@@ -475,6 +475,29 @@ export function bridgeToResponsesSSE(
         currentReasoning = null;
       };
 
+      const appendCurrentReasoningSummary = (text: string) => {
+        if (!currentReasoning) {
+          const itemId = `rs_${uuid()}`;
+          const item = { type: "reasoning", id: itemId, summary: [] as { type: string; text: string }[] };
+          emit("response.output_item.added", { output_index: outputIndex, item });
+          emit("response.reasoning_summary_part.added", {
+            item_id: itemId, output_index: outputIndex, summary_index: 0,
+            part: { type: "summary_text", text: "" },
+          });
+          currentReasoning = { itemId, outputIndex, text: "", textBytes: 0 };
+        }
+        ({ value: currentReasoning.text, bytes: currentReasoning.textBytes } = appendString(
+          currentReasoning.text,
+          currentReasoning.textBytes,
+          text,
+          "reasoning",
+        ));
+        emit("response.reasoning_summary_text.delta", {
+          item_id: currentReasoning.itemId, output_index: currentReasoning.outputIndex,
+          summary_index: 0, delta: text,
+        });
+      };
+
       const closeCurrentRawReasoning = () => {
         if (!currentRawReasoning) return;
         const item = {
@@ -781,26 +804,7 @@ export function bridgeToResponsesSSE(
               if (currentRawReasoning) closeCurrentRawReasoning();
               flushHiddenRawReasoning();
               if (currentToolCall) closeCurrentToolCall();
-              if (!currentReasoning) {
-                const itemId = `rs_${uuid()}`;
-                const item = { type: "reasoning", id: itemId, summary: [] as { type: string; text: string }[] };
-                emit("response.output_item.added", { output_index: outputIndex, item });
-                emit("response.reasoning_summary_part.added", {
-                  item_id: itemId, output_index: outputIndex, summary_index: 0,
-                  part: { type: "summary_text", text: "" },
-                });
-                currentReasoning = { itemId, outputIndex, text: "", textBytes: 0 };
-              }
-              ({ value: currentReasoning.text, bytes: currentReasoning.textBytes } = appendString(
-                currentReasoning.text,
-                currentReasoning.textBytes,
-                event.thinking,
-                "reasoning",
-              ));
-              emit("response.reasoning_summary_text.delta", {
-                item_id: currentReasoning.itemId, output_index: currentReasoning.outputIndex,
-                summary_index: 0, delta: event.thinking,
-              });
+              appendCurrentReasoningSummary(event.thinking);
               break;
             }
             case "thinking_signature": {
@@ -818,6 +822,10 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "reasoning_raw_delta": {
+              // A configured Chat Completions provider may designate its `reasoning_content` as
+              // displayable summary text. Hidden mode deliberately wins over that presentation
+              // hint: it keeps the established txt-only encrypted envelope for exact replay and
+              // emits no summary/raw deltas to the client.
               if (options?.hideThinkingSummary) {
                 ({ value: hiddenRawReasoningText, bytes: hiddenRawReasoningBytes } = appendString(
                   hiddenRawReasoningText,
@@ -828,8 +836,13 @@ export function bridgeToResponsesSSE(
                 break;
               }
               if (currentMsg) closeCurrentMessage("commentary");
-              if (currentReasoning) closeCurrentReasoning();
               if (currentToolCall) closeCurrentToolCall();
+              if (event.presentation === "summary") {
+                if (currentRawReasoning) closeCurrentRawReasoning();
+                appendCurrentReasoningSummary(event.text);
+                break;
+              }
+              if (currentReasoning) closeCurrentReasoning();
               if (!currentRawReasoning) {
                 const itemId = `rs_${uuid()}`;
                 const item = { type: "reasoning", id: itemId, summary: [] as never[], content: [] as { type: string; text: string }[] };
@@ -1457,9 +1470,16 @@ export function buildResponseJSON(
         break;
       case "reasoning_raw_delta":
         if (currentText) flushText("commentary");
-        if (currentSummaryReasoning) flushSummaryReasoning();
         if (currentToolCallId) flushToolCall();
-        {
+        // Hidden mode retains raw provider text in the established txt-only envelope regardless
+        // of how it would have been presented. That replay contract must not depend on UI mode.
+        if (e.presentation === "summary" && options?.hideThinkingSummary !== true) {
+          if (currentRawReasoning) flushRawReasoning();
+          ({ value: currentSummaryReasoning, bytes: currentSummaryReasoningBytes } = appendBatchString(
+            currentSummaryReasoning, currentSummaryReasoningBytes, e.text, "reasoning",
+          ));
+        } else {
+          if (currentSummaryReasoning) flushSummaryReasoning();
           ({ value: currentRawReasoning, bytes: currentRawReasoningBytes } = appendBatchString(
             currentRawReasoning, currentRawReasoningBytes, e.text, "reasoning",
           ));

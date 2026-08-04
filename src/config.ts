@@ -28,6 +28,7 @@ import {
   isWirePinnedModel,
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
   OPENAI_PROVIDER_TIER_VERSION,
+  REASONING_CONTENT_MODE_VALUES,
   REASONING_SUMMARY_DELIVERY_VALUES,
   type OcxClaudeCodeConfig,
   type OcxConfig,
@@ -481,6 +482,7 @@ const providerConfigSchema = z.object({
   mcpMaxResultBytes: z.number().int().positive().optional(),
   apiKeyTransport: z.enum(["x-api-key", "bearer"]).optional(),
   responsesPath: z.string().min(1).optional(),
+  reasoningContentMode: z.enum(REASONING_CONTENT_MODE_VALUES).optional(),
   statelessResponses: z.boolean().optional(),
   allowPrivateNetwork: z.boolean().optional(),
   codexAccountMode: z.enum(["pool", "direct"]).optional(),
@@ -604,6 +606,15 @@ export function booleanRecordConfigError(value: unknown, field: string): string 
 }
 
 const REASONING_SUMMARY_DELIVERY_SET = new Set<string>(REASONING_SUMMARY_DELIVERY_VALUES);
+const REASONING_CONTENT_MODE_SET = new Set<string>(REASONING_CONTENT_MODE_VALUES);
+
+export function reasoningContentModeConfigError(value: unknown): string | null {
+  if (value === undefined) return null;
+  if (typeof value !== "string" || !REASONING_CONTENT_MODE_SET.has(value)) {
+    return `reasoningContentMode must be one of: ${REASONING_CONTENT_MODE_VALUES.join(", ")}`;
+  }
+  return null;
+}
 
 export function reasoningSummaryDeliveryRecordConfigError(
   value: unknown,

@@ -63,6 +63,7 @@ description: 공급자 항목, 인증, 엔드포인트, 모델 카탈로그, 할
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | 이 OAuth 공급자의 Token Guardian 정책을 덮어씁니다. |
 | `reasoningEfforts?` | `string[]` | 광고하고 전송할 공급자 전반의 Codex reasoning 레이블입니다. |
 | `modelReasoningEfforts?` | `Record<string, string[]>` | 모델별 레이블입니다. 빈 목록이면 effort 제어를 숨깁니다. |
+| `reasoningContentMode?` | `"raw" \| "summary"` | `openai-chat`이 상위 `reasoning_content`를 표시하는 방식입니다. 기본값은 `raw`이며, 클라이언트가 reasoning을 표시할 때 `summary`는 Codex 네이티브 요약 이벤트를 사용합니다. 숨김 모드가 항상 우선하고 replay는 유지되며, effort나 진행 텍스트는 바꾸지 않습니다. |
 | `modelSupportsReasoningSummaries?` | `Record<string, boolean>` | 모델을 `false`로 두면 summary 광고를 멈추고 summary 전달 필드를 제거합니다. |
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | 모델별 Responses 전달 enum입니다. 기존 delivery 필드를 다시 씁니다. |
 | `modelAdapters?` | `Record<string, string>` | 혼합 와이어 게이트웨이를 위한 모델별 `openai-chat` 또는 `openai-responses` 와이어 재정의입니다. 명시적 항목이 레지스트리 기본값보다 우선합니다. DeepSeek 프리셋은 `deepseek-v4-flash`에 네이티브 Responses를 선택할 수 있습니다. 단일 와이어 상위 항목과 정식 ChatGPT forward는 재정의를 거부합니다. |

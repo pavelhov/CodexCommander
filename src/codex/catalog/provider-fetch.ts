@@ -112,6 +112,7 @@ function providerCatalogFingerprint(name: string, prov: OcxProviderConfig): Reco
     inMod: prov.modelInputModalities ?? null,
     re: prov.modelReasoningEfforts ?? null,
     defRe: prov.modelDefaultReasoningEfforts ?? null,
+    rcMode: prov.reasoningContentMode ?? null,
     rsSum: prov.modelSupportsReasoningSummaries ?? null,
     rsDel: prov.modelReasoningSummaryDelivery ?? null,
     noVis: [...(prov.noVisionModels ?? [])].sort(),

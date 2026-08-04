@@ -221,6 +221,14 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
   const modelReasoningEffortMap = mergeNestedRecord(registryEntry.modelReasoningEffortMap, provider.modelReasoningEffortMap);
   const modelReasoningEfforts = mergeStringArrayRecord(registryEntry.modelReasoningEfforts, provider.modelReasoningEfforts);
   const modelDefaultReasoningEfforts = mergeRecordFill(registryEntry.modelDefaultReasoningEfforts, provider.modelDefaultReasoningEfforts);
+  const modelSupportsReasoningSummaries = mergeRecordFill(
+    registryEntry.modelSupportsReasoningSummaries,
+    provider.modelSupportsReasoningSummaries,
+  );
+  const modelReasoningSummaryDelivery = mergeRecordFill(
+    registryEntry.modelReasoningSummaryDelivery,
+    provider.modelReasoningSummaryDelivery,
+  );
   const modelContextWindows = providerName === OPENAI_API_PROVIDER_ID
     ? mergePositiveNumberCaps(registryEntry.modelContextWindows, provider.modelContextWindows)
     : mergeRecordFill(registryEntry.modelContextWindows, provider.modelContextWindows);
@@ -269,6 +277,9 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
     ...(provider.location === undefined && registryEntry.location !== undefined ? { location: registryEntry.location } : {}),
     ...(provider.contextWindow === undefined && registryEntry.contextWindow !== undefined ? { contextWindow: registryEntry.contextWindow } : {}),
     ...(provider.reasoningEfforts === undefined && registryEntry.reasoningEfforts !== undefined ? { reasoningEfforts: registryEntry.reasoningEfforts } : {}),
+    ...(provider.reasoningContentMode === undefined && registryEntry.reasoningContentMode !== undefined
+      ? { reasoningContentMode: registryEntry.reasoningContentMode }
+      : {}),
     ...(provider.escapeBuiltinToolNames === undefined && registryEntry.escapeBuiltinToolNames !== undefined ? { escapeBuiltinToolNames: registryEntry.escapeBuiltinToolNames } : {}),
     ...(provider.keyOptional === undefined && registryEntry.keyOptional !== undefined ? { keyOptional: registryEntry.keyOptional } : {}),
     ...(provider.modelSuffixBracketStrip === undefined && registryEntry.modelSuffixBracketStrip !== undefined ? { modelSuffixBracketStrip: registryEntry.modelSuffixBracketStrip } : {}),
@@ -285,6 +296,8 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
     ...(modelMaxOutputTokens ? { modelMaxOutputTokens } : {}),
     ...(modelReasoningEfforts ? { modelReasoningEfforts } : {}),
     ...(modelDefaultReasoningEfforts ? { modelDefaultReasoningEfforts } : {}),
+    ...(modelSupportsReasoningSummaries ? { modelSupportsReasoningSummaries } : {}),
+    ...(modelReasoningSummaryDelivery ? { modelReasoningSummaryDelivery } : {}),
     ...(reasoningEffortMap ? { reasoningEffortMap } : {}),
     ...(modelReasoningEffortMap ? { modelReasoningEffortMap } : {}),
     ...(noVisionModels ? { noVisionModels } : {}),

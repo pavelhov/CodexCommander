@@ -74,6 +74,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | Override this OAuth provider's Token Guardian policy. |
 | `reasoningEfforts?` | `string[]` | Provider-wide Codex reasoning labels to advertise and send. |
 | `modelReasoningEfforts?` | `Record<string, string[]>` | Per-model labels. An empty list hides effort control. |
+| `reasoningContentMode?` | `"raw" \| "summary"` | How `openai-chat` presents upstream `reasoning_content`. `raw` is the default; `summary` uses native Codex reasoning-summary events when the client requests visible reasoning. Hidden reasoning still wins and remains replayable. This does not change effort or generate progress text. |
 | `modelSupportsReasoningSummaries?` | `Record<string, boolean>` | Set a model to `false` to stop advertising summaries and strip summary-delivery fields. |
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | Per-model Responses delivery enum; rewrites an existing delivery field. |
 | `modelAdapters?` | `Record<string, string>` | Per-model `openai-chat` or `openai-responses` wire override for mixed-wire gateways. Explicit entries beat registry defaults; DeepSeek's preset can select native Responses for `deepseek-v4-flash`. Single-wire upstream pins and canonical ChatGPT forward reject overrides. |
