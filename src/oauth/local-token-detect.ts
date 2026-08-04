@@ -4,13 +4,24 @@
  * Ported from jawcode packages/ai/src/utils/oauth/local-token-detect.ts (xAI portion).
  */
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { identityFromKimiTokens } from "./kimi";
 import type { OAuthCredentials } from "./types";
 
 const XAI_AUTH_KEY_PREFIX = "https://auth.x.ai::";
 const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
+const MAX_KIMI_CREDENTIAL_BYTES = 64 * 1024;
 
 export function detectGrokCliToken(): OAuthCredentials | null {
   const authPath = join(process.env.HOME ?? homedir(), ".grok", "auth.json");
@@ -36,6 +47,83 @@ export function detectGrokCliToken(): OAuthCredentials | null {
     };
   } catch {
     return null;
+  }
+}
+
+/** Kimi Code home: `KIMI_CODE_HOME` override, else `~/.kimi-code`. */
+function kimiCodeHome(): string {
+  const explicit = process.env.KIMI_CODE_HOME;
+  return explicit && explicit.length > 0
+    ? explicit
+    : join(process.env.HOME ?? homedir(), ".kimi-code");
+}
+
+/**
+ * Parse Kimi Code's persisted token without taking ownership of its rotating refresh grant.
+ *
+ * The refresh token is consulted only for signed account identity, then discarded. OpenCodex
+ * links to fresh CLI access-token generations read-only; it must never refresh or write Kimi's
+ * credential store independently of the CLI's own cross-process lock.
+ */
+export function parseKimiCliCredential(raw: string): OAuthCredentials | null {
+  try {
+    const data = JSON.parse(raw) as Record<string, unknown>;
+    const access = data.access_token;
+    const refresh = data.refresh_token;
+    const expiresAtSeconds = data.expires_at;
+    if (
+      typeof access !== "string"
+      || access.length === 0
+      || typeof expiresAtSeconds !== "number"
+      || !Number.isFinite(expiresAtSeconds)
+      || expiresAtSeconds <= 0
+    ) {
+      return null;
+    }
+    const identity = identityFromKimiTokens(
+      access,
+      typeof refresh === "string" && refresh.length > 0 ? refresh : undefined,
+    );
+    return {
+      access,
+      // Fail closed if this credential ever escapes the local-CLI refresh branch.
+      refresh: "",
+      expires: expiresAtSeconds * 1000,
+      ...identity,
+      source: "local-cli",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Read-only detection of the current Kimi Code CLI credential generation. */
+export function detectKimiCliToken(): OAuthCredentials | null {
+  const path = join(kimiCodeHome(), "credentials", "kimi-code.json");
+  let fd: number | undefined;
+  try {
+    const pathMetadata = lstatSync(path);
+    if (!pathMetadata.isFile() || pathMetadata.isSymbolicLink()) return null;
+    fd = openSync(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+    const openedMetadata = fstatSync(fd);
+    if (!openedMetadata.isFile() || openedMetadata.size <= 0 || openedMetadata.size > MAX_KIMI_CREDENTIAL_BYTES) {
+      return null;
+    }
+    const bytes = Buffer.allocUnsafe(MAX_KIMI_CREDENTIAL_BYTES + 1);
+    let total = 0;
+    while (total < bytes.length) {
+      const count = readSync(fd, bytes, total, bytes.length - total, null);
+      if (count === 0) break;
+      total += count;
+    }
+    if (total === 0 || total > MAX_KIMI_CREDENTIAL_BYTES) return null;
+    return parseKimiCliCredential(bytes.toString("utf8", 0, total));
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* best-effort after read failure */ }
+    }
   }
 }
 
