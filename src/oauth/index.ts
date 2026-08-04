@@ -4,8 +4,8 @@ import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
 import { loadConfig, resolveEnvValue, saveConfig } from "../config";
 import { maskEmail } from "../lib/privacy";
 import { KiroTokenRefreshError, environmentKiroRoutingMetadata, loginKiro, refreshKiroToken, settleKiroLoginTransaction } from "./kiro";
-import { getAccountCredential, getAccountSet, removeAccount, saveAccountCredential, saveCredential, setActiveAccount, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration, readOAuthRefreshIntent, writeOAuthRefreshIntent, markOAuthRefreshIntentStaleOwner, clearOAuthRefreshIntent, normalizeAuthStoreBuffer, OAuthMutationBusyError } from "./store";
-import { loginXai, refreshXaiToken, XAI_LOCAL_CLI_DETACH_WARNING, XaiTokenRequestError } from "./xai";
+import { getAccountCredential, getAccountSet, removeAccount, saveAccountCredential, saveCredential, setActiveAccount, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration, readOAuthRefreshIntent, writeOAuthRefreshIntent, markOAuthRefreshIntentStaleOwner, clearOAuthRefreshIntent, normalizeAuthStoreBuffer, OAuthMutationBusyError, scrubExistingXaiLocalCliRefreshBackup } from "./store";
+import { loginXai, refreshXaiToken, XaiTokenRequestError } from "./xai";
 import { ANTHROPIC_OAUTH_BETA, AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "./anthropic";
 import { loginKimi, refreshKimiToken } from "./kimi";
 import { loginChatGPT, refreshChatGPTToken } from "./chatgpt";
@@ -119,6 +119,15 @@ const permanentRefreshFailures=new Map<string,number>();
 interface XaiRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal }
 interface AnthropicRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal; flight?: OAuthRefreshFlightEvidence; replacedStaleFlight?: OAuthRefreshFlightEvidence }
 interface GenericRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal }
+interface XaiLocalCliRefreshDeps {
+  intentLock?: ReturnType<typeof createOAuthRefreshIntentLock>;
+  now?: () => number;
+  afterPrePersistRead?: () => void | Promise<void>;
+  /** Test seam: runs before the local refresh grant is scrubbed. */
+  beforeScrubPersist?: () => void | Promise<void>;
+  /** Test seam: runs before a newer CLI access generation is adopted. */
+  beforeAdoptPersist?: () => void | Promise<void>;
+}
 interface KimiLocalCliRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void> }
 function verdictKey(p:string,a:string,c:OAuthCredentials){return `${p}\0${a}\0${credentialGeneration(c)}`;}
 function cached(p:string,a:string,c:OAuthCredentials,now:()=>number){const k=verdictKey(p,a,c),u=permanentRefreshFailures.get(k);if(u===undefined)return false;if(u<=now()){permanentRefreshFailures.delete(k);return false;}return true;}
@@ -281,6 +290,8 @@ export class OAuthLoginRequiredError extends Error {
 
 export const KIMI_LOCAL_CLI_REFRESH_REQUIRED =
   "Kimi CLI-linked credential is stale. Run `kimi` once to refresh its login, then retry the OpenCodex request.";
+export const XAI_LOCAL_CLI_REFRESH_REQUIRED =
+  "Grok CLI-linked credential is stale. Run `grok` once to refresh its login, then retry the OpenCodex request.";
 
 function accessSnapshot(provider: string, accountId: string, cred: OAuthCredentials): OAuthAccessSnapshot {
   const storedKiroRouting = {
@@ -344,8 +355,16 @@ async function resolveAccessSnapshotForAccount(
 ): Promise<OAuthAccessSnapshot> {
   const def = OAUTH_PROVIDERS[provider];
   if (!def) throw new UnsupportedOAuthProviderError(provider);
-  const cred = getAccountCredential(provider, accountId);
+  let cred = getAccountCredential(provider, accountId);
   if (!cred) throw new OAuthLoginRequiredError(provider);
+  // Older builds copied Grok's native rotating refresh grant. Remove it before every
+  // fast return so even an already-fresh linked token cannot be re-persisted elsewhere.
+  if (provider === "xai") {
+    // This migration must run even when the current access token is already clean/fresh,
+    // because an older pre-multiauth backup can independently retain the native grant.
+    scrubExistingXaiLocalCliRefreshBackup();
+    cred = await scrubXaiLocalCliRefreshGrant(provider, accountId, cred);
+  }
   const current = accessSnapshot(provider, accountId, cred);
   if (rejectedGeneration !== undefined && current.generation !== rejectedGeneration) return current;
   if (rejectedGeneration === undefined && cred.expires > Date.now() + REFRESH_SKEW_MS) return current;
@@ -438,7 +457,6 @@ function terminal(error:unknown):boolean{
   if(error instanceof KiroTokenRefreshError)return (error.httpStatus===400||error.httpStatus===401)&&error.oauthError!==undefined;
   return isTerminalRefreshError(error);
 }
-function authoritative(stored:OAuthCredentials,active:boolean,now:()=>number):OAuthCredentials{if(stored.source!=="local-cli")return stored;const disk=detectGrokCliToken();if(!disk)return stored;const allowed=isSameGrokIdentity(stored,disk)||(active&&!hasComparableGrokIdentity(stored,disk));return allowed&&shouldAdoptGrokGeneration(stored,disk,now(),REFRESH_SKEW_MS)?disk:stored;}
 function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCredentials {
   return {
     ...fresh,
@@ -461,6 +479,105 @@ function shouldAdoptKimiCliGeneration(stored: OAuthCredentials, disk: OAuthCrede
   if (credentialGeneration(disk) === credentialGeneration(stored)) return false;
   const bothExpiriesExist = stored.expires > 0 && disk.expires > 0;
   return !bothExpiriesExist || disk.expires >= stored.expires;
+}
+
+const MAX_XAI_LOCAL_CLI_SCRUB_ATTEMPTS = 4;
+
+/** Persistently remove a legacy native Grok refresh grant, reconciling CAS winners. */
+async function scrubXaiLocalCliRefreshGrant(
+  provider: string,
+  accountId: string,
+  initial: OAuthCredentials,
+  beforeFirstPersist?: () => void | Promise<void>,
+): Promise<OAuthCredentials> {
+  if (provider !== "xai") return initial;
+  let current = initial;
+  for (let attempt = 0; attempt < MAX_XAI_LOCAL_CLI_SCRUB_ATTEMPTS; attempt++) {
+    if (current.source !== "local-cli" || !current.refresh) return current;
+    if (attempt === 0) await beforeFirstPersist?.();
+    const sanitized = { ...current, refresh: "" };
+    const outcome = await mergeAccountCredential(provider, accountId, sanitized, {
+      expectedGeneration: credentialGeneration(current),
+    });
+    if (!outcome.superseded) return sanitized;
+    current = outcome.stored;
+  }
+  throw new OAuthMutationBusyError("Grok CLI credential changed repeatedly while removing its native refresh grant");
+}
+
+/**
+ * Renew a read-only Grok CLI link by adopting a newer native-CLI access generation.
+ *
+ * The native Grok CLI owns `auth.json`, its file lock, and the rotating refresh grant.
+ * OpenCodex never submits that grant and never writes the Grok credential store.
+ */
+export async function refreshXaiLocalCliAccountWithLock(
+  provider: string,
+  accountId: string,
+  callerCredential: OAuthCredentials,
+  deps: XaiLocalCliRefreshDeps = {},
+): Promise<string> {
+  const now = deps.now ?? Date.now;
+  const guard = await (deps.intentLock ?? createOAuthRefreshIntentLock(provider, accountId)).acquire();
+  try {
+    let stored = getAccountCredential(provider, accountId);
+    if (!stored) throw new OAuthLoginRequiredError(provider);
+    stored = await scrubXaiLocalCliRefreshGrant(
+      provider,
+      accountId,
+      stored,
+      deps.beforeScrubPersist,
+    );
+    if (stored.source !== "local-cli") {
+      if (stored.expires > now() + REFRESH_SKEW_MS) return stored.access;
+      throw new OAuthTokenRefreshStaleError();
+    }
+    if (
+      (stored.access !== callerCredential.access || stored.expires !== callerCredential.expires)
+      && stored.expires > now() + REFRESH_SKEW_MS
+    ) {
+      return stored.access;
+    }
+
+    const disk = detectGrokCliToken();
+    if (!disk || disk.expires <= now() + REFRESH_SKEW_MS) {
+      throw new OAuthLoginRequiredError(provider, XAI_LOCAL_CLI_REFRESH_REQUIRED);
+    }
+    if (!hasComparableGrokIdentity(stored, disk)) {
+      throw new OAuthLoginRequiredError(
+        provider,
+        "Grok CLI-linked credential has no verifiable account identity, so OpenCodex cannot safely adopt a rotated token. Run `ocx login xai` to create a new link.",
+      );
+    }
+    if (!isSameGrokIdentity(stored, disk)) {
+      throw new OAuthLoginRequiredError(
+        provider,
+        "Grok CLI is signed in to a different account than this linked OpenCodex account. Run `ocx login xai` to link the current account.",
+      );
+    }
+    if (
+      credentialGeneration(disk) === credentialGeneration(stored)
+      || !shouldAdoptGrokGeneration(stored, disk, now(), REFRESH_SKEW_MS)
+    ) {
+      throw new OAuthLoginRequiredError(provider, XAI_LOCAL_CLI_REFRESH_REQUIRED);
+    }
+
+    await deps.beforeAdoptPersist?.();
+    const outcome = await mergeAccountCredential(provider, accountId, disk, {
+      expectedGeneration: credentialGeneration(stored),
+      afterPrePersistRead: deps.afterPrePersistRead,
+    });
+    if (outcome.superseded) {
+      const winner = await scrubXaiLocalCliRefreshGrant(provider, accountId, outcome.stored);
+      const winnerChangedAccess = winner.access !== stored.access || winner.expires !== stored.expires;
+      if (winnerChangedAccess && winner.expires > now() + REFRESH_SKEW_MS) return winner.access;
+      throw new OAuthLoginRequiredError(provider, XAI_LOCAL_CLI_REFRESH_REQUIRED);
+    }
+    logOAuthEvent("Grok CLI access-token generation adopted read-only", { provider, accountId });
+    return disk.access;
+  } finally {
+    guard.release();
+  }
 }
 
 /**
@@ -529,7 +646,86 @@ export async function refreshKimiLocalCliAccountWithLock(
   }
 }
 
-export async function refreshXaiAccountWithLock(provider:string,accountId:string,def:OAuthProviderDef,callerCredential:OAuthCredentials,deps:XaiRefreshDeps={}):Promise<string>{const writerGeneration=captureConfigGeneration();const now=deps.now??Date.now;const guard=await(deps.intentLock??createOAuthRefreshIntentLock(provider,accountId)).acquire();try{const stored=getAccountCredential(provider,accountId);if(!stored)throw new OAuthLoginRequiredError(provider);const active=getAccountSet(provider)?.activeAccountId===accountId,candidate=authoritative(stored,active,now);if(credentialGeneration(candidate)!==credentialGeneration(callerCredential)&&candidate.expires>now()+REFRESH_SKEW_MS){if(credentialGeneration(candidate)!==credentialGeneration(stored)){const o=await mergeAccountCredential(provider,accountId,candidate,{expectedGeneration:credentialGeneration(stored),afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}}return candidate.access;}if(cached(provider,accountId,candidate,now))throw new OAuthLoginRequiredError(provider);const generation=credentialGeneration(candidate);try{const fresh=merged(await def.refresh(candidate.refresh,deps.signal),candidate);const o=await mergeAccountCredential(provider,accountId,fresh,{expectedGeneration:generation,afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));if(candidate.source==="local-cli")console.warn(XAI_LOCAL_CLI_DETACH_WARNING);return fresh.access;}catch(error){if(error instanceof OAuthMutationBusyError){permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));throw error;}if(!terminal(error))throw error;const failedAt=now();permanentRefreshFailures.set(verdictKey(provider,accountId,candidate),failedAt+XAI_PERMANENT_FAILURE_TTL_MS);sweepExpiredOnWrite(failedAt);await markAccountNeedsReauthIfGeneration(provider,accountId,generation,writerGeneration);throw new OAuthLoginRequiredError(provider);}}finally{guard.release();}}
+export async function refreshXaiAccountWithLock(
+  provider: string,
+  accountId: string,
+  def: OAuthProviderDef,
+  callerCredential: OAuthCredentials,
+  deps: XaiRefreshDeps = {},
+): Promise<string> {
+  if (callerCredential.source === "local-cli") {
+    return refreshXaiLocalCliAccountWithLock(provider, accountId, callerCredential, {
+      intentLock: deps.intentLock,
+      now: deps.now,
+      afterPrePersistRead: deps.afterPrePersistRead,
+    });
+  }
+
+  const writerGeneration = captureConfigGeneration();
+  const now = deps.now ?? Date.now;
+  const guard = await (deps.intentLock ?? createOAuthRefreshIntentLock(provider, accountId)).acquire();
+  try {
+    let stored = getAccountCredential(provider, accountId);
+    if (!stored) throw new OAuthLoginRequiredError(provider);
+    // Ownership changed while the caller was waiting. Never spend a native CLI grant
+    // from the OpenCodex-owned refresh path; the next request will enter read-only renewal.
+    if (stored.source === "local-cli") {
+      stored = await scrubXaiLocalCliRefreshGrant(provider, accountId, stored);
+      if (stored.source !== "local-cli") {
+        if (stored.expires > now() + REFRESH_SKEW_MS) return stored.access;
+        throw new OAuthTokenRefreshStaleError();
+      }
+      if (stored.expires > now() + REFRESH_SKEW_MS) return stored.access;
+      throw new OAuthTokenRefreshStaleError();
+    }
+    if (
+      credentialGeneration(stored) !== credentialGeneration(callerCredential)
+      && stored.expires > now() + REFRESH_SKEW_MS
+    ) {
+      return stored.access;
+    }
+    if (cached(provider, accountId, stored, now)) throw new OAuthLoginRequiredError(provider);
+
+    const generation = credentialGeneration(stored);
+    try {
+      const fresh = merged(await def.refresh(stored.refresh, deps.signal), stored);
+      const outcome = await mergeAccountCredential(provider, accountId, fresh, {
+        expectedGeneration: generation,
+        afterPrePersistRead: deps.afterPrePersistRead,
+      });
+      if (outcome.superseded) {
+        const winner = outcome.stored.source === "local-cli"
+          ? await scrubXaiLocalCliRefreshGrant(provider, accountId, outcome.stored)
+          : outcome.stored;
+        if (winner.expires > now() + REFRESH_SKEW_MS) return winner.access;
+        throw new OAuthLoginRequiredError(provider);
+      }
+      permanentRefreshFailures.delete(verdictKey(provider, accountId, stored));
+      return fresh.access;
+    } catch (error) {
+      if (error instanceof OAuthMutationBusyError) {
+        permanentRefreshFailures.delete(verdictKey(provider, accountId, stored));
+        throw error;
+      }
+      if (!terminal(error)) throw error;
+      const failedAt = now();
+      permanentRefreshFailures.set(
+        verdictKey(provider, accountId, stored),
+        failedAt + XAI_PERMANENT_FAILURE_TTL_MS,
+      );
+      sweepExpiredOnWrite(failedAt);
+      await markAccountNeedsReauthIfGeneration(
+        provider,
+        accountId,
+        generation,
+        writerGeneration,
+      );
+      throw new OAuthLoginRequiredError(provider);
+    }
+  } finally {
+    guard.release();
+  }
+}
 
 function newerClaudeCredential(stored: OAuthCredentials, now: number): OAuthCredentials | undefined {
   if (stored.source !== "local-cli") return undefined;

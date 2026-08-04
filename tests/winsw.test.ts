@@ -36,13 +36,18 @@ describe("winsw xml", () => {
   });
 
   test("carries service env: OCX_SERVICE, token file pointer, and escaped PATH parity", () => {
-    const xml = buildWinswXml(entry, { ...env, KIMI_CODE_HOME: "C:\\Users\\jun\\.kimi-code & profile" });
+    const xml = buildWinswXml(entry, {
+      ...env,
+      KIMI_CODE_HOME: "C:\\Users\\jun\\.kimi-code & profile",
+      GROK_HOME: '  C:\\Users\\jun\\.grok & "profile" <x>  ',
+    });
 
     expect(xml).toContain('<env name="OCX_SERVICE" value="1"/>');
     expect(xml).toContain('<env name="OCX_API_TOKEN_FILE"');
     expect(xml).toContain('<env name="PATH" value="C:\\bin;C:\\tools &amp; more"/>');
     expect(winswEnvValue(xml, "OPENCODEX_HOME")).toBe(getConfigDir());
     expect(winswEnvValue(xml, "KIMI_CODE_HOME")).toBe("C:\\Users\\jun\\.kimi-code & profile");
+    expect(winswEnvValue(xml, "GROK_HOME")).toBe('C:\\Users\\jun\\.grok & "profile" <x>');
     // Token VALUES never land in the XML — only file pointers / non-secret budgets.
     expect(xml).not.toContain("OPENCODEX_API_AUTH_TOKEN");
     expect(xml).not.toContain("OPENCODEX_ADMIN_AUTH_TOKEN");
@@ -55,6 +60,12 @@ describe("winsw xml", () => {
     const overrideXml = buildWinswXml(overrideEntry, env);
     expect(overrideXml).toContain('<env name="OCX_BUN_RUNTIME_SOURCE" value="override"/>');
     expect(overrideXml).toContain("<executable>C:\\Custom\\bun.exe</executable>");
+  });
+
+  test("omits GROK_HOME when it is empty after trimming", () => {
+    const xml = buildWinswXml(entry, { ...env, GROK_HOME: "   " });
+
+    expect(winswEnvValue(xml, "GROK_HOME")).toBeNull();
   });
 
   test("bakes install-time ACL timeout and never embeds the admin token (#764)", () => {

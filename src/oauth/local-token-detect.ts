@@ -21,33 +21,88 @@ import type { OAuthCredentials } from "./types";
 
 const XAI_AUTH_KEY_PREFIX = "https://auth.x.ai::";
 const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
+const MAX_GROK_CREDENTIAL_BYTES = 64 * 1024;
 const MAX_KIMI_CREDENTIAL_BYTES = 64 * 1024;
 
-export function detectGrokCliToken(): OAuthCredentials | null {
-  const authPath = join(process.env.HOME ?? homedir(), ".grok", "auth.json");
-  if (!existsSync(authPath)) return null;
-
+function readBoundedRegularFile(path: string, maxBytes: number): string | null {
+  let fd: number | undefined;
   try {
-    const raw = JSON.parse(readFileSync(authPath, "utf8")) as Record<string, Record<string, unknown>>;
+    const pathMetadata = lstatSync(path);
+    if (!pathMetadata.isFile() || pathMetadata.isSymbolicLink()) return null;
+    fd = openSync(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+    const openedMetadata = fstatSync(fd);
+    if (!openedMetadata.isFile() || openedMetadata.size <= 0 || openedMetadata.size > maxBytes) {
+      return null;
+    }
+    const bytes = Buffer.allocUnsafe(maxBytes + 1);
+    let total = 0;
+    while (total < bytes.length) {
+      const count = readSync(fd, bytes, total, bytes.length - total, null);
+      if (count === 0) break;
+      total += count;
+    }
+    return total > 0 && total <= maxBytes
+      ? bytes.toString("utf8", 0, total)
+      : null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* best-effort after read failure */ }
+    }
+  }
+}
 
-    const entry = Object.entries(raw).find(([key]) => key.startsWith(XAI_AUTH_KEY_PREFIX))?.[1];
-    if (!entry?.key || !entry?.refresh_token) return null;
+/** Grok home: `GROK_HOME` override, else `~/.grok`. */
+function grokHome(): string {
+  const explicit = process.env.GROK_HOME?.trim();
+  return explicit || join(process.env.HOME ?? homedir(), ".grok");
+}
 
-    const accessToken = entry.key as string;
-    const refreshToken = entry.refresh_token as string;
-    const expiresAt = entry.expires_at ? new Date(entry.expires_at as string).getTime() : 0;
+/** Parse a fresh Grok CLI access generation without retaining its rotating refresh grant. */
+export function parseGrokCliCredential(raw: string): OAuthCredentials | null {
+  try {
+    const data = JSON.parse(raw) as Record<string, unknown>;
+    const entry = Object.entries(data).find(([key]) => key.startsWith(XAI_AUTH_KEY_PREFIX))?.[1];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+    const fields = entry as Record<string, unknown>;
+    const access = fields.key;
+    const expiresRaw = fields.expires_at;
+    const expires = typeof expiresRaw === "string" ? new Date(expiresRaw).getTime() : 0;
+    const accountId = typeof fields.user_id === "string" && fields.user_id.length > 0
+      ? fields.user_id
+      : typeof fields.principal_id === "string" && fields.principal_id.length > 0
+        ? fields.principal_id
+        : undefined;
+    const email = typeof fields.email === "string" && fields.email.length > 0
+      ? fields.email.toLowerCase()
+      : undefined;
+    if (
+      typeof access !== "string"
+      || access.length === 0
+      || !Number.isFinite(expires)
+      || expires <= 0
+      || (!accountId && !email)
+    ) return null;
 
     return {
-      refresh: refreshToken,
-      access: accessToken,
-      expires: expiresAt,
-      accountId: entry.user_id as string | undefined,
-      email: entry.email as string | undefined,
+      access,
+      // Grok owns auth.json and its refresh-token lock. OpenCodex is read-only.
+      refresh: "",
+      expires,
+      ...(accountId ? { accountId } : {}),
+      ...(email ? { email } : {}),
       source: "local-cli",
     };
   } catch {
     return null;
   }
+}
+
+/** Read-only detection of the current native Grok CLI access-token generation. */
+export function detectGrokCliToken(): OAuthCredentials | null {
+  const raw = readBoundedRegularFile(join(grokHome(), "auth.json"), MAX_GROK_CREDENTIAL_BYTES);
+  return raw ? parseGrokCliCredential(raw) : null;
 }
 
 /** Kimi Code home: `KIMI_CODE_HOME` override, else `~/.kimi-code`. */
@@ -100,31 +155,8 @@ export function parseKimiCliCredential(raw: string): OAuthCredentials | null {
 /** Read-only detection of the current Kimi Code CLI credential generation. */
 export function detectKimiCliToken(): OAuthCredentials | null {
   const path = join(kimiCodeHome(), "credentials", "kimi-code.json");
-  let fd: number | undefined;
-  try {
-    const pathMetadata = lstatSync(path);
-    if (!pathMetadata.isFile() || pathMetadata.isSymbolicLink()) return null;
-    fd = openSync(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
-    const openedMetadata = fstatSync(fd);
-    if (!openedMetadata.isFile() || openedMetadata.size <= 0 || openedMetadata.size > MAX_KIMI_CREDENTIAL_BYTES) {
-      return null;
-    }
-    const bytes = Buffer.allocUnsafe(MAX_KIMI_CREDENTIAL_BYTES + 1);
-    let total = 0;
-    while (total < bytes.length) {
-      const count = readSync(fd, bytes, total, bytes.length - total, null);
-      if (count === 0) break;
-      total += count;
-    }
-    if (total === 0 || total > MAX_KIMI_CREDENTIAL_BYTES) return null;
-    return parseKimiCliCredential(bytes.toString("utf8", 0, total));
-  } catch {
-    return null;
-  } finally {
-    if (fd !== undefined) {
-      try { closeSync(fd); } catch { /* best-effort after read failure */ }
-    }
-  }
+  const raw = readBoundedRegularFile(path, MAX_KIMI_CREDENTIAL_BYTES);
+  return raw ? parseKimiCliCredential(raw) : null;
 }
 
 export function hasComparableGrokIdentity(stored: OAuthCredentials, disk: OAuthCredentials): boolean {
@@ -145,7 +177,9 @@ export function shouldAdoptGrokGeneration(
 ): boolean {
   if (disk.expires <= now + refreshSkewMs) return false;
   const bothExpiriesExist = stored.expires > 0 && disk.expires > 0;
-  if (bothExpiriesExist) return disk.expires >= stored.expires;
+  // The Grok CLI store has no monotonic generation counter. Equal expiry is therefore
+  // ambiguous and may be an older access token copied back over auth.json; fail closed.
+  if (bothExpiriesExist) return disk.expires > stored.expires;
   return true;
 }
 

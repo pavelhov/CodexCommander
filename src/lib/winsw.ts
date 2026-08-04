@@ -93,6 +93,7 @@ export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = proces
   // SCM services do not inherit the interactive user environment (#764). Bake:
   // - OPENCODEX_HOME so file-backed admin auth (`admin-api-token`) resolves
   // - KIMI_CODE_HOME when explicitly set so local Kimi CLI credentials stay discoverable
+  // - GROK_HOME when explicitly set so local Grok CLI credentials stay discoverable
   // - OPENCODEX_ACL_TIMEOUT_MS when set (not a secret)
   // Never embed OPENCODEX_ADMIN_AUTH_TOKEN or OPENCODEX_API_AUTH_TOKEN values in XML —
   // those stay file-pointer / generated-file only (uninstall retains the XML).
@@ -106,6 +107,7 @@ export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = proces
     env.CODEX_HOME?.trim() ? `  <env name="CODEX_HOME" value="${xmlEscape(currentCodexHomeAbsolute())}"/>` : null,
     `  <env name="OPENCODEX_HOME" value="${xmlEscape(getConfigDir())}"/>`,
     env.KIMI_CODE_HOME?.trim() ? `  <env name="KIMI_CODE_HOME" value="${xmlEscape(env.KIMI_CODE_HOME.trim())}"/>` : null,
+    env.GROK_HOME?.trim() ? `  <env name="GROK_HOME" value="${xmlEscape(env.GROK_HOME.trim())}"/>` : null,
     aclTimeout ? `  <env name="OPENCODEX_ACL_TIMEOUT_MS" value="${xmlEscape(aclTimeout)}"/>` : null,
   ].filter((line): line is string => Boolean(line));
   return `<?xml version="1.0" encoding="UTF-8"?>

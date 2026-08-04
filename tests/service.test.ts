@@ -113,16 +113,19 @@ describe("systemd service unit", () => {
     const oldCodexHome = process.env.CODEX_HOME;
     const oldOpenCodexHome = process.env.OPENCODEX_HOME;
     const oldKimiCodeHome = process.env.KIMI_CODE_HOME;
+    const oldGrokHome = process.env.GROK_HOME;
     const oldApiAuthToken = process.env.OPENCODEX_API_AUTH_TOKEN;
     try {
       process.env.CODEX_HOME = "/tmp/codex-home";
       process.env.OPENCODEX_HOME = "/tmp/opencodex-home";
       process.env.KIMI_CODE_HOME = "/tmp/kimi-code-home";
+      process.env.GROK_HOME = '/tmp/grok-"home\\100%';
       process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
       const unit = buildUnit();
       expect(unit).toContain('Environment="CODEX_HOME=/tmp/codex-home"');
       expect(unit).toContain('Environment="OPENCODEX_HOME=/tmp/opencodex-home"');
       expect(unit).toContain('Environment="KIMI_CODE_HOME=/tmp/kimi-code-home"');
+      expect(unit).toContain('Environment="GROK_HOME=/tmp/grok-\\"home\\\\100%%"');
       expectTextToContainPath(unit, serviceApiTokenFilePath());
       expect(unit).not.toContain("local-secret");
       expect(unit).not.toContain("Environment=\"OPENCODEX_API_AUTH_TOKEN=");
@@ -133,6 +136,8 @@ describe("systemd service unit", () => {
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;
       if (oldKimiCodeHome === undefined) delete process.env.KIMI_CODE_HOME;
       else process.env.KIMI_CODE_HOME = oldKimiCodeHome;
+      if (oldGrokHome === undefined) delete process.env.GROK_HOME;
+      else process.env.GROK_HOME = oldGrokHome;
       if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
       else process.env.OPENCODEX_API_AUTH_TOKEN = oldApiAuthToken;
     }
@@ -478,21 +483,25 @@ describe("Windows service task", () => {
     const oldPath = process.env.PATH;
     const oldOpenCodexHome = process.env.OPENCODEX_HOME;
     const oldKimiCodeHome = process.env.KIMI_CODE_HOME;
+    const oldGrokHome = process.env.GROK_HOME;
     const oldApiAuthToken = process.env.OPENCODEX_API_AUTH_TOKEN;
     try {
       process.env.PATH = 'C:\\safe" & echo PWNED & rem "';
       process.env.OPENCODEX_HOME = 'C:\\ocx" & del C:\\important & rem "';
       process.env.KIMI_CODE_HOME = 'C:\\kimi" & del C:\\important & rem "';
+      process.env.GROK_HOME = 'C:\\grok" & del C:\\important & rem "';
       process.env.OPENCODEX_API_AUTH_TOKEN = 'token" & echo LEAK & rem "';
       const script = buildWindowsServiceScript();
       expect(script).toContain('set "PATH=C:\\safe & echo PWNED & rem "');
       expect(script).toContain('set "OPENCODEX_HOME=C:\\ocx & del C:\\important & rem "');
       expect(script).toContain('set "KIMI_CODE_HOME=C:\\kimi & del C:\\important & rem "');
+      expect(script).toContain('set "GROK_HOME=C:\\grok & del C:\\important & rem "');
       expect(script).toContain('set "OCX_API_TOKEN_FILE=');
       expect(script).toContain('set /p OPENCODEX_API_AUTH_TOKEN=<"%OCX_API_TOKEN_FILE%"');
       expect(script).not.toContain('set "PATH=C:\\safe" & echo PWNED');
       expect(script).not.toContain('set "OPENCODEX_HOME=C:\\ocx" & del');
       expect(script).not.toContain('set "KIMI_CODE_HOME=C:\\kimi" & del');
+      expect(script).not.toContain('set "GROK_HOME=C:\\grok" & del');
       expect(script).not.toContain("token & echo LEAK");
     } finally {
       if (oldPath === undefined) delete process.env.PATH;
@@ -501,6 +510,8 @@ describe("Windows service task", () => {
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;
       if (oldKimiCodeHome === undefined) delete process.env.KIMI_CODE_HOME;
       else process.env.KIMI_CODE_HOME = oldKimiCodeHome;
+      if (oldGrokHome === undefined) delete process.env.GROK_HOME;
+      else process.env.GROK_HOME = oldGrokHome;
       if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
       else process.env.OPENCODEX_API_AUTH_TOKEN = oldApiAuthToken;
     }
@@ -778,16 +789,19 @@ describe("launchd service plist", () => {
     const oldCodexHome = process.env.CODEX_HOME;
     const oldOpenCodexHome = process.env.OPENCODEX_HOME;
     const oldKimiCodeHome = process.env.KIMI_CODE_HOME;
+    const oldGrokHome = process.env.GROK_HOME;
     const oldApiAuthToken = process.env.OPENCODEX_API_AUTH_TOKEN;
     try {
       process.env.CODEX_HOME = "/tmp/codex-home";
       process.env.OPENCODEX_HOME = "/tmp/opencodex-home";
       process.env.KIMI_CODE_HOME = "/tmp/kimi-code-home";
+      process.env.GROK_HOME = "/tmp/grok-home & <profile>";
       process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
       const plist = buildPlist();
       expect(plist).toContain("<key>CODEX_HOME</key><string>/tmp/codex-home</string>");
       expect(plist).toContain("<key>OPENCODEX_HOME</key><string>/tmp/opencodex-home</string>");
       expect(plist).toContain("<key>KIMI_CODE_HOME</key><string>/tmp/kimi-code-home</string>");
+      expect(plist).toContain("<key>GROK_HOME</key><string>/tmp/grok-home &amp; &lt;profile&gt;</string>");
       expect(plist).toContain("<key>OCX_API_TOKEN_FILE</key>");
       expectTextToContainPath(plist, serviceApiTokenFilePath());
       expect(plist).not.toContain("local-secret");
@@ -799,6 +813,8 @@ describe("launchd service plist", () => {
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;
       if (oldKimiCodeHome === undefined) delete process.env.KIMI_CODE_HOME;
       else process.env.KIMI_CODE_HOME = oldKimiCodeHome;
+      if (oldGrokHome === undefined) delete process.env.GROK_HOME;
+      else process.env.GROK_HOME = oldGrokHome;
       if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
       else process.env.OPENCODEX_API_AUTH_TOKEN = oldApiAuthToken;
     }

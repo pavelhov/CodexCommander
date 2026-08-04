@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getValidAccessToken, getValidAccessTokenForAccount, OAuthLoginRequiredError, OAuthTokenRefreshBusyError, OAuthTokenRefreshStaleError, OAUTH_PROVIDERS, refreshAnthropicAccountWithLock, seedOAuthTokenRefreshFlightsForTests } from "../src/oauth";
+import { getValidAccessToken, getValidAccessTokenForAccount, OAuthLoginRequiredError, OAuthTokenRefreshBusyError, OAuthTokenRefreshStaleError, OAUTH_PROVIDERS, refreshAnthropicAccountWithLock, seedOAuthTokenRefreshFlightsForTests, XAI_LOCAL_CLI_REFRESH_REQUIRED } from "../src/oauth";
 import { AnthropicTokenError } from "../src/oauth/anthropic";
 import { credentialGeneration, getAccountCredential, getAccountSet, getAuthRefreshIntentPath, getCredential, markAccountNeedsReauth, readOAuthRefreshIntent, saveCredential, writeOAuthRefreshIntent } from "../src/oauth/store";
 
@@ -16,6 +16,7 @@ const origCliDbFile = process.env.KIRO_CLI_DB_FILE;
 const origCliDbPath = process.env.KIROCLI_DB_PATH;
 const origCliTokenKey = process.env.KIROCLI_TOKEN_KEY;
 const origClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+const origGrokHome = process.env.GROK_HOME;
 const origFetch = globalThis.fetch;
 const origWarn = console.warn;
 let tmp: string;
@@ -32,6 +33,7 @@ beforeEach(() => {
   delete process.env.KIRO_CLI_DB_FILE;
   delete process.env.KIROCLI_DB_PATH;
   delete process.env.KIROCLI_TOKEN_KEY;
+  delete process.env.GROK_HOME;
   process.env.CLAUDE_CONFIG_DIR = join(tmp, ".claude");
 });
 
@@ -44,6 +46,7 @@ afterEach(() => {
   if (origCliDbFile === undefined) delete process.env.KIRO_CLI_DB_FILE; else process.env.KIRO_CLI_DB_FILE = origCliDbFile;
   if (origCliDbPath === undefined) delete process.env.KIROCLI_DB_PATH; else process.env.KIROCLI_DB_PATH = origCliDbPath;
   if (origCliTokenKey === undefined) delete process.env.KIROCLI_TOKEN_KEY; else process.env.KIROCLI_TOKEN_KEY = origCliTokenKey;
+  if (origGrokHome === undefined) delete process.env.GROK_HOME; else process.env.GROK_HOME = origGrokHome;
   if (origClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = origClaudeConfigDir;
   globalThis.fetch = origFetch;
   console.warn = origWarn;
@@ -376,7 +379,7 @@ describe("oauth refresh hardening", () => {
 
     await expect(getValidAccessToken("xai")).resolves.toBe("xai-disk");
     expect(mock.count()).toBe(0);
-    expect(getCredential("xai")?.refresh).toBe("rt-new");
+    expect(getCredential("xai")?.refresh).toBe("");
     expect(getCredential("xai")?.source).toBe("local-cli");
   });
 
@@ -395,7 +398,7 @@ describe("oauth refresh hardening", () => {
     expect(getCredential("xai")?.expires).toBe(diskExpires);
   });
 
-  test("stale Grok generation refreshes once and detaches to OpenCodex ownership", async () => {
+  test("stale Grok generation never spends the native refresh grant", async () => {
     await saveCredential("xai", {
       access: "xai-old", refresh: "rt-old", expires: Date.now() - 1, accountId: "user-1", source: "local-cli",
     });
@@ -405,22 +408,11 @@ describe("oauth refresh hardening", () => {
     const grokPath = join(tmp, ".grok", "auth.json");
     const before = readFileSync(grokPath);
     const mock = mockXaiRefreshFetch();
-    const warnings: unknown[][] = [];
-    const originalWarn = console.warn;
-    console.warn = (...args: unknown[]) => { warnings.push(args); };
-    try {
-      await expect(getValidAccessToken("xai")).resolves.toBe("xai-fresh");
-    } finally {
-      console.warn = originalWarn;
-    }
-
-    expect(mock.discoveryCount()).toBe(1);
-    expect(mock.tokenCount()).toBe(1);
-    expect(warnings).toEqual([[
-      "[oauth:xai] Grok CLI credential was stale; refreshed into OpenCodex ownership. Grok CLI may require login again.",
-    ]]);
-    expect(getCredential("xai")?.refresh).toBe("rt-fresh");
-    expect(getCredential("xai")?.source).toBe("oauth");
+    await expect(getValidAccessToken("xai")).rejects.toThrow(XAI_LOCAL_CLI_REFRESH_REQUIRED);
+    expect(mock.discoveryCount()).toBe(0);
+    expect(mock.tokenCount()).toBe(0);
+    expect(getCredential("xai")?.refresh).toBe("");
+    expect(getCredential("xai")?.source).toBe("local-cli");
     expect(readFileSync(grokPath)).toEqual(before);
   });
 
@@ -434,11 +426,11 @@ describe("oauth refresh hardening", () => {
     });
     const mock = mockXaiRefreshFetch();
 
-    await expect(getValidAccessToken("xai")).resolves.toBe("xai-fresh");
-    expect(mock.discoveryCount()).toBe(1);
-    expect(mock.tokenCount()).toBe(1);
-    expect(new URLSearchParams(mock.tokenBodies[0]).get("refresh_token")).toBe("rt-ours");
-    expect(getCredential("xai")?.source).toBe("oauth");
+    await expect(getValidAccessToken("xai")).rejects.toThrow(XAI_LOCAL_CLI_REFRESH_REQUIRED);
+    expect(mock.discoveryCount()).toBe(0);
+    expect(mock.tokenCount()).toBe(0);
+    expect(getCredential("xai")?.refresh).toBe("");
+    expect(getCredential("xai")?.source).toBe("local-cli");
   });
 
   test("mismatched Grok identity is not adopted into a local-cli account", async () => {
@@ -450,15 +442,17 @@ describe("oauth refresh hardening", () => {
     });
     const mock = mockXaiRefreshFetch();
 
-    await expect(getValidAccessToken("xai")).resolves.toBe("xai-fresh");
-    expect(mock.discoveryCount()).toBe(1);
-    expect(mock.tokenCount()).toBe(1);
-    expect(new URLSearchParams(mock.tokenBodies[0]).get("refresh_token")).toBe("rt-ours");
+    await expect(getValidAccessToken("xai")).rejects.toThrow(
+      "Grok CLI is signed in to a different account",
+    );
+    expect(mock.discoveryCount()).toBe(0);
+    expect(mock.tokenCount()).toBe(0);
+    expect(getCredential("xai")?.refresh).toBe("");
     expect(getCredential("xai")?.accountId).toBe("user-1");
-    expect(getCredential("xai")?.source).toBe("oauth");
+    expect(getCredential("xai")?.source).toBe("local-cli");
   });
 
-  test("concurrent xAI local-cli refreshes share reconciliation and one detach exchange", async () => {
+  test("concurrent stale xAI local-cli requests share a no-IdP failure", async () => {
     await saveCredential("xai", {
       access: "xai-old", refresh: "rt-old", expires: Date.now() - 1, accountId: "user-1", source: "local-cli",
     });
@@ -467,12 +461,15 @@ describe("oauth refresh hardening", () => {
     });
     const mock = mockXaiRefreshFetch();
 
-    const [a, b] = await Promise.all([getValidAccessToken("xai"), getValidAccessToken("xai")]);
-    expect(a).toBe("xai-fresh");
-    expect(b).toBe("xai-fresh");
-    expect(mock.discoveryCount()).toBe(1);
-    expect(mock.tokenCount()).toBe(1);
-    expect(getCredential("xai")?.source).toBe("oauth");
+    const results = await Promise.allSettled([getValidAccessToken("xai"), getValidAccessToken("xai")]);
+    expect(results.every(result =>
+      result.status === "rejected"
+      && result.reason instanceof Error
+      && result.reason.message === XAI_LOCAL_CLI_REFRESH_REQUIRED)).toBe(true);
+    expect(mock.discoveryCount()).toBe(0);
+    expect(mock.tokenCount()).toBe(0);
+    expect(getCredential("xai")?.refresh).toBe("");
+    expect(getCredential("xai")?.source).toBe("local-cli");
   });
 
   test("Anthropic transient failures do not mark needsReauth", async () => {
