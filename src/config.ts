@@ -608,6 +608,7 @@ const providerConfigSchema = z.object({
   apiKeyTransport: z.enum(["x-api-key", "bearer"]).optional(),
   responsesPath: z.string().min(1).optional(),
   reasoningContentMode: z.enum(REASONING_CONTENT_MODE_VALUES).optional(),
+  chatCompletionTokenField: z.enum(["max_tokens", "max_completion_tokens"]).optional(),
   statelessResponses: z.boolean().optional(),
   supportsServiceTier: z.boolean().optional(),
   preserveResponsesReasoningContent: z.boolean().optional(),

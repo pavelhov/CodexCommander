@@ -470,6 +470,13 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   if (defaultMaxOutputError) return `provider ${name} ${defaultMaxOutputError}`;
   const maxOutputError = positiveIntegerRecordConfigError(raw.modelMaxOutputTokens, "modelMaxOutputTokens");
   if (maxOutputError) return `provider ${name} ${maxOutputError}`;
+  if (
+    raw.chatCompletionTokenField !== undefined
+    && raw.chatCompletionTokenField !== "max_tokens"
+    && raw.chatCompletionTokenField !== "max_completion_tokens"
+  ) {
+    return `provider ${name} chatCompletionTokenField must be max_tokens or max_completion_tokens`;
+  }
   const openRouterError = openRouterRoutingConfigError(typed);
   if (openRouterError) return `provider ${name} ${openRouterError}`;
   if (typed.authMode === "local") {
@@ -539,6 +546,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       "modelContextWindows",
       "defaultMaxOutputTokens",
       "modelMaxOutputTokens",
+      "chatCompletionTokenField",
       "openRouterRouting",
       "modelOpenRouterRouting",
       "reasoningEfforts",

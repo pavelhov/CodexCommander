@@ -326,6 +326,52 @@ describe("openai-chat max output defaults", () => {
     expect(body.max_tokens).toBe(8_000);
   });
 
+  test("canonical Kimi Coding Plan routes use max_completion_tokens for both auth modes and model families", () => {
+    for (const [providerName, authMode] of [
+      ["kimi", "oauth"],
+      ["kimi-code", "key"],
+    ] as const) {
+      for (const [modelId, wireModel] of [
+        ["k3", "k3"],
+        ["k3[1m]", "k3"],
+        ["kimi-k2.7-code", "kimi-k2.7-code"],
+      ] as const) {
+        const config: OcxConfig = {
+          port: 10100,
+          defaultProvider: providerName,
+          providers: {
+            [providerName]: {
+              adapter: "openai-chat",
+              baseUrl: "https://api.kimi.com/coding/v1",
+              apiKey: "test-kimi-credential",
+              authMode,
+            },
+          },
+        };
+        const route = routeModel(config, `${providerName}/${modelId}`);
+        const req = parsed();
+        req.modelId = route.modelId;
+        req.options.maxOutputTokens = 8_000;
+
+        expect(route.provider.chatCompletionTokenField).toBe("max_completion_tokens");
+        const body = JSON.parse(createOpenAIChatAdapter(route.provider).buildRequest(req).body);
+        expect(body).toMatchObject({ model: wireModel, max_completion_tokens: 8_000 });
+        expect(body).not.toHaveProperty("max_tokens");
+      }
+    }
+  });
+
+  test("a custom provider at the Kimi URL keeps the generic max_tokens default", () => {
+    const req = parsed();
+    req.options.maxOutputTokens = 8_000;
+    const body = JSON.parse(createOpenAIChatAdapter(provider({
+      baseUrl: "https://api.kimi.com/coding/v1",
+    })).buildRequest(req).body);
+
+    expect(body.max_tokens).toBe(8_000);
+    expect(body).not.toHaveProperty("max_completion_tokens");
+  });
+
   test("thinking-budget models size thinking_budget from the effective default budget", () => {
     const body = JSON.parse(createOpenAIChatAdapter(provider({
       defaultMaxOutputTokens: 20_000,

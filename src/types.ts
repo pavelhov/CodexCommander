@@ -1168,6 +1168,12 @@ export interface OcxProviderConfig {
   defaultMaxOutputTokens?: number;
   /** Model-specific fallback output token budgets. Exact/model-pattern entries beat the provider default. */
   modelMaxOutputTokens?: Record<string, number>;
+  /**
+   * Output-budget field used by the OpenAI Chat adapter. Most compatible APIs use the legacy
+   * `max_tokens`; newer reasoning endpoints may require `max_completion_tokens` so reasoning and
+   * answer tokens share the documented completion cap.
+   */
+  chatCompletionTokenField?: "max_tokens" | "max_completion_tokens";
   headers?: Record<string, string>;
   /** Default provider-routing preferences for models sent through the canonical OpenRouter API. */
   openRouterRouting?: OpenRouterProviderRouting;

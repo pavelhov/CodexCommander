@@ -202,6 +202,7 @@ export interface ProviderRegistryEntry {
   modelInputModalities?: Record<string, string[]>;
   defaultMaxOutputTokens?: number;
   modelMaxOutputTokens?: Record<string, number>;
+  chatCompletionTokenField?: OcxProviderConfig["chatCompletionTokenField"];
   reasoningEfforts?: string[];
   modelReasoningEfforts?: Record<string, string[]>;
   modelDefaultReasoningEfforts?: Record<string, string>;
@@ -241,7 +242,7 @@ export type ProviderConfigSeed = Pick<
   OcxProviderConfig,
   "adapter" | "baseUrl" | "apiKeyTransport" | "responsesPath" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
   | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
-  | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
+  | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens" | "chatCompletionTokenField"
   | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningContentMode"
   | "modelSupportsReasoningSummaries" | "modelReasoningSummaryDelivery" | "reasoningEffortMap" | "modelReasoningEffortMap"
   | "reasoningWireFormat"
@@ -1006,6 +1007,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // or the one the Claude /v1/messages inbound derives); the adapter itself never invents one.
     // Evidence: https://platform.kimi.com/docs/api/chat
     promptCacheKey: true,
+    // Kimi deprecates max_tokens for reasoning models; its native provider normalizes every
+    // completion cap to max_completion_tokens so the cap covers reasoning plus answer output.
+    chatCompletionTokenField: "max_completion_tokens",
     featured: true,
     oauthId: "kimi",
     jawcodeBundle: "moonshot",
@@ -1960,6 +1964,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelSuffixBracketStrip: true,
     // API-key form of the same Kimi Code Plan transport; keep cache affinity identical to OAuth.
     promptCacheKey: true,
+    chatCompletionTokenField: "max_completion_tokens",
     models: KIMI_CODING_MODELS,
     modelContextWindows: KIMI_CODING_MODEL_CONTEXT_WINDOWS,
     modelInputModalities: KIMI_CODING_MODEL_INPUT_MODALITIES,

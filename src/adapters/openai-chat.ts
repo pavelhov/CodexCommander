@@ -756,7 +756,9 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           ? (toolChoice === "none" ? "none" : "auto")
           : toolChoice;
       }
-      if (maxTokens !== undefined) body.max_tokens = maxTokens;
+      if (maxTokens !== undefined) {
+        body[provider.chatCompletionTokenField ?? "max_tokens"] = maxTokens;
+      }
       if (parsed.options.temperature !== undefined && !modelInList(provider.noTemperatureModels, parsed.modelId)) {
         body.temperature = parsed.options.temperature;
       }

@@ -18,6 +18,7 @@ export interface DerivedKeyLoginProvider {
   modelMaxInputTokens?: Record<string, number>;
   defaultMaxOutputTokens?: number;
   modelMaxOutputTokens?: Record<string, number>;
+  chatCompletionTokenField?: OcxProviderConfig["chatCompletionTokenField"];
   reasoningEfforts?: string[];
   modelReasoningEfforts?: Record<string, string[]>;
   modelDefaultReasoningEfforts?: Record<string, string>;
@@ -135,6 +136,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.modelMaxInputTokens ? { modelMaxInputTokens: { ...entry.modelMaxInputTokens } } : {}),
     ...(entry.defaultMaxOutputTokens !== undefined ? { defaultMaxOutputTokens: entry.defaultMaxOutputTokens } : {}),
     ...(entry.modelMaxOutputTokens ? { modelMaxOutputTokens: { ...entry.modelMaxOutputTokens } } : {}),
+    ...(entry.chatCompletionTokenField !== undefined ? { chatCompletionTokenField: entry.chatCompletionTokenField } : {}),
     ...(entry.reasoningEfforts ? { reasoningEfforts: [...entry.reasoningEfforts] } : {}),
     ...(entry.modelReasoningEfforts ? { modelReasoningEfforts: cloneRecordOfArrays(entry.modelReasoningEfforts) } : {}),
     ...(entry.modelDefaultReasoningEfforts ? { modelDefaultReasoningEfforts: { ...entry.modelDefaultReasoningEfforts } } : {}),
@@ -187,6 +189,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       ...(entry.modelMaxInputTokens ? { modelMaxInputTokens: { ...entry.modelMaxInputTokens } } : {}),
       ...(entry.defaultMaxOutputTokens !== undefined ? { defaultMaxOutputTokens: entry.defaultMaxOutputTokens } : {}),
       ...(entry.modelMaxOutputTokens ? { modelMaxOutputTokens: { ...entry.modelMaxOutputTokens } } : {}),
+      ...(entry.chatCompletionTokenField !== undefined ? { chatCompletionTokenField: entry.chatCompletionTokenField } : {}),
       ...(entry.reasoningEfforts ? { reasoningEfforts: [...entry.reasoningEfforts] } : {}),
       ...(entry.modelReasoningEfforts ? { modelReasoningEfforts: cloneRecordOfArrays(entry.modelReasoningEfforts) } : {}),
       ...(entry.modelDefaultReasoningEfforts ? { modelDefaultReasoningEfforts: { ...entry.modelDefaultReasoningEfforts } } : {}),
@@ -264,6 +267,9 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (seed.modelInputModalities) prov.modelInputModalities = fillRecordOfArrays(seed.modelInputModalities, prov.modelInputModalities);
   if (prov.defaultMaxOutputTokens === undefined && seed.defaultMaxOutputTokens !== undefined) prov.defaultMaxOutputTokens = seed.defaultMaxOutputTokens;
   if (!prov.modelMaxOutputTokens && seed.modelMaxOutputTokens) prov.modelMaxOutputTokens = { ...seed.modelMaxOutputTokens };
+  if (prov.chatCompletionTokenField === undefined && seed.chatCompletionTokenField !== undefined) {
+    prov.chatCompletionTokenField = seed.chatCompletionTokenField;
+  }
   if (!prov.reasoningEfforts && seed.reasoningEfforts) prov.reasoningEfforts = [...seed.reasoningEfforts];
   if (!prov.modelReasoningEfforts && seed.modelReasoningEfforts) prov.modelReasoningEfforts = cloneRecordOfArrays(seed.modelReasoningEfforts);
   if (!prov.modelDefaultReasoningEfforts && seed.modelDefaultReasoningEfforts) prov.modelDefaultReasoningEfforts = { ...seed.modelDefaultReasoningEfforts };

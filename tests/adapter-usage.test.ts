@@ -76,6 +76,55 @@ describe("adapter reasoning and usage details", () => {
     });
   });
 
+  test("OpenAI-compatible reasoning_content is yielded before the upstream stream closes", async () => {
+    const adapter = createOpenAIChatAdapter({ ...provider, reasoningContentMode: "summary" });
+    const encoder = new TextEncoder();
+    let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start(next) { controller = next; },
+    }));
+    const iterator = adapter.parseStream(response)[Symbol.asyncIterator]();
+
+    controller!.enqueue(encoder.encode(
+      'data: {"choices":[{"delta":{"reasoning_content":"first live thought"}}]}\n\n',
+    ));
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const first = await Promise.race([
+      iterator.next(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("reasoning delta was buffered until stream completion")), 500);
+      }),
+    ]).finally(() => {
+      if (timeout !== undefined) clearTimeout(timeout);
+    });
+    expect(first).toEqual({
+      done: false,
+      value: {
+        type: "reasoning_raw_delta",
+        text: "first live thought",
+        presentation: "summary",
+      },
+    });
+
+    controller!.enqueue(encoder.encode([
+      'data: {"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}',
+      "",
+      "data: [DONE]",
+      "",
+    ].join("\n")));
+    controller!.close();
+
+    const remaining = [];
+    for (let next = await iterator.next(); !next.done; next = await iterator.next()) {
+      remaining.push(next.value);
+    }
+    expect(remaining).toEqual([
+      { type: "text_delta", text: "answer" },
+      { type: "done", usage: undefined },
+    ]);
+  });
+
   test("OpenAI-compatible non-OpenAI providers receive the tool catalog nudge", async () => {
     const adapter = createOpenAIChatAdapter(provider);
     const request = await adapter.buildRequest({
