@@ -36,12 +36,13 @@ describe("winsw xml", () => {
   });
 
   test("carries service env: OCX_SERVICE, token file pointer, and escaped PATH parity", () => {
-    const xml = buildWinswXml(entry, env);
+    const xml = buildWinswXml(entry, { ...env, KIMI_CODE_HOME: "C:\\Users\\jun\\.kimi-code & profile" });
 
     expect(xml).toContain('<env name="OCX_SERVICE" value="1"/>');
     expect(xml).toContain('<env name="OCX_API_TOKEN_FILE"');
     expect(xml).toContain('<env name="PATH" value="C:\\bin;C:\\tools &amp; more"/>');
     expect(winswEnvValue(xml, "OPENCODEX_HOME")).toBe(getConfigDir());
+    expect(winswEnvValue(xml, "KIMI_CODE_HOME")).toBe("C:\\Users\\jun\\.kimi-code & profile");
     // Token VALUES never land in the XML — only file pointers / non-secret budgets.
     expect(xml).not.toContain("OPENCODEX_API_AUTH_TOKEN");
     expect(xml).not.toContain("OPENCODEX_ADMIN_AUTH_TOKEN");

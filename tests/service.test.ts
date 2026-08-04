@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
-import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceInstallState, readWindowsSchedulerXmlState, repairService, resolveServiceListenPort, runLaunchctl, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceStatusSummary, systemdNeedsDaemonReload, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
+import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, ensureLaunchdExecutable, launchdExecutableDiagnostic, launchdExecutablePath, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceInstallState, readWindowsSchedulerXmlState, removeLaunchdExecutable, repairService, resolveServiceListenPort, runLaunchctl, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceStatusSummary, systemdNeedsDaemonReload, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
 import type { ServiceDiagnostic } from "../src/service";
 import { buildWinswXml } from "../src/lib/winsw";
 import { serviceApiTokenFilePath } from "../src/lib/service-secrets";
@@ -72,13 +72,16 @@ describe("service listen-port bake", () => {
     }
   });
 
-  test("Windows batch and launchd/systemd shell commands bake start --port", () => {
+  test("service definitions bake start --port", () => {
     process.env.OPENCODEX_HOME = TEST_DIR;
     mkdirSync(TEST_DIR, { recursive: true });
     saveConfig({ port: 13337, hostname: "127.0.0.1", defaultProvider: "openai", providers: {} } as OcxConfig);
     const script = buildWindowsServiceScript({ bun: "C:\\OpenCodex\\bun.exe", cli: "C:\\OpenCodex\\cli.ts" });
     expect(script).toContain("start --port 13337");
-    expect(buildPlist()).toContain("start --port 13337");
+    const plist = buildPlist();
+    expect(plist).toContain("<string>start</string>");
+    expect(plist).toContain("<string>--port</string>");
+    expect(plist).toContain("<string>13337</string>");
     expect(buildUnit()).toContain("start --port 13337");
   });
 });
@@ -109,14 +112,17 @@ describe("systemd service unit", () => {
   test("preserves custom Codex and OpenCodex homes", () => {
     const oldCodexHome = process.env.CODEX_HOME;
     const oldOpenCodexHome = process.env.OPENCODEX_HOME;
+    const oldKimiCodeHome = process.env.KIMI_CODE_HOME;
     const oldApiAuthToken = process.env.OPENCODEX_API_AUTH_TOKEN;
     try {
       process.env.CODEX_HOME = "/tmp/codex-home";
       process.env.OPENCODEX_HOME = "/tmp/opencodex-home";
+      process.env.KIMI_CODE_HOME = "/tmp/kimi-code-home";
       process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
       const unit = buildUnit();
       expect(unit).toContain('Environment="CODEX_HOME=/tmp/codex-home"');
       expect(unit).toContain('Environment="OPENCODEX_HOME=/tmp/opencodex-home"');
+      expect(unit).toContain('Environment="KIMI_CODE_HOME=/tmp/kimi-code-home"');
       expectTextToContainPath(unit, serviceApiTokenFilePath());
       expect(unit).not.toContain("local-secret");
       expect(unit).not.toContain("Environment=\"OPENCODEX_API_AUTH_TOKEN=");
@@ -125,6 +131,8 @@ describe("systemd service unit", () => {
       else process.env.CODEX_HOME = oldCodexHome;
       if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;
+      if (oldKimiCodeHome === undefined) delete process.env.KIMI_CODE_HOME;
+      else process.env.KIMI_CODE_HOME = oldKimiCodeHome;
       if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
       else process.env.OPENCODEX_API_AUTH_TOKEN = oldApiAuthToken;
     }
@@ -469,24 +477,30 @@ describe("Windows service task", () => {
   test("escapes environment values that would break out of set quotes", () => {
     const oldPath = process.env.PATH;
     const oldOpenCodexHome = process.env.OPENCODEX_HOME;
+    const oldKimiCodeHome = process.env.KIMI_CODE_HOME;
     const oldApiAuthToken = process.env.OPENCODEX_API_AUTH_TOKEN;
     try {
       process.env.PATH = 'C:\\safe" & echo PWNED & rem "';
       process.env.OPENCODEX_HOME = 'C:\\ocx" & del C:\\important & rem "';
+      process.env.KIMI_CODE_HOME = 'C:\\kimi" & del C:\\important & rem "';
       process.env.OPENCODEX_API_AUTH_TOKEN = 'token" & echo LEAK & rem "';
       const script = buildWindowsServiceScript();
       expect(script).toContain('set "PATH=C:\\safe & echo PWNED & rem "');
       expect(script).toContain('set "OPENCODEX_HOME=C:\\ocx & del C:\\important & rem "');
+      expect(script).toContain('set "KIMI_CODE_HOME=C:\\kimi & del C:\\important & rem "');
       expect(script).toContain('set "OCX_API_TOKEN_FILE=');
       expect(script).toContain('set /p OPENCODEX_API_AUTH_TOKEN=<"%OCX_API_TOKEN_FILE%"');
       expect(script).not.toContain('set "PATH=C:\\safe" & echo PWNED');
       expect(script).not.toContain('set "OPENCODEX_HOME=C:\\ocx" & del');
+      expect(script).not.toContain('set "KIMI_CODE_HOME=C:\\kimi" & del');
       expect(script).not.toContain("token & echo LEAK");
     } finally {
       if (oldPath === undefined) delete process.env.PATH;
       else process.env.PATH = oldPath;
       if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;
+      if (oldKimiCodeHome === undefined) delete process.env.KIMI_CODE_HOME;
+      else process.env.KIMI_CODE_HOME = oldKimiCodeHome;
       if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
       else process.env.OPENCODEX_API_AUTH_TOKEN = oldApiAuthToken;
     }
@@ -573,17 +587,160 @@ describe("Windows service task", () => {
 });
 
 describe("launchd service plist", () => {
+  test("runs the named OpenCodex executable directly", () => {
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    mkdirSync(TEST_DIR, { recursive: true });
+    const plist = buildPlist();
+
+    expectTextToContainPath(plist, launchdExecutablePath());
+    expect(plist).not.toContain("<string>/bin/sh</string>");
+    expect(plist).not.toContain("<string>-lc</string>");
+    expect(plist).toContain("<string>start</string>");
+    expect(plist).toContain("<string>--port</string>");
+  });
+
+  test("creates a stable unsigned OpenCodex launcher that forwards tokenized arguments", () => {
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    mkdirSync(TEST_DIR, { recursive: true });
+    const bun = join(TEST_DIR, "bun-one");
+
+    const launcher = ensureLaunchdExecutable(bun);
+    expect(launcher).toBe(launchdExecutablePath());
+    const metadata = lstatSync(launcher);
+    expect(metadata.isFile()).toBe(true);
+    expect(metadata.isSymbolicLink()).toBe(false);
+    expect(metadata.mode & 0o111).not.toBe(0);
+    const content = readFileSync(launcher, "utf8");
+    expect(content).toContain("OpenCodex managed launchd launcher v1");
+    expect(content).toContain(`exec '${bun}' "$@"`);
+  });
+
+  test("updates only a launcher proven by install state and the installed plist", () => {
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    mkdirSync(TEST_DIR, { recursive: true });
+    const firstBun = join(TEST_DIR, "bun-one");
+    const secondBun = join(TEST_DIR, "bun-two");
+    const launcher = ensureLaunchdExecutable(firstBun);
+    const state = {
+      version: 2 as const,
+      codexHome: TEST_DIR,
+      opencodexHome: TEST_DIR,
+      bunPath: firstBun,
+      cliPath: join(TEST_DIR, "cli.ts"),
+      backend: "scheduler" as const,
+    };
+    const deps = { readInstallState: () => state, readPlist: () => buildPlist() };
+
+    ensureLaunchdExecutable(secondBun, deps);
+    expect(lstatSync(launcher).isSymbolicLink()).toBe(false);
+    expect(readFileSync(launcher, "utf8")).toContain(`exec '${secondBun}' "$@"`);
+  });
+
+  test("migrates the previous managed Bun symlink to the unsigned launcher", () => {
+    if (process.platform === "win32") return;
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    mkdirSync(TEST_DIR, { recursive: true });
+    const firstBun = join(TEST_DIR, "bun-one");
+    const secondBun = join(TEST_DIR, "bun-two");
+    const launcher = launchdExecutablePath();
+    symlinkSync(firstBun, launcher);
+    const state = {
+      version: 2 as const,
+      codexHome: TEST_DIR,
+      opencodexHome: TEST_DIR,
+      bunPath: firstBun,
+      cliPath: join(TEST_DIR, "cli.ts"),
+      backend: "scheduler" as const,
+    };
+
+    ensureLaunchdExecutable(secondBun, {
+      readInstallState: () => state,
+      readPlist: () => buildPlist(),
+    });
+
+    expect(lstatSync(launcher).isSymbolicLink()).toBe(false);
+    expect(readFileSync(launcher, "utf8")).toContain(`exec '${secondBun}' "$@"`);
+  });
+
+  test("never replaces a foreign regular file or symlink", () => {
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    mkdirSync(TEST_DIR, { recursive: true });
+    const launcher = launchdExecutablePath();
+    const bun = join(TEST_DIR, "bun");
+    const noInstalledService = { readInstallState: () => null };
+
+    writeFileSync(launcher, "user-owned");
+    expect(() => ensureLaunchdExecutable(bun, noInstalledService)).toThrow(/foreign/);
+    expect(readFileSync(launcher, "utf8")).toBe("user-owned");
+
+    if (process.platform === "win32") return;
+    unlinkSync(launcher);
+    symlinkSync(bun, launcher);
+    expect(() => ensureLaunchdExecutable(bun, noInstalledService)).toThrow(/foreign/);
+    expect(readlinkSync(launcher)).toBe(bun);
+    expect(removeLaunchdExecutable(noInstalledService)).toBe(false);
+    expect(readlinkSync(launcher)).toBe(bun);
+  });
+
+  test("uninstall removes only a launcher proven to belong to this service", () => {
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    mkdirSync(TEST_DIR, { recursive: true });
+    const bun = join(TEST_DIR, "bun");
+    const launcher = ensureLaunchdExecutable(bun);
+    const state = {
+      version: 2 as const,
+      codexHome: TEST_DIR,
+      opencodexHome: TEST_DIR,
+      bunPath: bun,
+      cliPath: join(TEST_DIR, "cli.ts"),
+      backend: "scheduler" as const,
+    };
+
+    expect(removeLaunchdExecutable({
+      readInstallState: () => state,
+      readPlist: () => buildPlist(),
+    })).toBe(true);
+    expect(existsSync(launcher)).toBe(false);
+  });
+
+  test("diagnoses a missing or modified launcher without replacing it", () => {
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    mkdirSync(TEST_DIR, { recursive: true });
+    const bun = join(TEST_DIR, "bun");
+    const launcher = ensureLaunchdExecutable(bun);
+    const state = {
+      version: 2 as const,
+      codexHome: TEST_DIR,
+      opencodexHome: TEST_DIR,
+      bunPath: bun,
+      cliPath: join(TEST_DIR, "cli.ts"),
+      backend: "scheduler" as const,
+    };
+    const deps = { readInstallState: () => state, readPlist: () => buildPlist() };
+
+    expect(launchdExecutableDiagnostic(deps)).toBeNull();
+    unlinkSync(launcher);
+    expect(launchdExecutableDiagnostic(deps)).toContain("missing");
+    writeFileSync(launcher, "user-owned", { mode: 0o700 });
+    expect(launchdExecutableDiagnostic(deps)).toContain("STALE");
+    expect(readFileSync(launcher, "utf8")).toBe("user-owned");
+  });
+
   test("preserves custom Codex and OpenCodex homes", () => {
     const oldCodexHome = process.env.CODEX_HOME;
     const oldOpenCodexHome = process.env.OPENCODEX_HOME;
+    const oldKimiCodeHome = process.env.KIMI_CODE_HOME;
     const oldApiAuthToken = process.env.OPENCODEX_API_AUTH_TOKEN;
     try {
       process.env.CODEX_HOME = "/tmp/codex-home";
       process.env.OPENCODEX_HOME = "/tmp/opencodex-home";
+      process.env.KIMI_CODE_HOME = "/tmp/kimi-code-home";
       process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
       const plist = buildPlist();
       expect(plist).toContain("<key>CODEX_HOME</key><string>/tmp/codex-home</string>");
       expect(plist).toContain("<key>OPENCODEX_HOME</key><string>/tmp/opencodex-home</string>");
+      expect(plist).toContain("<key>KIMI_CODE_HOME</key><string>/tmp/kimi-code-home</string>");
+      expect(plist).toContain("<key>OCX_API_TOKEN_FILE</key>");
       expectTextToContainPath(plist, serviceApiTokenFilePath());
       expect(plist).not.toContain("local-secret");
       expect(plist).not.toContain("<key>OPENCODEX_API_AUTH_TOKEN</key>");
@@ -592,6 +749,8 @@ describe("launchd service plist", () => {
       else process.env.CODEX_HOME = oldCodexHome;
       if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;
+      if (oldKimiCodeHome === undefined) delete process.env.KIMI_CODE_HOME;
+      else process.env.KIMI_CODE_HOME = oldKimiCodeHome;
       if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
       else process.env.OPENCODEX_API_AUTH_TOKEN = oldApiAuthToken;
     }
@@ -984,30 +1143,35 @@ describe("launchctl load verification", () => {
   describe("launchdJobMatchesPlist", () => {
     // Shape captured from a real `launchctl print gui/$(id -u)/com.opencodex.proxy`
     // run on macOS 27.0: the arguments block is tab-indented one level, entries two.
-    const cmd = "exec '/pkg/bun' '/pkg/src/cli/index.ts' start --port 10100";
-    const printed = (command: string) => [
+    const args = ["/h/.opencodex/OpenCodex", "/pkg/src/cli/index.ts", "start", "--port", "10100"];
+    const printed = (values: readonly string[]) => [
       "\targuments = {",
-      "\t\t/bin/sh",
-      "\t\t-lc",
-      `\t\tif [ -f '/h/.opencodex/service-api-token' ]; then OPENCODEX_API_AUTH_TOKEN="$(cat '/h/.opencodex/service-api-token')"; export OPENCODEX_API_AUTH_TOKEN; fi; ${command}`,
+      ...values.map(value => `\t\t${value}`),
       "\t}",
     ].join("\n");
 
     test("reports matching when print shows the current arguments", () => {
-      expect(launchdJobMatchesPlist(cmd, {
-        run: () => ({ ok: true, stdout: printed(cmd), stderr: "" }),
+      expect(launchdJobMatchesPlist(args, {
+        run: () => ({ ok: true, stdout: printed(args), stderr: "" }),
       })).toEqual({ loaded: true, matchesPlist: true });
     });
 
     test("reports loaded-but-stale when print shows different arguments", () => {
-      const old = "exec '/old/pkg/bun' '/old/pkg/src/cli/index.ts' start --port 10100";
-      expect(launchdJobMatchesPlist(cmd, {
+      const old = ["/h/.opencodex/OpenCodex", "/old/pkg/src/cli/index.ts", "start", "--port", "10100"];
+      expect(launchdJobMatchesPlist(args, {
         run: () => ({ ok: true, stdout: printed(old), stderr: "" }),
       })).toEqual({ loaded: true, matchesPlist: false });
     });
 
+    test("still recognizes a legacy shell command while an old job is loaded", () => {
+      const legacy = "exec '/pkg/bun' '/pkg/src/cli/index.ts' start --port 10100";
+      expect(launchdJobMatchesPlist(legacy, {
+        run: () => ({ ok: true, stdout: `arguments = {\n\t/bin/sh\n\t-lc\n\t${legacy}\n}`, stderr: "" }),
+      })).toEqual({ loaded: true, matchesPlist: true });
+    });
+
     test("reports not loaded when print fails", () => {
-      expect(launchdJobMatchesPlist(cmd, {
+      expect(launchdJobMatchesPlist(args, {
         run: () => ({ ok: false, stdout: "", stderr: "Could not find service" }),
       })).toEqual({ loaded: false, matchesPlist: false });
     });
@@ -1017,6 +1181,20 @@ describe("launchctl load verification", () => {
     // A runLaunchctl RESULT, not a spawnSync result.
     const failedLoad = () => ({ ok: true, stdout: "", stderr: "Load failed: 5: Input/output error" });
     const cleanLoad = () => ({ ok: true, stdout: "", stderr: "" });
+    const installedPort = () => 10100;
+
+    test("does not silently re-bake a stale Bun runtime during start", () => {
+      process.env.OPENCODEX_HOME = TEST_DIR;
+      mkdirSync(TEST_DIR, { recursive: true });
+      const installedBun = join(TEST_DIR, "installed-bun");
+      const launcher = ensureLaunchdExecutable(installedBun);
+      const before = readFileSync(launcher, "utf8");
+
+      startLaunchd({ launchctl: cleanLoad });
+
+      expect(readFileSync(launcher, "utf8")).toBe(before);
+      expect(readFileSync(launcher, "utf8")).toContain(installedBun);
+    });
 
     test("returns without consulting launchd when the load is clean", () => {
       expect(() => startLaunchd({
@@ -1036,6 +1214,7 @@ describe("launchctl load verification", () => {
         expect(() => startLaunchd({
           launchctl: failedLoad,
           matches: () => ({ loaded: true, matchesPlist: true }),
+          installedPort,
         })).not.toThrow();
       } finally {
         log.mockRestore();
@@ -1047,7 +1226,7 @@ describe("launchctl load verification", () => {
       const lines: string[] = [];
       const log = spyOn(console, "log").mockImplementation(m => { lines.push(String(m)); });
       try {
-        startLaunchd({ launchctl: failedLoad, matches: () => ({ loaded: true, matchesPlist: true }) });
+        startLaunchd({ launchctl: failedLoad, matches: () => ({ loaded: true, matchesPlist: true }), installedPort });
       } finally {
         log.mockRestore();
       }
@@ -1058,6 +1237,7 @@ describe("launchctl load verification", () => {
       expect(() => startLaunchd({
         launchctl: failedLoad,
         matches: () => ({ loaded: true, matchesPlist: false }),
+        installedPort,
       })).toThrow(/bootout/);
     });
 
@@ -1065,6 +1245,7 @@ describe("launchctl load verification", () => {
       expect(() => startLaunchd({
         launchctl: failedLoad,
         matches: () => ({ loaded: false, matchesPlist: false }),
+        installedPort,
       })).toThrow(/service install/);
     });
   });
@@ -1080,15 +1261,23 @@ describe("service serving confirmation", () => {
   describe("launchdListenPort", () => {
     test("reads the port baked into the plist, not the current config", () => {
       expect(launchdListenPort({
-        readPlist: () => "<string>exec '/b' '/c' start --port 18222</string>",
+        readPlist: () => "<string>--port</string>\n<string>18222</string>",
       })).toBe(18222);
     });
 
-    // The command's own Bun/CLI paths precede the argument; a path containing the
-    // literal must not shadow it.
-    test("prefers the argument tail over a path that looks like one", () => {
+    test("ignores a path that contains a decoy port", () => {
       expect(launchdListenPort({
-        readPlist: () => "<string>exec '/opt/start --port 9999/bun' '/c' start --port 18222</string>",
+        readPlist: () => [
+          "<string>/opt/start --port 9999/bun</string>",
+          "<string>--port</string>",
+          "<string>18222</string>",
+        ].join("\n"),
+      })).toBe(18222);
+    });
+
+    test("still reads the legacy shell-command format", () => {
+      expect(launchdListenPort({
+        readPlist: () => "<string>exec '/b' '/c' start --port 18222</string>",
       })).toBe(18222);
     });
 
@@ -1097,8 +1286,8 @@ describe("service serving confirmation", () => {
     });
 
     test("rejects out-of-range ports rather than probing them", () => {
-      expect(launchdListenPort({ readPlist: () => "<string>start --port 0</string>" })).toBeNull();
-      expect(launchdListenPort({ readPlist: () => "<string>start --port 70000</string>" })).toBeNull();
+      expect(launchdListenPort({ readPlist: () => "<string>--port</string><string>0</string>" })).toBeNull();
+      expect(launchdListenPort({ readPlist: () => "<string>--port</string><string>70000</string>" })).toBeNull();
     });
 
     // Linux/Windows hit this on every call: plistPath() has nothing to read.
