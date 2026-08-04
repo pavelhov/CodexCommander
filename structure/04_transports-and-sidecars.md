@@ -490,8 +490,14 @@ honored by BOTH reasoning paths: anthropic `thinking_delta` AND raw `reasoning_r
 (openai-chat `reasoning_content`, kiro tags). Hidden reasoning emits an envelope-only reasoning
 item (`summary: []`, txt-only `ocxr1:` `encrypted_content`, no text deltas) — invisible in the
 Codex app, so tool cells group like native models — while the text still round-trips for
-`preserveReasoningContentModels` replay. Visible mode (summary "auto") keeps the raw
-`content[reasoning_text]` shape. Diagnosis and codex-rs grouping evidence:
+`preserveReasoningContentModels` replay. Visible mode (any requested summary other than `none`)
+keeps the raw `content[reasoning_text]` shape by default. An `openai-chat` provider may instead set
+`reasoningContentMode: "summary"`; its upstream `reasoning_content` deltas then map to native
+reasoning-summary events when visible. The canonical Kimi Code K3 presets use this presentation
+mode. `hideThinkingSummary` always takes precedence over the provider hint, emits no visible
+summary/raw deltas, and retains the same replay envelope. The setting is presentation-only: it
+does not change reasoning effort or manufacture progress, percentage, ETA, or heartbeat text.
+Diagnosis and codex-rs grouping evidence:
 `devlog/_fin/260709_native_response_pattern/`.
 
 ## Chat-to-Responses message phase inference

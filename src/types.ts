@@ -263,7 +263,7 @@ export type AdapterEvent =
   // Kiro reasoning round-trip: the encrypted `redactedContent` blob for the CURRENT assistant turn.
   // Never rendered — it only rides the reasoning item's envelope so the next request can replay it.
   | { type: "kiro_redacted_reasoning"; data: string }
-  | { type: "reasoning_raw_delta"; text: string }
+  | { type: "reasoning_raw_delta"; text: string; presentation?: ReasoningContentMode }
   | { type: "tool_call_start"; id: string; name: string }
   | { type: "tool_call_delta"; arguments: string }
   | { type: "tool_call_end" }
@@ -1210,6 +1210,12 @@ export interface OcxProviderConfig {
   /** Model-specific default Codex reasoning tier; must also be present in the visible tier list. */
   modelDefaultReasoningEfforts?: Record<string, string>;
   /**
+   * Presentation mode for raw upstream `reasoning_content` deltas. Unset preserves the historical
+   * raw-reasoning path; `summary` lets the bridge render those same deltas in Codex's collapsible
+   * reasoning-summary surface without changing the upstream effort or generated content.
+   */
+  reasoningContentMode?: ReasoningContentMode;
+  /**
    * Model-specific Codex reasoning-summary capability. Set false when an OpenAI-compatible
    * Responses backend rejects Codex summary-delivery fields for that model.
    */
@@ -1362,6 +1368,10 @@ export const REASONING_SUMMARY_DELIVERY_VALUES = [
 ] as const;
 
 export type ReasoningSummaryDelivery = typeof REASONING_SUMMARY_DELIVERY_VALUES[number];
+
+export const REASONING_CONTENT_MODE_VALUES = ["raw", "summary"] as const;
+
+export type ReasoningContentMode = typeof REASONING_CONTENT_MODE_VALUES[number];
 
 /** Trusted runtime ownership for Codex-account credentials. Never persisted per provider. */
 export type CodexAccountMode = "direct" | "pool";

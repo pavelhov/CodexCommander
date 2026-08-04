@@ -21,6 +21,9 @@ export interface DerivedKeyLoginProvider {
   reasoningEfforts?: string[];
   modelReasoningEfforts?: Record<string, string[]>;
   modelDefaultReasoningEfforts?: Record<string, string>;
+  reasoningContentMode?: OcxProviderConfig["reasoningContentMode"];
+  modelSupportsReasoningSummaries?: Record<string, boolean>;
+  modelReasoningSummaryDelivery?: OcxProviderConfig["modelReasoningSummaryDelivery"];
   reasoningEffortMap?: Record<string, string>;
   modelReasoningEffortMap?: Record<string, Record<string, string>>;
   reasoningWireFormat?: OcxProviderConfig["reasoningWireFormat"];
@@ -135,6 +138,9 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.reasoningEfforts ? { reasoningEfforts: [...entry.reasoningEfforts] } : {}),
     ...(entry.modelReasoningEfforts ? { modelReasoningEfforts: cloneRecordOfArrays(entry.modelReasoningEfforts) } : {}),
     ...(entry.modelDefaultReasoningEfforts ? { modelDefaultReasoningEfforts: { ...entry.modelDefaultReasoningEfforts } } : {}),
+    ...(entry.reasoningContentMode ? { reasoningContentMode: entry.reasoningContentMode } : {}),
+    ...(entry.modelSupportsReasoningSummaries ? { modelSupportsReasoningSummaries: { ...entry.modelSupportsReasoningSummaries } } : {}),
+    ...(entry.modelReasoningSummaryDelivery ? { modelReasoningSummaryDelivery: { ...entry.modelReasoningSummaryDelivery } } : {}),
     ...(entry.reasoningEffortMap ? { reasoningEffortMap: { ...entry.reasoningEffortMap } } : {}),
     ...(entry.modelReasoningEffortMap ? { modelReasoningEffortMap: cloneNestedRecord(entry.modelReasoningEffortMap) } : {}),
     ...(entry.reasoningWireFormat ? { reasoningWireFormat: entry.reasoningWireFormat } : {}),
@@ -184,6 +190,9 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       ...(entry.reasoningEfforts ? { reasoningEfforts: [...entry.reasoningEfforts] } : {}),
       ...(entry.modelReasoningEfforts ? { modelReasoningEfforts: cloneRecordOfArrays(entry.modelReasoningEfforts) } : {}),
       ...(entry.modelDefaultReasoningEfforts ? { modelDefaultReasoningEfforts: { ...entry.modelDefaultReasoningEfforts } } : {}),
+      ...(entry.reasoningContentMode ? { reasoningContentMode: entry.reasoningContentMode } : {}),
+      ...(entry.modelSupportsReasoningSummaries ? { modelSupportsReasoningSummaries: { ...entry.modelSupportsReasoningSummaries } } : {}),
+      ...(entry.modelReasoningSummaryDelivery ? { modelReasoningSummaryDelivery: { ...entry.modelReasoningSummaryDelivery } } : {}),
       ...(entry.reasoningEffortMap ? { reasoningEffortMap: { ...entry.reasoningEffortMap } } : {}),
       ...(entry.modelReasoningEffortMap ? { modelReasoningEffortMap: cloneNestedRecord(entry.modelReasoningEffortMap) } : {}),
       ...(entry.reasoningWireFormat ? { reasoningWireFormat: entry.reasoningWireFormat } : {}),
@@ -258,6 +267,13 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (!prov.reasoningEfforts && seed.reasoningEfforts) prov.reasoningEfforts = [...seed.reasoningEfforts];
   if (!prov.modelReasoningEfforts && seed.modelReasoningEfforts) prov.modelReasoningEfforts = cloneRecordOfArrays(seed.modelReasoningEfforts);
   if (!prov.modelDefaultReasoningEfforts && seed.modelDefaultReasoningEfforts) prov.modelDefaultReasoningEfforts = { ...seed.modelDefaultReasoningEfforts };
+  if (prov.reasoningContentMode === undefined && seed.reasoningContentMode !== undefined) prov.reasoningContentMode = seed.reasoningContentMode;
+  if (seed.modelSupportsReasoningSummaries) {
+    prov.modelSupportsReasoningSummaries = { ...seed.modelSupportsReasoningSummaries, ...prov.modelSupportsReasoningSummaries };
+  }
+  if (seed.modelReasoningSummaryDelivery) {
+    prov.modelReasoningSummaryDelivery = { ...seed.modelReasoningSummaryDelivery, ...prov.modelReasoningSummaryDelivery };
+  }
   if (!prov.reasoningEffortMap && seed.reasoningEffortMap) prov.reasoningEffortMap = { ...seed.reasoningEffortMap };
   if (!prov.modelReasoningEffortMap && seed.modelReasoningEffortMap) prov.modelReasoningEffortMap = cloneNestedRecord(seed.modelReasoningEffortMap);
   if (prov.reasoningWireFormat === undefined && seed.reasoningWireFormat !== undefined) prov.reasoningWireFormat = seed.reasoningWireFormat;

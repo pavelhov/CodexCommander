@@ -718,6 +718,14 @@ function thinkingBudgetForEffort(parsed: OcxParsedRequest, reasoningEffort: stri
 }
 
 export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAdapter {
+  // Chat Completions exposes one provider-defined `reasoning_content` channel. Preserve its
+  // source identity in AdapterEvent so the Responses bridge can choose the matching client UI:
+  // raw reasoning items by default, or native reasoning-summary items for providers that opt in.
+  // This is presentation metadata only; request construction and replay stay unchanged.
+  // Omit the field for default/explicit raw mode to preserve the pre-feature AdapterEvent shape.
+  const reasoningPresentation = provider.reasoningContentMode === "summary"
+    ? { presentation: "summary" as const }
+    : {};
   return {
     name: "openai-chat",
 
@@ -989,7 +997,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         if (delta) {
           const reasoningText = reasoningTextFrom(delta);
           if (reasoningText !== undefined) {
-            yield { type: "reasoning_raw_delta", text: reasoningText };
+            yield { type: "reasoning_raw_delta", text: reasoningText, ...reasoningPresentation };
           }
           if (typeof delta.content === "string" && delta.content.length > 0) {
             sawUserFacingOutput = true;
@@ -1177,7 +1185,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       const msg = choice.message;
       const reasoningText = reasoningTextFrom(msg);
       if (reasoningText !== undefined) {
-        events.push({ type: "reasoning_raw_delta", text: reasoningText });
+        events.push({ type: "reasoning_raw_delta", text: reasoningText, ...reasoningPresentation });
       }
       if (typeof msg.content === "string") {
         events.push({ type: "text_delta", text: msg.content });

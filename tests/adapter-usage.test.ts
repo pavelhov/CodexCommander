@@ -51,6 +51,31 @@ describe("adapter reasoning and usage details", () => {
     ]);
   });
 
+  test("OpenAI-compatible reasoning_content carries the configured summary presentation", async () => {
+    const adapter = createOpenAIChatAdapter({ ...provider, reasoningContentMode: "summary" });
+    const batch = await adapter.parseResponse?.(new Response(JSON.stringify({
+      choices: [{ message: { reasoning_content: "batch progress", content: "answer" } }],
+    })));
+
+    expect(batch?.[0]).toEqual({
+      type: "reasoning_raw_delta",
+      text: "batch progress",
+      presentation: "summary",
+    });
+
+    const streamed = [];
+    for await (const event of adapter.parseStream(new Response([
+      'data: {"choices":[{"delta":{"reasoning_content":"live progress"}}]}\n\n',
+      "data: [DONE]\n\n",
+    ].join("")))) streamed.push(event);
+
+    expect(streamed[0]).toEqual({
+      type: "reasoning_raw_delta",
+      text: "live progress",
+      presentation: "summary",
+    });
+  });
+
   test("OpenAI-compatible non-OpenAI providers receive the tool catalog nudge", async () => {
     const adapter = createOpenAIChatAdapter(provider);
     const request = await adapter.buildRequest({

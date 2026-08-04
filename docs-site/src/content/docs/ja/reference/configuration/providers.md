@@ -74,6 +74,7 @@ namespace 付き combo alias はその namespace prefix に selector を再利�
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` |この OAuth プロバイダーの Token Guardian ポリシーをオーバーライドします。 |
 | `reasoningEfforts?` | `string[]` |プロバイダー全体の Codex 推論ラベルをアドバタイズして送信します。 |
 | `modelReasoningEfforts?` | `Record<string, string[]>` |モデルごとのラベル。空のリストは努力制御を非表示にします。 |
+| `reasoningContentMode?` | `"raw" \| "summary"` | `openai-chat` が上流の `reasoning_content` をどう表示するかを指定します。デフォルトは `raw`。クライアントが推論を表示するとき、`summary` は Codex のネイティブ summary イベントを使います。非表示モードが常に優先され、リプレイは保持されます。effort や進捗テキストは変更しません。 |
 | `modelSupportsReasoningSummaries?` | `Record<string, boolean>` |モデルを `false` に設定して、概要の広告を停止し、概要配信フィールドを削除します。 |
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` |モデルごとの応答配信列挙型。既存の配信フィールドを書き換えます。 |
 | `modelAdapters?` | `Record<string, string>` | 混合配線ゲートウェイのモデルごとの `openai-chat` または `openai-responses` 配線オーバーライド。明示的なエントリはレジストリのデフォルトを破ります。DeepSeek のプリセットは `deepseek-v4-flash` のネイティブ Responses を選択でき、GitHub Copilot は GPT-5 ファミリー (`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`) を Responses 専用デフォルトとして宣言します。これらのモデルはエージェント トラフィックで `/chat/completions` を拒否するためです。`gpt-5.4-nano` のようなビルトイン デフォルトのないモデルはここでオプトインできます。単線アップストリーム ピンと正規の ChatGPT 転送はオーバーライドを拒否します。 |

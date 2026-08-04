@@ -154,6 +154,7 @@ describe("rotateProviderTransportOn429", () => {
       options: { promptCacheKey },
     };
     const initial = routeModel(config, "kimi-code/k3").provider;
+    expect(initial.reasoningContentMode).toBe("summary");
     const initialBody = JSON.parse(createOpenAIChatAdapter(initial).buildRequest(parsed).body);
     expect(initialBody.prompt_cache_key).toBe(promptCacheKey);
 
@@ -164,6 +165,7 @@ describe("rotateProviderTransportOn429", () => {
     });
     expect(rotated?.apiKey).toBe("key-beta-444555666777");
     expect(rotated?.promptCacheKey).toBe(true);
+    expect(rotated?.reasoningContentMode).toBe("summary");
     const retryBody = JSON.parse(createOpenAIChatAdapter(rotated!).buildRequest(parsed).body);
     expect(retryBody.prompt_cache_key).toBe(promptCacheKey);
   });

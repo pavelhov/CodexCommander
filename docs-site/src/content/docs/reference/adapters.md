@@ -46,6 +46,12 @@ provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local & cloud),
   this request shape. The adapter clamps other effort requests to the verified `low` tier, accepts
   reasoning deltas from either `delta.reasoning_content` or `delta.reasoning`, requests streamed
   usage with `stream_options.include_usage`, and reads usage from non-stream response envelopes.
+- `reasoningContentMode: "summary"` presents upstream `reasoning_content` through Codex's native
+  reasoning-summary events instead of the raw reasoning-content surface. The canonical Kimi Code
+  K3 presets enable this mode and advertise summary support, so the app can display genuine Kimi
+  reasoning deltas as soon as Kimi sends them. It is presentation-only: it neither changes effort
+  nor invents percentage, ETA, or heartbeat text. A client request that hides reasoning still wins;
+  opencodex emits no visible reasoning deltas and keeps the existing replay envelope.
 
 ## `openai-responses`
 

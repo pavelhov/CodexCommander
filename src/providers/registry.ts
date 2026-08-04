@@ -205,6 +205,9 @@ export interface ProviderRegistryEntry {
   reasoningEfforts?: string[];
   modelReasoningEfforts?: Record<string, string[]>;
   modelDefaultReasoningEfforts?: Record<string, string>;
+  reasoningContentMode?: OcxProviderConfig["reasoningContentMode"];
+  modelSupportsReasoningSummaries?: Record<string, boolean>;
+  modelReasoningSummaryDelivery?: OcxProviderConfig["modelReasoningSummaryDelivery"];
   reasoningEffortMap?: Record<string, string>;
   modelReasoningEffortMap?: Record<string, Record<string, string>>;
   reasoningWireFormat?: OcxProviderConfig["reasoningWireFormat"];
@@ -239,7 +242,9 @@ export type ProviderConfigSeed = Pick<
   "adapter" | "baseUrl" | "apiKeyTransport" | "responsesPath" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
   | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
-  | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap" | "reasoningWireFormat"
+  | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningContentMode"
+  | "modelSupportsReasoningSummaries" | "modelReasoningSummaryDelivery" | "reasoningEffortMap" | "modelReasoningEffortMap"
+  | "reasoningWireFormat"
   | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noPenaltyModels"
   | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "reasoningSplitModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames"
   | "googleMode" | "project" | "location" | "headers"
@@ -581,6 +586,9 @@ const KIMI_CODING_REASONING_EFFORTS = Object.fromEntries(
 );
 const KIMI_CODING_DEFAULT_REASONING_EFFORTS = Object.fromEntries(
   KIMI_CODING_K3_MODELS.map(id => [id, "max"]),
+);
+const KIMI_CODING_REASONING_SUMMARY_SUPPORT = Object.fromEntries(
+  KIMI_CODING_K3_MODELS.map(id => [id, true]),
 );
 const KIMI_CODING_REASONING_EFFORT_MAPS = Object.fromEntries(
   KIMI_CODING_K3_MODELS.map(id => [id, KIMI_CODING_K3_REASONING_EFFORT_MAP]),
@@ -1010,6 +1018,8 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     noReasoningModels: KIMI_CODING_NO_REASONING_MODELS,
     modelReasoningEfforts: KIMI_CODING_REASONING_EFFORTS,
     modelDefaultReasoningEfforts: KIMI_CODING_DEFAULT_REASONING_EFFORTS,
+    reasoningContentMode: "summary",
+    modelSupportsReasoningSummaries: KIMI_CODING_REASONING_SUMMARY_SUPPORT,
     modelReasoningEffortMap: KIMI_CODING_REASONING_EFFORT_MAPS,
     noTemperatureModels: KIMI_LOCKED_PARAMETER_MODELS,
     noTopPModels: KIMI_LOCKED_PARAMETER_MODELS,
@@ -1956,6 +1966,8 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     noReasoningModels: KIMI_CODING_NO_REASONING_MODELS,
     modelReasoningEfforts: KIMI_CODING_REASONING_EFFORTS,
     modelDefaultReasoningEfforts: KIMI_CODING_DEFAULT_REASONING_EFFORTS,
+    reasoningContentMode: "summary",
+    modelSupportsReasoningSummaries: KIMI_CODING_REASONING_SUMMARY_SUPPORT,
     modelReasoningEffortMap: KIMI_CODING_REASONING_EFFORT_MAPS,
     noTemperatureModels: KIMI_LOCKED_PARAMETER_MODELS,
     noTopPModels: KIMI_LOCKED_PARAMETER_MODELS,
