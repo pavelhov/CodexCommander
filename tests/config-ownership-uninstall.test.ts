@@ -77,6 +77,25 @@ describe("owned config uninstall", () => {
     }
   });
 
+  test("does not pre-claim the macOS launchd executable name", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-uninstall-launcher-name-"));
+    const ownedPath = join(dir, "config.json");
+    const foreignLauncher = join(dir, "OpenCodex");
+
+    try {
+      expect(recordOwnedConfigPath(dir, ownedPath)).toBe(true);
+      writeFileSync(ownedPath, '{"owned":true}\n');
+      writeFileSync(foreignLauncher, "user-owned\n");
+
+      const result = removeOwnedConfigState(dir);
+      expect(result.status).toBe("partial");
+      expect(result.residualPaths).toEqual([foreignLauncher]);
+      expect(readFileSync(foreignLauncher, "utf8")).toBe("user-owned\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("recursively removes a manifest-owned state directory", () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-uninstall-tree-"));
     const artifacts = join(dir, "artifacts");

@@ -7,7 +7,7 @@
  */
 import { execFileSync, execSync, spawnSync } from "node:child_process";
 import { findLiveProxy, proxyIdentityAt, SERVICE_STOP_LIVENESS } from "./server/proxy-liveness";
-import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readlinkSync, unlinkSync, writeFileSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort, verifyPidIdentity } from "./config";
@@ -57,6 +57,170 @@ function cliEntry(): { bun: string; bunRuntimeSource: BunRuntimeSource; cli: str
 
 function plistPath(): string {
   return join(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`);
+}
+
+/** Stable, user-facing launchd executable name shown by macOS Login Items. */
+export function launchdExecutablePath(): string {
+  return join(getConfigDir(), "OpenCodex");
+}
+
+const LAUNCHD_EXECUTABLE_MARKER = "# OpenCodex managed launchd launcher v1";
+
+type LaunchdExecutableDeps = {
+  readInstallState?: () => ServiceInstallState | null;
+  readPlist?: () => string;
+};
+
+function buildLaunchdExecutable(bun: string): string {
+  // A regular unsigned file gives macOS a stable OpenCodex identity. Keeping Bun in
+  // this tiny wrapper (instead of a symlink) avoids attributing the Login Item to
+  // Bun's signer; "$@" keeps launchd's arguments tokenized rather than re-parsing a
+  // command string.
+  return `#!/bin/sh\n${LAUNCHD_EXECUTABLE_MARKER}\nexec ${shellQuote(resolve(bun))} "$@"\n`;
+}
+
+function launchdPlistTargetsExecutable(text: string, launcher: string): boolean {
+  const argumentsBlock = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(text)?.[1];
+  const firstArgument = argumentsBlock
+    ? /<string>([^<]*)<\/string>/.exec(argumentsBlock)?.[1]
+    : undefined;
+  return firstArgument === plistString(launcher);
+}
+
+function installedLaunchdExecutableEvidence(
+  launcher: string,
+  deps: LaunchdExecutableDeps,
+): { state: ServiceInstallState; plist: string } | null {
+  const state = (deps.readInstallState ?? readServiceInstallState)();
+  if (!state?.bunPath) return null;
+  if (normalizePathForCompare(state.opencodexHome) !== normalizePathForCompare(getConfigDir())) return null;
+  try {
+    const plist = (deps.readPlist ?? (() => readFileSync(plistPath(), "utf8")))();
+    return launchdPlistTargetsExecutable(plist, launcher) ? { state, plist } : null;
+  } catch {
+    return null;
+  }
+}
+
+function sameFsEntry(
+  left: Stats,
+  right: Stats,
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode;
+}
+
+function writeLaunchdExecutableNoClobber(launcher: string, content: string): void {
+  const temp = `${launcher}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temp, content, { encoding: "utf8", flag: "wx", mode: 0o700 });
+    // link(2), unlike rename(2), refuses an existing destination. A file appearing
+    // after our absence check is therefore preserved rather than overwritten.
+    linkSync(temp, launcher);
+  } finally {
+    try { unlinkSync(temp); } catch { /* linked or never created */ }
+  }
+}
+
+function replaceKnownLaunchdExecutable(
+  launcher: string,
+  before: Stats,
+  content: string,
+): void {
+  const temp = `${launcher}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temp, content, { encoding: "utf8", flag: "wx", mode: 0o700 });
+    const current = lstatSync(launcher);
+    if (!sameFsEntry(before, current)) {
+      throw new Error(`Refusing to replace launchd executable changed during install: ${launcher}`);
+    }
+    unlinkSync(launcher);
+    // Do not let a same-user race turn the update into an overwrite: if something
+    // claims the name after unlink, preserve it and fail the install.
+    linkSync(temp, launcher);
+  } finally {
+    try { unlinkSync(temp); } catch { /* linked or never created */ }
+  }
+}
+
+export function ensureLaunchdExecutable(
+  bun = cliEntry().bun,
+  deps: LaunchdExecutableDeps = {},
+): string {
+  const launcher = launchdExecutablePath();
+  const desired = buildLaunchdExecutable(bun);
+  let metadata: Stats;
+  try {
+    metadata = lstatSync(launcher);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    writeLaunchdExecutableNoClobber(launcher, desired);
+    recordOwnedConfigPath(getConfigDir(), launcher);
+    return launcher;
+  }
+
+  if (metadata.isFile() && !metadata.isSymbolicLink()) {
+    const current = readFileSync(launcher, "utf8");
+    if (current === desired && (metadata.mode & 0o111) !== 0) return launcher;
+  }
+
+  const installed = installedLaunchdExecutableEvidence(launcher, deps);
+  const previouslyManaged = Boolean(installed && (
+    (metadata.isSymbolicLink()
+      && normalizePathForCompare(resolve(dirname(launcher), readlinkSync(launcher)))
+        === normalizePathForCompare(installed.state.bunPath!))
+    || (metadata.isFile()
+      && !metadata.isSymbolicLink()
+      && readFileSync(launcher, "utf8") === buildLaunchdExecutable(installed.state.bunPath!))
+  ));
+  if (!previouslyManaged) {
+    throw new Error(`Refusing to replace foreign launchd executable: ${launcher}`);
+  }
+
+  replaceKnownLaunchdExecutable(launcher, metadata, desired);
+  recordOwnedConfigPath(getConfigDir(), launcher);
+  return launcher;
+}
+
+export function removeLaunchdExecutable(deps: LaunchdExecutableDeps = {}): boolean {
+  const launcher = launchdExecutablePath();
+  try {
+    const metadata = lstatSync(launcher);
+    const installed = installedLaunchdExecutableEvidence(launcher, deps);
+    if (!installed) return false;
+    const managed = metadata.isSymbolicLink()
+      ? normalizePathForCompare(resolve(dirname(launcher), readlinkSync(launcher)))
+        === normalizePathForCompare(installed.state.bunPath!)
+      : metadata.isFile()
+        && readFileSync(launcher, "utf8") === buildLaunchdExecutable(installed.state.bunPath!);
+    if (!managed || !sameFsEntry(metadata, lstatSync(launcher))) return false;
+    unlinkSync(launcher);
+    return true;
+  } catch {
+    // An absent launcher or an entry we cannot prove is ours is deliberately left
+    // alone. Uninstalling a service never grants authority over a foreign path.
+    return false;
+  }
+}
+
+/** Report a missing, legacy, non-executable, or modified managed launchd launcher. */
+export function launchdExecutableDiagnostic(deps: LaunchdExecutableDeps = {}): string | null {
+  const launcher = launchdExecutablePath();
+  const installed = installedLaunchdExecutableEvidence(launcher, deps);
+  if (!installed) {
+    return `STALE launchd executable registration (${launcher}) — run 'ocx service install' to repair`;
+  }
+  try {
+    const metadata = lstatSync(launcher);
+    const healthy = metadata.isFile()
+      && !metadata.isSymbolicLink()
+      && (metadata.mode & 0o111) !== 0
+      && readFileSync(launcher, "utf8") === buildLaunchdExecutable(installed.state.bunPath!);
+    return healthy
+      ? null
+      : `STALE launchd executable (${launcher}) — run 'ocx service install' to repair`;
+  } catch {
+    return `STALE launchd executable (missing: ${launcher}) — run 'ocx service install' to repair`;
+  }
 }
 
 function logPath(): string {
@@ -364,15 +528,18 @@ export function buildPlist(): string {
   const path = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
   const codexHome = process.env.CODEX_HOME?.trim();
   const opencodexHome = process.env.OPENCODEX_HOME?.trim();
+  const kimiCodeHome = process.env.KIMI_CODE_HOME?.trim();
+  const args = buildLaunchdArguments(cli);
   const envLines = [
     `    <key>OCX_SERVICE</key><string>1</string>`,
     `    <key>${BUN_RUNTIME_SOURCE_ENV}</key><string>${bunRuntimeSource}</string>`,
     `    <key>${BUN_RUNTIME_PATH_ENV}</key><string>${plistString(bun)}</string>`,
+    `    <key>OCX_API_TOKEN_FILE</key><string>${plistString(serviceApiTokenFilePath())}</string>`,
     `    <key>PATH</key><string>${plistString(path)}</string>`,
     codexHome ? `    <key>CODEX_HOME</key><string>${plistString(codexHome)}</string>` : null,
     opencodexHome ? `    <key>OPENCODEX_HOME</key><string>${plistString(opencodexHome)}</string>` : null,
+    kimiCodeHome ? `    <key>KIMI_CODE_HOME</key><string>${plistString(kimiCodeHome)}</string>` : null,
   ].filter((line): line is string => Boolean(line)).join("\n");
-  const command = buildServiceShellCommand(bun, cli);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -380,9 +547,7 @@ export function buildPlist(): string {
   <key>Label</key><string>${LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/sh</string>
-    <string>-lc</string>
-    <string>${plistString(command)}</string>
+${args.map(arg => `    <string>${plistString(arg)}</string>`).join("\n")}
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -395,6 +560,10 @@ ${envLines}
 </dict>
 </plist>
 `;
+}
+
+function buildLaunchdArguments(cli: string, port = resolveServiceListenPort()): string[] {
+  return [launchdExecutablePath(), cli, "start", "--port", String(port)];
 }
 
 function shellQuote(value: string): string {
@@ -435,15 +604,14 @@ function buildServiceShellCommand(bun: string, cli: string, port = resolveServic
  * OCX_BAKE_PORT, or any later config.port edit, would otherwise leave launchd serving
  * one port while the confirmation probes another, failing a healthy service.
  *
- * Anchored on the closing tag and matched LAST: the command also carries the Bun and
- * CLI paths, and a path containing the literal `start --port 9999` must not shadow
- * the real argument. buildPlist emits the command as the final ProgramArguments
- * string, and buildServiceShellCommand puts the port at the very end of it.
+ * New plists use tokenized ProgramArguments. Keep the legacy shell-command parser so
+ * status and repair can still understand a service installed by an older release.
  */
 export function launchdListenPort(deps: { readPlist?: () => string } = {}): number | null {
   try {
     const text = (deps.readPlist ?? (() => readFileSync(plistPath(), "utf8")))();
-    const last = [...text.matchAll(/start --port (\d{1,5})\s*<\/string>/g)].at(-1);
+    const last = [...text.matchAll(/<string>--port<\/string>\s*<string>(\d{1,5})<\/string>/g)].at(-1)
+      ?? [...text.matchAll(/start --port (\d{1,5})\s*<\/string>/g)].at(-1);
     if (!last) return null;
     const n = Number(last[1]);
     return n > 0 && n <= 65535 ? n : null;
@@ -681,7 +849,7 @@ function launchdGuiDomain(): string {
  * catch a load that silently no-op'd.
  */
 export function launchdJobMatchesPlist(
-  expectedCommand: string,
+  expectedArguments: string | readonly string[],
   deps: { run?: typeof runLaunchctl } = {},
 ): { loaded: boolean; matchesPlist: boolean } {
   const run = deps.run ?? runLaunchctl;
@@ -692,7 +860,16 @@ export function launchdJobMatchesPlist(
   // into a false negative — a false "stale" verdict would send users to `bootout` for
   // nothing.
   const printedText = `${printed.stdout}\n${printed.stderr}`;
-  return { loaded: true, matchesPlist: printedText.includes(expectedCommand) };
+  if (typeof expectedArguments === "string") {
+    return { loaded: true, matchesPlist: printedText.includes(expectedArguments) };
+  }
+  const block = /arguments = \{([\s\S]*?)\n\s*\}/.exec(printedText)?.[1];
+  const actualArguments = block
+    ? block.split("\n").map(line => line.trim()).filter(Boolean)
+    : [];
+  const matchesPlist = actualArguments.length === expectedArguments.length
+    && actualArguments.every((arg, index) => arg === expectedArguments[index]);
+  return { loaded: true, matchesPlist };
 }
 
 /**
@@ -1455,6 +1632,7 @@ export function buildWindowsServiceScript(entry = cliEntry(), port = resolveServ
     windowsBatchSet("PATH", path, "pathList"),
     windowsBatchSet("CODEX_HOME", process.env.CODEX_HOME?.trim(), "path"),
     windowsBatchSet("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim(), "path"),
+    windowsBatchSet("KIMI_CODE_HOME", process.env.KIMI_CODE_HOME?.trim(), "path"),
     windowsBatchSet("OCX_API_TOKEN_FILE", serviceApiTokenFilePath(), "path"),
     windowsBatchSet("OCX_SERVICE_LOG", serviceLogPath(), "path"),
     windowsBatchSet("OCX_BUN", bun, "path"),
@@ -1705,6 +1883,7 @@ function installLaunchd(): void {
   recordOwnedConfigPath(getConfigDir(), serviceStatePath());
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
   writeServiceApiTokenFile();
+  ensureLaunchdExecutable();
   const p = plistPath();
   // Capture this BEFORE writing: the write below makes the plist exist unconditionally,
   // so a post-write existsSync would call every fresh install an "installed" service.
@@ -1740,7 +1919,9 @@ function installLaunchd(): void {
 export function startLaunchd(deps: {
   launchctl?: typeof runLaunchctl;
   matches?: typeof launchdJobMatchesPlist;
+  installedPort?: () => number;
 } = {}): void {
+  const entry = cliEntry();
   const run = deps.launchctl ?? runLaunchctl;
   const p = plistPath();
   const loaded = run(["load", "-w", p]);
@@ -1749,9 +1930,8 @@ export function startLaunchd(deps: {
   // already be bootstrapped from THIS plist, which is a no-op rather than an error.
   // `install` can assume a stale job (it just rewrote the plist); `start` cannot, and
   // throwing here would break `ocx service start` on every healthy service.
-  const entry = cliEntry();
   const live = (deps.matches ?? launchdJobMatchesPlist)(
-    buildServiceShellCommand(entry.bun, entry.cli),
+    buildLaunchdArguments(entry.cli, (deps.installedPort ?? installedServiceListenPort)()),
   );
   if (live.loaded && live.matchesPlist) {
     console.log("ℹ️  service was already loaded from the current plist; nothing to do.");
@@ -1769,6 +1949,9 @@ function statusLaunchd(): string { try { return sh(`launchctl list | grep ${LABE
 function uninstallLaunchd(): void {
   const p = plistPath();
   try { sh(`launchctl unload "${p}" 2>/dev/null`); } catch { /* not loaded */ }
+  // Keep the plist and install state available while proving the launcher is ours.
+  // A foreign file or symlink at the same path is preserved.
+  removeLaunchdExecutable();
   if (existsSync(p)) unlinkSync(p);
 }
 
@@ -2029,7 +2212,13 @@ export function bakedServicePathsDiagnostic(): string | null {
 
 function serviceDiagnosticsSummary(): string {
   const stale = bakedServicePathsDiagnostic();
-  return stale ? `${stale}; logs: ${serviceLogPath()}` : `logs: ${serviceLogPath()}`;
+  const launcherStale = process.platform === "darwin" && existsSync(plistPath())
+    ? launchdExecutableDiagnostic()
+    : null;
+  const diagnostics = [stale, launcherStale].filter((value): value is string => Boolean(value));
+  return diagnostics.length > 0
+    ? `${diagnostics.join("; ")}; logs: ${serviceLogPath()}`
+    : `logs: ${serviceLogPath()}`;
 }
 
 // ── Linux (systemd user unit) ──
@@ -2047,6 +2236,7 @@ export function buildUnit(): string {
   const path = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
   const codexHome = systemdEnvironmentAssignment("CODEX_HOME", process.env.CODEX_HOME?.trim());
   const opencodexHome = systemdEnvironmentAssignment("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim());
+  const kimiCodeHome = systemdEnvironmentAssignment("KIMI_CODE_HOME", process.env.KIMI_CODE_HOME?.trim());
   const envLines = [
     systemdEnvironmentAssignment("OCX_SERVICE", "1"),
     systemdEnvironmentAssignment(BUN_RUNTIME_SOURCE_ENV, bunRuntimeSource),
@@ -2054,6 +2244,7 @@ export function buildUnit(): string {
     systemdEnvironmentAssignment("PATH", path),
     codexHome,
     opencodexHome,
+    kimiCodeHome,
   ].filter((line): line is string => Boolean(line)).join("\n");
   return `[Unit]
 Description=OpenCodex Proxy Server
@@ -2472,7 +2663,10 @@ export function diagnoseService(): ServiceDiagnostic {
   if (process.platform === "darwin") {
     const installed = existsSync(plistPath());
     const running = installed && Boolean(statusLaunchd());
-    const stale = installed && bakedServicePathsDiagnostic() !== null;
+    const stale = installed && (
+      bakedServicePathsDiagnostic() !== null
+      || launchdExecutableDiagnostic() !== null
+    );
     const viable = installed && running && !stale;
     const summary = !installed ? `not installed (${diagnostics})`
       : stale ? `installed, but stale (launchd; ${diagnostics})`
@@ -2552,12 +2746,12 @@ export async function serviceStatusReport(
   const stalePlist = deps.matchesPlist?.() ?? (process.platform === "darwin"
     ? (() => {
         const entry = cliEntry();
-        // Pass the INSTALLED port explicitly: the default third argument is
+        // Pass the INSTALLED port explicitly: the default second argument is
         // resolveServiceListenPort(), which reads OCX_BAKE_PORT/config.port, so after
-        // a config edit the expected string would never match and every run would
+        // a config edit the expected arguments would never match and every run would
         // print a false "OLDER plist".
         return launchdJobMatchesPlist(
-          buildServiceShellCommand(entry.bun, entry.cli, installedServiceListenPort()),
+          buildLaunchdArguments(entry.cli, installedServiceListenPort()),
         );
       })()
     : null);
