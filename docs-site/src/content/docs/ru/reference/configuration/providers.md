@@ -71,6 +71,7 @@ cross-route credential fallback не существует. Строки API GPT-
 | `modelMaxInputTokens?` | `Record<string, number>` | Положительные лимиты max input по моделям, используемые для подсказок auto-compaction в каталоге. |
 | `defaultMaxOutputTokens?` | `number` | Provider-wide fallback для `openai-chat`, когда клиент не передал `max_output_tokens`. |
 | `modelMaxOutputTokens?` | `Record<string, number>` | Положительные fallback-budget'ы `openai-chat` по моделям; exact/pattern-match имеет приоритет над provider-default. |
+| `chatCompletionTokenField?` | `"max_tokens" \| "max_completion_tokens"` | Поле бюджета вывода Chat Completions. По умолчанию `max_tokens`; пресеты Kimi Coding Plan используют `max_completion_tokens`. |
 | `headers?` | `Record<string, string>` | Дополнительные upstream-header'ы. Заголовки авторизации, cookie, API-key-header'ы, встроенные переводы строк и невалидные имена отклоняются. |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | Предпочтения по умолчанию для OpenRouter (`order`, `only`, `allowFallbacks`); валидно только для канонического OpenRouter с `openai-chat`. |
 | `modelOpenRouterRouting?` | `Record<string, OpenRouterProviderRouting>` | Exact override по model id, которые полностью заменяют provider-wide preference для OpenRouter. |

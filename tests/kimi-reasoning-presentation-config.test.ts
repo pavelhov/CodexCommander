@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { buildCatalogEntries } from "../src/codex/catalog";
 import { applyProviderConfigHints } from "../src/codex/catalog/provider-fetch";
 import { getDefaultConfig, validateConfigCandidate } from "../src/config";
+import { providerConfigFromKeyLoginProvider } from "../src/oauth/login-cli";
 import {
   deriveKeyLoginMap,
   deriveOAuthProviderConfig,
@@ -40,14 +41,49 @@ describe("Kimi reasoning-content presentation config", () => {
     );
   });
 
+  test("validates the chat completion token field at disk and management boundaries", () => {
+    const defaults = getDefaultConfig();
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: "https://example.test/v1",
+      chatCompletionTokenField: "max_completion_tokens",
+    } satisfies OcxProviderConfig;
+
+    expect(validateConfigCandidate({
+      ...defaults,
+      defaultProvider: "custom",
+      providers: { custom: provider },
+    }).ok).toBe(true);
+    expect(providerManagementConfigError("custom", provider)).toBeNull();
+
+    const invalid = { ...provider, chatCompletionTokenField: "completion_tokens" };
+    expect(validateConfigCandidate({
+      ...defaults,
+      defaultProvider: "custom",
+      providers: { custom: invalid },
+    }).ok).toBe(false);
+    expect(providerManagementConfigError("custom", invalid)).toBe(
+      "provider custom chatCompletionTokenField must be max_tokens or max_completion_tokens",
+    );
+  });
+
   test("canonical OAuth and API-key Kimi seeds inherit summary presentation without overriding user choices", () => {
     expect(deriveOAuthProviderConfig("kimi")).toMatchObject({
       reasoningContentMode: "summary",
       modelSupportsReasoningSummaries: { k3: true, "k3[1m]": true },
+      chatCompletionTokenField: "max_completion_tokens",
     });
     expect(deriveKeyLoginMap()["kimi-code"]).toMatchObject({
       reasoningContentMode: "summary",
       modelSupportsReasoningSummaries: { k3: true, "k3[1m]": true },
+      chatCompletionTokenField: "max_completion_tokens",
+    });
+    expect(providerConfigFromKeyLoginProvider(
+      deriveKeyLoginMap()["kimi-code"],
+      "test-kimi-key",
+    )).toMatchObject({
+      apiKey: "test-kimi-key",
+      chatCompletionTokenField: "max_completion_tokens",
     });
 
     for (const providerId of ["kimi", "kimi-code"]) {
@@ -57,6 +93,7 @@ describe("Kimi reasoning-content presentation config", () => {
       expect(seed.reasoningContentMode).toBe("summary");
       expect(seed.modelSupportsReasoningSummaries).toEqual({ k3: true, "k3[1m]": true });
       expect(seed.modelDefaultReasoningEfforts?.k3).toBe("max");
+      expect(seed.chatCompletionTokenField).toBe("max_completion_tokens");
 
       const existing: OcxProviderConfig = {
         adapter: entry.adapter,
@@ -65,6 +102,7 @@ describe("Kimi reasoning-content presentation config", () => {
       enrichProviderFromRegistry(providerId, existing);
       expect(existing.reasoningContentMode).toBe("summary");
       expect(existing.modelSupportsReasoningSummaries).toEqual({ k3: true, "k3[1m]": true });
+      expect(existing.chatCompletionTokenField).toBe("max_completion_tokens");
 
       const optedOut: OcxProviderConfig = {
         adapter: entry.adapter,
@@ -97,8 +135,10 @@ describe("Kimi reasoning-content presentation config", () => {
       const routed = routeModel(staleConfig, `${providerId}/k3`).provider;
       expect(routed.reasoningContentMode).toBe("summary");
       expect(routed.modelSupportsReasoningSummaries).toEqual({ k3: true, "k3[1m]": true });
+      expect(routed.chatCompletionTokenField).toBe("max_completion_tokens");
       expect(staleProvider.reasoningContentMode).toBeUndefined();
       expect(staleProvider.modelSupportsReasoningSummaries).toBeUndefined();
+      expect(staleProvider.chatCompletionTokenField).toBeUndefined();
 
       const optedOut = routeModel({
         ...staleConfig,
@@ -106,10 +146,12 @@ describe("Kimi reasoning-content presentation config", () => {
           ...staleProvider,
           reasoningContentMode: "raw" as const,
           modelSupportsReasoningSummaries: { k3: false },
+          chatCompletionTokenField: "max_tokens" as const,
         } },
       }, `${providerId}/k3`).provider;
       expect(optedOut.reasoningContentMode).toBe("raw");
       expect(optedOut.modelSupportsReasoningSummaries).toEqual({ k3: false, "k3[1m]": true });
+      expect(optedOut.chatCompletionTokenField).toBe("max_tokens");
     }
 
   });

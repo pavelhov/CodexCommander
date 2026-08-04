@@ -380,12 +380,15 @@ describe("provider registry parity", () => {
       }
       expect(entry?.modelSuffixBracketStrip).toBe(true);
       expect(entry?.promptCacheKey).toBe(true);
+      expect(entry?.chatCompletionTokenField).toBe("max_completion_tokens");
       // Key-pool 429 rotation rebuilds the provider from the persisted config (not the routed
       // one), so the flag must survive seeding/enrichment, not just the router's registry backfill.
       expect(providerConfigSeed(entry!).promptCacheKey).toBe(true);
+      expect(providerConfigSeed(entry!).chatCompletionTokenField).toBe("max_completion_tokens");
       const enriched: OcxProviderConfig = { adapter: "openai-chat", baseUrl: entry!.baseUrl };
       enrichProviderFromCatalog(providerId, enriched);
       expect(enriched.promptCacheKey).toBe(true);
+      expect(enriched.chatCompletionTokenField).toBe("max_completion_tokens");
       expect(entry?.noReasoningModels).not.toContain("k3");
       expect(entry?.noReasoningModels).not.toContain("k3[1m]");
       expect(entry?.modelReasoningEfforts?.k3).toEqual(["low", "high", "max"]);

@@ -151,12 +151,15 @@ describe("rotateProviderTransportOn429", () => {
       modelId: "k3",
       context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
       stream: false,
-      options: { promptCacheKey },
+      options: { promptCacheKey, maxOutputTokens: 8_000 },
     };
     const initial = routeModel(config, "kimi-code/k3").provider;
     expect(initial.reasoningContentMode).toBe("summary");
+    expect(initial.chatCompletionTokenField).toBe("max_completion_tokens");
     const initialBody = JSON.parse(createOpenAIChatAdapter(initial).buildRequest(parsed).body);
     expect(initialBody.prompt_cache_key).toBe(promptCacheKey);
+    expect(initialBody.max_completion_tokens).toBe(8_000);
+    expect(initialBody).not.toHaveProperty("max_tokens");
 
     const rotated = rotateProviderTransportOn429(config, "kimi-code", initial, {
       now: 1_000_000,
@@ -166,8 +169,11 @@ describe("rotateProviderTransportOn429", () => {
     expect(rotated?.apiKey).toBe("key-beta-444555666777");
     expect(rotated?.promptCacheKey).toBe(true);
     expect(rotated?.reasoningContentMode).toBe("summary");
+    expect(rotated?.chatCompletionTokenField).toBe("max_completion_tokens");
     const retryBody = JSON.parse(createOpenAIChatAdapter(rotated!).buildRequest(parsed).body);
     expect(retryBody.prompt_cache_key).toBe(promptCacheKey);
+    expect(retryBody.max_completion_tokens).toBe(8_000);
+    expect(retryBody).not.toHaveProperty("max_tokens");
   });
 
   test("inherits the routed provider's registry backfills; only the key changes", () => {

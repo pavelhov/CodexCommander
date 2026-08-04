@@ -55,6 +55,7 @@ description: プロバイダー エントリ、認証、エンドポイント、
 | `modelMaxInputTokens?` | `Record<string, number>` |カタログの自動圧縮ヒントに使用されるモデルごとの正の最大入力制限。 |
 | `defaultMaxOutputTokens?` | `number` |クライアントが `max_output_tokens` を省略した場合の、プロバイダー全体の `openai-chat` フォールバック。 |
 | `modelMaxOutputTokens?` | `Record<string, number>` |モデルごとの `openai-chat` フォールバック バジェットがプラスになります。正確な/パターン一致はプロバイダーのデフォルトを上回ります。 |
+| `chatCompletionTokenField?` | `"max_tokens" \| "max_completion_tokens"` | Chat Completions の出力予算フィールド。既定値は `max_tokens`、Kimi Coding Plan プリセットは `max_completion_tokens` を使用します。 |
 | `headers?` | `Record<string, string>` |追加の上流ヘッダー。認証、Cookie、API キー ヘッダー、埋め込まれた改行、および無効な名前は拒否されます。 |
 | `openRouterRouting?` | `OpenRouterProviderRouting` |デフォルトの OpenRouter `order`、`only`、および `allowFallbacks` 設定。 `openai-chat` を持つ正規 OpenRouter に対してのみ有効です。 |
 | `modelOpenRouterRouting?` | `Record<string, OpenRouterProviderRouting>` |プロバイダー全体の OpenRouter 設定を置き換える正確なモデル ID のオーバーライド。 |

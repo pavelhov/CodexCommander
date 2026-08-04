@@ -330,6 +330,12 @@ src/providers/key-failover.ts). If an opted-in upstream rejects the field, OpenC
 saved configuration. Other OpenAI-compatible providers remain deny-by-default because strict
 backends may reject the OpenAI-specific field.
 
+The same canonical Kimi presets select `chatCompletionTokenField: "max_completion_tokens"`.
+Kimi deprecates `max_tokens` for reasoning models, and its native provider normalizes completion
+caps to `max_completion_tokens`; uncapped requests still omit both fields. This is a declarative
+provider capability rather than a destination-host check, so a custom provider pointed at the same
+URL keeps the generic `max_tokens` default unless it opts in explicitly.
+
 ## xAI Grok hardening (official Grok Build contract parity)
 
 Grounded in the open-sourced official client (xai-org/grok-build); unit + evidence:

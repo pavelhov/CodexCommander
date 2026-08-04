@@ -290,6 +290,9 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
     ...(provider.defaultMaxOutputTokens === undefined && registryEntry.defaultMaxOutputTokens !== undefined
       ? { defaultMaxOutputTokens: registryEntry.defaultMaxOutputTokens }
       : {}),
+    ...(provider.chatCompletionTokenField === undefined && registryEntry.chatCompletionTokenField !== undefined
+      ? { chatCompletionTokenField: registryEntry.chatCompletionTokenField }
+      : {}),
     ...(modelContextWindows ? { modelContextWindows } : {}),
     ...(modelInputModalities ? { modelInputModalities } : {}),
     ...(modelMaxInputTokens ? { modelMaxInputTokens } : {}),

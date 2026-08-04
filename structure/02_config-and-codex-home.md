@@ -150,9 +150,10 @@ catalog/request tier metadata may use `priority`. Do not collapse these spelling
 `OcxProviderConfig.defaultMaxOutputTokens` and `modelMaxOutputTokens` are OpenAI Chat wire defaults,
 not context-window metadata. They are applied only when a Responses request omits
 `max_output_tokens`; an explicit request value wins, then a model-specific configured value, then
-the provider default, then the adapter omits `max_tokens`.
+the provider default, then the adapter omits the output-budget field. `chatCompletionTokenField`
+selects that field (`max_tokens` by default or `max_completion_tokens` for providers such as Kimi).
 
-Both fields must stay positive finite integers at disk-config and management validation boundaries.
+Both numeric fields must stay positive finite integers at disk-config and management validation boundaries.
 Registry entries may seed them through `providerConfigSeed`, key-login derivation, OAuth reconcile,
 and `routeModel`, but user config overrides registry defaults per field/key.
 
