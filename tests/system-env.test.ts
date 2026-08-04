@@ -93,6 +93,7 @@ describe("system environment injection", () => {
     // may add owned ocx-*.md writes — devlog 070; count is no longer fixed).
     const writePaths = writeSpy.mock.calls.map(call => String(call[0]));
     expect(writePaths.some(p => p.includes("claude-env.sh"))).toBe(true);
+    expect(writePaths.some(p => p.endsWith("/.zshrc"))).toBe(true);
     expect(writePaths.some(p => p.includes("system-env-port"))).toBe(true);
     expect(JSON.parse(trackingFile!)).toMatchObject({ pid: process.pid, port: 4567 });
   });
@@ -128,6 +129,7 @@ describe("system environment injection", () => {
       ...baseConfig,
       claudeCode: { systemEnv: false },
     })).toEqual({ injected: false, reason: "systemEnv disabled" });
+    expect(writeSpy.mock.calls.some(call => String(call[0]).endsWith("/.zshrc"))).toBe(false);
   });
 
   test("injectSystemEnv preserves a custom ANTHROPIC_BASE_URL", async () => {
