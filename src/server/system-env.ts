@@ -329,6 +329,9 @@ export async function injectSystemEnv(port: number, config: OcxConfig): Promise<
 
     // Shell-hook env file: works for new shells in already-running Terminal.app.
     writeShellEnvFile(port, config, modelEnv, auto);
+    // Install the shell hook only after the user explicitly enables systemEnv and
+    // injection succeeds. Startup must not mutate .zshrc while this feature is off.
+    installShellHook();
 
     // Gateway-model cache pre-write (devlog 030): plain `claude` sessions read the
     // picker list from ~/.claude/cache/gateway-models.json and cannot refresh it

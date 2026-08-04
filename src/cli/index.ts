@@ -35,7 +35,7 @@ import { startupHealthSummary } from "../codex/autostart-health";
 import { drainAndShutdown, isRecyclingForExit, startServer } from "../server";
 import { injectSystemEnv, revertSystemEnv } from "../server/system-env";
 import { buildDesktop3pRegistry } from "../claude/desktop-3p";
-import { installShellHook, uninstallShellHook } from "../server/system-env";
+import { uninstallShellHook } from "../server/system-env";
 import { startTokenGuardian } from "../oauth/token-guardian";
 import { startHistoryMigrationGuardian } from "../codex/history-migration-guardian";
 import { maybeAutoRestoreCodexShim } from "./codex-shim-autorestore";
@@ -341,8 +341,6 @@ async function handleStart(options: { block?: boolean } = {}) {
   // System-wide env injection AFTER signal handlers are registered (crash safety:
   // syncCleanup reverts even if injection itself or subsequent startup steps fail).
   await injectSystemEnv(port, config).catch(() => {});
-  // Auto-install .zshrc hook (idempotent — skips if already present).
-  installShellHook();
 
   await maybeShowStarPrompt(); // once-only Yes/No GitHub-star prompt on first interactive start
   // Post-startup sync drives the readiness gate AND the #1046 stale app-server
