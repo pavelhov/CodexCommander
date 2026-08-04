@@ -3,19 +3,23 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  detectGrokCliToken,
   detectKimiCliToken,
   parseClaudeOauthPayload,
+  parseGrokCliCredential,
   parseKimiCliCredential,
   readClaudeCredentialsFile,
 } from "../src/oauth/local-token-detect";
 
 let tmp: string;
 let prevConfigDir: string | undefined;
+let prevGrokHome: string | undefined;
 let prevKimiHome: string | undefined;
 
 beforeAll(() => {
   tmp = mkdtempSync(join(tmpdir(), "ocx-claude-detect-"));
   prevConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  prevGrokHome = process.env.GROK_HOME;
   prevKimiHome = process.env.KIMI_CODE_HOME;
 });
 
@@ -26,6 +30,8 @@ afterAll(() => {
 afterEach(() => {
   if (prevConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = prevConfigDir;
+  if (prevGrokHome === undefined) delete process.env.GROK_HOME;
+  else process.env.GROK_HOME = prevGrokHome;
   if (prevKimiHome === undefined) delete process.env.KIMI_CODE_HOME;
   else process.env.KIMI_CODE_HOME = prevKimiHome;
 });
@@ -35,6 +41,78 @@ function jwtWithClaims(claims: Record<string, unknown>): string {
   const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
   return `${header}.${payload}.sig`;
 }
+
+describe("Grok CLI read-only credential detection", () => {
+  test("respects GROK_HOME and discards the rotating refresh grant", () => {
+    const home = join(tmp, "grok-a");
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "auth.json"), JSON.stringify({
+      "https://auth.x.ai::openid profile": {
+        key: "grok-access",
+        refresh_token: "grok-cli-owned-refresh",
+        expires_at: "2033-05-18T03:33:20.000Z",
+        user_id: "grok-user",
+        email: "GROK@EXAMPLE.COM",
+      },
+    }));
+    process.env.GROK_HOME = home;
+
+    expect(detectGrokCliToken()).toEqual({
+      access: "grok-access",
+      refresh: "",
+      expires: 2_000_000_000_000,
+      accountId: "grok-user",
+      email: "grok@example.com",
+      source: "local-cli",
+    });
+  });
+
+  test("rejects malformed, missing-expiry, and identity-less records", () => {
+    expect(parseGrokCliCredential("not json")).toBeNull();
+    expect(parseGrokCliCredential(JSON.stringify({
+      "https://auth.x.ai::scope": { key: "grok-access", user_id: "user" },
+    }))).toBeNull();
+    expect(parseGrokCliCredential(JSON.stringify({
+      "https://auth.x.ai::scope": {
+        key: "grok-access",
+        expires_at: "2033-05-18T03:33:20.000Z",
+      },
+    }))).toBeNull();
+  });
+
+  test("uses principal_id when user_id is absent", () => {
+    expect(parseGrokCliCredential(JSON.stringify({
+      "https://auth.x.ai::scope": {
+        key: "grok-access",
+        expires_at: "2033-05-18T03:33:20.000Z",
+        principal_id: "principal-1",
+      },
+    }))).toMatchObject({ accountId: "principal-1", refresh: "", source: "local-cli" });
+  });
+
+  test("refuses oversized and symlinked credential files", () => {
+    const oversized = join(tmp, "grok-oversized");
+    mkdirSync(oversized, { recursive: true });
+    writeFileSync(join(oversized, "auth.json"), " ".repeat(65 * 1024));
+    process.env.GROK_HOME = oversized;
+    expect(detectGrokCliToken()).toBeNull();
+
+    if (process.platform === "win32") return;
+    const linked = join(tmp, "grok-symlink");
+    const target = join(tmp, "grok-actual.json");
+    mkdirSync(linked, { recursive: true });
+    writeFileSync(target, JSON.stringify({
+      "https://auth.x.ai::scope": {
+        key: "grok-access",
+        expires_at: "2033-05-18T03:33:20.000Z",
+        user_id: "user",
+      },
+    }));
+    symlinkSync(target, join(linked, "auth.json"));
+    process.env.GROK_HOME = linked;
+    expect(detectGrokCliToken()).toBeNull();
+  });
+});
 
 describe("Kimi Code read-only credential detection", () => {
   test("reads Unix-second expiry and discards the rotating refresh grant", () => {

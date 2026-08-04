@@ -12,9 +12,6 @@ const XAI_OAUTH_CALLBACK_PATH = "/callback";
 const XAI_OAUTH_REFRESH_SKEW_MS = 2 * 60 * 1000;
 const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
 
-export const XAI_LOCAL_CLI_DETACH_WARNING =
-  "[oauth:xai] Grok CLI credential was stale; refreshed into OpenCodex ownership. Grok CLI may require login again.";
-
 interface XaiDiscovery {
   authorizationEndpoint: string;
   tokenEndpoint: string;
@@ -201,22 +198,21 @@ export async function loginXai(
   if (importLocal !== "off") {
     const { detectGrokCliToken } = await import("./local-token-detect");
     const local = detectGrokCliToken();
+    if (local && local.expires > Date.now() + 60_000) {
+      ctrl.onProgress?.("Found a fresh Grok CLI token, linking read-only");
+      return local;
+    }
+    if (importLocal === "only") {
+      throw new Error(
+        local
+          ? "Grok CLI token is stale. Run `grok` once to refresh its login, then retry."
+          : "No Grok CLI token found. Run `grok login`, then retry.",
+      );
+    }
     if (local) {
-      ctrl.onProgress?.("Found Grok CLI token, importing automatically");
-      if (local.expires >= Date.now() + 60_000) return local;
-      try {
-        const fresh = await refreshXaiToken(local.refresh, ctrl.signal);
-        ctrl.onProgress?.(XAI_LOCAL_CLI_DETACH_WARNING);
-        return { ...fresh, source: "oauth" };
-      } catch (error) {
-        if (importLocal === "only") {
-          throw new Error(
-            `Grok CLI token is expired and could not be refreshed: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }
-    } else if (importLocal === "only") {
-      throw new Error("No Grok CLI token found at ~/.grok/auth.json. Run 'ocx login xai' for browser OAuth.");
+      ctrl.onProgress?.(
+        "Grok CLI token is stale, so it cannot be linked safely; continuing with an independent xAI browser login",
+      );
     }
   }
 

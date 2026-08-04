@@ -16,7 +16,7 @@
  *   extracts JWT `sub` — both append distinct accounts under multiauth.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir, atomicWriteFile, backupInvalidConfig, hardenConfigDir, hardenExistingSecret } from "../config";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
@@ -200,14 +200,78 @@ export function createOAuthRefreshIntentLock(provider:string,accountId:string,ov
  * would silently drop the new shape (normalizeCredential -> null) and then persist an empty
  * store, destroying refresh tokens; the backup makes that recoverable.
  */
+function scrubXaiLocalCliRefreshInRawStore(raw: unknown): boolean {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+  const xai = (raw as Record<string, unknown>).xai;
+  let scrubbed = false;
+  const scrubCredential = (value: unknown): void => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    const credential = value as Record<string, unknown>;
+    if (credential.source !== "local-cli" || typeof credential.refresh !== "string" || !credential.refresh) return;
+    credential.refresh = "";
+    scrubbed = true;
+  };
+  if (xai && typeof xai === "object" && !Array.isArray(xai)) {
+    const accounts = (xai as { accounts?: unknown }).accounts;
+    if (Array.isArray(accounts)) {
+      for (const account of accounts) {
+        if (!account || typeof account !== "object" || Array.isArray(account)) continue;
+        scrubCredential((account as { credential?: unknown }).credential);
+      }
+    } else {
+      scrubCredential(xai);
+    }
+  }
+  return scrubbed;
+}
+
 function backupLegacyOnce(): void {
   const path = getAuthStorePath();
   const backup = `${path}.pre-multiauth`;
   if (!existsSync(path) || existsSync(backup)) return;
   try {
-    copyFileSync(path, backup);
-    try { chmodSync(backup, 0o600); } catch { /* best-effort */ }
+    const bytes = readFileSync(path, "utf8");
+    const raw = JSON.parse(bytes) as Record<string, unknown>;
+    const backupBytes = scrubXaiLocalCliRefreshInRawStore(raw)
+      ? `${JSON.stringify(raw, null, 2)}\n`
+      : bytes;
+    const fd = openSync(backup, "wx", 0o600);
+    try { writeFileSync(fd, backupBytes, "utf8"); }
+    finally { closeSync(fd); }
   } catch { /* best-effort */ }
+}
+
+const MAX_LEGACY_AUTH_BACKUP_BYTES = 4 * 1024 * 1024;
+
+/** Remove native Grok refresh grants retained by a backup from an older build. */
+export function scrubExistingXaiLocalCliRefreshBackup(): void {
+  const backup = `${getAuthStorePath()}.pre-multiauth`;
+  let fd: number | undefined;
+  try {
+    const before = lstatSync(backup);
+    if (!before.isFile() || before.nlink !== 1 || before.size > MAX_LEGACY_AUTH_BACKUP_BYTES) return;
+    fd = openSync(backup, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    const opened = fstatSync(fd);
+    if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== before.dev || opened.ino !== before.ino || opened.size > MAX_LEGACY_AUTH_BACKUP_BYTES) return;
+    // Read at most the observed size plus one byte. The extra byte detects a writer that
+    // extends the file after fstat without allocating the full global bound on every check.
+    const bytes = Buffer.allocUnsafe(Math.min(MAX_LEGACY_AUTH_BACKUP_BYTES + 1, opened.size + 1));
+    let total = 0;
+    while (total < bytes.length) {
+      const count = readSync(fd, bytes, total, bytes.length - total, null);
+      if (count === 0) break;
+      total += count;
+    }
+    closeSync(fd);
+    fd = undefined;
+    if (total === 0 || total > opened.size || total > MAX_LEGACY_AUTH_BACKUP_BYTES) return;
+    const raw = JSON.parse(bytes.toString("utf8", 0, total)) as Record<string, unknown>;
+    if (!scrubXaiLocalCliRefreshInRawStore(raw)) return;
+    const current = lstatSync(backup);
+    if (!current.isFile() || current.nlink !== 1 || current.dev !== opened.dev || current.ino !== opened.ino || current.mtimeMs !== opened.mtimeMs || current.size !== opened.size) return;
+    atomicWriteFile(backup, `${JSON.stringify(raw, null, 2)}\n`);
+  } catch { /* best-effort migration; never follow or replace an unsafe path */ }
+  finally { if (fd !== undefined) try { closeSync(fd); } catch { /* best-effort */ } }
 }
 
 function isCredentialSource(value: unknown): value is OAuthCredentialSource {
@@ -428,6 +492,7 @@ function serializeMutation<T>(work: () => Promise<T>, retainedValues: readonly u
 export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
     const { store, hadLegacy } = loadAuthStoreInternal();
     if (hadLegacy) backupLegacyOnce();
+    scrubExistingXaiLocalCliRefreshBackup();
     const result = await fn(store);
     persist(store);
     return result;

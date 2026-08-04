@@ -438,6 +438,7 @@ export function buildPlist(): string {
   const codexHome = process.env.CODEX_HOME?.trim();
   const opencodexHome = process.env.OPENCODEX_HOME?.trim();
   const kimiCodeHome = process.env.KIMI_CODE_HOME?.trim();
+  const grokHome = process.env.GROK_HOME?.trim();
   const args = buildLaunchdArguments(cli);
   const envLines = [
     `    <key>OCX_SERVICE</key><string>1</string>`,
@@ -446,6 +447,7 @@ export function buildPlist(): string {
     codexHome ? `    <key>CODEX_HOME</key><string>${plistString(codexHome)}</string>` : null,
     opencodexHome ? `    <key>OPENCODEX_HOME</key><string>${plistString(opencodexHome)}</string>` : null,
     kimiCodeHome ? `    <key>KIMI_CODE_HOME</key><string>${plistString(kimiCodeHome)}</string>` : null,
+    grokHome ? `    <key>GROK_HOME</key><string>${plistString(grokHome)}</string>` : null,
   ].filter((line): line is string => Boolean(line)).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -1450,6 +1452,7 @@ export function buildWindowsServiceScript(entry = cliEntry(), port = resolveServ
     windowsBatchSet("CODEX_HOME", process.env.CODEX_HOME?.trim(), "path"),
     windowsBatchSet("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim(), "path"),
     windowsBatchSet("KIMI_CODE_HOME", process.env.KIMI_CODE_HOME?.trim(), "path"),
+    windowsBatchSet("GROK_HOME", process.env.GROK_HOME?.trim(), "path"),
     windowsBatchSet("OCX_API_TOKEN_FILE", serviceApiTokenFilePath(), "path"),
     windowsBatchSet("OCX_SERVICE_LOG", serviceLogPath(), "path"),
     windowsBatchSet("OCX_BUN", bun, "path"),
@@ -2049,12 +2052,14 @@ export function buildUnit(): string {
   const codexHome = systemdEnvironmentAssignment("CODEX_HOME", process.env.CODEX_HOME?.trim());
   const opencodexHome = systemdEnvironmentAssignment("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim());
   const kimiCodeHome = systemdEnvironmentAssignment("KIMI_CODE_HOME", process.env.KIMI_CODE_HOME?.trim());
+  const grokHome = systemdEnvironmentAssignment("GROK_HOME", process.env.GROK_HOME?.trim());
   const envLines = [
     systemdEnvironmentAssignment("OCX_SERVICE", "1"),
     systemdEnvironmentAssignment("PATH", path),
     codexHome,
     opencodexHome,
     kimiCodeHome,
+    grokHome,
   ].filter((line): line is string => Boolean(line)).join("\n");
   return `[Unit]
 Description=OpenCodex Proxy Server
