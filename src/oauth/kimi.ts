@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { getConfigDir } from "../config";
-import type { OAuthController, OAuthCredentials } from "./types";
+import type { LocalTokenImportMode, OAuthController, OAuthCredentials } from "./types";
 
 const CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098";
 const DEFAULT_OAUTH_HOST = "https://auth.kimi.com";
@@ -193,7 +193,31 @@ async function pollForToken(deviceCode: string, intervalMs: number, expiresInMs:
   throw new Error("Kimi device flow timed out");
 }
 
-export async function loginKimi(ctrl: OAuthController): Promise<OAuthCredentials> {
+export async function loginKimi(
+  ctrl: OAuthController,
+  opts?: { importLocal?: LocalTokenImportMode },
+): Promise<OAuthCredentials> {
+  const importLocal = opts?.importLocal ?? "off";
+  if (importLocal !== "off") {
+    const { detectKimiCliToken } = await import("./local-token-detect");
+    const local = detectKimiCliToken();
+    if (local && local.expires > Date.now() + 60_000) {
+      ctrl.onProgress?.("Found a fresh Kimi Code CLI token, linking read-only");
+      return local;
+    }
+    if (importLocal === "only") {
+      throw new Error(
+        local
+          ? "Kimi Code CLI token is stale. Run `kimi` once to refresh its login, then retry."
+          : "No Kimi Code CLI token found. Run `kimi login`, then retry.",
+      );
+    }
+    if (local) {
+      ctrl.onProgress?.(
+        "Kimi Code CLI token is stale, so it cannot be linked safely; continuing with an independent Kimi device login",
+      );
+    }
+  }
   const device = await requestDeviceAuthorization();
   ctrl.onAuth?.({ url: device.verificationUriComplete, instructions: `Enter code: ${device.userCode}` });
   return pollForToken(device.deviceCode, device.intervalMs, device.expiresInMs, ctrl.signal);

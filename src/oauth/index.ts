@@ -18,7 +18,7 @@ import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport } from "../providers/registry";
 import { resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
 import { resolveProviderTransport } from "../providers/xai-transport";
-import { detectClaudeCodeToken, detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
+import { detectClaudeCodeToken, detectGrokCliToken, detectKimiCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
 import { logOAuthEvent } from "./log";
 import { captureConfigGeneration, sweepExpiredOnWrite, type GenerationContext } from "../lib/state-store-sweeper";
 import { retainedUtf8Bytes } from "../lib/admission";
@@ -119,6 +119,7 @@ const permanentRefreshFailures=new Map<string,number>();
 interface XaiRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal }
 interface AnthropicRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal; flight?: OAuthRefreshFlightEvidence; replacedStaleFlight?: OAuthRefreshFlightEvidence }
 interface GenericRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal }
+interface KimiLocalCliRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void> }
 function verdictKey(p:string,a:string,c:OAuthCredentials){return `${p}\0${a}\0${credentialGeneration(c)}`;}
 function cached(p:string,a:string,c:OAuthCredentials,now:()=>number){const k=verdictKey(p,a,c),u=permanentRefreshFailures.get(k);if(u===undefined)return false;if(u<=now()){permanentRefreshFailures.delete(k);return false;}return true;}
 export function sweepExpiredXaiPermanentFailureVerdicts(now=Date.now()):number{let removed=0;for(const[key,until]of permanentRefreshFailures){if(until>now)continue;permanentRefreshFailures.delete(key);removed+=1;}return removed;}
@@ -186,7 +187,7 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     defaultRefreshPolicy: "disabled",
   },
   kimi: {
-    login: (ctrl) => loginKimi(ctrl),
+    login: (ctrl, opts) => loginKimi(ctrl, { importLocal: opts?.forceLogin ? "off" : "fallback" }),
     refresh: refreshKimiToken,
     providerConfig: oauthConfig("kimi"),
     defaultModel: oauthDefaultModel("kimi"),
@@ -272,11 +273,14 @@ export class UnsupportedOAuthProviderError extends Error {
 }
 
 export class OAuthLoginRequiredError extends Error {
-  constructor(provider: string) {
-    super(`Not logged in to ${provider}. Run: ocx login ${provider}`);
+  constructor(provider: string, message = `Not logged in to ${provider}. Run: ocx login ${provider}`) {
+    super(message);
     this.name = "OAuthLoginRequiredError";
   }
 }
+
+export const KIMI_LOCAL_CLI_REFRESH_REQUIRED =
+  "Kimi CLI-linked credential is stale. Run `kimi` once to refresh its login, then retry the OpenCodex request.";
 
 function accessSnapshot(provider: string, accountId: string, cred: OAuthCredentials): OAuthAccessSnapshot {
   const storedKiroRouting = {
@@ -395,7 +399,7 @@ export async function getValidAccessTokenSnapshot(provider: string): Promise<OAu
 }
 
 /** Providers whose upstream-401 replay path may force a snapshot refresh. */
-const FORCE_REFRESH_PROVIDERS = new Set(["xai", "github-copilot", "kiro"]);
+const FORCE_REFRESH_PROVIDERS = new Set(["xai", "github-copilot", "kiro", "kimi"]);
 
 export async function forceRefreshOAuthAccessSnapshot(
   rejected: OAuthAccessSnapshot,
@@ -446,6 +450,85 @@ function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCrede
     ...(fresh.kiro === undefined && previous.kiro ? { kiro: previous.kiro } : {}),
   };
 }
+
+function isSameKimiCliIdentity(stored: OAuthCredentials, disk: OAuthCredentials): boolean {
+  if (stored.accountId && disk.accountId) return stored.accountId === disk.accountId;
+  if (stored.email && disk.email) return stored.email.toLowerCase() === disk.email.toLowerCase();
+  return false;
+}
+
+function shouldAdoptKimiCliGeneration(stored: OAuthCredentials, disk: OAuthCredentials): boolean {
+  if (credentialGeneration(disk) === credentialGeneration(stored)) return false;
+  const bothExpiriesExist = stored.expires > 0 && disk.expires > 0;
+  return !bothExpiriesExist || disk.expires >= stored.expires;
+}
+
+/**
+ * Refresh a read-only Kimi CLI link by adopting a newer CLI-owned access-token generation.
+ *
+ * Kimi refresh tokens rotate. OpenCodex therefore never submits or persists the CLI refresh
+ * grant and never writes `~/.kimi-code`; Kimi itself remains the sole refresh owner. A missing,
+ * stale, unchanged, or different-account CLI generation fails closed with an actionable error.
+ */
+export async function refreshKimiLocalCliAccountWithLock(
+  provider: string,
+  accountId: string,
+  callerCredential: OAuthCredentials,
+  deps: KimiLocalCliRefreshDeps = {},
+): Promise<string> {
+  const now = deps.now ?? Date.now;
+  const guard = await (deps.intentLock ?? createOAuthRefreshIntentLock(provider, accountId)).acquire();
+  try {
+    const stored = getAccountCredential(provider, accountId);
+    if (!stored) throw new OAuthLoginRequiredError(provider);
+    if (stored.source !== "local-cli") {
+      if (stored.expires > now() + REFRESH_SKEW_MS) return stored.access;
+      // Another writer changed ownership while this request waited. A retry will enter the
+      // normal provider-owned refresh branch; do not refresh under stale local-CLI authority.
+      throw new OAuthTokenRefreshStaleError();
+    }
+    if (
+      credentialGeneration(stored) !== credentialGeneration(callerCredential)
+      && stored.expires > now() + REFRESH_SKEW_MS
+    ) {
+      return stored.access;
+    }
+
+    const disk = detectKimiCliToken();
+    if (!disk || disk.expires <= now() + REFRESH_SKEW_MS) {
+      throw new OAuthLoginRequiredError(provider, KIMI_LOCAL_CLI_REFRESH_REQUIRED);
+    }
+    if (!(stored.accountId || stored.email) || !(disk.accountId || disk.email)) {
+      throw new OAuthLoginRequiredError(
+        provider,
+        "Kimi CLI-linked credential has no verifiable account identity, so OpenCodex cannot safely adopt a rotated token. Run `ocx login kimi` to create a new link.",
+      );
+    }
+    if (!isSameKimiCliIdentity(stored, disk)) {
+      throw new OAuthLoginRequiredError(
+        provider,
+        "Kimi CLI is signed in to a different account than this linked OpenCodex account. Run `ocx login kimi` to link the current account.",
+      );
+    }
+    if (!shouldAdoptKimiCliGeneration(stored, disk)) {
+      throw new OAuthLoginRequiredError(provider, KIMI_LOCAL_CLI_REFRESH_REQUIRED);
+    }
+
+    const outcome = await mergeAccountCredential(provider, accountId, disk, {
+      expectedGeneration: credentialGeneration(stored),
+      afterPrePersistRead: deps.afterPrePersistRead,
+    });
+    if (outcome.superseded) {
+      if (outcome.stored.expires > now() + REFRESH_SKEW_MS) return outcome.stored.access;
+      throw new OAuthLoginRequiredError(provider, KIMI_LOCAL_CLI_REFRESH_REQUIRED);
+    }
+    logOAuthEvent("Kimi CLI access-token generation adopted read-only", { provider, accountId });
+    return disk.access;
+  } finally {
+    guard.release();
+  }
+}
+
 export async function refreshXaiAccountWithLock(provider:string,accountId:string,def:OAuthProviderDef,callerCredential:OAuthCredentials,deps:XaiRefreshDeps={}):Promise<string>{const writerGeneration=captureConfigGeneration();const now=deps.now??Date.now;const guard=await(deps.intentLock??createOAuthRefreshIntentLock(provider,accountId)).acquire();try{const stored=getAccountCredential(provider,accountId);if(!stored)throw new OAuthLoginRequiredError(provider);const active=getAccountSet(provider)?.activeAccountId===accountId,candidate=authoritative(stored,active,now);if(credentialGeneration(candidate)!==credentialGeneration(callerCredential)&&candidate.expires>now()+REFRESH_SKEW_MS){if(credentialGeneration(candidate)!==credentialGeneration(stored)){const o=await mergeAccountCredential(provider,accountId,candidate,{expectedGeneration:credentialGeneration(stored),afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}}return candidate.access;}if(cached(provider,accountId,candidate,now))throw new OAuthLoginRequiredError(provider);const generation=credentialGeneration(candidate);try{const fresh=merged(await def.refresh(candidate.refresh,deps.signal),candidate);const o=await mergeAccountCredential(provider,accountId,fresh,{expectedGeneration:generation,afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));if(candidate.source==="local-cli")console.warn(XAI_LOCAL_CLI_DETACH_WARNING);return fresh.access;}catch(error){if(error instanceof OAuthMutationBusyError){permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));throw error;}if(!terminal(error))throw error;const failedAt=now();permanentRefreshFailures.set(verdictKey(provider,accountId,candidate),failedAt+XAI_PERMANENT_FAILURE_TTL_MS);sweepExpiredOnWrite(failedAt);await markAccountNeedsReauthIfGeneration(provider,accountId,generation,writerGeneration);throw new OAuthLoginRequiredError(provider);}}finally{guard.release();}}
 
 function newerClaudeCredential(stored: OAuthCredentials, now: number): OAuthCredentials | undefined {
@@ -589,6 +672,9 @@ async function refreshAndPersistAccessToken(
   flight?: OAuthRefreshFlightEvidence,
   replacedStaleFlight?: OAuthRefreshFlightEvidence,
 ): Promise<string> {
+  if (provider === "kimi" && cred.source === "local-cli") {
+    return refreshKimiLocalCliAccountWithLock(provider, accountId, cred);
+  }
   if (provider === "xai") return refreshXaiAccountWithLock(provider, accountId, def, cred, { signal });
   if (provider === "anthropic") return refreshAnthropicAccountWithLock(provider, accountId, def, cred, { signal, flight, replacedStaleFlight });
   return refreshGenericAccountWithLock(provider, accountId, def, cred, { signal });
