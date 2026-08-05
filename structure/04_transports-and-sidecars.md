@@ -348,9 +348,10 @@ Grounded in the open-sourced official client (xai-org/grok-build); unit + eviden
   each signature on its own text); boundaries (user/tool-result/agent) clear pending state;
   call items fold pending reasoning into the same turn.
 - **Grok CLI credential ownership:** `source:"local-cli"` xAI credentials re-read
-  `~/.grok/auth.json` (read-only) before any refresh and adopt a newer usable generation with
-  zero IdP calls (`shouldAdoptGrokGeneration`, later-expiresAt authority); an IdP refresh
-  detaches the credential to `source:"oauth"`.
+  `~/.grok/auth.json` (read-only) and adopt a newer usable generation with zero IdP calls
+  (`shouldAdoptGrokGeneration`, later-expiresAt authority). OpenCodex never submits the native
+  CLI refresh token; a separate browser OAuth login creates an OpenCodex-owned `source:"oauth"`
+  credential instead of detaching a linked CLI credential during refresh.
 - **Two-lock refresh transaction:** per-provider+account intent lock held across the IdP
   exchange plus a short global store-write lock + async mutation funnel around every
   `auth.json` load-merge-persist (`src/oauth/store.ts`); generation-guarded persist

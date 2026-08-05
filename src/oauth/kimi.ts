@@ -201,18 +201,25 @@ export async function loginKimi(
   if (importLocal !== "off") {
     const { detectKimiCliToken } = await import("./local-token-detect");
     const local = detectKimiCliToken();
-    if (local && local.expires > Date.now() + 60_000) {
+    const hasVerifiableIdentity = Boolean(local?.accountId || local?.email);
+    if (local && hasVerifiableIdentity && local.expires > Date.now() + 60_000) {
       ctrl.onProgress?.("Found a fresh Kimi Code CLI token, linking read-only");
       return local;
     }
     if (importLocal === "only") {
       throw new Error(
-        local
+        local && !hasVerifiableIdentity
+          ? "Kimi Code CLI token has no verifiable account identity and cannot be linked read-only. Run `ocx login kimi` to use an independent device login."
+          : local
           ? "Kimi Code CLI token is stale. Run `kimi` once to refresh its login, then retry."
           : "No Kimi Code CLI token found. Run `kimi login`, then retry.",
       );
     }
-    if (local) {
+    if (local && !hasVerifiableIdentity) {
+      ctrl.onProgress?.(
+        "Kimi Code CLI token has no verifiable account identity, so it cannot be linked safely; continuing with an independent Kimi device login",
+      );
+    } else if (local) {
       ctrl.onProgress?.(
         "Kimi Code CLI token is stale, so it cannot be linked safely; continuing with an independent Kimi device login",
       );

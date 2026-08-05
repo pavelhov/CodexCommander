@@ -33,7 +33,7 @@ max input 922,000 で `*-pro` virtual ID は公開状態を維持し、wire で�
  --- | --- | --- |
 | `key` | API キーを送信します(`Authorization: Bearer …`、またはアダプターにより `x-api-key` / `api-key`)。キーはリテラルまたは `${ENV_VAR}` 参照です。 | 大半のプロバイダー。 |
 | `forward` | **受け取った Codex 認証ヘッダーを**プロバイダーにそのまま中継します — キーを保存しません。ChatGPT ログインのパススルーです。 | OpenAI(`openai-responses` アダプター)。 |
-| `oauth` | 保存された OAuth アクセストークンを読み込み bearer キーとして使い、期限切れ前に自動更新します。 | xAI、Anthropic、Kimi、Kiro、Google Antigravity、Cursor。 |
+| `oauth` | 保存された OAuth アクセストークンを bearer キーとして使い、認証情報の所有者に従います。OpenCodex 所有の認証情報は期限切れ前に更新され、リンクされた Grok/Kimi CLI 認証情報は読み取り専用で採用されてネイティブ CLI 所有のままです。 | xAI、Anthropic、Kimi、Kiro、Google Antigravity、Cursor。 |
 
 ## 1. ChatGPT ログイン(forward / パススルー)
 
@@ -61,8 +61,10 @@ ChatGPT パススルーカタログには GPT-5.6 Sol/Terra/Luna の名前空間
 ## 2. アカウントログイン(OAuth)
 
 OAuth ログインを使うプロバイダープリセットは 6 つで、これに実験的な非公式デバイスフロー
-ブリッジ経由の GitHub Copilot が加わります。認証情報は `~/.opencodex/auth.json` に保存され、
-自動更新されます。ログイン CLI は `chatgpt` も受け付けます。このコマンドは ChatGPT 認証情報を
+ブリッジ経由の GitHub Copilot が加わります。認証情報は `~/.opencodex/auth.json` に保存されます。
+OpenCodex 所有の認証情報は自動更新されます。サインイン済みの Grok または Kimi CLI セッションを
+リンクした場合、opencodex は現在のアクセス世代を読み取り専用で採用し、更新の責任はネイティブ
+CLI に残します。ログイン CLI は `chatgpt` も受け付けます。このコマンドは ChatGPT 認証情報を
 発行し `forward` モードのプロバイダーエントリを作成します。
 
 ```bash
@@ -81,7 +83,7 @@ ocx logout <provider>
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://api.x.ai/v1` | ライブ一覧を優先し、フォールバックのデフォルトモデルは `grok-4.5`。 |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude モデル; ライブモデル一覧は `/v1/models` から取得。 |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 コーディングモデル。 |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K3（`k3`、1M コンテキスト）、固定ウィンドウ `k3-256k`、互換エイリアス `k3[1m]`、レガシー K2.7/K2.6/K2.5 コーディングモデル。 |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初回ログインは、インストール済みでサインインした `kiro-cli` セッションを取り込みます（Unix では `curl -fsSL https://cli.kiro.dev/install | bash`、Windows PowerShell では `irm 'https://cli.kiro.dev/install.ps1' | iex` でインストールしてから `kiro-cli login` を実行）。**アカウントを追加**は `kiro-cli` をログアウトして新しいブラウザログインを開始し、`kiro-cli` 自体のアカウントを切り替えてアカウント別プロファイルメタデータを保存します。既存の OpenCodex アカウントは保持され、キャンセルまたは失敗時には以前の `kiro-cli` セッションが復元されます。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth を Cloud Code Assist wire で使用。CCA は汎用 `/models` エンドポイントを公開しないため、管理された 6 モデルの静的カタログを使用します。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 実験的 PKCE ログイン、HTTP/2 トランスポート、アカウント別モデル探索をサポート。 |

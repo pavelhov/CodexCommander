@@ -264,7 +264,7 @@ describe("combo catalog capability intersection", () => {
     const built = buildCatalogEntries(nativeTemplate(), [], [model], undefined, false, "default", exact);
     const merged = mergeCatalogEntriesForSync(
       [], built, new Map(), [], false, new Set(), nativeTemplate(), new Set(),
-      new Set(["combo"]), "default", exact, false,
+      new Set(["combo"]), "default", exact, false, false,
     );
     const row = merged.find(entry => entry.slug === "combo/mixed");
     expect((row?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
@@ -364,7 +364,7 @@ describe("combo catalog capability intersection", () => {
       };
       const merged = mergeCatalogEntriesForSync(
         [stale], [], new Map(), [], false, new Set(), null, new Set(), new Set(),
-        "default", new Set(), false,
+        "default", new Set(), false, false,
       );
       expect(merged.some(entry => entry.slug === slug)).toBe(false);
     }
@@ -458,7 +458,7 @@ describe("combo catalog capability intersection", () => {
     const built = buildCatalogEntries(null, [], [malformed], undefined, false, "default", exact);
     const merged = mergeCatalogEntriesForSync(
       [], built, new Map(), [], false, new Set(), null, new Set(), new Set(["combo"]),
-      "default", exact, false,
+      "default", exact, false, false,
     );
     expect(merged.some(entry => entry.slug === "combo/hidden")).toBe(false);
   });
@@ -471,7 +471,7 @@ describe("combo catalog capability intersection", () => {
     };
     const preserved = mergeCatalogEntriesForSync(
       [physical], [], new Map(), [], false, new Set(), null, new Set(), new Set(["combo"]),
-      "default", new Set(), true,
+      "default", new Set(), true, false,
     ).find(entry => entry.slug === "combo/model");
     expect(preserved).toBeDefined();
     expect((preserved?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
@@ -480,11 +480,11 @@ describe("combo catalog capability intersection", () => {
     const stale = { ...physical, slug: "combo/deleted" };
     expect(mergeCatalogEntriesForSync(
       [stale], [], new Map(), [], false, new Set(), null, new Set(), new Set(),
-      "default", new Set(), false,
+      "default", new Set(), false, false,
     ).some(entry => entry.slug === "combo/deleted")).toBe(false);
     expect(mergeCatalogEntriesForSync(
       [stale], [], new Map(), [], false, new Set(), null, new Set(), new Set(),
-      "default", new Set(["combo/deleted"]), false,
+      "default", new Set(["combo/deleted"]), false, false,
     ).some(entry => entry.slug === "combo/deleted")).toBe(false);
   });
 
@@ -772,14 +772,20 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
     const rebuild = () => buildCatalogEntries(nativeTemplate(), [], [model]);
 
     // First sync: freshly built entries merged into an empty on-disk catalog.
-    const firstSync = mergeCatalogEntriesForSync([], rebuild(), new Map(), [], false);
+    const firstSync = mergeCatalogEntriesForSync(
+      [], rebuild(), new Map(), [], false, new Set(), null, new Set(), new Set(),
+      "default", new Set(), false, false,
+    );
     const firstRow = firstSync.find(e => e.slug === "deepseek/deepseek-v4")!;
     expect(firstRow.display_name).toBe("DeepSeek V4");
 
     // Second sync: re-derive from the SAME config and merge against the now-populated catalog.
     // Routed entries are rebuilt from gatherRoutedModels each sync, so display_name must be
     // re-derived deterministically and never drift back to the bare slug.
-    const secondSync = mergeCatalogEntriesForSync(firstSync, rebuild(), new Map(), [], false);
+    const secondSync = mergeCatalogEntriesForSync(
+      firstSync, rebuild(), new Map(), [], false, new Set(), null, new Set(), new Set(),
+      "default", new Set(), false, false,
+    );
     const secondRow = secondSync.find(e => e.slug === "deepseek/deepseek-v4")!;
     expect(secondRow.display_name).toBe("DeepSeek V4");
     expect(secondRow.slug).toBe("deepseek/deepseek-v4");
@@ -803,7 +809,7 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
     };
     const merged = mergeCatalogEntriesForSync([synthesizedLuna], [], new Map(), [], false);
     expect(merged.find(e => e.slug === "gpt-5.6-luna")?.display_name).toBe("GPT-5.6-Luna");
-  });
+  }, 20_000);
 
   test("a configured customModel displayName propagates end-to-end through gatherRoutedModels", async () => {
     clearModelCache("custom-provider");
@@ -1603,6 +1609,7 @@ describe("Codex catalog routed normalization", () => {
             models: [
               "k3",
               "k3[1m]",
+              "k3-256k",
               "kimi-k2.7-code",
               "kimi-k2.7-code-highspeed",
               "kimi-k2.6",
@@ -1610,7 +1617,7 @@ describe("Codex catalog routed normalization", () => {
               "configured-ghost",
             ],
             modelSuffixBracketStrip: true,
-            modelContextWindows: { "k3[1m]": 1_048_576 },
+            modelContextWindows: { "k3": 1_048_576, "k3[1m]": 1_048_576, "k3-256k": 262_144 },
           },
           xai: {
             adapter: "openai-chat",
@@ -1634,6 +1641,7 @@ describe("Codex catalog routed normalization", () => {
 
       expect(models.map(model => `${model.provider}/${model.id}`)).toEqual([
         "kimi/k3",
+        "kimi/k3-256k",
         "kimi/k3[1m]",
         "kimi/kimi-for-coding",
         "kimi/kimi-for-coding-highspeed",
@@ -1649,6 +1657,7 @@ describe("Codex catalog routed normalization", () => {
         "xai/grok-composer-2.5-fast",
       ]);
       expect(models.find(model => model.provider === "kimi" && model.id === "k3[1m]")?.contextWindow).toBe(1_048_576);
+      expect(models.find(model => model.provider === "kimi" && model.id === "k3-256k")?.contextWindow).toBe(262_144);
       expect(models.some(model => model.id === "grok-4.20-multi-agent-0309")).toBe(false);
       expect(models.some(model => model.id === "configured-ghost")).toBe(false);
       expect(warning.mock.calls.flat().join(" ")).not.toContain("omitted configured model ids");

@@ -448,15 +448,15 @@ const ALIBABA_INTL_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
   "MiniMax-M2.5": ["text"],
 };
 
-// 260717 Kimi K3: the subscription endpoint uses one upstream id (`k3`) for both
-// entitlement tiers. Bare `k3` advertises the Moderato 256K ceiling; the local `[1m]`
-// alias advertises Allegretto's 1M ceiling and is stripped before the upstream request.
-// The separately billed Moonshot API uses `kimi-k3`.
+// Kimi Code now publishes `k3` as the up-to-1M model and `k3-256k` as the fixed 256K,
+// lower-quota model. Keep the local `[1m]` compatibility alias for existing Codex configs;
+// it is stripped to `k3` before the upstream request. The separately billed Moonshot API
+// continues to use `kimi-k3`.
 // Evidence: https://www.kimi.com/code/docs/en/kimi-code/models.html
 //           https://www.kimi.com/code/docs/en/kimi-code/error-reference.html
 const KIMI_K3_STANDARD_CONTEXT_WINDOW = 262_144;
 const KIMI_K3_1M_CONTEXT_WINDOW = 1_048_576;
-const KIMI_CODING_K3_MODELS = ["k3", "k3[1m]"];
+const KIMI_CODING_K3_MODELS = ["k3", "k3[1m]", "k3-256k"];
 const KIMI_LEGACY_API_MODELS = ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"];
 const KIMI_API_MODELS = ["kimi-k3", ...KIMI_LEGACY_API_MODELS];
 const KIMI_CODING_MODELS = [...KIMI_CODING_K3_MODELS, ...KIMI_LEGACY_API_MODELS, "kimi-for-coding"];
@@ -505,7 +505,10 @@ const NVIDIA_NIM_KIMI_MODELS = [
   "moonshotai/kimi-k2-instruct", "moonshotai/kimi-k2-instruct-0905",
 ];
 const KIMI_CODING_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
-  KIMI_CODING_MODELS.map(id => [id, id === "k3[1m]" ? KIMI_K3_1M_CONTEXT_WINDOW : KIMI_K3_STANDARD_CONTEXT_WINDOW]),
+  KIMI_CODING_MODELS.map(id => [
+    id,
+    id === "k3" || id === "k3[1m]" ? KIMI_K3_1M_CONTEXT_WINDOW : KIMI_K3_STANDARD_CONTEXT_WINDOW,
+  ]),
 );
 const KIMI_CODING_MODEL_INPUT_MODALITIES = Object.fromEntries(
   KIMI_CODING_K3_MODELS.map(id => [id, ["text", "image"]]),

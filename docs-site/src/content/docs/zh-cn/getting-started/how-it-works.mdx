@@ -44,8 +44,9 @@ Sol/Terra/Luna 三个模型和 `gpt-5.4-mini`。仪表盘可以从原生或已�
    (`claude-`、`gpt-`、`o1-`/`o3-`/`o4-`、`llama-`/`mixtral-`/`gemma-`) → provider 的 `models[]` →
    `defaultProvider` 回退。参见 [模型路由](/zh-cn/guides/model-routing/)。
 
-3. **认证** —— 对于 `oauth` 类型的 provider,opencodex 会换入一个全新、自动刷新的 access
-   token 作为 bearer key,从而让现有的 adapter 无需改动即可完成认证。
+3. **认证** —— 对于 `oauth` 类型的 provider，opencodex 会把当前 access token 解析为 bearer
+   key，并遵循凭据所有权：OpenCodex 自有凭据会自动刷新；已链接的 Grok/Kimi 原生 CLI 代际会被
+   重新读取，并以只读方式使用。
 
 4. **Vision sidecar(可选)** —— 如果已路由的模型被列在 `provider.noVisionModels` 中,且
    请求携带了图像，opencodex 会通过你的 ChatGPT 登录凭据，使用已配置的 vision sidecar 描述

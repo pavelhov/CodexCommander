@@ -32,7 +32,7 @@ shipped v1 配置自动迁移到 marker 2 的单一选项行。原配置只保�
 | --- | --- | --- |
 | `key` | 发送你的 API 密钥（`Authorization: Bearer …`，或按 adapter 使用 `x-api-key` / `api-key`）。密钥可以是字面值，也可以是 `${ENV_VAR}` 引用。 | 大多数提供商。 |
 | `forward` | 将**你传入的 Codex 认证请求头**原样转发给提供商——不存储任何密钥。这就是 ChatGPT 登录的透传方式。 | OpenAI（`openai-responses` adapter）。 |
-| `oauth` | 读取已存储的 OAuth 访问令牌（过期前自动刷新），并将其用作 bearer 密钥。 | xAI、Anthropic、Kimi、Kiro、Google Antigravity、Cursor。 |
+| `oauth` | 读取已存储的 OAuth 访问令牌作为 bearer 密钥，并遵循凭据所有权。OpenCodex 自有凭据会在过期前刷新；已链接的 Grok/Kimi CLI 凭据以只读方式采用，并仍由原生 CLI 所有。 | xAI、Anthropic、Kimi、Kiro、Google Antigravity、Cursor。 |
 
 ## 1. ChatGPT 登录（forward / 透传）
 
@@ -56,8 +56,9 @@ ChatGPT 透传目录也会加入 GPT-5.6 Sol/Terra/Luna 的裸 slug（`gpt-5.6-s
 ## 2. 账号登录（OAuth）
 
 有六个提供商预设使用 OAuth 登录，另加通过实验性非官方设备流桥接的 GitHub Copilot。
-opencodex 会把凭据存入 `~/.opencodex/auth.json` 并自动刷新。登录 CLI 也接受 `chatgpt`：
-它会获取一份 ChatGPT 凭据，并创建一个 `forward` 模式的提供商条目。
+opencodex 会把凭据存入 `~/.opencodex/auth.json`。OpenCodex 自有凭据会自动刷新。链接已登录的
+Grok 或 Kimi CLI 会话时，opencodex 只读采用其当前访问代际，更新责任仍由原生 CLI 承担。
+登录 CLI 也接受 `chatgpt`：它会获取一份 ChatGPT 凭据，并创建一个 `forward` 模式的提供商条目。
 
 ```bash
 ocx login xai          # xAI Grok
@@ -75,7 +76,7 @@ ocx logout <provider>
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://api.x.ai/v1` | 优先使用实时 Grok 目录；回退默认模型为 `grok-4.5`。 |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude 模型；实时模型列表从 `/v1/models` 获取。 |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 编程模型。 |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K3（`k3`，1M 上下文）、固定窗口 `k3-256k`、兼容别名 `k3[1m]`，以及旧版 K2.7/K2.6/K2.5 编程模型。 |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 首次登录会导入已安装并已登录的 Kiro CLI 会话（Unix 使用 `curl -fsSL https://cli.kiro.dev/install | bash`；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1' | iex`；然后运行 `kiro-cli login`）。**添加账户**会先退出 `kiro-cli`，再启动新的浏览器登录，从而切换 `kiro-cli` 自身使用的账户，并保存账户范围的配置文件元数据。现有 OpenCodex 账户会保留；如果取消或失败，则恢复之前的 `kiro-cli` 会话。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 通过 Cloud Code Assist 协议使用 Google OAuth。由于 CCA 不提供通用 `/models` 端点，因此使用维护中的六模型静态目录。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 实验性 PKCE 登录、HTTP/2 传输和按账号筛选的模型发现。 |

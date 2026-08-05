@@ -63,10 +63,11 @@ Codex は OpenAI **Responses API** を使います。opencodex は HTTP と Serv
    (`claude-`、`gpt-`、`o1-`/`o3-`/`o4-`、`llama-`/`mixtral-`/`gemma-`) → プロバイダーの `models[]` →
    `defaultProvider` フォールバック。[モデルルーティング](/ja/guides/model-routing/)を参照してください。
 
-3. **Authenticate** — `oauth` プロバイダーの場合、opencodex が新しく自動更新された access
-   トークンを bearer キーに差し替えるため、既存のアダプターは変更なく認証されます。ChatGPT/Codex プール
-   アカウントでは `codex/auth-context.ts` がまずアカウントを解決し、必要なプール認証情報がない場合は
-   パススルーアダプターは進みません。
+3. **Authenticate** — `oauth` プロバイダーの場合、opencodex は現在の access トークンを
+   bearer キーとして解決し、認証情報の所有者に従います。OpenCodex 所有の認証情報は自動更新され、
+   リンクされた Grok/Kimi ネイティブ CLI の世代は再読み込みして読み取り専用で使います。
+   ChatGPT/Codex プールアカウントでは `codex/auth-context.ts` がまずアカウントを解決し、必要な
+   プール認証情報がない場合はパススルーアダプターは進みません。
 
 4. **Vision サイドカー(任意)** — ルーティングされたモデルが `provider.noVisionModels` に列挙されており
    リクエストに画像が含まれる場合、opencodex は設定された ChatGPT vision サイドカーで各画像を説明した

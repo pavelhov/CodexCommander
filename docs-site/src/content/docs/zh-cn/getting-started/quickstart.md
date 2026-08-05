@@ -69,7 +69,8 @@ codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 
 ## 登录而非粘贴 key
 
-部分 provider 支持真正的账号登录（OAuth，自动刷新）：
+部分 provider 支持真正的账号登录。OpenCodex 自有 OAuth 凭据会自动刷新；已链接的
+Grok/Kimi 原生 CLI 会话仍由 CLI 所有：
 
 ```bash
 ocx login xai          # or: anthropic, kimi, kiro, google-antigravity, cursor

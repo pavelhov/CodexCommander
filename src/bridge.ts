@@ -1103,6 +1103,9 @@ export function bridgeToResponsesSSE(
           return;
         }
         if (!terminated) {
+          if (currentMsg) closeCurrentMessage();
+          if (currentReasoning) closeCurrentReasoning();
+          if (currentRawReasoning) closeCurrentRawReasoning();
           flushHiddenRawReasoning();
           if (currentToolCall) failCurrentToolCall();
           if (currentWebSearch) closeCurrentWebSearch("failed", []);

@@ -148,6 +148,24 @@ describe("hidden raw reasoning (hideThinkingSummary parity for reasoning_raw_del
     expect(decodeReasoningEnvelope(added[0].encrypted_content as string)?.txt).toBe("doomed thought");
   });
 
+  test("streamed visible summary closes its native item before a thrown upstream failure", async () => {
+    async function* throwing(): AsyncGenerator<AdapterEvent> {
+      yield { type: "reasoning_raw_delta", text: "partial progress", presentation: "summary" };
+      throw new Error("upstream exploded");
+    }
+    const frames = await collectSse(bridgeToResponsesSSE(throwing(), "routed/model"));
+    const summaryDone = frames.find(frame => frame.event === "response.reasoning_summary_text.done");
+    const itemDone = frames.find(frame => frame.event === "response.output_item.done");
+    const failedIndex = frames.findIndex(frame => frame.event === "response.failed");
+
+    expect(summaryDone?.data.text).toBe("partial progress");
+    expect(itemDone?.data.item).toMatchObject({
+      type: "reasoning",
+      summary: [{ type: "summary_text", text: "partial progress" }],
+    });
+    expect(frames.indexOf(itemDone!)).toBeLessThan(failedIndex);
+  });
+
   test("non-streaming hidden: envelope-only item instead of raw content", () => {
     const json = buildResponseJSON([
       { type: "reasoning_raw_delta", text: "quiet" },

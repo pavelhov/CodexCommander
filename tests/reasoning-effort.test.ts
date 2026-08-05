@@ -245,7 +245,7 @@ describe("provider-specific reasoning effort mapping", () => {
     expect(body).not.toHaveProperty("tool_choice");
   });
 
-  test("Kimi K3 context aliases share the k3 wire id and normalize the documented effort tiers", () => {
+  test("Kimi K3 variants use their documented wire ids and normalize the effort tiers", () => {
     const config: OcxConfig = {
       port: 10100,
       defaultProvider: "kimi",
@@ -258,7 +258,11 @@ describe("provider-specific reasoning effort mapping", () => {
         },
       },
     };
-    for (const selector of ["kimi/k3", "kimi/k3[1m]"]) {
+    for (const [selector, wireModel] of [
+      ["kimi/k3", "k3"],
+      ["kimi/k3[1m]", "k3"],
+      ["kimi/k3-256k", "k3-256k"],
+    ] as const) {
       const route = routeModel(config, selector);
       expect(configuredReasoningEfforts(route.provider, route.modelId)).toEqual(["low", "high", "max"]);
       for (const [requested, wire] of Object.entries({
@@ -279,7 +283,7 @@ describe("provider-specific reasoning effort mapping", () => {
         });
         const body = JSON.parse(req.body) as Record<string, unknown>;
 
-        expect(body.model).toBe("k3");
+        expect(body.model).toBe(wireModel);
         expect(body.reasoning_effort).toBe(wire);
         expect(req.reasoningLog).toEqual({
           effectiveEffort: wire,

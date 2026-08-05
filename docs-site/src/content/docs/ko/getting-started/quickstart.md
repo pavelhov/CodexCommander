@@ -69,7 +69,8 @@ codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 
 ## 키를 붙여넣는 대신 로그인하기
 
-일부 프로바이더는 실제 계정 로그인을 지원합니다(OAuth, 자동 갱신):
+일부 프로바이더는 실제 계정 로그인을 지원합니다. OpenCodex 소유 OAuth 자격 증명은 자동
+갱신되며, 연결된 Grok/Kimi 네이티브 CLI 세션은 CLI 소유로 유지됩니다:
 
 ```bash
 ocx login xai          # or: anthropic, kimi, kiro, google-antigravity, cursor

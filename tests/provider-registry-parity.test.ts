@@ -353,6 +353,7 @@ describe("provider registry parity", () => {
     const codingModels = [
       "k3",
       "k3[1m]",
+      "k3-256k",
       "kimi-k2.7-code",
       "kimi-k2.7-code-highspeed",
       "kimi-k2.6",
@@ -372,7 +373,9 @@ describe("provider registry parity", () => {
       const entry = PROVIDER_REGISTRY.find(provider => provider.id === providerId);
       expect(entry?.models).toEqual(codingModels);
       for (const modelId of codingModels) {
-        expect(entry?.modelContextWindows?.[modelId]).toBe(modelId === "k3[1m]" ? 1_048_576 : 262_144);
+        expect(entry?.modelContextWindows?.[modelId]).toBe(
+          modelId === "k3" || modelId === "k3[1m]" ? 1_048_576 : 262_144,
+        );
       }
       for (const field of parityLists) {
         expect(entry?.[field]).toContain("kimi-k2.7-code");
@@ -391,9 +394,11 @@ describe("provider registry parity", () => {
       expect(enriched.chatCompletionTokenField).toBe("max_completion_tokens");
       expect(entry?.noReasoningModels).not.toContain("k3");
       expect(entry?.noReasoningModels).not.toContain("k3[1m]");
+      expect(entry?.noReasoningModels).not.toContain("k3-256k");
       expect(entry?.modelReasoningEfforts?.k3).toEqual(["low", "high", "max"]);
       expect(entry?.modelReasoningEfforts?.["k3[1m]"]).toEqual(["low", "high", "max"]);
-      for (const modelId of ["k3", "k3[1m]"]) {
+      expect(entry?.modelReasoningEfforts?.["k3-256k"]).toEqual(["low", "high", "max"]);
+      for (const modelId of ["k3", "k3[1m]", "k3-256k"]) {
         expect(entry?.modelDefaultReasoningEfforts?.[modelId]).toBe("max");
         expect(entry?.modelReasoningEffortMap?.[modelId]).toEqual({
           none: "none",
@@ -406,12 +411,14 @@ describe("provider registry parity", () => {
       }
       expect(entry?.modelInputModalities?.k3).toEqual(["text", "image"]);
       expect(entry?.modelInputModalities?.["k3[1m]"]).toEqual(["text", "image"]);
+      expect(entry?.modelInputModalities?.["k3-256k"]).toEqual(["text", "image"]);
       expect(entry?.noTemperatureModels).toContain("k3");
       expect(entry?.noTemperatureModels).toContain("k3[1m]");
       expect(entry?.noTopPModels).toContain("k3");
       expect(entry?.noPenaltyModels).toContain("k3");
       expect(entry?.preserveReasoningContentModels).toContain("k3");
       expect(entry?.preserveReasoningContentModels).toContain("k3[1m]");
+      expect(entry?.preserveReasoningContentModels).toContain("k3-256k");
       expect(entry?.modelReasoningEfforts?.["kimi-for-coding"]).toEqual([]);
     }
 
