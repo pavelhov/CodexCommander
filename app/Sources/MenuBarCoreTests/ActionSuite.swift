@@ -1,0 +1,146 @@
+import Foundation
+import MenuBarCore
+
+private actor FakeActionClient: ProxyActionClient {
+    let currentEndpoint: ProxyEndpoint
+    private var restartResult: Result<RestartAccepted, Error>
+    private var livenessQueue: [ProxyClient.Liveness]
+    private(set) var livenessCalls = 0
+    private(set) var restartCalls = 0
+
+    init(
+        oldPID: Int? = 42,
+        restartResult: Result<RestartAccepted, Error> = .success(
+            RestartAccepted(
+                success: true,
+                activeTurnCount: 0,
+                drainTimeoutMs: 0,
+                alreadyDraining: false
+            )
+        ),
+        liveness: [ProxyClient.Liveness]
+    ) {
+        currentEndpoint = ProxyEndpoint(
+            host: "127.0.0.1",
+            port: 10100,
+            expectedPID: oldPID
+        )!
+        self.restartResult = restartResult
+        self.livenessQueue = liveness
+    }
+
+    func restart() async throws -> RestartAccepted {
+        restartCalls += 1
+        return try restartResult.get()
+    }
+
+    func liveness(timeout: TimeInterval) async -> ProxyClient.Liveness {
+        livenessCalls += 1
+        return livenessQueue.isEmpty ? .indeterminate : livenessQueue.removeFirst()
+    }
+
+    func counts() -> (restart: Int, liveness: Int) {
+        (restartCalls, livenessCalls)
+    }
+}
+
+private final class TestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var instant = Date(timeIntervalSince1970: 1_000)
+
+    func now() -> Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return instant
+    }
+
+    func advance(_ seconds: TimeInterval) {
+        lock.lock()
+        instant = instant.addingTimeInterval(seconds)
+        lock.unlock()
+    }
+}
+
+enum ActionSuite {
+    static func run(_ t: TestRunner) {
+        t.test("restart: a 202 is not success until a replacement pid is validated") {
+            let client = FakeActionClient(liveness: [
+                .reachable(pid: 42),
+                .refused,
+                .reachable(pid: 43),
+            ])
+            let clock = TestClock()
+            let coordinator = ActionCoordinator(
+                client: client,
+                sleeper: { seconds in clock.advance(max(seconds, 1)) },
+                now: { clock.now() }
+            )
+            let result = sync { await coordinator.restart() }
+            t.equal(result, .restarted)
+            let counts = sync { await client.counts() }
+            t.equal(counts.restart, 1)
+            t.equal(counts.liveness, 3)
+        }
+
+        t.test("restart: the old process staying alive is reported as unconfirmed") {
+            let client = FakeActionClient(liveness: Array(repeating: .reachable(pid: 42), count: 30))
+            let clock = TestClock()
+            let coordinator = ActionCoordinator(
+                client: client,
+                sleeper: { _ in clock.advance(5) },
+                now: { clock.now() }
+            )
+            let result = sync { await coordinator.restart() }
+            if case .failed(let message) = result {
+                t.expect(message.contains("could not be confirmed"), "unexpected message: \(message)")
+            } else {
+                t.expect(false, "same pid must not be reported as restarted")
+            }
+        }
+
+        t.test("restart: without an old pid, refusal then valid identity proves replacement") {
+            let client = FakeActionClient(
+                oldPID: nil,
+                liveness: [.refused, .reachable(pid: 99)]
+            )
+            let clock = TestClock()
+            let coordinator = ActionCoordinator(
+                client: client,
+                sleeper: { _ in clock.advance(1) },
+                now: { clock.now() }
+            )
+            t.equal(sync { await coordinator.restart() }, .restarted)
+        }
+
+        t.test("restart: an explicit refusal never enters replacement polling") {
+            let client = FakeActionClient(
+                restartResult: .success(RestartAccepted(success: false)),
+                liveness: [.reachable(pid: 43)]
+            )
+            let coordinator = ActionCoordinator(client: client)
+            let result = sync { await coordinator.restart() }
+            if case .failed(let message) = result {
+                t.expect(message.contains("refused"), "unexpected message: \(message)")
+            } else {
+                t.expect(false, "an explicit refusal must fail")
+            }
+            t.equal(sync { await client.counts() }.liveness, 0)
+        }
+
+    }
+
+    private static func sync<T>(_ operation: @escaping () async -> T) -> T {
+        let semaphore = DispatchSemaphore(value: 0)
+        let box = ResultBox<T>()
+        Task {
+            box.value = await operation()
+            semaphore.signal()
+        }
+        semaphore.wait()
+        return box.value!
+    }
+
+    private final class ResultBox<T>: @unchecked Sendable {
+        var value: T?
+    }
+}

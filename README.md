@@ -69,6 +69,16 @@ account exclusion, affinity expiry, or 401/403 and 429 recovery can rebind them.
 selection order when one of them — usually your Codex Desktop login — should only be reached for
 once the others are drained.
 
+### macOS menu bar companion
+
+The native companion shows live agent activity and provider quota windows, then opens the existing
+dashboard for OAuth, API keys, account management, and logs. It is a UI layer over the running
+proxy: no Keychain, no second provider-login system, and no provider credentials stored in the app.
+
+Download the universal app from the matching GitHub release, or build it from this checkout with
+`npm run test:macos && npm run build:macos`. Full setup, security, Gatekeeper, and troubleshooting
+details are in the [macOS menu bar guide](https://opencodex.me/guides/macos-menu-bar/).
+
 ### For agents
 
 ```bash
@@ -115,6 +125,8 @@ see the [installation docs](https://opencodex.me/getting-started/installation/).
   through a sidecar over your ChatGPT login.
 - **See what's happening** — the dashboard shows providers, OAuth status, model selection, and a
   live request log with cache token counts.
+- **Native macOS glance view** — see active parent/subagent rows and every available session,
+  weekly, monthly, or credit quota window without duplicating provider setup outside the dashboard.
 - **Clean exit, zero residue** — `ocx stop` restores Codex to its original configuration.
 
 ## Model routing

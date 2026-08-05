@@ -41,6 +41,7 @@ devlog/**/security-advisory-draft*
 
 # Test-generated artifacts
 tests/.tmp-*/
+/.ocx-*
 .claude/
 
 # Retired Go native-runtime experiment. `go/` is not part of the build, the

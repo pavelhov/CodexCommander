@@ -32,8 +32,8 @@ import {
 } from "./request-log";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
-import type { AdmissionLease } from "../lib/admission";
 import { tryClaimNativeMainProfileForTurn } from "../codex/native-main-admission";
+import type { ActiveTurnLease } from "./lifecycle";
 import {
   createTranslatorBudget,
   finalizeTranslatorBudgetResponse,
@@ -59,7 +59,7 @@ export async function handleChatCompletions(
   req: Request,
   config: OcxConfig,
   logCtx: RequestLogContext,
-  logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease },
+  logIds?: { requestId: string; start: number; turnAdmissionLease?: ActiveTurnLease },
 ): Promise<Response> {
   const translatorBudget = createTranslatorBudget();
   try {
@@ -78,7 +78,7 @@ async function handleChatCompletionsWithBudget(
   config: OcxConfig,
   logCtx: RequestLogContext,
   translatorBudget: TranslatorBudget,
-  logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease },
+  logIds?: { requestId: string; start: number; turnAdmissionLease?: ActiveTurnLease },
 ): Promise<Response> {
   let chatBody: unknown;
   let internalBody: Rec;
@@ -204,7 +204,10 @@ async function handleChatCompletionsWithBudget(
     // Body is Responses-shaped by now, but the client spoke Chat Completions.
     inboundWire: "chat",
     translatorBudget,
-    ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
+    ...(logIds ? { onFirstOutput: () => {
+      recordFirstOutput(logCtx, logIds.start);
+      logIds.turnAdmissionLease?.markAgentActivityFirstOutput();
+    } } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForTerminalStatus(status), { terminalStatus: status, closeReason: "terminal" }),
     onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),
   });

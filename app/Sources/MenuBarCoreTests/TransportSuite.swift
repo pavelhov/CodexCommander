@@ -1,0 +1,252 @@
+import Foundation
+import MenuBarCore
+
+final class StubProtocol: URLProtocol, @unchecked Sendable {
+    struct Response {
+        let status: Int
+        let body: String
+        let headers: [String: String]
+        let urlError: URLError.Code?
+
+        init(
+            status: Int,
+            body: String = "",
+            headers: [String: String] = [:],
+            urlError: URLError.Code? = nil
+        ) {
+            self.status = status
+            self.body = body
+            self.headers = headers
+            self.urlError = urlError
+        }
+    }
+
+    nonisolated(unsafe) private static var queue: [Response] = []
+    nonisolated(unsafe) private static var requests: [URLRequest] = []
+    private static let lock = NSLock()
+
+    static func reset(_ responses: [Response]) {
+        lock.lock()
+        queue = responses
+        requests = []
+        lock.unlock()
+    }
+
+    static var recorded: [URLRequest] {
+        lock.lock()
+        defer { lock.unlock() }
+        return requests
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        Self.lock.lock()
+        Self.requests.append(request)
+        let response = Self.queue.isEmpty ? nil : Self.queue.removeFirst()
+        Self.lock.unlock()
+
+        guard let response else {
+            client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
+            return
+        }
+        if let code = response.urlError {
+            client?.urlProtocol(self, didFailWithError: URLError(code))
+            return
+        }
+        let http = HTTPURLResponse(
+            url: request.url!,
+            statusCode: response.status,
+            httpVersion: "HTTP/1.1",
+            headerFields: response.headers
+        )!
+        client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(response.body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+enum TransportSuite {
+    private static let identity =
+        #"{"status":"ok","service":"opencodex","version":"2.10.0","pid":42,"port":10100}"#
+
+    static func run(_ t: TestRunner) {
+        t.test("transport: validates identity immediately before a credential-bearing request") {
+            StubProtocol.reset([
+                .init(status: 200, body: identity),
+                .init(status: 200, body: #"{"status":"protected"}"#),
+            ])
+            let client = makeClient(credential: "admin-secret")
+            let status: String? = sync { try? await client.health().status }
+            t.equal(status, "protected")
+            let requests = StubProtocol.recorded
+            t.equal(requests.count, 2)
+            t.equal(requests[0].url?.path, "/healthz")
+            t.isNil(
+                requests[0].value(forHTTPHeaderField: "x-opencodex-api-key"),
+                "health credential"
+            )
+            t.equal(requests[1].url?.path, "/api/startup-health")
+            t.equal(
+                requests[1].value(forHTTPHeaderField: "x-opencodex-api-key"),
+                "admin-secret"
+            )
+        }
+
+        t.test("transport: a foreign health response blocks the token completely") {
+            StubProtocol.reset([
+                .init(
+                    status: 200,
+                    body: #"{"status":"ok","service":"other","version":"1","pid":42,"port":10100}"#
+                ),
+            ])
+            let client = makeClient(credential: "never-send")
+            let error = sync { await proxyError { try await client.health() } }
+            t.equal(error, .identityMismatch)
+            t.equal(StubProtocol.recorded.count, 1)
+            t.isNil(
+                StubProtocol.recorded[0].value(forHTTPHeaderField: "x-opencodex-api-key"),
+                "foreign health credential"
+            )
+        }
+
+        t.test("transport: missing management auth fails before networking") {
+            StubProtocol.reset([])
+            let client = makeClient(credential: nil)
+            let error = sync { await proxyError { try await client.health() } }
+            t.equal(error, .authenticationUnavailable)
+            t.equal(StubProtocol.recorded.count, 0)
+        }
+
+        t.test("transport: a 401 gets one fresh identity check and one retry") {
+            StubProtocol.reset([
+                .init(status: 200, body: identity),
+                .init(status: 401),
+                .init(status: 200, body: identity),
+                .init(status: 200, body: #"{"status":"protected"}"#),
+            ])
+            let client = makeClient(credential: "admin-secret")
+            let status: String? = sync { try? await client.health().status }
+            t.equal(status, "protected")
+            t.equal(StubProtocol.recorded.map { $0.url?.path ?? "" }, [
+                "/healthz", "/api/startup-health", "/healthz", "/api/startup-health",
+            ])
+        }
+
+        t.test("transport: repeated 401s stop after the single retry") {
+            StubProtocol.reset([
+                .init(status: 200, body: identity),
+                .init(status: 401),
+                .init(status: 200, body: identity),
+                .init(status: 401),
+            ])
+            let client = makeClient(credential: "stale")
+            let error = sync { await proxyError { try await client.health() } }
+            t.equal(error, .unauthorized)
+            t.equal(StubProtocol.recorded.count, 4)
+        }
+
+        t.test("transport: redirects are not followed") {
+            StubProtocol.reset([
+                .init(
+                    status: 302,
+                    headers: ["Location": "http://example.com/steal"]
+                ),
+            ])
+            let client = makeClient(credential: "admin-secret")
+            let result = sync { await client.liveness() }
+            t.equal(result, .indeterminate)
+            t.equal(StubProtocol.recorded.count, 1)
+            t.equal(StubProtocol.recorded[0].url?.host, "127.0.0.1")
+        }
+
+        t.test("transport: production session disables cache, cookies, credentials, and proxies") {
+            let session = ProxyClient.secureSessionForTesting(
+                protocolClasses: [StubProtocol.self]
+            )
+            let config = session.configuration
+            t.isNil(config.urlCache, "urlCache")
+            t.isNil(config.httpCookieStorage, "httpCookieStorage")
+            t.isNil(config.urlCredentialStorage, "urlCredentialStorage")
+            t.equal(config.httpShouldSetCookies, false)
+            t.equal(config.connectionProxyDictionary?.isEmpty ?? true, true)
+            t.equal(config.requestCachePolicy, .reloadIgnoringLocalAndRemoteCacheData)
+        }
+
+        t.test("transport: response bodies never enter user-facing errors") {
+            StubProtocol.reset([
+                .init(status: 200, body: identity),
+                .init(status: 500, body: "SECRET-CONFIG-VALUE"),
+            ])
+            let client = makeClient(credential: "admin-secret")
+            let error = sync { await proxyError { try await client.health() } }
+            t.equal(error, .http(500))
+            t.expect(
+                !(error?.userMessage.contains("SECRET") ?? false),
+                "error text must not echo response bodies"
+            )
+        }
+
+        t.test("transport: activity schema v1 decodes without raw identifiers") {
+            let activity = """
+            {"schemaVersion":1,"generatedAt":1780000000000,"proxyState":"active",
+             "activeTurnCount":2,"displayedActivityCount":2,"unattributedActiveCount":0,
+             "truncated":false,"activities":[
+               {"id":"opaque-a","role":"primary","provider":"openai","model":"gpt-5.6-sol",
+                "phase":"running","startedAt":1779999999000},
+               {"id":"opaque-b","parentId":"opaque-a","role":"subagent","provider":"kimi",
+                "model":"k3","phase":"starting","startedAt":1779999999500}]}
+            """
+            StubProtocol.reset([
+                .init(status: 200, body: identity),
+                .init(status: 200, body: activity),
+            ])
+            let client = makeClient(credential: "admin-secret")
+            let snapshot: AgentActivitySnapshot? = sync { try? await client.activity() }
+            t.equal(snapshot?.schemaVersion, 1)
+            t.equal(snapshot?.activities.count, 2)
+            t.equal(snapshot?.activities[1].parentId, "opaque-a")
+            t.equal(snapshot?.activities[1].phase, .starting)
+        }
+    }
+
+    private static func makeClient(credential: String?) -> ProxyClient {
+        let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
+        let session = ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self])
+        return ProxyClient(
+            endpoint: endpoint,
+            session: session,
+            credentials: StaticCredentialStore(credential)
+        )
+    }
+
+    private static func proxyError<T>(
+        _ operation: () async throws -> T
+    ) async -> ProxyError? {
+        do {
+            _ = try await operation()
+            return nil
+        } catch let error as ProxyError {
+            return error
+        } catch {
+            return nil
+        }
+    }
+
+    private static func sync<T>(_ operation: @escaping () async -> T) -> T {
+        let semaphore = DispatchSemaphore(value: 0)
+        let box = ResultBox<T>()
+        Task {
+            box.value = await operation()
+            semaphore.signal()
+        }
+        semaphore.wait()
+        return box.value!
+    }
+
+    private final class ResultBox<T>: @unchecked Sendable {
+        var value: T?
+    }
+}

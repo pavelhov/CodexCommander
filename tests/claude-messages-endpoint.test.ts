@@ -415,6 +415,39 @@ function freshLogCtx(): RequestLogContext {
 
 const MESSAGE_START_FRAME = 'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":3}}}\n\n';
 
+test("native Anthropic TTFT ignores envelopes and records actual content output only", async () => {
+  const upstream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(sseEncoder.encode(MESSAGE_START_FRAME));
+      controller.enqueue(sseEncoder.encode(
+        'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}\n\n',
+      ));
+      controller.enqueue(sseEncoder.encode(
+        'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":" again"}}\n\n',
+      ));
+      controller.enqueue(sseEncoder.encode('event: message_stop\ndata: {"type":"message_stop"}\n\n'));
+      controller.close();
+    },
+  });
+  const { finalize } = spyFinalize();
+  let firstOutputCalls = 0;
+  const reader = tapAnthropicSseForLog(
+    upstream,
+    freshLogCtx(),
+    finalize,
+    { stallMs: 0, maxBytes: 0 },
+    () => { firstOutputCalls += 1; },
+  ).getReader();
+  expect((await reader.read()).done).toBe(false);
+  expect(firstOutputCalls).toBe(0);
+  expect((await reader.read()).done).toBe(false);
+  expect(firstOutputCalls).toBe(1);
+  expect((await reader.read()).done).toBe(false);
+  expect(firstOutputCalls).toBe(1);
+  while (!(await reader.read()).done) { /* drain */ }
+  expect(firstOutputCalls).toBe(1);
+});
+
 test("A1: stalled upstream body gets an Anthropic timeout_error tail and body_stall close reason", async () => {
   const upstream = new ReadableStream<Uint8Array>({
     start(controller) {

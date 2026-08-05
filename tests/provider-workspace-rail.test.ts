@@ -72,20 +72,25 @@ describe("provider rail source contract", () => {
     expect((css.match(/\.providers-workspace-rail-row\s*\{/g) ?? []).length).toBe(1);
   });
 
-  test("redirects the legacy workspace subroute and normalizes unknown suffixes", async () => {
+  test("redirects only the exact legacy workspace route and accepts provider deep links", async () => {
     const { hashBelongsToPage, resolveAppHashChange } = await import("../gui/src/app-routing");
     // WP5 (Q1): the dual-layout hash is no longer a Providers route. It must not belong,
     // and it must be passively replaced so an old bookmark still lands somewhere real.
     expect(hashBelongsToPage("providers/workspace", "providers")).toBe(false);
     expect(hashBelongsToPage("providers", "providers")).toBe(true);
-    expect(hashBelongsToPage("providers/other", "providers")).toBe(false);
-    expect(hashBelongsToPage("providers/workspace/extra", "providers")).toBe(false);
+    // Provider ids are runtime-configured, so syntactically valid ids belong at the
+    // App layer. The Providers page resolves availability after config has loaded.
+    expect(hashBelongsToPage("providers/other", "providers")).toBe(true);
+    expect(hashBelongsToPage("providers/workspace/extra", "providers")).toBe(true);
 
     const legacy = resolveAppHashChange("providers/workspace");
     expect(legacy.page).toBe("providers");
     expect(legacy.replaceTo).toBe("providers");
-    // Unknown suffixes collapse to the bare page rather than 404.
-    expect(resolveAppHashChange("providers/other").replaceTo).toBe("providers");
+    expect(resolveAppHashChange("providers/other").replaceTo).toBeNull();
+    // A malformed tab is passively canonicalized to the provider overview.
+    expect(resolveAppHashChange("providers/workspace/extra").replaceTo).toBe(
+      "providers/workspace/overview",
+    );
 
     const routing = await Bun.file("gui/src/app-routing.ts").text();
     const routeState = await Bun.file("gui/src/use-app-route-state.ts").text();

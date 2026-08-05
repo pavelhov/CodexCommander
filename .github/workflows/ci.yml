@@ -25,6 +25,7 @@ on:
       - "tests/**"
       - "scripts/**"
       - "gui/**"
+      - "app/**"
       - "assets/**"
       - ".gitattributes"
       - ".npmignore"
@@ -45,6 +46,7 @@ on:
       - "tests/**"
       - "scripts/**"
       - "gui/**"
+      - "app/**"
       - "assets/**"
       - ".gitattributes"
       - ".npmignore"
@@ -365,6 +367,14 @@ jobs:
 
       - name: Test
         run: bun test --isolate tests
+
+      # The native companion shares proxy contracts with the Bun suite, but its
+      # Swift tests and app assembly must execute on an actual macOS runner.
+      - name: Test macOS menu bar app
+        run: bun run test:macos
+
+      - name: Build macOS menu bar app
+        run: bun run build:macos
 
       - name: CLI help smoke
         run: bun run src/cli/index.ts help

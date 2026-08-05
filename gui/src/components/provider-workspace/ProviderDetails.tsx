@@ -2,7 +2,7 @@
  * ProviderDetails — the detail header + tab shell (WP090+091). Owns tab state
  * and composes the Overview/Models/Usage/Settings panels.
  */
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { formatProviderDisplayName } from "../../provider-icons";
@@ -21,8 +21,9 @@ import ProviderSettings from "./ProviderSettings";
 import { UnsavedLeaveDialog } from "./ProviderDialogs";
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
 import type { AccountLoadState, ProviderModelUsageRow, ProviderUsageTotals, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers, ProviderUpdatePatch } from "./types";
+import type { ProviderRouteTab } from "../../provider-route";
 
-type Tab = "overview" | "models" | "usage" | "accounts" | "settings";
+type Tab = ProviderRouteTab;
 
 export default function ProviderDetails({
   item,
@@ -53,6 +54,8 @@ export default function ProviderDetails({
   onRemoveProvider,
   onSetDisabled,
   onSetDefault,
+  routeTab,
+  onRouteTabChange,
 }: {
   item: WorkspaceItem;
   usageTotals?: ProviderUsageTotals;
@@ -84,12 +87,37 @@ export default function ProviderDetails({
   onRemoveProvider?: (name: string) => void;
   onSetDisabled?: (name: string, disabled: boolean) => void;
   onSetDefault?: (name: string) => void;
+  /** Controlled/initial route tab from the providers hash deep link. */
+  routeTab?: Tab;
+  /**
+   * Deliberate tab navigation updates the hash.
+   * `replace` is for passive restores (e.g. cancel leave dialog) so Back is not trapped.
+   */
+  onRouteTabChange?: (tab: Tab, mode?: "push" | "replace") => void;
 }) {
   const t = useT();
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<Tab>(routeTab ?? "overview");
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [pendingLeave, setPendingLeave] = useState<Tab | "deselect" | null>(null);
   const [leaveSaving, setLeaveSaving] = useState(false);
+
+  // Follow external hash navigation (refresh / Back / Forward / deep link).
+  // Unsaved settings still get the leave dialog when the hash tries to leave Settings.
+  useEffect(() => {
+    if (!routeTab || routeTab === tab) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      if (settingsDirty && tab === "settings" && routeTab !== "settings") {
+        setPendingLeave(routeTab);
+        return;
+      }
+      setTab(routeTab);
+    });
+    return () => { cancelled = true; };
+    // Hash is the source of truth for external navigation; local dirty/tab guards run inside.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeTab]);
   const settingsSaveRef = useRef<(() => Promise<boolean>) | null>(null);
   const registerSettingsSave = useCallback((save: (() => Promise<boolean>) | null) => {
     settingsSaveRef.current = save;
@@ -120,7 +148,9 @@ export default function ProviderDetails({
       return;
     }
     setTab(next);
-  }, [tab, settingsDirty]);
+    // Deliberate user tab clicks push hash history; avoid no-op loops when already there.
+    if (onRouteTabChange && next !== routeTab) onRouteTabChange(next, "push");
+  }, [tab, settingsDirty, onRouteTabChange, routeTab]);
 
   const requestDeselect = useCallback(() => {
     if (settingsDirty && tab === "settings") {
@@ -302,14 +332,25 @@ export default function ProviderDetails({
       {pendingLeave && (
         <UnsavedLeaveDialog
           saving={leaveSaving}
-          onCancel={() => { if (!leaveSaving) setPendingLeave(null); }}
+          onCancel={() => {
+            if (leaveSaving) return;
+            setPendingLeave(null);
+            // External hash may have drifted while the leave dialog was open. Restore
+            // Settings with replaceState so Back is not trapped and no loop is pushed.
+            if (routeTab && routeTab !== "settings") {
+              onRouteTabChange?.("settings", "replace");
+            }
+          }}
           onDiscard={() => {
             if (leaveSaving) return;
             const next = pendingLeave;
             setPendingLeave(null);
             setSettingsDirty(false);
             if (next === "deselect") onDeselect();
-            else setTab(next);
+            else {
+              setTab(next);
+              if (onRouteTabChange && next !== routeTab) onRouteTabChange(next, "push");
+            }
           }}
           onSave={() => {
             void (async () => {
@@ -322,7 +363,10 @@ export default function ProviderDetails({
                 setPendingLeave(null);
                 setSettingsDirty(false);
                 if (next === "deselect") onDeselect();
-                else if (next) setTab(next);
+                else if (next) {
+                  setTab(next);
+                  if (onRouteTabChange && next !== routeTab) onRouteTabChange(next, "push");
+                }
               } finally {
                 setLeaveSaving(false);
               }

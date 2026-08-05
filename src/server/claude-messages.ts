@@ -34,8 +34,8 @@ import { addFinalRequestLog, httpStatusForTerminalStatus, recordFirstOutput, typ
 import { conversationIdFromClaudeMetadata } from "./request-log-conversation";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
-import type { AdmissionLease } from "../lib/admission";
 import { tryClaimNativeMainProfileForTurn } from "../codex/native-main-admission";
+import { trackStreamLifetime, type ActiveTurnLease } from "./lifecycle";
 import {
   createTranslatorBudget,
   finalizeTranslatorBudgetResponse,
@@ -159,9 +159,16 @@ export function tapAnthropicSseForLog(
   logCtx: RequestLogContext,
   finalize: (status: number, meta: { closeReason: PassthroughCloseReason }) => void,
   guard?: PassthroughBodyGuard,
+  onFirstOutput?: () => void,
 ): ReadableStream<Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
+  let firstOutputSeen = false;
+  const recordFirstOutputOnce = () => {
+    if (firstOutputSeen) return;
+    firstOutputSeen = true;
+    onFirstOutput?.();
+  };
   let buffer = "";
   let usageAcc: Rec = {};
   const inspect = (chunk: Uint8Array) => {
@@ -175,6 +182,16 @@ export function tapAnthropicSseForLog(
       let data: unknown;
       try { data = JSON.parse(dataLine); } catch { continue; }
       if (!isRec(data)) continue;
+      if (data.type === "content_block_delta" && isRec(data.delta)) {
+        const delta = data.delta;
+        const output = delta.text ?? delta.thinking ?? delta.partial_json;
+        if (typeof output === "string" && output.length > 0) recordFirstOutputOnce();
+      } else if (data.type === "content_block_start" && isRec(data.content_block)) {
+        const block = data.content_block;
+        if (block.type === "tool_use" || (typeof block.text === "string" && block.text.length > 0)) {
+          recordFirstOutputOnce();
+        }
+      }
       if (data.type === "message_start" && isRec(data.message) && isRec(data.message.usage)) {
         usageAcc = { ...usageAcc, ...data.message.usage };
       } else if (data.type === "message_delta" && isRec(data.usage)) {
@@ -296,7 +313,7 @@ async function anthropicNativePassthrough(
   req: Request,
   config: OcxConfig,
   logCtx: RequestLogContext,
-  logIds: { requestId: string; start: number } | undefined,
+  logIds: { requestId: string; start: number; turnAdmissionLease?: ActiveTurnLease } | undefined,
   body: Rec,
   pathname: string,
 ): Promise<Response> {
@@ -304,6 +321,7 @@ async function anthropicNativePassthrough(
   logCtx.model = model;
   logCtx.provider = "anthropic-native";
   logCtx.requestedModel = model;
+  logIds?.turnAdmissionLease?.markAgentActivityRunning({ provider: "anthropic-native", model });
   let logged = false;
   const finalize = (status: number, meta: { closeReason: PassthroughCloseReason | "non_stream" }) => {
     if (!logIds || logged) return;
@@ -346,9 +364,32 @@ async function anthropicNativePassthrough(
   const upstream = result.upstream;
 
   const contentType = upstream.headers.get("content-type") ?? "application/json";
-  const bodyGuard = resolvePassthroughBodyGuard(config, req.signal);
   if (upstream.ok && contentType.includes("text/event-stream") && upstream.body) {
-    return new Response(tapAnthropicSseForLog(upstream.body, logCtx, finalize, bodyGuard), {
+    const lease = logIds?.turnAdmissionLease;
+    const turnAbort = lease ? new AbortController() : undefined;
+    const forwardAbort = () => turnAbort?.abort(req.signal.reason);
+    if (turnAbort) {
+      if (req.signal.aborted) forwardAbort();
+      else req.signal.addEventListener("abort", forwardAbort, { once: true });
+    }
+    const bodyGuard = resolvePassthroughBodyGuard(config, turnAbort?.signal ?? req.signal);
+    const tapped = tapAnthropicSseForLog(
+      upstream.body,
+      logCtx,
+      finalize,
+      bodyGuard,
+      () => logIds?.turnAdmissionLease?.markAgentActivityFirstOutput(),
+    );
+    let responseBody = tapped;
+    if (lease && turnAbort) {
+      responseBody = trackStreamLifetime(
+        tapped,
+        turnAbort,
+        () => req.signal.removeEventListener("abort", forwardAbort),
+        lease,
+      );
+    }
+    return new Response(responseBody, {
       status: upstream.status,
       headers: {
         "Content-Type": contentType,
@@ -359,6 +400,7 @@ async function anthropicNativePassthrough(
   }
   // Non-stream (count_tokens, errors, stream:false): relay verbatim under the same
   // idle/size bounds — headers are NOT yet sent here, so real statuses are available.
+  const bodyGuard = resolvePassthroughBodyGuard(config, req.signal);
   const bodyResult = await readBoundedPassthroughBody(upstream, bodyGuard);
   if (bodyResult.kind === "client_cancel") {
     finalize(499, { closeReason: "client_cancel" });
@@ -375,8 +417,11 @@ async function anthropicNativePassthrough(
   const text = bodyResult.text;
   if (upstream.ok) {
     try {
-      const parsed = JSON.parse(text) as { usage?: Rec };
+      const parsed = JSON.parse(text) as { usage?: Rec; content?: unknown[] };
       if (isRec(parsed?.usage)) logCtx.usage = anthropicUsageToOcx(parsed.usage);
+      if (Array.isArray(parsed?.content) && parsed.content.length > 0) {
+        logIds?.turnAdmissionLease?.markAgentActivityFirstOutput();
+      }
     } catch { /* count_tokens etc. */ }
   }
   finalize(upstream.status, { closeReason: "non_stream" });
@@ -521,7 +566,7 @@ export async function handleClaudeMessages(
   req: Request,
   config: OcxConfig,
   logCtx: RequestLogContext,
-  logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease },
+  logIds?: { requestId: string; start: number; turnAdmissionLease?: ActiveTurnLease },
 ): Promise<Response> {
   const translatorBudget = createTranslatorBudget();
   try {
@@ -540,7 +585,7 @@ async function handleClaudeMessagesWithBudget(
   config: OcxConfig,
   logCtx: RequestLogContext,
   translatorBudget: TranslatorBudget,
-  logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease },
+  logIds?: { requestId: string; start: number; turnAdmissionLease?: ActiveTurnLease },
 ): Promise<Response> {
   logCtx.surface = "claude";
   const disabled = claudeInboundDisabled(config);
@@ -727,7 +772,10 @@ async function handleClaudeMessagesWithBudget(
     // would fire, disagreeing with the pre-flight decision above.
     inboundWire: "anthropic",
     translatorBudget,
-    ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
+    ...(logIds ? { onFirstOutput: () => {
+      recordFirstOutput(logCtx, logIds.start);
+      logIds.turnAdmissionLease?.markAgentActivityFirstOutput();
+    } } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForTerminalStatus(status), { terminalStatus: status, closeReason: "terminal" }),
     onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),
   });

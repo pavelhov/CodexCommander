@@ -83,8 +83,7 @@ import { hasKeyPoolFailover, rotateProviderTransportOn429 } from "../../provider
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
 import type { WsData } from "../ws-bridge";
-import { codexAccountSelectionForTurn, registerTurn, trackStreamLifetime, unregisterTurn } from "../lifecycle";
-import type { AdmissionLease } from "../../lib/admission";
+import { codexAccountSelectionForTurn, registerTurn, trackStreamLifetime, unregisterTurn, type ActiveTurnLease } from "../lifecycle";
 import { redactSecretString } from "../../lib/redact";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { supportedLadderFor } from "../effort-policy";
@@ -144,7 +143,7 @@ async function resolveAlternateCompactContext(args: {
   route: { provider: OcxProviderConfig; codexAccountMode?: CodexAccountMode };
   selectedModelId: string | undefined;
   excludeAccountId: string | null;
-  turnAdmissionLease?: AdmissionLease;
+  turnAdmissionLease?: ActiveTurnLease;
 }): Promise<{ authCtx: CodexAuthContext; provider: OcxProviderConfig; headers: Headers } | null> {
   const { req, config, route, selectedModelId, excludeAccountId, turnAdmissionLease } = args;
   if (!route.codexAccountMode || !excludeAccountId) return null;
@@ -252,7 +251,7 @@ export async function handleResponsesCompact(
   req: Request,
   config: OcxConfig,
   logCtx: RequestLogContext,
-  turnAdmissionLease?: AdmissionLease,
+  turnAdmissionLease?: ActiveTurnLease,
 ): Promise<Response> {
   let body: unknown;
   try {

@@ -22,6 +22,12 @@ import {
 } from "../adapters/cursor/native-exec-shell";
 import type { CodexAccountSelectionAdmission } from "../codex/auth-context";
 import { releaseNativeMainStartupLifecycle } from "../codex/native-profile-startup";
+import {
+  AgentActivityRegistry,
+  type AgentActivityRoute,
+  type AgentActivitySnapshot,
+  type AgentActivityStart,
+} from "./agent-activity";
 
 // ---------------------------------------------------------------------------
 // Active turn tracking + graceful shutdown drain
@@ -33,7 +39,11 @@ export interface ActiveTurnLease extends AdmissionLease {
   bindAbortController(ac: AbortController): void;
   beginCodexAccountSelection(): CodexAccountSelectionAdmission;
   isTransferred(): boolean;
+  updateAgentActivityMetadata(clientMetadata: unknown, headers?: Headers): void;
+  markAgentActivityRunning(route: AgentActivityRoute): void;
+  markAgentActivityFirstOutput(at?: number): void;
 }
+const agentActivity = new AgentActivityRegistry<ActiveTurnLease>(MAX_ACTIVE_TURNS);
 const activeTurns = new Map<AbortController, ActiveTurnLease>();
 const admittedTurns = new Set<ActiveTurnLease>();
 const knownTurnControllers = new WeakSet<AbortController>();
@@ -155,7 +165,7 @@ export function resetLifecycleDrainStateForTests(): void {
   serverStartupReleaseFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
   releaseServerStartupLifecycleImpl = releaseNativeMainStartupLifecycle;
 }
-export function tryAdmitTurn(): ActiveTurnLease | null {
+export function tryAdmitTurn(activity?: AgentActivityStart): ActiveTurnLease | null {
   if (isDraining()) return null;
   const gateLease = turnGate.tryAcquire();
   if (!gateLease) return null;
@@ -200,9 +210,23 @@ export function tryAdmitTurn(): ActiveTurnLease | null {
       };
     },
     isTransferred() { return transferred; },
+    updateAgentActivityMetadata(clientMetadata, headers) {
+      try {
+        agentActivity.updateMetadata(lease, clientMetadata, headers);
+      } catch {
+        /* optional observability must never break the data plane */
+      }
+    },
+    markAgentActivityRunning(route) {
+      agentActivity.markRunning(lease, route);
+    },
+    markAgentActivityFirstOutput(at) {
+      agentActivity.markFirstOutput(lease, at);
+    },
     release() {
       if (!active) return;
       active = false;
+      agentActivity.remove(lease);
       admittedTurns.delete(lease);
       for (const controller of controllers) {
         if (activeTurns.get(controller) === lease) activeTurns.delete(controller);
@@ -213,6 +237,13 @@ export function tryAdmitTurn(): ActiveTurnLease | null {
     },
   };
   admittedTurns.add(lease);
+  if (activity) {
+    try {
+      agentActivity.begin(lease, activity);
+    } catch {
+      /* optional observability must never break admission */
+    }
+  }
   return lease;
 }
 export function codexAccountSelectionForTurn(
@@ -261,6 +292,13 @@ export function isDraining(): boolean { return shutdownDraining || temporaryDrai
 export function getActiveTurnCount(): number { return turnGate.metrics().active; }
 export function getNativeMainProfileRequestCount(): number {
   return nativeMainSelections + nativeMainTurns.size;
+}
+export function getAgentActivitySnapshot(): AgentActivitySnapshot {
+  return agentActivity.snapshot(getActiveTurnCount(), isDraining());
+}
+/** Test-only isolation seam. Call only after releasing leases created by the test. */
+export function resetAgentActivityForTests(): void {
+  agentActivity.resetForTests();
 }
 export function activeRegistryMetrics(): Record<string, AdmissionMetrics> {
   const turns = turnGate.metrics();

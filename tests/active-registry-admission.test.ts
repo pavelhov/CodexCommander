@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { abortAndReleaseAllTurns, activeRegistryMetrics, trackStreamLifetime, tryAdmitTurn, unregisterTurn } from "../src/server/lifecycle";
+import { abortAndReleaseAllTurns, activeRegistryMetrics, getAgentActivitySnapshot, trackStreamLifetime, tryAdmitTurn, unregisterTurn } from "../src/server/lifecycle";
 import {
   MAX_TRACKED_CODEX_WEBSOCKETS,
   getTrackedCodexWebSocketCountForAccount,
@@ -125,13 +125,30 @@ describe("active registry admission", () => {
       const response = await fetch(new URL("/v1/responses", server.url), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: "fixture/model", input: "hello", stream: true }),
+        body: JSON.stringify({
+          model: "fixture/model",
+          input: "hello",
+          stream: true,
+          client_metadata: { turn_id: "http-body-turn-must-not-leak" },
+        }),
       });
       expect(response.status).toBe(200);
       expect(activeRegistryMetrics().activeTurns.active).toBe(before + 1);
+      expect(getAgentActivitySnapshot()).toMatchObject({
+        activeTurnCount: before + 1,
+        displayedActivityCount: 1,
+        activities: [{
+          role: "primary",
+          provider: "fixture",
+          model: "model",
+          phase: "running",
+        }],
+      });
+      expect(JSON.stringify(getAgentActivitySnapshot())).not.toContain("http-body-turn-must-not-leak");
       settle();
       expect(await response.text()).toBe("chunk");
       expect(activeRegistryMetrics().activeTurns.active).toBe(before);
+      expect(getAgentActivitySnapshot().displayedActivityCount).toBe(0);
     } finally {
       settle?.();
       await server.stop(true);

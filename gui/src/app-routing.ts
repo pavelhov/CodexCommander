@@ -1,6 +1,7 @@
 /** Pure hash → page resolution used by App route state. */
 
 import { normalizeHashPath } from "./hash-routing";
+import { resolveProvidersHash } from "./provider-route";
 
 export type Page =
   | "dashboard"
@@ -83,12 +84,20 @@ export const INTEGRATION_TAB_HASHES = [
 ] as const;
 
 export function hashBelongsToPage(rawHash: string, page: Page): boolean {
-  return rawHash === page
-    || (page === "logs" && rawHash === "logs/debug")
-    || (page === "dashboard"
-      && (rawHash === DASHBOARD_UPDATE_HASH || (DASHBOARD_TAB_HASHES as readonly string[]).includes(rawHash)))
-    || (page === "integrations"
-      && (INTEGRATION_TAB_HASHES as readonly string[]).includes(rawHash));
+  if (rawHash === page) return true;
+  if (page === "logs" && rawHash === "logs/debug") return true;
+  if (page === "dashboard"
+    && (rawHash === DASHBOARD_UPDATE_HASH || (DASHBOARD_TAB_HASHES as readonly string[]).includes(rawHash))) {
+    return true;
+  }
+  if (page === "providers") {
+    // Legacy dual-layout hash is redirected, not owned.
+    if (rawHash === "providers/workspace") return false;
+    return resolveProvidersHash(rawHash).belongs;
+  }
+  if (page === "integrations"
+    && (INTEGRATION_TAB_HASHES as readonly string[]).includes(rawHash)) return true;
+  return false;
 }
 
 
@@ -134,6 +143,15 @@ export function resolveAppHashChange(rawHash: string): AppHashChangeAction {
   // Legacy deep link from the removed dual-layout era.
   if (rawHash === "providers/workspace") {
     return { page: "providers", replaceTo: "providers" };
+  }
+
+  // Providers detail deep links: keep valid ones, passively rewrite malformed ones.
+  if (nextPage === "providers" && rawHash.startsWith("providers/")) {
+    const resolved = resolveProvidersHash(rawHash);
+    if (!resolved.belongs) {
+      return { page: "providers", replaceTo: resolved.replaceTo ?? "providers" };
+    }
+    return { page: "providers", replaceTo: resolved.replaceTo };
   }
 
   // An unrecognised sub-hash is normalised away rather than left in the URL.

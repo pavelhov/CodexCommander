@@ -68,6 +68,7 @@ import { handleAgentSettingsRoutes } from "./management/agent-settings-routes";
 import { handleOauthAccountRoutes } from "./management/oauth-account-routes";
 import { handleComboRoutes } from "./management/combo-routes";
 import { handleSystemRoutes } from "./management/system-routes";
+import { handleActivityRoutes } from "./management/activity-routes";
 import { handleSidebarRoutes } from "./management/sidebar-routes";
 import { handleIntegrationRoutes } from "./management/integration-routes";
 import { handleNativeIntegrationRoutes } from "./management/native-integration-routes";
@@ -204,6 +205,7 @@ export async function handleManagementAPI(
     ??     (await handleAgentSettingsRoutes(ctx))
     ??     (await handleOauthAccountRoutes(ctx))
     ??     (await handleComboRoutes(ctx))
+    ??     (await handleActivityRoutes(ctx))
     ??     (await handleSystemRoutes(ctx))
       ?? (await handleSidebarRoutes(ctx));
   } catch (error) {
