@@ -27,11 +27,13 @@ test("only src/grok/inject.ts writes a grok config.toml", () => {
   const writers: string[] = [];
   for (const path of walk(SRC)) {
     const content = readFileSync(path, "utf8");
-    // A GROK TOML writer: touches a grok-home-resolved config.toml AND a write
-    // primitive. Codex's own ~/.codex/config.toml writers (codex/inject.ts, journal,
-    // service) match neither side of the grok-home pattern and must not trip this.
-    const mentionsGrokToml = content.includes("config.toml")
-      && (content.includes("grokHome") || content.includes("GROK_HOME"));
+    // A Grok TOML writer: constructs the Grok config path (or calls the shared path
+    // helper) AND contains a write primitive. Merely carrying GROK_HOME into a service
+    // environment must not combine with an unrelated $CODEX_HOME/config.toml diagnostic
+    // elsewhere in the same module and become a false second writer.
+    const mentionsGrokToml = /join\s*\(\s*grokHome\s*,\s*["']config\.toml["']/.test(content)
+      || /\bgrokConfigPath\s*\(/.test(content)
+      || /join\s*\(\s*homedir\(\)\s*,\s*["']\.grok["']\s*,\s*["']config\.toml["']/.test(content);
     const writes = /atomicWriteFile|writeFileSync|writeFile\(/.test(content);
     if (mentionsGrokToml && writes) writers.push(path);
   }

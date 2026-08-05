@@ -260,8 +260,8 @@ describe("resolveMatchedPrice", () => {
     expect(resolveMatchedPrice("openrouter", "anthropic-claude-3.5-sonnet")).toBeNull();
   });
 
-  test("16. shipped overlay membership: 51 keys, including Opus 5 and compatibility prices", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(51);
+  test("16. shipped overlay membership: 53 keys, including Opus 5 and compatibility prices", () => {
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(53);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [
@@ -293,6 +293,7 @@ describe("resolveMatchedPrice", () => {
       "google-antigravity/gpt-oss-120b-medium",
       "kimi/k3",
       "kimi/k3[1m]",
+      "kimi/k3-256k",
       "kimi/kimi-k2.7-code",
       "kimi/kimi-k2.7-code-highspeed",
       "kimi/kimi-k2.6",
@@ -305,6 +306,7 @@ describe("resolveMatchedPrice", () => {
       "moonshot/kimi-k2.5",
       "kimi-code/k3",
       "kimi-code/k3[1m]",
+      "kimi-code/k3-256k",
       "kimi-code/kimi-k2.7-code",
       "kimi-code/kimi-k2.7-code-highspeed",
       "kimi-code/kimi-k2.6",

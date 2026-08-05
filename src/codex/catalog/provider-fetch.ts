@@ -629,6 +629,7 @@ export const QUIET_AUTHORITATIVE_CATALOG_PROVIDERS = new Set(["kimi", "xai"]);
 export const CALLABLE_CONFIGURED_COMPATIBILITY_MODELS: Readonly<Record<string, ReadonlySet<string>>> = {
   kimi: new Set([
     "k3[1m]",
+    "k3-256k",
     "kimi-k2.7-code",
     "kimi-k2.7-code-highspeed",
     "kimi-k2.6",

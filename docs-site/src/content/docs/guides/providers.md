@@ -57,7 +57,7 @@ labels local presets separately; those normally omit both `authMode` and `apiKey
 | --- | --- | --- |
 | `key` | Sends your API key (`Authorization: Bearer …`, or `x-api-key` / `api-key` per adapter). The key may be a literal or an `${ENV_VAR}` reference. | Most providers. |
 | `forward` | Relays **your incoming Codex auth headers** verbatim to the provider — no key stored. This is the ChatGPT-login passthrough. | OpenAI (`openai-responses` adapter). |
-| `oauth` | Resolves a stored OAuth access token (auto-refreshed before expiry) and uses it as the bearer key. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor, GitHub Copilot. |
+| `oauth` | Resolves a stored OAuth access token and follows its credential owner. OpenCodex-owned credentials refresh before expiry; linked Grok/Kimi CLI credentials are adopted read-only and remain native-CLI-owned. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor, GitHub Copilot. |
 
 The [`retryOn429`](/reference/configuration/) same-key 429 replay applies only to API-key
 providers (`authMode: "key"`). OAuth, forward, and local presets are excluded — their
@@ -90,9 +90,11 @@ The ChatGPT passthrough catalog also layers in the bare GPT-5.6 Sol/Terra/Luna s
 ## 2. Account login (OAuth)
 
 Seven provider presets use OAuth login — plus GitHub Copilot via an experimental unofficial
-device-flow bridge. opencodex stores their credentials in
-`~/.opencodex/auth.json` and refreshes them automatically. `chatgpt` is also accepted by the login
-CLI; it acquires a ChatGPT credential while creating a `forward`-mode provider entry.
+device-flow bridge. opencodex stores their credentials in `~/.opencodex/auth.json`.
+OpenCodex-owned credentials refresh automatically. When a signed-in Grok or Kimi CLI session is
+linked, opencodex adopts its current access generation read-only and the native CLI remains
+responsible for renewal. `chatgpt` is also accepted by the login CLI; it acquires a ChatGPT
+credential while creating a `forward`-mode provider entry.
 
 ```bash
 ocx login xai          # xAI Grok
@@ -111,7 +113,7 @@ ocx logout <provider>
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://api.x.ai/v1` | Live-first Grok catalog; `grok-4.5` is the fallback default. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude models; live model list fetched from `/v1/models`. |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 coding models. |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K3 (`k3`, 1M context), fixed-window `k3-256k`, compatibility alias `k3[1m]`, and legacy K2.7/K2.6/K2.5 coding models. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Initial login imports the installed, signed-in `kiro-cli` session (on Unix, install with `curl -fsSL https://cli.kiro.dev/install | bash`; on Windows PowerShell, use `irm 'https://cli.kiro.dev/install.ps1' | iex`; then run `kiro-cli login`). **Add account** logs `kiro-cli` out, starts a fresh browser login that switches the account used by `kiro-cli`, and stores account-scoped profile metadata. Existing OpenCodex accounts are preserved, and cancellation or failure restores the previous `kiro-cli` session. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. Uses the maintained six-model static catalog because CCA does not expose the generic `/models` endpoint. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport, and account-filtered model discovery. |

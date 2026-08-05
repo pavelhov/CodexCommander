@@ -82,7 +82,8 @@ understand when guidance, native defaults, and fallback apply.
 
 ## Logging in instead of pasting a key
 
-Some providers support real account login (OAuth, auto-refreshed):
+Some providers support real account login. OpenCodex-owned OAuth credentials auto-refresh; linked
+Grok/Kimi native CLI sessions remain CLI-owned:
 
 ```bash
 ocx login xai          # or: anthropic, kimi, kiro, google-antigravity, cursor

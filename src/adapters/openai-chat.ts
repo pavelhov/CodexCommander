@@ -599,9 +599,41 @@ function ensureRootObjectType(parameters: unknown): Record<string, unknown> {
   return { ...obj, type: "object" };
 }
 
-function expandXaiRootObjectSchemas(schema: unknown): Record<string, unknown>[] | undefined {
+function resolveXaiLocalSchemaRef(
+  ref: string,
+  document: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (!ref.startsWith("#/")) return undefined;
+  let current: unknown = document;
+  for (const encoded of ref.slice(2).split("/")) {
+    const key = encoded.replace(/~1/g, "/").replace(/~0/g, "~");
+    if (!current || typeof current !== "object" || Array.isArray(current)) return undefined;
+    if (!Object.hasOwn(current, key)) return undefined;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current && typeof current === "object" && !Array.isArray(current)
+    ? current as Record<string, unknown>
+    : undefined;
+}
+
+function expandXaiRootObjectSchemas(
+  schema: unknown,
+  document: Record<string, unknown>,
+  seenRefs = new Set<string>(),
+): Record<string, unknown>[] | undefined {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) return undefined;
   const obj = schema as Record<string, unknown>;
+  if (obj.$ref !== undefined) {
+    if (typeof obj.$ref !== "string" || seenRefs.has(obj.$ref)) return undefined;
+    const target = resolveXaiLocalSchemaRef(obj.$ref, document);
+    if (!target) return undefined;
+    const nextSeen = new Set(seenRefs);
+    nextSeen.add(obj.$ref);
+    const resolved = expandXaiRootObjectSchemas(target, document, nextSeen);
+    if (!resolved) return undefined;
+    const siblings = Object.fromEntries(Object.entries(obj).filter(([key]) => key !== "$ref"));
+    return resolved.map(variant => ({ ...variant, ...siblings }));
+  }
   const compositionKey = ["oneOf", "anyOf"].find(key => Array.isArray(obj[key]));
   if (!compositionKey) {
     if (obj.type !== undefined && obj.type !== "object") return undefined;
@@ -613,7 +645,7 @@ function expandXaiRootObjectSchemas(schema: unknown): Record<string, unknown>[] 
   if (!Array.isArray(branches)) return undefined;
   const expanded: Record<string, unknown>[] = [];
   for (const branch of branches) {
-    const variants = expandXaiRootObjectSchemas(branch);
+    const variants = expandXaiRootObjectSchemas(branch, document, new Set(seenRefs));
     if (!variants) return undefined;
     for (const variant of variants) expanded.push({ ...siblings, ...variant });
   }
@@ -621,7 +653,10 @@ function expandXaiRootObjectSchemas(schema: unknown): Record<string, unknown>[] 
 }
 
 function normalizeXaiToolParameters(parameters: unknown): Record<string, unknown> | undefined {
-  const variants = expandXaiRootObjectSchemas(parameters);
+  const document = parameters && typeof parameters === "object" && !Array.isArray(parameters)
+    ? parameters as Record<string, unknown>
+    : {};
+  const variants = expandXaiRootObjectSchemas(parameters, document);
   if (!variants) return undefined;
   if (variants.length === 1) return variants[0];
   const root = parameters && typeof parameters === "object" && !Array.isArray(parameters)

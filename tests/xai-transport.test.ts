@@ -172,6 +172,88 @@ describe("xAI auth-mode transport selection", () => {
     expect(tool?.function.parameters.oneOf).toHaveLength(2);
     expect((tool?.function.parameters.oneOf as Record<string, unknown>[]).every(branch => branch.type === "object")).toBe(true);
   });
+
+  test("dereferences local root branches in tool_search-loaded xAI schemas", () => {
+    const parameters = {
+      oneOf: [
+        { $ref: "#/$defs/create" },
+        {
+          oneOf: [
+            { $ref: "#/$defs/updateAlias" },
+            {
+              type: "object",
+              properties: { mode: { const: "delete" }, id: { type: "string" } },
+              required: ["mode", "id"],
+              additionalProperties: false,
+            },
+          ],
+        },
+      ],
+      $defs: {
+        create: {
+          type: "object",
+          properties: { mode: { const: "create" }, name: { type: "string" } },
+          required: ["mode", "name"],
+          additionalProperties: false,
+        },
+        updateAlias: { $ref: "#/$defs/update" },
+        update: {
+          type: "object",
+          properties: { mode: { const: "update" }, id: { type: "string" } },
+          required: ["mode", "id"],
+          additionalProperties: false,
+        },
+      },
+    };
+    const parsedRequest = parseRequest({
+      model: "xai/grok-4.5",
+      input: [
+        { type: "tool_search_call", call_id: "search-1", arguments: { query: "automation" } },
+        {
+          type: "tool_search_output",
+          call_id: "search-1",
+          status: "completed",
+          tools: [{ type: "function", name: "automation_update", description: "Update an automation", parameters }],
+        },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "continue" }] },
+      ],
+    });
+    const request = createOpenAIChatAdapter(provider("key")).buildRequest(parsedRequest);
+    const body = JSON.parse(request.body) as { tools: Array<{ function: { name: string; parameters: Record<string, unknown> } }> };
+    const schema = body.tools.find(entry => entry.function.name === "automation_update")?.function.parameters;
+    const branches = schema?.oneOf as Record<string, unknown>[];
+
+    expect(branches).toHaveLength(3);
+    expect(branches.every(branch => branch.type === "object" && branch.$ref === undefined)).toBe(true);
+    expect(branches.map(branch => (branch.properties as Record<string, unknown>).mode)).toEqual([
+      { const: "create" },
+      { const: "update" },
+      { const: "delete" },
+    ]);
+    expect(schema?.$defs).toEqual(parameters.$defs);
+  });
+
+  test("omits an xAI tool whose local root reference resolves to a non-object schema", () => {
+    const request = createOpenAIChatAdapter(provider("key")).buildRequest({
+      ...parsed(),
+      context: {
+        messages: [],
+        tools: [{
+          name: "unsafe_ref",
+          description: "Unsafe",
+          parameters: {
+            oneOf: [{ $ref: "#/$defs/object" }, { $ref: "#/$defs/string" }],
+            $defs: {
+              object: { type: "object", properties: {} },
+              string: { type: "string" },
+            },
+          },
+        }],
+      },
+    });
+
+    expect(JSON.parse(request.body).tools).toBeUndefined();
+  });
 });
 
 describe("xAI prompt-cache conv-id affinity", () => {

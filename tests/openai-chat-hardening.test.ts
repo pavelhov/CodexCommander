@@ -334,6 +334,7 @@ describe("openai-chat max output defaults", () => {
       for (const [modelId, wireModel] of [
         ["k3", "k3"],
         ["k3[1m]", "k3"],
+        ["k3-256k", "k3-256k"],
         ["kimi-k2.7-code", "kimi-k2.7-code"],
       ] as const) {
         const config: OcxConfig = {

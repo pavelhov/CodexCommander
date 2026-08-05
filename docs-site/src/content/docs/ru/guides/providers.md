@@ -60,7 +60,7 @@ description: Все способы, которыми opencodex аутентиф�
 | --- | --- | --- |
 | `key` | Отправляет ваш API-ключ (`Authorization: Bearer …` либо `x-api-key` / `api-key` в зависимости от адаптера). Ключ может быть литералом или ссылкой вида `${ENV_VAR}`. | Большинство провайдеров. |
 | `forward` | Передаёт провайдеру **входящие заголовки аутентификации Codex** без изменений — ключ не хранится. Это сквозной режим (passthrough) входа через ChatGPT. | OpenAI (адаптер `openai-responses`). |
-| `oauth` | Берёт сохранённый OAuth-токен доступа (автоматически обновляется до истечения срока) и использует его как bearer-ключ. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor, GitHub Copilot. |
+| `oauth` | Берёт сохранённый OAuth-токен как bearer-ключ и соблюдает владельца учётных данных. Учётные данные OpenCodex обновляются до истечения срока; связанные данные Grok/Kimi CLI принимаются только для чтения и остаются во владении нативного CLI. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor, GitHub Copilot. |
 
 Повтор при 429 на том же ключе ([`retryOn429`](/ru/reference/configuration/)) применим только к
 провайдерам с API-ключом (`authMode: "key"`). Пресеты OAuth, forward и local исключены — их
@@ -95,8 +95,11 @@ account id, OpenAI beta/originator/session — см. [Адаптеры](/ru/refe
 
 Семь пресетов провайдеров используют вход через OAuth — плюс GitHub Copilot через
 экспериментальный неофициальный мост device flow. opencodex хранит их учётные данные в
-`~/.opencodex/auth.json` и обновляет их автоматически. CLI входа также принимает `chatgpt`: эта
-команда получает учётные данные ChatGPT и одновременно создаёт запись провайдера в режиме `forward`.
+`~/.opencodex/auth.json`. Учётные данные, принадлежащие OpenCodex, обновляются автоматически.
+При подключении активной сессии Grok или Kimi CLI opencodex принимает текущее поколение доступа
+только для чтения, а обновление остаётся обязанностью нативного CLI. CLI входа также принимает
+`chatgpt`: эта команда получает учётные данные ChatGPT и одновременно создаёт запись провайдера в
+режиме `forward`.
 
 ```bash
 ocx login xai          # xAI Grok
@@ -115,7 +118,7 @@ ocx logout <provider>
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://api.x.ai/v1` | Каталог Grok загружается в реальном времени; фолбэк по умолчанию — `grok-4.5`. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Модели Claude; актуальный список моделей загружается из `/v1/models`. |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Модели Kimi K2.7/K2.6/K2.5 для кодинга. |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K3 (`k3`, контекст 1M), фиксированное окно `k3-256k`, алиас совместимости `k3[1m]` и прежние модели K2.7/K2.6/K2.5. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Первый вход импортирует существующую сессию после установки Kiro CLI (в Unix: `curl -fsSL https://cli.kiro.dev/install | bash`; в Windows PowerShell: `irm 'https://cli.kiro.dev/install.ps1' | iex`; затем выполните `kiro-cli login`). **Добавить аккаунт** выполняет выход из `kiro-cli`, запускает новый вход через браузер, переключает аккаунт самого `kiro-cli` и сохраняет метаданные профиля отдельно для каждого аккаунта. Существующие аккаунты OpenCodex сохраняются; при отмене или сбое восстанавливается предыдущая сессия `kiro-cli`. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth поверх протокола Cloud Code Assist. Используется поддерживаемый статический каталог из шести моделей, поскольку CCA не предоставляет общий эндпоинт `/models`. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Экспериментальный PKCE-вход, живой транспорт HTTP/2 и обнаружение моделей с фильтрацией по аккаунту. |

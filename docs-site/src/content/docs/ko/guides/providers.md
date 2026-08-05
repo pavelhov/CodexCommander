@@ -51,7 +51,7 @@ shipped v1 config는 marker 2의 단일 옵션 행으로 자동 이관됩니다.
 | --- | --- | --- |
 | `key` | API 키를 전송합니다(`Authorization: Bearer …`, 또는 어댑터에 따라 `x-api-key` / `api-key`). 키는 리터럴이거나 `${ENV_VAR}` 참조일 수 있습니다. | 대부분의 프로바이더. |
 | `forward` | **수신된 Codex 인증 헤더를** 프로바이더에 그대로 중계합니다 — 키를 저장하지 않습니다. ChatGPT 로그인 패스스루입니다. | OpenAI (`openai-responses` 어댑터). |
-| `oauth` | 저장된 OAuth 액세스 토큰을 불러와 bearer 키로 사용하며, 만료 전에 자동 갱신합니다. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor. |
+| `oauth` | 저장된 OAuth 액세스 토큰을 bearer 키로 사용하고 자격 증명 소유권을 따릅니다. OpenCodex 소유 자격 증명은 만료 전에 갱신되며, 연결된 Grok/Kimi CLI 자격 증명은 읽기 전용으로 채택되어 네이티브 CLI 소유로 유지됩니다. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor. |
 
 [`retryOn429`](/ko/reference/configuration/)（동일 키 429 재시도）는 API 키 프로바이더
 （`authMode: "key"`）에만 적용됩니다. OAuth·forward·로컬 프리셋은 제외됩니다 — 같은 토큰을
@@ -84,9 +84,11 @@ ChatGPT 패스스루 카탈로그에는 GPT-5.6 Sol/Terra/Luna의 네임스페�
 ## 2. 계정 로그인 (OAuth)
 
 OAuth 로그인을 사용하는 프로바이더 프리셋은 일곱 개이며, 여기에 실험적 비공식 디바이스 플로우
-브리지를 쓰는 GitHub Copilot이 추가됩니다. 자격 증명은 `~/.opencodex/auth.json`에 저장되고
-자동으로 갱신됩니다. 로그인 CLI는 `chatgpt`도 받습니다. 이 명령은 ChatGPT 자격 증명을
-발급받고 `forward` 모드 프로바이더 항목을 만듭니다.
+브리지를 쓰는 GitHub Copilot이 추가됩니다. 자격 증명은 `~/.opencodex/auth.json`에 저장됩니다.
+OpenCodex 소유 자격 증명은 자동 갱신됩니다. 로그인된 Grok 또는 Kimi CLI 세션을 연결하면
+opencodex는 현재 액세스 세대를 읽기 전용으로 채택하고 갱신 책임은 네이티브 CLI에 남깁니다.
+로그인 CLI는 `chatgpt`도 받습니다. 이 명령은 ChatGPT 자격 증명을 발급받고 `forward` 모드
+프로바이더 항목을 만듭니다.
 
 ```bash
 ocx login xai          # xAI Grok
@@ -105,7 +107,7 @@ ocx logout <provider>
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://api.x.ai/v1` | 실시간 목록을 우선 사용하며, 폴백 기본 모델은 `grok-4.5`입니다. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude 모델; 실시간 모델 목록은 `/v1/models`에서 가져옵니다. |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 코딩 모델. |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K3(`k3`, 1M 컨텍스트), 고정 윈도우 `k3-256k`, 호환 별칭 `k3[1m]`, 레거시 K2.7/K2.6/K2.5 코딩 모델. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 최초 로그인은 설치하고 로그인한 `kiro-cli` 세션을 가져옵니다(Unix에서는 `curl -fsSL https://cli.kiro.dev/install | bash`, Windows PowerShell에서는 `irm 'https://cli.kiro.dev/install.ps1' | iex`로 설치한 뒤 `kiro-cli login` 실행). **계정 추가**는 `kiro-cli`에서 로그아웃한 뒤 새 브라우저 로그인을 시작하여 `kiro-cli` 자체의 계정을 전환하고, 계정별 프로필 메타데이터를 저장합니다. 기존 OpenCodex 계정은 유지되며, 취소되거나 실패하면 이전 `kiro-cli` 세션을 복원합니다. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth를 Cloud Code Assist wire로 사용합니다. CCA가 범용 `/models` 엔드포인트를 제공하지 않으므로 유지 관리되는 6개 모델 정적 카탈로그를 사용합니다. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 실험적 PKCE 로그인, HTTP/2 전송, 계정별 모델 탐색을 지원합니다. |

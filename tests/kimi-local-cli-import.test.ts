@@ -132,6 +132,24 @@ describe("Kimi Code CLI read-only login import", () => {
     );
     expect(fetchCalls).toBe(0);
   });
+
+  test("ordinary login skips a fresh identity-less CLI token and starts independent device auth", async () => {
+    const credentials = join(kimiHome, "credentials");
+    mkdirSync(credentials, { recursive: true });
+    writeFileSync(join(credentials, "kimi-code.json"), JSON.stringify({
+      access_token: "opaque-access",
+      refresh_token: "opaque-refresh",
+      expires_at: Math.floor((Date.now() + 10 * 60_000) / 1000),
+    }));
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls++;
+      return new Response("upstream unavailable", { status: 503 });
+    }) as typeof fetch;
+
+    await expect(OAUTH_PROVIDERS.kimi!.login({})).rejects.toThrow("Kimi device authorization failed: 503");
+    expect(fetchCalls).toBe(1);
+  });
 });
 
 describe("Kimi Code CLI linked-token renewal", () => {

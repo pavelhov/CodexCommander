@@ -70,12 +70,12 @@ describe("Kimi reasoning-content presentation config", () => {
   test("canonical OAuth and API-key Kimi seeds inherit summary presentation without overriding user choices", () => {
     expect(deriveOAuthProviderConfig("kimi")).toMatchObject({
       reasoningContentMode: "summary",
-      modelSupportsReasoningSummaries: { k3: true, "k3[1m]": true },
+      modelSupportsReasoningSummaries: { k3: true, "k3[1m]": true, "k3-256k": true },
       chatCompletionTokenField: "max_completion_tokens",
     });
     expect(deriveKeyLoginMap()["kimi-code"]).toMatchObject({
       reasoningContentMode: "summary",
-      modelSupportsReasoningSummaries: { k3: true, "k3[1m]": true },
+      modelSupportsReasoningSummaries: { k3: true, "k3[1m]": true, "k3-256k": true },
       chatCompletionTokenField: "max_completion_tokens",
     });
     expect(providerConfigFromKeyLoginProvider(
@@ -91,7 +91,7 @@ describe("Kimi reasoning-content presentation config", () => {
       const seed = providerConfigSeed(entry);
 
       expect(seed.reasoningContentMode).toBe("summary");
-      expect(seed.modelSupportsReasoningSummaries).toEqual({ k3: true, "k3[1m]": true });
+      expect(seed.modelSupportsReasoningSummaries).toEqual({ k3: true, "k3[1m]": true, "k3-256k": true });
       expect(seed.modelDefaultReasoningEfforts?.k3).toBe("max");
       expect(seed.chatCompletionTokenField).toBe("max_completion_tokens");
 
@@ -101,7 +101,7 @@ describe("Kimi reasoning-content presentation config", () => {
       };
       enrichProviderFromRegistry(providerId, existing);
       expect(existing.reasoningContentMode).toBe("summary");
-      expect(existing.modelSupportsReasoningSummaries).toEqual({ k3: true, "k3[1m]": true });
+      expect(existing.modelSupportsReasoningSummaries).toEqual({ k3: true, "k3[1m]": true, "k3-256k": true });
       expect(existing.chatCompletionTokenField).toBe("max_completion_tokens");
 
       const optedOut: OcxProviderConfig = {
@@ -112,7 +112,7 @@ describe("Kimi reasoning-content presentation config", () => {
       };
       enrichProviderFromRegistry(providerId, optedOut);
       expect(optedOut.reasoningContentMode).toBe("raw");
-      expect(optedOut.modelSupportsReasoningSummaries).toEqual({ k3: false, "k3[1m]": true });
+      expect(optedOut.modelSupportsReasoningSummaries).toEqual({ k3: false, "k3[1m]": true, "k3-256k": true });
     }
   });
 
@@ -124,7 +124,7 @@ describe("Kimi reasoning-content presentation config", () => {
         adapter: entry.adapter,
         baseUrl: entry.baseUrl,
         authMode: entry.authKind === "oauth" ? "oauth" : "key",
-        models: ["k3", "k3[1m]"],
+        models: ["k3", "k3[1m]", "k3-256k"],
       };
       const staleConfig = {
         ...defaults,
@@ -134,7 +134,7 @@ describe("Kimi reasoning-content presentation config", () => {
 
       const routed = routeModel(staleConfig, `${providerId}/k3`).provider;
       expect(routed.reasoningContentMode).toBe("summary");
-      expect(routed.modelSupportsReasoningSummaries).toEqual({ k3: true, "k3[1m]": true });
+      expect(routed.modelSupportsReasoningSummaries).toEqual({ k3: true, "k3[1m]": true, "k3-256k": true });
       expect(routed.chatCompletionTokenField).toBe("max_completion_tokens");
       expect(staleProvider.reasoningContentMode).toBeUndefined();
       expect(staleProvider.modelSupportsReasoningSummaries).toBeUndefined();
@@ -150,7 +150,7 @@ describe("Kimi reasoning-content presentation config", () => {
         } },
       }, `${providerId}/k3`).provider;
       expect(optedOut.reasoningContentMode).toBe("raw");
-      expect(optedOut.modelSupportsReasoningSummaries).toEqual({ k3: false, "k3[1m]": true });
+      expect(optedOut.modelSupportsReasoningSummaries).toEqual({ k3: false, "k3[1m]": true, "k3-256k": true });
       expect(optedOut.chatCompletionTokenField).toBe("max_tokens");
     }
 
@@ -158,12 +158,12 @@ describe("Kimi reasoning-content presentation config", () => {
 
   test("advertises summaries for K3 variants while preserving Ultra and conservative legacy rows", () => {
     const provider = providerConfigSeed(getProviderRegistryEntry("kimi")!);
-    const models = ["k3", "k3[1m]", "kimi-k2.7-code"].map(id =>
+    const models = ["k3", "k3[1m]", "k3-256k", "kimi-k2.7-code"].map(id =>
       applyProviderConfigHints("kimi", provider, { provider: "kimi", id }));
     const entries = buildCatalogEntries(null, [], models);
     const bySlug = new Map(entries.map(entry => [entry.slug, entry]));
 
-    for (const slug of ["kimi/k3", "kimi/k3[1m]"]) {
+    for (const slug of ["kimi/k3", "kimi/k3[1m]", "kimi/k3-256k"]) {
       const entry = bySlug.get(slug);
       expect(entry?.supports_reasoning_summaries).toBe(true);
       expect(entry?.default_reasoning_level).toBe("max");

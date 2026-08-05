@@ -87,7 +87,9 @@ codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 
 ## Вход в аккаунт вместо вставки ключа
 
-Некоторые провайдеры поддерживают полноценный вход в аккаунт (OAuth с автообновлением):
+Некоторые провайдеры поддерживают полноценный вход в аккаунт. OAuth-данные, принадлежащие
+OpenCodex, обновляются автоматически; связанные сессии нативного Grok/Kimi CLI остаются во
+владении CLI:
 
 ```bash
 ocx login xai          # or: anthropic, kimi, kiro, google-antigravity, cursor

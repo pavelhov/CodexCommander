@@ -59,10 +59,13 @@ Use `--api-key` or an OAuth login for anything secret.
 
 ### `ocx login <provider>`
 
-Start the provider's registered login flow. OAuth providers open a browser and store auto-refreshed
-credentials under `~/.opencodex/`; API-key login providers open their key dashboard, prompt for the
-key, validate it when possible, and save the resulting provider config. The command prints the
-currently accepted OAuth and API-key provider ids when the name is missing or unknown.
+Start the provider's registered login flow. Depending on the provider, OAuth login opens a browser
+or imports/links a signed-in native CLI session. OpenCodex-owned credentials stored under
+`~/.opencodex/` refresh automatically; linked Grok/Kimi CLI access generations are adopted
+read-only and the native CLI remains responsible for renewal. API-key login providers open their
+key dashboard, prompt for the key, validate it when possible, and save the resulting provider
+config. The command prints the currently accepted OAuth and API-key provider ids when the name is
+missing or unknown.
 
 Use the same command to **reauthenticate** after `ocx status` / `ocx doctor` reports
 reauthentication required or a terminal refresh failure (or use Reauthenticate in the dashboard).
