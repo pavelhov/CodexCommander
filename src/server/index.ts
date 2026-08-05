@@ -372,8 +372,12 @@ export function startServer(port?: number) {
     }), req, config);
   }
 
-  async function runAdmittedHttpTurn(req: Request, work: (lease: ActiveTurnLease) => Promise<Response>): Promise<Response> {
-    const lease = tryAdmitTurn();
+  async function runAdmittedHttpTurn(
+    req: Request,
+    work: (lease: ActiveTurnLease) => Promise<Response>,
+    activity?: { startedAt: number; clientMetadata?: unknown },
+  ): Promise<Response> {
+    const lease = tryAdmitTurn(activity ? { headers: req.headers, ...activity } : undefined);
     if (!lease) return serverBusyResponse(req, "active turns");
     let response: Response;
     try {
@@ -714,7 +718,10 @@ export function startServer(port?: number) {
           const response = await handleResponses(req, config, logCtx, {
             turnAdmissionLease,
             abortSignal: req.signal,
-            onFirstOutput: () => recordFirstOutput(logCtx, start),
+            onFirstOutput: () => {
+              recordFirstOutput(logCtx, start);
+              turnAdmissionLease.markAgentActivityFirstOutput();
+            },
             onNativePassthroughTerminal: status => {
               finalizeNativePassthroughLog(httpStatusForTerminalStatus(status), {
                 terminalStatus: status,
@@ -726,7 +733,7 @@ export function startServer(port?: number) {
             },
           });
           return withCors(responseWithDeferredRequestLog(response, requestId, start, logCtx), req, config);
-        });
+        }, { startedAt: start });
       }
 
       // Anthropic Messages inbound (Claude Code). count_tokens FIRST (longer path).
@@ -772,7 +779,7 @@ export function startServer(port?: number) {
           await handleClaudeMessages(req, config, logCtx, { requestId, start, turnAdmissionLease }),
           req,
           config,
-        ));
+        ), { startedAt: start });
       }
 
 
@@ -799,7 +806,7 @@ export function startServer(port?: number) {
           await handleChatCompletions(req, config, logCtx, { requestId, start, turnAdmissionLease }),
           req,
           config,
-        ));
+        ), { startedAt: start });
       }
 
       // ChatGPT / Codex App voice (GPT‑Live / Frameless Bidi) + OpenAI Realtime call-create.
@@ -980,7 +987,13 @@ export function startServer(port?: number) {
           return;
         }
 
-        const turnAdmissionLease = tryAdmitTurn();
+        const start = Date.now();
+        const baseHeaders = ws.data.headers ?? new Headers();
+        const turnAdmissionLease = tryAdmitTurn({
+          headers: baseHeaders,
+          clientMetadata: frame.client_metadata,
+          startedAt: start,
+        });
         if (!turnAdmissionLease) {
           sendJsonFrame(ws, buildWsErrorFrame(503, {
             type: "server_error",
@@ -996,7 +1009,6 @@ export function startServer(port?: number) {
         delete payload.type;
         turnAdmissionLease.bindAbortController(turnAbort);
         void (async () => {
-          const start = Date.now();
           const requestId = nextRequestLogId(start);
           // Resolved once at the handshake — a frame has no request headers left
           // to re-resolve from. Optional on WsData like every other member, so
@@ -1018,7 +1030,6 @@ export function startServer(port?: number) {
             logged = true;
             addFinalRequestLog(requestId, start, logCtx, status, meta);
           };
-          const baseHeaders = ws.data.headers ?? new Headers();
           const fwd = new Headers({ "content-type": "application/json" });
           baseHeaders.forEach((value, key) => fwd.set(key, value));
           const req = new Request("http://localhost/v1/responses", {
@@ -1032,7 +1043,10 @@ export function startServer(port?: number) {
               forceEmptyResponseId: true,
               abortSignal: turnAbort.signal,
               turnAdmissionLease,
-              onFirstOutput: () => recordFirstOutput(logCtx, start),
+              onFirstOutput: () => {
+                recordFirstOutput(logCtx, start);
+                turnAdmissionLease.markAgentActivityFirstOutput();
+              },
               onCodexAuthContextResolved: context => updateCodexWebSocketAuthContext(ws, context),
               recordTerminalOutcomes: false,
               setTerminalOutcomeRecorder: recorder => {

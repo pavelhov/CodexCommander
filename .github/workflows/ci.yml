@@ -9,6 +9,7 @@ on:
       - "tests/**"
       - "scripts/**"
       - "gui/**"
+      - "app/**"
       - ".gitattributes"
       - ".npmignore"
       - "package.json"
@@ -26,6 +27,7 @@ on:
       - "tests/**"
       - "scripts/**"
       - "gui/**"
+      - "app/**"
       - ".gitattributes"
       - ".npmignore"
       - "package.json"
@@ -184,6 +186,16 @@ jobs:
 
       - name: Privacy scan
         run: bun run privacy:scan
+
+      # Native companion checks stay on the macOS leg and run only after the
+      # repository privacy gate has passed.
+      - name: Test macOS menu bar app
+        if: runner.os == 'macOS'
+        run: bun run test:macos
+
+      - name: Build macOS menu bar app
+        if: runner.os == 'macOS'
+        run: bun run build:macos
 
       - name: Check release helper syntax
         run: bun build scripts/release.ts --target=bun --outdir=.tmp/ci-release-script-check

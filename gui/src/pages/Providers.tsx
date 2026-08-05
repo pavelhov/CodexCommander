@@ -19,6 +19,15 @@ import { useProvidersCrud } from "./use-providers-crud";
 import { useProvidersFetch } from "./use-providers-fetch";
 import { ProvidersPageModals } from "./providers-page-modals";
 import { buildAccountLoginStatus, buildAddModalAccountRows } from "./providers-page-utils";
+import { navigateHash, normalizeHashPath, replaceHash } from "../hash-routing";
+import {
+  providerRouteHash,
+  readProviderSelectionFromHash,
+  resolveProvidersHash,
+  type ProviderRouteTab,
+} from "../provider-route";
+import { providerAuthSurface } from "../provider-workspace/auth";
+import type { WorkspaceItem } from "../provider-workspace/catalog";
 
 export default function Providers({ apiBase }: { apiBase: string }) {
   const t = useT();
@@ -33,7 +42,12 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [oauthStatus, setOauthStatus] = useState<Record<string, import("./providers-shared").OAuthStatus>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [loginInfo, setLoginInfo] = useState<{ provider: string; url?: string; instructions?: string; deviceCode?: string } | null>(null);
-  const [workspaceSelected, setWorkspaceSelected] = useState<string | null>(null);
+  const [workspaceSelected, setWorkspaceSelected] = useState<string | null>(
+    () => readProviderSelectionFromHash()?.providerId ?? null,
+  );
+  const [routeTab, setRouteTab] = useState<ProviderRouteTab>(
+    () => readProviderSelectionFromHash()?.tab ?? "overview",
+  );
   const [addIntent, setAddIntent] = useState<AddProviderIntent | null>(null);
   const [removeConfirmName, setRemoveConfirmName] = useState<string | null>(null);
   /** ChatGPT/Codex login from Add Provider → Accounts (uses /api/codex-auth, not /api/oauth). */
@@ -53,7 +67,94 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   }, []);
 
   useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
-  // Providers hash sync is owned by App (passive replaceHash / deliberate navigateHash).
+  // Providers deep links: App owns page-level hash ownership; this page owns
+  // selection + tab within `#providers...` and only uses replaceHash for safe
+  // normalization (unknown provider / unavailable accounts tab).
+  const applyProvidersHash = useCallback((rawHash: string) => {
+    const raw = normalizeHashPath(rawHash);
+    if (!raw.startsWith("providers")) return;
+    const resolved = resolveProvidersHash(raw);
+    if (resolved.replaceTo) replaceHash(resolved.replaceTo);
+    const selection = resolved.selection;
+    if (!selection) {
+      setWorkspaceSelected(null);
+      setRouteTab("overview");
+      return;
+    }
+    setWorkspaceSelected(selection.providerId);
+    setRouteTab(selection.tab);
+  }, []);
+
+  // The App router canonicalizes malformed provider hashes in production. Keep the
+  // page independently safe when embedded or tested without App: initial state already
+  // reflects the resolved selection, so this mount effect only repairs the URL and does
+  // not enqueue redundant React state updates.
+  useEffect(() => {
+    const resolved = resolveProvidersHash(window.location.hash);
+    if (resolved.replaceTo) replaceHash(resolved.replaceTo);
+  }, []);
+
+  useEffect(() => {
+    const onRouteHash = () => {
+      applyProvidersHash(window.location.hash);
+    };
+    window.addEventListener("hashchange", onRouteHash);
+    window.addEventListener("popstate", onRouteHash);
+    return () => {
+      window.removeEventListener("hashchange", onRouteHash);
+      window.removeEventListener("popstate", onRouteHash);
+    };
+  }, [applyProvidersHash]);
+
+  // After config loads, unknown providers fall back via replaceState and clear selection.
+  useEffect(() => {
+    if (!config || !workspaceSelected) return;
+    if (Object.prototype.hasOwnProperty.call(config.providers, workspaceSelected)) return;
+    replaceHash("providers");
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setWorkspaceSelected(null);
+      setRouteTab("overview");
+    });
+    return () => { cancelled = true; };
+  }, [config, workspaceSelected]);
+
+  // If the hash asks for Accounts but this provider has no auth surface, fall back to overview.
+  useEffect(() => {
+    if (!config || !workspaceSelected || routeTab !== "accounts") return;
+    const provider = config.providers[workspaceSelected];
+    if (!provider) return;
+    const item = { name: workspaceSelected, ...provider } as WorkspaceItem;
+    if (providerAuthSurface(item)) return;
+    replaceHash(providerRouteHash(workspaceSelected, "overview"));
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setRouteTab("overview");
+    });
+    return () => { cancelled = true; };
+  }, [config, workspaceSelected, routeTab]);
+
+  const selectProvider = useCallback((name: string | null) => {
+    if (!name) {
+      navigateHash("providers");
+      setWorkspaceSelected(null);
+      setRouteTab("overview");
+      return;
+    }
+    // Fresh selection always opens overview so a previous tab does not leak across providers.
+    navigateHash(providerRouteHash(name, "overview"));
+    setWorkspaceSelected(name);
+    setRouteTab("overview");
+  }, []);
+
+  const selectProviderTab = useCallback((tab: ProviderRouteTab, mode: "push" | "replace" = "push") => {
+    if (!workspaceSelected) return;
+    const next = providerRouteHash(workspaceSelected, tab);
+    if (mode === "replace") replaceHash(next);
+    else navigateHash(next);
+    setRouteTab(tab);
+  }, [workspaceSelected]);
 
   // Warm the Add Provider catalog cache while the page is open so opening the
   // modal does not wait on a cold /api/provider-presets round-trip (~same key as
@@ -270,7 +371,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         apiBase={apiBase}
         defaultProvider={config.defaultProvider}
         selectedName={workspaceSelected}
-        onSelect={setWorkspaceSelected}
+        onSelect={selectProvider}
         onAddProvider={intent => { setAddIntent(intent ?? null); setAdding(true); }}
         onEditConfig={openJsonEditor}
         jsonEditor={{
@@ -303,7 +404,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             modelsLoadFailed={data.modelsLoadFailed}
             onRetryModels={data.onRetryModels}
             oauthEmail={loginStatus?.email}
-            onDeselect={() => setWorkspaceSelected(null)}
+            onDeselect={() => selectProvider(null)}
+            routeTab={routeTab}
+            onRouteTabChange={selectProviderTab}
             apiBase={apiBase}
             oauth={loginStatus}
             accounts={accountSets[item.name]?.accounts ?? []}

@@ -30,13 +30,19 @@ import { catalogModelEfforts } from "../codex/catalog";
  * sources — responses_metadata.rs subagent_source). Those are maintenance turns,
  * not spawned children, and must never trip subagentEffortCap.
  */
+export function isThreadSpawnMetadata(value: unknown): boolean {
+  return !!value
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && (value as { subagent_kind?: unknown }).subagent_kind === "thread_spawn";
+}
+
 export function isThreadSpawnRequest(headers: Headers): boolean {
   if (headers.get("x-openai-subagent") === "collab_spawn") return true;
   const turnMeta = headers.get("x-codex-turn-metadata");
   if (!turnMeta) return false;
   try {
-    const parsed = JSON.parse(turnMeta) as { subagent_kind?: unknown };
-    return parsed.subagent_kind === "thread_spawn";
+    return isThreadSpawnMetadata(JSON.parse(turnMeta));
   } catch {
     return false;
   }

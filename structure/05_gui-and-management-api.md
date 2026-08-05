@@ -75,6 +75,7 @@ this document owns is which module holds which area and what invariant that area
 | Key providers | `GET /api/key-providers` exposes API-key provider presets for setup and dashboard flows, and `GET/POST/DELETE /api/keys` owns the proxy's own admission keys. Multi-key pool per key-auth provider: `GET /api/providers/keys`, `POST /api/providers/keys`, `PUT /api/providers/keys/active`, `PUT /api/providers/keys/alias`, `DELETE /api/providers/keys` masked list, add (upsert + activate), switch, rename, and remove keys. `provider.apiKey` always mirrors the active pool entry so routing stays single-key. |
 | OpenAI account mode | Report one OpenAI Codex card with Pool/Direct controls and one API-key card. Mode PATCH persists live without restart or catalog identity changes; Pool owns account/quota controls and Direct uses caller/main login only. Main-account DTOs report real credential presence and terminal `needsReauth` state instead of treating missing/invalid native auth as an unknown quota. |
 | Subagents | Read/write the featured `subagentModels` list capped at five ids. `GET/PUT /api/injection-model` manages the shared delegation model/effort selection, the independent OpenCodex guidance switch, and the default-off `syncCodexSubagentDefaults` opt-in for native Codex subagent defaults. When OpenCodex owns the active Codex routing, native `[agents]` defaults apply to newly created Codex tasks after sync/restart; external user-managed provider configs remain untouched. The defaults do not cause delegation and preserve existing user-owned defaults rather than overwriting them. PUT is partial-update: absent keys are unchanged, `null` clears, and non-object bodies are rejected with 400 before field validation. `syncCodexSubagentDefaults: true` requires a nonblank `model` and a supported Codex reasoning effort when effort is set; clearing `model` (null/empty) always clears effort and disables native-default sync even when the stored effort was invalid. |
+| Agent activity | `src/server/management/activity-routes.ts` — `GET /api/agent-activity` exposes a bounded, active-only snapshot for local status surfaces. Records contain opaque process-ephemeral ids, privacy-safe model/provider labels, `primary`/`subagent` role, and truthful `starting`/`running` phases; no prompt, path, tool, account, raw request/thread id, error, or historical transcript is retained or serialized. Parent ids are emitted only when the parent appears in the same payload. Counts describe the pre-truncation snapshot, while at most 64 deterministically ordered records are returned. The response is management-authenticated and `Cache-Control: no-store`. |
 | V2 / Multi-agent mode | `GET/PUT /api/v2` — reports/sets the codex `multi_agent_v2` feature flag, the 3-state `multiAgentMode` override (`v1`/`default`/`v2`), and the logical maximum thread count. Selecting `v2` enables the native flag and migrates `[agents] max_threads` to the v2 key; selecting `v1` disables it and migrates the same value back. `default` leaves the native flag unchanged. PUT accepts `enabled`, `multiAgentMode`, and/or the compatibility-named `maxConcurrentThreadsPerSession`; contradictory mode/flag pairs are rejected before writes. Every transition is rollback-safe and resyncs the catalog. |
 | Logs & Debug | One sidebar entry (`/#logs`) with two tabs. Logs tab: request/runtime logs for local diagnosis. Debug tab (`/#logs/debug`; legacy `/#debug` deep links redirect there): provider + usage toggles, refresh/follow log viewer. `GET/PUT /api/debug`; `GET /api/debug/logs` and `GET /api/debug/usage-logs` (monotonic `after` cursor, legacy `since` accepted). CLI: `ocx debug provider|usage …` (both streams via running proxy API). |
 | Usage | `GET /api/usage` aggregate read-only summary derived from `~/.opencodex/usage.jsonl`; measured / reported / unreported / unsupported / estimated counts, daily zero-filled grid, model and provider breakdowns. Never exposes prompts. |
@@ -168,7 +169,7 @@ single forms, and the shell pattern is the part worth keeping stable:
 
 | Surface | Shape |
 | --- | --- |
-| Providers | Rail of configured providers plus a detail pane whose tabs are Overview, Models, Usage, then Accounts or API Keys when the provider has an auth surface, then Settings (`gui/src/components/provider-workspace/ProviderDetails.tsx`). |
+| Providers | Rail of configured providers plus a detail pane whose tabs are Overview, Models, Usage, then Accounts or API Keys when the provider has an auth surface, then Settings (`gui/src/components/provider-workspace/ProviderDetails.tsx`). The canonical `#providers/<provider>/<tab>` route preserves provider and tab selection across reload, Back, and Forward; malformed or unavailable destinations fall back without activating an invalid control. |
 | API keys | Rail plus per-key detail; masked values only (`gui/src/components/apikeys-workspace/`). |
 | Storage | Rail plus cleanup and trash detail (`gui/src/components/storage-workspace/`). |
 | Subagents | Featured-roster selection workspace (`gui/src/components/subagents-workspace/`). |
@@ -177,9 +178,27 @@ single forms, and the shell pattern is the part worth keeping stable:
 | Codex accounts | Account pool cards, add-account flow, switch and reset modals (`gui/src/components/CodexAccountPool.tsx`, `gui/src/components/AddCodexAccountModal.tsx`). |
 | Dashboard overview | Overview, Providers, and Models tabs at the page level (`gui/src/pages/Dashboard.tsx`), the 30-day token and coverage stats in the overview head (`gui/src/pages/dashboard-overview-head.tsx`), and the effort-cap, injection, maintenance, sidecar, and memory panels below it (`gui/src/pages/dashboard-overview-panels.tsx`). |
 
-Rail selection is component-local state today, so a reload returns to the workspace's default
-selection rather than the previously selected row. An OAuth ToS warning is shown before a login that
-requires acceptance (`gui/src/components/OAuthTosWarningModal.tsx`).
+Provider rail and detail-tab selection are URL-backed. Other rail workspaces keep component-local
+selection and return to their default row after a reload. An OAuth ToS warning is shown before a
+login that requires acceptance (`gui/src/components/OAuthTosWarningModal.tsx`).
+
+## macOS menu bar companion
+
+`app/` is a native AppKit menu bar client for the existing local proxy; it is not a second proxy,
+credential store, provider registry, or quota engine. It reads the same protected local management
+credential used by the dashboard/CLI, talks only to a validated literal loopback address, and never
+copies that credential into Keychain. A Finder-launched app cannot inherit an environment-only admin
+token, so that configuration is reported as unsupported instead of prompting for or persisting a
+duplicate secret.
+
+The popover is a compact status surface: active primary/subagent work from `/api/agent-activity`, one
+provider-quota accordion with ChatGPT first and expanded by default, and fixed links into the full
+dashboard. Provider management opens `#providers/<provider>/<tab>` so login, account, model, usage,
+and settings work remain in the existing authenticated browser UI. Restart is an explicit confirmed
+`POST /api/system/restart`; successful rediscovery and each menu open re-arm one authentication retry,
+and all post-restart config reads use fresh file descriptors. Activity and quota polling runs only
+while the menu is open; a slower identity/health tick keeps the status-bar state useful while closed.
+Unavailable or unknown data is rendered honestly rather than invented.
 
 The `/#codex-auth` add-account modal has a three-step manual-code UX contract on top of the existing
 OAuth polling API: submit request, waiting-for-login completion, and terminal success/failure. Once

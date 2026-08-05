@@ -106,6 +106,7 @@ describe("GitHub Actions hardening", () => {
       ".github/workflows/release.yml",
       ".github/workflows/stale-needs-info.yml",
       ".npmignore",
+      "app/**",
       "bin/**",
       "bun.lock",
       "gui/**",
@@ -130,6 +131,11 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("bun run lint");
     expect(workflow).toContain("- name: GUI build");
     expect(workflow).toContain("bun run build");
+    expect(workflow).toContain("- name: Test macOS menu bar app");
+    expect(workflow).toContain("if: runner.os == 'macOS'");
+    expect(workflow).toContain("bun run test:macos");
+    expect(workflow).toContain("- name: Build macOS menu bar app");
+    expect(workflow).toContain("bun run build:macos");
   });
 
   test("stale needs-info workflow is schedule-only and least-privilege", async () => {
@@ -204,6 +210,14 @@ describe("GitHub Actions hardening", () => {
 
   test("release workflow gates the exact SHA, channel, and service surface without injection", async () => {
     const workflow = await readText(".github/workflows/release.yml");
+    const parsed = Bun.YAML.parse(workflow) as {
+      jobs?: Record<string, {
+        permissions?: Record<string, string>;
+        needs?: string[];
+        if?: string;
+        "timeout-minutes"?: number;
+      }>;
+    };
 
     // Least privilege + never cancel a publish mid-flight.
     expect(workflow).toContain("actions: read");
@@ -221,7 +235,20 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0");
     expect(workflow).toContain("oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6");
     expect(workflow).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e");
+    expect(workflow).toContain("actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4");
+    expect(workflow).toContain("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c");
     expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
+
+    // macOS packaging is tokenless and independent from npm publish; only the
+    // join job receives contents:write, and only for real releases.
+    expect(parsed.jobs?.["package-macos"]?.permissions).toEqual({ contents: "read" });
+    expect(parsed.jobs?.["package-macos"]?.["timeout-minutes"]).toBe(20);
+    expect(parsed.jobs?.["attach-macos"]?.permissions).toEqual({ contents: "write" });
+    expect(parsed.jobs?.["attach-macos"]?.needs).toEqual(["publish", "package-macos"]);
+    expect(parsed.jobs?.["attach-macos"]?.if).toBe("${{ inputs.dry-run != true }}");
+    expect(parsed.jobs?.["attach-macos"]?.["timeout-minutes"]).toBe(10);
+    expect(workflow).toContain("shasum -a 256 -c ./*.sha256");
+    expect(workflow).toContain("GH_REPO: ${{ github.repository }}");
 
     // Workflow-dispatch inputs must reach shell code via env, never by direct
     // interpolation into run: source (script-injection hardening).

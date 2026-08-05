@@ -100,10 +100,9 @@ import { hasKeyPoolFailover, rotateProviderTransportOn429 } from "../../provider
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
 import type { WsData } from "../ws-bridge";
-import { registerTurn, trackStreamLifetime, unregisterTurn } from "../lifecycle";
+import { registerTurn, trackStreamLifetime, unregisterTurn, type ActiveTurnLease } from "../lifecycle";
 import { redactSecretString } from "../../lib/redact";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
-import type { AdmissionLease } from "../../lib/admission";
 import { supportedLadderFor } from "../effort-policy";
 import { isThreadSpawnRequest } from "../effort-policy";
 import {
@@ -514,7 +513,7 @@ export interface ConsumedComboFailure {
 
 
 export interface HandleResponsesOptions {
-  turnAdmissionLease?: AdmissionLease;
+  turnAdmissionLease?: ActiveTurnLease;
   forceEmptyResponseId?: boolean;
   abortSignal?: AbortSignal;
   /** One-shot TTFT callback: first non-empty model output observed (WP4). */
@@ -1176,6 +1175,12 @@ async function handleResponsesInner(
   } catch (err) {
     return decodeRequestErrorResponse(err, "responses");
   }
+  if (body && typeof body === "object" && !Array.isArray(body)) {
+    options.turnAdmissionLease?.updateAgentActivityMetadata(
+      (body as { client_metadata?: unknown }).client_metadata,
+      req.headers,
+    );
+  }
   const comboId = !options.comboAttempt ? comboIdFromRawBody(body, config) : null;
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
     return handleComboResponses(req, body, comboId, config, logCtx, options);
@@ -1348,6 +1353,10 @@ async function handleResponsesInner(
   }
 
   await applyFinalRouteRequestNormalization({ parsed, route, config, req, logCtx, inboundWire });
+  options.turnAdmissionLease?.markAgentActivityRunning({
+    provider: route.providerName,
+    model: route.modelId,
+  });
 
   {
     const finalAuth = await resolveResponsesCodexAuth(req, config, route, options);

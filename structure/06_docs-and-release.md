@@ -40,8 +40,8 @@ bun run build
 
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | `pull_request` to `main`/`dev`, `push` to `main`/`preview`/`dev`, or manual dispatch when runtime/package paths change | Cross-platform runtime/package quality gate on Linux, Windows, and macOS. The `test` job (Bun) runs typecheck, `bun test --isolate tests`, the GUI suite (`cd gui && bun test tests`), the privacy scan, release-helper syntax check, GUI lint/build, and `ocx help`; `npm-global-smoke` (Node only, **no setup-bun**) builds package assets, packs the tarball, installs it globally, and runs `ocx help` to prove the bundled-Bun launcher works without a separate Bun install. |
-| `.github/workflows/release.yml` | Manual dispatch only | npm publish/dry-run workflow. It requires the exact `GITHUB_SHA` to have a successful Cross-platform CI run before publish or dry-run. |
+| `.github/workflows/ci.yml` | `pull_request` to `main`/`dev`, `push` to `main`/`preview`/`dev`, or manual dispatch when runtime/package paths change | Cross-platform runtime/package quality gate on Linux, Windows, and macOS. The `test` job (Bun) runs typecheck, `bun test --isolate tests`, the GUI suite (`cd gui && bun test tests`), the privacy scan, release-helper syntax check, GUI lint/build, and `ocx help`; its macOS leg additionally runs the Swift companion tests and assembles `OpenCodex.app`. `npm-global-smoke` (Node only, **no setup-bun**) builds package assets, packs the tarball, installs it globally, and runs `ocx help` to prove the bundled-Bun launcher works without a separate Bun install. |
+| `.github/workflows/release.yml` | Manual dispatch only | npm publish/dry-run plus an independent macOS packaging job. It requires the exact `GITHUB_SHA` to have a successful Cross-platform CI run before publish or dry-run. The macOS job creates a universal app archive and checksum; a non-dry-run attaches both to the matching GitHub Release only after checksum verification. |
 | `.github/workflows/deploy-docs.yml` | `push` to `main` touching `docs-site/**` or the workflow, or manual dispatch | Build and publish the Astro/Starlight docs site to GitHub Pages. |
 | `.github/workflows/service-lifecycle.yml` | `pull_request` to `main`/`dev` and `push`, both filtered on the service path set (`src/service.ts`, `src/cli.ts`, `src/cli/index.ts`, `src/lib/bun-runtime.ts`, `package.json`, `bun.lock`, the workflow), or manual dispatch | Service-lifecycle smoke on three platforms: Linux systemd, macOS launchd, and Windows Scheduled Tasks. Each installs, verifies, stops via `ocx stop`, and uninstalls. The path list is kept in sync with the `release.yml` service-gate regex. |
 | `.github/workflows/enforce-pr-target.yml` | `pull_request_target` (opened, reopened, edited, ready_for_review, synchronize) | The `enforce-target` gate: rejects pull requests whose head ancestry sits on the `main` tip while far behind `dev`, and rejects empty or malformed descriptions. Stacked child PRs targeting another open PR's head skip the wrong-base gate. |
@@ -138,10 +138,13 @@ Invariants:
 
 ## Release workflow
 
-Package release is npm-focused. `package.json` exposes `opencodex` and `ocx`, `prepublishOnly` runs
-typecheck and GUI build, and `scripts/release.ts` now runs local typecheck, `bun test --isolate tests`, and
+The runtime package release remains npm-focused, while the same manual workflow independently builds
+the optional macOS companion. `package.json` exposes `opencodex` and `ocx`, `prepublishOnly` runs
+typecheck and GUI build, and `scripts/release.ts` runs local typecheck, `bun test --isolate tests`, and
 `bun run privacy:scan` before the version bump, commit/push, Cross-platform CI wait, and GitHub
-Release workflow dispatch. Docs publishing is separate from npm release publishing.
+Release workflow dispatch. The macOS archive is ad-hoc signed unless a caller supplies a real signing
+identity; public notarization remains a separate credentialed release gate. Docs publishing is
+separate from package and app release publishing.
 
 ## Release metadata invariants
 
@@ -187,6 +190,9 @@ bun run privacy:scan
 bun build scripts/release.ts --target=bun --outdir=.tmp/ci-release-script-check
 cd gui && bun install --frozen-lockfile && bun run lint && bun run build
 bun run src/cli/index.ts help
+# macOS runner only
+bun run test:macos
+bun run build:macos
 ```
 
 and the Node-only global-install smoke path:
@@ -204,5 +210,6 @@ Those stay outside the default gate until a concrete regression justifies the ex
 
 The Release workflow remains manual and publish-focused. Before any dry-run or publish step, it
 checks that the exact release commit (`GITHUB_SHA`) already has a successful Cross-platform CI run.
-This keeps release runs short and makes release a deployment of a verified commit rather than a
-second CI pipeline.
+The macOS package is built independently of npm publication, but is attached only for a real release
+after its checksum is verified. This keeps release runs short and makes release a deployment of a
+verified commit rather than a second CI pipeline.

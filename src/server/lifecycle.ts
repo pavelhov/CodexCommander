@@ -20,6 +20,12 @@ import {
   beginBackgroundShellShutdown,
   terminateAllBackgroundShells,
 } from "../adapters/cursor/native-exec-shell";
+import {
+  AgentActivityRegistry,
+  type AgentActivityRoute,
+  type AgentActivitySnapshot,
+  type AgentActivityStart,
+} from "./agent-activity";
 
 // ---------------------------------------------------------------------------
 // Active turn tracking + graceful shutdown drain
@@ -30,7 +36,11 @@ const turnGate = createAdmissionGate("active_turns", MAX_ACTIVE_TURNS);
 export interface ActiveTurnLease extends AdmissionLease {
   bindAbortController(ac: AbortController): void;
   isTransferred(): boolean;
+  updateAgentActivityMetadata(clientMetadata: unknown, headers?: Headers): void;
+  markAgentActivityRunning(route: AgentActivityRoute): void;
+  markAgentActivityFirstOutput(at?: number): void;
 }
+const agentActivity = new AgentActivityRegistry<ActiveTurnLease>(MAX_ACTIVE_TURNS);
 const activeTurns = new Map<AbortController, ActiveTurnLease>();
 const admittedTurns = new Set<ActiveTurnLease>();
 const knownTurnControllers = new WeakSet<AbortController>();
@@ -41,7 +51,7 @@ let _serverRef: ReturnType<typeof Bun.serve> | undefined;
 
 export function setServerRef(server: ReturnType<typeof Bun.serve> | undefined): void { _serverRef = server; }
 export function setDraining(value: boolean): void { draining = value; }
-export function tryAdmitTurn(): ActiveTurnLease | null {
+export function tryAdmitTurn(activity?: AgentActivityStart): ActiveTurnLease | null {
   const gateLease = turnGate.tryAcquire();
   if (!gateLease) return null;
   const controllers = new Set<AbortController>();
@@ -59,9 +69,23 @@ export function tryAdmitTurn(): ActiveTurnLease | null {
       activeTurns.set(ac, lease);
     },
     isTransferred() { return transferred; },
+    updateAgentActivityMetadata(clientMetadata, headers) {
+      try {
+        agentActivity.updateMetadata(lease, clientMetadata, headers);
+      } catch {
+        /* optional observability must never break the data plane */
+      }
+    },
+    markAgentActivityRunning(route) {
+      agentActivity.markRunning(lease, route);
+    },
+    markAgentActivityFirstOutput(at) {
+      agentActivity.markFirstOutput(lease, at);
+    },
     release() {
       if (!active) return;
       active = false;
+      agentActivity.remove(lease);
       admittedTurns.delete(lease);
       for (const controller of controllers) {
         if (activeTurns.get(controller) === lease) activeTurns.delete(controller);
@@ -71,6 +95,13 @@ export function tryAdmitTurn(): ActiveTurnLease | null {
     },
   };
   admittedTurns.add(lease);
+  if (activity) {
+    try {
+      agentActivity.begin(lease, activity);
+    } catch {
+      /* optional observability must never break admission */
+    }
+  }
   return lease;
 }
 export function registerTurn(ac: AbortController, lease?: AdmissionLease): void {
@@ -87,6 +118,13 @@ export function unregisterTurn(ac: AbortController): void {
 }
 export function isDraining(): boolean { return draining; }
 export function getActiveTurnCount(): number { return turnGate.metrics().active; }
+export function getAgentActivitySnapshot(): AgentActivitySnapshot {
+  return agentActivity.snapshot(getActiveTurnCount(), draining);
+}
+/** Test-only isolation seam. Call only after releasing leases created by the test. */
+export function resetAgentActivityForTests(): void {
+  agentActivity.resetForTests();
+}
 export function activeRegistryMetrics(): Record<string, AdmissionMetrics> {
   const turns = turnGate.metrics();
   return {

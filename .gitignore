@@ -38,4 +38,5 @@ devlog/**/security-advisory-draft*
 
 # Test-generated artifacts
 tests/.tmp-*/
+/.ocx-*
 .claude/

@@ -87,6 +87,13 @@ export function useAppRouteState() {
       replaceHash("providers");
       return;
     }
+    // Passive normalization only. Valid providers deep links stay put; malformed
+    // ones are rewritten by resolveAppHashChange via applyHashAction.
+    if (page === "providers" && rawHash.startsWith("providers/")) {
+      const action = resolveAppHashChange(rawHash);
+      if (action.replaceTo) replaceHash(action.replaceTo);
+      return;
+    }
     if (!hashBelongsToPage(rawHash, page)) {
       replaceHash(page);
     }

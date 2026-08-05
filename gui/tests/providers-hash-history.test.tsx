@@ -70,7 +70,11 @@ describe("route resolution", () => {
   test("registered sub-hashes survive; unknown ones are normalised away", () => {
     expect(resolveAppHashChange("logs/debug").replaceTo).toBeNull();
     expect(resolveAppHashChange("dashboard/models").replaceTo).toBeNull();
-    expect(resolveAppHashChange("providers/nope").replaceTo).toBe("providers");
+    // Provider detail deep links are valid at the App layer; unknown providers are
+    // handled by the Providers page after config loads (replaceState to #providers).
+    expect(resolveAppHashChange("providers/nope").replaceTo).toBeNull();
+    expect(resolveAppHashChange("providers/openai/accounts").replaceTo).toBeNull();
+    expect(resolveAppHashChange("providers/openai/nope").replaceTo).toBe("providers/openai/overview");
     expect(resolveAppHashChange("models/nope").replaceTo).toBe("models");
   });
 
