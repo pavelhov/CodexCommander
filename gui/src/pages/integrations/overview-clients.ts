@@ -13,6 +13,7 @@
  */
 
 import type { TKey } from "../../i18n/shared";
+import { homeDisplayPath } from "../../integration-path";
 import type { VisualIntegrationState } from "./IntegrationStateBadge";
 import {
   FILE_INTEGRATION_CLIENTS,
@@ -20,12 +21,14 @@ import {
   type IntegrationStatus,
 } from "./integration-api";
 import type { NativeIntegrationClientId, NativeStatus } from "./native-api";
+import type { OpenCodeIntegrationEnvelope } from "./opencode-integration-api";
 
 export type OverviewClientId =
   | "codex"
   | "claude"
   | "claudeDesktop"
   | "grok"
+  | "opencode"
   | FileIntegrationClientId;
 
 /** How far the `/api/keys` read has got, since the count alone cannot say. */
@@ -129,12 +132,13 @@ export interface OverviewSources {
   claude: ClaudeCodePayload | null;
   claudeDesktop: ClaudeDesktopPayload | null;
   grok: GrokPayload | null;
+  opencode: OpenCodeIntegrationEnvelope | null;
+  opencodeSettled: boolean;
   native: NativeStatus[] | null;
   nativeSettled: boolean;
 }
 
 const FILE_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
-  opencode: "integrations.tab.opencode",
   pi: "integrations.tab.pi",
   hermes: "integrations.tab.hermes",
   openclaw: "integrations.tab.openclaw",
@@ -160,7 +164,7 @@ function codexRow(payload: CodexRoutingPayload | null): OverviewRow {
   const base = {
     id: "codex" as const,
     hash: "integrations/codex",
-    labelKey: "integrations.tab.codex" as TKey,
+    labelKey: "clientApps.client.codex" as TKey,
     toggle: "codex" as const,
     toggleBlocked: null,
     togglePath: null,
@@ -238,7 +242,7 @@ function claudeRow(
   const base = {
     id: "claude" as const,
     hash: "integrations/claude",
-    labelKey: "integrations.tab.claude" as TKey,
+    labelKey: "clientApps.client.claude" as TKey,
     toggle: "claude" as const,
     toggleBlocked: native?.disableBlocked ?? null,
     togglePath: native?.configPath ?? null,
@@ -380,6 +384,58 @@ function grokRow(
   };
 }
 
+/**
+ * OpenCode is intentionally not a shared file-toggle client. Its dedicated
+ * integration owns provider.opencodex, the protected token reference,
+ * auto-connect, app launch, and surgical restore as one transaction boundary.
+ */
+function opencodeRow(
+  payload: OpenCodeIntegrationEnvelope | null,
+  settled: boolean,
+): OverviewRow {
+  const base = {
+    id: "opencode" as const,
+    hash: "integrations/opencode",
+    labelKey: "integrations.tab.opencode" as TKey,
+    detailKey: null,
+    detailVars: null,
+    toggle: null,
+    toggleBlocked: null,
+    status: null,
+  };
+  if (!settled || !payload) {
+    return {
+      ...base,
+      state: "unknown",
+      installed: false,
+      applied: false,
+      detail: null,
+      togglePath: null,
+    };
+  }
+
+  const installed = payload.installation.desktopInstalled || payload.installation.cliInstalled;
+  const state = payload.integration.state === "applied"
+    ? "current"
+    : payload.integration.state === "modified"
+      ? "stale"
+      : payload.integration.state === "needs_attention"
+        ? "unsafe"
+        : "absent";
+  return {
+    ...base,
+    state,
+    installed,
+    // A restorable journal means the dedicated writer still owns a managed
+    // provider, even when that provider needs attention before it can be used.
+    applied: payload.integration.state === "applied"
+      || payload.integration.state === "modified"
+      || (payload.integration.state === "needs_attention" && payload.integration.canRestore),
+    detail: homeDisplayPath(payload.integration.targetPath),
+    togglePath: payload.integration.targetPath,
+  };
+}
+
 function fileRow(status: IntegrationStatus): OverviewRow {
   return {
     id: status.clientId,
@@ -419,6 +475,7 @@ export function buildOverviewRows(sources: OverviewSources): OverviewRows {
       sources.nativeSettled,
     ),
     grokRow(sources.grok, nativeGrok, sources.nativeSettled),
+    opencodeRow(sources.opencode, sources.opencodeSettled),
   ];
   for (const clientId of FILE_INTEGRATION_CLIENTS) {
     const status = statusByClient.get(clientId);

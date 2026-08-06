@@ -241,6 +241,7 @@ free-experimentation model.
 | **OpenAI (API key)** | `https://api.openai.com/v1` |
 | **Anthropic (API key)** | `https://api.anthropic.com` |
 | **OpenRouter** | `https://openrouter.ai/api/v1` |
+| **OpenCode Go** | `https://opencode.ai/zen/go/v1` |
 | **Cline** | `https://api.cline.bot/api/v1` |
 | **ClinePass** | `https://api.cline.bot/api/v1` |
 | **Ollama Cloud** | `https://ollama.com/v1` |
@@ -304,6 +305,12 @@ quarantined rather than routed. Transports follow the official endpoint table: Q
 models go over Anthropic Messages, `gpt-5.6-luna` and `grok-4.5` over OpenAI Responses, and the
 remaining models over OpenAI Chat Completions. These trust facts attach only to the canonical
 `https://opencode.ai/zen/go/v1` destination; a same-named custom provider keeps its own behavior.
+
+The built-in preset is key-based, so Add Provider groups it under **Paid**, not account-login
+providers, and OpenCodex does not offer an OpenCode Go OAuth flow. It is also separate from both the
+**OpenCode** client under Client Apps and the no-key **OpenCode Free** provider. Add Provider search
+spans Accounts, Free, and Paid, so searching `opencode` from any tab shows all matching presets with
+their tier labels.
 
 > **Three Volcengine billing routes:** `volcengine` is the pay-as-you-go Ark API,
 > `volcengine-coding-plan` consumes Coding Plan quota, and `volcengine-agent-plan` consumes Agent

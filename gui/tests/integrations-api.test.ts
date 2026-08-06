@@ -104,7 +104,7 @@ test("refusals route by reason and preserve manual recovery fields end to end", 
   globalThis.fetch = (async () => Response.json({
     error: "integration mutation failed",
     code: "integration_mutation_failed",
-    clientId: "opencode",
+    clientId: "pi",
     state: "conflict",
     reason: "write_failed",
     message: "write failed after the snapshot was stored",
@@ -112,7 +112,7 @@ test("refusals route by reason and preserve manual recovery fields end to end", 
     residual: true,
   }, { status: 500 })) as typeof fetch;
 
-  const error = await toggleIntegration("", "opencode", false).catch(cause => cause);
+  const error = await toggleIntegration("", "pi", false).catch(cause => cause);
 
   expect(error).toBeInstanceOf(IntegrationApiError);
   expect(error).toMatchObject({

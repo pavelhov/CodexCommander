@@ -180,6 +180,7 @@ opencodex поставляется с 76 встроенными пресетам
 | **OpenAI (API key)** | `https://api.openai.com/v1` |
 | **Anthropic (API key)** | `https://api.anthropic.com` |
 | **OpenRouter** | `https://openrouter.ai/api/v1` |
+| **OpenCode Go** | `https://opencode.ai/zen/go/v1` |
 | **Cline** | `https://api.cline.bot/api/v1` |
 | **ClinePass** | `https://api.cline.bot/api/v1` |
 | **Ollama Cloud** | `https://ollama.com/v1` |
@@ -235,6 +236,12 @@ Volcengine Agent Plan использует нативную конечную т�
 **$30 / 7 дней**, **$60 / 30 дней**. Локальные наблюдения этих окон — оценки использования, а не
 остаток квоты или биллинг в реальном времени. Авторитетное событие лимита показывается только когда
 его явно сообщает upstream.
+
+Встроенный пресет использует API-ключ, поэтому Add Provider относит его к **Paid**, а не к входам по
+аккаунту; OAuth-потока OpenCode Go в OpenCodex нет. Он также отличается от клиента **OpenCode** в
+разделе Client Apps и от не требующего ключа провайдера **OpenCode Free**. Поиск Add Provider
+охватывает Accounts, Free и Paid одновременно, поэтому запрос `opencode` на любой вкладке показывает
+все совпавшие пресеты с их категориями.
 
 > **Три маршрута тарификации Volcengine:** `volcengine` — Ark API с оплатой по факту,
 > `volcengine-coding-plan` расходует квоту Coding Plan, а `volcengine-agent-plan` — квоту Agent

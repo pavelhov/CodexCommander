@@ -1,13 +1,15 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useState } from "react";
 import { navigateHash, normalizeHashPath } from "../hash-routing";
-import { useT, type TKey } from "../i18n/shared";
+import { IconChevron } from "../icons";
+import { useT } from "../i18n/shared";
 import ApiKeys from "./ApiKeys";
 import Claude from "./Claude";
 import Grok from "./Grok";
-import IntegrationsOverview from "./integrations/IntegrationsOverview";
+import ClientAppsPage from "./integrations/ClientAppsPage";
 import FileIntegrationPage, {
   type FileIntegrationClientId,
 } from "./integrations/FileIntegrationPage";
+import OpenCodeIntegrationPage from "./integrations/OpenCodeIntegrationPage";
 
 type IntegrationTab =
   | "overview"
@@ -15,30 +17,29 @@ type IntegrationTab =
   | "codex"
   | "claude"
   | "grok"
+  | "opencode"
   | FileIntegrationClientId;
 
-interface TabDefinition {
+interface ViewDefinition {
   id: IntegrationTab;
   hash: string;
-  labelKey: TKey;
 }
 
-const TABS: readonly TabDefinition[] = [
-  { id: "overview", hash: "integrations", labelKey: "integrations.tab.overview" },
-  { id: "keys", hash: "integrations/keys", labelKey: "integrations.tab.keys" },
-  { id: "codex", hash: "integrations/codex", labelKey: "integrations.tab.codex" },
-  { id: "claude", hash: "integrations/claude", labelKey: "integrations.tab.claude" },
-  { id: "grok", hash: "integrations/grok", labelKey: "integrations.tab.grok" },
-  { id: "opencode", hash: "integrations/opencode", labelKey: "integrations.tab.opencode" },
-  { id: "pi", hash: "integrations/pi", labelKey: "integrations.tab.pi" },
-  { id: "hermes", hash: "integrations/hermes", labelKey: "integrations.tab.hermes" },
-  { id: "openclaw", hash: "integrations/openclaw", labelKey: "integrations.tab.openclaw" },
-  { id: "kimi", hash: "integrations/kimi", labelKey: "integrations.tab.kimi" },
-  { id: "gajae", hash: "integrations/gajae", labelKey: "integrations.tab.gajae" },
+const VIEWS: readonly ViewDefinition[] = [
+  { id: "overview", hash: "integrations" },
+  { id: "keys", hash: "integrations/keys" },
+  { id: "codex", hash: "integrations/codex" },
+  { id: "claude", hash: "integrations/claude" },
+  { id: "grok", hash: "integrations/grok" },
+  { id: "opencode", hash: "integrations/opencode" },
+  { id: "pi", hash: "integrations/pi" },
+  { id: "hermes", hash: "integrations/hermes" },
+  { id: "openclaw", hash: "integrations/openclaw" },
+  { id: "kimi", hash: "integrations/kimi" },
+  { id: "gajae", hash: "integrations/gajae" },
 ] as const;
 
 const FILE_CLIENTS = new Set<FileIntegrationClientId>([
-  "opencode",
   "pi",
   "hermes",
   "openclaw",
@@ -49,16 +50,8 @@ const FILE_CLIENTS = new Set<FileIntegrationClientId>([
 function readIntegrationTab(hash = window.location.hash): IntegrationTab {
   const raw = normalizeHashPath(hash);
   if (raw === "integrations/claude/desktop") return "claude";
-  const match = TABS.find(tab => tab.hash === raw);
+  const match = VIEWS.find(view => view.hash === raw);
   return match?.id ?? "overview";
-}
-
-function tabDomId(tab: IntegrationTab): string {
-  return `integrations-tab-${tab}`;
-}
-
-function panelDomId(tab: IntegrationTab): string {
-  return `integrations-panel-${tab}`;
 }
 
 export default function Integrations({ apiBase }: { apiBase: string }) {
@@ -72,8 +65,6 @@ export default function Integrations({ apiBase }: { apiBase: string }) {
   const [mounted, setMounted] = useState<ReadonlySet<IntegrationTab>>(
     () => new Set([readIntegrationTab()]),
   );
-  const tabRefs = useRef<Map<IntegrationTab, HTMLButtonElement> | null>(null);
-  if (tabRefs.current === null) tabRefs.current = new Map();
 
   /*
    * Every tab change goes through here, whether it came from a click or from
@@ -96,73 +87,25 @@ export default function Integrations({ apiBase }: { apiBase: string }) {
     };
   }, []);
 
-  const selectTab = (next: IntegrationTab, moveFocus: boolean) => {
-    const definition = TABS.find(candidate => candidate.id === next);
-    if (!definition) return;
-    navigateHash(definition.hash);
-    activateTab(next);
-    if (moveFocus) {
-      window.requestAnimationFrame(() => {
-        tabRefs.current!.get(next)?.focus({ preventScroll: true });
-      });
-    }
-  };
-
-  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
-    const index = TABS.findIndex(candidate => candidate.id === tab);
-    let nextIndex: number | null = null;
-    if (event.key === "ArrowLeft") nextIndex = (index - 1 + TABS.length) % TABS.length;
-    else if (event.key === "ArrowRight") nextIndex = (index + 1) % TABS.length;
-    else if (event.key === "Home") nextIndex = 0;
-    else if (event.key === "End") nextIndex = TABS.length - 1;
-    if (nextIndex === null) return;
-    event.preventDefault();
-    selectTab(TABS[nextIndex].id, true);
-  };
-
   return (
     <section className="integrations-page">
-      <div className="page-head">
-        <h2>{t("nav.integrations")}</h2>
-      </div>
-      <p className="page-sub">{t("integrations.subtitle")}</p>
-
-      <div className="page-tabs" role="tablist" aria-label={t("integrations.tabsLabel")}>
-        {TABS.map(definition => (
-          <button
-            key={definition.id}
-            ref={node => {
-              if (node) tabRefs.current!.set(definition.id, node);
-              else tabRefs.current!.delete(definition.id);
-            }}
-            type="button"
-            role="tab"
-            id={tabDomId(definition.id)}
-            aria-selected={tab === definition.id}
-            aria-controls={panelDomId(definition.id)}
-            tabIndex={tab === definition.id ? 0 : -1}
-            className={`page-tab${tab === definition.id ? " page-tab--active" : ""}`}
-            onClick={() => selectTab(definition.id, true)}
-            onKeyDown={handleTabKeyDown}
-          >
-            {t(definition.labelKey)}
-          </button>
-        ))}
-      </div>
-
-      {TABS.map(definition => {
+      {VIEWS.map(definition => {
         if (!mounted.has(definition.id)) return null;
         const active = tab === definition.id;
         return (
           <div
             key={definition.id}
-            role="tabpanel"
-            id={panelDomId(definition.id)}
-            aria-labelledby={tabDomId(definition.id)}
+            className="client-apps-view"
+            data-client-apps-view={definition.id}
             hidden={!active}
           >
+            {definition.id !== "overview" && (
+              <button type="button" className="client-apps-back" onClick={() => navigateHash("integrations")}>
+                <IconChevron aria-hidden="true" /> {t("clientApps.action.back")}
+              </button>
+            )}
             {definition.id === "overview" && (
-              <IntegrationsOverview apiBase={apiBase} active={active} />
+              <ClientAppsPage apiBase={apiBase} active={active} />
             )}
             {definition.id === "keys" && <ApiKeys apiBase={apiBase} active={active} />}
             {definition.id === "codex" && (
@@ -180,6 +123,9 @@ export default function Integrations({ apiBase }: { apiBase: string }) {
             )}
             {definition.id === "claude" && <Claude apiBase={apiBase} active={active} />}
             {definition.id === "grok" && <Grok apiBase={apiBase} active={active} />}
+            {definition.id === "opencode" && (
+              <OpenCodeIntegrationPage apiBase={apiBase} active={active} />
+            )}
             {FILE_CLIENTS.has(definition.id as FileIntegrationClientId) && (
               <FileIntegrationPage
                 apiBase={apiBase}

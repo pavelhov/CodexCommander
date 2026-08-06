@@ -37,15 +37,15 @@ function envelope() {
 beforeEach(() => {
   previous = Object.fromEntries(globalKeys.map(key => [key, Reflect.get(globalThis, key)])) as typeof previous;
   clearClientResourceStoresForTests();
-  testWindow = new Window({ url: "http://localhost/#integrations" });
+  testWindow = new Window({ url: "http://localhost/#integrations/opencode" });
   Object.defineProperty(testWindow.navigator, "language", { configurable: true, value: "en-US" });
   Object.defineProperties(globalThis, {
-    document: { configurable: true, value: testWindow.document },
-    window: { configurable: true, value: testWindow },
-    navigator: { configurable: true, value: testWindow.navigator },
-    localStorage: { configurable: true, value: testWindow.localStorage },
-    confirm: { configurable: true, value: () => true },
-    IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
+    document: { configurable: true, writable: true, value: testWindow.document },
+    window: { configurable: true, writable: true, value: testWindow },
+    navigator: { configurable: true, writable: true, value: testWindow.navigator },
+    localStorage: { configurable: true, writable: true, value: testWindow.localStorage },
+    confirm: { configurable: true, writable: true, value: () => true },
+    IS_REACT_ACT_ENVIRONMENT: { configurable: true, writable: true, value: true },
   });
   state = "not_applied";
   requests = [];
@@ -73,7 +73,7 @@ afterEach(async () => {
   clearClientResourceStoresForTests();
   testWindow.close();
   for (const key of globalKeys) {
-    Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
+    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value: previous[key] });
   }
 });
 

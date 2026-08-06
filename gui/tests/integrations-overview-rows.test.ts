@@ -5,6 +5,7 @@ import {
   type OverviewSources,
 } from "../src/pages/integrations/overview-clients";
 import type { IntegrationStatus } from "../src/pages/integrations/integration-api";
+import type { OpenCodeIntegrationEnvelope } from "../src/pages/integrations/opencode-integration-api";
 
 /**
  * The overview's whole job is to not lie about what is applied, so these tests
@@ -35,9 +36,32 @@ function sources(overrides: Partial<OverviewSources> = {}): OverviewSources {
     claude: null,
     claudeDesktop: null,
     grok: null,
+    opencode: null,
+    opencodeSettled: true,
     native: null,
     nativeSettled: true,
     ...overrides,
+  };
+}
+
+function opencode(
+  state: OpenCodeIntegrationEnvelope["integration"]["state"] = "applied",
+  overrides: Partial<OpenCodeIntegrationEnvelope["integration"]> = {},
+): OpenCodeIntegrationEnvelope {
+  return {
+    integration: {
+      state,
+      targetPath: "/home/test/.config/opencode/opencode.jsonc",
+      autoConnect: false,
+      canRestore: state !== "not_applied",
+      tokenReady: state === "applied" || state === "modified",
+      ...overrides,
+    },
+    installation: { desktopInstalled: true, cliInstalled: true, preferred: "desktop" },
+    canOpen: true,
+    downloadUrl: "https://opencode.ai/download",
+    consoleUrl: "https://opencode.ai/console",
+    provider: { configured: false, credentialVerification: "not_configured" },
   };
 }
 
@@ -49,14 +73,14 @@ function rowById(built: ReturnType<typeof buildOverviewRows>, id: string) {
 
 test("a null source is unknown, never absent, and is counted in neither total", () => {
   const built = buildOverviewRows(sources());
-  for (const id of ["codex", "claude", "claudeDesktop", "grok"]) {
+  for (const id of ["codex", "claude", "claudeDesktop", "grok", "opencode"]) {
     expect(rowById(built, id).state).toBe("unknown");
   }
   const counts = countOverviewRows(built.rows);
   expect(counts.detected).toBe(0);
   expect(counts.applied).toBe(0);
-  // Four, not five: keys is a credential surface and never a client row.
-  expect(counts.unknown).toBe(4);
+  // Five, not six: keys is a credential surface and never a client row.
+  expect(counts.unknown).toBe(5);
 });
 
 test("Codex reads routingInjected, not status", () => {
@@ -114,13 +138,13 @@ test("Claude Desktop: applied but not the served profile reads as stale", () => 
 test("file clients keep their existing badge and applied semantics", () => {
   const rows = buildOverviewRows(sources({
     clients: [
-      fileStatus({ clientId: "opencode", state: "current" }),
       fileStatus({ clientId: "pi", state: "stale" }),
       fileStatus({ clientId: "hermes", state: "conflict" }),
       fileStatus({ clientId: "openclaw", state: "absent" }),
       fileStatus({ clientId: "kimi", state: "absent", installed: false }),
       fileStatus({ clientId: "gajae", state: "unsafe" }),
     ],
+    opencode: opencode("applied"),
   }));
   expect(rowById(rows, "opencode").applied).toBe(true);
   expect(rowById(rows, "pi").applied).toBe(true);
@@ -137,9 +161,9 @@ test("file clients keep their existing badge and applied semantics", () => {
   expect(counts.stale).toBe(1);
 });
 
-test("every client counts toward the summary, not just the file six", () => {
+test("every client counts toward the summary, not just shared file clients", () => {
   const rows = buildOverviewRows(sources({
-    clients: [fileStatus({ clientId: "opencode", state: "current" })],
+    opencode: opencode("applied"),
     codex: { routingInjected: true, status: "at-risk" },
     keyCount: 2,
     claude: { enabled: true },
@@ -183,8 +207,32 @@ test("an unsettled file list renders unknown rows instead of dropping them", () 
 
   // Once settled, a client the server omitted is genuinely gone.
   const settled = buildOverviewRows(sources({ clients: [], clientsSettled: true }));
-  expect(settled.rows).toHaveLength(4);
+  expect(settled.rows).toHaveLength(5);
   expect(settled.rows.some(row => row.hash === "integrations/keys")).toBe(false);
+});
+
+test("dedicated OpenCode status preserves the richer writer semantics", () => {
+  const applied = buildOverviewRows(sources({ opencode: opencode("applied") }));
+  expect(rowById(applied, "opencode")).toMatchObject({
+    state: "current",
+    installed: true,
+    applied: true,
+    toggle: null,
+    detail: "~/.config/opencode/opencode.jsonc",
+  });
+
+  const modified = buildOverviewRows(sources({ opencode: opencode("modified") }));
+  expect(rowById(modified, "opencode")).toMatchObject({ state: "stale", applied: true });
+
+  const attention = buildOverviewRows(sources({
+    opencode: opencode("needs_attention", { canRestore: true, tokenReady: false }),
+  }));
+  expect(rowById(attention, "opencode")).toMatchObject({ state: "unsafe", applied: true });
+
+  const noJournal = buildOverviewRows(sources({
+    opencode: opencode("needs_attention", { canRestore: false, tokenReady: false }),
+  }));
+  expect(rowById(noJournal, "opencode")).toMatchObject({ state: "unsafe", applied: false });
 });
 
 test("each row points at its own tab", () => {

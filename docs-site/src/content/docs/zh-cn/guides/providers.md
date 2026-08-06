@@ -155,6 +155,7 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 | **OpenAI (API key)** | `https://api.openai.com/v1` |
 | **Anthropic (API key)** | `https://api.anthropic.com` |
 | **OpenRouter** | `https://openrouter.ai/api/v1` |
+| **OpenCode Go** | `https://opencode.ai/zen/go/v1` |
 | **Cline** | `https://api.cline.bot/api/v1` |
 | **ClinePass** | `https://api.cline.bot/api/v1` |
 | **Ollama Cloud** | `https://ollama.com/v1` |
@@ -205,6 +206,11 @@ OpenCodex 不会读取 OpenCode 认证存储，也不会将此密钥迁移到 Ke
 公开模型目录不能证明密钥有效；保存的密钥只有在使用该活动密钥首次成功推理后才会显示为**已验证**。
 公开上限只是参考值：**$12 / 5 小时**、**$30 / 7 天**、**$60 / 30 天**。这些窗口的本地观测是
 使用量估计，不是实时剩余额度或账单。只有上游明确报告具体限制事件时，才显示权威的限制事件。
+
+内置预设使用 API 密钥，因此 Add Provider 将其归入 **Paid**，而不是账号登录；OpenCodex 不提供
+OpenCode Go OAuth 流程。它也不同于 Client Apps 下的 **OpenCode** 客户端和无需密钥的
+**OpenCode Free** 提供商。Add Provider 搜索会同时覆盖 Accounts、Free 和 Paid，所以从任意标签
+搜索 `opencode` 都会按类别显示所有匹配的预设。
 
 > **三条火山方舟计费线路：**`volcengine` 是按量付费方舟 API，`volcengine-coding-plan`
 > 消耗 Coding Plan 额度，`volcengine-agent-plan` 消耗 Agent Plan 额度。密钥与端点需要属于

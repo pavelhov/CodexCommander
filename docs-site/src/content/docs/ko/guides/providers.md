@@ -168,6 +168,7 @@ Cline IDE/CLI에서만 제공되며 API로는 사용할 수 없습니다. `minim
 | **OpenAI (API key)** | `https://api.openai.com/v1` |
 | **Anthropic (API key)** | `https://api.anthropic.com` |
 | **OpenRouter** | `https://openrouter.ai/api/v1` |
+| **OpenCode Go** | `https://opencode.ai/zen/go/v1` |
 | **Cline** | `https://api.cline.bot/api/v1` |
 | **ClinePass** | `https://api.cline.bot/api/v1` |
 | **Ollama Cloud** | `https://ollama.com/v1` |
@@ -220,6 +221,11 @@ OpenCodex는 OpenCode 인증 저장소를 읽거나 이 키를 Keychain으로 �
 **검증됨**이 됩니다. 공개 한도는 참조값인 **$12 / 5시간**, **$30 / 7일**, **$60 / 30일**입니다.
 해당 기간의 로컬 관측값은 실시간 남은 할당량이나 청구가 아닌 사용량 추정치입니다. 권위 있는 제한
 이벤트는 업스트림이 구체적으로 보고한 경우에만 표시합니다.
+
+내장 프리셋은 API 키 방식이므로 Add Provider에서 계정 로그인 대신 **Paid**로 분류되며, OpenCodex는
+OpenCode Go OAuth 흐름을 제공하지 않습니다. Client Apps의 **OpenCode** 클라이언트 및 키가 필요 없는
+**OpenCode Free** 프로바이더와도 별개입니다. Add Provider 검색은 Accounts, Free, Paid를 함께 검색하므로
+어느 탭에서든 `opencode`를 입력하면 일치하는 프리셋과 구분이 표시됩니다.
 
 > **Volcengine의 세 가지 과금 경로:** `volcengine`은 종량제 Ark API,
 > `volcengine-coding-plan`은 Coding Plan 할당량, `volcengine-agent-plan`은 Agent Plan

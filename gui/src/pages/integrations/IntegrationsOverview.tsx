@@ -32,6 +32,7 @@ import {
   toggleNativeIntegration,
   type NativeStatus,
 } from "./native-api";
+import { loadOpenCodeIntegration } from "./opencode-integration-api";
 
 const GROK_DISABLE_COPY: ConsequenceCopy = {
   titleKey: "integrations.dialog.grok.title",
@@ -207,6 +208,10 @@ export default function IntegrationsOverview({
     (signal: AbortSignal) => loadGrokFenceStatus(apiBase, signal),
     [apiBase],
   );
+  const fetchOpenCode = useCallback(
+    (signal: AbortSignal) => loadOpenCodeIntegration(apiBase, signal, t("integrations.loadFailed")),
+    [apiBase, t],
+  );
   const fetchNative = useCallback(
     async (signal: AbortSignal) => (await loadNativeIntegrations(apiBase, signal))?.clients ?? null,
     [apiBase],
@@ -256,6 +261,12 @@ export default function IntegrationsOverview({
     fetchGrok,
     { isEmpty: value => value === null, enabled: active },
   );
+  const openCodeResource = useDataSurface(
+    `integrations-opencode:${apiBase}`,
+    [apiBase],
+    fetchOpenCode,
+    { isEmpty: () => false, enabled: active },
+  );
   const nativeResource = useDataSurface<NativeStatus[] | null>(
     `integration-native:${apiBase}`,
     [apiBase],
@@ -274,6 +285,8 @@ export default function IntegrationsOverview({
    */
   const clientsSettled = statesResource.state.kind !== "cold"
     && statesResource.state.kind !== "retrying-cold";
+  const openCodeSettled = openCodeResource.state.kind !== "cold"
+    && openCodeResource.state.kind !== "retrying-cold";
   const native = nativeResource.state.data ?? null;
   // `readOptional` returns null for a failed probe. Only an actual array is a
   // settled contract; an empty array is meaningful and removes both switches.
@@ -300,6 +313,8 @@ export default function IntegrationsOverview({
     claude: claudeResource.state.data ?? null,
     claudeDesktop: claudeDesktopResource.state.data ?? null,
     grok: grokResource.state.data ?? null,
+    opencode: openCodeResource.state.data ?? null,
+    opencodeSettled: openCodeSettled,
     native,
     nativeSettled,
   });
@@ -319,6 +334,7 @@ export default function IntegrationsOverview({
     claudeResource.refresh();
     claudeDesktopResource.refresh();
     grokResource.refresh();
+    openCodeResource.refresh();
     nativeResource.refresh();
   };
 

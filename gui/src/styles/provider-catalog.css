@@ -60,6 +60,17 @@
   text-overflow: ellipsis;
 }
 
+/* Cross-tier search results: one labelled group per tier with matches. */
+.provider-catalog-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.provider-catalog-group-label {
+  padding: 2px 2px 0;
+}
+
 .provider-catalog-footer {
   display: flex;
   gap: 8px;

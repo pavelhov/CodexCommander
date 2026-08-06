@@ -1,19 +1,50 @@
 ---
-title: Integrations
-description: Connect opencodex to OpenCode, Pi, Hermes, OpenClaw, Kimi Code and Gajae Code from the dashboard — one switch per client, with a backup taken before every write.
+title: Client Apps
+description: Connect OpenCodex to Codex, Claude Code, Grok Build, OpenCode, Pi, Hermes, OpenClaw, Kimi Code and Gajae Code without mixing client setup with provider credentials.
 ---
 
-The **Integrations** tab writes opencodex's provider block into a client's own config
-file, and removes it again. Six clients work this way, each with a switch:
+The dashboard calls this area **Client Apps**. It answers “where do I work?” while
+**Providers** answers “where does model access come from?” and **API Access** manages
+credentials that a client uses to reach the OpenCodex proxy.
+
+| Area | Owns |
+| --- | --- |
+| **Providers** | Upstream accounts, OAuth logins, API keys, subscription gateways and local model servers |
+| **Models** | The enabled/visible catalog exported through the proxy |
+| **Routing** | How a request is resolved after it reaches OpenCodex |
+| **Client Apps** | Codex App/CLI/SDK, Claude Code/Desktop, Grok Build, OpenCode and other local clients |
+| **API Access** | Proxy access keys for clients; never upstream provider credentials |
+
+The old `#integrations/*` hashes remain valid so bookmarks still reach every client
+detail surface. Client Apps replaces the eleven-tab strip with one configured/available
+catalog and a selected-client detail pane.
+
+:::note[OpenCode is not OpenCode Go]
+**OpenCode** is a client app. **OpenCode Go** is a paid model provider and is added under
+Providers. OpenCode Go currently uses the API key issued by the OpenCode console; the
+OpenCodex registry does not expose an OpenCode Go OAuth login. **OpenCode Free** is a
+separate keyless provider preset.
+:::
+
+For the five shared file-managed clients, Client Apps writes OpenCodex's provider block
+into the client's own config file and removes it again through the same reversible
+writer. Each has a switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
-| OpenCode | `~/.config/opencode/opencode.json` | JSON | next direct launch | `OPENCODEX_OPENCODE_API_KEY` |
 | Pi | `~/.pi/agent/models.json` | JSON | new sessions | `OPENCODEX_API_KEY` |
 | Hermes | `~/.hermes/config.yaml` | YAML | new sessions | `OPENCODEX_HERMES_API_KEY` |
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | immediately, on a running gateway | `OPENCODEX_OPENCLAW_API_KEY` |
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | on restart, or `/reload` | loopback placeholder |
 | Gajae Code | `~/.gjc/agent/models.yml` | YAML | new sessions, or when you open `/model` |`OPENCODEX_GAJAE_API_KEY` |
+
+OpenCode has its own detail flow because it needs stronger persistence semantics than
+the shared switch. It resolves the active global `opencode.jsonc` or `opencode.json`,
+owns only `provider.opencodex`, stores the proxy admission token in protected OpenCodex
+state, and writes a `{file:…}` reference instead of embedding the token. The page also
+offers auto-connect, one-click Desktop launch, safe refresh, and restore. Restore is
+byte-exact while the file is untouched and becomes provider-only after unrelated user
+edits, so OpenCode and the shared writer never compete for the same config block.
 
 Paths honor each client's own environment override where it has one, so a relocated
 `HERMES_HOME`, `KIMI_CODE_HOME` or `XDG_CONFIG_HOME` is followed rather than guessed
@@ -35,13 +66,31 @@ opencodex reads these from its own environment. If your gateway runs with a prof
 or a relocated home, start opencodex with the same variables set, or it will
 correctly follow a different installation.
 
-## The other four surfaces are not switches
+## The other four surfaces use different controls
 
-**API Keys** manages opencodex's own credentials and is not a client at all. **Codex
-CLI** is wired by the proxy service itself — starting opencodex applies it, stopping it
-restores native routing — so there is nothing to toggle per-file. **Claude** keeps its
-own enable flag and Desktop's Save/Apply flow, and **Grok Build** keeps its
-select-then-apply model fence. Those semantics predate this feature and are unchanged.
+**API Access** manages opencodex's own client-facing credentials and is not a client at
+all. **Codex CLI** is wired by the proxy service itself — starting opencodex applies it,
+stopping it restores native routing — so there is no per-file switch. **Claude** keeps
+its own enable flag and Desktop's Save/Apply flow, and **Grok Build** keeps its
+select-then-apply model fence. Those semantics predate this catalog and are unchanged.
+
+## Which models each client receives
+
+Client Apps does not create a second model catalog. Each integration consumes the
+enabled, visible OpenCodex catalog, with the client-specific encoding it requires:
+
+- Codex App, CLI and SDK read the shared Codex catalog.
+- Claude Code 2.1.129+ discovers the gateway catalog through `/v1/models`; older builds
+  can still use routed ids through `/model` or environment overrides.
+- Grok Build's managed fence is regenerated from the visible catalog when OpenCodex
+  starts/ensures, and can be refreshed after catalog changes.
+- `ocx opencode` generates OpenCode's runtime provider block from the visible catalog on
+  every launch. A block applied to disk is a snapshot and must be refreshed after model
+  visibility changes.
+
+“Visible” is deliberate: disabled providers, provider allowlists and disabled models can
+all narrow what a client sees. A catalog row also proves discoverability, not that an
+upstream account currently has quota or that the client has sent a successful request.
 
 ## Rollback
 

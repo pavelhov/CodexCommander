@@ -38,10 +38,12 @@ bun run dev:gui
 | **Windows 托盘** | 安装用户登录托盘，一键控制代理启动、停止、重启、面板和状态。托盘不是代理重启服务。 |
 | **Codex 自动启动** | 允许已安装的 Codex launcher shim 运行 `ocx ensure`。此开关不会安装 shim 或后台服务。 |
 | **Providers** | 添加、编辑、设为默认（仅已启用）、启用/禁用、删除 provider，并在支持时管理 OAuth 账号池和 API key 池。删除当前默认时，会切换到剩余的第一个已启用 provider（若存在）；否则拒绝删除并保留当前默认。Claude（Anthropic）OAuth 池中，每个已登录账号显示各自的 5 小时与周限额条（用量按凭证计）；探测失败时保留上次已知数值并标记为暂时不可用。 |
-| **Add provider** | 搜索 registry preset，选择账号登录、API key 服务、本地服务器或自定义 endpoint。 |
+| **Add provider** | 搜索 registry preset，选择账号登录、API key 服务、本地服务器或自定义 endpoint。输入搜索词时会同时搜索 Accounts、Free 和 Paid；标签仍可用于浏览。 |
 | **Codex Auth** | 添加 ChatGPT/Codex 池账号，选择下一 session 的账号，刷新 5h / 每周 / 30d 配额，启用或停用配额自动切换，设置其 1–100% 阈值和临时故障 failover。 |
 | **Subagents** | 在 `spawn_agent` override 列表中置顶最多五个原生或路由模型。 |
 | **Models** | 开关原生 GPT 与路由模型，配置 provider allowlist 和上下文上限，选择 **Classic v1**、**Automatic**（base）或 **Concurrent v2**，并设置 v2 thread 数量。Current behavior 卡片会将上下文显示为 **Uncapped**、**Limited** 或 **Mixed limits**。每个路由 provider 都会显示 **自动发现已开启** 或 **仅静态目录**，并链接到对应的 provider 设置。 |
+| **Client Apps** | 查看已配置和可连接的本地客户端；在支持时应用或移除托管配置并检查备份；集中访问 Codex、Claude Code/Desktop、Grok Build、OpenCode 及文件托管客户端，同时避免把客户端与提供商混为一谈。 |
+| **API Access** | 签发和管理其他应用连接 OpenCodex 代理时使用的认证密钥。上游提供商凭据仍归 Providers 管理。 |
 | **Logs** | 自动刷新近期请求，显示 token、请求强度以及（可用时）实际发送强度、实际模型、provider、状态、request id、耗时和错误详情。适配器发送 reasoning 参数时，详情中还会显示准确的 wire field。可按不透明会话/对话 ID（客户端提供时）筛选，并对当前已加载的 Logs 环形缓冲合计 token 与估算标价成本。 |
 | **Usage / Debug** | 查看 token usage 覆盖率与趋势，或启用可选的 provider transport 和 usage 提取诊断。 |
 | **Storage** | 只读查看 CODEX_HOME 磁盘占用（会话、归档、数据库、附件）。可选归档清理：预览最旧 N%，默认隔离到 `CODEX_HOME/.trash`，或勾选后永久删除。**自动清理策略**为可选且**默认关闭**（`storageCleanupPolicy.enabled`）；可在 Storage 页配置阈值/目标/计划/模式，或点「立即运行」。可在 Storage 页从隔离区恢复（JSONL + 线程）。活动会话保持只读。Codex 锁定最新/活动的 `state_*.sqlite` 时拒绝清理与恢复。 |

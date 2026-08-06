@@ -580,7 +580,7 @@ test("a card body navigates to its own client's tab", async () => {
   expect(testWindow.location.hash).toBe("#integrations/hermes");
 });
 
-test("every reachable client gets a card, not just the file six", async () => {
+test("every reachable client gets a card, not just shared file clients", async () => {
   /*
    * The overview read one route and counted six clients, so a user with
    * Claude Code connected and a Grok fence written was told nothing was

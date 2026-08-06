@@ -66,6 +66,7 @@ const REAL_LOOKING_KEY = ["ocx", "live", "9f3c7a2b41d84e6fa05c8e17b3d92764"].joi
 const MODELS_FIXTURE: ExportModel[] = [
   { namespaced: "a/m1", provider: "a", id: "m1", contextWindow: 128_000 },
 ];
+const GENERIC_INTEGRATION_CLIENT_IDS = INTEGRATION_CLIENT_IDS.filter(clientId => clientId !== "opencode");
 
 function baseConfig(): OcxConfig {
   return {
@@ -168,7 +169,13 @@ async function journal(query = ""): Promise<JournalRow[]> {
 const INVALID_CLIENT_BODY = {
   error: "invalid integration client",
   code: "invalid_integration_client",
-  validClients: [...INTEGRATION_CLIENT_IDS],
+  validClients: [...GENERIC_INTEGRATION_CLIENT_IDS],
+};
+const DEDICATED_OPENCODE_BODY = {
+  error: "OpenCode is managed by its dedicated integration API",
+  code: "dedicated_integration_client",
+  clientId: "opencode",
+  route: "/api/integrations/opencode",
 };
 
 /** Let every pending microtask/IO turn run before observing shared state. */
@@ -198,21 +205,21 @@ function snapshotTreeIfPresent(root: string): Record<string, string> | null {
 }
 
 describe("GET /api/client-integrations", () => {
-  test("lists all registry clients in registry order", async () => {
+  test("lists generic clients in registry order and leaves OpenCode to its dedicated API", async () => {
     installHermes();
     const response = await api("/api/client-integrations");
     expect(response.status).toBe(200);
     const text = await response.text();
     const body = JSON.parse(text) as { clients: { clientId: string; configPath: string }[] };
 
-    expect(body.clients.map(c => c.clientId)).toEqual([...INTEGRATION_CLIENT_IDS]);
+    expect(body.clients.map(c => c.clientId)).toEqual([...GENERIC_INTEGRATION_CLIENT_IDS]);
     for (const client of body.clients) {
       expect(client.configPath.startsWith(home)).toBe(true);
     }
     // The route must read through the SAME store the caller bound, or a test
     // that isolates writes still reads the developer's real snapshots.
     const models = await exportModels();
-    expect(body.clients).toEqual(INTEGRATION_CLIENT_IDS.map(clientId =>
+    expect(body.clients).toEqual(GENERIC_INTEGRATION_CLIENT_IDS.map(clientId =>
       JSON.parse(JSON.stringify(readIntegrationState({
         clientId, models, config, port: 10100, store, env: routeEnv, home,
       })))));
@@ -268,6 +275,21 @@ describe("client validation", () => {
     expect(method).toBeNull();
     const journalPost = await rawApi("/api/client-integrations/journal", { method: "POST" });
     expect(journalPost).toBeNull();
+  });
+
+  test("generic OpenCode reads, writes, and journal filters redirect to the dedicated owner", async () => {
+    const direct = await api("/api/client-integrations/opencode");
+    expect(direct.status).toBe(409);
+    expect(await direct.json()).toEqual(DEDICATED_OPENCODE_BODY);
+
+    const write = await put("opencode", true);
+    expect(write.status).toBe(409);
+    expect(await write.json()).toEqual(DEDICATED_OPENCODE_BODY);
+
+    const history = await api("/api/client-integrations/journal?client=opencode");
+    expect(history.status).toBe(409);
+    expect(await history.json()).toEqual(DEDICATED_OPENCODE_BODY);
+    expect(store.listOperations()).toHaveLength(0);
   });
 });
 
@@ -641,6 +663,30 @@ describe("POST /api/client-integrations/restore", () => {
 });
 
 describe("GET /api/client-integrations/journal", () => {
+  test("hides historical generic OpenCode rows and refuses to restore them", async () => {
+    const configPath = join(home, ".config", "opencode", "opencode.jsonc");
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, "{\"provider\":{\"keep\":true}}\n");
+    store.appendJournal({
+      opId: "legacy-generic-opencode-op",
+      clientId: "opencode",
+      kind: "apply",
+      at: "2026-08-02T10:00:00.000Z",
+      configPath,
+      snapshot: { kind: "none" },
+      resultFingerprint: "",
+      resultAbsent: true,
+      priorRecord: null,
+    });
+
+    expect(await journal()).toEqual([]);
+    const response = await restore({ opId: "legacy-generic-opencode-op" });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual(DEDICATED_OPENCODE_BODY);
+    expect(readFileSync(configPath, "utf8")).toBe("{\"provider\":{\"keep\":true}}\n");
+    expect(store.listOperations("opencode")).toHaveLength(1);
+  });
+
   test("derives snapshot tags and undoable per request", async () => {
     const configPath = installHermes();
     expect((await put("hermes", true)).status).toBe(200);

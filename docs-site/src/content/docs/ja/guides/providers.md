@@ -168,6 +168,7 @@ Cline IDE/CLI のみで API からは使えません。`minimax/minimax-m2.5` �
 | **OpenAI (API キー)** | `https://api.openai.com/v1` |
 | **Anthropic (API キー)** | `https://api.anthropic.com` |
 | **OpenRouter** | `https://openrouter.ai/api/v1` |
+| **OpenCode Go** | `https://opencode.ai/zen/go/v1` |
 | **Cline** | `https://api.cline.bot/api/v1` |
 | **ClinePass** | `https://api.cline.bot/api/v1` |
 | **Ollama Cloud** | `https://ollama.com/v1` |
@@ -220,6 +221,11 @@ OpenCode Desktop/CLI とは別物です。[OpenCode コンソール](https://ope
 推論に成功して初めて**検証済み**になります。公開上限は参照値で、**$12 / 5 時間**、**$30 / 7 日**、
 **$60 / 30 日**です。これらのウィンドウのローカル観測は使用量の推定であり、ライブの残りクォータや
 請求ではありません。権威ある制限イベントは、upstream が具体的に報告した場合にのみ表示されます。
+
+組み込みプリセットは API キー方式なので、Add Provider ではアカウントログインではなく **Paid** に分類され、
+OpenCodex は OpenCode Go の OAuth フローを提供しません。Client Apps の **OpenCode** クライアントや、キー不要の
+**OpenCode Free** プロバイダーとも別物です。Add Provider の検索は Accounts、Free、Paid を横断するため、
+どのタブから `opencode` を検索しても一致するプリセットと区分が表示されます。
 
 > **Volcengine の 3 つの課金経路:** `volcengine` は従量課金 Ark API、
 > `volcengine-coding-plan` は Coding Plan の割り当て、`volcengine-agent-plan` は Agent Plan

@@ -161,3 +161,13 @@ export function resolveAppHashChange(rawHash: string): AppHashChangeAction {
 
   return { page: nextPage, replaceTo: null };
 }
+
+/**
+ * Hash used by navigation chrome after passive route correction. `replaceHash`
+ * intentionally emits no hashchange event, so consumers that keep their own
+ * selected-row state must resolve the replacement up front as well.
+ */
+export function resolvedNavigationHash(hash: string): string {
+  const rawHash = normalizeHashPath(hash);
+  return resolveAppHashChange(rawHash).replaceTo ?? rawHash;
+}

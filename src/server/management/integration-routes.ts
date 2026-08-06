@@ -35,6 +35,11 @@ import { loadExportModels } from "./model-rows";
 const INTEGRATION_ROUTE_PREFIX = "/api/client-integrations/";
 const INTEGRATION_MUTATION_JOIN_MS = 120_000;
 export const INTEGRATION_MUTATION_TERMINAL_MS = 10 * 60_000;
+const DEDICATED_OPENCODE_CLIENT_ID = "opencode" as const;
+const GENERIC_INTEGRATION_CLIENT_IDS = INTEGRATION_CLIENT_IDS.filter(
+  (clientId): clientId is Exclude<IntegrationClientId, typeof DEDICATED_OPENCODE_CLIENT_ID> =>
+    clientId !== DEDICATED_OPENCODE_CLIENT_ID,
+);
 
 type IntegrationStateRecord = Awaited<ReturnType<typeof readIntegrationState>>;
 type ApplyResult = Awaited<ReturnType<typeof applyIntegration>>;
@@ -244,8 +249,23 @@ function invalidClientResponse(ctx: ManagementContext): Response {
   return jsonResponse({
     error: "invalid integration client",
     code: "invalid_integration_client",
-    validClients: INTEGRATION_CLIENT_IDS,
+    validClients: GENERIC_INTEGRATION_CLIENT_IDS,
   }, 400, ctx.req, ctx.config);
+}
+
+/**
+ * OpenCode has richer persistence semantics than the generic fragment writer:
+ * one protected token reference, auto-connect, app launch, and surgical
+ * restore. Refusing it here enforces one production writer for
+ * `provider.opencodex`, including against historical generic journal rows.
+ */
+function dedicatedOpenCodeResponse(ctx: ManagementContext): Response {
+  return jsonResponse({
+    error: "OpenCode is managed by its dedicated integration API",
+    code: "dedicated_integration_client",
+    clientId: DEDICATED_OPENCODE_CLIENT_ID,
+    route: "/api/integrations/opencode",
+  }, 409, ctx.req, ctx.config);
 }
 
 function internalErrorResponse(error: unknown, ctx: ManagementContext): Response {
@@ -346,7 +366,7 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
        * later one silently — a duplicate that could only ever hide a
        * disagreement, never surface it.
        */
-      const clients = INTEGRATION_CLIENT_IDS.map(clientId =>
+      const clients = GENERIC_INTEGRATION_CLIENT_IDS.map(clientId =>
         readIntegrationState({ clientId, models, config: ctx.config, port, store, ...pathOverrides() }));
       return jsonResponse({ clients } satisfies IntegrationStateListEnvelope, 200, req, ctx.config);
     } catch (error) {
@@ -360,9 +380,14 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     if (requestedClient !== null && !isIntegrationClientId(requestedClient)) {
       return invalidClientResponse(ctx);
     }
+    if (requestedClient === DEDICATED_OPENCODE_CLIENT_ID) {
+      return dedicatedOpenCodeResponse(ctx);
+    }
     try {
       const store = integrationStore();
-      const storedOperations = store.listOperations(requestedClient ?? undefined);
+      const storedOperations = store
+        .listOperations(requestedClient ?? undefined)
+        .filter(operation => operation.clientId !== DEDICATED_OPENCODE_CLIENT_ID);
       const newestByClient = new Map<IntegrationClientId, string>();
       for (const operation of storedOperations) {
         if (!newestByClient.has(operation.clientId)) {
@@ -443,6 +468,9 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
           opId,
         }, 404, req, ctx.config);
       }
+      if (operation.clientId === DEDICATED_OPENCODE_CLIENT_ID) {
+        return dedicatedOpenCodeResponse(ctx);
+      }
       const snapshot = store.readSnapshot(operation);
       if (snapshot.kind === "expired") {
         return jsonResponse({
@@ -493,6 +521,9 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
   const requestedClient = decodeClientPath(url.pathname);
   if (requestedClient === null) return null;
   if (!isIntegrationClientId(requestedClient)) return invalidClientResponse(ctx);
+  if (requestedClient === DEDICATED_OPENCODE_CLIENT_ID) {
+    return dedicatedOpenCodeResponse(ctx);
+  }
 
   if (req.method === "GET") {
     try {

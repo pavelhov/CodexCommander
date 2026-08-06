@@ -4,6 +4,7 @@ import {
   hashBelongsToPage,
   readPageFromHash,
   resolveAppHashChange,
+  resolvedNavigationHash,
   INTEGRATION_TAB_HASHES,
   VALID_PAGES,
 } from "../src/app-routing";
@@ -35,6 +36,13 @@ describe("legacy integration hashes", () => {
       // even if every legacy hash collapsed onto Overview.
       expect(action.replaceTo).toBe(destination);
     }
+  });
+
+  test("navigation chrome selects the corrected nested destination immediately", () => {
+    expect(resolvedNavigationHash("#api")).toBe("integrations/keys");
+    expect(resolvedNavigationHash("#claude")).toBe("integrations/claude");
+    expect(resolvedNavigationHash("#grok")).toBe("integrations/grok");
+    expect(resolvedNavigationHash("#integrations")).toBe("integrations");
   });
 
   test("the legacy page ids are no longer routes of their own", () => {

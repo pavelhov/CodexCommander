@@ -14,12 +14,11 @@ import Integrations from "./pages/Integrations";
 import Startup from "./pages/Startup";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconTerminal, IconX, IconRoute } from "./icons";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRoute } from "./icons";
 import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n/shared";
 import { Select } from "./ui";
 import { installApiAuthFetch } from "./api";
-import { type Page } from "./app-routing";
-import { normalizeHashPath } from "./hash-routing";
+import { resolvedNavigationHash, type Page } from "./app-routing";
 import { useAppRouteState } from "./use-app-route-state";
 import { requestProxyStop } from "./stop-proxy";
 
@@ -38,62 +37,59 @@ const PAGE_TKEY: Record<Page, TKey> = {
   usage: "nav.usage",
   storage: "nav.storage",
   "codex-auth": "nav.codexAuth",
-  integrations: "nav.integrations",
+  integrations: "nav.clientApps",
   routing: "nav.routing",
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 const THEME_KEY = "ocx-theme";
 
-/**
- * A sidebar row usually maps one-to-one onto a page. Claude does not: it is a
- * shortcut into a tab of the Integrations page, so it needs a destination that
- * is not the bare page hash and a current-state rule that is not `page === id`.
- */
 type NavEntry = {
   id: Page;
   tkey: TKey;
   Icon: typeof IconGrid;
-  /** Sub-path handed to navigateToPage; the row targets a tab of `id`. */
+  /** Sub-path handed to navigateToPage; the row targets a nested surface of `id`. */
   subPath?: string;
   /** Hash prefixes that keep this row current, instead of the page match. */
   activeHashes?: readonly string[];
 };
 
-const NAV: NavEntry[] = [
-  { id: "dashboard", tkey: "nav.dashboard", Icon: IconGrid },
-  { id: "codex-auth", tkey: "nav.codexAuth", Icon: IconKey },
-  { id: "providers", tkey: "nav.providers", Icon: IconServer },
-  { id: "models", tkey: "nav.models", Icon: IconBoxes },
-  { id: "subagents", tkey: "nav.subagents", Icon: IconBot },
-  { id: "logs", tkey: "nav.logs", Icon: IconList },
-  { id: "usage", tkey: "nav.usage", Icon: IconActivity },
-  { id: "routing", tkey: "nav.routing", Icon: IconRoute },
-  { id: "storage", tkey: "nav.storage", Icon: IconHardDrive },
-  /*
-   * Claude sits directly above Integrations because it is a shortcut into that
-   * page. It carries navigation ONLY — the connection switch that used to live
-   * on this row now belongs to ClaudeCode, which owns GET/PUT /api/claude-code.
-   * A nav row owning a mutation is exactly the trap that was removed.
-   *
-   * The prefix also covers `integrations/claude/desktop`, so Desktop keeps the
-   * row current without a second entry.
-   */
+type NavSection = { labelKey: TKey | null; entries: NavEntry[] };
+
+const NAV_SECTIONS: NavSection[] = [
+  { labelKey: null, entries: [{ id: "dashboard", tkey: "nav.dashboard", Icon: IconGrid }] },
+  { labelKey: "nav.group.sources", entries: [{ id: "providers", tkey: "nav.providers", Icon: IconServer }] },
   {
-    id: "integrations",
-    tkey: "nav.claude",
-    Icon: IconTerminal,
-    subPath: "claude",
-    activeHashes: ["integrations/claude"],
+    labelKey: "nav.group.proxy",
+    entries: [
+      { id: "models", tkey: "nav.models", Icon: IconBoxes },
+      { id: "routing", tkey: "nav.routing", Icon: IconRoute },
+      { id: "subagents", tkey: "nav.subagents", Icon: IconBot },
+    ],
   },
-  { id: "integrations", tkey: "nav.integrations", Icon: IconGlobe },
+  {
+    labelKey: "nav.group.connections",
+    entries: [
+      { id: "integrations", tkey: "nav.clientApps", Icon: IconMonitor },
+      { id: "integrations", tkey: "nav.apiAccess", Icon: IconKey, subPath: "keys", activeHashes: ["integrations/keys"] },
+    ],
+  },
+  {
+    labelKey: "nav.group.observe",
+    entries: [
+      { id: "logs", tkey: "nav.logs", Icon: IconList },
+      { id: "usage", tkey: "nav.usage", Icon: IconActivity },
+    ],
+  },
+  { labelKey: "nav.group.system", entries: [{ id: "storage", tkey: "nav.storage", Icon: IconHardDrive }] },
 ];
 
+const NAV = NAV_SECTIONS.flatMap(section => section.entries);
+
 /**
- * Two rows resolve to the same page, so `page === id` would light both at once
- * and the sidebar would claim the user is in two places. A row with
- * `activeHashes` wins its own hash; a plain row keeps the page match only while
- * no sibling has claimed the current hash.
+ * Client Apps and API Access resolve to the same outer page. A row with
+ * `activeHashes` claims its nested surface; the plain Client Apps row keeps the
+ * page match only while no sibling has claimed the current hash.
  */
 function isNavEntryActive(entry: NavEntry, page: Page, rawHash: string): boolean {
   if (entry.activeHashes) {
@@ -127,12 +123,9 @@ export default function App() {
 
   // Narrow screens: the sidebar becomes an off-canvas drawer behind a hamburger toggle.
   const [navOpen, setNavOpen] = useState(false);
-  /*
-   * The sidebar's current row is a HASH question, not just a page question:
-   * Claude and Integrations are the same page and are told apart by the tab.
-   * `useAppRouteState` only surfaces the page, so track the raw hash here.
-   */
-  const [navHash, setNavHash] = useState(() => normalizeHashPath(
+  /* Client Apps and API Access share one outer page, so the selected sidebar
+   * row depends on the nested hash rather than on `page` alone. */
+  const [navHash, setNavHash] = useState(() => resolvedNavigationHash(
     typeof window === "undefined" ? "" : window.location.hash,
   ));
   const menuBtnRef = useRef<HTMLButtonElement>(null);
@@ -143,7 +136,7 @@ export default function App() {
     // External navigation (hash edit, back/forward) also dismisses the mobile drawer.
     const dismissNav = () => {
       setNavOpen(false);
-      setNavHash(normalizeHashPath(window.location.hash));
+      setNavHash(resolvedNavigationHash(window.location.hash));
     };
     window.addEventListener("hashchange", dismissNav);
     window.addEventListener("popstate", dismissNav);
@@ -252,42 +245,29 @@ export default function App() {
           </button>
         </div>
         <nav>
-          {/*
-            Codex Auth was once filtered out of this list whenever the workspace layout
-            was active, on the grounds that the Providers workspace embeds the same
-            account pool. It is now promoted to the second slot instead: there is only
-            one layout, so that filter would have hidden the page permanently.
-          */}
-          {/*
-            The sidebar is navigation only. The Claude row used to carry the
-            connection switch, which made a nav entry the owner of a mutation
-            and left the control stranded once the three integration pages
-            collapsed into one. ClaudeCode owns GET/PUT /api/claude-code, and
-            the switch lives on its own surface.
-          */}
-          {NAV.map(entry => {
-            const { id, tkey, Icon, subPath } = entry;
-            const active = isNavEntryActive(entry, page, navHash);
-            return (
-              <div key={subPath ? `${id}/${subPath}` : id} className="nav-entry">
-                <button type="button" className={`nav-item${active ? " active" : ""}`}
-                  data-page={subPath ? `${id}/${subPath}` : id}
-                  onClick={() => {
-                    // Deliberate sidebar navigation — push a history entry.
-                    navigateToPage(id, subPath);
-                    // `hashchange` fires asynchronously and not at all when the
-                    // hash is unchanged, so the row that was just clicked would
-                    // otherwise stay un-highlighted for a frame or, for a repeat
-                    // click, forever.
-                    setNavHash(subPath ? `${id}/${subPath}` : id);
-                    setNavOpen(false);
-                  }}
-                  aria-current={active ? "page" : undefined}>
-                  <Icon /> {t(tkey)}
-                </button>
-              </div>
-            );
-          })}
+          {NAV_SECTIONS.map((section, index) => (
+            <div key={section.labelKey ?? `nav-root-${index}`} className="nav-section">
+              {section.labelKey && <div className="nav-section-label">{t(section.labelKey)}</div>}
+              {section.entries.map(entry => {
+                const { id, tkey, Icon, subPath } = entry;
+                const active = isNavEntryActive(entry, page, navHash);
+                return (
+                  <div key={subPath ? `${id}/${subPath}` : id} className="nav-entry">
+                    <button type="button" className={`nav-item${active ? " active" : ""}`}
+                      data-page={subPath ? `${id}/${subPath}` : id}
+                      onClick={() => {
+                        navigateToPage(id, subPath);
+                        setNavHash(subPath ? `${id}/${subPath}` : id);
+                        setNavOpen(false);
+                      }}
+                      aria-current={active ? "page" : undefined}>
+                      <Icon /> {t(tkey)}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
         </nav>
         <div className="sidebar-foot">
           <div className="lang-toggle">
@@ -324,7 +304,7 @@ export default function App() {
       </aside>
 
       <main className="main" inert={navOpen}>
-        <div className={`main-inner${page === "combos" ? " main-inner--combos" : ""}`}>
+        <div className={`main-inner${page === "combos" ? " main-inner--combos" : ""}${page === "integrations" ? " main-inner--client-apps" : ""}`}>
           <ErrorBoundary
             key={page}
             pageName={t(PAGE_TKEY[page])}

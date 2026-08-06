@@ -1,7 +1,6 @@
 import { readJsonIfOk } from "../../fetch-json";
 
 export const FILE_INTEGRATION_CLIENTS = [
-  "opencode",
   "pi",
   "hermes",
   "openclaw",
