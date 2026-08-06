@@ -144,7 +144,8 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 inline-конфигурация сохраняется, а только `provider.opencodex` заменяется для этого запуска.
 Глобальные или проектные `opencode.json` могут читаться, чтобы выдать warning о существующем
 override, но файлы на диске никогда не меняются. Маршрутизируемые модели появляются как
-`opencodex/<provider>/<model>`. Последующий запуск обычного `opencode` работает ровно как раньше.
+`opencodex/<provider>/<model>`. Этот лончер не меняет последующие обычные запуски `opencode`;
+единственный постоянный путь для `provider.opencodex` — отдельная opt-in интеграция Dashboard.
 
 ### `ocx grok <status|exclude|include|set|clear|apply> ...`
 

@@ -67,6 +67,7 @@ import { handleComboRoutes } from "./management/combo-routes";
 import { handleSystemRoutes } from "./management/system-routes";
 import { handleActivityRoutes } from "./management/activity-routes";
 import { handleSidebarRoutes } from "./management/sidebar-routes";
+import { handleIntegrationRoutes } from "./management/integration-routes";
 import type { ManagementContext } from "./management/context";
 export type { ManagementApiDeps } from "./management/context";
 import { fetchAllModels } from "./management/shared";
@@ -95,12 +96,21 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     }
   }
   async function refreshCodexCatalogBestEffort(): Promise<void> {
-    if (deps.refreshCodexCatalog) return deps.refreshCodexCatalog();
+    if (deps.refreshCodexCatalog) await deps.refreshCodexCatalog();
+    else {
+      try {
+        const { refreshCodexModelCatalog } = await import("../codex/refresh");
+        await refreshCodexModelCatalog(config);
+      } catch {
+        /* catalog absent */
+      }
+    }
     try {
-      const { refreshCodexModelCatalog } = await import("../codex/refresh");
-      await refreshCodexModelCatalog(config);
+      const { reconcileOpencodeIntegrationIfEnabled } = await import("./management/integration-routes");
+      await reconcileOpencodeIntegrationIfEnabled(config, Number(url.port) || config.port);
     } catch {
-      /* catalog absent */
+      // Optional client integration: catalog/config mutations must still succeed
+      // when OpenCode is absent or its user-owned config needs attention.
     }
   }
 
@@ -131,6 +141,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     routed = (await handleConfigRoutes(ctx))
     ??     (await handleLogsUsageRoutes(ctx))
     ??     (await handleProviderRoutes(ctx))
+    ??     (await handleIntegrationRoutes(ctx))
     ??     (await handleModelRoutes(ctx))
     ??     (await handleAgentSettingsRoutes(ctx))
     ??     (await handleOauthAccountRoutes(ctx))
@@ -156,33 +167,21 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   if (routed) return routed;
 
   if (url.pathname === "/api/stop" && req.method === "POST") {
-    const { restoreNativeCodex } = await import("../codex/inject");
-    const { stopServiceIfInstalled, isServiceOwnershipError } = await import("../service");
-    try {
-      stopServiceIfInstalled();
-    } catch (err) {
-      if (isServiceOwnershipError(err)) {
-        // The installed service belongs to another CODEX_HOME/OPENCODEX_HOME: it would respawn
-        // this proxy immediately, and its shared config is not ours to tear down. Refuse the
-        // stop instead of half-performing it. 409, not 500 — the request is well-formed.
-        return jsonResponse({ success: false, message: err.message }, 409, req, config);
-      }
-      throw err;
+    const { prepareExplicitProxyShutdown } = await import("../cli/proxy-lifecycle");
+    const prepared = prepareExplicitProxyShutdown();
+    if (!prepared.accepted) {
+      return jsonResponse(
+        { success: false, message: prepared.message },
+        prepared.status,
+        req,
+        config,
+      );
     }
-    const restore = restoreNativeCodex();
-    // Both managed configs come down together on an explicit teardown. The daemon's own
-    // syncCleanup skips this when OCX_SERVICE is set (so a crash/respawn keeps the fence),
-    // which is exactly why an intentional stop has to do it here.
-    const { stripGrokConfig } = await import("../grok/inject");
-    const grok = stripGrokConfig();
     setTimeout(async () => {
       await drainAndShutdown(undefined, config.shutdownTimeoutMs ?? 5000);
       process.exit(0);
     }, 200);
-    const grokNote = grok.ok ? "" : ` Grok config cleanup failed: ${grok.message}`;
-    return jsonResponse(restore.success
-      ? { success: true, message: `Proxy stopping, native Codex restored.${grokNote}` }
-      : { success: false, message: `Proxy stopping, but native Codex restore failed: ${restore.message}. Run \`ocx restore\`.${grokNote}` });
+    return jsonResponse({ success: prepared.success, message: prepared.message });
   }
 
   if (url.pathname.startsWith("/api/codex-auth/")) {

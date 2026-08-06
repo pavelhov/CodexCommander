@@ -35,9 +35,12 @@ import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { configuredAdminToken } from "../src/lib/admin-secrets";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+import { deriveStartupHealth } from "../src/codex/autostart-health";
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
+const previousCodexCliPath = process.env.CODEX_CLI_PATH;
 const originalGlobalFetch = globalThis.fetch;
 // A per-run directory, not a fixed path. This used to be
 // join(import.meta.dir, ".tmp-server-auth-test"), the exact same literal that
@@ -50,6 +53,27 @@ const originalGlobalFetch = globalThis.fetch;
 // isolation convention already used by tests/helpers/isolated-codex-home.ts.
 const TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-server-auth-"));
 let isolatedCodexHome: IsolatedCodexHome | null = null;
+
+const settingsManagementDeps = {
+  resolveCodexRuntime: () => ({
+    runtime: { command: "codex-fixture", version: "0.999.0", source: "environment" as const },
+    failures: [],
+  }),
+  getCachedStartupHealth: async () => deriveStartupHealth({
+    routingKind: "native",
+    autostartEnabled: false,
+    serviceInstalled: false,
+    serviceViable: false,
+    serviceEnabled: false,
+    serviceRunning: false,
+    serviceStale: false,
+    serviceConflict: false,
+    serviceSupported: true,
+    shimInstalled: false,
+    shimHealthy: false,
+    platform: process.platform,
+  }),
+};
 
 function config(hostname?: string): OcxConfig {
   return {
@@ -116,6 +140,7 @@ function stubModelDiscoveryFor(...origins: string[]): void {
 
 beforeEach(() => {
   isolatedCodexHome = installIsolatedCodexHome("ocx-server-auth-codex-");
+  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
 });
 
 afterEach(() => {
@@ -124,6 +149,8 @@ afterEach(() => {
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+  else process.env.CODEX_CLI_PATH = previousCodexCliPath;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   clearCodexUpstreamHealth();
@@ -661,7 +688,7 @@ describe("server local API auth", () => {
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
 
-    const server = startServer(0);
+    const server = startServer(0, { managementDeps: settingsManagementDeps });
     const origin = `http://127.0.0.1:${server.port}`;
     try {
       const settings = await fetch(new URL("/api/settings", server.url), {
@@ -691,7 +718,7 @@ describe("server local API auth", () => {
       port: 0,
     });
 
-    const server = startServer(0);
+    const server = startServer(0, { managementDeps: settingsManagementDeps });
     const origin = `http://lan.example.test:${server.port}`;
     try {
       const missing = await fetch(`http://127.0.0.1:${server.port}/api/settings`, {

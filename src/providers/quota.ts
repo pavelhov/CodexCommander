@@ -6,6 +6,8 @@ import { getAccountCredential, getAccountSet, getCredential } from "../oauth/sto
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "./registry";
 import type { OcxConfig, OcxProviderConfig } from "../types";
+import { readUsageSnapshotForManagement, usageTotalTokens, type PersistedUsageEntry } from "../usage/log";
+import { effectiveServiceTier, estimateAttemptCost, estimateRequestCost } from "../usage/cost";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "./openai-tiers";
 import {
   captureConfigGeneration,
@@ -29,6 +31,26 @@ export interface ProviderQuotaWindow {
   resetAt?: number;
 }
 
+export interface ProviderQuotaReferenceWindow {
+  id: "five_hour" | "weekly" | "monthly";
+  label: string;
+  windowSeconds: number;
+  publishedLimitUsd: number;
+  observedSpendUsd?: number;
+  observedTokens: number;
+  observedRequests: number;
+  pricedRequests: number;
+  unpricedRequests: number;
+  unmeasuredRequests: number;
+  coverage: "none" | "complete" | "partial" | "unpriced";
+}
+
+export interface ProviderQuotaLimitEvent {
+  limitName: "5 hour" | "weekly" | "monthly";
+  observedAt: number;
+  resetAt?: number;
+}
+
 export interface ProviderQuota {
   fiveHourPercent?: number;
   fiveHourResetAt?: number;
@@ -37,6 +59,10 @@ export interface ProviderQuota {
   monthlyPercent?: number;
   monthlyResetAt?: number;
   customWindows?: ProviderQuotaWindow[];
+  /** Published caps plus local observations; never presented as provider remaining balance. */
+  referenceWindows?: ProviderQuotaReferenceWindow[];
+  /** Authoritative only because the upstream emitted this concrete limit event. */
+  observedLimitEvent?: ProviderQuotaLimitEvent;
   updatedAt: number;
 }
 
@@ -78,7 +104,9 @@ function hasQuotaRows(quota: ProviderQuota | null | undefined): quota is Provide
   return typeof quota.fiveHourPercent === "number"
     || typeof quota.weeklyPercent === "number"
     || typeof quota.monthlyPercent === "number"
-    || !!quota.customWindows?.some(window => typeof window.percent === "number");
+    || !!quota.customWindows?.some(window => typeof window.percent === "number")
+    || !!quota.referenceWindows?.length
+    || !!quota.observedLimitEvent;
 }
 
 function providerLabel(providerId: string): string {
@@ -891,6 +919,191 @@ async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig
   });
 }
 
+const OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1";
+const OPENCODE_GO_CAPS_VERIFIED_AT = "2026-08-05";
+const OPENCODE_GO_REFERENCE_WINDOWS = [
+  { id: "five_hour", label: "5-hour", windowSeconds: 5 * 60 * 60, publishedLimitUsd: 12 },
+  { id: "weekly", label: "7-day", windowSeconds: 7 * 24 * 60 * 60, publishedLimitUsd: 30 },
+  { id: "monthly", label: "30-day", windowSeconds: 30 * 24 * 60 * 60, publishedLimitUsd: 60 },
+] as const;
+const OPENCODE_GO_MAX_OBSERVATION_MS = 30 * 24 * 60 * 60 * 1000;
+
+function isCanonicalOpenCodeGoBaseUrl(baseUrl: string): boolean {
+  return normalizedBaseUrl(baseUrl) === OPENCODE_GO_BASE_URL;
+}
+
+type LocalSpendObservation = {
+  timestamp: number;
+  cost?: number;
+  tokens: number;
+  measured: boolean;
+};
+
+function openCodeGoSpendObservations(entries: readonly PersistedUsageEntry[]): LocalSpendObservation[] {
+  const observations: LocalSpendObservation[] = [];
+  for (const entry of entries) {
+    const serviceTier = effectiveServiceTier(entry);
+    if (entry.attempts?.length) {
+      for (const attempt of entry.attempts) {
+        if (attempt.provider !== "opencode-go") continue;
+        const estimate = estimateAttemptCost(attempt, undefined, serviceTier);
+        observations.push({
+          timestamp: entry.timestamp,
+          ...(estimate ? { cost: estimate.cost.total } : {}),
+          tokens: attempt.totalTokens ?? usageTotalTokens(attempt.usage) ?? 0,
+          measured: !!attempt.usage,
+        });
+      }
+      continue;
+    }
+    if (entry.provider !== "opencode-go") continue;
+    const estimate = estimateRequestCost({
+      provider: entry.provider,
+      model: entry.model,
+      usage: entry.usage,
+      usageStatus: entry.usageStatus,
+      serviceTier,
+    });
+    observations.push({
+      timestamp: entry.timestamp,
+      ...(estimate ? { cost: estimate.cost.total } : {}),
+      tokens: entry.totalTokens ?? usageTotalTokens(entry.usage) ?? 0,
+      measured: !!entry.usage,
+    });
+  }
+  return observations;
+}
+
+function localReferenceWindows(
+  observations: readonly LocalSpendObservation[],
+  now: number,
+  history: { truncated: boolean; oldestRetainedAt?: number },
+): ProviderQuotaReferenceWindow[] {
+  return OPENCODE_GO_REFERENCE_WINDOWS.map(reference => {
+    const windowStart = now - reference.windowSeconds * 1000;
+    const rows = observations.filter(row => row.timestamp >= windowStart);
+    const priced = rows.filter(row => row.cost !== undefined);
+    const unpricedRequests = rows.filter(row => row.measured && row.cost === undefined).length;
+    const unmeasuredRequests = rows.filter(row => !row.measured).length;
+    const retainedHistoryMayStartInsideWindow = history.truncated
+      && (history.oldestRetainedAt === undefined || history.oldestRetainedAt > windowStart);
+    const measuredCoverage: ProviderQuotaReferenceWindow["coverage"] = rows.length === 0
+      ? "none"
+      : priced.length === rows.length
+        ? "complete"
+        : priced.length === 0
+          ? "unpriced"
+          : "partial";
+    const coverage: ProviderQuotaReferenceWindow["coverage"] = retainedHistoryMayStartInsideWindow
+      ? "partial"
+      : measuredCoverage;
+    return {
+      ...reference,
+      ...(priced.length > 0 ? { observedSpendUsd: priced.reduce((sum, row) => sum + row.cost!, 0) } : {}),
+      observedTokens: rows.reduce((sum, row) => sum + row.tokens, 0),
+      observedRequests: rows.length,
+      pricedRequests: priced.length,
+      unpricedRequests,
+      unmeasuredRequests,
+      coverage,
+    };
+  });
+}
+
+/** Test seam for retention-boundary truthfulness without constructing a multi-megabyte log. */
+export function openCodeGoReferenceWindowsForTest(
+  entries: readonly PersistedUsageEntry[],
+  now: number,
+  historyTruncated: boolean,
+): ProviderQuotaReferenceWindow[] {
+  const oldestRetainedAt = entries
+    .map(entry => entry.timestamp)
+    .filter(Number.isFinite)
+    .reduce<number | undefined>((oldest, timestamp) => oldest === undefined ? timestamp : Math.min(oldest, timestamp), undefined);
+  const relevantEntries = entries.filter(entry => entry.timestamp >= now - OPENCODE_GO_MAX_OBSERVATION_MS);
+  return localReferenceWindows(openCodeGoSpendObservations(relevantEntries), now, {
+    truncated: historyTruncated,
+    ...(oldestRetainedAt !== undefined ? { oldestRetainedAt } : {}),
+  });
+}
+
+function openCodeGoLimitName(message: string | undefined): ProviderQuotaLimitEvent["limitName"] | null {
+  if (!message || !/GoUsageLimitError|go\s+usage\s+limit|usage\s+limit/i.test(message)) return null;
+  const match = message.match(/limitName\\?["']?\s*[:=]\s*\\?["']?(5\s*hour|weekly|monthly)/i)
+    ?? message.match(/\b(5\s*hour|weekly|monthly)\b(?=[^\n]{0,80}\blimit\b)/i);
+  if (!match) return null;
+  const normalized = match[1]!.toLowerCase().replace(/\s+/g, " ");
+  return normalized === "5 hour" || normalized === "weekly" || normalized === "monthly"
+    ? normalized
+    : null;
+}
+
+function retryAfterResetAt(raw: string | undefined, observedAt: number): number | undefined {
+  if (!raw) return undefined;
+  if (/^\d+(?:\.\d+)?$/.test(raw)) {
+    const seconds = Number(raw);
+    if (!Number.isFinite(seconds) || seconds < 0 || seconds > 40 * 24 * 60 * 60) return undefined;
+    return observedAt + Math.ceil(seconds * 1000);
+  }
+  const timestamp = Date.parse(raw);
+  return Number.isFinite(timestamp)
+    && timestamp - observedAt <= 40 * 24 * 60 * 60 * 1000
+    ? timestamp
+    : undefined;
+}
+
+function latestOpenCodeGoLimitEvent(
+  entries: readonly PersistedUsageEntry[],
+  now: number,
+): ProviderQuotaLimitEvent | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]!;
+    if (entry.provider !== "opencode-go" || entry.status !== 429) continue;
+    const limitName = openCodeGoLimitName(entry.upstreamError);
+    if (!limitName) continue;
+    const observedAt = entry.timestamp + Math.max(0, entry.durationMs);
+    const resetAt = retryAfterResetAt(entry.upstreamRetryAfter, observedAt);
+    const nominalMs = limitName === "5 hour"
+      ? 5 * 60 * 60 * 1000
+      : limitName === "weekly"
+        ? 7 * 24 * 60 * 60 * 1000
+        : 30 * 24 * 60 * 60 * 1000;
+    if ((resetAt ?? observedAt + nominalMs) <= now) continue;
+    return { limitName, observedAt, ...(resetAt !== undefined ? { resetAt } : {}) };
+  }
+  return undefined;
+}
+
+async function fetchOpenCodeGoReferenceQuota(provider: string): Promise<ProviderQuotaReport> {
+  const now = Date.now();
+  const usageSnapshot = await readUsageSnapshotForManagement();
+  const entries = usageSnapshot.entries;
+  const historyTruncated = usageSnapshot.truncatedPrefixBytes > 0 || usageSnapshot.entriesTruncated;
+  const oldestRetainedAt = entries
+    .map(entry => entry.timestamp)
+    .filter(Number.isFinite)
+    .reduce<number | undefined>((oldest, timestamp) => oldest === undefined ? timestamp : Math.min(oldest, timestamp), undefined);
+  // The longest displayed window is 30 days. Avoid re-pricing older rows on each
+  // five-minute quota refresh while still using the full snapshot for retention truth.
+  const relevantEntries = entries.filter(entry => entry.timestamp >= now - OPENCODE_GO_MAX_OBSERVATION_MS);
+  const observedLimitEvent = latestOpenCodeGoLimitEvent(relevantEntries, now);
+  const quota: ProviderQuota = {
+    referenceWindows: localReferenceWindows(openCodeGoSpendObservations(relevantEntries), now, {
+      truncated: historyTruncated,
+      ...(oldestRetainedAt !== undefined ? { oldestRetainedAt } : {}),
+    }),
+    ...(observedLimitEvent ? { observedLimitEvent } : {}),
+    updatedAt: now,
+  };
+  return {
+    provider,
+    label: providerLabel(provider),
+    source: `opencode-go:published-caps-${OPENCODE_GO_CAPS_VERIFIED_AT}+local-estimate`,
+    quota,
+    updatedAt: now,
+  };
+}
+
 async function maybeFetchProviderQuota(
   name: string,
   provider: OcxProviderConfig,
@@ -899,6 +1112,9 @@ async function maybeFetchProviderQuota(
 ): Promise<ProviderQuotaReport | null> {
   if (provider.disabled === true) return null;
   try {
+    if (name === "opencode-go" && isCanonicalOpenCodeGoBaseUrl(provider.baseUrl)) {
+      return fetchOpenCodeGoReferenceQuota(name);
+    }
     if (isBuiltInChatGptForwardProvider(name, provider)) return fetchChatGptForwardQuota(config, name, provider, forceRefresh);
     if (provider.authMode === "oauth" && name === "xai") return fetchXaiQuota(name);
     if (provider.authMode === "oauth" && name === "anthropic") return fetchAnthropicQuota(name);

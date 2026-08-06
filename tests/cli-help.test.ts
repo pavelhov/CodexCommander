@@ -98,6 +98,15 @@ describe("CLI subcommand help", () => {
     const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-status-"));
     try {
       const configPath = join(opencodexHome, "config.json");
+      const codexRuntime = join(opencodexHome, process.platform === "win32" ? "codex.cmd" : "codex");
+      writeFileSync(
+        codexRuntime,
+        process.platform === "win32"
+          ? "@echo off\r\necho codex-cli 1.2.3\r\n"
+          : "#!/bin/sh\necho 'codex-cli 1.2.3'\n",
+        "utf8",
+      );
+      if (process.platform !== "win32") chmodSync(codexRuntime, 0o755);
       writeFileSync(configPath, JSON.stringify({
         port: 9,
         providers: {
@@ -113,7 +122,11 @@ describe("CLI subcommand help", () => {
 
       const result = spawnSync(process.execPath, [cliPath, "status"], {
         cwd: repoRoot,
-        env: { ...process.env, OPENCODEX_HOME: opencodexHome },
+        env: {
+          ...process.env,
+          OPENCODEX_HOME: opencodexHome,
+          CODEX_CLI_PATH: codexRuntime,
+        },
         encoding: "utf8",
       });
 

@@ -398,7 +398,7 @@ describe("ocx opencode native slug selection", () => {
         },
       },
     });
-    expect(opencodeLaunchNativeSlugs(config).length).toBeGreaterThan(0);
+    expect(opencodeLaunchNativeSlugs(config, () => ["gpt-5.5"])).toEqual(["gpt-5.5"]);
   });
 });
 

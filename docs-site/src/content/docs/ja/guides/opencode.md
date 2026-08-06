@@ -34,9 +34,31 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 
 グローバルまたはプロジェクト設定でも `provider.opencodex` が定義されている場合、ランチャーは情報メモを出力します。`ocx opencode` のランタイム層がその起動に対してそれをオーバーライドします。
 
+## ダッシュボードの永続接続（任意）
+
+通常の OpenCode、エディター統合、または Desktop のワンクリック起動で使うには、OpenCodex
+ダッシュボードの **Integrations** で **Apply connection** を選びます。これは `ocx opencode` とは
+別の経路です。
+
+- `XDG_CONFIG_HOME` 配下（通常は `~/.config/opencode/`）のアクティブなグローバル設定を選び、
+  `opencode.jsonc` が存在すればそれを、なければ `opencode.json` を使います。
+- JSONC 編集は `provider.opencodex` だけを変更するため、コメント、書式、他のプロバイダー、
+  エージェント、MCP、無関係なキーは保持されます。
+- プロキシのアドミッション トークンは OpenCodex の保護された状態に残り、OpenCode 設定には
+  `{file:/absolute/path}` 参照だけが入ります。OpenCode の認証ストアは読みません。
+- **Always keep OpenCode connected** はデフォルトでオフで、明示的に有効にした後だけプロキシ起動や
+  表示カタログ変更時にこの管理ブロックを更新します。
+
+journal が正確な復元を安全と確認した場合、**Restore** は元のバイト列を正確に復元します。それ以外では、
+ダッシュボードは他のユーザー編集を保持したまま管理対象の `provider.opencodex` だけを外科的に
+復元または削除します。**Open OpenCode** は OpenCode Desktop をワンクリックで起動します。CLI だけの
+場合は、ディスクを変更しない `ocx opencode` を使用してください。
+
 ## ブロックを独自の設定に入れる
 
-`ocx opencode` は 1 回の起動に対してのみプロバイダー ブロックを挿入します。これは、プレーン `opencode` はまだプロキシについて何も知らないことを意味します。プレーンな `opencode` から、またはランチャーを経由しないエディター拡張機能からルーティングされたモデルを利用できるようにしたい場合、`ocx export` は同じプロバイダー ブロックを出力して、独自の設定にマージします。
+`ocx opencode` は 1 回の起動に対してのみプロバイダー ブロックを挿入します。上のダッシュボード永続接続を
+適用していない場合、プレーン `opencode` はまだプロキシについて何も知りません。プレーンな `opencode`
+から、またはランチャーを経由しないエディター拡張機能からルーティングされたモデルを利用できるようにしたい場合、`ocx export` は同じプロバイダー ブロックを出力して、独自の設定にマージします。
 
 ```bash
 ocx export --client opencode
@@ -90,7 +112,9 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 ## 元に戻す
 
-元に戻す必要はありません。生成された設定ファイルは `~/.opencodex` の下に書き込まれません。プレーンな `opencode` を実行すると、以前と同じように独自の設定が読み取られます。
+一時的な `ocx opencode` では元に戻す必要はありません。OpenCode 設定ファイルを変更しないためです。
+ダッシュボード接続は **Integrations** の **Restore** で戻します。journal が許可すれば元のバイト列を
+正確に復元し、それ以外では管理対象プロバイダーだけが外科的に復元されます。
 
 ## モデルの制限
 

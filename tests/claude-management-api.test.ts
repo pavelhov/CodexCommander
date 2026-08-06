@@ -8,6 +8,7 @@ import { startServer } from "../src/server";
 import * as systemEnv from "../src/server/system-env";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 
 // Full-suite Windows load: startServer + multi-PUT management flows often exceed bun's
 // default 5s per-test budget (same flake class as 810fa115 / kiro-oauth).
@@ -17,6 +18,7 @@ let testDir = "";
 let previousHome: string | undefined;
 let previousClaudeConfigDir: string | undefined;
 let previousDesktopConfigDir: string | undefined;
+let previousCodexCliPath: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 function setPlatform(platform: NodeJS.Platform): void {
@@ -29,7 +31,9 @@ beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
   previousDesktopConfigDir = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+  previousCodexCliPath = process.env.CODEX_CLI_PATH;
   isolatedCodexHome = installIsolatedCodexHome("ocx-claude-mgmt-");
+  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
   testDir = mkdtempSync(join(tmpdir(), "ocx-claude-mgmt-"));
   process.env.OPENCODEX_HOME = testDir;
   // These API tests intentionally toggle agent injection off. Never let that
@@ -53,6 +57,8 @@ afterEach(() => {
   else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
   if (previousDesktopConfigDir === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
   else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previousDesktopConfigDir;
+  if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+  else process.env.CODEX_CLI_PATH = previousCodexCliPath;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });

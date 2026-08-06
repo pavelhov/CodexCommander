@@ -153,6 +153,21 @@ first and submit the returned digest. Prefer quarantine when recovery may be nee
 | `PUT, DELETE /api/custom-models/{id}` | Edit or delete one custom model | 400 invalid id/fields; 404 not found; 409 duplicate model |
 | `GET, PUT /api/selected-models` | Read provider allowlists and availability, or replace one allowlist | 400 missing provider/body; 404 unknown provider |
 
+### OpenCode integration
+
+| Method and path | Purpose | Notable errors |
+| --- | --- | --- |
+| `GET /api/integrations/opencode` | Read OpenCode installation detection, managed-connection state, target config path, auto-refresh setting, and OpenCode Go key-verification state | — |
+| `POST /api/integrations/opencode/apply` | Generate and surgically apply only `provider.opencodex` to the active OpenCode global JSONC/JSON config; accepts optional `{ "autoConnect": boolean }` | 400 invalid body; 409 malformed, changed, or unsafe external config |
+| `PUT /api/integrations/opencode` | Enable or disable opt-in catalog/startup refresh after a connection has been applied | 400 invalid body; 409 no applied connection |
+| `POST /api/integrations/opencode/restore` | Restore the exact pre-Apply bytes when safe, or surgically restore/remove only the managed provider; optional full mode requires current-hash confirmation | 400 invalid mode/body; 409 changed or unsafe external config |
+| `POST /api/integrations/opencode/open` | Apply when needed, then one-click launch detected OpenCode Desktop | 409 missing Desktop or integration needs attention |
+
+The persistent integration owns a protected token file under OpenCodex state and a journal/backup;
+the OpenCode config receives a `{file:…}` reference, never a serialized proxy key. The API never
+rewrites OpenCode's other config paths or reads its auth store. See [OpenCode](/guides/opencode/) for
+the user workflow.
+
 ### OAuth accounts, provider keys, and data-plane keys
 
 | Method and path | Purpose | Notable errors |
@@ -193,19 +208,11 @@ keys are not returned to dashboard clients.
 `provider_has_dependent_combos` is a safety barrier: remove or edit the dependent combos before
 deleting their provider.
 
-### Sidebar and consent-bound actions
+### Sidebar
 
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
-| `GET /api/github/star` | Read repository star status through the user's `gh` session | Status-specific fixed result codes |
-| `POST /api/github/star` | Star the repository only from an authenticated human action | 403 `agent_consent_required` for agent-driven callers without dashboard-session evidence |
 | `GET /api/update/badge` | Read the cheap sidebar update-badge state | — |
-
-:::caution
-Management authentication proves access to the proxy; it does not prove consent to spend the
-user's identity. An agent must not route around `agent_consent_required`. The user must choose
-whether to star the repository.
-:::
 
 ### System lifecycle
 

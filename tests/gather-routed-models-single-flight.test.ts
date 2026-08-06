@@ -3,6 +3,7 @@ import {
   clearGatherRoutedModelsInflight,
   filterCatalogVisibleModels,
   gatherRoutedModels as gatherRoutedModelsDirect,
+  NATIVE_OPENAI_MODELS,
   resetCatalogRuntimeStateForTests,
   type ComboCatalogOmission,
 } from "../src/codex/catalog";
@@ -14,7 +15,10 @@ import { CatalogGatherBusyError } from "../src/codex/catalog/provider-fetch";
 const originalFetch = globalThis.fetch;
 
 const gatherRoutedModels: typeof gatherRoutedModelsDirect = (config, options) =>
-  gatherRoutedModelsDirect(withStubbedProviderFetch(config), options);
+  gatherRoutedModelsDirect(withStubbedProviderFetch(config), {
+    ...options,
+    nativeOpenAiSlugs: options?.nativeOpenAiSlugs ?? (() => NATIVE_OPENAI_MODELS),
+  });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;

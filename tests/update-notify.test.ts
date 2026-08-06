@@ -119,12 +119,17 @@ describe("cli wiring", () => {
   test("update prompt runs before the server binds a port", async () => {
     const cli = await readText("src/cli/index.ts");
     const promptIndex = cli.indexOf("await maybeShowUpdatePrompt()");
-    const portIndex = cli.indexOf("let port = await chooseListenPort");
+    const lockIndex = cli.indexOf("startLock = await acquireProxyStartLock()");
+    const portIndex = cli.indexOf("port = await chooseListenPort(requestedPort)");
     const serverIndex = cli.indexOf("startServer(port)");
     expect(promptIndex).toBeGreaterThan(-1);
+    expect(lockIndex).toBeGreaterThan(-1);
     expect(portIndex).toBeGreaterThan(-1);
+    expect(promptIndex).toBeLessThan(lockIndex);
+    expect(lockIndex).toBeLessThan(portIndex);
     expect(promptIndex).toBeLessThan(portIndex);
     expect(promptIndex).toBeLessThan(serverIndex);
+    expect(portIndex).toBeLessThan(serverIndex);
   });
 
   test("hidden __refresh-version subcommand is wired", async () => {

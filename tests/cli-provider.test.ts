@@ -419,7 +419,7 @@ describe("ocx provider mutating --json", () => {
 
 describe("ocx provider add --sync", () => {
   test("provider add --sync flag is accepted without error", () => {
-    const { dir } = freshConfig();
+    const { dir } = freshConfig({ port: 9 });
     try {
       // --sync without a running proxy should still succeed (sync silently skipped)
       const result = runCli(["provider", "add", "deepseek", "--api-key", "sk-test", "--sync"], { OPENCODEX_HOME: dir });
@@ -428,10 +428,10 @@ describe("ocx provider add --sync", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, SPAWN_BUDGET_MS);
 
   test("provider add --sync --json reports needsSync false", () => {
-    const { dir } = freshConfig();
+    const { dir } = freshConfig({ port: 9 });
     try {
       const result = runCli(["provider", "add", "deepseek", "--api-key", "sk-test", "--sync", "--json"], { OPENCODEX_HOME: dir });
       expect(result.status).toBe(0);

@@ -12,5 +12,6 @@ TransportSuite.run(runner)
 SnapshotStateSuite.run(runner)
 PollingSuite.run(runner)
 ActionSuite.run(runner)
+LifecycleHelperSuite.run(runner)
 
 exit(runner.summarize())

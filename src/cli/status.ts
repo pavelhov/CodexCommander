@@ -185,7 +185,10 @@ export async function collectStatus(): Promise<CliStatusView> {
   const codexPlugins = diagnoseCodexBundledPlugins();
   const resolvedRuntime = (() => {
     try {
-      return resolveCodexRuntime();
+      // Status is a hot/read-only path (and the menu companion can invoke it often).
+      // Stop at the first valid runtime; PATH-wide "newer available" discovery belongs
+      // in doctor, where its bounded multi-process probes do not stall ordinary status.
+      return resolveCodexRuntime({ discoverAlternatives: false });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const redacted = redactUserPath(redactSecretString(message)).slice(0, 160);

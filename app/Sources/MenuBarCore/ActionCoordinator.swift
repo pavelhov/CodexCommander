@@ -13,6 +13,12 @@ public enum RestartOutcome: Equatable, Sendable {
     case failed(String)
 }
 
+public enum ProxyControlOutcome: Equatable, Sendable {
+    case running
+    case stopped
+    case failed(String)
+}
+
 /// Executes the panel's confirm-gated restart and reports what actually happened.
 ///
 /// Split from the UI because the interesting behaviour is timing, not presentation: a
@@ -21,6 +27,7 @@ public actor ActionCoordinator {
     public static let pollInterval: TimeInterval = 0.5
 
     private let client: any ProxyActionClient
+    private let lifecycle: any LifecycleCommandRunning
     private let sleeper: @Sendable (TimeInterval) async -> Void
     /// Injected so tests can advance time without waiting for it. A no-op sleeper alone
     /// is not enough: the loop is bounded by a deadline, so the clock has to move too.
@@ -28,14 +35,45 @@ public actor ActionCoordinator {
 
     public init(
         client: any ProxyActionClient,
+        lifecycle: any LifecycleCommandRunning = LifecycleHelper(),
         sleeper: @escaping @Sendable (TimeInterval) async -> Void = { seconds in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
         },
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.client = client
+        self.lifecycle = lifecycle
         self.sleeper = sleeper
         self.now = now
+    }
+
+    public func ensure() async -> ProxyControlOutcome {
+        await runLifecycle(.ensure, expected: .running)
+    }
+
+    public func start() async -> ProxyControlOutcome {
+        await runLifecycle(.start, expected: .running)
+    }
+
+    public func stop() async -> ProxyControlOutcome {
+        await runLifecycle(.stop, expected: .stopped)
+    }
+
+    private func runLifecycle(
+        _ action: LifecycleAction,
+        expected: LifecycleState
+    ) async -> ProxyControlOutcome {
+        do {
+            let result = try await lifecycle.run(action)
+            guard result.ok, result.state == expected else {
+                return .failed(result.message)
+            }
+            return expected == .running ? .running : .stopped
+        } catch let error as LifecycleHelperError {
+            return .failed(error.userMessage)
+        } catch {
+            return .failed("OpenCodex lifecycle control failed.")
+        }
     }
 
     /// Requests the proxy's owned drain-and-restart path and waits for a replacement

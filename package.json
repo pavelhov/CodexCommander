@@ -24,7 +24,8 @@
     "assets/claude-code-models.gif",
     "assets/codex-app-picker.png",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "engines": {
     "node": ">=18"
@@ -61,6 +62,7 @@
     "@bufbuild/protobuf": "^2.12.0",
     "@modelcontextprotocol/sdk": "^1",
     "bun": "1.3.14",
+    "jsonc-parser": "3.3.1",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -91,11 +93,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lidge-jun/opencodex.git"
+    "url": "git+https://github.com/pavelhov/opencodex.git"
   },
-  "homepage": "https://lidge-jun.github.io/opencodex/",
+  "homepage": "https://github.com/pavelhov/opencodex#readme",
   "bugs": {
-    "url": "https://github.com/lidge-jun/opencodex/issues"
+    "url": "https://github.com/pavelhov/opencodex/issues"
   },
   "license": "MIT"
 }

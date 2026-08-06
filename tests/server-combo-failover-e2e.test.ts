@@ -28,6 +28,7 @@ import {
 } from "../src/codex/routing";
 import { startServer } from "../src/server";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 
 // Full-suite Windows load: startServer + combo rename/delete management flows exceed the
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
@@ -108,6 +109,7 @@ const XAI_CHAT_ENDPOINT = `${XAI_GROK_CLI_BASE_URL}/chat/completions`;
 let testDir = "";
 let previousHome: string | undefined;
 let previousCursorToken: string | undefined;
+let previousCodexCliPath: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 let originalFetch: typeof fetch;
 let originalNow: () => number;
@@ -118,8 +120,10 @@ beforeEach(() => {
   originalNow = Date.now;
   previousHome = process.env.OPENCODEX_HOME;
   previousCursorToken = process.env.OPENCODEX_CURSOR_TEST_TOKEN;
+  previousCodexCliPath = process.env.CODEX_CLI_PATH;
   delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
   isolatedCodexHome = installIsolatedCodexHome("ocx-combo-030-codex-");
+  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
   testDir = mkdtempSync(join(tmpdir(), "ocx-combo-030-"));
   process.env.OPENCODEX_HOME = testDir;
   clearComboSelectionState();
@@ -141,6 +145,8 @@ afterEach(async () => {
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousCursorToken === undefined) delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
   else process.env.OPENCODEX_CURSOR_TEST_TOKEN = previousCursorToken;
+  if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+  else process.env.CODEX_CLI_PATH = previousCodexCliPath;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
@@ -586,7 +592,9 @@ describe("server combo failover 030 activation matrix", () => {
       }),
     }, combo.targets, { alias: combo.alias });
     saveConfig(config);
-    const server = startServer(0);
+    const server = startServer(0, {
+      managementDeps: { refreshCodexCatalog: async () => {} },
+    });
     try {
       const publicRows = async () => {
         const response = await fetch(new URL("/v1/models", server.url));
@@ -639,7 +647,9 @@ describe("server combo failover 030 activation matrix", () => {
       }),
     }, [{ provider: "a", model: "vendor/model" }], { alias: "a/vendor-model" });
     saveConfig(config);
-    const server = startServer(0);
+    const server = startServer(0, {
+      managementDeps: { refreshCodexCatalog: async () => {} },
+    });
     try {
       const response = await fetch(new URL("/v1/models", server.url));
       expect(response.status).toBe(200);

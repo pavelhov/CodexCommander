@@ -31,6 +31,25 @@ export function listKeyLoginProviders(): Array<{ id: string } & KeyLoginProvider
   return Object.entries(KEY_LOGIN_PROVIDERS).map(([id, p]) => ({ id, ...p }));
 }
 
+/** OpenCode Go's public catalog is intentionally not credential evidence. */
+export function isPublicCatalogOnlyKeyValidation(
+  providerName: string,
+  baseUrl: string,
+): boolean {
+  if (providerName !== "opencode-go") return false;
+  try {
+    const url = new URL(baseUrl);
+    return url.protocol === "https:"
+      && url.hostname.toLowerCase() === "opencode.ai"
+      && url.port === ""
+      && url.pathname.replace(/\/+$/, "") === "/zen/go/v1"
+      && !url.search
+      && !url.hash;
+  } catch {
+    return false;
+  }
+}
+
 function anthropicKeyValidationHeaders(provider: Pick<KeyLoginProvider, "apiKeyTransport">, key: string): HeadersInit {
   return provider.apiKeyTransport === "bearer"
     ? {
@@ -52,6 +71,9 @@ export async function validateApiKey(
   key: string,
 ): Promise<boolean | "unknown"> {
   try {
+    if (isPublicCatalogOnlyKeyValidation(providerName, provider.baseUrl)) {
+      return "unknown";
+    }
     if (provider.adapter === "anthropic") {
       const base = provider.baseUrl.replace(/\/v1\/?$/, "");
       const res = await fetch(`${base}/v1/messages`, {

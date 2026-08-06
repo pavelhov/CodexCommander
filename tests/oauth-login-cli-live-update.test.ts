@@ -9,6 +9,8 @@ import { notifyRunningProxyAfterOAuthLogin } from "../src/oauth/login-cli";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+import { SERVER_BUDGET_MS } from "./helpers/test-budget";
 
 /**
  * Regression: CLI OAuth login used to POST the bare OAuth preset into a running proxy.
@@ -17,6 +19,7 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isol
  */
 let testDir = "";
 let previousHome: string | undefined;
+let previousCodexCliPath: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 function keyModeXaiConfig(port = 0): OcxConfig {
@@ -31,6 +34,8 @@ function keyModeXaiConfig(port = 0): OcxConfig {
         authMode: "key",
         apiKey: "live-update-sentinel-key",
         apiKeyPool: [{ id: "livekey01", key: "live-update-sentinel-key" }],
+        liveModels: false,
+        models: ["grok-4.5"],
       },
     },
   } as OcxConfig;
@@ -38,7 +43,9 @@ function keyModeXaiConfig(port = 0): OcxConfig {
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
+  previousCodexCliPath = process.env.CODEX_CLI_PATH;
   isolatedCodexHome = installIsolatedCodexHome("ocx-oauth-live-codex-");
+  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
   testDir = mkdtempSync(join(tmpdir(), "ocx-oauth-live-"));
   process.env.OPENCODEX_HOME = testDir;
   saveConfig(keyModeXaiConfig());
@@ -47,6 +54,8 @@ beforeEach(() => {
 afterEach(() => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
+  if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+  else process.env.CODEX_CLI_PATH = previousCodexCliPath;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
@@ -54,7 +63,7 @@ afterEach(() => {
 
 describe("CLI OAuth live-update credential preservation", () => {
   test("notify after OAuth login keeps key billing on live and disk configs", async () => {
-    const server = startServer(0);
+    const server = startServer(0, { managementDeps: { refreshCodexCatalog: async () => {} } });
     try {
       const port = server.port!;
       const boot = loadConfig();
@@ -93,5 +102,5 @@ describe("CLI OAuth live-update credential preservation", () => {
     } finally {
       await server.stop(true);
     }
-  }, 15_000);
+  }, SERVER_BUDGET_MS);
 });

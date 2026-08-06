@@ -33,7 +33,7 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 import { filterSupportedNativeSlugs } from "./parsing";
 import type { RawEntry } from "./parsing";
-import { readCurrentCatalogOrCache, unique } from "./bundled";
+import { readCurrentCatalogOrCache, unique, type BundledCatalogDeps } from "./bundled";
 
 export const NATIVE_OPENAI_MODELS = [
   "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark",
@@ -166,13 +166,13 @@ export function shouldUpgradeToUpstreamEntry(entry: RawEntry): boolean {
     && entry.display_name === entry.slug;
 }
 
-export function nativeOpenAiSlugs(): string[] {
-  const live = listCatalogNativeSlugs();
+export function nativeOpenAiSlugs(deps: BundledCatalogDeps = {}): string[] {
+  const live = listCatalogNativeSlugs(deps);
   return live.length > 0 ? unique([...live, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]) : NATIVE_OPENAI_MODELS;
 }
 
-export function listCatalogNativeSlugs(): string[] {
-  const cat = readCurrentCatalogOrCache();
+export function listCatalogNativeSlugs(deps: BundledCatalogDeps = {}): string[] {
+  const cat = readCurrentCatalogOrCache(deps);
   const live = filterSupportedNativeSlugs(cat?.models ?? []);
   // Ensure documented additions (e.g. gpt-5.3-codex-spark) appear even when the bundled catalog
   // predates the slug — mirrors nativeOpenAiSlugs() which already merges them for /v1/models.

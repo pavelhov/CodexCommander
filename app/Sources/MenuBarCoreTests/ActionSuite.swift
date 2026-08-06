@@ -44,6 +44,31 @@ private actor FakeActionClient: ProxyActionClient {
     }
 }
 
+private actor FakeLifecycleRunner: LifecycleCommandRunning {
+    private var results: [LifecycleCommandResult]
+    private(set) var actions: [LifecycleAction] = []
+
+    init(results: [LifecycleCommandResult]) {
+        self.results = results
+    }
+
+    func run(_ action: LifecycleAction) async throws -> LifecycleCommandResult {
+        actions.append(action)
+        if results.isEmpty {
+            return LifecycleCommandResult(
+                action: action,
+                ok: false,
+                state: .failed,
+                changed: false,
+                message: "No result"
+            )
+        }
+        return results.removeFirst()
+    }
+
+    func recordedActions() -> [LifecycleAction] { actions }
+}
+
 private final class TestClock: @unchecked Sendable {
     private let lock = NSLock()
     private var instant = Date(timeIntervalSince1970: 1_000)
@@ -125,6 +150,51 @@ enum ActionSuite {
                 t.expect(false, "an explicit refusal must fail")
             }
             t.equal(sync { await client.counts() }.liveness, 0)
+        }
+
+        t.test("lifecycle: ensure, start, and stop use the fixed helper actions") {
+            let lifecycle = FakeLifecycleRunner(results: [
+                LifecycleCommandResult(
+                    action: .ensure, ok: true, state: .running,
+                    changed: true, pid: 41, port: 10100, message: "running"
+                ),
+                LifecycleCommandResult(
+                    action: .start, ok: true, state: .running,
+                    changed: false, pid: 41, port: 10100, message: "running"
+                ),
+                LifecycleCommandResult(
+                    action: .stop, ok: true, state: .stopped,
+                    changed: true, message: "stopped"
+                ),
+            ])
+            let coordinator = ActionCoordinator(
+                client: FakeActionClient(liveness: []),
+                lifecycle: lifecycle
+            )
+            t.equal(sync { await coordinator.ensure() }, .running)
+            t.equal(sync { await coordinator.start() }, .running)
+            t.equal(sync { await coordinator.stop() }, .stopped)
+            t.equal(
+                sync { await lifecycle.recordedActions() },
+                [.ensure, .start, .stop]
+            )
+        }
+
+        t.test("lifecycle: a helper refusal is surfaced without changing its message") {
+            let lifecycle = FakeLifecycleRunner(results: [
+                LifecycleCommandResult(
+                    action: .stop, ok: false, state: .blocked,
+                    changed: false, message: "Service ownership blocked the stop."
+                ),
+            ])
+            let coordinator = ActionCoordinator(
+                client: FakeActionClient(liveness: []),
+                lifecycle: lifecycle
+            )
+            t.equal(
+                sync { await coordinator.stop() },
+                .failed("Service ownership blocked the stop.")
+            )
         }
 
     }

@@ -111,7 +111,7 @@ import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
  * that model plus the identity/visibility fields this boundary computes for every row
  * regardless of source. `disabled` is always present; the rest vary by row origin.
  */
-type ManagementModelRow = Partial<CatalogModel> & {
+export type ManagementModelRow = Partial<CatalogModel> & {
   provider: string;
   id: string;
   namespaced: string;
@@ -126,7 +126,7 @@ type ManagementModelRow = Partial<CatalogModel> & {
  * models the GUI's Models tab shows — including this function's `disabled` computation,
  * which the export core (src/clients/config-export.ts) deliberately does not perform.
  */
-async function listManagementModelRows(config: OcxConfig): Promise<ManagementModelRow[]> {
+export async function listManagementModelRows(config: OcxConfig): Promise<ManagementModelRow[]> {
   const models = await fetchAllModels(config);
   const disabled = new Set(config.disabledModels ?? []);
   // Native GPT passthrough rows lead (provider "openai", bare-slug namespaced ids): sourced
@@ -179,7 +179,7 @@ async function listManagementModelRows(config: OcxConfig): Promise<ManagementMod
 }
 
 /** `/api/models` row → the narrower input the client-config serializers accept. */
-function toExportModel(row: ManagementModelRow): ExportModel {
+export function toExportModel(row: ManagementModelRow): ExportModel {
   return {
     namespaced: row.namespaced,
     provider: row.provider,

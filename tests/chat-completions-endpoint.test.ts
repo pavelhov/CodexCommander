@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,11 @@ import { chatCompletionsToResponsesBody, ChatCompletionsRequestError } from "../
 import { chatCompletionsUsage } from "../src/chat/outbound";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
 import type { TranslatorBudget } from "../src/lib/translator-budget";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+
+// This file starts real local proxy/upstream servers; allow startup headroom on
+// loaded CI/developer hosts while retaining finite per-test failure detection.
+setDefaultTimeout(30_000);
 
 function budgetedChatOutbound(module: typeof import("../src/chat/outbound")) {
   const translatorBudget = createTestTranslatorBudget();
@@ -36,12 +41,15 @@ function budgetedChatOutbound(module: typeof import("../src/chat/outbound")) {
 
 let testDir = "";
 let previousHome: string | undefined;
+let previousCodexCliPath: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 const originalFetch = globalThis.fetch;
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
+  previousCodexCliPath = process.env.CODEX_CLI_PATH;
   isolatedCodexHome = installIsolatedCodexHome("ocx-chat-completions-");
+  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
   testDir = mkdtempSync(join(tmpdir(), "ocx-chat-completions-"));
   process.env.OPENCODEX_HOME = testDir;
   globalThis.fetch = originalFetch;
@@ -50,6 +58,8 @@ beforeEach(() => {
 afterEach(() => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
+  if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+  else process.env.CODEX_CLI_PATH = previousCodexCliPath;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   globalThis.fetch = originalFetch;

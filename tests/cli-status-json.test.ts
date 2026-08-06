@@ -1,20 +1,29 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveStatusPid, selectListenTarget } from "../src/cli/status";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+
+setDefaultTimeout(30_000);
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
 
 function runStatusJson(opencodexHome: string) {
-  return spawnSync(process.execPath, [cliPath, "status", "--json"], {
-    cwd: repoRoot,
-    env: { ...process.env, OPENCODEX_HOME: opencodexHome },
-    encoding: "utf8",
-  });
+  const runtimeDir = mkdtempSync(join(tmpdir(), "ocx-status-runtime-"));
+  try {
+    const codexCliPath = createCodexRuntimeFixture(runtimeDir);
+    return spawnSync(process.execPath, [cliPath, "status", "--json"], {
+      cwd: repoRoot,
+      env: { ...process.env, OPENCODEX_HOME: opencodexHome, CODEX_CLI_PATH: codexCliPath },
+      encoding: "utf8",
+    });
+  } finally {
+    rmSync(runtimeDir, { recursive: true, force: true });
+  }
 }
 
 describe("CLI status JSON", () => {

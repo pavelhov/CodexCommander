@@ -64,6 +64,56 @@ public struct QuotaWindow: Decodable, Equatable, Sendable {
     public let resetAt: Double?
 }
 
+/// A published provider cap paired with observations from this local OpenCodex usage
+/// log. This is reference data, not a provider-reported balance or remaining percent.
+public struct QuotaReferenceWindow: Decodable, Equatable, Sendable {
+    public let id: String?
+    public let label: String?
+    public let windowSeconds: Double?
+    public let publishedLimitUsd: Double?
+    public let observedSpendUsd: Double?
+    public let observedTokens: Int64?
+    public let observedRequests: Int?
+    public let pricedRequests: Int?
+    public let unpricedRequests: Int?
+    public let unmeasuredRequests: Int?
+    public let coverage: String?
+
+    public enum ObservationQuality: Equatable, Sendable {
+        case none
+        /// Every observed request has a local price estimate; it is still not billing data.
+        case estimate
+        /// Some local usage or pricing is absent, so the displayed estimate is incomplete.
+        case partial
+    }
+
+    public var observationQuality: ObservationQuality {
+        let requests = max(0, observedRequests ?? 0)
+        let tokens = max(0, observedTokens ?? 0)
+        let hasObservation = requests > 0 || tokens > 0 || observedSpendUsd != nil
+        guard hasObservation else { return .none }
+
+        let priced = max(0, pricedRequests ?? 0)
+        let unpriced = max(0, unpricedRequests ?? 0)
+        let unmeasured = max(0, unmeasuredRequests ?? 0)
+        let internallyComplete = coverage == "complete"
+            && requests > 0
+            && priced == requests
+            && unpriced == 0
+            && unmeasured == 0
+            && observedSpendUsd?.isFinite == true
+        return internallyComplete ? .estimate : .partial
+    }
+}
+
+/// A concrete upstream limit response observed by OpenCodex. Unlike reference-window
+/// estimates, this event is authoritative evidence that the named provider limit fired.
+public struct QuotaObservedLimitEvent: Decodable, Equatable, Sendable {
+    public let limitName: String?
+    public let observedAt: Double?
+    public let resetAt: Double?
+}
+
 public struct ProviderQuota: Decodable, Equatable, Sendable {
     public let weeklyPercent: Double?
     public let monthlyPercent: Double?
@@ -72,6 +122,8 @@ public struct ProviderQuota: Decodable, Equatable, Sendable {
     public let monthlyResetAt: Double?
     public let fiveHourResetAt: Double?
     public let customWindows: [QuotaWindow]?
+    public let referenceWindows: [QuotaReferenceWindow]?
+    public let observedLimitEvent: QuotaObservedLimitEvent?
     public let updatedAt: Double?
 }
 
@@ -180,6 +232,17 @@ public extension QuotaReport {
         }
 
         return windows
+    }
+
+    /// Published reference caps remain deliberately separate from normalized provider
+    /// windows. In particular, local spend divided by a cap must never become a fake
+    /// provider-reported percentage or remaining balance.
+    var referenceWindows: [QuotaReferenceWindow] {
+        quota?.referenceWindows ?? []
+    }
+
+    var observedLimitEvent: QuotaObservedLimitEvent? {
+        quota?.observedLimitEvent
     }
 
     /// The single window that best represents current pressure, for the compact row.

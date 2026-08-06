@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,9 @@ import { afterCatalogWriteHandleAppServers } from "../src/codex/app-server-proce
 import { refreshCodexModelCatalog } from "../src/codex/refresh";
 import { syncModelsToCodex } from "../src/codex/sync";
 import type { OcxConfig } from "../src/types";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+
+setDefaultTimeout(30_000);
 
 const emptyConfig = {
   port: 10100,
@@ -17,16 +20,19 @@ const emptyConfig = {
 describe("invalidateCodexModelsCache write gate (#476 / #518)", () => {
   let previousCodexHome: string | undefined;
   let previousOpenCodexHome: string | undefined;
+  let previousCodexCliPath: string | undefined;
   let codexHome = "";
   let opencodexHome = "";
 
   beforeEach(() => {
     previousCodexHome = process.env.CODEX_HOME;
     previousOpenCodexHome = process.env.OPENCODEX_HOME;
+    previousCodexCliPath = process.env.CODEX_CLI_PATH;
     codexHome = mkdtempSync(join(tmpdir(), "ocx-invalidate-codex-"));
     opencodexHome = mkdtempSync(join(tmpdir(), "ocx-invalidate-ocx-"));
     process.env.CODEX_HOME = codexHome;
     process.env.OPENCODEX_HOME = opencodexHome;
+    process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(opencodexHome);
   });
 
   afterEach(() => {
@@ -34,6 +40,8 @@ describe("invalidateCodexModelsCache write gate (#476 / #518)", () => {
     else process.env.CODEX_HOME = previousCodexHome;
     if (previousOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousOpenCodexHome;
+    if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+    else process.env.CODEX_CLI_PATH = previousCodexCliPath;
     rmSync(codexHome, { recursive: true, force: true });
     rmSync(opencodexHome, { recursive: true, force: true });
   });

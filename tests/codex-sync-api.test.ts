@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -6,10 +6,14 @@ import { syncModelsToCodex } from "../src/codex/sync";
 import { MANAGED_AGENTS_TABLE_MARKER, MANAGED_SUBAGENT_DEFAULT_MARKER } from "../src/codex/subagent-defaults";
 import type { OcxConfig } from "../src/types";
 import type { OrcaCodexHomeDiagnostic } from "../src/codex/home";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+
+setDefaultTimeout(30_000);
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-sync-api");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
 let prevCodexHome: string | undefined;
+let previousCodexCliPath: string | undefined;
 
 const config = {
   port: 10100,
@@ -33,15 +37,19 @@ function homeDiagnostic(overrides: Partial<OrcaCodexHomeDiagnostic> = {}): OrcaC
 describe("GUI/CLI Codex sync backend", () => {
   beforeEach(() => {
     prevCodexHome = process.env.CODEX_HOME;
+    previousCodexCliPath = process.env.CODEX_CLI_PATH;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_CODEX_HOME, { recursive: true });
     process.env.CODEX_HOME = TEST_CODEX_HOME;
+    process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(TEST_DIR);
     writeFileSync(join(TEST_CODEX_HOME, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
   });
 
   afterEach(() => {
     if (prevCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = prevCodexHome;
+    if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+    else process.env.CODEX_CLI_PATH = previousCodexCliPath;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
   test("returns the structured sync result used by POST /api/sync", async () => {

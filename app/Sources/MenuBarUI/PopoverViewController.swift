@@ -14,7 +14,9 @@ public final class PopoverViewController: NSViewController {
     private let dashboardButton = NSButton()
     private let logsButton = NSButton()
     private let refreshButton = NSButton()
+    private let lifecycleButton = NSButton()
     private let restartButton = NSButton()
+    private let quitButton = NSButton()
 
     // Scrolling body
     private let scrollView = NSScrollView()
@@ -36,13 +38,17 @@ public final class PopoverViewController: NSViewController {
     public var onDashboard: (() -> Void)?
     public var onLogs: (() -> Void)?
     public var onRefresh: (() -> Void)?
+    public var onStart: (() -> Void)?
+    public var onStop: (() -> Void)?
     public var onRestart: (() -> Void)?
+    public var onQuit: (() -> Void)?
     public var onManageProvider: ((String) -> Void)?
     public var onViewAllProviders: (() -> Void)?
 
     private var snapshot: ProxySnapshot?
     private var scrollHeight: NSLayoutConstraint?
     private var resultToken = 0
+    private var lifecycleControlsAllowed = true
 
     public override func loadView() {
         configureControls()
@@ -79,19 +85,24 @@ public final class PopoverViewController: NSViewController {
         scrollView.borderType = .noBorder
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
-        let footerDivider = NSView()
-        footerDivider.wantsLayer = true
-        footerDivider.layer?.backgroundColor = Theme.cardBorder.cgColor
-        footerDivider.translatesAutoresizingMaskIntoConstraints = false
-        footerDivider.widthAnchor.constraint(equalToConstant: 1).isActive = true
-        footerDivider.heightAnchor.constraint(equalToConstant: 22).isActive = true
-
-        let actions = NSStackView(views: [
-            dashboardButton, logsButton, refreshButton, NSView(), footerDivider, restartButton
+        let navigationActions = NSStackView(views: [
+            dashboardButton, logsButton, refreshButton, NSView()
         ])
-        actions.orientation = .horizontal
-        actions.spacing = Theme.rowGap
-        actions.alignment = .centerY
+        navigationActions.orientation = .horizontal
+        navigationActions.spacing = Theme.rowGap
+        navigationActions.alignment = .centerY
+
+        let lifecycleActions = NSStackView(views: [
+            lifecycleButton, restartButton, NSView(), quitButton
+        ])
+        lifecycleActions.orientation = .horizontal
+        lifecycleActions.spacing = Theme.rowGap
+        lifecycleActions.alignment = .centerY
+
+        let actions = NSStackView(views: [navigationActions, lifecycleActions])
+        actions.orientation = .vertical
+        actions.spacing = 5
+        actions.alignment = .leading
 
         let headerSeparator = makeSeparator()
         let column = NSStackView(views: [header, headerSeparator, scrollView, quotaSeparator, actions])
@@ -134,17 +145,23 @@ public final class PopoverViewController: NSViewController {
         styleFooterButton(dashboardButton, title: "Dashboard", symbol: "square.grid.2x2")
         styleFooterButton(logsButton, title: "Logs", symbol: "list.bullet.rectangle")
         styleFooterButton(refreshButton, title: "Refresh", symbol: "arrow.clockwise")
+        styleFooterButton(lifecycleButton, title: "Start", symbol: "play.fill")
         styleFooterButton(restartButton, title: "Restart…", symbol: "power")
+        styleFooterButton(quitButton, title: "Quit", symbol: "xmark.circle")
 
         dashboardButton.action = #selector(dashboardTapped)
         logsButton.action = #selector(logsTapped)
         refreshButton.action = #selector(refreshTapped)
+        lifecycleButton.action = #selector(lifecycleTapped)
         restartButton.action = #selector(restartTapped)
+        quitButton.action = #selector(quitTapped)
 
         dashboardButton.setAccessibilityLabel("Open dashboard")
         logsButton.setAccessibilityLabel("Open logs")
         refreshButton.setAccessibilityLabel("Refresh")
+        lifecycleButton.setAccessibilityLabel("Start OpenCodex proxy")
         restartButton.setAccessibilityLabel("Restart OpenCodex")
+        quitButton.setAccessibilityLabel("Quit OpenCodex menu bar app")
 
         commandField.font = Theme.numericSmall
         commandField.textColor = Theme.text
@@ -199,7 +216,16 @@ public final class PopoverViewController: NSViewController {
     }
 
     public func setRestartEnabled(_ enabled: Bool) {
-        restartButton.isEnabled = enabled
+        restartButton.isEnabled = lifecycleControlsAllowed && enabled
+        restartButton.alphaValue = restartButton.isEnabled ? 1 : 0.45
+    }
+
+    public func setLifecycleControlsEnabled(_ enabled: Bool) {
+        lifecycleControlsAllowed = enabled
+        lifecycleButton.isEnabled = enabled && snapshot.map { lifecycleActionable($0.state) } == true
+        restartButton.isEnabled = enabled && snapshot?.state.isRunning == true
+        lifecycleButton.alphaValue = lifecycleButton.isEnabled ? 1 : 0.45
+        restartButton.alphaValue = restartButton.isEnabled ? 1 : 0.45
     }
 
     public func refreshSize() { resize() }
@@ -234,18 +260,30 @@ public final class PopoverViewController: NSViewController {
     }
 
     private func applyActions(_ snapshot: ProxySnapshot) {
-        dashboardButton.isEnabled = true
-        logsButton.isEnabled = true
+        let definitelyStopped = snapshot.state == .unreachable
+        let stopIntent = lifecycleStops(snapshot.state)
+        dashboardButton.isEnabled = !definitelyStopped
+        logsButton.isEnabled = !definitelyStopped
         refreshButton.isEnabled = true
-        // Restart only while running; confirmation still gates the destructive call.
-        restartButton.isEnabled = snapshot.state.isRunning
-        restartButton.alphaValue = snapshot.state.isRunning ? 1 : 0.45
+        lifecycleButton.title = stopIntent ? "Stop…" : "Start"
+        lifecycleButton.image = NSImage(
+            systemSymbolName: stopIntent ? "stop.fill" : "play.fill",
+            accessibilityDescription: lifecycleButton.title
+        )
+        lifecycleButton.setAccessibilityLabel(
+            stopIntent ? "Stop OpenCodex proxy" : "Start OpenCodex proxy"
+        )
+        lifecycleButton.isEnabled = lifecycleControlsAllowed && lifecycleActionable(snapshot.state)
+        lifecycleButton.alphaValue = lifecycleButton.isEnabled ? 1 : 0.45
+        restartButton.isEnabled = lifecycleControlsAllowed && snapshot.state.isRunning
+        restartButton.alphaValue = restartButton.isEnabled ? 1 : 0.45
+        quitButton.isEnabled = true
     }
 
     private func resize() {
         view.layoutSubtreeIfNeeded()
         let bodyHeight = ceil(body.fittingSize.height)
-        let chrome = ceil(header.fittingSize.height) + Theme.gutter * 2 + Theme.rowGap * 3 + 30
+        let chrome = ceil(header.fittingSize.height) + Theme.gutter * 2 + Theme.rowGap * 3 + 56
         let natural = chrome + bodyHeight
         let preferred = max(Theme.preferredHeight, min(Theme.maxHeight, natural))
         let overflowing = natural > Theme.maxHeight
@@ -259,10 +297,29 @@ public final class PopoverViewController: NSViewController {
     @objc private func dashboardTapped() { onDashboard?() }
     @objc private func logsTapped() { onLogs?() }
     @objc private func refreshTapped() { onRefresh?() }
+    @objc private func lifecycleTapped() {
+        guard let state = snapshot?.state else { return }
+        if lifecycleStops(state) { onStop?() }
+        else if state == .unreachable { onStart?() }
+    }
     @objc private func restartTapped() { onRestart?() }
+    @objc private func quitTapped() { onQuit?() }
 
     public override func cancelOperation(_ sender: Any?) {
         view.window?.performClose(nil)
+    }
+
+    /// Unauthorized/degraded means a process may still be serving. Offer Stop so the
+    /// user can recover through the fixed lifecycle helper without spawning a duplicate.
+    private func lifecycleStops(_ state: ProxyState) -> Bool {
+        switch state {
+        case .running, .unauthorized, .degraded: return true
+        case .loading, .unreachable: return false
+        }
+    }
+
+    private func lifecycleActionable(_ state: ProxyState) -> Bool {
+        state != .loading
     }
 
     // MARK: - Test hooks
@@ -271,10 +328,24 @@ public final class PopoverViewController: NSViewController {
     package var activityView: AgentActivityView { activity }
     package var headerView: StatusHeaderView { header }
     package var footerTitles: [String] {
-        [dashboardButton.title, logsButton.title, refreshButton.title, restartButton.title]
+        [
+            dashboardButton.title,
+            logsButton.title,
+            refreshButton.title,
+            lifecycleButton.title,
+            restartButton.title,
+            quitButton.title,
+        ]
     }
     package func activateFooterForTesting(_ index: Int) {
-        let buttons = [dashboardButton, logsButton, refreshButton, restartButton]
+        let buttons = [
+            dashboardButton,
+            logsButton,
+            refreshButton,
+            lifecycleButton,
+            restartButton,
+            quitButton,
+        ]
         guard buttons.indices.contains(index) else { return }
         buttons[index].performClick(nil)
     }

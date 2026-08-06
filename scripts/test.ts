@@ -1,6 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+
+export const DEFAULT_TEST_SHARD_SIZE = 60;
+
+const BUN_TEST_FILE_PATTERN = /(?:\.test|_test|\.spec|_spec)\.(?:js|jsx|ts|tsx)$/;
 
 export interface IsolatedTestEnvironment {
   root: string;
@@ -35,6 +39,59 @@ export function createIsolatedTestEnvironment(
       rmSync(root, { recursive: true, force: true });
     },
   };
+}
+
+/** Discover the same test-file shapes Bun searches for, in stable path order. */
+export function listRepositoryTestFiles(testRoot = join(process.cwd(), "tests")): string[] {
+  const files: string[] = [];
+  const visit = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (entry.isFile() && BUN_TEST_FILE_PATTERN.test(entry.name)) files.push(path);
+    }
+  };
+  visit(testRoot);
+  return files.sort((a, b) => a.localeCompare(b));
+}
+
+export function resolveTestShardSize(raw = process.env.OCX_TEST_SHARD_SIZE): number {
+  if (raw === undefined || raw.trim() === "") return DEFAULT_TEST_SHARD_SIZE;
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error(`OCX_TEST_SHARD_SIZE must be a positive integer, received ${JSON.stringify(raw)}`);
+  }
+  return parsed;
+}
+
+export function partitionTestFiles(files: readonly string[], shardSize: number): string[][] {
+  if (!Number.isSafeInteger(shardSize) || shardSize < 1) {
+    throw new Error(`test shard size must be a positive integer, received ${shardSize}`);
+  }
+  const shards: string[][] = [];
+  for (let offset = 0; offset < files.length; offset += shardSize) {
+    shards.push(files.slice(offset, offset + shardSize));
+  }
+  return shards;
+}
+
+function runIsolatedTestProcess(testArgs: readonly string[]): number {
+  const isolated = createIsolatedTestEnvironment();
+  try {
+    const memoryArgs = process.env.OCX_TEST_SMOL === "1" ? ["--smol"] : [];
+    const child = Bun.spawnSync(
+      [process.execPath, "test", "--isolate", ...memoryArgs, ...testArgs],
+      {
+        env: isolated.env,
+        stdin: "inherit",
+        stdout: "inherit",
+        stderr: "inherit",
+      },
+    );
+    return child.exitCode ?? 1;
+  } finally {
+    isolated.cleanup();
+  }
 }
 
 /**
@@ -113,20 +170,30 @@ async function waitForExclusiveRun(selfPid: number): Promise<void> {
 }
 
 if (import.meta.main) {
-  const isolated = createIsolatedTestEnvironment();
   try {
     const requestedTests = process.argv.slice(2);
     await waitForExclusiveRun(process.pid);
     const startedAt = Date.now();
-    const child = Bun.spawnSync(
-      [process.execPath, "test", "--isolate", ...(requestedTests.length > 0 ? requestedTests : ["./tests/"])],
-      {
-        env: isolated.env,
-        stdin: "inherit",
-        stdout: "inherit",
-        stderr: "inherit",
-      },
-    );
+    let exitCode = 0;
+
+    if (requestedTests.length > 0 || process.env.OCX_TEST_NO_SHARDS === "1") {
+      exitCode = runIsolatedTestProcess(requestedTests.length > 0 ? requestedTests : ["./tests/"]);
+    } else {
+      const files = listRepositoryTestFiles();
+      const shards = partitionTestFiles(files, resolveTestShardSize());
+      if (shards.length === 0) throw new Error("no test files found under ./tests");
+
+      for (const [index, shard] of shards.entries()) {
+        console.warn(`[test] shard ${index + 1}/${shards.length} (${shard.length} files)`);
+        exitCode = runIsolatedTestProcess(shard);
+        if (exitCode !== 0) {
+          console.error(`[test] shard ${index + 1}/${shards.length} failed; stopping.`);
+          break;
+        }
+      }
+      if (exitCode === 0) console.warn(`[test] all ${shards.length} shards passed.`);
+    }
+
     const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
     if (requestedTests.length === 0 && elapsedSeconds > 600) {
       console.warn(
@@ -134,8 +201,9 @@ if (import.meta.main) {
         + "Check for another test runner, a busy CPU, or a test that started polling something real.",
       );
     }
-    process.exitCode = child.exitCode ?? 1;
-  } finally {
-    isolated.cleanup();
+    process.exitCode = exitCode;
+  } catch (error) {
+    console.error(`[test] ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
   }
 }

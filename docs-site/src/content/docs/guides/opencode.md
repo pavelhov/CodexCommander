@@ -47,12 +47,40 @@ and overrides only conflicting keys for the child process.
 If a global or project config also defines `provider.opencodex`, the launcher prints an
 informational note: the runtime layer from `ocx opencode` overrides it for that launch.
 
+## Persistent dashboard connection (optional)
+
+For plain OpenCode, editor integrations, or one-click Desktop launch, open **Integrations** in the
+OpenCodex dashboard and choose **Apply connection**. This is intentionally different from
+`ocx opencode`:
+
+- The dashboard selects OpenCode's active global config under `XDG_CONFIG_HOME` (normally
+  `~/.config/opencode/`): `opencode.jsonc` when it exists, otherwise `opencode.json`.
+- It makes a JSONC-aware, surgical edit of **only** `provider.opencodex`. Comments, formatting,
+  other providers, agents, keybinds, MCP entries, and unrelated keys remain owned by OpenCode and
+  are preserved.
+- The proxy admission token is written to OpenCodex's hardened integration state and the OpenCode
+  config receives only a protected `{file:/absolute/path}` reference. The token is not copied into
+  OpenCode's config or auth store.
+- **Always keep OpenCode connected** is off by default. After you opt in, OpenCodex refreshes its
+  managed provider block after proxy startup or a visible-catalog change; it still owns no other
+  OpenCode setting.
+
+**Restore** is reversible by design. When the journal confirms an exact restore is safe, OpenCodex
+restores the original bytes exactly (or removes a config file it created). Otherwise, Dashboard
+Restore defaults to a surgical restore of only `provider.opencodex`, preserving later user edits. A
+full external-config overwrite is available only to an API caller that explicitly confirms the
+current file hash.
+
+The **Open OpenCode** button is a one-click launcher for OpenCode Desktop. If only the CLI is
+installed, use `ocx opencode` from a terminal instead; it remains the transient, disk-nonmutating
+path described above.
+
 ## Putting the block into your own config
 
-`ocx opencode` injects the provider block for one launch only, which means plain `opencode` still
-knows nothing about the proxy. When you want routed models available from plain `opencode` — or
-from an editor extension that never goes through the launcher — `ocx export` prints the same
-provider block for you to merge into your own config:
+`ocx opencode` injects the provider block for one launch only. If you have not applied the optional
+dashboard connection above, plain `opencode` still knows nothing about the proxy. When you want to
+merge the block yourself instead, `ocx export` prints the same provider block for you to merge into
+your own config:
 
 ```bash
 ocx export --client opencode
@@ -123,8 +151,10 @@ own, and is unrelated to the upstream provider keys configured under
 
 ## Reverting
 
-Nothing to undo — no generated config file is written under `~/.opencodex`. Run plain
-`opencode` and it reads your own config exactly as before.
+For the transient `ocx opencode` launcher, there is nothing to undo: no OpenCode config file was
+changed. For a dashboard connection, choose **Restore** on **Integrations**; see the exact versus
+surgical behavior above. Plain `opencode` reads your own config as before once the managed provider
+is restored.
 
 ## Model limits
 

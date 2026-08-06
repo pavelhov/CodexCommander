@@ -1,8 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+
+setDefaultTimeout(30_000);
 
 const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
 const helpSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "help.ts"), "utf8");
@@ -52,10 +55,17 @@ describe("ocx restore back", () => {
         defaultProvider: "openai",
         checkForUpdates: false,
       }), "utf8");
+      const codexCliPath = createCodexRuntimeFixture(ocxHome);
 
       const result = spawnSync(process.execPath, ["run", "src/cli/index.ts", "sync"], {
         cwd: repoRoot,
-        env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome, CI: "1" },
+        env: {
+          ...process.env,
+          CODEX_HOME: codexHome,
+          OPENCODEX_HOME: ocxHome,
+          CODEX_CLI_PATH: codexCliPath,
+          CI: "1",
+        },
         encoding: "utf8",
       });
 

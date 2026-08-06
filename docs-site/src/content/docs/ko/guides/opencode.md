@@ -48,10 +48,29 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 메시지를 출력합니다. `ocx opencode`의 런타임 레이어가 이번 실행에서는 그것을
 덮어씁니다.
 
+## 대시보드 영구 연결(선택 사항)
+
+일반 OpenCode, 편집기 통합 또는 Desktop 원클릭 실행에는 OpenCodex 대시보드의
+**Integrations**에서 **Apply connection**을 선택합니다. 이는 `ocx opencode`와 별도의 경로입니다.
+
+- `XDG_CONFIG_HOME` 아래의 활성 전역 OpenCode 파일(보통 `~/.config/opencode/`) 중 기존
+  `opencode.jsonc`를 우선하고, 없으면 `opencode.json`을 선택합니다.
+- JSONC 편집은 `provider.opencodex`만 바꾸므로 주석, 서식, 다른 provider, agent, MCP와 키는
+  보존됩니다.
+- 프록시 인증 토큰은 OpenCodex의 보호된 상태에 남고 OpenCode 구성에는
+  `{file:/absolute/path}` 참조만 들어갑니다. OpenCode 인증 저장소는 읽지 않습니다.
+- **Always keep OpenCode connected**는 기본적으로 꺼져 있으며, 명시적으로 켠 후에만 프록시
+  시작 또는 표시된 카탈로그 변경 때 이 관리 블록을 갱신합니다.
+
+**Restore**는 journal이 정확한 복원을 안전하다고 판단할 때 원본 바이트를 정확히 복원합니다. 그 외에는
+Dashboard가 사용자의 다른 수정은 보존하고 관리되는 `provider.opencodex`만 되돌립니다.
+**Open OpenCode**는 Desktop을 원클릭으로 열며, CLI만 설치한 경우에는 디스크를 수정하지 않는
+`ocx opencode`를 사용하세요.
+
 ## 블록을 사용자 구성에 넣기
 
-`ocx opencode`는 provider 블록을 한 번의 실행에만 주입하므로, 평범한 `opencode`는
-여전히 프록시를 모릅니다. 일반 `opencode`에서, 혹은 런처를 거치지 않는 편집기
+`ocx opencode`는 provider 블록을 한 번의 실행에만 주입합니다. 위의 대시보드 영구 연결을 적용하지
+않았다면 평범한 `opencode`는 여전히 프록시를 모릅니다. 일반 `opencode`에서, 혹은 런처를 거치지 않는 편집기
 확장에서 라우팅된 모델을 쓰고 싶다면 `ocx export`가 같은 provider 블록을 출력해
 주므로 사용자 구성에 병합하면 됩니다:
 
@@ -127,8 +146,9 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 ## 되돌리기
 
-되돌릴 것은 없습니다. `~/.opencodex` 아래에 생성된 구성 파일은 쓰이지 않습니다.
-평소처럼 `opencode`를 실행하면 기존 구성을 그대로 읽습니다.
+일회성 `ocx opencode` 실행은 되돌릴 것이 없습니다. OpenCode 구성 파일을 바꾸지 않기 때문입니다.
+대시보드 연결은 **Integrations**의 **Restore**로 되돌립니다. journal이 허용하면 원본 바이트를 정확히
+복원하고, 그렇지 않으면 관리되는 provider만 수술식으로 복원합니다.
 
 ## 모델 제한
 

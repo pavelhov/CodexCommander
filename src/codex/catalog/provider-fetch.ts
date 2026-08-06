@@ -671,7 +671,10 @@ export function filterCatalogVisibleModels(
 
 export async function gatherRoutedModels(
   config: OcxConfig,
-  options?: { comboOmissions?: ComboCatalogOmission[] },
+  options?: {
+    comboOmissions?: ComboCatalogOmission[];
+    nativeOpenAiSlugs?: () => string[];
+  },
 ): Promise<CatalogModel[]> {
   const key = gatherFlightKey(config);
   let promise = gatherInflight.get(key);
@@ -680,7 +683,10 @@ export async function gatherRoutedModels(
     if (!lease) throw new CatalogGatherBusyError();
     // Claim the slot synchronously before any await so same-key callers join this flight.
     // Distinct keys keep their own entries — a second config must not evict the first.
-    const flight = gatherRoutedModelsUncached(config).finally(() => {
+    const flight = gatherRoutedModelsUncached(
+      config,
+      options?.nativeOpenAiSlugs ?? nativeOpenAiSlugs,
+    ).finally(() => {
       if (gatherInflight.get(key) === flight) gatherInflight.delete(key);
       lease.release();
     });
@@ -697,6 +703,7 @@ export async function gatherRoutedModels(
 
 async function gatherRoutedModelsUncached(
   config: OcxConfig,
+  listNativeOpenAiSlugs: () => string[],
 ): Promise<GatherFlightResult> {
   // Flight-local list: joiners copy from the resolved promise, not a process-global last write.
   const localOmissions: ComboCatalogOmission[] = [];
@@ -749,7 +756,7 @@ async function gatherRoutedModelsUncached(
     // configs that will never need it.
   } else {
     const disabled = disabledNativeSlugs(config);
-    for (const slug of nativeOpenAiSlugs()) {
+    for (const slug of listNativeOpenAiSlugs()) {
       if (disabled.has(slug)) continue;
       const contextWindow = nativeOpenAiContextWindow(slug);
       if (contextWindow === undefined) continue;

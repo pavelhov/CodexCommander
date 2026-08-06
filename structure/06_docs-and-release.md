@@ -68,6 +68,11 @@ The root READMEs are the concise product entrypoint. They should explain what op
 install/start it, where Codex state is touched, and where the full docs live. Deep implementation
 invariants belong in `structure/`, not the README.
 
+This fork's public source-clone URL is `https://github.com/pavelhov/opencodex.git`; upstream
+attribution and Git history remain part of the fork. The English README is canonical. Localized
+READMEs and docs-site mirrors must not retain an upstream clone URL or contradict current source
+companion, OpenCode, or lifecycle behavior.
+
 ## Historical docs
 
 `docs/` contains investigations and diagnostic notes. Do not treat it as the current public user
@@ -142,9 +147,18 @@ The runtime package release remains npm-focused, while the same manual workflow 
 the optional macOS companion. `package.json` exposes `opencodex` and `ocx`, `prepublishOnly` runs
 typecheck and GUI build, and `scripts/release.ts` runs local typecheck, `bun test --isolate tests`, and
 `bun run privacy:scan` before the version bump, commit/push, Cross-platform CI wait, and GitHub
-Release workflow dispatch. The macOS archive is ad-hoc signed unless a caller supplies a real signing
-identity; public notarization remains a separate credentialed release gate. Docs publishing is
-separate from package and app release publishing.
+Release workflow dispatch. The current macOS artifact is a ZIP and is ad-hoc signed unless the release
+owner supplies a real signing identity. A signed/notarized DMG is a later, separately credentialed
+commercial-distribution step. Docs publishing is separate from package and app release publishing.
+
+## Redistribution and rebranding
+
+MIT permits downstream forks and sale while requiring the copyright and permission notices in copies
+or substantial portions. It does not supply rights to third-party product names, logos, or trademarks.
+A downstream rebrander must audit names/logos/trademarks, preserve MIT and applicable third-party
+notices, avoid credential-pooling or credential-resale claims, and operate its own bundle identifier,
+signing/notarization, update channel, and package metadata. This is release-operational guidance, not
+legal advice.
 
 ## Release metadata invariants
 

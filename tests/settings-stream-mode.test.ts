@@ -28,9 +28,33 @@ import {
   setUsageSummaryCacheEntry,
   usageSummaryRetainedStoreSnapshot,
 } from "../src/server/management/usage-summary-cache";
+import { deriveStartupHealth } from "../src/codex/autostart-health";
 
 let TEST_DIR = "";
 const previousHome = process.env.OPENCODEX_HOME;
+
+const fixtureStartupHealth = async () => deriveStartupHealth({
+  routingKind: "native",
+  autostartEnabled: false,
+  serviceInstalled: false,
+  serviceViable: false,
+  serviceEnabled: false,
+  serviceRunning: false,
+  serviceStale: false,
+  serviceConflict: false,
+  serviceSupported: true,
+  shimInstalled: false,
+  shimHealthy: false,
+  platform: process.platform,
+});
+
+const fixtureSettingsDeps = {
+  resolveCodexRuntime: () => ({
+    runtime: { command: "codex-fixture", version: "0.999.0", source: "environment" as const },
+    failures: [],
+  }),
+  getCachedStartupHealth: fixtureStartupHealth,
+};
 
 function baseConfig(): OcxConfig {
   return {
@@ -56,9 +80,12 @@ function putSettings(config: OcxConfig, body: unknown): Promise<Response | null>
   return handleManagementAPI(req, new URL(req.url), config);
 }
 
-function getSettings(config: OcxConfig): Promise<Response | null> {
+function getSettings(
+  config: OcxConfig,
+  deps: NonNullable<Parameters<typeof handleManagementAPI>[3]> = fixtureSettingsDeps,
+): Promise<Response | null> {
   const req = new Request("http://127.0.0.1:10100/api/settings");
-  return handleManagementAPI(req, new URL(req.url), config);
+  return handleManagementAPI(req, new URL(req.url), config, deps);
 }
 
 beforeEach(() => {
@@ -134,7 +161,9 @@ describe("GET /api/settings", () => {
     try {
       process.env.CODEX_CLI_PATH = fakeCodex;
       process.env.PATH = "";
-      const body = await (await getSettings(baseConfig()))!.json() as {
+      const body = await (await getSettings(baseConfig(), {
+        getCachedStartupHealth: fixtureStartupHealth,
+      }))!.json() as {
         codexRuntime?: {
           path?: string;
           version?: string | null;

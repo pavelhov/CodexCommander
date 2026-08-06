@@ -33,8 +33,8 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 import { activeCodexModelsCachePath, applyJawcodeCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, catalogModelSlug, ensureCatalogBackup, ensureStrictCatalogFields, findNativeTemplate, isRoutedModelCompatibilityExcluded, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawEntry } from "./parsing";
-import { applyNativeVisibility, disabledNativeSlugs, isUnsupportedOpenAiNativeSlug, nativeOpenAiSlugs, shouldUpgradeToUpstreamEntry, upstreamNativeEntry } from "./metadata";
-import { loadCatalogForSync, resetBundledCatalogCacheForTests } from "./bundled";
+import { applyNativeVisibility, disabledNativeSlugs, isUnsupportedOpenAiNativeSlug, nativeOpenAiSlugs, NATIVE_OPENAI_MODELS, shouldUpgradeToUpstreamEntry, upstreamNativeEntry } from "./metadata";
+import { loadCatalogForSync, resetBundledCatalogCacheForTests, type BundledCatalogDeps } from "./bundled";
 import { isMultiAgentV2Enabled } from "../features";
 import { applyCatalogModelMetadata, applyReasoningLevels, catalogEntryEfforts, clampCatalogModelsToCodexSupport, ensureGpt56ReasoningLevels, ensureUltraReasoningLevel, isGpt56NativeSlug } from "./effort";
 import { clearGatherRoutedModelsInflight, filterCatalogVisibleModels, gatherRoutedModels, lastDropWarnSignature } from "./provider-fetch";
@@ -367,6 +367,7 @@ export function mergeCatalogEntriesForSync(
   exactComboSlugs: ReadonlySet<string> = new Set(),
   hasPhysicalComboProvider = false,
   includeNativeOpenAi = true,
+  availableNativeSlugs: readonly string[] = NATIVE_OPENAI_MODELS,
 ): RawEntry[] {
   const rank = new Map(featured.map((slug, i) => [slug, i] as const));
   const native = includeNativeOpenAi
@@ -414,7 +415,7 @@ export function mergeCatalogEntriesForSync(
   // Skip when no enabled canonical openai provider exists (#636) — bare gpt-* would 404.
   const nativeSlugs = new Set(native.flatMap(m => typeof m.slug === "string" ? [m.slug] : []));
   if (includeNativeOpenAi) {
-  for (const slug of nativeOpenAiSlugs()) {
+  for (const slug of availableNativeSlugs) {
     if (nativeSlugs.has(slug)) continue;
     nativeSlugs.add(slug);
     const priority = rank.has(slug)
@@ -507,14 +508,14 @@ export function mergeCatalogEntriesForSync(
   return applyMultiAgentMode(applyNativeVisibility(mergedEntries, disabledNative), multiAgentMode, isMultiAgentV2Enabled());
 }
 
-export async function syncCatalogModels(config: OcxConfig): Promise<{
+export async function syncCatalogModels(config: OcxConfig, deps: BundledCatalogDeps = {}): Promise<{
   added: number;
   path: string;
   catalogWritten: boolean;
   comboOmissions: ComboCatalogOmission[];
 }> {
   const catalogPath = readCodexCatalogPath();
-  const catalog = loadCatalogForSync(catalogPath);
+  const catalog = loadCatalogForSync(catalogPath, deps);
   if (!catalog) return { added: 0, path: catalogPath, catalogWritten: false, comboOmissions: [] };
 
   // The bundled catalog is a reliable native template on the default path, but it is not the
@@ -526,7 +527,10 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{
   const template = findNativeTemplate(catalog);
 
   const comboOmissions: ComboCatalogOmission[] = [];
-  const goModels = await gatherRoutedModels(config, { comboOmissions });
+  const goModels = await gatherRoutedModels(config, {
+    comboOmissions,
+    nativeOpenAiSlugs: () => nativeOpenAiSlugs(deps),
+  });
   try {
     // Once-only: preserve the PRISTINE pre-opencodex catalog as the native-priority baseline
     // (later syncs would otherwise overwrite it with featured-modified priorities).
@@ -565,8 +569,8 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{
   // bare gpt-* rows that hard-404 via NoEnabledOpenAiProviderError. Keep natives when no
   // providers are configured yet (fresh install / catalog bootstrap tests).
   const includeNativeOpenAi = enabledProviders.length === 0 || hasCanonicalOpenai;
-  catalog.models = mergeCatalogEntriesForSync(catalogModelsForMerge, goEntries, baseline, featured, wsEnabled, goIds, template, disabledNativeSlugs(config), gatheredProviderNames, multiAgentMode, exactComboSlugs, hasPhysicalComboProvider, includeNativeOpenAi);
-  clampCatalogModelsToCodexSupport(catalog.models);
+  catalog.models = mergeCatalogEntriesForSync(catalogModelsForMerge, goEntries, baseline, featured, wsEnabled, goIds, template, disabledNativeSlugs(config), gatheredProviderNames, multiAgentMode, exactComboSlugs, hasPhysicalComboProvider, includeNativeOpenAi, nativeOpenAiSlugs(deps));
+  clampCatalogModelsToCodexSupport(catalog.models, deps);
 
   atomicWriteFile(catalogPath, JSON.stringify(catalog, null, 2) + "\n");
   return { added: goEntries.length, path: catalogPath, catalogWritten: true, comboOmissions };

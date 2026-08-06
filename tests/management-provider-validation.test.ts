@@ -26,7 +26,7 @@ import {
   resolveGuiFilePath,
   rootFallbackPayload,
   safeConfigDTO,
-  startServer,
+  startServer as startServerImpl,
 } from "../src/server";
 import { handleManagementAPI } from "../src/server/management-api";
 import { clearModelCache, markProviderDiscoveryFailed } from "../src/codex/model-cache";
@@ -34,6 +34,7 @@ import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import * as destinationPolicy from "../src/lib/destination-policy";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 
 // Full-suite Windows load: startServer + multi-step provider PATCH/GET flows exceed the
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
@@ -41,6 +42,7 @@ setDefaultTimeout(60_000);
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
+const previousCodexCliPath = process.env.CODEX_CLI_PATH;
 const originalGlobalFetch = globalThis.fetch;
 // A per-run directory, not a fixed path. The 665b65643 split copied server-auth.test.ts's
 // ".tmp-server-auth-test" literal verbatim, so both files deleted and recreated the same
@@ -48,6 +50,24 @@ const originalGlobalFetch = globalThis.fetch;
 // the full failure mode; mkdtempSync also covers two concurrent runs of this file alone.
 const TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-management-provider-validation-"));
 let isolatedCodexHome: IsolatedCodexHome | null = null;
+
+/**
+ * These tests own management state transitions. Catalog-refresh invocation has dedicated
+ * dependency-spy coverage below, so the server cases default to a no-op refresh instead of
+ * probing every fixture provider and rewriting a physical Codex catalog after each mutation.
+ */
+function startServer(
+  port?: Parameters<typeof startServerImpl>[0],
+  options: NonNullable<Parameters<typeof startServerImpl>[1]> = {},
+) {
+  return startServerImpl(port, {
+    ...options,
+    managementDeps: {
+      refreshCodexCatalog: async () => {},
+      ...options.managementDeps,
+    },
+  });
+}
 
 function config(hostname?: string): OcxConfig {
   return {
@@ -106,6 +126,7 @@ function stubModelDiscoveryFor(...origins: string[]): void {
 
 beforeEach(() => {
   isolatedCodexHome = installIsolatedCodexHome("ocx-server-auth-codex-");
+  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
 });
 
 afterEach(() => {
@@ -114,6 +135,8 @@ afterEach(() => {
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+  else process.env.CODEX_CLI_PATH = previousCodexCliPath;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   clearCodexUpstreamHealth();
@@ -167,7 +190,7 @@ describe("provider management validation", () => {
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
 
-    const server = startServer(0);
+    const server = startServer(0, { managementDeps: { refreshCodexCatalog: async () => {} } });
     try {
       const response = await fetch(new URL("/api/providers", server.url), {
         method: "POST",
@@ -201,7 +224,7 @@ describe("provider management validation", () => {
       providers: { openai: canonicalDirect },
     });
 
-    const server = startServer(0);
+    const server = startServer(0, { managementDeps: { refreshCodexCatalog: async () => {} } });
     try {
       for (const field of [
         "virtualModels",
@@ -456,7 +479,7 @@ describe("provider management validation", () => {
         },
       },
     });
-    const server = startServer(0);
+    const server = startServer(0, { managementDeps: { refreshCodexCatalog: async () => {} } });
     try {
       const put = (path: string, body: unknown) => fetch(new URL(path, server.url), {
         method: "PUT",

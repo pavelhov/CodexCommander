@@ -156,7 +156,7 @@ import { runClaudeAuthModeMigration } from "../claude/auth-mode-migration";
 import { handleImages } from "./images";
 import { handleLive, logLiveSidebandFrame, parseLiveSidebandTarget, resolveLiveSidebandUpgrade } from "./live";
 import { handleSearch } from "./search";
-import { fetchAllModels, handleManagementAPI, VERSION } from "./management-api";
+import { fetchAllModels, handleManagementAPI, VERSION, type ManagementApiDeps } from "./management-api";
 import { initializeManagementAuthState, issueGuiSession, requireManagementAuth } from "./management-auth";
 
 const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
@@ -271,7 +271,7 @@ function attachLiveSidebandUpstream(ws: ServerWebSocket<WsData>): void {
 // trackSseForRequestLog(
 // export function relaySseWithHeartbeat
 
-export function startServer(port?: number) {
+export function startServer(port?: number, options: { managementDeps?: ManagementApiDeps } = {}) {
   const config = runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig()));
   setLiveStateStoreConfig(config);
   applyProxyEnv(config);
@@ -452,7 +452,7 @@ export function startServer(port?: number) {
       if (url.pathname.startsWith("/api/")) {
         const apiAuthError = requireManagementAuth(req, managementAuth, config);
         if (apiAuthError) return withManagementCors(apiAuthError, req, config);
-        const mgmtResponse = await handleManagementAPI(req, url, config);
+        const mgmtResponse = await handleManagementAPI(req, url, config, options.managementDeps);
         if (mgmtResponse) return withManagementCors(mgmtResponse, req, config);
         return withManagementCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);
       }
@@ -1132,6 +1132,15 @@ export function startServer(port?: number) {
       .then(({ primeCodexPoolQuotas }) => primeCodexPoolQuotas(config, "startup"))
       .catch(() => {});
   }
+
+  // A durable OpenCode client integration is opt-in. When enabled, refresh its
+  // owned provider block after the listener chooses the real port; failures are
+  // isolated from proxy startup and surfaced by the Integrations page instead.
+  import("./management/integration-routes")
+    .then(({ reconcileOpencodeIntegrationIfEnabled }) => (
+      reconcileOpencodeIntegrationIfEnabled(config, actualPort)
+    ))
+    .catch(() => {});
 
   // Opt-in storage policy (default OFF). Never blocks listen; cancellable on shutdown.
   scheduleStorageCleanupStartupRun();

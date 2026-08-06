@@ -491,3 +491,151 @@ final class QuotaWindowRowView: NSView {
         return "Resets in \(Format.resetsIn(date))"
     }
 }
+
+/// Text contract for published caps and local observations. Kept separate from
+/// `NormalizedQuota`: these values must never acquire a percentage bar unless the
+/// upstream provider actually supplied one.
+package enum ReferenceQuotaPresentation {
+    package static func horizon(_ window: QuotaReferenceWindow) -> String {
+        switch window.id {
+        case "five_hour": return "5h"
+        case "weekly": return "7d"
+        case "monthly": return "30d"
+        default:
+            let label = window.label?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return label?.isEmpty == false ? label! : "window"
+        }
+    }
+
+    package static func capText(_ window: QuotaReferenceWindow) -> String {
+        "\(horizon(window)) · Published cap \(Format.usdCap(window.publishedLimitUsd))"
+    }
+
+    package static func compactCapText(_ window: QuotaReferenceWindow) -> String {
+        "\(Format.usdCap(window.publishedLimitUsd))/\(horizon(window))"
+    }
+
+    package static func observationText(_ window: QuotaReferenceWindow) -> String {
+        let tokens = "\(Format.count(window.observedTokens)) tokens"
+        let requests = max(0, window.observedRequests ?? 0)
+        let requestText = "\(requests) request\(requests == 1 ? "" : "s")"
+        switch window.observationQuality {
+        case .none:
+            return "No local usage observed"
+        case .estimate:
+            return "Estimate \(Format.usdEstimate(window.observedSpendUsd)) · \(tokens) · \(requestText)"
+        case .partial:
+            let spend = Format.usdEstimate(window.observedSpendUsd)
+            let estimate = spend == Format.unknown ? "spend unavailable" : "estimate \(spend)"
+            return "Partial \(estimate) · \(tokens) · \(requestText)"
+        }
+    }
+
+    package static func limitTitle(_ event: QuotaObservedLimitEvent) -> String {
+        let raw = event.limitName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name: String
+        switch raw?.lowercased() {
+        case "5 hour": name = "5-hour"
+        case "weekly": name = "weekly"
+        case "monthly": name = "monthly"
+        default: name = raw?.isEmpty == false ? raw! : "Provider"
+        }
+        return "Observed \(name) limit"
+    }
+
+    package static func limitDetail(
+        _ event: QuotaObservedLimitEvent,
+        now: Date = Date()
+    ) -> String {
+        let observed = QuotaReport.date(from: event.observedAt)
+            .map { "observed \(Format.age($0, now: now))" }
+            ?? "observation time unavailable"
+        let reset = QuotaReport.date(from: event.resetAt)
+            .map { "resets in \(Format.resetsIn($0, now: now))" }
+            ?? "reset not supplied"
+        return "Upstream event · \(observed) · \(reset)"
+    }
+}
+
+/// A published cap with local estimate/coverage text. No progress bar is rendered:
+/// dividing observed spend by this cap would manufacture provider quota state.
+final class ReferenceQuotaWindowRowView: NSView {
+    init(window: QuotaReferenceWindow) {
+        super.init(frame: .zero)
+
+        let cap = makeLabel(
+            ReferenceQuotaPresentation.capText(window),
+            font: Theme.captionMedium,
+            color: Theme.text
+        )
+        let observation = makeLabel(
+            ReferenceQuotaPresentation.observationText(window),
+            font: Theme.micro,
+            color: Theme.muted
+        )
+        observation.lineBreakMode = .byTruncatingTail
+        let column = NSStackView(views: [cap, observation])
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = 2
+        column.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(column)
+        NSLayoutConstraint.activate([
+            column.topAnchor.constraint(equalTo: topAnchor),
+            column.leadingAnchor.constraint(equalTo: leadingAnchor),
+            column.trailingAnchor.constraint(equalTo: trailingAnchor),
+            column.bottomAnchor.constraint(equalTo: bottomAnchor),
+            widthAnchor.constraint(greaterThanOrEqualToConstant: 300),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 30),
+        ])
+
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel(
+            "\(ReferenceQuotaPresentation.capText(window)). \(ReferenceQuotaPresentation.observationText(window))."
+        )
+    }
+
+    required init?(coder: NSCoder) { nil }
+}
+
+/// A concrete upstream limit event is visually distinct from local estimates.
+final class ObservedLimitEventRowView: NSView {
+    init(event: QuotaObservedLimitEvent) {
+        super.init(frame: .zero)
+
+        let title = makeLabel(
+            ReferenceQuotaPresentation.limitTitle(event),
+            font: Theme.captionMedium,
+            color: Theme.amber
+        )
+        let detail = makeLabel(
+            ReferenceQuotaPresentation.limitDetail(event),
+            font: Theme.micro,
+            color: Theme.muted
+        )
+        detail.lineBreakMode = .byTruncatingTail
+        let column = NSStackView(views: [title, detail])
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = 2
+        column.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(column)
+        NSLayoutConstraint.activate([
+            column.topAnchor.constraint(equalTo: topAnchor),
+            column.leadingAnchor.constraint(equalTo: leadingAnchor),
+            column.trailingAnchor.constraint(equalTo: trailingAnchor),
+            column.bottomAnchor.constraint(equalTo: bottomAnchor),
+            widthAnchor.constraint(greaterThanOrEqualToConstant: 300),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 30),
+        ])
+
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel(
+            "\(ReferenceQuotaPresentation.limitTitle(event)). \(ReferenceQuotaPresentation.limitDetail(event))."
+        )
+    }
+
+    required init?(coder: NSCoder) { nil }
+}

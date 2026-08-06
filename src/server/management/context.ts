@@ -1,7 +1,11 @@
 import type { OcxConfig } from "../../types";
+import type { ResolveCodexRuntimeResult } from "../../codex/runtime";
+import type { StartupHealth } from "../../codex/autostart-health";
 import type { StartupInstallAction } from "../startup-action-control";
 
 export interface ManagementApiDeps {
+  resolveCodexRuntime?: () => ResolveCodexRuntimeResult;
+  getCachedStartupHealth?: (config: Pick<OcxConfig, "codexAutoStart">) => Promise<StartupHealth>;
   toggleCodexMultiAgentV2?: (enabled: boolean) => void;
   refreshCodexCatalog?: () => Promise<void>;
   /**

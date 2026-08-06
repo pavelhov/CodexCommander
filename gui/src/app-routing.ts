@@ -15,6 +15,7 @@ export type Page =
   | "storage"
   | "codex-auth"
   | "api"
+  | "integrations"
   | "claude"
   | "grok";
 
@@ -30,6 +31,7 @@ export const VALID_PAGES = new Set<Page>([
   "storage",
   "codex-auth",
   "api",
+  "integrations",
   "claude",
   "grok",
 ]);

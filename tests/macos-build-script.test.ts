@@ -174,6 +174,8 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
       expect(stderr).not.toContain("Refusing to build into");
       const resources = join(inside, "OpenCodex.app", "Contents", "Resources");
       expect(existsSync(join(resources, "OpenCodex.png"))).toBe(true);
+      expect(existsSync(join(resources, "LICENSE.txt"))).toBe(true);
+      expect(existsSync(join(resources, "THIRD_PARTY_NOTICES.md"))).toBe(true);
       expect(existsSync(join(resources, "provider-icons", "openai.svg"))).toBe(true);
       expect(existsSync(join(resources, "provider-icons", "kimi-color.svg"))).toBe(true);
       expect(existsSync(join(resources, "provider-icons", "grok-color.svg"))).toBe(true);

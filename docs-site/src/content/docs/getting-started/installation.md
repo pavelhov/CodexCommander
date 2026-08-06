@@ -60,17 +60,23 @@ ocx update --tag preview
 To hack on opencodex itself:
 
 ```bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone https://github.com/pavelhov/opencodex.git
 cd opencodex
 bun install
-bun run dev:proxy   # starts the proxy API in dev mode (src/cli/index.ts start)
-bun run dev:gui     # starts the dashboard dev server (another terminal)
+bun run build:gui   # build the dashboard that the proxy serves at /
+bun run start       # starts the proxy from src/cli/index.ts
 ```
 
-`bun run dev` remains an alias for `bun run dev:proxy`. The proxy API exposes `/healthz`,
-`/v1/responses`, and `/api/*`; `GET /` serves the packaged dashboard only after `bun run build:gui`
-has produced `gui/dist`. While hacking on the dashboard, run the frontend separately with
-`bun run dev:gui`.
+The checkout URL above is this fork's source of truth for the approved companion and OpenCode
+integration. Upstream attribution and Git history remain intact. `bun run dev` remains an alias for
+`bun run dev:proxy`; the proxy API exposes `/healthz`, `/v1/responses`, and `/api/*`. While hacking
+on the dashboard, run `bun run dev:proxy` and `bun run dev:gui` in separate terminals instead of the
+packaged-dashboard commands above.
+
+On macOS, build the companion from this same checkout with `bun run test:macos && bun run
+build:macos`. Its source-build location is `dist/macos/OpenCodex.app`; do not copy that development
+build into Application Support. See [macOS Menu Bar Companion](/guides/macos-menu-bar/) for lifecycle
+and release-installation behavior.
 
 ## What gets created
 

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,12 +8,20 @@ import { AUTH_MATRIX } from "../src/server/auth-cors";
 import { clearApiKeyUsageCacheForTests, rollupApiKeyUsage } from "../src/server/management/api-key-usage";
 import { normalizeUsageEntryForTest, usageLogPath, type PersistedUsageEntry } from "../src/usage/log";
 import type { OcxConfig } from "../src/types";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+
+// Server startup and the full authentication matrix can cross Bun's 5s default
+// on loaded CI/developer hosts without changing the behavior under test.
+setDefaultTimeout(30_000);
 
 const ADMIN_TOKEN = "admin-secret-for-attribution";
 const previousHome = process.env.OPENCODEX_HOME;
 const previousDataToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+const previousCodexCliPath = process.env.CODEX_CLI_PATH;
 let testHome = "";
+let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 function remoteConfig(): OcxConfig {
   return {
@@ -47,6 +55,8 @@ async function keysGet(server: { url: URL }): Promise<Record<string, unknown>> {
 
 beforeEach(() => {
   testHome = mkdtempSync(join(tmpdir(), "ocx-attribution-"));
+  isolatedCodexHome = installIsolatedCodexHome("ocx-attribution-codex-");
+  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
   process.env.OPENCODEX_HOME = testHome;
   delete process.env.OPENCODEX_API_AUTH_TOKEN;
   process.env.OPENCODEX_ADMIN_AUTH_TOKEN = ADMIN_TOKEN;
@@ -60,6 +70,10 @@ afterEach(() => {
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousDataToken;
   if (previousAdminToken === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
   else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdminToken;
+  if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+  else process.env.CODEX_CLI_PATH = previousCodexCliPath;
+  isolatedCodexHome?.restore();
+  isolatedCodexHome = null;
   if (testHome) rmSync(testHome, { recursive: true, force: true });
   testHome = "";
 });

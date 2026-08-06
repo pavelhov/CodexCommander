@@ -114,28 +114,20 @@ The **Codex Auth** page manages the native ChatGPT/Codex route:
   values.
 - Pool request logs use opaque labels such as `p3fa91c`, never account emails.
 
-## Starring is yours to decide, not an agent's
+## Integrations
 
-The sidebar's star button — and the one-time question `ocx start` asks in an interactive
-terminal — goes through **your own `gh` login**. opencodex holds no GitHub token, and the
-only thing it learns is your yes or no.
+The **Integrations** page connects OpenCode without treating it as another provider login. Its
+**Apply connection** action changes only `provider.opencodex` in OpenCode's active global JSONC/JSON
+file, preserves comments and unrelated keys, and delivers the proxy credential through a protected
+file reference rather than copying a key into OpenCode config. **Always keep OpenCode connected** is
+an opt-in refresh after proxy startup or model-catalog changes.
 
-Because that writes to your GitHub account, agent-driven callers are refused rather than
-allowed to answer for you:
-
-- `ocx start` and `ocx service install` **skip the prompt entirely** when an agent or CI
-  harness is driving them (`CLAUDECODE`, `CODEX_THREAD_ID`, `CURSOR_TRACE_ID`, `CI`, and
-  similar). The one-time marker stays unwritten, so the real prompt still shows up on your
-  next hand-typed run. The agent is told to ask you instead — and to ask as a plain Yes/No
-  choice you have to answer, not as a soft aside it can slip past you. If you never get
-  around to answering, the agent is told to re-ask rather than treat your silence as a no.
-- `POST /api/github/star` answers `403` with `code: "agent_consent_required"` when the proxy
-  runs under an agent session and the request has no dashboard browser session. Possessing
-  the admin token is not consent: an agent on your machine can read that file.
-- The dashboard button keeps working normally. A real click carries same-origin session
-  evidence, so it is recognized as you even when an agent started the proxy.
-- Saying no ends it. Nothing is persisted and nothing is added to any model prompt to nudge
-  you later.
+If OpenCode config changed after Apply, the page reports that user edits are preserved and **Restore**
+removes or restores only the managed provider. When the journal permits an exact restore, the original
+file is restored byte-for-byte. The
+**Open OpenCode** action launches OpenCode Desktop in one click; when only the CLI is installed, use
+`ocx opencode` for its non-mutating, transient connection instead. See
+[OpenCode](/guides/opencode/) for the file-selection and restore details.
 
 ## How the dashboard talks to the proxy
 
@@ -144,7 +136,7 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | Endpoint | Purpose |
 | --- | --- |
 | `GET` / `PUT /api/settings` | Read settings or toggle Codex autostart. |
-| `GET` / `POST /api/github/star` | Read the `gh`-derived star state, or star the repository. The POST is refused with `403` `agent_consent_required` for agent-driven callers without a dashboard session. |
+| `GET /api/integrations/opencode` · `POST /api/integrations/opencode/apply` · `POST /api/integrations/opencode/restore` | Inspect, safely apply, or restore the managed OpenCode connection. |
 | `GET /api/startup-health` | Read secret-free routing, service, shim, and restart-safety diagnostics. |
 | `POST /api/startup-action` | Install the background service or Codex launcher shim through fixed, allowlisted actions. |
 | `GET` / `POST /api/windows-tray` | Read or change the Windows tray installation and visible-process state. POST accepts `install`, `start`, `stop`, or `uninstall`. |

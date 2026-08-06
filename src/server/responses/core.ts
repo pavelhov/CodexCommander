@@ -97,6 +97,7 @@ import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentE
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
 import type { InboundWire } from "../../providers/registry";
 import { hasKeyPoolFailover, rotateProviderTransportOn429 } from "../../providers/key-failover";
+import { noteProviderCredentialVerified } from "../../providers/credential-verification";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
 import type { WsData } from "../ws-bridge";
@@ -119,6 +120,7 @@ import {
   readConfiguredCodexServiceTier,
   recordAdapterReasoning,
   recordAttemptRequestedEffort,
+  recordUpstreamRetryAfter,
   requestLogSpeedLabel,
   sealRequestAttemptIdentity,
   usageFromResponsesPayload,
@@ -1742,6 +1744,7 @@ async function handleResponsesInner(
     // keep their typed failure envelope. Non-empty bodies are relayed verbatim
     // (headers included) so pool-retry Activation B/D and client diagnostics stay intact.
     if (!upstreamResponse.ok) {
+      recordUpstreamRetryAfter(logCtx, upstreamResponse.headers.get("retry-after"));
       if (options.comboAttempt) {
         const failure = await consumeComboFailure(upstreamResponse, options.abortSignal);
         options.onConsumedComboFailure?.(failure);
@@ -2460,6 +2463,9 @@ async function handleResponsesInner(
       break;
     }
     if (!upstreamResponse.ok) {
+      // Capture quota evidence from the real upstream response before the client
+      // error envelope adds any synthetic Retry-After fallback.
+      recordUpstreamRetryAfter(logCtx, upstreamResponse.headers.get("retry-after"));
       if (options.comboAttempt) {
         const failure = await consumeComboFailure(upstreamResponse, options.abortSignal)
           .finally(cleanupUpstreamAbort);
@@ -2491,6 +2497,7 @@ async function handleResponsesInner(
     }
   }
 
+  noteProviderCredentialVerified(config, route.providerName, route.provider.apiKey);
   cancelBodyOnAbort(upstreamResponse.body, upstream.signal);
 
   // Claude can return a clean end_turn after announcing an edit without emitting any tool call.

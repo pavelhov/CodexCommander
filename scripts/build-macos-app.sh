@@ -155,6 +155,8 @@ cp "$package_dir/Info.plist" "$staged_app/Contents/Info.plist"
 # files directly; no duplicate drawn logos or generated placeholders live in app/.
 mkdir -p "$staged_app/Contents/Resources/provider-icons"
 cp "$repo_root/gui/public/logo.png" "$staged_app/Contents/Resources/OpenCodex.png"
+cp "$repo_root/LICENSE" "$staged_app/Contents/Resources/LICENSE.txt"
+cp "$repo_root/THIRD_PARTY_NOTICES.md" "$staged_app/Contents/Resources/THIRD_PARTY_NOTICES.md"
 # Quota responses are provider-agnostic, so package the complete existing icon set.
 # Copying only the three featured rows made every additional connected provider fall
 # back to a question mark in release builds even though its real asset existed in-repo.

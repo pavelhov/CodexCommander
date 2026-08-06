@@ -138,7 +138,8 @@ Ensure the proxy is running, then launch opencode with a generated `provider.ope
 OpenCode's inline runtime layer (`OPENCODE_CONFIG_CONTENT`). Existing inline config is preserved and
 only `provider.opencodex` is replaced for this launch. Global or project `opencode.json` files may be
 read to warn about an existing override, but on-disk files are never modified. Routed models appear
-as `opencodex/<provider>/<model>`. Launching plain `opencode` later behaves exactly as before.
+as `opencodex/<provider>/<model>`. This launcher leaves later plain `opencode` launches unchanged;
+the separate opt-in dashboard integration is the only path that persists `provider.opencodex`.
 
 ### `ocx grok <status|exclude|include|set|clear|apply> ...`
 

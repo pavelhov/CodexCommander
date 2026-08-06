@@ -21,7 +21,6 @@
  *   real supervisor). Log only a stable errno code — never the raw message
  *   (paths in ENOENT often include the OS username).
  */
-import { spawn } from "node:child_process";
 import {
   drainAndShutdown,
   getActiveTurnCount,
@@ -32,6 +31,7 @@ import {
 } from "../lifecycle";
 import { isServiceViable } from "../../service";
 import { readRuntimePort } from "../../config";
+import { spawnDetachedProxyStart } from "../../cli/proxy-lifecycle";
 
 /** Fixed v1 drain window for the memory-card action (not config-driven). */
 export const MEMORY_DRAIN_RESTART_MS = 60_000;
@@ -86,42 +86,6 @@ function spawnFailureCode(err: unknown): string {
   return "spawn_failed";
 }
 
-function spawnDetachedStart(port?: number): Promise<void> {
-  const args = [process.argv[1], "start"];
-  if (typeof port === "number" && Number.isFinite(port) && port > 0 && port <= 65535) {
-    args.push("--port", String(Math.trunc(port)));
-  }
-  return new Promise<void>((resolve, reject) => {
-    let child: ReturnType<typeof spawn>;
-    try {
-      child = spawn(process.execPath, args, {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-        env: { ...process.env, OCX_SERVICE: "1" },
-      });
-    } catch (err) {
-      reject(err);
-      return;
-    }
-    let settled = false;
-    const finish = (fn: () => void) => {
-      if (settled) return;
-      settled = true;
-      fn();
-    };
-    child.once("error", (err) => {
-      finish(() => reject(err));
-    });
-    child.once("spawn", () => {
-      finish(() => {
-        child.unref();
-        resolve();
-      });
-    });
-  });
-}
-
 /**
  * Accept a drain-and-restart request. Returns immediately; the drain +
  * respawn runs on a short timer so the HTTP response can flush first.
@@ -153,7 +117,7 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo): {
       const port = (io.listenPort ?? resolveListenPort)();
       const exitProcess = io.exitProcess ?? ((code: number) => { process.exit(code); });
       try {
-        await (io.spawnStart ?? spawnDetachedStart)(port);
+        await (io.spawnStart ?? (selectedPort => spawnDetachedProxyStart({ port: selectedPort })))(port);
       } catch (err) {
         console.warn(
           `⚠️  Drain-and-restart spawn failed (${spawnFailureCode(err)}); exiting without replacement`,

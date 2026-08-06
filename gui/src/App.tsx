@@ -10,12 +10,13 @@ import Usage from "./pages/Usage";
 import Storage from "./pages/Storage";
 import CodexAuth from "./pages/CodexAuth";
 import ApiKeys from "./pages/ApiKeys";
+import Integrations from "./pages/Integrations";
 import Claude from "./pages/Claude";
 import Grok from "./pages/Grok";
 import Startup from "./pages/Startup";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX } from "./icons";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconLink, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX } from "./icons";
 import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n/shared";
 import { Select, Switch } from "./ui";
 import { installApiAuthFetch } from "./api";
@@ -40,6 +41,7 @@ const PAGE_TKEY: Record<Page, TKey> = {
   storage: "nav.storage",
   "codex-auth": "nav.codexAuth",
   api: "nav.api",
+  integrations: "nav.integrations",
   claude: "nav.claude",
   grok: "nav.grok",
 };
@@ -57,6 +59,7 @@ const NAV: { id: Page; tkey: TKey; Icon: typeof IconGrid }[] = [
   { id: "usage", tkey: "nav.usage", Icon: IconActivity },
   { id: "storage", tkey: "nav.storage", Icon: IconHardDrive },
   { id: "api", tkey: "nav.api", Icon: IconGlobe },
+  { id: "integrations", tkey: "nav.integrations", Icon: IconLink },
   { id: "claude", tkey: "nav.claude", Icon: IconSparkle },
   { id: "grok", tkey: "nav.grok", Icon: IconBoxes },
 ];
@@ -315,6 +318,7 @@ export default function App() {
             {page === "storage" && <Storage apiBase={API_BASE} />}
             {page === "codex-auth" && <CodexAuth apiBase={API_BASE} />}
             {page === "api" && <ApiKeys apiBase={API_BASE} />}
+            {page === "integrations" && <Integrations apiBase={API_BASE} />}
             {page === "claude" && <Claude apiBase={API_BASE} />}
             {page === "grok" && <Grok apiBase={API_BASE} />}
           </ErrorBoundary>

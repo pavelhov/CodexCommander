@@ -233,6 +233,29 @@ Most use the `openai-chat` adapter with a bearer key; a few that expose only an 
 endpoint (e.g. **Xiaomi MiMo**) use the `anthropic` adapter (`x-api-key`).
 Volcengine Agent Plan uses its native Responses endpoint through `openai-responses`.
 
+### OpenCode Go is an upstream provider, not the OpenCode client
+
+`opencode-go` is the OpenCode Go subscription provider at
+`https://opencode.ai/zen/go/v1`. It is distinct from the OpenCode Desktop/CLI client described in
+[OpenCode](/guides/opencode/). Create its key in the
+[OpenCode console](https://opencode.ai/console), then add **OpenCode Go** from the dashboard's
+**Providers** page or configure the `opencode-go` preset with that key. OpenCodex does not scrape an
+OpenCode authentication store or migrate this key to Keychain.
+
+The public model catalog is not evidence that a key works, so a saved key is **unverified** until the
+first successful inference using that active key. The provider's published caps are reference caps —
+**$12 / 5 hours**, **$30 / 7 days**, and **$60 / 30 days**. The dashboard's matching 5-hour, 7-day,
+and 30-day observations are local usage estimates, not live remaining quota or billing. An
+authoritative limit event is shown only after the upstream reports a concrete limit event (and, when
+provided, its reset).
+
+The provider pins the current Zen Go lineup (25 model ids) as its static catalog, with live
+`/v1/models` discovery authoritative on the canonical host — ids outside the trusted set are
+quarantined rather than routed. Transports follow the official endpoint table: Qwen and MiniMax
+models go over Anthropic Messages, `gpt-5.6-luna` and `grok-4.5` over OpenAI Responses, and the
+remaining models over OpenAI Chat Completions. These trust facts attach only to the canonical
+`https://opencode.ai/zen/go/v1` destination; a same-named custom provider keeps its own behavior.
+
 > **Three Volcengine billing routes:** `volcengine` is the pay-as-you-go Ark API,
 > `volcengine-coding-plan` consumes Coding Plan quota, and `volcengine-agent-plan` consumes Agent
 > Plan quota. Use the key and endpoint issued for the same product; the ordinary `/api/v3` endpoint

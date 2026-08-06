@@ -281,12 +281,20 @@ final class ProviderQuotaRowView: NSView {
         var arranged: [NSView] = [headerHost]
         if expanded {
             let windows = report.normalizedWindows()
-            if windows.isEmpty {
+            let references = report.referenceWindows
+            let limitEvent = report.observedLimitEvent
+            if windows.isEmpty && references.isEmpty && limitEvent == nil {
                 let missing = makeLabel("Unavailable", font: Theme.caption, color: Theme.muted)
                 arranged.append(missing)
             } else {
+                if let limitEvent {
+                    arranged.append(ObservedLimitEventRowView(event: limitEvent))
+                }
                 for window in windows {
                     arranged.append(QuotaWindowRowView(window: window))
+                }
+                for reference in references {
+                    arranged.append(ReferenceQuotaWindowRowView(window: reference))
                 }
             }
         }
@@ -347,22 +355,38 @@ final class ProviderQuotaRowView: NSView {
 
     private func collapsedSummary(_ report: QuotaReport) -> String {
         let windows = report.normalizedWindows().filter(\.hasPercent)
-        guard !windows.isEmpty else { return "Unavailable" }
-        let parts = windows.prefix(3).map { window -> String in
-            let label: String
-            switch window.windowLabel {
-            case "5h": label = "5h"
-            case "week": label = "Weekly"
-            case "month": label = "Monthly"
-            default: label = window.windowLabel
+        if !windows.isEmpty {
+            let parts = windows.prefix(3).map { window -> String in
+                let label: String
+                switch window.windowLabel {
+                case "5h": label = "5h"
+                case "week": label = "Weekly"
+                case "month": label = "Monthly"
+                default: label = window.windowLabel
+                }
+                return "\(label) \(Format.percent(window.percent))"
             }
-            return "\(label) \(Format.percent(window.percent))"
+            var text = parts.joined(separator: " · ")
+            if windows.count == 1, let reset = compactReset(windows[0]) {
+                text += " · \(reset)"
+            }
+            return text
         }
-        var text = parts.joined(separator: " · ")
-        if windows.count == 1, let reset = compactReset(windows[0]) {
-            text += " · \(reset)"
+
+        if let event = report.observedLimitEvent {
+            return "\(ReferenceQuotaPresentation.limitTitle(event)) · \(eventResetSummary(event))"
         }
-        return text
+        let references = report.referenceWindows
+        if !references.isEmpty {
+            let caps = references.prefix(3).map(ReferenceQuotaPresentation.compactCapText)
+            return "Caps \(caps.joined(separator: " · "))"
+        }
+        return "Unavailable"
+    }
+
+    private func eventResetSummary(_ event: QuotaObservedLimitEvent) -> String {
+        guard let reset = QuotaReport.date(from: event.resetAt) else { return "Reset unknown" }
+        return "Resets in \(Format.resetsIn(reset))"
     }
 
     private func compactReset(_ window: NormalizedQuota) -> String? {

@@ -97,11 +97,15 @@ runner.test("ui: menu-bar glyph distinguishes every operational state") {
     runner.equal(Set(symbols).count, states.count, "one symbol per state")
 }
 
-runner.test("ui: footer exposes Dashboard Logs Refresh Restart") {
+runner.test("ui: footer exposes navigation, lifecycle, and UI-only Quit actions") {
     let controller = PopoverViewController()
     _ = controller.view
     let titles = controller.footerTitles
-    runner.equal(titles, ["Dashboard", "Logs", "Refresh", "Restart…"], "footer titles")
+    runner.equal(
+        titles,
+        ["Dashboard", "Logs", "Refresh", "Start", "Restart…", "Quit"],
+        "footer titles"
+    )
 }
 
 // MARK: - Accordion / no duplicates
@@ -175,6 +179,63 @@ runner.test("ui: no duplicate provider strip — accordion is the only provider 
     runner.equal(controller.quotaAccordion.providerIDs.count, Set(controller.quotaAccordion.providerIDs).count, "unique providers")
 }
 
+runner.test("ui: OpenCode Go renders published caps and honest local observation semantics") {
+    let quotas = decodeQuotas("""
+    [{"provider":"opencode-go","label":"OpenCode Go","quota":{
+      "referenceWindows":[
+        {"id":"five_hour","label":"5-hour","windowSeconds":18000,
+         "publishedLimitUsd":12,"observedSpendUsd":0.3,"observedTokens":1000120,
+         "observedRequests":3,"pricedRequests":3,"unpricedRequests":0,
+         "unmeasuredRequests":0,"coverage":"complete"},
+        {"id":"weekly","label":"7-day","windowSeconds":604800,
+         "publishedLimitUsd":30,"observedSpendUsd":1.1,"observedTokens":2400000,
+         "observedRequests":4,"pricedRequests":2,"unpricedRequests":1,
+         "unmeasuredRequests":1,"coverage":"partial"},
+        {"id":"monthly","label":"30-day","windowSeconds":2592000,
+         "publishedLimitUsd":60,"observedTokens":0,"observedRequests":0,
+         "pricedRequests":0,"unpricedRequests":0,"unmeasuredRequests":0,
+         "coverage":"none"}],
+      "observedLimitEvent":{"limitName":"weekly","observedAt":1784915000000,
+                            "resetAt":1784918600000}}}]
+    """)
+    let report = quotas[0]
+    let references = report.referenceWindows
+    runner.equal(ReferenceQuotaPresentation.capText(references[0]), "5h · Published cap $12")
+    runner.equal(ReferenceQuotaPresentation.capText(references[1]), "7d · Published cap $30")
+    runner.equal(ReferenceQuotaPresentation.capText(references[2]), "30d · Published cap $60")
+    runner.equal(
+        ReferenceQuotaPresentation.observationText(references[0]),
+        "Estimate $0.30 · 1,000,120 tokens · 3 requests"
+    )
+    runner.expect(
+        ReferenceQuotaPresentation.observationText(references[1]).hasPrefix("Partial estimate $1.10"),
+        "partial observation label"
+    )
+    runner.equal(
+        ReferenceQuotaPresentation.observationText(references[2]),
+        "No local usage observed"
+    )
+    let event = report.observedLimitEvent!
+    runner.equal(ReferenceQuotaPresentation.limitTitle(event), "Observed weekly limit")
+    runner.equal(
+        ReferenceQuotaPresentation.limitDetail(
+            event,
+            now: Date(timeIntervalSince1970: 1_784_915_000)
+        ),
+        "Upstream event · observed just now · resets in 1h"
+    )
+
+    let rendered = references.flatMap {
+        [ReferenceQuotaPresentation.capText($0), ReferenceQuotaPresentation.observationText($0)]
+    }.joined(separator: " ")
+    runner.expect(!rendered.contains("%"), "reference data must not manufacture a percentage")
+
+    let accordion = ProviderQuotaAccordionView()
+    accordion.apply(makeSnapshot(quotas: quotas))
+    runner.equal(accordion.providerRowCount, 1, "reference-only quota stays visible")
+    runner.expect(accordion.expandedProviderIDs.contains("opencode-go"), "reference provider expands")
+}
+
 // MARK: - Deep links
 
 runner.test("ui: provider deep-link encoding preserves safe ids") {
@@ -231,16 +292,76 @@ runner.test("ui: accessibility labels exist on header and accordion") {
     _ = runner.notNil(controller.quotaAccordion.accessibilityLabel(), "quota a11y")
 }
 
-runner.test("ui: footer buttons invoke all four production actions") {
+runner.test("ui: running footer invokes Stop, Restart, and UI-only Quit independently") {
     let controller = PopoverViewController()
     _ = controller.view
+    controller.apply(makeSnapshot())
     var calls: [String] = []
     controller.onDashboard = { calls.append("dashboard") }
     controller.onLogs = { calls.append("logs") }
     controller.onRefresh = { calls.append("refresh") }
+    controller.onStop = { calls.append("stop") }
     controller.onRestart = { calls.append("restart") }
-    for index in 0..<4 { controller.activateFooterForTesting(index) }
-    runner.equal(calls, ["dashboard", "logs", "refresh", "restart"])
+    controller.onQuit = { calls.append("quit") }
+    for index in 0..<6 { controller.activateFooterForTesting(index) }
+    runner.equal(calls, ["dashboard", "logs", "refresh", "stop", "restart", "quit"])
+}
+
+runner.test("ui: stopped footer offers Start and keeps Restart disabled") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    controller.apply(ProxySnapshot(state: .unreachable, endpoint: .default))
+    var started = false
+    var restarted = false
+    controller.onStart = { started = true }
+    controller.onRestart = { restarted = true }
+    controller.activateFooterForTesting(3)
+    controller.activateFooterForTesting(4)
+    runner.equal(started, true)
+    runner.equal(restarted, false)
+}
+
+runner.test("ui: degraded and unauthorized states offer Stop without enabling Restart") {
+    for state in [ProxyState.degraded("Timed out"), .unauthorized] {
+        let controller = PopoverViewController()
+        _ = controller.view
+        controller.apply(ProxySnapshot(state: state, endpoint: .default))
+        var started = false
+        var stopped = false
+        var restarted = false
+        controller.onStart = { started = true }
+        controller.onStop = { stopped = true }
+        controller.onRestart = { restarted = true }
+
+        runner.equal(controller.footerTitles[3], "Stop…", "uncertain live state uses stop intent")
+        controller.activateFooterForTesting(3)
+        controller.activateFooterForTesting(4)
+        runner.equal(started, false, "does not start a possible duplicate")
+        runner.equal(stopped, true, "stop remains actionable")
+        runner.equal(restarted, false, "restart requires confirmed running identity")
+    }
+}
+
+runner.test("ui: polling cannot re-enable lifecycle controls during an action") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    var stopped = false
+    var restarted = false
+    controller.onStop = { stopped = true }
+    controller.onRestart = { restarted = true }
+    controller.apply(makeSnapshot())
+    controller.setLifecycleControlsEnabled(false)
+
+    // A poll renders a fresh snapshot while the lifecycle helper is still running.
+    controller.apply(makeSnapshot())
+    controller.activateFooterForTesting(3)
+    controller.activateFooterForTesting(4)
+    runner.equal(stopped, false, "stop remains disabled")
+    runner.equal(restarted, false, "restart remains disabled")
+
+    controller.setLifecycleControlsEnabled(true)
+    controller.activateFooterForTesting(3)
+    runner.equal(stopped, true, "controls recover after the action completes")
 }
 
 // MARK: - Resource honesty

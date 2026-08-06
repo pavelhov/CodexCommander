@@ -17,6 +17,7 @@ import { getProviderRegistryEntry, providerCodexAccountMode, providerMatchesRegi
 import { providerConfigSeed } from "../providers/derive";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { openRouterRoutingConfigError } from "../providers/openrouter-routing";
+import { providerCredentialVerification } from "../providers/credential-verification";
 
 let _corsOrigin = "http://localhost:10100";
 export function setCorsOrigin(port: number): void { _corsOrigin = `http://localhost:${port}`; }
@@ -528,6 +529,8 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     if (typeof registryNote === "string" && registryNote.trim()) dto.note = registryNote;
     const codexAccountMode = providerCodexAccountMode(name, provider);
     if (codexAccountMode) dto.codexAccountMode = codexAccountMode;
+    const credentialVerification = providerCredentialVerification(config, name);
+    if (credentialVerification) dto.credentialVerification = credentialVerification;
     providers[name] = dto;
   }
   return {

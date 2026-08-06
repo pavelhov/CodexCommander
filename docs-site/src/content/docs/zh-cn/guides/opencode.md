@@ -34,9 +34,28 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 
 如果全局或项目配置里也定义了 `provider.opencodex`，启动器会打印一条提示信息：`ocx opencode` 的运行时层会在这次启动中覆盖它。
 
+## 通过控制面板建立持久连接（可选）
+
+若要让普通 OpenCode、编辑器集成或 Desktop 一键启动使用代理，请在 OpenCodex 控制面板的
+**Integrations** 中选择 **Apply connection**。这与 `ocx opencode` 是不同的路径：
+
+- 它会选择 `XDG_CONFIG_HOME` 下的活动 OpenCode 全局配置（通常是
+  `~/.config/opencode/`）：已有的 `opencode.jsonc` 优先，否则是 `opencode.json`。
+- JSONC 编辑只会修改 `provider.opencodex`，并保留注释、格式、其他 provider、agent、MCP
+  和无关键。
+- 代理准入令牌保留在 OpenCodex 的受保护状态中；OpenCode 配置只收到
+  `{file:/absolute/path}` 引用，不会读取 OpenCode 的认证存储。
+- **Always keep OpenCode connected** 默认关闭；只有明确开启后，才会在代理启动或可见目录变化
+  时刷新这一受管 block。
+
+当 journal 确认精确恢复安全时，**Restore** 会精确恢复原始字节；否则控制面板只会外科式恢复或
+删除受管的 `provider.opencodex`，保留其他用户修改。**Open OpenCode** 可一键启动 OpenCode Desktop；
+只有 CLI 时请使用仍然不改磁盘的 `ocx opencode`。
+
 ## 把这个 block 放进你自己的配置里
 
-`ocx opencode` 只会在单次启动中注入 provider block，这意味着普通的 `opencode` 仍然不知道代理的存在。若你希望在普通 `opencode` 中也能使用路由模型，或者希望编辑器扩展不经过启动器也能使用它们，`ocx export` 会打印同样的 provider block，供你合并到自己的配置中：
+`ocx opencode` 只会在单次启动中注入 provider block。若未应用上面的控制面板持久连接，普通的
+`opencode` 仍然不知道代理的存在。若你希望在普通 `opencode` 中也能使用路由模型，或者希望编辑器扩展不经过启动器也能使用它们，`ocx export` 会打印同样的 provider block，供你合并到自己的配置中：
 
 ```bash
 ocx export --client opencode
@@ -90,7 +109,8 @@ loopback 绑定（`127.0.0.1`，默认值）不会进行任何认证，所以 `{
 
 ## 回滚
 
-无需撤销 - `~/.opencodex` 下不会写入任何生成的配置文件。直接运行普通的 `opencode` 即可，它会像之前一样读取你自己的配置。
+临时的 `ocx opencode` 无需撤销，因为它不会修改 OpenCode 配置。对于控制面板连接，请在
+**Integrations** 中选择 **Restore**：journal 允许时会精确恢复原始字节，否则只会外科式恢复受管 provider。
 
 ## 模型限制
 

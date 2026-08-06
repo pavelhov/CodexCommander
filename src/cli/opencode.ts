@@ -40,6 +40,7 @@ import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/servic
 import { providerCodexAccountMode } from "../providers/registry";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
+import { ensureProxyLifecycle } from "./proxy-lifecycle";
 
 /**
  * The provider-block serializer, its constants, and the config-path helpers now live in
@@ -189,9 +190,12 @@ export function opencodeModelKey(provider: string, id: string): string {
  * Native OpenAI slugs advertised to opencode. Omitted in Codex Direct mode because native
  * chat-completions require the caller's real ChatGPT OAuth bearer, not proxy admission.
  */
-export function opencodeLaunchNativeSlugs(config: OcxConfig): string[] {
+export function opencodeLaunchNativeSlugs(
+  config: OcxConfig,
+  listVisibleNativeSlugs: (config: Pick<OcxConfig, "disabledModels">) => string[] = visibleNativeSlugs,
+): string[] {
   if (providerCodexAccountMode("openai", config.providers?.openai) === "direct") return [];
-  return [...visibleNativeSlugs(config)];
+  return [...listVisibleNativeSlugs(config)];
 }
 
 /** Back-compat helper for unit tests that assemble slugs/routed rows directly. */
@@ -488,30 +492,6 @@ export function opencodeApiKey(config: OcxConfig, env: OpencodeLaunchEnv = proce
   return config.apiKeys?.[0]?.key || "ocx";
 }
 
-async function ensureProxyForOpencode(config: OcxConfig): Promise<LiveProxy | null> {
-  const live = await findLiveProxy();
-  if (live) return live;
-  const cfgPort = config.port;
-  const pinPort = typeof cfgPort === "number" && cfgPort > 0 ? cfgPort : 10100;
-  const child = spawn(process.execPath, [process.argv[1], "start", "--port", String(pinPort)], {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
-    env: opencodeProxyStartEnv(process.env) as NodeJS.ProcessEnv,
-  });
-  // Without a listener an 'error' (bad argv[1], EMFILE, AV denial) throws synchronously
-  // and kills this process; the health poll below already reports the failure properly.
-  child.on("error", () => { /* handled by the deadline loop returning null */ });
-  child.unref();
-  const deadline = Date.now() + 8_000;
-  while (Date.now() < deadline) {
-    const started = await findLiveProxy();
-    if (started) return started;
-    await new Promise(resolve => setTimeout(resolve, 250));
-  }
-  return null;
-}
-
 const OPENCODE_INSTALL_HINT = "❌ `opencode` CLI not found. Install it first: npm install -g opencode-ai";
 
 /**
@@ -529,9 +509,14 @@ export function opencodeNotFoundHint(
 
 export async function cmdOpencode(args: string[]): Promise<number> {
   const config = loadConfig();
-  const live = await ensureProxyForOpencode(config);
+  const ensured = await ensureProxyLifecycle({
+    honorAutoStart: false,
+    ensureCompanion: true,
+    startEnv: opencodeProxyStartEnv(process.env) as NodeJS.ProcessEnv,
+  });
+  const live = ensured.ok ? await findLiveProxy() : null;
   if (!live) {
-    console.error("❌ Proxy did not become healthy after starting.");
+    console.error(`❌ ${ensured.ok ? "Proxy identity disappeared after starting." : ensured.message}`);
     return 1;
   }
 

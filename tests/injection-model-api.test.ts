@@ -3,7 +3,7 @@
  * PUT validates the reasoning effort against the Codex ladder, clears it with the
  * model, and GET surfaces `{ effort, efforts }` next to the existing model picker.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,13 +12,28 @@ import { refreshCodexModelCatalog } from "../src/codex/refresh";
 import { handleManagementAPI } from "../src/server/management-api";
 import { CODEX_REASONING_LEVELS } from "../src/reasoning-effort";
 import type { OcxConfig } from "../src/types";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+
+setDefaultTimeout(30_000);
 
 const savedHome = process.env.OPENCODEX_HOME;
+const savedCodexCliPath = process.env.CODEX_CLI_PATH;
 let tempHome: string | null = null;
+let isolatedCodexHome: IsolatedCodexHome | null = null;
+
+beforeEach(() => {
+  isolatedCodexHome = installIsolatedCodexHome("ocx-injection-model-codex-");
+  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
+});
 
 afterEach(() => {
   if (savedHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = savedHome;
+  if (savedCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+  else process.env.CODEX_CLI_PATH = savedCodexCliPath;
+  isolatedCodexHome?.restore();
+  isolatedCodexHome = null;
   if (tempHome) { rmSync(tempHome, { recursive: true, force: true }); tempHome = null; }
 });
 

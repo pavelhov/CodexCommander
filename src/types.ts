@@ -1201,9 +1201,21 @@ export const MODEL_ADAPTER_OVERRIDE_ALLOWED: ReadonlySet<string> = new Set([
  * Providers whose listed model ids must be driven over the Anthropic wire even when
  * the provider's configured adapter says otherwise — the upstream only speaks
  * Anthropic for these models.
+ *
+ * OpenCode Go models that serve only Anthropic Messages (`/zen/go/v1/messages`) on the
+ * canonical Zen Go gateway. Official endpoint table: https://opencode.ai/docs/go/#endpoints
+ * (MiniMax M3/M2.7/M2.5 and every Qwen row are Anthropic Messages; GLM/Kimi/DeepSeek/MiMo/Hy3
+ * are Chat Completions; GPT-5.6 Luna and Grok 4.5 are Responses). Kept next to the pin map so
+ * the config validator and the wire resolver share one source; the provider registry derives
+ * its per-model transport table from the same list.
  */
+export const OPENCODE_GO_ANTHROPIC_WIRE_MODEL_IDS = [
+  "minimax-m2.5", "minimax-m2.7", "minimax-m3",
+  "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus", "qwen3.8-max",
+] as const;
+
 const ANTHROPIC_WIRE_MODELS: Record<string, ReadonlySet<string>> = {
-  "opencode-go": new Set(["minimax-m2.5", "minimax-m2.7", "minimax-m3"]),
+  "opencode-go": new Set(OPENCODE_GO_ANTHROPIC_WIRE_MODEL_IDS),
 };
 
 /**

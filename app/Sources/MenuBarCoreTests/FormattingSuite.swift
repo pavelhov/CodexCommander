@@ -20,6 +20,15 @@ enum FormattingSuite {
             t.equal(Format.percent(.greatestFiniteMagnitude), "—")
         }
 
+        t.test("format: reference caps, estimates, and token counts stay explicit") {
+            t.equal(Format.usdCap(12), "$12")
+            t.equal(Format.usdCap(12.5), "$12.50")
+            t.equal(Format.usdEstimate(0.3), "$0.30")
+            t.equal(Format.usdEstimate(nil), "—")
+            t.equal(Format.count(1_000_120), "1,000,120")
+            t.equal(Format.count(nil), "—")
+        }
+
         t.test("format: reset countdowns are coarse") {
             let now = Date(timeIntervalSince1970: 1_784_915_000)
             t.equal(Format.resetsIn(now.addingTimeInterval(60 * 30), now: now), "30m")

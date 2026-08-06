@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { isServiceOwnershipError, ServiceOwnershipError } from "../src/service";
 
 const CLI_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
+const LIFECYCLE_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "proxy-lifecycle.ts"), "utf8");
 const SERVICE_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "service.ts"), "utf8");
 const MANAGEMENT_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "server", "management-api.ts"), "utf8");
 const PROCESS_CONTROL_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "lib", "process-control.ts"), "utf8");
@@ -31,42 +32,34 @@ describe("Grok fence lifecycle wiring", () => {
     expect(grokSyncAt).toBeGreaterThan(registryCatchAt);
   });
 
-  test("ensure passes the observed bind host on the live branch and the configured host after spawning", () => {
-    const ensureFn = sliceFn(CLI_SOURCE, "async function handleEnsure(", "async function handleTrayProxyStart(");
-    const liveBranch = ensureFn.slice(0, ensureFn.indexOf("const pinPort"));
-    const spawnBranch = ensureFn.slice(ensureFn.indexOf("const pinPort"));
-
-    // live.hostname is what the proxy ACTUALLY bound; config.hostname may have drifted.
-    expect(liveBranch).toContain("live.hostname ? { hostname: live.hostname }");
-    expect(spawnBranch).toContain("config.hostname ? { hostname: config.hostname }");
+  test("ensure syncs Grok against the observed live bind host", () => {
+    const syncFn = sliceFn(LIFECYCLE_SOURCE, "async function syncLiveProxy(", "export async function proxyLifecycleStatus(");
+    // The live hostname is authoritative after either an existing or newly spawned proxy.
+    expect(syncFn).toContain("live.hostname ? { hostname: live.hostname }");
   });
 
   test("handleStop gates shared teardown on ownership but still reverts system env", () => {
-    const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
+    const serviceStopFn = sliceFn(LIFECYCLE_SOURCE, "function stopLifecycleService(", "interface ManagedStateRestoreResult");
+    const stopFn = sliceFn(LIFECYCLE_SOURCE, "export async function stopProxyLifecycle(", "export async function restartProxyLifecycle(");
 
-    expect(stopFn).toContain("isServiceOwnershipError(err)");
-    expect(stopFn).toContain("ownershipBlocked = true");
-
-    const gateAt = stopFn.indexOf("if (!ownershipBlocked)");
-    const stripAt = stopFn.indexOf("stripGrokConfig()");
-    const restoreAt = stopFn.indexOf("restoreNativeCodex()");
-    const revertAt = stopFn.indexOf("revertSystemEnv()");
-
-    expect(gateAt).toBeGreaterThan(-1);
-    expect(stripAt).toBeGreaterThan(gateAt);
-    expect(restoreAt).toBeGreaterThan(gateAt);
-    // revertSystemEnv carries its own ownership check and concerns launchctl env, not
-    // CODEX_HOME — gating it too would be over-broad.
-    expect(stopFn.slice(revertAt - 200, revertAt)).toContain("NOT gated");
+    expect(serviceStopFn).toContain("isServiceOwnershipError(error)");
+    expect(serviceStopFn).toContain("blocked: true");
+    const blockedAt = stopFn.indexOf("if (service.blocked)");
+    const restoreAt = stopFn.indexOf("restoreManagedClientState(logger)");
+    expect(blockedAt).toBeGreaterThan(-1);
+    expect(restoreAt).toBeGreaterThan(blockedAt);
+    expect(stopFn.slice(blockedAt, restoreAt)).toContain("revertSystemEnv()");
+    expect(stopFn.slice(blockedAt, restoreAt)).toContain("return lifecycleResult");
   });
 
   test("a refused Grok strip makes ocx stop fail instead of reporting success", () => {
-    const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
-    expect(stopFn).toContain("else if (!g.ok) { stopFailed = true;");
+    const restoreFn = sliceFn(LIFECYCLE_SOURCE, "function restoreManagedClientState(", "/** Shared server-side preparation");
+    expect(restoreFn).toContain("else if (!grok.ok)");
+    expect(restoreFn).toContain("ok = false");
   });
 
   test("a refused proxy stop reports WHY, not just that it failed", () => {
-    const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
+    const stopFn = sliceFn(LIFECYCLE_SOURCE, "export async function stopProxyLifecycle(", "export async function restartProxyLifecycle(");
     // stopProxy throws the ownership refusal ("run the stop from that home"). A bare
     // `catch {}` on these call sites strands the operator on a generic failure line, whose
     // natural next move is a manual kill — the teardown the 409 guard exists to prevent.
@@ -75,27 +68,30 @@ describe("Grok fence lifecycle wiring", () => {
 
     // Both proxy-stop call sites (tracked pid, and the orphan-recovery pid) bind the error
     // and echo its message.
-    const detailEchoes = stopFn.match(/const detail = err instanceof Error \? err\.message : String\(err\);/g);
+    const detailEchoes = stopFn.match(/const detail = error instanceof Error \? error\.message : String\(error\);/g);
     expect(detailEchoes).toHaveLength(2);
-    expect(stopFn.match(/if \(detail\) console\.error\(`   \$\{detail\}`\);/g)).toHaveLength(2);
+    expect(stopFn.match(/if \(detail\) logger\.error\(detail\);/g)).toHaveLength(2);
   });
 
   test("handleStop returns its outcome so restart and the tray can react", () => {
     const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
     // process.exit() inside handleStop would strand runTrayProxyRestart's start() half.
     expect(stopFn).toContain("process.exitCode = 1");
-    expect(stopFn).toContain("return !stopFailed");
+    expect(stopFn).toContain("return result.ok");
     expect(stopFn).not.toContain("process.exit(1)");
 
-    const restartCase = sliceFn(CLI_SOURCE, 'case "restart"', 'case "health"');
-    expect(restartCase).toContain("if (await handleStop()) await handleEnsure()");
+    const restartAt = LIFECYCLE_SOURCE.indexOf("export async function restartProxyLifecycle(");
+    expect(restartAt).toBeGreaterThan(-1);
+    const restartFn = LIFECYCLE_SOURCE.slice(restartAt);
+    expect(restartFn).toContain("if (!stopped.ok) return stopped");
+    expect(restartFn).toContain("ensureProxyLifecycle(");
   });
 
   test("handleStop treats an incomplete native Codex restore as a stop failure", () => {
-    const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
-    expect(stopFn).toContain("if (r.success) console.log");
-    expect(stopFn).toContain("stopFailed = true");
-    expect(stopFn).toContain("console.error(`⚠️  ${r.message}`)");
+    const restoreFn = sliceFn(LIFECYCLE_SOURCE, "function restoreManagedClientState(", "/** Shared server-side preparation");
+    expect(restoreFn).toContain("if (restore.success)");
+    expect(restoreFn).toContain("ok = false");
+    expect(restoreFn).toContain("logger.warn(restore.message)");
   });
 
   test("the daemon's exit cleanup keeps the OCX_SERVICE exclusion and adds the ownership check", () => {
@@ -146,9 +142,11 @@ describe("ownership errors are distinguishable", () => {
 describe("POST /api/stop teardown", () => {
   test("refuses with 409 on ownership mismatch instead of throwing a 500", () => {
     const handler = sliceFn(MANAGEMENT_SOURCE, '"/api/stop"', "/api/codex-auth/");
+    const prepareFn = sliceFn(LIFECYCLE_SOURCE, "export function prepareExplicitProxyShutdown(", "export async function stopProxyLifecycle(");
 
-    expect(handler).toContain("isServiceOwnershipError(err)");
-    expect(handler).toContain("}, 409, req, config)");
+    expect(prepareFn).toContain("if (service.blocked)");
+    expect(prepareFn).toContain("status: 409");
+    expect(handler).toContain("prepared.status");
     // The refusal must return BEFORE the shutdown is scheduled: a refused stop keeps running.
     const refusalAt = handler.indexOf("409");
     const shutdownAt = handler.indexOf("drainAndShutdown");
@@ -157,8 +155,9 @@ describe("POST /api/stop teardown", () => {
 
   test("strips the Grok fence on an accepted stop", () => {
     const handler = sliceFn(MANAGEMENT_SOURCE, '"/api/stop"', "/api/codex-auth/");
-    expect(handler).toContain('await import("../grok/inject")');
-    expect(handler).toContain("stripGrokConfig()");
+    const restoreFn = sliceFn(LIFECYCLE_SOURCE, "function restoreManagedClientState(", "/** Shared server-side preparation");
+    expect(handler).toContain("prepareExplicitProxyShutdown()");
+    expect(restoreFn).toContain("stripGrokConfig()");
   });
 
   test("a 409 does not escalate to a forced kill", () => {

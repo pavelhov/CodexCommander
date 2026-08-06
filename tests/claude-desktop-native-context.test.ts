@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,10 @@ import { buildClaudeDesktopState } from "../src/server/management/shared";
 import { nativeOpenAiContextWindow, visibleNativeSlugs } from "../src/codex/catalog";
 import { generateDesktop3pModels } from "../src/claude/desktop-3p";
 import type { OcxConfig } from "../src/types";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+import { installIsolatedCodexHome } from "./helpers/isolated-codex-home";
+
+setDefaultTimeout(30_000);
 
 /**
  * D1b: native Desktop models carry their real context window, and the DTO and the
@@ -26,7 +30,10 @@ const config = {
 test("buildClaudeDesktopState gives native rows their real context window", async () => {
   const home = tempHome();
   const prev = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+  const previousCodexCliPath = process.env.CODEX_CLI_PATH;
+  const isolatedCodexHome = installIsolatedCodexHome("ocx-desktop-context-codex-");
   process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = home;
+  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
   try {
     const state = await buildClaudeDesktopState(config);
     const sol = state.models.find(m => m.route === "native/gpt-5.6-sol");
@@ -43,6 +50,9 @@ test("buildClaudeDesktopState gives native rows their real context window", asyn
   } finally {
     if (prev === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
     else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = prev;
+    if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+    else process.env.CODEX_CLI_PATH = previousCodexCliPath;
+    isolatedCodexHome.restore();
     rmSync(home, { recursive: true, force: true });
   }
 });

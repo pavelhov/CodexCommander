@@ -19,6 +19,7 @@ import { resolveAndPersistCodexRuntime, type ResolveCodexRuntimeDeps } from "../
 
 export interface V2CliDeps {
   execFile?: (file: string, args: string[], options?: SpawnInvocation["options"]) => void;
+  featuresInvocation?: (action: "enable" | "disable") => SpawnInvocation;
   isEnabled?: typeof isMultiAgentV2Enabled;
   hasMaxThreads?: typeof hasAgentsMaxThreads;
   sync?: (port?: number) => Promise<unknown>;
@@ -55,7 +56,7 @@ function runCodexFeatures(action: "enable" | "disable", deps: V2CliDeps): void {
   const exec = deps.execFile ?? ((file: string, args: string[], options?: SpawnInvocation["options"]) => {
     execFileSync(file, args, { stdio: ["ignore", "pipe", "pipe"], timeout: 15_000, windowsHide: true, ...options });
   });
-  const inv = codexFeaturesInvocation(action);
+  const inv = (deps.featuresInvocation ?? codexFeaturesInvocation)(action);
   exec(inv.file, inv.args, inv.options);
 }
 
