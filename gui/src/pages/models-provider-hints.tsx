@@ -1,13 +1,16 @@
 import { IconInfo } from "../icons";
 import { useT } from "../i18n/shared";
 import type { ProviderDiscoverySummary } from "../models-groups";
+import { providerRouteHash } from "../provider-route";
 import { discoveryFailureLabel } from "./models-shared";
 
 export function EmptyProviderHint({
+  provider,
   liveModels,
   discovery,
   showFailureBadge = true,
 }: {
+  provider?: string;
   liveModels: boolean;
   discovery?: ProviderDiscoverySummary;
   showFailureBadge?: boolean;
@@ -22,7 +25,7 @@ export function EmptyProviderHint({
         {failed
           ? `${discoveryFailureLabel(t, failed)} `
           : `${t(liveModels ? "models.emptyDiscovery" : "models.emptyDiscoveryDisabled")} `}
-        <a href="#providers">{t("models.openProviderSettings")}</a>
+        <a href={provider ? `#${providerRouteHash(provider, "settings")}` : "#providers"}>{t("models.openProviderSettings")}</a>
       </span>
     </div>
   );

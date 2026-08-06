@@ -95,9 +95,10 @@ delegation и на backend он уходит как `max`. Наличие зап
 
 ## Режим multi-agent surface
 
-Элемент v1/base/v2 на странице Models меняет collaboration surface, которую использует каждая
-запись picker'а Codex; каноническое описание режима, делегирования, наследования, fallback и
-поведения encrypted task см. в [Поверхности подагентов](/guides/sub-agent-surface/).
+На странице Models три режима collaboration называются **Classic v1**, **Automatic** (base/upstream
+default) и **Concurrent v2**. Этот элемент меняет collaboration surface, которую использует каждая
+запись picker'а Codex; каноническое описание режима, делегирования, наследования, fallback и поведения
+encrypted task см. в [Поверхности подагентов](/guides/sub-agent-surface/).
 
 ## Верхние reasoning-tier'ы
 

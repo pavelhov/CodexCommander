@@ -513,15 +513,24 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const respond = () => jsonResponse({ ok: true, cap: DEFAULT_PROVIDER_CONTEXT_CAP, value: globalContextCapValue(config), caps: providerContextCaps(config) });
 
     // Branch 1: set the global cap value and re-point every enabled provider to it.
+    // The GUI may include setAll so selecting a value and applying it is one atomic
+    // policy change instead of briefly writing an unintended intermediate cap.
     if (body.value !== undefined) {
-      if (typeof body.value !== "number" || !Number.isFinite(body.value) || body.value <= 0) {
-        return jsonResponse({ error: "value must be a positive number" }, 400);
+      if (typeof body.value !== "number" || !Number.isFinite(body.value) || !Number.isInteger(body.value) || body.value <= 0) {
+        return jsonResponse({ error: "value must be a positive integer" }, 400);
       }
-      const affected = Object.keys(providerContextCaps(config));
+      if (body.setAll !== undefined && typeof body.setAll !== "boolean") {
+        return jsonResponse({ error: "setAll must be a boolean" }, 400);
+      }
+      const before = Object.keys(providerContextCaps(config));
+      const names = Object.keys(config.providers);
       setGlobalContextCapValue(config, body.value);
+      if (typeof body.setAll === "boolean") {
+        setAllProviderContextCaps(config, names, body.setAll);
+      }
       save(config);
       reconcileLiveStateStores();
-      for (const provider of affected) clearModelCache(provider);
+      for (const provider of new Set([...before, ...names])) clearModelCache(provider);
       await refreshCodexCatalogBestEffort();
       return respond();
     }

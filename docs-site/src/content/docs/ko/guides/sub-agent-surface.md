@@ -89,7 +89,7 @@ opencodex는 읽을 수 없거나 빈 작업을 그대로 넘기지 않고 안�
 ### GUI
 
 - **Dashboard** → 첫 번째 상태 셀: **v1**, **base**, **v2**를 고릅니다.
-- **Models** → 맨 위 행의 세그먼트 선택기: 같은 전역 모드를 고릅니다.
+- **Models** → **Current behavior** → **Collaboration**: **Classic v1**, **Automatic**(base), **Concurrent v2** 중에서 고릅니다.
 - **Dashboard** → **Sub-agent delegation**: 가이드 모델/추론 강도와 네이티브 기본값 사용 여부를 설정합니다.
 - **Subagents**: 로스터를 선택하고 순서를 정한 뒤 전역 폴백 체인을 설정합니다.
 
@@ -165,4 +165,4 @@ curl -X PUT http://localhost:10100/api/injection-model \
 
 ### 컨텍스트 상한
 
-모델 컨텍스트 상한은 서브에이전트 모드와 무관합니다. Models 페이지에서 설정하세요. 네이티브 OpenAI 모델은 실제 컨텍스트 윈도우를 그대로 유지합니다.
+모델 컨텍스트 상한은 서브에이전트 모드와 무관합니다. **Models** → **Current behavior** → **Context**에서 설정하세요. **Uncapped**는 라우팅 프로바이더에 인위적인 상한이 없음을, **Limited**는 모두가 공유 값을 사용함을, **Mixed limits**는 프로바이더별 차이가 있음을 뜻합니다. 네이티브 OpenAI 모델은 실제 컨텍스트 윈도우를 그대로 유지합니다.

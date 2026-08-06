@@ -120,7 +120,7 @@ content when you control the caller.
 ### GUI
 
 - **Dashboard** → first stat cell: choose **v1**, **base**, or **v2**.
-- **Models** → top-row segmented control: choose the same global mode.
+- **Models** → **Current behavior** → **Collaboration**: choose **Classic v1**, **Automatic** (base), or **Concurrent v2**.
 - **Dashboard** → **Sub-agent delegation**: set guidance model/effort and the native-default opt-in.
 - **Subagents**: choose and order the roster and configure the global fallback chain.
 
@@ -203,5 +203,7 @@ tier that Codex converts to `max`; opencodex then maps or clamps the value for t
 
 ### Context cap
 
-The model context cap is independent of sub-agent mode. Configure it on the Models page; native
-OpenAI models retain their real context windows.
+The model context cap is independent of sub-agent mode. Configure it under **Models** → **Current
+behavior** → **Context**. **Uncapped** means no routed provider has an artificial cap; **Limited**
+means all routed providers use the shared value; **Mixed limits** reports per-provider differences.
+Native OpenAI models retain their real context windows.

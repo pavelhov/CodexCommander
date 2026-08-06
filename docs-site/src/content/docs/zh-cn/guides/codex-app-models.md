@@ -64,7 +64,7 @@ visibility = "list"
 
 ## 多代理界面模式
 
-Models 页面上的 v1/base/v2 控件会改变每个选择器条目使用的 Codex 协作界面；有关规范模式、委派、继承、fallback 以及加密任务行为，请参见 [Sub-agent Surface](/guides/sub-agent-surface/)。
+Models 页面将三个协作选项标为 **Classic v1**、**Automatic**（base/upstream 默认值）和 **Concurrent v2**。该控件会改变每个选择器条目使用的 Codex 协作界面；有关规范模式、委派、继承、fallback 以及加密任务行为，请参见 [Sub-agent Surface](/guides/sub-agent-surface/)。
 
 ## 推理顶档
 

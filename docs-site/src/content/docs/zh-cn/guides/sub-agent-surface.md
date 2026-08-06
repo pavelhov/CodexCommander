@@ -89,7 +89,7 @@ opencodex 会安全失败，而不是转发空任务或不可读任务：
 ### GUI
 
 - **Dashboard** → 第一个状态单元：选择 **v1**、**base** 或 **v2**。
-- **Models** → 顶部一行的分段控件：选择相同的全局模式。
+- **Models** → **Current behavior** → **Collaboration**：选择 **Classic v1**、**Automatic**（base）或 **Concurrent v2**。
 - **Dashboard** → **Sub-agent delegation**：设置指引模型/effort，以及原生默认值启用项。
 - **Subagents**：选择并排序 roster，并配置全局 fallback chain。
 
@@ -165,4 +165,4 @@ curl -X PUT http://localhost:10100/api/injection-model \
 
 ### 上下文上限
 
-模型上下文上限与子代理模式无关。请在 Models 页面配置它；原生 OpenAI 模型会保留其真实的上下文窗口。
+模型上下文上限与子代理模式无关。请在 **Models** → **Current behavior** → **Context** 中配置。**Uncapped** 表示路由 provider 没有人工上限；**Limited** 表示所有路由 provider 使用同一个共享值；**Mixed limits** 表示 provider 之间存在差异。原生 OpenAI 模型会保留其真实上下文窗口。

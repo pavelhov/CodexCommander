@@ -2005,6 +2005,38 @@ describe("provider management validation", () => {
       });
       expect(await all.json()).toMatchObject({ ok: true, caps: { "test-openai": 500_000, other: 500_000 } });
 
+      // Value + setAll is one atomic policy update for staged UI editors.
+      const atomic = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value: 600_000, setAll: true }),
+      });
+      expect(atomic.status).toBe(200);
+      expect(await atomic.json()).toMatchObject({
+        ok: true,
+        value: 600_000,
+        caps: { "test-openai": 600_000, other: 600_000 },
+      });
+
+      // A compound clear persists the new reusable value without leaving caps enabled.
+      const atomicClear = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value: 650_000, setAll: false }),
+      });
+      expect(atomicClear.status).toBe(200);
+      expect(await atomicClear.json()).toMatchObject({ ok: true, value: 650_000, caps: {} });
+
+      // Invalid compound bodies are rejected before either field mutates persisted state.
+      const badCompound = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value: 700_000, setAll: "yes" }),
+      });
+      expect(badCompound.status).toBe(400);
+      const afterBadCompound = await fetch(new URL("/api/provider-context-caps", server.url));
+      expect(await afterBadCompound.json()).toMatchObject({ value: 650_000, caps: {} });
+
       // Invalid global value is rejected.
       const bad = await fetch(new URL("/api/provider-context-caps", server.url), {
         method: "PUT",
@@ -2012,6 +2044,13 @@ describe("provider management validation", () => {
         body: JSON.stringify({ value: 0 }),
       });
       expect(bad.status).toBe(400);
+
+      const fractional = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value: 0.5 }),
+      });
+      expect(fractional.status).toBe(400);
     } finally {
       await server.stop(true);
     }

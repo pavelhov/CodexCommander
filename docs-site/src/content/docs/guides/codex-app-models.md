@@ -93,9 +93,10 @@ forces Codex's model cache stale after a toggle.
 
 ## Multi-agent surface mode
 
-The Models-page v1/base/v2 control changes which Codex collaboration surface each picker entry uses;
-see [Sub-agent Surface](/guides/sub-agent-surface/) for the canonical mode, delegation, inheritance,
-fallback, and encrypted-task behavior.
+The Models page labels the three collaboration choices **Classic v1**, **Automatic** (the base/upstream
+default), and **Concurrent v2**. This control changes which Codex collaboration surface each picker
+entry uses; see [Sub-agent Surface](/guides/sub-agent-surface/) for the canonical mode, delegation,
+inheritance, fallback, and encrypted-task behavior.
 
 ## Reasoning top tiers
 
