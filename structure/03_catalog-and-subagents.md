@@ -114,8 +114,9 @@ The override is applied as a final pass in both `buildCatalogEntries` (live `/v1
 ensures `normalizeRoutedCatalogEntry` (which deletes `multi_agent_version` from routed entries) does
 not clobber the forced value.
 
-CLI: `ocx v2 mode v1|default|v2`. GUI: segmented control on the Models page. API: `GET/PUT /api/v2`
-with `multiAgentMode` field.
+CLI: `ocx v2 mode v1|default|v2`. GUI: **Models → Current behavior → Collaboration**, labeled
+**Classic v1**, **Automatic**, and **Concurrent v2**. API: `GET/PUT /api/v2` with
+`multiAgentMode` field.
 
 The `multi_agent_v2` feature flag and the logical maximum thread count are separate from
 `multiAgentMode` (`src/codex/features.ts`): the mode decides which surface Codex advertises, while

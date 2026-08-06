@@ -60,6 +60,39 @@ export interface ShadowCallData {
   sourceModels?: string[];
 }
 
+export type ContextPolicyState = "uncapped" | "limited" | "mixed";
+
+export interface ContextPolicySummary {
+  state: ContextPolicyState;
+  capped: number;
+  total: number;
+}
+
+export function isPositiveContextCap(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+/**
+ * Aggregate routed-provider caps without collapsing a partial selection into an
+ * ambiguous off switch. `limited` means every routed provider uses the current
+ * global value; any partial or stale-value combination is intentionally `mixed`.
+ */
+export function summarizeContextPolicy(
+  providerNames: string[],
+  caps: Record<string, number>,
+  currentValue: number,
+): ContextPolicySummary {
+  const capped = providerNames.filter(provider => isPositiveContextCap(caps[provider]));
+  if (capped.length === 0) return { state: "uncapped", capped: 0, total: providerNames.length };
+  const everyProviderUsesCurrentValue = capped.length === providerNames.length
+    && capped.every(provider => caps[provider] === currentValue);
+  return {
+    state: everyProviderUsesCurrentValue ? "limited" : "mixed",
+    capped: capped.length,
+    total: providerNames.length,
+  };
+}
+
 export const CAP_OPTIONS = Array.from({ length: 18 }, (_, i) => 100_000 + i * 50_000); // 100k … 950k
 export const CAP_OPTION_SET = new Set(CAP_OPTIONS);
 export const CUSTOM_OPTION = "custom";

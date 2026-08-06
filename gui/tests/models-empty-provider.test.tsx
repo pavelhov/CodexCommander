@@ -116,6 +116,10 @@ test("Models page combines final visibility, atomic actions, discovery status, a
   let selected = ["gemini-pro", "gemini-flash"];
   const disabled = new Set(["gpt-oss"]);
   const visibilityBodies: Array<{ scope: string; targets: Array<{ id: string }>; enabled: boolean }> = [];
+  const contextCapBodies: Array<{ provider?: string; enabled?: boolean; value?: number; setAll?: boolean }> = [];
+  let contextCapValue = 350_000;
+  let contextCaps: Record<string, number> = {};
+  let multiAgentMode: "v1" | "default" | "v2" = "v1";
   let failNext = false;
   let failCatalog = false;
   let modelFetches = 0;
@@ -146,9 +150,35 @@ test("Models page combines final visibility, atomic actions, discovery status, a
       }]);
     }
     if (url.endsWith("/api/selected-models")) return Response.json({ selected: { [provider]: selected }, available: { [provider]: ids } });
-    if (url.endsWith("/api/provider-context-caps")) return Response.json({ caps: {} });
+    if (url.endsWith("/api/provider-context-caps")) {
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as (typeof contextCapBodies)[number];
+        contextCapBodies.push(body);
+        // Emulate the pre-atomic endpoint too: its value branch ignored a sibling setAll.
+        if (typeof body.value === "number") contextCapValue = body.value;
+        else if (body.setAll === true) contextCaps = { [provider]: contextCapValue };
+        else if (body.setAll === false) contextCaps = {};
+        else if (typeof body.provider === "string" && typeof body.enabled === "boolean") {
+          if (body.enabled) contextCaps[body.provider] = contextCapValue;
+          else delete contextCaps[body.provider];
+        }
+      }
+      return Response.json({ value: contextCapValue, caps: contextCaps });
+    }
     if (url.endsWith("/api/combos")) return Response.json({ combos: [] });
     if (url.endsWith("/api/shadow-call-settings")) return Response.json({ enabled: true, model: `${provider}/gemini-pro` });
+    if (url.endsWith("/api/v2")) {
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { multiAgentMode?: "v1" | "default" | "v2" };
+        if (body.multiAgentMode) multiAgentMode = body.multiAgentMode;
+      }
+      return Response.json({
+        enabled: false,
+        agentsMaxThreadsConflict: false,
+        maxConcurrentThreadsPerSession: null,
+        multiAgentMode,
+      });
+    }
     if (url.endsWith("/api/model-visibility") && init?.method === "PUT") {
       const body = JSON.parse(String(init.body)) as (typeof visibilityBodies)[number];
       visibilityBodies.push(body);
@@ -194,8 +224,71 @@ test("Models page combines final visibility, atomic actions, discovery status, a
     expect(switchFor("gemini-pro").getAttribute("aria-pressed")).toBe("true");
     expect(switchFor("claude-sonnet").getAttribute("aria-pressed")).toBe("false");
     expect(container.querySelector(".badge.badge-amber")?.textContent).toContain("Discovery failed");
+    const discoveryLink = container.querySelector<HTMLAnchorElement>('a[href="#providers/fallback-provider/settings"]');
+    expect(discoveryLink?.textContent).toContain("Auto-discovery on");
+    expect(discoveryLink?.getAttribute("aria-label")).toContain("Open provider settings");
     expect(container.textContent).not.toContain("Not selected");
+    expect(container.textContent).toContain("Classic v1");
+    expect(container.textContent).toContain("Flexible model selection");
+    expect(container.textContent).toContain("Uncapped");
+    expect(container.textContent).toContain("Models use their full advertised window");
+    expect(container.textContent).toContain("No combos configured yet");
+    expect(container.querySelector(`button[aria-label="Change context policy for ${provider}"]`)).toBeNull();
 
+    const contextChange = container.querySelector<HTMLButtonElement>('button[aria-controls="models-context-editor"]')!;
+    await act(async () => contextChange.click());
+    const limitRadio = container.querySelector<HTMLInputElement>('input[name="models-context-policy"][value="limited"]')!;
+    await act(async () => limitRadio.click());
+    expect(contextCapBodies).toHaveLength(0);
+    await act(async () => container.querySelector<HTMLButtonElement>('button.select-trigger[aria-label="Context cap"]')?.click());
+    const cap200k = [...testWindow.document.querySelectorAll<HTMLElement>('[role="option"]')]
+      .find(option => option.textContent === "200k");
+    await act(async () => cap200k?.click());
+    expect(contextCapBodies).toHaveLength(0);
+    await act(async () => {
+      buttonText("Apply policy").click();
+      await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+    });
+    expect(contextCapBodies.slice(-2)).toEqual([
+      { value: 200_000, setAll: true },
+      { setAll: true },
+    ]);
+    expect(container.textContent).toContain("Limited to 200k");
+    await act(async () => contextChange.click());
+
+    const collaborationChange = container.querySelector<HTMLButtonElement>('button[aria-controls="models-collaboration-editor"]')!;
+    await act(async () => collaborationChange.click());
+    const automaticRadio = container.querySelector<HTMLInputElement>('input[name="models-collaboration-mode"][value="default"]')!;
+    await act(async () => {
+      automaticRadio.click();
+      await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+    });
+    expect(container.textContent).toContain("Automatic");
+    expect(automaticRadio.checked).toBe(true);
+    await act(async () => collaborationChange.click());
+
+    const collapseAll = [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find(button => button.textContent?.includes("Collapse all"))!;
+    const expandAll = [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find(button => button.textContent?.includes("Expand all"))!;
+    await act(async () => collapseAll.click());
+    expect(switchFor("gemini-pro")).toBeNull();
+    const catalogSearch = container.querySelector<HTMLInputElement>('input[type="search"]')!;
+    const setCatalogSearch = (value: string) => {
+      Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!
+        .set!.call(catalogSearch, value);
+      catalogSearch.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    };
+    await act(async () => setCatalogSearch("gemini-pro"));
+    expect(switchFor("gemini-pro")).not.toBeNull();
+    await act(async () => {
+      setCatalogSearch("");
+      expandAll.click();
+    });
+
+    const advanced = [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find(button => button.textContent?.includes("Advanced"));
+    await act(async () => advanced?.click());
     await act(async () => container.querySelector<HTMLButtonElement>('button.select-trigger[aria-label="Shadow Call Intercept"]')?.click());
     // The workspace Select portals its listbox to document.body, so the options are not inside
     // `container`. Query the document instead of the mount node.

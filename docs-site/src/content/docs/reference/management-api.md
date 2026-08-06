@@ -205,6 +205,10 @@ keys are not returned to dashboard clients.
 | `GET, PUT /api/provider-context-caps` | Read or update global, all-provider, or one-provider context caps | 400 invalid request; 404 unknown provider |
 | `GET /api/provider-presets` | Return GUI provider presets derived from the runtime registry | — |
 
+`PUT /api/provider-context-caps` accepts a positive integer `value`, boolean `setAll`, or the
+per-provider `{ provider, enabled }` shape. `value` and `setAll` may be sent together to apply a
+shared value atomically.
+
 `provider_has_dependent_combos` is a safety barrier: remove or edit the dependent combos before
 deleting their provider.
 

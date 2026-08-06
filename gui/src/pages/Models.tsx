@@ -1,16 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Switch, Notice, EmptyState, Select, Tooltip } from "../ui";
-import { IconChevron, IconBoxes, IconInfo, IconShuffle, IconCheck, IconAlert } from "../icons";
+import { Switch, Notice, EmptyState, Select } from "../ui";
+import {
+  IconAlert,
+  IconBot,
+  IconBoxes,
+  IconCheck,
+  IconChevron,
+  IconHardDrive,
+  IconInfo,
+  IconSearch,
+  IconShuffle,
+} from "../icons";
 import { useT } from "../i18n/shared";
 import type { TFn, TKey } from "../i18n/shared";
 import { modelLabel } from "../model-display";
-import { formatNamespacedModelId, formatProviderDisplayName, providerDisplaySlug } from "../provider-icons";
+import { formatNamespacedModelId, formatProviderDisplayName } from "../provider-icons";
 import { type ComboItem, parseComboList } from "../combo-workspace-data";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { setClientResourceData } from "../client-resource";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
+import { providerRouteHash } from "../provider-route";
 import {
   buildProviderModelGroups,
   type ConfiguredProviderSummary,
@@ -40,6 +51,8 @@ import {
   writeCollapsedProviders,
   writeCombosOpen,
   discoveryFailureLabel,
+  isPositiveContextCap,
+  summarizeContextPolicy,
   type ModelRow,
   type ProviderContextCapsResponse,
   type ShadowCallData,
@@ -72,10 +85,12 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const [providers, setProviders] = useState<ConfiguredProviderSummary[]>(() => cached?.providers ?? []);
   const [disabled, setDisabled] = useState<Set<string>>(() => new Set(cached?.disabled ?? []));
   const [selectedModels, setSelectedModels] = useState<ProviderModelMap | null>(() => cached?.selectedModels ?? null);
-  const [search, setSearch] = useState<Record<string, string>>({});
+  const [catalogQuery, setCatalogQuery] = useState("");
   const [limit, setLimit] = useState<Record<string, number>>({});
   const [contextCaps, setContextCaps] = useState<Record<string, number>>(() => cached?.contextCaps ?? {});
   const [contextCapValue, setContextCapValue] = useState(() => cached?.contextCapValue ?? 350_000);
+  const [contextCapDraft, setContextCapDraft] = useState(() => cached?.contextCapValue ?? 350_000);
+  const [contextDraftMode, setContextDraftMode] = useState<"full" | "limited">("full");
   const [customCap, setCustomCap] = useState("");
   const [showCustom, setShowCustom] = useState(false);
   const initialCollapsed = readCollapsedProviders();
@@ -108,7 +123,6 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const loadPendingRef = useRef(false);
   // multi_agent_v2 / ultra gate. null = endpoint unavailable (older proxy build) -> section hidden.
   const [v2, setV2] = useState<V2Status | null>(null);
-  const [v2Loading, setV2Loading] = useState(true);
   const [v2Busy, setV2Busy] = useState(false);
   const [v2Note, setV2Note] = useState("");
   const v2BusyRef = useRef(false);
@@ -130,6 +144,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [shadowCall, setShadowCall] = useState<ShadowCallData | null>(null);
   const [shadowCallSaving, setShadowCallSaving] = useState(false);
+  const [behaviorEditor, setBehaviorEditor] = useState<"collaboration" | "context" | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   // Combo summary section. null = cold load with no seed (pending strut). Failed reads stay
   // null + combosError so an API error never masquerades as "no combos configured".
   const combosCacheKey = `ocx.models.combos.v1:${apiBase}`;
@@ -204,8 +220,6 @@ export default function Models({ apiBase }: { apiBase: string }) {
       });
     } catch {
       setV2(null); // old server / network: hide the section instead of guessing
-    } finally {
-      setV2Loading(false);
     }
   }, [apiBase]);
 
@@ -313,6 +327,15 @@ export default function Models({ apiBase }: { apiBase: string }) {
     [models, providers],
   );
 
+  const routedProviderNames = useMemo(
+    () => groups.filter(group => !group.native && group.rows.length > 0).map(group => group.provider),
+    [groups],
+  );
+  const contextPolicy = useMemo(
+    () => summarizeContextPolicy(routedProviderNames, contextCaps, contextCapValue),
+    [contextCapValue, contextCaps, routedProviderNames],
+  );
+
   // One-shot default collapse. It stays an effect on `groups` so CACHED groups collapse
   // immediately on first paint, even when revalidation is slow or fails; moving it into
   // the load() success path would render cached providers expanded and leave them
@@ -372,7 +395,10 @@ export default function Models({ apiBase }: { apiBase: string }) {
     setBusy(true);
     busyRef.current = true;
     setStatus("");
-    const enabled = contextCaps[provider] !== contextCapValue;
+    // Any positive stored value means the provider is capped. Treat a stale value as
+    // capped too, so the first click always removes the policy instead of silently
+    // replacing it with the current global value.
+    const enabled = !isPositiveContextCap(contextCaps[provider]);
     try {
       const r = await fetch(`${apiBase}/api/provider-context-caps`, {
         method: "PUT",
@@ -423,7 +449,23 @@ export default function Models({ apiBase }: { apiBase: string }) {
         body: JSON.stringify(body),
       });
       try {
-        const data = await readJsonOrThrow<ProviderContextCapsResponse>(r, t("models.capSaveFailed"));
+        let data = await readJsonOrThrow<ProviderContextCapsResponse>(r, t("models.capSaveFailed"));
+        const requestedValue = typeof body.value === "number" ? Math.floor(body.value) : null;
+        // Current runtimes apply { value, setAll } atomically. A dashboard can briefly
+        // outlive an older local proxy during an upgrade, whose value branch ignored
+        // setAll; detect that response and finish the explicit user action once.
+        if (
+          requestedValue !== null
+          && body.setAll === true
+          && !routedProviderNames.every(provider => data?.caps?.[provider] === requestedValue)
+        ) {
+          const fallback = await fetch(`${apiBase}/api/provider-context-caps`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ setAll: true }),
+          });
+          data = await readJsonOrThrow<ProviderContextCapsResponse>(fallback, t("models.capSaveFailed"));
+        }
         if (typeof data?.value === "number" && Number.isFinite(data.value) && data.value > 0) setContextCapValue(data.value);
         setContextCaps(data?.caps ?? {});
         setOk(true);
@@ -441,34 +483,44 @@ export default function Models({ apiBase }: { apiBase: string }) {
     }
   };
 
-  const setGlobalCap = (value: number) => {
-    if (!Number.isFinite(value) || value <= 0) return;
-    void putCap({ value: Math.floor(value) });
-  };
-
   const onSelectCap = (raw: string) => {
-    if (raw === CUSTOM_OPTION) { setShowCustom(true); setCustomCap(String(contextCapValue)); return; }
+    if (raw === CUSTOM_OPTION) { setShowCustom(true); setCustomCap(String(contextCapDraft)); return; }
     setShowCustom(false);
     const value = Number(raw);
-    if (Number.isFinite(value) && value > 0 && value !== contextCapValue) setGlobalCap(value);
+    if (Number.isFinite(value) && value > 0) setContextCapDraft(Math.floor(value));
   };
 
   const applyCustomCap = () => {
     const value = Number(customCap.replace(/[_,\s]/g, ""));
     if (!Number.isFinite(value) || value <= 0) { publishFeedback(false, t("models.capSaveFailed")); return; }
     setShowCustom(false);
-    setGlobalCap(value);
+    setContextCapDraft(Math.floor(value));
   };
 
-  const allCapped = useMemo(
-    () => {
-      // Cap aggregate counts routed providers only; the single native group has no cap switch.
-      const routed = groups.filter(group => !group.native && group.rows.length > 0);
-      return routed.length > 0 && routed.every(group => contextCaps[group.provider] === contextCapValue);
-    },
-    [groups, contextCaps, contextCapValue],
-  );
-  const setAll = () => { void putCap({ setAll: !allCapped }); };
+  const toggleContextEditor = () => {
+    if (behaviorEditor === "context") {
+      setBehaviorEditor(null);
+      return;
+    }
+    setContextDraftMode(contextPolicy.state === "uncapped" ? "full" : "limited");
+    setContextCapDraft(contextCapValue);
+    setCustomCap(String(contextCapValue));
+    setShowCustom(false);
+    setBehaviorEditor("context");
+  };
+
+  const applyContextPolicy = () => {
+    if (contextDraftMode === "full") {
+      void putCap({ setAll: false });
+      return;
+    }
+    if (!Number.isFinite(contextCapDraft) || contextCapDraft <= 0) {
+      setOk(false);
+      setStatus(t("models.capSaveFailed"));
+      return;
+    }
+    void putCap({ value: Math.floor(contextCapDraft), setAll: true });
+  };
 
   const saveShadowCall = async (patch: Partial<ShadowCallData>) => {
     if (!shadowCall || shadowCallSaving) return;
@@ -500,7 +552,17 @@ export default function Models({ apiBase }: { apiBase: string }) {
       });
       try {
         const data = await readJsonOrThrow<V2Status & { warnings?: string[] }>(r, t("models.saveFailed"));
-        void loadV2();
+        if (!data || typeof data.enabled !== "boolean") {
+          setOk(false);
+          setStatus(t("models.saveFailed"));
+          return;
+        }
+        setV2({
+          enabled: data.enabled,
+          agentsMaxThreadsConflict: data.agentsMaxThreadsConflict === true,
+          maxConcurrentThreadsPerSession: typeof data.maxConcurrentThreadsPerSession === "number" ? data.maxConcurrentThreadsPerSession : null,
+          multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2" ? data.multiAgentMode : "default",
+        });
         setOk(true);
         setStatus(t("models.v2Applied"));
         setV2Note((data?.warnings ?? []).join(" "));
@@ -679,7 +741,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
 
   const renderGroup = (group: ProviderModelGroup<ModelRow>) => {
     const { provider, rows, native, liveModels, discovery } = group;
-    const isCollapsed = collapsed.has(provider);
+    const q = catalogQuery.trim().toLowerCase();
+    const isCollapsed = collapsed.has(provider) && q === "";
     // Final visibility, not just the disable flag: a model is visible to Codex only when the
     // provider allowlist admits it AND it is not disabled. Reading `disabled` alone made the
     // switches disagree with what the picker actually offers.
@@ -691,11 +754,20 @@ export default function Models({ apiBase }: { apiBase: string }) {
       disabled.has(model.namespaced),
     );
     const activeCount = rows.filter(isVisible).length;
-    const capOn = contextCaps[provider] === contextCapValue;
+    const providerCap = contextCaps[provider];
+    const capOn = isPositiveContextCap(providerCap);
     const isNative = native;
     const discoveryFailure = liveModels && discovery?.status === "failed" ? discovery : undefined;
-    const q = (search[provider] ?? "").trim().toLowerCase();
-    const filtered = q ? rows.filter(m => m.id.toLowerCase().includes(q)) : rows;
+    const discoveryLabel = t(liveModels ? "models.discoveryAutoOn" : "models.discoveryAutoOff");
+    const providerSettingsHref = `#${providerRouteHash(provider, "settings")}`;
+    const providerMatchesQuery = provider.toLowerCase().includes(q);
+    const filtered = q && !providerMatchesQuery
+      ? rows.filter(model => (
+        model.id.toLowerCase().includes(q)
+        || model.namespaced.toLowerCase().includes(q)
+        || model.displayName?.toLowerCase().includes(q)
+      ))
+      : rows;
     // Display-only: enabled models float to the top of each provider group so they
     // stay findable in long lists. The sort is stable, so the server order is kept
     // inside each partition, and this does not affect the picker order above
@@ -719,73 +791,88 @@ export default function Models({ apiBase }: { apiBase: string }) {
        );
      };
     return (
-      <div key={provider} className="card models-provider-card">
-       <div className={`row group-head models-provider-head${isCollapsed ? "" : " open"}`}>
-          <button
-            type="button"
-            className="row models-provider-toggle"
-            onClick={() => toggleCollapse(provider)}
-            aria-expanded={!isCollapsed}
-            style={{ flex: 1, border: 0, background: "transparent", padding: 0, color: "inherit", cursor: "pointer", textAlign: "left" }}
-          >
-          <IconChevron style={{ width: 14, height: 14, color: "var(--muted)", transform: isCollapsed ? "none" : "rotate(90deg)", transition: "transform .12s" }} />
-          <span className="text-body font-semibold">{providerDisplaySlug(provider)}</span>
-          {isNative && <span className="models-chip muted mono text-caption">{t("models.nativeGroupLabel")}</span>}
-         {discoveryFailure && (
-           <span
-             className="badge badge-amber"
-             role="status"
-             title={discoveryFailureLabel(t, discoveryFailure)}
-           >
-             {t("models.discoveryFailedBadge")}
-           </span>
-         )}
-          <span className="muted mono text-label">{t("models.active", { active: activeCount, total: rows.length })}</span>
-          </button>
-           <div className="row models-provider-actions">
-             {!isNative && (
-               <button
-                 type="button"
-                 className="btn btn-ghost btn-sm text-caption"
-                 onClick={(e) => {
-                   e.stopPropagation();
-                   setCustomModalMode("add");
-                   setCustomModalProvider(provider);
-                   setCustomModalId("");
-                   setCustomFormModelId("");
-                   setCustomFormDisplayName("");
-                   setCustomFormContextWindow("");
-                   setCustomFormShowCustomCtx(false);
-                   setCustomFormModalities(["text"]);
-                   setCustomError("");
-                   setCustomModalOpen(true);
-                 }}
-                 aria-label={t("models.customAdd")}
-                 aria-haspopup="dialog"
-               >+</button>
-             )}
-             <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOn} onClick={() => bulkToggle(true)}>{t("models.allOn")}</button>
-             <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOff} onClick={() => bulkToggle(false)}>{t("models.allOff")}</button>
-             {!isNative && <>
-               <Switch on={capOn} onClick={() => toggleProviderCap(provider)} disabled={busy} label={t("models.capValue", { value: fmtK(contextCapValue) })} />
-               <span className="muted mono text-label">{t("models.capValue", { value: fmtK(contextCapValue) })}</span>
-             </>}
-           </div>
+      <div key={provider} className="models-provider-group">
+       <div className={`group-head models-provider-head${isCollapsed ? "" : " open"}`}>
+          <div className="models-provider-identity">
+            <button
+              type="button"
+              className="row models-provider-toggle"
+              onClick={() => toggleCollapse(provider)}
+              aria-expanded={!isCollapsed}
+            >
+              <IconChevron style={{ width: 14, height: 14, color: "var(--muted)", transform: isCollapsed ? "none" : "rotate(90deg)", transition: "transform .12s" }} />
+              <span className="text-body font-semibold">{provider}</span>
+              {isNative && <span className="models-chip muted mono text-caption">{t("models.nativeGroupLabel")}</span>}
+              {discoveryFailure && (
+                <span
+                  className="badge badge-amber"
+                  role="status"
+                  title={discoveryFailureLabel(t, discoveryFailure)}
+                >
+                  {t("models.discoveryFailedBadge")}
+                </span>
+              )}
+            </button>
+            {!isNative && (
+              <a
+                className={`models-provider-discovery${liveModels ? " is-live" : " is-static"}`}
+                href={providerSettingsHref}
+                aria-label={`${discoveryLabel}. ${t("models.openProviderSettings")}`}
+              >
+                <span className="models-provider-discovery-dot" aria-hidden="true" />
+                {discoveryLabel}
+              </a>
+            )}
+          </div>
+          <span className="models-provider-visible mono text-label">
+            <span className="sr-only">{t("models.tableVisible")}: </span>
+            {t("models.visibleCount", { active: activeCount, total: rows.length })}
+          </span>
+          {isNative ? (
+            <span className="models-context-policy models-context-policy--full">
+              <span className="sr-only">{t("models.tableContext")}: </span>
+              <IconCheck aria-hidden="true" />
+              {t("models.contextProviderNative")}
+            </span>
+          ) : (
+            <span className={`models-context-policy${capOn ? " models-context-policy--capped" : " models-context-policy--full"}`}>
+              <span className="sr-only">{t("models.tableContext")}: </span>
+              {capOn ? <IconInfo aria-hidden="true" /> : <IconCheck aria-hidden="true" />}
+              {capOn
+                ? t("models.contextProviderCapped", { value: fmtK(providerCap) })
+                : t("models.contextProviderFull")}
+            </span>
+          )}
+          <div className="row models-provider-actions">
+            {!isNative && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm text-caption"
+                onClick={() => {
+                  setCustomModalMode("add");
+                  setCustomModalProvider(provider);
+                  setCustomModalId("");
+                  setCustomFormModelId("");
+                  setCustomFormDisplayName("");
+                  setCustomFormContextWindow("");
+                  setCustomFormShowCustomCtx(false);
+                  setCustomFormModalities(["text"]);
+                  setCustomError("");
+                  setCustomModalOpen(true);
+                }}
+                aria-label={t("models.customAdd")}
+                aria-haspopup="dialog"
+              >+</button>
+            )}
+            <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOn} onClick={() => bulkToggle(true)}>{t("models.allOn")}</button>
+            <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOff} onClick={() => bulkToggle(false)}>{t("models.allOff")}</button>
+          </div>
         </div>
         {!isCollapsed && (
           <div className="models-provider-body">
             {isNative && <p className="muted text-label models-provider-hint">{t("models.nativeHint")}</p>}
             {rows.length === 0 && (
-              <EmptyProviderHint liveModels={liveModels} discovery={discovery} showFailureBadge={false} />
-            )}
-            {rows.length > PAGE / 2 && (
-              <input
-                className="input"
-                placeholder={t("models.search")}
-                value={search[provider] ?? ""}
-                onChange={e => setSearch(prev => ({ ...prev, [provider]: e.target.value }))}
-                aria-label={t("models.search")}
-              />
+              <EmptyProviderHint provider={provider} liveModels={liveModels} discovery={discovery} showFailureBadge={false} />
             )}
              {visible.map(m => {
                // The row reflects the same final-visibility answer as the count and the picker.
@@ -905,60 +992,118 @@ export default function Models({ apiBase }: { apiBase: string }) {
      );
   };
 
-  const visibleGroups = selectedProvider
+  const providerScopedGroups = selectedProvider
     ? groups.filter(group => group.provider === selectedProvider)
     : groups;
+  const normalizedCatalogQuery = catalogQuery.trim().toLowerCase();
+  const visibleGroups = normalizedCatalogQuery
+    ? providerScopedGroups.filter(group => (
+      group.provider.toLowerCase().includes(normalizedCatalogQuery)
+      || group.rows.some(model => (
+        model.id.toLowerCase().includes(normalizedCatalogQuery)
+        || model.namespaced.toLowerCase().includes(normalizedCatalogQuery)
+        || model.displayName?.toLowerCase().includes(normalizedCatalogQuery)
+      ))
+    ))
+    : providerScopedGroups;
+
+  const multiAgentMode = v2?.multiAgentMode ?? "default";
+  const contextStateLabel = contextPolicy.state === "uncapped"
+    ? t("models.contextStateUncapped")
+    : contextPolicy.state === "limited"
+      ? t("models.contextStateLimited", { value: fmtK(contextCapValue) })
+      : t("models.contextStateMixed");
+  const contextStateDescription = contextPolicy.state === "uncapped"
+    ? t("models.contextDescUncapped")
+    : contextPolicy.state === "limited"
+      ? t("models.contextDescLimited", { value: fmtK(contextCapValue) })
+      : t("models.contextDescMixed", {
+        capped: contextPolicy.capped,
+        total: contextPolicy.total,
+      });
+  const contextDraftUnchanged = contextDraftMode === "full"
+    ? contextPolicy.state === "uncapped"
+    : contextPolicy.state === "limited" && contextCapDraft === contextCapValue;
 
   const controlsBlock = (
-    <>
-      <div className="models-control-top-row">
-        <div className="models-shadow-row row muted text-control" aria-busy={!shadowCall || undefined}>
-          <span className="models-shadow-label">{t("models.shadowCallIntercept")} <Tooltip content={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })}>ⓘ</span></Tooltip></span>
-          <code className="text-caption models-shadow-warning" style={{ opacity: 0.6 }}>{t("models.shadowCallOriginal", { models: shadowSourceModelBadge(shadowCall?.sourceModels) })}</code>
-          <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />
-          <div className="models-shadow-model-slot">
-            <Select value={shadowCall?.model ?? ""} options={shadowCallOptions} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
-          </div>
-        </div>
-
-        {(v2Loading || v2) && (
-          <div className="models-v2-mode-row row">
-            <span className="muted text-control">{t("models.v2Label")}</span>
-            <div className="segmented models-segmented" role="radiogroup" aria-label={t("models.v2Label")}>
-              {(["v1", "default", "v2"] as const).map(mode => (
-                <button
-                  key={mode}
-                  type="button"
-                  role="radio"
-                  aria-checked={(v2?.multiAgentMode ?? "default") === mode}
-                  className={`btn btn-sm${(v2?.multiAgentMode ?? "default") === mode ? " btn-primary" : " btn-ghost"}`}
-                  style={{ background: (v2?.multiAgentMode ?? "default") === mode ? undefined : "transparent", color: (v2?.multiAgentMode ?? "default") === mode ? undefined : "var(--muted)" }}
-                  disabled={!v2 || v2Busy}
-                  onClick={() => void setMultiAgentMode(mode)}
-                >
-                  {t(`models.v2Mode_${mode}` as TKey)}
-                </button>
-              ))}
+    <section className="models-behavior" aria-labelledby="models-current-behavior">
+      <h3 id="models-current-behavior" className="models-section-title">{t("models.currentBehavior")}</h3>
+      <div className={`models-behavior-panel${v2 ? "" : " models-behavior-panel--single"}`}>
+        {v2 && (
+          <div className="models-behavior-item">
+            <div className="models-behavior-item-head">
+              <span className="models-behavior-title"><IconBot aria-hidden="true" />{t("models.collaborationTitle")}</span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                aria-expanded={behaviorEditor === "collaboration"}
+                aria-controls="models-collaboration-editor"
+                onClick={() => setBehaviorEditor(current => current === "collaboration" ? null : "collaboration")}
+              >
+                {t("models.change")}
+              </button>
             </div>
+            <div className="models-behavior-status-row">
+              <span className="models-behavior-pill">{t(`models.modeLabel_${multiAgentMode}` as TKey)}</span>
+              <span className="models-behavior-positive"><IconCheck aria-hidden="true" />{t(`models.modeStatus_${multiAgentMode}` as TKey)}</span>
+            </div>
+            <p>{t(`models.modeDesc_${multiAgentMode}` as TKey)}</p>
+          </div>
+        )}
+        <div className="models-behavior-item">
+          <div className="models-behavior-item-head">
+            <span className="models-behavior-title"><IconHardDrive aria-hidden="true" />{t("models.contextTitle")}</span>
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              style={{ width: 24, height: 24, minWidth: 24, flex: "0 0 24px", padding: 0, borderRadius: "var(--radius-pill)", color: "var(--muted)" }}
-              disabled={!v2}
-              onClick={() => setV2HelpOpen(true)}
-              aria-label={t("models.v2Label")}
-              aria-haspopup="dialog"
+              aria-expanded={behaviorEditor === "context"}
+              aria-controls="models-context-editor"
+              onClick={toggleContextEditor}
             >
-              <IconInfo width={14} height={14} aria-hidden="true" />
+              {t("models.change")}
             </button>
           </div>
-        )}
+          <div className="models-behavior-status-row">
+            <span className="models-behavior-pill">{contextStateLabel}</span>
+            <span className={`models-behavior-positive${contextPolicy.state === "mixed" ? " models-behavior-positive--mixed" : ""}`}>
+              {contextPolicy.state === "mixed" ? <IconInfo aria-hidden="true" /> : <IconCheck aria-hidden="true" />}
+              {contextStateDescription}
+            </span>
+          </div>
+        </div>
       </div>
 
-      {v2 && (v2.enabled || v2.agentsMaxThreadsConflict || v2Note) && (
-        <div className="models-v2-detail-row row">
+      {behaviorEditor === "collaboration" && v2 && (
+        <div id="models-collaboration-editor" className="models-behavior-editor">
+          <div className="models-behavior-editor-head">
+            <div>
+              <strong>{t("models.collaborationTitle")}</strong>
+              <span className="models-editor-kicker">{t("models.newSessionsOnly")}</span>
+            </div>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setBehaviorEditor(null)}>{t("common.close")}</button>
+          </div>
+          <div className="models-mode-options" role="radiogroup" aria-label={t("models.collaborationTitle")}>
+            {(["v1", "default", "v2"] as const).map(mode => (
+              <label
+                key={mode}
+                className={`models-mode-option${multiAgentMode === mode ? " models-mode-option--selected" : ""}`}
+              >
+                <input
+                  className="sr-only models-option-radio"
+                  type="radio"
+                  name="models-collaboration-mode"
+                  value={mode}
+                  checked={multiAgentMode === mode}
+                  disabled={v2Busy}
+                  onChange={() => void setMultiAgentMode(mode)}
+                />
+                <span className="models-mode-option-title">{t(`models.modeLabel_${mode}` as TKey)}</span>
+                <span>{t(`models.modeOptionDesc_${mode}` as TKey)}</span>
+              </label>
+            ))}
+          </div>
           {v2.enabled && (
-            <>
+            <div className="models-thread-row">
               <span className="muted text-control">{t("models.v2ThreadsLabel")}</span>
               <Select
                 value={showThreadsCustom
@@ -972,116 +1117,182 @@ export default function Models({ apiBase }: { apiBase: string }) {
                   ...(v2.maxConcurrentThreadsPerSession !== null && v2.maxConcurrentThreadsPerSession !== undefined
                     && !THREAD_OPTION_SET.has(v2.maxConcurrentThreadsPerSession) && !showThreadsCustom
                     ? [{ value: CUSTOM_OPTION, label: String(v2.maxConcurrentThreadsPerSession) }] : []),
-                  ...THREAD_OPTIONS.map(v => ({ value: String(v), label: String(v) })),
+                  ...THREAD_OPTIONS.map(value => ({ value: String(value), label: String(value) })),
                   { value: CUSTOM_OPTION, label: t("models.custom") },
                 ]}
-                onChange={v => onSelectThreads(v)}
+                onChange={onSelectThreads}
                 disabled={v2Busy}
                 label={t("models.v2ThreadsLabel")}
               />
               {showThreadsCustom && (
                 <>
                   <input
-                    className="input"
-                    style={{ width: 100 }}
+                    className="input models-thread-input"
                     inputMode="numeric"
                     value={threadsCustom}
-                    onChange={e => setThreadsCustom(e.target.value)}
-                    onKeyDown={e => { if (e.key === "Enter") void putV2Threads(Number(threadsCustom.replace(/[_,\s]/g, ""))); }}
+                    onChange={event => setThreadsCustom(event.target.value)}
+                    onKeyDown={event => { if (event.key === "Enter") void putV2Threads(Number(threadsCustom.replace(/[_,\s]/g, ""))); }}
                     disabled={v2Busy}
                     aria-label={t("models.v2ThreadsLabel")}
                   />
-                  <button type="button" className="btn btn-sm" disabled={v2Busy}
-                    onClick={() => { void putV2Threads(Number(threadsCustom.replace(/[_,\s]/g, ""))); }}>
+                  <button type="button" className="btn btn-sm" disabled={v2Busy} onClick={() => void putV2Threads(Number(threadsCustom.replace(/[_,\s]/g, "")))}>
                     {t("models.v2ThreadsApply")}
                   </button>
                 </>
               )}
-            </>
+              <button type="button" className="btn btn-ghost btn-sm models-info-button" onClick={() => setV2HelpOpen(true)} aria-label={t("models.v2DocsLink")} aria-haspopup="dialog">
+                <IconInfo aria-hidden="true" />
+              </button>
+            </div>
           )}
-          {v2.enabled && v2.agentsMaxThreadsConflict && (
-            <span className="mono text-label" style={{ color: "var(--err, #e5484d)" }}>{t("models.v2Conflict")}</span>
-          )}
+          {v2.enabled && v2.agentsMaxThreadsConflict && <span className="models-editor-error">{t("models.v2Conflict")}</span>}
           {v2Note && <span className="muted text-label">{v2Note}</span>}
         </div>
       )}
 
-      <div className="row models-cap-row">
-        <span className="muted text-control">{t("models.contextCapLabel")}</span>
-        <Select
-          value={showCustom ? CUSTOM_OPTION : (CAP_OPTION_SET.has(contextCapValue) ? String(contextCapValue) : CUSTOM_OPTION)}
-          options={[
-            ...(!CAP_OPTION_SET.has(contextCapValue) && !showCustom
-              ? [{ value: String(contextCapValue), label: fmtK(contextCapValue) }] : []),
-            ...CAP_OPTIONS.map(v => ({ value: String(v), label: fmtK(v) })),
-            { value: CUSTOM_OPTION, label: t("models.custom") },
-          ]}
-          onChange={v => onSelectCap(v)}
-          disabled={busy}
-          label={t("models.contextCapLabel")}
-        />
-        {showCustom && (
-          <>
-            <input
-              className="input"
-              style={{ width: 160 }}
-              inputMode="numeric"
-              placeholder={t("models.customPlaceholder")}
-              value={customCap}
-              onChange={e => setCustomCap(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter") applyCustomCap(); }}
-              disabled={busy}
-              aria-label={t("models.customPlaceholder")}
-            />
-            <button type="button" onClick={applyCustomCap} disabled={busy} className="btn btn-ghost btn-sm">{t("models.customApply")}</button>
-          </>
-        )}
-        <Switch on={allCapped} onClick={setAll} disabled={busy} label={t("models.setAll")} />
-        <span className="muted text-label leading-body">{t("models.setAllHint", { value: fmtK(contextCapValue) })}</span>
-      </div>
-
-      {(() => {
-        const customCount = models.filter(m => m.custom).length;
-        if (customCount === 0) return null;
-        return (
-          <div className="row muted text-label models-custom-summary">
-            <span className="models-chip mono text-caption">
-              {t("models.customSummary", { count: customCount })}
-            </span>
+      {behaviorEditor === "context" && (
+        <div id="models-context-editor" className="models-behavior-editor">
+          <div className="models-behavior-editor-head">
+            <div>
+              <strong>{t("models.contextPolicyTitle")}</strong>
+              <span className="models-editor-kicker">{t("models.contextPolicyScope")}</span>
+            </div>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setBehaviorEditor(null)}>{t("common.close")}</button>
           </div>
-        );
-      })()}
-
-      <div className="row muted text-label leading-body models-order-hint">
-        <IconInfo width={15} height={15} aria-hidden="true" />
-        <span>{t("models.orderHint")}</span>
-      </div>
-    </>
+          <div className="models-context-options" role="radiogroup" aria-label={t("models.contextPolicyTitle")}>
+            <div className={`models-context-option${contextDraftMode === "full" ? " models-context-option--selected" : ""}`}>
+              <label className="models-context-option-copy">
+                <input
+                  className="sr-only models-option-radio"
+                  type="radio"
+                  name="models-context-policy"
+                  value="full"
+                  checked={contextDraftMode === "full"}
+                  disabled={busy}
+                  onChange={() => setContextDraftMode("full")}
+                />
+                <strong>{t("models.contextUseFull")}</strong>
+                <span>{t("models.contextUseFullHint")}</span>
+              </label>
+            </div>
+            <div className={`models-context-option models-context-option--limit${contextDraftMode === "limited" ? " models-context-option--selected" : ""}`}>
+              <label className="models-context-option-copy">
+                <input
+                  className="sr-only models-option-radio"
+                  type="radio"
+                  name="models-context-policy"
+                  value="limited"
+                  checked={contextDraftMode === "limited"}
+                  disabled={busy}
+                  onChange={() => setContextDraftMode("limited")}
+                />
+                <strong>{t("models.contextSetLimit")}</strong>
+                <span>{t("models.contextSetLimitHint")}</span>
+              </label>
+              <div className="models-context-limit-controls">
+                <Select
+                  value={showCustom ? CUSTOM_OPTION : (CAP_OPTION_SET.has(contextCapDraft) ? String(contextCapDraft) : CUSTOM_OPTION)}
+                  options={[
+                    ...(!CAP_OPTION_SET.has(contextCapDraft) && !showCustom
+                      ? [{ value: String(contextCapDraft), label: fmtK(contextCapDraft) }] : []),
+                    ...CAP_OPTIONS.map(value => ({ value: String(value), label: fmtK(value) })),
+                    { value: CUSTOM_OPTION, label: t("models.custom") },
+                  ]}
+                  onChange={onSelectCap}
+                  disabled={busy || contextDraftMode !== "limited"}
+                  label={t("models.contextCapLabel")}
+                />
+                {showCustom && (
+                  <>
+                    <input
+                      className="input models-context-limit-input"
+                      inputMode="numeric"
+                      placeholder={t("models.customPlaceholder")}
+                      value={customCap}
+                      onChange={event => setCustomCap(event.target.value)}
+                      onKeyDown={event => { if (event.key === "Enter") applyCustomCap(); }}
+                      disabled={busy}
+                      aria-label={t("models.customPlaceholder")}
+                    />
+                    <button type="button" onClick={applyCustomCap} disabled={busy} className="btn btn-ghost btn-sm">{t("models.customApply")}</button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+          {contextPolicy.state === "mixed" && (
+            <p className="models-context-mixed-note">{t("models.contextMixedHint", { capped: contextPolicy.capped, total: contextPolicy.total })}</p>
+          )}
+          <div className="models-context-apply-row">
+            <span className="muted text-label">
+              {contextDraftMode === "limited"
+                ? t("models.contextApplyLimitHint", { value: fmtK(contextCapDraft) })
+                : t("models.contextApplyFullHint")}
+            </span>
+            <button type="button" className="btn btn-primary btn-sm" disabled={busy || routedProviderNames.length === 0 || contextDraftUnchanged} onClick={applyContextPolicy}>
+              {t("models.contextApply")}
+            </button>
+          </div>
+          {routedProviderNames.length > 0 && (
+            <div className="models-context-overrides">
+              <div className="models-context-overrides-head">
+                <strong>{t("models.contextOverrides")}</strong>
+                <span>{t("models.contextOverridesHint")}</span>
+              </div>
+              {routedProviderNames.map(provider => {
+                const providerCap = contextCaps[provider];
+                const capOn = isPositiveContextCap(providerCap);
+                return (
+                  <div key={provider} className="models-context-override-row">
+                    <div>
+                      <span className="models-context-override-name">{provider}</span>
+                      <span className={`models-context-policy${capOn ? " models-context-policy--capped" : " models-context-policy--full"}`}>
+                        {capOn ? <IconInfo aria-hidden="true" /> : <IconCheck aria-hidden="true" />}
+                        {capOn
+                          ? t("models.contextProviderCapped", { value: fmtK(providerCap) })
+                          : t("models.contextProviderFull")}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      disabled={busy}
+                      onClick={() => void toggleProviderCap(provider)}
+                      aria-label={capOn
+                        ? t("models.contextProviderUseFullAria", { provider })
+                        : t("models.contextProviderLimitAria", { provider, value: fmtK(contextCapValue) })}
+                    >
+                      {capOn
+                        ? t("models.contextProviderUseFull")
+                        : t("models.contextProviderLimit", { value: fmtK(contextCapValue) })}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
   );
 
   const combosBlock = (
     <>
-      {/* Silent height strut: reserves the empty-card slot so a late /api/combos
-          cannot insert a row, without a bordered "Combos · Loading…" placeholder. */}
       {combos === null && !combosError && (
-        <div className="models-combos-card models-combos-card--pending" aria-busy="true">
-          <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-            {t("common.loading")}
-          </span>
-        </div>
-      )}
-      {combos === null && combosError && (
-        <div className="card models-combos-card">
+        <div className="card models-combos-card" aria-busy="true">
           <div className="row models-combos-empty-head">
             <div className="row models-field-row" style={{ minWidth: 0 }}>
               <IconShuffle width={14} height={14} aria-hidden="true" style={{ flexShrink: 0 }} />
               <strong>{t("nav.combos")}</strong>
-              <span className="muted text-label" role="alert">{t("models.loadFail")}</span>
+              <span className="muted text-label">{t("common.loading")}</span>
             </div>
-            <button type="button" className="btn btn-sm" style={{ flexShrink: 0 }} onClick={() => combosResource.refresh()}>
-              {t("common.retry")}
-            </button>
           </div>
+        </div>
+      )}
+      {combos === null && combosError && (
+        <div className="models-inline-error" role="alert">
+          <span>{t("models.combosLoadFailed")}</span>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => combosResource.refresh()}>{t("common.retry")}</button>
         </div>
       )}
       {combos !== null && combos.length === 0 && (
@@ -1090,74 +1301,110 @@ export default function Models({ apiBase }: { apiBase: string }) {
             <div className="row models-field-row" style={{ minWidth: 0 }}>
               <IconShuffle width={14} height={14} aria-hidden="true" style={{ flexShrink: 0 }} />
               <strong>{t("nav.combos")}</strong>
-              {combosError ? (
-                <span className="muted text-label" role="alert">{t("models.loadFail")}</span>
-              ) : (
-                <span className="muted text-label">{t("models.combosEmpty")}</span>
-              )}
+              <span className="muted text-label">{t("models.combosEmpty")}</span>
             </div>
-            {combosError ? (
-              <button type="button" className="btn btn-sm" style={{ flexShrink: 0 }} onClick={() => combosResource.refresh()}>
-                {t("common.retry")}
-              </button>
-            ) : (
-              <a className="btn btn-sm" href="#combos" style={{ flexShrink: 0 }}>{t("models.combosSetup")}</a>
-            )}
+            <a className="btn btn-sm" href="#combos" style={{ flexShrink: 0 }}>{t("models.combosSetup")}</a>
           </div>
         </div>
       )}
-      {combos !== null && combos.length > 0 && (
+      {combos !== null && combos.length > 0 && combosError && (
+        <div className="models-inline-error" role="alert">
+          <span>{t("models.combosLoadFailed")}</span>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => combosResource.refresh()}>{t("common.retry")}</button>
+        </div>
+      )}
+      {combos !== null && combos.length > 0 && combosOpen && (
         <div className="card models-combos-card">
-          <div className={`row group-head models-field-row${combosOpen ? " open" : ""}`}>
-            <button
-              type="button"
-              className="row models-field-row"
-              aria-expanded={combosOpen}
-              onClick={toggleCombosOpen}
-              style={{ flex: 1, background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit", color: "inherit", textAlign: "left", minWidth: 0 }}
-            >
-              <IconChevron style={{ width: 14, height: 14, color: "var(--muted)", flexShrink: 0, transform: combosOpen ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
+          <div className="row group-head models-field-row open">
+            <div className="row models-field-row" style={{ flex: 1, minWidth: 0 }}>
               <IconShuffle width={14} height={14} aria-hidden="true" style={{ flexShrink: 0 }} />
               <strong>{t("nav.combos")}</strong>
               <span className="muted mono text-label">{t("models.combosActive", { count: combos.length })}</span>
-              {combosError && (
-                <span className="muted text-label" role="alert">{t("models.loadFail")}</span>
-              )}
-            </button>
-            {combosError ? (
-              <button type="button" className="btn btn-sm btn-ghost" style={{ flexShrink: 0 }} onClick={() => combosResource.refresh()}>
-                {t("common.retry")}
-              </button>
-            ) : (
-              <a className="btn btn-sm btn-ghost" href="#combos" style={{ flexShrink: 0 }}>{t("models.combosSetup")}</a>
-            )}
-          </div>
-          {combosOpen && (
-            <div>
-              {combos.map(c => (
-                <div key={c.id} className="row models-combo-row">
-                  <span className="mono leading-ui">{c.model}</span>
-                  <span className="muted text-label">{c.strategy} · {c.targets.length}</span>
-                </div>
-              ))}
-              <a className="row muted models-combos-add" href="#combos">
-                + {t("models.combosAdd")}
-              </a>
             </div>
-          )}
+            <button type="button" className="btn btn-sm btn-ghost" onClick={toggleCombosOpen}>{t("common.close")}</button>
+            <a className="btn btn-sm btn-ghost" href="#combos">{t("models.combosSetup")}</a>
+          </div>
+          <div>
+            {combos.map(combo => (
+              <div key={combo.id} className="row models-combo-row">
+                <span className="mono leading-ui">{combo.model}</span>
+                <span className="muted text-label">{combo.strategy} · {combo.targets.length}</span>
+              </div>
+            ))}
+            <a className="row muted models-combos-add" href="#combos">+ {t("models.combosAdd")}</a>
+          </div>
         </div>
       )}
     </>
   );
 
-  const collapseControls = (
-    <div className="row models-collapse-controls">
-      <button type="button" className="btn btn-ghost btn-sm text-caption" onClick={() => setAllCollapsed(true)} disabled={busy}>
-        <IconChevron width={12} height={12} aria-hidden="true" /> {t("models.collapseAll")}
-      </button>
-      <button type="button" className="btn btn-ghost btn-sm text-caption" onClick={() => setAllCollapsed(false)} disabled={busy}>
-        <IconChevron width={12} height={12} aria-hidden="true" style={{ transform: "rotate(90deg)" }} /> {t("models.expandAll")}
-      </button>
+  const catalogToolbar = (
+    <div className="models-catalog-toolbar">
+      <label className="models-catalog-search">
+        <IconSearch aria-hidden="true" />
+        <input
+          type="search"
+          value={catalogQuery}
+          onChange={event => setCatalogQuery(event.target.value)}
+          placeholder={t("models.catalogSearch")}
+          aria-label={t("models.catalogSearch")}
+        />
+      </label>
+      <div className="row models-catalog-actions">
+        <button type="button" className="btn btn-ghost btn-sm text-caption" onClick={() => setAllCollapsed(true)} disabled={busy}>
+          <IconChevron width={12} height={12} aria-hidden="true" /> {t("models.collapseAll")}
+        </button>
+        <button type="button" className="btn btn-ghost btn-sm text-caption" onClick={() => setAllCollapsed(false)} disabled={busy}>
+          <IconChevron width={12} height={12} aria-hidden="true" style={{ transform: "rotate(90deg)" }} /> {t("models.expandAll")}
+        </button>
+        {combos !== null && combos.length > 0 ? (
+          <button type="button" className="btn btn-ghost btn-sm text-caption" onClick={toggleCombosOpen} aria-expanded={combosOpen}>
+            <IconShuffle width={13} height={13} aria-hidden="true" /> {t("nav.combos")} <span className="mono">{combos.length}</span>
+          </button>
+        ) : (
+          <a className="btn btn-ghost btn-sm text-caption" href="#combos">
+            <IconShuffle width={13} height={13} aria-hidden="true" /> {t("nav.combos")}
+          </a>
+        )}
+      </div>
+    </div>
+  );
+
+  const advancedBlock = (
+    <div className="models-advanced">
+      <div className="models-advanced-head">
+        <button
+          type="button"
+          className="models-advanced-toggle"
+          aria-expanded={advancedOpen}
+          aria-describedby="models-advanced-description"
+          onClick={() => setAdvancedOpen(open => !open)}
+        >
+          <IconChevron aria-hidden="true" style={{ transform: advancedOpen ? "rotate(90deg)" : "none" }} />
+          <strong>{t("models.advanced")}</strong>
+          <span>{t("models.advancedHint")}</span>
+        </button>
+        <span id="models-advanced-description" className="sr-only">
+          {t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })}
+        </span>
+        <span
+          className="models-advanced-info"
+          title={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })}
+          aria-hidden="true"
+        ><IconInfo /></span>
+      </div>
+      {advancedOpen && (
+        <div className="models-advanced-body" aria-busy={!shadowCall || undefined}>
+          <div className="models-shadow-row row text-control">
+            <span className="models-shadow-label">{t("models.shadowCallIntercept")}</span>
+            <code className="text-caption models-shadow-warning">{t("models.shadowCallOriginal", { models: shadowSourceModelBadge(shadowCall?.sourceModels) })}</code>
+            <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />
+            <div className="models-shadow-model-slot">
+              <Select value={shadowCall?.model ?? ""} options={shadowCallOptions} onChange={value => { setShadowCall(current => current ? { ...current, model: value } : current); void saveShadowCall({ model: value }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 
@@ -1414,15 +1661,39 @@ export default function Models({ apiBase }: { apiBase: string }) {
         </aside>
         <section className="models-workspace-main" aria-label={t("models.workspace.mainAria")}>
           {controlsBlock}
+          {catalogToolbar}
           {combosBlock}
-          {collapseControls}
+          <div className="models-provider-columns" aria-hidden="true">
+            <span>{t("models.tableProvider")}</span>
+            <span>{t("models.tableVisible")}</span>
+            <span>{t("models.tableContext")}</span>
+            <span>{t("models.tableActions")}</span>
+          </div>
           <div className="models-provider-list">
             {
               // eslint-disable-next-line react-hooks/refs -- The hover ref is only read by row event handlers nested in this renderer.
               visibleGroups.map(group => renderGroup(group))
             }
           </div>
+          {normalizedCatalogQuery && visibleGroups.length === 0 && (
+            <EmptyState icon={<IconSearch />} title={t("models.searchEmptyTitle")}>
+              {t("models.searchEmptyHint")}
+            </EmptyState>
+          )}
           {groups.length === 0 && emptyStateBlock}
+          {models.some(model => model.custom) && (
+            <div className="row muted text-label models-custom-summary">
+              <span className="models-chip mono text-caption">{t("models.customSummary", { count: models.filter(model => model.custom).length })}</span>
+            </div>
+          )}
+          <div className="row muted text-label leading-body models-order-hint">
+            <IconInfo width={15} height={15} aria-hidden="true" />
+            <span className="models-order-hint-copy">
+              <span>{t("models.orderHint")}</span>
+              <span>{t("models.catalogBehaviorHint")}</span>
+            </span>
+          </div>
+          {advancedBlock}
         </section>
       </div>
       {modalsBlock}

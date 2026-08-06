@@ -42,7 +42,7 @@ bun run dev:gui
 | **Add provider** | 레지스트리 기반 프리셋에서 계정 로그인, API key 서비스, 로컬 서버, custom endpoint를 검색합니다. |
 | **Codex Auth** | ChatGPT/Codex 풀 계정을 추가하고, 다음 세션 계정을 선택하고, 5시간 / 주간 / 30일 할당량을 갱신하며, 할당량 자동 전환을 켜거나 끄고 1~100% 임계값과 일시적 실패 failover를 설정합니다. |
 | **Subagents** | `spawn_agent` override 목록에 네이티브 또는 라우팅 모델을 최대 5개까지 우선 노출합니다. |
-| **Models** | 네이티브 GPT와 라우팅 모델을 켜고 끄고, 프로바이더 allowlist와 컨텍스트 상한, v1/base/v2, v2 thread 수를 설정합니다. |
+| **Models** | 네이티브 GPT와 라우팅 모델을 켜고 끄고, 프로바이더 allowlist와 컨텍스트 상한을 설정하며, **Classic v1**, **Automatic**(base), **Concurrent v2**를 선택하고 v2 thread 수를 설정합니다. Current behavior 카드는 컨텍스트를 **Uncapped**, **Limited**, **Mixed limits**로 표시합니다. 각 라우팅 프로바이더에는 **자동 검색 켜짐** 또는 **정적 카탈로그만** 상태와 해당 프로바이더 설정 링크가 표시됩니다. |
 | **Logs** | 토큰, 요청한 강도와 (사용 가능한 경우) 실제 전송 강도, 실제 모델, 프로바이더, 상태, 요청 id, 소요 시간, 오류 상세가 포함된 최근 요청을 자동 갱신합니다. 어댑터가 reasoning 매개변수를 전송한 경우 상세 보기에 정확한 wire field도 표시됩니다. 클라이언트가 보낸 불투명 대화/세션 id로 필터하면 현재 로드된 Logs 링의 토큰·추정 정가 합계를 볼 수 있습니다. |
 | **Usage / Debug** | 토큰 사용량의 측정 범위와 추이를 보거나, 선택적 프로바이더 전송/사용량 추출 진단을 켭니다. |
 | **Storage** | CODEX_HOME 디스크 사용량(세션, 보관, DB, 첨부)을 읽기 전용으로 표시합니다. 선택적 보관 정리: 가장 오래된 N%를 미리본 뒤 기본으로 `CODEX_HOME/.trash`에 격리하거나, 명시 체크 후 영구 삭제합니다. **자동 정리 정책**은 opt-in이며 **기본 OFF**(`storageCleanupPolicy.enabled`)입니다. Storage 페이지에서 임계값/목표/일정/모드를 설정하거나 **지금 실행**하세요. Storage 페이지에서 격리 항목을 복원할 수 있습니다(JSONL + 스레드). 활성 세션은 읽기 전용입니다. Codex가 최신/활성 `state_*.sqlite`를 잠그면 정리와 복원을 거절합니다. |
@@ -58,6 +58,8 @@ bun run dev:gui
 ## 모델 노출
 
 **Models** 스위치는 Codex의 최종 노출 상태를 나타냅니다. 라우팅 모델은 프로바이더 allowlist에 포함되거나 allowlist가 없고, 동시에 비활성화되지 않았을 때만 켜집니다. 모델을 켜면 두 필터를 원자적으로 조정하며, **모두 활성화**는 allowlist를 해제해 새로 발견되는 모델도 켭니다.
+
+업스트림 카탈로그 자동 갱신은 프로바이더별 **Providers → Settings**에서 관리합니다. Models 페이지는 그 상태를 표시하고 바로 연결할 뿐, 별도의 검색 설정을 저장하지 않습니다.
 
 ## 위임 선택기와 스폰 라우팅의 차이
 
