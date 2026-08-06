@@ -1242,7 +1242,7 @@ export const ru: Record<TKey, string> = {
   "modal.forwardHintPrefix": "Ключ не нужен — прокси передаёт ваши учётные данные",
   "modal.forwardCredentials": "codex login",
   "modal.forwardHintSuffix": "этому провайдеру.",
-  "modal.localHint": "API-ключ не сохраняется. Будет добавлен статический публичный каталог моделей Cursor для Codex, но живой транспорт Cursor и нативное выполнение файловых и shell-операций остаются отключёнными до прохождения аудита.",
+  "modal.localHint": "API-ключ не сохраняется. OpenCodex подключается к этому локальному серверу; обнаружение моделей и список моделей настраиваются в параметрах провайдера.",
   "modal.getApiKey": "Получить API-ключ {label}",
   "modal.apiKey": "API-ключ",
   "modal.apiKeyTransport": "Заголовок API-ключа",

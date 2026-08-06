@@ -2,11 +2,11 @@
 
 ## Comparison target
 
-- Source visual truth: `/Users/pavel/.codex/generated_images/019fd777-7cee-7d72-a266-0311348317d4/exec-ef014282-eb95-4ec9-baf9-588577fc4725.png`
+- Source visual truth: `<Codex image-generation output>/exec-ef014282-eb95-4ec9-baf9-588577fc4725.png`
 - Rendered implementation: `http://127.0.0.1:4175/#integrations`
-- Implementation screenshot: `/Users/pavel/tools/opencodex-clients-ia-v2/.tmp/client-apps-final-desktop.png`
-- Full-view comparison: `/Users/pavel/tools/opencodex-clients-ia-v2/.tmp/client-apps-final-comparison.jpg`
-- Focused workspace comparison: `/Users/pavel/tools/opencodex-clients-ia-v2/.tmp/client-apps-final-focus-comparison.jpg`
+- Implementation screenshot: `<client-apps-worktree>/.tmp/client-apps-final-desktop.png`
+- Full-view comparison: `<client-apps-worktree>/.tmp/client-apps-final-comparison.jpg`
+- Focused workspace comparison: `<client-apps-worktree>/.tmp/client-apps-final-focus-comparison.jpg`
 - Viewport: 1440 × 1024 CSS px, light/system theme
 - Source pixels: 1487 × 1058; normalized to 1440 × 1024 for comparison
 - Implementation pixels: 1440 × 1024 at 1× CSS density
@@ -19,8 +19,8 @@ The full-view comparison confirms the same core composition as the source: group
 
 Additional responsive evidence:
 
-- Tablet, 900 × 900: `/Users/pavel/tools/opencodex-clients-ia-v2/.tmp/client-apps-tablet.png`; one-column detail layout, no horizontal overflow (`scrollWidth === viewportWidth`)
-- Mobile, 390 × 844: `/Users/pavel/tools/opencodex-clients-ia-v2/.tmp/client-apps-mobile.png`; mobile top bar, stacked flow, wrapped chips, single-column client rows, no clipped controls
+- Tablet, 900 × 900: `<client-apps-worktree>/.tmp/client-apps-tablet.png`; one-column detail layout, no horizontal overflow (`scrollWidth === viewportWidth`)
+- Mobile, 390 × 844: `<client-apps-worktree>/.tmp/client-apps-mobile.png`; mobile top bar, stacked flow, wrapped chips, single-column client rows, no clipped controls
 - Short mobile drawer, 390 × 600: grouped navigation scrolls independently (`clientHeight 350`, `scrollHeight 547`, `overflow-y: auto`) while footer controls remain visible
 
 Primary interactions tested in the in-app browser:
@@ -79,6 +79,13 @@ Sol’s final audit found no P0/P1 issues and identified truthfulness and resili
 - Passive legacy redirects select the correct sidebar destination immediately, and grouped navigation scrolls on short screens.
 
 The desktop source/implementation comparison, tablet capture, mobile capture, overflow measurements, interaction checks, and console check were repeated after these corrections. No browser console errors or actionable visual regressions remain.
+
+### Convergence pass — passed
+
+- Rechecked the merged workspace at 1440 × 1000 and 390 × 844 CSS px against an isolated proxy with real management routes.
+- The overview keeps OpenCode navigation-only while the dedicated `#integrations/opencode` page owns apply, refresh, auto-connect, protected credential delivery, and OpenCode Go provider guidance.
+- Desktop and mobile widths had no horizontal overflow (`scrollWidth === clientWidth`); opening a detail after scrolling now resets to its heading instead of inheriting the catalog position.
+- All observed management requests returned successfully, and the final clean browser session produced no console warnings or errors.
 
 ## Findings
 

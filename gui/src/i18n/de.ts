@@ -1793,7 +1793,7 @@ export const de: Record<TKey, string> = {
   "modal.forwardHintPrefix": "Kein Schlüssel nötig — der Proxy leitet deine",
   "modal.forwardCredentials": "codex login",
   "modal.forwardHintSuffix": "Anmeldedaten an diesen Anbieter weiter.",
-  "modal.localHint": "Es wird kein API-Schlüssel gespeichert. Damit wird Cursors öffentlicher Modellkatalog für Codex hinzugefügt; live Cursor-Transport und native Datei-/Shell-Ausführung bleiben deaktiviert, bis sie geprüft sind.",
+  "modal.localHint": "Es wird kein API-Schlüssel gespeichert. OpenCodex verbindet sich mit diesem lokalen Server; Live-Modellerkennung und Modellliste lassen sich in den Provider-Einstellungen verwalten.",
   "modal.getApiKey": "{label}-API-Schlüssel holen",
   "modal.apiKey": "API-Schlüssel",
   "modal.apiKeyTransport": "API-Schlüssel-Header",

@@ -66,13 +66,15 @@ afterEach(() => {
 });
 
 describe("the client registries cannot drift apart", () => {
-  test("every list of clients holds exactly the same six ids", async () => {
+  test("shared registries keep all six clients while the generic GUI writer excludes OpenCode", async () => {
     /*
-     * Five lists name the same six clients, and two of them are maintained by
-     * hand: the GUI cannot import the backend registry, because that would
-     * pull node:os and node:path into the browser bundle. A client added
-     * server-side renders no row until someone remembers the tuple, and the
-     * only thing that catches forgetting is this test.
+     * The shared export/backend registries and API Access UI name all six
+     * clients. The generic Client Apps writer deliberately names only five:
+     * OpenCode has a dedicated API and writer that exclusively owns
+     * provider.opencodex. These browser lists are maintained by hand because
+     * importing the backend registry would pull node:os and node:path into the
+     * bundle, so this test keeps both the shared set and the ownership split
+     * explicit.
      */
     const gui = await import("../gui/src/components/apikeys-workspace/client-config-clients");
     const guiIntegrations = await import("../gui/src/pages/integrations/integration-api");
@@ -83,7 +85,10 @@ describe("the client registries cannot drift apart", () => {
     expect([...INTEGRATION_CLIENT_IDS].sort()).toEqual(expected);
     expect([...gui.CLIENTS].sort()).toEqual(expected);
     expect(Object.keys(gui.CLIENT_LABEL_KEYS).sort()).toEqual(expected);
-    expect([...guiIntegrations.FILE_INTEGRATION_CLIENTS].sort()).toEqual(expected);
+
+    const expectedGenericWriterClients = expected.filter(clientId => clientId !== "opencode");
+    expect([...guiIntegrations.FILE_INTEGRATION_CLIENTS].sort()).toEqual(expectedGenericWriterClients);
+    expect(guiIntegrations.FILE_INTEGRATION_CLIENTS).not.toContain("opencode");
   });
 });
 

@@ -1200,7 +1200,7 @@ export const ja: Record<TKey, string> = {
   "modal.forwardHintPrefix": "キー不要 — プロキシはあなたの",
   "modal.forwardCredentials": "codex ログイン",
   "modal.forwardHintSuffix": "資格情報をこのプロバイダーに転送します。",
-  "modal.localHint": "API キーは保存されません。Cursor の静的な公開モデルカタログを Codex に追加しますが、ライブの Cursor トランスポートとネイティブのファイル/シェル実行は監査されるまで無効のままです。",
+  "modal.localHint": "API キーは保存されません。OpenCodex はこのローカルサーバーに接続し、ライブモデル検出とモデル一覧はプロバイダー設定で管理できます。",
   "modal.getApiKey": "{label} の API キーを取得",
   "modal.apiKey": "API キー",
   "modal.apiKeyTransport": "API キーヘッダー",

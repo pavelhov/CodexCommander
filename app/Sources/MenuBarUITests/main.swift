@@ -29,6 +29,10 @@ func decodeQuotas(_ json: String) -> [QuotaReport] {
     try! JSONDecoder().decode([QuotaReport].self, from: Data(json.utf8))
 }
 
+func decodeProviders(_ json: String) -> [ProviderSummary] {
+    try! JSONDecoder().decode([ProviderSummary].self, from: Data(json.utf8))
+}
+
 func activitySnapshot(
     activities: String,
     unattributed: Int = 0,
@@ -52,7 +56,9 @@ func activitySnapshot(
 func makeSnapshot(
     quotas: [QuotaReport] = [],
     activity: AgentActivitySnapshot? = nil,
+    providers: [ProviderSummary] = [],
     health: StartupHealth = StartupHealth(status: "protected"),
+    providersLoaded: Bool = false,
     quotasLoaded: Bool = true,
     activityLoaded: Bool = true
 ) -> ProxySnapshot {
@@ -61,7 +67,9 @@ func makeSnapshot(
         endpoint: .default,
         quotas: quotas,
         activity: activity,
+        providers: providers,
         lastUpdated: Date(),
+        providersLoaded: providersLoaded,
         quotasLoaded: quotasLoaded,
         activityLoaded: activityLoaded
     )
@@ -186,6 +194,67 @@ runner.test("ui: ChatGPT/OpenAI expands first; Kimi and Grok stay collapsed") {
 
     accordion.toggleForTesting("kimi")
     runner.equal(accordion.expandedProviderIDs, ["kimi"], "one open section")
+}
+
+runner.test("ui: configured Grok stays visible when its quota report is unavailable") {
+    let quotas = decodeQuotas("""
+    [
+      \(quotaJSON(provider: "openai", label: "ChatGPT", weekly: 22)),
+      \(quotaJSON(provider: "kimi", label: "Kimi", weekly: 38))
+    ]
+    """)
+    let providers = decodeProviders("""
+    [
+      {"name":"openai","authMode":"forward","quotaCapable":true},
+      {"name":"kimi","authMode":"oauth","quotaCapable":true},
+      {"name":"xai","authMode":"oauth","quotaCapable":true}
+    ]
+    """)
+    let accordion = ProviderQuotaAccordionView()
+    accordion.apply(makeSnapshot(quotas: quotas, providers: providers, providersLoaded: true))
+
+    runner.equal(
+        accordion.providerIDs,
+        ["openai", "kimi", "xai"],
+        "missing Grok report gets one placeholder"
+    )
+    runner.equal(
+        accordion.unavailableProviderIDs,
+        ["xai"],
+        "placeholder carries no quota claim"
+    )
+    runner.expect(
+        accordion.providerAccessibilityLabelForTesting("xai")?.contains("unavailable") == true,
+        "VoiceOver names the unavailable state"
+    )
+}
+
+runner.test("ui: an unavailable configured provider is a row, not an empty state") {
+    let providers = decodeProviders("""
+    [{"name":"xai","authMode":"oauth","quotaCapable":true}]
+    """)
+    let accordion = ProviderQuotaAccordionView()
+    accordion.apply(makeSnapshot(providers: providers, providersLoaded: true))
+
+    runner.equal(accordion.providerIDs, ["xai"])
+    runner.equal(accordion.unavailableProviderIDs, ["xai"])
+    runner.expect(!accordion.showsEmptyState, "connected provider must not render the no-sources message")
+}
+
+runner.test("ui: actual reports win; disabled and unsupported providers get no placeholder") {
+    let quotas = decodeQuotas("[\(quotaJSON(provider: "xai", label: "Grok", monthly: 41))]")
+    let providers = decodeProviders("""
+    [
+      {"name":"xai","authMode":"oauth","quotaCapable":true},
+      {"name":"anthropic","authMode":"oauth","quotaCapable":true,"disabled":true},
+      {"name":"deepseek","authMode":"key","quotaCapable":false}
+    ]
+    """)
+    let accordion = ProviderQuotaAccordionView()
+    accordion.apply(makeSnapshot(quotas: quotas, providers: providers, providersLoaded: true))
+
+    runner.equal(accordion.providerIDs, ["xai"], "no duplicate or unsupported placeholders")
+    runner.equal(accordion.unavailableProviderIDs, [], "actual report remains authoritative")
 }
 
 runner.test("ui: provider and view-all controls invoke their dashboard handoffs") {

@@ -13,6 +13,7 @@ import {
   clearProviderQuotaCache,
   fetchProviderQuotaReports,
   setProviderQuotaBeforePublishForTests,
+  supportsProviderQuotaReporting,
 } from "../src/providers/quota";
 import type { OcxConfig } from "../src/types";
 
@@ -97,6 +98,40 @@ afterEach(() => {
 });
 
 describe("fetchProviderQuotaReports", () => {
+  test("publishes one authoritative quota-capability predicate for thin clients", () => {
+    const config = testConfig();
+    const capability = Object.fromEntries(
+      Object.entries(config.providers).map(([name, provider]) => [
+        name,
+        supportsProviderQuotaReporting(name, provider),
+      ]),
+    );
+
+    expect(capability).toMatchObject({
+      openai: true,
+      xai: true,
+      anthropic: true,
+      cursor: true,
+      "google-antigravity": true,
+      kimi: true,
+      disabled_xai: false,
+    });
+    expect(supportsProviderQuotaReporting("xai", {
+      ...config.providers.disabled_xai,
+      disabled: true,
+    })).toBe(true);
+    expect(supportsProviderQuotaReporting("deepseek", {
+      adapter: "openai-chat",
+      authMode: "key",
+      baseUrl: "https://api.deepseek.com/v1",
+    })).toBe(false);
+    expect(supportsProviderQuotaReporting("opencode-go", {
+      adapter: "openai-chat",
+      authMode: "key",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+    })).toBe(true);
+  });
+
   test("returns active provider quota rows without leaking credentials or raw upstream payloads", async () => {
     await saveCredential("xai", { access: "xai-access-secret", refresh: "xai-refresh-secret", expires: Date.now() + 3600_000 });
     await saveCredential("anthropic", { access: "claude-access-secret", refresh: "claude-refresh-secret", expires: Date.now() + 3600_000 });

@@ -2,16 +2,16 @@
 
 ## Evidence
 
-- Visual source: `/Users/pavel/.codex/generated_images/019fd796-06e5-7f73-ab9e-2e498021f8f8/exec-d9d59c99-9a68-415c-b930-4351f490cedb.png`
-- Final implementation screenshot: `/Users/pavel/tools/opencodex/.tmp/design-qa/models-main-final.png`
-- Full side-by-side comparison: `/Users/pavel/tools/opencodex/.tmp/design-qa/models-comparison-final.png`
-- Current-behavior comparison: `/Users/pavel/tools/opencodex/.tmp/design-qa/models-behavior-comparison-final.png`
-- Catalog-table comparison: `/Users/pavel/tools/opencodex/.tmp/design-qa/models-table-comparison-final.png`
+- Visual source: `<Codex image-generation output>/exec-d9d59c99-9a68-415c-b930-4351f490cedb.png`
+- Final implementation screenshot: `<workspace>/.tmp/design-qa/models-main-final.png`
+- Full side-by-side comparison: `<workspace>/.tmp/design-qa/models-comparison-final.png`
+- Current-behavior comparison: `<workspace>/.tmp/design-qa/models-behavior-comparison-final.png`
+- Catalog-table comparison: `<workspace>/.tmp/design-qa/models-table-comparison-final.png`
 - Responsive evidence:
-  - `/Users/pavel/tools/opencodex/.tmp/design-qa/models-responsive-1024-final.png`
-  - `/Users/pavel/tools/opencodex/.tmp/design-qa/models-responsive-768-final.png`
-  - `/Users/pavel/tools/opencodex/.tmp/design-qa/models-responsive-600-rows-final.png`
-  - `/Users/pavel/tools/opencodex/.tmp/design-qa/models-responsive-600-editor-final.png`
+  - `<workspace>/.tmp/design-qa/models-responsive-1024-final.png`
+  - `<workspace>/.tmp/design-qa/models-responsive-768-final.png`
+  - `<workspace>/.tmp/design-qa/models-responsive-600-rows-final.png`
+  - `<workspace>/.tmp/design-qa/models-responsive-600-editor-final.png`
 
 ## Capture contract
 
@@ -50,6 +50,13 @@
 - Column values carry assistive labels even though the visual header is presentational.
 - Narrow layouts checked at 1024, 768, and 600 CSS px; the 600 px Context editor uses full-width 44 px Apply/override targets.
 - Browser console after the final interaction pass: no warnings or errors.
+
+## Convergence verification
+
+- Rechecked against the merged Client Apps/provider architecture on the isolated proxy, at 1440 × 1000 and 390 × 844 CSS px.
+- A registry-local LM Studio provider appeared with `Auto-discovery on`; its link opened the exact Provider Settings surface with both live discovery and local/private-network access enabled.
+- Collaboration remained explicit (`Classic v1`, `Automatic`, `Concurrent v2`), and the context summary remained explicit (`Uncapped` versus an applied routed-provider limit).
+- Mobile width stayed exact (`scrollWidth === clientWidth === 390`), and the final clean browser session produced no console warnings or errors.
 
 ## Remaining severity
 

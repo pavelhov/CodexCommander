@@ -115,3 +115,28 @@ test("changing an explicit false to true sends an explicit liveModels choice", a
   expect(patches[0]?.liveModels).toBe(true);
   await act(async () => { root.unmount(); });
 });
+
+test("an omitted auth mode on a loopback provider is presented and saved as local", async () => {
+  const item: WorkspaceItem = {
+    name: "lm-studio",
+    adapter: "openai-chat",
+    baseUrl: "http://localhost:1234/v1",
+    note: "before",
+  };
+  const { root, container, patches } = await mountSettings(item);
+  const authLabel = [...container.querySelectorAll(".pwi-settings-field")]
+    .find(field => field.querySelector(".pwi-settings-label")?.textContent === "Auth mode");
+  const authInput = authLabel?.querySelector<HTMLInputElement>("input");
+  expect(authInput?.value).toBe("Local");
+
+  const note = container.querySelector<HTMLTextAreaElement>(".pwi-settings-textarea")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLTextAreaElement.prototype, "value")!
+      .set!.call(note, "after");
+    note.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+  });
+  await save(container);
+
+  expect(patches[0]?.authMode).toBe("local");
+  await act(async () => { root.unmount(); });
+});

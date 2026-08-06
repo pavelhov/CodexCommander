@@ -11,7 +11,7 @@ public final class ProviderQuotaAccordionView: NSView {
     private let empty = makeLabel("", font: Theme.caption, color: Theme.muted)
     private var expandedProviders: Set<String> = []
     private var didSeedExpansion = false
-    private var currentReports: [QuotaReport] = []
+    private var currentRows: [ProviderQuotaRow] = []
 
     public var onManage: ((String) -> Void)?
     public var onViewAll: (() -> Void)?
@@ -74,7 +74,7 @@ public final class ProviderQuotaAccordionView: NSView {
         }
 
         guard snapshot.quotasLoaded else {
-            currentReports = []
+            currentRows = []
             rows.isHidden = true
             empty.isHidden = false
             empty.stringValue = "Quotas unavailable"
@@ -83,8 +83,8 @@ public final class ProviderQuotaAccordionView: NSView {
             return
         }
 
-        let ordered = orderedReports(snapshot.quotas)
-        currentReports = ordered
+        let ordered = orderedRows(snapshot.providerQuotaRows)
+        currentRows = ordered
         seedExpansionIfNeeded(ordered)
 
         let quotaUpdated = ordered.compactMap(\.freshnessDate).max()
@@ -106,13 +106,13 @@ public final class ProviderQuotaAccordionView: NSView {
         rows.isHidden = false
         viewAllButton.isHidden = false
 
-        for report in ordered {
-            let expanded = expandedProviders.contains(report.provider)
+        for quotaRow in ordered {
+            let expanded = expandedProviders.contains(quotaRow.provider)
             let row = ProviderQuotaRowView(
-                report: report,
+                row: quotaRow,
                 expanded: expanded,
-                onToggle: { [weak self] in self?.toggle(report.provider) },
-                onManage: { [weak self] in self?.onManage?(report.provider) }
+                onToggle: { [weak self] in self?.toggle(quotaRow.provider) },
+                onManage: { [weak self] in self?.onManage?(quotaRow.provider) }
             )
             row.translatesAutoresizingMaskIntoConstraints = false
             rows.addArrangedSubview(row)
@@ -121,7 +121,7 @@ public final class ProviderQuotaAccordionView: NSView {
     }
 
     /// Stable order: ChatGPT/OpenAI first, then Kimi, Grok, then remaining alpha.
-    public func orderedReports(_ reports: [QuotaReport]) -> [QuotaReport] {
+    public func orderedRows(_ reports: [ProviderQuotaRow]) -> [ProviderQuotaRow] {
         func rank(_ provider: String) -> Int {
             switch provider.lowercased() {
             case "openai", "chatgpt", "openai-apikey": return 0
@@ -140,7 +140,7 @@ public final class ProviderQuotaAccordionView: NSView {
         }
     }
 
-    private func seedExpansionIfNeeded(_ reports: [QuotaReport]) {
+    private func seedExpansionIfNeeded(_ reports: [ProviderQuotaRow]) {
         guard !didSeedExpansion else { return }
         didSeedExpansion = true
         if let first = reports.first(where: {
@@ -164,13 +164,13 @@ public final class ProviderQuotaAccordionView: NSView {
             rows.removeArrangedSubview(view)
             view.removeFromSuperview()
         }
-        for report in currentReports {
-            let expanded = expandedProviders.contains(report.provider)
+        for quotaRow in currentRows {
+            let expanded = expandedProviders.contains(quotaRow.provider)
             let row = ProviderQuotaRowView(
-                report: report,
+                row: quotaRow,
                 expanded: expanded,
-                onToggle: { [weak self] in self?.toggle(report.provider) },
-                onManage: { [weak self] in self?.onManage?(report.provider) }
+                onToggle: { [weak self] in self?.toggle(quotaRow.provider) },
+                onManage: { [weak self] in self?.onManage?(quotaRow.provider) }
             )
             row.translatesAutoresizingMaskIntoConstraints = false
             rows.addArrangedSubview(row)
@@ -185,7 +185,17 @@ public final class ProviderQuotaAccordionView: NSView {
 
     package var expandedProviderIDs: Set<String> { expandedProviders }
     package var providerRowCount: Int { rows.arrangedSubviews.count }
-    package var providerIDs: [String] { currentReports.map(\.provider) }
+    package var providerIDs: [String] { currentRows.map(\.provider) }
+    package var unavailableProviderIDs: [String] {
+        currentRows.filter(\.isUnavailable).map(\.provider)
+    }
+    package var showsEmptyState: Bool { !empty.isHidden }
+    package func providerAccessibilityLabelForTesting(_ provider: String) -> String? {
+        rows.arrangedSubviews
+            .compactMap { $0 as? ProviderQuotaRowView }
+            .first(where: { $0.providerID == provider })?
+            .accessibilityLabel()
+    }
     package func toggleForTesting(_ provider: String) { toggle(provider) }
     package func triggerViewAllForTesting() { onViewAll?() }
     package func triggerManageForTesting(_ provider: String) { onManage?(provider) }
@@ -202,21 +212,21 @@ final class ProviderQuotaRowView: NSView {
     let providerID: String
 
     init(
-        report: QuotaReport,
+        row: ProviderQuotaRow,
         expanded: Bool,
         onToggle: @escaping () -> Void,
         onManage: @escaping () -> Void
     ) {
-        self.providerID = report.provider
+        self.providerID = row.provider
         super.init(frame: .zero)
 
-        let display = ResourceAssets.providerDisplayName(report.provider, label: report.label)
+        let display = ResourceAssets.providerDisplayName(row.provider, label: row.label)
         let iconView = NSImageView()
         iconView.imageScaling = .scaleProportionallyUpOrDown
         iconView.translatesAutoresizingMaskIntoConstraints = false
         iconView.widthAnchor.constraint(equalToConstant: 16).isActive = true
         iconView.heightAnchor.constraint(equalToConstant: 16).isActive = true
-        if let icon = ResourceAssets.providerIcon(for: report.provider) {
+        if let icon = ResourceAssets.providerIcon(for: row.provider) {
             iconView.image = icon
             iconView.contentTintColor = Theme.text
         } else {
@@ -235,14 +245,14 @@ final class ProviderQuotaRowView: NSView {
         chevron.widthAnchor.constraint(equalToConstant: 12).isActive = true
         chevron.heightAnchor.constraint(equalToConstant: 12).isActive = true
 
-        let summary = makeLabel(collapsedSummary(report), font: Theme.micro, color: Theme.faint)
+        let summary = makeLabel(collapsedSummary(row), font: Theme.micro, color: Theme.faint)
 
-        let manage = ActionButton(title: "PROVIDER", handler: onManage)
+        let manage = ActionButton(title: row.isUnavailable ? "SETTINGS" : "PROVIDER", handler: onManage)
         manage.bezelStyle = .texturedRounded
         manage.controlSize = .mini
         manage.font = NSFont.systemFont(ofSize: 8, weight: .medium)
         manage.contentTintColor = Theme.muted
-        manage.setAccessibilityLabel("Manage \(display)")
+        manage.setAccessibilityLabel("Open \(display) Provider settings")
 
         let headerLeft = makeRow([iconView, name], spacing: 8)
         let headerRight = makeRow(expanded ? [manage, chevron] : [summary, chevron], spacing: 6)
@@ -253,7 +263,11 @@ final class ProviderQuotaRowView: NSView {
         headerButton.setButtonType(.momentaryChange)
         headerButton.title = ""
         headerButton.imagePosition = .imageOnly
-        headerButton.setAccessibilityLabel("\(display) quotas")
+        headerButton.setAccessibilityLabel(
+            row.isUnavailable
+                ? "\(display) quotas, unavailable"
+                : "\(display) quotas"
+        )
         headerButton.setAccessibilityRole(.button)
 
         let headerHost = NSView()
@@ -280,21 +294,32 @@ final class ProviderQuotaRowView: NSView {
 
         var arranged: [NSView] = [headerHost]
         if expanded {
-            let windows = report.normalizedWindows()
-            let references = report.referenceWindows
-            let limitEvent = report.observedLimitEvent
-            if windows.isEmpty && references.isEmpty && limitEvent == nil {
-                let missing = makeLabel("Unavailable", font: Theme.caption, color: Theme.muted)
+            if row.isUnavailable {
+                let missing = makeLabel(
+                    "No quota data. Check Provider settings.",
+                    font: Theme.caption,
+                    color: Theme.muted
+                )
+                missing.lineBreakMode = .byWordWrapping
+                missing.maximumNumberOfLines = 2
+                missing.preferredMaxLayoutWidth = Theme.width - Theme.gutter * 2 - 20
                 arranged.append(missing)
-            } else {
-                if let limitEvent {
-                    arranged.append(ObservedLimitEventRowView(event: limitEvent))
-                }
-                for window in windows {
-                    arranged.append(QuotaWindowRowView(window: window))
-                }
-                for reference in references {
-                    arranged.append(ReferenceQuotaWindowRowView(window: reference))
+            } else if let report = row.report {
+                let windows = report.normalizedWindows()
+                let references = report.referenceWindows
+                let limitEvent = report.observedLimitEvent
+                if windows.isEmpty && references.isEmpty && limitEvent == nil {
+                    arranged.append(makeLabel("Unavailable", font: Theme.caption, color: Theme.muted))
+                } else {
+                    if let limitEvent {
+                        arranged.append(ObservedLimitEventRowView(event: limitEvent))
+                    }
+                    for window in windows {
+                        arranged.append(QuotaWindowRowView(window: window))
+                    }
+                    for reference in references {
+                        arranged.append(ReferenceQuotaWindowRowView(window: reference))
+                    }
                 }
             }
         }
@@ -321,7 +346,11 @@ final class ProviderQuotaRowView: NSView {
 
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
-        setAccessibilityLabel("\(display) provider quotas")
+        setAccessibilityLabel(
+            row.isUnavailable
+                ? "\(display) provider quotas, unavailable"
+                : "\(display) provider quotas"
+        )
 
         self.headerButton = headerButton
         self.manageButton = expanded ? manage : nil
@@ -353,7 +382,8 @@ final class ProviderQuotaRowView: NSView {
         return headerButton.hitTest(managePoint) == nil
     }
 
-    private func collapsedSummary(_ report: QuotaReport) -> String {
+    private func collapsedSummary(_ row: ProviderQuotaRow) -> String {
+        guard let report = row.report else { return "Quota unavailable" }
         let windows = report.normalizedWindows().filter(\.hasPercent)
         if !windows.isEmpty {
             let parts = windows.prefix(3).map { window -> String in

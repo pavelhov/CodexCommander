@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { EventEmitter } from "node:events";
 import {
   ensureProxyLifecycle,
   findLiveProxyForStart,
   macOSCompanionOpenArguments,
+  spawnDetachedProxyStart,
   type EnsureProxyLifecycleIo,
 } from "../src/cli/proxy-lifecycle";
+import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCES, BUN_RUNTIME_SOURCE_ENV } from "../src/lib/bun-runtime";
 import type { ServiceDiagnostic } from "../src/service";
 import type { LivenessIo } from "../src/server/proxy-liveness";
 import type { OcxConfig } from "../src/types";
@@ -225,6 +229,31 @@ describe("shared proxy lifecycle authority", () => {
     });
     expect(result).toMatchObject({ ok: true, pid: 88, port: 10100, changed: true });
     expect(calls).toEqual(["spawn:10100", "wait:20000", "sync:88"]);
+  });
+
+  test("the shared detached launcher preserves caller env and stamps runtime provenance", async () => {
+    let spawnedEnv: NodeJS.ProcessEnv | undefined;
+    let unrefCalled = false;
+    const child = new EventEmitter() as EventEmitter & { unref(): void };
+    child.unref = () => { unrefCalled = true; };
+    const spawnFn = ((_command: string, _args: readonly string[], options: SpawnOptions) => {
+      spawnedEnv = options.env;
+      queueMicrotask(() => child.emit("spawn"));
+      return child as unknown as ChildProcess;
+    }) as unknown as typeof nodeSpawn;
+
+    await spawnDetachedProxyStart({
+      port: 10124,
+      entry: "/repo/src/cli/index.ts",
+      env: { OCX_SERVICE: "1", OCX_TEST_SENTINEL: "kept" },
+      spawnFn,
+    });
+
+    expect(spawnedEnv?.OCX_SERVICE).toBe("1");
+    expect(spawnedEnv?.OCX_TEST_SENTINEL).toBe("kept");
+    expect(spawnedEnv?.[BUN_RUNTIME_PATH_ENV]).toBe(process.execPath);
+    expect(BUN_RUNTIME_SOURCES).toContain(spawnedEnv?.[BUN_RUNTIME_SOURCE_ENV]);
+    expect(unrefCalled).toBe(true);
   });
 
   test("macOS companion launch targets only dist/macos or the fixed bundle id", () => {

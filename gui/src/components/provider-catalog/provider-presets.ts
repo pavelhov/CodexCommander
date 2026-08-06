@@ -26,6 +26,8 @@ export interface CatalogPreset {
   note?: string;
   /** API key is optional — provider works without one (keyless free). */
   keyOptional?: boolean;
+  /** Mirrors registry intent for providers that are local by definition. */
+  allowPrivateNetworkByDefault?: boolean;
   /** Free pricing — may still require an API key (e.g. NVIDIA NIM). */
   freeTier?: boolean;
   /**

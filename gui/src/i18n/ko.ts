@@ -1820,7 +1820,7 @@ export const ko: Record<TKey, string> = {
   "modal.forwardHintPrefix": "키 불필요 — 프록시가",
   "modal.forwardCredentials": "codex login",
   "modal.forwardHintSuffix": "자격 증명을 이 프로바이더로 전달합니다.",
-  "modal.localHint": "API 키는 저장되지 않습니다. Cursor의 공개 모델 카탈로그만 Codex에 추가되며, live Cursor 전송과 네이티브 파일/셸 실행은 검토 전까지 비활성입니다.",
+  "modal.localHint": "API 키는 저장되지 않습니다. OpenCodex가 이 로컬 서버에 연결하며, 실시간 모델 검색과 모델 목록은 제공자 설정에서 관리할 수 있습니다.",
   "modal.getApiKey": "{label} API 키 받기",
   "modal.apiKey": "API 키",
   "modal.apiKeyTransport": "API 키 헤더",

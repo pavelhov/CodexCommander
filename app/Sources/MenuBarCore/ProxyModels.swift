@@ -299,6 +299,63 @@ public struct ProviderSummary: Decodable, Equatable, Sendable {
     public let authMode: String?
     public let hasApiKey: Bool?
     public let disabled: Bool?
+    public let quotaCapable: Bool?
 
     public var isEnabled: Bool { !(disabled ?? false) }
+    public var supportsQuotaReporting: Bool { isEnabled && quotaCapable == true }
+}
+
+/// Tray-only display state. An unavailable row is structurally incapable of carrying
+/// a fabricated percentage, reset, source, or freshness timestamp.
+public enum ProviderQuotaRow: Equatable, Sendable {
+    case available(QuotaReport)
+    case unavailable(ProviderSummary)
+
+    public var provider: String {
+        switch self {
+        case .available(let report): return report.provider
+        case .unavailable(let summary): return summary.name
+        }
+    }
+
+    public var label: String? {
+        if case .available(let report) = self { return report.label }
+        return nil
+    }
+
+    public var report: QuotaReport? {
+        if case .available(let report) = self { return report }
+        return nil
+    }
+
+    public var isUnavailable: Bool {
+        if case .unavailable = self { return true }
+        return false
+    }
+
+    public var freshnessDate: Date? { report?.freshnessDate }
+}
+
+public extension ProxySnapshot {
+    /// Join one completed provider inventory with the latest completed quota snapshot.
+    /// Enabled configured providers form the left side; actual reports always win.
+    var providerQuotaRows: [ProviderQuotaRow] {
+        guard providersLoaded, quotasLoaded else { return quotas.map(ProviderQuotaRow.available) }
+
+        var reportsByProvider: [String: QuotaReport] = [:]
+        for report in quotas {
+            let key = report.provider.lowercased()
+            if reportsByProvider[key] == nil { reportsByProvider[key] = report }
+        }
+
+        var rows: [ProviderQuotaRow] = []
+        for provider in providers where provider.isEnabled {
+            if let report = reportsByProvider.removeValue(forKey: provider.name.lowercased()) {
+                rows.append(.available(report))
+            } else if provider.supportsQuotaReporting {
+                rows.append(.unavailable(provider))
+            }
+        }
+        return rows
+    }
 }

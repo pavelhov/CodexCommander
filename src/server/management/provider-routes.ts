@@ -37,7 +37,11 @@ import {
   resolveProviderModelDiscovery,
 } from "../../providers/model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
-import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
+import {
+  clearProviderQuotaCache,
+  fetchProviderQuotaReports,
+  supportsProviderQuotaReporting,
+} from "../../providers/quota";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
 import { clearThreadAccountMap } from "../../codex/routing";
@@ -253,6 +257,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       authMode: p.authMode,
       apiKeyTransport: p.apiKeyTransport,
       disabled: p.disabled === true,
+      quotaCapable: supportsProviderQuotaReporting(name, p),
       codexAccountMode: providerCodexAccountMode(name, p),
       discovery: p.liveModels === false ? undefined : getProviderDiscoveryStatus(name),
     })));

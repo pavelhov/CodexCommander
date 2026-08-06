@@ -14,6 +14,7 @@ import { useT } from "../../i18n/shared";
 import { IconLock } from "../../icons";
 import { isCatalogProviderId } from "../../provider-icons";
 import { openAiAccountProviderState } from "../../provider-payload";
+import { isLocalProvider } from "../../provider-workspace/kind";
 import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import { authModeLabel } from "./ProviderRail";
 import type { WorkspaceItem, ProviderUpdatePatch } from "./types";
@@ -22,6 +23,11 @@ const ADAPTERS = ["openai-responses", "openai-chat", "anthropic", "google", "azu
 const EMPTY_MODELS: string[] = [];
 
 type ChoicesStatus = "idle" | "loading" | "ready" | "error";
+
+function editableAuthMode(item: WorkspaceItem): string {
+  if (item.authMode) return String(item.authMode);
+  return isLocalProvider(item) || item.keyOptional ? "local" : "key";
+}
 
 export default function ProviderSettings({
   item, availableModels = EMPTY_MODELS, apiBase, onUpdateProvider, onDirtyChange, onRegisterSave,
@@ -36,7 +42,7 @@ export default function ProviderSettings({
   onRegisterSave?: (save: (() => Promise<boolean>) | null) => void;
 }) {
   const t = useT();
-  const initialAuth = String(item.authMode ?? (item.keyOptional ? "local" : "key"));
+  const initialAuth = editableAuthMode(item);
   const [adapter, setAdapter] = useState(item.adapter);
   const [baseUrl, setBaseUrl] = useState(item.baseUrl);
   const [defaultModel, setDefaultModel] = useState(item.defaultModel ?? "");
@@ -59,7 +65,7 @@ export default function ProviderSettings({
     setAdapter(item.adapter);
     setBaseUrl(item.baseUrl);
     setDefaultModel(item.defaultModel ?? "");
-    setAuthMode(String(item.authMode ?? (item.keyOptional ? "local" : "key")));
+    setAuthMode(initialAuth);
     setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
     setNote(item.note ?? "");
     setAllowPrivateNetwork(item.allowPrivateNetwork ?? false);
@@ -67,7 +73,7 @@ export default function ProviderSettings({
     setMsg(null);
     setModeMsg(null);
     queueMicrotask(() => setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl)));
-  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, item.liveModels, baseUrlChoices]);
+  }, [item.adapter, item.baseUrl, item.defaultModel, item.apiKeyTransport, item.note, item.allowPrivateNetwork, item.liveModels, baseUrlChoices, initialAuth]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Account mode syncs on its own: a mode PATCH refresh must not reset an in-progress
@@ -111,7 +117,7 @@ export default function ProviderSettings({
   const dirty = adapter.trim() !== item.adapter
     || baseUrl.trim() !== item.baseUrl
     || defaultModel.trim() !== (item.defaultModel ?? "")
-    || authMode !== String(item.authMode ?? (item.keyOptional ? "local" : "key"))
+    || authMode !== initialAuth
     || (adapter.trim() === "anthropic" && authMode === "key" && apiKeyTransport !== (item.apiKeyTransport ?? "x-api-key"))
     || note.trim() !== (item.note ?? "")
     || allowPrivateNetwork !== (item.allowPrivateNetwork ?? false)

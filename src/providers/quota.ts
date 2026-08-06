@@ -1367,6 +1367,25 @@ async function fetchOpenCodeGoReferenceQuota(provider: string): Promise<Provider
   };
 }
 
+/**
+ * Whether a provider shape has a concrete quota-reporting implementation.
+ * Exposed through the safe provider summary so thin clients can distinguish a
+ * supported provider with temporarily unavailable data from an unsupported one.
+ */
+export function supportsProviderQuotaReporting(
+  name: string,
+  provider: OcxProviderConfig,
+): boolean {
+  if (name === "opencode-go" && isCanonicalOpenCodeGoBaseUrl(provider.baseUrl)) return true;
+  if (isBuiltInChatGptForwardProvider(name, provider)) return true;
+  if (provider.authMode === "oauth") {
+    if (["xai", "anthropic", "cursor", "google-antigravity"].includes(name)) return true;
+    if (name === "kimi" && isCanonicalKimiCodeBaseUrl(provider.baseUrl)) return true;
+  }
+  if (provider.authMode === "key" && isCanonicalKimiCodeBaseUrl(provider.baseUrl)) return true;
+  return (provider.authMode ?? "key") === "key" && isCanonicalA6apiBaseUrl(provider.baseUrl);
+}
+
 async function maybeFetchProviderQuota(
   name: string,
   provider: OcxProviderConfig,
@@ -1374,7 +1393,7 @@ async function maybeFetchProviderQuota(
   forceRefresh: boolean,
   prefetchedCodexSnapshot?: CodexAuthAccountsSnapshotPromise,
 ): Promise<ProviderQuotaProbeResult> {
-  if (provider.disabled === true) return null;
+  if (provider.disabled === true || !supportsProviderQuotaReporting(name, provider)) return null;
   try {
     if (name === "opencode-go" && isCanonicalOpenCodeGoBaseUrl(provider.baseUrl)) {
       return fetchOpenCodeGoReferenceQuota(name);

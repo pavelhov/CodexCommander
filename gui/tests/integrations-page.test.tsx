@@ -158,3 +158,18 @@ test("malformed integration status becomes the recoverable error state", async (
   expect(container.textContent).toContain("Could not read the OpenCode integration status");
   expect(container.querySelector(".integration-card-primary")).toBeNull();
 });
+
+test("switching client-app views resets the mobile scroll container", async () => {
+  await mount();
+  testWindow.document.body.scrollTop = 640;
+  testWindow.document.documentElement.scrollTop = 640;
+
+  await act(async () => {
+    testWindow.location.hash = "#integrations";
+    testWindow.dispatchEvent(new testWindow.HashChangeEvent("hashchange"));
+    await Promise.resolve();
+  });
+
+  expect(testWindow.document.body.scrollTop).toBe(0);
+  expect(testWindow.document.documentElement.scrollTop).toBe(0);
+});

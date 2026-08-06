@@ -52,6 +52,8 @@ public final class StatusHeaderView: NSView {
     init() {
         super.init(frame: .zero)
         brand.image = ResourceAssets.brandImage(size: NSSize(width: 25, height: 25))
+        brand.image?.isTemplate = true
+        brand.contentTintColor = Theme.text
         brand.imageScaling = .scaleProportionallyUpOrDown
         brand.translatesAutoresizingMaskIntoConstraints = false
         brand.widthAnchor.constraint(equalToConstant: 25).isActive = true

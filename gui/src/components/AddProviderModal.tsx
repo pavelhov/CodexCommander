@@ -147,7 +147,7 @@ export default function AddProviderModal({
         apiKey: "",
         apiKeyTransport: undefined,
         defaultModel: p.defaultModel ?? "",
-        allowPrivateNetwork: false,
+        allowPrivateNetwork: p.allowPrivateNetworkByDefault === true,
       },
     });
   };

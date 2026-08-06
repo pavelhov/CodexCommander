@@ -76,7 +76,9 @@ override it.
 - **Quit** — closes the companion UI only. It does not stop the proxy, service, or client routing.
 
 ChatGPT appears first and expanded when its quota report is available. Kimi and Grok appear as
-collapsed summaries. **View all providers** opens the complete Providers workspace.
+collapsed summaries. A configured quota-capable provider that returns no report stays visible as
+**Quota unavailable**; expand it to open Provider settings. **View all providers** opens the
+complete Providers workspace.
 
 ## Authentication and privacy
 
@@ -142,7 +144,7 @@ next launch and refreshes the existing Login Item registration only when Launch 
 - **Authentication unavailable** — run <code>ocx doctor</code>; verify that the OpenCodex state
   directory and <code>admin-api-token</code> are owned by your user and are not group/world
   accessible.
-- **Quota unavailable** — open the provider's **Manage** destination and connect or reauthenticate
+- **Quota unavailable** — open **Provider settings** and connect or reauthenticate
   the account. Some providers do not expose a quota API.
 - **Restart did not recover** — open **Logs** and run <code>ocx status</code>. The companion never
   kills a process or rewrites service state as a fallback.

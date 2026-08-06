@@ -245,8 +245,8 @@ export default function App() {
           </button>
         </div>
         <nav>
-          {NAV_SECTIONS.map((section, index) => (
-            <div key={section.labelKey ?? `nav-root-${index}`} className="nav-section">
+          {NAV_SECTIONS.map(section => (
+            <div key={section.labelKey ?? section.entries[0]?.id ?? "nav-root"} className="nav-section">
               {section.labelKey && <div className="nav-section-label">{t(section.labelKey)}</div>}
               {section.entries.map(entry => {
                 const { id, tkey, Icon, subPath } = entry;

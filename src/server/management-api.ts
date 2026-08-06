@@ -179,6 +179,10 @@ export async function handleManagementAPI(
   }
 
   async function syncClaudeAgentDefsBestEffort(): Promise<void> {
+    if (deps.syncClaudeAgentDefsBestEffort) {
+      await deps.syncClaudeAgentDefsBestEffort();
+      return;
+    }
     try {
       const { injectClaudeAgentDefs } = await import("../claude/agents-inject");
       if (config.claudeCode?.enabled === false || config.claudeCode?.injectAgents === false) {
@@ -187,7 +191,7 @@ export async function handleManagementAPI(
       }
       try {
         const [models, { buildClaudeContextWindows }, { visibleNativeSlugs }] = await Promise.all([
-          fetchAllModels(config),
+          (deps.fetchAllModels ?? fetchAllModels)(config),
           import("../claude/context-windows"),
           import("../codex/catalog"),
         ]);

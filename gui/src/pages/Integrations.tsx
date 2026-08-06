@@ -87,6 +87,14 @@ export default function Integrations({ apiBase }: { apiBase: string }) {
     };
   }, []);
 
+  useEffect(() => {
+    // The dashboard's fixed-height shell makes body the mobile scroll container.
+    // Reset both candidates so opening a detail view never inherits the catalog's
+    // scroll position (and direct deep links consistently start at the heading).
+    document.body.scrollTop = 0;
+    document.documentElement.scrollTop = 0;
+  }, [tab]);
+
   return (
     <section className="integrations-page">
       {VIEWS.map(definition => {

@@ -17,6 +17,7 @@ import { currentExternalCodexModelProvider, restoreNativeCodex } from "../codex/
 import { reconcileJournal } from "../codex/journal";
 import { syncModelsToCodex } from "../codex/sync";
 import { stripGrokConfig } from "../grok/inject";
+import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { stopProxy } from "../lib/process-control";
 import {
   diagnoseService,
@@ -153,7 +154,7 @@ export function spawnDetachedProxyStart(options: SpawnDetachedProxyOptions = {})
         detached: true,
         stdio: "ignore",
         windowsHide: true,
-        env,
+        env: withProcessRuntimeProvenance(env),
       });
     } catch (error) {
       reject(error);

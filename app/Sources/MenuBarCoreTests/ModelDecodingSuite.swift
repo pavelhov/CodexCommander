@@ -83,6 +83,49 @@ enum ModelDecodingSuite {
             t.equal(byProvider["xai"]?.providerLabel, "xAI Grok")
         }
 
+        t.test("providers: quota presentation eligibility mirrors supported probes") {
+            let providers = try decode([ProviderSummary].self, """
+            [
+              {"name":"openai","authMode":"forward","quotaCapable":true},
+              {"name":"xai","authMode":"oauth","quotaCapable":true},
+              {"name":"kimi","authMode":"key","quotaCapable":true},
+              {"name":"team-a6","authMode":"key","quotaCapable":true},
+              {"name":"opencode-go","authMode":"key","quotaCapable":true},
+              {"name":"deepseek","authMode":"key","quotaCapable":false},
+              {"name":"legacy-xai","authMode":"oauth"},
+              {"name":"anthropic","authMode":"oauth","quotaCapable":true,"disabled":true}
+            ]
+            """)
+            let byName = Dictionary(uniqueKeysWithValues: providers.map { ($0.name, $0) })
+            for name in ["openai", "xai", "kimi", "team-a6", "opencode-go"] {
+                t.equal(byName[name]?.supportsQuotaReporting, true, "\(name) supported")
+            }
+            t.equal(byName["deepseek"]?.supportsQuotaReporting, false)
+            t.equal(byName["legacy-xai"]?.supportsQuotaReporting, false, "old proxy omits capability")
+            t.equal(byName["anthropic"]?.supportsQuotaReporting, false, "disabled provider")
+
+            let reports = try decode([QuotaReport].self, """
+            [
+              {"provider":"xai","label":"Grok","quota":{"monthlyPercent":41}},
+              {"provider":"anthropic","label":"Anthropic","quota":{"weeklyPercent":12}},
+              {"provider":"removed","label":"Removed","quota":{"monthlyPercent":9}}
+            ]
+            """)
+            let snapshot = ProxySnapshot(
+                state: .running(StartupHealth(status: "protected")),
+                endpoint: .default,
+                quotas: reports,
+                providers: providers,
+                providersLoaded: true,
+                quotasLoaded: true
+            )
+            let rows = snapshot.providerQuotaRows
+            t.equal(rows.map(\.provider), ["openai", "xai", "kimi", "team-a6", "opencode-go"])
+            t.equal(rows.filter { $0.provider == "xai" }.count, 1, "actual report wins")
+            t.equal(rows.first { $0.provider == "xai" }?.isUnavailable, false)
+            t.equal(rows.first { $0.provider == "openai" }?.isUnavailable, true)
+        }
+
         t.test("quotas: nested freshness wins and report freshness fills the gap") {
             let nested = try decode(
                 QuotaReport.self,

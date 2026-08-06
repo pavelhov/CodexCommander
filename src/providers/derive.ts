@@ -68,6 +68,8 @@ export interface DerivedProviderPreset {
   dashboardUrl?: string;
   note?: string;
   keyOptional?: boolean;
+  /** Registry-local providers start with the private-network control enabled. */
+  allowPrivateNetworkByDefault?: boolean;
   /** Free pricing (may still require a key). */
   freeTier?: boolean;
   /**
@@ -361,6 +363,7 @@ function entryToPreset(entry: ProviderRegistryEntry): DerivedProviderPreset {
     ...(entry.dashboardUrl ? { dashboardUrl: entry.dashboardUrl } : {}),
     ...(entry.note ? { note: entry.note } : {}),
     ...(entry.keyOptional ? { keyOptional: true } : {}),
+    ...(entry.allowPrivateNetworkByDefault ? { allowPrivateNetworkByDefault: true } : {}),
     ...(entry.freeTier ? { freeTier: true } : {}),
     ...(entry.baseUrlChoices ? { baseUrlChoices: entry.baseUrlChoices.map(c => ({ ...c })) } : {}),
   };

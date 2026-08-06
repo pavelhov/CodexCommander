@@ -17,6 +17,12 @@ export interface ManagementApiDeps {
   toggleDefaultModeRequestUserInput?: (enabled: boolean) => void;
   createManagementConvergeCodex?: (config: Readonly<OcxConfig>) => ConvergeCodex;
   /**
+   * Claude agent-definition sync seam for route tests. Production leaves this
+   * unset and uses the real best-effort writer; tests with in-memory configs
+   * must not rewrite the user's ~/.claude/agents directory.
+   */
+  syncClaudeAgentDefsBestEffort?: () => Promise<void> | void;
+  /**
    * Persistence seam for route-level tests. Production leaves this unset and uses
    * `saveConfigPreservingClaudeCode`; tests that pass an in-memory fixture config
    * MUST inject a no-op/spy so the fixture can never overwrite the user's real

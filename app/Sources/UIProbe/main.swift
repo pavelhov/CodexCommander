@@ -11,9 +11,13 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate {
     let controller = PopoverViewController()
     var panel: PopoverPanel?
     var outputPath = "/tmp/opencodex-ui-probe.png"
+    var lightAppearance = false
 
     func applicationDidFinishLaunching(_ n: Notification) {
-        NSApp.appearance = NSAppearance(named: .darkAqua)
+        lightAppearance = CommandLine.arguments.contains("--light")
+        NSApp.appearance = NSAppearance(
+            named: lightAppearance ? .aqua : .darkAqua
+        )
 
         if CommandLine.arguments.count > 1 {
             outputPath = CommandLine.arguments[1]
@@ -38,6 +42,9 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate {
             LaunchAtLoginPresentation(status: .enabled, desiredEnabled: true)
         )
         controller.apply(snap)
+        if CommandLine.arguments.contains("--expand-grok") {
+            controller.quotaAccordion.toggleForTesting("xai")
+        }
         controller.view.layoutSubtreeIfNeeded()
 
         let width: CGFloat = 387
@@ -87,11 +94,15 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate {
             // offscreen bitmap has no window content behind it to blur.
             let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 12, yRadius: 12)
             path.addClip()
+            let startingWhite: CGFloat = lightAppearance ? 0.99 : 0.13
+            let endingWhite: CGFloat = lightAppearance ? 0.95 : 0.075
             NSGradient(
-                starting: NSColor(calibratedWhite: 0.13, alpha: 0.98),
-                ending: NSColor(calibratedWhite: 0.075, alpha: 0.98)
+                starting: NSColor(calibratedWhite: startingWhite, alpha: 0.98),
+                ending: NSColor(calibratedWhite: endingWhite, alpha: 0.98)
             )?.draw(in: bounds, angle: -90)
-            NSColor.white.withAlphaComponent(0.16).setStroke()
+            (lightAppearance ? NSColor.black : NSColor.white)
+                .withAlphaComponent(lightAppearance ? 0.12 : 0.16)
+                .setStroke()
             path.lineWidth = 1
             path.stroke()
 
@@ -121,8 +132,8 @@ private enum Fixture {
           "schemaVersion": 1,
           "generatedAt": \(ms),
           "proxyState": "running",
-          "activeTurnCount": 3,
-          "displayedActivityCount": 3,
+          "activeTurnCount": 1,
+          "displayedActivityCount": 1,
           "unattributedActiveCount": 0,
           "truncated": false,
           "activities": [
@@ -135,26 +146,6 @@ private enum Fixture {
               "phase": "running",
               "startedAt": \(ms - 120000),
               "firstOutputAt": \(ms - 110000)
-            },
-            {
-              "id": "child-1",
-              "parentId": "primary-1",
-              "role": "subagent",
-              "provider": "kimi",
-              "model": "Kimi K2.5",
-              "phase": "running",
-              "startedAt": \(ms - 60000),
-              "firstOutputAt": \(ms - 55000)
-            },
-            {
-              "id": "orphan-1",
-              "parentId": null,
-              "role": "subagent",
-              "provider": "xai",
-              "model": "Grok Code",
-              "phase": "starting",
-              "startedAt": \(ms - 15000),
-              "firstOutputAt": null
             }
           ]
         }
@@ -187,17 +178,17 @@ private enum Fixture {
               "weeklyResetAt": \(now.addingTimeInterval(2 * 86400).timeIntervalSince1970),
               "monthlyResetAt": \(now.addingTimeInterval(26 * 86400).timeIntervalSince1970)
             }
-          },
-          {
-            "provider": "xai",
-            "label": "Grok",
-            "source": "oauth",
-            "updatedAt": \(ms),
-            "quota": {
-              "monthlyPercent": 41,
-              "monthlyResetAt": \(now.addingTimeInterval(26 * 86400).timeIntervalSince1970)
-            }
           }
+        ]
+        """
+
+        // Grok is intentionally configured but absent from quota reports: this is the
+        // expired/transient-probe state that must remain visible without a fake value.
+        let providersJSON = """
+        [
+          {"name":"openai","authMode":"forward","quotaCapable":true},
+          {"name":"kimi","authMode":"oauth","quotaCapable":true},
+          {"name":"xai","authMode":"oauth","quotaCapable":true}
         ]
         """
 
@@ -208,6 +199,10 @@ private enum Fixture {
         let quotas = try! JSONDecoder().decode(
             [QuotaReport].self,
             from: Data(quotasJSON.utf8)
+        )
+        let providers = try! JSONDecoder().decode(
+            [ProviderSummary].self,
+            from: Data(providersJSON.utf8)
         )
 
         return ProxySnapshot(
@@ -222,7 +217,7 @@ private enum Fixture {
             endpoint: endpoint,
             quotas: quotas,
             activity: activity,
-            providers: [],
+            providers: providers,
             lastUpdated: now,
             providersLoaded: true,
             quotasLoaded: true,

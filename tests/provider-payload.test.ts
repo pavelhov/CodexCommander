@@ -290,6 +290,13 @@ describe("provider dashboard payload", () => {
       .toHaveProperty("allowPrivateNetwork", true);
   });
 
+  test("registry-local presets expose their intentional private-network default to the GUI", () => {
+    const local = deriveProviderPresets().find(row => row.id === "lm-studio")!;
+    const cloud = deriveProviderPresets().find(row => row.id === "deepseek")!;
+    expect(local.allowPrivateNetworkByDefault).toBe(true);
+    expect(cloud.allowPrivateNetworkByDefault).toBeUndefined();
+  });
+
   test("reserved OpenAI payload never carries private-network access from form state", () => {
     const preset = deriveProviderPresets().find(row => row.id === "openai")!;
     const result = buildProviderPostBody(preset, {

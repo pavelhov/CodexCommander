@@ -82,8 +82,9 @@ describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
     const defs = buildClaudeAgentDefs(config, windows, dir);
     const models = Object.fromEntries(defs.map(def => [def.name, def.model]));
 
-    expect(windows["claude-ocx-kimi--k3"]).toBe(262_144);
+    expect(windows["claude-ocx-kimi--k3"]).toBe(1_048_576);
     expect(windows["claude-ocx-kimi--k3[1m]"]).toBe(1_048_576);
+    expect(windows["claude-ocx-kimi--k3-256k"]).toBe(262_144);
     expect(models).toEqual({
       "ocx-k3-1m": "claude-ocx-kimi--k3[1m]",
       "ocx-self": "claude-ocx-kimi--k3[1m]",
