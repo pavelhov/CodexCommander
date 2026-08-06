@@ -2331,6 +2331,7 @@ describe("provider management validation", () => {
       const models = await fetch(new URL("/api/models", server.url));
       const body = await models.json() as Array<{ id: string; contextWindow?: number; contextCap?: number }>;
       expect(body.find(m => m.id === "wide-model")).toMatchObject({ contextWindow: 500_000, contextCap: 500_000 });
+      expect(body.find(m => m.id === "other-model")).toMatchObject({ contextWindow: 500_000, contextCap: 500_000 });
 
       // Set-all off clears every cap.
       const cleared = await fetch(new URL("/api/provider-context-caps", server.url), {
@@ -2360,6 +2361,10 @@ describe("provider management validation", () => {
         value: 600_000,
         caps: { "test-openai": 600_000, other: 600_000 },
       });
+      const atomicModels = await fetch(new URL("/api/models", server.url));
+      const atomicBody = await atomicModels.json() as Array<{ id: string; contextWindow?: number; contextCap?: number }>;
+      expect(atomicBody.find(m => m.id === "wide-model")).toMatchObject({ contextWindow: 600_000, contextCap: 600_000 });
+      expect(atomicBody.find(m => m.id === "other-model")).toMatchObject({ contextWindow: 600_000, contextCap: 600_000 });
 
       // A compound clear persists the new reusable value without leaving caps enabled.
       const atomicClear = await fetch(new URL("/api/provider-context-caps", server.url), {
