@@ -12,6 +12,8 @@ public actor PollingCoordinator {
     public static let heavyInterval: TimeInterval = 60
     public static let backoffInterval: TimeInterval = 30
     public static let backoffAfterFailures = 3
+    public static let revalidationInterval: TimeInterval = 1
+    public static let maxDiagnosticStaleRefreshes = 6
 
     private let client: ProxyClient
     private var snapshot: ProxySnapshot
@@ -25,6 +27,10 @@ public actor PollingCoordinator {
     /// immediately reopening the popover dropped the reopen's refresh entirely: the old
     /// cycle exited on its generation guard and the new one had already been rejected.
     private var pendingOpenRefresh = false
+    /// A stale-while-revalidate startup-health response is intentionally conservative.
+    /// Keep the neutral/last-known state while the background probe catches up, but
+    /// bound retries so a genuinely broken diagnostic eventually remains visible.
+    private var diagnosticStaleRefreshes = 0
     /// Attempt time, distinct from success time: a persistently failing quota endpoint
     /// must still respect the slower cadence.
     private var lastQuotaAttempt: Date?
@@ -38,6 +44,10 @@ public actor PollingCoordinator {
 
     /// Interval until the next liveness tick, widened once failures pile up.
     public var currentInterval: TimeInterval {
+        if diagnosticStaleRefreshes > 0,
+           diagnosticStaleRefreshes <= Self.maxDiagnosticStaleRefreshes {
+            return Self.revalidationInterval
+        }
         if snapshot.consecutiveFailures >= Self.backoffAfterFailures {
             return Self.backoffInterval
         }
@@ -93,12 +103,26 @@ public actor PollingCoordinator {
                 await drainPendingRefresh()
                 return
             }
-            snapshot.state = .running(health)
-            snapshot.lastKnownStartCommand = health.manualStartCommand
-            snapshot.recommendedCommand = health.recommendedCommand
             snapshot.endpoint = await client.currentEndpoint
             snapshot.credentialAvailability = await client.credentialAvailability
             snapshot.consecutiveFailures = 0
+            if health.isDiagnosticStale {
+                diagnosticStaleRefreshes += 1
+                if diagnosticStaleRefreshes <= Self.maxDiagnosticStaleRefreshes {
+                    // A cold launch stays neutral. Once a fresh protected state exists,
+                    // do not replace it with a false warning during cache revalidation.
+                    if !snapshot.state.isRunning { snapshot.state = .loading }
+                    publish()
+                    refreshInFlight = false
+                    await drainPendingRefresh()
+                    return
+                }
+            } else {
+                diagnosticStaleRefreshes = 0
+            }
+            snapshot.state = .running(health)
+            snapshot.lastKnownStartCommand = health.manualStartCommand
+            snapshot.recommendedCommand = health.recommendedCommand
             snapshot.lastUpdated = Date()
         } catch is CancellationError {
             // The popover closed mid-flight. Not a proxy failure; leave state untouched.
@@ -205,6 +229,7 @@ public actor PollingCoordinator {
     }
 
     private func apply(_ error: ProxyError) {
+        diagnosticStaleRefreshes = 0
         snapshot.consecutiveFailures += 1
         switch error {
         case .unreachable:

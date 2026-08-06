@@ -40,6 +40,7 @@ enum ModelDecodingSuite {
             t.equal(health.status, "at-risk")
             t.equal(health.platform, "darwin")
             t.equal(health.recommendedCommand, "ocx service install")
+            t.equal(health.isDiagnosticStale, true)
             t.equal(health.isProtected, false)
             t.equal(health.isServiceManaged, true)
             t.equal(health.manualStartCommand, "ocx service start")
@@ -48,6 +49,7 @@ enum ModelDecodingSuite {
         t.test("health: an unknown status string decodes without throwing") {
             let health = try decode(StartupHealth.self, #"{"status":"some-future-state"}"#)
             t.equal(health.status, "some-future-state")
+            t.equal(health.isDiagnosticStale, false)
             t.equal(health.isProtected, false)
         }
 
