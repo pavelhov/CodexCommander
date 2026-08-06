@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createIsolatedTestEnvironment } from "../scripts/test";
+import {
+  createIsolatedTestEnvironment,
+  DEFAULT_TEST_SHARD_SIZE,
+  listRepositoryTestFiles,
+  partitionTestFiles,
+  resolveTestShardSize,
+} from "../scripts/test";
 
 describe("test runner isolation", () => {
   test("redirects user homes to a disposable root", () => {
@@ -20,5 +27,43 @@ describe("test runner isolation", () => {
       isolated.cleanup();
     }
     expect(existsSync(isolated.root)).toBe(false);
+  });
+
+  test("partitions full-suite files without dropping or duplicating paths", () => {
+    expect(partitionTestFiles(["a", "b", "c", "d", "e"], 2)).toEqual([
+      ["a", "b"],
+      ["c", "d"],
+      ["e"],
+    ]);
+    expect(partitionTestFiles([], 2)).toEqual([]);
+    expect(() => partitionTestFiles(["a"], 0)).toThrow("positive integer");
+  });
+
+  test("uses a bounded default shard size and validates overrides", () => {
+    expect(resolveTestShardSize(undefined)).toBe(DEFAULT_TEST_SHARD_SIZE);
+    expect(resolveTestShardSize("17")).toBe(17);
+    expect(() => resolveTestShardSize("0")).toThrow("positive integer");
+    expect(() => resolveTestShardSize("many")).toThrow("positive integer");
+  });
+
+  test("discovers Bun test filename patterns in stable order", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-test-discovery-"));
+    try {
+      mkdirSync(join(root, "nested"));
+      for (const path of [
+        join(root, "zeta.test.ts"),
+        join(root, "nested", "alpha.spec.tsx"),
+        join(root, "nested", "beta_test.js"),
+        join(root, "ignored.ts"),
+      ]) writeFileSync(path, "", "utf8");
+
+      expect(listRepositoryTestFiles(root)).toEqual([
+        join(root, "nested", "alpha.spec.tsx"),
+        join(root, "nested", "beta_test.js"),
+        join(root, "zeta.test.ts"),
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

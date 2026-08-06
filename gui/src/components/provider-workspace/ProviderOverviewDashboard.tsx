@@ -10,6 +10,7 @@ import type { WorkspaceSections, WorkspaceItem } from "../../provider-workspace/
 import {
   accountQuotaFromReport,
   capacityAggregationFromReport,
+  referenceQuotaFromReport,
   type ProviderQuotaReportView,
 } from "../../provider-workspace/report";
 import {
@@ -70,8 +71,19 @@ export default function ProviderOverviewDashboard({
       const report = quotaReports[item.name];
       const quota = report ? accountQuotaFromReport(report) : null;
       const aggregation = report ? capacityAggregationFromReport(report) : null;
-      if (report && (quota || aggregation?.presentation === "coverage-only")) {
-        result.push({ item, report, urgency: quota ? maxQuotaUtilisation(quota) : -1 });
+      const reference = report ? referenceQuotaFromReport(report) : null;
+      if (report && (quota || aggregation?.presentation === "coverage-only" || reference)) {
+        result.push({
+          item,
+          report,
+          urgency: reference?.observedLimitEvent
+            ? 101
+            : quota
+              ? maxQuotaUtilisation(quota)
+              : reference
+                ? 0
+                : -1,
+        });
       }
     }
     return result.sort((a, b) => b.urgency - a.urgency || a.item.name.localeCompare(b.item.name));
@@ -168,7 +180,23 @@ export default function ProviderOverviewDashboard({
                   </div>
                   <IconChevron className="pws-dashboard-row-chevron" aria-hidden="true" />
                   <div className="pws-dashboard-row-bars">
-                    <ProviderCapacityQuota report={report} pending={quotasLoading && !report.quota} />
+                    {referenceQuotaFromReport(report) ? (
+                      <div className="pws-dashboard-reference-caps">
+                        {referenceQuotaFromReport(report)!.windows.map(window => (
+                          <span key={window.id}>
+                            <strong>{new Intl.NumberFormat(locale, { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(window.publishedLimitUsd)}</strong>
+                            {t(window.id === "five_hour"
+                              ? "pws.reference.fiveHourShort"
+                              : window.id === "weekly"
+                                ? "pws.reference.weeklyShort"
+                                : "pws.reference.monthlyShort")}
+                          </span>
+                        ))}
+                        <small>{t("pws.reference.dashboardHint")}</small>
+                      </div>
+                    ) : (
+                      <ProviderCapacityQuota report={report} pending={quotasLoading && !report.quota} />
+                    )}
                   </div>
                 </button>
               ))}

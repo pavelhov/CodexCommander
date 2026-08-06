@@ -1,13 +1,19 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+
+setDefaultTimeout(30_000);
 
 const previousHome = process.env.OPENCODEX_HOME;
+const previousCodexCliPath = process.env.CODEX_CLI_PATH;
 let testHome = "";
+let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 function effortConfig(): OcxConfig {
   return {
@@ -18,6 +24,7 @@ function effortConfig(): OcxConfig {
       kimi: {
         adapter: "openai-chat",
         baseUrl: "https://kimi.test/v1",
+        liveModels: false,
         models: ["k3", "kimi-for-coding"],
         modelReasoningEfforts: {
           k3: ["low", "high", "max"],
@@ -31,12 +38,18 @@ function effortConfig(): OcxConfig {
 
 beforeEach(() => {
   testHome = mkdtempSync(join(tmpdir(), "ocx-grok-effort-list-"));
+  isolatedCodexHome = installIsolatedCodexHome("ocx-grok-effort-list-codex-");
+  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
   process.env.OPENCODEX_HOME = testHome;
 });
 
 afterEach(() => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
+  if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+  else process.env.CODEX_CLI_PATH = previousCodexCliPath;
+  isolatedCodexHome?.restore();
+  isolatedCodexHome = null;
   if (testHome) rmSync(testHome, { recursive: true, force: true });
   testHome = "";
 });

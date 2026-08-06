@@ -9,7 +9,7 @@ Source development requires the `bun` CLI on your `PATH`. The published npm pack
 Bun runtime for users, but this checkout's scripts run through your local Bun installation.
 
 ```bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone https://github.com/pavelhov/opencodex.git
 cd opencodex
 bun install
 bun run dev:proxy    # proxy API in dev mode

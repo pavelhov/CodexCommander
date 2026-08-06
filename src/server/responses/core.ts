@@ -111,6 +111,7 @@ import {
   rateLimitRetryPolicyFor,
   rotateProviderTransportOn429,
 } from "../../providers/key-failover";
+import { noteProviderCredentialVerified } from "../../providers/credential-verification";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
 import type { WsData } from "../ws-bridge";
@@ -134,6 +135,7 @@ import {
   readConfiguredCodexServiceTier,
   recordAdapterReasoning,
   recordAttemptRequestedEffort,
+  recordUpstreamRetryAfter,
   requestLogSpeedLabel,
   sealRequestAttemptIdentity,
   usageFromResponsesPayload,
@@ -2035,6 +2037,7 @@ async function handleResponsesInner(
       });
     }
     if (!upstreamResponse.ok) {
+      recordUpstreamRetryAfter(logCtx, upstreamResponse.headers.get("retry-after"));
       if (options.comboAttempt) {
         const failure = await consumeComboFailure(upstreamResponse, options.abortSignal);
         options.onConsumedComboFailure?.(failure);
@@ -2967,6 +2970,9 @@ async function handleResponsesInner(
       break;
     }
     if (!upstreamResponse.ok) {
+      // Capture quota evidence from the real upstream response before the client
+      // error envelope adds any synthetic Retry-After fallback.
+      recordUpstreamRetryAfter(logCtx, upstreamResponse.headers.get("retry-after"));
       if (options.comboAttempt) {
         const failure = await consumeComboFailure(upstreamResponse, options.abortSignal)
           .finally(cleanupUpstreamAbort);
@@ -3000,6 +3006,7 @@ async function handleResponsesInner(
     }
   }
 
+  noteProviderCredentialVerified(config, route.providerName, route.provider.apiKey);
   cancelBodyOnAbort(upstreamResponse.body, upstream.signal);
 
   // Anthropic-only: one bounded internal continuation re-ask for clean end_turn turns that

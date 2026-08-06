@@ -101,3 +101,109 @@
   color: var(--amber);
   font-size: 12px;
 }
+
+/* Published provider caps plus local observations are not percentage quotas. */
+.pws-reference-quota {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pws-reference-intro,
+.pws-reference-disclaimer {
+  max-width: var(--prose-measure);
+  margin: 0;
+  font-size: var(--text-control);
+}
+
+.pws-reference-event {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--amber) 30%, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: var(--text-control);
+}
+
+.pws-reference-event-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  margin-top: 5px;
+  border-radius: var(--radius-round);
+  background: var(--amber);
+}
+
+.pws-reference-event > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pws-reference-windows {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.pws-reference-row {
+  min-width: 0;
+  padding: 12px;
+  border-left: 1px solid var(--border-soft);
+}
+
+.pws-reference-row:first-child { border-left: 0; }
+
+.pws-reference-row-head,
+.pws-reference-observed {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pws-reference-row-head strong {
+  font-size: var(--text-control);
+}
+
+.pws-reference-cap {
+  color: var(--muted);
+  font-size: var(--text-caption);
+}
+
+.pws-reference-observed {
+  margin-top: 9px;
+  color: var(--text);
+  font-size: var(--text-label);
+}
+
+.pws-reference-badge {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  color: var(--muted);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  white-space: nowrap;
+}
+
+.pws-reference-badge--partial,
+.pws-reference-badge--unpriced {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+@media (max-width: 760px) {
+  .pws-reference-windows { grid-template-columns: minmax(0, 1fr); }
+  .pws-reference-row { border-top: 1px solid var(--border-soft); border-left: 0; }
+  .pws-reference-row:first-child { border-top: 0; }
+}

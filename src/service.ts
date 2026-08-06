@@ -37,7 +37,6 @@ import { defaultWinswEntry, installWinswService, startWinswService, stopWinswSer
 import { hardenSecretDir, hardenSecretPath } from "./lib/windows-secret-acl";
 import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "./lib/win-paths";
 import { recordOwnedConfigPath } from "./lib/config-ownership";
-import { maybeShowStarPrompt } from "./cli/star-prompt";
 
 const LABEL = "com.opencodex.proxy";
 const TASK = "opencodex-proxy";
@@ -2494,6 +2493,28 @@ async function stopTrackedProxyForServiceCommand(): Promise<TrackedProxyCleanupR
 }
 
 /**
+ * Start an installed, viable service without producing CLI output. Shared lifecycle
+ * coordinators perform their own identity-checked health wait and user-facing reporting.
+ * Returns false when no service is installed; stale, conflicting, or foreign installs
+ * fail closed instead of being bypassed by an unmanaged proxy.
+ */
+export function startServiceIfInstalled(): boolean {
+  assertServiceEnvironmentMatchesInstall();
+  const diagnostic = diagnoseService();
+  if (!diagnostic.installed) return false;
+  if (!serviceStartableFromTray(diagnostic)) {
+    throw new Error("Installed service is not safe to start; repair or remove it first");
+  }
+  const backend: ServiceBackend = process.platform === "win32"
+    ? readServiceBackend()
+    : "scheduler";
+  const ops = platformOps(backend);
+  if (!ops) throw new Error(`Background service is unsupported on ${process.platform}`);
+  ops.start();
+  return true;
+}
+
+/**
  * If a service is installed, stop it so the process manager doesn't respawn after `ocx stop`.
  * Returns true if a service was found and stopped.
  */
@@ -2850,11 +2871,6 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       // installed artifact instead.
       await reportServiceServing("installed", { port: resolveServiceListenPort() });
       if (process.platform === "linux") console.log("   For auto-start on boot: loginctl enable-linger $USER");
-      // Service users never reach the `ocx start` prompt: the proxy they run is the
-      // supervised child, which always carries OCX_SERVICE=1. This command, though, is
-      // hand-typed in a real terminal, so it is the one interactive moment they get.
-      // Same one-time marker and same guards (TTY, gh auth, agent deferral) apply.
-      await maybeShowStarPrompt();
       break;
     case "start":
       ops.start();

@@ -92,6 +92,8 @@ export interface GatherRoutedModelsOptions {
   providerAuthOutcomes?: CatalogGatherProviderAuthOutcome[];
   /** Internal convergence sink for the immutable policy that produced the returned rows. */
   discoveryPolicySnapshots?: CatalogProviderDiscoveryPolicySnapshot[];
+  /** Test/runtime seam for the native rows that may satisfy combo targets. */
+  nativeOpenAiSlugs?: () => string[];
 }
 
 interface GatherFlightResult {
@@ -143,6 +145,7 @@ interface GatherFlightCapture {
   readonly authResolver: ModelsAuthResolver;
   readonly providerAuthOutcomes: readonly CatalogGatherProviderAuthOutcome[];
   readonly openAiApiPolicy: CatalogTrustedOpenAiApiPolicySnapshot;
+  readonly nativeComboSlugs: readonly string[];
 }
 
 interface GatherInflightEntry {
@@ -408,6 +411,7 @@ function captureProviderGather(
 function captureGatherFlight(
   config: OcxConfig,
   createAuthResolver: ModelsAuthResolverFactory,
+  listNativeOpenAiSlugs: () => string[] = nativeOpenAiSlugs,
 ): GatherFlightCapture {
   const providerAuthOutcomes: CatalogGatherProviderAuthOutcome[] = [];
   const authResolver = createAuthResolver(providerAuthOutcomes);
@@ -415,6 +419,9 @@ function captureGatherFlight(
     .filter(([, provider]) => provider.disabled !== true)
     .map(([name, provider]) => captureProviderGather(name, provider, authResolver));
   const discoveryPolicySnapshots = Object.freeze(providers.map(provider => provider.policy));
+  const nativeComboSlugs = Object.freeze(hasComboTargets(config)
+    ? [...listNativeOpenAiSlugs()]
+    : []);
   return Object.freeze({
     discoveryPolicyIdentity: keyedGatherIdentity("catalog-discovery-policy-v1", discoveryPolicySnapshots),
     // Credentials are hashed under the same unexported per-process key, never
@@ -432,21 +439,24 @@ function captureGatherFlight(
     }))),
     // Every enriched provider row the flight will gather from, in admission order.
     // Anything that can change a catalog row lives in here by construction.
-    providerGraphIdentity: keyedGatherIdentity("catalog-gather-provider-graph-v1",
-      providers.map(provider => ({
+    providerGraphIdentity: keyedGatherIdentity("catalog-gather-provider-graph-v1", {
+      providers: providers.map(provider => ({
         name: provider.name,
         // `fetch` is a caller-owned transport executor, not admitted state: the
         // outbound transport honors it so a caller can supply its own HTTP path.
         // It is the one member of a provider row that is legitimately a function,
         // so it is dropped here rather than allowed to break every encode.
         provider: omitProviderTransportExecutor(provider.provider),
-      }))),
+      })),
+      nativeComboSlugs,
+    }),
     discoveryPolicySnapshots,
     providers: Object.freeze(providers),
     authResolver,
     providerAuthOutcomes: Object.freeze([...providerAuthOutcomes]),
     openAiApiPolicy: providers.find(provider => provider.name === OPENAI_API_PROVIDER_ID)?.policy.trustedOpenAiApi
       ?? Object.freeze({ state: "unused" as const }),
+    nativeComboSlugs,
   });
 }
 
@@ -1144,7 +1154,11 @@ async function gatherRoutedModelsWithAuth(
   createAuthResolver: ModelsAuthResolverFactory,
   options?: GatherRoutedModelsOptions,
 ): Promise<CatalogModel[]> {
-  const capture = captureGatherFlight(config, createAuthResolver);
+  const capture = captureGatherFlight(
+    config,
+    createAuthResolver,
+    options?.nativeOpenAiSlugs ?? nativeOpenAiSlugs,
+  );
   const bucket = gatherInflight.get(key) ?? [];
   let entry = bucket.find(candidate => (
     candidate.discoveryPolicyIdentity === capture.discoveryPolicyIdentity
@@ -1255,7 +1269,7 @@ async function gatherRoutedModelsUncached(
     // configs that will never need it.
   } else {
     const disabled = disabledNativeSlugs(config);
-    for (const slug of nativeOpenAiSlugs()) {
+    for (const slug of capture.nativeComboSlugs) {
       if (disabled.has(slug)) continue;
       const contextWindow = nativeOpenAiContextWindow(slug);
       if (contextWindow === undefined) continue;

@@ -7,7 +7,14 @@ import { useT, useI18n } from "../../i18n/shared";
 import QuotaBars from "../QuotaBars";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { formatRelativeTime, relativeTimeLabelsFromT, formatRequestCount, formatTokenCount, formatCostUsd } from "../../provider-workspace/usage";
-import { accountQuotaFromReport, formatQuotaSourceLabel, type ProviderQuotaReportView } from "../../provider-workspace/report";
+import {
+  accountQuotaFromReport,
+  formatQuotaSourceLabel,
+  referenceQuotaFromReport,
+  type ProviderQuotaLimitEventView,
+  type ProviderQuotaReferenceWindowView,
+  type ProviderQuotaReportView,
+} from "../../provider-workspace/report";
 import type { ProviderUsageTotals, ProviderModelUsageRow } from "./types";
 
 export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsage }: {
@@ -21,6 +28,7 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsa
   const timeLabels = relativeTimeLabelsFromT(t);
   const hasUsage = usageTotals?.requests !== undefined;
   const quota = accountQuotaFromReport(quotaReport);
+  const referenceQuota = referenceQuotaFromReport(quotaReport);
   const [expandedModel, setExpandedModel] = useState<string | null>(null);
   void item;
 
@@ -135,8 +143,28 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsa
       )}
 
       <div className="pws-usage-block">
-        <h3 className="pws-section-title">{t("pws.rateLimits")}</h3>
-        {quota ? (
+        <h3 className="pws-section-title">{referenceQuota ? t("pws.planLimits") : t("pws.rateLimits")}</h3>
+        {referenceQuota ? (
+          <>
+            <ReferenceQuota
+              windows={referenceQuota.windows}
+              limitEvent={referenceQuota.observedLimitEvent}
+              locale={locale}
+            />
+            <dl className="pws-kv pws-usage-meta">
+              {quotaReport?.source?.trim() && (
+                <div className="pws-kv-row">
+                  <dt>{t("pws.stats.source")}</dt>
+                  <dd>{formatQuotaSourceLabel(quotaReport.source)}</dd>
+                </div>
+              )}
+              <div className="pws-kv-row">
+                <dt>{t("pws.stats.quotaUpdated")}</dt>
+                <dd>{formatRelativeTime(quotaReport?.updatedAt, timeLabels)}</dd>
+              </div>
+            </dl>
+          </>
+        ) : quota ? (
           <>
             <QuotaBars quota={quota} plan={null} threshold={80} t={t} layout="stacked" />
             <dl className="pws-kv pws-usage-meta">
@@ -158,4 +186,98 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsa
       </div>
     </div>
   );
+}
+
+const REFERENCE_WINDOW_KEYS = {
+  five_hour: "pws.reference.fiveHour",
+  weekly: "pws.reference.weekly",
+  monthly: "pws.reference.monthly",
+} as const;
+
+const LIMIT_NAME_KEYS = {
+  "5 hour": "pws.reference.fiveHour",
+  weekly: "pws.reference.weekly",
+  monthly: "pws.reference.monthly",
+} as const;
+
+function ReferenceQuota({ windows, limitEvent, locale }: {
+  windows: ProviderQuotaReferenceWindowView[];
+  limitEvent?: ProviderQuotaLimitEventView;
+  locale: string;
+}) {
+  const t = useT();
+  const money = (amount: number) => new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: amount >= 10 ? 0 : 2,
+  }).format(amount);
+  const reset = limitEvent?.resetAt === undefined ? null : new Intl.DateTimeFormat(locale, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(limitEvent.resetAt));
+
+  return (
+    <div className="pws-reference-quota">
+      <p className="muted pws-reference-intro">{t("pws.reference.intro")}</p>
+      {limitEvent && (
+        <div className="pws-reference-event" role="status">
+          <span className="pws-reference-event-dot" aria-hidden="true" />
+          <div>
+            <strong>{t("pws.reference.limitReported", { window: t(LIMIT_NAME_KEYS[limitEvent.limitName]) })}</strong>
+            <span>{reset
+              ? t("pws.reference.limitReset", { reset })
+              : t("pws.reference.limitResetUnknown")}</span>
+          </div>
+        </div>
+      )}
+      <div className="pws-reference-windows">
+        {windows.map(window => (
+          <div className="pws-reference-row" key={window.id}>
+            <div className="pws-reference-row-head">
+              <strong>{t(REFERENCE_WINDOW_KEYS[window.id])}</strong>
+              <span className="pws-reference-cap">
+                {t("pws.reference.publishedCap", { amount: money(window.publishedLimitUsd) })}
+              </span>
+            </div>
+            <div className="pws-reference-observed">
+              <span>{observedWindowLabel(window, locale, t)}</span>
+              {window.coverage !== "none" && (
+                <span className={`pws-reference-badge pws-reference-badge--${window.coverage}`}>
+                  {t(window.coverage === "complete"
+                    ? "pws.reference.estimate"
+                    : window.coverage === "partial"
+                      ? "pws.reference.partial"
+                      : "pws.reference.tokensOnly")}
+                </span>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="muted pws-reference-disclaimer">{t("pws.reference.notBalance")}</p>
+    </div>
+  );
+}
+
+function observedWindowLabel(
+  window: ProviderQuotaReferenceWindowView,
+  locale: string,
+  t: ReturnType<typeof useT>,
+): string {
+  if (window.observedRequests === 0) return t("pws.reference.noTraffic");
+  if (window.observedSpendUsd !== undefined) {
+    const amount = new Intl.NumberFormat(locale, {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: window.observedSpendUsd < 0.01 ? 4 : 2,
+    }).format(window.observedSpendUsd);
+    return t("pws.reference.spendObserved", { amount });
+  }
+  if (window.observedTokens > 0) {
+    return t("pws.reference.tokensObserved", { tokens: formatTokenCount(window.observedTokens, locale) });
+  }
+  return t("pws.reference.requestsObserved", { requests: formatRequestCount(window.observedRequests, locale) });
 }

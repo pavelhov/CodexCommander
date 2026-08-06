@@ -81,13 +81,15 @@ opencodex state root does not undo those writes. Putting native Codex back is th
 | `~/.opencodex/codex-runtime.json`, `codex-runtime-clamp.json` | opencodex Codex runtime | Selected Codex executable/version state and effort-clamp diagnostics. Not process identity: these persist a resolved choice and a diagnostic, so losing them changes behavior until re-resolved. |
 | `~/.opencodex/service-state.json`, `service.log`, `service-api-token`, `opencodex-service-launcher.vbs`, `opencodex-service-task.xml`, `opencodex-service.cmd`, `winsw`, `tray-state.json`, `tray-heartbeat.json`, `opencodex-tray.ps1`, `opencodex-tray-*.ico`, `update-job.json` | opencodex operators | Installed-service, Windows tray, and self-update artifacts and bookkeeping. The update record carries its worker PID so a dead worker recovers instead of blocking later runs. |
 | `~/.opencodex/responses-state.json`, `usage-debug.jsonl`, `crash.log`, `artifacts/` | opencodex diagnostics and artifacts | Bounded caches, diagnostics, and generated image/video artifacts served locally. |
-| `~/.opencodex/codex-shim.json`, `*.lock`, `kimi-device-id`, `mimo-client-id`, `.star-prompted` | opencodex bookkeeping | Shim restore obligations, cross-process locks, per-install client identifiers, one-shot UI flags. |
+| `~/.opencodex/integrations/opencode/{proxy-api-key,journal.json,backups/}` | opencodex OpenCode integration | Hardened proxy-admission token delivery, before-image backup, and journal for the optional persistent OpenCode connection. The journal may only target OpenCode's resolved global JSON/JSONC config and bounds exact or surgical restore. |
+| `~/.opencodex/codex-shim.json`, `*.lock`, `kimi-device-id`, `mimo-client-id` | opencodex bookkeeping | Shim restore obligations, cross-process locks, and per-install client identifiers. |
 | `~/.opencodex/.opencodex-owner.json`, `.opencodex-uninstall.json` | opencodex | Ownership marker and the manifest that bounds what uninstall may remove. Both live in the OpenCodex state root, not in `$CODEX_HOME`. |
 | `$CODEX_HOME/config.toml` | Codex, edited by opencodex | Active provider and provider table. |
 | `$CODEX_HOME/opencodex.config.toml` | opencodex | Optional profile for explicit Codex opt-in. |
 | `$CODEX_HOME/opencodex-catalog.json` | opencodex | Shared native+routed model catalog. |
 | `$CODEX_HOME/opencodex-journal.json` | opencodex | Injection journal used by restore to strip only marker-owned values while preserving later user edits. |
 | `$CODEX_HOME/models_cache.json` | Codex, invalidated by opencodex | Cache invalidated after model/catalog changes. |
+| `$XDG_CONFIG_HOME/opencode/opencode.json[c]` | OpenCode user config, minimally edited by opencodex only after explicit integration Apply | OpenCode owns the file. OpenCodex edits only `provider.opencodex`, preserves unrelated JSONC/JSON content, and never reads an OpenCode auth store. |
 | `dist/`, `gui/dist/`, `node_modules/` | generated | Build output/dependencies. |
 
 ## Non-negotiable invariants

@@ -20,6 +20,7 @@ import { resolveAndPersistCodexRuntime, type ResolveCodexRuntimeDeps } from "../
 
 export interface V2CliDeps {
   execFile?: (file: string, args: string[], options?: SpawnInvocation["options"]) => void;
+  featuresInvocation?: (action: "enable" | "disable") => SpawnInvocation;
   isEnabled?: typeof isMultiAgentV2Enabled;
   hasMaxThreads?: typeof hasAgentsMaxThreads;
   sync?: (port?: number) => Promise<unknown>;
@@ -78,12 +79,22 @@ export function runCodexFeaturesCommand(
 }
 
 function runCodexFeatures(action: "enable" | "disable", deps: V2CliDeps): void {
-  if (deps.execFile) {
-    const inv = codexFeaturesInvocation(action);
-    deps.execFile(inv.file, inv.args, inv.options);
+  if (!deps.execFile && !deps.featuresInvocation) {
+    runCodexFeaturesCommand(action);
     return;
   }
-  runCodexFeaturesCommand(action);
+  const exec = deps.execFile ?? ((file: string, args: string[], options?: SpawnInvocation["options"]) => {
+    execFileSync(file, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 15_000,
+      windowsHide: true,
+      encoding: "utf8",
+      env: { ...process.env, CODEX_HOME: dirname(activeCodexConfigPath()) },
+      ...options,
+    });
+  });
+  const inv = (deps.featuresInvocation ?? codexFeaturesInvocation)(action);
+  exec(inv.file, inv.args, inv.options);
 }
 
 export function v2StatusLine(enabled: boolean): string {

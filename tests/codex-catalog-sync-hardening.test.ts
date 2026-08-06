@@ -1,47 +1,27 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
+import { readCodexCatalogPath, resetCatalogRuntimeStateForTests, syncCatalogModels } from "../src/codex/catalog";
+import type { OcxConfig } from "../src/types";
 
-const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
+setDefaultTimeout(30_000);
 
-function runScript(
-  codexHome: string,
-  opencodexHome: string,
-  script: string,
-  extraEnv: Record<string, string> = {},
-): { stdout: string; status: number; stderr: string } {
-  const result = spawnSync(process.execPath, ["--eval", script], {
-    cwd: repoRoot,
-    env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome, ...extraEnv },
-    encoding: "utf8",
+async function syncCatalog(config: Pick<OcxConfig, "providers"> & Partial<OcxConfig>): Promise<string> {
+  const warnings: string[] = [];
+  const warning = spyOn(console, "warn").mockImplementation((...values) => {
+    warnings.push(values.map(String).join(" "));
   });
-  return { stdout: result.stdout?.trim() ?? "", stderr: result.stderr ?? "", status: result.status ?? 1 };
-}
-
-function createCodexCatalogFixture(dir: string): string {
-  const scriptPath = join(dir, "codex-catalog-fixture.js");
-  const bundled = JSON.stringify({ models: [nativeEntry("gpt-5.5", 0)] });
-  writeFileSync(scriptPath, [
-    'if (process.argv.includes("--version")) {',
-    '  console.log("codex-cli 0.999.0");',
-    '} else {',
-    `  process.stdout.write(${JSON.stringify(bundled)});`,
-    '}',
-  ].join("\n"), "utf8");
-
-  if (process.platform === "win32") {
-    const commandPath = join(dir, "codex-catalog-fixture.cmd");
-    writeFileSync(commandPath, `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`, "utf8");
-    return commandPath;
+  try {
+    await syncCatalogModels({
+      port: 10100,
+      defaultProvider: Object.keys(config.providers)[0] ?? "openai",
+      ...config,
+    } as OcxConfig, testCatalogDeps());
+    return warnings.join("\n");
+  } finally {
+    warning.mockRestore();
   }
-
-  const commandPath = join(dir, "codex-catalog-fixture");
-  writeFileSync(commandPath, `#!/bin/sh\nexec "${process.execPath}" "${scriptPath}" "$@"\n`, "utf8");
-  chmodSync(commandPath, 0o755);
-  return commandPath;
 }
 
 function nativeEntry(slug: string, priority: number): Record<string, unknown> {
@@ -53,6 +33,13 @@ function nativeEntry(slug: string, priority: number): Record<string, unknown> {
     visibility: "list",
     base_instructions: "You are Codex, a coding agent based on GPT-5.",
     supported_reasoning_levels: [{ effort: "medium", description: "m" }],
+  };
+}
+
+function testCatalogDeps() {
+  return {
+    commandCandidates: () => ["codex-fixture"],
+    execFileSync: () => JSON.stringify({ models: [nativeEntry("gpt-5.5", 0)] }),
   };
 }
 
@@ -88,18 +75,30 @@ function ocxLegacyAuthoredEntry(slug: string, priority: number): Record<string, 
 describe("Codex catalog sync hardening", () => {
   let codexHome: string;
   let opencodexHome: string;
+  let previousCodexHome: string | undefined;
+  let previousOpenCodexHome: string | undefined;
 
   beforeEach(() => {
+    previousCodexHome = process.env.CODEX_HOME;
+    previousOpenCodexHome = process.env.OPENCODEX_HOME;
     codexHome = mkdtempSync(join(tmpdir(), "ocx-sync-home-"));
     opencodexHome = mkdtempSync(join(tmpdir(), "ocx-sync-ocx-"));
+    process.env.CODEX_HOME = codexHome;
+    process.env.OPENCODEX_HOME = opencodexHome;
+    resetCatalogRuntimeStateForTests();
   });
 
   afterEach(() => {
+    resetCatalogRuntimeStateForTests();
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
+    if (previousOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousOpenCodexHome;
     if (existsSync(codexHome)) rmSync(codexHome, { recursive: true, force: true });
     if (existsSync(opencodexHome)) rmSync(opencodexHome, { recursive: true, force: true });
   });
 
-  test("Gap B: drops legacy OpenAI-family natives but keeps supported + user natives", () => {
+  test("Gap B: drops legacy OpenAI-family natives but keeps supported + user natives", async () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({
@@ -118,11 +117,7 @@ describe("Codex catalog sync hardening", () => {
       ],
     }, null, 2) + "\n");
 
-    const r = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({ providers: {} }).then(res => console.log(JSON.stringify(res)));
-    `);
-    expect(r.status).toBe(0);
+    await syncCatalog({ providers: {} });
 
     const slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).toContain("gpt-5.5");
@@ -138,7 +133,7 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).not.toContain("codex-auto-review");  // legacy dropped
   });
 
-  test("Gap A: an empty routed fetch preserves existing routed entries on disk", () => {
+  test("Gap A: an empty routed fetch preserves existing routed entries on disk", async () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({
@@ -150,12 +145,8 @@ describe("Codex catalog sync hardening", () => {
     }, null, 2) + "\n");
 
     // config has NO providers => gatherRoutedModels returns [] (transient empty fetch).
-    const r = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({ providers: {} }).then(res => console.log(JSON.stringify(res)));
-    `);
-    expect(r.status).toBe(0);
-    expect(r.stderr).toContain("routed model fetch returned empty; preserving 2 existing routed entries");
+    const warnings = await syncCatalog({ providers: {} });
+    expect(warnings).toContain("routed model fetch returned empty; preserving 2 existing routed entries");
 
     const slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).toContain("kiro/claude-opus-4.8");   // routed preserved despite empty fetch
@@ -163,7 +154,7 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).toContain("gpt-5.5");
   });
 
-  test("account rows reconcile idempotently and independently from provider outages", () => {
+  test("account rows reconcile idempotently and independently from provider outages", async () => {
     const catalogPath = join(codexHome, "catalog.json");
     const firstCatalogPath = join(opencodexHome, "first-catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
@@ -202,38 +193,32 @@ describe("Codex catalog sync hardening", () => {
       ],
     }, null, 2) + "\n");
 
-    const r = runScript(codexHome, opencodexHome, `
-      const { copyFileSync } = require("node:fs");
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      const catalogPath = ${JSON.stringify(catalogPath)};
-      const firstCatalogPath = ${JSON.stringify(firstCatalogPath)};
-      const config = {
-        providers: {
-          openai: {
-            adapter: "openai-responses",
-            baseUrl: "https://chatgpt.com/backend-api/codex",
-            liveModels: false
-          }
+    const config: Pick<OcxConfig, "providers"> & Partial<OcxConfig> = {
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          liveModels: false,
         },
-        codexAccounts: [{
-          id: "stored-team-account",
-          email: "private@example.test",
-          alias: "Private Display Name",
-          isMain: false
-        }],
-        codexAccountNamespaces: {
-          desktop: "@main",
-          team: "stored-team-account",
-          removed: "missing-account"
-        }
-      };
-      await syncCatalogModels(config);
-      copyFileSync(catalogPath, firstCatalogPath);
-      await syncCatalogModels(config);
-    `);
-    expect(r.status).toBe(0);
-    expect(r.stderr).toContain("routed model fetch returned empty; preserving 2 existing routed entries");
-    expect(r.stderr).not.toContain("account selector collision");
+      },
+      codexAccounts: [{
+        id: "stored-team-account",
+        email: "private@example.test",
+        alias: "Private Display Name",
+        isMain: false,
+      }],
+      codexAccountNamespaces: {
+        desktop: "@main",
+        team: "stored-team-account",
+        removed: "missing-account",
+      },
+    };
+    const firstWarnings = await syncCatalog(config);
+    writeFileSync(firstCatalogPath, readFileSync(catalogPath));
+    const secondWarnings = await syncCatalog(config);
+    const warnings = `${firstWarnings}\n${secondWarnings}`;
+    expect(warnings).toContain("routed model fetch returned empty; preserving 2 existing routed entries");
+    expect(warnings).not.toContain("account selector collision");
 
     const rows = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{
       slug: string;
@@ -297,42 +282,36 @@ describe("Codex catalog sync hardening", () => {
     expect(JSON.stringify(rows)).not.toContain("Private Display Name");
   });
 
-  test("a live provider row shadowed by an account selector warns once per runtime generation", () => {
+  test("a live provider row shadowed by an account selector warns once per runtime generation", async () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({
       models: [nativeEntry("gpt-5.5", 0)],
     }, null, 2) + "\n");
 
-    const r = runScript(codexHome, opencodexHome, `
-      const { resetCatalogRuntimeStateForTests, syncCatalogModels } = require("./src/codex/catalog");
-      const config = {
-        providers: {
-          openai: {
-            adapter: "openai-responses",
-            baseUrl: "https://chatgpt.com/backend-api/codex",
-            liveModels: false
-          },
-          team: {
-            adapter: "openai-chat",
-            baseUrl: "https://api.example.test/v1",
-            liveModels: false,
-            models: ["gpt-5.5"]
-          }
+    const config: Pick<OcxConfig, "providers"> & Partial<OcxConfig> = {
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          liveModels: false,
         },
-        codexAccounts: [{ id: "stored-team-account", isMain: false }],
-        codexAccountNamespaces: { team: "stored-team-account" }
-      };
-      syncCatalogModels(config)
-        .then(() => syncCatalogModels(config))
-        .then(() => {
-          resetCatalogRuntimeStateForTests();
-          return syncCatalogModels(config);
-        })
-        .then(res => console.log(JSON.stringify(res)));
-    `);
-    expect(r.status).toBe(0);
-    expect((r.stderr.match(/account selector collision on "team\/gpt-5\.5"/g) ?? []).length).toBe(2);
+        team: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          liveModels: false,
+          models: ["gpt-5.5"],
+        },
+      },
+      codexAccounts: [{ id: "stored-team-account", isMain: false }],
+      codexAccountNamespaces: { team: "stored-team-account" },
+    };
+    const firstWarnings = await syncCatalog(config);
+    const secondWarnings = await syncCatalog(config);
+    resetCatalogRuntimeStateForTests();
+    const thirdWarnings = await syncCatalog(config);
+    const warnings = `${firstWarnings}\n${secondWarnings}\n${thirdWarnings}`;
+    expect((warnings.match(/account selector collision on "team\/gpt-5\.5"/g) ?? []).length).toBe(2);
 
     const rows = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{
       slug: string;
@@ -343,26 +322,22 @@ describe("Codex catalog sync hardening", () => {
     ]);
   });
 
-  test("non-OpenAI-only sync omits account rows without reprioritizing routed models", () => {
+  test("non-OpenAI-only sync omits account rows without reprioritizing routed models", async () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({ models: [nativeEntry("gpt-5.5", 0)] }, null, 2) + "\n");
 
-    const r = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({
-        providers: {
-          mock: {
-            adapter: "openai-chat",
-            baseUrl: "https://api.example.test/v1",
-            liveModels: false,
-            models: ["static-model"]
-          }
+    await syncCatalog({
+      providers: {
+        mock: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          liveModels: false,
+          models: ["static-model"],
         },
-        codexAccountNamespaces: { desktop: "@main" }
-      }).then(res => console.log(JSON.stringify(res)));
-    `);
-    expect(r.status).toBe(0);
+      },
+      codexAccountNamespaces: { desktop: "@main" },
+    });
 
     const rows = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{
       slug: string;
@@ -373,29 +348,25 @@ describe("Codex catalog sync hardening", () => {
     expect(rows.some(row => row.slug === "desktop/gpt-5.5")).toBe(false);
   });
 
-  test("disabled canonical OpenAI keeps bare bootstrap rows but omits unrouteable account rows", () => {
+  test("disabled canonical OpenAI keeps bare bootstrap rows but omits unrouteable account rows", async () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({
       models: [nativeEntry("gpt-5.5", 0)],
     }, null, 2) + "\n");
 
-    const r = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({
-        providers: {
-          openai: {
-            adapter: "openai-responses",
-            baseUrl: "https://chatgpt.com/backend-api/codex",
-            disabled: true,
-            liveModels: false
-          }
+    await syncCatalog({
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          disabled: true,
+          liveModels: false,
         },
-        codexAccounts: [{ id: "stored-side-account", isMain: false }],
-        codexAccountNamespaces: { team: "stored-side-account" }
-      }).then(res => console.log(JSON.stringify(res)));
-    `);
-    expect(r.status).toBe(0);
+      },
+      codexAccounts: [{ id: "stored-side-account", isMain: false }],
+      codexAccountNamespaces: { team: "stored-side-account" },
+    });
 
     const rows = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{
       slug: string;
@@ -405,7 +376,7 @@ describe("Codex catalog sync hardening", () => {
     expect(rows.some(row => row.slug.startsWith("team/"))).toBe(false);
   });
 
-  test("account sync recovers supported natives that were hidden before selectors existed", () => {
+  test("account sync recovers supported natives that were hidden before selectors existed", async () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({
@@ -415,22 +386,18 @@ describe("Codex catalog sync hardening", () => {
       ],
     }, null, 2) + "\n");
 
-    const r = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({
-        providers: {
-          openai: {
-            adapter: "openai-responses",
-            baseUrl: "https://chatgpt.com/backend-api/codex",
-            liveModels: false
-          }
+    await syncCatalog({
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          liveModels: false,
         },
-        disabledModels: ["gpt-5.4", "team/gpt-5.5"],
-        codexAccounts: [{ id: "stored-side-account", isMain: false }],
-        codexAccountNamespaces: { desktop: "@main", team: "stored-side-account" }
-      }).then(res => console.log(JSON.stringify(res)));
-    `);
-    expect(r.status).toBe(0);
+      },
+      disabledModels: ["gpt-5.4", "team/gpt-5.5"],
+      codexAccounts: [{ id: "stored-side-account", isMain: false }],
+      codexAccountNamespaces: { desktop: "@main", team: "stored-side-account" },
+    });
 
     const rows = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{
       slug: string;
@@ -450,7 +417,7 @@ describe("Codex catalog sync hardening", () => {
     expect(rows.find(row => row.slug === "team/gpt-5.4")?.visibility).toBe("hide");
   });
 
-  test("default catalog path merges from disk instead of replacing it with bundled rows", () => {
+  test("default catalog path merges from disk instead of replacing it with bundled rows", async () => {
     const catalogPath = join(codexHome, "opencodex-catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'openai_base_url = "http://127.0.0.1:10100/v1"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({
@@ -464,13 +431,8 @@ describe("Codex catalog sync hardening", () => {
 
     // Force the default-path bundled shortcut to succeed. The fixture intentionally returns only
     // a native row so this test fails if sync uses the bundled catalog as its merge input.
-    const codexCliPath = createCodexCatalogFixture(opencodexHome);
-    const r = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({ providers: {} }).then(res => console.log(JSON.stringify(res)));
-    `, { CODEX_CLI_PATH: codexCliPath });
-    expect(r.status).toBe(0);
-    expect(r.stderr).toContain("routed model fetch returned empty; preserving 2 existing routed entries");
+    const warnings = await syncCatalog({ providers: {} });
+    expect(warnings).toContain("routed model fetch returned empty; preserving 2 existing routed entries");
 
     const slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).toContain("gpt-5.5");
@@ -479,7 +441,7 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).toContain("opencode-go/glm-5.2");
   });
 
-  test("empty routed refresh drops compatibility-excluded rows while preserving other routed entries", () => {
+  test("empty routed refresh drops compatibility-excluded rows while preserving other routed entries", async () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({
@@ -491,12 +453,8 @@ describe("Codex catalog sync hardening", () => {
       ],
     }, null, 2) + "\n");
 
-    const r = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({ providers: {} }).then(res => console.log(JSON.stringify(res)));
-    `);
-    expect(r.status).toBe(0);
-    expect(r.stderr).toContain("routed model fetch returned empty; preserving 2 existing routed entries");
+    const warnings = await syncCatalog({ providers: {} });
+    expect(warnings).toContain("routed model fetch returned empty; preserving 2 existing routed entries");
 
     const slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).toContain("kiro/claude-opus-4.8");
@@ -519,7 +477,7 @@ describe("Codex catalog sync hardening", () => {
    * happily if sync dropped the row instead of cleaning it, which would quietly delete a
    * provider model and call it a fix.
    */
-  test("a poisoned routed row already on disk is repaired, not dropped, by the next sync", () => {
+  test("a poisoned routed row already on disk is repaired, not dropped, by the next sync", async () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     const poisoned = {
@@ -530,11 +488,7 @@ describe("Codex catalog sync hardening", () => {
       models: [nativeEntry("gpt-5.5", 0), poisoned],
     }, null, 2) + "\n");
 
-    const r = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({ providers: {} }).then(res => console.log(JSON.stringify(res)));
-    `);
-    expect(r.status).toBe(0);
+    await syncCatalog({ providers: {} });
 
     const written = JSON.parse(readFileSync(catalogPath, "utf8")) as {
       models: Array<{ slug: string; input_modalities?: unknown }>;
@@ -560,7 +514,7 @@ describe("Codex catalog sync hardening", () => {
    * stay preserved — the ownership signature in the generated description is
    * what separates the two.
    */
-  test("drops OpenCodex-authored rows of a deleted provider, keeps foreign rows", () => {
+  test("drops OpenCodex-authored rows of a deleted provider, keeps foreign rows", async () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({
@@ -571,20 +525,16 @@ describe("Codex catalog sync hardening", () => {
       ],
     }, null, 2) + "\n");
 
-    const r = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({
-        providers: {
-          openai: {
-            adapter: "openai-chat",
-            baseUrl: "https://api.example.test/v1",
-            liveModels: false,
-            models: ["fresh-model"]
-          }
-        }
-      }).then(res => console.log(JSON.stringify(res)));
-    `);
-    expect(r.status).toBe(0);
+    await syncCatalog({
+      providers: {
+        openai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          liveModels: false,
+          models: ["fresh-model"],
+        },
+      },
+    });
 
     const slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).not.toContain("future-grok/old-model");
@@ -592,7 +542,7 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).toContain("openai/fresh-model");
   });
 
-  test("empty-gather transient protection still drops deleted-provider ghost rows", () => {
+  test("empty-gather transient protection still drops deleted-provider ghost rows", async () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({
@@ -608,20 +558,16 @@ describe("Codex catalog sync hardening", () => {
     // preserve-existing branch. The deleted provider's authored row must
     // still go; the configured provider's authored row and the foreign row
     // stay (transient protection).
-    const r = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({
-        providers: {
-          openai: {
-            adapter: "openai-chat",
-            baseUrl: "https://api.example.test/v1",
-            liveModels: false,
-            models: []
-          }
-        }
-      }).then(res => console.log(JSON.stringify(res)));
-    `);
-    expect(r.status).toBe(0);
+    await syncCatalog({
+      providers: {
+        openai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          liveModels: false,
+          models: [],
+        },
+      },
+    });
 
     const slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).not.toContain("future-grok/old-model");
@@ -629,7 +575,7 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).toContain("cursor/composer-2.5");
   });
 
-  test("drops legacy-signature ghost rows in both gather branches", () => {
+  test("drops legacy-signature ghost rows in both gather branches", async () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({
@@ -641,20 +587,16 @@ describe("Codex catalog sync hardening", () => {
     }, null, 2) + "\n");
 
     // Partial-gather branch: another provider is configured and gathers rows.
-    const partial = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({
-        providers: {
-          openai: {
-            adapter: "openai-chat",
-            baseUrl: "https://api.example.test/v1",
-            liveModels: false,
-            models: ["fresh-model"]
-          }
-        }
-      }).then(res => console.log(JSON.stringify(res)));
-    `);
-    expect(partial.status).toBe(0);
+    await syncCatalog({
+      providers: {
+        openai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          liveModels: false,
+          models: ["fresh-model"],
+        },
+      },
+    });
     let slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).not.toContain("future-grok/legacy-model");
     expect(slugs).toContain("cursor/composer-2.5");
@@ -667,17 +609,13 @@ describe("Codex catalog sync hardening", () => {
         routedEntry("cursor/composer-2.5", 6),
       ],
     }, null, 2) + "\n");
-    const empty = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({ providers: {} }).then(res => console.log(JSON.stringify(res)));
-    `);
-    expect(empty.status).toBe(0);
+    await syncCatalog({ providers: {} });
     slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).not.toContain("future-grok/legacy-model");
     expect(slugs).toContain("cursor/composer-2.5");
   });
 
-  test("drops legacy combo-alias ghost rows in both gather branches", () => {
+  test("drops legacy combo-alias ghost rows in both gather branches", async () => {
     const legacyComboAlias = {
       ...routedEntry("vendor/fast", 5),
       description: "Routed via opencodex → combo (combo).",
@@ -696,46 +634,38 @@ describe("Codex catalog sync hardening", () => {
     // Partial-gather branch: a PHYSICAL combo provider bypasses the generic
     // combo cleanup, so only the ownership matcher can remove the alias.
     seed();
-    const partial = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({
-        providers: {
-          combo: {
-            adapter: "openai-chat",
-            baseUrl: "https://api.example.test/v1",
-            liveModels: false,
-            models: ["fresh-model"]
-          }
-        }
-      }).then(res => console.log(JSON.stringify(res)));
-    `);
-    expect(partial.status).toBe(0);
+    await syncCatalog({
+      providers: {
+        combo: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          liveModels: false,
+          models: ["fresh-model"],
+        },
+      },
+    });
     let slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).not.toContain("vendor/fast");
     expect(slugs).toContain("cursor/composer-2.5");
 
     // Empty-gather branch: physical combo present but gathers zero rows.
     seed();
-    const empty = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({
-        providers: {
-          combo: {
-            adapter: "openai-chat",
-            baseUrl: "https://api.example.test/v1",
-            liveModels: false,
-            models: []
-          }
-        }
-      }).then(res => console.log(JSON.stringify(res)));
-    `);
-    expect(empty.status).toBe(0);
+    await syncCatalog({
+      providers: {
+        combo: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          liveModels: false,
+          models: [],
+        },
+      },
+    });
     slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).not.toContain("vendor/fast");
     expect(slugs).toContain("cursor/composer-2.5");
   });
 
-  test("preserves existing routed entries for providers absent from the current sync config", () => {
+  test("preserves existing routed entries for providers absent from the current sync config", async () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({
@@ -746,20 +676,16 @@ describe("Codex catalog sync hardening", () => {
       ],
     }, null, 2) + "\n");
 
-    const r = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({
-        providers: {
-          openai: {
-            adapter: "openai-chat",
-            baseUrl: "https://api.example.test/v1",
-            liveModels: false,
-            models: ["fresh-model"]
-          }
-        }
-      }).then(res => console.log(JSON.stringify(res)));
-    `);
-    expect(r.status).toBe(0);
+    await syncCatalog({
+      providers: {
+        openai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          liveModels: false,
+          models: ["fresh-model"],
+        },
+      },
+    });
 
     const slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).toContain("cursor/composer-2.5");
@@ -767,7 +693,7 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).not.toContain("openai/stale-model");
   });
 
-  test("replaces existing routed entries for providers present in the current sync config", () => {
+  test("replaces existing routed entries for providers present in the current sync config", async () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({
@@ -778,20 +704,16 @@ describe("Codex catalog sync hardening", () => {
       ],
     }, null, 2) + "\n");
 
-    const r = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({
-        providers: {
-          cursor: {
-            adapter: "cursor",
-            baseUrl: "https://api2.cursor.sh",
-            liveModels: false,
-            models: ["composer-2.5"]
-          }
-        }
-      }).then(res => console.log(JSON.stringify(res)));
-    `);
-    expect(r.status).toBe(0);
+    await syncCatalog({
+      providers: {
+        cursor: {
+          adapter: "cursor",
+          baseUrl: "https://api2.cursor.sh",
+          liveModels: false,
+          models: ["composer-2.5"],
+        },
+      },
+    });
 
     const slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).toContain("cursor/composer-2.5");
@@ -804,12 +726,7 @@ describe("Codex catalog sync hardening", () => {
     mkdirSync(alternateHome, { recursive: true });
     writeFileSync(join(alternateHome, "config.toml"), 'model_catalog_json = "nested/catalog.json"\n', "utf8");
 
-    const r = runScript(codexHome, opencodexHome, `
-      const { readCodexCatalogPath } = require("./src/codex/catalog");
-      process.env.CODEX_HOME = ${JSON.stringify(alternateHome)};
-      console.log(readCodexCatalogPath());
-    `);
-    expect(r.status).toBe(0);
-    expect(r.stdout).toBe(resolve(realpathSync.native(alternateHome), "nested/catalog.json"));
+    process.env.CODEX_HOME = alternateHome;
+    expect(readCodexCatalogPath()).toBe(resolve(realpathSync.native(alternateHome), "nested/catalog.json"));
   });
 });

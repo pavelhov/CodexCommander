@@ -17,6 +17,7 @@ import {
   isKnownInboundProtocol,
   isKnownUsageSurface,
   isValidReasoningWireValue,
+  normalizePersistedRetryAfter,
   readRecentUsageEntries,
   usageForFinalLog,
   usageStatusForFinalLog,
@@ -90,6 +91,7 @@ export interface RequestLogContext {
    * message) extracted from a `response.failed` SSE payload or non-streaming error body, so the
    * request log / GUI shows the actual upstream failure rather than only the HTTP-mapped code. */
   upstreamError?: string;
+  upstreamRetryAfter?: string;
   /** HTTP status derived from a terminal `response.failed` SSE payload (429/401/503/etc.). */
   terminalHttpStatus?: number;
   /** Structured reason from `response.incomplete`; internal-only input to log classification. */
@@ -140,6 +142,7 @@ export interface RequestLogEntry {
   closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
   /** Secret-redacted upstream error reason, surfaced in /api/logs and the GUI detail modal. */
   upstreamError?: string;
+  upstreamRetryAfter?: string;
   usageStatus: UsageStatus;
   usage?: OcxUsage;
   totalTokens?: number;
@@ -249,6 +252,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...(terminalStatus ? { terminalStatus } : {}),
     ...(closeReason ? { closeReason } : {}),
     ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
+    ...(entry.upstreamRetryAfter ? { upstreamRetryAfter: entry.upstreamRetryAfter } : {}),
     usageStatus: entry.usageStatus,
     ...(entry.usage ? { usage: entry.usage } : {}),
     ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
@@ -311,6 +315,7 @@ export function addRequestLog(entry: RequestLogEntry) {
         ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
         ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
         ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
+        ...(entry.upstreamRetryAfter ? { upstreamRetryAfter: entry.upstreamRetryAfter } : {}),
       }
       : {};
     appendUsageEntry({
@@ -358,6 +363,16 @@ export function addRequestLog(entry: RequestLogEntry) {
 export function nextRequestLogId(timestamp = Date.now()): string {
   requestLogSeq = (requestLogSeq % 1_000_000) + 1;
   return `ocx-${timestamp.toString(36)}-${requestLogSeq.toString(36)}`;
+}
+
+/** Capture only bounded numeric/date Retry-After syntax; arbitrary headers never persist. */
+export function recordUpstreamRetryAfter(
+  logCtx: RequestLogContext,
+  value: string | null | undefined,
+): void {
+  if (logCtx.upstreamRetryAfter) return;
+  const normalized = normalizePersistedRetryAfter(value);
+  if (normalized) logCtx.upstreamRetryAfter = normalized;
 }
 
 /**
@@ -829,6 +844,7 @@ export function addFinalRequestLog(
     ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
     ...(closeReason ? { closeReason } : {}),
     ...(logCtx.upstreamError ? { upstreamError: logCtx.upstreamError } : {}),
+    ...(logCtx.upstreamRetryAfter ? { upstreamRetryAfter: logCtx.upstreamRetryAfter } : {}),
     usageStatus,
     ...(loggedUsage ? { usage: loggedUsage } : {}),
     ...(totalTokens !== undefined ? { totalTokens } : {}),

@@ -195,6 +195,17 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 大多数使用带 bearer 密钥的 `openai-chat` adapter；少数仅暴露 Anthropic 兼容端点的提供商（例如 **Xiaomi MiMo**）使用 `anthropic` adapter（`x-api-key`）。
 火山方舟 Agent Plan 通过 `openai-responses` adapter 使用原生 Responses 端点。
 
+### OpenCode Go 是上游提供商，不是 OpenCode 客户端
+
+`opencode-go` 是位于 `https://opencode.ai/zen/go/v1` 的 OpenCode Go 订阅提供商，和
+OpenCode Desktop/CLI 不同。请在 [OpenCode 控制台](https://opencode.ai/console) 创建密钥，然后在
+控制面板的 **Providers** 页面添加 **OpenCode Go**，或用该密钥配置 `opencode-go` 预设。
+OpenCodex 不会读取 OpenCode 认证存储，也不会将此密钥迁移到 Keychain。
+
+公开模型目录不能证明密钥有效；保存的密钥只有在使用该活动密钥首次成功推理后才会显示为**已验证**。
+公开上限只是参考值：**$12 / 5 小时**、**$30 / 7 天**、**$60 / 30 天**。这些窗口的本地观测是
+使用量估计，不是实时剩余额度或账单。只有上游明确报告具体限制事件时，才显示权威的限制事件。
+
 > **三条火山方舟计费线路：**`volcengine` 是按量付费方舟 API，`volcengine-coding-plan`
 > 消耗 Coding Plan 额度，`volcengine-agent-plan` 消耗 Agent Plan 额度。密钥与端点需要属于
 > 同一产品；已经订阅 Plan 时调用普通 `/api/v3` 端点仍可能产生按量费用。

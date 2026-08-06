@@ -6,7 +6,7 @@ description: opencodex 的开发环境、结构、约定，以及添加 provider
 ## 环境搭建
 
 ```bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone https://github.com/pavelhov/opencodex.git
 cd opencodex
 bun install
 bun run dev:proxy    # 开发模式代理 API

@@ -209,6 +209,18 @@ Cline IDE/CLI のみで API からは使えません。`minimax/minimax-m2.5` �
 (例: **Xiaomi MiMo**)は `anthropic` アダプター(`x-api-key`)を使います。
 Volcengine Agent Plan は `openai-responses` アダプターでネイティブ Responses エンドポイントを使用します。
 
+### OpenCode Go は OpenCode クライアントではなく上流プロバイダーです
+
+`opencode-go` は `https://opencode.ai/zen/go/v1` の OpenCode Go サブスクリプションプロバイダーで、
+OpenCode Desktop/CLI とは別物です。[OpenCode コンソール](https://opencode.ai/console)でキーを作成し、
+ダッシュボードの **Providers** から **OpenCode Go** を追加するか、そのキーで `opencode-go` プリセットを
+構成します。OpenCodex は OpenCode の認証ストアを読み取らず、このキーを Keychain に移行しません。
+
+公開モデルカタログはキーの有効性の証拠ではありません。保存されたキーは、アクティブなキーで最初の
+推論に成功して初めて**検証済み**になります。公開上限は参照値で、**$12 / 5 時間**、**$30 / 7 日**、
+**$60 / 30 日**です。これらのウィンドウのローカル観測は使用量の推定であり、ライブの残りクォータや
+請求ではありません。権威ある制限イベントは、upstream が具体的に報告した場合にのみ表示されます。
+
 > **Volcengine の 3 つの課金経路:** `volcengine` は従量課金 Ark API、
 > `volcengine-coding-plan` は Coding Plan の割り当て、`volcengine-agent-plan` は Agent Plan
 > の割り当てを使用します。同じ製品で発行されたキーとエンドポイントを組み合わせてください。

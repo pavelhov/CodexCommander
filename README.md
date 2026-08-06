@@ -73,11 +73,32 @@ once the others are drained.
 
 The native companion shows live agent activity and provider quota windows, then opens the existing
 dashboard for OAuth, API keys, account management, and logs. It is a UI layer over the running
-proxy: no Keychain, no second provider-login system, and no provider credentials stored in the app.
+proxy: no Keychain migration, no second provider-login system, and no provider credentials stored in
+the app.
 
-Download the universal app from the matching GitHub release, or build it from this checkout with
-`npm run test:macos && npm run build:macos`. Full setup, security, Gatekeeper, and troubleshooting
-details are in the [macOS menu bar guide](https://opencodex.me/guides/macos-menu-bar/).
+A released app may be unzipped and placed in **Applications**. During active source development,
+keep the one app build in this checkout instead of copying it to Application Support or maintaining a
+second app copy:
+
+```bash
+bun install
+bun run test:macos
+bun run build:macos
+open dist/macos/OpenCodex.app
+```
+
+Double-clicking that source build ensures the proxy through the same checkout; if startup fails, the
+menu app stays open so its diagnostics and **Start** control remain available. **Quit** closes only
+the companion UI. **Stop** and **Restart** are separate, confirmation-gated proxy actions. Full
+setup, Gatekeeper, release packaging, and troubleshooting details are in the
+[macOS menu bar guide](https://opencodex.me/guides/macos-menu-bar/).
+
+### OpenCode client
+
+`ocx opencode` starts OpenCode with a transient, in-memory `provider.opencodex` block and never
+rewrites OpenCode config files. For plain OpenCode or the Desktop app, use the dashboard's
+**Integrations** page to apply the opt-in, reversible connection that owns only
+`provider.opencodex`; see the [OpenCode guide](https://opencodex.me/guides/opencode/).
 
 ### For agents
 
@@ -90,11 +111,6 @@ ocx init      # interactive setup: writes ~/.opencodex/config.json and wires Cod
 `ocx init` never starts the proxy; start it first (or after — either order works, but headless
 commands like `ocx provider add` and `ocx combo set` talk to the **live** proxy and exit nonzero
 when it is unreachable). `ocx status` / `ocx doctor` / `ocx health` report the running state.
-
-> **Agents installing or running opencodex:** read
-> [`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md). An interactive `ocx start` may ask once whether to
-> star this repository — that is the user's decision, never an agent's. The CLI suppresses the
-> prompt for agent-driven runs and the API refuses them with `403 agent_consent_required`.
 
 ## Supported platforms
 
@@ -232,12 +248,16 @@ Source development requires the `bun` CLI on your `PATH`. This is separate from 
 package's bundled Bun runtime, which is used only by installed `ocx` commands.
 
 ```bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone https://github.com/pavelhov/opencodex.git
 cd opencodex
 bun install
 bun run typecheck
 bun run test
 ```
+
+This fork is the source checkout for the OpenCodex companion and OpenCode integration documented
+here. It retains upstream attribution and Git history; the upstream repository is not the clone URL
+for this work.
 
 See **[Contributing](./CONTRIBUTING.md)**.
 
@@ -250,3 +270,10 @@ Some providers — notably Anthropic (Claude) — may suspend or restrict accoun
 ## License
 
 MIT
+
+The MIT license permits forks, modification, distribution, and sale subject to its notice condition.
+It does not grant third-party product names, logos, or trademark rights. A rebrander or commercial
+redistributor must audit names, logos, and trademarks; preserve the MIT and applicable third-party
+notices; avoid claims that it pools or resells third-party credentials or subscriptions; and use its
+own bundle identifier, signing and notarization, update channel, and package metadata. This is a
+release-operational checklist, not legal advice.

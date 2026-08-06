@@ -6,7 +6,7 @@ description: opencodex の開発環境、構成、規約、プロバイダーと
 ## セットアップ
 
 ```bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone https://github.com/pavelhov/opencodex.git
 cd opencodex
 bun install
 bun run dev:proxy    # 開発モードのプロキシ API

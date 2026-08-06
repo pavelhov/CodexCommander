@@ -28,10 +28,12 @@ import {
   LOCAL_ATTESTATION_PROOF_HEADER,
   verifyLocalAttestationProof,
 } from "../src/lib/local-management-attestation";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 
 const previousHome = process.env.OPENCODEX_HOME;
 const previousDataToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+const previousCodexCliPath = process.env.CODEX_CLI_PATH;
 let testHome = "";
 
 function remoteConfig(): OcxConfig {
@@ -77,6 +79,7 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = testHome;
   process.env.OPENCODEX_API_AUTH_TOKEN = "data-secret";
   process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "admin-secret";
+  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(testHome);
 });
 
 afterEach(() => {
@@ -89,6 +92,8 @@ afterEach(() => {
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousDataToken;
   if (previousAdminToken === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
   else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdminToken;
+  if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+  else process.env.CODEX_CLI_PATH = previousCodexCliPath;
   if (testHome) rmSync(testHome, { recursive: true, force: true });
   testHome = "";
 });

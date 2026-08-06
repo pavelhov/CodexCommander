@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claimOwnedServiceHome } from "./helpers/owned-service-home";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 
 /**
  * Regression: `ocx start` + Ctrl-C must NOT orphan the Bun proxy.
@@ -89,6 +90,7 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
         // no-ops when no config.toml exists) — this lets us prove the config is RESTORED.
         const codexConfig = join(home, "config.toml");
         writeFileSync(codexConfig, 'model = "gpt-5.1"\n');
+        const codexRuntime = createCodexRuntimeFixture(home);
 
         const child = spawn("node", [BIN_OCX, "start", "--port", String(port)], {
           stdio: "ignore",
@@ -99,6 +101,8 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
             OPENCODEX_HOME: home,
             CODEX_HOME: home,
             ...identity.serviceManagerEnv,
+            CODEX_CLI_PATH: codexRuntime,
+            OCX_DISABLE_COMPANION: "1",
           },
         });
         spawned.push(child);
@@ -107,9 +111,16 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
         child.on("exit", () => { exited = true; });
 
         // 1. Proxy comes up + injected the Codex config (Design B root override on loopback).
-        const up = await waitUntil(() => healthy(port), 20_000);
+        // Cold launcher/runtime imports can exceed 20s under endpoint scanning even
+        // though the listener and managed-config publication still converge normally.
+        const up = await waitUntil(() => healthy(port), 45_000);
         expect(up).toBe(true);
         expect(existsSync(join(home, "ocx.pid"))).toBe(true);
+        const injectedReady = await waitUntil(async () => {
+          try { return readFileSync(codexConfig, "utf8").includes("# Auto-injected by opencodex"); }
+          catch { return false; }
+        }, 30_000);
+        expect(injectedReady).toBe(true);
         const injected = readFileSync(codexConfig, "utf8");
         expect(injected).toContain("# Auto-injected by opencodex");
         expect(injected).toContain(`openai_base_url = "http://127.0.0.1:${port}/v1"`);
@@ -131,7 +142,7 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
         expect(existsSync(join(home, "runtime-port.json"))).toBe(false);
         expect(readFileSync(codexConfig, "utf8")).not.toContain("opencodex");
       },
-      45_000,
+      90_000,
     );
   }
 });

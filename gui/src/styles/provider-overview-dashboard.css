@@ -252,6 +252,33 @@
 .pws-capacity-incomplete {
   /* Semantic amber: WCAG AA on both themes (6.26:1 light, 9.65:1 dark). */
   color: var(--amber);
+.pws-dashboard-reference-caps {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+  min-height: 42px;
+  padding: 6px 0;
+}
+
+.pws-dashboard-reference-caps > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.pws-dashboard-reference-caps > span strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.pws-dashboard-reference-caps > small {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 10.5px;
 }
 
 .pws-dashboard-section--rate-limits,

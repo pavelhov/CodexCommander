@@ -87,7 +87,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     let resolved: ReturnType<typeof resolveCodexRuntime>;
     try {
       // Full alternative discovery (memoized) so newerAvailable warnings work.
-      resolved = resolveCodexRuntime();
+      resolved = (deps.resolveCodexRuntime ?? resolveCodexRuntime)();
     } catch {
       resolved = {
         runtime: { command: "codex", version: null, source: "fallback" },
@@ -129,7 +129,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hostname: config.hostname ?? "127.0.0.1",
       streamMode: config.streamMode ?? "auto",
       appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
-      startupHealth: await getCachedStartupHealth(config),
+      startupHealth: await (deps.getCachedStartupHealth ?? getCachedStartupHealth)(config),
       codexRuntime: {
         path: displayCodexRuntimePath(resolved.runtime.command),
         version: resolved.runtime.version,

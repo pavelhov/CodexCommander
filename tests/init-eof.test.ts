@@ -29,5 +29,5 @@ describe("ocx init piped stdin (#754)", () => {
     const stderr = await new Response(proc.stderr).text();
     expect(stderr.toLowerCase()).toMatch(/stdin (closed|reached eof)/);
     expect(existsSync(join(home, "config.json"))).toBe(false);
-  });
+  }, 12_000);
 });

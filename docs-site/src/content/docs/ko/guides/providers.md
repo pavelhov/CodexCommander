@@ -209,6 +209,18 @@ Cline IDE/CLI에서만 제공되며 API로는 사용할 수 없습니다. `minim
 (예: **Xiaomi MiMo**)는 `anthropic` 어댑터(`x-api-key`)를 사용합니다.
 Volcengine Agent Plan은 `openai-responses` 어댑터로 네이티브 Responses 엔드포인트를 사용합니다.
 
+### OpenCode Go는 OpenCode 클라이언트가 아닌 업스트림 제공자입니다
+
+`opencode-go`는 `https://opencode.ai/zen/go/v1`의 OpenCode Go 구독 제공자이며 OpenCode
+Desktop/CLI와는 별개입니다. [OpenCode 콘솔](https://opencode.ai/console)에서 키를 만든 뒤
+대시보드 **Providers**에서 **OpenCode Go**를 추가하거나 그 키로 `opencode-go` 프리셋을 구성하세요.
+OpenCodex는 OpenCode 인증 저장소를 읽거나 이 키를 Keychain으로 마이그레이션하지 않습니다.
+
+공개 모델 카탈로그는 키가 작동한다는 증거가 아닙니다. 저장된 키는 활성 키로 첫 추론에 성공한 뒤에만
+**검증됨**이 됩니다. 공개 한도는 참조값인 **$12 / 5시간**, **$30 / 7일**, **$60 / 30일**입니다.
+해당 기간의 로컬 관측값은 실시간 남은 할당량이나 청구가 아닌 사용량 추정치입니다. 권위 있는 제한
+이벤트는 업스트림이 구체적으로 보고한 경우에만 표시합니다.
+
 > **Volcengine의 세 가지 과금 경로:** `volcengine`은 종량제 Ark API,
 > `volcengine-coding-plan`은 Coding Plan 할당량, `volcengine-agent-plan`은 Agent Plan
 > 할당량을 사용합니다. 같은 상품에서 발급된 키와 엔드포인트를 함께 사용해야 하며, Plan 구독이

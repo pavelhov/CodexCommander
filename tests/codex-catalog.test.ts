@@ -35,7 +35,10 @@ const originalFetch = globalThis.fetch;
  * caller-owned executor that hands control back to the stub.
  */
 const gatherRoutedModels: typeof gatherRoutedModelsDirect = (config, options) =>
-  gatherRoutedModelsDirect(withStubbedProviderFetch(config), options);
+  gatherRoutedModelsDirect(withStubbedProviderFetch(config), {
+    ...options,
+    nativeOpenAiSlugs: options?.nativeOpenAiSlugs ?? (() => NATIVE_OPENAI_MODELS),
+  });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;

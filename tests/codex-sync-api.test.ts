@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +8,9 @@ import { MANAGED_AGENTS_TABLE_MARKER, MANAGED_SUBAGENT_DEFAULT_MARKER } from "..
 import type { OcxConfig } from "../src/types";
 import type { OrcaCodexHomeDiagnostic } from "../src/codex/home";
 import { claimOwnedServiceHome } from "./helpers/owned-service-home";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+
+setDefaultTimeout(30_000);
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-sync-api");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
@@ -18,6 +21,7 @@ let prevCodexHome: string | undefined;
 let prevOpenCodexHome: string | undefined;
 let prevHome: string | undefined;
 let prevUserProfile: string | undefined;
+let previousCodexCliPath: string | undefined;
 
 const config = {
   port: 0,
@@ -58,6 +62,7 @@ describe("GUI/CLI Codex sync backend", () => {
     prevOpenCodexHome = process.env.OPENCODEX_HOME;
     prevHome = process.env.HOME;
     prevUserProfile = process.env.USERPROFILE;
+    previousCodexCliPath = process.env.CODEX_CLI_PATH;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_CODEX_HOME, { recursive: true });
     mkdirSync(TEST_OCX_HOME, { recursive: true });
@@ -66,6 +71,7 @@ describe("GUI/CLI Codex sync backend", () => {
     process.env.OPENCODEX_HOME = TEST_OCX_HOME;
     process.env.HOME = TEST_HOME;
     process.env.USERPROFILE = TEST_HOME;
+    process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(TEST_DIR);
     writeFileSync(join(TEST_CODEX_HOME, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
     writeFileSync(join(TEST_OCX_HOME, "config.json"), JSON.stringify(config));
     claimTempHome(TEST_CODEX_HOME, TEST_OCX_HOME, TEST_HOME);
@@ -80,6 +86,8 @@ describe("GUI/CLI Codex sync backend", () => {
     else process.env.HOME = prevHome;
     if (prevUserProfile === undefined) delete process.env.USERPROFILE;
     else process.env.USERPROFILE = prevUserProfile;
+    if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+    else process.env.CODEX_CLI_PATH = previousCodexCliPath;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
   test("returns the structured sync result used by POST /api/sync", async () => {

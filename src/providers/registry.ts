@@ -1,4 +1,5 @@
 import type { CodexAccountMode, OcxProviderConfig } from "../types";
+import { OPENCODE_GO_ANTHROPIC_WIRE_MODEL_IDS } from "../types";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "./kiro-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, ANTIGRAVITY_MODEL_EFFORTS } from "./antigravity-models";
 import type { ProviderBaseUrlChoice } from "./base-url-choices";
@@ -352,7 +353,40 @@ const THINKING_BUDGET_MODELS = [
   "qwen3.5-397b", "qwen3.6-35b",
   "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus",
 ];
-const OPENCODE_GO_THINKING_BUDGET_MODELS = ["qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus"];
+const OPENCODE_GO_THINKING_BUDGET_MODELS = ["qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus", "qwen3.8-max"];
+/**
+ * Pinned last-known-good OpenCode Go lineup (25 ids): the exact id set advertised by
+ * `GET https://opencode.ai/zen/go/v1/models`, verified 2026-08-05. That endpoint is
+ * existence-only — it returns ids without context/output/pricing metadata — so this list is
+ * the catalog seed, and the registry-only discovery filter below admits exactly these ids:
+ * any other model upstream starts (or stops) advertising is quarantined rather than guessed
+ * onto a wire, and the drift tests in tests/opencode-go-catalog.test.ts pin the set.
+ *
+ * `hy3-preview` is advertised upstream but is not Go-plan callable (issue #82): it stays in
+ * the trusted id set (its wire fact is honest) and out of pickers via the compatibility
+ * exclusion in src/codex/catalog/parsing.ts.
+ *
+ * Transport split per the official endpoint table (https://opencode.ai/docs/go/#endpoints):
+ * Qwen and MiniMax rows serve Anthropic Messages (`/zen/go/v1/messages`), GPT-5.6 Luna and
+ * Grok 4.5 serve OpenAI Responses (`/zen/go/v1/responses`), and the remaining rows serve
+ * OpenAI Chat Completions (`/zen/go/v1/chat/completions`). The Anthropic subset is a hard
+ * wire pin owned by types.ts (OPENCODE_GO_ANTHROPIC_WIRE_MODEL_IDS); the two OpenAI-shaped
+ * wires are registry `modelWireDefaults` on the entry below.
+ */
+const OPENCODE_GO_MODELS = [
+  "minimax-m3", "minimax-m2.7", "minimax-m2.5",
+  "kimi-k3", "kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5",
+  "glm-5.2", "glm-5.1", "glm-5",
+  "deepseek-v4-pro", "deepseek-v4-flash",
+  "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.5-plus",
+  "mimo-v2-pro", "mimo-v2-omni", "mimo-v2.5-pro", "mimo-v2.5",
+  "hy3", "hy3-preview",
+  "gpt-5.6-luna", "grok-4.5",
+];
+const OPENCODE_GO_RESPONSES_WIRE_MODELS = ["gpt-5.6-luna", "grok-4.5"];
+// grok-4.5 reasoning is always-on with low/medium/high control (mirrors the verified xAI
+// ladder on the `xai` entry); GPT-5.6 Luna serves the OpenAI API GPT-5.6 ladder.
+const OPENCODE_GO_GROK45_REASONING_EFFORTS = ["low", "medium", "high"];
 const DEEPSEEK_THINKING_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"];
 const OPENCODE_FREE_DEEPSEEK_MODELS = ["deepseek-v4-flash-free"];
 /*
@@ -1102,13 +1136,49 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     id: "opencode-go", label: "opencode go", adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1",
     authKind: "key", featured: true, dashboardUrl: "https://opencode.ai/auth", defaultModel: "kimi-k2.7-code",
     jawcodeBundle: "opencode-go", note: "GLM, DeepSeek, Kimi, Qwen, MiMo…",
-    modelContextWindows: { "kimi-k3": KIMI_K3_STANDARD_CONTEXT_WINDOW },
-    modelInputModalities: { "kimi-k3": ["text", "image"] },
+    models: [...OPENCODE_GO_MODELS],
+    // Live /v1/models is the authoritative lineup; the static list above is the last-good
+    // fallback seed. The registry-only filter quarantines any id outside the trusted 25, and
+    // `preserveCustomDestination` keeps the whole trusted transport registry (this filter, the
+    // wire defaults, and every registry metadata backfill) attached to the canonical Zen Go
+    // host only — a same-named row pointed elsewhere is a custom provider and gets none of it.
+    liveModels: true,
+    preserveCustomDestination: true,
+    apiKeyValidation: "unknown",
+    modelDiscovery: {
+      filter: { anyOf: [{ path: ["id"], equalsAny: OPENCODE_GO_MODELS }] },
+    },
+    // Per-model wire facts for the Responses-serving rows. The Anthropic-only rows are
+    // hard-pinned in types.ts, and the remaining trusted rows keep the provider-wide
+    // openai-chat adapter — so every trusted id has exactly one wire fact and none is
+    // inferred. (The defaults only bind canonical rows: `preserveCustomDestination` detaches
+    // the registry from adapter- or destination-mismatched rows entirely.)
+    modelWireDefaults: {
+      ...Object.fromEntries(OPENCODE_GO_RESPONSES_WIRE_MODELS.map(id => [id, "openai-responses"])),
+    },
+    // Zen Go context windows not covered by the generated jawcode bundle (qwen3.8-max and
+    // gpt-5.6-luna have no bundle row yet): official data pages
+    // https://opencode.ai/data/qwen/qwen3-8-max (1M) and
+    // https://opencode.ai/data/openai/gpt-5-6-luna (1.1M — the OpenAI API value 1,050,000).
+    modelContextWindows: {
+      "kimi-k3": KIMI_K3_STANDARD_CONTEXT_WINDOW,
+      "qwen3.8-max": 1_000_000,
+      "gpt-5.6-luna": 1_050_000,
+    },
+    // qwen3.8-max (text/image/video) and gpt-5.6-luna (text/image/pdf) are multimodal upstream;
+    // the jawcode type can only represent text+image, so video/pdf stay source facts.
+    modelInputModalities: {
+      "kimi-k3": ["text", "image"],
+      "qwen3.8-max": ["text", "image"],
+      "gpt-5.6-luna": ["text", "image"],
+    },
     modelReasoningEfforts: {
       "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
       "kimi-k3": KIMI_CODING_K3_REASONING_EFFORTS,
       "kimi-k2.7-code": [],
       "kimi-k2.7-code-highspeed": [],
+      "grok-4.5": OPENCODE_GO_GROK45_REASONING_EFFORTS,
+      "gpt-5.6-luna": OPENAI_API_GPT56_REASONING_EFFORTS,
       ...Object.fromEntries(OPENCODE_GO_THINKING_TOGGLE_MODELS.map(id => [id, THINKING_TOGGLE_EFFORTS])),
       ...Object.fromEntries(OPENCODE_GO_THINKING_BUDGET_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
       ...Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),

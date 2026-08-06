@@ -2,8 +2,29 @@ import { describe, expect, test } from "bun:test";
 import { handleManagementAPI } from "../src/server/management-api";
 import { ManagementRequest as Request } from "./helpers/management-auth";
 import type { OcxConfig } from "../src/types";
+import { deriveStartupHealth } from "../src/codex/autostart-health";
 
 const config = { providers: [] } as unknown as OcxConfig;
+const managementDeps = {
+  resolveCodexRuntime: () => ({
+    runtime: { command: "codex-fixture", version: "0.999.0", source: "environment" as const },
+    failures: [],
+  }),
+  getCachedStartupHealth: async () => deriveStartupHealth({
+    routingKind: "native",
+    autostartEnabled: false,
+    serviceInstalled: false,
+    serviceViable: false,
+    serviceEnabled: false,
+    serviceRunning: false,
+    serviceStale: false,
+    serviceConflict: false,
+    serviceSupported: true,
+    shimInstalled: false,
+    shimHealthy: false,
+    platform: process.platform,
+  }),
+};
 
 /**
  * #725: the dashboard rendered request-log timestamps in the BROWSER's zone, so a proxy
@@ -15,7 +36,7 @@ const config = { providers: [] } as unknown as OcxConfig;
 describe("log timestamp timezone (#725)", () => {
   test("/api/settings reports the server's IANA zone", async () => {
     const url = new URL("http://localhost/api/settings");
-    const response = await handleManagementAPI(new Request(url), url, config);
+    const response = await handleManagementAPI(new Request(url), url, config, managementDeps);
     expect(response?.status).toBe(200);
     const body = await response!.json() as { timeZone?: unknown };
     expect(typeof body.timeZone).toBe("string");
@@ -26,7 +47,7 @@ describe("log timestamp timezone (#725)", () => {
 
   test("/api/logs envelope includes a usable timeZone", async () => {
     const url = new URL("http://localhost/api/logs");
-    const response = await handleManagementAPI(new Request(url), url, config);
+    const response = await handleManagementAPI(new Request(url), url, config, managementDeps);
     expect(response?.status).toBe(200);
     const body = await response!.json() as {
       timeZone?: unknown;

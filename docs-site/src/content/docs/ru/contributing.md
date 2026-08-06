@@ -6,7 +6,7 @@ description: Разработка opencodex — настройка окруже�
 ## Настройка окружения
 
 ```bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone https://github.com/pavelhov/opencodex.git
 cd opencodex
 bun install
 bun run dev:proxy    # прокси-API в режиме разработки

@@ -29,22 +29,27 @@ OpenCodex 인스턴스와만 통신합니다.
   메타데이터에서 활성 부모를 입증할 수 있을 때만 생성된 자식이 중첩되며, 그렇지 않으면 독립형
   서브에이전트로 표시됩니다. 컴패니언은 대기 중, 검토 중, 속도 제한됨 또는 완료 기록을
   만들어내지 않습니다.
-- **제공자 할당량** — OpenCodex가 반환하는 실제 5시간, 주간, 월간 또는 제공자별 크레딧 기간과
-  재설정 시간을 모두 표시합니다. 누락된 데이터는 사용할 수 없음으로 표시하며 사용량 0 또는
-  무제한 용량으로 표시하지 않습니다.
+- **제공자 할당량** — 제공자가 보고하는 5시간, 주간, 월간 또는 제공자별 기간과 재설정 시간을
+  사용할 수 있을 때 표시합니다. OpenCode Go는 임의의 현재 잔액 대신 공개 한도와 로컬 관측값을
+  표시합니다. 누락된 데이터는 사용할 수 없음으로 표시하며 사용량 0 또는 무제한 용량으로
+  표시하지 않습니다.
 - **대시보드 및 Logs** — 기본 브라우저에서 해당 로컬 대시보드 보기를 엽니다.
 - **관리** — 선택한 제공자의 Accounts 또는 API Keys 탭을 엽니다. OAuth, API 키 입력, 재인증,
   계정 전환 및 제공자 구성은 대시보드에서 계속 처리합니다.
+- **중지** — 항상 확인을 요청하고 활성 클라이언트 및 서브에이전트 요청을 중단하며, 네이티브
+  Codex를 복원하고 메뉴 막대 앱은 계속 실행합니다.
 - **재시작** — 확인을 요청하고 프록시가 최대 60초 동안 활성 요청을 드레이닝하도록 한 다음
   교체 프로세스에 다시 연결합니다. 재시작 요청 수락을 완료로 표시하지 않으며, 새 프로세스가
   신원 검사를 통과할 때까지 앱이 기다립니다.
+- **Quit** — 컴패니언 UI만 닫으며 프록시, 서비스 또는 클라이언트 라우팅은 중지하지 않습니다.
 
 ChatGPT의 할당량 보고서를 사용할 수 있으면 ChatGPT가 맨 먼저 확장된 상태로 표시됩니다. Kimi와
 Grok은 접힌 요약으로 표시됩니다. **모든 제공자 보기**는 전체 Providers 작업 영역을 엽니다.
 
 ## 인증 및 개인정보 보호
 
-컴패니언은 별도의 로그인 시스템을 만들지 않으며 macOS Keychain을 사용하지 않습니다.
+컴패니언은 별도의 로그인 시스템을 만들지 않으며 macOS Keychain으로 데이터를 마이그레이션하거나
+제공자 자격 증명을 읽지 않습니다.
 
 현재 OpenCodex 버전은 <code>~/.opencodex/admin-api-token</code>(또는
 <code>$OPENCODEX_HOME/admin-api-token</code>)에 독립적인 관리 자격 증명을 생성합니다. 컴패니언은
@@ -79,13 +84,19 @@ ID, 제공자/모델 식별자, 타임스탬프 및 집계 수가 포함됩니�
 macOS 13 이상과 Xcode Command Line Tools가 필요합니다. Intel + Apple silicon 유니버설 릴리스
 빌드에는 전체 Xcode가 필요합니다.
 
-    git clone https://github.com/pavelhov/opencodex.git
-    cd opencodex
-    npm run test:macos
-    npm run build:macos
-    open dist/macos/OpenCodex.app
+```bash
+git clone https://github.com/pavelhov/opencodex.git
+cd opencodex
+bun install
+bun run test:macos
+bun run build:macos
+open dist/macos/OpenCodex.app
+```
 
-이 두 스크립트는 Swift를 직접 호출하므로 npm 종속성을 설치할 필요가 없습니다.
+소스 앱의 위치는 정확히 `dist/macos/OpenCodex.app`입니다. 같은 체크아웃의 Bun과 CLI를
+사용하므로 `bun install` 종속성이 필요합니다. 개발 중에는 이 위치에 두고 Application Support로
+복사하지 마세요. 더블클릭하면 프록시 시작을 시도하지만 오프라인이거나 시작에 실패해도 앱은 닫히지
+않으며 패널과 **Start** 컨트롤을 계속 사용할 수 있습니다.
 
 ## 문제 해결
 

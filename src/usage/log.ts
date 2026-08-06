@@ -93,6 +93,8 @@ export interface PersistedUsageEntry {
    * contains prompts, credentials, or hidden reasoning.
    */
   routeDecision?: RouteDecisionTraceV1;
+  /** Validated upstream Retry-After value captured for an observed quota event. */
+  upstreamRetryAfter?: string;
 }
 
 const KNOWN_USAGE_SURFACES = new Set<NonNullable<PersistedUsageEntry["surface"]>>([
@@ -315,6 +317,28 @@ function capMetadataString(s: string): string {
   return s.length > MAX_METADATA_STRING_LEN ? s.slice(0, MAX_METADATA_STRING_LEN) : s;
 }
 
+export function normalizePersistedRetryAfter(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 128) return undefined;
+  if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    return Number.isFinite(seconds) && seconds >= 0 && seconds <= 40 * 24 * 60 * 60
+      ? trimmed
+      : undefined;
+  }
+  // Persist only IMF-fixdate, the current HTTP-date wire form. Date.parse accepts
+  // arbitrary prose containing a date; using it alone would turn Retry-After into a
+  // small but unnecessary attacker-controlled metadata channel.
+  if (!/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(trimmed)) {
+    return undefined;
+  }
+  const timestamp = Date.parse(trimmed);
+  return Number.isFinite(timestamp) && new Date(timestamp).toUTCString() === trimmed
+    ? trimmed
+    : undefined;
+}
+
 /** Test seam: the normalization branch old rows take is worth asserting directly. */
 export function normalizeUsageEntryForTest(entry: PersistedUsageEntry): PersistedUsageEntry {
   return normalizeUsageEntry(entry);
@@ -391,6 +415,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
     ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
     ...(routeDecision ? { routeDecision } : {}),
+    ...(normalizePersistedRetryAfter(entry.upstreamRetryAfter)
+      ? { upstreamRetryAfter: normalizePersistedRetryAfter(entry.upstreamRetryAfter) }
+      : {}),
   };
 }
 

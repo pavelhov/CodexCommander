@@ -13,6 +13,34 @@ public enum Format {
         return "\(Int(value.rounded()))%"
     }
 
+    /// Published dollar cap. Whole-dollar values stay compact (`$12`); malformed
+    /// external values remain unknown rather than looking like a real provider fact.
+    public static func usdCap(_ value: Double?) -> String {
+        guard let value, value.isFinite, value >= 0, value <= 1_000_000_000 else {
+            return unknown
+        }
+        if value.rounded() == value { return String(format: "$%.0f", value) }
+        return String(format: "$%.2f", value)
+    }
+
+    /// Local cost observations are pricing estimates, so retain cents even when zero.
+    public static func usdEstimate(_ value: Double?) -> String {
+        guard let value, value.isFinite, value >= 0, value <= 1_000_000_000 else {
+            return unknown
+        }
+        return String(format: "$%.2f", value)
+    }
+
+    public static func count(_ value: Int64?) -> String {
+        guard let value, value >= 0 else { return unknown }
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 0
+        formatter.usesGroupingSeparator = true
+        return formatter.string(from: NSNumber(value: value)) ?? unknown
+    }
+
     /// "resets in 3d 4h" / "resets in 12m". Past dates read as "expired".
     public static func resetsIn(_ date: Date?, now: Date = Date()) -> String {
         guard let date else { return unknown }

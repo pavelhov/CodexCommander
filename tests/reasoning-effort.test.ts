@@ -615,7 +615,7 @@ describe("thinking-budget models (260709)", () => {
     });
   });
 
-  test("routed Qwen models advertise five levels and send thinking_budget over openai-chat", () => {
+  test("routed Qwen models advertise five levels and pin to the Anthropic wire", () => {
     const config = {
       port: 10100,
       defaultProvider: "opencode-go",
@@ -624,12 +624,13 @@ describe("thinking-budget models (260709)", () => {
     const route = routeModel(config, "opencode-go/qwen3.7-max");
 
     expect(route.provider.adapter).toBe("openai-chat");
-    expect(route.provider.thinkingBudgetModels).toContain("qwen3.7-max");
     expect(route.provider.modelReasoningEfforts?.["qwen3.7-max"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
 
-    const body = buildBody(route.provider, route.modelId, { reasoning: "max", maxOutputTokens: 65536 });
-    expect(body.thinking_budget).toBe(65536);
-    expect(body).not.toHaveProperty("reasoning_effort");
+    // The official Zen Go endpoint table serves every Qwen row over Anthropic Messages, so
+    // the request-time wire resolver pins the adapter; the advertised ladder is mapped onto
+    // an Anthropic thinking budget by the anthropic adapter (chat-side thinking_budget
+    // coverage lives with the Neuralwatt rows above).
+    expect(resolveWireProtocolOverride("opencode-go", route.modelId, route.provider).adapter).toBe("anthropic");
   });
 
   test("Alibaba Token Plan routes Qwen3.8 Max Preview with the Qwen thinking budget contract", () => {
@@ -655,10 +656,14 @@ describe("thinking-budget models (260709)", () => {
     expect(body).not.toHaveProperty("reasoning_effort");
   });
 
-  test("opencode-go Qwen models are no longer pinned to the Anthropic wire", () => {
+  test("opencode-go Qwen and MiniMax models are pinned to the Anthropic wire", () => {
+    // Official endpoint table (https://opencode.ai/docs/go/#endpoints): every Qwen and MiniMax
+    // row on Zen Go serves Anthropic Messages (/zen/go/v1/messages) only.
     const provider: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1" };
 
-    expect(resolveWireProtocolOverride("opencode-go", "qwen3.7-max", provider).adapter).toBe("openai-chat");
+    for (const modelId of ["qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus", "qwen3.8-max"]) {
+      expect(resolveWireProtocolOverride("opencode-go", modelId, provider).adapter).toBe("anthropic");
+    }
     expect(resolveWireProtocolOverride("opencode-go", "minimax-m3", provider).adapter).toBe("anthropic");
   });
 

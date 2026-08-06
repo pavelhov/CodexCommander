@@ -94,7 +94,18 @@ describe("catalog ultra (always-on)", () => {
       ],
       default_reasoning_level: "ultra",
     };
-    const merged = mergeCatalogEntriesForSync([diskSol as never], [], new Map(), [], false);
+    const codexHome = mkdtempSync(join(tmpdir(), "ocx-v2-catalog-"));
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n');
+    writeFileSync(join(codexHome, "catalog.json"), JSON.stringify({ models: [diskSol] }));
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    let merged: ReturnType<typeof mergeCatalogEntriesForSync>;
+    try {
+      merged = mergeCatalogEntriesForSync([diskSol as never], [], new Map(), [], false);
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+    }
     const sol = merged.find(e => e.slug === "gpt-5.6-sol")!;
     expect(efforts(sol)).toContain("ultra");
     expect(efforts(sol)).toContain("max");
@@ -477,8 +488,16 @@ describe("config-surface parity: agents.enabled, max_depth, subagent_developer_i
   });
 
   test("feature toggling delegates to exactly the multi_agent_v2 native key", () => {
-    expect(codexFeaturesInvocation("enable").args).toEqual(["features", "enable", "multi_agent_v2"]);
-    expect(codexFeaturesInvocation("disable").args).toEqual(["features", "disable", "multi_agent_v2"]);
+    const runtimeDeps = {
+      env: { PATH: "" },
+      configDir: mkdtempSync(join(tmpdir(), "ocx-v2-toggle-")),
+      existsSync: () => false,
+      execFileSync: () => "codex-cli 0.999.0",
+    };
+    expect(codexFeaturesInvocation("enable", "multi_agent_v2", "darwin", runtimeDeps).args)
+      .toEqual(["features", "enable", "multi_agent_v2"]);
+    expect(codexFeaturesInvocation("disable", "multi_agent_v2", "darwin", runtimeDeps).args)
+      .toEqual(["features", "disable", "multi_agent_v2"]);
   });
 
   test("getAgentsEnabled is tri-state: absent, true, false", () => {
@@ -1060,6 +1079,11 @@ describe("cli surface", () => {
     process.env.OPENCODEX_HOME = mkdtempSync(join(tmpdir(), "ocx-cli-config-"));
     const logs: string[] = [];
     const deps = {
+      featuresInvocation: (action: "enable" | "disable") => ({
+        file: "codex-fixture",
+        args: ["features", action, "multi_agent_v2"],
+        options: {},
+      }),
       execFile: (_file: string, args: string[]) => {
         // POSIX: ["features", "enable|disable", ...]; win32 .cmd: ["/d","/s","/c","...enable..."]
         const joined = args.join(" ");

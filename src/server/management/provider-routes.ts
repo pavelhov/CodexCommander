@@ -26,7 +26,8 @@ import { removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { ProviderOutboundPolicyError, providerOutboundGet, providerRedirectError } from "../../lib/provider-outbound";
-import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
+import { enrichProviderFromCatalog, isPublicCatalogOnlyKeyValidation, listKeyLoginProviders } from "../../oauth/key-providers";
+import { providerCredentialVerification } from "../../providers/credential-verification";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode, providerMatchesRegistryTransport } from "../../providers/registry";
 import {
@@ -464,6 +465,18 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       // positive connectivity evidence nor an outage, and it must stay before
       // credential resolution/network access for providers such as Antigravity.
       return jsonResponse({ applicable: false, reason: "static_catalog", latencyMs: 0 });
+    }
+    if (isPublicCatalogOnlyKeyValidation(name, prov.baseUrl)) {
+      const credentialVerification = providerCredentialVerification(config, name);
+      return jsonResponse({
+        applicable: false,
+        reason: "public_catalog",
+        latencyMs: 0,
+        credentialVerification,
+        message: credentialVerification === "verified"
+          ? "Credential verified by a successful inference. The public model catalog is not used as authentication evidence."
+          : "The model catalog is public, so it cannot verify this key. OpenCodex will mark it verified after the first successful inference.",
+      });
     }
     const { resolveModelsAuthToken, buildModelsRequest } = await import("../../oauth");
     const apiKey = await resolveModelsAuthToken(name, prov);

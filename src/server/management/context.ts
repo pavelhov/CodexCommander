@@ -1,5 +1,7 @@
 import type { OcxConfig } from "../../types";
 import type { NativeProfileApiDeps } from "../../codex/native-profile-api";
+import type { ResolveCodexRuntimeResult } from "../../codex/runtime";
+import type { StartupHealth } from "../../codex/autostart-health";
 import type { StartupInstallAction } from "../startup-action-control";
 import type { ManagementPrincipal } from "../management-auth";
 import type { CatalogModel } from "../../codex/catalog";
@@ -9,6 +11,8 @@ import type { RuntimePortState } from "../../config";
 import type { CatalogDisposition, ConvergeCodex } from "../../codex/convergence-types";
 
 export interface ManagementApiDeps {
+  resolveCodexRuntime?: () => ResolveCodexRuntimeResult;
+  getCachedStartupHealth?: (config: Pick<OcxConfig, "codexAutoStart">) => Promise<StartupHealth>;
   toggleCodexMultiAgentV2?: (enabled: boolean) => void;
   toggleDefaultModeRequestUserInput?: (enabled: boolean) => void;
   createManagementConvergeCodex?: (config: Readonly<OcxConfig>) => ConvergeCodex;

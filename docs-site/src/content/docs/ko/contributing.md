@@ -6,7 +6,7 @@ description: opencodex 개발 환경, 구조, 컨벤션, 프로바이더와 어�
 ## 설정
 
 ```bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone https://github.com/pavelhov/opencodex.git
 cd opencodex
 bun install
 bun run dev:proxy    # 개발 모드 프록시 API

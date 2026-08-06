@@ -363,6 +363,8 @@ export interface StartServerDeps {
   managementAuthState?: ManagementAuthState;
   /** Test-only route dependencies, forwarded only after management admission succeeds. */
   managementApi?: ManagementApiDeps;
+  /** Backward-compatible name used by the fork's companion/integration test harnesses. */
+  managementDeps?: ManagementApiDeps;
   /** Test-only native-main recovery dependencies; production constructs the normal manager. */
   nativeMainStartup?: NativeMainStartupGateDeps;
   /** Test-only seam for an upstream that cannot complete its WebSocket close handshake. */
@@ -684,7 +686,13 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         // gate used. Consent-bearing routes need this: request headers are forgeable
         // by anything holding the admin token, the credential is not.
         const principal = managementPrincipal(req, managementAuth, config) ?? undefined;
-        const mgmtResponse = await handleManagementAPI(req, url, config, deps.managementApi, principal);
+        const mgmtResponse = await handleManagementAPI(
+          req,
+          url,
+          config,
+          deps.managementApi ?? deps.managementDeps,
+          principal,
+        );
         if (mgmtResponse) return withManagementCors(mgmtResponse, req, config);
         return withManagementCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);
       }
@@ -1444,6 +1452,15 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       .then(({ primeCodexPoolQuotas }) => primeCodexPoolQuotas(config, "startup"))
       .catch(() => {});
   }
+
+  // A durable OpenCode client integration is opt-in. When enabled, refresh its
+  // owned provider block after the listener chooses the real port; failures are
+  // isolated from proxy startup and surfaced by the Integrations page instead.
+  import("./management/opencode-integration-routes")
+    .then(({ reconcileOpencodeIntegrationIfEnabled }) => (
+      reconcileOpencodeIntegrationIfEnabled(config, actualPort)
+    ))
+    .catch(() => {});
 
   // Opt-in storage policy (default OFF). Never blocks listen; cancellable on shutdown.
   scheduleStorageCleanupStartupRun();

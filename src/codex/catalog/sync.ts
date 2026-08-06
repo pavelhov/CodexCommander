@@ -37,6 +37,7 @@ import {
   bundledCatalogCacheState,
   loadBundledCodexCatalog,
   resetBundledCatalogCacheForTests,
+  type BundledCatalogDeps,
 } from "./bundled";
 import { isMultiAgentV2Enabled } from "../features";
 import { applyCatalogModelMetadata, applyReasoningLevels, catalogEntryEfforts, clampCatalogModelsToCodexSupport, ensureGpt56ReasoningLevels, ensureUltraReasoningLevel, isGpt56NativeSlug } from "./effort";
@@ -461,6 +462,7 @@ export function mergeCatalogEntriesForSync(
   hasPhysicalComboProvider = false,
   includeNativeOpenAi = true,
   accountBoundEntries: readonly RawEntry[] = [],
+  availableNativeSlugs: readonly string[] = NATIVE_OPENAI_MODELS,
 ): RawEntry[] {
   const rank = new Map(featured.map((slug, i) => [slug, i] as const));
   const native = includeNativeOpenAi
@@ -508,7 +510,7 @@ export function mergeCatalogEntriesForSync(
   // Skip when no enabled canonical openai provider exists (#636) — bare gpt-* would 404.
   const nativeSlugs = new Set(native.flatMap(m => typeof m.slug === "string" ? [m.slug] : []));
   if (includeNativeOpenAi) {
-  for (const slug of nativeOpenAiSlugs()) {
+  for (const slug of availableNativeSlugs) {
     if (nativeSlugs.has(slug)) continue;
     nativeSlugs.add(slug);
     const priority = rank.has(slug)
@@ -660,6 +662,8 @@ interface RetainedCatalogSyncResult {
 interface RetainedCatalogSyncWrite {
   readonly config: OcxConfig;
   readonly goModels: CatalogModel[];
+  readonly availableNativeSlugs: readonly string[];
+  readonly deps: BundledCatalogDeps;
   readonly comboOmissions: ComboCatalogOmission[];
   readonly read: RetainedCatalogSyncRead;
   readonly permit: CatalogWritePermit;
@@ -675,8 +679,8 @@ function optionalFileBytes(path: string): string | null {
   }
 }
 
-function loadCatalogForRetainedSync(path: string): RawCatalog | null {
-  const bundled = isDefaultCatalogPath(path) ? loadBundledCodexCatalog() : null;
+function loadCatalogForRetainedSync(path: string, deps: BundledCatalogDeps): RawCatalog | null {
+  const bundled = isDefaultCatalogPath(path) ? loadBundledCodexCatalog(deps) : null;
   if (bundled) return JSON.parse(JSON.stringify(bundled)) as RawCatalog;
   const active = readCatalog(path);
   if (active && findNativeTemplate(active)) return active;
@@ -735,9 +739,12 @@ function retainedCatalogProcessEvidence(): string {
  * provider await. The exact evidence is compared after K acquisition; a newer
  * catalog/backup/cache or target selection makes this attempt a no-write.
  */
-function readRetainedCatalogSync(config: OcxConfig): RetainedCatalogSyncRead | null {
+function readRetainedCatalogSync(
+  config: OcxConfig,
+  deps: BundledCatalogDeps,
+): RetainedCatalogSyncRead | null {
   const catalogPath = readCodexCatalogPath();
-  const catalog = loadCatalogForRetainedSync(catalogPath);
+  const catalog = loadCatalogForRetainedSync(catalogPath, deps);
   if (!catalog) return null;
 
   // The bundled catalog is a reliable native template on the default path, but it is not the
@@ -783,6 +790,8 @@ function pristineCatalogBytes(read: RetainedCatalogSyncRead): string | null {
 function writeRetainedCatalogSync({
   config,
   goModels,
+  availableNativeSlugs,
+  deps,
   comboOmissions,
   read,
   permit,
@@ -791,7 +800,6 @@ function writeRetainedCatalogSync({
   const { catalogPath, catalog, onDiskCatalog } = read;
   const catalogModelsForMerge = onDiskCatalog?.models ?? catalog.models ?? [];
   const template = findNativeTemplate(catalog);
-
   try {
     // Once-only: preserve the PRISTINE pre-opencodex catalog as the native-priority baseline
     // (later syncs would otherwise overwrite it with featured-modified priorities).
@@ -853,7 +861,7 @@ function writeRetainedCatalogSync({
   const accountBoundEntries = includeAccountBoundNativeOpenAi && accountSelectors.length > 0
     ? buildCatalogEntries(
       template ? JSON.parse(JSON.stringify(template)) : null,
-      NATIVE_OPENAI_MODELS,
+      [...availableNativeSlugs],
       [],
       featured,
       wsEnabled,
@@ -877,8 +885,9 @@ function writeRetainedCatalogSync({
     hasPhysicalComboProvider,
     includeNativeOpenAi,
     accountBoundEntries,
+    availableNativeSlugs,
   );
-  clampCatalogModelsToCodexSupport(catalog.models);
+  clampCatalogModelsToCodexSupport(catalog.models, deps);
 
   replaceActiveCodexCatalog(permit, owningCodexHome, {
     path: catalogPath,
@@ -940,9 +949,12 @@ function currentDisabledModelsForRestore(): Set<string> | null {
   }
 }
 
-export async function syncCatalogModels(config: OcxConfig): Promise<RetainedCatalogSyncResult> {
+export async function syncCatalogModels(
+  config: OcxConfig,
+  deps: BundledCatalogDeps = {},
+): Promise<RetainedCatalogSyncResult> {
   const owningCodexHome = getCodexHome();
-  const preflightRead = readRetainedCatalogSync(config);
+  const preflightRead = readRetainedCatalogSync(config, deps);
   if (preflightRead === null) {
     return {
       added: 0,
@@ -960,13 +972,17 @@ export async function syncCatalogModels(config: OcxConfig): Promise<RetainedCata
   // The persisted runtime selection is covered by the filesystem evidence above
   // rather than by a process epoch; see `retainedCatalogProcessEvidence` for why
   // the in-memory runtime memo cannot be baselined honestly from this path.
-  loadBundledCodexCatalog();
+  loadBundledCodexCatalog(deps);
+  const availableNativeSlugs = nativeOpenAiSlugs(deps);
   const prepared: RetainedCatalogSyncRead = {
     ...preflightRead,
     evidence: retainedCatalogSyncEvidence(config, preflightRead.catalogPath, preflightRead.catalog),
     processEvidence: retainedCatalogProcessEvidence(),
   };
-  const goModels = await gatherRoutedModels(config, { comboOmissions });
+  const goModels = await gatherRoutedModels(config, {
+    comboOmissions,
+    nativeOpenAiSlugs: () => [...availableNativeSlugs],
+  });
   const committed = withCatalogWriteSerialization(owningCodexHome, permit => {
     // Desired state can flip OFF during the provider await above. The catalog
     // evidence revalidation below cannot see that — intent lives in our config,
@@ -987,6 +1003,8 @@ export async function syncCatalogModels(config: OcxConfig): Promise<RetainedCata
     return writeRetainedCatalogSync({
       config,
       goModels,
+      availableNativeSlugs,
+      deps,
       comboOmissions,
       read: current,
       permit,

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   accountBoundNativeDisplayName,
   accountBoundNativeModelSlugs,
@@ -18,6 +18,24 @@ import {
 import { handleManagementAPI } from "../src/server/management-api";
 import { applyMultiAgentMode, applyNativeOpenAiContextOverride } from "../src/codex/catalog/parsing";
 import type { OcxConfig } from "../src/types";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+
+let previousCodexCliPath: string | undefined;
+let isolatedCodexHome: IsolatedCodexHome | null = null;
+
+beforeEach(() => {
+  previousCodexCliPath = process.env.CODEX_CLI_PATH;
+  isolatedCodexHome = installIsolatedCodexHome("ocx-native-toggle-codex-");
+  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
+});
+
+afterEach(() => {
+  if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+  else process.env.CODEX_CLI_PATH = previousCodexCliPath;
+  isolatedCodexHome?.restore();
+  isolatedCodexHome = null;
+});
 
 function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
   return { port: 10100, providers: {}, defaultProvider: "openai", ...overrides } as OcxConfig;

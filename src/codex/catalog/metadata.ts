@@ -32,7 +32,7 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
 import type { RawEntry } from "./parsing";
-import { readCurrentCatalogOrCache, unique } from "./bundled";
+import { readCurrentCatalogOrCache, unique, type BundledCatalogDeps } from "./bundled";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 
 export const NATIVE_OPENAI_MODELS = [
@@ -200,13 +200,13 @@ export function shouldUpgradeToUpstreamEntry(entry: RawEntry): boolean {
     && entry.display_name === entry.slug;
 }
 
-export function nativeOpenAiSlugs(): string[] {
-  const live = listCatalogNativeSlugs();
+export function nativeOpenAiSlugs(deps: BundledCatalogDeps = {}): string[] {
+  const live = listCatalogNativeSlugs(deps);
   return live.length > 0 ? unique([...live, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]) : NATIVE_OPENAI_MODELS;
 }
 
-export function listCatalogNativeSlugs(): string[] {
-  const cat = readCurrentCatalogOrCache();
+export function listCatalogNativeSlugs(deps: BundledCatalogDeps = {}): string[] {
+  const cat = readCurrentCatalogOrCache(deps);
   const models = cat?.models ?? [];
   const live = models.flatMap(entry => {
     const slug = typeof entry.slug === "string" ? entry.slug : "";

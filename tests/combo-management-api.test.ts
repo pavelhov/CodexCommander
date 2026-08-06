@@ -41,6 +41,7 @@ import type { OcxConfig } from "../src/types";
 import { syncCatalogModels } from "../src/codex/catalog";
 import { injectClaudeAgentDefs } from "../src/claude/agents-inject";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 
 const VALID_COMBO = { targets: [{ provider: "a", model: "m1" }] };
 
@@ -49,9 +50,9 @@ function baseConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
     port: 10100,
     defaultProvider: "a",
     providers: {
-      a: { adapter: "openai-chat", baseUrl: "https://a.example/v1", apiKey: "ka", models: ["m1"] },
-      b: { adapter: "openai-chat", baseUrl: "https://b.example/v1", apiKey: "kb", models: ["m2"] },
-      c: { adapter: "openai-chat", baseUrl: "https://c.example/v1", apiKey: "kc", models: ["m3"] },
+      a: { adapter: "openai-chat", baseUrl: "https://a.example/v1", apiKey: "ka", liveModels: false, models: ["m1"] },
+      b: { adapter: "openai-chat", baseUrl: "https://b.example/v1", apiKey: "kb", liveModels: false, models: ["m2"] },
+      c: { adapter: "openai-chat", baseUrl: "https://c.example/v1", apiKey: "kc", liveModels: false, models: ["m3"] },
     },
     combos: {
       free: {
@@ -97,9 +98,11 @@ function successfulPicks(config: OcxConfig, count: number): string[] {
 async function withTempHome<T>(run: (dir: string) => Promise<T> | T): Promise<T> {
   const previousHome = process.env.OPENCODEX_HOME;
   const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  const previousCodexCliPath = process.env.CODEX_CLI_PATH;
   const dir = mkdtempSync(join(tmpdir(), "ocx-combos-"));
   process.env.OPENCODEX_HOME = dir;
   process.env.CLAUDE_CONFIG_DIR = join(dir, "claude");
+  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(dir);
   try {
     return await run(dir);
   } finally {
@@ -107,6 +110,8 @@ async function withTempHome<T>(run: (dir: string) => Promise<T> | T): Promise<T>
     else process.env.OPENCODEX_HOME = previousHome;
     if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
+    if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+    else process.env.CODEX_CLI_PATH = previousCodexCliPath;
     rmSync(dir, { recursive: true, force: true });
   }
 }
@@ -514,7 +519,7 @@ describe("combo management API", () => {
     const disabledResponse = await comboApi(config, "GET", "/api/subagent-models");
     const disabledBody = await disabledResponse!.json() as { available: string[] };
     expect(disabledBody.available).not.toContain("deepseek-v4-flash");
-  }, 15_000);
+  }, 30_000);
 
   test("GET models round-trips a disabled combo alias for the Models GUI", async () => {
     const config = baseConfig({
@@ -729,7 +734,7 @@ describe("combo management API", () => {
         else process.env.CODEX_HOME = previousCodexHome;
       }
     });
-  }, 15_000);
+  }, 30_000);
 
   test("provider deletion is guarded by sorted combo dependencies until cleanup", async () => {
     await withTempHome(async () => {

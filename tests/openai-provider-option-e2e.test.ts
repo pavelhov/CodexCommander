@@ -16,6 +16,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 
 type Capture = {
   url: string;
@@ -118,6 +119,7 @@ describe("OpenAI provider-option integration spine", () => {
     const previousEnv = {
       OPENCODEX_HOME: process.env.OPENCODEX_HOME,
       CODEX_HOME: process.env.CODEX_HOME,
+      CODEX_CLI_PATH: process.env.CODEX_CLI_PATH,
       CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
     };
     const savedFetch = globalThis.fetch;
@@ -154,6 +156,7 @@ describe("OpenAI provider-option integration spine", () => {
       }
       process.env.OPENCODEX_HOME = opencodexHome;
       process.env.CODEX_HOME = codexHome;
+      process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(codexHome);
       process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
       const authPath = join(codexHome, "auth.json");
       writeFileSync(authPath, JSON.stringify({
@@ -284,7 +287,15 @@ describe("OpenAI provider-option integration spine", () => {
       expect(deriveModule.deriveProviderPresets().map(entry => entry.id)).not.toContain("openai-multi");
       expect(sidecar.listOpenAiForwardSidecarCandidates(config).map(row => row.providerName)).toEqual(["openai"]);
 
-      server = serverModule.startServer(0);
+      server = serverModule.startServer(0, {
+        managementDeps: {
+          // This test owns management-state behavior, not physical Codex catalog refreshes.
+          // Keeping both side effects local also prevents fixture mutations from invoking an
+          // installed ChatGPT/Codex runtime or starting background quota work.
+          refreshCodexCatalog: async () => {},
+          primeCodexPoolQuotas: () => {},
+        },
+      });
       loopbackOrigin = new URL(server.url).origin;
       const local = (path: string, init?: RequestInit) => fetch(new URL(path, server!.url), init);
       const post = (path: string, body: unknown, headers: HeadersInit = {}) => local(path, {
@@ -581,6 +592,7 @@ describe("OpenAI provider-option integration spine", () => {
         for (const reset of resets) reset();
         restoreEnv("OPENCODEX_HOME", previousEnv.OPENCODEX_HOME);
         restoreEnv("CODEX_HOME", previousEnv.CODEX_HOME);
+        restoreEnv("CODEX_CLI_PATH", previousEnv.CODEX_CLI_PATH);
         restoreEnv("CLAUDE_CONFIG_DIR", previousEnv.CLAUDE_CONFIG_DIR);
         rmSync(root, { recursive: true, force: true });
         expect(hashTree(realClaudeDir)).toBe(realClaudeHashBefore);

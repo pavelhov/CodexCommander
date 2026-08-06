@@ -5,23 +5,17 @@ import { stripGrokConfig } from "../grok/inject";
 import { resolveCodexHistoryJobTarget, runCodexHistoryJob } from "../codex/history-job";
 import { reconcileJournal } from "../codex/journal";
 import {
-  codexAutoStartEnabled,
   getConfigDir,
   loadConfig,
   readPid,
-  readPidFileValue,
-  readRuntimePort,
   removePid,
-  removePidIfValueIs,
   removeRuntimePort,
-  removeRuntimePortIfPidIs,
   saveConfig,
   writePid,
   writeRuntimePort,
 } from "../config";
 import { collectStatus } from "./status";
 import { dispatchInternalCliCommand, type InternalCliCommand } from "./internal-dispatch";
-import { runTrayProxyRestart, runTrayProxyStart } from "./tray-proxy";
 import { installCrashGuards } from "../lib/crash-guard";
 import { hasHelpFlag, printSubcommandUsage, printUsage, printVersion } from "./help";
 import { findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../server/ports";
@@ -30,7 +24,7 @@ import { createReadinessGate } from "../server/readiness";
 import { parseReadyArgs, runReady, type ReadyArgs } from "./ready";
 import { stopProxy } from "../lib/process-control";
 import { loadServiceTokenFromFile } from "../lib/service-secrets";
-import { diagnoseService, isServiceOwnershipError, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "../service";
+import { serviceCommand, serviceEnvironmentOwnedHere, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "../service";
 import { startupHealthSummary } from "../codex/autostart-health";
 import { drainAndShutdown, isRecyclingForExit, startServer } from "../server";
 import { injectSystemEnv, revertSystemEnv } from "../server/system-env";
@@ -39,7 +33,6 @@ import { uninstallShellHook } from "../server/system-env";
 import { startTokenGuardian } from "../oauth/token-guardian";
 import { startHistoryMigrationGuardian } from "../codex/history-migration-guardian";
 import { maybeAutoRestoreCodexShim } from "./codex-shim-autorestore";
-import { maybeShowStarPrompt } from "./star-prompt";
 import { scheduleCatalogPrewarm } from "./catalog-prewarm";
 import { maybeShowUpdatePrompt } from "../update/notify";
 import { syncModelsToCodex } from "../codex/sync";
@@ -50,6 +43,15 @@ import { removeOwnedConfigState } from "../lib/config-ownership";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { initializeNodeLauncherContext } from "./launcher-context";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
+import { acquireProxyStartLock } from "../server/proxy-start-lock";
+import {
+  ensureProxyLifecycle,
+  ensureMacOSCompanionApp,
+  findLiveProxyForStart,
+  restartProxyLifecycle,
+  stopProxyLifecycle,
+  type ProxyLifecycleLogger,
+} from "./proxy-lifecycle";
 
 initializeNodeLauncherContext();
 const args = process.argv.slice(2);
@@ -88,7 +90,7 @@ if (command === "ready") {
   readyArgs = parsed.args;
 }
 
-maybeAutoRestoreCodexShim(command, args);
+if (command !== "__macos-lifecycle") maybeAutoRestoreCodexShim(command, args);
 
 function parsePortOption(): number | undefined {
   if (args.length === 1) return undefined;
@@ -107,18 +109,6 @@ function parsePortOption(): number | undefined {
   return port;
 }
 
-async function waitForProxy(timeoutMs = 8_000): Promise<LiveProxy | null> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    // Runtime-state-first with identity: finds the proxy even when it started on a
-    // fallback port, and never mistakes a foreign 200 for our proxy.
-    const live = await findLiveProxy();
-    if (live) return live;
-    await new Promise(resolve => setTimeout(resolve, 150));
-  }
-  return null;
-}
-
 /**
  * A Grok fence sync that throws is best-effort by design — it must never block startup.
  * Reporting nothing, however, is what lets a STALE fence survive: `~/.grok/config.toml`
@@ -132,15 +122,6 @@ function grokSyncFailureMessage(err: unknown): string {
   return `Grok Build config sync failed: ${detail}. `
     + "~/.grok/config.toml may still point at a previous proxy port — "
     + "run 'ocx ensure' (or apply from the dashboard's Grok page) to repoint it.";
-}
-
-/** Argv for detached `start`, optionally hard-pinning the listen port. */
-function startArgv(port?: number): string[] {
-  const args = [process.argv[1], "start"];
-  if (typeof port === "number" && Number.isFinite(port) && port > 0 && port <= 65535) {
-    args.push("--port", String(Math.trunc(port)));
-  }
-  return args;
 }
 
 async function chooseListenPort(requestedPort?: number): Promise<number> {
@@ -180,11 +161,6 @@ async function chooseListenPort(requestedPort?: number): Promise<number> {
     }
     return selected;
   } catch (err) {
-    if (err instanceof PortUnavailableError) {
-      console.error(`❌ ${err.message}`);
-      console.error("   Stop whatever holds that port, or change config.port, then retry.");
-      process.exit(1);
-    }
     throw err;
   }
 }
@@ -196,64 +172,100 @@ async function handleStart(options: { block?: boolean } = {}) {
   const serviceToken = loadServiceTokenFromFile(process.env);
   if (serviceToken) process.env.OPENCODEX_API_AUTH_TOKEN = serviceToken;
   const requestedPort = parsePortOption();
-  if (!currentExternalCodexModelProvider()) reconcileJournal();
-  const existingPid = readPid();
-  if (existingPid) {
-    const live = await findLiveProxy();
-    if (live) {
-      console.error(`⚠️  Proxy already running (PID ${live.pid ?? existingPid}, port ${live.port}). Use 'ocx stop' first.`);
-      process.exit(1);
-    }
-    removePid(existingPid);
-  }
 
   // Interactive-only update prompt. Must run BEFORE we bind a port / write a
   // PID: choosing "Update now" installs globally and exits, so we never want a
   // live daemon holding resources while it overwrites its own binary.
   await maybeShowUpdatePrompt();
 
-  // Port selection is check-then-bind: a concurrent `ocx start`/`ensure` can win the port
-  // between the probe and Bun.serve. Soft starts may re-pick; hard-pinned `--port` retries
-  // the same port only (never hop — that was the remaining PR #152 gap).
-  let port = await chooseListenPort(requestedPort);
-  // One private readiness gate for this startServer invocation, captured by the
-  // listener's closure. handleStart owns it and transitions it after the
-  // post-startup sync settles. A second startServer in the same process would
-  // get its own gate and could never reset/mutate this one.
-  const readinessGate = createReadinessGate();
-  let server: ReturnType<typeof startServer>;
-  const localAttestationSecret = createLocalAttestationSecret();
-  for (let attempt = 0; ; attempt++) {
-    try {
-      server = startServer(port, { localAttestationSecret, readinessGate });
-      // Prewarm the live provider model cache as soon as the port is bound so the
-      // first GUI /v1/models (and syncModelsToCodex below) share one discovery flight
-      // instead of racing duplicate upstream /models fetches.
-      scheduleCatalogPrewarm();
-      break;
-    } catch (err) {
-      if (!isAddrInUse(err) || attempt >= 2) throw err;
-      if (requestedPort !== undefined) {
-        console.log(`⚠️  Port ${port} was taken while starting; waiting to retry the same port...`);
-        const hostname = loadConfig().hostname ?? "127.0.0.1";
-        const freed = await waitForPortAvailable(port, hostname, { timeoutMs: 3_000, intervalMs: 50 });
-        if (!freed) {
-          console.error(`❌ Port ${port} stayed busy; refusing to hop to an ephemeral port.`);
-          process.exit(1);
-        }
-        continue;
-      }
-      console.log(`⚠️  Port ${port} was taken while starting; picking another...`);
-      port = await chooseListenPort(requestedPort);
-    }
+  // Hold one cross-process authority from the final identity check through listener
+  // bind and runtime-record publication. Concurrent start/ensure children wait here,
+  // then observe this exact PID instead of choosing another port.
+  let startLock: Awaited<ReturnType<typeof acquireProxyStartLock>>;
+  try {
+    startLock = await acquireProxyStartLock();
+  } catch (error) {
+    console.error(`❌ Could not coordinate proxy startup: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+    return;
   }
-  // A single request's streaming error must never crash the daemon serving every
-  // other Codex session — capture the full stack to crash.log and stay up.
-  installCrashGuards();
-  writePid(process.pid);
 
-  const config = loadConfig();
-  writeRuntimePort({ pid: process.pid, port, hostname: config.hostname, attestationSecret: localAttestationSecret });
+  let port = 0;
+  let server: ReturnType<typeof startServer> | undefined;
+  let config = loadConfig();
+  const readinessGate = createReadinessGate();
+  const localAttestationSecret = createLocalAttestationSecret();
+  let startLockReleased = false;
+  const releaseStartLock = () => {
+    if (startLockReleased) return;
+    startLockReleased = true;
+    startLock.release();
+  };
+  try {
+    if (!currentExternalCodexModelProvider()) reconcileJournal();
+    const existingPid = readPid();
+    // Runtime records remain authoritative for this state home. With an explicit
+    // port and no local records, however, do not let another OpenCodex home's
+    // default-port listener masquerade as this instance and block the requested bind.
+    const live = await findLiveProxyForStart(requestedPort, config);
+    if (live) {
+      console.error(`⚠️  Proxy already running (PID ${live.pid ?? existingPid ?? "unknown"}, port ${live.port}). Use 'ocx stop' first.`);
+      process.exitCode = 1;
+      return;
+    }
+    if (existingPid) removePid(existingPid);
+
+    // The start lock closes the check-then-bind race. Soft starts may still re-pick if
+    // an unrelated process takes the preferred port; hard-pinned starts never hop.
+    port = await chooseListenPort(requestedPort);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        server = startServer(port, { localAttestationSecret, readinessGate });
+        scheduleCatalogPrewarm();
+        break;
+      } catch (err) {
+        if (!isAddrInUse(err) || attempt >= 2) throw err;
+        if (requestedPort !== undefined) {
+          console.log(`⚠️  Port ${port} was taken while starting; waiting to retry the same port...`);
+          const hostname = loadConfig().hostname ?? "127.0.0.1";
+          const freed = await waitForPortAvailable(port, hostname, { timeoutMs: 3_000, intervalMs: 50 });
+          if (!freed) {
+            console.error(`❌ Port ${port} stayed busy; refusing to hop to an ephemeral port.`);
+            process.exitCode = 1;
+            return;
+          }
+          continue;
+        }
+        console.log(`⚠️  Port ${port} was taken while starting; picking another...`);
+        port = await chooseListenPort(requestedPort);
+      }
+    }
+    installCrashGuards();
+    writePid(process.pid);
+    config = loadConfig();
+    writeRuntimePort({ pid: process.pid, port, hostname: config.hostname, attestationSecret: localAttestationSecret });
+  } catch (error) {
+    if (server) {
+      try { await drainAndShutdown(server, 0); } catch { /* startup is already failing */ }
+      removePid(process.pid);
+      removeRuntimePort(process.pid);
+      server = undefined;
+    }
+    if (error instanceof PortUnavailableError) {
+      console.error(`❌ ${error.message}`);
+      console.error("   Stop whatever holds that port, or change config.port, then retry.");
+      process.exitCode = 1;
+      return;
+    }
+    throw error;
+  } finally {
+    // Successful startup keeps authority until initial managed-client publication is
+    // complete. A just-bound Bun listener may not answer health while module startup
+    // is still running; releasing here allowed a contender to spawn a second process.
+    if (!server) releaseStartLock();
+  }
+  if (!server) return;
+  try {
   // No pre-emptive snapshot here. `injectCodexConfig` journals the exact bytes it
   // is about to transform; snapshotting earlier only captured a baseline that could
   // already be stale by the time injection ran (#477).
@@ -338,266 +350,141 @@ async function handleStart(options: { block?: boolean } = {}) {
   process.on("SIGHUP", shutdown);
   process.on("exit", syncCleanup);
 
-  // System-wide env injection AFTER signal handlers are registered (crash safety:
-  // syncCleanup reverts even if injection itself or subsequent startup steps fail).
-  await injectSystemEnv(port, config).catch(() => {});
+  // Let module startup reach its resident wait before doing catalog/provider work.
+  // Bun does not dispatch this just-created server while the entry module is still in
+  // its initial top-level await chain; a detached initializer makes /healthz available
+  // promptly while preserving the same startup work and cleanup handlers.
+  const initialization = (async () => {
+    // A zero-delay timer can win the first event-loop turn and immediately enter a
+    // synchronous launchctl/catalog section. Leave a short, fixed health-publication
+    // window so ensure/Finder callers can validate the listener before that work.
+    await Bun.sleep(250);
 
-  await maybeShowStarPrompt(); // once-only Yes/No GitHub-star prompt on first interactive start
-  // Post-startup sync drives the readiness gate AND the #1046 stale app-server
-  // warning. `syncCodexOnStartIfEnabled` respects the Codex integration toggle
-  // (OFF → no sync) and reports whether anything was written; the readiness gate
-  // observes the real sync outcome (ok/warning) so /readyz never advertises a
-  // half-synced proxy as ready while /healthz stays live.
-  const startupSync = await syncCodexOnStartIfEnabled(port, config, undefined, readinessGate);
-  if (!startupSync.ran) console.log("   Codex integration OFF; startup left Codex native.");
-  // #1046: one warning per startup, after BOTH writes. The server's cache
-  // invalidation happens first and the catalog sync second, so the mtime is only
-  // final here — and neither write site warns on its own, or a boot that hits
-  // both would warn twice.
-  const { consumeStartupCacheInvalidationWrite } = await import("../server");
-  if (consumeStartupCacheInvalidationWrite() || startupSync.catalogWritten || startupSync.cacheSynced) {
-    const { warnIfStaleCodexAppServersAfterStartupWrite } = await import("../codex/app-server-processes");
-    warnIfStaleCodexAppServersAfterStartupWrite({ log: console });
-  }
-  if (!currentExternalCodexModelProvider() && !shouldInjectApiAuthHeader(config) && config.syncResumeHistory !== false) {
-    historyGuardian = startHistoryMigrationGuardian();
-  }
+    // System-wide env injection AFTER signal handlers are registered (crash safety:
+    // syncCleanup reverts even if injection itself or subsequent startup steps fail).
+    await injectSystemEnv(port, config).catch(() => {});
+
+    // Drive readiness from the real startup catalog sync while /healthz remains available.
+    const startupSync = await syncCodexOnStartIfEnabled(port, config, undefined, readinessGate);
+    if (!startupSync.ran) console.log("   Codex integration OFF; startup left Codex native.");
+    // Warn once, after both startup write sites settle, when a stale Codex app-server may
+    // still be holding the previous model catalog.
+    const { consumeStartupCacheInvalidationWrite } = await import("../server");
+    if (consumeStartupCacheInvalidationWrite() || startupSync.catalogWritten || startupSync.cacheSynced) {
+      const { warnIfStaleCodexAppServersAfterStartupWrite } = await import("../codex/app-server-processes");
+      warnIfStaleCodexAppServersAfterStartupWrite({ log: console });
+    }
+    if (!currentExternalCodexModelProvider() && !shouldInjectApiAuthHeader(config) && config.syncResumeHistory !== false) {
+      historyGuardian = startHistoryMigrationGuardian();
+    }
   // Build Desktop 3P alias registry so inbound claude-opus-4-8-{code} aliases (and legacy claude-opus-4-{code}) decode correctly.
-  try {
-    const { fetchAllModels } = await import("../server/management-api");
-    const { visibleNativeSlugs, filterCatalogVisibleModels } = await import("../codex/catalog");
-    const models = filterCatalogVisibleModels(await fetchAllModels(config), config);
-    buildDesktop3pRegistry(
-      [...visibleNativeSlugs(config)],
-      models.map(m => ({ provider: m.provider, id: m.id, contextWindow: m.contextWindow })),
-      config.claudeCode?.desktopProfile,
-    );
-  } catch { /* best-effort — registry rebuilds on first /v1/models call */ }
+    try {
+      const { fetchAllModels } = await import("../server/management-api");
+      const { visibleNativeSlugs, filterCatalogVisibleModels } = await import("../codex/catalog");
+      const models = filterCatalogVisibleModels(await fetchAllModels(config), config);
+      buildDesktop3pRegistry(
+        [...visibleNativeSlugs(config)],
+        models.map(m => ({ provider: m.provider, id: m.id, contextWindow: m.contextWindow })),
+        config.claudeCode?.desktopProfile,
+      );
+    } catch { /* best-effort — registry rebuilds on first /v1/models call */ }
   // Grok Build auto-registration: additive fenced block in ~/.grok/config.toml so an installed
   // grok CLI can pick opencodex-routed models without manual config. No-op when ~/.grok is
   // absent or the bind is non-loopback; removed again by stop/eject/uninstall/shutdown.
   // Deliberately a SIBLING of the Desktop-3P block above: nesting it there meant a catalog
   // failure skipped the fence entirely, even though syncGrokConfig handles that case itself.
-  //
-  // Gated on the persisted switch: without this, turning Grok off lasted exactly
-  // one restart, because the toggle removed the fence and start wrote it back.
-  if (shouldSyncGrokOnStart(config)) try {
-    const { syncGrokConfig } = await import("../grok/sync");
-    const r = await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {});
-    if (r.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
-    else if (!r.ok) console.error(`⚠️  ${r.message}`);
-  } catch (err) {
-    // Best-effort: grok integration must never block startup. But swallowing the error
-    // silently is how a stale fence survives unnoticed — ~/.grok/config.toml keeps
-    // pointing at whatever port the LAST successful sync wrote, and if that listener is
-    // gone every grok turn retries against a refused connection with nothing in our log
-    // to explain it. Name the failure and the one command that repairs it.
-    console.error(`⚠️  ${grokSyncFailureMessage(err)}`);
-  }
+    if (shouldSyncGrokOnStart(config)) try {
+      const { syncGrokConfig } = await import("../grok/sync");
+      const r = await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {});
+      if (r.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
+      else if (!r.ok) console.error(`⚠️  ${r.message}`);
+    } catch (err) {
+      // Best-effort: grok integration must never block startup. But swallowing the error
+      // silently is how a stale fence survives unnoticed — ~/.grok/config.toml keeps
+      // pointing at whatever port the LAST successful sync wrote, and if that listener is
+      // gone every grok turn retries against a refused connection with nothing in our log
+      // to explain it. Name the failure and the one command that repairs it.
+      console.error(`⚠️  ${grokSyncFailureMessage(err)}`);
+    }
+    await ensureMacOSCompanionApp().catch(() => false);
+  })().catch(async error => {
+    try { await drainAndShutdown(server, 0); } catch { /* startup is already failing */ }
+    removePid(process.pid);
+    removeRuntimePort(process.pid);
+    throw error;
+  }).finally(releaseStartLock);
+
   if (options.block ?? true) {
+    void initialization.catch(error => {
+      console.error(`❌ OpenCodex startup initialization failed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    });
     setInterval(() => {}, 60_000);
     await new Promise<void>(() => {});
   }
+  await initialization;
+  } catch (error) {
+    try { await drainAndShutdown(server, 0); } catch { /* startup is already failing */ }
+    removePid(process.pid);
+    removeRuntimePort(process.pid);
+    throw error;
+  } finally {
+    releaseStartLock();
+  }
 }
 
+const lifecycleLogger: ProxyLifecycleLogger = {
+  info: message => console.log(message),
+  warn: message => console.error(`⚠️  ${message}`),
+  error: message => console.error(`❌ ${message}`),
+};
+
 async function handleEnsure() {
-  if (!currentExternalCodexModelProvider()) reconcileJournal();
-  const config = loadConfig();
-  if (!codexAutoStartEnabled(config)) {
-    console.log("Codex autostart is disabled.");
+  const result = await ensureProxyLifecycle({
+    honorAutoStart: true,
+    ensureCompanion: true,
+    logger: lifecycleLogger,
+  });
+  if (result.state === "disabled") {
+    console.log(result.message);
     return;
   }
-  const live = await findLiveProxy();
-  if (live) {
-      const synced = await syncModelsToCodex(live.port).catch(e => {
-        console.error(`⚠️  Model sync skipped: ${e instanceof Error ? e.message : String(e)}`);
-        return null;
-      });
-      if (synced?.status === "skipped") console.log("   Codex integration OFF; startup left Codex native.");
-      // Ensure env file exists for already-running proxy (may have been deleted or pre-dates this feature).
-      await injectSystemEnv(live.port, config).catch(() => {});
-      // Refresh the Grok Build fence too (same contract as start). live.hostname is the
-      // hostname the running proxy actually bound — config.hostname may have drifted.
-      try {
-        const { syncGrokConfig } = await import("../grok/sync");
-        const g = await syncGrokConfig(live.port, config, live.hostname ? { hostname: live.hostname } : {});
-        if (g.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
-        else if (!g.ok) console.error(`⚠️  ${g.message}`);
-      } catch (err) { console.error(`⚠️  ${grokSyncFailureMessage(err)}`); }
-      console.log(`✅ Proxy running on port ${live.port}`);
-      return;
-    }
-
-  const pinPort = config.port ?? 10100;
-  const child = spawn(process.execPath, startArgv(pinPort > 0 ? pinPort : undefined), {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
-    env: withProcessRuntimeProvenance({ ...process.env, OCX_SERVICE: "1" }),
-  });
-  child.unref();
-
-  const port = (await waitForProxy())?.port;
-  if (!port) {
-    console.error("❌ Proxy did not become healthy after starting.");
-    process.exit(1);
+  if (result.ok) console.log(`✅ Proxy running on port ${result.port}`);
+  else {
+    console.error(`❌ ${result.message}`);
+    process.exitCode = 1;
   }
-  // Deterministic fence guarantee: the spawned child injects late in its own startup, but
-  // this parent returns as soon as /healthz responds — inject here too (idempotent block
-  // replace) so `ocx ensure` never returns without the Grok fence in place.
-  try {
-    const { syncGrokConfig } = await import("../grok/sync");
-    const g = await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {});
-    if (g.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
-    else if (!g.ok) console.error(`⚠️  ${g.message}`);
-  } catch (err) { console.error(`⚠️  ${grokSyncFailureMessage(err)}`); }
-  // Always sync the LIVE port: after a fallback-port start, config.port still names the
-  // busy preferred port — syncing that would point Codex at a dead listener.
-  const synced = await syncModelsToCodex(port).catch(e => {
-    console.error(`⚠️  Model sync skipped: ${e instanceof Error ? e.message : String(e)}`);
-    return null;
-  });
-  if (synced?.status === "skipped") console.log("   Codex integration OFF; startup left Codex native.");
-  console.log(`✅ Proxy running on port ${port}`);
 }
 
 /** Fixed tray action: start the proxy without depending on codexAutoStart. */
 async function handleTrayProxyStart(): Promise<void> {
-  const ok = await runTrayProxyStart({
-    findLive: findLiveProxy,
-    diagnoseService: () => {
-      const service = diagnoseService();
-      return { installed: service.installed, startable: serviceStartableFromTray(service), summary: service.summary };
-    },
-    startService: () => serviceCommand("start"),
-    startDirect: () => {
-      const config = loadConfig();
-      const port = (config.port ?? 10100) > 0 ? (config.port ?? 10100) : 10100;
-      const child = spawn(process.execPath, startArgv(port), {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-        env: withProcessRuntimeProvenance({ ...process.env, OCX_SERVICE: "1" }),
-      });
-      child.unref();
-    },
-    waitForProxy,
-    info: message => console.log(message),
-    error: message => console.error(message),
+  const result = await ensureProxyLifecycle({
+    honorAutoStart: false,
+    ensureCompanion: false,
+    logger: lifecycleLogger,
   });
-  if (!ok) process.exitCode = 1;
+  if (result.ok) console.log(`Proxy running on port ${result.port}.`);
+  else {
+    console.error(result.message);
+    process.exitCode = 1;
+  }
 }
 
 async function handleTrayProxyRestart(): Promise<void> {
-  const ok = await runTrayProxyRestart({
-    stop: async () => {
-      await handleStop();
-      return !process.exitCode || process.exitCode === 0;
-    },
-    start: async () => {
-      await handleTrayProxyStart();
-      return !process.exitCode || process.exitCode === 0;
-    },
+  const result = await restartProxyLifecycle({
+    ensureCompanion: false,
+    logger: lifecycleLogger,
   });
-  if (!ok) process.exitCode = 1;
+  if (!result.ok) {
+    console.error(result.message);
+    process.exitCode = 1;
+  }
 }
 
 async function handleStop() {
-  let stopFailed = false;
-  let stoppedService = false;
-  // An ownership mismatch means the service manager was never even contacted: the installed
-  // service is still live and will respawn the proxy. Tearing down SHARED state in that
-  // situation (native Codex config, the Grok fence) removes config out from under a running
-  // service — the exact failure this flag prevents. A plain stop failure is different: we
-  // tried, so local teardown still proceeds.
-  let ownershipBlocked = false;
-  try {
-    stoppedService = stopServiceIfInstalled();
-    if (stoppedService) console.log("🛑 Service manager stopped (won't respawn).");
-  } catch (err) {
-    if (isServiceOwnershipError(err)) {
-      ownershipBlocked = true;
-      stopFailed = true;
-      console.error(`❌ ${err.message}`);
-      console.error("   Skipping shared teardown (native Codex restore, Grok config): the installed service is still running.");
-    } else {
-      console.error(`⚠️  Service manager stop failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  const pid = readPid();
-  if (pid) {
-    try {
-      // Graceful-first (management-API drain) — on Windows this is the only path where
-      // the proxy's shutdown handlers actually run; taskkill /F is the fallback inside.
-      await stopProxy(pid);
-      console.log(`✅ Proxy (PID ${pid}) stopped.`);
-      removePid(pid);
-      removeRuntimePort(pid);
-    } catch (err) {
-      stopFailed = true;
-      console.error(`❌ Failed to stop proxy (PID ${pid}).`);
-      // stopProxy throws with the reason — an ownership refusal (409) carries the
-      // remediation ("run the stop from that home"). Swallowing it leaves the operator
-      // with a bare failure and a manual `kill` as the obvious next move, which is the
-      // exact teardown the refusal exists to prevent.
-      const detail = err instanceof Error ? err.message : String(err);
-      if (detail) console.error(`   ${detail}`);
-    }
-  } else {
-    // Snapshot the stale on-disk state BEFORE the async probe: a concurrent `ocx start`
-    // can write fresh records mid-probe, and the purge below must never delete those.
-    const stalePidValue = readPidFileValue();
-    const staleRuntimePid = readRuntimePort()?.pid ?? null;
-    // Orphan recovery: a live proxy can outlive its pid file (crash, manual delete,
-    // corrupt file). Identity-checked liveness still finds it via the runtime record.
-    const live = await findLiveProxy();
-    if (live?.pid) {
-      try {
-        await stopProxy(live.pid);
-        console.log(`✅ Proxy (PID ${live.pid}) stopped.`);
-      } catch (err) {
-        stopFailed = true;
-        console.error(`❌ Failed to stop proxy (PID ${live.pid}).`);
-        const detail = err instanceof Error ? err.message : String(err);
-        if (detail) console.error(`   ${detail}`);
-      }
-    } else if (!stoppedService) {
-      console.log("No running proxy found.");
-    }
-    if (!stopFailed) {
-      // `readPid() === null` means the snapshotted pid file was absent, invalid, dead, or
-      // not ours — stale by definition. Purge (guarded by the snapshot) so `ocx update`'s
-      // stop gate can't wedge on it.
-      removePidIfValueIs(stalePidValue);
-      removeRuntimePortIfPidIs(staleRuntimePid);
-    }
-  }
-  if (!ownershipBlocked) {
-    const r = await restoreNativeCodexAsync();
-    if (r.success) console.log(`↩️  ${r.message}`);
-    else {
-      stopFailed = true;
-      console.error(`⚠️  ${r.message}`);
-    }
-  }
-  // revertSystemEnv is NOT gated: it carries its own ownership check and concerns launchctl
-  // user env, not CODEX_HOME. Safety net for when the daemon's syncCleanup didn't run (SIGKILL).
-  try { revertSystemEnv(); } catch { /* best-effort */ }
-  if (!ownershipBlocked) {
-    // Same safety net for the Grok Build managed block (marker-owned, idempotent).
-    try {
-      const g = stripGrokConfig();
-      if (g.changed) console.log(`↩️  ${g.message}`);
-      // A refused strip (e.g. orphaned marker) leaves the fence pointing at a dead proxy —
-      // reporting success there hides a broken end state.
-      else if (!g.ok) { stopFailed = true; console.error(`⚠️  ${g.message}`); }
-    } catch { /* best-effort */ }
-  }
-  // Set the code rather than exiting inline: `restart` and the tray coordinator call this
-  // function and need it to RETURN so they can decide what to do next.
-  if (stopFailed) process.exitCode = 1;
-  return !stopFailed;
+  const result = await stopProxyLifecycle({ logger: lifecycleLogger });
+  if (!result.ok) process.exitCode = 1;
+  return result.ok;
 }
 
 async function handleUninstall() {
@@ -995,28 +882,26 @@ switch (command) {
   case "gui": {
     const cfg = await import("../config");
     const config = cfg.loadConfig();
-    // Identity-checked liveness (not the pid file + a fixed sleep): finds a fallback-port
-    // proxy and waits until the spawned one actually answers before opening the browser.
-    let live = await findLiveProxy();
+    const ensured = await ensureProxyLifecycle({
+      honorAutoStart: false,
+      ensureCompanion: true,
+      logger: lifecycleLogger,
+    });
+    if (!ensured.ok || !ensured.port) {
+      console.error("❌ Proxy did not become healthy after starting. Not opening the GUI.");
+      process.exitCode = 1;
+      break;
+    }
+    const live = await findLiveProxy();
     if (!live) {
-      console.log("Proxy not running. Starting...");
-      const child = spawn(process.execPath, startArgv((config.port ?? 10100) > 0 ? (config.port ?? 10100) : undefined), {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-        env: withProcessRuntimeProvenance(process.env),
-      });
-      child.unref();
-      live = await waitForProxy();
-      if (!live) {
-        console.error("❌ Proxy did not become healthy after starting. Not opening the GUI.");
-        process.exit(1);
-      }
+      console.error("❌ Proxy identity disappeared before the GUI could open.");
+      process.exitCode = 1;
+      break;
     }
     // Open the host the proxy actually binds — `localhost` only answers for
     // loopback/wildcard binds, not a concrete LAN/IPv6 hostname.
     const guiHost = probeHostname(live?.hostname ?? config.hostname);
-    const guiUrl = `http://${guiHost === "127.0.0.1" ? "localhost" : guiHost}:${live?.port ?? config.port}`;
+    const guiUrl = `http://${guiHost === "127.0.0.1" ? "localhost" : guiHost}:${live.port}`;
     console.log(`Opening ${guiUrl}`);
     const { openUrl } = await import("../lib/open-url");
     openUrl(guiUrl);
@@ -1072,6 +957,11 @@ switch (command) {
     await refreshVersionCache(channel);
     break;
   }
+  case "__macos-lifecycle": {
+    const { runMacOSLifecycleHelper } = await import("./macos-lifecycle");
+    process.exitCode = await runMacOSLifecycleHelper(args.slice(1));
+    break;
+  }
   case "__tray-start":
   case "__tray-restart":
   case "__startup-health":
@@ -1097,10 +987,15 @@ switch (command) {
     break;
   }
   case "restart": {
-    // A failed stop must not be followed by a re-inject: with a foreign service still running
-    // (ownership mismatch) we would rewrite shared config we just declined to touch.
-    if (await handleStop()) await handleEnsure();
-    else console.error("↩️  Restart aborted: the proxy was not stopped cleanly.");
+    const result = await restartProxyLifecycle({
+      ensureCompanion: true,
+      logger: lifecycleLogger,
+    });
+    if (result.ok) console.log(`✅ Proxy restarted on port ${result.port}.`);
+    else {
+      console.error(`↩️  Restart aborted: ${result.message}`);
+      process.exitCode = 1;
+    }
     break;
   }
   case "health": {

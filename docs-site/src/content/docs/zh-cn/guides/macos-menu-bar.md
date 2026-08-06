@@ -27,20 +27,23 @@ Control 键点按该应用，选择**打开**，然后确认**打开**。本地�
 - **智能体活动** — 当前活动数量以及实时模型/提供商行。只有当 OpenCodex 能够根据请求元数据
   证明其活动父项时，派生的子项才会嵌套显示；否则，它会显示为独立的子智能体。伴侣绝不会
   虚构排队中、审阅中、受速率限制或已完成的历史记录。
-- **提供商配额** — OpenCodex 返回的每个真实 5 小时、每周、每月或提供商特定的额度窗口，
-  包括重置时间。缺失数据会显示为不可用，绝不会显示为零使用量或无限容量。
+- **提供商配额** — 在可用时显示提供商报告的 5 小时、每周、每月或特定额度窗口及重置时间。
+  OpenCode Go 显示公开上限和本地观测值，不会编造当前余额。缺失数据会显示为不可用，绝不会
+  显示为零使用量或无限容量。
 - **Dashboard 和 Logs** — 在默认浏览器中打开对应的本地控制面板视图。
 - **管理** — 打开所选提供商的 Accounts 或 API Keys 标签页。OAuth、API 密钥输入、重新认证、
   账户切换和提供商配置仍在控制面板中进行。
+- **停止** — 始终请求确认，会中断活动客户端和子智能体请求、恢复原生 Codex，并让菜单栏应用保持打开。
 - **重启** — 请求确认，允许代理用最多 60 秒排空活动请求，然后重新连接到替代进程。接受重启
   请求不会被显示为完成；应用会等待新进程通过身份检查。
+- **Quit** — 只关闭伴侣 UI；不会停止代理、服务或客户端路由。
 
 如果 ChatGPT 的配额报告可用，ChatGPT 会排在最前并默认展开。Kimi 和 Grok 显示为折叠摘要。
 **查看所有提供商**会打开完整的 Providers 工作区。
 
 ## 身份验证与隐私
 
-伴侣不会创建另一套登录系统，也不使用 macOS Keychain。
+伴侣不会创建另一套登录系统，也不会迁移到 macOS Keychain 或从中读取提供商凭据。
 
 当前 OpenCodex 版本会在 <code>~/.opencodex/admin-api-token</code>（或
 <code>$OPENCODEX_HOME/admin-api-token</code>）生成独立的管理凭据。伴侣通过经过验证且不跟随
@@ -72,13 +75,18 @@ URL。
 需要 macOS 13 或更高版本以及 Xcode Command Line Tools。构建 Intel + Apple silicon 通用
 发行版需要完整的 Xcode。
 
-    git clone https://github.com/pavelhov/opencodex.git
-    cd opencodex
-    npm run test:macos
-    npm run build:macos
-    open dist/macos/OpenCodex.app
+```bash
+git clone https://github.com/pavelhov/opencodex.git
+cd opencodex
+bun install
+bun run test:macos
+bun run build:macos
+open dist/macos/OpenCodex.app
+```
 
-这两个脚本会直接调用 Swift，因此无需安装 npm 依赖。
+源码应用的唯一位置是 `dist/macos/OpenCodex.app`。它使用同一检出中的 Bun 和 CLI，因此需要先运行
+`bun install`。开发期间请保留在此位置，不要复制到 Application Support。双击会尝试确保代理运行；
+即使离线或启动失败，应用也不会关闭，面板和 **Start** 控件仍可使用。
 
 ## 故障排除
 

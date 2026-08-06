@@ -152,7 +152,10 @@ describe("Codex catalog refresh", () => {
       writeFileSync(catalogPath, nativeCatalogFixture("gpt-5.6-sol"), "utf8");
       const before = readFileSync(catalogPath, "utf8");
 
-      const result = await syncCatalogModels(config);
+      const result = await syncCatalogModels(config, {
+        commandCandidates: () => ["codex-fixture"],
+        execFileSync: () => nativeCatalogFixture("gpt-5.5"),
+      });
       const after = readFileSync(catalogPath, "utf8");
       const rewritten = JSON.parse(after);
 

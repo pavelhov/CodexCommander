@@ -80,6 +80,18 @@ reorder up to five native or routed models. The dashboard can also set one prefe
 and reasoning effort. See [Sub-agent Surface](/guides/sub-agent-surface/) to choose v1/base/v2 and
 understand when guidance, native defaults, and fallback apply.
 
+For a headless roster, use the same live proxy policy:
+
+```bash
+ocx agent subagents set anthropic/claude-opus-5,gpt-5.6-sol
+ocx v2 mode default
+```
+
+The dashboard's **Use as native Codex sub-agent default** is a separate, default-off opt-in. When
+OpenCodex owns the active Codex routing, the next sync or restart writes only its marker-owned
+`[agents]` defaults for newly created tasks; it does not cause delegation or overwrite user-owned
+defaults.
+
 ## Logging in instead of pasting a key
 
 Some providers support real account login. OpenCodex-owned OAuth credentials auto-refresh; linked

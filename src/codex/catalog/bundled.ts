@@ -471,21 +471,21 @@ export function materializeBundledCodexCatalog(path: string, deps: BundledCatalo
   return JSON.parse(JSON.stringify(catalog)) as RawCatalog;
 }
 
-export function loadCatalogForSync(path: string): RawCatalog | null {
-  const bundled = isDefaultCatalogPath(path) ? loadBundledCodexCatalog() : null;
+export function loadCatalogForSync(path: string, deps: BundledCatalogDeps = {}): RawCatalog | null {
+  const bundled = isDefaultCatalogPath(path) ? loadBundledCodexCatalog(deps) : null;
   if (bundled) return JSON.parse(JSON.stringify(bundled)) as RawCatalog;
   const catalog = readCatalog(path);
   if (catalog && findNativeTemplate(catalog)) return catalog;
   return readCatalog(catalogBackupPathFor(path))
     ?? (isDefaultCatalogPath(path) ? readCatalog(legacyCatalogBackupPath()) : null)
     ?? readCatalog(activeCodexModelsCachePath())
-    ?? materializeBundledCodexCatalog(path)
+    ?? materializeBundledCodexCatalog(path, deps)
     ?? catalog;
 }
 
-export function readCurrentCatalogOrCache(): RawCatalog | null {
+export function readCurrentCatalogOrCache(deps: BundledCatalogDeps = {}): RawCatalog | null {
   const path = readCodexCatalogPath();
-  const bundled = isDefaultCatalogPath(path) ? loadBundledCodexCatalog() : null;
+  const bundled = isDefaultCatalogPath(path) ? loadBundledCodexCatalog(deps) : null;
   if (bundled) return JSON.parse(JSON.stringify(bundled)) as RawCatalog;
   return readCatalog(path) ?? readCatalog(activeCodexModelsCachePath());
 }

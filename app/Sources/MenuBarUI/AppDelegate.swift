@@ -13,6 +13,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pollTask: Task<Void, Never>?
     private var escapeMonitor: Any?
     private var restartInFlight = false
+    private var lifecycleInFlight = false
 
     public override init() { super.init() }
 
@@ -58,7 +59,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.onDashboard = { [weak self] in self?.openDashboard() }
         controller.onLogs = { [weak self] in self?.openLogs() }
         controller.onRefresh = { [weak self] in self?.refreshNow() }
+        controller.onStart = { [weak self] in self?.startProxy() }
+        controller.onStop = { [weak self] in self?.stopProxy() }
         controller.onRestart = { [weak self] in self?.restartProxy() }
+        controller.onQuit = { NSApp.terminate(nil) }
         controller.onManageProvider = { [weak self] provider in
             self?.openProvider(provider)
         }
@@ -77,6 +81,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             await MainActor.run { (NSApp.delegate as? AppDelegate)?.startPolling() }
         }
+        ensureProxyOnLaunch()
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
@@ -111,8 +116,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.button?.image = StatusIcon.image(for: snapshot.state)
         statusItem?.button?.toolTip = "OpenCodex — \(snapshot.state.title) (\(snapshot.endpoint.display))"
         controller.apply(snapshot)
-        if !restartInFlight {
+        if !restartInFlight && !lifecycleInFlight {
             controller.setRestartEnabled(snapshot.state.isRunning)
+            controller.setLifecycleControlsEnabled(true)
         }
     }
 
@@ -182,10 +188,96 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Finder launch is the app-level start contract. It uses the fixed TS helper and
+    /// keeps the menu app alive even when startup fails, so Start remains available.
+    private func ensureProxyOnLaunch() {
+        guard !lifecycleInFlight, !restartInFlight else { return }
+        lifecycleInFlight = true
+        controller.setLifecycleControlsEnabled(false)
+        Task { [actions, coordinator] in
+            let outcome = await actions?.ensure() ?? .failed("Lifecycle control is unavailable.")
+            await coordinator?.forceRefresh()
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.lifecycleInFlight = false
+                if case .failed(let message) = outcome {
+                    self.controller.showResult(message, isError: true)
+                }
+                self.controller.setLifecycleControlsEnabled(true)
+            }
+        }
+    }
+
+    private func startProxy() {
+        guard !lifecycleInFlight, !restartInFlight else { return }
+        lifecycleInFlight = true
+        controller.setLifecycleControlsEnabled(false)
+        controller.showResult("Starting OpenCodex…", isError: false)
+        Task { [actions, coordinator] in
+            let outcome = await actions?.start() ?? .failed("Lifecycle control is unavailable.")
+            await coordinator?.forceRefresh()
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.lifecycleInFlight = false
+                switch outcome {
+                case .running:
+                    self.controller.showResult("OpenCodex started.", isError: false)
+                case .stopped:
+                    self.controller.showResult("OpenCodex did not start.", isError: true)
+                case .failed(let message):
+                    self.controller.showResult(message, isError: true)
+                }
+                self.controller.setLifecycleControlsEnabled(true)
+            }
+        }
+    }
+
+    private func stopProxy() {
+        guard !lifecycleInFlight, !restartInFlight else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Stop the OpenCodex proxy?"
+        alert.informativeText =
+            "Active Codex, Claude, OpenCode, and subagent requests will be interrupted. The menu bar app will stay open."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Stop Proxy")
+        alert.addButton(withTitle: "Cancel")
+
+        panel.isPresentingModal = true
+        NSApp.activate(ignoringOtherApps: true)
+        let confirmed = alert.runModal() == .alertFirstButtonReturn
+        panel.isPresentingModal = false
+        guard confirmed else {
+            panel.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        lifecycleInFlight = true
+        controller.setLifecycleControlsEnabled(false)
+        controller.showResult("Stopping OpenCodex…", isError: false)
+        Task { [actions, coordinator] in
+            let outcome = await actions?.stop() ?? .failed("Lifecycle control is unavailable.")
+            await coordinator?.forceRefresh()
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.lifecycleInFlight = false
+                switch outcome {
+                case .stopped:
+                    self.controller.showResult("Proxy stopped. The menu app is still running.", isError: false)
+                case .running:
+                    self.controller.showResult("OpenCodex is still running.", isError: true)
+                case .failed(let message):
+                    self.controller.showResult(message, isError: true)
+                }
+                self.controller.setLifecycleControlsEnabled(true)
+            }
+        }
+    }
+
     /// Restart is destructive to in-flight work, so it always confirms first and only
     /// reports success after ActionCoordinator confirms a replacement process.
     private func restartProxy() {
-        guard !restartInFlight else { return }
+        guard !restartInFlight, !lifecycleInFlight else { return }
 
         let alert = NSAlert()
         alert.messageText = "Restart OpenCodex?"
@@ -207,6 +299,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         restartInFlight = true
         controller.setRestartEnabled(false)
+        controller.setLifecycleControlsEnabled(false)
         controller.showResult("Restart accepted…", isError: false)
 
         Task { [actions, coordinator] in
@@ -225,6 +318,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 } else {
                     self?.controller.setRestartEnabled(true)
                 }
+                self?.controller.setLifecycleControlsEnabled(true)
             }
         }
     }

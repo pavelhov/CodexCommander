@@ -1,9 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claimOwnedServiceHome } from "./helpers/owned-service-home";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+
+setDefaultTimeout(30_000);
 
 const repoRoot = join(import.meta.dir, "..");
 
@@ -116,10 +119,18 @@ describe("ocx restore back", () => {
         defaultProvider: "fixture",
         checkForUpdates: false,
       }), "utf8");
+      const codexCliPath = createCodexRuntimeFixture(ocxHome);
 
       const result = spawnSync(process.execPath, ["run", "src/cli/index.ts", "sync"], {
         cwd: repoRoot,
-        env: { ...process.env, ...ownedEnvironment(codexHome, ocxHome), CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome, CI: "1" },
+        env: {
+          ...process.env,
+          ...ownedEnvironment(codexHome, ocxHome),
+          CODEX_HOME: codexHome,
+          OPENCODEX_HOME: ocxHome,
+          CODEX_CLI_PATH: codexCliPath,
+          CI: "1",
+        },
         encoding: "utf8",
       });
 
