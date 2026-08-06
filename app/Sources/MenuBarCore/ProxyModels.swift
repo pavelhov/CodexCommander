@@ -17,6 +17,7 @@ public struct StartupHealth: Decodable, Equatable, Sendable {
     public let serviceInstalled: Bool?
     public let serviceEnabled: Bool?
     public let rebootSafe: Bool?
+    public let diagnosticStale: Bool?
     public let recommendedCommand: String?
 
     public init(
@@ -28,6 +29,7 @@ public struct StartupHealth: Decodable, Equatable, Sendable {
         serviceInstalled: Bool? = nil,
         serviceEnabled: Bool? = nil,
         rebootSafe: Bool? = nil,
+        diagnosticStale: Bool? = nil,
         recommendedCommand: String? = nil
     ) {
         self.status = status
@@ -38,12 +40,18 @@ public struct StartupHealth: Decodable, Equatable, Sendable {
         self.serviceInstalled = serviceInstalled
         self.serviceEnabled = serviceEnabled
         self.rebootSafe = rebootSafe
+        self.diagnosticStale = diagnosticStale
         self.recommendedCommand = recommendedCommand
     }
 
     /// `status` is treated as an open string: unknown values degrade to a neutral state
     /// rather than crashing or being coerced into "healthy".
     public var isProtected: Bool { status == "protected" }
+
+    /// The server returns its conservative fallback immediately while a service-manager
+    /// probe refreshes in the background. That is a revalidation signal, not by itself
+    /// evidence that protection was lost.
+    public var isDiagnosticStale: Bool { diagnosticStale == true }
 
     /// True when a supervisor owns the process lifecycle. Used only for the qualifier
     /// line — it deliberately does not gate any action, because `/api/stop` stops the

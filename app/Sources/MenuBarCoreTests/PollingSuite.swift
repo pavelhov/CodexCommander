@@ -68,6 +68,86 @@ enum PollingSuite {
             t.equal(sync { await coordinator.currentInterval }, PollingCoordinator.backoffInterval)
         }
 
+        t.test("polling: stale startup health stays neutral until revalidation completes") {
+            StubProtocol.reset(
+                healthResponses(#"{"status":"at-risk","diagnosticStale":true}"#)
+                    + healthResponses(#"{"status":"protected","diagnosticStale":false}"#)
+            )
+            let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
+            let client = ProxyClient(
+                endpoint: endpoint,
+                session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
+                credentials: StaticCredentialStore("admin-secret")
+            )
+            let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
+
+            sync { await coordinator.refresh() }
+            t.equal(sync { await coordinator.current }.state, .loading)
+            t.equal(
+                sync { await coordinator.currentInterval },
+                PollingCoordinator.revalidationInterval
+            )
+
+            sync { await coordinator.refresh() }
+            t.equal(sync { await coordinator.current }.state.isRunning, true)
+            t.equal(sync { await coordinator.currentInterval }, PollingCoordinator.closedInterval)
+        }
+
+        t.test("polling: stale revalidation preserves the last known protected state") {
+            StubProtocol.reset(
+                healthResponses(#"{"status":"protected","diagnosticStale":false}"#)
+                    + healthResponses(#"{"status":"at-risk","diagnosticStale":true}"#)
+                    + healthResponses(#"{"status":"protected","diagnosticStale":false}"#)
+            )
+            let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
+            let client = ProxyClient(
+                endpoint: endpoint,
+                session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
+                credentials: StaticCredentialStore("admin-secret")
+            )
+            let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
+
+            sync { await coordinator.refresh() }
+            let protected = sync { await coordinator.current }.state
+            sync { await coordinator.refresh() }
+            t.equal(sync { await coordinator.current }.state, protected)
+            t.equal(
+                sync { await coordinator.currentInterval },
+                PollingCoordinator.revalidationInterval
+            )
+
+            sync { await coordinator.refresh() }
+            t.equal(sync { await coordinator.current }.state.isRunning, true)
+            t.equal(sync { await coordinator.currentInterval }, PollingCoordinator.closedInterval)
+        }
+
+        t.test("polling: persistently stale diagnostics eventually surface at-risk") {
+            let stale = healthResponses(#"{"status":"at-risk","diagnosticStale":true}"#)
+            StubProtocol.reset(
+                Array(
+                    repeating: stale,
+                    count: PollingCoordinator.maxDiagnosticStaleRefreshes + 1
+                ).flatMap { $0 }
+            )
+            let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
+            let client = ProxyClient(
+                endpoint: endpoint,
+                session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
+                credentials: StaticCredentialStore("admin-secret")
+            )
+            let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
+
+            for _ in 0...PollingCoordinator.maxDiagnosticStaleRefreshes {
+                sync { await coordinator.refresh() }
+            }
+            let snapshot = sync { await coordinator.current }
+            t.equal(snapshot.state, .running(StartupHealth(
+                status: "at-risk",
+                diagnosticStale: true
+            )))
+            t.equal(sync { await coordinator.currentInterval }, PollingCoordinator.closedInterval)
+        }
+
         t.test("polling: activity failures do not erase successful quota data") {
             var responses = openResponses()
             // The third logical response is activity's management response (index 3
@@ -102,13 +182,14 @@ enum PollingSuite {
           {"provider":"openai","label":"ChatGPT","quota":{"fiveHourPercent":38,"weeklyPercent":22}},
           {"provider":"kimi","label":"Kimi","quota":{"weeklyPercent":41}}]}
         """
-        func pair(_ body: String) -> [StubProtocol.Response] {
-            [.init(status: 200, body: identity), .init(status: 200, body: body)]
-        }
-        return pair(#"{"status":"protected"}"#)
-            + pair(activity)
-            + pair(#"[{"name":"openai"},{"name":"kimi"}]"#)
-            + pair(quotas)
+        return healthResponses(#"{"status":"protected"}"#)
+            + healthResponses(activity)
+            + healthResponses(#"[{"name":"openai"},{"name":"kimi"}]"#)
+            + healthResponses(quotas)
+    }
+
+    private static func healthResponses(_ body: String) -> [StubProtocol.Response] {
+        [.init(status: 200, body: identity), .init(status: 200, body: body)]
     }
 
     private static func sync<T>(_ operation: @escaping () async -> T) -> T {
