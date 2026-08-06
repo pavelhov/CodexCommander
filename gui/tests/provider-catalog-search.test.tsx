@@ -12,7 +12,7 @@ import type { CatalogPreset } from "../src/components/provider-catalog/provider-
  * the Accounts tab it filtered nothing at all, because the rows rendered there
  * are account login rows, not presets. A query now searches every tier (plus
  * the login rows) at once and renders grouped, tier-labelled results, so a
- * Paid provider like opencode go surfaces even when the user typed from the
+ * A Paid provider like OpenCode Go surfaces even when the user typed from the
  * Accounts tab. No-query tab behavior must stay exactly as before.
  */
 
@@ -20,7 +20,7 @@ import type { CatalogPreset } from "../src/components/provider-catalog/provider-
 const PRESETS: CatalogPreset[] = [
   { id: "openai", label: "OpenAI", adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", auth: "forward" },
   { id: "opencode-free", label: "OpenCode Free", adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/v1", auth: "key", keyOptional: true },
-  { id: "opencode-go", label: "opencode go", adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1", auth: "key" },
+  { id: "opencode-go", label: "OpenCode Go", adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1", auth: "key" },
   { id: "deepseek", label: "DeepSeek", adapter: "openai-chat", baseUrl: "https://api.deepseek.com", auth: "key" },
 ];
 
@@ -135,13 +135,13 @@ function tierButton(container: HTMLElement, name: string): HTMLButtonElement {
   return found;
 }
 
-test("searching 'opencode' from the Accounts tab surfaces the Paid opencode go preset, grouped and tier-labelled", async () => {
+test("searching 'opencode' from the Accounts tab surfaces the Paid OpenCode Go preset, grouped and tier-labelled", async () => {
   const container = await mount("accounts");
   await typeInto(searchInput(container), "opencode");
 
   // The Paid provider is visible without guessing the Paid tab — the fix for
   // the silent single-tier filter.
-  expect(rowTitles(container)).toContain("opencode go");
+  expect(rowTitles(container)).toContain("OpenCode Go");
   expect(rowTitles(container)).toContain("OpenCode Free");
   // Groups carry the existing tab strings as tier labels, Free before Paid,
   // and no Accounts group: neither the ChatGPT login row nor the
@@ -167,7 +167,7 @@ test("search from the Free tab surfaces Paid matches without switching tabs", as
   const container = await mount("free");
   await typeInto(searchInput(container), "opencode");
 
-  expect(rowTitles(container)).toContain("opencode go");
+  expect(rowTitles(container)).toContain("OpenCode Go");
   expect(rowTitles(container)).toContain("OpenCode Free");
   expect(groupLabels(container)).toEqual(["Free", "Paid"]);
   // The visual tier choice remains, but ARIA no longer claims that one tab
@@ -200,7 +200,7 @@ test("clicking a cross-tier search result selects that preset", async () => {
   await typeInto(searchInput(container), "opencode");
 
   const row = [...container.querySelectorAll<HTMLButtonElement>(".provider-catalog-rows button.list-row")]
-    .find(el => el.textContent?.includes("opencode go"));
+    .find(el => el.textContent?.includes("OpenCode Go"));
   expect(row).toBeDefined();
   await click(row!);
   expect(selected).toEqual(["opencode-go"]);
@@ -218,14 +218,14 @@ test("no-query tab behavior is preserved: tabs filter per tier and clear the que
   expect(rowTitles(container)).toEqual(["OpenCode Free"]);
   await click(tab(container, "Paid"));
   // No usage data yet: stable alphabetical order.
-  expect(rowTitles(container)).toEqual(["DeepSeek", "opencode go"]);
+  expect(rowTitles(container)).toEqual(["DeepSeek", "OpenCode Go"]);
 
   // Typing a query then switching tabs clears it, restoring the full tier list.
   await typeInto(searchInput(container), "opencode");
   expect(rowTitles(container)).toContain("OpenCode Free");
   await click(tierButton(container, "Paid"));
   expect(searchInput(container).value).toBe("");
-  expect(rowTitles(container)).toEqual(["DeepSeek", "opencode go"]);
+  expect(rowTitles(container)).toEqual(["DeepSeek", "OpenCode Go"]);
   expect(groupLabels(container)).toEqual([]);
 });
 
@@ -253,5 +253,5 @@ test("search results keep usage-ranked order within a tier group", async () => {
   const paidGroup = [...container.querySelectorAll('[role="group"]')]
     .find(g => g.getAttribute("aria-label") === "Paid")!;
   const titles = [...paidGroup.querySelectorAll(".list-row .title")].map(el => el.textContent);
-  expect(titles).toEqual(["opencode go", "DeepSeek"]);
+  expect(titles).toEqual(["OpenCode Go", "DeepSeek"]);
 });

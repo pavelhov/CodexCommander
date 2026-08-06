@@ -29,6 +29,7 @@ export function useProvidersCrud({
   fetchConfig,
   fetchOauth,
   fetchProviderQuotas,
+  refreshModels,
   refreshCodexAccount,
 }: {
   apiBase: string;
@@ -41,6 +42,8 @@ export function useProvidersCrud({
   fetchConfig: () => Promise<void>;
   fetchOauth: () => Promise<void>;
   fetchProviderQuotas: (refresh?: boolean) => Promise<void>;
+  /** Refetch provider model inventory after a successful provider mutation. */
+  refreshModels?: () => void;
   /** Shared Codex account controller refresh (Providers.tsx passes codexPool.load). */
   refreshCodexAccount?: () => Promise<unknown> | unknown;
 }) {
@@ -78,20 +81,25 @@ export function useProvidersCrud({
   }, [apiBase, fetchConfig, fetchOauth, fetchProviderQuotas, notify, removeBusyRef, setRemoveConfirmName, setWorkspaceSelected, t, workspaceSelected]);
 
   const setProviderDisabled = useCallback(async (name: string, disabled: boolean) => {
-    const res = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ disabled }),
-    });
-    if (!res.ok) {
-      notify(await apiErrorMessage(res, disabled ? t("prov.disableFail", { name }) : t("prov.enableFail", { name })), false);
-      return;
+    try {
+      const res = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ disabled }),
+      });
+      if (!res.ok) {
+        notify(await apiErrorMessage(res, disabled ? t("prov.disableFail", { name }) : t("prov.enableFail", { name })), false);
+        return;
+      }
+      notify(disabled ? t("prov.disabled", { name }) : t("prov.enabled", { name }), true);
+      await fetchConfig();
+      refreshModels?.();
+      fetchOauth();
+      fetchProviderQuotas(true);
+    } catch {
+      notify(t("prov.networkError"), false);
     }
-    notify(disabled ? t("prov.disabled", { name }) : t("prov.enabled", { name }), true);
-    fetchConfig();
-    fetchOauth();
-    fetchProviderQuotas(true);
-  }, [apiBase, fetchConfig, fetchOauth, fetchProviderQuotas, notify, t]);
+  }, [apiBase, fetchConfig, fetchOauth, fetchProviderQuotas, notify, refreshModels, t]);
 
   const updateProvider = useCallback(async (name: string, patch: ProviderUpdatePatch): Promise<{ ok: boolean; error?: string }> => {
     try {
@@ -106,9 +114,14 @@ export function useProvidersCrud({
       // Await refresh so callers (e.g. notes editor) only leave edit mode once
       // item.note reflects the saved value.
       await fetchConfig();
+      // Provider settings can change the discovery transport or `liveModels` policy.
+      // Refresh the provider workspace inventory immediately so its Models tab does not
+      // keep stale rows until a retry, remount, or unrelated account mutation.
+      const modePatch = Object.hasOwn(patch, "codexAccountMode");
+      if (!modePatch) refreshModels?.();
       // A codexAccountMode PATCH clears quota caches and thread affinity server-side,
       // so both dependent surfaces must refresh before the action reports success.
-      if (Object.hasOwn(patch, "codexAccountMode")) {
+      if (modePatch) {
         const refreshes: Promise<unknown>[] = [fetchProviderQuotas(true)];
         if (refreshCodexAccount) refreshes.push(Promise.resolve(refreshCodexAccount()));
         await Promise.all(refreshes);
@@ -117,7 +130,7 @@ export function useProvidersCrud({
     } catch {
       return { ok: false, error: t("prov.networkError") };
     }
-  }, [apiBase, fetchConfig, fetchProviderQuotas, refreshCodexAccount, t]);
+  }, [apiBase, fetchConfig, fetchProviderQuotas, refreshCodexAccount, refreshModels, t]);
 
   const setDefaultProvider = useCallback(async (name: string): Promise<boolean> => {
     try {

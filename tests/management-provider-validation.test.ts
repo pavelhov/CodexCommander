@@ -30,7 +30,12 @@ import {
 } from "../src/server";
 import { handleManagementAPI } from "../src/server/management-api";
 import { providerManagementConfigError } from "../src/server/auth-cors";
-import { clearModelCache, markProviderDiscoveryFailed } from "../src/codex/model-cache";
+import {
+  clearModelCache,
+  getProviderLiveModelCount,
+  markProviderDiscoveryFailed,
+  markProviderDiscoveryOk,
+} from "../src/codex/model-cache";
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -1995,6 +2000,13 @@ describe("provider management validation", () => {
 
     // Unknown-only bodies are rejected.
     expect((await patch("extra", { bogus: 1 }))?.status).toBe(400);
+
+    // Disabling a provider invalidates its discovery provenance as well as its routed rows.
+    // Otherwise the Providers workspace can pair an empty available set with a stale live count.
+    markProviderDiscoveryOk("extra", 2);
+    expect(getProviderLiveModelCount("extra")).toBe(2);
+    expect((await patch("extra", { disabled: true }))?.status).toBe(200);
+    expect(getProviderLiveModelCount("extra")).toBeUndefined();
   });
   test("provider PATCH manages custom headers with merge and clear semantics", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });

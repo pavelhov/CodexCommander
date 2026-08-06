@@ -431,7 +431,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     });
     if (replayError !== undefined) return jsonResponse({ error: replayError }, 409);
     reconcileLiveStateStores();
-    if (applied.editorTouched) {
+    if (applied.editorTouched || keys.includes("disabled")) {
       const { clearModelCache } = await import("../../codex/model-cache");
       clearModelCache(name);
     }
