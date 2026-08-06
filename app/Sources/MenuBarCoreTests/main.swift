@@ -13,5 +13,6 @@ SnapshotStateSuite.run(runner)
 PollingSuite.run(runner)
 ActionSuite.run(runner)
 LifecycleHelperSuite.run(runner)
+LaunchAtLoginSuite.run(runner)
 
 exit(runner.summarize())

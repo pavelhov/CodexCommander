@@ -34,6 +34,9 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate {
         let realPanel = PopoverPanel()
         realPanel.contentViewController = controller
         let snap = Fixture.referenceSnapshot()
+        controller.applyLaunchAtLogin(
+            LaunchAtLoginPresentation(status: .enabled, desiredEnabled: true)
+        )
         controller.apply(snap)
         controller.view.layoutSubtreeIfNeeded()
 
@@ -208,7 +211,14 @@ private enum Fixture {
         )
 
         return ProxySnapshot(
-            state: .running(StartupHealth(status: "protected", protection: "service")),
+            state: .running(StartupHealth(
+                status: "protected",
+                protection: "service",
+                serviceRunning: true,
+                serviceInstalled: true,
+                serviceEnabled: true,
+                rebootSafe: true
+            )),
             endpoint: endpoint,
             quotas: quotas,
             activity: activity,

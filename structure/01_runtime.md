@@ -77,6 +77,8 @@ must leave the menu app alive with its status/Start controls available; it canno
 because the proxy is unavailable. Its **Quit** action terminates only the AppKit process. **Stop** and
 **Restart** are explicit, confirmation-gated proxy actions; Stop restores native Codex and keeps the
 menu app open, while Restart reports success only after it observes a replacement proxy identity.
+The main app is the default desktop Login Item; launchd remains an independent optional headless
+server supervisor. Login registration never changes provider, proxy, or service configuration.
 
 ## Providers and adapters
 

@@ -17,10 +17,20 @@ macOS 伴侣会在菜单栏中显示最有用的 OpenCodex 状态，同时不会
        shasum -a 256 -c OpenCodex-<version>-macos-universal.zip.sha256
 
 4. 解压，然后将 <code>OpenCodex.app</code> 移到**应用程序**。
-5. 打开该应用。其图标会出现在菜单栏中；它不会添加 Dock 图标。
+5. 打开该应用。其图标会出现在菜单栏中；它不会添加 Dock 图标。从稳定位置首次启动时会启用
+   **Launch at Login**。
 
 在发行版使用 Developer ID 签名并完成公证之前，macOS 可能会阻止首次启动下载的应用。按住
 Control 键点按该应用，选择**打开**，然后确认**打开**。本地构建不会带有下载文件的隔离属性。
+
+## 启动模式
+
+- **Desktop** — 登录时打开菜单栏应用，并连接或启动唯一一个服务器。
+- **Headless** — 不打开菜单栏应用，只启动另行安装的 `ocx service`。
+- **Off** — 不自动启动；手动打开应用或运行 `ocx start`。
+
+可在启动行切换 **Launch at Login**。如果需要批准，应用会直接打开 macOS Login Items 设置。
+此开关不会安装、停止或删除后台服务。
 
 ## 面板显示的内容
 
@@ -101,5 +111,6 @@ open dist/macos/OpenCodex.app
 
 ## 卸载
 
-退出伴侣，然后将 <code>OpenCodex.app</code> 移到废纸篓。它不存储提供商凭据，也不创建 Keychain
-条目。卸载伴侣不会停止或卸载 OpenCodex 代理。
+关闭 **Launch at Login**，退出伴侣，然后将 <code>OpenCodex.app</code> 移到废纸篓。它不存储
+提供商凭据，也不创建 Keychain 条目。卸载伴侣不会停止或卸载 OpenCodex 代理；只有在也要删除
+无界面服务时，才需另行运行 <code>ocx service uninstall</code>。

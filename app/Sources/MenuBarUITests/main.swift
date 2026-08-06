@@ -52,11 +52,12 @@ func activitySnapshot(
 func makeSnapshot(
     quotas: [QuotaReport] = [],
     activity: AgentActivitySnapshot? = nil,
+    health: StartupHealth = StartupHealth(status: "protected"),
     quotasLoaded: Bool = true,
     activityLoaded: Bool = true
 ) -> ProxySnapshot {
     ProxySnapshot(
-        state: .running(StartupHealth(status: "protected")),
+        state: .running(health),
         endpoint: .default,
         quotas: quotas,
         activity: activity,
@@ -106,6 +107,62 @@ runner.test("ui: footer exposes navigation, lifecycle, and UI-only Quit actions"
         ["Dashboard", "Logs", "Refresh", "Start", "Restart…", "Quit"],
         "footer titles"
     )
+}
+
+runner.test("ui: startup control exposes desktop, headless, off, and approval states") {
+    let controller = PopoverViewController()
+    _ = controller.view
+
+    controller.applyLaunchAtLogin(
+        LaunchAtLoginPresentation(status: .enabled, desiredEnabled: true)
+    )
+    controller.apply(makeSnapshot(health: StartupHealth(
+        status: "protected",
+        protection: "service",
+        serviceInstalled: true,
+        serviceEnabled: true
+    )))
+    runner.equal(
+        controller.startupModeView.modeText,
+        "Desktop · server protected in background"
+    )
+    runner.equal(controller.startupModeView.isLaunchAtLoginOn, true)
+
+    controller.applyLaunchAtLogin(
+        LaunchAtLoginPresentation(status: .disabled, desiredEnabled: false)
+    )
+    runner.equal(
+        controller.startupModeView.modeText,
+        "Headless · server starts without the menu app"
+    )
+
+    controller.apply(makeSnapshot(health: StartupHealth(status: "at-risk")))
+    runner.equal(
+        controller.startupModeView.modeText,
+        "Off · start OpenCodex manually"
+    )
+
+    controller.applyLaunchAtLogin(
+        LaunchAtLoginPresentation(status: .requiresApproval, desiredEnabled: true)
+    )
+    runner.expect(
+        controller.startupModeView.showsSettingsButton,
+        "approval state should expose Login Items settings"
+    )
+}
+
+runner.test("ui: startup control forwards explicit preference changes") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    var requested: Bool?
+    var openedSettings = false
+    controller.onLaunchAtLoginChange = { requested = $0 }
+    controller.onOpenLoginSettings = { openedSettings = true }
+
+    controller.startupModeView.toggleForTesting(true)
+    runner.equal(requested, true)
+    controller.startupModeView.onOpenSettings?()
+    runner.equal(openedSettings, true)
 }
 
 // MARK: - Accordion / no duplicates

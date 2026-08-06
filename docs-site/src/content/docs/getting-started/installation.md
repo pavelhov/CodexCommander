@@ -76,7 +76,7 @@ packaged-dashboard commands above.
 On macOS, build the companion from this same checkout with `bun run test:macos && bun run
 build:macos`. Its source-build location is `dist/macos/OpenCodex.app`; do not copy that development
 build into Application Support. See [macOS Menu Bar Companion](/guides/macos-menu-bar/) for lifecycle
-and release-installation behavior.
+behavior, Launch at Login, Desktop/Headless/Off modes, and release installation.
 
 ## What gets created
 

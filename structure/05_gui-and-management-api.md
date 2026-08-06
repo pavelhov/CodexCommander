@@ -199,6 +199,15 @@ the AppKit UI. **Stop** and **Restart** are separate confirmation-gated operatio
 fixed lifecycle helper to restore native Codex and leaves the menu app open; Restart uses the
 drain-aware management restart and reports success only after replacement identity verification.
 
+The desktop default is app-first: the first launch from Applications, `~/Applications`, or the exact
+source `dist/macos` location registers the main app through `SMAppService.mainApp`. The preference is
+explicitly reversible in the panel. A source rebuild refreshes that registration only while the
+preference remains enabled; translocated and unstable paths never register. One atomic per-user
+process lock plus LaunchServices reuse prevents simultaneous login/manual launches from running two
+menu controllers. This does not replace or auto-install `com.opencodex.proxy`: the launchd service
+remains the optional headless/crash-supervised server path, and service children still never open the
+companion.
+
 The popover is a compact status surface: active primary/subagent work from `/api/agent-activity`, one
 provider-quota accordion with ChatGPT first and expanded by default, and fixed links into the full
 dashboard. Provider management opens `#providers/<provider>/<tab>` so login, account, model, usage,

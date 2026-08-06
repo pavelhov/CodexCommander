@@ -14,6 +14,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var escapeMonitor: Any?
     private var restartInFlight = false
     private var lifecycleInFlight = false
+    private let launchAtLoginController = LaunchAtLoginController()
+    private lazy var executableFingerprint = ExecutableFingerprint.current()
+    private lazy var launchAtLoginRegistrationAllowed =
+        LaunchAtLoginEligibility.isStableBundle(Bundle.main.bundleURL)
 
     public override init() { super.init() }
 
@@ -63,6 +67,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.onStop = { [weak self] in self?.stopProxy() }
         controller.onRestart = { [weak self] in self?.restartProxy() }
         controller.onQuit = { NSApp.terminate(nil) }
+        controller.onLaunchAtLoginChange = { [weak self] enabled in
+            self?.setLaunchAtLogin(enabled)
+        }
+        controller.onOpenLoginSettings = { [weak self] in
+            self?.launchAtLoginController.openSystemSettings()
+        }
         controller.onManageProvider = { [weak self] provider in
             self?.openProvider(provider)
         }
@@ -81,7 +91,29 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             await MainActor.run { (NSApp.delegate as? AppDelegate)?.startPolling() }
         }
+        controller.applyLaunchAtLogin(
+            launchAtLoginController.reconcile(
+                executableFingerprint: executableFingerprint,
+                registrationAllowed: launchAtLoginRegistrationAllowed
+            )
+        )
         ensureProxyOnLaunch()
+    }
+
+    public func applicationDidBecomeActive(_ notification: Notification) {
+        controller.applyLaunchAtLogin(
+            launchAtLoginController.currentPresentation(
+                registrationAllowed: launchAtLoginRegistrationAllowed
+            )
+        )
+    }
+
+    public func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        presentPopover()
+        return true
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
@@ -129,14 +161,23 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     #endif
 
     @objc private func togglePopover() {
-        guard let button = statusItem?.button else { return }
         if panel.isShown {
             panel.dismiss()
         } else {
-            panel.present(from: button)
-            installEscapeMonitor()
-            Task { [coordinator] in await coordinator?.setPopoverOpen(true) }
+            presentPopover()
         }
+    }
+
+    private func presentPopover() {
+        guard let button = statusItem?.button else { return }
+        controller.applyLaunchAtLogin(
+            launchAtLoginController.currentPresentation(
+                registrationAllowed: launchAtLoginRegistrationAllowed
+            )
+        )
+        panel.present(from: button)
+        installEscapeMonitor()
+        Task { [coordinator] in await coordinator?.setPopoverOpen(true) }
     }
 
     private func handlePanelClosed() {
@@ -185,6 +226,23 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             NSWorkspace.shared.open(url)
         } else {
             NSWorkspace.shared.open(endpoint.baseURL)
+        }
+    }
+
+    private func setLaunchAtLogin(_ enabled: Bool) {
+        let presentation = launchAtLoginController.setEnabled(
+            enabled,
+            executableFingerprint: executableFingerprint,
+            registrationAllowed: launchAtLoginRegistrationAllowed
+        )
+        controller.applyLaunchAtLogin(presentation)
+        if let error = presentation.errorMessage {
+            controller.showResult(error, isError: true)
+        } else if presentation.needsApproval {
+            controller.showResult(
+                "Approve OpenCodex under Login Items in System Settings.",
+                isError: false
+            )
         }
     }
 

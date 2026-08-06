@@ -81,7 +81,13 @@ open dist/macos/OpenCodex.app
 
 Double-clicking that source build ensures the proxy through the same checkout; if startup fails, the
 menu app stays open so its diagnostics and **Start** control remain available. **Quit** closes only
-the companion UI. **Stop** and **Restart** are separate, confirmation-gated proxy actions. Full
+the companion UI. **Stop** and **Restart** are separate, confirmation-gated proxy actions.
+
+On its first launch from `dist/macos` or Applications, the app enables **Launch at Login** so the
+menu icon returns after sign-in. The startup row exposes the actual mode: **Desktop** launches the
+menu app, **Headless** leaves only an installed background service at login, and **Off** starts
+neither automatically. Rebuilt source apps refresh their login registration in place; they are
+never copied into Application Support. Full
 setup, Gatekeeper, release packaging, and troubleshooting details are in the
 [macOS menu bar guide](https://opencodex.me/guides/macos-menu-bar/).
 

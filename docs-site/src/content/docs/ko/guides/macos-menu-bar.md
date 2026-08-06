@@ -17,11 +17,21 @@ OpenCodex 인스턴스와만 통신합니다.
        shasum -a 256 -c OpenCodex-<version>-macos-universal.zip.sha256
 
 4. 압축을 풀고 <code>OpenCodex.app</code>을 **응용 프로그램**으로 이동합니다.
-5. 앱을 엽니다. 아이콘은 메뉴 막대에 나타나며 Dock 아이콘은 추가되지 않습니다.
+5. 앱을 엽니다. 아이콘은 메뉴 막대에 나타나며 Dock 아이콘은 추가되지 않습니다. 안정적인 위치에서
+   처음 실행하면 **Launch at Login**이 활성화됩니다.
 
 릴리스가 Developer ID로 서명되고 공증되기 전까지는 macOS가 다운로드 후 첫 실행을 차단할 수
 있습니다. 앱을 Control-클릭하고 **열기**를 선택한 다음 **열기**를 확인합니다. 로컬에서 만든
 빌드에는 다운로드된 파일의 격리 속성이 없습니다.
+
+## 시작 모드
+
+- **Desktop** — 로그인할 때 메뉴 앱을 열고 정확히 하나의 서버에 연결하거나 시작합니다.
+- **Headless** — 메뉴 앱 없이 별도로 설치한 `ocx service`만 시작합니다.
+- **Off** — 자동으로 시작하지 않으며 앱 또는 `ocx start`로 수동 시작합니다.
+
+시작 행에서 **Launch at Login**을 변경할 수 있습니다. 승인이 필요하면 macOS Login Items 설정을
+직접 엽니다. 이 스위치는 백그라운드 서비스를 설치, 중지 또는 제거하지 않습니다.
 
 ## 패널에 표시되는 내용
 
@@ -111,6 +121,7 @@ open dist/macos/OpenCodex.app
 
 ## 제거
 
-컴패니언을 종료하고 <code>OpenCodex.app</code>을 휴지통으로 이동합니다. 제공자 자격 증명을 저장하지
-않으며 Keychain 항목도 만들지 않습니다. 컴패니언을 제거해도 OpenCodex 프록시는 중지되거나
-제거되지 않습니다.
+**Launch at Login**을 끈 다음 컴패니언을 종료하고 <code>OpenCodex.app</code>을 휴지통으로
+이동합니다. 제공자 자격 증명을 저장하지 않으며 Keychain 항목도 만들지 않습니다. 컴패니언을
+제거해도 OpenCodex 프록시는 중지되거나 제거되지 않습니다. 헤드리스 서비스도 제거하려는 경우에만
+별도로 <code>ocx service uninstall</code>을 실행하십시오.
