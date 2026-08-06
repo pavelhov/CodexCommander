@@ -17,6 +17,7 @@ public final class PopoverViewController: NSViewController {
     private let lifecycleButton = NSButton()
     private let restartButton = NSButton()
     private let quitButton = NSButton()
+    private let startupMode = StartupModeView()
 
     // Scrolling body
     private let scrollView = NSScrollView()
@@ -42,6 +43,8 @@ public final class PopoverViewController: NSViewController {
     public var onStop: (() -> Void)?
     public var onRestart: (() -> Void)?
     public var onQuit: (() -> Void)?
+    public var onLaunchAtLoginChange: ((Bool) -> Void)?
+    public var onOpenLoginSettings: (() -> Void)?
     public var onManageProvider: ((String) -> Void)?
     public var onViewAllProviders: (() -> Void)?
 
@@ -49,6 +52,10 @@ public final class PopoverViewController: NSViewController {
     private var scrollHeight: NSLayoutConstraint?
     private var resultToken = 0
     private var lifecycleControlsAllowed = true
+    private var launchAtLogin = LaunchAtLoginPresentation(
+        status: .disabled,
+        desiredEnabled: false
+    )
 
     public override func loadView() {
         configureControls()
@@ -62,6 +69,12 @@ public final class PopoverViewController: NSViewController {
         }
         quotas.onViewAll = { [weak self] in
             self?.onViewAllProviders?()
+        }
+        startupMode.onToggle = { [weak self] enabled in
+            self?.onLaunchAtLoginChange?(enabled)
+        }
+        startupMode.onOpenSettings = { [weak self] in
+            self?.onOpenLoginSettings?()
         }
 
         body.orientation = .vertical
@@ -105,7 +118,9 @@ public final class PopoverViewController: NSViewController {
         actions.alignment = .leading
 
         let headerSeparator = makeSeparator()
-        let column = NSStackView(views: [header, headerSeparator, scrollView, quotaSeparator, actions])
+        let column = NSStackView(views: [
+            header, headerSeparator, scrollView, quotaSeparator, startupMode, actions,
+        ])
         column.orientation = .vertical
         column.alignment = .leading
         column.spacing = 6
@@ -128,6 +143,7 @@ public final class PopoverViewController: NSViewController {
             header.widthAnchor.constraint(equalToConstant: contentWidth),
             headerSeparator.widthAnchor.constraint(equalToConstant: contentWidth),
             quotaSeparator.widthAnchor.constraint(equalToConstant: contentWidth),
+            startupMode.widthAnchor.constraint(equalToConstant: contentWidth),
             actions.widthAnchor.constraint(equalToConstant: contentWidth),
             scrollView.widthAnchor.constraint(equalToConstant: contentWidth),
             body.widthAnchor.constraint(equalToConstant: contentWidth),
@@ -197,7 +213,14 @@ public final class PopoverViewController: NSViewController {
 
         applyGuidance(snapshot)
         applyActions(snapshot)
+        applyStartupMode(snapshot)
         resize()
+    }
+
+    public func applyLaunchAtLogin(_ presentation: LaunchAtLoginPresentation) {
+        launchAtLogin = presentation
+        applyStartupMode(snapshot)
+        refreshSize()
     }
 
     public func showResult(_ text: String, isError: Bool) {
@@ -283,7 +306,9 @@ public final class PopoverViewController: NSViewController {
     private func resize() {
         view.layoutSubtreeIfNeeded()
         let bodyHeight = ceil(body.fittingSize.height)
-        let chrome = ceil(header.fittingSize.height) + Theme.gutter * 2 + Theme.rowGap * 3 + 56
+        let chrome = ceil(header.fittingSize.height)
+            + ceil(startupMode.fittingSize.height)
+            + Theme.gutter * 2 + Theme.rowGap * 4 + 58
         let natural = chrome + bodyHeight
         let preferred = max(Theme.preferredHeight, min(Theme.maxHeight, natural))
         let overflowing = natural > Theme.maxHeight
@@ -304,6 +329,16 @@ public final class PopoverViewController: NSViewController {
     }
     @objc private func restartTapped() { onRestart?() }
     @objc private func quitTapped() { onQuit?() }
+
+    private func applyStartupMode(_ snapshot: ProxySnapshot?) {
+        let serviceManaged: Bool
+        if let snapshot, case .running(let health) = snapshot.state {
+            serviceManaged = health.isServiceManaged
+        } else {
+            serviceManaged = false
+        }
+        startupMode.apply(launchAtLogin, serviceManaged: serviceManaged)
+    }
 
     public override func cancelOperation(_ sender: Any?) {
         view.window?.performClose(nil)
@@ -327,6 +362,7 @@ public final class PopoverViewController: NSViewController {
     package var quotaAccordion: ProviderQuotaAccordionView { quotas }
     package var activityView: AgentActivityView { activity }
     package var headerView: StatusHeaderView { header }
+    package var startupModeView: StartupModeView { startupMode }
     package var footerTitles: [String] {
         [
             dashboardButton.title,

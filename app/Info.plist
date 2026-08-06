@@ -24,6 +24,8 @@
   <string>0.0.0</string>
   <key>LSUIElement</key>
   <true/>
+  <key>LSMultipleInstancesProhibited</key>
+  <true/>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <!-- macOS 14 stopped allowing IP-address loads under App Transport Security by

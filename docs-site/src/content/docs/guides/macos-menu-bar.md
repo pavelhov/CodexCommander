@@ -17,7 +17,8 @@ the OpenCodex instance running on the same Mac.
        shasum -a 256 -c OpenCodex-<version>-macos-universal.zip.sha256
 
 4. Unzip it and move <code>OpenCodex.app</code> to **Applications**.
-5. Open the app. Its icon appears in the menu bar; it does not add a Dock icon.
+5. Open the app. Its icon appears in the menu bar; it does not add a Dock icon. The first stable
+   launch enables **Launch at Login** so the icon returns after the next sign-in.
 
 The current release package is a ZIP. Unless its release owner supplies a Developer ID signing
 identity, the bundle is ad-hoc signed; it is not a signed and notarized DMG. macOS may block the
@@ -29,6 +30,30 @@ the downloaded-file quarantine attribute.
 An installed release may live in **Applications**. Do not use Application Support as an app-install
 directory. During active source development, use the repository build in the next section as the one
 active companion instead of keeping a copied app alongside it.
+
+The app registers only a stable bundle path: Applications, `~/Applications`, or the repository's
+`dist/macos/OpenCodex.app`. It does not register a quarantined App Translocation path or an app
+opened directly from Downloads. Move a release first, then open it.
+
+## Startup modes
+
+The panel has one **Launch at Login** switch and reports the resulting mode:
+
+- **Desktop** — the OpenCodex menu app launches when you sign in and ensures or attaches to exactly
+  one server. This is the default desktop experience.
+- **Headless** — the menu app is not a login item, but an independently installed
+  `ocx service` continues starting and supervising the server.
+- **Off** — neither the menu app nor a background service starts automatically; open the app or run
+  `ocx start` manually.
+
+The visible app and background server remain separate internally because **Quit** closes only the
+UI. macOS may therefore list OpenCodex under both **Open at Login** and **Allow in the Background**;
+those are two responsibilities of one installation, not duplicate app copies. Turning off Launch at
+Login never installs, removes, starts, or stops the background service.
+
+If macOS requires approval, the startup row links directly to **System Settings → General → Login
+Items & Extensions**. OpenCodex reflects a revocation made there instead of repeatedly trying to
+override it.
 
 ## What the panel shows
 
@@ -105,12 +130,15 @@ The source app is exactly `dist/macos/OpenCodex.app`. It discovers the checkout'
 and bundled Bun, so it should stay in that location while you work on this repository. Double-clicking
 it attempts to ensure the proxy, but a missing CLI, offline failure, or failed start does not close
 the app: its status panel remains available and **Start** can be retried. This source workflow does
-not install or copy the app into Application Support.
+not install or copy the app into Application Support. A rebuild at the same path is detected on the
+next launch and refreshes the existing Login Item registration only when Launch at Login remains on.
 
 ## Troubleshooting
 
 - **Proxy unavailable** — start it with <code>ocx start</code> or install the background service
   with <code>ocx service install</code>.
+- **Menu icon missing after login** — open the app, check its **Launch at Login** row, and follow the
+  **Open Settings** action if macOS reports that approval is required.
 - **Authentication unavailable** — run <code>ocx doctor</code>; verify that the OpenCodex state
   directory and <code>admin-api-token</code> are owned by your user and are not group/world
   accessible.
@@ -121,6 +149,7 @@ not install or copy the app into Application Support.
 
 ## Uninstall
 
-Quit the companion and move <code>OpenCodex.app</code> to the Trash. It stores no provider
-credentials and creates no Keychain entries. Uninstalling the companion does not stop or uninstall
-the OpenCodex proxy.
+Turn off **Launch at Login**, quit the companion, and move <code>OpenCodex.app</code> to the Trash.
+It stores no provider credentials and creates no Keychain entries. Uninstalling the companion does
+not stop or uninstall the OpenCodex proxy; run <code>ocx service uninstall</code> separately only if
+you also want to remove the headless service.
