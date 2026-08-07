@@ -173,6 +173,27 @@ enum LaunchAtLoginSuite {
             )
             t.equal(
                 DesktopStartupMode.summary(
+                    loginStatus: .enabled,
+                    serviceManaged: true
+                ),
+                "Desktop · Quit Menu Bar leaves proxy running"
+            )
+            t.equal(
+                DesktopStartupMode.summary(
+                    loginStatus: .enabled,
+                    serviceManaged: false
+                ),
+                "Desktop · Quit Menu Bar leaves proxy running"
+            )
+            t.equal(
+                DesktopStartupMode.summary(
+                    loginStatus: .disabled,
+                    serviceManaged: true
+                ),
+                "Headless · proxy runs without the menu bar"
+            )
+            t.equal(
+                DesktopStartupMode.summary(
                     loginStatus: .requiresApproval,
                     serviceManaged: true
                 ),

@@ -1,7 +1,7 @@
 import AppKit
 import MenuBarCore
 
-public final class AppDelegate: NSObject, NSApplicationDelegate {
+public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem?
     private let panel = PopoverPanel()
     private let controller = PopoverViewController()
@@ -22,6 +22,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public override init() { super.init() }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        installApplicationMenu()
         do {
             let installation = try ProxyDiscovery.discover()
             let client = try ProxyClient(installation: installation)
@@ -66,7 +67,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.onStart = { [weak self] in self?.startProxy() }
         controller.onStop = { [weak self] in self?.stopProxy() }
         controller.onRestart = { [weak self] in self?.restartProxy() }
-        controller.onQuit = { NSApp.terminate(nil) }
+        controller.onQuitMenuBar = { [weak self] in self?.quitMenuBar(nil) }
+        controller.onStopAndQuit = { [weak self] in self?.stopOpenCodexAndQuit(nil) }
         controller.onLaunchAtLoginChange = { [weak self] enabled in
             self?.setLaunchAtLogin(enabled)
         }
@@ -152,6 +154,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             controller.setRestartEnabled(snapshot.state.isRunning)
             controller.setLifecycleControlsEnabled(true)
         }
+        updateApplicationMenu()
     }
 
     // MARK: - Actions
@@ -246,11 +249,41 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func installApplicationMenu() {
+        NSApp.mainMenu = ApplicationMenuFactory.make(
+            target: self,
+            quitAction: #selector(quitMenuBar(_:)),
+            stopAndQuitAction: #selector(stopOpenCodexAndQuit(_:))
+        )
+        updateApplicationMenu()
+    }
+
+    private func updateApplicationMenu() {
+        NSApp.mainMenu?.items.first?.submenu?.update()
+    }
+
+    /// Safe default: close only the companion. The proxy is an independent process and
+    /// remains available to connected clients.
+    @objc private func quitMenuBar(_ sender: Any?) {
+        NSApp.terminate(nil)
+    }
+
+    public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(stopOpenCodexAndQuit(_:)) {
+            return LifecycleActionAvailability.canStopAndQuit(
+                state: latest?.state,
+                controlsAllowed: !lifecycleInFlight && !restartInFlight
+            )
+        }
+        return true
+    }
+
     /// Finder launch is the app-level start contract. It uses the fixed TS helper and
     /// keeps the menu app alive even when startup fails, so Start remains available.
     private func ensureProxyOnLaunch() {
         guard !lifecycleInFlight, !restartInFlight else { return }
         lifecycleInFlight = true
+        updateApplicationMenu()
         controller.setLifecycleControlsEnabled(false)
         Task { [actions, coordinator] in
             let outcome = await actions?.ensure() ?? .failed("Lifecycle control is unavailable.")
@@ -258,6 +291,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.lifecycleInFlight = false
+                self.updateApplicationMenu()
                 if case .failed(let message) = outcome {
                     self.controller.showResult(message, isError: true)
                 }
@@ -269,6 +303,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startProxy() {
         guard !lifecycleInFlight, !restartInFlight else { return }
         lifecycleInFlight = true
+        updateApplicationMenu()
         controller.setLifecycleControlsEnabled(false)
         controller.showResult("Starting OpenCodex…", isError: false)
         Task { [actions, coordinator] in
@@ -277,6 +312,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.lifecycleInFlight = false
+                self.updateApplicationMenu()
                 switch outcome {
                 case .running:
                     self.controller.showResult("OpenCodex started.", isError: false)
@@ -292,36 +328,42 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func stopProxy() {
         guard !lifecycleInFlight, !restartInFlight else { return }
+        guard confirm(.stopProxy) else { return }
+        performStop(quitWhenStopped: false)
+    }
 
-        let alert = NSAlert()
-        alert.messageText = "Stop the OpenCodex proxy?"
-        alert.informativeText =
-            "Active Codex, Claude, OpenCode, and subagent requests will be interrupted. The menu bar app will stay open."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Stop Proxy")
-        alert.addButton(withTitle: "Cancel")
+    /// Explicit destructive exit: stop routing first and terminate the companion only
+    /// after the lifecycle helper confirms that the proxy and service are stopped.
+    @objc private func stopOpenCodexAndQuit(_ sender: Any?) {
+        guard !lifecycleInFlight, !restartInFlight else { return }
+        guard confirm(.stopAndQuit) else { return }
+        performStop(quitWhenStopped: true)
+    }
 
-        panel.isPresentingModal = true
-        NSApp.activate(ignoringOtherApps: true)
-        let confirmed = alert.runModal() == .alertFirstButtonReturn
-        panel.isPresentingModal = false
-        guard confirmed else {
-            panel.makeKeyAndOrderFront(nil)
-            return
-        }
-
+    private func performStop(quitWhenStopped: Bool) {
         lifecycleInFlight = true
+        updateApplicationMenu()
         controller.setLifecycleControlsEnabled(false)
         controller.showResult("Stopping OpenCodex…", isError: false)
         Task { [actions, coordinator] in
             let outcome = await actions?.stop() ?? .failed("Lifecycle control is unavailable.")
-            await coordinator?.forceRefresh()
+            let shouldTerminate = quitWhenStopped
+                && StopAndQuitPolicy.shouldTerminate(after: outcome)
+            if !shouldTerminate { await coordinator?.forceRefresh() }
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.lifecycleInFlight = false
+                self.updateApplicationMenu()
+                if shouldTerminate {
+                    NSApp.terminate(nil)
+                    return
+                }
                 switch outcome {
                 case .stopped:
-                    self.controller.showResult("Proxy stopped. The menu app is still running.", isError: false)
+                    self.controller.showResult(
+                        "Proxy stopped. The menu bar app is still open.",
+                        isError: false
+                    )
                 case .running:
                     self.controller.showResult("OpenCodex is still running.", isError: true)
                 case .failed(let message):
@@ -336,26 +378,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     /// reports success after ActionCoordinator confirms a replacement process.
     private func restartProxy() {
         guard !restartInFlight, !lifecycleInFlight else { return }
-
-        let alert = NSAlert()
-        alert.messageText = "Restart OpenCodex?"
-        alert.informativeText =
-            "Active turns will drain, then OpenCodex will come back on the same port."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Restart")
-        alert.addButton(withTitle: "Cancel")
-
-        panel.isPresentingModal = true
-        NSApp.activate(ignoringOtherApps: true)
-        let confirmed = alert.runModal() == .alertFirstButtonReturn
-        panel.isPresentingModal = false
-
-        guard confirmed else {
-            panel.makeKeyAndOrderFront(nil)
-            return
-        }
+        guard confirm(.restartProxy) else { return }
 
         restartInFlight = true
+        updateApplicationMenu()
         controller.setRestartEnabled(false)
         controller.setLifecycleControlsEnabled(false)
         controller.showResult("Restart accepted…", isError: false)
@@ -365,6 +391,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             await coordinator?.forceRefresh()
             await MainActor.run { [weak self] in
                 self?.restartInFlight = false
+                self?.updateApplicationMenu()
                 switch outcome {
                 case .restarted:
                     self?.controller.showResult("OpenCodex restarted.", isError: false)
@@ -379,6 +406,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.controller.setLifecycleControlsEnabled(true)
             }
         }
+    }
+
+    private func confirm(_ confirmation: LifecycleConfirmation) -> Bool {
+        let alert = confirmation.makeAlert()
+        panel.isPresentingModal = true
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        panel.isPresentingModal = false
+        if response != confirmation.confirmationResponse, panel.isShown {
+            panel.makeKeyAndOrderFront(nil)
+        }
+        return response == confirmation.confirmationResponse
     }
 }
 

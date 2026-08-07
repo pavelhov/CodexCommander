@@ -50,11 +50,11 @@ public enum DesktopStartupMode: String, Equatable, Sendable {
         }
         switch mode {
         case .desktop:
-            return serviceManaged
-                ? "Desktop · server protected in background"
-                : "Desktop · app starts the server"
+            // Both startup paths outlive the companion: services are launchd-owned,
+            // while the app fallback uses spawnDetachedProxyStart() and unref().
+            return "Desktop · Quit Menu Bar leaves proxy running"
         case .headless:
-            return "Headless · server starts without the menu app"
+            return "Headless · proxy runs without the menu bar"
         case .off:
             return "Off · start OpenCodex manually"
         }

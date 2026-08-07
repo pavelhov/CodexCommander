@@ -16,8 +16,12 @@ public final class PopoverViewController: NSViewController {
     private let refreshButton = NSButton()
     private let lifecycleButton = NSButton()
     private let restartButton = NSButton()
-    private let quitButton = NSButton()
+    private let quitMenuBarButton = NSButton()
+    private let stopAndQuitButton = NSButton()
     private let startupMode = StartupModeView()
+    private let headerSeparator = makeSeparator()
+    private let footerActions = NSStackView()
+    private let column = NSStackView()
 
     // Scrolling body
     private let scrollView = NSScrollView()
@@ -42,7 +46,8 @@ public final class PopoverViewController: NSViewController {
     public var onStart: (() -> Void)?
     public var onStop: (() -> Void)?
     public var onRestart: (() -> Void)?
-    public var onQuit: (() -> Void)?
+    public var onQuitMenuBar: (() -> Void)?
+    public var onStopAndQuit: (() -> Void)?
     public var onLaunchAtLoginChange: ((Bool) -> Void)?
     public var onOpenLoginSettings: (() -> Void)?
     public var onManageProvider: ((String) -> Void)?
@@ -106,21 +111,28 @@ public final class PopoverViewController: NSViewController {
         navigationActions.alignment = .centerY
 
         let lifecycleActions = NSStackView(views: [
-            lifecycleButton, restartButton, NSView(), quitButton
+            lifecycleButton, restartButton, NSView()
         ])
         lifecycleActions.orientation = .horizontal
         lifecycleActions.spacing = Theme.rowGap
         lifecycleActions.alignment = .centerY
 
-        let actions = NSStackView(views: [navigationActions, lifecycleActions])
-        actions.orientation = .vertical
-        actions.spacing = 5
-        actions.alignment = .leading
-
-        let headerSeparator = makeSeparator()
-        let column = NSStackView(views: [
-            header, headerSeparator, scrollView, quotaSeparator, startupMode, actions,
+        let exitActions = NSStackView(views: [
+            quitMenuBarButton, NSView(), stopAndQuitButton
         ])
+        exitActions.orientation = .horizontal
+        exitActions.spacing = Theme.rowGap
+        exitActions.alignment = .centerY
+
+        footerActions.setViews([navigationActions, lifecycleActions, exitActions], in: .top)
+        footerActions.orientation = .vertical
+        footerActions.spacing = 5
+        footerActions.alignment = .leading
+
+        column.setViews(
+            [header, headerSeparator, scrollView, quotaSeparator, startupMode, footerActions],
+            in: .top
+        )
         column.orientation = .vertical
         column.alignment = .leading
         column.spacing = 6
@@ -144,7 +156,7 @@ public final class PopoverViewController: NSViewController {
             headerSeparator.widthAnchor.constraint(equalToConstant: contentWidth),
             quotaSeparator.widthAnchor.constraint(equalToConstant: contentWidth),
             startupMode.widthAnchor.constraint(equalToConstant: contentWidth),
-            actions.widthAnchor.constraint(equalToConstant: contentWidth),
+            footerActions.widthAnchor.constraint(equalToConstant: contentWidth),
             scrollView.widthAnchor.constraint(equalToConstant: contentWidth),
             body.widthAnchor.constraint(equalToConstant: contentWidth),
         ])
@@ -161,23 +173,40 @@ public final class PopoverViewController: NSViewController {
         styleFooterButton(dashboardButton, title: "Dashboard", symbol: "square.grid.2x2")
         styleFooterButton(logsButton, title: "Logs", symbol: "list.bullet.rectangle")
         styleFooterButton(refreshButton, title: "Refresh", symbol: "arrow.clockwise")
-        styleFooterButton(lifecycleButton, title: "Start", symbol: "play.fill")
-        styleFooterButton(restartButton, title: "Restart…", symbol: "power")
-        styleFooterButton(quitButton, title: "Quit", symbol: "xmark.circle")
+        styleFooterButton(lifecycleButton, title: "Start Proxy", symbol: "play.fill")
+        styleFooterButton(restartButton, title: "Restart Proxy…", symbol: "power")
+        styleFooterButton(quitMenuBarButton, title: "Quit Menu Bar", symbol: "xmark.circle")
+        styleFooterButton(
+            stopAndQuitButton,
+            title: "Stop OpenCodex and Quit…",
+            symbol: "stop.circle"
+        )
+        stopAndQuitButton.contentTintColor = Theme.red
 
         dashboardButton.action = #selector(dashboardTapped)
         logsButton.action = #selector(logsTapped)
         refreshButton.action = #selector(refreshTapped)
         lifecycleButton.action = #selector(lifecycleTapped)
         restartButton.action = #selector(restartTapped)
-        quitButton.action = #selector(quitTapped)
+        quitMenuBarButton.action = #selector(quitMenuBarTapped)
+        stopAndQuitButton.action = #selector(stopAndQuitTapped)
+
+        quitMenuBarButton.keyEquivalent = CompanionShortcut.keyEquivalent
+        quitMenuBarButton.keyEquivalentModifierMask = CompanionShortcut.quitModifiers
+        stopAndQuitButton.keyEquivalent = CompanionShortcut.keyEquivalent
+        stopAndQuitButton.keyEquivalentModifierMask = CompanionShortcut.stopAndQuitModifiers
 
         dashboardButton.setAccessibilityLabel("Open dashboard")
         logsButton.setAccessibilityLabel("Open logs")
         refreshButton.setAccessibilityLabel("Refresh")
         lifecycleButton.setAccessibilityLabel("Start OpenCodex proxy")
-        restartButton.setAccessibilityLabel("Restart OpenCodex")
-        quitButton.setAccessibilityLabel("Quit OpenCodex menu bar app")
+        restartButton.setAccessibilityLabel("Restart OpenCodex proxy")
+        quitMenuBarButton.setAccessibilityLabel(
+            "Quit the OpenCodex menu bar app and leave the proxy running"
+        )
+        stopAndQuitButton.setAccessibilityLabel(
+            "Stop the OpenCodex proxy and quit the menu bar app"
+        )
 
         commandField.font = Theme.numericSmall
         commandField.textColor = Theme.text
@@ -247,8 +276,13 @@ public final class PopoverViewController: NSViewController {
         lifecycleControlsAllowed = enabled
         lifecycleButton.isEnabled = enabled && snapshot.map { lifecycleActionable($0.state) } == true
         restartButton.isEnabled = enabled && snapshot?.state.isRunning == true
+        stopAndQuitButton.isEnabled = LifecycleActionAvailability.canStopAndQuit(
+            state: snapshot?.state,
+            controlsAllowed: enabled
+        )
         lifecycleButton.alphaValue = lifecycleButton.isEnabled ? 1 : 0.45
         restartButton.alphaValue = restartButton.isEnabled ? 1 : 0.45
+        stopAndQuitButton.alphaValue = stopAndQuitButton.isEnabled ? 1 : 0.45
     }
 
     public func refreshSize() { resize() }
@@ -288,7 +322,7 @@ public final class PopoverViewController: NSViewController {
         dashboardButton.isEnabled = !definitelyStopped
         logsButton.isEnabled = !definitelyStopped
         refreshButton.isEnabled = true
-        lifecycleButton.title = stopIntent ? "Stop…" : "Start"
+        lifecycleButton.title = stopIntent ? "Stop Proxy…" : "Start Proxy"
         lifecycleButton.image = NSImage(
             systemSymbolName: stopIntent ? "stop.fill" : "play.fill",
             accessibilityDescription: lifecycleButton.title
@@ -300,15 +334,27 @@ public final class PopoverViewController: NSViewController {
         lifecycleButton.alphaValue = lifecycleButton.isEnabled ? 1 : 0.45
         restartButton.isEnabled = lifecycleControlsAllowed && snapshot.state.isRunning
         restartButton.alphaValue = restartButton.isEnabled ? 1 : 0.45
-        quitButton.isEnabled = true
+        quitMenuBarButton.isEnabled = true
+        stopAndQuitButton.isEnabled = LifecycleActionAvailability.canStopAndQuit(
+            state: snapshot.state,
+            controlsAllowed: lifecycleControlsAllowed
+        )
+        stopAndQuitButton.alphaValue = stopAndQuitButton.isEnabled ? 1 : 0.45
     }
 
     private func resize() {
         view.layoutSubtreeIfNeeded()
         let bodyHeight = ceil(body.fittingSize.height)
-        let chrome = ceil(header.fittingSize.height)
+        let fixedViewsHeight = ceil(header.fittingSize.height)
+            + ceil(headerSeparator.fittingSize.height)
+            + ceil(quotaSeparator.fittingSize.height)
             + ceil(startupMode.fittingSize.height)
-            + Theme.gutter * 2 + Theme.rowGap * 4 + 58
+            + ceil(footerActions.fittingSize.height)
+        let stackGaps = column.spacing * CGFloat(max(0, column.views.count - 1))
+        let chrome = fixedViewsHeight
+            + stackGaps
+            + column.edgeInsets.top
+            + column.edgeInsets.bottom
         let natural = chrome + bodyHeight
         let preferred = max(Theme.preferredHeight, min(Theme.maxHeight, natural))
         let overflowing = natural > Theme.maxHeight
@@ -328,7 +374,8 @@ public final class PopoverViewController: NSViewController {
         else if state == .unreachable { onStart?() }
     }
     @objc private func restartTapped() { onRestart?() }
-    @objc private func quitTapped() { onQuit?() }
+    @objc private func quitMenuBarTapped() { onQuitMenuBar?() }
+    @objc private func stopAndQuitTapped() { onStopAndQuit?() }
 
     private func applyStartupMode(_ snapshot: ProxySnapshot?) {
         let serviceManaged: Bool
@@ -370,20 +417,33 @@ public final class PopoverViewController: NSViewController {
             refreshButton.title,
             lifecycleButton.title,
             restartButton.title,
-            quitButton.title,
+            quitMenuBarButton.title,
+            stopAndQuitButton.title,
         ]
     }
+    package var footerEnabledStates: [Bool] {
+        footerButtons.map(\.isEnabled)
+    }
+    package var footerAccessibilityLabels: [String?] {
+        footerButtons.map { $0.accessibilityLabel() }
+    }
+    package var footerKeyEquivalents: [(String, NSEvent.ModifierFlags)] {
+        footerButtons.map { ($0.keyEquivalent, $0.keyEquivalentModifierMask) }
+    }
     package func activateFooterForTesting(_ index: Int) {
-        let buttons = [
+        guard footerButtons.indices.contains(index) else { return }
+        footerButtons[index].performClick(nil)
+    }
+    private var footerButtons: [NSButton] {
+        [
             dashboardButton,
             logsButton,
             refreshButton,
             lifecycleButton,
             restartButton,
-            quitButton,
+            quitMenuBarButton,
+            stopAndQuitButton,
         ]
-        guard buttons.indices.contains(index) else { return }
-        buttons[index].performClick(nil)
     }
 }
 

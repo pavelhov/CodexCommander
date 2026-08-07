@@ -46,10 +46,13 @@ The panel has one **Launch at Login** switch and reports the resulting mode:
 - **Off** — neither the menu app nor a background service starts automatically; open the app or run
   `ocx start` manually.
 
-The visible app and background server remain separate internally because **Quit** closes only the
-UI. macOS may therefore list OpenCodex under both **Open at Login** and **Allow in the Background**;
-those are two responsibilities of one installation, not duplicate app copies. Turning off Launch at
-Login never installs, removes, starts, or stops the background service.
+The visible app and background server remain separate internally. With the OpenCodex panel active,
+**Quit Menu Bar** (`⌘Q`) closes only the companion UI and deliberately leaves routing active.
+**Stop OpenCodex and Quit…** (`⌥⌘Q`) is the explicit destructive exit: after confirmation, it stops
+the proxy and service, restores native Codex routing, and closes the companion only after the stop is verified. macOS may
+therefore list OpenCodex under both **Open at Login** and **Allow in the Background**; those are two
+responsibilities of one installation, not duplicate app copies. Turning off Launch at Login never
+installs, removes, starts, or stops the background service.
 
 If macOS requires approval, the startup row links directly to **System Settings → General → Login
 Items & Extensions**. OpenCodex reflects a revocation made there instead of repeatedly trying to
@@ -68,12 +71,17 @@ override it.
 - **Dashboard and Logs** — open the corresponding local dashboard view in your default browser.
 - **Manage** — opens the selected provider's Accounts or API Keys tab. OAuth, API-key entry,
   reauthentication, account switching, and provider configuration stay in the dashboard.
-- **Stop** — always asks for confirmation, interrupts active client and sub-agent requests, restores
-  native Codex, and leaves the menu app open.
-- **Restart** — always asks for confirmation, lets the proxy drain active requests for up to 60
+- **Stop Proxy…** — always asks for confirmation, interrupts active client and sub-agent requests,
+  restores native Codex, and leaves the menu app open.
+- **Restart Proxy…** — always asks for confirmation, lets the proxy drain active requests for up to 60
   seconds, then reconnects to the replacement process. Accepting the restart request is not
   presented as completion; the app waits until the new process passes identity checks.
-- **Quit** — closes the companion UI only. It does not stop the proxy, service, or client routing.
+- **Quit Menu Bar** — closes the companion UI only. It does not stop the proxy, service, or client
+  routing. With the panel active, this is the safe `⌘Q` action.
+- **Stop OpenCodex and Quit…** — confirms the interruption, stops the background proxy and service,
+  restores native Codex routing, and quits only after the stopped state is confirmed. If stopping
+  fails, the companion stays open and reports the error. With the panel active, its shortcut is
+  `⌥⌘Q`.
 
 ChatGPT appears first and expanded when its quota report is available. Kimi and Grok appear as
 collapsed summaries. A configured quota-capable provider that returns no report stays visible as
