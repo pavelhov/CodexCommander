@@ -56,7 +56,10 @@ Control 键点按该应用，选择**打开**，然后确认**打开**。本地�
 
 如果 ChatGPT 的配额报告可用，ChatGPT 会排在最前并默认展开。Kimi 和 Grok 显示为折叠摘要。
 已配置且支持配额的提供商即使未返回报告也不会从列表中消失；该行会显示**配额不可用**，展开后可进入
-提供商设置。**查看所有提供商**会打开完整的 Providers 工作区。
+提供商设置。如果关联的 Grok 或 Kimi CLI 登录已过期，该行会改为显示**登录需要刷新**，并提示运行
+`grok` 或 `kimi`，然后点击**刷新**。被拒绝的登录显示为**需要登录**，网络或上游故障显示为
+**暂时不可用**。这些是本地代理返回的固定隐私安全原因代码，不是原始提供商错误。
+**查看所有提供商**会打开完整的 Providers 工作区。
 
 ## 身份验证与隐私
 
@@ -104,6 +107,8 @@ open dist/macos/OpenCodex.app
 源码应用的唯一位置是 `dist/macos/OpenCodex.app`。它使用同一检出中的 Bun 和 CLI，因此需要先运行
 `bun install`。开发期间请保留在此位置，不要复制到 Application Support。双击会尝试确保代理运行；
 即使离线或启动失败，应用也不会关闭，面板和 **Start** 控件仍可使用。
+每次构建都会把准确的 Git 修订写入应用包 `Info.plist` 的 `OpenCodexSourceRevision`，并在构建结束时
+输出。未提交的源码会带有 `-dirty`，因此制作最终分发包前请先提交。
 
 ## 故障排除
 
@@ -112,7 +117,8 @@ open dist/macos/OpenCodex.app
 - **身份验证不可用** — 运行 <code>ocx doctor</code>；确认 OpenCodex 状态目录和
   <code>admin-api-token</code> 归你的用户所有，并且组用户和其他用户无法访问。
 - **配额不可用** — 打开该提供商的**管理**目标，然后连接或重新认证账户。部分提供商不公开
-  配额 API。
+  配额 API。如果 Grok 显示**登录需要刷新**，请运行 <code>grok</code> 完成登录，然后在 OpenCodex
+  中点击**刷新**；Kimi 的对应操作使用 <code>kimi</code>。
 - **重启后未恢复** — 打开 **Logs** 并运行 <code>ocx status</code>。伴侣绝不会将终止进程或重写
   服务状态作为回退措施。
 

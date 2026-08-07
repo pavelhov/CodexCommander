@@ -38,6 +38,10 @@ func decodeProviders(_ json: String) -> [ProviderSummary] {
     try! JSONDecoder().decode([ProviderSummary].self, from: Data(json.utf8))
 }
 
+func decodeQuotaAvailability(_ json: String) -> [ProviderQuotaAvailability] {
+    try! JSONDecoder().decode([ProviderQuotaAvailability].self, from: Data(json.utf8))
+}
+
 func activitySnapshot(
     activities: String,
     unattributed: Int = 0,
@@ -60,6 +64,7 @@ func activitySnapshot(
 
 func makeSnapshot(
     quotas: [QuotaReport] = [],
+    quotaAvailability: [ProviderQuotaAvailability] = [],
     activity: AgentActivitySnapshot? = nil,
     providers: [ProviderSummary] = [],
     health: StartupHealth = StartupHealth(status: "protected"),
@@ -71,6 +76,7 @@ func makeSnapshot(
         state: .running(health),
         endpoint: .default,
         quotas: quotas,
+        quotaAvailability: quotaAvailability,
         activity: activity,
         providers: providers,
         lastUpdated: Date(),
@@ -219,7 +225,16 @@ runner.test("ui: configured Grok stays visible when its quota report is unavaila
     ]
     """)
     let accordion = ProviderQuotaAccordionView()
-    accordion.apply(makeSnapshot(quotas: quotas, providers: providers, providersLoaded: true))
+    let availability = decodeQuotaAvailability("""
+    [{"provider":"xai","status":"unavailable",
+      "reason":"local_cli_refresh_required","checkedAt":1}]
+    """)
+    accordion.apply(makeSnapshot(
+        quotas: quotas,
+        quotaAvailability: availability,
+        providers: providers,
+        providersLoaded: true
+    ))
 
     runner.equal(
         accordion.providerIDs,
@@ -232,8 +247,8 @@ runner.test("ui: configured Grok stays visible when its quota report is unavaila
         "placeholder carries no quota claim"
     )
     runner.expect(
-        accordion.providerAccessibilityLabelForTesting("xai")?.contains("unavailable") == true,
-        "VoiceOver names the unavailable state"
+        accordion.providerAccessibilityLabelForTesting("xai")?.contains("login needs refresh") == true,
+        "VoiceOver names the actionable login state"
     )
 }
 

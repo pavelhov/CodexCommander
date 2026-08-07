@@ -21,6 +21,9 @@ const RECOVERY_AT = Date.UTC(2026, 7, 8, 4, 32);
 const providers = {
   openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
 } as never;
+const grokProvider = {
+  xai: { adapter: "openai-responses", authMode: "oauth", baseUrl: "https://api.x.ai/v1" },
+} as never;
 
 type TestCapacityWindow = {
   usedPercent: number;
@@ -182,14 +185,17 @@ afterEach(async () => {
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: originalFetch });
 });
 
-async function mountShell(quotaRefreshEpoch = 0) {
+async function mountShell(
+  quotaRefreshEpoch = 0,
+  providerConfig: Parameters<typeof ProviderWorkspaceShell>[0]["providers"] = providers,
+) {
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
     root ??= createRoot(host);
     root.render(
       <LanguageProvider>
         <ProviderWorkspaceShell
-          providers={providers}
+          providers={providerConfig}
           apiBase=""
           defaultProvider="openai"
           selectedName={null}
@@ -202,6 +208,25 @@ async function mountShell(quotaRefreshEpoch = 0) {
   });
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
 }
+
+test("quota auth availability immediately moves Grok from connected to needs attention", async () => {
+  quotaPayload = {
+    reports: [],
+    availability: [{
+      provider: "xai",
+      status: "unavailable",
+      reason: "local_cli_refresh_required",
+      checkedAt: Date.now(),
+    }],
+  };
+
+  await mountShell(0, grokProvider);
+
+  const text = host.textContent ?? "";
+  expect(text).toContain("Needs attention");
+  expect(host.querySelector('[title="Needs attention"]')).not.toBeNull();
+  expect(text).not.toContain("1Ready");
+});
 
 test("provider quota fetch preserves aggregate capacity through shell state and render", async () => {
   await mountShell();

@@ -35,6 +35,23 @@ enum ModelDecodingSuite {
     """
 
     static func run(_ t: TestRunner) {
+        t.test("build provenance: formats only stamped git revisions") {
+            t.equal(
+                BuildProvenance.shortRevision(
+                    "d986bada3d4c7986b8d127b2d60eabfc81713d25"
+                ),
+                "d986bada"
+            )
+            t.equal(
+                BuildProvenance.shortRevision(
+                    "d986bada3d4c7986b8d127b2d60eabfc81713d25-dirty"
+                ),
+                "d986bada-dirty"
+            )
+            t.isNil(BuildProvenance.shortRevision("2.10.2"), "release version is not provenance")
+            t.isNil(BuildProvenance.shortRevision("unknown"), "unknown source")
+        }
+
         t.test("health: decodes the live startup-health payload") {
             let health = try decode(StartupHealth.self, liveHealth)
             t.equal(health.status, "at-risk")
@@ -83,6 +100,27 @@ enum ModelDecodingSuite {
             t.equal(byProvider["xai"]?.providerLabel, "xAI Grok")
         }
 
+        t.test("quotas: availability reasons are actionable and forward compatible") {
+            let envelope = try decode(ProviderQuotaEnvelope.self, """
+            {"generatedAt":1784915336899,"reports":[],"availability":[
+              {"provider":"xai","status":"unavailable",
+               "reason":"local_cli_refresh_required","checkedAt":1784915336899},
+              {"provider":"future","status":"future-state",
+               "reason":"future-reason","checkedAt":1784915336899}]}
+            """)
+            t.equal(envelope.availability?.count, 2)
+            t.equal(envelope.availability?.first?.status, .unavailable)
+            t.equal(envelope.availability?.first?.reason, .localCLIRefreshRequired)
+            t.equal(envelope.availability?.last?.status, .unknown)
+            t.equal(envelope.availability?.last?.reason, .unknown)
+
+            let oldProxy = try decode(
+                ProviderQuotaEnvelope.self,
+                #"{"generatedAt":1,"reports":[]}"#
+            )
+            t.isNil(oldProxy.availability, "older proxy fallback")
+        }
+
         t.test("providers: quota presentation eligibility mirrors supported probes") {
             let providers = try decode([ProviderSummary].self, """
             [
@@ -115,6 +153,10 @@ enum ModelDecodingSuite {
                 state: .running(StartupHealth(status: "protected")),
                 endpoint: .default,
                 quotas: reports,
+                quotaAvailability: try decode([ProviderQuotaAvailability].self, """
+                [{"provider":"openai","status":"unavailable",
+                  "reason":"reauth_required","checkedAt":1}]
+                """),
                 providers: providers,
                 providersLoaded: true,
                 quotasLoaded: true
@@ -124,6 +166,10 @@ enum ModelDecodingSuite {
             t.equal(rows.filter { $0.provider == "xai" }.count, 1, "actual report wins")
             t.equal(rows.first { $0.provider == "xai" }?.isUnavailable, false)
             t.equal(rows.first { $0.provider == "openai" }?.isUnavailable, true)
+            t.equal(
+                rows.first { $0.provider == "openai" }?.availability?.reason,
+                .reauthRequired
+            )
         }
 
         t.test("quotas: nested freshness wins and report freshness fills the gap") {

@@ -85,8 +85,11 @@ override it.
 
 ChatGPT appears first and expanded when its quota report is available. Kimi and Grok appear as
 collapsed summaries. A configured quota-capable provider that returns no report stays visible as
-**Quota unavailable**; expand it to open Provider settings. **View all providers** opens the
-complete Providers workspace.
+**Quota unavailable**; expand it to open Provider settings. When a linked Grok or Kimi CLI login is
+stale, the row instead says **Login needs refresh** and tells you to run `grok` or `kimi`, then use
+**Refresh**. A rejected account login says **Sign-in required**; a network or upstream failure says
+**Temporarily unavailable**. These states are fixed, privacy-safe reason codes from the local proxy,
+not raw provider errors. **View all providers** opens the complete Providers workspace.
 
 ## Authentication and privacy
 
@@ -142,6 +145,9 @@ it attempts to ensure the proxy, but a missing CLI, offline failure, or failed s
 the app: its status panel remains available and **Start** can be retried. This source workflow does
 not install or copy the app into Application Support. A rebuild at the same path is detected on the
 next launch and refreshes the existing Login Item registration only when Launch at Login remains on.
+Each build stamps its exact Git revision into `OpenCodexSourceRevision` in the bundle's `Info.plist`
+and prints it at the end of the build. Uncommitted source is marked with `-dirty`, so commit before
+making a final distributable bundle.
 
 ## Troubleshooting
 
@@ -153,7 +159,9 @@ next launch and refreshes the existing Login Item registration only when Launch 
   directory and <code>admin-api-token</code> are owned by your user and are not group/world
   accessible.
 - **Quota unavailable** — open **Provider settings** and connect or reauthenticate
-  the account. Some providers do not expose a quota API.
+  the account. If Grok says **Login needs refresh**, run <code>grok</code>, complete its login, then
+  use **Refresh** in OpenCodex; use <code>kimi</code> for the equivalent Kimi state. Some providers do
+  not expose a quota API.
 - **Restart did not recover** — open **Logs** and run <code>ocx status</code>. The companion never
   kills a process or rewrites service state as a fallback.
 

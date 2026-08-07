@@ -78,6 +78,7 @@ public struct ProxySnapshot: Equatable, Sendable {
     public var state: ProxyState
     public var endpoint: ProxyEndpoint
     public var quotas: [QuotaReport]
+    public var quotaAvailability: [ProviderQuotaAvailability]
     public var activity: AgentActivitySnapshot?
     public var providers: [ProviderSummary]
     public var lastUpdated: Date?
@@ -99,6 +100,7 @@ public struct ProxySnapshot: Equatable, Sendable {
         state: ProxyState = .loading,
         endpoint: ProxyEndpoint,
         quotas: [QuotaReport] = [],
+        quotaAvailability: [ProviderQuotaAvailability] = [],
         activity: AgentActivitySnapshot? = nil,
         providers: [ProviderSummary] = [],
         lastUpdated: Date? = nil,
@@ -113,6 +115,7 @@ public struct ProxySnapshot: Equatable, Sendable {
         self.state = state
         self.endpoint = endpoint
         self.quotas = quotas
+        self.quotaAvailability = quotaAvailability
         self.activity = activity
         self.providers = providers
         self.lastUpdated = lastUpdated

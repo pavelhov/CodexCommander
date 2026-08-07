@@ -25,6 +25,8 @@ enum PollingSuite {
             t.equal(snapshot.activity?.activities.count, 2)
             t.equal(snapshot.quotasLoaded, true)
             t.equal(snapshot.quotas.count, 2)
+            t.equal(snapshot.quotaAvailability.count, 1)
+            t.equal(snapshot.quotaAvailability[0].reason, .localCLIRefreshRequired)
 
             StubProtocol.reset([
                 .init(status: 200, body: identity),
@@ -167,6 +169,66 @@ enum PollingSuite {
             t.equal(snapshot.quotasLoaded, true)
             t.equal(snapshot.quotas.count, 2)
         }
+
+        t.test("polling: manual refresh bypasses the proxy quota cache") {
+            StubProtocol.reset(openResponses())
+            let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
+            let client = ProxyClient(
+                endpoint: endpoint,
+                session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
+                credentials: StaticCredentialStore("admin-secret")
+            )
+            let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
+            sync { await coordinator.setPopoverOpen(true) }
+
+            StubProtocol.reset(openResponses())
+            sync { await coordinator.forceRefresh() }
+
+            let quotaRequest = StubProtocol.recorded.first {
+                $0.url?.path == "/api/provider-quotas"
+            }
+            let refreshValue = quotaRequest?.url.flatMap {
+                URLComponents(url: $0, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first { $0.name == "refresh" }?.value
+            }
+            t.equal(refreshValue, "1")
+        }
+
+        t.test("polling: force refresh queued mid-cycle retains its cache bypass") {
+            StubProtocol.reset(openResponses() + openResponses())
+            let gate = StubProtocol.pauseNextRequest()
+            let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
+            let client = ProxyClient(
+                endpoint: endpoint,
+                session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
+                credentials: StaticCredentialStore("admin-secret")
+            )
+            let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
+            let opening = Task { await coordinator.setPopoverOpen(true) }
+            let started = gate.waitUntilStarted()
+            guard started else {
+                gate.resume()
+                sync { await opening.value }
+                t.equal(started, true)
+                return
+            }
+            sync { await coordinator.forceRefresh() }
+            gate.resume()
+            sync { await opening.value }
+
+            let quotaRequests = StubProtocol.recorded.filter {
+                $0.url?.path == "/api/provider-quotas"
+            }
+            t.equal(quotaRequests.count, 2)
+            let refreshValues = quotaRequests.map { request in
+                request.url.flatMap {
+                    URLComponents(url: $0, resolvingAgainstBaseURL: false)?
+                        .queryItems?.first { $0.name == "refresh" }?.value
+                }
+            }
+            t.isNil(refreshValues[0], "ordinary first-cycle quota query")
+            t.equal(refreshValues[1], "1")
+        }
     }
 
     private static func openResponses() -> [StubProtocol.Response] {
@@ -180,7 +242,9 @@ enum PollingSuite {
         let quotas = """
         {"generatedAt":1780000000000,"reports":[
           {"provider":"openai","label":"ChatGPT","quota":{"fiveHourPercent":38,"weeklyPercent":22}},
-          {"provider":"kimi","label":"Kimi","quota":{"weeklyPercent":41}}]}
+          {"provider":"kimi","label":"Kimi","quota":{"weeklyPercent":41}}],
+         "availability":[{"provider":"xai","status":"unavailable",
+          "reason":"local_cli_refresh_required","checkedAt":1780000000000}]}
         """
         return healthResponses(#"{"status":"protected"}"#)
             + healthResponses(activity)

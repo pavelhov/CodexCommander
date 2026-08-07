@@ -71,11 +71,6 @@ private struct HealthIdentity: Decodable {
     let port: Int
 }
 
-private struct QuotaEnvelope: Decodable {
-    let generatedAt: Double?
-    let reports: [QuotaReport]?
-}
-
 private struct EmptyBody: Encodable {}
 
 public struct RestartAccepted: Decodable, Equatable, Sendable {
@@ -169,12 +164,11 @@ public actor ProxyClient {
         try await authenticatedGet("api/agent-activity")
     }
 
-    public func quotas(forceRefresh: Bool = false) async throws -> [QuotaReport] {
-        let envelope: QuotaEnvelope = try await authenticatedGet(
+    public func quotas(forceRefresh: Bool = false) async throws -> ProviderQuotaEnvelope {
+        try await authenticatedGet(
             "api/provider-quotas",
             query: forceRefresh ? [URLQueryItem(name: "refresh", value: "1")] : []
         )
-        return envelope.reports ?? []
     }
 
     public func restart() async throws -> RestartAccepted {

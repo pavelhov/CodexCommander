@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -182,6 +182,9 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
       expect(existsSync(join(resources, "provider-icons", "claude-color.svg"))).toBe(true);
       expect(existsSync(join(resources, "provider-icons", "cursor-color.svg"))).toBe(true);
       expect(existsSync(join(resources, "provider-icons", "gemini-color.svg"))).toBe(true);
+      const info = readFileSync(join(inside, "OpenCodex.app", "Contents", "Info.plist"), "utf8");
+      expect(info).toContain("<key>OpenCodexSourceRevision</key>");
+      expect(info).toMatch(/[0-9a-f]{40}(?:-dirty)?/);
     } finally {
       rmSync(inside, { recursive: true, force: true });
     }

@@ -2,6 +2,22 @@ import Foundation
 import MenuBarCore
 
 final class StubProtocol: URLProtocol, @unchecked Sendable {
+    final class RequestGate: @unchecked Sendable {
+        private let started = DispatchSemaphore(value: 0)
+        private let resumeSignal = DispatchSemaphore(value: 0)
+
+        fileprivate func block() {
+            started.signal()
+            resumeSignal.wait()
+        }
+
+        func waitUntilStarted(timeout: TimeInterval = 2) -> Bool {
+            started.wait(timeout: .now() + timeout) == .success
+        }
+
+        func resume() { resumeSignal.signal() }
+    }
+
     struct Response {
         let status: Int
         let body: String
@@ -23,13 +39,23 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
 
     nonisolated(unsafe) private static var queue: [Response] = []
     nonisolated(unsafe) private static var requests: [URLRequest] = []
+    nonisolated(unsafe) private static var nextGate: RequestGate?
     private static let lock = NSLock()
 
     static func reset(_ responses: [Response]) {
         lock.lock()
         queue = responses
         requests = []
+        nextGate = nil
         lock.unlock()
+    }
+
+    static func pauseNextRequest() -> RequestGate {
+        let gate = RequestGate()
+        lock.lock()
+        nextGate = gate
+        lock.unlock()
+        return gate
     }
 
     static var recorded: [URLRequest] {
@@ -45,7 +71,11 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         Self.lock.lock()
         Self.requests.append(request)
         let response = Self.queue.isEmpty ? nil : Self.queue.removeFirst()
+        let gate = Self.nextGate
+        Self.nextGate = nil
         Self.lock.unlock()
+
+        gate?.block()
 
         guard let response else {
             client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))

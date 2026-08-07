@@ -16,6 +16,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     private var lifecycleInFlight = false
     private let launchAtLoginController = LaunchAtLoginController()
     private lazy var executableFingerprint = ExecutableFingerprint.current()
+    private lazy var sourceRevision = BuildProvenance.shortRevision(
+        Bundle.main.object(forInfoDictionaryKey: "OpenCodexSourceRevision")
+    )
     private lazy var launchAtLoginRegistrationAllowed =
         LaunchAtLoginEligibility.isStableBundle(Bundle.main.bundleURL)
 
@@ -148,7 +151,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         latest = snapshot
         endpoint = snapshot.endpoint
         statusItem?.button?.image = StatusIcon.image(for: snapshot.state)
-        statusItem?.button?.toolTip = "OpenCodex — \(snapshot.state.title) (\(snapshot.endpoint.display))"
+        let build = sourceRevision.map { " · build \($0)" } ?? ""
+        statusItem?.button?.toolTip = "OpenCodex — \(snapshot.state.title) (\(snapshot.endpoint.display))\(build)"
         controller.apply(snapshot)
         if !restartInFlight && !lifecycleInFlight {
             controller.setRestartEnabled(snapshot.state.isRunning)

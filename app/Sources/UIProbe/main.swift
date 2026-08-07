@@ -191,6 +191,16 @@ private enum Fixture {
           {"name":"xai","authMode":"oauth","quotaCapable":true}
         ]
         """
+        let availabilityJSON = """
+        [
+          {
+            "provider": "xai",
+            "status": "unavailable",
+            "reason": "local_cli_refresh_required",
+            "checkedAt": \(ms)
+          }
+        ]
+        """
 
         let activity = try! JSONDecoder().decode(
             AgentActivitySnapshot.self,
@@ -204,6 +214,10 @@ private enum Fixture {
             [ProviderSummary].self,
             from: Data(providersJSON.utf8)
         )
+        let quotaAvailability = try! JSONDecoder().decode(
+            [ProviderQuotaAvailability].self,
+            from: Data(availabilityJSON.utf8)
+        )
 
         return ProxySnapshot(
             state: .running(StartupHealth(
@@ -216,6 +230,7 @@ private enum Fixture {
             )),
             endpoint: endpoint,
             quotas: quotas,
+            quotaAvailability: quotaAvailability,
             activity: activity,
             providers: providers,
             lastUpdated: now,

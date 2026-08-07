@@ -265,7 +265,7 @@ final class ProviderQuotaRowView: NSView {
         headerButton.imagePosition = .imageOnly
         headerButton.setAccessibilityLabel(
             row.isUnavailable
-                ? "\(display) quotas, unavailable"
+                ? "\(display) quotas, \(unavailableSummary(row).lowercased())"
                 : "\(display) quotas"
         )
         headerButton.setAccessibilityRole(.button)
@@ -296,7 +296,7 @@ final class ProviderQuotaRowView: NSView {
         if expanded {
             if row.isUnavailable {
                 let missing = makeLabel(
-                    "No quota data. Check Provider settings.",
+                    unavailableDetail(row),
                     font: Theme.caption,
                     color: Theme.muted
                 )
@@ -348,7 +348,7 @@ final class ProviderQuotaRowView: NSView {
         setAccessibilityRole(.group)
         setAccessibilityLabel(
             row.isUnavailable
-                ? "\(display) provider quotas, unavailable"
+                ? "\(display) provider quotas, \(unavailableSummary(row).lowercased())"
                 : "\(display) provider quotas"
         )
 
@@ -360,6 +360,32 @@ final class ProviderQuotaRowView: NSView {
 
     private weak var headerButton: ActionButton?
     private weak var manageButton: ActionButton?
+
+    private func unavailableSummary(_ row: ProviderQuotaRow) -> String {
+        switch row.availability?.reason {
+        case .localCLIRefreshRequired: return "Login needs refresh"
+        case .reauthRequired: return "Sign-in required"
+        case .upstreamUnavailable: return "Temporarily unavailable"
+        case .unknown, nil: return "Quota unavailable"
+        }
+    }
+
+    private func unavailableDetail(_ row: ProviderQuotaRow) -> String {
+        switch row.availability?.reason {
+        case .localCLIRefreshRequired:
+            switch row.provider.lowercased() {
+            case "xai": return "Grok login needs refresh. Run `grok`, then refresh."
+            case "kimi", "kimi-code": return "Kimi login needs refresh. Run `kimi`, then refresh."
+            default: return "CLI login needs refresh. Open Provider settings."
+            }
+        case .reauthRequired:
+            return "Login needs attention. Open Provider settings."
+        case .upstreamUnavailable:
+            return "Quota is temporarily unavailable. Try Refresh."
+        case .unknown, nil:
+            return "No quota data. Check Provider settings."
+        }
+    }
 
     func headerHitTestingWorksForTesting() -> Bool {
         layoutSubtreeIfNeeded()
@@ -383,7 +409,7 @@ final class ProviderQuotaRowView: NSView {
     }
 
     private func collapsedSummary(_ row: ProviderQuotaRow) -> String {
-        guard let report = row.report else { return "Quota unavailable" }
+        guard let report = row.report else { return unavailableSummary(row) }
         let windows = report.normalizedWindows().filter(\.hasPercent)
         if !windows.isEmpty {
             let parts = windows.prefix(3).map { window -> String in

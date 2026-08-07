@@ -281,10 +281,19 @@ export class UnsupportedOAuthProviderError extends Error {
   }
 }
 
+export type OAuthLoginRequiredReason = "reauth_required" | "local_cli_refresh_required";
+
 export class OAuthLoginRequiredError extends Error {
-  constructor(provider: string, message = `Not logged in to ${provider}. Run: ocx login ${provider}`) {
+  readonly reason: OAuthLoginRequiredReason;
+
+  constructor(
+    provider: string,
+    message = `Not logged in to ${provider}. Run: ocx login ${provider}`,
+    reason: OAuthLoginRequiredReason = "reauth_required",
+  ) {
     super(message);
     this.name = "OAuthLoginRequiredError";
+    this.reason = reason;
   }
 }
 
@@ -392,6 +401,7 @@ async function resolveAccessSnapshotForAccount(
     flightId: randomUUID(),
     dispatched: false,
   };
+  const refreshWriterGeneration = captureConfigGeneration();
   const refresh = (async (): Promise<OAuthAccessSnapshot> => {
     const accessToken = await refreshAndPersistAccessToken(provider, accountId, def, cred, abort.signal, flight, replacedStaleFlight);
     const persisted = getAccountCredential(provider, accountId);
@@ -400,8 +410,24 @@ async function resolveAccessSnapshotForAccount(
       throw new Error(`OAuth refresh persisted an unexpected access token for ${provider}`);
     }
     return accessSnapshot(provider, accountId, persisted);
-  })().catch(error => {
+  })().catch(async error => {
     if (abort.signal.reason instanceof OAuthTokenRefreshStaleError) throw abort.signal.reason;
+    if (error instanceof OAuthLoginRequiredError) {
+      // Persist only a typed, generation-bound readiness bit. A concurrent successful
+      // refresh/adoption changes the credential generation, so this late failure cannot
+      // mark the replacement account stale. Read surfaces stay local and never need to
+      // probe an OAuth endpoint merely to tell the truth about the last terminal result.
+      try {
+        await markAccountNeedsReauthIfGeneration(
+          provider,
+          accountId,
+          current.generation,
+          refreshWriterGeneration,
+        );
+      } catch {
+        // Readiness persistence must not replace the provider's actionable auth error.
+      }
+    }
     throw error;
   }).finally(() => {
     if (tokenRefreshes.get(key) === flight) tokenRefreshes.delete(key);
@@ -541,7 +567,11 @@ export async function refreshXaiLocalCliAccountWithLock(
 
     const disk = detectGrokCliToken();
     if (!disk || disk.expires <= now() + REFRESH_SKEW_MS) {
-      throw new OAuthLoginRequiredError(provider, XAI_LOCAL_CLI_REFRESH_REQUIRED);
+      throw new OAuthLoginRequiredError(
+        provider,
+        XAI_LOCAL_CLI_REFRESH_REQUIRED,
+        "local_cli_refresh_required",
+      );
     }
     if (!hasComparableGrokIdentity(stored, disk)) {
       throw new OAuthLoginRequiredError(
@@ -559,7 +589,11 @@ export async function refreshXaiLocalCliAccountWithLock(
       credentialGeneration(disk) === credentialGeneration(stored)
       || !shouldAdoptGrokGeneration(stored, disk, now(), REFRESH_SKEW_MS)
     ) {
-      throw new OAuthLoginRequiredError(provider, XAI_LOCAL_CLI_REFRESH_REQUIRED);
+      throw new OAuthLoginRequiredError(
+        provider,
+        XAI_LOCAL_CLI_REFRESH_REQUIRED,
+        "local_cli_refresh_required",
+      );
     }
 
     await deps.beforeAdoptPersist?.();
@@ -571,7 +605,11 @@ export async function refreshXaiLocalCliAccountWithLock(
       const winner = await scrubXaiLocalCliRefreshGrant(provider, accountId, outcome.stored);
       const winnerChangedAccess = winner.access !== stored.access || winner.expires !== stored.expires;
       if (winnerChangedAccess && winner.expires > now() + REFRESH_SKEW_MS) return winner.access;
-      throw new OAuthLoginRequiredError(provider, XAI_LOCAL_CLI_REFRESH_REQUIRED);
+      throw new OAuthLoginRequiredError(
+        provider,
+        XAI_LOCAL_CLI_REFRESH_REQUIRED,
+        "local_cli_refresh_required",
+      );
     }
     logOAuthEvent("Grok CLI access-token generation adopted read-only", { provider, accountId });
     return disk.access;
@@ -613,7 +651,11 @@ export async function refreshKimiLocalCliAccountWithLock(
 
     const disk = detectKimiCliToken();
     if (!disk || disk.expires <= now() + REFRESH_SKEW_MS) {
-      throw new OAuthLoginRequiredError(provider, KIMI_LOCAL_CLI_REFRESH_REQUIRED);
+      throw new OAuthLoginRequiredError(
+        provider,
+        KIMI_LOCAL_CLI_REFRESH_REQUIRED,
+        "local_cli_refresh_required",
+      );
     }
     if (!(stored.accountId || stored.email) || !(disk.accountId || disk.email)) {
       throw new OAuthLoginRequiredError(
@@ -628,7 +670,11 @@ export async function refreshKimiLocalCliAccountWithLock(
       );
     }
     if (!shouldAdoptKimiCliGeneration(stored, disk)) {
-      throw new OAuthLoginRequiredError(provider, KIMI_LOCAL_CLI_REFRESH_REQUIRED);
+      throw new OAuthLoginRequiredError(
+        provider,
+        KIMI_LOCAL_CLI_REFRESH_REQUIRED,
+        "local_cli_refresh_required",
+      );
     }
 
     const outcome = await mergeAccountCredential(provider, accountId, disk, {
@@ -637,7 +683,11 @@ export async function refreshKimiLocalCliAccountWithLock(
     });
     if (outcome.superseded) {
       if (outcome.stored.expires > now() + REFRESH_SKEW_MS) return outcome.stored.access;
-      throw new OAuthLoginRequiredError(provider, KIMI_LOCAL_CLI_REFRESH_REQUIRED);
+      throw new OAuthLoginRequiredError(
+        provider,
+        KIMI_LOCAL_CLI_REFRESH_REQUIRED,
+        "local_cli_refresh_required",
+      );
     }
     logOAuthEvent("Kimi CLI access-token generation adopted read-only", { provider, accountId });
     return disk.access;
@@ -1430,10 +1480,11 @@ export function submitManualLoginCode(provider: string, input: string): { ok: tr
 
 export interface OAuthAccountSummary { id: string; alias?: string; email?: string; active: boolean; needsReauth?: boolean; expiresAt?: number }
 
-export function getLoginStatus(provider: string): { loggedIn: boolean; email?: string; source?: OAuthCredentials["source"]; error?: string; done: boolean; activeAccountId?: string; accounts?: OAuthAccountSummary[] } {
+export function getLoginStatus(provider: string): { loggedIn: boolean; email?: string; source?: OAuthCredentials["source"]; error?: string; done: boolean; needsReauth?: boolean; activeAccountId?: string; accounts?: OAuthAccountSummary[] } {
   const cred = getCredential(provider);
   const st = loginState.get(provider);
   const set = getAccountSet(provider);
+  const activeAccount = set?.accounts.find(account => account.id === set.activeAccountId);
   const accounts: OAuthAccountSummary[] | undefined = set?.accounts.map(a => ({
     id: a.id,
     ...(a.alias ? { alias: a.alias } : {}),
@@ -1448,6 +1499,7 @@ export function getLoginStatus(provider: string): { loggedIn: boolean; email?: s
     source: cred?.source,
     error: st?.error,
     done: st?.done ?? false,
+    ...(activeAccount?.needsReauth ? { needsReauth: true } : {}),
     ...(set ? { activeAccountId: set.activeAccountId, accounts } : {}),
   };
 }

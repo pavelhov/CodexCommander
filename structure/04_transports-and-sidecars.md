@@ -421,7 +421,10 @@ Grounded in the open-sourced official client (xai-org/grok-build); unit + eviden
   `~/.grok/auth.json` (read-only) and adopt a newer usable generation with zero IdP calls
   (`shouldAdoptGrokGeneration`, later-expiresAt authority). OpenCodex never submits the native
   CLI refresh token; a separate browser OAuth login creates an OpenCodex-owned `source:"oauth"`
-  credential instead of detaching a linked CLI credential during refresh.
+  credential instead of detaching a linked CLI credential during refresh. A terminal stale-CLI
+  result marks only the rejected stored generation as needing attention and is projected to quota
+  clients as the fixed `local_cli_refresh_required` reason; it never serializes the OAuth exception,
+  account identity, or credential.
 - **Two-lock refresh transaction:** per-provider+account intent lock held across the IdP
   exchange plus a short global store-write lock + async mutation funnel around every
   `auth.json` load-merge-persist (`src/oauth/store.ts`); generation-guarded persist

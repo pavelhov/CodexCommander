@@ -205,6 +205,31 @@ fi
 plutil -replace CFBundleShortVersionString -string "$version_core" "$staged_app/Contents/Info.plist"
 plutil -replace CFBundleVersion            -string "$build_version" "$staged_app/Contents/Info.plist"
 
+# Same-version bundles can coexist when contributors build from multiple worktrees.
+# Stamp the exact source revision so diagnostics can distinguish them without relying
+# on the bundle path or a release version shared by both copies. A dirty suffix is
+# deliberate: claiming the HEAD commit for uncommitted source would be false provenance.
+source_revision="${OPENCODEX_BUILD_REVISION:-}"
+if [[ -z "$source_revision" ]]; then
+  source_revision="$(git -C "$repo_root" rev-parse --verify HEAD 2>/dev/null || true)"
+  # `git diff` ignores untracked source files. Porcelain status covers staged,
+  # unstaged, and untracked (but not ignored build output), so `-dirty` cannot
+  # falsely claim that a newly added source file belongs to HEAD.
+  if [[ -n "$source_revision" ]] \
+    && [[ -n "$(git -C "$repo_root" status --porcelain --untracked-files=normal 2>/dev/null)" ]]; then
+    source_revision="${source_revision}-dirty"
+  fi
+fi
+if [[ -z "$source_revision" ]]; then
+  source_revision="unknown"
+elif [[ ! "$source_revision" =~ ^[0-9a-fA-F]{40}(-dirty)?$ ]]; then
+  echo "OPENCODEX_BUILD_REVISION must be a 40-character git SHA with optional -dirty suffix." >&2
+  exit 1
+fi
+if ! plutil -replace OpenCodexSourceRevision -string "$source_revision" "$staged_app/Contents/Info.plist" 2>/dev/null; then
+  plutil -insert OpenCodexSourceRevision -string "$source_revision" "$staged_app/Contents/Info.plist"
+fi
+
 # Icon: reuse the dashboard favicon rather than adding another binary asset to the repo.
 icon_source="$repo_root/gui/public/favicon.png"
 if [[ ! -f "$icon_source" ]]; then
@@ -251,5 +276,5 @@ fi
 rm -rf "$app_bundle"
 mv "$staged_app" "$app_bundle"
 
-echo "==> Built $app_bundle (release $version, short $version_core, build $build_version)"
+echo "==> Built $app_bundle (release $version, short $version_core, build $build_version, source $source_revision)"
 lipo -archs "$app_bundle/Contents/MacOS/OpenCodexMenuBar"

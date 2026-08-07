@@ -27,6 +27,9 @@ public actor PollingCoordinator {
     /// immediately reopening the popover dropped the reopen's refresh entirely: the old
     /// cycle exited on its generation guard and the new one had already been rejected.
     private var pendingOpenRefresh = false
+    /// Preserve a user-requested server-cache bypass when it arrives during another
+    /// cycle; reducing it to a normal pending refresh would make the button lie.
+    private var pendingQuotaForceRefresh = false
     /// A stale-while-revalidate startup-health response is intentionally conservative.
     /// Keep the neutral/last-known state while the background probe catches up, but
     /// bound retries so a genuinely broken diagnostic eventually remains visible.
@@ -87,9 +90,19 @@ public actor PollingCoordinator {
     /// while the provider quota read still respects
     /// the 60s interval so reopening the popover repeatedly does not hammer the proxy.
     public func refresh(includeHeavy: Bool = false) async {
+        await performRefresh(includeHeavy: includeHeavy, forceQuotaRefresh: false)
+    }
+
+    /// Internal pairing keeps `forceQuotaRefresh` from being requested without the
+    /// popover-heavy reads that can actually consume it.
+    private func performRefresh(
+        includeHeavy: Bool,
+        forceQuotaRefresh: Bool
+    ) async {
         // Overlapping cycles publish interleaved state and double the request rate.
         guard !refreshInFlight else {
             if includeHeavy { pendingOpenRefresh = true }
+            if forceQuotaRefresh { pendingQuotaForceRefresh = true }
             return
         }
         refreshInFlight = true
@@ -154,12 +167,12 @@ public actor PollingCoordinator {
 
             // Rate-limit on ATTEMPT, not success, so a persistently failing endpoint is
             // not retried on every two-second activity cycle.
-            let quotaDue = lastQuotaAttempt.map {
+            let quotaDue = forceQuotaRefresh || (lastQuotaAttempt.map {
                 Date().timeIntervalSince($0) >= Self.heavyInterval
-            } ?? true
+            } ?? true)
             if quotaDue, isCurrent(cycle) {
                 lastQuotaAttempt = Date()
-                await refreshQuotas(cycle: cycle)
+                await refreshQuotas(cycle: cycle, forceRefresh: forceQuotaRefresh)
             }
         }
 
@@ -169,20 +182,22 @@ public actor PollingCoordinator {
     }
 
     /// User-initiated refresh: activity is immediate and quotas bypass their normal
-    /// sixty-second cadence exactly once.
+    /// sixty-second cadence and the proxy's five-minute cache exactly once.
     public func forceRefresh() async {
-        lastQuotaAttempt = nil
-        await refresh(includeHeavy: true)
+        await performRefresh(includeHeavy: true, forceQuotaRefresh: true)
     }
 
     /// Runs a refresh that arrived while another cycle held the lock.
     private func drainPendingRefresh() async {
         guard pendingOpenRefresh, popoverOpen else {
             pendingOpenRefresh = false
+            pendingQuotaForceRefresh = false
             return
         }
+        let forceQuotaRefresh = pendingQuotaForceRefresh
         pendingOpenRefresh = false
-        await refresh(includeHeavy: true)
+        pendingQuotaForceRefresh = false
+        await performRefresh(includeHeavy: true, forceQuotaRefresh: forceQuotaRefresh)
     }
 
     /// Reads that are only meaningful while the popover is open.
@@ -219,11 +234,12 @@ public actor PollingCoordinator {
 
     /// The slower provider-quota read. A failed refresh preserves the last successful
     /// rows and their upstream freshness timestamps.
-    private func refreshQuotas(cycle: Int) async {
+    private func refreshQuotas(cycle: Int, forceRefresh: Bool) async {
         guard isCurrent(cycle) else { return }
-        if let quotas = try? await client.quotas() {
+        if let envelope = try? await client.quotas(forceRefresh: forceRefresh) {
             guard isCurrent(cycle) else { return }
-            snapshot.quotas = quotas
+            snapshot.quotas = envelope.reports ?? []
+            snapshot.quotaAvailability = envelope.availability ?? []
             snapshot.quotasLoaded = true
         }
     }

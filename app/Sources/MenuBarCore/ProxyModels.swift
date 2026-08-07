@@ -143,6 +143,53 @@ public struct QuotaReport: Decodable, Equatable, Sendable {
     public let updatedAt: Double?
 }
 
+public enum ProviderQuotaAvailabilityState: Equatable, Sendable, Decodable {
+    case available
+    case stale
+    case unavailable
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        switch try decoder.singleValueContainer().decode(String.self) {
+        case "available": self = .available
+        case "stale": self = .stale
+        case "unavailable": self = .unavailable
+        default: self = .unknown
+        }
+    }
+}
+
+public enum ProviderQuotaUnavailableReason: Equatable, Sendable, Decodable {
+    case reauthRequired
+    case localCLIRefreshRequired
+    case upstreamUnavailable
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        switch try decoder.singleValueContainer().decode(String.self) {
+        case "reauth_required": self = .reauthRequired
+        case "local_cli_refresh_required": self = .localCLIRefreshRequired
+        case "upstream_unavailable": self = .upstreamUnavailable
+        default: self = .unknown
+        }
+    }
+}
+
+public struct ProviderQuotaAvailability: Decodable, Equatable, Sendable {
+    public let provider: String
+    public let status: ProviderQuotaAvailabilityState
+    public let reason: ProviderQuotaUnavailableReason?
+    public let checkedAt: Double?
+}
+
+/// Additive `/api/provider-quotas` envelope. Older proxies omit `availability`; the
+/// companion preserves its existing generic unavailable fallback in that case.
+public struct ProviderQuotaEnvelope: Decodable, Equatable, Sendable {
+    public let generatedAt: Double?
+    public let reports: [QuotaReport]?
+    public let availability: [ProviderQuotaAvailability]?
+}
+
 public enum AgentActivityRole: String, Decodable, Equatable, Sendable {
     case primary
     case subagent
@@ -308,28 +355,35 @@ public struct ProviderSummary: Decodable, Equatable, Sendable {
 /// Tray-only display state. An unavailable row is structurally incapable of carrying
 /// a fabricated percentage, reset, source, or freshness timestamp.
 public enum ProviderQuotaRow: Equatable, Sendable {
-    case available(QuotaReport)
-    case unavailable(ProviderSummary)
+    case available(QuotaReport, ProviderQuotaAvailability?)
+    case unavailable(ProviderSummary, ProviderQuotaAvailability?)
 
     public var provider: String {
         switch self {
-        case .available(let report): return report.provider
-        case .unavailable(let summary): return summary.name
+        case .available(let report, _): return report.provider
+        case .unavailable(let summary, _): return summary.name
         }
     }
 
     public var label: String? {
-        if case .available(let report) = self { return report.label }
+        if case .available(let report, _) = self { return report.label }
         return nil
     }
 
     public var report: QuotaReport? {
-        if case .available(let report) = self { return report }
+        if case .available(let report, _) = self { return report }
         return nil
     }
 
+    public var availability: ProviderQuotaAvailability? {
+        switch self {
+        case .available(_, let availability), .unavailable(_, let availability):
+            return availability
+        }
+    }
+
     public var isUnavailable: Bool {
-        if case .unavailable = self { return true }
+        if case .unavailable(_, _) = self { return true }
         return false
     }
 
@@ -340,7 +394,15 @@ public extension ProxySnapshot {
     /// Join one completed provider inventory with the latest completed quota snapshot.
     /// Enabled configured providers form the left side; actual reports always win.
     var providerQuotaRows: [ProviderQuotaRow] {
-        guard providersLoaded, quotasLoaded else { return quotas.map(ProviderQuotaRow.available) }
+        let availabilityByProvider = Dictionary(
+            quotaAvailability.map { ($0.provider.lowercased(), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        guard providersLoaded, quotasLoaded else {
+            return quotas.map {
+                .available($0, availabilityByProvider[$0.provider.lowercased()])
+            }
+        }
 
         var reportsByProvider: [String: QuotaReport] = [:]
         for report in quotas {
@@ -350,10 +412,11 @@ public extension ProxySnapshot {
 
         var rows: [ProviderQuotaRow] = []
         for provider in providers where provider.isEnabled {
+            let availability = availabilityByProvider[provider.name.lowercased()]
             if let report = reportsByProvider.removeValue(forKey: provider.name.lowercased()) {
-                rows.append(.available(report))
+                rows.append(.available(report, availability))
             } else if provider.supportsQuotaReporting {
-                rows.append(.unavailable(provider))
+                rows.append(.unavailable(provider, availability))
             }
         }
         return rows

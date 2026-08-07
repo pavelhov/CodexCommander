@@ -7,8 +7,21 @@ import {
 import { isMainAccountIdentityGenerationLive } from "../codex/main-account-cache";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
 import { resolveEnvValue } from "../config";
-import { getValidAccessToken, getValidAccessTokenForAccount } from "../oauth";
-import { getAccountCredential, getAccountSet, getCredential } from "../oauth/store";
+import {
+  forceRefreshOAuthAccessSnapshot,
+  getValidAccessToken,
+  getValidAccessTokenForAccount,
+  getValidAccessTokenSnapshot,
+  OAuthLoginRequiredError,
+  type OAuthAccessSnapshot,
+  type OAuthLoginRequiredReason,
+} from "../oauth";
+import {
+  getAccountCredential,
+  getAccountSet,
+  getCredential,
+  markAccountNeedsReauthIfGeneration,
+} from "../oauth/store";
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
 import { apiKeyPoolEntryId } from "./api-keys";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "./registry";
@@ -48,7 +61,15 @@ export function setProviderQuotaBeforePublishForTests(
   providerQuotaBeforePublishForTests = hook;
 }
 const TERMINAL_QUOTA_FAILURE = Symbol("terminal-quota-failure");
-type ProviderQuotaProbeResult = ProviderQuotaReport | null | typeof TERMINAL_QUOTA_FAILURE;
+interface ProviderQuotaUnavailable {
+  readonly kind: "unavailable";
+  readonly reason: ProviderQuotaUnavailableReason;
+}
+type ProviderQuotaProbeResult =
+  | ProviderQuotaReport
+  | ProviderQuotaUnavailable
+  | null
+  | typeof TERMINAL_QUOTA_FAILURE;
 
 export interface ProviderQuotaWindow {
   label: string;
@@ -101,9 +122,21 @@ export interface ProviderQuotaReport {
   aggregation?: CodexCapacityAggregation;
 }
 
+export type ProviderQuotaUnavailableReason = OAuthLoginRequiredReason | "upstream_unavailable";
+
+export interface ProviderQuotaAvailability {
+  provider: string;
+  status: "available" | "stale" | "unavailable";
+  /** Fixed privacy-safe code only; raw provider errors never cross this boundary. */
+  reason?: ProviderQuotaUnavailableReason;
+  checkedAt: number;
+}
+
 export interface ProviderQuotaResponse {
   generatedAt: number;
   reports: ProviderQuotaReport[];
+  /** One row per enabled provider with a concrete quota implementation. */
+  availability: ProviderQuotaAvailability[];
 }
 
 let cache: { key: string; ts: number; response: ProviderQuotaResponse } | null = null;
@@ -226,6 +259,67 @@ function hasQuotaRows(quota: ProviderQuota | null | undefined): quota is Provide
 
 function providerLabel(providerId: string): string {
   return getProviderRegistryEntry(providerId)?.label ?? providerId;
+}
+
+function quotaUnavailable(reason: ProviderQuotaUnavailableReason): ProviderQuotaUnavailable {
+  return { kind: "unavailable", reason };
+}
+
+function isQuotaUnavailable(value: unknown): value is ProviderQuotaUnavailable {
+  return typeof value === "object"
+    && value !== null
+    && "kind" in value
+    && value.kind === "unavailable";
+}
+
+function isQuotaReport(value: ProviderQuotaProbeResult): value is ProviderQuotaReport {
+  return value !== null && value !== TERMINAL_QUOTA_FAILURE && !isQuotaUnavailable(value);
+}
+
+function isTerminalQuotaUnavailable(value: ProviderQuotaProbeResult): boolean {
+  return isQuotaUnavailable(value) && value.reason !== "upstream_unavailable";
+}
+
+/**
+ * A quota endpoint's first 401 is not enough to condemn the whole account. Refresh
+ * the exact rejected OAuth generation and replay once, matching the serving path.
+ * Only a terminal refresh result or a second 401 becomes an auth availability reason.
+ */
+async function fetchOAuthQuotaWith401Replay(
+  initial: OAuthAccessSnapshot,
+  send: (accessToken: string) => Promise<Response>,
+): Promise<{ response: Response; auth: OAuthAccessSnapshot } | ProviderQuotaUnavailable> {
+  let response: Response;
+  try {
+    response = await send(initial.accessToken);
+  } catch {
+    return quotaUnavailable("upstream_unavailable");
+  }
+  if (response.status !== 401) return { response, auth: initial };
+  try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+
+  let refreshed: OAuthAccessSnapshot;
+  try {
+    refreshed = await forceRefreshOAuthAccessSnapshot(initial);
+  } catch (error) {
+    return error instanceof OAuthLoginRequiredError
+      ? quotaUnavailable(error.reason)
+      : quotaUnavailable("upstream_unavailable");
+  }
+  try {
+    response = await send(refreshed.accessToken);
+  } catch {
+    return quotaUnavailable("upstream_unavailable");
+  }
+  if (response.status === 401) {
+    await markAccountNeedsReauthIfGeneration(
+      refreshed.provider,
+      refreshed.accountId,
+      refreshed.generation,
+    ).catch(() => false);
+    return quotaUnavailable("reauth_required");
+  }
+  return { response, auth: refreshed };
 }
 
 function normalizeResetAt(value: unknown): number | undefined {
@@ -443,32 +537,44 @@ function centsValue(value: unknown): number | undefined {
   return rec ? toFiniteNumber(rec.val) : undefined;
 }
 
-async function fetchXaiQuota(provider: string): Promise<ProviderQuotaReport | null> {
-  let accessToken: string;
+async function fetchXaiQuota(provider: string): Promise<ProviderQuotaProbeResult> {
+  let auth: Awaited<ReturnType<typeof getValidAccessTokenSnapshot>>;
   try {
-    accessToken = await getValidAccessToken("xai");
-  } catch {
-    return null;
+    auth = await getValidAccessTokenSnapshot("xai");
+  } catch (error) {
+    return error instanceof OAuthLoginRequiredError
+      ? quotaUnavailable(error.reason)
+      : quotaUnavailable("upstream_unavailable");
   }
-  const response = await fetch("https://cli-chat-proxy.grok.com/v1/billing", {
-    headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` },
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  if (!response.ok) return null;
+  const outcome = await fetchOAuthQuotaWith401Replay(auth, accessToken => (
+    fetch("https://cli-chat-proxy.grok.com/v1/billing", {
+      headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` },
+      redirect: "error",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    })
+  ));
+  if (isQuotaUnavailable(outcome)) return outcome;
+  const { response } = outcome;
+  if (!response.ok) {
+    return quotaUnavailable("upstream_unavailable");
+  }
   const body = asRecord(await response.json().catch(() => null));
   const config = asRecord(body?.config);
-  if (!config) return null;
+  if (!config) return quotaUnavailable("upstream_unavailable");
   const limitCents = centsValue(config.monthlyLimit);
   const usedCents = centsValue(config.used);
-  if (limitCents === undefined || usedCents === undefined || limitCents <= 0) return null;
+  if (limitCents === undefined || usedCents === undefined || limitCents <= 0) {
+    return quotaUnavailable("upstream_unavailable");
+  }
   const percent = normalizePercent((usedCents / limitCents) * 100);
-  if (percent === undefined) return null;
+  if (percent === undefined) return quotaUnavailable("upstream_unavailable");
   const quota: ProviderQuota = {
     monthlyPercent: percent,
     monthlyResetAt: normalizeResetAt(config.billingPeriodEnd),
     updatedAt: Date.now(),
   };
-  return report(provider, "xai:grok-billing", quota);
+  return report(provider, "xai:grok-billing", quota)
+    ?? quotaUnavailable("upstream_unavailable");
 }
 
 function parseClaudeBucket(value: unknown): { percent?: number; resetAt?: number } | null {
@@ -646,8 +752,10 @@ export function reconcileProviderAccountQuotaRows(context: GenerationContext): n
   }
   if (cache) {
     const reports = cache.response.reports.filter(report => context.providerNames.has(report.provider));
+    const availability = cache.response.availability.filter(row => context.providerNames.has(row.provider));
     removed += cache.response.reports.length - reports.length;
-    cache = { ...cache, response: { ...cache.response, reports } };
+    removed += cache.response.availability.length - availability.length;
+    cache = { ...cache, response: { ...cache.response, reports, availability } };
   }
   liveAccountQuotaKeys = new Set(context.oauthAccountKeys);
   liveProviderQuotaKeys = new Set(context.providerNames);
@@ -887,33 +995,61 @@ function parseKimiQuotaPayload(value: unknown): ProviderQuota | null {
   return hasQuotaRows(quota) ? quota : null;
 }
 
-async function resolveKimiQuotaBearer(config: OcxProviderConfig): Promise<string | null> {
+type KimiQuotaBearer = {
+  accessToken: string;
+  oauth?: OAuthAccessSnapshot;
+};
+
+async function resolveKimiQuotaBearer(
+  config: OcxProviderConfig,
+): Promise<KimiQuotaBearer | ProviderQuotaUnavailable | null> {
   if (config.authMode === "oauth") {
     try {
-      return await getValidAccessToken("kimi");
-    } catch {
-      return null;
+      const auth = await getValidAccessTokenSnapshot("kimi");
+      return {
+        accessToken: auth.accessToken,
+        oauth: auth,
+      };
+    } catch (error) {
+      return error instanceof OAuthLoginRequiredError
+        ? quotaUnavailable(error.reason)
+        : quotaUnavailable("upstream_unavailable");
     }
   }
   // ACTIVE key only: silently walking apiKeyPool when the primary env reference is
   // unresolved would render a quota bar for a DIFFERENT account than the one routing
   // requests — a wrong meter is worse than no meter.
   const primary = resolveEnvValue(config.apiKey)?.trim();
-  return primary || null;
+  return primary ? { accessToken: primary } : null;
 }
 
-async function fetchKimiQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
+async function fetchKimiQuota(
+  provider: string,
+  config: OcxProviderConfig,
+): Promise<ProviderQuotaProbeResult> {
   // Never release credentials to a user-edited or lookalike provider host.
   if (!isCanonicalKimiCodeBaseUrl(config.baseUrl)) return null;
-  const accessToken = await resolveKimiQuotaBearer(config);
-  if (!accessToken) return null;
-  const response = await fetch(KIMI_CODE_USAGE_URL, {
+  const bearer = await resolveKimiQuotaBearer(config);
+  if (!bearer || isQuotaUnavailable(bearer)) return bearer;
+  const send = (accessToken: string) => fetch(KIMI_CODE_USAGE_URL, {
     headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` },
+    redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
-  if (!response.ok) return null;
+  const outcome = bearer.oauth
+    ? await fetchOAuthQuotaWith401Replay(bearer.oauth, send)
+    : await send(bearer.accessToken)
+      .then(response => ({ response, auth: undefined }))
+      .catch(() => quotaUnavailable("upstream_unavailable"));
+  if (isQuotaUnavailable(outcome)) return outcome;
+  const { response } = outcome;
+  if (!response.ok) {
+    return quotaUnavailable("upstream_unavailable");
+  }
   const quota = parseKimiQuotaPayload(await response.json().catch(() => null));
-  return quota ? report(provider, "kimi:usages", quota) : null;
+  return quota
+    ? report(provider, "kimi:usages", quota) ?? quotaUnavailable("upstream_unavailable")
+    : quotaUnavailable("upstream_unavailable");
 }
 
 /** Cursor included usage via api2.cursor.sh (Bearer from OAuth) — unofficial, may change. */
@@ -1444,15 +1580,19 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
 
   const promise = (async (): Promise<ProviderQuotaResponse> => {
     const previous = cache && cache.key === key ? cache.response.reports : [];
+    const providerEntries = Object.entries(config.providers);
     const probeResults = await Promise.all(
-      Object.entries(config.providers).map(([name, provider]) => (
+      providerEntries.map(([name, provider]) => (
         maybeFetchProviderQuota(name, provider, config, forceRefresh, prefetchedCodexSnapshot)
       )),
     );
-    const fresh = probeResults.filter((item): item is ProviderQuotaReport => item !== null && item !== TERMINAL_QUOTA_FAILURE);
-    const terminalFailures = new Set(
-      Object.keys(config.providers).filter((_, index) => probeResults[index] === TERMINAL_QUOTA_FAILURE),
-    );
+    const fresh = probeResults.filter(isQuotaReport);
+    const terminalFailures = new Set(providerEntries.flatMap(([providerName], index) => {
+      const result = probeResults[index] ?? null;
+      return result === TERMINAL_QUOTA_FAILURE || isTerminalQuotaUnavailable(result)
+        ? [providerName]
+        : [];
+    }));
     await providerQuotaBeforePublishForTests?.();
     let commitKey: string | null = null;
     if (epoch === invalidationEpoch) {
@@ -1488,7 +1628,32 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
       generationMismatchedProviders.delete(provider);
     }
 
-    const response = { generatedAt: Date.now(), reports: [...byProvider.values()] };
+    const generatedAt = Date.now();
+    const availability: ProviderQuotaAvailability[] = providerEntries.flatMap(
+      ([providerName, provider], index) => {
+        if (provider.disabled === true || !supportsProviderQuotaReporting(providerName, provider)) {
+          return [];
+        }
+        const result = probeResults[index] ?? null;
+        const status: ProviderQuotaAvailability["status"] = isQuotaReport(result)
+          ? "available"
+          : byProvider.has(providerName)
+            ? "stale"
+            : "unavailable";
+        const reason = isQuotaUnavailable(result) ? result.reason : undefined;
+        return [{
+          provider: providerName,
+          status,
+          ...(reason ? { reason } : {}),
+          checkedAt: generatedAt,
+        }];
+      },
+    );
+    const response: ProviderQuotaResponse = {
+      generatedAt,
+      reports: [...byProvider.values()],
+      availability,
+    };
     // Commit only when this probe still holds authority (no clear/force superseded it).
     if (
       epoch === invalidationEpoch

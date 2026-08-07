@@ -373,6 +373,8 @@ describe("oauth refresh hardening", () => {
     await saveCredential("xai", {
       access: "xai-old", refresh: "rt-old", expires: Date.now() - 1, accountId: "user-1", source: "local-cli",
     });
+    const accountId = getAccountSet("xai")!.activeAccountId;
+    await markAccountNeedsReauth("xai", accountId, true);
     seedGrokAuth({
       key: "xai-disk", refresh_token: "rt-new", expires_at: new Date(Date.now() + 3600_000).toISOString(), user_id: "user-1",
     });
@@ -381,6 +383,7 @@ describe("oauth refresh hardening", () => {
     expect(mock.count()).toBe(0);
     expect(getCredential("xai")?.refresh).toBe("");
     expect(getCredential("xai")?.source).toBe("local-cli");
+    expect(getAccountSet("xai")!.accounts[0]?.needsReauth).toBeUndefined();
   });
 
   test("newer-expiry Grok access token is adopted when refresh generation is unchanged", async () => {
@@ -431,6 +434,7 @@ describe("oauth refresh hardening", () => {
     expect(mock.tokenCount()).toBe(0);
     expect(getCredential("xai")?.refresh).toBe("");
     expect(getCredential("xai")?.source).toBe("local-cli");
+    expect(getAccountSet("xai")?.accounts[0]?.needsReauth).toBe(true);
   });
 
   test("mismatched Grok identity is not adopted into a local-cli account", async () => {

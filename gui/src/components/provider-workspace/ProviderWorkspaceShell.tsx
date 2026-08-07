@@ -98,6 +98,25 @@ function freshQuotaReportsFromResponse(value: unknown, now = Date.now()): Record
   return out;
 }
 
+/**
+ * The quota endpoint may discover an auth problem after the account list was read.
+ * Project only fixed, privacy-safe reason codes into workspace readiness so an open
+ * Providers page cannot keep saying Connected until its next account refresh.
+ */
+function quotaAuthAttentionFromResponse(value: unknown): Record<string, boolean> {
+  if (!Array.isArray(value)) return {};
+  const out: Record<string, boolean> = {};
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const row = raw as Record<string, unknown>;
+    if (typeof row.provider !== "string" || !row.provider.trim()) continue;
+    if (row.reason === "reauth_required" || row.reason === "local_cli_refresh_required") {
+      out[row.provider] = true;
+    }
+  }
+  return out;
+}
+
 export default function ProviderWorkspaceShell({
   providers,
   apiBase,
@@ -166,6 +185,7 @@ export default function ProviderWorkspaceShell({
   const [quotaReports, setQuotaReports] = useState<Record<string, ProviderQuotaReportView>>(() => (
     readFreshQuotaReportCache(quotasCacheKey) ?? {}
   ));
+  const [quotaAuthAttention, setQuotaAuthAttention] = useState<Record<string, boolean>>({});
   const [usageLoading, setUsageLoading] = useState(() => !readSessionListCache(usageCacheKey));
   const [quotasLoading, setQuotasLoading] = useState(() => {
     const cached = readFreshQuotaReportCache(quotasCacheKey);
@@ -176,8 +196,11 @@ export default function ProviderWorkspaceShell({
 
   const sections = useMemo(() => {
     const base = buildProviderWorkspace(hideRedundantChatGptForwardProviders(providers));
-    return applyActiveAccountReauth(base, activeAccountNeedsReauth ?? {});
-  }, [providers, activeAccountNeedsReauth]);
+    return applyActiveAccountReauth(base, {
+      ...(activeAccountNeedsReauth ?? {}),
+      ...quotaAuthAttention,
+    });
+  }, [providers, activeAccountNeedsReauth, quotaAuthAttention]);
 
   const retryModels = useCallback(() => {
     setModelsLoadEpoch(epoch => epoch + 1);
@@ -267,12 +290,16 @@ export default function ProviderWorkspaceShell({
       // be bypassed. The old derived-key effect always read the cached view, which is why a
       // switch could leave the bars showing the previous account's quota.
       void fetch(`${apiBase}/api/provider-quotas${quotaForceRefresh ? "?refresh=1" : ""}`)
-        .then(r => readJsonIfOk<{ reports?: Array<{ provider: string; label?: string; source?: string; updatedAt?: number; quota?: unknown; aggregation?: unknown }> }>(r))
+        .then(r => readJsonIfOk<{
+          reports?: Array<{ provider: string; label?: string; source?: string; updatedAt?: number; quota?: unknown; aggregation?: unknown }>;
+          availability?: unknown;
+        }>(r))
         .then((data) => {
           if (cancelled || !data) return;
           // A successful endpoint response is authoritative, including an empty report list.
           const next = freshQuotaReportsFromResponse(data.reports);
           setQuotaReports(next);
+          setQuotaAuthAttention(quotaAuthAttentionFromResponse(data.availability));
           writeSessionListCache(quotasCacheKey, next);
         })
         .catch(() => {

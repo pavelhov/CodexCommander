@@ -3,12 +3,19 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as authApi from "../src/codex/auth-api";
-import { clearAccountNeedsReauth, markAccountNeedsReauth } from "../src/codex/account-runtime-state";
+import {
+  clearAccountNeedsReauth,
+  markAccountNeedsReauth as markCodexAccountNeedsReauth,
+} from "../src/codex/account-runtime-state";
 import { clearMainAccountInfoCache } from "../src/codex/main-account-cache";
 import { clearAccountQuota, updateAccountQuota } from "../src/codex/quota";
 import { clearCodexUpstreamHealth } from "../src/codex/routing";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
-import { saveCredential } from "../src/oauth/store";
+import {
+  markAccountNeedsReauth as markOAuthAccountNeedsReauth,
+  saveCredential,
+} from "../src/oauth/store";
+import { getLoginStatus } from "../src/oauth";
 import {
   clearProviderQuotaCache,
   fetchProviderQuotaReports,
@@ -132,6 +139,146 @@ describe("fetchProviderQuotaReports", () => {
     })).toBe(true);
   });
 
+  test("reports a stale Grok CLI link as actionable without leaking its auth error", async () => {
+    const previousGrokHome = process.env.GROK_HOME;
+    process.env.GROK_HOME = join(opencodexHome, "missing-grok-home");
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+    try {
+      await saveCredential("xai", {
+        access: "stale-grok-access",
+        refresh: "native-grant-must-be-scrubbed",
+        expires: Date.now() - 1,
+        accountId: "linked-grok-account",
+        source: "local-cli",
+      });
+      const config = {
+        defaultProvider: "xai",
+        providers: {
+          xai: {
+            adapter: "openai-chat",
+            authMode: "oauth",
+            baseUrl: "https://api.x.ai/v1",
+          },
+        },
+      } as OcxConfig;
+
+      const result = await fetchProviderQuotaReports(config, true);
+
+      expect(result.reports).toEqual([]);
+      expect(result.availability).toEqual([{
+        provider: "xai",
+        status: "unavailable",
+        reason: "local_cli_refresh_required",
+        checkedAt: expect.any(Number),
+      }]);
+      expect(getLoginStatus("xai").needsReauth).toBe(true);
+      expect(upstreamCalls).toBe(0);
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toContain("stale-grok-access");
+      expect(serialized).not.toContain("native-grant-must-be-scrubbed");
+      expect(serialized).not.toContain("linked-grok-account");
+      expect(serialized).not.toContain("Grok CLI-linked credential is stale");
+    } finally {
+      if (previousGrokHome === undefined) delete process.env.GROK_HOME;
+      else process.env.GROK_HOME = previousGrokHome;
+    }
+  });
+
+  test("a rejected Grok login drops last-good quota instead of hiding auth failure behind it", async () => {
+    await saveCredential("xai", {
+      access: "xai-access-secret",
+      refresh: "xai-refresh-secret",
+      expires: Date.now() + 3_600_000,
+    });
+    const config = {
+      defaultProvider: "xai",
+      providers: {
+        xai: {
+          adapter: "openai-chat",
+          authMode: "oauth",
+          baseUrl: "https://api.x.ai/v1",
+        },
+      },
+    } as OcxConfig;
+    let rejected = false;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/.well-known/openid-configuration")) {
+        return new Response(JSON.stringify({
+          authorization_endpoint: "https://auth.x.ai/authorize",
+          token_endpoint: "https://auth.x.ai/token",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url === "https://auth.x.ai/token") {
+        return new Response(JSON.stringify({
+          access_token: "xai-refreshed-access",
+          refresh_token: "xai-refreshed-token",
+          expires_in: 3600,
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return rejected
+        ? new Response("unauthorized", { status: 401 })
+        : new Response(JSON.stringify({
+            config: { monthlyLimit: { val: 10_000 }, used: { val: 2_500 } },
+          }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const first = await fetchProviderQuotaReports(config, true);
+    expect(first.reports).toHaveLength(1);
+    expect(first.availability[0]?.status).toBe("available");
+
+    rejected = true;
+    const second = await fetchProviderQuotaReports(config, true);
+    expect(second.reports).toEqual([]);
+    expect(second.availability).toEqual([{
+      provider: "xai",
+      status: "unavailable",
+      reason: "reauth_required",
+      checkedAt: expect.any(Number),
+    }]);
+    expect(getLoginStatus("xai").needsReauth).toBe(true);
+  });
+
+  test("reports a stale Kimi CLI link with the same actionable privacy-safe reason", async () => {
+    const previousKimiHome = process.env.KIMI_CODE_HOME;
+    process.env.KIMI_CODE_HOME = join(opencodexHome, "missing-kimi-code-home");
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+    try {
+      await saveCredential("kimi", {
+        access: "stale-kimi-access",
+        refresh: "",
+        expires: Date.now() - 1,
+        accountId: "linked-kimi-account",
+        source: "local-cli",
+      });
+
+      const result = await fetchProviderQuotaReports(kimiOnlyConfig(), true);
+
+      expect(result.reports).toEqual([]);
+      expect(result.availability).toEqual([{
+        provider: "kimi",
+        status: "unavailable",
+        reason: "local_cli_refresh_required",
+        checkedAt: expect.any(Number),
+      }]);
+      expect(getLoginStatus("kimi").needsReauth).toBe(true);
+      expect(upstreamCalls).toBe(0);
+      expect(JSON.stringify(result)).not.toContain("stale-kimi-access");
+      expect(JSON.stringify(result)).not.toContain("linked-kimi-account");
+    } finally {
+      if (previousKimiHome === undefined) delete process.env.KIMI_CODE_HOME;
+      else process.env.KIMI_CODE_HOME = previousKimiHome;
+    }
+  });
+
   test("returns active provider quota rows without leaking credentials or raw upstream payloads", async () => {
     await saveCredential("xai", { access: "xai-access-secret", refresh: "xai-refresh-secret", expires: Date.now() + 3600_000 });
     await saveCredential("anthropic", { access: "claude-access-secret", refresh: "claude-refresh-secret", expires: Date.now() + 3600_000 });
@@ -139,11 +286,16 @@ describe("fetchProviderQuotaReports", () => {
     await saveCredential("google-antigravity", { access: "agy-access-secret", refresh: "agy-refresh-secret", expires: Date.now() + 3600_000, projectId: "agy-project-secret" });
     await saveCredential("kimi", { access: "kimi-access-secret", refresh: "kimi-refresh-secret", expires: Date.now() + 3600_000 });
 
-    const seen: { url: string; authorization?: string; body?: string }[] = [];
+    const seen: { url: string; authorization?: string; body?: string; redirect?: RequestRedirect }[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const headers = init?.headers as Record<string, string> | undefined;
-      seen.push({ url, authorization: headers?.Authorization, body: typeof init?.body === "string" ? init.body : undefined });
+      seen.push({
+        url,
+        authorization: headers?.Authorization,
+        body: typeof init?.body === "string" ? init.body : undefined,
+        redirect: init?.redirect,
+      });
       if (url === "https://chatgpt.com/backend-api/wham/usage") {
         return new Response(JSON.stringify({
           email: "person@example.com",
@@ -270,6 +422,7 @@ describe("fetchProviderQuotaReports", () => {
     expect(serialized).not.toContain("kimi-business-secret");
     expect(serialized).not.toContain("TYPE_PURCHASE");
     expect(seen.find(row => row.url.includes("grok.com"))?.authorization).toBe("Bearer xai-access-secret");
+    expect(seen.find(row => row.url.includes("grok.com"))?.redirect).toBe("error");
     expect(seen.find(row => row.url.includes("anthropic.com"))?.authorization).toBe("Bearer claude-access-secret");
     expect(seen.find(row => row.url.includes("cloudcode-pa.googleapis.com"))?.authorization).toBe("Bearer agy-access-secret");
     expect(seen.find(row => row.url.includes("cloudcode-pa.googleapis.com"))?.body).toBe(JSON.stringify({ project: "agy-project-secret" }));
@@ -619,6 +772,12 @@ describe("fetchProviderQuotaReports", () => {
     const result = await fetchProviderQuotaReports(kimiOnlyConfig(), true);
 
     expect(result.reports).toEqual([]);
+    expect(result.availability).toEqual([{
+      provider: "kimi",
+      status: "unavailable",
+      reason: "upstream_unavailable",
+      checkedAt: expect.any(Number),
+    }]);
   });
 
   test("Kimi quota recognizes a 5h label when window metadata is absent", async () => {
@@ -774,26 +933,69 @@ describe("fetchProviderQuotaReports", () => {
     expect(result.reports[0]?.quota.weeklyPercent).toBe(25);
   });
 
-  test("Kimi quota preserves a last-good row after 401 only within the shared age bound", async () => {
+  test("Kimi OAuth 401 drops last-good quota and marks the rejected generation", async () => {
     await saveCredential("kimi", { access: "kimi-access-secret", refresh: "kimi-refresh-secret", expires: Date.now() + 3600_000 });
     let authorized = true;
-    globalThis.fetch = (async () => authorized
-      ? new Response(JSON.stringify({ usage: { limit: "100", used: "35" } }), { status: 200 })
-      : new Response("unauthorized", { status: 401 })) as typeof fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      if (String(input) === "https://auth.kimi.com/api/oauth/token") {
+        return new Response(JSON.stringify({
+          access_token: "refreshed-kimi-access",
+          refresh_token: "refreshed-kimi-token",
+          expires_in: 3600,
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return authorized
+        ? new Response(JSON.stringify({ usage: { limit: "100", used: "35" } }), { status: 200 })
+        : new Response("unauthorized", { status: 401 });
+    }) as typeof fetch;
 
     const good = await fetchProviderQuotaReports(kimiOnlyConfig(), true);
     expect(good.reports[0]?.quota.weeklyPercent).toBe(35);
-    const originalUpdatedAt = good.reports[0]!.updatedAt;
-
     authorized = false;
-    const preserved = await fetchProviderQuotaReports(kimiOnlyConfig(), true);
-    expect(preserved.reports[0]?.quota.weeklyPercent).toBe(35);
-    expect(preserved.reports[0]?.updatedAt).toBe(originalUpdatedAt);
+    const rejected = await fetchProviderQuotaReports(kimiOnlyConfig(), true);
+    expect(rejected.reports).toEqual([]);
+    expect(rejected.availability).toEqual([{
+      provider: "kimi",
+      status: "unavailable",
+      reason: "reauth_required",
+      checkedAt: expect.any(Number),
+    }]);
+    expect(getLoginStatus("kimi").needsReauth).toBe(true);
+  });
 
-    preserved.reports[0]!.updatedAt = Date.now() - 31 * 60_000;
-    preserved.reports[0]!.quota.updatedAt = Date.now() - 31 * 60_000;
-    const expired = await fetchProviderQuotaReports(kimiOnlyConfig(), true);
-    expect(expired.reports).toEqual([]);
+  test("Kimi quota replays one 401 with a refreshed generation and clears prior attention", async () => {
+    await saveCredential("kimi", {
+      access: "old-kimi-access",
+      refresh: "old-kimi-refresh",
+      expires: Date.now() + 3_600_000,
+    });
+    const accountId = getLoginStatus("kimi").activeAccountId!;
+    await markOAuthAccountNeedsReauth("kimi", accountId, true);
+    const usageAuthorizations: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://auth.kimi.com/api/oauth/token") {
+        return new Response(JSON.stringify({
+          access_token: "fresh-kimi-access",
+          refresh_token: "fresh-kimi-refresh",
+          expires_in: 3600,
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      usageAuthorizations.push((init?.headers as Record<string, string>).Authorization);
+      return usageAuthorizations.length === 1
+        ? new Response("unauthorized", { status: 401 })
+        : new Response(JSON.stringify({ usage: { limit: "100", used: "20" } }), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(kimiOnlyConfig(), true);
+
+    expect(result.reports[0]?.quota.weeklyPercent).toBe(20);
+    expect(result.availability[0]?.status).toBe("available");
+    expect(usageAuthorizations).toEqual([
+      "Bearer old-kimi-access",
+      "Bearer fresh-kimi-access",
+    ]);
+    expect(getLoginStatus("kimi").needsReauth).toBeUndefined();
   });
 
   test("pool mode reports a weighted estimate while preserving the effective account raw quota", async () => {
@@ -1008,7 +1210,7 @@ describe("fetchProviderQuotaReports", () => {
     }) as typeof fetch;
 
     await fetchProviderQuotaReports(config, true);
-    markAccountNeedsReauth("added");
+    markCodexAccountNeedsReauth("added");
     const reauth = (await fetchProviderQuotaReports(config)).reports[0];
     expect(reauth?.aggregation).toMatchObject({ includedAccounts: 1, reauthAccounts: 1, incomplete: true });
     clearAccountNeedsReauth("added");
