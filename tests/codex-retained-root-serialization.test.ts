@@ -294,12 +294,13 @@ for (const publisher of ["convergence", "retained"] as const) {
         const response = await handleManagementAPI(req, new URL(req.url), config);
         console.log(JSON.stringify({ status: response.status, body: await response.json() }));
       `], { cwd: repoRoot, env: sandbox.env, stdout: "pipe", stderr: "pipe" });
+      const stdoutText = new Response(sync.stdout).text();
+      const stderrText = new Response(sync.stderr).text();
 
       await Promise.race([
         waitForPath(requested),
         sync.exited.then(async exitCode => {
-          const stdout = await new Response(sync.stdout).text();
-          const stderr = await new Response(sync.stderr).text();
+          const [stdout, stderr] = await Promise.all([stdoutText, stderrText]);
           throw new Error(`sync exited before provider barrier (${exitCode})\nstdout=${stdout}\nstderr=${stderr}`);
         }),
       ]);
@@ -313,8 +314,8 @@ for (const publisher of ["convergence", "retained"] as const) {
       writeFileSync(release, "release");
       const [exitCode, stdout, stderr] = await Promise.all([
         sync.exited,
-        new Response(sync.stdout).text(),
-        new Response(sync.stderr).text(),
+        stdoutText,
+        stderrText,
       ]);
       expect({ exitCode, stdout, stderr }).toMatchObject({ exitCode: 0 });
       expect(readFileSync(catalogPath, "utf8")).toBe(newer);
@@ -377,12 +378,13 @@ test("a persisted runtime selection moved by another process during the await bl
     const { syncCatalogModels } = await import("./src/codex/catalog/sync.ts");
     console.log(JSON.stringify(await syncCatalogModels(config)));
   `], { cwd: repoRoot, env: sandbox.env, stdout: "pipe", stderr: "pipe" });
+  const stdoutText = new Response(sync.stdout).text();
+  const stderrText = new Response(sync.stderr).text();
 
   await Promise.race([
     waitForPath(requested),
     sync.exited.then(async exitCode => {
-      const stdout = await new Response(sync.stdout).text();
-      const stderr = await new Response(sync.stderr).text();
+      const [stdout, stderr] = await Promise.all([stdoutText, stderrText]);
       throw new Error(`sync exited before provider barrier (${exitCode})\nstdout=${stdout}\nstderr=${stderr}`);
     }),
   ]);
@@ -399,8 +401,8 @@ test("a persisted runtime selection moved by another process during the await bl
   writeFileSync(release, "release");
   const [exitCode, stdout, stderr] = await Promise.all([
     sync.exited,
-    new Response(sync.stdout).text(),
-    new Response(sync.stderr).text(),
+    stdoutText,
+    stderrText,
   ]);
   expect({ exitCode, stderr }).toMatchObject({ exitCode: 0 });
   expect(JSON.parse(stdout.trim())).toMatchObject({ catalogWritten: false });
