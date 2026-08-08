@@ -239,6 +239,79 @@ enum LifecycleHelperSuite {
             }
         }
 
+        t.test("lifecycle helper: decodes a bounded count-only catalog result") {
+            try withTemporaryDirectory { root in
+                let script = try makeExecutable(
+                    in: root,
+                    named: "catalog-helper",
+                    body: """
+                    #!/bin/sh
+                    printf '{"schemaVersion":1,"action":"%s","ok":true,"state":"running","changed":true,"pid":42,"port":10100,"message":"Agent catalog updated.","catalogUpdated":true,"codexRestartRequired":false,"staleWorkerCount":2,"stoppedWorkerCount":2,"survivingWorkerCount":0}\\n' "$2"
+                    """
+                )
+                let helper = LifecycleHelper(
+                    invocation: LifecycleInvocation(executable: script),
+                    timeout: 2
+                )
+                let result = sync { try await helper.run(.applyCodexCatalog) }
+                switch result {
+                case .success(let value):
+                    t.equal(value.action, .applyCodexCatalog)
+                    t.equal(value.catalogUpdated, true)
+                    t.equal(value.stoppedWorkerCount, 2)
+                    t.equal(value.survivingWorkerCount, 0)
+                case .failure(let error):
+                    t.expect(false, "unexpected helper failure: \(error)")
+                }
+            }
+        }
+
+        t.test("lifecycle helper: rejects negative catalog worker counts") {
+            try withTemporaryDirectory { root in
+                let script = try makeExecutable(
+                    in: root,
+                    named: "invalid-catalog-helper",
+                    body: """
+                    #!/bin/sh
+                    printf '{"schemaVersion":1,"action":"%s","ok":true,"state":"running","changed":true,"message":"Agent catalog updated.","catalogUpdated":true,"codexRestartRequired":false,"stoppedWorkerCount":-1,"survivingWorkerCount":0}\\n' "$2"
+                    """
+                )
+                let helper = LifecycleHelper(
+                    invocation: LifecycleInvocation(executable: script),
+                    timeout: 2
+                )
+                let result = sync { try await helper.run(.applyCodexCatalog) }
+                if case .failure(let error as LifecycleHelperError) = result {
+                    t.equal(error, .invalidResponse)
+                } else {
+                    t.expect(false, "negative worker counts must be rejected")
+                }
+            }
+        }
+
+        t.test("lifecycle helper: rejects catalog success missing required fields") {
+            try withTemporaryDirectory { root in
+                let script = try makeExecutable(
+                    in: root,
+                    named: "incomplete-catalog-helper",
+                    body: """
+                    #!/bin/sh
+                    printf '{"schemaVersion":1,"action":"%s","ok":true,"state":"running","changed":true,"message":"Agent catalog updated.","catalogUpdated":true,"codexRestartRequired":false,"stoppedWorkerCount":1}\\n' "$2"
+                    """
+                )
+                let helper = LifecycleHelper(
+                    invocation: LifecycleInvocation(executable: script),
+                    timeout: 2
+                )
+                let result = sync { try await helper.run(.applyCodexCatalog) }
+                if case .failure(let error as LifecycleHelperError) = result {
+                    t.equal(error, .invalidResponse)
+                } else {
+                    t.expect(false, "catalog success missing a required field must be rejected")
+                }
+            }
+        }
+
         t.test("lifecycle helper: rejects output beyond the fixed cap") {
             try withTemporaryDirectory { root in
                 let script = try makeExecutable(

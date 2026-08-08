@@ -48,12 +48,19 @@ export interface ProxyLifecycleResult {
   pid: number | null;
   port: number | null;
   message: string;
+  /** Additive catalog-apply fields consumed by the native companion. */
+  catalogUpdated?: boolean;
+  codexRestartRequired?: boolean;
+  staleWorkerCount?: number;
+  stoppedWorkerCount?: number;
+  survivingWorkerCount?: number;
   errorCode?:
     | "AUTOSTART_DISABLED"
     | "SERVICE_BLOCKED"
     | "START_FAILED"
     | "STOP_FAILED"
     | "SYNC_FAILED"
+    | "PROXY_RESTART_REQUIRED"
     | "CODEX_RESTART_REQUIRED";
 }
 
@@ -66,11 +73,15 @@ export interface ProxyCatalogSyncOutcome {
   message?: string;
   warning?: string;
   catalogQuality?: "live" | "retained" | "native-only";
+  catalogWritten?: boolean;
+  cacheSynced?: boolean;
   staleAppServerHint?: string;
   catalogState?: {
     state?: "fresh" | "stale" | "not_running" | "unknown";
+    processes?: Array<{ pid?: number; startedAtMs?: number | null }>;
+    catalogMtimeMs?: number | null;
   };
-  lifecycleErrorCode?: "SYNC_FAILED" | "CODEX_RESTART_REQUIRED";
+  lifecycleErrorCode?: "SYNC_FAILED" | "PROXY_RESTART_REQUIRED";
 }
 
 export interface ProxyLifecycleLogger {
@@ -151,6 +162,11 @@ function lifecycleResult(
     live?: LiveProxy | null;
     message: string;
     errorCode?: ProxyLifecycleResult["errorCode"];
+    catalogUpdated?: boolean;
+    codexRestartRequired?: boolean;
+    staleWorkerCount?: number;
+    stoppedWorkerCount?: number;
+    survivingWorkerCount?: number;
   },
 ): ProxyLifecycleResult {
   return {
@@ -162,6 +178,13 @@ function lifecycleResult(
     pid: options.live?.pid ?? null,
     port: options.live?.port ?? null,
     message: options.message.slice(0, 240),
+    ...(options.catalogUpdated !== undefined ? { catalogUpdated: options.catalogUpdated } : {}),
+    ...(options.codexRestartRequired !== undefined
+      ? { codexRestartRequired: options.codexRestartRequired }
+      : {}),
+    ...(options.staleWorkerCount !== undefined ? { staleWorkerCount: options.staleWorkerCount } : {}),
+    ...(options.stoppedWorkerCount !== undefined ? { stoppedWorkerCount: options.stoppedWorkerCount } : {}),
+    ...(options.survivingWorkerCount !== undefined ? { survivingWorkerCount: options.survivingWorkerCount } : {}),
     ...(options.errorCode ? { errorCode: options.errorCode } : {}),
   };
 }
@@ -331,7 +354,7 @@ async function syncLiveProxy(
           ? body.message
           : "OpenCodex is running, but its Codex model catalog did not synchronize."),
       ...(typeof body?.warning === "string" ? { warning: body.warning } : {}),
-      lifecycleErrorCode: runningProxyNeedsRestart ? "CODEX_RESTART_REQUIRED" : "SYNC_FAILED",
+      lifecycleErrorCode: runningProxyNeedsRestart ? "PROXY_RESTART_REQUIRED" : "SYNC_FAILED",
     };
     logger.warn(catalogSync.message ?? "Model catalog sync failed.");
   }
@@ -353,7 +376,10 @@ async function syncLiveProxy(
 
 function catalogSyncFailure(
   result: ProxyCatalogSyncOutcome | void,
-): { errorCode: "SYNC_FAILED" | "CODEX_RESTART_REQUIRED"; message: string } | null {
+): {
+  errorCode: "SYNC_FAILED" | "PROXY_RESTART_REQUIRED";
+  message: string;
+} | null {
   // Test seams written before this contract returned void. Production always
   // returns a structured result from the live management plane.
   if (result === undefined) return null;
@@ -379,16 +405,54 @@ function catalogSyncFailure(
         ?? "OpenCodex is running, but its Codex model catalog did not converge. Run `ocx sync` and retry.",
     };
   }
-  if (
-    result.staleAppServerHint
-    || result.catalogState?.state === "stale"
-  ) {
-    return {
-      errorCode: "CODEX_RESTART_REQUIRED",
-      message: "Models were restored, but ChatGPT is still using its previous catalog. Restart ChatGPT to load the routed models.",
-    };
-  }
   return null;
+}
+
+interface CatalogSyncNotice {
+  errorCode: "CODEX_RESTART_REQUIRED";
+  message: string;
+  catalogUpdated: boolean;
+  codexRestartRequired: true;
+  staleWorkerCount: number;
+  stoppedWorkerCount: 0;
+  survivingWorkerCount: number;
+}
+
+function staleCatalogWorkerCount(result: ProxyCatalogSyncOutcome): number {
+  const status = result.catalogState;
+  if (status?.state !== "stale" || !Array.isArray(status.processes)) return 0;
+  const mtime = status.catalogMtimeMs;
+  if (typeof mtime !== "number" || !Number.isFinite(mtime)) return 0;
+  return status.processes.filter(process => (
+    typeof process.startedAtMs === "number"
+    && Number.isFinite(process.startedAtMs)
+    && process.startedAtMs <= mtime
+  )).length;
+}
+
+/** A stale Codex worker roster is actionable, but the OpenCodex proxy is healthy. */
+function catalogSyncNotice(result: ProxyCatalogSyncOutcome | void): CatalogSyncNotice | null {
+  if (!result) return null;
+  const intentionalNativeOnly = result.status === "skipped"
+    && (result.skippedReason === "desired_disabled" || result.skippedReason === "external_provider")
+    && result.ok;
+  if (intentionalNativeOnly) return null;
+  // Current proxies report catalogState. The hint-only branch retains compatibility
+  // with an older live proxy without letting a generic post-write hint override a
+  // current proxy's explicit fresh/not_running/unknown classification.
+  const updateReady = result.catalogState?.state === "stale"
+    || (result.catalogState === undefined && result.staleAppServerHint !== undefined);
+  if (!updateReady) return null;
+  const staleWorkerCount = staleCatalogWorkerCount(result);
+  return {
+    errorCode: "CODEX_RESTART_REQUIRED",
+    message: "Agent catalog update ready. Codex workers are using an older model roster.",
+    catalogUpdated: result.catalogWritten === true || result.cacheSynced === true,
+    codexRestartRequired: true,
+    staleWorkerCount,
+    stoppedWorkerCount: 0,
+    survivingWorkerCount: staleWorkerCount,
+  };
 }
 
 export async function proxyLifecycleStatus(
@@ -425,6 +489,7 @@ export async function ensureProxyLifecycle(
   let live = await findLive();
   let startedHere = false;
   let syncProblem: ReturnType<typeof catalogSyncFailure> = null;
+  let syncNotice: ReturnType<typeof catalogSyncNotice> = null;
   if (!live && options.honorAutoStart && !codexAutoStartEnabled(config)) {
     return lifecycleResult(action, "disabled", {
       ok: true,
@@ -519,6 +584,7 @@ export async function ensureProxyLifecycle(
     }
     const syncResult = await (io.syncLive ?? syncLiveProxy)(live, config, logger);
     syncProblem = catalogSyncFailure(syncResult);
+    syncNotice = catalogSyncNotice(syncResult);
   } finally {
     ensureLock.release();
   }
@@ -532,6 +598,20 @@ export async function ensureProxyLifecycle(
       live,
       message: syncProblem.message,
       errorCode: syncProblem.errorCode,
+    });
+  }
+  if (syncNotice) {
+    return lifecycleResult(action, "running", {
+      ok: true,
+      changed: startedHere,
+      live,
+      message: syncNotice.message,
+      errorCode: syncNotice.errorCode,
+      catalogUpdated: syncNotice.catalogUpdated,
+      codexRestartRequired: syncNotice.codexRestartRequired,
+      staleWorkerCount: syncNotice.staleWorkerCount,
+      stoppedWorkerCount: syncNotice.stoppedWorkerCount,
+      survivingWorkerCount: syncNotice.survivingWorkerCount,
     });
   }
   return lifecycleResult(action, "running", {

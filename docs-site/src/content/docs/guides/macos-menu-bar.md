@@ -83,6 +83,10 @@ override it.
 - **Dashboard and Logs** — open the corresponding local dashboard view in your default browser.
 - **Manage** — opens the selected provider's Accounts or API Keys tab. OAuth, API-key entry,
   reauthentication, account switching, and provider configuration stay in the dashboard.
+- **Agent catalog update ready** — a persistent, nonfatal card shown when running Codex background
+  workers still hold an older model roster. The OpenCodex proxy remains healthy and running.
+- **Apply agent catalog…** — opens a confirmation that reports fresh request activity when
+  available, warns that applying may interrupt an answer, and offers **Apply Now** or **Later**.
 - **Stop Proxy…** — always asks for confirmation, interrupts active client and sub-agent requests,
   restores native Codex, and leaves the menu app open.
 - **Restart Proxy…** — always asks for confirmation, lets the proxy drain active requests for up to 60
@@ -102,6 +106,28 @@ stale, the row instead says **Login needs refresh** and tells you to run `grok` 
 **Refresh**. A rejected account login says **Sign-in required**; a network or upstream failure says
 **Temporarily unavailable**. These states are fixed, privacy-safe reason codes from the local proxy,
 not raw provider errors. **View all providers** opens the complete Providers workspace.
+
+## Agent catalog updates
+
+Opening the app automatically synchronizes the Codex model catalog with the providers currently
+configured in OpenCodex. If no Codex worker is running, the new roster is ready for the next Codex
+task. If a long-lived worker loaded an older roster, OpenCodex stays running and the panel keeps the
+nonfatal **Agent catalog update ready** card visible.
+
+Choose **Apply agent catalog…** to review the interruption risk. The confirmation requests a fresh
+active-request count when possible, but zero active requests is not presented as proof that Codex is
+idle: another request can begin before the action runs. **Apply Now** synchronizes once more, sends
+`SIGTERM` only to exact current-user `codex … app-server` and `codex-code-mode-host` process matches,
+and briefly verifies that the old process IDs exited. It never uses a broad `pkill`, restarts the
+OpenCodex proxy, or closes the menu app. Codex creates a fresh background host on the next task and
+loads the current roster.
+
+This release does not include **Apply when idle**. If an answer is active, choose **Later** and apply
+the update when you are ready; the card remains available. The advanced CLI fallback is:
+
+```bash
+ocx sync --restart-codex
+```
 
 ## Authentication and privacy
 
@@ -176,11 +202,11 @@ making a final distributable bundle.
   not expose a quota API.
 - **Restart did not recover** — open **Logs** and use the app's status panel. The companion never
   kills a process or rewrites service state as a fallback.
-- **Only native models appear after a stop, update, or cold start** — reopen OpenCodex or use
-  <code>ocx sync</code>. Startup restores still-configured routed models from its protected
-  last-known-good catalog when live provider discovery is temporarily empty. If the panel says the
-  catalog was restored but ChatGPT is still using its previous catalog, restart ChatGPT once; the
-  companion does not terminate it automatically.
+- **Only native models appear after a stop, update, or cold start** — reopen OpenCodex. Launch
+  automatically synchronizes the catalog and restores still-configured routed models from its
+  protected last-known-good catalog when live provider discovery is temporarily empty. If **Agent
+  catalog update ready** remains visible, choose **Apply agent catalog…**, or use the CLI fallback in
+  [Agent catalog updates](#agent-catalog-updates).
 
 ## Uninstall
 

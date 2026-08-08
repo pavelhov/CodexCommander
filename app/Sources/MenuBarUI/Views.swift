@@ -30,6 +30,109 @@ func makeSeparator() -> NSView {
     return line
 }
 
+// MARK: - Agent catalog update
+
+/// Persistent, non-error affordance for a healthy proxy whose Codex workers still
+/// hold an older in-memory model roster.
+public final class CatalogUpdateView: NSView {
+    private let title = makeLabel(
+        "Agent catalog update ready",
+        font: Theme.label,
+        color: Theme.amber
+    )
+    private let detail: NSTextField = {
+        let field = makeLabel("", font: Theme.caption, color: Theme.muted)
+        field.lineBreakMode = .byWordWrapping
+        field.maximumNumberOfLines = 5
+        return field
+    }()
+    private let applyButton = NSButton()
+
+    public var onApply: (() -> Void)?
+
+    public override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = Theme.cardRadius
+        layer?.backgroundColor = Theme.card.cgColor
+        layer?.borderWidth = 1
+        layer?.borderColor = Theme.amber.withAlphaComponent(0.32).cgColor
+
+        applyButton.title = "Apply agent catalog…"
+        applyButton.image = NSImage(
+            systemSymbolName: "arrow.triangle.2.circlepath",
+            accessibilityDescription: "Apply agent catalog update"
+        )
+        applyButton.imagePosition = .imageLeading
+        applyButton.bezelStyle = .recessed
+        applyButton.isBordered = false
+        applyButton.controlSize = .small
+        applyButton.font = Theme.captionMedium
+        applyButton.contentTintColor = Theme.amber
+        applyButton.target = self
+        applyButton.action = #selector(applyTapped)
+        applyButton.setAccessibilityLabel(
+            "Apply the agent catalog update by restarting only Codex background workers"
+        )
+
+        let column = NSStackView(views: [title, detail, applyButton])
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = Theme.tightGap
+        column.edgeInsets = NSEdgeInsets(top: 9, left: 10, bottom: 8, right: 10)
+        column.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(column)
+        NSLayoutConstraint.activate([
+            column.topAnchor.constraint(equalTo: topAnchor),
+            column.leadingAnchor.constraint(equalTo: leadingAnchor),
+            column.trailingAnchor.constraint(equalTo: trailingAnchor),
+            column.bottomAnchor.constraint(equalTo: bottomAnchor),
+            detail.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -20),
+        ])
+
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        update(staleWorkerCount: nil)
+        isHidden = true
+    }
+
+    public required init?(coder: NSCoder) { nil }
+
+    public convenience init() { self.init(frame: .zero) }
+
+    public func update(staleWorkerCount: Int?) {
+        let workerText: String
+        switch staleWorkerCount {
+        case 1:
+            workerText = "One Codex background worker is using an older model roster."
+        case .some(let count) where count > 1:
+            workerText = "\(count) Codex background workers are using an older model roster."
+        default:
+            workerText = "Codex background workers are using an older model roster."
+        }
+        detail.stringValue = "\(workerText) Applying the update restarts only those workers and may interrupt active answers. OpenCodex remains running."
+        setAccessibilityLabel("Agent catalog update ready. \(detail.stringValue)")
+        isHidden = false
+    }
+
+    public func hide() { isHidden = true }
+
+    public func setApplyEnabled(_ enabled: Bool) {
+        applyButton.isEnabled = enabled
+        applyButton.alphaValue = enabled ? 1 : 0.45
+    }
+
+    @objc private func applyTapped() { onApply?() }
+
+    // MARK: Test hooks
+
+    package var detailText: String { detail.stringValue }
+    package var buttonTitle: String { applyButton.title }
+    package var buttonEnabled: Bool { applyButton.isEnabled }
+    package var buttonAccessibilityLabel: String? { applyButton.accessibilityLabel() }
+    package func activateForTesting() { applyButton.performClick(nil) }
+}
+
 // MARK: - Status header
 
 /// Brand mark + OpenCodex title + truthful status + active count.

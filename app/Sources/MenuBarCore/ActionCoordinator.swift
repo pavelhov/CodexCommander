@@ -16,6 +16,24 @@ public enum RestartOutcome: Equatable, Sendable {
 public enum ProxyControlOutcome: Equatable, Sendable {
     case running
     case stopped
+    /// The proxy is healthy, but long-lived Codex workers still hold an older roster.
+    case catalogUpdateReady(staleWorkerCount: Int?)
+    case failed(String)
+}
+
+public struct CodexCatalogApplySummary: Equatable, Sendable {
+    public let catalogUpdated: Bool
+    public let stoppedWorkerCount: Int
+
+    public init(catalogUpdated: Bool, stoppedWorkerCount: Int) {
+        self.catalogUpdated = catalogUpdated
+        self.stoppedWorkerCount = stoppedWorkerCount
+    }
+}
+
+public enum CodexCatalogApplyOutcome: Equatable, Sendable {
+    case applied(CodexCatalogApplySummary)
+    case incomplete(message: String, stoppedWorkerCount: Int, survivingWorkerCount: Int)
     case failed(String)
 }
 
@@ -65,6 +83,9 @@ public actor ActionCoordinator {
     ) async -> ProxyControlOutcome {
         do {
             let result = try await lifecycle.run(action)
+            if result.state == .running, result.codexRestartRequired == true {
+                return .catalogUpdateReady(staleWorkerCount: result.staleWorkerCount)
+            }
             guard result.ok, result.state == expected else {
                 return .failed(result.message)
             }
@@ -73,6 +94,42 @@ public actor ActionCoordinator {
             return .failed(error.userMessage)
         } catch {
             return .failed("OpenCodex lifecycle control failed.")
+        }
+    }
+
+    /// Applies the current model catalog and restarts only Codex's catalog-caching
+    /// workers through the fixed lifecycle bridge. The OpenCodex proxy is untouched.
+    public func applyCodexCatalog() async -> CodexCatalogApplyOutcome {
+        do {
+            let result = try await lifecycle.run(.applyCodexCatalog)
+            let stopped = result.stoppedWorkerCount ?? 0
+            let surviving = result.survivingWorkerCount ?? 0
+            // A stale worker may coexist with a refused or failed catalog write. The
+            // write failure is authoritative: never describe that result as applied.
+            if !result.ok, result.errorCode == "SYNC_FAILED" {
+                return .failed(result.message)
+            }
+            if surviving > 0 || result.codexRestartRequired == true {
+                return .incomplete(
+                    message: result.message,
+                    stoppedWorkerCount: stopped,
+                    survivingWorkerCount: surviving
+                )
+            }
+            guard result.ok,
+                  result.state == .running || result.state == .stopped,
+                  let catalogUpdated = result.catalogUpdated
+            else {
+                return .failed(result.message)
+            }
+            return .applied(CodexCatalogApplySummary(
+                catalogUpdated: catalogUpdated,
+                stoppedWorkerCount: stopped
+            ))
+        } catch let error as LifecycleHelperError {
+            return .failed(error.userMessage)
+        } catch {
+            return .failed("OpenCodex could not apply the agent catalog update.")
         }
     }
 

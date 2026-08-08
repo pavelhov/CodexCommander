@@ -121,6 +121,30 @@ describe("shared proxy lifecycle authority", () => {
     expect(calls).toEqual(["release", "companion"]);
   });
 
+  test("an older live proxy that lacks /api/sync requires a proxy restart and stays fatal", async () => {
+    const result = await ensureProxyLifecycle({
+      io: baseIo({
+        findLive: async () => ({ pid: 42, port: 10123, source: "runtime" }),
+        syncLive: async () => ({
+          status: "failed",
+          ok: false,
+          lifecycleErrorCode: "PROXY_RESTART_REQUIRED",
+          message: "The running OpenCodex proxy must be restarted before its catalog can be synchronized.",
+        }),
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      state: "running",
+      pid: 42,
+      port: 10123,
+      errorCode: "PROXY_RESTART_REQUIRED",
+    });
+    expect(result.message).toContain("OpenCodex proxy must be restarted");
+    expect(result.codexRestartRequired).toBeUndefined();
+  });
+
   test("integration OFF is a converged lifecycle state", async () => {
     const result = await ensureProxyLifecycle({
       io: baseIo({
@@ -176,7 +200,7 @@ describe("shared proxy lifecycle authority", () => {
     });
   });
 
-  test("a stale Codex app-server catalog requires a ChatGPT restart without stopping the proxy", async () => {
+  test("a stale Codex worker catalog is a nonfatal update-ready notice", async () => {
     const result = await ensureProxyLifecycle({
       io: baseIo({
         findLive: async () => ({ pid: 42, port: 10123, source: "runtime" }),
@@ -184,7 +208,64 @@ describe("shared proxy lifecycle authority", () => {
           status: "applied",
           ok: true,
           catalogQuality: "retained",
+          catalogWritten: true,
+          catalogState: {
+            state: "stale",
+            catalogMtimeMs: 2_000,
+            processes: [
+              { pid: 81, startedAtMs: 1_000 },
+              { pid: 82, startedAtMs: 3_000 },
+            ],
+          },
+        }),
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      state: "running",
+      pid: 42,
+      errorCode: "CODEX_RESTART_REQUIRED",
+      catalogUpdated: true,
+      codexRestartRequired: true,
+      staleWorkerCount: 1,
+      stoppedWorkerCount: 0,
+      survivingWorkerCount: 1,
+    });
+    expect(result.message).toContain("update ready");
+  });
+
+  test("a generic post-write hint cannot override an explicit fresh worker state", async () => {
+    const result = await ensureProxyLifecycle({
+      io: baseIo({
+        findLive: async () => ({ pid: 42, port: 10123, source: "runtime" }),
+        syncLive: async () => ({
+          status: "applied",
+          ok: true,
+          catalogQuality: "live",
+          catalogWritten: true,
+          staleAppServerHint: "restart if stale",
+          catalogState: { state: "fresh" },
+        }),
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: true, state: "running", pid: 42 });
+    expect(result.errorCode).toBeUndefined();
+    expect(result.codexRestartRequired).toBeUndefined();
+  });
+
+  test("a real sync failure remains fatal even when worker state is stale", async () => {
+    const result = await ensureProxyLifecycle({
+      io: baseIo({
+        findLive: async () => ({ pid: 42, port: 10123, source: "runtime" }),
+        syncLive: async () => ({
+          status: "applied",
+          ok: false,
+          catalogQuality: "retained",
+          catalogWritten: true,
           catalogState: { state: "stale" },
+          message: "Catalog config injection failed.",
         }),
       }),
     });
@@ -193,9 +274,9 @@ describe("shared proxy lifecycle authority", () => {
       ok: false,
       state: "running",
       pid: 42,
-      errorCode: "CODEX_RESTART_REQUIRED",
+      errorCode: "SYNC_FAILED",
+      message: "Catalog config injection failed.",
     });
-    expect(result.message).toContain("Restart ChatGPT");
   });
 
   test("already-live ensure callers serialize managed-client sync", async () => {

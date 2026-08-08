@@ -68,8 +68,19 @@ the current provider gather, `retained` means at least one provider was recovere
 already-active last-known-good rows, and `native-only` means no OpenCodex-authored routed rows are
 active. `native-only` with an enabled routed-capable provider is an actionable sync warning, not a
 fully-ready result. The macOS lifecycle waits for startup readiness, retries convergence through the
-live management API, and reports a stale Codex app-server cache as “restart ChatGPT required” while
-leaving the healthy proxy running.
+live management API, and automatically synchronizes the catalog on app launch. A worker roster that
+predates the committed catalog is a nonfatal, persistent **Agent catalog update ready** state; it does
+not make OpenCodex appear stopped or unhealthy. The confirmed **Apply agent catalog** action performs
+another sync, sends `SIGTERM` only to exact current-user `codex … app-server` and
+`codex-code-mode-host` matches, verifies the old workers' exits, and leaves the OpenCodex proxy and
+menu app running. Release one does not promise idle deferral: activity is warning context, **Apply
+Now** is explicit consent to possible interruption, and **Later** leaves the update pending.
+
+The CLI remains the advanced fallback:
+
+```bash
+ocx sync --restart-codex
+```
 
 ## Entry shape
 

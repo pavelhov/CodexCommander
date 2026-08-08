@@ -197,13 +197,15 @@ enum ActionSuite {
             )
         }
 
-        t.test("lifecycle: a live proxy with an unconverged catalog is surfaced as failure") {
+        t.test("lifecycle: a live proxy with stale Codex workers becomes update-ready") {
             let lifecycle = FakeLifecycleRunner(results: [
                 LifecycleCommandResult(
                     action: .ensure, ok: false, state: .running,
                     changed: true, pid: 41, port: 10100,
                     message: "Restart ChatGPT to load the routed models.",
-                    errorCode: "CODEX_RESTART_REQUIRED"
+                    errorCode: "CODEX_RESTART_REQUIRED",
+                    codexRestartRequired: true,
+                    staleWorkerCount: 2
                 ),
             ])
             let coordinator = ActionCoordinator(
@@ -212,7 +214,115 @@ enum ActionSuite {
             )
             t.equal(
                 sync { await coordinator.ensure() },
-                .failed("Restart ChatGPT to load the routed models.")
+                .catalogUpdateReady(staleWorkerCount: 2)
+            )
+        }
+
+        t.test("lifecycle: restart-like error codes without the additive flag remain failures") {
+            let lifecycle = FakeLifecycleRunner(results: [
+                LifecycleCommandResult(
+                    action: .ensure, ok: false, state: .running,
+                    changed: false, pid: 41, port: 10100,
+                    message: "Legacy Codex restart required.",
+                    errorCode: "CODEX_RESTART_REQUIRED"
+                ),
+                LifecycleCommandResult(
+                    action: .ensure, ok: false, state: .running,
+                    changed: false, pid: 41, port: 10100,
+                    message: "Proxy restart required.",
+                    errorCode: "PROXY_RESTART_REQUIRED"
+                ),
+            ])
+            let coordinator = ActionCoordinator(
+                client: FakeActionClient(liveness: []),
+                lifecycle: lifecycle
+            )
+            t.equal(
+                sync { await coordinator.ensure() },
+                .failed("Legacy Codex restart required.")
+            )
+            t.equal(
+                sync { await coordinator.ensure() },
+                .failed("Proxy restart required.")
+            )
+        }
+
+        t.test("catalog apply: uses the fixed helper action and returns counts") {
+            let lifecycle = FakeLifecycleRunner(results: [
+                LifecycleCommandResult(
+                    action: .applyCodexCatalog, ok: true, state: .running,
+                    changed: true, pid: 41, port: 10100,
+                    message: "Agent catalog updated.",
+                    catalogUpdated: true,
+                    codexRestartRequired: false,
+                    stoppedWorkerCount: 2,
+                    survivingWorkerCount: 0
+                ),
+            ])
+            let coordinator = ActionCoordinator(
+                client: FakeActionClient(liveness: []),
+                lifecycle: lifecycle
+            )
+            t.equal(
+                sync { await coordinator.applyCodexCatalog() },
+                .applied(CodexCatalogApplySummary(
+                    catalogUpdated: true,
+                    stoppedWorkerCount: 2
+                ))
+            )
+            t.equal(
+                sync { await lifecycle.recordedActions() },
+                [.applyCodexCatalog]
+            )
+        }
+
+        t.test("catalog apply: surviving workers remain an incomplete update") {
+            let lifecycle = FakeLifecycleRunner(results: [
+                LifecycleCommandResult(
+                    action: .applyCodexCatalog, ok: false, state: .running,
+                    changed: true, pid: 41, port: 10100,
+                    message: "One Codex worker is still running.",
+                    catalogUpdated: true,
+                    codexRestartRequired: true,
+                    stoppedWorkerCount: 1,
+                    survivingWorkerCount: 1
+                ),
+            ])
+            let coordinator = ActionCoordinator(
+                client: FakeActionClient(liveness: []),
+                lifecycle: lifecycle
+            )
+            t.equal(
+                sync { await coordinator.applyCodexCatalog() },
+                .incomplete(
+                    message: "One Codex worker is still running.",
+                    stoppedWorkerCount: 1,
+                    survivingWorkerCount: 1
+                )
+            )
+        }
+
+        t.test("catalog apply: a sync failure wins over stale surviving workers") {
+            let lifecycle = FakeLifecycleRunner(results: [
+                LifecycleCommandResult(
+                    action: .applyCodexCatalog, ok: false, state: .running,
+                    changed: false, pid: 41, port: 10100,
+                    message: "Agent catalog update did not complete.",
+                    errorCode: "SYNC_FAILED",
+                    catalogUpdated: false,
+                    codexRestartRequired: true,
+                    staleWorkerCount: 2,
+                    stoppedWorkerCount: 0,
+                    survivingWorkerCount: 2
+                ),
+            ])
+            let coordinator = ActionCoordinator(
+                client: FakeActionClient(liveness: []),
+                lifecycle: lifecycle
+            )
+            t.equal(
+                sync { await coordinator.applyCodexCatalog() },
+                .failed("Agent catalog update did not complete.")
             )
         }
 

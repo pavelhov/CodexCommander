@@ -263,12 +263,17 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     const {
       attachStaleAppServerHint,
       collectCodexAppServerCatalogState,
+      resetCodexAppServerCatalogStateCache,
     } = await import("../../codex/app-server-processes");
     const { readRuntimePort, loadConfig } = await import("../../config");
     // Never use the server-captured startup object for a durable integration
     // decision. A toggle may have persisted while this process was gathering.
     const runtime = readRuntimePort(process.pid);
     const result = await syncModelsToCodex(runtime?.port, loadConfig(), null);
+    // A read taken before this sync can be memoized for five seconds. Drop it
+    // before classifying the just-written catalog so launch-time update
+    // readiness cannot be masked by a pre-write `fresh` snapshot.
+    resetCodexAppServerCatalogStateCache();
     const status = result.status === "refused" ? 409 : (result.status === "skipped" || result.ok ? 200 : 500);
     return jsonResponse({
       ...attachStaleAppServerHint(result),

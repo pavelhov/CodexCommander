@@ -308,6 +308,24 @@ describe("Codex app-server process matching (#476)", () => {
     expect(result.failed).toEqual([]);
   });
 
+  test("restartCodexAppServers skips same-command PID reuse when a birth time was captured", () => {
+    const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const result = restartCodexAppServers(
+      [{ pid: 42, commandLine: "codex app-server", startedAtMs: 1_000 }],
+      {
+        listSnapshots: () => [{ pid: 42, commandLine: "codex app-server" }],
+        // Same PID and command line, but a replacement worker started later.
+        readStartMs: () => 2_000,
+        kill: (pid, signal) => { signals.push({ pid, signal }); },
+        isAlive: () => true,
+        waitExit: () => false,
+      },
+    );
+
+    expect(signals).toEqual([]);
+    expect(result).toEqual({ requested: [42], stopped: [], surviving: [], failed: [] });
+  });
+
   test("afterCatalogWriteHandleAppServers warns by default and restarts when requested", () => {
     const errors: string[] = [];
     const logs: string[] = [];
@@ -387,7 +405,10 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
       configRoutesSource.indexOf('url.pathname === "/api/update/check"'),
     );
     expect(syncHandler).toContain("attachStaleAppServerHint(result)");
+    expect(syncHandler).toContain("resetCodexAppServerCatalogStateCache()");
     expect(syncHandler).toContain("collectCodexAppServerCatalogState()");
+    expect(syncHandler.indexOf("resetCodexAppServerCatalogStateCache()"))
+      .toBeLessThan(syncHandler.indexOf("collectCodexAppServerCatalogState()"));
     expect(syncHandler).not.toContain("listCodexAppServerProcesses");
     expect(syncHandler).not.toContain("afterCatalogWriteHandleAppServers");
     expect(STALE_CODEX_APP_SERVER_HINT).toContain("ocx sync --restart-codex");

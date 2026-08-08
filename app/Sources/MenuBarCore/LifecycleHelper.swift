@@ -7,6 +7,7 @@ public enum LifecycleAction: String, Codable, Sendable {
     case start
     case stop
     case restart
+    case applyCodexCatalog
 }
 
 public enum LifecycleState: String, Codable, Sendable {
@@ -27,6 +28,13 @@ public struct LifecycleCommandResult: Codable, Equatable, Sendable {
     public let port: Int?
     public let message: String
     public let errorCode: String?
+    /// Catalog-action fields are additive so older lifecycle results remain decodable.
+    /// The app deliberately receives counts rather than process identifiers.
+    public let catalogUpdated: Bool?
+    public let codexRestartRequired: Bool?
+    public let staleWorkerCount: Int?
+    public let stoppedWorkerCount: Int?
+    public let survivingWorkerCount: Int?
 
     public init(
         schemaVersion: Int = 1,
@@ -37,7 +45,12 @@ public struct LifecycleCommandResult: Codable, Equatable, Sendable {
         pid: Int? = nil,
         port: Int? = nil,
         message: String,
-        errorCode: String? = nil
+        errorCode: String? = nil,
+        catalogUpdated: Bool? = nil,
+        codexRestartRequired: Bool? = nil,
+        staleWorkerCount: Int? = nil,
+        stoppedWorkerCount: Int? = nil,
+        survivingWorkerCount: Int? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.action = action
@@ -48,6 +61,11 @@ public struct LifecycleCommandResult: Codable, Equatable, Sendable {
         self.port = port
         self.message = message
         self.errorCode = errorCode
+        self.catalogUpdated = catalogUpdated
+        self.codexRestartRequired = codexRestartRequired
+        self.staleWorkerCount = staleWorkerCount
+        self.stoppedWorkerCount = stoppedWorkerCount
+        self.survivingWorkerCount = survivingWorkerCount
     }
 }
 
@@ -335,6 +353,15 @@ public actor LifecycleHelper: LifecycleCommandRunning {
                       result.message.utf8.count <= 240,
                       result.pid.map({ $0 > 0 }) ?? true,
                       result.port.map({ (1...65_535).contains($0) }) ?? true,
+                      result.staleWorkerCount.map({ $0 >= 0 }) ?? true,
+                      result.stoppedWorkerCount.map({ $0 >= 0 }) ?? true,
+                      result.survivingWorkerCount.map({ $0 >= 0 }) ?? true,
+                      action != .applyCodexCatalog || !result.ok || (
+                          result.catalogUpdated != nil
+                              && result.codexRestartRequired != nil
+                              && result.stoppedWorkerCount != nil
+                              && result.survivingWorkerCount != nil
+                      ),
                       (process.terminationStatus == 0) == result.ok
                 else {
                     continuation.resume(throwing: LifecycleHelperError.invalidResponse)
