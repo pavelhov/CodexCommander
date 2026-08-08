@@ -1281,6 +1281,45 @@ describe("mock-max wire clamp (nativeEffortClamp)", () => {
 });
 
 describe("3-state multi-agent mode", () => {
+  test("Sol/Luna/Kimi/Grok/DeepSeek roster keeps exact v1/default/v2 protocol semantics", () => {
+    const native = ["gpt-5.6-sol", "gpt-5.6-luna"];
+    const routed = [
+      { id: "k3[1m]", provider: "kimi", reasoningEfforts: ["low", "high", "max"] },
+      { id: "grok-4.5", provider: "xai", reasoningEfforts: ["low", "high", "max"] },
+      { id: "deepseek-v4-flash", provider: "opencode-go", reasoningEfforts: ["low", "high", "max"] },
+    ];
+    const roster = [
+      "gpt-5.6-sol",
+      "gpt-5.6-luna",
+      "kimi/k3[1m]",
+      "xai/grok-4.5",
+      "opencode-go/deepseek-v4-flash",
+    ];
+
+    const entriesFor = (mode: MultiAgentMode) => buildCatalogEntries(
+      template(),
+      native,
+      routed as never,
+      [],
+      false,
+      mode,
+    );
+
+    for (const entry of entriesFor("v1").filter(candidate => roster.includes(candidate.slug))) {
+      expect(entry.multi_agent_version).toBe("v1");
+    }
+    for (const entry of entriesFor("v2").filter(candidate => roster.includes(candidate.slug))) {
+      expect(entry.multi_agent_version).toBe("v2");
+    }
+
+    const defaults = new Map(entriesFor("default").map(entry => [entry.slug, entry.multi_agent_version]));
+    expect(defaults.get("gpt-5.6-sol")).toBe("v2");
+    expect(defaults.get("gpt-5.6-luna")).toBe("v1");
+    expect(defaults.get("kimi/k3[1m]")).toBeUndefined();
+    expect(defaults.get("xai/grok-4.5")).toBeUndefined();
+    expect(defaults.get("opencode-go/deepseek-v4-flash")).toBeUndefined();
+  });
+
   test("mode v1: ALL entries get multi_agent_version = v1 (overrides upstream pins)", () => {
     const entries = buildCatalogEntries(template(), ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5"], [], [], false, "v1");
     for (const e of entries) {
