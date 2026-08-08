@@ -9,6 +9,11 @@ import type { injectGrokConfig } from "../../grok/inject";
 import type { removeDesktop3pStandardPivot, writeDesktop3pConfig } from "../../claude/desktop-3p";
 import type { RuntimePortState } from "../../config";
 import type { CatalogDisposition, ConvergeCodex } from "../../codex/convergence-types";
+import type { syncModelsToCodex } from "../../codex/sync";
+import type {
+  collectCodexAppServerCatalogState,
+  resetCodexAppServerCatalogStateCache,
+} from "../../codex/app-server-processes";
 
 export interface ManagementApiDeps {
   resolveCodexRuntime?: () => ResolveCodexRuntimeResult;
@@ -51,6 +56,15 @@ export interface ManagementApiDeps {
    * on the developer's real runtime state file.
    */
   readRuntimePort?: (pid: number) => RuntimePortState | null;
+  /**
+   * Fixed /api/sync seams keep route-level serialization tests off the host's
+   * real Codex process table while production continues to use the native
+   * implementations. The reset and collect functions are separate so tests
+   * can still assert their ordering.
+   */
+  syncModelsToCodex?: typeof syncModelsToCodex;
+  resetCodexAppServerCatalogStateCache?: typeof resetCodexAppServerCatalogStateCache;
+  collectCodexAppServerCatalogState?: typeof collectCodexAppServerCatalogState;
   clearThreadAccountMap?: () => void;
   clearProviderQuotaCache?: () => void;
   primeCodexPoolQuotas?: (config: OcxConfig, reason: string) => Promise<void> | void;

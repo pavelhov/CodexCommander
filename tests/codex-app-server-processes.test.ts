@@ -405,10 +405,10 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
       configRoutesSource.indexOf('url.pathname === "/api/update/check"'),
     );
     expect(syncHandler).toContain("attachStaleAppServerHint(result)");
-    expect(syncHandler).toContain("resetCodexAppServerCatalogStateCache()");
-    expect(syncHandler).toContain("collectCodexAppServerCatalogState()");
-    expect(syncHandler.indexOf("resetCodexAppServerCatalogStateCache()"))
-      .toBeLessThan(syncHandler.indexOf("collectCodexAppServerCatalogState()"));
+    expect(syncHandler).toContain("deps.resetCodexAppServerCatalogStateCache ?? resetCodexAppServerCatalogStateCache");
+    expect(syncHandler).toContain("deps.collectCodexAppServerCatalogState ?? collectCodexAppServerCatalogState");
+    expect(syncHandler.indexOf("deps.resetCodexAppServerCatalogStateCache"))
+      .toBeLessThan(syncHandler.indexOf("deps.collectCodexAppServerCatalogState"));
     expect(syncHandler).not.toContain("listCodexAppServerProcesses");
     expect(syncHandler).not.toContain("afterCatalogWriteHandleAppServers");
     expect(STALE_CODEX_APP_SERVER_HINT).toContain("ocx sync --restart-codex");

@@ -262,11 +262,38 @@ async function runPublisher(
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   if (kind === "retained") {
     return runChild(sandbox, `
-      const { handleManagementAPI } = await import("./src/server/management-api.ts");
       const config = ${JSON.stringify(config)};
-      const req = new Request("http://localhost/api/sync", { method: "POST", headers: { Host: "localhost" } });
-      const response = await handleManagementAPI(req, new URL(req.url), config);
-      console.log(JSON.stringify({ status: response.status, body: await response.json() }));
+      // The first /api/sync request already proves the HTTP boundary and remains
+      // suspended in the parent-owned provider. This competing writer needs to
+      // exercise the retained catalog commit, not make a second request to the
+      // same deliberately held test server. Give it an in-process provider seam
+      // so the race is controlled only by K and filesystem evidence.
+      config.providers.fixture.fetch = async () => Response.json({
+        data: [{ id: "publisher-model" }],
+      });
+      const { syncCatalogModels } = await import("./src/codex/catalog/sync.ts");
+      const result = await syncCatalogModels(config, {
+        // This race covers retained catalog serialization, not Codex binary
+        // discovery. Keep the bundled native template in-process so subprocess
+        // scheduling cannot consume the fixed race deadline.
+        commandCandidates: () => ["codex-fixture"],
+        execFileSync: () => JSON.stringify({ models: [{
+          slug: "gpt-5.5",
+          display_name: "gpt-5.5",
+          description: "native",
+          priority: 0,
+          visibility: "list",
+          supported_in_api: true,
+          shell_type: "shell_command",
+          base_instructions: "You are Codex, a coding agent based on GPT-5.",
+          supported_reasoning_levels: [{ effort: "medium", description: "medium" }],
+        }] }),
+      });
+      // Provider discovery owns bounded cache timers that are irrelevant after
+      // the committed bytes and result are available. Flush the diagnostic frame
+      // before exiting so this serialization test never waits for those timers.
+      await Bun.write(Bun.stdout, JSON.stringify(result) + "\\n");
+      process.exit(0);
     `);
   }
   return runChild(sandbox, `
@@ -319,9 +346,29 @@ for (const publisher of ["convergence", "retained"] as const) {
     try {
       const sync = trackChild(Bun.spawn([process.execPath, "--eval", `
         const config = ${JSON.stringify(config)};
-        const { handleManagementAPI } = await import("./src/server/management-api.ts");
+        // Exercise the production route that owns /api/sync without cold-loading
+        // every unrelated management route into this deadline-bound child.
+        const { handleConfigRoutes } = await import("./src/server/management/config-routes.ts");
         const req = new Request("http://localhost/api/sync", { method: "POST", headers: { Host: "localhost" } });
-        const response = await handleManagementAPI(req, new URL(req.url), config);
+        const response = await handleConfigRoutes({
+          req,
+          url: new URL(req.url),
+          config,
+          deps: {
+            // Catalog/process staleness is covered in its own unit suite. Keep
+            // this filesystem race independent from the host's real Codex
+            // workers and bounded ps/launchctl probes.
+            resetCodexAppServerCatalogStateCache: () => {},
+            collectCodexAppServerCatalogState: () => ({
+              state: "not_running",
+              processes: [],
+              catalogMtimeMs: null,
+            }),
+          },
+          convergeCodexCatalog: async () => { throw new Error("unexpected convergence route"); },
+          syncClaudeAgentDefsBestEffort: async () => {},
+        });
+        if (!response) throw new Error("/api/sync was not handled");
         console.log(JSON.stringify({ status: response.status, body: await response.json() }));
       `], { cwd: repoRoot, env: sandbox.env, stdout: "pipe", stderr: "pipe" }));
       const stdoutText = new Response(sync.stdout).text();
