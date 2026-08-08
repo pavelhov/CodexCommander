@@ -1,577 +1,982 @@
-/* ============================================================================
-   subagents-workspace — isolated stylesheet (mirrors providers-workspace layout DNA)
-   Namespace: subagents-workspace-  |  widgets: swi-
-   Uses only design tokens from styles.css. No gradients.
-   ============================================================================ */
+/* Agent Command Center — uses dashboard tokens and existing icon assets only. */
 
 .main-inner:has(.subagents-workspace-shell) {
-  max-width: 1200px;
+  max-width: 1380px;
+}
+
+.subagents-page-head {
+  align-items: flex-start;
+  margin-bottom: var(--space-3);
+}
+
+.subagents-page-head h2 {
+  margin-bottom: var(--space-1);
+}
+
+.subagents-page-subtitle {
+  margin: 0;
+  max-width: var(--prose-measure);
+  color: var(--muted);
+  font-size: var(--text-control);
+}
+
+.subagents-catalog-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-sm);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  background: var(--surface);
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.subagents-catalog-badge > span {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-round);
+  background: currentColor;
+}
+
+.subagents-catalog-badge--fresh {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 28%, var(--border));
+  background: var(--green-soft);
+}
+
+.subagents-catalog-badge--stale,
+.subagents-catalog-badge--unknown {
+  color: var(--amber);
+  border-color: color-mix(in srgb, var(--amber) 28%, var(--border));
+  background: var(--amber-soft);
 }
 
 .subagents-workspace-shell {
   width: 100%;
   min-width: 0;
-  container-type: inline-size;
-  container-name: subagents-workspace;
+  container: subagents-workspace / inline-size;
 }
 
-.subagents-workspace-root {
+.subagents-command-grid {
   display: grid;
-  /*
-    Single column at every width: the two-pane rail split read as cramped on this tab,
-    so the picker sits above the featured list instead of beside it. The responsive
-    blocks below are now the same shape as the default and only adjust the seam.
-  */
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(360px, 0.88fr) minmax(480px, 1.12fr);
   gap: var(--space-4);
-  width: 100%;
-  max-width: 100%;
-  min-height: 0;
+  align-items: stretch;
 }
 
-/* ── Rail ─────────────────────────────────────────────── */
+.subagents-command-card {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
 
-.subagents-workspace-rail {
+.swi-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  min-height: 72px;
+}
+
+.swi-card-title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-subtitle);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+}
+
+.swi-card-subtitle {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: var(--text-label);
+  line-height: var(--leading-ui);
+}
+
+.swi-roster,
+.swi-library {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  /* Stacked layout: the seam runs underneath, not down the side. */
-  border-bottom: 1px solid var(--border);
-  padding-bottom: var(--space-3);
-  min-width: 0;
+  min-height: 560px;
 }
 
-/* Stacked sections: featured roster, then the picker. */
-.subagents-workspace-section {
+.swi-roster-list {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  margin: 0;
+  padding: 0 var(--space-4);
+  list-style: none;
+}
+
+.swi-roster-row {
+  display: grid;
+  grid-template-columns: var(--control-md) 26px 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 64px;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  transition: border-color var(--motion-fast), background var(--motion-fast), transform var(--motion-fast);
+}
+
+.swi-roster-row:hover,
+.swi-roster-row:focus-within {
+  border-color: color-mix(in srgb, var(--text) 22%, var(--border));
+}
+
+.swi-roster-row--dragging {
+  opacity: 0.55;
+  transform: scale(0.995);
+}
+
+.swi-roster-row--drop {
+  border-color: var(--green);
+  background: var(--green-soft);
+}
+
+.swi-roster-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-md);
+  height: var(--control-md);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  color: var(--muted);
+  background: transparent;
+  cursor: grab;
+}
+
+.swi-roster-grip:hover {
+  color: var(--text);
+  background: var(--raised);
+}
+
+.swi-roster-grip:active {
+  cursor: grabbing;
+}
+
+.swi-roster-grip:focus-visible,
+.swi-library-toggle:focus-visible,
+.swi-filter:focus-visible,
+.swi-library-search:focus-within {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 2px;
+}
+
+.swi-roster-rank,
+.swi-library-priority {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--text-label);
+  font-variant-numeric: tabular-nums;
+}
+
+.swi-model-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.swi-model-mark--native {
+  width: auto;
+  max-width: 20px;
+  overflow: hidden;
+}
+
+.swi-model-mark--native .model-label {
+  font-size: 0;
+}
+
+.swi-model-mark--native svg {
+  width: 18px !important;
+  height: 18px !important;
+}
+
+.swi-roster-identity,
+.swi-library-identity {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--space-1);
   min-width: 0;
 }
 
-/* Sections stay in the document and the sticky strip scrolls between them; the seam marks
-   where one ends, matching the Usage tab. */
-.subagents-workspace-section + .subagents-workspace-section {
-  margin-top: var(--space-3);
-  padding-top: var(--space-4);
-  border-top: 1px solid var(--border);
+.swi-roster-name,
+.swi-library-name {
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--text-control);
+  line-height: var(--leading-ui);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* ── Delegation settings ──────────────────────────────── */
+.swi-model-chips {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
+}
 
-.swi-delegation {
+.swi-model-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 19px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  background: var(--raised);
+  font-size: var(--text-micro);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.swi-roster-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-0-5);
+}
+
+.swi-roster-arrow {
+  color: var(--muted);
+}
+
+.swi-roster-remove {
+  color: var(--red);
+}
+
+.swi-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: auto;
+  padding: var(--space-4);
+  color: var(--muted);
+  font-size: var(--text-label);
+}
+
+.swi-card-footer > span {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  line-height: var(--leading-ui);
+}
+
+.swi-card-footer svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.swi-featured-empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  min-height: 260px;
+  margin: 0 var(--space-4);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  text-align: center;
+}
+
+.swi-library-head {
+  align-items: center;
+}
+
+.swi-library-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: min(270px, 48%);
+  min-height: var(--control-lg);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  background: var(--surface);
+}
+
+.swi-library-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+}
+
+.swi-library-search input::placeholder {
+  color: var(--muted);
+}
+
+.swi-library-filters {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-4) var(--space-3);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.swi-filter {
+  min-height: var(--control-md);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  background: var(--surface);
+  font: inherit;
+  font-size: var(--text-label);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.swi-filter:hover {
+  color: var(--text);
+  background: var(--raised);
+}
+
+.swi-filter--active {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--text) 35%, var(--border));
+  background: var(--raised);
+}
+
+.swi-library-list {
   display: flex;
   flex-direction: column;
+  gap: var(--space-1-5);
+  max-height: 390px;
+  margin: 0 var(--space-4);
+  padding-right: var(--space-1);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.swi-library-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto var(--control-md);
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 58px;
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface);
 }
 
-.swi-delegation-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-3);
+.swi-library-row:hover {
+  border-color: color-mix(in srgb, var(--text) 22%, var(--border));
+  background: var(--hover);
 }
 
-.swi-delegation-row + .swi-delegation-row {
+.swi-library-row--selected {
+  border-color: color-mix(in srgb, var(--green) 35%, var(--border));
+  background: var(--green-soft);
+}
+
+.swi-library-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-md);
+  height: var(--control-md);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color: var(--text);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.swi-library-toggle:hover:not(:disabled) {
+  background: var(--raised);
+}
+
+.swi-library-toggle--selected {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 35%, var(--border));
+}
+
+.swi-library-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.subagents-workspace-rail-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  padding: var(--space-5);
+  color: var(--muted);
+  text-align: center;
+}
+
+.swi-library-footer {
+  justify-content: flex-start;
+}
+
+.swi-policy {
+  margin-top: var(--space-4);
+  overflow: visible;
+}
+
+.swi-policy > .swi-card-head {
+  min-height: auto;
+  padding-bottom: var(--space-2);
+}
+
+.swi-policy-body {
+  padding: 0 var(--space-4) var(--space-4);
+}
+
+.swi-policy-body > .notice {
+  margin-bottom: var(--space-3);
+}
+
+.swi-policy-grid {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.8fr) minmax(220px, 1.2fr) minmax(200px, 1.05fr) minmax(150px, 0.72fr) auto;
+  gap: var(--space-4);
+  align-items: end;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.swi-policy-field {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: var(--space-2);
+}
+
+.swi-policy-field .custom-select,
+.swi-policy-field .select-trigger {
+  width: 100%;
+}
+
+.swi-policy-guidance-field {
+  grid-column: span 2;
+}
+
+.swi-policy-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--control-lg);
+}
+
+.swi-policy-label {
+  color: var(--text);
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-ui);
+}
+
+.swi-policy-help {
+  display: block;
+  color: var(--muted);
+  font-size: var(--text-micro);
+  line-height: var(--leading-body);
+}
+
+.swi-policy-save-cell {
+  display: flex;
+  align-items: flex-end;
+  min-height: calc(var(--control-lg) + 34px);
+}
+
+.swi-policy-save-cell .btn {
+  min-width: 128px;
+  min-height: var(--control-lg);
+  white-space: nowrap;
+}
+
+.swi-concurrency-control {
+  display: flex;
+  align-items: stretch;
+  min-height: var(--control-lg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.swi-concurrency-control:focus-within {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 1px;
+}
+
+.swi-concurrency-control input {
+  width: 100%;
+  min-width: 0;
+  padding: 0 var(--space-3);
+  border: 0;
+  outline: 0;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.swi-concurrency-control input::-webkit-inner-spin-button,
+.swi-concurrency-control input::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.swi-concurrency-control input::placeholder {
+  color: var(--muted);
+}
+
+.swi-concurrency-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, var(--control-md));
+  border-left: 1px solid var(--border);
+}
+
+.swi-concurrency-buttons button,
+.swi-fallback-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.swi-concurrency-buttons button + button {
+  border-left: 1px solid var(--border-soft);
+}
+
+.swi-concurrency-buttons button:hover:not(:disabled),
+.swi-fallback-actions button:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--raised);
+}
+
+.swi-concurrency-buttons button:disabled,
+.swi-fallback-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.36;
+}
+
+.swi-concurrency-buttons svg,
+.swi-fallback-actions svg {
+  width: 14px;
+  height: 14px;
+}
+
+.swi-policy-details {
+  margin-top: var(--space-3);
   border-top: 1px solid var(--border-soft);
 }
 
+.swi-policy-details > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-lg);
+  color: var(--muted);
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.swi-policy-details > summary svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  transition: transform var(--motion-fast);
+}
+
+.swi-policy-details[open] > summary svg {
+  transform: rotate(90deg);
+}
+
+.swi-policy-details > summary:hover {
+  color: var(--text);
+}
+
+.swi-policy-details-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.9fr) minmax(430px, 1.1fr);
+  gap: var(--space-4);
+  padding-top: var(--space-2);
+}
+
+.swi-policy-detail-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.swi-fallback-chain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.swi-fallback-empty {
+  padding: var(--space-3);
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-xs);
+  text-align: center;
+}
+
+.swi-fallback-chain li {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-lg);
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+}
+
+.swi-fallback-rank {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--text-label);
+}
+
+.swi-fallback-name {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: var(--text-label);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.swi-fallback-actions {
+  display: flex;
+  align-items: center;
+}
+
+.swi-fallback-actions button {
+  width: var(--control-md);
+  height: var(--control-md);
+  border-radius: var(--radius-xs);
+}
+
+.swi-fallback-actions button:last-child {
+  color: var(--red);
+}
+
+.swi-add-fallback {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+}
+
+.swi-policy-safeguards {
+  gap: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.swi-policy-mini-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(130px, auto);
+  align-items: center;
+  gap: var(--space-4);
+  min-height: 74px;
+  padding: var(--space-3) 0;
+}
+
+.swi-policy-mini-field + .swi-policy-mini-field {
+  border-top: 1px solid var(--border-soft);
+}
+
+.swi-policy-toggle-field {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.swi-policy-detail-note {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-label);
+}
+
+.swi-policy-detail-note svg {
+  width: 15px;
+  height: 15px;
+}
+
+.swi-policy-loading,
+.swi-policy-load-error {
+  margin: 0 var(--space-4) var(--space-4);
+}
+
+.swi-policy-loading {
+  display: flex;
+  align-items: center;
+  min-height: 120px;
+  justify-content: center;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.swi-policy-load-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.swi-delegation {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.4fr) minmax(220px, 0.8fr) minmax(220px, 0.8fr);
+  gap: 0;
+  margin: 0 var(--space-4) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.swi-delegation-row {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-4);
+}
+
+.swi-delegation-row + .swi-delegation-row {
+  border-left: 1px solid var(--border-soft);
+}
+
 .swi-delegation-row .setting-copy {
-  flex: 1 1 auto;
   min-width: 0;
 }
 
 .swi-delegation-row .setting-hint {
-  margin-top: 3px;
-  max-width: 72ch;
-  line-height: 1.5;
+  max-width: 58ch;
+  margin-top: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-label);
+  line-height: var(--leading-body);
 }
 
 .swi-delegation-controls {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  flex-shrink: 0;
+  min-width: 0;
   flex-wrap: wrap;
-  justify-content: flex-end;
 }
 
-.swi-rail-icon {
-  width: 15px;
-  height: 15px;
-  flex-shrink: 0;
-  color: var(--faint);
-}
-
-.subagents-workspace-rail-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.subagents-workspace-rail-title {
-  font-size: var(--text-body);
-  font-weight: var(--weight-semibold);
-  color: var(--text);
-}
-
-.subagents-workspace-rail-count {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--faint);
-  font-variant-numeric: tabular-nums;
-}
-
-/*
-  Picker box: the model list is the only long region on this tab, and letting it run to full
-  height pushed the Featured roster off screen. The box caps it so the tab fits one screen.
-*/
-.swi-picker-box {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  min-height: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  padding: var(--space-2);
-}
-
-.swi-picker-box .subagents-workspace-rail-search {
-  flex: 0 0 auto;
-}
-
-.subagents-workspace-rail-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-height: 0;
-}
-
-/*
-  Inner scroller, scoped to the boxed picker. An earlier version trapped the wheel because it
-  contained the overscroll chain, so the page never moved once the pointer was over the list.
-  `overscroll-behavior: auto` hands the gesture back to the page at either end, which is the
-  same arrangement the storage rail uses.
-*/
-/*
-  One row is 42px tall with a 4px gap, so a clean box height is always `n * 46 - 4`. The
-  helpers below keep every cap on that grid; a plain `vh` cap lands mid-row and the list looks
-  clipped rather than scrollable.
-*/
-.swi-picker-box {
-  --swi-row-step: 46px;
-}
-
-.swi-picker-box .subagents-workspace-rail-list {
-  /* Fallback for engines without stepped-value functions: 10 rows. */
-  max-height: min(456px, 52vh);
-  overflow-y: auto;
-  overscroll-behavior: auto;
-  scrollbar-gutter: stable;
-}
-
-/* Round the viewport-relative cap down to a whole row count so the box never ends mid-row. */
-@supports (height: round(down, 50vh, 46px)) {
-  .swi-picker-box .subagents-workspace-rail-list {
-    max-height: calc(round(down, min(456px, 52vh) + 4px, var(--swi-row-step)) - 4px);
+@container subagents-workspace (max-width: 980px) {
+  .subagents-command-grid {
+    grid-template-columns: 1fr;
   }
-}
 
-.subagents-workspace-rail-group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.subagents-workspace-rail-group + .subagents-workspace-rail-group {
-  margin-top: 8px;
-}
-
-.subagents-workspace-rail-group-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  font-size: var(--text-caption);
-  font-weight: var(--weight-medium);
-  color: var(--muted);
-  padding: var(--space-2) var(--space-2) var(--space-1);
-}
-
-.subagents-workspace-rail-group-count {
-  flex-shrink: 0;
-  font-variant-numeric: tabular-nums;
-}
-
-.subagents-workspace-rail-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  /* Avoid width:100% — it can paint under the scrollbar track in overflow containers. */
-  max-width: 100%;
-  min-width: 0;
-  min-height: 42px;
-  padding: var(--space-1) var(--space-1-5);
-  border-radius: var(--radius-sm);
-  transition: background var(--motion-fast);
-}
-
-.subagents-workspace-rail-row:hover {
-  background: var(--surface);
-}
-
-.subagents-workspace-rail-row--selected {
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px var(--border);
-}
-
-.subagents-workspace-rail-row-main {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  appearance: none;
-  background: none;
-  border: none;
-  padding: 4px 6px;
-  cursor: pointer;
-  font: inherit;
-  font-size: var(--text-body);
-  color: var(--text);
-  text-align: left;
-  border-radius: var(--radius-sm);
-}
-
-.subagents-workspace-rail-row-main:focus-visible {
-  outline: 2px solid var(--accent-ring);
-  outline-offset: -2px;
-}
-
-.subagents-workspace-rail-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--mono);
-  font-size: 12.5px;
-  flex: 1 1 auto;
-}
-
-.subagents-workspace-rail-toggle {
-  flex-shrink: 0;
-  appearance: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--faint);
-  cursor: pointer;
-  transition: background var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
-}
-
-.subagents-workspace-rail-toggle:hover {
-  background: var(--surface);
-  border-color: var(--muted);
-}
-
-.subagents-workspace-rail-toggle:focus-visible {
-  outline: 2px solid var(--accent-ring);
-  outline-offset: 1px;
-}
-
-.subagents-workspace-rail-toggle--on {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.subagents-workspace-rail-toggle--disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.swi-rail-priority {
-  font-family: var(--mono);
-  font-size: 10.5px;
-  font-weight: 700;
-  color: var(--accent);
-  flex-shrink: 0;
-  width: 14px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-
-.subagents-workspace-rail-empty {
-  font-size: 12px;
-  padding: 8px 4px;
-  color: var(--muted);
-}
-
-/* ── Main ─────────────────────────────────────────────── */
-
-.subagents-workspace-main {
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-  padding: 0;
-}
-
-.swi-featured-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 6px;
-}
-
-.swi-featured-title {
-  font-size: 1.15rem;
-  font-weight: 600;
-  color: var(--text);
-  margin: 0;
-}
-
-.swi-featured-count {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--faint);
-  font-variant-numeric: tabular-nums;
-}
-
-.swi-featured-hint {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 12.5px;
-  line-height: 1.5;
-  max-width: 80ch;
-  margin: 0 0 16px;
-}
-
-.swi-featured-hint svg {
-  flex-shrink: 0;
-  margin-top: 2px;
-}
-
-.swi-featured-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 18px;
-}
-
-.swi-featured-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  padding: 9px 12px;
-}
-
-.swi-featured-pos {
-  font-family: var(--mono);
-  font-weight: 700;
-  font-size: 13px;
-  color: var(--accent);
-  width: 18px;
-  flex-shrink: 0;
-  font-variant-numeric: tabular-nums;
-}
-
-.swi-featured-name {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--mono);
-  font-size: 13px;
-  color: var(--text);
-}
-
-.swi-featured-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
-.swi-featured-empty {
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-sm);
-  padding: 24px 16px;
-  text-align: center;
-  color: var(--muted);
-  font-size: 13px;
-  margin-bottom: 18px;
-}
-
-.swi-save-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-/* ── Detail view ──────────────────────────────────────── */
-
-.swi-detail {
-  display: flex;
-  flex-direction: column;
-  max-width: 720px;
-}
-
-.swi-detail-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  background: none;
-  border: none;
-  color: var(--accent);
-  font: inherit;
-  font-size: 0.82rem;
-  cursor: pointer;
-  padding: 0;
-  margin-bottom: 10px;
-}
-
-.swi-detail-back:hover {
-  text-decoration: underline;
-}
-
-.swi-detail-back-chevron {
-  width: 12px;
-  height: 12px;
-  transform: rotate(180deg);
-}
-
-.swi-detail-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 16px;
-}
-
-.swi-detail-icon {
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  color: var(--text);
-}
-
-.swi-detail-title {
-  font-size: 1.15rem;
-  font-weight: 600;
-  margin: 0;
-  line-height: 1.3;
-  min-width: 0;
-  word-break: break-all;
-}
-
-.swi-detail-section {
-  margin-bottom: 18px;
-}
-
-.swi-detail-section-title {
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  margin: 0 0 8px 0;
-}
-
-.swi-detail-kv {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-}
-
-.swi-detail-kv-row {
-  display: flex;
-  gap: 12px;
-  padding: 5px 0;
-  font-size: 0.84rem;
-  line-height: 1.4;
-}
-
-.swi-detail-kv-row dt {
-  flex-shrink: 0;
-  width: 130px;
-  color: var(--muted);
-  font-weight: 400;
-}
-
-.swi-detail-kv-row dd {
-  margin: 0;
-  flex: 1;
-  min-width: 0;
-  word-break: break-word;
-}
-
-.swi-detail-kv-row dd code {
-  font-size: 0.8rem;
-}
-
-.swi-detail-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-/* ── Responsive ───────────────────────────────────────── */
-
-/*
-  The layout is single-column at every width now, so these blocks no longer switch the
-  grid; they only cap the picker height where vertical space is tight.
-*/
-@container subagents-workspace (max-width: 720px) {
-  .subagents-workspace-root {
+  .swi-roster,
+  .swi-library {
     min-height: auto;
   }
 
-  .swi-picker-box .subagents-workspace-rail-list {
-    max-height: min(318px, 46vh);
+  .swi-roster-list,
+  .swi-library-list {
+    max-height: 430px;
   }
 
-  @supports (height: round(down, 50vh, 46px)) {
-    .swi-picker-box .subagents-workspace-rail-list {
-      max-height: calc(round(down, min(318px, 46vh) + 4px, var(--swi-row-step)) - 4px);
-    }
+  .swi-card-footer {
+    margin-top: var(--space-3);
   }
-}
 
-/* Mobile: sidebar is a drawer. */
-@media (max-width: 768px) {
-  .subagents-workspace-root {
+  .swi-delegation {
+    grid-template-columns: 1fr;
+  }
+
+  .swi-delegation-row + .swi-delegation-row {
+    border-top: 1px solid var(--border-soft);
+    border-left: 0;
+  }
+
+  .swi-policy-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .swi-policy-guidance-field {
+    grid-column: span 2;
+  }
+
+  .swi-policy-save-cell {
+    grid-column: 1 / -1;
     min-height: auto;
   }
 
-  .swi-picker-box .subagents-workspace-rail-list {
-    max-height: min(272px, 44vh);
+  .swi-policy-details-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@container subagents-workspace (max-width: 620px) {
+  .subagents-page-head {
+    align-items: flex-start;
   }
 
-  @supports (height: round(down, 50vh, 46px)) {
-    .swi-picker-box .subagents-workspace-rail-list {
-      max-height: calc(round(down, min(272px, 44vh) + 4px, var(--swi-row-step)) - 4px);
-    }
+  .subagents-catalog-badge {
+    margin-top: var(--space-2);
+  }
+
+  .swi-card-head,
+  .swi-library-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .swi-library-search {
+    width: 100%;
+  }
+
+  .swi-roster-row {
+    grid-template-columns: var(--control-touch) 24px 20px minmax(0, 1fr) var(--control-touch);
+    min-height: 68px;
+    padding: var(--space-1) var(--space-2);
+  }
+
+  .swi-roster-grip,
+  .swi-library-toggle {
+    width: var(--control-touch);
+    height: var(--control-touch);
+  }
+
+  .swi-roster-actions .swi-roster-arrow {
+    display: none;
+  }
+
+  .swi-roster .swi-model-chip:nth-child(n + 3) {
+    display: none;
+  }
+
+  .swi-roster-actions {
+    justify-content: flex-end;
+  }
+
+  .swi-roster-remove {
+    width: var(--control-touch);
+    height: var(--control-touch);
+  }
+
+  .swi-library-row {
+    grid-template-columns: 22px minmax(0, 1fr) var(--control-touch);
+    min-height: 64px;
+  }
+
+  .swi-library-priority {
+    display: none;
+  }
+
+  .swi-card-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .swi-card-footer .btn {
+    min-height: var(--control-touch);
+    width: 100%;
+  }
+
+  .swi-policy-body {
+    padding-right: var(--space-3);
+    padding-left: var(--space-3);
+  }
+
+  .swi-policy-grid {
+    grid-template-columns: 1fr;
+    padding: var(--space-3);
+  }
+
+  .swi-policy-guidance-field {
+    grid-column: auto;
+  }
+
+  .swi-policy-save-cell,
+  .swi-policy-save-cell .btn {
+    width: 100%;
+  }
+
+  .swi-policy-mini-field {
+    grid-template-columns: 1fr;
+    gap: var(--space-2);
+  }
+
+  .swi-policy-toggle-field {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .swi-policy-detail-group {
+    padding: var(--space-3);
+  }
+
+  .swi-concurrency-buttons {
+    grid-template-columns: repeat(2, var(--control-touch));
+  }
+
+  .swi-concurrency-buttons button,
+  .swi-fallback-actions button {
+    min-width: var(--control-touch);
+    min-height: var(--control-touch);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .swi-roster-row {
+    transition: none;
   }
 }

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 /**
- * Subagents ships a single denser workspace layout (rail + featured main pane).
+ * Subagents ships one command-center layout (active roster + library + policy).
  * Classic stacked cards and the view-mode toggle are gone.
  */
 
@@ -29,16 +29,16 @@ test("Subagents keeps the featured-slot contract: 5 slots, reorder, remove, save
   ).text();
 
   // Five-slot cap is a single exported FEATURED_MAX shared by page and workspace.
-  expect(page).toContain("prev.length >= FEATURED_MAX");
+  expect(page).toContain("previous.length >= FEATURED_MAX");
   expect(page).toContain("FEATURED_MAX");
   expect(workspace).toContain("export const FEATURED_MAX");
-  expect(workspace).toContain("{chosen.length}/{FEATURED_MAX}");
+  expect(workspace).toContain('t("sub.rosterCount", { n: chosen.length, max: FEATURED_MAX })');
 
   // Reorder / remove / save controls survive in the workspace main pane.
-  expect(workspace).toContain('t("sub.moveUp", { m })');
-  expect(workspace).toContain('t("sub.moveDown", { m })');
-  expect(workspace).toContain('t("sub.removeAria", { m })');
-  expect(workspace).toContain('t("common.save")');
+  expect(workspace).toContain('t("sub.moveUp", { m: selector })');
+  expect(workspace).toContain('t("sub.moveDown", { m: selector })');
+  expect(workspace).toContain('t("sub.removeAria", { m: selector })');
+  expect(workspace).toContain('t("sub.saveRoster")');
 
   // Persistence still targets the subagent-models endpoint.
   expect(page).toContain("/api/subagent-models");

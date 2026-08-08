@@ -100,11 +100,15 @@ subagentModels = [
 
 ## 更改顺序
 
-自定义开头模型顺序的受支持方式是重新排列 `subagentModels`。仪表盘的 **Sub-agents** 页面可以调整
-裸原生和路由 id 的顺序。配置和 `ocx agent subagents set` 也接受精确的账户限定
-`<selector>/<native-openai-model>` id，但仪表盘不会提供这些 id，保存列表时也不会保留它们。配置的
-id 请勿超过五个。存在账户 selector 时，一个裸原生选项可能展开为多个 selector-qualified 行，因此
-已配置的选项与公布的行不一定一一对应。
+自定义开头模型顺序的受支持方式是重新排列 `subagentModels`。在仪表盘中打开 **Subagents** →
+**Agent Command Center**，通过拖动、箭头按钮或 <kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd> 重新排列
+**Active Roster**。可搜索的 **Agent Library** 可能包含远超五个的目录模型；路由可用时条目仍可通过精确 id
+指定，而五个槽位的限制仅适用于最先向 `spawn_agent` 公布的 override。
+
+使用 `ocx agent subagents set` 或编辑 opencodex 配置，添加实时库中没有的精确
+`<selector>/<native-openai-model>` 选项。即使其 provider 暂时不可用，命令中心也会保留已配置的精确
+selector，并可对其重新排序。存在账户 selector 时，一个裸原生选项可能展开为多个 selector-qualified
+行，因此已配置的选项与公布的行不一定一一对应。
 
 目前 `OcxConfig` 中没有通用的 `modelOrder`、`providerOrder` 或 priority map 设置。受支持的排序
 字段是 `subagentModels`；`disabledModels` 和各 provider 的 `selectedModels` 都是可见性字段。

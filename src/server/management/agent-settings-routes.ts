@@ -257,8 +257,11 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     if (wantsMode && body.multiAgentMode !== "v1" && body.multiAgentMode !== "default" && body.multiAgentMode !== "v2") {
       return jsonResponse({ error: "body.multiAgentMode must be 'v1', 'default', or 'v2'" }, 400);
     }
-    if (wantsThreads && (typeof body.maxConcurrentThreadsPerSession !== "number" || !Number.isInteger(body.maxConcurrentThreadsPerSession) || body.maxConcurrentThreadsPerSession < 1)) {
-      return jsonResponse({ error: "body.maxConcurrentThreadsPerSession must be an integer >= 1" }, 400);
+    // null clears the active thread-limit key (same unset contract as the other
+    // nullable fields below); an integer keeps the existing set behavior.
+    if (wantsThreads && body.maxConcurrentThreadsPerSession !== null
+        && (typeof body.maxConcurrentThreadsPerSession !== "number" || !Number.isInteger(body.maxConcurrentThreadsPerSession) || body.maxConcurrentThreadsPerSession < 1)) {
+      return jsonResponse({ error: "body.maxConcurrentThreadsPerSession must be an integer >= 1, or null to clear it" }, 400);
     }
     // Validate every new field BEFORE any write, so each 400 leaves config untouched.
     // null unsets the key; "" is a meaningful value for instructions and must not be
@@ -295,7 +298,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       toggle = (enabled: boolean) => runCodexFeaturesCommand(enabled ? "enable" : "disable");
       }
       const result = transitionMultiAgentV2(targetFlag, toggle, {
-        ...(wantsThreads ? { threadLimit: body.maxConcurrentThreadsPerSession as number } : {}),
+        ...(wantsThreads ? { threadLimit: body.maxConcurrentThreadsPerSession as number | null } : {}),
       });
       if (!result.ok) return jsonResponse({ error: `multi_agent_v2 transition failed: ${result.error}` }, 502);
       if (result.changed && result.threadLimit !== null) warnings.push(`Thread limit ${result.threadLimit} preserved for ${targetFlag ? "v2" : "v1"}.`);

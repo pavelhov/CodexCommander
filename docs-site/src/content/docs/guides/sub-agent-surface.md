@@ -17,7 +17,7 @@ Choose the mode for **new sessions**. Existing sessions keep the surface they st
 | Mode | What Codex gets | Who should pick it |
 | --- | --- | --- |
 | **v1** | Classic namespaced `spawn_agent`, `send_input`, `resume_agent`, and `close_agent` tools. A spawn can select another model directly. | Beginners who need reliable delegation across different providers, especially native-to-routed children. |
-| **base** (default) | Upstream model pins: GPT-5.6 Sol/Terra use v2, Luna uses v1, and unpinned models follow Codex's `multi_agent_v2` feature flag. | Most users. It follows Codex's intended surface for each model without forcing one globally. |
+| **base** (default; **Follow Codex defaults** in the GUI) | Upstream model pins: GPT-5.6 Sol/Terra use v2, Luna uses v1, and unpinned models follow Codex's `multi_agent_v2` feature flag. | Most users. It follows Codex's intended surface for each model without forcing one globally. |
 | **v2** | Flat `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`, and agent-list tools, with concurrent sessions. | Users who want the newer concurrent workflow and understand model inheritance and the encrypted-task limitation below. |
 
 :::tip[Not sure?]
@@ -121,9 +121,21 @@ content when you control the caller.
 ### GUI
 
 - **Dashboard** → first stat cell: choose **v1**, **base**, or **v2**.
-- **Models** → **Current behavior** → **Collaboration**: choose **Classic v1**, **Automatic** (base), or **Concurrent v2**.
-- **Dashboard** → **Sub-agent delegation**: set guidance model/effort and the native-default opt-in.
-- **Subagents**: choose and order the roster and configure the global fallback chain.
+- **Models** → **Current behavior** → **Collaboration**: choose **Classic v1**, **Follow Codex defaults** (base), or **Concurrent v2**.
+- **Subagents** → **Agent Command Center**:
+  - **Active Roster** chooses and orders the five model overrides advertised first to `spawn_agent`.
+    Drag rows, use the arrow buttons, or press <kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd>.
+  - **Agent Library** searches the current model catalog and filters factual capabilities such as
+    reasoning, long context, vision, and tool support. Entries remain addressable by exact id when
+    their route is available, including models outside the five-slot roster.
+  - **Run Policy** stages the agent protocol, preferred guidance model and effort, ordered global
+    child fallback chain, health recheck interval, thread limit, sub-agent effort ceiling, roster
+    guidance, and native Codex-default sync. Save policy changes separately from roster changes.
+
+Leaving **Thread limit** blank restores the Codex default. V2 counts total threads including the root;
+V1 counts child threads. Protocol and thread-limit changes apply to new sessions; guidance and
+fallback apply to future spawned child turns. The page reports when a running Codex app-server still
+has a stale catalog.
 
 ### CLI
 

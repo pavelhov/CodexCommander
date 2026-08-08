@@ -89,9 +89,13 @@ opencodex는 읽을 수 없거나 빈 작업을 그대로 넘기지 않고 안�
 ### GUI
 
 - **Dashboard** → 첫 번째 상태 셀: **v1**, **base**, **v2**를 고릅니다.
-- **Models** → **Current behavior** → **Collaboration**: **Classic v1**, **Automatic**(base), **Concurrent v2** 중에서 고릅니다.
-- **Dashboard** → **Sub-agent delegation**: 가이드 모델/추론 강도와 네이티브 기본값 사용 여부를 설정합니다.
-- **Subagents**: 로스터를 선택하고 순서를 정한 뒤 전역 폴백 체인을 설정합니다.
+- **Models** → **Current behavior** → **Collaboration**: **Classic v1**, **Codex 기본값 따르기**(base), **Concurrent v2** 중에서 고릅니다.
+- **Subagents** → **Agent Command Center**:
+  - **Active Roster**는 `spawn_agent`에 가장 먼저 알려지는 다섯 개의 모델 오버라이드를 선택하고 순서를 정합니다. 행을 드래그하거나, 화살표 버튼을 쓰거나, <kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd>를 누르세요.
+  - **Agent Library**는 현재 모델 카탈로그를 검색하고 reasoning, long context, vision, tool support 같은 사실 기반 capability로 필터링합니다. 라우트가 사용 가능하면 다섯 칸 로스터 밖의 항목도 정확한 id로 지정할 수 있습니다.
+  - **Run Policy**는 에이전트 프로토콜, 선호 안내 모델과 강도, 생성된 하위 작업의 전역 폴백 체인, 헬스 재확인 간격, 스레드 제한, 서브에이전트 강도 상한, 로스터 안내, 네이티브 Codex 기본값 동기화를 스테이징합니다. 정책 변경은 로스터 변경과 별도로 저장하세요.
+
+**스레드 한도**를 비워 두면 Codex 기본값으로 돌아갑니다. V2는 루트를 포함한 전체 스레드 수를, V1은 하위 스레드 수를 셉니다. 프로토콜과 한도는 새 세션에, 안내와 폴백은 이후 하위 작업에 적용되며, 실행 중인 Codex app-server에 오래된 카탈로그가 남아 있으면 페이지가 이를 알립니다.
 
 ### CLI
 

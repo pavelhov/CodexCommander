@@ -104,13 +104,17 @@ account selector がある場合、5 項目の制限は bare native の選択が
 
 ## 順序を変える方法
 
-先頭モデルの順序を変更するサポート手段は、`subagentModels` を並べ替えることです。
-ダッシュボードの **Sub-agents** ページでは bare native id と routed id を並べ替えられます。
-設定と `ocx agent subagents set` は exact account-qualified
-`<selector>/<native-openai-model>` id も受け付けますが、ダッシュボードはこれらの id を表示せず、
-リストの保存時にも保持しません。設定する id は最大 5 つにしてください。account selector がある
-場合は 1 つの bare native が複数の selector-qualified 行に展開されるため、設定した選択肢と公開
-される行は必ずしも一対一ではありません。
+先頭モデルの順序を変更するサポート手段は、`subagentModels` を並べ替えることです。ダッシュボードでは
+**Subagents** → **Agent Command Center** を開き、ドラッグ、矢印ボタン、または
+<kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd> で **Active Roster** を並べ替えます。検索可能な
+**Agent Library** には 5 つをはるかに超えるカタログモデルが含まれる場合があります。ルートが利用可能な
+場合にエントリを正確な id で指定でき、5 枠の制限は `spawn_agent` に最初に公開されるオーバーライドにのみ適用されます。
+
+`ocx agent subagents set` を使うか、opencodex 設定を編集して、ライブ ライブラリにない正確な
+`<selector>/<native-openai-model>` の選択肢を追加します。コマンド センターは、設定済みの正確な
+selector を、そのプロバイダーが一時的に利用できない間も保持し、並べ替えできます。account selector がある
+場合は 1 つの bare native が複数の selector-qualified 行に展開されるため、設定した選択肢と公開される
+行は必ずしも一対一ではありません。
 
 現在 `OcxConfig` には一般 `modelOrder`、`providerOrder`、priority map 設定はありません。サポートされるソート
 フィールドは `subagentModels` です。`disabledModels` と各プロバイダーの `selectedModels` は公開

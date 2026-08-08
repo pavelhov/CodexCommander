@@ -104,12 +104,17 @@ account selector가 있으면 bare native 선택이 selector-qualified 그룹으
 
 ## 순서를 바꾸는 방법
 
-선두 모델 순서를 바꾸는 지원 수단은 `subagentModels`를 재정렬하는 것입니다. 대시보드의
-**Sub-agents** 페이지에서는 bare native와 routed id의 순서를 바꿀 수 있습니다. 설정과
-`ocx agent subagents set`은 exact account-qualified `<selector>/<native-openai-model>` id도
-지원하지만, 대시보드는 이러한 id를 제공하지 않으며 목록을 저장할 때도 보존하지 않습니다. 설정 id는
-최대 5개만 사용하세요. account selector가 있으면 bare native 하나가 여러 selector-qualified 행으로
-확장될 수 있으므로 설정 항목과 노출 행이 항상 일대일로 대응하지는 않습니다.
+선두 모델 순서를 바꾸는 지원 수단은 `subagentModels`를 재정렬하는 것입니다. 대시보드에서
+**Subagents** → **Agent Command Center**를 열고 드래그, 화살표 버튼, 또는
+<kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd>로 **Active Roster**의 순서를 바꿉니다. 검색 가능한
+**Agent Library**에는 다섯 개를 훨씬 넘는 카탈로그 모델이 있을 수 있습니다. 라우트가 사용 가능할 때
+항목을 정확한 id로 지정할 수 있으며, 다섯 칸 제한은 `spawn_agent`에 가장 먼저 알려지는 오버라이드에만 적용됩니다.
+
+`ocx agent subagents set`을 사용하거나 opencodex 설정을 편집해 라이브 라이브러리에 없는 정확한
+`<selector>/<native-openai-model>` 선택지를 추가하세요. 커맨드 센터는 이미 설정된 정확한 selector를
+프로바이더가 일시적으로 사용 불가능한 동안에도 보존하고 순서를 바꿀 수 있습니다. account selector가
+있으면 bare native 하나가 여러 selector-qualified 행으로 확장될 수 있으므로 설정 항목과 노출 행이 항상
+일대일로 대응하지는 않습니다.
 
 현재 `OcxConfig`에는 일반 `modelOrder`, `providerOrder`, priority map 설정이 없습니다. 지원되는 정렬
 필드는 `subagentModels`입니다. `disabledModels`와 각 프로바이더의 `selectedModels`는 노출

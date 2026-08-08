@@ -345,6 +345,130 @@ describe("thread-limit-preserving v1/v2 transition", () => {
   });
 });
 
+describe("nullable thread-limit reset (explicit null clears the active key)", () => {
+  const flipTableFlag = (path: string) => (enabled: boolean) => {
+    const content = readFileSync(path, "utf8");
+    writeFileSync(path, content.replace(/^enabled\s*=\s*(?:true|false)$/m, `enabled = ${enabled}`));
+  };
+
+  test("transition: explicit null clears the active V2 key; omitted preserves it", () => {
+    const clearedPath = fixtureConfig("[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 64\n");
+    let calls = 0;
+    const cleared = transitionMultiAgentV2(true, () => { calls++; }, { configPath: clearedPath, threadLimit: null });
+    expect(cleared).toEqual({ ok: true, changed: true, threadLimit: null });
+    expect(calls).toBe(0); // same-state: no feature toggle
+    expect(getMaxConcurrentThreads(clearedPath)).toBe(null);
+    expect(getLogicalMaxThreads(clearedPath)).toBe(null);
+    expect(isMultiAgentV2Enabled(clearedPath)).toBe(true);
+
+    const keptPath = fixtureConfig("[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 64\n");
+    const kept = transitionMultiAgentV2(true, () => { calls++; }, { configPath: keptPath });
+    expect(kept).toMatchObject({ ok: true, threadLimit: 64 });
+    expect(getMaxConcurrentThreads(keptPath)).toBe(64);
+  });
+
+  test("transition: explicit null clears the active V1 key; omitted preserves it", () => {
+    const clearedPath = fixtureConfig("[agents]\nmax_threads = 100\nmax_depth = 2\n");
+    let calls = 0;
+    const cleared = transitionMultiAgentV2(false, () => { calls++; }, { configPath: clearedPath, threadLimit: null });
+    expect(cleared).toEqual({ ok: true, changed: true, threadLimit: null });
+    expect(calls).toBe(0);
+    expect(getAgentsMaxThreads(clearedPath)).toBe(null);
+    expect(getLogicalMaxThreads(clearedPath)).toBe(null);
+    expect(readFileSync(clearedPath, "utf8")).toContain("max_depth = 2");
+
+    const keptPath = fixtureConfig("[agents]\nmax_threads = 100\n");
+    const kept = transitionMultiAgentV2(false, () => { calls++; }, { configPath: keptPath });
+    expect(kept).toMatchObject({ ok: true, threadLimit: 100 });
+    expect(getAgentsMaxThreads(keptPath)).toBe(100);
+  });
+
+  test("transition: explicit null also clears a limit stored in the OTHER backend", () => {
+    // Boot-conflict shape: V2 enabled with the legacy key still present. A null
+    // reset must leave NO thread limit in either storage.
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n\n[agents]\nmax_threads = 100\n");
+    const result = transitionMultiAgentV2(true, () => { /* already enabled */ }, { configPath: path, threadLimit: null });
+    expect(result).toEqual({ ok: true, changed: true, threadLimit: null });
+    expect(getMaxConcurrentThreads(path)).toBe(null);
+    expect(getAgentsMaxThreads(path)).toBe(null);
+  });
+
+  test("transition: invalid thread limits are still rejected; null is not", () => {
+    const path = fixtureConfig("[agents]\nmax_threads = 100\n");
+    expect(transitionMultiAgentV2(false, () => {}, { configPath: path, threadLimit: 0 }).ok).toBe(false);
+    expect(transitionMultiAgentV2(false, () => {}, { configPath: path, threadLimit: 2.5 }).ok).toBe(false);
+    expect(transitionMultiAgentV2(false, () => {}, { configPath: path, threadLimit: null }).ok).toBe(true);
+  });
+
+  test("PUT /api/v2 with maxConcurrentThreadsPerSession:null clears the V2 key and returns null", async () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 64\n");
+    const oldCodexHome = process.env.CODEX_HOME;
+    const oldOcxHome = process.env.OPENCODEX_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    process.env.OPENCODEX_HOME = mkdtempSync(join(tmpdir(), "ocx-api-config-"));
+    const config = { providers: [] } as never;
+    const deps = {
+      toggleCodexMultiAgentV2: flipTableFlag(path),
+      createManagementConvergeCodex: catalogConvergenceFactory(),
+    };
+    const put = (payload: unknown) => new Request("http://localhost/api/v2", {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+    });
+    try {
+      const cleared = await handleManagementAPI(put({ maxConcurrentThreadsPerSession: null }), new URL("http://localhost/api/v2"), config, deps);
+      expect(cleared?.status).toBe(200);
+      expect(await cleared?.json()).toMatchObject({ ok: true, enabled: true, maxConcurrentThreadsPerSession: null });
+      expect(getMaxConcurrentThreads(path)).toBe(null);
+      expect(getLogicalMaxThreads(path)).toBe(null);
+
+      // A follow-up GET reports the cleared state.
+      const get = await handleManagementAPI(new Request("http://localhost/api/v2"), new URL("http://localhost/api/v2"), config, deps);
+      expect(await get?.json()).toMatchObject({ enabled: true, maxConcurrentThreadsPerSession: null });
+
+      // Integer behavior is unchanged after a reset.
+      const set = await handleManagementAPI(put({ maxConcurrentThreadsPerSession: 33 }), new URL("http://localhost/api/v2"), config, deps);
+      expect(set?.status).toBe(200);
+      expect(getMaxConcurrentThreads(path)).toBe(33);
+
+      // Non-null invalid values are still 400.
+      expect((await handleManagementAPI(put({ maxConcurrentThreadsPerSession: 0 }), new URL("http://localhost/api/v2"), config, deps))?.status).toBe(400);
+      expect((await handleManagementAPI(put({ maxConcurrentThreadsPerSession: "8" }), new URL("http://localhost/api/v2"), config, deps))?.status).toBe(400);
+      expect(getMaxConcurrentThreads(path)).toBe(33);
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+      if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcxHome;
+    }
+  });
+
+  test("PUT /api/v2 with maxConcurrentThreadsPerSession:null clears the V1 key and returns null", async () => {
+    const path = fixtureConfig("[agents]\nmax_threads = 50\n");
+    const oldCodexHome = process.env.CODEX_HOME;
+    const oldOcxHome = process.env.OPENCODEX_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    process.env.OPENCODEX_HOME = mkdtempSync(join(tmpdir(), "ocx-api-config-"));
+    const config = { providers: [] } as never;
+    let toggles = 0;
+    const deps = {
+      toggleCodexMultiAgentV2: () => { toggles++; },
+      createManagementConvergeCodex: catalogConvergenceFactory(),
+    };
+    try {
+      const req = new Request("http://localhost/api/v2", {
+        method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ maxConcurrentThreadsPerSession: null }),
+      });
+      const res = await handleManagementAPI(req, new URL(req.url), config, deps);
+      expect(res?.status).toBe(200);
+      expect(await res?.json()).toMatchObject({ ok: true, enabled: false, maxConcurrentThreadsPerSession: null });
+      expect(toggles).toBe(0); // V1 stays active: no feature flip
+      expect(getAgentsMaxThreads(path)).toBe(null);
+      expect(getLogicalMaxThreads(path)).toBe(null);
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+      if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcxHome;
+    }
+  });
+});
+
 describe("v1<->v2 root-slot translation", () => {
   const flipTableFlag = (path: string) => (enabled: boolean) => {
     const content = readFileSync(path, "utf8");

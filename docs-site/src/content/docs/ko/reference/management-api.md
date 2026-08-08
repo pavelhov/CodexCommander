@@ -56,11 +56,11 @@ Authorization: Bearer <admin-token>
 
 | Method and path | 목적 | 주요 오류 |
 | --- | --- | --- |
-| `GET, PUT /api/v2` | native multi-agent v2 모드와 thread 설정을 읽거나 변경합니다 | 400 잘못된 설정; 502 전환 또는 영속화 실패 |
-| `GET, PUT /api/injection-model` | 주입된 sub-agent 모델, effort, prompt, guidance 설정을 읽거나 설정합니다 | 400 잘못된 모델, effort, 또는 본문 |
+| `GET, PUT /api/v2` | 에이전트 프로토콜(v1, Codex 기본값 따르기, v2)과 thread 설정을 읽거나 변경합니다. `maxConcurrentThreadsPerSession: null`이면 Codex 기본값으로 복원됩니다 | 400 잘못된 설정; 502 전환 또는 영속화 실패 |
+| `GET, PUT /api/injection-model` | 선호 안내 모델, effort, prompt, guidance 설정을 읽거나 설정합니다. 네이티브 기본값 동기화를 켜지 않으면 자문용입니다 | 400 잘못된 모델, effort, 또는 본문 |
 | `GET, PUT /api/effort-caps` | 전역 및 sub-agent reasoning-effort 상한을 읽거나 설정합니다 | 400 잘못된 ladder 값 |
-| `GET, PUT /api/subagent-models` | sub-agent에 광고되는 모델을 읽거나 순서를 조정합니다 | 400 잘못된 목록 또는 모델 5개 초과 |
-| `GET, PUT /api/subagent-model-fallback` | 정렬된 fallback 체인과 poll interval을 읽거나 설정합니다 | 400 잘못된 목록 또는 poll interval |
+| `GET, PUT /api/subagent-models` | `spawn_agent`에 광고되는 최대 5개 모델을 읽거나 순서를 조정합니다. 라우팅을 강제하지 않습니다 | 400 잘못된 목록 또는 모델 5개 초과 |
+| `GET, PUT /api/subagent-model-fallback` | 생성된 하위 작업의 전역 fallback 순서와 poll interval을 읽거나 설정합니다 | 400 잘못된 목록 또는 poll interval |
 | `GET /api/grok` | Grok 관리 구성 상태와 후보 모델을 읽습니다 | 400 상태 읽기 실패 |
 | `PUT /api/grok/selection` | 제외할 Grok 모델을 영속화합니다 | 400 잘못되었거나 너무 큰 선택 |
 | `POST /api/grok/apply` | 관리형 동기화를 통해 영속화된 Grok 구성을 적용합니다 | 409 `grok_apply_busy`; 400/500 적용 실패 |
