@@ -1,6 +1,6 @@
 # 000 — Multi-agent workstation and self-contained macOS app
 
-Status: ACTIVE
+Status: IMPLEMENTED — FRESH-SESSION LIVE MATRIX PENDING
 Created: 2026-08-08
 Branch: `codex/multi-agent-workstation`
 Base: `main` at `6f88fc3f101d32947ebf11a25c33640ff50a313e`
@@ -54,10 +54,10 @@ re-encryption, or a blanket `agent_message` rewrite.
 
 | ID | Workstream | Primary scope | Terminal gate |
 |---|---|---|---|
-| WS-01 | Truthful Agent Command Center | `gui/`, docs locales | GUI tests, lint, i18n lint, build, visual QA |
-| WS-02 | Compatibility-aware roster guidance | `src/server/responses/`, catalog helpers, runtime tests | native V2 guidance excludes unreadable routed children; exact overrides still fail closed |
-| WS-03 | Upstream plaintext-boundary proposal | this devlog unit; upstream source references | provider-aware spawn/send/follow-up/return contract with no unsafe workaround |
-| WS-04 | Self-contained macOS runtime | `app/`, `scripts/`, runtime resource resolution, docs | clean-environment app starts proxy and serves dashboard without global Bun/npm/ocx |
+| WS-01 | Truthful Agent Command Center | `gui/`, docs locales | COMPLETE — GUI tests, lint, i18n lint, build, and retained visual QA |
+| WS-02 | Compatibility-aware roster guidance | `src/server/responses/`, catalog helpers, runtime tests | COMPLETE — native V2 guidance excludes unreadable routed children; exact overrides still fail closed |
+| WS-03 | Upstream plaintext-boundary proposal | this devlog unit; upstream source references | COMPLETE — provider-aware spawn/send/follow-up/return contract with no unsafe workaround |
+| WS-04 | Self-contained macOS runtime | `app/`, `scripts/`, runtime resource resolution, docs | COMPLETE FOR TEST DISTRIBUTION — bundled-runtime lifecycle smoke passed without global Bun/npm/ocx |
 | WS-05 | Distribution hardening | packaging/release follow-up | Developer ID signing, notarization, stapling, DMG, updater, clean-VM gate |
 
 WS-05 is a separately credentialed release phase. No publish, deployment,
@@ -68,12 +68,15 @@ submission is authorized by this unit.
 
 Work stays on one delivery branch but lands as scoped checkpoint commits:
 
-1. `docs(plan): track multi-agent workstation delivery`
-2. `fix(gui): clarify roster guidance and agent protocol`
-3. `fix(codex): filter incompatible automatic v2 delegates`
-4. `docs(codex): specify cross-provider v2 plaintext boundary`
-5. `feat(macos): bundle the app-owned OpenCodex runtime`
-6. `test(macos): gate clean bundled-runtime startup`
+1. `13eccd9b` — `docs(plan): track multi-agent workstation delivery`
+2. `aebd7278` — `fix(agents): filter encrypted v2 worker guidance`
+3. `0cfe71f4` — `docs(agents): propose provider-aware v2 delivery`
+4. `f9ac7819` — `feat(gui): make agent command center truthful`
+5. `108752a9` — `docs(plan): retain agent command center qa`
+6. `1b8e2f6e` — `test(agents): cover mixed roster protocol modes`
+7. `0ca85586` — `feat(macos): bundle self-contained universal runtime`
+8. `0df6a52f` — `test: keep prepush expectations deterministic`
+9. `33425358` — `fix(gui): clear command center review findings`
 
 Commits may be split further when review boundaries demand it. A checkpoint is
 created only after its focused tests pass. The branch is not merged directly
@@ -82,19 +85,20 @@ maintainer-controlled `dev` to `main` promotion.
 
 ## Global acceptance gates
 
-Before the branch is review-ready:
+Completed branch gates:
 
 1. `bun run typecheck`
 2. `bun run test`
 3. `bun run privacy:scan`
 4. `cd gui && bun test tests && bun run lint:i18n && bun run lint && bun run build`
-5. `cd docs-site && bun install --frozen-lockfile && bun run build`
+5. `cd docs-site && bun --bun run build`
 6. `bun run test:macos`
 7. `bun run build:macos`
 8. packaged-app smoke from a sanitized environment with no usable global
    `bun`, `node`, `npm`, or `ocx`
-9. fresh Codex task after catalog sync for the V1 model matrix: Sol, Luna,
-   Kimi, Grok, and DeepSeek
+
+The remaining review-readiness gate is a fresh Codex task after catalog sync
+for the V1 live model matrix: Sol, Luna, Kimi, Grok, and DeepSeek.
 
 The fresh-session matrix is intentionally last: the protocol and catalog are
 sticky for an existing task, so running it inside the task that changed the
@@ -102,6 +106,9 @@ setting would produce false evidence.
 
 ## Branch completion
 
-When all workstreams reach terminal gates, move this unit to
-`devlog/_fin/260808_multi_agent_workstation/` and record commit ids, test
-results, remaining upstream dependency, and the exact review/promotion path.
+The repository-wide pre-push gate is green. Keep this unit open until a
+fresh-task mixed-roster run is recorded. The separate plaintext-V2 experiment must use a
+different worktree/branch and may be integrated only after its exact schema,
+feature signal, provider result, regression tests, and commit are reported.
+Then move this unit to `devlog/_fin/260808_multi_agent_workstation/` and record
+the remaining upstream/distribution dependencies and review/promotion path.

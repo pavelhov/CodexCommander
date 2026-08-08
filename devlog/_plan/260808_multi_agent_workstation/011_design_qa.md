@@ -4,8 +4,8 @@ Status: prior visual audit retained; integration gates rerun on branch
 
 ## Visual references
 
-- Original full-screen concept used during the earlier workspace implementation:
-  `/Users/pavel/.codex/generated_images/019fdd08-bc68-70a0-9e53-2bce3312556f/exec-4c43d07a-c5d2-4a00-8c8c-d75c7b3c2e5a.png`
+- An earlier local full-screen concept informed the workspace implementation but is not
+  tracked; the branch-owned reference below is the durable review artifact.
 - Branch-owned Run Policy reference for this workstream:
   `assets/run-policy-reference.png`
 - Primary implementation: `gui/src/components/subagents-workspace/SubagentsWorkspace.tsx`
@@ -63,5 +63,7 @@ ambiguous empty fallback—were corrected before this branch checkpoint.
   authoritative for this checkpoint; the prior live visual audit above is retained as
   historical evidence rather than silently restated as a new run.
 
-The repository-wide suite, privacy scan, macOS harness, and packaged-app smoke remain
-integration gates for the full workstation branch.
+The repository-wide suite, privacy scan, macOS harness, and packaged-app smoke have
+passed and remain retained full-branch gates. The genuinely remaining checks are the
+fresh-task live mixed-roster matrix, a clean-VM distribution check, and the separately
+credentialed WS-05 signing/notarization work.

@@ -1,6 +1,6 @@
 # 010 — Truthful Agent Command Center
 
-Status: IN PROGRESS
+Status: COMPLETE
 Updated: 2026-08-08
 
 ## Decisions
@@ -21,7 +21,8 @@ Updated: 2026-08-08
   **Use roster as worker guidance**. It controls OpenCodex-authored guidance; it
   does not force delegation or route every child.
 - A warning appears only while V2 is selected, explaining the existing issue #92
-  encryption boundary and the v1/native fallback recovery options. No upstream
+  encryption boundary, per-route compatibility filtering, fail-closed exact
+  overrides, and Classic v1 as the predictable cross-provider path. No upstream
   response transport or fail-closed guard was changed in this workstream.
 - All visible strings are localized in `en`, `de`, `ja`, `ko`, `ru`, and `zh`.
 
@@ -31,13 +32,17 @@ Updated: 2026-08-08
 - `bun run typecheck` — passed.
 - `cd gui && bun run lint && bun run build` — passed; Vite emitted only the
   existing Node-version and chunk-size warnings.
+- `bun scripts/doctor-gui-if-changed.ts` — passed; React Doctor reported no
+  issues.
 - Focused GUI tests — passed (31 tests across Subagents, Run Policy, Models,
   and guidance surfaces; the final semantic subset is 18 tests).
 - Runtime mode/thread migration coverage remains in
   `tests/codex-v2-gate.test.ts`; no runtime response/collaboration files were
   changed by WS-01.
 
-## Remaining branch gates
+## Integration result
 
-Run the full GUI suite and the repository test/privacy/docs gates after the
-other workstation workstreams settle. Do not commit from this workstream.
+The full GUI suite, localization lint, GUI lint, production build, Bun-hosted
+docs build, and privacy scan passed on the combined branch. Repository-wide and
+pre-push results are recorded in the branch status ledger rather than repeated
+inside this completed workstream.
