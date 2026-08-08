@@ -88,7 +88,10 @@ export default function SubagentRunPolicySection({
     if (delegation.model) selectors.add(delegation.model);
     return [...selectors].map(value => ({ value, label: formatNamespacedModelId(value, t) }));
   }, [delegation.available, delegation.model, t]);
-  const addableFallbacks = fallbackChoices.filter(model => !policy.fallbackModels.includes(model));
+  const addableFallbacks = useMemo(() => {
+    const selectedFallbacks = new Set(policy.fallbackModels);
+    return fallbackChoices.filter(model => !selectedFallbacks.has(model));
+  }, [fallbackChoices, policy.fallbackModels]);
 
   const updateDraft = (patch: Partial<DelegationDraft>) => {
     setFeedback(null);

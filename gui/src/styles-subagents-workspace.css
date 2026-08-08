@@ -374,6 +374,7 @@
   gap: var(--space-1-5);
   max-height: 390px;
   margin: 0 var(--space-4);
+  padding-inline-start: 0;
   padding-right: var(--space-1);
   overflow-y: auto;
   scrollbar-width: thin;

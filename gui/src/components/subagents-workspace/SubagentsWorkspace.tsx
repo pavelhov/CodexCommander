@@ -155,10 +155,12 @@ export default function SubagentsWorkspace({
   const [overIndex, setOverIndex] = useState<number | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
-  const gripRefs = useRef(new Map<string, HTMLButtonElement>());
+  const gripRefs = useRef<Map<string, HTMLButtonElement> | null>(null);
+  if (gripRefs.current === null) gripRefs.current = new Map<string, HTMLButtonElement>();
+  const gripRefMap = gripRefs.current;
 
   const restoreGripFocus = (selector: string) => {
-    const focus = () => gripRefs.current.get(selector)?.focus();
+    const focus = () => gripRefMap.get(selector)?.focus();
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(focus);
     else setTimeout(focus, 0);
   };
@@ -265,8 +267,8 @@ export default function SubagentsWorkspace({
                       draggable={!busy}
                       disabled={busy}
                       ref={node => {
-                        if (node) gripRefs.current.set(selector, node);
-                        else gripRefs.current.delete(selector);
+                        if (node) gripRefMap.set(selector, node);
+                        else gripRefMap.delete(selector);
                       }}
                       aria-label={t("sub.dragAria", { m: selector, n: index + 1 })}
                       title={t("sub.dragHint")}
@@ -354,16 +356,16 @@ export default function SubagentsWorkspace({
               >{option.label}</button>
             ))}
           </div>
-          <div className="swi-library-list" role="list">
+          <ul className="swi-library-list">
             {visibleModels.length === 0 ? (
-              <div className="subagents-workspace-rail-empty">{t("sub.noMatchingModels")}</div>
+              <li className="subagents-workspace-rail-empty">{t("sub.noMatchingModels")}</li>
             ) : visibleModels.map(model => {
               const selector = model.native ? model.id : model.namespaced;
               const selected = chosenSet.has(selector);
               const priority = selected ? chosen.indexOf(selector) + 1 : null;
               const blocked = !selected && (full || busy);
               return (
-                <div className={`swi-library-row${selected ? " swi-library-row--selected" : ""}`} key={selector} role="listitem">
+                <li className={`swi-library-row${selected ? " swi-library-row--selected" : ""}`} key={selector}>
                   <ModelMark model={model} />
                   <span className="swi-library-identity">
                     <span className="swi-library-name">{formatNamespacedModelId(selector, t)}</span>
@@ -383,10 +385,10 @@ export default function SubagentsWorkspace({
                       ? t("sub.workspace.removeFromFeatured", { m: selector })
                       : full ? t("sub.workspace.featuredFull") : t("sub.workspace.addToFeatured", { m: selector })}
                   >{selected ? <IconCheck aria-hidden="true" /> : <IconPlus aria-hidden="true" />}</button>
-                </div>
+                </li>
               );
             })}
-          </div>
+          </ul>
           <div className="swi-card-footer swi-library-footer">
             <span><IconInfo width={15} height={15} aria-hidden="true" />{t("sub.libraryHint")}</span>
           </div>
