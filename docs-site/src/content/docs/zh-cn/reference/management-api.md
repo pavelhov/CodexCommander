@@ -56,7 +56,7 @@ Authorization: Bearer <admin-token>
 
 | 方法和路径 | 用途 | 典型错误 |
 | --- | --- | --- |
-| `GET, PUT /api/v2` | 读取或更改代理协议（v1、遵循 Codex 默认值或 v2）和线程设置；`maxConcurrentThreadsPerSession: null` 恢复 Codex 默认值 | 400 无效设置；502 过渡或持久化失败 |
+| `GET, PUT /api/v2` | 读取或更改代理协议、V2 消息传递和线程设置。`multiAgentV2MessageDelivery` 接受 `plaintext` 或默认的 `encrypted`；发送 `encrypted` 或 `null` 会移除显式明文覆盖。更改传递后请启动新会话。`maxConcurrentThreadsPerSession: null` 恢复 Codex 默认值 | 400 无效设置；502 过渡或持久化失败 |
 | `GET, PUT /api/injection-model` | 读取或设置首选指导模型、努力程度、提示词和指导设置；未启用原生默认值同步时仅供指导 | 400 无效模型、努力程度或请求体 |
 | `GET, PUT /api/effort-caps` | 读取或设置全局和子代理推理努力上限 | 400 无效的阶梯值 |
 | `GET, PUT /api/subagent-models` | 读取或排序向 `spawn_agent` 公开的最多五个模型；不会强制路由 | 400 无效列表或超过五个模型 |

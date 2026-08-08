@@ -615,7 +615,7 @@ export const ja: Record<TKey, string> = {
   "sub.policy.loading": "実行ポリシーを読み込み中…",
   "sub.policy.retry": "ポリシーを再読み込み",
   "sub.policy.details": "フォールバックチェーンと安全策",
-  "sub.policy.timing": "プロトコルとスレッド上限は新しいセッションに、ガイダンス、フォールバック、effort は次の対象リクエストに適用されます。",
+  "sub.policy.timing": "プロトコル、V2 メッセージ配信、スレッド上限は新しいセッションに、ガイダンス、フォールバック、effort は次の対象リクエストに適用されます。",
   "sub.policy.fallbackChain": "順序付きフォールバックチェーン",
   "sub.policy.fallbackChainHint": "生成された子タスクでは、要求モデルとロールのフォールバックの後にグローバル候補を上から試します。空欄でグローバル一覧を無効にします。",
   "sub.policy.addFallback": "フォールバックを追加",

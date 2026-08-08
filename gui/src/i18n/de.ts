@@ -632,7 +632,7 @@ export const de: Record<TKey, string> = {
   "sub.policy.loading": "Ausführungsrichtlinie wird geladen…",
   "sub.policy.retry": "Richtlinie neu laden",
   "sub.policy.details": "Fallback-Kette und Schutzmaßnahmen",
-  "sub.policy.timing": "Protokoll und Thread-Limit gelten für neue Sitzungen; Anleitung, Fallback und Effort gelten für nachfolgende geeignete Anfragen.",
+  "sub.policy.timing": "Protokoll, V2-Nachrichtenzustellung und Thread-Limit gelten für neue Sitzungen; Anleitung, Fallback und Effort gelten für nachfolgende geeignete Anfragen.",
   "sub.policy.fallbackChain": "Geordnete Fallback-Kette",
   "sub.policy.fallbackChainHint": "Bei gestarteten Kindläufen folgt diese globale Liste auf angefordertes Modell und Rollen-Fallback. Leer lassen, um die globale Liste zu deaktivieren.",
   "sub.policy.addFallback": "Fallback hinzufügen",

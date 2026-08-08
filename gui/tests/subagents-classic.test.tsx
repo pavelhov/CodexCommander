@@ -21,6 +21,7 @@ let chosen: string[] = [];
 let modelRows: Array<Record<string, unknown>> = [];
 let catalogState: { state: "fresh" | "stale"; processes?: Array<{ pid: number; startedAtMs: number }> } = { state: "fresh" };
 let policyMode: "v1" | "default" | "v2" = "default";
+let messageDelivery: "encrypted" | "plaintext" = "encrypted";
 let caseSequence = 0;
 let apiBase = "";
 
@@ -43,6 +44,7 @@ beforeEach(() => {
   modelRows = available.map(id => ({ provider: "openai", id, namespaced: id, native: true }));
   catalogState = { state: "fresh" };
   policyMode = "default";
+  messageDelivery = "encrypted";
   apiBase = `/classic-${++caseSequence}`;
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
@@ -64,7 +66,11 @@ beforeEach(() => {
       if (path.endsWith("/api/injection-model")) {
         return Response.json({ model: null, effort: null, efforts: ["low", "high"], available: [], multiAgentGuidanceEnabled: true, syncCodexSubagentDefaults: false });
       }
-      if (path.endsWith("/api/v2")) return Response.json({ multiAgentMode: policyMode, maxConcurrentThreadsPerSession: null });
+      if (path.endsWith("/api/v2")) return Response.json({
+        multiAgentMode: policyMode,
+        multiAgentV2MessageDelivery: messageDelivery,
+        maxConcurrentThreadsPerSession: null,
+      });
       if (path.endsWith("/api/subagent-model-fallback")) return Response.json({ models: [], pollMs: 60_000, available });
       if (path.endsWith("/api/effort-caps")) return Response.json({ effortCap: null, subagentEffortCap: null, efforts: ["low", "high"] });
       return Response.json({ error: "not found" }, { status: 404 });
@@ -137,6 +143,14 @@ test("shows the V2 encryption compatibility notice only for the V2 protocol", as
   policyMode = "v1";
   await mount();
   expect(container.textContent).not.toContain("external providers cannot read (#92)");
+});
+
+test("shows the plaintext privacy notice when Codex defaults may select V2", async () => {
+  policyMode = "default";
+  messageDelivery = "plaintext";
+  await mount();
+  expect(container.textContent).toContain("including messages to native workers");
+  expect(container.textContent).toContain("Start a new session after saving");
 });
 
 test("caps featured selections at five", async () => {

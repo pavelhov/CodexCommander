@@ -71,7 +71,7 @@ GUI-сессия в стиле loopback не выпускается.
 
 | Метод и путь | Назначение | Особые ошибки |
 | --- | --- | --- |
-| `GET, PUT /api/v2` | Прочитать или изменить протокол агента (v1, следовать настройкам Codex или v2) и thread settings; `maxConcurrentThreadsPerSession: null` восстанавливает значение Codex по умолчанию | 400 invalid settings; 502 transition or persistence failure |
+| `GET, PUT /api/v2` | Прочитать или изменить протокол агента, доставку сообщений V2 и настройки потоков. `multiAgentV2MessageDelivery` принимает `plaintext` или значение по умолчанию `encrypted`; `encrypted` или `null` удаляет явное переопределение открытого текста. После изменения доставки начните новую сессию. `maxConcurrentThreadsPerSession: null` восстанавливает значение Codex по умолчанию | 400 invalid settings; 502 transition or persistence failure |
 | `GET, PUT /api/injection-model` | Прочитать или задать предпочтительную модель подсказки, effort, prompt и guidance settings; без синхронизации нативных значений это только рекомендация | 400 invalid model, effort or body |
 | `GET, PUT /api/effort-caps` | Прочитать или задать глобальный и sub-agent потолок reasoning effort | 400 invalid ladder value |
 | `GET, PUT /api/subagent-models` | Прочитать или упорядочить до пяти моделей, объявляемых `spawn_agent`; маршрутизацию не принуждает | 400 invalid list or more than five models |

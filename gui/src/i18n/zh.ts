@@ -642,7 +642,7 @@ export const zh: Record<TKey, string> = {
   "sub.policy.loading": "正在加载运行策略…",
   "sub.policy.retry": "重新加载策略",
   "sub.policy.details": "回退链与保护措施",
-  "sub.policy.timing": "协议和线程上限适用于新会话；指导、回退和 effort 设置适用于之后符合条件的请求。",
+  "sub.policy.timing": "协议、V2 消息传递和线程上限适用于新会话；指导、回退和 effort 设置适用于之后符合条件的请求。",
   "sub.policy.fallbackChain": "有序回退链",
   "sub.policy.fallbackChainHint": "对于已生成的子任务，请求模型和角色回退之后按从上到下顺序尝试全局候选项。留空则禁用全局列表。",
   "sub.policy.addFallback": "添加回退项",

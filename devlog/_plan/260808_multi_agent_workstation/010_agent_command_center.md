@@ -20,10 +20,12 @@ Updated: 2026-08-08
 - The existing guidance switch is surfaced in the primary policy grid as
   **Use roster as worker guidance**. It controls OpenCodex-authored guidance; it
   does not force delegation or route every child.
-- A warning appears only while V2 is selected, explaining the existing issue #92
-  encryption boundary, per-route compatibility filtering, fail-closed exact
-  overrides, and Classic v1 as the predictable cross-provider path. No upstream
-  response transport or fail-closed guard was changed in this workstream.
+- The encrypted issue-92 warning appears while V2 is selected. The plaintext
+  privacy warning appears whenever forced V2 or Follow Codex defaults may use
+  the explicit plaintext policy. It explains that every V2 worker message from
+  that parent, including messages to native workers, becomes plaintext and that
+  the operator must start a new session. Exact overrides still fail closed when
+  unreadable, and Classic v1 remains the established cross-provider path.
 - All visible strings are localized in `en`, `de`, `ja`, `ko`, `ru`, and `zh`.
 
 ## Verification

@@ -998,11 +998,6 @@ export function bridgeToResponsesSSE(
                 : {
                     type: "function_call", id: itemId, call_id: event.id, name: realName,
                     arguments: "", status: "in_progress", ...(ns ? { namespace: ns } : {}),
-                    ...v2PlaintextFunctionCallFields(
-                      options?.plaintextV2Collaboration === true,
-                      ns,
-                      realName,
-                    ),
                   };
               emit("response.output_item.added", { output_index: outputIndex, item });
               currentToolCall = { itemId, outputIndex, callId: event.id, name: realName, args: "", argsBytes: 0, namespace: ns, freeform, toolSearch };

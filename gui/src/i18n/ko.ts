@@ -645,7 +645,7 @@ export const ko: Record<TKey, string> = {
   "sub.policy.loading": "실행 정책을 불러오는 중…",
   "sub.policy.retry": "정책 다시 불러오기",
   "sub.policy.details": "폴백 체인 및 보호 장치",
-  "sub.policy.timing": "프로토콜과 스레드 한도는 새 세션에, 안내·폴백·effort 설정은 이후 해당 요청에 적용됩니다.",
+  "sub.policy.timing": "프로토콜, V2 메시지 전달, 스레드 한도는 새 세션에, 안내·폴백·effort 설정은 이후 해당 요청에 적용됩니다.",
   "sub.policy.fallbackChain": "정렬된 폴백 체인",
   "sub.policy.fallbackChainHint": "생성된 하위 작업에서 요청 모델과 역할 폴백 다음 전역 후보를 위에서 아래로 시도합니다. 비워 두면 전역 목록을 끕니다.",
   "sub.policy.addFallback": "폴백 추가",

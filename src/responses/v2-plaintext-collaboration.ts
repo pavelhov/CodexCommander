@@ -2,6 +2,11 @@ export const V2_PLAINTEXT_COLLABORATION_NAMESPACE = "ocx_collaboration_plaintext
 
 const CLIENT_COLLABORATION_NAMESPACE = "collaboration";
 const PLAINTEXT_MESSAGE_TOOLS = new Set(["spawn_agent", "send_message", "followup_task"]);
+const LIFECYCLE_TOOLS = new Set(["interrupt_agent", "list_agents", "wait_agent"]);
+const RECOGNIZED_COLLABORATION_TOOLS = new Set([
+  ...PLAINTEXT_MESSAGE_TOOLS,
+  ...LIFECYCLE_TOOLS,
+]);
 
 export function isV2PlaintextMessageCall(namespace: unknown, name: unknown): boolean {
   return namespace === CLIENT_COLLABORATION_NAMESPACE
@@ -45,10 +50,14 @@ function requestToolGroups(body: JsonObject): unknown[][] {
   return groups;
 }
 
-function isAliasDeclaration(tool: unknown): boolean {
-  return isObject(tool)
-    && tool.type === "namespace"
-    && tool.name === V2_PLAINTEXT_COLLABORATION_NAMESPACE;
+function containsAliasNamespace(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(containsAliasNamespace);
+  if (!isObject(value)) return false;
+  if (
+    (value.type === "namespace" && value.name === V2_PLAINTEXT_COLLABORATION_NAMESPACE)
+    || value.namespace === V2_PLAINTEXT_COLLABORATION_NAMESPACE
+  ) return true;
+  return Object.values(value).some(containsAliasNamespace);
 }
 
 function inspectCollaborationNamespace(tool: unknown): "absent" | "complete" | "invalid" {
@@ -59,20 +68,23 @@ function inspectCollaborationNamespace(tool: unknown): "absent" | "complete" | "
 
   const seen = new Set<string>();
   for (const candidate of tool.tools) {
-    if (!isObject(candidate) || candidate.type !== "function" || typeof candidate.name !== "string") {
-      continue;
-    }
-    if (!PLAINTEXT_MESSAGE_TOOLS.has(candidate.name)) continue;
-    if (seen.has(candidate.name)) return "invalid";
+    if (
+      !isObject(candidate)
+      || candidate.type !== "function"
+      || typeof candidate.name !== "string"
+      || !RECOGNIZED_COLLABORATION_TOOLS.has(candidate.name)
+      || seen.has(candidate.name)
+    ) return "invalid";
     seen.add(candidate.name);
 
+    if (!PLAINTEXT_MESSAGE_TOOLS.has(candidate.name)) continue;
     const message = isObject(candidate.parameters)
       && isObject(candidate.parameters.properties)
       ? candidate.parameters.properties.message
       : undefined;
     if (!isObject(message) || message.encrypted !== true) return "invalid";
   }
-  return seen.size === PLAINTEXT_MESSAGE_TOOLS.size ? "complete" : "invalid";
+  return seen.size === RECOGNIZED_COLLABORATION_TOOLS.size ? "complete" : "invalid";
 }
 
 function rewriteMessageTool(tool: unknown): unknown {
@@ -156,7 +168,7 @@ export function rewriteV2PlaintextCollaborationRequest(
   if (!isObject(body)) return { body, activated: false, reason: "missing_schema" };
 
   const groups = requestToolGroups(body);
-  if (groups.some(group => group.some(isAliasDeclaration))) {
+  if (containsAliasNamespace(body)) {
     return { body, activated: false, reason: "alias_collision" };
   }
 
@@ -267,6 +279,7 @@ function markCanonicalResponseValue(value: unknown): { value: unknown; changed: 
   }
   if (
     value.type === "function_call"
+    && value.status === "completed"
     && isV2PlaintextMessageCall(value.namespace, value.name)
     && (value.encrypted_function_args === undefined
       || (Array.isArray(value.encrypted_function_args) && value.encrypted_function_args.length === 0))

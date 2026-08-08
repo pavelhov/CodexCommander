@@ -59,6 +59,15 @@ function messageSchema(tool: unknown): Record<string, unknown> | undefined {
   return record.parameters?.properties?.message;
 }
 
+/** Synthetic Fernet-shaped blob; it contains no captured task or authentic HMAC. */
+function fernetFixture(): string {
+  const raw = Buffer.alloc(73, 0x5a);
+  raw[0] = 0x80;
+  raw.writeBigUInt64BE(1_720_000_000n, 1);
+  const unpadded = raw.toString("base64url");
+  return `${unpadded}${"=".repeat((4 - (unpadded.length % 4)) % 4)}`;
+}
+
 describe("native V2 plaintext collaboration request rewrite", () => {
   test("aliases a complete Responses-Lite namespace, replay, and tool choice atomically", () => {
     const namespace = collaborationNamespace();
@@ -119,7 +128,7 @@ describe("native V2 plaintext collaboration request rewrite", () => {
     expect(output.input[0]!.tools[0]).toMatchObject({ name: V2_PLAINTEXT_COLLABORATION_NAMESPACE });
   });
 
-  test("fails closed on a partial schema or alias collision", () => {
+  test("fails closed on partial, future, or colliding schemas", () => {
     const partial = collaborationNamespace();
     partial.tools = (partial.tools as Record<string, unknown>[]).filter(tool => tool.name !== "followup_task");
     const partialBody = { input: [{ type: "additional_tools", tools: [partial] }] };
@@ -134,6 +143,44 @@ describe("native V2 plaintext collaboration request rewrite", () => {
     };
     const collisionResult = rewriteV2PlaintextCollaborationRequest(collisionBody);
     expect(collisionResult).toEqual({ body: collisionBody, activated: false, reason: "alias_collision" });
+
+    const replayCollisionBody = {
+      tools: [collaborationNamespace()],
+      input: [{
+        type: "function_call",
+        namespace: V2_PLAINTEXT_COLLABORATION_NAMESPACE,
+        name: "wait_agent",
+        arguments: "{}",
+      }],
+    };
+    expect(rewriteV2PlaintextCollaborationRequest(replayCollisionBody)).toEqual({
+      body: replayCollisionBody,
+      activated: false,
+      reason: "alias_collision",
+    });
+
+    const missingLifecycle = collaborationNamespace();
+    missingLifecycle.tools = (missingLifecycle.tools as Record<string, unknown>[])
+      .filter(tool => tool.name !== "wait_agent");
+    const missingLifecycleBody = { tools: [missingLifecycle] };
+    expect(rewriteV2PlaintextCollaborationRequest(missingLifecycleBody)).toEqual({
+      body: missingLifecycleBody,
+      activated: false,
+      reason: "schema_mismatch",
+    });
+
+    const future = collaborationNamespace();
+    (future.tools as Record<string, unknown>[]).push({
+      type: "function",
+      name: "future_agent_tool",
+      parameters: { type: "object", properties: {} },
+    });
+    const futureBody = { tools: [future] };
+    expect(rewriteV2PlaintextCollaborationRequest(futureBody)).toEqual({
+      body: futureBody,
+      activated: false,
+      reason: "schema_mismatch",
+    });
   });
 
   test("fails closed when one message field is already plaintext", () => {
@@ -208,13 +255,15 @@ describe("native V2 plaintext collaboration response restore", () => {
   test("marks canonical calls from routed Responses-native providers without touching lifecycle tools", () => {
     const payload = JSON.stringify({
       output: [
-        { type: "function_call", namespace: "collaboration", name: "send_message", arguments: "{}" },
+        { type: "function_call", namespace: "collaboration", name: "send_message", arguments: "{}", status: "completed" },
+        { type: "function_call", namespace: "collaboration", name: "spawn_agent", arguments: "{}", status: "in_progress" },
         { type: "function_call", namespace: "collaboration", name: "wait_agent", arguments: "{}" },
         {
           type: "function_call",
           namespace: "collaboration",
           name: "followup_task",
           arguments: "{}",
+          status: "completed",
           encrypted_function_args: ["message"],
         },
       ],
@@ -224,7 +273,8 @@ describe("native V2 plaintext collaboration response restore", () => {
     };
     expect(marked.output[0]).toMatchObject({ encrypted_function_args: [] });
     expect(marked.output[1]).not.toHaveProperty("encrypted_function_args");
-    expect(marked.output[2]).toMatchObject({ encrypted_function_args: ["message"] });
+    expect(marked.output[2]).not.toHaveProperty("encrypted_function_args");
+    expect(marked.output[3]).toMatchObject({ encrypted_function_args: ["message"] });
   });
 });
 
@@ -370,6 +420,13 @@ describe("routed V2 plaintext collaboration bridge", () => {
       const output = (payload as { response?: { output?: Record<string, unknown>[] } }).response?.output;
       return [...(item ? [item] : []), ...(output ?? [])];
     }).filter(item => item.type === "function_call" && item.status === "completed");
+    const inProgressItems = payloads.flatMap(payload => {
+      const item = (payload as { item?: Record<string, unknown> }).item;
+      return item ? [item] : [];
+    }).filter(item => item.type === "function_call" && item.status === "in_progress");
+    for (const item of inProgressItems) {
+      expect(item).not.toHaveProperty("encrypted_function_args");
+    }
     expect(streamItems.filter(item => item.name === "spawn_agent").length).toBeGreaterThanOrEqual(2);
     for (const item of streamItems.filter(item => item.name === "spawn_agent")) {
       expect(item.encrypted_function_args).toEqual([]);
@@ -515,6 +572,39 @@ describe("native V2 plaintext collaboration handleResponses integration", () => 
     expect(declaration.name).toBe("collaboration");
     expect(messageSchema(declaration.tools.find(tool => tool.name === "spawn_agent"))).toMatchObject({ encrypted: true });
     expect(logCtx.suppressUsageDebugBodySample).toBeUndefined();
+  });
+
+  test("keeps genuine Fernet child assignments fail-closed under plaintext policy", async () => {
+    const encryptedTask = fernetFixture();
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("provider dispatch must not happen");
+    }) as typeof fetch;
+    const body = routedV2Body(false);
+    body.input = [
+      (body.input as unknown[])[0],
+      {
+        type: "agent_message",
+        author: "/root",
+        recipient: "/root/worker",
+        content: [{ type: "encrypted_content", encrypted_content: encryptedTask }],
+      },
+    ];
+
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }), routedResponsesConfig("plaintext"), { model: "", provider: "" });
+    const text = await response.text();
+
+    expect(response.status).toBe(400);
+    expect(JSON.parse(text)).toMatchObject({
+      error: { code: "unreadable_encrypted_agent_task" },
+    });
+    expect(fetchCalls).toBe(0);
+    expect(text).not.toContain(encryptedTask);
   });
 });
 

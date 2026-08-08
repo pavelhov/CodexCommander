@@ -77,6 +77,8 @@ Work stays on one delivery branch but lands as scoped checkpoint commits:
 7. `0ca85586` — `feat(macos): bundle self-contained universal runtime`
 8. `0df6a52f` — `test: keep prepush expectations deterministic`
 9. `33425358` — `fix(gui): clear command center review findings`
+10. `bef7c19a` — `feat(agents): enable plaintext mixed-provider v2`
+11. `796a7b02` — `test: make subprocess output reads single-owner`
 
 Commits may be split further when review boundaries demand it. A checkpoint is
 created only after its focused tests pass. The branch is not merged directly

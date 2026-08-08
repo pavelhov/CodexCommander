@@ -653,7 +653,7 @@ export const en = {
   "sub.policy.loading": "Loading run policy…",
   "sub.policy.retry": "Reload policy",
   "sub.policy.details": "Fallback chain and safeguards",
-  "sub.policy.timing": "Protocol and thread limit apply to new sessions; guidance, fallback, and effort settings apply to subsequent eligible requests.",
+  "sub.policy.timing": "Protocol, V2 message delivery, and thread limit apply to new sessions; guidance, fallback, and effort settings apply to subsequent eligible requests.",
   "sub.policy.fallbackChain": "Ordered fallback chain",
   "sub.policy.fallbackChainHint": "For spawned child turns, global candidates are tried after the requested model and role fallback. Leave empty to disable the global fallback list.",
   "sub.policy.addFallback": "Add fallback",

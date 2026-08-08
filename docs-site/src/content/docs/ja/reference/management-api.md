@@ -56,7 +56,7 @@ Authorization: Bearer <admin-token>
 
 |メソッドとパス |目的 |注目すべきエラー |
 | --- | --- | --- |
-| `GET, PUT /api/v2` |エージェントプロトコル（v1、Codex の既定値、v2）とスレッド設定を読み取りまたは変更します。`maxConcurrentThreadsPerSession: null` で Codex のデフォルトに戻ります | 400 の無効な設定。 502 移行または永続化の失敗 |
+| `GET, PUT /api/v2` |エージェントプロトコル、V2 メッセージ配信、スレッド設定を読み取りまたは変更します。`multiAgentV2MessageDelivery` は `plaintext` または既定の `encrypted` を受け付け、`encrypted` か `null` で明示的な平文オーバーライドを解除します。配信変更後は新しいセッションを開始してください。`maxConcurrentThreadsPerSession: null` で Codex のデフォルトに戻ります | 400 の無効な設定。 502 移行または永続化の失敗 |
 | `GET, PUT /api/injection-model` |優先ガイダンスモデル、エフォート、プロンプト、ガイダンス設定を読み取りまたは設定します。ネイティブ既定値の同期を有効にしない限り助言的です | 400 無効なモデル、エフォート、またはボディ |
 | `GET, PUT /api/effort-caps` |グローバルおよびサブエージェントの推論工数の上限を読み取りまたは設定する | 400 無効なラダー値 |
 | `GET, PUT /api/subagent-models` |`spawn_agent` にアドバタイズされる最大 5 モデルを読み取るか順序付けします。ルーティングを強制しません | 400 の無効なリストまたは 5 つ以上のモデル |

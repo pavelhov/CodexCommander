@@ -70,7 +70,7 @@ route-specific results rather than repeating this table.
 
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
-| `GET, PUT /api/v2` | Read or change the agent protocol (v1, Follow Codex defaults, or v2) and thread settings; `maxConcurrentThreadsPerSession: null` restores the Codex default | 400 invalid settings; 502 transition or persistence failure |
+| `GET, PUT /api/v2` | Read or change the agent protocol, V2 message delivery, and thread settings. `multiAgentV2MessageDelivery` accepts `plaintext` or the `encrypted` default; sending `encrypted` or `null` removes the explicit plaintext override. Start a new session after changing delivery. `maxConcurrentThreadsPerSession: null` restores the Codex default | 400 invalid settings; 502 transition or persistence failure |
 | `GET, PUT /api/injection-model` | Read or set the preferred guidance model, effort, prompt, and guidance settings; this is advisory unless native-default sync is enabled | 400 invalid model, effort, or body |
 | `GET, PUT /api/effort-caps` | Read or set global and sub-agent reasoning-effort ceilings | 400 invalid ladder value |
 | `GET, PUT /api/subagent-models` | Read or order up to five models advertised to `spawn_agent`; this does not force routing | 400 invalid list or more than five models |

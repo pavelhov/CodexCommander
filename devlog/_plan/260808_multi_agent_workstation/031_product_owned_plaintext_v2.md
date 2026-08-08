@@ -1,6 +1,6 @@
 # 031 — Product-owned plaintext V2 compatibility
 
-Status: VERIFIED ON ISOLATED BRANCH; READY FOR SURGICAL INTEGRATION
+Status: INTEGRATED ON TARGET; TARGET VERIFICATION IN PROGRESS
 
 Branch: `codex/v2-plaintext-shim`
 Base: `codex/multi-agent-workstation` at `0ca85586`
