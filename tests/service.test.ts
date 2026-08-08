@@ -84,6 +84,18 @@ describe("service listen-port bake", () => {
     expect(plist).toContain("<string>13337</string>");
     expect(buildUnit()).toContain("start --port 13337");
   });
+
+  test("app-owned service preserves the signed-bundle update boundary", () => {
+    const previous = process.env.OCX_APP_RUNTIME;
+    try {
+      process.env.OCX_APP_RUNTIME = "1";
+      const plist = buildPlist();
+      expect(plist).toContain("<key>OCX_APP_RUNTIME</key><string>1</string>");
+    } finally {
+      if (previous === undefined) delete process.env.OCX_APP_RUNTIME;
+      else process.env.OCX_APP_RUNTIME = previous;
+    }
+  });
 });
 
 describe("systemd service unit", () => {

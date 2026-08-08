@@ -9,16 +9,25 @@ the OpenCodex instance running on the same Mac.
 
 ## Install
 
-1. Install and start OpenCodex normally.
-2. Download <code>OpenCodex-&lt;version&gt;-macos-universal.zip</code> and its
+1. Download <code>OpenCodex-&lt;version&gt;-macos-universal.zip</code> and its
    <code>.sha256</code> file from the matching GitHub release.
-3. Verify the archive:
+2. Verify the archive:
 
        shasum -a 256 -c OpenCodex-<version>-macos-universal.zip.sha256
 
-4. Unzip it and move <code>OpenCodex.app</code> to **Applications**.
-5. Open the app. Its icon appears in the menu bar; it does not add a Dock icon. The first stable
-   launch enables **Launch at Login** so the icon returns after the next sign-in.
+3. Unzip it and move <code>OpenCodex.app</code> to **Applications**.
+4. Open the app. It contains the OpenCodex Bun runtime, proxy source, production dependencies, and
+   dashboard assets, so a separate npm, Bun, or <code>ocx</code> install is not required. Its icon
+   appears in the menu bar; it does not add a Dock icon. The first stable launch enables
+   **Launch at Login** so the icon returns after the next sign-in.
+
+The bundled runtime still uses the existing user-owned state at <code>~/.opencodex</code> and
+<code>~/.codex</code>. It does not copy credentials into the app bundle or Keychain. Provider OAuth
+and API-key setup remains in the local dashboard.
+
+The bundled runtime is read-only in place. **Update** reports that the latest signed app release
+must replace the bundle; it never runs npm, Bun, or a source checkout update against signed
+<code>Contents/Resources</code>.
 
 The current release package is a ZIP. Unless its release owner supplies a Developer ID signing
 identity, the bundle is ad-hoc signed; it is not a signed and notarized DMG. macOS may block the
@@ -26,6 +35,9 @@ first downloaded launch, so Control-click the app, choose **Open**, then confirm
 notarized DMG is a later commercial-distribution step that needs the distributor's own certificate,
 notarization credentials, package metadata, and update channel. A build made locally does not carry
 the downloaded-file quarantine attribute.
+
+The ZIP is a public-release attachment only when built with a Developer ID identity and validated
+by Gatekeeper plus a stapled notarization ticket. Ad-hoc ZIPs are Actions/test artifacts only.
 
 An installed release may live in **Applications**. Do not use Application Support as an app-install
 directory. During active source development, use the repository build in the next section as the one
@@ -151,8 +163,8 @@ making a final distributable bundle.
 
 ## Troubleshooting
 
-- **Proxy unavailable** — start it with <code>ocx start</code> or install the background service
-  with <code>ocx service install</code>.
+- **Proxy unavailable** — use **Start Proxy** in the bundled app. Source builds can also use
+  <code>ocx start</code> or install the background service with <code>ocx service install</code>.
 - **Menu icon missing after login** — open the app, check its **Launch at Login** row, and follow the
   **Open Settings** action if macOS reports that approval is required.
 - **Authentication unavailable** — run <code>ocx doctor</code>; verify that the OpenCodex state
@@ -162,7 +174,7 @@ making a final distributable bundle.
   the account. If Grok says **Login needs refresh**, run <code>grok</code>, complete its login, then
   use **Refresh** in OpenCodex; use <code>kimi</code> for the equivalent Kimi state. Some providers do
   not expose a quota API.
-- **Restart did not recover** — open **Logs** and run <code>ocx status</code>. The companion never
+- **Restart did not recover** — open **Logs** and use the app's status panel. The companion never
   kills a process or rewrites service state as a fallback.
 
 ## Uninstall

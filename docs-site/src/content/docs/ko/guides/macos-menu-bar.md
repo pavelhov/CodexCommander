@@ -9,20 +9,26 @@ OpenCodex 인스턴스와만 통신합니다.
 
 ## 설치
 
-1. 평소처럼 OpenCodex를 설치하고 시작합니다.
-2. 일치하는 GitHub 릴리스에서 <code>OpenCodex-&lt;version&gt;-macos-universal.zip</code>과
+1. 일치하는 GitHub 릴리스에서 <code>OpenCodex-&lt;version&gt;-macos-universal.zip</code>과
    해당 <code>.sha256</code> 파일을 다운로드합니다.
-3. 아카이브를 확인합니다.
+2. 아카이브를 확인합니다.
 
        shasum -a 256 -c OpenCodex-<version>-macos-universal.zip.sha256
 
-4. 압축을 풀고 <code>OpenCodex.app</code>을 **응용 프로그램**으로 이동합니다.
-5. 앱을 엽니다. 아이콘은 메뉴 막대에 나타나며 Dock 아이콘은 추가되지 않습니다. 안정적인 위치에서
-   처음 실행하면 **Launch at Login**이 활성화됩니다.
+3. 압축을 풀고 <code>OpenCodex.app</code>을 **응용 프로그램**으로 이동합니다.
+4. 앱을 엽니다. 앱에 Bun 런타임, 프록시, 프로덕션 의존성 및 대시보드가 포함되어 있으므로 별도의 npm,
+   Bun 또는 <code>ocx</code> 설치가 필요하지 않습니다. 아이콘은 메뉴 막대에 나타나며 Dock 아이콘은 추가되지
+   않습니다. 안정적인 위치에서 처음 실행하면 **Launch at Login**이 활성화됩니다.
+
+번들 런타임은 기존 사용자 상태인 <code>~/.opencodex</code>와 <code>~/.codex</code>를 사용합니다. 자격 증명을
+앱 번들이나 Keychain으로 복사하지 않습니다. 제공자 OAuth 및 API 키 설정은 로컬 대시보드에서 수행합니다.
 
 릴리스가 Developer ID로 서명되고 공증되기 전까지는 macOS가 다운로드 후 첫 실행을 차단할 수
 있습니다. 앱을 Control-클릭하고 **열기**를 선택한 다음 **열기**를 확인합니다. 로컬에서 만든
 빌드에는 다운로드된 파일의 격리 속성이 없습니다.
+
+번들 런타임은 읽기 전용입니다. 업데이트는 최신 서명된 <code>OpenCodex.app</code> 번들로 교체해야 하며,
+서명된 <code>Contents/Resources</code>에 npm, Bun 또는 소스 업데이트를 실행하지 않습니다.
 
 ## 시작 모드
 

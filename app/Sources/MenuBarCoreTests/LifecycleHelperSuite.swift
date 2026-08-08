@@ -3,6 +3,85 @@ import MenuBarCore
 
 enum LifecycleHelperSuite {
     static func run(_ t: TestRunner) {
+        t.test("lifecycle helper: released app prefers its bundled runtime outside the repository") {
+            try withTemporaryDirectory { root in
+                let bundle = root.appendingPathComponent(
+                    "Applications/OpenCodex.app",
+                    isDirectory: true
+                )
+                let runtime = bundle.appendingPathComponent(
+                    "Contents/Resources/runtime",
+                    isDirectory: true
+                )
+                let entry = runtime.appendingPathComponent("src/cli/index.ts")
+                let package = runtime.appendingPathComponent("package.json")
+                let bun = runtime.appendingPathComponent("node_modules/bun/bin/bun")
+                try FileManager.default.createDirectory(
+                    at: entry.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.createDirectory(
+                    at: bun.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try Data(#"{"name":"@bitkyc08/opencodex"}"#.utf8).write(to: package)
+                try Data().write(to: entry)
+                try Data("#!/bin/sh\n".utf8).write(to: bun)
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o700],
+                    ofItemAtPath: bun.path
+                )
+
+                let invocation = LifecycleHelperDiscovery.discover(
+                    bundleURL: bundle,
+                    environment: [
+                        "PATH": "/definitely/not-a-real-path",
+                        "BUN_OPTIONS": "--inspect",
+                        "DYLD_INSERT_LIBRARIES": "/tmp/should-not-be-used.dylib",
+                    ],
+                    home: root.appendingPathComponent("outside-repo", isDirectory: true)
+                )
+                t.equal(invocation?.executable.path, bun.path)
+                t.equal(invocation?.prefixArguments, [entry.path])
+            }
+        }
+
+        t.test("lifecycle helper: app-owned invocation receives the update boundary marker") {
+            try withTemporaryDirectory { root in
+                let executable = root.appendingPathComponent(
+                    "OpenCodex.app/Contents/Resources/runtime/bin/helper",
+                    isDirectory: false
+                )
+                try FileManager.default.createDirectory(
+                    at: executable.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                let body = """
+                #!/bin/sh
+                if [ "$OCX_APP_RUNTIME" != "1" ]; then exit 9; fi
+                if [ "$PATH" != "/usr/bin:/bin:/usr/sbin:/sbin" ]; then exit 10; fi
+                printf '{"schemaVersion":1,"action":"%s","ok":true,"state":"running","changed":false,"message":"bundled"}\\n' "$2"
+                """
+                try Data(body.utf8).write(to: executable)
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o700],
+                    ofItemAtPath: executable.path
+                )
+
+                let helper = LifecycleHelper(
+                    invocation: LifecycleInvocation(executable: executable),
+                    timeout: 2
+                )
+                let result = sync { try await helper.run(.status) }
+                switch result {
+                case .success(let value):
+                    t.equal(value.message, "bundled")
+                case .failure(let error):
+                    t.expect(false, "unexpected helper failure: \(error)")
+                }
+            }
+        }
+
         t.test("lifecycle helper: source app resolves the repository Bun entry") {
             try withTemporaryDirectory { root in
                 let repository = root.appendingPathComponent("repo", isDirectory: true)
@@ -13,6 +92,13 @@ enum LifecycleHelperSuite {
                 let entry = repository.appendingPathComponent("src/cli/index.ts")
                 let package = repository.appendingPathComponent("package.json")
                 let bun = repository.appendingPathComponent("node_modules/bun/bin/bun.exe")
+                let bundledRuntime = bundle.appendingPathComponent(
+                    "Contents/Resources/runtime",
+                    isDirectory: true
+                )
+                let bundledEntry = bundledRuntime.appendingPathComponent("src/cli/index.ts")
+                let bundledPackage = bundledRuntime.appendingPathComponent("package.json")
+                let bundledBun = bundledRuntime.appendingPathComponent("node_modules/bun/bin/bun")
                 try FileManager.default.createDirectory(
                     at: bundle,
                     withIntermediateDirectories: true
@@ -25,15 +111,33 @@ enum LifecycleHelperSuite {
                     at: bun.deletingLastPathComponent(),
                     withIntermediateDirectories: true
                 )
+                try FileManager.default.createDirectory(
+                    at: bundledEntry.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.createDirectory(
+                    at: bundledBun.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
                 FileManager.default.createFile(
                     atPath: package.path,
                     contents: Data(#"{"name":"@bitkyc08/opencodex"}"#.utf8)
                 )
                 FileManager.default.createFile(atPath: entry.path, contents: Data())
                 FileManager.default.createFile(atPath: bun.path, contents: Data("#!/bin/sh\n".utf8))
+                FileManager.default.createFile(
+                    atPath: bundledPackage.path,
+                    contents: Data(#"{"name":"@bitkyc08/opencodex"}"#.utf8)
+                )
+                FileManager.default.createFile(atPath: bundledEntry.path, contents: Data())
+                FileManager.default.createFile(atPath: bundledBun.path, contents: Data("#!/bin/sh\n".utf8))
                 try FileManager.default.setAttributes(
                     [.posixPermissions: 0o700],
                     ofItemAtPath: bun.path
+                )
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o700],
+                    ofItemAtPath: bundledBun.path
                 )
 
                 let invocation = LifecycleHelperDiscovery.discover(

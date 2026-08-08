@@ -9,16 +9,23 @@ macOS コンパニオンは、プロキシを置き換えたり Web ダッシュ
 
 ## インストール
 
-1. 通常どおり OpenCodex をインストールして起動します。
-2. 対応する GitHub リリースから <code>OpenCodex-&lt;version&gt;-macos-universal.zip</code> と
+1. 対応する GitHub リリースから <code>OpenCodex-&lt;version&gt;-macos-universal.zip</code> と
    その <code>.sha256</code> ファイルをダウンロードします。
-3. アーカイブを検証します。
+2. アーカイブを検証します。
 
        shasum -a 256 -c OpenCodex-<version>-macos-universal.zip.sha256
 
-4. 展開して <code>OpenCodex.app</code> を**アプリケーション**に移動します。
-5. アプリを開きます。アイコンはメニューバーに表示され、Dock アイコンは追加されません。安定した
-   場所からの初回起動では **Launch at Login** が有効になります。
+3. 展開して <code>OpenCodex.app</code> を**アプリケーション**に移動します。
+4. アプリを開きます。アプリには Bun ランタイム、プロキシ、依存関係、ダッシュボードが含まれるため、
+   別途 npm、Bun、<code>ocx</code> をインストールする必要はありません。アイコンはメニューバーに表示され、
+   Dock アイコンは追加されません。安定した場所からの初回起動では **Launch at Login** が有効になります。
+
+バンドルされたランタイムは既存のユーザー状態（<code>~/.opencodex</code> と <code>~/.codex</code>）を使用します。
+認証情報をアプリバンドルや Keychain にコピーすることはありません。プロバイダーの OAuth と API キー設定は
+ローカルダッシュボードで行います。
+
+バンドル内のランタイムは読み取り専用です。更新は署名済みの最新 <code>OpenCodex.app</code> を置き換えて行い、
+署名済みの <code>Contents/Resources</code> に対して npm、Bun、ソース更新を実行しません。
 
 リリースが Developer ID で署名され、公証されるまでは、macOS がダウンロード後の初回起動を
 ブロックする場合があります。アプリを Control-クリックして**開く**を選び、もう一度**開く**を

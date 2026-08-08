@@ -151,6 +151,101 @@ mkdir -p "$staged_app/Contents/MacOS" "$staged_app/Contents/Resources"
 cp "$executable" "$staged_app/Contents/MacOS/OpenCodexMenuBar"
 cp "$package_dir/Info.plist" "$staged_app/Contents/Info.plist"
 
+# A release app owns the proxy runtime. Keep the package-shaped layout intact so Bun
+# can resolve the existing TypeScript entrypoints, workers, and dependency graph without
+# relying on the caller's checkout, PATH, npm, or a separately installed Bun. Resolve one
+# lockfile-pinned production install for both Darwin architectures; the installed app never
+# repeats this step or performs a first-launch network install.
+runtime_root="$staged_app/Contents/Resources/runtime"
+if [[ ! -f "$repo_root/gui/dist/index.html" ]]; then
+  echo "Missing $repo_root/gui/dist/index.html; run bun run build:gui before building the macOS app." >&2
+  exit 1
+fi
+mkdir -p "$runtime_root"
+cp "$repo_root/package.json" "$runtime_root/package.json"
+cp "$repo_root/bun.lock" "$runtime_root/bun.lock"
+cp -R "$repo_root/src" "$runtime_root/src"
+cp -R "$repo_root/bin" "$runtime_root/bin"
+mkdir -p "$runtime_root/gui"
+cp -R "$repo_root/gui/dist" "$runtime_root/gui/dist"
+
+deps_root="$(mktemp -d "$staging_root/.OpenCodex-runtime-deps.XXXXXX")"
+cp "$repo_root/package.json" "$deps_root/package.json"
+cp "$repo_root/bun.lock" "$deps_root/bun.lock"
+if ! (cd "$deps_root" && bun install --production --frozen-lockfile --ignore-scripts --os=darwin --cpu='*' --force >/dev/null); then
+  echo "Could not resolve lockfile-pinned Darwin production dependencies." >&2
+  echo "Retry the build with network access; the installed app never performs this step." >&2
+  exit 1
+fi
+cp -R "$deps_root/node_modules" "$runtime_root/node_modules"
+
+arm_bun="$runtime_root/node_modules/@oven/bun-darwin-aarch64/bin/bun"
+x64_bun="$runtime_root/node_modules/@oven/bun-darwin-x64-baseline/bin/bun"
+if [[ ! -x "$x64_bun" ]]; then
+  x64_bun="$runtime_root/node_modules/@oven/bun-darwin-x64/bin/bun"
+fi
+if [[ ! -x "$arm_bun" || ! -x "$x64_bun" ]]; then
+  echo "Darwin arm64/x86_64 Bun binaries are missing from the production install." >&2
+  exit 1
+fi
+
+host_arch="$(uname -m)"
+runtime_bun="$runtime_root/node_modules/bun/bin/bun.exe"
+if [[ "${UNIVERSAL:-0}" == "1" ]]; then
+  lipo -create "$arm_bun" "$x64_bun" -output "$runtime_bun"
+else
+  case "$host_arch" in
+    arm64|aarch64) cp "$arm_bun" "$runtime_bun" ;;
+    x86_64) cp "$x64_bun" "$runtime_bun" ;;
+    *) echo "Unsupported macOS host architecture: $host_arch" >&2; exit 1 ;;
+  esac
+fi
+chmod 755 "$runtime_bun"
+rm -f "$runtime_root/node_modules/bun/bin/bunx" "$runtime_root/node_modules/bun/bin/bunx.exe" \
+  "$runtime_root/node_modules/.bin/bunx"
+ln -s bun.exe "$runtime_root/node_modules/bun/bin/bunx.exe"
+
+keyring_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)",/\1/p' \
+  "$runtime_root/node_modules/@napi-rs/keyring/package.json" | head -n 1)"
+for keyring_package in keyring-darwin-arm64 keyring-darwin-x64; do
+  keyring_meta="$runtime_root/node_modules/@napi-rs/$keyring_package/package.json"
+  keyring_binary="$runtime_root/node_modules/@napi-rs/$keyring_package/keyring.darwin-${keyring_package##*-}.node"
+  if [[ ! -f "$keyring_binary" || ! -f "$keyring_meta" ]]; then
+    echo "Missing bundled keyring slice: $keyring_package" >&2
+    exit 1
+  fi
+  slice_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)",/\1/p' "$keyring_meta" | head -n 1)"
+  if [[ -z "$keyring_version" || "$slice_version" != "$keyring_version" ]]; then
+    echo "Bundled keyring version mismatch for $keyring_package (expected $keyring_version, got $slice_version)." >&2
+    exit 1
+  fi
+done
+
+# The materialized Bun executable above is the only runtime entrypoint. Drop the three
+# architecture payload packages after lipo/copy so the app does not carry ~190 MB of
+# duplicate Bun slices that no resolver can select at runtime.
+for bun_slice_package in bun-darwin-aarch64 bun-darwin-x64 bun-darwin-x64-baseline; do
+  rm -rf "$runtime_root/node_modules/@oven/$bun_slice_package"
+  if [[ -e "$runtime_root/node_modules/@oven/$bun_slice_package" ]]; then
+    echo "Failed to remove duplicate Bun slice package: $bun_slice_package" >&2
+    exit 1
+  fi
+done
+
+runtime_architectures="$(lipo -archs "$runtime_bun")"
+if [[ "${UNIVERSAL:-0}" == "1" ]]; then
+  for required_arch in arm64 x86_64; do
+    if [[ " $runtime_architectures " != *" $required_arch "* ]]; then
+      echo "Universal bundled Bun is missing $required_arch (got: $runtime_architectures)" >&2
+      exit 1
+    fi
+  done
+fi
+if [[ ! -f "$runtime_root/src/cli/index.ts" || ! -f "$runtime_root/gui/dist/index.html" ]]; then
+  echo "Bundled OpenCodex runtime is incomplete under $runtime_root." >&2
+  exit 1
+fi
+
 # Reuse the dashboard's real brand/provider assets. The AppKit surface loads these
 # files directly; no duplicate drawn logos or generated placeholders live in app/.
 mkdir -p "$staged_app/Contents/Resources/provider-icons"
@@ -245,7 +340,9 @@ for size in 16 32 128 256 512; do
 done
 iconutil -c icns "$iconset" -o "$staged_app/Contents/Resources/OpenCodex.icns"
 
-# Signing.
+# Signing. Sign nested Mach-O payloads first and the bundle last. This order is
+# deterministic for Developer ID/notarization and avoids relying on codesign --deep
+# to discover or repair nested code implicitly.
 #
 # MACOS_SIGN_IDENTITY selects a Developer ID Application certificate already present in
 # the caller's keychain and enables the hardened runtime, which is what notarization
@@ -259,11 +356,25 @@ iconutil -c icns "$iconset" -o "$staged_app/Contents/Resources/OpenCodex.icns"
 # be verified". The project has no Developer ID certificate today, so ad-hoc is what
 # ships and the docs must carry the right-click-Open path rather than pretend
 # otherwise.
+nested_code=(
+  "$runtime_bun"
+  "$runtime_root/node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node"
+  "$runtime_root/node_modules/@napi-rs/keyring-darwin-x64/keyring.darwin-x64.node"
+  "$staged_app/Contents/MacOS/OpenCodexMenuBar"
+)
+
 if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
-  codesign --force --deep --options runtime --timestamp \
-    --sign "$MACOS_SIGN_IDENTITY" "$staged_app"
+  for code_path in "${nested_code[@]}"; do
+    codesign --force --options runtime --timestamp --sign "$MACOS_SIGN_IDENTITY" "$code_path"
+    codesign --verify --strict --verbose=2 "$code_path"
+  done
+  codesign --force --options runtime --timestamp --sign "$MACOS_SIGN_IDENTITY" "$staged_app"
   echo "==> Signed with $MACOS_SIGN_IDENTITY (hardened runtime)"
 else
+  for code_path in "${nested_code[@]}"; do
+    codesign --force --sign - --timestamp=none "$code_path"
+    codesign --verify --strict --verbose=2 "$code_path"
+  done
   codesign --force --sign - --timestamp=none "$staged_app"
   echo "==> Ad-hoc signed (no MACOS_SIGN_IDENTITY): Gatekeeper will require the" >&2
   echo "    right-click-Open path on first launch." >&2

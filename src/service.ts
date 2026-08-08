@@ -529,12 +529,14 @@ export function buildPlist(): string {
   const opencodexHome = process.env.OPENCODEX_HOME?.trim();
   const kimiCodeHome = process.env.KIMI_CODE_HOME?.trim();
   const grokHome = process.env.GROK_HOME?.trim();
+  const appRuntime = process.env.OCX_APP_RUNTIME === "1";
   const args = buildLaunchdArguments(cli);
   const envLines = [
     `    <key>OCX_SERVICE</key><string>1</string>`,
     `    <key>${BUN_RUNTIME_SOURCE_ENV}</key><string>${bunRuntimeSource}</string>`,
     `    <key>${BUN_RUNTIME_PATH_ENV}</key><string>${plistString(bun)}</string>`,
     `    <key>OCX_API_TOKEN_FILE</key><string>${plistString(serviceApiTokenFilePath())}</string>`,
+    appRuntime ? `    <key>OCX_APP_RUNTIME</key><string>1</string>` : null,
     `    <key>PATH</key><string>${plistString(path)}</string>`,
     codexHome ? `    <key>CODEX_HOME</key><string>${plistString(codexHome)}</string>` : null,
     opencodexHome ? `    <key>OPENCODEX_HOME</key><string>${plistString(opencodexHome)}</string>` : null,

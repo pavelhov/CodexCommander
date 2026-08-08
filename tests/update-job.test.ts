@@ -64,6 +64,21 @@ describe("GUI update check", () => {
     expect(result.command).toBe("git pull && bun install && bun run build:gui");
   });
 
+  test("reports app-owned runtimes as signed-bundle replacement only", () => {
+    let latestCalls = 0;
+    const result = checkForUpdate("latest", {
+      currentVersion: () => "2.6.17",
+      detectInstall: () => "app",
+      latestVersion: () => { latestCalls += 1; return "2.6.18"; },
+    });
+
+    expect(latestCalls).toBe(0);
+    expect(result.canUpdate).toBe(false);
+    expect(result.updateAvailable).toBe(false);
+    expect(result.reason).toBe("app_bundle_update_required");
+    expect(result.command).toBe("Open the latest OpenCodex.app release");
+  });
+
   test("handles registry lookup failures without claiming an update", () => {
     const result = checkForUpdate("latest", {
       currentVersion: () => "2.6.17",
@@ -106,6 +121,16 @@ describe("GUI update check", () => {
 });
 
 describe("GUI update execution decisions", () => {
+  test("app-owned updates never produce a package-manager command", () => {
+    expect(updateCommand("app", "latest")).toEqual({ bin: "", args: [] });
+    expect(updateCommandStr("app", "latest")).toBe("Open the latest OpenCodex.app release");
+    expect(updateExecutionCommand("app", "latest")).toMatchObject({
+      bin: "",
+      args: [],
+      display: "Open the latest OpenCodex.app release",
+    });
+  });
+
   test("npm worker uses the Node launcher update path", () => {
     const cmd = updateExecutionCommand("npm", "preview", "/pkg/bin/ocx.mjs");
     expect(cmd.bin).toMatch(/^node/);

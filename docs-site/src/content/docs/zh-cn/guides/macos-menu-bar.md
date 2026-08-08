@@ -9,19 +9,25 @@ macOS 伴侣会在菜单栏中显示最有用的 OpenCodex 状态，同时不会
 
 ## 安装
 
-1. 按照常规方式安装并启动 OpenCodex。
-2. 从对应的 GitHub 发行版下载 <code>OpenCodex-&lt;version&gt;-macos-universal.zip</code> 及其
+1. 从对应的 GitHub 发行版下载 <code>OpenCodex-&lt;version&gt;-macos-universal.zip</code> 及其
    <code>.sha256</code> 文件。
-3. 验证归档文件：
+2. 验证归档文件：
 
        shasum -a 256 -c OpenCodex-<version>-macos-universal.zip.sha256
 
-4. 解压，然后将 <code>OpenCodex.app</code> 移到**应用程序**。
-5. 打开该应用。其图标会出现在菜单栏中；它不会添加 Dock 图标。从稳定位置首次启动时会启用
+3. 解压，然后将 <code>OpenCodex.app</code> 移到**应用程序**。
+4. 打开该应用。应用已包含 Bun 运行时、代理、生产依赖和仪表板资源，因此无需另行安装 npm、Bun 或
+   <code>ocx</code>。其图标会出现在菜单栏中；它不会添加 Dock 图标。从稳定位置首次启动时会启用
    **Launch at Login**。
+
+内置运行时继续使用现有用户状态 <code>~/.opencodex</code> 和 <code>~/.codex</code>，不会将凭据复制到
+应用包或 Keychain。提供商 OAuth 和 API 密钥仍在本地仪表板中配置。
 
 在发行版使用 Developer ID 签名并完成公证之前，macOS 可能会阻止首次启动下载的应用。按住
 Control 键点按该应用，选择**打开**，然后确认**打开**。本地构建不会带有下载文件的隔离属性。
+
+内置运行时为只读。更新时应替换为最新签名的 <code>OpenCodex.app</code>；npm、Bun 或源码更新不会
+修改已签名的 <code>Contents/Resources</code>。
 
 ## 启动模式
 

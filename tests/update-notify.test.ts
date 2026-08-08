@@ -7,6 +7,8 @@ import {
   isNewer,
   isSourceBuildVersion,
   readVersionCache,
+  refreshVersionCache,
+  shouldConsider,
   writeVersionCache,
   type VersionCache,
 } from "../src/update/notify";
@@ -143,5 +145,24 @@ describe("cli wiring", () => {
     const cli = await readText("src/cli/index.ts");
     expect(cli).toContain("case \"__refresh-version\"");
     expect(cli).toContain("refreshVersionCache");
+  });
+
+  test("app-owned runtime never prompts or refreshes the npm version cache", async () => {
+    const previousMarker = process.env.OCX_APP_RUNTIME;
+    const previousStdinTTY = process.stdin.isTTY;
+    const previousStdoutTTY = process.stdout.isTTY;
+    process.env.OCX_APP_RUNTIME = "1";
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+    try {
+      expect(shouldConsider()).toBeNull();
+      await refreshVersionCache("latest");
+      expect(readVersionCache("latest")).toBeNull();
+    } finally {
+      if (previousMarker === undefined) delete process.env.OCX_APP_RUNTIME;
+      else process.env.OCX_APP_RUNTIME = previousMarker;
+      Object.defineProperty(process.stdin, "isTTY", { value: previousStdinTTY, configurable: true });
+      Object.defineProperty(process.stdout, "isTTY", { value: previousStdoutTTY, configurable: true });
+    }
   });
 });

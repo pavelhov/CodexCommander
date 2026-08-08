@@ -130,7 +130,10 @@ function interactiveGuardOk(): boolean {
  * real global install, a non-source version, and an interactive TTY session.
  */
 export function shouldConsider(): { channel: Channel; current: string } | null {
-  if (detectInstall() === "source") return null;
+  const installer = detectInstall();
+  // App-owned Resources are signed and immutable. Their update path is app
+  // replacement, so do not query npm or offer a package-manager prompt.
+  if (installer === "source" || installer === "app") return null;
   const current = currentVersion();
   if (current === "?" || isSourceBuildVersion(current)) return null;
   if (!interactiveGuardOk()) return null;
@@ -183,6 +186,8 @@ export function triggerBackgroundRefreshIfStale(channel: Channel, cache: Version
  * a failed fetch retries on the next start.
  */
 export async function refreshVersionCache(channel: Channel): Promise<void> {
+  const installer = detectInstall();
+  if (installer === "app" || installer === "source") return;
   const latest = latestVersion(channel);
   if (!latest) return; // do not dirty the cache or advance the timestamp
   const prev = readVersionCache(channel);

@@ -24,11 +24,17 @@ export function historyRestoreIncomplete(configDir = getConfigDir()): boolean {
 export const PKG = "@bitkyc08/opencodex";
 const HERE = dirname(fileURLToPath(import.meta.url)); // .../opencodex/src/update
 
-export type Installer = "bun" | "npm" | "source";
+export type Installer = "bun" | "npm" | "source" | "app";
 export type Channel = "latest" | "preview";
 
 /** Infer how opencodex is installed from the running module's path. */
 export function detectInstall(): Installer {
+  // LifecycleHelper persists this marker into launchd, but path detection keeps
+  // an app-owned service safe if it was installed before the marker existed.
+  if (
+    process.env.OCX_APP_RUNTIME === "1"
+    || /[\\/]Contents[\\/]Resources[\\/]runtime[\\/]/.test(HERE)
+  ) return "app";
   if (!HERE.includes("node_modules")) return "source"; // a git checkout, not a global install
   return HERE.includes(".bun") ? "bun" : "npm";
 }
@@ -99,6 +105,7 @@ export function latestVersion(tag: string): string | null {
 
 /** The global-install command opencodex would run to update on this channel. */
 export function updateCommand(installer: Installer, tag: Channel, resolvedVersion?: string | null): { bin: string; args: string[] } {
+  if (installer === "app") return { bin: "", args: [] };
   const bin = installer === "bun" ? "bun" : "npm";
   // Immutable target: when the registry resolved a concrete version, install exactly
   // that version — the dist-tag can move between resolution and install (TOCTOU).
@@ -111,6 +118,7 @@ export function updateCommand(installer: Installer, tag: Channel, resolvedVersio
 
 /** Human-readable form of {@link updateCommand}, used in the update prompt label. */
 export function updateCommandStr(installer: Installer, tag: Channel, resolvedVersion?: string | null): string {
+  if (installer === "app") return "Open the latest OpenCodex.app release";
   const { bin, args } = updateCommand(installer, tag, resolvedVersion);
   return `${bin} ${args.join(" ")}`;
 }
@@ -156,6 +164,11 @@ export async function runUpdate(): Promise<void> {
 
   if (installer === "source") {
     console.log("Running from a source checkout — update with:  git pull && bun install");
+    return;
+  }
+  if (installer === "app") {
+    console.log("This OpenCodex runtime is owned by the application bundle.");
+    console.log("Update by installing the latest signed OpenCodex.app release; Resources are never modified in place.");
     return;
   }
 

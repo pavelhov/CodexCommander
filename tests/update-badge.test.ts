@@ -5,7 +5,7 @@ import type { VersionCache } from "../src/update/notify";
 
 function deps(overrides: {
   current?: string;
-  installer?: "npm" | "bun" | "source";
+  installer?: "npm" | "bun" | "source" | "app";
   cache?: VersionCache | null;
 }): UpdateBadgeDeps {
   return {
@@ -36,6 +36,13 @@ describe("readUpdateBadge", () => {
     const badge = readUpdateBadge(deps({ installer: "source", cache: cache("9.9.9") }));
     expect(badge.updateAvailable).toBe(false);
     expect(badge.canUpdate).toBe(false);
+  });
+
+  test("an app-owned runtime requires replacing the signed app bundle", () => {
+    const badge = readUpdateBadge(deps({ installer: "app", cache: cache("9.9.9") }));
+    expect(badge.updateAvailable).toBe(false);
+    expect(badge.canUpdate).toBe(false);
+    expect(badge.unknown).toBe(false);
   });
 
   test("a source build version is treated the same way", () => {

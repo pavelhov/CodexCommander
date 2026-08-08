@@ -3,9 +3,9 @@ set -euo pipefail
 
 # Wraps OpenCodex.app for distribution.
 #
-# Every step is an assertion rather than a hope: a release asset that is produced but
-# empty, unsigned, or missing its executable is worse than no asset at all, because the
-# failure surfaces on the user's machine instead of in CI.
+# Every step is an assertion rather than a hope: structurally valid ad-hoc archives may be
+# retained as CI/test artifacts, but only a Developer ID-signed, Gatekeeper-accepted, stapled
+# archive may be marked ready for public distribution.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
@@ -46,22 +46,58 @@ OUTPUT_DIR="$build_root" UNIVERSAL="$universal" CONFIGURATION=release \
 
 app_bundle="$build_root/OpenCodex.app"
 executable="$app_bundle/Contents/MacOS/OpenCodexMenuBar"
+runtime_root="$app_bundle/Contents/Resources/runtime"
+
+for required_path in \
+  "$runtime_root/package.json" \
+  "$runtime_root/src/cli/index.ts" \
+  "$runtime_root/gui/dist/index.html"; do
+  if [[ ! -e "$required_path" ]]; then
+    echo "Packaged app is missing required runtime resource: $required_path" >&2
+    exit 1
+  fi
+done
+if [[ ! -e "$runtime_root/node_modules/bun/bin/bun.exe" \
+   && ! -e "$runtime_root/node_modules/bun/bin/bun" ]]; then
+  echo "Packaged app is missing the bundled Bun runtime." >&2
+  exit 1
+fi
+runtime_bun="$runtime_root/node_modules/bun/bin/bun.exe"
+[[ -e "$runtime_bun" ]] || runtime_bun="$runtime_root/node_modules/bun/bin/bun"
+runtime_architectures="$(lipo -archs "$runtime_bun")"
+if [[ "$universal" == "1" ]]; then
+  for required_arch in arm64 x86_64; do
+    if [[ " $runtime_architectures " != *" $required_arch "* ]]; then
+      echo "Universal app is missing $required_arch in bundled Bun (got: $runtime_architectures)" >&2
+      exit 1
+    fi
+  done
+fi
 
 codesign --verify --deep --strict --verbose=2 "$app_bundle"
 
-# Report the Gatekeeper verdict rather than discovering it on a user's machine. An
-# ad-hoc build is expected to be rejected; that is documented, not a packaging failure.
-# A build that claimed a real identity and STILL fails assessment is a failure.
-if spctl --assess --type execute "$app_bundle" >/dev/null 2>&1; then
-  echo "==> Gatekeeper: accepted" >&2
-else
-  if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
-    echo "Signed with $MACOS_SIGN_IDENTITY but Gatekeeper still rejects the bundle." >&2
-    echo "It likely needs notarization (notarytool) and a stapled ticket." >&2
-    exit 1
+# A public distribution attachment is ready only when a real Developer ID identity,
+# Gatekeeper assessment, and stapled notarization ticket all pass. Ad-hoc archives remain
+# useful Actions/test artifacts, but are never marked ready for public release attachment.
+distribution_ready=false
+if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
+  signature_detail="$(codesign --display --verbose=4 "$app_bundle" 2>&1 || true)"
+  if ! grep -Fq 'Authority=Developer ID Application:' <<< "$signature_detail"; then
+    echo "==> Signature is not a Developer ID Application identity; archive is not distribution-ready." >&2
+  elif spctl --assess --type execute "$app_bundle" >/dev/null 2>&1; then
+    echo "==> Gatekeeper: accepted" >&2
+    if xcrun stapler validate "$app_bundle" >/dev/null 2>&1; then
+      distribution_ready=true
+      echo "==> Stapler: validated" >&2
+    else
+      echo "==> Stapler: validation failed; archive is not distribution-ready." >&2
+    fi
+  else
+    echo "==> Gatekeeper: rejected for $MACOS_SIGN_IDENTITY; archive is not distribution-ready." >&2
   fi
+else
   echo "==> Gatekeeper: rejected (expected for an ad-hoc signature)." >&2
-  echo "    Users must right-click > Open on first launch; this is documented." >&2
+  echo "    Users must right-click > Open on first launch; archive is an Actions/test artifact only." >&2
 fi
 
 architectures="$(lipo -archs "$executable")"
@@ -96,6 +132,15 @@ if ! grep -Fqx 'OpenCodex.app/Contents/MacOS/OpenCodexMenuBar' <<< "$archive_ent
   printf '%s\n' "$archive_entries" | head -20 >&2
   exit 1
 fi
+for required_entry in \
+  'OpenCodex.app/Contents/Resources/runtime/package.json' \
+  'OpenCodex.app/Contents/Resources/runtime/src/cli/index.ts' \
+  'OpenCodex.app/Contents/Resources/runtime/gui/dist/index.html'; do
+  if ! grep -Fqx "$required_entry" <<< "$archive_entries"; then
+    echo "Packaged archive does not contain required runtime resource: $required_entry" >&2
+    exit 1
+  fi
+done
 
 (
   cd "$output_dir"
@@ -106,8 +151,10 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   {
     echo "archive_name=$archive_name"
     echo "checksum_name=$checksum_name"
+    echo "distribution_ready=$distribution_ready"
   } >> "$GITHUB_OUTPUT"
 fi
 
+echo "distribution_ready=$distribution_ready"
 echo "$archive_path"
 echo "$checksum_path"

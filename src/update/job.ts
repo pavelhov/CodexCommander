@@ -272,6 +272,9 @@ export function updateExecutionCommand(
   launcher = packageLauncherPath(),
   resolvedVersion?: string | null,
 ): { bin: string; args: string[]; display: string } {
+  if (installer === "app") {
+    return { bin: "", args: [], display: "Open the latest OpenCodex.app release" };
+  }
   if (installer === "npm") {
     const bin = nodeBin();
     const args = [launcher, "update", "--tag", channel];
@@ -295,6 +298,9 @@ export function restartCommand(
   port?: number,
   serviceArgs?: string[],
 ): { mode: "service" | "proxy"; bin: string; args: string[]; display: string } {
+  if (installer === "app") {
+    return { mode: serviceInstalled ? "service" : "proxy", bin: "", args: [], display: "Open the latest OpenCodex.app release" };
+  }
   const mode = serviceInstalled ? "service" : "proxy";
   const pinPort = !serviceInstalled && typeof port === "number" && Number.isFinite(port) && port > 0;
   const startArgs = pinPort
@@ -323,7 +329,7 @@ export function checkForUpdate(
   const current = deps.currentVersion();
   const installer = deps.detectInstall();
   const channel = requestedChannel ?? normalizeUpdateChannel(null, current);
-  const latest = installer === "source" ? null : deps.latestVersion(channel);
+  const latest = installer === "source" || installer === "app" ? null : deps.latestVersion(channel);
   const updateAvailable = !!latest && isNewer(latest, current, channel);
   let reason: string | undefined;
   let command = installer === "source" ? manualSourceCommand() : updateExecutionCommand(installer, channel).display;
@@ -331,6 +337,9 @@ export function checkForUpdate(
   if (installer === "source") {
     reason = "source_checkout";
     command = manualSourceCommand();
+  } else if (installer === "app") {
+    reason = "app_bundle_update_required";
+    command = "Open the latest OpenCodex.app release";
   } else if (!latest) {
     reason = "latest_unavailable";
   } else if (!updateAvailable) {
@@ -343,7 +352,7 @@ export function checkForUpdate(
     channel,
     installer,
     updateAvailable,
-    canUpdate: installer !== "source" && updateAvailable,
+    canUpdate: installer !== "source" && installer !== "app" && updateAvailable,
     command,
     releaseNotesUrl: RELEASE_NOTES_URL,
     ...(reason ? { reason } : {}),
