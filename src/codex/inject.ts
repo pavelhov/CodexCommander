@@ -127,6 +127,12 @@ export interface InjectCodexOptions {
    * caller that is willing to wait can raise it.
    */
   lockTimeoutMs?: number;
+  /**
+   * Preserve-only guard for a caller that already observed an external
+   * model_provider. If that exact provider is no longer active when the config
+   * is re-read, refuse before any native injection or journal mutation.
+   */
+  expectedExternalProvider?: string;
 }
 
 function configuredManagedSubagentDefaults(
@@ -639,6 +645,15 @@ export async function injectCodexConfig(
 
   const rawContent = readFileSync(CODEX_CONFIG_PATH, "utf-8");
   const activeProvider = externalCodexModelProvider(rawContent);
+  if (
+    options.expectedExternalProvider !== undefined
+    && activeProvider !== options.expectedExternalProvider
+  ) {
+    return {
+      success: false,
+      message: "Codex external model_provider changed before it could be preserved; no files were changed.",
+    };
+  }
   if (activeProvider) {
     // A launcher may have journaled before the provider manager took ownership. Never let shutdown
     // replay that stale snapshot over externally managed config.

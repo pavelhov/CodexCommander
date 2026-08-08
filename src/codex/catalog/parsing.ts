@@ -457,3 +457,32 @@ export function readNativeBaseline(catalogPath: string): Map<string, number> {
   }
   return out;
 }
+
+/**
+ * Fixed OpenCodex-owned last-known-good snapshot of OpenCodex-authored routed
+ * catalog rows, kept under OPENCODEX_HOME (getConfigDir) rather than inside the
+ * Codex-owned catalog file. It is persisted only after a successful LIVE routed
+ * sync and is never overwritten or deleted by an empty or failed gather, so a
+ * stop-like native restore followed by a transient provider outage can rehydrate
+ * the routed rows for providers that are still configured instead of silently
+ * leaving Codex native-only.
+ */
+export function retainedRoutedCatalogPath(): string {
+  return join(getConfigDir(), "codex-routed-retained.json");
+}
+
+/** Read the retained routed snapshot; null when absent or malformed. */
+export function readRetainedRoutedCatalog(): RawCatalog | null {
+  return readCatalog(retainedRoutedCatalogPath());
+}
+
+/**
+ * Atomically persist routed rows (mode-600 via atomicWriteFile, which also
+ * records the write in the OpenCodex config ownership ledger).
+ */
+export function writeRetainedRoutedCatalog(models: RawEntry[]): void {
+  const path = retainedRoutedCatalogPath();
+  const dir = dirname(path);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  atomicWriteFile(path, `${JSON.stringify({ models }, null, 2)}\n`);
+}

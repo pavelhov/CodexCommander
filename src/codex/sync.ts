@@ -7,12 +7,13 @@ import { collectOrcaCodexHomeDiagnostic } from "./home";
 import { summarizeComboCatalogOmissions, type ComboCatalogOmission } from "./catalog/aggregation";
 import { shouldSyncCodexOnStart } from "./desired-state";
 import { admitCodexWrite, type CodexAdmission } from "./admission";
+import { hasRoutedCapableProviders, type CatalogQuality } from "./catalog/sync";
 
 export interface CodexSyncResult {
   /** `skipped` is policy truth, never evidence that Codex was written. */
   status: "applied" | "skipped" | "refused";
   ok: boolean;
-  skippedReason?: "desired_disabled";
+  skippedReason?: "desired_disabled" | "external_provider";
   /** Present when unattended convergence refused another service's native home. */
   authority?: "service-home";
   added: number;
@@ -20,6 +21,15 @@ export interface CodexSyncResult {
   catalogExists: boolean;
   catalogWritten: boolean;
   cacheSynced: boolean;
+  /**
+   * Where the routed rows in the active Codex catalog came from: `live` (gathered
+   * from providers), `retained` (rehydrated from the OpenCodex-owned last-known-good
+   * snapshot), or `native-only` (no OpenCodex-routed rows). `native-only` while
+   * routed providers are configured carries an actionable `warning`.
+   */
+  catalogQuality: CatalogQuality;
+  /** Routed rows rehydrated from the retained last-known-good snapshot this sync. */
+  rehydrated: number;
   message: string;
   warning?: string;
   comboOmissions?: ComboCatalogOmission[];
@@ -77,12 +87,41 @@ export async function syncModelsToCodex(
       catalogExists: false,
       catalogWritten: false,
       cacheSynced: false,
+      catalogQuality: "native-only",
+      rehydrated: 0,
       message: "Codex integration is OFF; no Codex config, catalog, cache, or history was changed.",
     };
   }
-  // Catalog gathering precedes injection and can itself write the native
+  const p = port ?? config.port ?? 10100;
+  const externalProvider = (deps.currentExternalCodexModelProvider ?? currentExternalCodexModelProvider)();
+  if (externalProvider) {
+    const result = await deps.injectCodexConfig(p, config, {
+      expectedExternalProvider: externalProvider,
+    });
+    log?.log(result.message);
+    reportCodexHomeTarget(log, deps.collectCodexHomeDiagnostic ?? collectOrcaCodexHomeDiagnostic);
+    return {
+      status: result.success ? "skipped" : "refused",
+      ...(result.success ? { skippedReason: "external_provider" as const } : {}),
+      ok: result.success,
+      added: 0,
+      catalogPath: null,
+      catalogExists: false,
+      catalogWritten: false,
+      cacheSynced: false,
+      catalogQuality: "native-only",
+      rehydrated: 0,
+      message: result.message,
+      ...(result.nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning: result.nativeSubagentDefaultsWarning } : {}),
+    };
+  }
+
+  // Catalog gathering precedes direct injection and can itself write the native
   // catalog/cache. It therefore needs the same unattended service-home veto as
-  // the injector, before it gets a chance to create any artifact.
+  // the injector, before it gets a chance to create any artifact. An explicitly
+  // external model_provider is handled above: that path preserves its owner and
+  // never enters catalog publication, so a machine-global service-manager claim
+  // must not turn the no-op into a false ownership refusal.
   const admission = (deps.admitCodexWrite ?? admitCodexWrite)();
   if (admission.kind === "refused" && admission.authority === "service-home") {
     return {
@@ -94,25 +133,9 @@ export async function syncModelsToCodex(
       catalogExists: false,
       catalogWritten: false,
       cacheSynced: false,
+      catalogQuality: "native-only",
+      rehydrated: 0,
       message: admission.message,
-    };
-  }
-  const p = port ?? config.port ?? 10100;
-  const externalProvider = (deps.currentExternalCodexModelProvider ?? currentExternalCodexModelProvider)();
-  if (externalProvider) {
-    const result = await deps.injectCodexConfig(p, config, {});
-    log?.log(result.message);
-    reportCodexHomeTarget(log, deps.collectCodexHomeDiagnostic ?? collectOrcaCodexHomeDiagnostic);
-    return {
-      status: "applied",
-      ok: result.success,
-      added: 0,
-      catalogPath: null,
-      catalogExists: false,
-      catalogWritten: false,
-      cacheSynced: false,
-      message: result.message,
-      ...(result.nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning: result.nativeSubagentDefaultsWarning } : {}),
     };
   }
 
@@ -123,6 +146,8 @@ export async function syncModelsToCodex(
   let catalogExists = false;
   let catalogWritten = false;
   let cacheSynced = false;
+  let catalogQuality: CatalogQuality = "native-only";
+  let rehydrated = 0;
   let warning: string | undefined;
   let comboOmissions: ComboCatalogOmission[] = [];
 
@@ -132,14 +157,34 @@ export async function syncModelsToCodex(
     catalogExists = cat.catalogExists;
     catalogWritten = cat.catalogWritten;
     cacheSynced = cat.cacheSynced;
+    catalogQuality = cat.catalogQuality;
+    rehydrated = cat.rehydrated;
     catalogPathForInjection = cat.catalogExists ? cat.path : null;
     catalogPath = catalogPathForInjection;
     comboOmissions = cat.comboOmissions ?? [];
     if (cat.added > 0) {
       log?.log(`   + ${cat.added} models appended to Codex catalog (${cat.path})`);
+    } else if (cat.rehydrated > 0) {
+      log?.log(`   + ${cat.rehydrated} routed models restored from the retained snapshot (${cat.path})`);
     } else if (!cat.catalogExists) {
       warning = "catalog sync skipped: no Codex catalog source found; keeping Codex's native catalog.";
       log?.error(warning);
+    }
+    // A native-only commit while routed providers are configured is a degraded
+    // state, not a success: the live gather returned nothing and there was no
+    // retained snapshot to fall back on. Surface it so the readiness gate and
+    // /api/sync consumers can act instead of reporting a false fully-ready sync.
+    if (
+      cat.catalogQuality === "native-only"
+      && cat.catalogWritten
+      && cat.skippedReason !== "desired_disabled"
+      && hasRoutedCapableProviders(config)
+    ) {
+      const nativeOnly =
+        "catalog sync produced no routed models (Codex left native-only) while routed providers are configured; "
+        + "provider discovery returned nothing. Retry with 'ocx sync' or check provider connectivity.";
+      warning = warning ? `${warning} ${nativeOnly}` : nativeOnly;
+      log?.error(nativeOnly);
     }
     if (comboOmissions.length > 0) {
       // Individual omission lines already went through console.warn during gather;
@@ -165,6 +210,8 @@ export async function syncModelsToCodex(
       catalogExists: false,
       catalogWritten: false,
       cacheSynced: false,
+      catalogQuality: "native-only",
+      rehydrated: 0,
       message: result.message,
     };
   }
@@ -179,6 +226,8 @@ export async function syncModelsToCodex(
     catalogExists,
     catalogWritten,
     cacheSynced,
+    catalogQuality,
+    rehydrated,
     message: result.message,
     ...(warning ? { warning } : {}),
     ...(comboOmissions.length > 0 ? { comboOmissions } : {}),

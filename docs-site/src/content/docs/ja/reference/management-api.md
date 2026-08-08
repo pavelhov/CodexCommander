@@ -92,7 +92,7 @@ Authorization: Bearer <admin-token>
 | `POST /api/startup-action` |サービスまたは Codex シムをインストールまたは修復する | 400 無効なアクション。 500 アクション失敗 |
 | `GET, POST /api/windows-tray` | Windows トレイの状態を読み取るか、インストール/起動/停止/アンインストールする | 400 のサポートされていないプラットフォーム/アクション。 500 操作失敗 |
 | `GET /api/diagnostics/project-config` |キャッシュされたプロジェクト設定の読み取りに関する警告 | — |
-| `POST /api/sync` |現在のモデル カタログを Codex に同期する | 500 回の同期に失敗しました |
+| `POST /api/sync` | 現在のモデルカタログを Codex に同期し、`catalogQuality`、`rehydrated`、Codex app-server の `catalogState`、必要な再起動ヒントを返す | 409 書き込み権限の拒否、500 同期失敗 |
 | `GET /api/update/check` | `latest` または `preview` 更新チャネルを確認してください。 400 無効なタグ |
 | `POST /api/update/run` |更新ジョブを開始し、必要に応じて再起動します。 400 無効な本文。ジョブ固有の競合/エラーのステータス |
 | `GET /api/update/status` | ID によって更新ジョブをポーリングする | 404 不明なジョブ |

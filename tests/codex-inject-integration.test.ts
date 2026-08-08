@@ -14,16 +14,31 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 
 // Full injectCodexConfig runs in a subprocess with isolated CODEX_HOME/OPENCODEX_HOME so
 // module-level path constants bind to the temp dirs (same pattern as codex-journal.test.ts).
-function runInject(codexHome: string, ocxHome: string, configJson = "{}"): { stdout: string; status: number } {
+function runInject(
+  codexHome: string,
+  ocxHome: string,
+  configJson = "{}",
+  optionsJson = "{}",
+): { stdout: string; status: number } {
   const script = `
     const { injectCodexConfig } = require("./src/codex/inject");
-    injectCodexConfig(10100, JSON.parse(process.env.TEST_OCX_CONFIG)).then(r => {
+    injectCodexConfig(
+      10100,
+      JSON.parse(process.env.TEST_OCX_CONFIG),
+      JSON.parse(process.env.TEST_INJECT_OPTIONS),
+    ).then(r => {
       console.log(JSON.stringify(r));
     });
   `;
   const result = spawnSync(process.execPath, ["--eval", script], {
     cwd: repoRoot,
-    env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome, TEST_OCX_CONFIG: configJson },
+    env: {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      OPENCODEX_HOME: ocxHome,
+      TEST_OCX_CONFIG: configJson,
+      TEST_INJECT_OPTIONS: optionsJson,
+    },
     encoding: "utf8",
   });
   return { stdout: result.stdout?.trim() ?? "", status: result.status ?? 1 };
@@ -426,6 +441,27 @@ describe("injectCodexConfig integration (Design B)", () => {
    expect(readFileSync(rolloutPath, "utf8")).toBe(rollout);
    expect(existsSync(journalPath)).toBe(false);
  });
+
+  test("external-provider preservation refuses a changed provider before any write", () => {
+    const original = 'model_provider = "openai"\nmodel = "gpt-5.6-sol"\n';
+    writeFileSync(join(codexHome, "config.toml"), original, "utf8");
+
+    const r = runInject(
+      codexHome,
+      ocxHome,
+      "{}",
+      JSON.stringify({ expectedExternalProvider: "custom" }),
+    );
+
+    expect(r.status).toBe(0);
+    const result = JSON.parse(r.stdout);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("changed before it could be preserved");
+    expect(result.message).toContain("no files were changed");
+    expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
+    expect(existsSync(join(codexHome, "opencodex.config.toml"))).toBe(false);
+    expect(existsSync(join(codexHome, "opencodex-journal.json"))).toBe(false);
+  });
 
   // Regression for #1090: the reporter's Windows shape — CRLF line endings, an external
   // root model_provider, a coexisting [model_providers.opencodex] table, and a [windows]

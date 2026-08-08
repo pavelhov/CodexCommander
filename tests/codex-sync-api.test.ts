@@ -307,6 +307,61 @@ describe("GUI/CLI Codex sync backend", () => {
     expect(result.warning).toContain("catalog boom");
   });
 
+  test("native-only catalog quality is actionable when routed providers are configured", async () => {
+    const errors: string[] = [];
+    const result = await syncModelsToCodex(10100, config, {
+      log: () => {},
+      error: line => errors.push(String(line)),
+    }, {
+      admitCodexWrite: admittedSync,
+      refreshCodexModelCatalog: async () => ({
+        added: 0,
+        path: "/tmp/opencodex-catalog.json",
+        catalogExists: true,
+        catalogWritten: true,
+        cacheSynced: true,
+        comboOmissions: [],
+        catalogQuality: "native-only",
+        rehydrated: 0,
+      }),
+      injectCodexConfig: async () => ({ success: true, message: "injected" }),
+      currentExternalCodexModelProvider: () => null,
+      collectCodexHomeDiagnostic: () => homeDiagnostic(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.catalogQuality).toBe("native-only");
+    expect(result.warning).toContain("Codex left native-only");
+    expect(result.warning).toContain("ocx sync");
+    expect(errors.join("\n")).toContain("provider discovery returned nothing");
+  });
+
+  test("retained catalog quality is converged without a native-only warning", async () => {
+    const result = await syncModelsToCodex(10100, config, null, {
+      admitCodexWrite: admittedSync,
+      refreshCodexModelCatalog: async () => ({
+        added: 0,
+        path: "/tmp/opencodex-catalog.json",
+        catalogExists: true,
+        catalogWritten: true,
+        cacheSynced: true,
+        comboOmissions: [],
+        catalogQuality: "retained",
+        rehydrated: 2,
+      }),
+      injectCodexConfig: async () => ({ success: true, message: "injected" }),
+      currentExternalCodexModelProvider: () => null,
+      collectCodexHomeDiagnostic: () => homeDiagnostic(),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      catalogQuality: "retained",
+      rehydrated: 2,
+    });
+    expect(result.warning).toBeUndefined();
+  });
+
   test("returns native subagent default conflicts as structured warnings", async () => {
     const result = await syncModelsToCodex(10100, config, null, {
       admitCodexWrite: admittedSync,
@@ -370,6 +425,7 @@ describe("GUI/CLI Codex sync backend", () => {
   test("skips catalog refresh before preserving an external provider", async () => {
     let refreshed = false;
     let injectedCatalogPath: string | null | undefined = "unset";
+    let expectedExternalProvider: string | undefined;
     const logs: string[] = [];
     const errors: string[] = [];
     const mismatch = homeDiagnostic({
@@ -381,13 +437,14 @@ describe("GUI/CLI Codex sync backend", () => {
       action: "migrate the installed service",
     });
     const result = await syncModelsToCodex(10100, config, { log: line => logs.push(String(line)), error: line => errors.push(String(line)) }, {
-      admitCodexWrite: admittedSync,
+      admitCodexWrite: () => { throw new Error("external providers must not enter write admission"); },
       refreshCodexModelCatalog: async () => {
         refreshed = true;
         throw new Error("must not refresh");
       },
       injectCodexConfig: async (_port, _config, options) => {
         injectedCatalogPath = options.catalogPath;
+        expectedExternalProvider = options.expectedExternalProvider;
         return { success: true, message: "external provider preserved" };
       },
       currentExternalCodexModelProvider: () => "custom",
@@ -396,14 +453,18 @@ describe("GUI/CLI Codex sync backend", () => {
 
     expect(refreshed).toBe(false);
     expect(injectedCatalogPath).toBeUndefined();
+    expect(expectedExternalProvider).toBe("custom");
     expect(result).toEqual({
-      status: "applied",
+      status: "skipped",
+      skippedReason: "external_provider",
       ok: true,
       added: 0,
       catalogPath: null,
       catalogExists: false,
       catalogWritten: false,
       cacheSynced: false,
+      catalogQuality: "native-only",
+      rehydrated: 0,
       message: "external provider preserved",
     });
     expect(logs).toContain(`   Target Codex home: ${mismatch.effectiveCodexHome}`);

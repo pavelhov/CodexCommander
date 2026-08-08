@@ -108,7 +108,7 @@ GUI-сессия в стиле loopback не выпускается.
 | `POST /api/startup-action` | Установить или починить службу или Codex shim | 400 invalid action; 500 action failure |
 | `GET, POST /api/windows-tray` | Прочитать состояние Windows tray или установить/запустить/остановить/удалить её | 400 unsupported platform/action; 500 operation failure |
 | `GET /api/diagnostics/project-config` | Прочитать кэшированные предупреждения project config | — |
-| `POST /api/sync` | Синхронизировать текущий каталог моделей в Codex | 500 failed sync |
+| `POST /api/sync` | Синхронизировать каталог моделей в Codex; возвращает `catalogQuality`, `rehydrated`, `catalogState` app-server и подсказку о перезапуске | 409 отказ в праве записи; 500 ошибка синхронизации |
 | `GET /api/update/check` | Проверить канал обновлений `latest` или `preview` | 400 invalid tag |
 | `POST /api/update/run` | Запустить update job, при желании с последующим restart | 400 invalid body; job-specific conflict/error status |
 | `GET /api/update/status` | Опрашивать update job по id | 404 unknown job |

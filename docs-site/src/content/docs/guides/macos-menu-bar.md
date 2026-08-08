@@ -176,6 +176,11 @@ making a final distributable bundle.
   not expose a quota API.
 - **Restart did not recover** — open **Logs** and use the app's status panel. The companion never
   kills a process or rewrites service state as a fallback.
+- **Only native models appear after a stop, update, or cold start** — reopen OpenCodex or use
+  <code>ocx sync</code>. Startup restores still-configured routed models from its protected
+  last-known-good catalog when live provider discovery is temporarily empty. If the panel says the
+  catalog was restored but ChatGPT is still using its previous catalog, restart ChatGPT once; the
+  companion does not terminate it automatically.
 
 ## Uninstall
 

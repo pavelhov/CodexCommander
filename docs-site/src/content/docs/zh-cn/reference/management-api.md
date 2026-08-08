@@ -92,7 +92,7 @@ Authorization: Bearer <admin-token>
 | `POST /api/startup-action` | 安装或修复服务或 Codex shim | 400 无效动作；500 动作失败 |
 | `GET, POST /api/windows-tray` | 读取 Windows 托盘状态，或安装、启动、停止、卸载它 | 400 不支持的平台/动作；500 操作失败 |
 | `GET /api/diagnostics/project-config` | 读取缓存的项目配置警告 | — |
-| `POST /api/sync` | 将当前模型目录同步到 Codex | 500 同步失败 |
+| `POST /api/sync` | 将当前模型目录同步到 Codex，并返回 `catalogQuality`、`rehydrated`、Codex app-server `catalogState` 和所需的重启提示 | 409 写入权限被拒绝；500 同步失败 |
 | `GET /api/update/check` | 检查 `latest` 或 `preview` 更新通道 | 400 无效标签 |
 | `POST /api/update/run` | 启动更新任务，可选随后重启 | 400 无效请求体；任务特定的冲突/错误状态 |
 | `GET /api/update/status` | 按 id 轮询更新任务 | 404 未知任务 |

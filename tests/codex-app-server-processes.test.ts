@@ -381,12 +381,13 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
     expect(syncCacheCase.replace(gatedBlock, "")).not.toContain("afterCatalogWriteHandleAppServers");
   });
 
-  test("POST /api/sync attaches staleAppServerHint only after a write and never enumerates processes", () => {
+  test("POST /api/sync attaches the current catalog state and never enumerates processes directly", () => {
     const syncHandler = configRoutesSource.slice(
       configRoutesSource.indexOf('url.pathname === "/api/sync"'),
       configRoutesSource.indexOf('url.pathname === "/api/update/check"'),
     );
     expect(syncHandler).toContain("attachStaleAppServerHint(result)");
+    expect(syncHandler).toContain("collectCodexAppServerCatalogState()");
     expect(syncHandler).not.toContain("listCodexAppServerProcesses");
     expect(syncHandler).not.toContain("afterCatalogWriteHandleAppServers");
     expect(STALE_CODEX_APP_SERVER_HINT).toContain("ocx sync --restart-codex");

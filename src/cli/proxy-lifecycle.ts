@@ -15,7 +15,6 @@ import {
 } from "../config";
 import { currentExternalCodexModelProvider, restoreNativeCodex } from "../codex/inject";
 import { reconcileJournal } from "../codex/journal";
-import { syncModelsToCodex } from "../codex/sync";
 import { stripGrokConfig } from "../grok/inject";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { stopProxy } from "../lib/process-control";
@@ -26,10 +25,16 @@ import {
   startServiceIfInstalled,
   stopServiceIfInstalled,
 } from "../service";
-import { findLiveProxy, type LiveProxy } from "../server/proxy-liveness";
+import {
+  findLiveProxy,
+  probeHostname,
+  probeReadiness,
+  type LiveProxy,
+} from "../server/proxy-liveness";
 import { acquireProxyEnsureLock } from "../server/proxy-start-lock";
 import { injectSystemEnv, revertSystemEnv } from "../server/system-env";
 import type { OcxConfig } from "../types";
+import { RuntimeApiError, runtimeRequest } from "./runtime-api";
 
 export type ProxyLifecycleAction = "status" | "ensure" | "start" | "stop" | "restart";
 export type ProxyLifecycleState = "running" | "stopped" | "disabled" | "blocked" | "failed";
@@ -43,7 +48,29 @@ export interface ProxyLifecycleResult {
   pid: number | null;
   port: number | null;
   message: string;
-  errorCode?: "AUTOSTART_DISABLED" | "SERVICE_BLOCKED" | "START_FAILED" | "STOP_FAILED";
+  errorCode?:
+    | "AUTOSTART_DISABLED"
+    | "SERVICE_BLOCKED"
+    | "START_FAILED"
+    | "STOP_FAILED"
+    | "SYNC_FAILED"
+    | "CODEX_RESTART_REQUIRED";
+}
+
+export type ProxyStartupReadiness = "ready" | "failed" | "legacy" | "timeout";
+
+export interface ProxyCatalogSyncOutcome {
+  status?: "applied" | "skipped" | "refused" | "failed";
+  ok: boolean;
+  skippedReason?: "desired_disabled" | "external_provider";
+  message?: string;
+  warning?: string;
+  catalogQuality?: "live" | "retained" | "native-only";
+  staleAppServerHint?: string;
+  catalogState?: {
+    state?: "fresh" | "stale" | "not_running" | "unknown";
+  };
+  lifecycleErrorCode?: "SYNC_FAILED" | "CODEX_RESTART_REQUIRED";
 }
 
 export interface ProxyLifecycleLogger {
@@ -72,7 +99,12 @@ export interface EnsureProxyLifecycleIo {
   startService?: () => boolean;
   spawnStart?: (port?: number, env?: NodeJS.ProcessEnv) => Promise<void>;
   waitForProxy?: (timeoutMs?: number) => Promise<LiveProxy | null>;
-  syncLive?: (live: LiveProxy, config: OcxConfig, logger: ProxyLifecycleLogger) => Promise<void>;
+  waitForReady?: (live: LiveProxy, timeoutMs?: number) => Promise<ProxyStartupReadiness>;
+  syncLive?: (
+    live: LiveProxy,
+    config: OcxConfig,
+    logger: ProxyLifecycleLogger,
+  ) => Promise<ProxyCatalogSyncOutcome | void>;
   ensureCompanion?: () => Promise<boolean>;
   reconcile?: () => void;
   acquireEnsureLock?: () => Promise<{ release(): void }>;
@@ -184,6 +216,36 @@ export async function waitForProxy(timeoutMs = 12_000): Promise<LiveProxy | null
   return null;
 }
 
+/**
+ * Let the proxy-owned startup convergence finish before asking it to converge
+ * again through the management plane. A live legacy proxy has no `/readyz`;
+ * three identity-adjacent misses classify that case quickly instead of spending
+ * the whole startup budget polling an endpoint it cannot serve.
+ */
+export async function waitForProxyReadiness(
+  live: LiveProxy,
+  timeoutMs = 20_000,
+): Promise<ProxyStartupReadiness> {
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+  let consecutiveMisses = 0;
+  while (Date.now() < deadline) {
+    const result = await probeReadiness(live.port, {
+      ...(live.hostname ? { hostname: live.hostname } : {}),
+      ...(live.pid ? { expectedPid: live.pid } : {}),
+    });
+    if (result?.status === "ready") return "ready";
+    if (result?.status === "failed") return "failed";
+    if (result === null) {
+      consecutiveMisses += 1;
+      if (consecutiveMisses >= 3) return "legacy";
+    } else {
+      consecutiveMisses = 0;
+    }
+    await Bun.sleep(200);
+  }
+  return "timeout";
+}
+
 /** Fixed LaunchServices argv for the repo-built companion (or a registered release app). */
 export function macOSCompanionOpenArguments(
   options: {
@@ -246,10 +308,33 @@ async function syncLiveProxy(
   live: LiveProxy,
   config: OcxConfig,
   logger: ProxyLifecycleLogger,
-): Promise<void> {
-  await syncModelsToCodex(live.port).catch(error => {
-    logger.warn(`Model sync skipped: ${error instanceof Error ? error.message : String(error)}`);
-  });
+): Promise<ProxyCatalogSyncOutcome> {
+  let catalogSync: ProxyCatalogSyncOutcome;
+  try {
+    catalogSync = await runtimeRequest<ProxyCatalogSyncOutcome>("/api/sync", {
+      method: "POST",
+      signal: AbortSignal.timeout(45_000),
+    }, {
+      baseUrl: `http://${probeHostname(live.hostname)}:${live.port}`,
+    });
+  } catch (error) {
+    const body = error instanceof RuntimeApiError && error.body && typeof error.body === "object"
+      ? error.body as Partial<ProxyCatalogSyncOutcome>
+      : null;
+    const runningProxyNeedsRestart = error instanceof RuntimeApiError && error.status === 404;
+    catalogSync = {
+      status: body?.status ?? "failed",
+      ok: false,
+      message: runningProxyNeedsRestart
+        ? "The running OpenCodex proxy must be restarted before its catalog can be synchronized."
+        : (typeof body?.message === "string" && body.message
+          ? body.message
+          : "OpenCodex is running, but its Codex model catalog did not synchronize."),
+      ...(typeof body?.warning === "string" ? { warning: body.warning } : {}),
+      lifecycleErrorCode: runningProxyNeedsRestart ? "CODEX_RESTART_REQUIRED" : "SYNC_FAILED",
+    };
+    logger.warn(catalogSync.message ?? "Model catalog sync failed.");
+  }
   await injectSystemEnv(live.port, config).catch(() => {});
   try {
     const { syncGrokConfig } = await import("../grok/sync");
@@ -263,6 +348,47 @@ async function syncLiveProxy(
   } catch (error) {
     logger.warn(`Grok Build config sync failed: ${error instanceof Error ? error.message : String(error)}`);
   }
+  return catalogSync;
+}
+
+function catalogSyncFailure(
+  result: ProxyCatalogSyncOutcome | void,
+): { errorCode: "SYNC_FAILED" | "CODEX_RESTART_REQUIRED"; message: string } | null {
+  // Test seams written before this contract returned void. Production always
+  // returns a structured result from the live management plane.
+  if (result === undefined) return null;
+  if (result.lifecycleErrorCode) {
+    return {
+      errorCode: result.lifecycleErrorCode,
+      message: result.message ?? "OpenCodex model catalog synchronization failed.",
+    };
+  }
+  const intentionalNativeOnly = result.status === "skipped"
+    && (result.skippedReason === "desired_disabled" || result.skippedReason === "external_provider")
+    && result.ok;
+  if (intentionalNativeOnly) return null;
+  if (
+    !result.ok
+    || result.status === "refused"
+    || (result.warning !== undefined && result.warning !== "")
+    || result.catalogQuality === "native-only"
+  ) {
+    return {
+      errorCode: "SYNC_FAILED",
+      message: result.message
+        ?? "OpenCodex is running, but its Codex model catalog did not converge. Run `ocx sync` and retry.",
+    };
+  }
+  if (
+    result.staleAppServerHint
+    || result.catalogState?.state === "stale"
+  ) {
+    return {
+      errorCode: "CODEX_RESTART_REQUIRED",
+      message: "Models were restored, but ChatGPT is still using its previous catalog. Restart ChatGPT to load the routed models.",
+    };
+  }
+  return null;
 }
 
 export async function proxyLifecycleStatus(
@@ -298,6 +424,7 @@ export async function ensureProxyLifecycle(
 
   let live = await findLive();
   let startedHere = false;
+  let syncProblem: ReturnType<typeof catalogSyncFailure> = null;
   if (!live && options.honorAutoStart && !codexAutoStartEnabled(config)) {
     return lifecycleResult(action, "disabled", {
       ok: true,
@@ -381,12 +508,31 @@ export async function ensureProxyLifecycle(
       }
       startedHere = true;
     }
-    await (io.syncLive ?? syncLiveProxy)(live, config, logger);
+    if (startedHere) {
+      const readiness = await (io.waitForReady ?? waitForProxyReadiness)(
+        live,
+        Math.min(options.waitTimeoutMs ?? 20_000, 20_000),
+      );
+      if (readiness !== "ready") {
+        logger.warn(`Startup catalog readiness was ${readiness}; retrying through the live proxy.`);
+      }
+    }
+    const syncResult = await (io.syncLive ?? syncLiveProxy)(live, config, logger);
+    syncProblem = catalogSyncFailure(syncResult);
   } finally {
     ensureLock.release();
   }
   if (options.ensureCompanion !== false) {
     await (io.ensureCompanion ?? ensureMacOSCompanionApp)().catch(() => false);
+  }
+  if (syncProblem) {
+    return lifecycleResult(action, "running", {
+      ok: false,
+      changed: startedHere,
+      live,
+      message: syncProblem.message,
+      errorCode: syncProblem.errorCode,
+    });
   }
   return lifecycleResult(action, "running", {
     ok: true,

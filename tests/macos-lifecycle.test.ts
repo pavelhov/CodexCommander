@@ -31,4 +31,22 @@ describe("macOS lifecycle JSON frame", () => {
     expect(Buffer.byteLength(encoded.frame, "utf8")).toBeLessThanOrEqual(MACOS_LIFECYCLE_JSON_MAX_BYTES);
     expect(JSON.parse(encoded.frame)).toMatchObject({ ok: false, state: "failed" });
   });
+
+  test("a live proxy with failed catalog convergence stays running in the bounded failure frame", () => {
+    const result: ProxyLifecycleResult = {
+      ...success("OpenCodex is running, but its Codex model catalog did not converge."),
+      action: "ensure",
+      ok: false,
+      state: "running",
+      errorCode: "SYNC_FAILED",
+    };
+    const encoded = encodeMacOSLifecycleResult("ensure", result);
+    expect(encoded.exitCode).toBe(1);
+    expect(Buffer.byteLength(encoded.frame, "utf8")).toBeLessThanOrEqual(MACOS_LIFECYCLE_JSON_MAX_BYTES);
+    expect(JSON.parse(encoded.frame)).toMatchObject({
+      ok: false,
+      state: "running",
+      errorCode: "SYNC_FAILED",
+    });
+  });
 });

@@ -92,7 +92,7 @@ Authorization: Bearer <admin-token>
 | `POST /api/startup-action` | 서비스 또는 Codex shim을 설치하거나 복구합니다 | 400 잘못된 작업; 500 작업 실패 |
 | `GET, POST /api/windows-tray` | Windows tray 상태를 읽거나 설치, 시작, 중지, 제거합니다 | 400 지원되지 않는 플랫폼/작업; 500 작업 실패 |
 | `GET /api/diagnostics/project-config` | 캐시된 프로젝트 구성 경고를 읽습니다 | — |
-| `POST /api/sync` | 현재 model catalog를 Codex에 동기화합니다 | 500 동기화 실패 |
+| `POST /api/sync` | 현재 모델 카탈로그를 Codex에 동기화하고 `catalogQuality`, `rehydrated`, Codex app-server `catalogState`, 필요한 재시작 힌트를 반환합니다 | 409 쓰기 권한 거부, 500 동기화 실패 |
 | `GET /api/update/check` | `latest` 또는 `preview` 업데이트 채널을 확인합니다 | 400 잘못된 태그 |
 | `POST /api/update/run` | 선택적으로 restart를 뒤따르게 할 수 있는 업데이트 작업을 시작합니다 | 400 잘못된 본문; 작업별 충돌/오류 상태 |
 | `GET /api/update/status` | id로 업데이트 작업을 조회합니다 | 404 알 수 없는 작업 |

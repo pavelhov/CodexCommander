@@ -197,6 +197,25 @@ enum ActionSuite {
             )
         }
 
+        t.test("lifecycle: a live proxy with an unconverged catalog is surfaced as failure") {
+            let lifecycle = FakeLifecycleRunner(results: [
+                LifecycleCommandResult(
+                    action: .ensure, ok: false, state: .running,
+                    changed: true, pid: 41, port: 10100,
+                    message: "Restart ChatGPT to load the routed models.",
+                    errorCode: "CODEX_RESTART_REQUIRED"
+                ),
+            ])
+            let coordinator = ActionCoordinator(
+                client: FakeActionClient(liveness: []),
+                lifecycle: lifecycle
+            )
+            t.equal(
+                sync { await coordinator.ensure() },
+                .failed("Restart ChatGPT to load the routed models.")
+            )
+        }
+
     }
 
     private static func sync<T>(_ operation: @escaping () async -> T) -> T {

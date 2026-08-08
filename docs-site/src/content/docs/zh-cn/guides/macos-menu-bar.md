@@ -127,6 +127,9 @@ open dist/macos/OpenCodex.app
   中点击**刷新**；Kimi 的对应操作使用 <code>kimi</code>。
 - **重启后未恢复** — 打开 **Logs** 并运行 <code>ocx status</code>。伴侣绝不会将终止进程或重写
   服务状态作为回退措施。
+- **停止、更新或冷启动后只显示原生模型** — 重新打开 OpenCodex，或运行 <code>ocx sync</code>。
+  即使启动时的提供商发现暂时为空，OpenCodex 也会从受保护的最近正常目录中恢复仍在配置中的路由
+  模型。如果恢复后 ChatGPT 仍在使用旧目录，请重启一次 ChatGPT；伴侣应用不会自动结束它。
 
 ## 卸载
 

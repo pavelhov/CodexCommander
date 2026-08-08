@@ -107,7 +107,7 @@ See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and rou
 | `POST /api/startup-action` | Install or repair the service or Codex shim | 400 invalid action; 500 action failure |
 | `GET, POST /api/windows-tray` | Read Windows tray state or install/start/stop/uninstall it | 400 unsupported platform/action; 500 operation failure |
 | `GET /api/diagnostics/project-config` | Read cached project configuration warnings | — |
-| `POST /api/sync` | Sync the current model catalog into Codex | 500 failed sync |
+| `POST /api/sync` | Sync the current model catalog into Codex; returns `catalogQuality` (`live`, `retained`, or `native-only`), `rehydrated`, current Codex app-server `catalogState`, and a restart hint when stale | 409 refused write authority; 500 failed sync |
 | `GET /api/update/check` | Check the `latest` or `preview` update channel | 400 invalid tag |
 | `POST /api/update/run` | Start an update job, optionally followed by restart | 400 invalid body; job-specific conflict/error status |
 | `GET /api/update/status` | Poll an update job by id | 404 unknown job |
