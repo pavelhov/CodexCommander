@@ -18,6 +18,8 @@ let root: Root | null = null;
 let requests: { url: string; init?: RequestInit }[] = [];
 let available: string[] = [];
 let chosen: string[] = [];
+let advertised: string[] = [];
+let excluded: Array<{ configured: string; catalogModel?: string; reason: string }> = [];
 let modelRows: Array<Record<string, unknown>> = [];
 let catalogState: { state: "fresh" | "stale"; processes?: Array<{ pid: number; startedAtMs: number }> } = { state: "fresh" };
 let policyMode: "v1" | "default" | "v2" = "default";
@@ -41,6 +43,8 @@ beforeEach(() => {
   requests = [];
   available = ["a-1", "a-2", "a-3", "a-4", "a-5", "a-6"];
   chosen = [];
+  advertised = [];
+  excluded = [];
   modelRows = available.map(id => ({ provider: "openai", id, namespaced: id, native: true }));
   catalogState = { state: "fresh" };
   policyMode = "default";
@@ -56,9 +60,9 @@ beforeEach(() => {
         if (method === "PUT") {
           const models = JSON.parse(String(init?.body)).models as string[];
           chosen = models;
-          return Response.json({ ok: true, applied: models, catalogRefresh: { ok: true } });
+          return Response.json({ ok: true, applied: models, advertised, excluded, catalogRefresh: { ok: true } });
         }
-        return Response.json({ available, chosen, catalogState });
+        return Response.json({ available, chosen, advertised, excluded, catalogState });
       }
       if (path.endsWith("/api/models")) {
         return Response.json(modelRows);
@@ -268,6 +272,31 @@ test("revalidates live catalog status when revisiting a warm command-center cach
   await mount();
   const secondReads = requests.filter(request => request.url.endsWith("/api/subagent-models") && !request.init?.method).length;
   expect(secondReads).toBeGreaterThan(firstReads);
-  expect(container.textContent).toContain("Catalog current");
+  expect(container.textContent).toContain("Codex workers current");
   expect(container.textContent).not.toContain("Restart needed");
+});
+
+test("warns when a fresh catalog does not advertise every saved roster model", async () => {
+  chosen = ["gpt-5.6-sol", "opencode-go/glm-5.2", "kimi/k3[1m]", "xai/grok-4.5", "opencode-go/deepseek-v4-flash"];
+  available = [...chosen];
+  advertised = chosen.slice(0, 3);
+  excluded = chosen.slice(3).map(configured => ({
+    configured,
+    catalogModel: configured,
+    reason: "outside_display_limit",
+  }));
+  modelRows = chosen.map(namespaced => {
+    const slash = namespaced.indexOf("/");
+    return slash < 0
+      ? { provider: "openai", id: namespaced, namespaced, native: true }
+      : { provider: namespaced.slice(0, slash), id: namespaced.slice(slash + 1), namespaced };
+  });
+
+  await mount();
+
+  expect(container.textContent).toContain("Codex workers current");
+  expect(container.textContent).toContain("roster models are not currently advertised");
+  expect(container.textContent).toContain("xai/grok-4.5");
+  expect(container.textContent).toContain("opencode-go/deepseek-v4-flash");
+  expect(container.textContent).toContain("roster is not fully effective");
 });

@@ -17,13 +17,23 @@ import SubagentRunPolicySection from "../components/subagents-workspace/Subagent
 type SubagentsSnapshot = {
   available: string[];
   chosen: string[];
+  advertised: string[];
+  excluded: RosterExclusion[];
   models: AgentModelRow[];
   catalogState?: CatalogState;
   metadataLimited?: boolean;
 };
 
+type RosterExclusion = {
+  configured: string;
+  catalogModel?: string;
+  reason: string;
+};
+
 type SaveResponse = {
   applied?: string[];
+  advertised?: string[];
+  excluded?: RosterExclusion[];
   catalogRefresh?: {
     ok?: boolean;
     status?: string;
@@ -53,7 +63,13 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
 
   const loadSubagents = useCallback(async (): Promise<SubagentsSnapshot> => {
     const rosterRequest = fetch(`${apiBase}/api/subagent-models`)
-      .then(res => readJsonOrThrow<{ available?: string[]; chosen?: string[]; catalogState?: CatalogState }>(res, t("sub.loadFail")));
+      .then(res => readJsonOrThrow<{
+        available?: string[];
+        chosen?: string[];
+        advertised?: string[];
+        excluded?: RosterExclusion[];
+        catalogState?: CatalogState;
+      }>(res, t("sub.loadFail")));
     const metadataRequest = fetch(`${apiBase}/api/models`)
       .then(res => readJsonOrThrow<AgentModelRow[]>(res, t("sub.metadataLoadFail")))
       .then(rows => Array.isArray(rows) ? rows : [])
@@ -68,6 +84,8 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     const next: SubagentsSnapshot = {
       available,
       chosen: nextChosen,
+      advertised: response.advertised ?? [],
+      excluded: response.excluded ?? [],
       models: (modelRows ?? []).filter(model => !model.disabled),
       catalogState: response.catalogState,
       metadataLimited: modelRows === null,
@@ -150,20 +168,26 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       });
       const data = await readJsonOrThrow<SaveResponse>(response, t("sub.saveFailed"));
       const applied = data?.applied ?? chosen;
+      const advertised = data?.advertised ?? [];
+      const excluded = data?.excluded ?? [];
       setChosen(applied);
       setCommittedChosen(applied);
       writeSessionListCache(cacheKey, {
         available,
         chosen: applied,
+        advertised,
+        excluded,
         models,
         catalogState: snapshot?.catalogState,
         metadataLimited: snapshot?.metadataLimited,
       });
       const refreshFailed = data?.catalogRefresh?.ok === false || data?.catalogRefresh?.status === "failed";
-      setStatusTone(refreshFailed ? "warn" : "ok");
+      setStatusTone(refreshFailed || excluded.length > 0 ? "warn" : "ok");
       setStatus(refreshFailed
         ? t("sub.savedRefreshFailed", { n: applied.length, cmd: "ocx sync --restart-codex" })
-        : t("sub.saved", { n: applied.length, cmd: "ocx sync --restart-codex" }));
+        : excluded.length > 0
+          ? t("sub.savedExcluded", { n: applied.length, missing: excluded.length })
+          : t("sub.saved", { n: applied.length, cmd: "ocx sync --restart-codex" }));
       load();
     } catch (error) {
       setStatusTone("err");
@@ -197,6 +221,8 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
         : catalogState?.state === "unknown"
           ? t("sub.catalog.unknown")
           : null;
+  const excluded = snapshot?.excluded ?? [];
+  const excludedModels = excluded.map(item => item.configured).join(", ");
 
   return (
     <>
@@ -212,6 +238,11 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
         )}
       </div>
       {status && <Notice tone={statusTone}>{status}</Notice>}
+      {excluded.length > 0 && (
+        <Notice tone="warn">
+          {t("sub.roster.excludedNotice", { n: excluded.length, models: excludedModels })}
+        </Notice>
+      )}
       {catalogState?.state === "stale" && (
         <Notice tone="warn">
           {t("sub.catalog.staleNotice", { n: catalogState.processes?.length ?? 0, cmd: "ocx sync --restart-codex" })}

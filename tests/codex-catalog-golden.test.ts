@@ -73,7 +73,7 @@ describe("codex-catalog golden (pure buildCatalogEntries oracle)", () => {
 
     // Full structural snapshot (the oracle): exact slug set + priority + ws projection.
     expect(projection.map(p => `${p.slug}@${p.priority}`).sort()).toEqual([
-      "gpt-5.4@9",
+      "gpt-5.4@102",
       "gpt-5.5@0",
       "kiro/claude-opus-4.6@1",
       "opencode-go/glm-5.2@5",

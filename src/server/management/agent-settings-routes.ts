@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
-import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
+import { catalogModelSlug, effectiveSubagentRoster, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import {
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
@@ -573,8 +573,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     return jsonResponse({ ok: true, effortCap: config.effortCap ?? null, subagentEffortCap: config.subagentEffortCap ?? null });
   }
 
-  // Subagent model picker: which ≤5 routed models Codex's spawn_agent advertises (it shows the
-  // first 5 routed catalog entries). PUT reorders the injected catalog so the chosen ones lead.
+  // Subagent model picker: persist up to five requested quick picks. Codex advertises the first
+  // five picker-visible catalog rows, so the response reports the effective V2 projection rather
+  // than implying every saved choice necessarily entered that window. PUT reprioritizes the
+  // injected catalog so eligible chosen rows lead.
   if (url.pathname === "/api/subagent-models" && req.method === "GET") {
     const models = await fetchAllModels(config);
     const disabled = new Set(config.disabledModels ?? []);
@@ -594,7 +596,14 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     // in-memory catalog than the one on disk.
     const { collectCodexAppServerCatalogState } = await import("../../codex/app-server-processes");
     const catalogState = collectCodexAppServerCatalogState();
-    return jsonResponse({ chosen: config.subagentModels ?? [], available, catalogState });
+    const effectiveV2 = effectiveSubagentRoster(config.subagentModels ?? [], "v2");
+    return jsonResponse({
+      chosen: config.subagentModels ?? [],
+      available,
+      catalogState,
+      advertised: effectiveV2.advertised.map(model => model.model),
+      excluded: effectiveV2.excluded,
+    });
   }
   if (url.pathname === "/api/subagent-models" && req.method === "PUT") {
     let body: { models?: unknown };
@@ -606,7 +615,14 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const catalogRefresh = await convergeCodexCatalog();
     await syncClaudeAgentDefsBestEffort();
     await autoApplyDesktopBestEffort();
-    return jsonResponse({ ok: true, applied: chosen, catalogRefresh });
+    const effectiveV2 = effectiveSubagentRoster(chosen, "v2");
+    return jsonResponse({
+      ok: true,
+      applied: chosen,
+      catalogRefresh,
+      advertised: effectiveV2.advertised.map(model => model.model),
+      excluded: effectiveV2.excluded,
+    });
   }
 
   // Priority-ordered subagent model fallback chain for quota-aware spawn routing.

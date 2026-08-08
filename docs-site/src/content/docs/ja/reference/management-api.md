@@ -59,7 +59,7 @@ Authorization: Bearer <admin-token>
 | `GET, PUT /api/v2` |エージェントプロトコル、V2 メッセージ配信、スレッド設定を読み取りまたは変更します。`multiAgentV2MessageDelivery` は `plaintext` または既定の `encrypted` を受け付け、`encrypted` か `null` で明示的な平文オーバーライドを解除します。配信変更後は新しいセッションを開始してください。`maxConcurrentThreadsPerSession: null` で Codex のデフォルトに戻ります | 400 の無効な設定。 502 移行または永続化の失敗 |
 | `GET, PUT /api/injection-model` |優先ガイダンスモデル、エフォート、プロンプト、ガイダンス設定を読み取りまたは設定します。ネイティブ既定値の同期を有効にしない限り助言的です | 400 無効なモデル、エフォート、またはボディ |
 | `GET, PUT /api/effort-caps` |グローバルおよびサブエージェントの推論工数の上限を読み取りまたは設定する | 400 無効なラダー値 |
-| `GET, PUT /api/subagent-models` |`spawn_agent` にアドバタイズされる最大 5 モデルを読み取るか順序付けします。ルーティングを強制しません | 400 の無効なリストまたは 5 つ以上のモデル |
+| `GET, PUT /api/subagent-models` | `spawn_agent` のクイック候補を最大 5 モデルまで読み取り、または順序付けします。ルーティングは強制しません。応答では保存済みの `chosen` と実際に有効な `advertised` を分け、反映されなかった候補を `excluded` で報告します | 400 の無効なリストまたは 5 つ以上のモデル |
 | `GET, PUT /api/subagent-model-fallback` |生成された子タスク用のグローバルな順序付きフォールバックとポーリング間隔を読み取るか設定します。 | 400 無効なリストまたはポーリング間隔 |
 | `GET /api/grok` | Grok 管理対象設定のステータスと候補モデルを読む | 400 ステータス読み取り失敗 |
 | `PUT /api/grok/selection` |除外された Grok モデルを永続化します。 400 個の無効な選択またはサイズが大きすぎる選択 |

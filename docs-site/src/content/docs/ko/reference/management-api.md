@@ -59,7 +59,7 @@ Authorization: Bearer <admin-token>
 | `GET, PUT /api/v2` | 에이전트 프로토콜, V2 메시지 전달, thread 설정을 읽거나 변경합니다. `multiAgentV2MessageDelivery`는 `plaintext` 또는 기본값 `encrypted`를 받으며, `encrypted` 또는 `null`을 보내면 명시적 평문 재정의가 제거됩니다. 전달 변경 후에는 새 세션을 시작하세요. `maxConcurrentThreadsPerSession: null`은 Codex 기본값을 복원합니다 | 400 잘못된 설정; 502 전환 또는 영속화 실패 |
 | `GET, PUT /api/injection-model` | 선호 안내 모델, effort, prompt, guidance 설정을 읽거나 설정합니다. 네이티브 기본값 동기화를 켜지 않으면 자문용입니다 | 400 잘못된 모델, effort, 또는 본문 |
 | `GET, PUT /api/effort-caps` | 전역 및 sub-agent reasoning-effort 상한을 읽거나 설정합니다 | 400 잘못된 ladder 값 |
-| `GET, PUT /api/subagent-models` | `spawn_agent`에 광고되는 최대 5개 모델을 읽거나 순서를 조정합니다. 라우팅을 강제하지 않습니다 | 400 잘못된 목록 또는 모델 5개 초과 |
+| `GET, PUT /api/subagent-models` | `spawn_agent` 빠른 선택 모델을 최대 5개까지 읽거나 순서를 조정합니다. 라우팅을 강제하지 않습니다. 응답은 저장된 `chosen` 목록과 실제 `advertised` 목록을 구분하고 반영되지 않은 선택을 `excluded`로 보고합니다 | 400 잘못된 목록 또는 모델 5개 초과 |
 | `GET, PUT /api/subagent-model-fallback` | 생성된 하위 작업의 전역 fallback 순서와 poll interval을 읽거나 설정합니다 | 400 잘못된 목록 또는 poll interval |
 | `GET /api/grok` | Grok 관리 구성 상태와 후보 모델을 읽습니다 | 400 상태 읽기 실패 |
 | `PUT /api/grok/selection` | 제외할 Grok 모델을 영속화합니다 | 400 잘못되었거나 너무 큰 선택 |

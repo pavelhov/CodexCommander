@@ -59,7 +59,7 @@ Authorization: Bearer <admin-token>
 | `GET, PUT /api/v2` | 读取或更改代理协议、V2 消息传递和线程设置。`multiAgentV2MessageDelivery` 接受 `plaintext` 或默认的 `encrypted`；发送 `encrypted` 或 `null` 会移除显式明文覆盖。更改传递后请启动新会话。`maxConcurrentThreadsPerSession: null` 恢复 Codex 默认值 | 400 无效设置；502 过渡或持久化失败 |
 | `GET, PUT /api/injection-model` | 读取或设置首选指导模型、努力程度、提示词和指导设置；未启用原生默认值同步时仅供指导 | 400 无效模型、努力程度或请求体 |
 | `GET, PUT /api/effort-caps` | 读取或设置全局和子代理推理努力上限 | 400 无效的阶梯值 |
-| `GET, PUT /api/subagent-models` | 读取或排序向 `spawn_agent` 公开的最多五个模型；不会强制路由 | 400 无效列表或超过五个模型 |
+| `GET, PUT /api/subagent-models` | 读取或排序最多五个 `spawn_agent` 快速选择；不会强制路由。响应会区分已保存的 `chosen` 列表与实际生效的 `advertised` 列表，并在 `excluded` 中报告未生效的选择 | 400 无效列表或超过五个模型 |
 | `GET, PUT /api/subagent-model-fallback` | 读取或设置已生成子任务的全局回退顺序和轮询间隔 | 400 无效列表或轮询间隔 |
 | `GET /api/grok` | 读取 Grok 托管配置状态和候选模型 | 400 状态读取失败 |
 | `PUT /api/grok/selection` | 持久化被排除的 Grok 模型 | 400 选择无效或超出大小限制 |

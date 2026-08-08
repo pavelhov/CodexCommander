@@ -207,6 +207,33 @@ export function finishUpstreamNativeEntry(clone: RawEntry, priority: number): Ra
   return ensureStrictCatalogFields(normalizeServiceTiers(clone));
 }
 
+/**
+ * The ONE native-priority policy shared by buildCatalogEntries (fresh/convergence
+ * builds) and mergeCatalogEntriesForSync (on-disk merge):
+ *
+ * 1. A featured exact rank always wins (featured = the configured subagent roster).
+ * 2. When a nonempty featured roster exists, an unfeatured native sorts STRICTLY
+ *    BELOW the featured block — Codex's models-manager sorts by priority ASC and
+ *    advertises only the first 5 to spawn_agent, so a genuine upstream priority
+ *    (gpt-5.6-terra=2, gpt-5.6-luna=3) would otherwise displace configured routed
+ *    models from that five-slot window.
+ * 3. With no featured roster, the genuine upstream/baseline priority is preserved
+ *    untouched.
+ */
+export function nativeCatalogEntryPriority(
+  slug: string,
+  rank: ReadonlyMap<string, number>,
+  featuredCount: number,
+  baselinePriority: number,
+): number {
+  const featuredRank = rank.get(slug);
+  if (featuredRank !== undefined) return featuredRank;
+  if (featuredCount > 0) {
+    return Math.max(typeof baselinePriority === "number" ? baselinePriority : 9, featuredCount + 100);
+  }
+  return baselinePriority;
+}
+
 export function isExactComboCatalogModel(
   model: CatalogModel | undefined,
   exactComboSlugs: ReadonlySet<string>,
@@ -350,7 +377,15 @@ export function buildCatalogEntries(
     .map(catalogModelSlug));
   for (const slug of gptSlugs) {
     const e = deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9);
-    if (rank.has(slug)) e.priority = rank.get(slug)!;
+    // deriveEntry keeps the genuine upstream snapshot priority for snapshot-backed
+    // natives (terra=2, luna=3); route it through the shared native policy so an
+    // unfeatured native can never outrank the featured block (spawn_agent top-5).
+    e.priority = nativeCatalogEntryPriority(
+      slug,
+      rank,
+      featured?.length ?? 0,
+      typeof e.priority === "number" ? e.priority : 9,
+    );
     out.push(e);
     nativeEntries.push(e);
   }
@@ -534,25 +569,20 @@ export function mergeCatalogEntriesForSync(
       && !isUnsupportedOpenAiNativeSlug(m.slug as string))
     .map(m => {
       const slug = m.slug as string;
-      // Featured models rank first (rank order); non-featured natives are pushed below the featured
-      // block when any model is featured, else keep their pristine baseline priority.
       const baselinePriority = baseline.get(slug) ?? (m.priority as number);
-      const priority = rank.has(slug)
-        ? rank.get(slug)!
-        : featured.length > 0
-          ? Math.max(typeof baselinePriority === "number" ? baselinePriority : 9, featured.length + 100)
-          : baselinePriority;
+      const priority = nativeCatalogEntryPriority(slug, rank, featured.length, baselinePriority);
       // Fallback-quality entries (ocx synthesis / codex-rs model_info fallback: display_name
       // stamped with the bare slug) are upgraded to the pinned upstream snapshot entry so a
       // previously synthesized ladder (e.g. luna advertising ultra) self-heals on sync. A
       // genuine catalog entry (real display name) is preserved untouched.
       if (shouldUpgradeToUpstreamEntry(m)) {
         const upstream = upstreamNativeEntry(slug)!;
-        const upgradePriority = rank.has(slug)
-          ? rank.get(slug)!
-          : featured.length > 0
-            ? Math.max(typeof upstream.priority === "number" ? upstream.priority : 9, featured.length + 100)
-            : typeof upstream.priority === "number" ? upstream.priority : priority;
+        const upgradePriority = nativeCatalogEntryPriority(
+          slug,
+          rank,
+          featured.length,
+          typeof upstream.priority === "number" ? upstream.priority : priority,
+        );
         const finished = finishUpstreamNativeEntry(upstream, 9);
         finished.priority = upgradePriority;
         return finished;
@@ -573,11 +603,7 @@ export function mergeCatalogEntriesForSync(
   for (const slug of availableNativeSlugs) {
     if (nativeSlugs.has(slug)) continue;
     nativeSlugs.add(slug);
-    const priority = rank.has(slug)
-      ? rank.get(slug)!
-      : featured.length > 0
-        ? featured.length + 100
-        : 9;
+    const priority = nativeCatalogEntryPriority(slug, rank, featured.length, 9);
     native.push(deriveEntry(template ? JSON.parse(JSON.stringify(template)) : null, slug, "OpenAI native model (Codex OAuth passthrough).", priority));
   }
   }
