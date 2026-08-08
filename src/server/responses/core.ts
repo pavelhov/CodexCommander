@@ -916,13 +916,41 @@ async function applyFinalRouteRequestNormalization(args: {
   {
     const guidance = await multiAgentGuidanceText(parsed, {
       multiAgentGuidanceEnabled: config.multiAgentGuidanceEnabled,
+      encryptedCodexTasks: isCanonicalOpenAiForwardProvider(route.provider),
       codexAccountNamespace: route.codexAccountNamespace,
       injectionModel: config.injectionModel,
       injectionEffort: config.injectionEffort,
       subagentModels: config.subagentModels,
       subagentModelFallback: config.subagentModelFallback,
       injectionPrompt: config.injectionPrompt,
-    });
+    }, isCanonicalOpenAiForwardProvider(route.provider)
+      ? {
+        isEncryptedTaskCompatibleModel: (model: string): boolean => {
+          try {
+            const candidate = routeModel(config, model);
+            if (!isCanonicalOpenAiForwardProvider(candidate.provider)) return false;
+            // A combo can select a native target now and still fail over to an
+            // external target later. Only advertise it for encrypted parents when
+            // every concrete target can consume native ciphertext.
+            if (candidate.combo) {
+              const combo = getCombo(config, candidate.combo.comboId);
+              return combo?.targets.every(target => {
+                try {
+                  return isCanonicalOpenAiForwardProvider(
+                    routeModel(config, `${target.provider}/${target.model}`).provider,
+                  );
+                } catch {
+                  return false;
+                }
+              }) ?? false;
+            }
+            return true;
+          } catch {
+            return false;
+          }
+        },
+      }
+      : undefined);
     if (guidance) {
       injectDeveloperMessage(parsed, guidance);
       if (isInjectionDebugEnabled()) {
