@@ -20,7 +20,7 @@ Last updated: 2026-08-08
 |---|---|---|---|
 | WS-01 Truthful Agent Command Center | COMPLETE | UI worker | Existing layout retained; all six GUI locales and affected public docs updated |
 | WS-02 Compatibility-aware guidance | COMPLETE | runtime worker | Automatic guidance only; exact-id callability and fail-closed dispatch preserved |
-| WS-03 Product-owned plaintext V2 | INTEGRATED; MACOS STALL FIX VERIFIED; FULL TARGET RUNTIME GATE INCOMPLETE | protocol worker | Live Sol→Kimi proof and focused transport gates passed; the real and fixture-backed full suites stop only on pre-existing fixed-timeout subprocess cases |
+| WS-03 Product-owned plaintext V2 | INTEGRATED; MACOS STALL FIX VERIFIED; FULL TARGET RUNTIME GATE GREEN | protocol worker | Live Sol→Kimi proof, focused transport gates, and all 603 one-file runtime shards passed; the authorized deterministic Codex fixture was used after three cold-runtime setup timeouts |
 | WS-04 Bundled macOS runtime | COMPLETE FOR TEST DISTRIBUTION | macOS worker | Bun-plus-source universal ZIP; self-contained lifecycle smoke passed |
 | WS-05 Signed distribution | BLOCKED BY CREDENTIALLED RELEASE PHASE | maintainer | Design and tests may land; signing/notarization execution requires explicit credentials and approval |
 
@@ -96,6 +96,23 @@ Last updated: 2026-08-08
   53-pass/seven-timeout result (5.01-15.60 seconds), and one final isolated
   retry reproduced it. This is not an assertion failure and is outside the
   relay diff; no timeout, assertion, fixture, or production guard was changed.
+- Cold-start catalog convergence is now durable: successful routed discovery
+  writes an owner-only last-known-good snapshot, a later offline/partial start
+  rehydrates eligible routed rows without resurrecting removed or disabled
+  providers, and lifecycle success distinguishes live process health from
+  catalog convergence. External Codex providers take an explicit preserve-only
+  path and an unclassified native-only result fails closed.
+- The final target runtime gate covered all 603 one-file shards on one revision
+  and worktree. Shards 1-166 passed against the real Codex runtime. Shard 167
+  then hit three setup-marker timeouts before provider dispatch; its focused
+  rerun passed 6/6 with the existing ignored deterministic Codex fixture, and
+  the fixture-backed continuation passed shards 167-603. No assertion,
+  production timeout, or safety guard was weakened.
+- Test infrastructure now supports an explicit bounded start shard, prints
+  cross-platform resume instructions, removes irrelevant external Codex probes
+  from native-residue unit cases, and identity-checks any test-owned proxy
+  before launcher cleanup. The three real launcher signal cases passed and no
+  child proxy was left behind.
 - Current task cannot run the requested V1 external-model matrix because its
   root protocol and catalog snapshot predate the setting change. The matrix is
   queued for a fresh task after implementation and sync.
@@ -140,3 +157,12 @@ recognized plaintext-V2 collaboration rewrite on the exact validated Bun
 version. Other rewrites remain explicit-only, and `streamMode: "legacy-tee"`
 remains the kill switch. Do not make plaintext V2 the product default until the
 post-integration Sol/Luna × Kimi/Grok/DeepSeek matrix is green.
+
+### 2026-08-08 — Retain routed catalog state without weakening native restore
+
+Stopping OpenCodex still restores a native-only Codex catalog. OpenCodex now
+keeps a separate owner-only routed snapshot and uses it as a last-known-good
+source when the next cold start has empty or partial provider discovery. Process
+liveness remains `/healthz`; lifecycle completion requires a converged catalog
+or an explicit policy/external-provider skip. ChatGPT app-server restart remains
+user-controlled when an already-running picker is stale.
