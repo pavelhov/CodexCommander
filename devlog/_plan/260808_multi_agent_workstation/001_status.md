@@ -8,7 +8,9 @@ Last updated: 2026-08-08
 - Base commit: `6f88fc3f101d32947ebf11a25c33640ff50a313e`
 - Agent Command Center, compatibility guidance, protocol proposal, and bundled
   macOS runtime checkpoints are committed independently on this branch.
-- No upstream commits have been merged or cherry-picked.
+- No commits from `upstream/dev` have been merged or cherry-picked. The verified
+  local plaintext feature and independent race fix were surgically cherry-picked
+  as `bef7c19a` and `796a7b02`, followed by integration hardening `f0962e42`.
 
 ## Workstreams
 
@@ -16,7 +18,7 @@ Last updated: 2026-08-08
 |---|---|---|---|
 | WS-01 Truthful Agent Command Center | COMPLETE | UI worker | Existing layout retained; all six GUI locales and affected public docs updated |
 | WS-02 Compatibility-aware guidance | COMPLETE | runtime worker | Automatic guidance only; exact-id callability and fail-closed dispatch preserved |
-| WS-03 Product-owned plaintext V2 | INTEGRATED; TARGET VERIFICATION PENDING | protocol worker | Live Sol→Kimi proof and source-branch gates passed; encrypted default and unreadable-task guard retained |
+| WS-03 Product-owned plaintext V2 | INTEGRATED; FULL TARGET RUNTIME GATE INCOMPLETE | protocol worker | Live Sol→Kimi proof, source-branch gates, and target focused/GUI/docs/static gates passed; four cold-subprocess files time out under current host load |
 | WS-04 Bundled macOS runtime | COMPLETE FOR TEST DISTRIBUTION | macOS worker | Bun-plus-source universal ZIP; self-contained lifecycle smoke passed |
 | WS-05 Signed distribution | BLOCKED BY CREDENTIALLED RELEASE PHASE | maintainer | Design and tests may land; signing/notarization execution requires explicit credentials and approval |
 
@@ -63,6 +65,16 @@ Last updated: 2026-08-08
   repository test files, 713 GUI tests, 226 built docs pages, typecheck, GUI
   lint/i18n/build, privacy scan, and diff check passed. Target-branch gates are
   rerun after integration rather than inferred from those results.
+- Target integration verification passed 128 focused runtime tests, 714 GUI
+  tests across 124 files, locale lint, ESLint, GUI production build, 226-page
+  docs build, typecheck, privacy scan, React Doctor, and diff check.
+- The exact one-file-sharded target runtime command stopped at shard 154 on
+  fixed-timeout cold Codex probes. Continued coverage exercised all 602 files;
+  only `codex-native-residue`, `codex-retained-root-serialization`,
+  `native-claude-desktop-toggle`, and `native-grok-toggle` remained red. Their
+  subprocesses took roughly 8-27 seconds against fixed 5-10 second deadlines;
+  targeted retries reproduced the delays. No assertion or timeout was changed,
+  so the full target runtime gate is explicitly not green.
 - Current task cannot run the requested V1 external-model matrix because its
   root protocol and catalog snapshot predate the setting change. The matrix is
   queued for a fresh task after implementation and sync.

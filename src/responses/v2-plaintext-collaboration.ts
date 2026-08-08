@@ -158,9 +158,9 @@ function rewriteNamespaceSelector(value: unknown): unknown {
  *
  * The ChatGPT backend validates the reserved `collaboration` schema byte-for-semantics and rejects
  * removing its encrypted message markers in place. The transform is therefore atomic: every visible
- * collaboration namespace must expose the complete known three-message schema, and no alias may
- * already exist. A partial/future schema stays untouched so the existing encrypted fail-closed path
- * remains authoritative.
+ * collaboration namespace must expose the complete known six-tool schema (three message tools and
+ * three lifecycle tools), and no alias may already exist. A partial/future schema stays untouched so
+ * the existing encrypted fail-closed path remains authoritative.
  */
 export function rewriteV2PlaintextCollaborationRequest(
   body: unknown,

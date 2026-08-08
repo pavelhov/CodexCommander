@@ -1,6 +1,6 @@
 # 000 — Multi-agent workstation and self-contained macOS app
 
-Status: IMPLEMENTED — INTEGRATION VERIFICATION PENDING
+Status: IMPLEMENTED — TARGET RUNTIME GATE INCOMPLETE ON HOST TIMING
 Created: 2026-08-08
 Branch: `codex/multi-agent-workstation`
 Base: `main` at `6f88fc3f101d32947ebf11a25c33640ff50a313e`
@@ -56,7 +56,7 @@ re-encryption, or a blanket `agent_message` rewrite.
 |---|---|---|---|
 | WS-01 | Truthful Agent Command Center | `gui/`, docs locales | COMPLETE — GUI tests, lint, i18n lint, build, and retained visual QA |
 | WS-02 | Compatibility-aware roster guidance | `src/server/responses/`, catalog helpers, runtime tests | COMPLETE — native V2 guidance excludes unreadable routed children; exact overrides still fail closed |
-| WS-03 | Product-owned plaintext V2 compatibility | native Responses request/response wire, Run Policy, docs | INTEGRATED — target-branch verification pending; encrypted default and issue-92 guard retained |
+| WS-03 | Product-owned plaintext V2 compatibility | native Responses request/response wire, Run Policy, docs | INTEGRATED — focused, GUI, docs, typecheck, privacy, and diff gates pass; required full runtime invocation is red only on four pre-existing cold-subprocess files under current host load |
 | WS-04 | Self-contained macOS runtime | `app/`, `scripts/`, runtime resource resolution, docs | COMPLETE FOR TEST DISTRIBUTION — bundled-runtime lifecycle smoke passed without global Bun/npm/ocx |
 | WS-05 | Distribution hardening | packaging/release follow-up | Developer ID signing, notarization, stapling, DMG, updater, clean-VM gate |
 
@@ -79,6 +79,7 @@ Work stays on one delivery branch but lands as scoped checkpoint commits:
 9. `33425358` — `fix(gui): clear command center review findings`
 10. `bef7c19a` — `feat(agents): enable plaintext mixed-provider v2`
 11. `796a7b02` — `test: make subprocess output reads single-owner`
+12. `f0962e42` — `fix(agents): harden plaintext v2 integration`
 
 Commits may be split further when review boundaries demand it. A checkpoint is
 created only after its focused tests pass. The branch is not merged directly
@@ -87,20 +88,32 @@ maintainer-controlled `dev` to `main` promotion.
 
 ## Global acceptance gates
 
-Completed branch gates:
+Completed target-integration gates:
 
 1. `bun run typecheck`
-2. `bun run test`
+2. focused plaintext/V2/fail-closed runtime suites
 3. `bun run privacy:scan`
 4. `cd gui && bun test tests && bun run lint:i18n && bun run lint && bun run build`
-5. `cd docs-site && bun --bun run build`
-6. `bun run test:macos`
-7. `bun run build:macos`
-8. packaged-app smoke from a sanitized environment with no usable global
+5. `cd docs-site && bunx --bun astro build`
+6. `git diff --check`
+
+The exact required `OCX_TEST_SHARD_SIZE=1 bun run test` target gate remains
+red. Shards 1-153 passed before shard 154 stopped the runner. Continued
+one-file coverage exercised shards 155-602; every file passed except four
+pre-existing cold-subprocess suites whose fixed 5-10 second deadlines expired
+under sustained host load. Targeted retries reproduced the same delays without
+touching feature code. No timeout, fixture boundary, or assertion was changed.
+
+Earlier branch gates retained by this integration:
+
+1. `bun run test:macos`
+2. `bun run build:macos`
+3. packaged-app smoke from a sanitized environment with no usable global
    `bun`, `node`, `npm`, or `ocx`
 
-The remaining review-readiness gate is a fresh Codex task after catalog sync
-for the V1 live model matrix: Sol, Luna, Kimi, Grok, and DeepSeek.
+Remaining review-readiness gates are an idle-host rerun of the full runtime
+command and a fresh Codex task after catalog sync for the live model matrix:
+Sol/Luna parents with Kimi, Grok, and DeepSeek children.
 
 The fresh-session matrix is intentionally last: the protocol and catalog are
 sticky for an existing task, so running it inside the task that changed the
@@ -110,7 +123,7 @@ setting would produce false evidence.
 
 The pre-feature repository-wide pre-push gate is green. The product-owned
 plaintext V2 feature was verified in its isolated worktree and is now integrated
-here; keep this unit open until the target-branch gates and fresh-task
+here. Keep this unit open until the idle-host runtime gate and fresh-task
 mixed-roster run are recorded. Then move this unit to
 `devlog/_fin/260808_multi_agent_workstation/` and record the remaining
 upstream/distribution dependencies and review/promotion path.

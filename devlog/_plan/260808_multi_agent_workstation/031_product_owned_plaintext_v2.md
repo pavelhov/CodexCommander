@@ -1,6 +1,6 @@
 # 031 — Product-owned plaintext V2 compatibility
 
-Status: INTEGRATED ON TARGET; TARGET VERIFICATION IN PROGRESS
+Status: INTEGRATED ON TARGET; REQUIRED TARGET RUNTIME GATE INCOMPLETE ON HOST TIMING
 
 Branch: `codex/v2-plaintext-shim`
 Base: `codex/multi-agent-workstation` at `0ca85586`
@@ -103,7 +103,7 @@ MoA excluded Codex to preserve ChatGPT allowance:
 - Manual matrix after integration: Sol/Luna parents and Kimi/Grok/DeepSeek
   children, including spawn, wait, send, follow-up, and native encrypted control.
 
-## Verification result
+## Isolated source verification
 
 - Focused runtime coverage: 107 tests passed across the plaintext transform and
   V2 management-policy suites.
@@ -122,3 +122,23 @@ MoA excluded Codex to preserve ChatGPT allowance:
 The broader Sol/Luna × Kimi/Grok/DeepSeek manual matrix remains a
 post-integration gate because model catalogs and protocol selection are sticky
 for the task that performs the integration.
+
+## Target integration verification
+
+- Focused runtime coverage passed: 128 tests across plaintext collaboration,
+  V2 policy, and encrypted-task fail-closed suites.
+- GUI passed 714 tests across 124 files, locale lint, ESLint, React Doctor, and
+  production build. Docs built all 226 pages. Typecheck, privacy scan, and
+  `git diff --check` passed.
+- `OCX_TEST_SHARD_SIZE=1 bun run test` passed shards 1-153, then stopped at
+  `codex-native-residue`. Continued one-file coverage exercised shards 155-602.
+  Every file passed except `codex-native-residue` (7 timeouts),
+  `codex-retained-root-serialization` (3), `native-claude-desktop-toggle` (2),
+  and `native-grok-toggle` (13 plus one cascaded post-timeout error).
+- Each affected subprocess exceeded a fixed 5-10 second deadline while taking
+  roughly 8-27 seconds. Targeted retries reproduced the same timing boundary;
+  the repository's allowed deterministic Codex fixture was absent. No fixture
+  was created and no timeout, assertion, or safety guard was weakened.
+- Therefore integration is complete, but the required full target runtime gate
+  is not green. Rerun it on an idle host before review readiness, then perform
+  the separately authorized live Sol/Luna × Kimi/Grok/DeepSeek matrix.
