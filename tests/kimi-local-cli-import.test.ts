@@ -195,7 +195,7 @@ describe("Kimi Code CLI linked-token renewal", () => {
       KIMI_LOCAL_CLI_REFRESH_REQUIRED,
     );
     expect(refreshCalls).toBe(0);
-    expect(getAccountSet("kimi")!.accounts[0]!.needsReauth).toBeUndefined();
+    expect(getAccountSet("kimi")!.accounts[0]!.needsReauth).toBe(true);
   });
 
   test("refuses to adopt a fresh CLI generation from a different account", async () => {

@@ -40,7 +40,14 @@ describe("test runner isolation", () => {
   });
 
   test("uses a bounded default shard size and validates overrides", () => {
-    expect(resolveTestShardSize(undefined)).toBe(DEFAULT_TEST_SHARD_SIZE);
+    const originalShardSize = process.env.OCX_TEST_SHARD_SIZE;
+    delete process.env.OCX_TEST_SHARD_SIZE;
+    try {
+      expect(resolveTestShardSize()).toBe(DEFAULT_TEST_SHARD_SIZE);
+    } finally {
+      if (originalShardSize === undefined) delete process.env.OCX_TEST_SHARD_SIZE;
+      else process.env.OCX_TEST_SHARD_SIZE = originalShardSize;
+    }
     expect(resolveTestShardSize("17")).toBe(17);
     expect(() => resolveTestShardSize("0")).toThrow("positive integer");
     expect(() => resolveTestShardSize("many")).toThrow("positive integer");
