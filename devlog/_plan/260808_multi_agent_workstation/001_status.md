@@ -8,9 +8,11 @@ Last updated: 2026-08-08
 - Base commit: `6f88fc3f101d32947ebf11a25c33640ff50a313e`
 - Agent Command Center, compatibility guidance, protocol proposal, and bundled
   macOS runtime checkpoints are committed independently on this branch.
-- No commits from `upstream/dev` have been merged or cherry-picked. The verified
-  local plaintext feature and independent race fix were surgically cherry-picked
-  as `bef7c19a` and `796a7b02`, followed by integration hardening `f0962e42`.
+- The verified local plaintext feature and independent race fix were surgically
+  cherry-picked as `bef7c19a` and `796a7b02`, followed by integration hardening
+  `f0962e42`. The focused upstream Darwin rewrite fix `b6d32507` was later
+  cherry-picked as `1b92dd23`; the product-specific terminal relay hardening is
+  committed as `783dfd2f`.
 
 ## Workstreams
 
@@ -18,7 +20,7 @@ Last updated: 2026-08-08
 |---|---|---|---|
 | WS-01 Truthful Agent Command Center | COMPLETE | UI worker | Existing layout retained; all six GUI locales and affected public docs updated |
 | WS-02 Compatibility-aware guidance | COMPLETE | runtime worker | Automatic guidance only; exact-id callability and fail-closed dispatch preserved |
-| WS-03 Product-owned plaintext V2 | INTEGRATED; FULL TARGET RUNTIME GATE INCOMPLETE | protocol worker | Live Sol→Kimi proof, source-branch gates, and target focused/GUI/docs/static gates passed; four cold-subprocess files time out under current host load |
+| WS-03 Product-owned plaintext V2 | INTEGRATED; MACOS STALL FIX VERIFIED; FULL TARGET RUNTIME GATE INCOMPLETE | protocol worker | Live Sol→Kimi proof and focused transport gates passed; the real and fixture-backed full suites stop only on pre-existing fixed-timeout subprocess cases |
 | WS-04 Bundled macOS runtime | COMPLETE FOR TEST DISTRIBUTION | macOS worker | Bun-plus-source universal ZIP; self-contained lifecycle smoke passed |
 | WS-05 Signed distribution | BLOCKED BY CREDENTIALLED RELEASE PHASE | maintainer | Design and tests may land; signing/notarization execution requires explicit credentials and approval |
 
@@ -61,6 +63,18 @@ Last updated: 2026-08-08
 - Product-owned plaintext V2 live proof completed with a stock Codex 0.147 Sol
   parent and Kimi K3 child; spawn, wait, child completion, and parent receipt
   succeeded without decrypting or rewriting task text.
+- The later macOS stall was isolated below the model/protocol layer: the proxy
+  received and persisted `response.completed` immediately, while Codex did not
+  execute the returned collaboration call until exactly 300.001 seconds later.
+  Bun 1.3.14 reproduces the upstream async-`pull()` cancellation defect from
+  Bun #32111. The upstream eager Darwin rewrite commit was integrated, then the
+  remaining post-relay async-`pull()` budget wrapper was removed for the exact
+  validated plaintext-V2 shape. Owned budgets now settle exactly once from the
+  producer; caller-owned budgets remain untouched; `legacy-tee` remains the
+  immediate rollback switch.
+- A second MoA review with Kimi K3 and Grok 4.5 independently approved the
+  narrow single-reader design subject to exact Bun-version gating, fail-closed
+  schema handling, deterministic lifecycle tests, and payload-free counters.
 - Isolated-source verification completed: 107 focused runtime tests, all 602
   repository test files, 713 GUI tests, 226 built docs pages, typecheck, GUI
   lint/i18n/build, privacy scan, and diff check passed. Target-branch gates are
@@ -75,6 +89,13 @@ Last updated: 2026-08-08
   subprocesses took roughly 8-27 seconds against fixed 5-10 second deadlines;
   targeted retries reproduced the delays. No assertion or timeout was changed,
   so the full target runtime gate is explicitly not green.
+- The idle-host rerun after the Darwin relay fix again passed shards 1-153 and
+  stopped at `codex-native-residue`: 53 tests passed and seven subprocess cases
+  exceeded their fixed 5-second timeout (9.17-25.36 seconds with the real Codex
+  runtime). The authorized existing deterministic fixture produced the same
+  53-pass/seven-timeout result (5.01-15.60 seconds), and one final isolated
+  retry reproduced it. This is not an assertion failure and is outside the
+  relay diff; no timeout, assertion, fixture, or production guard was changed.
 - Current task cannot run the requested V1 external-model matrix because its
   root protocol and catalog snapshot predate the setting change. The matrix is
   queued for a fresh task after implementation and sync.
@@ -109,3 +130,13 @@ activates only for the exact known schema. All unreadable-ciphertext guards
 remain authoritative for disabled, old, malformed, or changed contracts. The
 verified feature is now integrated on this branch; see
 `031_product_owned_plaintext_v2.md`.
+
+### 2026-08-08 — Use a narrow Darwin relay exception, not a product-wide default
+
+The bundled Bun still lacks a released generic async-`pull()` cancellation fix.
+Keep generic Darwin traffic on the established tee path, but automatically use
+the tested synchronous-`pull()` eager relay for an explicitly enabled, fully
+recognized plaintext-V2 collaboration rewrite on the exact validated Bun
+version. Other rewrites remain explicit-only, and `streamMode: "legacy-tee"`
+remains the kill switch. Do not make plaintext V2 the product default until the
+post-integration Sol/Luna × Kimi/Grok/DeepSeek matrix is green.

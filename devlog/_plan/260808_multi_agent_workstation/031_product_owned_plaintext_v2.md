@@ -1,6 +1,6 @@
 # 031 — Product-owned plaintext V2 compatibility
 
-Status: INTEGRATED ON TARGET; REQUIRED TARGET RUNTIME GATE INCOMPLETE ON HOST TIMING
+Status: INTEGRATED AND MACOS TRANSPORT-HARDENED; REQUIRED TARGET RUNTIME GATE INCOMPLETE ON HOST TIMING
 
 Branch: `codex/v2-plaintext-shim`
 Base: `codex/multi-agent-workstation` at `0ca85586`
@@ -86,6 +86,42 @@ MoA excluded Codex to preserve ChatGPT allowance:
 - Fable/Claude: unavailable because the organization disabled Claude Code
   subscription access; no Sol replacement was used.
 
+A second MoA pass after the macOS stall diagnosis used Kimi K3 and Grok 4.5.
+Both independently approved the narrow single-reader relay with these retained
+conditions: exact runtime gating, a `legacy-tee` rollback, exactly-once owned
+budget cleanup, untouched caller-owned budgets, deterministic lifecycle tests,
+and scalar-only observability. Neither recommended a patched Codex binary, file
+inbox, decryption, re-encryption, or product-wide silent plaintext default.
+
+## macOS stall diagnosis and transport hardening
+
+The post-integration "Thinking" stall was downstream of the verified plaintext
+protocol. A native Sol turn returned and persisted `response.completed`
+immediately, but Codex executed the collaboration call exactly 300.001 seconds
+later. The proxy had already completed the model turn, ruling out provider
+capacity and the namespace/sentinel bridge for that reproduction.
+
+Bun 1.3.14 reproduces the public Bun #32111 async-`pull()` client-cancellation
+defect. Upstream OpenCodex commit `b6d32507` moves Darwin client rewrites onto
+the eager bounded relay, but target-side budget finalization still reconstructed
+the returned body with an async-`pull()` stream. The integrated fix therefore:
+
+1. Uses the eager single-reader relay automatically only for an activated
+   plaintext-V2 collaboration rewrite on the exact validated bundled Bun.
+2. Keeps the returned client stream's `pull()` synchronous and prevents later
+   response reconstruction from wrapping it in the defective shape.
+3. Transfers owned translator-budget cleanup to the producer's exactly-once
+   terminal path while leaving caller-owned budgets unchanged.
+4. Keeps other Darwin rewrites explicit-only and preserves
+   `streamMode: "legacy-tee"` as the immediate rollback.
+5. Exposes payload-free aggregate relay counters and suppresses request/response
+   body sampling on plaintext-V2 turns.
+
+Focused verification passed 127 transport/plaintext tests plus 122 adjacent
+snapshot/fallback/V2-policy tests, TypeScript typecheck, privacy scan, and diff
+check. The exact eager relay survived the deterministic cancellation diagnostic;
+the known-bad generic async-`pull()` shape remained the positive failure control.
+
 ## Acceptance gates
 
 - Pure request/response transform tests: complete/partial schemas, collision,
@@ -142,3 +178,10 @@ for the task that performs the integration.
 - Therefore integration is complete, but the required full target runtime gate
   is not green. Rerun it on an idle host before review readiness, then perform
   the separately authorized live Sol/Luna × Kimi/Grok/DeepSeek matrix.
+- The idle-host rerun after transport hardening passed shards 1-153 before the
+  same `codex-native-residue` fixed-timeout boundary: 53 tests passed and seven
+  subprocess cases timed out with no assertion mismatch. Retrying the complete
+  suite with the existing executable deterministic Codex fixture produced the
+  same result, and one final isolated fixture retry reproduced it. No timeout or
+  assertion was modified, so the full target runtime gate remains explicitly
+  incomplete rather than being reported green.
