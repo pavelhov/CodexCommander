@@ -38,23 +38,31 @@ to GUI static serving.
 Native passthrough SSE has TWO shapes, selected per request in
 `src/server/responses/core.ts`:
 
-- **Default outside Windows: tee + background inspection.** `upstreamResponse.body.tee()` sends
+- **Default tee + background inspection.** `upstreamResponse.body.tee()` sends
   branch[0] through a terminal-aware client relay while branch[1] is
   drained eagerly by `consumeForInspection`/`consumeForResponseLogMetadata`
   for terminal-outcome recording, quota, the passthrough continuation cache,
-  and request logs. This remains the default shape on bundled Bun 1.3.14.
+  and request logs. This remains the default outside Windows and for ordinary
+  macOS traffic.
 - **Terminal-aware eager bounded relay** (`src/server/relay-eager.ts`). Windows
   uses this single-reader shape for rewrite traffic and for no-rewrite traffic
   selected by `selectEagerPath` in `src/lib/bun-stream-caps.ts`; the latter keeps
   `legacy-tee` and known-bad-runtime `auto` on tee as documented. When selected,
   `response.completed` closes the client stream even if upstream keeps HTTP/SSE
-  alive. Darwin uses it for no-client-rewrite traffic only (neither image-gen
-  aliases nor item-id repair) and is explicit-only: `auto` stays tee even after
-  a future threshold bump. One eager reader + byte-bounded
-  client queue + post-cancel bounded discard-drain replaces the tee and goes
-  directly to the response without a JS rewrite wrapper, preserving the full
-  inspection side-effect set (shared `createSseInspector` factory in `relay.ts`)
-  including the #44 late-terminal semantics.
+  alive. Darwin `auto` uses it only when the exact native plaintext-V2
+  collaboration schema activated its client rewrite and the process runs the
+  specifically validated bundled Bun; an unvalidated Bun fails closed to tee
+  with a startup warning. Explicit `eager-relay` remains available for other
+  eligible Darwin SSE turns, and `legacy-tee` always disables this auto path.
+  One eager reader + byte-bounded client queue + post-cancel bounded
+  discard-drain replaces the tee. Its synchronous `pull()` body goes directly
+  to the response: owned translator-budget cleanup transfers to the producer's
+  exactly-once teardown, and a body marker survives header-only Response
+  reconstruction so no later async-pull wrapper can reintroduce Bun #32111.
+  Caller-owned budgets are never transferred. Inspection still uses the shared
+  `createSseInspector` factory in `relay.ts`, including #44 late-terminal
+  semantics. `/api/system/memory` exposes only scalar eager-relay lifecycle and
+  queue counters; no payload or request identity is retained.
 
 The two-shape contract is mirror-commented in `src/server/index.ts`; the real
 `core.ts` gate is source-invariant-tested by `tests/passthrough-abort.test.ts`,

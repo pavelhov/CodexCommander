@@ -70,6 +70,27 @@ export interface TranslatorBudget {
 }
 
 const retainedEventOwnership = new WeakMap<object, { budget: TranslatorBudget; bytes: number }>();
+const selfFinalizingResponseBodies = new WeakSet<ReadableStream<Uint8Array>>();
+
+/**
+ * Transfer an owned budget's terminal cleanup to the stream producer itself.
+ *
+ * The marker lives on the body rather than the Response so header-only
+ * reconstruction (`new Response(response.body, ...)`) cannot lose it. Callers
+ * must install an exactly-once producer finalizer before applying this marker.
+ */
+export function markTranslatorBudgetSelfFinalizingBody(
+  body: ReadableStream<Uint8Array>,
+): ReadableStream<Uint8Array> {
+  selfFinalizingResponseBodies.add(body);
+  return body;
+}
+
+export function isTranslatorBudgetSelfFinalizingBody(
+  body: ReadableStream<Uint8Array> | null,
+): boolean {
+  return body !== null && selfFinalizingResponseBodies.has(body);
+}
 
 /**
  * Charge a materialized adapter-event batch and attach its lease to the events themselves.
@@ -334,17 +355,25 @@ export function resetTranslatorAggregateForTests(): void {
   aggregateOverflows = 0;
 }
 
-export function finalizeTranslatorBudgetResponse(response: Response, budget: TranslatorBudget): Response {
+export function finalizeTranslatorBudgetResponse(
+  response: Response,
+  budget: TranslatorBudget,
+  finalizeBudget: () => void = () => budget.dispose(),
+): Response {
   if (!response.body) {
-    budget.dispose();
+    finalizeBudget();
     return response;
   }
+  // The eager relay owns this budget through its exactly-once producer teardown.
+  // Preserve response identity and, critically, do not re-wrap its synchronous
+  // pull source in the Bun#32111 async-pull crash shape.
+  if (isTranslatorBudgetSelfFinalizingBody(response.body)) return response;
   const reader = response.body.getReader();
   let finalized = false;
   const finalize = () => {
     if (finalized) return;
     finalized = true;
-    budget.dispose();
+    finalizeBudget();
   };
   return new Response(new ReadableStream<Uint8Array>({
     async pull(controller) {

@@ -197,7 +197,12 @@ describe("GET /api/system/memory", () => {
 	        frameBufferHighWaterBytes: number; completedItemsMaxCount: number; frameCapOverflows: number;
 	        itemCapEvictions: number; postCancelDrainStops: number;
 	      };
-	      streamMode: string; eagerRelay: unknown;
+	      eagerRelayCounters: {
+	        starts: number; inFlight: number; maxInFlight: number; clientCancels: number;
+	        upstreamAborts: number; upstreamErrors: number; syntheticTerminals: number;
+	        currentQueuedBytes: number; queueHighWaterBytes: number;
+	      };
+	      streamMode: string; eagerRelay: unknown; plaintextV2EagerRelay: unknown;
 	      watchdog: { samples: unknown[]; warnThresholdBytes: number; observedBytes: number; observedMetric: string } | null;
 	      activeTurnCount: number; isDraining: boolean;
 	    };
@@ -240,10 +245,25 @@ describe("GET /api/system/memory", () => {
       itemCapEvictions: expect.any(Number),
       postCancelDrainStops: expect.any(Number),
     });
+    expect(body.eagerRelayCounters).toEqual({
+      starts: expect.any(Number),
+      inFlight: expect.any(Number),
+      maxInFlight: expect.any(Number),
+      clientCancels: expect.any(Number),
+      upstreamAborts: expect.any(Number),
+      upstreamErrors: expect.any(Number),
+      syntheticTerminals: expect.any(Number),
+      currentQueuedBytes: expect.any(Number),
+      queueHighWaterBytes: expect.any(Number),
+    });
     expect(body.streamMode).toBe("auto");
     // This route has no rewrite context and reports the selector's effective
     // no-rewrite baseline on win32/darwin, null elsewhere.
-    expect(body.eagerRelay).toEqual(selectEagerPath(process.platform, false, "auto"));
+	    expect(body.eagerRelay).toEqual(selectEagerPath(process.platform, {
+	      needsClientRewrite: false,
+	      plaintextCollaborationRewrite: false,
+	    }, "auto"));
+	    expect(body.plaintextV2EagerRelay).toBeNull();
 	    expect(body.watchdog).not.toBeNull();
 	    expect(body.watchdog!.samples.length).toBeLessThanOrEqual(60);
 	    expect(typeof body.watchdog!.observedBytes).toBe("number");

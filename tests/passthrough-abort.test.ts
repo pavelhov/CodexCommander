@@ -34,6 +34,9 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     const coreSource = await readSource("src/server/responses/core.ts");
     const relaySource = await readSource("src/server/relay.ts");
     const capsSource = await readSource("src/lib/bun-stream-caps.ts");
+    const eagerSource = await readSource("src/server/relay-eager.ts");
+    const budgetSource = await readSource("src/lib/translator-budget.ts");
+    const corsSource = await readSource("src/server/auth-cors.ts");
     const sseBranch = coreSource.slice(
       coreSource.indexOf("if (isEventStream && upstreamResponse.body)"),
       coreSource.indexOf("const body = relayWithAbort(upstreamResponse.body, upstream);"),
@@ -45,13 +48,23 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     const selector = capsSource.slice(
       capsSource.indexOf("export function selectEagerPath"),
     );
+    const budgetFinalizer = budgetSource.slice(
+      budgetSource.indexOf("export function finalizeTranslatorBudgetResponse"),
+    );
+    const eagerStreamSource = eagerSource.slice(
+      eagerSource.indexOf("return new ReadableStream<Uint8Array>({"),
+    );
+    const corsWrapper = corsSource.slice(
+      corsSource.indexOf("export function withCors"),
+      corsSource.indexOf("export function withManagementCors"),
+    );
 
     expect(sseBranch).toContain("upstreamResponse.body.tee()");
     // Windows no-rewrite traffic must honor the stream-mode/runtime gate so
     // legacy-tee remains a safety escape hatch for Bun#32111.
     expect(sseBranch).toContain("const repairConfig = route.provider.responsesItemIdRepair;");
     expect(sseBranch).toContain("const needsClientRewrite = imageGenCallAliases.size > 0");
-    expect(sseBranch).toContain("new Response(eagerBody");
+    expect(sseBranch).toContain("const clientBody = options.settleOwnedTranslatorBudget");
     expect(sseBranch).toContain("const rewrittenBody = clientBlockRewrite !== undefined || payloadRewrites.length > 0");
     expect(sseBranch).toContain("eagerPath?.useEagerRelay || win32EagerRewrite");
     expect(sseBranch).not.toContain("win32TerminalRelay");
@@ -64,17 +77,32 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     expect(sseBranch).toContain("relaySseWithFailedTail(rewrittenBody, upstream");
     expect(sseBranch).toContain("new Response(clientBody");
     expect(sseBranch).toContain("markNativePassthroughSseResponse");
-    // #314/phase 100 two-platform contract: the real core gate delegates to the
-    // selector, whose darwin branch admits only explicit config-eager decisions.
+    // The real core gate delegates to the selector. Darwin auto admits only an
+    // activated plaintext collaboration rewrite on the validated bundled Bun.
     expect(sseBranch).toContain("const eagerPath = selectEagerPath(");
     expect(sseBranch).toContain("config.streamMode ?? \"auto\",");
     expect(selector).toContain('platform !== "win32" && platform !== "darwin"');
-    expect(selector).toContain('decision.reason === "config-eager"');
+    expect(selector).toContain("shape.plaintextCollaborationRewrite");
+    expect(selector).toContain("DARWIN_PLAINTEXT_EAGER_VALIDATED_BUN_VERSION");
+    expect(selector).toContain('reason: "auto-darwin-plaintext-v2"');
     expect(sseBranch).toContain("relaySseEagerBounded(upstreamResponse.body, turnAc,");
+    expect(sseBranch).toContain("markTranslatorBudgetSelfFinalizingBody(eagerBody)");
+    expect(sseBranch).toContain("options.settleOwnedTranslatorBudget?.()");
     expect(sseBranch).not.toContain("relaySseWithHeartbeat(");
     expect(sseBranch).not.toContain("trackStreamLifetime(");
     expect(logWrapper.indexOf("isNativePassthroughSseResponse(response)")).toBeGreaterThanOrEqual(0);
     expect(logWrapper.indexOf("isNativePassthroughSseResponse(response)")).toBeLessThan(logWrapper.indexOf("trackSseForRequestLog("));
+    // Bun#32111 invariant: the exact eager body keeps synchronous pull, the
+    // owned-budget finalizer returns marked bodies by identity before locking
+    // them, deferred logging skips native passthrough, and CORS only reuses the
+    // same body. No post-relay async-pull wrapper is reachable.
+    expect(eagerStreamSource).toContain("pull() {");
+    expect(eagerStreamSource).not.toContain("async pull(");
+    expect(budgetFinalizer.indexOf("isTranslatorBudgetSelfFinalizingBody(response.body)")).toBeLessThan(
+      budgetFinalizer.indexOf("response.body.getReader()"),
+    );
+    expect(corsWrapper).not.toContain("ReadableStream");
+    expect(corsWrapper).toContain("new Response(response.body");
   });
 
   test("CASE B: relays body bytes verbatim and completes cleanly without aborting", async () => {

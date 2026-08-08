@@ -95,7 +95,13 @@ import {
   prepareSameTarget429Wait,
 } from "../../lib/upstream-retry";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../auth-cors";
-import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
+import {
+  createTranslatorBudget,
+  finalizeTranslatorBudgetResponse,
+  isTranslatorBudgetExceededError,
+  markTranslatorBudgetSelfFinalizingBody,
+  type TranslatorBudget,
+} from "../../lib/translator-budget";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { slugsEquivalent } from "../../providers/slug-codec";
@@ -1257,51 +1263,6 @@ export async function handleComboResponses(
 
 
 
-function finalizeOwnedTranslatorBudget(response: Response, budget: TranslatorBudget): Response {
-  if (!response.body) {
-    budget.dispose();
-    return response;
-  }
-  const reader = response.body.getReader();
-  let finalized = false;
-  const finalize = () => {
-    if (finalized) return;
-    finalized = true;
-    budget.dispose();
-  };
-  const body = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const result = await reader.read();
-        if (result.done) {
-          finalize();
-          controller.close();
-        } else {
-          controller.enqueue(result.value);
-        }
-      } catch (error) {
-        finalize();
-        controller.error(error);
-      }
-    },
-    async cancel(reason) {
-      try { await reader.cancel(reason); } finally { finalize(); }
-    },
-  });
-  const finalizedResponse = new Response(body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
-  if (isNativePassthroughSseResponse(response)) {
-    markNativePassthroughSseResponse(finalizedResponse);
-  }
-  if (isEagerRelaySseResponse(response)) {
-    markEagerRelaySseResponse(finalizedResponse);
-  }
-  return finalizedResponse;
-}
-
 /**
  * Service-tier capability gate, applied after the final route/wire is settled. A
  * provider explicitly documented as NOT supporting `service_tier` must never
@@ -1336,13 +1297,41 @@ export async function handleResponses(
 ): Promise<Response> {
   const ownsBudget = options.translatorBudget === undefined;
   const translatorBudget = options.translatorBudget ?? createTranslatorBudget();
+  let ownedBudgetSettled = false;
+  const settleOwnedTranslatorBudget = () => {
+    if (!ownsBudget || ownedBudgetSettled) return;
+    ownedBudgetSettled = true;
+    translatorBudget.dispose();
+  };
   try {
-    const response = await handleResponsesInner(req, config, logCtx, { ...options, translatorBudget });
-    return ownsBudget ? finalizeOwnedTranslatorBudget(response, translatorBudget) : response;
+    const response = await handleResponsesInner(req, config, logCtx, {
+      ...options,
+      translatorBudget,
+      ...(ownsBudget ? { settleOwnedTranslatorBudget } : {}),
+    });
+    return ownsBudget
+      ? finalizeOwnedTranslatorBudget(response, translatorBudget, settleOwnedTranslatorBudget)
+      : response;
   } catch (error) {
-    if (ownsBudget) translatorBudget.dispose();
+    settleOwnedTranslatorBudget();
     throw error;
   }
+}
+
+function finalizeOwnedTranslatorBudget(
+  response: Response,
+  budget: TranslatorBudget,
+  settle: () => void,
+): Response {
+  const finalizedResponse = finalizeTranslatorBudgetResponse(response, budget, settle);
+  if (finalizedResponse === response) return response;
+  if (isNativePassthroughSseResponse(response)) {
+    markNativePassthroughSseResponse(finalizedResponse);
+  }
+  if (isEagerRelaySseResponse(response)) {
+    markEagerRelaySseResponse(finalizedResponse);
+  }
+  return finalizedResponse;
 }
 
 /**
@@ -1353,7 +1342,11 @@ async function handleResponsesInner(
   req: Request,
   config: OcxConfig,
   logCtx: RequestLogContext,
-  options: HandleResponsesOptions & { translatorBudget: TranslatorBudget },
+  options: HandleResponsesOptions & {
+    translatorBudget: TranslatorBudget;
+    /** Present only when this invocation owns the budget lifecycle. */
+    settleOwnedTranslatorBudget?: () => void;
+  },
 ): Promise<Response> {
   // The Chat and Anthropic surfaces replay through here with a Responses-shaped body,
   // so an omitted value means a genuine Responses inbound.
@@ -2117,11 +2110,10 @@ async function handleResponsesInner(
     // background for terminal-outcome/quota inspection only.
     // #314 alternative shape: win32 no-rewrite traffic follows the runtime/config
     // gate; darwin no-rewrite traffic joins it only for explicit
-    // `streamMode: "eager-relay"` opt-in. Darwin `auto` always stays tee. The
-    // eager shape skips tee and uses one bounded reader with inline inspection
-    // (src/server/relay-eager.ts; policy:
-    // devlog/_fin/260731_macos_rss_retention/100_darwin_eager_optin.md).
-    // The bundled known-bad runtime remains on tee by default on both platforms.
+    // Darwin `auto` uses the tested synchronous-pull eager shape only for an
+    // activated plaintext-V2 collaboration rewrite. Other Darwin rewrites stay
+    // explicit-only; `legacy-tee` remains the rollback switch.
+    // Generic no-rewrite traffic on the bundled runtime remains on tee by default.
     if (isEventStream && upstreamResponse.body) {
       const repairConfig = route.provider.responsesItemIdRepair;
       const snapshotRepairEnabled = hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair);
@@ -2167,7 +2159,10 @@ async function handleResponsesInner(
       const win32EagerRewrite = isWin32EagerRewrite(process.platform, needsClientRewrite);
       const eagerPath = selectEagerPath(
         process.platform,
-        needsClientRewrite,
+        {
+          needsClientRewrite,
+          plaintextCollaborationRewrite: plaintextCollaborationClientRewrite !== undefined,
+        },
         config.streamMode ?? "auto",
       );
       const inlineEagerRewrite = needsClientRewrite
@@ -2211,7 +2206,7 @@ async function handleResponsesInner(
           // Stream lifetime follows the protocol terminal even when this request
           // has no outcome callback configured (reported() would stay false).
           sawTerminal: () => inspector.terminalSeen(),
-          ...(win32EagerRewrite
+          ...(inlineEagerRewrite
             ? { rewritePayload: composeSsePayloadRewrites(...payloadRewrites) }
             : {}),
           ...(clientBlockRewrite
@@ -2229,15 +2224,20 @@ async function handleResponsesInner(
             }
           },
           onClientCancel: () => options.onNativePassthroughCancel?.(),
-          onDone: () => unregisterTurn(turnAc),
+          onDone: () => {
+            try { unregisterTurn(turnAc); } finally { options.settleOwnedTranslatorBudget?.(); }
+          },
         }, inlineEagerRewrite ? { rewriteBudget: translatorBudget } : undefined);
         // When selected, this relay closes response.completed even if upstream
         // keeps the connection alive. Windows forced-rewrite traffic and Darwin
-        // explicit eager traffic apply client rewrites inline rather than via
-        // the tee()+JS-pull chain.
+        // explicit/validated-plaintext eager traffic apply client rewrites
+        // inline rather than via the tee()+JS-pull chain.
         if (!headers.has("content-type")) headers.set("content-type", "text/event-stream");
+        const clientBody = options.settleOwnedTranslatorBudget
+          ? markTranslatorBudgetSelfFinalizingBody(eagerBody)
+          : eagerBody;
         return markEagerRelaySseResponse(
-          markNativePassthroughSseResponse(new Response(eagerBody, {
+          markNativePassthroughSseResponse(new Response(clientBody, {
             status: upstreamResponse.status,
             headers,
           })),

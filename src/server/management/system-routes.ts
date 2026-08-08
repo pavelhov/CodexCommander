@@ -29,6 +29,7 @@ import { responseStateMetrics } from "../../responses/state";
 import { appOwnedBytesSnapshot } from "../../lib/app-owned-memory";
 import { jsonResponse } from "../auth-cors";
 import { getInspectionCounters } from "../relay";
+import { getEagerRelayCounters } from "../relay-eager";
 import type { ManagementContext } from "./context";
 import { acceptSystemRestart } from "./system-restart";
 
@@ -69,12 +70,17 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
       })()
       : null;
     const streamMode = config.streamMode ?? "auto";
-    /**
-     * No request-specific rewrite context exists on this route, so report the
-     * effective no-client-rewrite baseline. Individual rewrite requests still
-     * stay on tee even when this baseline says eager.
-     */
-    const eagerRelay = selectEagerPath(process.platform, false, streamMode);
+    /** No request context exists here, so report both stable policy baselines. */
+    const eagerRelay = selectEagerPath(process.platform, {
+      needsClientRewrite: false,
+      plaintextCollaborationRewrite: false,
+    }, streamMode);
+    const plaintextV2EagerRelay = config.multiAgentV2MessageDelivery === "plaintext"
+      ? selectEagerPath(process.platform, {
+        needsClientRewrite: true,
+        plaintextCollaborationRewrite: true,
+      }, streamMode)
+      : null;
     return jsonResponse({
       pid: process.pid,
       bunVersion: Bun.version,
@@ -95,8 +101,10 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
       responseState: responseStateMetrics(),
       appOwnedBytes: appOwnedBytesSnapshot(),
       inspectionCounters: getInspectionCounters(),
+      eagerRelayCounters: getEagerRelayCounters(),
       streamMode,
       eagerRelay,
+      plaintextV2EagerRelay,
       watchdog,
       activeTurnCount: getActiveTurnCount(),
       isDraining: isDraining(),

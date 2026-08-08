@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   bunHasAsyncPullCancelFix,
   compareBunVersions,
+  DARWIN_PLAINTEXT_EAGER_VALIDATED_BUN_VERSION,
+  darwinPlaintextEagerRuntimeWarning,
   decideEagerRelay,
   isStreamMode,
   isWin32EagerRewrite,
@@ -101,37 +103,58 @@ describe("selectEagerPath (platform policy matrix)", () => {
   const configLegacy = { useEagerRelay: false, reason: "config-legacy" } as const;
   const configEager = { useEagerRelay: true, reason: "config-eager" } as const;
   const autoFixed = { useEagerRelay: true, reason: "auto-fixed-runtime" } as const;
+  const autoDarwinPlaintext = { useEagerRelay: true, reason: "auto-darwin-plaintext-v2" } as const;
+  const none = { needsClientRewrite: false, plaintextCollaborationRewrite: false } as const;
+  const otherRewrite = { needsClientRewrite: true, plaintextCollaborationRewrite: false } as const;
+  const plaintextRewrite = { needsClientRewrite: true, plaintextCollaborationRewrite: true } as const;
   const cases: Array<{
     platform: NodeJS.Platform;
     mode: "auto" | "legacy-tee" | "eager-relay";
-    rewrite: boolean;
-    expected: typeof configLegacy | typeof configEager | typeof autoFixed | null;
+    shape: typeof none | typeof otherRewrite | typeof plaintextRewrite;
+    version: string;
+    minFixed: string | null;
+    expected: typeof configLegacy | typeof configEager | typeof autoFixed | typeof autoDarwinPlaintext | null;
   }> = [
-    { platform: "win32", mode: "legacy-tee", rewrite: false, expected: configLegacy },
-    { platform: "win32", mode: "eager-relay", rewrite: false, expected: configEager },
-    { platform: "win32", mode: "auto", rewrite: false, expected: autoFixed },
-    { platform: "win32", mode: "legacy-tee", rewrite: true, expected: null },
-    { platform: "win32", mode: "eager-relay", rewrite: true, expected: null },
-    { platform: "win32", mode: "auto", rewrite: true, expected: null },
-    { platform: "darwin", mode: "legacy-tee", rewrite: false, expected: null },
-    { platform: "darwin", mode: "eager-relay", rewrite: false, expected: configEager },
-    { platform: "darwin", mode: "auto", rewrite: false, expected: null },
-    { platform: "darwin", mode: "legacy-tee", rewrite: true, expected: null },
-    { platform: "darwin", mode: "eager-relay", rewrite: true, expected: configEager },
-    { platform: "darwin", mode: "auto", rewrite: true, expected: null },
-    { platform: "linux", mode: "legacy-tee", rewrite: false, expected: null },
-    { platform: "linux", mode: "eager-relay", rewrite: false, expected: null },
-    { platform: "linux", mode: "auto", rewrite: false, expected: null },
-    { platform: "linux", mode: "legacy-tee", rewrite: true, expected: null },
-    { platform: "linux", mode: "eager-relay", rewrite: true, expected: null },
-    { platform: "linux", mode: "auto", rewrite: true, expected: null },
+    { platform: "win32", mode: "legacy-tee", shape: none, version: "9.9.9", minFixed: "1.4.0", expected: configLegacy },
+    { platform: "win32", mode: "eager-relay", shape: none, version: "1.3.14", minFixed: null, expected: configEager },
+    { platform: "win32", mode: "auto", shape: none, version: "1.4.0", minFixed: "1.4.0", expected: autoFixed },
+    { platform: "win32", mode: "auto", shape: otherRewrite, version: "1.4.0", minFixed: "1.4.0", expected: null },
+    { platform: "win32", mode: "auto", shape: plaintextRewrite, version: "1.3.14", minFixed: null, expected: null },
+    { platform: "darwin", mode: "legacy-tee", shape: plaintextRewrite, version: "1.3.14", minFixed: null, expected: null },
+    { platform: "darwin", mode: "eager-relay", shape: none, version: "1.3.14", minFixed: null, expected: configEager },
+    { platform: "darwin", mode: "eager-relay", shape: otherRewrite, version: "1.3.14", minFixed: null, expected: configEager },
+    { platform: "darwin", mode: "auto", shape: none, version: "1.3.14", minFixed: null, expected: null },
+    { platform: "darwin", mode: "auto", shape: otherRewrite, version: "1.3.14", minFixed: null, expected: null },
+    { platform: "darwin", mode: "auto", shape: plaintextRewrite, version: "1.3.14", minFixed: null, expected: autoDarwinPlaintext },
+    { platform: "darwin", mode: "auto", shape: plaintextRewrite, version: "1.3.15", minFixed: null, expected: null },
+    { platform: "linux", mode: "eager-relay", shape: none, version: "1.3.14", minFixed: null, expected: null },
+    { platform: "linux", mode: "auto", shape: plaintextRewrite, version: "1.3.14", minFixed: null, expected: null },
   ];
 
-  for (const { platform, mode, rewrite, expected } of cases) {
-    test(`${platform} + ${mode} + rewrite=${rewrite}`, () => {
-      expect(selectEagerPath(platform, rewrite, mode, "1.4.0", "1.4.0")).toEqual(expected);
+  for (const { platform, mode, shape, version, minFixed, expected } of cases) {
+    test(`${platform} + ${mode} + ${shape.plaintextCollaborationRewrite ? "plaintext-v2" : shape.needsClientRewrite ? "other-rewrite" : "no-rewrite"} + Bun ${version}`, () => {
+      expect(selectEagerPath(platform, shape, mode, version, minFixed)).toEqual(expected);
     });
   }
+});
+
+describe("Darwin plaintext-V2 runtime validation", () => {
+  test("the validated relay runtime stays pinned to the bundled Bun dependency", async () => {
+    const pkg = await Bun.file(new URL("../package.json", import.meta.url)).json() as {
+      dependencies?: { bun?: string };
+    };
+    expect(DARWIN_PLAINTEXT_EAGER_VALIDATED_BUN_VERSION).toBe("1.3.14");
+    expect(pkg.dependencies?.bun).toBe(DARWIN_PLAINTEXT_EAGER_VALIDATED_BUN_VERSION);
+  });
+
+  test("warns only when plaintext auto would fall back on an unvalidated Darwin runtime", () => {
+    expect(darwinPlaintextEagerRuntimeWarning("darwin", "auto", "plaintext", "1.3.15"))
+      .toContain("stays on legacy tee");
+    expect(darwinPlaintextEagerRuntimeWarning("darwin", "auto", "plaintext", "1.3.14")).toBeNull();
+    expect(darwinPlaintextEagerRuntimeWarning("darwin", "legacy-tee", "plaintext", "1.3.15")).toBeNull();
+    expect(darwinPlaintextEagerRuntimeWarning("darwin", "auto", "encrypted", "1.3.15")).toBeNull();
+    expect(darwinPlaintextEagerRuntimeWarning("linux", "auto", "plaintext", "1.3.15")).toBeNull();
+  });
 });
 
 describe("isStreamMode", () => {

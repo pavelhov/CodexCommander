@@ -1,12 +1,17 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { bridgeToResponsesSSE, buildResponseJSON } from "../src/bridge";
 import { handleResponses } from "../src/server/responses";
+import { isEagerRelaySseResponse } from "../src/server/relay";
 import {
   inspectResponseLogJson,
   inspectResponseLogSsePayload,
   type RequestLogContext,
 } from "../src/server/request-log";
 import type { AdapterEvent, OcxConfig } from "../src/types";
+import {
+  createTranslatorBudget,
+  translatorLiveBudgetCountForTests,
+} from "../src/lib/translator-budget";
 import {
   V2_PLAINTEXT_COLLABORATION_NAMESPACE,
   markV2PlaintextCollaborationJson,
@@ -482,6 +487,7 @@ describe("plaintext V2 usage-debug privacy", () => {
 
 describe("native V2 plaintext collaboration handleResponses integration", () => {
   test("aliases the ChatGPT request and restores every streamed client item", async () => {
+    const liveBudgetsBefore = translatorLiveBudgetCountForTests();
     let upstreamBody = "";
     globalThis.fetch = (async (_input, init) => {
       upstreamBody = typeof init?.body === "string" ? init.body : "";
@@ -497,6 +503,7 @@ describe("native V2 plaintext collaboration handleResponses integration", () => 
       headers: { "content-type": "application/json", authorization: "Bearer test" },
       body: JSON.stringify(nativeV2Body()),
     }), nativeConfig("plaintext"), logCtx);
+    if (process.platform === "darwin") expect(isEagerRelaySseResponse(response)).toBe(true);
     const upstream = JSON.parse(upstreamBody) as { input: Array<{ type: string; tools?: Record<string, unknown>[] }> };
     const declaration = upstream.input[0]!.tools![1] as { name: string; tools: Record<string, unknown>[] };
     expect(declaration.name).toBe(V2_PLAINTEXT_COLLABORATION_NAMESPACE);
@@ -520,7 +527,69 @@ describe("native V2 plaintext collaboration handleResponses integration", () => 
         encrypted_function_args: [],
       });
     }
+    expect(translatorLiveBudgetCountForTests()).toBe(liveBudgetsBefore);
   });
+
+  test.skipIf(process.platform !== "darwin")(
+    "keeps caller-owned budgets alive on the auto eager plaintext path",
+    async () => {
+      globalThis.fetch = (async () => new Response(completedSse(V2_PLAINTEXT_COLLABORATION_NAMESPACE), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      })) as typeof fetch;
+      const budget = createTranslatorBudget();
+      const liveBudgetsWithCaller = translatorLiveBudgetCountForTests();
+      try {
+        const response = await handleResponses(new Request("http://localhost/v1/responses", {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: "Bearer test" },
+          body: JSON.stringify(nativeV2Body()),
+        }), nativeConfig("plaintext"), { model: "", provider: "" }, { translatorBudget: budget });
+
+        expect(isEagerRelaySseResponse(response)).toBe(true);
+        await response.text();
+        expect(translatorLiveBudgetCountForTests()).toBe(liveBudgetsWithCaller);
+      } finally {
+        budget.dispose();
+      }
+    },
+  );
+
+  test.skipIf(process.platform !== "darwin")(
+    "settles an owned budget after client cancel and a late upstream terminal",
+    async () => {
+      const liveBudgetsBefore = translatorLiveBudgetCountForTests();
+      let upstreamController!: ReadableStreamDefaultController<Uint8Array>;
+      globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) { upstreamController = controller; },
+      }), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      })) as typeof fetch;
+
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer test" },
+        body: JSON.stringify(nativeV2Body()),
+      }), nativeConfig("plaintext"), { model: "", provider: "" });
+      expect(isEagerRelaySseResponse(response)).toBe(true);
+      const reader = response.body!.getReader();
+      upstreamController.enqueue(new TextEncoder().encode(
+        `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "started" })}\n\n`,
+      ));
+      expect((await reader.read()).done).toBe(false);
+      await reader.cancel("client closed");
+      upstreamController.enqueue(new TextEncoder().encode(
+        completedSse(V2_PLAINTEXT_COLLABORATION_NAMESPACE),
+      ));
+
+      const deadline = Date.now() + 2_000;
+      while (translatorLiveBudgetCountForTests() !== liveBudgetsBefore && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      expect(translatorLiveBudgetCountForTests()).toBe(liveBudgetsBefore);
+    },
+  );
 
   test("restores the bounded JSON response after aliasing the native request", async () => {
     let upstreamBody = "";
