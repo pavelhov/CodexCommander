@@ -31,6 +31,7 @@ import {
 } from "../src/codex/features";
 import { cmdV2, codexFeaturesInvocation, v2StatusLine, multiAgentModeLine } from "../src/cli/v2";
 import { handleManagementAPI } from "../src/server/management-api";
+import { loadConfig } from "../src/config";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 function template(): Record<string, unknown> {
@@ -779,6 +780,51 @@ describe("config-surface parity: agents.enabled, max_depth, subagent_developer_i
 });
 
 describe("management API logical v1/v2 switching", () => {
+  test("persists and clears the explicit V2 message-delivery policy", async () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
+    const oldCodexHome = process.env.CODEX_HOME;
+    const oldOcxHome = process.env.OPENCODEX_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    process.env.OPENCODEX_HOME = mkdtempSync(join(tmpdir(), "ocx-api-delivery-"));
+    const config = { providers: [], multiAgentV2MessageDelivery: "encrypted" } as never;
+    const deps = { createManagementConvergeCodex: catalogConvergenceFactory() };
+    try {
+      const setPlaintext = new Request("http://localhost/api/v2", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ multiAgentV2MessageDelivery: "plaintext" }),
+      });
+      const response = await handleManagementAPI(setPlaintext, new URL(setPlaintext.url), config, deps);
+      expect(response?.status).toBe(200);
+      expect(await response?.json()).toMatchObject({ multiAgentV2MessageDelivery: "plaintext" });
+      expect(loadConfig().multiAgentV2MessageDelivery).toBe("plaintext");
+
+      const get = new Request("http://localhost/api/v2");
+      const getResponse = await handleManagementAPI(get, new URL(get.url), config, deps);
+      expect(await getResponse?.json()).toMatchObject({ multiAgentV2MessageDelivery: "plaintext" });
+
+      const clear = new Request("http://localhost/api/v2", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ multiAgentV2MessageDelivery: null }),
+      });
+      const clearResponse = await handleManagementAPI(clear, new URL(clear.url), config, deps);
+      expect(clearResponse?.status).toBe(200);
+      expect(await clearResponse?.json()).toMatchObject({ multiAgentV2MessageDelivery: "encrypted" });
+      expect(loadConfig().multiAgentV2MessageDelivery).toBeUndefined();
+
+      const invalid = new Request("http://localhost/api/v2", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ multiAgentV2MessageDelivery: "automatic" }),
+      });
+      expect((await handleManagementAPI(invalid, new URL(invalid.url), config, deps))?.status).toBe(400);
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+      if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcxHome;
+    }
+  });
+
   test("mode-only switches translate the limit across the root-slot boundary in both directions", async () => {
     const path = fixtureConfig("[agents]\nmax_threads = 100\nmax_depth = 2\n");
     const oldCodexHome = process.env.CODEX_HOME;

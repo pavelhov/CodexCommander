@@ -226,6 +226,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       agentsMaxThreadsConflict: enabled && hasAgentsMaxThreads(),
       maxConcurrentThreadsPerSession: getLogicalMaxThreads(),
       multiAgentMode: config.multiAgentMode ?? "default",
+      multiAgentV2MessageDelivery: config.multiAgentV2MessageDelivery ?? "encrypted",
       agentsEnabled: getAgentsEnabled(),
       agentsMaxDepth: getAgentsMaxDepth(),
       subagentDeveloperInstructions: getSubagentDeveloperInstructions(),
@@ -239,6 +240,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       enabled?: unknown;
       maxConcurrentThreadsPerSession?: unknown;
       multiAgentMode?: unknown;
+      multiAgentV2MessageDelivery?: unknown;
       agentsEnabled?: unknown;
       agentsMaxDepth?: unknown;
       subagentDeveloperInstructions?: unknown;
@@ -247,15 +249,22 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const wantsFlag = body.enabled !== undefined;
     const wantsThreads = body.maxConcurrentThreadsPerSession !== undefined;
     const wantsMode = body.multiAgentMode !== undefined;
+    const wantsMessageDelivery = body.multiAgentV2MessageDelivery !== undefined;
     const wantsAgentsEnabled = body.agentsEnabled !== undefined;
     const wantsMaxDepth = body.agentsMaxDepth !== undefined;
     const wantsSubagentInstructions = body.subagentDeveloperInstructions !== undefined;
-    if (!wantsFlag && !wantsThreads && !wantsMode && !wantsAgentsEnabled && !wantsMaxDepth && !wantsSubagentInstructions) {
-      return jsonResponse({ error: "body must set enabled, multiAgentMode, maxConcurrentThreadsPerSession, agentsEnabled, agentsMaxDepth, and/or subagentDeveloperInstructions" }, 400);
+    if (!wantsFlag && !wantsThreads && !wantsMode && !wantsMessageDelivery && !wantsAgentsEnabled && !wantsMaxDepth && !wantsSubagentInstructions) {
+      return jsonResponse({ error: "body must set enabled, multiAgentMode, multiAgentV2MessageDelivery, maxConcurrentThreadsPerSession, agentsEnabled, agentsMaxDepth, and/or subagentDeveloperInstructions" }, 400);
     }
     if (wantsFlag && typeof body.enabled !== "boolean") return jsonResponse({ error: "body.enabled must be a boolean" }, 400);
     if (wantsMode && body.multiAgentMode !== "v1" && body.multiAgentMode !== "default" && body.multiAgentMode !== "v2") {
       return jsonResponse({ error: "body.multiAgentMode must be 'v1', 'default', or 'v2'" }, 400);
+    }
+    if (wantsMessageDelivery
+      && body.multiAgentV2MessageDelivery !== null
+      && body.multiAgentV2MessageDelivery !== "encrypted"
+      && body.multiAgentV2MessageDelivery !== "plaintext") {
+      return jsonResponse({ error: "body.multiAgentV2MessageDelivery must be 'encrypted', 'plaintext', or null" }, 400);
     }
     // null clears the active thread-limit key (same unset contract as the other
     // nullable fields below); an integer keeps the existing set behavior.
@@ -306,9 +315,17 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     if (wantsMode) {
       if (mode === "default") delete config.multiAgentMode;
       else config.multiAgentMode = mode;
-      saveConfigPreservingClaudeCode(config);
       warnings.push(`Multi-agent mode set to '${mode}'. Applies to new sessions.`);
     }
+    if (wantsMessageDelivery) {
+      if (body.multiAgentV2MessageDelivery === "plaintext") {
+        config.multiAgentV2MessageDelivery = "plaintext";
+      } else {
+        delete config.multiAgentV2MessageDelivery;
+      }
+      warnings.push("V2 message delivery changes affect subsequent requests. Start a new session instead of switching an active conversation.");
+    }
+    if (wantsMode || wantsMessageDelivery) saveConfigPreservingClaudeCode(config);
     // New-key scalar writes: each writer is individually atomic, so apply them in
     // sequence after the transition. A failure here is a persistence failure (the
     // writers' ok:false result or a throw from the underlying atomic write helper),
@@ -348,6 +365,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       agentsMaxThreadsConflict: enabled && hasAgentsMaxThreads(),
       maxConcurrentThreadsPerSession: getLogicalMaxThreads(),
       multiAgentMode: config.multiAgentMode ?? "default",
+      multiAgentV2MessageDelivery: config.multiAgentV2MessageDelivery ?? "encrypted",
       agentsEnabled: getAgentsEnabled(),
       agentsMaxDepth: getAgentsMaxDepth(),
       subagentDeveloperInstructions: getSubagentDeveloperInstructions(),

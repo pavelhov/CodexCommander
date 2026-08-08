@@ -3,6 +3,7 @@ import { adapterFailureFromMessage, classifyError, CYBER_POLICY_ERROR_CODE, isCy
 import { encodeCompactionSummary } from "./responses/compaction";
 import { encodeReasoningEnvelope, type ReasoningEnvelope } from "./responses/reasoning-envelope";
 import { rememberReasoningForCall } from "./responses/reasoning-replay-cache";
+import { v2PlaintextFunctionCallFields } from "./responses/v2-plaintext-collaboration";
 import { resolveStallTimeoutSec } from "./stall-timeout";
 import { usageDisplayTotalTokens } from "./usage/totals";
 import {
@@ -161,6 +162,8 @@ export function bridgeToResponsesSSE(
     responseId?: string;
     stallTimeoutSec?: number;
     hideThinkingSummary?: boolean;
+    /** Mark V2 collaboration message items as plaintext for stock Codex 0.147+. */
+    plaintextV2Collaboration?: boolean;
     /**
      * Remote compaction v2 turn: accumulate all assistant text and, on done, emit ONE synthetic
      * `{type:"compaction", encrypted_content:"ocx1:"+base64(text)}` output item before
@@ -626,6 +629,11 @@ export function bridgeToResponsesSSE(
               call_id: currentToolCall.callId, name: currentToolCall.name,
               arguments: argsStr, status: "completed",
               ...(currentToolCall.namespace ? { namespace: currentToolCall.namespace } : {}),
+              ...v2PlaintextFunctionCallFields(
+                options?.plaintextV2Collaboration === true,
+                currentToolCall.namespace,
+                currentToolCall.name,
+              ),
             };
         emit("response.output_item.done", { output_index: currentToolCall.outputIndex, item });
         retainFinishedItem(item as OutputItem);
@@ -987,7 +995,15 @@ export function bridgeToResponsesSSE(
                 ? { type: "tool_search_call", id: itemId, call_id: event.id, execution: "client", arguments: {}, status: "in_progress" }
                 : freeform
                 ? { type: "custom_tool_call", id: itemId, call_id: event.id, name: realName, input: "", status: "in_progress" }
-                : { type: "function_call", id: itemId, call_id: event.id, name: realName, arguments: "", status: "in_progress", ...(ns ? { namespace: ns } : {}) };
+                : {
+                    type: "function_call", id: itemId, call_id: event.id, name: realName,
+                    arguments: "", status: "in_progress", ...(ns ? { namespace: ns } : {}),
+                    ...v2PlaintextFunctionCallFields(
+                      options?.plaintextV2Collaboration === true,
+                      ns,
+                      realName,
+                    ),
+                  };
               emit("response.output_item.added", { output_index: outputIndex, item });
               currentToolCall = { itemId, outputIndex, callId: event.id, name: realName, args: "", argsBytes: 0, namespace: ns, freeform, toolSearch };
               budget?.openCall(event.id);
@@ -1366,6 +1382,8 @@ function buildResponseJSONWithBudget(
   modelId: string,
   options?: {
     hideThinkingSummary?: boolean;
+    /** Mark completed V2 collaboration message items as plaintext for stock Codex 0.147+. */
+    plaintextV2Collaboration?: boolean;
     toolNsMap?: Map<string, { namespace: string; name: string }>;
     freeformToolNames?: Set<string>;
     toolSearchToolNames?: Set<string>;
@@ -1553,6 +1571,13 @@ function buildResponseJSONWithBudget(
         call_id: currentToolCallId, name: realName,
         arguments: currentToolCallArgs || "{}", status,
         ...(ns ? { namespace: ns } : {}),
+        ...(status === "completed"
+          ? v2PlaintextFunctionCallFields(
+              options?.plaintextV2Collaboration === true,
+              ns,
+              realName,
+            )
+          : {}),
       });
     }
     budget?.closeCall(currentToolCallId);

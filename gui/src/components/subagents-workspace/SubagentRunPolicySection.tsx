@@ -4,7 +4,7 @@ import { type TKey, useT } from "../../i18n/shared";
 import { formatNamespacedModelId } from "../../provider-icons";
 import { Notice, Select, Switch } from "../../ui";
 import type { DelegationModelOption, DelegationPatch } from "../../pages/use-subagent-delegation";
-import type { MultiAgentMode, SubagentRunPolicy } from "../../pages/use-subagent-run-policy";
+import type { MultiAgentMode, MultiAgentV2MessageDelivery, SubagentRunPolicy } from "../../pages/use-subagent-run-policy";
 
 type DelegationState = {
   loaded: boolean;
@@ -135,6 +135,10 @@ export default function SubagentRunPolicySection({
     value: mode,
     label: t(`models.modeLabel_${mode}` as TKey),
   }));
+  const messageDeliveryOptions = (["encrypted", "plaintext"] as MultiAgentV2MessageDelivery[]).map(delivery => ({
+    value: delivery,
+    label: t(`sub.policy.messageDelivery_${delivery}` as TKey),
+  }));
   const pollOptions = [
     { value: "15000", label: t("sub.policy.seconds", { n: 15 }) },
     { value: "30000", label: t("sub.policy.seconds", { n: 30 }) },
@@ -162,7 +166,11 @@ export default function SubagentRunPolicySection({
       {(policy.error || delegation.error) && <Notice tone="err">{policy.error || delegation.error}</Notice>}
       {feedback === "saved" && <Notice tone="ok">{t("sub.policy.saved")}</Notice>}
       {feedback === "failed" && !policy.error && !delegation.error && <Notice tone="err">{t("sub.policy.saveFailed")}</Notice>}
-      {policy.mode === "v2" && <Notice tone="warn">{t("sub.policy.compatibilityV2")}</Notice>}
+      {policy.mode === "v2" && <Notice tone="warn">{t(
+        policy.messageDelivery === "plaintext"
+          ? "sub.policy.compatibilityV2Plaintext"
+          : "sub.policy.compatibilityV2",
+      )}</Notice>}
 
       <div className="swi-policy-grid">
         <div className="swi-policy-field">
@@ -177,6 +185,23 @@ export default function SubagentRunPolicySection({
             style={{ width: "100%" }}
           />
           <span className="swi-policy-help">{t(`models.modeOptionDesc_${policy.mode}` as TKey)}</span>
+        </div>
+
+        <div className="swi-policy-field">
+          <label className="swi-policy-label" htmlFor="subagent-policy-message-delivery">{t("sub.policy.messageDelivery")}</label>
+          <Select
+            id="subagent-policy-message-delivery"
+            value={policy.messageDelivery}
+            options={messageDeliveryOptions}
+            onChange={value => {
+              setFeedback(null);
+              policy.setMessageDelivery(value as MultiAgentV2MessageDelivery);
+            }}
+            disabled={saving}
+            label={t("sub.policy.messageDelivery")}
+            style={{ width: "100%" }}
+          />
+          <span className="swi-policy-help">{t(`sub.policy.messageDeliveryHint_${policy.messageDelivery}` as TKey)}</span>
         </div>
 
         <div className="swi-policy-field">

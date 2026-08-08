@@ -79,6 +79,8 @@ export interface RequestLogContext {
   usageDebugBodyKind?: UsageDebugBodyKind;
   usageDebugBodySample?: string;
   usageDebugContentType?: string;
+  /** Never persist upstream body samples for intentionally plaintext V2 collaboration turns. */
+  suppressUsageDebugBodySample?: boolean;
   /** Route adapter type ("cursor"/"kiro"/"anthropic"/…): drives estimated-usage detection
    *  independent of the user-chosen provider NAME (devlog 130 B2). */
   providerAdapter?: string;
@@ -598,7 +600,7 @@ export function inspectResponseLogJson(logCtx: RequestLogContext, text: string):
     /* body may not be JSON; request log metadata is best-effort only */
   }
   captureUpstreamError(logCtx, text);
-  if (isUsageDebugEnabled() && logCtx.usageDebugBodyKind === undefined) {
+  if (isUsageDebugEnabled() && !logCtx.suppressUsageDebugBodySample && logCtx.usageDebugBodyKind === undefined) {
     logCtx.usageDebugBodyKind = "json";
     logCtx.usageDebugBodySample = truncateForDebug(text);
   }
@@ -622,7 +624,7 @@ export function inspectResponseLogSsePayloadParsed(
   parsed: unknown | undefined,
 ): void {
   if (!payload || payload.trim() === "[DONE]") return;
-  const debugEnabled = isUsageDebugEnabled();
+  const debugEnabled = isUsageDebugEnabled() && !logCtx.suppressUsageDebugBodySample;
   const sseAlreadyMarked = logCtx.usageDebugBodyKind === "sse";
   if (parsed !== undefined) applyResponseLogMetadata(logCtx, parsed);
   captureUpstreamErrorParsed(logCtx, payload, parsed);

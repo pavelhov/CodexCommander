@@ -19,7 +19,12 @@ let testWindow: Window;
 type FetchCall = { url: string; method: string; body?: Record<string, unknown> };
 
 const serverState = {
-  v2: { enabled: true, multiAgentMode: "default", maxConcurrentThreadsPerSession: null as number | null },
+  v2: {
+    enabled: true,
+    multiAgentMode: "default",
+    multiAgentV2MessageDelivery: "encrypted",
+    maxConcurrentThreadsPerSession: null as number | null,
+  },
   fallback: { models: ["gpt-5"], pollMs: 60_000, available: ["gpt-5", "gpt-5-mini"] },
   effortCaps: { effortCap: null as string | null, subagentEffortCap: "low" as string | null, efforts: ["low", "medium", "high"] },
 };
@@ -39,6 +44,9 @@ function installFetch() {
     if (url.endsWith("/api/v2")) {
       if (method === "PUT") {
         if (body && typeof body.multiAgentMode === "string") serverState.v2.multiAgentMode = body.multiAgentMode;
+        if (body && typeof body.multiAgentV2MessageDelivery === "string") {
+          serverState.v2.multiAgentV2MessageDelivery = body.multiAgentV2MessageDelivery;
+        }
         if (body && "maxConcurrentThreadsPerSession" in body
             && (body.maxConcurrentThreadsPerSession === null || typeof body.maxConcurrentThreadsPerSession === "number")) {
           serverState.v2.maxConcurrentThreadsPerSession = body.maxConcurrentThreadsPerSession;
@@ -69,7 +77,12 @@ function installFetch() {
 }
 
 function resetServerState() {
-  serverState.v2 = { enabled: true, multiAgentMode: "default", maxConcurrentThreadsPerSession: null };
+  serverState.v2 = {
+    enabled: true,
+    multiAgentMode: "default",
+    multiAgentV2MessageDelivery: "encrypted",
+    maxConcurrentThreadsPerSession: null,
+  };
   serverState.fallback = { models: ["gpt-5"], pollMs: 60_000, available: ["gpt-5", "gpt-5-mini"] };
   serverState.effortCaps = { effortCap: null, subagentEffortCap: "low", efforts: ["low", "medium", "high"] };
 }
@@ -132,6 +145,7 @@ test("loads the initial policy from all three endpoints", async () => {
   expect(h.loading).toBe(false);
   expect(h.error).toBeNull();
   expect(h.mode).toBe("default");
+  expect(h.messageDelivery).toBe("encrypted");
   expect(h.concurrency).toBeNull();
   expect(h.fallbackModels).toEqual(["gpt-5"]);
   expect(h.fallbackAvailable).toEqual(["gpt-5", "gpt-5-mini"]);
@@ -179,6 +193,21 @@ test("keeps the classic v1 and concurrent v2 protocol values intact", async () =
   calls = [];
   await act(async () => { expect(await hook(ref).save()).toBe(true); });
   expect(puts().find(call => call.url.endsWith("/api/v2"))?.body).toEqual({ multiAgentMode: "v2" });
+
+  await act(async () => { root.unmount(); });
+});
+
+test("saves plaintext V2 delivery independently in the v2 policy group", async () => {
+  const { root, ref } = await mountPolicy();
+  act(() => { hook(ref).setMessageDelivery("plaintext"); });
+  calls = [];
+
+  await act(async () => { expect(await hook(ref).save()).toBe(true); });
+  expect(puts().find(call => call.url.endsWith("/api/v2"))?.body).toEqual({
+    multiAgentV2MessageDelivery: "plaintext",
+  });
+  expect(hook(ref).messageDelivery).toBe("plaintext");
+  expect(hook(ref).dirty).toBe(false);
 
   await act(async () => { root.unmount(); });
 });

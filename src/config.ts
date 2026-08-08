@@ -1056,6 +1056,7 @@ const configSchema = z.object({
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
   contextCapValue: z.number().int().positive().optional(),
   multiAgentGuidanceEnabled: z.boolean().optional(),
+  multiAgentV2MessageDelivery: z.enum(["encrypted", "plaintext"]).optional().catch(undefined),
   // These selections pre-date schema validation and used to pass through as
   // unknown fields. Invalid hand edits must disable only the optional
   // delegation/native-default feature, not reject the whole config and hide

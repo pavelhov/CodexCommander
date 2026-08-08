@@ -1,9 +1,14 @@
 # 030 — Provider-aware plaintext delivery for Multi-Agent V2
 
-Status: PROPOSAL ONLY
+Status: SUPERSEDED FOR PRODUCT DELIVERY BY `031_product_owned_plaintext_v2.md`
 
 Owner: WS-03
-Scope: contribution-ready upstream design; no OpenCodex runtime change
+Scope: retained upstream design reference; no upstream submission planned
+
+> OpenCodex now owns an opt-in compatibility shim using Codex 0.147's
+> `DirectPlaintextMessage` receiving path. The broader provider-edge contract
+> below remains the cleaner upstream architecture, but it is no longer a
+> dependency for this product branch.
 
 ## Summary
 

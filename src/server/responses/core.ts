@@ -192,6 +192,11 @@ import {
 } from "../sse-payload-rewrite";
 import { responsesJsonToSseBody } from "../responses-json-events";
 import { guardTerminalEventStream } from "./terminal-guard";
+import {
+  createV2PlaintextCollaborationMarkerRewrite,
+  createV2PlaintextCollaborationRestoreRewrite,
+  rewriteV2PlaintextCollaborationRequest,
+} from "../../responses/v2-plaintext-collaboration";
 
 /**
  * Adapters whose continuation state must survive Codex's store:false requests.
@@ -888,6 +893,20 @@ async function applyFinalRouteRequestNormalization(args: {
   logCtx.providerAdapter = route.provider.adapter;
   logCtx.routeDecision = route.routeDecision;
 
+  if (
+    config.multiAgentV2MessageDelivery === "plaintext"
+    && isCanonicalOpenAiForwardProvider(route.provider)
+    && collabSurface(parsed) === "v2"
+  ) {
+    const rewrite = rewriteV2PlaintextCollaborationRequest(parsed._rawBody);
+    if (rewrite.activated) {
+      parsed._rawBody = rewrite.body;
+      parsed._v2PlaintextCollaborationAlias = true;
+    } else if (isInjectionDebugEnabled()) {
+      injectionDebugLog(`[opencodex] native v2 plaintext delivery stayed fail-closed (${rewrite.reason})`);
+    }
+  }
+
   if (responsesUpstreamStreaming === false && route.provider.adapter === "openai-responses") {
     parsed.stream = false;
     if (parsed._rawBody && typeof parsed._rawBody === "object") {
@@ -914,16 +933,18 @@ async function applyFinalRouteRequestNormalization(args: {
   applyServiceTierGate(route.provider, parsed._rawBody, parsed.options);
 
   {
+    const encryptedCodexTasks = isCanonicalOpenAiForwardProvider(route.provider)
+      && parsed._v2PlaintextCollaborationAlias !== true;
     const guidance = await multiAgentGuidanceText(parsed, {
       multiAgentGuidanceEnabled: config.multiAgentGuidanceEnabled,
-      encryptedCodexTasks: isCanonicalOpenAiForwardProvider(route.provider),
+      encryptedCodexTasks,
       codexAccountNamespace: route.codexAccountNamespace,
       injectionModel: config.injectionModel,
       injectionEffort: config.injectionEffort,
       subagentModels: config.subagentModels,
       subagentModelFallback: config.subagentModelFallback,
       injectionPrompt: config.injectionPrompt,
-    }, isCanonicalOpenAiForwardProvider(route.provider)
+    }, encryptedCodexTasks
       ? {
         isEncryptedTaskCompatibleModel: (model: string): boolean => {
           try {
@@ -1401,6 +1422,13 @@ async function handleResponsesInner(
     }
     return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
+  const plaintextV2DeliveryRequested = config.multiAgentV2MessageDelivery === "plaintext"
+    && collabSurface(parsed) === "v2";
+  if (plaintextV2DeliveryRequested) {
+    // Collaboration arguments intentionally become readable to the local Codex runtime. Keep
+    // them out of the separate opt-in usage-debug persistence surface on every provider route.
+    logCtx.suppressUsageDebugBodySample = true;
+  }
   // Prefer a pre-populated id (routed Claude) over Responses headers that may be
   // absent or synthetically injected (session_id from prompt_cache_key).
   if (!logCtx.conversationId) {
@@ -1787,6 +1815,11 @@ async function handleResponsesInner(
     const imageGenCallAliases = route.provider.authMode === "forward"
       ? new Map<string, { namespace: string; name: string }>()
       : imageGenToolCallAliases(toolBridgeMaps.toolNsMap, parsed._rawBody, translatorBudget);
+    const plaintextCollaborationClientRewrite = createV2PlaintextCollaborationRestoreRewrite(
+      parsed._v2PlaintextCollaborationAlias === true,
+    ) ?? createV2PlaintextCollaborationMarkerRewrite(
+      plaintextV2DeliveryRequested && !isCanonicalOpenAiForwardProvider(route.provider),
+    );
     // Local continuation cache for the ChatGPT passthrough. Codex WS turns chain with
     // previous_response_id, ocx converts them to internal HTTP requests, and the ChatGPT Codex
     // REST backend rejects the parameter — the adapter strips it in forward mode, so the ONLY
@@ -2092,13 +2125,21 @@ async function handleResponsesInner(
     if (isEventStream && upstreamResponse.body) {
       const repairConfig = route.provider.responsesItemIdRepair;
       const snapshotRepairEnabled = hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair);
-      const needsClientRewrite = imageGenCallAliases.size > 0 || hasResponsesItemIdRepair(repairConfig) || snapshotRepairEnabled;
-      // Compose opt-in payload rewrites into one parse/stringify pass (image-gen restore first).
-      const payloadRewrites = [
+      const needsClientRewrite = imageGenCallAliases.size > 0
+        || hasResponsesItemIdRepair(repairConfig)
+        || snapshotRepairEnabled
+        || plaintextCollaborationClientRewrite !== undefined;
+      // Snapshot repair may inject outbound tool defaults after ordinary payload rewrites. Keep
+      // plaintext alias restoration/marker injection as the final client-facing pass.
+      const preSnapshotPayloadRewrites = [
         createImageGenCallRestoreRewrite(imageGenCallAliases),
         hasResponsesItemIdRepair(repairConfig)
           ? createResponsesItemIdPayloadRewrite(repairConfig!, translatorBudget)
           : undefined,
+      ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
+      const payloadRewrites = [
+        ...preSnapshotPayloadRewrites,
+        plaintextCollaborationClientRewrite,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
       // #893: sparse-snapshot gateways get field backfills AND lifecycle event
       // injection at the block level, after payload rewrites. Defaults come
@@ -2113,8 +2154,11 @@ async function handleResponsesInner(
       })();
       const clientBlockRewrite = snapshotRepairEnabled
         ? composeSseBlockRewrites(
-          payloadRewriteAsBlockRewrite(composeSsePayloadRewrites(...payloadRewrites)),
+          payloadRewriteAsBlockRewrite(composeSsePayloadRewrites(...preSnapshotPayloadRewrites)),
           createResponsesSnapshotBlockRewrite(snapshotDefaultsRequest, translatorBudget),
+          ...(plaintextCollaborationClientRewrite
+            ? [payloadRewriteAsBlockRewrite(plaintextCollaborationClientRewrite)]
+            : []),
         )
         : undefined;
       // #864: win32 rewrite traffic must never enter the tee()+JS-pull chain
@@ -2289,15 +2333,24 @@ async function handleResponsesInner(
         } catch { /* non-JSON despite content-type; recording is best-effort */ }
       }
       const clientJson = (() => {
-        const restored = restoreImageGenCallsInJson(text, imageGenCallAliases);
-        if (!hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair)) return restored;
+        const imageRestored = restoreImageGenCallsInJson(text, imageGenCallAliases);
+        if (!hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair)) {
+          return plaintextCollaborationClientRewrite
+            ? plaintextCollaborationClientRewrite(imageRestored)
+            : imageRestored;
+        }
         let outbound: unknown;
         try {
           outbound = JSON.parse(request.body);
         } catch {
           outbound = undefined;
         }
-        return repairResponsesSnapshotJson(restored, outbound);
+        const repaired = repairResponsesSnapshotJson(imageRestored, outbound);
+        // Snapshot repair can reintroduce outbound alias defaults, so apply the plaintext
+        // client rewrite exactly once and only after repair, matching the SSE block order.
+        return plaintextCollaborationClientRewrite
+          ? plaintextCollaborationClientRewrite(repaired)
+          : repaired;
       })();
       // #875: the transport-neutral reliability policy forced a bounded JSON
       // upstream for a client that asked for SSE. Reframe the completed JSON
@@ -2351,6 +2404,13 @@ async function handleResponsesInner(
         statusText: upstreamResponse.statusText,
         headers,
       });
+    }
+    if (plaintextCollaborationClientRewrite !== undefined && upstreamResponse.ok) {
+      return formatErrorResponse(
+        502,
+        "upstream_error",
+        "V2 plaintext delivery received an unsupported response content type",
+      );
     }
     const body = relayWithAbort(upstreamResponse.body, upstream);
     const turnAc = new AbortController();
@@ -2611,6 +2671,7 @@ async function handleResponsesInner(
           ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
           stallTimeoutSec: config.stallTimeoutSec,
           hideThinkingSummary: parsed.options.hideThinkingSummary,
+          plaintextV2Collaboration: plaintextV2DeliveryRequested,
           ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
           ...(routedCompaction ? { compaction: true } : {}),
           onUsage: usage => {
@@ -2656,6 +2717,7 @@ async function handleResponsesInner(
       translatorBudget,
       replayCacheScope: parsed._clientThreadId ?? "global",
       hideThinkingSummary: parsed.options.hideThinkingSummary,
+      plaintextV2Collaboration: plaintextV2DeliveryRequested,
       toolNsMap,
       freeformToolNames,
       toolSearchToolNames,
@@ -3306,6 +3368,7 @@ async function handleResponsesInner(
         ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
         stallTimeoutSec: config.stallTimeoutSec,
         hideThinkingSummary: parsed.options.hideThinkingSummary,
+        plaintextV2Collaboration: plaintextV2DeliveryRequested,
         ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
         ...(routedCompaction ? { compaction: true } : {}),
         onUsage: usage => {
@@ -3362,6 +3425,7 @@ async function handleResponsesInner(
       translatorBudget,
       replayCacheScope: parsed._clientThreadId ?? "global",
       hideThinkingSummary: parsed.options.hideThinkingSummary,
+      plaintextV2Collaboration: plaintextV2DeliveryRequested,
       toolNsMap,
       freeformToolNames,
       toolSearchToolNames,

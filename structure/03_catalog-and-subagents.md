@@ -115,12 +115,26 @@ ensures `normalizeRoutedCatalogEntry` (which deletes `multi_agent_version` from 
 not clobber the forced value.
 
 CLI: `ocx v2 mode v1|default|v2`. GUI: **Models → Current behavior → Collaboration**, labeled
-**Classic v1**, **Automatic**, and **Concurrent v2**. API: `GET/PUT /api/v2` with
+**Classic v1**, **Follow Codex defaults**, and **Concurrent v2**. API: `GET/PUT /api/v2` with
 `multiAgentMode` field.
 
 The `multi_agent_v2` feature flag and the logical maximum thread count are separate from
 `multiAgentMode` (`src/codex/features.ts`): the mode decides which surface Codex advertises, while
 the flag and thread count decide what the native runtime allows.
+
+`OcxConfig.multiAgentV2MessageDelivery` is a separate request-time policy. `encrypted` is the
+default and preserves ChatGPT's reserved collaboration schema plus the unreadable-ciphertext
+fail-closed guard. `plaintext` opts the whole V2 parent session into mixed-provider compatibility:
+canonical ChatGPT requests atomically alias the complete known collaboration namespace, strip only
+the three message encryption markers, then restore the namespace and add Codex's
+`encrypted_function_args: []` plaintext sentinel on the response. Routed adapters add that sentinel
+only to completed `spawn_agent`, `send_message`, and `followup_task` calls at the bridge boundary.
+Lifecycle and unrelated tools remain unchanged. Because the parent schema is fixed before worker
+selection, all V2 delegation messages in that parent session become plaintext, including native
+children; usage-debug body sampling is suppressed for those turns. Changes affect subsequent
+requests, so the operator must start a new session rather than switch an active conversation.
+Partial, future, malformed, or colliding native schemas stay encrypted and retain the existing
+fail-closed guard.
 
 ## Ultra reasoning level
 

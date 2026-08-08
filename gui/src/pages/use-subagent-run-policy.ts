@@ -17,11 +17,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
  */
 
 export type MultiAgentMode = "v1" | "default" | "v2";
+export type MultiAgentV2MessageDelivery = "encrypted" | "plaintext";
 
 type GroupName = "v2" | "fallback" | "effort-caps";
 
 type Snapshot = {
   mode: MultiAgentMode;
+  messageDelivery: MultiAgentV2MessageDelivery;
   concurrency: number | null;
   fallbackModels: string[];
   pollMs: number;
@@ -35,6 +37,10 @@ const POLL_MS_MAX = 600_000;
 
 function parseMode(value: unknown): MultiAgentMode {
   return value === "v1" || value === "v2" ? value : "default";
+}
+
+function parseMessageDelivery(value: unknown): MultiAgentV2MessageDelivery {
+  return value === "plaintext" ? "plaintext" : "encrypted";
 }
 
 function parseStringArray(value: unknown): string[] {
@@ -63,6 +69,7 @@ async function readErrorMessage(res: Response): Promise<string> {
 export function useSubagentRunPolicy(apiBase: string) {
   const [committed, setCommitted] = useState<Snapshot | null>(null);
   const [mode, setMode] = useState<MultiAgentMode>("default");
+  const [messageDelivery, setMessageDelivery] = useState<MultiAgentV2MessageDelivery>("encrypted");
   const [concurrency, setConcurrency] = useState<number | null>(null);
   const [fallbackModels, setFallbackModels] = useState<string[]>([]);
   const [fallbackAvailable, setFallbackAvailable] = useState<string[]>([]);
@@ -96,6 +103,7 @@ export function useSubagentRunPolicy(apiBase: string) {
     return {
       snap: {
         mode: parseMode(v2o.multiAgentMode),
+        messageDelivery: parseMessageDelivery(v2o.multiAgentV2MessageDelivery),
         concurrency: typeof v2o.maxConcurrentThreadsPerSession === "number"
           && Number.isFinite(v2o.maxConcurrentThreadsPerSession)
           ? v2o.maxConcurrentThreadsPerSession
@@ -113,6 +121,7 @@ export function useSubagentRunPolicy(apiBase: string) {
   const applySnapshot = useCallback((fresh: { snap: Snapshot; available: string[]; efforts: string[] }) => {
     setCommitted(fresh.snap);
     setMode(fresh.snap.mode);
+    setMessageDelivery(fresh.snap.messageDelivery);
     setConcurrency(fresh.snap.concurrency);
     setFallbackModels(fresh.snap.fallbackModels);
     setPollMs(fresh.snap.pollMs);
@@ -140,6 +149,7 @@ export function useSubagentRunPolicy(apiBase: string) {
 
   const dirty = committed !== null && (
     mode !== committed.mode
+    || messageDelivery !== committed.messageDelivery
     || concurrency !== committed.concurrency
     || !sameStrings(fallbackModels, committed.fallbackModels)
     || pollMs !== committed.pollMs
@@ -176,6 +186,7 @@ export function useSubagentRunPolicy(apiBase: string) {
 
     const v2Body: Record<string, unknown> = {};
     if (mode !== committed.mode) v2Body.multiAgentMode = mode;
+    if (messageDelivery !== committed.messageDelivery) v2Body.multiAgentV2MessageDelivery = messageDelivery;
     if (concurrency !== committed.concurrency) v2Body.maxConcurrentThreadsPerSession = concurrency;
     if (Object.keys(v2Body).length > 0) {
       if ("maxConcurrentThreadsPerSession" in v2Body
@@ -220,6 +231,7 @@ export function useSubagentRunPolicy(apiBase: string) {
       setEfforts(fresh.efforts);
       if (!failedGroups.has("v2")) {
         setMode(fresh.snap.mode);
+        setMessageDelivery(fresh.snap.messageDelivery);
         setConcurrency(fresh.snap.concurrency);
       }
       if (!failedGroups.has("fallback")) {
@@ -238,7 +250,7 @@ export function useSubagentRunPolicy(apiBase: string) {
     savingRef.current = false;
     setSaving(false);
     return failures.length === 0;
-  }, [apiBase, committed, mode, concurrency, fallbackModels, pollMs, effortCap, subagentEffortCap, readAll]);
+  }, [apiBase, committed, mode, messageDelivery, concurrency, fallbackModels, pollMs, effortCap, subagentEffortCap, readAll]);
 
   const reload = useCallback(async (): Promise<boolean> => {
     try {
@@ -260,6 +272,8 @@ export function useSubagentRunPolicy(apiBase: string) {
     error,
     mode,
     setMode,
+    messageDelivery,
+    setMessageDelivery,
     concurrency,
     setConcurrency,
     fallbackModels,

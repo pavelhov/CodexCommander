@@ -1,6 +1,6 @@
 # 000 — Multi-agent workstation and self-contained macOS app
 
-Status: IMPLEMENTED — FRESH-SESSION LIVE MATRIX PENDING
+Status: IMPLEMENTED — INTEGRATION VERIFICATION PENDING
 Created: 2026-08-08
 Branch: `codex/multi-agent-workstation`
 Base: `main` at `6f88fc3f101d32947ebf11a25c33640ff50a313e`
@@ -17,8 +17,8 @@ workstation without inventing a second orchestration engine:
 3. prevent automatic V2 guidance from recommending child routes whose native
    encrypted task payload cannot cross the provider boundary;
 4. retain the current fail-closed guard for explicit incompatible overrides;
-5. prepare the upstream plaintext-boundary contract required for true
-   heterogeneous V2 trees; and
+5. provide an explicit product-owned plaintext compatibility contract for
+   heterogeneous V2 trees while retaining encrypted fail-closed behavior; and
 6. ship a macOS app that contains the runtime and dashboard instead of
    requiring a separate npm/Bun/OpenCodex installation.
 
@@ -56,7 +56,7 @@ re-encryption, or a blanket `agent_message` rewrite.
 |---|---|---|---|
 | WS-01 | Truthful Agent Command Center | `gui/`, docs locales | COMPLETE — GUI tests, lint, i18n lint, build, and retained visual QA |
 | WS-02 | Compatibility-aware roster guidance | `src/server/responses/`, catalog helpers, runtime tests | COMPLETE — native V2 guidance excludes unreadable routed children; exact overrides still fail closed |
-| WS-03 | Upstream plaintext-boundary proposal | this devlog unit; upstream source references | COMPLETE — provider-aware spawn/send/follow-up/return contract with no unsafe workaround |
+| WS-03 | Product-owned plaintext V2 compatibility | native Responses request/response wire, Run Policy, docs | INTEGRATED — target-branch verification pending; encrypted default and issue-92 guard retained |
 | WS-04 | Self-contained macOS runtime | `app/`, `scripts/`, runtime resource resolution, docs | COMPLETE FOR TEST DISTRIBUTION — bundled-runtime lifecycle smoke passed without global Bun/npm/ocx |
 | WS-05 | Distribution hardening | packaging/release follow-up | Developer ID signing, notarization, stapling, DMG, updater, clean-VM gate |
 
@@ -106,9 +106,9 @@ setting would produce false evidence.
 
 ## Branch completion
 
-The repository-wide pre-push gate is green. Keep this unit open until a
-fresh-task mixed-roster run is recorded. The separate plaintext-V2 experiment must use a
-different worktree/branch and may be integrated only after its exact schema,
-feature signal, provider result, regression tests, and commit are reported.
-Then move this unit to `devlog/_fin/260808_multi_agent_workstation/` and record
-the remaining upstream/distribution dependencies and review/promotion path.
+The pre-feature repository-wide pre-push gate is green. The product-owned
+plaintext V2 feature was verified in its isolated worktree and is now integrated
+here; keep this unit open until the target-branch gates and fresh-task
+mixed-roster run are recorded. Then move this unit to
+`devlog/_fin/260808_multi_agent_workstation/` and record the remaining
+upstream/distribution dependencies and review/promotion path.

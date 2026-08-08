@@ -16,7 +16,7 @@ Last updated: 2026-08-08
 |---|---|---|---|
 | WS-01 Truthful Agent Command Center | COMPLETE | UI worker | Existing layout retained; all six GUI locales and affected public docs updated |
 | WS-02 Compatibility-aware guidance | COMPLETE | runtime worker | Automatic guidance only; exact-id callability and fail-closed dispatch preserved |
-| WS-03 Upstream plaintext contract | COMPLETE | protocol worker | Contribution-ready proposal; no unsafe proxy decryption workaround |
+| WS-03 Product-owned plaintext V2 | INTEGRATED; TARGET VERIFICATION PENDING | protocol worker | Live Sol→Kimi proof and source-branch gates passed; encrypted default and unreadable-task guard retained |
 | WS-04 Bundled macOS runtime | COMPLETE FOR TEST DISTRIBUTION | macOS worker | Bun-plus-source universal ZIP; self-contained lifecycle smoke passed |
 | WS-05 Signed distribution | BLOCKED BY CREDENTIALLED RELEASE PHASE | maintainer | Design and tests may land; signing/notarization execution requires explicit credentials and approval |
 
@@ -56,6 +56,13 @@ Last updated: 2026-08-08
   conditional pass with no redesign request. Codex was excluded to preserve
   parent ChatGPT allowance. Fable failed because organization subscription
   access is disabled, and was not silently replaced with Codex.
+- Product-owned plaintext V2 live proof completed with a stock Codex 0.147 Sol
+  parent and Kimi K3 child; spawn, wait, child completion, and parent receipt
+  succeeded without decrypting or rewriting task text.
+- Isolated-source verification completed: 107 focused runtime tests, all 602
+  repository test files, 713 GUI tests, 226 built docs pages, typecheck, GUI
+  lint/i18n/build, privacy scan, and diff check passed. Target-branch gates are
+  rerun after integration rather than inferred from those results.
 - Current task cannot run the requested V1 external-model matrix because its
   root protocol and catalog snapshot predate the setting change. The matrix is
   queued for a fresh task after implementation and sync.
@@ -81,11 +88,12 @@ stale catalog. Do not set model overrides from this task. Reuse already-open
 native research workers and MoA now; run the full roster from a newly started
 V1 task after sync.
 
-### 2026-08-08 — Plaintext V2 experiment remains isolated
+### 2026-08-08 — Own plaintext V2 compatibility in OpenCodex
 
-Task `019fdf94-add7-7552-99f7-485787e0d2a1` is probing whether removing the
-encrypted collaboration schema marker yields a genuine plaintext V2 handoff.
-Its first run reached a real Kimi dispatch, but the exact schema and successful
-provider return are not yet proven. It must remain in a separate worktree and
-branch; integration requires a feature signal and retains this branch's
-fail-closed behavior for older clients.
+Task `019fdf94-add7-7552-99f7-485787e0d2a1` proved the complete product-owned
+contract on the isolated `codex/v2-plaintext-shim` branch. The default remains
+encrypted; plaintext mode uses a bidirectional non-reserved namespace shim and
+activates only for the exact known schema. All unreadable-ciphertext guards
+remain authoritative for disabled, old, malformed, or changed contracts. The
+verified feature is now integrated on this branch; see
+`031_product_owned_plaintext_v2.md`.

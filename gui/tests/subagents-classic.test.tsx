@@ -129,7 +129,7 @@ test("renders one active roster, one agent library, and one run-policy card", as
 test("shows the V2 encryption compatibility notice only for the V2 protocol", async () => {
   policyMode = "v2";
   await mount();
-  expect(container.textContent).toContain("external providers cannot read (#92)");
+  expect(container.textContent).toContain("cannot be read by external providers (#92)");
 
   const currentRoot = root!;
   await act(async () => { currentRoot.unmount(); });
