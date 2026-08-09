@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   clearLoginState,
@@ -17,7 +17,7 @@ import type { CodexCommanderConfig } from "../src/types";
 import type { OAuthController } from "../src/oauth/types";
 import { getCredential } from "../src/oauth/store";
 import * as oauthStore from "../src/oauth/store";
-import { armClaudeCodeBaseline, loadConfig, saveConfig, saveConfigPreservingClaudeCode } from "../src/config";
+import { armClaudeCodeBaseline, loadConfig, readConfigDiagnostics, saveConfig, saveConfigPreservingClaudeCode } from "../src/config";
 import { isApiAuthRequired, requireApiAuth } from "../src/server/auth-cors";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-oauth-public-surface");
@@ -39,6 +39,7 @@ function config(): CodexCommanderConfig {
 
 beforeEach(() => {
   clearLoginState("xai");
+  clearLoginState("kimi");
   rmSync(TEST_DIR, { recursive: true, force: true });
   mkdirSync(TEST_DIR, { recursive: true });
   process.env.CODEXCOMMANDER_HOME = TEST_DIR;
@@ -46,6 +47,7 @@ beforeEach(() => {
 
 afterEach(() => {
   clearLoginState("xai");
+  clearLoginState("kimi");
   if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
   else process.env.CODEXCOMMANDER_HOME = previousHome;
   rmSync(TEST_DIR, { recursive: true, force: true });
@@ -277,6 +279,78 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
         { id: "key-b", key: "test-key-b" },
       ],
     });
+  });
+
+  for (const provider of ["xai", "kimi"] as const) {
+    test(`management ${provider} OAuth creates and reconciles a fresh-home config`, async () => {
+      const liveConfig = config();
+      expect(readConfigDiagnostics().source).toBe("default");
+      const originalLogin = OAUTH_PROVIDERS[provider].login;
+      OAUTH_PROVIDERS[provider].login = async (ctrl) => {
+        ctrl.onAuth({
+          url: `https://auth.example.test/${provider}`,
+          instructions: `Authorize ${provider}`,
+          deviceCode: `${provider}-device-code`,
+        });
+        return {
+          access: `${provider}-access`,
+          refresh: `${provider}-refresh`,
+          accountId: `${provider}-account`,
+          expires: Date.now() + 60_000,
+        };
+      };
+
+      try {
+        const request = new Request("http://localhost/api/oauth/login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ provider }),
+        });
+        const response = await handleManagementAPI(request, new URL(request.url), liveConfig);
+        expect(response?.status).toBe(200);
+        expect(await response?.json()).toEqual({
+          url: `https://auth.example.test/${provider}`,
+          instructions: `Authorize ${provider}`,
+          deviceCode: `${provider}-device-code`,
+        });
+
+        const status = await waitForOAuthDone(provider);
+        expect(status).toMatchObject({ done: true, loggedIn: true });
+        expect(status.error).toBeUndefined();
+        expect(readConfigDiagnostics().source).toBe("file");
+        expect(loadConfig().providers[provider]).toEqual(OAUTH_PROVIDERS[provider].providerConfig);
+        expect(liveConfig.providers[provider]).toEqual(OAUTH_PROVIDERS[provider].providerConfig);
+      } finally {
+        OAUTH_PROVIDERS[provider].login = originalLogin;
+        clearLoginState(provider);
+      }
+    });
+  }
+
+  test("management OAuth still refuses malformed persisted config before provider login", async () => {
+    writeFileSync(join(TEST_DIR, "config.json"), "{");
+    const liveConfig = config();
+    const originalLogin = OAUTH_PROVIDERS.xai.login;
+    let loginCalls = 0;
+    OAUTH_PROVIDERS.xai.login = async () => {
+      loginCalls += 1;
+      return { access: "must-not-save", refresh: "must-not-save" };
+    };
+
+    try {
+      const request = new Request("http://localhost/api/oauth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "xai" }),
+      });
+      const response = await handleManagementAPI(request, new URL(request.url), liveConfig);
+      expect(response?.status).toBe(409);
+      expect(await response?.json()).toEqual({ error: "invalid_json" });
+      expect(loginCalls).toBe(0);
+    } finally {
+      OAUTH_PROVIDERS.xai.login = originalLogin;
+      clearLoginState("xai");
+    }
   });
 
   test("management OAuth activates the live provider only after persistence succeeds", async () => {

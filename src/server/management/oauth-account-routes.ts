@@ -147,9 +147,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       // Use persisted state, not the live object, as the merge base: another management
       // request may already have mutated live config and yielded before its save.
       const persistedDiagnostics = readConfigDiagnostics();
-      if (persistedDiagnostics.source !== "file") {
+      // A missing file is the normal fresh-home state. The explicit login is authorized to
+      // create it, and the normalized defaults are the correct three-way merge baseline.
+      // Malformed or unreadable bytes remain fail-closed so login never replaces them.
+      if (persistedDiagnostics.source === "fallback") {
         return jsonResponse({
-          error: persistedDiagnostics.error ?? "CodexCommander config file is missing",
+          error: persistedDiagnostics.error ?? "CodexCommander config file is invalid",
         }, 409);
       }
       const persistedBaseline = persistedDiagnostics.config;

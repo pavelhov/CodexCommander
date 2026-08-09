@@ -325,7 +325,8 @@ async function handleCodexToggle(ctx: ManagementContext): Promise<Response> {
       // same trap `runGrokApplyFlight` documents below.
       const runtime = (ctx.deps.readRuntimePort ?? readRuntimePort)(process.pid);
       const port = runtime?.port ?? ctx.config.port;
-      const { syncModelsToCodex } = await import("../../codex/sync");
+      const syncModelsToCodex = ctx.deps.syncModelsToCodex
+        ?? (await import("../../codex/sync")).syncModelsToCodex;
       const applied = await syncModelsToCodex(port);
       if (applied.status === "skipped") {
         return jsonResponse({

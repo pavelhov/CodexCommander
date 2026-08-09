@@ -18,6 +18,7 @@ import { join } from "node:path";
 
 import { handleManagementAPI } from "../src/server/management-api";
 import type { ManagementApiDeps } from "../src/server/management/context";
+import type { CodexSyncResult } from "../src/codex/sync";
 import type { CodexCommanderConfig } from "../src/types";
 
 let fixtureRoot = "";
@@ -39,9 +40,25 @@ function baseConfig(): CodexCommanderConfig {
   };
 }
 
+function currentSyncResult(): CodexSyncResult {
+  return {
+    status: "applied",
+    ok: true,
+    added: 1,
+    catalogPath: join(fixtureRoot, "models.json"),
+    catalogExists: true,
+    catalogWritten: true,
+    cacheSynced: true,
+    catalogQuality: "live",
+    rehydrated: 0,
+    message: "Codex integration is current",
+  };
+}
+
 function testDeps(overrides: Partial<ManagementApiDeps> = {}): ManagementApiDeps {
   return {
     fetchAllModels: async () => [] as never,
+    syncModelsToCodex: async () => currentSyncResult(),
     ...overrides,
   } as ManagementApiDeps;
 }
@@ -159,6 +176,12 @@ describe("turning Codex back on", () => {
 
     const result = await put(baseConfig(), { enabled: true });
     expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      ok: true,
+      clientId: "codex",
+      state: "current",
+      desiredEnabled: true,
+    });
     // Absence is ON, so an untouched config and a re-enabled one are identical.
     expect(persistedCodexIntent()).toBeUndefined();
   });

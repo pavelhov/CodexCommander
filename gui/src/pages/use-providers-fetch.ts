@@ -10,6 +10,7 @@ export function useProvidersFetch({
   setConfig,
   setOauthProviders,
   setOauthStatus,
+  oauthStatusRevisionRef,
   notify,
   invalidateProviderQuotas,
   configCacheKey,
@@ -19,6 +20,7 @@ export function useProvidersFetch({
   setConfig: React.Dispatch<React.SetStateAction<ProvidersConfig | null>>;
   setOauthProviders: React.Dispatch<React.SetStateAction<string[]>>;
   setOauthStatus: React.Dispatch<React.SetStateAction<Record<string, OAuthStatus>>>;
+  oauthStatusRevisionRef: React.MutableRefObject<Map<string, number>>;
   notify: (msg: string, ok: boolean) => void;
   /** Bump the shell's quota revision; `force` adds `?refresh=1` to its next read. */
   invalidateProviderQuotas: (force?: boolean) => void;
@@ -37,6 +39,7 @@ export function useProvidersFetch({
   }, [apiBase, configCacheKey, notify, setConfig, t]);
 
   const fetchOauth = useCallback(async () => {
+    const revisionAtStart = new Map(oauthStatusRevisionRef.current);
     try {
       // Codex openai status is owned by useCodexAccountPool — do not duplicate /accounts.
       const provRes = await fetch(`${apiBase}/api/oauth/providers`);
@@ -48,9 +51,20 @@ export function useProvidersFetch({
         const s = sRes ? (await readJsonIfOk<OAuthStatus>(sRes) ?? { loggedIn: false }) : { loggedIn: false };
         return [p, s] as const;
       }));
-      setOauthStatus(Object.fromEntries(oauthEntries));
+      setOauthStatus(previous => {
+        const next: Record<string, OAuthStatus> = Object.fromEntries(oauthEntries);
+        for (const [provider] of oauthEntries) {
+          const startedAt = revisionAtStart.get(provider) ?? 0;
+          const current = oauthStatusRevisionRef.current.get(provider) ?? 0;
+          if (current === startedAt) continue;
+          const locallyUpdated = previous[provider];
+          if (locallyUpdated) next[provider] = locallyUpdated;
+          else delete next[provider];
+        }
+        return next;
+      });
     } catch { /* ignore */ }
-  }, [apiBase, setOauthProviders, setOauthStatus]);
+  }, [apiBase, oauthStatusRevisionRef, setOauthProviders, setOauthStatus]);
 
   /*
    * The workspace shell owns the single quota read; this only invalidates it. Keeping the
