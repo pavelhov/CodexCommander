@@ -110,8 +110,8 @@ routed provider-id `provider/model`. Account-qualified id `<selector>/<native-op
 
 ## Режим multi-agent surface
 
-На странице Models три режима collaboration называются **Classic v1**, **Automatic** (base/upstream
-default) и **Concurrent v2**. Этот элемент меняет collaboration surface, которую использует каждая
+На странице Models три режима collaboration называются **Classic v1**, **Follow Codex defaults**
+(base/upstream behavior) и **Concurrent v2**. Этот элемент меняет collaboration surface, которую использует каждая
 запись picker'а Codex; каноническое описание режима, делегирования, наследования, fallback и поведения
 encrypted task см. в [Поверхности подагентов](/guides/sub-agent-surface/).
 
@@ -147,15 +147,14 @@ capability-гейтом — `service_tier` удаляется только ко�
 ## Выбор подагентов
 
 Codex сортирует видимые в picker'е записи каталога по возрастанию `priority` и рекламирует первые
-пять как model-override для `spawn_agent`. Страница Subagents в дашборде позволяет выбрать и
-сохранить до пяти bare native-id или routed provider-id `provider/model`. Настроенный вручную
-`subagentModels` также принимает account-qualified id `<selector>/<native-openai-model>`, но
-дашборд не предлагает эти точные id; сохранение страницы заменяет список вариантами, доступными в
-дашборде. opencodex назначает им низкие приоритеты каталога в выбранном порядке; при активных
-селекторах аккаунтов bare native-выбор разворачивается в группы selector-qualified строк. Остальные
-модели всё равно можно вызывать по точному id.
+пять как model-override для `spawn_agent`. **Agent Command Center** в дашборде позволяет выбрать и
+сохранить до пяти bare native-id или routed provider-id `provider/model`. Уже настроенные
+account-qualified id `<selector>/<native-openai-model>` сохраняются, а интерфейс сообщает, какие
+сохранённые записи реально рекламируются или исключены. opencodex назначает им низкие приоритеты
+каталога в выбранном порядке; при активных селекторах аккаунтов bare native-выбор разворачивается
+в группы selector-qualified строк. Остальные модели всё равно можно вызывать по точному id.
 
-Список featured-моделей отделён от выбора **Sub-agent delegation** в дашборде. Он только
+Active Roster отделён от выбора **Sub-agent delegation** в дашборде. Он только
 определяет, какие override Codex показывает первыми; он не выбирает модель и не инициирует
 делегирование сам по себе.
 

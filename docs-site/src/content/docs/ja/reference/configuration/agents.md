@@ -11,7 +11,7 @@ description: マルチエージェント サーフェス、委任ガイダンス
 | --- | --- | --- | --- |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` はすべてのカタログ モデルを v1 としてスタンプします。 `v2` はすべてのモデルを v2 としてスタンプします。 `default` はアップストリーム ピン (Sol/Terra v2、Luna v1) を復元し、それ以外の場合はネイティブの `multi_agent_v2` フラグに従います。新しいセッションに適用されます。 |
 | `multiAgentV2MessageDelivery?` | `"encrypted" \| "plaintext"` | `"encrypted"` | V2 親メッセージの配信方針です。`encrypted` は ChatGPT の予約済み暗号化契約を維持します。実験的な `plaintext` は以降の V2 親リクエストを複数プロバイダー互換にし、その親の全委任メッセージを平文にします。ルーティングされた親のメッセージ呼び出しにも Codex の平文マーカーを付与します。変更後は新しいセッションを開始してください。 |
-| `subagentModels?` | `string[]` | `gpt-5.5`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.4-mini` |最大 5 つの bare native id、account-qualified `<selector>/<native-openai-model>` id、または routed `provider/model` id をサブエージェント ピッカーで優先表示します。Subagents ページで選べるのは bare native id と routed id だけで、保存時には exact account-qualified の選択が除外されます。exact の選択には `ocx agent subagents set` を使用するか、設定を直接編集してください。明示的な空リストも保持されます。 |
+| `subagentModels?` | `string[]` | `gpt-5.5`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.4-mini` | 最大 5 つの bare native id、account-qualified `<selector>/<native-openai-model>` id、または routed `provider/model` id をサブエージェント ピッカーで優先公開します。ダッシュボードは account-qualified を含む設定済みの exact selector を保持し、保存された項目のうち実際に公開されたものと除外されたものを表示します。現在のカタログにない選択には `ocx agent subagents set` を使用するか、設定を直接編集してください。明示的な空リストも保持されます。 |
 | `injectionModel?` | `string` | — |プロキシ作成の v2 委任ガイダンスで使用される、優先されるネイティブまたはルーティングされたサブエージェント モデル。 |
 | `injectionEffort?` | `string` | — |優先努力 (`low` ～ `ultra`)。`injectionModel` でのみ意味があります。 |
 | `injectionPrompt?` | `string` | — | 組み込みの v2 ガイダンス本文を置き換えます。`{{model}}`、`{{effort}}`、`{{roster}}`、`{{fallback}}`をサポートします。`injectionModel` が設定されていればカスタムプロンプトが生成されます。 |

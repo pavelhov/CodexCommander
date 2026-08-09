@@ -40,8 +40,8 @@ bun run dev:gui
 | **Providers** | 添加、编辑、设为默认（仅已启用）、启用/禁用、删除 provider，并在支持时管理 OAuth 账号池和 API key 池。删除当前默认时，会切换到剩余的第一个已启用 provider（若存在）；否则拒绝删除并保留当前默认。Claude（Anthropic）OAuth 池中，每个已登录账号显示各自的 5 小时与周限额条（用量按凭证计）；探测失败时保留上次已知数值并标记为暂时不可用。 |
 | **Add provider** | 搜索 registry preset，选择账号登录、API key 服务、本地服务器或自定义 endpoint。输入搜索词时会同时搜索 Accounts、Free 和 Paid；标签仍可用于浏览。 |
 | **Codex Auth** | 添加 ChatGPT/Codex 池账号，选择下一 session 的账号，刷新 5h / 每周 / 30d 配额，启用或停用配额自动切换，设置其 1–100% 阈值和临时故障 failover。 |
-| **Subagents** | 在 `spawn_agent` override 列表中置顶最多五个原生或路由模型。 |
-| **Models** | 开关原生 GPT 与路由模型，配置 provider allowlist 和上下文上限，选择 **Classic v1**、**Automatic**（base）或 **Concurrent v2**，并设置 v2 thread 数量。Current behavior 卡片会将上下文显示为 **Uncapped**、**Limited** 或 **Mixed limits**。每个路由 provider 都会显示 **自动发现已开启** 或 **仅静态目录**，并链接到对应的 provider 设置。 |
+| **Subagents** | 在 **Agent Command Center** 中选择并排序向 `spawn_agent` 公开的五个模型、搜索当前目录，并配置协议、V2 传递、引导、回退和线程上限等 Run Policy。已保存但未公开的条目会被明确报告。 |
+| **Models** | 开关原生 GPT 与路由模型，配置 provider allowlist 和上下文上限，选择 **Classic v1**、**Follow Codex defaults** 或 **Concurrent v2**，并设置 v2 thread 数量。Current behavior 卡片会将上下文显示为 **Uncapped**、**Limited** 或 **Mixed limits**。每个路由 provider 都会显示 **自动发现已开启** 或 **仅静态目录**，并链接到对应的 provider 设置。 |
 | **Client Apps** | 查看已配置和可连接的本地客户端；在支持时应用或移除托管配置并检查备份；集中访问 Codex、Claude Code/Desktop、Grok Build、OpenCode 及文件托管客户端，同时避免把客户端与提供商混为一谈。 |
 | **API Access** | 签发和管理其他应用连接 OpenCodex 代理时使用的认证密钥。上游提供商凭据仍归 Providers 管理。 |
 | **Logs** | 自动刷新近期请求，显示 token、请求强度以及（可用时）实际发送强度、实际模型、provider、状态、request id、耗时和错误详情。适配器发送 reasoning 参数时，详情中还会显示准确的 wire field。可按不透明会话/对话 ID（客户端提供时）筛选，并对当前已加载的 Logs 环形缓冲合计 token 与估算标价成本。 |

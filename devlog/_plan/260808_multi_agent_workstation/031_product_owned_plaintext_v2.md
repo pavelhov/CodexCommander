@@ -1,37 +1,32 @@
 # 031 — Product-owned plaintext V2 compatibility
 
-Status: INTEGRATED AND MACOS TRANSPORT-HARDENED; REQUIRED TARGET RUNTIME GATE INCOMPLETE ON HOST TIMING
+Status: INTEGRATED, TRANSPORT-HARDENED, AND LIVE-VERIFIED
 
-Branch: `codex/v2-plaintext-shim`
-Base: `codex/multi-agent-workstation` at `0ca85586`
-Scope: opt-in mixed-provider V2 parent compatibility; existing encrypted guard retained
+Branch: `codex/multi-agent-workstation`
+Scope: explicit mixed-provider V2 compatibility with encrypted fail-closed behavior retained
 
 ## Decision
 
-OpenCodex will own an experimental plaintext V2 compatibility mode instead of
-waiting for, or submitting, an upstream change. It does not decrypt or
-re-encrypt backend payloads.
+OpenCodex owns an experimental plaintext V2 compatibility mode. It does not
+decrypt or re-encrypt backend payloads.
 
-The ChatGPT backend rejects a plaintext modification of its reserved
-`collaboration` schema. The working contract is therefore bidirectional:
+For a canonical ChatGPT parent with the complete recognized V2 collaboration
+schema, the proxy:
 
-1. For a canonical native ChatGPT parent with the complete recognized V2
-   schema, rename the entire namespace to `ocx_collaboration_plaintext` on the
-   upstream wire.
-2. Remove `encrypted: true` only from the `message` properties of
-   `spawn_agent`, `send_message`, and `followup_task`.
-3. Rewrite replayed collaboration function-call namespaces and tool selectors
-   to the same wire alias.
-4. Restore every returned alias namespace to `collaboration` across SSE and
-   JSON responses.
-5. Add `encrypted_function_args: []` only to the three plaintext message calls.
-   Codex 0.147 classifies that exact shape as `DirectPlaintextMessage` and keeps
-   its native V2 graph, mailbox, wait, follow-up, and completion lifecycle.
-6. For routed parents (Kimi, Grok, DeepSeek, and other adapters), add the same
-   marker at the bridge boundary to completed message calls only. This supports
-   nested delegation without changing lifecycle or unrelated tool calls.
+1. aliases the complete `collaboration` namespace to
+   `ocx_collaboration_plaintext` on the upstream wire;
+2. removes `encrypted: true` only from the `message` properties of
+   `spawn_agent`, `send_message`, and `followup_task`;
+3. rewrites replayed collaboration calls and tool selectors to the same alias;
+4. restores the complete namespace across SSE and JSON responses; and
+5. adds `encrypted_function_args: []` only to completed message-bearing calls.
 
-The transform is opt-in through:
+Stock Codex 0.147 recognizes that marker as `DirectPlaintextMessage` while
+retaining the V2 graph, mailbox, wait, follow-up, interrupt, and completion
+lifecycle. Routed parents receive equivalent marker handling at the OpenCodex
+bridge.
+
+The operator enables the contract explicitly:
 
 ```json
 {
@@ -39,149 +34,70 @@ The transform is opt-in through:
 }
 ```
 
-`"encrypted"` remains the default. A partial, future, malformed, or colliding
-schema is not guessed: the rewrite does not activate, and the existing
-`unreadable_encrypted_agent_task` guard remains authoritative.
+`"encrypted"` remains the default. Sending `null` or `"encrypted"` through
+the management API removes the explicit plaintext override.
 
-Activation is capability-shaped rather than version-shaped. OpenCodex requires
-the explicit plaintext policy, a canonical ChatGPT route, and the complete
-recognized V2 collaboration schema before it aliases the native request. A
-missing or changed contract leaves the encrypted path and fail-closed guard in
-place, regardless of the reported Codex version.
+## Activation and fail-closed boundary
+
+Native aliasing activates only when all of these are true:
+
+- plaintext delivery is explicitly enabled;
+- the resolved parent route is canonical ChatGPT;
+- the complete recognized collaboration schema is present; and
+- the plaintext alias does not already exist anywhere in the request.
+
+Unknown, duplicate, partial, malformed, colliding, or future schemas remain on
+the encrypted path. Existing `unreadable_encrypted_agent_task` detection and
+native-only fallback remain authoritative. Lifecycle calls such as list, wait,
+and interrupt keep their namespace but never receive the plaintext sentinel.
+Incomplete or failed function calls are never promoted into executable
+plaintext messages.
+
+Rejected approaches remain rejected:
+
+- guessed decryption or proxy re-encryption;
+- stripping ciphertext and dispatching an empty or replacement task;
+- a patched Codex binary or file inbox;
+- blanket `agent_message` rewriting; and
+- automatic plaintext activation.
 
 ## Privacy boundary
 
-The parent chooses its tool schema before it chooses a worker. Plaintext mode
-therefore applies to every V2 delegation message from that parent, including
-native-to-native messages. The trusted local Codex runtime and OpenCodex proxy
-necessarily handle that plaintext. OpenCodex suppresses upstream body samples
-for these turns from its opt-in usage-debug persistence surface.
+The parent chooses its collaboration schema before choosing a worker, so
+plaintext mode applies to every V2 delegation message from that parent,
+including native-to-native messages. The trusted local Codex runtime and
+OpenCodex proxy necessarily handle that plaintext. Usage-debug metadata and
+usage extraction remain available, but request and response body samples are
+suppressed for activated plaintext-V2 turns.
 
-## Live proof
+## macOS transport hardening
 
-An ignored scratch proxy was placed in front of the running OpenCodex service.
-No prompts, credentials, or bodies were logged.
+The original post-integration macOS stall was below the model/protocol layer:
+the proxy had already received `response.completed`, but an async-`pull()`
+stream shape delayed Codex tool execution. The branch therefore uses the eager
+single-reader Darwin relay only for the exact recognized plaintext-V2 rewrite
+on the validated bundled Bun version. Owned translator budgets settle exactly
+once from the producer; caller-owned budgets remain untouched;
+`streamMode: "legacy-tee"` remains the rollback switch.
 
-- Bare marker removal under `collaboration` produced the expected ChatGPT 400:
-  the reserved `collaboration.followup_task` schema no longer matched.
-- Namespace alias + marker removal let a fresh Sol V2 parent create a Kimi K3
-  child whose exact task was `V2_PLAINTEXT_OK`.
-- Restoring only the three message tools proved why the full namespace must be
-  restored: `wait_agent` arrived under the alias and Codex rejected it.
-- Restoring the whole namespace produced a clean end-to-end run: Sol spawned
-  Kimi, Kimi returned `WAIT_OK`, `wait_agent` completed with the child in the
-  completed state, and the parent returned `WAIT_OK_RECEIVED`.
+## Verification
 
-## Review findings
+- Transform tests cover complete and malformed schemas, collisions, replay,
+  tool choice, all lifecycle calls, sentinel allowlisting, unexpected
+  ciphertext, JSON/SSE restoration, and encrypted-mode negative controls.
+- Usage-debug tests confirm metadata remains while body samples are absent.
+- The full runtime suite covered all 604 one-file shards on the functional
+  revision; GUI, docs, typecheck, privacy, and diff gates passed.
+- A fresh Sol parent spawned the exact external workers below with isolated
+  prompts and awaited each completion:
+  - `opencode-go/deepseek-v4-flash` → `DEEPSEEK_V2_OK`
+  - `kimi/k3[1m]` → `KIMI_V2_OK`
+  - `opencode-go/glm-5.2` → `GLM_V2_OK`
+  - `xai/grok-4.5` → `GROK_V2_OK`
+- A follow-up sent to the completed Kimi worker returned
+  `KIMI_FOLLOWUP_OK`. No substitution, timeout, catalog exclusion, or
+  unawaited task occurred.
 
-MoA excluded Codex to preserve ChatGPT allowance:
-
-- Grok 4.5: success; endorsed proxy aliasing as an explicit experimental
-  bridge, with whole-namespace restore, exact-value matching, replay coverage,
-  stream/JSON composition, and fail-closed behavior.
-- Kimi K3: success; independently concluded a patched binary would still need
-  the same non-reserved namespace because the backend constraint is server-side.
-  It emphasized idempotence, session stickiness, privacy disclosure, and no
-  substring rewriting inside arguments.
-- Fable/Claude: unavailable because the organization disabled Claude Code
-  subscription access; no Sol replacement was used.
-
-A second MoA pass after the macOS stall diagnosis used Kimi K3 and Grok 4.5.
-Both independently approved the narrow single-reader relay with these retained
-conditions: exact runtime gating, a `legacy-tee` rollback, exactly-once owned
-budget cleanup, untouched caller-owned budgets, deterministic lifecycle tests,
-and scalar-only observability. Neither recommended a patched Codex binary, file
-inbox, decryption, re-encryption, or product-wide silent plaintext default.
-
-## macOS stall diagnosis and transport hardening
-
-The post-integration "Thinking" stall was downstream of the verified plaintext
-protocol. A native Sol turn returned and persisted `response.completed`
-immediately, but Codex executed the collaboration call exactly 300.001 seconds
-later. The proxy had already completed the model turn, ruling out provider
-capacity and the namespace/sentinel bridge for that reproduction.
-
-Bun 1.3.14 reproduces the public Bun #32111 async-`pull()` client-cancellation
-defect. Upstream OpenCodex commit `b6d32507` moves Darwin client rewrites onto
-the eager bounded relay, but target-side budget finalization still reconstructed
-the returned body with an async-`pull()` stream. The integrated fix therefore:
-
-1. Uses the eager single-reader relay automatically only for an activated
-   plaintext-V2 collaboration rewrite on the exact validated bundled Bun.
-2. Keeps the returned client stream's `pull()` synchronous and prevents later
-   response reconstruction from wrapping it in the defective shape.
-3. Transfers owned translator-budget cleanup to the producer's exactly-once
-   terminal path while leaving caller-owned budgets unchanged.
-4. Keeps other Darwin rewrites explicit-only and preserves
-   `streamMode: "legacy-tee"` as the immediate rollback.
-5. Exposes payload-free aggregate relay counters and suppresses request/response
-   body sampling on plaintext-V2 turns.
-
-Focused verification passed 127 transport/plaintext tests plus 122 adjacent
-snapshot/fallback/V2-policy tests, TypeScript typecheck, privacy scan, and diff
-check. The exact eager relay survived the deterministic cancellation diagnostic;
-the known-bad generic async-`pull()` shape remained the positive failure control.
-
-## Acceptance gates
-
-- Pure request/response transform tests: complete/partial schemas, collision,
-  copy-on-write, replay, tool choice, all lifecycle calls, sentinel allowlist,
-  unexpected ciphertext, malformed JSON.
-- `handleResponses` fake-upstream SSE test: aliased outbound body and restored
-  added/done/completed items.
-- Native bounded-JSON restore plus routed streaming/batch marker allowlist.
-- Usage-debug metadata inspection stays active while body samples remain empty.
-- Encrypted-mode negative control remains byte-semantic compatible.
-- Management API and GUI persist the explicit delivery policy.
-- Six GUI locales and all translated sub-agent/configuration docs stay aligned.
-- Focused tests, typecheck, full runtime suite, GUI lint/i18n/build, docs build,
-  and privacy scan pass before integration.
-- Manual matrix after integration: Sol/Luna parents and Kimi/Grok/DeepSeek
-  children, including spawn, wait, send, follow-up, and native encrypted control.
-
-## Isolated source verification
-
-- Focused runtime coverage: 107 tests passed across the plaintext transform and
-  V2 management-policy suites.
-- Full runtime coverage: all 602 repository test files passed in isolated
-  one-file shards. Sustained host antivirus/system-policy load required a
-  60-second timing allowance for the cold native-integration files; no
-  assertion, fixture boundary, or test case was disabled.
-- GUI: 713 tests passed; locale lint, ESLint, and the production build passed.
-- Docs: all 226 static pages built successfully.
-- Repository gates: TypeScript typecheck, privacy scan, and `git diff --check`
-  passed.
-- A pre-existing subprocess-test race discovered during the full run was fixed
-  separately by sharing each stdout/stderr read promise instead of consuming a
-  losing `Promise.race` branch twice.
-
-The broader Sol/Luna × Kimi/Grok/DeepSeek manual matrix remains a
-post-integration gate because model catalogs and protocol selection are sticky
-for the task that performs the integration.
-
-## Target integration verification
-
-- Focused runtime coverage passed: 128 tests across plaintext collaboration,
-  V2 policy, and encrypted-task fail-closed suites.
-- GUI passed 714 tests across 124 files, locale lint, ESLint, React Doctor, and
-  production build. Docs built all 226 pages. Typecheck, privacy scan, and
-  `git diff --check` passed.
-- `OCX_TEST_SHARD_SIZE=1 bun run test` passed shards 1-153, then stopped at
-  `codex-native-residue`. Continued one-file coverage exercised shards 155-602.
-  Every file passed except `codex-native-residue` (7 timeouts),
-  `codex-retained-root-serialization` (3), `native-claude-desktop-toggle` (2),
-  and `native-grok-toggle` (13 plus one cascaded post-timeout error).
-- Each affected subprocess exceeded a fixed 5-10 second deadline while taking
-  roughly 8-27 seconds. Targeted retries reproduced the same timing boundary;
-  the repository's allowed deterministic Codex fixture was absent. No fixture
-  was created and no timeout, assertion, or safety guard was weakened.
-- Therefore integration is complete, but the required full target runtime gate
-  is not green. Rerun it on an idle host before review readiness, then perform
-  the separately authorized live Sol/Luna × Kimi/Grok/DeepSeek matrix.
-- The idle-host rerun after transport hardening passed shards 1-153 before the
-  same `codex-native-residue` fixed-timeout boundary: 53 tests passed and seven
-  subprocess cases timed out with no assertion mismatch. Retrying the complete
-  suite with the existing executable deterministic Codex fixture produced the
-  same result, and one final isolated fixture retry reproduced it. No timeout or
-  assertion was modified, so the full target runtime gate remains explicitly
-  incomplete rather than being reported green.
+The feature is ready for fork integration while remaining explicitly labeled
+experimental. Broader client-version telemetry—not a hard-coded version
+number—should decide when it is safe to reconsider the default.

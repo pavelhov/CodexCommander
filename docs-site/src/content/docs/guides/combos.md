@@ -191,7 +191,7 @@ You have four recovery options:
 1. Select a native ChatGPT model for the child.
 2. Add a canonical native ChatGPT target to the combo.
 3. Use the v1 surface for delegation across different providers.
-4. If you control the caller, resend the task as plaintext v2 `agent_message` content.
+4. Enable **Plaintext compatibility** under **Subagents → Run Policy**, then start a new session.
 
 See [Sub-agent Surface](/guides/sub-agent-surface/) for the v1/base/v2 modes and the full encrypted
 task workflow.

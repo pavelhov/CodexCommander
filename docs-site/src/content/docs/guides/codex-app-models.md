@@ -107,8 +107,8 @@ forces Codex's model cache stale after a toggle.
 
 ## Multi-agent surface mode
 
-The Models page labels the three collaboration choices **Classic v1**, **Automatic** (the base/upstream
-default), and **Concurrent v2**. This control changes which Codex collaboration surface each picker
+The Models page labels the three collaboration choices **Classic v1**, **Follow Codex defaults** (the
+base/upstream behavior), and **Concurrent v2**. This control changes which Codex collaboration surface each picker
 entry uses; see [Sub-agent Surface](/guides/sub-agent-surface/) for the canonical mode, delegation,
 inheritance, fallback, and encrypted-task behavior.
 
@@ -144,14 +144,14 @@ never advertised where it cannot be honored, and custom gateways can opt in expl
 ## Subagent selection
 
 Codex sorts picker-visible catalog entries by ascending `priority` and advertises the first five as
-`spawn_agent` model overrides. The dashboard Subagents page can select and save up to five bare
-native ids or routed `provider/model` ids. Manually configured `subagentModels` also accepts
-account-qualified `<selector>/<native-openai-model>` ids, but the dashboard does not offer those
-exact ids; saving the page replaces the list with dashboard-visible choices. opencodex assigns low
-catalog priorities in the selected order; when account selectors are active, bare native selections
-expand into selector-qualified groups. Other models remain callable by exact id.
+`spawn_agent` model overrides. The dashboard's **Agent Command Center** can select and save up to
+five bare native ids or routed `provider/model` ids. It also preserves already-configured
+account-qualified `<selector>/<native-openai-model>` ids, reports whether each saved choice is
+actually advertised, and assigns low catalog priorities in the selected order. When account selectors
+are active, bare native selections expand into selector-qualified groups. Other models remain callable
+by exact id.
 
-The featured-model list is separate from the Dashboard's **Sub-agent delegation** selection. It
+The active roster is separate from the Dashboard's **Sub-agent delegation** selection. It
 controls which overrides Codex offers first; it does not select a model or trigger delegation by
 itself.
 

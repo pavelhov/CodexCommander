@@ -84,7 +84,7 @@ opencodex 会安全失败，而不是转发空任务或不可读任务：
 - 对于该任务，combo 只会考虑规范的原生 ChatGPT 目标，包括重试。如果没有可用目标，则返回相同的 400 错误。
 - 可读的明文任务会保持正常的路由和 fallback 行为。
 
-恢复选项是选择原生 ChatGPT 子级、在 combo 中添加原生 ChatGPT 目标、在异构 provider 委派中使用 v1，或者在你控制调用方时将任务作为明文 v2 `agent_message` 内容重新发送。
+恢复选项是选择原生 ChatGPT 子级、在 combo 中添加原生 ChatGPT 目标、在异构 provider 委派中使用 v1，或者在 **Subagents → Run Policy** 中启用 **Plaintext compatibility** 并启动新会话。
 
 ## 更改模式
 

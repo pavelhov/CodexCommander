@@ -153,7 +153,7 @@ combo 失败分为 **跳转** 失败和 **终止** 失败。
 1. 为子任务选择一个原生 ChatGPT 模型。
 2. 向 combo 添加一个规范的原生 ChatGPT 目标。
 3. 使用 v1 接口在不同 provider 之间委派。
-4. 如果你控制调用方，请把任务作为明文 v2 `agent_message` 内容重新发送。
+4. 在 **Subagents → Run Policy** 中启用 **Plaintext compatibility**，然后启动新会话。
 
 有关 v1/base/v2 模式以及完整的加密任务工作流，请参见 [子代理接口](/guides/sub-agent-surface/)。
 

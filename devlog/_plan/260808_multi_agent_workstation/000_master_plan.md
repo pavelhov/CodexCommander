@@ -1,129 +1,67 @@
 # 000 — Multi-agent workstation and self-contained macOS app
 
-Status: IMPLEMENTED — TARGET RUNTIME GATE INCOMPLETE ON HOST TIMING
+Status: IMPLEMENTED — LIVE MIXED-PROVIDER V2 ACCEPTANCE GREEN; SIGNED DISTRIBUTION OPEN
+
 Created: 2026-08-08
+Updated: 2026-08-08
 Branch: `codex/multi-agent-workstation`
-Base: `main` at `6f88fc3f101d32947ebf11a25c33640ff50a313e`
-Integration target: `dev` for review, then maintainer promotion to `main`
+Base: fork `main` at `6f88fc3f101d32947ebf11a25c33640ff50a313e`
 
 ## Objective
 
-Turn the existing OpenCodex provider proxy into a dependable multi-model
-workstation without inventing a second orchestration engine:
+Make OpenCodex a dependable multi-model workstation without adding a second
+orchestration engine:
 
-1. make the Agent Command Center explain the behavior it already owns;
-2. keep the five-model roster as advertised worker guidance, while every
-   catalog model remains callable by exact id;
-3. prevent automatic V2 guidance from recommending child routes whose native
-   encrypted task payload cannot cross the provider boundary;
-4. retain the current fail-closed guard for explicit incompatible overrides;
-5. provide an explicit product-owned plaintext compatibility contract for
-   heterogeneous V2 trees while retaining encrypted fail-closed behavior; and
-6. ship a macOS app that contains the runtime and dashboard instead of
-   requiring a separate npm/Bun/OpenCodex installation.
+1. explain the five-model roster and Run Policy truthfully;
+2. keep automatic guidance compatible with the resolved parent route;
+3. support explicit, fail-closed plaintext V2 delivery for mixed providers;
+4. keep routed catalogs durable and make stale Codex workers easy to refresh;
+5. ship a macOS app containing the Bun runtime, OpenCodex source, production
+   dependencies, and dashboard.
 
-This unit does **not** add role graphs, team profiles, game-development
-workflows, prompt templates, file inboxes, guessed decryption, proxy
-re-encryption, or a blanket `agent_message` rewrite.
+The unit deliberately excludes role graphs, team profiles, prompt templates,
+file inboxes, guessed decryption, proxy re-encryption, blanket
+`agent_message` rewriting, silent worker restarts, and silent plaintext
+activation.
 
-## Verified starting state
+## Delivered workstreams
 
-- The active roster is capped at five because Codex advertises the first five
-  featured picker-visible rows to `spawn_agent`; catalog models outside the
-  roster remain callable by exact id.
-- V2 guidance already includes the effective roster when
-  `multiAgentGuidanceEnabled` is on. The UI hides that fact under an advanced
-  toggle and overstates the preferred/fallback relationship.
-- `multiAgentMode = default` restores upstream model pins and the current
-  Codex feature setting. It does not select a worker.
-- V2 is selected by the root task and inherited by its tree. Changing the
-  setting does not retrofit an already-running task.
-- Issue #92 is reproducible: a native Sol parent can select a routed child,
-  but the child assignment arrives only as backend ciphertext. OpenCodex
-  correctly refuses to dispatch an empty task or leak the ciphertext.
-- The Swift menu-bar bundle is a companion only. It finds an external `ocx`
-  and Bun runtime; it does not contain the proxy, CLI, dependencies, or
-  `gui/dist`.
-- A temporary `bun build --compile` probe bundled 769 modules, but
-  `--version` failed because runtime metadata resolved `/package.json` from
-  the compiled `$bunfs` layout. Dynamic workers, subprocesses, GUI assets,
-  services, and npm updater assumptions make a compiled helper a later
-  refactor rather than the first reliable app release.
+| ID | Result |
+| --- | --- |
+| WS-01 Agent Command Center | The Subagents page now exposes Active Roster, Agent Library, and Run Policy with truthful copy and six synchronized GUI locales. |
+| WS-02 Compatibility-aware guidance | Encrypted native V2 guidance excludes unreadable external routes while exact overrides retain the existing fail-closed behavior. |
+| WS-03 Plaintext V2 compatibility | Explicit `multiAgentV2MessageDelivery: "plaintext"` enables the recognized mixed-provider V2 contract; encrypted delivery remains the default. |
+| WS-04 Self-contained macOS app | The application bundles its runtime and dashboard, auto-syncs the catalog, and offers a confirmed **Apply agent catalog** action for stale Codex workers. |
+| WS-05 Signed distribution | Developer ID signing, notarization, stapling, quarantine testing, and the public updater remain a separately credentialed release phase. |
 
-## Workstream map
+## Verification retained for the functional branch
 
-| ID | Workstream | Primary scope | Terminal gate |
-|---|---|---|---|
-| WS-01 | Truthful Agent Command Center | `gui/`, docs locales | COMPLETE — GUI tests, lint, i18n lint, build, and retained visual QA |
-| WS-02 | Compatibility-aware roster guidance | `src/server/responses/`, catalog helpers, runtime tests | COMPLETE — native V2 guidance excludes unreadable routed children; exact overrides still fail closed |
-| WS-03 | Product-owned plaintext V2 compatibility | native Responses request/response wire, Run Policy, docs | INTEGRATED — focused, GUI, docs, typecheck, privacy, and diff gates pass; required full runtime invocation is red only on four pre-existing cold-subprocess files under current host load |
-| WS-04 | Self-contained macOS runtime | `app/`, `scripts/`, runtime resource resolution, docs | COMPLETE FOR TEST DISTRIBUTION — bundled-runtime lifecycle smoke passed without global Bun/npm/ocx |
-| WS-05 | Distribution hardening | packaging/release follow-up | Developer ID signing, notarization, stapling, DMG, updater, clean-VM gate |
+- All 604 one-file runtime shards were exercised on the same functional
+  revision and worktree. A contention-only serialization shard was rerun with
+  the repository fixture and the continuation completed green; no assertion,
+  production timeout, or safety guard was weakened.
+- The full GUI suite passed 715 tests, localization lint, ESLint, React Doctor,
+  and the production build.
+- The documentation site built all 226 pages. Typecheck, privacy scan, and
+  `git diff --check` passed.
+- The native macOS suites passed 95 core and 31 UI tests. The bundled app
+  started the proxy without a global `bun`, `npm`, or `ocx`, and the dashboard
+  returned HTTP 200.
+- A fresh Sol V2 parent dispatched the exact models
+  `opencode-go/deepseek-v4-flash`, `kimi/k3[1m]`,
+  `opencode-go/glm-5.2`, and `xai/grok-4.5`. All four completed with their
+  required markers, and a Kimi follow-up completed without substitution,
+  timeout, or catalog exclusion.
 
-WS-05 is a separately credentialed release phase. No publish, deployment,
-version bump, signing credential use, notarization submission, or App Store
-submission is authorized by this unit.
+## Remaining release work
 
-## Commit and review strategy
+- Run the signed/notarized build and clean-machine quarantine matrix when the
+  required Apple credentials are available.
+- Add a signed app update and rollback channel before calling the macOS bundle
+  a public auto-updating release.
+- Keep plaintext V2 explicit and experimental until additional client-schema
+  versions are feature-detected in production.
 
-Work stays on one delivery branch but lands as scoped checkpoint commits:
-
-1. `13eccd9b` — `docs(plan): track multi-agent workstation delivery`
-2. `aebd7278` — `fix(agents): filter encrypted v2 worker guidance`
-3. `0cfe71f4` — `docs(agents): propose provider-aware v2 delivery`
-4. `f9ac7819` — `feat(gui): make agent command center truthful`
-5. `108752a9` — `docs(plan): retain agent command center qa`
-6. `1b8e2f6e` — `test(agents): cover mixed roster protocol modes`
-7. `0ca85586` — `feat(macos): bundle self-contained universal runtime`
-8. `0df6a52f` — `test: keep prepush expectations deterministic`
-9. `33425358` — `fix(gui): clear command center review findings`
-10. `bef7c19a` — `feat(agents): enable plaintext mixed-provider v2`
-11. `796a7b02` — `test: make subprocess output reads single-owner`
-12. `f0962e42` — `fix(agents): harden plaintext v2 integration`
-
-Commits may be split further when review boundaries demand it. A checkpoint is
-created only after its focused tests pass. The branch is not merged directly
-to `main`: repository policy requires review against `dev`, followed by the
-maintainer-controlled `dev` to `main` promotion.
-
-## Global acceptance gates
-
-Completed target-integration gates:
-
-1. `bun run typecheck`
-2. focused plaintext/V2/fail-closed runtime suites
-3. `bun run privacy:scan`
-4. `cd gui && bun test tests && bun run lint:i18n && bun run lint && bun run build`
-5. `cd docs-site && bunx --bun astro build`
-6. `git diff --check`
-
-The exact required `OCX_TEST_SHARD_SIZE=1 bun run test` target gate remains
-red. Shards 1-153 passed before shard 154 stopped the runner. Continued
-one-file coverage exercised shards 155-602; every file passed except four
-pre-existing cold-subprocess suites whose fixed 5-10 second deadlines expired
-under sustained host load. Targeted retries reproduced the same delays without
-touching feature code. No timeout, fixture boundary, or assertion was changed.
-
-Earlier branch gates retained by this integration:
-
-1. `bun run test:macos`
-2. `bun run build:macos`
-3. packaged-app smoke from a sanitized environment with no usable global
-   `bun`, `node`, `npm`, or `ocx`
-
-Remaining review-readiness gates are an idle-host rerun of the full runtime
-command and a fresh Codex task after catalog sync for the live model matrix:
-Sol/Luna parents with Kimi, Grok, and DeepSeek children.
-
-The fresh-session matrix is intentionally last: the protocol and catalog are
-sticky for an existing task, so running it inside the task that changed the
-setting would produce false evidence.
-
-## Branch completion
-
-The pre-feature repository-wide pre-push gate is green. The product-owned
-plaintext V2 feature was verified in its isolated worktree and is now integrated
-here. Keep this unit open until the idle-host runtime gate and fresh-task
-mixed-roster run are recorded. Then move this unit to
-`devlog/_fin/260808_multi_agent_workstation/` and record the remaining
-upstream/distribution dependencies and review/promotion path.
+Repository policy targets feature review at `dev` followed by maintainer
+promotion to `main`. A fork owner may still use a direct fork-main comparison
+for private integration review.

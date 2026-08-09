@@ -74,7 +74,7 @@ exact selector 行が表示されず、切り替えることもできません�
 
 ## マルチエージェントサーフェスモード
 
-モデルページでは 3 つのコラボレーション選択肢を **Classic v1**、**Automatic**（base / upstream のデフォルト）、**Concurrent v2** と表示します。このコントロールは各ピッカーエントリが使用する Codex コラボレーションサーフェスを変更します。正規モード、委任、継承、フォールバック、および暗号化されたタスクの動作については、[サブエージェントサーフェス](/guides/sub-agent-surface/) を参照してください。
+モデルページでは 3 つのコラボレーション選択肢を **Classic v1**、**Follow Codex defaults**（base / upstream の動作）、**Concurrent v2** と表示します。このコントロールは各ピッカーエントリが使用する Codex コラボレーションサーフェスを変更します。正規モード、委任、継承、フォールバック、および暗号化されたタスクの動作については、[サブエージェントサーフェス](/guides/sub-agent-surface/) を参照してください。
 
 ## 上位層の推論
 
@@ -97,9 +97,9 @@ fast_mode = true
 
 ## サブエージェントの選択
 
-Codex は、ピッカーに表示されるカタログ エントリを `priority` の昇順で並べ替え、最初の 5 つを `spawn_agent` モデル オーバーライドとしてアドバタイズします。ダッシュボードの Subagents ページでは、bare native id または routed `provider/model` id を最大 5 つ選択して保存できます。手動で設定した `subagentModels` は account-qualified `<selector>/<native-openai-model>` id も受け付けますが、ダッシュボードにはこれらの exact id が表示されません。ページを保存すると、リストはダッシュボードに表示される選択肢で置き換えられます。opencodex は選択順に低いカタログ priority を割り当てます。account selector が有効な場合、bare native の選択は selector-qualified グループに展開されます。他のモデルは引き続き正確な ID で呼び出すことができます。
+Codex は、ピッカーに表示されるカタログ エントリを `priority` の昇順で並べ替え、最初の 5 つを `spawn_agent` モデル オーバーライドとしてアドバタイズします。ダッシュボードの **Agent Command Center** では、bare native id または routed `provider/model` id を最大 5 つ選択して保存できます。設定済みの account-qualified `<selector>/<native-openai-model>` id も保持され、各保存項目が実際に公開されたか除外されたかが表示されます。opencodex は選択順に低いカタログ priority を割り当てます。account selector が有効な場合、bare native の選択は selector-qualified グループに展開されます。他のモデルは引き続き正確な ID で呼び出すことができます。
 
-注目モデルのリストは、ダッシュボードの **サブエージェント委任** の選択とは別のものです。 Codex が提供するものを最初にオーバーライドするものを制御します。モデルを選択したり、委任をトリガーしたりすることはありません。
+Active Roster は、ダッシュボードの **サブエージェント委任** の選択とは別のものです。Codex が最初に提供する override を制御しますが、モデルを選択したり、委任をトリガーしたりすることはありません。
 
 ## モデルの状態を更新しています
 
