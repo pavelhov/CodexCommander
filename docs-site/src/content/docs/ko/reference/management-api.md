@@ -1,25 +1,25 @@
 ---
 title: 관리 API
-description: opencodex 제어 평면의 인증, 오류, 엔드포인트 참고 문서입니다.
+description: CodexCommander 제어 평면의 인증, 오류, 엔드포인트 참고 문서입니다.
 ---
 
-Management API는 opencodex의 제어 평면입니다. `http://localhost:10100`의 대시보드는 이 API의 한 클라이언트이며, 헤드리스 `ocx` provider, model, combo, account, settings, diagnostics, lifecycle 명령도 모두 클라이언트입니다. 이 API는 프록시가 실행 중일 때만 사용할 수 있습니다.
+Management API는 CodexCommander의 제어 평면입니다. `http://localhost:10100`의 대시보드는 이 API의 한 클라이언트이며, 헤드리스 `ccx` provider, model, combo, account, settings, diagnostics, lifecycle 명령도 모두 클라이언트입니다. 이 API는 프록시가 실행 중일 때만 사용할 수 있습니다.
 
 대화형 클라이언트가 필요하면 [Web Dashboard](/guides/web-dashboard/)를 사용하고, 자동화를 만들 때는 이 참고 문서를 사용하십시오. 영속 값은 결국 [Configuration](/reference/configuration/)을 따릅니다.
 
 ## 인증 모델
 
-Management API에는 데이터 평면 API 키와는 독립된 자체 관리자 자격 증명이 있습니다. 시작 시 opencodex는 다음 순서로 이를 확인합니다.
+Management API에는 데이터 평면 API 키와는 독립된 자체 관리자 자격 증명이 있습니다. 시작 시 CodexCommander는 다음 순서로 이를 확인합니다.
 
-1. 설정되어 있으면 `OPENCODEX_ADMIN_AUTH_TOKEN`
-2. 강화된 비밀 파일에 저장된 생성된 `ocx_admin_*` 토큰
+1. 설정되어 있으면 `CODEXCOMMANDER_ADMIN_AUTH_TOKEN`
+2. 강화된 비밀 파일에 저장된 생성된 `ccx_admin_*` 토큰
 
 파일 기반 토큰은 해당 디렉터리와 파일 권한 또는 ACL이 강화된 뒤에만 허용됩니다. 이를 보장할 수 없으면 관리 인증은 실패를 닫는 방식으로 처리되며, 환경 토큰이 제공되거나 파일 상태가 복구될 때까지 API는 503을 반환합니다.
 
 관리자 토큰은 다음 두 형식 중 하나로 보내면 됩니다.
 
 ```http
-X-OpenCodex-API-Key: <admin-token>
+X-CodexCommander-API-Key: <admin-token>
 ```
 
 ```http
@@ -32,7 +32,7 @@ Authorization: Bearer <admin-token>
 
 ### 루프백 대시보드 세션
 
-루프백 바인드에서는 대시보드 초기화가 수명이 짧은 `ocx_session_*` 자격 증명을 받을 수 있습니다. 각 세션은 5분 동안 유지되며 정확한 대시보드 origin에 묶입니다. 안전한 요청은 그 origin과 일치해야 합니다. 안전하지 않은 메서드에는 브라우저 `Origin`과 세션의 CSRF 토큰도 필요합니다.
+루프백 바인드에서는 대시보드 초기화가 수명이 짧은 `ccx_session_*` 자격 증명을 받을 수 있습니다. 각 세션은 5분 동안 유지되며 정확한 대시보드 origin에 묶입니다. 안전한 요청은 그 origin과 일치해야 합니다. 안전하지 않은 메서드에는 브라우저 `Origin`과 세션의 CSRF 토큰도 필요합니다.
 
 세션 발급은 원격 바인드와 같이 데이터 평면 인증이 필요한 경우에는 항상 비활성화됩니다. 원격 운영자는 원시 관리자 토큰으로 인증해야 하며, 루프백 방식의 GUI 세션은 발급되지 않습니다.
 
@@ -42,7 +42,7 @@ Authorization: Bearer <admin-token>
 
 | 상태 | 유형 또는 코드 | 의미 |
 | --- | --- | --- |
-| 401 | `opencodex admin token required` | 관리자 토큰 또는 GUI 세션이 없거나, 잘못되었거나, 만료되었거나, origin이 일치하지 않거나, CSRF 증거가 없습니다 |
+| 401 | `codexcommander admin token required` | 관리자 토큰 또는 GUI 세션이 없거나, 잘못되었거나, 만료되었거나, origin이 일치하지 않거나, CSRF 증거가 없습니다 |
 | 403 | `cross-origin request blocked` | 요청 origin이 management allowlist 밖에 있습니다 |
 | 404 | `not_found` | method와 path에 맞는 management route가 없습니다 |
 | 413 | `request body too large` | POST, PUT, PATCH 본문이 management 2 MiB 제한을 초과했습니다 |
@@ -65,7 +65,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/grok/selection` | 제외할 Grok 모델을 영속화합니다 | 400 잘못되었거나 너무 큰 선택 |
 | `POST /api/grok/apply` | 관리형 동기화를 통해 영속화된 Grok 구성을 적용합니다 | 409 `grok_apply_busy`; 400/500 적용 실패 |
 | `GET, PUT /api/claude-desktop` | Claude Desktop 라우팅/네이티브 프로필을 읽거나 저장합니다 | 400 잘못되었거나 사용할 수 없는 할당 |
-| `POST /api/claude-desktop/apply` | 저장된 프로필을 Claude Desktop의 관리형 구성에 기록합니다 | 400/500 기록 실패 |
+| `POST /api/claude-desktop/apply` | 저장된 프로필을 Claude Desktop의 관리형 구성에 기록합니다. JSON 객체와 명시적 `mode`(`static`, `hybrid`, `discovery`)가 필요합니다 | 400 본문/mode 오류, 500 기록 실패 |
 | `GET /api/claude-desktop/status` | 저장된 프로필과 적용된 프로필, Desktop 상태를 확인합니다 | 400 상태 읽기 실패 |
 | `GET, PUT /api/claude-code` | Claude Code gateway, auth-mode, model-map, context, agent, sidecar 설정을 읽거나 갱신합니다 | 400 잘못된 필드 또는 형태 |
 
@@ -93,9 +93,6 @@ Authorization: Bearer <admin-token>
 | `GET, POST /api/windows-tray` | Windows tray 상태를 읽거나 설치, 시작, 중지, 제거합니다 | 400 지원되지 않는 플랫폼/작업; 500 작업 실패 |
 | `GET /api/diagnostics/project-config` | 캐시된 프로젝트 구성 경고를 읽습니다 | — |
 | `POST /api/sync` | 현재 모델 카탈로그를 Codex에 동기화하고 `catalogQuality`, `rehydrated`, Codex app-server `catalogState`, 필요한 재시작 힌트를 반환합니다 | 409 쓰기 권한 거부, 500 동기화 실패 |
-| `GET /api/update/check` | `latest` 또는 `preview` 업데이트 채널을 확인합니다 | 400 잘못된 태그 |
-| `POST /api/update/run` | 선택적으로 restart를 뒤따르게 할 수 있는 업데이트 작업을 시작합니다 | 400 잘못된 본문; 작업별 충돌/오류 상태 |
-| `GET /api/update/status` | id로 업데이트 작업을 조회합니다 | 404 알 수 없는 작업 |
 | `GET, PUT /api/sidecar-settings` | web-search 및 vision sidecar 모델/backend 설정을 읽거나 업데이트합니다 | 400 잘못된 형태, backend, 또는 한도 |
 | `GET, PUT /api/shadow-call-settings` | shadow-call interception 설정을 읽거나 업데이트합니다 | 400 잘못된 형태 또는 값 |
 
@@ -175,12 +172,6 @@ Authorization: Bearer <admin-token>
 
 `provider_has_dependent_combos`는 안전 장치입니다. provider를 삭제하기 전에 종속된 combo를 제거하거나 수정하십시오.
 
-### 사이드바
-
-| Method and path | 목적 | 주요 오류 |
-| --- | --- | --- |
-| `GET /api/update/badge` | 저렴한 sidebar update-badge 상태를 읽습니다 | — |
-
 ### 시스템 수명 주기
 
 | Method and path | 목적 | 주요 오류 |
@@ -200,7 +191,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/codex-auth/accounts/pause` | 계정 하나를 일시 중지하거나 재개합니다 | 400 잘못된 account/state; 404 누락된 account |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | quota가 소진된 account를 일시 중지합니다 | mutation-lock 실패는 503이 됩니다 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | account 하나 또는 모든 account의 runtime cooldown을 지웁니다 | 400 잘못된 id |
-| `GET, PUT /api/codex-auth/active` | 활성 account를 읽거나 선택합니다 | 400 잘못되었거나 누락된 account; 409 paused/legacy-row 충돌 |
+| `GET, PUT /api/codex-auth/active` | 활성 account를 읽거나 선택합니다 | 400 잘못되었거나 누락된 account; 409 일시 중지된 account |
 | `PUT /api/codex-auth/auto-switch` | 자동 account 전환을 위한 quota threshold를 설정합니다 | 400 잘못된 threshold |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Codex account-pool 선택 전략을 업데이트합니다 | 400 잘못된 전략/구성 |
 | `PUT /api/codex-auth/failover` | account failover threshold를 설정합니다 | 400 잘못된 threshold |
@@ -216,4 +207,4 @@ Authorization: Bearer <admin-token>
 
 ## 클라이언트 선택
 
-일반적인 관리 작업에는 [Web Dashboard](/guides/web-dashboard/)가 가장 안전한 안내형 워크플로를 제공합니다. 헤드리스 호스트와 자동화에는 대응하는 `ocx` 명령을 사용하십시오. 이 명령들은 동일한 실시간 API를 호출하며, 프록시에 접근할 수 없거나 작업이 실패하면 0이 아닌 결과를 반환합니다. 직접 HTTP는 위의 정확한 엔드포인트 계약이 필요한 통합에 가장 유용합니다.
+일반적인 관리 작업에는 [Web Dashboard](/guides/web-dashboard/)가 가장 안전한 안내형 워크플로를 제공합니다. 헤드리스 호스트와 자동화에는 대응하는 `ccx` 명령을 사용하십시오. 이 명령들은 동일한 실시간 API를 호출하며, 프록시에 접근할 수 없거나 작업이 실패하면 0이 아닌 결과를 반환합니다. 직접 HTTP는 위의 정확한 엔드포인트 계약이 필요한 통합에 가장 유용합니다.

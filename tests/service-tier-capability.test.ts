@@ -10,7 +10,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { providerConfigSeed, enrichProviderFromRegistry } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
 import { applyServiceTierGate, handleResponses } from "../src/server/responses/core";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
 
 describe("registry capability reaches saved configs without overriding them", () => {
   test("the registry holds the defaults; the seed stays free of them so explicit config stays distinguishable", () => {
@@ -26,17 +26,17 @@ describe("registry capability reaches saved configs without overriding them", ()
   });
 
   test("enrichProviderFromRegistry backfills a missing field (not a hardcoded config)", () => {
-    const prov: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://api.deepseek.com", apiKey: "sk-test" };
+    const prov: CodexCommanderProviderConfig = { adapter: "openai-chat", baseUrl: "https://api.deepseek.com", apiKey: "sk-test" };
     enrichProviderFromRegistry("deepseek", prov);
     expect(prov.supportsServiceTier).toBe(false);
     expect(prov.preserveResponsesReasoningContent).toBe(true);
   });
 
   test("an explicit config value beats the registry default in both directions", () => {
-    const stripped: OcxProviderConfig = { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", apiKey: "sk-test", supportsServiceTier: false };
+    const stripped: CodexCommanderProviderConfig = { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", apiKey: "sk-test", supportsServiceTier: false };
     enrichProviderFromRegistry("openai-apikey", stripped);
     expect(stripped.supportsServiceTier).toBe(false);
-    const optedIn: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://api.deepseek.com", apiKey: "sk-test", supportsServiceTier: true };
+    const optedIn: CodexCommanderProviderConfig = { adapter: "openai-chat", baseUrl: "https://api.deepseek.com", apiKey: "sk-test", supportsServiceTier: true };
     enrichProviderFromRegistry("deepseek", optedIn);
     expect(optedIn.supportsServiceTier).toBe(true);
   });
@@ -92,13 +92,13 @@ describe("the gate fires on the live handleResponses path", () => {
 
   async function drive(
     providerName: string,
-    provider: OcxProviderConfig,
+    provider: CodexCommanderProviderConfig,
     model: string,
     rawBody: Record<string, unknown>,
     fastMode?: boolean,
   ): Promise<Record<string, unknown>> {
     const { bodies } = captureBody();
-    const config = { providers: { [providerName]: provider }, ...(fastMode === undefined ? {} : { fastMode }) } as unknown as OcxConfig;
+    const config = { providers: { [providerName]: provider }, ...(fastMode === undefined ? {} : { fastMode }) } as unknown as CodexCommanderConfig;
     await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -112,9 +112,9 @@ describe("the gate fires on the live handleResponses path", () => {
     return bodies[0] ?? {};
   }
 
-  const deepseekProvider = (): OcxProviderConfig =>
+  const deepseekProvider = (): CodexCommanderProviderConfig =>
     ({ ...providerConfigSeed(getProviderRegistryEntry("deepseek")!), apiKey: "sk-test" });
-  const openAiKeyProvider = (): OcxProviderConfig =>
+  const openAiKeyProvider = (): CodexCommanderProviderConfig =>
     ({ ...providerConfigSeed(getProviderRegistryEntry("openai-apikey")!), apiKey: "sk-test" });
 
   test("DeepSeek never receives service_tier, even with fastMode on", async () => {
@@ -140,7 +140,7 @@ describe("the gate fires on the live handleResponses path", () => {
   });
 
   test("an unclassified custom Responses provider keeps caller values; only explicit false strips", async () => {
-    const custom = (): OcxProviderConfig => ({ adapter: "openai-responses", baseUrl: "https://gateway.example.com/v1", apiKey: "sk-test" });
+    const custom = (): CodexCommanderProviderConfig => ({ adapter: "openai-responses", baseUrl: "https://gateway.example.com/v1", apiKey: "sk-test" });
     const preserved = await drive("custom-gw", custom(), "some-model", { service_tier: "priority" });
     expect(preserved.service_tier).toBe("priority");
     const stripped = await drive("custom-gw", { ...custom(), supportsServiceTier: false }, "some-model", { service_tier: "priority" });

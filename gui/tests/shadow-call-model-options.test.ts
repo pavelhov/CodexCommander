@@ -16,10 +16,10 @@ test("shadow-call options preserve canonical native and routed namespaced ids", 
   expect(options.map(option => option.value)).not.toContain("encoded/provider/model/with/slash");
 });
 
-test("shadow-call options retain an unmatched legacy current value", () => {
-  expect(shadowCallModelOptions(models, "legacy/bare-id").at(-1)).toEqual({
-    value: "legacy/bare-id",
-    label: "legacy/bare-id",
+test("shadow-call options retain an unmatched current custom value", () => {
+  expect(shadowCallModelOptions(models, "custom/bare-id").at(-1)).toEqual({
+    value: "custom/bare-id",
+    label: "custom/bare-id",
   });
 });
 

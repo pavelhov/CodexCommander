@@ -1,4 +1,4 @@
-import type { CodexAccountMode, OcxProviderConfig } from "../types";
+import type { CodexAccountMode, CodexCommanderProviderConfig } from "../types";
 import { PROVIDER_REGISTRY, providerMatchesRegistryTransport, type ProviderRegistryEntry } from "./registry";
 
 export interface DerivedKeyLoginProvider {
@@ -7,7 +7,7 @@ export interface DerivedKeyLoginProvider {
   responsesPath?: string;
   adapter: string;
   apiKeyValidation?: "unknown";
-  apiKeyTransport?: OcxProviderConfig["apiKeyTransport"];
+  apiKeyTransport?: CodexCommanderProviderConfig["apiKeyTransport"];
   dashboardUrl: string;
   models?: string[];
   liveModels?: boolean;
@@ -18,16 +18,16 @@ export interface DerivedKeyLoginProvider {
   modelMaxInputTokens?: Record<string, number>;
   defaultMaxOutputTokens?: number;
   modelMaxOutputTokens?: Record<string, number>;
-  chatCompletionTokenField?: OcxProviderConfig["chatCompletionTokenField"];
+  chatCompletionTokenField?: CodexCommanderProviderConfig["chatCompletionTokenField"];
   reasoningEfforts?: string[];
   modelReasoningEfforts?: Record<string, string[]>;
   modelDefaultReasoningEfforts?: Record<string, string>;
-  reasoningContentMode?: OcxProviderConfig["reasoningContentMode"];
+  reasoningContentMode?: CodexCommanderProviderConfig["reasoningContentMode"];
   modelSupportsReasoningSummaries?: Record<string, boolean>;
-  modelReasoningSummaryDelivery?: OcxProviderConfig["modelReasoningSummaryDelivery"];
+  modelReasoningSummaryDelivery?: CodexCommanderProviderConfig["modelReasoningSummaryDelivery"];
   reasoningEffortMap?: Record<string, string>;
   modelReasoningEffortMap?: Record<string, Record<string, string>>;
-  reasoningWireFormat?: OcxProviderConfig["reasoningWireFormat"];
+  reasoningWireFormat?: CodexCommanderProviderConfig["reasoningWireFormat"];
   noVisionModels?: string[];
   noReasoningModels?: string[];
   noTemperatureModels?: string[];
@@ -78,7 +78,7 @@ export interface DerivedProviderPreset {
    */
   baseUrlChoices?: Array<{ id: string; label: string; baseUrl?: string }>;
   /** Immutable canonical provider config seed for the reserved canonical `openai` forward preset. */
-  provider?: OcxProviderConfig;
+  provider?: CodexCommanderProviderConfig;
 }
 
 export function listRegistryEntries(): readonly ProviderRegistryEntry[] {
@@ -115,7 +115,7 @@ function cloneNestedRecord(input: Record<string, Record<string, string>>): Recor
  * The registry auth kind is preserved verbatim (including `"local"`) so fail-closed gates
  * keep distinguishing local runtimes from API-key providers after the seed round-trip.
  */
-export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderConfig {
+export function providerConfigSeed(entry: ProviderRegistryEntry): CodexCommanderProviderConfig {
   return {
     adapter: entry.adapter,
     baseUrl: entry.baseUrl,
@@ -233,7 +233,7 @@ export function deriveInitProviders(): DerivedInitProvider[] {
   }));
 }
 
-export function deriveOAuthProviderConfig(id: string): OcxProviderConfig | undefined {
+export function deriveOAuthProviderConfig(id: string): CodexCommanderProviderConfig | undefined {
   const entry = PROVIDER_REGISTRY.find(row => row.id === id && row.authKind === "oauth");
   return entry ? providerConfigSeed(entry) : undefined;
 }
@@ -253,7 +253,7 @@ export function deriveProviderPresets(): DerivedProviderPreset[] {
   return [...dedupePresets(presets), customPreset()];
 }
 
-export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig): void {
+export function enrichProviderFromRegistry(name: string, prov: CodexCommanderProviderConfig): void {
   const entry = PROVIDER_REGISTRY.find(row => row.id === name);
   if (!entry || !providerMatchesRegistryTransport(name, prov)) return;
   const seed = providerConfigSeed(entry);

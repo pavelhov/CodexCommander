@@ -1,4 +1,4 @@
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 
 export interface ProviderRewriteResult {
   /** Number of references re-pointed. */
@@ -31,7 +31,7 @@ export interface ProviderRewriteResult {
  * caller that moves a provider row handles its own allowlist, where the
  * destination catalog is known.
  */
-export function rewriteProviderReferences(config: OcxConfig, from: string, to: string): ProviderRewriteResult {
+export function rewriteProviderReferences(config: CodexCommanderConfig, from: string, to: string): ProviderRewriteResult {
   const prefix = `${from}/`;
   const collisions: string[] = [];
   let changed = 0;
@@ -47,7 +47,7 @@ export function rewriteProviderReferences(config: OcxConfig, from: string, to: s
    * Rewrite a routed-string list in place. Assigning the result unconditionally
    * would add an own property with value `undefined` where the field was absent,
    * which breaks the no-op contract. The key type is an explicit union rather
-   * than `keyof OcxConfig`: the latter also admits `customModels` and friends, so
+   * than `keyof CodexCommanderConfig`: the latter also admits `customModels` and friends, so
    * `map` would infer a union array that is not assignable back.
    */
   type RoutedListKey = "disabledModels" | "subagentModels" | "subagentModelFallback";
@@ -79,7 +79,6 @@ export function rewriteProviderReferences(config: OcxConfig, from: string, to: s
     [config.shadowCallIntercept as Record<string, unknown> | undefined, "model"],
     [config.webSearchSidecar as Record<string, unknown> | undefined, "model"],
     [config.visionSidecar as Record<string, unknown> | undefined, "model"],
-    [config.claudeCode as unknown as Record<string, unknown> | undefined, "model"],
     [config.claudeCode as unknown as Record<string, unknown> | undefined, "smallFastModel"],
     [config.claudeCode?.webSearchSidecar as Record<string, unknown> | undefined, "model"],
     [config.claudeCode?.visionSidecar as Record<string, unknown> | undefined, "model"],
@@ -90,7 +89,6 @@ export function rewriteProviderReferences(config: OcxConfig, from: string, to: s
     if (next) owner[key] = next;
   }
 
-  routeRecordValues(config.claudeCode?.tierModels as Record<string, string> | undefined);
   routeRecordValues(config.claudeCode?.modelMap as Record<string, string> | undefined);
 
   // Bare provider ids.

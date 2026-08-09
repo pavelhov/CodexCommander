@@ -24,7 +24,7 @@
 
   <path class="line" d="M156 140 H218" />
   <rect class="box-strong" x="218" y="84" width="144" height="112" />
-  <text class="label" x="290" y="118" text-anchor="middle">opencodex</text>
+  <text class="label" x="290" y="118" text-anchor="middle">CodexCommander</text>
   <text class="sub" x="290" y="140" text-anchor="middle">thread affinity</text>
   <text class="sub" x="290" y="160" text-anchor="middle">quota routing</text>
 

@@ -1,9 +1,6 @@
 # OpenAI Provider Account-Mode SOT
 
-This current contract supersedes the provider-identity and account-selection sections of
-`devlog/_fin/260717_openai_hardening`; that archived unit remains historical evidence for the
-earlier three-tier implementation. The replacement contract and its verification evidence live in
-`devlog/_fin/260717_openai_single_provider_option`.
+This file defines the current provider-identity and account-selection contract.
 
 ## Public provider contract
 
@@ -71,35 +68,6 @@ gpt-5.6-sol                         # openai; Pool or Direct follows the provide
 openai-apikey/gpt-5.6-sol           # OpenAI API key
 openai-apikey/gpt-5.6-sol-pro       # API Pro virtual model
 ```
-
-## Migration and restore
-
-Current configs use `openaiProviderTierVersion: 2`. Startup projects shipped v1 Direct/Multi
-configs into one canonical `providers.openai` row, absorbs the legacy account-selection intent into
-`codexAccountMode`, removes legacy public provider rows, and maps a legacy default to `openai`.
-A marker-1 config containing neither Codex-forward row preserves that absence.
-
-Known `openai-multi/<model>` selected ids are rewritten to bare ids in disabled/subagent/injection,
-shadow, sidecar, Claude model/tier, and model-map destination fields. Rewritten arrays are
-deduplicated in stable order; unrelated providers, API-key ids, and unknown passthrough fields are
-not rewritten. Conflicting provider context caps keep the lower positive value with path-only
-warnings.
-
-Before the first v2 projection, opencodex creates a mode-0600, no-replace byte snapshot:
-
-```sh
-cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json
-```
-
-The historical v1 backup is never overwritten. Restoring the v2 backup intentionally restores the
-shipped v1 shape; the next startup re-migrates to the same marker-2 bytes.
-
-A pre-existing snapshot that differs from the current config is classified before anything is written
-(`src/config.ts` `classifyOpenAiTierBackup`): a snapshot that parses as a valid pre-migration (v1)
-config is a user-intentional rollback point and blocks migration; a snapshot that is unparseable or
-already tier-v2 is stale and is replaced with a warning. The distinction matters because silently
-discarding a rollback point is destructive, while preserving a stale one would block every later
-migration.
 
 ## Model and wire identity
 

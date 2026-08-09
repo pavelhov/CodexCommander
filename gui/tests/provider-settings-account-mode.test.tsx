@@ -13,7 +13,7 @@ let testWindow: Window;
 
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
-  testWindow = new Window({ url: "http://localhost/#providers/workspace" });
+  testWindow = new Window({ url: "http://localhost/#providers" });
   Object.defineProperty(testWindow.navigator, "language", { configurable: true, value: "en-US" });
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: testWindow.document },

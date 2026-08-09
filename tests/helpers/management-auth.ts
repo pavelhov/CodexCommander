@@ -1,4 +1,5 @@
 import { configuredAdminToken } from "../../src/lib/admin-secrets";
+import { API_KEY_HEADER } from "../../src/identity";
 
 function isLocalManagementRequest(input: RequestInfo | URL): boolean {
   try {
@@ -16,7 +17,7 @@ function isLocalManagementRequest(input: RequestInfo | URL): boolean {
 export function managementFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   if (!isLocalManagementRequest(input)) return globalThis.fetch(input, init);
   const headers = managementHeaders(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-  if (!headers.has("x-opencodex-api-key")) return globalThis.fetch(input, init);
+  if (!headers.has(API_KEY_HEADER)) return globalThis.fetch(input, init);
   if (input instanceof Request) {
     return globalThis.fetch(new Request(input, { headers }), init ? { ...init, headers } : undefined);
   }
@@ -27,7 +28,7 @@ export function managementFetch(input: RequestInfo | URL, init?: RequestInit): P
 export function managementHeaders(initial?: HeadersInit): Headers {
   const headers = new Headers(initial);
   const token = configuredAdminToken();
-  if (token && !headers.has("x-opencodex-api-key")) headers.set("x-opencodex-api-key", token);
+  if (token && !headers.has(API_KEY_HEADER)) headers.set(API_KEY_HEADER, token);
   return headers;
 }
 

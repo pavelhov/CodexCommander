@@ -12,10 +12,11 @@ import {
   restoreIntegration,
   type IntegrationWriteInput,
 } from "../src/integrations/writer";
-import type { OcxConfig } from "../src/types";
+import { fingerprint } from "../src/integrations/ownership";
+import type { CodexCommanderConfig } from "../src/types";
 
 /**
- * Activation coverage for devlog/_fin/260802_client_toggle_api/031 §6.
+ * Activation coverage for implementation contract §6.
  *
  * Every test drives the real writer against a temp HOME and a temp store, so
  * "we never touch anything we do not own" is proven by the filesystem rather
@@ -37,15 +38,15 @@ const MODELS: ExportModel[] = [
   { namespaced: "openai/gpt-5.5", provider: "openai", id: "gpt-5.5", contextWindow: 400_000 },
 ];
 
-const CONFIG: OcxConfig = {
+const CONFIG: CodexCommanderConfig = {
   port: 10100,
   hostname: "127.0.0.1",
   defaultProvider: "mock",
   providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" } },
-} as unknown as OcxConfig;
+} as unknown as CodexCommanderConfig;
 
 beforeEach(() => {
-  const base = mkdtempSync(join(tmpdir(), "ocx-integrations-writer-"));
+  const base = mkdtempSync(join(tmpdir(), "ccx-integrations-writer-"));
   home = join(base, "home");
   storeRoot = join(base, "store", "integrations");
   mkdirSync(home, { recursive: true });
@@ -100,7 +101,7 @@ describe("apply", () => {
     if (result.ok) expect(result.changed).toBe(true);
 
     const text = readFileSync(configPath, "utf8");
-    expect(Bun.YAML.parse(text)).toMatchObject({ providers: { opencodex: { api_mode: "chat_completions" } } });
+    expect(Bun.YAML.parse(text)).toMatchObject({ providers: { codexcommander: { api_mode: "chat_completions" } } });
     const rows = store.listOperations("hermes");
     expect(rows).toHaveLength(1);
     expect(rows[0]!.kind).toBe("apply");
@@ -152,7 +153,7 @@ describe("apply", () => {
     mkdirSync(join(home, ".gjc"), { recursive: true });
     const result = applyIntegration(input({
       clientId: "gajae",
-      config: { ...CONFIG, hostname: "0.0.0.0" } as OcxConfig,
+      config: { ...CONFIG, hostname: "0.0.0.0" } as CodexCommanderConfig,
     }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("non_loopback");
@@ -196,6 +197,18 @@ describe("disable", () => {
     if (result.ok) expect(result.changed).toBe(false);
   });
 
+  test("an existing unowned provider block is a conflict", () => {
+    const configPath = installHermes();
+    const foreign = 'providers:\n  codexcommander:\n    api: "http://example.invalid/v1"\n';
+    writeFileSync(configPath, foreign);
+
+    const result = applyIntegration(input());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("conflict");
+    // The file is byte-identical: an unowned block is never adopted.
+    expect(readFileSync(configPath, "utf8")).toBe(foreign);
+  });
+
   test("refuses to delete a block after someone edited the file", () => {
     const configPath = installHermes();
     expect(applyIntegration(input()).ok).toBe(true);
@@ -204,14 +217,33 @@ describe("disable", () => {
     const result = disableIntegration(input());
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("conflict");
-    expect(readFileSync(configPath, "utf8")).toContain("opencodex");
+    expect(readFileSync(configPath, "utf8")).toContain("codexcommander");
+  });
+
+  test("an older ownership record cannot authorize disable", () => {
+    const configPath = installHermes();
+    expect(applyIntegration(input()).ok).toBe(true);
+    const applied = readFileSync(configPath, "utf8");
+    const recordsPath = join(storeRoot, "records.json");
+    const envelope = JSON.parse(readFileSync(recordsPath, "utf8")) as {
+      schemaVersion: number;
+      records: Record<string, Record<string, unknown>>;
+    };
+    delete envelope.records.hermes!.createdContainers;
+    writeFileSync(recordsPath, `${JSON.stringify(envelope, null, 2)}\n`);
+
+    const result = disableIntegration(input());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("conflict");
+    expect(readFileSync(configPath, "utf8")).toBe(applied);
+    expect(store.readRecords().hermes).toBeUndefined();
   });
 
   test("kimi loses its provider AND every model entry it owns", () => {
     mkdirSync(join(home, ".kimi-code"), { recursive: true });
     const configPath = join(home, ".kimi-code", "config.toml");
     // A user's own entry that merely looks like ours must survive.
-    writeFileSync(configPath, '[models."opencodex/mine"]\nprovider = "elsewhere"\n');
+    writeFileSync(configPath, '[models."codexcommander/mine"]\nprovider = "elsewhere"\n');
     expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
 
     const applied = Bun.TOML.parse(readFileSync(configPath, "utf8")) as { models: Record<string, unknown> };
@@ -219,7 +251,7 @@ describe("disable", () => {
 
     expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
     const after = Bun.TOML.parse(readFileSync(configPath, "utf8")) as { models?: Record<string, unknown> };
-    expect(after.models).toEqual({ "opencodex/mine": { provider: "elsewhere" } });
+    expect(after.models).toEqual({ "codexcommander/mine": { provider: "elsewhere" } });
   });
 });
 
@@ -298,7 +330,7 @@ describe("nothing leaks", () => {
     const secret = ["sk", "live", "should", "never", "appear"].join("-");
     const configPath = installHermes();
     applyIntegration(input({
-      config: { ...CONFIG, apiKeys: [{ key: secret }] } as unknown as OcxConfig,
+      config: { ...CONFIG, apiKeys: [{ key: secret }] } as unknown as CodexCommanderConfig,
     }));
     expect(readFileSync(configPath, "utf8")).not.toContain(secret);
   });

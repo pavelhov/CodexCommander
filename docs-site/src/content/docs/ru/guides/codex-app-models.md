@@ -1,16 +1,16 @@
 ---
 title: Селектор моделей Codex App
-description: Как модели opencodex появляются в Codex App, Codex CLI и Codex TUI через общий каталог Codex.
+description: Как модели CodexCommander появляются в Codex App, Codex CLI и Codex TUI через общий каталог Codex.
 ---
 
-opencodex не патчит Codex App. Он записывает ту же конфигурацию Codex и тот же каталог моделей,
+CodexCommander не патчит Codex App. Он записывает ту же конфигурацию Codex и тот же каталог моделей,
 которыми уже пользуются Codex CLI/TUI. Поскольку Codex App читает это общее состояние,
 маршрутизируемые модели могут появляться в picker'е App как обычные записи каталога Codex.
 
 Записи OpenAI используют два credential-транспорта: нативный вход Codex и namespaced-транспорт
 API-ключа `openai-apikey/<model>`. Само по себе переключение `codexAccountMode` между Pool и Direct
 не меняет id в picker'е. Однако если в `codexAccountNamespaces` есть подходящие селекторы,
-opencodex добавляет для сопоставленных аккаунтов отдельные строки
+CodexCommander добавляет для сопоставленных аккаунтов отдельные строки
 `<selector>/<native-openai-model>` и скрывает bare native-строки из picker'а. Имена селекторов —
 это публичные метки, которые выбирает пользователь; встроенного смысла роли аккаунта у них нет.
 Выбор строки с селектором использует только сопоставленный аккаунт, не меняет активный аккаунт Pool
@@ -33,26 +33,17 @@ gpt-5.6-sol                         # bare-маршрут входа Codex че�
 openai-apikey/gpt-5.6-sol           # API key
 ```
 
-Свежие установки и конфигурации без сохранённого режима по умолчанию используют Pool. Текущие
-конфигурации помечены marker 2 и сохраняют исходник shipped v1 в
-`~/.opencodex/config.json.pre-openai-tiers-v2.bak`; вернуть его можно так:
-
-```sh
-cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json
-```
-
-Более ранние трёхпровайдерные конфигурации v1 автоматически мигрируют в одну строку с
-переключаемым режимом.
+Свежие установки и конфигурации без сохранённого режима по умолчанию используют Pool.
 
 ## Путь интеграции
 
-`ocx init`, `ocx start` и `ocx sync` подключают общий конфиг и каталог Codex к прокси; подробности
+`ccx init`, `ccx start` и `ccx sync` подключают общий конфиг и каталог Codex к прокси; подробности
 о внедрении конфигурации, синхронизации каталога, shim'ах, fallback с WebSocket и механике
 восстановления см. в [Интеграции с Codex](/guides/codex-integration/).
 
 ## Почему появляются маршрутизируемые модели
 
-Picker моделей Codex ожидает записи каталога в формате Codex. opencodex строит маршрутизируемые
+Picker моделей Codex ожидает записи каталога в формате Codex. CodexCommander строит маршрутизируемые
 записи, клонируя шаблон нативной модели Codex и затем заменяя идентичность на routed-модель:
 
 ```text
@@ -62,13 +53,13 @@ visibility = "list"
 ```
 
 Клон сохраняет поля, нужные строгому парсеру: reasoning level'ы, тип shell, флаги поддержки API и
-базовые инструкции. После этого opencodex убирает нативные возможности, которые данный маршрут
+базовые инструкции. После этого CodexCommander убирает нативные возможности, которые данный маршрут
 не может честно поддержать, включая service-tier metadata OpenAI.
 
 ## Текущее покрытие стабильных моделей
 
 Нативный fallback-набор включает `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,
-`gpt-5.3-codex-spark` и GPT-5.6 Sol/Terra/Luna. Для семейства GPT-5.5/5.4 opencodex сохраняет
+`gpt-5.3-codex-spark` и GPT-5.6 Sol/Terra/Luna. Для семейства GPT-5.5/5.4 CodexCommander сохраняет
 более богатые живые записи установленного каталога Codex и синтезирует только отсутствующую
 запись. Bundled upstream-snapshot используется только для GPT-5.6, где он даёт настоящую
 per-model identity и метаданные вместо приближения по старому шаблону.
@@ -139,7 +130,7 @@ service_tier = "fast"
 fast_mode = true
 ```
 
-Но каталог моделей и id tier'а во время выполнения используют `priority`. opencodex сохраняет это
+Но каталог моделей и id tier'а во время выполнения используют `priority`. CodexCommander сохраняет это
 разделение. Нативные passthrough-модели OpenAI сохраняют поддержку fast; routed-провайдеры ограничены
 capability-гейтом — `service_tier` удаляется только когда провайдер объявил `supportsServiceTier: false` (registry классифицирует canonical OpenAI как `true`, DeepSeek и Volcengine Ark как `false`); неклассифицированные custom gateway'и сохраняют значения вызывающего без изменений и не получают подстановку.
 Так что опция fast не рекламируется там, где её нельзя выполнить, а custom gateway'и могут включить её явно через `true`.
@@ -150,7 +141,7 @@ Codex сортирует видимые в picker'е записи каталог
 пять как model-override для `spawn_agent`. **Agent Command Center** в дашборде позволяет выбрать и
 сохранить до пяти bare native-id или routed provider-id `provider/model`. Уже настроенные
 account-qualified id `<selector>/<native-openai-model>` сохраняются, а интерфейс сообщает, какие
-сохранённые записи реально рекламируются или исключены. opencodex назначает им низкие приоритеты
+сохранённые записи реально рекламируются или исключены. CodexCommander назначает им низкие приоритеты
 каталога в выбранном порядке; при активных селекторах аккаунтов bare native-выбор разворачивается
 в группы selector-qualified строк. Остальные модели всё равно можно вызывать по точному id.
 
@@ -164,9 +155,9 @@ Active Roster отделён от выбора **Sub-agent delegation** в да�
 поверхность Codex:
 
 ```bash
-ocx sync
+ccx sync
 ```
 
-Каждый раз, когда меняются видимость, priority или metadata каталога, opencodex переписывает
+Каждый раз, когда меняются видимость, priority или metadata каталога, CodexCommander переписывает
 `models_cache.json` с намеренно устаревшей cache-wrapper, чтобы следующее обновление моделей в
 Codex прочитало новый каталог.

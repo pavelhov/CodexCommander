@@ -21,7 +21,7 @@ const RESET_RETRY_MAX_ATTEMPTS = 3;
 const RESET_RETRY_BASE_DELAY_MS = 150;
 const RESET_RETRY_MAX_DELAY_MS = 1_000;
 
-// Transient-5xx status retry layer (pre-stream only; devlog/_plan/260716_claudecode_hardening/010).
+// Transient-5xx status retry layer (pre-stream only; implementation contract).
 const TRANSIENT_RETRY_MAX_ATTEMPTS = 3; // 1 initial + 2 retries
 const TRANSIENT_RETRY_BASE_DELAY_MS = 400;
 const TRANSIENT_RETRY_MAX_DELAY_MS = 5_000;
@@ -32,7 +32,7 @@ const TRANSIENT_RETRY_SLOW_ATTEMPT_MS = 15_000;
 /**
  * Upstream statuses treated as transient: gateway errors and Cloudflare 52x.
  * 500 is included per the OpenAI SDK default (auto-retries >=500; Tier-2 proven in
- * devlog/260716_ocx_claude_sol_502_midstream/02). 507 was observed in the 48h ledger
+ * the midstream retry investigation). 507 was observed in the 48h ledger
  * but is deliberately excluded (storage-class, not gateway-transient).
  */
 export function isTransientUpstreamStatus(status: number): boolean {

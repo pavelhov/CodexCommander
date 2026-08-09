@@ -3,22 +3,22 @@ import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/ada
 import { getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
 import { resetDebugSettingsForTests, setDebugSettings } from "../src/lib/debug-settings";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
-import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { AdapterEvent, CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createGoogleAdapter = (...args: Parameters<typeof createGoogleAdapterProduction>) =>
   withTestTranslatorBudget(createGoogleAdapterProduction(...args));
 
-function parsed(stream = false): OcxParsedRequest {
+function parsed(stream = false): CodexCommanderParsedRequest {
   return {
     modelId: "gemini-3.5-flash",
     context: { messages: [{ role: "user", content: "hi" }] },
     stream,
     options: {},
-  } as OcxParsedRequest;
+  } as CodexCommanderParsedRequest;
 }
 
-function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
+function provider(overrides: Partial<CodexCommanderProviderConfig> = {}): CodexCommanderProviderConfig {
   return {
     adapter: "google",
     baseUrl: "https://generativelanguage.googleapis.com",
@@ -28,7 +28,7 @@ function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig
   };
 }
 
-function antigravityProvider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
+function antigravityProvider(overrides: Partial<CodexCommanderProviderConfig> = {}): CodexCommanderProviderConfig {
   return provider({
     baseUrl: "https://daily-cloudcode-pa.googleapis.com",
     apiKey: "antigravity-test-token",
@@ -72,7 +72,7 @@ describe("google provider hardening", () => {
     const adapter = createGoogleAdapter(antigravityProvider({ apiKey: "   " }));
 
     await expect(adapter.buildRequest(parsed())).rejects.toThrow(
-      "google-antigravity oauth token missing — run ocx login google-antigravity",
+      "google-antigravity oauth token missing — run ccx login google-antigravity",
     );
   });
 
@@ -171,7 +171,7 @@ describe("google provider hardening", () => {
       ));
 
       expect(events).toContainEqual({ type: "heartbeat" });
-      const dropped = getDebugLogEntries().filter(entry => entry.line.includes("[ocx:frame-drop] google"));
+      const dropped = getDebugLogEntries().filter(entry => entry.line.includes("[ccx:frame-drop] google"));
       expect(dropped).toHaveLength(1);
       expect(dropped[0]?.line).toContain("bytes=7");
     } finally {

@@ -13,14 +13,12 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-
-const BEGIN_MARKER = "# >>> opencodex managed block — do not edit (removed by `ocx stop`) >>>";
-const END_MARKER = "# <<< opencodex managed block <<<";
+import { findManagedRegion } from "./inject";
 
 export interface GrokStatusModel {
   /** Alias of the emitted `[model.<alias>]` table. */
   alias: string;
-  /** The model id opencodex routes for. */
+  /** The model id CodexCommander routes for. */
   id: string;
   contextWindow?: number;
 }
@@ -56,11 +54,10 @@ export function readGrokStatus(opts: { grokHome?: string } = {}): GrokStatus {
     return { configPath, present: false, baseUrl: null, models: [] };
   }
 
-  const begin = content.indexOf(BEGIN_MARKER);
-  const end = content.indexOf(END_MARKER, begin + 1);
-  if (begin < 0 || end < 0) return { configPath, present: false, baseUrl: null, models: [] };
+  const managed = findManagedRegion(content);
+  if (!managed || managed.orphaned) return { configPath, present: false, baseUrl: null, models: [] };
 
-  const region = content.slice(begin + BEGIN_MARKER.length, end);
+  const region = content.slice(managed.contentStart, managed.contentEnd);
   const models: GrokStatusModel[] = [];
   let baseUrl: string | null = null;
   let current: GrokStatusModel | null = null;
@@ -95,7 +92,7 @@ export function readGrokStatus(opts: { grokHome?: string } = {}): GrokStatus {
  * lands in our log. The user sees a correct context window (the stale entry carries it)
  * and an endless "Retrying (attempt N/15)". That is a silent failure unless someone
  * compares the fence's port against the port we actually bound — which is exactly what
- * `ocx status` is for.
+ * `ccx status` is for.
  *
  * Returns null when there is nothing to say: no fence, an unparsable endpoint, or a
  * fence that already agrees with the live listener.

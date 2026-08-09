@@ -36,7 +36,7 @@ describe("runKeyringSmoke", () => {
       createId: () => ids.shift()!,
     });
 
-    expect(created).toEqual([["opencodex.keyring-smoke.service-id", "ci-account-id"]]);
+    expect(created).toEqual([["codexcommander.keyring-smoke.service-id", "ci-account-id"]]);
     expect(entry.deletes).toBe(1);
     expect(entry.secret).toBeNull();
   });

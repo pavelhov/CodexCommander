@@ -6,10 +6,8 @@ import { hashBelongsToPage, readPageFromHash, resolveAppHashChange } from "../sr
 /**
  * Hash routing contract after WP5 removed the Classic/Workspace split.
  *
- * The cases that survived from the dual-layout era are the ones that were never about
- * the preference: the generic helpers, history semantics, and passive normalization.
- * The legacy `#providers/workspace` deep link is kept as a REDIRECT case — it must land
- * on `#providers` without trapping Back.
+ * Covers generic helpers, history semantics, canonical provider deep links,
+ * and passive normalization.
  */
 
 describe("hash helpers", () => {
@@ -58,13 +56,11 @@ describe("route resolution", () => {
     }
   });
 
-  test("the legacy workspace deep link redirects to #providers", () => {
-    // WP5: the dual-layout hash is no longer a route. It must normalise away rather
-    // than persist, and replaceTo (not a push) keeps Back usable.
-    expect(hashBelongsToPage("providers/workspace", "providers")).toBe(false);
-    const action = resolveAppHashChange("providers/workspace");
+  test("canonical provider deep links remain selected", () => {
+    expect(hashBelongsToPage("providers/example", "providers")).toBe(true);
+    const action = resolveAppHashChange("providers/example");
     expect(action.page).toBe("providers");
-    expect(action.replaceTo).toBe("providers");
+    expect(action.replaceTo).toBeNull();
   });
 
   test("registered sub-hashes survive; unknown ones are normalised away", () => {
@@ -76,12 +72,6 @@ describe("route resolution", () => {
     expect(resolveAppHashChange("providers/openai/accounts").replaceTo).toBeNull();
     expect(resolveAppHashChange("providers/openai/nope").replaceTo).toBe("providers/openai/overview");
     expect(resolveAppHashChange("models/nope").replaceTo).toBe("models");
-  });
-
-  test("legacy #debug still maps onto the Logs tab", () => {
-    const action = resolveAppHashChange("debug");
-    expect(action.page).toBe("logs");
-    expect(action.replaceTo).toBe("logs/debug");
   });
 
   test("an unknown page falls back to the dashboard", () => {
@@ -145,36 +135,6 @@ describe("useAppRouteState (real hook)", () => {
     }
   });
 
-  test("the legacy workspace hash is REPLACED, so Back is not trapped", async () => {
-    const { seen, act } = await mountAt("#dashboard");
-
-    // Build a real prior entry, then navigate onto the legacy hash the way a bookmark
-    // or a pasted link would.
-    const baseline = win.history.length;
-    await act(async () => { seen.current!.navigateToPage("models"); });
-    expect(win.history.length).toBeGreaterThan(baseline);
-
-    const beforeLegacy = win.history.length;
-    await act(async () => {
-      win.location.hash = "providers/workspace";
-      win.dispatchEvent(new win.HashChangeEvent("hashchange"));
-      await new Promise((r) => setTimeout(r, 10));
-    });
-
-    // The rewrite itself must be a replace, so it adds no entry beyond the navigation.
-    expect(normalizeHashPath(win.location.hash)).toBe("providers");
-    expect(seen.current!.page).toBe("providers");
-    expect(win.history.length).toBe(beforeLegacy + 1);
-
-    // And Back must reach the previous page rather than bouncing on a rewritten entry.
-    await act(async () => {
-      win.history.back();
-      await new Promise((r) => setTimeout(r, 20));
-    });
-    expect(normalizeHashPath(win.location.hash)).toBe("models");
-    expect(seen.current!.page).toBe("models");
-  });
-
   test("an unknown suffix is normalised through the hook", async () => {
     const { seen } = await mountAt("#models/nope");
     expect(normalizeHashPath(win.location.hash)).toBe("models");
@@ -192,20 +152,6 @@ describe("useAppRouteState (real hook)", () => {
     expect(win.history.length).toBeGreaterThan(before);
   });
 
-  test("stale layout-preference keys are cleared on mount", async () => {
-    const seed = new Window({ url: "http://localhost/#dashboard" });
-    seed.localStorage.setItem("ocx-global-view", "workspace");
-    seed.localStorage.setItem("ocx-providers-view", "classic");
-    seed.localStorage.setItem("keep-me", "yes");
-
-    await mountAt("#dashboard", seed.localStorage as unknown as Storage);
-
-    expect(seed.localStorage.getItem("ocx-global-view")).toBeNull();
-    expect(seed.localStorage.getItem("ocx-providers-view")).toBeNull();
-    // Unrelated keys must survive the cleanup.
-    expect(seed.localStorage.getItem("keep-me")).toBe("yes");
-  });
-
   test("a throwing storage does not break routing", async () => {
     const throwing = {
       getItem: () => { throw new Error("blocked"); },
@@ -213,9 +159,9 @@ describe("useAppRouteState (real hook)", () => {
       removeItem: () => { throw new Error("blocked"); },
     } as unknown as Storage;
 
-    const { seen } = await mountAt("#providers/workspace", throwing);
-    // Cleanup failure is swallowed; the redirect still happens.
-    expect(normalizeHashPath(win.location.hash)).toBe("providers");
+    const { seen } = await mountAt("#providers/example", throwing);
+    // Route normalization does not depend on storage access.
+    expect(normalizeHashPath(win.location.hash)).toBe("providers/example");
     expect(seen.current!.page).toBe("providers");
   });
 });

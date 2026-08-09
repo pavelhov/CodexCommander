@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 // Full-suite Windows load: startServer + discovery GETs exceed the default 5s budget
@@ -16,25 +16,25 @@ let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-claude-discovery-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-claude-discovery-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-claude-discovery-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-claude-discovery-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
 });
 
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
 });
 
-function configWithStaticModels(claudeCode?: OcxConfig["claudeCode"]): OcxConfig {
+function configWithStaticModels(claudeCode?: CodexCommanderConfig["claudeCode"]): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "mock",
-    openaiProviderTierVersion: 2,
     providers: {
       mock: {
         adapter: "openai-chat",
@@ -46,7 +46,7 @@ function configWithStaticModels(claudeCode?: OcxConfig["claudeCode"]): OcxConfig
       },
     },
     ...(claudeCode ? { claudeCode } : {}),
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 test("anthropic-version header flips /v1/models to the discovery contract", async () => {
@@ -68,7 +68,7 @@ test("anthropic-version header flips /v1/models to the discovery contract", asyn
     for (const entry of json.data) {
       expect(entry.id.startsWith("claude") || entry.id.startsWith("anthropic")).toBe(true);
       expect(typeof entry.display_name).toBe("string");
-      // Full ModelInfo contract (devlog 130 B4b): capabilities ride discovery.
+      // Full ModelInfo contract (implementation contract B4b): capabilities ride discovery.
       expect(entry.type).toBe("model");
       expect(entry.created_at).toBe("2026-01-01T00:00:00Z");
       expect(entry.capabilities).toBeDefined();
@@ -105,11 +105,11 @@ test("?flavor=anthropic works without the header; disabled -> empty data", async
   }
 });
 
-test("per-surface id style: ?ids= wins, claude-code UA gets readable, unknown UA stays hashed (devlog 050)", async () => {
+test("per-surface id style: ?ids= wins, claude-code UA gets readable, unknown UA stays hashed (implementation contract)", async () => {
   saveConfig(configWithStaticModels());
   const server = startServer(0);
   try {
-    const readable = "claude-ocx-mock--test-model";
+    const readable = "claude-ccx2-mock--test-model";
     // 1) explicit ?ids=cli -> readable
     let json = await fetch(new URL("/v1/models?flavor=anthropic&ids=cli", server.url)).then(r => r.json()) as { data: { id: string }[] };
     expect(json.data.some(m => m.id === readable)).toBe(true);
@@ -167,6 +167,7 @@ test("exact account disables affect only the matching OpenAI and Codex discovery
     id: "stored-side-account",
     email: "private@example.test",
     alias: "Private Display Name",
+    logLabel: "pabcdef",
     isMain: false,
   }];
   config.codexAccountNamespaces = {
@@ -286,13 +287,13 @@ test("Codex discovery restores account rows for supported natives hidden on disk
         models: Array<{
           slug: string;
           visibility?: string;
-          opencodex_catalog_kind?: string;
+          codexcommander_catalog_kind?: string;
         }>;
       };
     expect(catalog.models.find(model => model.slug === "gpt-5.5")?.visibility).toBe("hide");
     expect(catalog.models.find(model => model.slug === "team/gpt-5.5")).toMatchObject({
       visibility: "list",
-      opencodex_catalog_kind: "account-selector-v1",
+      codexcommander_catalog_kind: "account-selector-v1",
     });
     expect(catalog.models.find(model => model.slug === "team/gpt-5.4")?.visibility)
       .toBe("hide");
@@ -327,8 +328,8 @@ test("account selectors stay out of discovery when no canonical OpenAI provider 
 test("disabled canonical OpenAI preserves bare bootstrap rows without advertising account routes", async () => {
   const config = {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "openai",
-    openaiProviderTierVersion: 2,
     providers: {
       openai: {
         adapter: "openai-responses",
@@ -337,9 +338,14 @@ test("disabled canonical OpenAI preserves bare bootstrap rows without advertisin
         liveModels: false,
       },
     },
-    codexAccounts: [{ id: "stored-side-account", isMain: false }],
+    codexAccounts: [{
+      id: "stored-side-account",
+      email: "stored-side-account@example.test",
+      logLabel: "p123abc",
+      isMain: false,
+    }],
     codexAccountNamespaces: { team: "stored-side-account" },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
   saveConfig(config);
   const server = startServer(0);
   try {

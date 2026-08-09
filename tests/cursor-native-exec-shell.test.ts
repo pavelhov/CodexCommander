@@ -144,7 +144,7 @@ describe("shellStreamExec completion acknowledgement", () => {
     const execMsg = create(ExecServerMessageSchema, {
       id: 42,
       execId: "7",
-      message: { case: "shellStreamArgs", value: create(ShellArgsSchema, { command: "echo OCX_STREAM_OK" }) },
+      message: { case: "shellStreamArgs", value: create(ShellArgsSchema, { command: "echo CCX_STREAM_OK" }) },
     });
 
     const replies = (await shellStreamExec(execMsg)).map(decodeClient);
@@ -163,7 +163,7 @@ describe("shellStreamExec completion acknowledgement", () => {
     if (resultMsg.case !== "shellResult") throw new Error("missing shellResult");
     expect(resultMsg.value.result.case).toBe("success");
     if (resultMsg.value.result.case === "success") {
-      expect(resultMsg.value.result.value.stdout).toContain("OCX_STREAM_OK");
+      expect(resultMsg.value.result.value.stdout).toContain("CCX_STREAM_OK");
       expect(resultMsg.value.result.value.exitCode).toBe(0);
     }
 

@@ -11,8 +11,8 @@ import {
 
 const profile: RoutingProfileDto = {
   id: "fast",
-  alias: "ocx/fast",
-  model: "ocx/fast",
+  alias: "ccx/fast",
+  model: "ccx/fast",
   revision: "abc123",
   candidates: [
     { provider: "anthropic", model: "claude-sonnet-5" },
@@ -57,7 +57,7 @@ describe("routing profile editor data", () => {
       id: "fast",
       expectedRevision: "abc123",
       profile: {
-        alias: "ocx/fast",
+        alias: "ccx/fast",
         candidates: profile.candidates,
         require: {
           minContextWindow: 128000,

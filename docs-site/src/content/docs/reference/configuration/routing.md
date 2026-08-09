@@ -10,12 +10,12 @@ Routing turns the model id sent by a client into one concrete provider and upstr
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `defaultProvider` | `string` | `"openai"` | Final provider used when no earlier model rule matches. It must name an enabled configured provider. |
-| `combos?` | `Record<string, OcxComboConfig>` | `{}` | Virtual `combo/<id>` models built from ordered provider/model targets. |
-| `routingProfiles?` | `Record<string, OcxRoutingProfileConfig>` | `{}` | Virtual `policy/<id>` models that select among an explicit candidate allowlist using hard capability requirements and deterministic scoring. |
+| `combos?` | `Record<string, CodexCommanderComboConfig>` | `{}` | Virtual `combo/<id>` models built from ordered provider/model targets. |
+| `routingProfiles?` | `Record<string, CodexCommanderRoutingProfileConfig>` | `{}` | Virtual `policy/<id>` models that select among an explicit candidate allowlist using hard capability requirements and deterministic scoring. |
 
 ## Model resolution order
 
-opencodex resolves the requested model in this order:
+CodexCommander resolves the requested model in this order:
 
 1. An explicit `policy/<id>` or configured routing-profile alias, executing the policy evaluator
    and routing the selected candidate. An unknown profile id fails closed.
@@ -129,7 +129,7 @@ candidate evidence is provided through the API (`POST /api/routing-profiles/dry-
 {
   "routingProfiles": {
     "fast": {
-      "alias": "ocx/fast",
+      "alias": "ccx/fast",
       "candidates": [
         { "provider": "anthropic", "model": "claude-sonnet-5" },
         { "provider": "openai", "model": "gpt-5.6-sol" }
@@ -148,8 +148,8 @@ candidate evidence is provided through the API (`POST /api/routing-profiles/dry-
 }
 ```
 
-CLI: `ocx route policy list [--json]`, `ocx route policy show <id> [--json]`, and
-`ocx route policy dry-run <id> [--model-context <tokens>] [--tools] [--image] [--structured-output] [--json]`.
+CLI: `ccx route policy list [--json]`, `ccx route policy show <id> [--json]`, and
+`ccx route policy dry-run <id> [--model-context <tokens>] [--tools] [--image] [--structured-output] [--json]`.
 Dry-run evaluates candidates without sending any upstream request.
 
 Quota evidence (`optimize.quota`, `require.minQuotaHeadroom`, `unknownEvidence.quota`) comes from
@@ -179,7 +179,7 @@ Per-request route-decision traces are recorded when a policy profile executes.
 
 ### Catalog eligibility
 
-A combo remains directly routable even when it cannot be listed. `ocx sync`, `/v1/models`, and the
+A combo remains directly routable even when it cannot be listed. `ccx sync`, `/v1/models`, and the
 Codex picker list it only when every target exposes capabilities that can be intersected:
 
 - a positive `contextWindow`, from live metadata, registry hints, or provider
@@ -211,14 +211,14 @@ Returned history and route-decision payloads expose only masked request metadata
 (for example opaque `apiKeyId` labels). They do not include credentials, raw
 prompt bodies, or provider secrets.
 
-CLI: `ocx logs explain <request-id>`, `ocx logs rebuild-index`,
-`ocx logs index-status`, `ocx route policy list | show | dry-run | evaluate`.
+CLI: `ccx logs explain <request-id>`, `ccx logs rebuild-index`,
+`ccx logs index-status`, `ccx route policy list | show | dry-run | evaluate`.
 
-## Migration
+## Existing data
 
 `routingProfiles` is optional and additive: existing config files load
-unchanged. Old `usage.jsonl` rows without `routeDecision` parse unchanged.
+unchanged. `usage.jsonl` rows without `routeDecision` also parse unchanged.
 The history index is disposable - deleting `routing-history.sqlite` triggers
-an automatic rebuild from `usage.jsonl` on the next query; `ocx logs
+an automatic rebuild from `usage.jsonl` on the next query; `ccx logs
 rebuild-index` forces one. Nothing in this system auto-tunes weights,
 budgets, or candidate sets.

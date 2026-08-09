@@ -16,7 +16,7 @@ describe("logOAuthEvent", () => {
       console.info = original;
     }
     expect(lines.length).toBe(1);
-    expect(lines[0]).toContain("[opencodex]");
+    expect(lines[0]).toContain("[codexcommander]");
     expect(lines[0]).toContain("provider=kiro");
     expect(lines[0]).toContain("account=account-…wxyz");
     expect(lines[0]).not.toContain("acct_abcdefghijklmnopqrstuvwxyz");

@@ -1,5 +1,5 @@
 /**
- * One export client, one row (devlog 260802/010).
+ * One export client, one row (implementation contract).
  *
  * The row carries identity plus the two transport actions; inspection lives in
  * the dialog. Each row owns its own request, so one client's 503 cannot disable

@@ -5,8 +5,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
+import { API_KEY_HEADER } from "../src/identity";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 let testDir = "";
@@ -14,15 +15,15 @@ let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-claude-native-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-claude-native-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-claude-native-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-claude-native-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
 });
 
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
@@ -52,16 +53,17 @@ function mockAnthropicUpstream(captured: Captured[]) {
   });
 }
 
-function cfg(anthropicBaseUrl: string, extraClaude?: Record<string, unknown>): OcxConfig {
+function cfg(anthropicBaseUrl: string, extraClaude?: Record<string, unknown>): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "mock",
     providers: {
       mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:1/v1", apiKey: "k", allowPrivateNetwork: true, liveModels: false, models: ["test-model"] },
     },
     connectTimeoutMs: 250,
     claudeCode: { anthropicBaseUrl, ...extraClaude },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 const OAUTH_HEADERS = {
@@ -148,6 +150,34 @@ test("unmapped claude model + sk-ant credential passes through verbatim", async 
   }
 });
 
+test("native passthrough strips the proxy credential but preserves unrelated headers", async () => {
+  const captured: Captured[] = [];
+  const upstream = mockAnthropicUpstream(captured);
+  saveConfig(cfg(upstream.url.toString().replace(/\/$/, "")));
+  const server = startServer(0);
+  try {
+    const res = await fetch(new URL("/v1/messages", server.url), {
+      method: "POST",
+      headers: {
+        ...OAUTH_HEADERS,
+        [API_KEY_HEADER]: "proxy-credential-sentinel",
+        "x-end-to-end-example": "preserve-me",
+      },
+      body: JSON.stringify(claudeBody()),
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+
+    expect(captured).toHaveLength(1);
+    const upstreamHeaders = captured[0].headers;
+    expect(upstreamHeaders.get(API_KEY_HEADER)).toBeNull();
+    expect(upstreamHeaders.get("x-end-to-end-example")).toBe("preserve-me");
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
 test("native passthrough persists conversationId from metadata.user_id", async () => {
   const { createHash } = await import("node:crypto");
   const { clearRequestLogsForTests } = await import("../src/server/request-log");
@@ -223,14 +253,14 @@ test("alias/mapped models and non-anthropic credentials do NOT pass through", as
     const alias = await fetch(new URL("/v1/messages", server.url), {
       method: "POST",
       headers: OAUTH_HEADERS,
-      body: JSON.stringify({ model: "claude-ocx-mock--test-model", max_tokens: 10, messages: [{ role: "user", content: "x" }] }),
+      body: JSON.stringify({ model: "claude-ccx2-mock--test-model", max_tokens: 10, messages: [{ role: "user", content: "x" }] }),
     });
     expect(alias.status).not.toBe(200);
 
     // Claude model with placeholder bearer -> translate path (no sk-ant credential).
     const placeholder = await fetch(new URL("/v1/messages", server.url), {
       method: "POST",
-      headers: { "content-type": "application/json", "authorization": "Bearer opencodex-local" },
+      headers: { "content-type": "application/json", "authorization": "Bearer codexcommander-local" },
       body: JSON.stringify({ model: "claude-fable-5", max_tokens: 10, messages: [{ role: "user", content: "x" }] }),
     });
     expect(placeholder.status).not.toBe(200);
@@ -261,7 +291,7 @@ test("nativePassthrough:false disables the pierce", async () => {
   }
 });
 
-// --- Generous image pipeline on the native branch (devlog 260714 .../040, P1-P5) ---
+// --- Generous image pipeline on the native branch (implementation contract .../040, P1-P5) ---
 
 import { resetNormalizeStateForTests } from "../src/adapters/anthropic-image-normalize";
 import { sniffImageDimensions } from "../src/adapters/anthropic-image-guard";

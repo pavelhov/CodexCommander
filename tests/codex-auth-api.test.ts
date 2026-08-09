@@ -38,7 +38,7 @@ import {
   getTrackedCodexWebSocketCountForAccount,
   registerCodexWebSocket,
 } from "../src/codex/websocket-registry";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import type { WsData } from "../src/server/ws-bridge";
 import { handleNativeProfileAPI } from "../src/codex/native-profile-api";
 import type { NativeProfileManager } from "../src/codex/native-profile-manager";
@@ -67,21 +67,32 @@ import {
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-auth-api-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
-const MANUAL_IMPORT_ENV = "OPENCODEX_ENABLE_UNVERIFIED_CODEX_IMPORT";
+const MANUAL_IMPORT_ENV = "CODEXCOMMANDER_ENABLE_UNVERIFIED_CODEX_IMPORT";
 const WARMUP_INPUT = [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }];
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 let previousCodexHome: string | undefined;
 let previousManualImportEnv: string | undefined;
 let previousFetch: typeof fetch;
 
-function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
-  return {
+function makeConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
+  const config: CodexCommanderConfig = {
     port: 10100,
-    providers: {},
+    multiAgentGuidanceEnabled: true,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+      },
+    },
     defaultProvider: "openai",
     codexAccounts: [],
     ...overrides,
   };
+  config.codexAccounts = config.codexAccounts?.map((account, index) => account.isMain || account.logLabel
+    ? account
+    : { ...account, logLabel: `p${(index + 1).toString(16).padStart(6, "0")}` });
+  return config;
 }
 
 function enableManualImport(): void {
@@ -118,7 +129,7 @@ function mockCodexWarmupSuccess(): { calls: () => number } {
 }
 
 async function completeMockCodexOAuth(options: {
-  config: OcxConfig;
+  config: CodexCommanderConfig;
   requestBody: { id: string; reauth?: boolean };
   oauthAccountId: string;
   email: string;
@@ -196,7 +207,7 @@ async function completeMockCodexOAuth(options: {
 }
 
 function seedPoolAccount(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   account: {
     id: string;
     email: string;
@@ -209,7 +220,13 @@ function seedPoolAccount(
 ): void {
   config.codexAccounts = [
     ...(config.codexAccounts ?? []),
-    { id: account.id, email: account.email, plan: account.plan, isMain: false },
+    {
+      id: account.id,
+      email: account.email,
+      plan: account.plan,
+      logLabel: `p${((config.codexAccounts?.length ?? 0) + 1).toString(16).padStart(6, "0")}`,
+      isMain: false,
+    },
   ];
   saveCodexAccountCredential(account.id, {
     accessToken: account.accessToken ?? `access-${account.id}`,
@@ -221,13 +238,13 @@ function seedPoolAccount(
 
 beforeEach(() => {
   resetLifecycleDrainStateForTests();
-  previousOpencodexHome = process.env.OPENCODEX_HOME;
+  previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
   previousCodexHome = process.env.CODEX_HOME;
   previousManualImportEnv = process.env[MANUAL_IMPORT_ENV];
   previousFetch = globalThis.fetch;
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   mkdirSync(TEST_CODEX_HOME, { recursive: true });
-  process.env.OPENCODEX_HOME = TEST_DIR;
+  process.env.CODEXCOMMANDER_HOME = TEST_DIR;
   process.env.CODEX_HOME = TEST_CODEX_HOME;
   delete process.env[MANUAL_IMPORT_ENV];
   clearAccountNeedsReauth("__main__");
@@ -255,8 +272,8 @@ afterEach(() => {
   clearPoolRotationState();
   clearCodexWebSocketRegistry();
   globalThis.fetch = previousFetch;
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
   if (previousManualImportEnv === undefined) delete process.env[MANUAL_IMPORT_ENV];
@@ -902,7 +919,7 @@ describe("codex-auth API", () => {
         email: "person@example.test",
         plan: "Plus",
         chatgptAccountId: "acct-config-secret",
-        logLabel: "work",
+        logLabel: "pabc123",
         isMain: false,
       }],
     });
@@ -923,7 +940,7 @@ describe("codex-auth API", () => {
       id: "pool-safe",
       email: "p***n@example.test",
       plan: "Plus",
-      logLabel: "work",
+      logLabel: "pabc123",
       isMain: false,
       hasCredential: true,
     });
@@ -1619,6 +1636,7 @@ describe("codex-auth API", () => {
       id: "pool-plan-reused",
       email: "new-plan@example.com",
       plan: "free",
+      logLabel: "p00cafe",
       isMain: false,
     }];
     saveCodexAccountCredential("pool-plan-reused", {
@@ -1680,6 +1698,7 @@ describe("codex-auth API", () => {
       id: "pool-plan-generation-flight",
       email: "new-flight@example.com",
       plan: "free",
+      logLabel: "p00cafe",
       isMain: false,
     }];
     saveCodexAccountCredential("pool-plan-generation-flight", {
@@ -1755,6 +1774,7 @@ describe("codex-auth API", () => {
         id: "pool-plan-finished",
         email: "new-finished@example.com",
         plan: "free",
+        logLabel: "p00cafe",
         isMain: false,
       },
       ...(config.codexAccounts ?? []),
@@ -1809,6 +1829,7 @@ describe("codex-auth API", () => {
       id: "pool-plan-stale-auth",
       email: "new-auth@example.com",
       plan: "free",
+      logLabel: "p00cafe",
       isMain: false,
     }];
     saveCodexAccountCredential("pool-plan-stale-auth", {
@@ -2553,7 +2574,7 @@ describe("codex-auth API", () => {
     expect(resolveCodexAccountForThread("runtime-selection", config)).toBe("pool-runtime");
   });
 
-  async function putPriority(config: OcxConfig, body: unknown): Promise<Response> {
+  async function putPriority(config: CodexCommanderConfig, body: unknown): Promise<Response> {
     const req = new Request("http://localhost/api/codex-auth/accounts/priority", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -3215,63 +3236,6 @@ describe("codex-auth API", () => {
     expect(getCodexAccountCredential("pool-untouched")).toEqual(beforeCredential);
   });
 
-  test("DELETE /api/codex-auth/accounts removes a configured legacy reserved account", async () => {
-    const accountId = "Constructor";
-    const config = makeConfig({
-      activeCodexAccountId: accountId,
-      codexAccounts: [{ id: accountId, email: "legacy@example.test", isMain: false }],
-    });
-    saveCodexAccountCredential(accountId, {
-      accessToken: "legacy-access",
-      refreshToken: "legacy-refresh",
-      expiresAt: Date.now() + 5 * 60_000,
-      chatgptAccountId: "legacy-account",
-    });
-
-    const req = new Request(
-      `http://localhost/api/codex-auth/accounts?id=${encodeURIComponent(accountId)}`,
-      { method: "DELETE" },
-    );
-    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
-
-    expect(resp!.status).toBe(200);
-    expect(config.codexAccounts).toEqual([]);
-    expect(config.activeCodexAccountId).toBeUndefined();
-    expect(getCodexAccountCredential(accountId)).toBeNull();
-  });
-
-  test("legacy non-main __main__ is quarantined and removable without touching Desktop auth", async () => {
-    const config = makeConfig({
-      activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID,
-      codexAccounts: [{ id: MAIN_CODEX_ACCOUNT_ID, email: "invalid-legacy@example.test", isMain: false }],
-    });
-    saveCodexAccountCredential(MAIN_CODEX_ACCOUNT_ID, {
-      accessToken: "legacy-pool-access",
-      refreshToken: "legacy-pool-refresh",
-      expiresAt: Date.now() + 5 * 60_000,
-      chatgptAccountId: "legacy-pool-account",
-    });
-    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
-      tokens: { access_token: "desktop-access", account_id: "desktop-account" },
-    }));
-
-    expect(getMainChatgptAccountId()).toBe("desktop-account");
-    expect(resolveCodexAccountForThread("legacy-main-row", config)).toBeNull();
-
-    const req = new Request(
-      `http://localhost/api/codex-auth/accounts?id=${encodeURIComponent(MAIN_CODEX_ACCOUNT_ID)}`,
-      { method: "DELETE" },
-    );
-
-    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
-
-    expect(resp!.status).toBe(200);
-    expect(config.codexAccounts).toEqual([]);
-    expect(config.activeCodexAccountId).toBeUndefined();
-    expect(getCodexAccountCredential(MAIN_CODEX_ACCOUNT_ID)).toBeNull();
-    expect(getMainChatgptAccountId()).toBe("desktop-account");
-  });
-
   test("GET /api/codex-auth/login-status returns idle by default", async () => {
     const req = new Request("http://localhost/api/codex-auth/login-status", { method: "GET" });
     const url = new URL(req.url);
@@ -3776,7 +3740,7 @@ describe("codex-auth API", () => {
   test("GET /api/codex-auth/login-status masks transient flow-state emails at response boundaries", async () => {
     const source = await Bun.file("src/codex/auth-api.ts").text();
     expect(source).toContain("st ? { ...st, email: maskEmail(st.email) ?? undefined } : { status: \"expired\" }");
-    expect(source).toContain("return jsonResponse({ ...st, email: maskEmail(st.email) ?? undefined });");
+    expect(source).not.toContain("for (const [, st] of codexAuthLoginState)");
   });
 
   test("GET /api/codex-auth/accounts reuses cached pool quota without fetching usage", async () => {

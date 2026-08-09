@@ -1,5 +1,5 @@
 /**
- * Claude inbound debug capture (devlog/260711_claude_inbound/130 B1).
+ * Claude inbound debug capture (implementation contract B1).
  *
  * Opt-in ring (last 20) of ALLOWLIST SCALARS from inbound Anthropic requests so the
  * user can watch live what Claude Desktop/Code actually sends per effort-slider

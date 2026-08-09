@@ -6,7 +6,7 @@
  * upstream request; execution wiring arrives with RI-05.
  */
 
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import {
   buildRouteDecisionTrace,
   MAX_REQUIREMENTS,
@@ -265,7 +265,7 @@ function requestRequirementFor(
  * candidates are scored in declaration order, ties break by earlier index.
  */
 export function evaluatePolicyProfile(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   profileId: string,
   requestEvidence: PolicyRequestEvidence,
   candidateEvidence: PolicyCandidateEvidence[],

@@ -47,7 +47,7 @@ function seedSubagents(cacheKey: string): SubagentsSnapshot | null {
 
 export default function Subagents({ apiBase }: { apiBase: string }) {
   const t = useT();
-  const cacheKey = `ocx.subagents.v2:${apiBase}`;
+  const cacheKey = `ccx.subagents.v2:${apiBase}`;
   const cached = seedSubagents(cacheKey);
   const [chosen, setChosen] = useState<string[]>(() => cached?.chosen ?? []);
   const [committedChosen, setCommittedChosen] = useState<string[]>(() => cached?.chosen ?? []);
@@ -184,10 +184,10 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       const refreshFailed = data?.catalogRefresh?.ok === false || data?.catalogRefresh?.status === "failed";
       setStatusTone(refreshFailed || excluded.length > 0 ? "warn" : "ok");
       setStatus(refreshFailed
-        ? t("sub.savedRefreshFailed", { n: applied.length, cmd: "ocx sync --restart-codex" })
+        ? t("sub.savedRefreshFailed", { n: applied.length, cmd: "ccx sync --restart-codex" })
         : excluded.length > 0
           ? t("sub.savedExcluded", { n: applied.length, missing: excluded.length })
-          : t("sub.saved", { n: applied.length, cmd: "ocx sync --restart-codex" }));
+          : t("sub.saved", { n: applied.length, cmd: "ccx sync --restart-codex" }));
       load();
     } catch (error) {
       setStatusTone("err");
@@ -245,7 +245,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       )}
       {catalogState?.state === "stale" && (
         <Notice tone="warn">
-          {t("sub.catalog.staleNotice", { n: catalogState.processes?.length ?? 0, cmd: "ocx sync --restart-codex" })}
+          {t("sub.catalog.staleNotice", { n: catalogState.processes?.length ?? 0, cmd: "ccx sync --restart-codex" })}
         </Notice>
       )}
       {catalogState?.state === "not_running" && <Notice tone="warn">{t("sub.catalog.notRunningNotice")}</Notice>}

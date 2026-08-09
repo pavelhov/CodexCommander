@@ -1,9 +1,9 @@
 /**
  * Claude-surface context-window map + effective model-env computation
- * (devlog/260712_cli_context_cache/010 B2, audit R2#1/R3#1/R3#4/R4#3).
+ * (implementation contract B2, audit R2#1/R3#1/R3#4/R4#3).
  *
  * The map registers EVERY selector form a Claude Code model slot might store —
- * bare native slug, provider/id, desktop3p alias, legacy claude-ocx-* alias —
+ * bare native slug, provider/id, desktop3p alias, readable claude-ccx2-* alias —
  * with first-wins dedupe (mirrors the desktop3p registry collision policy).
  * Values are authoritative context windows only (native override table /
  * adapter-reported CatalogModel.contextWindow); nothing is guessed.
@@ -14,7 +14,7 @@ import { nativeOpenAiContextWindow, type CatalogModel } from "../codex/catalog";
 
 const ONE_MILLION = 1_000_000;
 
-/** Auto-context defaults (devlog 260712 020, user-approved). */
+/** Auto-context defaults (implementation contract 020, user-approved). */
 export const AUTO_COMPACT_WINDOW_DEFAULT = 350_000;
 export const AUTO_CONTEXT_FLOOR = 200_000;
 /** Binary-verified accepted range for CLAUDE_CODE_AUTO_COMPACT_WINDOW (2.1.207: pSo=1e5, yDs=1e6). */
@@ -41,7 +41,6 @@ export const AUTO_CONTEXT_OFF: AutoContextMode = { enabled: false, compactWindow
 interface AutoContextConfigSlice {
   autoContext?: boolean;
   autoCompactWindow?: number;
-  maxContextTokens?: number;
 }
 
 function inAutoCompactRange(value: number): boolean {
@@ -50,9 +49,7 @@ function inAutoCompactRange(value: number): boolean {
 
 /**
  * Resolve the auto-context mode from claudeCode config. Disabled when the user
- * turned it off OR when the legacy maxContextTokens override is set — that pair
- * (MAX_CONTEXT_TOKENS + DISABLE_COMPACT) takes rule-1 precedence inside the CLI,
- * making both AUTO_COMPACT_WINDOW and [1m] accounting inert.
+ * turns it off.
  *
  * `envOverride` is the raw CLAUDE_CODE_AUTO_COMPACT_WINDOW the USER already
  * exported (user-wins injection keeps it): a valid value drives the marking
@@ -63,8 +60,6 @@ function inAutoCompactRange(value: number): boolean {
  */
 export function resolveAutoContext(claudeCode: AutoContextConfigSlice | undefined, envOverride?: string): AutoContextMode {
   if (claudeCode?.autoContext === false) return AUTO_CONTEXT_OFF;
-  const maxCtx = claudeCode?.maxContextTokens;
-  if (typeof maxCtx === "number" && Number.isFinite(maxCtx) && maxCtx > 0) return AUTO_CONTEXT_OFF;
   if (typeof envOverride === "string" && envOverride !== "") {
     const parsed = Number(envOverride);
     return inAutoCompactRange(parsed) ? { enabled: true, compactWindow: parsed } : AUTO_CONTEXT_OFF;
@@ -139,21 +134,12 @@ export function withOneMillionMarker(selector: string | undefined, windows: Reco
   return shouldMarkOneMillion(window, auto) ? `${selector}[1m]` : selector;
 }
 
-export interface ClaudeTierModels {
-  opus?: string;
-  sonnet?: string;
-  haiku?: string;
-  fable?: string;
-}
-
 /**
- * The exact env map Claude Code consumes for model slots (audit R4#4):
- * ANTHROPIC_MODEL + the four tier defaults + the legacy small-fast alias.
- * effective-haiku contract (audit R1#8): tierModels.haiku ?? smallFastModel, one
- * value injected into BOTH haiku variables.
+ * The helper-model environment slots Claude Code consumes. One configured value
+ * feeds both the current Haiku selector and Anthropic's small-fast wire slot.
  */
 export function effectiveModelEnv(
-  claudeCode: { model?: string; smallFastModel?: string; tierModels?: ClaudeTierModels; autoContext?: boolean; autoCompactWindow?: number; maxContextTokens?: number } | undefined,
+  claudeCode: { smallFastModel?: string; autoContext?: boolean; autoCompactWindow?: number } | undefined,
   windows: Record<string, number>,
   autoOverride?: AutoContextMode,
 ): Record<string, string> {
@@ -163,13 +149,8 @@ export function effectiveModelEnv(
     const marked = withOneMillionMarker(value, windows, auto);
     if (marked) out[name] = marked;
   };
-  set("ANTHROPIC_MODEL", claudeCode?.model);
-  set("ANTHROPIC_DEFAULT_OPUS_MODEL", claudeCode?.tierModels?.opus);
-  set("ANTHROPIC_DEFAULT_SONNET_MODEL", claudeCode?.tierModels?.sonnet);
-  set("ANTHROPIC_DEFAULT_FABLE_MODEL", claudeCode?.tierModels?.fable);
-  const effectiveHaiku = claudeCode?.tierModels?.haiku ?? claudeCode?.smallFastModel;
-  set("ANTHROPIC_DEFAULT_HAIKU_MODEL", effectiveHaiku);
-  set("ANTHROPIC_SMALL_FAST_MODEL", effectiveHaiku);
+  set("ANTHROPIC_DEFAULT_HAIKU_MODEL", claudeCode?.smallFastModel);
+  set("ANTHROPIC_SMALL_FAST_MODEL", claudeCode?.smallFastModel);
   return out;
 }
 

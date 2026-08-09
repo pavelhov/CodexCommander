@@ -1,11 +1,11 @@
 ---
 title: Codex App 模型选择器
-description: opencodex 中的模型如何通过共享 Codex 目录出现在 Codex App、Codex CLI 和 Codex TUI 中。
+description: CodexCommander 中的模型如何通过共享 Codex 目录出现在 Codex App、Codex CLI 和 Codex TUI 中。
 ---
 
-opencodex 不会修改 Codex App。它会写入 Codex CLI/TUI 已经使用的同一套 Codex 配置和模型目录。因为 Codex App 读取的是这份共享状态，路由模型可以像普通 Codex 目录条目一样出现在 App 的模型选择器中。
+CodexCommander 不会修改 Codex App。它会写入 Codex CLI/TUI 已经使用的同一套 Codex 配置和模型目录。因为 Codex App 读取的是这份共享状态，路由模型可以像普通 Codex 目录条目一样出现在 App 的模型选择器中。
 
-OpenAI 条目有两种凭据通道：原生 Codex 登录，以及命名空间化的 `openai-apikey/<model>` API key 通道。仅在 Pool 与 Direct 之间切换 `codexAccountMode` 不会改变选择器 id。但当 `codexAccountNamespaces` 中有目标账户存在的 selector 时，opencodex 会为映射账户添加独立的 `<selector>/<native-openai-model>` 行，并在选择器中隐藏裸原生行。Selector 名称是用户自定义的公开标签，没有内置的账户角色含义。选择带 `selector` 的行只会使用映射账户，不会更改当前 Pool 账户；目标不可用时，请求会直接失败，不会切换到其他账户。详情请参阅[精确 Codex 账户选择器](/reference/configuration/routing/#exact-codex-account-selectors)。API GPT-5.6 条目使用 1,050,000 context / 922,000 max input，而 `*-pro` 选择器 id 会解析到基础线协议模型，并在日志、用量和选择器状态中保留虚拟 id，同时带上 `reasoning.mode: "pro"`。API 目录固定为恰好八个 id：`gpt-5.5`、`gpt-5.6`、Sol/Terra/Luna，以及它们三个 Pro 虚拟 id；不存在通用的 `gpt-5.6-pro` 别名。Compact 请求会保留所选 tier，但发送基础模型且不带 reasoning 对象。
+OpenAI 条目有两种凭据通道：原生 Codex 登录，以及命名空间化的 `openai-apikey/<model>` API key 通道。仅在 Pool 与 Direct 之间切换 `codexAccountMode` 不会改变选择器 id。但当 `codexAccountNamespaces` 中有目标账户存在的 selector 时，CodexCommander 会为映射账户添加独立的 `<selector>/<native-openai-model>` 行，并在选择器中隐藏裸原生行。Selector 名称是用户自定义的公开标签，没有内置的账户角色含义。选择带 `selector` 的行只会使用映射账户，不会更改当前 Pool 账户；目标不可用时，请求会直接失败，不会切换到其他账户。详情请参阅[精确 Codex 账户选择器](/reference/configuration/routing/#exact-codex-account-selectors)。API GPT-5.6 条目使用 1,050,000 context / 922,000 max input，而 `*-pro` 选择器 id 会解析到基础线协议模型，并在日志、用量和选择器状态中保留虚拟 id，同时带上 `reasoning.mode: "pro"`。API 目录固定为恰好八个 id：`gpt-5.5`、`gpt-5.6`、Sol/Terra/Luna，以及它们三个 Pro 虚拟 id；不存在通用的 `gpt-5.6-pro` 别名。Compact 请求会保留所选 tier，但发送基础模型且不带 reasoning 对象。
 
 请通过选择器 id 显式选择凭据路径。在 Providers 页面切换 Pool/Direct；下面的 `<selector>` 是
 用户自定义、通过 `codexAccountNamespaces` 映射的公开标签：
@@ -16,21 +16,15 @@ gpt-5.6-sol                         # 通过 Pool 或 Direct 使用 bare Codex �
 openai-apikey/gpt-5.6-sol           # API key
 ```
 
-全新安装和没有保存模式的配置默认使用 Pool。当前配置使用 marker 2，并保留随发行版提供的 v1 源文件 `~/.opencodex/config.json.pre-openai-tiers-v2.bak`；可用以下命令恢复：
-
-```sh
-cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json
-```
-
-更早的 v1 三 provider 配置会自动迁移到这个支持单一选项的行。
+全新安装和没有保存模式的配置默认使用 Pool。
 
 ## 集成路径
 
-`ocx init`、`ocx start` 和 `ocx sync` 会把共享的 Codex 配置和目录接入代理；有关配置注入、目录同步、shim、WebSocket fallback 和恢复机制，请参见 [Codex Integration](/guides/codex-integration/)。
+`ccx init`、`ccx start` 和 `ccx sync` 会把共享的 Codex 配置和目录接入代理；有关配置注入、目录同步、shim、WebSocket fallback 和恢复机制，请参见 [Codex Integration](/guides/codex-integration/)。
 
 ## 为什么路由模型会显示
 
-Codex 的模型选择器需要 Codex 形状的目录条目。opencodex 会克隆一个原生 Codex 模型模板，然后替换路由模型的身份：
+Codex 的模型选择器需要 Codex 形状的目录条目。CodexCommander 会克隆一个原生 Codex 模型模板，然后替换路由模型的身份：
 
 ```text
 slug = "anthropic/claude-sonnet-..."
@@ -38,11 +32,11 @@ display_name = "anthropic/claude-sonnet-..."
 visibility = "list"
 ```
 
-克隆会保留严格解析器字段，例如 reasoning 档位、shell 类型、API 支持标志和 base instructions。随后，opencodex 会移除该路由无法兑现的仅原生能力，包括 OpenAI service-tier 元数据。
+克隆会保留严格解析器字段，例如 reasoning 档位、shell 类型、API 支持标志和 base instructions。随后，CodexCommander 会移除该路由无法兑现的仅原生能力，包括 OpenAI service-tier 元数据。
 
 ## 当前稳定模型覆盖
 
-原生回退集合包含 `gpt-5.5`、`gpt-5.4`、`gpt-5.4-mini`、`gpt-5.3-codex-spark` 以及 GPT-5.6 Sol/Terra/Luna。对于 GPT-5.5/5.4 家族，opencodex 会保留已安装 Codex 目录中更丰富的实时条目，只在缺失时才合成条目。内置的上游快照只用于 GPT-5.6，因为它提供的是每个模型真实的身份和元数据，而不是较旧模板的近似版本。
+原生回退集合包含 `gpt-5.5`、`gpt-5.4`、`gpt-5.4-mini`、`gpt-5.3-codex-spark` 以及 GPT-5.6 Sol/Terra/Luna。对于 GPT-5.5/5.4 家族，CodexCommander 会保留已安装 Codex 目录中更丰富的实时条目，只在缺失时才合成条目。内置的上游快照只用于 GPT-5.6，因为它提供的是每个模型真实的身份和元数据，而不是较旧模板的近似版本。
 
 | 路由 | 选择器 id 与目录元数据 |
 | --- | --- |
@@ -92,11 +86,11 @@ service_tier = "fast"
 fast_mode = true
 ```
 
-但模型目录和运行时请求里的 tier id 使用的是 `priority`。opencodex 保留了这个拆分。原生 OpenAI 透传模型保留 fast 支持；路由的提供商会按能力门控——只有当提供商声明 `supportsServiceTier: false` 时才会剥离 `service_tier`（注册表已将官方 OpenAI 分类为 `true`，DeepSeek 和 Volcengine Ark 分类为 `false`）；未分类的自定义网关会原样保留调用方提供的值且绝不注入，因此无法兑现的 fast 选项不会被展示，自定义网关也可以用 `true` 显式启用。
+但模型目录和运行时请求里的 tier id 使用的是 `priority`。CodexCommander 保留了这个拆分。原生 OpenAI 透传模型保留 fast 支持；路由的提供商会按能力门控——只有当提供商声明 `supportsServiceTier: false` 时才会剥离 `service_tier`（注册表已将官方 OpenAI 分类为 `true`，DeepSeek 和 Volcengine Ark 分类为 `false`）；未分类的自定义网关会原样保留调用方提供的值且绝不注入，因此无法兑现的 fast 选项不会被展示，自定义网关也可以用 `true` 显式启用。
 
 ## 子代理选择
 
-Codex 会按 `priority` 升序对选择器可见的目录条目排序，并把前五个作为 `spawn_agent` 模型 override 暴露出来。仪表盘的 **Agent Command Center** 最多可以选择并保存五个裸原生 id 或路由 `provider/model` id，也会保留已配置的账户限定 `<selector>/<native-openai-model>` id，并报告每个保存项是否实际公开或被排除。opencodex 会按所选顺序分配较低的目录 priority；启用账户 selector 时，裸原生选择会展开为 selector-qualified 分组。其他模型仍然可以通过精确 id 调用。
+Codex 会按 `priority` 升序对选择器可见的目录条目排序，并把前五个作为 `spawn_agent` 模型 override 暴露出来。仪表盘的 **Agent Command Center** 最多可以选择并保存五个裸原生 id 或路由 `provider/model` id，也会保留已配置的账户限定 `<selector>/<native-openai-model>` id，并报告每个保存项是否实际公开或被排除。CodexCommander 会按所选顺序分配较低的目录 priority；启用账户 selector 时，裸原生选择会展开为 selector-qualified 分组。其他模型仍然可以通过精确 id 调用。
 
 Active Roster 与 Dashboard 的 **Sub-agent delegation** 选择彼此独立。它只决定 Codex 先提供哪些 override；它不会自己选择模型，也不会触发委派。
 
@@ -105,7 +99,7 @@ Active Roster 与 Dashboard 的 **Sub-agent delegation** 选择彼此独立。�
 如果选择器里仍然显示旧条目，请刷新目录并重启目标 Codex 界面：
 
 ```bash
-ocx sync
+ccx sync
 ```
 
-每当目录可见性、priority 或元数据发生变化时，opencodex 都会用一个刻意标记为过期的缓存 wrapper 重写 `models_cache.json`，这样 Codex 下次刷新模型时就会读取新目录。
+每当目录可见性、priority 或元数据发生变化时，CodexCommander 都会用一个刻意标记为过期的缓存 wrapper 重写 `models_cache.json`，这样 Codex 下次刷新模型时就会读取新目录。

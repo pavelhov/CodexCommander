@@ -9,7 +9,7 @@ import {
 } from "../src/integrations/serialize";
 
 /**
- * Activation coverage for devlog/_fin/260802_client_toggle_api/011 §1.
+ * Activation coverage for implementation contract §1.
  *
  * The round-trip assertions are the load-bearing ones: a renderer that emits
  * plausible-looking text a parser then reads differently is worse than one that
@@ -26,9 +26,9 @@ describe("renderYaml", () => {
   test("round-trips through Bun.YAML.parse", () => {
     const doc = {
       providers: {
-        opencodex: {
+        codexcommander: {
           api: "http://127.0.0.1:10100/v1",
-          api_key: "${OPENCODEX_HERMES_API_KEY}",
+          api_key: "${CODEXCOMMANDER_HERMES_API_KEY}",
           discover_models: false,
           models: ["anthropic/claude-opus-4-8", "openai/gpt-5.5"],
         },
@@ -40,7 +40,7 @@ describe("renderYaml", () => {
   test("round-trips a sequence of maps", () => {
     const doc = {
       providers: {
-        opencodex: {
+        codexcommander: {
           baseUrl: "http://127.0.0.1:10100/v1",
           models: [
             { id: "a/b", name: "A (routed)", input: ["text"] },
@@ -95,8 +95,8 @@ describe("renderYaml", () => {
 describe("renderToml", () => {
   test("round-trips through Bun.TOML.parse", () => {
     const doc = {
-      providers: { opencodex: { type: "openai", base_url: "http://127.0.0.1:10100/v1" } },
-      models: { "opencodex/a-b": { provider: "opencodex", model: "a/b", max_context_size: 200000 } },
+      providers: { codexcommander: { type: "openai", base_url: "http://127.0.0.1:10100/v1" } },
+      models: { "codexcommander/a-b": { provider: "codexcommander", model: "a/b", max_context_size: 200000 } },
     };
     expect(Bun.TOML.parse(renderToml(doc))).toEqual(doc);
   });

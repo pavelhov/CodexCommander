@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter, stripBracketedModelSuffix } from "../src/adapters/openai-chat";
 import { createAnthropicAdapter } from "../src/adapters/anthropic";
 import { routeModel } from "../src/router";
-import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 
-function parsed(modelId: string): OcxParsedRequest {
+function parsed(modelId: string): CodexCommanderParsedRequest {
   return {
     modelId,
     context: { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
@@ -13,7 +13,7 @@ function parsed(modelId: string): OcxParsedRequest {
   };
 }
 
-function openaiChatProvider(): OcxProviderConfig {
+function openaiChatProvider(): CodexCommanderProviderConfig {
   return {
     adapter: "openai-chat",
     baseUrl: "https://api.z.ai/api/paas/v4",
@@ -21,8 +21,8 @@ function openaiChatProvider(): OcxProviderConfig {
   };
 }
 
-function routedZaiProvider(): OcxProviderConfig {
-  const config: OcxConfig = {
+function routedZaiProvider(): CodexCommanderProviderConfig {
+  const config: CodexCommanderConfig = {
     port: 10100,
     defaultProvider: "zai",
     providers: {
@@ -35,7 +35,7 @@ function routedZaiProvider(): OcxProviderConfig {
   return routeModel(config, "zai/glm-5.2[1m]").provider;
 }
 
-function anthropicProvider(): OcxProviderConfig {
+function anthropicProvider(): CodexCommanderProviderConfig {
   return {
     adapter: "anthropic",
     baseUrl: "https://api.z.ai/api/coding/paas/v4",
@@ -81,7 +81,7 @@ describe("openai-chat adapter wire model normalization", () => {
   });
 
   test("an unflagged provider sends glm-5.2[1m] verbatim", async () => {
-    const provider: OcxProviderConfig = {
+    const provider: CodexCommanderProviderConfig = {
       adapter: "openai-chat",
       baseUrl: "https://example.test/v1",
     };

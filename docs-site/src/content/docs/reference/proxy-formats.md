@@ -3,7 +3,7 @@ title: Proxy API Formats
 description: Wire-level reference for the Responses, Chat Completions, Anthropic Messages, model catalog, WebSocket, realtime, and compaction surfaces.
 ---
 
-opencodex presents one local proxy in several client dialects. A Codex client can speak the
+CodexCommander presents one local proxy in several client dialects. A Codex client can speak the
 Responses API, an OpenAI-compatible app can speak Chat Completions, and Claude Code can speak
 Anthropic Messages without requiring every upstream provider to implement every format.
 
@@ -34,7 +34,7 @@ should select among several targets.
 
 ## `POST /v1/responses`
 
-This is the native opencodex data-plane shape. The request body must be a JSON object with a
+This is the native CodexCommander data-plane shape. The request body must be a JSON object with a
 non-empty `model`. `input` may be a string or an array of Responses items.
 
 ### Accepted request fields
@@ -186,7 +186,7 @@ wins unless `client_version` is also present.
 ## `POST /v1/live` and Realtime sideband
 
 `POST /v1/live` accepts the ChatGPT/Codex App Frameless call-creation surface.
-`POST /v1/realtime/calls` accepts the OpenAI Realtime call-creation surface. opencodex selects an
+`POST /v1/realtime/calls` accepts the OpenAI Realtime call-creation surface. CodexCommander selects an
 eligible OpenAI-family route, normalizes the call-creation request for the upstream authentication
 mode, and relays the bounded response.
 
@@ -208,7 +208,7 @@ conversation.
 | Route type | Behavior |
 | --- | --- |
 | Canonical ChatGPT or official OpenAI route | Forwards the request to the native `/responses/compact` endpoint with the resolved account and model authentication |
-| Other routed model | Runs an internal, non-streaming, no-tools compaction turn with a `compaction_trigger`; requires exactly one synthetic `compaction` item whose `encrypted_content` is an `ocx1:` envelope; decodes that summary into v1 replacement history |
+| Other routed model | Runs an internal, non-streaming, no-tools compaction turn with a `compaction_trigger`; requires exactly one synthetic `compaction` item whose `encrypted_content` is a `ccx1:` envelope; decodes that summary into v1 replacement history |
 
 Native compact responses are buffered with a 32 MiB maximum, including responses whose declared
 `Content-Length` already exceeds the limit. The compact-specific failures include:
@@ -220,12 +220,12 @@ Native compact responses are buffered with a 32 MiB maximum, including responses
 | 499 | `client_cancelled` | The client cancelled while forwarding or buffering |
 | 502 | `compact_response_too_large` | Native compact output exceeded 32 MiB |
 | 502 | `upstream_error` | Connection, read, or synthetic compaction turn failure |
-| 502 | `invalid_response_error` | The synthetic turn did not produce exactly one valid, non-empty `ocx1:` compaction item |
+| 502 | `invalid_response_error` | The synthetic turn did not produce exactly one valid, non-empty `ccx1:` compaction item |
 
 ## Authentication matrix
 
 On a loopback-only bind, data-plane admission does not require a configured key. On a remote bind,
-use the matrix below. “Dedicated” means `X-OpenCodex-API-Key`; the other columns mean
+use the matrix below. “Dedicated” means `X-CodexCommander-API-Key`; the other columns mean
 `Authorization: Bearer ...` and `x-api-key`.
 
 | Surface | Dedicated | Bearer | `x-api-key` |
@@ -264,13 +264,13 @@ Anthropic-origin failures are rendered in Anthropic's error envelope, so the ori
 ## Encrypted-content hygiene
 
 The proxy treats genuine backend ciphertext as opaque. Structurally valid ciphertext is preserved
-byte for byte: opencodex does not decrypt it, translate its contents, or re-encrypt it for another
+byte for byte: CodexCommander does not decrypt it, translate its contents, or re-encrypt it for another
 provider.
 
-Some agent hooks have historically placed plaintext control text in an `encrypted_content` slot.
+Some agent hooks place plaintext control text in an `encrypted_content` slot.
 For compatibility, the proxy separates that plaintext into text parts while retaining any
 structurally valid Fernet runs unchanged. If an `agent_message` loses all encrypted parts during
 that repair, it becomes a normal user message. If a current v2 task remains genuinely encrypted
-but the selected routed target cannot read native ChatGPT ciphertext, opencodex fails with
+but the selected routed target cannot read native ChatGPT ciphertext, CodexCommander fails with
 `unreadable_encrypted_agent_task` instead of sending unreadable bytes to that provider. See
 [Sub-agent Surface](/guides/sub-agent-surface/) for the client behavior around worker tasks.

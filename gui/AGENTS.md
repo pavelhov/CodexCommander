@@ -1,4 +1,4 @@
-# OpenCodex GUI — agent rules
+# CodexCommander GUI — agent rules
 
 This file applies to `gui/` and inherits the repository-wide rules in `/AGENTS.md`.
 
@@ -20,7 +20,7 @@ This file applies to `gui/` and inherits the repository-wide rules in `/AGENTS.m
   - **Company / product names** (e.g. OpenAI, Anthropic, GitHub, Codex).
   - **Model identifiers** from APIs/catalogs (e.g. `gpt-4o`, `deepseek-v4-flash-free`) when displaying provider data, not labels like "Default model".
   - **Technical / machine text** — do **not** put these in locale files:
-    - CLI/shell samples (`curl …`, `export VAR=…`, `ocx claude`)
+    - CLI/shell samples (`curl …`, `export VAR=…`, `ccx claude`)
     - Content inside `<pre>` / `<code>`
     - HTTP headers, env var names, protocol field dumps (`model=…`, `thinking`)
     - Units/abbreviations next to numbers (`ms`, `k`, `1M`, cache `c`/`w`)

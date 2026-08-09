@@ -3,14 +3,13 @@ title: プロバイダーの構成
 description: プロバイダー エントリ、認証、エンドポイント、モデル カタログ、クォータ、コンテキスト キャップ、およびプロバイダー固有のオプション。
 ---
 
-プロバイダーは、opencodex に、モデルが存在する場所、モデルが通信するワイヤー アダプター、およびリクエストの認証方法を伝えます。
+プロバイダーは、CodexCommander に、モデルが存在する場所、モデルが通信するワイヤー アダプター、およびリクエストの認証方法を伝えます。
 
 ## プロバイダー関連のトップレベルフィールド
 
 |フィールド |タイプ |デフォルト |意味 |
 | --- | --- | --- | --- |
-| `providers` | `Record<string, OcxProviderConfig>` | — |プロバイダー名からプロバイダー設定へのマップ。 |
-| `openaiProviderTierVersion?` | `2` |移行によって設定される |単一のオプション対応 OpenAI プロジェクションを完了としてマークします。 |
+| `providers` | `Record<string, CodexCommanderProviderConfig>` | — |プロバイダー名からプロバイダー設定へのマップ。 |
 | `disabledModels?` | `string[]` | — | Codex catalog と `/v1/models` から非表示にする model。直接の proxy 呼び出しはブロックしません。routed id は一覧から削除されます。account-qualified native id は該当する selector row だけを非表示にし、bare native GPT id は bare row とその model の全 account-selector row を非表示にします。Models ページに表示されるのは bare native 行と routed 行だけです。selector-qualified 行を 1 つだけ非表示にするには、この設定フィールドを直接編集してください。 |
 | `providerContextCaps?` | `Record<string, number>` | `{}` |プロバイダーごとの Codex に表示されるコンテキストの上限。キャップは既知のコンテキスト ウィンドウを下げるだけです。 |
 | `contextCapValue?` | `number` | `350000` |ダッシュボードのコンテキストキャップ コントロールで使用される値。これを変更すると、有効になっているすべての `providerContextCaps` エントリが更新されます。 |
@@ -18,16 +17,16 @@ description: プロバイダー エントリ、認証、エンドポイント、
 | `pausedCodexAccountIds?` | `string[]` | `[]` |再開するまでプールの選択から除外されるアカウント (一時停止時のメイン `__main__` アカウントを含む)。 |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | 任意の公開 model selector を保存済み Codex アカウント target に対応付ける任意の map。target が存在する各 selector は Codex picker に個別の `<selector>/<native-openai-model>` row を追加し、各 row はそのアカウントだけを使用します。selector が 1 つでも有効な場合、bare native row は picker で非表示になりますが、明示的に無効化されない限り id は引き続き routing でき、raw `/v1/models` にも表示されます。 |
 | `activeCodexAccountId?` | `string` | — |次のリクエスト用に手動で選択されたプール アカウント。選択するとスレッドのアフィニティがクリアされます。実行中のリクエストでは、取得された資格情報が保持されます。 |
-| `codexAccountPriorities?` | `Record<string,number>` | — | Codex pool のアカウント別選択順。アカウント ID → `-100` から `100` の整数で、**大きいほど先に使われ**、未設定は `0` です。これは eligibility ではなく順序の境界です。選択は適格なアカウントを、まだ quota に余裕がある最上位 tier に絞り込み、その tier の中を `accountPoolStrategy` が選びます。tier が飛ばされるのは、そのメンバー全員が `autoSwitchThreshold` 超過、cooldown 中、soft-avoid、一時停止、または再認証待ちのときだけで、usage 不明が tier を drain させることはありません。順序付けが不適格なアカウントを選択可能にすることはなく、すでにアカウントが結び付いた thread を再 bind することもありません。メインの `__main__` も同じ条件で参加するため、Codex Desktop ログインを最後に使わせられます。エントリが 1 つもなければ挙動は従来どおりです。map が不正な場合は警告を出して順序付けを無効にします（config の修復処理は走りません）。`ocx account priority` と Codex Auth ページで管理します。 |
+| `codexAccountPriorities?` | `Record<string,number>` | — | Codex pool のアカウント別選択順。アカウント ID → `-100` から `100` の整数で、**大きいほど先に使われ**、未設定は `0` です。これは eligibility ではなく順序の境界です。選択は適格なアカウントを、まだ quota に余裕がある最上位 tier に絞り込み、その tier の中を `accountPoolStrategy` が選びます。tier が飛ばされるのは、そのメンバー全員が `autoSwitchThreshold` 超過、cooldown 中、soft-avoid、一時停止、または再認証待ちのときだけで、usage 不明が tier を drain させることはありません。順序付けが不適格なアカウントを選択可能にすることはなく、すでにアカウントが結び付いた thread を再 bind することもありません。メインの `__main__` も同じ条件で参加するため、Codex Desktop ログインを最後に使わせられます。エントリが 1 つもなければ、すべてのアカウントの優先度は `0` です。map が不正な場合は警告を出して順序付けを無効にします（config の修復処理は走りません）。`ccx account priority` と Codex Auth ページで管理します。 |
 | `autoSwitchThreshold?` | `number` | `80` | 使用量ベースのプロアクティブ切り替えしきい値。`quota` は紐付け済み/未紐付けタスクの次のリクエストを再評価でき、`fill-first` は未紐付け割り当ての使い切り基準としてのみ使用し、通常の `round-robin` 選択は使用しません。既知の 5 時間、週次、30 日 quota window の最大スコアを使います。`0` は使用量ベースの切り替えだけを無効にし、未紐付け割り当てや障害回復は無効にしません。 |
 | `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新規/未紐付け Codex リクエストの割り当て戦略。live な `(parent thread id, quota scope)` affinity がなければ未紐付けで、プロキシ再起動や affinity リセット後は既存の表示タスクも未紐付けになり得ます。`quota` はアクティブアカウントがなければ既知 usage 最小の適格アカウントを選び、適格なアクティブアカウントが `autoSwitchThreshold` 未満なら維持します。しきい値到達後は、未紐付けリクエストまたは紐付け済みタスクの次のリクエストを usage の低い適格アカウントへ移せます。`round-robin` は未紐付けリクエストを均等分散し、`fill-first` は cooldown、使用不可、または drain threshold までアクティブアカウントへ割り当てます。 |
 | `accountPoolStickyLimit?` | `number` | `1` | 1 回の round-robin 選択で次へ進む前に保持する新規/未紐付けタスク割り当て数。カウンターは上流の成功後ではなくタスクの紐付け時に増えます。範囲 1–100。`accountPoolStrategy` が `round-robin` のときのみ。 |
 | `upstreamFailoverThreshold?` | `number` | `3` |今後の新しいセッションがフェイルオーバーする前に一時的なエラーが連続して発生する。 `0` を無効に設定します。実証済みの接続前DNS/TCP到達不能障害はprovider-host単位で記録され、アカウントの健全性、クールダウン、スレッド/セッションの親和性、アクティブアカウントの選択、Poolルーティングには影響せず、この閾値にもカウントされません。 |
 | `modelCacheTtlMs?` | `number` | `300000` |プロバイダーごとの `/models` キャッシュの鮮度ウィンドウ。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic プロンプト キャッシュ ポリシー: 無効、5 分間の一時的、または 1 時間の延長。 |
-| `tokenGuardian?` | `OcxTokenGuardianConfig` |オフ |オプションのプロアクティブな OAuth 更新および Codex アカウントのウォームアップ ポリシー。 |
+| `tokenGuardian?` | `CodexCommanderTokenGuardianConfig` |オフ |オプションのプロアクティブな OAuth 更新および Codex アカウントのウォームアップ ポリシー。 |
 
-selector 名はユーザーが選ぶ公開 label であり、opencodex はアカウント role の意味を付与しません。
+selector 名はユーザーが選ぶ公開 label であり、CodexCommander はアカウント role の意味を付与しません。
 `codexAccountNamespaces` のキーは長さ 1〜64 文字、先頭と末尾は ASCII
 英数字、内部には英数字、`.`、`_`、`-` を使用でき、予約済み JavaScript object 名は拒否されます。
 値は有効な pool account id（内部 `__main__` は不可）、または Codex Desktop アカウントを示す
@@ -41,17 +40,15 @@ namespace 付き combo alias はその namespace prefix に selector を再利�
 
 `openai` および `openai-apikey` は固定予約 ID です。 `openai.codexAccountMode` はデフォルトでは `"pool"` で、メインアカウントと追加アカウント全体を選択します。 `"direct"` は、現在の呼び出し元/メイン ログインのみを使用します。 API は、設定された API キーまたはキー プールのみを使用します。ベア モデルまたは `openai-apikey/<model>` を使用します。クロスルート認証情報のフォールバックはありません。 API GPT-5.6 行は 1,050,000 コンテキスト / 最大 922,000 入力メタデータを伝送し、Pro 仮想 ID は `reasoning.mode: "pro"` を使用してベース ワイヤー モデルに書き換えられます。
 
-`openaiProviderTierVersion: 2` は、現在の単一プロバイダーの投影をマークします。出荷された v1 設定を移行する前に、opencodex は別のバックアップを置き換えずに `config.json.pre-openai-tiers-v2.bak` を作成し、既知の名前空間で選択された既知のレガシー ID を裸の ID に書き換えます。
-
-## プロバイダーエントリー (`OcxProviderConfig`)
+## プロバイダーエントリー (`CodexCommanderProviderConfig`)
 
 |フィールド |タイプ |意味 |
 | --- | --- | --- |
-| `adapter` | `string` | `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro`、`cursor`、`azure-openai` (または別名 `azure`) のいずれか。 |
+| `adapter` | `string` | `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro`、`cursor`、`azure-openai` のいずれか。 |
 | `baseUrl` | `string` |アップストリーム API のベース URL。ほとんどの組み込み固定エンドポイントは不一致を無視します。衝突安全キー プリセットは、古い同じ名前のカスタム宛先を保持します。 |
 | `responsesPath?` | `string` |キー認証 `openai-responses` リクエストの相対リソース パス。 `/` で始まり、スキーム、クエリ、またはフラグメントが含まれていない必要があります。 |
 | `supportsServiceTier?` | `boolean` | `service_tier` ケイパビリティの 3 状態です。`true`: fast モードが注入でき、呼び出し元の値も保持されます。`false`: フィールドは削除され、注入もされません (非対応と文書化されたアップストリームには送りません)。未設定: 未分類 — 呼び出し元の値はそのまま保持され、fast モードは注入しません。レジストリは正規 OpenAI (`true`)、DeepSeek、Volcengine Ark (`false`) を分類します。実際にティアをサポートするカスタム ゲートウェイにのみ明示的に設定してください。 |
-| `preserveResponsesReasoningContent?` | `boolean` | リプレイされる Responses reasoning アイテムの平文 reasoning コンテンツを消去せずに保持します (消去は ChatGPT バックエンドのルールです)。DeepSeek のように reasoning リプレイを受け入れるアップストリームで有効にしてください。プロキシ生成の `ocxr1` エンベロープは常に削除されます。 |
+| `preserveResponsesReasoningContent?` | `boolean` | リプレイされる Responses reasoning アイテムの平文 reasoning コンテンツを消去せずに保持します (消去は ChatGPT バックエンドのルールです)。DeepSeek のように reasoning リプレイを受け入れるアップストリームで有効にしてください。プロキシ生成の `ccxr1` エンベロープは常に削除されます。 |
 | `disabled?` | `boolean` |プロバイダーをディスク上に保持しますが、ルーティングおよびモデル/カタログのリストからは除外します。 |
 | `apiKey?` | `string` | API キー、またはリクエスト時に解決される `${ENV_VAR}` / `$ENV_VAR` 参照。 |
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic キーのヘッダー スタイル。デフォルトはネイティブ `x-api-key` です。キー認証 `anthropic` プロバイダーにのみ有効です。 |
@@ -103,16 +100,15 @@ namespace 付き combo alias はその namespace prefix に selector を再利�
 | `location?` | `string` |頂点の位置。環境フォールバックは `GOOGLE_CLOUD_LOCATION` です。 |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` |カーソルのみ: 標準入出力またはストリーミング可能な HTTP MCP サーバー。 |
 | `desktopExecutor?` | `DesktopExecutorConfig` |カーソルのみ: 外部コンピュータ使用および画面録画コマンド。 |
-| `unsafeAllowNativeLocalExec?` | `boolean` |カーソルのレガシー ブール値。新しいフィールドが設定されていない場合のみ、`nativeLocalExec: "on"` と同等です。 |
-| `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` |カーソルのローカル実行ポリシー。 `off` がデフォルトです。 `codex-sandbox` は現在、`off` と同様にフェールクローズされます。 |
+| `nativeLocalExec?` | `"off" \| "on"` |カーソルのローカル実行ポリシー。 `off` がデフォルトです。 |
 
-API キープロバイダーは、リテラルキーまたは環境参照を保持する場合があります。 OAuth プロバイダーは、`ocx login` によって設定された資格情報ストアを使用します。サブスクリプションに基づくクロード コードの起動動作は、[`claudeCode.authMode`](/reference/configuration/server/#claude-code) で構成されます。
+API キープロバイダーは、リテラルキーまたは環境参照を保持する場合があります。 OAuth プロバイダーは、`ccx login` によって設定された資格情報ストアを使用します。サブスクリプションに基づくクロード コードの起動動作は、[`claudeCode.authMode`](/reference/configuration/server/#claude-code) で構成されます。
 
 ## プロバイダーによるアウトバウンドの安全性診断
 
-ダッシュボード接続テストとライブ モデル検出では、制限された GET 専用トランスポートが使用されます。送信プロキシを使用しない場合、opencodex はホスト名を一度解決し、その検証されたアドレスにのみ接続します。 HTTPS は元のホスト、SNI、および証明書の検証を保持します。プロバイダー設定では証明書チェックを無効にすることはできません。
+ダッシュボード接続テストとライブ モデル検出では、制限された GET 専用トランスポートが使用されます。送信プロキシを使用しない場合、CodexCommander はホスト名を一度解決し、その検証されたアドレスにのみ接続します。 HTTPS は元のホスト、SNI、および証明書の検証を保持します。プロバイダー設定では証明書チェックを無効にすることはできません。
 
-`HTTP_PROXY`、`HTTPS_PROXY`、または `ALL_PROXY` が適用される場合、これらの操作は Bun のネイティブ フェッチを維持します。 URL とリテラル アドレスのチェックは引き続き実行されますが、プロキシが最終ルート、DNS 応答、ピアを選択するため、opencodex はそのピアを固定したり検証したりできません。これは明示的なセキュリティ制限です。
+`HTTP_PROXY`、`HTTPS_PROXY`、または `ALL_PROXY` が適用される場合、これらの操作は Bun のネイティブ フェッチを維持します。 URL とリテラル アドレスのチェックは引き続き実行されますが、プロキシが最終ルート、DNS 応答、ピアを選択するため、CodexCommander はそのピアを固定したり検証したりできません。これは明示的なセキュリティ制限です。
 
 プライベート/ローカル宛先には `allowPrivateNetwork: true` が必要で、送信プロキシがアクティブな場合は、一致する `NO_PROXY` エントリが必要です。ループバックは自動的に追加されます。 CIDR エントリは解釈されないため、各 LAN ホストを明示的にリストします。マッチャーは、正確なホスト、ドメイン サフィックス、オプションのポート、括弧で囲まれた IPv6、および `*` をサポートします。たとえば、`192.168.1.50` を明示的にリストします。メタデータとリンクローカル宛先はブロックされたままになります。診断リクエストはリダイレクトを拒否し、資格情報が剥奪されたターゲットを報告します。通常のプロバイダー要求のリダイレクト レビューは、この診断ガードとは独立したままになります。
 
@@ -155,14 +151,14 @@ affinity を維持します。これらの戦略は provider enforcement を回�
 有効にすると、429 レコードは `Retry-After` またはデフォルトのバックオフからの制限されたクールダウンを記録し、リクエスト内でローテーションする可能性があります。アフィニティはプロセスローカルであり、サイズ制限があります。資格情報 401/403 は、アカウントに再認証が必要であることをマークします。すべての対象となるアカウントが冷却されている場合、クライアントは、既知の場合、認証エラーではなく、`Retry-After` を含む 429 を受け取ります。
 
 :::caution[実験的]
-Anthropic アカウント ポリシーのリスクを理解していない限り、これは無効のままにしてください。不明な場合は、`ocx account use anthropic <id>` を手動で切り替えることをお勧めします。
+Anthropic アカウント ポリシーのリスクを理解していない限り、これは無効のままにしてください。不明な場合は、`ccx account use anthropic <id>` を手動で切り替えることをお勧めします。
 :::
 
 ### 管理されたレコードの形状
 
 `apiKeys[]` エントリには、`id`、`name`、生成された `key`、および ISO `createdAt` 文字列が含まれます。 `codexAccounts[]` エントリには `id`、`email`、および `isMain` が必要で、オプションの `plan`、`chatgptAccountId`、およびプライバシー セーフな `logLabel` が必要です。これらのレコードは通常、ダッシュボードで管理されます。
 
-### `tokenGuardian` (`OcxTokenGuardianConfig`)
+### `tokenGuardian` (`CodexCommanderTokenGuardianConfig`)
 
 |フィールド |タイプ |デフォルト |意味 |
 | --- | --- | --- | --- |
@@ -189,7 +185,7 @@ Anthropic アカウント ポリシーのリスクを理解していない限り
 
 アダプターは、解決された URL を後で調整できます。たとえば、Kiro は、インポートされた資格情報の正規 `runtime.{region}.kiro.dev` の API リージョンに従います。 [アダプター](/reference/adapters/)を参照してください。
 
-ルーティングで `baseUrl` が破棄されると、opencodex はレジストリ エンドポイントと構成された起点のみをログに記録します。構成されたパス自体に資格情報が含まれる場合があります。未使用の URL を削除するか、目的のリージョンに一致するプロバイダー エントリを選択します。 `alibaba-token-plan` は北京に固定されていますが、`alibaba-token-plan-intl` は国際エンドポイントをカバーしています。
+ルーティングで `baseUrl` が破棄されると、CodexCommander はレジストリ エンドポイントと構成された起点のみをログに記録します。構成されたパス自体に資格情報が含まれる場合があります。未使用の URL を削除するか、目的のリージョンに一致するプロバイダー エントリを選択します。 `alibaba-token-plan` は北京に固定されていますが、`alibaba-token-plan-intl` は国際エンドポイントをカバーしています。
 
 壊れた `openai-responses` ゲートウェイの場合、修復はプロバイダー オブジェクトに属します。
 
@@ -214,7 +210,7 @@ Anthropic アカウント ポリシーのリスクを理解していない限り
 
 ## Cursor プロバイダー (`adapter: "cursor"`)
 
-カーソルブリッジは実験的なものです。 `ocx login cursor` の後に、`providers.cursor` を追加または編集します。ピッカーはカーソル固有のモデル パラメーターをレンダリングできないため、カーソル ルーターの最適化ラダーは別の Codex ID として公開されます。
+カーソルブリッジは実験的なものです。 `ccx login cursor` の後に、`providers.cursor` を追加または編集します。ピッカーはカーソル固有のモデル パラメーターをレンダリングできないため、カーソル ルーターの最適化ラダーは別の Codex ID として公開されます。
 
 |Codexモデル |カーソル ルーターモード |
 | --- | --- |
@@ -230,9 +226,6 @@ Anthropic アカウント ポリシーのリスクを理解していない限り
 - `"off"` (デフォルト) は、カーソルネイティブの `read`、`write`、`delete`、`ls`、`grep`、`shell`、および
 `fetch`実行。
 - `"on"` は、信頼できるローカルでの実行を選択し、Codex 承認/サンドボックス セマンティクスをバイパスします。
-- `"codex-sandbox"` は互換性のために残されていますが、`"off"` と同様にフェールクローズされます。散文のリクエストは
-信頼できるサンドボックス証明書ではありません。
-
 ```json
 {
   "providers": {
@@ -247,7 +240,7 @@ Anthropic アカウント ポリシーのリスクを理解していない限り
 }
 ```
 
-最上位ではなく、`providers.cursor` にフィールドを設定します。ダッシュボードで **プロバイダー > カーソル > JSON の編集** を使用し、保存して再起動します。従来の `unsafeAllowNativeLocalExec: true` は、`nativeLocalExec` が設定されていない場合にのみ `nativeLocalExec: "on"` と等しくなります。 MCP、画面録画、およびコンピューターの使用は、`mcpServers` および `desktopExecutor` によって個別に制御されます。
+最上位ではなく、`providers.cursor` にフィールドを設定します。ダッシュボードで **プロバイダー > カーソル > JSON の編集** を使用し、保存して再起動します。MCP、画面録画、およびコンピューターの使用は、`mcpServers` および `desktopExecutor` によって個別に制御されます。
 
 各 `mcpServers.<name>` は、`command` (stdio) または `url` (ストリーミング可能な HTTP) のいずれかを受け入れます。 Stdio は `args`、`env`、および `cwd` も受け入れます。 HTTP は `headers` を受け入れます。どちらも `enabled` (デフォルトは true) と `toolPrefix` をサポートします。 `desktopExecutor` は、`computerUseCommand`、`recordScreenCommand`、`cwd`、`env`、および `timeoutMs` (デフォルトは `30000`) を受け入れます。コマンドは `sh -c` を通じて実行され、stdin から 1 つの JSON リクエストを読み取り、1 つの JSON 結果を stdout に書き込む必要があります。
 
@@ -283,7 +276,7 @@ OpenRouter は、複数の推論プロバイダーを通じて 1 つのモデル
 }
 ```
 
-モデル キーは、外部の opencodex プロバイダー プレフィックスを除いた、正確なネイティブ OpenRouter ID です。 `openrouter/anthropic-claude-sonnet-5` を選択すると、モデル ルールを適用する前のネイティブ `anthropic/claude-sonnet-5` が復元されます。
+モデル キーは、外部の CodexCommander プロバイダー プレフィックスを除いた、正確なネイティブ OpenRouter ID です。 `openrouter/anthropic-claude-sonnet-5` を選択すると、モデル ルールを適用する前のネイティブ `anthropic/claude-sonnet-5` が復元されます。
 
 ## 静的モデルのホワイトリスト
 

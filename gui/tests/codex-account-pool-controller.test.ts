@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 /**
- * WP3 (devlog/_plan/260725_gui_view_consolidation/030_account_state_lift.md):
+ * Controller ownership contract:
  * Codex account state has ONE owner. Providers instantiates the controller and hands
  * the same instance to the Overview tab and the Accounts tab, so a mutation on either
  * surface is immediately visible on the other.
@@ -18,7 +18,7 @@ test("the controller is the single data owner and exposes the agreed contract", 
     "pausingExhausted", "activeNeedsReauth", "activePinnedId",
     "load", "switchAccount", "setAccountPaused", "setAccountPriority", "pauseExhaustedAccounts",
     "saveAlias", "removeAccount", "syncAfterAccountAdded",
-    // WP2 (260730_gui_hydration_loading_unify/010): progress is part of the contract, because a
+    // Progress is part of the contract, because a
     // forced quota refresh keeps `loadState` at "ready" and would otherwise be invisible.
     "refreshing", "initialLoading",
   ]) {

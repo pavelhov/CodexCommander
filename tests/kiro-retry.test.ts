@@ -341,7 +341,7 @@ describe("kiro retry fetch", () => {
     const text = await res.text();
     expect(res.status).toBe(400);
     expect(text).toContain("kiro_profile_required");
-    expect(text).toContain("ocx account login kiro --reauth");
+    expect(text).toContain("ccx account login kiro --reauth");
     // Non-retryable: exactly one upstream call.
     expect(mock.calls).toHaveLength(1);
   });

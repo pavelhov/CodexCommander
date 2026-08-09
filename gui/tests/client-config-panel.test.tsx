@@ -1,5 +1,5 @@
 /**
- * Client config panel (devlog 260731_client_config_export/040, reshaped by 260802/010).
+ * Client config panel (implementation contract, reshaped by 260802/010).
  *
  * The panel renders what GET /api/client-config returns, so every assertion here drives the
  * real component against a stubbed route rather than a locally rebuilt config.
@@ -25,18 +25,18 @@ const OPENCODE_ENVELOPE_BASE = {
   client: "opencode",
   filename: "opencode.json",
   destination: "/home/dev/.config/opencode/opencode.json",
-  apiKeyEnv: "OPENCODEX_OPENCODE_API_KEY",
-  exportHint: "export OPENCODEX_OPENCODE_API_KEY=<your key>",
+  apiKeyEnv: "CODEXCOMMANDER_OPENCODE_API_KEY",
+  exportHint: "export CODEXCOMMANDER_OPENCODE_API_KEY=<your key>",
   modelCount: 2,
   modelsWithoutLimits: 0,
   format: "json",
   mediaType: "application/json",
   config: {
     provider: {
-      opencodex: {
+      codexcommander: {
         npm: "@ai-sdk/openai-compatible",
-        name: "OpenCodex",
-        options: { baseURL: "http://127.0.0.1:10100/v1", apiKey: "{env:OPENCODEX_OPENCODE_API_KEY}" },
+        name: "CodexCommander",
+        options: { baseURL: "http://127.0.0.1:10100/v1", apiKey: "{env:CODEXCOMMANDER_OPENCODE_API_KEY}" },
         models: { "gpt-5.4": { name: "gpt-5.4 (native)" } },
       },
     },
@@ -47,14 +47,14 @@ const PI_ENVELOPE_BASE = {
   client: "pi",
   filename: "pi-models.json",
   destination: "/home/dev/.pi/agent/models.json",
-  apiKeyEnv: "OPENCODEX_PI_API_KEY",
-  exportHint: "export OPENCODEX_PI_API_KEY=<your key>",
+  apiKeyEnv: "CODEXCOMMANDER_PI_API_KEY",
+  exportHint: "export CODEXCOMMANDER_PI_API_KEY=<your key>",
   modelCount: 2,
   modelsWithoutLimits: 1,
   format: "json",
   mediaType: "application/json",
   // Pi keys its models as an ARRAY — the shape swap is what proves a real refetch.
-  config: { providers: { opencodex: { models: [{ id: "gpt-5.4" }, { id: "claude-sonnet-4-6" }] } } },
+  config: { providers: { codexcommander: { models: [{ id: "gpt-5.4" }, { id: "claude-sonnet-4-6" }] } } },
 };
 
 /**
@@ -86,8 +86,8 @@ const KIMI_ENVELOPE = {
   modelsWithoutLimits: 0,
   format: "toml",
   mediaType: "application/toml",
-  text: '[providers.opencodex]\ntype = "openai"\nbase_url = "http://127.0.0.1:10100/v1"\n',
-  config: { providers: { opencodex: { type: "openai", base_url: "http://127.0.0.1:10100/v1" } } },
+  text: '[providers.codexcommander]\ntype = "openai"\nbase_url = "http://127.0.0.1:10100/v1"\n',
+  config: { providers: { codexcommander: { type: "openai", base_url: "http://127.0.0.1:10100/v1" } } },
 };
 
 beforeEach(() => {
@@ -184,7 +184,7 @@ test("each row fetches its own client and its dialog renders that client's exact
   const piJson = container.querySelector(".awi-clientconfig-json")!.textContent!;
   const parsed = JSON.parse(piJson) as typeof PI_ENVELOPE.config;
   expect(parsed).toEqual(PI_ENVELOPE.config);
-  expect(Array.isArray(parsed.providers.opencodex.models)).toBe(true);
+  expect(Array.isArray(parsed.providers.codexcommander.models)).toBe(true);
   expect(piJson).not.toContain("\"npm\"");
 
   await act(async () => { root.unmount(); });
@@ -386,7 +386,7 @@ test("download emits the fetched config under the server-provided filename and n
     const tomlBytes = await blobs[1]!.text();
     expect(tomlBytes).toBe(KIMI_ENVELOPE.text);
     expect(tomlBytes).not.toBe(`${JSON.stringify(KIMI_ENVELOPE.config, null, 2)}\n`);
-    expect(tomlBytes.startsWith("[providers.opencodex]")).toBe(true);
+    expect(tomlBytes.startsWith("[providers.codexcommander]")).toBe(true);
 
     const announcement = container.querySelector(".sr-only[aria-live='polite']")!.textContent!;
     expect(announcement).toContain("Downloaded kimi-config.toml");
@@ -473,7 +473,7 @@ test("no-key state is informational and leaves copy and download enabled", async
 
   await act(async () => { rowButton(container, "OpenCode", "Details").click(); });
   expect(container.querySelector(".awi-clientconfig-nokey")?.textContent)
-    .toContain("OPENCODEX_OPENCODE_API_KEY has no key behind it yet");
+    .toContain("CODEXCOMMANDER_OPENCODE_API_KEY has no key behind it yet");
 
   await act(async () => { root.unmount(); });
 });

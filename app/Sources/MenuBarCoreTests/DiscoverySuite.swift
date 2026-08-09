@@ -2,7 +2,7 @@ import Foundation
 import MenuBarCore
 
 enum DiscoverySuite {
-    private static let token = "ocx_admin_" + String(repeating: "a", count: 43)
+    private static let token = "ccx_admin_" + String(repeating: "a", count: 43)
 
     static func run(_ t: TestRunner) {
         t.test("discovery: accepts only explicit literal loopback and maps wildcards") {
@@ -42,6 +42,35 @@ enum DiscoverySuite {
             }
         }
 
+        t.test("discovery: runtime metadata requires the exact current schema") {
+            try withSandbox { root in
+                try writeToken(root)
+                let validSecret = String(repeating: "A", count: 43)
+                try writeRuntimeJSON(
+                    root,
+                    #"{"schemaVersion":1,"pid":4242,"port":18181,"attestationSecret":"\#(validSecret)"}"#
+                )
+                t.equal(try discover(root).endpoint.port, 18181)
+
+                let invalidRecords = [
+                    #"{"pid":4242,"port":18181}"#,
+                    #"{"schemaVersion":2,"pid":4242,"port":18181}"#,
+                    #"{"schemaVersion":1,"pid":4242,"port":18181,"legacyPort":18181}"#,
+                    #"{"schemaVersion":1,"pid":4242,"port":18181,"hostname":null}"#,
+                    #"{"schemaVersion":1,"pid":4242,"port":18181,"attestationSecret":"short"}"#,
+                ]
+                for record in invalidRecords {
+                    try writeRuntimeJSON(root, record)
+                    do {
+                        _ = try discover(root)
+                        t.expect(false, "non-current runtime record should fail")
+                    } catch DiscoveryError.unsafeRuntimeRecord {
+                        // expected
+                    }
+                }
+            }
+        }
+
         t.test("discovery: reads the existing protected token and never needs Keychain") {
             try withSandbox { root in
                 try writeRuntime(root, host: "127.0.0.1")
@@ -57,8 +86,8 @@ enum DiscoverySuite {
                 try writeRuntime(root, host: "127.0.0.1")
                 let found = try ProxyDiscovery.discover(
                     environment: [
-                        "OPENCODEX_HOME": root.path,
-                        "OPENCODEX_ADMIN_AUTH_TOKEN": "environment-secret",
+                        "CODEXCOMMANDER_HOME": root.path,
+                        "CODEXCOMMANDER_ADMIN_AUTH_TOKEN": "environment-secret",
                     ],
                     home: URL(fileURLWithPath: "/unused")
                 )
@@ -127,20 +156,62 @@ enum DiscoverySuite {
             }
         }
 
-        t.test("discovery: OPENCODEX_HOME overrides the default directory") {
+        t.test("discovery: CODEXCOMMANDER_HOME overrides the default directory") {
             try withSandbox { root in
                 let resolved = ProxyDiscovery.configDirectory(
-                    environment: ["OPENCODEX_HOME": root.path],
+                    environment: ["CODEXCOMMANDER_HOME": root.path],
                     home: URL(fileURLWithPath: "/nonexistent")
                 )
                 t.equal(resolved.path, root.standardizedFileURL.path)
+            }
+        }
+
+        t.test("discovery: default directory is always the CodexCommander home") {
+            try withSandbox { home in
+                let canonical = home.appendingPathComponent(".codexcommander", isDirectory: true)
+                try FileManager.default.createDirectory(
+                    at: canonical,
+                    withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700]
+                )
+                let resolved = ProxyDiscovery.configDirectory(environment: [:], home: home)
+                t.equal(resolved.path, canonical.standardizedFileURL.path)
+            }
+        }
+
+        t.test("discovery: blank home override uses the CodexCommander default") {
+            try withSandbox { home in
+                let canonical = home.appendingPathComponent(".codexcommander", isDirectory: true)
+                try FileManager.default.createDirectory(
+                    at: canonical,
+                    withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700]
+                )
+                let resolved = ProxyDiscovery.configDirectory(
+                    environment: ["CODEXCOMMANDER_HOME": "  \n"],
+                    home: home
+                )
+                t.equal(resolved.path, canonical.standardizedFileURL.path)
+            }
+        }
+
+        t.test("discovery: rejects non-CodexCommander token formats") {
+            try withSandbox { root in
+                try writeRuntime(root, host: "127.0.0.1")
+                let invalid = "wrong_admin_" + String(repeating: "a", count: 43)
+                let file = root.appendingPathComponent("admin-api-token")
+                try invalid.write(to: file, atomically: true, encoding: .utf8)
+                try chmod(file, 0o600)
+                let found = try discover(root)
+                t.isNil(found.credential, "credential")
+                t.equal(found.credentialAvailability, .unavailable)
             }
         }
     }
 
     private static func withSandbox(_ body: (URL) throws -> Void) throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("ocx-discovery-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("codexcommander-discovery-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
             at: root,
             withIntermediateDirectories: true,
@@ -152,22 +223,26 @@ enum DiscoverySuite {
 
     private static func discover(_ root: URL) throws -> ProxyInstallation {
         try ProxyDiscovery.discover(
-            environment: ["OPENCODEX_HOME": root.path],
+            environment: ["CODEXCOMMANDER_HOME": root.path],
             home: URL(fileURLWithPath: "/unused")
         )
     }
 
     private static func runtimeJSON(host: String?) -> String {
         if let host {
-            return #"{"pid":4242,"port":18181,"hostname":"\#(host)"}"#
+            return #"{"schemaVersion":1,"pid":4242,"port":18181,"hostname":"\#(host)"}"#
         }
-        return #"{"pid":4242,"port":18181}"#
+        return #"{"schemaVersion":1,"pid":4242,"port":18181}"#
     }
 
     private static func writeRuntime(_ root: URL, host: String?) throws {
+        try writeRuntimeJSON(root, runtimeJSON(host: host))
+    }
+
+    private static func writeRuntimeJSON(_ root: URL, _ json: String) throws {
         let file = root.appendingPathComponent("runtime-port.json")
         try? FileManager.default.removeItem(at: file)
-        try runtimeJSON(host: host).write(to: file, atomically: true, encoding: .utf8)
+        try json.write(to: file, atomically: true, encoding: .utf8)
         try chmod(file, 0o600)
     }
 

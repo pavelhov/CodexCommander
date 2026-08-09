@@ -1,4 +1,4 @@
-import type { OcxConfig } from "../../types";
+import type { CodexCommanderConfig } from "../../types";
 import { jsonResponse } from "../auth-cors";
 import {
   DecompressedBodyTooLargeError,
@@ -14,7 +14,7 @@ export function readManagementJsonBody<T = unknown>(req: Request): Promise<T> {
 export function managementBodyTooLargeResponse(
   error: unknown,
   req: Request,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
 ): Response | null {
   return error instanceof DecompressedBodyTooLargeError
     ? jsonResponse({ error: "request body too large" }, 413, req, config)

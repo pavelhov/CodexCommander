@@ -46,14 +46,11 @@ export function oauthHealthShowsReauth(status: OAuthHealthStatus | undefined): b
   return status === "reauth_required";
 }
 
-/**
- * Aggregate/row reauth gate: legacy `needsReauth` OR canonical health projection.
- * Health-only `reauth_required` must still demote Providers overview attention state.
- */
+/** Aggregate/row reauth gate from the canonical structured health projection. */
 export function accountNeedsReauth(
-  account: { needsReauth?: boolean; health?: { status?: OAuthHealthStatus } | null } | null | undefined,
+  account: { health?: { status?: OAuthHealthStatus } | null } | null | undefined,
 ): boolean {
-  return Boolean(account?.needsReauth) || oauthHealthShowsReauth(account?.health?.status);
+  return oauthHealthShowsReauth(account?.health?.status);
 }
 
 /** Cooldown: show wait copy; do not urge probing or immediate retry. */
@@ -61,7 +58,7 @@ export function oauthHealthIsCooldown(status: OAuthHealthStatus | undefined): bo
   return status === "cooldown";
 }
 
-/** Non-healthy states where copying `ocx doctor` is a useful next step. */
+/** Non-healthy states where copying `ccx doctor` is a useful next step. */
 export function oauthHealthShowsDoctor(status: OAuthHealthStatus | undefined): boolean {
   return status === "warning" || status === "reauth_required";
 }
@@ -124,7 +121,7 @@ export function formatOAuthHealthSummary(
 
 /**
  * Safe clipboard write: never throws, and reports honestly whether the text
- * landed. The legacy `execCommand` path is not decoration — `navigator.clipboard`
+ * landed. The `execCommand` fallback is needed because `navigator.clipboard`
  * is undefined outside a secure context, which is exactly what a LAN-bound GUI
  * (`hostname: 0.0.0.0` over plain HTTP) serves. Without the fallback, copying
  * would be permanently unavailable on that deployment.
@@ -136,7 +133,7 @@ export async function copyTextToClipboard(text: string): Promise<boolean> {
       await write(text);
       return true;
     } catch {
-      // Permission denied or a non-secure context: fall through to the legacy path.
+      // Permission denied or a non-secure context: use the secondary path.
     }
   }
   return copyViaExecCommand(text);
@@ -170,4 +167,3 @@ export function doctorCopyButtonLabel(
   if (!outcome) return t("pws.copyDoctor");
   return outcome === "copied" ? t("pws.doctorCopied") : t("pws.doctorCopyUnavailable");
 }
-

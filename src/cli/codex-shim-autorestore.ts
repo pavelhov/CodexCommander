@@ -39,7 +39,7 @@ export function maybeAutoRestoreCodexShim(
     deps.warn(
       `⚠️  Codex shim auto-restore failed; continuing without it: ${
         error instanceof Error ? error.message : String(error)
-      }. Run 'ocx codex-shim install' after the Codex update finishes.`,
+      }. Run 'ccx codex-shim install' after the Codex update finishes.`,
     );
   }
 }

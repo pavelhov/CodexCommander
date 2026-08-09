@@ -1,7 +1,7 @@
 import {
   getConfigDir,
   reconcileConfigWarningMemos,
-  sweepDeadOcxStartProcessCache,
+  sweepDeadCodexCommanderStartProcessCache,
 } from "../config";
 import { reconcileCodexReauthState } from "../codex/account-runtime-state";
 import { reconcileCatalogWarningMemos } from "../codex/catalog/aggregation";
@@ -38,7 +38,7 @@ import { sweepExpiredResponseStates } from "../responses/state";
 import { sweepExpiredAntigravityReplay } from "../adapters/google-antigravity-replay";
 import { reconcileProviderAccountQuotaRows } from "../providers/quota";
 import { reconcileRouterWarningMemos } from "../router";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import {
   type GenerationContext,
   reconcileStateGeneration,
@@ -47,9 +47,9 @@ import {
   type StateStoreRegistration,
 } from "./state-store-sweeper";
 
-let liveServerConfig: OcxConfig | null = null;
+let liveServerConfig: CodexCommanderConfig | null = null;
 
-export function setLiveStateStoreConfig(config: OcxConfig): void {
+export function setLiveStateStoreConfig(config: CodexCommanderConfig): void {
   liveServerConfig = config;
 }
 
@@ -101,7 +101,7 @@ export const STATE_STORE_REGISTRATIONS = [
   { name: "gcp-adc", sweepExpired: sweepExpiredGcpAdcTokens, reconcileGeneration: reconcileGcpAdcTokens },
   { name: "config-ownership", reconcileGeneration: reconcileConfigOwnershipRoots },
   { name: "oauth-flow-state", reconcileGeneration: reconcileOAuthFlowState },
-  { name: "ocx-start-process-cache", sweepLiveness: sweepDeadOcxStartProcessCache },
+  { name: "codexcommander-start-process-cache", sweepLiveness: sweepDeadCodexCommanderStartProcessCache },
 ] satisfies readonly StateStoreRegistration[];
 
 for (const registration of STATE_STORE_REGISTRATIONS) registerStateStore(registration);

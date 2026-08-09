@@ -1,9 +1,9 @@
 ---
 title: モデルの並び順について
-description: opencodex が Codex モデルピッカーと spawn_agent モデルオーバーライドの順序を決める方式。
+description: CodexCommander が Codex モデルピッカーと spawn_agent モデルオーバーライドの順序を決める方式。
 ---
 
-Codex モデルピッカーは opencodex 設定に書かれたプロバイダー宣言順やモデル配列順を保存しません。
+Codex モデルピッカーは CodexCommander 設定に書かれたプロバイダー宣言順やモデル配列順を保存しません。
 最終順序はカタログ priority で決まり、同じ priority を持つルーティングモデルには決定論的
 アルファベット順ソートが適用されます。
 
@@ -12,7 +12,7 @@ Codex モデルピッカーは opencodex 設定に書かれたプロバイダー
 Codex の models-manager はピッカーに表示されるカタログ項目を `priority` 昇順でソートします。
 カタログ配列順は捨てるため、生成された JSON 配列で項目を前に動かしてもピッカーでは前に移動しません。この制約は `src/codex/catalog/sync.ts` に直接記録されています。
 
-そのため opencodex は配列位置ではなくより低い priority を付与してフィーチャー位置を制御します。
+そのため CodexCommander は配列位置ではなくより低い priority を付与してフィーチャー位置を制御します。
 この表の固定値と以下の例は、有効な account selector がない構成を説明します。`N` 個の selector が
 ある場合、設定 rank `i` の featured bare native は priority `i * N + j` の selector 行へ展開され、
 `j` は 0 から始まる selector の位置です。featured routed 行には `i * N`、exact
@@ -67,7 +67,7 @@ Codex の priority ソートでもこの先頭順序は保存されます。
 3. カタログマージ過程で featured ブロックの下に押し下げられた選択されていないネイティブモデル
 
 `subagentModels` がない場合、ルーティングモデルは priority `5` を維持し、ネイティブ GPT 項目は通常 priority
-(opencodex が作った項目は通常 `9`)を使います。ルーティンググループ内部は引き続きプロバイダー/ID
+(CodexCommander が作った項目は通常 `9`)を使います。ルーティンググループ内部は引き続きプロバイダー/ID
 アルファベット順です。
 
 ## 例
@@ -110,12 +110,12 @@ account selector がある場合、5 項目の制限は bare native の選択が
 **Agent Library** には 5 つをはるかに超えるカタログモデルが含まれる場合があります。ルートが利用可能な
 場合にエントリを正確な id で指定でき、5 枠の制限は `spawn_agent` に最初に公開されるオーバーライドにのみ適用されます。
 
-`ocx agent subagents set` を使うか、opencodex 設定を編集して、ライブ ライブラリにない正確な
+`ccx agent subagents set` を使うか、CodexCommander 設定を編集して、ライブ ライブラリにない正確な
 `<selector>/<native-openai-model>` の選択肢を追加します。コマンド センターは、設定済みの正確な
 selector を、そのプロバイダーが一時的に利用できない間も保持し、並べ替えできます。account selector がある
 場合は 1 つの bare native が複数の selector-qualified 行に展開されるため、設定した選択肢と公開される
 行は必ずしも一対一ではありません。
 
-現在 `OcxConfig` には一般 `modelOrder`、`providerOrder`、priority map 設定はありません。サポートされるソート
+現在 `CodexCommanderConfig` には一般 `modelOrder`、`providerOrder`、priority map 設定はありません。サポートされるソート
 フィールドは `subagentModels` です。`disabledModels` と各プロバイダーの `selectedModels` は公開
 フィールドです。そのため残りのピッカー順序を変えるには設定変更ではなくコード動作の変更が必要です。

@@ -47,7 +47,7 @@ test("local provider setup copy describes the selected local server, never Curso
     </I18nContext.Provider>,
   );
 
-  expect(markup).toContain("OpenCodex connects to this local server");
+  expect(markup).toContain("CodexCommander connects to this local server");
   expect(markup).toContain("Provider settings");
   expect(markup).not.toContain("Cursor");
 });
@@ -107,7 +107,7 @@ test("choosing a registry-local preset enables its intentional private-network d
 
     const privateNetwork = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
     expect(privateNetwork?.checked).toBe(true);
-    expect(container.textContent).toContain("OpenCodex connects to this local server");
+    expect(container.textContent).toContain("CodexCommander connects to this local server");
     expect(container.textContent).not.toContain("Cursor's static public model catalog");
   } finally {
     await act(async () => root.unmount());

@@ -7,7 +7,7 @@ description: 提供方配置、凭据、配额，以及模型目录命令。
 
 ## 提供方
 
-### `ocx provider <subcommand>`
+### `ccx provider <subcommand>`
 
 非交互式提供方管理。注册表条目按名称预置；自定义名称必须同时提供
 `--adapter` 和 `--base-url`。
@@ -27,13 +27,13 @@ description: 提供方配置、凭据、配额，以及模型目录命令。
 | `account-mode` | `pool`, `direct`, `--json` | 选择 Codex 账号的池化或直连路由。 |
 
 ```bash
-ocx provider list --json
-ocx provider test ark
-ocx provider add anthropic --api-key sk-ant-... --set-default --sync
-ocx provider add local-dev --adapter openai-chat --base-url http://localhost:11434/v1
-ocx provider show anthropic --json
-ocx models --provider anthropic --json
-ocx models live --provider ark --json
+ccx provider list --json
+ccx provider test ark
+ccx provider add anthropic --api-key sk-ant-... --set-default --sync
+ccx provider add local-dev --adapter openai-chat --base-url http://localhost:11434/v1
+ccx provider show anthropic --json
+ccx models --provider anthropic --json
+ccx models live --provider ark --json
 ```
 
 :::caution[自定义请求头不是凭据通道]
@@ -52,36 +52,36 @@ ocx models live --provider ark --json
 
 ## 认证
 
-### `ocx login <provider>`
+### `ccx login <provider>`
 
 启动该提供方已注册的登录流程。根据提供方不同，OAuth 登录会打开浏览器，或导入/链接
-已登录的原生 CLI 会话。存储在 `~/.opencodex/` 下且归 OpenCodex 所有的凭据会自动刷新；
+已登录的原生 CLI 会话。存储在 `~/.codexcommander/` 下且归 CodexCommander 所有的凭据会自动刷新；
 已链接的 Grok/Kimi CLI 访问代际以只读方式采用，更新责任仍由原生 CLI 承担。API 密钥登录
 提供方会打开其密钥控制台，提示输入密钥，在可行时进行校验，并保存生成的提供方配置。
 当名称缺失或未知时，命令会打印当前可接受的 OAuth 和 API 密钥提供方 id。
 
-在 `ocx status` / `ocx doctor` 报告需要重新认证或终端刷新失败后，也可用同一条
+在 `ccx status` / `ccx doctor` 报告需要重新认证或终端刷新失败后，也可用同一条
 命令执行**重新认证**（或者在仪表盘中使用 Reauthenticate）。Codex 池账号不是一个
-公开的 `ocx login` 提供方 - 请通过仪表盘里的 Codex 账号池（Reauthenticate）或
-无头模式的 `ocx account reauth` 流程重新认证。
+公开的 `ccx login` 提供方 - 请通过仪表盘里的 Codex 账号池（Reauthenticate）或
+无头模式的 `ccx account reauth` 流程重新认证。
 
 ```bash
-ocx login xai
-ocx login anthropic
+ccx login xai
+ccx login anthropic
 ```
 
-### `ocx logout <provider>`
+### `ccx logout <provider>`
 
 移除某个提供方已存储的 OAuth 凭据。
 
 ## 账号与密钥池
 
-### `ocx account <subcommand>`
+### `ccx account <subcommand>`
 
 通过正在运行的代理列出并切换提供方账号和 API 密钥池。随附的帮助输出如下：
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage: ccx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 current <provider>  Show the active account or key.
@@ -122,7 +122,7 @@ OAuth 账号会显示为 `Account N`，而 plan/label 列会在 plan、屏蔽后
 }
 ```
 
-### `ocx account list [provider] [--json] [--all]`
+### `ccx account list [provider] [--json] [--all]`
 
 不指定提供方时，会列出 Codex 池、OAuth 账号和已配置的 API 密钥池。除非提供
 `--all`，否则会跳过空的提供方。指定提供方时，只列出该凭据家族。人类可读输出
@@ -134,7 +134,7 @@ OAuth 账号会显示为 `Account N`，而 plan/label 列会在 plan、屏蔽后
 { accounts: AccountRow[], notes: string[] }
 ```
 
-### `ocx account current <provider> [--json]`
+### `ccx account current <provider> [--json]`
 
 显示当前活动账号或密钥。没有手动固定的 Codex 池会报告自动选择最低使用量的结果；
 没有活动凭据的其他家族会报告该状态，但仍然以 0 退出。`--json` 返回：
@@ -143,10 +143,10 @@ OAuth 账号会显示为 `Account N`，而 plan/label 列会在 plan、屏蔽后
 { provider, type, activeId: string | null, autoSwitchThreshold?: number, account: AccountRow | null }
 ```
 
-### `ocx account use <provider> <account-or-key-id|main> [--json]`
+### `ccx account use <provider> <account-or-key-id|main> [--json]`
 
 选择已有的 Codex 账号、OAuth 账号或 API key。对 `openai` 而言，`main` 选择 Codex App 登录。
-Codex Pool 选择会清除进程本地 affinity，并从下一次请求开始生效，包括已有可见任务的请求；代理重启或 affinity eviction 后，任务也可能变为未绑定，但进行中的请求保留已捕获账号。此选择只控制 Pool routing；Direct mode 继续使用 caller-owned/native main credential。基于用量的主动切换、401/403 重新认证、429/retry-after cooldown、排除，以及输出前 429/402 故障恢复之后仍可能选择其他合格 Pool 账号。这些恢复路径在关闭基于用量的切换时仍然有效。账号变化后 OpenCodex 会重放对话上下文，但 provider prompt cache 可能需要重新预热。未知 provider 或 id 返回退出码 1。`--json` 返回：
+Codex Pool 选择会清除进程本地 affinity，并从下一次请求开始生效，包括已有可见任务的请求；代理重启或 affinity eviction 后，任务也可能变为未绑定，但进行中的请求保留已捕获账号。此选择只控制 Pool routing；Direct mode 继续使用 caller-owned/native main credential。基于用量的主动切换、401/403 重新认证、429/retry-after cooldown、排除，以及输出前 429/402 故障恢复之后仍可能选择其他合格 Pool 账号。这些恢复路径在关闭基于用量的切换时仍然有效。账号变化后 CodexCommander 会重放对话上下文，但 provider prompt cache 可能需要重新预热。未知 provider 或 id 返回退出码 1。`--json` 返回：
 遇到 **401/403** 时，App 登录会清除该账户的进程内 affinity 并要求重新认证。
 遇到 **429** 时，它会遵循 `Retry-After`、启动账户 cooldown、清除 affinity，
 并可将请求切换到另一个符合条件的 Pool 账户。即使 `autoSwitchThreshold: 0`，
@@ -156,9 +156,9 @@ Codex Pool 选择会清除进程本地 affinity，并从下一次请求开始生
 { ok: true, provider, type, activeId }
 ```
 
-### `ocx account refresh <provider> [--json]`
+### `ccx account refresh <provider> [--json]`
 
-对于 Codex 池，请使用 `ocx account refresh openai [--json]`。它会强制刷新账号配额，
+对于 Codex 池，请使用 `ccx account refresh openai [--json]`。它会强制刷新账号配额，
 并打印可用的周/月百分比和重置时间；缺失的配额数据会报告为未知，而不是 0%。其
 JSON 外壳是 `{ accounts: AccountRow[] }`，每个 Codex 行上都会带有 `quota`。
 
@@ -169,7 +169,7 @@ token，也不是简单重读账号列表。`--json` 返回
 会以 1 退出；上游配额探测如果失败或超时，则会降级为 `null` 或陈旧报告（以 0 退出），
 与仪表盘的配额条保持一致。
 
-### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
+### `ccx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
 只控制 `openai` 的 Codex 账号池。`on` 会设为 80%，`off` 会设为 0%，`status` 会读取
 当前值，而 `threshold <n>` 接受 0 到 100 之间的整数。其他提供方和无效值都会以 1
@@ -179,11 +179,11 @@ token，也不是简单重读账号列表。`--json` 返回
 { provider, autoSwitchThreshold: number, enabled: boolean }
 ```
 
-### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
+### `ccx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
 
 读取或设置某个 Codex pool 账号的选择顺序：**数值越大越先使用**，默认值为 `0`，范围是 `-100` 到
 `100`。只有 `openai` 的 Codex pool 有选择顺序，其他 provider 返回退出码 1。`main` 指向 Codex Desktop
-登录账号，它与其他 pool 账号一样参与排序：`ocx account priority openai main last` 就能把它留作备用。
+登录账号，它与其他 pool 账号一样参与排序：`ccx account priority openai main last` 就能把它留作备用。
 
 预设词只是小整数的别名：`first` 为 `+2`，`earlier` 为 `+1`，`normal` 为 `0`，`later` 为 `-1`，
 `last` 为 `-2`。`reset` 恢复默认值并删除已保存的条目。**省略取值即为读取**，不会改写当前顺序。
@@ -199,12 +199,12 @@ token，也不是简单重读账号列表。`--json` 返回
 ```
 
 
-### `ocx account login|reauth|code|cancel ...`
+### `ccx account login|reauth|code|cancel ...`
 
 在无头 shell 中运行基于浏览器或手动代码的账号认证。请使用
-`ocx account --help` 查看与提供方相关的命令形式。
+`ccx account --help` 查看与提供方相关的命令形式。
 
-### `ocx account remove <provider> <id|main> --yes [--json]`
+### `ccx account remove <provider> <id|main> --yes [--json]`
 
 这个受保护的非交互式删除需要 `--yes`。删除前，它会验证 id 是否存在；缺失的 id
 会以 1 退出，而不会发送 DELETE。主 Codex App 登录不能被移除，因此会拒绝
@@ -217,35 +217,35 @@ token，也不是简单重读账号列表。`--json` 返回
 { error: string } // stderr, exit 1
 ```
 
-### `ocx account add-key <provider> [--label <label>] [--json]`
+### `ccx account add-key <provider> [--label <label>] [--json]`
 
 为 API 密钥提供方添加并激活一个密钥。该密钥只会从非 TTY 的管道/重定向 stdin
 读取；交互式 TTY 输入、空输入、OAuth/Codex 提供方，以及 API 失败都会以 1 退出。
 密钥永远不会回显，即使它出现在 label 里也是如此。建议使用秘密管理器或 here-string：
 
 ```bash
-ocx account add-key openrouter --label personal <<< "$OPENROUTER_API_KEY"
-security find-generic-password -w openrouter | ocx account add-key openrouter --json
+ccx account add-key openrouter --label personal <<< "$OPENROUTER_API_KEY"
+security find-generic-password -w openrouter | ccx account add-key openrouter --json
 ```
 
 `--json` 返回 `{ ok: true, id: string | null, label?: string }`，并且绝不会包含该密钥。
 
-### `ocx account reset-credits <id|main> [--consume --yes]`
+### `ccx account reset-credits <id|main> [--consume --yes]`
 
 查看某个账号的 Codex 重置额度。消耗额度会造成破坏性影响，因此同时需要 `--consume`
 和 `--yes`。
 
-### `ocx account main <subcommand>`
+### `ccx account main <subcommand>`
 
-管理命名的原生 Codex 主登录配置文件，而不更改 OpenCodex 账号池路由。
+管理命名的原生 Codex 主登录配置文件，而不更改 CodexCommander 账号池路由。
 
 ```text
-ocx account main doctor [--json]
-ocx account main list [--json]
-ocx account main register <label> [--json]
-ocx account main add <label>
-ocx account main switch <profile-id-or-label> --yes [--json]
-ocx account main recover [--rollback --yes] [--json]
+ccx account main doctor [--json]
+ccx account main list [--json]
+ccx account main register <label> [--json]
+ccx account main add <label>
+ccx account main switch <profile-id-or-label> --yes [--json]
+ccx account main recover [--rollback --yes] [--json]
 ```
 
 每个变更命令都会显示运行中代理返回的规范化有效 `CODEX_HOME`。该路径可能与调用进程的
@@ -253,19 +253,17 @@ ocx account main recover [--rollback --yes] [--json]
 
 版本 1 支持基于文件的 Codex 身份验证，使用 AES-256-GCM 加密保存的配置文件，并将加密密钥保存在操作系统凭据存储中。`add` 会先在受限暂存环境中启动官方 Codex 登录，再导入生成的凭据。切换配置文件前请关闭 Codex。切换成功后会保留本地任务和历史记录，但继续使用前必须重启 Codex。使用 `doctor` 检查配置文件状态，使用 `recover` 完成或回滚中断的切换。`switch` 可接受配置文件 ID 或标签。
 
-v1 恢复矩阵覆盖的是事务文件通过重命名发布后 OpenCodex 进程退出的情况。它不声明能够在操作系统或内核崩溃、突然断电后持久保存：`atomicWriteFileAsync()` 不会对文件或父目录执行 `fsync`。
+v1 恢复矩阵覆盖的是事务文件通过重命名发布后 CodexCommander 进程退出的情况。它不声明能够在操作系统或内核崩溃、突然断电后持久保存：`atomicWriteFileAsync()` 不会对文件或父目录执行 `fsync`。
 
-加密保管库、切换日志、恢复标记和日志隔离文件位于规范的 `<real CODEX_HOME>/.opencodex-native-main-profiles` 目录中。因此，共用该 Codex 主目录的所有 OpenCodex 实例都会看到同一个所有者和同一份恢复状态。明文登录暂存数据仍分别隔离在各自的 `<OPENCODEX_HOME>/native-main-profile-staging` 目录下。
+加密保管库、切换日志、恢复标记和日志隔离文件位于规范的 `<real CODEX_HOME>/.codexcommander-native-main-profiles` 目录中。因此，共用该 Codex 主目录的所有 CodexCommander 实例都会看到同一个所有者和同一份恢复状态。明文登录暂存数据仍分别隔离在各自的 `<CODEXCOMMANDER_HOME>/native-main-profile-staging` 目录下。
 
-在允许 native-main 流量或日志恢复之前，生命周期所有者会取得凭据的独占占用权，并且只删除名称与 `auth.json.ocx.<pid>.<sequence>.tmp` 完全匹配的崩溃残留文件。每个候选文件在整个过程中都必须位于未发生变化的规范 `CODEX_HOME` 下，并保持为硬链接计数为 1 的普通文件；系统会先将其截断，再刷新其内容，最后取消链接（unlink）。若发生链接或重解析点替换、文件标识发生变化或存在其他歧义，native-main 流量将继续保持关闭；名称仅近似匹配的文件绝不会被自动删除。这项防护针对正常协作的 OpenCodex 发生崩溃的情况，并不能抵御已经以同一操作系统用户身份运行的恶意进程。该用户以及承载 `CODEX_HOME` 的文件系统仍属于信任范围；截断文件也不保证从写时复制存储、快照或 SSD 残留数据中实现物理擦除。
-
-预览版使用 `<OPENCODEX_HOME>/native-main-profiles`。该布局绝不会被静默导入。如果 `doctor` 报告旧版配置文件状态，请停止所有共用同一 `CODEX_HOME` 的 OpenCodex 代理。然后，请先备份，并在保留仅所有者可访问权限的情况下，将相应的 `*.vault.json`、`*.journal.json`、恢复标记以及任何被引用的日志隔离文件一起移动到规范目录中；或者删除旧的预览版文件集，再次运行 `ocx account main register`。只要仍有任何共用该 `CODEX_HOME` 的代理正在运行，就不要在多个旧根目录之间选择其一，也不要同时使用两种布局。在 Windows 上，按以前不区分大小写的主目录标识索引的预览状态必须重置，而不能直接移动，因为其加密 AAD 和操作系统密钥环标识被有意设计为不再复用。
+在允许 native-main 流量或日志恢复之前，生命周期所有者会取得凭据的独占占用权，并且只删除名称与 `auth.json.ccx.<pid>.<sequence>.tmp` 完全匹配的崩溃残留文件。每个候选文件在整个过程中都必须位于未发生变化的规范 `CODEX_HOME` 下，并保持为硬链接计数为 1 的普通文件；系统会先将其截断，再刷新其内容，最后取消链接（unlink）。若发生链接或重解析点替换、文件标识发生变化或存在其他歧义，native-main 流量将继续保持关闭；名称仅近似匹配的文件绝不会被自动删除。这项防护针对正常协作的 CodexCommander 发生崩溃的情况，并不能抵御已经以同一操作系统用户身份运行的恶意进程。该用户以及承载 `CODEX_HOME` 的文件系统仍属于信任范围；截断文件也不保证从写时复制存储、快照或 SSD 残留数据中实现物理擦除。
 
 ## 模型
 
-### `ocx models [subcommand]` · `ocx model <subcommand>`
+### `ccx models [subcommand]` · `ccx model <subcommand>`
 
-`ocx model` 是 `ocx models` 的别名。没有子命令时，列出已配置提供方中静态预置的模型。
+`ccx model` 是 `ccx models` 的别名。没有子命令时，列出已配置提供方中静态预置的模型。
 `--provider` 可过滤单个已配置提供方，而 `--json` 会返回模型元数据。`live` 读取运行中
 的目录；`add`、`edit`、`remove` 和 `list-custom` 管理手动目录条目；`enable`、
 `disable` 和 `provider` 控制可见性；`selected` 控制提供方允许列表；`context` 控制提供方
@@ -273,7 +271,7 @@ v1 恢复矩阵覆盖的是事务文件通过重命名发布后 OpenCodex 进程
 
 这里提供仪表盘中所有逐模型操作，因此无头安装永远不需要 GUI 来管理目录。`add`、
 `remove` 和 `list-custom` 针对配置文件工作，并通过目录同步应用到正在运行的代理；
-其余命令会与在线管理 API 通信，并要求代理正在运行（`ocx start`，或已安装的服务）。
+其余命令会与在线管理 API 通信，并要求代理正在运行（`ccx start`，或已安装的服务）。
 
 | 子命令 | 支持的标志 | 操作 |
 | --- | --- | --- |
@@ -288,18 +286,18 @@ v1 恢复矩阵覆盖的是事务文件通过重命名发布后 OpenCodex 进程
 | `provider <name> <on\|off>` | `--json` | 一次写入中启用或禁用某个提供方的全部模型。 |
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | 读取或替换提供方模型允许列表。`--clear` 会移除允许列表，使所有模型都可提供。 |
 | `context <status\|value <tokens>\|provider <name> <on\|off>\|all <on\|off>>` | `--json` | 读取或设置上下文窗口上限，可全局设置或按提供方设置。 |
-| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | 读取或设置 Codex 后台辅助调用所替换的模型。`-` 会清除该模型。`status` 还会报告 `sourceModels`，即代理拦截的辅助器 slug（默认值：`gpt-5.6-luna`；0.144.x 及更早客户端使用的 `gpt-5.4-mini` 可通过显式 `sourceModels` 覆盖恢复）。 |
+| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | 读取或设置 Codex 后台辅助调用所替换的模型。`-` 会清除该模型。`status` 还会报告 `sourceModels`，即代理拦截的辅助器 slug（默认值：`gpt-5.6-luna`；显式覆盖仅用于当前自定义辅助器 ID）。 |
 
 ```bash
-ocx models live --json                                  # what Codex can actually see right now
-ocx models disable anthropic/claude-haiku-4             # hide one routed model
-ocx models enable gpt-5.6-sol                           # no slash, so it is treated as native
-ocx models provider zenmux off                          # hide a noisy provider wholesale
-ocx models selected anthropic --set claude-opus-5,claude-fable-5
-ocx models selected anthropic --clear                   # drop the allowlist again
-ocx models add deepseek deepseek-v4 --display-name 'DeepSeek V4' --context-window 128000 --modalities text,image
-ocx models list-custom --json                           # read the custom-id for edit/remove
-ocx models remove deepseek/deepseek-v4 --yes
+ccx models live --json                                  # what Codex can actually see right now
+ccx models disable anthropic/claude-haiku-4             # hide one routed model
+ccx models enable gpt-5.6-sol                           # no slash, so it is treated as native
+ccx models provider zenmux off                          # hide a noisy provider wholesale
+ccx models selected anthropic --set claude-opus-5,claude-fable-5
+ccx models selected anthropic --clear                   # drop the allowlist again
+ccx models add deepseek deepseek-v4 --display-name 'DeepSeek V4' --context-window 128000 --modalities text,image
+ccx models list-custom --json                           # read the custom-id for edit/remove
+ccx models remove deepseek/deepseek-v4 --yes
 ```
 
 带斜杠的模型选择器会按 routed 处理（`anthropic/claude-opus-5`）；裸 id 会被视为

@@ -47,10 +47,10 @@ afterEach(() => {
 const CLAUDE_OK = {
   enabled: true,
   authMode: "proxy",
+  markerMode: "proxy",
   autoConnectSupported: false,
   systemEnv: false,
   fastMode: null,
-  maxContextTokens: null,
   autoContext: true,
   autoCompactWindow: null,
   injectAgents: true,

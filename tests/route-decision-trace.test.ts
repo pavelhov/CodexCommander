@@ -22,7 +22,7 @@ import {
   normalizeRouteDecisionTrace,
   type RouteDecisionTraceV1,
 } from "../src/routing/trace";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 /** Near-budget trace: 8 candidates x 16 exclusions with max-length strings. */
 function oversizedTrace(): RouteDecisionTraceV1 {
@@ -50,19 +50,19 @@ let testDir = "";
 let previousHome: string | undefined;
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  testDir = mkdtempSync(join(tmpdir(), "ocx-route-trace-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  testDir = mkdtempSync(join(tmpdir(), "ccx-route-trace-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   resetUsageReadCacheForTests();
 });
 
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
 });
 
-function baseConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
+function baseConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
   return {
     port: 10100,
     defaultProvider: "a",
@@ -322,7 +322,7 @@ describe("route decision traces (RI-01)", () => {
   test("trace round-trips through usage.jsonl and request-log hydration", () => {
     const route = routeModel(baseConfig(), "combo/free");
     const entry: PersistedUsageEntry = {
-      requestId: "ocx-trace-roundtrip",
+      requestId: "ccx-trace-roundtrip",
       timestamp: 1700000000000,
       provider: "combo",
       model: "combo/free",
@@ -342,7 +342,7 @@ describe("route decision traces (RI-01)", () => {
 
   test("old JSONL rows without a trace parse unchanged", () => {
     const entry: PersistedUsageEntry = {
-      requestId: "ocx-legacy-row",
+      requestId: "ccx-legacy-row",
       timestamp: 1700000000000,
       provider: "a",
       model: "m1",
@@ -352,12 +352,12 @@ describe("route decision traces (RI-01)", () => {
     };
     const normalized = normalizeUsageEntryForTest(entry);
     expect(normalized.routeDecision).toBeUndefined();
-    expect(normalized.requestId).toBe("ocx-legacy-row");
+    expect(normalized.requestId).toBe("ccx-legacy-row");
   });
 
   test("hand-edited corrupt trace rows are dropped or normalized, never poisoned", () => {
     const entry: PersistedUsageEntry = {
-      requestId: "ocx-corrupt-trace",
+      requestId: "ccx-corrupt-trace",
       timestamp: 1700000000000,
       provider: "a",
       model: "m1",
@@ -376,7 +376,7 @@ describe("route decision traces (RI-01)", () => {
 
   test("request-log hydration drops a corrupt persisted trace", () => {
     const entry: PersistedUsageEntry = {
-      requestId: "ocx-corrupt-hydration",
+      requestId: "ccx-corrupt-hydration",
       timestamp: 1700000000000,
       provider: "a",
       model: "m1",

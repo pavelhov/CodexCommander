@@ -15,7 +15,7 @@ import {
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import { routedSlug } from "../src/providers/slug-codec";
 import { routeModel } from "../src/router";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
 import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
 
 const FIXTURE = readFileSync(join(import.meta.dir, "fixtures/baseten-models.json"), "utf8");
@@ -32,7 +32,7 @@ function basetenEntry() {
   return entry;
 }
 
-function basetenConfig(overrides: Partial<OcxProviderConfig> = {}): OcxConfig {
+function basetenConfig(overrides: Partial<CodexCommanderProviderConfig> = {}): CodexCommanderConfig {
   return {
     port: 10100,
     defaultProvider: "baseten",

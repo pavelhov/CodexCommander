@@ -1,16 +1,16 @@
 /**
  * Claude auth-mode resolution.
  *
- * The resolver answers exactly ONE question: does the opencodex-owned dummy token
- * (`ANTHROPIC_AUTH_TOKEN=opencodex-proxy`) get injected? That is narrower than "how
+ * The resolver answers exactly ONE question: does the CodexCommander-owned dummy token
+ * (`ANTHROPIC_AUTH_TOKEN=codexcommander-proxy`) get injected? That is narrower than "how
  * will Claude authenticate" — native passthrough additionally needs an `sk-ant-`
  * credential on the incoming request — so the field is `markerMode`, not
- * `effectiveAuthMode` (devlog/_plan/260726_claude_auth_auto/002 R2-1).
+ * `effectiveAuthMode` (implementation contract R2-1).
  *
  * The admission-key axis is separate and untouched: when the proxy requires an
  * admission key, `buildClaudeEnv` injects it regardless of mode.
  */
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import type { AuthDetectResult, AuthSourceId } from "./auth-detect";
 
 export type MarkerMode = "proxy" | "subscription";
@@ -34,7 +34,7 @@ export interface ResolvedAuthMode {
  * subscriber into proxy mode on a failed read (denied keychain, unreadable file) is
  * the worst outcome this feature can produce.
  */
-export function resolveClaudeAuthMode(config: OcxConfig, detection: AuthDetectResult): ResolvedAuthMode {
+export function resolveClaudeAuthMode(config: CodexCommanderConfig, detection: AuthDetectResult): ResolvedAuthMode {
   const authMode = config.claudeCode?.authMode;
   if (authMode === "proxy") return { markerMode: "proxy", origin: "manual", detection };
   if (authMode === "subscription") return { markerMode: "subscription", origin: "manual", detection };
@@ -57,6 +57,6 @@ export function resolveClaudeAuthMode(config: OcxConfig, detection: AuthDetectRe
 /** The three-state intent as the API and GUI express it. */
 export type AuthModeIntent = "auto" | "proxy" | "subscription";
 
-export function authModeIntent(config: OcxConfig): AuthModeIntent {
+export function authModeIntent(config: CodexCommanderConfig): AuthModeIntent {
   return config.claudeCode?.authMode ?? "auto";
 }

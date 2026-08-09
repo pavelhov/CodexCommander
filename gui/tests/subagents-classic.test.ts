@@ -12,7 +12,7 @@ test("Subagents mounts the denser workspace as the only layout", async () => {
   expect(page).toContain("subagents-workspace");
   expect(page).not.toContain("readViewMode");
   expect(page).not.toContain("workspaceView");
-  expect(page).not.toContain("ocx-subagents-view");
+  expect(page).not.toContain("ccx-subagents-view");
   expect(page).not.toContain("pws.workspaceToggle");
   expect(page).not.toContain("pws.classicToggle");
 

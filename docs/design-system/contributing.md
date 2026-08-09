@@ -58,5 +58,5 @@ cd gui && bun run lint && bun run build
 
 ```bash
 cd gui
-OPENCODEX_PROXY_TARGET=http://127.0.0.1:10101 bun run dev --host 127.0.0.1
+CODEXCOMMANDER_PROXY_TARGET=http://127.0.0.1:10101 bun run dev --host 127.0.0.1
 ```

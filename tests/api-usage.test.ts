@@ -5,18 +5,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
-import { resetUsageReadCacheForTests, usageReadCacheStatsForTests } from "../src/usage/log";
+import {
+  resetUsageReadCacheForTests,
+  USAGE_LOG_SCHEMA_VERSION,
+  usageReadCacheStatsForTests,
+} from "../src/usage/log";
 
 let testDir = "";
 let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
-function baseConfig(): OcxConfig {
+function baseConfig(): CodexCommanderConfig {
   return {
     port: 0,
     hostname: "127.0.0.1",
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "openai",
     providers: {
       openai: {
@@ -25,16 +30,18 @@ function baseConfig(): OcxConfig {
         authMode: "forward",
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 function writeFixture(now: number): void {
   const lines = [
     JSON.stringify({
-      requestId: "ocx-old",
+      schemaVersion: USAGE_LOG_SCHEMA_VERSION,
+      requestId: "ccx-old",
       timestamp: now - 10 * 86_400_000,
       provider: "openai",
       model: "gpt-5.5",
+      surface: "codex",
       status: 200,
       durationMs: 12,
       usageStatus: "reported",
@@ -42,10 +49,12 @@ function writeFixture(now: number): void {
       totalTokens: 150,
     }),
     JSON.stringify({
-      requestId: "ocx-recent",
+      schemaVersion: USAGE_LOG_SCHEMA_VERSION,
+      requestId: "ccx-recent",
       timestamp: now - 1 * 86_400_000,
       provider: "openai",
       model: "gpt-5.5",
+      surface: "codex",
       status: 200,
       durationMs: 10,
       usageStatus: "reported",
@@ -53,7 +62,8 @@ function writeFixture(now: number): void {
       totalTokens: 15,
     }),
     JSON.stringify({
-      requestId: "ocx-missing",
+      schemaVersion: USAGE_LOG_SCHEMA_VERSION,
+      requestId: "ccx-missing",
       timestamp: now - 1 * 86_400_000,
       provider: "anthropic",
       model: "claude-x",
@@ -67,17 +77,17 @@ function writeFixture(now: number): void {
 }
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-api-usage-codex-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-api-usage-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-api-usage-codex-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-api-usage-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   resetUsageReadCacheForTests();
   saveConfig(baseConfig());
 });
 
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
@@ -136,10 +146,12 @@ describe("GET /api/usage", () => {
       expect(usageReadCacheStatsForTests().fullReads).toBe(1);
 
       appendFileSync(join(testDir, "usage.jsonl"), `${JSON.stringify({
-        requestId: "ocx-appended",
+        schemaVersion: USAGE_LOG_SCHEMA_VERSION,
+        requestId: "ccx-appended",
         timestamp: Date.now(),
         provider: "openai",
         model: "gpt-5.5",
+        surface: "codex",
         status: 200,
         durationMs: 1,
         usageStatus: "reported",

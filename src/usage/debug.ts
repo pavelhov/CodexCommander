@@ -1,4 +1,4 @@
-/** Usage-shape diagnostic JSONL. Enable with `ocx debug usage on` or OPENCODEX_USAGE_DEBUG=1. */
+/** Usage-shape diagnostic JSONL. Enable with `ccx debug usage on` or CCX_USAGE_DEBUG=1. */
 
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -7,7 +7,7 @@ import { DEBUG_ENV } from "../lib/debug-settings";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import type { DebugLogEntry } from "../lib/debug-log-buffer";
 import { redactSecretString, redactSecrets } from "../lib/redact";
-import type { OcxUsage } from "../types";
+import type { CodexCommanderUsage } from "../types";
 
 export const USAGE_DEBUG_ENV = DEBUG_ENV.usage;
 export { isUsageDebugEnabled } from "../lib/debug-settings";
@@ -26,7 +26,7 @@ export interface UsageDebugRecord {
   upstreamStatus: number;
   bodyKind: UsageDebugBodyKind;
   bodySample: string;
-  extractedUsage: OcxUsage | null;
+  extractedUsage: CodexCommanderUsage | null;
 }
 
 export function usageDebugPath(): string {

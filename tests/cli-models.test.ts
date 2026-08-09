@@ -17,9 +17,10 @@ function runCli(args: string[], env: Record<string, string> = {}) {
 }
 
 function freshConfig(extra?: Record<string, unknown>) {
-  const dir = mkdtempSync(join(tmpdir(), "ocx-models-"));
+  const dir = mkdtempSync(join(tmpdir(), "ccx-models-"));
   const config = {
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     providers: {
       openai: {
         adapter: "openai-responses",
@@ -41,11 +42,11 @@ function freshConfig(extra?: Record<string, unknown>) {
   return { dir };
 }
 
-describe("ocx models", () => {
+describe("ccx models", () => {
   test("models lists all provider models", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["models"], { OPENCODEX_HOME: dir });
+      const result = runCli(["models"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("test-model-1");
       expect(result.stdout).toContain("test-model-2");
@@ -59,7 +60,7 @@ describe("ocx models", () => {
   test("models --provider filters to one provider", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["models", "--provider", "test"], { OPENCODEX_HOME: dir });
+      const result = runCli(["models", "--provider", "test"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("test-model-1");
       expect(result.stdout).toContain("test:");
@@ -71,7 +72,7 @@ describe("ocx models", () => {
   test("models --provider rejects unknown provider", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["models", "--provider", "nonexistent"], { OPENCODEX_HOME: dir });
+      const result = runCli(["models", "--provider", "nonexistent"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("not configured");
     } finally {
@@ -82,7 +83,7 @@ describe("ocx models", () => {
   test("models --json returns valid JSON", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["models", "--json"], { OPENCODEX_HOME: dir });
+      const result = runCli(["models", "--json"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(0);
       const parsed = JSON.parse(result.stdout);
       expect(parsed.models).toBeArray();
@@ -98,7 +99,7 @@ describe("ocx models", () => {
   test("models --provider X --json combines flags", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["models", "--provider", "test", "--json"], { OPENCODEX_HOME: dir });
+      const result = runCli(["models", "--provider", "test", "--json"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(0);
       const parsed = JSON.parse(result.stdout);
       expect(parsed.models.every((m: { provider: string }) => m.provider === "test")).toBe(true);
@@ -110,7 +111,7 @@ describe("ocx models", () => {
   test("models --help prints usage", () => {
     const result = runCli(["models", "--help"]);
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("ocx models");
+    expect(result.stdout).toContain("ccx models");
   });
 
   test("help models shows models help entry", () => {
@@ -120,11 +121,12 @@ describe("ocx models", () => {
   });
 });
 
-describe("ocx models richer metadata", () => {
+describe("ccx models richer metadata", () => {
   test("models --json includes contextWindow and inputModalities", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-models-rich-"));
+    const dir = mkdtempSync(join(tmpdir(), "ccx-models-rich-"));
     const config = {
       port: 10100,
+      multiAgentGuidanceEnabled: true,
       providers: {
         test: {
           adapter: "openai-chat",
@@ -142,7 +144,7 @@ describe("ocx models richer metadata", () => {
     };
     writeFileSync(join(dir, "config.json"), JSON.stringify(config), "utf8");
     try {
-      const result = runCli(["models", "--json"], { OPENCODEX_HOME: dir });
+      const result = runCli(["models", "--json"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(0);
       const parsed = JSON.parse(result.stdout);
       const modelA = parsed.models.find((m: { model: string }) => m.model === "model-a");
@@ -161,7 +163,7 @@ describe("ocx models richer metadata", () => {
   test("models rejects unknown flags", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["models", "--bogus"], { OPENCODEX_HOME: dir });
+      const result = runCli(["models", "--bogus"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("Unknown flag");
     } finally {

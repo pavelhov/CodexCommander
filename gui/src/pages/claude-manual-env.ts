@@ -1,6 +1,5 @@
 /**
- * Pure manual-env builder for the Claude Code page (devlog
- * 260720_claude_authmode_persist/020): extracted from ClaudeCode.tsx so the
+ * Pure manual-env builder for the Claude Code page (implementation contract): extracted from ClaudeCode.tsx so the
  * copy-paste shell block is directly unit-testable (tests/claude-manual-env.test.ts).
  */
 
@@ -14,9 +13,8 @@ export interface ClaudeManualEnvState {
    * terminal, so this block is guidance, not a universal prediction.
    */
   authMode: "auto" | "subscription" | "proxy";
-  /** Resolved marker decision from the backend (absent on an older proxy). */
-  markerMode?: "proxy" | "subscription";
-  maxContextTokens: number | null;
+  /** Resolved marker decision from the backend. */
+  markerMode: "proxy" | "subscription";
   autoContext: boolean;
   autoCompactWindow: number | null;
   effectiveModelEnv: Record<string, string>;
@@ -24,19 +22,17 @@ export interface ClaudeManualEnvState {
 }
 
 export const MODEL_ENV_NAMES = [
-  "ANTHROPIC_MODEL",
-  "ANTHROPIC_DEFAULT_OPUS_MODEL",
-  "ANTHROPIC_DEFAULT_SONNET_MODEL",
   "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-  "ANTHROPIC_DEFAULT_FABLE_MODEL",
+  "ANTHROPIC_SMALL_FAST_MODEL",
 ] as const;
 
 export function buildManualEnv(state: ClaudeManualEnvState): string {
+  if (state.markerMode !== "proxy" && state.markerMode !== "subscription") {
+    throw new Error("markerMode is required");
+  }
   const baseUrl = `http://127.0.0.1:${state.port}`;
-  // "auto" defers to the backend's resolution; an older proxy that does not send one
-  // degrades to the historical subscription default rather than guessing proxy.
-  const marker = state.authMode === "auto" ? (state.markerMode ?? "subscription") : state.authMode;
-  const autoCompactActive = state.autoContext && state.maxContextTokens === null;
+  const marker = state.authMode === "auto" ? state.markerMode : state.authMode;
+  const autoCompactActive = state.autoContext;
   const modelEnvExports = MODEL_ENV_NAMES
     .filter(name => state.effectiveModelEnv[name])
     .map(name => `export ${name}=${state.effectiveModelEnv[name]}`);
@@ -44,7 +40,7 @@ export function buildManualEnv(state: ClaudeManualEnvState): string {
   return [
     `export ANTHROPIC_BASE_URL=${baseUrl}`,
     ...(marker === "proxy"
-      ? ["export ANTHROPIC_AUTH_TOKEN=opencodex-proxy"]
+      ? ["export ANTHROPIC_AUTH_TOKEN=codexcommander-proxy"]
       : ["# no ANTHROPIC_AUTH_TOKEN: your claude.ai login (and connectors) stay active"]),
     "export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1",
     // The flag is an auth assertion in current Claude Code. It belongs only to

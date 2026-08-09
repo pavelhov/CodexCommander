@@ -1,23 +1,18 @@
-import type { OcxProviderConfig } from "../../types";
+import type { CodexCommanderProviderConfig } from "../../types";
 import type { CursorClientMessage } from "./types";
 
-export type CursorNativeExecMode = "off" | "codex-sandbox" | "on";
+export type CursorNativeExecMode = "off" | "on";
 
 /** Codex permissions template marker, e.g. "`sandbox_mode` is `danger-full-access`". */
 export const CURSOR_SANDBOX_FULL_ACCESS_RE = /sandbox_mode[^\n]{0,80}danger-full-access/i;
 
 /**
- * Config-owner-selected policy; explicit mode wins, legacy boolean maps to "on".
- * The UNSET default is "off". `nativeLocalExec: "on"` is the only non-legacy setting that
+ * Config-owner-selected policy. The UNSET default is "off". `nativeLocalExec: "on"` is the
+ * only setting that
  * authorizes Cursor server-driven local read/write/delete/ls/grep/shell/fetch execution.
- * `nativeLocalExec: "codex-sandbox"` is kept as a recognized legacy/deprecated spelling but is
- * fail-closed: opencodex has no trustworthy per-request attestation that caller-supplied
- * Responses instructions/system/developer prose reflects a real Codex sandbox state.
  */
-export function resolveCursorNativeExecMode(provider: OcxProviderConfig): CursorNativeExecMode {
-  const mode = provider.nativeLocalExec;
-  if (mode === "off" || mode === "codex-sandbox" || mode === "on") return mode;
-  return provider.unsafeAllowNativeLocalExec === true ? "on" : "off";
+export function resolveCursorNativeExecMode(provider: CodexCommanderProviderConfig): CursorNativeExecMode {
+  return provider.nativeLocalExec === "on" ? "on" : "off";
 }
 
 /**
@@ -38,7 +33,7 @@ export function cursorRequestDeclaresFullAccess(
 }
 
 /** Effective per-request allowance: only server-local config opt-in enables native exec. */
-export function effectiveCursorNativeExecAllow(provider: OcxProviderConfig, requestDeclaresFullAccess: boolean): boolean {
+export function effectiveCursorNativeExecAllow(provider: CodexCommanderProviderConfig, requestDeclaresFullAccess: boolean): boolean {
   const mode = resolveCursorNativeExecMode(provider);
   void requestDeclaresFullAccess;
   return mode === "on";

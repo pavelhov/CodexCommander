@@ -5,50 +5,58 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 let testDir = "";
 let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
-function baseConfig(): OcxConfig {
+function baseConfig(): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     hostname: "127.0.0.1",
     defaultProvider: "opencode-go",
     providers: {
-      "opencode-go": { adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1", apiKey: "key-first-000111222333" },
+      "opencode-go": {
+        adapter: "openai-chat",
+        baseUrl: "https://opencode.ai/zen/go/v1",
+        apiKey: "key-first-000111222333",
+        apiKeyPool: [{ id: "first-key", key: "key-first-000111222333" }],
+      },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-provider-keys-codex-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-provider-keys-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-provider-keys-codex-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-provider-keys-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   saveConfig(baseConfig());
 });
 
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
 });
 
 describe("provider API key pool", () => {
-  test("GET seeds legacy bare apiKey into a one-entry pool with masked value", async () => {
+  test("GET does not salvage a legacy bare apiKey", async () => {
+    const legacy = baseConfig();
+    delete legacy.providers["opencode-go"]!.apiKeyPool;
+    saveConfig(legacy);
     const server = startServer(0);
     try {
       const res = await fetch(new URL("/api/providers/keys?name=opencode-go", server.url));
       expect(res.status).toBe(200);
       const body = await res.json() as { activeId: string | null; keys: Array<{ id: string; masked: string; active: boolean }> };
-      expect(body.keys.length).toBe(1);
-      expect(body.keys[0]!.active).toBe(true);
-      expect(body.keys[0]!.masked.includes("****")).toBe(true);
+      expect(body.activeId).toBeNull();
+      expect(body.keys).toEqual([]);
       expect(JSON.stringify(body).includes("key-first-000111222333")).toBe(false);
     } finally {
       await server.stop(true);

@@ -4,8 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   inspectNativeProfileJournal,
-  assertNoLegacyNativeProfileState,
-  legacyWindowsNativeProfileHomeId,
   MAX_NATIVE_PROFILE_JOURNAL_BYTES,
   MAX_NATIVE_PROFILE_METADATA_BYTES,
   nativeProfileHomeId,
@@ -32,7 +30,7 @@ const SOURCE_HASH = "b".repeat(64);
 const TARGET_HASH = "c".repeat(64);
 const CREATED_AT = "2026-08-02T00:00:00.000Z";
 const REPLACEMENT_TRANSACTION_ID = "44444444-4444-4444-8444-444444444444";
-const BOUNDED_READ_TEST_SEAM = Symbol.for("opencodex.native-profile-store.bounded-read-test-seam");
+const BOUNDED_READ_TEST_SEAM = Symbol.for("codexcommander.native-profile-store.bounded-read-test-seam");
 
 interface BoundedReadTestSeam {
   beforeOpen?: (path: string) => void;
@@ -46,23 +44,21 @@ afterEach(() => {
 });
 
 function context(): NativeProfileContext {
-  const base = mkdtempSync(join(tmpdir(), "ocx-native-profile-store-"));
+  const base = mkdtempSync(join(tmpdir(), "ccx-native-profile-store-"));
   roots.push(base);
   const requestedCodexHome = join(base, "codex");
-  const configDir = join(base, "opencodex");
+  const configDir = join(base, "codexcommander");
   mkdirSync(requestedCodexHome, { mode: 0o700 });
   const codexHome = realpathSync.native(requestedCodexHome);
-  const rootDir = join(codexHome, ".opencodex-native-main-profiles");
+  const rootDir = join(codexHome, ".codexcommander-native-main-profiles");
   mkdirSync(rootDir, { mode: 0o700 });
   mkdirSync(configDir, { mode: 0o700 });
   return {
     codexHome,
     configDir,
     instanceId: "d".repeat(64),
-    legacyHomeId: null,
     rootDir,
     stagingRoot: join(configDir, "native-main-profile-staging", HOME_ID),
-    legacyRootDir: join(configDir, "native-main-profiles"),
     homeId: HOME_ID,
     authPath: join(codexHome, "auth.json"),
     vaultPath: join(rootDir, "profiles.vault.json"),
@@ -73,12 +69,12 @@ function context(): NativeProfileContext {
 }
 
 describe("native-profile path ownership", () => {
-  test("shares authoritative metadata by canonical CODEX_HOME but isolates staging by OPENCODEX_HOME", () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-native-profile-layout-"));
+  test("shares authoritative metadata by canonical CODEX_HOME but isolates staging by CODEXCOMMANDER_HOME", () => {
+    const root = mkdtempSync(join(tmpdir(), "ccx-native-profile-layout-"));
     roots.push(root);
     const codexHome = join(root, "codex");
-    const configA = join(root, "opencodex-a");
-    const configB = join(root, "opencodex-b");
+    const configA = join(root, "codexcommander-a");
+    const configB = join(root, "codexcommander-b");
     mkdirSync(codexHome);
     mkdirSync(configA);
     mkdirSync(configB);
@@ -94,14 +90,12 @@ describe("native-profile path ownership", () => {
     expect(a.lockPath).toBe(b.lockPath);
     expect(a.stagingRoot).not.toBe(b.stagingRoot);
     expect(a.instanceId).not.toBe(b.instanceId);
-    expect(a.rootDir).toBe(join(a.codexHome, ".opencodex-native-main-profiles"));
+    expect(a.rootDir).toBe(join(a.codexHome, ".codexcommander-native-main-profiles"));
     expect(a.stagingRoot).toBe(join(a.configDir, "native-main-profile-staging", a.homeId));
     expect(nativeProfileHomeId("C:\\Users\\CaseSensitive\\.codex"))
       .not.toBe(nativeProfileHomeId("C:\\Users\\casesensitive\\.codex"));
-    expect(legacyWindowsNativeProfileHomeId("C:\\Users\\CaseSensitive\\.codex"))
-      .toBe(legacyWindowsNativeProfileHomeId("C:\\Users\\casesensitive\\.codex"));
 
-    const requestedMissing = join(root, "missing-parent", "opencodex");
+    const requestedMissing = join(root, "missing-parent", "codexcommander");
     const beforeCreate = resolveNativeProfileContext({ codexHome, configDir: requestedMissing });
     mkdirSync(requestedMissing, { recursive: true });
     const afterCreate = resolveNativeProfileContext({ codexHome, configDir: requestedMissing });
@@ -109,11 +103,6 @@ describe("native-profile path ownership", () => {
     expect(afterCreate.instanceId).toBe(beforeCreate.instanceId);
     expect(afterCreate.stagingRoot).toBe(beforeCreate.stagingRoot);
 
-    const previousWindowsId = legacyWindowsNativeProfileHomeId(a.codexHome);
-    const legacyContext = { ...a, legacyHomeId: previousWindowsId };
-    mkdirSync(legacyContext.legacyRootDir, { recursive: true });
-    writeFileSync(join(legacyContext.legacyRootDir, `${previousWindowsId}.vault.json`), "{}\n", { mode: 0o600 });
-    expect(() => assertNoLegacyNativeProfileState(legacyContext)).toThrow(NativeProfileError);
   });
 });
 

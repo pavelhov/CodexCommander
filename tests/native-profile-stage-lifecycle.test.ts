@@ -55,10 +55,10 @@ async function atomic(path: string, content: string): Promise<void> {
 }
 
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "ocx-stage-lifecycle-"));
+  const root = mkdtempSync(join(tmpdir(), "ccx-stage-lifecycle-"));
   roots.push(root);
   const codexHome = join(root, "codex");
-  const configDir = join(root, "opencodex");
+  const configDir = join(root, "codexcommander");
   mkdirSync(codexHome, { recursive: true });
   mkdirSync(configDir, { recursive: true });
   writeFileSync(join(codexHome, "config.toml"), 'cli_auth_credentials_store = "file"\n');

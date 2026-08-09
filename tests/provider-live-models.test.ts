@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { gatherRoutedModels } from "../src/codex/catalog";
 import { clearModelCache } from "../src/codex/model-cache";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
 
-// Phase 2 of devlog/model_update/260709_model_refresh: live /models discovery is the
+// Phase 2 of implementation contract live /models discovery is the
 // authoritative lineup; static config lists are the fallback seed. These tests pin the
 // authority/fallback contract of fetchProviderModels through the public gatherRoutedModels seam.
 
@@ -12,14 +12,14 @@ const HY3_PROVIDER = "opencode-go";
 const HY3_CONTROL_PROVIDER = "hy3-control-live-test";
 const OPENCODE_FREE_PROVIDER = "opencode-free";
 
-function withTestFetch<T extends OcxProviderConfig>(provider: T): T {
+function withTestFetch<T extends CodexCommanderProviderConfig>(provider: T): T {
   if (globalThis.fetch !== originalFetch) {
     (provider as T & { fetch?: typeof fetch }).fetch = globalThis.fetch;
   }
   return provider;
 }
 
-function config(): OcxConfig {
+function config(): CodexCommanderConfig {
   return {
     providers: {
       [PROVIDER]: withTestFetch({
@@ -31,7 +31,7 @@ function config(): OcxConfig {
         modelContextWindows: { "grok-4.5": 500_000 },
       }),
     },
-  } as unknown as OcxConfig;
+  } as unknown as CodexCommanderConfig;
 }
 
 const originalFetch = globalThis.fetch;
@@ -109,7 +109,7 @@ describe("live provider model discovery (authority + fallback)", () => {
           apiKey: "sk-test",
         }),
       },
-    } as unknown as OcxConfig);
+    } as unknown as CodexCommanderConfig);
     const slugs = models.map(model => `${model.provider}/${model.id}`);
 
     expect(slugs).not.toContain("opencode-go/hy3-preview");
@@ -157,7 +157,7 @@ describe("live provider model discovery (authority + fallback)", () => {
           liveModels: true,
         }),
       },
-    } as unknown as OcxConfig);
+    } as unknown as CodexCommanderConfig);
 
     const ids = models.filter(m => m.provider === OPENCODE_FREE_PROVIDER).map(m => m.id).sort();
     expect(ids).toEqual(["big-pickle", "deepseek-v4-flash-free", "hy3-free", "mimo-v2.5-free", "north-mini-code-free"]);
@@ -217,7 +217,7 @@ describe("live provider model discovery (authority + fallback)", () => {
             models: ["configured-fallback"],
           }),
         },
-      } as unknown as OcxConfig);
+      } as unknown as CodexCommanderConfig);
 
       expect(models.filter(model => model.provider === providerName).map(model => model.id))
         .toEqual(["configured-fallback"]);
@@ -248,7 +248,7 @@ describe("live provider model discovery (authority + fallback)", () => {
           defaultModel: "claude-sonnet-5",
         },
       },
-    } as unknown as OcxConfig);
+    } as unknown as CodexCommanderConfig);
 
     const ids = models.filter(m => m.provider === oauthProvider).map(m => m.id).sort();
     expect(ids).toEqual(["claude-opus-4-8", "claude-sonnet-5"]);

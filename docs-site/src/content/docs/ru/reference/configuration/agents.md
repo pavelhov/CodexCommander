@@ -3,7 +3,7 @@ title: Конфигурация агентов
 description: Multi-agent surface, guidance при делегировании, preferred model'и, fallback chain'ы, sync native default'ов и effort cap'ы.
 ---
 
-Настройки агентов управляют тем, какая collaboration surface Codex рекламируется и как opencodex
+Настройки агентов управляют тем, какая collaboration surface Codex рекламируется и как CodexCommander
 подсказывает, маршрутизирует и ограничивает делегированную работу.
 
 ## Поля агентов
@@ -12,20 +12,20 @@ description: Multi-agent surface, guidance при делегировании, pr
 | --- | --- | --- | --- |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` штампует все модели как v1; `v2` штампует все модели как v2. `default` восстанавливает upstream pin'ы (Sol/Terra — v2, Luna — v1) и для остальных следует native flag `multi_agent_v2`. Применяется к новым сессиям. |
 | `multiAgentV2MessageDelivery?` | `"encrypted" \| "plaintext"` | `"encrypted"` | Политика доставки сообщений V2-родителя. `encrypted` сохраняет зарезервированный шифрованный контракт ChatGPT. Экспериментальный `plaintext` включает совместимость между провайдерами для последующих V2-запросов родителя и делает все его сообщения делегирования открытыми; вызовы сообщений маршрутизируемого родителя также получают plaintext-маркер Codex. После изменения начните новую сессию. |
-| `subagentModels?` | `string[]` | `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.4-mini` | До пяти bare native-id, account-qualified id `<selector>/<native-openai-model>` или routed-id `provider/model`, которые первыми рекламируются в picker'е подагентов. Дашборд сохраняет настроенные exact selector'ы, включая account-qualified варианты, и показывает, какие сохранённые записи реально рекламируются или исключены. Для вариантов, отсутствующих в текущем каталоге, используйте `ocx agent subagents set` или отредактируйте конфигурацию. Явный пустой список сохраняется. |
+| `subagentModels?` | `string[]` | `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.4-mini` | До пяти bare native-id, account-qualified id `<selector>/<native-openai-model>` или routed-id `provider/model`, которые первыми рекламируются в picker'е подагентов. Дашборд сохраняет настроенные exact selector'ы, включая account-qualified варианты, и показывает, какие сохранённые записи реально рекламируются или исключены. Для вариантов, отсутствующих в текущем каталоге, используйте `ccx agent subagents set` или отредактируйте конфигурацию. Явный пустой список сохраняется. |
 | `injectionModel?` | `string` | — | Предпочитаемая native- или routed-модель подагента, которую proxy использует в собственном guidance v2. |
 | `injectionEffort?` | `string` | — | Предпочитаемый effort (`low`–`ultra`), имеющий смысл только вместе с `injectionModel`. |
 | `injectionPrompt?` | `string` | — | Заменяет встроенное тело guidance для v2. Поддерживает `{{model}}`, `{{effort}}`, `{{roster}}` и `{{fallback}}`. Настроенного `injectionModel` достаточно, чтобы отобразить пользовательский prompt. |
-| `multiAgentGuidanceEnabled?` | `boolean` | `true` | Управляет только developer-guidance, написанным самим opencodex, для v1/v2; не меняет native default'ы агентов, tools, routing, roster'ы и effort cap'ы. |
+| `multiAgentGuidanceEnabled` | `boolean` | `true` | Управляет только developer-guidance, написанным самим CodexCommander, для v1/v2; не меняет native default'ы агентов, tools, routing, roster'ы и effort cap'ы. |
 | `syncCodexSubagentDefaults?` | `boolean` | `false` | Разрешает записывать `injectionModel` и, при наличии, `injectionEffort` как native default'ы Codex при sync/restart. Требует `injectionModel`. |
 | `subagentModelFallback?` | `string[]` | `[]` | Глобальные fallback-модели для порождённых child-turn'ов в порядке приоритета. |
 | `subagentModelFallbackPollMs?` | `number` | `60000` | Интервал кэша для availability probe. Значения ниже 1000 ms возвращаются к дефолту. |
 | `effortCap?` | `string` | — | Жёсткий потолок effort для qualifying v2 main-turn'ов и помеченных spawned-child turn'ов. Принимает `low`–`ultra`. |
 | `subagentEffortCap?` | `string` | — | Дополнительный потолок только для spawned-child turn'ов. Если применимы оба cap'а, выигрывает более низкий. |
 
-Управляйте surface через дашборд или `ocx v2 status|on|off|mode <v1|default|v2>|threads <n>`.
+Управляйте surface через дашборд или `ccx v2 status|on|off|mode <v1|default|v2>|threads <n>`.
 Смена режима применяется к новым сессиям. `maxConcurrentThreadsPerSession` — это поле
-`PUT /api/v2`, а не ключ `config.json`; `ocx v2 threads <n>` записывает
+`PUT /api/v2`, а не ключ `config.json`; `ccx v2 threads <n>` записывает
 `max_concurrent_threads_per_session` в `[features.multi_agent_v2]` файла
 `$CODEX_HOME/config.toml` после включения v2.
 
@@ -73,7 +73,7 @@ user-owned target field'ы считаются конфликтом и сохра
 2. role-level `model_fallback` из `$CODEX_HOME/agents/*.toml`; затем
 3. глобальные записи `subagentModelFallback`.
 
-opencodex пропускает кандидатов, которые отключены, не маршрутизируются, unhealthy, находятся в
+CodexCommander пропускает кандидатов, которые отключены, не маршрутизируются, unhealthy, находятся в
 cooldown либо уже достигли порога quota. Availability-снимок кэшируется на
 `subagentModelFallbackPollMs`. Шифрованные child-task'и могут ограничить цепочку каноническими
 native ChatGPT-target'ами; если ни одна из них не может прочитать encrypted payload, запрос
@@ -103,7 +103,7 @@ surface v2, а child-turn — когда он помечен точными mark
 
 Cap'ы умеют только понижать effort. Они опускают значение до самой высокой объявленной ступени,
 которая не выше cap'а. Если у модели нет управления effort или ни одна поддерживаемая ступень не
-помещается под cap, opencodex убирает поле effort и позволяет провайдеру применить собственный
+помещается под cap, CodexCommander убирает поле effort и позволяет провайдеру применить собственный
 дефолт. `max` и `ultra` принимаются, хотя дашборд предлагает только `low`–`xhigh`.
 
 Если нужен объясняющий вариант для начинающих о поведении v1, default и v2, см.

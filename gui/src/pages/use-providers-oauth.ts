@@ -121,13 +121,13 @@ export function useProvidersOAuth({
             finished = true;
             break;
           }
-          if (target?.needsReauth) {
+          if (target?.health?.status === "reauth_required") {
             notify(t("prov.loginError", { provider: oauthLabel(provider), error: t("prov.reauthIdentityMismatch") }), false);
             setLoginInfo(null);
             finished = true;
             break;
           }
-          notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ocx sync" }), true);
+          notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ccx sync" }), true);
           setLoginInfo(null);
           fetchConfig();
           const knownProviders = Object.keys(accountSets);

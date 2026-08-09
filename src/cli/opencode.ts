@@ -1,12 +1,12 @@
 /**
- * `ocx opencode [opencode args...]` — launch opencode wired to the local proxy.
+ * `ccx opencode [opencode args...]` — launch opencode wired to the local proxy.
  *
- * Mirrors `ocx claude` (src/cli/claude.ts): ensure the proxy is running, then exec the
+ * Mirrors `ccx claude` (src/cli/claude.ts): ensure the proxy is running, then exec the
  * client with stdio inherited. The wiring channel differs — opencode reads providers
  * from merged JSON config layers rather than env slots.
  *
  * The launcher never copies or rewrites the user's opencode config files. It may read
- * global/project config to detect an existing `provider.opencodex` override, then injects
+ * global/project config to detect an existing `provider.codexcommander` override, then injects
  * only the generated provider block through OpenCode's inline runtime layer
  * (`OPENCODE_CONFIG_CONTENT`), which outranks project/global/custom config and avoids
  * duplicating API keys, MCP credentials, or breaking relative `{file:…}` paths.
@@ -23,7 +23,6 @@ import { loadConfig } from "../config";
 import {
   OPENCODE_API_KEY_ENV,
   OPENCODE_CONFIG_SCHEMA,
-  OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG,
   OPENCODE_PROVIDER_ID,
   buildOpencodeProviderBlockFromCatalog,
   opencodeGlobalConfigPath,
@@ -34,13 +33,13 @@ import type {
   OpencodeLaunchEnv,
   OpencodeProviderBlock,
 } from "../clients/config-export";
-import { visibleNativeSlugs } from "../codex/catalog";
 import { commandInvocation } from "../lib/win-exec";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/service-secrets";
 import { providerCodexAccountMode } from "../providers/registry";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import { ensureProxyLifecycle } from "./proxy-lifecycle";
+import { API_KEY_HEADER, readEnv } from "../identity";
 
 /**
  * The provider-block serializer, its constants, and the config-path helpers now live in
@@ -64,16 +63,6 @@ export type {
   OpencodeModelEntry,
   OpencodeProviderBlock,
 } from "../clients/config-export";
-
-/** One proxy-routed model destined for the generated provider block. */
-export interface OpencodeRoutedModel {
-  provider: string;
-  id: string;
-  /** Authoritative context window (CatalogModel.contextWindow); optional. */
-  contextWindow?: number;
-  /** Authoritative display label (CatalogModel.displayName); optional. */
-  displayName?: string;
-}
 
 /** Row shape from authenticated GET /api/models on the running proxy. */
 export interface OpencodeProxyModelRow {
@@ -181,53 +170,7 @@ export function parseJsonc(text: string): unknown {
   }
 }
 
-/** Model key as the proxy routes it: `provider/id` for routed models, bare slug for native OpenAI entries. */
-export function opencodeModelKey(provider: string, id: string): string {
-  return provider === "native" ? id : `${provider}/${id}`;
-}
-
-/**
- * Native OpenAI slugs advertised to opencode. Omitted in Codex Direct mode because native
- * chat-completions require the caller's real ChatGPT OAuth bearer, not proxy admission.
- */
-export function opencodeLaunchNativeSlugs(
-  config: OcxConfig,
-  listVisibleNativeSlugs: (config: Pick<OcxConfig, "disabledModels">) => string[] = visibleNativeSlugs,
-): string[] {
-  if (providerCodexAccountMode("openai", config.providers?.openai) === "direct") return [];
-  return [...listVisibleNativeSlugs(config)];
-}
-
-/** Back-compat helper for unit tests that assemble slugs/routed rows directly. */
-export function buildOpencodeProviderBlock(
-  port: number,
-  nativeSlugs: readonly string[],
-  routedModels: readonly OpencodeRoutedModel[],
-  nativeContextWindow: (slug: string) => number | undefined = () => undefined,
-  hostname?: string,
-  config: OcxConfig = OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG,
-): OpencodeProviderBlock {
-  const catalog: OpencodeCatalogModel[] = [
-    ...nativeSlugs.map(id => ({
-      namespaced: id,
-      native: true,
-      provider: "openai",
-      id,
-      contextWindow: nativeContextWindow(id),
-    })),
-    ...routedModels.map(model => ({
-      namespaced: opencodeModelKey(model.provider, model.id),
-      native: false,
-      provider: model.provider,
-      id: model.id,
-      contextWindow: model.contextWindow,
-      displayName: model.displayName,
-    })),
-  ];
-  return buildOpencodeProviderBlockFromCatalog(port, catalog, hostname, config);
-}
-
-/** Default deadline for authenticated GET /api/models during `ocx opencode` launch. */
+/** Default deadline for authenticated GET /api/models during `ccx opencode` launch. */
 export const OPENCODE_PROXY_MODELS_TIMEOUT_MS = 8_000;
 
 /** Fetch the live model catalog from a running proxy's management API. */
@@ -240,7 +183,7 @@ export async function fetchOpencodeProxyModels(
   const fetchImpl = deps.fetchImpl ?? fetch;
   const headers = new Headers({ Accept: "application/json" });
   const token = apiKey.trim();
-  if (token) headers.set("X-OpenCodex-API-Key", token);
+  if (token) headers.set(API_KEY_HEADER, token);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), deps.timeoutMs ?? OPENCODE_PROXY_MODELS_TIMEOUT_MS);
   const abortIfTimedOut = (): Promise<never> => new Promise((_, reject) => {
@@ -299,7 +242,7 @@ export async function fetchOpencodeProxyModels(
  */
 export function opencodeCatalogFromProxyRows(
   rows: readonly OpencodeProxyModelRow[],
-  config: OcxConfig,
+  config: CodexCommanderConfig,
 ): OpencodeCatalogModel[] {
   const omitNative = providerCodexAccountMode("openai", config.providers?.openai) === "direct";
   const seen = new Set<string>();
@@ -332,7 +275,7 @@ export function isOpencodeRuntimeConfigError(
 }
 
 /**
- * Merge inherited `OPENCODE_CONFIG_CONTENT` and override only `provider.opencodex`.
+ * Merge inherited `OPENCODE_CONFIG_CONTENT` and override only `provider.codexcommander`.
  * When no inline layer is present, emit the minimal runtime object for this launcher.
  */
 export function mergeOpencodeRuntimeConfig(
@@ -366,25 +309,6 @@ export function mergeOpencodeRuntimeConfig(
       [OPENCODE_PROVIDER_ID]: providerBlock,
     },
   } as OpencodeGeneratedConfig;
-}
-
-/** Inline runtime config carrying only the provider block this launcher owns. */
-export function buildOpencodeConfig(
-  port: number,
-  nativeSlugs: readonly string[],
-  routedModels: readonly OpencodeRoutedModel[],
-  nativeContextWindow: (slug: string) => number | undefined = () => undefined,
-  hostname?: string,
-  config: OcxConfig = OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG,
-): OpencodeGeneratedConfig {
-  const merged = mergeOpencodeRuntimeConfig(
-    undefined,
-    buildOpencodeProviderBlock(port, nativeSlugs, routedModels, nativeContextWindow, hostname, config),
-  );
-  if (isOpencodeRuntimeConfigError(merged)) {
-    throw new Error(merged.error);
-  }
-  return merged;
 }
 
 /** Serialize the inline runtime config OpenCode merges on launch. */
@@ -439,31 +363,26 @@ export function opencodeProviderOverridePath(
   return null;
 }
 
-/** @deprecated Use {@link opencodeProviderOverridePath}. */
-export function projectConfigOverridesProvider(cwd: string): string | null {
-  return opencodeProviderOverridePath(cwd);
-}
-
 function serviceTokenLookupEnv(env: OpencodeLaunchEnv): OpencodeLaunchEnv {
-  if (env.OCX_API_TOKEN_FILE?.trim()) return env;
-  return { ...env, OCX_API_TOKEN_FILE: serviceApiTokenFilePath() };
+  if (env.CCX_API_TOKEN_FILE?.trim()) return env;
+  return { ...env, CCX_API_TOKEN_FILE: serviceApiTokenFilePath() };
 }
 
 /**
- * Child env for a detached `ocx start` from `ocx opencode`. When the admission token is
- * not already in the environment, pass through an existing `OCX_API_TOKEN_FILE` or the
+ * Child env for a detached `ccx start` from `ccx opencode`. When the admission token is
+ * not already in the environment, pass through an existing `CCX_API_TOKEN_FILE` or the
  * default hardened service token path so `handleStart` can load it before bind.
  */
 export function opencodeProxyStartEnv(base: OpencodeLaunchEnv = process.env): OpencodeLaunchEnv {
-  const withTokenFile = base.OPENCODEX_API_AUTH_TOKEN?.trim()
+  const withTokenFile = readEnv("CODEXCOMMANDER_API_AUTH_TOKEN", base as NodeJS.ProcessEnv)
     ? base
     : serviceTokenLookupEnv(base);
-  return { ...withTokenFile, OCX_SERVICE: "1" };
+  return { ...withTokenFile, CCX_SERVICE: "1" };
 }
 
 /**
  * Env assembly (unit-tested). Inherited inline config is merged and only
- * `provider.opencodex` is replaced; disk config layers stay untouched. The admission
+ * `provider.codexcommander` is replaced; disk config layers stay untouched. The admission
  * key travels in the child env rather than in the inline config payload.
  */
 export function buildOpencodeEnv(
@@ -484,12 +403,12 @@ export function buildOpencodeEnv(
  * Admission key for the proxy: env token, hardened service token file, configured API
  * key, then the open-loopback placeholder. Never serialized into runtime config.
  */
-export function opencodeApiKey(config: OcxConfig, env: OpencodeLaunchEnv = process.env): string {
-  const envToken = env.OPENCODEX_API_AUTH_TOKEN?.trim();
+export function opencodeApiKey(config: CodexCommanderConfig, env: OpencodeLaunchEnv = process.env): string {
+  const envToken = readEnv("CODEXCOMMANDER_API_AUTH_TOKEN", env as NodeJS.ProcessEnv);
   if (envToken) return envToken;
   const serviceToken = loadServiceTokenFromFile(serviceTokenLookupEnv(env));
   if (serviceToken) return serviceToken;
-  return config.apiKeys?.[0]?.key || "ocx";
+  return config.apiKeys?.[0]?.key || "ccx";
 }
 
 const OPENCODE_INSTALL_HINT = "❌ `opencode` CLI not found. Install it first: npm install -g opencode-ai";
@@ -497,7 +416,7 @@ const OPENCODE_INSTALL_HINT = "❌ `opencode` CLI not found. Install it first: n
 /**
  * cmd.exe reports command-not-found as exit 9009 (the win32 launcher routes `.cmd`
  * shims through cmd.exe, so ENOENT never fires there). Signal exits are not hints.
- * Same contract as claudeNotFoundHint (devlog 260715_cross_platform_audit/020).
+ * Same contract as claudeNotFoundHint (implementation contract).
  */
 export function opencodeNotFoundHint(
   code: number | null,
@@ -542,7 +461,7 @@ export async function cmdOpencode(args: string[]): Promise<number> {
   console.error("   Your existing opencode config files are left untouched; only the runtime provider block is injected.");
   const providerOverride = opencodeProviderOverridePath(process.cwd());
   if (providerOverride) {
-    console.error(`ℹ ${providerOverride} also defines provider.${OPENCODE_PROVIDER_ID}; the runtime layer from ocx opencode overrides it for this launch.`);
+    console.error(`ℹ ${providerOverride} also defines provider.${OPENCODE_PROVIDER_ID}; the runtime layer from ccx opencode overrides it for this launch.`);
   }
 
   const builtEnv = buildOpencodeEnv(providerBlock, apiKey, process.env);

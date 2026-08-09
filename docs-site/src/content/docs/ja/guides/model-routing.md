@@ -1,6 +1,6 @@
 ---
 title: モデルルーティング
-description: opencodex が与えられたモデル ID をどのプロバイダーが処理するか決定する方式。
+description: CodexCommander が与えられたモデル ID をどのプロバイダーが処理するか決定する方式。
 ---
 
 Codex がモデルを要求すると `router.ts` がこれを正確に一つの設定されたプロバイダーに解釈します。ルールは
@@ -26,7 +26,7 @@ model ID は変更しません。`openai-apikey/<model>` は API key transport �
 
 2. **Combo ID または alias** — 1 つ以上の combo が設定されている間は、canonical `combo/<id>`
    または設定済み combo alias が provider namespace より先に concrete target を選択します。
-   combo が 1 つも設定されていない場合、文字どおり `combo` という名前の legacy physical provider
+   combo が 1 つも設定されていない場合、文字どおり `combo` という名前の physical provider
    は通常の provider namespace として残ります。target selection と failover の動作は
    [Combos](/ja/guides/combos/)を参照してください。
 

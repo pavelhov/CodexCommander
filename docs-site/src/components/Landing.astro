@@ -12,12 +12,9 @@ import {
 	siOllama,
 	siOpenrouter,
 } from 'simple-icons';
-import demo from '../assets/demo.gif';
-import dashboard from '../assets/dashboard.png';
 import picker from '../assets/codex-app-picker.png';
 import heroFieldLight from '../assets/hero-route-light.png';
 import heroFieldDark from '../assets/hero-route-dark.png';
-import SiteJsonLd from './SiteJsonLd.astro';
 
 interface Props {
 	locale?: 'ko' | 'zh-cn' | 'ru' | 'ja';
@@ -61,15 +58,15 @@ const providers: { label: string; path?: string }[] = [
 ];
 
 const quickstartMini = [
-	{ cmd: 'npm install -g @bitkyc08/opencodex', note: t('Install', '설치', '安装', 'Установка', 'インストール') },
-	{ cmd: 'ocx start', note: t('Start the proxy', '프록시 시작', '启动代理', 'Запуск прокси', 'プロキシを起動') },
+	{ cmd: 'bun install && bun run build:gui', note: t('Prepare this checkout', '이 체크아웃 준비', '准备此源码检出', 'Подготовить исходный checkout', 'このチェックアウトを準備') },
+	{ cmd: 'bun run src/cli/index.ts start', note: t('Start the proxy', '프록시 시작', '启动代理', 'Запуск прокси', 'プロキシを起動') },
 ];
 
 const quickstart = [
-	{ cmd: 'npm install -g @bitkyc08/opencodex', note: t('Install', '설치', '安装', 'Установка', 'インストール') },
-	{ cmd: 'ocx init', note: t('Inject a provider into Codex', 'Codex에 프로바이더 주입', '向 Codex 注入 provider', 'Внедрение провайдера в Codex', 'プロバイダーを Codex に注入') },
-	{ cmd: 'ocx start', note: t('Start the proxy', '프록시 시작', '启动代理', 'Запуск прокси', 'プロキシを起動') },
-	{ cmd: 'codex "Write a hello world in Rust"', note: t('Codex now routes through ocx', 'Codex가 ocx를 경유', 'Codex 现在经由 ocx 路由', 'Codex теперь работает через ocx', 'Codex は ocx 経由に') },
+	{ cmd: 'bun install && bun run build:gui', note: t('Prepare this checkout', '이 체크아웃 준비', '准备此源码检出', 'Подготовить исходный checkout', 'このチェックアウトを準備') },
+	{ cmd: 'bun run src/cli/index.ts init', note: t('Inject a provider into Codex', 'Codex에 프로바이더 주입', '向 Codex 注入 provider', 'Внедрение провайдера в Codex', 'プロバイダーを Codex に注入') },
+	{ cmd: 'bun run src/cli/index.ts start', note: t('Start the proxy', '프록시 시작', '启动代理', 'Запуск прокси', 'プロキシを起動') },
+	{ cmd: 'codex "Write a hello world in Rust"', note: t('Codex now routes through ccx', 'Codex가 ccx를 경유', 'Codex 现在经由 ccx 路由', 'Codex теперь работает через ccx', 'Codex は ccx 経由に') },
 ];
 
 // full docs map for the closing sitemap band (also the mobile path to every section)
@@ -118,16 +115,11 @@ const docsMap = [
 		icon: 'folder',
 		links: [
 			{ label: t('Contributing', '기여하기', '贡献', 'Участие в проекте', 'コントリビュート'), href: `${prefix}contributing/` },
-			{ label: 'GitHub', href: 'https://github.com/lidge-jun/opencodex' },
-			{ label: 'npm', href: 'https://www.npmjs.com/package/@bitkyc08/opencodex' },
+			{ label: 'GitHub', href: 'https://github.com/pavelhov/CodexCommander' },
 		],
 	},
 ];
 ---
-
-{/* Site-name markup: Landing only renders on the locale home pages, so this is
-    the one place Google should see a WebSite entity. */}
-<SiteJsonLd locale={locale} />
 
 <div class="lp not-content">
 	<!-- scene stack: hero -> quickstart -> horizontal rail. Each wrapper owns a
@@ -157,14 +149,14 @@ const docsMap = [
 				</span>{t(' on any LLM.', '를 어떤 LLM 위에서든.', ' 跑在任意 LLM 上。', ' на любой LLM.', ' を任意の LLM 上で。')}
 			</h1>
 			<p class="lp-sub">
-				{t('opencodex is a local proxy that serves Codex and Claude Code from one port — translating each wire format to any provider, with streaming, tool calls, reasoning, and images in both directions. Zero client patches.', 'opencodex는 포트 하나로 Codex와 Claude Code를 함께 서빙하는 로컬 프록시입니다 — 각 wire 포맷을 어떤 프로바이더로든 양방향 변환하고, 스트리밍·tool call·reasoning·이미지까지 그대로 통과시킵니다. 클라이언트 패치는 없습니다.', 'opencodex 是一个本地代理，用同一个端口同时服务 Codex 与 Claude Code —— 将各自的线路格式双向翻译为任意 provider，支持流式、工具调用、推理与图像。无需修补客户端。', 'opencodex — локальный прокси, который обслуживает Codex и Claude Code через один порт: транслирует каждый wire-формат под любого провайдера, пропуская стриминг, вызовы инструментов, рассуждения и изображения в обе стороны. Никаких патчей на стороне клиента.', 'opencodex は 1 つのポートで Codex と Claude Code をまとめて提供するローカルプロキシです — 各 wire フォーマットを任意のプロバイダーへ双方向に変換し、ストリーミング・ツール呼び出し・推論・画像までそのまま通します。クライアントのパッチは不要です。')}
+				{t('CodexCommander is a local proxy that serves Codex and Claude Code from one port — translating each wire format to any provider, with streaming, tool calls, reasoning, and images in both directions. Zero client patches.', 'CodexCommander는 포트 하나로 Codex와 Claude Code를 함께 서빙하는 로컬 프록시입니다 — 각 wire 포맷을 어떤 프로바이더로든 양방향 변환하고, 스트리밍·tool call·reasoning·이미지까지 그대로 통과시킵니다. 클라이언트 패치는 없습니다.', 'CodexCommander 是一个本地代理，用同一个端口同时服务 Codex 与 Claude Code —— 将各自的线路格式双向翻译为任意 provider，支持流式、工具调用、推理与图像。无需修补客户端。', 'CodexCommander — локальный прокси, который обслуживает Codex и Claude Code через один порт: транслирует каждый wire-формат под любого провайдера, пропуская стриминг, вызовы инструментов, рассуждения и изображения в обе стороны. Никаких патчей на стороне клиента.', 'CodexCommander は 1 つのポートで Codex と Claude Code をまとめて提供するローカルプロキシです — 各 wire フォーマットを任意のプロバイダーへ双方向に変換し、ストリーミング・ツール呼び出し・推論・画像までそのまま通します。クライアントのパッチは不要です。')}
 			</p>
 			<div class="lp-cta">
 				<a class="lp-btn-primary" href={`${prefix}getting-started/installation/`}>
 					{t('Get Started', '시작하기', '快速开始', 'Начать', 'はじめに')}
 					<svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
 				</a>
-				<a class="lp-btn-ghost" href="https://github.com/lidge-jun/opencodex">GitHub</a>
+				<a class="lp-btn-ghost" href="https://github.com/pavelhov/CodexCommander">GitHub</a>
 			</div>
 		<ul class="lp-chips" aria-label={t('Supported providers', '지원 프로바이더', '支持的 provider', 'Поддерживаемые провайдеры', '対応プロバイダー')}>
 				{providers.map((p) => (
@@ -181,7 +173,7 @@ const docsMap = [
 			</ul>
 		</div>
 		<div class="lp-stage-in">
-			<Image src={dashboard} alt={t('The opencodex dashboard — live proxy status, routed providers, and available models', 'opencodex 대시보드 — 실시간 프록시 상태, 라우팅된 프로바이더, 사용 가능한 모델', 'opencodex 控制台 —— 实时代理状态、路由的 provider 与可用模型', 'Дашборд opencodex — статус прокси в реальном времени, маршрутизированные провайдеры и доступные модели', 'opencodex ダッシュボード — プロキシのリアルタイム状態、ルーティング済みプロバイダー、利用可能モデル')} loading="eager" />
+			<img src={`${base}og.png`} alt={t('CodexCommander — universal provider proxy for OpenAI Codex and Claude Code', 'CodexCommander — OpenAI Codex와 Claude Code를 위한 범용 프로바이더 프록시', 'CodexCommander — 面向 OpenAI Codex 与 Claude Code 的通用 provider 代理', 'CodexCommander — универсальный прокси провайдеров для OpenAI Codex и Claude Code', 'CodexCommander — OpenAI Codex と Claude Code 向けの汎用プロバイダープロキシ')} loading="eager" width="1200" height="630" />
 		</div>
 	</div>
 	</section>
@@ -204,19 +196,7 @@ const docsMap = [
 	</div>
 	</section>
 
-	<!-- demo scrub: the capture plays through, driven by scroll -->
-	<section class="lp-scene lp-scene-scrub">
-	<div class="lp-scene-inner lp-scrub">
-		<h2 class="lp-scrub-title">{t('Watch Codex run on a routed model.', '라우팅된 모델 위의 Codex를 그대로.', '看 Codex 跑在路由模型上。', 'Смотрите, как Codex работает на маршрутизированной модели.', 'ルーティングされたモデルで動く Codex を見る。')}</h2>
-		<div class="lp-scrub-stage">
-			<canvas class="lp-scrub-canvas" data-base={base} data-count="158" width="960" height="856" aria-label={t('Codex App running a task on a routed non-OpenAI model', '라우팅된 비 OpenAI 모델에서 작업 중인 Codex App', 'Codex App 在路由的非 OpenAI 模型上执行任务', 'Codex App выполняет задачу на маршрутизированной модели не от OpenAI', 'ルーティングされた非 OpenAI モデルでタスクを実行する Codex App')}></canvas>
-			<Image src={demo} alt={t('Codex App running a task on a routed non-OpenAI model', '라우팅된 비 OpenAI 모델에서 작업 중인 Codex App', 'Codex App 在路由的非 OpenAI 模型上执行任务', 'Codex App выполняет задачу на маршрутизированной модели не от OpenAI', 'ルーティングされた非 OpenAI モデルでタスクを実行する Codex App')} loading="lazy" class="lp-scrub-poster" />
-		</div>
-		<p class="lp-scrub-caption">{t('One task, streamed end to end through opencodex.', '작업 하나가 opencodex를 관통해 끝까지 스트리밍됩니다.', '一个任务，经 opencodex 全程流式完成。', 'Одна задача — стриминг через opencodex от начала до конца.', '1 つのタスクが opencodex を経てエンドツーエンドでストリーミングされます。')}</p>
 	</div>
-	</section>
-	</div>
-
 	<!-- feature bento: dominant cell + content-weighted spans -->
 	<section class="lp-bento">
 		<h2 class="lp-bento-title">{t('One proxy, the whole surface.', '프록시 하나로 전체 서피스를.', '一个代理，覆盖全部能力。', 'Один прокси — все возможности.', '1 つのプロキシでサーフェス全体を。')}</h2>
@@ -246,8 +226,7 @@ const docsMap = [
 			</article>
 			<article class="lp-cell lp-cell-claude">
 				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.terminal} /></svg>Claude Code</h3>
-				<p>{t('ocx claude launches Claude Code against the same port — every routed model in the /model picker, auto-context up to 1M, roster sub-agents, and your claude.ai login stays active.', 'ocx claude가 같은 포트로 Claude Code를 띄웁니다 — 라우팅된 모든 모델이 /model 선택기에 뜨고, 최대 1M auto-context, 로스터 서브에이전트, claude.ai 로그인은 그대로 유지됩니다.', 'ocx claude 让 Claude Code 连接同一端口 —— 所有路由模型出现在 /model 选择器中，auto-context 最高 1M，roster 子代理，claude.ai 登录保持不变。', 'ocx claude запускает Claude Code на том же порту — все маршрутизированные модели в селекторе /model, auto-context до 1M, подагенты из ростера, а ваш вход в claude.ai остаётся активным.', 'ocx claude が同じポートで Claude Code を起動します — ルーティングされたすべてのモデルが /model ピッカーに表示され、最大 1M の auto-context、ロスターのサブエージェント、claude.ai ログインはそのまま維持されます。')}</p>
-				<img src={`${base}claude-code-models.gif`} alt={t('Claude Code running a routed model through opencodex — gpt-5.6-luna-medium active in the status bar', 'opencodex로 라우팅된 모델에서 돌아가는 Claude Code — 상태 표시줄에 gpt-5.6-luna-medium 활성', '通过 opencodex 运行路由模型的 Claude Code —— 状态栏显示 gpt-5.6-luna-medium 为当前模型', 'Claude Code на маршрутизированной модели через opencodex — gpt-5.6-luna-medium активна в строке состояния', 'opencodex でルーティングされたモデルで動作する Claude Code — ステータスバーに gpt-5.6-luna-medium が有効なモデルとして表示')} loading="lazy" />
+				<p>{t('ccx claude launches Claude Code against the same port — every routed model in the /model picker, auto-context up to 1M, roster sub-agents, and your claude.ai login stays active.', 'ccx claude가 같은 포트로 Claude Code를 띄웁니다 — 라우팅된 모든 모델이 /model 선택기에 뜨고, 최대 1M auto-context, 로스터 서브에이전트, claude.ai 로그인은 그대로 유지됩니다.', 'ccx claude 让 Claude Code 连接同一端口 —— 所有路由模型出现在 /model 选择器中，auto-context 最高 1M，roster 子代理，claude.ai 登录保持不变。', 'ccx claude запускает Claude Code на том же порту — все маршрутизированные модели в селекторе /model, auto-context до 1M, подагенты из ростера, а ваш вход в claude.ai остаётся активным.', 'ccx claude が同じポートで Claude Code を起動します — ルーティングされたすべてのモデルが /model ピッカーに表示され、最大 1M の auto-context、ロスターのサブエージェント、claude.ai ログインはそのまま維持されます。')}</p>
 			</article>
 			<article class="lp-cell">
 				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.search} /></svg>{t('Search & vision sidecars', '검색 & 비전 사이드카', '搜索与视觉边车', 'Сайдкары поиска и зрения', '検索 & ビジョンサイドカー')}</h3>
@@ -255,7 +234,7 @@ const docsMap = [
 			</article>
 			<article class="lp-cell lp-cell-terminal">
 				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.code} /></svg>{t('Quickstart', '퀵스타트', '快速开始', 'Быстрый старт', 'クイックスタート')}</h3>
-				<p>{t('ocx init writes a provider into your Codex config and shares one model catalog with Codex CLI, TUI, App, and SDK. ocx stop restores native Codex cleanly.', 'ocx init이 Codex 설정에 프로바이더를 기록하고 CLI, TUI, App, SDK가 같은 모델 카탈로그를 공유합니다. ocx stop이면 네이티브 Codex로 깔끔하게 복원됩니다.', 'ocx init 将 provider 写入 Codex 配置，CLI、TUI、App 与 SDK 共享同一模型目录。ocx stop 可干净地恢复原生 Codex。', 'ocx init записывает провайдера в конфигурацию Codex, а Codex CLI, TUI, App и SDK используют общий каталог моделей. ocx stop чисто восстанавливает нативный Codex.', 'ocx init が Codex 設定にプロバイダーを書き込み、CLI、TUI、App、SDK と同じモデルカタログを共有します。ocx stop でネイティブ Codex に綺麗に復元します。')}</p>
+				<p>{t('ccx init writes a provider into your Codex config and shares one model catalog with Codex CLI, TUI, App, and SDK. ccx stop restores native Codex cleanly.', 'ccx init이 Codex 설정에 프로바이더를 기록하고 CLI, TUI, App, SDK가 같은 모델 카탈로그를 공유합니다. ccx stop이면 네이티브 Codex로 깔끔하게 복원됩니다.', 'ccx init 将 provider 写入 Codex 配置，CLI、TUI、App 与 SDK 共享同一模型目录。ccx stop 可干净地恢复原生 Codex。', 'ccx init записывает провайдера в конфигурацию Codex, а Codex CLI, TUI, App и SDK используют общий каталог моделей. ccx stop чисто восстанавливает нативный Codex.', 'ccx init が Codex 設定にプロバイダーを書き込み、CLI、TUI、App、SDK と同じモデルカタログを共有します。ccx stop でネイティブ Codex に綺麗に復元します。')}</p>
 				<div class="lp-terminal">
 					<div class="lp-terminal-bar"><span>zsh</span></div>
 					<pre>{quickstart.map((line) => (<code><span class="lp-prompt">$ </span>{line.cmd}<span class="lp-note">  # {line.note}</span>{'\n'}</code>))}</pre>
@@ -283,92 +262,11 @@ const docsMap = [
 
 	<p class="lp-disclaimer">
 		{t(
-			'opencodex is an independent community project, not affiliated with or endorsed by OpenAI, Anthropic, or any other provider. Some providers may restrict accounts that route traffic through third-party proxies — review each provider\u2019s Terms of Service before connecting.',
-			'opencodex는 독립 커뮤니티 프로젝트이며 OpenAI, Anthropic 등 어떤 프로바이더와도 제휴하거나 보증받지 않습니다. 일부 프로바이더는 서드파티 프록시 경유 트래픽 계정을 제한할 수 있으니 연결 전 각 프로바이더의 이용약관을 확인하세요.',
-			'opencodex 是独立的社区项目，与 OpenAI、Anthropic 或任何其他 provider 均无关联或背书。部分 provider 可能限制经第三方代理路由流量的账号 —— 连接前请查阅各 provider 的服务条款。',
-			'opencodex — независимый проект сообщества, никак не связанный с OpenAI, Anthropic или любым другим провайдером и не одобренный ими. Некоторые провайдеры могут ограничивать аккаунты, направляющие трафик через сторонние прокси, — перед подключением ознакомьтесь с условиями обслуживания каждого провайдера.',
-			'opencodex は独立したコミュニティプロジェクトであり、OpenAI、Anthropic などいかなるプロバイダーとも提携・推奨されるものではありません。一部のプロバイダーはサードパーティプロキシ経由のトラフィックを使用するアカウントを制限する可能性があります — 接続前に各プロバイダーの利用規約を確認してください。'
+			'CodexCommander is an independent community project, not affiliated with or endorsed by OpenAI, Anthropic, or any other provider. Some providers may restrict accounts that route traffic through third-party proxies — review each provider\u2019s Terms of Service before connecting.',
+			'codexcommander는 독립 커뮤니티 프로젝트이며 OpenAI, Anthropic 등 어떤 프로바이더와도 제휴하거나 보증받지 않습니다. 일부 프로바이더는 서드파티 프록시 경유 트래픽 계정을 제한할 수 있으니 연결 전 각 프로바이더의 이용약관을 확인하세요.',
+			'CodexCommander 是独立的社区项目，与 OpenAI、Anthropic 或任何其他 provider 均无关联或背书。部分 provider 可能限制经第三方代理路由流量的账号 —— 连接前请查阅各 provider 的服务条款。',
+			'CodexCommander — независимый проект сообщества, никак не связанный с OpenAI, Anthropic или любым другим провайдером и не одобренный ими. Некоторые провайдеры могут ограничивать аккаунты, направляющие трафик через сторонние прокси, — перед подключением ознакомьтесь с условиями обслуживания каждого провайдера.',
+			'CodexCommander は独立したコミュニティプロジェクトであり、OpenAI、Anthropic などいかなるプロバイダーとも提携・推奨されるものではありません。一部のプロバイダーはサードパーティプロキシ経由のトラフィックを使用するアカウントを制限する可能性があります — 接続前に各プロバイダーの利用規約を確認してください。'
 		)}
 	</p>
 </div>
-
-<script>
-	// Frame-sequence scrub (motion.md): the demo capture plays through as the
-	// scrub scene scrolls. Short-circuits under reduced motion / small screens
-	// (the animated poster stays); progressive checkpoint loading.
-	const canvas = document.querySelector<HTMLCanvasElement>('.lp-scrub-canvas');
-	const section = document.querySelector<HTMLElement>('.lp-scene-scrub');
-	const poster = document.querySelector<HTMLImageElement>('.lp-scrub-poster');
-	const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-	const wide = matchMedia('(min-width: 48rem)').matches;
-	if (canvas && section && poster && !reduce && wide) {
-		const ctx = canvas.getContext('2d');
-		const count = Number(canvas.dataset.count || '0');
-		const base = canvas.dataset.base || '/';
-		const url = (i: number) => `${base}demo-frames/${String(i + 1).padStart(3, '0')}.webp`;
-		const frames: (HTMLImageElement | undefined)[] = new Array(count);
-		let started = false;
-		let current = -1;
-		let raf = 0;
-		const load = (i: number) =>
-			new Promise<void>((resolve) => {
-				if (frames[i]) return resolve();
-				const img = new Image();
-				img.onload = () => { frames[i] = img; resolve(); };
-				img.onerror = () => resolve();
-				img.src = url(i);
-			});
-		const nearestLoaded = (i: number) => {
-			for (let d = 0; d < count; d++) {
-				if (frames[i - d]?.complete) return i - d;
-				if (frames[i + d]?.complete) return i + d;
-			}
-			return -1;
-		};
-		const draw = (i: number) => {
-			const j = nearestLoaded(Math.max(0, Math.min(count - 1, i)));
-			if (j < 0 || j === current || !ctx) return;
-			current = j;
-			const img = frames[j]!;
-			if (canvas.width !== img.naturalWidth) {
-				canvas.width = img.naturalWidth;
-				canvas.height = img.naturalHeight;
-			}
-			ctx.clearRect(0, 0, canvas.width, canvas.height);
-			ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-			poster.style.display = 'none';
-			canvas.style.display = 'block';
-		};
-		const update = () => {
-			raf = 0;
-			const rect = section.getBoundingClientRect();
-			const travel = section.offsetHeight - innerHeight;
-			if (travel <= 0) return;
-			const progress = Math.min(1, Math.max(0, -rect.top / travel));
-			draw(Math.round(progress * (count - 1)));
-		};
-		const start = async () => {
-			if (started) return;
-			started = true;
-			await load(0);
-			draw(0);
-			// checkpoints first, then fill in idle time
-			const checkpoints = [count - 1, Math.floor(count / 2), Math.floor(count / 4), Math.floor((3 * count) / 4)];
-			await Promise.all(checkpoints.map(load));
-			update();
-			const fill = (i: number) => {
-				if (i >= count) return;
-				load(i).then(() => {
-					const next = () => fill(i + 1);
-					'requestIdleCallback' in window ? requestIdleCallback(next) : setTimeout(next, 16);
-				});
-			};
-			fill(0);
-			addEventListener('scroll', () => { raf ||= requestAnimationFrame(update); }, { passive: true });
-			addEventListener('resize', () => { raf ||= requestAnimationFrame(update); }, { passive: true });
-		};
-		new IntersectionObserver((entries, obs) => {
-			if (entries.some((e) => e.isIntersecting)) { obs.disconnect(); start(); }
-		}, { rootMargin: '100% 0px' }).observe(section);
-	}
-</script>

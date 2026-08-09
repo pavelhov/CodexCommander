@@ -1,10 +1,10 @@
 /**
- * Durable desired state for the native Codex integration.
+ * Durable desired state for native client integrations.
  *
- * The switch was never the hard part — `ocx restore` already unroutes Codex
+ * The switch was never the hard part — `ccx restore` already unroutes Codex
  * without stopping the proxy. What was missing is that the decision did not
- * survive a restart, because `ocx start` force-synced unconditionally. These
- * tests pin the two halves of the fix: absence means ON, and only an explicit
+ * survive a restart, because `ccx start` force-synced unconditionally. These
+ * tests pin the current sparse contract: absence means ON, and only an explicit
  * `false` gates the startup sync.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -23,35 +23,44 @@ import {
   shouldSyncGrokOnStart,
   syncCodexOnStartIfEnabled,
 } from "../src/codex/desired-state";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 let testRoot = "";
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 
-function baseConfig(): OcxConfig {
-  return { port: 10100, providers: {}, defaultProvider: "openai" };
+function baseConfig(): CodexCommanderConfig {
+  return {
+    port: 10100,
+    multiAgentGuidanceEnabled: true,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+      },
+    },
+    defaultProvider: "openai",
+  };
 }
 
 beforeEach(() => {
-  previousOpencodexHome = process.env.OPENCODEX_HOME;
-  testRoot = mkdtempSync(join(tmpdir(), "ocx-desired-state-"));
-  process.env.OPENCODEX_HOME = testRoot;
+  previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+  testRoot = mkdtempSync(join(tmpdir(), "ccx-desired-state-"));
+  process.env.CODEXCOMMANDER_HOME = testRoot;
 });
 
 afterEach(() => {
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   rmSync(testRoot, { recursive: true, force: true });
 });
 
-describe("absence means ON", () => {
+describe("the current sparse desired-state schema", () => {
   /**
-   * Three different configs, one meaning. A user who never touched a switch, a
-   * config written by a binary that predates this field, and an explicit `true`
-   * are the same state — and none of them may read as "turned off". Only an
-   * explicit `false` is OFF.
+   * Three valid current-schema encodings, one meaning: an omitted map, an empty
+   * map, and an explicit `true` are all enabled. Only an explicit `false` is OFF.
    */
-  const onCases: { name: string; config: OcxConfig }[] = [
+  const onCases: { name: string; config: CodexCommanderConfig }[] = [
     { name: "no clientIntegrations at all", config: baseConfig() },
     { name: "an empty clientIntegrations object", config: { ...baseConfig(), clientIntegrations: {} } },
     { name: "an explicit true", config: { ...baseConfig(), clientIntegrations: { codex: true } } },
@@ -67,12 +76,7 @@ describe("absence means ON", () => {
     expect(codexIntegrationEnabled({ ...baseConfig(), clientIntegrations: { codex: false } })).toBe(false);
   });
 
-  /**
-   * A hand edit of the wrong type must not be read as OFF. `"false"` is a string,
-   * and treating any non-true value as OFF would silently unroute a user who
-   * fat-fingered their config — the schema drops the bad key, and absence is ON.
-   */
-  test("a malformed value degrades to ON rather than OFF, and keeps unknown keys", () => {
+  test("malformed and unknown integration fields reject the whole config", () => {
     writeFileSync(
       join(testRoot, "config.json"),
       JSON.stringify({
@@ -80,10 +84,7 @@ describe("absence means ON", () => {
         clientIntegrations: { codex: "false", "future-client": false },
       }, null, 2),
     );
-    const loaded = loadConfig();
-    expect(codexIntegrationEnabled(loaded)).toBe(true);
-    // The key this binary does not understand survives the parse.
-    expect((loaded.clientIntegrations as Record<string, unknown> | undefined)?.["future-client"]).toBe(false);
+    expect(() => loadConfig()).toThrow("schema_invalid");
   });
 });
 
@@ -137,7 +138,7 @@ describe("persisting the decision", () => {
           baseUrl: "https://chatgpt.com/backend-api/codex",
           authMode: "forward",
         },
-      } as OcxConfig["providers"],
+      } as CodexCommanderConfig["providers"],
     });
     setCodexIntegrationEnabled(false);
 
@@ -146,17 +147,17 @@ describe("persisting the decision", () => {
     expect(codexIntegrationEnabled(after)).toBe(false);
   });
 
-  test("an unknown future key in the object is preserved across a write", () => {
-    writeFileSync(
-      join(testRoot, "config.json"),
-      JSON.stringify({ ...baseConfig(), clientIntegrations: { "future-client": false } }, null, 2),
-    );
-    setCodexIntegrationEnabled(false);
+  test("an unknown integration key is refused without rewriting the invalid bytes", () => {
+    const path = join(testRoot, "config.json");
+    const original = JSON.stringify({ ...baseConfig(), clientIntegrations: { "future-client": false } }, null, 2);
+    writeFileSync(path, original);
 
-    const raw = JSON.parse(readFileSync(join(testRoot, "config.json"), "utf8")) as Record<string, unknown>;
-    const integrations = raw.clientIntegrations as Record<string, unknown>;
-    expect(integrations.codex).toBe(false);
-    expect(integrations["future-client"]).toBe(false);
+    expect(setCodexIntegrationEnabled(false)).toMatchObject({
+      ok: false,
+      reason: "invalid",
+      retryable: false,
+    });
+    expect(readFileSync(path, "utf8")).toBe(original);
   });
 
   test("a missing config refuses rather than creating one", () => {
@@ -167,7 +168,7 @@ describe("persisting the decision", () => {
 
 describe("the startup gate", () => {
   /**
-   * This is the defect the whole phase exists for. `ocx start` called
+   * This is the defect the whole phase exists for. `ccx start` called
    * `syncModelsToCodex(port).catch(() => {})` unconditionally, so an OFF lasted
    * exactly until the next start: restore unrouted Codex, and start put the
    * routing straight back.
@@ -229,12 +230,10 @@ describe("the startup gate", () => {
   });
 });
 
-describe("Grok has the same durability, because it shipped without it", () => {
+describe("Grok shares the durable desired-state contract", () => {
   /**
-   * Grok's toggle already existed and already worked — and lasted exactly one
-   * restart. It strips the fence from `~/.grok/config.toml` and recorded
-   * nothing, so `ocx start` called `syncGrokConfig` unconditionally and wrote
-   * the fence straight back. Identical defect to Codex, different file.
+   * Grok uses the same sparse map and startup gate as Codex, so a persisted OFF
+   * is not undone by regenerating its managed fence on the next start.
    */
   test("absence, empty, and explicit true all read as enabled; only false is off", () => {
     expect(grokIntegrationEnabled(baseConfig())).toBe(true);
@@ -251,8 +250,7 @@ describe("Grok has the same durability, because it shipped without it", () => {
 
   /**
    * The two switches are independent. Turning Codex off must not take Grok with
-   * it — a shared key or a shared helper reading the wrong field would, and the
-   * ten-key union this design rejected is exactly how that happens.
+   * it; each transition is scoped to its own field.
    */
   test("the two clients do not affect each other", () => {
     saveConfig(baseConfig());

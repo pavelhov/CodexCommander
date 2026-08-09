@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import { drainAndShutdown } from "../src/server/lifecycle";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { stopStorageCleanupScheduler } from "../src/storage/policy-scheduler";
 import {
@@ -25,9 +25,10 @@ let previousHome: string | undefined;
 let previousCleanupTestHooks: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
-function baseConfig(): OcxConfig {
+function baseConfig(): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     hostname: "127.0.0.1",
     defaultProvider: "openai",
     providers: {
@@ -37,7 +38,7 @@ function baseConfig(): OcxConfig {
         authMode: "forward",
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 function seedArchived(codexHome: string): void {
@@ -51,16 +52,16 @@ function seedArchived(codexHome: string): void {
 }
 
 beforeEach(async () => {
-  previousHome = process.env.OPENCODEX_HOME;
-  previousCleanupTestHooks = process.env.OPENCODEX_CLEANUP_TEST_HOOKS;
-  process.env.OPENCODEX_CLEANUP_TEST_HOOKS = "1";
-  // Join leftover Workers before allocating homes / mutating OPENCODEX_HOME.
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  previousCleanupTestHooks = process.env.CCX_CLEANUP_TEST_HOOKS;
+  process.env.CCX_CLEANUP_TEST_HOOKS = "1";
+  // Join leftover Workers before allocating homes / mutating CODEXCOMMANDER_HOME.
   stopStorageCleanupScheduler();
   await resetRestoreTrashJobForTestsAsync();
   await drainStorageWorkers();
-  isolatedCodexHome = installIsolatedCodexHome("ocx-restore-job-responsive-codex-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-restore-job-responsive-"));
-  process.env.OPENCODEX_HOME = testDir;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-restore-job-responsive-codex-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-restore-job-responsive-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   saveConfig(baseConfig());
   stopStorageCleanupScheduler();
 });
@@ -70,10 +71,10 @@ afterEach(async () => {
   await resetRestoreTrashJobForTestsAsync();
   await drainStorageWorkers();
   setRestoreTrashJobTestHooks(null);
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  if (previousCleanupTestHooks === undefined) delete process.env.OPENCODEX_CLEANUP_TEST_HOOKS;
-  else process.env.OPENCODEX_CLEANUP_TEST_HOOKS = previousCleanupTestHooks;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
+  if (previousCleanupTestHooks === undefined) delete process.env.CCX_CLEANUP_TEST_HOOKS;
+  else process.env.CCX_CLEANUP_TEST_HOOKS = previousCleanupTestHooks;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
@@ -85,7 +86,7 @@ describe("storage trash restore job responsiveness", () => {
     setup: () => void,
     assert: (serverUrl: string) => Promise<void>,
   ): Promise<void> {
-    const previousHooksEnv = process.env.OPENCODEX_CLEANUP_TEST_HOOKS;
+    const previousHooksEnv = process.env.CCX_CLEANUP_TEST_HOOKS;
     setup();
     const server = startServer(0);
     try {
@@ -95,16 +96,16 @@ describe("storage trash restore job responsiveness", () => {
         await drainAndShutdown(server, 5_000);
       } finally {
         setRestoreTrashJobTestHooks(null);
-        if (previousHooksEnv === undefined) delete process.env.OPENCODEX_CLEANUP_TEST_HOOKS;
-        else process.env.OPENCODEX_CLEANUP_TEST_HOOKS = previousHooksEnv;
+        if (previousHooksEnv === undefined) delete process.env.CCX_CLEANUP_TEST_HOOKS;
+        else process.env.CCX_CLEANUP_TEST_HOOKS = previousHooksEnv;
       }
     }
   }
 
-  test("test-stream route is absent without OPENCODEX_CLEANUP_TEST_HOOKS", async () => {
+  test("test-stream route is absent without CCX_CLEANUP_TEST_HOOKS", async () => {
     await withTestStreamRoute(
       () => {
-        delete process.env.OPENCODEX_CLEANUP_TEST_HOOKS;
+        delete process.env.CCX_CLEANUP_TEST_HOOKS;
         setRestoreTrashJobTestHooks({ enableTestStream: true });
       },
       async (serverUrl) => {
@@ -119,7 +120,7 @@ describe("storage trash restore job responsiveness", () => {
   test("test-stream route returns JSON 404 when hooks are enabled but stream is null", async () => {
     await withTestStreamRoute(
       () => {
-        process.env.OPENCODEX_CLEANUP_TEST_HOOKS = "1";
+        process.env.CCX_CLEANUP_TEST_HOOKS = "1";
         // enableTestStream omitted → getRestoreTrashTestStreamResponse() returns null
         setRestoreTrashJobTestHooks({ blockMs: 0 });
       },
@@ -135,7 +136,7 @@ describe("storage trash restore job responsiveness", () => {
   test("test-stream route serves the enabled hook stream", async () => {
     await withTestStreamRoute(
       () => {
-        process.env.OPENCODEX_CLEANUP_TEST_HOOKS = "1";
+        process.env.CCX_CLEANUP_TEST_HOOKS = "1";
         setRestoreTrashJobTestHooks({ enableTestStream: true });
       },
       async (serverUrl) => {

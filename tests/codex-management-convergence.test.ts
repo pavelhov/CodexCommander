@@ -6,10 +6,21 @@ import {
   projectCatalogOnlyOutcome,
 } from "../src/codex/management-convergence";
 import type { CatalogDisposition } from "../src/codex/convergence-types";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
-function config(): OcxConfig {
-  return { port: 10100, providers: {}, defaultProvider: "openai" };
+function config(): CodexCommanderConfig {
+  return {
+    port: 10100,
+    multiAgentGuidanceEnabled: true,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+      },
+    },
+    defaultProvider: "openai",
+  };
 }
 
 test("projects unavailable generation admission as retryable busy", async () => {
@@ -21,14 +32,6 @@ test("projects unavailable generation admission as retryable busy", async () => 
     kind: "catalog-only",
     changed: false,
     catalogRefresh: { status: "skipped", reason: "busy", retryable: true },
-    history: {
-      status: "not-evaluated",
-      attempts: 0,
-      nextRetryAt: null,
-      txId: null,
-      pendingRows: null,
-      backupEntries: null,
-    },
     observed: {
       aggregate: "not-evaluated",
       isApplied: null,
@@ -41,19 +44,6 @@ test("projects unavailable generation admission as retryable busy", async () => 
         catalog: "not-evaluated",
         cache: "not-evaluated",
         journal: "not-evaluated",
-        history: {
-          state: {
-            status: "not-evaluated",
-            attempts: 0,
-            nextRetryAt: null,
-            txId: null,
-            pendingRows: null,
-            backupEntries: null,
-          },
-          database: "not-evaluated",
-          manifest: "not-evaluated",
-          rollouts: "not-evaluated",
-        },
         provenance: {
           state: "not-evaluated",
           nativeGeneration: null,
@@ -152,14 +142,6 @@ for (const changed of booleans) {
         kind: "catalog-only",
         changed,
         catalogRefresh,
-        history: {
-          status: "not-evaluated",
-          attempts: 0,
-          nextRetryAt: null,
-          txId: null,
-          pendingRows: null,
-          backupEntries: null,
-        },
         observed: {
           aggregate: "not-evaluated",
           isApplied: null,
@@ -172,19 +154,6 @@ for (const changed of booleans) {
             catalog: "not-evaluated",
             cache: "not-evaluated",
             journal: "not-evaluated",
-            history: {
-              state: {
-                status: "not-evaluated",
-                attempts: 0,
-                nextRetryAt: null,
-                txId: null,
-                pendingRows: null,
-                backupEntries: null,
-              },
-              database: "not-evaluated",
-              manifest: "not-evaluated",
-              rollouts: "not-evaluated",
-            },
             provenance: {
               state: "not-evaluated",
               nativeGeneration: null,

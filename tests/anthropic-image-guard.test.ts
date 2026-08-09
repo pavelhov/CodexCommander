@@ -232,7 +232,7 @@ describe("enforceAnthropicImageLimits — byte limits", () => {
   });
 
   test("B3: a single image over the 5MiB base64-length cap is textified, siblings intact", () => {
-    // GAP case (devlog 260714_image_normalization_pipeline/010): decoded 4,194,304 bytes
+    // GAP case (implementation contract): decoded 4,194,304 bytes
     // (4MiB, UNDER the old decoded-bytes rule) encodes to 5,592,408 base64 chars — over
     // the base64-length cap the API actually enforces. Red on the old comparison.
     const messages = [userMsg([imageBlock(bigPngBase64(800, 600, 4 * 1024 * 1024)), imageBlock(SMALL)])];

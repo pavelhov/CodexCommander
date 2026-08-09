@@ -1,4 +1,4 @@
-import type { OcxProviderConfig, OpenRouterProviderRouting } from "../types";
+import type { CodexCommanderProviderConfig, OpenRouterProviderRouting } from "../types";
 
 const ROUTING_KEYS = new Set(["order", "only", "allowFallbacks"]);
 const MAX_PROVIDER_SLUGS = 64;
@@ -52,7 +52,7 @@ function routingPreferenceError(value: unknown, field: string): string | null {
   return null;
 }
 
-export function openRouterRoutingConfigError(provider: OcxProviderConfig): string | null {
+export function openRouterRoutingConfigError(provider: CodexCommanderProviderConfig): string | null {
   const hasDefault = provider.openRouterRouting !== undefined;
   const hasModels = provider.modelOpenRouterRouting !== undefined;
   if (!hasDefault && !hasModels) return null;
@@ -81,7 +81,7 @@ export function openRouterRoutingConfigError(provider: OcxProviderConfig): strin
 }
 
 export function resolveOpenRouterRouting(
-  provider: OcxProviderConfig,
+  provider: CodexCommanderProviderConfig,
   modelId: string,
 ): OpenRouterProviderRouting | undefined {
   if (!isCanonicalOpenRouterTarget(provider.baseUrl)) return undefined;

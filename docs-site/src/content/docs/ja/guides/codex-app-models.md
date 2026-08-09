@@ -1,11 +1,11 @@
 ---
 title: Codex App モデル ピッカー
-description: opencodex モデルが、共有 Codex カタログを通じて Codex App、Codex CLI、Codex TUI にどのように表示されるか。
+description: CodexCommander モデルが、共有 Codex カタログを通じて Codex App、Codex CLI、Codex TUI にどのように表示されるか。
 ---
 
-opencodex は Codex アプリにパッチを適用しません。 Codex CLI/TUI が既に使用しているのと同じ Codex 設定とモデル カタログを書き込みます。 Codex アプリはその共有状態を読み取るため、ルーティングされたモデルは通常の Codex カタログ エントリとしてアプリのモデル ピッカーに表示されます。
+CodexCommander は Codex アプリにパッチを適用しません。 Codex CLI/TUI が既に使用しているのと同じ Codex 設定とモデル カタログを書き込みます。 Codex アプリはその共有状態を読み取るため、ルーティングされたモデルは通常の Codex カタログ エントリとしてアプリのモデル ピッカーに表示されます。
 
-OpenAI エントリには、ネイティブ Codex ログインと、名前空間付きの `openai-apikey/<model>` API キーという 2 つの資格情報ルートがあります。`codexAccountMode` だけを Pool と Direct の間で変更しても、ピッカー ID は変わりません。ただし、`codexAccountNamespaces` に対象アカウントが存在する selector がある場合、opencodex は対応するアカウントごとに `<selector>/<native-openai-model>` 行を追加し、ピッカーでは bare native 行を非表示にします。Selector 名はユーザーが決める公開ラベルであり、組み込みのアカウント role の意味はありません。`selector` 付きの行を選択すると、対応付けられたアカウントだけが使用され、アクティブな Pool アカウントは変更されません。対象を利用できない場合、別のアカウントへ切り替えずにリクエストが失敗します。詳しくは [Codex アカウントの明示的な selector](/reference/configuration/routing/#exact-codex-account-selectors) を参照してください。API GPT-5.6 エントリは 1,050,000 コンテキスト / 922,000 最大入力を使用し、`*-pro` ピッカー ID は `reasoning.mode: "pro"` のベース ワイヤ モデルに解決されますが、ログ、使用状況、およびピッカー状態は仮想 ID を保持します。 API カタログは、`gpt-5.5`、`gpt-5.6`、Sol/Terra/Luna、およびそれらの 3 つの Pro 仮想 ID の 8 つの ID に固定されています。汎用の `gpt-5.6-pro` エイリアスはありません。コンパクト リクエストは、選択された層を保持しますが、推論オブジェクトなしで基本モデルを送信します。
+OpenAI エントリには、ネイティブ Codex ログインと、名前空間付きの `openai-apikey/<model>` API キーという 2 つの資格情報ルートがあります。`codexAccountMode` だけを Pool と Direct の間で変更しても、ピッカー ID は変わりません。ただし、`codexAccountNamespaces` に対象アカウントが存在する selector がある場合、CodexCommander は対応するアカウントごとに `<selector>/<native-openai-model>` 行を追加し、ピッカーでは bare native 行を非表示にします。Selector 名はユーザーが決める公開ラベルであり、組み込みのアカウント role の意味はありません。`selector` 付きの行を選択すると、対応付けられたアカウントだけが使用され、アクティブな Pool アカウントは変更されません。対象を利用できない場合、別のアカウントへ切り替えずにリクエストが失敗します。詳しくは [Codex アカウントの明示的な selector](/reference/configuration/routing/#exact-codex-account-selectors) を参照してください。API GPT-5.6 エントリは 1,050,000 コンテキスト / 922,000 最大入力を使用し、`*-pro` ピッカー ID は `reasoning.mode: "pro"` のベース ワイヤ モデルに解決されますが、ログ、使用状況、およびピッカー状態は仮想 ID を保持します。 API カタログは、`gpt-5.5`、`gpt-5.6`、Sol/Terra/Luna、およびそれらの 3 つの Pro 仮想 ID の 8 つの ID に固定されています。汎用の `gpt-5.6-pro` エイリアスはありません。コンパクト リクエストは、選択された層を保持しますが、推論オブジェクトなしで基本モデルを送信します。
 
 ピッカー ID で資格情報ルートを明示的に選択します。Pool/Direct は Providers ページで変更します。以下の `<selector>` は、`codexAccountNamespaces` で対応付けたユーザー定義の公開ラベルです。
 
@@ -15,21 +15,15 @@ gpt-5.6-sol                         # Pool または Direct による bare Codex
 openai-apikey/gpt-5.6-sol           # API key
 ```
 
-新規インストールと保存モードのない設定は、デフォルトでプールになります。現在の設定はマーカー 2 を使用し、出荷された v1 ソースを `~/.opencodex/config.json.pre-openai-tiers-v2.bak` に保持します。次のようにして復元します。
-
-```sh
-cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json
-```
-
-以前の v1 の 3 プロバイダー設定は、単一のオプション対応行に自動的に移行されます。
+新規インストールと保存モードのない設定は、デフォルトで Pool になります。
 
 ## 統合パス
 
-`ocx init`、`ocx start`、および `ocx sync` は、共有 Codex 設定とカタログをプロキシに接続します。設定の挿入、カタログの同期、シム、WebSocket フォールバック、および復元の仕組みについては、[Codexの統合](/guides/codex-integration/) を参照してください。
+`ccx init`、`ccx start`、および `ccx sync` は、共有 Codex 設定とカタログをプロキシに接続します。設定の挿入、カタログの同期、シム、WebSocket フォールバック、および復元の仕組みについては、[Codexの統合](/guides/codex-integration/) を参照してください。
 
 ## 配線されたモデルが表示される理由
 
-Codex のモデル ピッカーは、Codex の形をしたカタログ エントリを想定しています。 opencodex は、ネイティブ Codex モデル テンプレートを複製し、ルーティングされたモデル ID を置き換えることによって、ルーティングされたエントリを構築します。
+Codex のモデル ピッカーは、Codex の形をしたカタログ エントリを想定しています。 CodexCommander は、ネイティブ Codex モデル テンプレートを複製し、ルーティングされたモデル ID を置き換えることによって、ルーティングされたエントリを構築します。
 
 ```text
 slug = "anthropic/claude-sonnet-..."
@@ -37,11 +31,11 @@ display_name = "anthropic/claude-sonnet-..."
 visibility = "list"
 ```
 
-クローンは、推論レベル、シェル タイプ、API サポート フラグ、基本命令などの厳密なパーサー フィールドを保持します。次に、opencodex は、OpenAI サービス層メタデータなど、ルートが尊重できないネイティブのみの機能を削除します。
+クローンは、推論レベル、シェル タイプ、API サポート フラグ、基本命令などの厳密なパーサー フィールドを保持します。次に、CodexCommander は、OpenAI サービス層メタデータなど、ルートが尊重できないネイティブのみの機能を削除します。
 
 ## 現在の安定したモデルの範囲
 
-ネイティブ フォールバック セットには、`gpt-5.5`、`gpt-5.4`、`gpt-5.4-mini`、`gpt-5.3-codex-spark`、および GPT-5.6 Sol/Terra/Luna が含まれます。 GPT-5.5/5.4 ファミリの場合、opencodex は、インストールされている Codex カタログの豊富なライブ エントリを保存し、欠落しているエントリのみを合成します。バンドルされたアップストリーム スナップショットは GPT-5.6 でのみ使用され、古いテンプレートの近似値の代わりに実際のモデルごとの ID とメタデータが提供されます。
+ネイティブ フォールバック セットには、`gpt-5.5`、`gpt-5.4`、`gpt-5.4-mini`、`gpt-5.3-codex-spark`、および GPT-5.6 Sol/Terra/Luna が含まれます。 GPT-5.5/5.4 ファミリの場合、CodexCommander は、インストールされている Codex カタログの豊富なライブ エントリを保存し、欠落しているエントリのみを合成します。バンドルされたアップストリーム スナップショットは GPT-5.6 でのみ使用され、古いテンプレートの近似値の代わりに実際のモデルごとの ID とメタデータが提供されます。
 
 |ルート |ピッカー ID とカタログのメタデータ |
 | --- | --- |
@@ -93,11 +87,11 @@ service_tier = "fast"
 fast_mode = true
 ```
 
-ただし、モデル カタログとランタイム リクエスト層 ID は `priority` を使用します。opencodex はその分割を保持します。ネイティブ OpenAI パススルー モデルは高速サポートを維持します。ルーティングされたプロバイダーはケイパビリティでゲートされ、`supportsServiceTier: false` と宣言された場合のみ `service_tier` が削除されます (レジストリは正規 OpenAI を `true`、DeepSeek と Volcengine Ark を `false` に分類します)。未分類のカスタム ゲートウェイは呼び出し元の値をそのまま保持し、注入もされません。そのため、受け入れられない場所で高速オプションがアドバタイズされることはなく、カスタム ゲートウェイは `true` で明示的にオプトインできます。
+ただし、モデル カタログとランタイム リクエスト層 ID は `priority` を使用します。CodexCommander はその分割を保持します。ネイティブ OpenAI パススルー モデルは高速サポートを維持します。ルーティングされたプロバイダーはケイパビリティでゲートされ、`supportsServiceTier: false` と宣言された場合のみ `service_tier` が削除されます (レジストリは正規 OpenAI を `true`、DeepSeek と Volcengine Ark を `false` に分類します)。未分類のカスタム ゲートウェイは呼び出し元の値をそのまま保持し、注入もされません。そのため、受け入れられない場所で高速オプションがアドバタイズされることはなく、カスタム ゲートウェイは `true` で明示的にオプトインできます。
 
 ## サブエージェントの選択
 
-Codex は、ピッカーに表示されるカタログ エントリを `priority` の昇順で並べ替え、最初の 5 つを `spawn_agent` モデル オーバーライドとしてアドバタイズします。ダッシュボードの **Agent Command Center** では、bare native id または routed `provider/model` id を最大 5 つ選択して保存できます。設定済みの account-qualified `<selector>/<native-openai-model>` id も保持され、各保存項目が実際に公開されたか除外されたかが表示されます。opencodex は選択順に低いカタログ priority を割り当てます。account selector が有効な場合、bare native の選択は selector-qualified グループに展開されます。他のモデルは引き続き正確な ID で呼び出すことができます。
+Codex は、ピッカーに表示されるカタログ エントリを `priority` の昇順で並べ替え、最初の 5 つを `spawn_agent` モデル オーバーライドとしてアドバタイズします。ダッシュボードの **Agent Command Center** では、bare native id または routed `provider/model` id を最大 5 つ選択して保存できます。設定済みの account-qualified `<selector>/<native-openai-model>` id も保持され、各保存項目が実際に公開されたか除外されたかが表示されます。CodexCommander は選択順に低いカタログ priority を割り当てます。account selector が有効な場合、bare native の選択は selector-qualified グループに展開されます。他のモデルは引き続き正確な ID で呼び出すことができます。
 
 Active Roster は、ダッシュボードの **サブエージェント委任** の選択とは別のものです。Codex が最初に提供する override を制御しますが、モデルを選択したり、委任をトリガーしたりすることはありません。
 
@@ -106,7 +100,7 @@ Active Roster は、ダッシュボードの **サブエージェント委任** 
 ピッカーに古いエントリがまだ表示されている場合は、カタログを更新し、ターゲットの Codex サーフェスを再起動します。
 
 ```bash
-ocx sync
+ccx sync
 ```
 
-opencodex は、カタログの可視性、優先度、またはメタデータが変更されるたびに、意図的に古いキャッシュ ラッパーで `models_cache.json` を書き換えるため、次回の Codex モデルの更新で新しいカタログが読み取られます。
+CodexCommander は、カタログの可視性、優先度、またはメタデータが変更されるたびに、意図的に古いキャッシュ ラッパーで `models_cache.json` を書き換えるため、次回の Codex モデルの更新で新しいカタログが読み取られます。

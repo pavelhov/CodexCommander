@@ -87,7 +87,7 @@ function CopyOnClickTip({
     ? createPortal(
       <span
         id={tipId}
-        className="ocx-tooltip-bubble api-copy-tip-fixed"
+        className="ccx-tooltip-bubble api-copy-tip-fixed"
         role="tooltip"
         style={{ top: coords.top, left: coords.left }}
       >
@@ -99,7 +99,7 @@ function CopyOnClickTip({
 
   const shared = {
     ref: anchorRef as never,
-    className: `ocx-tooltip ${className}`,
+    className: `ccx-tooltip ${className}`,
     onMouseEnter: openTip,
     onMouseLeave: closeTip,
     onFocus: openTip,

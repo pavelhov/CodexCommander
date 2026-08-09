@@ -14,7 +14,7 @@ function entry(overrides: Partial<PersistedUsageEntry> & { ts: number }): Persis
     status: rest.status ?? 200,
     durationMs: rest.durationMs ?? 10,
     usageStatus: rest.usageStatus ?? "unreported",
-    ...(rest.surface === "claude" ? { surface: rest.surface } : {}),
+    ...(rest.surface !== undefined ? { surface: rest.surface } : {}),
     ...(rest.resolvedModel !== undefined ? { resolvedModel: rest.resolvedModel } : {}),
     ...(rest.usage ? { usage: rest.usage } : {}),
     ...(rest.totalTokens !== undefined ? { totalTokens: rest.totalTokens } : {}),
@@ -60,6 +60,7 @@ describe("summarizeUsage", () => {
         ts: FIXED_NOW - 1000,
         provider: "openai",
         model: "gpt-5.5",
+        surface: "codex",
         usageStatus: "reported",
         usage: { inputTokens: 100, outputTokens: 10 },
       }),
@@ -97,6 +98,7 @@ describe("summarizeUsage", () => {
         ts: FIXED_NOW - 1000,
         provider: "openai",
         model: "gpt-5.5",
+        surface: "codex",
         usageStatus: "reported",
         usage: { inputTokens: 10, outputTokens: 2 },
         totalTokens: 12,
@@ -203,14 +205,14 @@ describe("summarizeUsage", () => {
         ts: FIXED_NOW - 1000,
         provider: "anthropic",
         usageStatus: "reported",
-        usage: { inputTokens: 100, outputTokens: 20, cachedInputTokens: 40 },
+        usage: { inputTokens: 100, outputTokens: 20, cacheReadInputTokens: 40 },
         totalTokens: 120,
       }),
       entry({
         ts: FIXED_NOW - 2000,
         provider: "kiro",
         usageStatus: "estimated",
-        usage: { inputTokens: 30, outputTokens: 5, cachedInputTokens: 10, estimated: true },
+        usage: { inputTokens: 30, outputTokens: 5, cacheReadInputTokens: 10, estimated: true },
         totalTokens: 35,
       }),
     ];
@@ -252,32 +254,6 @@ describe("summarizeUsage", () => {
     expect(sum.providers[0].totalTokens).toBe(120);
   });
 
-  test("legacy combined cachedInputTokens rows recover reads by subtracting the write share", () => {
-    // Pre-070 claude-route rows stored cachedInputTokens = read + write with only the
-    // creation split present (devlog 070).
-    const entries: PersistedUsageEntry[] = [
-      entry({
-        ts: FIXED_NOW - 1000,
-        provider: "anthropic",
-        usageStatus: "reported",
-        usage: {
-          inputTokens: 744002,
-          outputTokens: 1875,
-          totalTokens: 745877,
-          cachedInputTokens: 743998,
-          cacheCreationInputTokens: 743998,
-        },
-        totalTokens: 1489875,
-      }),
-    ];
-    const sum = summarizeUsage(entries, "30d", FIXED_NOW);
-
-    expect(sum.summary.cacheReadInputTokens).toBe(0);
-    expect(sum.summary.cacheCreationInputTokens).toBe(743998);
-    // the inflated outer total is healed by the inner usage.totalTokens
-    expect(sum.summary.totalTokens).toBe(745877);
-  });
-
   test("Kiro estimated totals count as measured for coverage and model rows", () => {
     const entries: PersistedUsageEntry[] = [
       entry({
@@ -297,7 +273,7 @@ describe("summarizeUsage", () => {
       reportedRequests: 0,
       estimatedRequests: 1,
       coverageRatio: 1,
-      totalTokens: 2_879_320_000,
+      totalTokens: 16_274,
     });
     expect(sum.models[0]).toMatchObject({
       provider: "kiro",
@@ -306,7 +282,7 @@ describe("summarizeUsage", () => {
       measuredRequests: 1,
       reportedRequests: 0,
       estimatedRequests: 1,
-      totalTokens: 2_879_320_000,
+      totalTokens: 16_274,
     });
   });
 
@@ -360,20 +336,19 @@ describe("summarizeUsage", () => {
     expect(sum.providers[0].shareRatio).toBeCloseTo(1);
   });
 
-  test("merges OpenAI passthrough and ChatGPT main/pool usage into one provider/model row", () => {
+  test("merges OpenAI passthrough and ChatGPT pool usage into one provider/model row", () => {
     const entries: PersistedUsageEntry[] = [
       entry({ ts: FIXED_NOW - 1, provider: "openai", model: "gpt-5.5", usageStatus: "reported", usage: { inputTokens: 4, outputTokens: 1 }, totalTokens: 5 }),
       entry({ ts: FIXED_NOW - 2, provider: "chatgpt", model: "gpt-5.5", usageStatus: "reported", usage: { inputTokens: 3, outputTokens: 1 }, totalTokens: 4 }),
-      entry({ ts: FIXED_NOW - 3, provider: "chatgpt-main", model: "gpt-5.5", usageStatus: "reported", usage: { inputTokens: 1, outputTokens: 1 }, totalTokens: 2 }),
-      entry({ ts: FIXED_NOW - 4, provider: "chatgpt-p104398", model: "gpt-5.5", usageStatus: "reported", usage: { inputTokens: 2, outputTokens: 1 }, totalTokens: 3 }),
+      entry({ ts: FIXED_NOW - 3, provider: "chatgpt-p104398", model: "gpt-5.5", usageStatus: "reported", usage: { inputTokens: 2, outputTokens: 1 }, totalTokens: 3 }),
     ];
     const sum = summarizeUsage(entries, "30d", FIXED_NOW);
     expect(sum.providers).toHaveLength(1);
-    expect(sum.providers[0]).toMatchObject({ provider: "openai", requests: 4, totalTokens: 14 });
+    expect(sum.providers[0]).toMatchObject({ provider: "openai", requests: 3, totalTokens: 12 });
     expect(sum.models).toHaveLength(1);
-    expect(sum.models[0]).toMatchObject({ provider: "openai", model: "gpt-5.5", requests: 4, totalTokens: 14 });
-    expect(sum.days.find(day => day.requests === 4)?.models).toEqual([
-      { provider: "openai", model: "gpt-5.5", requests: 4, attemptCount: 4, totalTokens: 14 },
+    expect(sum.models[0]).toMatchObject({ provider: "openai", model: "gpt-5.5", requests: 3, totalTokens: 12 });
+    expect(sum.days.find(day => day.requests === 3)?.models).toEqual([
+      { provider: "openai", model: "gpt-5.5", requests: 3, attemptCount: 3, totalTokens: 12 },
     ]);
   });
 
@@ -494,14 +469,14 @@ describe("summarizeUsage", () => {
     });
   });
 
-  test("legacy entries gain exactly one attempt without changing logical totals", () => {
-    const legacy = entry({
+  test("single-target entries count one attempt without changing logical totals", () => {
+    const singleTarget = entry({
       ts: FIXED_NOW - 1,
       usageStatus: "reported",
       usage: { inputTokens: 2, outputTokens: 1 },
       totalTokens: 3,
     });
-    const sum = summarizeUsage([legacy], "30d", FIXED_NOW);
+    const sum = summarizeUsage([singleTarget], "30d", FIXED_NOW);
     expect(sum.summary).toMatchObject({ requests: 1, attemptCount: 1, totalTokens: 3 });
     expect(sum.models[0]).toMatchObject({ requests: 1, attemptCount: 1, totalTokens: 3 });
     expect(sum.providers[0]).toMatchObject({ requests: 1, attemptCount: 1, totalTokens: 3 });
@@ -529,14 +504,14 @@ describe("summarizeUsage", () => {
     expect(sum.summary.totalTokens).toBe(2);
   });
 
-  test("collapses google-antigravity suffix/compat wire ids into picker/call base models", () => {
+  test("collapses current google-antigravity wire ids into picker/call base models", () => {
     const entries: PersistedUsageEntry[] = [
       entry({
         ts: FIXED_NOW - 1,
         requestId: "ag-flash-high",
         provider: "google-antigravity",
-        model: "gemini-3.5-flash-high",
-        resolvedModel: "gemini-3.5-flash-high",
+        model: "gemini-3.6-flash-high",
+        resolvedModel: "gemini-3.6-flash-high",
         usageStatus: "reported",
         usage: { inputTokens: 1000, outputTokens: 100 },
         totalTokens: 1100,
@@ -545,24 +520,14 @@ describe("summarizeUsage", () => {
         ts: FIXED_NOW - 2,
         requestId: "ag-flash-low",
         provider: "google-antigravity",
-        model: "gemini-3.5-flash-low",
-        resolvedModel: "gemini-3.5-flash-low",
+        model: "gemini-3.6-flash-low",
+        resolvedModel: "gemini-3.6-flash-low",
         usageStatus: "reported",
         usage: { inputTokens: 500, outputTokens: 50 },
         totalTokens: 550,
       }),
       entry({
         ts: FIXED_NOW - 3,
-        requestId: "ag-flash-agent",
-        provider: "google-antigravity",
-        model: "gemini-3-flash-agent",
-        resolvedModel: "gemini-3-flash-agent",
-        usageStatus: "reported",
-        usage: { inputTokens: 100, outputTokens: 10 },
-        totalTokens: 110,
-      }),
-      entry({
-        ts: FIXED_NOW - 4,
         requestId: "ag-pro-agent",
         provider: "google-antigravity",
         model: "gemini-pro-agent",
@@ -572,7 +537,7 @@ describe("summarizeUsage", () => {
         totalTokens: 2200,
       }),
       entry({
-        ts: FIXED_NOW - 5,
+        ts: FIXED_NOW - 4,
         requestId: "ag-pro-low",
         provider: "google-antigravity",
         model: "gemini-3.1-pro-low",
@@ -581,7 +546,7 @@ describe("summarizeUsage", () => {
         totalTokens: 330,
       }),
       entry({
-        ts: FIXED_NOW - 6,
+        ts: FIXED_NOW - 5,
         requestId: "ag-unknown",
         provider: "google-antigravity",
         model: "future-cca-model",
@@ -590,7 +555,7 @@ describe("summarizeUsage", () => {
         totalTokens: 11,
       }),
       entry({
-        ts: FIXED_NOW - 7,
+        ts: FIXED_NOW - 6,
         requestId: "openai-virtual",
         provider: "openai",
         model: "gpt-5.6-sol-pro",
@@ -606,8 +571,8 @@ describe("summarizeUsage", () => {
     expect(byModel["google-antigravity/gemini-3.6-flash"]).toMatchObject({
       provider: "google-antigravity",
       model: "gemini-3.6-flash",
-      requests: 3,
-      totalTokens: 1760,
+      requests: 2,
+      totalTokens: 1650,
     });
     expect(byModel["google-antigravity/gemini-3.6-flash"]?.resolvedModel).toBeUndefined();
 
@@ -634,7 +599,7 @@ describe("summarizeUsage", () => {
 
     const day = sum.days.find(d => d.requests > 0)!;
     const dayModels = Object.fromEntries(day.models.map(m => [`${m.provider}/${m.model}`, m]));
-    expect(dayModels["google-antigravity/gemini-3.6-flash"]?.requests).toBe(3);
+    expect(dayModels["google-antigravity/gemini-3.6-flash"]?.requests).toBe(2);
     expect(dayModels["google-antigravity/gemini-3.1-pro"]?.requests).toBe(2);
   });
 

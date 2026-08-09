@@ -3,7 +3,7 @@ title: Adapters
 description: 七个 provider adapter 的目标、请求构建方式与各自特性。
 ---
 
-**adapter** 负责在 opencodex 的内部请求/响应模型与某个 provider 的 wire 格式之间转换。每个
+**adapter** 负责在 CodexCommander 的内部请求/响应模型与某个 provider 的 wire 格式之间转换。每个
 adapter 都实现 `ProviderAdapter` 接口（`src/adapters/base.ts`）：
 
 ```ts
@@ -17,7 +17,7 @@ interface ProviderAdapter {
 }
 ```
 
-`buildRequest` 把 `OcxParsedRequest` 转成上游 HTTP 请求；`parseStream` / `parseResponse` 把 provider
+`buildRequest` 把 `CodexCommanderParsedRequest` 转成上游 HTTP 请求；`parseStream` / `parseResponse` 把 provider
 回复转回内部 `AdapterEvent`。`fetchResponse` 允许 adapter 自己负责重试和 timeout；`runTurn` 支持
 无法表示成一次 HTTP fetch 加一条响应流的 transport。随后
 [`bridge.ts`](/zh-cn/reference/architecture/#桥接器) 把 event 转成 Responses SSE。
@@ -54,7 +54,7 @@ interface ProviderAdapter {
 会等待并先于其他处理或故障转移，在相同 key 上重放完全相同请求，与翻译后的
 `openai-chat`/Anthropic 请求路径一致。自定义 `runTurn` 传输不在 HTTP 重试循环之内。
 
-- `forward` URL → `{baseUrl}/responses`。`key` provider 默认保留原有的 `{baseUrl}/v1/responses` 构造。
+- `forward` URL → `{baseUrl}/responses`。`key` provider 的默认 URL 是 `{baseUrl}/v1/responses`。
 - `key` provider 可设置经过验证的相对 `responsesPath`；adapter 会移除 `baseUrl` 末尾的一个 `/`，并向 `{trimmedBaseUrl}{responsesPath}` 发送请求。Ark Agent Plan 使用 `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` 和 `responsesPath: "/responses"`。
 - `forward` 模式只会转发安全的 header allowlist（`FORWARD_HEADERS`）：authorization、ChatGPT
   account id 和 OpenAI beta/originator/session header。这条 ChatGPT 登录路径也为
@@ -106,7 +106,7 @@ Kiro 的 assistant 文本本身没有可靠的回合结束标记，但终止的 
 错误，内容过滤或 guardrail 停止表现为 filtered incomplete。没有真实工具调用却出现的 `TOOL_USE` 被视为
 矛盾而非进展。
 
-启用工具时，opencodex 会添加私有 `codex_kiro_final_answer`。重试不会制造空的 assistant/user 回合，
+启用工具时，CodexCommander 会添加私有 `codex_kiro_final_answer`。重试不会制造空的 assistant/user 回合，
 而会保留原始 user/tool-result，并在发送前校验角色交替、非空结构消息以及 tool use/result 配对。
 完成工具的回答即使与先前 commentary 完全相同，也会作为 `final_answer` 发出。
 
@@ -131,10 +131,10 @@ Kiro 的 assistant 文本本身没有可靠的回合结束标记，但终止的 
 - 保留 `cursor/grok-4.5-fast` 作为可选模型，但向 Cursor 发送规范的 `grok-4.5` 模型，并将独立的
   `effort` 和 `fast=true` 值放入 `requested_model.parameters`。
 - Cursor 原生本地 filesystem/shell/network 执行默认被拒绝。显式 `mcpServers` 与
-  `desktopExecutor` 集成分别需要 opt-in；`unsafeAllowNativeLocalExec` 会启用更广泛的内置
+  `desktopExecutor` 集成分别需要 opt-in；`nativeLocalExec: "on"` 会启用更广泛的内置
   executor，并绕过 Codex 审批和 sandbox 语义。
 
-## `azure-openai`（别名：`azure`）
+## `azure-openai`
 
 **目标：** **Azure OpenAI**。封装 `openai-responses`，因此同样是 `passthrough: true`。
 **认证：** 用 `api-key` header 进行 `key` 认证，而非 Bearer。

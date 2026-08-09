@@ -33,18 +33,18 @@ afterEach(restore);
 
 test("session list cache round-trips non-secret JSON shapes", () => {
   install();
-  writeSessionListCache("ocx.test", { range: "30d", surface: "claude", n: 3 });
-  expect(readSessionListCache<{ range: string; surface: string; n: number }>("ocx.test")).toEqual({
+  writeSessionListCache("ccx.test", { range: "30d", surface: "claude", n: 3 });
+  expect(readSessionListCache<{ range: string; surface: string; n: number }>("ccx.test")).toEqual({
     range: "30d",
     surface: "claude",
     n: 3,
   });
-  clearSessionListCache("ocx.test");
-  expect(readSessionListCache("ocx.test")).toBeNull();
+  clearSessionListCache("ccx.test");
+  expect(readSessionListCache("ccx.test")).toBeNull();
 });
 
 test("session list cache returns null for corrupt JSON", () => {
   install();
-  sessionStorage.setItem("ocx.bad", "{not-json");
-  expect(readSessionListCache("ocx.bad")).toBeNull();
+  sessionStorage.setItem("ccx.bad", "{not-json");
+  expect(readSessionListCache("ccx.bad")).toBeNull();
 });

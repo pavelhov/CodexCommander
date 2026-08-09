@@ -148,7 +148,7 @@ async function request(port: number, kind: string): Promise<{ status: number; te
   if (kind === "management-list" || kind === "management-doctor") {
     const path = kind === "management-doctor" ? "/api/native-main-profiles/doctor" : "/api/native-main-profiles";
     const response = await fetch(`http://127.0.0.1:${port}${path}`, {
-      headers: { "x-opencodex-api-key": process.env.OPENCODEX_ADMIN_AUTH_TOKEN ?? "" },
+      headers: { "x-codexcommander-api-key": process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN ?? "" },
     });
     return { status: response.status, text: await response.text() };
   }
@@ -198,7 +198,7 @@ for await (const line of lines) {
           method: "PUT",
           headers: {
             "content-type": "application/json",
-            "x-opencodex-api-key": process.env.OPENCODEX_ADMIN_AUTH_TOKEN ?? "",
+            "x-codexcommander-api-key": process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN ?? "",
           },
           body: JSON.stringify({ accountId: mode === "pool" ? "pool-a" : MAIN_CODEX_ACCOUNT_ID }),
         });

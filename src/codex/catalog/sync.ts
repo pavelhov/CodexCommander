@@ -7,13 +7,13 @@ import { shouldSyncCodexOnStart } from "../desired-state";
 import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, getCodexHome, readRootTomlString, resolveCodexConfigPath } from "../paths";
 import { clearModelCache, DEFAULT_MODEL_CACHE_TTL_MS, getFreshCached, getStaleCached, isModelsFetchCoolingDown, markModelsFetchFailure, setCached } from "../model-cache";
 import { buildModelsRequest, resolveModelsAuthToken } from "../../oauth";
-import type { OcxConfig, OcxProviderConfig } from "../../types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJawcodeModelMetadata, resolveJawcodeProvider } from "../../generated/jawcode-model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
-import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
+import { routedSlug } from "../../providers/slug-codec";
 import { identifyRoutedModel } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
@@ -30,7 +30,7 @@ import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
-import { activeCodexModelsCachePath, applyJawcodeCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline, readRetainedRoutedCatalog, retainedRoutedCatalogPath, writeRetainedRoutedCatalog } from "./parsing";
+import { activeCodexModelsCachePath, applyJawcodeCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline, readRetainedRoutedCatalog, retainedRoutedCatalogPath, writeRetainedRoutedCatalog } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
 import { applyNativeVisibility, disabledNativeSlugs, isUnsupportedOpenAiNativeSlug, nativeOpenAiSlugs, NATIVE_OPENAI_MODELS, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, shouldUpgradeToUpstreamEntry, SUPPORTED_NATIVE_OPENAI_SLUGS, upstreamNativeEntry } from "./metadata";
 import {
@@ -50,7 +50,6 @@ import {
 } from "../catalog-write-serialization";
 import {
   publishHashedCodexCatalogBackup,
-  publishLegacyCodexCatalogBackup,
   replaceActiveCodexCatalog,
   replaceCodexModelsCache,
 } from "../internal/catalog-writer";
@@ -64,9 +63,9 @@ export const MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5;
  *
  * - `live`: routed rows were gathered live from providers this sync.
  * - `retained`: the live gather yielded nothing and the on-disk catalog had no
- *   routed rows, so rows were rehydrated from the OpenCodex-owned last-known-good
+ *   routed rows, so rows were rehydrated from the CodexCommander-owned last-known-good
  *   snapshot for providers still configured.
- * - `native-only`: the committed catalog has no OpenCodex-routed rows (nothing to
+ * - `native-only`: the committed catalog has no CodexCommander-routed rows (nothing to
  *   restore); with routed providers configured this is a degraded state and must
  *   surface an actionable warning rather than a false fully-ready success.
  */
@@ -84,12 +83,11 @@ export type SubagentRosterExclusionReason =
  * Whether a catalog entry may be offered as a V2 subagent model.
  *
  * Upstream (codex-rs 92938d880) requires `multi_agent_version === "v2"` exactly,
- * because upstream assumes a single backend serves every model. opencodex routes
+ * because upstream assumes a single backend serves every model. codexcommander routes
  * many providers, so that equality would reject the cross-provider spawns this
  * proxy exists to enable.
  *
- * Decision (option B, devlog 260730_codex_rs_upstream_v2_live_handoff/060): any
- * model opencodex actually routes is eligible. An entry pinned to a DIFFERENT
+ * Any model codexcommander actually routes is eligible. An entry pinned to a DIFFERENT
  * multi-agent backend (`v1`) stays excluded, because that pin is a real capability
  * statement rather than an absence of information. An unpinned entry (null or
  * absent) is a routed or unpinned-native model and is allowed. The three-way
@@ -118,18 +116,17 @@ export interface EffectiveSubagentRoster {
 }
 
 export function configuredCatalogEntry(entries: readonly RawEntry[], configured: string): RawEntry | undefined {
-  return entries.find(entry => entry.slug === configured)
-    ?? entries.find(entry => typeof entry.slug === "string" && slugsEquivalent(configured, entry.slug));
+  return entries.find(entry => entry.slug === configured);
 }
 
 function configuredSubagentModelMatchesEntry(configured: string, entry: RawEntry): boolean {
   if (typeof entry.slug !== "string") return false;
-  if (slugsEquivalent(configured, entry.slug)) return true;
+  if (configured === entry.slug) return true;
   const nativeSlug = trustedAccountBoundNativeCatalogSlug(entry);
   return !configured.includes("/")
     && nativeSlug !== undefined
     && SUPPORTED_NATIVE_OPENAI_SLUGS.has(nativeSlug)
-    && slugsEquivalent(configured, nativeSlug);
+    && configured === nativeSlug;
 }
 
 export function effectiveSubagentRoster(
@@ -140,7 +137,7 @@ export function effectiveSubagentRoster(
   const configured = configuredModels
     .filter(model => model.trim().length > 0)
     .filter((model, index, all) =>
-      !all.slice(0, index).some(previous => slugsEquivalent(previous, model))
+      !all.slice(0, index).some(previous => previous === model)
     );
   const entries = catalogEntries ?? readCatalog(readCodexCatalogPath())?.models ?? [];
   const ordered = entries
@@ -301,7 +298,7 @@ export function deriveEntry(
       // alias (`provider/vendor-model`); the model object carries the native id.
       const modelName = model?.id ?? slug.slice(slug.indexOf("/") + 1);
       if (typeof e.base_instructions === "string") {
-        // Proxy-neutral: keep the GPT-5/OpenAI disclaimer but never advertise the opencodex proxy
+        // Proxy-neutral: keep the GPT-5/OpenAI disclaimer but never advertise the codexcommander proxy
         // (leaking that into base_instructions is a non-first-party signature → ToS risk).
         e.base_instructions = identifyRoutedModel(e.base_instructions, modelName);
       }
@@ -396,8 +393,8 @@ export function buildCatalogEntries(
       const catalogSlug = `${selector}/${nativeSlug}`;
       e.slug = catalogSlug;
       e.display_name = accountBoundNativeDisplayName(selector, native);
-      // Codex ignores this OpenCodex extension; preserve the native comp_hash unchanged.
-      e.opencodex_catalog_kind = CODEX_ACCOUNT_BOUND_CATALOG_KIND;
+      // Codex ignores this CodexCommander extension; preserve the native comp_hash unchanged.
+      e.codexcommander_catalog_kind = CODEX_ACCOUNT_BOUND_CATALOG_KIND;
       const exactRank = rank.get(catalogSlug);
       const inheritedRank = rank.get(nativeSlug);
       const featuredRank = exactRank ?? inheritedRank;
@@ -420,13 +417,13 @@ export function buildCatalogEntries(
     const e = deriveEntry(
       template,
       slug,
-      `Routed via opencodex → ${m.provider} (${m.owned_by ?? m.provider}).`,
+      `Routed via CodexCommander → ${m.provider} (${m.owned_by ?? m.provider}).`,
       5,
       m,
       exactComboSlugs,
     );
-    // Featured picks may be stored raw (legacy) or encoded — honor both.
-    const rankHit = rank.get(slug) ?? rank.get(`${m.provider}/${m.id}`);
+    // Featured picks are canonical Codex-facing selectors.
+    const rankHit = rank.get(slug);
     if (rankHit !== undefined) e.priority = rankHit * priorityStride;
     else if (accountSelectors.length > 0) {
       // Keep the generated account rows together in Codex's priority-sorted flat picker.
@@ -442,7 +439,7 @@ export function buildCatalogEntries(
     else {
       delete entry.supports_websockets;
       // Snapshot-backed native entries carry prefer_websockets: never advertise a preference
-      // for an endpoint ocx has disabled.
+      // for an endpoint ccx has disabled.
       delete entry.prefer_websockets;
     }
   }
@@ -465,10 +462,9 @@ export function resetCatalogRuntimeStateForTests(): void {
 export function orderForSubagents(goModels: CatalogModel[], featured?: string[]): CatalogModel[] {
   if (!featured || featured.length === 0) return goModels;
   const rank = new Map(featured.map((id, i) => [id, i]));
-  // Featured picks may be stored raw (legacy) or encoded — match both forms.
+  // Featured picks are canonical Codex-facing selectors.
   const rankOf = (m: CatalogModel) =>
     (m.alias ? rank.get(m.alias) : undefined)
-      ?? rank.get(`${m.provider}/${m.id}`)
       ?? rank.get(routedSlug(m.provider, m.id))
       ?? Number.MAX_SAFE_INTEGER;
   return [...goModels].sort((a, b) => {
@@ -477,18 +473,18 @@ export function orderForSubagents(goModels: CatalogModel[], featured?: string[])
 }
 
 /**
- * True when an existing catalog row was authored by OpenCodex routing (#855).
- * Every generated routed row — current full-slug form, the June–July 2026
- * provider-name form, and legacy combo aliases — carries the stable
- * description prefix `Routed via opencodex → `; foreign rows from Cursor or
- * user tooling do not. `owned_by` cannot serve as the signal (upstream
- * ownership), and `comp_hash` defaults to "opencodex" for every normalized
+ * True when an existing catalog row was authored by CodexCommander routing (#855).
+ * Every generated routed row carries the stable description prefix
+ * `Routed via CodexCommander → `; foreign rows from Cursor or user tooling do
+ * not. `owned_by` cannot serve as the signal (upstream
+ * ownership), and `comp_hash` defaults to "codexcommander" for every normalized
  * row.
  */
-function isOcxAuthoredRoutedEntry(entry: RawEntry): boolean {
+function isCodexCommanderAuthoredRoutedEntry(entry: RawEntry): boolean {
   const desc = typeof entry.description === "string" ? entry.description : "";
   const slug = typeof entry.slug === "string" ? entry.slug : "";
-  return slug.includes("/") && desc.startsWith("Routed via opencodex → ");
+  return slug.includes("/")
+    && desc.startsWith("Routed via CodexCommander → ");
 }
 
 /**
@@ -498,7 +494,7 @@ function isOcxAuthoredRoutedEntry(entry: RawEntry): boolean {
  * empty `models` list intentionally publishes zero rows — a native-only catalog
  * is legitimate for both, so neither may trigger the native-only warning.
  */
-export function hasRoutedCapableProviders(config: Pick<OcxConfig, "providers">): boolean {
+export function hasRoutedCapableProviders(config: Pick<CodexCommanderConfig, "providers">): boolean {
   for (const [, provider] of Object.entries(config.providers ?? {})) {
     if (provider.disabled === true) continue;
     if (provider.authMode === "forward") continue;
@@ -510,24 +506,22 @@ export function hasRoutedCapableProviders(config: Pick<OcxConfig, "providers">):
 
 /**
  * Whether a retained snapshot row may be rehydrated into the active catalog:
- * it must be OpenCodex-authored, its provider (or combo) must still be
+ * it must be CodexCommander-authored, its provider (or combo) must still be
  * configured and enabled, and it must survive the same model-level
  * disabled/selected filters the live gather path applies.
  */
 function retainedRowStillConfigured(
   entry: RawEntry,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   gatheredProviderNames: ReadonlySet<string>,
 ): boolean {
-  if (!isOcxAuthoredRoutedEntry(entry)) return false;
+  if (!isCodexCommanderAuthoredRoutedEntry(entry)) return false;
   const slug = typeof entry.slug === "string" ? entry.slug : "";
   const slash = slug.indexOf("/");
   if (slash <= 0) return false;
   const provider = slug.slice(0, slash);
   const model = slug.slice(slash + 1);
-  for (const stored of config.disabledModels ?? []) {
-    if (slugEquals(stored, provider, model)) return false;
-  }
+  if ((config.disabledModels ?? []).includes(slug)) return false;
   if (provider === COMBO_NAMESPACE) return getCombo(config, model) !== undefined;
   if (!gatheredProviderNames.has(provider)) return false;
   const providerConfig = config.providers?.[provider];
@@ -571,7 +565,7 @@ export function mergeCatalogEntriesForSync(
       const slug = m.slug as string;
       const baselinePriority = baseline.get(slug) ?? (m.priority as number);
       const priority = nativeCatalogEntryPriority(slug, rank, featured.length, baselinePriority);
-      // Fallback-quality entries (ocx synthesis / codex-rs model_info fallback: display_name
+      // Fallback-quality entries (ccx synthesis / codex-rs model_info fallback: display_name
       // stamped with the bare slug) are upgraded to the pinned upstream snapshot entry so a
       // previously synthesized ladder (e.g. luna advertising ultra) self-heals on sync. A
       // genuine catalog entry (real display name) is preserved untouched.
@@ -620,7 +614,7 @@ export function mergeCatalogEntriesForSync(
     aligned.display_name = entry.display_name;
     aligned.priority = entry.priority;
     aligned.visibility = "list";
-    aligned.opencodex_catalog_kind = CODEX_ACCOUNT_BOUND_CATALOG_KIND;
+    aligned.codexcommander_catalog_kind = CODEX_ACCOUNT_BOUND_CATALOG_KIND;
     return aligned;
   });
 
@@ -636,12 +630,12 @@ export function mergeCatalogEntriesForSync(
   const preservingExistingRouted = routedEntries.length === 0
     && existingRoutedEntries.length > 0;
   if (preservingExistingRouted) {
-    // #855: transient-fetch protection keeps existing rows, but rows OpenCodex
+    // #855: transient-fetch protection keeps existing rows, but rows CodexCommander
     // itself authored for a provider that is no longer configured are ghosts,
     // not protected foreign entries.
     finalRoutedEntries = existingRoutedEntries.filter(m => {
       const provider = (m.slug as string).slice(0, (m.slug as string).indexOf("/"));
-      return !(isOcxAuthoredRoutedEntry(m) && !gatheredProviderNames.has(provider));
+      return !(isCodexCommanderAuthoredRoutedEntry(m) && !gatheredProviderNames.has(provider));
     });
   } else {
     const preservedForeignRouted = catalogModels.filter(m => {
@@ -649,9 +643,9 @@ export function mergeCatalogEntriesForSync(
       if (trustedAccountBoundNativeCatalogSlug(m) !== undefined) return false;
       const provider = m.slug.slice(0, m.slug.indexOf("/"));
       if (gatheredProviderNames.has(provider) || freshSlugs.has(m.slug)) return false;
-      // #855: an OpenCodex-authored row whose provider was deleted is a ghost;
+      // #855: an CodexCommander-authored row whose provider was deleted is a ghost;
       // only genuinely foreign rows (Cursor, user tooling) are preserved.
-      return !isOcxAuthoredRoutedEntry(m);
+      return !isCodexCommanderAuthoredRoutedEntry(m);
     });
     finalRoutedEntries = [...routedEntries, ...preservedForeignRouted];
   }
@@ -681,7 +675,7 @@ export function mergeCatalogEntriesForSync(
     return false;
   });
   if (preservingExistingRouted) {
-    console.warn(`[opencodex] catalog sync: routed model fetch returned empty; preserving ${finalRoutedEntries.length} existing routed entr${finalRoutedEntries.length === 1 ? "y" : "ies"} on disk.`);
+    console.warn(`[codexcommander] catalog sync: routed model fetch returned empty; preserving ${finalRoutedEntries.length} existing routed entr${finalRoutedEntries.length === 1 ? "y" : "ies"} on disk.`);
   }
 
   const managedEntries = [...finalRoutedEntries, ...alignedAccountBoundEntries];
@@ -749,7 +743,7 @@ interface RetainedCatalogSyncResult {
 }
 
 interface RetainedCatalogSyncWrite {
-  readonly config: OcxConfig;
+  readonly config: CodexCommanderConfig;
   readonly goModels: CatalogModel[];
   readonly availableNativeSlugs: readonly string[];
   readonly deps: BundledCatalogDeps;
@@ -774,13 +768,12 @@ function loadCatalogForRetainedSync(path: string, deps: BundledCatalogDeps): Raw
   const active = readCatalog(path);
   if (active && findNativeTemplate(active)) return active;
   return readCatalog(catalogBackupPathFor(path))
-    ?? (isDefaultCatalogPath(path) ? readCatalog(legacyCatalogBackupPath()) : null)
     ?? readCatalog(activeCodexModelsCachePath())
     ?? active;
 }
 
 function retainedCatalogSyncEvidence(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   catalogPath: string,
   catalog: RawCatalog,
 ): string {
@@ -791,8 +784,6 @@ function retainedCatalogSyncEvidence(
     catalogBytes: optionalFileBytes(catalogPath),
     retainedBytes: optionalFileBytes(retainedRoutedCatalogPath()),
     hashedBackupBytes: optionalFileBytes(catalogBackupPathFor(catalogPath)),
-    legacyBackupBytes: isDefaultCatalogPath(catalogPath)
-      ? optionalFileBytes(legacyCatalogBackupPath()) : null,
     modelsCacheBytes: optionalFileBytes(activeCodexModelsCachePath()),
     // The persisted runtime selection is a pre-await filesystem input, not a
     // process epoch: another PROCESS can move runtime authority by rewriting this
@@ -830,7 +821,7 @@ function retainedCatalogProcessEvidence(): string {
  * catalog/backup/cache or target selection makes this attempt a no-write.
  */
 function readRetainedCatalogSync(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   deps: BundledCatalogDeps,
 ): RetainedCatalogSyncRead | null {
   const catalogPath = readCodexCatalogPath();
@@ -847,7 +838,7 @@ function readRetainedCatalogSync(
 }
 
 function revalidateRetainedCatalogSync(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   prepared: RetainedCatalogSyncRead,
 ): RetainedCatalogSyncRead | null {
   const catalogPath = readCodexCatalogPath();
@@ -891,7 +882,7 @@ function writeRetainedCatalogSync({
   const catalogModelsForMerge = onDiskCatalog?.models ?? catalog.models ?? [];
   const template = findNativeTemplate(catalog);
   try {
-    // Once-only: preserve the PRISTINE pre-opencodex catalog as the native-priority baseline
+    // Once-only: preserve the PRISTINE pre-codexcommander catalog as the native-priority baseline
     // (later syncs would otherwise overwrite it with featured-modified priorities).
     const pristine = pristineCatalogBytes(read);
     if (pristine !== null) {
@@ -899,12 +890,6 @@ function writeRetainedCatalogSync({
         path: catalogBackupPathFor(catalogPath),
         content: pristine,
       });
-      if (isDefaultCatalogPath(catalogPath)) {
-        publishLegacyCodexCatalogBackup(permit, owningCodexHome, {
-          path: legacyCatalogBackupPath(),
-          content: pristine,
-        });
-      }
     }
   } catch { /* backup best-effort */ }
 
@@ -960,7 +945,7 @@ function writeRetainedCatalogSync({
       accountSelectors,
     ).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined)
     : [];
-  // Rehydration: fill provider-level gaps from the last-known-good OpenCodex
+  // Rehydration: fill provider-level gaps from the last-known-good CodexCommander
   // snapshot. A stop-like native restore plus a total outage restores every
   // still-configured provider; a partial live gather keeps its fresh providers
   // and restores only providers that returned no rows. If the active catalog
@@ -1013,18 +998,18 @@ function writeRetainedCatalogSync({
   );
   clampCatalogModelsToCodexSupport(catalog.models, deps);
 
-  const ocxAuthoredRouted = catalog.models.filter(isOcxAuthoredRoutedEntry);
+  const ccxAuthoredRouted = catalog.models.filter(isCodexCommanderAuthoredRoutedEntry);
   const retainedSlugs = new Set(retainedRows.flatMap(entry =>
     typeof entry.slug === "string" ? [entry.slug] : []
   ));
-  const rehydrated = ocxAuthoredRouted.filter(entry =>
+  const rehydrated = ccxAuthoredRouted.filter(entry =>
     typeof entry.slug === "string" && retainedSlugs.has(entry.slug)
   ).length;
   const catalogQuality: CatalogQuality = retainedRows.length > 0
     ? "retained"
     : liveRoutedEntries.length > 0
       ? "live"
-      : ocxAuthoredRouted.length > 0
+      : ccxAuthoredRouted.length > 0
         ? "retained"
         : "native-only";
   replaceActiveCodexCatalog(permit, owningCodexHome, {
@@ -1036,7 +1021,7 @@ function writeRetainedCatalogSync({
   // rows that were actually verified against live provider discovery.
   if (liveRoutedEntries.length > 0) {
     try {
-      writeRetainedRoutedCatalog(ocxAuthoredRouted);
+      writeRetainedRoutedCatalog(ccxAuthoredRouted);
     } catch { /* snapshot is best-effort; the catalog write is the primary artifact */ }
   }
   return {
@@ -1098,7 +1083,7 @@ function currentDisabledModelsForRestore(): Set<string> | null {
 }
 
 export async function syncCatalogModels(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   deps: BundledCatalogDeps = {},
 ): Promise<RetainedCatalogSyncResult> {
   const owningCodexHome = getCodexHome();

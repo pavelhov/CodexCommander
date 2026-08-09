@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
  * loading over one model's metadata (#759).
  *
  * The catalog writer normalizes on the way out, but a rejected value stored here would still
- * be handed back to the GUI and CLI as if it were real, and the offline `ocx models add` path
+ * be handed back to the GUI and CLI as if it were real, and the offline `ccx models add` path
  * already refuses it. Validate at ingress so all three paths agree.
  */
 const ALLOWED_INPUT_MODALITIES = new Set(["text", "image", "audio"]);
@@ -18,7 +18,7 @@ function readInputModalities(raw: unknown): { values?: string[]; error?: string 
   // Reject non-strings rather than filtering them out. Dropping them silently accepted a
   // malformed POST and, worse, let a PUT of `[42]` clear the stored modalities while
   // answering 200 — the opposite of the contract this validator exists to state. An empty
-  // array stays valid: that is how `ocx models edit --modalities -` clears the field.
+  // array stays valid: that is how `ccx models edit --modalities -` clears the field.
   const rejected: string[] = [];
   for (const value of raw) {
     if (typeof value !== "string") return { error: "inputModalities must contain only strings" };
@@ -79,7 +79,7 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../../lib/debug-settings";
-import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
+import type { CodexCommanderClaudeCodeConfig, CodexCommanderConfig, CodexCommanderCustomModel, CodexCommanderProviderConfig } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
@@ -125,7 +125,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   // A handler persists the exact config object passed in. Production defaults to
   // the real store; tests that pass an in-memory fixture inject a no-op/spy. Do not
   // bypass this seam with a dynamic config import — doing so replaced a user's
-  // ~/.opencodex/config.json with the `existing-uuid` test fixture.
+  // ~/.codexcommander/config.json with the `existing-uuid` test fixture.
   const persistConfig = deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
 
   if (url.pathname === "/api/catalog" && req.method === "GET") {
@@ -138,7 +138,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     };
     const { loadPersistedCodexRuntime } = await import("../../codex/runtime");
     const version = loadPersistedCodexRuntime()?.selectedVersion;
-    if (version) headers["x-opencodex-codex-version"] = version;
+    if (version) {
+      headers["x-codexcommander-codex-version"] = version;
+    }
     return new Response(JSON.stringify(catalog), { status: 200, headers });
   }
 
@@ -147,7 +149,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   }
 
   /**
-   * Client config document for OpenCode / Pi, built from the SAME function `ocx export`
+   * Client config document for OpenCode / Pi, built from the SAME function `ccx export`
    * calls, so the bytes a user downloads here and the bytes they pipe from the CLI cannot
    * disagree. Read-only: this route never writes the user's client config.
    */
@@ -338,7 +340,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     if (existing.some(cm => routedSlug(cm.provider, cm.modelId) === newSlug)) {
       return jsonResponse({ error: "duplicate model" }, 409);
     }
-    const entry: OcxCustomModel = {
+    const entry: CodexCommanderCustomModel = {
       id: randomUUID(),
       provider,
       modelId,

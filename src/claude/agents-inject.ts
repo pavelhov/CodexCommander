@@ -1,39 +1,40 @@
 /**
- * Claude Code custom-agent definition injection (devlog 260712 070).
+ * Claude Code custom-agent definition injection (implementation contract 070).
  *
  * The Agent tool's `model` argument is a hard 4-alias enum (2.1.207 binary), but an
  * agent DEFINITION's frontmatter `model:` is a free string ("Model alias this agent
  * uses. If omitted, inherits the parent's model"). So we sync the featured
  * subagent roster (config.subagentModels, <=5) plus the main model (when not
- * already covered) into ~/.claude/agents/ocx-*.md — one dispatchable
+ * already covered) into ~/.claude/agents/ccx-*.md — one dispatchable
  * `subagent_type` per routed model, loaded at the next session start.
  *
  * Ownership contract: this module only creates/overwrites/deletes files matching
- * `ocx-*.md` inside the agents dir. User-authored agents are never touched.
+ * `ccx-*.md` inside the agents dir, and only when the
+ * generated-by marker proves we wrote them. User-authored agents are never touched.
  */
 import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import { claudeCodeAlias, claudeCodeNativeAlias } from "./alias";
 import { AUTO_CONTEXT_OFF, shouldMarkOneMillion, stripOneMillionMarker, withOneMillionMarker } from "./context-windows";
 import { claudeConfigDir } from "./gateway-cache";
 import { DEFAULT_SUBAGENT_MODELS, hasOwnProvider } from "../config";
 import { effectiveBlockedSkillNames, resolveInboundModel } from "./inbound";
 import { knownModelIdsForProvider } from "../router";
-import { decodeRoutedModelId } from "../providers/slug-codec";
+import { encodeRoutedModelId } from "../providers/slug-codec";
 
 export interface ClaudeAgentDef {
   file: string;
   name: string;
   model: string;
   description: string;
-  effort?: NonNullable<OcxConfig["claudeCode"]>["subagentEffort"];
+  effort?: NonNullable<CodexCommanderConfig["claudeCode"]>["subagentEffort"];
   blockedSkills: readonly string[];
 }
 
-const OWNED_PREFIX = "ocx-";
+const OWNED_PREFIX = "ccx-";
 /** Ownership proof (audit 071 #2): a file without this marker is NEVER touched. */
-const GENERATED_MARKER = "generated-by: opencodex";
+const GENERATED_MARKER = "generated-by: codexcommander";
 
 function sanitizeName(value: string): string {
   const cleaned = value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -43,7 +44,7 @@ function sanitizeName(value: string): string {
 /**
  * The user's default model as saved by the /model picker (settings.json `model`).
  * `model: "inherit"` in agent frontmatter is DISPROVEN on 2.1.207 (live: a
- * no-model ocx-self dispatch fell back to claude-fable-5 — devlog 072), so the
+ * no-model ccx-self dispatch fell back to claude-fable-5 — implementation contract), so the
  * self-clone pins this value instead, refreshed at every launch-time sync.
  */
 function pickerDefaultModel(configDir: string): string | null {
@@ -55,9 +56,10 @@ function pickerDefaultModel(configDir: string): string | null {
   }
 }
 
-/** Roster entry -> alias + display parts. Entries are bare native slugs or "provider/id".
- * Codex-facing encoded ids (`provider/vendor-model`) decode to the native slash id first
- * so the alias joins the raw-native context-window map (context-windows.ts). */
+/**
+ * Roster entry -> alias + display parts. Routed entries use the canonical
+ * one-slash Codex selector (`provider/encoded-model-id`).
+ */
 
 /**
  * Generated subagent defs cannot rely on the parent's auto-context compaction
@@ -79,20 +81,24 @@ function withSubagentContextMarker(selector: string, windows: Record<string, num
   }
   return wasMarked ? selector : bare;
 }
-function entryParts(entry: string, config: OcxConfig): { alias: string; id: string; provider: string } {
+function entryParts(entry: string, config: CodexCommanderConfig): { alias: string; id: string; provider: string } | null {
   const slash = entry.indexOf("/");
   if (slash > 0) {
     const provider = entry.slice(0, slash);
+    const selector = entry.slice(slash + 1);
+    if (!selector || selector.includes("/")) return null;
     const prov = hasOwnProvider(config.providers, provider) ? config.providers[provider] : undefined;
-    const id = prov
-      ? decodeRoutedModelId(entry.slice(slash + 1), knownModelIdsForProvider(provider, prov))
-      : entry.slice(slash + 1);
+    const matches = prov
+      ? [...knownModelIdsForProvider(provider, prov)].filter(id => encodeRoutedModelId(id) === selector)
+      : [];
+    if (matches.length > 1) return null;
+    const id = matches[0] ?? selector;
     return { alias: claudeCodeAlias(provider, id), id, provider };
   }
   return { alias: claudeCodeNativeAlias(entry), id: entry, provider: "native" };
 }
 
-export function buildClaudeAgentDefs(config: OcxConfig, windows: Record<string, number>, configDir = claudeConfigDir()): ClaudeAgentDef[] {
+export function buildClaudeAgentDefs(config: CodexCommanderConfig, windows: Record<string, number>, configDir = claudeConfigDir()): ClaudeAgentDef[] {
   const blockedSkills = effectiveBlockedSkillNames(config.claudeCode);
   const blockedSkillsFor = (model: string): readonly string[] => {
     const unmarked = stripOneMillionMarker(model);
@@ -132,15 +138,17 @@ export function buildClaudeAgentDefs(config: OcxConfig, windows: Record<string, 
   const roster = config.subagentModels === undefined ? DEFAULT_SUBAGENT_MODELS : config.subagentModels;
   for (const entry of roster.slice(0, 5)) {
     if (typeof entry !== "string" || entry.trim() === "") continue;
-    const { alias, id, provider } = entryParts(entry.trim(), config);
-    push(sanitizeName(id), alias, `Delegate work to ${id} (${provider}) via opencodex routing. General-purpose worker/explorer on that model. ${NO_MODEL_ARG}`);
+    const parts = entryParts(entry.trim(), config);
+    if (!parts) continue;
+    const { alias, id, provider } = parts;
+    push(sanitizeName(id), alias, `Delegate work to ${id} (${provider}) via CodexCommander routing. General-purpose worker/explorer on that model. ${NO_MODEL_ARG}`);
   }
 
-  // Self-clone slot: pin the picker-saved default (settings.json), falling back to
-  // config.claudeCode.model. `inherit` is NOT honored by 2.1.207 (live-disproven,
-  // devlog 072); a session started with a divergent --model stays divergent until
-  // the next launch sync — documented limit. No resolvable default -> no self def.
-  const selfModel = pickerDefaultModel(configDir) ?? (config.claudeCode?.model?.trim() || null);
+  // Self-clone slot: pin the picker-saved default (settings.json). `inherit` is
+  // NOT honored by 2.1.207 (live-disproven, implementation contract); a session
+  // started with a divergent --model stays divergent until the next launch sync.
+  // No resolvable picker default means no self definition.
+  const selfModel = pickerDefaultModel(configDir);
   if (selfModel) {
     const marked = withSubagentContextMarker(selfModel, windows);
     defs.push({
@@ -178,21 +186,21 @@ function renderAgentDef(def: ClaudeAgentDef): string {
     "---",
     "",
     `<!-- ${GENERATED_MARKER} -->`,
-    // Proxy routing directive (devlog 072): 2.1.207 does not honor custom gateway
+    // Proxy routing directive (implementation contract): 2.1.207 does not honor custom gateway
     // ids in agent frontmatter (falls back to sonnet — live-proven), but the agent
     // BODY rides the subagent's system prompt verbatim. The proxy detects this
     // directive and overrides the request model before routing/passthrough.
-    `<!-- ocx-route: ${def.model} -->`,
-    ...(def.effort ? [`<!-- ocx-effort: ${def.effort} -->`] : []),
+    `<!-- ccx-route: ${def.model} -->`,
+    ...(def.effort ? [`<!-- ccx-effort: ${def.effort} -->`] : []),
     "",
-    `You are a delegated worker running on \`${def.model}\` through the local opencodex proxy.`,
-    `IDENTITY: your ACTUAL underlying model is \`${def.model}\` — the opencodex proxy routes this`,
+    `You are a delegated worker running on \`${def.model}\` through the local CodexCommander proxy.`,
+    `IDENTITY: your ACTUAL underlying model is \`${def.model}\` — the CodexCommander proxy routes this`,
     "session there regardless of what model name the Claude Code harness displays or claims.",
     "If asked which model you are, answer with the id above; do not guess a Claude model name.",
     ...blockedSkillGuard,
     "",
     "Complete the dispatched task directly and report results concisely. This file is",
-    "auto-generated by opencodex (`ocx claude`) from the featured subagent roster —",
+    "auto-generated by CodexCommander (`ccx claude`) from the featured subagent roster —",
     "manual edits will be overwritten; remove the model from the roster to drop it.",
     "",
   ].join("\n");
@@ -203,14 +211,15 @@ function isOwnedFile(path: string): boolean {
   try {
     const st = lstatSync(path);
     if (!st.isFile()) return false; // symlink or dir: never touch (audit 071 #2)
-    return readFileSync(path, "utf8").includes(GENERATED_MARKER);
+    const content = readFileSync(path, "utf8");
+    return content.includes(GENERATED_MARKER);
   } catch {
     return false;
   }
 }
 
 /**
- * Sync owned agent files: write/overwrite current defs, prune stale ocx-*.md,
+ * Sync owned agent files: write/overwrite current defs and prune stale ccx-*.md,
  * never touch anything else. Ownership requires the generated marker; writes are
  * atomic (tmp + rename). Best-effort — returns null on any failure.
  */
@@ -220,7 +229,8 @@ export function syncClaudeAgentDefs(defs: readonly ClaudeAgentDef[], configDir =
     mkdirSync(dir, { recursive: true });
     const keep = new Set(defs.map(d => d.file));
     for (const existing of readdirSync(dir)) {
-      if (!existing.startsWith(OWNED_PREFIX) || !existing.endsWith(".md")) continue;
+      if (!existing.endsWith(".md")) continue;
+      if (!existing.startsWith(OWNED_PREFIX)) continue;
       if (!keep.has(existing) && isOwnedFile(join(dir, existing))) {
         try { unlinkSync(join(dir, existing)); } catch { /* best-effort prune */ }
       }
@@ -228,7 +238,7 @@ export function syncClaudeAgentDefs(defs: readonly ClaudeAgentDef[], configDir =
     const written: string[] = [];
     for (const def of defs) {
       const target = join(dir, def.file);
-      // A pre-existing ocx-* file WITHOUT our marker is user property: skip the def.
+      // A pre-existing ccx-* file WITHOUT our marker is user property: skip the def.
       try {
         lstatSync(target);
         if (!isOwnedFile(target)) continue;
@@ -244,8 +254,8 @@ export function syncClaudeAgentDefs(defs: readonly ClaudeAgentDef[], configDir =
   }
 }
 
-/** Launch-time hook: gate + build + sync in one call (used by ocx claude and systemEnv). */
-export function injectClaudeAgentDefs(config: OcxConfig, windows: Record<string, number>, configDir?: string): string[] | null {
+/** Launch-time hook: gate + build + sync in one call (used by ccx claude and systemEnv). */
+export function injectClaudeAgentDefs(config: CodexCommanderConfig, windows: Record<string, number>, configDir?: string): string[] | null {
   if (config.claudeCode?.enabled === false || config.claudeCode?.injectAgents === false) {
     // Disabled: prune verified-owned files so stale definitions stop loading
     // in future sessions (audit 071 #3).
@@ -254,7 +264,7 @@ export function injectClaudeAgentDefs(config: OcxConfig, windows: Record<string,
   return syncClaudeAgentDefs(buildClaudeAgentDefs(config, windows, configDir), configDir);
 }
 /**
- * Dispatcher directive appended to every ocx-* description. The ocx-route body
+ * Dispatcher directive appended to every ccx-* description. The ccx-route body
  * directive makes the Agent tool's `model` argument INERT (the proxy overrides
  * the request model before routing — live-proven), so instead of asking the
  * dispatcher to omit it (which caused schema-anxiety loops), we hand it a fixed
@@ -262,4 +272,4 @@ export function injectClaudeAgentDefs(config: OcxConfig, windows: Record<string,
  * is visibly a placeholder in the Claude Code UI, while "sonnet" was
  * indistinguishable from a genuine Sonnet call (issue #252).
  */
-const NO_MODEL_ARG = "NOTE: this agent's real model is pinned by the opencodex proxy — the `model` argument is ignored. Pass model: \"haiku\" as a placeholder (or omit it); routing is unaffected either way.";
+const NO_MODEL_ARG = "NOTE: this agent's real model is pinned by the CodexCommander proxy — the `model` argument is ignored. Pass model: \"haiku\" as a placeholder (or omit it); routing is unaffected either way.";

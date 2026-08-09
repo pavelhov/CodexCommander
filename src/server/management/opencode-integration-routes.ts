@@ -1,4 +1,4 @@
-/** Management routes for external client integrations owned by OpenCodex. */
+/** Management routes for external client integrations owned by CodexCommander. */
 import {
   OPENCODE_CONSOLE_URL,
   OPENCODE_DOWNLOAD_URL,
@@ -23,7 +23,7 @@ import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
 import { listManagementModelRows, toExportModel } from "./model-rows";
-import type { OcxConfig } from "../../types";
+import type { CodexCommanderConfig } from "../../types";
 import { providerCredentialVerification } from "../../providers/credential-verification";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -31,7 +31,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export async function buildPersistentOpencodeProviderBlock(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   port: number,
 ): Promise<OpencodeProviderBlock> {
   const rows = await listManagementModelRows(config);
@@ -46,7 +46,7 @@ export async function buildPersistentOpencodeProviderBlock(
 
 /** Best-effort sync used after startup/catalog changes when the user opted in. */
 export async function reconcileOpencodeIntegrationIfEnabled(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   port: number,
 ): Promise<boolean> {
   const status = inspectOpencodeIntegration();
@@ -58,7 +58,7 @@ export async function reconcileOpencodeIntegrationIfEnabled(
   }).changed;
 }
 
-function statusEnvelope(config: OcxConfig) {
+function statusEnvelope(config: CodexCommanderConfig) {
   const installation = detectOpencodeInstallation();
   return {
     integration: inspectOpencodeIntegration(),
@@ -73,7 +73,7 @@ function statusEnvelope(config: OcxConfig) {
   };
 }
 
-function integrationError(config: OcxConfig, error: unknown, status = 409): Response {
+function integrationError(config: CodexCommanderConfig, error: unknown, status = 409): Response {
   return jsonResponse({
     error: error instanceof Error ? error.message : String(error),
     ...statusEnvelope(config),
@@ -92,7 +92,7 @@ async function readOptionalObject(req: Request): Promise<Record<string, unknown>
   return parsed;
 }
 
-export async function handleLegacyOpencodeIntegrationRoutes(ctx: ManagementContext): Promise<Response | null> {
+export async function handleOpencodeIntegrationRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config } = ctx;
   if (url.pathname === "/api/integrations/opencode" && req.method === "GET") {
     return jsonResponse(statusEnvelope(config));
@@ -164,7 +164,7 @@ export async function handleLegacyOpencodeIntegrationRoutes(ctx: ManagementConte
       if (!installation.desktopInstalled) {
         return integrationError(config, new Error(
           installation.cliInstalled
-            ? "OpenCode CLI is installed, but the desktop app is required for one-click launch. Use `ocx opencode` for the CLI."
+            ? "OpenCode CLI is installed, but the desktop app is required for one-click launch. Use `ccx opencode` for the CLI."
             : "OpenCode Desktop is not installed.",
         ));
       }

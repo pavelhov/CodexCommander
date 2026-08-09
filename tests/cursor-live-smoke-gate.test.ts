@@ -24,8 +24,8 @@ describe("Cursor live smoke credential gate", () => {
 
   test("present token enables the gate without storing the token in the gate object", () => {
     const gate = readCursorLiveSmokeGate({
-      OPENCODEX_CURSOR_TEST_TOKEN: fakeSecret,
-      OPENCODEX_CURSOR_TEST_BASE_URL: "https://cursor.example.test",
+      CCX_CURSOR_TEST_TOKEN: fakeSecret,
+      CCX_CURSOR_TEST_BASE_URL: "https://cursor.example.test",
     });
 
     expect(gate).toEqual({
@@ -37,12 +37,12 @@ describe("Cursor live smoke credential gate", () => {
   });
 
   test("token accessor is separate from the public gate status", () => {
-    expect(getCursorLiveSmokeToken({ OPENCODEX_CURSOR_TEST_TOKEN: ` ${fakeSecret} ` })).toBe(fakeSecret);
-    expect(getCursorLiveSmokeToken({ OPENCODEX_CURSOR_TEST_TOKEN: "   " })).toBeUndefined();
+    expect(getCursorLiveSmokeToken({ CCX_CURSOR_TEST_TOKEN: ` ${fakeSecret} ` })).toBe(fakeSecret);
+    expect(getCursorLiveSmokeToken({ CCX_CURSOR_TEST_TOKEN: "   " })).toBeUndefined();
   });
 
   test("skip messages never include token values", () => {
-    const gate = readCursorLiveSmokeGate({ OPENCODEX_CURSOR_TEST_TOKEN: fakeSecret });
+    const gate = readCursorLiveSmokeGate({ CCX_CURSOR_TEST_TOKEN: fakeSecret });
 
     expect(cursorLiveSmokeSkipMessage(gate)).not.toContain(fakeSecret);
   });

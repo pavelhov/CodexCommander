@@ -1,4 +1,4 @@
-import type { OcxProviderConfig } from "../types";
+import type { CodexCommanderProviderConfig } from "../types";
 import { deriveKeyLoginMap, enrichProviderFromRegistry, type DerivedKeyLoginProvider } from "../providers/derive";
 import { resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
 
@@ -19,7 +19,7 @@ export const KEY_LOGIN_PROVIDERS: Record<string, KeyLoginProvider> = deriveKeyLo
  * caller didn't already supply. Lets the vision/reasoning classification actually reach the saved
  * config (the GUI/API only send adapter/baseUrl/apiKey/defaultModel). No-op for unknown names.
  */
-export function enrichProviderFromCatalog(name: string, prov: OcxProviderConfig): void {
+export function enrichProviderFromCatalog(name: string, prov: CodexCommanderProviderConfig): void {
   enrichProviderFromRegistry(name, prov);
 }
 
@@ -106,7 +106,7 @@ export async function validateApiKey(
       return "unknown";
     }
 
-    const configuredProvider: OcxProviderConfig = {
+    const configuredProvider: CodexCommanderProviderConfig = {
       adapter: provider.adapter,
       baseUrl: provider.baseUrl,
       authMode: "key",

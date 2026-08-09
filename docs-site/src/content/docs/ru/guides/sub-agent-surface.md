@@ -7,9 +7,9 @@ description: Управляйте тем, как Codex создаёт и обс�
 
 Подагент — это отдельный воркер Codex, которого основной агент может создать для узкой задачи. У
 него собственный контекст и собственные инструменты, поэтому несколько независимых задач могут
-идти параллельно. opencodex управляет тем, какая collaboration surface Codex раскрывает для этих
+идти параллельно. CodexCommander управляет тем, какая collaboration surface Codex раскрывает для этих
 воркеров, какие модели Codex предлагает для них и как выполняется fallback при сбое модели. Когда
-именно основной агент должен делегировать задачу, opencodex не решает.
+именно основной агент должен делегировать задачу, CodexCommander не решает.
 
 ## Режимы
 
@@ -38,7 +38,7 @@ Codex:
   flag'ом `multi_agent_v2`.
 - **v2** записывает `multi_agent_version = "v2"` для каждой модели.
 
-opencodex применяет это как финальный проход и к живому каталогу `/v1/models`, и к каталогу,
+CodexCommander применяет это как финальный проход и к живому каталогу `/v1/models`, и к каталогу,
 синхронизированному на диск. Поэтому смена режима одинаково влияет на новые App-, CLI- и
 TUI-сессии.
 
@@ -50,12 +50,12 @@ TUI-сессии.
 
 Раздел **Sub-agent delegation** в дашборде управляет тремя связанными настройками:
 
-- `injectionModel` — предпочитаемая модель воркера, которую opencodex упоминает в guidance.
+- `injectionModel` — предпочитаемая модель воркера, которую CodexCommander упоминает в guidance.
 - `injectionEffort` — необязательный `reasoning_effort`, запрашиваемый для этой модели.
 - `injectionPrompt` — замена встроенного текста guidance для v2.
 
 `multiAgentGuidanceEnabled` по умолчанию включён и служит главным переключателем
-guidance-сообщений, которые opencodex пишет сам, на обеих поверхностях. Если выключить его,
+guidance-сообщений, которые CodexCommander пишет сам, на обеих поверхностях. Если выключить его,
 подавляются и блок v2 designation, и proactive text для v1.
 
 Это инструкции для основного агента, а не proxy-side spawn router. На v2 полный форк истории
@@ -72,33 +72,33 @@ guidance-сообщений, которые opencodex пишет сам, на о
 | `{{roster}}` | Разрешённый ростер, видимый в picker и совместимый с поверхностью |
 | `{{fallback}}` | Настроенное глобальное fallback guidance |
 
-Встроенное guidance для v2 ограничено 700 символами. Если оно не укладывается, opencodex сначала
+Встроенное guidance для v2 ограничено 700 символами. Если оно не укладывается, CodexCommander сначала
 убирает ростер, а не обрезает ядро инструкций для spawn. Встроенное guidance включается только
 тогда, когда разрешается предпочитаемая модель, допустимый ростер или fallback chain. Настроенного
 `injectionModel` достаточно, чтобы отобразить пользовательский prompt; если значение без селектора
 нельзя разрешить однозначно, `{{model}}` заменяется пустой строкой.
 
-На v1 opencodex внедряет только upstream-style proactive guidance о делегировании на уровнях
+На v1 CodexCommander внедряет только upstream-style proactive guidance о делегировании на уровнях
 effort `max` или `ultra`. Предпочитаемую модель, ростер, fallback list и custom prompt на v1 он
 не добавляет.
 
 Опция `syncCodexSubagentDefaults`, выключенная по умолчанию, отделена от guidance. Когда
-opencodex владеет активной маршрутизацией Codex, sync или restart могут записать выбранные
+CodexCommander владеет активной маршрутизацией Codex, sync или restart могут записать выбранные
 значения как marker-owned поля `[agents] default_subagent_model` и
-`default_subagent_reasoning_effort` в TOML Codex. opencodex обновляет или удаляет только те поля,
+`default_subagent_reasoning_effort` в TOML Codex. CodexCommander обновляет или удаляет только те поля,
 которые помечены его marker'ами. Если любое из целевых полей принадлежит пользователю, пара
 остаётся без изменений вместо частичной записи; неоднозначный TOML отклоняется без записи.
 Внешние provider manager'ы и user-owned root routing тоже сохраняют приоритет.
 
 ## Fallback chains
 
-Для порождённого воркера opencodex строит такой порядок приоритета:
+Для порождённого воркера CodexCommander строит такой порядок приоритета:
 
 1. Запрошенная основная модель.
 2. Список `model_fallback` роли из её определения `$CODEX_HOME/agents/*.toml`.
-3. Глобальный список `subagentModelFallback` в конфигурации opencodex.
+3. Глобальный список `subagentModelFallback` в конфигурации CodexCommander.
 
-Дубликаты id моделей удаляются с сохранением первого вхождения. При выборе opencodex пропускает
+Дубликаты id моделей удаляются с сохранением первого вхождения. При выборе CodexCommander пропускает
 кандидатов, которые отключены, немаршрутизируемы, опираются на отключённого провайдера, помечены
 как unhealthy, находятся в cooldown, не имеют доступного pooled-аккаунта Codex или вышли за
 настроенный порог квоты. Результаты availability probe кэшируются на
@@ -112,11 +112,11 @@ ChatGPT, выбор ограничивается каноническими на
 
 Codex может отправить задачу child v2 из native-to-routed пути только как backend-encrypted
 `encrypted_content`. Эту нагрузку может прочитать нативный backend ChatGPT, но не внешний
-провайдер. Это известное ограничение [#92](https://github.com/lidge-jun/opencodex/issues/92).
+провайдер. Это известное ограничение [#92](https://github.com/pavelhov/CodexCommander/issues/92).
 
 Так ведёт себя политика по умолчанию `multiAgentV2MessageDelivery: "encrypted"`. Экспериментальная политика `"plaintext"` преобразует только полный распознанный V2-контракт во внешнее незарезервированное пространство имён и восстанавливает `collaboration` перед Codex. Поэтому нативный родитель вроде Sol может делегировать Kimi, Grok и DeepSeek, сохраняя V2 lifecycle. Цена совместимости: все V2-сообщения этого родителя, включая сообщения нативным дочерним агентам, становятся plaintext. После сохранения нужна новая сессия; неизвестная или частичная схема не преобразуется и завершается безопасной ошибкой.
 
-opencodex завершаетcя безопасно и не пересылает пустую или нечитаемую задачу:
+CodexCommander завершаетcя безопасно и не пересылает пустую или нечитаемую задачу:
 
 - Прямой не-нативный маршрут возвращает HTTP 400 с
   `error.code = "unreadable_encrypted_agent_task"` и не отражает ciphertext назад.
@@ -154,27 +154,27 @@ combo, использовать v1 для делегирования между 
 
 ### CLI
 
-Для collaboration surface и native feature settings используйте `ocx v2`:
+Для collaboration surface и native feature settings используйте `ccx v2`:
 
 ```bash
-ocx v2 status
-ocx v2 mode v1
-ocx v2 mode default
-ocx v2 mode v2
-ocx v2 threads 8
+ccx v2 status
+ccx v2 mode v1
+ccx v2 mode default
+ccx v2 mode v2
+ccx v2 threads 8
 ```
 
-Для делегирования, ростера, effort cap и fallback settings используйте `ocx agent`:
+Для делегирования, ростера, effort cap и fallback settings используйте `ccx agent`:
 
 ```bash
-ocx agent status
-ocx agent injection set --model anthropic/claude-sonnet-5 --effort xhigh
-ocx agent subagents set gpt-5.6-sol,anthropic/claude-sonnet-5
-ocx agent fallback set gpt-5.4-mini,xai/grok-4.5 --poll-ms 60000
-ocx agent effort set --subagent max
+ccx agent status
+ccx agent injection set --model anthropic/claude-sonnet-5 --effort xhigh
+ccx agent subagents set gpt-5.6-sol,anthropic/claude-sonnet-5
+ccx agent fallback set gpt-5.4-mini,xai/grok-4.5 --poll-ms 60000
+ccx agent effort set --subagent max
 ```
 
-Чтобы очистить nullable-значение у `ocx agent injection`, передайте `-`, либо используйте
+Чтобы очистить nullable-значение у `ccx agent injection`, передайте `-`, либо используйте
 соответствующее действие `clear` для ростера или fallback list. Полный состав семейств команд см.
 в [справочнике CLI](/reference/cli/).
 
@@ -224,13 +224,13 @@ model- или effort-override.
 ### Смена режима влияет на уже запущенные сессии?
 
 Нет. После смены режима начните новую сессию Codex. Если долго живущий App host всё ещё показывает
-устаревшее состояние каталога, выполните `ocx sync` и перезапустите нужную поверхность Codex.
+устаревшее состояние каталога, выполните `ccx sync` и перезапустите нужную поверхность Codex.
 
 ### Reasoning effort
 
 `injectionEffort` влияет только на guidance для делегированных воркеров и, если это явно
 включено, на нативные default'ы подагентов в Codex. На effort родительской сессии он не влияет.
-`ultra` — это верхний client-facing tier, который Codex переводит в `max`; затем opencodex
+`ultra` — это верхний client-facing tier, который Codex переводит в `max`; затем CodexCommander
 сопоставляет или ограничивает это значение под выбранного провайдера.
 
 ### Context cap

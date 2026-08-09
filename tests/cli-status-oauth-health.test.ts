@@ -7,21 +7,21 @@ import { collectOAuthHealthEntries } from "../src/oauth/health";
 import { getAccountSet, markAccountNeedsReauth, saveCredential } from "../src/oauth/store";
 
 const origHome = process.env.HOME;
-const origOcxHome = process.env.OPENCODEX_HOME;
+const origCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
 let tmp: string;
 
 beforeEach(() => {
   tmp = join(tmpdir(), `cli-status-oauth-health-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   mkdirSync(tmp, { recursive: true });
   process.env.HOME = tmp;
-  process.env.OPENCODEX_HOME = join(tmp, "ocx");
+  process.env.CODEXCOMMANDER_HOME = join(tmp, "ccx");
 });
 
 afterEach(() => {
   if (origHome === undefined) delete process.env.HOME;
   else process.env.HOME = origHome;
-  if (origOcxHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = origOcxHome;
+  if (origCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = origCodexCommanderHome;
   rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -31,7 +31,7 @@ describe("formatOAuthHealthForStatus", () => {
       provider: "openai",
       accountId: "acct_abcdefghijklmnopqrstuvwxyz",
       health: { status: "reauth_required", reason: "refresh_failed" },
-      action: "run `ocx login openai`",
+      action: "run `ccx login openai`",
     }]);
     expect(text).toContain("OAuth health: warning");
     expect(text).toContain("account-…wxyz");

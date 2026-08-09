@@ -29,7 +29,7 @@ import {
 const roots: string[] = [];
 
 function root(): string {
-  const dir = mkdtempSync(join(tmpdir(), "ocx-journal-"));
+  const dir = mkdtempSync(join(tmpdir(), "ccx-journal-"));
   roots.push(dir);
   return dir;
 }
@@ -42,8 +42,8 @@ afterEach(() => {
 function scenario(opts: { config: string | null; store: string | null }) {
   const dir = root();
   const configPath = join(dir, "config.toml");
-  const storePath = join(dir, "opencodex-prompt.json");
-  const journalPath = join(dir, "opencodex-prompt.journal");
+  const storePath = join(dir, "codexcommander-prompt.json");
+  const journalPath = join(dir, "codexcommander-prompt.journal");
 
   const preConfigBytes = "PRE_C";
   const postConfigBytes = "POST_C";
@@ -165,7 +165,7 @@ describe("recovery", () => {
 
   test("a corrupt journal is recovery_required, and nothing is written", () => {
     const s = scenario({ config: "POST_C", store: "PRE_S" });
-    writeFileSync(s.journalPath, "ocx-journal-v1 deadbeef\n{\"configPath\":\"/x\"}", "utf8");
+    writeFileSync(s.journalPath, "ccx-journal-v1 deadbeef\n{\"configPath\":\"/x\"}", "utf8");
     const result = recoverIfNeeded(s.journalPath);
     expect(result.ok).toBe(false);
     expect(read(s.configPath)).toBe("POST_C");
@@ -227,7 +227,7 @@ describe("durable write", () => {
 
   test("successful durable writes release temp ACL memos", () => {
     const previousUsername = process.env.USERNAME;
-    process.env.USERNAME = "ocx-test-user";
+    process.env.USERNAME = "ccx-test-user";
     resetHardenedStateForTests();
     setPlatformForTests("win32");
     setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
@@ -248,7 +248,7 @@ describe("durable write", () => {
 
   test("a temp that disappears during hardening still releases its memo", () => {
     const previousUsername = process.env.USERNAME;
-    process.env.USERNAME = "ocx-test-user";
+    process.env.USERNAME = "ccx-test-user";
     resetHardenedStateForTests();
     setPlatformForTests("win32");
     const dir = root();

@@ -5,21 +5,21 @@ import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { resolveFirstUsableOpenAiSidecar } from "../src/providers/openai-sidecar";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const originalFetch = globalThis.fetch;
-const previousHome = process.env.OPENCODEX_HOME;
-const previousDataToken = process.env.OPENCODEX_API_AUTH_TOKEN;
-const previousAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+const previousHome = process.env.CODEXCOMMANDER_HOME;
+const previousDataToken = process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+const previousAdminToken = process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
 let testHome = "";
 let upstreamAttempts: string[] = [];
 
-function forwardConfig(): OcxConfig {
+function forwardConfig(): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     hostname: "127.0.0.1",
     defaultProvider: "openai",
-    openaiProviderTierVersion: 2,
     providers: {
       openai: {
         adapter: "openai-responses",
@@ -28,14 +28,14 @@ function forwardConfig(): OcxConfig {
         codexAccountMode: "direct",
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 beforeEach(() => {
-  testHome = mkdtempSync(join(tmpdir(), "ocx-forward-admission-"));
-  process.env.OPENCODEX_HOME = testHome;
-  delete process.env.OPENCODEX_API_AUTH_TOKEN;
-  process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "admin-secret";
+  testHome = mkdtempSync(join(tmpdir(), "ccx-forward-admission-"));
+  process.env.CODEXCOMMANDER_HOME = testHome;
+  delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+  process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = "admin-secret";
   upstreamAttempts = [];
   globalThis.fetch = (async (input, init) => {
     const raw = input instanceof Request ? input.url : String(input);
@@ -50,12 +50,12 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  if (previousDataToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-  else process.env.OPENCODEX_API_AUTH_TOKEN = previousDataToken;
-  if (previousAdminToken === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
-  else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdminToken;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
+  if (previousDataToken === undefined) delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+  else process.env.CODEXCOMMANDER_API_AUTH_TOKEN = previousDataToken;
+  if (previousAdminToken === undefined) delete process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
+  else process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = previousAdminToken;
   if (testHome) rmSync(testHome, { recursive: true, force: true });
   testHome = "";
 });

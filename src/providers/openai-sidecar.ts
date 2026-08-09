@@ -11,7 +11,7 @@ import {
 import { recordCodexUpstreamOutcome, type CodexUpstreamOutcome } from "../codex/routing";
 import { extractAccountId } from "../oauth/chatgpt";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../server/auth-cors";
-import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
+import type { CodexAccountMode, CodexCommanderConfig, CodexCommanderProviderConfig } from "../types";
 import {
   isCanonicalOpenAiForwardProvider,
   OPENAI_API_PROVIDER_ID,
@@ -21,7 +21,7 @@ import { getProviderRegistryEntry, providerCodexAccountMode } from "./registry";
 
 export interface OpenAiForwardSidecarCandidate {
   providerName: typeof OPENAI_CODEX_PROVIDER_ID;
-  provider: OcxProviderConfig;
+  provider: CodexCommanderProviderConfig;
   accountMode: CodexAccountMode;
 }
 
@@ -46,13 +46,13 @@ export interface OpenAiImagesProviderSelection {
   forwardCandidates: OpenAiForwardSidecarCandidate[];
   keyed?: {
     providerName: string;
-    provider: OcxProviderConfig;
+    provider: CodexCommanderProviderConfig;
     apiKey: string;
   };
   error?: string;
 }
 
-export function listOpenAiForwardSidecarCandidates(config: OcxConfig): OpenAiForwardSidecarCandidate[] {
+export function listOpenAiForwardSidecarCandidates(config: CodexCommanderConfig): OpenAiForwardSidecarCandidate[] {
   const provider = config.providers[OPENAI_CODEX_PROVIDER_ID];
   if (!provider || provider.disabled === true) return [];
   // The built-in registry defaults an omitted authMode to forward. Normalize only that
@@ -89,7 +89,7 @@ function directSidecarHeaders(
 export async function resolveFirstUsableOpenAiSidecar(
   candidates: readonly OpenAiForwardSidecarCandidate[],
   incomingHeaders: Headers,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   options: {
     exactAccount?: ExactOpenAiSidecarAccount;
     beginCodexAccountSelection?: () => CodexAccountSelectionAdmission | undefined;
@@ -173,7 +173,7 @@ export async function resolveFirstUsableOpenAiSidecar(
   return undefined;
 }
 
-export function selectOpenAiImagesProvider(config: OcxConfig): OpenAiImagesProviderSelection {
+export function selectOpenAiImagesProvider(config: CodexCommanderConfig): OpenAiImagesProviderSelection {
   const selection: OpenAiImagesProviderSelection = {
     forwardCandidates: listOpenAiForwardSidecarCandidates(config),
   };
@@ -192,7 +192,7 @@ export function selectOpenAiImagesProvider(config: OcxConfig): OpenAiImagesProvi
 }
 
 /** Resolve an explicit custom Images provider, otherwise preserve the existing OpenAI fallback. */
-export function selectImagesProvider(config: OcxConfig): OpenAiImagesProviderSelection {
+export function selectImagesProvider(config: CodexCommanderConfig): OpenAiImagesProviderSelection {
   const configuredProvider = config.images?.provider;
   if (configuredProvider === undefined) return selectOpenAiImagesProvider(config);
   if (typeof configuredProvider !== "string" || !configuredProvider.trim()) {

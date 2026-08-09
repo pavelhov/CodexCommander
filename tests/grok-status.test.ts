@@ -6,7 +6,7 @@ import { injectGrokConfig } from "../src/grok/inject";
 import { grokFenceEndpointDrift, readGrokStatus } from "../src/grok/status";
 
 function tempGrokHome(): { root: string; grokHome: string } {
-  const root = mkdtempSync(join(tmpdir(), "ocx-grok-status-"));
+  const root = mkdtempSync(join(tmpdir(), "ccx-grok-status-"));
   const grokHome = join(root, ".grok");
   mkdirSync(grokHome);
   return { root, grokHome };
@@ -83,7 +83,7 @@ describe("readGrokStatus", () => {
 /**
  * 2026-07-27 field report: the fence named 127.0.0.1:4179 while the proxy listened on
  * 10100. Grok retried the refused connection 15 times per turn entirely on its own side,
- * so no request — and therefore no log line — ever reached opencodex. The context window
+ * so no request — and therefore no log line — ever reached codexcommander. The context window
  * still read correctly, because the stale entry carried it. Nothing in the product said
  * why, which is what this check exists to fix.
  */

@@ -31,23 +31,32 @@ import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/account-id";
 import { clearAccountQuota, updateAccountQuota } from "../src/codex/auth-api";
 import { getConfigPath } from "../src/config";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-pool-rotation-test");
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 let previousCodexHome: string | undefined;
 
-function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
+function makeConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
   return {
-    providers: {},
+    port: 10100,
+    multiAgentGuidanceEnabled: true,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        authMode: "forward",
+      },
+    },
+    defaultProvider: "openai",
     codexAccounts: [],
     activeCodexAccountId: undefined,
     autoSwitchThreshold: 80,
     ...overrides,
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 function saveTestCredential(id: string): void {
@@ -59,13 +68,18 @@ function saveTestCredential(id: string): void {
   });
 }
 
-function makeThreeAccountConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
+function makeThreeAccountConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
   const ids = ["a", "b", "c"];
   for (const id of ids) saveTestCredential(id);
   return makeConfig({
     activeCodexAccountId: "a",
     autoSwitchThreshold: 80,
-    codexAccounts: ids.map(id => ({ id, email: `${id}@example.test`, isMain: false })),
+    codexAccounts: ids.map((id, index) => ({
+      id,
+      email: `${id}@example.test`,
+      logLabel: `p${(index + 1).toString(16).padStart(6, "0")}`,
+      isMain: false,
+    })),
     ...overrides,
   });
 }
@@ -177,7 +191,7 @@ describe("setCodexAccountPriority", () => {
   });
 
   test("writing the default order removes that account's entry", () => {
-    const config = makeConfig({ codexAccountPriorities: { a: 1, b: 2 } } as Partial<OcxConfig>);
+    const config = makeConfig({ codexAccountPriorities: { a: 1, b: 2 } } as Partial<CodexCommanderConfig>);
     setCodexAccountPriority(config, "a", DEFAULT_ACCOUNT_PRIORITY);
     expect(config.codexAccountPriorities).toEqual({ b: 2 });
     expect(getCodexAccountPriority(config, "a")).toBe(DEFAULT_ACCOUNT_PRIORITY);
@@ -186,13 +200,13 @@ describe("setCodexAccountPriority", () => {
   // An empty map would still be a stored map, and routing's fast path keys off the
   // key being absent — a pool that was ordered and then reset must look unordered.
   test("emptying the map drops the config key entirely", () => {
-    const config = makeConfig({ codexAccountPriorities: { a: 1 } } as Partial<OcxConfig>);
+    const config = makeConfig({ codexAccountPriorities: { a: 1 } } as Partial<CodexCommanderConfig>);
     setCodexAccountPriority(config, "a", DEFAULT_ACCOUNT_PRIORITY);
     expect(Object.hasOwn(config, "codexAccountPriorities")).toBe(false);
   });
 
   test("forgetCodexAccountPriority leaves the other accounts' order alone", () => {
-    const config = makeConfig({ codexAccountPriorities: { a: 1, b: -3 } } as Partial<OcxConfig>);
+    const config = makeConfig({ codexAccountPriorities: { a: 1, b: -3 } } as Partial<CodexCommanderConfig>);
     forgetCodexAccountPriority(config, "b");
     expect(config.codexAccountPriorities).toEqual({ a: 1 });
   });
@@ -212,7 +226,7 @@ describe("setCodexAccountPriority", () => {
 
 describe("codexAccountPriorityLookup", () => {
   test("reports the stored order for a configured account", () => {
-    const config = makeConfig({ codexAccountPriorities: { a: 2 } } as Partial<OcxConfig>);
+    const config = makeConfig({ codexAccountPriorities: { a: 2 } } as Partial<CodexCommanderConfig>);
     const priorityOf = codexAccountPriorityLookup(config);
     expect(priorityOf("a")).toBe(2);
     expect(priorityOf("b")).toBe(DEFAULT_ACCOUNT_PRIORITY);
@@ -221,7 +235,7 @@ describe("codexAccountPriorityLookup", () => {
   // `constructor` resolves on Object.prototype, so an ungated read would hand a
   // function to normalization instead of reporting "this account has no order".
   test("inherited members of the map are not a selection order", () => {
-    const config = makeConfig({ codexAccountPriorities: { a: 2 } } as Partial<OcxConfig>);
+    const config = makeConfig({ codexAccountPriorities: { a: 2 } } as Partial<CodexCommanderConfig>);
     const priorityOf = codexAccountPriorityLookup(config);
     expect(priorityOf("constructor")).toBe(DEFAULT_ACCOUNT_PRIORITY);
     expect(priorityOf("toString")).toBe(DEFAULT_ACCOUNT_PRIORITY);
@@ -234,7 +248,7 @@ describe("codexAccountPriorityLookup", () => {
   });
 
   test("an unparseable stored order degrades to the default tier", () => {
-    const config = makeConfig({ codexAccountPriorities: { a: 1.5, b: 999 } } as Partial<OcxConfig>);
+    const config = makeConfig({ codexAccountPriorities: { a: 1.5, b: 999 } } as Partial<CodexCommanderConfig>);
     const priorityOf = codexAccountPriorityLookup(config);
     expect(priorityOf("a")).toBe(DEFAULT_ACCOUNT_PRIORITY);
     expect(priorityOf("b")).toBe(DEFAULT_ACCOUNT_PRIORITY);
@@ -243,7 +257,7 @@ describe("codexAccountPriorityLookup", () => {
 
 describe("clearCodexAccountPin", () => {
   test("releases whatever is pinned when no account is named", () => {
-    const config = makeConfig({ activeCodexAccountPinned: "a" } as Partial<OcxConfig>);
+    const config = makeConfig({ activeCodexAccountPinned: "a" } as Partial<CodexCommanderConfig>);
     clearCodexAccountPin(config);
     expect(config.activeCodexAccountPinned).toBeUndefined();
     // Deleted rather than set to undefined, so the saved config carries no key.
@@ -251,7 +265,7 @@ describe("clearCodexAccountPin", () => {
   });
 
   test("releases only the named account", () => {
-    const config = makeConfig({ activeCodexAccountPinned: "a" } as Partial<OcxConfig>);
+    const config = makeConfig({ activeCodexAccountPinned: "a" } as Partial<CodexCommanderConfig>);
     clearCodexAccountPin(config, "b");
     expect(config.activeCodexAccountPinned).toBe("a");
 
@@ -312,10 +326,10 @@ describe("pickRoundRobinAccount", () => {
 
 describe("accountPoolStrategy new-session routing", () => {
   beforeEach(() => {
-    previousOpencodexHome = process.env.OPENCODEX_HOME;
+    previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     previousCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = TEST_DIR;
     clearThreadAccountMap();
@@ -329,8 +343,8 @@ describe("accountPoolStrategy new-session routing", () => {
     clearCodexUpstreamHealth();
     clearThreadAccountMap();
     clearPoolRotationState();
-    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
@@ -510,7 +524,7 @@ describe("accountPoolStrategy new-session routing", () => {
 
   test("invalid on-disk strategy defaults to quota like Anthropic", () => {
     const config = makeThreeAccountConfig({
-      accountPoolStrategy: "weighted" as OcxConfig["accountPoolStrategy"],
+      accountPoolStrategy: "weighted" as CodexCommanderConfig["accountPoolStrategy"],
     });
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 10);
@@ -722,10 +736,10 @@ describe("accountPoolStrategy new-session routing", () => {
 
 describe("selection order across rotation strategies", () => {
   beforeEach(() => {
-    previousOpencodexHome = process.env.OPENCODEX_HOME;
+    previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     previousCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = TEST_DIR;
     clearThreadAccountMap();
@@ -739,8 +753,8 @@ describe("selection order across rotation strategies", () => {
     clearCodexUpstreamHealth();
     clearThreadAccountMap();
     clearPoolRotationState();
-    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
@@ -754,7 +768,7 @@ describe("selection order across rotation strategies", () => {
     const config = makeThreeAccountConfig({
       accountPoolStrategy: "round-robin",
       codexAccountPriorities: { a: 1, b: 1 },
-    } as Partial<OcxConfig>);
+    } as Partial<CodexCommanderConfig>);
     primeAllQuota();
 
     const picks = Array.from({ length: 12 }, () => resolveCodexAccountForThread(null, config));
@@ -765,7 +779,7 @@ describe("selection order across rotation strategies", () => {
     const config = makeThreeAccountConfig({
       accountPoolStrategy: "round-robin",
       codexAccountPriorities: { a: 1, b: 1 },
-    } as Partial<OcxConfig>);
+    } as Partial<CodexCommanderConfig>);
     primeAllQuota();
     updateAccountQuota("a", 95);
     updateAccountQuota("b", 95);
@@ -778,7 +792,7 @@ describe("selection order across rotation strategies", () => {
     const config = makeThreeAccountConfig({
       accountPoolStrategy: "round-robin",
       codexAccountPriorities: { a: 1 },
-    } as Partial<OcxConfig>);
+    } as Partial<CodexCommanderConfig>);
     primeAllQuota();
     updateAccountQuota("a", 95);
     expect(resolveCodexAccountForThread(null, config)).not.toBe("a");
@@ -792,7 +806,7 @@ describe("selection order across rotation strategies", () => {
       accountPoolStrategy: "round-robin",
       codexAccountPriorities: { a: 1, b: 1 },
       activeCodexAccountPinned: "c",
-    } as Partial<OcxConfig>);
+    } as Partial<CodexCommanderConfig>);
     primeAllQuota();
 
     const held = Array.from({ length: 4 }, () => resolveCodexAccountForThread(null, config));
@@ -807,7 +821,7 @@ describe("selection order across rotation strategies", () => {
       accountPoolStrategy: "fill-first",
       activeCodexAccountId: undefined,
       codexAccountPriorities: { c: 1 },
-    } as Partial<OcxConfig>);
+    } as Partial<CodexCommanderConfig>);
     primeAllQuota();
 
     expect(resolveCodexAccountForThread(null, config)).toBe("c");
@@ -816,7 +830,7 @@ describe("selection order across rotation strategies", () => {
   });
 
   test("an alternate crosses tiers when the exclusion empties the tier above", () => {
-    const config = makeThreeAccountConfig({ codexAccountPriorities: { a: 1 } } as Partial<OcxConfig>);
+    const config = makeThreeAccountConfig({ codexAccountPriorities: { a: 1 } } as Partial<CodexCommanderConfig>);
     primeAllQuota();
 
     // Without the exclusion reaching eligibility the tier walk would select
@@ -827,7 +841,7 @@ describe("selection order across rotation strategies", () => {
   test("an independent native scope tiers on its own health snapshot", () => {
     const config = makeThreeAccountConfig({
       codexAccountPriorities: { a: 1 },
-    } as Partial<OcxConfig>);
+    } as Partial<CodexCommanderConfig>);
     const now = 1_800_000_000_000;
     primeAllQuota();
 
@@ -846,7 +860,7 @@ describe("selection order across rotation strategies", () => {
     const config = makeThreeAccountConfig({
       activeCodexAccountId: "b",
       codexAccountPriorities: { a: 1 },
-    } as Partial<OcxConfig>);
+    } as Partial<CodexCommanderConfig>);
     const now = 1_800_000_000_000;
     primeAllQuota();
 
@@ -860,7 +874,7 @@ describe("selection order across rotation strategies", () => {
       activeCodexAccountId: "a",
       activeCodexAccountPinned: "a",
       codexAccountPriorities: { b: 1 },
-    } as Partial<OcxConfig>);
+    } as Partial<CodexCommanderConfig>);
     primeAllQuota();
 
     expect(resolveCodexAccountForThread("pinned-thread", config)).toBe("a");
@@ -881,7 +895,7 @@ describe("selection order across rotation strategies", () => {
       activeCodexAccountId: "a",
       activeCodexAccountPinned: "a",
       codexAccountPriorities: { b: 1 },
-    } as Partial<OcxConfig>);
+    } as Partial<CodexCommanderConfig>);
     primeAllQuota();
     updateAccountQuota("a", 95);
 
@@ -929,7 +943,7 @@ describe("selection order across rotation strategies", () => {
     const config = makeThreeAccountConfig({
       activeCodexAccountId: "a",
       upstreamFailoverThreshold: 1,
-    } as Partial<OcxConfig>);
+    } as Partial<CodexCommanderConfig>);
     primeAllQuota();
     const failedAt = Date.now();
 
@@ -961,7 +975,7 @@ describe("selection order across rotation strategies", () => {
       const config = makeThreeAccountConfig({
         accountPoolStrategy: strategy,
         codexAccountPriorities: { a: 2, b: 1 },
-      } as Partial<OcxConfig>);
+      } as Partial<CodexCommanderConfig>);
       primeAllQuota(95);
 
       const picks = Array.from({ length: 6 }, () => resolveCodexAccountForThread(null, config));
@@ -988,7 +1002,7 @@ describe("selection order across rotation strategies", () => {
       const flat = makeThreeAccountConfig({
         accountPoolStrategy: strategy,
         codexAccountPriorities: { a: 0, b: 0, c: 0 },
-      } as Partial<OcxConfig>);
+      } as Partial<CodexCommanderConfig>);
       const flatPicks = Array.from({ length: 6 }, () => resolveCodexAccountForThread(null, flat));
 
       expect(picks).toEqual([...expected]);
@@ -1005,7 +1019,7 @@ describe("selection order across rotation strategies", () => {
     const config = makeThreeAccountConfig({
       activeCodexAccountId: "a",
       codexAccountPriorities: { __main__: 2, a: 1, b: 1, c: 1 },
-    } as Partial<OcxConfig>);
+    } as Partial<CodexCommanderConfig>);
     primeAllQuota();
     // No auth.json exists in this harness, so a live-token read for __main__ would fail.
     const selectionOptions = { nativeMainSelectionOnly: true as const };

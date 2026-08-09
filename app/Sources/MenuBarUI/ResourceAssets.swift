@@ -69,14 +69,14 @@ public enum ResourceAssets {
     ]
 
     public static func brandImage(size: NSSize = NSSize(width: 22, height: 22)) -> NSImage {
-        if let image = loadImage(named: "OpenCodex.png", subdir: nil)
+        if let image = loadImage(named: "CodexCommander.png", subdir: nil)
             ?? loadImage(named: "logo.png", subdir: nil, repoRelative: "gui/public/logo.png")
             ?? loadImage(named: "favicon.png", subdir: nil, repoRelative: "gui/public/favicon.png") {
             return resized(image, to: size)
         }
         return NSImage(
             systemSymbolName: "terminal",
-            accessibilityDescription: "OpenCodex"
+            accessibilityDescription: "CodexCommander"
         ) ?? NSImage(size: size)
     }
 
@@ -201,7 +201,7 @@ public enum ResourceAssets {
         )
         candidates.append(URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
         candidates.append(URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".."))
-        if let env = ProcessInfo.processInfo.environment["OPENCODEX_ROOT"], !env.isEmpty {
+        if let env = ProcessInfo.processInfo.environment["CODEXCOMMANDER_ROOT"], !env.isEmpty {
             candidates.append(URL(fileURLWithPath: env))
         }
         for root in candidates {

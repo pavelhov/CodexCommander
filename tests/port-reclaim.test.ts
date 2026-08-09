@@ -69,7 +69,7 @@ describe("parseTcpQuadsForLocalPort / IPv6", () => {
 });
 
 describe("reclaimListenPort", () => {
-  test("does not kill any ocx listener by default (healthy proxy / stale pid files)", async () => {
+  test("does not kill any ccx listener by default (healthy proxy / stale pid files)", async () => {
     const killed: number[] = [];
     await expect(reclaimListenPort(10100, "127.0.0.1", {
       timeoutMs: 80,
@@ -79,7 +79,7 @@ describe("reclaimListenPort", () => {
       isAvailableFn: async () => false,
       listListenPidsFn: () => [4242],
       isAliveFn: () => true,
-      verifyOcxFn: pid => pid,
+      verifyCodexCommanderFn: pid => pid,
       killFn: pid => {
         killed.push(pid);
       },
@@ -88,19 +88,19 @@ describe("reclaimListenPort", () => {
     expect(killed).toEqual([]);
   });
 
-  test("does not kill when killOcxHolders is true but allowlist is empty", async () => {
+  test("does not kill when killCodexCommanderHolders is true but allowlist is empty", async () => {
     const killed: number[] = [];
     await expect(reclaimListenPort(10100, "127.0.0.1", {
       timeoutMs: 80,
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: false,
-      killOcxHolders: true,
+      killCodexCommanderHolders: true,
       onlyKillPids: [],
       isAvailableFn: async () => false,
       listListenPidsFn: () => [4242],
       isAliveFn: () => true,
-      verifyOcxFn: pid => pid,
+      verifyCodexCommanderFn: pid => pid,
       killFn: pid => {
         killed.push(pid);
       },
@@ -109,18 +109,18 @@ describe("reclaimListenPort", () => {
     expect(killed).toEqual([]);
   });
 
-  test("concurrent pinned-start shape: second start never kills the first ocx listener", async () => {
+  test("concurrent pinned-start shape: second start never kills the first ccx listener", async () => {
     const killed: number[] = [];
     await expect(reclaimListenPort(10100, "127.0.0.1", {
       timeoutMs: 80,
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: false,
-      killOcxHolders: false,
+      killCodexCommanderHolders: false,
       isAvailableFn: async () => false,
       listListenPidsFn: () => [1111],
       isAliveFn: () => true,
-      verifyOcxFn: pid => pid,
+      verifyCodexCommanderFn: pid => pid,
       killFn: pid => {
         killed.push(pid);
       },
@@ -129,7 +129,7 @@ describe("reclaimListenPort", () => {
     expect(killed).toEqual([]);
   });
 
-  test("kills only the allowlisted ocx pid after revalidation", async () => {
+  test("kills only the allowlisted ccx pid after revalidation", async () => {
     const killed: number[] = [];
     const verified: number[] = [];
     await expect(reclaimListenPort(10100, "127.0.0.1", {
@@ -137,12 +137,12 @@ describe("reclaimListenPort", () => {
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: false,
-      killOcxHolders: true,
+      killCodexCommanderHolders: true,
       onlyKillPids: [100],
       isAvailableFn: async () => false,
       listListenPidsFn: () => [100, 200],
       isAliveFn: () => true,
-      verifyOcxFn: pid => {
+      verifyCodexCommanderFn: pid => {
         verified.push(pid);
         return pid;
       },
@@ -155,19 +155,19 @@ describe("reclaimListenPort", () => {
     expect(verified.filter(pid => pid === 100).length).toBeGreaterThanOrEqual(2);
   });
 
-  test("unknown old PID: update-style reclaim kills no ocx listener", async () => {
+  test("unknown old PID: update-style reclaim kills no ccx listener", async () => {
     const killed: number[] = [];
     await expect(reclaimListenPort(10100, "127.0.0.1", {
       timeoutMs: 80,
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: false,
-      killOcxHolders: false,
+      killCodexCommanderHolders: false,
       onlyKillPids: [],
       isAvailableFn: async () => false,
       listListenPidsFn: () => [777],
       isAliveFn: () => true,
-      verifyOcxFn: pid => pid,
+      verifyCodexCommanderFn: pid => pid,
       killFn: pid => {
         killed.push(pid);
       },
@@ -176,7 +176,7 @@ describe("reclaimListenPort", () => {
     expect(killed).toEqual([]);
   });
 
-  test("does not kill foreign (non-ocx) listeners and does not drop their TCP rows", async () => {
+  test("does not kill foreign (non-ccx) listeners and does not drop their TCP rows", async () => {
     const killed: number[] = [];
     const dropped: number[] = [];
     await expect(reclaimListenPort(10100, "127.0.0.1", {
@@ -184,12 +184,12 @@ describe("reclaimListenPort", () => {
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: true,
-      killOcxHolders: true,
+      killCodexCommanderHolders: true,
       onlyKillPids: [999],
       isAvailableFn: async () => false,
       listListenPidsFn: () => [555],
       isAliveFn: () => true,
-      verifyOcxFn: () => null,
+      verifyCodexCommanderFn: () => null,
       killFn: pid => {
         killed.push(pid);
       },
@@ -211,12 +211,12 @@ describe("reclaimListenPort", () => {
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: true,
-      killOcxHolders: true,
+      killCodexCommanderHolders: true,
       onlyKillPids: [100],
       isAvailableFn: async () => false,
       listListenPidsFn: () => ({ ok: false, error: "lsof/netstat unavailable" }),
       isAliveFn: () => true,
-      verifyOcxFn: pid => pid,
+      verifyCodexCommanderFn: pid => pid,
       killFn: pid => {
         killed.push(pid);
       },
@@ -238,7 +238,7 @@ describe("reclaimListenPort", () => {
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: false,
-      killOcxHolders: true,
+      killCodexCommanderHolders: true,
       onlyKillPids: [18268],
       isAvailableFn: async () => {
         ticks += 1;
@@ -246,7 +246,7 @@ describe("reclaimListenPort", () => {
       },
       listListenPidsFn: () => [18268],
       isAliveFn: () => false,
-      verifyOcxFn: pid => pid,
+      verifyCodexCommanderFn: pid => pid,
       killFn: pid => {
         killed.push(pid);
       },
@@ -283,12 +283,12 @@ describe("reclaimListenPort", () => {
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: false,
-      killOcxHolders: true,
+      killCodexCommanderHolders: true,
       onlyKillPids: [4242],
       isAvailableFn: async () => available,
       listListenPidsFn: () => (available ? [] : [4242]),
       isAliveFn: () => true,
-      verifyOcxFn: pid => pid,
+      verifyCodexCommanderFn: pid => pid,
       killFn: pid => {
         killed.push(pid);
         available = true;
@@ -299,7 +299,7 @@ describe("reclaimListenPort", () => {
     expect(killed).toEqual([4242]);
   });
 
-  test("allowlisted pid with failing ocx revalidation is still killed (trusted teardown PID)", async () => {
+  test("allowlisted pid with failing ccx revalidation is still killed (trusted teardown PID)", async () => {
     const killed: number[] = [];
     let available = false;
     let checks = 0;
@@ -308,14 +308,14 @@ describe("reclaimListenPort", () => {
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: false,
-      killOcxHolders: true,
+      killCodexCommanderHolders: true,
       onlyKillPids: [100],
       isAvailableFn: async () => available,
       listListenPidsFn: () => (available ? [] : [100]),
       isAliveFn: () => !available,
-      verifyOcxFn: pid => {
+      verifyCodexCommanderFn: pid => {
         checks += 1;
-        // First pass (scan identity) succeeds; later scans reclassify as non-ocx.
+        // First pass (scan identity) succeeds; later scans reclassify as non-ccx.
         // Allowlisted teardown PIDs still take the best-effort kill path.
         return checks === 1 ? pid : null;
       },
@@ -339,12 +339,12 @@ describe("reclaimListenPort", () => {
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: true,
-      killOcxHolders: true,
+      killCodexCommanderHolders: true,
       onlyKillPids: [100],
       isAvailableFn: async () => available,
       listListenPidsFn: () => (alive ? [100] : []),
       isAliveFn: () => alive,
-      verifyOcxFn: pid => {
+      verifyCodexCommanderFn: pid => {
         checks += 1;
         return checks === 1 ? pid : null;
       },
@@ -363,7 +363,7 @@ describe("reclaimListenPort", () => {
     expect(dropped).toEqual([10100]);
   });
 
-  test("does not drop TCP rows while allowlisted non-ocx survives kill", async () => {
+  test("does not drop TCP rows while allowlisted non-ccx survives kill", async () => {
     const killed: number[] = [];
     const dropped: number[] = [];
     await expect(reclaimListenPort(10100, "127.0.0.1", {
@@ -371,12 +371,12 @@ describe("reclaimListenPort", () => {
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: true,
-      killOcxHolders: true,
+      killCodexCommanderHolders: true,
       onlyKillPids: [100],
       isAvailableFn: async () => false,
       listListenPidsFn: () => [100],
       isAliveFn: () => true,
-      verifyOcxFn: () => null,
+      verifyCodexCommanderFn: () => null,
       killFn: pid => {
         killed.push(pid);
       },
@@ -397,12 +397,12 @@ describe("reclaimListenPort", () => {
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: true,
-      killOcxHolders: true,
+      killCodexCommanderHolders: true,
       onlyKillPids: [100],
       isAvailableFn: async () => false,
       listListenPidsFn: () => [100],
       isAliveFn: () => true,
-      verifyOcxFn: pid => pid,
+      verifyCodexCommanderFn: pid => pid,
       killFn: () => {
         throw new Error("kill failed");
       },
@@ -415,7 +415,7 @@ describe("reclaimListenPort", () => {
     expect(dropped).toEqual([]);
   });
 
-  test("does not drop TCP rows while allowlisted ocx survives kill", async () => {
+  test("does not drop TCP rows while allowlisted ccx survives kill", async () => {
     const killed: number[] = [];
     const dropped: number[] = [];
     await expect(reclaimListenPort(10100, "127.0.0.1", {
@@ -423,12 +423,12 @@ describe("reclaimListenPort", () => {
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: true,
-      killOcxHolders: true,
+      killCodexCommanderHolders: true,
       onlyKillPids: [100],
       isAvailableFn: async () => false,
       listListenPidsFn: () => [100],
       isAliveFn: () => true,
-      verifyOcxFn: pid => pid,
+      verifyCodexCommanderFn: pid => pid,
       killFn: pid => {
         killed.push(pid);
       },
@@ -442,7 +442,7 @@ describe("reclaimListenPort", () => {
     expect(dropped).toEqual([]);
   });
 
-  test("drops TCP rows only after allowlisted ocx is confirmed dead", async () => {
+  test("drops TCP rows only after allowlisted ccx is confirmed dead", async () => {
     let alive = true;
     let available = false;
     const dropped: number[] = [];
@@ -451,12 +451,12 @@ describe("reclaimListenPort", () => {
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: true,
-      killOcxHolders: true,
+      killCodexCommanderHolders: true,
       onlyKillPids: [4242],
       isAvailableFn: async () => available,
       listListenPidsFn: () => (alive ? [4242] : []),
       isAliveFn: () => alive,
-      verifyOcxFn: pid => pid,
+      verifyCodexCommanderFn: pid => pid,
       killFn: () => {
         alive = false;
       },
@@ -470,7 +470,7 @@ describe("reclaimListenPort", () => {
     expect(dropped).toEqual([10100]);
   });
 
-  test("killAllOcxOnPort kills ocx listeners absent from the allowlist snapshot", async () => {
+  test("killAllCodexCommanderOnPort kills ccx listeners absent from the allowlist snapshot", async () => {
     const killed: number[] = [];
     let holder = 9001;
     let available = false;
@@ -479,13 +479,13 @@ describe("reclaimListenPort", () => {
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: false,
-      killOcxHolders: true,
-      killAllOcxOnPort: true,
+      killCodexCommanderHolders: true,
+      killAllCodexCommanderOnPort: true,
       onlyKillPids: [100], // pre-update PID — respawned child is 9001
       isAvailableFn: async () => available,
       listListenPidsFn: () => (holder > 0 ? [holder] : []),
       isAliveFn: pid => pid === holder,
-      verifyOcxFn: pid => pid,
+      verifyCodexCommanderFn: pid => pid,
       killFn: pid => {
         killed.push(pid);
         if (pid === holder) holder = 0;
@@ -497,7 +497,7 @@ describe("reclaimListenPort", () => {
     expect(killed).toEqual([9001]);
   });
 
-  test("foreign non-ocx claimant survives reclaim without allowlist or ocx identity", async () => {
+  test("foreign non-ccx claimant survives reclaim without allowlist or ccx identity", async () => {
     const killed: number[] = [];
     const dropped: number[] = [];
     await expect(reclaimListenPort(10100, "127.0.0.1", {
@@ -505,13 +505,13 @@ describe("reclaimListenPort", () => {
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: true,
-      killOcxHolders: true,
-      killAllOcxOnPort: true,
+      killCodexCommanderHolders: true,
+      killAllCodexCommanderOnPort: true,
       onlyKillPids: [4242], // trusted old PID — different from the foreign holder
       isAvailableFn: async () => false,
       listListenPidsFn: () => [777],
       isAliveFn: () => true,
-      verifyOcxFn: () => null,
+      verifyCodexCommanderFn: () => null,
       killFn: pid => {
         killed.push(pid);
       },
@@ -525,7 +525,7 @@ describe("reclaimListenPort", () => {
     expect(dropped).toEqual([]);
   });
 
-  test("allowlisted PID that fails ocx verify still gets killed and does not block TCP drop", async () => {
+  test("allowlisted PID that fails ccx verify still gets killed and does not block TCP drop", async () => {
     const killed: number[] = [];
     const dropped: number[] = [];
     let alive = true;
@@ -535,13 +535,13 @@ describe("reclaimListenPort", () => {
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: true,
-      killOcxHolders: true,
+      killCodexCommanderHolders: true,
       onlyKillPids: [14772],
       isAvailableFn: async () => available,
       // Windows often keeps a dead pre-update owner listed; cmdline probe already failed.
       listListenPidsFn: () => (alive ? [14772] : []),
       isAliveFn: () => alive,
-      verifyOcxFn: () => null,
+      verifyCodexCommanderFn: () => null,
       killFn: pid => {
         killed.push(pid);
         alive = false;
@@ -557,7 +557,7 @@ describe("reclaimListenPort", () => {
     expect(dropped).toEqual([10100]);
   });
 
-  test("dead ghost then same PID reused is killed again under killAllOcxOnPort", async () => {
+  test("dead ghost then same PID reused is killed again under killAllCodexCommanderOnPort", async () => {
     const killed: number[] = [];
     let phase: "first-live" | "ghost" | "reuse" = "first-live";
     let available = false;
@@ -566,13 +566,13 @@ describe("reclaimListenPort", () => {
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: false,
-      killOcxHolders: true,
-      killAllOcxOnPort: true,
+      killCodexCommanderHolders: true,
+      killAllCodexCommanderOnPort: true,
       onlyKillPids: [],
       isAvailableFn: async () => available,
       listListenPidsFn: () => [4242],
       isAliveFn: () => phase !== "ghost",
-      verifyOcxFn: pid => pid,
+      verifyCodexCommanderFn: pid => pid,
       killFn: pid => {
         killed.push(pid);
         if (phase === "first-live") phase = "ghost";

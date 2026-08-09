@@ -517,7 +517,7 @@ export function relaySseWithHeartbeat(
   if (!body) return null;
   const reader = body.getReader();
   const decoder = new TextDecoder();
-  const heartbeat = new TextEncoder().encode(": opencodex keepalive\n\n");
+  const heartbeat = new TextEncoder().encode(": codexcommander keepalive\n\n");
   let timer: ReturnType<typeof setInterval> | undefined;
   let closed = false;
   let clientCancelled = false;
@@ -659,7 +659,7 @@ function joinedBytes(slices: readonly Uint8Array[], byteLength: number): Uint8Ar
  * Per-chunk SSE inspection state machine shared by consumeForInspection,
  * consumeForResponseLogMetadata, and the eager bounded relay (relay-eager.ts).
  *
- * Extraction-fidelity invariants (devlog/_plan/260723_win_mem_safestream/020):
+ * Extraction-fidelity invariants (implementation contract):
  * - logCtx SSE inspection is gated on !reported; in the metadata configuration
  *   (no onTerminal) `reported` stays permanently false, which reproduces the
  *   metadata consumer's unconditional inspection through the same gate.

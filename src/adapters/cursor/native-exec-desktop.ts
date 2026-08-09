@@ -21,7 +21,7 @@ import type { CursorNativeToolDeps } from "./native-exec-tools";
 const DEFAULT_DESKTOP_TIMEOUT_MS = 30_000;
 
 /**
- * Opt-in external executor for computer-use / record-screen. opencodex is a headless proxy and
+ * Opt-in external executor for computer-use / record-screen. CodexCommander is a headless proxy and
  * cannot drive a screen itself; set these commands only when running on a host that can. Each
  * command receives the request as JSON on stdin and must print a JSON result on stdout.
  */
@@ -124,8 +124,7 @@ function recordScreenFailure(error: string): RecordScreenResult {
 
 /**
  * Spawn `command` via the platform shell (sh -c on POSIX, cmd.exe /d /s /c on win32 —
- * the configured command is platform-native shell syntax; devlog
- * 260715_cross_platform_audit/020), write `payload` as JSON to stdin, return parsed stdout JSON.
+ * the configured command is platform-native shell syntax; implementation contract), write `payload` as JSON to stdin, return parsed stdout JSON.
  */
 function runExternalJson(command: string, payload: unknown, config: DesktopExecutorConfig): Promise<unknown> {
   const timeoutMs = config.timeoutMs ?? DEFAULT_DESKTOP_TIMEOUT_MS;

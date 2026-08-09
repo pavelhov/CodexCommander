@@ -3,10 +3,10 @@ Provider logo assets for the dashboard.
 Sources:
 
 - Existing baseline copied from `../cli-jaw/public/assets/providers`.
-- Additional candidates copied from `devlog/_plan/260705_provider-quota-dashboard/svg-candidates`.
+- Additional candidates copied from `implementation contract`.
 
 License/source notes for the additional candidates are recorded in
-`devlog/_plan/260705_provider-quota-dashboard/21_svg_candidates.md` and its
+`implementation contract` and its
 `svg-candidates/manifest.json`.
 
 Export-client marks (used by the API tab's connect rows, not the provider list):

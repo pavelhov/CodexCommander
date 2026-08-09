@@ -10,13 +10,13 @@
  * exact single-reader implementation has a synchronous `pull()` and was
  * positive-control tested against the bundled Bun below. `auto` may use that
  * exact shape only for an activated plaintext collaboration rewrite; every
- * other Darwin rewrite remains explicit-only, and `legacy-tee` is the kill
+ * other Darwin rewrite remains explicit-only, and `safe-tee` is the kill
  * switch. A Bun bump must update the validated version in the same reviewed
  * commit after re-running the abort/backpressure diagnostic.
  *
  * Prerelease conservatism: a version carrying a prerelease suffix (e.g.
  * `1.4.0-canary.3`) is NEVER treated as fixed even when its numeric triple
- * reaches the threshold — canaries are exactly the OPENCODEX_BUN_PATH audience
+ * reaches the threshold — canaries are exactly the CCX_BUN_PATH audience
  * and may predate the fix commit.
  */
 
@@ -29,9 +29,9 @@ export const MIN_FIXED_BUN_VERSION: string | null = null;
 /** Exact bundled runtime used for the Darwin plaintext-V2 relay validation. */
 export const DARWIN_PLAINTEXT_EAGER_VALIDATED_BUN_VERSION = "1.3.14";
 
-export type StreamMode = "auto" | "legacy-tee" | "eager-relay";
+export type StreamMode = "auto" | "safe-tee" | "eager-relay";
 
-export const STREAM_MODES: readonly StreamMode[] = ["auto", "legacy-tee", "eager-relay"];
+export const STREAM_MODES: readonly StreamMode[] = ["auto", "safe-tee", "eager-relay"];
 
 export function isStreamMode(value: unknown): value is StreamMode {
   return typeof value === "string" && (STREAM_MODES as readonly string[]).includes(value);
@@ -76,7 +76,7 @@ export function bunHasAsyncPullCancelFix(
 export type EagerRelayDecision = {
   useEagerRelay: boolean;
   reason:
-    | "config-legacy"
+    | "config-safe"
     | "config-eager"
     | "auto-fixed-runtime"
     | "auto-known-bad"
@@ -98,7 +98,7 @@ export function decideEagerRelay(
   version: string = Bun.version,
   minFixed: string | null = MIN_FIXED_BUN_VERSION,
 ): EagerRelayDecision {
-  if (mode === "legacy-tee") return { useEagerRelay: false, reason: "config-legacy" };
+  if (mode === "safe-tee") return { useEagerRelay: false, reason: "config-safe" };
   if (mode === "eager-relay") return { useEagerRelay: true, reason: "config-eager" };
   return bunHasAsyncPullCancelFix(version, minFixed)
     ? { useEagerRelay: true, reason: "auto-fixed-runtime" }
@@ -153,7 +153,7 @@ export function darwinPlaintextEagerRuntimeWarning(
     || delivery !== "plaintext"
     || version.trim() === DARWIN_PLAINTEXT_EAGER_VALIDATED_BUN_VERSION
   ) return null;
-  return `macOS plaintext V2 auto relay was validated on Bun ${DARWIN_PLAINTEXT_EAGER_VALIDATED_BUN_VERSION}; running Bun ${version} stays on legacy tee. Set streamMode to \"eager-relay\" only after validating this runtime.`;
+  return `macOS plaintext V2 auto relay was validated on Bun ${DARWIN_PLAINTEXT_EAGER_VALIDATED_BUN_VERSION}; running Bun ${version} stays on safe tee. Set streamMode to \"eager-relay\" only after validating this runtime.`;
 }
 
 /**

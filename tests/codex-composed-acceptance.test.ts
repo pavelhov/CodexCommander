@@ -21,8 +21,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
-import { createHash } from "node:crypto";
-import { Database } from "bun:sqlite";
 
 import {
   canonicalizeCodexHome,
@@ -72,9 +70,9 @@ async function waitFor<T>(read: () => T | null | Promise<T | null>, label: strin
 }
 
 class Fixture {
-  readonly root = mkdtempSync(join(tmpdir(), "ocx-composed-"));
+  readonly root = mkdtempSync(join(tmpdir(), "ccx-composed-"));
   readonly codex = join(this.root, "codex");
-  readonly ocx = join(this.root, "ocx");
+  readonly ccx = join(this.root, "ccx");
   readonly homeA = join(this.root, "home-a");
   readonly homeB = join(this.root, "home-b");
   readonly userprofileA = join(this.root, "userprofile-a");
@@ -89,7 +87,7 @@ class Fixture {
   readonly children: Array<ReturnType<typeof Bun.spawn>> = [];
 
   constructor() {
-    for (const path of [this.codex, this.ocx, this.homeA, this.homeB, this.userprofileA, this.userprofileB, this.runtime, this.provider]) {
+    for (const path of [this.codex, this.ccx, this.homeA, this.homeB, this.userprofileA, this.userprofileB, this.runtime, this.provider]) {
       mkdirSync(path, { recursive: true, mode: 0o700 });
     }
     this.lockPath = resolveCodexCoordinatorDatabasePath(resolveEffectiveUserIdentity(), realpathSync.native(this.codex));
@@ -98,7 +96,7 @@ class Fixture {
       if (existsSync(path)) throw new Error(`lock preflight found pre-existing case path: ${path}`);
     }
     writeFileSync(join(this.codex, "config.toml"), 'model = "gpt-5"\n');
-    this.serviceManagerEnv = claimOwnedServiceHome(this.codex, this.ocx, this.homeA).env;
+    this.serviceManagerEnv = claimOwnedServiceHome(this.codex, this.ccx, this.homeA).env;
   }
 
   env(home = this.homeA, userprofile = this.userprofileA): Record<string, string> {
@@ -108,22 +106,22 @@ class Fixture {
       HOME: home,
       USERPROFILE: userprofile,
       CODEX_HOME: this.codex,
-      OPENCODEX_HOME: this.ocx,
+      CODEXCOMMANDER_HOME: this.ccx,
       XDG_RUNTIME_DIR: this.runtime,
-      OPENCODEX_API_AUTH_TOKEN: this.dataToken,
+      CODEXCOMMANDER_API_AUTH_TOKEN: this.dataToken,
       // `/api/*` is the management plane, distinct from the data-plane token.
       // A fixed fixture value avoids reading the generated credential file.
-      OPENCODEX_ADMIN_AUTH_TOKEN: this.managementToken,
+      CODEXCOMMANDER_ADMIN_AUTH_TOKEN: this.managementToken,
       NO_PROXY: "127.0.0.1,localhost",
       ...this.serviceManagerEnv,
     };
   }
 
   writeConfig(overrides: Record<string, unknown> = {}): void {
-    writeFileSync(join(this.ocx, "config.json"), JSON.stringify({
+    writeFileSync(join(this.ccx, "config.json"), JSON.stringify({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       hostname: "127.0.0.1",
-      syncResumeHistory: false,
       claudeCode: { systemEnv: false },
       providers: {
         fixture: {
@@ -155,15 +153,38 @@ class Fixture {
     const child = this.spawnCli(argv, home, userprofile);
     const completed = await Promise.race([
       Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`CLI watchdog: ocx ${argv.join(" ")}`)), timeoutMs)),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`CLI watchdog: ccx ${argv.join(" ")}`)), timeoutMs)),
     ]);
     const [stdout, stderr, exitCode] = completed;
     return { exitCode, stdout, stderr };
   }
 
+  async initializeCoordinator(): Promise<void> {
+    const child = Bun.spawn([process.execPath, "--eval", [
+      'const { readCodexTransitionState } = await import("./src/codex/transition-state.ts");',
+      'console.log(JSON.stringify(readCodexTransitionState()));',
+    ].join("\n")], {
+      cwd: repoRoot,
+      env: this.env(),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    this.children.push(child);
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect({ exitCode, stderr }).toMatchObject({ exitCode: 0 });
+    expect(JSON.parse(stdout.trim())).toMatchObject({
+      kind: "ready",
+      state: { nativeGeneration: 0, currentTxId: null },
+    });
+  }
+
   async start(): Promise<StartedServer> {
     const child = this.spawnCli(["start"]);
-    const runtimePath = join(this.ocx, "runtime-port.json");
+    const runtimePath = join(this.ccx, "runtime-port.json");
     const runtime = await waitFor(() => {
       if (!existsSync(runtimePath)) return null;
       try {
@@ -201,7 +222,7 @@ class Fixture {
     const response = await fetch(`http://127.0.0.1:${runtime.port}${path}`, {
       ...init,
       headers: {
-        "x-opencodex-api-key": this.managementToken,
+        "x-codexcommander-api-key": this.managementToken,
         ...(init.body ? { "content-type": "application/json" } : {}),
         ...(init.headers ?? {}),
       },
@@ -315,7 +336,7 @@ describe("WP13 composed toggle acceptance", () => {
       fx.writeConfig({ clientIntegrations: { codex: false } });
       const server = await fx.start();
       try {
-        writeFileSync(join(fx.codex, "opencodex-catalog.json"), JSON.stringify({ models: [] }));
+        writeFileSync(join(fx.codex, "codexcommander-catalog.json"), JSON.stringify({ models: [] }));
         fx.writeConfig({ providers: { fixture: {
           adapter: "openai-chat", baseUrl: `http://127.0.0.1:${provider.port}/v1`, apiKey: "fixture-key",
           allowPrivateNetwork: true, liveModels: true,
@@ -351,10 +372,12 @@ describe("WP13 composed toggle acceptance", () => {
   test("D-reduced: foreign service-home evidence refuses real CLI and HTTP writers before artifacts", async () => {
     const fx = fixture();
     fx.writeConfig();
-    writeFileSync(join(fx.ocx, "service-state.json"), JSON.stringify({
-      version: 2,
+    writeFileSync(join(fx.ccx, "service-state.json"), JSON.stringify({
+      version: 3,
       codexHome: join(fx.root, "foreign-codex"),
-      opencodexHome: join(fx.root, "foreign-ocx"),
+      codexCommanderHome: join(fx.root, "foreign-ccx"),
+      bunPath: process.execPath,
+      cliPath,
       backend: "scheduler",
     }));
     const before = manifest(fx.codex);
@@ -386,14 +409,14 @@ describe("WP13 composed toggle acceptance", () => {
     const release = join(fx.root, "release");
     const holder = Bun.spawn([process.execPath, lockChildPath], {
       cwd: repoRoot,
-      env: { ...fx.env(fx.homeA, fx.userprofileA), OCX_LOCK_CHILD_PAYLOAD: JSON.stringify({ timeoutMs: 5_000, holdMarker: held, releaseMarker: release }) },
+      env: { ...fx.env(fx.homeA, fx.userprofileA), CCX_LOCK_CHILD_PAYLOAD: JSON.stringify({ timeoutMs: 5_000, holdMarker: held, releaseMarker: release }) },
       stdout: "pipe", stderr: "pipe",
     });
     fx.children.push(holder);
     await waitFor(() => existsSync(held) ? true : null, "held coordinator lock");
     const contender = Bun.spawn([process.execPath, lockChildPath], {
       cwd: repoRoot,
-      env: { ...fx.env(fx.homeB, fx.userprofileB), OCX_LOCK_CHILD_PAYLOAD: JSON.stringify({ timeoutMs: 0 }) },
+      env: { ...fx.env(fx.homeB, fx.userprofileB), CCX_LOCK_CHILD_PAYLOAD: JSON.stringify({ timeoutMs: 0 }) },
       stdout: "pipe", stderr: "pipe",
     });
     fx.children.push(contender);
@@ -431,72 +454,11 @@ describe("WP13 composed toggle acceptance", () => {
     const second = await fx.start();
     const secondOutput = new Response(second.process.stdout).text();
     try {
-      expect(readFileSync(join(grokHome, "config.toml"), "utf8")).not.toContain("opencodex managed block");
+      expect(readFileSync(join(grokHome, "config.toml"), "utf8")).not.toContain("codexcommander managed block");
     } finally {
       await fx.stop(second);
     }
     expect(await secondOutput).not.toContain("Grok Build config updated");
   }, 45_000);
 
-  /** RED: report restore success after a blocked history worker; config recovery must not hide history contention. */
-  test("Restore truth: JSON distinguishes a busy history restore from native artifact recovery", async () => {
-    const fx = fixture();
-    fx.writeConfig({ clientIntegrations: { codex: false } });
-    const original = 'model = "gpt-5"\n';
-    const injected = `${original}# Auto-injected by opencodex\nopenai_base_url = "http://127.0.0.1:45678/v1"\n`;
-    const profile = "# opencodex profile\n";
-    writeFileSync(join(fx.codex, "config.toml"), injected);
-    writeFileSync(join(fx.codex, "opencodex.config.toml"), profile);
-    writeFileSync(join(fx.codex, "opencodex-journal.json"), JSON.stringify({
-      version: 1,
-      originalConfig: Buffer.from(original).toString("base64"),
-      originalProfile: null,
-      injectedConfigHash: createHash("sha256").update(injected).digest("hex"),
-      injectedProfileHash: createHash("sha256").update(profile).digest("hex"),
-      pid: process.pid,
-      timestamp: new Date().toISOString(),
-    }));
-    const stateDb = join(fx.codex, "state_5.sqlite");
-    const rollout = join(fx.codex, "restore-rollout.jsonl");
-    writeFileSync(rollout, `${JSON.stringify({ type: "session_meta", payload: { id: "restore-1", model_provider: "opencodex", source: "cli" } })}\n`);
-    const seeded = new Database(stateDb);
-    seeded.exec("CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, model_provider TEXT NOT NULL, source TEXT NOT NULL, first_user_message TEXT NOT NULL, has_user_event INTEGER NOT NULL)");
-    seeded.run("INSERT INTO threads VALUES ('restore-1', ?, 'opencodex', 'cli', 'hello', 1)", [rollout]);
-    seeded.close();
-    const historyBefore = readFileSync(stateDb);
-    const held = join(fx.root, "history-held");
-    const release = join(fx.root, "history-release");
-    const holder = Bun.spawn([process.execPath, "--eval", `
-      import { Database } from "bun:sqlite";
-      import { existsSync, writeFileSync } from "node:fs";
-      const db = new Database(${JSON.stringify(stateDb)});
-      db.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
-      writeFileSync(${JSON.stringify(held)}, "held");
-      const waiter = new Int32Array(new SharedArrayBuffer(4));
-      while (!existsSync(${JSON.stringify(release)})) Atomics.wait(waiter, 0, 0, 20);
-      db.exec("COMMIT"); db.close();
-    `], { cwd: repoRoot, env: fx.env(), stdout: "pipe", stderr: "pipe" });
-    fx.children.push(holder);
-    await waitFor(() => existsSync(held) ? true : null, "history BEGIN IMMEDIATE");
-    // The contended restore deliberately waits out PRODUCTION's retry budget:
-    // a 5 s SQLite busy timeout per attempt, two attempts, plus the delay
-    // between them — ~11 s of intentional waiting before it can report `busy`.
-    // A 15 s watchdog left almost no margin and fired on a loaded macOS runner
-    // (dev CI run 31105071651). Give the wait its budget plus real headroom;
-    // the case's own 45 s test timeout still bounds it.
-    const blocked = await fx.runCli(["restore", "--json"], fx.homeA, fx.userprofileA, 30_000);
-    expect(blocked.exitCode).toBe(1);
-    const envelope = JSON.parse(blocked.stdout) as { success: boolean; artifacts: { history: { state: string; reason?: string } } };
-    expect(envelope).toMatchObject({ success: false, artifacts: { history: { state: "failed", reason: "busy" } } });
-    expect(readFileSync(join(fx.codex, "config.toml"), "utf8")).toBe(original);
-    expect(readFileSync(stateDb).equals(historyBefore)).toBe(true);
-    writeFileSync(release, "release");
-    expect(await holder.exited).toBe(0);
-    const converged = await fx.runCli(["restore", "--json"]);
-    expect(converged.exitCode).toBe(0);
-    expect(JSON.parse(converged.stdout)).toMatchObject({ success: true, artifacts: { history: { state: "ok" } } });
-    const after = new Database(stateDb, { readonly: true });
-    expect(after.query<{ model_provider: string }, []>("SELECT model_provider FROM threads WHERE id = 'restore-1'").get()?.model_provider).toBe("openai");
-    after.close();
-  }, 45_000);
 });

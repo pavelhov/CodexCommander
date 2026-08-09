@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
-  conversationIdFromClaudeCacheKey,
   conversationIdFromClaudeMetadata,
   conversationIdFromResponsesRequest,
   matchesLogConversationId,
@@ -18,7 +17,7 @@ import type { PersistedUsageEntry } from "../src/usage/log";
 
 function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
   return {
-    requestId: "ocx-test",
+    requestId: "ccx-test",
     timestamp: 1,
     model: "gpt-test",
     provider: "openai",
@@ -98,8 +97,6 @@ describe("conversationIdFromClaudeMetadata", () => {
   test("hashes metadata.user_id and ignores Desktop system-hash keys", () => {
     expect(conversationIdFromClaudeMetadata({ user_id: "session-user" })).toBe(digest32("session-user"));
     expect(conversationIdFromClaudeMetadata({})).toBeUndefined();
-    expect(conversationIdFromClaudeCacheKey("system", "system-hash")).toBeUndefined();
-    expect(conversationIdFromClaudeCacheKey("metadata", digest32("session-user"))).toBe(digest32("session-user"));
   });
 });
 

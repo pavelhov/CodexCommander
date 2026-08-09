@@ -3,7 +3,7 @@ title: "사이드카: 웹 검색 및 비전"
 description: 네이티브 ChatGPT 사이드카를 통해 라우팅 모델에 실제 웹 검색을, 텍스트 전용 모델에 이미지 이해 기능을 제공합니다.
 ---
 
-라우팅 모델마다 호스팅 **웹 검색**이나 네이티브 **이미지 입력** 지원 범위가 다릅니다. opencodex는
+라우팅 모델마다 호스팅 **웹 검색**이나 네이티브 **이미지 입력** 지원 범위가 다릅니다. CodexCommander는
 ChatGPT 로그인(`forward`) 프로바이더나 저장된 Anthropic OAuth 프로바이더를 사용하는 두
 사이드카로 부족한 기능을 보완합니다. 사이드카 오류는 턴 전체를 실패시키지 않고 길이가 제한된 도구
 결과나 이미지 안내문으로 바뀝니다.
@@ -17,7 +17,7 @@ OAuth 프로바이더가 있을 때 `anthropic`, 없을 때 `openai`를 사용�
 
 ## 웹 검색 사이드카
 
-Codex가 패스스루가 아닌 라우팅 모델에 호스팅 `web_search`를 요청하면 opencodex는 다음 순서로
+Codex가 패스스루가 아닌 라우팅 모델에 호스팅 `web_search`를 요청하면 CodexCommander는 다음 순서로
 처리합니다.
 
 1. 호스팅 `web_search` 도구를 **제거하고** 라우팅 모델에는 합성 `web_search(query)` 함수 도구를
@@ -30,7 +30,7 @@ Codex가 패스스루가 아닌 라우팅 모델에 호스팅 `web_search`를 �
    **반복**합니다. 한도에 닿으면 검색 도구를 제거하고 최종 답변을 강제합니다. `apply_patch`나 shell
    같은 실제 클라이언트 도구가 나오면 턴을 끝내 해당 호출이 Codex에 전달되게 합니다.
 
-라우팅 모델의 모든 반복은 업스트림에 `stream: true`를 요청하지만, opencodex는 검색 여부나 최종
+라우팅 모델의 모든 반복은 업스트림에 `stream: true`를 요청하지만, CodexCommander는 검색 여부나 최종
 답변을 결정하기 전에 의미 있는 event를 내부에서 전부 버퍼링합니다. 첫 번째 반복의 최종
 header/status와 429 key rotation만 미리 가져옵니다. 따라서 합성 검색 호출과 중간 출력은 클라이언트에
 모델 출력으로 노출되지 않습니다.
@@ -69,10 +69,10 @@ stall은 전체 생성 timeout이 아닙니다. SSE가 시작되기 전 실패�
 
 ## 비전 사이드카
 
-라우팅 모델이 해당 프로바이더의 `noVisionModels`에 있고 요청에 이미지가 들어오면, opencodex는
+라우팅 모델이 해당 프로바이더의 `noVisionModels`에 있고 요청에 이미지가 들어오면, CodexCommander는
 메인 호출 **전에** 각 이미지를 설명한 텍스트로 바꿉니다. Dashboard와 관리 API의 현재 기본 선택값은
-`gpt-5.6-luna`이며, 시작할 때 명시적으로 저장된 기존 `gpt-5.4-mini` 값도 Luna로 마이그레이션합니다.
-다만 `visionSidecar.model` 필드 자체가 없으면 비전 실행 경로는 코드 폴백인 `gpt-5.4-mini`를 씁니다.
+`gpt-5.6-luna`입니다. `visionSidecar.model` 필드 자체가 없으면 비전 실행 경로는 코드 폴백인
+`gpt-5.4-mini`를 씁니다.
 
 - 이미지는 사용자, developer, 도구 결과 메시지에서 올 수 있습니다. Codex의 `view_image` 결과도
   포함됩니다.

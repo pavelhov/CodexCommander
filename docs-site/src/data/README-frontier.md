@@ -5,7 +5,7 @@ Static leaderboard data for the docs-site **Benchmarks** page lives in
 `../components/FrontierBoards.astro`. Ported from PR #144 (GUI Frontier page
 proposal) — the GUI was not the right home for hand-maintained snapshots.
 
-These numbers are **snapshots**, not live OpenCodex metering. Refresh them when
+These numbers are **snapshots**, not live CodexCommander metering. Refresh them when
 upstream boards move, then bump `provenance.capturedAt` and (if needed) the
 catalog `version`.
 

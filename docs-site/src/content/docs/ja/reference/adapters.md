@@ -3,7 +3,7 @@ title: アダプター
 description: 7つのプロバイダーアダプターの対象、リクエスト構成方式、固有の動作。
 ---
 
-**アダプター**は opencodex の内部リクエスト/レスポンスモデルとプロバイダーの wire 形式の間を変換します。すべてのアダプターは `ProviderAdapter` インターフェース（`src/adapters/base.ts`）を実装します。
+**アダプター**は CodexCommander の内部リクエスト/レスポンスモデルとプロバイダーの wire 形式の間を変換します。すべてのアダプターは `ProviderAdapter` インターフェース（`src/adapters/base.ts`）を実装します。
 
 ```ts
 interface ProviderAdapter {
@@ -16,7 +16,7 @@ interface ProviderAdapter {
 }
 ```
 
-`buildRequest` は `OcxParsedRequest` を上流の HTTP リクエストに落とし、`parseStream` /
+`buildRequest` は `CodexCommanderParsedRequest` を上流の HTTP リクエストに落とし、`parseStream` /
 `parseResponse` はプロバイダーのレスポンスを内部 `AdapterEvent` に持ち上げます。`fetchResponse` があると、アダプターがリトライとタイムアウトを直接担います。`runTurn` は 1 回の HTTP fetch とその後のレスポンスストリームでは表現できない伝送方式をサポートします。その後 [`bridge.ts`](/ja/reference/architecture/#ブリッジ) がイベントを Responses SSE に変えます。
 
 ## `openai-chat`
@@ -51,7 +51,7 @@ interface ProviderAdapter {
 先立って、同じキーで同一リクエストを待機して再送します。カスタム `runTurn` トランスポートは
 HTTP リトライ ループの対象外です。
 
-- `forward` URL → `{baseUrl}/responses`。`key` provider はデフォルトで従来の `{baseUrl}/v1/responses` 構築を使います。
+- `forward` URL → `{baseUrl}/responses`。`key` provider のデフォルト URL は `{baseUrl}/v1/responses` です。
 - `key` provider は検証済みの相対 `responsesPath` を設定できます。adapter は `baseUrl` 末尾の `/` を 1 つ除き、`{trimmedBaseUrl}{responsesPath}` に送信します。Ark Agent Plan では `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` と `responsesPath: "/responses"` を使います。
 - `forward` モードでは安全なヘッダー許可リスト（`FORWARD_HEADERS`）だけを中継します。authorization、ChatGPT account id、OpenAI beta/originator/session ヘッダーが対象です。この ChatGPT ログイン経路は [サイドカー](/ja/guides/sidecars/) にも使われます。
 
@@ -119,9 +119,9 @@ filtered incomplete になります。実際のツール呼び出しを伴わな
 - content-addressed blob で対話状態を再生し、サーバーツール呼び出しを Codex に再マッピングします。protobuf の `GetUsableModels` RPC でリアルタイム Cursor モデルを探し、run リクエストが wire に commit される前だけリトライします。
 - `cursor/grok-4.5-fast` は選択可能なモデルとして維持しつつ、Cursor には正規の `grok-4.5`
   モデルを送信し、個別の `effort` および `fast=true` 値は `requested_model.parameters` に格納します。
-- Cursor ネイティブのローカルファイルシステム/shell/network 実行はデフォルトで拒否します。明示的な `mcpServers` と `desktopExecutor` 統合はそれぞれ別の opt-in です。`unsafeAllowNativeLocalExec` はより広い組み込み executor を有効にし、Codex の承認/サンドボックスルールを迂回します。
+- Cursor ネイティブのローカルファイルシステム/shell/network 実行はデフォルトで拒否します。明示的な `mcpServers` と `desktopExecutor` 統合はそれぞれ別の opt-in です。`nativeLocalExec: "on"` はより広い組み込み executor を有効にし、Codex の承認/サンドボックスルールを迂回します。
 
-## `azure-openai`（別名: `azure`）
+## `azure-openai`
 
 **対象:** **Azure OpenAI**。`openai-responses` を包むため、同じく `passthrough: true` です。
 **認証:** `api-key` ヘッダーの `key`（Bearer ではない）。

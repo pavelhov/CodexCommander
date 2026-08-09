@@ -1,28 +1,28 @@
 ---
 title: Web 仪表盘
-description: 用于管理代理健康状态、provider、模型、委派指引、认证池、usage 和日志的 opencodex GUI。
+description: 用于管理代理健康状态、provider、模型、委派指引、认证池、usage 和日志的 CodexCommander GUI。
 ---
 
-opencodex 内置了一个由代理提供服务的本地 web 仪表盘（`gui/` 下的 Vite/React 应用）。你可以在
+CodexCommander 内置了一个由代理提供服务的本地 web 仪表盘（`gui/` 下的 Vite/React 应用）。你可以在
 这里快速管理 provider、Codex/ChatGPT 账号、目录模型、sidecar、子代理设置和请求流量。
 
 ## 打开仪表盘
 
 ```bash
-ocx gui
+ccx gui
 ```
 
 该命令会在浏览器中打开 `http://localhost:<port>`；如果代理尚未运行，会先自动启动。开发时也可
 让 GUI dev server 单独连接到正在运行的代理：
 
 ```bash
-ocx start
+ccx start
 bun run dev:gui
 ```
 
 ## 登录
 
-通过 `localhost`、`127.0.0.1` 等 loopback 地址打开仪表盘时，它会自动获得一个短期 GUI session，因此通常无需输入 token。在非 loopback 主机上公开仪表盘时，必须使用 `OPENCODEX_ADMIN_AUTH_TOKEN` 或自动生成的 `~/.opencodex/admin-api-token` 文件中的管理员 token。
+通过 `localhost`、`127.0.0.1` 等 loopback 地址打开仪表盘时，它会自动获得一个短期 GUI session，因此通常无需输入 token。在非 loopback 主机上公开仪表盘时，必须使用 `CODEXCOMMANDER_ADMIN_AUTH_TOKEN` 或自动生成的 `~/.codexcommander/admin-api-token` 文件中的管理员 token。
 
 远程仪表盘会显示标准密码表单，浏览器密码管理器可以提示保存并自动填充 token。仪表盘本身只在内存中保存 token，不会写入 `localStorage` 或 `sessionStorage`；是否持久保存完全由浏览器或密码管理器决定。
 
@@ -31,19 +31,19 @@ bun run dev:gui
 | 区域 | 作用 |
 | --- | --- |
 | **Dashboard 摘要** | 显示 multi-agent 模式、在线状态、版本、运行时间、provider 数量、30 天 token 总量、活动 provider 和可用的原生/路由模型。 |
-| **Sub-agent delegation** | 选择供 OpenCodex 委派指引与可选的 Codex 原生子代理默认值共用的原生/路由模型和可选 reasoning 强度。它不是逐次生成的路由器，详见下文。 |
+| **Sub-agent delegation** | 选择供 CodexCommander 委派指引与可选的 Codex 原生子代理默认值共用的原生/路由模型和可选 reasoning 强度。它不是逐次生成的路由器，详见下文。 |
 | **Sidecar** | 选择 web-search 模型及强度，以及图像描述模型；更改从下一次请求开始生效。 |
-| **Maintenance** | 重新同步 Codex 模型目录，查看项目级配置绕过警告，检查 latest/preview 版本，并可在更新后重启代理。 |
+| **Maintenance** | 重新同步 Codex 模型目录并查看项目级配置绕过警告。 |
 | **启动安全** | 显示注入的 Codex 路由能否在重启后继续工作，并分别显示服务、launcher shim 状态和准确的修复命令。 |
 | **Windows 托盘** | 安装用户登录托盘，一键控制代理启动、停止、重启、面板和状态。托盘不是代理重启服务。 |
-| **Codex 自动启动** | 允许已安装的 Codex launcher shim 运行 `ocx ensure`。此开关不会安装 shim 或后台服务。 |
+| **Codex 自动启动** | 允许已安装的 Codex launcher shim 运行 `ccx ensure`。此开关不会安装 shim 或后台服务。 |
 | **Providers** | 添加、编辑、设为默认（仅已启用）、启用/禁用、删除 provider，并在支持时管理 OAuth 账号池和 API key 池。删除当前默认时，会切换到剩余的第一个已启用 provider（若存在）；否则拒绝删除并保留当前默认。Claude（Anthropic）OAuth 池中，每个已登录账号显示各自的 5 小时与周限额条（用量按凭证计）；探测失败时保留上次已知数值并标记为暂时不可用。 |
 | **Add provider** | 搜索 registry preset，选择账号登录、API key 服务、本地服务器或自定义 endpoint。输入搜索词时会同时搜索 Accounts、Free 和 Paid；标签仍可用于浏览。 |
 | **Codex Auth** | 添加 ChatGPT/Codex 池账号，选择下一 session 的账号，刷新 5h / 每周 / 30d 配额，启用或停用配额自动切换，设置其 1–100% 阈值和临时故障 failover。 |
 | **Subagents** | 在 **Agent Command Center** 中选择并排序向 `spawn_agent` 公开的五个模型、搜索当前目录，并配置协议、V2 传递、引导、回退和线程上限等 Run Policy。已保存但未公开的条目会被明确报告。 |
 | **Models** | 开关原生 GPT 与路由模型，配置 provider allowlist 和上下文上限，选择 **Classic v1**、**Follow Codex defaults** 或 **Concurrent v2**，并设置 v2 thread 数量。Current behavior 卡片会将上下文显示为 **Uncapped**、**Limited** 或 **Mixed limits**。每个路由 provider 都会显示 **自动发现已开启** 或 **仅静态目录**，并链接到对应的 provider 设置。 |
 | **Client Apps** | 查看已配置和可连接的本地客户端；在支持时应用或移除托管配置并检查备份；集中访问 Codex、Claude Code/Desktop、Grok Build、OpenCode 及文件托管客户端，同时避免把客户端与提供商混为一谈。 |
-| **API Access** | 签发和管理其他应用连接 OpenCodex 代理时使用的认证密钥。上游提供商凭据仍归 Providers 管理。 |
+| **API Access** | 签发和管理其他应用连接 CodexCommander 代理时使用的认证密钥。上游提供商凭据仍归 Providers 管理。 |
 | **Logs** | 自动刷新近期请求，显示 token、请求强度以及（可用时）实际发送强度、实际模型、provider、状态、request id、耗时和错误详情。适配器发送 reasoning 参数时，详情中还会显示准确的 wire field。可按不透明会话/对话 ID（客户端提供时）筛选，并对当前已加载的 Logs 环形缓冲合计 token 与估算标价成本。 |
 | **Usage / Debug** | 查看 token usage 覆盖率与趋势，或启用可选的 provider transport 和 usage 提取诊断。 |
 | **Storage** | 只读查看 CODEX_HOME 磁盘占用（会话、归档、数据库、附件）。可选归档清理：预览最旧 N%，默认隔离到 `CODEX_HOME/.trash`，或勾选后永久删除。**自动清理策略**为可选且**默认关闭**（`storageCleanupPolicy.enabled`）；可在 Storage 页配置阈值/目标/计划/模式，或点「立即运行」。可在 Storage 页从隔离区恢复（JSONL + 线程）。活动会话保持只读。Codex 锁定最新/活动的 `state_*.sqlite` 时拒绝清理与恢复。 |
@@ -51,7 +51,7 @@ bun run dev:gui
 
 ### 链接到某个部分
 
-布局只有一种，无需切换。Dashboard 的各个部分都有自己的地址：`#dashboard` 打开 Overview，`#dashboard/providers` 与 `#dashboard/models` 打开另外两个。刷新、收藏和后退都会保留当前所在的部分。**Logs** 同理，使用 `#logs` 与 `#logs/debug`。旧的 `#providers/workspace` 书签现在会跳转到 `#providers`。
+布局只有一种，无需切换。Dashboard 的各个部分都有自己的地址：`#dashboard` 打开 Overview，`#dashboard/providers` 与 `#dashboard/models` 打开另外两个。刷新、收藏和后退都会保留当前所在的部分。**Logs** 同理，使用 `#logs` 与 `#logs/debug`。
 
 **Logs** 和 **Usage** 中的费用是根据已报告 token 计算的 API 标价折算值，不是账单，也不能证明
 实际发生了扣费；实际可能计入订阅用量或消耗服务商额度。
@@ -65,15 +65,15 @@ bun run dev:gui
 ## 委派选择器与生成路由的区别
 
 Dashboard 的 **Sub-agent delegation** 选择器会保存 `injectionModel`，以及可选的
-`injectionEffort`。所选值会用于由 OpenCodex 编写的委派指引，而该指引由
+`injectionEffort`。所选值会用于由 CodexCommander 编写的委派指引，而该指引由
 `multiAgentGuidanceEnabled` 单独控制。清除模型时也会清除已保存的强度，并关闭原生默认值同步。
 
-启用 **用作原生 Codex 子代理默认值** 后，当 OpenCodex 管理当前 Codex 路由时，下一次同步或重启会
+启用 **用作原生 Codex 子代理默认值** 后，当 CodexCommander 管理当前 Codex 路由时，下一次同步或重启会
 把所选模型和强度应用为原生 `[agents]` 默认值；外部用户管理的 provider 配置不会被修改。这些默认值只影响新建的 Codex 任务，该选项本身不会触发委派。已有的用户自有
 `[agents]` 默认值会保留而不会被覆盖，因此请求的默认值可能与 Codex 实际使用的默认值不同。
 
 :::caution
-两个开关相互独立：关闭 OpenCodex 委派指引不会关闭原生默认值同步；启用原生默认值同步也不会
+两个开关相互独立：关闭 CodexCommander 委派指引不会关闭原生默认值同步；启用原生默认值同步也不会
 启用委派指引或触发委派。两者都不是代理侧的逐次跨模型路由器。v1/base/v2 的
 权威说明见 [子代理界面](/zh-cn/guides/sub-agent-surface/)。
 :::
@@ -95,7 +95,7 @@ Pool 模式会在主账号和已添加的 Codex 账号之间选择；Direct 只�
 - 每张账号卡片都带有 **选择顺序** 控件（最先 / 较先 / 默认 / 较后 / 最后）。顺序靠前的账号先被使用，
   只有当它上面的账号全部耗尽或不可用时才会降到更靠后的顺序。改动顺序会从**下一个未绑定请求**起生效，
   且不会移动已经绑定的 thread。Codex Desktop（主）账号同样参与排序，可以设为 **最后** 留作备用。
-  用 `ocx account priority` 设置的非预设值也会保留在卡片上，仍可选择。
+  用 `ccx account priority` 设置的非预设值也会保留在卡片上，仍可选择。
 - Thread affinity 可避免每个请求都来回切换账号。启用配额自动切换后，长时间运行的 thread 会被
   定期重新评估；当相关 usage 达到阈值，并且存在使用率确实更低的可用账号时，该 thread 可能会
   重新绑定。
@@ -118,7 +118,6 @@ GUI 是代理 JSON 管理 API 之上的轻量客户端。常用 endpoint 包括�
 | `GET /api/startup-health` | 读取不含秘密信息的路由、服务、shim 和重启安全诊断。 |
 | `GET` / `POST /api/windows-tray` | 读取或更改 Windows 托盘安装和显示状态；POST 支持 `install`、`start`、`stop`、`uninstall`。 |
 | `POST /api/sync` | 重建共享模型目录，并把 Codex 模型缓存标记为过期。 |
-| `GET /api/update/check` · `POST /api/update/run` · `GET /api/update/status` | 检查、运行和监控自更新任务。 |
 | `GET` / `PUT /api/sidecar-settings` | 读取或设置 search/vision sidecar 模型。 |
 | `GET` / `PUT /api/injection-model` | 读取或设置委派指引模型/强度、指引开关及 Codex 原生子代理默认值同步开关。 |
 | `GET` / `PUT /api/v2` | 读取或设置界面模式、Codex feature flag 和 v2 thread 上限。 |

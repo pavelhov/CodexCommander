@@ -3,19 +3,19 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-describe("ocx init piped stdin (#754)", () => {
+describe("ccx init piped stdin (#754)", () => {
   const dirs: string[] = [];
   afterEach(() => {
     while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
   });
 
   test("exits cleanly when stdin closes before the first prompt answer", async () => {
-    const home = mkdtempSync(join(tmpdir(), "ocx-init-eof-"));
+    const home = mkdtempSync(join(tmpdir(), "ccx-init-eof-"));
     dirs.push(home);
     const cli = join(import.meta.dir, "..", "src", "cli", "index.ts");
     const proc = Bun.spawn({
       cmd: [process.execPath, cli, "init"],
-      env: { ...process.env, OPENCODEX_HOME: home },
+      env: { ...process.env, CODEXCOMMANDER_HOME: home },
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",

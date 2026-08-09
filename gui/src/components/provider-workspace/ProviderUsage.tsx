@@ -27,8 +27,8 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsa
   const { locale } = useI18n();
   const timeLabels = relativeTimeLabelsFromT(t);
   const hasUsage = usageTotals?.requests !== undefined;
-  const quota = accountQuotaFromReport(quotaReport);
-  const referenceQuota = referenceQuotaFromReport(quotaReport);
+  const quota = quotaReport ? accountQuotaFromReport(quotaReport) : null;
+  const referenceQuota = quotaReport ? referenceQuotaFromReport(quotaReport) : null;
   const [expandedModel, setExpandedModel] = useState<string | null>(null);
   void item;
 

@@ -18,11 +18,11 @@ import { startServer } from "../src/server";
 import { usageLogPath } from "../src/usage/log";
 
 const moduleOriginalFetch = globalThis.fetch;
-const moduleOriginalHome = process.env.OPENCODEX_HOME;
+const moduleOriginalHome = process.env.CODEXCOMMANDER_HOME;
 afterEach(() => {
   globalThis.fetch = moduleOriginalFetch;
-  if (moduleOriginalHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = moduleOriginalHome;
+  if (moduleOriginalHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = moduleOriginalHome;
 });
 
 describe("OpenAI API virtual model resolution", () => {
@@ -176,12 +176,12 @@ describe("validateOpenAiVirtualModelDefinition", () => {
 describe("OpenAI API compact transport", () => {
   test("maps every Pro id to base, strips reasoning, buffers failures, caps bodies, and logs exactly once", async () => {
     const originalFetch = globalThis.fetch;
-    const home = mkdtempSync(join(tmpdir(), "ocx-openai-api-compact-"));
-    process.env.OPENCODEX_HOME = home;
+    const home = mkdtempSync(join(tmpdir(), "ccx-openai-api-compact-"));
+    process.env.CODEXCOMMANDER_HOME = home;
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "openai-apikey",
-      openaiProviderTierVersion: 2,
       providers: {
         "openai-apikey": {
           adapter: "openai-responses",
@@ -360,7 +360,7 @@ describe("OpenAI API compact transport", () => {
     } finally {
       globalThis.fetch = originalFetch;
       await server.stop(true);
-      delete process.env.OPENCODEX_HOME;
+      delete process.env.CODEXCOMMANDER_HOME;
       rmSync(home, { recursive: true, force: true });
     }
   }, 20_000);
@@ -369,13 +369,13 @@ describe("OpenAI API compact transport", () => {
 describe("OpenAI API Pro transport identities", () => {
   test("HTTP JSON, HTTP SSE, and real WebSocket keep base wire/client identity and virtual logs", async () => {
     const originalFetch = globalThis.fetch;
-    const home = mkdtempSync(join(tmpdir(), "ocx-openai-api-pro-"));
-    process.env.OPENCODEX_HOME = home;
+    const home = mkdtempSync(join(tmpdir(), "ccx-openai-api-pro-"));
+    process.env.CODEXCOMMANDER_HOME = home;
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       websockets: true,
       defaultProvider: "openai-apikey",
-      openaiProviderTierVersion: 2,
       providers: {
         "openai-apikey": {
           adapter: "openai-responses",
@@ -512,7 +512,7 @@ describe("OpenAI API Pro transport identities", () => {
     } finally {
       globalThis.fetch = originalFetch;
       await server.stop(true);
-      delete process.env.OPENCODEX_HOME;
+      delete process.env.CODEXCOMMANDER_HOME;
       rmSync(home, { recursive: true, force: true });
     }
   }, 20_000);

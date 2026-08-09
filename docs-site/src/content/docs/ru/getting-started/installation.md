@@ -1,9 +1,9 @@
 ---
 title: Установка
-description: Установите прокси opencodex (ocx) и необходимые компоненты и убедитесь, что он запускается.
+description: Установите прокси CodexCommander (ccx) и необходимые компоненты и убедитесь, что он запускается.
 ---
 
-opencodex устанавливает два эквивалентных имени команды: `ocx` и `opencodex`. Обе запускают один и
+В пакетной или локально связанной сборке CodexCommander предоставляет два эквивалентных имени команды: `ccx` и `codexcommander`. Обе запускают один и
 тот же небольшой локальный HTTP-сервер (построенный на Bun). Запросы к моделям идут к провайдеру,
 выбранному маршрутизацией; опциональные сайдкары для vision и веб-поиска также могут использовать
 ваш вход в ChatGPT, когда они нужны маршрутизируемой модели.
@@ -12,87 +12,58 @@ opencodex устанавливает два эквивалентных имен�
 
 | Требование | Зачем |
 | --- | --- |
-| **[Node](https://nodejs.org) ≥ 18** | `ocx` работает на рантайме Bun, но рантайм автоматически поставляется в комплекте при `npm install` — устанавливать Bun самостоятельно **не нужно**. |
-| **[OpenAI Codex](https://openai.com/codex)** (CLI, App или SDK) | Клиент, перед которым работает opencodex. opencodex записывает данные в `$CODEX_HOME/config.toml` (по умолчанию `~/.codex/config.toml`). |
+| **[Bun](https://bun.sh)** | Исходный рантайм и скрипты репозитория выполняются непосредственно через Bun. |
+| **[OpenAI Codex](https://openai.com/codex)** (CLI, App или SDK) | Клиент, перед которым работает CodexCommander. CodexCommander записывает данные в `$CODEX_HOME/config.toml` (по умолчанию `~/.codex/config.toml`). |
 | Аккаунт провайдера или API-ключ | Anthropic, xAI, Kimi, Ollama Cloud, OpenRouter, OpenAI-совместимая конечная точка или ваш вход в ChatGPT. |
 
-## Установка
+## Запуск исходного checkout
 
 ```bash
-npm install -g @bitkyc08/opencodex
-```
-
-:::note[npm заблокировал postinstall-скрипт bun?]
-Свежие версии npm могут блокировать postinstall-скрипт bun (`npm warn
-install-scripts ... blocked because they are not covered by allowScripts`),
-из-за чего встроенный рантайм Bun остаётся неподготовленным. Переустановите
-пакет, разрешив скрипт bun, — и обязательно указывайте имя пакета: в
-сокращённой подсказке npm его нет, и без него вместо пакета переустановится
-текущий каталог:
-
-```bash
-npm install -g --allow-scripts=bun @bitkyc08/opencodex
-
-# если изначально устанавливали через sudo, продолжайте использовать sudo:
-sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
-```
-:::
-
-Убедитесь, что оба псевдонима команды доступны в `PATH`:
-
-```bash
-ocx --version
-opencodex --version
-```
-
-### Каналы релизов
-
-Стабильный канал `latest` уже включает поддержку каталога GPT-5.6 Sol/Terra/Luna для маршрутов
-ChatGPT, OpenAI по API-ключу, OpenRouter и экспериментального Cursor. Доступ у вышестоящего
-провайдера по-прежнему зависит от аккаунта; сами по себе записи каталога доступ не дают.
-Используйте канал preview только для тестирования ещё не выпущенных сборок opencodex:
-
-```bash
-npm install -g @bitkyc08/opencodex@preview
-ocx update --tag preview
-```
-
-## Запуск из исходного кода
-
-Чтобы работать над самим opencodex:
-
-```bash
-git clone https://github.com/pavelhov/opencodex.git
-cd opencodex
 bun install
+bun run build:gui
+bun run src/cli/index.ts start
+```
+
+Пакет в реестре сейчас не опубликован. В этом checkout заменяйте `ccx <args>` на
+`bun run src/cli/index.ts <args>`. В другом терминале проверьте рантайм:
+
+```bash
+bun run src/cli/index.ts --version
+```
+
+## Режим разработки
+
+При изменении UI запускайте прокси и панель управления отдельно:
+
+```bash
 bun run dev:proxy   # запускает API прокси в режиме разработки (src/cli/index.ts start)
 bun run dev:gui     # запускает dev-сервер панели управления (в другом терминале)
 ```
 
-`bun run dev` остаётся псевдонимом для `bun run dev:proxy`. API прокси предоставляет `/healthz`,
+`bun run dev` — псевдоним для `bun run dev:proxy`. API прокси предоставляет `/healthz`,
 `/v1/responses` и `/api/*`; `GET /` отдаёт упакованную панель управления только после того, как
 `bun run build:gui` создаст `gui/dist`. Пока вы работаете над панелью управления, запускайте
-фронтенд отдельно командой `bun run dev:gui`.
+фронтенд отдельно командой `bun run dev:gui`. Компаньон macOS собирается из того же checkout командами `bun run test:macos && bun run build:macos`; исходная сборка находится в `dist/macos/CodexCommander.app`.
 
 ## Что создаётся
 
-Состояние opencodex хранится в `$OPENCODEX_HOME` (по умолчанию `~/.opencodex`). Файлы интеграции
+Состояние CodexCommander хранится в `$CODEXCOMMANDER_HOME` (по умолчанию `~/.codexcommander`). Файлы интеграции
 с Codex находятся в `$CODEX_HOME` (по умолчанию `~/.codex`).
 
 | Путь | Назначение |
 | --- | --- |
-| `$OPENCODEX_HOME/config.json` | Ваши провайдеры, провайдер по умолчанию, порт и параметры. |
-| `$OPENCODEX_HOME/ocx.pid` | PID запущенного прокси (защита от повторного запуска). |
-| `$OPENCODEX_HOME/runtime-port.json` | Текущие PID, имя хоста и порт, включая автоматически выбранный запасной порт. |
-| `$OPENCODEX_HOME/auth.json` | Сохранённые учётные данные OAuth (после `ocx login`). |
-| `$OPENCODEX_HOME/catalog-backup*.json` | Резервные копии каталога моделей Codex, создаваемые перед тем, как opencodex его изменит. |
-| `$CODEX_HOME/config.toml` | На loopback-адресе opencodex добавляет корневой `openai_base_url`, отмеченный собственным маркером; при привязке не к loopback используются `model_provider = "opencodex"` и `[model_providers.opencodex]`, чтобы Codex мог отправлять заголовок API-аутентификации. |
-| `$CODEX_HOME/opencodex.config.toml` | Резервный/справочный профиль, записываемый рядом с основной конфигурацией Codex. |
-| `$CODEX_HOME/opencodex-catalog.json` | Синхронизированный каталог нативных и маршрутизируемых моделей, используемый Codex. |
+| `$CODEXCOMMANDER_HOME/config.json` | Ваши провайдеры, провайдер по умолчанию, порт и параметры. |
+| `$CODEXCOMMANDER_HOME/codexcommander.pid` | PID запущенного прокси (защита от повторного запуска). |
+| `$CODEXCOMMANDER_HOME/runtime-port.json` | Текущие PID, имя хоста и порт, включая автоматически выбранный запасной порт. |
+| `$CODEXCOMMANDER_HOME/auth.json` | Сохранённые учётные данные OAuth (после `ccx login`). |
+| `$CODEXCOMMANDER_HOME/catalog-backup-<catalog-id>.json` | Резервные копии каталога моделей Codex, создаваемые перед тем, как CodexCommander его изменит. |
+| `$CODEX_HOME/config.toml` | На loopback-адресе CodexCommander добавляет корневой `openai_base_url`, отмеченный собственным маркером; при привязке не к loopback используются `model_provider = "codexcommander"` и `[model_providers.codexcommander]`, чтобы Codex мог отправлять заголовок API-аутентификации. |
+| `$CODEX_HOME/codexcommander.config.toml` | Резервный/справочный профиль, записываемый рядом с основной конфигурацией Codex. |
+| `$CODEX_HOME/codexcommander-catalog.json` | Синхронизированный каталог нативных и маршрутизируемых моделей, используемый Codex. |
 
 :::note
-opencodex никогда не удаляет вашу конфигурацию Codex. Каждое внедрение обратимо — `ocx stop`,
-`ocx restore` или `ocx eject` убирают ровно те строки, которые добавил opencodex, и восстанавливают
+CodexCommander никогда не удаляет вашу конфигурацию Codex. Каждое внедрение обратимо — `ccx stop`,
+`ccx restore` или `ccx eject` убирают ровно те строки, которые добавил CodexCommander, и восстанавливают
 нативный Codex.
 :::
 

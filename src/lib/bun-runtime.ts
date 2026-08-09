@@ -1,10 +1,10 @@
 /**
  * Bundled Bun runtime resolution.
  *
- * opencodex ships the Bun runtime via the `bun` npm dependency (esbuild-style:
+ * CodexCommander ships the Bun runtime via the `bun` npm dependency (esbuild-style:
  * a tiny main package + platform-specific `@oven/bun-*` optionalDependencies,
  * finalized by the package's own postinstall `node install.js`). The npm `bin`
- * launcher (bin/ocx.mjs) and the durable service/shim integrations both need a
+ * launcher (`bin/ccx.mjs`) and the durable service/shim integrations both need a
  * stable path to that binary. This module is the single source of truth.
  *
  * In a from-source dev checkout the `bun` dependency may be absent; callers fall
@@ -19,7 +19,8 @@ export { isRealBunBinary };
 
 const require = createRequire(import.meta.url);
 
-const BUN_OVERRIDE_ENV = "OPENCODEX_BUN_PATH";
+/** Explicit override consumed by the canonical launcher. */
+const BUN_OVERRIDE_ENV = "CCX_BUN_PATH";
 
 /**
  * Env marker stamped by whichever launcher selected the Bun binary, then read back
@@ -29,14 +30,14 @@ const BUN_OVERRIDE_ENV = "OPENCODEX_BUN_PATH";
  * resolving it at report time answers "what would this shell pick now", not "what was
  * this service started with", and those differ exactly when the answer matters.
  */
-export const BUN_RUNTIME_SOURCE_ENV = "OCX_BUN_RUNTIME_SOURCE";
+export const BUN_RUNTIME_SOURCE_ENV = "CCX_BUN_RUNTIME_SOURCE";
 
 /**
  * The binary the marker was minted for. Stamped beside the source so a reader can tell
  * whether a marker still describes the process holding it, without re-deriving the
  * selection from an environment that may no longer contain it.
  */
-export const BUN_RUNTIME_PATH_ENV = "OCX_BUN_RUNTIME_PATH";
+export const BUN_RUNTIME_PATH_ENV = "CCX_BUN_RUNTIME_PATH";
 
 export type BunRuntimeSource = "override" | "bundled" | "process";
 
@@ -67,7 +68,7 @@ export function reportedBunRuntimeSource(
   if (!source) return undefined;
   // Source and binary are a PAIR: without a recorded path that names THIS
   // executable, the marker describes some other launch and must not be
-  // reported (a bare OCX_BUN_RUNTIME_SOURCE inherited from an unrelated
+  // reported (a bare CCX_BUN_RUNTIME_SOURCE inherited from an unrelated
   // parent would otherwise claim a confident wrong origin).
   const recordedPath = env[BUN_RUNTIME_PATH_ENV]?.trim();
   if (!recordedPath || !samePath(recordedPath, process.execPath)) return undefined;
@@ -85,7 +86,7 @@ export function bunRuntimeProvenanceEnv(runtime: DurableBunRuntime): Record<stri
  *
  * These launchers re-exec the current runtime rather than resolving a binary, so the
  * provenance to report is whatever launched THIS process. Without this the marker would
- * be silently dropped on `ocx ensure`, GUI start, restart, and update-relaunch, and the
+ * be silently dropped on `ccx ensure`, GUI start, restart, and update-relaunch, and the
  * service would report an unknown origin it actually knows.
  *
  * An inherited marker is carried forward only when the binary it was minted for is the
@@ -94,7 +95,7 @@ export function bunRuntimeProvenanceEnv(runtime: DurableBunRuntime): Record<stri
  * Bun would otherwise relaunch the daemon with a provenance contradicting the binary
  * actually serving it. The check compares the recorded path rather than re-deriving the
  * selection, because a service installed with a shell-local override keeps neither that
- * shell nor its `OPENCODEX_BUN_PATH`, and re-deriving would demote a correct `override`
+ * shell nor its `CCX_BUN_PATH`, and re-deriving would demote a correct `override`
  * to `process` on its first relaunch.
  */
 export function withProcessRuntimeProvenance(
@@ -168,7 +169,7 @@ export function durableBunRuntime(): DurableBunRuntime {
   // A durable artifact must use the runtime selected BEFORE Bun auto-loaded a
   // project dotenv. The Node launcher and owned service/shim launchers stamp the
   // selected source/path pair; it is accepted only when it names this exact
-  // running executable. Re-reading OPENCODEX_BUN_PATH here would let a project
+  // running executable. Re-reading CCX_BUN_PATH here would let a project
   // `.env` persist an arbitrary executable into a shim or service.
   return recordedCurrentRuntime(process.env) ?? unmarkedDurableBunRuntime();
 }
@@ -176,7 +177,7 @@ export function durableBunRuntime(): DurableBunRuntime {
 /**
  * Bun path to bake into durable artifacts (launchd/systemd/Task Scheduler and
  * the Codex auto-start shim). Prefer the bundled binary — it lives under the
- * npm global prefix and survives across `ocx update` — and fall back to the
+ * installed package and remains stable for its lifetime — and fall back to the
  * current runtime, which is Bun when launched normally.
  */
 export function durableBunPath(): string {

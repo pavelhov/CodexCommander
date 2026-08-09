@@ -8,7 +8,7 @@
  * bookkeeping seams to that same store so the two can never point at different
  * roots.
  *
- * Design of record: devlog/_fin/260802_client_toggle_api/006 §Config-dir seam.
+ * Design contract.
  */
 import {
   appendOperation,
@@ -63,11 +63,11 @@ export interface IntegrationStateStore {
  * Bind every integration state path to ONE root.
  *
  * Ownership-manifest note: writes go through `atomicWriteFile`, which records
- * the target in the opencodex uninstall manifest. That registration is scoped
+ * the target in the CodexCommander uninstall manifest. That registration is scoped
  * by `manifestRelativePath` and refuses any path outside the process config
  * dir, so a store rooted in a temp dir — the shape every test uses — touches
  * no global state. A store rooted UNDER the real config dir does register its
- * files there, which is correct: those files genuinely are opencodex-owned and
+ * files there, which is correct: those files genuinely are CodexCommander-owned and
  * should be removed on uninstall.
  */
 export function createIntegrationStateStore(root: string = integrationsDir()): IntegrationStateStore {

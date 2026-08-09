@@ -1,7 +1,7 @@
 /**
  * Eager bounded single-reader SSE relay (#314 WP2) + createSseInspector
  * extraction locks. Fixtures follow the deterministic pull-count pattern from
- * devlog/_plan/260723_win_mem_safestream/020 — no wall-clock assertions except
+ * implementation contract — no wall-clock assertions except
  * via the injectable clock/short drain windows.
  */
 import { describe, expect, test } from "bun:test";

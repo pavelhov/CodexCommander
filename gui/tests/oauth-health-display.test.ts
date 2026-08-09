@@ -43,11 +43,10 @@ describe("oauth health badge helpers", () => {
     expect(oauthHealthIsCooldown("healthy")).toBe(false);
   });
 
-  test("accountNeedsReauth combines legacy flag with health-only reauth", () => {
+  test("accountNeedsReauth follows the structured health status", () => {
     expect(accountNeedsReauth(undefined)).toBe(false);
-    expect(accountNeedsReauth({ needsReauth: true })).toBe(true);
     expect(accountNeedsReauth({ health: { status: "reauth_required" } })).toBe(true);
-    expect(accountNeedsReauth({ needsReauth: false, health: { status: "healthy" } })).toBe(false);
+    expect(accountNeedsReauth({ health: { status: "healthy" } })).toBe(false);
     expect(accountNeedsReauth({ health: { status: "cooldown" } })).toBe(false);
     expect(accountNeedsReauth({ health: { status: "warning" } })).toBe(false);
   });
@@ -79,7 +78,7 @@ describe("oauth health badge helpers", () => {
     const original = hadClipboard ? navigator.clipboard : undefined;
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
     try {
-      expect(await copyTextToClipboard("ocx doctor")).toBe(false);
+      expect(await copyTextToClipboard("ccx doctor")).toBe(false);
     } finally {
       if (hadClipboard) {
         Object.defineProperty(navigator, "clipboard", { configurable: true, value: original });
@@ -99,8 +98,8 @@ describe("oauth health badge helpers", () => {
       value: { writeText },
     });
     try {
-      expect(await copyTextToClipboard("ocx doctor")).toBe(true);
-      expect(writeText).toHaveBeenCalledWith("ocx doctor");
+      expect(await copyTextToClipboard("ccx doctor")).toBe(true);
+      expect(writeText).toHaveBeenCalledWith("ccx doctor");
     } finally {
       if (hadClipboard) {
         Object.defineProperty(navigator, "clipboard", { configurable: true, value: original });

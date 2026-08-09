@@ -30,7 +30,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
     return (
       <EmptyState style={{ marginTop: 40 }} icon={<IconAlert />}
         title={<span style={{ color: "var(--red)" }}>{t("dash.cannotConnect")}</span>}>
-        <Trans k="dash.runStart" cmd="ocx start" />
+        <Trans k="dash.runStart" cmd="ccx start" />
       </EmptyState>
     );
   }
@@ -49,7 +49,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
       setExpandedProviders={setExpandedProviders}
     />
   );
-  const updateDialog = <DashboardDialogs {...d} />;
+  const dialogs = <DashboardDialogs {...d} />;
 
   const sections: { id: DashboardSection; label: string; body: ReactNode }[] = [
     { id: "overview", label: t("dash.workspace.overview"), body: overviewSection },
@@ -105,7 +105,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
       >
         {selected.body}
       </section>
-      {updateDialog}
+      {dialogs}
     </div>
   );
 }

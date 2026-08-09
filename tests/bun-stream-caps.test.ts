@@ -70,7 +70,7 @@ describe("bunHasAsyncPullCancelFix", () => {
 });
 
 describe("decideEagerRelay (activation scenarios)", () => {
-  test("auto on today's bundled runtime → legacy tee (auto-known-bad)", () => {
+  test("auto on today's bundled runtime → safe tee (auto-known-bad)", () => {
     expect(decideEagerRelay("auto", "1.3.14", null)).toEqual({
       useEagerRelay: false,
       reason: "auto-known-bad",
@@ -91,16 +91,16 @@ describe("decideEagerRelay (activation scenarios)", () => {
     });
   });
 
-  test("explicit legacy-tee pin wins even on fixed runtimes", () => {
-    expect(decideEagerRelay("legacy-tee", "9.9.9", "1.4.0")).toEqual({
+  test("explicit safe-tee pin wins even on fixed runtimes", () => {
+    expect(decideEagerRelay("safe-tee", "9.9.9", "1.4.0")).toEqual({
       useEagerRelay: false,
-      reason: "config-legacy",
+      reason: "config-safe",
     });
   });
 });
 
 describe("selectEagerPath (platform policy matrix)", () => {
-  const configLegacy = { useEagerRelay: false, reason: "config-legacy" } as const;
+  const configSafe = { useEagerRelay: false, reason: "config-safe" } as const;
   const configEager = { useEagerRelay: true, reason: "config-eager" } as const;
   const autoFixed = { useEagerRelay: true, reason: "auto-fixed-runtime" } as const;
   const autoDarwinPlaintext = { useEagerRelay: true, reason: "auto-darwin-plaintext-v2" } as const;
@@ -109,18 +109,18 @@ describe("selectEagerPath (platform policy matrix)", () => {
   const plaintextRewrite = { needsClientRewrite: true, plaintextCollaborationRewrite: true } as const;
   const cases: Array<{
     platform: NodeJS.Platform;
-    mode: "auto" | "legacy-tee" | "eager-relay";
+    mode: "auto" | "safe-tee" | "eager-relay";
     shape: typeof none | typeof otherRewrite | typeof plaintextRewrite;
     version: string;
     minFixed: string | null;
-    expected: typeof configLegacy | typeof configEager | typeof autoFixed | typeof autoDarwinPlaintext | null;
+    expected: typeof configSafe | typeof configEager | typeof autoFixed | typeof autoDarwinPlaintext | null;
   }> = [
-    { platform: "win32", mode: "legacy-tee", shape: none, version: "9.9.9", minFixed: "1.4.0", expected: configLegacy },
+    { platform: "win32", mode: "safe-tee", shape: none, version: "9.9.9", minFixed: "1.4.0", expected: configSafe },
     { platform: "win32", mode: "eager-relay", shape: none, version: "1.3.14", minFixed: null, expected: configEager },
     { platform: "win32", mode: "auto", shape: none, version: "1.4.0", minFixed: "1.4.0", expected: autoFixed },
     { platform: "win32", mode: "auto", shape: otherRewrite, version: "1.4.0", minFixed: "1.4.0", expected: null },
     { platform: "win32", mode: "auto", shape: plaintextRewrite, version: "1.3.14", minFixed: null, expected: null },
-    { platform: "darwin", mode: "legacy-tee", shape: plaintextRewrite, version: "1.3.14", minFixed: null, expected: null },
+    { platform: "darwin", mode: "safe-tee", shape: plaintextRewrite, version: "1.3.14", minFixed: null, expected: null },
     { platform: "darwin", mode: "eager-relay", shape: none, version: "1.3.14", minFixed: null, expected: configEager },
     { platform: "darwin", mode: "eager-relay", shape: otherRewrite, version: "1.3.14", minFixed: null, expected: configEager },
     { platform: "darwin", mode: "auto", shape: none, version: "1.3.14", minFixed: null, expected: null },
@@ -149,9 +149,9 @@ describe("Darwin plaintext-V2 runtime validation", () => {
 
   test("warns only when plaintext auto would fall back on an unvalidated Darwin runtime", () => {
     expect(darwinPlaintextEagerRuntimeWarning("darwin", "auto", "plaintext", "1.3.15"))
-      .toContain("stays on legacy tee");
+      .toContain("stays on safe tee");
     expect(darwinPlaintextEagerRuntimeWarning("darwin", "auto", "plaintext", "1.3.14")).toBeNull();
-    expect(darwinPlaintextEagerRuntimeWarning("darwin", "legacy-tee", "plaintext", "1.3.15")).toBeNull();
+    expect(darwinPlaintextEagerRuntimeWarning("darwin", "safe-tee", "plaintext", "1.3.15")).toBeNull();
     expect(darwinPlaintextEagerRuntimeWarning("darwin", "auto", "encrypted", "1.3.15")).toBeNull();
     expect(darwinPlaintextEagerRuntimeWarning("linux", "auto", "plaintext", "1.3.15")).toBeNull();
   });
@@ -160,9 +160,9 @@ describe("Darwin plaintext-V2 runtime validation", () => {
 describe("isStreamMode", () => {
   test("accepts the three modes, rejects everything else", () => {
     expect(isStreamMode("auto")).toBe(true);
-    expect(isStreamMode("legacy-tee")).toBe(true);
+    expect(isStreamMode("safe-tee")).toBe(true);
     expect(isStreamMode("eager-relay")).toBe(true);
-    expect(isStreamMode("legacy_tee")).toBe(false);
+    expect(isStreamMode(["legacy", "tee"].join("-"))).toBe(false);
     expect(isStreamMode(1)).toBe(false);
     expect(isStreamMode(undefined)).toBe(false);
   });

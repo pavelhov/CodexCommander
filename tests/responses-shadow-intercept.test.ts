@@ -1,7 +1,5 @@
 /**
- * Shadow call intercept source-model matching (issue #311): Codex 0.145.0 moved
- * its hard-coded helper model from gpt-5.4-mini to gpt-5.6-luna. The current
- * default follows modern clients, while sourceModels keeps an escape hatch.
+ * Shadow call intercept source-model matching for the current helper model.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -10,7 +8,7 @@ import { join } from "node:path";
 import { handleResponses, isShadowSourceModel } from "../src/server/responses";
 import { shouldInterceptShadowCall } from "../src/lib/shadow-call";
 import { handleManagementAPI } from "../src/server/management-api";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 const originalFetch = globalThis.fetch;
@@ -25,7 +23,7 @@ describe("isShadowSourceModel", () => {
     expect(isShadowSourceModel("gpt-5.6-luna-2026-08")).toBe(true);
   });
 
-  test("does not match the legacy helper by default but supports an explicit override", () => {
+  test("supports an explicit custom source-model override", () => {
     expect(isShadowSourceModel("gpt-5.4-mini")).toBe(false);
     expect(isShadowSourceModel("gpt-5.4-mini", ["gpt-5.4-mini"])).toBe(true);
   });
@@ -69,19 +67,19 @@ describe("shouldInterceptShadowCall", () => {
     expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, metadata("turn"))).toBe(false);
   });
 
-  test("keeps legacy matching for headerless, malformed, and unrecognized metadata", () => {
-    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, new Headers())).toBe(true);
+  test("fails closed for headerless, malformed, and unrecognized metadata", () => {
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, new Headers())).toBe(false);
     expect(shouldInterceptShadowCall(
       "gpt-5.6-luna",
       undefined,
       new Headers({ "x-codex-turn-metadata": "{" }),
-    )).toBe(true);
+    )).toBe(false);
     expect(shouldInterceptShadowCall(
       "gpt-5.6-luna",
       undefined,
       new Headers({ "x-codex-turn-metadata": "{}" }),
-    )).toBe(true);
-    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, metadata("future-kind"))).toBe(true);
+    )).toBe(false);
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, metadata("future-kind"))).toBe(false);
   });
 
   test("uses case-insensitive Headers lookup and still excludes non-source models", () => {
@@ -93,10 +91,11 @@ describe("shouldInterceptShadowCall", () => {
   });
 });
 
-function interceptConfig(): OcxConfig {
+function interceptConfig(): CodexCommanderConfig {
   return {
     port: 0,
     defaultProvider: "xai",
+    multiAgentGuidanceEnabled: true,
     providers: {
       xai: {
         adapter: "openai-chat",
@@ -106,10 +105,10 @@ function interceptConfig(): OcxConfig {
       },
     },
     shadowCallIntercept: { enabled: true, model: "xai/grok-4.5" },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
-async function post(config: OcxConfig, model: string, requestKind?: string): Promise<Response> {
+async function post(config: CodexCommanderConfig, model: string, requestKind?: string): Promise<Response> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (requestKind) {
     headers["x-codex-turn-metadata"] = JSON.stringify({ request_kind: requestKind });
@@ -176,24 +175,23 @@ describe("shadow call intercept request path (issue #311)", () => {
 });
 
 /**
- * The GUI badge/tooltip used to hard-code "5.4-mini", so it kept naming a model
- * Codex no longer sends. The management API is the single source of truth for
- * which models are intercepted; every client renders what it reports.
+ * The management API is the single source of truth for which models are
+ * intercepted; every client renders what it reports.
  */
 async function withTempHome<T>(run: () => Promise<T>): Promise<T> {
-  const previousHome = process.env.OPENCODEX_HOME;
-  const dir = mkdtempSync(join(tmpdir(), "ocx-shadow-"));
-  process.env.OPENCODEX_HOME = dir;
+  const previousHome = process.env.CODEXCOMMANDER_HOME;
+  const dir = mkdtempSync(join(tmpdir(), "ccx-shadow-"));
+  process.env.CODEXCOMMANDER_HOME = dir;
   try {
     return await run();
   } finally {
-    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousHome;
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
-async function shadowApi(config: OcxConfig, method: string, body?: unknown): Promise<Record<string, unknown>> {
+async function shadowApi(config: CodexCommanderConfig, method: string, body?: unknown): Promise<Record<string, unknown>> {
   // Management API enforces a same-origin gate; a browserless caller must look local.
   const headers: Record<string, string> = { origin: "http://127.0.0.1:10100", host: "127.0.0.1:10100" };
   if (body !== undefined) headers["content-type"] = "application/json";
@@ -211,9 +209,16 @@ async function shadowApi(config: OcxConfig, method: string, body?: unknown): Pro
 }
 
 describe("shadow-call settings API reports the intercepted source models", () => {
-  test("GET reports the 0.145.0+ helper-model default", async () => {
+  test("GET reports the current helper-model default", async () => {
     await withTempHome(async () => {
-      const body = await shadowApi({ port: 0, defaultProvider: "xai", providers: {} } as OcxConfig, "GET");
+      const body = await shadowApi({
+        port: 0,
+        defaultProvider: "xai",
+        multiAgentGuidanceEnabled: true,
+        providers: {
+          xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", authMode: "key" },
+        },
+      } as CodexCommanderConfig, "GET");
       expect(body.sourceModels).toEqual(["gpt-5.6-luna"]);
     });
   });
@@ -223,9 +228,12 @@ describe("shadow-call settings API reports the intercepted source models", () =>
       const config = {
         port: 0,
         defaultProvider: "xai",
-        providers: {},
+        multiAgentGuidanceEnabled: true,
+        providers: {
+          xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", authMode: "key" },
+        },
         shadowCallIntercept: { enabled: true, model: "gpt-5.5", sourceModels: ["gpt-5.6-luna"] },
-      } as OcxConfig;
+      } as CodexCommanderConfig;
       expect((await shadowApi(config, "GET")).sourceModels).toEqual(["gpt-5.6-luna"]);
       const put = await shadowApi(config, "PUT", { enabled: true });
       expect(put.sourceModels).toEqual(["gpt-5.6-luna"]);

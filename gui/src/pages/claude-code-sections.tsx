@@ -117,7 +117,6 @@ export function ClaudeCodeSettingsCard({
         <div className="setting-label">
           <span className="title">{t("claude.autoContext")}</span>
           <span className="desc">{t("claude.autoContextDesc")}</span>
-          {state.maxContextTokens !== null && <span className="desc" style={{ color: "var(--muted)" }}>{t("claude.autoContextInert")}</span>}
         </div>
         <SettingToggle label={t("claude.autoContext")} checked={state.autoContext} onChange={autoContext => onStateChange({ ...state, autoContext })} />
       </div>
@@ -218,8 +217,8 @@ export function ClaudeCodeQuickstartSection({ manualEnv }: { manualEnv: string }
   // Title lives in ClaudeCode's shared ccw-main-head so every rail pane shares one top inset.
   return (
     <>
-      <p className="muted text-label" style={{ margin: "0 0 8px" }}><Trans k="claude.quickstartHint" cmd="ocx claude" /></p>
-      <pre className="mono card" style={{ padding: "10px 14px", overflowX: "auto", margin: 0 }}>ocx claude</pre>
+      <p className="muted text-label" style={{ margin: "0 0 8px" }}><Trans k="claude.quickstartHint" cmd="ccx claude" /></p>
+      <pre className="mono card" style={{ padding: "10px 14px", overflowX: "auto", margin: 0 }}>ccx claude</pre>
       <details style={{ margin: "10px 0 0" }}>
         <summary className="muted text-label" style={{ cursor: "pointer", padding: "2px 2px" }}>{t("claude.manualEnv")}</summary>
         <pre className="mono card text-label" style={{ padding: "10px 14px", overflowX: "auto", margin: "6px 0 0" }}>{manualEnv}</pre>

@@ -194,7 +194,7 @@ function record(kind: string, err: unknown, promise?: unknown): void {
     return; // no stderr banner — this is expected noise, not a crash
   }
   const line = formatCrashEntry(kind, err, promise);
-  // Always surface to stderr so foreground `ocx start` users still see it,
+  // Always surface to stderr so foreground `ccx start` users still see it,
   // then persist for later diagnosis.
   console.error(`⚠️  ${kind} (proxy stayed up; logged to crash.log)`);
   console.error(line.trimStart());

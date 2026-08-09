@@ -13,10 +13,10 @@ import {
 import { INTEGRATION_CLIENT_IDS, isLoopbackOnly } from "../src/integrations/registry";
 import { classifyIntegration, readIntegrationState } from "../src/integrations/state";
 import { createIntegrationStateStore } from "../src/integrations/store";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 /**
- * Activation coverage for devlog/_fin/260802_client_toggle_api/021 §6.
+ * Activation coverage for implementation contract §6.
  *
  * Every fixture is built DIRECTLY on disk — write a config, write a record,
  * classify — because the writer does not exist until WP3 and a phase that
@@ -26,18 +26,18 @@ const MODELS: ExportModel[] = [
   { namespaced: "anthropic/claude-opus-4-8", provider: "anthropic", id: "claude-opus-4-8", contextWindow: 200_000 },
 ];
 
-const CONFIG: OcxConfig = {
+const CONFIG: CodexCommanderConfig = {
   port: 10100,
   hostname: "127.0.0.1",
   defaultProvider: "mock",
   providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" } },
-} as OcxConfig;
+} as CodexCommanderConfig;
 
 let home: string;
 let stateRoot: string;
 
 beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), "ocx-integrations-state-"));
+  home = mkdtempSync(join(tmpdir(), "ccx-integrations-state-"));
   stateRoot = join(home, "state", "integrations");
 });
 
@@ -87,6 +87,7 @@ function seedRecord(fileText: string, blockOverride?: string): OwnershipRecord {
     fileFingerprint: fingerprint(fileText),
     blockFingerprint: blockOverride ?? fingerprint(canonicalContribution(contribution)),
     fragmentPaths: contribution.fragments.map(fragment => fragment.path),
+    createdContainers: [],
     appliedAt: "2026-08-02T00:00:00.000Z",
     opId: "seeded-op",
   };
@@ -243,7 +244,10 @@ describe("ordering guards", () => {
     const record = seedRecord(text);
     writeFileSync(
       join(stateRoot, "records.json"),
-      `${JSON.stringify({ pi: { ...record, clientId: "kimi" } }, null, 2)}\n`,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        records: { pi: { ...record, clientId: "kimi" } },
+      }, null, 2)}\n`,
     );
     const status = readIntegrationState(input());
     expect(status.state).toBe("conflict");
@@ -263,6 +267,25 @@ describe("ordering guards", () => {
     expect(status.state).toBe("conflict");
     expect(status.reason).toBe("unowned-key");
     // No stale provenance leaks out of a memory we could not read.
+    expect(status.appliedAt).toBeUndefined();
+    expect(status.lastOpId).toBeUndefined();
+  });
+
+  test("a record without current removal provenance is dropped", () => {
+    const text = seedOurConfig();
+    const record = seedRecord(text);
+    const older = { ...record } as Record<string, unknown>;
+    delete older.createdContainers;
+    expect(() => writeRecord(older as unknown as OwnershipRecord, stateRoot))
+      .toThrow(/incomplete integration ownership record/);
+    writeFileSync(
+      join(stateRoot, "records.json"),
+      `${JSON.stringify({ schemaVersion: 1, records: { pi: older } }, null, 2)}\n`,
+    );
+
+    expect(store().readRecords().pi).toBeUndefined();
+    const status = readIntegrationState(input());
+    expect(status).toMatchObject({ state: "conflict", reason: "unowned-key" });
     expect(status.appliedAt).toBeUndefined();
     expect(status.lastOpId).toBeUndefined();
   });
@@ -359,6 +382,28 @@ describe("classifier unit behavior", () => {
   test("fragment order does not change the contribution fingerprint", () => {
     const reversed = { ...contribution, fragments: [...contribution.fragments].reverse() };
     expect(canonicalContribution(reversed)).toBe(canonicalContribution(contribution));
+  });
+
+  test("non-current recorded fragment paths are not reconstructed as stale", () => {
+    const parsed = { providers: { "previous-schema": { api: "http://127.0.0.1" } } };
+    const fileText = `${JSON.stringify(parsed)}\n`;
+    const record: OwnershipRecord = {
+      clientId: "pi",
+      configPath: "/tmp/models.json",
+      fileFingerprint: fingerprint(fileText),
+      blockFingerprint: fingerprint("previous-schema"),
+      fragmentPaths: [["providers", "previous-schema"]],
+      createdContainers: [],
+      appliedAt: "2026-08-01T00:00:00.000Z",
+      opId: "previous-schema",
+    };
+    expect(classifyIntegration({
+      fileText,
+      fileIsRegular: true,
+      parsed,
+      record,
+      contribution,
+    })).toEqual({ state: "absent" });
   });
 });
 

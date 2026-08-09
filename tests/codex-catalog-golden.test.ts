@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildCatalogEntries } from "../src/codex/catalog";
 
-// Behavior-preservation ORACLE for the future codex-catalog.ts split (devlog 260701).
+// Behavior-preservation ORACLE for the future codex-catalog.ts split (implementation contract).
 // buildCatalogEntries is the pure core (no fs/network). This snapshots its full serialized
 // output for a fixed input set so a later build/discovery/persistence split can prove it did
 // not change the injected catalog. If this snapshot changes, the split changed behavior.

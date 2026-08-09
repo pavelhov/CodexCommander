@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { loadConfig, readRuntimePort } from "../config";
+import { API_KEY_HEADER, HOME_ENV, readEnv } from "../identity";
 import { configuredAdminToken } from "./admin-secrets";
 
 export function isProcessAlive(pid: number): boolean {
@@ -67,8 +68,8 @@ export async function stopProxyGracefully(pid: number, io: GracefulStopIo = {}):
   if (!runtime?.port) return false;
   const env = io.env ?? process.env;
   const headers: Record<string, string> = {};
-  const token = configuredAdminToken(env.OPENCODEX_HOME?.trim() || undefined, env as NodeJS.ProcessEnv);
-  if (token) headers["x-opencodex-api-key"] = token;
+  const token = configuredAdminToken(readEnv(HOME_ENV, env as NodeJS.ProcessEnv), env as NodeJS.ProcessEnv);
+  if (token) headers[API_KEY_HEADER] = token;
   const fetchFn = io.fetchFn ?? fetch;
   try {
     const res = await fetchFn(`http://${gracefulStopHost(runtime.hostname)}:${runtime.port}/api/stop`, {
@@ -112,7 +113,7 @@ export async function stopProxy(pid: number): Promise<void> {
     // config while that service keeps the proxy alive.
     throw new Error(
       "The running proxy refused to stop: a service installed under a different "
-      + "CODEX_HOME/OPENCODEX_HOME owns it. Run the stop from that home.",
+      + "CODEX_HOME/CODEXCOMMANDER_HOME owns it. Run the stop from that home.",
     );
   }
   if (graceful) {
@@ -136,7 +137,7 @@ async function waitForStoppedPort(
       intervalMs: 100,
       scanIntervalMs: 500,
       // Only the process we just stopped — never kill a newly started twin proxy.
-      killOcxHolders: !!(stoppedPid && stoppedPid > 0),
+      killCodexCommanderHolders: !!(stoppedPid && stoppedPid > 0),
       onlyKillPids: stoppedPid && stoppedPid > 0 ? [stoppedPid] : [],
     });
   } catch {

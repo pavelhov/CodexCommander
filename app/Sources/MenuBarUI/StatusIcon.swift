@@ -13,7 +13,7 @@ public enum StatusIcon {
             systemSymbolName: symbolName(for: state),
             accessibilityDescription: accessibilityDescription(for: state)
         )
-            ?? NSImage(systemSymbolName: "chevron.left.forwardslash.chevron.right", accessibilityDescription: "OpenCodex")
+            ?? NSImage(systemSymbolName: "chevron.left.forwardslash.chevron.right", accessibilityDescription: "CodexCommander")
             ?? NSImage(size: size)
         image.isTemplate = true
         return image.withSymbolConfiguration(
@@ -40,6 +40,6 @@ public enum StatusIcon {
 
     private static func accessibilityDescription(for state: ProxyState) -> String {
         let detail = state.detail.map { ", \($0)" } ?? ""
-        return "OpenCodex — \(state.title)\(detail)"
+        return "CodexCommander — \(state.title)\(detail)"
     }
 }

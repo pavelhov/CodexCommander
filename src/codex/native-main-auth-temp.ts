@@ -15,7 +15,7 @@ import { dirname, join, resolve } from "node:path";
 import type { NativeProfileContext } from "./native-profile-store";
 import { NativeProfileError } from "./native-profile-types";
 
-const AUTH_TEMP_NAME = /^auth\.json\.ocx\.[1-9]\d*\.[1-9]\d*\.tmp$/;
+const AUTH_TEMP_NAME = /^auth\.json\.ccx\.[1-9]\d*\.[1-9]\d*\.tmp$/;
 const MAX_AUTH_TEMP_RESIDUES = 128;
 
 interface PathIdentity {
@@ -134,7 +134,7 @@ function scrubOne(
     assertOpenIdentity(fd, path, parent, parentIdentity, observed, 1n);
     seam.beforeUnlink?.(path);
 
-    // The lifetime owner and exclusive claim exclude cooperative OpenCodex writers.
+    // The lifetime owner and exclusive claim exclude cooperative CodexCommander writers.
     // A malicious process running as the same OS user can still race Node's final
     // identity-check/unlink gap and is intentionally outside this trusted-owner boundary.
     unlinkSync(path);

@@ -16,7 +16,7 @@ let quotaPayload: unknown;
 let rejectQuotaFetch = false;
 let quotaFetchOverride: (() => Promise<Response>) | null = null;
 
-const QUOTA_CACHE_KEY = "ocx.providers.quotas.v1:";
+const QUOTA_CACHE_KEY = "ccx.providers.quotas.v1:";
 const RECOVERY_AT = Date.UTC(2026, 7, 8, 4, 32);
 const providers = {
   openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
@@ -53,7 +53,7 @@ type AggregateTestPayload = {
       pausedAccounts: number;
       reauthAccounts: number;
       staleQuotaAccounts: number;
-      partialWindowAccounts?: number;
+      partialWindowAccounts: number;
       incomplete: boolean;
       weekly: TestCapacityWindow;
       monthly?: TestCapacityWindow;
@@ -81,6 +81,7 @@ function aggregatePayload(): AggregateTestPayload {
         pausedAccounts: 0,
         reauthAccounts: 0,
         staleQuotaAccounts: 0,
+        partialWindowAccounts: 0,
         incomplete: true,
         weekly: {
           usedPercent: 30.8,

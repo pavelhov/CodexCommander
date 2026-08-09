@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import { drainAndShutdown } from "../src/server/lifecycle";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import {
   resetStorageCleanupPolicyJobForTestsAsync,
@@ -24,9 +24,10 @@ let testDir = "";
 let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
-function baseConfig(): OcxConfig {
+function baseConfig(): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     hostname: "127.0.0.1",
     defaultProvider: "openai",
     providers: {
@@ -36,7 +37,7 @@ function baseConfig(): OcxConfig {
         authMode: "forward",
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 function seedArchived(codexHome: string): void {
@@ -55,14 +56,14 @@ function seedArchived(codexHome: string): void {
 }
 
 beforeEach(async () => {
-  previousHome = process.env.OPENCODEX_HOME;
-  // Join leftover Workers before allocating homes / mutating OPENCODEX_HOME.
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  // Join leftover Workers before allocating homes / mutating CODEXCOMMANDER_HOME.
   stopStorageCleanupScheduler();
   await resetStorageCleanupPolicyJobForTestsAsync();
   await drainStorageWorkers();
-  isolatedCodexHome = installIsolatedCodexHome("ocx-policy-job-responsive-codex-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-policy-job-responsive-"));
-  process.env.OPENCODEX_HOME = testDir;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-policy-job-responsive-codex-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-policy-job-responsive-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   saveConfig(baseConfig());
   stopStorageCleanupScheduler();
 });
@@ -72,8 +73,8 @@ afterEach(async () => {
   await resetStorageCleanupPolicyJobForTestsAsync();
   await drainStorageWorkers();
   setStorageCleanupPolicyJobTestHooks(null);
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });

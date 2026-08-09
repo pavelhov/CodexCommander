@@ -1,11 +1,11 @@
-import type { OcxContentPart, OcxToolCall, OcxToolResultMessage } from "../types";
+import type { CodexCommanderContentPart, CodexCommanderToolCall, CodexCommanderToolResultMessage } from "../types";
 import { normalizeToolId } from "./kiro-wire";
 
 function stringifyValue(value: unknown): string {
   try { return JSON.stringify(value); } catch { return String(value); }
 }
 
-function contentText(content: string | OcxContentPart[]): string {
+function contentText(content: string | CodexCommanderContentPart[]): string {
   if (typeof content === "string") return content;
   return content
     .map(part => {
@@ -21,14 +21,14 @@ export function appendFallbackText(base: string, fallback: string): string {
   return [base, fallback].filter(Boolean).join("\n\n");
 }
 
-export function toolCallFallbackText(toolCall: OcxToolCall): string {
+export function toolCallFallbackText(toolCall: CodexCommanderToolCall): string {
   return [
     `Tool call fallback (${toolCall.name}, id ${normalizeToolId(toolCall.id)}):`,
     stringifyValue(toolCall.arguments ?? {}),
   ].join("\n");
 }
 
-export function toolResultFallbackText(toolResult: OcxToolResultMessage): string {
+export function toolResultFallbackText(toolResult: CodexCommanderToolResultMessage): string {
   return [
     `Tool result fallback (${toolResult.toolName}, id ${normalizeToolId(toolResult.toolCallId)}, ${toolResult.isError ? "error" : "success"}):`,
     contentText(toolResult.content) || "(empty)",

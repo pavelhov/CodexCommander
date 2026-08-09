@@ -5,13 +5,13 @@ description: 通过非 OpenAI 模型生成 Grok Imagine Video 视频。
 
 ## 概述
 
-Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xAI 的 Grok Imagine Video 生成功能。启用后，系统会在对话中注入一个合成的 `video_gen` 工具。模型会像调用普通函数工具一样调用它；opencodex 拦截该调用，向 xAI 提交视频生成任务，轮询直到完成，然后下载结果。
+Video Bridge 允许你通过 CodexCommander 路由的任意非 OpenAI 模型使用 xAI 的 Grok Imagine Video 生成功能。启用后，系统会在对话中注入一个合成的 `video_gen` 工具。模型会像调用普通函数工具一样调用它；CodexCommander 拦截该调用，向 xAI 提交视频生成任务，轮询直到完成，然后下载结果。
 
 ## 前提条件
 
-- 一个带有 **API key** 的 `xai` provider 条目（仅执行 `ocx login xai` 不够，视频桥接需要 key 认证，而不是 OAuth）
+- 一个带有 **API key** 的 `xai` provider 条目（仅执行 `ccx login xai` 不够，视频桥接需要 key 认证，而不是 OAuth）
 - 作为路由目标的非 OpenAI 模型（例如 Anthropic Claude、Google Gemini）
-- 已配置 opencodex 通过该非 OpenAI provider 路由
+- 已配置 CodexCommander 通过该非 OpenAI provider 路由
 
 > **⚠ 需要 provider key：** 只有当 `xai` provider 使用 API key 认证时，视频桥接才会生效。请在配置中加入以下内容：
 >
@@ -23,7 +23,7 @@ Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xA
 > }
 > ```
 >
-> 如果你是通过 `ocx login xai` 接入的（OAuth），provider 会保持在 `authMode: "oauth"`，桥接就会静默不启用。请在环境中设置 `XAI_API_KEY`，或者像上面那样直接硬编码密钥。
+> 如果你是通过 `ccx login xai` 接入的（OAuth），provider 会保持在 `authMode: "oauth"`，桥接就会静默不启用。请在环境中设置 `XAI_API_KEY`，或者像上面那样直接硬编码密钥。
 
 ## 配置
 
@@ -50,9 +50,9 @@ Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xA
 
 ## 工作原理
 
-1. opencodex 检测到一个已路由的非 OpenAI 模型，并且 `videoBridgeEnabled: true`
+1. CodexCommander 检测到一个已路由的非 OpenAI 模型，并且 `videoBridgeEnabled: true`
 2. 系统会在对话中注入一个合成的 `video_gen` 函数工具
-3. 当模型调用 `video_gen` 时，opencodex 会向 xAI 的 `/videos/generations` 提交任务
+3. 当模型调用 `video_gen` 时，CodexCommander 会向 xAI 的 `/videos/generations` 提交任务
 4. 桥接每隔 5-15 秒轮询一次任务状态，并发送心跳消息以保持流持续存活
 5. 视频准备就绪后，会下载到 artifacts 目录
 6. 本地文件路径会作为工具结果返回给模型

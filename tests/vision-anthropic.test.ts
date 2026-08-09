@@ -7,9 +7,10 @@ import * as oauthModule from "../src/oauth";
 mock.module("../src/oauth", () => ({ ...oauthModule, getValidAccessToken: async () => "anthropic-vision-token" }));
 
 import { CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../src/oauth/anthropic";
+import { getDefaultConfig } from "../src/config";
 import { parseRequest } from "../src/responses/parser";
 import { handleManagementAPI } from "../src/server/management-api";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
 import {
   describeImageAnthropic,
   parseAnthropicVisionSSE,
@@ -17,7 +18,7 @@ import {
 } from "../src/vision";
 
 const DATA_IMAGE = "data:image/png;base64,aGVsbG8=";
-const anthropicProvider: OcxProviderConfig = {
+const anthropicProvider: CodexCommanderProviderConfig = {
   adapter: "anthropic",
   authMode: "oauth",
   baseUrl: "https://api.anthropic.test/v1/",
@@ -199,12 +200,12 @@ describe("Anthropic vision executor", () => {
 
 describe("Anthropic vision planning and management config", () => {
   test("explicit anthropic backend fails closed without a usable stored credential", async () => {
-    const routed: OcxProviderConfig = {
+    const routed: CodexCommanderProviderConfig = {
       adapter: "openai-chat",
       baseUrl: "https://routed.test/v1",
       noVisionModels: ["blind"],
     };
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "routed",
       providers: {
@@ -222,10 +223,10 @@ describe("Anthropic vision planning and management config", () => {
   });
 
   test("GET/PUT persists valid vision backend and cap and rejects invalid values", async () => {
-    const previousHome = process.env.OPENCODEX_HOME;
-    const isolatedHome = mkdtempSync(join(tmpdir(), "ocx-vision-management-"));
-    process.env.OPENCODEX_HOME = isolatedHome;
-    const config: OcxConfig = { port: 10100, defaultProvider: "none", providers: {} };
+    const previousHome = process.env.CODEXCOMMANDER_HOME;
+    const isolatedHome = mkdtempSync(join(tmpdir(), "ccx-vision-management-"));
+    process.env.CODEXCOMMANDER_HOME = isolatedHome;
+    const config: CodexCommanderConfig = { ...getDefaultConfig(), port: 10100 };
     try {
       const put = await handleManagementAPI(
         new Request("http://localhost/api/sidecar-settings", {
@@ -309,17 +310,17 @@ describe("Anthropic vision planning and management config", () => {
       expect(config.webSearchSidecar).toEqual({ reasoning: "high" });
       expect(config.visionSidecar).toEqual({ maxDescriptionsPerTurn: 4 });
     } finally {
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previousHome;
       rmSync(isolatedHome, { recursive: true, force: true });
     }
   });
 
   test("PUT rejects malformed body shapes with 400 and never persists them (review F2)", async () => {
-    const previousHome = process.env.OPENCODEX_HOME;
-    const isolatedHome = mkdtempSync(join(tmpdir(), "ocx-vision-management-malformed-"));
-    process.env.OPENCODEX_HOME = isolatedHome;
-    const config: OcxConfig = { port: 10100, defaultProvider: "none", providers: {} };
+    const previousHome = process.env.CODEXCOMMANDER_HOME;
+    const isolatedHome = mkdtempSync(join(tmpdir(), "ccx-vision-management-malformed-"));
+    process.env.CODEXCOMMANDER_HOME = isolatedHome;
+    const config: CodexCommanderConfig = { port: 10100, defaultProvider: "none", providers: {} };
     try {
       for (const raw of ["null", "[]", "\"str\"", "123",
         JSON.stringify({ vision: [] }), JSON.stringify({ vision: "bad" }),
@@ -339,8 +340,8 @@ describe("Anthropic vision planning and management config", () => {
       expect(config.visionSidecar).toBeUndefined();
       expect(config.webSearchSidecar).toBeUndefined();
     } finally {
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previousHome;
       rmSync(isolatedHome, { recursive: true, force: true });
     }
   });

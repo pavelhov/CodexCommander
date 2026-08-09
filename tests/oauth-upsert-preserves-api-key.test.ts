@@ -3,14 +3,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { upsertOAuthProvider } from "../src/oauth";
-import {
-  apiKeyPoolEntryId,
-  listProviderApiKeys,
-  removeProviderApiKey,
-  setActiveProviderApiKey,
-} from "../src/providers/api-keys";
+import { removeProviderApiKey } from "../src/providers/api-keys";
 import { routeModel } from "../src/router";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 /**
  * Regression: `upsertOAuthProvider` used to overwrite the provider entry with the bare preset
@@ -18,9 +13,10 @@ import type { OcxConfig } from "../src/types";
  * explicit `authMode: "key"` billing choice back to the subscription. Providers whose registry
  * entry sets `allowKeyAuthOverride` (xai, github-copilot) are the ones that can hold both.
  */
-function configWithKey(provider: string, adapter: string, baseUrl: string): OcxConfig {
+function configWithKey(provider: string, adapter: string, baseUrl: string): CodexCommanderConfig {
   return {
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: provider,
     providers: {
       [provider]: {
@@ -31,7 +27,7 @@ function configWithKey(provider: string, adapter: string, baseUrl: string): OcxC
         apiKeyPool: [{ id: "aaaaaaaa", key: "stored-key-sentinel" }],
       },
     },
-  } as unknown as OcxConfig;
+  } as unknown as CodexCommanderConfig;
 }
 
 describe("upsertOAuthProvider credential preservation", () => {
@@ -73,92 +69,92 @@ describe("upsertOAuthProvider credential preservation", () => {
 
   test("persists key mode for env-backed keys without consulting the login CLI environment", () => {
     const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
-    config.providers.xai!.apiKey = "${OCX_TEST_XAI_API_KEY}";
-    config.providers.xai!.apiKeyPool = [{ id: "env-key", key: "${OCX_TEST_XAI_API_KEY}" }];
-    const previous = process.env.OCX_TEST_XAI_API_KEY;
-    delete process.env.OCX_TEST_XAI_API_KEY;
+    config.providers.xai!.apiKey = "${CCX_TEST_XAI_API_KEY}";
+    config.providers.xai!.apiKeyPool = [{ id: "env-key", key: "${CCX_TEST_XAI_API_KEY}" }];
+    const previous = process.env.CCX_TEST_XAI_API_KEY;
+    delete process.env.CCX_TEST_XAI_API_KEY;
     try {
       upsertOAuthProvider(config, "xai");
       const provider = config.providers.xai!;
-      expect(provider.apiKey).toBe("${OCX_TEST_XAI_API_KEY}");
-      expect(provider.apiKeyPool).toEqual([{ id: "env-key", key: "${OCX_TEST_XAI_API_KEY}" }]);
+      expect(provider.apiKey).toBe("${CCX_TEST_XAI_API_KEY}");
+      expect(provider.apiKeyPool).toEqual([{ id: "env-key", key: "${CCX_TEST_XAI_API_KEY}" }]);
       expect(provider.authMode).toBe("key");
     } finally {
-      if (previous === undefined) delete process.env.OCX_TEST_XAI_API_KEY;
-      else process.env.OCX_TEST_XAI_API_KEY = previous;
+      if (previous === undefined) delete process.env.CCX_TEST_XAI_API_KEY;
+      else process.env.CCX_TEST_XAI_API_KEY = previous;
     }
   });
 
   test("falls back to OAuth at routing time when the proxy cannot resolve the active key", () => {
     const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
-    config.providers.xai!.apiKey = "${OCX_TEST_XAI_API_KEY_MISSING}";
-    config.providers.xai!.apiKeyPool = [{ id: "env-key", key: "${OCX_TEST_XAI_API_KEY_MISSING}" }];
+    config.providers.xai!.apiKey = "${CCX_TEST_XAI_API_KEY_MISSING}";
+    config.providers.xai!.apiKeyPool = [{ id: "env-key", key: "${CCX_TEST_XAI_API_KEY_MISSING}" }];
     upsertOAuthProvider(config, "xai");
     expect(config.providers.xai!.authMode).toBe("key");
 
-    const previous = process.env.OCX_TEST_XAI_API_KEY_MISSING;
-    delete process.env.OCX_TEST_XAI_API_KEY_MISSING;
+    const previous = process.env.CCX_TEST_XAI_API_KEY_MISSING;
+    delete process.env.CCX_TEST_XAI_API_KEY_MISSING;
     try {
       const routed = routeModel(config, "xai/grok-4.5").provider;
       expect(routed.authMode).toBe("oauth");
       expect(routed.apiKey).toBeUndefined();
       expect(config.providers.xai!.authMode).toBe("key");
     } finally {
-      if (previous === undefined) delete process.env.OCX_TEST_XAI_API_KEY_MISSING;
-      else process.env.OCX_TEST_XAI_API_KEY_MISSING = previous;
+      if (previous === undefined) delete process.env.CCX_TEST_XAI_API_KEY_MISSING;
+      else process.env.CCX_TEST_XAI_API_KEY_MISSING = previous;
     }
   });
 
   test("uses key billing at routing time when the proxy resolves the env-backed active key", () => {
     const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
-    config.providers.xai!.apiKey = "${OCX_TEST_XAI_API_KEY}";
-    config.providers.xai!.apiKeyPool = [{ id: "env-key", key: "${OCX_TEST_XAI_API_KEY}" }];
+    config.providers.xai!.apiKey = "${CCX_TEST_XAI_API_KEY}";
+    config.providers.xai!.apiKeyPool = [{ id: "env-key", key: "${CCX_TEST_XAI_API_KEY}" }];
     upsertOAuthProvider(config, "xai");
     expect(config.providers.xai!.authMode).toBe("key");
 
-    const previous = process.env.OCX_TEST_XAI_API_KEY;
-    process.env.OCX_TEST_XAI_API_KEY = "resolved-xai-secret";
+    const previous = process.env.CCX_TEST_XAI_API_KEY;
+    process.env.CCX_TEST_XAI_API_KEY = "resolved-xai-secret";
     try {
       const routed = routeModel(config, "xai/grok-4.5").provider;
       expect(routed.authMode).toBe("key");
       expect(routed.apiKey).toBe("resolved-xai-secret");
       expect(config.providers.xai!.authMode).toBe("key");
     } finally {
-      if (previous === undefined) delete process.env.OCX_TEST_XAI_API_KEY;
-      else process.env.OCX_TEST_XAI_API_KEY = previous;
+      if (previous === undefined) delete process.env.CCX_TEST_XAI_API_KEY;
+      else process.env.CCX_TEST_XAI_API_KEY = previous;
     }
   });
 
   test("CLI and proxy env visibility can diverge without rewriting stored authMode", () => {
     const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
-    config.providers.xai!.apiKey = "${OCX_TEST_XAI_SPLIT_ENV}";
-    config.providers.xai!.apiKeyPool = [{ id: "env-key", key: "${OCX_TEST_XAI_SPLIT_ENV}" }];
-    const previous = process.env.OCX_TEST_XAI_SPLIT_ENV;
+    config.providers.xai!.apiKey = "${CCX_TEST_XAI_SPLIT_ENV}";
+    config.providers.xai!.apiKeyPool = [{ id: "env-key", key: "${CCX_TEST_XAI_SPLIT_ENV}" }];
+    const previous = process.env.CCX_TEST_XAI_SPLIT_ENV;
 
     // Login CLI sees the secret; upsert still records key intent, not CLI resolution.
-    process.env.OCX_TEST_XAI_SPLIT_ENV = "cli-only-secret";
+    process.env.CCX_TEST_XAI_SPLIT_ENV = "cli-only-secret";
     upsertOAuthProvider(config, "xai");
     expect(config.providers.xai!.authMode).toBe("key");
 
     // Running proxy lacks the env var: route on OAuth without touching stored mode.
-    delete process.env.OCX_TEST_XAI_SPLIT_ENV;
+    delete process.env.CCX_TEST_XAI_SPLIT_ENV;
     const oauthFallback = routeModel(config, "xai/grok-4.5").provider;
     expect(oauthFallback.authMode).toBe("oauth");
     expect(oauthFallback.apiKey).toBeUndefined();
     expect(config.providers.xai!.authMode).toBe("key");
 
     // Proxy later gains the env var: key billing resumes without a config rewrite.
-    process.env.OCX_TEST_XAI_SPLIT_ENV = "proxy-secret";
+    process.env.CCX_TEST_XAI_SPLIT_ENV = "proxy-secret";
     const keyRoute = routeModel(config, "xai/grok-4.5").provider;
     expect(keyRoute.authMode).toBe("key");
     expect(keyRoute.apiKey).toBe("proxy-secret");
     expect(config.providers.xai!.authMode).toBe("key");
 
-    if (previous === undefined) delete process.env.OCX_TEST_XAI_SPLIT_ENV;
-    else process.env.OCX_TEST_XAI_SPLIT_ENV = previous;
+    if (previous === undefined) delete process.env.CCX_TEST_XAI_SPLIT_ENV;
+    else process.env.CCX_TEST_XAI_SPLIT_ENV = previous;
   });
 
-  test("inserts a missing active key into the pool so listing matches routing", () => {
+  test("drops a pool whose active key is missing", () => {
     const config = {
       port: 10100,
       defaultProvider: "xai",
@@ -171,41 +167,12 @@ describe("upsertOAuthProvider credential preservation", () => {
           apiKeyPool: [{ id: "pool-visible", key: "pool-visible-key" }],
         },
       },
-    } as OcxConfig;
-    const previousHome = process.env.OPENCODEX_HOME;
-    const testHome = mkdtempSync(join(tmpdir(), "ocx-oauth-upsert-pool-"));
-    process.env.OPENCODEX_HOME = testHome;
-    try {
-      upsertOAuthProvider(config, "xai");
-      const provider = config.providers.xai!;
-      const activeId = apiKeyPoolEntryId("routing-only-key");
-      expect(provider.authMode).toBe("key");
-      expect(provider.apiKey).toBe("routing-only-key");
-      expect(provider.apiKeyPool).toEqual([
-        { id: "pool-visible", key: "pool-visible-key" },
-        { id: activeId, key: "routing-only-key" },
-      ]);
-
-      const listed = listProviderApiKeys(config, "xai");
-      expect(listed.activeId).toBe(activeId);
-      expect(listed.keys.find(entry => entry.id === activeId)?.active).toBe(true);
-      expect(listed.keys.find(entry => entry.id === "pool-visible")?.active).toBe(false);
-
-      expect(setActiveProviderApiKey(config, "xai", "pool-visible")).toBe(true);
-      expect(config.providers.xai!.apiKey).toBe("pool-visible-key");
-      expect(listProviderApiKeys(config, "xai").activeId).toBe("pool-visible");
-
-      expect(setActiveProviderApiKey(config, "xai", activeId)).toBe(true);
-      expect(config.providers.xai!.apiKey).toBe("routing-only-key");
-      expect(removeProviderApiKey(config, "xai", activeId)).toBe(true);
-      expect(config.providers.xai!.apiKey).toBe("pool-visible-key");
-      expect(config.providers.xai!.apiKeyPool).toEqual([{ id: "pool-visible", key: "pool-visible-key" }]);
-      expect(listProviderApiKeys(config, "xai").activeId).toBe("pool-visible");
-    } finally {
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
-      rmSync(testHome, { recursive: true, force: true });
-    }
+    } as CodexCommanderConfig;
+    upsertOAuthProvider(config, "xai");
+    const provider = config.providers.xai!;
+    expect(provider.authMode).toBe("oauth");
+    expect(provider.apiKey).toBeUndefined();
+    expect(provider.apiKeyPool).toBeUndefined();
   });
 
   test("drops malformed stored key fields instead of breaking OAuth routing", () => {
@@ -221,7 +188,7 @@ describe("upsertOAuthProvider credential preservation", () => {
           apiKeyPool: [{ id: "bad-key", key: 67890 }],
         },
       },
-    } as unknown as OcxConfig;
+    } as unknown as CodexCommanderConfig;
     upsertOAuthProvider(config, "xai");
     expect(config.providers.xai!.authMode).toBe("oauth");
     expect(config.providers.xai!.apiKey).toBeUndefined();
@@ -229,7 +196,7 @@ describe("upsertOAuthProvider credential preservation", () => {
     expect(routeModel(config, "xai/grok-4.5").provider.authMode).toBe("oauth");
   });
 
-  test("rejects an unsafe active key and promotes the first safe pool entry", () => {
+  test("drops an unsafe key pool instead of promoting an alternate row", () => {
     const config = {
       port: 10100,
       defaultProvider: "xai",
@@ -245,16 +212,15 @@ describe("upsertOAuthProvider credential preservation", () => {
           ],
         },
       },
-    } as OcxConfig;
+    } as CodexCommanderConfig;
     upsertOAuthProvider(config, "xai");
     const provider = config.providers.xai!;
-    expect(provider.authMode).toBe("key");
-    expect(provider.apiKey).toBe("safe-alternate");
-    expect(provider.apiKeyPool).toEqual([{ id: "safe", key: "safe-alternate" }]);
-    expect(routeModel(config, "xai/grok-4.5").provider.authMode).toBe("key");
+    expect(provider.authMode).toBe("oauth");
+    expect(provider.apiKey).toBeUndefined();
+    expect(provider.apiKeyPool).toBeUndefined();
   });
 
-  test("filters malformed and duplicate pool data without deleting valid keys", () => {
+  test("drops malformed and duplicate pool data instead of filtering it", () => {
     const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
     config.providers.xai!.apiKeyPool = [
       { id: "primary", key: "stored-key-sentinel" },
@@ -265,20 +231,16 @@ describe("upsertOAuthProvider credential preservation", () => {
     ];
     upsertOAuthProvider(config, "xai");
     const provider = config.providers.xai!;
-    expect(provider.authMode).toBe("key");
-    expect(provider.apiKey).toBe("stored-key-sentinel");
-    expect(provider.apiKeyPool).toEqual([
-      { id: "primary", key: "stored-key-sentinel" },
-      { id: "alternate", key: "alternate-key" },
-      { id: "bad-added-at", key: "bad-metadata" },
-    ]);
+    expect(provider.authMode).toBe("oauth");
+    expect(provider.apiKey).toBeUndefined();
+    expect(provider.apiKeyPool).toBeUndefined();
   });
 
   test("returns to oauth after the last stored API key is removed", () => {
     const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
-    const previousHome = process.env.OPENCODEX_HOME;
-    const testHome = mkdtempSync(join(tmpdir(), "ocx-oauth-upsert-"));
-    process.env.OPENCODEX_HOME = testHome;
+    const previousHome = process.env.CODEXCOMMANDER_HOME;
+    const testHome = mkdtempSync(join(tmpdir(), "ccx-oauth-upsert-"));
+    process.env.CODEXCOMMANDER_HOME = testHome;
     try {
       expect(removeProviderApiKey(config, "xai", "aaaaaaaa")).toBe(true);
       expect(config.providers.xai!.authMode).toBe("key");
@@ -291,8 +253,8 @@ describe("upsertOAuthProvider credential preservation", () => {
       expect(provider.apiKey).toBeUndefined();
       expect(provider.apiKeyPool).toBeUndefined();
     } finally {
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previousHome;
       rmSync(testHome, { recursive: true, force: true });
     }
   });
@@ -311,7 +273,7 @@ describe("upsertOAuthProvider credential preservation", () => {
           note: "stale-note",
         },
       },
-    } as unknown as OcxConfig;
+    } as unknown as CodexCommanderConfig;
     upsertOAuthProvider(config, "anthropic");
     const provider = config.providers.anthropic!;
     expect(provider.authMode).toBe("oauth");
@@ -321,7 +283,7 @@ describe("upsertOAuthProvider credential preservation", () => {
   });
 
   test("a fresh login on an unconfigured provider gets the untouched preset", () => {
-    const config = { port: 10100, defaultProvider: "openai", providers: {} } as unknown as OcxConfig;
+    const config = { port: 10100, defaultProvider: "openai", providers: {} } as unknown as CodexCommanderConfig;
     upsertOAuthProvider(config, "xai");
     const provider = config.providers.xai!;
     expect(provider.authMode).toBe("oauth");

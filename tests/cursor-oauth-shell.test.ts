@@ -3,11 +3,11 @@ import { buildInitProviders } from "../src/cli/init";
 import { isOAuthProvider, listOAuthProviders } from "../src/oauth";
 import { deriveProviderPresets } from "../src/providers/derive";
 
-// WP16 (devlog 350.100): the disabled OAuth shell was replaced by the real PKCE flow — the flow
+// WP16 (implementation contract): the disabled OAuth shell was replaced by the real PKCE flow — the flow
 // itself is covered by tests/cursor-oauth.test.ts. These tests cover cursor's provider-routing,
 // init/preset metadata, and the OAuth module's standalone property (no local fs/process/http2).
 describe("Cursor provider routing + standalone OAuth module", () => {
-  // WP17 (devlog 350.101): cursor is now registered in OAUTH_PROVIDERS.
+  // WP17 (implementation contract): cursor is now registered in OAUTH_PROVIDERS.
   test("cursor is exposed through OAuth provider routing", () => {
     expect(isOAuthProvider("cursor")).toBe(true);
     expect(listOAuthProviders()).toContain("cursor");

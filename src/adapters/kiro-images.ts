@@ -1,4 +1,4 @@
-import type { OcxContentPart } from "../types";
+import type { CodexCommanderContentPart } from "../types";
 import { normalizeImageTargets, type NormalizeOptions, type NormalizeTarget } from "./anthropic-image-normalize";
 
 // CodeWhisperer native image part (matches Kiro IDE wire format): the base64 bytes live directly in
@@ -24,7 +24,7 @@ function parseDataUrlImage(imageUrl: string): KiroImage | undefined {
   return { format, source: { bytes } };
 }
 
-export function extractKiroImages(content: string | OcxContentPart[]): KiroImage[] {
+export function extractKiroImages(content: string | CodexCommanderContentPart[]): KiroImage[] {
   if (typeof content === "string") return [];
   const out: KiroImage[] = [];
   for (const p of content) {
@@ -38,7 +38,7 @@ export function extractKiroImages(content: string | OcxContentPart[]): KiroImage
 /**
  * Conservative POLICY caps for the CodeWhisperer GenerateAssistantResponse payload,
  * whose limits are undocumented. Derived from adjacent AWS surfaces
- * (devlog/260714_image_normalization_pipeline/050): Bedrock `Message` allows 20 images
+ * (implementation contract): Bedrock `Message` allows 20 images
  * per message (Converse), and `InvokeModel` caps requests at 25,000,000 bytes — 18MiB
  * bounds the IMAGE share of the body with headroom for text/tools.
  */

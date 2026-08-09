@@ -1,4 +1,4 @@
-import type { OcxComboDefaultEffort, OcxComboTarget, OcxConfig } from "../types";
+import type { CodexCommanderComboDefaultEffort, CodexCommanderComboTarget, CodexCommanderConfig } from "../types";
 import { resolveComboId } from "./types";
 
 const warnedUnsupportedDefaults = new Set<string>();
@@ -16,7 +16,7 @@ export function resetComboEffortWarningStateForTests(): void {
   warnedUnsupportedDefaults.clear();
 }
 
-export function comboIdFromRawBody(body: unknown, config: OcxConfig): string | null {
+export function comboIdFromRawBody(body: unknown, config: CodexCommanderConfig): string | null {
   if (!body || typeof body !== "object" || Array.isArray(body)) return null;
   const model = (body as { model?: unknown }).model;
   if (typeof model !== "string") return null;
@@ -25,8 +25,8 @@ export function comboIdFromRawBody(body: unknown, config: OcxConfig): string | n
 
 export function concreteComboRequestBody(
   body: unknown,
-  target: Pick<OcxComboTarget, "provider" | "model">,
-  defaultEffort: OcxComboDefaultEffort | null,
+  target: Pick<CodexCommanderComboTarget, "provider" | "model">,
+  defaultEffort: CodexCommanderComboDefaultEffort | null,
   targetReasoningEfforts: readonly string[] | undefined,
 ): Record<string, unknown> {
   const clone = structuredClone(body) as Record<string, unknown>;
@@ -44,7 +44,7 @@ export function concreteComboRequestBody(
     const key = `${target.provider}/${target.model}:${defaultEffort}`;
     if (!warnedUnsupportedDefaults.has(key)) {
       warnedUnsupportedDefaults.add(key);
-      console.debug("[opencodex] combo default effort omitted", {
+      console.debug("[codexcommander] combo default effort omitted", {
         provider: target.provider,
         model: target.model,
         requestedEffort: defaultEffort,

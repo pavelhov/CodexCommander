@@ -4,8 +4,9 @@ import { expandUserPath } from "../config";
 import { defaultCodexHome } from "./home";
 import { readRootTomlString } from "./paths";
 import { truncateRetainedUtf8 } from "../lib/admission";
+import { isOwnedProviderId } from "../identity";
+import { isSectionMarkerLine } from "./injected-marker";
 
-const OCX_SECTION_MARKER = "# Auto-injected by opencodex";
 const DIAGNOSTICS_CACHE_TTL_MS = 30_000;
 const MAX_DIAGNOSTIC_VALUE_BYTES = 8 * 1024;
 
@@ -20,7 +21,7 @@ export type ProjectCodexConfigIssueCode = "model_providers_table" | "profile_sel
 export interface ProjectCodexConfigWarning {
   path: string;
   code: ProjectCodexConfigIssueCode;
-  /** Effective provider id that bypasses OpenCodex. */
+  /** Effective provider id that bypasses CodexCommander. */
   detail: string;
   /** Profile name when the bypass is selected via profile = "…". */
   profileName?: string;
@@ -39,7 +40,7 @@ function hasInjectedOpenaiBaseUrl(content: string): boolean {
   const firstTable = lines.findIndex(l => /^\s*\[/.test(l));
   const rootEnd = firstTable === -1 ? lines.length : firstTable;
   for (let i = 1; i < rootEnd; i++) {
-    if (/^\s*openai_base_url\s*=/.test(lines[i]) && lines[i - 1].includes(OCX_SECTION_MARKER)) return true;
+    if (/^\s*openai_base_url\s*=/.test(lines[i]) && isSectionMarkerLine(lines[i - 1]!)) return true;
   }
   return false;
 }
@@ -99,7 +100,7 @@ function hasModelProviderTable(sections: Map<string, Record<string, string>>, pr
 
 /** Built-in openai provider still routes through the proxy under Design B (marker-owned openai_base_url). */
 function isProxyCompatibleProvider(provider: string): boolean {
-  return provider === "opencodex" || provider === "openai";
+  return isOwnedProviderId(provider) || provider === "openai";
 }
 
 export interface EffectiveProjectModelRouting {
@@ -132,8 +133,8 @@ export function resolveEffectiveProjectModelProvider(content: string): Effective
   return { provider: null, profileName: null, via: null };
 }
 
-/** True when global Codex config routes through the opencodex proxy. */
-export function isGlobalOpencodexRoutingActive(
+/** True when global Codex config routes through the CodexCommander proxy. */
+export function isGlobalCodexCommanderRoutingActive(
   codexConfigPath: string = resolveCodexConfigPath(),
   content?: string,
 ): boolean {
@@ -147,7 +148,7 @@ export function isGlobalOpencodexRoutingActive(
     }
   }
   if (hasInjectedOpenaiBaseUrl(text)) return true;
-  if (readRootTomlString(text, "model_provider") === "opencodex") return true;
+  if (isOwnedProviderId(readRootTomlString(text, "model_provider"))) return true;
   return false;
 }
 
@@ -184,7 +185,7 @@ export function analyzeProjectCodexConfig(content: string, configPath: string): 
       message:
         `Project Codex config selects provider "${provider}" via `
         + `${routing.via === "profile" ? `profile = "${routing.profileName}"` : "model_provider"} and defines `
-        + `[model_providers.${provider}] (${rel}). That routes this trusted project away from the OpenCodex proxy.`,
+        + `[model_providers.${provider}] (${rel}). That routes this trusted project away from the CodexCommander proxy.`,
     }];
   }
 
@@ -196,7 +197,7 @@ export function analyzeProjectCodexConfig(content: string, configPath: string): 
       profileName: routing.profileName,
       message:
         `Project Codex config profile "${routing.profileName}" sets model_provider = "${provider}" (${rel}). `
-        + "That routes this trusted project away from the OpenCodex proxy.",
+        + "That routes this trusted project away from the CodexCommander proxy.",
     }];
   }
 
@@ -206,7 +207,7 @@ export function analyzeProjectCodexConfig(content: string, configPath: string): 
     detail: provider,
     message:
       `Project Codex config sets model_provider = "${provider}" (${rel}). `
-      + "Use global ~/.codex/config.toml for OpenCodex routing instead of a project-local provider override.",
+      + "Use global ~/.codex/config.toml for CodexCommander routing instead of a project-local provider override.",
   }];
 }
 
@@ -227,8 +228,7 @@ export function dedupeRelatedProjectCodexWarnings(
 
 /**
  * Render a path under the user's home as `~/...` for warning display.
- * Platform-correct containment (devlog 260715_cross_platform_audit/030): the old
- * lowercase prefix match had no component boundary (`C:\Users\bob2` rendered as
+ * The former lowercase prefix match had no component boundary (`C:\Users\bob2` rendered as
  * inside `~` for home `C:\Users\bob`) and case-folded on case-sensitive POSIX
  * filesystems. `relative()` carries the right case semantics per platform; reject
  * parent (`..`, `..\x`) and cross-drive (absolute) results.
@@ -297,11 +297,11 @@ export function discoverProjectCodexConfigPaths(options: {
 export function collectProjectCodexConfigWarnings(options: {
   cwd?: string;
   codexConfigPath?: string;
-  requireOpencodexRouting?: boolean;
+  requireCodexCommanderRouting?: boolean;
 } = {}): ProjectCodexConfigWarning[] {
   const codexConfigPath = options.codexConfigPath ?? resolveCodexConfigPath();
-  const requireRouting = options.requireOpencodexRouting ?? true;
-  if (requireRouting && !isGlobalOpencodexRoutingActive(codexConfigPath)) return [];
+  const requireRouting = options.requireCodexCommanderRouting ?? true;
+  if (requireRouting && !isGlobalCodexCommanderRoutingActive(codexConfigPath)) return [];
 
   const warnings: ProjectCodexConfigWarning[] = [];
   for (const path of discoverProjectCodexConfigPaths({ cwd: options.cwd, codexConfigPath })) {
@@ -354,7 +354,7 @@ export function summarizeProjectCodexIssue(warning: ProjectCodexConfigWarning): 
 function humanizeProviderDetail(detail: string): string {
   if (detail === "opencode_go") return "OpenCode Go";
   if (/^opencode(?:$|[-_.:/])/.test(detail)) return "OpenCode";
-  if (detail === "opencodex") return "OpenCodex";
+  if (detail === "codexcommander") return "CodexCommander";
   return detail;
 }
 
@@ -362,7 +362,7 @@ function humanizeProviderDetail(detail: string): string {
 export function explainProjectConfigBypass(warnings: ProjectCodexConfigWarning[]): string {
   const targets = [...new Set(warnings.map(w => humanizeProviderDetail(w.detail)))];
   const via = targets.length === 1 ? targets[0]! : targets.join(" / ");
-  return `Overrides OpenCodex — Codex uses ${via} for this repo instead of the proxy (~/.codex/config.toml).`;
+  return `Overrides CodexCommander — Codex uses ${via} for this repo instead of the proxy (~/.codex/config.toml).`;
 }
 
 export interface ProjectCodexConfigWarningGroup {
@@ -395,19 +395,19 @@ export function formatProjectCodexConfigWarningsForDoctor(warnings: ProjectCodex
     lines.push(`  --     ${relPath(path)} — ${issues.join(", ")}`);
     lines.push(`         ${bypass}`);
   }
-  lines.push("       fix: remove those entries so OpenCodex proxy routing applies in this project");
+  lines.push("       fix: remove those entries so CodexCommander proxy routing applies in this project");
   return lines;
 }
 
 export function formatProjectCodexConfigWarningsForConsole(warnings: ProjectCodexConfigWarning[]): string[] {
   const grouped = groupProjectCodexConfigWarningsByPath(warnings);
   if (grouped.length === 0) return [];
-  const lines = ["⚠️  Project Codex config bypasses OpenCodex:"];
+  const lines = ["⚠️  Project Codex config bypasses CodexCommander:"];
   for (const { path, issues, bypass } of grouped) {
     lines.push(`    ${relPath(path)} — ${issues.join(", ")}`);
     lines.push(`    ${bypass}`);
   }
-  lines.push("    fix: remove those entries so OpenCodex proxy routing applies in this project");
+  lines.push("    fix: remove those entries so CodexCommander proxy routing applies in this project");
   return lines;
 }
 

@@ -18,7 +18,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
 import { forgetEphemeralSecretPath, forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
-import type { OcxProviderContinuationState } from "../types";
+import type { CodexCommanderProviderContinuationState } from "../types";
 
 export const RESPONSE_SPILL_VERSION = 1;
 export const RESPONSE_SPILL_DIR_NAME = "responses-state-spill";
@@ -35,7 +35,7 @@ export interface ResponseSpillPayload {
   responseId: string;
   createdAt: number;
   items: unknown[];
-  providers?: OcxProviderContinuationState;
+  providers?: CodexCommanderProviderContinuationState;
 }
 
 export interface ResponseSpillRef {

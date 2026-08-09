@@ -25,8 +25,6 @@
  *
  * Lock order is `N -> C`. C is `withConfigMutationLockSync`, entered while N is
  * held and released before N commits. There is no `C -> N`.
- *
- * Design record: devlog/_fin/260804_codex_write_substrate/030_lock_protocol.md.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
@@ -41,7 +39,7 @@ import type {
 } from "./convergence-types";
 import { getCodexHome } from "./paths";
 import { nativeMainOwnerFilesystemSupported } from "./native-main-owner";
-import { openCodexCoordinatorTransaction } from "./transition-state";
+import { beginCodexCoordinatorTransaction } from "./transition-state";
 import {
   CodexUserIdentityRefusal,
   resolveCodexCoordinatorDatabasePath,
@@ -218,7 +216,7 @@ export function canonicalizeCodexHome(
   // hash alike there; POSIX paths are not, so they must not be folded.
   const normalized = process.platform === "win32" ? canonical.toLowerCase() : canonical;
   const lockId = createHash("sha256")
-    .update("opencodex-codex-write-lock-v1\0")
+    .update("codexcommander-codex-write-lock-v1\0")
     .update(normalized)
     .digest("hex");
   return { ok: true, home: { path: canonical, lockId } };
@@ -302,9 +300,9 @@ export async function withCodexWriteLock<T>(
   for (;;) {
     if (signal?.aborted) return { status: "busy", reason: "cancelled", retryable: true, waitedMs: waited(), lockId: target.lockId };
 
-    let transaction: ReturnType<typeof openCodexCoordinatorTransaction> | undefined;
+    let transaction: ReturnType<typeof beginCodexCoordinatorTransaction> | undefined;
     try {
-      transaction = openCodexCoordinatorTransaction(databasePath);
+      transaction = beginCodexCoordinatorTransaction(databasePath);
     } catch (error) {
       // Only contention retries. A malformed database, an unsafe path, or an
       // identity failure will fail identically forever; telling a caller to retry

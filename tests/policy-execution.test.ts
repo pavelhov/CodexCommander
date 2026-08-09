@@ -7,25 +7,25 @@ import { isValidProviderName } from "../src/config";
 import { getRoutingProfile } from "../src/routing/profile";
 import { closeRequestHistoryIndex } from "../src/routing/history/indexer";
 import { evidenceFromBody } from "../src/routing/request-evidence";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 let testDir = "";
 let previousHome: string | undefined;
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  testDir = mkdtempSync(join(tmpdir(), "ocx-policy-exec-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  testDir = mkdtempSync(join(tmpdir(), "ccx-policy-exec-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
 });
 
 afterEach(() => {
   closeRequestHistoryIndex();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
 });
 
-function baseConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
+function baseConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
   return {
     port: 10100,
     defaultProvider: "a",
@@ -70,7 +70,6 @@ function baseConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
     },
     routingProfiles: {
       fast: {
-        alias: "ocx/fast",
         candidates: [
           { provider: "a", model: "m1" },
           { provider: "b", model: "m2" },
@@ -107,11 +106,22 @@ describe("policy execution (RI-05)", () => {
     });
   });
 
-  test("profile alias executes the same policy", () => {
-    const route = routeModel(baseConfig(), "ocx/fast");
+  test("a profile alias is its sole public routing id", () => {
+    const baseline = baseConfig();
+    const config = baseConfig({
+      routingProfiles: {
+        fast: { ...baseline.routingProfiles!.fast!, alias: "ccx/fast" },
+      },
+    });
+    const route = routeModel(config, "ccx/fast");
     expect(route.routeKind).toBe("policy");
     expect(route.providerName).toBe("a");
     expect(route.modelId).toBe("m1");
+    expect(routeModel(config, "policy/fast")).toMatchObject({
+      routeKind: "default-provider",
+      providerName: "a",
+      modelId: "policy/fast",
+    });
   });
 
   test("concrete selection never re-enters policy lookup (alias recursion guard)", () => {
@@ -126,7 +136,7 @@ describe("policy execution (RI-05)", () => {
         },
       },
     });
-    const route = routeModel(config, "policy/direct");
+    const route = routeModel(config, "direct/a");
     expect(route.routeKind).toBe("policy");
     expect(route.providerName).toBe("a");
     expect(route.modelId).toBe("m1");

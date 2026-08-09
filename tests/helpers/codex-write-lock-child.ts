@@ -12,7 +12,7 @@
 import { withCodexWriteLock } from "../../src/codex/codex-write-lock";
 import type { AdmissionSnapshot } from "../../src/codex/convergence-types";
 
-const payload = JSON.parse(process.env.OCX_LOCK_CHILD_PAYLOAD ?? "{}") as {
+const payload = JSON.parse(process.env.CCX_LOCK_CHILD_PAYLOAD ?? "{}") as {
   timeoutMs?: number;
   holdMarker?: string;
   releaseMarker?: string;
@@ -49,9 +49,6 @@ const result = await withCodexWriteLock(
         { nativeGeneration: ctx.expectation.nativeBefore, currentTxId: ctx.currentTxId },
         {
           txId: ctx.expectation.txId,
-          direction: "apply",
-          authoritySnapshotId: ctx.admission.authoritySnapshotId,
-          nextRetryAt: new Date().toISOString(),
         },
       );
     }

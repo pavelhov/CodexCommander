@@ -12,7 +12,7 @@ let runner = TestRunner()
 
 final class ApplicationMenuTarget: NSObject {
     @objc func quitMenuBar(_ sender: Any?) {}
-    @objc func stopOpenCodexAndQuit(_ sender: Any?) {}
+    @objc func stopCodexCommanderAndQuit(_ sender: Any?) {}
 }
 
 func quotaJSON(
@@ -26,8 +26,8 @@ func quotaJSON(
     if let fiveHour { parts.append("\"fiveHourPercent\":\(fiveHour)") }
     if let weekly { parts.append("\"weeklyPercent\":\(weekly)") }
     if let monthly { parts.append("\"monthlyPercent\":\(monthly)") }
-    let quota = parts.isEmpty ? "null" : "{\(parts.joined(separator: ","))}"
-    return "{\"provider\":\"\(provider)\",\"label\":\"\(label)\",\"quota\":\(quota)}"
+    let quota = "{\"updatedAt\":1\(parts.isEmpty ? "" : "," + parts.joined(separator: ","))}"
+    return "{\"provider\":\"\(provider)\",\"label\":\"\(label)\",\"source\":\"test\",\"quota\":\(quota),\"updatedAt\":1}"
 }
 
 func decodeQuotas(_ json: String) -> [QuotaReport] {
@@ -40,6 +40,43 @@ func decodeProviders(_ json: String) -> [ProviderSummary] {
 
 func decodeQuotaAvailability(_ json: String) -> [ProviderQuotaAvailability] {
     try! JSONDecoder().decode([ProviderQuotaAvailability].self, from: Data(json.utf8))
+}
+
+func currentHealth(
+    status: String = "protected",
+    protection: String = "none",
+    serviceInstalled: Bool = false,
+    serviceEnabled: Bool = false,
+    diagnosticStale: Bool = false
+) -> StartupHealth {
+    StartupHealth(
+        status: status,
+        protection: protection,
+        platform: "darwin",
+        routingKind: "codexcommander-local",
+        routingInjected: true,
+        localRoutingDependency: true,
+        autostartEnabled: serviceEnabled,
+        serviceRunning: serviceEnabled,
+        serviceInstalled: serviceInstalled,
+        serviceViable: serviceEnabled,
+        serviceEnabled: serviceEnabled,
+        serviceStale: false,
+        serviceConflict: false,
+        serviceSupported: true,
+        shimInstalled: false,
+        shimHealthy: false,
+        shimCoverage: "none",
+        rebootSafe: serviceEnabled,
+        diagnosticStale: diagnosticStale,
+        recommendedCommand: nil,
+        commands: .init(
+            installService: "ccx service install",
+            repairService: "ccx service repair",
+            installShim: "ccx codex-shim install",
+            restoreNative: "ccx restore"
+        )
+    )
 }
 
 func activitySnapshot(
@@ -67,7 +104,7 @@ func makeSnapshot(
     quotaAvailability: [ProviderQuotaAvailability] = [],
     activity: AgentActivitySnapshot? = nil,
     providers: [ProviderSummary] = [],
-    health: StartupHealth = StartupHealth(status: "protected"),
+    health: StartupHealth = currentHealth(),
     providersLoaded: Bool = false,
     quotasLoaded: Bool = true,
     activityLoaded: Bool = true
@@ -107,8 +144,8 @@ runner.test("ui: nonactivating panel remains key-capable for Escape and keyboard
 runner.test("ui: menu-bar glyph distinguishes every operational state") {
     let states: [ProxyState] = [
         .loading,
-        .running(StartupHealth(status: "protected")),
-        .running(StartupHealth(status: "at-risk")),
+        .running(currentHealth()),
+        .running(currentHealth(status: "at-risk")),
         .unreachable,
         .unauthorized,
         .degraded("Unavailable"),
@@ -125,7 +162,7 @@ runner.test("ui: footer exposes navigation, proxy lifecycle, and both exit contr
         titles,
         [
             "Dashboard", "Logs", "Refresh", "Start Proxy", "Restart Proxy…",
-            "Quit Menu Bar", "Stop OpenCodex and Quit…",
+            "Quit Menu Bar", "Stop CodexCommander and Quit…",
         ],
         "footer titles"
     )
@@ -147,7 +184,7 @@ runner.test("ui: catalog update is a persistent action outside the proxy footer"
         "card reports a count without exposing process identifiers"
     )
     runner.expect(
-        controller.catalogUpdateDetail.contains("OpenCodex remains running"),
+        controller.catalogUpdateDetail.contains("CodexCommander remains running"),
         "card distinguishes the catalog action from a proxy restart"
     )
     runner.expect(
@@ -181,11 +218,8 @@ runner.test("ui: startup control exposes desktop, headless, off, and approval st
     controller.applyLaunchAtLogin(
         LaunchAtLoginPresentation(status: .enabled, desiredEnabled: true)
     )
-    controller.apply(makeSnapshot(health: StartupHealth(
-        status: "protected",
-        protection: "service",
-        serviceInstalled: true,
-        serviceEnabled: true
+    controller.apply(makeSnapshot(health: currentHealth(
+        protection: "service", serviceInstalled: true, serviceEnabled: true
     )))
     runner.equal(
         controller.startupModeView.modeText,
@@ -201,10 +235,10 @@ runner.test("ui: startup control exposes desktop, headless, off, and approval st
         "Headless · proxy runs without the menu bar"
     )
 
-    controller.apply(makeSnapshot(health: StartupHealth(status: "at-risk")))
+    controller.apply(makeSnapshot(health: currentHealth(status: "at-risk")))
     runner.equal(
         controller.startupModeView.modeText,
-        "Off · start OpenCodex manually"
+        "Off · start CodexCommander manually"
     )
 
     controller.applyLaunchAtLogin(
@@ -262,9 +296,9 @@ runner.test("ui: configured Grok stays visible when its quota report is unavaila
     """)
     let providers = decodeProviders("""
     [
-      {"name":"openai","authMode":"forward","quotaCapable":true},
-      {"name":"kimi","authMode":"oauth","quotaCapable":true},
-      {"name":"xai","authMode":"oauth","quotaCapable":true}
+      {"name":"openai","adapter":"openai-responses","authMode":"forward","hasApiKey":false,"disabled":false,"quotaCapable":true},
+      {"name":"kimi","adapter":"kimi","authMode":"oauth","hasApiKey":false,"disabled":false,"quotaCapable":true},
+      {"name":"xai","adapter":"openai-chat","authMode":"oauth","hasApiKey":false,"disabled":false,"quotaCapable":true}
     ]
     """)
     let accordion = ProviderQuotaAccordionView()
@@ -297,7 +331,7 @@ runner.test("ui: configured Grok stays visible when its quota report is unavaila
 
 runner.test("ui: an unavailable configured provider is a row, not an empty state") {
     let providers = decodeProviders("""
-    [{"name":"xai","authMode":"oauth","quotaCapable":true}]
+    [{"name":"xai","adapter":"openai-chat","authMode":"oauth","hasApiKey":false,"disabled":false,"quotaCapable":true}]
     """)
     let accordion = ProviderQuotaAccordionView()
     accordion.apply(makeSnapshot(providers: providers, providersLoaded: true))
@@ -311,9 +345,9 @@ runner.test("ui: actual reports win; disabled and unsupported providers get no p
     let quotas = decodeQuotas("[\(quotaJSON(provider: "xai", label: "Grok", monthly: 41))]")
     let providers = decodeProviders("""
     [
-      {"name":"xai","authMode":"oauth","quotaCapable":true},
-      {"name":"anthropic","authMode":"oauth","quotaCapable":true,"disabled":true},
-      {"name":"deepseek","authMode":"key","quotaCapable":false}
+      {"name":"xai","adapter":"openai-chat","authMode":"oauth","hasApiKey":false,"disabled":false,"quotaCapable":true},
+      {"name":"anthropic","adapter":"anthropic","authMode":"oauth","hasApiKey":false,"disabled":true,"quotaCapable":true},
+      {"name":"deepseek","adapter":"openai-chat","authMode":"key","hasApiKey":false,"disabled":false,"quotaCapable":false}
     ]
     """)
     let accordion = ProviderQuotaAccordionView()
@@ -373,7 +407,7 @@ runner.test("ui: no duplicate provider strip — accordion is the only provider 
 
 runner.test("ui: OpenCode Go renders published caps and honest local observation semantics") {
     let quotas = decodeQuotas("""
-    [{"provider":"opencode-go","label":"OpenCode Go","quota":{
+    [{"provider":"opencode-go","label":"OpenCode Go","source":"test","updatedAt":1,"quota":{"updatedAt":1,
       "referenceWindows":[
         {"id":"five_hour","label":"5-hour","windowSeconds":18000,
          "publishedLimitUsd":12,"observedSpendUsd":0.3,"observedTokens":1000120,
@@ -449,7 +483,7 @@ runner.test("ui: provider deep-link encoding preserves safe ids") {
 
     let dynamicKeyProvider = try! JSONDecoder().decode(
         ProviderSummary.self,
-        from: Data("{\"name\":\"deepseek\",\"authMode\":\"key\",\"hasApiKey\":false}".utf8)
+        from: Data("{\"name\":\"deepseek\",\"adapter\":\"openai-chat\",\"authMode\":\"key\",\"hasApiKey\":false,\"disabled\":false,\"quotaCapable\":false}".utf8)
     )
     runner.expect(
         ResourceAssets.supportsAccountsTab("deepseek", summary: dynamicKeyProvider),
@@ -583,7 +617,7 @@ runner.test("ui: exit actions expose clear labels, accessibility, and distinct s
         "safe quit explains proxy persistence"
     )
     runner.expect(
-        labels[6]?.contains("Stop the OpenCodex proxy") == true,
+        labels[6]?.contains("Stop the CodexCommander proxy") == true,
         "destructive exit explains proxy stop"
     )
 
@@ -598,7 +632,7 @@ runner.test("ui: exit actions expose clear labels, accessibility, and distinct s
 
 runner.test("ui: lifecycle confirmations default to Cancel and mark stop actions destructive") {
     let stop = LifecycleConfirmation.stopProxy.makeAlert()
-    runner.equal(stop.messageText, "Stop the OpenCodex proxy?")
+    runner.equal(stop.messageText, "Stop the CodexCommander proxy?")
     runner.equal(
         stop.buttons.map(\.title),
         ["Stop Proxy", "Cancel"],
@@ -622,7 +656,7 @@ runner.test("ui: lifecycle confirmations default to Cancel and mark stop actions
     runner.equal(restart.buttons[0].hasDestructiveAction, false)
 
     let stopAndQuit = LifecycleConfirmation.stopAndQuit.makeAlert()
-    runner.equal(stopAndQuit.messageText, "Stop OpenCodex and quit?")
+    runner.equal(stopAndQuit.messageText, "Stop CodexCommander and quit?")
     runner.equal(stopAndQuit.buttons.map(\.title), ["Stop and Quit", "Cancel"])
     runner.equal(stopAndQuit.buttons[0].hasDestructiveAction, true)
     runner.expect(
@@ -641,7 +675,7 @@ runner.test("ui: catalog confirmation is activity-aware and defaults to Later") 
         "busy confirmation names current activity"
     )
     runner.expect(
-        busyAlert.informativeText.contains("OpenCodex remains running"),
+        busyAlert.informativeText.contains("CodexCommander remains running"),
         "confirmation keeps proxy restart separate"
     )
     runner.equal(busyAlert.buttons[0].hasDestructiveAction, true)
@@ -683,11 +717,11 @@ runner.test("ui: application menu keeps Command-Q safe and provides explicit des
     let menu = ApplicationMenuFactory.make(
         target: target,
         quitAction: #selector(ApplicationMenuTarget.quitMenuBar(_:)),
-        stopAndQuitAction: #selector(ApplicationMenuTarget.stopOpenCodexAndQuit(_:))
+        stopAndQuitAction: #selector(ApplicationMenuTarget.stopCodexCommanderAndQuit(_:))
     )
     let items = menu.items.first?.submenu?.items.filter { !$0.isSeparatorItem } ?? []
-    runner.equal(menu.items.map(\.title), ["OpenCodex", "Edit"])
-    runner.equal(items.map(\.title), ["Stop OpenCodex and Quit…", "Quit Menu Bar"])
+    runner.equal(menu.items.map(\.title), ["CodexCommander", "Edit"])
+    runner.equal(items.map(\.title), ["Stop CodexCommander and Quit…", "Quit Menu Bar"])
     runner.equal(items[0].keyEquivalent, "q")
     runner.equal(items[0].keyEquivalentModifierMask, [.command, .option])
     runner.equal(items[1].keyEquivalent, "q")
@@ -702,7 +736,7 @@ runner.test("ui: application menu keeps Command-Q safe and provides explicit des
 runner.test("ui: destructive menu availability follows proxy and in-flight state") {
     runner.equal(
         LifecycleActionAvailability.canStopAndQuit(
-            state: .running(StartupHealth(status: "protected")),
+            state: .running(currentHealth()),
             controlsAllowed: true
         ),
         true
@@ -786,7 +820,7 @@ runner.test("ui: app menu starts with destructive exit disabled and safe quit en
     let menu = ApplicationMenuFactory.make(
         target: delegate,
         quitAction: NSSelectorFromString("quitMenuBar:"),
-        stopAndQuitAction: NSSelectorFromString("stopOpenCodexAndQuit:")
+        stopAndQuitAction: NSSelectorFromString("stopCodexCommanderAndQuit:")
     )
     let appMenu = menu.items[0].submenu
     appMenu?.update()

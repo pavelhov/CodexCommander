@@ -85,7 +85,7 @@ enum LaunchAtLoginSuite {
 
             t.equal(result.status, .disabled)
             t.equal(result.desiredEnabled, true)
-            t.equal(result.errorMessage, "OpenCodex could not update Launch at Login.")
+            t.equal(result.errorMessage, "CodexCommander could not update Launch at Login.")
             t.equal(preferences.registeredExecutableFingerprint, nil)
         }
 
@@ -222,35 +222,49 @@ enum LaunchAtLoginSuite {
             let home = URL(fileURLWithPath: "/Users/example", isDirectory: true)
             t.equal(
                 LaunchAtLoginEligibility.isStableBundle(
-                    URL(fileURLWithPath: "/repo/dist/macos/OpenCodex.app"),
+                    URL(fileURLWithPath: "/repo/dist/macos/CodexCommander.app"),
                     home: home
                 ),
                 true
             )
             t.equal(
                 LaunchAtLoginEligibility.isStableBundle(
-                    URL(fileURLWithPath: "/Applications/OpenCodex.app"),
+                    URL(fileURLWithPath: "/Applications/CodexCommander.app"),
                     home: home
                 ),
                 true
             )
             t.equal(
                 LaunchAtLoginEligibility.isStableBundle(
-                    URL(fileURLWithPath: "/Users/example/Applications/OpenCodex.app"),
+                    URL(fileURLWithPath: "/Users/example/Applications/CodexCommander.app"),
                     home: home
                 ),
                 true
             )
             t.equal(
                 LaunchAtLoginEligibility.isStableBundle(
-                    URL(fileURLWithPath: "/Users/example/Downloads/OpenCodex.app"),
+                    URL(fileURLWithPath: "/Users/example/Downloads/CodexCommander.app"),
                     home: home
                 ),
                 false
             )
             t.equal(
                 LaunchAtLoginEligibility.isStableBundle(
-                    URL(fileURLWithPath: "/private/var/folders/AppTranslocation/OpenCodex.app"),
+                    URL(fileURLWithPath: "/private/var/folders/AppTranslocation/CodexCommander.app"),
+                    home: home
+                ),
+                false
+            )
+            t.equal(
+                LaunchAtLoginEligibility.isStableBundle(
+                    URL(fileURLWithPath: "/repo/dist/macos/Other.app"),
+                    home: home
+                ),
+                false
+            )
+            t.equal(
+                LaunchAtLoginEligibility.isStableBundle(
+                    URL(fileURLWithPath: "/Applications/Other.app"),
                     home: home
                 ),
                 false
@@ -259,7 +273,7 @@ enum LaunchAtLoginSuite {
 
         t.test("menu app: process lock admits exactly one owner") {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent(
-                "OpenCodex-Instance-\(UUID().uuidString)",
+                "CodexCommander-Instance-\(UUID().uuidString)",
                 isDirectory: true
             )
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

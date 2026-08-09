@@ -6,14 +6,14 @@ import { saveConfig } from "../src/config";
 import type { NativeProfileManager } from "../src/codex/native-profile-manager";
 import { startServer } from "../src/server";
 import { initializeManagementAuthState, issueGuiSession, type ManagementAuthState } from "../src/server/management-auth";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { SERVER_BUDGET_MS } from "./helpers/test-budget";
 
 const previousHome = process.env.HOME;
-const previousOpenCodexHome = process.env.OPENCODEX_HOME;
+const previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
 const previousCodexHome = process.env.CODEX_HOME;
-const previousAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
-const previousDataToken = process.env.OPENCODEX_API_AUTH_TOKEN;
+const previousAdminToken = process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
+const previousDataToken = process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
 let testHome = "";
 
 interface NativeOperation {
@@ -35,9 +35,10 @@ const operations: readonly NativeOperation[] = [
   { name: "recover", path: "/api/native-main-profiles/recover", method: "POST", body: { rollback: true, confirmedStopped: true } },
 ];
 
-function loopbackConfig(): OcxConfig {
+function loopbackConfig(): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     hostname: "127.0.0.1",
     defaultProvider: "test",
     providers: {
@@ -69,25 +70,25 @@ function testManager(calls: string[]): NativeProfileManager {
 }
 
 beforeEach(() => {
-  testHome = mkdtempSync(join(tmpdir(), "ocx-native-profile-route-security-"));
+  testHome = mkdtempSync(join(tmpdir(), "ccx-native-profile-route-security-"));
   process.env.HOME = testHome;
-  process.env.OPENCODEX_HOME = testHome;
+  process.env.CODEXCOMMANDER_HOME = testHome;
   process.env.CODEX_HOME = join(testHome, "codex-home");
-  process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "native-main-admin-token";
-  delete process.env.OPENCODEX_API_AUTH_TOKEN;
+  process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = "native-main-admin-token";
+  delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
 });
 
 afterEach(() => {
   if (previousHome === undefined) delete process.env.HOME;
   else process.env.HOME = previousHome;
-  if (previousOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpenCodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
-  if (previousAdminToken === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
-  else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdminToken;
-  if (previousDataToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-  else process.env.OPENCODEX_API_AUTH_TOKEN = previousDataToken;
+  if (previousAdminToken === undefined) delete process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
+  else process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = previousAdminToken;
+  if (previousDataToken === undefined) delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+  else process.env.CODEXCOMMANDER_API_AUTH_TOKEN = previousDataToken;
   if (testHome) rmSync(testHome, { recursive: true, force: true });
   testHome = "";
 });
@@ -107,14 +108,14 @@ describe("native-main profile routes at the management admission boundary", () =
         });
 
         expect((await request()).status).toBe(401);
-        expect((await request({ "x-opencodex-api-key": "wrong-admin-token" })).status).toBe(401);
+        expect((await request({ "x-codexcommander-api-key": "wrong-admin-token" })).status).toBe(401);
         expect((await request({
-          "x-opencodex-api-key": "native-main-admin-token",
+          "x-codexcommander-api-key": "native-main-admin-token",
           origin: "https://attacker.example",
         })).status).toBe(403);
         expect(calls).toEqual([]);
 
-        expect((await request({ "x-opencodex-api-key": "native-main-admin-token" })).status).toBe(200);
+        expect((await request({ "x-codexcommander-api-key": "native-main-admin-token" })).status).toBe(200);
         expect(calls).toEqual([operation.name]);
         calls.length = 0;
       }
@@ -145,9 +146,9 @@ describe("native-main profile routes at the management admission boundary", () =
           headers: {
             "content-type": "application/json",
             Origin: server.url.origin,
-            "x-opencodex-api-key": session.token,
-            "x-opencodex-gui-origin": server.url.origin,
-            ...(csrf === undefined ? {} : { "x-opencodex-csrf-token": csrf }),
+            "x-codexcommander-api-key": session.token,
+            "x-codexcommander-gui-origin": server.url.origin,
+            ...(csrf === undefined ? {} : { "x-codexcommander-csrf-token": csrf }),
           },
           body: operation.body ? JSON.stringify(operation.body) : undefined,
         });

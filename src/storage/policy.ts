@@ -339,7 +339,7 @@ export interface PolicySelection {
   candidateRelPaths?: string[];
 }
 
-/** Build a Phase-2-compatible preview for the active policy target. */
+/** Build a current-format preview for the active policy target. */
 export function selectPolicyPreview(
   policy: StorageCleanupPolicy,
   codexHome: string = resolveCodexHomeDir(),

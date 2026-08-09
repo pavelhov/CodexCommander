@@ -86,5 +86,5 @@ void waitForNativeMainStartupGate().then(() => {
 while (!existsSync(stopPath)) await Bun.sleep(10);
 // Test-only stall, opt-in. It exists so the parent's bounded teardown can be shown
 // firing (#1061) — without it the timeout branch is present but never exercised.
-if (process.env.OCX_TEST_STALL_ON_STOP === "1") await new Promise(() => {});
+if (process.env.CCX_TEST_STALL_ON_STOP === "1") await new Promise(() => {});
 await server.stop(true);

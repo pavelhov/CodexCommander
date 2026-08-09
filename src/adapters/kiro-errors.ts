@@ -113,7 +113,7 @@ function classifyKiroFailure(
   // instead of the generic validation bucket. Non-retryable by definition.
   if (evidence.includes("profilearn") && evidence.includes("required")) {
     return {
-      message: "kiro_profile_required: Kiro requires a CodeWhisperer profileArn for this account and model. Re-login or re-import the matching Kiro account (ocx account login kiro --reauth) so the profile is captured, then retry.",
+      message: "kiro_profile_required: Kiro requires a CodeWhisperer profileArn for this account and model. Re-login or re-import the matching Kiro account (ccx account login kiro --reauth) so the profile is captured, then retry.",
       status: 400,
       errorType: "invalid_request_error",
       code: "kiro_profile_required",

@@ -6,19 +6,19 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 /**
- * Project dotenv can write environment variables before OpenCodex evaluates,
+ * Project dotenv can write environment variables before CodexCommander evaluates,
  * but it cannot add the random proof argument emitted by the plain-Node npm
  * launcher. Exercise that split through a real Bun child on every CI platform.
  */
 describe("Node launcher context transport", () => {
-  const dir = mkdtempSync(join(tmpdir(), "ocx-launch-context-"));
+  const dir = mkdtempSync(join(tmpdir(), "ccx-launch-context-"));
   const probe = join(dir, "probe.ts");
   const moduleUrl = pathToFileURL(join(import.meta.dir, "..", "src", "cli", "launcher-context.ts")).href;
   writeFileSync(
     probe,
     `import { initializeNodeLauncherContext } from ${JSON.stringify(moduleUrl)};\n`
       + "const context = initializeNodeLauncherContext();\n"
-      + "process.stdout.write(JSON.stringify({ context, args: process.argv.slice(2), contextEnv: process.env.OCX_NODE_LAUNCH_CONTEXT ?? null }));\n",
+      + "process.stdout.write(JSON.stringify({ context, args: process.argv.slice(2), contextEnv: process.env.CCX_NODE_LAUNCH_CONTEXT ?? null }));\n",
   );
 
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -32,9 +32,8 @@ describe("Node launcher context transport", () => {
 
   function run(args: string[], contextEnv: string | undefined) {
     const env = { ...process.env };
-    delete env.OCX_PRE_BUN_ANTHROPIC_ENV;
-    if (contextEnv === undefined) delete env.OCX_NODE_LAUNCH_CONTEXT;
-    else env.OCX_NODE_LAUNCH_CONTEXT = contextEnv;
+    if (contextEnv === undefined) delete env.CCX_NODE_LAUNCH_CONTEXT;
+    else env.CCX_NODE_LAUNCH_CONTEXT = contextEnv;
     const result = spawnSync(process.execPath, [probe, ...args], { encoding: "utf8", env });
     expect(result.status).toBe(0);
     return JSON.parse(result.stdout) as {
@@ -45,7 +44,7 @@ describe("Node launcher context transport", () => {
   }
 
   test("matching argv proof authenticates and consumes the parent snapshot", () => {
-    const seen = run([`--ocx-internal-launch-proof=${proof}`, "claude"], context);
+    const seen = run([`--ccx-internal-launch-proof=${proof}`, "claude"], context);
     expect(seen.context?.anthropicEnvSlots).toEqual(["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"]);
     expect(seen.args).toEqual(["claude"]);
     expect(seen.contextEnv).toBeNull();
@@ -60,8 +59,8 @@ describe("Node launcher context transport", () => {
 
   test("duplicate internal proofs fail closed and are removed from user argv", () => {
     const seen = run([
-      `--ocx-internal-launch-proof=${proof}`,
-      `--ocx-internal-launch-proof=${proof}`,
+      `--ccx-internal-launch-proof=${proof}`,
+      `--ccx-internal-launch-proof=${proof}`,
       "claude",
     ], context);
     expect(seen.context).toBeNull();

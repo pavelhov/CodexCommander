@@ -18,22 +18,22 @@ import { classifyTransportFailureKind } from "../src/lib/upstream-reachability";
 import { fetchWithResetRetry, fetchWithTransientRetry } from "../src/lib/upstream-retry";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { getConfigPath } from "../src/config";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-issue-914-test");
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 let previousCodexHome: string | undefined;
 
-function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
+function makeConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
   return {
     providers: {},
     codexAccounts: [],
     activeCodexAccountId: undefined,
     autoSwitchThreshold: 80,
     ...overrides,
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 function saveTestCredential(id: string): void {
@@ -45,7 +45,7 @@ function saveTestCredential(id: string): void {
   });
 }
 
-function makeTwoAccountConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
+function makeTwoAccountConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
   for (const id of ["a", "b"]) saveTestCredential(id);
   return makeConfig({
     activeCodexAccountId: "a",
@@ -55,11 +55,11 @@ function makeTwoAccountConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
 }
 
 beforeEach(() => {
-  previousOpencodexHome = process.env.OPENCODEX_HOME;
+  previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
   previousCodexHome = process.env.CODEX_HOME;
   rmSync(TEST_DIR, { recursive: true, force: true });
   mkdirSync(TEST_DIR, { recursive: true });
-  process.env.OPENCODEX_HOME = TEST_DIR;
+  process.env.CODEXCOMMANDER_HOME = TEST_DIR;
   process.env.CODEX_HOME = TEST_DIR;
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
@@ -67,8 +67,8 @@ beforeEach(() => {
 });
 
 function restoreEnv(): void {
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
   rmSync(TEST_DIR, { recursive: true, force: true });

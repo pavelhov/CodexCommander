@@ -12,13 +12,13 @@
 import { injectCodexConfig } from "../../src/codex/inject";
 import { readConfigDiagnostics } from "../../src/config";
 
-const payload = JSON.parse(process.env.OCX_INJECT_RACE_PAYLOAD ?? "{}") as {
+const payload = JSON.parse(process.env.CCX_INJECT_RACE_PAYLOAD ?? "{}") as {
   port?: number;
   lockTimeoutMs?: number;
 };
 
-// The real caller passes the persisted config; a child that invented `{}` could
-// not exercise settings the parent seeded — syncResumeHistory among them.
+// The real caller passes the persisted config so the child exercises the same
+// routing settings as its parent.
 const persisted = readConfigDiagnostics();
 const config = persisted.source === "file" ? persisted.config : {};
 

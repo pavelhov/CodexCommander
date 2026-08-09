@@ -310,7 +310,7 @@ export class AgentActivityRegistry<Owner extends object> {
 
   private digestKnownSafe(field: CorrelationField, value: string): string {
     return createHmac("sha256", this.deps.hmacKey)
-      .update("opencodex-agent-activity-v1\0")
+      .update("codexcommander-agent-activity-v1\0")
       .update(field)
       .update("\0")
       .update(value)

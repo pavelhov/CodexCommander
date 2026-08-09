@@ -25,7 +25,7 @@ afterEach(() => {
   while (tempRoots.length > 0) rmSync(tempRoots.pop()!, { recursive: true, force: true });
 });
 
-describe("ocx account main", () => {
+describe("ccx account main", () => {
   test("cleanup guidance requires a literal true signal", () => {
     const errors: string[] = [];
     console.error = (...values: unknown[]) => errors.push(values.join(" "));
@@ -38,7 +38,7 @@ describe("ocx account main", () => {
     ]);
 
     expect(apiError({ error: "validation failed", cleanupRequired: true }, "fallback")).toBe(1);
-    expect(errors.at(-1)).toBe("Warning: native-login staging cleanup is still required; run 'ocx account main doctor'.");
+    expect(errors.at(-1)).toBe("Warning: native-login staging cleanup is still required; run 'ccx account main doctor'.");
   });
 
   test("official login honors an explicit Windows runtime outside PATH through ComSpec", () => {
@@ -59,7 +59,7 @@ describe("ocx account main", () => {
         expect(args.at(-1)).toContain("codex.cmd");
         return "codex-cli 9.9.9";
       },
-      configDir: tempConfigDir("ocx-native-profile-explicit-runtime-"),
+      configDir: tempConfigDir("ccx-native-profile-explicit-runtime-"),
     });
 
     expect(invocation.file).toBe(comSpec);
@@ -71,7 +71,7 @@ describe("ocx account main", () => {
 
   test("official login honors a persisted runtime outside PATH", () => {
     const runtime = "C:\\Portable Codex\\codex.exe";
-    const configDir = tempConfigDir("ocx-native-profile-persisted-runtime-");
+    const configDir = tempConfigDir("ccx-native-profile-persisted-runtime-");
     writeFileSync(join(configDir, "codex-runtime.json"), `${JSON.stringify({
       version: 1,
       command: runtime,
@@ -96,9 +96,9 @@ describe("ocx account main", () => {
   });
 
   test("mutating human output uses the server's effective home while add keeps the auth envelope off HTTP", async () => {
-    const stagingHome = join(tmpdir(), "ocx-native-profile-stage");
-    const effectiveHome = join(tmpdir(), "ocx-native-profile-effective-home");
-    const clientHome = join(tmpdir(), "ocx-native-profile-client-home");
+    const stagingHome = join(tmpdir(), "ccx-native-profile-stage");
+    const effectiveHome = join(tmpdir(), "ccx-native-profile-effective-home");
+    const clientHome = join(tmpdir(), "ccx-native-profile-client-home");
     process.env.CODEX_HOME = clientHome;
     const requests: Array<{ path: string; body?: Record<string, unknown> }> = [];
     const output: string[] = [];
@@ -130,7 +130,10 @@ describe("ocx account main", () => {
     const deps = {
       baseUrl: "http://127.0.0.1:10100",
       fetchImpl,
-      runCodexLoginImpl: async (home: string) => { loginHome = home; return 0; },
+      spawnCodexLoginImpl: (home: string) => {
+        loginHome = home;
+        return { exited: Promise.resolve(0), kill: () => {} };
+      },
     };
 
     expect(await cmdAccount(["main", "register", "personal"], deps)).toBe(0);
@@ -167,8 +170,8 @@ describe("ocx account main", () => {
   });
 
   test("JSON mutating output preserves the server's canonical effective home", async () => {
-    const effectiveHome = join(tmpdir(), "ocx-native-profile-json-effective-home");
-    process.env.CODEX_HOME = join(tmpdir(), "ocx-native-profile-json-client-home");
+    const effectiveHome = join(tmpdir(), "ccx-native-profile-json-effective-home");
+    process.env.CODEX_HOME = join(tmpdir(), "ccx-native-profile-json-client-home");
     const responses: Record<string, Record<string, unknown>> = {
       register: { effectiveCodexHome: effectiveHome, profile: { id: "p1", label: "personal", identityHint: "account-87654321", state: "active" } },
       switch: { ok: true, effectiveCodexHome: effectiveHome, activeProfile: { id: "p2", label: "work", identityHint: "account-12345678", state: "active" }, restartRequired: true },
@@ -196,7 +199,7 @@ describe("ocx account main", () => {
   });
 
   test("add sends an idempotent cancel fallback after a non-200 finish response", async () => {
-    const stagingHome = join(tmpdir(), "ocx-native-profile-stage-non-200");
+    const stagingHome = join(tmpdir(), "ccx-native-profile-stage-non-200");
     const requests: string[] = [];
     const errors: string[] = [];
     console.error = (...values: unknown[]) => errors.push(values.join(" "));
@@ -215,7 +218,7 @@ describe("ocx account main", () => {
     expect(await cmdAccount(["main", "add", "work"], {
       baseUrl: "http://127.0.0.1:10100",
       fetchImpl,
-      runCodexLoginImpl: async () => 0,
+      spawnCodexLoginImpl: () => ({ exited: Promise.resolve(0), kill: () => {} }),
     })).toBe(1);
     expect(requests).toEqual([
       "/api/native-main-profiles/stage",
@@ -224,11 +227,11 @@ describe("ocx account main", () => {
       "/api/native-main-profiles/stage/cancel",
     ]);
     expect(errors).toContain("Error: validation failed");
-    expect(errors).not.toContain("Warning: native-login staging cleanup is still required; run 'ocx account main doctor'.");
+    expect(errors).not.toContain("Warning: native-login staging cleanup is still required; run 'ccx account main doctor'.");
   });
 
   test("add sends an idempotent cancel fallback when the finish response disconnects", async () => {
-    const stagingHome = join(tmpdir(), "ocx-native-profile-stage-disconnect");
+    const stagingHome = join(tmpdir(), "ccx-native-profile-stage-disconnect");
     const requests: string[] = [];
     const fetchImpl: typeof fetch = async input => {
       const path = new URL(String(input)).pathname;
@@ -243,7 +246,7 @@ describe("ocx account main", () => {
     expect(await cmdAccount(["main", "add", "work"], {
       baseUrl: "http://127.0.0.1:10100",
       fetchImpl,
-      runCodexLoginImpl: async () => 0,
+      spawnCodexLoginImpl: () => ({ exited: Promise.resolve(0), kill: () => {} }),
     })).toBe(1);
     expect(requests).toEqual([
       "/api/native-main-profiles/stage",
@@ -254,8 +257,8 @@ describe("ocx account main", () => {
   });
 
   test("add cancels server staging when official login aborts", async () => {
-    const stagingHome = join(tmpdir(), "ocx-native-profile-stage-abort");
-    const effectiveHome = join(tmpdir(), "ocx-native-profile-effective-home-abort");
+    const stagingHome = join(tmpdir(), "ccx-native-profile-stage-abort");
+    const effectiveHome = join(tmpdir(), "ccx-native-profile-effective-home-abort");
     const requests: string[] = [];
     const errors: string[] = [];
     console.error = (...values: unknown[]) => errors.push(values.join(" "));
@@ -271,7 +274,10 @@ describe("ocx account main", () => {
     expect(await cmdAccount(["main", "add", "work"], {
       baseUrl: "http://127.0.0.1:10100",
       fetchImpl,
-      runCodexLoginImpl: async () => { throw new Error("login aborted"); },
+      spawnCodexLoginImpl: () => ({
+        exited: Promise.reject(new Error("login aborted")),
+        kill: () => {},
+      }),
     })).toBe(1);
     expect(requests).toEqual([
       "/api/native-main-profiles/stage",
@@ -282,7 +288,7 @@ describe("ocx account main", () => {
   });
 
   test("heartbeats only while the configured Codex login child is alive", async () => {
-    const stagingHome = join(tmpdir(), "ocx-native-profile-stage-heartbeat-child");
+    const stagingHome = join(tmpdir(), "ccx-native-profile-stage-heartbeat-child");
     const writerToken = "writer-token-child-lifetime-111111111111111111111111";
     const requests: Array<{ path: string; body?: Record<string, unknown> }> = [];
     let resolveExit!: (code: number) => void;
@@ -330,7 +336,7 @@ describe("ocx account main", () => {
   });
 
   test("a stalled heartbeat is aborted before lease expiry, kills login, and cancels staging", async () => {
-    const stagingHome = join(tmpdir(), "ocx-native-profile-stage-heartbeat-deadline");
+    const stagingHome = join(tmpdir(), "ccx-native-profile-stage-heartbeat-deadline");
     const requests: string[] = [];
     let now = 10_000;
     const leaseExpiresAt = now + 60_000;

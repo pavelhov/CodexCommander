@@ -23,22 +23,23 @@ import {
 } from "../src/oauth/anthropic-routing";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 describe("active registry admission", () => {
   test("active turn 257 returns structured server_busy before handler work", async () => {
     const leases = Array.from({ length: 256 }, () => tryAdmitTurn());
-    const previousHome = process.env.OPENCODEX_HOME;
-    const home = mkdtempSync(join(tmpdir(), "ocx-active-turn-"));
-    process.env.OPENCODEX_HOME = home;
+    const previousHome = process.env.CODEXCOMMANDER_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ccx-active-turn-"));
+    process.env.CODEXCOMMANDER_HOME = home;
     saveConfig({
       port: 0,
       hostname: "127.0.0.1",
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "openai",
       providers: {
         openai: { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authMode: "forward" },
       },
-    } as OcxConfig);
+    } as CodexCommanderConfig);
     const server = startServer(0);
     try {
       expect(leases.every(Boolean)).toBe(true);
@@ -52,26 +53,27 @@ describe("active registry admission", () => {
     } finally {
       for (const lease of leases) lease?.release();
       await server.stop(true);
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previousHome;
       rmSync(home, { recursive: true, force: true });
     }
   });
 
   test("websocket 129 rejects at the real upgrade boundary without entering account registry", async () => {
     const leases = Array.from({ length: MAX_TRACKED_CODEX_WEBSOCKETS }, () => tryReserveCodexWebSocket());
-    const previousHome = process.env.OPENCODEX_HOME;
-    const home = mkdtempSync(join(tmpdir(), "ocx-websocket-cap-"));
-    process.env.OPENCODEX_HOME = home;
+    const previousHome = process.env.CODEXCOMMANDER_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ccx-websocket-cap-"));
+    process.env.CODEXCOMMANDER_HOME = home;
     saveConfig({
       port: 0,
       hostname: "127.0.0.1",
+      multiAgentGuidanceEnabled: true,
       websockets: true,
       defaultProvider: "openai",
       providers: {
         openai: { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authMode: "forward" },
       },
-    } as OcxConfig);
+    } as CodexCommanderConfig);
     const server = startServer(0);
     try {
       expect(leases.every(Boolean)).toBe(true);
@@ -84,16 +86,16 @@ describe("active registry admission", () => {
     } finally {
       for (const lease of leases) lease?.release();
       await server.stop(true);
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previousHome;
       rmSync(home, { recursive: true, force: true });
     }
   });
 
   test("non-SSE streamed response keeps its admitted turn until the body settles", async () => {
-    const previousHome = process.env.OPENCODEX_HOME;
-    const home = mkdtempSync(join(tmpdir(), "ocx-non-sse-turn-"));
-    process.env.OPENCODEX_HOME = home;
+    const previousHome = process.env.CODEXCOMMANDER_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ccx-non-sse-turn-"));
+    process.env.CODEXCOMMANDER_HOME = home;
     let settle!: () => void;
     let settled = false;
     const upstream = Bun.serve({
@@ -114,11 +116,12 @@ describe("active registry admission", () => {
     saveConfig({
       port: 0,
       hostname: "127.0.0.1",
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "fixture",
       providers: {
         fixture: { adapter: "openai-responses", baseUrl: `http://127.0.0.1:${upstream.port}/v1`, allowPrivateNetwork: true, apiKey: "test-key" },
       },
-    } as OcxConfig);
+    } as CodexCommanderConfig);
     const server = startServer(0);
     const before = activeRegistryMetrics().activeTurns.active;
     try {
@@ -153,17 +156,17 @@ describe("active registry admission", () => {
       settle?.();
       await server.stop(true);
       upstream.stop(true);
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previousHome;
       rmSync(home, { recursive: true, force: true });
     }
   });
 
   test("storage home slot 33 returns storage_mutation_busy without dropping active slots", () => {
-    const homes = Array.from({ length: MAX_ACTIVE_STORAGE_HOME_SLOTS }, (_, index) => `/tmp/ocx-slot-${index}`);
+    const homes = Array.from({ length: MAX_ACTIVE_STORAGE_HOME_SLOTS }, (_, index) => `/tmp/ccx-slot-${index}`);
     const leases = homes.map(home => tryBeginStorageMutation("cleanup", home));
     expect(leases.every(result => result.acquired)).toBe(true);
-    expect(tryBeginStorageMutation("cleanup", "/tmp/ocx-slot-overflow")).toEqual({
+    expect(tryBeginStorageMutation("cleanup", "/tmp/ccx-slot-overflow")).toEqual({
       acquired: false,
       error: "storage_mutation_busy",
     });

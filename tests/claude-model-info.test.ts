@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { buildAnthropicModelInfos, nativeEffectiveLadder } from "../src/claude/model-info";
 import { nativeEffortClamp } from "../src/codex/catalog";
 
-describe("anthropic-flavor ModelInfo discovery entries (devlog 130 B4b)", () => {
+describe("anthropic-flavor ModelInfo discovery entries (implementation contract B4b)", () => {
   test("routed model with adapter-reported ladder advertises exactly those rungs", () => {
     const [info] = buildAnthropicModelInfos([], [{
       provider: "cursor", id: "gpt-5.6-luna",
@@ -63,7 +63,7 @@ describe("anthropic-flavor ModelInfo discovery entries (devlog 130 B4b)", () => 
     expect(infos).toHaveLength(1);
   });
 
-  test("[1m] picker variants: only >=1M models get a second row (devlog 260712 B1)", () => {
+  test("[1m] picker variants: only >=1M models get a second row (implementation contract B1)", () => {
     const infos = buildAnthropicModelInfos([], [
       { provider: "cursor", id: "gpt-5.6-luna", contextWindow: 1_000_000, reasoningEfforts: ["low", "high", "max"] },
       { provider: "mock", id: "small-model", contextWindow: 128_000 },
@@ -122,7 +122,7 @@ describe("anthropic-flavor ModelInfo discovery entries (devlog 130 B4b)", () => 
     expect(variants[0]!.display_name.includes("claude-big-5")).toBe(true);
   });
 
-  test("readable id style serves claude-ocx ids with hash fallback + readable [1m] variants (devlog 050)", () => {
+  test("readable id style serves claude-ccx ids with hash fallback + readable [1m] variants (implementation contract)", () => {
     const auto = { enabled: true, compactWindow: 350_000 };
     const infos = buildAnthropicModelInfos(["gpt-5.6-sol"], [
       { provider: "cursor", id: "gpt-5.6-luna", contextWindow: 1_000_000 },
@@ -130,15 +130,15 @@ describe("anthropic-flavor ModelInfo discovery entries (devlog 130 B4b)", () => 
       { provider: "weird--provider", id: "m1", contextWindow: 128_000 }, // unrepresentable -> hash fallback
     ], auto, "readable");
     const ids = infos.map(i => i.id);
-    expect(ids).toContain("claude-ocx-native--gpt-5.6-sol");
+    expect(ids).toContain("claude-ccx2-native--gpt-5.6-sol");
     // 372k native: NO [1m] variant under the authoritative-window contract.
-    expect(ids).not.toContain("claude-ocx-native--gpt-5.6-sol[1m]");
-    expect(ids).toContain("claude-ocx-cursor--gpt-5.6-luna");
-    expect(ids).toContain("claude-ocx-cursor--gpt-5.6-luna[1m]");
+    expect(ids).not.toContain("claude-ccx2-native--gpt-5.6-sol[1m]");
+    expect(ids).toContain("claude-ccx2-cursor--gpt-5.6-luna");
+    expect(ids).toContain("claude-ccx2-cursor--gpt-5.6-luna[1m]");
     expect(ids).toContain("claude-opus-4-8"); // anthropic canonical passthrough
     expect(ids.some(id => /^claude-opus-4-8-[a-z][0-9a-z]{2}$/.test(id))).toBe(true); // fallback row survives
     // Default style stays hashed (desktop contract untouched).
     const hashed = buildAnthropicModelInfos(["gpt-5.6-sol"], [], auto);
-    expect(hashed.map(i => i.id).some(id => id.startsWith("claude-ocx-"))).toBe(false);
+    expect(hashed.map(i => i.id).some(id => id.startsWith("claude-ccx2-"))).toBe(false);
   });
 });

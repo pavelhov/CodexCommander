@@ -2,12 +2,34 @@ import Foundation
 import MenuBarCore
 
 enum SnapshotStateSuite {
-    private static func health(_ status: String?, service: Bool = false) -> StartupHealth {
+    private static func health(_ status: String, service: Bool = false) -> StartupHealth {
         StartupHealth(
             status: status,
             protection: service ? "service" : "none",
+            platform: "darwin",
+            routingKind: "codexcommander-local",
+            routingInjected: true,
+            localRoutingDependency: true,
+            autostartEnabled: service,
+            serviceRunning: service,
             serviceInstalled: service,
-            serviceEnabled: service
+            serviceViable: service,
+            serviceEnabled: service,
+            serviceStale: false,
+            serviceConflict: false,
+            serviceSupported: true,
+            shimInstalled: false,
+            shimHealthy: false,
+            shimCoverage: "none",
+            rebootSafe: service,
+            diagnosticStale: false,
+            recommendedCommand: nil,
+            commands: .init(
+                installService: "ccx service install",
+                repairService: "ccx service repair",
+                installShim: "ccx codex-shim install",
+                restoreNative: "ccx restore"
+            )
         )
     }
 
@@ -47,13 +69,13 @@ enum SnapshotStateSuite {
 
         t.test("actions: a stopped proxy offers the start command for its own install") {
             let plain = ProxySnapshot(state: .unreachable, endpoint: endpoint)
-            t.equal(plain.nextAction, NextAction.runCommand("ocx start"))
+            t.equal(plain.nextAction, NextAction.runCommand("ccx start"))
 
             let managed = ProxySnapshot(
                 state: .unreachable, endpoint: endpoint,
-                lastKnownStartCommand: "ocx service start"
+                lastKnownStartCommand: "ccx service start"
             )
-            t.equal(managed.nextAction, NextAction.runCommand("ocx service start"))
+            t.equal(managed.nextAction, NextAction.runCommand("ccx service start"))
         }
 
         t.test("state: the running detail line drops empty and 'none' qualifiers") {
@@ -66,7 +88,7 @@ enum SnapshotStateSuite {
         t.test("snapshot: provider summaries remain available to dashboard handoffs") {
             let providers = try JSONDecoder().decode(
                 [ProviderSummary].self,
-                from: Data(#"[{"name":"openai"},{"name":"anthropic"}]"#.utf8)
+                from: Data(#"[{"name":"openai","adapter":"openai-responses","hasApiKey":false,"disabled":false,"quotaCapable":true},{"name":"anthropic","adapter":"anthropic","hasApiKey":false,"disabled":false,"quotaCapable":true}]"#.utf8)
             )
             let snapshot = ProxySnapshot(
                 state: .running(health("protected")), endpoint: endpoint,

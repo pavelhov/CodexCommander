@@ -10,63 +10,21 @@ import {
 } from "../src/app-routing";
 import { normalizeHashPath, replaceHash } from "../src/hash-routing";
 
-/**
- * Routing contract for devlog/_fin/260802_client_toggle_api/050 §2-§3.
- *
- * The three legacy top-level pages (`api`, `claude`, `grok`) collapse into one
- * `integrations` route with nested hashes. The load-bearing property is not
- * "the page resolves" — it is that each legacy hash keeps its SPECIFIC nested
- * destination, because `readPageFromHash` already answers `integrations` and
- * generic normalization would otherwise rewrite the hash to the bare page and
- * silently land an old bookmark on Overview.
- */
+/** Canonical Integration routes and passive normalization semantics. */
 
-const LEGACY_DESTINATIONS: readonly (readonly [string, string])[] = [
-  ["api", "integrations/keys"],
-  ["claude", "integrations/claude"],
-  ["grok", "integrations/grok"],
-];
-
-describe("legacy integration hashes", () => {
-  test("each legacy hash resolves to its own nested destination", () => {
-    for (const [legacy, destination] of LEGACY_DESTINATIONS) {
-      const action = resolveAppHashChange(legacy);
-      expect(action.page).toBe("integrations");
-      // The destination, not merely the page: asserting only `page` would pass
-      // even if every legacy hash collapsed onto Overview.
-      expect(action.replaceTo).toBe(destination);
-    }
+describe("top-level route hard cut", () => {
+  test("unknown page ids normalize to the dashboard", () => {
+    expect(readPageFromHash("unknown-page")).toBe("dashboard");
+    expect(resolveAppHashChange("unknown-page")).toEqual({
+      page: "dashboard",
+      replaceTo: "dashboard",
+    });
+    expect(resolvedNavigationHash("#unknown-page")).toBe("dashboard");
   });
 
-  test("navigation chrome selects the corrected nested destination immediately", () => {
-    expect(resolvedNavigationHash("#api")).toBe("integrations/keys");
-    expect(resolvedNavigationHash("#claude")).toBe("integrations/claude");
-    expect(resolvedNavigationHash("#grok")).toBe("integrations/grok");
-    expect(resolvedNavigationHash("#integrations")).toBe("integrations");
-  });
-
-  test("the legacy page ids are no longer routes of their own", () => {
-    for (const [legacy] of LEGACY_DESTINATIONS) {
-      expect(VALID_PAGES.has(legacy as never)).toBe(false);
-      // They still resolve — as the new page, never as the dashboard fallback.
-      expect(readPageFromHash(legacy)).toBe("integrations");
-    }
-  });
-
-  test("readPageFromHash alone cannot preserve the destination", () => {
-    /*
-     * Pins the ORDERING the plan calls observable. `readPageFromHash` maps the
-     * legacy id to the new page, so by the time generic normalization runs the
-     * hash already "belongs" to no registered route; only the explicit
-     * resolver branches carry the nested destination. If those branches moved
-     * below the normalization, `replaceTo` would be the bare page instead.
-     */
-    for (const [legacy, destination] of LEGACY_DESTINATIONS) {
-      expect(readPageFromHash(legacy)).toBe("integrations");
-      expect(hashBelongsToPage(legacy, "integrations")).toBe(false);
-      expect(resolveAppHashChange(legacy).replaceTo).toBe(destination);
-      expect(resolveAppHashChange(legacy).replaceTo).not.toBe("integrations");
-    }
+  test("only canonical page ids are registered", () => {
+    expect(VALID_PAGES.has("integrations")).toBe(true);
+    expect(VALID_PAGES.has("unknown-page" as never)).toBe(false);
   });
 });
 
@@ -106,12 +64,10 @@ describe("registered nested hashes", () => {
   });
 });
 
-describe("the collapse disturbs no neighbouring route", () => {
+describe("neighbouring canonical routes", () => {
   test("logs, dashboard and providers keep their contracts", () => {
     expect(hashBelongsToPage("logs/debug", "logs")).toBe(true);
-    expect(resolveAppHashChange("debug").replaceTo).toBe("logs/debug");
-    expect(resolveAppHashChange("providers/workspace").replaceTo).toBe("providers");
-    expect(hashBelongsToPage("dashboard/update", "dashboard")).toBe(true);
+    expect(resolveAppHashChange("providers/example").replaceTo).toBeNull();
     // Cross-page suffixes stay invalid in both directions.
     expect(hashBelongsToPage("integrations/keys", "dashboard")).toBe(false);
     expect(hashBelongsToPage("logs/debug", "integrations")).toBe(false);
@@ -125,7 +81,7 @@ describe("history semantics", () => {
 
   beforeEach(() => {
     previous = Object.fromEntries(keys.map(key => [key, Reflect.get(globalThis, key)]));
-    win = new Window({ url: "http://localhost/#api" });
+    win = new Window({ url: "http://localhost/#integrations/nonsense" });
     Object.defineProperties(globalThis, {
       window: { configurable: true, value: win },
       document: { configurable: true, value: win.document },
@@ -138,25 +94,16 @@ describe("history semantics", () => {
     }
   });
 
-  test("correcting an old bookmark adds no history entry", () => {
-    /*
-     * The whole reason `replaceTo` exists rather than a push: a user arriving
-     * on `#api` must not need two Backs to leave, with the first one landing
-     * on a hash the router immediately corrects again.
-     */
+  test("normalizing an unknown nested route adds no history entry", () => {
     const before = win.history.length;
     const action = resolveAppHashChange(normalizeHashPath(win.location.hash));
-    expect(action.replaceTo).toBe("integrations/keys");
+    expect(action.replaceTo).toBe("integrations");
     replaceHash(action.replaceTo!, win as unknown as Window & typeof globalThis);
-    expect(normalizeHashPath(win.location.hash)).toBe("integrations/keys");
+    expect(normalizeHashPath(win.location.hash)).toBe("integrations");
     expect(win.history.length).toBe(before);
   });
 
-  test("the corrected hash is itself a registered route, so it settles", () => {
-    // A redirect that lands on something the resolver would rewrite again is
-    // a loop; assert the destination is terminal.
-    for (const [, destination] of LEGACY_DESTINATIONS) {
-      expect(resolveAppHashChange(destination).replaceTo).toBeNull();
-    }
+  test("the corrected hash is terminal", () => {
+    expect(resolveAppHashChange("integrations").replaceTo).toBeNull();
   });
 });

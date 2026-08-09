@@ -1,7 +1,8 @@
 import type { TKey } from "./i18n/shared";
+import type { StartupRoutingKind } from "./pages/startup-shared";
 
 export interface StartupRiskDetail {
-  routingKind: "native" | "opencodex-local" | "custom-local" | "custom-remote" | "unknown";
+  routingKind: StartupRoutingKind;
   shimCoverage: "full" | "cli-only" | "none";
 }
 

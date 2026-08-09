@@ -15,7 +15,7 @@ import { handleManagementAPI } from "../src/server/management-api";
 import { saveCredential } from "../src/oauth/store";
 import { XAI_OAUTH_DISCOVERY_URL } from "../src/oauth/xai";
 import { XAI_GROK_CLI_BASE_URL } from "../src/providers/xai-transport";
-import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../src/types";
+import type { AdapterEvent, CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { clearRequestLogsForTests, hydrateRequestLogsFromDisk, type RequestLogContext } from "../src/server/request-log";
 import { responseWithDeferredRequestLog } from "../src/server/relay";
@@ -49,7 +49,7 @@ let customCursorTransportFactory: CursorTransportFactory | undefined;
 
 mock.module("../src/server/adapter-resolve", () => ({
   ...actualResolver,
-  resolveAdapter(provider: OcxProviderConfig, cacheRetention?: "none" | "short" | "long") {
+  resolveAdapter(provider: CodexCommanderProviderConfig, cacheRetention?: "none" | "short" | "long") {
     if (provider.adapter === "cursor" && customCursorTransportFactory) {
       // Real cursor adapter (adapter.name === "cursor") over a fake transport, so server-level
       // tests can drive the genuine continuation/persistence policy without a live socket.
@@ -119,14 +119,14 @@ const servers: Array<ReturnType<typeof Bun.serve>> = [];
 beforeEach(() => {
   originalFetch = globalThis.fetch;
   originalNow = Date.now;
-  previousHome = process.env.OPENCODEX_HOME;
-  previousCursorToken = process.env.OPENCODEX_CURSOR_TEST_TOKEN;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  previousCursorToken = process.env.CCX_CURSOR_TEST_TOKEN;
   previousCodexCliPath = process.env.CODEX_CLI_PATH;
-  delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-combo-030-codex-");
+  delete process.env.CCX_CURSOR_TEST_TOKEN;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-combo-030-codex-");
   process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
-  testDir = mkdtempSync(join(tmpdir(), "ocx-combo-030-"));
-  process.env.OPENCODEX_HOME = testDir;
+  testDir = mkdtempSync(join(tmpdir(), "ccx-combo-030-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   clearComboSelectionState();
   clearComboTargetCooldowns();
   clearCodexUpstreamHealth();
@@ -142,10 +142,10 @@ afterEach(async () => {
   globalThis.fetch = originalFetch;
   Date.now = originalNow;
   for (const server of servers.splice(0)) await server.stop(true);
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  if (previousCursorToken === undefined) delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
-  else process.env.OPENCODEX_CURSOR_TEST_TOKEN = previousCursorToken;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
+  if (previousCursorToken === undefined) delete process.env.CCX_CURSOR_TEST_TOKEN;
+  else process.env.CCX_CURSOR_TEST_TOKEN = previousCursorToken;
   if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
   else process.env.CODEX_CLI_PATH = previousCodexCliPath;
   isolatedCodexHome?.restore();
@@ -207,8 +207,8 @@ function provider(
   adapter: string,
   url: string,
   apiKey: string,
-  extra: Partial<OcxProviderConfig> = {},
-): OcxProviderConfig {
+  extra: Partial<CodexCommanderProviderConfig> = {},
+): CodexCommanderProviderConfig {
   return {
     adapter,
     baseUrl: url,
@@ -220,12 +220,13 @@ function provider(
 }
 
 function comboConfig(
-  providers: OcxConfig["providers"],
+  providers: CodexCommanderConfig["providers"],
   targets = Object.keys(providers).map((name, index) => ({ provider: name, model: `m${index + 1}` })),
-  extra: Partial<NonNullable<OcxConfig["combos"]>[string]> = {},
-): OcxConfig {
+  extra: Partial<NonNullable<CodexCommanderConfig["combos"]>[string]> = {},
+): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: Object.keys(providers)[0]!,
     providers,
     combos: { free: { strategy: "failover", targets, ...extra } },
@@ -233,7 +234,7 @@ function comboConfig(
 }
 
 async function post(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   raw: Record<string, unknown> = {},
   options: HandleOptions = {},
   headers: Record<string, string> = {},
@@ -248,7 +249,7 @@ async function post(
 let loggedRequestSequence = 0;
 
 async function postLogged(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   raw: Record<string, unknown> = {},
   options: HandleOptions = {},
   headers: Record<string, string> = {},
@@ -270,7 +271,7 @@ async function postLogged(
 }
 
 async function postModelLogged(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   model: string,
   raw: Record<string, unknown> = {},
   options: HandleOptions = {},
@@ -292,7 +293,7 @@ async function postModelLogged(
   );
 }
 
-async function latestAttemptReceipts(config: OcxConfig) {
+async function latestAttemptReceipts(config: CodexCommanderConfig) {
   const response = await management(config, "GET", "/api/logs?tail=1");
   const logs = logsFromApiBody(await response!.json());
   const usage = readUsageEntries();
@@ -300,7 +301,7 @@ async function latestAttemptReceipts(config: OcxConfig) {
 }
 
 async function expectCancelledAttemptReceipt(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   expected: { provider: string; model: string; adapter: string },
 ): Promise<void> {
   const { log, usage } = await latestAttemptReceipts(config);
@@ -339,7 +340,7 @@ async function collectSse(response: Response): Promise<SseFrame[]> {
 }
 
 async function management(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   method: string,
   path: string,
   body?: unknown,
@@ -645,7 +646,7 @@ describe("server combo failover 030 activation matrix", () => {
     }, combo.targets, { alias: combo.alias });
     saveConfig(config);
     const server = startServer(0, {
-      managementDeps: { refreshCodexCatalog: async () => {} },
+      managementApi: { refreshCodexCatalog: async () => {} },
     });
     try {
       const publicRows = async () => {
@@ -700,7 +701,7 @@ describe("server combo failover 030 activation matrix", () => {
     }, [{ provider: "a", model: "vendor/model" }], { alias: "a/vendor-model" });
     saveConfig(config);
     const server = startServer(0, {
-      managementDeps: { refreshCodexCatalog: async () => {} },
+      managementApi: { refreshCodexCatalog: async () => {} },
     });
     try {
       const response = await fetch(new URL("/v1/models", server.url));
@@ -832,7 +833,7 @@ describe("server combo failover 030 activation matrix", () => {
       id: rawAccountId,
       email: "combo-reset@example.test",
       isMain: false,
-      logLabel: "preset01",
+      logLabel: "p1e5e71",
     }];
     config.activeCodexAccountId = rawAccountId;
     config.autoSwitchThreshold = 0;
@@ -880,7 +881,7 @@ describe("server combo failover 030 activation matrix", () => {
       id: rawAccountId,
       email: "combo-retry-after@example.test",
       isMain: false,
-      logLabel: "pretry01",
+      logLabel: "pae7011",
     }];
     config.activeCodexAccountId = rawAccountId;
     config.autoSwitchThreshold = 0;
@@ -931,7 +932,7 @@ describe("server combo failover 030 activation matrix", () => {
       id: rawAccountId,
       email: "pool@example.test",
       isMain: false,
-      logLabel: "pspark1",
+      logLabel: "p5a9a11",
     }];
     config.activeCodexAccountId = rawAccountId;
     config.autoSwitchThreshold = 0;
@@ -1089,7 +1090,7 @@ describe("server combo failover 030 activation matrix", () => {
     expect(JSON.stringify(await response.json())).toContain("connected backup");
   });
 
-  test("Azure passthrough 403 hops into ordinary openai-chat", async () => {
+  test("Azure OpenAI passthrough 403 hops into ordinary openai-chat", async () => {
     const hits: string[] = [];
     const a = serve(() => {
       hits.push("azure");
@@ -1100,7 +1101,7 @@ describe("server combo failover 030 activation matrix", () => {
       return chatSuccess("chat backup", "m2");
     });
     const config = comboConfig({
-      a: provider("azure", baseUrl(a), "azure-key"),
+      a: provider("azure-openai", baseUrl(a), "azure-key"),
       b: provider("openai-chat", baseUrl(b), "key-b"),
     });
     const response = await post(config);
@@ -1349,7 +1350,7 @@ describe("server combo failover 030 activation matrix", () => {
       seen.push(body);
       return chatSuccess("ok", String(body.model ?? "glm-5.2-fast-preview"));
     };
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 0,
       defaultProvider: "bailian",
       providers: {
@@ -1479,7 +1480,7 @@ describe("server combo failover 030 activation matrix", () => {
       }) as typeof fetch;
       const local = serve(request => originalFetch(request));
       const root = local.url.toString().replace(/\/$/, "");
-      const providers: OcxConfig["providers"] = {
+      const providers: CodexCommanderConfig["providers"] = {
         xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", authMode: "oauth" },
         b: provider("openai-chat", `${root}/b/v1`, "key-b"),
         ...(includeC ? { c: provider("openai-chat", `${root}/c/v1`, "key-c") } : {}),
@@ -1535,8 +1536,9 @@ describe("server combo failover 030 activation matrix", () => {
     const a = serve(() => { aHits += 1; return chatSuccess("a"); });
     const b = serve(() => { bHits += 1; return chatSuccess("b"); });
     const c = serve(() => { cHits += 1; return chatSuccess("default"); });
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "c",
       providers: {
         a: provider("openai-chat", baseUrl(a), "key-a"),
@@ -1570,7 +1572,7 @@ describe("server combo failover 030 activation matrix", () => {
       physicalModel = (await request.json() as { model?: string }).model ?? "";
       return chatSuccess("physical combo", "model");
     });
-    const physicalConfig: OcxConfig = {
+    const physicalConfig: CodexCommanderConfig = {
       port: 0,
       defaultProvider: "combo",
       providers: { combo: provider("openai-chat", baseUrl(physical), "key-combo") },
@@ -1582,7 +1584,7 @@ describe("server combo failover 030 activation matrix", () => {
 
     const member = serve(() => { memberHits += 1; return chatSuccess("member"); });
     const fallback = serve(() => { defaultHits += 1; return chatSuccess("default"); });
-    const unknownConfig: OcxConfig = {
+    const unknownConfig: CodexCommanderConfig = {
       port: 0,
       defaultProvider: "fallback",
       providers: {
@@ -1848,7 +1850,7 @@ describe("cursor conversation continuity across store:false chains", () => {
     });
   }
 
-  async function postCursor(config: OcxConfig, raw: Record<string, unknown>): Promise<Response> {
+  async function postCursor(config: CodexCommanderConfig, raw: Record<string, unknown>): Promise<Response> {
     return handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -1856,7 +1858,7 @@ describe("cursor conversation continuity across store:false chains", () => {
     }), config, { model: "", provider: "" }, {});
   }
 
-  function cursorConfig(): OcxConfig {
+  function cursorConfig(): CodexCommanderConfig {
     return {
       port: 0,
       // Registry forces authMode=oauth for the canonical "cursor" name; a non-registry

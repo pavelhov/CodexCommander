@@ -53,14 +53,8 @@ function dash(overrides: Partial<Dash> = {}): Dash {
     t: (key: keyof typeof en) => en[key],
     runSync: async () => {},
     syncing: false,
-    updateTriggerRef: { current: null },
-    openUpdateDialog: () => {},
-    updateLoading: false,
-    updateOpen: false,
     syncResult: null,
     syncError: null,
-    updateJob: null,
-    reconnecting: false,
     clearSyncFeedback: () => {},
     ...overrides,
   } as unknown as Dash;
@@ -213,7 +207,7 @@ test("warning-bearing results never auto-dismiss and offer an explicit dismiss",
   expect(toast).not.toBeNull();
   expect(toast!.className).toContain("notice-warn");
   // The stale-app-server hint and warning stay in the message.
-  expect(toast!.textContent).toContain("ocx sync --restart-codex");
+  expect(toast!.textContent).toContain("ccx sync --restart-codex");
   // Still visible well past the plain success 6s / error 8s hold times.
   await advanceTime(6000);
   await advanceTime(8000);
@@ -307,8 +301,7 @@ test("a new sync re-arms a dismissed toast", async () => {
 
   // A fresh sync click (re-arms dismissed=false) with a new result re-shows the
   // toast on a fresh 6s timer instead of staying hidden.
-  const syncButton = [...host.querySelectorAll<HTMLButtonElement>(".maintenance-actions button")]
-    .find(b => !b.classList.contains("maintenance-update-anchor"))!;
+  const syncButton = host.querySelector<HTMLButtonElement>(".maintenance-actions button")!;
   await act(async () => { syncButton.click(); });
   d = dash({
     syncResult: {

@@ -17,11 +17,11 @@ export function clampedNumberInput(raw: string, min: number, max: number): numbe
   return Math.min(max, Math.max(min, n));
 }
 
-/** ChatGPT passthrough has no /models catalog — GPT slugs are listed under provider "openai". */
-export function isChatGptForwardOption(p: ProviderOption | undefined): boolean {
+/** OpenAI forward auth has no /models catalog; GPT slugs use the OpenAI catalog. */
+export function isOpenAiForwardOption(p: ProviderOption | undefined): boolean {
   if (!p) return false;
   const id = p.name.toLowerCase();
-  if (id !== "openai" && id !== "chatgpt") return false;
+  if (id !== "openai") return false;
   if ((p.authMode ?? "").toLowerCase() !== "forward") return false;
   if ((p.adapter ?? "").toLowerCase() !== "openai-responses") return false;
   const base = (p.baseUrl ?? "").replace(/\/+$/, "");
@@ -35,8 +35,8 @@ export function modelsForProvider(
 ): string[] {
   const keys = new Set<string>([provider]);
   const meta = providers.find((p) => p.name === provider);
-  // Alias chatgpt → openai native GPT rows (forward providers don't publish their own catalog).
-  if (provider.toLowerCase() === "chatgpt" || isChatGptForwardOption(meta)) {
+  // Forward providers do not publish a separate catalog.
+  if (isOpenAiForwardOption(meta)) {
     keys.add("openai");
   }
   const ids: string[] = [];

@@ -1,28 +1,16 @@
 import type { RefObject } from "react";
 import { useEffect, useRef } from "react";
 import { readJsonOrThrow } from "../fetch-json";
-import type { TKey } from "../i18n/shared";
 import type { StartupHealthStatus } from "../startup-health-ui";
+import type { StartupRoutingKind } from "./startup-shared";
 
 export type DashboardSection = "overview" | "providers" | "models";
-
-/**
- * `#dashboard/update` is the sidebar's action deep link. It is not a tab, so it resolves
- * to Overview (where the maintenance panel lives) and separately asks the dashboard to
- * open the update dialog.
- */
-export const DASHBOARD_UPDATE_HASH = "dashboard/update";
 
 export function readDashboardSectionFromHash(): DashboardSection {
   const raw = window.location.hash.replace(/^#\/?/, "");
   if (raw === "dashboard/providers") return "providers";
   if (raw === "dashboard/models") return "models";
   return "overview";
-}
-
-/** True while the location hash is the sidebar update deep link. */
-export function hashRequestsUpdateDialog(): boolean {
-  return window.location.hash.replace(/^#\/?/, "") === DASHBOARD_UPDATE_HASH;
 }
 
 /** Overview is the bare `#dashboard`; the other sections carry a suffix. */
@@ -48,7 +36,7 @@ export interface SettingsData {
   timeZone?: string;
   startupHealth?: {
     status: "native" | "protected" | "at-risk";
-    routingKind: "native" | "opencodex-local" | "custom-local" | "custom-remote" | "unknown";
+    routingKind: StartupRoutingKind;
     autostartEnabled: boolean;
     shimCoverage: "full" | "cli-only" | "none";
     diagnosticStale: boolean;
@@ -61,11 +49,8 @@ export interface SidecarPatch {
   webSearch?: { backend?: SidecarBackend | null; model?: string };
   vision?: { backend?: SidecarBackend | null; model?: string };
 }
-export interface ShadowCallData { enabled: boolean; model: string; sourceModels?: string[] }
+export type { ShadowCallData } from "./shadow-call-source";
 export interface UsageSummary30d { summary: { requests: number; totalTokens: number; coverageRatio: number } }
-export type UpdateChannel = "latest" | "preview";
-export type Installer = "npm" | "bun" | "source";
-export type UpdateJobStatus = "running" | "restarting" | "succeeded" | "failed";
 export interface SyncResult {
   ok: boolean;
   added: number;
@@ -89,56 +74,7 @@ export interface ProjectCodexConfigGroup {
   issues: string[];
   bypass: string;
 }
-export interface UpdateCheckData {
-  currentVersion: string;
-  latestVersion: string | null;
-  channel: UpdateChannel;
-  installer: Installer;
-  updateAvailable: boolean;
-  canUpdate: boolean;
-  command: string;
-  releaseNotesUrl: string;
-  reason?: string;
-}
-export interface UpdateJob {
-  id: string;
-  status: UpdateJobStatus;
-  currentVersion: string;
-  latestVersion: string | null;
-  channel: UpdateChannel;
-  installer: Installer;
-  restart: boolean;
-  command: string;
-  log: string[];
-  error?: string;
-  restarted?: boolean;
-}
-
 export const EFFORT_CAP_LEVELS = ["low", "medium", "high", "xhigh"];
-export const UPDATE_CHECK_MAX_AUTO_RETRIES = 2;
-export const UPDATE_CHECK_RETRY_BASE_MS = 800;
-
-export function defaultUpdateChannel(version: string | undefined): UpdateChannel {
-  return version?.includes("-preview.") ? "preview" : "latest";
-}
-
-export function updateReasonLabel(reason: string | undefined, t: (key: TKey) => string): string {
-  switch (reason) {
-    case "source_checkout": return t("dash.updateReason.source_checkout");
-    case "latest_unavailable": return t("dash.updateReason.latest_unavailable");
-    case "already_latest": return t("dash.updateReason.already_latest");
-    default: return t("dash.updateReason.unknown");
-  }
-}
-
-export function updateJobLabel(status: UpdateJobStatus, t: (key: TKey) => string): string {
-  switch (status) {
-    case "running": return t("dash.updateStatus.running");
-    case "restarting": return t("dash.updateStatus.restarting");
-    case "succeeded": return t("dash.updateStatus.succeeded");
-    case "failed": return t("dash.updateStatus.failed");
-  }
-}
 
 export function mergeSidecarSetting(
   current: SidecarSetting,

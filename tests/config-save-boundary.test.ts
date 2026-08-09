@@ -4,12 +4,11 @@ import { join } from "node:path";
 
 /**
  * "Every live-config writer goes through the guarded saver" is a claim until something
- * checks it (devlog 260726_claude_auth_auto/040 H1). `saveConfig` serializes the WHOLE
+ * checks it (implementation contract H1). `saveConfig` serializes the WHOLE
  * config, so ONE bare call on a live config re-clobbers a hand-edited `claudeCode` and
  * silently undoes the guard.
  *
- * Startup migrations are the documented exception: they run before the server serves
- * requests, against a config nobody else holds.
+ * Startup must not rewrite persisted config before or after the live baseline is armed.
  */
 
 const SRC = join(import.meta.dir, "..", "src");
@@ -60,16 +59,14 @@ test("guarded modules do not import the bare saver", () => {
   expect(offenders).toEqual([]);
 });
 
-// The exception has to stay narrow and visible, not become a habit.
 test("startServer arms the baseline before it can serve a request", () => {
   const text = readFileSync(join(SRC, "server", "index.ts"), "utf8");
   const start = text.indexOf("export function startServer");
   expect(start).toBeGreaterThan(-1);
   const armIndex = text.indexOf("armClaudeCodeBaseline(config)", start);
   expect(armIndex).toBeGreaterThan(-1);
-  // Every bare save inside startServer is a startup migration and must precede arming.
   const body = text.slice(start, armIndex);
   const after = text.slice(armIndex, text.indexOf("\n}\n", armIndex));
-  expect(bareSaveConfigCalls(body).length).toBeGreaterThan(0);
+  expect(bareSaveConfigCalls(body)).toEqual([]);
   expect(bareSaveConfigCalls(after)).toEqual([]);
 });

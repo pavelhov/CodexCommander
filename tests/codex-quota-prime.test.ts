@@ -24,16 +24,16 @@ import {
   getNativeMainProfileRequestCount,
   resetLifecycleDrainStateForTests,
 } from "../src/server/lifecycle";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
-// Phase 20 (260630_wsl-account-autoswitch): startup/lazy quota priming.
+// Startup and lazy quota priming.
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-quota-prime-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 let previousCodexHome: string | undefined;
 
-function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
+function makeConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
   return {
     port: 10100,
     providers: {
@@ -45,15 +45,22 @@ function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
       },
     },
     defaultProvider: "openai",
+    multiAgentGuidanceEnabled: true,
     codexAccounts: [],
     ...overrides,
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
-function seedPoolAccount(config: OcxConfig, id: string, plan?: string): void {
+function seedPoolAccount(config: CodexCommanderConfig, id: string, plan?: string): void {
   config.codexAccounts = [
     ...(config.codexAccounts ?? []),
-    { id, email: `${id}@example.test`, plan, isMain: false },
+    {
+      id,
+      email: `${id}@example.test`,
+      plan,
+      logLabel: `p${((config.codexAccounts?.length ?? 0) + 1).toString(16).padStart(6, "0")}`,
+      isMain: false,
+    },
   ];
   saveCodexAccountCredential(id, {
     accessToken: `access-${id}`,
@@ -86,11 +93,11 @@ function switchRequest(): Request {
 
 describe("primeCodexPoolQuotas", () => {
   beforeEach(() => {
-    previousOpencodexHome = process.env.OPENCODEX_HOME;
+    previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     previousCodexHome = process.env.CODEX_HOME;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_CODEX_HOME, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     // Isolate the main-account source: TEST_CODEX_HOME has no auth.json, so the
     // main account is deterministically absent and priming only touches the pool.
     process.env.CODEX_HOME = TEST_CODEX_HOME;
@@ -109,8 +116,8 @@ describe("primeCodexPoolQuotas", () => {
     clearMainAccountInfoCache();
     resetMainCodexAccountIdentityTrackingForTests();
     resetLifecycleDrainStateForTests();
-    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
@@ -383,7 +390,7 @@ describe("primeCodexPoolQuotas", () => {
 
   test("credential-less pool accounts are skipped and stay unknown", async () => {
     const config = makeConfig({
-      codexAccounts: [{ id: "nocred", email: "nocred@example.test", isMain: false }],
+      codexAccounts: [{ id: "nocred", email: "nocred@example.test", logLabel: "p000001", isMain: false }],
     });
     const originalFetch = globalThis.fetch;
     let calls = 0;

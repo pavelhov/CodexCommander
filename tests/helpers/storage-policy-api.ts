@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { drainAndShutdown } from "../../src/server/lifecycle";
-import type { OcxConfig } from "../../src/types";
+import type { CodexCommanderConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./isolated-codex-home";
 import {
   resetArchivedCleanupJobForTests,
@@ -24,10 +24,11 @@ import {
 import { stopStorageCleanupScheduler } from "../../src/storage/policy-scheduler";
 import { drainStorageWorkers } from "../../src/storage/worker-lifecycle";
 
-export function baseConfig(): OcxConfig {
+export function baseConfig(): CodexCommanderConfig {
   return {
     port: 0,
     hostname: "127.0.0.1",
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "openai",
     providers: {
       openai: {
@@ -36,7 +37,7 @@ export function baseConfig(): OcxConfig {
         authMode: "forward",
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 export function seedArchived(codexHome: string): void {
@@ -112,8 +113,8 @@ export type PolicyApiHarness = {
 };
 
 export async function installPolicyApiHarness(prefix: string): Promise<PolicyApiHarness> {
-  const previousHome = process.env.OPENCODEX_HOME;
-  // Join leftover Workers before allocating homes / mutating OPENCODEX_HOME.
+  const previousHome = process.env.CODEXCOMMANDER_HOME;
+  // Join leftover Workers before allocating homes / mutating CODEXCOMMANDER_HOME.
   // Sync reset used to fire-and-forget terminate and race the next spawn under
   // `bun test --isolate`; a rejected reset after env mutation would also leak.
   stopStorageCleanupScheduler();
@@ -126,13 +127,13 @@ export async function installPolicyApiHarness(prefix: string): Promise<PolicyApi
   try {
     isolatedCodexHome = installIsolatedCodexHome(`${prefix}-codex-`);
     testDir = mkdtempSync(join(tmpdir(), `${prefix}-`));
-    process.env.OPENCODEX_HOME = testDir;
+    process.env.CODEXCOMMANDER_HOME = testDir;
     saveConfig(baseConfig());
     stopStorageCleanupScheduler();
     return { testDir, isolatedCodexHome, previousHome };
   } catch (error) {
-    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousHome;
     isolatedCodexHome?.restore();
     if (testDir) rmSync(testDir, { recursive: true, force: true });
     throw error;
@@ -148,8 +149,8 @@ export async function uninstallPolicyApiHarness(h: PolicyApiHarness): Promise<vo
     await drainStorageWorkers();
     resetArchivedCleanupJobForTests();
   } finally {
-    if (h.previousHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = h.previousHome;
+    if (h.previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = h.previousHome;
     h.isolatedCodexHome.restore();
     if (h.testDir) rmSync(h.testDir, { recursive: true, force: true });
   }

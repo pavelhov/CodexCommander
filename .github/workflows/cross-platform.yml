@@ -1,0 +1,78 @@
+name: CodexCommander cross-platform verification
+
+# Pull requests deliberately do not trigger this workflow. The stable Ubuntu
+# `ci` job is the repository's only required PR check; macOS and Windows verify
+# the integrated result after it reaches `main`, or when an owner asks for a
+# run explicitly.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codexcommander-cross-platform-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            runner: macos-latest
+          - platform: windows
+            runner: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install GUI dependencies
+        working-directory: gui
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      # The repository suite serves gui/dist and reads its bootstrap metadata,
+      # so this is a test prerequisite rather than a redundant packaging step.
+      - name: Build GUI
+        working-directory: gui
+        run: bun run build
+
+      - name: GUI tests
+        working-directory: gui
+        run: bun test tests
+
+      - name: Test suite
+        run: bun run test
+
+      - name: CLI help smoke
+        run: bun run src/cli/index.ts help
+
+      # Swift verification belongs on a real macOS runner. It remains in this
+      # post-integration workflow so it cannot create extra pull-request checks.
+      - name: Test macOS menu bar app
+        if: matrix.platform == 'macos'
+        run: bun run test:macos
+
+      - name: Build macOS menu bar app
+        if: matrix.platform == 'macos'
+        run: bun run build:macos

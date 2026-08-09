@@ -1,5 +1,5 @@
 /**
- * `ocx models` subcommand — list configured models and manage custom models.
+ * `ccx models` subcommand — list configured models and manage custom models.
  */
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
@@ -7,11 +7,11 @@ import { syncModelsToCodex } from "../codex/sync";
 import { hasOwnProvider, isValidProviderName, loadConfig, saveConfig } from "../config";
 import { routedSlug } from "../providers/slug-codec";
 import { findLiveProxy } from "../server/proxy-liveness";
-import type { OcxConfig, OcxCustomModel } from "../types";
+import type { CodexCommanderConfig, CodexCommanderCustomModel } from "../types";
 
-const ADD_USAGE = "Usage: ocx models add <provider> <modelId> [--display-name <name>] [--context-window <tokens>] [--modalities text,image,audio]";
-const REMOVE_USAGE = "Usage: ocx models remove <customId|provider/modelId> [--yes]";
-const LIST_CUSTOM_USAGE = "Usage: ocx models list-custom [--json]";
+const ADD_USAGE = "Usage: ccx models add <provider> <modelId> [--display-name <name>] [--context-window <tokens>] [--modalities text,image,audio]";
+const REMOVE_USAGE = "Usage: ccx models remove <customId|provider/modelId> [--yes]";
+const LIST_CUSTOM_USAGE = "Usage: ccx models list-custom [--json]";
 const ALLOWED_MODALITIES = new Set(["text", "image", "audio"]);
 
 interface ModelEntry {
@@ -23,7 +23,7 @@ interface ModelEntry {
   reasoningEfforts: string[] | null;
 }
 
-function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[] {
+function collectModels(config: CodexCommanderConfig, providerFilter?: string): ModelEntry[] {
   const entries: ModelEntry[] = [];
   const providers = providerFilter
     ? { [providerFilter]: config.providers[providerFilter] }
@@ -126,7 +126,7 @@ async function handleCustomAdd(args: string[]): Promise<void> {
 
   const config = loadConfig();
   if (!hasOwnProvider(config.providers, provider)) {
-    fail(`provider "${provider}" is not configured. See: ocx provider list`);
+    fail(`provider "${provider}" is not configured. See: ccx provider list`);
   }
 
   const displayName = displayNameValue?.trim() || undefined;
@@ -156,7 +156,7 @@ async function handleCustomAdd(args: string[]): Promise<void> {
     fail(`custom model "${slug}" already exists`);
   }
 
-  const entry: OcxCustomModel = {
+  const entry: CodexCommanderCustomModel = {
     id: randomUUID(),
     provider,
     modelId,
@@ -171,7 +171,7 @@ async function handleCustomAdd(args: string[]): Promise<void> {
   console.log(`Added custom model ${slug} (${entry.id}).`);
 }
 
-async function confirmCustomRemoval(model: OcxCustomModel): Promise<boolean> {
+async function confirmCustomRemoval(model: CodexCommanderCustomModel): Promise<boolean> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     fail("remove requires --yes in non-interactive mode");
   }
@@ -211,7 +211,7 @@ async function handleCustomRemove(args: string[]): Promise<void> {
   console.log(`Removed custom model ${routedSlug(model.provider, model.modelId)}.`);
 }
 
-function customModelCells(model: OcxCustomModel): string[] {
+function customModelCells(model: CodexCommanderCustomModel): string[] {
   return [
     model.id.slice(0, 8),
     model.modelId,
@@ -221,7 +221,7 @@ function customModelCells(model: OcxCustomModel): string[] {
   ];
 }
 
-function printCustomModelGroup(provider: string, models: OcxCustomModel[]): void {
+function printCustomModelGroup(provider: string, models: CodexCommanderCustomModel[]): void {
   const rows = models.map(customModelCells);
   const headers = ["ID", "MODEL", "DISPLAY NAME", "CONTEXT", "MODALITIES"];
   const widths = headers.map((header, column) => Math.max(header.length, ...rows.map(row => row[column].length)));
@@ -245,7 +245,7 @@ function handleCustomList(args: string[]): void {
     console.log("No custom models registered.");
     return;
   }
-  const byProvider = new Map<string, OcxCustomModel[]>();
+  const byProvider = new Map<string, CodexCommanderCustomModel[]>();
   for (const model of models) {
     const group = byProvider.get(model.provider) ?? [];
     group.push(model);
@@ -266,14 +266,14 @@ function handleConfiguredModels(args: string[]): void {
     } else {
       console.error(`Unexpected argument(s): ${restArgs.join(", ")}`);
     }
-    console.error("Usage: ocx models [--provider <name>] [--json]");
+    console.error("Usage: ccx models [--provider <name>] [--json]");
     process.exit(1);
   }
 
   const config = loadConfig();
 
   if (providerFilter && !hasOwnProvider(config.providers, providerFilter)) {
-    console.error(`Provider "${providerFilter}" is not configured. See: ocx provider list`);
+    console.error(`Provider "${providerFilter}" is not configured. See: ccx provider list`);
     process.exit(1);
   }
 

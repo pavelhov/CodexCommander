@@ -1,4 +1,4 @@
-import type { OcxContentPart } from "../types";
+import type { CodexCommanderContentPart } from "../types";
 
 /**
  * Parse a `data:<media-type>;base64,<data>` URL into its parts. Codex sends inline images as base64
@@ -16,7 +16,7 @@ export function parseDataUrl(url: string): { mediaType: string; base64: string }
  * the vision sidecar runs, images are already text; this is the fallback for an undescribed image
  * (vision model via view_image): a short marker, never the token-exploding image_url.
  */
-export function contentPartsToText(content: string | OcxContentPart[]): string {
+export function contentPartsToText(content: string | CodexCommanderContentPart[]): string {
   if (typeof content === "string") return content;
   const text = content.map(p => (p.type === "text" ? p.text : "[image]")).join("");
   return text || "[image]";

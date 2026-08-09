@@ -1,7 +1,8 @@
 {
-  "name": "@bitkyc08/opencodex",
-  "version": "2.10.2",
-  "description": "Universal provider proxy for OpenAI Codex & Claude Code — use any LLM with Codex CLI/App/SDK and Claude Code",
+  "name": "codexcommander",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CodexCommander — universal provider proxy for OpenAI Codex & Claude Code — use any LLM with Codex CLI/App/SDK and Claude Code",
   "type": "module",
   "main": "./bin/package-main.mjs",
   "exports": {
@@ -12,8 +13,8 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "opencodex": "./bin/ocx.mjs",
-    "ocx": "./bin/ocx.mjs"
+    "codexcommander": "./bin/ccx.mjs",
+    "ccx": "./bin/ccx.mjs"
   },
   "files": [
     "bin",
@@ -21,7 +22,6 @@
     "gui/dist",
     "assets/banner.png",
     "assets/architecture.png",
-    "assets/claude-code-models.gif",
     "assets/codex-app-picker.png",
     "README.md",
     "LICENSE",
@@ -49,9 +49,6 @@
     "test:macos": "swift run --package-path app MenuBarCoreTests && swift run --package-path app MenuBarUITests",
     "prepare:package": "bun scripts/prepare-package.ts",
     "prepack": "bun run prepare:package",
-    "prepublishOnly": "bun run audit:high && bun run typecheck && bun run build:gui",
-    "release": "bun scripts/release.ts",
-    "release:watch": "bun scripts/release.ts watch",
     "prepush": "bun run typecheck && bun run lint:gui:if-changed && bun run test && bun run privacy:scan && bun run doctor:gui:if-changed",
     "lint:gui": "cd gui && bun run lint",
     "lint:gui:if-changed": "bun scripts/lint-gui-if-changed.ts",
@@ -78,6 +75,8 @@
   },
   "keywords": [
     "codex",
+    "codexcommander",
+    "ccx",
     "openai",
     "proxy",
     "llm",
@@ -97,11 +96,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pavelhov/opencodex.git"
+    "url": "git+https://github.com/pavelhov/CodexCommander.git"
   },
-  "homepage": "https://github.com/pavelhov/opencodex#readme",
+  "homepage": "https://github.com/pavelhov/CodexCommander#readme",
   "bugs": {
-    "url": "https://github.com/pavelhov/opencodex/issues"
+    "url": "https://github.com/pavelhov/CodexCommander/issues"
   },
   "license": "MIT"
 }

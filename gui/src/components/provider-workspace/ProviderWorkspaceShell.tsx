@@ -10,7 +10,7 @@ import { IconFilter, IconSearch, IconBoxes, IconGlobe, IconLock, IconKey, IconTr
 import {
   applyActiveAccountReauth,
   buildProviderWorkspace,
-  hideRedundantChatGptForwardProviders,
+  publicWorkspaceProviders,
   isFreeProvider,
   sortWorkspaceItems,
   type ProviderSortMode,
@@ -22,7 +22,7 @@ import { providerKind } from "../../provider-workspace/kind";
 import { readJsonIfOk, readJsonOrThrow } from "../../fetch-json";
 import { readSessionListCache, writeSessionListCache } from "../../session-list-cache";
 import { countAvailableModels, parseAvailableModels, parseLiveModelCounts, parseSelectedModels, type ProviderAvailableModels, type ProviderLiveModelCounts, type ProviderModelCounts, type ProviderSelectedModels } from "../../provider-workspace/usage";
-import type { ProviderQuotaReportView } from "../../provider-workspace/report";
+import { capacityAggregationFromReport, type ProviderQuotaReportView } from "../../provider-workspace/report";
 import { formatProviderDisplayName } from "../../provider-icons";
 import { RailRow } from "./ProviderRail";
 import type { PricingFilter, ProviderModelUsageRow, ProviderUsageTotals, StatusFilter, TypeFilter } from "./types";
@@ -61,15 +61,17 @@ function freshQuotaReport(value: unknown, now: number): ProviderQuotaReportView 
   if (typeof row.updatedAt !== "number" || !Number.isFinite(row.updatedAt)) return null;
   if (now - row.updatedAt >= QUOTA_REPORT_MAX_AGE_MS) return null;
   if (!("quota" in row)) return null;
+  if (!("aggregation" in row)) return null;
   if (row.label !== undefined && typeof row.label !== "string") return null;
   if (row.source !== undefined && typeof row.source !== "string") return null;
-  return {
+  const report: ProviderQuotaReportView = {
     ...(typeof row.label === "string" ? { label: row.label } : {}),
     ...(typeof row.source === "string" ? { source: row.source } : {}),
     updatedAt: row.updatedAt,
     quota: row.quota,
-    ...(row.aggregation !== undefined ? { aggregation: row.aggregation } : {}),
+    aggregation: row.aggregation,
   };
+  return capacityAggregationFromReport(report) ? report : null;
 }
 
 function freshQuotaReportRecord(value: unknown, now = Date.now()): Record<string, ProviderQuotaReportView> | null {
@@ -174,8 +176,8 @@ export default function ProviderWorkspaceShell({
   const [selectedModels, setSelectedModels] = useState<ProviderSelectedModels>({});
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsLoadFailed, setModelsLoadFailed] = useState(false);
-  const quotasCacheKey = `ocx.providers.quotas.v1:${apiBase}`;
-  const usageCacheKey = `ocx.providers.usage.v1:${apiBase}`;
+  const quotasCacheKey = `ccx.providers.quotas.v1:${apiBase}`;
+  const usageCacheKey = `ccx.providers.usage.v1:${apiBase}`;
   const [usageTotals, setUsageTotals] = useState<Record<string, ProviderUsageTotals>>(() => (
     readSessionListCache<{ totals: Record<string, ProviderUsageTotals> }>(usageCacheKey)?.totals ?? {}
   ));
@@ -195,7 +197,7 @@ export default function ProviderWorkspaceShell({
   const filterWrapRef = useRef<HTMLDivElement>(null);
 
   const sections = useMemo(() => {
-    const base = buildProviderWorkspace(hideRedundantChatGptForwardProviders(providers));
+    const base = buildProviderWorkspace(publicWorkspaceProviders(providers));
     return applyActiveAccountReauth(base, {
       ...(activeAccountNeedsReauth ?? {}),
       ...quotaAuthAttention,
@@ -291,7 +293,7 @@ export default function ProviderWorkspaceShell({
       // switch could leave the bars showing the previous account's quota.
       void fetch(`${apiBase}/api/provider-quotas${quotaForceRefresh ? "?refresh=1" : ""}`)
         .then(r => readJsonIfOk<{
-          reports?: Array<{ provider: string; label?: string; source?: string; updatedAt?: number; quota?: unknown; aggregation?: unknown }>;
+          reports?: Array<{ provider: string; label?: string; source?: string; updatedAt?: number; quota?: unknown; aggregation: unknown }>;
           availability?: unknown;
         }>(r))
         .then((data) => {

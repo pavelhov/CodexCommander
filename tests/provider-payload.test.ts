@@ -239,9 +239,8 @@ describe("provider dashboard payload", () => {
   });
 
   test("only OpenAI is reserved and missing mode resolves to Pool copy", () => {
-    expect(isReservedCodexForwardPreset({ id: "openai-multi" })).toBe(false);
-    expect(deriveProviderPresets().find(row => row.id === "openai-multi")).toBeUndefined();
-    expect(codexPresetDescriptionKey({ id: "openai-multi", codexAccountMode: "direct" })).toBeNull();
+    expect(isReservedCodexForwardPreset({ id: "custom-forward" })).toBe(false);
+    expect(codexPresetDescriptionKey({ id: "custom-forward", codexAccountMode: "direct" })).toBeNull();
     expect(codexPresetDescriptionKey({ id: "openai" })).toBe("prov.openaiPoolDesc");
     expect(codexPresetDescriptionKey({ id: "openai", codexAccountMode: "pool" })).toBe("prov.openaiPoolDesc");
     expect(codexPresetDescriptionKey({ id: "openai", codexAccountMode: "direct" })).toBe("prov.openaiDirectDesc");

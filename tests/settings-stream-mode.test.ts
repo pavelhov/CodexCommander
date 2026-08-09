@@ -2,9 +2,8 @@
  * /api/settings streamMode surface (#314 WP1) + config persistence round-trip.
  *
  * streamMode is persisted in config.json (including the macOS explicit eager
- * opt-in; Windows services do not inherit shell env), degraded to "auto" with
- * a warning when the persisted value is invalid (must never trip loadConfig's
- * backup-and-defaults repair path), and settable alone via PUT (legacy
+ * opt-in; Windows services do not inherit shell env), rejected when the
+ * persisted value is invalid, and settable alone via PUT (legacy
  * codexAutoStart-only PUTs keep working).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -14,7 +13,7 @@ import { join } from "node:path";
 import { getConfigPath, loadConfig, saveConfig } from "../src/config";
 import { handleManagementAPI } from "../src/server/management-api";
 import { invalidateStartupHealthCache } from "../src/server/startup-health-cache";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import {
   appOwnedBytesSnapshot,
   configureAppOwnedMemoryBudget,
@@ -31,7 +30,7 @@ import {
 import { deriveStartupHealth } from "../src/codex/autostart-health";
 
 let TEST_DIR = "";
-const previousHome = process.env.OPENCODEX_HOME;
+const previousHome = process.env.CODEXCOMMANDER_HOME;
 
 const fixtureStartupHealth = async () => deriveStartupHealth({
   routingKind: "native",
@@ -56,9 +55,10 @@ const fixtureSettingsDeps = {
   getCachedStartupHealth: fixtureStartupHealth,
 };
 
-function baseConfig(): OcxConfig {
+function baseConfig(): CodexCommanderConfig {
   return {
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "openai",
     providers: {
       openai: {
@@ -71,7 +71,7 @@ function baseConfig(): OcxConfig {
   };
 }
 
-function putSettings(config: OcxConfig, body: unknown): Promise<Response | null> {
+function putSettings(config: CodexCommanderConfig, body: unknown): Promise<Response | null> {
   const req = new Request("http://127.0.0.1:10100/api/settings", {
     method: "PUT",
     headers: { "content-type": "application/json" },
@@ -81,7 +81,7 @@ function putSettings(config: OcxConfig, body: unknown): Promise<Response | null>
 }
 
 function getSettings(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   deps: NonNullable<Parameters<typeof handleManagementAPI>[3]> = fixtureSettingsDeps,
 ): Promise<Response | null> {
   const req = new Request("http://127.0.0.1:10100/api/settings");
@@ -92,16 +92,16 @@ beforeEach(() => {
   resetAppOwnedMemoryForTests();
   resetUsageSummaryCacheForTests();
   invalidateStartupHealthCache();
-  TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-settings-stream-"));
-  process.env.OPENCODEX_HOME = TEST_DIR;
+  TEST_DIR = mkdtempSync(join(tmpdir(), "ccx-settings-stream-"));
+  process.env.CODEXCOMMANDER_HOME = TEST_DIR;
 });
 
 afterEach(() => {
   resetAppOwnedMemoryForTests();
   resetUsageSummaryCacheForTests();
   invalidateStartupHealthCache();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   if (TEST_DIR && existsSync(TEST_DIR)) {
     try {
       rmSync(TEST_DIR, { recursive: true, force: true });
@@ -174,7 +174,7 @@ describe("GET /api/settings", () => {
         };
       };
       expect(typeof body.codexRuntime?.path).toBe("string");
-      // OPENCODEX_HOME lives under the OS user profile; username must stay redacted on all OS.
+      // CODEXCOMMANDER_HOME lives under the OS user profile; username must stay redacted on all OS.
       expect(body.codexRuntime?.path?.toLowerCase()).not.toMatch(/[/\\]users[/\\][^/\\[\]]+[/\\]/i);
       expect(body.codexRuntime?.path?.toLowerCase()).not.toContain("alice");
       expect(body.codexRuntime?.version).toBe("0.133.0");
@@ -260,7 +260,7 @@ describe("PUT /api/settings", () => {
   });
 
   test("auto normalizes to key removal, persisted round-trip drops it", async () => {
-    const config = { ...baseConfig(), streamMode: "legacy-tee" as const };
+    const config = { ...baseConfig(), streamMode: "safe-tee" as const };
     const res = await putSettings(config, { streamMode: "auto" });
     expect(res!.status).toBe(200);
     expect(config.streamMode).toBeUndefined();
@@ -270,17 +270,19 @@ describe("PUT /api/settings", () => {
 
   test("non-auto value persists and survives loadConfig", async () => {
     const config = baseConfig();
-    await putSettings(config, { streamMode: "legacy-tee" });
+    await putSettings(config, { streamMode: "safe-tee" });
     const reloaded = loadConfig();
-    expect(reloaded.streamMode).toBe("legacy-tee");
+    expect(reloaded.streamMode).toBe("safe-tee");
   });
 
-  test("rejects invalid streamMode with 400", async () => {
+  test("rejects invalid and retired streamMode values with 400", async () => {
     const config = baseConfig();
-    const res = await putSettings(config, { streamMode: "bogus" });
-    expect(res!.status).toBe(400);
-    const body = await res!.json() as { error?: string };
-    expect(body.error).toContain("streamMode");
+    for (const streamMode of ["bogus", ["legacy", "tee"].join("-")]) {
+      const res = await putSettings(config, { streamMode });
+      expect(res!.status).toBe(400);
+      const body = await res!.json() as { error?: string };
+      expect(body.error).toContain("streamMode");
+    }
   });
 
   test("rejects empty body with 400", async () => {
@@ -322,33 +324,27 @@ describe("PUT /api/settings", () => {
 });
 
 describe("config.json schema resilience", () => {
-  test("invalid persisted streamMode degrades to auto without nuking the config", () => {
+  test("invalid persisted streamMode is rejected by strict config loading", () => {
     const config = { ...baseConfig(), streamMode: "eager-relay" as const };
     saveConfig(config);
     const raw = JSON.parse(readFileSync(getConfigPath(), "utf-8")) as Record<string, unknown>;
-    raw.streamMode = "legacy_tee"; // hand-edit typo
+    raw.streamMode = ["legacy", "tee"].join("-"); // retired hand-edit value
     writeFileSync(getConfigPath(), JSON.stringify(raw, null, 2));
-    const reloaded = loadConfig();
-    // Degraded, not defaulted: providers must survive.
-    expect(reloaded.streamMode).toBeUndefined();
-    expect(reloaded.providers.openai).toBeDefined();
-    expect(reloaded.providers.openai!.apiKey).toBe("sk-secret-value");
+    expect(() => loadConfig()).toThrow("schema_invalid: streamMode");
   });
 
   test("valid persisted streamMode round-trips through loadConfig", () => {
-    const config = { ...baseConfig(), streamMode: "legacy-tee" as const };
+    const config = { ...baseConfig(), streamMode: "safe-tee" as const };
     saveConfig(config);
-    expect(loadConfig().streamMode).toBe("legacy-tee");
+    expect(loadConfig().streamMode).toBe("safe-tee");
   });
 
-  test("malformed persisted appOwnedMemoryBudgetMb degrades to default without dropping providers", () => {
+  test("malformed persisted appOwnedMemoryBudgetMb is rejected by strict config loading", () => {
     saveConfig({ ...baseConfig(), appOwnedMemoryBudgetMb: 128 });
     const raw = JSON.parse(readFileSync(getConfigPath(), "utf-8")) as Record<string, unknown>;
     raw.appOwnedMemoryBudgetMb = "huge";
     writeFileSync(getConfigPath(), JSON.stringify(raw, null, 2));
-    const reloaded = loadConfig();
-    expect(reloaded.appOwnedMemoryBudgetMb).toBe(256);
-    expect(reloaded.providers.openai?.apiKey).toBe("sk-secret-value");
+    expect(() => loadConfig()).toThrow("schema_invalid: appOwnedMemoryBudgetMb");
   });
 });
 import { ManagementRequest as Request } from "./helpers/management-auth";

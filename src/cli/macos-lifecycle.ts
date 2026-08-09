@@ -54,7 +54,7 @@ function failedResult(action: MacOSLifecycleAction): MacOSLifecycleResult {
     changed: false,
     pid: null,
     port: null,
-    message: "OpenCodex lifecycle action failed.",
+    message: "CodexCommander lifecycle action failed.",
     errorCode: action === "stop" ? "STOP_FAILED" : "START_FAILED",
   };
 }
@@ -101,7 +101,7 @@ export async function runMacOSLifecycleHelper(args: string[]): Promise<number> {
   const requested = args.length === 1 ? args[0] : undefined;
   if (!requested || !allowedActions.has(requested as MacOSLifecycleAction)) {
     const invalid = failedResult("status");
-    invalid.message = "Unsupported OpenCodex lifecycle action.";
+    invalid.message = "Unsupported CodexCommander lifecycle action.";
     process.stdout.write(`${JSON.stringify(invalid)}\n`);
     return 2;
   }

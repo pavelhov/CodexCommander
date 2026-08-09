@@ -68,10 +68,10 @@ function captureEnvelopes(captured: NativeEnvelopeSnapshot[]): (path: string) =>
 }
 
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "ocx-native-profile-"));
+  const root = mkdtempSync(join(tmpdir(), "ccx-native-profile-"));
   roots.push(root);
   const codexHome = join(root, "codex");
-  const configDir = join(root, "opencodex");
+  const configDir = join(root, "codexcommander");
   mkdirSync(codexHome, { recursive: true });
   mkdirSync(configDir, { recursive: true });
   writeFileSync(join(codexHome, "config.toml"), 'cli_auth_credentials_store = "file"\n');
@@ -276,9 +276,9 @@ describe("native main profile transactions", () => {
     }
   }, 15_000);
 
-  test("the same canonical CODEX_HOME serializes different OpenCodex config roots", async () => {
+  test("the same canonical CODEX_HOME serializes different CodexCommander config roots", async () => {
     const f = fixture();
-    const secondConfigDir = join(f.root, "opencodex-second");
+    const secondConfigDir = join(f.root, "codexcommander-second");
     mkdirSync(secondConfigDir, { recursive: true });
     const ready = join(f.root, "canonical-home-ready");
     const release = join(f.root, "canonical-home-release");
@@ -303,13 +303,13 @@ describe("native main profile transactions", () => {
     }
   }, 15_000);
 
-  test("shares one vault while preventing another OPENCODEX_HOME from finishing or cancelling a stage", async () => {
+  test("shares one vault while preventing another CODEXCOMMANDER_HOME from finishing or cancelling a stage", async () => {
     const f = fixture();
     const first = new NativeProfileManager(f.options);
     await first.register("personal");
     const stage = await first.prepareStage();
     writeFileSync(join(stage.stagingCodexHome, "auth.json"), f.target, { mode: 0o600 });
-    const secondConfigDir = join(f.root, "opencodex-second");
+    const secondConfigDir = join(f.root, "codexcommander-second");
     mkdirSync(secondConfigDir, { mode: 0o700 });
     const second = new NativeProfileManager({ ...f.options, configDir: secondConfigDir });
 
@@ -328,9 +328,9 @@ describe("native main profile transactions", () => {
     expect((await second.list()).profiles.map(profile => profile.label).sort()).toEqual(["personal", "work"]);
   });
 
-  test("shares journal quarantine and manual recovery state across OPENCODEX_HOME roots", async () => {
+  test("shares journal quarantine and manual recovery state across CODEXCOMMANDER_HOME roots", async () => {
     const f = await enrolledFixture();
-    const secondConfigDir = join(f.root, "opencodex-second");
+    const secondConfigDir = join(f.root, "codexcommander-second");
     mkdirSync(secondConfigDir, { mode: 0o700 });
     const second = new NativeProfileManager({ ...f.options, configDir: secondConfigDir });
     const originalAuth = readFileSync(f.manager.context.authPath, "utf8");
@@ -485,23 +485,6 @@ describe("native main profile transactions", () => {
     expect((caught as NativeProfileError).code).toBe("STAGING_CLEANUP_REQUIRED");
     expect((caught as NativeProfileError).cleanupRequired).toBe(true);
     expect(readFileSync(external, "utf8")).toBe(f.target);
-  });
-
-  test("rejects legacy config-root metadata before creating shared state", async () => {
-    const f = fixture();
-    const manager = new NativeProfileManager(f.options);
-    mkdirSync(manager.context.legacyRootDir, { recursive: true, mode: 0o700 });
-    writeFileSync(join(manager.context.legacyRootDir, `${manager.context.homeId}.vault.json`), "{}\n", { mode: 0o600 });
-    const authBefore = readFileSync(manager.context.authPath, "utf8");
-
-    let caught: unknown;
-    try { await manager.register("personal"); } catch (error) { caught = error; }
-
-    expect(caught).toBeInstanceOf(NativeProfileError);
-    expect((caught as NativeProfileError).code).toBe("LEGACY_PROFILE_STATE");
-    expect(existsSync(manager.context.rootDir)).toBe(false);
-    expect(existsSync(manager.context.lockPath)).toBe(false);
-    expect(readFileSync(manager.context.authPath, "utf8")).toBe(authBefore);
   });
 
   test("creates owner-only shared metadata and instance-local staging on POSIX", async () => {
@@ -850,7 +833,7 @@ describe("native main profile transactions", () => {
     expect(existsSync(stage.stagingCodexHome)).toBe(false);
   });
 
-  test("resolves normalized labels and exact IDs but fails closed for a legacy ambiguous selector", async () => {
+  test("resolves normalized labels and exact IDs but fails closed for an ambiguous selector", async () => {
     const f = await enrolledFixture();
     await f.manager.register("Personal Caf\u00e9");
 
@@ -1193,7 +1176,7 @@ describe("native main profile transactions", () => {
 
     expect(caught).toBeInstanceOf(NativeProfileError);
     expect((caught as NativeProfileError).code).toBe("RECOVERY_REQUIRED");
-    expect((caught as NativeProfileError).message).toContain("ocx account main recover");
+    expect((caught as NativeProfileError).message).toContain("ccx account main recover");
     expect(readFileSync(f.manager.context.authPath, "utf8")).toBe(authBefore);
     expect(readFileSync(f.manager.context.vaultPath, "utf8")).toBe(vaultBefore);
     expect(readFileSync(f.manager.context.journalPath, "utf8")).toBe(journalBefore);

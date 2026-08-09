@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { buildClaudeDesktopState } from "../src/server/management/shared";
 import { nativeOpenAiContextWindow, visibleNativeSlugs } from "../src/codex/catalog";
 import { generateDesktop3pModels } from "../src/claude/desktop-3p";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 import { installIsolatedCodexHome } from "./helpers/isolated-codex-home";
 
@@ -18,21 +18,21 @@ setDefaultTimeout(30_000);
  */
 
 function tempHome(): string {
-  return mkdtempSync(join(tmpdir(), "ocx-desktop-ctx-"));
+  return mkdtempSync(join(tmpdir(), "ccx-desktop-ctx-"));
 }
 
 const config = {
   port: 10100,
   defaultProvider: "openai",
   providers: {},
-} as unknown as OcxConfig;
+} as unknown as CodexCommanderConfig;
 
 test("buildClaudeDesktopState gives native rows their real context window", async () => {
   const home = tempHome();
-  const prev = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+  const prev = process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR;
   const previousCodexCliPath = process.env.CODEX_CLI_PATH;
-  const isolatedCodexHome = installIsolatedCodexHome("ocx-desktop-context-codex-");
-  process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = home;
+  const isolatedCodexHome = installIsolatedCodexHome("ccx-desktop-context-codex-");
+  process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR = home;
   process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
   try {
     const state = await buildClaudeDesktopState(config);
@@ -48,8 +48,8 @@ test("buildClaudeDesktopState gives native rows their real context window", asyn
       if (expected !== undefined) expect(row?.contextWindow).toBe(expected);
     }
   } finally {
-    if (prev === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
-    else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = prev;
+    if (prev === undefined) delete process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR;
+    else process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR = prev;
     if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
     else process.env.CODEX_CLI_PATH = previousCodexCliPath;
     isolatedCodexHome.restore();

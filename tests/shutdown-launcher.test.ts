@@ -8,11 +8,11 @@ import { claimOwnedServiceHome } from "./helpers/owned-service-home";
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 
 /**
- * Regression: `ocx start` + Ctrl-C must NOT orphan the Bun proxy.
+ * Regression: `ccx start` + Ctrl-C must NOT orphan the Bun proxy.
  *
- * The bin/ocx.mjs launcher used a blocking spawnSync that did not forward signals,
+ * The bin/ccx.mjs launcher used a blocking spawnSync that did not forward signals,
  * so a signal delivered only to the launcher killed it and left the Bun child
- * serving forever (port bound, ocx.pid/runtime-port.json left behind, Codex config
+ * serving forever (port bound, codexcommander.pid/runtime-port.json left behind, Codex config
  * not restored). The launcher now forwards SIGINT/SIGTERM/SIGHUP to the child and
  * waits for its graceful shutdown.
  *
@@ -20,7 +20,7 @@ import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
  * on PATH to exercise the real launcher.
  */
 
-const BIN_OCX = join(import.meta.dir, "..", "bin", "ocx.mjs");
+const BIN_CCX = join(import.meta.dir, "..", "bin", "ccx.mjs");
 const nodeAvailable = !spawnSync("node", ["--version"], { stdio: "ignore" }).error;
 const runnable = process.platform !== "win32" && nodeAvailable;
 
@@ -86,7 +86,7 @@ async function healthIdentity(port: number, expectedPid: number): Promise<boolea
     });
     if (!res.ok) return false;
     const body = await res.json() as Record<string, unknown>;
-    return body.service === "opencodex"
+    return body.service === "codexcommander"
       && body.pid === expectedPid
       && body.port === port;
   } catch {
@@ -132,12 +132,12 @@ async function waitUntil(fn: () => Promise<boolean>, deadlineMs: number): Promis
   return false;
 }
 
-describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
+describe.skipIf(!runnable)("ccx launcher graceful shutdown", () => {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     test(
       `${signal} to the launcher tears down the Bun proxy and restores Codex config (no orphan)`,
       async () => {
-        const home = mkdtempSync(join(tmpdir(), "ocx-shutdown-"));
+        const home = mkdtempSync(join(tmpdir(), "ccx-shutdown-"));
         const port = await freePort();
         tmpRuns.push({ home, port });
         const identity = claimTempHome(home);
@@ -147,6 +147,7 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
         // so unrelated provider timing could consume the fixed 30s injection budget.
         writeFileSync(join(home, "config.json"), `${JSON.stringify({
           port,
+          multiAgentGuidanceEnabled: true,
           hostname: "127.0.0.1",
           codexAutoStart: true,
           defaultProvider: "mock",
@@ -168,17 +169,17 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
         writeFileSync(codexConfig, 'model = "gpt-5.1"\n');
         const codexRuntime = createCodexRuntimeFixture(home);
 
-        const child = spawn("node", [BIN_OCX, "start", "--port", String(port)], {
+        const child = spawn("node", [BIN_CCX, "start", "--port", String(port)], {
           stdio: ["ignore", "pipe", "pipe"],
           env: {
             ...process.env,
             HOME: identity.homeDir,
             USERPROFILE: identity.userProfile,
-            OPENCODEX_HOME: home,
+            CODEXCOMMANDER_HOME: home,
             CODEX_HOME: home,
             ...identity.serviceManagerEnv,
             CODEX_CLI_PATH: codexRuntime,
-            OCX_DISABLE_COMPANION: "1",
+            CCX_DISABLE_COMPANION: "1",
           },
         });
         spawned.push(child);
@@ -199,9 +200,9 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
           // though the listener and managed-config publication still converge normally.
           const up = await waitUntil(() => healthy(port), 45_000);
           expect(up).toBe(true);
-          expect(existsSync(join(home, "ocx.pid"))).toBe(true);
+          expect(existsSync(join(home, "codexcommander.pid"))).toBe(true);
           const injectedReady = await waitUntil(async () => {
-            try { return readFileSync(codexConfig, "utf8").includes("# Auto-injected by opencodex"); }
+            try { return readFileSync(codexConfig, "utf8").includes("# Auto-injected by CodexCommander"); }
             catch { return false; }
           }, 30_000);
           expect(
@@ -209,9 +210,9 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
             `launcher stdout tail=${childStdout}\nlauncher stderr tail=${childStderr}`,
           ).toBe(true);
           const injected = readFileSync(codexConfig, "utf8");
-          expect(injected).toContain("# Auto-injected by opencodex");
+          expect(injected).toContain("# Auto-injected by CodexCommander");
           expect(injected).toContain(`openai_base_url = "http://127.0.0.1:${port}/v1"`);
-          expect(injected).not.toContain("model_providers.opencodex");
+          expect(injected).not.toContain("model_providers.codexcommander");
 
           // 2. Signal ONLY the launcher PID (the exact orphan trigger).
           child.kill(signal);
@@ -225,9 +226,9 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
           expect(portFreed).toBe(true);
 
           // 5. Graceful cleanup ran: pid + runtime-port removed, Codex config restored.
-          expect(existsSync(join(home, "ocx.pid"))).toBe(false);
+          expect(existsSync(join(home, "codexcommander.pid"))).toBe(false);
           expect(existsSync(join(home, "runtime-port.json"))).toBe(false);
-          expect(readFileSync(codexConfig, "utf8")).not.toContain("opencodex");
+          expect(readFileSync(codexConfig, "utf8")).not.toContain("CodexCommander");
         } finally {
           // A failed precondition used to SIGKILL only the Node launcher in afterAll,
           // orphaning its Bun proxy. Ask the launcher to forward a graceful signal

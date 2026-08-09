@@ -1,5 +1,5 @@
 /**
- * /api/injection-model effort support (devlog/260710_injection_effort):
+ * /api/injection-model effort support (implementation contract):
  * PUT validates the reasoning effort against the Codex ladder, clears it with the
  * model, and GET surfaces `{ effort, efforts }` next to the existing model picker.
  */
@@ -7,29 +7,29 @@ import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getConfigPath, loadConfig } from "../src/config";
+import { getConfigPath, getDefaultConfig, loadConfig } from "../src/config";
 import { refreshCodexModelCatalog } from "../src/codex/refresh";
 import { handleManagementAPI } from "../src/server/management-api";
 import { CODEX_REASONING_LEVELS } from "../src/reasoning-effort";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 setDefaultTimeout(30_000);
 
-const savedHome = process.env.OPENCODEX_HOME;
+const savedHome = process.env.CODEXCOMMANDER_HOME;
 const savedCodexCliPath = process.env.CODEX_CLI_PATH;
 let tempHome: string | null = null;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 beforeEach(() => {
-  isolatedCodexHome = installIsolatedCodexHome("ocx-injection-model-codex-");
+  isolatedCodexHome = installIsolatedCodexHome("ccx-injection-model-codex-");
   process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
 });
 
 afterEach(() => {
-  if (savedHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = savedHome;
+  if (savedHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = savedHome;
   if (savedCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
   else process.env.CODEX_CLI_PATH = savedCodexCliPath;
   isolatedCodexHome?.restore();
@@ -38,15 +38,15 @@ afterEach(() => {
 });
 
 function isolatedHome(): void {
-  tempHome = mkdtempSync(join(tmpdir(), "ocx-injection-"));
-  process.env.OPENCODEX_HOME = tempHome;
+  tempHome = mkdtempSync(join(tmpdir(), "ccx-injection-"));
+  process.env.CODEXCOMMANDER_HOME = tempHome;
 }
 
-function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
-  return { port: 10100, providers: {}, defaultProvider: "openai", ...overrides } as OcxConfig;
+function makeConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
+  return { ...getDefaultConfig(), ...overrides };
 }
 
-async function put(config: OcxConfig, body: unknown): Promise<Response> {
+async function put(config: CodexCommanderConfig, body: unknown): Promise<Response> {
   const req = new Request("http://localhost/api/injection-model", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -189,7 +189,7 @@ describe("/api/injection-model guidance kill switch + partial update", () => {
       injectionEffort: "max",
       injectionPrompt: "RULES {{model}} {{roster}}",
     });
-    const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+    const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as CodexCommanderConfig;
     expect(persisted).toMatchObject({
       multiAgentGuidanceEnabled: false,
       injectionModel: "gpt-5.6-terra",
@@ -345,6 +345,17 @@ describe("/api/injection-model guidance kill switch + partial update", () => {
     expect(await response.json()).toEqual({ error: "model must be a nonblank string or null" });
     expect(config).toEqual(before);
     expect(existsSync(getConfigPath())).toBe(false);
+  });
+
+  test("rejects an old raw nested selector without mutating existing settings", async () => {
+    isolatedHome();
+    const config = makeConfig({ injectionModel: "gpt-5.6-terra", injectionEffort: "high" });
+    const before = structuredClone(config);
+
+    const response = await put(config, { model: "openrouter/anthropic/claude-sonnet-5" });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "model must be a canonical selector or null" });
+    expect(config).toEqual(before);
   });
 
   test("rejects native-default opt-in when a legacy stored effort is not Codex-supported", async () => {

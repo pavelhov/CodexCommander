@@ -5,9 +5,9 @@ import { runWithWebSearch as runWithWebSearchProduction, type WebSearchLoopDeps 
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { headersForCodexAuthContext } from "../src/codex/auth-context";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar } from "../src/providers/openai-sidecar";
-import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../src/types";
+import type { AdapterEvent, CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
 import type { AdapterFetchContext, ProviderAdapter } from "../src/adapters/base";
-import type { OcxMessage, OcxParsedRequest } from "../src/types";
+import type { CodexCommanderMessage, CodexCommanderParsedRequest } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
 
@@ -118,19 +118,19 @@ describe("issue #1001 — forced-answer passes must produce usable output", () =
   });
 });
 
-const routedProvider: OcxProviderConfig = {
+const routedProvider: CodexCommanderProviderConfig = {
   adapter: "openai-chat",
   baseUrl: "https://example.test/v1",
   apiKey: "routed-key",
 };
 
-const forwardProvider: OcxProviderConfig = {
+const forwardProvider: CodexCommanderProviderConfig = {
   adapter: "openai-responses",
   baseUrl: "https://chatgpt.test/v1",
   authMode: "forward",
 };
 
-function config(overrides: Partial<OcxConfig> = {}): OcxConfig {
+function config(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
   return {
     port: 10100,
     defaultProvider: "routed",
@@ -156,7 +156,7 @@ function parsedWithWebSearch() {
 
 describe("web-search sidecar planning", () => {
   test("canonical sidecar discovery defaults only an omitted OpenAI auth mode to forward", () => {
-    const canonicalWithoutAuthMode: OcxConfig = {
+    const canonicalWithoutAuthMode: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "openai",
       providers: {
@@ -177,7 +177,7 @@ describe("web-search sidecar planning", () => {
       { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "key" },
       { adapter: "openai-chat", baseUrl: "https://chatgpt.com/backend-api/codex" },
       { adapter: "openai-responses", baseUrl: "https://proxy.example.test/v1" },
-    ] satisfies OcxProviderConfig[]) {
+    ] satisfies CodexCommanderProviderConfig[]) {
       expect(listOpenAiForwardSidecarCandidates({
         ...canonicalWithoutAuthMode,
         providers: { openai },
@@ -186,7 +186,7 @@ describe("web-search sidecar planning", () => {
   });
 
   test("central Direct sidecar selection never treats a proxy admission bearer as Codex auth", async () => {
-    const cfg: OcxConfig = {
+    const cfg: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "routed",
       providers: {
@@ -202,14 +202,14 @@ describe("web-search sidecar planning", () => {
     };
     const resolved = await resolveFirstUsableOpenAiSidecar(
       listOpenAiForwardSidecarCandidates(cfg),
-      new Headers({ authorization: "Bearer proxy-secret", "x-opencodex-api-key": "proxy-secret" }),
+      new Headers({ authorization: "Bearer proxy-secret", "x-codexcommander-api-key": "proxy-secret" }),
       cfg,
     );
     expect(resolved).toBeUndefined();
   });
 
   test("central Direct sidecar selection requires a canonical ChatGPT account-bearing bearer", async () => {
-    const cfg: OcxConfig = {
+    const cfg: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "routed",
       providers: {
@@ -241,7 +241,7 @@ describe("web-search sidecar planning", () => {
   });
 
   test("central Direct sidecar selection requires an explicit matching ChatGPT account header", async () => {
-    const cfg: OcxConfig = {
+    const cfg: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "routed",
       providers: {
@@ -1092,11 +1092,11 @@ describe("web-search sidecar native web_search_call emission", () => {
       ));
     }) as typeof fetch;
 
-    const seenBodies: OcxMessage[][] = [];
+    const seenBodies: CodexCommanderMessage[][] = [];
     let pass = 0;
     const adapter: ProviderAdapter = {
       name: "mock",
-      buildRequest: (p: OcxParsedRequest) => {
+      buildRequest: (p: CodexCommanderParsedRequest) => {
         seenBodies.push(p.context.messages);
         return { url: "https://routed.test/v1/chat/completions", method: "POST", headers: {}, body: "{}" };
       },
@@ -1157,11 +1157,11 @@ describe("web-search sidecar native web_search_call emission", () => {
       ));
     }) as typeof fetch;
 
-    const seenBodies: OcxMessage[][] = [];
+    const seenBodies: CodexCommanderMessage[][] = [];
     let pass = 0;
     const adapter: ProviderAdapter = {
       name: "mock",
-      buildRequest: (p: OcxParsedRequest) => {
+      buildRequest: (p: CodexCommanderParsedRequest) => {
         seenBodies.push(p.context.messages);
         return { url: "https://routed.test/v1/chat/completions", method: "POST", headers: {}, body: "{}" };
       },
@@ -1223,11 +1223,11 @@ describe("web-search sidecar native web_search_call emission", () => {
       ));
     }) as typeof fetch;
 
-    const seenBodies: OcxMessage[][] = [];
+    const seenBodies: CodexCommanderMessage[][] = [];
     let pass = 0;
     const adapter: ProviderAdapter = {
       name: "mock",
-      buildRequest: (p: OcxParsedRequest) => {
+      buildRequest: (p: CodexCommanderParsedRequest) => {
         seenBodies.push(p.context.messages);
         return { url: "https://routed.test/v1/chat/completions", method: "POST", headers: {}, body: "{}" };
       },
@@ -1310,7 +1310,7 @@ describe("web-search sidecar native web_search_call emission", () => {
     }) as typeof fetch;
 
     // modelInList matches EXACTLY, so the provider list and the request model must agree verbatim.
-    const deepseekProvider: OcxProviderConfig = {
+    const deepseekProvider: CodexCommanderProviderConfig = {
       adapter: "openai-chat",
       baseUrl: "https://routed.test/v1",
       apiKey: "routed-key",
@@ -1407,12 +1407,12 @@ describe("web-search sidecar native web_search_call emission", () => {
 });
 
 /** Adapter that records the messages handed to it on each pass (forced-answer nudge assertion). */
-function capturingAdapter(firstPass: AdapterEvent[]): { adapter: ProviderAdapter; messagesPerPass: OcxMessage[][] } {
-  const messagesPerPass: OcxMessage[][] = [];
+function capturingAdapter(firstPass: AdapterEvent[]): { adapter: ProviderAdapter; messagesPerPass: CodexCommanderMessage[][] } {
+  const messagesPerPass: CodexCommanderMessage[][] = [];
   let pass = 0;
   const adapter: ProviderAdapter = {
     name: "mock",
-    buildRequest: (parsed: OcxParsedRequest) => {
+    buildRequest: (parsed: CodexCommanderParsedRequest) => {
       messagesPerPass.push(parsed.context.messages);
       return { url: "https://routed.test/v1/chat/completions", method: "POST", headers: {}, body: "{}" };
     },

@@ -14,13 +14,13 @@ import {
 } from "./runtime-api";
 
 const USAGE = `Usage:
-  ocx agent [status] [--json]
-  ocx agent injection <status|set> [--model <id|->] [--effort <level|->]
+  ccx agent [status] [--json]
+  ccx agent injection <status|set> [--model <id|->] [--effort <level|->]
       [--prompt <text|->] [--guidance <on|off>] [--json]
-  ocx agent effort <status|set> [--main <level|->] [--subagent <level|->] [--json]
-  ocx agent subagents <status|set|clear> [model,model...] [--json]
-  ocx agent fallback <status|set|clear> [model,model...] [--poll-ms <5000-600000>] [--json]
-  ocx agent sidecar <status|web|vision> [--model <id|->] [--backend <openai|anthropic|->]
+  ccx agent effort <status|set> [--main <level|->] [--subagent <level|->] [--json]
+  ccx agent subagents <status|set|clear> [model,model...] [--json]
+  ccx agent fallback <status|set|clear> [model,model...] [--poll-ms <5000-600000>] [--json]
+  ccx agent sidecar <status|web|vision> [--model <id|->] [--backend <openai|anthropic|->]
       [--reasoning <level>] [--max-descriptions <n>] [--json]`;
 
 function clearable(value: string | undefined): string | null | undefined {

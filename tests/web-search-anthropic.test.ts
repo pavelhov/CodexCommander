@@ -13,13 +13,13 @@ import {
 } from "../src/web-search";
 import { parseAnthropicSidecarSSE, runAnthropicWebSearch } from "../src/web-search/anthropic-executor";
 import { CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../src/oauth/anthropic";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
 
-const routedProvider: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://routed.test/v1", apiKey: "routed-key" };
-const forwardProvider: OcxProviderConfig = { adapter: "openai-responses", baseUrl: "https://chatgpt.test/v1", authMode: "forward" };
-const anthropicProvider: OcxProviderConfig = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" };
+const routedProvider: CodexCommanderProviderConfig = { adapter: "openai-chat", baseUrl: "https://routed.test/v1", apiKey: "routed-key" };
+const forwardProvider: CodexCommanderProviderConfig = { adapter: "openai-responses", baseUrl: "https://chatgpt.test/v1", authMode: "forward" };
+const anthropicProvider: CodexCommanderProviderConfig = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" };
 
-function config(overrides: Partial<OcxConfig> = {}): OcxConfig {
+function config(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
   return { port: 10100, defaultProvider: "routed", providers: { routed: routedProvider, chatgpt: forwardProvider }, ...overrides };
 }
 

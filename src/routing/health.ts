@@ -16,7 +16,7 @@
  * All formulas are deterministic with documented constants; no ML.
  */
 
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import { openRequestHistoryIndexSync, requestHistoryDb } from "./history/indexer";
 import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import {

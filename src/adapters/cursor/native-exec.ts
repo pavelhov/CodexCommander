@@ -52,7 +52,7 @@ import {
 } from "./native-exec-tools";
 import { clientBytes, execBytes } from "./native-exec-common";
 import type { McpToolDefinition } from "./gen/agent_pb";
-import { OCX_RESPONSES_TOOL_PROVIDER } from "./tool-definitions";
+import { CCX_RESPONSES_TOOL_PROVIDER } from "./tool-definitions";
 
 export type CursorNativeExecDeps = CursorNativeNetworkDeps & CursorNativeToolDeps;
 
@@ -66,21 +66,21 @@ export interface CursorNativeExecContext extends CursorNativeExecDeps {
   sessionId?: string;
   mcpToolDefs?: McpToolDefinition[];
   clientToolDefs?: McpToolDefinition[];
-  /** Unsafe opt-in escape hatch for Cursor server-driven local fs/shell/fetch execution. */
-  unsafeAllowNativeLocalExec?: boolean;
+  /** Server-local opt-in for Cursor-driven local fs/shell/fetch execution. */
+  nativeLocalExecEnabled?: boolean;
   /** apply_patch is visible for this request; Cursor-native write/delete must not bypass Codex. */
   rejectNativeFileMutations?: boolean;
 }
 
-export function cursorUnsafeNativeLocalExecEnabled(input: Pick<CursorNativeExecContext, "unsafeAllowNativeLocalExec"> = {}): boolean {
-  return input.unsafeAllowNativeLocalExec === true;
+export function cursorNativeLocalExecEnabled(input: Pick<CursorNativeExecContext, "nativeLocalExecEnabled"> = {}): boolean {
+  return input.nativeLocalExecEnabled === true;
 }
 
 /**
  * Content-addressed blob store shared across streams. Bounded: without eviction a long-running
  * proxy accumulates every conversation's prompt blobs forever (unbounded memory) and any stale
  * blob stays servable indefinitely — a cross-conversation contamination enabler if Cursor's
- * server-side state ever references old ids (devlog 260702 P0). Continuation requests re-store
+ * server-side state ever references old ids (implementation contract P0). Continuation requests re-store
  * their blobs on every turn (`rootPromptMessages` → `storeCursorBlob`), so TTL + cap eviction is
  * safe for live sessions: only genuinely abandoned entries age out.
  */
@@ -501,7 +501,7 @@ export async function handleCursorNativeExec(execMsg: ExecServerMessage, deps: C
       result: { case: "success", value: create(RequestContextSuccessSchema, { requestContext: create(RequestContextSchema, { tools }) }) },
     }))];
   }
-  if (!cursorUnsafeNativeLocalExecEnabled(deps)) {
+  if (!cursorNativeLocalExecEnabled(deps)) {
     if (execCase === "readArgs") return [rejectReadExecForPolicy(execMsg)];
     if (execCase === "writeArgs") return [rejectWriteExecForPolicy(execMsg)];
     if (execCase === "deleteArgs") return [rejectDeleteExecForPolicy(execMsg)];
@@ -523,7 +523,7 @@ export async function handleCursorNativeExec(execMsg: ExecServerMessage, deps: C
   if (execCase === "backgroundShellSpawnArgs") return [backgroundShellSpawnExec(execMsg, deps.sessionId ?? "")];
   if (execCase === "writeShellStdinArgs") return [writeShellStdinExec(execMsg, deps.sessionId ?? "")];
   if (execCase === "fetchArgs") return [await fetchExec(execMsg, deps)];
-  if (execCase === "mcpArgs" && execMsg.message.value.providerIdentifier === OCX_RESPONSES_TOOL_PROVIDER) {
+  if (execCase === "mcpArgs" && execMsg.message.value.providerIdentifier === CCX_RESPONSES_TOOL_PROVIDER) {
     return [execBytes(execMsg, "mcpResult", create(McpResultSchema, {
       result: {
         case: "error",
@@ -543,7 +543,7 @@ export async function handleCursorNativeExec(execMsg: ExecServerMessage, deps: C
         case: "error",
         value: create(DiagnosticsErrorSchema, {
           path,
-          error: "Diagnostics are not supported by the opencodex Cursor transport.",
+          error: "Diagnostics are not supported by the CodexCommander Cursor transport.",
         }),
       },
     }))];

@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendUsageEntry, resetUsageReadCacheForTests } from "../src/usage/log";
 import { clearProviderQuotaCache, fetchProviderQuotaReports, openCodeGoReferenceWindowsForTest } from "../src/providers/quota";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
-function config(baseUrl = "https://opencode.ai/zen/go/v1"): OcxConfig {
+function config(baseUrl = "https://opencode.ai/zen/go/v1"): CodexCommanderConfig {
   return {
     port: 10100,
     hostname: "127.0.0.1",
@@ -19,7 +19,7 @@ function config(baseUrl = "https://opencode.ai/zen/go/v1"): OcxConfig {
         apiKey: "go-key",
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 describe("OpenCode Go published caps and local observations", () => {
@@ -27,9 +27,9 @@ describe("OpenCode Go published caps and local observations", () => {
   let previousHome: string | undefined;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "ocx-go-quota-"));
-    previousHome = process.env.OPENCODEX_HOME;
-    process.env.OPENCODEX_HOME = root;
+    root = mkdtempSync(join(tmpdir(), "ccx-go-quota-"));
+    previousHome = process.env.CODEXCOMMANDER_HOME;
+    process.env.CODEXCOMMANDER_HOME = root;
     clearProviderQuotaCache();
     resetUsageReadCacheForTests();
   });
@@ -37,8 +37,8 @@ describe("OpenCode Go published caps and local observations", () => {
   afterEach(() => {
     clearProviderQuotaCache();
     resetUsageReadCacheForTests();
-    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousHome;
     rmSync(root, { recursive: true, force: true });
   });
 

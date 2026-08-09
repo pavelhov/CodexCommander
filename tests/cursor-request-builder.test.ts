@@ -7,9 +7,9 @@ import {
 } from "../src/adapters/cursor/request-builder";
 import { cursorMcpToolsEncodedSize } from "../src/adapters/cursor/tool-definitions";
 import { parseRequest } from "../src/responses/parser";
-import type { OcxParsedRequest } from "../src/types";
+import type { CodexCommanderParsedRequest } from "../src/types";
 
-const base: OcxParsedRequest = {
+const base: CodexCommanderParsedRequest = {
   modelId: "cursor/auto",
   context: { messages: [] },
   stream: false,

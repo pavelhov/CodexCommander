@@ -9,7 +9,7 @@ import {
 } from "../src/codex/catalog";
 import { clearModelCache } from "../src/codex/model-cache";
 import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { CatalogGatherBusyError } from "../src/codex/catalog/provider-fetch";
 
 const originalFetch = globalThis.fetch;
@@ -44,7 +44,7 @@ describe("gatherRoutedModels single-flight", () => {
       });
     }) as typeof fetch;
 
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "slow",
       providers: {
@@ -75,7 +75,7 @@ describe("gatherRoutedModels single-flight", () => {
         headers: { "content-type": "application/json" },
       })) as typeof fetch;
 
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "a",
       providers: {
@@ -128,7 +128,7 @@ describe("gatherRoutedModels single-flight", () => {
       });
     }) as typeof fetch;
 
-    const configA: OcxConfig = {
+    const configA: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "a",
       providers: {
@@ -139,7 +139,7 @@ describe("gatherRoutedModels single-flight", () => {
         },
       },
     };
-    const configB: OcxConfig = {
+    const configB: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "b",
       providers: {
@@ -178,7 +178,7 @@ describe("gatherRoutedModels single-flight", () => {
       });
     }) as typeof fetch;
 
-    const config = (liveModels?: true): OcxConfig => ({
+    const config = (liveModels?: true): CodexCommanderConfig => ({
       port: 10100,
       defaultProvider: "alibaba-token-plan",
       providers: {
@@ -209,7 +209,7 @@ describe("gatherRoutedModels single-flight", () => {
         headers: { "content-type": "application/json" },
       })) as typeof fetch;
 
-    const mk = (comboId: string, provider: string, baseUrl: string): OcxConfig => ({
+    const mk = (comboId: string, provider: string, baseUrl: string): CodexCommanderConfig => ({
       port: 10100,
       defaultProvider: provider,
       providers: {
@@ -261,14 +261,14 @@ describe("gatherRoutedModels single-flight", () => {
       liveModels: false as const,
     };
     // liveModels:false uses configured models — still fingerprints context hints.
-    const configA: OcxConfig = {
+    const configA: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "p",
       providers: {
         p: { ...baseProv, models: ["m1"], modelContextWindows: { m1: 100_000 } },
       },
     };
-    const configB: OcxConfig = {
+    const configB: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "p",
       providers: {
@@ -298,7 +298,7 @@ describe("gatherRoutedModels single-flight", () => {
       );
     }) as typeof fetch;
 
-    const base: OcxConfig = {
+    const base: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "p",
       providers: {
@@ -309,7 +309,7 @@ describe("gatherRoutedModels single-flight", () => {
         },
       },
     };
-    const withSel: OcxConfig = {
+    const withSel: CodexCommanderConfig = {
       ...base,
       providers: {
         p: {
@@ -349,7 +349,7 @@ describe("gatherRoutedModels single-flight", () => {
       );
     }) as typeof fetch;
 
-    const base: OcxConfig = {
+    const base: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "p",
       providers: {
@@ -360,7 +360,7 @@ describe("gatherRoutedModels single-flight", () => {
         },
       },
     };
-    const withDisabled: OcxConfig = {
+    const withDisabled: CodexCommanderConfig = {
       ...base,
       disabledModels: ["p/drop-me"],
     };
@@ -389,7 +389,7 @@ describe("gatherRoutedModels single-flight", () => {
         headers: { "content-type": "application/json" },
       });
     }) as typeof fetch;
-    const configs = Array.from({ length: 9 }, (_, index): OcxConfig => ({
+    const configs = Array.from({ length: 9 }, (_, index): CodexCommanderConfig => ({
       port: 10100,
       defaultProvider: `p${index}`,
       providers: {

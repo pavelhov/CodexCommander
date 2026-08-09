@@ -28,7 +28,7 @@ import {
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { modelInList, namespacedToolName } from "../../types";
-import type { AdapterEvent, CodexAccountMode, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage } from "../../types";
+import type { AdapterEvent, CodexAccountMode, CodexCommanderConfig, CodexCommanderParsedRequest, CodexCommanderProviderConfig, CodexCommanderProviderContinuationState, CodexCommanderUsage } from "../../types";
 import {
   forceRefreshOAuthAccessSnapshot,
   getOAuthCredentialApiBaseUrl,
@@ -139,12 +139,12 @@ export function compactResponseTooLargeError(): Response {
  */
 async function resolveAlternateCompactContext(args: {
   req: Request;
-  config: OcxConfig;
-  route: { provider: OcxProviderConfig; codexAccountMode?: CodexAccountMode };
+  config: CodexCommanderConfig;
+  route: { provider: CodexCommanderProviderConfig; codexAccountMode?: CodexAccountMode };
   selectedModelId: string | undefined;
   excludeAccountId: string | null;
   turnAdmissionLease?: ActiveTurnLease;
-}): Promise<{ authCtx: CodexAuthContext; provider: OcxProviderConfig; headers: Headers } | null> {
+}): Promise<{ authCtx: CodexAuthContext; provider: CodexCommanderProviderConfig; headers: Headers } | null> {
   const { req, config, route, selectedModelId, excludeAccountId, turnAdmissionLease } = args;
   if (!route.codexAccountMode || !excludeAccountId) return null;
   try {
@@ -249,7 +249,7 @@ export async function bufferCompactResponse(upstream: Response, signal: AbortSig
 
 export async function handleResponsesCompact(
   req: Request,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   logCtx: RequestLogContext,
   turnAdmissionLease?: ActiveTurnLease,
 ): Promise<Response> {
@@ -396,7 +396,7 @@ export async function handleResponsesCompact(
     // considered. The alternate is one bounded send: a second ladder would multiply the
     // work an already-rejecting pool is doing.
     const sendCompactAttempt = (
-      sendProvider: OcxProviderConfig,
+      sendProvider: CodexCommanderProviderConfig,
       sendHeaders: Headers,
       recovery: "normal" | "single",
     ): Promise<Response> => {
@@ -550,7 +550,7 @@ export async function handleResponsesCompact(
   }
 
   // ROUTED model: run the v2 synthetic-compaction turn internally (appends COMPACT_PROMPT, no
-  // tools) and decode the resulting ocx1 envelope into plain v1 replacement-history items.
+  // tools) and decode the resulting ccx1 envelope into plain v1 replacement-history items.
   const inputItems = Array.isArray(raw.input) ? (raw.input as unknown[]) : [];
   const internalBody = {
     ...raw,
@@ -604,7 +604,7 @@ export async function handleResponsesCompact(
   }
   const encrypted = compactionItems[0]!.encrypted_content;
   const decoded = typeof encrypted === "string" ? decodeCompactionSummary(encrypted) : null;
-  // An empty `ocx1:` envelope decodes to "" rather than null, so length is what matters.
+  // An empty `ccx1:` envelope decodes to "" rather than null, so length is what matters.
   if (decoded === null || decoded.trim().length === 0) {
     return formatErrorResponse(502, "invalid_response_error", "compaction turn produced an empty summary");
   }

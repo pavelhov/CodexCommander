@@ -1,5 +1,5 @@
-import type { OcxUsage } from "../../types";
-import type { OcxMessage, OcxRequestOptions, OcxTool } from "../../types";
+import type { CodexCommanderUsage } from "../../types";
+import type { CodexCommanderMessage, CodexCommanderRequestOptions, CodexCommanderTool } from "../../types";
 import type { CursorRoutingLevel } from "./discovery";
 
 export interface CursorRequestedModelParameter {
@@ -16,9 +16,9 @@ export interface CursorRunRequest {
   conversationId: string;
   system: string[];
   messages: CursorRequestMessage[];
-  rawMessages?: OcxMessage[];
-  tools?: OcxTool[];
-  toolChoice?: OcxRequestOptions["toolChoice"];
+  rawMessages?: CodexCommanderMessage[];
+  tools?: CodexCommanderTool[];
+  toolChoice?: CodexCommanderRequestOptions["toolChoice"];
   parallelToolCalls?: boolean;
   /**
    * Clear provider-private context-usage carry-forward before this run. Used when Codex starts a
@@ -44,8 +44,8 @@ export type CursorServerMessage =
   | { type: "tool_call_start"; id: string; name: string }
   | { type: "tool_call_delta"; arguments: string }
   | { type: "tool_call_end"; id?: string }
-  | { type: "done"; usage?: OcxUsage }
-  | { type: "error"; message: string; usage?: OcxUsage }
+  | { type: "done"; usage?: CodexCommanderUsage }
+  | { type: "error"; message: string; usage?: CodexCommanderUsage }
   | { type: "heartbeat" }
   | { type: "kv_get"; key: string }
   | { type: "kv_set"; key: string; value: Uint8Array }

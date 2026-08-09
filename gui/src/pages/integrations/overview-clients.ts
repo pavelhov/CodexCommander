@@ -154,8 +154,8 @@ export function isAppliedState(state: VisualIntegrationState): boolean {
 /**
  * Codex CLI.
  *
- * `routingInjected` — server-derived as `routingKind === "opencodex-local"` —
- * is the only field that answers "is opencodex in Codex's path right now".
+ * `routingInjected` — server-derived as `routingKind === "codexcommander-local"` —
+ * is the only field that answers "is CodexCommander in Codex's path right now".
  * `status` mixes in service viability and reboot safety, which is the Startup
  * page's question, so a `protected` status with no injected routing still
  * reads as not applied here.
@@ -386,7 +386,7 @@ function grokRow(
 
 /**
  * OpenCode is intentionally not a shared file-toggle client. Its dedicated
- * integration owns provider.opencodex, the protected token reference,
+ * integration owns provider.codexcommander, the protected token reference,
  * auto-connect, app launch, and surgical restore as one transaction boundary.
  */
 function opencodeRow(

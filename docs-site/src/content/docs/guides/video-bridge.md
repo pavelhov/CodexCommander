@@ -6,15 +6,15 @@ description: Generate videos with Grok Imagine Video through a non-OpenAI model.
 ## Overview
 
 The Video Bridge lets you use xAI's Grok Imagine Video generation through any non-OpenAI model
-routed by opencodex. When enabled, a synthetic `video_gen` tool is injected into the conversation.
-The model calls it like any function tool; opencodex intercepts the call, submits a video generation
+routed by CodexCommander. When enabled, a synthetic `video_gen` tool is injected into the conversation.
+The model calls it like any function tool; CodexCommander intercepts the call, submits a video generation
 job to xAI, polls until completion, and downloads the result.
 
 ## Prerequisites
 
-- An `xai` provider entry with an **API key** (`ocx login xai` alone is not sufficient — the video bridge requires key auth, not OAuth)
+- An `xai` provider entry with an **API key** (`ccx login xai` alone is not sufficient — the video bridge requires key auth, not OAuth)
 - A non-OpenAI model as your routed provider (e.g. Anthropic Claude, Google Gemini)
-- opencodex configured to route through the non-OpenAI provider
+- CodexCommander configured to route through the non-OpenAI provider
 
 > **⚠ Provider key required:** The video bridge only activates when the `xai` provider uses
 > API key auth. Add this to your config:
@@ -27,7 +27,7 @@ job to xAI, polls until completion, and downloads the result.
 > }
 > ```
 >
-> If you onboarded via `ocx login xai` (OAuth), the provider stays in `authMode: "oauth"`
+> If you onboarded via `ccx login xai` (OAuth), the provider stays in `authMode: "oauth"`
 > and the bridge silently won't activate. Set `XAI_API_KEY` in the environment **or**
 > hard-code the key as shown above.
 
@@ -56,9 +56,9 @@ Add `videoBridgeEnabled: true` to your `images` config:
 
 ## How It Works
 
-1. opencodex detects a non-OpenAI routed model with `videoBridgeEnabled: true`
+1. CodexCommander detects a non-OpenAI routed model with `videoBridgeEnabled: true`
 2. A synthetic `video_gen` function tool is injected into the conversation
-3. When the model calls `video_gen`, opencodex submits a job to xAI's `/videos/generations`
+3. When the model calls `video_gen`, CodexCommander submits a job to xAI's `/videos/generations`
 4. The bridge polls the job status every 5-15 seconds, sending heartbeat messages to keep the stream alive
 5. When the video is ready, it's downloaded to the artifacts directory
 6. The local file path is returned to the model as a tool result

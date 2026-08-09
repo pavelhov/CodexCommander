@@ -1,4 +1,4 @@
-export interface OcxErrorPayload {
+export interface CodexCommanderErrorPayload {
   message: string;
   type: string;
   code: string | null;
@@ -102,7 +102,7 @@ export function isClientClosedMessage(text: string): boolean {
   );
 }
 
-export function classifyError(status: number, type: string, message: string): OcxErrorPayload {
+export function classifyError(status: number, type: string, message: string): CodexCommanderErrorPayload {
   const text = message.toLowerCase();
   if (type === "previous_response_not_found") {
     return { message, type: "invalid_request_error", code: "previous_response_not_found" };
@@ -307,7 +307,7 @@ export function inferHttpStatusFromAdapterMessage(message: string): number {
 }
 
 /** Map an adapter terminal error message to HTTP status + classified Codex error payload. */
-export function adapterFailureFromMessage(message: string): { httpStatus: number; error: OcxErrorPayload } {
+export function adapterFailureFromMessage(message: string): { httpStatus: number; error: CodexCommanderErrorPayload } {
   const httpStatus = inferHttpStatusFromAdapterMessage(message);
   let finalMessage = message;
   const retryAfterSeconds = parseRetryAfterFromMessage(message);

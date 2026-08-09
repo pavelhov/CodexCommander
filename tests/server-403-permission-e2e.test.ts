@@ -8,7 +8,7 @@ import { saveConfig } from "../src/config";
 import { classifyError } from "../src/lib/errors";
 import { startServer } from "../src/server";
 import { clearRequestLogsForTests } from "../src/server/request-log";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 const SUBSCRIPTION_MESSAGE =
@@ -19,25 +19,26 @@ let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-403-e2e-codex-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-403-e2e-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-403-e2e-codex-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-403-e2e-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   clearRequestLogsForTests();
 });
 
 afterEach(() => {
   clearRequestLogsForTests();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
 });
 
-function config(baseUrl: string): OcxConfig {
+function config(baseUrl: string): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     hostname: "127.0.0.1",
     defaultProvider: "ollama-test",
     providers: {
@@ -51,7 +52,7 @@ function config(baseUrl: string): OcxConfig {
         defaultModel: "pro-model",
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 async function runUpstreamFailure(status: 401 | 403, body: unknown): Promise<{

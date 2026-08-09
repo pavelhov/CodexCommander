@@ -1,4 +1,4 @@
-/** In-memory ring buffer of debug log lines for `ocx debug logs` / GUI tailing. */
+/** In-memory ring buffer of debug log lines for `ccx debug logs` / GUI tailing. */
 
 export interface DebugLogEntry {
   /** Monotonic cursor for pagination; survives same-millisecond bursts. */

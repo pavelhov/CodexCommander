@@ -1,28 +1,28 @@
 ---
 title: opencode
-description: Используйте любую маршрутизируемую модель из opencode — opencodex внедряет блок провайдера времени выполнения и не меняет вашу конфигурацию opencode.
+description: Используйте любую маршрутизируемую модель из opencode — CodexCommander внедряет блок провайдера времени выполнения и не меняет вашу конфигурацию opencode.
 ---
 
 opencode читает провайдеров из объединённых JSON-слоёв конфигурации, а не из переменных окружения,
-поэтому здесь нет слота вроде `ANTHROPIC_BASE_URL`, который можно просто подменить. `ocx opencode`
+поэтому здесь нет слота вроде `ANTHROPIC_BASE_URL`, который можно просто подменить. `ccx opencode`
 закрывает этот пробел: он убеждается, что прокси запущен, строит блок провайдера из видимого
 каталога и внедряет его через inline runtime layer OpenCode (`OPENCODE_CONFIG_CONTENT`).
 
 ## Быстрый старт
 
 ```bash
-ocx opencode
+ccx opencode
 ```
 
 Команда убеждается, что прокси запущен, и запускает opencode, внедряя для этого процесса только
-сгенерированный блок `provider.opencodex`. Дополнительные аргументы передаются дальше:
-`ocx opencode run "hello"`.
+сгенерированный блок `provider.codexcommander`. Дополнительные аргументы передаются дальше:
+`ccx opencode run "hello"`.
 
-Маршрутизируемые модели появляются в picker под провайдером `opencodex`:
+Маршрутизируемые модели появляются в picker под провайдером `codexcommander`:
 
 ```text
-opencodex/kiro/glm-5
-opencodex/gpt-5.6-sol      # native slugs stay unprefixed
+codexcommander/kiro/glm-5
+codexcommander/gpt-5.6-sol      # native slugs stay unprefixed
 ```
 
 ## Ваша собственная конфигурация никогда не меняется
@@ -30,54 +30,54 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 Лончер не копирует и не переписывает `~/.config/opencode/opencode.json`,
 проектные `opencode.json` / `opencode.jsonc` и любые другие конфигурационные слои на диске. Он
 может читать глобальную или проектную конфигурацию, чтобы обнаружить override
-`provider.opencodex`, но ваши существующие провайдеры, агенты, keybind'ы, записи MCP и
+`provider.codexcommander`, но ваши существующие провайдеры, агенты, keybind'ы, записи MCP и
 относительные ссылки `{file:…}` продолжают разрешаться из исходных файлов.
 
-Только для этого запуска opencodex добавляет сгенерированный блок `provider.opencodex` через
+Только для этого запуска CodexCommander добавляет сгенерированный блок `provider.codexcommander` через
 inline runtime layer OpenCode. Этот слой сливается после глобальной/custom/project-конфигурации и
 переопределяет только конфликтующие ключи дочернего процесса.
 
-| Слой | Поведение с `ocx opencode` |
+| Слой | Поведение с `ccx opencode` |
 | --- | --- |
 | Global / custom / project config | Остаётся на диске ровно в том виде, в каком вы её записали |
-| Inline runtime (`OPENCODE_CONFIG_CONTENT`) | Получает только сгенерированный блок `provider.opencodex` |
+| Inline runtime (`OPENCODE_CONFIG_CONTENT`) | Получает только сгенерированный блок `provider.codexcommander` |
 | Relative `{file:…}` paths | Всё так же разрешаются относительно конфигурационного файла, где были определены |
 
-Если глобальная или проектная конфигурация тоже определяет `provider.opencodex`, лончер печатает
-информационное замечание: runtime layer из `ocx opencode` переопределяет её только для этого
+Если глобальная или проектная конфигурация тоже определяет `provider.codexcommander`, лончер печатает
+информационное замечание: runtime layer из `ccx opencode` переопределяет её только для этого
 запуска.
 
 ## Постоянное подключение через Dashboard (необязательно)
 
 Для обычного OpenCode, редакторских интеграций или запуска Desktop одним нажатием откройте
-**Integrations** в панели OpenCodex и выберите **Apply connection**. Это отдельный путь от
-`ocx opencode`:
+**Integrations** в панели CodexCommander и выберите **Apply connection**. Это отдельный путь от
+`ccx opencode`:
 
 - выбирается активный глобальный файл OpenCode под `XDG_CONFIG_HOME` (обычно
   `~/.config/opencode/`): существующий `opencode.jsonc`, иначе `opencode.json`;
-- JSONC-редактор меняет только `provider.opencodex`, сохраняя комментарии, форматирование и все
+- JSONC-редактор меняет только `provider.codexcommander`, сохраняя комментарии, форматирование и все
   остальные ключи;
-- токен допуска остаётся в защищённом состоянии OpenCodex, а конфигурация OpenCode получает лишь
+- токен допуска остаётся в защищённом состоянии CodexCommander, а конфигурация OpenCode получает лишь
   ссылку `{file:/абсолютный/путь}` — токен и хранилище авторизации OpenCode не читаются;
 - **Always keep OpenCode connected** выключен по умолчанию и после явного включения обновляет
   только этот блок при старте прокси или изменении видимого каталога.
 
 **Restore** восстанавливает исходные байты точно, когда journal допускает точное восстановление.
-Иначе Dashboard восстанавливает или удаляет только управляемый `provider.opencodex`, не затрагивая
+Иначе Dashboard восстанавливает или удаляет только управляемый `provider.codexcommander`, не затрагивая
 поздние правки пользователя. **Open OpenCode** запускает OpenCode Desktop одним нажатием; при наличии только
-CLI используйте `ocx opencode`, который остаётся временным и не меняет файлы.
+CLI используйте `ccx opencode`, который остаётся временным и не меняет файлы.
 
 ## Как перенести блок в свою конфигурацию
 
-`ocx opencode` внедряет блок провайдера только на один запуск. Если постоянное подключение Dashboard
+`ccx opencode` внедряет блок провайдера только на один запуск. Если постоянное подключение Dashboard
 выше не применено, обычный `opencode` по-прежнему ничего не знает о прокси. Если вы хотите, чтобы
 маршрутизируемые модели были доступны и из
 обычного `opencode` — либо из расширения редактора, которое никогда не проходит через этот
-лончер, — `ocx export` напечатает тот же блок провайдера, чтобы вы сами слили его в свою
+лончер, — `ccx export` напечатает тот же блок провайдера, чтобы вы сами слили его в свою
 конфигурацию:
 
 ```bash
-ocx export --client opencode
+ccx export --client opencode
 ```
 
 Прокси должен быть запущен. Команда печатает конфиг, канонический путь назначения
@@ -87,32 +87,32 @@ ocx export --client opencode
 вашим действием.
 
 :::caution[Сливать, а не заменять]
-Слейте блок `provider.opencodex` со своей существующей конфигурацией. Если заменить им весь файл,
+Слейте блок `provider.codexcommander` со своей существующей конфигурацией. Если заменить им весь файл,
 вы уничтожите остальные провайдеры, агенты, keybind'ы и записи MCP. Именно поэтому
-`ocx export --out` отказывается перезаписывать существующий файл, так что указывайте `--out` на
+`ccx export --out` отказывается перезаписывать существующий файл, так что указывайте `--out` на
 временный путь и потом переносите только нужный блок:
 
 ```bash
-ocx export --client opencode --out ~/opencodex-opencode.json
+ccx export --client opencode --out ~/codexcommander-opencode.json
 ```
 :::
 
 В отличие от runtime-блока лончера, слитый блок — это статический снимок: он не следует за вашим
 каталогом. После добавления провайдера или изменения видимости моделей заново выполните
-`ocx export`.
+`ccx export`.
 
 После merge экспортируйте admission key перед запуском opencode — если только прокси не работает
 на loopback, где ключ не нужен:
 
 ```bash
-export OPENCODEX_OPENCODE_API_KEY=<your key>
+export CODEXCOMMANDER_OPENCODE_API_KEY=<your key>
 ```
 
 ## Admission key не пишется на диск
 
 Когда прокси требует API-ключ, inline runtime config содержит ссылку `{env:…}` opencode, а не сам
 секрет. На loopback эта ссылка используется как `apiKey`; на не-loopback привязке она уходит
-только через `x-opencodex-api-key`, чтобы admission прокси оставался отделённым от любого
+только через `x-codexcommander-api-key`, чтобы admission прокси оставался отделённым от любого
 upstream-заголовка `Authorization`.
 
 Пример для loopback:
@@ -120,7 +120,7 @@ upstream-заголовка `Authorization`.
 ```json
 "options": {
   "baseURL": "http://127.0.0.1:10100/v1",
-  "apiKey": "{env:OPENCODEX_OPENCODE_API_KEY}"
+  "apiKey": "{env:CODEXCOMMANDER_OPENCODE_API_KEY}"
 }
 ```
 
@@ -130,24 +130,24 @@ upstream-заголовка `Authorization`.
 "options": {
   "baseURL": "http://192.168.1.10:10100/v1",
   "headers": {
-    "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
+    "x-codexcommander-api-key": "{env:CODEXCOMMANDER_OPENCODE_API_KEY}"
   }
 }
 ```
 
 Реальное значение передаётся только через окружение дочернего процесса.
-`OPENCODEX_API_AUTH_TOKEN` имеет приоритет, затем идёт hardened service token file, затем
+`CODEXCOMMANDER_API_AUTH_TOKEN` имеет приоритет, затем идёт hardened service token file, затем
 настроенный API key — именно он требуется для не-loopback-привязки.
 
 Loopback-привязка (`127.0.0.1`, по умолчанию) не требует аутентификации, поэтому ссылка `{env:…}`
 остаётся инертной, и переменную можно не задавать. Она важна только когда `hostname` выходит за
 пределы loopback; см. [Удалённый доступ](/reference/configuration/#remote-access). Этот admission key
-относится к самому opencodex и не связан с upstream-ключами провайдеров, настраиваемыми в
+относится к самому CodexCommander и не связан с upstream-ключами провайдеров, настраиваемыми в
 [Провайдерах](/guides/providers/).
 
 ## Откат
 
-Для временного запуска `ocx opencode` откатывать нечего: конфигурация OpenCode не меняется.
+Для временного запуска `ccx opencode` откатывать нечего: конфигурация OpenCode не меняется.
 Для подключения Dashboard выберите **Restore** в **Integrations**: при безопасном точном восстановлении
 вернутся исходные байты, иначе будет хирургически восстановлен только управляемый провайдер.
 
@@ -162,7 +162,7 @@ Loopback-привязка (`127.0.0.1`, по умолчанию) не требу
 получалось `output > context`. Эта цифра существует только для удовлетворения схемы — она не
 утверждает ничего о реальном максимуме какой-либо модели.
 
-Блок провайдера `opencodex` пересобирается при каждом запуске, поэтому внесённые вами правки
+Блок провайдера `codexcommander` пересобирается при каждом запуске, поэтому внесённые вами правки
 внутри него не сохранятся. Для пользовательских записей держите отдельный provider key.
 
 ## Требования

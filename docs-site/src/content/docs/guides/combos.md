@@ -4,7 +4,7 @@ description: Route one virtual model to several providers for failover or weight
 ---
 
 A **combo** is one virtual model that fronts an ordered list of real provider/model targets. Your
-client requests `combo/<id>`; opencodex chooses a target, rewrites the request to that concrete
+client requests `combo/<id>`; CodexCommander chooses a target, rewrites the request to that concrete
 `provider/model`, and can try another target when the first one has a retryable failure.
 
 This is useful when you want either:
@@ -21,11 +21,11 @@ This example creates `combo/main` with Anthropic first and OpenAI second. Both p
 already exist and be enabled.
 
 ```bash
-ocx combo set main --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol
+ccx combo set main --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol
 ```
 
 The default strategy is failover, so a normal request goes to
-`anthropic/claude-opus-4-8`. If that attempt has a retryable failure, opencodex can hop to
+`anthropic/claude-opus-4-8`. If that attempt has a retryable failure, CodexCommander can hop to
 `openai/gpt-5.6-sol`.
 
 Use the virtual model anywhere you would normally provide a model id:
@@ -40,7 +40,7 @@ Use the virtual model anywhere you would normally provide a model id:
 Confirm the saved definition:
 
 ```bash
-ocx combo show main
+ccx combo show main
 ```
 
 :::tip
@@ -50,7 +50,7 @@ distribute traffic, and add weights only when equal distribution is not appropri
 
 ## How combo names work
 
-The combo id in `ocx combo set <id>` must start with a letter or number. It may then contain
+The combo id in `ccx combo set <id>` must start with a letter or number. It may then contain
 letters, numbers, `.`, `_`, or `-`, up to 64 characters total. Its canonical model id is always
 `combo/<id>`; for example, id `main` becomes `combo/main`.
 
@@ -101,7 +101,7 @@ successful requests stay on the selected target before the next weighted selecti
 Create a 2:1 combo with batches of two successful requests:
 
 ```bash
-ocx combo set balanced \
+ccx combo set balanced \
   --targets anthropic/claude-opus-4-8:2,openai/gpt-5.6-sol:1 \
   --strategy round-robin \
   --sticky 2
@@ -135,7 +135,7 @@ Combo failures are divided into **hop** failures and **terminal** failures.
 | Any other unclassified error | Stop and return the error. |
 
 A hopped target enters cooldown for 60 seconds by default. If the upstream response includes a
-valid `Retry-After` value, opencodex uses it instead. Numeric seconds and HTTP-date values are
+valid `Retry-After` value, CodexCommander uses it instead. Numeric seconds and HTTP-date values are
 accepted, and every cooldown is capped at 10 minutes.
 
 The current request never retries the same attempted target. Later requests skip it until its
@@ -155,23 +155,23 @@ quota, and overload failures; it does not hide caller errors or policy refusals.
 2. the caller did not set an effort; and
 3. the selected target's catalog advertises that exact effort.
 
-If the request has no `reasoning` object, opencodex creates one. If `reasoning` exists without an
+If the request has no `reasoning` object, CodexCommander creates one. If `reasoning` exists without an
 `effort` property, it preserves the other fields and adds the default. A caller-provided effort is
 never overwritten.
 
-When target capability is unknown or does not include the configured effort, opencodex omits the
+When target capability is unknown or does not include the configured effort, CodexCommander omits the
 default and leaves the target's own behavior unchanged. Supported values are `low`, `medium`,
 `high`, `xhigh`, `max`, and `ultra`; omit the field or set it to `null` to leave effort entirely to
 the caller and target.
 
 ## Encrypted v2 sub-agent tasks
 
-There is one important limitation for Codex v2 sub-agents ([issue #92](https://github.com/lidge-jun/opencodex/issues/92)).
+There is one important limitation for Codex v2 sub-agents ([issue #92](https://github.com/pavelhov/CodexCommander/issues/92)).
 A native parent can send a newly spawned worker's task only as ciphertext minted for the native
 ChatGPT backend. An external provider cannot read that payload.
 
 For such a request, a combo filters its eligible targets to canonical native ChatGPT routes,
-including after a retryable failure. If the combo has no decrypt-capable target, opencodex stops
+including after a retryable failure. If the combo has no decrypt-capable target, CodexCommander stops
 before dispatch and returns HTTP 400:
 
 ```json
@@ -208,16 +208,16 @@ combos, and its target picker excludes disabled models and nested combos.
 The primary commands are:
 
 ```bash
-ocx combo list
-ocx combo show <id>
-ocx combo set <id> --targets provider/model[:weight],...
-ocx combo remove <id> --yes
+ccx combo list
+ccx combo show <id>
+ccx combo set <id> --targets provider/model[:weight],...
+ccx combo remove <id> --yes
 ```
 
 `set` also accepts `--strategy`, `--sticky`, `--effort`, `--alias`, and `--rename-from`. Use `-`
 as the value of `--effort` or `--alias` to clear that field. `create` and `update` are aliases for
 `set`; `delete` is an alias for `remove`; and the same subcommands are available under
-`ocx route combo`.
+`ccx route combo`.
 
 ### Management API
 
@@ -263,8 +263,8 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 ### Why does `combo/<id>` return 404?
 
 The combo id is unknown. The response is HTTP 404 with type `invalid_request_error`. Run
-`ocx combo list`, check spelling and case, and confirm your management command wrote to the same
-running opencodex instance that receives model requests.
+`ccx combo list`, check spelling and case, and confirm your management command wrote to the same
+running CodexCommander instance that receives model requests.
 
 ### Why do I get `combo_unavailable`?
 

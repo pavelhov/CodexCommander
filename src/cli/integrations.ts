@@ -13,8 +13,8 @@ import {
 } from "./runtime-api";
 
 const CLAUDE_USAGE = `Usage:
-  ocx claude config [status] [--json]
-  ocx claude config set [--enabled <on|off>] [--auth-mode <auto|proxy|subscription>]
+  ccx claude config [status] [--json]
+  ccx claude config set [--enabled <on|off>] [--auth-mode <auto|proxy|subscription>]
       [--system-env <on|off>] [--fast-mode <on|off>] [--auto-context <on|off>]
       [--compact-window <tokens|default>] [--inject-agents <on|off>]
       [--small-fast-model <id|->] [--model-map <from=to,from=to|->]
@@ -22,16 +22,16 @@ const CLAUDE_USAGE = `Usage:
       [--vision-model <id|->] [--vision-backend <openai|anthropic|->] [--json]`;
 
 const GROK_USAGE = `Usage:
-  ocx grok [status] [--json]
-  ocx grok <exclude|include|set> <model,model...> [--json]
-  ocx grok clear [--json]
-  ocx grok apply [--json]`;
+  ccx grok [status] [--json]
+  ccx grok <exclude|include|set> <model,model...> [--json]
+  ccx grok clear [--json]
+  ccx grok apply [--json]`;
 
 const CLIENT_USAGE = `Usage:
-  ocx integration client [status] [--client <id>] [--json]
-  ocx integration client <enable|disable> --client <id> [--json]
-  ocx integration client history [--client <id>] [--json]
-  ocx integration client restore --op <opId> [--confirm-drift] [--json]`;
+  ccx integration client [status] [--client <id>] [--json]
+  ccx integration client <enable|disable> --client <id> [--json]
+  ccx integration client history [--client <id>] [--json]
+  ccx integration client restore --op <opId> [--confirm-drift] [--json]`;
 
 function parseMap(raw: string): Record<string, string> {
   if (raw === "-") return {};

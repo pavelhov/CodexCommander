@@ -20,7 +20,7 @@ export type StoredAccountQuota = {
   updatedAt: number;
 };
 
-/** Disk snapshot under OPENCODEX_HOME — usage percents only (no emails/tokens). */
+/** Disk snapshot under CODEXCOMMANDER_HOME — usage percents only (no emails/tokens). */
 const QUOTA_CACHE_FILENAME = "codex-quota-cache.json";
 /** Keep last-known bars across restarts; WHAM still refreshes on TTL in live/prime paths. */
 const QUOTA_DISK_MAX_AGE_MS = 6 * 60 * 60_000;
@@ -463,7 +463,7 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
   // - 기존 구현 및 제약 조건: primary meant weekly, and older responses omit limit_window_seconds.
   // - 검토한 주요 대안: exact-duration matching, plan-specific mapping, and a duration lower bound.
   // - 선택한 방식: only an explicit primary duration of at least 28 days changes it to monthly.
-  // - 다른 대안 대신 이 방식을 선택한 이유: it accepts calendar-month variance and preserves legacy payloads.
+  // - 다른 대안 대신 이 방식을 선택한 이유: it accepts calendar-month variance and duration-less payloads.
   // - 장점, 단점 및 영향: Team monthly quotas classify correctly; unknown durations remain weekly by design.
   const weeklyPercent = primaryIsMonthly ? secondaryPercent : primaryPercent ?? secondaryPercent;
   const weeklyResetAt = primaryIsMonthly

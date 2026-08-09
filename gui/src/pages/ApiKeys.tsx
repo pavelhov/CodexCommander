@@ -16,7 +16,6 @@ import { DataSurfaceSkeleton } from "../components/data-surface";
 import ApiKeysWorkspace from "../components/apikeys-workspace/ApiKeysWorkspace";
 import {
   DEFAULT_ENDPOINTS,
-  deriveApiEndpoints,
   isApiAuthMatrix,
   isApiKeyUsage,
   type ApiEndpointInfo,
@@ -35,7 +34,6 @@ interface KeysResponse {
   attributionSince?: string;
   historyTruncated?: boolean;
   authMatrix?: unknown;
-  endpoint?: string;
   baseUrl?: string;
   responsesEndpoint?: string;
   chatCompletionsEndpoint?: string;
@@ -73,7 +71,14 @@ function seedEndpointsFromApiBase(apiBase: string): ApiEndpointInfo {
   try {
     const url = new URL(trimmed);
     if (!url.host) return DEFAULT_ENDPOINTS;
-    return deriveApiEndpoints(`${trimmed}/v1/responses`);
+    const baseUrl = `${trimmed}/v1`;
+    return {
+      baseUrl,
+      responses: `${baseUrl}/responses`,
+      chatCompletions: `${baseUrl}/chat/completions`,
+      messages: `${baseUrl}/messages`,
+      models: `${baseUrl}/models`,
+    };
   } catch {
     return DEFAULT_ENDPOINTS;
   }
@@ -97,8 +102,8 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
   // v2: a v1 session entry has no auth matrix, and defaulting that to [] would
   // turn stale client state into an apparently authoritative empty auth table.
-  const keysCacheKey = `ocx.apikeys.list.v2:${apiBase}`;
-  const modelsCacheKey = `ocx.apikeys.models.v1:${apiBase}`;
+  const keysCacheKey = `ccx.apikeys.list.v2:${apiBase}`;
+  const modelsCacheKey = `ccx.apikeys.models.v1:${apiBase}`;
   const keysResourceKey = `api-keys:${apiBase}`;
   const modelsResourceKey = `api-models:${apiBase}`;
   // A cache entry is arbitrary parsed JSON. Trusting it would reintroduce exactly
@@ -125,18 +130,17 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
     const rows = data.keys ?? [];
     if (rows.some(key => !isApiKeyUsage(key.usage))) throw new Error(t("api.keysLoadFailed"));
     const validatedKeys = rows as ApiKeyEntry[];
-    const derived = deriveApiEndpoints(data.endpoint ?? "");
     const next: CachedKeysShape = {
       // Validate rather than coerce. A missing or malformed `usage` used to
       // become zeroes, which says "used zero times" about data we could not
       // read — and every reader downstream would believe it.
       keys: validatedKeys,
       endpoints: {
-        baseUrl: data.baseUrl ?? derived.baseUrl,
-        responses: data.responsesEndpoint ?? data.endpoint ?? DEFAULT_ENDPOINTS.responses,
-        chatCompletions: data.chatCompletionsEndpoint ?? derived.chatCompletions,
-        messages: data.messagesEndpoint ?? derived.messages,
-        models: data.modelsEndpoint ?? derived.models,
+        baseUrl: data.baseUrl ?? DEFAULT_ENDPOINTS.baseUrl,
+        responses: data.responsesEndpoint ?? DEFAULT_ENDPOINTS.responses,
+        chatCompletions: data.chatCompletionsEndpoint ?? DEFAULT_ENDPOINTS.chatCompletions,
+        messages: data.messagesEndpoint ?? DEFAULT_ENDPOINTS.messages,
+        models: data.modelsEndpoint ?? DEFAULT_ENDPOINTS.models,
       },
       claudeCodeEnabled: data.claudeCodeEnabled !== false,
       ...(data.attributionSince ? { attributionSince: data.attributionSince } : {}),
@@ -359,7 +363,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
           "Content-Type": "application/json",
           // The one header every data-plane endpoint accepts, so a pass here
           // means something on a remote bind too.
-          "x-opencodex-api-key": newKey,
+          "x-codexcommander-api-key": newKey,
         },
         body: JSON.stringify(request.body),
       });
@@ -392,7 +396,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
       </div>
       <p className="page-sub">
         {subtitleParts[0]}
-        <code>x-opencodex-api-key</code>
+        <code>x-codexcommander-api-key</code>
         {subtitleParts[1]}
       </p>
 

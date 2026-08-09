@@ -54,7 +54,7 @@ const DEFAULT_INTERVAL_MS = 60_000;
 const DEFAULT_WARN_THRESHOLD_BYTES = 4 * 1024 ** 3; // 4 GiB
 const DEFAULT_RING_SIZE = 360; // ≈6h at 60s
 const WARN_INTERVAL_MS = 30 * 60_000;
-const DOCS_URL = "https://opencodex.me/troubleshooting/windows-memory/";
+const DOCS_URL = "https://github.com/pavelhov/CodexCommander/blob/main/docs-site/src/content/docs/troubleshooting/windows-memory.md";
 
 let active: MemoryWatchdog | null = null;
 
@@ -135,7 +135,7 @@ export function startMemoryWatchdog(opts?: {
       lastWarnAt = now();
       const observedMb = Math.round(s.observedBytes / (1024 * 1024));
       const thresholdMb = Math.round(warnThresholdBytes / (1024 * 1024));
-      warn(`⚠️  opencodex observed memory ${observedMb}MB (${s.observedMetric}) exceeds the ${thresholdMb}MB watch threshold. On Windows this is usually the upstream Bun runtime memory issue — see ${DOCS_URL}`);
+      warn(`⚠️  CodexCommander observed memory ${observedMb}MB (${s.observedMetric}) exceeds the ${thresholdMb}MB watch threshold. On Windows this is usually the upstream Bun runtime memory issue — see ${DOCS_URL}`);
     }
   };
 

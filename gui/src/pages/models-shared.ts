@@ -41,24 +41,18 @@ export interface ModelRow {
 }
 
 export interface ProviderContextCapsResponse {
-  cap?: number;
-  value?: number;
-  caps?: Record<string, number>;
+  value: number;
+  caps: Record<string, number>;
 }
 
 export interface V2Status {
   enabled: boolean;
   agentsMaxThreadsConflict: boolean;
-  maxConcurrentThreadsPerSession?: number | null;
-  multiAgentMode?: "v1" | "default" | "v2";
+  maxConcurrentThreadsPerSession: number | null;
+  multiAgentMode: "v1" | "default" | "v2";
 }
 
-export interface ShadowCallData {
-  enabled: boolean;
-  model: string;
-  /** Source models the runtime actually intercepts. Older runtimes omit it. */
-  sourceModels?: string[];
-}
+export type { ShadowCallData } from "./shadow-call-source";
 
 export type ContextPolicyState = "uncapped" | "limited" | "mixed";
 
@@ -100,9 +94,8 @@ export const THREAD_OPTIONS = [4, 8, 16, 32, 64, 128, 256, 500, 1000];
 export const THREAD_OPTION_SET = new Set(THREAD_OPTIONS);
 export const PAGE = 60; // rows rendered per provider before a "show more"
 
-export const COLLAPSED_KEY_V2 = "ocx-models-collapsed:v2";
-export const COMBOS_OPEN_KEY_V1 = "ocx-models-combos-open:v1";
-export const COMBOS_OPEN_KEY_LEGACY = "ocx-models-combos-open";
+export const COLLAPSED_KEY_V2 = "ccx-models-collapsed:v2";
+export const COMBOS_OPEN_KEY_V1 = "ccx-models-combos-open:v1";
 
 /** Compact token display (350k) — unit is technical, not prose. */
 export function fmtK(n: number): string {
@@ -160,7 +153,7 @@ export function writeCollapsedProviders(collapsed: Set<string>, storage: Storage
 
 export function readCombosOpen(storage: StorageLike = localStorage): boolean {
   try {
-    const saved = storage.getItem(COMBOS_OPEN_KEY_V1) ?? storage.getItem(COMBOS_OPEN_KEY_LEGACY);
+    const saved = storage.getItem(COMBOS_OPEN_KEY_V1);
     return saved === "1";
   } catch {
     return false;

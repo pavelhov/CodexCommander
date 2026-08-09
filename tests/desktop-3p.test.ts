@@ -9,8 +9,6 @@ import {
   desktop3pAlias,
   generateDesktop3pConfig,
   generateDesktop3pModels,
-  legacyDesktop3pAlias,
-  parseDesktop3pModeArgs,
   resolveDesktop3pConfigLibraryPath,
   resolveDesktop3pAlias,
 } from "../src/claude/desktop-3p";
@@ -23,7 +21,7 @@ describe("Claude Desktop 3P models", () => {
     // suffix-less path is one Desktop never reads. Branch-by-branch coverage lives in
     // tests/claude-desktop-config-path.test.ts; this pins the public entry point.
     expect(resolveDesktop3pConfigLibraryPath({
-      env: { OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: " /custom/library " },
+      env: { CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR: " /custom/library " },
       platform: "darwin",
       homeDir: "/Users/test",
     })).toBe("/custom/library");
@@ -65,7 +63,6 @@ describe("Claude Desktop 3P models", () => {
 
   test("aliases use the opus-4-8 prefix and never collide with real dateless ids", () => {
     expect(desktop3pAlias("native", "gpt-5.6-sol")).toBe("claude-opus-4-8-ncb");
-    expect(legacyDesktop3pAlias("native", "gpt-5.6-sol")).toBe("claude-opus-4-ncb");
     // Real Anthropic ids pass through untouched (dateless canonical form).
     expect(desktop3pAlias("anthropic", "claude-opus-4-8")).toBe("claude-opus-4-8");
     // Letter-first suffix: can never equal a bare real id or a numeric date suffix.
@@ -123,9 +120,8 @@ describe("Claude Desktop 3P models", () => {
     );
     expect(registry.get("claude-opus-4-8-ncb")).toBe("native/gpt-5.6-sol");
     expect(resolveDesktop3pAlias("claude-opus-4-8-yrf")).toBe("opencode-go/glm-5.2");
-    // Legacy pre-rename aliases still decode (stale Desktop configs).
-    expect(resolveDesktop3pAlias("claude-opus-4-ncb")).toBe("native/gpt-5.6-sol");
-    expect(resolveDesktop3pAlias("claude-opus-4-yrf")).toBe("opencode-go/glm-5.2");
+    expect(resolveDesktop3pAlias("claude-opus-4-ncb")).toBeNull();
+    expect(resolveDesktop3pAlias("claude-opus-4-yrf")).toBeNull();
     expect(resolveDesktop3pAlias("claude-opus-4-8-unknown")).toBeNull();
   });
 
@@ -147,7 +143,7 @@ describe("Claude Desktop 3P models", () => {
     }
   });
 
-  test("generates a static config by default (list overrides discovery — no merge, devlog 138)", () => {
+  test("generates a static config by default (list overrides discovery — no merge, implementation contract)", () => {
     const config = generateDesktop3pConfig(
       4096,
       ["gpt-5.6-sol"],
@@ -176,14 +172,14 @@ describe("Claude Desktop 3P models", () => {
     expect(resolveDesktop3pAlias("claude-opus-4-8-ncb")).toBe("native/gpt-5.6-sol");
   });
 
-  test("hybrid mode keeps the static list AND discovery on (CCR-defensive)", () => {
+  test("hybrid mode keeps the static list and discovery on", () => {
     const config = generateDesktop3pConfig(4096, ["gpt-5.6-sol"], [], "test-key", "hybrid");
     const reparsed = JSON.parse(JSON.stringify(config));
     expect(reparsed.modelDiscoveryEnabled).toBe(true);
     expect(reparsed.inferenceModels.map((m: { name: string }) => m.name)).toEqual(["claude-opus-4-8-ncb"]);
   });
 
-  test("generates a discovery-only config with --discovery-only", () => {
+  test("generates a discovery-only config", () => {
     const config = generateDesktop3pConfig(4096, ["gpt-5.6-sol"], [], "test-key", "discovery");
     const reparsed = JSON.parse(JSON.stringify(config));
     expect(reparsed.modelDiscoveryEnabled).toBe(true);
@@ -191,18 +187,7 @@ describe("Claude Desktop 3P models", () => {
     expect(resolveDesktop3pAlias("claude-opus-4-8-ncb")).toBe("native/gpt-5.6-sol");
   });
 
-  test("parses desktop mode flags with mutual exclusion and unknown-flag rejection", () => {
-    expect(parseDesktop3pModeArgs([])).toEqual({ mode: "static" });
-    expect(parseDesktop3pModeArgs(["--static"])).toEqual({ mode: "static" });
-    expect(parseDesktop3pModeArgs(["--hybrid"])).toEqual({ mode: "hybrid" });
-    expect(parseDesktop3pModeArgs(["--discovery-only"])).toEqual({ mode: "discovery" });
-    expect("error" in parseDesktop3pModeArgs(["--static", "--discovery-only"])).toBe(true);
-    expect("error" in parseDesktop3pModeArgs(["--hybrid", "--static"])).toBe(true);
-    expect(parseDesktop3pModeArgs(["--static", "--static"])).toEqual({ mode: "static" });
-    expect("error" in parseDesktop3pModeArgs(["--wat"])).toBe(true);
-  });
-
-  test("generates a valid static gateway config with --static", () => {
+  test("generates a valid static gateway config", () => {
     const config = generateDesktop3pConfig(
       4096,
       ["gpt-5.6-sol"],
@@ -222,9 +207,8 @@ describe("Claude Desktop 3P models", () => {
       "claude-opus-4-8-ncb",
       "claude-opus-4-6",
     ]);
-    // Static generation also refreshes the decode registry (new + legacy aliases).
+    // Static generation also refreshes the decode registry.
     expect(resolveDesktop3pAlias("claude-opus-4-8-ncb")).toBe("native/gpt-5.6-sol");
-    expect(resolveDesktop3pAlias("claude-opus-4-ncb")).toBe("native/gpt-5.6-sol");
   });
 
   test("renders persisted family/date assignments and installs their decode registry", () => {
@@ -242,7 +226,7 @@ describe("Claude Desktop 3P models", () => {
   });
 
   test("backs up owned config and preserves old bytes when atomic replacement fails", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-desktop-atomic-"));
+    const dir = mkdtempSync(join(tmpdir(), "ccx-desktop-atomic-"));
     const path = join(dir, "owned.json");
     try {
       writeFileSync(path, "old bytes\n");
@@ -259,24 +243,4 @@ describe("Claude Desktop 3P models", () => {
     }
   });
 
-  test("legacy hash collisions stay bound to the same route when default ordering changes", () => {
-    const warning = spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const routed = [
-        { provider: "test", id: "model-123" },
-        { provider: "test", id: "model-155" },
-      ];
-      let profile = reconcileDesktopProfile(undefined, routed.map(model => ({
-        route: `${model.provider}/${model.id}`,
-        label: model.id,
-      })));
-      profile = setDesktopFamilyDefault(profile, "opus", "test/model-155");
-      generateDesktop3pModels([], routed, profile);
-      expect(legacyDesktop3pAlias("test", "model-123")).toBe(legacyDesktop3pAlias("test", "model-155"));
-      expect(resolveDesktop3pAlias(legacyDesktop3pAlias("test", "model-123"))).toBe("test/model-123");
-      expect(warning.mock.calls.flat().join(" ")).toContain("stays bound to test/model-123");
-    } finally {
-      warning.mockRestore();
-    }
-  });
 });

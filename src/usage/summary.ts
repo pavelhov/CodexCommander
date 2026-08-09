@@ -23,7 +23,7 @@ export interface UsageSummaryTotals {
   reasoningOutputTokens: number;
   totalTokens: number;
   coverageRatio: number;
-  /** Display-time estimated cost in USD for the filtered window (WP6, devlog 004).
+  /** Display-time estimated cost in USD for the filtered window (WP6, implementation contract).
    *  Sums per-request estimateRequestCost / per-attempt combo costs; requests whose
    *  price is unmatched are excluded from the sum and counted separately. */
   estimatedCostUsd: number;
@@ -255,15 +255,8 @@ function addTokens(
   if (!entry.usage) return;
   totals.inputTokens += entry.usage.inputTokens;
   totals.outputTokens += entry.usage.outputTokens;
-  // Prefer the explicit read/write split; legacy claude-route rows stored read+write
-  // combined in cachedInputTokens with only the creation split present (devlog 070),
-  // so recover reads by subtracting the write share for those rows.
   const creation = entry.usage.cacheCreationInputTokens;
-  const read = typeof entry.usage.cacheReadInputTokens === "number"
-    ? entry.usage.cacheReadInputTokens
-    : typeof entry.usage.cachedInputTokens === "number" && typeof creation === "number"
-      ? Math.max(0, entry.usage.cachedInputTokens - creation)
-      : entry.usage.cachedInputTokens;
+  const read = entry.usage.cacheReadInputTokens;
   if (typeof read === "number") {
     totals.cachedInputTokens += read;
     totals.cacheReadInputTokens += read;
@@ -558,10 +551,7 @@ export function summarizeUsage(
     if (since !== null && entry.timestamp < since) return false;
     if (surface === "claude") return entry.surface === "claude" || entry.surface === "claude-desktop";
     if (surface === "grok") return entry.surface === "grok";
-    // Codex = the historical unlabelled bucket. Before the grok tag existed every
-    // non-Claude turn landed here, and `surface !== "claude"` also swallowed
-    // claude-desktop — disjoint predicates fix both.
-    if (surface === "codex") return entry.surface === undefined;
+    if (surface === "codex") return entry.surface === "codex";
     return true;
   });
   const totals = blankTotals();

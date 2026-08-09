@@ -1,31 +1,5 @@
-# Default reviewer
+# Single-owner repository: every path defaults to the owner. CODEOWNERS here
+# requests review; it is not a merge gate. Merge requirements live in the
+# GitHub ruleset on `main`, which must list repository admins as Always-allow
+# bypass actors (see MAINTAINERS.md).
 * @pavelhov
-
-# High-impact runtime behavior
-/src/adapters/ @lidge-jun @Ingwannu @Wibias
-/src/providers/ @lidge-jun @Ingwannu @Wibias
-/src/codex/ @lidge-jun @Ingwannu @Wibias
-/src/server/ @lidge-jun @Ingwannu @Wibias
-
-# Repository automation and release security
-/.github/ @pavelhov
-/scripts/release.ts @pavelhov
-/scripts/build-macos-app.sh @pavelhov
-/scripts/package-macos-release.sh @pavelhov
-/package.json @pavelhov
-/bun.lock @pavelhov
-
-# Authentication, credentials, and management API
-/src/oauth/ @pavelhov
-/src/codex/auth-context.ts @pavelhov
-/src/server/auth-cors.ts @pavelhov
-/src/server/management-api.ts @pavelhov
-/app/Sources/MenuBarCore/Discovery.swift @pavelhov
-/app/Sources/MenuBarCore/ProxyClient.swift @pavelhov
-/app/Info.plist @pavelhov
-
-# Governance and security policy
-/AGENTS.md @pavelhov
-**/AGENTS.md @pavelhov
-/MAINTAINERS.md @pavelhov
-/SECURITY.md @pavelhov

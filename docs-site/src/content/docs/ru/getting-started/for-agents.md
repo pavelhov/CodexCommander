@@ -1,6 +1,6 @@
 ---
 title: Быстрый старт для агентов
-description: Установите и используйте opencodex из агентного или сценарного терминала.
+description: Установите и используйте CodexCommander из агентного или сценарного терминала.
 ---
 
 Эта страница предназначена для ИИ-агента или пользователя, который работает из терминала через
@@ -8,52 +8,55 @@ description: Установите и используйте opencodex из аг�
 сценарий для человека, откройте [Быстрый старт](/getting-started/quickstart/). Дашборд остаётся
 доступен для интерактивной настройки; см. [Веб-дашборд](/guides/web-dashboard/).
 
-## Настройте opencodex
+## Настройте CodexCommander
 
-Установите опубликованный пакет и убедитесь, что `ocx` доступен в `PATH`:
+Используйте существующий исходный checkout. Пакет в реестре сейчас не опубликован:
 
 ```bash
-npm install -g @bitkyc08/opencodex
-ocx --version
+bun install
+bun run build:gui
+bun run src/cli/index.ts --version
 ```
 
 Выберите один из способов запуска прокси:
 
 ```bash
 # Foreground: blocks this terminal until stopped.
-ocx start
+bun run src/cli/index.ts start
 
 # Background: installs or updates the service, then starts it.
-ocx service
+bun run src/cli/index.ts service
 ```
 
-Запустите `ocx init` в интерактивном терминале. Если `ocx start` уже занимает передний план,
+Запустите `ccx init` в интерактивном терминале. Если `ccx start` уже занимает передний план,
 используйте второй терминал:
 
 ```bash
-ocx init
+bun run src/cli/index.ts init
 ```
 
-Мастер записывает `$OPENCODEX_HOME/config.json` (обычно `~/.opencodex/config.json`). Он также может
+Далее любую команду `ccx <args>` в этом checkout можно выполнить как `bun run src/cli/index.ts <args>`.
+
+Мастер записывает `$CODEXCOMMANDER_HOME/config.json` (обычно `~/.codexcommander/config.json`). Он также может
 вставить адрес прокси в `config.toml` Codex и установить необязательный shim автозапуска Codex.
-`ocx init` никогда не запускает прокси. Для полностью неинтерактивной настройки вместо мастера
-настройте провайдеров через `ocx provider add`, как показано ниже.
+`ccx init` никогда не запускает прокси. Для полностью неинтерактивной настройки вместо мастера
+настройте провайдеров через `ccx provider add`, как показано ниже.
 
 ## Проверьте headless-установку
 
 Используйте эти read-only проверки в сценариях и агентных запусках:
 
 ```bash
-ocx status
-ocx doctor
-ocx health --json
+ccx status
+ccx doctor
+ccx health --json
 ```
 
-`ocx status` сообщает состояние прокси и службы. `ocx doctor` диагностирует локальную среду,
-сеть, рантайм Codex и проблемы со здоровьем аккаунтов. `ocx health` завершаетcя с кодом `0`,
+`ccx status` сообщает состояние прокси и службы. `ccx doctor` диагностирует локальную среду,
+сеть, рантайм Codex и проблемы со здоровьем аккаунтов. `ccx health` завершаетcя с кодом `0`,
 когда прокси исправен, и с `1` в противном случае; `--json` возвращает структурированный вывод.
 
-Команды, работающие через management API, например `ocx combo set`, обращаются к живому прокси.
+Команды, работающие через management API, например `ccx combo set`, обращаются к живому прокси.
 Если живой прокси не найден или API недоступен, CLI трактует это как ошибку `503` и завершаетcя с
 ненулевым кодом. Перед повторной попыткой запустите прокси в foreground или как фоновую службу.
 Полные поверхности команд и endpoint'ов описаны в [справочнике CLI](/reference/cli/) и
@@ -65,20 +68,20 @@ Registry-провайдеры можно добавлять по имени. Н�
 API-ключом и делает его провайдером по умолчанию:
 
 ```bash
-ocx provider add anthropic-apikey \
+ccx provider add anthropic-apikey \
   --api-key "$ANTHROPIC_API_KEY" \
   --set-default
 ```
 
-`ocx provider add` записывает локальную конфигурацию. Добавьте `--sync`, если живой прокси уже
-работает и вы хотите сразу синхронизировать модели в Codex; иначе позже выполните `ocx sync`.
+`ccx provider add` записывает локальную конфигурацию. Добавьте `--sync`, если живой прокси уже
+работает и вы хотите сразу синхронизировать модели в Codex; иначе позже выполните `ccx sync`.
 Пользовательские провайдеры, которых нет в registry, требуют одновременно `--adapter` и
 `--base-url`.
 
 Когда все целевые провайдеры настроены и прокси запущен, создайте failover-combo:
 
 ```bash
-ocx combo set main \
+ccx combo set main \
   --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol \
   --strategy failover
 ```
@@ -90,14 +93,14 @@ ocx combo set main \
 ## Удалённые и LAN-привязки
 
 Привязка к loopback по умолчанию не требует API-токена. Для не-loopback-привязки, например
-`0.0.0.0`, требуется `OPENCODEX_API_AUTH_TOKEN`; без него прокси откажется запускаться. Задайте
-эту переменную перед `ocx start` или перед `ocx service install`, чтобы служба тоже её получила:
+`0.0.0.0`, требуется `CODEXCOMMANDER_API_AUTH_TOKEN`; без него прокси откажется запускаться. Задайте
+эту переменную перед `ccx start` или перед `ccx service install`, чтобы служба тоже её получила:
 
 ```bash
-export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
-ocx service install
+export CODEXCOMMANDER_API_AUTH_TOKEN="your-secret-token"
+ccx service install
 ```
 
 После этого клиенты должны аутентифицировать запросы как к management API, так и к модели.
-Прежде чем открывать opencodex за пределы локальной машины, прочитайте правила удалённого доступа
+Прежде чем открывать CodexCommander за пределы локальной машины, прочитайте правила удалённого доступа
 в разделе [Конфигурация](/reference/configuration/).

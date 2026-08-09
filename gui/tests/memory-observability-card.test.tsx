@@ -46,9 +46,22 @@ const MEMORY_PAYLOAD = {
   arrayBuffers: 1_048_576,
   observedBytes: 8_388_608,
   observedMetric: "external",
+  jscHeap: null,
   activeTurnCount: 2,
   isDraining: false,
-  responseState: { count: 3, totalBytes: 5_242_880, largestBytes: 1_048_576, oldestAgeMs: 60_000 },
+  responseState: {
+    count: 3,
+    residentCount: 3,
+    spillStubCount: 0,
+    tombstoneCount: 0,
+    totalBytes: 5_242_880,
+    spillPayloadBytes: 0,
+    largestBytes: 1_048_576,
+    oldestAgeMs: 60_000,
+    spillWrites: 0,
+    spillWriteFailures: 0,
+    spillReadFailures: 0,
+  },
   watchdog: {
     warnThresholdBytes: 4 * 1024 ** 3,
     lastWarnAt: null,
@@ -186,18 +199,19 @@ test("Drain & restart posts /api/system/restart after confirm", async () => {
   await act(async () => { root.unmount(); });
 });
 
-test("older memory payloads without activeTurnCount hide the restart action", async () => {
-  const legacy = { ...MEMORY_PAYLOAD } as Record<string, unknown>;
-  delete legacy.activeTurnCount;
-  delete legacy.isDraining;
+test("an incomplete successful memory response is rejected as unavailable", async () => {
+  const incomplete = { ...MEMORY_PAYLOAD } as Record<string, unknown>;
+  delete incomplete.activeTurnCount;
+  delete incomplete.isDraining;
 
   const { root, container } = await mountCard((url) => {
     if (url.includes("/api/startup-health")) return Response.json({ protection: "none" });
-    if (url.includes("/api/system/memory")) return Response.json(legacy);
+    if (url.includes("/api/system/memory")) return Response.json(incomplete);
     return new Response(null, { status: 404 });
   });
 
   expect(container.textContent ?? "").not.toContain("Drain & restart");
+  expect(container.textContent ?? "").not.toContain("MiB");
 
   await act(async () => { root.unmount(); });
 });

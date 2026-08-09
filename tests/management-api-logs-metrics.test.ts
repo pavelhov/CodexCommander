@@ -6,9 +6,9 @@ import {
   getRequestLogEntries,
   type RequestLogEntry,
 } from "../src/server/request-log";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
-const config = { providers: [] } as unknown as OcxConfig;
+const config = { providers: [] } as unknown as CodexCommanderConfig;
 
 afterEach(() => clearRequestLogsForTests());
 
@@ -138,13 +138,12 @@ describe("GET /api/logs display metrics", () => {
     expect(dto!.attempts[1].displayMetrics.cost).toEqual({ kind: "unavailable", reason: "price_unmatched" });
   });
 
-  test("legacy recoverable cache row is priced, not invalid_cache_breakdown", async () => {
-    // canonical reading R=60,W=20 contradicts I=70; legacy retry recovers R=40,W=20.
+  test("contradictory cache detail is invalid_cache_breakdown", async () => {
     addRequestLog(baseEntry({
       usage: { inputTokens: 70, outputTokens: 10, cachedInputTokens: 60, cacheCreationInputTokens: 20 },
     }));
     const [dto] = await readLogs();
-    expect(dto!.displayMetrics.cost.kind).toBe("value");
+    expect(dto!.displayMetrics.cost).toEqual({ kind: "unavailable", reason: "invalid_cache_breakdown" });
   });
 
   test("doubly-contradictory cache row is invalid_cache_breakdown", async () => {

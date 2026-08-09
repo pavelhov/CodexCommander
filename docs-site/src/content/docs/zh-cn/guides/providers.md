@@ -1,9 +1,9 @@
 ---
 title: 提供商
-description: opencodex 进行身份验证并与 LLM 提供商通信的所有方式——OAuth、API 密钥、ChatGPT 转发以及本地。
+description: CodexCommander 进行身份验证并与 LLM 提供商通信的所有方式——OAuth、API 密钥、ChatGPT 转发以及本地。
 ---
 
-**提供商（provider）** 是一个上游 LLM 端点，加上访问它的方式：一个 adapter、一个基础 URL、一种认证模式，以及一个可选的模型列表。提供商配置位于 `~/.opencodex/config.json` 的 `providers` 下。
+**提供商（provider）** 是一个上游 LLM 端点，加上访问它的方式：一个 adapter、一个基础 URL、一种认证模式，以及一个可选的模型列表。提供商配置位于 `~/.codexcommander/config.json` 的 `providers` 下。
 
 ## OpenAI 账户模式
 
@@ -35,10 +35,6 @@ Codex 登录使用 Pool 模式时，Providers 概览显示整个账户池的已�
 各账户状态和路由控制请参阅
 [Codex Auth 账户池](/zh-cn/guides/web-dashboard/#codex-auth-and-account-pools)。
 
-shipped v1 配置自动迁移到 marker 2 的单一选项行。原配置只保留一次到
-`~/.opencodex/config.json.pre-openai-tiers-v2.bak`；恢复命令：
-`cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`。
-
 ## 认证模式
 
 提供商配置支持三种 `authMode`，默认值为 `key`。内置注册表还会单独标记本地预设；这类预设通常会
@@ -48,7 +44,7 @@ shipped v1 配置自动迁移到 marker 2 的单一选项行。原配置只保�
 | --- | --- | --- |
 | `key` | 发送你的 API 密钥（`Authorization: Bearer …`，或按 adapter 使用 `x-api-key` / `api-key`）。密钥可以是字面值，也可以是 `${ENV_VAR}` 引用。 | 大多数提供商。 |
 | `forward` | 将**你传入的 Codex 认证请求头**原样转发给提供商——不存储任何密钥。这就是 ChatGPT 登录的透传方式。 | OpenAI（`openai-responses` adapter）。 |
-| `oauth` | 读取已存储的 OAuth 访问令牌作为 bearer 密钥，并遵循凭据所有权。OpenCodex 自有凭据会在过期前刷新；已链接的 Grok/Kimi CLI 凭据以只读方式采用，并仍由原生 CLI 所有。 | xAI、Anthropic、Kimi、Kiro、Google Antigravity、Cursor。 |
+| `oauth` | 读取已存储的 OAuth 访问令牌作为 bearer 密钥，并遵循凭据所有权。CodexCommander 自有凭据会在过期前刷新；已链接的 Grok/Kimi CLI 凭据以只读方式采用，并仍由原生 CLI 所有。 | xAI、Anthropic、Kimi、Kiro、Google Antigravity、Cursor。 |
 
 [`retryOn429`](/zh-cn/reference/configuration/)（同 key 的 429 重试）仅适用于 API-key 提供商
 （`authMode: "key"`）。OAuth、forward 与本地预设均被排除——同一 token 绝不可重放，本地运行时
@@ -76,37 +72,37 @@ ChatGPT 透传目录也会加入 GPT-5.6 Sol/Terra/Luna 的裸 slug（`gpt-5.6-s
 ## 2. 账号登录（OAuth）
 
 有七个提供商预设使用 OAuth 登录，另加通过实验性非官方设备流桥接的 GitHub Copilot。
-opencodex 会把凭据存入 `~/.opencodex/auth.json`。OpenCodex 自有凭据会自动刷新。链接已登录的
-Grok 或 Kimi CLI 会话时，opencodex 只读采用其当前访问代际，更新责任仍由原生 CLI 承担。
+CodexCommander 会把凭据存入 `~/.codexcommander/auth.json`。CodexCommander 自有凭据会自动刷新。链接已登录的
+Grok 或 Kimi CLI 会话时，CodexCommander 只读采用其当前访问代际，更新责任仍由原生 CLI 承担。
 登录 CLI 也接受 `chatgpt`：它会获取一份 ChatGPT 凭据，并创建一个 `forward` 模式的提供商条目。
 
 ```bash
-ocx login xai          # xAI Grok
-ocx login anthropic    # Anthropic Claude (Pro/Max)
-ocx login kimi         # Moonshot Kimi
-ocx login kiro         # 导入 kiro-cli 凭据（支持令牌回退）
-ocx login google-antigravity
-ocx login cursor       # 独立的 Cursor PKCE 登录
-ocx login command-code # Command Code 浏览器 OAuth（或导入 ~/.commandcode/auth.json）
-ocx login github-copilot  # GitHub 设备流 → Copilot 令牌（Copilot Pro/Business）
-ocx login chatgpt      # 独立的 ChatGPT OAuth 登录
-ocx logout <provider>
+ccx login xai          # xAI Grok
+ccx login anthropic    # Anthropic Claude (Pro/Max)
+ccx login kimi         # Moonshot Kimi
+ccx login kiro         # 导入 kiro-cli 凭据（支持令牌回退）
+ccx login google-antigravity
+ccx login cursor       # 独立的 Cursor PKCE 登录
+ccx login command-code # Command Code 浏览器 OAuth（或导入 ~/.commandcode/auth.json）
+ccx login github-copilot  # GitHub 设备流 → Copilot 令牌（Copilot Pro/Business）
+ccx login chatgpt      # 独立的 ChatGPT OAuth 登录
+ccx logout <provider>
 ```
 
 | 提供商 | Adapter | 基础 URL | 备注 |
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://api.x.ai/v1` | 优先使用实时 Grok 目录；回退默认模型为 `grok-4.5`。 |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude 模型；实时模型列表从 `/v1/models` 获取。 |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K3（`k3`，1M 上下文）、固定窗口 `k3-256k`、兼容别名 `k3[1m]`，以及旧版 K2.7/K2.6/K2.5 编程模型。 |
-| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 首次登录会导入已安装并已登录的 Kiro CLI 会话（Unix 使用 `curl -fsSL https://cli.kiro.dev/install | bash`；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1' | iex`；然后运行 `kiro-cli login`）。**添加账户**会先退出 `kiro-cli`，再启动新的浏览器登录，从而切换 `kiro-cli` 自身使用的账户，并保存账户范围的配置文件元数据。现有 OpenCodex 账户会保留；如果取消或失败，则恢复之前的 `kiro-cli` 会话。 |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K3（`k3`，1M 上下文）、固定窗口 `k3-256k`、兼容别名 `k3[1m]`，以及 K2.7/K2.6/K2.5 编程模型。 |
+| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 首次登录会导入已安装并已登录的 Kiro CLI 会话（Unix 使用 `curl -fsSL https://cli.kiro.dev/install | bash`；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1' | iex`；然后运行 `kiro-cli login`）。**添加账户**会先退出 `kiro-cli`，再启动新的浏览器登录，从而切换 `kiro-cli` 自身使用的账户，并保存账户范围的配置文件元数据。现有 CodexCommander 账户会保留；如果取消或失败，则恢复之前的 `kiro-cli` 会话。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 通过 Cloud Code Assist 协议使用 Google OAuth。由于 CCA 不提供通用 `/models` 端点，因此使用维护中的六模型静态目录。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 实验性 PKCE 登录、HTTP/2 传输和按账号筛选的模型发现。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 实验性。GitHub 设备流 + `copilot_internal` 交换（VS Code OAuth 客户端）。需要有效的 Copilot 订阅；不是官方第三方 API。 |
 
-对于规范的 Kimi Coding Plan 预设（`kimi` 账号登录和 `kimi-code` API key），opencodex
+对于规范的 Kimi Coding Plan 预设（`kimi` 账号登录和 `kimi-code` API key），CodexCommander
 只会把调用方提供的稳定 `prompt_cache_key` 转发到 Chat Completions 请求，绝不自行生成。Kimi
 文档要求使用稳定的会话/任务 key 来提高 Code Plan 缓存命中率；没有 key 的请求仍保持不带 key。
-若已 opt-in 的上游拒绝该字段，opencodex 不会删除字段后重试，也不会改动已保存配置；其他
+若已 opt-in 的上游拒绝该字段，CodexCommander 不会删除字段后重试，也不会改动已保存配置；其他
 provider 仍保持 deny-by-default。
 
 你也可以从 [web 仪表盘](/zh-cn/guides/web-dashboard/) 启动 OAuth。
@@ -116,33 +112,33 @@ provider 仍保持 deny-by-default。
 OAuth 凭据中带有稳定账号 id 或邮箱的提供商可以保存多个登录。Providers 页面会在下拉列表中显示这些
 账号，允许继续添加，并在不登出其他账号的情况下切换当前账号。只有没有身份信息的 Kimi 凭据会替换
 当前 active slot；Kiro 账户以配置文件 ARN 为键。`chatgpt` 始终只有一个 slot，因为 Codex 账号池使用独立存储。令牌仍保存在
-`~/.opencodex/auth.json` 中；`/api/oauth/accounts` 只返回脱敏后的 metadata。
+`~/.codexcommander/auth.json` 中；`/api/oauth/accounts` 只返回脱敏后的 metadata。
 
 ### Kiro 凭据导入
 
-Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/install | bash` 安装；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1' | iex`；然后先运行 `kiro-cli login`。如果没有 `kiro-cli` 会话，`ocx login kiro` 会回退到粘贴的访问令牌或 `KIRO_ACCESS_TOKEN` 环境变量。
+Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/install | bash` 安装；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1' | iex`；然后先运行 `kiro-cli login`。如果没有 `kiro-cli` 会话，`ccx login kiro` 会回退到粘贴的访问令牌或 `KIRO_ACCESS_TOKEN` 环境变量。
 
-普通的 `ocx login kiro` 导入会以只读方式打开 CLI SQLite 数据库，不修改数据库、WAL 或 SHM。
+普通的 `ccx login kiro` 导入会以只读方式打开 CLI SQLite 数据库，不修改数据库、WAL 或 SHM。
 
 - `KIROCLI_DB_PATH` 用于选择非标准位置的 Kiro CLI SQLite 数据库；指定的数据库必须已经存在。
 - `KIROCLI_TOKEN_KEY` 在存在多个含糊的令牌行时选择确切的 `auth_kv` 行键。缺少选择值时，登录会失败而不会猜测。
 
-导入的凭据会保存到 `~/.opencodex/auth.json`。**添加账户**的回滚是独立流程：恢复之前的快照时会替换数据库，并删除当前的 WAL、SHM 和 journal 边车文件。
+导入的凭据会保存到 `~/.codexcommander/auth.json`。**添加账户**的回滚是独立流程：恢复之前的快照时会替换数据库，并删除当前的 WAL、SHM 和 journal 边车文件。
 
 由于回滚依赖快照，当会话存储已存在但无法捕获时（文件不可读、架构不匹配、令牌选择有歧义），当 `KIROCLI_DB_PATH` / `KIRO_CLI_DB_FILE` 将导入路径指向与活动 CLI 存储不同的位置时，或当主 CLI 数据库没有可识别的令牌行时，**添加账户**会拒绝将 `kiro-cli` 登出。请修复或删除常规 `kiro-cli` 数据路径下的损坏数据库，并取消仅用于导入的选择器后重试。对于完全没有现有 `kiro-cli` 会话的机器，不受影响。
 
 ## 3. API 密钥目录
 
-opencodex 内置 76 个预设：64 个密钥预设、8 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+CodexCommander 内置 76 个预设：64 个密钥预设、8 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 
 **ClinePass** 使用 Cline API 密钥连接[官方订阅目录](https://docs.cline.bot/getting-started/clinepass)和
 [Chat Completions 端点](https://docs.cline.bot/api/chat-completions)。运营主体是
 [Cline 条款](https://cline.bot/tos)所列的 Cline Bot Inc.。
-`cline-pass/cline-pass/kimi-k3` 这样的路由 ID 是预期格式：第一段选择 opencodex 提供商，
+`cline-pass/cline-pass/kimi-k3` 这样的路由 ID 是预期格式：第一段选择 CodexCommander 提供商，
 其余的 `cline-pass/kimi-k3` 是发送到上游的完整模型 slug。用量由账户的滚动 5 小时、每周和
-每月限额共同管理。当前 opencodex 仅公开经过实测的 `low` reasoning 档位；在网关公布或验证更宽
+每月限额共同管理。当前 CodexCommander 仅公开经过实测的 `low` reasoning 档位；在网关公布或验证更宽
 档位之前，更高请求会被限制为 `low`。
 
 **Cline** 使用相同的 API 密钥和端点，按用量计费，可访问 100 多个模型
@@ -201,13 +197,13 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 `opencode-go` 是位于 `https://opencode.ai/zen/go/v1` 的 OpenCode Go 订阅提供商，和
 OpenCode Desktop/CLI 不同。请在 [OpenCode 控制台](https://opencode.ai/console) 创建密钥，然后在
 控制面板的 **Providers** 页面添加 **OpenCode Go**，或用该密钥配置 `opencode-go` 预设。
-OpenCodex 不会读取 OpenCode 认证存储，也不会将此密钥迁移到 Keychain。
+CodexCommander 不会读取 OpenCode 认证存储，也不会将此密钥存入 Keychain。
 
 公开模型目录不能证明密钥有效；保存的密钥只有在使用该活动密钥首次成功推理后才会显示为**已验证**。
 公开上限只是参考值：**$12 / 5 小时**、**$30 / 7 天**、**$60 / 30 天**。这些窗口的本地观测是
 使用量估计，不是实时剩余额度或账单。只有上游明确报告具体限制事件时，才显示权威的限制事件。
 
-内置预设使用 API 密钥，因此 Add Provider 将其归入 **Paid**，而不是账号登录；OpenCodex 不提供
+内置预设使用 API 密钥，因此 Add Provider 将其归入 **Paid**，而不是账号登录；CodexCommander 不提供
 OpenCode Go OAuth 流程。它也不同于 Client Apps 下的 **OpenCode** 客户端和无需密钥的
 **OpenCode Free** 提供商。Add Provider 搜索会同时覆盖 Accounts、Free 和 Paid，所以从任意标签
 搜索 `opencode` 都会按类别显示所有匹配的预设。
@@ -239,7 +235,7 @@ inference key 可从 [Vultr Console](https://my.vultr.com) 的订阅概览复制
 
 **Command Code 发现：**该预设从固定的 Provider API 主机读取 Command Code 的
 `/provider/v1/models` 列表，保留含 `/` 的原生模型 id，并将实时发现限制为 256 KiB 和 256 条原始记录。
-`ocx login command-code` 支持通过浏览器进行 OAuth 登录（现有 Command Code CLI 用户还可选择从
+`ccx login command-code` 支持通过浏览器进行 OAuth 登录（现有 Command Code CLI 用户还可选择从
 `~/.commandcode/auth.json` 导入本地 CLI 凭据）；模型目录按账户隔离，并在登录后从经过认证的发现
 端点获取。聊天请求使用已配置的 bearer 密钥。密钥可在 [Command Code Studio](https://commandcode.ai/studio/) 创建。
 
@@ -274,7 +270,7 @@ dedicated deployment 需要配置为 custom provider。API 密钥可在
 ### A6API 信用额度
 
 使用 `openai-chat`、`authMode: "key"` 以及规范地址 `https://api.a6api.com` 或
-`https://api.a6api.com/v1` 的自定义提供商，会在仪表板和 `ocx account refresh <provider>`
+`https://api.a6api.com/v1` 的自定义提供商，会在仪表板和 `ccx account refresh <provider>`
 中显示 A6API 信用使用情况；提供商名称可以自定义。系统依据账户的 hard credit limit 将令牌单位换算为 USD，并显示已用百分比和剩余额度。
 令牌到期不代表额度补充，因此不会显示为配额重置。只有当前活动密钥会发送到规范主机，重定向会被拒绝；负数
 或内部不一致的计费总数不会生成报告。
@@ -293,13 +289,13 @@ dedicated deployment 需要配置为 custom provider。API 密钥可在
 
 ### 从终端切换账号
 
-无需打开仪表盘，即可使用 `ocx account list`、`ocx account current` 和 `ocx account use` 查看或
+无需打开仪表盘，即可使用 `ccx account list`、`ccx account current` 和 `ccx account use` 查看或
 切换同一组 Codex、OAuth 和 API-key pool。完整命令、JSON 输出和新 session 生效规则请参阅
-[CLI 参考](/zh-cn/reference/cli/#ocx-account-subcommand)。
+[CLI 参考](/zh-cn/reference/cli/#ccx-account-subcommand)。
 
 ### GPT-5.6 预览路径
 
-GPT-5.6 Sol/Terra/Luna 会预置在提供商的回退列表中，因此即使实时模型目录暂时滞后，`ocx sync`
+GPT-5.6 Sol/Terra/Luna 会预置在提供商的回退列表中，因此即使实时模型目录暂时滞后，`ccx sync`
 也能继续显示这些模型。
 
 | Codex 路由 | 预置模型 id | Codex 中显示的上下文 |
@@ -314,47 +310,47 @@ GPT-5.6 Sol/Terra/Luna 会预置在提供商的回退列表中，因此即使实
 发现结果，仅保留当前账号可用的模型。
 
 :::note[gateway 与订阅 proxy]
-是否支持某个提供商，取决于 opencodex 是否有匹配的 wire adapter，而**不取决于**它是否属于
+是否支持某个提供商，取决于 CodexCommander 是否有匹配的 wire adapter，而**不取决于**它是否属于
 “agent”产品。当前 adapter id 包括 `openai-chat`、`openai-responses`、`anthropic`、`google`
-（AI Studio、Vertex、Antigravity/Cloud Code Assist 模式）、`azure` / `azure-openai`、`kiro` 和
+（AI Studio、Vertex、Antigravity/Cloud Code Assist 模式）、`azure-openai`、`kiro` 和
 `cursor`。原生 Amazon Bedrock 这类无法匹配上述实现的专有 API 暂不直接支持。**GitHub Copilot** 和
 **GitLab Duo** 是多模型 gateway，映射到各自的通用 OpenAI 兼容端点。Copilot 支持通过
-`ocx login github-copilot` 使用 GitHub 设备流 OAuth 登录（非官方桥接 — 使用 VS Code 公开客户端 id
+`ccx login github-copilot` 使用 GitHub 设备流 OAuth 登录（非官方桥接 — 使用 VS Code 公开客户端 id
 登录后换取短期 Copilot API 令牌，需要有效的 Copilot 订阅，GitHub 政策收紧时可能失效）；GitLab Duo
 使用 Bearer **订阅令牌**（而非普通 API 密钥）进行认证。
 **Cloudflare AI Gateway** 需要将 account 和 gateway id 填入 URL。
 
 Copilot 提供混合 wire 目录：其 GPT-5 系列模型（`gpt-5.3-codex`、`gpt-5.4`、
 `gpt-5.4-mini`、`gpt-5.5`、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`）会拒绝面向
-agent 流量的 `/chat/completions`，因此 opencodex 默认将这些模型路由到 Responses API，而其他
+agent 流量的 `/chat/completions`，因此 CodexCommander 默认将这些模型路由到 Responses API，而其他
 Copilot 模型仍走 chat completions。优先级为：硬 wire 固定 → 显式
 [`modelAdapters`](/zh-cn/reference/configuration/providers/) 条目 → 注册表默认值 → 提供商级
 adapter。若要将没有内置默认值的模型（例如 `gpt-5.4-nano`）接入 Responses，请设置
 `"modelAdapters": { "gpt-5.4-nano": "openai-responses" }`。
 
 Cursor 作为单独的实验性 adapter 进行跟踪。`adapter: "cursor"` 会作为实验性本地配置出现在
-`ocx init` 和 dashboard Add Provider picker 中，并保存 Cursor 的静态回退模型目录 metadata。配置
-Cursor access token 后，opencodex 会使用 Cursor live HTTP/2 transport。内置回退列表包含上下文为
+`ccx init` 和 dashboard Add Provider picker 中，并保存 Cursor 的静态回退模型目录 metadata。配置
+Cursor access token 后，CodexCommander 会使用 Cursor live HTTP/2 transport。内置回退列表包含上下文为
 1M 的 `gpt-5.6-sol` / `terra` / `luna`、上下文为 500K 的 `grok-4.5` / `grok-4.5-fast`，以及上下文为
 262K 的 `kimi-k3`；最终显示哪些模型由账号的实时发现结果决定。Cursor 只以带 effort 后缀的 wire id
 提供 Kimi K3，因此 `cursor/kimi-k3` 暴露 `low` / `high` / `max` 阶梯，默认值为 `max`，与该模型
 文档中的 API 默认值一致。Cursor 服务器直接发起的
 native read/write/delete/ls/grep/shell/fetch 执行默认禁用，因为它会绕过 Codex 的 approval 和
-sandbox 路径；只有在可信本地实验中，才应在 `~/.opencodex/config.json` 的 `providers.cursor`
-对象上设置 `unsafeAllowNativeLocalExec: true`，也可以在仪表盘的 **Providers → Cursor → Edit JSON**
+sandbox 路径；只有在可信本地实验中，才应在 `~/.codexcommander/config.json` 的 `providers.cursor`
+对象上设置 `nativeLocalExec: "on"`，也可以在仪表盘的 **Providers → Cursor → Edit JSON**
 中设置。完整示例参见 [配置参考](/zh-cn/reference/configuration/#cursor-provider-adapter-cursor)。MCP、屏幕录制和 computer-use
-通过 executor hook 暴露；没有配置本地 executor 时，opencodex 会返回 typed no-executor 结果。
+通过 executor hook 暴露；没有配置本地 executor 时，CodexCommander 会返回 typed no-executor 结果。
 Cursor OAuth 和 live model discovery 已在这个实验性 adapter 中启用；Cursor 仍不会出现在 key-login
 列表中。
 :::
 
 ### Ollama Cloud
 
-Ollama Cloud 是托管（而非本地）的 Ollama，在 `https://ollama.com/v1` 上兼容 OpenAI，密钥来自 [ollama.com/settings/keys](https://ollama.com/settings/keys)。opencodex 按视觉能力对其云端阵容进行分类，使 [vision sidecar](/zh-cn/guides/sidecars/) 仅对纯文本模型生效。纯文本模型（例如 `glm-5.2`、`deepseek-v4-pro`、`gpt-oss`、`qwen3-coder`、`minimax-m2.x`、`nemotron-3-*`）列在 `noVisionModels` 中；原生支持视觉的模型（例如 `kimi-k2.6`、`minimax-m3`、`gemma4`、`qwen3.5`、`gemini-3-flash-preview`）则不在其中。匹配能容忍 Ollama 的 `:size` 标签，因此 `gpt-oss` 涵盖 `gpt-oss:120b` 和 `gpt-oss:20b`。
+Ollama Cloud 是托管（而非本地）的 Ollama，在 `https://ollama.com/v1` 上兼容 OpenAI，密钥来自 [ollama.com/settings/keys](https://ollama.com/settings/keys)。CodexCommander 按视觉能力对其云端阵容进行分类，使 [vision sidecar](/zh-cn/guides/sidecars/) 仅对纯文本模型生效。纯文本模型（例如 `glm-5.2`、`deepseek-v4-pro`、`gpt-oss`、`qwen3-coder`、`minimax-m2.x`、`nemotron-3-*`）列在 `noVisionModels` 中；原生支持视觉的模型（例如 `kimi-k2.6`、`minimax-m3`、`gemma4`、`qwen3.5`、`gemini-3-flash-preview`）则不在其中。匹配能容忍 Ollama 的 `:size` 标签，因此 `gpt-oss` 涵盖 `gpt-oss:120b` 和 `gpt-oss:20b`。
 
 ## 4. 本地提供商
 
-让 opencodex 指向本地的 OpenAI 兼容服务器——通常使用空密钥：
+让 CodexCommander 指向本地的 OpenAI 兼容服务器——通常使用空密钥：
 
 | 提供商 | 基础 URL |
 | --- | --- |
@@ -364,4 +360,4 @@ Ollama Cloud 是托管（而非本地）的 Ollama，在 `https://ollama.com/v1`
 
 ## 任意 OpenAI 兼容端点
 
-如果某个提供商使用 Chat Completions，`openai-chat` adapter 即可处理它——在仪表盘中选择 **Custom**，或在 `ocx init` 中选择 `custom` 并输入基础 URL。每个提供商字段（`headers`、`noReasoningModels`、`noVisionModels`、`models`……）请参见 [配置参考](/zh-cn/reference/configuration/)。
+如果某个提供商使用 Chat Completions，`openai-chat` adapter 即可处理它——在仪表盘中选择 **Custom**，或在 `ccx init` 中选择 `custom` 并输入基础 URL。每个提供商字段（`headers`、`noReasoningModels`、`noVisionModels`、`models`……）请参见 [配置参考](/zh-cn/reference/configuration/)。

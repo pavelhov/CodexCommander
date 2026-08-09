@@ -1,10 +1,10 @@
 /**
- * `ocx claude [claude args...]` — launch Claude Code wired to the local proxy.
+ * `ccx claude [claude args...]` — launch Claude Code wired to the local proxy.
  *
- * Mirrors `ccr code` UX (devlog/260711_claude_inbound/020, 003 E1/E2/E5/G1):
+ * Mirrors `ccr code` UX (implementation contract, 003 E1/E2/E5/G1):
  * ensures the proxy is running, injects the Anthropic env slots, then execs the
  * `claude` CLI with stdio inherited. User-exported env wins except when a stale
- * loopback opencodex base URL points at a different proxy port.
+ * loopback codexcommander base URL points at a different proxy port.
  */
 import { spawn } from "node:child_process";
 import { loadConfig } from "../config";
@@ -13,12 +13,13 @@ import { effectiveModelEnv, resolveAutoContext } from "../claude/context-windows
 import { refreshGatewayModelCacheFromProxy } from "../claude/gateway-cache";
 import { commandInvocation } from "../lib/win-exec";
 import { findLiveProxy } from "../server/proxy-liveness";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import { configuredAdminToken } from "../lib/admin-secrets";
-import { PROXY_MARKER, ownAdmissionTokens, defaultAuthDetectDeps, detectClaudeAuth, type AuthDetectDeps } from "../claude/auth-detect";
+import { API_KEY_HEADER } from "../identity";
+import { PROXY_MARKER, isProxyMarker, ownAdmissionTokens, defaultAuthDetectDeps, detectClaudeAuth, type AuthDetectDeps } from "../claude/auth-detect";
 import { resolveClaudeAuthMode } from "../claude/auth-mode";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
-import { ANTHROPIC_PARENT_ENV_SLOTS, trustedNodeLauncherContext, type AnthropicParentEnvSlot } from "./launcher-context";
+import { ANTHROPIC_PARENT_ENV_SLOTS, NODE_LAUNCH_CONTEXT_ENV, trustedNodeLauncherContext, type AnthropicParentEnvSlot } from "./launcher-context";
 
 export interface ClaudeLaunchEnv {
   [key: string]: string | undefined;
@@ -39,10 +40,10 @@ export type ClaudeEnvDeps = {
  * token vars triggers Claude Code's auth-conflict warning, 003 E1), and never
  * preserves Anthropic variables proven to exist in the parent Node launcher,
  * apart from stale loopback ANTHROPIC_BASE_URL values owned by a previous
- * opencodex launch. Unproven ambient values fail closed as project dotenv.
+ * codexcommander launch. Unproven ambient values fail closed as project dotenv.
  */
 export function buildClaudeEnv(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   port: number,
   base: ClaudeLaunchEnv,
   contextWindows: Record<string, number> = {},
@@ -52,9 +53,9 @@ export function buildClaudeEnv(
   // Step 1 — strip OUR OWN dummy from the inherited environment before anything reads
   // or writes the token slot. setDefault below preserves any non-empty value, so a
   // stale marker left in place would suppress the admission key and then be removed,
-  // leaving the child with no token at all (audit R2-1). It is opencodex state, never
+  // leaving the child with no token at all (audit R2-1). It is codexcommander state, never
   // user auth, so dropping it unconditionally is safe.
-  if (env.ANTHROPIC_AUTH_TOKEN === PROXY_MARKER) delete env.ANTHROPIC_AUTH_TOKEN;
+  if (isProxyMarker(env.ANTHROPIC_AUTH_TOKEN)) delete env.ANTHROPIC_AUTH_TOKEN;
   // Step 1b — drop Anthropic credentials AND destinations that Bun may have synthesized
   // from a project `.env`/`.env.local`. The plain-Node launcher records genuine parent
   // exports before Bun starts and pairs that context with an argv proof, so with a
@@ -72,7 +73,7 @@ export function buildClaudeEnv(
   //
   // Direct `bun src/cli/index.ts` therefore loses ambient Anthropic values. That is a
   // real cost to a documented entry point, and the escape hatch is the launcher: run
-  // through `ocx` (the published bin) and genuine shell exports are preserved by proof.
+  // through `ccx` (the published bin) and genuine shell exports are preserved by proof.
   const explicitSlots = deps.preBunAnthropicSlots;
   const trustedSlots = explicitSlots === undefined
     ? trustedNodeLauncherContext()?.anthropicEnvSlots ?? []
@@ -82,9 +83,8 @@ export function buildClaudeEnv(
     const value = env[name];
     if (value !== undefined && value !== "" && !exported.has(name)) delete env[name];
   }
-  // Never forward old or current provenance seams to Claude Code.
-  delete env.OCX_PRE_BUN_ANTHROPIC_ENV;
-  delete env.OCX_NODE_LAUNCH_CONTEXT;
+  // Never forward the launcher provenance seam to Claude Code.
+  delete env[NODE_LAUNCH_CONTEXT_ENV];
   const setDefault = (name: string, value: string | undefined) => {
     if (value === undefined || value.length === 0) return;
     if (env[name] !== undefined && env[name] !== "") return; // user wins
@@ -98,7 +98,7 @@ export function buildClaudeEnv(
       const isLoopback = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
       if (isLoopback && parsed.port !== "" && Number(parsed.port) !== port) {
         const replacement = `http://127.0.0.1:${port}`;
-        console.error(`⚠ Replacing stale opencodex ANTHROPIC_BASE_URL ${existingBaseUrl} with ${replacement}.`);
+        console.error(`⚠ Replacing stale codexcommander ANTHROPIC_BASE_URL ${existingBaseUrl} with ${replacement}.`);
         env.ANTHROPIC_BASE_URL = replacement;
       }
     } catch {
@@ -141,36 +141,23 @@ export function buildClaudeEnv(
   // Connectors still work because they check OAuth state ($o()), not base URL (Gd()).
   // Native /model picker discovery ("From gateway", Claude Code >= 2.1.129).
   setDefault("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1");
-  // Host-managed routing guard (devlog 260720_claude_authmode_persist/020): with
+  // Host-managed routing guard (implementation contract): with
   // this flag in the spawn env, Claude Code strips provider-managed vars
   // (ANTHROPIC_BASE_URL/AUTH_TOKEN/API_KEY, model slots) from settings-sourced
   // env (managedEnv.ts), so a leftover cc-switch/CCR ~/.claude/settings.json
-  // env block cannot silently hijack proxy routing away from opencodex.
+  // env block cannot silently hijack proxy routing away from codexcommander.
   // setDefault: an explicit user export (e.g. =0, isEnvTruthy-false) still wins.
   // Intentional contract change: settings.env model slots are also stripped in
-  // ocx claude runs — use the top-level settings "model" field or opt out.
+  // ccx claude runs — use the top-level settings "model" field or opt out.
   // Claude Code 2.1.206+ also treats this as a host-auth assertion. Injecting it
   // without a host token makes a valid claude.ai subscription look logged out,
-  // so the guard is only safe when opencodex actually owns authentication.
+  // so the guard is only safe when codexcommander actually owns authentication.
   if (env.ANTHROPIC_AUTH_TOKEN) {
     setDefault("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1");
   }
-  // Opt-in effort forcing (devlog 136 B6): opus-shaped aliases already carry
-  // output_config.effort, so this is OFF unless the user enables it in config.
-  if (config.claudeCode?.alwaysEnableEffort === true) {
-    setDefault("CLAUDE_CODE_ALWAYS_ENABLE_EFFORT", "1");
-  }
-  // Context-window override: the official pair — MAX_CONTEXT_TOKENS alone is ignored
-  // for recognized claude-shaped ids unless DISABLE_COMPACT=1 rides along (devlog 135).
-  const maxCtx = config.claudeCode?.maxContextTokens;
-  if (typeof maxCtx === "number" && Number.isFinite(maxCtx) && maxCtx > 0) {
-    setDefault("CLAUDE_CODE_MAX_CONTEXT_TOKENS", String(Math.floor(maxCtx)));
-    setDefault("DISABLE_COMPACT", "1");
-  }
-  // Auto-context (devlog 260712 020): min(believed window, env) inside the CLI means
+  // Auto-context (implementation contract 020): min(believed window, env) inside the CLI means
   // one global env acts as a per-model floor — [1m]-marked models compact here while
-  // unmarked (200k-accounted) models keep their default behavior. Inert when the
-  // legacy maxContextTokens pair above is set (resolveAutoContext handles that).
+  // unmarked (200k-accounted) models keep their default behavior.
   // A user-exported value drives the marking predicate too (audit 021 #2) so the
   // [1m] marker and the compaction threshold can never separate.
   const userAutoCompact = typeof base.CLAUDE_CODE_AUTO_COMPACT_WINDOW === "string" && base.CLAUDE_CODE_AUTO_COMPACT_WINDOW !== ""
@@ -180,9 +167,8 @@ export function buildClaudeEnv(
   if (auto.enabled) {
     setDefault("CLAUDE_CODE_AUTO_COMPACT_WINDOW", String(auto.compactWindow));
   }
-  // Model slots (devlog 260712 B2): default + four tier defaults + legacy small-fast,
-  // with automatic [1m] context-variant marking when the slot's target model has an
-  // authoritative >=1M window (Claude Code then accounts 1M, compaction preserved).
+  // Helper-model slots, with automatic [1m] context-variant marking when the
+  // configured model has an authoritative >=1M window.
   for (const [name, value] of Object.entries(effectiveModelEnv(config.claudeCode, contextWindows, auto))) {
     setDefault(name, value);
   }
@@ -194,11 +180,11 @@ export function buildClaudeEnv(
  * daemon registers every selector form — audit R3#1). 3s bound + management auth header.
  * (no [1m] marking, conservative).
  */
-export async function fetchClaudeContextWindows(config: OcxConfig, port: number, timeoutMs = 3_000): Promise<Record<string, number>> {
+export async function fetchClaudeContextWindows(config: CodexCommanderConfig, port: number, timeoutMs = 3_000): Promise<Record<string, number>> {
   try {
     const headers = new Headers();
     const token = configuredAdminToken();
-    if (token) headers.set("x-opencodex-api-key", token);
+    if (token) headers.set(API_KEY_HEADER, token);
     const res = await fetch(`http://127.0.0.1:${port}/api/claude-code`, {
       headers,
       signal: AbortSignal.timeout(timeoutMs),
@@ -221,7 +207,7 @@ async function ensureProxyForClaude(): Promise<number | null> {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
-    env: withProcessRuntimeProvenance({ ...process.env, OCX_SERVICE: "1" }),
+    env: withProcessRuntimeProvenance({ ...process.env, CCX_SERVICE: "1" }),
   });
   child.unref();
   const deadline = Date.now() + 8_000;
@@ -238,7 +224,7 @@ const CLAUDE_INSTALL_HINT = "❌ `claude` CLI not found. Install it first: npm i
 /**
  * cmd.exe reports command-not-found as exit 9009 (the win32 launcher routes `.cmd`
  * shims through cmd.exe, so ENOENT never fires there). Signal exits are not hints.
- * Devlog 260715_cross_platform_audit/020.
+ * implementation contract
  */
 export function claudeNotFoundHint(
   code: number | null,
@@ -261,7 +247,7 @@ export async function cmdClaude(args: string[]): Promise<number> {
   }
   const contextWindows = await fetchClaudeContextWindows(config, port);
   const env = buildClaudeEnv(config, port, process.env, contextWindows);
-  // Pre-write the CLI's gateway-model cache (devlog 030): without a token the CLI
+  // Pre-write the CLI's gateway-model cache (implementation contract): without a token the CLI
   // never refreshes it, so the picker would keep showing yesterday's aliases.
   try {
     const cachePath = await refreshGatewayModelCacheFromProxy(port);
@@ -272,7 +258,7 @@ export async function cmdClaude(args: string[]): Promise<number> {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`⚠ Gateway model cache could not be refreshed: ${message}`);
   }
-  // Sync roster agents (devlog 070): subagentModels + self -> ~/.claude/agents/ocx-*.md.
+  // Sync roster agents (implementation contract): subagentModels + self -> ~/.claude/agents/ccx-*.md.
   try {
     const written = injectClaudeAgentDefs(config, contextWindows);
     if (written === null) {

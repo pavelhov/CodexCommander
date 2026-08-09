@@ -38,7 +38,7 @@ const server = Bun.serve({
     if (request.method !== "POST" || new URL(request.url).pathname !== "/v1/responses") {
       return new Response("not found", { status: 404 });
     }
-    if (request.headers.get("x-opencodex-api-key") !== "fixture-admission") {
+    if (request.headers.get("x-codexcommander-api-key") !== "fixture-admission") {
       return new Response("unauthorized", { status: 401 });
     }
 

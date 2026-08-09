@@ -16,14 +16,14 @@ import {
 } from "../src/oauth/anthropic-routing";
 import { getAccountSet, saveCredential, setActiveAccount } from "../src/oauth/store";
 import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../src/providers/quota";
-import type { OcxAccountPoolRotationStrategy, OcxConfig } from "../src/types";
+import type { CodexCommanderAccountPoolRotationStrategy, CodexCommanderConfig } from "../src/types";
 
-const originalHome = process.env.OPENCODEX_HOME;
+const originalHome = process.env.CODEXCOMMANDER_HOME;
 let home: string;
 
 beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), "ocx-anthropic-pool-"));
-  process.env.OPENCODEX_HOME = home;
+  home = mkdtempSync(join(tmpdir(), "ccx-anthropic-pool-"));
+  process.env.CODEXCOMMANDER_HOME = home;
   clearAnthropicAccountPoolState();
   clearPoolRotationState();
   clearAccountQuotaCache("anthropic");
@@ -33,8 +33,8 @@ afterEach(() => {
   clearAnthropicAccountPoolState();
   clearPoolRotationState();
   clearAccountQuotaCache("anthropic");
-  if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = originalHome;
+  if (originalHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = originalHome;
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -65,8 +65,8 @@ async function seedTwoAccounts() {
 function cfg(
   enabled: boolean,
   threshold = 80,
-  pool: { strategy?: OcxAccountPoolRotationStrategy; stickyLimit?: number } = {},
-): OcxConfig {
+  pool: { strategy?: CodexCommanderAccountPoolRotationStrategy; stickyLimit?: number } = {},
+): CodexCommanderConfig {
   return {
     port: 0,
     defaultProvider: "anthropic",
@@ -78,7 +78,7 @@ function cfg(
       autoSwitchThreshold: threshold,
       ...pool,
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 async function seedThreeAccounts() {

@@ -24,7 +24,7 @@ export interface IdleDeadline {
 }
 
 /**
- * Resettable inactivity deadline (devlog 260716_passthrough_followups/010).
+ * Resettable inactivity deadline (implementation contract).
  *
  * Fires `onIdle` at most ONCE after `idleMs` elapses with no `reset()`/`pause()`.
  * Contract:

@@ -137,7 +137,7 @@ function kiroCliDbPath(): string {
 }
 
 function kiroCliRecoveryPath(): string {
-  return `${kiroCliDbPath()}.opencodex-recovery`;
+  return `${kiroCliDbPath()}.codexcommander-recovery`;
 }
 
 function rewriteKiroCliRecoveryOwner(ownerPid: number): void {
@@ -314,6 +314,8 @@ describe("kiro oauth — import-first", () => {
     expect(recoveryExistedBeforeLogout).toBe(true);
     if (process.platform !== "win32") expect(recoveryModeBeforeLogout).toBe(0o600);
     expect(existsSync(kiroCliRecoveryPath())).toBe(true);
+    expect(readFileSync(kiroCliRecoveryPath()).toString("utf8")
+      .startsWith("codexcommander-kiro-session-v3\n")).toBe(true);
     settleKiroLoginTransaction(pending, true);
     expect(existsSync(kiroCliRecoveryPath())).toBe(false);
     expect(readKiroCliSqlite()?.access).toBe("aoa-new");
@@ -383,7 +385,7 @@ describe("kiro oauth — import-first", () => {
     const abandoned = await loginKiro({}, { forceLogin: true, cliRunner: firstRunner });
     expect(abandoned.access).toBe("aoa-abandoned");
     expect(existsSync(kiroCliRecoveryPath())).toBe(true);
-    const liveTransactionFiles = ["", "-wal", "-shm", "-journal", ".opencodex-recovery"]
+    const liveTransactionFiles = ["", "-wal", "-shm", "-journal", ".codexcommander-recovery"]
       .map(suffix => readFileSync(`${kiroCliDbPath()}${suffix}`));
 
     let liveOwnerRunnerCalled = false;
@@ -399,7 +401,7 @@ describe("kiro oauth — import-first", () => {
     expect((liveOwnerFailure as Error).message).toContain(kiroCliRecoveryPath());
     expect(liveOwnerRunnerCalled).toBe(false);
     expect(existsSync(kiroCliRecoveryPath())).toBe(true);
-    expect(["", "-wal", "-shm", "-journal", ".opencodex-recovery"]
+    expect(["", "-wal", "-shm", "-journal", ".codexcommander-recovery"]
       .map((suffix, index) => readFileSync(`${kiroCliDbPath()}${suffix}`).equals(liveTransactionFiles[index]!)))
       .toEqual([true, true, true, true, true]);
 
@@ -566,6 +568,31 @@ describe("kiro oauth — import-first", () => {
     expect((failure as Error).message).toContain("recovery data is invalid");
     expect((failure as Error).message).toContain(kiroCliRecoveryPath());
     expect((failure as Error).message).toContain("Remove this file to continue");
+    expect(runnerCalled).toBe(false);
+    expect(readKiroCliSqlite()).toMatchObject({ access: "aoa-prior", refresh: "rt-prior" });
+    expect(existsSync(kiroCliRecoveryPath())).toBe(true);
+  });
+
+  test("recovery accepts only the current CodexCommander v3 envelope", async () => {
+    seedKiroCliDb({ access_token: "aoa-prior", refresh_token: "rt-prior" });
+    const database = readFileSync(kiroCliDbPath());
+    writeFileSync(kiroCliRecoveryPath(), Buffer.concat([
+      Buffer.from("codexcommander-kiro-session-v2\n", "utf8"),
+      Buffer.from(`${process.pid}\n`, "utf8"),
+      Buffer.from("retired-process-instance\n", "utf8"),
+      database,
+    ]), { mode: 0o600 });
+    let runnerCalled = false;
+
+    const failure = await loginKiro({}, {
+      cliRunner: async () => {
+        runnerCalled = true;
+        return { exitCode: 0, stdout: "" };
+      },
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain("recovery data is invalid");
     expect(runnerCalled).toBe(false);
     expect(readKiroCliSqlite()).toMatchObject({ access: "aoa-prior", refresh: "rt-prior" });
     expect(existsSync(kiroCliRecoveryPath())).toBe(true);
@@ -955,8 +982,8 @@ describe("kiro oauth — import-first", () => {
     });
   });
 
-  test("legacy stored credential without kiro metadata does not borrow the local CLI region", async () => {
-    // A legacy OCX account predates account-scoped metadata. The local CLI is signed into a
+  test("stored credential without kiro metadata does not borrow the local CLI region", async () => {
+    // A stored account without account-scoped metadata may coexist with a different local CLI login.
     // different account in another region; refresh must not route through that region.
     seedKiroCliDb({
       access_token: "aoa-other-cli",
@@ -967,21 +994,21 @@ describe("kiro oauth — import-first", () => {
     let captured: string | undefined;
     globalThis.fetch = (async (input) => {
       captured = String(input);
-      return new Response(JSON.stringify({ accessToken: "aoa-legacy-new", expiresIn: 60 }), { status: 200 });
+      return new Response(JSON.stringify({ accessToken: "aoa-stored-new", expiresIn: 60 }), { status: 200 });
     }) as typeof fetch;
 
-    const cred = await refreshKiroToken("rt-legacy", undefined, {
-      access: "aoa-legacy",
-      refresh: "rt-legacy",
+    const cred = await refreshKiroToken("rt-stored", undefined, {
+      access: "aoa-stored",
+      refresh: "rt-stored",
       expires: 0,
     });
 
     expect(captured).toBe("https://prod.us-east-1.auth.desktop.kiro.dev/refreshToken");
     expect(captured).not.toContain("ap-southeast-1");
-    expect(cred.access).toBe("aoa-legacy-new");
+    expect(cred.access).toBe("aoa-stored-new");
   });
 
-  test("legacy stored credential ignores KIRO_REGION set for a different local account", async () => {
+  test("stored credential ignores KIRO_REGION set for a different local account", async () => {
     process.env.KIRO_REGION = "eu-central-1";
     let captured: string | undefined;
     globalThis.fetch = (async (input) => {
@@ -989,9 +1016,9 @@ describe("kiro oauth — import-first", () => {
       return new Response(JSON.stringify({ accessToken: "aoa-scoped-new", expiresIn: 60 }), { status: 200 });
     }) as typeof fetch;
 
-    await refreshKiroToken("rt-legacy", undefined, {
-      access: "aoa-legacy",
-      refresh: "rt-legacy",
+    await refreshKiroToken("rt-stored", undefined, {
+      access: "aoa-stored",
+      refresh: "rt-stored",
       expires: 0,
     });
 

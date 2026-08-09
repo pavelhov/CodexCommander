@@ -197,10 +197,10 @@ export function collectOrcaCodexHomeDiagnostic(deps: OrcaCodexHomeDeps = {}): Or
     appCodexHome: displayApp,
     orcaCodexHome: displayOrca,
     warning: mismatch
-      ? `CODEX_HOME targets Orca's runtime home (${displayEffective}), while the Windows ChatGPT/Codex app uses ${displayApp}; OpenCodex injection will not reach that app.`
+      ? `CODEX_HOME targets Orca's runtime home (${displayEffective}), while the Windows ChatGPT/Codex app uses ${displayApp}; CodexCommander injection will not reach that app.`
       : null,
     action: mismatch
-      ? "If a service was installed from Orca, run 'ocx service uninstall' in that original Orca shell first. Then in Command Prompt run set \"ORCA_CODEX_HOME=\" and set \"CODEX_HOME=%USERPROFILE%\\.codex\"; or in PowerShell run Remove-Item Env:ORCA_CODEX_HOME -ErrorAction SilentlyContinue; $env:CODEX_HOME = Join-Path $env:USERPROFILE '.codex'. Rerun the command, then reinstall with 'ocx service install'."
+      ? "If a service was installed from Orca, run 'ccx service uninstall' in that original Orca shell first. Then in Command Prompt run set \"ORCA_CODEX_HOME=\" and set \"CODEX_HOME=%USERPROFILE%\\.codex\"; or in PowerShell run Remove-Item Env:ORCA_CODEX_HOME -ErrorAction SilentlyContinue; $env:CODEX_HOME = Join-Path $env:USERPROFILE '.codex'. Rerun the command, then reinstall with 'ccx service install'."
       : null,
   };
 }

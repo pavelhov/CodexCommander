@@ -1,9 +1,9 @@
 ---
 title: Архитектура
-description: Внутреннее устройство opencodex — карта модулей, мост AdapterEvent, парсер запросов и кэширование.
+description: Внутреннее устройство CodexCommander — карта модулей, мост AdapterEvent, парсер запросов и кэширование.
 ---
 
-opencodex — это один процесс Bun. Запрос приходит как OpenAI Responses, нормализуется во
+CodexCommander — это один процесс Bun. Запрос приходит как OpenAI Responses, нормализуется во
 внутреннюю модель, маршрутизируется, отправляется провайдеру через адаптер и мостом
 преобразуется обратно в Responses SSE. Сквозной поток описан в разделе
 [Как это работает](/ru/getting-started/how-it-works/).
@@ -12,7 +12,7 @@ opencodex — это один процесс Bun. Запрос приходит 
 
 ```
 src/
-├── cli/                # ocx command dispatch, init, status, provider commands
+├── cli/                # ccx command dispatch, init, status, provider commands
 ├── server/             # Bun.serve, /v1/* proxy, /api/* management API, WS bridge
 ├── codex/              # Codex config injection, catalog sync, auth/account integration
 ├── providers/          # provider metadata, API-key pool, quota and labels
@@ -22,12 +22,12 @@ src/
 ├── lib/                # runtime, process, retry, privacy, token estimate helpers
 ├── web-search/         # web-search sidecar (synthetic tool, loop, executor, parser)
 ├── vision/             # vision sidecar (describe + plan)
-├── config.ts           # ~/.opencodex/config.json, defaults, PID, env resolution
+├── config.ts           # ~/.codexcommander/config.json, defaults, PID, env resolution
 ├── router.ts           # model id → provider + adapter
 ├── bridge.ts           # AdapterEvent stream → Responses SSE / JSON
 ├── reasoning-effort.ts # reasoning-effort translation, clamping, and catalog levels
 ├── responses/
-│   ├── parser.ts       # Responses request → OcxParsedRequest
+│   ├── parser.ts       # Responses request → CodexCommanderParsedRequest
 │   ├── schema.ts       # Zod validation
 │   └── compaction.ts   # remote compaction prompts, envelopes, compact history
 ├── service.ts          # launchd / systemd / Task Scheduler background service
@@ -35,15 +35,14 @@ src/
 └── index.ts            # public entry
 ```
 
-Три прежних крупных входных файла теперь служат фасадами совместимости: `codex/catalog.ts`
-экспортирует семь модулей `codex/catalog/*.ts`, `server/management-api.ts` направляет запросы в
+`codex/catalog.ts` экспортирует семь модулей `codex/catalog/*.ts`, `server/management-api.ts` направляет запросы в
 девять модулей `server/management/*.ts`, а `server/responses.ts` экспортирует пять модулей
 `server/responses/*.ts`.
 
 ## Поток запроса
 
 `server/index.ts` владеет HTTP-границей и делегирует плоскость данных Responses в
-фасад `server/responses.ts` и его модули `server/responses/*.ts`:
+`server/responses.ts` и его модули `server/responses/*.ts`:
 
 1. `server/index.ts` применяет CORS и аутентификацию API, отклоняет новую работу во время
    завершения (drain) и записывает метаданные жизненного цикла запроса. Он обслуживает
@@ -77,9 +76,9 @@ src/
 ## Парсер
 
 `responses/parser.ts` валидирует входящий запрос через `responses/schema.ts` (Zod), затем строит
-`OcxParsedRequest`:
+`CodexCommanderParsedRequest`:
 
-- **Сообщения** — элементы `input` становятся нормализованным `OcxMessage[]`: user / developer /
+- **Сообщения** — элементы `input` становятся нормализованным `CodexCommanderMessage[]`: user / developer /
   assistant / toolResult. Элементы `reasoning` становятся блоками thinking; элементы
   `function_call`, `custom_tool_call` и `tool_search_call` становятся вызовами инструментов; их
   аналоги `*_output` становятся результатами инструментов.
@@ -132,20 +131,20 @@ src/
 v2, синхронизацию каталога, диагностику и отладочные логи, использование и квоты, настройки
 сайдкаров, обновления, сгенерированные клиентские API-ключи, вход/статус/выход OAuth и выбор
 аккаунта, управление аккаунтами Codex и корректную остановку. `server/auth-cors.ts` требует
-`OPENCODEX_API_AUTH_TOKEN` и для `/api/*`, и для `/v1/*`, когда прокси привязан за пределами
+`CODEXCOMMANDER_API_AUTH_TOKEN` и для `/api/*`, и для `/v1/*`, когда прокси привязан за пределами
 loopback; настроенные записи `corsAllowOrigins` расширяют allowlist локальных origin.
 
 Реализации OAuth живут в `oauth/`; access-токены загружаются или обновляются непосредственно
 перед маршрутизируемым вызовом, а `oauth/token-guardian.ts` может проактивно обновлять только тех
 провайдеров, чья политика это разрешает. Учётные данные пула Codex/ChatGPT и привязка потоков
 живут в `codex/` и не попадают в ответы management API. Использование по запросам нормализуется в
-`OcxUsage`, отражается в терминальных событиях Responses и агрегируется модулем `usage/` для
+`CodexCommanderUsage`, отражается в терминальных событиях Responses и агрегируется модулем `usage/` для
 дашборда и необязательной JSONL-диагностики.
 
 ## Транспорт и compaction
 
 `server/index.ts` по умолчанию обслуживает HTTP/SSE на `/v1/responses`. Если Codex пытается
-выполнить WebSocket-апгрейд Responses, пока `websockets` равно `false`, opencodex возвращает
+выполнить WebSocket-апгрейд Responses, пока `websockets` равно `false`, CodexCommander возвращает
 `426 upgrade_required`; Codex тогда откатывается на HTTP для этой сессии. Когда установлено
 `"websockets": true`, та же конечная точка принимает апгрейд и использует WebSocket-мост.
 
@@ -160,7 +159,7 @@ Compaction контекста Codex работает для маршрутизи
 - `codex/model-cache.ts` держит в памяти TTL-кэш живых результатов `/models` для каждого
   провайдера (по умолчанию 5 минут, как у собственного кэша Codex) с откатом на устаревшие данные
   при неудачном запросе.
-- `codex/catalog/sync.ts`, экспортируемый через фасад `codex/catalog.ts`, сливает маршрутизируемые
+- `codex/catalog/sync.ts`, экспортируемый через `codex/catalog.ts`, сливает маршрутизируемые
   модели в каталог Codex как записи с пространствами
   имён, ставит рекомендуемые
   [модели подагентов](/ru/guides/codex-integration/#the-subagent-picker) первыми,
@@ -183,8 +182,8 @@ Compaction контекста Codex работает для маршрутизи
 
 ## Основные типы
 
-Внутренняя модель живёт в `types.ts`: `OcxParsedRequest`, `OcxContext`, объединение `OcxMessage`,
-`OcxContentPart` (text / image), `OcxToolCall`, `OcxTool`, `AdapterEvent` и типы конфигурации
-(`OcxConfig`, `OcxProviderConfig`). Широко используются два хелпера: `namespacedToolName()` и
+Внутренняя модель живёт в `types.ts`: `CodexCommanderParsedRequest`, `CodexCommanderContext`, объединение `CodexCommanderMessage`,
+`CodexCommanderContentPart` (text / image), `CodexCommanderToolCall`, `CodexCommanderTool`, `AdapterEvent` и типы конфигурации
+(`CodexCommanderConfig`, `CodexCommanderProviderConfig`). Широко используются два хелпера: `namespacedToolName()` и
 `modelInList()` (толерантное сопоставление с тегом `:size` для `noVisionModels` /
 `noReasoningModels`).

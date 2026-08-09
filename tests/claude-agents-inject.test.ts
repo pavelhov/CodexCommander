@@ -6,31 +6,31 @@ import { buildClaudeAgentDefs, injectClaudeAgentDefs, syncClaudeAgentDefs } from
 import { buildClaudeContextWindows } from "../src/claude/context-windows";
 import { fetchProviderModels } from "../src/codex/catalog/provider-fetch";
 import { OAUTH_PROVIDERS } from "../src/oauth";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const dirs: string[] = [];
 function tempDir(): string {
-  const d = mkdtempSync(join(tmpdir(), "ocx-agents-"));
+  const d = mkdtempSync(join(tmpdir(), "ccx-agents-"));
   dirs.push(d);
   return d;
 }
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
 
-function cfg(extra?: Partial<OcxConfig>): OcxConfig {
-  return { port: 10100, defaultProvider: "mock", providers: {}, ...extra } as OcxConfig;
+function cfg(extra?: Partial<CodexCommanderConfig>): CodexCommanderConfig {
+  return { port: 10100, defaultProvider: "mock", providers: {}, ...extra } as CodexCommanderConfig;
 }
 
-function generatedBodies(config: OcxConfig, dir: string): string[] {
+function generatedBodies(config: CodexCommanderConfig, dir: string): string[] {
   const defs = buildClaudeAgentDefs(config, {}, dir);
   syncClaudeAgentDefs(defs, dir);
   return defs.map(def => readFileSync(join(dir, "agents", def.file), "utf8"));
 }
 
-describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
+describe("buildClaudeAgentDefs (implementation contract + audit 071)", () => {
   test("roster + pinned self mark only authoritative 1M windows; name collision suffix", () => {
-    const windows = { "claude-ocx-native--gpt-5.6-sol": 372_000, "claude-ocx-cursor--gpt-5.6-sol": 1_000_000 };
+    const windows = { "claude-ccx2-native--gpt-5.6-sol": 372_000, "claude-ccx2-cursor--gpt-5.6-sol": 1_000_000 };
     const dir = tempDir();
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ocx-native--gpt-5.6-sol[1m]" }));
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ccx2-native--gpt-5.6-sol[1m]" }));
     const defs = buildClaudeAgentDefs(cfg({
       subagentModels: ["gpt-5.6-sol", "cursor/gpt-5.6-sol"],
       claudeCode: { autoContext: true },
@@ -38,10 +38,10 @@ describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
     const byName = Object.fromEntries(defs.map(d => [d.name, d]));
     // 372K >= 350K compact default marks the MAIN session (env slots pair with the
     // compact window), but a generated subagent has no such pairing — it stays bare.
-    expect(byName["ocx-gpt-5-6-sol"]!.model).toBe("claude-ocx-native--gpt-5.6-sol");
-    expect(byName["ocx-gpt-5-6-sol-2"]!.model).toBe("claude-ocx-cursor--gpt-5.6-sol[1m]"); // collision suffix
+    expect(byName["ccx-gpt-5-6-sol"]!.model).toBe("claude-ccx2-native--gpt-5.6-sol");
+    expect(byName["ccx-gpt-5-6-sol-2"]!.model).toBe("claude-ccx2-cursor--gpt-5.6-sol[1m]"); // collision suffix
     // Self pins the picker-saved default but cannot inherit an unsafe auto-context marker.
-    expect(byName["ocx-self"]!.model).toBe("claude-ocx-native--gpt-5.6-sol");
+    expect(byName["ccx-self"]!.model).toBe("claude-ccx2-native--gpt-5.6-sol");
     expect(defs).toHaveLength(3);
     // Dispatcher directive (live repro: model:"fable" override broke inherit).
     for (const d of defs) expect(d.description).toContain("`model` argument is ignored");
@@ -61,10 +61,26 @@ describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
     const models = Object.fromEntries(defs.map(def => [def.name, def.model]));
 
     expect(models).toEqual({
-      "ocx-claude-sonnet-4-6": "claude-sonnet-4-6[1m]",
-      "ocx-claude-opus-4-6": "claude-opus-4-6[1m]",
-      "ocx-claude-opus-4-7": "claude-opus-4-7[1m]",
+      "ccx-claude-sonnet-4-6": "claude-sonnet-4-6[1m]",
+      "ccx-claude-opus-4-6": "claude-opus-4-6[1m]",
+      "ccx-claude-opus-4-7": "claude-opus-4-7[1m]",
     });
+  });
+
+  test("routed roster entries require the canonical one-slash selector", () => {
+    const config = cfg({
+      providers: {
+        nested: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.test/v1",
+          models: ["vendor/model"],
+        },
+      },
+      subagentModels: ["nested/vendor-model", "nested/vendor/model"],
+    });
+    const defs = buildClaudeAgentDefs(config, {}, tempDir());
+    expect(defs).toHaveLength(1);
+    expect(defs[0]!.model).toBe("claude-ccx2-nested--vendor~smodel");
   });
 
   test("generated profiles preserve genuine routed [1m] ids and honor provider caps", async () => {
@@ -78,48 +94,48 @@ describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
     const catalog = await fetchProviderModels("kimi", kimi, 0);
     const windows = buildClaudeContextWindows([], catalog);
     const dir = tempDir();
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ocx-kimi--k3[1m]" }));
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ccx2-kimi--k3[1m]" }));
     const defs = buildClaudeAgentDefs(config, windows, dir);
     const models = Object.fromEntries(defs.map(def => [def.name, def.model]));
 
-    expect(windows["claude-ocx-kimi--k3"]).toBe(1_048_576);
-    expect(windows["claude-ocx-kimi--k3[1m]"]).toBe(1_048_576);
-    expect(windows["claude-ocx-kimi--k3-256k"]).toBe(262_144);
+    expect(windows["claude-ccx2-kimi--k3"]).toBe(1_048_576);
+    expect(windows["claude-ccx2-kimi--k3[1m]"]).toBe(1_048_576);
+    expect(windows["claude-ccx2-kimi--k3-256k"]).toBe(262_144);
     expect(models).toEqual({
-      "ocx-k3-1m": "claude-ocx-kimi--k3[1m]",
-      "ocx-self": "claude-ocx-kimi--k3[1m]",
+      "ccx-k3-1m": "claude-ccx2-kimi--k3[1m]",
+      "ccx-self": "claude-ccx2-kimi--k3[1m]",
     });
 
     // A provider cap below 1M unmarks the same selector.
     const cappedCatalog = await fetchProviderModels("kimi", kimi, 0, 350_000);
     const cappedWindows = buildClaudeContextWindows([], cappedCatalog);
     const cappedDir = tempDir();
-    writeFileSync(join(cappedDir, "settings.json"), JSON.stringify({ model: "claude-ocx-kimi--k3[1m]" }));
+    writeFileSync(join(cappedDir, "settings.json"), JSON.stringify({ model: "claude-ccx2-kimi--k3[1m]" }));
     const cappedDefs = buildClaudeAgentDefs(config, cappedWindows, cappedDir);
 
-    expect(cappedWindows["claude-ocx-kimi--k3[1m]"]).toBe(350_000);
+    expect(cappedWindows["claude-ccx2-kimi--k3[1m]"]).toBe(350_000);
     expect(Object.fromEntries(cappedDefs.map(def => [def.name, def.model]))).toEqual({
-      "ocx-k3-1m": "claude-ocx-kimi--k3",
-      "ocx-self": "claude-ocx-kimi--k3",
+      "ccx-k3-1m": "claude-ccx2-kimi--k3",
+      "ccx-self": "claude-ccx2-kimi--k3",
     });
   });
 
   test("marker case is honored and unknown windows keep the selector as-was", () => {
-    const windows = { "claude-ocx-cursor--gpt-5.6-sol": 1_000_000 };
+    const windows = { "claude-ccx2-cursor--gpt-5.6-sol": 1_000_000 };
     const dir = tempDir();
     // Uppercase [1M] spelling is a genuine marker (the CLI matches /\[1m\]/i).
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ocx-cursor--gpt-5.6-sol[1M]" }));
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ccx2-cursor--gpt-5.6-sol[1M]" }));
     const defs = buildClaudeAgentDefs(cfg({ subagentModels: ["cursor/gpt-5.6-sol", "cursor/unknown-model"] }), windows, dir);
     const byName = Object.fromEntries(defs.map(d => [d.name, d]));
-    expect(byName["ocx-gpt-5-6-sol"]!.model).toBe("claude-ocx-cursor--gpt-5.6-sol[1m]");
+    expect(byName["ccx-gpt-5-6-sol"]!.model).toBe("claude-ccx2-cursor--gpt-5.6-sol[1m]");
     // Incomplete metadata: no window entry -> selector preserved, never unmarked.
-    expect(byName["ocx-unknown-model"]!.model).toBe("claude-ocx-cursor--unknown-model");
-    expect(byName["ocx-self"]!.model).toBe("claude-ocx-cursor--gpt-5.6-sol[1M]");
+    expect(byName["ccx-unknown-model"]!.model).toBe("claude-ccx2-cursor--unknown-model");
+    expect(byName["ccx-self"]!.model).toBe("claude-ccx2-cursor--gpt-5.6-sol[1M]");
   });
 
   test("placeholder guidance recommends haiku, never sonnet (issue #252)", () => {
     const dir = tempDir();
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ocx-native--gpt-5.6-sol" }));
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ccx2-native--gpt-5.6-sol" }));
     const defs = buildClaudeAgentDefs(cfg({ subagentModels: ["gpt-5.6-sol"] }), {}, dir);
     expect(defs.length).toBeGreaterThan(0);
     for (const d of defs) {
@@ -130,13 +146,12 @@ describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
     }
   });
 
-  test("unset roster seeds the defaults; explicit [] respected; no default model -> no self", () => {
-    const dir = tempDir(); // empty: no settings.json, no claudeCode.model
+  test("unset roster seeds the defaults; explicit [] respected; no picker default -> no self", () => {
+    const dir = tempDir();
     const seeded = buildClaudeAgentDefs(cfg(), {}, dir);
     expect(seeded.length).toBe(5); // 5 defaults, no self (unresolvable)
-    const explicit = buildClaudeAgentDefs(cfg({ subagentModels: [], claudeCode: { model: "mock/big" } }), {}, dir);
-    expect(explicit.map(d => d.name)).toEqual(["ocx-self"]);
-    expect(explicit[0]!.model).toBe("mock/big"); // config fallback when settings absent
+    const explicit = buildClaudeAgentDefs(cfg({ subagentModels: [] }), {}, dir);
+    expect(explicit).toEqual([]);
   });
 
   test("rendered frontmatter quotes every scalar and parses back", () => {
@@ -154,8 +169,8 @@ describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
     expect(fields.model).toBe(def!.model);
     expect(fields.effort).toBeUndefined();
     expect(typeof fields.description).toBe("string");
-    expect(body).toContain("generated-by: opencodex");
-    expect(body).toContain(`ocx-route: ${def!.model}`);
+    expect(body).toContain("generated-by: codexcommander");
+    expect(body).toContain(`ccx-route: ${def!.model}`);
     expect(body).toContain("IDENTITY: your ACTUAL underlying model");
   });
 
@@ -163,7 +178,7 @@ describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
     const levels = ["low", "medium", "high", "xhigh", "max"] as const;
     for (const effort of levels) {
       const dir = tempDir();
-      writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ocx-native--gpt-5.6-sol" }));
+      writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ccx2-native--gpt-5.6-sol" }));
       const defs = buildClaudeAgentDefs(cfg({
         subagentModels: ["gpt-5.6-sol"],
         claudeCode: { subagentEffort: effort },
@@ -174,7 +189,7 @@ describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
       for (const def of defs) {
         const body = readFileSync(join(dir, "agents", def.file), "utf8");
         expect(body.match(new RegExp(`^effort: ${JSON.stringify(effort)}$`, "gm"))).toHaveLength(1);
-        expect(body).toContain(`<!-- ocx-effort: ${effort} -->`);
+        expect(body).toContain(`<!-- ccx-effort: ${effort} -->`);
       }
     }
   });
@@ -183,7 +198,7 @@ describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
     const dir = tempDir();
     const configured = cfg({ subagentModels: ["gpt-5.6-sol"], claudeCode: { subagentEffort: "max" } });
     injectClaudeAgentDefs(configured, {}, dir);
-    const target = join(dir, "agents", "ocx-gpt-5-6-sol.md");
+    const target = join(dir, "agents", "ccx-gpt-5-6-sol.md");
     expect(readFileSync(target, "utf8")).toContain('effort: "max"');
 
     injectClaudeAgentDefs(cfg({ subagentModels: ["gpt-5.6-sol"] }), {}, dir);
@@ -192,9 +207,9 @@ describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
 
   test("generated routed agents refuse the default blocked skill before its bundle expands", () => {
     const dir = tempDir();
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ocx-native--gpt-5.6-sol" }));
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ccx2-native--gpt-5.6-sol" }));
     const bodies = generatedBodies(cfg({ subagentModels: ["gpt-5.6-sol"] }), dir);
-    expect(bodies).toHaveLength(2); // roster + ocx-self
+    expect(bodies).toHaveLength(2); // roster + ccx-self
     for (const body of bodies) {
       expect(body).toContain("Do not invoke blocked Claude Code skills");
       expect(body).toContain(JSON.stringify("claude-api"));
@@ -203,7 +218,7 @@ describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
 
   test("generated blocked-skill guard mirrors custom names and honors explicit opt-out", () => {
     const customDir = tempDir();
-    writeFileSync(join(customDir, "settings.json"), JSON.stringify({ model: "claude-ocx-native--gpt-5.6-sol" }));
+    writeFileSync(join(customDir, "settings.json"), JSON.stringify({ model: "claude-ccx2-native--gpt-5.6-sol" }));
     const customBodies = generatedBodies(cfg({
       subagentModels: ["gpt-5.6-sol"],
       claudeCode: { blockedSkills: [" My-Skill "] },
@@ -216,7 +231,7 @@ describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
     }
 
     const offDir = tempDir();
-    writeFileSync(join(offDir, "settings.json"), JSON.stringify({ model: "claude-ocx-native--gpt-5.6-sol" }));
+    writeFileSync(join(offDir, "settings.json"), JSON.stringify({ model: "claude-ccx2-native--gpt-5.6-sol" }));
     const offBodies = generatedBodies(cfg({
       subagentModels: ["gpt-5.6-sol"],
       claudeCode: { blockedSkills: [] },
@@ -253,10 +268,8 @@ describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
 
   test("direct provider self and disabled native passthrough keep the routed guard", () => {
     const directDir = tempDir();
-    const [directBody] = generatedBodies(cfg({
-      subagentModels: [],
-      claudeCode: { model: "mock/big" },
-    }), directDir);
+    writeFileSync(join(directDir, "settings.json"), JSON.stringify({ model: "mock/big" }));
+    const [directBody] = generatedBodies(cfg({ subagentModels: [] }), directDir);
     expect(directBody).toContain("Do not invoke blocked Claude Code skills");
 
     const disabledDir = tempDir();
@@ -270,21 +283,22 @@ describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
 });
 
 describe("syncClaudeAgentDefs ownership contract (audit 071 #2/#3)", () => {
-  test("writes, overwrites, and prunes ONLY marker-verified ocx files", () => {
+  test("writes, overwrites, and prunes ONLY marker-verified ccx files", () => {
     const dir = tempDir();
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ocx-native--gpt-5.6-sol" }));
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ccx2-native--gpt-5.6-sol" }));
     const defs = buildClaudeAgentDefs(cfg({ subagentModels: ["gpt-5.6-sol"] }), {}, dir);
     expect(syncClaudeAgentDefs(defs, dir)!.length).toBe(2);
     const agentsDir = join(dir, "agents");
     // User-authored file with our prefix but no marker: untouched by prune AND by write.
-    writeFileSync(join(agentsDir, "ocx-custom.md"), "---\nname: ocx-custom\n---\nuser file");
-    writeFileSync(join(agentsDir, "ocx-gpt-5-6-sol.md"), "user replaced this — no marker");
+    writeFileSync(join(agentsDir, "ccx-custom.md"), "---\nname: ccx-custom\n---\nuser file");
+    writeFileSync(join(agentsDir, "ccx-gpt-5-6-sol.md"), "user replaced this — no marker");
     const second = syncClaudeAgentDefs(buildClaudeAgentDefs(cfg({ subagentModels: [] }), {}, dir), dir)!;
-    expect(second).toEqual(["ocx-self.md"]);
+    expect(second).toEqual(["ccx-self.md"]);
     const remaining = readdirSync(agentsDir).sort();
-    // ocx-self rewritten; unowned ocx-custom + user-replaced sol file both preserved.
-    expect(remaining).toEqual(["ocx-custom.md", "ocx-gpt-5-6-sol.md", "ocx-self.md"]);
-    expect(readFileSync(join(agentsDir, "ocx-gpt-5-6-sol.md"), "utf8")).toBe("user replaced this — no marker");
+    // ccx-self rewritten; unowned ccx-custom + user-replaced sol file both preserved;
+    // no extra generated files remain.
+    expect(remaining).toEqual(["ccx-self.md", "ccx-custom.md", "ccx-gpt-5-6-sol.md"].sort());
+    expect(readFileSync(join(agentsDir, "ccx-gpt-5-6-sol.md"), "utf8")).toBe("user replaced this — no marker");
   });
 
   // Capability probe: Windows without elevated symlink rights throws EPERM. Detect once
@@ -307,7 +321,7 @@ describe("syncClaudeAgentDefs ownership contract (audit 071 #2/#3)", () => {
     const victim = join(dir, "victim.md");
     writeFileSync(victim, "precious");
     try {
-      symlinkSync(victim, join(agentsDir, "ocx-linked.md"));
+      symlinkSync(victim, join(agentsDir, "ccx-linked.md"));
     } catch (err) {
       // Windows without Developer Mode / elevated privileges cannot create symlinks.
       if (process.platform === "win32" && (err as NodeJS.ErrnoException).code === "EPERM") {
@@ -317,12 +331,12 @@ describe("syncClaudeAgentDefs ownership contract (audit 071 #2/#3)", () => {
     }
     syncClaudeAgentDefs([], dir); // prune pass
     expect(readFileSync(victim, "utf8")).toBe("precious");
-    expect(readdirSync(agentsDir)).toContain("ocx-linked.md");
+    expect(readdirSync(agentsDir)).toContain("ccx-linked.md");
   });
 
   test("injectClaudeAgentDefs prunes owned files when disabled (audit 071 #3)", () => {
     const dir = tempDir();
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ocx-native--gpt-5.6-sol" }));
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ccx2-native--gpt-5.6-sol" }));
     injectClaudeAgentDefs(cfg({ subagentModels: ["gpt-5.6-sol"] }), {}, dir);
     expect(readdirSync(join(dir, "agents")).length).toBe(2);
     injectClaudeAgentDefs(cfg({ subagentModels: ["gpt-5.6-sol"], claudeCode: { injectAgents: false } }), {}, dir);

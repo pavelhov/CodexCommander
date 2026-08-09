@@ -3,12 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ProviderAdapter, IncomingMeta } from "../../src/adapters/base";
-import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
+import type { AdapterEvent, CodexCommanderParsedRequest } from "../../src/types";
 import type { ImageBridgePlan, ImageCallResult } from "../../src/images/types";
 import type { ImageBridgeDeps } from "../../src/images/loop";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
-const PREV_HOME = process.env.OPENCODEX_HOME;
+const PREV_HOME = process.env.CODEXCOMMANDER_HOME;
 let runWithImageBridgeProduction: typeof import("../../src/images/loop")["runWithImageBridge"];
 let clampImageMaxRounds: typeof import("../../src/images/loop")["clampImageMaxRounds"];
 let DEFAULT_MAX_ROUNDS: typeof import("../../src/images/loop")["DEFAULT_MAX_ROUNDS"];
@@ -20,7 +20,7 @@ let fulfillResult: ImageCallResult = {
 };
 
 beforeAll(async () => {
-  process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID());
+  process.env.CODEXCOMMANDER_HOME = join(tmpdir(), "ccx-test-" + randomUUID());
   mock.restore();
   mock.module("../../src/web-search/progress-stream", () => ({
     parseStreamWithProgress: async function* (_resp: Response, parse: (r: Response) => AsyncGenerator<AdapterEvent>, _opts: unknown) {
@@ -51,7 +51,7 @@ function runWithImageBridge(
     },
   });
 }
-afterAll(() => { if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = PREV_HOME; mock.restore(); });
+afterAll(() => { if (PREV_HOME === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = PREV_HOME; mock.restore(); });
 
 // --- Mock adapter: yields canned events per iteration from a queue ---
 let streamQueue: AdapterEvent[][] = [];
@@ -84,8 +84,8 @@ const plan = {
   toolNames: new Set(["image_gen"]),
 } as ImageBridgePlan;
 
-function makeParsed(): OcxParsedRequest {
-  return { modelId: "test-model", context: { messages: [], tools: [] }, stream: true, options: {} } as OcxParsedRequest;
+function makeParsed(): CodexCommanderParsedRequest {
+  return { modelId: "test-model", context: { messages: [], tools: [] }, stream: true, options: {} } as CodexCommanderParsedRequest;
 }
 
 const imageCallEvents: AdapterEvent[] = [
@@ -668,7 +668,7 @@ describe("runWithImageBridge — runTurn adapter", () => {
   let runTurnEventQueue: AdapterEvent[][] = [];
   const runTurnAdapter: ProviderAdapter = {
     ...mockAdapter,
-    runTurn: async (_parsed: OcxParsedRequest, _incoming: IncomingMeta, emit: (e: AdapterEvent) => void) => {
+    runTurn: async (_parsed: CodexCommanderParsedRequest, _incoming: IncomingMeta, emit: (e: AdapterEvent) => void) => {
       const events = runTurnEventQueue.shift();
       if (events) for (const e of events) emit(e);
     },

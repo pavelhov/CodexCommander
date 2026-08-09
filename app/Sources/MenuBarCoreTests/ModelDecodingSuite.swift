@@ -1,37 +1,40 @@
 import Foundation
 import MenuBarCore
 
-/// Fixtures are verbatim captures from the live proxy on 2026-07-25, recorded in
-/// devlog/_plan/260725_macos_menubar_app/002_api_surface.md. Hand-written fixtures would
-/// only prove the models decode themselves.
+/// Fixtures track the live CodexCommander payload shape and command guidance.
 enum ModelDecodingSuite {
     private static func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         try JSONDecoder().decode(type, from: Data(json.utf8))
     }
 
-    private struct Envelope: Decodable { let reports: [QuotaReport]? }
+    private static func rejects<T: Decodable>(_ type: T.Type, _ json: String) -> Bool {
+        (try? decode(type, json)) == nil
+    }
+
+    private static func report(provider: String, label: String, source: String = "test", quota: String) -> String {
+        "{\"provider\":\"\(provider)\",\"label\":\"\(label)\",\"source\":\"\(source)\",\"quota\":\(quota),\"updatedAt\":1784915090763}"
+    }
 
     private static let liveHealth = """
-    {"routingKind":"opencodex-local","autostartEnabled":false,"serviceInstalled":true,
+    {"routingKind":"codexcommander-local","autostartEnabled":false,"serviceInstalled":true,
      "serviceViable":true,"serviceEnabled":true,"serviceRunning":true,"serviceStale":false,
      "serviceConflict":false,"serviceSupported":true,"shimInstalled":false,
      "shimHealthy":false,"platform":"darwin","diagnosticStale":true,"routingInjected":true,
      "localRoutingDependency":true,"status":"at-risk","rebootSafe":false,"protection":"none",
-     "shimCoverage":"none","recommendedCommand":"ocx service install",
-     "commands":{"installService":"ocx service install","installShim":"ocx codex-shim install",
-     "restoreNative":"ocx restore"}}
+     "shimCoverage":"none","recommendedCommand":"ccx service install",
+     "commands":{"installService":"ccx service install","repairService":"ccx service repair","installShim":"ccx codex-shim install",
+     "restoreNative":"ccx restore"}}
     """
 
     private static let liveQuotas = """
     {"generatedAt":1784915336899,"reports":[
       {"provider":"openai","label":"OpenAI (Codex login)","source":"chatgpt:wham",
-       "quota":{"updatedAt":1784915090763,"weeklyPercent":44,"weeklyResetAt":1785258443,
-                "resetCredits":3}},
+       "quota":{"updatedAt":1784915090763,"weeklyPercent":44,"weeklyResetAt":1785258443},"updatedAt":1784915090763},
       {"provider":"anthropic","label":"Anthropic Claude","source":"anthropic:oauth-usage",
-       "quota":{"weeklyPercent":58,"weeklyResetAt":1785265199718,
-                "customWindows":[{"label":"5h","percent":1,"resetAt":1784928599718}]}},
+       "quota":{"updatedAt":1784915090763,"weeklyPercent":58,"weeklyResetAt":1785265199718,
+                "customWindows":[{"label":"5h","percent":1,"resetAt":1784928599718}]},"updatedAt":1784915090763},
       {"provider":"xai","label":"xAI Grok","source":"xai:grok-billing",
-       "quota":{"monthlyPercent":86.82666666666667,"monthlyResetAt":1785542400000}}]}
+       "quota":{"updatedAt":1784915090763,"monthlyPercent":86.82666666666667,"monthlyResetAt":1785542400000},"updatedAt":1784915090763}],"availability":[]}
     """
 
     static func run(_ t: TestRunner) {
@@ -48,7 +51,7 @@ enum ModelDecodingSuite {
                 ),
                 "d986bada-dirty"
             )
-            t.isNil(BuildProvenance.shortRevision("2.10.2"), "release version is not provenance")
+            t.isNil(BuildProvenance.shortRevision("1.2.3"), "release version is not provenance")
             t.isNil(BuildProvenance.shortRevision("unknown"), "unknown source")
         }
 
@@ -56,31 +59,40 @@ enum ModelDecodingSuite {
             let health = try decode(StartupHealth.self, liveHealth)
             t.equal(health.status, "at-risk")
             t.equal(health.platform, "darwin")
-            t.equal(health.recommendedCommand, "ocx service install")
+            t.equal(health.recommendedCommand, "ccx service install")
             t.equal(health.isDiagnosticStale, true)
             t.equal(health.isProtected, false)
             t.equal(health.isServiceManaged, true)
-            t.equal(health.manualStartCommand, "ocx service start")
+            t.equal(health.manualStartCommand, "ccx service start")
         }
 
-        t.test("health: an unknown status string decodes without throwing") {
-            let health = try decode(StartupHealth.self, #"{"status":"some-future-state"}"#)
+        t.test("health: an unknown status string remains forward compatible") {
+            let health = try decode(StartupHealth.self, liveHealth.replacingOccurrences(of: "at-risk", with: "some-future-state"))
             t.equal(health.status, "some-future-state")
-            t.equal(health.isDiagnosticStale, false)
+            t.equal(health.isDiagnosticStale, true)
             t.equal(health.isProtected, false)
         }
 
-        t.test("health: without service fields it is not service-managed") {
-            let health = try decode(StartupHealth.self, #"{"status":"protected"}"#)
-            t.equal(health.isProtected, true)
-            t.equal(health.isServiceManaged, false)
-            t.equal(health.manualStartCommand, "ocx start")
+        t.test("health: rejects a stale partial startup-health payload") {
+            t.expect(rejects(StartupHealth.self, #"{"status":"protected"}"#), "partial health must be rejected")
+        }
+
+        t.test("restart: rejects a partial accepted response") {
+            t.expect(
+                rejects(RestartAccepted.self, #"{"success":true,"activeTurnCount":0,"drainTimeoutMs":1000,"alreadyDraining":false}"#),
+                "restart message must be present"
+            )
+            let accepted = try decode(
+                RestartAccepted.self,
+                #"{"success":true,"message":"Draining in-flight requests, then restarting.","activeTurnCount":0,"drainTimeoutMs":1000,"alreadyDraining":false}"#
+            )
+            t.equal(accepted.drainTimeoutMs, 1000)
         }
 
         // The decisive trap: openai sends weeklyResetAt in SECONDS (1785258443) while
         // anthropic sends MILLISECONDS (1785265199718) in the same array.
         t.test("quotas: mixed second and millisecond timestamps both resolve to 2026") {
-            let reports = try decode(Envelope.self, liveQuotas).reports ?? []
+            let reports = try decode(ProviderQuotaEnvelope.self, liveQuotas).reports
             t.equal(reports.count, 3)
             let calendar = Calendar(identifier: .gregorian)
             for report in reports {
@@ -91,7 +103,7 @@ enum ModelDecodingSuite {
         }
 
         t.test("quotas: normalization picks the right window per provider") {
-            let reports = try decode(Envelope.self, liveQuotas).reports ?? []
+            let reports = try decode(ProviderQuotaEnvelope.self, liveQuotas).reports
             let byProvider = Dictionary(uniqueKeysWithValues: reports.map { ($0.provider, $0.normalized()) })
             t.equal(byProvider["openai"]?.windowLabel, "week")
             t.equal(byProvider["openai"]?.percent, 44)
@@ -108,30 +120,25 @@ enum ModelDecodingSuite {
               {"provider":"future","status":"future-state",
                "reason":"future-reason","checkedAt":1784915336899}]}
             """)
-            t.equal(envelope.availability?.count, 2)
-            t.equal(envelope.availability?.first?.status, .unavailable)
-            t.equal(envelope.availability?.first?.reason, .localCLIRefreshRequired)
-            t.equal(envelope.availability?.last?.status, .unknown)
-            t.equal(envelope.availability?.last?.reason, .unknown)
-
-            let oldProxy = try decode(
-                ProviderQuotaEnvelope.self,
-                #"{"generatedAt":1,"reports":[]}"#
-            )
-            t.isNil(oldProxy.availability, "older proxy fallback")
+            t.equal(envelope.availability.count, 2)
+            t.equal(envelope.availability.first?.status, .unavailable)
+            t.equal(envelope.availability.first?.reason, .localCLIRefreshRequired)
+            t.equal(envelope.availability.last?.status, .unknown)
+            t.equal(envelope.availability.last?.reason, .unknown)
+            t.expect(rejects(ProviderQuotaEnvelope.self, #"{"generatedAt":1,"reports":[]}"#), "partial quota envelope must be rejected")
         }
 
         t.test("providers: quota presentation eligibility mirrors supported probes") {
             let providers = try decode([ProviderSummary].self, """
             [
-              {"name":"openai","authMode":"forward","quotaCapable":true},
-              {"name":"xai","authMode":"oauth","quotaCapable":true},
-              {"name":"kimi","authMode":"key","quotaCapable":true},
-              {"name":"team-a6","authMode":"key","quotaCapable":true},
-              {"name":"opencode-go","authMode":"key","quotaCapable":true},
-              {"name":"deepseek","authMode":"key","quotaCapable":false},
-              {"name":"legacy-xai","authMode":"oauth"},
-              {"name":"anthropic","authMode":"oauth","quotaCapable":true,"disabled":true}
+              {"name":"openai","adapter":"openai-responses","authMode":"forward","hasApiKey":false,"disabled":false,"quotaCapable":true},
+              {"name":"xai","adapter":"openai-chat","authMode":"oauth","hasApiKey":true,"disabled":false,"quotaCapable":true},
+              {"name":"kimi","adapter":"kimi","authMode":"key","hasApiKey":true,"disabled":false,"quotaCapable":true},
+              {"name":"team-a6","adapter":"openai-chat","authMode":"key","hasApiKey":true,"disabled":false,"quotaCapable":true},
+              {"name":"opencode-go","adapter":"opencode-go","authMode":"key","hasApiKey":true,"disabled":false,"quotaCapable":true},
+              {"name":"deepseek","adapter":"openai-chat","authMode":"key","hasApiKey":true,"disabled":false,"quotaCapable":false},
+              {"name":"xai-no-quota","adapter":"openai-chat","authMode":"oauth","hasApiKey":true,"disabled":false,"quotaCapable":false},
+              {"name":"anthropic","adapter":"anthropic","authMode":"oauth","hasApiKey":false,"disabled":true,"quotaCapable":true}
             ]
             """)
             let byName = Dictionary(uniqueKeysWithValues: providers.map { ($0.name, $0) })
@@ -139,18 +146,18 @@ enum ModelDecodingSuite {
                 t.equal(byName[name]?.supportsQuotaReporting, true, "\(name) supported")
             }
             t.equal(byName["deepseek"]?.supportsQuotaReporting, false)
-            t.equal(byName["legacy-xai"]?.supportsQuotaReporting, false, "old proxy omits capability")
+            t.equal(byName["xai-no-quota"]?.supportsQuotaReporting, false, "capability disabled")
             t.equal(byName["anthropic"]?.supportsQuotaReporting, false, "disabled provider")
 
             let reports = try decode([QuotaReport].self, """
             [
-              {"provider":"xai","label":"Grok","quota":{"monthlyPercent":41}},
-              {"provider":"anthropic","label":"Anthropic","quota":{"weeklyPercent":12}},
-              {"provider":"removed","label":"Removed","quota":{"monthlyPercent":9}}
+              {"provider":"xai","label":"Grok","source":"test","quota":{"updatedAt":1,"monthlyPercent":41},"updatedAt":1},
+              {"provider":"anthropic","label":"Anthropic","source":"test","quota":{"updatedAt":1,"weeklyPercent":12},"updatedAt":1},
+              {"provider":"removed","label":"Removed","source":"test","quota":{"updatedAt":1,"monthlyPercent":9},"updatedAt":1}
             ]
             """)
             let snapshot = ProxySnapshot(
-                state: .running(StartupHealth(status: "protected")),
+                state: .running(try decode(StartupHealth.self, liveHealth.replacingOccurrences(of: "at-risk", with: "protected"))),
                 endpoint: .default,
                 quotas: reports,
                 quotaAvailability: try decode([ProviderQuotaAvailability].self, """
@@ -172,24 +179,16 @@ enum ModelDecodingSuite {
             )
         }
 
-        t.test("quotas: nested freshness wins and report freshness fills the gap") {
+        t.test("quotas: quota measurement timestamp is authoritative") {
             let nested = try decode(
                 QuotaReport.self,
-                #"{"provider":"openai","updatedAt":1000,"quota":{"updatedAt":1784915090763}}"#
+                #"{"provider":"openai","label":"OpenAI","source":"test","updatedAt":1000,"quota":{"updatedAt":1784915090763}}"#
             )
             t.equal(nested.freshnessDate, QuotaReport.date(from: 1784915090763))
-
-            let report = try decode(
-                QuotaReport.self,
-                #"{"provider":"xai","updatedAt":1784915090763,"quota":{}}"#
-            )
-            t.equal(report.freshnessDate, QuotaReport.date(from: 1784915090763))
         }
 
         t.test("quotas: a custom-window-only quota uses its own label") {
-            let json = """
-            {"provider":"p","quota":{"customWindows":[{"label":"5h","percent":12,"resetAt":1784928599718}]}}
-            """
+            let json = report(provider: "p", label: "P", quota: #"{"updatedAt":1,"customWindows":[{"label":"5h","percent":12,"resetAt":1784928599718}]}"#)
             let normalized = try decode(QuotaReport.self, json).normalized()
             t.equal(normalized.windowLabel, "5h")
             t.equal(normalized.percent, 12)
@@ -199,10 +198,7 @@ enum ModelDecodingSuite {
         // google-antigravity each carry two customWindows. Returning one window would
         // hide real quota pressure.
         t.test("quotas: kimi exposes both its five-hour and weekly windows") {
-            let json = """
-            {"provider":"kimi","label":"Kimi","quota":{"fiveHourPercent":22,
-             "fiveHourResetAt":1784928599718,"weeklyPercent":61,"weeklyResetAt":1785265199718}}
-            """
+            let json = report(provider: "kimi", label: "Kimi", quota: #"{"updatedAt":1,"fiveHourPercent":22,"fiveHourResetAt":1784928599718,"weeklyPercent":61,"weeklyResetAt":1785265199718}"#)
             let report = try decode(QuotaReport.self, json)
             let windows = report.normalizedWindows()
             t.equal(windows.count, 2)
@@ -213,12 +209,7 @@ enum ModelDecodingSuite {
         }
 
         t.test("quotas: multiple custom windows are all retained") {
-            let json = """
-            {"provider":"cursor","label":"Cursor","quota":{"monthlyPercent":10,
-             "monthlyResetAt":1785256304000,
-             "customWindows":[{"label":"First-party models","percent":4,"resetAt":1785256304000},
-                              {"label":"API usage","percent":1,"resetAt":1785256304000}]}}
-            """
+            let json = report(provider: "cursor", label: "Cursor", quota: #"{"updatedAt":1,"monthlyPercent":10,"monthlyResetAt":1785256304000,"customWindows":[{"label":"First-party models","percent":4,"resetAt":1785256304000},{"label":"API usage","percent":1,"resetAt":1785256304000}]}"#)
             let report = try decode(QuotaReport.self, json)
             let windows = report.normalizedWindows()
             t.equal(windows.count, 3)
@@ -227,11 +218,7 @@ enum ModelDecodingSuite {
         }
 
         t.test("quotas: a provider with only custom windows still normalizes") {
-            let json = """
-            {"provider":"google-antigravity","label":"Google","quota":{
-             "customWindows":[{"label":"Gem","percent":30,"resetAt":1785256304000},
-                              {"label":"Cla","percent":12,"resetAt":1785256304000}]}}
-            """
+            let json = report(provider: "google-antigravity", label: "Google", quota: #"{"updatedAt":1,"customWindows":[{"label":"Gem","percent":30,"resetAt":1785256304000},{"label":"Cla","percent":12,"resetAt":1785256304000}]}"#)
             let report = try decode(QuotaReport.self, json)
             t.equal(report.normalizedWindows().count, 2)
             t.equal(report.normalized().windowLabel, "Gem")
@@ -242,10 +229,7 @@ enum ModelDecodingSuite {
         // right now even if its monthly usage is 10%; picking the longer horizon would
         // paint that row green while the user cannot make a request.
         t.test("quotas: the compact row shows the window under the most pressure") {
-            let json = """
-            {"provider":"kimi","label":"Kimi","quota":{"fiveHourPercent":99,
-             "fiveHourResetAt":1784928599718,"monthlyPercent":10,"monthlyResetAt":1785542400000}}
-            """
+            let json = report(provider: "kimi", label: "Kimi", quota: #"{"updatedAt":1,"fiveHourPercent":99,"fiveHourResetAt":1784928599718,"monthlyPercent":10,"monthlyResetAt":1785542400000}"#)
             let report = try decode(QuotaReport.self, json)
             t.equal(report.normalized().windowLabel, "5h")
             t.equal(report.normalized().percent, 99)
@@ -253,25 +237,19 @@ enum ModelDecodingSuite {
         }
 
         t.test("quotas: equal pressure breaks toward the longer horizon") {
-            let json = """
-            {"provider":"p","quota":{"fiveHourPercent":50,"fiveHourResetAt":1784928599718,
-             "weeklyPercent":50,"weeklyResetAt":1785265199718}}
-            """
+            let json = report(provider: "p", label: "P", quota: #"{"updatedAt":1,"fiveHourPercent":50,"fiveHourResetAt":1784928599718,"weeklyPercent":50,"weeklyResetAt":1785265199718}"#)
             t.equal(try decode(QuotaReport.self, json).normalized().windowLabel, "week")
         }
 
-        t.test("quotas: a window reporting only a reset time does not outrank a measured one") {
-            let json = """
-            {"provider":"p","quota":{"weeklyPercent":12,"weeklyResetAt":1785265199718,
-             "customWindows":[{"label":"unmeasured","resetAt":1785265199718}]}}
-            """
+        t.test("quotas: a less-pressured custom window does not outrank a measured one") {
+            let json = report(provider: "p", label: "P", quota: #"{"updatedAt":1,"weeklyPercent":12,"weeklyResetAt":1785265199718,"customWindows":[{"label":"custom","percent":6,"resetAt":1785265199718}]}"#)
             let report = try decode(QuotaReport.self, json)
             t.equal(report.normalized().windowLabel, "week")
             t.equal(report.normalized().percent, 12)
         }
 
-        t.test("quotas: an absent quota normalizes to a nil percent") {
-            let normalized = try decode(QuotaReport.self, #"{"provider":"p","label":"P"}"#).normalized()
+        t.test("quotas: a current empty quota normalizes to a nil percent") {
+            let normalized = try decode(QuotaReport.self, report(provider: "p", label: "P", quota: #"{"updatedAt":1}"#)).normalized()
             t.isNil(normalized.percent, "percent")
             t.equal(normalized.hasPercent, false)
             t.isNil(normalized.resetAt, "resetAt")
@@ -279,7 +257,7 @@ enum ModelDecodingSuite {
 
         t.test("quotas: OpenCode Go reference caps decode without inventing a percentage") {
             let json = """
-            {"provider":"opencode-go","label":"OpenCode Go",
+            {"provider":"opencode-go","label":"OpenCode Go","updatedAt":1784915090763,
              "source":"opencode-go:published-caps+local-estimate","quota":{
                "updatedAt":1784915090763,
                "referenceWindows":[
@@ -311,8 +289,8 @@ enum ModelDecodingSuite {
 
         t.test("quotas: inconsistent complete coverage degrades to Partial") {
             let json = """
-            {"provider":"opencode-go","quota":{"referenceWindows":[{
-              "id":"five_hour","publishedLimitUsd":12,"observedSpendUsd":0.3,
+            {"provider":"opencode-go","label":"OpenCode Go","source":"test","updatedAt":1,"quota":{"updatedAt":1,"referenceWindows":[{
+              "id":"five_hour","label":"5-hour","windowSeconds":18000,"publishedLimitUsd":12,"observedSpendUsd":0.3,
               "observedTokens":100,"observedRequests":2,"pricedRequests":1,
               "unpricedRequests":1,"unmeasuredRequests":0,"coverage":"complete"}]}}
             """
@@ -323,9 +301,9 @@ enum ModelDecodingSuite {
         t.test("providers: decodes the live list") {
             let json = """
             [{"name":"openai","adapter":"openai-responses","hasApiKey":false,
-              "authMode":"forward","disabled":false,"codexAccountMode":"pool"},
+              "authMode":"forward","disabled":false,"quotaCapable":true,"codexAccountMode":"pool"},
              {"name":"anthropic","adapter":"anthropic","hasApiKey":false,
-              "authMode":"oauth","disabled":true}]
+              "authMode":"oauth","disabled":true,"quotaCapable":true}]
             """
             let providers = try decode([ProviderSummary].self, json)
             t.equal(providers.count, 2)
@@ -334,8 +312,19 @@ enum ModelDecodingSuite {
             t.equal(providers[1].isEnabled, false)
         }
 
-        t.test("providers: a provider without a disabled field is enabled") {
-            t.equal(try decode(ProviderSummary.self, #"{"name":"custom"}"#).isEnabled, true)
+        t.test("providers: rejects partial summaries but keeps authMode optional") {
+            let current = #"{"name":"custom","adapter":"openai-chat","hasApiKey":false,"disabled":false,"quotaCapable":false}"#
+            t.equal(try decode(ProviderSummary.self, current).isEnabled, true)
+            let requiredFragments = [
+                ("adapter", ",\"adapter\":\"openai-chat\""),
+                ("hasApiKey", ",\"hasApiKey\":false"),
+                ("disabled", ",\"disabled\":false"),
+                ("quotaCapable", ",\"quotaCapable\":false"),
+            ]
+            for (field, fragment) in requiredFragments {
+                let partial = current.replacingOccurrences(of: fragment, with: "")
+                t.expect(rejects(ProviderSummary.self, partial), "missing \(field) must be rejected")
+            }
         }
 
         t.test("activity: schema v1 decodes truthful active-only phases") {

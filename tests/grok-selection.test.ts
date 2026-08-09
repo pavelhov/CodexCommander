@@ -6,7 +6,7 @@ import { buildGrokManagedBlock, injectGrokConfig } from "../src/grok/inject";
 import { syncGrokConfig } from "../src/grok/sync";
 import { nativeOpenAiContextWindow, visibleNativeSlugs } from "../src/codex/catalog";
 import type { CatalogModel } from "../src/codex/catalog";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
@@ -15,7 +15,7 @@ let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 beforeEach(() => {
   previousCodexCliPath = process.env.CODEX_CLI_PATH;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-grok-selection-codex-");
+  isolatedCodexHome = installIsolatedCodexHome("ccx-grok-selection-codex-");
   process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
 });
 
@@ -39,7 +39,7 @@ const MODELS = [
 ];
 
 function tempGrokHome(): { root: string; grokHome: string } {
-  const root = mkdtempSync(join(tmpdir(), "ocx-grok-sel-"));
+  const root = mkdtempSync(join(tmpdir(), "ccx-grok-sel-"));
   const grokHome = join(root, ".grok");
   mkdirSync(grokHome);
   return { root, grokHome };
@@ -62,7 +62,7 @@ test("excluding an unknown id changes nothing", () => {
     .toBe(buildGrokManagedBlock(10100, MODELS));
 });
 
-// THE audit regression: kimi/k3 and kimi/k3[1m] both sanitize toward ocx-kimi-k3-….
+// THE audit regression: kimi/k3 and kimi/k3[1m] both sanitize toward ccx-kimi-k3-….
 // Switching the first off must NOT rename the second's alias.
 test("excluding a colliding model leaves the survivor's alias unchanged", () => {
   const full = buildGrokManagedBlock(10100, [
@@ -74,8 +74,8 @@ test("excluding a colliding model leaves the survivor's alias unchanged", () => 
     { id: "kimi-k3" },
   ], undefined, undefined, new Set(["kimi/k3"]));
 
-  const survivorAlias = /\[model\.(ocx-[^\]]+)\][^[]*model = "kimi-k3"/.exec(full)?.[1];
-  expect(survivorAlias).toBe("ocx-kimi-k3-2");
+  const survivorAlias = /\[model\.(ccx-[^\]]+)\][^[]*model = "kimi-k3"/.exec(full)?.[1];
+  expect(survivorAlias).toBe("ccx-kimi-k3-2");
   expect(filtered).toContain(`[model.${survivorAlias}]`);
   expect(filtered).not.toContain('model = "kimi/k3"');
 });
@@ -84,7 +84,7 @@ test("excluding a colliding model leaves the survivor's alias unchanged", () => 
 // stray blank line or merge the marker with the next table.
 test("excluding the first model keeps the TOML shape valid", () => {
   const block = buildGrokManagedBlock(10100, MODELS, undefined, undefined, new Set(["kimi/k3"]));
-  const afterMarker = block.split("do not edit (removed by `ocx stop`) >>>\n")[1]!;
+  const afterMarker = block.split("do not edit (removed by `ccx stop`) >>>\n")[1]!;
   expect(afterMarker.startsWith("[model.")).toBe(true);
   expect(block).not.toContain("\n\n\n");
 });
@@ -97,7 +97,7 @@ test("excluding everything writes a marker-only fence that strip removes", () =>
     const result = injectGrokConfig(10100, MODELS, { grokHome, excluded: new Set(MODELS.map(m => m.id)) });
     expect(result.ok).toBe(true);
     const content = readFileSync(join(grokHome, "config.toml"), "utf8");
-    expect(content).toContain(">>> opencodex managed block");
+    expect(content).toContain(">>> CodexCommander managed block");
     expect(content).not.toContain("[model.");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -107,7 +107,7 @@ test("excluding everything writes a marker-only fence that strip removes", () =>
 test("a user-reserved alias still pushes generated aliases past it while exclusions are active", () => {
   const { root, grokHome } = tempGrokHome();
   try {
-    writeFileSync(join(grokHome, "config.toml"), '[model.ocx-kimi-k3]\nmodel = "mine"\n', "utf8");
+    writeFileSync(join(grokHome, "config.toml"), '[model.ccx-kimi-k3]\nmodel = "mine"\n', "utf8");
     const result = injectGrokConfig(10100, [{ id: "kimi/k3" }, { id: "kimi-k3" }], {
       grokHome,
       excluded: new Set(["kimi/k3"]),
@@ -115,15 +115,15 @@ test("a user-reserved alias still pushes generated aliases past it while exclusi
     expect(result.ok).toBe(true);
     const content = readFileSync(join(grokHome, "config.toml"), "utf8");
     // The user's own table is preserved verbatim outside the fence.
-    expect(content).toContain('[model.ocx-kimi-k3]\nmodel = "mine"');
+    expect(content).toContain('[model.ccx-kimi-k3]\nmodel = "mine"');
     // And the survivor's generated alias starts AFTER the reservation, not at -1.
-    expect(content).not.toContain("[model.ocx-kimi-k3]\nmodel = \"kimi-k3\"");
+    expect(content).not.toContain("[model.ccx-kimi-k3]\nmodel = \"kimi-k3\"");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-const baseConfig = { port: 10100, defaultProvider: "openai", providers: {} } as unknown as OcxConfig;
+const baseConfig = { port: 10100, defaultProvider: "openai", providers: {} } as unknown as CodexCommanderConfig;
 
 test("syncGrokConfig with grokExcludedModels omits that model's table end to end", async () => {
   const { root, grokHome } = tempGrokHome();
@@ -131,7 +131,7 @@ test("syncGrokConfig with grokExcludedModels omits that model's table end to end
     const routed: CatalogModel[] = [
       { id: "grok-4.5", provider: "cursor", contextWindow: 500_000 } as CatalogModel,
     ];
-    const config = { ...baseConfig, grokExcludedModels: ["cursor/grok-4.5"] } as OcxConfig;
+    const config = { ...baseConfig, grokExcludedModels: ["cursor/grok-4.5"] } as CodexCommanderConfig;
     const result = await syncGrokConfig(10190, config, { grokHome }, {
       fetchAllModels: async () => routed,
       injectGrokConfig,
@@ -140,7 +140,7 @@ test("syncGrokConfig with grokExcludedModels omits that model's table end to end
     const content = readFileSync(join(grokHome, "config.toml"), "utf8");
     expect(content).not.toContain('model = "cursor/grok-4.5"');
     // Natives are untouched and still carry their windows.
-    expect(content).toContain("[model.ocx-gpt-");
+    expect(content).toContain("[model.ccx-gpt-");
     expect(content).toContain(`context_window = ${nativeOpenAiContextWindow("gpt-5.6-sol")}`);
     expect(visibleNativeSlugs(config).length).toBeGreaterThan(0);
   } finally {

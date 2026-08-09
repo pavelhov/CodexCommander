@@ -12,10 +12,18 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  OWNER_FILE,
+  UNINSTALL_MANIFEST,
+} from "../identity";
 import type { GenerationContext } from "./state-store-sweeper";
 
-export const CONFIG_OWNER_FILE = ".opencodex-owner.json";
-export const CONFIG_UNINSTALL_MANIFEST = ".opencodex-uninstall.json";
+export const CONFIG_OWNER_FILE = OWNER_FILE;
+export const CONFIG_UNINSTALL_MANIFEST = UNINSTALL_MANIFEST;
+const OWNERSHIP_METADATA_FILES = [
+  CONFIG_OWNER_FILE,
+  CONFIG_UNINSTALL_MANIFEST,
+] as const;
 
 export type ConfigRemovalResult = {
   status: "absent" | "removed" | "partial" | "refused";
@@ -33,13 +41,19 @@ type ConfigUninstallManifest = ConfigOwner & {
   paths: string[];
 };
 
+type ConfigOwnership = {
+  owner: ConfigOwner;
+  manifest: ConfigUninstallManifest;
+  ownerFile: string;
+  manifestFile: string;
+};
+
 const METADATA_MAX_BYTES = 64 * 1024;
 const MANIFEST_MAX_PATHS = 1024;
 const INITIAL_OWNED_PATHS = [
   "artifacts",
   "auth.json",
   "auth.store.lock",
-  "catalog-backup.json",
   "claude-env.sh",
   "codex-accounts.json",
   "codex-runtime-clamp.json",
@@ -54,14 +68,15 @@ const INITIAL_OWNED_PATHS = [
   "crash.log",
   "kimi-device-id",
   "mimo-client-id",
-  "ocx.pid",
-  "opencodex-service-launcher.vbs",
-  "opencodex-service-task.xml",
-  "opencodex-service.cmd",
-  "opencodex-tray-offline.ico",
-  "opencodex-tray-online.ico",
-  "opencodex-tray-warning.ico",
-  "opencodex-tray.ps1",
+  "codexcommander.pid",
+  "codexcommander-service-launcher.vbs",
+  "codexcommander-service-task.xml",
+  "codexcommander-service.cmd",
+  "codexcommander-tray-offline.ico",
+  "codexcommander-tray-online.ico",
+  "codexcommander-tray-warning.ico",
+  "codexcommander-tray.ps1",
+  "codexcommander-tray.vbs",
   "proxy-ensure.lock",
   "proxy-start.lock",
   "responses-state.json",
@@ -72,16 +87,12 @@ const INITIAL_OWNED_PATHS = [
   "system-env-port",
   "tray-heartbeat.json",
   "tray-state.json",
-  "update-job.json",
   "usage-debug.jsonl",
   "usage.jsonl",
   "version.json",
   "winsw",
 ] as const;
-const ownershipCache = new Map<string, {
-  owner: ConfigOwner;
-  manifest: ConfigUninstallManifest;
-} | null>();
+const ownershipCache = new Map<string, ConfigOwnership | null>();
 let lastReconciledGeneration = 0;
 
 export function listLiveConfigOwnershipRoots(currentConfigDir: string): ReadonlySet<string> {
@@ -175,13 +186,15 @@ function manifestRelativePath(configDir: string, candidatePath: string): string 
   if (normalized.split("/").some(part => !part || part === "." || part === ".." || part.includes("\\"))) {
     return null;
   }
-  if (normalized === CONFIG_OWNER_FILE || normalized === CONFIG_UNINSTALL_MANIFEST) return null;
+  if (OWNERSHIP_METADATA_FILES.some(name => normalized === name)) return null;
   return normalized;
 }
 
-function loadOwnership(configDir: string): { owner: ConfigOwner; manifest: ConfigUninstallManifest } | null {
-  const ownerPath = join(configDir, CONFIG_OWNER_FILE);
-  const manifestPath = join(configDir, CONFIG_UNINSTALL_MANIFEST);
+function loadOwnership(configDir: string): ConfigOwnership | null {
+  const ownerName = CONFIG_OWNER_FILE;
+  const manifestName = CONFIG_UNINSTALL_MANIFEST;
+  const ownerPath = join(configDir, ownerName);
+  const manifestPath = join(configDir, manifestName);
   if (!existsSync(ownerPath) || !existsSync(manifestPath)) return null;
   try {
     const owner = readBoundedJson(ownerPath);
@@ -194,13 +207,18 @@ function loadOwnership(configDir: string): { owner: ConfigOwner; manifest: Confi
       || !samePath(owner.root, root)
       || !samePath(manifest.root, root)
     ) return null;
-    return { owner, manifest };
+    return {
+      owner,
+      manifest,
+      ownerFile: ownerName,
+      manifestFile: manifestName,
+    };
   } catch {
     return null;
   }
 }
 
-function createOwnership(configDir: string): { owner: ConfigOwner; manifest: ConfigUninstallManifest } | null {
+function createOwnership(configDir: string): ConfigOwnership | null {
   const rootStat = lstatSync(configDir);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink() || readdirSync(configDir).length !== 0) return null;
   const owner: ConfigOwner = {
@@ -224,11 +242,20 @@ function createOwnership(configDir: string): { owner: ConfigOwner; manifest: Con
     try { unlinkSync(join(configDir, CONFIG_OWNER_FILE)); } catch { /* incomplete metadata fails closed */ }
     throw error;
   }
-  return { owner, manifest };
+  return {
+    owner,
+    manifest,
+    ownerFile: CONFIG_OWNER_FILE,
+    manifestFile: CONFIG_UNINSTALL_MANIFEST,
+  };
 }
 
-function writeManifest(configDir: string, manifest: ConfigUninstallManifest): void {
-  const path = join(configDir, CONFIG_UNINSTALL_MANIFEST);
+function writeManifest(
+  configDir: string,
+  manifest: ConfigUninstallManifest,
+  manifestFile = CONFIG_UNINSTALL_MANIFEST,
+): void {
+  const path = join(configDir, manifestFile);
   const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   writeFileSync(temp, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   try {
@@ -279,8 +306,8 @@ export function recordOwnedConfigPath(configDir: string, candidatePath: string):
     ...ownership.manifest,
     paths: [...ownership.manifest.paths, rel].sort(),
   };
-  writeManifest(configDir, manifest);
-  ownershipCache.set(cacheKey, { owner: ownership.owner, manifest });
+  writeManifest(configDir, manifest, ownership.manifestFile);
+  ownershipCache.set(cacheKey, { ...ownership, manifest });
   return true;
 }
 
@@ -331,8 +358,11 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
   }
 
   try {
-    unlinkSync(join(configDir, CONFIG_UNINSTALL_MANIFEST));
-    unlinkSync(join(configDir, CONFIG_OWNER_FILE));
+    // Remove the complete current metadata pair. The validated pair authorizes the uninstall;
+    // an orphaned half must not keep an otherwise empty root alive.
+    for (const name of OWNERSHIP_METADATA_FILES) {
+      if (existsSync(join(configDir, name))) unlinkSync(join(configDir, name));
+    }
   } catch (error) {
     return {
       status: "partial",

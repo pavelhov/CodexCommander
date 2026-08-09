@@ -26,7 +26,7 @@ import {
   CODEX_QUOTA_PROBE_INTERVAL_MS,
   recordCodexUpstreamOutcome,
 } from "../src/codex/routing";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 // beforeEach writes three Codex credentials (NTFS ACL harden on Windows). Under
 // `bun test --isolate` on a loaded windows-latest runner that can exceed the
@@ -34,7 +34,7 @@ import type { OcxConfig } from "../src/types";
 setDefaultTimeout(30_000);
 
 const savedCodexHome = process.env.CODEX_HOME;
-const savedOpencodexHome = process.env.OPENCODEX_HOME;
+const savedCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
 let testDir: string;
 
 function installPoolCredential(accountId: string, now = Date.now()): void {
@@ -46,9 +46,10 @@ function installPoolCredential(accountId: string, now = Date.now()): void {
   });
 }
 
-function cfg(overrides: Partial<OcxConfig> = {}): OcxConfig {
+function cfg(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
   return {
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     providers: {
       // Omitted codexAccountMode — canonical openai defaults to pool via routeModel.
       openai: {
@@ -63,10 +64,10 @@ function cfg(overrides: Partial<OcxConfig> = {}): OcxConfig {
     activeCodexAccountId: "pool-a",
     autoSwitchThreshold: 80,
     codexAccounts: [
-      { id: "main", email: "main@example.test", isMain: true },
-      { id: "pool-a", email: "a@example.test", isMain: false, chatgptAccountId: "pool_a_acc" },
-      { id: "account-a", email: "aa@example.test", isMain: false, chatgptAccountId: "aa_acc" },
-      { id: "account-b", email: "bb@example.test", isMain: false, chatgptAccountId: "bb_acc" },
+      { id: "main", email: "main@example.test", logLabel: "p000001", isMain: true },
+      { id: "pool-a", email: "a@example.test", logLabel: "p000002", isMain: false, chatgptAccountId: "pool_a_acc" },
+      { id: "account-a", email: "aa@example.test", logLabel: "p000003", isMain: false, chatgptAccountId: "aa_acc" },
+      { id: "account-b", email: "bb@example.test", logLabel: "p000004", isMain: false, chatgptAccountId: "bb_acc" },
     ],
     subagentModelFallback: [
       "gpt-5.6-sol",
@@ -78,7 +79,7 @@ function cfg(overrides: Partial<OcxConfig> = {}): OcxConfig {
 }
 
 function codexHomeFixture(): string {
-  const dir = mkdtempSync(join(tmpdir(), "ocx-subagent-fallback-"));
+  const dir = mkdtempSync(join(tmpdir(), "ccx-subagent-fallback-"));
   mkdirSync(join(dir, "agents"), { recursive: true });
   process.env.CODEX_HOME = dir;
   return dir;
@@ -87,8 +88,8 @@ function codexHomeFixture(): string {
 // Credential writes can hit Windows ACL harden stalls under full-suite isolate
 // load (GHA windows-latest: beforeEach/afterEach hook timed out ~7.6s).
 beforeEach(() => {
-  testDir = mkdtempSync(join(tmpdir(), "ocx-subagent-fb-"));
-  process.env.OPENCODEX_HOME = testDir;
+  testDir = mkdtempSync(join(tmpdir(), "ccx-subagent-fb-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   process.env.CODEX_HOME = testDir;
   installPoolCredential("pool-a");
   installPoolCredential("account-a");
@@ -102,8 +103,8 @@ beforeEach(() => {
 afterEach(() => {
   if (savedCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = savedCodexHome;
-  if (savedOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = savedOpencodexHome;
+  if (savedCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = savedCodexCommanderHome;
   clearAccountQuota();
   resetSubagentModelFallbackStateForTests();
   clearAccountNeedsReauth("pool-a");

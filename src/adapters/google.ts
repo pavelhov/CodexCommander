@@ -4,13 +4,13 @@ import { createHash } from "node:crypto";
 import { createImageBudget, materializeInlineImage, MAX_ENCODED_BYTES_PER_IMAGE, artifactHttpUrl } from "../images/artifacts";
 import type {
   AdapterEvent,
-  OcxAssistantMessage,
-  OcxContentPart,
-  OcxParsedRequest,
-  OcxProviderConfig,
-  OcxTextContent,
-  OcxToolCall,
-  OcxUsage,
+  CodexCommanderAssistantMessage,
+  CodexCommanderContentPart,
+  CodexCommanderParsedRequest,
+  CodexCommanderProviderConfig,
+  CodexCommanderTextContent,
+  CodexCommanderToolCall,
+  CodexCommanderUsage,
 } from "../types";
 import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolAllowedByChoice } from "../types";
 import { contentPartsToText, parseDataUrl } from "./image";
@@ -83,7 +83,7 @@ function geminiToolCallId(rawId: string | undefined): string | undefined {
  * can be inlined; a remote URL has no mime type we can supply, so it is skipped here (the textual
  * result already carries an "[image]" marker via contentPartsToText).
  */
-function toolResultImageParts(content: string | OcxContentPart[]): unknown[] {
+function toolResultImageParts(content: string | CodexCommanderContentPart[]): unknown[] {
   if (typeof content === "string") return [];
   const parts: unknown[] = [];
   for (const p of content) {
@@ -117,14 +117,14 @@ function geminiTextPart(text: unknown): { text: string } | undefined {
  * actually carry (`toolResultImageParts` adds none). Fall back to the placeholder unless the content
  * has something representable.
  */
-function geminiToolResultText(content: string | OcxContentPart[]): string {
+function geminiToolResultText(content: string | CodexCommanderContentPart[]): string {
   if (typeof content === "string") return content || GEMINI_EMPTY_TOOL_OUTPUT_PLACEHOLDER;
   const hasContent = content.some(p => p.type === "image" || (typeof p.text === "string" && p.text.length > 0));
   return hasContent ? contentPartsToText(content) : GEMINI_EMPTY_TOOL_OUTPUT_PLACEHOLDER;
 }
 
 function messagesToGeminiFormat(
-  parsed: OcxParsedRequest,
+  parsed: CodexCommanderParsedRequest,
   routedModelId = parsed.modelId,
 ): { systemInstruction?: unknown; contents: unknown[] } {
   // Neutralize Codex's GPT-5 identity line (Gemini/Antigravity share this path) so a routed model
@@ -147,7 +147,7 @@ function messagesToGeminiFormat(
           contents.push({ role: "user", parts: [{ text: msg.content || GEMINI_EMPTY_PLACEHOLDER }] });
         } else {
           const parts: unknown[] = [];
-          for (const p of msg.content as OcxContentPart[]) {
+          for (const p of msg.content as CodexCommanderContentPart[]) {
             if (p.type === "image") {
               const data = parseDataUrl(p.imageUrl);
               // Gemini takes base64 via inline_data; a remote URL needs a mime type we don't have, so
@@ -164,14 +164,14 @@ function messagesToGeminiFormat(
         break;
       }
       case "assistant": {
-        const aMsg = msg as OcxAssistantMessage;
+        const aMsg = msg as CodexCommanderAssistantMessage;
         const parts: unknown[] = [];
         for (const p of aMsg.content) {
           if (p.type === "text") {
-            const textPart = geminiTextPart((p as OcxTextContent).text);
+            const textPart = geminiTextPart((p as CodexCommanderTextContent).text);
             if (textPart) parts.push(textPart);
           } else if (p.type === "toolCall") {
-            const tc = p as OcxToolCall;
+            const tc = p as CodexCommanderToolCall;
             // Preserve the thought signature on the function-call part so Antigravity/Gemini-3
             // reasoning continuity survives history-driven (stateless) turns, not just same-process
             // streaming covered by the replay cache. Only forward a REAL upstream signature — the
@@ -215,7 +215,7 @@ function messagesToGeminiFormat(
   return { systemInstruction, contents };
 }
 
-function toolsToGeminiFormat(parsed: OcxParsedRequest): unknown[] | undefined {
+function toolsToGeminiFormat(parsed: CodexCommanderParsedRequest): unknown[] | undefined {
   if (!parsed.context.tools?.length) return undefined;
   const allowed = isAllowedToolChoice(parsed.options.toolChoice)
     ? new Set(parsed.options.toolChoice.allowedTools)
@@ -239,7 +239,7 @@ function toolsToGeminiFormat(parsed: OcxParsedRequest): unknown[] | undefined {
  * so the common case is byte-identical. The allowedTools variant already filters the
  * declarations in toolsToGeminiFormat; only its "required" half needs a wire mode.
  */
-function toolChoiceToGeminiToolConfig(parsed: OcxParsedRequest): Record<string, unknown> | undefined {
+function toolChoiceToGeminiToolConfig(parsed: CodexCommanderParsedRequest): Record<string, unknown> | undefined {
   const choice = parsed.options.toolChoice;
   if (!choice || choice === "auto") return undefined;
   if (choice === "none") return { functionCallingConfig: { mode: "NONE" } };
@@ -255,7 +255,7 @@ function toolChoiceToGeminiToolConfig(parsed: OcxParsedRequest): Record<string, 
   };
 }
 
-function usageFromGemini(usage: Record<string, number> | undefined): OcxUsage | undefined {
+function usageFromGemini(usage: Record<string, number> | undefined): CodexCommanderUsage | undefined {
   if (!usage) return undefined;
   return {
     inputTokens: usage.promptTokenCount ?? 0,
@@ -297,7 +297,7 @@ function artifactMarkdownUrl(filePath: string): string {
   return artifactHttpUrl(filePath).replace(/([()])/g, "\\$1");
 }
 
-export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapter {
+export function createGoogleAdapter(provider: CodexCommanderProviderConfig): ProviderAdapter {
   // Per-request closure: resolveAdapter builds a fresh adapter per request (server.ts), so buildRequest
   // can stash the CCA model/session for parseStream's reasoning-replay observation.
   let antigravityModel: string | undefined;
@@ -317,7 +317,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
       : {}),
 
-    async buildRequest(parsed: OcxParsedRequest) {
+    async buildRequest(parsed: CodexCommanderParsedRequest) {
       const routedModelId = provider.googleMode === "cloud-code-assist"
         ? resolveAntigravityEffortWireModel(
             parsed.modelId,
@@ -359,12 +359,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       if (provider.googleMode === "cloud-code-assist") {
         // Google Antigravity (Cloud Code Assist): wrap the flat Gemini body in the CCA envelope.
         const token = provider.apiKey?.trim();
-        if (!token) throw new Error("google-antigravity oauth token missing — run ocx login google-antigravity");
+        if (!token) throw new Error("google-antigravity oauth token missing — run ccx login google-antigravity");
         const base = provider.baseUrl?.trim();
         if (!base) throw new Error("google-antigravity requires a non-empty baseUrl");
         const url = `${base}/v1internal:${method}${streamParam}`;
         const project = provider.project;
-        if (!project) throw new Error("Antigravity requires a discovered Cloud Code Assist project id (re-run `ocx login google-antigravity`).");
+        if (!project) throw new Error("Antigravity requires a discovered Cloud Code Assist project id (re-run `ccx login google-antigravity`).");
         const sessionId = antigravitySessionId(parsed);
         const mappedEffort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
         const { wireModelId, thinkingLevel } = resolveAntigravityEffortWireModel(parsed.modelId, mappedEffort);
@@ -472,7 +472,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       const budgetEncoder = new TextEncoder();
       let buffer = "";
       let bufferBytes = 0;
-      let pendingUsage: OcxUsage | undefined;
+      let pendingUsage: CodexCommanderUsage | undefined;
       let toolCallsStarted = 0;
       let lastFinishReason: string | undefined;
       let sawAnyFrame = false;

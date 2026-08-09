@@ -1,6 +1,13 @@
 import { timingSafeEqual } from "node:crypto";
 import { formatErrorResponse } from "../bridge";
 import {
+  ADMIN_KEY_PREFIX,
+  API_KEY_HEADER,
+  AUTH_REQUIRED_MESSAGE,
+  DATA_KEY_PREFIX,
+  GUI_SESSION_PREFIX,
+} from "../identity";
+import {
   apiKeyTransportConfigError,
   booleanRecordConfigError,
   modelAdapterRecordConfigError,
@@ -18,7 +25,7 @@ import { providerDestinationConfigError } from "../lib/destination-policy";
 import { redactSecretString } from "../lib/redact";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerCodexAccountMode, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
-import type { OcxConfig, OcxProviderConfig } from "../types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../types";
 import { openRouterRoutingConfigError } from "../providers/openrouter-routing";
 import { googleVertexLocationConfigError } from "../providers/google-vertex-location";
 import { providerCredentialVerification } from "../providers/credential-verification";
@@ -75,7 +82,7 @@ export function isSameOriginAsRequest(req: Request, origin: string): boolean {
   }
 }
 
-export function isAllowedRequestOrigin(req: Request, config: OcxConfig): boolean {
+export function isAllowedRequestOrigin(req: Request, config: CodexCommanderConfig): boolean {
   const origin = req.headers.get("Origin");
   if (!isApiAuthRequired(config)) {
     if (!isLoopbackRequestHost(req.headers.get("Host"))) return false;
@@ -84,7 +91,7 @@ export function isAllowedRequestOrigin(req: Request, config: OcxConfig): boolean
   return !origin || isLoopbackOriginValue(origin) || isSameOriginAsRequest(req, origin) || isExtraAllowedOrigin(origin, config);
 }
 
-function isExtraAllowedOrigin(origin: string, cfg: OcxConfig): boolean {
+function isExtraAllowedOrigin(origin: string, cfg: CodexCommanderConfig): boolean {
   if (!cfg.corsAllowOrigins?.length) return false;
   const parsedOrigin = comparableOrigin(origin);
   return cfg.corsAllowOrigins.some(allowed => {
@@ -108,7 +115,7 @@ function comparableOrigin(value: string): string | null {
   }
 }
 
-export function managementRequestOrigin(req: Request, config: OcxConfig): string | null {
+export function managementRequestOrigin(req: Request, config: CodexCommanderConfig): string | null {
   const host = req.headers.get("Host");
   const parsedHost = parseHttpHost(host);
   if (!host || !parsedHost) return null;
@@ -122,7 +129,7 @@ export function managementRequestOrigin(req: Request, config: OcxConfig): string
   }
 }
 
-export function isAllowedManagementOrigin(req: Request, config: OcxConfig): boolean {
+export function isAllowedManagementOrigin(req: Request, config: CodexCommanderConfig): boolean {
   const requestOrigin = managementRequestOrigin(req, config);
   if (!requestOrigin) return false;
   const origin = req.headers.get("Origin");
@@ -138,7 +145,7 @@ export function browserSecurityHeaders(): Record<string, string> {
   };
 }
 
-export function corsHeaders(req?: Request, config?: OcxConfig): Record<string, string> {
+export function corsHeaders(req?: Request, config?: CodexCommanderConfig): Record<string, string> {
   const origin = req?.headers.get("Origin");
   const allowOrigin = origin && req && config && isAllowedRequestOrigin(req, config) ? origin : _corsOrigin;
   return {
@@ -147,13 +154,13 @@ export function corsHeaders(req?: Request, config?: OcxConfig): Record<string, s
     // ChatGPT-Account-Id is required for browser/Electron ChatGPT & Codex App voice preflights
     // (direct forward auth matches the bearer to this account id). The OpenAI-Alpha .. X-OAI-Attestation
     // block covers GPT-Live voice protocol headers relayed by the /v1/live call-create path.
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-OpenCodex-API-Key, X-Api-Key, Anthropic-Version, Anthropic-Beta, ChatGPT-Account-Id, OpenAI-Alpha, X-Session-Id, Session-Id, Thread-Id, Originator, X-OAI-Attestation",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-CodexCommander-API-Key, X-CodexCommander-GUI-Origin, X-CodexCommander-CSRF-Token, X-Api-Key, Anthropic-Version, Anthropic-Beta, ChatGPT-Account-Id, OpenAI-Alpha, X-Session-Id, Session-Id, Thread-Id, Originator, X-OAI-Attestation",
     "Vary": "Origin",
     ...browserSecurityHeaders(),
   };
 }
 
-export function managementCorsHeaders(req?: Request, config?: OcxConfig): Record<string, string> {
+export function managementCorsHeaders(req?: Request, config?: CodexCommanderConfig): Record<string, string> {
   const headers = corsHeaders();
   const origin = req?.headers.get("Origin");
   if (origin && req && config && isAllowedManagementOrigin(req, config)) {
@@ -162,7 +169,7 @@ export function managementCorsHeaders(req?: Request, config?: OcxConfig): Record
   return headers;
 }
 
-export function withCors(response: Response, req: Request, config: OcxConfig): Response {
+export function withCors(response: Response, req: Request, config: CodexCommanderConfig): Response {
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(corsHeaders(req, config))) {
     headers.set(name, value);
@@ -174,7 +181,7 @@ export function withCors(response: Response, req: Request, config: OcxConfig): R
   });
 }
 
-export function withManagementCors(response: Response, req: Request, config: OcxConfig): Response {
+export function withManagementCors(response: Response, req: Request, config: CodexCommanderConfig): Response {
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(managementCorsHeaders(req, config))) {
     headers.set(name, value);
@@ -186,20 +193,20 @@ export function withManagementCors(response: Response, req: Request, config: Ocx
   });
 }
 
-export function jsonResponse(data: unknown, status = 200, req?: Request, config?: OcxConfig): Response {
+export function jsonResponse(data: unknown, status = 200, req?: Request, config?: CodexCommanderConfig): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/json", ...corsHeaders(req, config) },
   });
 }
 
-export function configuredApiAuthToken(_config: OcxConfig): string | undefined {
-  const token = process.env.OPENCODEX_API_AUTH_TOKEN?.trim();
+export function configuredApiAuthToken(_config: CodexCommanderConfig): string | undefined {
+  const token = process.env.CODEXCOMMANDER_API_AUTH_TOKEN?.trim();
   return token || undefined;
 }
 
 export function configuredAdminAuthToken(): string | undefined {
-  const token = process.env.OPENCODEX_ADMIN_AUTH_TOKEN?.trim();
+  const token = process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN?.trim();
   return token || undefined;
 }
 
@@ -210,16 +217,16 @@ export function isLoopbackHostname(hostname: string | undefined): boolean {
   return normalized === "" || normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1" || normalized === "[::1]";
 }
 
-export function isApiAuthRequired(config: OcxConfig): boolean {
+export function isApiAuthRequired(config: CodexCommanderConfig): boolean {
   return !isLoopbackHostname(config.hostname);
 }
 
-export function assertServerAuthConfig(config: OcxConfig): void {
+export function assertServerAuthConfig(config: CodexCommanderConfig): void {
   const hasConfiguredDataCredential = !!configuredApiAuthToken(config)
     || (config.apiKeys ?? []).some(entry => !!entry.key.trim());
   if (isApiAuthRequired(config) && !hasConfiguredDataCredential) {
     throw new Error(
-      "A data-plane credential (OPENCODEX_API_AUTH_TOKEN or config.apiKeys) is required when binding opencodex to a non-loopback hostname",
+      "A data-plane credential (CODEXCOMMANDER_API_AUTH_TOKEN or config.apiKeys) is required when binding CodexCommander to a non-loopback hostname",
     );
   }
 }
@@ -255,7 +262,7 @@ export type DataPlaneAdmission =
  * discarded, which is what makes per-key attribution possible without touching
  * the admission decision itself.
  */
-export function resolveDataPlaneAdmissionSecret(token: string, config: OcxConfig): DataPlaneAdmission | null {
+export function resolveDataPlaneAdmissionSecret(token: string, config: CodexCommanderConfig): DataPlaneAdmission | null {
   const actual = token.trim();
   if (!actual) return null;
   if (secretEquals(actual, configuredApiAuthToken(config))) return { kind: "environment" };
@@ -266,7 +273,7 @@ export function resolveDataPlaneAdmissionSecret(token: string, config: OcxConfig
 }
 
 /** Whether `token` is a data-plane admission secret. */
-export function isDataPlaneAdmissionSecret(token: string, config: OcxConfig): boolean {
+export function isDataPlaneAdmissionSecret(token: string, config: CodexCommanderConfig): boolean {
   return resolveDataPlaneAdmissionSecret(token, config) !== null;
 }
 
@@ -320,21 +327,21 @@ export function isManagementAdmissionSecret(token: string): boolean {
 }
 
 /** Whether `token` is one of the proxy's own admission secrets and must never reach an upstream. */
-export function isProxyAdmissionSecret(token: string, config: OcxConfig): boolean {
+export function isProxyAdmissionSecret(token: string, config: CodexCommanderConfig): boolean {
   const actual = token.trim();
   if (!actual) return false;
-  if (/^ocx_(?:data|admin|session)_/.test(actual) || /^ocx_[0-9a-f]{40}$/.test(actual)) return true;
+  if ([DATA_KEY_PREFIX, ADMIN_KEY_PREFIX, GUI_SESSION_PREFIX].some(prefix => actual.startsWith(prefix))) return true;
   return isDataPlaneAdmissionSecret(actual, config) || isManagementAdmissionSecret(actual);
 }
 
 export class ForwardAdmissionCredentialError extends Error {
   constructor() {
-    super("OpenCodex admission credentials cannot be forwarded upstream");
+    super("CodexCommander admission credentials cannot be forwarded upstream");
     this.name = "ForwardAdmissionCredentialError";
   }
 }
 
-export function validateForwardAdmissionCredential(headers: Headers, config: OcxConfig): void {
+export function validateForwardAdmissionCredential(headers: Headers, config: CodexCommanderConfig): void {
   const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
   if (bearer && isProxyAdmissionSecret(bearer, config)) throw new ForwardAdmissionCredentialError();
 }
@@ -343,10 +350,10 @@ export function validateForwardAdmissionCredential(headers: Headers, config: Ocx
  * Resolving form of `hasValidApiAuth`: identical header precedence, identical
  * decision, but it names the admission instead of collapsing it to a boolean.
  */
-export function resolveApiAuth(req: Request, config: OcxConfig): DataPlaneAdmission | null {
+export function resolveApiAuth(req: Request, config: CodexCommanderConfig): DataPlaneAdmission | null {
   // A loopback bind never reads a token at all, so there is no key to name.
   if (!isApiAuthRequired(config)) return { kind: "loopback" };
-  const actual = req.headers.get("x-opencodex-api-key")?.trim()
+  const actual = req.headers.get(API_KEY_HEADER)?.trim()
     || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim()
     // Anthropic-SDK clients (Claude Code with ANTHROPIC_API_KEY) authenticate via x-api-key.
     || req.headers.get("x-api-key")?.trim();
@@ -354,13 +361,13 @@ export function resolveApiAuth(req: Request, config: OcxConfig): DataPlaneAdmiss
   return resolveDataPlaneAdmissionSecret(actual, config);
 }
 
-export function hasValidApiAuth(req: Request, config: OcxConfig): boolean {
+export function hasValidApiAuth(req: Request, config: CodexCommanderConfig): boolean {
   return resolveApiAuth(req, config) !== null;
 }
 
-export function requireApiAuth(req: Request, config: OcxConfig, _kind: "data-plane"): Response | null {
+export function requireApiAuth(req: Request, config: CodexCommanderConfig, _kind: "data-plane"): Response | null {
   if (hasValidApiAuth(req, config)) return null;
-  return formatErrorResponse(401, "authentication_error", "opencodex API key required");
+  return formatErrorResponse(401, "authentication_error", AUTH_REQUIRED_MESSAGE);
 }
 
 /**
@@ -368,18 +375,18 @@ export function requireApiAuth(req: Request, config: OcxConfig, _kind: "data-pla
  * Codex Direct. Remote binds must use the dedicated proxy header so the two bearer
  * domains can never be confused.
  */
-export function resolveResponsesApiAuth(req: Request, config: OcxConfig): DataPlaneAdmission | null {
+export function resolveResponsesApiAuth(req: Request, config: CodexCommanderConfig): DataPlaneAdmission | null {
   if (!isApiAuthRequired(config)) return { kind: "loopback" };
   // Dedicated header ONLY. `Authorization` on these transports may belong to
   // Codex Direct passthrough, and the two bearer domains must stay unconfusable.
-  const actual = req.headers.get("x-opencodex-api-key")?.trim();
+  const actual = req.headers.get(API_KEY_HEADER)?.trim();
   if (!actual) return null;
   return resolveDataPlaneAdmissionSecret(actual, config);
 }
 
-export function requireResponsesApiAuth(req: Request, config: OcxConfig): Response | null {
+export function requireResponsesApiAuth(req: Request, config: CodexCommanderConfig): Response | null {
   if (resolveResponsesApiAuth(req, config)) return null;
-  return formatErrorResponse(401, "authentication_error", "opencodex API key required");
+  return formatErrorResponse(401, "authentication_error", AUTH_REQUIRED_MESSAGE);
 }
 
 const FORBIDDEN_PROVIDER_RUNTIME_FIELDS = [
@@ -387,7 +394,7 @@ const FORBIDDEN_PROVIDER_RUNTIME_FIELDS = [
   "sidecarOutcomeRecorder", "_codexAccountOverride", "_codexAccountRequired",
 ] as const;
 
-function sameCanonicalProviderSeed(actual: Record<string, unknown>, expected: OcxProviderConfig): boolean {
+function sameCanonicalProviderSeed(actual: Record<string, unknown>, expected: CodexCommanderProviderConfig): boolean {
   const actualKeys = Object.keys(actual).sort();
   const expectedKeys = Object.keys(expected).sort();
   if (actualKeys.length !== expectedKeys.length || actualKeys.some((key, i) => key !== expectedKeys[i])) return false;
@@ -407,8 +414,7 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   for (const field of FORBIDDEN_PROVIDER_RUNTIME_FIELDS) {
     if (Object.hasOwn(raw, field)) return `provider ${name} must not include runtime field "${field}"`;
   }
-  if (name === "chatgpt") return "provider chatgpt is reserved for internal credential compatibility";
-  if (name === "openai-multi") return "provider openai-multi is reserved for legacy config migration";
+  if (name === "chatgpt") return "provider chatgpt is reserved for internal account routing";
   if (name === "openai") {
     const entry = getProviderRegistryEntry(name);
     const seed = entry ? providerConfigSeed(entry) : undefined;
@@ -425,7 +431,7 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   } else if (Object.hasOwn(raw, "codexAccountMode")) {
     return `provider ${name} must not include codexAccountMode`;
   }
-  const typed = provider as unknown as OcxProviderConfig;
+  const typed = provider as unknown as CodexCommanderProviderConfig;
   const baseUrlError = providerBaseUrlConfigError(typed.baseUrl);
   if (baseUrlError) return `provider ${name} ${baseUrlError}`;
   if (effectiveGoogleMode(name, typed) === "vertex" && typed.location !== undefined) {
@@ -515,16 +521,16 @@ export function publicProviderBaseUrl(baseUrl: string): string {
   }
 }
 
-export function copyIfDefined<K extends keyof OcxProviderConfig>(
+export function copyIfDefined<K extends keyof CodexCommanderProviderConfig>(
   out: Record<string, unknown>,
-  provider: OcxProviderConfig,
+  provider: CodexCommanderProviderConfig,
   key: K,
 ): void {
   const value = provider[key];
   if (value !== undefined) out[key as string] = value as unknown;
 }
 
-export function safeConfigDTO(config: OcxConfig): unknown {
+export function safeConfigDTO(config: CodexCommanderConfig): unknown {
   const providers: Record<string, Record<string, unknown>> = {};
   for (const [name, provider] of Object.entries(config.providers)) {
     const dto: Record<string, unknown> = {

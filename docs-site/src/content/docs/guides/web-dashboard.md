@@ -1,23 +1,23 @@
 ---
 title: Web Dashboard
-description: The opencodex GUI for proxy health, providers, models, delegation guidance, auth pools, usage, and logs.
+description: The CodexCommander GUI for proxy health, providers, models, delegation guidance, auth pools, usage, and logs.
 ---
 
-opencodex ships a local web dashboard (a Vite/React app under `gui/`) served from the proxy. It is the
+CodexCommander ships a local web dashboard (a Vite/React app under `gui/`) served from the proxy. It is the
 shortest path to managing providers, Codex/ChatGPT accounts, catalog models, sidecars, sub-agent
 settings, and request traffic.
 
 ## Opening it
 
 ```bash
-ocx gui
+ccx gui
 ```
 
 This opens `http://localhost:<port>` in your browser, auto-starting the proxy first if needed. In
 development you can run the GUI dev server separately against a running proxy:
 
 ```bash
-ocx start
+ccx start
 bun run dev:gui
 ```
 
@@ -26,8 +26,8 @@ bun run dev:gui
 On the default loopback bind (`localhost` / `127.0.0.1`) the dashboard never asks for a token:
 the proxy mints short-lived GUI sessions into the served page and renews them silently when
 they expire or the proxy restarts. Only a dashboard bound to a non-loopback hostname requires
-the admin token (`OPENCODEX_ADMIN_AUTH_TOKEN`, or the auto-generated
-`~/.opencodex/admin-api-token` file).
+the admin token (`CODEXCOMMANDER_ADMIN_AUTH_TOKEN`, or the auto-generated
+`~/.codexcommander/admin-api-token` file).
 
 When a remote dashboard needs that credential, it presents a standard password form so a browser
 password manager can offer to save and autofill it. The dashboard itself still keeps the token only
@@ -39,19 +39,19 @@ the browser or password manager's decision.
 | Area | What it does |
 | --- | --- |
 | **Dashboard summary** | Multi-agent mode, online state, version, uptime, provider count, 30-day token total, active providers, and available native/routed models. |
-| **Sub-agent delegation** | Choose a native or routed model and optional reasoning effort shared by OpenCodex delegation guidance and the separate native-default opt-in. This is not a proxy-side per-spawn router; see below. |
+| **Sub-agent delegation** | Choose a native or routed model and optional reasoning effort shared by CodexCommander delegation guidance and the separate native-default opt-in. This is not a proxy-side per-spawn router; see below. |
 | **Sidecars** | Choose the web-search model and effort plus the vision-description model. Changes apply on the next request. |
-| **Maintenance** | Resync the Codex model catalog, inspect project-local config bypass warnings, check the latest or preview release, and run an update with optional proxy restart. |
+| **Maintenance** | Resync the Codex model catalog and inspect project-local config bypass warnings. |
 | **Startup safety** | Show whether injected Codex routing survives a restart, with separate service and launcher-shim health plus exact repair commands. |
 | **Windows tray** | Install a per-user login tray for one-click proxy start, stop, restart, dashboard access, and status. The tray is a controller, not a proxy restart service. |
-| **Codex autostart** | Allow an already-installed Codex launcher shim to run `ocx ensure`. This toggle does not install a shim or background service. |
+| **Codex autostart** | Allow an already-installed Codex launcher shim to run `ccx ensure`. This toggle does not install a shim or background service. |
 | **Providers** | Add, edit, set the default (enabled providers only), enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Removing the current default switches to the first remaining enabled provider when one exists; otherwise deletion is refused and the current default is kept. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. |
 | **Add provider** | Search registry-backed presets for account login, API-key services, local servers, or a custom endpoint. A query searches Accounts, Free and Paid together while the tabs remain useful for browsing. |
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, select the next-session account, refresh 5h / weekly / 30d quotas, enable or disable quota auto-switch, set its 1–100% threshold, and configure transient-failure failover. |
 | **Subagents** | Open the **Agent Command Center** to choose and order the five models advertised to `spawn_agent`, search the current catalog, and configure Run Policy for protocol, V2 delivery, guidance, fallback, and thread limits. Saved entries that are not advertised are reported explicitly. |
 | **Models** | Toggle native GPT and routed models, set provider allowlists and context caps, choose **Classic v1**, **Follow Codex defaults**, or **Concurrent v2**, and configure the v2 thread limit. The Current behavior card reports context as **Uncapped**, **Limited**, or **Mixed limits**. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. Each routed-provider row reports **Auto-discovery on** or **Static catalog only** and links to the owning Provider setting. |
 | **Client Apps** | Inspect configured and available local clients, apply or remove managed config where supported, review backups, and reach Codex, Claude Code/Desktop, Grok Build, OpenCode and the file-managed clients without treating providers as clients. |
-| **API Access** | Issue and manage keys that authenticate other apps to the OpenCodex proxy. Provider credentials remain under Providers. |
+| **API Access** | Issue and manage keys that authenticate other apps to the CodexCommander proxy. Provider credentials remain under Providers. |
 | **Logs** | Auto-refresh recent requests with tokens, requested effort and (when available) effective outbound effort, resolved model, provider, status, request id, duration, and error details. The detail view includes the exact reasoning wire field when the adapter emits one. Filter by opaque conversation/session id (when the client sends one) to total tokens and estimated list-price cost for the currently loaded Logs ring. |
 | **Usage / Debug** | Inspect token-usage coverage and trends, or enable opt-in provider transport and usage-extraction diagnostics. |
 | **Storage** | Read-only CODEX_HOME disk breakdown (sessions, archives, DBs, attachments). Optional archived cleanup: preview the oldest N%, then quarantine to `CODEX_HOME/.trash` (default) or permanently delete behind an explicit checkbox. **Auto-cleanup policy** is opt-in and **default OFF** (`storageCleanupPolicy.enabled`); configure threshold/target/schedule/mode on the Storage page, or trigger **Run now**. Quarantined entries can be restored from the Storage page (JSONL + threads). Active sessions stay read-only. Cleanup and restore are refused while Codex holds the newest/active `state_*.sqlite` locked. |
@@ -62,8 +62,7 @@ the browser or password manager's decision.
 There is a single layout, so there is no layout switch to configure. Dashboard sections are
 addressable instead: `#dashboard` opens Overview, and `#dashboard/providers` and
 `#dashboard/models` open the other two. Reload, bookmark, and Back all keep the section you were
-on. **Logs** works the same way with `#logs` and `#logs/debug`. An older `#providers/workspace`
-bookmark now lands on `#providers`.
+on. **Logs** works the same way with `#logs` and `#logs/debug`.
 
 Cost values in **Logs** and **Usage** are API list-price equivalents calculated from reported tokens.
 They are not billing receipts or evidence of an actual charge; subscription usage or provider credits
@@ -84,19 +83,19 @@ Models page shows that state and links directly to it; it does not keep a second
 ## Delegation picker vs spawn routing
 
 The Dashboard's **Sub-agent delegation** picker stores `injectionModel` and, optionally,
-`injectionEffort`. **OpenCodex multi-agent guidance** independently controls the delegation
+`injectionEffort`. **CodexCommander multi-agent guidance** independently controls the delegation
 instructions that use those values. On eligible v2 turns, that guidance tells the parent
 agent which exact model and reasoning effort to pass to `spawn_agent`; clearing the model also clears
 the stored effort.
 
 The default-off **Use as native Codex subagent defaults** switch applies the same selection to Codex's
-native `[agents]` defaults on the next sync/restart when OpenCodex manages the active Codex routing.
+native `[agents]` defaults on the next sync/restart when CodexCommander manages the active Codex routing.
 External user-managed provider configs remain untouched. Those defaults affect newly created Codex tasks
 and do not themselves cause delegation. Existing user-owned `[agents]` defaults are preserved rather
 than overwritten, so they may continue to override the requested defaults.
 
 :::caution
-Neither control is a proxy-side cross-model spawn router. OpenCodex guidance asks Codex to pass
+Neither control is a proxy-side cross-model spawn router. CodexCommander guidance asks Codex to pass
 overrides to `spawn_agent`; native `[agents]` defaults apply only when Codex creates a new task after
 they have been synchronized. See
 [Sub-agent Surface](/guides/sub-agent-surface/) for the canonical v1/base/v2 behavior.
@@ -128,7 +127,7 @@ and other providers.
   Higher order is used first, and the pool drops to a lower order only once every account above it is
   drained or unavailable. A changed order applies from the next unbound request and never moves a
   thread that is already bound. The Codex Desktop (main) account is ordered like any other, so it can
-  be set to **Last** and kept as the reserve. An order set from `ocx account priority` outside those
+  be set to **Last** and kept as the reserve. An order set from `ccx account priority` outside those
   five presets stays visible and selectable on the card.
 - Thread affinity prevents per-request flapping. With quota auto-switch enabled, a long-running
   thread is periodically re-evaluated and may rebind after its relevant usage reaches the threshold
@@ -136,8 +135,8 @@ and other providers.
 - New sessions can choose the lowest-usage eligible account. Paid plans score the hottest known 5h,
   weekly, or 30d window; Go/Free plans use the 30d window only.
 - When WHAM supplies `limit_window_seconds`, Codex Auth classifies a primary window of at least 28
-  days as 30d instead of assuming every primary window is weekly. Responses without a duration keep
-  the legacy weekly interpretation.
+  days as 30d instead of assuming every primary window is weekly. Responses without a duration are
+  interpreted as weekly.
 - **Refresh quotas** re-reads account usage immediately so routing and the account cards use the same
   values.
 - Pool request logs use opaque labels such as `p3fa91c`, never account emails.
@@ -150,7 +149,7 @@ visible fields, incomplete-coverage meaning, and routing boundary.
 ## Integrations
 
 The **Integrations** page connects OpenCode without treating it as another provider login. Its
-**Apply connection** action changes only `provider.opencodex` in OpenCode's active global JSONC/JSON
+**Apply connection** action changes only `provider.codexcommander` in OpenCode's active global JSONC/JSON
 file, preserves comments and unrelated keys, and delivers the proxy credential through a protected
 file reference rather than copying a key into OpenCode config. **Always keep OpenCode connected** is
 an opt-in refresh after proxy startup or model-catalog changes.
@@ -159,7 +158,7 @@ If OpenCode config changed after Apply, the page reports that user edits are pre
 removes or restores only the managed provider. When the journal permits an exact restore, the original
 file is restored byte-for-byte. The
 **Open OpenCode** action launches OpenCode Desktop in one click; when only the CLI is installed, use
-`ocx opencode` for its non-mutating, transient connection instead. See
+`ccx opencode` for its non-mutating, transient connection instead. See
 [OpenCode](/guides/opencode/) for the file-selection and restore details.
 
 ## How the dashboard talks to the proxy
@@ -174,7 +173,6 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | `POST /api/startup-action` | Install the background service or Codex launcher shim through fixed, allowlisted actions. |
 | `GET` / `POST /api/windows-tray` | Read or change the Windows tray installation and visible-process state. POST accepts `install`, `start`, `stop`, or `uninstall`. |
 | `POST /api/sync` | Rebuild the shared model catalog and stale the Codex model cache. |
-| `GET /api/update/check` · `POST /api/update/run` · `GET /api/update/status` | Check, run, and monitor self-update jobs. Worker PIDs are persisted so a crashed job recovers automatically; legacy no-PID jobs recover after ten minutes. |
 | `GET` / `PUT /api/sidecar-settings` | Read or set search/vision sidecar model settings. |
 | `GET` / `PUT /api/injection-model` | Read or set the shared sub-agent model/effort selection and the independent guidance/native-default switches. |
 | `GET` / `PUT /api/v2` | Read or set the surface mode, Codex feature flag, and v2 thread limit. |

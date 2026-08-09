@@ -5,15 +5,16 @@ import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import {
   abortAndReleaseAllTurns,
+  beginShutdownDrain,
   getAgentActivitySnapshot,
   resetAgentActivityForTests,
-  setDraining,
+  resetLifecycleDrainStateForTests,
   trackStreamLifetime,
   tryAdmitTurn,
   type ActiveTurnLease,
 } from "../src/server/lifecycle";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const ownedLeases: ActiveTurnLease[] = [];
 
@@ -49,7 +50,7 @@ function admit(input: {
 afterEach(() => {
   for (const lease of ownedLeases.splice(0).reverse()) lease.release();
   resetAgentActivityForTests();
-  setDraining(false);
+  resetLifecycleDrainStateForTests();
 });
 
 describe("agent activity registry", () => {
@@ -352,7 +353,7 @@ describe("agent activity registry", () => {
     const forcedLease = admit({ startedAt: 3 });
     const controller = new AbortController();
     forcedLease.bindAbortController(controller);
-    setDraining(true);
+    expect(beginShutdownDrain()).toBe(true);
     expect(getAgentActivitySnapshot().proxyState).toBe("draining");
     abortAndReleaseAllTurns();
     expect(controller.signal.aborted).toBe(true);
@@ -366,14 +367,15 @@ describe("agent activity registry", () => {
 
 describe("GET /api/agent-activity", () => {
   test("uses the existing auth/origin gate, allows authenticated no-Origin loopback, and disables caching", async () => {
-    const previousHome = process.env.OPENCODEX_HOME;
-    const previousAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
-    const home = mkdtempSync(join(tmpdir(), "ocx-agent-activity-route-"));
-    process.env.OPENCODEX_HOME = home;
-    process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "admin-secret";
+    const previousHome = process.env.CODEXCOMMANDER_HOME;
+    const previousAdminToken = process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
+    const home = mkdtempSync(join(tmpdir(), "ccx-agent-activity-route-"));
+    process.env.CODEXCOMMANDER_HOME = home;
+    process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = "admin-secret";
     saveConfig({
       port: 0,
       hostname: "127.0.0.1",
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "fixture",
       providers: {
         fixture: {
@@ -383,14 +385,14 @@ describe("GET /api/agent-activity", () => {
           models: ["fixture-model"],
         },
       },
-    } as OcxConfig);
+    } as CodexCommanderConfig);
     const server = startServer(0);
     try {
       const missing = await fetch(new URL("/api/agent-activity", server.url));
       expect(missing.status).toBe(401);
 
       const allowed = await fetch(new URL("/api/agent-activity", server.url), {
-        headers: { "x-opencodex-api-key": "admin-secret" },
+        headers: { "x-codexcommander-api-key": "admin-secret" },
       });
       expect(allowed.status).toBe(200);
       expect(allowed.headers.get("cache-control")).toBe("no-store");
@@ -406,17 +408,17 @@ describe("GET /api/agent-activity", () => {
 
       const rejectedOrigin = await fetch(new URL("/api/agent-activity", server.url), {
         headers: {
-          "x-opencodex-api-key": "admin-secret",
+          "x-codexcommander-api-key": "admin-secret",
           origin: "https://attacker.test",
         },
       });
       expect(rejectedOrigin.status).toBe(403);
     } finally {
       await server.stop(true);
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
-      if (previousAdminToken === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
-      else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdminToken;
+      if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previousHome;
+      if (previousAdminToken === undefined) delete process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
+      else process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = previousAdminToken;
       rmSync(home, { recursive: true, force: true });
     }
   });

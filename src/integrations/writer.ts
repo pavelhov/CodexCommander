@@ -1,5 +1,5 @@
 /**
- * Apply, disable and restore an opencodex provider block in a client's config.
+ * Apply, disable and restore a CodexCommander provider block in a client's config.
  *
  * Everything here exists to keep one promise: a toggle can always be undone.
  * That means every mutation snapshots first, writes atomically, and journals
@@ -7,14 +7,14 @@
  * file is not in a state we can reason about. A disable that deletes work the
  * user did after us would be worse than never shipping the feature.
  *
- * Design of record: devlog/_fin/260802_client_toggle_api/030 and 031.
+ * Design contract and 031.
  */
 import { dirname } from "node:path";
 import { EXPORT_CLIENTS, type ExportModel } from "../clients/config-export";
 import { isLoopbackHostname } from "../codex/inject";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import { PARSE_FAILED, defaultIntegrationIO, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
-import { fingerprint, canonicalContribution, fragmentPathsOf, type OwnershipRecord } from "./ownership";
+import { fingerprint, canonicalContribution, fragmentPathsOf, isCurrentOwnershipRecord, type OwnershipRecord } from "./ownership";
 import { createdContainerPaths, mergeContribution, removeFragments } from "./merge";
 import { INTEGRATION_CLIENTS, isLoopbackOnly, type IntegrationClientId } from "./registry";
 import { classifyIntegration, exportContextOf } from "./state";
@@ -59,7 +59,7 @@ export type WriteOutcome = WriteOk | WriteRefused;
 export interface IntegrationWriteInput {
   clientId: IntegrationClientId;
   models: readonly ExportModel[];
-  config: OcxConfig;
+  config: CodexCommanderConfig;
   port: number;
   env?: NodeJS.ProcessEnv;
   home?: string;
@@ -238,8 +238,8 @@ export function applyIntegration(input: IntegrationWriteInput): WriteOutcome {
   if (classified.state === "conflict") {
     return refuse(clientId, "conflict", "conflict",
       classified.reason === "foreign-edit"
-        ? `${configPath} changed after opencodex wrote it`
-        : `${configPath} already contains an opencodex block we did not write`);
+        ? `${configPath} changed after CodexCommander wrote it`
+        : `${configPath} already contains a CodexCommander block we did not write`);
   }
   /*
    * `unsafe` from the classifier means the document is not one we may write
@@ -251,7 +251,7 @@ export function applyIntegration(input: IntegrationWriteInput): WriteOutcome {
   if (classified.state === "unsafe") {
     return refuse(clientId, "unsafe", "unsafe",
       classified.reason === "blocked-container"
-        ? `${configPath} holds a value where opencodex would have to write a section, so applying would replace it`
+        ? `${configPath} holds a value where CodexCommander would have to write a section, so applying would replace it`
         : `${configPath} cannot be changed safely`);
   }
   if (classified.state === "current") {
@@ -269,7 +269,7 @@ export function applyIntegration(input: IntegrationWriteInput): WriteOutcome {
    * — so a later disable strands it forever.
    */
   const base = classified.state === "stale" && record
-    ? removeFragments(parsed, record.fragmentPaths, new Set(record.createdContainers ?? [])).doc
+    ? removeFragments(parsed, record.fragmentPaths, new Set(record.createdContainers)).doc
     : parsed;
   // Computed against the document as it stands BEFORE the merge: afterwards
   // every container exists and "did we create this?" is unanswerable.
@@ -286,7 +286,7 @@ export function applyIntegration(input: IntegrationWriteInput): WriteOutcome {
   } catch (error) {
     if (!(error instanceof UnserializableValueError)) throw error;
     return refuse(clientId, "unsafe", "unsafe",
-      `${configPath} contains something opencodex cannot rewrite safely (${error.message}), so it was left alone`);
+      `${configPath} contains something CodexCommander cannot rewrite safely (${error.message}), so it was left alone`);
   }
 
   // Compare-before-commit: someone may have written between classify and now.
@@ -328,8 +328,8 @@ export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
   if (classified.state === "conflict") {
     return refuse(clientId, "conflict", "conflict",
       classified.reason === "foreign-edit"
-        ? `${configPath} changed after opencodex wrote it; disabling would discard that edit`
-        : `${configPath} contains an opencodex block we did not write`);
+        ? `${configPath} changed after CodexCommander wrote it; disabling would discard that edit`
+        : `${configPath} contains a CodexCommander block we did not write`);
   }
   /*
    * `unsafe` reaches here the same way it reaches apply, and the code below
@@ -341,7 +341,7 @@ export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
   if (classified.state === "unsafe") {
     return refuse(clientId, "unsafe", "unsafe",
       classified.reason === "blocked-container"
-        ? `${configPath} holds a value where opencodex would have to read a section, so nothing can be removed safely`
+        ? `${configPath} holds a value where CodexCommander would have to read a section, so nothing can be removed safely`
         : `${configPath} cannot be changed safely`);
   }
 
@@ -350,7 +350,7 @@ export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
   const { doc, removed } = removeFragments(
     parsed,
     record!.fragmentPaths,
-    new Set(record!.createdContainers ?? []),
+    new Set(record!.createdContainers),
   );
   if (!removed) {
     return { ok: true, changed: false, state: "absent", clientId, message: "nothing to remove" };
@@ -361,7 +361,7 @@ export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
   } catch (error) {
     if (!(error instanceof UnserializableValueError)) throw error;
     return refuse(clientId, "unsafe", "unsafe",
-      `${configPath} contains something opencodex cannot rewrite safely (${error.message}), so nothing was removed`);
+      `${configPath} contains something CodexCommander cannot rewrite safely (${error.message}), so nothing was removed`);
   }
 
   const recheck = io.readText(configPath);
@@ -437,10 +437,13 @@ export function restoreIntegration(input: IntegrationRestoreInput): WriteOutcome
   const preSnapshot = store.captureSnapshot(clientId, opId, current);
   const restoredText = snapshot.kind === "none" ? null : snapshot.text;
 
-  // Provenance is RESTORED, never re-derived: `priorRecord` described these
-  // exact bytes when the snapshot was taken. Re-deriving it from the file would
-  // mean guessing which entries are ours, and a wrong guess deletes a user's.
-  const restoredRecord = entry.priorRecord;
+  // Current provenance is RESTORED, never re-derived: `priorRecord` described
+  // these exact bytes when the snapshot was taken. Older incomplete records
+  // are dropped; re-deriving them from the file would mean guessing which
+  // entries are ours, and a wrong guess deletes a user's.
+  const restoredRecord = isCurrentOwnershipRecord(entry.priorRecord)
+    ? entry.priorRecord
+    : null;
   const fresh = EXPORT_CLIENTS[clientId].buildContribution(exportContextOf(input));
   /*
    * Does the restored record actually describe the restored bytes?
@@ -448,7 +451,7 @@ export function restoreIntegration(input: IntegrationRestoreInput): WriteOutcome
    * It usually does — `priorRecord` was written for exactly this snapshot. But
    * a CONFIRMED drift-restore snapshots the user's edited file first, and
    * undoing that restore puts those edited bytes back while carrying a record
-   * that describes what opencodex had written. Overwriting the record's
+   * that describes what CodexCommander had written. Overwriting the record's
    * fingerprint with the restored bytes then laundered a foreign edit into
    * owned content: the state read `current`, and a later disable deleted
    * fields the user had added by hand.

@@ -65,7 +65,7 @@ describe("planInteractionQueryReply", () => {
   });
 
   // web/exa are approve/reject permission gates: approving delegates the search to Cursor's server
-  // (which injects results into the model), so opencodex APPROVES instead of rejecting — rejecting
+  // (which injects results into the model), so codexcommander APPROVES instead of rejecting — rejecting
   // killed the model's web capability on the Cursor path.
   test.each([
     ["webSearchRequestQuery", WebSearchRequestQuerySchema, "webSearchRequestResponse"],
@@ -113,12 +113,12 @@ describe("isClientToolFrame", () => {
     });
   }
 
-  test("ocx-bridged mcpToolCall counts as client tool activity", () => {
+  test("ccx-bridged mcpToolCall counts as client tool activity", () => {
     const toolCall = create(ToolCallSchema, {
       tool: {
         case: "mcpToolCall",
         value: create(McpToolCallSchema, {
-          args: create(McpArgsSchema, { name: "exec_command", toolName: "exec_command", toolCallId: "call_1", providerIdentifier: "opencodex-responses" }),
+          args: create(McpArgsSchema, { name: "exec_command", toolName: "exec_command", toolCallId: "call_1", providerIdentifier: "codexcommander-responses" }),
         }),
       },
     });

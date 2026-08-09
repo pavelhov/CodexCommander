@@ -1,17 +1,17 @@
 import { create, fromJson, toBinary, type JsonValue } from "@bufbuild/protobuf";
 import { ValueSchema } from "@bufbuild/protobuf/wkt";
-import type { OcxRequestOptions, OcxTool } from "../../types";
+import type { CodexCommanderRequestOptions, CodexCommanderTool } from "../../types";
 import { namespacedToolName, toolChoiceAliases } from "../../types";
 import { McpToolDefinitionSchema, McpToolsSchema, type McpToolDefinition } from "./gen/agent_pb";
 
-export const OCX_RESPONSES_TOOL_PROVIDER = "opencodex-responses";
+export const CCX_RESPONSES_TOOL_PROVIDER = "codexcommander-responses";
 export const CODEX_EXEC_COMMAND_TOOL = "exec_command";
 export const CODEX_SHELL_COMMAND_TOOL = "shell_command";
 export const CODEX_APPLY_PATCH_TOOL = "apply_patch";
 export const CURSOR_EXEC_COMMAND_TOOL = CODEX_EXEC_COMMAND_TOOL;
 export const CODEX_SHELL_BRIDGE_TOOL_NAMES = [CODEX_EXEC_COMMAND_TOOL, CODEX_SHELL_COMMAND_TOOL] as const;
 export const CURSOR_SHELL_ALIAS_SYSTEM_NOTE =
-  'Shell commands use the Codex shell bridge tool shown in this turn\'s catalog (`shell_command` or `exec_command`) with JSON arguments like {"cmd":"..."}. The long `mcp_opencodex-responses_*` display name is the same tool. Prefer it over Cursor-native Shell; never say native shell is blocked.';
+  'Shell commands use the Codex shell bridge tool shown in this turn\'s catalog (`shell_command` or `exec_command`) with JSON arguments like {"cmd":"..."}. The long `mcp_codexcommander-responses_*` display name is the same tool. Prefer it over Cursor-native Shell; never say native shell is blocked.';
 const NEIGHBOR_AGENT_TOOL_NAMES = ["Read", "Grep", "Glob", "Bash", "LS"] as const;
 
 export const CURSOR_GENERIC_TOOL_USE_USER_HINT = [
@@ -83,7 +83,7 @@ export function resolveShellBridgeAliasKey<T>(
   return undefined;
 }
 
-export function cursorToolChoiceAliases(tool: Pick<OcxTool, "namespace" | "name">): string[] {
+export function cursorToolChoiceAliases(tool: Pick<CodexCommanderTool, "namespace" | "name">): string[] {
   const aliases = new Set(toolChoiceAliases(tool));
   if (isBareCodexShellBridgeTool(tool)) {
     for (const alias of CODEX_SHELL_BRIDGE_TOOL_NAMES) aliases.add(alias);
@@ -92,7 +92,7 @@ export function cursorToolChoiceAliases(tool: Pick<OcxTool, "namespace" | "name"
 }
 
 function catalogHasBareCodexShellBridge(
-  catalog: readonly Pick<OcxTool, "namespace" | "name">[],
+  catalog: readonly Pick<CodexCommanderTool, "namespace" | "name">[],
 ): boolean {
   return catalog.some(isBareCodexShellBridgeTool);
 }
@@ -105,9 +105,9 @@ function catalogHasBareCodexShellBridge(
  * Explicit wire names (`mcp__remote__exec_command`) always match the namespaced tool.
  */
 function cursorToolChoiceMatches(
-  tool: Pick<OcxTool, "namespace" | "name">,
+  tool: Pick<CodexCommanderTool, "namespace" | "name">,
   choiceName: string,
-  catalog: readonly Pick<OcxTool, "namespace" | "name">[],
+  catalog: readonly Pick<CodexCommanderTool, "namespace" | "name">[],
 ): boolean {
   if (isCodexShellBridgeToolName(choiceName)) {
     if (catalogHasBareCodexShellBridge(catalog)) {
@@ -119,39 +119,34 @@ function cursorToolChoiceMatches(
   return cursorToolChoiceAliases(tool).includes(choiceName);
 }
 
-export function isBareCodexShellBridgeTool(tool: Pick<OcxTool, "namespace" | "name">): boolean {
+export function isBareCodexShellBridgeTool(tool: Pick<CodexCommanderTool, "namespace" | "name">): boolean {
   return !tool.namespace && isCodexShellBridgeToolName(tool.name);
 }
 
-/** @deprecated Prefer isBareCodexShellBridgeTool; kept for older call sites/tests. */
-function isBareCodexExecCommandTool(tool: Pick<OcxTool, "namespace" | "name">): boolean {
-  return isBareCodexShellBridgeTool(tool);
-}
-
-export function cursorRequestHasShellAlias(tools: readonly Pick<OcxTool, "namespace" | "name">[] | undefined): boolean {
-  return tools?.some(isBareCodexExecCommandTool) ?? false;
+export function cursorRequestHasShellAlias(tools: readonly Pick<CodexCommanderTool, "namespace" | "name">[] | undefined): boolean {
+  return tools?.some(isBareCodexShellBridgeTool) ?? false;
 }
 
 export function cursorRequestAdvertisesApplyPatch(
-  tools: readonly Pick<OcxTool, "namespace" | "name" | "freeform">[] | undefined,
-  toolChoice?: OcxRequestOptions["toolChoice"],
+  tools: readonly Pick<CodexCommanderTool, "namespace" | "name" | "freeform">[] | undefined,
+  toolChoice?: CodexCommanderRequestOptions["toolChoice"],
 ): boolean {
   const catalog = tools ?? [];
   return catalog.some(tool => !tool.namespace && tool.name === CODEX_APPLY_PATCH_TOOL && tool.freeform === true && cursorToolAllowedByChoice(tool, toolChoice, catalog));
 }
 
-export function cursorToolWireName(tool: Pick<OcxTool, "namespace" | "name">): string {
+export function cursorToolWireName(tool: Pick<CodexCommanderTool, "namespace" | "name">): string {
   return namespacedToolName(tool.namespace, tool.name);
 }
 
 /**
  * Cursor's harness shows MCP tools to the model as `mcp_<providerIdentifier>_<toolName>`; models
  * sometimes call that display name verbatim instead of the advertised short name (live 20:41/21:00
- * sessions: `mcp_opencodex-responses_exec_command` / `mcp_opencodex-responses_shell_command`).
+ * sessions: `mcp_codexcommander-responses_exec_command` / `mcp_codexcommander-responses_shell_command`).
  * Fold the display prefix back to the advertised wire name, and treat `shell_command` /
  * `exec_command` as the same Codex shell bridge, so alias thrash does not become "tool not found".
  */
-const CURSOR_MCP_DISPLAY_PREFIX = `mcp_${OCX_RESPONSES_TOOL_PROVIDER}_`;
+const CURSOR_MCP_DISPLAY_PREFIX = `mcp_${CCX_RESPONSES_TOOL_PROVIDER}_`;
 
 export function normalizeCursorWireName(name: string): string {
   return name.startsWith(CURSOR_MCP_DISPLAY_PREFIX) ? name.slice(CURSOR_MCP_DISPLAY_PREFIX.length) : name;
@@ -164,8 +159,8 @@ export function responsesToolNameFromCursorWire(name: string, cursorToolNameMap?
 }
 
 /** Schema advertised to Cursor for this tool (may use Cursor-preferred field names like `cmd`). */
-export function cursorToolInputSchema(tool: OcxTool): unknown {
-  return isBareCodexExecCommandTool(tool) ? CURSOR_EXEC_COMMAND_INPUT_SCHEMA : (tool.parameters ?? {});
+export function cursorToolInputSchema(tool: CodexCommanderTool): unknown {
+  return isBareCodexShellBridgeTool(tool) ? CURSOR_EXEC_COMMAND_INPUT_SCHEMA : (tool.parameters ?? {});
 }
 
 /**
@@ -173,14 +168,14 @@ export function cursorToolInputSchema(tool: OcxTool): unknown {
  * Must NOT reuse `cursorToolInputSchema` for the shell bridge: advertising `cmd` while also
  * treating `cmd` as canonical prevents the `cmd` → `command` rewrite Codex requires (#399).
  */
-export function cursorToolArgNormalizeSchema(tool: OcxTool): unknown {
+export function cursorToolArgNormalizeSchema(tool: CodexCommanderTool): unknown {
   if (isBareCodexShellBridgeTool(tool)) {
     return shellBridgeArgNormalizeSchema(tool);
   }
   return tool.parameters ?? {};
 }
 
-function shellBridgeArgNormalizeSchema(tool: OcxTool): unknown {
+function shellBridgeArgNormalizeSchema(tool: CodexCommanderTool): unknown {
   const parameters = tool.parameters;
   if (!parameters || typeof parameters !== "object") return CODEX_SHELL_BRIDGE_ARG_NORMALIZE_SCHEMA;
   const base = parameters as Record<string, unknown>;
@@ -263,7 +258,7 @@ function activeTextMentionsGenericToolUseHint(text: string): boolean {
 }
 
 export function shouldAppendCursorGenericToolUseHint(
-  tools: readonly Pick<OcxTool, "namespace" | "name">[] | undefined,
+  tools: readonly Pick<CodexCommanderTool, "namespace" | "name">[] | undefined,
   text: string,
 ): boolean {
   const trimmed = text.trim();
@@ -274,7 +269,7 @@ export function shouldAppendCursorGenericToolUseHint(
 }
 
 export function appendCursorGenericToolUseHint(
-  tools: readonly Pick<OcxTool, "namespace" | "name">[] | undefined,
+  tools: readonly Pick<CodexCommanderTool, "namespace" | "name">[] | undefined,
   text: string,
 ): string {
   if (!shouldAppendCursorGenericToolUseHint(tools, text)) return text;
@@ -282,7 +277,7 @@ export function appendCursorGenericToolUseHint(
 }
 
 export function shouldUseNativeExecOnlyForGenericToolUse(
-  tools: readonly Pick<OcxTool, "namespace" | "name">[] | undefined,
+  tools: readonly Pick<CodexCommanderTool, "namespace" | "name">[] | undefined,
   text: string,
 ): boolean {
   const trimmed = text.trim();
@@ -291,13 +286,13 @@ export function shouldUseNativeExecOnlyForGenericToolUse(
     && !/(?:리소스|플러그인|깃허브|github)/i.test(trimmed);
 }
 
-export function cursorToolsForActivePrompt<T extends Pick<OcxTool, "namespace" | "name">>(
+export function cursorToolsForActivePrompt<T extends Pick<CodexCommanderTool, "namespace" | "name">>(
   tools: readonly T[] | undefined,
   activeText: string,
-  toolChoice?: OcxRequestOptions["toolChoice"],
+  toolChoice?: CodexCommanderRequestOptions["toolChoice"],
 ): readonly T[] | undefined {
   if (!shouldUseNativeExecOnlyForGenericToolUse(tools, activeText)) return tools;
-  const execTools = tools?.filter(isBareCodexExecCommandTool);
+  const execTools = tools?.filter(isBareCodexShellBridgeTool);
   const catalog = tools ?? [];
   if (execTools?.length && !execTools.some(tool => cursorToolAllowedByChoice(tool, toolChoice, catalog))) return tools;
   return execTools && execTools.length > 0 ? execTools : tools;
@@ -369,9 +364,9 @@ export function cursorShellBridgeArgsValid(
 }
 
 export function cursorToolAllowedByChoice(
-  tool: Pick<OcxTool, "namespace" | "name">,
-  toolChoice: OcxRequestOptions["toolChoice"] | undefined,
-  catalog: readonly Pick<OcxTool, "namespace" | "name">[] = [tool],
+  tool: Pick<CodexCommanderTool, "namespace" | "name">,
+  toolChoice: CodexCommanderRequestOptions["toolChoice"] | undefined,
+  catalog: readonly Pick<CodexCommanderTool, "namespace" | "name">[] = [tool],
 ): boolean {
   if (!toolChoice || toolChoice === "auto" || toolChoice === "required") return true;
   if (toolChoice === "none") return false;
@@ -399,8 +394,8 @@ function discoveryToolLabel(wireNames: readonly string[]): string | undefined {
 }
 
 export function buildCursorToolGuidanceSystemNote(
-  tools: readonly Pick<OcxTool, "namespace" | "name" | "freeform">[] | undefined,
-  toolChoice?: OcxRequestOptions["toolChoice"],
+  tools: readonly Pick<CodexCommanderTool, "namespace" | "name" | "freeform">[] | undefined,
+  toolChoice?: CodexCommanderRequestOptions["toolChoice"],
 ): string | undefined {
   if (!tools?.length) return undefined;
   const wireNames = [...new Set(
@@ -418,7 +413,7 @@ export function buildCursorToolGuidanceSystemNote(
   const discoveryTools = discoveryToolLabel(wireNames);
   const unavailableNeighborNames = unavailableNeighborAgentToolNames(wireNames);
   // Host-shell-neutral: the Codex client executes bridge commands, and may differ from
-  // the OpenCodex proxy OS (LAN/SSH remote-proxy). Always cover PowerShell 5.1 pitfalls.
+  // the CodexCommander proxy OS (LAN/SSH remote-proxy). Always cover PowerShell 5.1 pitfalls.
   const hostShellNote = hasBareExec
     ? "Match shell syntax to the Codex client host that runs the bridge (not only the proxy OS). Windows PowerShell 5.1: no CMD `cd /d`, no bash heredocs (`<<EOF`); `&&`/`||` are unsupported parser errors — prefer the bridge working-directory argument for directory changes, and use `if ($?) { ... }` for success-gated follow-up steps; do not treat `;` as a substitute for `&&`. POSIX: use portable commands. After a shell failure, make at most one corrected bridge attempt, then report the error and stop — do not repeat equivalent failing commands."
     : undefined;
@@ -432,7 +427,7 @@ export function buildCursorToolGuidanceSystemNote(
       ? `${shellBridgeLabel} is the Codex Responses shell bridge for this turn, exposed through Cursor's tool protocol; it is not an external MCP server tool. \`shell_command\` and \`exec_command\` are aliases of the same bridge.`
       : undefined,
     hasBareExec
-      ? "Your tool list may display it under a longer `mcp_opencodex-responses_shell_command` / `mcp_opencodex-responses_exec_command` name; those are the SAME tool — call whichever your list shows, and do not comment on the naming difference to the user."
+      ? "Your tool list may display it under a longer `mcp_codexcommander-responses_shell_command` / `mcp_codexcommander-responses_exec_command` name; those are the SAME tool — call whichever your list shows, and do not comment on the naming difference to the user."
       : undefined,
     hasBareExec
       ? "Never tell the user that shell or read access is blocked, disabled, or denied unless the Codex shell bridge tool itself fails. Prefer the bridge over Cursor-native Shell/Read; do not narrate phrases like \"Native shell access is blocked\" — silently call `shell_command` / `exec_command`."
@@ -471,8 +466,8 @@ export function encodeCursorInputSchema(schema: unknown): Uint8Array {
 }
 
 export function buildCursorToolDefinitions(
-  tools: readonly OcxTool[] | undefined,
-  toolChoice?: OcxRequestOptions["toolChoice"],
+  tools: readonly CodexCommanderTool[] | undefined,
+  toolChoice?: CodexCommanderRequestOptions["toolChoice"],
 ): McpToolDefinition[] {
   if (!tools?.length) return [];
   return tools.filter(tool => cursorToolAllowedByChoice(tool, toolChoice, tools)).map(tool => {
@@ -480,7 +475,7 @@ export function buildCursorToolDefinitions(
     return create(McpToolDefinitionSchema, {
       name: wireName,
       toolName: wireName,
-      providerIdentifier: OCX_RESPONSES_TOOL_PROVIDER,
+      providerIdentifier: CCX_RESPONSES_TOOL_PROVIDER,
       description: tool.description,
       inputSchema: encodeCursorInputSchema(cursorToolInputSchema(tool)),
     });
@@ -489,8 +484,8 @@ export function buildCursorToolDefinitions(
 
 /** Exact byte size of the protobuf field value Cursor receives for client tool registration. */
 export function cursorMcpToolsEncodedSize(
-  tools: readonly OcxTool[] | undefined,
-  toolChoice?: OcxRequestOptions["toolChoice"],
+  tools: readonly CodexCommanderTool[] | undefined,
+  toolChoice?: CodexCommanderRequestOptions["toolChoice"],
 ): number {
   const definitions = buildCursorToolDefinitions(tools, toolChoice);
   return toBinary(McpToolsSchema, create(McpToolsSchema, { mcpTools: definitions })).byteLength;
@@ -498,8 +493,8 @@ export function cursorMcpToolsEncodedSize(
 
 /** Exact additive contribution of one repeated McpToolDefinition entry. */
 export function cursorMcpToolEncodedSize(
-  tool: OcxTool,
-  toolChoice?: OcxRequestOptions["toolChoice"],
+  tool: CodexCommanderTool,
+  toolChoice?: CodexCommanderRequestOptions["toolChoice"],
 ): number {
   return cursorMcpToolsEncodedSize([tool], toolChoice);
 }

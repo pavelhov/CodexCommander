@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { oauthLoginSummary } from "../src/oauth";
 
-describe("oauthLoginSummary (ocx status OAuth logins)", () => {
+describe("oauthLoginSummary (ccx status OAuth logins)", () => {
   test("lists every OAuth provider with a boolean login state, including cursor", () => {
     const summary = oauthLoginSummary();
     const providers = summary.map(e => e.provider);

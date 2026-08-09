@@ -9,10 +9,6 @@ function selectorBlock(css: string, selector: string): string {
   return css.slice(start, end + 1);
 }
 
-test("legacy provider quota reports remain valid without aggregation metadata", () => {
-  expect(capacityAggregationFromReport({ quota: { weeklyPercent: 42 } })).toBeNull();
-});
-
 test("capacity metadata preserves estimate, raw current quota, recovery percent, and incomplete coverage", () => {
   const aggregation = capacityAggregationFromReport({
     quota: { weeklyPercent: 30.769230769, updatedAt: 123 },
@@ -87,19 +83,22 @@ test("fallback and coverage-only metadata never become aggregate presentation", 
       incomplete: true,
       excludedAccounts: 2,
       unknownPlanAccounts: 0,
+      partialWindowAccounts: 0,
     },
   });
   expect(fallback?.presentation).toBe("effective-account-fallback");
-  const legacyCoverage = capacityAggregationFromReport({
+  const coverage = capacityAggregationFromReport({
     aggregation: {
       kind: "capacity-weighted-v1",
       scope: "routable-known",
+      presentation: "coverage-only",
       incomplete: true,
       excludedAccounts: 2,
       unknownPlanAccounts: 1,
+      partialWindowAccounts: 0,
     },
   });
-  expect(legacyCoverage?.presentation).toBe("coverage-only");
+  expect(coverage?.presentation).toBe("coverage-only");
 });
 
 test("capacity recovery layout wraps and stacks in narrow provider panes", async () => {

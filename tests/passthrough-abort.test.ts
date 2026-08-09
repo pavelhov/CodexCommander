@@ -61,7 +61,7 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
 
     expect(sseBranch).toContain("upstreamResponse.body.tee()");
     // Windows no-rewrite traffic must honor the stream-mode/runtime gate so
-    // legacy-tee remains a safety escape hatch for Bun#32111.
+    // safe-tee remains a safety escape hatch for Bun#32111.
     expect(sseBranch).toContain("const repairConfig = route.provider.responsesItemIdRepair;");
     expect(sseBranch).toContain("const needsClientRewrite = imageGenCallAliases.size > 0");
     expect(sseBranch).toContain("const clientBody = options.settleOwnedTranslatorBudget");
@@ -150,7 +150,7 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     ]);
 
     expect(first.done).toBe(false);
-    expect(new TextDecoder().decode(first.value)).toBe(": opencodex keepalive\n\n");
+    expect(new TextDecoder().decode(first.value)).toBe(": codexcommander keepalive\n\n");
 
     await reader.cancel("client gone");
     expect(ac.signal.aborted).toBe(true);

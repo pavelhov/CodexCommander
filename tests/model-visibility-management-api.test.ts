@@ -8,18 +8,19 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isol
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 const TEST_DIR = join(import.meta.dir, `.tmp-model-visibility-management-${process.pid}`);
-const previousOpencodexHome = process.env.OPENCODEX_HOME;
+const previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 let refreshes = 0;
 
 beforeEach(() => {
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   mkdirSync(TEST_DIR, { recursive: true });
-  process.env.OPENCODEX_HOME = TEST_DIR;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-model-visibility-codex-");
+  process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-model-visibility-codex-");
   refreshes = 0;
   saveConfig({
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "google-antigravity",
     providers: {
       "google-antigravity": {
@@ -40,8 +41,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
@@ -134,6 +135,7 @@ describe("atomic model visibility management", () => {
   test("treats a physical combo provider with no configured combos as a routed provider", async () => {
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "combo",
       providers: {
         combo: {
@@ -215,9 +217,9 @@ describe("atomic model visibility management", () => {
     expect(refreshes).toBe(2);
   });
 
-  test("keeps a colliding physical combo allowlist untouched when virtual combos take precedence", async () => {
+  test("keeps an unrelated physical provider allowlist untouched while virtual combos are toggled", async () => {
     const config = loadConfig();
-    config.providers.combo = {
+    config.providers["combo-physical"] = {
       adapter: "openai-chat",
       baseUrl: "https://combo.example.test/v1",
       models: ["physical-only"],
@@ -229,13 +231,13 @@ describe("atomic model visibility management", () => {
     config.disabledModels = ["anthropic/fast", "other/keep"];
 
     expect((await putWithConfig({ scope: "models", provider: "combo", targets: [{ id: "free" }], enabled: true }, config)).status).toBe(200);
-    expect(config.providers.combo.selectedModels).toEqual(["physical-only"]);
+    expect(config.providers["combo-physical"].selectedModels).toEqual(["physical-only"]);
     expect(config.disabledModels).toEqual(["other/keep"]);
     expect(refreshes).toBe(1);
 
     config.disabledModels = ["combo/free", "anthropic/fast", "other/keep"];
     expect((await putWithConfig({ scope: "provider", provider: "combo", targets: [{ id: "free" }], enabled: true }, config)).status).toBe(200);
-    expect(config.providers.combo.selectedModels).toEqual(["physical-only"]);
+    expect(config.providers["combo-physical"].selectedModels).toEqual(["physical-only"]);
     expect(config.disabledModels).toEqual(["other/keep"]);
     expect(refreshes).toBe(2);
   });

@@ -10,11 +10,11 @@ description: デフォルトのプロバイダーの選択、モデルの解決�
 |フィールド |タイプ |デフォルト |意味 |
 | --- | --- | --- | --- |
 | `defaultProvider` | `string` | `"openai"` |以前のモデルのルールが一致しない場合に使用される最終プロバイダー。有効な構成済みプロバイダーを指定する必要があります。 |
-| `combos?` | `Record<string, OcxComboConfig>` | `{}` |注文されたプロバイダー/モデル ターゲットから構築された仮想 `combo/<id>` モデル。 |
+| `combos?` | `Record<string, CodexCommanderComboConfig>` | `{}` |注文されたプロバイダー/モデル ターゲットから構築された仮想 `combo/<id>` モデル。 |
 
 ## モデルの解決順序
 
-opencodex は、要求されたモデルを次の順序で解決します。
+CodexCommander は、要求されたモデルを次の順序で解決します。
 
 1. 設定済みの `<account-selector>/<native-openai-model>` namespace。対応する保存済み Codex アカウントだけに routing され、無効または利用不能な exact target は fail closed します。
 2. 正規の `combo/<id>` または構成されたコンボ エイリアス。正規 ID は、エイリアスが一致する前に優先されます。
@@ -77,7 +77,7 @@ selector の後には bare native OpenAI-family id だけを指定できます�
 
 ### カタログの適格性
 
-コンボは、リストに表示できない場合でも、直接ルーティング可能です。 `ocx sync`、`/v1/models`、および Codex ピッカーは、すべてのターゲットが交差できる機能を公開している場合にのみリストします。
+コンボは、リストに表示できない場合でも、直接ルーティング可能です。 `ccx sync`、`/v1/models`、および Codex ピッカーは、すべてのターゲットが交差できる機能を公開している場合にのみリストします。
 
 - ライブメタデータ、レジストリヒント、またはプロバイダーからの正の `contextWindow`
 `modelContextWindows` / `contextWindow`;そして
@@ -89,7 +89,7 @@ selector の後には bare native OpenAI-family id だけを指定できます�
 
 明示的に要求された `policy/<id>`（または設定されたエイリアス）が、固定された候補許可リストの中から、ハードな能力要件と決定的で説明可能なスコアリングで選択します。既存のモデル ID が暗黙的にプロファイルを通ることはありません。`candidates`（明示的な許可リスト）、オプションの `alias`、`require`（`minContextWindow`、`minQuotaHeadroom`、`tools`、`imageInput`、`structuredOutput`、`localOnly`、`remoteAllowed`、`encryptedCodexTasks`、`reasoningEffort`、`serviceTier`）、`optimize`（latency/health/cost/quota の重み）、`limits.maxEstimatedCostUsd`、`unknownEvidence`（allow/penalize/exclude）をサポートします。未知はゼロや無料にはなりません。
 
-CLI: `ocx route policy list`、`ocx route policy show <id>`、`ocx route policy dry-run <id> --model-context <tokens> --tools`、`ocx route policy evaluate <id>`。
+CLI: `ccx route policy list`、`ccx route policy show <id>`、`ccx route policy dry-run <id> --model-context <tokens> --tools`、`ccx route policy evaluate <id>`。
 
 コンボは明示的な順序・重み付きターゲットのルーティングとフェイルオーバーです。ポリシープロファイルは、候補間の証拠に基づく選択です。
 
@@ -102,8 +102,8 @@ CLI: `ocx route policy list`、`ocx route policy show <id>`、`ocx route policy 
 
 返される履歴とルート決定ペイロードは、マスク済みのリクエストメタデータのみを公開します（例: 不透明な `apiKeyId` ラベル）。資格情報、生のプロンプト本文、プロバイダのシークレットは含みません。
 
-CLI: `ocx logs explain <request-id>`、`ocx logs rebuild-index`、`ocx logs index-status`。
+CLI: `ccx logs explain <request-id>`、`ccx logs rebuild-index`、`ccx logs index-status`。
 
-## 移行
+## 既存データ
 
-`routingProfiles` は任意の追加設定です。既存の設定ファイルと古い `usage.jsonl` 行はそのまま読み込めます。インデックスは使い捨てで、削除すると次回クエリ時に `usage.jsonl` から自動再構築されます。自動チューニングは行われません。
+`routingProfiles` は任意の追加設定です。既存の設定ファイルと、`routeDecision` を持たない `usage.jsonl` 行も読み込めます。インデックスは使い捨てで、削除すると次回クエリ時に `usage.jsonl` から自動再構築されます。自動チューニングは行われません。

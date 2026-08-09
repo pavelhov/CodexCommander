@@ -56,7 +56,7 @@ public enum DesktopStartupMode: String, Equatable, Sendable {
         case .headless:
             return "Headless · proxy runs without the menu bar"
         case .off:
-            return "Off · start OpenCodex manually"
+            return "Off · start CodexCommander manually"
         }
     }
 }
@@ -80,7 +80,7 @@ public final class UserDefaultsLaunchAtLoginPreferences: LaunchAtLoginPreference
 
     public init(
         defaults: UserDefaults = .standard,
-        namespace: String = "com.opencodex.menubar"
+        namespace: String = "com.codexcommander.menubar"
     ) {
         self.defaults = defaults
         desiredKey = "\(namespace).launch-at-login.desired"
@@ -156,7 +156,7 @@ public final class LaunchAtLoginController {
             return LaunchAtLoginPresentation(
                 status: .unavailable,
                 desiredEnabled: preferences.desiredEnabled ?? true,
-                errorMessage: "Move OpenCodex to Applications or use its repository build."
+                errorMessage: "Move CodexCommander to Applications or use its repository build."
             )
         }
         if preferences.desiredEnabled == nil {
@@ -191,7 +191,7 @@ public final class LaunchAtLoginController {
             }
             return presentation()
         } catch {
-            return presentation(error: "OpenCodex could not update Launch at Login.")
+            return presentation(error: "CodexCommander could not update Launch at Login.")
         }
     }
 
@@ -205,7 +205,7 @@ public final class LaunchAtLoginController {
             return LaunchAtLoginPresentation(
                 status: .unavailable,
                 desiredEnabled: preferences.desiredEnabled ?? enabled,
-                errorMessage: "Move OpenCodex to Applications or use its repository build."
+                errorMessage: "Move CodexCommander to Applications or use its repository build."
             )
         }
         preferences.desiredEnabled = enabled
@@ -225,7 +225,7 @@ public final class LaunchAtLoginController {
             }
             return presentation()
         } catch {
-            return presentation(error: "OpenCodex could not update Launch at Login.")
+            return presentation(error: "CodexCommander could not update Launch at Login.")
         }
     }
 
@@ -236,7 +236,7 @@ public final class LaunchAtLoginController {
             return LaunchAtLoginPresentation(
                 status: .unavailable,
                 desiredEnabled: preferences.desiredEnabled ?? true,
-                errorMessage: "Move OpenCodex to Applications or use its repository build."
+                errorMessage: "Move CodexCommander to Applications or use its repository build."
             )
         }
         if service.status == .enabled, preferences.desiredEnabled == false {
@@ -293,6 +293,7 @@ public enum LaunchAtLoginEligibility {
         let bundle = bundleURL.resolvingSymlinksInPath()
         let path = bundle.path
         guard bundle.pathExtension == "app",
+              bundle.lastPathComponent == "CodexCommander.app",
               !path.contains("/AppTranslocation/")
         else { return false }
 
@@ -300,8 +301,7 @@ public enum LaunchAtLoginEligibility {
         let userApplications = home.appendingPathComponent("Applications", isDirectory: true).path
         if path.hasPrefix("\(userApplications)/") { return true }
 
-        return bundle.lastPathComponent == "OpenCodex.app"
-            && bundle.deletingLastPathComponent().lastPathComponent == "macos"
+        return bundle.deletingLastPathComponent().lastPathComponent == "macos"
             && bundle.deletingLastPathComponent()
                 .deletingLastPathComponent().lastPathComponent == "dist"
     }

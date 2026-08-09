@@ -3,7 +3,7 @@ title: "コンボ: フェイルオーバーとロードバランシング"
 description: フェイルオーバーまたは加重負荷分散のために、1 つの仮想モデルを複数のプロバイダーにルーティングします。
 ---
 
-**コンボ** は、実際のプロバイダー/モデル ターゲットの順序付きリストの先頭にある 1 つの仮想モデルです。クライアントは `combo/<id>` をリクエストします。 opencodex はターゲットを選択し、リクエストをその具体的な `provider/model` に書き換えます。最初のターゲットで再試行可能な障害が発生した場合は、別のターゲットを試行できます。
+**コンボ** は、実際のプロバイダー/モデル ターゲットの順序付きリストの先頭にある 1 つの仮想モデルです。クライアントは `combo/<id>` をリクエストします。 CodexCommander はターゲットを選択し、リクエストをその具体的な `provider/model` に書き換えます。最初のターゲットで再試行可能な障害が発生した場合は、別のターゲットを試行できます。
 
 これは、次のいずれかが必要な場合に便利です。
 
@@ -17,10 +17,10 @@ description: フェイルオーバーまたは加重負荷分散のために、1
 この例では、最初に Anthropic、2 番目に OpenAI を使用して `combo/main` を作成します。両方のプロバイダーがすでに存在し、有効になっている必要があります。
 
 ```bash
-ocx combo set main --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol
+ccx combo set main --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol
 ```
 
-デフォルトの戦略はフェイルオーバーであるため、通常のリクエストは `anthropic/claude-opus-4-8` に送信されます。その試行に再試行可能な失敗があった場合、opencodex は `openai/gpt-5.6-sol` にホップできます。
+デフォルトの戦略はフェイルオーバーであるため、通常のリクエストは `anthropic/claude-opus-4-8` に送信されます。その試行に再試行可能な失敗があった場合、CodexCommander は `openai/gpt-5.6-sol` にホップできます。
 
 通常モデル ID を指定する場所であればどこでも仮想モデルを使用します。
 
@@ -34,7 +34,7 @@ ocx combo set main --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol
 保存された定義を確認します。
 
 ```bash
-ocx combo show main
+ccx combo show main
 ```
 
 :::tip
@@ -43,7 +43,7 @@ ocx combo show main
 
 ## コンボ名の仕組み
 
-`ocx combo set <id>` のコンボ ID は文字または数字で始まる必要があります。文字、数字、`.`、`_`、または `-` を合計 64 文字まで含めることができます。その正規モデル ID は常に `combo/<id>` です。たとえば、ID `main` は `combo/main` になります。
+`ccx combo set <id>` のコンボ ID は文字または数字で始まる必要があります。文字、数字、`.`、`_`、または `-` を合計 64 文字まで含めることができます。その正規モデル ID は常に `combo/<id>` です。たとえば、ID `main` は `combo/main` になります。
 
 `combo/` 名前空間は、コンボの構成中に予約されます。 `combo` という名前のプロバイダーはそれを占有することはできず、コンボ ID は構成されたプロバイダー名を複製することはできません。
 
@@ -83,7 +83,7 @@ ocx combo show main
 成功した 2 つのリクエストのバッチを含む 2:1 コンボを作成します。
 
 ```bash
-ocx combo set balanced \
+ccx combo set balanced \
   --targets anthropic/claude-opus-4-8:2,openai/gpt-5.6-sol:1 \
   --strategy round-robin \
   --sticky 2
@@ -112,7 +112,7 @@ ocx combo set balanced \
 |クライアントのキャンセル (499)、`origin_rejected`、サイバー ポリシーの拒否、コンテキスト オーバーフロー、または無効なリクエスト |停止してエラーを返します。別のターゲットではリクエストは有効になりません。 |
 |その他の未分類のエラー |停止してエラーを返します。 |
 
-ホップされたターゲットはデフォルトで 60 秒間のクールダウンに入ります。アップストリーム応答に有効な `Retry-After` 値が含まれている場合、opencodex は代わりにそれを使用します。秒数値と HTTP 日付値が受け入れられ、各クールダウンの上限は 10 分です。
+ホップされたターゲットはデフォルトで 60 秒間のクールダウンに入ります。アップストリーム応答に有効な `Retry-After` 値が含まれている場合、CodexCommander は代わりにそれを使用します。秒数値と HTTP 日付値が受け入れられ、各クールダウンの上限は 10 分です。
 
 現在のリクエストは、同じ試行ターゲットを再試行することはありません。以降のリクエストでは、クールダウンが期限切れになるまでスキップされます。適格なターゲットが残っていない場合、プロキシは `error.code = "combo_unavailable"` を含む HTTP 503 を返します。
 
@@ -128,15 +128,15 @@ ocx combo set balanced \
 2. 呼び出し側は努力を設定しませんでした。そして
 3. 選択したターゲットのカタログは、その正確な取り組みを宣伝します。
 
-リクエストに `reasoning` オブジェクトがない場合、opencodex はオブジェクトを作成します。 `reasoning` が `effort` プロパティなしで存在する場合、他のフィールドは保持され、デフォルトが追加されます。呼び出し元が提供した努力は決し​​て上書きされません。
+リクエストに `reasoning` オブジェクトがない場合、CodexCommander はオブジェクトを作成します。 `reasoning` が `effort` プロパティなしで存在する場合、他のフィールドは保持され、デフォルトが追加されます。呼び出し元が提供した努力は決し​​て上書きされません。
 
-ターゲットの機能が不明な場合、または設定されたエフォートが含まれていない場合、opencodex はデフォルトを省略し、ターゲット自体の動作を変更しないままにします。サポートされている値は、`low`、`medium`、`high`、`xhigh`、`max`、および `ultra` です。このフィールドを省略するか、`null` に設定して、呼び出し元とターゲットに作業を完全に任せます。
+ターゲットの機能が不明な場合、または設定されたエフォートが含まれていない場合、CodexCommander はデフォルトを省略し、ターゲット自体の動作を変更しないままにします。サポートされている値は、`low`、`medium`、`high`、`xhigh`、`max`、および `ultra` です。このフィールドを省略するか、`null` に設定して、呼び出し元とターゲットに作業を完全に任せます。
 
 ## 暗号化された v2 サブエージェント タスク
 
-Codex v2 サブエージェントには重要な制限が 1 つあります ([第92号](https://github.com/lidge-jun/opencodex/issues/92))。ネイティブの親は、新しく生成されたワーカーのタスクを、ネイティブ ChatGPT バックエンド用に作成された暗号文としてのみ送信できます。外部プロバイダーはそのペイロードを読み取ることができません。
+Codex v2 サブエージェントには重要な制限が 1 つあります ([第92号](https://github.com/pavelhov/CodexCommander/issues/92))。ネイティブの親は、新しく生成されたワーカーのタスクを、ネイティブ ChatGPT バックエンド用に作成された暗号文としてのみ送信できます。外部プロバイダーはそのペイロードを読み取ることができません。
 
-このようなリクエストの場合、コンボは、再試行可能な失敗後も含め、対象となるターゲットを正規のネイティブ ChatGPT ルートにフィルタリングします。コンボに復号化可能なターゲットがない場合、opencodex はディスパッチ前に停止し、HTTP 400 を返します。
+このようなリクエストの場合、コンボは、再試行可能な失敗後も含め、対象となるターゲットを正規のネイティブ ChatGPT ルートにフィルタリングします。コンボに復号化可能なターゲットがない場合、CodexCommander はディスパッチ前に停止し、HTTP 400 を返します。
 
 ```json
 {
@@ -169,13 +169,13 @@ v1/base/v2 モードと完全な暗号化タスクのワークフローについ
 主なコマンドは次のとおりです。
 
 ```bash
-ocx combo list
-ocx combo show <id>
-ocx combo set <id> --targets provider/model[:weight],...
-ocx combo remove <id> --yes
+ccx combo list
+ccx combo show <id>
+ccx combo set <id> --targets provider/model[:weight],...
+ccx combo remove <id> --yes
 ```
 
-`set` は、`--strategy`、`--sticky`、`--effort`、`--alias`、および `--rename-from` も受け入れます。そのフィールドをクリアするには、`--effort` または `--alias` の値として `-` を使用します。 `create` および `update` は、`set` のエイリアスです。 `delete` は `remove` のエイリアスです。同じサブコマンドが `ocx route combo` で使用できます。
+`set` は、`--strategy`、`--sticky`、`--effort`、`--alias`、および `--rename-from` も受け入れます。そのフィールドをクリアするには、`--effort` または `--alias` の値として `-` を使用します。 `create` および `update` は、`set` のエイリアスです。 `delete` は `remove` のエイリアスです。同じサブコマンドが `ccx route combo` で使用できます。
 
 ### 管理 API
 
@@ -217,7 +217,7 @@ ocx combo remove <id> --yes
 
 ### `combo/<id>` が 404 を返すのはなぜですか?
 
-コンボIDは不明です。応答はタイプ `invalid_request_error` の HTTP 404 です。 `ocx combo list` を実行し、スペルと大文字小文字を確認して、モデル要求を受信する同じ実行中の opencodex インスタンスに管理コマンドが書き込まれたことを確認します。
+コンボIDは不明です。応答はタイプ `invalid_request_error` の HTTP 404 です。 `ccx combo list` を実行し、スペルと大文字小文字を確認して、モデル要求を受信する同じ実行中の CodexCommander インスタンスに管理コマンドが書き込まれたことを確認します。
 
 ### `combo_unavailable` が発生するのはなぜですか?
 

@@ -8,7 +8,7 @@
  *   - mutation-test the fixture's argv instead of the argv production emits
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,7 +21,7 @@ import { inspectNativeCodexOwnership } from "../src/integrations/native/ownershi
 let home = "";
 const cleanup: string[] = [];
 let previousCodexHome: string | undefined;
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 
 /** Records exactly what production asked for, so the allowlist is observed. */
 function recorder(reply: (file: string, args: readonly string[]) => Partial<ReturnType<ProbeRunner>>) {
@@ -34,40 +34,40 @@ function recorder(reply: (file: string, args: readonly string[]) => Partial<Retu
 }
 
 beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), "ocx-probe-"));
+  home = mkdtempSync(join(tmpdir(), "ccx-probe-"));
   cleanup.push(home);
   previousCodexHome = process.env.CODEX_HOME;
-  previousOpencodexHome = process.env.OPENCODEX_HOME;
+  previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
 });
 afterEach(() => {
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   while (cleanup.length) rmSync(cleanup.pop()!, { recursive: true, force: true });
 });
 
-function writePlist(codexHome: string | null, opencodexHome: string | null): string {
+function writePlist(codexHome: string | null, codexCommanderHome: string | null): string {
   const dir = join(home, "Library", "LaunchAgents");
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, "com.opencodex.proxy.plist");
+  const path = join(dir, "com.codexcommander.proxy.plist");
   writeFileSync(path, [
     "<plist><dict><key>EnvironmentVariables</key><dict>",
     codexHome ? `<key>CODEX_HOME</key><string>${codexHome}</string>` : "",
-    opencodexHome ? `<key>OPENCODEX_HOME</key><string>${opencodexHome}</string>` : "",
+    codexCommanderHome ? `<key>CODEXCOMMANDER_HOME</key><string>${codexCommanderHome}</string>` : "",
     "</dict></dict></plist>",
   ].join("\n"));
   return path;
 }
 
-function writeUnit(codexHome: string, opencodexHome: string): string {
+function writeUnit(codexHome: string, codexCommanderHome: string): string {
   const dir = join(home, ".config", "systemd", "user");
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, "opencodex-proxy.service");
+  const path = join(dir, "codexcommander-proxy.service");
   writeFileSync(path, [
     "[Service]",
     `Environment="CODEX_HOME=${codexHome}"`,
-    `Environment="OPENCODEX_HOME=${opencodexHome}"`,
+    `Environment="CODEXCOMMANDER_HOME=${codexCommanderHome}"`,
   ].join("\n"));
   return path;
 }
@@ -79,22 +79,15 @@ describe("the probe only ever asks", () => {
    * that from the source text is not enough, because this unit has already
    * shipped a fix that was only a comment.
    */
-  /**
-   * Two calls, not one: `gui/<uid>` and `user/<uid>` are independent launchd
-   * domains carrying separate service sets. Measured on macOS 27.0, the shipped
-   * agent answers 0 under `gui` and 113 under `user` — so asking only one leaves
-   * the other free to hold a job this probe would then report as absent.
-   *
-   * What the test is really pinning is that every call only ASKS.
-   */
+  /** Both domains are independent; every call must only ask. */
   test("macOS asks launchctl only with print, in both domains", () => {
     const { run, calls } = recorder(() => ({ status: 113 }));
     inspectServiceManagerInstallation({ run, platform: "darwin", uid: 501, home });
 
     expect(calls).toHaveLength(2);
     expect(calls.map(c => c.args[1])).toEqual([
-      "gui/501/com.opencodex.proxy",
-      "user/501/com.opencodex.proxy",
+      "gui/501/com.codexcommander.proxy",
+      "user/501/com.codexcommander.proxy",
     ]);
     for (const call of calls) {
       expect(call.file).toBe("/bin/launchctl");
@@ -115,18 +108,21 @@ describe("the probe only ever asks", () => {
     expect(result.kind).toBe("unknown");
   });
 
-  test("Linux asks systemctl exactly once, with show", () => {
+  test("Linux asks systemctl once for the canonical unit, with show", () => {
     const { run, calls } = recorder(() => ({
       stdout: "LoadState=not-found\nActiveState=inactive\nFragmentPath=\nNeedDaemonReload=no\n",
     }));
     inspectServiceManagerInstallation({ run, platform: "linux", home });
 
     expect(calls).toHaveLength(1);
-    expect(calls[0].file).toBe("systemctl");
-    expect(calls[0].args).toContain("show");
-    expect(calls[0].args).toContain("--user");
-    for (const verb of ["start", "stop", "restart", "reload", "daemon-reload", "enable", "disable", "kill"]) {
-      expect(calls[0].args).not.toContain(verb);
+    expect(calls.map(call => call.args[2])).toEqual(["codexcommander-proxy"]);
+    for (const call of calls) {
+      expect(call.file).toBe("systemctl");
+      expect(call.args).toContain("show");
+      expect(call.args).toContain("--user");
+      for (const verb of ["start", "stop", "restart", "reload", "daemon-reload", "enable", "disable", "kill"]) {
+        expect(call.args).not.toContain(verb);
+      }
     }
   });
 
@@ -153,7 +149,7 @@ describe("absence has to be proven twice", () => {
    * definition sits right there.
    */
   test("no registration but a definition on disk is NOT absent", () => {
-    const path = writePlist("/somewhere/.codex", "/somewhere/.opencodex");
+    const path = writePlist("/somewhere/.codex", "/somewhere/.codexcommander");
     const { run } = recorder(() => ({ status: 113 }));
     const result = inspectServiceManagerInstallation({ run, platform: "darwin", uid: 501, home });
 
@@ -161,7 +157,7 @@ describe("absence has to be proven twice", () => {
     if (result.kind !== "present") return;
     expect(result.claims[0].registration).toBe("absent");
     expect(result.claims[0].definitionPath).toBe(path);
-    expect(result.claims[0].homes).toEqual({ codexHome: "/somewhere/.codex", opencodexHome: "/somewhere/.opencodex" });
+    expect(result.claims[0].homes).toEqual({ codexHome: "/somewhere/.codex", codexCommanderHome: "/somewhere/.codexcommander" });
   });
 
   test("a registration with no definition file is unknown, not present", () => {
@@ -195,7 +191,7 @@ describe("could not ask is not an answer", () => {
 
   test("exit 112 WITH a plist staged is unknown", () => {
     mkdirSync(join(home, "Library", "LaunchAgents"), { recursive: true });
-    writeFileSync(join(home, "Library", "LaunchAgents", "com.opencodex.proxy.plist"), "<plist/>");
+    writeFileSync(join(home, "Library", "LaunchAgents", "com.codexcommander.proxy.plist"), "<plist/>");
     const { run } = recorder(() => ({ status: 112, stderr: "Could not find domain for user" }));
     const result = inspectServiceManagerInstallation({ run, platform: "darwin", uid: 501, home });
     // Something is staged to load and we could not see whether it did.
@@ -216,8 +212,8 @@ describe("could not ask is not an answer", () => {
   test("a dangling plist symlink does not read as a clean machine", () => {
     const agents = join(home, "Library", "LaunchAgents");
     mkdirSync(agents, { recursive: true });
-    symlinkSync(join(home, "nothing-here.plist"), join(agents, "com.opencodex.proxy.plist"));
-    expect(existsSync(join(agents, "com.opencodex.proxy.plist"))).toBeFalse();
+    symlinkSync(join(home, "nothing-here.plist"), join(agents, "com.codexcommander.proxy.plist"));
+    expect(existsSync(join(agents, "com.codexcommander.proxy.plist"))).toBeFalse();
 
     const { run } = recorder(() => ({ status: 113 }));
     const result = inspectServiceManagerInstallation({ run, platform: "darwin", uid: 501, home });
@@ -240,7 +236,7 @@ describe("could not ask is not an answer", () => {
   });
 
   test("NeedDaemonReload=yes is unknown — systemd is running something else", () => {
-    writeUnit("/x/.codex", "/x/.opencodex");
+    writeUnit("/x/.codex", "/x/.codexcommander");
     const { run } = recorder(() => ({
       stdout: "LoadState=loaded\nActiveState=active\nFragmentPath=/x/unit\nNeedDaemonReload=yes\n",
     }));
@@ -262,7 +258,7 @@ describe("a definition that cannot supply homes is not present", () => {
     const dir = join(home, "Library", "LaunchAgents");
     mkdirSync(dir, { recursive: true });
     // A directory where the plist should be: exists, cannot be read as a file.
-    mkdirSync(join(dir, "com.opencodex.proxy.plist"));
+    mkdirSync(join(dir, "com.codexcommander.proxy.plist"));
     const { run } = recorder(() => ({ status: 113 }));
     expect(inspectServiceManagerInstallation({ run, platform: "darwin", uid: 501, home }).kind).toBe("unknown");
   });
@@ -273,49 +269,51 @@ describe("a definition that cannot supply homes is not present", () => {
    * comparison can skip it rather than compare against "".
    */
   test("an omitted home is null, not an empty string", () => {
-    writePlist(null, "/somewhere/.opencodex");
+    writePlist(null, "/somewhere/.codexcommander");
     const { run } = recorder(() => ({ status: 113 }));
     const result = inspectServiceManagerInstallation({ run, platform: "darwin", uid: 501, home });
     expect(result.kind).toBe("present");
     if (result.kind !== "present") return;
     expect(result.claims[0].homes.codexHome).toBeNull();
-    expect(result.claims[0].homes.opencodexHome).toBe("/somewhere/.opencodex");
+    expect(result.claims[0].homes.codexCommanderHome).toBe("/somewhere/.codexcommander");
   });
 });
 
 describe("ownership refuses what it cannot prove", () => {
-  /*
-   * The default state paths include the DEFAULT home mirror, resolved from
-   * homedir(), which no test sandbox moves. Left alone, these fixtures would
-   * read the developer's real installation and call their own machine foreign.
-   */
   function own(extra: { run: ProbeRunner }) {
     const codexHome = join(home, ".codex");
-    const opencodexHome = join(home, ".opencodex");
+    const codexCommanderHome = join(home, ".codexcommander");
     return {
       ...extra,
       platform: "darwin" as const,
       uid: 501,
       home,
-      statePaths: [join(opencodexHome, "service-state.json")],
-      currentHomes: { codexHome, opencodexHome },
+      statePaths: [join(codexCommanderHome, "service-state.json")],
+      currentHomes: { codexHome, codexCommanderHome },
     };
   }
 
-  function useHomes(): { codexHome: string; opencodexHome: string } {
+  function useHomes(): { codexHome: string; codexCommanderHome: string } {
     const codexHome = join(home, ".codex");
-    const opencodexHome = join(home, ".opencodex");
+    const codexCommanderHome = join(home, ".codexcommander");
     mkdirSync(codexHome, { recursive: true });
-    mkdirSync(opencodexHome, { recursive: true });
+    mkdirSync(codexCommanderHome, { recursive: true });
     process.env.CODEX_HOME = codexHome;
-    process.env.OPENCODEX_HOME = opencodexHome;
-    return { codexHome, opencodexHome };
+    process.env.CODEXCOMMANDER_HOME = codexCommanderHome;
+    return { codexHome, codexCommanderHome };
   }
 
-  function writeState(dir: string, codexHome: string, opencodexHome: string): void {
-    writeFileSync(join(dir, "service-state.json"), JSON.stringify({
-      version: 2, codexHome, opencodexHome, backend: "scheduler",
-    }));
+  function writeState(dir: string, codexHome: string, codexCommanderHome: string): void {
+    const path = join(dir, "service-state.json");
+    writeFileSync(path, JSON.stringify({
+      version: 3,
+      codexHome,
+      codexCommanderHome,
+      bunPath: process.execPath,
+      cliPath: import.meta.path,
+      backend: "scheduler",
+    }), { mode: 0o600 });
+    chmodSync(path, 0o600);
   }
 
   test("a fresh home with no state and no service is owned", () => {
@@ -325,8 +323,8 @@ describe("ownership refuses what it cannot prove", () => {
   });
 
   test("state naming another home is foreign", () => {
-    const { opencodexHome } = useHomes();
-    writeState(opencodexHome, "/elsewhere/.codex", "/elsewhere/.opencodex");
+    const { codexCommanderHome } = useHomes();
+    writeState(codexCommanderHome, "/elsewhere/.codex", "/elsewhere/.codexcommander");
     const { run } = recorder(() => ({ status: 113 }));
     expect(inspectNativeCodexOwnership(own({ run })).ownership).toBe("foreign");
   });
@@ -338,9 +336,9 @@ describe("ownership refuses what it cannot prove", () => {
    * half-finished operation to believe.
    */
   test("state says here, definition says elsewhere — unknown, not owned", () => {
-    const { codexHome, opencodexHome } = useHomes();
-    writeState(opencodexHome, codexHome, opencodexHome);
-    writePlist("/elsewhere/.codex", "/elsewhere/.opencodex");
+    const { codexHome, codexCommanderHome } = useHomes();
+    writeState(codexCommanderHome, codexHome, codexCommanderHome);
+    writePlist("/elsewhere/.codex", "/elsewhere/.codexcommander");
     const { run } = recorder(() => ({ status: 113 }));
 
     const result = inspectNativeCodexOwnership(own({ run }));
@@ -349,16 +347,16 @@ describe("ownership refuses what it cannot prove", () => {
   });
 
   test("state and definition agreeing is owned", () => {
-    const { codexHome, opencodexHome } = useHomes();
-    writeState(opencodexHome, codexHome, opencodexHome);
-    writePlist(codexHome, opencodexHome);
+    const { codexHome, codexCommanderHome } = useHomes();
+    writeState(codexCommanderHome, codexHome, codexCommanderHome);
+    writePlist(codexHome, codexCommanderHome);
     const { run } = recorder(() => ({ status: 113 }));
     expect(inspectNativeCodexOwnership(own({ run })).ownership).toBe("owned");
   });
 
   test("an installed definition that no state file accounts for is unknown", () => {
-    const { codexHome, opencodexHome } = useHomes();
-    writePlist(codexHome, opencodexHome);
+    const { codexHome, codexCommanderHome } = useHomes();
+    writePlist(codexHome, codexCommanderHome);
     const { run } = recorder(() => ({ status: 0, stdout: "state = running" }));
     expect(inspectNativeCodexOwnership(own({ run })).ownership).toBe("unknown");
   });
@@ -369,8 +367,10 @@ describe("ownership refuses what it cannot prove", () => {
    * unattended write.
    */
   test("a malformed state file is unknown, where the teardown helper says fine", () => {
-    const { opencodexHome } = useHomes();
-    writeFileSync(join(opencodexHome, "service-state.json"), "{ not json");
+    const { codexCommanderHome } = useHomes();
+    const path = join(codexCommanderHome, "service-state.json");
+    writeFileSync(path, "{ not json", { mode: 0o600 });
+    chmodSync(path, 0o600);
     const { run } = recorder(() => ({ status: 113 }));
     const result = inspectNativeCodexOwnership(own({ run }));
     expect(result.ownership).toBe("unknown");
@@ -385,8 +385,8 @@ describe("ownership refuses what it cannot prove", () => {
    * the real unaskable case, and it still refuses.
    */
   test("an unaskable service manager is unknown even with clean state", () => {
-    const { codexHome, opencodexHome } = useHomes();
-    writeState(opencodexHome, codexHome, opencodexHome);
+    const { codexHome, codexCommanderHome } = useHomes();
+    writeState(codexCommanderHome, codexHome, codexCommanderHome);
     const { run } = recorder(() => ({ status: null, spawnFailed: true, stderr: "spawn EACCES" }));
     expect(inspectNativeCodexOwnership(own({ run })).ownership).toBe("unknown");
   });

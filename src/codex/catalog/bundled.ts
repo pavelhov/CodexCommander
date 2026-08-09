@@ -6,7 +6,7 @@ import { atomicWriteFile, expandUserPath, getConfigDir, websocketsEnabled } from
 import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readRootTomlString, resolveCodexConfigPath } from "../paths";
 import { clearModelCache, DEFAULT_MODEL_CACHE_TTL_MS, getFreshCached, getStaleCached, isModelsFetchCoolingDown, markModelsFetchFailure, setCached } from "../model-cache";
 import { buildModelsRequest, resolveModelsAuthToken } from "../../oauth";
-import type { OcxConfig, OcxProviderConfig } from "../../types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJawcodeModelMetadata, resolveJawcodeProvider } from "../../generated/jawcode-model-metadata";
@@ -28,12 +28,14 @@ import {
 import type { NormalizedComboConfig } from "../../combos/types";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
+import { readEnv } from "../../identity";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
-import { activeCodexModelsCachePath, catalogBackupPathFor, findNativeTemplate, isDefaultCatalogPath, legacyCatalogBackupPath, parseCatalogJson, readCatalog, readCatalogBackup, readCodexCatalogPath } from "./parsing";
+import { activeCodexModelsCachePath, catalogBackupPathFor, findNativeTemplate, isDefaultCatalogPath, parseCatalogJson, readCatalog, readCatalogBackup, readCodexCatalogPath } from "./parsing";
 import type { RawCatalog, RawEntry } from "./parsing";
 import { codexExecInvocation, isSpawnableCodexCandidate } from "../exec-invocation";
+import { parseCodexShimState } from "../shim";
 import {
   parsePersistedCodexRuntime,
   peekCodexRuntimeProcessCache,
@@ -96,9 +98,9 @@ function cloneAndDeepFreeze<T>(value: T): DeepReadonly<T> {
 
 function bundledRuntimeKey(
   runtime: Pick<ResolvedCodexRuntime, "command" | "version">,
-  opencodexHome: string = process.env.OPENCODEX_HOME ?? "",
+  codexCommanderHome: string = readEnv("CODEXCOMMANDER_HOME") ?? "",
 ): string {
-  return [runtime.command, runtime.version ?? "", opencodexHome].join("\0");
+  return [runtime.command, runtime.version ?? "", codexCommanderHome].join("\0");
 }
 
 function publishBundledCatalogCache(
@@ -142,10 +144,10 @@ export function invalidateBundledCatalogCache(): void {
 export function setBundledCatalogCacheForTests(
   runtime: Pick<ResolvedCodexRuntime, "command" | "version">,
   value: RawCatalog | null,
-  options: Readonly<{ expiresAt?: number; opencodexHome?: string }> = {},
+  options: Readonly<{ expiresAt?: number; codexCommanderHome?: string }> = {},
 ): void {
   publishBundledCatalogCache(
-    bundledRuntimeKey(runtime, options.opencodexHome),
+    bundledRuntimeKey(runtime, options.codexCommanderHome),
     options.expiresAt ?? Date.now() + BUNDLED_CATALOG_CACHE_MS,
     value,
   );
@@ -196,15 +198,10 @@ export function codexCommandCandidates(): string[] {
 
 export function codexShimCommandCandidates(): string[] {
   try {
-    const state = JSON.parse(readFileSync(join(getConfigDir(), "codex-shim.json"), "utf8")) as {
-      wrapperPath?: unknown;
-      originalPath?: unknown;
-      backupPath?: unknown;
-      wrappers?: Array<{ wrapperPath?: unknown; originalPath?: unknown; backupPath?: unknown }>;
-    };
-    const files = Array.isArray(state.wrappers) && state.wrappers.length > 0 ? state.wrappers : [state];
+    const state = parseCodexShimState(readFileSync(join(getConfigDir(), "codex-shim.json"), "utf8"));
+    if (!state) return [];
     const out: string[] = [];
-    for (const file of files) {
+    for (const file of state.wrappers) {
       for (const value of [file.backupPath, file.originalPath, file.wrapperPath]) {
         if (typeof value !== "string" || value.length === 0) continue;
         if (!isSpawnableCodexCandidate(value)) continue;
@@ -240,7 +237,7 @@ export function loadBundledCodexCatalog(deps: BundledCatalogDeps = {}): Readonly
   const useCache = !deps.commandCandidates && !deps.execFileSync && !deps.configDir && !deps.env;
   const execFile = deps.execFileSync ?? (execFileSync as unknown as ExecFile);
   // Prefer the single resolved runtime so sync/clamp never probe a different binary
-  // than OpenCodex will launch. Tests may inject commandCandidates to stub probing.
+  // than CodexCommander will launch. Tests may inject commandCandidates to stub probing.
   let cacheKey: string | null = null;
   const candidates = deps.commandCandidates?.() ?? (() => {
     const resolved = resolveAndPersistCodexRuntime({
@@ -256,7 +253,7 @@ export function loadBundledCodexCatalog(deps: BundledCatalogDeps = {}): Readonly
       now: deps.now,
       // Catalog loading only consumes `resolved.runtime.command`, never `newerAvailable`.
       // Full PATH discovery probes every candidate launcher (100+ on a dev machine, ~1.2s),
-      // which alone can exceed the 3s budget `ocx claude` allows /api/claude-code. Priority
+      // which alone can exceed the 3s budget `ccx claude` allows /api/claude-code. Priority
       // selection is identical either way; callers wanting discovery diagnostics opt in.
       discoverAlternatives: deps.discoverAlternatives ?? false,
     });
@@ -325,7 +322,6 @@ export type CatalogSourceForGather =
         | "bundled-catalog-template"
         | "active-catalog-merge"
         | "hashed-backup-fallback"
-        | "legacy-backup-fallback"
         | "models-cache-fallback";
       catalog: ReadonlyRawCatalog;
       processLocal: Readonly<{
@@ -367,7 +363,7 @@ export function peekCodexRuntimeForCatalogGather(
     const runtime = processMemo.value.runtime;
     if (persistedBytes === null || (persisted && sameRuntimeIdentity(runtime, {
       command: persisted.command,
-      version: persisted.selectedVersion ?? null,
+      version: persisted.selectedVersion,
     }))) {
       return cloneAndDeepFreeze({
         kind: "available" as const,
@@ -388,7 +384,7 @@ export function peekCodexRuntimeForCatalogGather(
       origin: "persisted" as const,
       runtime: {
         command: persisted.command,
-        version: persisted.selectedVersion ?? null,
+        version: persisted.selectedVersion,
         source: persisted.source,
       },
       processLocal: UNUSED_PROCESS_LOCAL,
@@ -431,7 +427,6 @@ export function resolveCatalogSourceForGather(
   const roles = [
     "active-catalog-merge",
     "hashed-backup-fallback",
-    "legacy-backup-fallback",
     "models-cache-fallback",
   ] as const;
   for (const role of roles) {
@@ -477,7 +472,6 @@ export function loadCatalogForSync(path: string, deps: BundledCatalogDeps = {}):
   const catalog = readCatalog(path);
   if (catalog && findNativeTemplate(catalog)) return catalog;
   return readCatalog(catalogBackupPathFor(path))
-    ?? (isDefaultCatalogPath(path) ? readCatalog(legacyCatalogBackupPath()) : null)
     ?? readCatalog(activeCodexModelsCachePath())
     ?? materializeBundledCodexCatalog(path, deps)
     ?? catalog;

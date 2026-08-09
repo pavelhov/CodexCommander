@@ -47,7 +47,7 @@ import { codexAccountNamespaceProviderCollisionError } from "../../codex/account
 import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import { getProviderDiscoveryStatus } from "../../codex/model-cache";
-import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
+import { globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
 import { readUsageEntries } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
@@ -63,7 +63,7 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../../lib/debug-settings";
-import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
+import type { CodexCommanderClaudeCodeConfig, CodexCommanderConfig, CodexCommanderCustomModel, CodexCommanderProviderConfig } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
@@ -79,7 +79,7 @@ import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 type ProviderPatchApplication =
   | { error: string }
   | {
-      next: OcxProviderConfig;
+      next: CodexCommanderProviderConfig;
       touched: boolean;
       editorTouched: boolean;
       enablingOpenAi: boolean;
@@ -94,12 +94,12 @@ type ProviderPatchApplication =
  */
 function applyProviderPatchFields(
   name: string,
-  provider: OcxProviderConfig,
+  provider: CodexCommanderProviderConfig,
   rawBody: Record<string, unknown>,
   keys: string[],
-  config: OcxConfig,
+  config: CodexCommanderConfig,
 ): ProviderPatchApplication {
-  const next: OcxProviderConfig = { ...provider };
+  const next: CodexCommanderProviderConfig = { ...provider };
   let touched = false;
   let headersTouched = false;
 
@@ -272,7 +272,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const providerError = providerManagementConfigError(name, body.provider);
     if (providerError) return jsonResponse({ error: providerError }, 400);
-    const prov = body.provider ? stripCodexRuntimeProviderFields(body.provider as OcxProviderConfig) : undefined;
+    const prov = body.provider ? stripCodexRuntimeProviderFields(body.provider as CodexCommanderProviderConfig) : undefined;
     if (!name || !prov?.adapter || !prov?.baseUrl) {
       return jsonResponse({ error: "name, provider.adapter and provider.baseUrl are required" }, 400);
     }
@@ -300,18 +300,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // doesn't send — merge it in so the sidecars are gated correctly.
     enrichProviderFromCatalog(name, prov);
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
-    // Overwriting an existing provider must not drop its multi-key pool: carry it over, then
-    // let the (possibly new) apiKey join the pool as the active entry.
-    const existingPool = config.providers[name]?.apiKeyPool;
-    if (existingPool && !prov.apiKeyPool) prov.apiKeyPool = existingPool;
     config.providers[name] = stripRegistryOnlyStaticHeaders(name, prov);
     if (body.setDefault === true) config.defaultProvider = name;
     save(config);
     reconcileLiveStateStores();
-    if (prov.apiKey && prov.apiKeyPool) {
-      const { addProviderApiKey } = await import("../../providers/api-keys");
-      addProviderApiKey(config, name, prov.apiKey);
-    }
     const { clearModelCache } = await import("../../codex/model-cache");
     clearModelCache(name);
     const catalogRefresh = await convergeCodexCatalog();
@@ -480,7 +472,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         credentialVerification,
         message: credentialVerification === "verified"
           ? "Credential verified by a successful inference. The public model catalog is not used as authentication evidence."
-          : "The model catalog is public, so it cannot verify this key. OpenCodex will mark it verified after the first successful inference.",
+          : "The model catalog is public, so it cannot verify this key. CodexCommander will mark it verified after the first successful inference.",
       });
     }
     const { resolveModelsAuthToken, buildModelsRequest } = await import("../../oauth");
@@ -602,7 +594,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
   }
 
   if (url.pathname === "/api/provider-context-caps" && req.method === "GET") {
-    return jsonResponse({ cap: DEFAULT_PROVIDER_CONTEXT_CAP, value: globalContextCapValue(config), caps: providerContextCaps(config) });
+    return jsonResponse({ value: globalContextCapValue(config), caps: providerContextCaps(config) });
   }
 
   if (url.pathname === "/api/provider-context-caps" && req.method === "PUT") {
@@ -612,7 +604,6 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const { clearModelCache } = await import("../../codex/model-cache");
     const respond = (catalogRefresh: Awaited<ReturnType<typeof convergeCodexCatalog>>) => jsonResponse({
       ok: true,
-      cap: DEFAULT_PROVIDER_CONTEXT_CAP,
       value: globalContextCapValue(config),
       caps: providerContextCaps(config),
       catalogRefresh,

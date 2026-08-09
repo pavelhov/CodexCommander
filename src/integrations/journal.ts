@@ -10,13 +10,19 @@
  *    verbatim — so they go through `atomicWriteFile`, which applies 0600 plus
  *    Windows ACL hardening.
  *
- * Design of record: devlog/_fin/260802_client_toggle_api/021 §4.
+ * Design contract.
  */
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { atomicWriteFile } from "../config";
-import { ensureDir, fingerprint, integrationsDir, type OwnershipRecord } from "./ownership";
+import {
+  ensureDir,
+  fingerprint,
+  integrationsDir,
+  isCurrentOwnershipRecord,
+  type OwnershipRecord,
+} from "./ownership";
 import { isIntegrationClientId, type IntegrationClientId } from "./registry";
 
 export type OperationKind = "apply" | "disable" | "refresh" | "restore";
@@ -46,12 +52,86 @@ export interface JournalEntry {
    * Ownership as it stood BEFORE this operation. Restore puts this back
    * alongside the bytes, so provenance always describes the file it came with
    * and is never re-derived from a provider-id prefix — which would silently
-   * adopt a user's own `opencodex/...` entry.
+   * adopt a user's own similarly named entry.
    */
   priorRecord: OwnershipRecord | null;
 }
 
 export const SNAPSHOT_RETENTION = 10;
+const JOURNAL_SCHEMA_VERSION = 1 as const;
+const MAINTENANCE_SCHEMA_VERSION = 1 as const;
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function parseSnapshotRef(value: unknown, clientId: IntegrationClientId, opId: string): SnapshotRef | null {
+  if (!isPlainRecord(value) || typeof value.kind !== "string") return null;
+  if (value.kind === "none" || value.kind === "expired") {
+    return hasExactKeys(value, ["kind"]) ? { kind: value.kind } : null;
+  }
+  if (value.kind !== "stored" || !hasExactKeys(value, ["kind", "relPath"])
+    || typeof value.relPath !== "string") return null;
+  const expected = join("snapshots", clientId, opId);
+  return value.relPath === expected ? { kind: "stored", relPath: value.relPath } : null;
+}
+
+function parseJournalEntry(value: unknown): JournalEntry | null {
+  if (!isPlainRecord(value) || !hasExactKeys(value, [
+    "schemaVersion",
+    "opId",
+    "clientId",
+    "kind",
+    "at",
+    "configPath",
+    "snapshot",
+    "resultFingerprint",
+    "resultAbsent",
+    "priorRecord",
+  ]) || value.schemaVersion !== JOURNAL_SCHEMA_VERSION
+    || typeof value.opId !== "string" || value.opId.length === 0
+    || typeof value.clientId !== "string" || !isIntegrationClientId(value.clientId)
+    || !["apply", "disable", "refresh", "restore"].includes(String(value.kind))
+    || typeof value.at !== "string" || !Number.isFinite(Date.parse(value.at))
+    || typeof value.configPath !== "string" || value.configPath.length === 0
+    || typeof value.resultFingerprint !== "string"
+    || typeof value.resultAbsent !== "boolean") return null;
+  try {
+    assertSafeComponent(value.opId, "opId");
+  } catch {
+    return null;
+  }
+  const snapshot = parseSnapshotRef(value.snapshot, value.clientId, value.opId);
+  if (!snapshot) return null;
+  if (value.resultAbsent ? value.resultFingerprint !== "" : !/^[0-9a-f]{16}$/.test(value.resultFingerprint)) {
+    return null;
+  }
+  const priorRecord = value.priorRecord === null
+    ? null
+    : isCurrentOwnershipRecord(value.priorRecord)
+      && value.priorRecord.clientId === value.clientId
+      && value.priorRecord.configPath === value.configPath
+      ? value.priorRecord
+      : undefined;
+  if (priorRecord === undefined) return null;
+  return {
+    opId: value.opId,
+    clientId: value.clientId,
+    kind: value.kind as OperationKind,
+    at: value.at,
+    configPath: value.configPath,
+    snapshot,
+    resultFingerprint: value.resultFingerprint,
+    resultAbsent: value.resultAbsent,
+    priorRecord,
+  };
+}
 
 /**
  * Does the file on disk still hold what this operation left behind?
@@ -124,8 +204,10 @@ export function captureSnapshot(
 
 /** Commit the row. Pruning is post-commit and can never fail the append. */
 export function appendOperation(entry: JournalEntry, dir: string = integrationsDir()): void {
+  const current = parseJournalEntry({ schemaVersion: JOURNAL_SCHEMA_VERSION, ...entry });
+  if (!current) throw new Error("refusing to append an invalid integration journal entry");
   ensureDir(journalPath(dir));
-  appendFileSync(journalPath(dir), `${JSON.stringify(entry)}\n`, { encoding: "utf8", mode: 0o600 });
+  appendFileSync(journalPath(dir), `${JSON.stringify({ schemaVersion: JOURNAL_SCHEMA_VERSION, ...current })}\n`, { encoding: "utf8", mode: 0o600 });
   try {
     const pruned = pruneSnapshots(entry.clientId, dir);
     if (pruned.ok) clearPruneFailure(entry.clientId, dir);
@@ -151,8 +233,8 @@ export function listOperations(
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     try {
-      const parsed = JSON.parse(line) as JournalEntry;
-      if (!clientId || parsed.clientId === clientId) rows.push(parsed);
+      const parsed = parseJournalEntry(JSON.parse(line));
+      if (parsed && (!clientId || parsed.clientId === clientId)) rows.push(parsed);
     } catch {
       // Torn line from an interrupted append; the rest of the log is still good.
     }
@@ -255,8 +337,10 @@ function maintenancePath(dir: string): string {
 export function readMaintenance(dir: string = integrationsDir()): MaintenanceState {
   try {
     const parsed: unknown = JSON.parse(readFileSync(maintenancePath(dir), "utf8"));
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const raw = (parsed as { pruneFailures?: unknown }).pruneFailures;
+    if (isPlainRecord(parsed)
+      && hasExactKeys(parsed, ["schemaVersion", "pruneFailures"])
+      && parsed.schemaVersion === MAINTENANCE_SCHEMA_VERSION) {
+      const raw = parsed.pruneFailures;
       const failures: MaintenanceState["pruneFailures"] = {};
       if (raw && typeof raw === "object" && !Array.isArray(raw)) {
         for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
@@ -278,7 +362,10 @@ export function readMaintenance(dir: string = integrationsDir()): MaintenanceSta
 function writeMaintenance(state: MaintenanceState, dir: string): void {
   try {
     ensureDir(maintenancePath(dir));
-    atomicWriteFile(maintenancePath(dir), `${JSON.stringify(state, null, 2)}\n`);
+    atomicWriteFile(maintenancePath(dir), `${JSON.stringify({
+      schemaVersion: MAINTENANCE_SCHEMA_VERSION,
+      pruneFailures: state.pruneFailures,
+    }, null, 2)}\n`);
   } catch (error) {
     // The marker is an optimization for scheduling retries. `retentionDegraded`
     // is derived from the snapshot count, so losing it costs a retry, not the

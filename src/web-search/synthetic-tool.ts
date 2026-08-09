@@ -1,4 +1,4 @@
-import type { OcxTool } from "../types";
+import type { CodexCommanderTool } from "../types";
 
 /** The function name the chat model sees + the name the loop intercepts. */
 export const WEB_SEARCH_TOOL_NAME = "web_search";
@@ -23,7 +23,7 @@ export function extractHostedWebSearch(tools: unknown[] | undefined): Record<str
  * web_search. The model calls it like any function; the proxy intercepts the call and runs the real
  * search via the sidecar (the call is never relayed to Codex). `webSearch:true` flags it for the loop.
  */
-export function buildWebSearchTool(): OcxTool {
+export function buildWebSearchTool(): CodexCommanderTool {
   return {
     name: WEB_SEARCH_TOOL_NAME,
     description:

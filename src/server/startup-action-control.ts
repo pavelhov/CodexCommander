@@ -42,11 +42,11 @@ export type StartupInstallState =
 
 const INSTALL_DETAIL_LIMIT = 2_000;
 const INDETERMINATE_MESSAGE =
-  "Windows elevation timed out, but the elevated Task Scheduler transaction may still be running. New service installation attempts are temporarily blocked while OpenCodex reconciles its final state.";
+  "Windows elevation timed out, but the elevated Task Scheduler transaction may still be running. New service installation attempts are temporarily blocked while CodexCommander reconciles its final state.";
 const RECONCILING_MESSAGE =
   "A previous elevated Windows service installation is still being reconciled. Wait for it to finish or inspect the Task Scheduler state before retrying.";
 const BLOCKED_PARTIAL_MESSAGE =
-  "A previous elevated Windows service installation left a partial Task Scheduler state. Remove the OpenCodex scheduler task (or confirm it is absent), then clear the install block before retrying.";
+  "A previous elevated Windows service installation left a partial Task Scheduler state. Remove the CodexCommander scheduler task (or confirm it is absent), then clear the install block before retrying.";
 
 let installState: StartupInstallState = { status: "idle" };
 
@@ -88,7 +88,7 @@ export function clearStartupInstallPartialBlock(options: {
   if (options.probe.status === "present") {
     return {
       cleared: false,
-      detail: "OpenCodex Task Scheduler task is still present; remove it before clearing the block.",
+      detail: "CodexCommander Task Scheduler task is still present; remove it before clearing the block.",
     };
   }
   if (options.probe.status === "unknown") {
@@ -117,7 +117,7 @@ export function startupInstallArgv(
 }
 
 export interface CliInstallFailure {
-  /** Machine marker such as OCX_ERROR_CODE=..., when present in any stream. */
+  /** Machine marker such as CCX_ERROR_CODE=..., when present in any stream. */
   code: string | null;
   stdout: string;
   stderr: string;
@@ -126,8 +126,8 @@ export interface CliInstallFailure {
   detail: string;
 }
 
-function extractOcxErrorCode(text: string): string | null {
-  const match = text.match(/OCX_ERROR_CODE=[A-Z0-9_]+/);
+function extractCodexCommanderErrorCode(text: string): string | null {
+  const match = text.match(/CCX_ERROR_CODE=[A-Z0-9_]+/);
   return match ? match[0] : null;
 }
 
@@ -140,7 +140,7 @@ export function classifyCliInstallFailure(stdout: string, stderr: string, error:
   const stderrText = stderr.trim();
   const message = error.message.trim();
   const combined = [stderrText, stdoutText, message].filter(Boolean).join("\n");
-  const code = extractOcxErrorCode(combined);
+  const code = extractCodexCommanderErrorCode(combined);
   let detail = combined || message;
   if (detail.length > INSTALL_DETAIL_LIMIT) {
     const truncated = detail.slice(0, INSTALL_DETAIL_LIMIT);
@@ -149,11 +149,6 @@ export function classifyCliInstallFailure(stdout: string, stderr: string, error:
       : `${truncated}… (truncated)`;
   }
   return { code, stdout: stdoutText, stderr: stderrText, message, detail };
-}
-
-/** @deprecated Prefer classifyCliInstallFailure; kept for existing tests. */
-export function installFailureDetail(stdout: string, stderr: string, error: Error): string {
-  return classifyCliInstallFailure(stdout, stderr, error).detail;
 }
 
 function runCliInstall(
@@ -173,7 +168,7 @@ function runCliInstall(
     }, (error, stdout, stderr) => {
       if (error) {
         const failure = classifyCliInstallFailure(stdout, stderr, error);
-        reject(Object.assign(new Error(failure.detail), { ocxInstallFailure: failure }));
+        reject(Object.assign(new Error(failure.detail), { codexCommanderInstallFailure: failure }));
         return;
       }
       resolve({ stdout, stderr });
@@ -182,12 +177,12 @@ function runCliInstall(
 }
 
 function installFailureCode(error: unknown): string | null {
-  if (error && typeof error === "object" && "ocxInstallFailure" in error) {
-    const failure = (error as { ocxInstallFailure?: CliInstallFailure }).ocxInstallFailure;
+  if (error && typeof error === "object" && "codexCommanderInstallFailure" in error) {
+    const failure = (error as { codexCommanderInstallFailure?: CliInstallFailure }).codexCommanderInstallFailure;
     if (failure?.code) return failure.code;
   }
   const detail = error instanceof Error ? error.message : String(error);
-  return extractOcxErrorCode(detail);
+  return extractCodexCommanderErrorCode(detail);
 }
 
 function rejectIfBusy(_action: StartupInstallAction): Error | null {
@@ -226,7 +221,7 @@ function applyReconciliationOutcome(
 /**
  * Execute the existing fixed CLI installer outside the proxy event loop.
  *
- * Repair mode (`options.repair`) runs `ocx service repair` — asset rewrite + restart
+ * Repair mode (`options.repair`) runs `ccx service repair` — asset rewrite + restart
  * without Task Scheduler re-registration, so it must not enter the UAC elevation path.
  *
  * After an elevation request timeout the lock becomes `indeterminate` until the

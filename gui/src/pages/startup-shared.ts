@@ -3,10 +3,28 @@ import type { TKey } from "../i18n/shared";
 export type StartupStatus = "native" | "protected" | "at-risk";
 export type StartupProtection = "service" | "shim" | "none";
 export type StartupInstallAction = "install-service" | "install-shim";
+export type StartupRoutingKind =
+  | "native"
+  | "codexcommander-local"
+  | "custom-local"
+  | "custom-remote"
+  | "unknown";
+
+export function isCodexCommanderLocalRouting(kind: StartupRoutingKind): boolean {
+  return kind === "codexcommander-local";
+}
+
+export function startupRoutingKey(kind: StartupRoutingKind): TKey {
+  if (isCodexCommanderLocalRouting(kind)) return "startup.routing.proxy";
+  if (kind === "custom-local") return "startup.routing.customLocal";
+  if (kind === "custom-remote") return "startup.routing.customRemote";
+  if (kind === "unknown") return "startup.routing.unknown";
+  return "startup.routing.native";
+}
 
 export interface StartupHealthData {
   status: StartupStatus;
-  routingKind: "native" | "opencodex-local" | "custom-local" | "custom-remote" | "unknown";
+  routingKind: StartupRoutingKind;
   routingInjected: boolean;
   localRoutingDependency: boolean;
   autostartEnabled: boolean;

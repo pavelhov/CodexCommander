@@ -234,6 +234,6 @@ export async function loginCommandCode(ctrl: OAuthController, options: CommandCo
 }
 
 export async function refreshCommandCodeToken(apiKey: string): Promise<OAuthCredentials> {
-  if (!apiKey) throw new Error("Command Code API key missing; run ocx login command-code");
+  if (!apiKey) throw new Error("Command Code API key missing; run ccx login command-code");
   return { access: apiKey, refresh: apiKey, expires: Number.MAX_SAFE_INTEGER, source: "oauth" };
 }

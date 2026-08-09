@@ -3,7 +3,7 @@ import MenuBarCore
 
 enum PollingSuite {
     private static let identity =
-        #"{"status":"ok","service":"opencodex","version":"2.10.0","pid":42,"port":10100}"#
+        #"{"status":"ok","service":"codexcommander","version":"0.1.0","pid":42,"port":10100}"#
 
     static func run(_ t: TestRunner) {
         t.test("polling: closed uses a slow health cadence; open loads activity and quotas") {
@@ -30,7 +30,7 @@ enum PollingSuite {
 
             StubProtocol.reset([
                 .init(status: 200, body: identity),
-                .init(status: 200, body: #"{"status":"protected"}"#),
+                .init(status: 200, body: startupHealth(status: "protected", diagnosticStale: false)),
                 .init(status: 200, body: identity),
                 .init(status: 200, body: """
                     {"schemaVersion":1,"generatedAt":3,"proxyState":"active",
@@ -72,8 +72,8 @@ enum PollingSuite {
 
         t.test("polling: stale startup health stays neutral until revalidation completes") {
             StubProtocol.reset(
-                healthResponses(#"{"status":"at-risk","diagnosticStale":true}"#)
-                    + healthResponses(#"{"status":"protected","diagnosticStale":false}"#)
+                healthResponses(startupHealth(status: "at-risk", diagnosticStale: true))
+                    + healthResponses(startupHealth(status: "protected", diagnosticStale: false))
             )
             let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
             let client = ProxyClient(
@@ -97,9 +97,9 @@ enum PollingSuite {
 
         t.test("polling: stale revalidation preserves the last known protected state") {
             StubProtocol.reset(
-                healthResponses(#"{"status":"protected","diagnosticStale":false}"#)
-                    + healthResponses(#"{"status":"at-risk","diagnosticStale":true}"#)
-                    + healthResponses(#"{"status":"protected","diagnosticStale":false}"#)
+                healthResponses(startupHealth(status: "protected", diagnosticStale: false))
+                    + healthResponses(startupHealth(status: "at-risk", diagnosticStale: true))
+                    + healthResponses(startupHealth(status: "protected", diagnosticStale: false))
             )
             let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
             let client = ProxyClient(
@@ -124,7 +124,7 @@ enum PollingSuite {
         }
 
         t.test("polling: persistently stale diagnostics eventually surface at-risk") {
-            let stale = healthResponses(#"{"status":"at-risk","diagnosticStale":true}"#)
+            let stale = healthResponses(startupHealth(status: "at-risk", diagnosticStale: true))
             StubProtocol.reset(
                 Array(
                     repeating: stale,
@@ -143,9 +143,9 @@ enum PollingSuite {
                 sync { await coordinator.refresh() }
             }
             let snapshot = sync { await coordinator.current }
-            t.equal(snapshot.state, .running(StartupHealth(
-                status: "at-risk",
-                diagnosticStale: true
+            t.equal(snapshot.state, .running(try! JSONDecoder().decode(
+                StartupHealth.self,
+                from: Data(startupHealth(status: "at-risk", diagnosticStale: true).utf8)
             )))
             t.equal(sync { await coordinator.currentInterval }, PollingCoordinator.closedInterval)
         }
@@ -241,12 +241,12 @@ enum PollingSuite {
         """
         let quotas = """
         {"generatedAt":1780000000000,"reports":[
-          {"provider":"openai","label":"ChatGPT","quota":{"fiveHourPercent":38,"weeklyPercent":22}},
-          {"provider":"kimi","label":"Kimi","quota":{"weeklyPercent":41}}],
+          {"provider":"openai","label":"ChatGPT","source":"test","updatedAt":1,"quota":{"updatedAt":1,"fiveHourPercent":38,"weeklyPercent":22}},
+          {"provider":"kimi","label":"Kimi","source":"test","updatedAt":1,"quota":{"updatedAt":1,"weeklyPercent":41}}],
          "availability":[{"provider":"xai","status":"unavailable",
           "reason":"local_cli_refresh_required","checkedAt":1780000000000}]}
         """
-        return healthResponses(#"{"status":"protected"}"#)
+        return healthResponses(startupHealth(status: "protected", diagnosticStale: false))
             + healthResponses(activity)
             + healthResponses(#"[{"name":"openai"},{"name":"kimi"}]"#)
             + healthResponses(quotas)
@@ -254,6 +254,18 @@ enum PollingSuite {
 
     private static func healthResponses(_ body: String) -> [StubProtocol.Response] {
         [.init(status: 200, body: identity), .init(status: 200, body: body)]
+    }
+
+    private static func startupHealth(status: String, diagnosticStale: Bool) -> String {
+        """
+        {"status":"\(status)","routingKind":"codexcommander-local","routingInjected":true,
+         "localRoutingDependency":true,"autostartEnabled":false,"rebootSafe":false,"protection":"none",
+         "serviceInstalled":false,"serviceViable":false,"serviceEnabled":false,"serviceRunning":false,
+         "serviceStale":false,"serviceConflict":false,"shimInstalled":false,"shimHealthy":false,
+         "shimCoverage":"none","serviceSupported":true,"platform":"darwin","diagnosticStale":\(diagnosticStale),
+         "recommendedCommand":"ccx service install","commands":{"installService":"ccx service install",
+         "repairService":"ccx service repair","installShim":"ccx codex-shim install","restoreNative":"ccx restore"}}
+        """
     }
 
     private static func sync<T>(_ operation: @escaping () async -> T) -> T {

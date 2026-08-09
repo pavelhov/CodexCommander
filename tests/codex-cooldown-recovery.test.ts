@@ -24,16 +24,16 @@ import {
   recordCodexUpstreamOutcome,
   resolveCodexAccountForThread,
 } from "../src/codex/routing";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-cooldown-recovery-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
 const START = 1_800_000_000_000;
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 let previousCodexHome: string | undefined;
 let previousFetch: typeof fetch;
 
-function makeConfig(ids = ["a", "b"]): OcxConfig {
+function makeConfig(ids = ["a", "b"]): CodexCommanderConfig {
   return {
     providers: {
       openai: {
@@ -46,8 +46,14 @@ function makeConfig(ids = ["a", "b"]): OcxConfig {
     defaultProvider: "openai",
     activeCodexAccountId: ids[0],
     accountPoolStrategy: "fill-first",
-    codexAccounts: ids.map(id => ({ id, email: `${id}@example.test`, plan: "team", isMain: false })),
-  } as OcxConfig;
+    codexAccounts: ids.map((id, index) => ({
+      id,
+      email: `${id}@example.test`,
+      plan: "team",
+      logLabel: `p${(index + 1).toString(16).padStart(6, "0")}`,
+      isMain: false,
+    })),
+  } as CodexCommanderConfig;
 }
 
 function saveCredential(id: string, suffix = ""): void {
@@ -59,7 +65,7 @@ function saveCredential(id: string, suffix = ""): void {
   });
 }
 
-function cool(config: OcxConfig, id: string, scope: "shared" | "spark" = "shared", now = START): void {
+function cool(config: CodexCommanderConfig, id: string, scope: "shared" | "spark" = "shared", now = START): void {
   recordCodexUpstreamOutcome(config, id, 429, {
     now,
     resetAt: now + 60 * 60_000,
@@ -80,12 +86,12 @@ function due(at = START): number {
 
 describe("Codex cooldown recovery worker", () => {
   beforeEach(() => {
-    previousOpencodexHome = process.env.OPENCODEX_HOME;
+    previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     previousCodexHome = process.env.CODEX_HOME;
     previousFetch = globalThis.fetch;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_CODEX_HOME, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     process.env.CODEX_HOME = TEST_CODEX_HOME;
     clearAccountQuota();
     clearCodexUpstreamHealth();
@@ -97,8 +103,8 @@ describe("Codex cooldown recovery worker", () => {
     clearAccountQuota();
     clearCodexUpstreamHealth();
     clearCodexCooldownRecoveryProbeState();
-    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });

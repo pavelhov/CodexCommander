@@ -1,8 +1,8 @@
 import { getCodexAccountCredential } from "./account-store";
 import { isAccountNeedsReauth } from "./account-runtime-state";
 import { MAIN_CODEX_ACCOUNT_ID, isMainAccountTokenLive } from "./main-account";
-import { hasLegacyMainCodexPoolAccount, isSelectableCodexPoolAccount } from "./account-id";
-import type { OcxConfig } from "../types";
+import { isSelectableCodexPoolAccount } from "./account-id";
+import type { CodexCommanderConfig } from "../types";
 import { isNativeMainTrafficBlocked } from "./native-profile-startup";
 
 export interface CodexAccountUsabilityOptions {
@@ -13,7 +13,7 @@ export interface CodexAccountUsabilityOptions {
 }
 
 export function isCodexAccountUsable(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   accountId: string,
   options: CodexAccountUsabilityOptions = {},
 ): boolean {
@@ -21,9 +21,6 @@ export function isCodexAccountUsable(
     // Startup recovery owns the physical auth/vault boundary. Never parse or select
     // native __main__ while an encrypted switch journal is pending or inconclusive.
     if (!options.nativeMainSelectionOnly && isNativeMainTrafficBlocked()) return false;
-    // A legacy pool row with the sentinel makes an active `__main__` ambiguous.
-    // Fail closed until the authenticated compatibility-delete path removes it.
-    if (hasLegacyMainCodexPoolAccount(config.codexAccounts)) return false;
     if (isAccountNeedsReauth(accountId)) return false;
     // A selection-only caller owns the recovery/drain fence and will reject main
     // before reservation or token materialization. Treat cached main as a routing

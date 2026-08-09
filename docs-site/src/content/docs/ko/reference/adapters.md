@@ -3,7 +3,7 @@ title: 어댑터
 description: 7가지 프로바이더 어댑터의 대상, 요청 구성 방식, 고유 동작.
 ---
 
-**어댑터**는 opencodex의 내부 요청/응답 모델과 프로바이더 wire 형식 사이를 변환합니다. 모든
+**어댑터**는 CodexCommander의 내부 요청/응답 모델과 프로바이더 wire 형식 사이를 변환합니다. 모든
 어댑터는 `ProviderAdapter` 인터페이스(`src/adapters/base.ts`)를 구현합니다.
 
 ```ts
@@ -17,7 +17,7 @@ interface ProviderAdapter {
 }
 ```
 
-`buildRequest`는 `OcxParsedRequest`를 업스트림 HTTP 요청으로 내리고, `parseStream` /
+`buildRequest`는 `CodexCommanderParsedRequest`를 업스트림 HTTP 요청으로 내리고, `parseStream` /
 `parseResponse`는 프로바이더 응답을 내부 `AdapterEvent`로 올립니다. `fetchResponse`가 있으면
 어댑터가 재시도와 타임아웃을 직접 맡습니다. `runTurn`은 한 번의 HTTP fetch와 뒤이은 응답
 스트림으로 표현할 수 없는 전송 방식을 지원합니다. 이후
@@ -58,7 +58,7 @@ interface ProviderAdapter {
 같은 키로 동일 요청을 대기 후 재전송합니다. 커스텀 `runTurn` 전송은 HTTP 재시도 루프에
 포함되지 않습니다.
 
-- `forward` URL → `{baseUrl}/responses`. `key` provider는 기본적으로 기존 `{baseUrl}/v1/responses` 구성을 사용합니다.
+- `forward` URL → `{baseUrl}/responses`. `key` provider의 기본 URL은 `{baseUrl}/v1/responses`입니다.
 - `key` provider는 검증된 상대 `responsesPath`를 설정할 수 있습니다. adapter는 `baseUrl` 끝의 `/` 하나를 제거하고 `{trimmedBaseUrl}{responsesPath}`로 전송합니다. Ark Agent Plan은 `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"`와 `responsesPath: "/responses"`를 사용합니다.
 - `forward` 모드에서는 안전한 헤더 허용 목록(`FORWARD_HEADERS`)만 중계합니다. authorization,
   ChatGPT account id, OpenAI beta/originator/session 헤더가 대상입니다. 이 ChatGPT 로그인 경로는
@@ -139,10 +139,10 @@ commentary로 유지하고 비공개 완료 툴을 한 번 검증합니다.
 - `cursor/grok-4.5-fast`는 선택 가능한 모델로 유지하되, Cursor에는 정식 `grok-4.5` 모델을 보내고
   별도의 `effort`, `fast=true` 값은 `requested_model.parameters`에 담습니다.
 - Cursor 네이티브 로컬 파일시스템/shell/network 실행은 기본적으로 거부합니다. 명시적인
-  `mcpServers`와 `desktopExecutor` 통합은 각각 별도 opt-in입니다. `unsafeAllowNativeLocalExec`은
+  `mcpServers`와 `desktopExecutor` 통합은 각각 별도 opt-in입니다. `nativeLocalExec: "on"`은
   더 넓은 내장 executor를 켜며 Codex 승인/샌드박스 규칙을 우회합니다.
 
-## `azure-openai` (별칭: `azure`)
+## `azure-openai`
 
 **대상:** **Azure OpenAI**. `openai-responses`를 감싸므로 마찬가지로 `passthrough: true`입니다.
 **인증:** `api-key` 헤더의 `key`(Bearer 아님).

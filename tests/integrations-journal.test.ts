@@ -7,12 +7,12 @@ import { SNAPSHOT_RETENTION, type JournalEntry } from "../src/integrations/journ
 import type { OwnershipRecord } from "../src/integrations/ownership";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../src/integrations/store";
 
-/** Activation coverage for devlog/_fin/260802_client_toggle_api/021 §6. */
+/** Activation coverage for implementation contract §6. */
 let root: string;
 let store: IntegrationStateStore;
 
 beforeEach(() => {
-  root = join(mkdtempSync(join(tmpdir(), "ocx-integrations-journal-")), "integrations");
+  root = join(mkdtempSync(join(tmpdir(), "ccx-integrations-journal-")), "integrations");
   store = createIntegrationStateStore(root);
 });
 
@@ -28,7 +28,7 @@ function entry(overrides: Partial<JournalEntry> = {}): JournalEntry {
     at: new Date().toISOString(),
     configPath: "/home/dev/.pi/agent/models.json",
     snapshot: { kind: "none" },
-    resultFingerprint: "abc123",
+    resultFingerprint: "a".repeat(16),
     resultAbsent: false,
     priorRecord: null,
     ...overrides,
@@ -59,6 +59,18 @@ describe("append and read back", () => {
     // Simulate a crash mid-append.
     appendFileSync(join(root, "journal.jsonl"), '{"opId":"torn","clientI');
     expect(store.listOperations().map(row => row.opId)).toEqual(["intact"]);
+  });
+
+  test("unversioned and extra-field rows are ignored", () => {
+    mkdirSync(root, { recursive: true });
+    appendFileSync(join(root, "journal.jsonl"), `${JSON.stringify(entry({ opId: "unversioned" }))}\n`);
+    appendFileSync(join(root, "journal.jsonl"), `${JSON.stringify({
+      schemaVersion: 1,
+      ...entry({ opId: "extra-field" }),
+      retired: true,
+    })}\n`);
+    store.appendJournal(entry({ opId: "current" }));
+    expect(store.listOperations().map(row => row.opId)).toEqual(["current"]);
   });
 
   test("filtering by client leaves other clients' rows alone", () => {
@@ -142,10 +154,9 @@ describe("snapshots", () => {
 });
 
 describe("maintenance marker", () => {
-  test("a malformed marker cannot make a committed append look like a failure", () => {
+  test("a non-current marker cannot make a committed append look like a failure", () => {
     mkdirSync(root, { recursive: true });
-    // `{}` parses fine but has no pruneFailures — a cast would leave it
-    // undefined and the next mark/clear would throw AFTER the row committed.
+    // Versionless state is not current and therefore cannot participate.
     writeFileSync(join(root, "maintenance.json"), "{}\n");
     expect(() => store.appendJournal(entry({ opId: "committed" }))).not.toThrow();
     expect(store.findOperation("committed")).not.toBeNull();
@@ -155,6 +166,7 @@ describe("maintenance marker", () => {
   test("unknown clients and malformed entries are dropped, not trusted", () => {
     mkdirSync(root, { recursive: true });
     writeFileSync(join(root, "maintenance.json"), JSON.stringify({
+      schemaVersion: 1,
       pruneFailures: {
         pi: { at: "2026-08-02T00:00:00.000Z", error: "boom" },
         "not-a-client": { at: "x", error: "y" },
@@ -182,7 +194,7 @@ describe("maintenance marker", () => {
 
 describe("store isolation", () => {
   test("everything a store writes stays under its own root", () => {
-    const other = join(mkdtempSync(join(tmpdir(), "ocx-other-")), "integrations");
+    const other = join(mkdtempSync(join(tmpdir(), "ccx-other-")), "integrations");
     try {
       const otherStore = createIntegrationStateStore(other);
       otherStore.appendJournal(entry({ opId: "elsewhere" }));
@@ -230,7 +242,7 @@ describe("store isolation", () => {
       store.appendJournal({
         opId, clientId, kind: "apply", at: new Date(2026, 0, 1, 0, i).toISOString(),
         configPath: "/tmp/whatever", snapshot,
-        resultFingerprint: `f${i}`, resultAbsent: false, priorRecord: null,
+        resultFingerprint: String(i).padStart(16, "0"), resultAbsent: false, priorRecord: null,
       });
     }
     // Pruning already ran post-commit, so the bound holds here.
@@ -250,7 +262,7 @@ describe("store isolation", () => {
         expect(() => store.appendJournal({
           opId: "after-prune-broke", clientId, kind: "apply", at: new Date().toISOString(),
           configPath: "/tmp/whatever", snapshot: { kind: "none" },
-          resultFingerprint: "later", resultAbsent: false, priorRecord: null,
+          resultFingerprint: "1".repeat(16), resultAbsent: false, priorRecord: null,
         })).not.toThrow();
         // The row committed even though the maintenance that follows it failed.
         expect(store.findOperation("after-prune-broke")).not.toBeNull();
@@ -269,11 +281,11 @@ describe("store isolation", () => {
   });
 
   test("a temp-rooted store leaves the real ownership manifest untouched", () => {
-    // atomicWriteFile records writes in the opencodex uninstall manifest, but
+    // atomicWriteFile records writes in the codexcommander uninstall manifest, but
     // that registration refuses any path outside the process config dir. This
     // pins the property every other test in this file depends on: an isolated
     // store touches no global state.
-    const manifest = join(getConfigDir(), ".opencodex-ownership.json");
+    const manifest = join(getConfigDir(), ".codexcommander-ownership.json");
     const before = existsSync(manifest) ? readFileSync(manifest, "utf8") : null;
     store.captureSnapshot("kimi", "manifest-probe", "bytes");
     const after = existsSync(manifest) ? readFileSync(manifest, "utf8") : null;
@@ -293,7 +305,8 @@ describe("store isolation", () => {
       configPath: "/home/dev/.pi/agent/models.json",
       fileFingerprint: "f".repeat(16),
       blockFingerprint: "b".repeat(16),
-      fragmentPaths: [["providers", "opencodex"]],
+      fragmentPaths: [["providers", "codexcommander"]],
+      createdContainers: [],
       appliedAt: "2026-08-02T00:00:00.000Z",
       opId: "io-seam",
     };
@@ -301,10 +314,14 @@ describe("store isolation", () => {
     io.putRecord(record);
     expect(store.readRecords().pi?.opId).toBe("io-seam");
     expect(existsSync(join(root, "records.json"))).toBe(true);
+    expect(JSON.parse(readFileSync(join(root, "records.json"), "utf8"))).toMatchObject({
+      schemaVersion: 1,
+      records: { pi: { opId: "io-seam" } },
+    });
 
     // A second store rooted elsewhere sees nothing of it, and dropping through
     // the seam removes it from the same place it was written.
-    const other = join(mkdtempSync(join(tmpdir(), "ocx-io-seam-")), "integrations");
+    const other = join(mkdtempSync(join(tmpdir(), "ccx-io-seam-")), "integrations");
     try {
       expect(createIntegrationStateStore(other).readRecords().pi).toBeUndefined();
     } finally {
@@ -316,7 +333,10 @@ describe("store isolation", () => {
     // And the journal seam writes to the same root rather than the default one.
     io.appendJournal(entry({ opId: "io-seam-row" }));
     expect(store.findOperation("io-seam-row")).not.toBeNull();
-    expect(readFileSync(join(root, "journal.jsonl"), "utf8")).toContain("io-seam-row");
+    expect(JSON.parse(readFileSync(join(root, "journal.jsonl"), "utf8").trim())).toMatchObject({
+      schemaVersion: 1,
+      opId: "io-seam-row",
+    });
   });
 
   /**
@@ -330,11 +350,17 @@ describe("store isolation", () => {
       configPath: "/home/dev/.kimi/config.toml",
       fileFingerprint: "0123456789abcdef",
       blockFingerprint: "fedcba9876543210",
-      fragmentPaths: [["providers", "opencodex"], ["models", "opencodex/x"]],
+      fragmentPaths: [["providers", "codexcommander"], ["models", "codexcommander/x"]],
+      createdContainers: ["models"],
       appliedAt: "2026-08-01T09:00:00.000Z",
       opId: "previous-op",
     };
-    store.appendJournal(entry({ opId: "with-prior", clientId: "kimi", priorRecord }));
+    store.appendJournal(entry({
+      opId: "with-prior",
+      clientId: "kimi",
+      configPath: priorRecord.configPath,
+      priorRecord,
+    }));
     expect(store.findOperation("with-prior")?.priorRecord).toEqual(priorRecord);
   });
 });

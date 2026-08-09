@@ -5,8 +5,6 @@
  * `os.userInfo().homedir` follow HOME. A service and CLI for the same account
  * could therefore coordinate through different databases. The namespace is
  * keyed only by the effective uid/SID and the canonical CODEX_HOME.
- *
- * Design record: devlog/_fin/260804_codex_write_substrate/005_contract.md §7.
  */
 import { createHash } from "node:crypto";
 import {
@@ -20,7 +18,6 @@ import { isAbsolute, join, resolve } from "node:path";
 import type {
   ResolveCodexCoordinatorDatabasePath,
   ResolveCodexCatalogSerializationDatabasePath,
-  ResolveCodexHistorySerializationDatabasePath,
   ResolveEffectiveUserIdentity,
   UserIdentity,
 } from "./convergence-types";
@@ -139,7 +136,7 @@ function resolvePosixRuntimeRoot(uid: number): string {
     refuse("The system temporary directory cannot be trusted.", cause);
   }
 
-  const root = join(realTmp, `opencodex-runtime-v1-${uid}`);
+  const root = join(realTmp, `codexcommander-runtime-v1-${uid}`);
   ensurePrivatePosixDirectory(root, uid);
   return root;
 }
@@ -154,7 +151,7 @@ function resolveWindowsRuntimeRoot(identity: Extract<UserIdentity, { platform: "
   // The SID and known-folder values come from the effective token/.NET OS APIs,
   // never USERPROFILE or LOCALAPPDATA. WP11 adds descriptor/reparse/ACL checks at
   // the stable-database open boundary where those checks can cover SQLite too.
-  const root = resolve(localAppData, "OpenCodex", "Runtime", "v1", identity.sid.toUpperCase());
+  const root = resolve(localAppData, "CodexCommander", "Runtime", "v1", identity.sid.toUpperCase());
   try {
     mkdirSync(root, { recursive: true });
   } catch (cause) {
@@ -196,8 +193,7 @@ export const resolveCodexCoordinatorDatabasePath: ResolveCodexCoordinatorDatabas
  * sibling directories under the same per-user runtime root — same identity
  * namespace, same environment-independent parent, distinct exclusion.
  *
- * Consumers use the returned path verbatim and append nothing
- * (`005_contract.md:1256-1330`).
+ * Consumers use the returned path verbatim and append nothing.
  */
 export const resolveCodexCatalogSerializationDatabasePath:
   ResolveCodexCatalogSerializationDatabasePath = (identity, canonicalCodexHome) => {
@@ -219,48 +215,4 @@ export const resolveCodexCatalogSerializationDatabasePath:
 
     const homeDigest = createHash("sha256").update(canonicalCodexHome).digest("hex");
     return join(locks, `${homeDigest}.sqlite`);
-  };
-
-/**
- * H's FINAL database path.
- *
- * Keyed by the canonical state DB in addition to the canonical home, unlike N and
- * K. One `CODEX_HOME` can name a different `state_5.sqlite` — `model_catalog_json`
- * has the same shape of indirection for catalogs — and two operations against
- * different history databases are not the same exclusion. Hashing only the home
- * would serialize them together, and hashing the raw request path would let two
- * spellings of one database take different locks.
- */
-export const resolveCodexHistorySerializationDatabasePath:
-  ResolveCodexHistorySerializationDatabasePath = (
-    identity,
-    canonicalCodexHome,
-    canonicalStateDbPath,
-  ) => {
-    if (!isAbsolute(canonicalCodexHome)) {
-      refuse("The canonical CODEX_HOME must be an absolute path.");
-    }
-    if (!isAbsolute(canonicalStateDbPath)) {
-      refuse("The canonical Codex state database must be an absolute path.");
-    }
-    const root = identity.platform === "posix"
-      ? resolvePosixRuntimeRoot(identity.uid)
-      : resolveWindowsRuntimeRoot(identity);
-    const locks = join(root, "history-write-locks");
-    if (identity.platform === "posix") ensurePrivatePosixDirectory(locks, identity.uid);
-    else {
-      try {
-        mkdirSync(locks, { recursive: true });
-      } catch (cause) {
-        refuse("The Windows history serialization directory cannot be created.", cause);
-      }
-    }
-
-    // Both components are length-prefixed so no pair of (home, stateDb) values can
-    // collide by concatenation.
-    const digest = createHash("sha256")
-      .update(`${canonicalCodexHome.length}:${canonicalCodexHome}`)
-      .update(`${canonicalStateDbPath.length}:${canonicalStateDbPath}`)
-      .digest("hex");
-    return join(locks, `${digest}.sqlite`);
   };

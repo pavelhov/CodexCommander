@@ -33,7 +33,7 @@ export const CLAUDE_CODE_HEADERS: Record<string, string> = {
  * itself never leaves this function (only its hash drives the id).
  */
 export function claudeCodeSessionId(token: string | undefined): string {
-  const seed = token && token.length > 0 ? token : "opencodex-anon";
+  const seed = token && token.length > 0 ? token : "codexcommander-anon";
   const h = createHash("sha256").update(`claude-code-session:${seed}`, "utf8").digest("hex");
   // Shape the hash into a v4-looking UUID (version nibble 4, variant nibble 8-b).
   const variant = ((parseInt(h[16], 16) & 0x3) | 0x8).toString(16);

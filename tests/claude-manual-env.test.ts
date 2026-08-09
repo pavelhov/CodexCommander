@@ -6,7 +6,7 @@ const CONDITIONAL_FLAG_LINE = '[ -z "${CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST+x}" 
 function state(overrides: Partial<ClaudeManualEnvState> = {}): ClaudeManualEnvState {
   return {
     authMode: "subscription",
-    maxContextTokens: null,
+    markerMode: "subscription",
     autoContext: true,
     autoCompactWindow: null,
     effectiveModelEnv: {},
@@ -17,7 +17,7 @@ function state(overrides: Partial<ClaudeManualEnvState> = {}): ClaudeManualEnvSt
 
 test("proxy mode emits the dummy token plus the conditional host-managed flag", () => {
   const env = buildManualEnv(state({ authMode: "proxy" }));
-  expect(env).toContain("export ANTHROPIC_AUTH_TOKEN=opencodex-proxy");
+  expect(env).toContain("export ANTHROPIC_AUTH_TOKEN=codexcommander-proxy");
   expect(env).toContain("export ANTHROPIC_BASE_URL=http://127.0.0.1:10100");
   // Conditional form (audit R2 #1): pasting the block into a shell that already
   // exported =0 must keep the user's opt-out.
@@ -34,11 +34,11 @@ test("subscription mode keeps the login comment without asserting host-managed a
 
 test("model env slots and auto-compact window are appended before the claude launch line", () => {
   const env = buildManualEnv(state({
-    effectiveModelEnv: { ANTHROPIC_MODEL: "mock/test-model" },
+    effectiveModelEnv: { ANTHROPIC_DEFAULT_HAIKU_MODEL: "mock/test-model" },
     autoCompactWindow: 400_000,
   }));
   const lines = env.split("\n");
-  expect(lines).toContain("export ANTHROPIC_MODEL=mock/test-model");
+  expect(lines).toContain("export ANTHROPIC_DEFAULT_HAIKU_MODEL=mock/test-model");
   expect(lines).toContain("export CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000");
   expect(lines.at(-1)).toBe("claude");
 });

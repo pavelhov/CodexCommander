@@ -39,6 +39,7 @@ import {
   parseAccountPoolStrategy,
 } from "../../codex/pool-rotation";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
+import { DATA_KEY_PREFIX } from "../../identity";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
 import { readUsageEntries } from "../../usage/log";
@@ -55,7 +56,7 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../../lib/debug-settings";
-import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
+import type { CodexCommanderClaudeCodeConfig, CodexCommanderConfig, CodexCommanderCustomModel, CodexCommanderProviderConfig } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
@@ -145,7 +146,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       }
       // Use persisted state, not the live object, as the merge base: another management
       // request may already have mutated live config and yielded before its save.
-      const persistedBaseline = readConfigDiagnostics().config;
+      const persistedDiagnostics = readConfigDiagnostics();
+      if (persistedDiagnostics.source !== "file") {
+        return jsonResponse({
+          error: persistedDiagnostics.error ?? "CodexCommander config file is missing",
+        }, 409);
+      }
+      const persistedBaseline = persistedDiagnostics.config;
       // addAccount / reauth forces a fresh browser identity (skips local-CLI token import).
       const { url: authUrl, instructions, deviceCode } = await startLoginFlow(provider, {
         forceLogin: body.addAccount === true || reauth,
@@ -493,9 +500,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { readApiKeyUsageRollup } = await import("./api-key-usage");
     const { rollup, attributionSince, historyTruncated } = await readApiKeyUsageRollup(keys.map(k => k.id), config.managementUsageMaxReadBytes);
     return jsonResponse({
-      // 8 random hex past the fixed `ocx_data_` literal: enough to tell two keys
-      // apart in a list, with 128 bits of the tail still unrevealed. Masking only
-      // 8 characters showed `ocx_data...` for every key ever generated.
+      // 8 random hex past the fixed `ccx_data_` literal: enough to tell
+      // two keys apart in a list, with 128 bits of the tail still unrevealed.
+      // Masking only 8 characters showed the bare prefix for every key ever generated.
       keys: keys.map(k => ({
         id: k.id,
         name: k.name,
@@ -522,7 +529,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // made this secret's safety argument depend on string concatenation rather
     // than the RNG. 20 bytes is the same 40 hex characters as before, so nothing
     // that pattern-matches the key shape changes.
-    const key = "ocx_data_" + randomBytes(20).toString("hex");
+    // Admission is an exact secret comparison, never a prefix check.
+    const key = DATA_KEY_PREFIX + randomBytes(20).toString("hex");
     const entry = { id: randomUUID(), name, key, createdAt: new Date().toISOString() };
     config.apiKeys = [...(config.apiKeys ?? []), entry];
     saveConfigPreservingClaudeCode(config);

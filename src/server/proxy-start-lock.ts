@@ -199,7 +199,7 @@ export async function acquireProxyStartLock(
             if (sameSnapshot(owned, current)) unlinkSync(path);
           } catch (error) {
             if (errorCode(error) !== "ENOENT") {
-              console.warn("[opencodex] Proxy start lock release was deferred to stale recovery.");
+              console.warn("[codexcommander] Proxy start lock release was deferred to stale recovery.");
             }
           }
         },

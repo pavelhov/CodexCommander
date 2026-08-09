@@ -1,13 +1,13 @@
 /**
- * Additive merge and surgical removal of the fragments opencodex owns.
+ * Additive merge and surgical removal of the fragments CodexCommander owns.
  *
  * The rule that shapes this file: we insert exactly the paths our builder
  * named, and we delete exactly the paths a record says we wrote. Nothing here
- * ever scans for a prefix — a user's own `opencodex/...` entry is not ours to
+ * ever scans for a prefix — a user's own similarly named entry is not ours to
  * remove, and inferring ownership from a name is how a config editor destroys
  * work it did not create.
  *
- * Design of record: devlog/_fin/260802_client_toggle_api/031_wp3_writer_impl.md.
+ * Design contract
  */
 import type { ManagedContribution } from "../clients/config-export";
 

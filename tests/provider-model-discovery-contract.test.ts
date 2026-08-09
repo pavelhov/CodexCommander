@@ -19,7 +19,7 @@ import {
   type ProviderModelDiscoverySpec,
 } from "../src/providers/registry";
 import { routeModel } from "../src/router";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
 import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
 import { withRegistryDiscovery } from "./helpers/provider-registry-discovery";
 
@@ -44,8 +44,8 @@ async function withTogetherDiscovery<T>(
   return withRegistryDiscovery("together", spec, run, { preserveCustomDestination: true });
 }
 
-function togetherConfig(overrides: Partial<OcxProviderConfig> = {}): OcxConfig {
-  const config: OcxConfig = {
+function togetherConfig(overrides: Partial<CodexCommanderProviderConfig> = {}): CodexCommanderConfig {
+  const config: CodexCommanderConfig = {
     port: 10100,
     defaultProvider: "together",
     providers: {
@@ -136,7 +136,7 @@ describe("registry-owned provider model discovery", () => {
       expect(renamedCanonical.url)
         .toBe("https://api.together.xyz/v1/catalog?capability=chat&limit=100");
 
-      const collidingCustom: OcxProviderConfig = {
+      const collidingCustom: CodexCommanderProviderConfig = {
         adapter: "openai-chat",
         baseUrl: "https://custom.example/v9",
         authMode: "key",
@@ -164,7 +164,7 @@ describe("registry-owned provider model discovery", () => {
   });
 
   test("pins fixed OAuth discovery before resolving relative and default endpoints", async () => {
-    const staleConfig: OcxProviderConfig = {
+    const staleConfig: CodexCommanderProviderConfig = {
       adapter: "openai-chat",
       baseUrl: "https://untrusted.example/v9",
       authMode: "oauth",

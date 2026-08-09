@@ -2,16 +2,16 @@ import type { IncomingMeta, ProviderAdapter } from "./base";
 import { debugDroppedFrame } from "../lib/debug";
 import type {
   AdapterEvent,
-  OcxAssistantMessage,
-  OcxContentPart,
-  OcxMessage,
-  OcxParsedRequest,
-  OcxProviderConfig,
-  OcxTextContent,
-  OcxThinkingContent,
-  OcxToolCall,
-  OcxToolResultMessage,
-  OcxUsage,
+  CodexCommanderAssistantMessage,
+  CodexCommanderContentPart,
+  CodexCommanderMessage,
+  CodexCommanderParsedRequest,
+  CodexCommanderProviderConfig,
+  CodexCommanderTextContent,
+  CodexCommanderThinkingContent,
+  CodexCommanderToolCall,
+  CodexCommanderToolResultMessage,
+  CodexCommanderUsage,
 } from "../types";
 import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolAllowedByChoice } from "../types";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION, applyClaudeToolPrefix, stripClaudeToolPrefix } from "../oauth/anthropic";
@@ -26,7 +26,7 @@ import { decodeServerSentEvents } from "../lib/sse-decoder";
 import { isTranslatorBudgetExceededError, retainTranslatedEventBatch, type TranslatorBudget } from "../lib/translator-budget";
 
 /** Map a user content part to an Anthropic content block (text or image source). */
-function toAnthropicContentPart(p: OcxContentPart): unknown {
+function toAnthropicContentPart(p: CodexCommanderContentPart): unknown {
   if (p.type === "image") {
     const data = parseDataUrl(p.imageUrl);
     return data
@@ -281,7 +281,7 @@ function extractAnthropicErrorDetail(parsed: unknown): string | undefined {
   return undefined;
 }
 
-function usesNativeAnthropicEndpoint(provider: OcxProviderConfig): boolean {
+function usesNativeAnthropicEndpoint(provider: CodexCommanderProviderConfig): boolean {
   try {
     return new URL(provider.baseUrl).hostname === "api.anthropic.com";
   } catch {
@@ -416,7 +416,7 @@ function streamedToolArgumentsParse(assembled: string): boolean {
   }
 }
 
-function anthropicKeyUsesBearer(provider: OcxProviderConfig): boolean {
+function anthropicKeyUsesBearer(provider: CodexCommanderProviderConfig): boolean {
   return provider.apiKeyTransport === "bearer";
 }
 
@@ -515,13 +515,13 @@ function adaptiveEffort(effort: string): string {
   return effort === "minimal" ? "low" : effort;
 }
 
-function usageFromAnthropic(usage: Record<string, number> | undefined): OcxUsage | undefined {
+function usageFromAnthropic(usage: Record<string, number> | undefined): CodexCommanderUsage | undefined {
   if (!usage) return undefined;
   const hasCache = usage.cache_read_input_tokens !== undefined || usage.cache_creation_input_tokens !== undefined;
   const read = usage.cache_read_input_tokens ?? 0;
   const write = usage.cache_creation_input_tokens ?? 0;
   // Anthropic reports input_tokens EXCLUSIVE of cache read/write; normalize to the
-  // canonical inclusive convention (types.ts OcxUsage / devlog 070).
+  // canonical inclusive convention (types.ts CodexCommanderUsage / implementation contract).
   return {
     inputTokens: (usage.input_tokens ?? 0) + read + write,
     outputTokens: usage.output_tokens ?? 0,
@@ -544,7 +544,7 @@ function mergeAnthropicUsage(
   return { ...base, ...next };
 }
 
-function buildToolNameTransforms(provider: OcxProviderConfig): { toWire: (name: string) => string; fromWire: (name: string) => string } {
+function buildToolNameTransforms(provider: CodexCommanderProviderConfig): { toWire: (name: string) => string; fromWire: (name: string) => string } {
   if (provider.authMode === "oauth") {
     return { toWire: applyClaudeToolPrefix, fromWire: stripClaudeToolPrefix };
   }
@@ -557,7 +557,7 @@ function buildToolNameTransforms(provider: OcxProviderConfig): { toWire: (name: 
   return { toWire: (name) => name, fromWire: (name) => name };
 }
 
-function toAnthropicToolResult(msg: OcxToolResultMessage): Record<string, unknown> {
+function toAnthropicToolResult(msg: CodexCommanderToolResultMessage): Record<string, unknown> {
   // Anthropic tool_result accepts a string OR content blocks — render images natively
   // (e.g. Codex view_image output) instead of dropping them.
   let content: string | unknown[];
@@ -565,7 +565,7 @@ function toAnthropicToolResult(msg: OcxToolResultMessage): Record<string, unknow
     // Anthropic rejects tool_result with empty text content blocks.
     content = msg.content || "(empty tool output)";
   } else {
-    const parts = (msg.content as OcxContentPart[])
+    const parts = (msg.content as CodexCommanderContentPart[])
       .map(toAnthropicContentPart)
       .filter(p => !((p as { type?: string }).type === "text" && !(p as { text?: string }).text));
     content = parts.length > 0 ? parts : "(empty tool output)";
@@ -578,7 +578,7 @@ function toAnthropicToolResult(msg: OcxToolResultMessage): Record<string, unknow
   };
 }
 
-function orphanToolResultText(msg: OcxToolResultMessage): string {
+function orphanToolResultText(msg: CodexCommanderToolResultMessage): string {
   const label = msg.toolName ? `${msg.toolName} (${msg.toolCallId})` : msg.toolCallId;
   const content = typeof msg.content === "string"
     ? msg.content
@@ -587,7 +587,7 @@ function orphanToolResultText(msg: OcxToolResultMessage): string {
 }
 
 function messagesToAnthropicFormat(
-  parsed: OcxParsedRequest,
+  parsed: CodexCommanderParsedRequest,
   toolNames: { toWire: (name: string) => string },
 ): { system: string | undefined; messages: unknown[] } {
   const toolCatalogNudge = buildNonOpenAIToolCatalogNudgeForTools(
@@ -611,7 +611,7 @@ function messagesToAnthropicFormat(
           // Anthropic rejects empty string text content blocks.
           content = msg.content || "(empty)";
         } else {
-          const parts = (msg.content as OcxContentPart[])
+          const parts = (msg.content as CodexCommanderContentPart[])
             .map(toAnthropicContentPart)
             .filter(p => !((p as { type?: string }).type === "text" && !(p as { text?: string }).text));
           content = parts.length > 0 ? parts : "(empty)";
@@ -620,16 +620,16 @@ function messagesToAnthropicFormat(
         break;
       }
       case "assistant": {
-        const aMsg = msg as OcxAssistantMessage;
+        const aMsg = msg as CodexCommanderAssistantMessage;
         const preface: unknown[] = [];
         const toolUses: unknown[] = [];
         const toolUseIds: string[] = [];
         for (const part of aMsg.content) {
           if (part.type === "text") {
-            const text = (part as OcxTextContent).text;
+            const text = (part as CodexCommanderTextContent).text;
             if (text) preface.push({ type: "text", text });
           } else if (part.type === "thinking") {
-            const t = part as OcxThinkingContent;
+            const t = part as CodexCommanderThinkingContent;
             // Redacted blocks replay verbatim FIRST (they preceded the visible thinking block
             // in the original stream order preserved by the bridge envelope).
             for (const data of t.redacted ?? []) {
@@ -639,7 +639,7 @@ function messagesToAnthropicFormat(
               preface.push({ type: "thinking", thinking: t.thinking, signature: t.signature });
             }
           } else if (part.type === "toolCall") {
-            const tc = part as OcxToolCall;
+            const tc = part as CodexCommanderToolCall;
             const flatName = namespacedToolName(tc.namespace, tc.name);
             toolUseIds.push(tc.id);
             toolUses.push({ type: "tool_use", id: tc.id, name: toolNames.toWire(flatName), input: tc.arguments });
@@ -657,7 +657,7 @@ function messagesToAnthropicFormat(
           const seen = new Set<string>();
           let j = i + 1;
           while (j < parsed.context.messages.length && parsed.context.messages[j].role === "toolResult") {
-            const tr = parsed.context.messages[j] as OcxToolResultMessage;
+            const tr = parsed.context.messages[j] as CodexCommanderToolResultMessage;
             if (requiredIds.has(tr.toolCallId) && !seen.has(tr.toolCallId)) {
               resultBlocks.push(toAnthropicToolResult(tr));
               seen.add(tr.toolCallId);
@@ -684,7 +684,7 @@ function messagesToAnthropicFormat(
       case "toolResult": {
         // A standalone Anthropic tool_result is invalid unless it immediately follows an
         // assistant tool_use. Preserve the information as text instead of sending a 400-prone block.
-        messages.push({ role: "user", content: orphanToolResultText(msg as OcxToolResultMessage) });
+        messages.push({ role: "user", content: orphanToolResultText(msg as CodexCommanderToolResultMessage) });
         break;
       }
     }
@@ -703,7 +703,7 @@ function messagesToAnthropicFormat(
   return { system, messages };
 }
 
-function toolsToAnthropicFormat(parsed: OcxParsedRequest, toolNames: { toWire: (name: string) => string }): unknown[] | undefined {
+function toolsToAnthropicFormat(parsed: CodexCommanderParsedRequest, toolNames: { toWire: (name: string) => string }): unknown[] | undefined {
   if (!parsed.context.tools || parsed.context.tools.length === 0) return undefined;
   const allowed = isAllowedToolChoice(parsed.options.toolChoice)
     ? new Set(parsed.options.toolChoice.allowedTools)
@@ -809,7 +809,7 @@ function normalizeAnthropicInputSchema(schema: unknown): Record<string, unknown>
   return normalized;
 }
 
-export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetention?: "none" | "short" | "long"): ProviderAdapter {
+export function createAnthropicAdapter(provider: CodexCommanderProviderConfig, cacheRetention?: "none" | "short" | "long"): ProviderAdapter {
   const isOAuth = provider.authMode === "oauth";
   const toolNames = buildToolNameTransforms(provider);
   return {
@@ -817,10 +817,10 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
 
     formatErrorBody: formatAnthropicErrorBody,
 
-    async buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta) {
+    async buildRequest(parsed: CodexCommanderParsedRequest, incoming?: IncomingMeta) {
       if (typeof provider.apiKey !== "string" || provider.apiKey.trim() === "") {
         if (isOAuth) {
-          throw new Error("anthropic oauth token missing — run ocx login anthropic");
+          throw new Error("anthropic oauth token missing — run ccx login anthropic");
         }
         throw new Error("anthropic provider requires a non-empty apiKey (authMode: key)");
       }

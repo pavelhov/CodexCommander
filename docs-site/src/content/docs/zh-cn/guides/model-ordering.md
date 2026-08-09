@@ -1,9 +1,9 @@
 ---
 title: 模型排序
-description: opencodex 如何确定 Codex 模型选择器和 spawn_agent 模型 override 的顺序。
+description: CodexCommander 如何确定 Codex 模型选择器和 spawn_agent 模型 override 的顺序。
 ---
 
-Codex 模型选择器不会保留 opencodex 配置中 provider 的声明顺序或模型数组顺序。最终顺序由目录
+Codex 模型选择器不会保留 CodexCommander 配置中 provider 的声明顺序或模型数组顺序。最终顺序由目录
 priority 决定；priority 相同的路由模型则使用确定性的字母顺序。
 
 ## Codex 应用的规则
@@ -12,7 +12,7 @@ Codex 的 models-manager 按 `priority` 升序排列选择器中可见的目录�
 丢弃，因此在生成的 JSON 数组中把某个条目前移，并不会让它在选择器中前移。该约束直接记录在
 `src/codex/catalog/sync.ts` 中。
 
-因此，opencodex 通过分配更低的 priority 控制置顶位置，而不依赖数组位置。本表中的固定值及下例适用于
+因此，CodexCommander 通过分配更低的 priority 控制置顶位置，而不依赖数组位置。本表中的固定值及下例适用于
 没有有效账户 selector 的配置。存在 `N` 个 selector 时，配置 rank 为 `i` 的置顶裸原生模型会展开为
 priority 为 `i * N + j` 的 selector 行，其中 `j` 是从 0 开始的 selector 位置。置顶的路由行使用
 `i * N`，精确的账户限定原生 id 使用其 selector 对应的 `i * N + j`。Codex 仍只公布选择器中可见的
@@ -65,7 +65,7 @@ priority，因此 Codex 的 priority 排序会保留这个开头序列。
 3. 在目录合并过程中被移到 featured 区块之后的未选中原生模型。
 
 如果没有 `subagentModels`，路由模型保持 priority `5`，原生 GPT 条目使用正常 priority
-（opencodex 创建的条目通常为 `9`），路由组内部仍按 provider/id 字母排序。
+（CodexCommander 创建的条目通常为 `9`），路由组内部仍按 provider/id 字母排序。
 
 ## 示例
 
@@ -105,11 +105,11 @@ subagentModels = [
 **Active Roster**。可搜索的 **Agent Library** 可能包含远超五个的目录模型；路由可用时条目仍可通过精确 id
 指定，而五个槽位的限制仅适用于最先向 `spawn_agent` 公布的 override。
 
-使用 `ocx agent subagents set` 或编辑 opencodex 配置，添加实时库中没有的精确
+使用 `ccx agent subagents set` 或编辑 CodexCommander 配置，添加实时库中没有的精确
 `<selector>/<native-openai-model>` 选项。即使其 provider 暂时不可用，命令中心也会保留已配置的精确
 selector，并可对其重新排序。存在账户 selector 时，一个裸原生选项可能展开为多个 selector-qualified
 行，因此已配置的选项与公布的行不一定一一对应。
 
-目前 `OcxConfig` 中没有通用的 `modelOrder`、`providerOrder` 或 priority map 设置。受支持的排序
+目前 `CodexCommanderConfig` 中没有通用的 `modelOrder`、`providerOrder` 或 priority map 设置。受支持的排序
 字段是 `subagentModels`；`disabledModels` 和各 provider 的 `selectedModels` 都是可见性字段。
 因此，要更改选择器其余部分的顺序，需要修改代码行为，而不是调整配置。

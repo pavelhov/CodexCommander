@@ -36,7 +36,7 @@ import {
   markProviderDiscoveryFailed,
   markProviderDiscoveryOk,
 } from "../src/codex/model-cache";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import * as destinationPolicy from "../src/lib/destination-policy";
@@ -47,15 +47,15 @@ import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
 setDefaultTimeout(60_000);
 
-const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
-const previousOpencodexHome = process.env.OPENCODEX_HOME;
+const previousApiToken = process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+const previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
 const previousCodexCliPath = process.env.CODEX_CLI_PATH;
 const originalGlobalFetch = globalThis.fetch;
 // A per-run directory, not a fixed path. The 665b65643 split copied server-auth.test.ts's
 // ".tmp-server-auth-test" literal verbatim, so both files deleted and recreated the same
-// directory while pointing OPENCODEX_HOME at it. See the comment in server-auth.test.ts for
+// directory while pointing CODEXCOMMANDER_HOME at it. See the comment in server-auth.test.ts for
 // the full failure mode; mkdtempSync also covers two concurrent runs of this file alone.
-const TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-management-provider-validation-"));
+const TEST_DIR = mkdtempSync(join(tmpdir(), "ccx-management-provider-validation-"));
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 /**
@@ -69,16 +69,17 @@ function startServer(
 ) {
   return startServerImpl(port, {
     ...options,
-    managementDeps: {
+    managementApi: {
       refreshCodexCatalog: async () => {},
-      ...options.managementDeps,
+      ...options.managementApi,
     },
   });
 }
 
-function config(hostname?: string): OcxConfig {
+function config(hostname?: string): CodexCommanderConfig {
   return {
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     hostname,
     defaultProvider: "openai",
     providers: {
@@ -100,7 +101,7 @@ const canonicalDirect = {
   codexAccountMode: "direct",
 } as const;
 
-function poolProviders(): OcxConfig["providers"] {
+function poolProviders(): CodexCommanderConfig["providers"] {
   return {
     openai: { ...canonicalDirect, codexAccountMode: "pool" },
   };
@@ -132,16 +133,16 @@ function stubModelDiscoveryFor(...origins: string[]): void {
 }
 
 beforeEach(() => {
-  isolatedCodexHome = installIsolatedCodexHome("ocx-server-auth-codex-");
+  isolatedCodexHome = installIsolatedCodexHome("ccx-server-auth-codex-");
   process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
 });
 
 afterEach(() => {
   globalThis.fetch = originalGlobalFetch;
-  if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-  else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousApiToken === undefined) delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+  else process.env.CODEXCOMMANDER_API_AUTH_TOKEN = previousApiToken;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
   else process.env.CODEX_CLI_PATH = previousCodexCliPath;
   isolatedCodexHome?.restore();
@@ -327,10 +328,10 @@ describe("provider management validation", () => {
   test("provider management rejects externally supplied forward auth providers", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
 
-    const server = startServer(0, { managementDeps: { refreshCodexCatalog: async () => {} } });
+    const server = startServer(0, { managementApi: { refreshCodexCatalog: async () => {} } });
     try {
       const response = await fetch(new URL("/api/providers", server.url), {
         method: "POST",
@@ -356,15 +357,15 @@ describe("provider management validation", () => {
   test("provider management rejects runtime metadata and accepts only canonical OpenAI option seeds", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "openai",
-      openaiProviderTierVersion: 2,
       providers: { openai: canonicalDirect },
     });
 
-    const server = startServer(0, { managementDeps: { refreshCodexCatalog: async () => {} } });
+    const server = startServer(0, { managementApi: { refreshCodexCatalog: async () => {} } });
     try {
       for (const field of [
         "virtualModels",
@@ -394,13 +395,6 @@ describe("provider management validation", () => {
         });
         expect(accepted.status).toBe(200);
       }
-
-      const legacyMulti = await fetch(new URL("/api/providers", server.url), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "openai-multi", provider: canonicalDirect }),
-      });
-      expect(legacyMulti.status).toBe(400);
 
       for (const [, provider] of [
         ["base", { ...canonicalDirect, baseUrl: "https://attacker.example/backend-api/codex" }],
@@ -552,7 +546,6 @@ describe("provider management validation", () => {
         providers: Record<string, { codexAccountMode?: string }>;
       };
       expect(dto.providers.openai.codexAccountMode).toBe("direct");
-      expect(dto.providers["openai-multi"]).toBeUndefined();
       expect(dto.providers["custom-max-input"]).not.toHaveProperty("modelMaxInputTokens");
 
       const presetResponse = await fetch(new URL("/api/provider-presets", server.url)).then(response => response.json()) as {
@@ -573,7 +566,7 @@ describe("provider management validation", () => {
   test("provider management does not persist registry-only static auth headers for opencode-free", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
 
     const server = startServer(0);
@@ -592,7 +585,7 @@ describe("provider management validation", () => {
       });
       expect(response.status).toBe(200);
 
-      const saved = JSON.parse(readFileSync(join(TEST_DIR, "config.json"), "utf8")) as OcxConfig;
+      const saved = JSON.parse(readFileSync(join(TEST_DIR, "config.json"), "utf8")) as CodexCommanderConfig;
       expect(saved.providers["opencode-free"]).toBeDefined();
       expect(saved.providers["opencode-free"]?.headers).toBeUndefined();
       expect(saved.providers["opencode-free"]?.keyOptional).toBe(true);
@@ -604,12 +597,12 @@ describe("provider management validation", () => {
   test("management selections preserve an OpenAI API Pro selected id without wire rewriting", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     const selected = "openai-apikey/gpt-5.6-sol-pro";
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "openai-apikey",
-      openaiProviderTierVersion: 2,
       providers: {
         "openai-apikey": {
           adapter: "openai-responses",
@@ -619,7 +612,7 @@ describe("provider management validation", () => {
         },
       },
     });
-    const server = startServer(0, { managementDeps: { refreshCodexCatalog: async () => {} } });
+    const server = startServer(0, { managementApi: { refreshCodexCatalog: async () => {} } });
     try {
       const put = (path: string, body: unknown) => fetch(new URL(path, server.url), {
         method: "PUT",
@@ -659,7 +652,7 @@ describe("provider management validation", () => {
   test("provider management rejects namespace-breaking or reserved provider names", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
 
     const server = startServer(0);
@@ -689,7 +682,7 @@ describe("provider management validation", () => {
   test("provider management rejects names owned by a Codex account namespace without mutating config", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     const cfg = {
       ...config("127.0.0.1"),
       codexAccountNamespaces: { side: "side-account-id" },
@@ -727,7 +720,7 @@ describe("provider management validation", () => {
   test("provider management rejects base URLs with embedded credentials", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
 
     const server = startServer(0);
@@ -755,7 +748,7 @@ describe("provider management validation", () => {
   test("provider management rejects invalid or non-http base URLs", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
 
     const server = startServer(0);
@@ -785,7 +778,7 @@ describe("provider management validation", () => {
   test("provider management rejects private-network destinations without explicit opt-in", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
 
     const server = startServer(0);
@@ -814,7 +807,7 @@ describe("provider management validation", () => {
   test("provider management allows private-network destinations only with explicit opt-in", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
     stubModelDiscoveryFor("http://127.0.0.1:11434");
 
@@ -846,7 +839,7 @@ describe("provider management validation", () => {
   test("provider management always rejects metadata endpoints", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
 
     const server = startServer(0);
@@ -876,7 +869,7 @@ describe("provider management validation", () => {
   test("provider PATCH can enable allowPrivateNetwork and then change baseUrl to localhost", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
     stubModelDiscoveryFor("https://api.example.com", "http://127.0.0.1:11434");
 
@@ -923,7 +916,7 @@ describe("provider management validation", () => {
   test("provider PATCH rejects disabling allowPrivateNetwork while baseUrl is private", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
     stubModelDiscoveryFor("http://127.0.0.1:8080");
 
@@ -957,7 +950,7 @@ describe("provider management validation", () => {
   test("provider PATCH persists liveModels and provider metadata exposes the normalized state", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
 
     const server = startServer(0);
@@ -1015,7 +1008,7 @@ describe("provider management validation", () => {
  test("provider management rejects sensitive or injectable provider headers", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
 
     const server = startServer(0);
@@ -1050,7 +1043,7 @@ describe("provider management validation", () => {
   test("provider deletion does not treat inherited object keys as configured providers", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
 
     const server = startServer(0);
@@ -1067,9 +1060,10 @@ describe("provider management validation", () => {
   test("provider deletion removes stale provider context caps", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "test-openai",
       providers: {
         "test-openai": {
@@ -1103,9 +1097,10 @@ describe("provider management validation", () => {
   test("provider management switches the default and reassigns it when removed", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "alpha",
       providers: {
         alpha: { adapter: "openai-chat", baseUrl: "https://alpha.example.test/v1", liveModels: false },
@@ -1146,9 +1141,10 @@ describe("provider management validation", () => {
   test("provider management rejects POST setDefault for a disabled provider", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "alpha",
       providers: {
         alpha: { adapter: "openai-chat", baseUrl: "https://alpha.example.test/v1", liveModels: false },
@@ -1188,9 +1184,10 @@ describe("provider management validation", () => {
   test("provider management refuses to delete the default when only a disabled replacement remains", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "alpha",
       providers: {
         alpha: { adapter: "openai-chat", baseUrl: "https://alpha.example.test/v1", liveModels: false },
@@ -1231,9 +1228,10 @@ describe("provider management validation", () => {
   test("provider management can disable and re-enable non-default providers", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig({
       port: 10100,
+      multiAgentGuidanceEnabled: true,
       hostname: "127.0.0.1",
       defaultProvider: "openai",
       providers: {
@@ -1286,7 +1284,7 @@ describe("provider management validation", () => {
   test("provider management rejects disabling the default provider", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
 
     const server = startServer(0);
@@ -1308,9 +1306,10 @@ describe("provider management validation", () => {
   test("provider management accepts canonical OpenAI modes and rejects legacy Multi", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "test-openai",
       providers: {
         "test-openai": {
@@ -1319,7 +1318,7 @@ describe("provider management validation", () => {
           apiKey: "sk-secret-value",
         },
       },
-    } as OcxConfig);
+    } as CodexCommanderConfig);
 
     const server = startServer(0);
     try {
@@ -1345,13 +1344,6 @@ describe("provider management validation", () => {
       });
       expect(direct.status).toBe(200);
 
-      const legacyMulti = await fetch(new URL("/api/providers", server.url), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "openai-multi", provider: canonicalDirect }),
-      });
-      expect(legacyMulti.status).toBe(400);
-
       for (const overlay of [{ disabled: true }, { selectedModels: ["gpt-5.6-sol"] }]) {
         const forged = await fetch(new URL("/api/providers", server.url), {
           method: "POST",
@@ -1369,9 +1361,10 @@ describe("provider management validation", () => {
   test("canonical OpenAI POST passes allowBenchmarkAddresses into destination resolution", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    const liveConfig: OcxConfig = {
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    const liveConfig: CodexCommanderConfig = {
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "test-openai",
       providers: {
         "test-openai": {
@@ -1425,9 +1418,10 @@ describe("provider management validation", () => {
   test("canonical OpenAI POST still rejects non-benchmark private destination answers", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    const liveConfig: OcxConfig = {
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    const liveConfig: CodexCommanderConfig = {
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "test-openai",
       providers: {
         "test-openai": {
@@ -1467,12 +1461,12 @@ describe("provider management validation", () => {
   test("disabled-only PATCH cannot re-enable a noncanonical openai row unchanged", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    const liveConfig: OcxConfig = {
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    const liveConfig: CodexCommanderConfig = {
       port: 0,
+      multiAgentGuidanceEnabled: true,
       hostname: "127.0.0.1",
       defaultProvider: "extra",
-      openaiProviderTierVersion: 2,
       providers: {
         openai: {
           adapter: "openai-chat",
@@ -1518,12 +1512,12 @@ describe("provider management validation", () => {
   test("disabled-only PATCH re-enables canonical openai and fills missing pool mode", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       hostname: "127.0.0.1",
       defaultProvider: "extra",
-      openaiProviderTierVersion: 2,
       providers: {
         openai: {
           adapter: "openai-responses",
@@ -1566,12 +1560,12 @@ describe("provider management validation", () => {
   test("disabled OpenAI recovery accepts pure Clash fake-IP via destination check", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    const liveConfig: OcxConfig = {
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    const liveConfig: CodexCommanderConfig = {
       port: 0,
+      multiAgentGuidanceEnabled: true,
       hostname: "127.0.0.1",
       defaultProvider: "extra",
-      openaiProviderTierVersion: 2,
       providers: {
         openai: {
           adapter: "openai-responses",
@@ -1615,18 +1609,18 @@ describe("provider management validation", () => {
   test("disabled OpenAI recovery rejects loopback, RFC1918, and metadata and stays disabled", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     const disabledCanonical = {
       adapter: "openai-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
       authMode: "forward",
       disabled: true,
     } as const;
-    const liveConfig: OcxConfig = {
+    const liveConfig: CodexCommanderConfig = {
       port: 0,
+      multiAgentGuidanceEnabled: true,
       hostname: "127.0.0.1",
       defaultProvider: "extra",
-      openaiProviderTierVersion: 2,
       providers: {
         openai: { ...disabledCanonical },
         extra: {
@@ -1679,12 +1673,12 @@ describe("provider management validation", () => {
   test("disabled OpenAI recovery ignores persisted allowPrivateNetwork for DNS guard", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    const liveConfig: OcxConfig = {
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    const liveConfig: CodexCommanderConfig = {
       port: 0,
+      multiAgentGuidanceEnabled: true,
       hostname: "127.0.0.1",
       defaultProvider: "extra",
-      openaiProviderTierVersion: 2,
       providers: {
         openai: {
           adapter: "openai-responses",
@@ -1736,12 +1730,12 @@ describe("provider management validation", () => {
   test("disabled OpenAI recovery strips allowPrivateNetwork after successful re-enable", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    const liveConfig: OcxConfig = {
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    const liveConfig: CodexCommanderConfig = {
       port: 0,
+      multiAgentGuidanceEnabled: true,
       hostname: "127.0.0.1",
       defaultProvider: "extra",
-      openaiProviderTierVersion: 2,
       providers: {
         openai: {
           adapter: "openai-responses",
@@ -1792,12 +1786,12 @@ describe("provider management validation", () => {
     test(`disabled-only PATCH normalizes ${label} before save-and-reload`, async () => {
       if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
       mkdirSync(TEST_DIR, { recursive: true });
-      process.env.OPENCODEX_HOME = TEST_DIR;
+      process.env.CODEXCOMMANDER_HOME = TEST_DIR;
       saveConfig({
         port: 0,
+        multiAgentGuidanceEnabled: true,
         hostname: "127.0.0.1",
         defaultProvider: "extra",
-        openaiProviderTierVersion: 2,
         providers: {
           openai: {
             adapter: "openai-responses",
@@ -1845,12 +1839,12 @@ describe("provider management validation", () => {
   test("provider mode PATCH is strict, persists live state, clears caches and affinity, and primes Pool only", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    const liveConfig: OcxConfig = {
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    const liveConfig: CodexCommanderConfig = {
       port: 0,
+      multiAgentGuidanceEnabled: true,
       hostname: "127.0.0.1",
       defaultProvider: "openai",
-      openaiProviderTierVersion: 2,
       providers: {
         openai: { ...canonicalDirect, disabled: true },
         extra: { adapter: "openai-chat", baseUrl: "https://extra.example.test/v1" },
@@ -1865,7 +1859,7 @@ describe("provider management validation", () => {
       clearThreadAccountMap: () => { affinityClears += 1; },
       clearProviderQuotaCache: () => { quotaCacheClears += 1; },
       createManagementConvergeCodex: catalogConvergenceFactory(() => { catalogRefreshes += 1; }),
-      primeCodexPoolQuotas: (_config: OcxConfig, reason: string) => { primes.push(reason); },
+      primeCodexPoolQuotas: (_config: CodexCommanderConfig, reason: string) => { primes.push(reason); },
     };
     const patch = async (name: string, body: unknown) => {
       const req = new Request(`http://127.0.0.1/api/providers?name=${name}`, {
@@ -1919,12 +1913,12 @@ describe("provider management validation", () => {
   test("provider PATCH field-mask edits non-reserved providers and rejects unsafe fields (WP040)", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    const liveConfig: OcxConfig = {
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    const liveConfig: CodexCommanderConfig = {
       port: 0,
+      multiAgentGuidanceEnabled: true,
       hostname: "127.0.0.1",
       defaultProvider: "openai",
-      openaiProviderTierVersion: 2,
       providers: {
         openai: { ...canonicalDirect },
         extra: { adapter: "openai-chat", baseUrl: "https://extra.example.test/v1", apiKey: "sk-existing", note: "old note" },
@@ -2011,12 +2005,12 @@ describe("provider management validation", () => {
   test("provider PATCH manages custom headers with merge and clear semantics", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    const liveConfig: OcxConfig = {
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    const liveConfig: CodexCommanderConfig = {
       port: 0,
+      multiAgentGuidanceEnabled: true,
       hostname: "127.0.0.1",
       defaultProvider: "openai",
-      openaiProviderTierVersion: 2,
       providers: {
         openai: { ...canonicalDirect },
         agw: { adapter: "openai-chat", baseUrl: "https://agw.example.test/v1", apiKey: "sk-agw" },
@@ -2078,14 +2072,14 @@ describe("provider management validation", () => {
   test("GET /api/providers exposes hasHeaders but never header names or values (#959)", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     const sentinelName = "x-fingerprint-sentinel";
     const sentinelValue = "sentinel-secret-header-value";
-    const liveConfig: OcxConfig = {
+    const liveConfig: CodexCommanderConfig = {
       port: 0,
+      multiAgentGuidanceEnabled: true,
       hostname: "127.0.0.1",
       defaultProvider: "openai",
-      openaiProviderTierVersion: 2,
       providers: {
         openai: { ...canonicalDirect },
         hdr: {
@@ -2112,12 +2106,12 @@ describe("provider management validation", () => {
   test("provider PATCH merges headers case-insensitively", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    const liveConfig: OcxConfig = {
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    const liveConfig: CodexCommanderConfig = {
       port: 0,
+      multiAgentGuidanceEnabled: true,
       hostname: "127.0.0.1",
       defaultProvider: "openai",
-      openaiProviderTierVersion: 2,
       providers: {
         openai: { ...canonicalDirect },
         hdr: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:9/v1", allowPrivateNetwork: true },
@@ -2146,12 +2140,12 @@ describe("provider management validation", () => {
   test("provider PATCH clear keeps registry static headers", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    const liveConfig: OcxConfig = {
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    const liveConfig: CodexCommanderConfig = {
       port: 0,
+      multiAgentGuidanceEnabled: true,
       hostname: "127.0.0.1",
       defaultProvider: "openai",
-      openaiProviderTierVersion: 2,
       providers: {
         openai: { ...canonicalDirect },
         "opencode-free": {
@@ -2179,18 +2173,18 @@ describe("provider management validation", () => {
     // metadata (opencode-free's x-opencode-client marker) the transport relies on.
     expect((await patch("opencode-free", { headers: null }))?.status).toBe(200);
     expect(liveConfig.providers["opencode-free"].headers).toEqual({ "x-opencode-client": "desktop" });
-    const saved = JSON.parse(readFileSync(join(TEST_DIR, "config.json"), "utf8")) as OcxConfig;
+    const saved = JSON.parse(readFileSync(join(TEST_DIR, "config.json"), "utf8")) as CodexCommanderConfig;
     expect(saved.providers["opencode-free"]?.headers).toEqual({ "x-opencode-client": "desktop" });
   });
   test("concurrent provider PATCHes merge different headers", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    const liveConfig: OcxConfig = {
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    const liveConfig: CodexCommanderConfig = {
       port: 0,
+      multiAgentGuidanceEnabled: true,
       hostname: "127.0.0.1",
       defaultProvider: "openai",
-      openaiProviderTierVersion: 2,
       providers: {
         openai: { ...canonicalDirect },
         hdr: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:9/v1", allowPrivateNetwork: true },
@@ -2221,9 +2215,10 @@ describe("provider management validation", () => {
   test("provider context-cap API persists toggles and annotates model rows", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "test-openai",
       providers: {
         "test-openai": {
@@ -2244,7 +2239,7 @@ describe("provider management validation", () => {
     try {
       const initial = await fetch(new URL("/api/provider-context-caps", server.url));
       expect(initial.status).toBe(200);
-      expect(await initial.json()).toMatchObject({ cap: 350_000, caps: {} });
+      expect(await initial.json()).toMatchObject({ value: 350_000, caps: {} });
 
       const enabled = await fetch(new URL("/api/provider-context-caps", server.url), {
         method: "PUT",
@@ -2290,9 +2285,10 @@ describe("provider management validation", () => {
   test("provider context-cap API supports global value and set-all toggles", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "test-openai",
       providers: {
         "test-openai": {
@@ -2317,7 +2313,9 @@ describe("provider management validation", () => {
     const server = startServer(0);
     try {
       const initial = await fetch(new URL("/api/provider-context-caps", server.url));
-      expect(await initial.json()).toMatchObject({ cap: 350_000, value: 350_000, caps: {} });
+      const initialBody = await initial.json() as Record<string, unknown>;
+      expect(initialBody).toMatchObject({ value: 350_000, caps: {} });
+      expect(initialBody).not.toHaveProperty("cap");
 
       // Enable one provider, then change the global value: the enabled provider re-points.
       await fetch(new URL("/api/provider-context-caps", server.url), {

@@ -45,7 +45,6 @@ export type OAuthAccountRow = {
   alias?: string;
   email?: string;
   active: boolean;
-  needsReauth?: boolean;
   health?: { status: OAuthAccountHealthStatus; reason?: string; until?: string };
   healthLabel?: string;
   healthSummary?: string;

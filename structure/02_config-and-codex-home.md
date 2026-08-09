@@ -10,35 +10,35 @@ The managed files are:
 
 ```text
 $CODEX_HOME/config.toml
-$CODEX_HOME/opencodex.config.toml
-$CODEX_HOME/opencodex-catalog.json
-$CODEX_HOME/opencodex-journal.json
+$CODEX_HOME/codexcommander.config.toml
+$CODEX_HOME/codexcommander-catalog.json
+$CODEX_HOME/codexcommander-journal.json
 $CODEX_HOME/models_cache.json
-$CODEX_HOME/.opencodex-native-main-profiles/
+$CODEX_HOME/.codexcommander-native-main-profiles/
 ```
 
 Never assume macOS-only paths. Windows, service installs, and app-launched Codex can all depend on
 the resolved `CODEX_HOME`.
 
-Native-main profile ownership is bound to the real `CODEX_HOME`, not to an OpenCodex instance.
+Native-main profile ownership is bound to the real `CODEX_HOME`, not to a CodexCommander instance.
 Its encrypted vault, transaction journal, recovery marker, and referenced quarantine files live in
-the owner-only `.opencodex-native-main-profiles` directory. The unchanged
-`.opencodex-native-profile.lock.sqlite` beside that directory serializes every process sharing the
+the owner-only `.codexcommander-native-main-profiles` directory. The unchanged
+`.codexcommander-native-profile.lock.sqlite` beside that directory serializes every process sharing the
 home. Only plaintext login staging is instance-local under
-`$OPENCODEX_HOME/native-main-profile-staging`; a stage from one instance is invalid in another.
+`$CODEXCOMMANDER_HOME/native-main-profile-staging`; a stage from one instance is invalid in another.
 These paths and the OS keyring are owner-only: the operating-system account that owns them is the
-trust boundary and already has direct access to active native credentials. OpenCodex detects and
+trust boundary and already has direct access to active native credentials. CodexCommander detects and
 fails closed on file identities that change during an operation, but it does not claim isolation
 from a malicious process already running as that same trusted OS account.
 
-OpenCodex never overrides an explicit `CODEX_HOME`. On Windows, `ocx doctor` and `ocx status`
+CodexCommander never overrides an explicit `CODEX_HOME`. On Windows, `ccx doctor` and `ccx status`
 nevertheless diagnose the high-confidence Orca dual-home case: both `CODEX_HOME` and
 `ORCA_CODEX_HOME` select Orca's `orca/codex-runtime-home/home`, while the ChatGPT/Codex app uses the
 default `%USERPROFILE%\\.codex`. Sync and restore output always prints the exact target Codex home;
-display and JSON paths redact the OS username. The diagnostic tells users to invoke OpenCodex with
+display and JSON paths redact the OS username. The diagnostic tells users to invoke CodexCommander with
 the app home explicitly rather than silently claiming that an unrelated app was configured. If a
 service was installed under the Orca home, it must first be uninstalled from that original Orca
-environment and then reinstalled under the app home; changing only the current shell cannot migrate
+environment and then reinstalled under the app home; changing only the current shell does not change
 the recorded service ownership.
 
 [Decision Log]
@@ -49,12 +49,12 @@ the recorded service ownership.
 - 다른 대안 대신 이 방식을 선택한 이유: It fixes the silent failure while avoiding destructive or noisy behavior for intentional custom homes.
 - 장점, 단점 및 영향: Orca users get an actionable warning; other multi-home products remain unchanged until they have an equally reliable signature.
 
-`atomicWriteFile` uses a temp file named `{path}.ocx.{pid}.{seq}.tmp` (process ID + incrementing
-sequence number) to avoid collisions when concurrent writers (e.g. `ocx stop` and the proxy's own
+`atomicWriteFile` uses a temp file named `{path}.ccx.{pid}.{seq}.tmp` (process ID + incrementing
+sequence number) to avoid collisions when concurrent writers (e.g. `ccx stop` and the proxy's own
 shutdown handler) both restore Codex config simultaneously. The temp is renamed atomically into place.
 
 Response-state loading performs a bounded recovery pass for interrupted snapshot writes. It only
-matches regular files named `responses-state.json.ocx.<pid>.<sequence>.tmp`, waits at least 15
+matches regular files named `responses-state.json.ccx.<pid>.<sequence>.tmp`, waits at least 15
 minutes, and skips the current or any live PID. Eligible files are truncated before unlinking so a
 matching stale path is unlinked without following it. Path-based truncation is intentionally avoided:
 a same-user replacement could otherwise turn cleanup into a write through a symlink. Unrelated
@@ -80,9 +80,9 @@ matters for maintainers is which groups exist and who resolves them:
 | Routing | `defaultProvider`, `providers`, per-provider `selectedModels` | Explicit `provider/model` wins over `defaultProvider`. |
 | Catalog | `disabledModels`, `customModels`, `modelCacheTtlMs`, `providerContextCaps`, `contextCapValue` | Catalog state is derived; config only records intent. |
 | Retained state | `appOwnedMemoryBudgetMb` | Process-wide eviction target for app-owned logs, caches, blobs, and continuation payloads. Default 256 MiB, valid 64..4096; pinned state may temporarily exceed the target, but every pin-capable store has a finite local cap and their documented aggregate stays below `APP_OWNED_WORST_CASE_PINNED_BYTES` (512 MiB). Neither value caps RSS or native runtime memory. |
-| Transport | stream mode, timeouts, proxy settings, `websockets` | `streamMode` persists in config.json; Windows services need a persisted input. On macOS, `auto` selects the validated single-reader relay only for an activated plaintext-V2 collaboration rewrite, `eager-relay` explicitly selects it for other eligible SSE turns, and `legacy-tee` is the rollback pin. |
+| Transport | stream mode, timeouts, proxy settings, `websockets` | `streamMode` persists in config.json; Windows services need a persisted input. On macOS, `auto` selects the validated single-reader relay only for an activated plaintext-V2 collaboration rewrite, `eager-relay` explicitly selects it for other eligible SSE turns, and `safe-tee` is the rollback pin. |
 | Credentials | `apiKeys` | Data-plane only; never admitted to `/api/*`. |
-| Lifecycle | `codexAutoStart`, shim/start behavior, resume-history sync, storage cleanup | Startup safety reads these; see [`05_gui-and-management-api.md`](05_gui-and-management-api.md). |
+| Lifecycle | `codexAutoStart`, shim/start behavior, storage cleanup | Startup safety reads these; see [`05_gui-and-management-api.md`](05_gui-and-management-api.md). |
 
 Env values are resolved through `src/config.ts`, so a config value naming an env var never persists
 the secret itself.
@@ -95,33 +95,32 @@ keeps its native provider id, which decides whether existing thread history stil
 **Loopback (default).** A single marker-owned root override, no provider table:
 
 ```toml
-model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
+model_catalog_json = "/absolute/path/to/codexcommander-catalog.json"
 openai_base_url = "http://127.0.0.1:10100/v1"
 ```
 
 Codex keeps the native `openai` provider id, so new threads stay under that identity instead of
-being re-tagged. History that an earlier legacy injection re-tagged as `opencodex` is migrated back
-to `openai` once, as restore machinery — a no-op when there is nothing to migrate. A user-owned root
-`openai_base_url` is preserved instead of overwritten, and that case also blocks managed sub-agent
-defaults rather than fighting the user for ownership.
+being re-tagged and loopback history needs no remapping. A user-owned root `openai_base_url` is
+preserved instead of overwritten, and that case also blocks managed sub-agent defaults rather than
+fighting the user for ownership.
 
 **API auth header (non-loopback).** The built-in `openai` provider cannot carry the
-`x-opencodex-api-key` env header, so this form re-tags the root provider and appends the table:
+`x-codexcommander-api-key` env header, so this form re-tags the root provider and appends the table:
 
 ```toml
-model_provider = "opencodex"
-model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
+model_provider = "codexcommander"
+model_catalog_json = "/absolute/path/to/codexcommander-catalog.json"
 
-[model_providers.opencodex]
-name = "OpenCodex Proxy"
+[model_providers.codexcommander]
+name = "CodexCommander Proxy"
 base_url = "http://<host>:<port>/v1"
 wire_api = "responses"
 requires_openai_auth = true
-env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }
+env_http_headers = { "x-codexcommander-api-key" = "CODEXCOMMANDER_API_AUTH_TOKEN" }
 ```
 
 Root TOML keys must be written before the first `[table]`. Re-injection strips the stale form of
-both shapes — opencodex blocks, injected root base-url overrides, stale root context-window
+both shapes — CodexCommander blocks, injected root base-url overrides, stale root context-window
 overrides, and stale catalog paths — before rewriting, so switching between forms leaves no residue.
 
 Native Codex sub-agent defaults are a separate, explicit opt-in. When
@@ -131,11 +130,11 @@ Native Codex sub-agent defaults are a separate, explicit opt-in. When
 overwritten. Disabling the option and fallback restore remove only marker-owned values; journal
 restore must preserve later user edits while stripping those managed values.
 
-If the root config selects a provider other than `openai` or `opencodex`, injection must leave the
-config byte-for-byte unchanged and skip profile creation/updates and history migration. External
-provider managers own that routing configuration, and replacing their provider id can hide
-otherwise intact Codex sessions. This ownership check must run before catalog/cache refresh,
-journal creation, and the background history migration guardian.
+If the root config selects a provider other than `openai` or `codexcommander`, injection must leave the
+config byte-for-byte unchanged and skip profile creation/updates and history synchronization.
+External provider managers own that routing configuration, and replacing their provider id can hide
+otherwise intact Codex sessions. This ownership check must run before catalog/cache refresh, journal
+creation, or history work.
 
 `supports_websockets = true` is appended to the provider table only when `websocketsEnabled(config)`
 returns true.
@@ -146,20 +145,20 @@ Some Codex-home conditions are reported rather than repaired, because repairing 
 a deliberate user choice:
 
 - Bundled-plugin marketplace state on Windows (`src/codex/plugins-doctor.ts`), surfaced by
-  `ocx status`.
+  `ccx status`.
 - Project-level Codex config that bypasses managed routing
-  (`src/codex/project-config-warnings.ts`), surfaced by `ocx doctor` as a warning rather than an
+  (`src/codex/project-config-warnings.ts`), surfaced by `ccx doctor` as a warning rather than an
   override.
 
 ## Profile and fast tier
 
-When opencodex owns routing, it also writes `$CODEX_HOME/opencodex.config.toml` as an explicit profile
+When CodexCommander owns routing, it also writes `$CODEX_HOME/codexcommander.config.toml` as an explicit profile
 target. Codex config uses `service_tier = "fast"` and `[features].fast_mode = true`;
 catalog/request tier metadata may use `priority`. Do not collapse these spellings into one value.
 
 ## Provider output defaults
 
-`OcxProviderConfig.defaultMaxOutputTokens` and `modelMaxOutputTokens` are OpenAI Chat wire defaults,
+`CodexCommanderProviderConfig.defaultMaxOutputTokens` and `modelMaxOutputTokens` are OpenAI Chat wire defaults,
 not context-window metadata. They are applied only when a Responses request omits
 `max_output_tokens`; an explicit request value wins, then a model-specific configured value, then
 the provider default, then the adapter omits the output-budget field. `chatCompletionTokenField`
@@ -171,16 +170,16 @@ and `routeModel`, but user config overrides registry defaults per field/key.
 
 ## Restore
 
-`ocx stop`, `ocx restore` / `ocx eject`, `ocx service stop`, and `ocx service uninstall` must strip
-opencodex config and routed catalog entries without damaging native Codex state.
+`ccx stop`, `ccx restore` / `ccx eject`, `ccx service stop`, and `ccx service uninstall` must strip
+CodexCommander config and routed catalog entries without damaging native Codex state.
 
-Full `ocx uninstall` config cleanup is ownership-manifest based. A fresh config directory receives a
+Full `ccx uninstall` config cleanup is ownership-manifest based. A fresh config directory receives a
 root-bound owner marker and an uninstall manifest before its first atomic config write. Uninstall
 validates both bounded metadata files, rejects path traversal and a symlink/junction config root,
 and removes only normalized manifest entries. Manifest-owned directory links are unlinked without
 traversing their targets. Unknown files remain in place and make the command report a partial
 uninstall with their exact paths.
 
-Legacy nonempty config directories are deliberately not retroactively claimed. If either ownership
-file is missing, malformed, or bound to another root, uninstall refuses config deletion and reports
-the residual directory for manual review; there is no recursive-delete fallback.
+Nonempty config directories without canonical ownership metadata are deliberately not claimed. If
+either ownership file is missing, malformed, or bound to another root, uninstall refuses config
+deletion and reports the residual directory for manual review; there is no recursive-delete fallback.

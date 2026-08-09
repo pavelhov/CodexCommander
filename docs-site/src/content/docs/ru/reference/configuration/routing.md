@@ -11,11 +11,11 @@ upstream.
 | Поле | Тип | По умолчанию | Значение |
 | --- | --- | --- | --- |
 | `defaultProvider` | `string` | `"openai"` | Последний провайдер, используемый, если ни одно более раннее правило модели не совпало. Должен называть включённого настроенного провайдера. |
-| `combos?` | `Record<string, OcxComboConfig>` | `{}` | Виртуальные модели `combo/<id>`, построенные из упорядоченных целей provider/model. |
+| `combos?` | `Record<string, CodexCommanderComboConfig>` | `{}` | Виртуальные модели `combo/<id>`, построенные из упорядоченных целей provider/model. |
 
 ## Порядок разрешения модели
 
-opencodex разрешает запрошенную модель в следующем порядке:
+CodexCommander разрешает запрошенную модель в следующем порядке:
 
 1. Настроенное пространство имён `<account-selector>/<native-openai-model>`, направляемое только через
    сопоставленный сохранённый аккаунт Codex. Некорректная или недоступная exact target завершается fail closed.
@@ -86,7 +86,7 @@ opencodex разрешает запрошенную модель в следую
 
 ### Допустимость в каталоге
 
-Combo остаётся доступной для прямой маршрутизации, даже если её нельзя вывести в списке. `ocx sync`,
+Combo остаётся доступной для прямой маршрутизации, даже если её нельзя вывести в списке. `ccx sync`,
 `/v1/models` и селектор Codex показывают её, только когда у каждой цели есть возможности, которые
 можно пересечь:
 
@@ -104,7 +104,7 @@ Combo остаётся доступной для прямой маршрутиз
 
 Явно запрошенный `policy/<id>` (или настроенный псевдоним) выбирает среди фиксированного разрешённого списка кандидатов по жёстким требованиям к возможностям и детерминированной объяснимой оценке. Существующие идентификаторы моделей никогда не проходят через профиль неявно. Поддерживаются: `candidates` (явный список), необязательный `alias`, `require` (`minContextWindow`, `minQuotaHeadroom`, `tools`, `imageInput`, `structuredOutput`, `localOnly`, `remoteAllowed`, `encryptedCodexTasks`, `reasoningEffort`, `serviceTier`), `optimize` (веса latency/health/cost/quota), `limits.maxEstimatedCostUsd`, `unknownEvidence` (allow/penalize/exclude). Неизвестное не становится нулём или бесплатным.
 
-CLI: `ocx route policy list`, `ocx route policy show <id>`, `ocx route policy dry-run <id> --model-context <tokens> --tools`, `ocx route policy evaluate <id>`.
+CLI: `ccx route policy list`, `ccx route policy show <id>`, `ccx route policy dry-run <id> --model-context <tokens> --tools`, `ccx route policy evaluate <id>`.
 
 Комбо — это явная маршрутизация с порядком/весами и отказоустойчивостью. Профиль — это выбор на основе доказательств среди кандидатов.
 
@@ -117,8 +117,8 @@ CLI: `ocx route policy list`, `ocx route policy show <id>`, `ocx route policy dr
 
 Возвращаемые записи истории и решений маршрута содержат только маскированные метаданные запроса (например, непрозрачные метки `apiKeyId`). Учётные данные, сырые тела промптов и секреты провайдеров не включаются.
 
-CLI: `ocx logs explain <request-id>`, `ocx logs rebuild-index`, `ocx logs index-status`.
+CLI: `ccx logs explain <request-id>`, `ccx logs rebuild-index`, `ccx logs index-status`.
 
-## Миграция
+## Существующие данные
 
-`routingProfiles` — необязательная аддитивная настройка. Существующие конфиги и старые строки `usage.jsonl` загружаются без изменений. Индекс одноразовый: при удалении он автоматически перестраивается из `usage.jsonl` при следующем запросе. Автонастройки нет.
+`routingProfiles` — необязательная аддитивная настройка. Существующие конфиги и строки `usage.jsonl` без `routeDecision` также загружаются. Индекс одноразовый: при удалении он автоматически перестраивается из `usage.jsonl` при следующем запросе. Автонастройки нет.

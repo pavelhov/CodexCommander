@@ -1,13 +1,8 @@
 /**
  * CODEX_HOME-keyed transition state and coordinator transaction ownership.
  *
- * The original JSON read/compare/replace was called a CAS while native and
- * history writers held different locks. It was not one: an old Worker could
- * replace N+1 with stale N. This module owns the SQLite row, the conditional
- * UPDATE, and the opaque one-shot capability backed by an already-open
- * `BEGIN IMMEDIATE` transaction.
- *
- * Design record: devlog/_fin/260804_codex_write_substrate/005_contract.md §1.
+ * This module owns the SQLite row, the conditional UPDATE, and the opaque
+ * one-shot capability backed by an already-open `BEGIN IMMEDIATE` transaction.
  */
 import { randomUUID } from "node:crypto";
 import { chmodSync, lstatSync, realpathSync } from "node:fs";
@@ -18,14 +13,11 @@ import type {
   BeginCodexTransition,
   CodexCoordinatorTransaction,
   CodexCoordinatorTransactionController,
-  CodexHistoryState,
   CodexTransitionState,
-  CodexTransitionVersion,
   CommitExpectation,
   ReadCodexTransitionState,
   TransitionStateRead,
   TransitionStateUpdate,
-  UpdateCodexHistoryTransition,
 } from "./convergence-types";
 import { resolveCodexHomeDir } from "./home";
 import { readIntegrationRecord } from "./integration-record";
@@ -36,113 +28,38 @@ import {
   resolveEffectiveUserIdentity,
 } from "./user-identity";
 
-const COORDINATOR_SCHEMA_VERSION = 1;
-const DURABLE_HISTORY_STATUSES = new Set(["converged", "pending", "running", "blocked", "unknown"]);
-const DURABLE_HISTORY_REASONS = new Set([
-  "db-busy",
-  "permission",
-  "unreadable",
-  "schema",
-  "timeout",
-  "shutdown-cancelled",
-  "worker-died",
-  "overtaken",
-  "record-write-failed",
-]);
+const COORDINATOR_SCHEMA_VERSION = 2;
 
 const CREATE_TRANSITION_TABLE = `
   CREATE TABLE IF NOT EXISTS codex_transition_state (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     native_generation INTEGER NOT NULL CHECK (native_generation >= 0),
     current_tx_id TEXT,
-    history_status TEXT NOT NULL,
-    history_reason TEXT,
-    history_attempts INTEGER NOT NULL CHECK (history_attempts >= 0),
-    history_next_retry_at TEXT,
-    history_tx_id TEXT,
-    history_direction TEXT CHECK (history_direction IN ('apply', 'remove')),
-    history_authority_snapshot_id TEXT,
-    history_pending_rows INTEGER,
-    history_backup_entries INTEGER,
     updated_at TEXT NOT NULL,
-    CHECK (history_status IN ('converged', 'pending', 'running', 'blocked', 'unknown')),
-    CHECK (history_reason IS NULL OR history_reason IN
-      ('db-busy', 'permission', 'unreadable', 'schema', 'timeout',
-       'shutdown-cancelled', 'worker-died', 'overtaken', 'record-write-failed')),
-    CHECK (history_pending_rows IS NULL OR history_pending_rows >= 0),
-    CHECK (history_backup_entries IS NULL OR history_backup_entries >= 0),
     CHECK ((native_generation = 0 AND current_tx_id IS NULL)
-        OR (native_generation > 0 AND length(trim(current_tx_id)) > 0)),
-    CHECK ((native_generation = 0
-            AND history_tx_id IS NULL
-            AND history_direction IS NULL
-            AND history_authority_snapshot_id IS NULL)
-        OR (native_generation > 0
-            AND history_tx_id = current_tx_id
-            AND history_direction IS NOT NULL
-            AND length(trim(history_authority_snapshot_id)) > 0)),
-    CHECK (native_generation > 0 OR
-      (history_status = 'unknown'
-       AND history_reason IS NULL
-       AND history_attempts = 0
-       AND history_next_retry_at IS NULL
-       AND history_pending_rows IS NULL
-       AND history_backup_entries IS NULL))
+        OR (native_generation > 0 AND length(trim(current_tx_id)) > 0))
   )`;
 
 const INITIALIZE_TRANSITION_ROW = `
   INSERT OR IGNORE INTO codex_transition_state (
-    singleton, native_generation, current_tx_id,
-    history_status, history_reason, history_attempts,
-    history_next_retry_at, history_tx_id, history_direction,
-    history_authority_snapshot_id, history_pending_rows,
-    history_backup_entries, updated_at
-  ) VALUES (1, 0, NULL, 'unknown', NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, ?)`;
+    singleton, native_generation, current_tx_id, updated_at
+  ) VALUES (1, 0, NULL, ?)`;
 
 const SELECT_TRANSITION_ROW = `
-  SELECT native_generation, current_tx_id,
-         history_status, history_reason, history_attempts,
-         history_next_retry_at, history_tx_id, history_direction,
-         history_authority_snapshot_id, history_pending_rows,
-         history_backup_entries
+  SELECT native_generation, current_tx_id
     FROM codex_transition_state
    WHERE singleton = 1`;
 
 const BEGIN_TRANSITION = `
   UPDATE codex_transition_state
-     SET native_generation = ?, current_tx_id = ?,
-         history_status = 'pending', history_reason = NULL,
-         history_attempts = 0, history_next_retry_at = ?, history_tx_id = ?,
-         history_direction = ?, history_authority_snapshot_id = ?,
-         history_pending_rows = NULL, history_backup_entries = NULL,
-         updated_at = ?
+     SET native_generation = ?, current_tx_id = ?, updated_at = ?
    WHERE singleton = 1
      AND native_generation = ?
      AND current_tx_id IS ?`;
 
-const UPDATE_HISTORY = `
-  UPDATE codex_transition_state
-     SET history_status = ?, history_reason = ?, history_attempts = ?,
-         history_next_retry_at = ?, history_tx_id = ?,
-         history_pending_rows = ?, history_backup_entries = ?, updated_at = ?
-   WHERE singleton = 1
-     AND native_generation = ?
-     AND current_tx_id IS ?
-     AND history_tx_id IS ?
-     AND (native_generation = 0 OR history_direction IS NOT NULL)`;
-
 interface TransitionRow {
   native_generation: unknown;
   current_tx_id: unknown;
-  history_status: unknown;
-  history_reason: unknown;
-  history_attempts: unknown;
-  history_next_retry_at: unknown;
-  history_tx_id: unknown;
-  history_direction: unknown;
-  history_authority_snapshot_id: unknown;
-  history_pending_rows: unknown;
-  history_backup_entries: unknown;
 }
 
 const codexCoordinatorTransactionBrand: unique symbol = Symbol("CodexCoordinatorTransaction");
@@ -158,10 +75,10 @@ export class CodexCoordinatorTransactionError extends Error {
   }
 }
 
-class CodexCoordinatorLegacyAmbiguousError extends CodexCoordinatorTransactionError {
+class CodexCoordinatorStateAmbiguousError extends CodexCoordinatorTransactionError {
   constructor(message: string) {
     super(message);
-    this.name = "CodexCoordinatorLegacyAmbiguousError";
+    this.name = "CodexCoordinatorStateAmbiguousError";
   }
 }
 
@@ -185,58 +102,24 @@ function nullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
 }
 
-function nullableCount(value: unknown): value is number | null {
-  return value === null || isNonNegativeInteger(value);
-}
-
 function rowToState(row: TransitionRow | null): CodexTransitionState {
   if (!row) throw new CodexCoordinatorTransactionError("The coordinator transition row is missing.");
   if (!isNonNegativeInteger(row.native_generation)
-    || !nullableString(row.current_tx_id)
-    || typeof row.history_status !== "string"
-    || !DURABLE_HISTORY_STATUSES.has(row.history_status)
-    || !nullableString(row.history_reason)
-    || (row.history_reason !== null && !DURABLE_HISTORY_REASONS.has(row.history_reason))
-    || !isNonNegativeInteger(row.history_attempts)
-    || !nullableString(row.history_next_retry_at)
-    || !nullableString(row.history_tx_id)
-    || !nullableString(row.history_direction)
-    || !nullableString(row.history_authority_snapshot_id)
-    || !nullableCount(row.history_pending_rows)
-    || !nullableCount(row.history_backup_entries)) {
+    || !nullableString(row.current_tx_id)) {
     throw new CodexCoordinatorTransactionError("The coordinator transition row is malformed.");
   }
 
   const generation = row.native_generation;
-  if (generation === 0) {
-    if (row.current_tx_id !== null || row.history_tx_id !== null
-      || row.history_direction !== null || row.history_authority_snapshot_id !== null) {
-      throw new CodexCoordinatorTransactionError("The initial coordinator row contains transition metadata.");
-    }
-  } else if (!row.current_tx_id?.trim()
-    || row.history_tx_id !== row.current_tx_id
-    || (row.history_direction !== "apply" && row.history_direction !== "remove")
-    || !row.history_authority_snapshot_id?.trim()) {
-    throw new CodexCoordinatorTransactionError("The positive coordinator row lacks its complete history schedule.");
+  if (generation === 0 && row.current_tx_id !== null) {
+    throw new CodexCoordinatorTransactionError("The initial coordinator row contains transition metadata.");
+  }
+  if (generation > 0 && !row.current_tx_id?.trim()) {
+    throw new CodexCoordinatorTransactionError("The positive coordinator row lacks its transaction id.");
   }
 
-  const history: CodexHistoryState = {
-    status: row.history_status as Exclude<CodexHistoryState["status"], "not-evaluated">,
-    attempts: row.history_attempts,
-    nextRetryAt: row.history_next_retry_at,
-    txId: row.history_tx_id,
-    pendingRows: row.history_pending_rows,
-    backupEntries: row.history_backup_entries,
-    ...(row.history_reason === null ? {} : { reason: row.history_reason as NonNullable<CodexHistoryState["reason"]> }),
-  };
   return {
     nativeGeneration: generation,
     currentTxId: row.current_tx_id,
-    history,
-    historySchedule: generation === 0 ? null : {
-      direction: row.history_direction as "apply" | "remove",
-      authoritySnapshotId: row.history_authority_snapshot_id as string,
-    },
   };
 }
 
@@ -245,35 +128,20 @@ function readState(database: Database): CodexTransitionState {
   return rowToState(row);
 }
 
-function validateHistoryWrite(expected: CodexTransitionVersion, history: CodexHistoryState): void {
-  if (history.status === "not-evaluated" || !DURABLE_HISTORY_STATUSES.has(history.status)) {
-    throw new CodexCoordinatorTransactionError("Ephemeral history state cannot be persisted.");
-  }
-  if (!isNonNegativeInteger(history.attempts)
-    || !nullableCount(history.pendingRows)
-    || !nullableCount(history.backupEntries)
-    || (history.reason !== undefined && !DURABLE_HISTORY_REASONS.has(history.reason))) {
-    throw new CodexCoordinatorTransactionError("The history update is malformed.");
-  }
-  if (history.txId !== expected.currentTxId) {
-    throw new CodexCoordinatorTransactionError("The history update does not belong to the expected transition.");
-  }
-}
-
 /**
  * The missing-row incident proved that absence is not authority: installing
- * `{0,null}` over a legacy JSON pair or routed native bytes loses the only
- * evidence that an interrupted transition still needs salvage.
+ * `{0,null}` over routed native bytes loses the only evidence that an
+ * interrupted current transition still needs recovery.
  */
 function assertInitialStateCanBeCreated(): void {
   const integration = readIntegrationRecord();
   if (integration.kind === "invalid") {
-    throw new CodexCoordinatorLegacyAmbiguousError(
-      "A missing coordinator row cannot be initialized over legacy or invalid Codex integration state.",
+    throw new CodexCoordinatorStateAmbiguousError(
+      "A missing coordinator row cannot be initialized over invalid Codex integration state.",
     );
   }
   if (classifyNativeRoutedResidue().kind !== "clean") {
-    throw new CodexCoordinatorLegacyAmbiguousError(
+    throw new CodexCoordinatorStateAmbiguousError(
       "A missing coordinator row cannot be initialized while native Codex routing residue exists.",
     );
   }
@@ -285,14 +153,14 @@ function initialize(database: Database, databaseWasAbsent: boolean): void {
     throw new CodexCoordinatorTransactionError("The coordinator database schema version is unsupported.");
   }
   if (!databaseWasAbsent && version === 0) {
-    throw new CodexCoordinatorLegacyAmbiguousError(
-      "An existing unversioned coordinator database cannot be adopted automatically.",
+    throw new CodexCoordinatorStateAmbiguousError(
+      "An existing unversioned coordinator database is unsupported.",
     );
   }
   database.exec(CREATE_TRANSITION_TABLE);
   const existing = database.query<TransitionRow, []>(SELECT_TRANSITION_ROW).get();
   if (!existing && !databaseWasAbsent) {
-    throw new CodexCoordinatorLegacyAmbiguousError(
+    throw new CodexCoordinatorStateAmbiguousError(
       "The existing coordinator database has no authoritative transition row.",
     );
   }
@@ -318,19 +186,13 @@ function createCapability(
       consumed = true;
       if (!isNonNegativeInteger(expected.nativeGeneration)
         || (expected.currentTxId !== null && !expected.currentTxId.trim())
-        || !next.txId.trim()
-        || (next.direction !== "apply" && next.direction !== "remove")
-        || !next.authoritySnapshotId.trim()) {
+        || !next.txId.trim()) {
         throw new CodexCoordinatorTransactionError("The transition update is malformed.");
       }
 
       const result = database.query(BEGIN_TRANSITION).run(
         expected.nativeGeneration + 1,
         next.txId,
-        next.nextRetryAt,
-        next.txId,
-        next.direction,
-        next.authoritySnapshotId,
         new Date().toISOString(),
         expected.nativeGeneration,
         expected.currentTxId,
@@ -345,7 +207,7 @@ function createCapability(
   };
 }
 
-export function openCodexCoordinatorTransaction(finalDatabasePath: string): CodexCoordinatorTransactionController {
+export function beginCodexCoordinatorTransaction(finalDatabasePath: string): CodexCoordinatorTransactionController {
   let database: Database | undefined;
   let transactionOpen = false;
   let closed = false;
@@ -502,16 +364,30 @@ function mapUnavailable(
 }
 
 function mapReadError(error: unknown): TransitionStateRead {
-  if (error instanceof CodexCoordinatorLegacyAmbiguousError) {
-    return { kind: "legacy-ambiguous", message: error.message };
+  if (error instanceof CodexCoordinatorStateAmbiguousError) {
+    return { kind: "state-ambiguous", message: error.message };
   }
   return mapUnavailable(error);
+}
+
+function preflightMissingCoordinator(finalDatabasePath: string): void {
+  try {
+    lstatSync(finalDatabasePath);
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") throw error;
+    // Refuse before SQLite creates an empty file. `initialize()` repeats this
+    // check under BEGIN IMMEDIATE so a concurrent native write cannot be
+    // adopted between this side-effect-free preflight and acquisition.
+    assertInitialStateCanBeCreated();
+  }
 }
 
 export const readCodexTransitionState: ReadCodexTransitionState = () => {
   let transaction: CodexCoordinatorTransactionController | undefined;
   try {
-    transaction = openCodexCoordinatorTransaction(currentCoordinatorDatabasePath());
+    const path = currentCoordinatorDatabasePath();
+    preflightMissingCoordinator(path);
+    transaction = beginCodexCoordinatorTransaction(path);
     // Initialization and validation happen while N is held. Commit that setup
     // before reopening read-only; the controller never leaks its Database.
     transaction.commit();
@@ -543,7 +419,7 @@ function readCommittedState(): TransitionStateRead {
 export const beginCodexTransition: BeginCodexTransition = (expected, next) => {
   let transaction: CodexCoordinatorTransactionController | undefined;
   try {
-    transaction = openCodexCoordinatorTransaction(currentCoordinatorDatabasePath());
+    transaction = beginCodexCoordinatorTransaction(currentCoordinatorDatabasePath());
     const result = transaction.capability.beginTransition(expected, next);
     transaction.commit();
     return result;
@@ -553,52 +429,5 @@ export const beginCodexTransition: BeginCodexTransition = (expected, next) => {
     return { kind: "unavailable", reason: unavailable.reason };
   } finally {
     transaction?.close();
-  }
-};
-
-export const updateCodexHistoryTransition: UpdateCodexHistoryTransition = (expected, history) => {
-  let database: Database | undefined;
-  let transactionOpen = false;
-  try {
-    validateHistoryWrite(expected, history);
-    // `{ create: false }` ALONE is SQLITE_MISUSE on Bun 1.3.14: the flags must
-    // name a read mode. Without `readwrite` every history update failed before
-    // reaching its conditional UPDATE and returned `unavailable/database`, so no
-    // terminal history state could ever be recorded — and the four tests here
-    // still passed, because none of them called this function.
-    database = new Database(currentCoordinatorDatabasePath(), { readwrite: true, create: false });
-    database.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
-    transactionOpen = true;
-    const current = readState(database);
-    if (current.nativeGeneration > 0 && current.historySchedule === null) {
-      throw new CodexCoordinatorTransactionError("A positive transition cannot lose its direction.");
-    }
-    const result = database.query(UPDATE_HISTORY).run(
-      history.status,
-      history.reason ?? null,
-      history.attempts,
-      history.nextRetryAt,
-      history.txId,
-      history.pendingRows,
-      history.backupEntries,
-      new Date().toISOString(),
-      expected.nativeGeneration,
-      expected.currentTxId,
-      expected.currentTxId,
-    );
-    const state = readState(database);
-    database.exec("COMMIT");
-    transactionOpen = false;
-    return result.changes === 1
-      ? { kind: "updated", state }
-      : { kind: "conflict", current: state };
-  } catch (error) {
-    if (transactionOpen) {
-      try { database?.exec("ROLLBACK"); } catch { /* close releases N */ }
-    }
-    const unavailable = mapUnavailable(error);
-    return { kind: "unavailable", reason: unavailable.reason };
-  } finally {
-    try { database?.close(); } catch { /* operation already completed */ }
   }
 };

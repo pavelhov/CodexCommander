@@ -1,5 +1,5 @@
 /**
- * `ocx provider` subcommand — non-interactive provider management.
+ * `ccx provider` subcommand — non-interactive provider management.
  *
  * Subcommands:
  *   list          List configured and available registry providers
@@ -12,7 +12,7 @@ import { apiKeyTransportConfigError, hasOwnProvider, isValidProviderName, loadCo
 import { hasHelpFlag } from "./help";
 import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
-import type { OcxProviderConfig } from "../types";
+import type { CodexCommanderProviderConfig } from "../types";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { syncModelsToCodex } from "../codex/sync";
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
@@ -76,7 +76,7 @@ function validateAndSave(config: ReturnType<typeof loadConfig>): void {
 
 function handleList(args: string[]): void {
   const wantsJson = consumeFlag(args, "--json");
-  rejectUnknownArgs(args, "Usage: ocx provider list [--json]");
+  rejectUnknownArgs(args, "Usage: ccx provider list [--json]");
 
   const config = loadConfig();
   const configured = Object.keys(config.providers);
@@ -117,7 +117,7 @@ function handleList(args: string[]): void {
       const auth = entry.authKind === "forward" ? "chatgpt-login" : entry.authKind;
       console.log(`  ${entry.id.padEnd(24)} ${entry.label}  (${auth})`);
     }
-    console.log(`\nAdd with: ocx provider add <name> [--api-key <key>]`);
+    console.log(`\nAdd with: ccx provider add <name> [--api-key <key>]`);
   }
 }
 
@@ -125,7 +125,7 @@ function handleList(args: string[]): void {
 // provider add
 // ---------------------------------------------------------------------------
 
-const ADD_USAGE = "Usage: ocx provider add <name> [--adapter <adapter>] [--base-url <url>] [--api-key <key>] [--api-key-transport <x-api-key|bearer>] [--default-model <model>] [--allow-private-network] [--set-default] [--force] [--json] [--sync]";
+const ADD_USAGE = "Usage: ccx provider add <name> [--adapter <adapter>] [--base-url <url>] [--api-key <key>] [--api-key-transport <x-api-key|bearer>] [--default-model <model>] [--allow-private-network] [--set-default] [--force] [--json] [--sync]";
 
 async function handleAdd(args: string[]): Promise<void> {
   const name = args[0];
@@ -165,7 +165,7 @@ async function handleAdd(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  let provConfig: OcxProviderConfig;
+  let provConfig: CodexCommanderProviderConfig;
   const registryEntry = getProviderRegistryEntry(name);
 
   if (registryEntry) {
@@ -174,7 +174,7 @@ async function handleAdd(args: string[]): Promise<void> {
       if (registryEntry.authKind === "forward") {
         console.warn(`Warning: provider "${name}" uses ChatGPT login (forward auth); --api-key is ignored.`);
       } else if (registryEntry.authKind === "oauth") {
-        console.warn(`Warning: provider "${name}" uses OAuth auth; --api-key is ignored. Run: ocx login ${name}`);
+        console.warn(`Warning: provider "${name}" uses OAuth auth; --api-key is ignored. Run: ccx login ${name}`);
       } else {
         provConfig.apiKey = apiKey;
       }
@@ -185,7 +185,7 @@ async function handleAdd(args: string[]): Promise<void> {
   } else {
     if (!adapter || !baseUrl) {
       console.error(`Provider "${name}" is not in the registry. --adapter and --base-url are required.`);
-      console.error("Usage: ocx provider add <name> --adapter <adapter> --base-url <url> [--api-key <key>]");
+      console.error("Usage: ccx provider add <name> --adapter <adapter> --base-url <url> [--api-key <key>]");
       process.exit(1);
     }
     provConfig = {
@@ -248,17 +248,17 @@ async function handleAdd(args: string[]): Promise<void> {
   console.log(`✅ Provider "${name}"${registryLabel} added.`);
   if (setDefault) console.log(`   Set as default provider.`);
   if (registryEntry?.authKind === "oauth") {
-    console.log(`   Authenticate with: ocx login ${name}`);
+    console.log(`   Authenticate with: ccx login ${name}`);
   }
   if (registryEntry?.authKind === "key" && !apiKey) {
     const envKey = `${name.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY`;
-    console.log(`   Set API key with: ocx provider add ${name} --api-key <key> --force`);
+    console.log(`   Set API key with: ccx provider add ${name} --api-key <key> --force`);
     console.log(`   Or set env var: ${envKey}`);
   }
   if (wantsSync && !codexSyncSkipped) {
     console.log(`   Models synced to Codex.`);
   } else {
-    console.log(`   Apply to Codex: ocx sync`);
+    console.log(`   Apply to Codex: ccx sync`);
   }
 }
 
@@ -271,10 +271,10 @@ function handleRemove(args: string[]): void {
   const wantsJson = consumeFlag(restArgs, "--json");
   const name = restArgs[0];
   if (!name || name.startsWith("-")) {
-    console.error("Usage: ocx provider remove <name> [--json]");
+    console.error("Usage: ccx provider remove <name> [--json]");
     process.exit(1);
   }
-  rejectUnknownArgs(restArgs.slice(1), "Usage: ocx provider remove <name> [--json]");
+  rejectUnknownArgs(restArgs.slice(1), "Usage: ccx provider remove <name> [--json]");
 
   const config = loadConfig();
   if (!hasOwnProvider(config.providers, name)) {
@@ -283,7 +283,7 @@ function handleRemove(args: string[]): void {
   }
 
   if (name === config.defaultProvider) {
-    console.error(`Cannot remove "${name}" — it is the default provider. Change the default first: ocx provider set-default <other>`);
+    console.error(`Cannot remove "${name}" — it is the default provider. Change the default first: ccx provider set-default <other>`);
     process.exit(1);
   }
 
@@ -328,10 +328,10 @@ function handleShow(args: string[]): void {
   const wantsJson = consumeFlag(restArgs, "--json");
   const name = restArgs[0];
   if (!name || name.startsWith("-")) {
-    console.error("Usage: ocx provider show <name> [--json]");
+    console.error("Usage: ccx provider show <name> [--json]");
     process.exit(1);
   }
-  rejectUnknownArgs(restArgs.slice(1), "Usage: ocx provider show <name> [--json]");
+  rejectUnknownArgs(restArgs.slice(1), "Usage: ccx provider show <name> [--json]");
 
   const config = loadConfig();
   if (!hasOwnProvider(config.providers, name)) {
@@ -369,14 +369,14 @@ function handleSetDefault(args: string[]): void {
   const wantsJson = consumeFlag(restArgs, "--json");
   const name = restArgs[0];
   if (!name || name.startsWith("-")) {
-    console.error("Usage: ocx provider set-default <name> [--json]");
+    console.error("Usage: ccx provider set-default <name> [--json]");
     process.exit(1);
   }
-  rejectUnknownArgs(restArgs.slice(1), "Usage: ocx provider set-default <name> [--json]");
+  rejectUnknownArgs(restArgs.slice(1), "Usage: ccx provider set-default <name> [--json]");
 
   const config = loadConfig();
   if (!hasOwnProvider(config.providers, name)) {
-    console.error(`Provider "${name}" is not configured. Add it first: ocx provider add ${name}`);
+    console.error(`Provider "${name}" is not configured. Add it first: ccx provider add ${name}`);
     process.exit(1);
   }
 
@@ -405,7 +405,7 @@ function handleSetDefault(args: string[]): void {
 // Router (F2 fix: handle help flags internally, like service/codex-shim)
 // ---------------------------------------------------------------------------
 
-const PROVIDER_USAGE = `Usage: ocx provider <subcommand>
+const PROVIDER_USAGE = `Usage: ccx provider <subcommand>
 
 Subcommands:
   list                  List configured and available providers
@@ -421,12 +421,12 @@ Subcommands:
   account-mode <mode>   Set OpenAI Codex pool/direct mode
 
 Examples:
-  ocx provider list
-  ocx provider add anthropic --api-key sk-ant-...
-  ocx provider add my-ollama --adapter openai-chat --base-url http://localhost:11434/v1
-  ocx provider show anthropic --json
-  ocx provider set-default anthropic
-  ocx provider remove my-ollama`;
+  ccx provider list
+  ccx provider add anthropic --api-key sk-ant-...
+  ccx provider add my-ollama --adapter openai-chat --base-url http://localhost:11434/v1
+  ccx provider show anthropic --json
+  ccx provider set-default anthropic
+  ccx provider remove my-ollama`;
 
 export async function handleProviderCommand(args: string[]): Promise<void> {
   const sub = args[0];

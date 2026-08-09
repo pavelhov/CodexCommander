@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { handleResponses } from "../src/server/responses";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const config = {
   port: 0,
+  multiAgentGuidanceEnabled: true,
   defaultProvider: "claude-se",
   providers: {
     "claude-se": {
@@ -12,7 +13,7 @@ const config = {
       apiKey: "sk-test",
     },
   },
-} as unknown as OcxConfig;
+} as unknown as CodexCommanderConfig;
 
 /** Build an Anthropic SSE response from raw frames. */
 function anthropicSse(body: string): Response {
@@ -90,7 +91,7 @@ describe("server terminal guard integration", () => {
           retryOn429: { attempts: 1, intervalMs: 120, respectRetryAfter: false },
         },
       },
-    } as unknown as OcxConfig;
+    } as unknown as CodexCommanderConfig;
     let sends = 0;
     const requestBodies: string[] = [];
     globalThis.fetch = (async (_input, init) => {
@@ -142,7 +143,7 @@ describe("server terminal guard integration", () => {
           retryOn429: { attempts: 1, intervalMs: 120, respectRetryAfter: false },
         },
       },
-    } as unknown as OcxConfig;
+    } as unknown as CodexCommanderConfig;
     let sends = 0;
     globalThis.fetch = (async (_input, init) => {
       sends += 1;
@@ -183,7 +184,7 @@ describe("server terminal guard integration", () => {
           retryOn429: { attempts: 1, intervalMs: 120, respectRetryAfter: false },
         },
       },
-    } as unknown as OcxConfig;
+    } as unknown as CodexCommanderConfig;
     let sends = 0;
     globalThis.fetch = (async () => {
       sends += 1;
@@ -233,7 +234,7 @@ describe("server terminal guard integration", () => {
           retryOn429: { attempts: 3, intervalMs: 30_000, respectRetryAfter: false },
         },
       },
-    } as unknown as OcxConfig;
+    } as unknown as CodexCommanderConfig;
     let sends = 0;
     globalThis.fetch = (async () => {
       sends += 1;
@@ -282,7 +283,7 @@ describe("server terminal guard integration", () => {
           retryOn429: { attempts: 1, intervalMs: 1_500, respectRetryAfter: false },
         },
       },
-    } as unknown as OcxConfig;
+    } as unknown as CodexCommanderConfig;
     let sends = 0;
     globalThis.fetch = (async () => {
       sends += 1;

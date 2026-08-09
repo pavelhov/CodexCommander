@@ -2,12 +2,13 @@ import { currentExternalCodexModelProvider, injectCodexConfig } from "./inject";
 import { printProjectCodexConfigWarnings, groupProjectCodexConfigWarningsByPath, type ProjectCodexConfigWarning } from "./project-config-warnings";
 import { refreshCodexModelCatalog } from "./refresh";
 import { applyProxyEnv, loadConfig } from "../config";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import { collectOrcaCodexHomeDiagnostic } from "./home";
 import { summarizeComboCatalogOmissions, type ComboCatalogOmission } from "./catalog/aggregation";
 import { shouldSyncCodexOnStart } from "./desired-state";
 import { admitCodexWrite, type CodexAdmission } from "./admission";
 import { hasRoutedCapableProviders, type CatalogQuality } from "./catalog/sync";
+import { readCodexTransitionState } from "./transition-state";
 
 export interface CodexSyncResult {
   /** `skipped` is policy truth, never evidence that Codex was written. */
@@ -23,8 +24,8 @@ export interface CodexSyncResult {
   cacheSynced: boolean;
   /**
    * Where the routed rows in the active Codex catalog came from: `live` (gathered
-   * from providers), `retained` (rehydrated from the OpenCodex-owned last-known-good
-   * snapshot), or `native-only` (no OpenCodex-routed rows). `native-only` while
+   * from providers), `retained` (rehydrated from the CodexCommander-owned last-known-good
+   * snapshot), or `native-only` (no CodexCommander-routed rows). `native-only` while
    * routed providers are configured carries an actionable `warning`.
    */
   catalogQuality: CatalogQuality;
@@ -45,6 +46,11 @@ interface CodexSyncDeps {
   injectCodexConfig: typeof injectCodexConfig;
   /** The sync entry only needs this admission's service-home verdict. */
   admitCodexWrite?: () => CodexSyncAdmission;
+  /**
+   * Production prepares the current coordinator before catalog publication.
+   * Optional so pure unit seams never resolve or create a real user-home DB.
+   */
+  prepareCodexTransitionState: typeof readCodexTransitionState;
   currentExternalCodexModelProvider?: typeof currentExternalCodexModelProvider;
   collectCodexHomeDiagnostic?: typeof collectOrcaCodexHomeDiagnostic;
 }
@@ -52,7 +58,22 @@ interface CodexSyncDeps {
 const defaultDeps: CodexSyncDeps = {
   refreshCodexModelCatalog,
   injectCodexConfig,
+  prepareCodexTransitionState: readCodexTransitionState,
 };
+
+function coordinatorPreparationFailure(
+  result: Exclude<ReturnType<typeof readCodexTransitionState>, { kind: "ready" }>,
+): string {
+  if (result.kind === "state-ambiguous") {
+    return `Codex sync refused before catalog publication: ${result.message}`;
+  }
+  const detail = result.reason === "busy"
+    ? "the transition coordinator is busy; retry the sync"
+    : result.reason === "unsafe-path"
+      ? "the transition coordinator path is unsafe"
+      : "the transition coordinator is unavailable";
+  return `Codex sync refused before catalog publication because ${detail}.`;
+}
 
 function reportCodexHomeTarget(
   log: Pick<Console, "log" | "error"> | null,
@@ -69,7 +90,7 @@ function reportCodexHomeTarget(
 
 export async function syncModelsToCodex(
   port?: number,
-  config: OcxConfig = loadConfig(),
+  config: CodexCommanderConfig = loadConfig(),
   log: Pick<Console, "log" | "error"> | null = console,
   deps: CodexSyncDeps = defaultDeps,
 ): Promise<CodexSyncResult> {
@@ -139,7 +160,30 @@ export async function syncModelsToCodex(
     };
   }
 
-  applyProxyEnv(config); // `ocx ensure`/`ocx sync` fetch provider models outside the server process
+  /*
+   * A first sync must establish the current coordinator while native Codex
+   * state is still clean. Catalog refresh can write routed rows, and creating
+   * the coordinator afterwards would correctly look like an attempted adoption
+   * of uncoordinated residue. Refuse before applyProxyEnv or any catalog/cache
+   * write when the current coordinator cannot be initialized and validated.
+   */
+  const prepared = deps.prepareCodexTransitionState();
+  if (prepared.kind !== "ready") {
+    return {
+      status: "refused",
+      ok: false,
+      added: 0,
+      catalogPath: null,
+      catalogExists: false,
+      catalogWritten: false,
+      cacheSynced: false,
+      catalogQuality: "native-only",
+      rehydrated: 0,
+      message: coordinatorPreparationFailure(prepared),
+    };
+  }
+
+  applyProxyEnv(config); // `ccx ensure`/`ccx sync` fetch provider models outside the server process
   let added = 0;
   let catalogPath: string | null = null;
   let catalogPathForInjection: string | null | undefined;
@@ -182,7 +226,7 @@ export async function syncModelsToCodex(
     ) {
       const nativeOnly =
         "catalog sync produced no routed models (Codex left native-only) while routed providers are configured; "
-        + "provider discovery returned nothing. Retry with 'ocx sync' or check provider connectivity.";
+        + "provider discovery returned nothing. Retry with 'ccx sync' or check provider connectivity.";
       warning = warning ? `${warning} ${nativeOnly}` : nativeOnly;
       log?.error(nativeOnly);
     }

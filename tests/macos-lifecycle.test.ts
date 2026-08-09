@@ -9,7 +9,7 @@ import {
 } from "../src/codex/catalog-apply";
 import type { ProxyLifecycleResult } from "../src/cli/proxy-lifecycle";
 
-function success(message = "OpenCodex is running."): ProxyLifecycleResult {
+function success(message = "CodexCommander is running."): ProxyLifecycleResult {
   return {
     schemaVersion: 1,
     action: "status",
@@ -38,7 +38,7 @@ describe("macOS lifecycle JSON frame", () => {
 
   test("a live proxy with failed catalog convergence stays running in the bounded failure frame", () => {
     const result: ProxyLifecycleResult = {
-      ...success("OpenCodex is running, but its Codex model catalog did not converge."),
+      ...success("CodexCommander is running, but its Codex model catalog did not converge."),
       action: "ensure",
       ok: false,
       state: "running",

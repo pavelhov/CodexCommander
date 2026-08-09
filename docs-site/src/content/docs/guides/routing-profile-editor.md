@@ -1,9 +1,9 @@
 ---
 title: Routing Profile Editor
-description: Create, edit, validate, dry-run, and remove routing policy profiles from the OpenCodex dashboard.
+description: Create, edit, validate, dry-run, and remove routing policy profiles from the CodexCommander dashboard.
 ---
 
-The **Routing** page in the OpenCodex dashboard can manage `config.routingProfiles` without editing `config.json` by hand.
+The **Routing** page in the CodexCommander dashboard can manage `config.routingProfiles` without editing `config.json` by hand.
 
 ## Create a profile
 
@@ -50,7 +50,7 @@ Example save payload:
   "id": "fast",
   "mode": "create",
   "profile": {
-    "alias": "ocx/fast",
+    "alias": "ccx/fast",
     "candidates": [
       { "provider": "anthropic", "model": "claude-sonnet-5" },
       { "provider": "openai", "model": "gpt-5.6" }

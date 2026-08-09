@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { proxyStillLiveAfterStop } from "../src/service";
 
 /**
- * #764: `ocx service stop` reported success while the proxy kept running, and native Codex was
+ * #764: `ccx service stop` reported success while the proxy kept running, and native Codex was
  * restored on top of it.
  *
  * The subtlety is which failure mode matters. PR #780 waited only when `schtasks /end` returned

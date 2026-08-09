@@ -9,6 +9,7 @@ import {
   effortClampAppliesToRuntime,
   loadLastEffortClamp,
   loadPersistedCodexRuntime,
+  parsePersistedCodexRuntime,
   parseCodexVersionOutput,
   peekCodexRuntimeProcessCache,
   persistCodexRuntime,
@@ -30,7 +31,7 @@ import {
 } from "../src/codex/catalog/bundled";
 
 function tempConfigDir(): string {
-  return mkdtempSync(join(tmpdir(), "ocx-runtime-"));
+  return mkdtempSync(join(tmpdir(), "ccx-runtime-"));
 }
 
 function persistedRuntimeBytes(
@@ -69,6 +70,59 @@ describe("parseCodexVersionOutput / compareCodexVersions", () => {
   });
 });
 
+describe("Codex runtime persisted-state schema", () => {
+  test("accepts only a complete exact current runtime payload", () => {
+    const current = {
+      version: 1,
+      command: "/usr/local/bin/codex",
+      source: "configured",
+      selectedVersion: null,
+      updatedAt: "2026-08-04T00:00:00.000Z",
+    };
+
+    expect(parsePersistedCodexRuntime(JSON.stringify(current))).toEqual(current);
+    expect(parsePersistedCodexRuntime(JSON.stringify(
+      (({ selectedVersion: _, ...partial }) => partial)(current),
+    ))).toBeNull();
+    expect(parsePersistedCodexRuntime(JSON.stringify({ ...current, unknownField: true }))).toBeNull();
+    expect(parsePersistedCodexRuntime(JSON.stringify({ ...current, selectedVersion: "" }))).toBeNull();
+    expect(parsePersistedCodexRuntime(JSON.stringify({ ...current, source: "unknown" }))).toBeNull();
+  });
+
+  test("rejects incomplete and inexact clamp payloads", () => {
+    const configDir = tempConfigDir();
+    const path = join(configDir, "codex-runtime-clamp.json");
+    const current = {
+      version: 1,
+      updatedAt: "2026-08-04T00:00:00.000Z",
+      runtimePath: "/usr/local/bin/codex",
+      runtimeVersion: null,
+      removedEfforts: ["ultra"],
+      affectedModels: [],
+    };
+
+    writeFileSync(path, JSON.stringify(current));
+    expect(loadLastEffortClamp({ configDir })).toMatchObject({
+      runtimePath: current.runtimePath,
+      runtimeVersion: null,
+      removedEfforts: ["ultra"],
+      affectedModels: [],
+    });
+
+    const invalid = [
+      (({ runtimeVersion: _, ...partial }) => partial)(current),
+      (({ affectedModels: _, ...partial }) => partial)(current),
+      { ...current, unknownField: true },
+      { ...current, removedEfforts: [] },
+      { ...current, affectedModels: [42] },
+    ];
+    for (const payload of invalid) {
+      writeFileSync(path, JSON.stringify(payload));
+      expect(loadLastEffortClamp({ configDir })).toBeNull();
+    }
+  });
+});
+
 describe("observe-only Codex catalog gather caches", () => {
   test("cold gather returns typed misses without spawning or probing an executable", () => {
     const home = tempConfigDir();
@@ -93,10 +147,10 @@ describe("observe-only Codex catalog gather caches", () => {
       chmodSync(launcher, 0o755);
     }
 
-    const previousHome = process.env.OPENCODEX_HOME;
+    const previousHome = process.env.CODEXCOMMANDER_HOME;
     const previousCli = process.env.CODEX_CLI_PATH;
     const previousPath = process.env.PATH;
-    process.env.OPENCODEX_HOME = home;
+    process.env.CODEXCOMMANDER_HOME = home;
     process.env.CODEX_CLI_PATH = launcher;
     process.env.PATH = "";
     resetCodexRuntimeResolveCacheForTests();
@@ -117,8 +171,8 @@ describe("observe-only Codex catalog gather caches", () => {
       });
       expect(existsSync(spawnLog) ? readFileSync(spawnLog, "utf8").trim().split("\n").length : 0).toBe(0);
     } finally {
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previousHome;
       if (previousCli === undefined) delete process.env.CODEX_CLI_PATH;
       else process.env.CODEX_CLI_PATH = previousCli;
       if (previousPath === undefined) delete process.env.PATH;
@@ -347,9 +401,13 @@ describe("resolveCodexRuntime", () => {
       source: "configured",
     }, { configDir });
     writeFileSync(join(configDir, "codex-shim.json"), JSON.stringify({
-      backupPath: "C:\\shim\\codex.exe",
-      originalPath: "C:\\shim\\codex.exe",
-      wrapperPath: "C:\\shim\\wrapper.cmd",
+      version: 1,
+      platform: "win32",
+      wrappers: [{
+        backupPath: "C:\\shim\\codex.exe",
+        originalPath: "C:\\shim\\codex.exe",
+        wrapperPath: "C:\\shim\\wrapper.cmd",
+      }],
     }));
     const execFileSync: RuntimeExecFile = (file) => {
       const text = String(file);
@@ -371,7 +429,13 @@ describe("resolveCodexRuntime", () => {
   test("stale shim path is rejected", () => {
     const configDir = tempConfigDir();
     writeFileSync(join(configDir, "codex-shim.json"), JSON.stringify({
-      backupPath: "C:\\gone\\codex.exe",
+      version: 1,
+      platform: "win32",
+      wrappers: [{
+        backupPath: "C:\\gone\\codex.exe",
+        originalPath: "C:\\gone\\codex.exe",
+        wrapperPath: "C:\\gone\\wrapper.cmd",
+      }],
     }));
     const result = resolveCodexRuntime({
       configDir,
@@ -497,7 +561,7 @@ describe("resolveCodexRuntime", () => {
 
   test("creates missing config directory on first runtime/clamp persist", () => {
     const parent = tempConfigDir();
-    const configDir = join(parent, "nested", "opencodex-home");
+    const configDir = join(parent, "nested", "codexcommander-home");
     expect(existsSync(configDir)).toBe(false);
     persistCodexRuntime({
       command: "C:\\keep\\codex.exe",
@@ -586,10 +650,10 @@ describe("resolveCodexRuntime", () => {
       return readFileSync(probeLog, "utf8").split("\n").filter(line => line.trim().length > 0).length;
     };
 
-    const previousHome = process.env.OPENCODEX_HOME;
+    const previousHome = process.env.CODEXCOMMANDER_HOME;
     const previousCli = process.env.CODEX_CLI_PATH;
     const previousPath = process.env.PATH;
-    process.env.OPENCODEX_HOME = home;
+    process.env.CODEXCOMMANDER_HOME = home;
     process.env.CODEX_CLI_PATH = bin;
     process.env.PATH = "";
     resetCodexRuntimeResolveCacheForTests();
@@ -610,14 +674,14 @@ describe("resolveCodexRuntime", () => {
       // execFileSync, which opts resolveCacheKey() out of memoizing, and (2) an unconditional
       // persist whose `updatedAt` both clears the memo and rekeys it. Either one made every
       // catalog read spawn `codex --version` (~1s), pushing /api/claude-code past the 3s
-      // budget ocx claude allows and silently skipping the gateway-model cache refresh.
+      // budget ccx claude allows and silently skipping the gateway-model cache refresh.
       for (let i = 0; i < 4; i++) {
         expect(loadBundledCodexCatalog()?.models?.[0]?.slug).toBe("gpt-5.5");
       }
       expect(countProbes()).toBe(warm);
     } finally {
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previousHome;
       if (previousCli === undefined) delete process.env.CODEX_CLI_PATH;
       else process.env.CODEX_CLI_PATH = previousCli;
       if (previousPath === undefined) delete process.env.PATH;
@@ -652,18 +716,19 @@ describe("resolveCodexRuntime", () => {
     expect(loadPersistedCodexRuntime({ configDir })?.updatedAt).toBe(firstStamp);
   });
 
-  test("treats missing persisted and resolved versions as the same selection", () => {
+  test("treats persisted and resolved null versions as the same selection", () => {
     const configDir = tempConfigDir();
     const statePath = join(configDir, "codex-runtime.json");
     writeFileSync(statePath, JSON.stringify({
       version: 1,
       command: "codex",
       source: "environment",
+      selectedVersion: null,
       updatedAt: "2026-01-01T00:00:00.000Z",
     }));
 
-    const previousHome = process.env.OPENCODEX_HOME;
-    process.env.OPENCODEX_HOME = configDir;
+    const previousHome = process.env.CODEXCOMMANDER_HOME;
+    process.env.CODEXCOMMANDER_HOME = configDir;
     resetCodexRuntimeResolveCacheForTests();
     const deps = { env: { PATH: "" }, discoverAlternatives: false };
 
@@ -680,15 +745,15 @@ describe("resolveCodexRuntime", () => {
 
       expect(readFileSync(statePath, "utf8")).toBe(before);
     } finally {
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previousHome;
       resetCodexRuntimeResolveCacheForTests();
     }
   });
 
   test("catalog clamp clears diagnostics inside deps.configDir when probe fails", async () => {
     const { clampCatalogModelsToCodexSupport } = await import("../src/codex/catalog/effort");
-    const nested = join(tempConfigDir(), "nested", "opencodex-home");
+    const nested = join(tempConfigDir(), "nested", "codexcommander-home");
     const configured = join(nested, "codex.exe");
     persistEffortClamp({
       runtimePath: configured,
@@ -765,10 +830,10 @@ describe("resolveCodexRuntime", () => {
     writeLauncher(oldBin, "0.133.0", ["low", "medium", "high"]);
     writeLauncher(newBin, "0.145.0-alpha.30", ["low", "medium", "high", "max", "ultra"]);
 
-    const previousHome = process.env.OPENCODEX_HOME;
+    const previousHome = process.env.CODEXCOMMANDER_HOME;
     const previousCli = process.env.CODEX_CLI_PATH;
     const previousPath = process.env.PATH;
-    process.env.OPENCODEX_HOME = home;
+    process.env.CODEXCOMMANDER_HOME = home;
     process.env.PATH = "";
     resetCodexRuntimeResolveCacheForTests();
     resetBundledCatalogCacheForTests();
@@ -800,8 +865,8 @@ describe("resolveCodexRuntime", () => {
         level => (level as { effort?: string }).effort === "max",
       )).toBe(true);
     } finally {
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previousHome;
       if (previousCli === undefined) delete process.env.CODEX_CLI_PATH;
       else process.env.CODEX_CLI_PATH = previousCli;
       if (previousPath === undefined) delete process.env.PATH;

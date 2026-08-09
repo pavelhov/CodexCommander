@@ -209,7 +209,7 @@ export async function loginKimi(
     if (importLocal === "only") {
       throw new Error(
         local && !hasVerifiableIdentity
-          ? "Kimi Code CLI token has no verifiable account identity and cannot be linked read-only. Run `ocx login kimi` to use an independent device login."
+          ? "Kimi Code CLI token has no verifiable account identity and cannot be linked read-only. Run `ccx login kimi` to use an independent device login."
           : local
           ? "Kimi Code CLI token is stale. Run `kimi` once to refresh its login, then retry."
           : "No Kimi Code CLI token found. Run `kimi login`, then retry.",

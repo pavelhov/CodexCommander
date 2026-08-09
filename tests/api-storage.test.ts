@@ -5,17 +5,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 let testDir = "";
 let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
-function baseConfig(): OcxConfig {
+function baseConfig(): CodexCommanderConfig {
   return {
     port: 0,
     hostname: "127.0.0.1",
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "openai",
     providers: {
       openai: {
@@ -24,7 +25,7 @@ function baseConfig(): OcxConfig {
         authMode: "forward",
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 /** Seed the isolated CODEX_HOME with a known sessions tree the endpoint must report. */
@@ -57,16 +58,16 @@ function inventoryCodexHome(codexHome: string): { bytes: number; fileCount: numb
 }
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-api-storage-codex-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-api-storage-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-api-storage-codex-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-api-storage-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   saveConfig(baseConfig());
 });
 
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
@@ -106,9 +107,9 @@ describe("GET /api/storage", () => {
         "sessions/2026/07/01/rollout-x.jsonl",
       ];
       const coordinationDatabases = [
-        ".opencodex-native-main.claim.sqlite",
-        ".opencodex-native-main.owner.sqlite",
-        ".opencodex-native-profile.lock.sqlite",
+        ".codexcommander-native-main.claim.sqlite",
+        ".codexcommander-native-main.owner.sqlite",
+        ".codexcommander-native-profile.lock.sqlite",
       ];
       const sqliteSidecars = ["-journal", "-wal", "-shm"];
       expect(inventory.paths).toEqual(expect.arrayContaining(fixturePaths));

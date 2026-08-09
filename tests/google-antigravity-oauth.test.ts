@@ -116,12 +116,12 @@ describe("antigravity refresh", () => {
 
 describe("antigravity credential persistence (projectId survives the store)", () => {
   const origHome = process.env.HOME;
-  const origOcxHome = process.env.OPENCODEX_HOME;
+  const origCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
   let tmp: string;
 
   afterEach(() => {
     if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
-    if (origOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = origOcxHome;
+    if (origCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = origCodexCommanderHome;
     if (tmp) rmSync(tmp, { recursive: true, force: true });
   });
 
@@ -129,7 +129,7 @@ describe("antigravity credential persistence (projectId survives the store)", ()
     tmp = join(tmpdir(), `ag-store-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     mkdirSync(tmp, { recursive: true });
     process.env.HOME = tmp;
-    process.env.OPENCODEX_HOME = join(tmp, "ocx");
+    process.env.CODEXCOMMANDER_HOME = join(tmp, "ccx");
     await saveCredential("google-antigravity", { access: "a", refresh: "r", expires: Date.now() + 3_600_000, projectId: "proj-persist" });
     expect(getCredential("google-antigravity")?.projectId).toBe("proj-persist");
   });

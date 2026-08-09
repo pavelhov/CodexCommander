@@ -2,13 +2,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createAnthropicAdapter as createAnthropicAdapterProduction } from "../src/adapters/anthropic";
 import { providerConfigFromKeyLoginProvider } from "../src/oauth/login-cli";
 import { enrichProviderFromCatalog, KEY_LOGIN_PROVIDERS, validateApiKey, type KeyLoginProvider } from "../src/oauth/key-providers";
-import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { AdapterEvent, CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createAnthropicAdapter = (...args: Parameters<typeof createAnthropicAdapterProduction>) =>
   withTestTranslatorBudget(createAnthropicAdapterProduction(...args));
 
-function umansProvider(apiKey = "sk-umans", apiKeyTransport?: OcxProviderConfig["apiKeyTransport"]): OcxProviderConfig {
+function umansProvider(apiKey = "sk-umans", apiKeyTransport?: CodexCommanderProviderConfig["apiKeyTransport"]): CodexCommanderProviderConfig {
   return {
     adapter: "anthropic",
     baseUrl: "https://api.code.umans.ai",
@@ -19,7 +19,7 @@ function umansProvider(apiKey = "sk-umans", apiKeyTransport?: OcxProviderConfig[
   };
 }
 
-function parsedWithWebSearchTool(): OcxParsedRequest {
+function parsedWithWebSearchTool(): CodexCommanderParsedRequest {
   return {
     modelId: "umans-coder",
     context: {
@@ -49,7 +49,7 @@ describe("Umans provider", () => {
   });
 
   test("catalog enrichment preserves Anthropic Messages runtime metadata", async () => {
-    const provider: OcxProviderConfig = {
+    const provider: CodexCommanderProviderConfig = {
       adapter: "anthropic",
       baseUrl: "https://api.code.umans.ai",
       apiKey: "sk-umans",

@@ -11,17 +11,17 @@ import {
   restoreOpencodeIntegration,
   setOpencodeAutoConnect,
 } from "../src/clients/opencode-persistence";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const TOKEN = "test-proxy-admission-token-never-serialize";
 
 function providerBlock(): OpencodeProviderBlock {
   return {
     npm: "@ai-sdk/openai-compatible",
-    name: "OpenCodex",
+    name: "CodexCommander",
     options: {
       baseURL: "http://127.0.0.1:10100/v1",
-      apiKey: "{env:OPENCODEX_OPENCODE_API_KEY}",
+      apiKey: "{env:CODEXCOMMANDER_OPENCODE_API_KEY}",
     },
     models: {
       "opencode-go/gpt-5.6-luna": {
@@ -32,7 +32,7 @@ function providerBlock(): OpencodeProviderBlock {
   };
 }
 
-function config(hostname = "127.0.0.1"): OcxConfig {
+function config(hostname = "127.0.0.1"): CodexCommanderConfig {
   return {
     port: 10100,
     hostname,
@@ -44,7 +44,7 @@ function config(hostname = "127.0.0.1"): OcxConfig {
         authMode: "key",
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 describe("durable OpenCode integration", () => {
@@ -52,19 +52,19 @@ describe("durable OpenCode integration", () => {
   let previousHome: string | undefined;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "ocx-opencode-persist-"));
-    previousHome = process.env.OPENCODEX_HOME;
-    process.env.OPENCODEX_HOME = join(root, ".opencodex");
+    root = mkdtempSync(join(tmpdir(), "ccx-opencode-persist-"));
+    previousHome = process.env.CODEXCOMMANDER_HOME;
+    process.env.CODEXCOMMANDER_HOME = join(root, ".codexcommander");
   });
 
   afterEach(() => {
-    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousHome;
     rmSync(root, { recursive: true, force: true });
   });
 
   function paths() {
-    return opencodeIntegrationPaths({}, root, join(root, ".opencodex"));
+    return opencodeIntegrationPaths({}, root, join(root, ".codexcommander"));
   }
 
   function writeConfig(path: string, text: string, mode = 0o640): void {
@@ -78,7 +78,7 @@ describe("durable OpenCode integration", () => {
     expect(() => opencodeFileReference(join(root, "bad\npath"))).toThrow(/unsupported characters/);
   });
 
-  test("applies only provider.opencodex, preserves JSONC, and keeps the token out of config and journal", () => {
+  test("applies only provider.codexcommander, preserves JSONC, and keeps the token out of config and journal", () => {
     const p = paths();
     const original = `{
   // keep this user's MCP and theme settings
@@ -101,6 +101,7 @@ describe("durable OpenCode integration", () => {
     expect(applied).toContain(`{file:${p.tokenPath}}`);
     expect(applied).not.toContain(TOKEN);
     expect(journal).not.toContain(TOKEN);
+    expect(JSON.parse(journal)).toMatchObject({ exactRestoreEligible: true });
     expect(readFileSync(p.tokenPath, "utf8")).toBe(TOKEN);
     if (process.platform !== "win32") expect(lstatSync(p.tokenPath).mode & 0o777).toBe(0o600);
     if (process.platform !== "win32") expect(lstatSync(p.configJsonPath).mode & 0o777).toBe(0o640);
@@ -114,7 +115,7 @@ describe("durable OpenCode integration", () => {
     applyOpencodeIntegration(providerBlock(), TOKEN, { paths: p, config: config() });
 
     expect(readFileSync(p.configJsonPath, "utf8")).toBe('{"theme":"json"}\n');
-    expect(readFileSync(p.configJsoncPath, "utf8")).toContain('"opencodex"');
+    expect(readFileSync(p.configJsoncPath, "utf8")).toContain('"codexcommander"');
     expect(inspectOpencodeIntegration(p).targetPath).toBe(p.configJsoncPath);
   });
 
@@ -142,6 +143,21 @@ describe("durable OpenCode integration", () => {
     expect(restored.preservedUserEdits).toBe(false);
     expect(readFileSync(p.configJsonPath, "utf8")).toBe(original);
     expect(restored.status.state).toBe("not_applied");
+  });
+
+  test("rejects a journal that omits the current exact-restore contract", () => {
+    const p = paths();
+    writeConfig(p.configJsonPath, '{"theme":"light"}\n');
+    applyOpencodeIntegration(providerBlock(), TOKEN, { paths: p, config: config() });
+    const journal = JSON.parse(readFileSync(p.journalPath, "utf8")) as Record<string, unknown>;
+    delete journal.exactRestoreEligible;
+    writeFileSync(p.journalPath, `${JSON.stringify(journal)}\n`, { mode: 0o600 });
+    chmodSync(p.journalPath, 0o600);
+
+    const status = inspectOpencodeIntegration(p);
+    expect(status.state).toBe("needs_attention");
+    expect(status.detail).toContain("unsupported shape");
+    expect(() => restoreOpencodeIntegration({ paths: p })).toThrow(/unsupported shape/);
   });
 
   test("recognizes an externally restored original as safe exact cleanup", () => {
@@ -175,7 +191,7 @@ describe("durable OpenCode integration", () => {
     expect(restored.preservedUserEdits).toBe(true);
     expect(final).toContain('"theme": "dark"');
     expect(final).toContain('"username": "kept"');
-    expect(final).not.toContain('"opencodex"');
+    expect(final).not.toContain('"codexcommander"');
     expect(final).not.toContain('"provider"');
   });
 
@@ -196,12 +212,12 @@ describe("durable OpenCode integration", () => {
     expect(restored.preservedUserEdits).toBe(true);
     expect(final).toContain('"theme": "dark"');
     expect(final).toContain('"username": "kept-after-refresh"');
-    expect(final).not.toContain('"opencodex"');
+    expect(final).not.toContain('"codexcommander"');
   });
 
   test("surgical restore reinstates a pre-existing provider value", () => {
     const p = paths();
-    writeConfig(p.configJsonPath, '{\n  "provider": {\n    "opencodex": { "name": "user-owned" }\n  }\n}\n');
+    writeConfig(p.configJsonPath, '{\n  "provider": {\n    "codexcommander": { "name": "user-owned" }\n  }\n}\n');
     applyOpencodeIntegration(providerBlock(), TOKEN, { paths: p, config: config() });
     writeFileSync(p.configJsonPath, readFileSync(p.configJsonPath, "utf8").replace("{\n", '{\n  "theme": "later",\n'));
 
@@ -275,7 +291,7 @@ describe("durable OpenCode integration", () => {
     const p = paths();
     applyOpencodeIntegration(providerBlock(), TOKEN, { paths: p, config: config("0.0.0.0") });
     const applied = readFileSync(p.configJsonPath, "utf8");
-    expect(applied).toContain('"x-opencodex-api-key"');
+    expect(applied).toContain('"x-codexcommander-api-key"');
     expect(applied).toContain(`{file:${p.tokenPath}}`);
     expect(applied).not.toContain('"apiKey"');
   });

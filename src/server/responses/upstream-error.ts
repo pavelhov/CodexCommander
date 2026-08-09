@@ -1,7 +1,7 @@
 /**
  * Upstream connection failures share one message shape across the three catch sites in
  * core.ts. A TLS certificate/hostname mismatch deserves its own wording: the generic
- * "Provider unreachable" reads as if opencodex built a wrong endpoint, which sent issue
+ * "Provider unreachable" reads as if CodexCommander built a wrong endpoint, which sent issue
  * #553 looking for an adapter URL bug that does not exist. Name the likely cause and the
  * command that settles it.
  */
@@ -20,7 +20,7 @@ export function describeUpstreamConnectFailure(err: unknown, connectMs: number):
     const target = host ?? "the provider host";
     const probe = host ?? "<host>";
     return `Provider TLS certificate does not match ${target}: ${redactUrlUserinfo(detail)}. `
-      + "opencodex did not rewrite this hostname — a certificate that does not cover it normally "
+      + "CodexCommander did not rewrite this hostname — a certificate that does not cover it normally "
       + "means TLS interception (corporate proxy, VPN, or local MITM tooling) or a poisoned DNS "
       + `answer. Check with: openssl s_client -connect ${probe}:443 -servername ${probe} `
       + "</dev/null | openssl x509 -noout -subject -ext subjectAltName";

@@ -1,6 +1,6 @@
 ---
 title: 모델 라우팅
-description: opencodex가 주어진 모델 id를 어느 프로바이더가 처리할지 결정하는 방식.
+description: CodexCommander가 주어진 모델 id를 어느 프로바이더가 처리할지 결정하는 방식.
 ---
 
 Codex가 모델을 요청하면 `router.ts`가 이를 정확히 하나의 설정된 프로바이더로 해석합니다. 규칙은
@@ -26,7 +26,7 @@ fallback하지 않습니다.
 
 2. **Combo id 또는 alias** — combo가 하나 이상 설정되어 있는 동안에는 canonical `combo/<id>` 또는
    설정된 combo alias가 provider namespace보다 먼저 concrete target을 선택합니다. 설정된 combo가
-   하나도 없으면 이름이 정확히 `combo`인 legacy physical provider는 일반 provider namespace로
+   하나도 없으면 이름이 정확히 `combo`인 physical provider는 일반 provider namespace로
    유지됩니다. target selection과 failover 동작은 [Combos](/ko/guides/combos/)를 참고하십시오.
 
 3. **명시적 `provider/model`** — id에 `/`가 포함되어 있고 그 앞부분이 설정된 프로바이더의 이름이면,

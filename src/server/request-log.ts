@@ -7,7 +7,7 @@ import {
 } from "../lib/errors";
 import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
 import { readCodexCatalogPath } from "../codex/catalog";
-import type { OcxUsage } from "../types";
+import type { CodexCommanderUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
 import type { AdapterRequest } from "../adapters/base";
 import { redactSecretString } from "../lib/redact";
@@ -40,11 +40,11 @@ import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/
 export interface RequestLogContext {
   model: string;
   provider: string;
-  /** TTFT: ms from request start to the first non-empty model output delta (WP4, devlog 040). */
+  /** TTFT: ms from request start to the first non-empty model output delta (WP4, implementation contract). */
   firstOutputMs?: number;
   /** Best-effort chat/session correlation for Logs grouping (#330). Opaque; omit when unknown. */
   conversationId?: string;
-  surface?: "claude" | "claude-desktop" | "grok";
+  surface?: "codex" | "claude" | "claude-desktop" | "grok";
   /** The matched configured key's id. Set ONLY for admissionKind "configured" —
    *  never a sentinel, so a hand-edited entry whose id happens to be "loopback"
    *  cannot absorb unrelated traffic. */
@@ -69,7 +69,7 @@ export interface RequestLogContext {
   modelSupportsServiceTier?: boolean;
   responseServiceTier?: string;
   resolvedModel?: string;
-  usage?: OcxUsage;
+  usage?: CodexCommanderUsage;
   usageLogInputTokens?: number;
   attempts?: PersistedUsageAttempt[];
   /** Internal mutable final attempt; omitted from RequestLogEntry/JSONL. */
@@ -82,7 +82,7 @@ export interface RequestLogContext {
   /** Never persist upstream body samples for intentionally plaintext V2 collaboration turns. */
   suppressUsageDebugBodySample?: boolean;
   /** Route adapter type ("cursor"/"kiro"/"anthropic"/…): drives estimated-usage detection
-   *  independent of the user-chosen provider NAME (devlog 130 B2). */
+   *  independent of the user-chosen provider NAME (implementation contract B2). */
   providerAdapter?: string;
   /** Set when the bridge reported raw adapter usage via onUsage: the bridged wire now always
    *  carries synthetic zero-default token-detail objects (strict-client normalization, see
@@ -112,7 +112,7 @@ export interface RequestLogEntry {
   provider: string;
   /** TTFT: ms from request start to the first non-empty model output delta; unset for non-streaming/tool-only. */
   firstOutputMs?: number;
-  surface?: "claude" | "claude-desktop" | "grok";
+  surface?: "codex" | "claude" | "claude-desktop" | "grok";
   /** The matched configured key's id. Set ONLY for admissionKind "configured" —
    *  never a sentinel, so a hand-edited entry whose id happens to be "loopback"
    *  cannot absorb unrelated traffic. */
@@ -146,7 +146,7 @@ export interface RequestLogEntry {
   upstreamError?: string;
   upstreamRetryAfter?: string;
   usageStatus: UsageStatus;
-  usage?: OcxUsage;
+  usage?: CodexCommanderUsage;
   totalTokens?: number;
   attempts?: PersistedUsageAttempt[];
   /** Codex pool affinity decision for this request (diagnostics for #186). */
@@ -276,7 +276,7 @@ function normalizeRouteDecisionTraceForLog(
 
 /**
  * Seed the in-memory Logs ring buffer from usage.jsonl so GUI /api/logs survives
- * `ocx stop` / `ocx start` (process restart). Idempotent per process; no-ops when
+ * `ccx stop` / `ccx start` (process restart). Idempotent per process; no-ops when
  * the buffer already has live entries. Read failures are non-fatal (same as /api/usage).
  */
 export function hydrateRequestLogsFromDisk(
@@ -309,7 +309,7 @@ export function addRequestLog(entry: RequestLogEntry) {
   retainRequestLogEntry(entry);
   try {
     // Failure diagnostics survive the 200-entry ring buffer by riding the persisted
-    // usage entry (devlog/_plan/260716_claudecode_hardening/030). Success rows stay
+    // usage entry (implementation contract). Success rows stay
     // in their existing shape; the >=400 gate deliberately includes 499 client-cancels.
     const failureDiagnostics = entry.status >= 400 || (entry.terminalStatus && entry.terminalStatus !== "completed")
       ? {
@@ -364,7 +364,7 @@ export function addRequestLog(entry: RequestLogEntry) {
 
 export function nextRequestLogId(timestamp = Date.now()): string {
   requestLogSeq = (requestLogSeq % 1_000_000) + 1;
-  return `ocx-${timestamp.toString(36)}-${requestLogSeq.toString(36)}`;
+  return `ccx-${timestamp.toString(36)}-${requestLogSeq.toString(36)}`;
 }
 
 /** Capture only bounded numeric/date Retry-After syntax; arbitrary headers never persist. */
@@ -463,7 +463,7 @@ export function recordAdapterReasoning(
 
 export function requestLogErrorCode(status: number, upstreamError?: string): string | undefined {
   if (status >= 200 && status < 400) return undefined;
-  // Defense in depth: mid-stream web-search aborts used to land as 502 with this message.
+  // Message-aware classification keeps client cancellation distinct from an upstream failure.
   if (status === 499 || (upstreamError?.trim() && classifyError(status, "upstream_error", upstreamError).code === "client_closed_request")) {
     return "client_closed_request";
   }
@@ -539,7 +539,7 @@ export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unk
   }
 }
 
-export function usageFromResponsesPayload(usage: unknown): OcxUsage | undefined {
+export function usageFromResponsesPayload(usage: unknown): CodexCommanderUsage | undefined {
   if (!usage || typeof usage !== "object") return undefined;
   const raw = usage as {
     input_tokens?: unknown;
@@ -783,7 +783,6 @@ export function addFinalRequestLog(
   meta?: Pick<RequestLogEntry, "terminalStatus" | "closeReason">,
   addLog: (entry: RequestLogEntry) => void = addRequestLog,
 ): void {
-  // Mid-stream web-search aborts used to emit response.failed and land as 502/upstream_server_error.
   // Prefer the client-close classification whenever the captured reason says so.
   const effectiveStatus = status >= 500 && logCtx.upstreamError && isClientClosedMessage(logCtx.upstreamError)
     ? 499
@@ -920,14 +919,14 @@ export function filteredRequestLogCount(logs: RequestLogEntry[], params: URLSear
 }
 
 interface FinalizedUsageResult {
-  usage?: OcxUsage;
+  usage?: CodexCommanderUsage;
   status: UsageStatus;
   totalTokens?: number;
 }
 
 function finalizedUsage(
   adapter: string,
-  usage: OcxUsage | undefined,
+  usage: CodexCommanderUsage | undefined,
   inputTokenEstimate: number | undefined,
 ): FinalizedUsageResult {
   const estimate = typeof inputTokenEstimate === "number"
@@ -1004,7 +1003,7 @@ export function finishRequestAttempt(
   attempt: PersistedUsageAttempt,
   status: number,
   durationMs: number,
-  usage?: OcxUsage,
+  usage?: CodexCommanderUsage,
 ): PersistedUsageAttempt {
   const finalized = finalizedUsage(
     attempt.adapter,
@@ -1060,7 +1059,7 @@ export function aggregateAttemptUsage(
     (sum, usage) => sum + (usageTotalTokens(usage) ?? 0),
     0,
   );
-  const aggregate: OcxUsage = {
+  const aggregate: CodexCommanderUsage = {
     inputTokens: usages.reduce((sum, usage) => sum + usage.inputTokens, 0),
     outputTokens: usages.reduce((sum, usage) => sum + usage.outputTokens, 0),
     totalTokens,

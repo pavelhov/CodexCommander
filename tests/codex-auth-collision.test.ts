@@ -4,36 +4,43 @@ import { join } from "node:path";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { checkAccountIdCollision } from "../src/codex/auth-api";
 import { saveConfig } from "../src/config";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-auth-collision-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 let previousCodexHome: string | undefined;
 
 beforeEach(() => {
-  previousOpencodexHome = process.env.OPENCODEX_HOME;
+  previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
   previousCodexHome = process.env.CODEX_HOME;
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   mkdirSync(TEST_CODEX_HOME, { recursive: true });
-  process.env.OPENCODEX_HOME = TEST_DIR;
+  process.env.CODEXCOMMANDER_HOME = TEST_DIR;
   process.env.CODEX_HOME = TEST_CODEX_HOME;
 });
 
 afterEach(() => {
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
 });
 
-function seedAccount(id: string, email: string, chatgptAccountId: string, plan?: string): OcxConfig {
-  const config: OcxConfig = {
+function seedAccount(id: string, email: string, chatgptAccountId: string, plan?: string): CodexCommanderConfig {
+  const config: CodexCommanderConfig = {
     port: 10100,
-    providers: {},
+    multiAgentGuidanceEnabled: true,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+      },
+    },
     defaultProvider: "openai",
-    codexAccounts: [{ id, email, plan, isMain: false }],
+    codexAccounts: [{ id, email, plan, logLabel: "p000001", isMain: false }],
   };
   saveConfig(config);
   saveCodexAccountCredential(id, {
@@ -91,10 +98,17 @@ describe("codex auth account collision", () => {
     }));
     saveConfig({
       port: 10100,
-      providers: {},
+      multiAgentGuidanceEnabled: true,
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
       defaultProvider: "openai",
       codexAccounts: [],
-    } as OcxConfig);
+    } as CodexCommanderConfig);
 
     const result = checkAccountIdCollision("main-chatgpt-account", "main@example.test", "business");
     expect(result).toEqual({ collision: false });

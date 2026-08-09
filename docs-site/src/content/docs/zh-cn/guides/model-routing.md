@@ -1,6 +1,6 @@
 ---
 title: 模型路由
-description: opencodex 如何决定由哪个提供商来服务给定的模型 id。
+description: CodexCommander 如何决定由哪个提供商来服务给定的模型 id。
 ---
 
 当 Codex 请求某个模型时，`router.ts` 会将其解析为唯一一个已配置的提供商。规则**按顺序**检查；第一个匹配者胜出。
@@ -23,7 +23,7 @@ transport；这些凭证路径互不 fallback。
    ```
 
 2. **Combo id 或 alias** —— 配置了至少一个 combo 时，规范的 `combo/<id>` 或已配置 combo alias
-   会先选择具体目标，然后才检查 provider 命名空间。没有配置 combo 时，名称恰好为 `combo` 的 legacy
+   会先选择具体目标，然后才检查 provider 命名空间。没有配置 combo 时，名称恰好为 `combo` 的
    physical provider 仍作为普通 provider 命名空间。目标选择与 failover 行为见
    [Combos](/zh-cn/guides/combos/)。
 

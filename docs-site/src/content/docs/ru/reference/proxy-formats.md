@@ -3,7 +3,7 @@ title: Форматы API прокси
 description: Справочник протокольного уровня для Responses, Chat Completions, Anthropic Messages, каталога моделей, WebSocket, Realtime и компактизации.
 ---
 
-opencodex предоставляет один локальный прокси сразу в нескольких клиентских диалектах. Клиент
+CodexCommander предоставляет один локальный прокси сразу в нескольких клиентских диалектах. Клиент
 Codex может говорить на Responses API, OpenAI-совместимое приложение — на Chat Completions, а
 Claude Code — на Anthropic Messages, при этом от каждого upstream-провайдера не требуется
 реализовывать все эти форматы.
@@ -35,7 +35,7 @@ control и safety ответа всё равно происходят на гр�
 
 ## `POST /v1/responses`
 
-Это нативная форма data plane для opencodex. Тело запроса должно быть JSON-объектом с непустым
+Это нативная форма data plane для CodexCommander. Тело запроса должно быть JSON-объектом с непустым
 `model`. Поле `input` может быть строкой или массивом Responses item'ов.
 
 ### Разрешённые поля запроса
@@ -191,7 +191,7 @@ passthrough. Native-eligible-запрос пересылается в count-endp
 ## `POST /v1/live` и Realtime sideband
 
 `POST /v1/live` принимает surface Frameless call-creation из ChatGPT/Codex App.
-`POST /v1/realtime/calls` принимает surface call-creation OpenAI Realtime. opencodex выбирает
+`POST /v1/realtime/calls` принимает surface call-creation OpenAI Realtime. CodexCommander выбирает
 подходящий маршрут семейства OpenAI, нормализует запрос call-creation под нужный режим
 upstream-аутентификации и ретранслирует ограниченный ответ.
 
@@ -213,7 +213,7 @@ conversation.
 | Тип маршрута | Поведение |
 | --- | --- |
 | Canonical ChatGPT или официальный маршрут OpenAI | Пересылает запрос в нативный endpoint `/responses/compact` с разрешённым аккаунтом и model-authentication |
-| Любая другая routed-модель | Запускает внутренний, не-streaming, без-tool'овый compaction-turn с `compaction_trigger`; требует ровно один синтетический item `compaction`, чей `encrypted_content` — это envelope `ocx1:`; затем декодирует это summary обратно в replacement history v1 |
+| Любая другая routed-модель | Запускает внутренний, не-streaming, без-tool'овый compaction-turn с `compaction_trigger`; требует ровно один синтетический item `compaction`, чей `encrypted_content` — это envelope `ccx1:`; затем декодирует это summary обратно в replacement history v1 |
 
 Нативные compact-ответы буферизуются с максимумом 32 MiB, включая ответы, у которых один только
 заявленный `Content-Length` уже превышает лимит. Для compaction есть такие специфические ошибки:
@@ -225,12 +225,12 @@ conversation.
 | 499 | `client_cancelled` | Клиент отменил запрос во время forwarding или buffering |
 | 502 | `compact_response_too_large` | Нативный compact-output превысил 32 MiB |
 | 502 | `upstream_error` | Сбой соединения, чтения или synthetic compaction-turn |
-| 502 | `invalid_response_error` | Synthetic-turn не создал ровно один корректный непустой item compaction `ocx1:` |
+| 502 | `invalid_response_error` | Synthetic-turn не создал ровно один корректный непустой item compaction `ccx1:` |
 
 ## Матрица аутентификации
 
 На bind'е только для loopback data-plane admission не требует настроенного ключа. На удалённой
-привязке используйте матрицу ниже. «Dedicated» означает `X-OpenCodex-API-Key`; остальные столбцы —
+привязке используйте матрицу ниже. «Dedicated» означает `X-CodexCommander-API-Key`; остальные столбцы —
 это `Authorization: Bearer ...` и `x-api-key`.
 
 | Поверхность | Выделенный | Bearer | `x-api-key` |
@@ -271,14 +271,14 @@ origin превращается в 403 `permission_error`, а не в OpenAI-sty
 ## Гигиена `encrypted_content`
 
 Proxy относится к подлинному ciphertext backend'а как к непрозрачным данным. Структурно валидный
-ciphertext сохраняется байт в байт: opencodex его не расшифровывает, не переводит содержимое и не
+ciphertext сохраняется байт в байт: CodexCommander его не расшифровывает, не переводит содержимое и не
 перешифровывает для другого провайдера.
 
-Исторически некоторые agent hook'и клали plaintext control text в слот `encrypted_content`. Ради
-совместимости proxy отделяет такой plaintext в текстовые части, сохраняя нетронутыми все
+Некоторые agent hook'и кладут plaintext control text в слот `encrypted_content`. Proxy отделяет
+такой plaintext в текстовые части, сохраняя нетронутыми все
 структурно валидные фрагменты Fernet. Если после такой починки у `agent_message` не остаётся ни
 одной шифрованной части, сообщение становится обычным user-message. Если текущая задача v2
 остаётся по-настоящему зашифрованной, а выбранная routed-цель не умеет читать ciphertext нативного
-ChatGPT, opencodex завершит запрос ошибкой `unreadable_encrypted_agent_task`, вместо того чтобы
+ChatGPT, CodexCommander завершит запрос ошибкой `unreadable_encrypted_agent_task`, вместо того чтобы
 отправить нечитаемые байты этому провайдеру. О поведении клиента вокруг worker-task'ов см.
 [Поверхность подагентов](/guides/sub-agent-surface/).

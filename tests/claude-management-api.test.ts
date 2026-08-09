@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { loadConfig, saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import * as systemEnv from "../src/server/system-env";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 
@@ -28,35 +28,36 @@ function setPlatform(platform: NodeJS.Platform): void {
 const originalPlatform = process.platform;
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
   previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
-  previousDesktopConfigDir = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+  previousDesktopConfigDir = process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR;
   previousCodexCliPath = process.env.CODEX_CLI_PATH;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-claude-mgmt-");
+  isolatedCodexHome = installIsolatedCodexHome("ccx-claude-mgmt-");
   process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
-  testDir = mkdtempSync(join(tmpdir(), "ocx-claude-mgmt-"));
-  process.env.OPENCODEX_HOME = testDir;
+  testDir = mkdtempSync(join(tmpdir(), "ccx-claude-mgmt-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   // These API tests intentionally toggle agent injection off. Never let that
   // prune the developer's real ~/.claude/agents directory.
   process.env.CLAUDE_CONFIG_DIR = join(testDir, "claude");
-  process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = join(testDir, "claude-desktop");
+  process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR = join(testDir, "claude-desktop");
   saveConfig({
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "mock",
     providers: {
       mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:1/v1", apiKey: "k", allowPrivateNetwork: true, liveModels: false, models: ["test-model"] },
     },
-  } as OcxConfig);
+  } as CodexCommanderConfig);
 });
 
 afterEach(() => {
   setPlatform(originalPlatform);
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
-  if (previousDesktopConfigDir === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
-  else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previousDesktopConfigDir;
+  if (previousDesktopConfigDir === undefined) delete process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR;
+  else process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR = previousDesktopConfigDir;
   if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
   else process.env.CODEX_CLI_PATH = previousCodexCliPath;
   isolatedCodexHome?.restore();
@@ -71,12 +72,12 @@ test("GET /api/claude-code returns defaults + available + aliases", async () => 
     expect(r.status).toBe(200);
     const d = await r.json() as Record<string, any>;
     expect(d.enabled).toBe(true);
-    expect(d.model).toBe("");
+    expect(d).not.toHaveProperty("model");
     expect(d.smallFastModel).toBe("");
     expect(d.modelMap).toEqual({});
     expect(d.available).toContain("mock/test-model");
-    // Aliases preview uses the readable CLI-surface family (devlog 050 / audit 051 #2).
-    expect(d.aliases.some((a: { id: string }) => a.id === "claude-ocx-mock--test-model")).toBe(true);
+    // Aliases preview uses the readable CLI-surface family (implementation contract / audit 051 #2).
+    expect(d.aliases.some((a: { id: string }) => a.id === "claude-ccx2-mock--test-model")).toBe(true);
     expect(typeof d.port).toBe("number");
   } finally {
     await server.stop(true);
@@ -91,7 +92,6 @@ test("PUT round-trips settings and persists to config", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         enabled: false,
-        model: "mock/test-model",
         smallFastModel: " mock/test-model ",
         modelMap: { "claude-sonnet-4-5": "mock/test-model" },
       }),
@@ -102,38 +102,32 @@ test("PUT round-trips settings and persists to config", async () => {
     expect(putBody.enabled).toBe(false);
 
     const persisted = loadConfig();
-    // The migration sentinel is stamped on every persist so a post-upgrade block is
-    // never mistaken for a pre-upgrade subscriber; its value is a timestamp.
-    expect(typeof persisted.claudeCode?.authModeMigratedAt).toBe("string");
-    const { authModeMigratedAt, ...settings } = persisted.claudeCode!;
-    expect(settings).toEqual({
+    expect(persisted.claudeCode).toEqual({
       enabled: false,
-      model: "mock/test-model",
       smallFastModel: "mock/test-model",
       modelMap: { "claude-sonnet-4-5": "mock/test-model" },
     });
 
-    // Clearing a slot with "" deletes it; partial PUT leaves other fields alone.
+    // Clearing the helper slot with "" deletes it; partial PUT leaves other fields alone.
     const clear = await fetch(new URL("/api/claude-code", server.url), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "" }),
+      body: JSON.stringify({ smallFastModel: "" }),
     });
     expect(clear.status).toBe(200);
     const after = loadConfig();
-    expect(after.claudeCode?.model).toBeUndefined();
-    expect(after.claudeCode?.smallFastModel).toBe("mock/test-model");
+    expect(after.claudeCode?.smallFastModel).toBeUndefined();
     expect(after.claudeCode?.enabled).toBe(false);
   } finally {
     await server.stop(true);
   }
 });
 
-test("PUT round-trips three-state authMode (devlog 260720 + 260726_claude_auth_auto)", async () => {
+test("PUT round-trips three-state authMode", async () => {
   const server = startServer(0);
   try {
     // An absent config key is AUTO, not subscription: the old coercion turned every
-    // save into a sticky manual subscription (devlog 260726_claude_auth_auto/002 §3).
+    // save into a sticky manual subscription.
     let get = await fetch(new URL("/api/claude-code", server.url)).then(r => r.json()) as Record<string, unknown>;
     expect(get.authMode).toBe("auto");
 
@@ -189,7 +183,7 @@ test("GET exposes the resolved marker mode and its provenance", async () => {
 });
 
 // The auto-kill regression: saving an unrelated field must not convert auto into a
-// sticky manual mode (devlog 260726_claude_auth_auto/002 §3).
+// sticky manual mode (implementation contract §3).
 test("an unrelated PUT leaves an auto config on auto", async () => {
   const server = startServer(0);
   try {
@@ -208,12 +202,7 @@ test("an unrelated PUT leaves an auto config on auto", async () => {
   }
 });
 
-// THE regression the auto mode nearly shipped with: the migration reads "a claudeCode
-// block with no authMode" as a pre-upgrade subscriber. Post-upgrade, choosing Auto
-// DELETES authMode and merely toggling Claude on creates the block, so without a
-// sentinel written on every persist the next start converts Auto into a sticky manual
-// subscription — auto would survive exactly one proxy lifetime, with no way back.
-test("auto survives a restart instead of being migrated back to subscription", async () => {
+test("auto survives a restart", async () => {
   const first = startServer(0);
   try {
     const put = await fetch(new URL("/api/claude-code", first.url), {
@@ -227,7 +216,6 @@ test("auto survives a restart instead of being migrated back to subscription", a
     await first.stop(true);
   }
 
-  // A restart runs the startup migration against what the PUT persisted.
   const second = startServer(0);
   try {
     expect(loadConfig().claudeCode?.authMode).toBeUndefined();
@@ -238,8 +226,6 @@ test("auto survives a restart instead of being migrated back to subscription", a
   }
 });
 
-// The same trap by a different door: the GUI's ON toggle PUTs `{enabled}` alone, which
-// creates the block for a user who never opened the auth-mode control at all.
 test("toggling Claude on does not pin a fresh install to subscription", async () => {
   const first = startServer(0);
   try {
@@ -379,7 +365,7 @@ test("PUT immediately restores generated agents after re-enable and roster chang
       body: JSON.stringify({ injectAgents: true }),
     });
     expect(enable.status).toBe(200);
-    expect(readdirSync(agentsDir).some(name => name === "ocx-gpt-5-6-sol.md")).toBe(true);
+    expect(readdirSync(agentsDir).some(name => name === "ccx-gpt-5-6-sol.md")).toBe(true);
 
     const disable = await fetch(new URL("/api/claude-code", server.url), {
       method: "PUT",
@@ -395,7 +381,7 @@ test("PUT immediately restores generated agents after re-enable and roster chang
       body: JSON.stringify({ injectAgents: true }),
     });
     expect(reenable.status).toBe(200);
-    expect(readdirSync(agentsDir).some(name => name === "ocx-gpt-5-6-sol.md")).toBe(true);
+    expect(readdirSync(agentsDir).some(name => name === "ccx-gpt-5-6-sol.md")).toBe(true);
 
     const roster = await fetch(new URL("/api/subagent-models", server.url), {
       method: "PUT",
@@ -403,45 +389,13 @@ test("PUT immediately restores generated agents after re-enable and roster chang
       body: JSON.stringify({ models: ["gpt-5.6-terra"] }),
     });
     expect(roster.status).toBe(200);
-    expect(readdirSync(agentsDir)).toEqual(["ocx-gpt-5-6-terra.md"]);
+    expect(readdirSync(agentsDir)).toEqual(["ccx-gpt-5-6-terra.md"]);
   } finally {
     await server.stop(true);
   }
 });
 
-test("PUT/GET round-trips the context/effort levers (devlog 136 B6)", async () => {
-  const server = startServer(0);
-  try {
-    const put = await fetch(new URL("/api/claude-code", server.url), {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ maxContextTokens: 1_000_000, alwaysEnableEffort: true }),
-    });
-    expect(put.status).toBe(200);
-    let persisted = loadConfig();
-    expect(persisted.claudeCode?.maxContextTokens).toBe(1_000_000);
-    expect(persisted.claudeCode?.alwaysEnableEffort).toBe(true);
-
-    const get = await fetch(new URL("/api/claude-code", server.url)).then(r => r.json()) as Record<string, unknown>;
-    expect(get.maxContextTokens).toBe(1_000_000);
-    expect(get.alwaysEnableEffort).toBe(true);
-
-    // null clears the context override; alwaysEnableEffort:false deletes the flag.
-    const clear = await fetch(new URL("/api/claude-code", server.url), {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ maxContextTokens: null, alwaysEnableEffort: false }),
-    });
-    expect(clear.status).toBe(200);
-    persisted = loadConfig();
-    expect(persisted.claudeCode?.maxContextTokens).toBeUndefined();
-    expect(persisted.claudeCode?.alwaysEnableEffort).toBeUndefined();
-  } finally {
-    await server.stop(true);
-  }
-});
-
-test("PUT/GET round-trips auto-context (devlog 260712 020)", async () => {
+test("PUT/GET round-trips auto-context (implementation contract 020)", async () => {
   const server = startServer(0);
   try {
     // Defaults: on, window null (GUI shows the 350000 placeholder).
@@ -481,39 +435,22 @@ test("PUT/GET round-trips auto-context (devlog 260712 020)", async () => {
   }
 });
 
-test("PUT/GET round-trips tierModels and GET exposes contextWindows + effectiveModelEnv (devlog 260712 B2)", async () => {
+test("GET exposes contextWindows and the configured helper-model environment", async () => {
   const server = startServer(0);
   try {
     const put = await fetch(new URL("/api/claude-code", server.url), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tierModels: { opus: "mock/test-model", haiku: " mock/other-model " } }),
+      body: JSON.stringify({ smallFastModel: " mock/other-model " }),
     });
     expect(put.status).toBe(200);
     const persisted = loadConfig();
-    expect(persisted.claudeCode?.tierModels).toEqual({ opus: "mock/test-model", haiku: "mock/other-model" });
+    expect(persisted.claudeCode?.smallFastModel).toBe("mock/other-model");
 
     const get = await fetch(new URL("/api/claude-code", server.url)).then(r => r.json()) as Record<string, any>;
-    expect(get.tierModels).toEqual({ opus: "mock/test-model", haiku: "mock/other-model" });
     expect(typeof get.contextWindows).toBe("object");
-    expect(get.effectiveModelEnv.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("mock/test-model");
     expect(get.effectiveModelEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("mock/other-model");
     expect(get.effectiveModelEnv.ANTHROPIC_SMALL_FAST_MODEL).toBe("mock/other-model");
-
-    // Clearing with empty strings deletes the block; bad shapes 400.
-    const clear = await fetch(new URL("/api/claude-code", server.url), {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tierModels: { opus: "", haiku: "" } }),
-    });
-    expect(clear.status).toBe(200);
-    expect(loadConfig().claudeCode?.tierModels).toBeUndefined();
-    const bad = await fetch(new URL("/api/claude-code", server.url), {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tierModels: { opus: 5 } }),
-    });
-    expect(bad.status).toBe(400);
   } finally {
     await server.stop(true);
   }
@@ -524,12 +461,7 @@ test("PUT validation rejects bad shapes", async () => {
   try {
     const cases: [Record<string, unknown>, string][] = [
       [{ enabled: "yes" }, "enabled must be a boolean"],
-      [{ model: 5 }, "model must be a string"],
-      [{ maxContextTokens: 0 }, "maxContextTokens must be a positive integer or null"],
-      [{ maxContextTokens: -1 }, "maxContextTokens must be a positive integer or null"],
-      [{ maxContextTokens: 1.5 }, "maxContextTokens must be a positive integer or null"],
-      [{ maxContextTokens: "1000000" }, "maxContextTokens must be a positive integer or null"],
-      [{ alwaysEnableEffort: "on" }, "alwaysEnableEffort must be a boolean"],
+      [{ unsupportedSetting: true }, "unknown Claude Code setting: unsupportedSetting"],
       [{ autoContext: "on" }, "autoContext must be a boolean"],
       [{ injectAgents: "on" }, "injectAgents must be a boolean"],
       [{ blockedSkills: "claude-api" }, "blockedSkills must be an array of non-empty strings, or null"],
@@ -576,7 +508,7 @@ test("GET /api/claude-code reports Auto-connect unsupported outside Darwin", asy
   saveConfig({
     ...loadConfig(),
     claudeCode: { systemEnv: true },
-  } as OcxConfig);
+  } as CodexCommanderConfig);
   setPlatform("linux");
   const server = startServer(0);
   try {
@@ -616,11 +548,15 @@ test("Claude Desktop profile GET, PUT and apply round-trip four-family assignmen
     const discovery = await fetch(new URL("/v1/models?flavor=anthropic", server.url)).then(r => r.json()) as { data: Array<{ id: string }> };
     expect(discovery.data.some(model => model.id === alias)).toBe(true);
 
-    const apply = await fetch(new URL("/api/claude-desktop/apply", server.url), { method: "POST" });
+    const apply = await fetch(new URL("/api/claude-desktop/apply", server.url), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "static" }),
+    });
     expect(apply.status).toBe(200);
     const result = await apply.json() as { path: string; applied: boolean };
     expect(result.applied).toBe(true);
-    expect(result.path.startsWith(process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR!)).toBe(true);
+    expect(result.path.startsWith(process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR!)).toBe(true);
     const appliedConfig = JSON.parse(readFileSync(result.path, "utf8")) as { inferenceGatewayBaseUrl: string };
     expect(appliedConfig.inferenceGatewayBaseUrl).toBe(new URL(server.url).origin);
   } finally {
@@ -696,6 +632,9 @@ test("Claude Desktop apply honors the profile in the request body over daemon-st
 test("Claude Desktop apply validates the mode body", async () => {
   const server = startServer(0);
   try {
+    const missing = await fetch(new URL("/api/claude-desktop/apply", server.url), { method: "POST" });
+    expect(missing.status).toBe(400);
+
     const bad = await fetch(new URL("/api/claude-desktop/apply", server.url), {
       method: "POST",
       headers: { "Content-Type": "application/json" },

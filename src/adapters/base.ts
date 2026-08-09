@@ -1,4 +1,4 @@
-import type { AdapterEvent, OcxParsedRequest } from "../types";
+import type { AdapterEvent, CodexCommanderParsedRequest } from "../types";
 import type { TranslatorBudget } from "../lib/translator-budget";
 
 /** Metadata about the caller's incoming request, for auth-forwarding adapters. */
@@ -8,7 +8,7 @@ export interface IncomingMeta {
   abortSignal?: AbortSignal;
   /**
    * Image-normalization ladder bias for upstream-413 tightened retries: every image
-   * starts one tier lower (devlog/260714_image_normalization_pipeline/030). Only the
+   * starts one tier lower (implementation contract). Only the
    * anthropic adapter consumes it; others ignore it.
    */
   imageTierBias?: number;
@@ -28,14 +28,14 @@ export interface ProviderAdapter {
    * (e.g. Vertex AI ADC token) return a Promise. Sync adapters return the object directly; callers
    * must `await` the result (awaiting a non-Promise is a no-op).
    */
-  buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta): AdapterRequest | Promise<AdapterRequest>;
+  buildRequest(parsed: CodexCommanderParsedRequest, incoming: IncomingMeta): AdapterRequest | Promise<AdapterRequest>;
 
   fetchResponse?(request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response>;
 
   parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent>;
   parseResponse?(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]>;
   runTurn?(
-    parsed: OcxParsedRequest,
+    parsed: CodexCommanderParsedRequest,
     incoming: IncomingMeta,
     emit: (event: AdapterEvent) => void,
   ): Promise<void>;

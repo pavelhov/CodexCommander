@@ -1,5 +1,5 @@
-import type { AdapterEvent, OcxMessagePhase, OcxProviderContinuationState, OcxUsage } from "./types";
-import { adapterFailureFromMessage, classifyError, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, type OcxErrorPayload } from "./lib/errors";
+import type { AdapterEvent, CodexCommanderMessagePhase, CodexCommanderProviderContinuationState, CodexCommanderUsage } from "./types";
+import { adapterFailureFromMessage, classifyError, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, type CodexCommanderErrorPayload } from "./lib/errors";
 import { encodeCompactionSummary } from "./responses/compaction";
 import { encodeReasoningEnvelope, type ReasoningEnvelope } from "./responses/reasoning-envelope";
 import { rememberReasoningForCall } from "./responses/reasoning-replay-cache";
@@ -29,7 +29,7 @@ function sseEvent(name: string, data: Record<string, unknown>): string {
   return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
-function responsesUsage(usage: OcxUsage | undefined): Record<string, unknown> {
+function responsesUsage(usage: CodexCommanderUsage | undefined): Record<string, unknown> {
   // input_tokens_details / output_tokens_details are ALWAYS emitted (zero defaults):
   // strict Responses clients deserialize them as required fields — grok-build's pinned
   // async-openai fork (rev 95b52ebd, response_usage.rs) has non-Option InputTokenDetails/
@@ -75,7 +75,7 @@ function responsesUsage(usage: OcxUsage | undefined): Record<string, unknown> {
   return out;
 }
 
-function responseError(status: number, type: string, message: string): OcxErrorPayload {
+function responseError(status: number, type: string, message: string): CodexCommanderErrorPayload {
   return classifyError(status, type, message);
 }
 
@@ -96,7 +96,7 @@ function toolCallArgumentsUsable(args: string): boolean {
   }
 }
 
-function adapterFailureFromEvent(event: Extract<AdapterEvent, { type: "error" }>): { httpStatus: number; error: OcxErrorPayload } {
+function adapterFailureFromEvent(event: Extract<AdapterEvent, { type: "error" }>): { httpStatus: number; error: CodexCommanderErrorPayload } {
   if (event.status === undefined && event.errorType === undefined && event.code === undefined) {
     return adapterFailureFromMessage(event.message);
   }
@@ -166,14 +166,14 @@ export function bridgeToResponsesSSE(
     plaintextV2Collaboration?: boolean;
     /**
      * Remote compaction v2 turn: accumulate all assistant text and, on done, emit ONE synthetic
-     * `{type:"compaction", encrypted_content:"ocx1:"+base64(text)}` output item before
+     * `{type:"compaction", encrypted_content:"ccx1:"+base64(text)}` output item before
      * response.completed — codex-rs collect_compaction_output requires exactly one.
      */
     compaction?: boolean;
     /** One-shot: first non-empty text/thinking/raw-reasoning delta observed (WP4 TTFT). */
     onFirstOutput?: () => void;
     onTerminal?: (status: ResponsesTerminalStatus) => void;
-    onCompletedResponse?: (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => void;
+    onCompletedResponse?: (response: Record<string, unknown>, providerState?: CodexCommanderProviderContinuationState) => void;
     /**
      * Raw adapter-reported usage at the terminal event, BEFORE wire normalization.
      * responsesUsage() always emits token-detail objects with zero defaults for strict
@@ -182,7 +182,7 @@ export function bridgeToResponsesSSE(
      * (cache_detail_missing would be silently suppressed). Callers set logCtx.usage
      * from this callback instead of re-parsing the bridged SSE.
      */
-    onUsage?: (usage: OcxUsage | undefined) => void;
+    onUsage?: (usage: CodexCommanderUsage | undefined) => void;
     translatorBudget?: TranslatorBudget;
     /**
      * Conversation identity for the reasoning replay cache (issue #950).
@@ -386,12 +386,12 @@ export function bridgeToResponsesSSE(
       const stallSec = resolveStallTimeoutSec(options?.stallTimeoutSec);
       const maxStallTicks = Math.ceil((stallSec * 1000) / heartbeatMs);
 
-      let currentMsg: { itemId: string; outputIndex: number; text: string; textBytes: number; phase?: OcxMessagePhase } | null = null;
+      let currentMsg: { itemId: string; outputIndex: number; text: string; textBytes: number; phase?: CodexCommanderMessagePhase } | null = null;
       let currentReasoning: { itemId: string; outputIndex: number; text: string; textBytes: number } | null = null;
       let currentRawReasoning: { itemId: string; outputIndex: number; text: string; textBytes: number } | null = null;
       // Anthropic extended-thinking round-trip state: the signature signs the CURRENT thinking
       // block; redacted blocks are opaque payloads replayed verbatim. Attached to the reasoning
-      // item as an ocxr1 encrypted_content envelope on close. hiddenThinkingText collects the
+      // item as a ccxr1 encrypted_content envelope on close. hiddenThinkingText collects the
       // suppressed text under hideThinkingSummary so the signed text still round-trips.
       let pendingSignature: string | undefined;
       let pendingSignatureBytes = 0;
@@ -432,7 +432,7 @@ export function bridgeToResponsesSSE(
       };
       // hideThinkingSummary for RAW reasoning (openai-chat reasoning_content, kiro tags): no
       // visible reasoning item is emitted — the app renders nothing, so tool cells keep grouping
-      // like native models — but the text still round-trips in a txt-only ocxr1 envelope so
+      // like native models — but the text still round-trips in a txt-only ccxr1 envelope so
       // preserveReasoningContentModels replay (GLM interleaved thinking) keeps working. Direct
       // encodeReasoningEnvelope: takeReasoningEnvelope's sig/red guard would drop txt-only.
       let hiddenRawReasoningText = "";
@@ -509,7 +509,7 @@ export function bridgeToResponsesSSE(
         return anns;
       };
 
-      const closeCurrentMessage = (inferredPhase?: OcxMessagePhase) => {
+      const closeCurrentMessage = (inferredPhase?: CodexCommanderMessagePhase) => {
         if (!currentMsg) return;
         // Chat Completions has no message-phase field. Keep its live item provisional, then
         // classify it only when the next adapter event proves whether this text led into more
@@ -1384,9 +1384,9 @@ function buildResponseJSONWithBudget(
     toolSearchToolNames?: Set<string>;
     /** Remote compaction v2 turn — append one synthetic compaction output item (see bridgeToResponsesSSE). */
     compaction?: boolean;
-    onProviderState?: (state: OcxProviderContinuationState) => void;
+    onProviderState?: (state: CodexCommanderProviderContinuationState) => void;
     /** Raw adapter-reported usage before wire normalization (see bridgeToResponsesSSE onUsage). */
-    onUsage?: (usage: OcxUsage | undefined) => void;
+    onUsage?: (usage: CodexCommanderUsage | undefined) => void;
     translatorBudget?: TranslatorBudget;
     /** Conversation identity for the reasoning replay cache (issue #950). */
     replayCacheScope?: string;
@@ -1433,7 +1433,7 @@ function buildResponseJSONWithBudget(
     reservation?.commitRetained();
     if (replacedBytes > 0) budget?.releaseRetained(replacedBytes, { kind });
   };
-  let usage: OcxUsage | undefined;
+  let usage: CodexCommanderUsage | undefined;
   let errorEvent: Extract<AdapterEvent, { type: "error" }> | undefined;
   let incompleteEvent: Extract<AdapterEvent, { type: "incomplete" }> | undefined;
   let endTurn: boolean | undefined;
@@ -1444,7 +1444,7 @@ function buildResponseJSONWithBudget(
 
   let currentText = "";
   let currentTextBytes = 0;
-  let currentTextPhase: OcxMessagePhase | undefined;
+  let currentTextPhase: CodexCommanderMessagePhase | undefined;
   let currentSummaryReasoning = "";
   let currentSummaryReasoningBytes = 0;
   let currentRawReasoning = "";
@@ -1476,7 +1476,7 @@ function buildResponseJSONWithBudget(
     try { const o = JSON.parse(args); return o && typeof o === "object" ? o : {}; } catch { return {}; }
   };
 
-  const flushText = (inferredPhase?: OcxMessagePhase) => {
+  const flushText = (inferredPhase?: CodexCommanderMessagePhase) => {
     if (!currentText) return;
     const phase = currentTextPhase ?? inferredPhase;
     const annotations = pendingWebSources.map(s => ({

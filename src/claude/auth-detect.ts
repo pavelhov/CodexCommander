@@ -4,7 +4,7 @@
  * THREE values, not two. `unknown` means a source could not be READ (denied keychain,
  * permission error, corrupt JSON) — treating that as `absent` would silently flip a
  * subscriber into proxy mode, which is the failure this whole unit exists to prevent
- * (devlog/_plan/260726_claude_auth_auto/001 F1). The resolver maps unknown to the
+ * (implementation contract F1). The resolver maps unknown to the
  * historical default (subscription), never to proxy.
  *
  * IO is injectable so every source is testable without touching the real home
@@ -23,16 +23,21 @@ export type AuthSourceId =
   | "macos-keychain"           // S3: security find-generic-password (metadata only)
   | "exported-env";            // S5: ANTHROPIC_API_KEY / a USER's ANTHROPIC_AUTH_TOKEN
 
-// NOTE: there is deliberately no "opencodex anthropic OAuth" source. That is a
-// PROVIDER credential in opencodex's own store which the Claude CLI never consumes,
+// NOTE: there is deliberately no "CodexCommander Anthropic OAuth" source. That is a
+// provider credential in CodexCommander's own store which the Claude CLI never consumes,
 // so it is not evidence the client can authenticate natively (audit 002 §5).
 
 /**
- * The one opencodex-owned dummy token. Exported so the CLI, the system-env writer and
- * the tests all compare against the same literal — a second copy is how the marker
- * feedback loop (002 §1) sneaks back in.
+ * The one CodexCommander-owned dummy token. Exported so the CLI, the system-env
+ * writer and the tests all compare against the same literal — a second copy is
+ * how the marker feedback loop (002 §1) sneaks back in.
  */
-export const PROXY_MARKER = "opencodex-proxy";
+export const PROXY_MARKER = "codexcommander-proxy";
+
+/** True for the proxy-owned dummy token. */
+export function isProxyMarker(value: string | undefined | null): boolean {
+  return value === PROXY_MARKER;
+}
 
 const KEYCHAIN_SERVICE = "Claude Code-credentials";
 /** `security` exit code for "the item does not exist" — a real absent, not a failure. */
@@ -61,7 +66,7 @@ export interface AuthDetectDeps {
    */
   env(): NodeJS.ProcessEnv;
   /**
-   * Token values opencodex itself put into the environment. `system-env.ts` exports the
+   * Token values CodexCommander itself put into the environment. `system-env.ts` exports the
    * configured admission key as `ANTHROPIC_AUTH_TOKEN`, so without this the detector
    * reads OUR OWN output back as proof the user can authenticate natively — the same
    * feedback loop the `PROXY_MARKER` guard closes, one variable over.
@@ -140,15 +145,15 @@ function detectExportedEnv(deps: AuthDetectDeps): AuthSourceResult {
   try {
     const env = deps.env();
     const isOwn = (value: string): boolean =>
-      value === PROXY_MARKER || (deps.ownTokens ?? []).includes(value);
+      isProxyMarker(value) || (deps.ownTokens ?? []).includes(value);
     const apiKey = env.ANTHROPIC_API_KEY?.trim();
     if (apiKey && !isOwn(apiKey)) {
       return { source: "exported-env", presence: "present", detail: "ANTHROPIC_API_KEY" };
     }
     const token = env.ANTHROPIC_AUTH_TOKEN?.trim();
-    // Our own dummy is opencodex state, never user auth: counting it would make a
+    // Our own dummy is CodexCommander state, never user auth: counting it would make a
     // proxy-mode launch look authenticated on the NEXT launch (002 §1). The configured
-    // admission key is opencodex state for exactly the same reason — the system-env
+    // admission key is CodexCommander state for exactly the same reason — the system-env
     // writer exports it into this very variable.
     if (token && !isOwn(token)) {
       return { source: "exported-env", presence: "present", detail: "ANTHROPIC_AUTH_TOKEN" };
@@ -168,7 +173,7 @@ export function detectClaudeAuth(deps: AuthDetectDeps): AuthDetectResult {
   ];
   let staleProxyMarker = false;
   try {
-    staleProxyMarker = deps.env().ANTHROPIC_AUTH_TOKEN?.trim() === PROXY_MARKER;
+    staleProxyMarker = isProxyMarker(deps.env().ANTHROPIC_AUTH_TOKEN?.trim());
   } catch {
     staleProxyMarker = false;
   }
@@ -220,7 +225,7 @@ export function defaultAuthDetectDeps(
 }
 
 /**
- * The token values opencodex itself exports. Configured admission keys land in
+ * The token values CodexCommander itself exports. Configured admission keys land in
  * `ANTHROPIC_AUTH_TOKEN` (see `system-env.ts`), so detection must not read them back
  * as user auth.
  */

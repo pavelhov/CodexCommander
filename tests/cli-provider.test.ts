@@ -8,7 +8,7 @@ import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
-const isolatedCodexHome = mkdtempSync(join(tmpdir(), "ocx-prov-codex-home-"));
+const isolatedCodexHome = mkdtempSync(join(tmpdir(), "ccx-prov-codex-home-"));
 
 // Every case below spawns the real CLI. Cold Bun starts on a loaded windows-latest runner
 // routinely blow the 5s default before --help returns; the spawn IS the assertion.
@@ -29,9 +29,10 @@ function runCli(args: string[], env: Record<string, string> = {}) {
 }
 
 function freshConfig(extra?: Record<string, unknown>) {
-  const dir = mkdtempSync(join(tmpdir(), "ocx-prov-"));
+  const dir = mkdtempSync(join(tmpdir(), "ccx-prov-"));
   const config = {
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     providers: {
       openai: {
         adapter: "openai-responses",
@@ -50,11 +51,11 @@ function readConfig(dir: string) {
   return JSON.parse(readFileSync(join(dir, "config.json"), "utf8"));
 }
 
-describe("ocx provider", () => {
+describe("ccx provider", () => {
   test("provider --help prints usage", () => {
     const result = runCli(["provider", "--help"]);
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Usage: ocx provider");
+    expect(result.stdout).toContain("Usage: ccx provider");
     expect(result.stdout).toContain("list");
     expect(result.stdout).toContain("add");
     expect(result.stdout).toContain("remove");
@@ -63,7 +64,7 @@ describe("ocx provider", () => {
   test("provider list shows configured providers", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["provider", "list"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "list"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("openai");
       expect(result.stdout).toContain("(default)");
@@ -76,7 +77,7 @@ describe("ocx provider", () => {
   test("provider list --json returns valid JSON", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["provider", "list", "--json"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "list", "--json"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(0);
       const parsed = JSON.parse(result.stdout);
       expect(parsed.configured).toBeArray();
@@ -91,7 +92,7 @@ describe("ocx provider", () => {
   test("provider add registry provider seeds config", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["provider", "add", "deepseek", "--api-key", "sk-test"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "add", "deepseek", "--api-key", "sk-test"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("deepseek");
       expect(result.stdout).toContain("DeepSeek");
@@ -111,7 +112,7 @@ describe("ocx provider", () => {
     });
     try {
       const before = readFileSync(configPath, "utf8");
-      const result = runCli(["provider", "add", "deepseek", "--api-key", "sk-test"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "add", "deepseek", "--api-key", "sk-test"], { CODEXCOMMANDER_HOME: dir });
 
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("must not collide with a configured Codex account namespace");
@@ -127,7 +128,7 @@ describe("ocx provider", () => {
     });
     try {
       const before = readFileSync(configPath, "utf8");
-      const result = runCli(["login", provider], { OPENCODEX_HOME: dir });
+      const result = runCli(["login", provider], { CODEXCOMMANDER_HOME: dir });
 
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("must not collide with a configured Codex account namespace");
@@ -140,7 +141,7 @@ describe("ocx provider", () => {
   test("provider add custom provider requires --adapter and --base-url", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["provider", "add", "my-custom"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "add", "my-custom"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("--adapter");
       expect(result.stderr).toContain("--base-url");
@@ -156,15 +157,17 @@ describe("ocx provider", () => {
         "provider", "add", "my-llm",
         "--adapter", "openai-chat",
         "--base-url", "http://localhost:8080/v1",
+        "--allow-private-network",
         "--api-key", "test-key",
         "--default-model", "my-model",
-      ], { OPENCODEX_HOME: dir });
+      ], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(0);
 
       const config = readConfig(dir);
       expect(config.providers["my-llm"]).toBeDefined();
       expect(config.providers["my-llm"].adapter).toBe("openai-chat");
       expect(config.providers["my-llm"].baseUrl).toBe("http://localhost:8080/v1");
+      expect(config.providers["my-llm"].allowPrivateNetwork).toBe(true);
       expect(config.providers["my-llm"].apiKey).toBe("test-key");
       expect(config.providers["my-llm"].defaultModel).toBe("my-model");
     } finally {
@@ -175,7 +178,7 @@ describe("ocx provider", () => {
   test("provider add rejects duplicate without --force", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["provider", "add", "openai"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "add", "openai"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("already exists");
     } finally {
@@ -186,7 +189,7 @@ describe("ocx provider", () => {
   test("provider add with --force overwrites", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["provider", "add", "openai", "--force"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "add", "openai", "--force"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -196,7 +199,7 @@ describe("ocx provider", () => {
   test("provider add --set-default changes defaultProvider", () => {
     const { dir } = freshConfig();
     try {
-      runCli(["provider", "add", "deepseek", "--api-key", "k", "--set-default"], { OPENCODEX_HOME: dir });
+      runCli(["provider", "add", "deepseek", "--api-key", "k", "--set-default"], { CODEXCOMMANDER_HOME: dir });
       const config = readConfig(dir);
       expect(config.defaultProvider).toBe("deepseek");
     } finally {
@@ -212,7 +215,7 @@ describe("ocx provider", () => {
       },
     });
     try {
-      const result = runCli(["provider", "remove", "deepseek"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "remove", "deepseek"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(0);
 
       const config = readConfig(dir);
@@ -226,7 +229,7 @@ describe("ocx provider", () => {
   test("provider remove rejects default provider", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["provider", "remove", "openai"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "remove", "openai"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("default provider");
     } finally {
@@ -238,7 +241,7 @@ describe("ocx provider", () => {
     const { dir } = freshConfig();
     try {
       // Only one provider (openai is also default) - should fail on default check first
-      const result = runCli(["provider", "remove", "openai"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "remove", "openai"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -253,7 +256,7 @@ describe("ocx provider", () => {
       },
     });
     try {
-      const result = runCli(["provider", "show", "deepseek"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "show", "deepseek"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("deepseek");
       expect(result.stdout).toContain("openai-chat");
@@ -267,7 +270,7 @@ describe("ocx provider", () => {
   test("provider show --json returns valid JSON", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["provider", "show", "openai", "--json"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "show", "openai", "--json"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(0);
       const parsed = JSON.parse(result.stdout);
       expect(parsed.name).toBe("openai");
@@ -286,7 +289,7 @@ describe("ocx provider", () => {
       },
     });
     try {
-      const result = runCli(["provider", "set-default", "deepseek"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "set-default", "deepseek"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(0);
 
       const config = readConfig(dir);
@@ -299,7 +302,7 @@ describe("ocx provider", () => {
   test("provider set-default rejects unconfigured provider", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["provider", "set-default", "nonexistent"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "set-default", "nonexistent"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("not configured");
     } finally {
@@ -316,7 +319,7 @@ describe("ocx provider", () => {
   test("provider add warns on --api-key for oauth provider", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["provider", "add", "anthropic", "--api-key", "test"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "add", "anthropic", "--api-key", "test"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(0);
       expect(result.stderr).toContain("OAuth");
     } finally {
@@ -325,11 +328,11 @@ describe("ocx provider", () => {
   });
 });
 
-describe("ocx provider strict args", () => {
+describe("ccx provider strict args", () => {
   test("provider list rejects unknown flags", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["provider", "list", "--bogus"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "list", "--bogus"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("Unknown flag");
     } finally {
@@ -340,7 +343,7 @@ describe("ocx provider strict args", () => {
   test("provider add rejects unknown flags", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["provider", "add", "deepseek", "--unknown-thing"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "add", "deepseek", "--unknown-thing"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("Unknown flag");
     } finally {
@@ -351,7 +354,7 @@ describe("ocx provider strict args", () => {
   test("provider show rejects unknown flags", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["provider", "show", "openai", "--bogus"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "show", "openai", "--bogus"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("Unknown flag");
     } finally {
@@ -360,11 +363,11 @@ describe("ocx provider strict args", () => {
   });
 });
 
-describe("ocx provider mutating --json", () => {
+describe("ccx provider mutating --json", () => {
   test("provider add --json returns structured output", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["provider", "add", "deepseek", "--api-key", "sk-test", "--json"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "add", "deepseek", "--api-key", "sk-test", "--json"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(0);
       const parsed = JSON.parse(result.stdout);
       expect(parsed.action).toBe("added");
@@ -385,7 +388,7 @@ describe("ocx provider mutating --json", () => {
       },
     });
     try {
-      const result = runCli(["provider", "remove", "deepseek", "--json"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "remove", "deepseek", "--json"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(0);
       const parsed = JSON.parse(result.stdout);
       expect(parsed.action).toBe("removed");
@@ -405,7 +408,7 @@ describe("ocx provider mutating --json", () => {
       },
     });
     try {
-      const result = runCli(["provider", "set-default", "deepseek", "--json"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "set-default", "deepseek", "--json"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(0);
       const parsed = JSON.parse(result.stdout);
       expect(parsed.action).toBe("set-default");
@@ -417,12 +420,12 @@ describe("ocx provider mutating --json", () => {
   });
 });
 
-describe("ocx provider add --sync", () => {
+describe("ccx provider add --sync", () => {
   test("provider add --sync flag is accepted without error", () => {
     const { dir } = freshConfig({ port: 9 });
     try {
       // --sync without a running proxy should still succeed (sync silently skipped)
-      const result = runCli(["provider", "add", "deepseek", "--api-key", "sk-test", "--sync"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "add", "deepseek", "--api-key", "sk-test", "--sync"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("deepseek");
     } finally {
@@ -433,7 +436,7 @@ describe("ocx provider add --sync", () => {
   test("provider add --sync --json reports needsSync false", () => {
     const { dir } = freshConfig({ port: 9 });
     try {
-      const result = runCli(["provider", "add", "deepseek", "--api-key", "sk-test", "--sync", "--json"], { OPENCODEX_HOME: dir });
+      const result = runCli(["provider", "add", "deepseek", "--api-key", "sk-test", "--sync", "--json"], { CODEXCOMMANDER_HOME: dir });
       expect(result.status).toBe(0);
       const parsed = JSON.parse(result.stdout);
       expect(parsed.needsSync).toBe(true); // JSON mode skips sync, always reports needsSync=true

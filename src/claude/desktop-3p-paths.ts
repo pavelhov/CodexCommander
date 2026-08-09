@@ -67,13 +67,13 @@ export function resolveUserDataDir(inputs: DesktopPathInputs): string {
 }
 
 /**
- * The directory opencodex writes its 3P profile into.
+ * The directory CodexCommander writes its 3P profile into.
  *
- * OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR wins over every other branch and is returned
+ * CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR wins over every other branch and is returned
  * verbatim (no `join`), because tests point it straight at a temp directory.
  */
 export function resolveConfigLibraryDir(inputs: DesktopPathInputs): string {
-  const override = inputs.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR?.trim();
+  const override = inputs.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR?.trim();
   if (override) return override;
   return joinForPlatform(inputs.platform, resolveUserDataDir(inputs), "configLibrary");
 }

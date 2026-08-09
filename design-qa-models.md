@@ -31,7 +31,7 @@
 ## Final comparison findings
 
 - Layout and hierarchy: passed. Provider rail, Current behavior summary, catalog toolbar, table hierarchy, and Advanced disclosure match the selected direction.
-- Typography: passed. The implementation is intentionally denser than the concept image because it uses the existing OpenCodex type and control tokens; this is a P3 fidelity delta, not a readability defect.
+- Typography: passed. The implementation is intentionally denser than the concept image because it uses the existing CodexCommander type and control tokens; this is a P3 fidelity delta, not a readability defect.
 - Spacing and surfaces: passed. No overlap, clipping, broken wrapping, or unintended card treatment at the tested widths.
 - Color and state: passed. Uncapped/full-context states use the existing green semantic tokens; mixed/capped states use amber; disabled and selected controls remain distinguishable.
 - Icons and assets: passed. Existing product icon components are used consistently; no placeholder, CSS-art, custom-SVG, or fake imagery shortcuts were introduced.

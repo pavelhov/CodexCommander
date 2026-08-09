@@ -1,7 +1,7 @@
 /**
  * Expected-price overlay for models whose jawcode cost rows are missing or all-zero
  * (subscription/OAuth surfaces). Sourced from official pricing pages only
- * (devlog/_plan/260720_toks_speed_price_columns/003 — Luna research, main-verified).
+ * (Luna research, main-verified).
  *
  * Status semantics:
  * - "verified": official page opened directly; the 4-tuple is the published API price.
@@ -95,19 +95,12 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "openai-apikey", modelId: "gpt-5.6-terra-pro", cost4: GPT56_TERRA, source: `collapsed base ID ${OPENAI_GPT56_PRICING}`, verifiedAt: "2026-08-03", status: "verified-derived" },
   { provider: "openai-apikey", modelId: "gpt-5.6-luna-pro", cost4: GPT56_LUNA, source: `collapsed base ID ${OPENAI_GPT56_PRICING}`, verifiedAt: "2026-08-03", status: "verified-derived" },
   { provider: "google-antigravity", modelId: "gemini-3.1-pro-low", cost4: GEMINI_31_PRO, source: `derived: gemini-3.1-pro (<=200k tier) ${GEMINI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "google-antigravity", modelId: "gemini-3.1-pro-high", cost4: GEMINI_31_PRO, source: `derived: gemini-3.1-pro (<=200k tier) ${GEMINI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "google-antigravity", modelId: "gemini-pro-agent", cost4: GEMINI_31_PRO, source: `wire id for gemini-3.1-pro high ${GEMINI_PRICING}`, verifiedAt: "2026-07-23", status: "verified-derived" },
   { provider: "google-antigravity", modelId: "gemini-3.6-flash-low", cost4: GEMINI_36_FLASH, source: `derived: gemini-3.6-flash ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified-derived" },
   { provider: "google-antigravity", modelId: "gemini-3.6-flash-medium", cost4: GEMINI_36_FLASH, source: `derived: gemini-3.6-flash ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified-derived" },
   { provider: "google-antigravity", modelId: "gemini-3.6-flash-high", cost4: GEMINI_36_FLASH, source: `derived: gemini-3.6-flash ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified-derived" },
-  { provider: "google-antigravity", modelId: "gemini-3.5-flash-extra-low", cost4: GEMINI_36_FLASH, source: `compat alias -> gemini-3.6-flash-low ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified-derived" },
-  { provider: "google-antigravity", modelId: "gemini-3.5-flash-low", cost4: GEMINI_36_FLASH, source: `compat alias -> gemini-3.6-flash-medium ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified-derived" },
-  { provider: "google-antigravity", modelId: "gemini-3.5-flash-mid", cost4: GEMINI_36_FLASH, source: `compat alias -> gemini-3.6-flash-medium ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified-derived" },
-  { provider: "google-antigravity", modelId: "gemini-3.5-flash-high", cost4: GEMINI_36_FLASH, source: `compat alias -> gemini-3.6-flash-high ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified-derived" },
-  { provider: "google-antigravity", modelId: "gemini-3-flash-agent", cost4: GEMINI_36_FLASH, source: `compat alias -> gemini-3.6-flash-high ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified-derived" },
   // Direct Google Gemini API current model (verified — published table).
   { provider: "google", modelId: "gemini-3.6-flash", cost4: GEMINI_36_FLASH, source: GEMINI_PRICING, verifiedAt: "2026-07-22", status: "verified" },
-  { provider: "google-antigravity", modelId: "gemini-3.1-pro-preview", cost4: GEMINI_31_PRO, source: GEMINI_PRICING, verifiedAt: "2026-07-20", status: "verified" },
   // Antigravity-bundled third-party models — derived from the underlying vendor's
   // official API price (Antigravity itself bills via subscription quota).
   { provider: "google-antigravity", modelId: "claude-sonnet-4-6", cost4: CLAUDE_SONNET_46, source: `anthropic official Claude Sonnet 4.6 ${ANTHROPIC_PRICING}`, verifiedAt: "2026-07-23", status: "verified" },

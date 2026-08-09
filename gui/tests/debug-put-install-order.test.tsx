@@ -70,7 +70,7 @@ beforeEach(() => {
   // the cold-start GET and leaves pollCount at 0 (seen on Windows CI after mutation-busy).
   clearClientResourceStoresForTests();
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
-  testWindow = new Window({ url: "http://localhost/#debug" });
+  testWindow = new Window({ url: "http://localhost/#logs/debug" });
   // React 19 resolveUpdatePriority reads window.event; happy-dom omits the IE legacy field.
   Object.defineProperty(testWindow, "event", { configurable: true, writable: true, value: undefined });
   Object.defineProperties(globalThis, {

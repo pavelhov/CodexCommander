@@ -5,9 +5,9 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 
-const PREV_HOME = process.env.OPENCODEX_HOME;
-beforeAll(() => { process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-prune-" + randomUUID()); });
-afterAll(() => { if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = PREV_HOME; });
+const PREV_HOME = process.env.CODEXCOMMANDER_HOME;
+beforeAll(() => { process.env.CODEXCOMMANDER_HOME = join(tmpdir(), "ccx-prune-" + randomUUID()); });
+afterAll(() => { if (PREV_HOME === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = PREV_HOME; });
 
 const { pruneOldArtifacts, pruneArtifacts, DEFAULT_ARTIFACT_KEEP_COUNT } = await import("../../src/images/artifacts");
 

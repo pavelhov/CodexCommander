@@ -3,7 +3,7 @@
  *
  * The question this answers is NOT "is a job loaded". Installation writes the
  * definition BEFORE the state file (`service.ts` install paths) and embeds
- * `CODEX_HOME`/`OPENCODEX_HOME` inside it, so an interrupted reinstall leaves a
+ * `CODEX_HOME`/`CODEXCOMMANDER_HOME` inside it, so an interrupted reinstall leaves a
  * valid state file for one home beside an installed definition for another. A
  * probe that only asked about registration would call that owned. On macOS it is
  * worse: a logged-out user has the plist on disk with no GUI domain at all, so
@@ -19,9 +19,10 @@
  * manager would hold the event loop.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { HOME_ENV, SERVICE_LABEL, SERVICE_TASK } from "./identity";
 
 /** Short: this runs inside admission, and a slow answer is the same as none. */
 export const SERVICE_PROBE_TIMEOUT_MS = 2_000;
@@ -38,7 +39,7 @@ export interface ServiceManagerClaim {
    */
   readonly homes: {
     readonly codexHome: string | null;
-    readonly opencodexHome: string | null;
+    readonly codexCommanderHome: string | null;
   };
   readonly registration: "present" | "absent";
 }
@@ -83,8 +84,13 @@ export interface ProbeDeps {
   readonly home?: string;
 }
 
-const LABEL = "com.opencodex.proxy";
-const TASK = "opencodex-proxy";
+const LABEL = SERVICE_LABEL;
+const TASK = SERVICE_TASK;
+
+/** The only service identity this runtime installs or discovers. */
+const SERVICE_IDENTITIES = [
+  { label: LABEL, task: TASK },
+] as const;
 
 /**
  * `launchctl print` exits 113 for a service that is not there and 112 when the
@@ -139,34 +145,61 @@ function unitEnvValue(body: string, key: string): string | null {
 }
 
 function inspectLaunchd(deps: Required<Pick<ProbeDeps, "run" | "uid" | "home">>): ServiceManagerInstallation {
-  const definitionPath = join(deps.home, "Library", "LaunchAgents", `${LABEL}.plist`);
-
-  /*
-   * BOTH domains, because they are independent and hold separate service sets.
-   * Measured on macOS 27.0: the shipped agent answers 0 under `gui/<uid>` and
-   * 113 under `user/<uid>`. Asking only one leaves the other free to hold a job
-   * this probe would then call absent.
-   */
-  let registration: "present" | "absent" = "absent";
-  let unreachableDomains = 0;
-  for (const domain of [`gui/${deps.uid}`, `user/${deps.uid}`]) {
-    const printed = deps.run("/bin/launchctl", ["print", `${domain}/${LABEL}`]);
-    if (printed.spawnFailed || printed.timedOut) {
-      return unknown(`launchctl could not be asked: ${printed.timedOut ? "timed out" : printed.stderr.trim()}`);
+  const claims: ServiceManagerClaim[] = [];
+  let anyDefinition = false;
+  for (const identity of SERVICE_IDENTITIES) {
+    const definitionPath = join(deps.home, "Library", "LaunchAgents", `${identity.label}.plist`);
+    /*
+     * BOTH domains, because they are independent and hold separate service sets.
+     * Measured on macOS 27.0: the shipped agent answers 0 under `gui/<uid>` and
+     * 113 under `user/<uid>`. Asking only one leaves the other free to hold a job
+     * this probe would then call absent.
+     */
+    let registration: "present" | "absent" = "absent";
+    let unreachableDomains = 0;
+    for (const domain of [`gui/${deps.uid}`, `user/${deps.uid}`]) {
+      const printed = deps.run("/bin/launchctl", ["print", `${domain}/${identity.label}`]);
+      if (printed.spawnFailed || printed.timedOut) {
+        return unknown(`launchctl could not be asked: ${printed.timedOut ? "timed out" : printed.stderr.trim()}`);
+      }
+      if (printed.status === 0) { registration = "present"; break; }
+      if (printed.status === LAUNCHCTL_NO_SUCH_SERVICE) continue;
+      if (printed.status === LAUNCHCTL_NO_SUCH_DOMAIN) { unreachableDomains += 1; continue; }
+      return unknown(`launchctl print exited ${String(printed.status)}: ${printed.stderr.trim()}`);
     }
-    if (printed.status === 0) { registration = "present"; break; }
-    if (printed.status === LAUNCHCTL_NO_SUCH_SERVICE) continue;
-    if (printed.status === LAUNCHCTL_NO_SUCH_DOMAIN) { unreachableDomains += 1; continue; }
-    return unknown(`launchctl print exited ${String(printed.status)}: ${printed.stderr.trim()}`);
+
+    const definition = artifactPresence(definitionPath);
+    if (definition === "absent") {
+      // No file. A registration without one means launchd holds a definition whose
+      // file is gone — real, and not something to resolve unattended.
+      if (registration === "present") {
+        return unknown("launchd has a job loaded but its plist is missing");
+      }
+      void unreachableDomains;
+      continue;
+    }
+    anyDefinition = true;
+
+    let body: string;
+    try {
+      body = readFileSync(definitionPath, "utf-8");
+    } catch (error) {
+      // Present-but-unreadable cannot supply homes, and `present` without homes
+      // would compare equal to nothing and read as agreement.
+      return unknown(`the launchd plist exists but could not be read: ${String(error)}`);
+    }
+
+    claims.push({
+      backend: "launchd",
+      definitionPath,
+      homes: {
+        codexHome: plistEnvValue(body, "CODEX_HOME"),
+        codexCommanderHome: plistEnvValue(body, HOME_ENV),
+      },
+      registration,
+    });
   }
-
-  const definition = artifactPresence(definitionPath);
-  if (definition === "absent") {
-    // No file. A registration without one means launchd holds a definition whose
-    // file is gone — real, and not something to resolve unattended.
-    if (registration === "present") {
-      return unknown("launchd has a job loaded but its plist is missing");
-    }
+  if (!anyDefinition) {
     /*
      * Nothing staged, and every domain either answered "no such service" or does
      * not exist. 112 is an answer ABOUT THE DOMAIN and is label-independent —
@@ -175,31 +208,9 @@ function inspectLaunchd(deps: Required<Pick<ProbeDeps, "run" | "uid" | "home">>)
      * instead would refuse every write on a fresh headless Mac, which has no
      * GUI domain and no installation either.
      */
-    void unreachableDomains;
     return { kind: "absent" };
   }
-
-  let body: string;
-  try {
-    body = readFileSync(definitionPath, "utf-8");
-  } catch (error) {
-    // Present-but-unreadable cannot supply homes, and `present` without homes
-    // would compare equal to nothing and read as agreement.
-    return unknown(`the launchd plist exists but could not be read: ${String(error)}`);
-  }
-
-  return {
-    kind: "present",
-    claims: [{
-      backend: "launchd",
-      definitionPath,
-      homes: {
-        codexHome: plistEnvValue(body, "CODEX_HOME"),
-        opencodexHome: plistEnvValue(body, "OPENCODEX_HOME"),
-      },
-      registration,
-    }],
-  };
+  return { kind: "present", claims };
 }
 
 function systemdProperty(out: string, key: string): string | null {
@@ -211,66 +222,69 @@ function systemdProperty(out: string, key: string): string | null {
 }
 
 function inspectSystemd(deps: Required<Pick<ProbeDeps, "run" | "home">>): ServiceManagerInstallation {
-  const definitionPath = join(deps.home, ".config", "systemd", "user", `${TASK}.service`);
+  const claims: ServiceManagerClaim[] = [];
+  let anyDefinition = false;
+  for (const identity of SERVICE_IDENTITIES) {
+    const definitionPath = join(deps.home, ".config", "systemd", "user", `${identity.task}.service`);
+    /*
+     * All four properties in one call. LoadState alone is not enough — it is
+     * orthogonal to ActiveState — and neither says whether the LOADED bytes match
+     * the file. NeedDaemonReload is that signal, and this repository already
+     * documents it as the systemd analogue of launchd's stale plist.
+     */
+    const shown = deps.run("systemctl", [
+      "--user", "show", identity.task,
+      "-p", "LoadState", "-p", "ActiveState", "-p", "FragmentPath", "-p", "NeedDaemonReload",
+    ]);
+    if (shown.spawnFailed || shown.timedOut) {
+      return unknown(`systemctl could not be asked: ${shown.timedOut ? "timed out" : shown.stderr.trim()}`);
+    }
+    if (shown.status !== 0) {
+      // A missing unit still exits ZERO and says not-found; a non-zero status means
+      // the question never reached the bus.
+      return unknown(`systemctl show exited ${String(shown.status)}: ${shown.stderr.trim()}`);
+    }
 
-  /*
-   * All four properties in one call. LoadState alone is not enough — it is
-   * orthogonal to ActiveState — and neither says whether the LOADED bytes match
-   * the file. NeedDaemonReload is that signal, and this repository already
-   * documents it as the systemd analogue of launchd's stale plist.
-   */
-  const shown = deps.run("systemctl", [
-    "--user", "show", TASK,
-    "-p", "LoadState", "-p", "ActiveState", "-p", "FragmentPath", "-p", "NeedDaemonReload",
-  ]);
-  if (shown.spawnFailed || shown.timedOut) {
-    return unknown(`systemctl could not be asked: ${shown.timedOut ? "timed out" : shown.stderr.trim()}`);
-  }
-  if (shown.status !== 0) {
-    // A missing unit still exits ZERO and says not-found; a non-zero status means
-    // the question never reached the bus.
-    return unknown(`systemctl show exited ${String(shown.status)}: ${shown.stderr.trim()}`);
-  }
+    const loadState = systemdProperty(shown.stdout, "LoadState");
+    const activeState = systemdProperty(shown.stdout, "ActiveState");
+    const fragmentPath = systemdProperty(shown.stdout, "FragmentPath");
+    const needReload = systemdProperty(shown.stdout, "NeedDaemonReload");
+    if (loadState === null || activeState === null || needReload === null) {
+      return unknown("systemctl show did not report the properties it was asked for");
+    }
+    if (needReload === "yes") {
+      return unknown("systemd has a stale definition loaded; it needs daemon-reload");
+    }
 
-  const loadState = systemdProperty(shown.stdout, "LoadState");
-  const activeState = systemdProperty(shown.stdout, "ActiveState");
-  const fragmentPath = systemdProperty(shown.stdout, "FragmentPath");
-  const needReload = systemdProperty(shown.stdout, "NeedDaemonReload");
-  if (loadState === null || activeState === null || needReload === null) {
-    return unknown("systemctl show did not report the properties it was asked for");
-  }
-  if (needReload === "yes") {
-    return unknown("systemd has a stale definition loaded; it needs daemon-reload");
-  }
+    const registration: "present" | "absent" =
+      loadState === "not-found" && activeState === "inactive" && !fragmentPath ? "absent" : "present";
 
-  const registration: "present" | "absent" =
-    loadState === "not-found" && activeState === "inactive" && !fragmentPath ? "absent" : "present";
+    if (artifactPresence(definitionPath) === "absent") {
+      if (registration === "present") {
+        return unknown("systemd knows this unit but its file is missing");
+      }
+      continue;
+    }
+    anyDefinition = true;
 
-  if (artifactPresence(definitionPath) === "absent") {
-    return registration === "absent"
-      ? { kind: "absent" }
-      : unknown("systemd knows this unit but its file is missing");
-  }
+    let body: string;
+    try {
+      body = readFileSync(definitionPath, "utf-8");
+    } catch (error) {
+      return unknown(`the systemd unit exists but could not be read: ${String(error)}`);
+    }
 
-  let body: string;
-  try {
-    body = readFileSync(definitionPath, "utf-8");
-  } catch (error) {
-    return unknown(`the systemd unit exists but could not be read: ${String(error)}`);
-  }
-
-  return {
-    kind: "present",
-    claims: [{
+    claims.push({
       backend: "systemd",
       definitionPath,
       homes: {
         codexHome: unitEnvValue(body, "CODEX_HOME"),
-        opencodexHome: unitEnvValue(body, "OPENCODEX_HOME"),
+        codexCommanderHome: unitEnvValue(body, HOME_ENV),
       },
       registration,
-    }],
-  };
+    });
+  }
+  return anyDefinition ? { kind: "present", claims } : { kind: "absent" };
 }
 
 /**

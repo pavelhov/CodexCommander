@@ -33,7 +33,7 @@ import {
 } from "../server/proxy-liveness";
 import { acquireProxyEnsureLock } from "../server/proxy-start-lock";
 import { injectSystemEnv, revertSystemEnv } from "../server/system-env";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import { RuntimeApiError, runtimeRequest } from "./runtime-api";
 
 export type ProxyLifecycleAction = "status" | "ensure" | "start" | "stop" | "restart";
@@ -60,11 +60,10 @@ export interface ProxyLifecycleResult {
     | "START_FAILED"
     | "STOP_FAILED"
     | "SYNC_FAILED"
-    | "PROXY_RESTART_REQUIRED"
     | "CODEX_RESTART_REQUIRED";
 }
 
-export type ProxyStartupReadiness = "ready" | "failed" | "legacy" | "timeout";
+export type ProxyStartupReadiness = "ready" | "failed" | "timeout";
 
 export interface ProxyCatalogSyncOutcome {
   status?: "applied" | "skipped" | "refused" | "failed";
@@ -81,7 +80,7 @@ export interface ProxyCatalogSyncOutcome {
     processes?: Array<{ pid?: number; startedAtMs?: number | null }>;
     catalogMtimeMs?: number | null;
   };
-  lifecycleErrorCode?: "SYNC_FAILED" | "PROXY_RESTART_REQUIRED";
+  lifecycleErrorCode?: "SYNC_FAILED";
 }
 
 export interface ProxyLifecycleLogger {
@@ -105,7 +104,7 @@ export interface SpawnDetachedProxyOptions {
 
 export interface EnsureProxyLifecycleIo {
   findLive?: () => Promise<LiveProxy | null>;
-  loadConfig?: () => OcxConfig;
+  loadConfig?: () => CodexCommanderConfig;
   diagnoseService?: typeof diagnoseService;
   startService?: () => boolean;
   spawnStart?: (port?: number, env?: NodeJS.ProcessEnv) => Promise<void>;
@@ -113,9 +112,9 @@ export interface EnsureProxyLifecycleIo {
   waitForReady?: (live: LiveProxy, timeoutMs?: number) => Promise<ProxyStartupReadiness>;
   syncLive?: (
     live: LiveProxy,
-    config: OcxConfig,
+    config: CodexCommanderConfig,
     logger: ProxyLifecycleLogger,
-  ) => Promise<ProxyCatalogSyncOutcome | void>;
+  ) => Promise<ProxyCatalogSyncOutcome>;
   ensureCompanion?: () => Promise<boolean>;
   reconcile?: () => void;
   acquireEnsureLock?: () => Promise<{ release(): void }>;
@@ -138,12 +137,12 @@ export interface StopProxyLifecycleOptions {
 }
 
 /**
- * Locate a duplicate for `ocx start`. Runtime records still identify this state
+ * Locate a duplicate for `ccx start`. Runtime records still identify this state
  * home first; only the recordless fallback probe follows an explicit --port.
  */
 export function findLiveProxyForStart(
   requestedPort: number | undefined,
-  config: Pick<OcxConfig, "port" | "hostname">,
+  config: Pick<CodexCommanderConfig, "port" | "hostname">,
   findLive: typeof findLiveProxy = findLiveProxy,
 ): Promise<LiveProxy | null> {
   return findLive(requestedPort === undefined ? {} : {
@@ -190,7 +189,7 @@ function lifecycleResult(
 }
 
 export function proxyStartArgv(port?: number, entry = process.argv[1]): string[] {
-  if (!entry) throw new Error("OpenCodex CLI entry is unavailable");
+  if (!entry) throw new Error("CodexCommander CLI entry is unavailable");
   const argv = [entry, "start"];
   if (typeof port === "number" && Number.isSafeInteger(port) && port > 0 && port <= 65535) {
     argv.push("--port", String(port));
@@ -201,7 +200,7 @@ export function proxyStartArgv(port?: number, entry = process.argv[1]): string[]
 /** Spawn the canonical foreground start command and resolve only after OS spawn succeeds. */
 export function spawnDetachedProxyStart(options: SpawnDetachedProxyOptions = {}): Promise<void> {
   const spawnFn = options.spawnFn ?? spawn;
-  const env = options.env ?? { ...process.env, OCX_SERVICE: "1" };
+  const env = options.env ?? { ...process.env, CCX_SERVICE: "1" };
   return new Promise<void>((resolve, reject) => {
     let child: ReturnType<typeof spawn>;
     try {
@@ -241,16 +240,13 @@ export async function waitForProxy(timeoutMs = 12_000): Promise<LiveProxy | null
 
 /**
  * Let the proxy-owned startup convergence finish before asking it to converge
- * again through the management plane. A live legacy proxy has no `/readyz`;
- * three identity-adjacent misses classify that case quickly instead of spending
- * the whole startup budget polling an endpoint it cannot serve.
+ * again through the management plane.
  */
 export async function waitForProxyReadiness(
   live: LiveProxy,
   timeoutMs = 20_000,
 ): Promise<ProxyStartupReadiness> {
   const deadline = Date.now() + Math.max(0, timeoutMs);
-  let consecutiveMisses = 0;
   while (Date.now() < deadline) {
     const result = await probeReadiness(live.port, {
       ...(live.hostname ? { hostname: live.hostname } : {}),
@@ -258,18 +254,14 @@ export async function waitForProxyReadiness(
     });
     if (result?.status === "ready") return "ready";
     if (result?.status === "failed") return "failed";
-    if (result === null) {
-      consecutiveMisses += 1;
-      if (consecutiveMisses >= 3) return "legacy";
-    } else {
-      consecutiveMisses = 0;
-    }
     await Bun.sleep(200);
   }
   return "timeout";
 }
 
 /** Fixed LaunchServices argv for the repo-built companion (or a registered release app). */
+const MACOS_COMPANION_BUNDLE_ID = "com.codexcommander.menubar";
+
 export function macOSCompanionOpenArguments(
   options: {
     platform?: NodeJS.Platform;
@@ -280,13 +272,18 @@ export function macOSCompanionOpenArguments(
 ): string[] | null {
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
-  if (platform !== "darwin" || env.OCX_SERVICE === "1" || env.OCX_DISABLE_COMPANION === "1") {
+  if (platform !== "darwin" || env.CCX_SERVICE === "1" || env.CCX_DISABLE_COMPANION === "1") {
     return null;
   }
-  const sourceApp = options.appPath ?? join(repoRoot, "dist", "macos", "OpenCodex.app");
-  return (options.exists ?? existsSync)(sourceApp)
-    ? ["-g", sourceApp]
-    : ["-g", "-b", "com.opencodex.menubar"];
+  const exists = options.exists ?? existsSync;
+  if (options.appPath) {
+    return exists(options.appPath)
+      ? ["-g", options.appPath]
+      : ["-g", "-b", MACOS_COMPANION_BUNDLE_ID];
+  }
+  const app = join(repoRoot, "dist", "macos", "CodexCommander.app");
+  if (exists(app)) return ["-g", app];
+  return ["-g", "-b", MACOS_COMPANION_BUNDLE_ID];
 }
 
 /** Best-effort source/release companion launch. Never starts from service children. */
@@ -329,7 +326,7 @@ export function ensureMacOSCompanionApp(
 
 async function syncLiveProxy(
   live: LiveProxy,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   logger: ProxyLifecycleLogger,
 ): Promise<ProxyCatalogSyncOutcome> {
   let catalogSync: ProxyCatalogSyncOutcome;
@@ -344,17 +341,14 @@ async function syncLiveProxy(
     const body = error instanceof RuntimeApiError && error.body && typeof error.body === "object"
       ? error.body as Partial<ProxyCatalogSyncOutcome>
       : null;
-    const runningProxyNeedsRestart = error instanceof RuntimeApiError && error.status === 404;
     catalogSync = {
       status: body?.status ?? "failed",
       ok: false,
-      message: runningProxyNeedsRestart
-        ? "The running OpenCodex proxy must be restarted before its catalog can be synchronized."
-        : (typeof body?.message === "string" && body.message
-          ? body.message
-          : "OpenCodex is running, but its Codex model catalog did not synchronize."),
+      message: typeof body?.message === "string" && body.message
+        ? body.message
+        : "CodexCommander is running, but its Codex model catalog did not synchronize.",
       ...(typeof body?.warning === "string" ? { warning: body.warning } : {}),
-      lifecycleErrorCode: runningProxyNeedsRestart ? "PROXY_RESTART_REQUIRED" : "SYNC_FAILED",
+      lifecycleErrorCode: "SYNC_FAILED",
     };
     logger.warn(catalogSync.message ?? "Model catalog sync failed.");
   }
@@ -374,19 +368,37 @@ async function syncLiveProxy(
   return catalogSync;
 }
 
+function isCurrentCatalogState(value: ProxyCatalogSyncOutcome["catalogState"]): boolean {
+  if (!value || !["fresh", "stale", "not_running", "unknown"].includes(value.state ?? "")) return false;
+  if (!Array.isArray(value.processes)) return false;
+  if (value.catalogMtimeMs !== null && (typeof value.catalogMtimeMs !== "number" || !Number.isFinite(value.catalogMtimeMs))) {
+    return false;
+  }
+  return value.processes.every(process => (
+    typeof process.pid === "number"
+    && Number.isInteger(process.pid)
+    && process.pid > 0
+    && (process.startedAtMs === null
+      || (typeof process.startedAtMs === "number" && Number.isFinite(process.startedAtMs)))
+  ));
+}
+
 function catalogSyncFailure(
-  result: ProxyCatalogSyncOutcome | void,
+  result: ProxyCatalogSyncOutcome,
 ): {
-  errorCode: "SYNC_FAILED" | "PROXY_RESTART_REQUIRED";
+  errorCode: "SYNC_FAILED";
   message: string;
 } | null {
-  // Test seams written before this contract returned void. Production always
-  // returns a structured result from the live management plane.
-  if (result === undefined) return null;
   if (result.lifecycleErrorCode) {
     return {
       errorCode: result.lifecycleErrorCode,
-      message: result.message ?? "OpenCodex model catalog synchronization failed.",
+      message: result.message ?? "CodexCommander model catalog synchronization failed.",
+    };
+  }
+  if (result.ok && !isCurrentCatalogState(result.catalogState)) {
+    return {
+      errorCode: "SYNC_FAILED",
+      message: "The running CodexCommander proxy returned an invalid catalog state. Restart it and retry.",
     };
   }
   const intentionalNativeOnly = result.status === "skipped"
@@ -402,7 +414,7 @@ function catalogSyncFailure(
     return {
       errorCode: "SYNC_FAILED",
       message: result.message
-        ?? "OpenCodex is running, but its Codex model catalog did not converge. Run `ocx sync` and retry.",
+        ?? "CodexCommander is running, but its Codex model catalog did not converge. Run `ccx sync` and retry.",
     };
   }
   return null;
@@ -430,18 +442,13 @@ function staleCatalogWorkerCount(result: ProxyCatalogSyncOutcome): number {
   )).length;
 }
 
-/** A stale Codex worker roster is actionable, but the OpenCodex proxy is healthy. */
-function catalogSyncNotice(result: ProxyCatalogSyncOutcome | void): CatalogSyncNotice | null {
-  if (!result) return null;
+/** A stale Codex worker roster is actionable, but the CodexCommander proxy is healthy. */
+function catalogSyncNotice(result: ProxyCatalogSyncOutcome): CatalogSyncNotice | null {
   const intentionalNativeOnly = result.status === "skipped"
     && (result.skippedReason === "desired_disabled" || result.skippedReason === "external_provider")
     && result.ok;
   if (intentionalNativeOnly) return null;
-  // Current proxies report catalogState. The hint-only branch retains compatibility
-  // with an older live proxy without letting a generic post-write hint override a
-  // current proxy's explicit fresh/not_running/unknown classification.
-  const updateReady = result.catalogState?.state === "stale"
-    || (result.catalogState === undefined && result.staleAppServerHint !== undefined);
+  const updateReady = result.catalogState?.state === "stale";
   if (!updateReady) return null;
   const staleWorkerCount = staleCatalogWorkerCount(result);
   return {
@@ -463,11 +470,11 @@ export async function proxyLifecycleStatus(
     ? lifecycleResult(action, "running", {
       ok: true,
       live,
-      message: "OpenCodex proxy is running.",
+      message: "CodexCommander proxy is running.",
     })
     : lifecycleResult(action, "stopped", {
       ok: true,
-      message: "OpenCodex proxy is stopped.",
+      message: "CodexCommander proxy is stopped.",
     });
 }
 
@@ -507,7 +514,7 @@ export async function ensureProxyLifecycle(
   } catch {
     return lifecycleResult(action, "blocked", {
       ok: false,
-      message: "OpenCodex lifecycle coordination is unavailable.",
+      message: "CodexCommander lifecycle coordination is unavailable.",
       errorCode: "START_FAILED",
     });
   }
@@ -531,7 +538,7 @@ export async function ensureProxyLifecycle(
       if (service?.installed && !serviceStartableFromTray(service)) {
         return lifecycleResult(action, "blocked", {
           ok: false,
-          message: "Installed background service needs repair before OpenCodex can start.",
+          message: "Installed background service needs repair before CodexCommander can start.",
           errorCode: "SERVICE_BLOCKED",
         });
       }
@@ -546,7 +553,7 @@ export async function ensureProxyLifecycle(
             : 10100;
           const spawnStart = io.spawnStart
             ?? ((selectedPort, env) => spawnDetachedProxyStart({ port: selectedPort, env }));
-          await spawnStart(port, options.startEnv ?? { ...process.env, OCX_SERVICE: "1" });
+          await spawnStart(port, options.startEnv ?? { ...process.env, CCX_SERVICE: "1" });
         }
       } catch (error) {
         if (service?.installed || isServiceOwnershipError(error)) {
@@ -558,7 +565,7 @@ export async function ensureProxyLifecycle(
         }
         return lifecycleResult(action, "failed", {
           ok: false,
-          message: "OpenCodex proxy could not be started.",
+          message: "CodexCommander proxy could not be started.",
           errorCode: "START_FAILED",
         });
       }
@@ -567,7 +574,7 @@ export async function ensureProxyLifecycle(
       if (!live) {
         return lifecycleResult(action, "failed", {
           ok: false,
-          message: "OpenCodex proxy did not become healthy after starting.",
+          message: "CodexCommander proxy did not become healthy after starting.",
           errorCode: "START_FAILED",
         });
       }
@@ -618,7 +625,7 @@ export async function ensureProxyLifecycle(
     ok: true,
     changed: startedHere,
     live,
-    message: startedHere ? "OpenCodex proxy started." : "OpenCodex proxy is already running.",
+    message: startedHere ? "CodexCommander proxy started." : "CodexCommander proxy is already running.",
   });
 }
 
@@ -723,7 +730,7 @@ export function prepareExplicitProxyShutdown(): {
     success: restored.ok && !service.failed,
     message: restored.ok && !service.failed
       ? `Proxy stopping, native Codex restored.${grokNote}`
-      : `Proxy stopping, but native Codex restore did not complete. Run \`ocx restore\`.${grokNote}`,
+      : `Proxy stopping, but native Codex restore did not complete. Run \`ccx restore\`.${grokNote}`,
   };
 }
 
@@ -792,14 +799,14 @@ export async function stopProxyLifecycle(
     return lifecycleResult(action, "failed", {
       ok: false,
       changed,
-      message: "OpenCodex proxy stop did not complete cleanly.",
+      message: "CodexCommander proxy stop did not complete cleanly.",
       errorCode: "STOP_FAILED",
     });
   }
   return lifecycleResult(action, "stopped", {
     ok: true,
     changed,
-    message: changed ? "OpenCodex proxy stopped." : "OpenCodex proxy is already stopped.",
+    message: changed ? "CodexCommander proxy stopped." : "CodexCommander proxy is already stopped.",
   });
 }
 

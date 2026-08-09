@@ -1,4 +1,4 @@
-import type { OcxUsage } from "../types";
+import type { CodexCommanderUsage } from "../types";
 import { kiroTruncationReason } from "./kiro-truncation";
 
 export type ParsedKiroEvent =
@@ -7,7 +7,7 @@ export type ParsedKiroEvent =
   | { type: "context_usage"; contextUsagePercentage: number }
   | { type: "tool"; name?: string; toolUseId?: string; input?: string; stop?: boolean }
   | { type: "truncation"; data: string }
-  | { type: "metadata"; usage?: OcxUsage; contextUsagePercentage?: number; stopReason?: string }
+  | { type: "metadata"; usage?: CodexCommanderUsage; contextUsagePercentage?: number; stopReason?: string }
   | { type: "message_metadata"; conversationId?: string }
   | { type: "invalid_state"; message?: string }
   | { type: "error"; reason?: string; message?: string };
@@ -66,7 +66,7 @@ function tokenCount(eventType: string, obj: Record<string, unknown>, key: string
   return value;
 }
 
-function parseTokenUsage(eventType: string, value: unknown): OcxUsage | undefined {
+function parseTokenUsage(eventType: string, value: unknown): CodexCommanderUsage | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "object" || Array.isArray(value)) {
     return malformed(eventType, "tokenUsage must be an object");

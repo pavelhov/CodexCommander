@@ -6,48 +6,55 @@ import { invalidateCodexModelsCache } from "../src/codex/catalog";
 import { afterCatalogWriteHandleAppServers } from "../src/codex/app-server-processes";
 import { refreshCodexModelCatalog } from "../src/codex/refresh";
 import { syncModelsToCodex } from "../src/codex/sync";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 
 setDefaultTimeout(30_000);
 
 const emptyConfig = {
   port: 10100,
+  multiAgentGuidanceEnabled: true,
   defaultProvider: "openai",
-  providers: {},
-} as OcxConfig;
+  providers: {
+    openai: {
+      adapter: "openai-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward",
+    },
+  },
+} as CodexCommanderConfig;
 
 describe("invalidateCodexModelsCache write gate (#476 / #518)", () => {
   let previousCodexHome: string | undefined;
-  let previousOpenCodexHome: string | undefined;
+  let previousCodexCommanderHome: string | undefined;
   let previousCodexCliPath: string | undefined;
   let codexHome = "";
-  let opencodexHome = "";
+  let codexCommanderHome = "";
 
   beforeEach(() => {
     previousCodexHome = process.env.CODEX_HOME;
-    previousOpenCodexHome = process.env.OPENCODEX_HOME;
+    previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     previousCodexCliPath = process.env.CODEX_CLI_PATH;
-    codexHome = mkdtempSync(join(tmpdir(), "ocx-invalidate-codex-"));
-    opencodexHome = mkdtempSync(join(tmpdir(), "ocx-invalidate-ocx-"));
+    codexHome = mkdtempSync(join(tmpdir(), "ccx-invalidate-codex-"));
+    codexCommanderHome = mkdtempSync(join(tmpdir(), "ccx-invalidate-ccx-"));
     process.env.CODEX_HOME = codexHome;
-    process.env.OPENCODEX_HOME = opencodexHome;
-    process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(opencodexHome);
+    process.env.CODEXCOMMANDER_HOME = codexCommanderHome;
+    process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(codexCommanderHome);
   });
 
   afterEach(() => {
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
-    if (previousOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpenCodexHome;
+    if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
     if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
     else process.env.CODEX_CLI_PATH = previousCodexCliPath;
     rmSync(codexHome, { recursive: true, force: true });
-    rmSync(opencodexHome, { recursive: true, force: true });
+    rmSync(codexCommanderHome, { recursive: true, force: true });
   });
 
   test("returns true and writes models_cache when catalog.json is readable", () => {
-    writeFileSync(join(codexHome, "opencodex-catalog.json"), JSON.stringify({
+    writeFileSync(join(codexHome, "codexcommander-catalog.json"), JSON.stringify({
       models: [{ slug: "gpt-5.5" }],
     }, null, 2) + "\n");
 
@@ -68,14 +75,21 @@ describe("invalidateCodexModelsCache write gate (#476 / #518)", () => {
     // reacquires it. An OFF landing in that gap must gate this second write too —
     // otherwise a routed models_cache survives a completed disable while the
     // injector honestly reports status:"skipped".
-    writeFileSync(join(codexHome, "opencodex-catalog.json"), JSON.stringify({
+    writeFileSync(join(codexHome, "codexcommander-catalog.json"), JSON.stringify({
       models: [{ slug: "gpt-5.5" }],
     }, null, 2) + "\n");
-    mkdirSync(join(opencodexHome, ".opencodex"), { recursive: true });
-    writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({
+    mkdirSync(join(codexCommanderHome, ".codexcommander"), { recursive: true });
+    writeFileSync(join(codexCommanderHome, "config.json"), JSON.stringify({
       port: 10100,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "openai",
-      providers: {},
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
       clientIntegrations: { codex: false },
     }, null, 2) + "\n");
 
@@ -91,7 +105,7 @@ describe("invalidateCodexModelsCache write gate (#476 / #518)", () => {
     expect(invalidateCodexModelsCache()).toBe(false);
     expect(existsSync(join(codexHome, "models_cache.json"))).toBe(false);
 
-    // Mirrors ocx sync-cache: only call the handler when invalidate wrote.
+    // Mirrors ccx sync-cache: only call the handler when invalidate wrote.
     if (invalidateCodexModelsCache()) {
       afterCatalogWriteHandleAppServers({
         restart: true,
@@ -114,7 +128,7 @@ describe("invalidateCodexModelsCache write gate (#476 / #518)", () => {
   });
 
   test("returns false for invalid catalog JSON and does not warn/restart app-servers", () => {
-    writeFileSync(join(codexHome, "opencodex-catalog.json"), "{ not-json");
+    writeFileSync(join(codexHome, "codexcommander-catalog.json"), "{ not-json");
     const errors: string[] = [];
     const logs: string[] = [];
     let listed = 0;
@@ -140,13 +154,17 @@ describe("invalidateCodexModelsCache write gate (#476 / #518)", () => {
     expect(logs).toEqual([]);
   });
 
-  test("ocx sync --restart-codex neither warns nor restarts when catalog exists but is unreadable", async () => {
+  test("ccx sync --restart-codex neither warns nor restarts when catalog exists but is unreadable", async () => {
     // Non-default catalog path that exists on disk but cannot be read or rewritten as JSON.
     // (A directory at the catalog path: existsSync true, load/write both fail.)
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "broken.json"\n', "utf8");
     mkdirSync(join(codexHome, "broken.json"));
 
     const syncResult = await syncModelsToCodex(10100, emptyConfig, null, {
+      prepareCodexTransitionState: () => ({
+        kind: "ready",
+        state: { nativeGeneration: 0, currentTxId: null },
+      }),
       refreshCodexModelCatalog,
       injectCodexConfig: async () => ({ success: true, message: "injected" }),
       currentExternalCodexModelProvider: () => null,
@@ -160,7 +178,7 @@ describe("invalidateCodexModelsCache write gate (#476 / #518)", () => {
     const logs: string[] = [];
     let listed = 0;
 
-    // Mirrors `ocx sync --restart-codex`: only handle app-servers after a real write.
+    // Mirrors `ccx sync --restart-codex`: only handle app-servers after a real write.
     if (syncResult.catalogWritten || syncResult.cacheSynced) {
       afterCatalogWriteHandleAppServers({
         restart: true,
@@ -182,13 +200,17 @@ describe("invalidateCodexModelsCache write gate (#476 / #518)", () => {
     expect(logs).toEqual([]);
   });
 
-  test("ocx sync --restart-codex neither warns nor restarts when catalog JSON is malformed", async () => {
+  test("ccx sync --restart-codex neither warns nor restarts when catalog JSON is malformed", async () => {
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "broken.json"\n', "utf8");
     writeFileSync(join(codexHome, "broken.json"), "{ not-json", "utf8");
 
     // Real sync may rematerialize bundled content over a writable malformed file; the
     // regression target is the CLI gate using catalogWritten, not bundled recovery.
     const syncResult = await syncModelsToCodex(10100, emptyConfig, null, {
+      prepareCodexTransitionState: () => ({
+        kind: "ready",
+        state: { nativeGeneration: 0, currentTxId: null },
+      }),
       refreshCodexModelCatalog: async () => ({
         added: 0,
         path: join(codexHome, "broken.json"),

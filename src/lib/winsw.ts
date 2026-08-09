@@ -1,7 +1,7 @@
 /**
- * WinSW-backed native Windows service (opt-in via `ocx service install --native`).
+ * WinSW-backed native Windows service (opt-in via `ccx service install --native`).
  *
- * Design (devlog/_plan/260720_windows_service/060):
+ * Design (implementation contract):
  * - WinSW 2.12.0 NET461 build, downloaded on first native install and verified against
  *   a pinned SHA-256 (fail-closed: mismatch deletes the file and throws). The binary is
  *   NOT bundled in npm; offline installs get an explicit manual-placement hint.
@@ -15,7 +15,7 @@
  */
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { expandUserPath, getConfigDir, loadConfig } from "../config";
@@ -23,14 +23,16 @@ import { recordOwnedConfigPath } from "./config-ownership";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime } from "./bun-runtime";
 import type { BunRuntimeSource } from "./bun-runtime";
 import { serviceApiTokenFilePath } from "./service-secrets";
+import { HOME_ENV, WINSW_SERVICE_ID as CANONICAL_WINSW_SERVICE_ID } from "../identity";
+import { assertPrivateServiceFile, ensurePrivateServiceDirectory, writePrivateServiceFile } from "./service-files";
 
 export const WINSW_VERSION = "2.12.0";
 export const WINSW_URL = `https://github.com/winsw/winsw/releases/download/v${WINSW_VERSION}/WinSW.NET461.exe`;
 /** SHA-256 of the official v2.12.0 WinSW.NET461.exe release asset (655872 bytes). */
 export const WINSW_SHA256 = "b5066b7bbdfba1293e5d15cda3caaea88fbeab35bd5b38c41c913d492aadfc4f";
 
-/** SCM service id — distinct from the Task Scheduler task name (opencodex-proxy). */
-export const WINSW_SERVICE_ID = "opencodex-proxy-native";
+/** SCM service id — distinct from the Task Scheduler task name (codexcommander-proxy). */
+export const WINSW_SERVICE_ID = CANONICAL_WINSW_SERVICE_ID;
 
 export function winswDir(): string {
   return join(getConfigDir(), "winsw");
@@ -72,7 +74,7 @@ export interface WinswEntry {
 
 /**
  * Build the WinSW v2 XML. Never embeds the API token value — the app loads it from
- * OCX_API_TOKEN_FILE at startup (cli handleStart). PATH is baked for parity with the
+ * CCX_API_TOKEN_FILE at startup (cli handleStart). PATH is baked for parity with the
  * Task Scheduler wrapper / launchd / systemd: the SCM service environment lacks the
  * user's interactive PATH, which provider subprocesses may need.
  */
@@ -81,7 +83,7 @@ export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = proces
   const user = env.USERNAME?.trim() || "";
   const listenPort = (() => {
     if (typeof port === "number" && Number.isFinite(port) && port > 0 && port <= 65535) return Math.trunc(port);
-    const baked = env.OCX_BAKE_PORT?.trim();
+    const baked = env.CCX_BAKE_PORT?.trim();
     if (baked && /^\d+$/.test(baked)) {
       const n = Number(baked);
       if (n > 0 && n <= 65535) return n;
@@ -91,30 +93,29 @@ export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = proces
   // Services never bake `--port 0` (parsePortOption rejects it); treat as default.
   const safeListenPort = listenPort > 0 && listenPort <= 65535 ? listenPort : 10100;
   // SCM services do not inherit the interactive user environment (#764). Bake:
-  // - OPENCODEX_HOME so file-backed admin auth (`admin-api-token`) resolves
+  // - CODEXCOMMANDER_HOME so file-backed admin auth (`admin-api-token`) resolves
   // - KIMI_CODE_HOME when explicitly set so local Kimi CLI credentials stay discoverable
   // - GROK_HOME when explicitly set so local Grok CLI credentials stay discoverable
-  // - OPENCODEX_ACL_TIMEOUT_MS when set (not a secret)
-  // Never embed OPENCODEX_ADMIN_AUTH_TOKEN or OPENCODEX_API_AUTH_TOKEN values in XML —
-  // those stay file-pointer / generated-file only (uninstall retains the XML).
-  const aclTimeout = env.OPENCODEX_ACL_TIMEOUT_MS?.trim();
+  // - CODEXCOMMANDER_ACL_TIMEOUT_MS when set
+  // Never embed token values in XML; they stay file-pointer/generated-file only.
+  const aclTimeout = env.CODEXCOMMANDER_ACL_TIMEOUT_MS?.trim();
   const envLines = [
-    `  <env name="OCX_SERVICE" value="1"/>`,
+    `  <env name="CCX_SERVICE" value="1"/>`,
     `  <env name="${BUN_RUNTIME_SOURCE_ENV}" value="${xmlEscape(entry.bunRuntimeSource)}"/>`,
     `  <env name="${BUN_RUNTIME_PATH_ENV}" value="${xmlEscape(entry.bun)}"/>`,
-    `  <env name="OCX_API_TOKEN_FILE" value="${xmlEscape(serviceApiTokenFilePath())}"/>`,
+    `  <env name="CCX_API_TOKEN_FILE" value="${xmlEscape(serviceApiTokenFilePath())}"/>`,
     `  <env name="PATH" value="${xmlEscape(env.PATH ?? "")}"/>`,
     env.CODEX_HOME?.trim() ? `  <env name="CODEX_HOME" value="${xmlEscape(currentCodexHomeAbsolute())}"/>` : null,
-    `  <env name="OPENCODEX_HOME" value="${xmlEscape(getConfigDir())}"/>`,
+    `  <env name="${HOME_ENV}" value="${xmlEscape(getConfigDir())}"/>`,
     env.KIMI_CODE_HOME?.trim() ? `  <env name="KIMI_CODE_HOME" value="${xmlEscape(env.KIMI_CODE_HOME.trim())}"/>` : null,
     env.GROK_HOME?.trim() ? `  <env name="GROK_HOME" value="${xmlEscape(env.GROK_HOME.trim())}"/>` : null,
-    aclTimeout ? `  <env name="OPENCODEX_ACL_TIMEOUT_MS" value="${xmlEscape(aclTimeout)}"/>` : null,
+    aclTimeout ? `  <env name="CODEXCOMMANDER_ACL_TIMEOUT_MS" value="${xmlEscape(aclTimeout)}"/>` : null,
   ].filter((line): line is string => Boolean(line));
   return `<?xml version="1.0" encoding="UTF-8"?>
 <service>
   <id>${WINSW_SERVICE_ID}</id>
-  <name>OpenCodex Proxy (native)</name>
-  <description>OpenCodex proxy running as a native Windows service (windowless, starts at boot).</description>
+  <name>CodexCommander Proxy (native)</name>
+  <description>CodexCommander proxy running as a native Windows service (windowless, starts at boot).</description>
   <executable>${xmlEscape(entry.bun)}</executable>
   <arguments>${xmlEscape(`"${entry.cli}" start --port ${safeListenPort}`)}</arguments>
 ${envLines.join("\n")}
@@ -145,13 +146,14 @@ export function sha256Hex(data: Uint8Array | Buffer): string {
 export async function ensureWinswBinary(fetchImpl: typeof fetch = fetch): Promise<string> {
   const exe = winswExePath();
   if (existsSync(exe)) {
+    assertPrivateServiceFile(exe);
     const digest = sha256Hex(readFileSync(exe));
     if (digest === WINSW_SHA256) return exe;
-    unlinkSync(exe);
-    console.warn("⚠️  Existing WinSW binary failed hash verification; re-downloading.");
+    throw new Error(`Existing WinSW binary failed SHA-256 verification at ${exe}; refusing to replace an untrusted executable path.`);
   }
   recordOwnedConfigPath(getConfigDir(), winswDir());
-  if (!existsSync(winswDir())) mkdirSync(winswDir(), { recursive: true });
+  ensurePrivateServiceDirectory(getConfigDir());
+  ensurePrivateServiceDirectory(winswDir());
   let body: ArrayBuffer;
   try {
     const res = await fetchImpl(WINSW_URL);
@@ -171,7 +173,7 @@ export async function ensureWinswBinary(fetchImpl: typeof fetch = fetch): Promis
         "Refusing to install an unverified service binary.",
     );
   }
-  writeFileSync(exe, bytes);
+  writePrivateServiceFile(exe, bytes, { mode: 0o700, ownsExisting: () => false });
   return exe;
 }
 
@@ -184,7 +186,7 @@ function runWinswInteractive(args: string[]): void {
   if (!process.stdin.isTTY) {
     throw new Error(
       "WinSW install requires an interactive console to prompt for the service account password. "
-        + "Run `ocx service install --native` from an elevated Command Prompt or PowerShell window, not a hidden or piped session.",
+        + "Run `ccx service install --native` from an elevated Command Prompt or PowerShell window, not a hidden or piped session.",
     );
   }
   execFileSync(winswExePath(), args, { stdio: "inherit" });
@@ -195,6 +197,26 @@ function scQc(): string {
   return execFileSync(existsSync(sc) ? sc : "sc.exe", ["qc", WINSW_SERVICE_ID], {
     encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
   });
+}
+
+/** `sc qc` must name our exact WinSW executable before we mutate its SCM entry. */
+export function winswScmDefinitionOwned(qc: string, executable = winswExePath()): boolean {
+  const line = /BINARY_PATH_NAME\s*:\s*(.+)/i.exec(qc)?.[1]?.trim();
+  if (!line) return false;
+  const normalized = line.replace(/["']/g, "").replace(/\\/g, "/").toLowerCase();
+  const expected = executable.replace(/["']/g, "").replace(/\\/g, "/").toLowerCase();
+  return normalized === expected || normalized.startsWith(`${expected} `);
+}
+
+function assertWinswScmDefinitionOwned(): void {
+  if (process.platform !== "win32") return;
+  let qc: string;
+  try { qc = scQc(); } catch (error) {
+    throw new Error(`Cannot inspect native service definition before mutation: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!winswScmDefinitionOwned(qc)) {
+    throw new Error(`Refusing to mutate foreign native service registration: ${WINSW_SERVICE_ID}`);
+  }
 }
 
 export type WinswStatus = "started" | "stopped" | "nonexistent" | "unknown";
@@ -222,7 +244,7 @@ export function statusWinswRaw(): WinswStatus {
     }
   }
   // A missing exe does NOT prove the SCM registration is gone (quarantined binary,
-  // partial uninstall): a stale opencodex-proxy-native registration can outlive it.
+  // partial uninstall): the CodexCommander registration can outlive it.
   // Confirm absence against the SCM itself before reporting "nonexistent".
   if (process.platform !== "win32") return "nonexistent";
   const probe = probeScmRegistration();
@@ -281,7 +303,7 @@ function assertServiceAccountApplied(env: NodeJS.ProcessEnv = process.env): void
     try { runWinsw(["uninstall"]); } catch { /* rollback is best-effort */ }
     throw new Error(
       `Native service was registered as "${startName || "unknown"}" instead of the current user; ` +
-        "rolled back. Re-run `ocx service install --native` and enter the account credentials when prompted.",
+        "rolled back. Re-run `ccx service install --native` and enter the account credentials when prompted.",
     );
   }
 }
@@ -293,6 +315,7 @@ export interface WinswInstallDeps {
   run?: (args: string[]) => string;
   verifyAccount?: () => void;
   status?: () => WinswStatus;
+  assertScmOwnership?: () => void;
 }
 
 /**
@@ -302,28 +325,33 @@ export interface WinswInstallDeps {
  */
 export async function installWinswService(entry: WinswEntry, deps: WinswInstallDeps = {}): Promise<void> {
   const ensureBinary = deps.ensureBinary ?? ensureWinswBinary;
-  const writeXml = deps.writeXml ?? ((path: string, content: string) => writeFileSync(path, content, "utf8"));
+  const writeXml = deps.writeXml ?? ((path: string, content: string) => writePrivateServiceFile(path, content, {
+    mode: 0o600,
+    ownsExisting: (current) => current.includes(`<id>${WINSW_SERVICE_ID}</id>`) && current.includes("<serviceaccount>"),
+  }));
   const interactive = deps.interactive ?? runWinswInteractive;
   const run = deps.run ?? runWinsw;
   const verifyAccount = deps.verifyAccount ?? assertServiceAccountApplied;
   const status = deps.status ?? statusWinswRaw;
 
   await ensureBinary();
-  writeXml(winswXmlPath(), buildWinswXml(entry));
   const existing = status();
   if (existing === "unknown") {
     throw new Error(
       "Could not query the native service state (WinSW status failed or returned an unexpected result). " +
-        "Refusing to guess the install state — check 'ocx service status' and retry.",
+        "Refusing to guess the install state — check 'ccx service status' and retry.",
     );
   }
   if (existing === "nonexistent") {
+    writeXml(winswXmlPath(), buildWinswXml(entry));
     // WinSW self-elevates via UAC; a refused prompt aborts install (no silent fallback).
     // v2.12 recognizes prompting only as args[1]: `install /p` (XML is auto-discovered
     // as the same-basename file next to the exe).
     interactive(["install", "/p"]);
     verifyAccount();
   } else {
+    (deps.assertScmOwnership ?? assertWinswScmDefinitionOwned)();
+    writeXml(winswXmlPath(), buildWinswXml(entry));
     // Use `stopwait` (not `stop`) so the SCM service fully stops before `start` — bare
     // `stop` only sends the stop request; `start` against a STOP_PENDING service fails.
     try { run(["stopwait"]); } catch { /* already stopped */ }
@@ -331,8 +359,8 @@ export async function installWinswService(entry: WinswEntry, deps: WinswInstallD
   run(["start"]);
 }
 
-export function startWinswService(): void { runWinsw(["start"]); }
-export function stopWinswService(): void { try { runWinsw(["stopwait"]); } catch { /* not running */ } }
+export function startWinswService(): void { assertWinswScmDefinitionOwned(); runWinsw(["start"]); }
+export function stopWinswService(): void { assertWinswScmDefinitionOwned(); try { runWinsw(["stopwait"]); } catch { /* not running */ } }
 export function uninstallWinswService(): void {
   if (!existsSync(winswExePath())) {
     // The binary is gone but the SCM registration can outlive it (quarantine, partial
@@ -349,6 +377,7 @@ export function uninstallWinswService(): void {
         );
       }
       if (probe === true) {
+        assertWinswScmDefinitionOwned();
         try {
           execFileSync(scExePath(), ["stop", WINSW_SERVICE_ID], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
         } catch { /* not running */ }
@@ -357,6 +386,7 @@ export function uninstallWinswService(): void {
     }
     return;
   }
+  assertWinswScmDefinitionOwned();
   try { runWinsw(["stopwait"]); } catch { /* not running */ }
   try { runWinsw(["uninstall"]); } catch (err) {
     // Surface the failure so the caller can decide; silent swallow hides UAC refusals.
@@ -372,7 +402,7 @@ export function winswStatusSummary(): string {
   if (status === "nonexistent") {
     // A stale SCM service can outlive a deleted exe; surface the repair path.
     return existsSync(winswXmlPath()) && !existsSync(winswExePath())
-      ? "native assets present but WinSW binary missing — run 'ocx service repair'"
+      ? "native assets present but WinSW binary missing — run 'ccx service repair'"
       : "";
   }
   return `native (WinSW ${WINSW_VERSION}): ${status}`;

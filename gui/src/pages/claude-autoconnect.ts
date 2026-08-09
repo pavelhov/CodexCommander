@@ -1,15 +1,14 @@
-/**
- * claude-autoconnect — normalization boundary for the Auto-connect capability
- * contract. A missing capability field (old/stale backend) fails closed so a
- * persisted systemEnv:true is never presented as active on a non-Darwin host.
- */
+/** Validate the current Auto-connect response contract. */
 export function reconcileAutoConnectState(response: {
-  autoConnectSupported?: unknown;
-  systemEnv?: unknown;
+  autoConnectSupported: unknown;
+  systemEnv: unknown;
 }): { autoConnectSupported: boolean; systemEnv: boolean } {
-  const autoConnectSupported = response.autoConnectSupported === true;
+  if (typeof response.autoConnectSupported !== "boolean" || typeof response.systemEnv !== "boolean") {
+    throw new Error("invalid Claude Code Auto-connect response");
+  }
+  const autoConnectSupported = response.autoConnectSupported;
   return {
     autoConnectSupported,
-    systemEnv: autoConnectSupported && response.systemEnv === true,
+    systemEnv: autoConnectSupported && response.systemEnv,
   };
 }

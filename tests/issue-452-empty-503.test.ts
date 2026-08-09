@@ -8,15 +8,15 @@ import { saveConfig } from "../src/config";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
 import { resetDebugSettingsForTests } from "../src/lib/debug-settings";
-import { setDraining } from "../src/server/lifecycle";
+import { beginShutdownDrain, resetLifecycleDrainStateForTests } from "../src/server/lifecycle";
 import { startServer } from "../src/server";
 import { formatPassthroughUpstreamError } from "../src/server/responses/passthrough-error";
-import type { OcxConfig, OcxParsedRequest } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderParsedRequest } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
-const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
-const previousOpencodexHome = process.env.OPENCODEX_HOME;
-const previousOcxDebug = process.env.OCX_DEBUG;
+const previousApiToken = process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+const previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+const previousCodexCommanderDebug = process.env.CCX_DEBUG;
 const originalGlobalFetch = globalThis.fetch;
 const TEST_DIR = join(import.meta.dir, ".tmp-issue-452-empty-503");
 let isolatedCodexHome: IsolatedCodexHome | null = null;
@@ -35,21 +35,21 @@ function redirectCanonicalCodexTo(baseUrl: string): void {
 }
 
 beforeEach(() => {
-  isolatedCodexHome = installIsolatedCodexHome("ocx-issue-452-");
+  isolatedCodexHome = installIsolatedCodexHome("ccx-issue-452-");
   resetDebugSettingsForTests();
   resetDebugLogBufferForTests();
-  setDraining(false);
+  resetLifecycleDrainStateForTests();
 });
 
 afterEach(() => {
   globalThis.fetch = originalGlobalFetch;
-  setDraining(false);
-  if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-  else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  if (previousOcxDebug === undefined) delete process.env.OCX_DEBUG;
-  else process.env.OCX_DEBUG = previousOcxDebug;
+  resetLifecycleDrainStateForTests();
+  if (previousApiToken === undefined) delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+  else process.env.CODEXCOMMANDER_API_AUTH_TOKEN = previousApiToken;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
+  if (previousCodexCommanderDebug === undefined) delete process.env.CCX_DEBUG;
+  else process.env.CCX_DEBUG = previousCodexCommanderDebug;
   resetDebugSettingsForTests();
   resetDebugLogBufferForTests();
   isolatedCodexHome?.restore();
@@ -121,8 +121,8 @@ async function withPoolPassthrough(
 ): Promise<void> {
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
   mkdirSync(TEST_DIR, { recursive: true });
-  process.env.OPENCODEX_HOME = TEST_DIR;
-  delete process.env.OPENCODEX_API_AUTH_TOKEN;
+  process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+  delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
   clearAccountQuota();
@@ -138,8 +138,8 @@ async function withPoolPassthrough(
 
   saveConfig({
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "openai",
-    openaiProviderTierVersion: 2,
     providers: {
       openai: {
         adapter: "openai-responses",
@@ -149,11 +149,11 @@ async function withPoolPassthrough(
       },
     },
     codexAccounts: [
-      { id: "main", email: "main@example.test", isMain: true },
-      { id: "pool-a", email: "pool-a@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+      { id: "main", email: "main@example.test", logLabel: "p000001", isMain: true },
+      { id: "pool-a", email: "pool-a@example.test", logLabel: "pabc123", isMain: false, chatgptAccountId: "acct-pool-a" },
     ],
     activeCodexAccountId: "pool-a",
-  } as OcxConfig);
+  } as CodexCommanderConfig);
   saveCodexAccountCredential("pool-a", {
     accessToken: "pool-a-token",
     refreshToken: "pool-a-refresh",
@@ -250,10 +250,11 @@ describe("drain 503 JSON (#452)", () => {
   test("POST /v1/responses while draining returns JSON error body", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "xiaomi",
       providers: {
         xiaomi: {
@@ -263,11 +264,11 @@ describe("drain 503 JSON (#452)", () => {
           defaultModel: "mimo-v2.5-pro",
         },
       },
-    } as OcxConfig);
+    } as CodexCommanderConfig);
 
     const server = startServer(0);
     try {
-      setDraining(true);
+      expect(beginShutdownDrain()).toBe(true);
       const response = await originalGlobalFetch(new URL("/v1/responses", server.url), {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -279,15 +280,15 @@ describe("drain 503 JSON (#452)", () => {
       expect(json.error?.message).toContain("shutting down");
       expect(json.error?.code).toBe("server_is_overloaded");
     } finally {
-      setDraining(false);
+      resetLifecycleDrainStateForTests();
       await server.stop(true);
     }
   });
 });
 
 describe("openai-chat provider debug (#452)", () => {
-  test("buildRequest emits debugProviderDiagnostic when OCX_DEBUG=1", () => {
-    process.env.OCX_DEBUG = "1";
+  test("buildRequest emits debugProviderDiagnostic when CCX_DEBUG=1", () => {
+    process.env.CCX_DEBUG = "1";
     resetDebugLogBufferForTests();
     const adapter = createOpenAIChatAdapter({
       adapter: "openai-chat",
@@ -302,17 +303,17 @@ describe("openai-chat provider debug (#452)", () => {
         tools: [{ type: "function", name: "shell_command", description: "run", parameters: { type: "object" } }],
       },
       options: {},
-    } as unknown as OcxParsedRequest;
+    } as unknown as CodexCommanderParsedRequest;
     adapter.buildRequest(parsed);
     const lines = getDebugLogEntries().map(e => e.line);
-    expect(lines.some(line => line.includes("[ocx:openai-chat:request]"))).toBe(true);
+    expect(lines.some(line => line.includes("[ccx:openai-chat:request]"))).toBe(true);
     expect(lines.join("\n")).toContain('"host":"api.xiaomimimo.com"');
     expect(lines.join("\n")).not.toContain("sk-secret-xiaomi-key");
     expect(lines.join("\n")).not.toContain("/v1/chat/completions");
   });
 
   test("tenant-scoped baseUrl logs host only — account id never appears", () => {
-    process.env.OCX_DEBUG = "1";
+    process.env.CCX_DEBUG = "1";
     resetDebugLogBufferForTests();
     const accountId = "cf-account-abc123secret";
     const adapter = createOpenAIChatAdapter({
@@ -327,10 +328,10 @@ describe("openai-chat provider debug (#452)", () => {
         messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
       },
       options: {},
-    } as unknown as OcxParsedRequest;
+    } as unknown as CodexCommanderParsedRequest;
     adapter.buildRequest(parsed);
     const joined = getDebugLogEntries().map(e => e.line).join("\n");
-    expect(joined).toContain("[ocx:openai-chat:request]");
+    expect(joined).toContain("[ccx:openai-chat:request]");
     expect(joined).toContain('"host":"api.cloudflare.com"');
     expect(joined).not.toContain(accountId);
     expect(joined).not.toContain("/accounts/");

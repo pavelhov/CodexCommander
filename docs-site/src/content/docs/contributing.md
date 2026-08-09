@@ -1,16 +1,15 @@
 ---
 title: Contributing
-description: Develop opencodex — setup, layout, conventions, and how to add a provider or adapter.
+description: Develop CodexCommander — setup, layout, conventions, and how to add a provider or adapter.
 ---
 
 ## Setup
 
-Source development requires the `bun` CLI on your `PATH`. The published npm package bundles its own
-Bun runtime for users, but this checkout's scripts run through your local Bun installation.
+Source development requires the `bun` CLI on your `PATH`. No registry package is currently
+published; this checkout's scripts run through your local Bun installation.
 
 ```bash
-git clone https://github.com/pavelhov/opencodex.git
-cd opencodex
+cd /path/to/CodexCommander
 bun install
 bun run dev:proxy    # proxy API in dev mode
 bun run dev:gui      # dashboard dev server (another terminal)
@@ -46,12 +45,10 @@ The docs site you're reading lives in `docs-site/` (Astro + Starlight):
 cd docs-site && bun install && bun dev
 ```
 
-## Docs publishing
+## Docs site
 
-The public docs publish to GitHub Pages at <https://opencodex.me/>. The
-`.github/workflows/deploy-docs.yml` workflow runs on `main` pushes that touch `docs-site/**` or the
-workflow itself, builds `docs-site`, and deploys the generated site. Before pushing docs changes,
-run:
+The docs live in `docs-site/` and have no currently published host. Before opening a docs pull
+request, build locally:
 
 ```bash
 cd docs-site
@@ -59,68 +56,40 @@ bun install --frozen-lockfile
 bun run build
 ```
 
-## CI and releases
+Publishing automation is not included in this repository.
 
-GitHub Actions intentionally stay small:
+## Continuous integration
 
-- **Cross-platform CI** (`.github/workflows/ci.yml`) runs on pull requests and `main` pushes that
-  touch runtime, tests, package, script, TypeScript, or workflow files. Its Bun matrix covers Linux,
-  Windows, and macOS with install, typecheck, tests, privacy scan, a release-helper build smoke, GUI
-  build, and `ocx help`. A second three-OS lane proves npm global install works without a separately
-  installed Bun by using the package's bundled runtime.
-- **Release** (`.github/workflows/release.yml`) is manual. It does not act as a second full CI
-  pipeline; before dry-run or publish it requires the exact release commit (`GITHUB_SHA`) to already
-  have a successful Cross-platform CI run.
-- **Stale needs-info** (`.github/workflows/stale-needs-info.yml`) runs daily on the default branch.
-  Open issues labeled `needs-info` with no activity for 14 days get a warning; after 7 more idle
-  days they close as not planned. Any update clears the stale warning. To keep long-lived work open,
-  remove `needs-info` (for example when promoting an issue to `roadmap`).
-- **Issue quality** (`.github/workflows/enforce-issue-quality.yml`) validates template structure on
-  new and edited issues, applies kind labels (`bug`, `enhancement`, `provider-compatibility`,
-  `documentation`), and adds orthogonal **area** labels from the form Area field plus light
-  title/Summary heuristics: `provider`, `account-pool`, `catalog`, `gui`, `cli`, `proxy`,
-  `platform`, `streaming`, `tools`, `install`, and `service`. Kind/process labels stay separate so
-  you can filter `bug` + `account-pool` without collapsing those axes. Prefer the Area dropdown
-  over inventing per-provider labels. Area: Documentation does not add a second area tag (the docs
-  form already seeds `documentation`). Maintainers can re-apply area labels to all open issues with
-  workflow_dispatch `backfill_open_areas` after the workflow is on the default branch.
+Every pull request and every push to `main` runs one automatic GitHub check: **`ci`**
+(`.github/workflows/ci.yml`). That is the only required automation for ordinary
+contributions.
 
-Use the helper for releases:
+Repository administrators can use the GitHub ruleset **Always-allow** bypass when a
+protected-path or branch rule would otherwise block an intentional admin action. Bypass
+is for admin recovery and exceptional maintenance, not a substitute for review on
+contributor work.
 
-```bash
-bun run release <version>           # commits/pushes the bump; publish workflow is dry-run by default
-bun run release <version> --publish # publish after the CI-gated dry run is understood
-bun run release:watch               # watch the newest Release workflow run
-```
+## Branches and pull requests
 
-## Branches
+- **`main` is the sole default, integration, and pull-request target.** Open feature and
+  fix pull requests against `main`.
+- Branch from the current **`main`** tip.
+- Write a real description: what changed, why, and how you verified it (named commands
+  and results). Empty or placeholder-only descriptions are not enough for review.
+- If the change touches the dashboard UI, include a screenshot in the description.
+- Behavior changes need a focused regression near the existing tests for that subsystem.
+  Shared routing, adapter, config, or server changes need the full suite green.
 
-- `dev` — the only integration target. Open your pull request here.
-- `main` — releases only. It moves by maintainer-controlled promotion from
-  `dev`; do not open feature pull requests against it.
-- `preview` — the prerelease train.
+The retired dual-track Go native port is not part of this repository. Bun-native TypeScript on
+`main` is the single runtime line.
 
-The `dev2-go` line that carried the Go native port has been retired, and the
-dual-track carry policy with it. Its history is published read-only at
-[lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive).
-Bun-native TypeScript on `dev` is the single runtime line.
-
-Rebase pull requests are welcome. Bringing a stale branch onto the current head
-is normal contribution rather than noise — note the source commits in the
-description.
-
-## Pull requests
-
-- Target **`dev`**. Do not open feature or fix pull requests against **`main`**.
-- Branch from the current **`dev`** tip, not from **`main`**. The required **`enforce-target`** check rejects heads whose merge base sits on the **`main`** tip while the branch is far behind the pull request base (the failure mode seen in #644).
-- Write a real description: a **Summary** of what changed and why, plus a **Test plan** (or equivalent substance). Empty bodies, placeholder-only text, and descriptions that use escaped `\n` instead of real line breaks fail the check.
-- If the title or description mentions `gui`, include a screenshot of the UI change in the description; the `enforce-target` check re-runs on description edits until the screenshot is present.
-- Workflow changes in this repository use **`pull_request_target`**. Updated enforcement logic applies only after the workflow is promoted to the repository default branch — the same operational caveat documented in #631.
+Rebase pull requests are welcome. Bringing a stale branch onto the current head is
+ordinary maintenance — name the source commits in the description.
 
 ## Project maintainers
 
 The current maintainers, their responsibilities, and the review and merge policy are documented in
-[`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/main/MAINTAINERS.md). GitHub review
+[`MAINTAINERS.md`](https://github.com/pavelhov/CodexCommander/blob/main/MAINTAINERS.md). GitHub review
 ownership for the repository and security-sensitive paths is declared in `.github/CODEOWNERS`.
 
 ## Conventions
@@ -131,7 +100,7 @@ ownership for the repository and security-sensitive paths is declared in `.githu
 - **Handle async errors at boundaries** — sidecars never throw into the request path; they degrade to
   a graceful marker.
 - **Structure SOT** — current maintainer invariants live in `structure/`. Keep public user workflows
-  in `docs-site/` and historical investigation notes in `docs/`.
+  in `docs-site/` and maintained engineering notes in `docs/`.
 - **Preserve exports** — other modules may depend on them.
 
 ## Adding a provider to the catalog
@@ -152,14 +121,14 @@ All provider pickers and seeds derive from the canonical registry (`src/provider
 },
 ```
 
-`src/providers/derive.ts` feeds that entry into `ocx init`, `ocx provider`, dashboard presets,
+`src/providers/derive.ts` feeds that entry into `ccx init`, `ccx provider`, dashboard presets,
 API-key login, and OAuth config seeds. `enrichProviderFromCatalog()` copies model metadata and
 capability classifications onto the saved provider config. OAuth protocol implementations still
 live in `src/oauth/`; registry metadata alone is not an OAuth flow.
 
 ### Evidence required for a canonical preset
 
-A registry entry is a maintained promise: opencodex ships the destination that a user's API key is
+A registry entry is a maintained promise: CodexCommander ships the destination that a user's API key is
 sent to. A preset therefore needs primary-source evidence, not a working code path. Pull requests
 that add or promote a provider must supply all of the following in the description:
 
@@ -184,7 +153,7 @@ not a reason for rejection, and it does not lower the evidence bar either.
 When the evidence is incomplete, the honest home is a reference row in
 `src/providers/free-directory.ts` rather than the canonical registry. Directory rows carry an
 explicit `verification` grade (`official`, `primary`, `unverified`) and are inert: users can still
-reach the service through the custom OpenAI-compatible flow, while opencodex avoids advertising a
+reach the service through the custom OpenAI-compatible flow, while CodexCommander avoids advertising a
 preset it cannot stand behind. Promote the row to the registry once the evidence above exists.
 
 ## Adding an adapter
@@ -200,4 +169,4 @@ the factory from `src/index.ts` when it belongs to the public package API.
 
 Run the narrowest command that proves your change — `bun run typecheck` for types, a focused
 `bun test tests/<name>.test.ts` or runtime probe for behavior, then the broader gates appropriate to
-the affected surface. opencodex favors small, verifiable commits over large batches.
+the affected surface. CodexCommander favors small, verifiable commits over large batches.

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useKeyedClientResource } from "../client-resource";
-import { replaceHash } from "../hash-routing";
 import { useI18n } from "../i18n/shared";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import {
@@ -34,14 +33,7 @@ import {
   type SidecarData,
   type SidecarPatch,
   type SyncResult,
-  type UpdateChannel,
-  type UpdateCheckData,
-  type UpdateJob,
   type UsageSummary30d,
-  UPDATE_CHECK_MAX_AUTO_RETRIES,
-  UPDATE_CHECK_RETRY_BASE_MS,
-  defaultUpdateChannel,
-  hashRequestsUpdateDialog,
   mergeSidecarSetting,
   readDashboardSectionFromHash,
   requireJson,
@@ -49,11 +41,11 @@ import {
   useModalDialog,
 } from "./dashboard-shared";
 
-const CONTROLS_CACHE_PREFIX = "ocx.dash.controls.v1:";
-const OVERVIEW_CACHE_PREFIX = "ocx.dash.overview.v1:";
-const USAGE_CACHE_PREFIX = "ocx.dash.usage30d.v1:";
-const STARTUP_CACHE_PREFIX = "ocx.dash.startup.v1:";
-const MA_MODE_CACHE_PREFIX = "ocx.dash.maMode.v1:";
+const CONTROLS_CACHE_PREFIX = "ccx.dash.controls.v1:";
+const OVERVIEW_CACHE_PREFIX = "ccx.dash.overview.v1:";
+const USAGE_CACHE_PREFIX = "ccx.dash.usage30d.v1:";
+const STARTUP_CACHE_PREFIX = "ccx.dash.startup.v1:";
+const MA_MODE_CACHE_PREFIX = "ccx.dash.maMode.v1:";
 
 type CachedControls = {
   settings?: SettingsData | null;
@@ -129,30 +121,17 @@ export function useDashboardData(apiBase: string) {
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [projectConfigWarnings, setProjectConfigWarnings] = useState<ProjectCodexConfigGroup[]>([]);
-  const [updateOpen, setUpdateOpen] = useState(false);
-  const [updateChannel, setUpdateChannel] = useState<UpdateChannel>("latest");
-  const [updateRestart, setUpdateRestart] = useState(true);
-  const [updateLoading, setUpdateLoading] = useState(false);
-  const updateRetryRef = useRef(0);
-  const updateRetryTimerRef = useRef<number | null>(null);
-  const updateRequestEpochRef = useRef(0);
   const settingsRequestEpochRef = useRef(0);
   const settingsMutationEpochRef = useRef(0);
   const settingsMutationInFlightRef = useRef(false);
   const shadowCallRequestEpochRef = useRef(0);
   const shadowCallMutationEpochRef = useRef(0);
   const shadowCallMutationInFlightRef = useRef(false);
-  const [updateCheck, setUpdateCheck] = useState<UpdateCheckData | null>(null);
-  const [updateError, setUpdateError] = useState<string | null>(null);
-  const [updateJob, setUpdateJob] = useState<UpdateJob | null>(null);
-  const [reconnecting, setReconnecting] = useState(false);
   const [error, setError] = useState(false);
   const effortCapHelpTriggerRef = useRef<HTMLButtonElement>(null);
-  const updateTriggerRef = useRef<HTMLButtonElement>(null);
   const maHelpTriggerRef = useRef<HTMLButtonElement>(null);
   const shadowCallHelpTriggerRef = useRef<HTMLButtonElement>(null);
   const effortCapHelpDialogRef = useModalDialog(effortCapHelpOpen, effortCapHelpTriggerRef);
-  const updateDialogRef = useModalDialog(updateOpen, updateTriggerRef);
   const maHelpDialogRef = useModalDialog(maHelpOpen, maHelpTriggerRef);
   const shadowCallHelpDialogRef = useModalDialog(shadowCallHelpOpen, shadowCallHelpTriggerRef);
 
@@ -160,15 +139,6 @@ export function useDashboardData(apiBase: string) {
     const onHash = () => setSelectedSection(readDashboardSectionFromHash());
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
-  }, []);
-
-
-  useEffect(() => () => {
-    updateRequestEpochRef.current += 1;
-    if (updateRetryTimerRef.current !== null) {
-      window.clearTimeout(updateRetryTimerRef.current);
-      updateRetryTimerRef.current = null;
-    }
   }, []);
 
   const startupHealthRef = useRef<StartupHealthStatus | null>(cachedStartup);
@@ -388,54 +358,6 @@ export function useDashboardData(apiBase: string) {
     shadowCallRequestEpochRef.current += 1;
   }, []);
 
-  const updatePoll = useKeyedClientResource(
-    updateJob?.id && updateJob.restart ? `update-job:${apiBase}:${updateJob.id}` : `update-job:idle:${apiBase}`,
-    [apiBase, updateJob?.id, updateJob?.restart, updateJob?.latestVersion],
-    async (signal) => {
-      if (!updateJob?.id || !updateJob.restart) return { reconnecting: false as const };
-      const targetVersion = updateJob.latestVersion;
-      try {
-        const res = await fetch(`${apiBase}/api/update/status?jobId=${encodeURIComponent(updateJob.id)}`, { signal });
-        const statusData = await requireJson<{ job?: UpdateJob }>(res);
-        if (statusData.job) {
-          if (statusData.job.status === "failed") return { job: statusData.job, reconnecting: false as const };
-          if (targetVersion) {
-            try {
-              const healthRes = await fetch(`${apiBase}/healthz`, { cache: "no-store", signal });
-              const healthData = await requireJson<HealthData>(healthRes);
-              if (healthData.version === targetVersion) {
-                return { job: statusData.job, reconnecting: false as const, reload: true as const };
-              }
-            } catch {
-              return { job: statusData.job, reconnecting: true as const };
-            }
-          }
-          return { job: statusData.job, reconnecting: false as const };
-        }
-      } catch {
-        return { reconnecting: true as const };
-      }
-      return { reconnecting: false as const };
-    },
-    {
-      pollMs: 1500,
-      enabled: !!(updateJob?.id && updateJob.restart),
-      // This poll exists to notice a restarted server coming back. Pausing it while the
-      // tab is hidden is exactly when it would be missed, so it opts out of the gate.
-      pauseWhenHidden: false,
-    },
-  );
-
-  /* eslint-disable react-hooks/set-state-in-effect -- mirror update-job client-resource snapshot into local job UI state */
-  useEffect(() => {
-    const data = updatePoll.data;
-    if (!data) return;
-    if ("job" in data && data.job) setUpdateJob(data.job);
-    setReconnecting(data.reconnecting);
-    if ("reload" in data && data.reload) window.location.reload();
-  }, [updatePoll.data]);
-  /* eslint-enable react-hooks/set-state-in-effect */
-
   const grouped = useMemo(() => {
     const g: Record<string, ModelInfo[]> = {};
     for (const m of models) (g[m.provider] ??= []).push(m);
@@ -615,116 +537,6 @@ export function useDashboardData(apiBase: string) {
     }
   };
 
-  const fetchUpdateCheck = async (channel: UpdateChannel, resetRetry = false) => {
-    if (resetRetry) updateRetryRef.current = 0;
-    if (updateRetryTimerRef.current !== null) {
-      window.clearTimeout(updateRetryTimerRef.current);
-      updateRetryTimerRef.current = null;
-    }
-    const requestEpoch = ++updateRequestEpochRef.current;
-    setUpdateLoading(true);
-    setUpdateError(null);
-    setUpdateCheck(null);
-    try {
-      const res = await fetch(`${apiBase}/api/update/check?tag=${channel}`);
-      const check = await requireJson<UpdateCheckData>(res, "update check failed");
-      if (requestEpoch !== updateRequestEpochRef.current) return;
-
-      setUpdateCheck(check);
-      if (
-        check.reason === "latest_unavailable"
-        && updateRetryRef.current < UPDATE_CHECK_MAX_AUTO_RETRIES
-      ) {
-        const retry = ++updateRetryRef.current;
-        // Keep loading through scheduled retries — do not clear here.
-        updateRetryTimerRef.current = window.setTimeout(() => {
-          if (requestEpoch !== updateRequestEpochRef.current) return;
-          updateRetryTimerRef.current = null;
-          void fetchUpdateCheck(channel);
-        }, UPDATE_CHECK_RETRY_BASE_MS * retry);
-        return;
-      }
-
-      if (check.reason !== "latest_unavailable") updateRetryRef.current = 0;
-      setUpdateLoading(false);
-    } catch (err) {
-      if (requestEpoch !== updateRequestEpochRef.current) return;
-      setUpdateError(err instanceof Error ? err.message : String(err));
-      setUpdateLoading(false);
-    }
-  };
-
-  const closeUpdateDialog = () => {
-    updateRequestEpochRef.current += 1;
-    if (updateRetryTimerRef.current !== null) {
-      window.clearTimeout(updateRetryTimerRef.current);
-      updateRetryTimerRef.current = null;
-    }
-    setUpdateLoading(false);
-    setUpdateOpen(false);
-  };
-
-  const openUpdateDialog = () => {
-    const channel = defaultUpdateChannel(health?.version);
-    setUpdateChannel(channel);
-    setUpdateRestart(true);
-    setUpdateOpen(true);
-    void fetchUpdateCheck(channel, true);
-  };
-
-  const changeUpdateChannel = (channel: UpdateChannel) => {
-    setUpdateChannel(channel);
-    void fetchUpdateCheck(channel, true);
-  };
-
-  /**
-   * Sidebar update button deep link (`#dashboard/update`). Opening happens straight from
-   * the hashchange listener — an external event, not a render-time effect — so no
-   * intermediate state or ref hand-off is needed. The hash is normalized back to
-   * `#dashboard` before opening, so Back never re-triggers the dialog.
-   *
-   * `openUpdateDialogRef` keeps the listener registration stable while still calling the
-   * latest handler; it is only ever written inside an effect.
-   */
-  const openUpdateDialogRef = useRef(openUpdateDialog);
-  useEffect(() => {
-    openUpdateDialogRef.current = openUpdateDialog;
-  });
-  useEffect(() => {
-    const consume = () => {
-      if (!hashRequestsUpdateDialog()) return;
-      replaceHash("dashboard");
-      openUpdateDialogRef.current();
-    };
-    // A cold load straight onto the deep link: defer past mount so the open is not a
-    // render-phase side effect.
-    const initial = hashRequestsUpdateDialog() ? window.setTimeout(consume, 0) : null;
-    window.addEventListener("hashchange", consume);
-    return () => {
-      if (initial !== null) window.clearTimeout(initial);
-      window.removeEventListener("hashchange", consume);
-    };
-  }, []);
-
-  const runUpdate = async () => {
-    if (!updateCheck?.canUpdate) return;
-    setUpdateError(null);
-    try {
-      const res = await fetch(`${apiBase}/api/update/run`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tag: updateChannel, restart: updateRestart }),
-      });
-      const data = await requireJson<{ job?: UpdateJob }>(res, "update failed to start");
-      if (!data.job) throw new Error("update failed to start");
-      setUpdateJob(data.job);
-      setReconnecting(false);
-      closeUpdateDialog();
-    } catch (err) {
-      setUpdateError(err instanceof Error ? err.message : String(err));
-    }
-  };
-
   return {
     apiBase,
     locale, t,
@@ -740,13 +552,10 @@ export function useDashboardData(apiBase: string) {
     injectionModel, injectionEffort, injectionEfforts, injectionAvailable, injectionSaving,
     multiAgentGuidanceEnabled, syncCodexSubagentDefaults, saveInjection,
     effortCap, subagentEffortCap, effortCapSaving, setEffortCap, setSubagentEffortCap, setEffortCapSaving,
-    syncResult, syncError, projectConfigWarnings,
-    updateOpen, updateChannel, setUpdateRestart, updateRestart, updateLoading,
-    updateCheck, updateError, updateJob, reconnecting, error,
-    effortCapHelpTriggerRef, updateTriggerRef, maHelpTriggerRef, shadowCallHelpTriggerRef,
-    effortCapHelpDialogRef, updateDialogRef, maHelpDialogRef, shadowCallHelpDialogRef,
+    syncResult, syncError, projectConfigWarnings, error,
+    effortCapHelpTriggerRef, maHelpTriggerRef, shadowCallHelpTriggerRef,
+    effortCapHelpDialogRef, maHelpDialogRef, shadowCallHelpDialogRef,
     filteredGroups, sidecarModels,
     saveSidecar, saveShadowCall, switchMaMode, toggleCodexAutoStart, runSync, clearSyncFeedback,
-    fetchUpdateCheck, closeUpdateDialog, openUpdateDialog, changeUpdateChannel, runUpdate,
   };
 }

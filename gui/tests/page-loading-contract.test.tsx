@@ -8,7 +8,7 @@ import { clearClientResourceStoresForTests } from "../src/client-resource";
 import { writeSessionListCache } from "../src/session-list-cache";
 
 /**
- * WP3 (devlog/_plan/260730_gui_hydration_loading_unify/020_page_migration.md).
+ * WP3 (implementation contract).
  *
  * Every migrated surface answers the same three questions the same way: replace the content
  * while cold, report progress next to content that is already on screen, and keep a failure
@@ -122,7 +122,7 @@ let testWindow: Window;
 const originalFetch = globalThis.fetch;
 
 const API_BASE = "http://localhost";
-const CACHE_KEY = `ocx.combos.workspace.v1:${API_BASE}`;
+const CACHE_KEY = `ccx.combos.workspace.v1:${API_BASE}`;
 const CACHED_PAGE = {
   combos: [],
   providers: [{ name: "openai", disabled: false, hiddenFromPicker: false, authMode: "forward", adapter: "openai", baseUrl: "https://api.openai.com/v1", defaultModel: "gpt-5" }],

@@ -108,7 +108,7 @@ test("refusals route by reason and preserve manual recovery fields end to end", 
     state: "conflict",
     reason: "write_failed",
     message: "write failed after the snapshot was stored",
-    snapshotPath: "/tmp/opencodex-snapshots/op-3.json",
+    snapshotPath: "/tmp/codexcommander-snapshots/op-3.json",
     residual: true,
   }, { status: 500 })) as typeof fetch;
 
@@ -122,12 +122,12 @@ test("refusals route by reason and preserve manual recovery fields end to end", 
       reason: "write_failed",
       state: "conflict",
       message: "write failed after the snapshot was stored",
-      snapshotPath: "/tmp/opencodex-snapshots/op-3.json",
+      snapshotPath: "/tmp/codexcommander-snapshots/op-3.json",
       residual: true,
     },
   });
   expect((error as IntegrationApiError).body.snapshotPath)
-    .toBe("/tmp/opencodex-snapshots/op-3.json");
+    .toBe("/tmp/codexcommander-snapshots/op-3.json");
 });
 
 const BADGE_LABELS: Record<string, string> = {

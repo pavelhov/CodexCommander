@@ -6,7 +6,7 @@ import { atomicWriteFile, expandUserPath, getConfigDir, websocketsEnabled } from
 import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readRootTomlString, resolveCodexConfigPath } from "../paths";
 import { clearModelCache, DEFAULT_MODEL_CACHE_TTL_MS, getFreshCached, getStaleCached, isModelsFetchCoolingDown, markModelsFetchFailure, setCached } from "../model-cache";
 import { buildModelsRequest, resolveModelsAuthToken } from "../../oauth";
-import type { OcxConfig, OcxProviderConfig } from "../../types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJawcodeModelMetadata, resolveJawcodeProvider } from "../../generated/jawcode-model-metadata";
@@ -33,10 +33,6 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 import { NATIVE_OPENAI_CONTEXT_OVERRIDES, SUPPORTED_NATIVE_OPENAI_SLUGS, UPSTREAM_NATIVE_ENTRIES } from "./metadata";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
-
-export function legacyCatalogBackupPath(): string {
-  return join(getConfigDir(), "catalog-backup.json");
-}
 
 export function catalogBackupPathFor(catalogPath: string): string {
   const normalized = process.platform === "win32" ? resolve(catalogPath).toLowerCase() : resolve(catalogPath);
@@ -68,7 +64,7 @@ export function activeCodexConfigPath(): string {
 
 export function activeDefaultCatalogPath(): string {
   const home = activeCodexHome();
-  return home ? join(home, "opencodex-catalog.json") : DEFAULT_CATALOG_PATH;
+  return home ? join(home, "codexcommander-catalog.json") : DEFAULT_CATALOG_PATH;
 }
 
 export function activeCodexModelsCachePath(): string {
@@ -106,7 +102,7 @@ export interface CatalogModel {
   contextCap?: number;
   contextCapped?: boolean;
   inputModalities?: string[];
-  /** Provider opted into parallel tool calls (OcxProviderConfig.parallelToolCalls). */
+  /** Provider opted into parallel tool calls (CodexCommanderProviderConfig.parallelToolCalls). */
   parallelToolCalls?: boolean;
   /** Whether Codex may send Responses text.verbosity for this routed model. */
   supportsVerbosity?: boolean;
@@ -216,7 +212,7 @@ export function normalizeServiceTiers(entry: RawEntry): RawEntry {
     return entry;
   }
   // Codex stores the user-facing config spelling as "fast", but the catalog/request
-  // service tier id is "priority" in current codex-rs. Keep legacy catalogs working.
+  // service tier id is "priority" in current codex-rs. Normalize the user-facing spelling.
   if (entry.service_tier === "fast") entry.service_tier = "priority";
   if (Array.isArray(entry.service_tiers)) {
     entry.service_tiers = entry.service_tiers.map(tier => {
@@ -297,7 +293,7 @@ export function ensureStrictCatalogFields(
     entry.max_context_window = contextWindow;
   }
   if (typeof entry.effective_context_window_percent !== "number") entry.effective_context_window_percent = 95;
-  if (typeof entry.comp_hash !== "string") entry.comp_hash = "opencodex";
+  if (typeof entry.comp_hash !== "string") entry.comp_hash = "codexcommander";
   return ensureAutoCompactTokenLimit(entry);
 }
 
@@ -309,8 +305,7 @@ export type MultiAgentMode = "v1" | "default" | "v2";
  *   binary validates spawn_agent models against THIS catalog with its own
  *   `multi_agent_version == Some(V2)` test (codex-rs multi_agents_common.rs), so an
  *   absent pin means a clean refusal at spawn time — exactly the cross-provider
- *   spawns opencodex exists to enable (option B, devlog
- *   260730_codex_rs_upstream_v2_live_handoff/060). Upstream pins are always
+ *   spawns codexcommander exists to enable. Upstream pins are always
  *   preserved: a genuine "v1" pin is a real capability statement and stays excluded.
  *   With the feature off the output is byte-identical to the historical behavior.
  */
@@ -352,7 +347,7 @@ export function normalizeRoutedCatalogEntry(entry: RawEntry, parallelToolCalls =
   // Per-model routed opt-ins can be added once provider metadata exposes this capability.
   delete entry.supports_reasoning_summaries;
   const isCursorEntry = typeof entry.slug === "string" && entry.slug.startsWith("cursor/");
-  // Routed providers use opencodex sidecars and client-executed tool discovery. The sidecar
+  // Routed providers use codexcommander sidecars and client-executed tool discovery. The sidecar
   // runs through native gpt-5.4-mini, so image search is available and verbalized for text-only
   // models. EXCEPT cursor: its runTurn transport bypasses the web-search plan entirely and
   // rejects server search queries — advertising the tool would make models call into a void.
@@ -365,9 +360,9 @@ export function normalizeRoutedCatalogEntry(entry: RawEntry, parallelToolCalls =
   }
   // Cursor's transport already serializes overlapping tool calls into atomic Responses tool events.
   // Advertising parallel calls lets Codex send the same native capability bit it sends for OpenAI.
-  // Opt-in providers (OcxProviderConfig.parallelToolCalls, e.g. xAI) advertise it too: the
+  // Opt-in providers (CodexCommanderProviderConfig.parallelToolCalls, e.g. xAI) advertise it too: the
   // openai-chat adapter stops forcing parallel_tool_calls:false and the buffered stream parser
-  // assembles multi-call turns (devlog/_plan/260709_parallel_tool_calls).
+  // assembles multi-call turns.
   entry.supports_parallel_tool_calls = isCursorEntry || parallelToolCalls === true;
   return ensureStrictCatalogFields(entry, { isRouted: true });
 }
@@ -420,8 +415,7 @@ export function filterSupportedNativeSlugs(models: RawEntry[]): string[] {
 }
 
 export function readCatalogBackup(catalogPath: string): RawCatalog | null {
-  return readCatalog(catalogBackupPathFor(catalogPath))
-    ?? (isDefaultCatalogPath(catalogPath) ? readCatalog(legacyCatalogBackupPath()) : null);
+  return readCatalog(catalogBackupPathFor(catalogPath));
 }
 
 export function catalogHasRoutedEntries(catalog: RawCatalog | null): boolean {
@@ -444,7 +438,6 @@ export function ensureCatalogBackup(catalogPath: string, catalog: RawCatalog): v
   const dir = getConfigDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   writePristineCatalogBackup(catalogBackupPathFor(catalogPath), catalogPath, catalog);
-  if (isDefaultCatalogPath(catalogPath)) writePristineCatalogBackup(legacyCatalogBackupPath(), catalogPath, catalog);
 }
 
 export function readNativeBaseline(catalogPath: string): Map<string, number> {
@@ -459,8 +452,8 @@ export function readNativeBaseline(catalogPath: string): Map<string, number> {
 }
 
 /**
- * Fixed OpenCodex-owned last-known-good snapshot of OpenCodex-authored routed
- * catalog rows, kept under OPENCODEX_HOME (getConfigDir) rather than inside the
+ * Fixed CodexCommander-owned last-known-good snapshot of CodexCommander-authored routed
+ * catalog rows, kept under CODEXCOMMANDER_HOME (getConfigDir) rather than inside the
  * Codex-owned catalog file. It is persisted only after a successful LIVE routed
  * sync and is never overwritten or deleted by an empty or failed gather, so a
  * stop-like native restore followed by a transient provider outage can rehydrate
@@ -478,7 +471,7 @@ export function readRetainedRoutedCatalog(): RawCatalog | null {
 
 /**
  * Atomically persist routed rows (mode-600 via atomicWriteFile, which also
- * records the write in the OpenCodex config ownership ledger).
+ * records the write in the CodexCommander config ownership ledger).
  */
 export function writeRetainedRoutedCatalog(models: RawEntry[]): void {
   const path = retainedRoutedCatalogPath();

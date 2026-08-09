@@ -1,15 +1,19 @@
 /**
- * Multi-agent compatibility shims (follow-up to devlog/260709_v2_gated_ultra):
- * models are no longer v1-pinned by ocx, but legacy/v1-surface requests still need
+ * Multi-agent compatibility shims (follow-up to implementation contract):
+ * models are no longer v1-pinned by CodexCommander, but legacy/v1-surface requests still need
  * the Proactive delegation prompt when they arrive with the synthetic top tier.
  */
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { injectDeveloperMessage, multiAgentGuidanceText, sanitizeEncryptedContentInPlace } from "../src/server/responses";
+import {
+  injectDeveloperMessage,
+  multiAgentGuidanceText as rawMultiAgentGuidanceText,
+  sanitizeEncryptedContentInPlace,
+} from "../src/server/responses";
 import { parseRequest } from "../src/responses/parser";
-import type { OcxParsedRequest } from "../src/types";
+import type { CodexCommanderParsedRequest } from "../src/types";
 import { CODEX_ACCOUNT_BOUND_CATALOG_KIND, effectiveSubagentRoster } from "../src/codex/catalog";
 import { clearDebugSettings, setDebugSettings } from "../src/lib/debug-settings";
 import {
@@ -18,27 +22,27 @@ import {
 } from "../src/lib/injection-debug-log";
 
 const savedCodexHome = process.env.CODEX_HOME;
-const savedCatalogStateOverride = process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
+const savedCatalogStateOverride = process.env.CCX_APP_SERVER_CATALOG_STATE_OVERRIDE;
 
 // Hermetic default: the host machine may run a real Codex app-server whose
 // process state must not leak into these tests (#857).
-process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = "fresh";
+process.env.CCX_APP_SERVER_CATALOG_STATE_OVERRIDE = "fresh";
 
 afterEach(() => {
   if (savedCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = savedCodexHome;
-  process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = "fresh";
+  process.env.CCX_APP_SERVER_CATALOG_STATE_OVERRIDE = "fresh";
   clearDebugSettings();
   resetInjectionDebugLogBufferForTests();
 });
 
 afterAll(() => {
-  if (savedCatalogStateOverride === undefined) delete process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
-  else process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = savedCatalogStateOverride;
+  if (savedCatalogStateOverride === undefined) delete process.env.CCX_APP_SERVER_CATALOG_STATE_OVERRIDE;
+  else process.env.CCX_APP_SERVER_CATALOG_STATE_OVERRIDE = savedCatalogStateOverride;
 });
 
 function codexHomeFixture(configToml: string): string {
-  const dir = mkdtempSync(join(tmpdir(), "ocx-v1pin-"));
+  const dir = mkdtempSync(join(tmpdir(), "ccx-v1pin-"));
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "config.toml"), configToml);
   process.env.CODEX_HOME = dir;
@@ -56,7 +60,7 @@ type CatalogFixtureModel = {
 
 /** Write an injected-catalog fixture into the active CODEX_HOME. */
 function catalogFixture(dir: string, models: CatalogFixtureModel[]): void {
-  writeFileSync(join(dir, "opencodex-catalog.json"), JSON.stringify({
+  writeFileSync(join(dir, "codexcommander-catalog.json"), JSON.stringify({
     models: models.map((model, index) => ({
       slug: model.slug,
       display_name: model.slug,
@@ -66,7 +70,7 @@ function catalogFixture(dir: string, models: CatalogFixtureModel[]): void {
       // written (normalizeRoutedCatalogEntry deletes it). The production absent-key
       // path cannot be tested if the fixture rewrites it to "v2".
       ...(model.multiAgentVersion === undefined ? {} : { multi_agent_version: model.multiAgentVersion }),
-      ...(model.accountBound ? { opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND } : {}),
+      ...(model.accountBound ? { codexcommander_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND } : {}),
       supported_reasoning_levels: (model.efforts ?? [])
         .map(effort => ({ effort, description: effort })),
     })),
@@ -80,7 +84,7 @@ function parsedFixture(over: {
   reasoning?: string;
   tools?: Array<{ name: string; namespace?: string }>;
   rawInput?: unknown;
-}): OcxParsedRequest {
+}): CodexCommanderParsedRequest {
   return {
     modelId: "gpt-5.5",
     context: {
@@ -91,6 +95,18 @@ function parsedFixture(over: {
     options: over.reasoning ? { reasoning: over.reasoning as never } : {},
     _rawBody: { model: "gpt-5.5", input: over.rawInput ?? [] },
   };
+}
+
+/** Every current-config guidance fixture carries the required explicit switch. */
+function multiAgentGuidanceText(
+  parsed: CodexCommanderParsedRequest,
+  options: Parameters<typeof rawMultiAgentGuidanceText>[1] = { multiAgentGuidanceEnabled: true },
+  dependencies?: Parameters<typeof rawMultiAgentGuidanceText>[2],
+) {
+  return rawMultiAgentGuidanceText(parsed, {
+    multiAgentGuidanceEnabled: true,
+    ...options,
+  }, dependencies);
 }
 
 describe("multiAgentGuidanceText", () => {
@@ -321,8 +337,7 @@ describe("multiAgentGuidanceText", () => {
         injectionPrompt: "Use {{model}}.",
       },
     );
-    expect(ambiguousCustom).toBe("<multi_agent_mode>Use .</multi_agent_mode>");
-    expect(ambiguousCustom).not.toContain("gpt-5.6-sol");
+    expect(ambiguousCustom).toBeNull();
   });
 
   test("account projection never widens the five-model spawn candidate window", () => {
@@ -380,10 +395,10 @@ describe("multiAgentGuidanceText", () => {
         injectionModel: "gpt-5.6-sol",
         injectionPrompt: "Use {{model}}.",
       },
-    )).toBe("<multi_agent_mode>Use .</multi_agent_mode>");
+    )).toBeNull();
   });
 
-  test("effective roster applies alias, visibility, v2 compatibility, stable priority, cap, and diagnostics", async () => {
+  test("effective roster applies exact selectors, visibility, v2 compatibility, stable priority, cap, and diagnostics", async () => {
     const dir = codexHomeFixture(V2_ON);
     catalogFixture(dir, [
       { slug: "provider/vendor-model", efforts: ["high"], priority: 0 },
@@ -396,7 +411,7 @@ describe("multiAgentGuidanceText", () => {
       { slug: "displaced-model", efforts: ["high"], priority: 6 },
     ]);
     const configured = [
-      "provider/vendor/model",
+      "provider/vendor-model",
       "hidden-model",
       "v1-model",
       "missing-model",
@@ -456,10 +471,9 @@ describe("multiAgentGuidanceText", () => {
 
     const eligible = await multiAgentGuidanceText(
       parsedFixture({ tools: [{ name: "spawn_agent" }] }),
-      { injectionModel: "provider/vendor/model", injectionEffort: "high" },
+      { injectionModel: "provider/vendor-model", injectionEffort: "high" },
     );
     expect(eligible).toContain('Preferred sub-agent: model "provider/vendor-model", reasoning_effort "high"');
-    expect(eligible).not.toContain('model "provider/vendor/model"');
   });
 
   test("NATIVE v2 wire shape (collaboration namespace + v2 companions) is classified v2", async () => {
@@ -683,7 +697,7 @@ describe("multiAgentGuidanceText", () => {
     expect(text).toContain('Preferred sub-agent: model "opencode-go/glm-5.2", reasoning_effort "xhigh"');
   });
 
-  test("injectionPrompt preserves an unresolved explicit model and substitutes only the effective roster", async () => {
+  test("injectionPrompt omits an unresolved model and substitutes only the effective roster", async () => {
     const dir = codexHomeFixture(V2_ON);
     catalogFixture(dir, [
       { slug: "gpt-5.6-terra", efforts: ["high", "max"], priority: 0, multiAgentVersion: "v2" },
@@ -701,7 +715,7 @@ describe("multiAgentGuidanceText", () => {
     );
 
     expect(text).toBe(
-      '<multi_agent_mode>CUSTOM model=raw/preferred-model effort=max'
+      '<multi_agent_mode>CUSTOM model= effort=max'
         + ' Available models (reasoning_effort high/max): "gpt-5.6-terra".</multi_agent_mode>',
     );
     expect(text).not.toContain("gpt-5.6-luna");
@@ -866,7 +880,7 @@ describe("multiAgentGuidanceText", () => {
     expect(rosterCalls).toBe(0);
   });
 
-  test("unset and true preserve identical v1 and v2 guidance", async () => {
+  test("a missing switch disables guidance while explicit true enables v1 and v2 guidance", async () => {
     const dir = codexHomeFixture(V2_ON);
     catalogFixture(dir, [{
       slug: "gpt-5.6-terra",
@@ -881,21 +895,21 @@ describe("multiAgentGuidanceText", () => {
         { name: "send_input", namespace: "agents" },
       ],
     });
-    expect(await multiAgentGuidanceText(v1)).toBe(
-      await multiAgentGuidanceText(v1, { multiAgentGuidanceEnabled: true }),
-    );
+    expect(await rawMultiAgentGuidanceText(v1, {} as never)).toBeNull();
+    expect(await multiAgentGuidanceText(v1)).not.toBeNull();
 
     const v2Options = {
       injectionModel: "gpt-5.6-terra",
       subagentModels: ["gpt-5.6-terra"],
     };
+    expect(await rawMultiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      v2Options as never,
+    )).toBeNull();
     expect(await multiAgentGuidanceText(
       parsedFixture({ tools: [{ name: "spawn_agent" }] }),
       v2Options,
-    )).toBe(await multiAgentGuidanceText(
-      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
-      { ...v2Options, multiAgentGuidanceEnabled: true },
-    ));
+    )).not.toBeNull();
   });
 });
 

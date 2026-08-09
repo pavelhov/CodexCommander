@@ -5,7 +5,7 @@
  * management API, GUI) consumes this module so the bytes a user copies, downloads, or
  * curls can never drift between surfaces.
  *
- * Two invariants carried over from `ocx opencode` (src/cli/opencode.ts), which owned the
+ * Two invariants carried over from `ccx opencode` (src/cli/opencode.ts), which owned the
  * OpenCode serializer before it moved here:
  *
  * - **No secret is ever serialized.** Configs carry only the client's documented env
@@ -23,27 +23,28 @@ import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
+import { API_KEY_HEADER } from "../identity";
 import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
 import { probeHostname } from "../server/proxy-liveness";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 
 export type { ConfigFormat };
 
 /**
- * One entry opencodex owns inside a client's config: the JSON path to it and
+ * One entry codexcommander owns inside a client's config: the JSON path to it and
  * the value we put there.
  *
  * A path list rather than a single provider key because ownership is not
  * always one entry — Kimi owns its provider block AND one model entry per
  * model, and a writer that only knew about the provider would strand the rest
- * (devlog 260802 006 §2).
+ * (implementation contract 006 §2).
  */
 export interface ManagedFragment {
   path: readonly string[];
   value: unknown;
 }
 
-/** Everything opencodex contributes to one client's config, as one unit. */
+/** Everything codexcommander contributes to one client's config, as one unit. */
 export interface ManagedContribution {
   clientId: ExportClientId;
   fragments: readonly ManagedFragment[];
@@ -87,7 +88,7 @@ export interface OpencodeGeneratedConfig {
 }
 
 /** Provider key owned by this project; the only key any exporter ever emits. */
-export const OPENCODE_PROVIDER_ID = "opencodex";
+export const OPENCODE_PROVIDER_ID = "codexcommander";
 
 export const OPENCODE_CONFIG_SCHEMA = "https://opencode.ai/config.json";
 
@@ -102,13 +103,13 @@ const OPENCODE_PROVIDER_NPM = "@ai-sdk/openai-compatible";
  * `{env:...}` reference, so the secret never lands on disk. opencode substitutes it at
  * load time.
  */
-export const OPENCODE_API_KEY_ENV = "OPENCODEX_OPENCODE_API_KEY";
+export const OPENCODE_API_KEY_ENV = "CODEXCOMMANDER_OPENCODE_API_KEY";
 
 /** Env reference shared by apiKey and the dedicated proxy admission header. */
 export const OPENCODE_API_KEY_ENV_REF = `{env:${OPENCODE_API_KEY_ENV}}`;
 
 /** Env var Pi interpolates. Pi takes bare `$NAME`, not opencode's `{env:NAME}`. */
-export const PI_API_KEY_ENV = "OPENCODEX_API_KEY";
+export const PI_API_KEY_ENV = "CODEXCOMMANDER_API_KEY";
 
 /** Pi's reference form for the admission key. Never the value. */
 export const PI_API_KEY_ENV_REF = `$${PI_API_KEY_ENV}`;
@@ -117,11 +118,11 @@ export const PI_API_KEY_ENV_REF = `$${PI_API_KEY_ENV}`;
  * Hermes interpolates `${VAR}` anywhere in config.yaml, so the credential stays
  * in the environment exactly as it does for OpenCode and Pi.
  */
-export const HERMES_API_KEY_ENV = "OPENCODEX_HERMES_API_KEY";
+export const HERMES_API_KEY_ENV = "CODEXCOMMANDER_HERMES_API_KEY";
 export const HERMES_API_KEY_ENV_REF = `\${${HERMES_API_KEY_ENV}}`;
 
 /** OpenClaw interpolates `${UPPERCASE_VAR}` and fails closed when it is unset. */
-export const OPENCLAW_API_KEY_ENV = "OPENCODEX_OPENCLAW_API_KEY";
+export const OPENCLAW_API_KEY_ENV = "CODEXCOMMANDER_OPENCLAW_API_KEY";
 export const OPENCLAW_API_KEY_ENV_REF = `\${${OPENCLAW_API_KEY_ENV}}`;
 
 /**
@@ -130,14 +131,14 @@ export const OPENCLAW_API_KEY_ENV_REF = `\${${OPENCLAW_API_KEY_ENV}}`;
  * emit the same placeholder the Grok managed block uses rather than a user
  * secret; a non-loopback bind is refused by the writer instead of papered over.
  */
-export const KIMI_LOOPBACK_PLACEHOLDER = "opencodex-loopback";
+export const KIMI_LOOPBACK_PLACEHOLDER = "codexcommander-loopback";
 
 /**
  * Gajae's `apiKeyEnv` is env-name-only and fail-closed. Its sibling `apiKey`
  * falls back to treating the literal text as the token when the variable is
  * unset, which would silently ship a bogus credential — so we never emit it.
  */
-export const GAJAE_API_KEY_ENV = "OPENCODEX_GAJAE_API_KEY";
+export const GAJAE_API_KEY_ENV = "CODEXCOMMANDER_GAJAE_API_KEY";
 
 /** Pi's wire-dialect selector for an OpenAI-compatible endpoint. */
 const PI_API_DIALECT = "openai-completions";
@@ -157,12 +158,13 @@ const PI_API_DIALECT = "openai-completions";
 export const SCHEMA_REQUIRED_OUTPUT_BUDGET = 32_000;
 
 /** Deterministic loopback default for exported provider-block helpers in tests. */
-export const OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG: OcxConfig = {
+export const OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG: CodexCommanderConfig = {
   port: 10100,
   hostname: "127.0.0.1",
   defaultProvider: "mock",
+  multiAgentGuidanceEnabled: true,
   providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" } },
-} as OcxConfig;
+} as CodexCommanderConfig;
 
 /**
  * Resolve the user's global opencode config path. opencode uses the XDG layout on every
@@ -222,7 +224,7 @@ function absoluteClientPath(raw: string, home: string, variable: string): string
   if (!isAbsolute(trimmed)) {
     throw new ClientPathError(
       `${variable} must be an absolute path or start with ~; "${trimmed}" depends on the working directory, `
-      + "so opencodex and the client would disagree about which file it names.",
+      + "so codexcommander and the client would disagree about which file it names.",
     );
   }
   return trimmed;
@@ -362,9 +364,9 @@ export interface ExportContext {
   models: readonly ExportModel[];
   /**
    * Live proxy config. Only the OpenCode path reads it: a non-loopback bind moves
-   * admission from `apiKey` to the `x-opencodex-api-key` header.
+   * admission from `apiKey` to the `x-codexcommander-api-key` header.
    */
-  config?: OcxConfig;
+  config?: CodexCommanderConfig;
 }
 
 export type ExportClientId =
@@ -399,7 +401,7 @@ export interface ExportClientSpec {
    */
   summarize: (document: unknown) => { modelCount: number; modelsWithoutLimits: number };
   /**
-   * The fragments opencodex owns inside this client's config. Only the builder
+   * The fragments codexcommander owns inside this client's config. Only the builder
    * knows where a client keeps our entries, so ownership paths originate here
    * rather than being re-derived by the writer.
    */
@@ -408,7 +410,7 @@ export interface ExportClientSpec {
    * True when this client can only reach a loopback bind.
    *
    * `/v1/chat/completions` rejects bearer credentials and requires the
-   * dedicated `x-opencodex-api-key` header (AUTH_MATRIX in
+   * dedicated `x-codexcommander-api-key` header (AUTH_MATRIX in
    * src/server/auth-cors.ts). A client whose schema has no place to put that
    * header therefore cannot authenticate against a remote bind at all — so we
    * say so rather than exporting a config that 401s. Same reasoning as the
@@ -439,7 +441,7 @@ function outputBudgetFor(context: number): number {
  * Our internal vocabulary is `text | image | audio` (ALLOWED_INPUT_MODALITIES in
  * src/server/management/model-routes.ts). Pi and Gajae accept only
  * `text | image`, and both reject the WHOLE config file over one out-of-enum
- * value — Gajae reports `/providers/opencodex/models/N/input/2: Invalid option`
+ * value — Gajae reports `/providers/codexcommander/models/N/input/2: Invalid option`
  * and falls back to its built-in list, Pi returns an empty model config. So a
  * single `audio` model takes every routed model down with it. That is not
  * hypothetical: zenmux/meta-muse-spark-1.1 advertises audio and did exactly
@@ -451,7 +453,7 @@ function outputBudgetFor(context: number): number {
  * declared is unknown, and `text` is the honest floor — every routed model takes
  * prompts. A model declaring `["audio"]` and nothing else is incompatible with a
  * text|image client, and rewriting it to `["text"]` would advertise a capability
- * it does not have. That input is reachable three ways: `ocx models add
+ * it does not have. That input is reachable three ways: `ccx models add
  * --modalities audio`, `/api/custom-models`, and provider discovery.
  *
  * So unknown falls back to text and incompatible returns null, which drops the
@@ -496,12 +498,12 @@ function exportModelLabel(model: OpencodeCatalogModel): string {
   return `${id} (${providerLabel})`;
 }
 
-function opencodeProviderOptions(baseURL: string, config: OcxConfig): OpencodeProviderBlock["options"] {
+function opencodeProviderOptions(baseURL: string, config: CodexCommanderConfig): OpencodeProviderBlock["options"] {
   const options: OpencodeProviderBlock["options"] = { baseURL };
-  // Non-loopback binds accept proxy admission only via x-opencodex-api-key so Authorization
+  // Non-loopback binds accept proxy admission only via x-codexcommander-api-key so Authorization
   // stays free for Codex Direct upstream credentials when applicable.
   if (shouldInjectApiAuthHeader(config)) {
-    options.headers = { "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF };
+    options.headers = { [API_KEY_HEADER]: OPENCODE_API_KEY_ENV_REF };
     return options;
   }
   options.apiKey = OPENCODE_API_KEY_ENV_REF;
@@ -509,7 +511,7 @@ function opencodeProviderOptions(baseURL: string, config: OcxConfig): OpencodePr
 }
 
 /**
- * `opencodex` provider block for a resolved base URL.
+ * `codexcommander` provider block for a resolved base URL.
  *
  * `limit.context` is emitted ONLY from an authoritative context window — never guessed.
  * When none is available the whole `limit` block is dropped and opencode keeps its own
@@ -519,7 +521,7 @@ function opencodeProviderOptions(baseURL: string, config: OcxConfig): OpencodePr
 function opencodeProviderBlock(
   baseURL: string,
   catalogModels: readonly OpencodeCatalogModel[],
-  config: OcxConfig,
+  config: CodexCommanderConfig,
 ): OpencodeProviderBlock {
   const models: Record<string, OpencodeModelEntry> = {};
   for (const model of catalogModels) {
@@ -534,22 +536,22 @@ function opencodeProviderBlock(
   }
   return {
     npm: OPENCODE_PROVIDER_NPM,
-    name: "OpenCodex",
+    name: "CodexCommander",
     options: opencodeProviderOptions(baseURL, config),
     models,
   };
 }
 
 /**
- * Build the `opencodex` provider block from proxy catalog rows keyed by each row's
- * canonical `namespaced` selector. Used by the `ocx opencode` launcher, which injects
+ * Build the `codexcommander` provider block from proxy catalog rows keyed by each row's
+ * canonical `namespaced` selector. Used by the `ccx opencode` launcher, which injects
  * the block through OpenCode's inline runtime layer rather than any file.
  */
 export function buildOpencodeProviderBlockFromCatalog(
   port: number,
   catalogModels: readonly OpencodeCatalogModel[],
   hostname?: string,
-  config: OcxConfig = OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG,
+  config: CodexCommanderConfig = OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG,
 ): OpencodeProviderBlock {
   return opencodeProviderBlock(opencodeProxyBaseUrl(port, hostname), catalogModels, config);
 }
@@ -736,8 +738,8 @@ function buildPiClientConfig(ctx: ExportContext): PiGeneratedConfig {
 }
 
 /** Extra headers a non-loopback bind needs, or nothing on loopback. */
-function proxyAdmissionHeaders(config: OcxConfig | undefined, envRef: string): Record<string, string> | undefined {
-  return shouldInjectApiAuthHeader(config) ? { "x-opencodex-api-key": envRef } : undefined;
+function proxyAdmissionHeaders(config: CodexCommanderConfig | undefined, envRef: string): Record<string, string> | undefined {
+  return shouldInjectApiAuthHeader(config) ? { [API_KEY_HEADER]: envRef } : undefined;
 }
 
 function buildHermesClientConfig(ctx: ExportContext): HermesGeneratedConfig {
@@ -1048,7 +1050,7 @@ export function buildClientConfigText(
   };
 }
 
-/** The fragments opencodex owns in a client's config (writer-side). */
+/** The fragments CodexCommander owns in a client's config (writer-side). */
 export function buildClientContribution(client: ExportClientId, ctx: ExportContext): ManagedContribution {
   return EXPORT_CLIENTS[client].buildContribution(ctx);
 }

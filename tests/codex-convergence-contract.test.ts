@@ -37,17 +37,28 @@ import {
 } from "../src/codex/user-identity";
 import { saveConfig } from "../src/config";
 import { handleManagementAPI } from "../src/server/management-api";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { ManagementRequest } from "./helpers/management-auth";
 
 let root = "";
 let codexHome = "";
-let opencodexHome = "";
+let codexCommanderHome = "";
 let previousCodexHome: string | undefined;
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 
-function config(port = 10100): OcxConfig {
-  return { port, providers: {}, defaultProvider: "openai" };
+function config(port = 10100): CodexCommanderConfig {
+  return {
+    port,
+    multiAgentGuidanceEnabled: true,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+      },
+    },
+    defaultProvider: "openai",
+  };
 }
 
 function sourceCatalog(marker = "original"): string {
@@ -93,18 +104,18 @@ async function candidate(): Promise<CodexCatalogCandidate> {
 
 beforeEach(() => {
   previousCodexHome = process.env.CODEX_HOME;
-  previousOpencodexHome = process.env.OPENCODEX_HOME;
-  root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-convergence-")));
+  previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+  root = realpathSync.native(mkdtempSync(join(tmpdir(), "ccx-convergence-")));
   codexHome = join(root, "codex");
-  opencodexHome = join(root, "opencodex");
+  codexCommanderHome = join(root, "codexcommander");
   mkdirSync(codexHome);
-  mkdirSync(opencodexHome);
+  mkdirSync(codexCommanderHome);
   process.env.CODEX_HOME = codexHome;
-  process.env.OPENCODEX_HOME = opencodexHome;
+  process.env.CODEXCOMMANDER_HOME = codexCommanderHome;
   resetCatalogRuntimeStateForTests();
   resetCodexRuntimeResolveCacheForTests();
   saveConfig(config());
-  writeFileSync(join(codexHome, "opencodex-catalog.json"), sourceCatalog());
+  writeFileSync(join(codexHome, "codexcommander-catalog.json"), sourceCatalog());
 });
 
 afterEach(() => {
@@ -113,8 +124,8 @@ afterEach(() => {
   for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(`${kPath}${suffix}`, { force: true });
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -134,7 +145,7 @@ test("commit is fixed-order, receipt-exact, and a consumed candidate cannot be r
   expect(first).toEqual({
     kind: "committed",
     changed: true,
-    writes: { keyedBackup: "written", legacyBackup: "written", catalog: "written", cache: "written" },
+    writes: { keyedBackup: "written", catalog: "written", cache: "written" },
   });
   const after = manifest(root);
   expect(await commitCodexCatalogCandidate(gathered, 1_000)).toEqual({
@@ -163,7 +174,7 @@ test("home-selection drift rejects before every catalog target write", async () 
 
 test("same-inode source drift rejects before every catalog target write", async () => {
   const gathered = await candidate();
-  const path = join(codexHome, "opencodex-catalog.json");
+  const path = join(codexHome, "codexcommander-catalog.json");
   const inode = lstatSync(path).ino;
   writeFileSync(path, sourceCatalog("drifted"));
   expect(lstatSync(path).ino).toBe(inode);
@@ -175,7 +186,7 @@ test("same-inode source drift rejects before every catalog target write", async 
 
 test("target identity drift wins before source comparison and writes nothing", async () => {
   const gathered = await candidate();
-  const path = join(codexHome, "opencodex-catalog.json");
+  const path = join(codexHome, "codexcommander-catalog.json");
   const moved = join(codexHome, "moved.json");
   renameSync(path, moved);
   writeFileSync(path, readFileSync(moved));
@@ -195,14 +206,13 @@ test("used process-local authority drift rejects before every catalog target wri
   expect(existsSync(join(codexHome, "models_cache.json"))).toBe(false);
 });
 
-test("catalog-only commit never creates the native pair or routing/history artifacts", async () => {
+test("catalog-only commit never creates the native pair or routing artifacts", async () => {
   const gathered = await candidate();
   expect((await commitCodexCatalogCandidate(gathered, 1_000)).kind).toBe("committed");
   const nativeDb = resolveCodexCoordinatorDatabasePath(resolveEffectiveUserIdentity(), codexHome);
   expect(existsSync(nativeDb)).toBe(false);
   expect(existsSync(join(codexHome, "config.toml"))).toBe(false);
   expect(manifest(root).join("\n")).not.toContain("journal");
-  expect(manifest(root).join("\n")).not.toContain("history");
 });
 
 test("the total lazy adapter preserves a persisted-success route when factory construction fails", async () => {

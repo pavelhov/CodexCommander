@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCredential } from "../src/oauth/store";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import {
   clearAccountQuotaCache,
   clearProviderQuotaCache,
@@ -16,8 +16,8 @@ import {
 } from "../src/providers/quota";
 
 const originalFetch = globalThis.fetch;
-const previousOpencodexHome = process.env.OPENCODEX_HOME;
-let opencodexHome: string;
+const previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+let codexCommanderHome: string;
 
 const FIRST = { accountId: "acct-first", email: "first@example.com" };
 const SECOND = { accountId: "acct-second", email: "second@example.com" };
@@ -37,17 +37,17 @@ function usageBody(fiveHour: number, sevenDay: number): string {
 }
 
 beforeEach(() => {
-  opencodexHome = mkdtempSync(join(tmpdir(), "ocx-account-quota-"));
-  process.env.OPENCODEX_HOME = opencodexHome;
+  codexCommanderHome = mkdtempSync(join(tmpdir(), "ccx-account-quota-"));
+  process.env.CODEXCOMMANDER_HOME = codexCommanderHome;
   clearAccountQuotaCache();
   clearProviderQuotaCache();
 });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  rmSync(opencodexHome, { recursive: true, force: true });
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
+  rmSync(codexCommanderHome, { recursive: true, force: true });
   clearAccountQuotaCache();
   clearProviderQuotaCache();
   resetProviderQuotaReconcileStateForTests();
@@ -232,7 +232,7 @@ describe("fetchProviderAccountQuotas", () => {
       return new Response(body, { status: 200 });
     }) as typeof fetch;
 
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 1455,
       defaultProvider: "anthropic",
       providers: {
@@ -343,7 +343,7 @@ describe("fetchProviderAccountQuotas", () => {
       return new Response(usageBody(3, 21), { status: 200 });
     }) as typeof fetch;
 
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 1455,
       defaultProvider: "anthropic",
       providers: {
@@ -392,7 +392,7 @@ describe("fetchProviderAccountQuotas", () => {
       return new Response(usageBody(70, 15), { status: 200 });
     }) as typeof fetch;
 
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 1455,
       defaultProvider: "anthropic",
       providers: {

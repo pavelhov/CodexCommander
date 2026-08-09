@@ -54,7 +54,7 @@ afterEach(() => {
 });
 
 function seedHome(sizes: Array<{ name: string; bytes: number; when: Date }>): string {
-  home = mkdtempSync(join(tmpdir(), "ocx-storage-policy-"));
+  home = mkdtempSync(join(tmpdir(), "ccx-storage-policy-"));
   mkdirSync(join(home, "archived_sessions"));
   const db = new Database(join(home, "state_5.sqlite"));
   db.exec(`CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, archived INTEGER)`);
@@ -86,8 +86,6 @@ function syntheticCandidates(
       absPath: relPath,
       bytes: bytesEach,
       mtimeMs,
-      physicalRelPaths: [relPath],
-      physicalFiles: [{ relPath, bytes: bytesEach, mtimeMs }],
     };
   });
 }

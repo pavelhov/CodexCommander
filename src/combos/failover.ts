@@ -1,5 +1,5 @@
 import { classifyError, isCyberPolicyCode } from "../lib/errors";
-import type { OcxComboTarget } from "../types";
+import type { CodexCommanderComboTarget } from "../types";
 import { targetKey } from "./types";
 import {
   captureConfigGeneration,
@@ -21,7 +21,7 @@ let liveComboTargets = new Set<string>();
 
 function cooldownMapKey(
   comboId: string,
-  target: Pick<OcxComboTarget, "provider" | "model">,
+  target: Pick<CodexCommanderComboTarget, "provider" | "model">,
 ): string {
   return `${comboId}\0${targetKey(target)}`;
 }
@@ -46,7 +46,7 @@ export function parseRetryAfterMs(
 
 export function isComboTargetInCooldown(
   comboId: string,
-  target: Pick<OcxComboTarget, "provider" | "model">,
+  target: Pick<CodexCommanderComboTarget, "provider" | "model">,
   now = Date.now(),
 ): boolean {
   const key = cooldownMapKey(comboId, target);
@@ -61,7 +61,7 @@ export function isComboTargetInCooldown(
 
 export function coolComboTarget(
   comboId: string,
-  target: Pick<OcxComboTarget, "provider" | "model">,
+  target: Pick<CodexCommanderComboTarget, "provider" | "model">,
   options?: { retryAfter?: string | null; now?: number; cooldownMs?: number; writerGeneration?: number },
 ): void {
   const now = options?.now ?? Date.now();

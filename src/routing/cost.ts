@@ -10,7 +10,7 @@
  * (`limits.maxEstimatedCostUsd`) is evaluated deterministically.
  */
 
-import type { OcxUsage } from "../types";
+import type { CodexCommanderUsage } from "../types";
 import type { UsageStatus } from "../usage/log";
 import { estimateRequestCost, type ServiceTierInput } from "../usage/cost";
 import type { RouteCostEvidence } from "./trace";
@@ -21,7 +21,7 @@ export const COST_SCORE_REFERENCE_USD = 1.0;
 export interface CostEvidenceInput {
   provider: string;
   model: string;
-  usage?: OcxUsage;
+  usage?: CodexCommanderUsage;
   usageStatus?: UsageStatus;
   serviceTier?: ServiceTierInput;
   limitUsd?: number;

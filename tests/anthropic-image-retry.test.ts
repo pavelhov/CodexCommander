@@ -3,7 +3,7 @@ import { parsedHasInlineImage, shouldAttemptImageTierRetry } from "../src/server
 import { createAnthropicAdapter } from "../src/adapters/anthropic";
 import { resetNormalizeStateForTests } from "../src/adapters/anthropic-image-normalize";
 import { sniffImageDimensions } from "../src/adapters/anthropic-image-guard";
-import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 
 const ONE_PX_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -13,7 +13,7 @@ async function realPngDataUrl(width: number, height: number): Promise<string> {
   return `data:image/png;base64,${Buffer.from(buf).toString("base64")}`;
 }
 
-function parsedWithImages(imageUrls: string[]): OcxParsedRequest {
+function parsedWithImages(imageUrls: string[]): CodexCommanderParsedRequest {
   return {
     modelId: "claude-fable-5",
     stream: false,
@@ -30,14 +30,14 @@ function parsedWithImages(imageUrls: string[]): OcxParsedRequest {
         },
       ],
     },
-  } as unknown as OcxParsedRequest;
+  } as unknown as CodexCommanderParsedRequest;
 }
 
-const provider: OcxProviderConfig = {
+const provider: CodexCommanderProviderConfig = {
   adapter: "anthropic",
   baseUrl: "https://api.anthropic.com",
   apiKey: "sk-test-not-real",
-} as OcxProviderConfig;
+} as CodexCommanderProviderConfig;
 
 beforeEach(() => resetNormalizeStateForTests());
 
@@ -64,7 +64,7 @@ describe("image-retry gate (030 R3)", () => {
 
   test("parsedHasInlineImage ignores remote URLs and malformed content", () => {
     expect(parsedHasInlineImage(parsedWithImages(["https://example.com/a.png"]))).toBe(false);
-    expect(parsedHasInlineImage({ modelId: "m", stream: false, options: {}, context: { messages: [{ role: "user", content: "plain" }] } } as unknown as OcxParsedRequest)).toBe(false);
+    expect(parsedHasInlineImage({ modelId: "m", stream: false, options: {}, context: { messages: [{ role: "user", content: "plain" }] } } as unknown as CodexCommanderParsedRequest)).toBe(false);
   });
 });
 

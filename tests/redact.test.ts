@@ -57,8 +57,8 @@ describe("redactSecretString", () => {
 
   test("leaves non-credential colon labels readable", () => {
     // The colon rule must not swallow ordinary diagnostics.
-    expect(redactSecretString("model: gpt-5.5\nstatus: 429\nrequest: ocx-abc123"))
-      .toBe("model: gpt-5.5\nstatus: 429\nrequest: ocx-abc123");
+    expect(redactSecretString("model: gpt-5.5\nstatus: 429\nrequest: ccx-abc123"))
+      .toBe("model: gpt-5.5\nstatus: 429\nrequest: ccx-abc123");
   });
 
   test("masks the WHOLE colon-labelled value, including delimiter-bearing forms", () => {

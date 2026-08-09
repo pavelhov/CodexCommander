@@ -27,6 +27,30 @@ const CANONICAL_OPENAI = {
   codexAccountMode: "pool",
 };
 
+const CURRENT_MAIN_ACCOUNT = {
+  id: "main",
+  email: "main@example.test",
+  isMain: true,
+  paused: false,
+  priority: 0,
+  hasCredential: true,
+  needsReauth: false,
+  quota: null,
+  health: { status: "healthy" },
+  healthLabel: "Healthy",
+  healthSummary: "codex main account: healthy",
+};
+
+const CURRENT_ACTIVE = {
+  activeCodexAccountId: null,
+  pinned: false,
+  pinnedAccountId: null,
+  autoSwitchThreshold: 80,
+  upstreamFailoverThreshold: 3,
+  accountPoolStrategy: "quota",
+  accountPoolStickyLimit: 1,
+};
+
 beforeEach(() => {
   previous = Object.fromEntries(globals.map((k) => [k, Reflect.get(globalThis, k)])) as typeof previous;
   originalFetch = globalThis.fetch;
@@ -76,12 +100,10 @@ beforeEach(() => {
         return Response.json({ success: true, name: "openai", disabled: false });
       }
       if (url.pathname.startsWith("/api/codex-auth/accounts")) {
-        return Response.json({
-          accounts: [{ id: "main", email: "main@example.test", isMain: true, hasCredential: true, quota: null }],
-        });
+        return Response.json({ accounts: [CURRENT_MAIN_ACCOUNT] });
       }
       if (url.pathname.startsWith("/api/codex-auth/active")) {
-        return Response.json({ activeCodexAccountId: null, autoSwitchThreshold: 80 });
+        return Response.json(CURRENT_ACTIVE);
       }
       return Response.json({});
     },
@@ -182,9 +204,8 @@ test("absent OpenAI: preset load failure surfaces a localized error alert", asyn
       requests.push({ method, path: `${url.pathname}${url.search}` });
       if (url.pathname === "/api/config") return Response.json({ providers: configProviders });
       if (url.pathname === "/api/provider-presets") return new Response("nope", { status: 500 });
-      if (url.pathname.startsWith("/api/codex-auth/")) {
-        return Response.json({ accounts: [], activeCodexAccountId: null, autoSwitchThreshold: 80 });
-      }
+      if (url.pathname.startsWith("/api/codex-auth/accounts")) return Response.json({ accounts: [] });
+      if (url.pathname.startsWith("/api/codex-auth/active")) return Response.json(CURRENT_ACTIVE);
       return Response.json({});
     },
   });

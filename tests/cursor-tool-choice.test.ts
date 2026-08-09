@@ -2,14 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { buildCursorToolDefinitions } from "../src/adapters/cursor/tool-definitions";
 import { createCursorRequest } from "../src/adapters/cursor/request-builder";
 import { parseRequest } from "../src/responses/parser";
-import type { OcxTool } from "../src/types";
+import type { CodexCommanderTool } from "../src/types";
 
-const tools: OcxTool[] = [
+const tools: CodexCommanderTool[] = [
   { name: "read_file", namespace: "mcp__fs", description: "Read", parameters: {} },
   { name: "write_file", namespace: "mcp__fs", description: "Write", parameters: {} },
 ];
 
-const shellBridgeTools: OcxTool[] = [
+const shellBridgeTools: CodexCommanderTool[] = [
   { name: "shell_command", description: "Run", parameters: {} },
   { name: "read_file", namespace: "mcp__fs", description: "Read", parameters: {} },
 ];
@@ -34,7 +34,7 @@ describe("Cursor Responses tool_choice support", () => {
   });
 
   test("forced exec_command does not select a namespaced remote exec_command beside the bare bridge", () => {
-    const toolsWithRemote: OcxTool[] = [
+    const toolsWithRemote: CodexCommanderTool[] = [
       { name: "shell_command", description: "Run", parameters: {} },
       { name: "exec_command", namespace: "mcp__remote", description: "Remote exec", parameters: {} },
     ];
@@ -45,7 +45,7 @@ describe("Cursor Responses tool_choice support", () => {
   });
 
   test("raw exec_command selects namespaced remote when no bare shell bridge exists", () => {
-    const remoteOnly: OcxTool[] = [
+    const remoteOnly: CodexCommanderTool[] = [
       { name: "exec_command", namespace: "mcp__remote", description: "Remote exec", parameters: {} },
     ];
     expect(buildCursorToolDefinitions(remoteOnly, { name: "exec_command" }).map(tool => tool.toolName)).toEqual(["mcp__remote__exec_command"]);
@@ -54,7 +54,7 @@ describe("Cursor Responses tool_choice support", () => {
   });
 
   test("raw shell_command selects namespaced remote when no bare shell bridge exists", () => {
-    const remoteOnly: OcxTool[] = [
+    const remoteOnly: CodexCommanderTool[] = [
       { name: "shell_command", namespace: "mcp__remote", description: "Remote shell", parameters: {} },
     ];
     expect(buildCursorToolDefinitions(remoteOnly, { name: "shell_command" }).map(tool => tool.toolName)).toEqual(["mcp__remote__shell_command"]);

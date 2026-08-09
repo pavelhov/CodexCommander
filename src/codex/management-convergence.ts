@@ -1,27 +1,15 @@
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import { captureCatalogAdmissionSnapshot } from "./catalog-admission";
 import { convergeCodexCatalog } from "./convergence";
 import type {
   CatalogDisposition,
   CatalogOnlyOutcome,
-  CodexHistoryState,
   CodexObservedState,
   ConvergeCodex,
   ProjectCatalogOnlyOutcomeInput,
 } from "./convergence-types";
 
-function notEvaluatedHistory(): CodexHistoryState {
-  return {
-    status: "not-evaluated",
-    attempts: 0,
-    nextRetryAt: null,
-    txId: null,
-    pendingRows: null,
-    backupEntries: null,
-  };
-}
-
-function notEvaluatedObserved(history: CodexHistoryState): CodexObservedState {
+function notEvaluatedObserved(): CodexObservedState {
   return {
     aggregate: "not-evaluated",
     isApplied: null,
@@ -34,12 +22,6 @@ function notEvaluatedObserved(history: CodexHistoryState): CodexObservedState {
       catalog: "not-evaluated",
       cache: "not-evaluated",
       journal: "not-evaluated",
-      history: {
-        state: history,
-        database: "not-evaluated",
-        manifest: "not-evaluated",
-        rollouts: "not-evaluated",
-      },
       provenance: {
         state: "not-evaluated",
         nativeGeneration: null,
@@ -72,13 +54,11 @@ export function projectCatalogOnlyOutcome({
   changed,
   catalogRefresh,
 }: ProjectCatalogOnlyOutcomeInput): CatalogOnlyOutcome {
-  const history = notEvaluatedHistory();
   return {
     kind: "catalog-only",
     changed,
-    observed: notEvaluatedObserved(history),
+    observed: notEvaluatedObserved(),
     catalogRefresh,
-    history,
   };
 }
 
@@ -87,7 +67,7 @@ export function projectCatalogOnlyOutcome({
  * funnel. This module is intentionally not re-exported by a public Codex facade.
  */
 export function createManagementConvergeCodex(
-  config: Readonly<OcxConfig>,
+  config: Readonly<CodexCommanderConfig>,
 ): ConvergeCodex {
   const retainedConfig = config;
   return async request => {

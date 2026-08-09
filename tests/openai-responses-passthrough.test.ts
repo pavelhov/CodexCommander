@@ -667,7 +667,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
     }, meta).body) as { input: Record<string, unknown>[] };
 
     const repairedCallId = body.input[0].call_id as string;
-    expect(repairedCallId).toStartWith("call_ocx_");
+    expect(repairedCallId).toStartWith("call_ccx_");
     expect(repairedCallId.length).toBeLessThanOrEqual(64);
     expect(body.input[1].call_id).toBe(repairedCallId);
     expect(body.input[2].call_id).toBe("call_short");
@@ -753,7 +753,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
     }, meta).body) as { previous_response_id?: string; input: Array<{ call_id: string }> };
 
     expect(body.previous_response_id).toBeUndefined();
-    expect(body.input[0]?.call_id).toStartWith("call_ocx_");
+    expect(body.input[0]?.call_id).toStartWith("call_ccx_");
     expect(body.input[0]?.call_id.length).toBe(64);
     expect(body.input[1]?.call_id).toBe(body.input[0]?.call_id);
   });
@@ -788,7 +788,7 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
   };
   const meta = { headers: new Headers({ authorization: "Bearer token" }) };
 
-  test("keyed platform replaces a dotted image_gen function with a safe alias", () => {
+  test("keyed platform leaves a standalone dotted image_gen function untouched", () => {
     const adapter = createResponsesPassthroughAdapter(keyedProvider);
     const request = adapter.buildRequest({
       modelId: "gpt-5.6-sol",
@@ -807,10 +807,11 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     }, meta);
     const body = JSON.parse(request.body) as { tools: { type: string; name?: string }[] };
 
-    // Hosted image_generation dropped; the declared client tool wins and unrelated hosted tools stay.
-    expect(body.tools).toHaveLength(2);
-    expect(body.tools.some(t => t.type === "image_generation")).toBe(false);
-    expect(body.tools.some(t => t.type === "function" && t.name === "image_gen__imagegen")).toBe(true);
+    // A dotted flat declaration is not a canonical namespace declaration and receives no repair.
+    expect(body.tools).toHaveLength(3);
+    expect(body.tools.some(t => t.type === "image_generation")).toBe(true);
+    expect(body.tools.some(t => t.type === "function" && t.name === "image_gen.imagegen")).toBe(true);
+    expect(body.tools.some(t => t.type === "function" && t.name === "image_gen__imagegen")).toBe(false);
     expect(body.tools.some(t => t.type === "web_search")).toBe(true);
   });
 
@@ -889,7 +890,11 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
         model: "gpt-5.6-sol",
         input: [{
           type: "additional_tools",
-          tools: [{ type: "function", name: "image_gen.imagegen", parameters: {} }],
+          tools: [{
+            type: "namespace",
+            name: "image_gen",
+            tools: [{ type: "function", name: "imagegen", parameters: {} }],
+          }],
         }],
         tool_choice: {
           type: "allowed_tools",
@@ -974,7 +979,11 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
           {
             type: "additional_tools",
             role: "developer",
-            tools: [{ type: "function", name: "image_gen.imagegen", parameters: {} }],
+            tools: [{
+              type: "namespace",
+              name: "image_gen",
+              tools: [{ type: "function", name: "imagegen", parameters: {} }],
+            }],
           },
         ],
       },
@@ -992,7 +1001,7 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     expect(additionalTools?.tools?.some(t => t.name === "image_gen__imagegen")).toBe(true);
   });
 
-  test("keyed platform encodes native and legacy image-gen calls for upstream replay", () => {
+  test("keyed platform encodes canonical replay calls and leaves dotted calls untouched", () => {
     const adapter = createResponsesPassthroughAdapter(keyedProvider);
     const request = adapter.buildRequest({
       modelId: "gpt-5.6-sol",
@@ -1017,7 +1026,7 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
           {
             type: "function_call",
             name: "image_gen.imagegen",
-            call_id: "call_legacy",
+            call_id: "call_dotted",
             arguments: "{}",
           },
           { type: "function_call", name: "exec_command", call_id: "call_other", arguments: "{}" },
@@ -1030,7 +1039,7 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
 
     expect(body.input[0]).toMatchObject({ name: "image_gen__imagegen", call_id: "call_native" });
     expect(body.input[0]).not.toHaveProperty("namespace");
-    expect(body.input[1]).toMatchObject({ name: "image_gen__imagegen", call_id: "call_legacy" });
+    expect(body.input[1]).toMatchObject({ name: "image_gen.imagegen", call_id: "call_dotted" });
     expect(body.input[2]).toMatchObject({ name: "exec_command", call_id: "call_other" });
   });
 
@@ -1052,7 +1061,7 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
           type: "additional_tools",
           role: "developer",
           tools: [
-            { type: "function", name: "image_gen.imagegen", parameters: { type: "object" } },
+            { type: "function", name: "image_gen__imagegen", parameters: { type: "object" } },
             { type: "web_search" },
           ],
         }],
@@ -1117,7 +1126,7 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     expect(body.tool_choice).toEqual({ type: "function", name: "image_gen.imagegen" });
   });
 
-  test("configured model removes an empty image_gen namespace and preserves hosted image generation", () => {
+  test("configured model rewrites a selector resolved by a declared image_gen namespace", () => {
     const adapter = createResponsesPassthroughAdapter({
       ...keyedProvider,
       modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
@@ -1134,7 +1143,11 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
           type: "additional_tools",
           role: "developer",
           tools: [
-            { type: "namespace", name: "image_gen", tools: [] },
+            {
+              type: "namespace",
+              name: "image_gen",
+              tools: [{ type: "function", name: "imagegen", parameters: {} }],
+            },
             { type: "web_search" },
           ],
         }],
@@ -1223,7 +1236,7 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     expect(containers[0].tools).toContainEqual({ type: "image_generation" });
   });
 
-  test("configured model rewrites a custom image-gen selector", () => {
+  test("configured model leaves standalone dotted custom tools untouched", () => {
     const adapter = createResponsesPassthroughAdapter({
       ...keyedProvider,
       modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
@@ -1248,11 +1261,14 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
       tool_choice: { type: string };
     };
 
-    expect(body.tools).toEqual([{ type: "image_generation" }]);
-    expect(body.tool_choice).toEqual({ type: "image_generation" });
+    expect(body.tools).toEqual([
+      { type: "custom", name: "image_gen.render" },
+      { type: "image_generation" },
+    ]);
+    expect(body.tool_choice).toEqual({ type: "custom", name: "image_gen.render" });
   });
 
-  test("configured model retains a hosted declaration for a wrapper-only selector", () => {
+  test("configured model does not infer a dotted selector from an empty namespace", () => {
     const adapter = createResponsesPassthroughAdapter({
       ...keyedProvider,
       modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
@@ -1275,7 +1291,7 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     };
 
     expect(body.tools).toEqual([{ type: "image_generation" }]);
-    expect(body.tool_choice).toEqual({ type: "image_generation" });
+    expect(body.tool_choice).toEqual({ type: "function", name: "image_gen.imagegen" });
   });
 
   test("configured model retains hosted image generation without a forced selector", () => {
@@ -1307,7 +1323,7 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     }
   });
 
-  test("configured model retains a hosted declaration in wrapper-only additional tools", () => {
+  test("configured model does not infer a dotted selector from empty additional tools", () => {
     const adapter = createResponsesPassthroughAdapter({
       ...keyedProvider,
       modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
@@ -1335,7 +1351,7 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     const additionalTools = body.input.find(item => item.type === "additional_tools");
 
     expect(additionalTools?.tools).toEqual([{ type: "image_generation" }]);
-    expect(body.tool_choice).toEqual({ type: "image_generation" });
+    expect(body.tool_choice).toEqual({ type: "function", name: "image_gen.imagegen" });
   });
 
   test("configured model restores hosted image generation in unforced additional tools", () => {
@@ -1383,7 +1399,11 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
         model: "provider-image-model",
         input: [],
         tools: [
-          { type: "namespace", name: "image_gen", tools: [] },
+          {
+            type: "namespace",
+            name: "image_gen",
+            tools: [{ type: "function", name: "imagegen", parameters: {} }],
+          },
           { type: "image_generation" },
           { type: "function", name: "exec_command", parameters: {} },
         ],
@@ -1416,7 +1436,7 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     });
   });
 
-  test("configured model rewrites custom image-gen entries in an allowed-tools selector", () => {
+  test("configured model leaves standalone dotted custom allowed-tools entries untouched", () => {
     const adapter = createResponsesPassthroughAdapter({
       ...keyedProvider,
       modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
@@ -1450,6 +1470,7 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     };
 
     expect(body.tools).toEqual([
+      { type: "custom", name: "image_gen.render" },
       { type: "image_generation" },
       { type: "custom", name: "exec_command" },
     ]);
@@ -1457,7 +1478,7 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
       type: "allowed_tools",
       mode: "required",
       tools: [
-        { type: "image_generation" },
+        { type: "custom", name: "image_gen.render" },
         { type: "custom", name: "exec_command" },
       ],
     });

@@ -1,10 +1,10 @@
 ---
 title: Model Ordering
-description: How opencodex determines model order in the Codex picker and spawn_agent model overrides.
+description: How CodexCommander determines model order in the Codex picker and spawn_agent model overrides.
 ---
 
 The Codex model picker does not preserve the order of provider declarations or model arrays in the
-opencodex configuration. Its final order comes from catalog priorities, with a deterministic
+CodexCommander configuration. Its final order comes from catalog priorities, with a deterministic
 alphabetical order for routed models that share the same priority.
 
 ## The rule Codex applies
@@ -14,7 +14,7 @@ discards the catalog array order, so moving an entry earlier in a generated JSON
 it earlier in the picker. The implementation records this constraint directly in
 `src/codex/catalog/sync.ts`.
 
-opencodex therefore controls featured placement by assigning lower priorities, not by relying on
+CodexCommander therefore controls featured placement by assigning lower priorities, not by relying on
 array position. Unless noted otherwise, the fixed priorities and worked example below describe a
 catalog with no eligible Codex account selectors. With `N` eligible selectors, featured priorities
 use `N` as a stride: a bare native choice at configured rank `i` expands to selector rows at
@@ -72,7 +72,7 @@ With no eligible account selectors and a non-empty featured list, the resulting 
 3. Unselected native models, pushed below the featured block during catalog merge.
 
 Without `subagentModels`, routed models remain at priority `5`, native GPT entries use their normal
-priority (normally `9` for entries built by opencodex), and the routed group remains provider/id
+priority (normally `9` for entries built by CodexCommander), and the routed group remains provider/id
 alphabetical.
 
 ## Example
@@ -114,14 +114,14 @@ arrow buttons, or with <kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd>. The searc
 contain far more than five catalog models; entries remain addressable by exact id when their route is
 available, while the five-slot limit applies only to the overrides advertised first to `spawn_agent`.
 
-Use `ocx agent subagents set` or edit the opencodex configuration to add exact
+Use `ccx agent subagents set` or edit the CodexCommander configuration to add exact
 `<selector>/<native-openai-model>` choices that are not in the live library. The command center
 preserves and can reorder already-configured exact selectors even while their provider is
 temporarily unavailable. With account selectors, one bare native choice can expand into multiple
 selector-qualified catalog rows, so configured choices and advertised rows are not necessarily
 one-to-one.
 
-There is currently no general `modelOrder`, `providerOrder`, or priority-map setting in `OcxConfig`.
+There is currently no general `modelOrder`, `providerOrder`, or priority-map setting in `CodexCommanderConfig`.
 The supported ordering field is `subagentModels`; `disabledModels` and each provider's
 `selectedModels` are visibility fields. Changing the remaining picker order would require a
 code-level behavior change rather than a configuration edit.

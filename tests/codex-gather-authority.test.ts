@@ -7,7 +7,7 @@ import {
 } from "../src/codex/catalog";
 import { clearModelCache } from "../src/codex/model-cache";
 import { PROVIDER_REGISTRY, type ProviderModelDiscoverySpec } from "../src/providers/registry";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
 import { withRegistryDiscovery } from "./helpers/provider-registry-discovery";
 
@@ -19,7 +19,7 @@ function deferred(): { readonly promise: Promise<void>; readonly resolve: () => 
   return { promise, resolve };
 }
 
-function togetherConfig(apiKey = "together-authority-secret"): OcxConfig {
+function togetherConfig(apiKey = "together-authority-secret"): CodexCommanderConfig {
   return withStubbedProviderFetch({
     port: 10100,
     defaultProvider: "together",
@@ -259,7 +259,7 @@ describe("catalog gather discovery-policy authority", () => {
    * reproduced against real routes, but it is really a test of the general rule:
    * dropping `providerGraphIdentity` from the comparison turns it red.
    */
-  test("a provider field outside the legacy fingerprint cannot join another admission's flight", async () => {
+  test("a provider field outside the incomplete fingerprint cannot join another admission's flight", async () => {
     clearModelCache("together");
     clearGatherRoutedModelsInflight();
 
@@ -271,7 +271,7 @@ describe("catalog gather discovery-policy authority", () => {
       return Response.json({ data: [{ id: `model-${fetchCount}` }] });
     }) as typeof fetch;
 
-    const withEfforts = (efforts: readonly string[]): OcxConfig => {
+    const withEfforts = (efforts: readonly string[]): CodexCommanderConfig => {
       const config = togetherConfig();
       (config.providers.together as Record<string, unknown>).reasoningEfforts = [...efforts];
       return config;
@@ -283,7 +283,7 @@ describe("catalog gather discovery-policy authority", () => {
       expect(fetchCount).toBe(1);
 
       // Same provider, same endpoint, same credential, same discovery policy —
-      // only a field the legacy fingerprint never listed has moved.
+      // only a field the incomplete fingerprint never listed has moved.
       const second = gatherRoutedModels(withEfforts(["low", "high"]));
       await Bun.sleep(20);
       expect(fetchCount).toBe(2);

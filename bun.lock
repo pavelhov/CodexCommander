@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@bitkyc08/opencodex",
+      "name": "codexcommander",
       "dependencies": {
         "@bufbuild/protobuf": "^2.12.0",
         "@modelcontextprotocol/sdk": "^1.30.0",

@@ -27,7 +27,7 @@ import {
 } from "node:os";
 
 type Condition =
-  | "real-proxy-legacy-tee"
+  | "real-proxy-safe-tee"
   | "single-reader-inspection"
   | "direct-http-baseline";
 type Kind = "calibration" | "parent-pressure" | "workload";
@@ -49,7 +49,7 @@ const MiB = 1024 ** 2;
  * mistaken for, or compared against, a real measurement. The pre-registered
  * measurement constants below are untouched in a real run.
  */
-const SMOKE = process.env.OCX_RSS_HARNESS_SMOKE === "1";
+const SMOKE = process.env.CCX_RSS_HARNESS_SMOKE === "1";
 
 const WARM = SMOKE ? 2_000 : 60_000;
 const OBSERVE = SMOKE ? 6_000 : 600_000;
@@ -73,14 +73,14 @@ const CLIENTS = 3;
 const TURNS = CLIENTS * WAVES;
 const SETTLE = SMOKE ? ([0, 2, 4] as const) : ([0, 30, 60, 120, 300, 600] as const);
 const CONDITIONS: readonly Condition[] = [
-  "real-proxy-legacy-tee",
+  "real-proxy-safe-tee",
   "single-reader-inspection",
   "direct-http-baseline",
 ];
 const LATIN: readonly (readonly Condition[])[] = [
   CONDITIONS,
-  ["single-reader-inspection", "direct-http-baseline", "real-proxy-legacy-tee"],
-  ["direct-http-baseline", "real-proxy-legacy-tee", "single-reader-inspection"],
+  ["single-reader-inspection", "direct-http-baseline", "real-proxy-safe-tee"],
+  ["direct-http-baseline", "real-proxy-safe-tee", "single-reader-inspection"],
 ];
 const ORDER = [false, true, true, false, true, false] as const;
 
@@ -466,7 +466,7 @@ async function oneTurn(
     headers: {
       "content-type": "application/json",
       // Responses admission intentionally does not accept a caller Bearer token.
-      "x-opencodex-api-key": "fixture-admission",
+      "x-codexcommander-api-key": "fixture-admission",
     },
     body: JSON.stringify({
       model: "fixture/fixture-model",
@@ -606,10 +606,10 @@ async function startChild(
   sampler: boolean,
 ): Promise<Child> {
   throwIfInterrupted();
-  const real = condition === "real-proxy-legacy-tee";
+  const real = condition === "real-proxy-safe-tee";
   const args = real
     ? [
-      create(dir, join(dir, "opencodex"), true),
+      create(dir, join(dir, "codexcommander"), true),
       create(dir, join(dir, "codex"), true),
       url,
       join(dir, "child.jsonl"),
@@ -1258,9 +1258,9 @@ function analysis(
   const peaks = (condition: Condition): number[] => work
     .filter(run => run.condition === condition)
     .map(run => values[run.id]!.rss.peak);
-  const delta = med(peaks("real-proxy-legacy-tee"))
+  const delta = med(peaks("real-proxy-safe-tee"))
     - med(peaks("single-reader-inspection"));
-  const combined = environments["real-proxy-legacy-tee"].rss.upper
+  const combined = environments["real-proxy-safe-tee"].rss.upper
     + environments["single-reader-inspection"].rss.upper;
 
   return {
@@ -1335,7 +1335,7 @@ async function main(): Promise<void> {
       for (let index = 0; index < 6; index++) {
         await run({
           id: "cal-" + (index + 1) + "-" + (ORDER[index] ? "on" : "off"),
-          condition: "real-proxy-legacy-tee",
+          condition: "real-proxy-safe-tee",
           kind: "calibration",
           sampler: ORDER[index]!,
           series: "",

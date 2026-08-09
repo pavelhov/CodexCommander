@@ -32,7 +32,7 @@ export function charsPerToken(modelId?: string): number {
 }
 
 /**
- * CJK-aware ratio (devlog 260712 B3, audit R2#7): Korean/Chinese/Japanese text packs
+ * CJK-aware ratio (implementation contract B3, audit R2#7): Korean/Chinese/Japanese text packs
  * roughly one token per 1.5-3 chars, so a CJK-heavy blob estimated at English ratios
  * badly undercounts. When >30% of chars are CJK, clamp DOWN to 2.5 chars/token —
  * `min(model ratio, 2.5)` so per-model ratios (Claude 3.5, Kiro family) never rise.

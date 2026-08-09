@@ -4,13 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAzureAdapter as createAzureAdapterProduction } from "../src/adapters/azure";
 import { getConfigPath, loadConfig, readConfigDiagnostics } from "../src/config";
-import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createAzureAdapter = (...args: Parameters<typeof createAzureAdapterProduction>) =>
   withTestTranslatorBudget(createAzureAdapterProduction(...args));
 
-const parsed: OcxParsedRequest = {
+const parsed: CodexCommanderParsedRequest = {
   modelId: "gpt-5.5",
   context: { messages: [] },
   stream: true,
@@ -18,7 +18,7 @@ const parsed: OcxParsedRequest = {
   _rawBody: { model: "gpt-5.5", input: [], stream: true },
 };
 
-function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
+function provider(overrides: Partial<CodexCommanderProviderConfig> = {}): CodexCommanderProviderConfig {
   return {
     adapter: "azure-openai",
     baseUrl: "https://myres.openai.azure.com/openai",
@@ -85,13 +85,14 @@ describe("Azure OpenAI adapter hardening", () => {
   });
 
   test("reports unresolved placeholders as non-fatal config diagnostics", () => {
-    const previousHome = process.env.OPENCODEX_HOME;
-    const testDir = mkdtempSync(join(tmpdir(), "ocx-azure-diagnostics-"));
-    process.env.OPENCODEX_HOME = testDir;
+    const previousHome = process.env.CODEXCOMMANDER_HOME;
+    const testDir = mkdtempSync(join(tmpdir(), "ccx-azure-diagnostics-"));
+    process.env.CODEXCOMMANDER_HOME = testDir;
 
     try {
       writeFileSync(getConfigPath(), JSON.stringify({
         port: 10100,
+        multiAgentGuidanceEnabled: true,
         providers: {
           "azure-openai": provider({ baseUrl: "https://{resource}.openai.azure.com/openai" }),
         },
@@ -108,8 +109,8 @@ describe("Azure OpenAI adapter hardening", () => {
       expect(loadConfig().providers["azure-openai"].baseUrl).toBe("https://{resource}.openai.azure.com/openai");
       expect(readdirSync(testDir).filter(name => name.startsWith("config.json.invalid-"))).toHaveLength(0);
     } finally {
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previousHome;
       if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
     }
   });

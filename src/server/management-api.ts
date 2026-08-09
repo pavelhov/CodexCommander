@@ -47,7 +47,7 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../lib/debug-settings";
-import type { OcxClaudeCodeConfig, OcxClaudeDesktopProfile, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../types";
+import type { CodexCommanderClaudeCodeConfig, CodexCommanderClaudeDesktopProfile, CodexCommanderConfig, CodexCommanderCustomModel, CodexCommanderProviderConfig } from "../types";
 import type { DesktopProfileModel } from "../claude/desktop-profile";
 import { drainAndShutdown } from "./lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "./request-log";
@@ -69,9 +69,8 @@ import { handleOauthAccountRoutes } from "./management/oauth-account-routes";
 import { handleComboRoutes } from "./management/combo-routes";
 import { handleSystemRoutes } from "./management/system-routes";
 import { handleActivityRoutes } from "./management/activity-routes";
-import { handleSidebarRoutes } from "./management/sidebar-routes";
 import { handleIntegrationRoutes } from "./management/integration-routes";
-import { handleLegacyOpencodeIntegrationRoutes } from "./management/opencode-integration-routes";
+import { handleOpencodeIntegrationRoutes } from "./management/opencode-integration-routes";
 import { handleNativeIntegrationRoutes } from "./management/native-integration-routes";
 import type { ManagementContext } from "./management/context";
 import type { ManagementPrincipal } from "./management-auth";
@@ -81,7 +80,7 @@ import { CatalogGatherBusyError } from "../codex/catalog/provider-fetch";
 import type { CatalogDisposition, ConvergeCodex } from "../codex/convergence-types";
 import { managementBodyTooLargeResponse } from "./management/body";
 
-// installed npm version instead of a stale hardcode.
+// Read the package version instead of carrying a stale hardcode.
 export const VERSION = (() => {
   try {
     return JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version as string;
@@ -113,14 +112,14 @@ function isCatalogDisposition(value: unknown): value is CatalogDisposition {
 }
 
 const managementConvergenceBindings = new WeakMap<object, Readonly<{
-  factory: (config: Readonly<OcxConfig>) => ConvergeCodex;
+  factory: (config: Readonly<CodexCommanderConfig>) => ConvergeCodex;
   converge: ConvergeCodex;
 }>>();
 
 export async function handleManagementAPI(
   req: Request,
   url: URL,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   deps: ManagementApiDeps = {},
   principal?: ManagementPrincipal,
 ): Promise<Response | null> {
@@ -213,15 +212,14 @@ export async function handleManagementAPI(
     ??     (await handleRoutingProfileRoutes(ctx))
     ??     (await handleProviderRoutes(ctx))
     ??     (await handleIntegrationRoutes(ctx))
-    ??     (await handleLegacyOpencodeIntegrationRoutes(ctx))
+    ??     (await handleOpencodeIntegrationRoutes(ctx))
     ??     (await handleModelRoutes(ctx))
     ??     (await handleNativeIntegrationRoutes(ctx))
     ??     (await handleAgentSettingsRoutes(ctx))
     ??     (await handleOauthAccountRoutes(ctx))
     ??     (await handleComboRoutes(ctx))
     ??     (await handleActivityRoutes(ctx))
-    ??     (await handleSystemRoutes(ctx))
-      ?? (await handleSidebarRoutes(ctx));
+    ??     (await handleSystemRoutes(ctx));
   } catch (error) {
     const tooLarge = managementBodyTooLargeResponse(error, req, config);
     if (tooLarge) return tooLarge;

@@ -14,7 +14,7 @@ import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../adapters/
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { createAdapterEventQueue } from "../adapters/run-turn-queue";
-import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderContinuationState, OcxRequestOptions, OcxThinkingContent, OcxUsage, RateLimitRetryPolicy } from "../types";
+import type { AdapterEvent, CodexCommanderMessage, CodexCommanderParsedRequest, CodexCommanderProviderContinuationState, CodexCommanderRequestOptions, CodexCommanderThinkingContent, CodexCommanderUsage, RateLimitRetryPolicy } from "../types";
 import { namespacedToolName } from "../types";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { bridgeToResponsesSSE } from "../bridge";
@@ -63,10 +63,10 @@ export function clampImageMaxRounds(value: unknown): number {
 
 /** Drop image/video-specific tool_choice when media tools are stripped for a forced-final pass. */
 function stripMediaToolChoice(
-  options: OcxRequestOptions,
+  options: CodexCommanderRequestOptions,
   plan?: ImageBridgePlan,
   videoPlan?: VideoBridgePlan,
-): OcxRequestOptions {
+): CodexCommanderRequestOptions {
   const tc = options.toolChoice;
   if (!tc || typeof tc !== "object") return options;
   const isMediaTool = (name: string): boolean =>
@@ -157,8 +157,8 @@ async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
  * message containing tool_use to start with its signed thinking blocks — flattening multiple
  * blocks into one signature 400s on replay.
  */
-function extractIterationThinking(events: AdapterEvent[]): OcxThinkingContent[] {
-  const parts: OcxThinkingContent[] = [];
+function extractIterationThinking(events: AdapterEvent[]): CodexCommanderThinkingContent[] {
+  const parts: CodexCommanderThinkingContent[] = [];
   let thinking = "";
   let signature: string | undefined;
   let rawReasoning = "";
@@ -224,7 +224,7 @@ class LoopError extends Error {
  * metadata, and the optional image/video bridge plans.
  */
 export interface ImageBridgeDeps {
-  parsed: OcxParsedRequest;
+  parsed: CodexCommanderParsedRequest;
   adapter: ProviderAdapter;
   incomingMeta: IncomingMeta;
   plan?: ImageBridgePlan;
@@ -248,7 +248,7 @@ export interface ImageBridgeDeps {
   /** Provider-specific fetch (e.g. xAI transport wrapper). Falls back to global fetch. */
   fetchImpl?: typeof globalThis.fetch;
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
-  onUsage?: (usage: OcxUsage | undefined) => void;
+  onUsage?: (usage: CodexCommanderUsage | undefined) => void;
   /**
    * Optional 429 key-failover for the routed (non-xAI) model. Return a rebuilt adapter for the
    * rotated key, or null when the pool is exhausted.
@@ -257,7 +257,7 @@ export interface ImageBridgeDeps {
   /** Opt-in same-target 429 policy (key-auth providers). When present, 429 replays on the SAME key before on429 rotation. */
   retryOn429Policy?: Required<RateLimitRetryPolicy> | null;
   /** Called when the bridged Responses stream completes (parity with runTurn / routed paths). */
-  onCompletedResponse?: (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => void;
+  onCompletedResponse?: (response: Record<string, unknown>, providerState?: CodexCommanderProviderContinuationState) => void;
   /** WebSocket Responses path only — leave response id empty for protocol compatibility. */
   forceEmptyResponseId?: boolean;
 }
@@ -283,9 +283,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
   let paidImageCalls = 0;
   let paidVideoCalls = 0;
-  let hiddenUsage: OcxUsage | undefined;
+  let hiddenUsage: CodexCommanderUsage | undefined;
 
-  const addUsage = (a: OcxUsage | undefined, b: OcxUsage | undefined): OcxUsage | undefined => {
+  const addUsage = (a: CodexCommanderUsage | undefined, b: CodexCommanderUsage | undefined): CodexCommanderUsage | undefined => {
     if (!a) return b;
     if (!b) return a;
     return {
@@ -317,7 +317,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
     }
   };
 
-  const messages: OcxMessage[] = [...parsed.context.messages];
+  const messages: CodexCommanderMessage[] = [...parsed.context.messages];
   const allTools = parsed.context.tools ?? [];
   // Merge tool names from both plans for event scanning.
   const mediaToolNames = new Set<string>();
@@ -369,7 +369,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
    * restart) before the `on429` key rotation.
    */
   const prepareIterationEvents = async function* (forceFinal: boolean): AsyncGenerator<AdapterEvent, IterationResponse> {
-    const iterParsed: OcxParsedRequest = {
+    const iterParsed: CodexCommanderParsedRequest = {
       ...parsed,
       stream: true,
       context: { ...parsed.context, messages, tools: forceFinal ? toolsNoMedia : allTools },
@@ -913,7 +913,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       ...(deps.onUsage ? {
         // Terminal done/incomplete already includes hiddenUsage (merged above). Do not
         // add it again here or request logs double-count multi-iteration image turns.
-        onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(usage),
+        onUsage: (usage: CodexCommanderUsage | undefined) => deps.onUsage?.(usage),
       } : {}),
       ...(deps.onCompletedResponse ? { onCompletedResponse: deps.onCompletedResponse } : {}),
     },

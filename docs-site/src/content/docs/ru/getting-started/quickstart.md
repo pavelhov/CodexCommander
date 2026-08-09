@@ -1,6 +1,6 @@
 ---
 title: Быстрый старт
-description: Настройте первого провайдера и направьте OpenAI Codex через opencodex тремя командами.
+description: Настройте первого провайдера и направьте OpenAI Codex через CodexCommander тремя командами.
 ---
 
 Это руководство проводит от чистой установки до запуска Codex с моделью не от OpenAI.
@@ -8,10 +8,10 @@ description: Настройте первого провайдера и напр�
 ## 1. Запустите мастер настройки
 
 ```bash
-ocx init
+ccx init
 ```
 
-`ocx init` проведёт вас по следующим шагам:
+`ccx init` проведёт вас по следующим шагам:
 
 1. **Выбор провайдера** — выберите один из 76 встроенных пресетов реестра или `custom`, чтобы
    ввести базовый URL и адаптер вручную.
@@ -19,17 +19,17 @@ ocx init
 3. **Модель по умолчанию** — для провайдеров с ключом, локальных и `custom` примите значение из
    пресета или введите id модели.
 4. **Порт прокси** — по умолчанию `10100`.
-5. **Внедрить в Codex?** — при обычной loopback-настройке opencodex добавляет корневой
+5. **Внедрить в Codex?** — при обычной loopback-настройке CodexCommander добавляет корневой
    `openai_base_url` в `$CODEX_HOME/config.toml` (по умолчанию `~/.codex/config.toml`), чтобы
    встроенный провайдер `openai` в Codex указывал на прокси. При привязке к удалённым/LAN-адресам
    вместо этого используется отдельная запись провайдера с заголовком API-аутентификации.
 6. **Установить shim автозапуска?** — если включено, при запуске `codex` сначала выполняется
-   `ocx ensure`.
+   `ccx ensure`.
 
-Результат сохраняется в `$OPENCODEX_HOME/config.json` (по умолчанию `~/.opencodex/config.json`).
+Результат сохраняется в `$CODEXCOMMANDER_HOME/config.json` (по умолчанию `~/.codexcommander/config.json`).
 
 :::note[Записи rollout GPT-5.6]
-Текущий стабильный релиз добавляет GPT-5.6 Sol/Terra/Luna для passthrough ChatGPT, OpenAI по
+Текущее дерево исходников добавляет GPT-5.6 Sol/Terra/Luna для passthrough ChatGPT, OpenAI по
 API-ключу, OpenRouter и экспериментального адаптера Cursor. Они работают только тогда, когда у
 соответствующего вышестоящего аккаунта есть доступ. Пресеты OpenAI по API-ключу и OpenRouter
 заявляют используемое контекстное окно в 372 000 токенов; Cursor сохраняет собственные метаданные
@@ -39,30 +39,30 @@ API-ключу, OpenRouter и экспериментального адапте�
 ## 2. Запустите прокси
 
 ```bash
-ocx start            # defaults to port 10100
-ocx start --port 8080
+ccx start            # defaults to port 10100
+ccx start --port 8080
 ```
 
-При запуске opencodex:
+При запуске CodexCommander:
 
-- записывает свой PID в `~/.opencodex/ocx.pid` (и отказывается запускаться повторно),
+- записывает свой PID в `~/.codexcommander/codexcommander.pid` (и отказывается запускаться повторно),
 - обнаруживает живые модели там, где провайдер это поддерживает, и **синхронизирует нативные и
   маршрутизируемые записи в каталог моделей Codex**,
 - слушает `http://localhost:<port>/v1`.
 
-Если запрошенный порт занят, `ocx start` выбирает свободный порт, записывает его в
+Если запрошенный порт занят, `ccx start` выбирает свободный порт, записывает его в
 `runtime-port.json` и обновляет настройки Codex, чтобы тот использовал актуальный адрес.
 
 Проверьте:
 
 ```bash
-ocx status
-ocx gui       # open the dashboard on the live port
+ccx status
+ccx gui       # open the dashboard on the live port
 ```
 
 ## 3. Используйте Codex
 
-Теперь Codex прозрачно общается с opencodex:
+Теперь Codex прозрачно общается с CodexCommander:
 
 ```bash
 codex "Refactor this function for readability"
@@ -79,7 +79,7 @@ codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 ## Выбор моделей подагентов (опционально)
 
 В свежей конфигурации в селекторе подагентов Codex представлены пять нативных моделей: `gpt-5.5`,
-`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` и `gpt-5.4-mini`. Откройте `ocx gui`, чтобы
+`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` и `gpt-5.4-mini`. Откройте `ccx gui`, чтобы
 заменить или переупорядочить до пяти нативных или маршрутизируемых моделей. В панели управления
 также можно задать одну предпочитаемую модель подагента и уровень рассуждений. Раздел
 [Поверхность подагентов](/guides/sub-agent-surface/) поможет выбрать v1/base/v2 и понять, когда
@@ -88,12 +88,12 @@ codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 ## Вход в аккаунт вместо вставки ключа
 
 Некоторые провайдеры поддерживают полноценный вход в аккаунт. OAuth-данные, принадлежащие
-OpenCodex, обновляются автоматически; связанные сессии нативного Grok/Kimi CLI остаются во
+CodexCommander, обновляются автоматически; связанные сессии нативного Grok/Kimi CLI остаются во
 владении CLI:
 
 ```bash
-ocx login xai          # or: anthropic, kimi, kiro, google-antigravity, cursor
-ocx logout xai
+ccx login xai          # or: anthropic, kimi, kiro, google-antigravity, cursor
+ccx logout xai
 ```
 
 Самому OpenAI ключ **не нужен** — провайдер по умолчанию напрямую пересылает ваши существующие
@@ -102,9 +102,9 @@ ocx logout xai
 ## Остановка и восстановление
 
 ```bash
-ocx stop          # stop the proxy and restore native Codex
-ocx restore       # restore native Codex without stopping (alias: ocx eject)
-ocx restore back  # route Codex through the still-running proxy again
+ccx stop          # stop the proxy and restore native Codex
+ccx restore       # restore native Codex without stopping (alias: ccx eject)
+ccx restore back  # route Codex through the still-running proxy again
 ```
 
 ## Далее

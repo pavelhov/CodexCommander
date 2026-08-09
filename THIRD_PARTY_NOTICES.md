@@ -1,7 +1,7 @@
 # Third-party notices
 
-OpenCodex includes third-party software. The notices below are provided for attribution and do
-not change OpenCodex's own MIT license.
+CodexCommander includes third-party software. The notices below are provided for attribution and do
+not change CodexCommander's own MIT license.
 
 ## jsonc-parser 3.3.1
 

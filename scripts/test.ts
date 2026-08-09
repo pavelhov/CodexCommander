@@ -15,10 +15,10 @@ export interface IsolatedTestEnvironment {
 export function createIsolatedTestEnvironment(
   baseEnv: Record<string, string | undefined> = process.env,
 ): IsolatedTestEnvironment {
-  const root = mkdtempSync(join(tmpdir(), "opencodex-test-"));
-  const opencodexHome = join(root, ".opencodex");
+  const root = mkdtempSync(join(tmpdir(), "codexcommander-test-"));
+  const codexCommanderHome = join(root, ".codexcommander");
   const codexHome = join(root, ".codex");
-  mkdirSync(opencodexHome, { recursive: true });
+  mkdirSync(codexCommanderHome, { recursive: true });
   mkdirSync(codexHome, { recursive: true });
 
   return {
@@ -28,11 +28,11 @@ export function createIsolatedTestEnvironment(
       // Captured BEFORE HOME is overwritten: once the child starts with a rewritten
       // HOME, `homedir()` returns the sandbox, so this hand-off is the only way the
       // real-home write guard can still know which path to protect.
-      // (devlog 260730_codex_rs_upstream_v2_live_handoff/070.)
-      OCX_REAL_HOME: baseEnv.OCX_REAL_HOME ?? homedir(),
+      // (implementation contract)
+      CCX_REAL_HOME: baseEnv.CCX_REAL_HOME ?? homedir(),
       HOME: root,
       USERPROFILE: root,
-      OPENCODEX_HOME: opencodexHome,
+      CODEXCOMMANDER_HOME: codexCommanderHome,
       CODEX_HOME: codexHome,
     },
     cleanup() {
@@ -55,18 +55,18 @@ export function listRepositoryTestFiles(testRoot = join(process.cwd(), "tests"))
   return files.sort((a, b) => a.localeCompare(b));
 }
 
-export function resolveTestShardSize(raw = process.env.OCX_TEST_SHARD_SIZE): number {
+export function resolveTestShardSize(raw = process.env.CCX_TEST_SHARD_SIZE): number {
   if (raw === undefined || raw.trim() === "") return DEFAULT_TEST_SHARD_SIZE;
   const parsed = Number(raw);
   if (!Number.isSafeInteger(parsed) || parsed < 1) {
-    throw new Error(`OCX_TEST_SHARD_SIZE must be a positive integer, received ${JSON.stringify(raw)}`);
+    throw new Error(`CCX_TEST_SHARD_SIZE must be a positive integer, received ${JSON.stringify(raw)}`);
   }
   return parsed;
 }
 
 export function resolveTestStartShard(
   shardCount: number,
-  raw = process.env.OCX_TEST_START_SHARD,
+  raw = process.env.CCX_TEST_START_SHARD,
 ): number {
   if (!Number.isSafeInteger(shardCount) || shardCount < 1) {
     throw new Error(`test shard count must be a positive integer, received ${shardCount}`);
@@ -75,7 +75,7 @@ export function resolveTestStartShard(
   const parsed = Number(raw);
   if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > shardCount) {
     throw new Error(
-      `OCX_TEST_START_SHARD must be an integer from 1 to ${shardCount}, received ${JSON.stringify(raw)}`,
+      `CCX_TEST_START_SHARD must be an integer from 1 to ${shardCount}, received ${JSON.stringify(raw)}`,
     );
   }
   return parsed;
@@ -95,7 +95,7 @@ export function partitionTestFiles(files: readonly string[], shardSize: number):
 function runIsolatedTestProcess(testArgs: readonly string[]): number {
   const isolated = createIsolatedTestEnvironment();
   try {
-    const memoryArgs = process.env.OCX_TEST_SMOL === "1" ? ["--smol"] : [];
+    const memoryArgs = process.env.CCX_TEST_SMOL === "1" ? ["--smol"] : [];
     const child = Bun.spawnSync(
       [process.execPath, "test", "--isolate", ...memoryArgs, ...testArgs],
       {
@@ -149,10 +149,10 @@ function findCompetingTestRunners(selfPid: number): number[] {
  *
  * Queue rather than refuse: a failed `bun run test` invites `bun test` directly,
  * which bypasses this file entirely. Waiting is the behavior that survives being
- * worked around. `OCX_TEST_NO_QUEUE=1` opts out for anyone who really wants overlap.
+ * worked around. `CCX_TEST_NO_QUEUE=1` opts out for anyone who really wants overlap.
  */
 async function waitForExclusiveRun(selfPid: number): Promise<void> {
-  if (process.env.OCX_TEST_NO_QUEUE === "1") return;
+  if (process.env.CCX_TEST_NO_QUEUE === "1") return;
   const pollMs = 5_000;
   // Long enough for a full suite plus slack; past this, assume the holder is wedged
   // rather than working and let this run start anyway.
@@ -179,7 +179,7 @@ async function waitForExclusiveRun(selfPid: number): Promise<void> {
       console.warn(
         `[test] ${competing.length} other bun test runner(s) already running (pid ${competing.join(", ")}). `
         + "Waiting for them to finish so the suites do not fight over the CPU. "
-        + "Set OCX_TEST_NO_QUEUE=1 to run concurrently anyway.",
+        + "Set CCX_TEST_NO_QUEUE=1 to run concurrently anyway.",
       );
     }
     await Bun.sleep(pollMs);
@@ -193,7 +193,7 @@ if (import.meta.main) {
     const startedAt = Date.now();
     let exitCode = 0;
 
-    if (requestedTests.length > 0 || process.env.OCX_TEST_NO_SHARDS === "1") {
+    if (requestedTests.length > 0 || process.env.CCX_TEST_NO_SHARDS === "1") {
       exitCode = runIsolatedTestProcess(requestedTests.length > 0 ? requestedTests : ["./tests/"]);
     } else {
       const files = listRepositoryTestFiles();
@@ -216,8 +216,8 @@ if (import.meta.main) {
         if (exitCode !== 0) {
           console.error(`[test] shard ${index + 1}/${shards.length} failed; stopping.`);
           console.error(
-            `[test] after fixing the failure, set OCX_TEST_START_SHARD to ${index + 1} `
-            + `and OCX_TEST_SHARD_SIZE to ${shardSize}, then run bun run test.`,
+            `[test] after fixing the failure, set CCX_TEST_START_SHARD to ${index + 1} `
+            + `and CCX_TEST_SHARD_SIZE to ${shardSize}, then run bun run test.`,
           );
           break;
         }

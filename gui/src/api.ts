@@ -21,7 +21,12 @@ let requestAdminToken: AdminTokenPrompt = promptForAdminToken;
  * Deliberately NOT "/": the Vite dev server owns that route for the app shell, so the dev
  * proxy forwards this dedicated extensionless path to the backend with the original host.
  */
-const SESSION_REBOOTSTRAP_PATH = "/opencodex-session";
+const SESSION_REBOOTSTRAP_PATH = "/codexcommander-session";
+const SESSION_META_NAMES = {
+  token: "codexcommander-session-token",
+  csrf: "codexcommander-session-csrf",
+  origin: "codexcommander-session-origin",
+} as const;
 /** Safe authenticated read used to validate a raw admin token before closing the sign-in form. */
 const ADMIN_TOKEN_VALIDATION_PATH = "/api/settings";
 
@@ -36,9 +41,6 @@ function needsApiAuth(input: RequestInfo | URL): boolean {
     return false;
   }
 }
-
-/** Legacy sessionStorage key from pre-memory auth — wiped once on install, never read. */
-const LEGACY_TOKEN_KEY = "opencodex-api-token";
 
 /** In-memory only — never write tokens to web storage (XSS can read sessionStorage/localStorage). */
 let memoryToken: string | null = null;
@@ -67,9 +69,9 @@ function takeMetaContent(name: string): string | null {
 }
 
 function loadInjectedSession(): void {
-  const token = takeMetaContent("opencodex-session-token");
-  const csrfToken = takeMetaContent("opencodex-session-csrf");
-  const origin = takeMetaContent("opencodex-session-origin");
+  const token = takeMetaContent(SESSION_META_NAMES.token);
+  const csrfToken = takeMetaContent(SESSION_META_NAMES.csrf);
+  const origin = takeMetaContent(SESSION_META_NAMES.origin);
   storeSession(token, csrfToken, origin);
 }
 
@@ -80,7 +82,9 @@ function clearTokenIfCurrent(expected: string | null): void {
 
 /** Validate and store a server-minted GUI session; rejects anything bound to another origin. */
 function storeSession(token: string | null, csrfToken: string | null, origin: string | null): boolean {
-  if (!token?.startsWith("ocx_session_") || !csrfToken || origin !== window.location.origin) return false;
+  if (!token?.startsWith("ccx_session_")
+    || !csrfToken
+    || origin !== window.location.origin) return false;
   memoryToken = token;
   memoryCsrfToken = csrfToken;
   memorySessionOrigin = origin;
@@ -112,9 +116,9 @@ async function reBootstrapSessionToken(): Promise<string | null> {
     if (!response.ok) return null;
     const html = await response.text();
     const stored = storeSession(
-      metaContentFromHtml(html, "opencodex-session-token"),
-      metaContentFromHtml(html, "opencodex-session-csrf"),
-      metaContentFromHtml(html, "opencodex-session-origin"),
+      metaContentFromHtml(html, SESSION_META_NAMES.token),
+      metaContentFromHtml(html, SESSION_META_NAMES.csrf),
+      metaContentFromHtml(html, SESSION_META_NAMES.origin),
     );
     return stored ? readToken() : null;
   } catch {
@@ -134,22 +138,15 @@ async function verifyAdminToken(token: string): ReturnType<AdminTokenVerifier> {
   }
 }
 
-function clearLegacySessionToken(): void {
-  try {
-    sessionStorage.removeItem(LEGACY_TOKEN_KEY);
-  } catch {
-    /* session storage may be disabled */
-  }
-}
-
 function withToken(input: RequestInfo | URL, init: RequestInit | undefined, token: string): [RequestInfo | URL, RequestInit | undefined] {
   const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-  headers.set("X-OpenCodex-API-Key", token);
-  if (memorySessionOrigin && memoryCsrfToken && token.startsWith("ocx_session_")) {
-    headers.set("X-OpenCodex-GUI-Origin", memorySessionOrigin);
+  const isSession = token.startsWith("ccx_session_");
+  headers.set("X-CodexCommander-API-Key", token);
+  if (memorySessionOrigin && memoryCsrfToken && isSession) {
+    headers.set("X-CodexCommander-GUI-Origin", memorySessionOrigin);
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
     if (method !== "GET" && method !== "HEAD") {
-      headers.set("X-OpenCodex-CSRF-Token", memoryCsrfToken);
+      headers.set("X-CodexCommander-CSRF-Token", memoryCsrfToken);
     }
   }
   if (input instanceof Request) return [new Request(input, { headers }), init ? { ...init, headers } : undefined];
@@ -191,8 +188,6 @@ async function resolveTokenAfter401(failedToken: string | null): Promise<string 
 export function installApiAuthFetch(): void {
   if (installed) return;
   installed = true;
-  // Drop any leftover XSS-readable token; new tokens stay memory-only (no read/migrate).
-  clearLegacySessionToken();
   loadInjectedSession();
   const originalFetch = window.fetch.bind(window);
   rawFetch = originalFetch;

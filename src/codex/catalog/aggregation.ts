@@ -6,7 +6,7 @@ import { atomicWriteFile, expandUserPath, getConfigDir, websocketsEnabled } from
 import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readRootTomlString, resolveCodexConfigPath } from "../paths";
 import { clearModelCache, DEFAULT_MODEL_CACHE_TTL_MS, getFreshCached, getStaleCached, isModelsFetchCoolingDown, markModelsFetchFailure, setCached } from "../model-cache";
 import { buildModelsRequest, resolveModelsAuthToken } from "../../oauth";
-import type { OcxConfig, OcxProviderConfig } from "../../types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJawcodeModelMetadata, resolveJawcodeProvider } from "../../generated/jawcode-model-metadata";
@@ -222,7 +222,7 @@ export function buildComboCatalogOmission(
     id,
     targets,
     reason,
-    message: `[opencodex] Combo "${safeCatalogWarningLabel(id)}" is omitted from the catalog because ${comboCatalogOmissionDetail(reason)}: ${targets.join(", ")}.`,
+    message: `[codexcommander] Combo "${safeCatalogWarningLabel(id)}" is omitted from the catalog because ${comboCatalogOmissionDetail(reason)}: ${targets.join(", ")}.`,
   };
 }
 
@@ -248,7 +248,7 @@ export function warnUncataloguedComboOnce(
 }
 
 export function exactComboCatalogSlugs(
-  config: Pick<OcxConfig, "combos" | "disabledModels">,
+  config: Pick<CodexCommanderConfig, "combos" | "disabledModels">,
 ): Set<string> {
   const disabled = new Set(config.disabledModels ?? []);
   return new Set(listComboIds(config).flatMap(id => {
@@ -305,7 +305,7 @@ export function warnComboMasqueradeCollisionOnce(slug: string): void {
   if (comboMasqueradeCollisionWarnings.has(slug)) return;
   comboMasqueradeCollisionWarnings.add(slug);
   console.warn(
-    `[opencodex] combo alias collision on "${safeCatalogWarningLabel(slug)}": the combo wins and the shadowed provider model is omitted from the catalog.`,
+    `[codexcommander] combo alias collision on "${safeCatalogWarningLabel(slug)}": the combo wins and the shadowed provider model is omitted from the catalog.`,
   );
 }
 
@@ -314,7 +314,7 @@ export function warnAccountSelectorShadowedProviderOnce(slug: string): void {
   if (accountSelectorShadowCollisionWarnings.has(slug)) return;
   accountSelectorShadowCollisionWarnings.add(slug);
   console.warn(
-    `[opencodex] account selector collision on "${safeCatalogWarningLabel(slug)}": the account-bound native model wins and the shadowed provider model is omitted from the catalog. Rename the provider or account selector.`,
+    `[codexcommander] account selector collision on "${safeCatalogWarningLabel(slug)}": the account-bound native model wins and the shadowed provider model is omitted from the catalog. Rename the provider or account selector.`,
   );
 }
 
@@ -341,7 +341,7 @@ export function resolveSlugAliasCollisions(goModels: CatalogModel[]): Set<Catalo
     if (!slugAliasCollisionWarnings.has(key)) {
       slugAliasCollisionWarnings.add(key);
       console.warn(
-        `[opencodex] slug alias collision on "${key}": multiple native ids encode to the same Codex-facing slug; `
+        `[codexcommander] slug alias collision on "${key}": multiple native ids encode to the same Codex-facing slug; `
         + "the plain-hyphen native id is cataloged, the slash id remains callable via its raw selector.",
       );
     }

@@ -34,11 +34,11 @@ import {
   primeCodexPoolQuotas,
   updateAccountQuota,
 } from "../src/codex/auth-api";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const STORE_DIR = join(import.meta.dir, ".tmp-main-rotation-store");
 const CODEX_DIR = join(import.meta.dir, ".tmp-main-rotation-codex");
-let prevOpencodexHome: string | undefined;
+let prevCodexCommanderHome: string | undefined;
 let prevCodexHome: string | undefined;
 
 function writeMainAuth(): void {
@@ -58,18 +58,31 @@ function saveCred(id: string): void {
   });
 }
 
-function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
-  return {
-    providers: {},
+function makeConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
+  const config = {
+    port: 10100,
+    multiAgentGuidanceEnabled: true,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        authMode: "forward",
+      },
+    },
+    defaultProvider: "openai",
     codexAccounts: [
-      { id: "a", email: "a@test", isMain: false },
-      { id: "b", email: "b@test", isMain: false },
+      { id: "a", email: "a@test", logLabel: "p00000a", isMain: false },
+      { id: "b", email: "b@test", logLabel: "p00000b", isMain: false },
     ],
     activeCodexAccountId: "a",
     autoSwitchThreshold: 80,
     upstreamFailoverThreshold: 3,
     ...overrides,
-  } as OcxConfig;
+  } as CodexCommanderConfig;
+  config.codexAccounts = config.codexAccounts?.map((account, index) => account.isMain || account.logLabel
+    ? account
+    : { ...account, logLabel: `p${(index + 1).toString(16).padStart(6, "0")}` });
+  return config;
 }
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
@@ -80,11 +93,11 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 
 describe("main account rotation (Option A)", () => {
   beforeEach(() => {
-    prevOpencodexHome = process.env.OPENCODEX_HOME;
+    prevCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     prevCodexHome = process.env.CODEX_HOME;
     for (const d of [STORE_DIR, CODEX_DIR]) if (existsSync(d)) rmSync(d, { recursive: true });
     mkdirSync(STORE_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = STORE_DIR;
+    process.env.CODEXCOMMANDER_HOME = STORE_DIR;
     process.env.CODEX_HOME = CODEX_DIR;
     clearThreadAccountMap();
     clearCodexUpstreamHealth();
@@ -107,7 +120,7 @@ describe("main account rotation (Option A)", () => {
     setMainAccountPlan(null);
     for (const id of ["a", "b", MAIN_CODEX_ACCOUNT_ID]) clearAccountNeedsReauth(id);
     for (const d of [STORE_DIR, CODEX_DIR]) if (existsSync(d)) rmSync(d, { recursive: true });
-    if (prevOpencodexHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = prevOpencodexHome;
+    if (prevCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = prevCodexCommanderHome;
     if (prevCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = prevCodexHome;
   });
 

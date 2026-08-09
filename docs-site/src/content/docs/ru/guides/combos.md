@@ -4,7 +4,7 @@ description: Направляйте одну виртуальную модель
 ---
 
 **Combo** — это одна виртуальная модель, за которой стоит упорядоченный список реальных целей
-provider/model. Клиент запрашивает `combo/<id>`, opencodex выбирает цель, переписывает запрос на
+provider/model. Клиент запрашивает `combo/<id>`, CodexCommander выбирает цель, переписывает запрос на
 конкретный `provider/model` и при сбое, допускающем повтор, может попробовать следующую цель.
 
 Это полезно, если вам нужно одно из двух:
@@ -22,11 +22,11 @@ Combo работают поверх обычной маршрутизации п
 должны существовать и быть включены.
 
 ```bash
-ocx combo set main --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol
+ccx combo set main --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol
 ```
 
 Стратегия по умолчанию — failover, поэтому обычный запрос уйдёт в
-`anthropic/claude-opus-4-8`. Если эта попытка завершится retryable-сбоем, opencodex сможет
+`anthropic/claude-opus-4-8`. Если эта попытка завершится retryable-сбоем, CodexCommander сможет
 переключиться на `openai/gpt-5.6-sol`.
 
 Используйте виртуальную модель везде, где вы обычно передаёте id модели:
@@ -41,7 +41,7 @@ ocx combo set main --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol
 Проверьте сохранённое определение:
 
 ```bash
-ocx combo show main
+ccx combo show main
 ```
 
 :::tip
@@ -51,7 +51,7 @@ ocx combo show main
 
 ## Как работают имена combo
 
-Идентификатор combo в `ocx combo set <id>` должен начинаться с буквы или цифры. Дальше он может
+Идентификатор combo в `ccx combo set <id>` должен начинаться с буквы или цифры. Дальше он может
 содержать буквы, цифры, `.`, `_` или `-`, общей длиной до 64 символов. Канонический id модели
 всегда имеет вид `combo/<id>`; например, id `main` превращается в `combo/main`.
 
@@ -105,7 +105,7 @@ retryable-сбой OpenAI может перевести его на Google. Term
 Создайте combo 2:1 с партиями по два успешных запроса:
 
 ```bash
-ocx combo set balanced \
+ccx combo set balanced \
   --targets anthropic/claude-opus-4-8:2,openai/gpt-5.6-sol:1 \
   --strategy round-robin \
   --sticky 2
@@ -139,7 +139,7 @@ ocx combo set balanced \
 | Любая другая неклассифицированная ошибка | Остановиться и вернуть ошибку. |
 
 Цель, по которой произошёл hop, по умолчанию уходит в cooldown на 60 секунд. Если ответ upstream
-содержит корректный `Retry-After`, opencodex использует его. Поддерживаются и числовые секунды, и
+содержит корректный `Retry-After`, CodexCommander использует его. Поддерживаются и числовые секунды, и
 значения в формате HTTP-date; любой cooldown ограничивается 10 минутами.
 
 Текущий запрос никогда не повторяет уже опробованную цель. Более поздние запросы пропускают её,
@@ -159,11 +159,11 @@ Failover намеренно ограничен. Он помогает при п�
 2. вызывающая сторона сама не указала effort; и
 3. каталог выбранной цели объявляет поддержку именно этого effort.
 
-Если в запросе нет объекта `reasoning`, opencodex создаёт его. Если `reasoning` есть, но в нём нет
+Если в запросе нет объекта `reasoning`, CodexCommander создаёт его. Если `reasoning` есть, но в нём нет
 свойства `effort`, остальные поля сохраняются, а значение по умолчанию добавляется. Effort,
 заданный вызывающей стороной, никогда не перезаписывается.
 
-Если возможности цели неизвестны или не включают настроенный effort, opencodex опускает значение
+Если возможности цели неизвестны или не включают настроенный effort, CodexCommander опускает значение
 по умолчанию и оставляет нативное поведение цели без изменений. Поддерживаются `low`, `medium`,
 `high`, `xhigh`, `max` и `ultra`; опустите поле или задайте `null`, чтобы полностью оставить выбор
 effort вызывающей стороне и цели.
@@ -171,12 +171,12 @@ effort вызывающей стороне и цели.
 ## Шифрованные задачи подагентов v2
 
 Есть одно важное ограничение для подагентов Codex v2
-([issue #92](https://github.com/lidge-jun/opencodex/issues/92)). Нативный родитель может отправить
+([issue #92](https://github.com/pavelhov/CodexCommander/issues/92)). Нативный родитель может отправить
 задачу новому воркеру только как ciphertext, выпущенный для нативного backend ChatGPT. Внешний
 провайдер не может прочитать эту нагрузку.
 
 Для такого запроса combo фильтрует подходящие цели до канонических нативных маршрутов ChatGPT, в
-том числе после retryable-сбоя. Если в combo нет цели, способной расшифровать задачу, opencodex
+том числе после retryable-сбоя. Если в combo нет цели, способной расшифровать задачу, CodexCommander
 останавливается ещё до dispatch и возвращает HTTP 400:
 
 ```json
@@ -213,16 +213,16 @@ effort вызывающей стороне и цели.
 Основные команды:
 
 ```bash
-ocx combo list
-ocx combo show <id>
-ocx combo set <id> --targets provider/model[:weight],...
-ocx combo remove <id> --yes
+ccx combo list
+ccx combo show <id>
+ccx combo set <id> --targets provider/model[:weight],...
+ccx combo remove <id> --yes
 ```
 
 `set` также принимает `--strategy`, `--sticky`, `--effort`, `--alias` и `--rename-from`. Чтобы
 очистить поле, используйте `-` в качестве значения для `--effort` или `--alias`. `create` и
 `update` — это alias для `set`; `delete` — alias для `remove`; те же подкоманды доступны и через
-`ocx route combo`.
+`ccx route combo`.
 
 ### Management API
 
@@ -267,9 +267,9 @@ Combo хранятся в объекте верхнего уровня `combos`,
 
 ### Почему `combo/<id>` возвращает 404?
 
-Id combo неизвестен. Ответ — HTTP 404 с типом `invalid_request_error`. Запустите `ocx combo list`,
+Id combo неизвестен. Ответ — HTTP 404 с типом `invalid_request_error`. Запустите `ccx combo list`,
 проверьте написание и регистр, а также убедитесь, что management-команда записывала в тот же
-запущенный экземпляр opencodex, который принимает запросы к моделям.
+запущенный экземпляр CodexCommander, который принимает запросы к моделям.
 
 ### Почему я получаю `combo_unavailable`?
 

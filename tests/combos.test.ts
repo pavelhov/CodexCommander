@@ -38,7 +38,7 @@ import { getConfigPath, readConfigDiagnostics, saveConfig } from "../src/config"
 import { routeModel } from "../src/router";
 import { handleManagementAPI } from "../src/server/management-api";
 import { handleResponses } from "../src/server/responses";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { syncCatalogModels } from "../src/codex/catalog";
 import { injectClaudeAgentDefs } from "../src/claude/agents-inject";
 import { reconcileComboRotationState } from "../src/combos/resolve";
@@ -46,9 +46,10 @@ import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 const VALID_COMBO = { targets: [{ provider: "a", model: "m1" }] };
 
-function baseConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
+function baseConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
   return {
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "a",
     providers: {
       a: { adapter: "openai-chat", baseUrl: "https://a.example/v1", apiKey: "ka", models: ["m1"] },
@@ -68,7 +69,7 @@ function baseConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
   };
 }
 
-function rrConfig(stickyLimit: number, weights: number[]): OcxConfig {
+function rrConfig(stickyLimit: number, weights: number[]): CodexCommanderConfig {
   const providers = baseConfig().providers;
   const names = ["a", "b", "c"];
   return baseConfig({
@@ -87,7 +88,7 @@ function rrConfig(stickyLimit: number, weights: number[]): OcxConfig {
   });
 }
 
-function successfulPicks(config: OcxConfig, count: number): string[] {
+function successfulPicks(config: CodexCommanderConfig, count: number): string[] {
   const combo = getCombo(config, "free")!;
   return Array.from({ length: count }, () => {
     const pick = pickComboTarget(config, "free")!;
@@ -97,16 +98,16 @@ function successfulPicks(config: OcxConfig, count: number): string[] {
 }
 
 async function withTempHome<T>(run: (dir: string) => Promise<T> | T): Promise<T> {
-  const previousHome = process.env.OPENCODEX_HOME;
+  const previousHome = process.env.CODEXCOMMANDER_HOME;
   const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
-  const dir = mkdtempSync(join(tmpdir(), "ocx-combos-"));
-  process.env.OPENCODEX_HOME = dir;
+  const dir = mkdtempSync(join(tmpdir(), "ccx-combos-"));
+  process.env.CODEXCOMMANDER_HOME = dir;
   process.env.CLAUDE_CONFIG_DIR = join(dir, "claude");
   try {
     return await run(dir);
   } finally {
-    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousHome;
     if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
     rmSync(dir, { recursive: true, force: true });
@@ -118,7 +119,7 @@ function writeRawConfig(config: unknown): void {
 }
 
 async function comboApi(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   method: string,
   path: string,
   body?: unknown,
@@ -134,7 +135,7 @@ async function comboApi(
   });
 }
 
-async function comboApiRaw(config: OcxConfig, method: string, path: string, body: string): Promise<Response | null> {
+async function comboApiRaw(config: CodexCommanderConfig, method: string, path: string, body: string): Promise<Response | null> {
   const req = new Request(`http://localhost${path}`, {
     method,
     headers: { "content-type": "application/json" },
@@ -170,17 +171,20 @@ describe("combo namespace primitives", () => {
     expect(targetKey({ provider: "a", model: "m1" })).toBe("a/m1");
   });
 
-  test("resolves canonical ids before exact aliases and ignores unknown bare ids", () => {
+  test("resolves exactly one current public id for each configured combo", () => {
     const config = baseConfig({
       combos: {
-        free: { ...VALID_COMBO, alias: "combo/other" },
+        free: VALID_COMBO,
         other: { targets: [{ provider: "b", model: "m2" }], alias: "vendor/flash" },
       },
     });
-    expect(resolveComboId(config, "combo/other")).toBe("other");
+    expect(resolveComboId(config, "combo/free")).toBe("free");
     expect(resolveComboId(config, "vendor/flash")).toBe("other");
+    expect(resolveComboId(config, "combo/other")).toBeNull();
     expect(resolveComboId(config, "unknown-bare")).toBeNull();
+    expect(resolveComboId(config, "combo/missing")).toBe("missing");
     expect(tryPickComboModel(config, "vendor/flash")?.comboId).toBe("other");
+    expect(tryPickComboModel(config, "combo/other")).toBeNull();
     expect(tryPickComboModel(config, "unknown-bare")).toBeNull();
     expect(() => tryPickComboModel(config, "combo/missing")).toThrow(UnknownComboError);
   });
@@ -191,13 +195,14 @@ describe("combo request cloning", () => {
 
   afterEach(() => resetComboEffortWarningStateForTests());
 
-  test("detects canonical and alias combo model ids in raw request records", () => {
-    const config = baseConfig({ combos: { free: { ...VALID_COMBO, alias: "deepseek-v4-flash" } } });
-    expect(comboIdFromRawBody({ model: "combo/free" }, config)).toBe("free");
-    expect(comboIdFromRawBody({ model: "deepseek-v4-flash" }, config)).toBe("free");
-    expect(comboIdFromRawBody({ model: "a/m1" }, config)).toBeNull();
-    expect(comboIdFromRawBody({ model: 1 }, config)).toBeNull();
-    expect(comboIdFromRawBody(null, config)).toBeNull();
+  test("detects only the combo's current public id in raw request records", () => {
+    const aliased = baseConfig({ combos: { free: { ...VALID_COMBO, alias: "deepseek-v4-flash" } } });
+    expect(comboIdFromRawBody({ model: "combo/free" }, aliased)).toBeNull();
+    expect(comboIdFromRawBody({ model: "deepseek-v4-flash" }, aliased)).toBe("free");
+    expect(comboIdFromRawBody({ model: "combo/free" }, baseConfig())).toBe("free");
+    expect(comboIdFromRawBody({ model: "a/m1" }, aliased)).toBeNull();
+    expect(comboIdFromRawBody({ model: 1 }, aliased)).toBeNull();
+    expect(comboIdFromRawBody(null, aliased)).toBeNull();
   });
 
   test("clones the untouched body and injects an omitted combo default", () => {
@@ -435,7 +440,7 @@ describe("combo validation and normalization", () => {
     const cases: Array<{
       id?: string;
       raw: unknown;
-      providers?: OcxConfig["providers"];
+      providers?: CodexCommanderConfig["providers"];
       options?: { requireEnabledTarget?: boolean };
       path: Array<string | number>;
       message: string;
@@ -514,7 +519,7 @@ describe("combo validation and normalization", () => {
     expect(comboDefaultEffort(baseConfig({
       combos: { free: { defaultEffort: "xhigh", targets: [{ provider: "a", model: "m1" }] } },
     }), "free")).toBe("xhigh");
-    const corrupt = baseConfig() as OcxConfig & { combos: Record<string, { defaultEffort: string; targets: [] }> };
+    const corrupt = baseConfig() as CodexCommanderConfig & { combos: Record<string, { defaultEffort: string; targets: [] }> };
     corrupt.combos.free!.defaultEffort = "turbo";
     expect(comboDefaultEffort(corrupt, "free")).toBeNull();
   });
@@ -530,7 +535,7 @@ describe("combo validation and normalization", () => {
   });
 
   test("preserves a physical provider named combo while no combos are configured", () => {
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "combo",
       providers: {
@@ -541,7 +546,7 @@ describe("combo validation and normalization", () => {
     expect(preservesPhysicalComboProvider({ ...config, combos: {} })).toBeTrue();
     expect(preservesPhysicalComboProvider({ providers: {}, combos: {} })).toBeFalse();
     expect(preservesPhysicalComboProvider({ ...config, combos: { free: VALID_COMBO } })).toBeFalse();
-    const inheritedProviders = Object.create({ combo: config.providers.combo }) as OcxConfig["providers"];
+    const inheritedProviders = Object.create({ combo: config.providers.combo }) as CodexCommanderConfig["providers"];
     expect(preservesPhysicalComboProvider({ providers: inheritedProviders, combos: {} })).toBeFalse();
     expect(routeModel(config, "combo/model")).toMatchObject({
       providerName: "combo",
@@ -552,40 +557,78 @@ describe("combo validation and normalization", () => {
 });
 
 describe("persisted combo config parity", () => {
-  test("reports malformed maps and exact domain messages for policy-independent rows", async () => {
+  test("reports malformed maps and stable strict-schema diagnostics for invalid persisted rows", async () => {
     await withTempHome(() => {
       const providers = baseConfig().providers;
-      const root = { port: 10100, defaultProvider: "a", providers };
+      const root = { port: 10100, multiAgentGuidanceEnabled: true, defaultProvider: "a", providers };
       writeRawConfig({ ...root, combos: [] });
       expect(readConfigDiagnostics()).toMatchObject({
         source: "fallback",
-        error: expect.stringContaining("combos must be an object"),
+        error: "schema_invalid: combos: Invalid input: expected record, received array",
       });
 
-      const rows: Array<{ id: string; combo: unknown; providers?: OcxConfig["providers"] }> = [
-        { id: "free", combo: { ...VALID_COMBO, strategy: "random" } },
-        { id: "free", combo: { ...VALID_COMBO, stickyLimit: 0 } },
-        { id: "free", combo: { ...VALID_COMBO, defaultEffort: "turbo" } },
-        { id: "free", combo: { targets: [] } },
-        { id: "free", combo: { targets: [{ provider: "missing", model: "m1" }] } },
-        { id: "free", combo: { targets: [{ provider: "a", model: " " }] } },
-        { id: "free", combo: { targets: [{ provider: "a", model: "m1", weight: 1.5 }] } },
-        { id: "free", combo: { targets: [{ provider: " a ", model: " m1 " }, { provider: "a", model: "m1" }] } },
-        { id: "free", combo: VALID_COMBO, providers: { combo: providers.a! } },
-        { id: "a", combo: VALID_COMBO },
+      const rows: Array<{
+        id: string;
+        combo: unknown;
+        expected: string;
+        providers?: CodexCommanderConfig["providers"];
+      }> = [
+        {
+          id: "free",
+          combo: { ...VALID_COMBO, strategy: "random" },
+          expected: 'Invalid option: expected one of "failover"|"round-robin"',
+        },
+        {
+          id: "free",
+          combo: { ...VALID_COMBO, stickyLimit: 0 },
+          expected: "stickyLimit must be an integer from 1 to 100",
+        },
+        {
+          id: "free",
+          combo: { ...VALID_COMBO, defaultEffort: "turbo" },
+          expected: 'Invalid option: expected one of "low"|"medium"|"high"|"xhigh"|"max"|"ultra"',
+        },
+        { id: "free", combo: { targets: [] }, expected: "targets must be a non-empty array" },
+        {
+          id: "free",
+          combo: { targets: [{ provider: "missing", model: "m1" }] },
+          expected: 'targets[0].provider "missing" is not configured',
+        },
+        {
+          id: "free",
+          combo: { targets: [{ provider: "a", model: " " }] },
+          expected: "targets[0].model is required",
+        },
+        {
+          id: "free",
+          combo: { targets: [{ provider: "a", model: "m1", weight: 1.5 }] },
+          expected: "Invalid input: expected int, received number",
+        },
+        {
+          id: "free",
+          combo: { targets: [{ provider: " a ", model: " m1 " }, { provider: "a", model: "m1" }] },
+          expected: 'duplicate combo target "a/m1"',
+        },
+        {
+          id: "free",
+          combo: VALID_COMBO,
+          providers: { combo: providers.a! },
+          expected: 'provider name "combo" collides with the reserved "combo/" namespace',
+        },
+        { id: "a", combo: VALID_COMBO, expected: 'combo id "a" collides with configured provider name "a"' },
       ];
       for (const row of rows) {
         const rowProviders = row.providers ?? providers;
-        const expected = comboConfigError(row.id, row.combo, rowProviders)!;
         writeRawConfig({
           port: 10100,
+          multiAgentGuidanceEnabled: true,
           defaultProvider: Object.keys(rowProviders)[0],
           providers: rowProviders,
           combos: { [row.id]: row.combo },
         });
         const diagnostics = readConfigDiagnostics();
         expect(diagnostics.source).toBe("fallback");
-        expect(diagnostics.error).toContain(expected);
+        expect(diagnostics.error).toContain(row.expected);
       }
     });
   });
@@ -595,6 +638,7 @@ describe("persisted combo config parity", () => {
       const providers = baseConfig().providers;
       writeRawConfig({
         port: 10100,
+        multiAgentGuidanceEnabled: true,
         defaultProvider: "a",
         providers,
         combos: {

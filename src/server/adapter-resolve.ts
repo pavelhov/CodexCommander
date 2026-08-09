@@ -7,7 +7,7 @@ import { createMimoFreeAdapter } from "../adapters/mimo-free";
 import { createOpenAIChatAdapter } from "../adapters/openai-chat";
 import { createCommandCodeAdapter } from "../adapters/command-code";
 import { createResponsesPassthroughAdapter } from "../adapters/openai-responses";
-import type { OcxProviderConfig } from "../types";
+import type { CodexCommanderProviderConfig } from "../types";
 import { isWirePinnedModel, MODEL_ADAPTER_OVERRIDE_ALLOWED, pinnedWireAdapter } from "../types";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { type InboundWire, providerModelWireDefault } from "../providers/registry";
@@ -28,9 +28,9 @@ import { type InboundWire, providerModelWireDefault } from "../providers/registr
 export function resolveWireProtocolOverride(
   providerName: string,
   modelId: string,
-  providerConfig: OcxProviderConfig,
+  providerConfig: CodexCommanderProviderConfig,
   inbound: InboundWire = "responses",
-): OcxProviderConfig {
+): CodexCommanderProviderConfig {
   const pinned = pinnedWireAdapter(providerName, modelId);
   if (pinned && providerConfig.adapter !== pinned) {
     return { ...providerConfig, adapter: pinned };
@@ -56,7 +56,7 @@ export function resolveWireProtocolOverride(
 }
 
 /** Build the provider adapter for a resolved provider config. */
-export function resolveAdapter(providerConfig: OcxProviderConfig, cacheRetention?: "none" | "short" | "long") {
+export function resolveAdapter(providerConfig: CodexCommanderProviderConfig, cacheRetention?: "none" | "short" | "long") {
   switch (providerConfig.adapter) {
     case "command-code":
       return createCommandCodeAdapter(providerConfig);
@@ -70,7 +70,6 @@ export function resolveAdapter(providerConfig: OcxProviderConfig, cacheRetention
       return createGoogleAdapter(providerConfig);
     case "kiro":
       return createKiroAdapter(providerConfig);
-    case "azure":
     case "azure-openai":
       return createAzureAdapter(providerConfig);
     case "cursor":

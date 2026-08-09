@@ -6,31 +6,39 @@ import { join } from "node:path";
 import { handleCodexAuthAPI } from "../src/codex/auth-api";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
-function makeCodexConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
+function makeCodexConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
   return {
     port: 10100,
-    providers: {},
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "pool",
+      },
+    },
     defaultProvider: "openai",
     codexAccounts: [],
+    multiAgentGuidanceEnabled: true,
     ...overrides,
   };
 }
 
 describe("Codex account pool strategy management API", () => {
   const TEST_DIR = join(import.meta.dir, ".tmp-account-pool-mgmt-codex");
-  let previousOpencodexHome: string | undefined;
+  let previousCodexCommanderHome: string | undefined;
 
   beforeEach(() => {
-    previousOpencodexHome = process.env.OPENCODEX_HOME;
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
   });
 
   afterEach(() => {
-    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
     rmSync(TEST_DIR, { recursive: true, force: true });
   });
 
@@ -143,36 +151,40 @@ describe("Anthropic account pool strategy management API", () => {
   let previousHome: string | undefined;
   let isolatedCodexHome: IsolatedCodexHome | null = null;
 
-  function baseConfig(): OcxConfig {
+  function baseConfig(): CodexCommanderConfig {
     return {
       port: 0,
       hostname: "127.0.0.1",
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "anthropic",
       providers: {
         anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" },
       },
-    } as OcxConfig;
+    } as CodexCommanderConfig;
   }
 
   beforeEach(() => {
-    previousHome = process.env.OPENCODEX_HOME;
-    isolatedCodexHome = installIsolatedCodexHome("ocx-pool-mgmt-codex-");
-    testDir = mkdtempSync(join(tmpdir(), "ocx-pool-mgmt-"));
-    process.env.OPENCODEX_HOME = testDir;
+    previousHome = process.env.CODEXCOMMANDER_HOME;
+    isolatedCodexHome = installIsolatedCodexHome("ccx-pool-mgmt-codex-");
+    testDir = mkdtempSync(join(tmpdir(), "ccx-pool-mgmt-"));
+    process.env.CODEXCOMMANDER_HOME = testDir;
     saveConfig(baseConfig());
     writeFileSync(join(testDir, "auth.json"), JSON.stringify({
-      anthropic: {
-        activeAccountId: "aaaa1111",
-        accounts: [
-          { id: "aaaa1111", credential: { access: "t1", refresh: "r1", expires: 9999999999999, email: "a@example.com", accountId: "acct-1" } },
-        ],
+      schemaVersion: 1,
+      providers: {
+        anthropic: {
+          activeAccountId: "aaaa1111",
+          accounts: [
+            { id: "aaaa1111", credential: { access: "t1", refresh: "r1", expires: 9999999999999, email: "a@example.com", accountId: "acct-1" } },
+          ],
+        },
       },
     }), { mode: 0o600 });
   });
 
   afterEach(() => {
-    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousHome;
     isolatedCodexHome?.restore();
     isolatedCodexHome = null;
     if (testDir) rmSync(testDir, { recursive: true, force: true });

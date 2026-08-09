@@ -2,9 +2,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "b
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { OcxConfig, OcxProviderConfig, OcxParsedRequest } from "../../src/types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig, CodexCommanderParsedRequest } from "../../src/types";
 
-const PREV_HOME = process.env.OPENCODEX_HOME;
+const PREV_HOME = process.env.CODEXCOMMANDER_HOME;
 let planImageBridge: typeof import("../../src/images/plan")["planImageBridge"];
 let MAX_IMAGE_TIMEOUT_MS: typeof import("../../src/images/plan")["MAX_IMAGE_TIMEOUT_MS"];
 
@@ -12,7 +12,7 @@ let MAX_IMAGE_TIMEOUT_MS: typeof import("../../src/images/plan")["MAX_IMAGE_TIME
 let tokenResult: string | null = null;
 
 beforeAll(async () => {
-  process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID());
+  process.env.CODEXCOMMANDER_HOME = join(tmpdir(), "ccx-test-" + randomUUID());
   const actualOauth = await import("../../src/oauth/index");
   mock.module("../../src/oauth/index", () => ({
     ...actualOauth,
@@ -20,16 +20,16 @@ beforeAll(async () => {
   }));
   ({ planImageBridge, MAX_IMAGE_TIMEOUT_MS } = await import("../../src/images/plan"));
 });
-afterAll(() => { if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = PREV_HOME; mock.restore(); });
+afterAll(() => { if (PREV_HOME === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = PREV_HOME; mock.restore(); });
 
 beforeEach(() => {
   tokenResult = null;
 });
 
 function makeConfig(
-  providers: Record<string, Partial<OcxProviderConfig>>,
+  providers: Record<string, Partial<CodexCommanderProviderConfig>>,
   images?: { bridgeEnabled?: boolean; bridgeModel?: string; timeoutMs?: number },
-): OcxConfig {
+): CodexCommanderConfig {
   return {
     port: 0,
     defaultProvider: "test",
@@ -37,21 +37,21 @@ function makeConfig(
       Object.entries(providers).map(([k, v]) => [k, { adapter: "openai-chat", baseUrl: "https://api.test.com", ...v }]),
     ),
     ...(images ? { images } : {}),
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
-function makeParsed(withImageGen: boolean): OcxParsedRequest {
+function makeParsed(withImageGen: boolean): CodexCommanderParsedRequest {
   return {
     modelId: "test-model",
     context: { messages: [], tools: [] },
     stream: true,
     options: {},
     ...(withImageGen ? { _imageGeneration: { toolNames: new Set(["image_gen"]) } } : {}),
-  } as OcxParsedRequest;
+  } as CodexCommanderParsedRequest;
 }
 
-const routed = { adapter: "openai-chat", baseUrl: "https://api.anthropic.com" } as OcxProviderConfig;
-const openaiRouted = { adapter: "openai-chat", baseUrl: "https://api.openai.com" } as OcxProviderConfig;
+const routed = { adapter: "openai-chat", baseUrl: "https://api.anthropic.com" } as CodexCommanderProviderConfig;
+const openaiRouted = { adapter: "openai-chat", baseUrl: "https://api.openai.com" } as CodexCommanderProviderConfig;
 
 describe("planImageBridge", () => {
   test("bridgeEnabled false → undefined", async () => {

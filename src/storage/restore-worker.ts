@@ -14,7 +14,7 @@ interface RunMessage {
   blockMs?: number;
   restoreTest?: RestoreTestHooks;
   /** Env snapshot — Workers may not see parent mutations on all platforms. */
-  env?: { CODEX_HOME?: string; OPENCODEX_HOME?: string };
+  env?: { CODEX_HOME?: string; CODEXCOMMANDER_HOME?: string };
 }
 
 function isRunMessage(data: unknown): data is RunMessage {
@@ -30,7 +30,7 @@ self.onmessage = async (event: MessageEvent<unknown>) => {
   const { requestId, trashId, codexHome, busyTimeoutMs, blockMs, restoreTest, env } = event.data;
   try {
     if (env?.CODEX_HOME) process.env.CODEX_HOME = env.CODEX_HOME;
-    if (env?.OPENCODEX_HOME) process.env.OPENCODEX_HOME = env.OPENCODEX_HOME;
+    if (env?.CODEXCOMMANDER_HOME) process.env.CODEXCOMMANDER_HOME = env.CODEXCOMMANDER_HOME;
     if (typeof blockMs === "number" && Number.isFinite(blockMs) && blockMs > 0) {
       await Bun.sleep(Math.floor(blockMs));
     }

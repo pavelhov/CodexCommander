@@ -3,7 +3,7 @@ title: Proxy API 格式
 description: 面向 Responses、Chat Completions、Anthropic Messages、模型目录、WebSocket、realtime 和 compaction 各表面的传输层参考。
 ---
 
-opencodex 以多种客户端方言提供一个本地代理。Codex 客户端可以使用
+CodexCommander 以多种客户端方言提供一个本地代理。Codex 客户端可以使用
 Responses API，兼容 OpenAI 的应用可以使用 Chat Completions，而 Claude Code 可以使用
 Anthropic Messages，而不需要每个上游提供方都实现每一种格式。
 
@@ -33,7 +33,7 @@ Responses 表示是这座桥的中心。原生兼容的路由可以跳过部分�
 
 ## `POST /v1/responses`
 
-这是 opencodex 原生的数据平面形状。请求体必须是一个包含非空 `model` 的 JSON 对象。`input` 可以是字符串，也可以是 Responses 项目数组。
+这是 CodexCommander 原生的数据平面形状。请求体必须是一个包含非空 `model` 的 JSON 对象。`input` 可以是字符串，也可以是 Responses 项目数组。
 
 ### 接受的请求字段
 
@@ -163,7 +163,7 @@ choice 增量、带 `finish_reason` 的终止 choice，以及 `data: [DONE]`。�
 ## `POST /v1/live` 和 Realtime sideband
 
 `POST /v1/live` 接受 ChatGPT/Codex App 的 Frameless call-creation 表面。
-`POST /v1/realtime/calls` 接受 OpenAI Realtime 的 call-creation 表面。opencodex 会选择
+`POST /v1/realtime/calls` 接受 OpenAI Realtime 的 call-creation 表面。CodexCommander 会选择
 一个符合条件的 OpenAI 家族路由，将 call-creation 请求规范化为上游认证模式，并转发有界响应。
 
 完成调用创建后，客户端可以使用任一受支持的入站形式加入 sideband WebSocket：
@@ -181,7 +181,7 @@ Compaction 会为需要缩短长 Responses 会话的客户端返回替换历史�
 | 路由类型 | 行为 |
 | --- | --- |
 | Canonical ChatGPT 或官方 OpenAI 路由 | 将请求转发到原生 `/responses/compact` 端点，并使用已解析的账号和模型认证 |
-| 其他路由模型 | 运行一次内部的、非流式、无工具的 compaction 轮次，并带 `compaction_trigger`；要求且只允许一个 synthetic `compaction` 项，其 `encrypted_content` 是一个 `ocx1:` 封装；把该摘要解码为 v1 替换历史 |
+| 其他路由模型 | 运行一次内部的、非流式、无工具的 compaction 轮次，并带 `compaction_trigger`；要求且只允许一个 synthetic `compaction` 项，其 `encrypted_content` 是一个 `ccx1:` 封装；把该摘要解码为 v1 替换历史 |
 
 原生 compact 响应会被缓冲，最大 32 MiB，即使其声明的 `Content-Length` 已经超过该限制也是如此。compact 专用失败包括：
 
@@ -192,11 +192,11 @@ Compaction 会为需要缩短长 Responses 会话的客户端返回替换历史�
 | 499 | `client_cancelled` | 客户端在转发或缓冲期间取消了请求 |
 | 502 | `compact_response_too_large` | 原生 compact 输出超过 32 MiB |
 | 502 | `upstream_error` | 连接、读取，或合成 compaction 轮次失败 |
-| 502 | `invalid_response_error` | 合成轮次没有产出恰好一个有效、非空的 `ocx1:` compaction 项 |
+| 502 | `invalid_response_error` | 合成轮次没有产出恰好一个有效、非空的 `ccx1:` compaction 项 |
 
 ## 认证矩阵
 
-在仅绑定到 loopback 的情况下，数据平面准入不需要配置密钥。在远程绑定上，请使用下表。“Dedicated” 指 `X-OpenCodex-API-Key`；其他列指 `Authorization: Bearer ...` 和 `x-api-key`。
+在仅绑定到 loopback 的情况下，数据平面准入不需要配置密钥。在远程绑定上，请使用下表。“Dedicated” 指 `X-CodexCommander-API-Key`；其他列指 `Authorization: Bearer ...` 和 `x-api-key`。
 
 | 表面 | Dedicated | Bearer | `x-api-key` |
 | --- | --- | --- | --- |
@@ -232,7 +232,7 @@ Anthropic 来源的失败会以 Anthropic 的错误封装呈现，因此该方�
 
 ## 加密内容卫生
 
-代理把真正的后端密文视为不透明数据。结构有效的密文会逐字节保留：opencodex 不会对其解密、翻译其内容，或为另一个提供方重新加密。
+代理把真正的后端密文视为不透明数据。结构有效的密文会逐字节保留：CodexCommander 不会对其解密、翻译其内容，或为另一个提供方重新加密。
 
-某些 agent hook 历史上会把明文控制文本放进 `encrypted_content` 槽。为兼容起见，代理会把那部分明文拆分为文本片段，同时保持任何结构有效的 Fernet 片段不变。如果一个 `agent_message` 在该修复过程中失去了所有加密部分，它就会变成普通的 user message。如果当前的 v2 task 仍然真的是加密的，但所选路由目标无法读取原生 ChatGPT 密文，opencodex 会以
+某些 agent hook 会把明文控制文本放进 `encrypted_content` 槽。代理会把那部分明文拆分为文本片段，同时保持任何结构有效的 Fernet 片段不变。如果一个 `agent_message` 在该修复过程中失去了所有加密部分，它就会变成普通的 user message。如果当前的 v2 task 仍然真的是加密的，但所选路由目标无法读取原生 ChatGPT 密文，CodexCommander 会以
 `unreadable_encrypted_agent_task` 失败，而不是把不可读字节发送给该提供方。有关 worker task 周边的客户端行为，请参见 [Sub-agent Surface](/guides/sub-agent-surface/)。

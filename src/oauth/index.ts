@@ -1,10 +1,10 @@
 import type { KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./types";
 import { parseCallbackInput } from "./callback-server";
-import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig, RefreshPolicy } from "../types";
 import { loadConfig, resolveEnvValue, saveConfig } from "../config";
 import { maskEmail } from "../lib/privacy";
-import { KiroTokenRefreshError, environmentKiroRoutingMetadata, loginKiro, refreshKiroToken, settleKiroLoginTransaction } from "./kiro";
-import { getAccountCredential, getAccountSet, removeAccount, saveAccountCredential, saveCredential, setActiveAccount, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration, readOAuthRefreshIntent, writeOAuthRefreshIntent, markOAuthRefreshIntentStaleOwner, clearOAuthRefreshIntent, normalizeAuthStoreBuffer, OAuthMutationBusyError, scrubExistingXaiLocalCliRefreshBackup } from "./store";
+import { KiroTokenRefreshError, loginKiro, refreshKiroToken, settleKiroLoginTransaction } from "./kiro";
+import { getAccountCredential, getAccountSet, removeAccount, saveAccountCredential, saveCredential, setActiveAccount, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration, readOAuthRefreshIntent, writeOAuthRefreshIntent, markOAuthRefreshIntentStaleOwner, clearOAuthRefreshIntent, normalizeAuthStoreBuffer, OAuthMutationBusyError } from "./store";
 import { loginXai, refreshXaiToken, XaiTokenRequestError } from "./xai";
 import { ANTHROPIC_OAUTH_BETA, AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "./anthropic";
 import { loginKimi, refreshKimiToken } from "./kimi";
@@ -14,11 +14,11 @@ import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
-import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
+import { currentProviderApiKeyPool } from "../providers/api-keys";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport } from "../providers/registry";
 import { resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
 import { resolveProviderTransport } from "../providers/xai-transport";
-import { detectClaudeCodeToken, detectGrokCliToken, detectKimiCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
+import { detectClaudeCodeToken, detectKimiCliToken } from "./local-token-detect";
 import { logOAuthEvent } from "./log";
 import { captureConfigGeneration, sweepExpiredOnWrite, type GenerationContext } from "../lib/state-store-sweeper";
 import { retainedUtf8Bytes } from "../lib/admission";
@@ -119,15 +119,6 @@ const permanentRefreshFailures=new Map<string,number>();
 interface XaiRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal }
 interface AnthropicRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal; flight?: OAuthRefreshFlightEvidence; replacedStaleFlight?: OAuthRefreshFlightEvidence }
 interface GenericRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal }
-interface XaiLocalCliRefreshDeps {
-  intentLock?: ReturnType<typeof createOAuthRefreshIntentLock>;
-  now?: () => number;
-  afterPrePersistRead?: () => void | Promise<void>;
-  /** Test seam: runs before the local refresh grant is scrubbed. */
-  beforeScrubPersist?: () => void | Promise<void>;
-  /** Test seam: runs before a newer CLI access generation is adopted. */
-  beforeAdoptPersist?: () => void | Promise<void>;
-}
 interface KimiLocalCliRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void> }
 function verdictKey(p:string,a:string,c:OAuthCredentials){return `${p}\0${a}\0${credentialGeneration(c)}`;}
 function cached(p:string,a:string,c:OAuthCredentials,now:()=>number){const k=verdictKey(p,a,c),u=permanentRefreshFailures.get(k);if(u===undefined)return false;if(u<=now()){permanentRefreshFailures.delete(k);return false;}return true;}
@@ -148,17 +139,17 @@ interface OAuthProviderDef {
     credential?: OAuthCredentials,
   ): Promise<OAuthCredentials>;
   /** provider entry written into config.json on first login. */
-  providerConfig: OcxProviderConfig;
+  providerConfig: CodexCommanderProviderConfig;
   defaultModel: string;
   /**
-   * Built-in proactive-refresh policy, risk-tiered by the provider's ToS exposure (devlog
-   * 260703_oauth-multi-account-refresh-and-tos). A user's per-provider `config.providers[x].refreshPolicy`
+   * Built-in proactive-refresh policy, risk-tiered by the provider's ToS exposure. A user's
+   * per-provider `config.providers[x].refreshPolicy`
    * overrides this. Default when unset here: "lazy-only".
    */
   defaultRefreshPolicy?: RefreshPolicy;
 }
 
-function oauthConfig(id: string): OcxProviderConfig {
+function oauthConfig(id: string): CodexCommanderProviderConfig {
   const config = deriveOAuthProviderConfig(id);
   if (!config) throw new Error(`OAuth provider missing from registry: ${id}`);
   return config;
@@ -180,8 +171,7 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     defaultRefreshPolicy: "disabled",
   },
   xai: {
-    // forceLogin skips the local grok-cli import so a SECOND account can be chosen in the browser.
-    login: (ctrl, opts) => loginXai(ctrl, { importLocal: opts?.forceLogin ? "off" : "fallback" }),
+    login: ctrl => loginXai(ctrl),
     refresh: refreshXaiToken,
     providerConfig: oauthConfig("xai"),
     defaultModel: oauthDefaultModel("xai"),
@@ -252,7 +242,7 @@ function isRefreshPolicy(value: unknown): value is RefreshPolicy {
  * `config.providers[provider].refreshPolicy` if set, else the provider def's risk-tiered default,
  * else "lazy-only". The guardian acts only when this resolves to "proactive".
  */
-export function resolveRefreshPolicy(provider: string, config: OcxConfig): RefreshPolicy {
+export function resolveRefreshPolicy(provider: string, config: CodexCommanderConfig): RefreshPolicy {
   const override = config.providers[provider]?.refreshPolicy;
   if (isRefreshPolicy(override)) return override;
   const def = OAUTH_PROVIDERS[provider];
@@ -288,7 +278,7 @@ export class OAuthLoginRequiredError extends Error {
 
   constructor(
     provider: string,
-    message = `Not logged in to ${provider}. Run: ocx login ${provider}`,
+    message = `Not logged in to ${provider}. Run: ccx login ${provider}`,
     reason: OAuthLoginRequiredReason = "reauth_required",
   ) {
     super(message);
@@ -298,9 +288,7 @@ export class OAuthLoginRequiredError extends Error {
 }
 
 export const KIMI_LOCAL_CLI_REFRESH_REQUIRED =
-  "Kimi CLI-linked credential is stale. Run `kimi` once to refresh its login, then retry the OpenCodex request.";
-export const XAI_LOCAL_CLI_REFRESH_REQUIRED =
-  "Grok CLI-linked credential is stale. Run `grok` once to refresh its login, then retry the OpenCodex request.";
+  "Kimi CLI-linked credential is stale. Run `kimi` once to refresh its login, then retry the CodexCommander request.";
 
 function accessSnapshot(provider: string, accountId: string, cred: OAuthCredentials): OAuthAccessSnapshot {
   const storedKiroRouting = {
@@ -313,13 +301,11 @@ function accessSnapshot(provider: string, accountId: string, cred: OAuthCredenti
     accountId,
     generation: credentialGeneration(cred),
     accessToken: cred.access,
-    // Stored account metadata remains authoritative. Metadata-less legacy/environment credentials
-    // may use explicit environment routing, but never borrow the currently signed-in local CLI account.
+    // Stored account metadata remains authoritative. A saved account never borrows process
+    // environment routing; reauthenticate it with the intended account if its metadata is absent.
     ...(provider === "kiro"
       ? {
-          kiro: Object.keys(storedKiroRouting).length > 0
-            ? storedKiroRouting
-            : environmentKiroRoutingMetadata() ?? {},
+          kiro: storedKiroRouting,
         }
       : {}),
   };
@@ -366,14 +352,6 @@ async function resolveAccessSnapshotForAccount(
   if (!def) throw new UnsupportedOAuthProviderError(provider);
   let cred = getAccountCredential(provider, accountId);
   if (!cred) throw new OAuthLoginRequiredError(provider);
-  // Older builds copied Grok's native rotating refresh grant. Remove it before every
-  // fast return so even an already-fresh linked token cannot be re-persisted elsewhere.
-  if (provider === "xai") {
-    // This migration must run even when the current access token is already clean/fresh,
-    // because an older pre-multiauth backup can independently retain the native grant.
-    scrubExistingXaiLocalCliRefreshBackup();
-    cred = await scrubXaiLocalCliRefreshGrant(provider, accountId, cred);
-  }
   const current = accessSnapshot(provider, accountId, cred);
   if (rejectedGeneration !== undefined && current.generation !== rejectedGeneration) return current;
   if (rejectedGeneration === undefined && cred.expires > Date.now() + REFRESH_SKEW_MS) return current;
@@ -486,7 +464,7 @@ function terminal(error:unknown):boolean{
 function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCredentials {
   return {
     ...fresh,
-    source: previous.source === "local-cli" ? "oauth" : fresh.source ?? previous.source ?? "oauth",
+    source: fresh.source ?? previous.source ?? "oauth",
     ...(fresh.projectId === undefined && previous.projectId ? { projectId: previous.projectId } : {}),
     ...(fresh.apiBaseUrl === undefined && previous.apiBaseUrl ? { apiBaseUrl: previous.apiBaseUrl } : {}),
     ...(fresh.email === undefined && previous.email ? { email: previous.email } : {}),
@@ -507,121 +485,10 @@ function shouldAdoptKimiCliGeneration(stored: OAuthCredentials, disk: OAuthCrede
   return !bothExpiriesExist || disk.expires >= stored.expires;
 }
 
-const MAX_XAI_LOCAL_CLI_SCRUB_ATTEMPTS = 4;
-
-/** Persistently remove a legacy native Grok refresh grant, reconciling CAS winners. */
-async function scrubXaiLocalCliRefreshGrant(
-  provider: string,
-  accountId: string,
-  initial: OAuthCredentials,
-  beforeFirstPersist?: () => void | Promise<void>,
-): Promise<OAuthCredentials> {
-  if (provider !== "xai") return initial;
-  let current = initial;
-  for (let attempt = 0; attempt < MAX_XAI_LOCAL_CLI_SCRUB_ATTEMPTS; attempt++) {
-    if (current.source !== "local-cli" || !current.refresh) return current;
-    if (attempt === 0) await beforeFirstPersist?.();
-    const sanitized = { ...current, refresh: "" };
-    const outcome = await mergeAccountCredential(provider, accountId, sanitized, {
-      expectedGeneration: credentialGeneration(current),
-    });
-    if (!outcome.superseded) return sanitized;
-    current = outcome.stored;
-  }
-  throw new OAuthMutationBusyError("Grok CLI credential changed repeatedly while removing its native refresh grant");
-}
-
-/**
- * Renew a read-only Grok CLI link by adopting a newer native-CLI access generation.
- *
- * The native Grok CLI owns `auth.json`, its file lock, and the rotating refresh grant.
- * OpenCodex never submits that grant and never writes the Grok credential store.
- */
-export async function refreshXaiLocalCliAccountWithLock(
-  provider: string,
-  accountId: string,
-  callerCredential: OAuthCredentials,
-  deps: XaiLocalCliRefreshDeps = {},
-): Promise<string> {
-  const now = deps.now ?? Date.now;
-  const guard = await (deps.intentLock ?? createOAuthRefreshIntentLock(provider, accountId)).acquire();
-  try {
-    let stored = getAccountCredential(provider, accountId);
-    if (!stored) throw new OAuthLoginRequiredError(provider);
-    stored = await scrubXaiLocalCliRefreshGrant(
-      provider,
-      accountId,
-      stored,
-      deps.beforeScrubPersist,
-    );
-    if (stored.source !== "local-cli") {
-      if (stored.expires > now() + REFRESH_SKEW_MS) return stored.access;
-      throw new OAuthTokenRefreshStaleError();
-    }
-    if (
-      (stored.access !== callerCredential.access || stored.expires !== callerCredential.expires)
-      && stored.expires > now() + REFRESH_SKEW_MS
-    ) {
-      return stored.access;
-    }
-
-    const disk = detectGrokCliToken();
-    if (!disk || disk.expires <= now() + REFRESH_SKEW_MS) {
-      throw new OAuthLoginRequiredError(
-        provider,
-        XAI_LOCAL_CLI_REFRESH_REQUIRED,
-        "local_cli_refresh_required",
-      );
-    }
-    if (!hasComparableGrokIdentity(stored, disk)) {
-      throw new OAuthLoginRequiredError(
-        provider,
-        "Grok CLI-linked credential has no verifiable account identity, so OpenCodex cannot safely adopt a rotated token. Run `ocx login xai` to create a new link.",
-      );
-    }
-    if (!isSameGrokIdentity(stored, disk)) {
-      throw new OAuthLoginRequiredError(
-        provider,
-        "Grok CLI is signed in to a different account than this linked OpenCodex account. Run `ocx login xai` to link the current account.",
-      );
-    }
-    if (
-      credentialGeneration(disk) === credentialGeneration(stored)
-      || !shouldAdoptGrokGeneration(stored, disk, now(), REFRESH_SKEW_MS)
-    ) {
-      throw new OAuthLoginRequiredError(
-        provider,
-        XAI_LOCAL_CLI_REFRESH_REQUIRED,
-        "local_cli_refresh_required",
-      );
-    }
-
-    await deps.beforeAdoptPersist?.();
-    const outcome = await mergeAccountCredential(provider, accountId, disk, {
-      expectedGeneration: credentialGeneration(stored),
-      afterPrePersistRead: deps.afterPrePersistRead,
-    });
-    if (outcome.superseded) {
-      const winner = await scrubXaiLocalCliRefreshGrant(provider, accountId, outcome.stored);
-      const winnerChangedAccess = winner.access !== stored.access || winner.expires !== stored.expires;
-      if (winnerChangedAccess && winner.expires > now() + REFRESH_SKEW_MS) return winner.access;
-      throw new OAuthLoginRequiredError(
-        provider,
-        XAI_LOCAL_CLI_REFRESH_REQUIRED,
-        "local_cli_refresh_required",
-      );
-    }
-    logOAuthEvent("Grok CLI access-token generation adopted read-only", { provider, accountId });
-    return disk.access;
-  } finally {
-    guard.release();
-  }
-}
-
 /**
  * Refresh a read-only Kimi CLI link by adopting a newer CLI-owned access-token generation.
  *
- * Kimi refresh tokens rotate. OpenCodex therefore never submits or persists the CLI refresh
+ * Kimi refresh tokens rotate. CodexCommander therefore never submits or persists the CLI refresh
  * grant and never writes `~/.kimi-code`; Kimi itself remains the sole refresh owner. A missing,
  * stale, unchanged, or different-account CLI generation fails closed with an actionable error.
  */
@@ -660,13 +527,13 @@ export async function refreshKimiLocalCliAccountWithLock(
     if (!(stored.accountId || stored.email) || !(disk.accountId || disk.email)) {
       throw new OAuthLoginRequiredError(
         provider,
-        "Kimi CLI-linked credential has no verifiable account identity, so OpenCodex cannot safely adopt a rotated token. Run `ocx login kimi` to create a new link.",
+        "Kimi CLI-linked credential has no verifiable account identity, so CodexCommander cannot safely adopt a rotated token. Run `ccx login kimi` to create a new link.",
       );
     }
     if (!isSameKimiCliIdentity(stored, disk)) {
       throw new OAuthLoginRequiredError(
         provider,
-        "Kimi CLI is signed in to a different account than this linked OpenCodex account. Run `ocx login kimi` to link the current account.",
+        "Kimi CLI is signed in to a different account than this linked CodexCommander account. Run `ccx login kimi` to link the current account.",
       );
     }
     if (!shouldAdoptKimiCliGeneration(stored, disk)) {
@@ -703,31 +570,12 @@ export async function refreshXaiAccountWithLock(
   callerCredential: OAuthCredentials,
   deps: XaiRefreshDeps = {},
 ): Promise<string> {
-  if (callerCredential.source === "local-cli") {
-    return refreshXaiLocalCliAccountWithLock(provider, accountId, callerCredential, {
-      intentLock: deps.intentLock,
-      now: deps.now,
-      afterPrePersistRead: deps.afterPrePersistRead,
-    });
-  }
-
   const writerGeneration = captureConfigGeneration();
   const now = deps.now ?? Date.now;
   const guard = await (deps.intentLock ?? createOAuthRefreshIntentLock(provider, accountId)).acquire();
   try {
-    let stored = getAccountCredential(provider, accountId);
+    const stored = getAccountCredential(provider, accountId);
     if (!stored) throw new OAuthLoginRequiredError(provider);
-    // Ownership changed while the caller was waiting. Never spend a native CLI grant
-    // from the OpenCodex-owned refresh path; the next request will enter read-only renewal.
-    if (stored.source === "local-cli") {
-      stored = await scrubXaiLocalCliRefreshGrant(provider, accountId, stored);
-      if (stored.source !== "local-cli") {
-        if (stored.expires > now() + REFRESH_SKEW_MS) return stored.access;
-        throw new OAuthTokenRefreshStaleError();
-      }
-      if (stored.expires > now() + REFRESH_SKEW_MS) return stored.access;
-      throw new OAuthTokenRefreshStaleError();
-    }
     if (
       credentialGeneration(stored) !== credentialGeneration(callerCredential)
       && stored.expires > now() + REFRESH_SKEW_MS
@@ -744,9 +592,7 @@ export async function refreshXaiAccountWithLock(
         afterPrePersistRead: deps.afterPrePersistRead,
       });
       if (outcome.superseded) {
-        const winner = outcome.stored.source === "local-cli"
-          ? await scrubXaiLocalCliRefreshGrant(provider, accountId, outcome.stored)
-          : outcome.stored;
+        const winner = outcome.stored;
         if (winner.expires > now() + REFRESH_SKEW_MS) return winner.access;
         throw new OAuthLoginRequiredError(provider);
       }
@@ -838,7 +684,7 @@ export async function refreshAnthropicAccountWithLock(
     }
 
     try {
-      writeOAuthRefreshIntent(provider, accountId, generation, now(), deps.flight?.flightId);
+      writeOAuthRefreshIntent(provider, accountId, generation, now(), deps.flight?.flightId ?? randomUUID());
       if (deps.signal?.aborted) throw deps.signal.reason;
       if (deps.flight) deps.flight.dispatched = true;
       const fresh = merged(await def.refresh(stored.refresh, deps.signal), stored);
@@ -931,7 +777,7 @@ async function refreshAndPersistAccessToken(
  * codex-catalog.ts:fetchProviderModels so OAuth providers' models are listed once logged in.
  * Returns undefined for forward-mode or oauth-not-logged-in (caller skips).
  */
-export async function resolveModelsAuthToken(name: string, prov: OcxProviderConfig): Promise<string | undefined> {
+export async function resolveModelsAuthToken(name: string, prov: CodexCommanderProviderConfig): Promise<string | undefined> {
   if (prov.authMode === "forward") return undefined;
   if (prov.authMode === "oauth") {
     try {
@@ -943,7 +789,7 @@ export async function resolveModelsAuthToken(name: string, prov: OcxProviderConf
   return resolveEnvValue(prov.apiKey);
 }
 
-function modelDiscoveryTransportSeed(providerName: string, prov: OcxProviderConfig): OcxProviderConfig {
+function modelDiscoveryTransportSeed(providerName: string, prov: CodexCommanderProviderConfig): CodexCommanderProviderConfig {
   const entry = getProviderRegistryEntry(providerName);
   if (
     prov.authMode !== "oauth"
@@ -975,7 +821,7 @@ export interface ModelsRequestObservedAuth {
 }
 
 export function buildModelsRequest(
-  prov: OcxProviderConfig,
+  prov: CodexCommanderProviderConfig,
   apiKey: string | undefined,
   providerName = "",
   observedAuth?: ModelsRequestObservedAuth,
@@ -1022,178 +868,29 @@ export function buildModelsRequest(
 }
 
 /**
- * Refresh OAuth-managed provider presets (`models`, `noReasoningModels`, and a stale `defaultModel`)
- * from the registry so a proxy update that revises a provider's models — e.g. dropping deprecated
- * Claude snapshots or adding a new grok endpoint not in the live `/models` — reaches EXISTING
- * configs on the next `ocx start`, instead of only fresh installs. The live `/models` fetch stays
- * the primary source; this keeps the static fallback (and models-not-in-/models) current.
- *
- * Only touches providers that are registry-managed AND still `authMode: "oauth"`. Preset fields
- * are refreshed, while the registry's `liveModels` default is normally filled only when no value
- * is stored. Antigravity has one versioned exception below because its old GUI-generated `true`
- * cannot be distinguished from a hand-written pre-migration `true`. Persists + returns true when
- * anything changed.
- */
-function cloneProviderField(value: unknown): unknown {
-  if (Array.isArray(value)) return [...value];
-  if (value && typeof value === "object") return JSON.parse(JSON.stringify(value));
-  return value;
-}
-
-const OAUTH_RECONCILE_FIELDS: (keyof OcxProviderConfig)[] = [
-  "models",
-  "contextWindow",
-  "modelContextWindows",
-  "defaultMaxOutputTokens",
-  "modelMaxOutputTokens",
-  "modelInputModalities",
-  "noReasoningModels",
-  "noVisionModels",
-  "reasoningEfforts",
-  "modelReasoningEfforts",
-  "reasoningEffortMap",
-  "modelReasoningEffortMap",
-  "noTemperatureModels",
-  "noTopPModels",
-  "noPenaltyModels",
-  "autoToolChoiceOnlyModels",
-  "preserveReasoningContentModels",
-];
-
-const GOOGLE_ANTIGRAVITY_PROVIDER = "google-antigravity";
-const GOOGLE_ANTIGRAVITY_STATIC_CATALOG_VERSION = 1 as const;
-
-/** Only migrate the three-model experimental seed; an operator's later `liveModels: false` wins. */
-function isLegacyCommandCodeStaticCatalog(provider: OcxProviderConfig): boolean {
-  return provider.liveModels === false
-    && provider.defaultModel === "deepseek-v4-flash"
-    && JSON.stringify(provider.models) === JSON.stringify(["deepseek-v4-flash", "kimi-k3", "glm-5.2"]);
-}
-
-export function reconcileOAuthProviders(config: OcxConfig): boolean {
-  let changed = false;
-  const migrateAntigravityStaticCatalog =
-    config.googleAntigravityStaticCatalogVersion !== GOOGLE_ANTIGRAVITY_STATIC_CATALOG_VERSION;
-  for (const [name, prov] of Object.entries(config.providers)) {
-    const def = OAUTH_PROVIDERS[name];
-    if (name === "command-code" && isLegacyCommandCodeStaticCatalog(prov)) {
-      // The former experimental preset was the exact three-model seed above. It was not a user
-      // choice to disable discovery, so promote only that shape to the account live catalog.
-      prov.liveModels = true;
-      changed = true;
-    }
-    // Normalize the canonical row before the OAuth-only reconciliation guard. The old GUI and a
-    // manual edit both persist the same bare `true`, with no source metadata, so every ambiguous
-    // pre-marker value is reset once. A deliberate live-discovery choice can be re-enabled after
-    // the marker and is then preserved. Do this before the guard so omitted/non-OAuth authMode
-    // rows do not get stamped without actually receiving the new static default.
-    if (name === GOOGLE_ANTIGRAVITY_PROVIDER && migrateAntigravityStaticCatalog && prov.liveModels !== false) {
-      prov.liveModels = false;
-      changed = true;
-    }
-    // During the one-time Antigravity static-catalog migration, also refresh preset catalog
-    // fields when authMode is omitted or non-oauth. Otherwise liveModels flips to static while
-    // a stale models[] remains the published catalog forever.
-    const migrateAntigravityCatalogFields =
-      name === GOOGLE_ANTIGRAVITY_PROVIDER && migrateAntigravityStaticCatalog;
-    if (!def || (prov.authMode !== "oauth" && !migrateAntigravityCatalogFields)) continue;
-    const preset = def.providerConfig;
-    for (const field of OAUTH_RECONCILE_FIELDS) {
-      if (JSON.stringify(prov[field]) === JSON.stringify(preset[field])) continue;
-      if (preset[field] !== undefined) {
-        prov[field] = cloneProviderField(preset[field]) as never;
-      } else {
-        delete prov[field];
-      }
-      changed = true;
-    }
-    // Before this marker existed, the GUI materialized an omitted `liveModels` as `true` on any
-    // settings save. Since persisted values have no provenance, the pre-guard normalization above
-    // intentionally resets all pre-marker `true` values once. Later choices are version-bounded.
-    if (prov.liveModels === undefined && preset.liveModels !== undefined) {
-      prov.liveModels = preset.liveModels;
-      changed = true;
-    }
-    // Heal a defaultModel that no longer exists in the refreshed list (e.g. a deprecated snapshot).
-    // Skip providers without a static preset `models` list: for live-discovery providers
-    // (e.g. command-code OAuth) the account-scoped catalog is not enumerable here, so any
-    // persisted defaultModel is a user selection and must not be overwritten by the seed.
-    if (prov.defaultModel && preset.defaultModel && preset.models && preset.models.length > 0 && !(prov.models ?? []).includes(prov.defaultModel)) {
-      prov.defaultModel = preset.defaultModel;
-      changed = true;
-    }
-  }
-  if (migrateAntigravityStaticCatalog) {
-    config.googleAntigravityStaticCatalogVersion = GOOGLE_ANTIGRAVITY_STATIC_CATALOG_VERSION;
-    changed = true;
-  }
-  if (changed) saveConfig(config);
-  return changed;
-}
-
-/** Runtime guards: provider config is intentionally passthrough, so persisted fields may be malformed. */
-function preservableApiKeyPool(value: unknown): NonNullable<OcxProviderConfig["apiKeyPool"]> | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const pool: NonNullable<OcxProviderConfig["apiKeyPool"]> = [];
-  const ids = new Set<string>();
-  const keys = new Set<string>();
-  for (const entry of value as unknown[]) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const candidate = entry as Record<string, unknown>;
-    const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
-    const key = sanitizeApiKeyValue(candidate.key);
-    if (!id || !key || ids.has(id) || keys.has(key)) continue;
-    const label = typeof candidate.label === "string" ? candidate.label : undefined;
-    const addedAt = typeof candidate.addedAt === "number" && Number.isFinite(candidate.addedAt)
-      ? candidate.addedAt
-      : undefined;
-    ids.add(id);
-    keys.add(key);
-    pool.push({
-      id,
-      key,
-      ...(label !== undefined ? { label } : {}),
-      ...(addedAt !== undefined ? { addedAt } : {}),
-    });
-  }
-  // `apiKey` remains the routing source of truth. Keep valid alternate slots even when a
-  // hand-edited config left the pool out of sync, rather than deleting usable credentials.
-  return pool.length > 0 ? pool : undefined;
-}
-
-/**
  * Add/refresh an OAuth provider's config entry on a config object (does not persist).
  *
  * Providers whose registry entry sets `allowKeyAuthOverride` (xai, github-copilot) can be
  * billed through a stored API key instead of the OAuth login (router.ts honors
  * `authMode: "key"` for them). A blind preset overwrite here deletes `apiKey`/`apiKeyPool`
  * on every OAuth login, silently destroying the stored key and forcing a re-paste — and it
- * flips billing back to the subscription without the user asking. Carry the key fields over
- * and keep key billing while usable key material remains and the user was not explicitly on
- * oauth. If the final key was removed and only the old key mode remains, let the OAuth
- * preset restore `authMode: "oauth"` so the newly saved OAuth credential can be used.
- *
- * After preservation, `apiKey` always has exactly one matching pool entry (inserting via the
- * same content-derived id as the API-key manager when the active key was missing from the
- * pool). Key mode reflects stored user intent (explicit `"key"` or omitted mode with safe
- * key material) — never whether the login CLI process can resolve an env reference. Env-backed
+ * flips billing back to the subscription without the user asking. Carry over only a current,
+ * explicitly managed key pool; incomplete or malformed stored key state is discarded and the
+ * user can add a key again through the API-key controls. Key mode reflects stored user intent
+ * (explicit `"key"` or omitted mode with a current managed pool) — never whether the login CLI
+ * process can resolve an env reference. Env-backed
  * availability is decided at proxy routing time in `router.ts`.
  */
-export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
+export function upsertOAuthProvider(config: CodexCommanderConfig, provider: string): void {
   if (provider === "chatgpt") return;
   const def = OAUTH_PROVIDERS[provider];
   if (!def) return;
   const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
   if (namespaceCollision) throw new Error(namespaceCollision);
   const existing = config.providers[provider];
-  const next: OcxProviderConfig = { ...def.providerConfig };
-  // `liveModels` is a user-facing provider toggle. A registry default seeds new rows, but an
-  // explicit post-migration choice must survive re-login and the latest-config upsert. Old GUI
-  // saves and manual edits left identical pre-marker `true` values, so that ambiguous state is
-  // reset once; users who deliberately forced discovery can re-enable it after migration.
-  const preserveExistingLiveModels = provider !== GOOGLE_ANTIGRAVITY_PROVIDER
-    || config.googleAntigravityStaticCatalogVersion === GOOGLE_ANTIGRAVITY_STATIC_CATALOG_VERSION;
-  if (preserveExistingLiveModels && typeof existing?.liveModels === "boolean" && !isLegacyCommandCodeStaticCatalog(existing)) {
+  const next: CodexCommanderProviderConfig = { ...def.providerConfig };
+  // `liveModels` is a user-facing provider toggle. Preserve an explicit value across re-login.
+  if (typeof existing?.liveModels === "boolean") {
     next.liveModels = existing.liveModels;
   }
   // The Command Code protocol-version pin is an operator compatibility control. A re-login,
@@ -1203,31 +900,15 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
     next.commandCodeVersion = existing.commandCodeVersion;
   }
   if (existing && getProviderRegistryEntry(provider)?.allowKeyAuthOverride === true) {
-    // Shared sanitizeApiKeyValue trim / no-CRLF checks from api-key pool writes.
-    let storedApiKey = sanitizeApiKeyValue(existing.apiKey);
-    const storedApiKeyPool = preservableApiKeyPool(existing.apiKeyPool);
-    // Unsafe/blank active key with a usable pool: promote the first safe pool entry so
-    // key billing keeps working instead of falling back to oauth while pool keys remain.
-    if (storedApiKey === undefined && storedApiKeyPool && storedApiKeyPool.length > 0) {
-      storedApiKey = storedApiKeyPool[0]!.key;
-    }
-    if (storedApiKey !== undefined) {
-      const pool = storedApiKeyPool ? [...storedApiKeyPool] : [];
-      // Keep routing and listProviderApiKeys in sync: never leave a hidden active key that
-      // is absent from the pool (listing would fall back to pool[0] as "active").
-      if (!pool.some(entry => entry.key === storedApiKey)) {
-        pool.push({ id: apiKeyPoolEntryId(storedApiKey), key: storedApiKey });
-      }
-      next.apiKey = storedApiKey;
-      next.apiKeyPool = pool;
+    const storedPool = currentProviderApiKeyPool(existing);
+    if (storedPool) {
+      next.apiKey = existing.apiKey;
+      next.apiKeyPool = storedPool.map(entry => ({ ...entry }));
       const previousModeAllowsKey = existing.authMode === "key" || existing.authMode === undefined;
       if (previousModeAllowsKey) next.authMode = "key";
     }
   }
   config.providers[provider] = next;
-  if (provider === GOOGLE_ANTIGRAVITY_PROVIDER) {
-    config.googleAntigravityStaticCatalogVersion = GOOGLE_ANTIGRAVITY_STATIC_CATALOG_VERSION;
-  }
 }
 
 interface RunLoginDeps {
@@ -1309,9 +990,7 @@ export async function runLogin(
       }
       await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, cred);
     } else {
-      await (deps.saveCredential ?? saveCredential)(provider, cred, {
-        preserveIdentityless: provider === "kiro" && opts?.forceLogin === true,
-      });
+      await (deps.saveCredential ?? saveCredential)(provider, cred);
     }
     if (provider !== "chatgpt") {
       // Re-run against post-credential state so same-provider API-key additions, removals,
@@ -1504,7 +1183,7 @@ export function getLoginStatus(provider: string): { loggedIn: boolean; email?: s
   };
 }
 
-/** Token-safe per-provider login state for the CLI `ocx status` logins section (no tokens, masked email). */
+/** Token-safe per-provider login state for the CLI `ccx status` logins section (no tokens, masked email). */
 export function oauthLoginSummary(): Array<{ provider: string; loggedIn: boolean; email?: string }> {
   return listOAuthProviders().map(provider => {
     const status = getLoginStatus(provider);
@@ -1570,7 +1249,7 @@ export async function startLoginFlow(
         loginAbort.delete(provider);
         clearManualCodeSlot(provider);
         loginState.set(provider, { done: true });
-        // Local-token import (grok-cli / Claude Code keychain) completes WITHOUT firing onAuth —
+        // A local-token import (for example, Claude Code keychain) completes WITHOUT firing onAuth —
         // resolve so the GUI call returns instead of hanging.
         if (!urlResolved) resolve({ url: "", instructions: "Logged in via an existing local CLI/keychain token — no browser needed." });
         return;

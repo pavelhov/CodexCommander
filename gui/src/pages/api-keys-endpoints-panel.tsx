@@ -65,7 +65,7 @@ export function ApiKeysEndpointsPanel({
               <tr>
                 <th>{t("api.auth.endpoint")}</th>
                 <th><code>Authorization: Bearer</code></th>
-                <th><code>x-opencodex-api-key</code></th>
+                <th><code>x-codexcommander-api-key</code></th>
                 <th><code>x-api-key</code></th>
                 </tr>
             </thead>

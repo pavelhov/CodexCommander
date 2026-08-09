@@ -1,4 +1,4 @@
-import type { OcxParsedRequest, OcxTool } from "../types";
+import type { CodexCommanderParsedRequest, CodexCommanderTool } from "../types";
 import { namespacedToolName } from "../types";
 import { normalizeKiroModelId } from "../providers/kiro-models";
 import { createKiroToolNameRegistry, type KiroToolNameRegistry } from "./kiro-wire";
@@ -165,15 +165,15 @@ function serializedToolCatalogBytes(tools: readonly unknown[]): number {
   return textEncoder.encode(JSON.stringify(tools)).byteLength;
 }
 
-function omittedToolCatalogNotice(kept: number, omitted: readonly OcxTool[], registry: KiroToolNameRegistry): string {
+function omittedToolCatalogNotice(kept: number, omitted: readonly CodexCommanderTool[], registry: KiroToolNameRegistry): string {
   const names = omitted.slice(0, 12).map(tool => registry.alias(namespacedToolName(tool.namespace, tool.name)));
   const remainder = omitted.length - names.length;
   const summary = `${names.join(", ")}${remainder > 0 ? `, and ${remainder} more` : ""}`;
-  return `[opencodex] Kiro's outbound catalog budget allows ${kept} of ${kept + omitted.length} client tools this turn. Omitted and unavailable this turn: ${summary}.`;
+  return `[codexcommander] Kiro's outbound catalog budget allows ${kept} of ${kept + omitted.length} client tools this turn. Omitted and unavailable this turn: ${summary}.`;
 }
 
 export function convertKiroToolContext(
-  parsed: OcxParsedRequest,
+  parsed: CodexCommanderParsedRequest,
   registry: KiroToolNameRegistry = createKiroToolNameRegistry(),
 ): { tools: unknown[]; systemAdditions: string[]; nameMap: Map<string, string>; registry: KiroToolNameRegistry } {
   const tools = parsed.context.tools ?? [];
@@ -219,6 +219,6 @@ export function convertKiroToolContext(
   };
 }
 
-export function convertKiroTools(parsed: OcxParsedRequest): unknown[] {
+export function convertKiroTools(parsed: CodexCommanderParsedRequest): unknown[] {
   return convertKiroToolContext(parsed).tools;
 }

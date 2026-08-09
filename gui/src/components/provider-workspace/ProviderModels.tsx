@@ -16,7 +16,7 @@ export default function ProviderModels({
   selectedModels,
   modelsLoading = false,
   modelsLoadFailed = false,
-  needsReauth = false,
+  reauthRequired = false,
   onRetryModels,
   onOpenAccounts,
 }: {
@@ -29,7 +29,7 @@ export default function ProviderModels({
   modelsLoading?: boolean;
   modelsLoadFailed?: boolean;
   /** Active OAuth account needs a fresh login before live discovery works. */
-  needsReauth?: boolean;
+  reauthRequired?: boolean;
   onRetryModels?: () => void;
   onOpenAccounts?: () => void;
 }) {
@@ -163,7 +163,7 @@ export default function ProviderModels({
           <span className="muted">{t("pws.modelsAvailable", { count: models.length })}</span>
         )}
       </div>
-      {needsReauth && (
+      {reauthRequired && (
         <div className="pws-inline-error" role="status">
           <span>{t("pws.modelsNeedsReauth")}</span>
           {onOpenAccounts && (
@@ -173,7 +173,7 @@ export default function ProviderModels({
           )}
         </div>
       )}
-      {showingConfiguredFallback && !needsReauth && (
+      {showingConfiguredFallback && !reauthRequired && (
         <p className="muted text-label" style={{ marginBottom: 10 }}>{t("pws.modelsConfiguredFallback")}</p>
       )}
       <label className="text-label pws-custom-model-label" htmlFor={`pws-custom-model-${item.name}`}>

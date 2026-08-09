@@ -12,7 +12,7 @@ import { saveCredential } from "../src/oauth/store";
 import { normalizeKiroModelId } from "../src/providers/kiro-models";
 import { configuredReasoningEfforts, mapReasoningEffort } from "../src/reasoning-effort";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
-import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 
 const origHome = process.env.HOME;
 const origLocalAppData = process.env.LOCALAPPDATA;
@@ -22,7 +22,7 @@ const origApiRegion = process.env.KIRO_API_REGION;
 const origArn = process.env.KIRO_PROFILE_ARN;
 const origCredsFile = process.env.KIRO_CREDS_FILE;
 const origCredentialsFile = process.env.KIRO_CREDENTIALS_FILE;
-const origOcxHome = process.env.OPENCODEX_HOME;
+const origCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
 let tmp: string;
 
 beforeEach(() => {
@@ -33,7 +33,7 @@ beforeEach(() => {
   process.env.HOME = tmp;
   process.env.LOCALAPPDATA = join(tmp, "AppData", "Local");
   process.env.USERPROFILE = tmp;
-  process.env.OPENCODEX_HOME = tmp;
+  process.env.CODEXCOMMANDER_HOME = tmp;
   process.env.KIRO_REGION = "us-east-1";
   delete process.env.KIRO_API_REGION;
   delete process.env.KIRO_PROFILE_ARN;
@@ -49,15 +49,15 @@ afterEach(() => {
   if (origArn === undefined) delete process.env.KIRO_PROFILE_ARN; else process.env.KIRO_PROFILE_ARN = origArn;
   if (origCredsFile === undefined) delete process.env.KIRO_CREDS_FILE; else process.env.KIRO_CREDS_FILE = origCredsFile;
   if (origCredentialsFile === undefined) delete process.env.KIRO_CREDENTIALS_FILE; else process.env.KIRO_CREDENTIALS_FILE = origCredentialsFile;
-  if (origOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = origOcxHome;
+  if (origCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = origCodexCommanderHome;
   rmSync(tmp, { recursive: true, force: true });
 });
 
-const provider = { adapter: "kiro", baseUrl: "https://runtime.us-east-1.kiro.dev", authMode: "oauth", apiKey: "tok-123" } as unknown as OcxProviderConfig;
+const provider = { adapter: "kiro", baseUrl: "https://runtime.us-east-1.kiro.dev", authMode: "oauth", apiKey: "tok-123" } as unknown as CodexCommanderProviderConfig;
 const bashTool = { name: "bash", description: "Run a shell command", parameters: { type: "object" } };
 
-function parsedWith(messages: unknown[], tools?: unknown[], modelId = "claude-sonnet-4.5"): OcxParsedRequest {
-  return { modelId, stream: true, options: {}, context: { messages, tools } } as unknown as OcxParsedRequest;
+function parsedWith(messages: unknown[], tools?: unknown[], modelId = "claude-sonnet-4.5"): CodexCommanderParsedRequest {
+  return { modelId, stream: true, options: {}, context: { messages, tools } } as unknown as CodexCommanderParsedRequest;
 }
 
 function seedKiroCliMetadata(profileArn: string, region: string): void {
@@ -80,9 +80,9 @@ function seedKiroCliMetadata(profileArn: string, region: string): void {
 describe("kiro adapter — buildRequest", () => {
   test("rejects missing and blank Kiro tokens before building a request", async () => {
     for (const apiKey of [undefined, "", "   "]) {
-      const keyless = { ...provider, apiKey } as unknown as OcxProviderConfig;
+      const keyless = { ...provider, apiKey } as unknown as CodexCommanderProviderConfig;
       await expect(createKiroAdapter(keyless).buildRequest(parsedWith([{ role: "user", content: "hi" }]))).rejects.toThrow(
-        "kiro token missing — run ocx login kiro",
+        "kiro token missing — run ccx login kiro",
       );
     }
   });
@@ -118,7 +118,7 @@ describe("kiro adapter — buildRequest", () => {
   });
 
   test("Kiro API keys force the CLI token type and ignore unrelated profile metadata", async () => {
-    const apiKeyProvider = { ...provider, authMode: "key", apiKey: "ksk_example" } as unknown as OcxProviderConfig;
+    const apiKeyProvider = { ...provider, authMode: "key", apiKey: "ksk_example" } as unknown as CodexCommanderProviderConfig;
     const parsed = parsedWith([{ role: "user", content: "hi" }]);
     parsed._kiroAuthContext = {
       profileArn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/unrelated",
@@ -379,7 +379,7 @@ describe("kiro adapter — buildRequest", () => {
     const none = {
       ...parsedWith([{ role: "user", content: "hi" }], [bashTool]),
       options: { toolChoice: "none" },
-    } as OcxParsedRequest;
+    } as CodexCommanderParsedRequest;
     const disabled = JSON.parse((await createKiroAdapter(provider).buildRequest(none)).body)
       .conversationState.currentMessage.userInputMessage;
     expect(disabled.userInputMessageContext?.tools).toBeUndefined();
@@ -841,17 +841,17 @@ describe("kiro adapter — buildRequest", () => {
       await expect(createKiroAdapter(provider).buildRequest({
         ...parsedWith([{ role: "user", content: "hi" }], [bashTool]),
         options,
-      } as OcxParsedRequest)).rejects.toThrow(/Kiro (supports only|does not support)/);
+      } as CodexCommanderParsedRequest)).rejects.toThrow(/Kiro (supports only|does not support)/);
     }
 
-    const none = { ...parsedWith([{ role: "user", content: "hi" }], [bashTool]), options: { toolChoice: "none" } } as OcxParsedRequest;
+    const none = { ...parsedWith([{ role: "user", content: "hi" }], [bashTool]), options: { toolChoice: "none" } } as CodexCommanderParsedRequest;
     const current = JSON.parse((await createKiroAdapter(provider).buildRequest(none)).body).conversationState.currentMessage.userInputMessage;
     expect(current.userInputMessageContext?.tools).toBeUndefined();
   });
 });
 
 describe("kiro adapter — native and emulated reasoning effort", () => {
-  const kiro = PROVIDER_REGISTRY.find(p => p.id === "kiro") as unknown as OcxProviderConfig;
+  const kiro = PROVIDER_REGISTRY.find(p => p.id === "kiro") as unknown as CodexCommanderProviderConfig;
 
   test("kiro advertises Codex-compatible reasoning efforts", async () => {
     expect(kiro).toBeTruthy();
@@ -1011,7 +1011,7 @@ describe("kiro adapter — native and emulated reasoning effort", () => {
 });
 
 describe("kiro adapter — per-model context windows (kiro.dev/docs/models)", () => {
-  const kiro = PROVIDER_REGISTRY.find(p => p.id === "kiro") as unknown as OcxProviderConfig;
+  const kiro = PROVIDER_REGISTRY.find(p => p.id === "kiro") as unknown as CodexCommanderProviderConfig;
   const cw = kiro.modelContextWindows ?? {};
 
   test("registry includes the currently documented Kiro models", () => {

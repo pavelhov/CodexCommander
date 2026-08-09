@@ -1,5 +1,5 @@
 /**
- * `ocx ready` — pure parser + dependency-injected runner.
+ * `ccx ready` — pure parser + dependency-injected runner.
  *
  * Lives outside cli/index.ts (which dispatches argv at module top level) so the
  * full behavior is unit-testable without spawning a subprocess, opening a
@@ -165,7 +165,7 @@ function report(
 }
 
 /**
- * Run `ocx ready` over injected I/O. Returns the exit code (0 only when ready,
+ * Run `ccx ready` over injected I/O. Returns the exit code (0 only when ready,
  * 1 for not-ready/timeout, 64 for usage errors — though usage errors are
  * normally caught by parseReadyArgs before this runs). The runner performs NO
  * real subprocess/network work when the io injections are supplied.

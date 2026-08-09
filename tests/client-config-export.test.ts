@@ -19,7 +19,7 @@ import {
   type PiGeneratedConfig,
 } from "../src/clients/config-export";
 import { buildOpencodeProviderBlockFromCatalog, opencodeGlobalConfigPath } from "../src/cli/opencode";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 /**
  * Fixture covering the four rows that exercise every emission branch: native,
@@ -39,14 +39,15 @@ function ctx(extra?: Partial<ExportContext>): ExportContext {
   return { baseUrl: BASE_URL, models: FIXTURE, ...extra };
 }
 
-function cfg(extra?: Partial<OcxConfig>): OcxConfig {
+function cfg(extra?: Partial<CodexCommanderConfig>): CodexCommanderConfig {
   return {
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     hostname: "127.0.0.1",
     defaultProvider: "mock",
     providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" } },
     ...extra,
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 /**
@@ -58,7 +59,7 @@ function cfg(extra?: Partial<OcxConfig>): OcxConfig {
  * dedupe+sort precondition, so it is compared entry-by-entry against the same truth.
  */
 const GOLDEN_OPENCODE_BLOCK = JSON.parse(
-  '{"npm":"@ai-sdk/openai-compatible","name":"OpenCodex","options":{"baseURL":"http://127.0.0.1:10100/v1","apiKey":"{env:OPENCODEX_OPENCODE_API_KEY}"},"models":{"gpt-5.6-luna":{"name":"gpt-5.6-luna (native)","limit":{"context":272000,"output":32000}},"anthropic/claude-opus-5":{"name":"Claude Opus 5 (anthropic)","limit":{"context":200000,"output":32000}},"custom/no-context":{"name":"no-context (custom)"},"tiny/small-ctx":{"name":"small-ctx (tiny)","limit":{"context":8000,"output":8000}}}}',
+  '{"npm":"@ai-sdk/openai-compatible","name":"CodexCommander","options":{"baseURL":"http://127.0.0.1:10100/v1","apiKey":"{env:CODEXCOMMANDER_OPENCODE_API_KEY}"},"models":{"gpt-5.6-luna":{"name":"gpt-5.6-luna (native)","limit":{"context":272000,"output":32000}},"anthropic/claude-opus-5":{"name":"Claude Opus 5 (anthropic)","limit":{"context":200000,"output":32000}},"custom/no-context":{"name":"no-context (custom)"},"tiny/small-ctx":{"name":"small-ctx (tiny)","limit":{"context":8000,"output":8000}}}}',
 ) as {
   npm: string;
   name: string;
@@ -81,7 +82,7 @@ describe("relocated OpenCode serializer (accept criterion 1)", () => {
   });
 
   test("buildClientConfig('opencode') emits the same entries as the golden", () => {
-    const block = opencodeConfig().provider.opencodex!;
+    const block = opencodeConfig().provider.codexcommander!;
     expect(block.npm).toBe(GOLDEN_OPENCODE_BLOCK.npm);
     expect(block.name).toBe(GOLDEN_OPENCODE_BLOCK.name);
     expect(block.options).toEqual(GOLDEN_OPENCODE_BLOCK.options);
@@ -93,26 +94,26 @@ describe("relocated OpenCode serializer (accept criterion 1)", () => {
     }
   });
 
-  test("carries the V1 schema and only the opencodex provider key", () => {
+  test("carries the V1 schema and only the codexcommander provider key", () => {
     const config = opencodeConfig();
     expect(config.$schema).toBe("https://opencode.ai/config.json");
-    expect(Object.keys(config.provider)).toEqual(["opencodex"]);
+    expect(Object.keys(config.provider)).toEqual(["codexcommander"]);
   });
 
   test("a non-loopback bind moves admission to the header branch", () => {
-    const block = opencodeConfig(ctx({ config: cfg({ hostname: "0.0.0.0" }) })).provider.opencodex!;
+    const block = opencodeConfig(ctx({ config: cfg({ hostname: "0.0.0.0" }) })).provider.codexcommander!;
     expect(block.options.apiKey).toBeUndefined();
-    expect(block.options.headers).toEqual({ "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF });
+    expect(block.options.headers).toEqual({ "x-codexcommander-api-key": OPENCODE_API_KEY_ENV_REF });
   });
 
   test("a loopback bind keeps the apiKey branch", () => {
-    const block = opencodeConfig(ctx({ config: cfg({ hostname: "127.0.0.1" }) })).provider.opencodex!;
+    const block = opencodeConfig(ctx({ config: cfg({ hostname: "127.0.0.1" }) })).provider.codexcommander!;
     expect(block.options.apiKey).toBe(OPENCODE_API_KEY_ENV_REF);
     expect(block.options.headers).toBeUndefined();
   });
 
   test("the label carries the provider suffix, not a bare display name", () => {
-    const models = opencodeConfig().provider.opencodex!.models;
+    const models = opencodeConfig().provider.codexcommander!.models;
     expect(models["gpt-5.6-luna"]!.name).toBe("gpt-5.6-luna (native)");
     expect(models["anthropic/claude-opus-5"]!.name).toBe("Claude Opus 5 (anthropic)");
     expect(models["custom/no-context"]!.name).toBe("no-context (custom)");
@@ -150,7 +151,7 @@ describe("relocated OpenCode serializer (accept criterion 1)", () => {
 
 describe("Pi serializer (accept criterion 2)", () => {
   test("models is an array keyed by id, not a keyed object", () => {
-    const provider = piConfig().providers.opencodex!;
+    const provider = piConfig().providers.codexcommander!;
     expect(Array.isArray(provider.models)).toBe(true);
     expect(provider.models.map(model => model.id)).toEqual([
       "anthropic/claude-opus-5",
@@ -161,35 +162,35 @@ describe("Pi serializer (accept criterion 2)", () => {
   });
 
   test("provider envelope names the OpenAI-compatible dialect and the env reference", () => {
-    const provider = piConfig().providers.opencodex!;
+    const provider = piConfig().providers.codexcommander!;
     expect(provider.baseUrl).toBe(BASE_URL);
     expect(provider.api).toBe("openai-completions");
     expect(provider.apiKey).toBe(PI_API_KEY_ENV_REF);
-    expect(provider.apiKey).toBe("$OPENCODEX_API_KEY");
+    expect(provider.apiKey).toBe("$CODEXCOMMANDER_API_KEY");
   });
 
   test("cost is omitted on every entry — zeros would assert routed models are free", () => {
-    for (const model of piConfig().providers.opencodex!.models) {
+    for (const model of piConfig().providers.codexcommander!.models) {
       expect(model).not.toHaveProperty("cost");
     }
     expect(JSON.stringify(piConfig())).not.toContain("cost");
   });
 
   test("reasoning is omitted — an effort list is not Pi's boolean", () => {
-    for (const model of piConfig().providers.opencodex!.models) {
+    for (const model of piConfig().providers.codexcommander!.models) {
       expect(model).not.toHaveProperty("reasoning");
     }
   });
 
   test("contextWindow and maxTokens are omitted when the context window is unknown", () => {
-    const entry = piConfig().providers.opencodex!.models.find(model => model.id === "custom/no-context")!;
+    const entry = piConfig().providers.codexcommander!.models.find(model => model.id === "custom/no-context")!;
     expect(entry).not.toHaveProperty("contextWindow");
     expect(entry).not.toHaveProperty("maxTokens");
     expect(entry).toEqual({ id: "custom/no-context", name: "no-context (custom)", input: ["text"] });
   });
 
   test("maxTokens uses the schema budget and clamps to a smaller context window", () => {
-    const models = piConfig().providers.opencodex!.models;
+    const models = piConfig().providers.codexcommander!.models;
     const large = models.find(model => model.id === "gpt-5.6-luna")!;
     expect(large.contextWindow).toBe(272_000);
     expect(large.maxTokens).toBe(SCHEMA_REQUIRED_OUTPUT_BUDGET);
@@ -206,15 +207,15 @@ describe("Pi serializer (accept criterion 2)", () => {
         { namespaced: "c/empty", provider: "c", id: "empty", inputModalities: [] },
       ],
     }));
-    const models = config.providers.opencodex!.models;
+    const models = config.providers.codexcommander!.models;
     expect(models.find(model => model.id === "a/plain")!.input).toEqual(["text"]);
     expect(models.find(model => model.id === "b/multi")!.input).toEqual(["text", "image"]);
     expect(models.find(model => model.id === "c/empty")!.input).toEqual(["text"]);
   });
 
   test("Pi reuses the OpenCode label rule verbatim", () => {
-    const piNames = piConfig().providers.opencodex!.models.map(model => model.name).sort();
-    const opencodeNames = Object.values(opencodeConfig().provider.opencodex!.models)
+    const piNames = piConfig().providers.codexcommander!.models.map(model => model.name).sort();
+    const opencodeNames = Object.values(opencodeConfig().provider.codexcommander!.models)
       .map(entry => entry.name)
       .sort();
     expect(piNames).toEqual(opencodeNames);
@@ -222,14 +223,14 @@ describe("Pi serializer (accept criterion 2)", () => {
 });
 
 describe("no credential ever reaches the output (accept criterion 3)", () => {
-  const LIVE_KEY = "ocx_live_do_not_serialize_0123456789";
+  const LIVE_KEY = "ccx_live_do_not_serialize_0123456789";
 
-  test("neither serializer emits an ocx_ key even when one exists in config", () => {
-    const withKey = cfg({ apiKeys: [{ key: LIVE_KEY }] } as Partial<OcxConfig>);
+  test("neither serializer emits an ccx_ key even when one exists in config", () => {
+    const withKey = cfg({ apiKeys: [{ key: LIVE_KEY }] } as Partial<CodexCommanderConfig>);
     const context = ctx({ config: withKey });
     for (const client of EXPORT_CLIENT_IDS) {
       const serialized = JSON.stringify(buildClientConfig(client, context));
-      expect(serialized).not.toContain("ocx_");
+      expect(serialized).not.toContain("ccx_");
       expect(serialized).not.toContain(LIVE_KEY);
     }
   });
@@ -275,9 +276,9 @@ describe("stable ordering (accept criterion 4)", () => {
         { namespaced: "gpt-5.6-luna", provider: "openai", id: "gpt-5.6-luna", displayName: "Shadow" },
       ],
     });
-    expect(Object.keys(opencodeConfig(dupes).provider.opencodex!.models)).toEqual(["gpt-5.6-luna"]);
-    expect(piConfig(dupes).providers.opencodex!.models).toHaveLength(1);
-    expect(piConfig(dupes).providers.opencodex!.models[0]!.name).toBe("gpt-5.6-luna (native)");
+    expect(Object.keys(opencodeConfig(dupes).provider.codexcommander!.models)).toEqual(["gpt-5.6-luna"]);
+    expect(piConfig(dupes).providers.codexcommander!.models).toHaveLength(1);
+    expect(piConfig(dupes).providers.codexcommander!.models[0]!.name).toBe("gpt-5.6-luna (native)");
   });
 });
 
@@ -301,12 +302,12 @@ describe("EXPORT_CLIENTS registry", () => {
     expect(built.text).toBe(`{
   "$schema": "https://opencode.ai/config.json",
   "provider": {
-    "opencodex": {
+    "codexcommander": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "OpenCodex",
+      "name": "CodexCommander",
       "options": {
         "baseURL": "http://127.0.0.1:10100/v1",
-        "apiKey": "{env:OPENCODEX_OPENCODE_API_KEY}"
+        "apiKey": "{env:CODEXCOMMANDER_OPENCODE_API_KEY}"
       },
       "models": {
         "anthropic/claude-opus-5": {
@@ -345,10 +346,10 @@ describe("EXPORT_CLIENTS registry", () => {
     expect(built.format).toBe("json");
     expect(built.text).toBe(`{
   "providers": {
-    "opencodex": {
+    "codexcommander": {
       "baseUrl": "http://127.0.0.1:10100/v1",
       "api": "openai-completions",
-      "apiKey": "$OPENCODEX_API_KEY",
+      "apiKey": "$CODEXCOMMANDER_API_KEY",
       "models": [
         {
           "id": "anthropic/claude-opus-5",
@@ -452,7 +453,7 @@ describe("EXPORT_CLIENTS registry", () => {
     expect(EXPORT_CLIENTS.pi.apiKeyEnv).toBe(PI_API_KEY_ENV);
     expect(EXPORT_CLIENTS.pi.exportHint).toContain(PI_API_KEY_ENV);
     for (const id of EXPORT_CLIENT_IDS) {
-      expect(EXPORT_CLIENTS[id].exportHint).not.toContain("ocx_");
+      expect(EXPORT_CLIENTS[id].exportHint).not.toContain("ccx_");
     }
   });
 
@@ -464,7 +465,7 @@ describe("EXPORT_CLIENTS registry", () => {
 
   test("an empty catalog still yields a structurally valid document", () => {
     const empty = ctx({ models: [] });
-    expect(opencodeConfig(empty).provider.opencodex!.models).toEqual({});
-    expect(piConfig(empty).providers.opencodex!.models).toEqual([]);
+    expect(opencodeConfig(empty).provider.codexcommander!.models).toEqual({});
+    expect(piConfig(empty).providers.codexcommander!.models).toEqual([]);
   });
 });

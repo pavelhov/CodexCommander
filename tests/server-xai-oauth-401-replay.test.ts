@@ -7,7 +7,7 @@ import { XAI_OAUTH_DISCOVERY_URL } from "../src/oauth/xai";
 import { saveCredential } from "../src/oauth/store";
 import { XAI_GROK_CLI_BASE_URL } from "../src/providers/xai-transport";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 const TOKEN_ENDPOINT = "https://auth.x.ai/oauth/token";
@@ -20,16 +20,16 @@ let originalFetch: typeof fetch;
 
 beforeEach(() => {
   originalFetch = globalThis.fetch;
-  previousHome = process.env.OPENCODEX_HOME;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-xai-401-codex-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-xai-401-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-xai-401-codex-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-xai-401-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
 });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
@@ -45,9 +45,10 @@ function seedOAuth(): void {
   });
 }
 
-function xaiConfig(authMode: "oauth" | "key" = "oauth"): OcxConfig {
+function xaiConfig(authMode: "oauth" | "key" = "oauth"): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     hostname: "127.0.0.1",
     defaultProvider: "xai",
     providers: {
@@ -59,7 +60,7 @@ function xaiConfig(authMode: "oauth" | "key" = "oauth"): OcxConfig {
         models: ["grok-4.5"],
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 function successBody(text: string): string {

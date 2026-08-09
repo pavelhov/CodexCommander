@@ -16,7 +16,7 @@ import {
 let harness: PolicyApiHarness;
 
 beforeEach(async () => {
-  harness = await installPolicyApiHarness("ocx-api-storage-policy");
+  harness = await installPolicyApiHarness("ccx-api-storage-policy");
 });
 
 afterEach(async () => {

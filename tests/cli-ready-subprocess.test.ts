@@ -1,5 +1,5 @@
 /**
- * Real subprocess/loopback coverage for ocx ready dispatch boundaries.
+ * Real subprocess/loopback coverage for ccx ready dispatch boundaries.
  *
  * Keep tests/cli-ready.test.ts injected-only. These focused integration tests
  * prove that the top-level CLI preserves terminal-failed and pre-parse behavior
@@ -51,26 +51,26 @@ async function runCli(
   return { exitCode, stdout, stderr, elapsedMs: performance.now() - startedAt, timedOut };
 }
 
-function isolatedHomes(prefix: string): { root: string; opencodexHome: string; codexHome: string } {
+function isolatedHomes(prefix: string): { root: string; codexCommanderHome: string; codexHome: string } {
   const root = mkdtempSync(join(tmpdir(), prefix));
-  const opencodexHome = join(root, "opencodex");
+  const codexCommanderHome = join(root, "codexcommander");
   const codexHome = join(root, "codex");
-  mkdirSync(opencodexHome, { recursive: true });
+  mkdirSync(codexCommanderHome, { recursive: true });
   mkdirSync(codexHome, { recursive: true });
-  return { root, opencodexHome, codexHome };
+  return { root, codexCommanderHome, codexHome };
 }
 
-function writeRuntimePort(opencodexHome: string, port: number, pid: number): void {
+function writeRuntimePort(codexCommanderHome: string, port: number, pid: number): void {
   writeFileSync(
-    join(opencodexHome, "runtime-port.json"),
-    JSON.stringify({ pid, port, hostname: "127.0.0.1" }) + "\n",
+    join(codexCommanderHome, "runtime-port.json"),
+    JSON.stringify({ schemaVersion: 1, pid, port, hostname: "127.0.0.1" }) + "\n",
     "utf8",
   );
 }
 
-describe("ocx ready real subprocess", () => {
+describe("ccx ready real subprocess", () => {
   test("ready --wait exits immediately on terminal failed readiness", async () => {
-    const homes = isolatedHomes("ocx-ready-subprocess-failed-");
+    const homes = isolatedHomes("ccx-ready-subprocess-failed-");
     const fixturePid = process.pid;
     let healthzHits = 0;
     let readyzHits = 0;
@@ -82,7 +82,7 @@ describe("ocx ready real subprocess", () => {
         if (path === "/healthz") {
           healthzHits++;
           return Response.json({
-            service: "opencodex",
+            service: "codexcommander",
             status: "ok",
             version: "test",
             uptime: 1,
@@ -93,7 +93,7 @@ describe("ocx ready real subprocess", () => {
           readyzHits++;
           return Response.json(
             {
-              service: "opencodex",
+              service: "codexcommander",
               version: "test",
               uptime: 1,
               status: "failed",
@@ -106,12 +106,12 @@ describe("ocx ready real subprocess", () => {
         return new Response("not found", { status: 404 });
       },
     });
-    writeRuntimePort(homes.opencodexHome, server.port, fixturePid);
+    writeRuntimePort(homes.codexCommanderHome, server.port, fixturePid);
 
     try {
       const result = await runCli(
         ["ready", "--wait", "--timeout", "300", "--json"],
-        { OPENCODEX_HOME: homes.opencodexHome, CODEX_HOME: homes.codexHome },
+        { CODEXCOMMANDER_HOME: homes.codexCommanderHome, CODEX_HOME: homes.codexHome },
         10_000,
       );
 
@@ -135,7 +135,7 @@ describe("ocx ready real subprocess", () => {
   });
 
   test("invalid --timeout exits 64 before discovery and auto-restore", async () => {
-    const homes = isolatedHomes("ocx-ready-subprocess-invalid-");
+    const homes = isolatedHomes("ccx-ready-subprocess-invalid-");
     const fixturePid = process.pid;
     let healthzHits = 0;
     let readyzHits = 0;
@@ -147,7 +147,7 @@ describe("ocx ready real subprocess", () => {
         if (path === "/healthz") healthzHits++;
         if (path === "/readyz") readyzHits++;
         return Response.json({
-          service: "opencodex",
+          service: "codexcommander",
           status: "ok",
           version: "test",
           uptime: 1,
@@ -155,18 +155,18 @@ describe("ocx ready real subprocess", () => {
         });
       },
     });
-    writeRuntimePort(homes.opencodexHome, server.port, fixturePid);
+    writeRuntimePort(homes.codexCommanderHome, server.port, fixturePid);
     // If the global auto-restore preflight runs, this non-file state emits an
     // auto-restore warning. Invalid ready args must exit before inspecting it.
-    mkdirSync(join(homes.opencodexHome, "codex-shim.json"));
+    mkdirSync(join(homes.codexCommanderHome, "codex-shim.json"));
 
     try {
       const result = await runCli(
         ["ready", "--timeout", "5"],
         {
-          OPENCODEX_HOME: homes.opencodexHome,
+          CODEXCOMMANDER_HOME: homes.codexCommanderHome,
           CODEX_HOME: homes.codexHome,
-          OPENCODEX_CODEX_SHIM_AUTO_RESTORE: "1",
+          CODEXCOMMANDER_CODEX_SHIM_AUTO_RESTORE: "1",
         },
         10_000,
       );
@@ -174,7 +174,7 @@ describe("ocx ready real subprocess", () => {
       expect(result.timedOut).toBe(false);
       expect(result.exitCode).toBe(64);
       expect(result.stdout).toBe("");
-      expect(result.stderr).toContain("Usage: ocx ready");
+      expect(result.stderr).toContain("Usage: ccx ready");
       expect(result.stderr).not.toContain("auto-restore");
       expect(healthzHits).toBe(0);
       expect(readyzHits).toBe(0);

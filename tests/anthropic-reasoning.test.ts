@@ -2,24 +2,24 @@ import { describe, expect, test } from "bun:test";
 import { createAnthropicAdapter as createAnthropicAdapterProduction } from "../src/adapters/anthropic";
 import { parseRequest } from "../src/responses/parser";
 import { anthropicToResponsesBody } from "../src/claude/inbound";
-import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createAnthropicAdapter = (...args: Parameters<typeof createAnthropicAdapterProduction>) =>
   withTestTranslatorBudget(createAnthropicAdapterProduction(...args));
 
-const provider = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-x", authMode: "apiKey" } as unknown as OcxProviderConfig;
+const provider = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-x", authMode: "apiKey" } as unknown as CodexCommanderProviderConfig;
 
-function parsed(reasoning?: string, extraOpts: Record<string, unknown> = {}, modelId = "anthropic/claude-sonnet-4.5"): OcxParsedRequest {
+function parsed(reasoning?: string, extraOpts: Record<string, unknown> = {}, modelId = "anthropic/claude-sonnet-4.5"): CodexCommanderParsedRequest {
   return {
     modelId,
     stream: false,
     options: { ...(reasoning !== undefined ? { reasoning } : {}), ...extraOpts },
     context: { systemPrompt: ["sys"], messages: [{ role: "user", content: "hi" }] },
-  } as unknown as OcxParsedRequest;
+  } as unknown as CodexCommanderParsedRequest;
 }
 
-async function bodyOf(p: OcxParsedRequest): Promise<Record<string, unknown>> {
+async function bodyOf(p: CodexCommanderParsedRequest): Promise<Record<string, unknown>> {
   const { body } = await createAnthropicAdapter(provider).buildRequest(p);
   return JSON.parse(typeof body === "string" ? body : JSON.stringify(body)) as Record<string, unknown>;
 }

@@ -22,7 +22,7 @@ import {
   type RecordScreenResult,
 } from "./gen/agent_pb";
 import { errorText, execBytes } from "./native-exec-common";
-import { OCX_RESPONSES_TOOL_PROVIDER } from "./tool-definitions";
+import { CCX_RESPONSES_TOOL_PROVIDER } from "./tool-definitions";
 
 export interface CursorNativeToolDeps {
   mcp?: (args: McpArgs) => McpResult | Promise<McpResult>;
@@ -35,14 +35,14 @@ export interface CursorNativeToolDeps {
 export async function mcpExec(execMsg: ExecServerMessage, deps: CursorNativeToolDeps): Promise<Uint8Array> {
   if (execMsg.message.case !== "mcpArgs") throw new Error("invalid mcp exec");
   try {
-    if (execMsg.message.value.providerIdentifier === OCX_RESPONSES_TOOL_PROVIDER) {
+    if (execMsg.message.value.providerIdentifier === CCX_RESPONSES_TOOL_PROVIDER) {
       return execBytes(execMsg, "mcpResult", create(McpResultSchema, {
         result: { case: "error", value: create(McpErrorSchema, { error: "Responses client tools are surfaced to Codex and must not execute through the local MCP native-exec channel." }) },
       }));
     }
     const result = deps.mcp
       ? await deps.mcp(execMsg.message.value)
-      : create(McpResultSchema, { result: { case: "error", value: create(McpErrorSchema, { error: "No local MCP executor is configured inside opencodex." }) } });
+      : create(McpResultSchema, { result: { case: "error", value: create(McpErrorSchema, { error: "No local MCP executor is configured inside CodexCommander." }) } });
     return execBytes(execMsg, "mcpResult", result);
   } catch (err) {
     return execBytes(execMsg, "mcpResult", create(McpResultSchema, {
@@ -60,7 +60,7 @@ export async function listMcpResourcesExec(execMsg: ExecServerMessage, deps: Cur
     ? await deps.listMcpResources()
     : create(ListMcpResourcesExecResultSchema, {
         result: { case: "error", value: create(ListMcpResourcesErrorSchema, {
-          error: "No local MCP resource executor is configured inside opencodex.",
+          error: "No local MCP resource executor is configured inside CodexCommander.",
         }) },
       });
   return execBytes(execMsg, "listMcpResourcesExecResult", result);
@@ -73,7 +73,7 @@ export async function readMcpResourceExec(execMsg: ExecServerMessage, deps: Curs
     const result = deps.readMcpResource
       ? await deps.readMcpResource(args)
       : create(ReadMcpResourceExecResultSchema, {
-        result: { case: "error", value: create(ReadMcpResourceErrorSchema, { uri: args.uri, error: "No local MCP resource executor is configured inside opencodex." }) },
+        result: { case: "error", value: create(ReadMcpResourceErrorSchema, { uri: args.uri, error: "No local MCP resource executor is configured inside CodexCommander." }) },
       });
     return execBytes(execMsg, "readMcpResourceExecResult", result);
   } catch (err) {
@@ -90,7 +90,7 @@ export async function computerUseExec(execMsg: ExecServerMessage, deps: CursorNa
     const result = deps.computerUse
       ? await deps.computerUse(args)
       : create(ComputerUseResultSchema, {
-        result: { case: "error", value: create(ComputerUseErrorSchema, { error: "computer-use is not supported in this headless opencodex proxy. Configure provider.desktopExecutor.computerUseCommand to enable it.", actionCount: args.actions.length, durationMs: 0 }) },
+        result: { case: "error", value: create(ComputerUseErrorSchema, { error: "computer-use is not supported in this headless CodexCommander proxy. Configure provider.desktopExecutor.computerUseCommand to enable it.", actionCount: args.actions.length, durationMs: 0 }) },
       });
     return execBytes(execMsg, "computerUseResult", result);
   } catch (err) {
@@ -107,7 +107,7 @@ export async function recordScreenExec(execMsg: ExecServerMessage, deps: CursorN
     const result = deps.recordScreen
       ? await deps.recordScreen(args)
       : create(RecordScreenResultSchema, {
-        result: { case: "failure", value: create(RecordScreenFailureSchema, { error: "record-screen is not supported in this headless opencodex proxy. Configure provider.desktopExecutor.recordScreenCommand to enable it." }) },
+        result: { case: "failure", value: create(RecordScreenFailureSchema, { error: "record-screen is not supported in this headless CodexCommander proxy. Configure provider.desktopExecutor.recordScreenCommand to enable it." }) },
       });
     return execBytes(execMsg, "recordScreenResult", result);
   } catch (err) {

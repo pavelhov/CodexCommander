@@ -24,15 +24,15 @@ const AUTH_MATRIX = [
 
 const KEYS_OK = {
   keys: [
-    { id: "key-1", name: "alpha", prefix: "ocx_data_aaaaaaaa...", createdAt: "2026-01-15T12:00:00.000Z",
+    { id: "key-1", name: "alpha", prefix: "ccx_data_aaaaaaaa...", createdAt: "2026-01-15T12:00:00.000Z",
       usage: { requests7d: 3, totalRequests: 8 } },
-    { id: "key-2", name: "beta", prefix: "ocx_data_bbbbbbbb...", createdAt: "2026-01-16T12:00:00.000Z",
+    { id: "key-2", name: "beta", prefix: "ccx_data_bbbbbbbb...", createdAt: "2026-01-16T12:00:00.000Z",
       usage: { requests7d: 0, totalRequests: 0 } },
   ],
   attributionSince: "2026-07-20T00:00:00.000Z",
   authMatrix: AUTH_MATRIX,
   baseUrl: "http://127.0.0.1:10100/v1",
-  endpoint: "http://127.0.0.1:10100/v1/responses",
+  responsesEndpoint: "http://127.0.0.1:10100/v1/responses",
   claudeCodeEnabled: true,
 };
 

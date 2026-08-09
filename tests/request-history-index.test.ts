@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
@@ -7,6 +7,8 @@ import { ManagementRequest } from "./helpers/management-auth";
 import {
   appendUsageEntry,
   resetUsageReadCacheForTests,
+  USAGE_LOG_SCHEMA_VERSION,
+  usageLogPath,
   type PersistedUsageEntry,
 } from "../src/usage/log";
 import {
@@ -19,7 +21,7 @@ import {
 import { InvalidCursorError } from "../src/routing/history/cursor";
 import { HISTORY_DB_FILENAME } from "../src/routing/history/schema";
 import { getConfigDir } from "../src/config";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -52,21 +54,21 @@ function seedRows(count: number, startTimestamp = 1000, provider = "a"): Persist
 }
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  testDir = mkdtempSync(join(tmpdir(), "ocx-history-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  testDir = mkdtempSync(join(tmpdir(), "ccx-history-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   resetUsageReadCacheForTests();
   closeRequestHistoryIndex();
 });
 
 afterEach(() => {
   closeRequestHistoryIndex();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
 });
 
-function config(): OcxConfig {
+function config(): CodexCommanderConfig {
   return {
     port: 10100,
     defaultProvider: "a",
@@ -126,26 +128,89 @@ describe("request-history index (RI-02)", () => {
     expect(third.meta.lastError).toBe("");
   });
 
-  test("rows missing mandatory columns are skipped, not rejected", async () => {
+  test("only strict current usage rows enter the derived index", async () => {
     for (const row of seedRows(3)) appendUsageEntry(row);
-    const { appendFileSync } = await import("node:fs");
-    const { usageLogPath } = await import("../src/usage/log");
-    // A complete row is indexable even with no usage details.
+    // A current versioned row is indexable even with no usage details.
     appendFileSync(
       usageLogPath(),
-      JSON.stringify({ requestId: "lean", timestamp: 9000, provider: "a", model: "m1", status: 200, durationMs: 5 }) + "\n",
+      JSON.stringify({
+        schemaVersion: USAGE_LOG_SCHEMA_VERSION,
+        requestId: "lean",
+        timestamp: 9000,
+        provider: "a",
+        model: "m1",
+        surface: "codex",
+        status: 200,
+        durationMs: 5,
+        usageStatus: "unreported",
+      }) + "\n",
       "utf-8",
     );
-    // A row missing mandatory NOT NULL columns (model/status/durationMs) must
-    // be skipped by the parser instead of throwing during the insert.
+    // Formerly accepted unversioned and non-current rows, plus a malformed
+    // current row, are ignored rather than normalized or partially salvaged.
     appendFileSync(
       usageLogPath(),
-      JSON.stringify({ requestId: "broken", timestamp: 9001, provider: "a" }) + "\n",
+      [
+        JSON.stringify({
+          requestId: "unversioned",
+          timestamp: 9001,
+          provider: "a",
+          model: "m1",
+          surface: "codex",
+          status: 200,
+          durationMs: 5,
+          usageStatus: "unreported",
+        }),
+        JSON.stringify({
+          schemaVersion: USAGE_LOG_SCHEMA_VERSION + 1,
+          requestId: "future-version",
+          timestamp: 9002,
+          provider: "a",
+          model: "m1",
+          surface: "codex",
+          status: 200,
+          durationMs: 5,
+          usageStatus: "unreported",
+        }),
+        JSON.stringify({
+          schemaVersion: USAGE_LOG_SCHEMA_VERSION,
+          requestId: "broken",
+          timestamp: 9003,
+          provider: "a",
+          surface: "codex",
+          status: 200,
+          durationMs: 5,
+          usageStatus: "unreported",
+        }),
+      ].join("\n") + "\n",
       "utf-8",
     );
     const page = await queryRequestHistory({}, undefined, 10);
     expect(page.rows.some(row => row.requestId === "lean")).toBe(true);
+    expect(page.rows.some(row => row.requestId === "unversioned")).toBe(false);
+    expect(page.rows.some(row => row.requestId === "future-version")).toBe(false);
     expect(page.rows.some(row => row.requestId === "broken")).toBe(false);
+    expect(page.meta.indexedRows).toBe(4);
+  });
+
+  test("hydration rejects a damaged derived row instead of write-normalizing it", async () => {
+    appendUsageEntry(entry("damaged-row", 9000));
+    expect((await requestHistoryRowById("damaged-row"))?.surface).toBe("codex");
+    closeRequestHistoryIndex();
+
+    const { Database } = await import("bun:sqlite");
+    const index = new Database(join(getConfigDir(), HISTORY_DB_FILENAME));
+    const raw = index.query("SELECT row_json FROM requests WHERE request_id = ?").get("damaged-row") as {
+      row_json: string;
+    };
+    const { surface: _surface, ...withoutRequiredSurface } = JSON.parse(raw.row_json) as PersistedUsageEntry;
+    index.query("UPDATE requests SET row_json = ? WHERE request_id = ?").run(
+      JSON.stringify(withoutRequiredSurface),
+      "damaged-row",
+    );
+    index.close();
+
+    expect(await requestHistoryRowById("damaged-row")).toBeNull();
   });
 
   test("large history indexes fully and paginates without duplicates or misses", async () => {
@@ -180,9 +245,10 @@ describe("request-history index (RI-02)", () => {
     expect(page.meta.lastError).toContain("rebuilt");
   });
 
-  test("old schema version triggers a rebuild", async () => {
+  test("a non-current schema version triggers a rebuild", async () => {
     for (const row of seedRows(4)) appendUsageEntry(row);
     await queryRequestHistory({}, undefined, 10);
+    closeRequestHistoryIndex();
     const { Database } = await import("bun:sqlite");
     const db = new Database(join(getConfigDir(), HISTORY_DB_FILENAME));
     db.query("UPDATE schema_meta SET value = '999' WHERE key = 'schema_version'").run();
@@ -190,19 +256,51 @@ describe("request-history index (RI-02)", () => {
     const page = await queryRequestHistory({}, undefined, 10);
     expect(page.rows.length).toBe(4);
     expect(page.meta.schemaVersion).toBe(1);
+    expect(page.meta.lastError).toContain("rebuilt");
+  });
+
+  test("a pre-existing unversioned database is recreated instead of blessed as current", async () => {
+    for (const row of seedRows(4)) appendUsageEntry(row);
+    await queryRequestHistory({}, undefined, 10);
+    closeRequestHistoryIndex();
+    const { Database } = await import("bun:sqlite");
+    const dbFile = join(getConfigDir(), HISTORY_DB_FILENAME);
+    const stale = new Database(dbFile);
+    stale.query("DELETE FROM schema_meta WHERE key = 'schema_version'").run();
+    stale.exec("CREATE TABLE stale_schema_sentinel (value TEXT)");
+    stale.close();
+
+    const page = await queryRequestHistory({}, undefined, 10);
+    expect(page.rows.length).toBe(4);
+    expect(page.meta.schemaVersion).toBe(1);
+    expect(page.meta.lastError).toContain("rebuilt");
+    closeRequestHistoryIndex();
+
+    const rebuilt = new Database(dbFile);
+    const sentinel = rebuilt.query(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'stale_schema_sentinel'",
+    ).get();
+    rebuilt.close();
+    expect(sentinel).toBeNull();
   });
 
   test("partial final JSONL line is skipped until it completes", async () => {
     for (const row of seedRows(3)) appendUsageEntry(row);
     // Append a partial line without a trailing newline.
-    const { appendFileSync } = await import("node:fs");
-    const { usageLogPath } = await import("../src/usage/log");
-    appendFileSync(usageLogPath(), '{"requestId":"req-partial","timestamp":', "utf-8");
+    appendFileSync(
+      usageLogPath(),
+      `{"schemaVersion":${USAGE_LOG_SCHEMA_VERSION},"requestId":"req-partial","timestamp":`,
+      "utf-8",
+    );
     const page = await queryRequestHistory({}, undefined, 10);
     expect(page.rows.length).toBe(3);
     expect(page.meta.indexedRows).toBe(3);
     // Completing the line makes it indexable on the next refresh.
-    appendFileSync(usageLogPath(), '9999,"provider":"a","model":"m1","status":200,"durationMs":1,"usageStatus":"reported"}\n', "utf-8");
+    appendFileSync(
+      usageLogPath(),
+      '9999,"provider":"a","model":"m1","surface":"codex","status":200,"durationMs":1,"usageStatus":"reported"}\n',
+      "utf-8",
+    );
     const after = await queryRequestHistory({}, undefined, 10);
     expect(after.rows.length).toBe(4);
     expect(after.rows.some(row => row.requestId === "req-partial")).toBe(true);

@@ -2,16 +2,13 @@
 
 ## Supported Versions
 
-opencodex accepts security fixes on a best-effort basis for these lines:
+CodexCommander accepts security fixes on a best-effort basis for these lines:
 
 | Version | Supported |
 | --- | --- |
 | `main` | ✅ |
-| Latest published npm release | ✅ |
-| Older releases | ❌ |
 
-If you report an issue against an older release, maintainers may ask you to reproduce it on `main`
-or the latest published package before triage continues.
+Security reports should reproduce against the current `main` source line before triage continues.
 
 ## Reporting a Vulnerability
 
@@ -20,7 +17,7 @@ Please avoid posting undisclosed vulnerabilities as public GitHub issues.
 Report privately through GitHub private vulnerability reporting, which is enabled on this
 repository:
 
-**<https://github.com/lidge-jun/opencodex/security/advisories/new>**
+**<https://github.com/pavelhov/CodexCommander/security/advisories/new>**
 
 The same form is reachable from the repository's **Security** tab under **Report a vulnerability**.
 It is private between you and the maintainers, and it is the only channel this project offers for

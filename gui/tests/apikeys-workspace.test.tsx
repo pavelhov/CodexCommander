@@ -13,9 +13,9 @@ let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
 
 const sampleKeys: ApiKeyEntry[] = [
-  { id: "k1", name: "alpha", prefix: "ocx_data_aaaaaaaa...", createdAt: "2026-01-01T00:00:00.000Z",
+  { id: "k1", name: "alpha", prefix: "ccx_data_aaaaaaaa...", createdAt: "2026-01-01T00:00:00.000Z",
     usage: { requests7d: 2, totalRequests: 5, lastUsedAt: "2026-07-30T00:00:00.000Z" } },
-  { id: "k2", name: "beta", prefix: "ocx_data_bbbbbbbb...", createdAt: "2026-01-02T00:00:00.000Z",
+  { id: "k2", name: "beta", prefix: "ccx_data_bbbbbbbb...", createdAt: "2026-01-02T00:00:00.000Z",
     usage: { requests7d: 0, totalRequests: 0 } },
 ];
 
@@ -27,7 +27,7 @@ const endpoints = {
   models: "http://127.0.0.1:10100/v1/models",
 };
 
-const FULL_SECRET = "ocx_FULL_SECRET_ONLY_ONCE";
+const FULL_SECRET = "ccx_FULL_SECRET_ONLY_ONCE";
 
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
@@ -151,7 +151,7 @@ test("workspace overview navigation preserves pending secret and resets delete c
 
   await act(async () => { keyButton(container, "alpha").click(); });
   expect(container.textContent).toContain("Key details");
-  expect(container.textContent).toContain("ocx_data_aaaaaaaa...");
+  expect(container.textContent).toContain("ccx_data_aaaaaaaa...");
   expect(container.textContent).not.toContain(FULL_SECRET);
 
   await act(async () => {

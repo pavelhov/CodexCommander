@@ -4,15 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildGrokManagedBlock, injectGrokConfig, stripGrokConfig } from "../src/grok/inject";
 
-const BEGIN_MARKER = "# >>> opencodex managed block — do not edit (removed by `ocx stop`) >>>";
-const END_MARKER = "# <<< opencodex managed block <<<";
+const BEGIN_MARKER = "# >>> CodexCommander managed block — do not edit (removed by `ccx stop`) >>>";
+const END_MARKER = "# <<< CodexCommander managed block <<<";
 
 describe("Grok config injection", () => {
   let root: string;
   let grokHome: string;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "ocx-grok-inject-"));
+    root = mkdtempSync(join(tmpdir(), "ccx-grok-inject-"));
     grokHome = join(root, ".grok");
     mkdirSync(grokHome);
   });
@@ -36,7 +36,7 @@ describe("Grok config injection", () => {
 
   test("backs up once, appends to user config, and restores user bytes", () => {
     const configPath = join(grokHome, "config.toml");
-    const backupPath = join(grokHome, "config.toml.bak-opencodex");
+    const backupPath = join(grokHome, "config.toml.bak-codexcommander");
     const userContent = "theme = \"dark\"\n";
     writeFileSync(configPath, userContent, "utf8");
 
@@ -59,45 +59,45 @@ describe("Grok config injection", () => {
     const content = readFileSync(configPath, "utf8");
     expect(content.match(new RegExp(BEGIN_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) ?? []).toHaveLength(1);
     expect(content).not.toContain("old-model");
-    expect(content).toContain("[model.ocx-new-model]");
-    expect(content).toContain("[model.ocx-newer-model]");
+    expect(content).toContain("[model.ccx-new-model]");
+    expect(content).toContain("[model.ccx-newer-model]");
   });
 
   test("emits per-model direct fields (grok 0.2.101 ignores model_providers inheritance)", () => {
     const block = buildGrokManagedBlock(10190, [{ id: "cursor/grok-4.5", contextWindow: 500_000 }]);
     expect(block).not.toContain("[model_providers");
     expect(block).not.toContain("model_provider =");
-    const table = block.slice(block.indexOf("[model.ocx-cursor-grok-4-5]"));
+    const table = block.slice(block.indexOf("[model.ccx-cursor-grok-4-5]"));
     expect(table).toContain('model = "cursor/grok-4.5"');
     expect(table).toContain('base_url = "http://127.0.0.1:10190/v1"');
     expect(table).toContain('api_backend = "chat_completions"');
-    expect(table).toContain('api_key = "opencodex-loopback"');
+    expect(table).toContain('api_key = "codexcommander-loopback"');
     expect(table).toContain("context_window = 500000");
   });
 
   test("reserves user-owned [model.*] aliases outside the fence", () => {
     const configPath = join(grokHome, "config.toml");
-    const userContent = '[model.ocx-mine]\nmodel = "user/model"\nbase_url = "https://example.test/v1"\n';
+    const userContent = '[model.ccx-mine]\nmodel = "user/model"\nbase_url = "https://example.test/v1"\n';
     writeFileSync(configPath, userContent, "utf8");
 
     const result = injectGrokConfig(10100, [{ id: "mine" }], { grokHome });
     expect(result).toMatchObject({ ok: true, changed: true });
     const content = readFileSync(configPath, "utf8");
     // The user's table survives untouched and our entry takes a suffixed alias —
-    // a duplicate [model.ocx-mine] header would invalidate the whole TOML.
-    expect(content.match(/\[model\.ocx-mine\]/g) ?? []).toHaveLength(1);
-    expect(content).toContain("[model.ocx-mine-2]");
+    // a duplicate [model.ccx-mine] header would invalidate the whole TOML.
+    expect(content.match(/\[model\.ccx-mine\]/g) ?? []).toHaveLength(1);
+    expect(content).toContain("[model.ccx-mine-2]");
     expect(content.startsWith(userContent)).toBe(true);
   });
 
   test("recognizes quoted and whitespace-padded user model headers (TOML-equivalent forms)", () => {
     const configPath = join(grokHome, "config.toml");
     const userContent = [
-      '[model."ocx-quoted"]',
+      '[model."ccx-quoted"]',
       'model = "user/a"',
-      "[ model . ocx-spaced ]",
+      "[ model . ccx-spaced ]",
       'model = "user/b"',
-      "[model.'ocx-single']",
+      "[model.'ccx-single']",
       'model = "user/c"',
       "",
     ].join("\n");
@@ -106,27 +106,27 @@ describe("Grok config injection", () => {
     injectGrokConfig(10100, [{ id: "quoted" }, { id: "spaced" }, { id: "single" }], { grokHome });
     const content = readFileSync(configPath, "utf8");
     // Each equivalent user spelling reserves its canonical alias; ours are suffixed.
-    expect(content).toContain("[model.ocx-quoted-2]");
-    expect(content).toContain("[model.ocx-spaced-2]");
-    expect(content).toContain("[model.ocx-single-2]");
-    // Exactly one bare-form [model.ocx-quoted] must NOT exist (only the user's quoted header).
-    expect(content).not.toContain("[model.ocx-quoted]");
+    expect(content).toContain("[model.ccx-quoted-2]");
+    expect(content).toContain("[model.ccx-spaced-2]");
+    expect(content).toContain("[model.ccx-single-2]");
+    // Exactly one bare-form [model.ccx-quoted] must NOT exist (only the user's quoted header).
+    expect(content).not.toContain("[model.ccx-quoted]");
     // The whole file must stay valid TOML (no duplicate table definitions).
     expect(() => Bun.TOML.parse(content)).not.toThrow();
   });
 
   test("decodes TOML unicode escapes in user model headers", () => {
     const configPath = join(grokHome, "config.toml");
-    // \U0000006F and \u006F are both "o" — these headers canonically define model.ocx-esc*.
-    const userContent = '[model."\\U0000006Fcx-esc"]\nmodel = "user/esc"\n[model."\\u006Fcx-esc4"]\nmodel = "user/esc4"\n';
+    // \U00000063 and \u0063 are both "c" — these headers canonically define model.ccx-esc*.
+    const userContent = '[model."\\U00000063cx-esc"]\nmodel = "user/esc"\n[model."\\u0063cx-esc4"]\nmodel = "user/esc4"\n';
     writeFileSync(configPath, userContent, "utf8");
 
     injectGrokConfig(10100, [{ id: "esc" }, { id: "esc4" }], { grokHome });
     const content = readFileSync(configPath, "utf8");
-    expect(content).not.toContain("[model.ocx-esc]");
-    expect(content).not.toContain("[model.ocx-esc4]");
-    expect(content).toContain("[model.ocx-esc-2]");
-    expect(content).toContain("[model.ocx-esc4-2]");
+    expect(content).not.toContain("[model.ccx-esc]");
+    expect(content).not.toContain("[model.ccx-esc4]");
+    expect(content).toContain("[model.ccx-esc-2]");
+    expect(content).toContain("[model.ccx-esc4-2]");
     expect(() => Bun.TOML.parse(content)).not.toThrow();
   });
 
@@ -137,9 +137,9 @@ describe("Grok config injection", () => {
       { id: "same.path", contextWindow: 200_000 },
     ]);
 
-    expect(block).toContain("[model.ocx-anthropic-claude-opus-4-8]");
-    expect(block).toContain("[model.ocx-same-path]");
-    expect(block).toContain("[model.ocx-same-path-2]");
+    expect(block).toContain("[model.ccx-anthropic-claude-opus-4-8]");
+    expect(block).toContain("[model.ccx-same-path]");
+    expect(block).toContain("[model.ccx-same-path-2]");
     expect(block).toContain('name = "Quoted \\"name\\""');
     expect(block).toContain("context_window = 200000");
   });
@@ -179,17 +179,17 @@ describe("Grok config injection", () => {
   describe("user table reservation across TOML header spellings", () => {
     const configPath = () => join(grokHome, "config.toml");
 
-    // Every spelling below addresses the SAME table as a generated [model.ocx-mine]. grok's TOML
+    // Every spelling below addresses the SAME table as a generated [model.ccx-mine]. grok's TOML
     // parser rejects the entire config layer on a duplicate key, so an unreserved spelling would
     // destroy every unrelated setting the user owns — not just our block.
     const collidingSpellings: Array<[label: string, header: string]> = [
-      ["quoted first segment", '["model"."ocx-mine"]'],
-      ["single-quoted first segment", "['model'.ocx-mine]"],
-      ["mixed quoting with whitespace", `[ "model" . 'ocx-mine' ]`],
-      ["bare (baseline)", "[model.ocx-mine]"],
-      ["array of tables", "[[model.ocx-mine]]"],
-      ["sub-table", "[model.ocx-mine.extra]"],
-      ["trailing comment", '[model."ocx-mine"] # mine'],
+      ["quoted first segment", '["model"."ccx-mine"]'],
+      ["single-quoted first segment", "['model'.ccx-mine]"],
+      ["mixed quoting with whitespace", `[ "model" . 'ccx-mine' ]`],
+      ["bare (baseline)", "[model.ccx-mine]"],
+      ["array of tables", "[[model.ccx-mine]]"],
+      ["sub-table", "[model.ccx-mine.extra]"],
+      ["trailing comment", '[model."ccx-mine"] # mine'],
     ];
 
     for (const [label, header] of collidingSpellings) {
@@ -200,8 +200,8 @@ describe("Grok config injection", () => {
 
         const written = readFileSync(configPath(), "utf8");
         const generated = written.slice(written.indexOf(BEGIN_MARKER));
-        expect(generated).toContain("[model.ocx-mine-2]");
-        expect(generated).not.toContain("[model.ocx-mine]\n");
+        expect(generated).toContain("[model.ccx-mine-2]");
+        expect(generated).not.toContain("[model.ccx-mine]\n");
       });
     }
 
@@ -210,28 +210,28 @@ describe("Grok config injection", () => {
       // would needlessly suffix our aliases.
       writeFileSync(
         configPath(),
-        '[models.ocx-mine]\nx = 1\n\n[model_providers.ocx-mine]\ny = 2\n\n[auth_provider.ocx-mine]\nz = 3\n',
+        '[models.ccx-mine]\nx = 1\n\n[model_providers.ccx-mine]\ny = 2\n\n[auth_provider.ccx-mine]\nz = 3\n',
         "utf8",
       );
 
       injectGrokConfig(10100, [{ id: "mine" }], { grokHome });
 
       const written = readFileSync(configPath(), "utf8");
-      expect(written.slice(written.indexOf(BEGIN_MARKER))).toContain("[model.ocx-mine]");
+      expect(written.slice(written.indexOf(BEGIN_MARKER))).toContain("[model.ccx-mine]");
     });
 
     test("an unclosed header inside a multiline string does not swallow the next real header", () => {
       // The sub-table tail must not run past its own line. When it did, this valid TOML made the
-      // scan reserve "a" and miss ocx-mine entirely, so we emitted a duplicate [model.ocx-mine]
+      // scan reserve "a" and miss ccx-mine entirely, so we emitted a duplicate [model.ccx-mine]
       // and grok rejected the whole config layer.
-      const userContent = 'prompt = """\n[model.a.b\n"""\n\n[model.ocx-mine]\nmodel = "user/keeps-this"\n';
+      const userContent = 'prompt = """\n[model.a.b\n"""\n\n[model.ccx-mine]\nmodel = "user/keeps-this"\n';
       writeFileSync(configPath(), userContent, "utf8");
 
       injectGrokConfig(10100, [{ id: "mine" }], { grokHome });
 
       const generated = readFileSync(configPath(), "utf8");
-      expect(generated.slice(generated.indexOf(BEGIN_MARKER))).toContain("[model.ocx-mine-2]");
-      expect(generated.match(/^\[model\.ocx-mine\]$/gm)).toHaveLength(1);
+      expect(generated.slice(generated.indexOf(BEGIN_MARKER))).toContain("[model.ccx-mine-2]");
+      expect(generated.match(/^\[model\.ccx-mine\]$/gm)).toHaveLength(1);
     });
 
     test("generated aliases never contain a dot", () => {
@@ -334,7 +334,7 @@ describe("Grok config injection", () => {
         );
 
         expect(result).toMatchObject({ ok: true, changed: true });
-        expect(readFileSync(configPath(), "utf8")).toContain("[model.ocx-gpt-5-6-sol]");
+        expect(readFileSync(configPath(), "utf8")).toContain("[model.ccx-gpt-5-6-sol]");
       });
     }
 

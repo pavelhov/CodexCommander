@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { installApiAuthFetch, resetApiAuthFetchForTests } from "../src/api";
 
-const LEGACY_TOKEN_KEY = "opencodex-api-token";
+const SESSION_PATHS = new Set(["/codexcommander-session"]);
 const globals = ["document", "window", "navigator", "sessionStorage", "fetch"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
@@ -20,7 +20,7 @@ beforeEach(() => {
   });
   originalPrompt = window.prompt;
   resetApiAuthFetchForTests(async () => {
-    return window.prompt("OpenCodex admin token (OPENCODEX_ADMIN_AUTH_TOKEN)")?.trim() || null;
+    return window.prompt("CodexCommander admin token (CODEXCOMMANDER_ADMIN_AUTH_TOKEN)")?.trim() || null;
   });
   sessionStorage.clear();
 });
@@ -42,32 +42,11 @@ async function installMockAuthFetch(handler: typeof fetch): Promise<void> {
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: window.fetch });
 }
 
-test("installApiAuthFetch deletes legacy sessionStorage token without reading it", () => {
-  sessionStorage.setItem(LEGACY_TOKEN_KEY, "legacy-secret");
-  let getItemCalls = 0;
-  const storage = sessionStorage;
-  const originalGetItem = storage.getItem.bind(storage);
-  storage.getItem = ((key: string) => {
-    getItemCalls += 1;
-    return originalGetItem(key);
-  }) as typeof storage.getItem;
-
-  try {
-    installApiAuthFetch();
-    expect(getItemCalls).toBe(0);
-    expect(originalGetItem(LEGACY_TOKEN_KEY)).toBeNull();
-  } finally {
-    storage.getItem = originalGetItem;
-  }
-});
-
 test("prompted API tokens stay memory-only and are not written to sessionStorage", async () => {
-  sessionStorage.setItem(LEGACY_TOKEN_KEY, "legacy-secret");
-
   let authorized = false;
   const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
-    if (headers.get("X-OpenCodex-API-Key") === "fresh-token") {
+    if (headers.get("X-CodexCommander-API-Key") === "fresh-token") {
       authorized = true;
       return new Response("{}", { status: 200 });
     }
@@ -80,7 +59,6 @@ test("prompted API tokens stay memory-only and are not written to sessionStorage
   const res = await fetch("/api/config");
   expect(res.status).toBe(200);
   expect(authorized).toBe(true);
-  expect(sessionStorage.getItem(LEGACY_TOKEN_KEY)).toBeNull();
   expect(sessionStorage.length).toBe(0);
 });
 
@@ -95,7 +73,7 @@ test("validates prompted tokens with a safe read before retrying the failed requ
 
   const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost/");
-    const key = new Headers(init?.headers).get("X-OpenCodex-API-Key");
+    const key = new Headers(init?.headers).get("X-CodexCommander-API-Key");
     seenRequests.push([url.pathname, key]);
     if (url.pathname === "/api/settings" && key === "fresh-token") {
       return new Response("{}", { status: 200 });
@@ -121,9 +99,9 @@ test("cross-origin /api/* requests do not receive the API key or token prompt", 
   const seenHeaders: Array<string | null> = [];
   const stateful = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
-    seenHeaders.push(headers.get("X-OpenCodex-API-Key"));
+    seenHeaders.push(headers.get("X-CodexCommander-API-Key"));
     if (phase === "seed") {
-      if (headers.get("X-OpenCodex-API-Key") === "local-token") return new Response("{}", { status: 200 });
+      if (headers.get("X-CodexCommander-API-Key") === "local-token") return new Response("{}", { status: 200 });
       return new Response("unauthorized", { status: 401 });
     }
     return new Response("unauthorized", { status: 401 });
@@ -157,10 +135,10 @@ test("concurrent 401s share one token prompt and all retry with the stored token
     const headers = new Headers(init?.headers);
     // Session re-bootstrap probe: this fixture never mints sessions, so fail it fast
     // instead of letting it join the release queue below.
-    if (new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname === "/opencodex-session") {
+    if (SESSION_PATHS.has(new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname)) {
       return new Response("unauthorized", { status: 401 });
     }
-    if (headers.get("X-OpenCodex-API-Key") === "shared-token") {
+    if (headers.get("X-CodexCommander-API-Key") === "shared-token") {
       return new Response("{}", { status: 200 });
     }
     await new Promise<void>((resolve) => {
@@ -223,7 +201,7 @@ test("stale concurrent 401 does not clear a token refreshed by another request",
   const release401: Array<() => void> = [];
   const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
-    const key = headers.get("X-OpenCodex-API-Key");
+    const key = headers.get("X-CodexCommander-API-Key");
     if (key === "token-v2") return new Response("{}", { status: 200 });
     if (acceptV1 && key === "token-v1") return new Response("{}", { status: 200 });
     if (key === "token-v1") {
@@ -278,10 +256,10 @@ test("canceling the token prompt once does not reopen it for the rest of the 401
   const release401: Array<() => void> = [];
   const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
-    if (new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname === "/opencodex-session") {
+    if (SESSION_PATHS.has(new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname)) {
       return new Response("unauthorized", { status: 401 });
     }
-    if (headers.get("X-OpenCodex-API-Key")) {
+    if (headers.get("X-CodexCommander-API-Key")) {
       return new Response("{}", { status: 200 });
     }
     await new Promise<void>((resolve) => {
@@ -326,9 +304,9 @@ test("data-plane requests never receive the management token or prompt", async (
   const seenHeaders: Array<string | null> = [];
   const stateful = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
-    seenHeaders.push(headers.get("X-OpenCodex-API-Key"));
+    seenHeaders.push(headers.get("X-CodexCommander-API-Key"));
     if (phase === "seed") {
-      if (headers.get("X-OpenCodex-API-Key") === "local-token") return new Response("{}", { status: 200 });
+      if (headers.get("X-CodexCommander-API-Key") === "local-token") return new Response("{}", { status: 200 });
       return new Response("unauthorized", { status: 401 });
     }
     return new Response("unauthorized", { status: 401 });
@@ -352,11 +330,15 @@ test("data-plane requests never receive the management token or prompt", async (
   expect(promptCalls).toBe(beforeCrossPrompts);
 });
 
-function injectSessionMeta(token: string, csrf: string, origin: string): void {
+function injectSessionMeta(
+  token: string,
+  csrf: string,
+  origin: string,
+): void {
   for (const [name, content] of [
-    ["opencodex-session-token", token],
-    ["opencodex-session-csrf", csrf],
-    ["opencodex-session-origin", origin],
+    ["codexcommander-session-token", token],
+    ["codexcommander-session-csrf", csrf],
+    ["codexcommander-session-origin", origin],
   ] as const) {
     const meta = document.createElement("meta");
     meta.setAttribute("name", name);
@@ -365,12 +347,16 @@ function injectSessionMeta(token: string, csrf: string, origin: string): void {
   }
 }
 
-function sessionDocumentHtml(token: string, csrf: string, origin: string): string {
+function sessionDocumentHtml(
+  token: string,
+  csrf: string,
+  origin: string,
+): string {
   return [
     "<!doctype html><html><head>",
-    `<meta name="opencodex-session-token" content="${token}">`,
-    `<meta name="opencodex-session-csrf" content="${csrf}">`,
-    `<meta name="opencodex-session-origin" content="${origin}">`,
+    `<meta name="codexcommander-session-token" content="${token}">`,
+    `<meta name="codexcommander-session-csrf" content="${csrf}">`,
+    `<meta name="codexcommander-session-origin" content="${origin}">`,
     "</head><body></body></html>",
   ].join("");
 }
@@ -380,7 +366,7 @@ test("expired session silently re-bootstraps from the served document without pr
   // 5-minute TTL (or die on proxy restart), and the dashboard used to demand an admin token
   // the user never chose. The fetch wrapper must renew the session from a freshly served
   // document instead — token entry is not part of the default loopback experience.
-  injectSessionMeta("ocx_session_stale", "stale-csrf", "http://localhost");
+  injectSessionMeta("ccx_session_stale", "stale-csrf", "http://localhost");
 
   let promptCalls = 0;
   let bootstrapFetches = 0;
@@ -390,17 +376,17 @@ test("expired session silently re-bootstraps from the served document without pr
     const raw = input instanceof Request ? input.url : String(input);
     const url = new URL(raw, "http://localhost/");
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-    if (url.pathname === "/opencodex-session") {
+    if (url.pathname === "/codexcommander-session") {
       bootstrapFetches += 1;
-      return new Response(sessionDocumentHtml("ocx_session_fresh", "fresh-csrf", "http://localhost"), {
+      return new Response(sessionDocumentHtml("ccx_session_fresh", "fresh-csrf", "http://localhost"), {
         status: 200,
         headers: { "Content-Type": "text/html" },
       });
     }
-    seenApiKeys.push(headers.get("X-OpenCodex-API-Key"));
-    seenGuiOrigins.push(headers.get("X-OpenCodex-GUI-Origin"));
-    if (headers.get("X-OpenCodex-API-Key") === "ocx_session_fresh"
-      && headers.get("X-OpenCodex-GUI-Origin") === "http://localhost") {
+    seenApiKeys.push(headers.get("X-CodexCommander-API-Key"));
+    seenGuiOrigins.push(headers.get("X-CodexCommander-GUI-Origin"));
+    if (headers.get("X-CodexCommander-API-Key") === "ccx_session_fresh"
+      && headers.get("X-CodexCommander-GUI-Origin") === "http://localhost") {
       return new Response("{}", { status: 200 });
     }
     return new Response("unauthorized", { status: 401 });
@@ -415,7 +401,7 @@ test("expired session silently re-bootstraps from the served document without pr
   expect(res.status).toBe(200);
   expect(promptCalls).toBe(0);
   expect(bootstrapFetches).toBe(1);
-  expect(seenApiKeys).toEqual(["ocx_session_stale", "ocx_session_fresh"]);
+  expect(seenApiKeys).toEqual(["ccx_session_stale", "ccx_session_fresh"]);
   expect(seenGuiOrigins).toEqual(["http://localhost", "http://localhost"]);
 });
 
@@ -427,13 +413,13 @@ test("a session minted for another origin is rejected and the prompt fallback st
     const raw = input instanceof Request ? input.url : String(input);
     const url = new URL(raw, "http://localhost/");
     const headers = new Headers(init?.headers);
-    if (url.pathname === "/opencodex-session") {
-      return new Response(sessionDocumentHtml("ocx_session_foreign", "foreign-csrf", "http://192.0.2.10:10100"), {
+    if (SESSION_PATHS.has(url.pathname)) {
+      return new Response(sessionDocumentHtml("ccx_session_foreign", "foreign-csrf", "http://192.0.2.10:10100"), {
         status: 200,
         headers: { "Content-Type": "text/html" },
       });
     }
-    if (headers.get("X-OpenCodex-API-Key") === "manual-admin-token") return new Response("{}", { status: 200 });
+    if (headers.get("X-CodexCommander-API-Key") === "manual-admin-token") return new Response("{}", { status: 200 });
     return new Response("unauthorized", { status: 401 });
   }) as typeof fetch;
   window.prompt = () => {

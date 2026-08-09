@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { resolveKiroCliNativeSessionEntries } from "../src/oauth/kiro-credentials";
 
 /**
- * Issue #710: `ocx login kiro` could not import an existing Windows Kiro CLI session because the
+ * Issue #710: `ccx login kiro` could not import an existing Windows Kiro CLI session because the
  * native-store candidate list only covered macOS and Linux. The reporter verified the real path is
  * `%LOCALAPPDATA%\Kiro-Cli\data.sqlite3` (and that pointing KIROCLI_DB_PATH there made the import
  * succeed), so the reader and token selector already worked — only discovery was short.

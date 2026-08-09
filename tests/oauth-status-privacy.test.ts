@@ -5,19 +5,19 @@ import { getLoginStatus, getValidAccessToken, UnsupportedOAuthProviderError } fr
 import { saveCredential } from "../src/oauth/store";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-oauth-status-privacy-test");
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 
 describe("OAuth status privacy", () => {
   beforeEach(() => {
-    previousOpencodexHome = process.env.OPENCODEX_HOME;
+    previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
   });
 
   afterEach(() => {
-    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
 
@@ -42,14 +42,22 @@ describe("OAuth status privacy", () => {
   });
 
   test("saveCredential persists only the credential allowlist", async () => {
+    const existingId = "existing-account";
     writeFileSync(join(TEST_DIR, "auth.json"), JSON.stringify({
-      legacy: {
-        access: "legacy-access",
-        refresh: "legacy-refresh",
-        expires: Date.now() + 60_000,
-        source: "attacker-controlled-source",
-        prompt: "legacy prompt",
-        headers: { authorization: "Bearer legacy" },
+      schemaVersion: 1,
+      providers: {
+        existing: {
+          activeAccountId: existingId,
+          accounts: [{
+            id: existingId,
+            credential: {
+              access: "existing-access",
+              refresh: "existing-refresh",
+              expires: Date.now() + 60_000,
+              source: "manual",
+            },
+          }],
+        },
       },
     }), "utf8");
 
@@ -69,29 +77,36 @@ describe("OAuth status privacy", () => {
 
     expect(stored).toContain("access-token");
     expect(stored).toContain("refresh-token");
-    expect(stored).toContain("legacy-access");
+    expect(stored).toContain("existing-access");
     expect(stored).toContain("\"source\": \"credential-file\"");
-    expect(stored).not.toContain("attacker-controlled-source");
-    expect(stored).not.toContain("legacy prompt");
-    expect(stored).not.toContain("Bearer legacy");
     expect(stored).not.toContain("secret prompt");
     expect(stored).not.toContain("Bearer leaked");
     expect(stored).not.toContain("jwt-secret");
   });
 
-  test("getLoginStatus ignores invalid legacy source metadata", async () => {
+  test("getLoginStatus rejects a store with invalid source metadata", async () => {
+    const accountId = "xai-account";
     writeFileSync(join(TEST_DIR, "auth.json"), JSON.stringify({
-      xai: {
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: Date.now() + 60_000,
-        source: "oauth<script>",
+      schemaVersion: 1,
+      providers: {
+        xai: {
+          activeAccountId: accountId,
+          accounts: [{
+            id: accountId,
+            credential: {
+              access: "access-token",
+              refresh: "refresh-token",
+              expires: Date.now() + 60_000,
+              source: "oauth<script>",
+            },
+          }],
+        },
       },
     }), "utf8");
 
     const status = getLoginStatus("xai");
 
-    expect(status.loggedIn).toBe(true);
+    expect(status.loggedIn).toBe(false);
     expect(status.source).toBeUndefined();
     expect(JSON.stringify(status)).not.toContain("oauth<script>");
   });

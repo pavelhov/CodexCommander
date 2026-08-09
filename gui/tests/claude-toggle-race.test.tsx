@@ -47,10 +47,10 @@ function jsonResponse(body: unknown, status = 200): Response {
  */
 const CLAUDE_CODE_STATE = {
   authMode: "auto",
+  markerMode: "proxy",
   autoConnectSupported: false,
   systemEnv: false,
   fastMode: null,
-  maxContextTokens: null,
   autoContext: true,
   autoCompactWindow: null,
   injectAgents: true,

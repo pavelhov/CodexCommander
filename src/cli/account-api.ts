@@ -1,5 +1,5 @@
 /**
- * Data-access layer for `ocx account` (issue #180) — live-proxy HTTP client and
+ * Data-access layer for `ccx account` (issue #180) — live-proxy HTTP client and
  * per-family account readers. Kept separate from account.ts (command handlers)
  * per the 400-line module budget.
  */
@@ -7,7 +7,7 @@ import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
 import { runningProxyUpdateHeaders } from "../oauth/login-cli";
 import { isPublicOAuthProvider } from "../oauth/index";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "../providers/registry";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 
 export type AccountType = "codex" | "oauth" | "api-key";
 
@@ -45,20 +45,18 @@ export interface AccountDeps {
   /** Test injection: skip findLiveProxy and call the API at this base URL. */
   baseUrl?: string;
   fetchImpl?: typeof fetch;
-  loadConfigImpl?: () => OcxConfig;
+  loadConfigImpl?: () => CodexCommanderConfig;
   stdinImpl?: AccountStdin;
   stdinTimeoutMs?: number;
   /** Test/platform injection for the official Codex login in a restricted staging home. */
   spawnCodexLoginImpl?: (codexHome: string) => NativeMainLoginChild;
-  /** Legacy test seam. Production always uses the spawned child handle above. */
-  runCodexLoginImpl?: (codexHome: string) => Promise<number>;
   /** Test-only heartbeat cadence floor. Production keeps the five-second floor. */
   stageHeartbeatIntervalMinMs?: number;
   /** Test-only clock for deterministic native-profile lease deadline coverage. */
   stageLeaseClock?: StageLeaseClock;
 }
 
-export function classifyAccount(config: OcxConfig, name: string): ClassifyResult {
+export function classifyAccount(config: CodexCommanderConfig, name: string): ClassifyResult {
   const provider = config.providers?.[name];
   if (providerCodexAccountMode(name, provider)) return { type: "codex" };
   const entry = getProviderRegistryEntry(name);
@@ -114,7 +112,7 @@ export async function resolveBaseUrl(deps: AccountDeps): Promise<string | null> 
 }
 
 export function proxyUnreachable(): number {
-  console.error("Proxy not reachable. Start it with 'ocx start' or 'ocx ensure'.");
+  console.error("Proxy not reachable. Start it with 'ccx start' or 'ccx ensure'.");
   return 1;
 }
 
@@ -122,7 +120,7 @@ export function apiError(json: Record<string, unknown>, fallback: string): numbe
   const message = typeof json.error === "string" ? json.error : fallback;
   console.error(`Error: ${message}`);
   if (json.cleanupRequired === true) {
-    console.error("Warning: native-login staging cleanup is still required; run 'ocx account main doctor'.");
+    console.error("Warning: native-login staging cleanup is still required; run 'ccx account main doctor'.");
   }
   return 1;
 }

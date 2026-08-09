@@ -1,9 +1,9 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { browserSecurityHeaders } from "./auth-cors";
 import type { GuiSessionBootstrap } from "./management-auth";
 
-/** opencodex version, read from the packaged package.json (same source as the server bootstrap). */
+/** CodexCommander version, read from the packaged package.json (same source as the server bootstrap). */
 const VERSION = (() => {
   try {
     return JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version as string;
@@ -29,6 +29,37 @@ function findGuiDist(): string | null {
   return null;
 }
 
+function isContained(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+/**
+ * Static assets are an application boundary, not merely a path-normalisation problem.
+ * Resolve the root and candidate physically, and refuse links or hard-linked files so
+ * a compromised/stale GUI build cannot expose files outside its own generated tree.
+ */
+function physicalGuiDist(guiDist: string): string | null {
+  try {
+    const stat = lstatSync(guiDist);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return null;
+    return realpathSync(guiDist);
+  } catch {
+    return null;
+  }
+}
+
+function safeGuiFile(root: string, candidate: string): string | null {
+  try {
+    const stat = lstatSync(candidate);
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1) return null;
+    const physical = realpathSync(candidate);
+    return isContained(root, physical) ? physical : null;
+  } catch {
+    return null;
+  }
+}
+
 export function resolveGuiFilePath(guiDist: string, pathname: string): string | null {
   let decodedPath: string;
   try {
@@ -48,14 +79,6 @@ export function resolveGuiFilePath(guiDist: string, pathname: string): string | 
   return filePath;
 }
 
-function isFile(path: string): boolean {
-  try {
-    return statSync(path).isFile();
-  } catch {
-    return false;
-  }
-}
-
 /** HTML-attribute escape for values interpolated into meta tags. */
 function escapeHtmlAttribute(value: string): string {
   return value
@@ -68,9 +91,9 @@ function escapeHtmlAttribute(value: string): string {
 /** Shared session meta-tag block, escaped for quoted attribute interpolation. */
 function sessionBootstrapMeta(session: GuiSessionBootstrap): string {
   return [
-    `<meta name="opencodex-session-token" content="${escapeHtmlAttribute(session.token)}">`,
-    `<meta name="opencodex-session-csrf" content="${escapeHtmlAttribute(session.csrfToken)}">`,
-    `<meta name="opencodex-session-origin" content="${escapeHtmlAttribute(session.origin)}">`,
+    `<meta name="codexcommander-session-token" content="${escapeHtmlAttribute(session.token)}">`,
+    `<meta name="codexcommander-session-csrf" content="${escapeHtmlAttribute(session.csrfToken)}">`,
+    `<meta name="codexcommander-session-origin" content="${escapeHtmlAttribute(session.origin)}">`,
   ].join("");
 }
 
@@ -96,7 +119,7 @@ function htmlResponse(path: string, session?: GuiSessionBootstrap): Response {
 
 /**
  * Minimal session-bootstrap document, independent of any packaged GUI build. The dev
- * GUI (Vite) proxies /opencodex-session to the backend with the original host so the
+ * GUI (Vite) proxies /codexcommander-session to the backend with the original host so the
  * backend can mint an origin-bound loopback session even when gui/dist does not exist.
  */
 export function serveSessionBootstrap(session: GuiSessionBootstrap): Response {
@@ -111,13 +134,16 @@ export function serveGuiFile(
   session?: GuiSessionBootstrap,
 ): Response | null {
   if (!guiDist) return null;
-  const filePath = resolveGuiFilePath(guiDist, pathname);
-  if (!filePath) return null;
+  const root = physicalGuiDist(guiDist);
+  if (!root) return null;
+  const requestedPath = resolveGuiFilePath(root, pathname);
+  if (!requestedPath) return null;
+  const filePath = safeGuiFile(root, requestedPath);
 
-  if (!isFile(filePath)) {
+  if (!filePath) {
     if (!extname(pathname)) {
-      const indexPath = join(guiDist, "index.html");
-      if (isFile(indexPath)) {
+      const indexPath = safeGuiFile(root, join(root, "index.html"));
+      if (indexPath) {
         return htmlResponse(indexPath, session);
       }
     }
@@ -135,11 +161,11 @@ export function serveGuiFile(
 export function rootFallbackPayload() {
   return {
     status: "ok",
-    service: "opencodex",
+    service: "codexcommander",
     version: VERSION,
     dashboard: {
       available: false,
-      reason: "GUI build not found. Run `bun run build:gui` from the opencodex repo, or use `ocx gui` from a packaged install.",
+      reason: "GUI build not found. Run `bun run build:gui` from the CodexCommander repo, or use `ccx gui` from a packaged install.",
     },
     endpoints: {
       health: "/healthz",

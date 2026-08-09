@@ -1,5 +1,5 @@
 /**
- * Hard effort caps (devlog/260710_subagent_effort_intercept): sub-agent request
+ * Hard effort caps (implementation contract): sub-agent request
  * classification from codex-rs spawn markers, cap resolution, dual-shape rewrite,
  * and the /api/effort-caps management roundtrip.
  */
@@ -13,27 +13,39 @@ import { handleManagementAPI } from "../src/server/management-api";
 import { NoEnabledOpenAiProviderError, routeModel } from "../src/router";
 import { mapReasoningEffort } from "../src/reasoning-effort";
 import { nativeEffortClamp } from "../src/codex/catalog";
-import type { OcxConfig, OcxParsedRequest } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderParsedRequest } from "../src/types";
 
-const savedHome = process.env.OPENCODEX_HOME;
+const savedHome = process.env.CODEXCOMMANDER_HOME;
 const savedCodexHome = process.env.CODEX_HOME;
 let tempHome: string | null = null;
 let tempCodexHome: string | null = null;
 
 afterEach(() => {
-  if (savedHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = savedHome;
+  if (savedHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = savedHome;
   if (savedCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = savedCodexHome;
   if (tempHome) { rmSync(tempHome, { recursive: true, force: true }); tempHome = null; }
   if (tempCodexHome) { rmSync(tempCodexHome, { recursive: true, force: true }); tempCodexHome = null; }
 });
 
-function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
-  return { port: 10100, providers: {}, defaultProvider: "openai", ...overrides } as OcxConfig;
+function makeConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
+  return {
+    port: 10100,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+      },
+    },
+    defaultProvider: "openai",
+    multiAgentGuidanceEnabled: true,
+    ...overrides,
+  } as CodexCommanderConfig;
 }
 
-function makeParsed(reasoning?: string): OcxParsedRequest {
+function makeParsed(reasoning?: string): CodexCommanderParsedRequest {
   return {
     modelId: "gpt-5.6-sol",
     context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
@@ -216,7 +228,7 @@ describe("supportedLadderFor (real routeModel routes)", () => {
     // modelReasoningEfforts for grok-4.5 and noReasoningModels for the fast models.
     const config = makeConfig({
       providers: { xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", authMode: "oauth" } },
-    } as Partial<OcxConfig>);
+    } as Partial<CodexCommanderConfig>);
     const route = routeModel(config, "xai/grok-4.5");
     expect(supportedLadderFor(route)).toEqual(["low", "medium", "high"]);
     const noReasoning = routeModel(config, "xai/grok-composer-2.5-fast");
@@ -232,7 +244,7 @@ describe("supportedLadderFor (real routeModel routes)", () => {
         },
       },
       defaultProvider: "custom",
-    } as Partial<OcxConfig>);
+    } as Partial<CodexCommanderConfig>);
     const route = routeModel(config, "my-model");
     expect(route.providerName).toBe("custom");
     expect(supportedLadderFor(route)).toEqual(["low", "medium"]);
@@ -247,14 +259,14 @@ describe("supportedLadderFor (real routeModel routes)", () => {
         },
       },
       defaultProvider: "toggle",
-    } as Partial<OcxConfig>);
+    } as Partial<CodexCommanderConfig>);
     expect(supportedLadderFor(routeModel(config, "toggle/t-model"))).toBeUndefined();
   });
 
   test("custom key-mode providers cannot capture a bare native-looking OpenAI id", () => {
-    tempCodexHome = mkdtempSync(join(tmpdir(), "ocx-effort-catalog-"));
+    tempCodexHome = mkdtempSync(join(tmpdir(), "ccx-effort-catalog-"));
     process.env.CODEX_HOME = tempCodexHome;
-    writeFileSync(join(tempCodexHome, "opencodex-catalog.json"), JSON.stringify({
+    writeFileSync(join(tempCodexHome, "codexcommander-catalog.json"), JSON.stringify({
       models: [{ slug: "gpt-5.4", display_name: "gpt-5.4", supported_reasoning_levels: [
         { effort: "low", description: "low" }, { effort: "medium", description: "medium" },
       ] }],
@@ -267,7 +279,7 @@ describe("supportedLadderFor (real routeModel routes)", () => {
         },
       },
       defaultProvider: "selfhosted",
-    } as Partial<OcxConfig>);
+    } as Partial<CodexCommanderConfig>);
     expect(() => routeModel(config, "gpt-5.4")).toThrow(NoEnabledOpenAiProviderError);
     const namespaced = routeModel(config, "selfhosted/gpt-5.4");
     expect(namespaced.providerName).toBe("selfhosted");
@@ -275,9 +287,9 @@ describe("supportedLadderFor (real routeModel routes)", () => {
   });
 
   test("native forward-mode passthrough reads the injected catalog ladder", () => {
-    tempCodexHome = mkdtempSync(join(tmpdir(), "ocx-effort-catalog-"));
+    tempCodexHome = mkdtempSync(join(tmpdir(), "ccx-effort-catalog-"));
     process.env.CODEX_HOME = tempCodexHome;
-    writeFileSync(join(tempCodexHome, "opencodex-catalog.json"), JSON.stringify({
+    writeFileSync(join(tempCodexHome, "codexcommander-catalog.json"), JSON.stringify({
       models: [{ slug: "gpt-5.4", display_name: "gpt-5.4", supported_reasoning_levels: [
         { effort: "low", description: "low" }, { effort: "medium", description: "medium" },
         { effort: "high", description: "high" }, { effort: "xhigh", description: "xhigh" },
@@ -288,14 +300,14 @@ describe("supportedLadderFor (real routeModel routes)", () => {
         openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
       },
       defaultProvider: "openai",
-    } as Partial<OcxConfig>);
+    } as Partial<CodexCommanderConfig>);
     const route = routeModel(config, "gpt-5.4");
     expect(supportedLadderFor(route)).toEqual(["low", "medium", "high", "xhigh"]);
   });
 });
 
 describe("effortCapAppliesTo (caps are a v2-feature gate)", () => {
-  function parsedWithTools(tools: Array<{ name: string; namespace?: string }>, reasoning?: string): OcxParsedRequest {
+  function parsedWithTools(tools: Array<{ name: string; namespace?: string }>, reasoning?: string): CodexCommanderParsedRequest {
     return {
       modelId: "gpt-5.6-sol",
       context: {
@@ -419,11 +431,11 @@ describe("cap composition with downstream clamps", () => {
 
 describe("/api/effort-caps", () => {
   function isolatedHome(): void {
-    tempHome = mkdtempSync(join(tmpdir(), "ocx-effort-caps-"));
-    process.env.OPENCODEX_HOME = tempHome;
+    tempHome = mkdtempSync(join(tmpdir(), "ccx-effort-caps-"));
+    process.env.CODEXCOMMANDER_HOME = tempHome;
   }
 
-  async function put(config: OcxConfig, body: unknown): Promise<Response> {
+  async function put(config: CodexCommanderConfig, body: unknown): Promise<Response> {
     const req = new Request("http://localhost/api/effort-caps", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },

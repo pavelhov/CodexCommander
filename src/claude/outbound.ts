@@ -1,7 +1,7 @@
 /**
  * Claude Code outbound: internal /v1/responses output -> Anthropic Messages API shapes.
  *
- * Wire contract pinned in devlog/260711_claude_inbound/003_evidence.md (all Tier 2):
+ * Wire contract pinned in implementation contract (all Tier 2):
  *  - SSE order: message_start -> (content_block_start -> deltas -> content_block_stop)*
  *    -> message_delta -> message_stop; any number of `ping`.
  *  - thinking blocks get thinking_delta(s) then ONE synthetic signature_delta just
@@ -27,7 +27,7 @@ function uuid(): string {
   return crypto.randomUUID().replace(/-/g, "");
 }
 
-/** HTTP status -> Anthropic error taxonomy (010 amendment #4; full official table per devlog 100). */
+/** HTTP status -> Anthropic error taxonomy (010 amendment #4; full official table per implementation contract). */
 export function anthropicErrorType(status: number): string {
   switch (status) {
     case 400: return "invalid_request_error";
@@ -58,7 +58,7 @@ export function anthropicErrorResponse(status: number, message: string, type?: s
 /**
  * Responses usage -> Anthropic usage. Responses `input_tokens` is INCLUSIVE of cache
  * read+write (types.ts convention); Anthropic `input_tokens` excludes both, so
- * subtract the full cache detail (devlog 070 — subtracting reads only inflated the
+ * subtract the full cache detail (implementation contract — subtracting reads only inflated the
  * non-cached input Claude Code displays by the write share).
  */
 export function anthropicUsage(usage: unknown, webSearchRequests = 0): Rec {
@@ -244,7 +244,7 @@ export function responsesSseToAnthropicSse(
         emit("message_start", { type: "message_start", message: messageSnapshot(model) });
         emit("ping", { type: "ping" });
       };
-      // Idle keepalive (devlog 100): real Anthropic streams may interleave pings anywhere;
+      // Idle keepalive (implementation contract): real Anthropic streams may interleave pings anywhere;
       // synthesizing one during upstream silence protects remote deployments behind
       // LB/NAT idle timeouts and covers slow first tokens. Cheap and spec-legal.
       if (pingIntervalMs > 0) {
@@ -275,7 +275,7 @@ export function responsesSseToAnthropicSse(
           // Synthetic signature: Claude Code accepts it (003 E6); inbound drops replays anyway.
           emit("content_block_delta", {
             type: "content_block_delta", index: open.index,
-            delta: { type: "signature_delta", signature: `ocx${Date.now()}` },
+            delta: { type: "signature_delta", signature: `ccx${Date.now()}` },
           });
         }
         emit("content_block_stop", { type: "content_block_stop", index: open.index });
@@ -307,8 +307,8 @@ export function responsesSseToAnthropicSse(
       };
       // upstreamDerived: transient upstream statuses become overloaded_error so the
       // Anthropic-SDK client retries with backoff; proxy-internal exceptions stay
-      // api_error — a deterministic ocx bug must not be masked as retryable
-      // (devlog/_plan/260716_claudecode_hardening/020). On win32 mid-stream socket
+      // api_error — a deterministic CodexCommander bug must not be masked as retryable
+      // (implementation contract). On win32 mid-stream socket
       // resets reach the reader catch (no failed-tail relay) and stay api_error —
       // same as today, deliberate residual.
       const fail = (status: number, message: string, upstreamDerived = false, code?: string) => {
@@ -645,7 +645,7 @@ export function responsesSseToAnthropicSse(
               else decodedReservation.release();
             }
           }
-          // EOF without a terminal frame is a TRUNCATION, not success (devlog 100:
+          // EOF without a terminal frame is a TRUNCATION, not success (implementation contract:
           // gateways that close such streams politely hand Claude Code an empty/partial
           // turn with no retryable error — CLIProxyAPI#2189 failure pattern). Fail closed
           // with a mid-stream Anthropic error event so the client can retry.
@@ -709,7 +709,7 @@ export function responsesJsonToAnthropicMessage(json: unknown, model: string): R
           }
         }
         if (parts.length > 0) {
-          content.push({ type: "thinking", thinking: parts.join("\n\n"), signature: `ocx${Date.now()}` });
+          content.push({ type: "thinking", thinking: parts.join("\n\n"), signature: `ccx${Date.now()}` });
         }
         break;
       }

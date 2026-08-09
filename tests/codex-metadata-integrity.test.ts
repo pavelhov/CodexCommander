@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { FORWARD_HEADERS, createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../src/adapters/openai-responses";
 import { headersForCodexAuthContext } from "../src/codex/auth-context";
-import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
@@ -21,7 +21,7 @@ const poolAuthContext = {
   chatgptAccountId: accountA.chatgptAccountId,
 };
 
-function minimalParsed(): OcxParsedRequest {
+function minimalParsed(): CodexCommanderParsedRequest {
   return {
     modelId: "gpt-5.4",
     context: { messages: [] },
@@ -112,7 +112,7 @@ describe("Codex metadata integrity", () => {
   });
 
   test("adapter forward mode does not fabricate originator and applies pool override", () => {
-    const provider: OcxProviderConfig & {
+    const provider: CodexCommanderProviderConfig & {
       _codexAccountOverride: { accessToken: string; chatgptAccountId: string };
       _codexAccountRequired: boolean;
     } = {
@@ -140,7 +140,7 @@ describe("Codex metadata integrity", () => {
   });
 
   test("adapter forward mode preserves genuine client metadata", () => {
-    const provider: OcxProviderConfig = {
+    const provider: CodexCommanderProviderConfig = {
       adapter: "openai-responses",
       baseUrl: "https://chatgpt.test/backend-api/codex",
       authMode: "forward",

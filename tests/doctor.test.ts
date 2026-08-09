@@ -22,8 +22,8 @@ import { NativeProfileError } from "../src/codex/native-profile-types";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-doctor-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
-const TEST_OPENCODEX_HOME = join(TEST_DIR, "opencodex");
-let prevOpencodexHome: string | undefined;
+const TEST_CODEXCOMMANDER_HOME = join(TEST_DIR, "codexcommander");
+let prevCodexCommanderHome: string | undefined;
 let prevCodexHome: string | undefined;
 let prevHttpsProxy: string | undefined;
 let prevLowerHttpsProxy: string | undefined;
@@ -31,44 +31,44 @@ let prevProxyRef: string | undefined;
 
 describe("doctor", () => {
   beforeEach(() => {
-    prevOpencodexHome = process.env.OPENCODEX_HOME;
+    prevCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     prevCodexHome = process.env.CODEX_HOME;
     prevHttpsProxy = process.env.HTTPS_PROXY;
     prevLowerHttpsProxy = process.env.https_proxy;
-    prevProxyRef = process.env.OCX_TEST_PROXY_REF;
+    prevProxyRef = process.env.CCX_TEST_PROXY_REF;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_CODEX_HOME, { recursive: true });
-    mkdirSync(TEST_OPENCODEX_HOME, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_OPENCODEX_HOME;
+    mkdirSync(TEST_CODEXCOMMANDER_HOME, { recursive: true });
+    process.env.CODEXCOMMANDER_HOME = TEST_CODEXCOMMANDER_HOME;
     process.env.CODEX_HOME = TEST_CODEX_HOME;
     delete process.env.HTTPS_PROXY;
     delete process.env.https_proxy;
-    delete process.env.OCX_TEST_PROXY_REF;
+    delete process.env.CCX_TEST_PROXY_REF;
   });
 
   afterEach(() => {
-    if (prevOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = prevOpencodexHome;
+    if (prevCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = prevCodexCommanderHome;
     if (prevCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = prevCodexHome;
     if (prevHttpsProxy === undefined) delete process.env.HTTPS_PROXY;
     else process.env.HTTPS_PROXY = prevHttpsProxy;
     if (prevLowerHttpsProxy === undefined) delete process.env.https_proxy;
     else process.env.https_proxy = prevLowerHttpsProxy;
-    if (prevProxyRef === undefined) delete process.env.OCX_TEST_PROXY_REF;
-    else process.env.OCX_TEST_PROXY_REF = prevProxyRef;
+    if (prevProxyRef === undefined) delete process.env.CCX_TEST_PROXY_REF;
+    else process.env.CCX_TEST_PROXY_REF = prevProxyRef;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
 
   test("path report flips auth.json/config.json from absent to present", () => {
     let rows = collectPaths();
     const auth = () => rows.find(r => r.label === "CODEX_HOME/auth.json")!;
-    const cfg = () => rows.find(r => r.label === "OPENCODEX_HOME/config.json")!;
+    const cfg = () => rows.find(r => r.label === "CODEXCOMMANDER_HOME/config.json")!;
     expect(auth().exists).toBe(false);
     expect(cfg().exists).toBe(false);
 
     writeFileSync(join(TEST_CODEX_HOME, "auth.json"), "{}");
-    writeFileSync(join(TEST_OPENCODEX_HOME, "config.json"), "{}");
+    writeFileSync(join(TEST_CODEXCOMMANDER_HOME, "config.json"), "{}");
     rows = collectPaths();
     expect(auth().exists).toBe(true);
     expect(cfg().exists).toBe(true);
@@ -89,11 +89,11 @@ describe("doctor", () => {
       appCodexHome: appHome,
     });
     expect(mismatch.mismatch).toBe(true);
-    expect(mismatch.warning).toContain("OpenCodex injection will not reach that app");
+    expect(mismatch.warning).toContain("CodexCommander injection will not reach that app");
     expect(mismatch.effectiveCodexHome).toContain("C:\\Users\\[USER]\\");
     expect(mismatch.effectiveCodexHome).not.toContain("alice");
-    expect(mismatch.action).toContain("ocx service uninstall");
-    expect(mismatch.action).toContain("ocx service install");
+    expect(mismatch.action).toContain("ccx service uninstall");
+    expect(mismatch.action).toContain("ccx service install");
     expect(mismatch.action).toContain("%USERPROFILE%\\.codex");
     expect(mismatch.action).toContain("Remove-Item Env:ORCA_CODEX_HOME");
     expect(mismatch.action).toContain("SilentlyContinue; $env:CODEX_HOME");
@@ -122,7 +122,7 @@ describe("doctor", () => {
     const usersRoot = join(TEST_DIR, "mnt-c", "Users");
     const windowsCodexHome = join(usersRoot, "example", ".codex");
     mkdirSync(windowsCodexHome, { recursive: true });
-    writeFileSync(join(windowsCodexHome, "config.toml"), "model_provider = \"opencodex\"\n");
+    writeFileSync(join(windowsCodexHome, "config.toml"), "model_provider = \"codexcommander\"\n");
 
     expect(resolveCodexHomeDir({
       env: { WSL_DISTRO_NAME: "Ubuntu" },
@@ -218,12 +218,12 @@ describe("doctor", () => {
       "drivers /mnt/c drvfs rw,noatime 0 0",
     ].join("\n");
 
-    const c = detectFsType("/mnt/c/Users/test/.opencodex", mounts);
+    const c = detectFsType("/mnt/c/Users/test/.codexcommander", mounts);
     expect(c.isDrvfs).toBe(true);
     expect(c.isMntDrive).toBe(true);
     expect(c.fstype).toBe("drvfs");
 
-    const home = detectFsType("/home/test/.opencodex", mounts);
+    const home = detectFsType("/home/test/.codexcommander", mounts);
     expect(home.isDrvfs).toBe(false);
     expect(home.isMntDrive).toBe(false);
     expect(home.fstype).toBe("ext4");
@@ -285,14 +285,26 @@ describe("doctor", () => {
   });
 
   test("collectConfiguredProxy reports effective config proxy without leaking values", () => {
-    writeFileSync(join(TEST_OPENCODEX_HOME, "config.json"), JSON.stringify({ proxy: "${OCX_TEST_PROXY_REF}" }));
+    writeFileSync(join(TEST_CODEXCOMMANDER_HOME, "config.json"), JSON.stringify({
+      port: 10100,
+      multiAgentGuidanceEnabled: true,
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      defaultProvider: "openai",
+      proxy: "${CCX_TEST_PROXY_REF}",
+    }));
 
     let diagnostic = collectConfiguredProxy();
     expect(diagnostic.configured).toBe(true);
     expect(diagnostic.present).toBe(false);
-    expect(diagnostic.detail).toContain("OCX_TEST_PROXY_REF");
+    expect(diagnostic.detail).toContain("CCX_TEST_PROXY_REF");
 
-    process.env.OCX_TEST_PROXY_REF = "http://user:secret@proxy.example.test:8080";
+    process.env.CCX_TEST_PROXY_REF = "http://user:secret@proxy.example.test:8080";
     diagnostic = collectConfiguredProxy();
     expect(diagnostic.configured).toBe(true);
     expect(diagnostic.present).toBe(true);
@@ -419,7 +431,7 @@ describe("service memory section (#314 WP4)", () => {
       data: { ...baseData, heapUsed: 4 * 1024 ** 3, jscHeap: { heapSize: 4 * 1024 ** 3 } },
     });
     expect(lines.some(l => l.includes("possible JS-side retention"))).toBe(true);
-    expect(lines.some(l => l.includes("likely an opencodex bug"))).toBe(false);
+    expect(lines.some(l => l.includes("likely an codexcommander bug"))).toBe(false);
   });
 
   test("interpretation: all observed counters below threshold → normal line", () => {
@@ -447,21 +459,21 @@ describe("service memory section (#314 WP4)", () => {
   });
 
   test("guidance gating: win32 + auto-known-bad prints version-claiming guidance", () => {
-    // A bundled runtime is the case where "set OPENCODEX_BUN_PATH" is still the right advice.
+    // A bundled runtime is the case where "set CCX_BUN_PATH" is still the right advice.
     const lines = formatServiceMemoryLines({ status: "ok", data: { ...baseData, bunRuntimeSource: "bundled" } });
-    expect(lines.some(l => l.includes("OPENCODEX_BUN_PATH"))).toBe(true);
+    expect(lines.some(l => l.includes("CCX_BUN_PATH"))).toBe(true);
     // Version-claiming, never binary-claiming.
     expect(lines.join("\n")).not.toContain("bundled binary");
   });
 
-  test("guidance gating: an active override is never told to set OPENCODEX_BUN_PATH again (#848)", () => {
+  test("guidance gating: an active override is never told to set CCX_BUN_PATH again (#848)", () => {
     const lines = formatServiceMemoryLines({
       status: "ok",
       data: { ...baseData, bunRuntimeSource: "override" },
     });
     const text = lines.join("\n");
-    expect(text).toContain("OPENCODEX_BUN_PATH is already active");
-    expect(text).not.toContain("set OPENCODEX_BUN_PATH to a runtime you trust");
+    expect(text).toContain("CCX_BUN_PATH is already active");
+    expect(text).not.toContain("set CCX_BUN_PATH to a runtime you trust");
     // The affected-version warning itself must survive; only the remedy changes.
     expect(text).toContain("affected by the upstream Bun memory issue");
   });
@@ -470,7 +482,7 @@ describe("service memory section (#314 WP4)", () => {
     const { bunRuntimeSource: _omitted, ...legacy } = { ...baseData, bunRuntimeSource: undefined };
     const text = formatServiceMemoryLines({ status: "ok", data: legacy as ServiceMemoryData }).join("\n");
     expect(text).toContain("records no runtime origin");
-    expect(text).not.toContain("set OPENCODEX_BUN_PATH to a runtime you trust");
+    expect(text).not.toContain("set CCX_BUN_PATH to a runtime you trust");
   });
 
   test("guidance gating: a process-provenance runtime is not described as bundled", () => {
@@ -479,7 +491,7 @@ describe("service memory section (#314 WP4)", () => {
       data: { ...baseData, bunRuntimeSource: "process" },
     }).join("\n");
     expect(text).toContain("the runtime that launched it");
-    expect(text).toContain("set OPENCODEX_BUN_PATH to a runtime you trust");
+    expect(text).toContain("set CCX_BUN_PATH to a runtime you trust");
   });
 
   test("guidance gating: darwin auto-off or fixed Windows runtime prints no override guidance", () => {
@@ -491,13 +503,13 @@ describe("service memory section (#314 WP4)", () => {
         eagerRelay: { useEagerRelay: false, reason: "auto-known-bad" },
       },
     });
-    expect(darwin.some(l => l.includes("OPENCODEX_BUN_PATH"))).toBe(false);
+    expect(darwin.some(l => l.includes("CCX_BUN_PATH"))).toBe(false);
 
     const fixedRuntime = formatServiceMemoryLines({
       status: "ok",
       data: { ...baseData, eagerRelay: { useEagerRelay: true, reason: "auto-fixed-runtime" } },
     });
-    expect(fixedRuntime.some(l => l.includes("OPENCODEX_BUN_PATH"))).toBe(false);
+    expect(fixedRuntime.some(l => l.includes("CCX_BUN_PATH"))).toBe(false);
   });
 
   test("unauthorized and unreachable render honest lines without fake data", () => {
@@ -519,15 +531,15 @@ describe("service memory section (#314 WP4)", () => {
     const hint = proxyDownRestartHint({ proxyRunning: false, port: 10100, serviceViable: false });
     expect(hint).toContain("error sending request for url");
     expect(hint).toContain("127.0.0.1:10100");
-    expect(hint).toContain("ocx start");
-    expect(hint).toContain("ocx service install");
+    expect(hint).toContain("ccx start");
+    expect(hint).toContain("ccx service install");
   });
 
-  test("proxyDownRestartHint prefers 'ocx service start' when a service is installed", () => {
+  test("proxyDownRestartHint prefers 'ccx service start' when a service is installed", () => {
     const hint = proxyDownRestartHint({ proxyRunning: false, port: 12000, serviceViable: true });
-    expect(hint).toContain("ocx service start");
+    expect(hint).toContain("ccx service start");
     expect(hint).toContain("127.0.0.1:12000");
-    expect(hint).not.toContain("ocx service install");
+    expect(hint).not.toContain("ccx service install");
   });
 
   // 260804 #970 follow-up: serviceViable=false conflates "no service" with "registered
@@ -535,14 +547,14 @@ describe("service memory section (#314 WP4)", () => {
   // costs a UAC prompt on Windows and can switch a WinSW backend to Task Scheduler.
   test("an installed but unhealthy service is pointed at repair, not install", () => {
     const broken = proxyDownRestartHint({ proxyRunning: false, port: 10100, serviceViable: false, serviceInstalled: true });
-    expect(broken).toContain("ocx service repair");
-    expect(broken).not.toContain("ocx service install");
+    expect(broken).toContain("ccx service repair");
+    expect(broken).not.toContain("ccx service install");
 
     const absent = proxyDownRestartHint({ proxyRunning: false, port: 10100, serviceViable: false, serviceInstalled: false });
-    expect(absent).toContain("ocx service install");
+    expect(absent).toContain("ccx service install");
 
     // A two-manager conflict must be uninstalled first; repairService() refuses it.
     const conflict = proxyDownRestartHint({ proxyRunning: false, port: 10100, serviceViable: false, serviceInstalled: true, serviceConflict: true });
-    expect(conflict).toContain("ocx service install");
+    expect(conflict).toContain("ccx service install");
   });
 });

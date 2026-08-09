@@ -14,11 +14,11 @@ import {
   setIntegrationMutationFlightTestHooks,
   setIntegrationPathTestHooks,
 } from "../src/server/management/integration-routes";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 /**
- * Route contract for devlog/_fin/260802_client_toggle_api/040 §6-§7.
+ * Route contract for implementation contract §6-§7.
  *
  * Every refusal here is produced by the real writer against a real temp HOME
  * and a real temp store. A status-only fake would let a branch that never
@@ -61,16 +61,17 @@ const routeEnv = {} as NodeJS.ProcessEnv;
  * scanner sees no literal secret while the running config still holds a
  * serializable one — without that, "no key leaked" asserts nothing.
  */
-const REAL_LOOKING_KEY = ["ocx", "live", "9f3c7a2b41d84e6fa05c8e17b3d92764"].join("_");
+const REAL_LOOKING_KEY = ["ccx", "live", "9f3c7a2b41d84e6fa05c8e17b3d92764"].join("_");
 
 const MODELS_FIXTURE: ExportModel[] = [
   { namespaced: "a/m1", provider: "a", id: "m1", contextWindow: 128_000 },
 ];
 const GENERIC_INTEGRATION_CLIENT_IDS = INTEGRATION_CLIENT_IDS.filter(clientId => clientId !== "opencode");
 
-function baseConfig(): OcxConfig {
+function baseConfig(): CodexCommanderConfig {
   return {
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     hostname: "127.0.0.1",
     defaultProvider: "a",
     apiKeys: [{ id: "key-1", name: "default", key: REAL_LOOKING_KEY, createdAt: new Date(0).toISOString() }],
@@ -84,13 +85,13 @@ function baseConfig(): OcxConfig {
         modelContextWindows: { m1: 128_000 },
       },
     },
-  } as unknown as OcxConfig;
+  } as unknown as CodexCommanderConfig;
 }
 
-let config: OcxConfig;
+let config: CodexCommanderConfig;
 
 beforeEach(() => {
-  base = mkdtempSync(join(tmpdir(), "ocx-management-integrations-"));
+  base = mkdtempSync(join(tmpdir(), "ccx-management-integrations-"));
   home = join(base, "home");
   storeRoot = join(base, "store", "integrations");
   mkdirSync(home, { recursive: true });
@@ -303,7 +304,7 @@ describe("PUT /api/client-integrations/:clientId", () => {
     expect(applyBody.ok).toBe(true);
     expect(applyBody.changed).toBe(true);
     expect(typeof applyBody.opId).toBe("string");
-    expect(readFileSync(configPath, "utf8")).toContain("opencodex");
+    expect(readFileSync(configPath, "utf8")).toContain("codexcommander");
     expect((await (await api("/api/client-integrations/hermes")).json() as { state: string }).state).toBe("current");
 
     const disabled = await put("hermes", false);
@@ -311,7 +312,7 @@ describe("PUT /api/client-integrations/:clientId", () => {
     const disableBody = await disabled.json() as { ok: boolean; changed: boolean };
     expect(disableBody.ok).toBe(true);
     expect(disableBody.changed).toBe(true);
-    expect(readFileSync(configPath, "utf8")).not.toContain("opencodex");
+    expect(readFileSync(configPath, "utf8")).not.toContain("codexcommander");
 
     // Two immutable rows: the journal records history, it does not fold it.
     expect(store.listOperations("hermes").map(row => row.kind)).toEqual(["disable", "apply"]);
@@ -455,7 +456,7 @@ describe("refusals", () => {
     // asserting it, a refusal could arrive stripped of the one field that
     // tells the user which config to look at.
     expect(body.message).toBe(
-      `${configPath} changed after opencodex wrote it; disabling would discard that edit`,
+      `${configPath} changed after CodexCommander wrote it; disabling would discard that edit`,
     );
     expect(readFileSync(configPath, "utf8")).toBe(edited);
     expect(store.listOperations()).toHaveLength(journalBefore);
@@ -817,12 +818,12 @@ describe("admission", () => {
      * Only a real listener can show that, so this one starts one and lets an
      * unauthenticated mutation try to reach the route.
      */
-    const previousOpencodexHome = process.env.OPENCODEX_HOME;
-    const previousAdmin = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+    const previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+    const previousAdmin = process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
     const serverHome = join(base, "server-home");
     mkdirSync(serverHome, { recursive: true });
-    process.env.OPENCODEX_HOME = serverHome;
-    process.env.OPENCODEX_ADMIN_AUTH_TOKEN = ["admission", "secret", "fixture"].join("-");
+    process.env.CODEXCOMMANDER_HOME = serverHome;
+    process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = ["admission", "secret", "fixture"].join("-");
     installHermes();
 
     const { saveConfig } = await import("../src/config");
@@ -837,7 +838,7 @@ describe("admission", () => {
         body: JSON.stringify({ enabled: true }),
       });
       expect(unauthenticated.status).toBe(401);
-      expect(await unauthenticated.json()).toEqual({ error: "opencodex admin token required" });
+      expect(await unauthenticated.json()).toEqual({ error: "CodexCommander admin token required" });
       // Admission ran first, so the route never wrote and never journaled.
       expect(existsSync(hermesConfigPath())).toBe(false);
       expect(store.listOperations()).toHaveLength(0);
@@ -847,7 +848,7 @@ describe("admission", () => {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
-          "x-opencodex-api-key": process.env.OPENCODEX_ADMIN_AUTH_TOKEN ?? "",
+          "x-codexcommander-api-key": process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN ?? "",
         },
         body: JSON.stringify({ enabled: true }),
       });
@@ -858,17 +859,17 @@ describe("admission", () => {
       const crossOrigin = await fetch(new URL("/api/client-integrations", server.url), {
         headers: {
           Origin: "http://attacker.test",
-          "x-opencodex-api-key": process.env.OPENCODEX_ADMIN_AUTH_TOKEN ?? "",
+          "x-codexcommander-api-key": process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN ?? "",
         },
       });
       expect(crossOrigin.status).toBe(403);
       expect(await crossOrigin.json()).toEqual({ error: "cross-origin request blocked" });
     } finally {
       await server.stop(true);
-      if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousOpencodexHome;
-      if (previousAdmin === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
-      else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdmin;
+      if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
+      if (previousAdmin === undefined) delete process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
+      else process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = previousAdmin;
     }
   });
 
@@ -879,7 +880,7 @@ describe("admission", () => {
      * SECOND store is seeded and compared byte-for-byte, and — the part that
      * actually matters — the DEFAULT store the route would fall back to is
      * inventoried before and after. Comparing only a second temp directory
-     * proves nothing about the developer's own `~/.opencodex/integrations`,
+     * proves nothing about the developer's own `~/.codexcommander/integrations`,
      * which is the directory a lost seam would write to.
      */
     const defaultRoot = createIntegrationStateStore().root;
@@ -894,7 +895,7 @@ describe("admission", () => {
       at: new Date(0).toISOString(),
       configPath: join(base, "elsewhere", "config.yaml"),
       snapshot: { kind: "stored", relPath: join("snapshots", "hermes", "seeded-op") },
-      resultFingerprint: "seeded",
+      resultFingerprint: "5".repeat(16),
       resultAbsent: false,
       priorRecord: null,
     });
@@ -939,14 +940,14 @@ describe("admission", () => {
      * obtains it — from the meta tags injected into the served page — and both
      * requests go over the wire.
      */
-    const previousOpencodexHome = process.env.OPENCODEX_HOME;
-    const previousAdmin = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+    const previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+    const previousAdmin = process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
     const serverHome = join(base, "csrf-server-home");
     mkdirSync(serverHome, { recursive: true });
-    process.env.OPENCODEX_HOME = serverHome;
+    process.env.CODEXCOMMANDER_HOME = serverHome;
     // A GUI session is only issued when no admin token is configured; with one
     // set, `isApiAuthRequired` declines and there is no CSRF pair to test.
-    delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+    delete process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
     installHermes();
 
     const { saveConfig } = await import("../src/config");
@@ -967,8 +968,8 @@ describe("admission", () => {
       const html = await page.text();
       const meta = (name: string): string =>
         new RegExp(`<meta name="${name}" content="([^"]*)">`).exec(html)?.[1] ?? "";
-      const token = meta("opencodex-session-token");
-      const csrf = meta("opencodex-session-csrf");
+      const token = meta("codexcommander-session-token");
+      const csrf = meta("codexcommander-session-csrf");
       if (!token || !csrf) {
         /*
          * No built GUI, so no page to carry the session pair. The server owns
@@ -992,8 +993,8 @@ describe("admission", () => {
       const guiHeaders = {
         Origin: origin,
         "Content-Type": "application/json",
-        "x-opencodex-api-key": token,
-        "x-opencodex-gui-origin": origin,
+        "x-codexcommander-api-key": token,
+        "x-codexcommander-gui-origin": origin,
       };
 
       const withoutCsrf = await fetch(target, {
@@ -1009,16 +1010,16 @@ describe("admission", () => {
       // The control: the same request WITH the CSRF token reaches the route.
       const withCsrf = await fetch(target, {
         method: "PUT",
-        headers: { ...guiHeaders, "x-opencodex-csrf-token": csrf },
+        headers: { ...guiHeaders, "x-codexcommander-csrf-token": csrf },
         body: JSON.stringify({ enabled: true }),
       });
       expect(withCsrf.status).toBe(200);
       expect(store.listOperations("hermes")).toHaveLength(1);
     } finally {
       await server.stop(true);
-      if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousOpencodexHome;
-      if (previousAdmin !== undefined) process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdmin;
+      if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
+      if (previousAdmin !== undefined) process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = previousAdmin;
     }
   });
 });

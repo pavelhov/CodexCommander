@@ -1,5 +1,5 @@
 /**
- * The key list, as a table (devlog 260802/020, revised after the maintainer asked
+ * The key list, as a table (implementation contract, revised after the maintainer asked
  * for a top strip instead of a side rail).
  *
  * This replaces the workspace rail. A rail and a content pane were two vertical

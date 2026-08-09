@@ -1,6 +1,6 @@
 # 07 — Design Methodology for New Surfaces
 
-When adding or redesigning a GUI page, CLI wizard, or user-facing flow in opencodex,
+When adding or redesigning a GUI page, CLI wizard, or user-facing flow in CodexCommander,
 follow the PABCD Catalog Discovery stage ordering (CATALOG-DESIGN-FIRST-01):
 
 1. **Design/UX decisions first** (Product-Personality-Selection): mood, density, lightness,
@@ -10,7 +10,7 @@ follow the PABCD Catalog Discovery stage ordering (CATALOG-DESIGN-FIRST-01):
 3. **Backend wiring derived last**: API endpoints, data structures, and state management
    are consequences of the above, not independent decisions.
 
-This is a design-first rule for contributors, not a runtime feature: opencodex is infrastructure
+This is a design-first rule for contributors, not a runtime feature: CodexCommander is infrastructure
 plumbing, not a product-creation tool, so surface coherence is enforced by review rather than by an
 interview engine. The rule stands on its own; it does not depend on an external document.
 
@@ -23,7 +23,7 @@ surface list lives in `gui/src/app-routing.ts` and
 | Surface | Current design | Notes |
 |---|---|---|
 | Dashboard | Data-dense, light, rounded, sans-serif | Default Bun/React template aesthetic |
-| `ocx init` CLI | Flat numbered menu, no personality | Could benefit from staged approach |
+| `ccx init` CLI | Flat numbered menu, no personality | Could benefit from staged approach |
 | Add Provider modal | Functional form | Minimal styling |
 | Logs page | Dense table, monospace | Appropriate for log viewing |
 

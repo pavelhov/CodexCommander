@@ -167,7 +167,7 @@ describe("claude outbound SSE", () => {
       sse("response.completed", { response: { status: "completed", usage: { input_tokens: 120, output_tokens: 30, input_tokens_details: { cached_tokens: 100, cache_write_tokens: 5 } } } }),
     ].join("");
 
-    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "claude-ocx-test"));
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "claude-ccx2-test"));
     const names = events.map(e => e.name);
     expect(names).toEqual([
       "message_start", "ping",
@@ -180,7 +180,7 @@ describe("claude outbound SSE", () => {
 
     const start = events[0].data;
     expect(start.type).toBe("message_start");
-    expect(start.message).toMatchObject({ type: "message", role: "assistant", content: [], model: "claude-ocx-test", stop_reason: null });
+    expect(start.message).toMatchObject({ type: "message", role: "assistant", content: [], model: "claude-ccx2-test", stop_reason: null });
 
     // thinking block: index 0, thinking_delta then synthetic signature_delta before stop
     expect(events[2].data.content_block).toEqual({ type: "thinking", thinking: "", signature: "" });
@@ -391,12 +391,12 @@ describe("claude outbound SSE", () => {
     expect(e1.at(-1)!.name).toBe("message_stop");
 
     // Truncation must surface as a retryable Anthropic error event, not a polite
-    // end_turn close (devlog 100: silent-truncation gateway failure pattern).
+    // end_turn close (implementation contract: silent-truncation gateway failure pattern).
     const eof = sse("response.created", { response: {} }) + sse("response.output_text.delta", { delta: "y" });
     const e2 = await collectEvents(responsesSseToAnthropicSse(streamFrom(eof), "m"));
     expect(e2.map(e => e.name)).toEqual(["message_start", "ping", "content_block_start", "content_block_delta", "content_block_stop", "error"]);
     // Truncation is upstream-derived transient (502) -> overloaded_error so Claude Code retries
-    // (devlog/_plan/260716_claudecode_hardening/020).
+    // (implementation contract).
     expect(e2.at(-1)!.data).toMatchObject({ type: "error", error: { type: "overloaded_error" } });
   });
 
@@ -540,9 +540,9 @@ describe("claude outbound non-stream + helpers", () => {
         { type: "function_call", id: "f", call_id: "toolu_1", name: "Read", arguments: "{\"a\":1}" },
       ],
       usage: { input_tokens: 10, output_tokens: 4 },
-    }, "claude-ocx-x") as any;
+    }, "claude-ccx2-x") as any;
     expect(msg.type).toBe("message");
-    expect(msg.model).toBe("claude-ocx-x");
+    expect(msg.model).toBe("claude-ccx2-x");
     expect(msg.stop_reason).toBe("tool_use");
     expect(msg.content[0]).toMatchObject({ type: "thinking", thinking: "think" });
     expect(msg.content[1]).toEqual({ type: "text", text: "hi" });
@@ -673,7 +673,7 @@ describe("claude outbound web_search translation", () => {
         { type: "message", id: "m", role: "assistant", content: [{ type: "output_text", text: "done" }] },
       ],
       usage: { input_tokens: 5, output_tokens: 1 },
-    }, "claude-ocx-x") as Record<string, any>;
+    }, "claude-ccx2-x") as Record<string, any>;
     expect(msg.stop_reason).toBe("end_turn");
     expect(msg.content[0]).toEqual({ type: "server_tool_use", id: "ws_1", name: "web_search", input: { query: "latest bun release" } });
     expect(msg.content[1]).toMatchObject({ type: "web_search_tool_result", tool_use_id: "ws_1" });
@@ -764,7 +764,7 @@ describe("sanitizeWebSearchInput (#381)", () => {
         }),
       }],
       usage: { input_tokens: 3, output_tokens: 1 },
-    }, "claude-ocx-native--gpt-5.6-sol") as Record<string, any>;
+    }, "claude-ccx2-native--gpt-5.6-sol") as Record<string, any>;
     expect(msg.stop_reason).toBe("tool_use");
     expect(msg.content[0]).toEqual({
       type: "tool_use",

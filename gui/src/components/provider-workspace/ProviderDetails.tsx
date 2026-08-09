@@ -22,6 +22,7 @@ import { UnsavedLeaveDialog } from "./ProviderDialogs";
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
 import type { AccountLoadState, ProviderModelUsageRow, ProviderUsageTotals, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers, ProviderUpdatePatch } from "./types";
 import type { ProviderRouteTab } from "../../provider-route";
+import { accountNeedsReauth } from "../../oauth-health-display";
 
 type Tab = ProviderRouteTab;
 
@@ -71,7 +72,7 @@ export default function ProviderDetails({
   oauthEmail?: string;
   onDeselect: () => void;
   apiBase: string;
-  oauth?: { loggedIn: boolean; email?: string; error?: string; needsReauth?: boolean };
+  oauth?: { loggedIn: boolean; email?: string; error?: string };
   accounts?: OAuthAccountRow[];
   accountLoadState?: AccountLoadState;
   switchingAccountId?: string | null;
@@ -129,9 +130,9 @@ export default function ProviderDetails({
   const connectionIdentity = JSON.stringify([
     codexController?.activeId ?? "",
     accounts?.find(account => account.active)?.id ?? "",
+    accounts?.find(account => account.active)?.health?.status ?? "",
     keys?.find(entry => entry.active)?.id ?? "",
     oauth?.loggedIn === undefined ? "" : String(oauth.loggedIn),
-    oauth?.needsReauth === undefined ? "" : String(oauth.needsReauth),
     oauthEmail ?? "",
   ]);
   const tabs = useMemo<{ id: Tab; label: string }[]>(() => [
@@ -268,8 +269,8 @@ export default function ProviderDetails({
                 ? () => {
                     if (item.authMode === "oauth") {
                       const rows = accounts ?? [];
-                      const active = rows.find(a => a.active && a.needsReauth)
-                        ?? rows.find(a => a.needsReauth);
+                      const active = rows.find(a => a.active && accountNeedsReauth(a))
+                        ?? rows.find(a => accountNeedsReauth(a));
                       void authHandlers?.onReauth(item.name, active?.id);
                       return;
                     }
@@ -290,10 +291,7 @@ export default function ProviderDetails({
             selectedModels={selectedModels}
             modelsLoading={modelsLoading}
             modelsLoadFailed={modelsLoadFailed}
-            needsReauth={
-              (accounts ?? []).some(account => account.active && account.needsReauth)
-              || oauth?.needsReauth === true
-            }
+            reauthRequired={(accounts ?? []).some(account => account.active && accountNeedsReauth(account))}
             onRetryModels={onRetryModels}
             onOpenAccounts={authSurface ? () => switchTab("accounts") : undefined}
           />

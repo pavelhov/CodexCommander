@@ -7,7 +7,7 @@ import {
   type GajaeGeneratedConfig,
   type PiGeneratedConfig,
 } from "../src/clients/config-export";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 /**
  * Sibling of catalog-input-modality-enum.test.ts, whose incident this repeats
@@ -18,19 +18,19 @@ import type { OcxConfig } from "../src/types";
  * Gajae falls back to its built-in list, Pi returns an empty model config. This
  * actually happened: zenmux advertises audio on meta-muse-spark-1.1, we wrote it
  * through verbatim, and gjc reported
- * `/providers/opencodex/models/30/input/2: Invalid option: expected one of
+ * `/providers/codexcommander/models/30/input/2: Invalid option: expected one of
  * "text"|"image"` while showing none of the routed models.
  *
  * The per-entry tests in client-config-export.test.ts all passed while that file
  * was broken, which is why the whole-catalog assertion at the bottom exists.
  */
 
-const CONFIG: OcxConfig = {
+const CONFIG: CodexCommanderConfig = {
   port: 10100,
   hostname: "127.0.0.1",
   defaultProvider: "mock",
   providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" } },
-} as unknown as OcxConfig;
+} as unknown as CodexCommanderConfig;
 
 function ctx(models: ExportModel[]): ExportContext {
   return { baseUrl: "http://127.0.0.1:10100/v1", models, config: CONFIG };
@@ -56,7 +56,7 @@ const MIXED: ExportModel = {
 };
 
 /**
- * Reachable three ways: `ocx models add --modalities audio` (src/cli/models.ts),
+ * Reachable three ways: `ccx models add --modalities audio` (src/cli/models.ts),
  * POST /api/custom-models (model-routes.ts ALLOWED_INPUT_MODALITIES), and
  * provider discovery returning an audio-only list.
  */

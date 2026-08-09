@@ -13,7 +13,7 @@ import {
   upsertOAuthProvider,
 } from "../src/oauth";
 import { handleManagementAPI } from "../src/server/management-api";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import type { OAuthController } from "../src/oauth/types";
 import { getCredential } from "../src/oauth/store";
 import * as oauthStore from "../src/oauth/store";
@@ -21,18 +21,18 @@ import { armClaudeCodeBaseline, loadConfig, saveConfig, saveConfigPreservingClau
 import { isApiAuthRequired, requireApiAuth } from "../src/server/auth-cors";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-oauth-public-surface");
-const previousHome = process.env.OPENCODEX_HOME;
+const previousHome = process.env.CODEXCOMMANDER_HOME;
 const canonical = {
   adapter: "openai-responses",
   baseUrl: "https://chatgpt.com/backend-api/codex",
   authMode: "forward" as const,
 };
 
-function config(): OcxConfig {
+function config(): CodexCommanderConfig {
   return {
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "openai",
-    openaiProviderTierVersion: 2,
     providers: { openai: { ...canonical, codexAccountMode: "pool" } },
   };
 }
@@ -41,13 +41,13 @@ beforeEach(() => {
   clearLoginState("xai");
   rmSync(TEST_DIR, { recursive: true, force: true });
   mkdirSync(TEST_DIR, { recursive: true });
-  process.env.OPENCODEX_HOME = TEST_DIR;
+  process.env.CODEXCOMMANDER_HOME = TEST_DIR;
 });
 
 afterEach(() => {
   clearLoginState("xai");
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   rmSync(TEST_DIR, { recursive: true, force: true });
 });
 

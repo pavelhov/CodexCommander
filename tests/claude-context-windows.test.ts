@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { AUTO_COMPACT_WINDOW_DEFAULT, boundedContextWindows, buildClaudeContextWindows, effectiveModelEnv, resolveAutoContext, shouldMarkOneMillion, withOneMillionMarker } from "../src/claude/context-windows";
 import { desktop3pAlias } from "../src/claude/desktop-3p";
 
-describe("claude context-window map (devlog 260712 B2)", () => {
+describe("claude context-window map (implementation contract B2)", () => {
   const routed = [
     { provider: "cursor", id: "gpt-5.6-luna", contextWindow: 1_000_000 },
     { provider: "opencode-go", id: "glm-5.2", contextWindow: 1_000_000 },
@@ -14,17 +14,17 @@ describe("claude context-window map (devlog 260712 B2)", () => {
     const map = buildClaudeContextWindows([], routed);
     expect(map["cursor/gpt-5.6-luna"]).toBe(1_000_000);
     expect(map[desktop3pAlias("cursor", "gpt-5.6-luna")]).toBe(1_000_000);
-    expect(map["claude-ocx-cursor--gpt-5.6-luna"]).toBe(1_000_000);
+    expect(map["claude-ccx2-cursor--gpt-5.6-luna"]).toBe(1_000_000);
     expect(map["mock/small-model"]).toBe(128_000);
     expect(map["mock/no-window"]).toBeUndefined();
   });
 
-  test("registers native slugs (bare + desktop alias + legacy alias)", () => {
+  test("registers native slugs (bare + desktop alias + readable alias)", () => {
     const map = buildClaudeContextWindows(["gpt-5.6-sol", "gpt-5.4"], []);
     // Authoritative native overrides: gpt-5.6 natives 372k, gpt-5.4 native 1M.
     expect(map["gpt-5.6-sol"]).toBe(372_000);
     expect(map[desktop3pAlias("native", "gpt-5.6-sol")]).toBe(372_000);
-    expect(map["claude-ocx-native--gpt-5.6-sol"]).toBe(372_000);
+    expect(map["claude-ccx2-native--gpt-5.6-sol"]).toBe(372_000);
     expect(map["gpt-5.4"]).toBe(1_000_000);
   });
 
@@ -48,26 +48,16 @@ describe("claude context-window map (devlog 260712 B2)", () => {
     expect(withOneMillionMarker(undefined, windows)).toBeUndefined();
   });
 
-  test("effectiveModelEnv emits the exact six-slot map with the effective-haiku contract", () => {
+  test("effectiveModelEnv emits the two helper-model slots", () => {
     const windows = { "cursor/gpt-5.6-luna": 1_000_000, "mock/small-model": 128_000 };
     const env = effectiveModelEnv({
-      model: "cursor/gpt-5.6-luna",
       smallFastModel: "mock/small-model",
-      tierModels: { opus: "cursor/gpt-5.6-luna", sonnet: "mock/small-model" },
     }, windows);
-    expect(env.ANTHROPIC_MODEL).toBe("cursor/gpt-5.6-luna[1m]");
-    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("cursor/gpt-5.6-luna[1m]");
-    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("mock/small-model");
-    // effective-haiku: tierModels.haiku absent -> smallFastModel feeds BOTH haiku vars.
+    expect(env.ANTHROPIC_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
     expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("mock/small-model");
     expect(env.ANTHROPIC_SMALL_FAST_MODEL).toBe("mock/small-model");
     expect(env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBeUndefined();
-  });
-
-  test("tierModels.haiku wins over smallFastModel for both haiku vars", () => {
-    const env = effectiveModelEnv({ smallFastModel: "a", tierModels: { haiku: "b" } }, {});
-    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("b");
-    expect(env.ANTHROPIC_SMALL_FAST_MODEL).toBe("b");
   });
 
   test("boundedContextWindows resolves null on a slow acquisition (deterministic delay fixture)", async () => {
@@ -78,7 +68,7 @@ describe("claude context-window map (devlog 260712 B2)", () => {
   });
 });
 
-describe("auto-context (devlog 260712 020 + audit 021)", () => {
+describe("auto-context (implementation contract 020 + audit 021)", () => {
   test("resolveAutoContext: default on at 350k, valid custom, range fallback, off switches", () => {
     expect(resolveAutoContext(undefined)).toEqual({ enabled: true, compactWindow: AUTO_COMPACT_WINDOW_DEFAULT });
     expect(resolveAutoContext({ autoCompactWindow: 300_000 })).toEqual({ enabled: true, compactWindow: 300_000 });
@@ -86,8 +76,6 @@ describe("auto-context (devlog 260712 020 + audit 021)", () => {
     expect(resolveAutoContext({ autoCompactWindow: 50_000 }).compactWindow).toBe(AUTO_COMPACT_WINDOW_DEFAULT);
     expect(resolveAutoContext({ autoCompactWindow: 2_000_000 }).compactWindow).toBe(AUTO_COMPACT_WINDOW_DEFAULT);
     expect(resolveAutoContext({ autoContext: false }).enabled).toBe(false);
-    // Legacy maxContextTokens pair takes rule-1 precedence -> auto inert.
-    expect(resolveAutoContext({ maxContextTokens: 400_000 }).enabled).toBe(false);
   });
 
   test("user env override drives the predicate; invalid override disables auto (audit #2)", () => {
@@ -132,16 +120,16 @@ describe("auto-context (devlog 260712 020 + audit 021)", () => {
     expect(map["gpt-5.6-sol"]).toBe(372_000); // native override, not 999k
   });
 
-  test("effectiveModelEnv auto-marks a 372k native slot under the default auto mode", () => {
+  test("effectiveModelEnv auto-marks a 372k helper slot under the default auto mode", () => {
     const windows = buildClaudeContextWindows(["gpt-5.6-sol"], []);
-    const env = effectiveModelEnv({ model: "gpt-5.6-sol" }, windows);
-    expect(env.ANTHROPIC_MODEL).toBe("gpt-5.6-sol[1m]");
+    const env = effectiveModelEnv({ smallFastModel: "gpt-5.6-sol" }, windows);
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("gpt-5.6-sol[1m]");
     // Readable-alias slot value gets the same marking (audit 051 #4).
-    const readable = effectiveModelEnv({ model: "claude-ocx-native--gpt-5.6-sol" }, windows);
-    expect(readable.ANTHROPIC_MODEL).toBe("claude-ocx-native--gpt-5.6-sol[1m]");
+    const readable = effectiveModelEnv({ smallFastModel: "claude-ccx2-native--gpt-5.6-sol" }, windows);
+    expect(readable.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("claude-ccx2-native--gpt-5.6-sol[1m]");
     // Explicit off: no marking below 1M.
-    const off = effectiveModelEnv({ model: "gpt-5.6-sol", autoContext: false }, windows);
-    expect(off.ANTHROPIC_MODEL).toBe("gpt-5.6-sol");
+    const off = effectiveModelEnv({ smallFastModel: "gpt-5.6-sol", autoContext: false }, windows);
+    expect(off.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("gpt-5.6-sol");
   });
 
   test("[1m] handling is case-insensitive (audit #7)", () => {

@@ -28,12 +28,11 @@ const options = [
   { value: "gemini/gemini-3-flash", label: "gemini/gemini-3-flash" },
 ];
 
-function renderSetting(value: string, tierHaikuModel?: string): string {
+function renderSetting(value: string): string {
   return renderToStaticMarkup(
     <LanguageProvider>
       <SmallFastModelSetting
         value={value}
-        tierHaikuModel={tierHaikuModel}
         options={options}
         onChange={() => {}}
       />
@@ -48,14 +47,6 @@ test("unset background helper explains native selection and Sonnet cost", () => 
   expect(html).toContain("native Sonnet model");
   expect(html).toContain("may incur charges from your native provider");
   expect(html).toContain('role="status"');
-});
-
-test("tier Haiku override is the effective helper and hides the native warning", () => {
-  const html = renderSetting("", "mock/tier-haiku");
-  expect(html).toContain("Let Claude Code choose (native model)");
-  expect(html).toContain("background work such as chat summaries and topic detection");
-  expect(html).not.toContain("native Sonnet model");
-  expect(html).not.toContain('role="status"');
 });
 
 test("selected background helper keeps the neutral description and hides the native warning", () => {

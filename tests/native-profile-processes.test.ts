@@ -10,7 +10,7 @@ import {
 import { setTrustedWindowsSystemDirectoryResolverForTests } from "../src/lib/windows-elevation";
 
 async function withTrustedWindowsPowerShell<T>(run: (powershell: string) => Promise<T>): Promise<T> {
-  const systemDirectory = mkdtempSync(join(tmpdir(), "ocx-system32-"));
+  const systemDirectory = mkdtempSync(join(tmpdir(), "ccx-system32-"));
   const powershell = join(systemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
   mkdirSync(dirname(powershell), { recursive: true });
   writeFileSync(powershell, "");
@@ -156,7 +156,7 @@ describe("native profile process probe", () => {
   });
 
   test("kills and settles a timed-out child", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "ocx-native-probe-"));
+    const directory = mkdtempSync(join(tmpdir(), "ccx-native-probe-"));
     const survived = join(directory, "survived");
     const script = [
       `setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(survived)}, 'alive'), 300);`,

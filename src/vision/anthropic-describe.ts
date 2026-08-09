@@ -1,4 +1,4 @@
-import type { OcxProviderConfig } from "../types";
+import type { CodexCommanderProviderConfig } from "../types";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "../adapters/client-fingerprint";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
@@ -105,7 +105,7 @@ export async function describeImageAnthropic(
   detail: string | undefined,
   contextText: string,
   providerName: string,
-  provider: OcxProviderConfig,
+  provider: CodexCommanderProviderConfig,
   settings: VisionSettings,
   abortSignal?: AbortSignal,
 ): Promise<DescribeOutcome> {

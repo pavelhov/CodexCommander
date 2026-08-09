@@ -1,10 +1,10 @@
 ---
 title: 프로바이더
-description: opencodex가 LLM 프로바이더를 인증하고 통신하는 모든 방식 — OAuth, API 키, ChatGPT 포워드, 그리고 로컬.
+description: CodexCommander가 LLM 프로바이더를 인증하고 통신하는 모든 방식 — OAuth, API 키, ChatGPT 포워드, 그리고 로컬.
 ---
 
 **프로바이더**는 하나의 업스트림 LLM 엔드포인트와 거기에 도달하는 방법을 합친 것입니다: 어댑터, 베이스 URL, 인증
-모드, 그리고 선택적인 모델 목록으로 구성됩니다. 프로바이더는 `~/.opencodex/config.json`의 `providers` 아래에 위치합니다.
+모드, 그리고 선택적인 모델 목록으로 구성됩니다. 프로바이더는 `~/.codexcommander/config.json`의 `providers` 아래에 위치합니다.
 
 ## OpenAI 계정 모드
 
@@ -38,10 +38,6 @@ Codex 로그인을 Pool 모드로 사용하면 Providers 개요에는 임의의 
 판단을 변경하지 않습니다. 개별 계정 상태와 라우팅 제어는
 [Codex Auth 계정 풀](/ko/guides/web-dashboard/#codex-auth-and-account-pools)을 참고하세요.
 
-shipped v1 config는 marker 2의 단일 옵션 행으로 자동 이관됩니다. 원본은
-`~/.opencodex/config.json.pre-openai-tiers-v2.bak`에 한 번 보존되며 다음 명령으로 복원합니다:
-`cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`.
-
 ## 인증 모드
 
 프로바이더 설정에서 쓸 수 있는 `authMode`는 세 가지이며, 기본값은 `key`입니다. 빌트인 레지스트리는
@@ -51,7 +47,7 @@ shipped v1 config는 marker 2의 단일 옵션 행으로 자동 이관됩니다.
 | --- | --- | --- |
 | `key` | API 키를 전송합니다(`Authorization: Bearer …`, 또는 어댑터에 따라 `x-api-key` / `api-key`). 키는 리터럴이거나 `${ENV_VAR}` 참조일 수 있습니다. | 대부분의 프로바이더. |
 | `forward` | **수신된 Codex 인증 헤더를** 프로바이더에 그대로 중계합니다 — 키를 저장하지 않습니다. ChatGPT 로그인 패스스루입니다. | OpenAI (`openai-responses` 어댑터). |
-| `oauth` | 저장된 OAuth 액세스 토큰을 bearer 키로 사용하고 자격 증명 소유권을 따릅니다. OpenCodex 소유 자격 증명은 만료 전에 갱신되며, 연결된 Grok/Kimi CLI 자격 증명은 읽기 전용으로 채택되어 네이티브 CLI 소유로 유지됩니다. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor. |
+| `oauth` | 저장된 OAuth 액세스 토큰을 bearer 키로 사용하고 자격 증명 소유권을 따릅니다. CodexCommander 소유 자격 증명은 만료 전에 갱신되며, 연결된 Grok/Kimi CLI 자격 증명은 읽기 전용으로 채택되어 네이티브 CLI 소유로 유지됩니다. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor. |
 
 [`retryOn429`](/ko/reference/configuration/)（동일 키 429 재시도）는 API 키 프로바이더
 （`authMode: "key"`）에만 적용됩니다. OAuth·forward·로컬 프리셋은 제외됩니다 — 같은 토큰을
@@ -84,40 +80,40 @@ ChatGPT 패스스루 카탈로그에는 GPT-5.6 Sol/Terra/Luna의 네임스페�
 ## 2. 계정 로그인 (OAuth)
 
 OAuth 로그인을 사용하는 프로바이더 프리셋은 일곱 개이며, 여기에 실험적 비공식 디바이스 플로우
-브리지를 쓰는 GitHub Copilot이 추가됩니다. 자격 증명은 `~/.opencodex/auth.json`에 저장됩니다.
-OpenCodex 소유 자격 증명은 자동 갱신됩니다. 로그인된 Grok 또는 Kimi CLI 세션을 연결하면
-opencodex는 현재 액세스 세대를 읽기 전용으로 채택하고 갱신 책임은 네이티브 CLI에 남깁니다.
+브리지를 쓰는 GitHub Copilot이 추가됩니다. 자격 증명은 `~/.codexcommander/auth.json`에 저장됩니다.
+CodexCommander 소유 자격 증명은 자동 갱신됩니다. 로그인된 Grok 또는 Kimi CLI 세션을 연결하면
+CodexCommander는 현재 액세스 세대를 읽기 전용으로 채택하고 갱신 책임은 네이티브 CLI에 남깁니다.
 로그인 CLI는 `chatgpt`도 받습니다. 이 명령은 ChatGPT 자격 증명을 발급받고 `forward` 모드
 프로바이더 항목을 만듭니다.
 
 ```bash
-ocx login xai          # xAI Grok
-ocx login anthropic    # Anthropic Claude (Pro/Max)
-ocx login kimi         # Moonshot Kimi
-ocx login kiro         # kiro-cli 자격 증명 가져오기(토큰 폴백 지원)
-ocx login google-antigravity
-ocx login cursor       # Cursor 전용 PKCE 로그인
-ocx login command-code # Command Code 브라우저 OAuth (또는 ~/.commandcode/auth.json 가져오기)
-ocx login github-copilot  # GitHub 디바이스 플로우 → Copilot 토큰 (Copilot Pro/Business)
-ocx login chatgpt      # 별도 ChatGPT OAuth 로그인
-ocx logout <provider>
+ccx login xai          # xAI Grok
+ccx login anthropic    # Anthropic Claude (Pro/Max)
+ccx login kimi         # Moonshot Kimi
+ccx login kiro         # kiro-cli 자격 증명 가져오기(토큰 폴백 지원)
+ccx login google-antigravity
+ccx login cursor       # Cursor 전용 PKCE 로그인
+ccx login command-code # Command Code 브라우저 OAuth (또는 ~/.commandcode/auth.json 가져오기)
+ccx login github-copilot  # GitHub 디바이스 플로우 → Copilot 토큰 (Copilot Pro/Business)
+ccx login chatgpt      # 별도 ChatGPT OAuth 로그인
+ccx logout <provider>
 ```
 
 | 프로바이더 | 어댑터 | 베이스 URL | 비고 |
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://api.x.ai/v1` | 실시간 목록을 우선 사용하며, 폴백 기본 모델은 `grok-4.5`입니다. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude 모델; 실시간 모델 목록은 `/v1/models`에서 가져옵니다. |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K3(`k3`, 1M 컨텍스트), 고정 윈도우 `k3-256k`, 호환 별칭 `k3[1m]`, 레거시 K2.7/K2.6/K2.5 코딩 모델. |
-| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 최초 로그인은 설치하고 로그인한 `kiro-cli` 세션을 가져옵니다(Unix에서는 `curl -fsSL https://cli.kiro.dev/install | bash`, Windows PowerShell에서는 `irm 'https://cli.kiro.dev/install.ps1' | iex`로 설치한 뒤 `kiro-cli login` 실행). **계정 추가**는 `kiro-cli`에서 로그아웃한 뒤 새 브라우저 로그인을 시작하여 `kiro-cli` 자체의 계정을 전환하고, 계정별 프로필 메타데이터를 저장합니다. 기존 OpenCodex 계정은 유지되며, 취소되거나 실패하면 이전 `kiro-cli` 세션을 복원합니다. |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K3(`k3`, 1M 컨텍스트), 고정 윈도우 `k3-256k`, 호환 별칭 `k3[1m]`, K2.7/K2.6/K2.5 코딩 모델. |
+| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 최초 로그인은 설치하고 로그인한 `kiro-cli` 세션을 가져옵니다(Unix에서는 `curl -fsSL https://cli.kiro.dev/install | bash`, Windows PowerShell에서는 `irm 'https://cli.kiro.dev/install.ps1' | iex`로 설치한 뒤 `kiro-cli login` 실행). **계정 추가**는 `kiro-cli`에서 로그아웃한 뒤 새 브라우저 로그인을 시작하여 `kiro-cli` 자체의 계정을 전환하고, 계정별 프로필 메타데이터를 저장합니다. 기존 CodexCommander 계정은 유지되며, 취소되거나 실패하면 이전 `kiro-cli` 세션을 복원합니다. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth를 Cloud Code Assist wire로 사용합니다. CCA가 범용 `/models` 엔드포인트를 제공하지 않으므로 유지 관리되는 6개 모델 정적 카탈로그를 사용합니다. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 실험적 PKCE 로그인, HTTP/2 전송, 계정별 모델 탐색을 지원합니다. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 실험적. GitHub 디바이스 플로우 + `copilot_internal` 교환(VS Code OAuth 클라이언트). 활성 Copilot 구독 필요; 공식 서드파티 API가 아닙니다. |
 
-정식 Kimi Coding Plan 프리셋(`kimi` 계정 로그인과 `kimi-code` API key)의 경우, opencodex는
+정식 Kimi Coding Plan 프리셋(`kimi` 계정 로그인과 `kimi-code` API key)의 경우, CodexCommander는
 호출자가 제공한 안정적인 `prompt_cache_key`만 Chat Completions 요청으로 전달하며 직접 생성하지
 않습니다. Kimi 문서는 Code Plan 캐시 적중률을 높이기 위해 안정적인 세션/작업 key가 필요하다고
 명시합니다. key가 없는 요청은 keyless 상태로 유지됩니다. opt-in한 업스트림이 이 필드를 거부해도
-opencodex는 필드를 제거해 재시도하거나 저장된 설정을 변경하지 않습니다. 다른 프로바이더는
+CodexCommander는 필드를 제거해 재시도하거나 저장된 설정을 변경하지 않습니다. 다른 프로바이더는
 deny-by-default 상태로 유지됩니다.
 
 [웹 대시보드](/ko/guides/web-dashboard/)에서도 OAuth를 시작할 수 있습니다.
@@ -127,25 +123,25 @@ deny-by-default 상태로 유지됩니다.
 자격 증명에 고정된 계정 id나 이메일이 있는 OAuth 프로바이더는 로그인을 여러 개 보관할 수 있습니다.
 Providers 페이지에서 계정을 추가하고, 다른 계정을 로그아웃하지 않은 채 활성 계정만 바꿀 수 있습니다.
 계정 식별 정보가 없는 Kimi 자격 증명만 활성 슬롯을 교체하며, Kiro 계정은 프로필 ARN을 키로 저장됩니다.
-`chatgpt`는 Codex 계정 풀에 별도 저장소가 있어 항상 단일 슬롯만 씁니다. 토큰은 `~/.opencodex/auth.json`에 저장되고,
+`chatgpt`는 Codex 계정 풀에 별도 저장소가 있어 항상 단일 슬롯만 씁니다. 토큰은 `~/.codexcommander/auth.json`에 저장되고,
 `/api/oauth/accounts`는 마스킹된 메타데이터만 반환합니다.
 
 ### Kiro 자격 증명 가져오기
 
-Kiro 로그인에는 Kiro CLI가 필요합니다. Unix에서는 `curl -fsSL https://cli.kiro.dev/install | bash`, Windows PowerShell에서는 `irm 'https://cli.kiro.dev/install.ps1' | iex`로 설치한 뒤 먼저 `kiro-cli login`으로 로그인하세요. `kiro-cli` 세션이 없으면 `ocx login kiro`는 붙여 넣은 액세스 토큰이나 `KIRO_ACCESS_TOKEN` 환경 변수로 폴백합니다.
+Kiro 로그인에는 Kiro CLI가 필요합니다. Unix에서는 `curl -fsSL https://cli.kiro.dev/install | bash`, Windows PowerShell에서는 `irm 'https://cli.kiro.dev/install.ps1' | iex`로 설치한 뒤 먼저 `kiro-cli login`으로 로그인하세요. `kiro-cli` 세션이 없으면 `ccx login kiro`는 붙여 넣은 액세스 토큰이나 `KIRO_ACCESS_TOKEN` 환경 변수로 폴백합니다.
 
-일반 `ocx login kiro` 가져오기는 CLI SQLite 데이터베이스를 읽기 전용으로 열며 데이터베이스, WAL, SHM을 수정하지 않습니다.
+일반 `ccx login kiro` 가져오기는 CLI SQLite 데이터베이스를 읽기 전용으로 열며 데이터베이스, WAL, SHM을 수정하지 않습니다.
 
 - `KIROCLI_DB_PATH`는 비표준 Kiro CLI SQLite 데이터베이스를 선택하며, 지정한 데이터베이스는 이미 존재해야 합니다.
 - `KIROCLI_TOKEN_KEY`는 모호한 토큰 행이 여러 개일 때 가져올 정확한 `auth_kv` 행의 키를 선택합니다. 선택값이 없으면 추측하지 않고 로그인이 실패합니다.
 
-가져온 자격 증명은 `~/.opencodex/auth.json`에 저장됩니다. **계정 추가** 롤백은 별도 절차로, 이전 스냅샷을 복원할 때 데이터베이스를 교체하고 현재 WAL, SHM, journal 사이드카를 제거합니다.
+가져온 자격 증명은 `~/.codexcommander/auth.json`에 저장됩니다. **계정 추가** 롤백은 별도 절차로, 이전 스냅샷을 복원할 때 데이터베이스를 교체하고 현재 WAL, SHM, journal 사이드카를 제거합니다.
 
 롤백은 스냅샷이 있을 때만 가능하므로, 세션 저장소가 존재하지만 캡처할 수 없는 경우(파일을 읽을 수 없음, 스키마 불일치, 토큰 선택 모호), `KIROCLI_DB_PATH` / `KIRO_CLI_DB_FILE`이 실제 CLI 저장소와 다른 가져오기 경로를 가리키는 경우, 또는 기본 CLI 데이터베이스에 인식 가능한 토큰 행이 없는 경우 **계정 추가**는 `kiro-cli` 로그아웃을 거부합니다. 일반 `kiro-cli` 데이터 경로의 손상된 데이터베이스를 수리하거나 제거하고, 가져오기 전용 선택자가 설정돼 있으면 해제한 뒤 다시 시도하세요. 기존 `kiro-cli` 세션이 아예 없는 환경에서는 영향이 없습니다.
 
 ## 3. API 키 카탈로그
 
-opencodex에는 빌트인 프리셋이 76개 들어 있습니다. 키 방식 64개, OAuth 8개, 로컬 3개,
+CodexCommander에는 빌트인 프리셋이 76개 들어 있습니다. 키 방식 64개, OAuth 8개, 로컬 3개,
 기본 ChatGPT 포워드 프리셋 1개입니다. 대시보드의 **Add provider** 선택기는 키 발급 페이지를 열고,
 입력한 키를 검증한 뒤 저장합니다(검증은 프로바이더별로 다릅니다). 주요 항목은 다음과 같습니다:
 
@@ -153,9 +149,9 @@ opencodex에는 빌트인 프리셋이 76개 들어 있습니다. 키 방식 64�
 [Chat Completions 엔드포인트](https://docs.cline.bot/api/chat-completions)에 연결합니다. 운영 주체는
 [Cline 약관](https://cline.bot/tos)에 명시된 Cline Bot Inc.입니다. `cline-pass/cline-pass/kimi-k3`
 같은 라우팅 ID는 정상입니다.
-앞의 `cline-pass`는 opencodex 프로바이더이고, 뒤의 `cline-pass/kimi-k3`는 upstream에 보내는
+앞의 `cline-pass`는 CodexCommander 프로바이더이고, 뒤의 `cline-pass/kimi-k3`는 upstream에 보내는
 전체 모델 slug입니다. ClinePass 사용량은 계정의 5시간 롤링·주간·월간 한도를 함께 사용합니다.
-현재 opencodex는 실측된 `low` reasoning 단계만 광고하며, 더 높은 요청은 공식 지원 범위가
+현재 CodexCommander는 실측된 `low` reasoning 단계만 광고하며, 더 높은 요청은 공식 지원 범위가
 게시되거나 검증될 때까지 `low`로 제한합니다.
 
 **Cline**은 동일한 API 키·엔드포인트를 종량제로 사용하며 100개 이상의 모델에 접근합니다
@@ -215,14 +211,14 @@ Volcengine Agent Plan은 `openai-responses` 어댑터로 네이티브 Responses 
 `opencode-go`는 `https://opencode.ai/zen/go/v1`의 OpenCode Go 구독 제공자이며 OpenCode
 Desktop/CLI와는 별개입니다. [OpenCode 콘솔](https://opencode.ai/console)에서 키를 만든 뒤
 대시보드 **Providers**에서 **OpenCode Go**를 추가하거나 그 키로 `opencode-go` 프리셋을 구성하세요.
-OpenCodex는 OpenCode 인증 저장소를 읽거나 이 키를 Keychain으로 마이그레이션하지 않습니다.
+CodexCommander는 OpenCode 인증 저장소를 읽지 않으며 이 키를 Keychain에 저장하지 않습니다.
 
 공개 모델 카탈로그는 키가 작동한다는 증거가 아닙니다. 저장된 키는 활성 키로 첫 추론에 성공한 뒤에만
 **검증됨**이 됩니다. 공개 한도는 참조값인 **$12 / 5시간**, **$30 / 7일**, **$60 / 30일**입니다.
 해당 기간의 로컬 관측값은 실시간 남은 할당량이나 청구가 아닌 사용량 추정치입니다. 권위 있는 제한
 이벤트는 업스트림이 구체적으로 보고한 경우에만 표시합니다.
 
-내장 프리셋은 API 키 방식이므로 Add Provider에서 계정 로그인 대신 **Paid**로 분류되며, OpenCodex는
+내장 프리셋은 API 키 방식이므로 Add Provider에서 계정 로그인 대신 **Paid**로 분류되며, CodexCommander는
 OpenCode Go OAuth 흐름을 제공하지 않습니다. Client Apps의 **OpenCode** 클라이언트 및 키가 필요 없는
 **OpenCode Free** 프로바이더와도 별개입니다. Add Provider 검색은 Accounts, Free, Paid를 함께 검색하므로
 어느 탭에서든 `opencode`를 입력하면 일치하는 프리셋과 구분이 표시됩니다.
@@ -257,7 +253,7 @@ Nscale service token은 [Nscale Console](https://console.nscale.com)에서 만�
 
 **Command Code 검색:** 프리셋은 Command Code의 `/provider/v1/models` 목록을 고정된 Provider API
 호스트에서 읽고, 슬래시가 포함된 네이티브 모델 ID를 보존하며 live discovery를 256 KiB와 raw 행
-256개로 제한합니다. `ocx login command-code`는 브라우저 OAuth 로그인을 지원하며(기존 Command Code
+256개로 제한합니다. `ccx login command-code`는 브라우저 OAuth 로그인을 지원하며(기존 Command Code
 CLI 사용자는 `~/.commandcode/auth.json`의 로컬 CLI 자격 증명을 가져올 수 있음), 모델 카탈로그는
 계정 단위이며 로그인 후 인증된 discovery 엔드포인트에서 가져옵니다. 채팅 요청은 설정된 bearer
 키를 사용합니다. 키는 [Command Code Studio](https://commandcode.ai/studio/)에서 생성합니다.
@@ -296,7 +292,7 @@ Project ID가 포함된 URL과 dedicated deployment는 custom provider로 설정
 
 `openai-chat`, `authMode: "key"`, 공식 `https://api.a6api.com` 또는
 `https://api.a6api.com/v1` 주소를 사용하는 사용자 지정 프로바이더는 대시보드와
-`ocx account refresh <provider>`에서 A6API 크레딧 사용량을 표시합니다. 프로바이더 이름은 자유롭게 정할 수
+`ccx account refresh <provider>`에서 A6API 크레딧 사용량을 표시합니다. 프로바이더 이름은 자유롭게 정할 수
 있습니다. 계정의 hard credit limit을 기준으로 토큰 단위를 USD로 환산해 사용률과 남은 크레딧을 표시하며, 토큰 만료는 충전을 뜻하지 않으므로 쿼터
 리셋으로 표시하지 않습니다. 활성 키만 공식 호스트로 전송하고 리디렉션을 거부하며, 음수이거나 서로 일치하지
 않는 결제 합계에는 보고서를 만들지 않습니다.
@@ -318,13 +314,13 @@ Project ID가 포함된 URL과 dedicated deployment는 custom provider로 설정
 
 ### 터미널에서 계정 전환하기
 
-대시보드를 열지 않고도 `ocx account list`, `ocx account current`, `ocx account use`로 같은 Codex,
+대시보드를 열지 않고도 `ccx account list`, `ccx account current`, `ccx account use`로 같은 Codex,
 OAuth, API-key pool을 확인하고 전환할 수 있습니다. 전체 명령, JSON 출력, 새 세션 적용 방식은
-[CLI 레퍼런스](/ko/reference/cli/#ocx-account-subcommand)를 참고하세요.
+[CLI 레퍼런스](/ko/reference/cli/#ccx-account-subcommand)를 참고하세요.
 
 ### GPT-5.6 프리뷰 경로
 
-실시간 모델 카탈로그 갱신이 늦어도 `ocx sync`에서 모델이 사라지지 않도록 GPT-5.6
+실시간 모델 카탈로그 갱신이 늦어도 `ccx sync`에서 모델이 사라지지 않도록 GPT-5.6
 Sol/Terra/Luna를 폴백 목록에 넣어 둡니다.
 
 | Codex 경로 | 미리 등록된 모델 id | Codex에 표시되는 컨텍스트 |
@@ -340,12 +336,12 @@ Sol/Terra/Luna를 폴백 목록에 넣어 둡니다.
 기준으로 현재 계정에서 쓸 수 있는 모델만 남깁니다.
 
 :::note[게이트웨이 및 구독 프록시]
-프로바이더 지원 여부는 "에이전트" 제품인지가 아니라 opencodex에 맞는 wire 어댑터가 있는지로
+프로바이더 지원 여부는 "에이전트" 제품인지가 아니라 CodexCommander에 맞는 wire 어댑터가 있는지로
 결정됩니다. 현재 어댑터 id는 `openai-chat`, `openai-responses`, `anthropic`, `google`(AI Studio,
-Vertex, Antigravity/Cloud Code Assist 모드), `azure` / `azure-openai`, `kiro`, `cursor`입니다.
+Vertex, Antigravity/Cloud Code Assist 모드), `azure-openai`, `kiro`, `cursor`입니다.
 Amazon Bedrock 네이티브 API처럼 이 구현 중 어느 것과도 맞지 않는 독자 프로토콜은 직접 지원하지 않습니다.
 **GitHub Copilot**과 **GitLab Duo**는 자신의 범용 OpenAI 호환 엔드포인트에 매핑된 멀티 모델
-게이트웨이입니다. Copilot은 `ocx login github-copilot`으로 GitHub 디바이스 플로우 OAuth 로그인을
+게이트웨이입니다. Copilot은 `ccx login github-copilot`으로 GitHub 디바이스 플로우 OAuth 로그인을
 지원합니다(비공식 브리지 — VS Code 공개 클라이언트 id로 로그인 후 단기 Copilot API 토큰으로
 교환하며, 활성 Copilot 구독이 필요하고 GitHub 정책 변경으로 막힐 수 있음). GitLab Duo는 Bearer
 **구독 토큰**(일반 API 키가 아님)으로 인증합니다. **Cloudflare AI
@@ -353,23 +349,23 @@ Gateway**는 URL에 계정 + 게이트웨이 id를 채워야 합니다.
 
 Copilot은 혼합 wire 카탈로그를 제공합니다. GPT-5 계열 모델(`gpt-5.3-codex`, `gpt-5.4`,
 `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`)은 에이전트
-트래픽에 대해 `/chat/completions`를 거부하므로 opencodex는 이 모델들을 내장 기본값으로
+트래픽에 대해 `/chat/completions`를 거부하므로 CodexCommander는 이 모델들을 내장 기본값으로
 Responses API를 통해 라우팅하고, 다른 Copilot 모델은 모두 chat completions를 유지합니다.
 우선순위는 하드 wire 핀 → 명시적 [`modelAdapters`](/ko/reference/configuration/providers/)
 항목 → 레지스트리 기본값 → 프로바이더 전체 adapter 순입니다. 내장 기본값이 없는 모델(예:
 `gpt-5.4-nano`)을 Responses로 전환하려면 `"modelAdapters": { "gpt-5.4-nano": "openai-responses" }`를
 설정하세요.
 
-Cursor는 별도의 실험적 어댑터로 추적합니다. `adapter: "cursor"`는 `ocx init`과 dashboard Add
+Cursor는 별도의 실험적 어댑터로 추적합니다. `adapter: "cursor"`는 `ccx init`과 dashboard Add
 Provider picker에 실험적 local config 항목으로 표시되며, Cursor의 static fallback model catalog
-metadata를 저장합니다. Cursor access token이 설정되면 opencodex는 Cursor live HTTP/2 transport를
+metadata를 저장합니다. Cursor access token이 설정되면 CodexCommander는 Cursor live HTTP/2 transport를
 사용합니다. 번들 폴백 목록에는 1M 컨텍스트의 `gpt-5.6-sol` / `terra` / `luna`, 500K 컨텍스트의
 `grok-4.5` / `grok-4.5-fast`, 262K 컨텍스트의 `kimi-k3`가 들어 있으며, 실시간 탐색 결과에 따라
 현재 계정에 표시할 모델을 결정합니다. Cursor는 Kimi K3를 effort 접미사가 붙은 wire id로만
 제공하므로 `cursor/kimi-k3`는 `low` / `high` / `max` 래더를 노출하고 기본값은 모델 문서의 API
 기본값과 같은 `max`입니다. Cursor 서버가 직접 보내는 native read/write/delete/ls/grep/shell/fetch 실행은 Codex
 승인 및 sandbox 경로를 우회하므로 기본적으로 비활성화되어 있습니다. 신뢰한 로컬 실험에서만
-`~/.opencodex/config.json`의 `providers.cursor`에 `unsafeAllowNativeLocalExec: true`를 설정하세요.
+`~/.codexcommander/config.json`의 `providers.cursor`에 `nativeLocalExec: "on"`을 설정하세요.
 대시보드에서는 **Providers → Cursor → Edit JSON**에서 설정할 수 있습니다. 전체 예시는
 [설정 레퍼런스](/ko/reference/configuration/#cursor-provider-adapter-cursor)를 참고하세요.
 MCP, 화면 녹화, computer-use는 executor hook으로 열려 있으며, 로컬
@@ -381,7 +377,7 @@ model discovery는 이 실험적 어댑터에서 활성화되어 있으며, Curs
 ### Ollama Cloud
 
 Ollama Cloud는 호스팅형(로컬이 아님) Ollama로, `https://ollama.com/v1`에서 OpenAI 호환이며 키는
-[ollama.com/settings/keys](https://ollama.com/settings/keys)에서 발급받습니다. opencodex는 클라우드
+[ollama.com/settings/keys](https://ollama.com/settings/keys)에서 발급받습니다. CodexCommander는 클라우드
 라인업을 비전 기능에 따라 분류하여 [비전 사이드카](/ko/guides/sidecars/)가 텍스트 전용 모델에만
 작동하도록 합니다. 텍스트 전용 모델(예: `glm-5.2`, `deepseek-v4-pro`, `gpt-oss`, `qwen3-coder`,
 `minimax-m2.x`, `nemotron-3-*`)은 `noVisionModels`에 나열되며, 비전 네이티브 모델(예:
@@ -390,7 +386,7 @@ Ollama의 `:size` 태그에 관대하므로 `gpt-oss`는 `gpt-oss:120b`와 `gpt-
 
 ## 4. 로컬 프로바이더
 
-opencodex를 로컬 OpenAI 호환 서버로 향하게 하세요 — 보통은 빈 키와 함께 사용합니다:
+CodexCommander를 로컬 OpenAI 호환 서버로 향하게 하세요 — 보통은 빈 키와 함께 사용합니다:
 
 | 프로바이더 | 베이스 URL |
 | --- | --- |
@@ -401,6 +397,6 @@ opencodex를 로컬 OpenAI 호환 서버로 향하게 하세요 — 보통은 �
 ## 모든 OpenAI 호환 엔드포인트
 
 프로바이더가 Chat Completions를 사용한다면 `openai-chat` 어댑터가 이를 처리합니다 — 대시보드에서
-**Custom**을 선택하거나 `ocx init`에서 `custom`을 선택한 뒤 베이스 URL을 입력하세요. 모든 프로바이더 필드
+**Custom**을 선택하거나 `ccx init`에서 `custom`을 선택한 뒤 베이스 URL을 입력하세요. 모든 프로바이더 필드
 (`headers`, `noReasoningModels`, `noVisionModels`, `models`, …)는
 [설정 레퍼런스](/ko/reference/configuration/)를 참고하세요.

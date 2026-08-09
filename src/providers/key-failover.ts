@@ -9,8 +9,8 @@
  * Modelled after src/codex/routing.ts cooldown logic but scoped to plain API-key pools.
  */
 import { saveConfigPreservingClaudeCode } from "../config";
-import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy } from "../types";
-import { resolveProviderTransport, type OcxProviderTransport } from "./xai-transport";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig, RateLimitRetryPolicy } from "../types";
+import { resolveProviderTransport, type CodexCommanderProviderTransport } from "./xai-transport";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 
 // ---- cooldown state (in-memory, same as codex/routing.ts) ----
@@ -83,7 +83,7 @@ function isKeyInCooldown(providerName: string, keyId: string, now = Date.now()):
  * Check whether a provider has multiple keys available for failover.
  * Returns true only for key-auth providers with 2+ pool entries.
  */
-export function hasKeyPoolFailover(provider: OcxProviderConfig): boolean {
+export function hasKeyPoolFailover(provider: CodexCommanderProviderConfig): boolean {
   if (provider.authMode === "oauth" || provider.authMode === "forward") return false;
   return (provider.apiKeyPool?.length ?? 0) >= 2;
 }
@@ -96,7 +96,7 @@ export function hasKeyPoolFailover(provider: OcxProviderConfig): boolean {
  * callers never re-check fields.
  */
 export function rateLimitRetryPolicyFor(
-  provider: Pick<OcxProviderConfig, "retryOn429" | "authMode">,
+  provider: Pick<CodexCommanderProviderConfig, "retryOn429" | "authMode">,
 ): Required<RateLimitRetryPolicy> | null {
   const policy = provider.retryOn429;
   if (!policy || policy.enabled === false) return null;
@@ -136,7 +136,7 @@ export function rateLimitRetryDelayMs(
 /**
  * Record a 429 for the current key and attempt to switch to the next available one.
  *
- * @returns A new OcxProviderConfig with the swapped key (and mutated config on disk),
+ * @returns A new CodexCommanderProviderConfig with the swapped key (and mutated config on disk),
  *          or `null` when no alternative key is available (all in cooldown or pool < 2).
  *
  * The returned object is a snapshot of the PERSISTED config — it carries none of the
@@ -145,12 +145,12 @@ export function rateLimitRetryDelayMs(
  * takes only the swapped key and keeps the routed provider intact.
  */
 export function rotateKeyOn429(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   providerName: string,
   retryAfterHeader: string | null | undefined,
   now = Date.now(),
   attemptedKey?: string,
-): OcxProviderConfig | null {
+): CodexCommanderProviderConfig | null {
   const provider = config.providers[providerName];
   if (!provider) return null;
   if (provider.authMode === "oauth" || provider.authMode === "forward") return null;
@@ -230,11 +230,11 @@ interface RotateProviderTransportOptions {
  * path in src/server/responses/core.ts, which spreads `route.provider` for the same reason.
  */
 export function rotateProviderTransportOn429(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   providerName: string,
-  routedProvider: OcxProviderTransport,
+  routedProvider: CodexCommanderProviderTransport,
   options: RotateProviderTransportOptions = {},
-): OcxProviderTransport | null {
+): CodexCommanderProviderTransport | null {
   const rotated = rotateKeyOn429(
     config,
     providerName,

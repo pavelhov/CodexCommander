@@ -71,7 +71,7 @@ export function CodexAccountPoolCards({
     <>
       {pool.map(a => {
         const healthStatus = a.health?.status;
-        const showReauth = Boolean(a.needsReauth) || oauthHealthShowsReauth(healthStatus);
+        const showReauth = oauthHealthShowsReauth(healthStatus);
         const inCooldown = oauthHealthIsCooldown(healthStatus);
         const healthLabel = formatOAuthHealthLabel(t, a.health);
         const healthSummary = formatOAuthHealthSummary(t, "codex", a.id, a.health);

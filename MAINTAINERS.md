@@ -1,127 +1,72 @@
 # Maintainers
 
-This document lists the people responsible for maintaining opencodex and defines the project's
-review and merge policy.
+This document lists the people responsible for maintaining this repository and
+defines the project's review and merge policy.
 
 ## Current maintainers
 
 | GitHub account | Project role | Responsibilities |
 | --- | --- | --- |
-| [@lidge-jun](https://github.com/lidge-jun) | Project owner | Project direction, releases, repository administration, and final governance decisions |
-| [@Ingwannu](https://github.com/Ingwannu) | Maintainer | Issue and pull-request triage, `dev` integration, security review, and repository maintenance |
-| [@Wibias](https://github.com/Wibias) | Maintainer | Issue and pull-request triage, `dev` integration, and provider/CI maintenance |
+| [@pavelhov](https://github.com/pavelhov) | Owner | Project direction, releases, repository administration, security review, and final governance decisions |
 
-The table describes project responsibilities. Actual repository permissions remain controlled
-through GitHub repository settings.
+The table describes project responsibilities. Actual repository permissions
+remain controlled through GitHub repository settings.
 
-`dev` is the only integration line. The former `dev2-go` carry duty is retired;
-see [The retired `dev2-go` line](#the-retired-dev2-go-line).
+## Branch and merge policy
 
-## Review and merge policy
+- `main` is the sole integration branch, the default branch, and the target
+  of every pull request. There are no `dev`/`development`/`preview` lines.
+- The owner may push to `main` directly for maintainer-owned integration
+  work, urgent repairs, or incident recovery. The same CI and documentation
+  expectations still apply.
 
-- Pull requests target `dev`. It is the only integration line, and promotion to
-  `main` happens only from `dev`. The target-branch check accepts `dev` alone.
-- The **`enforce-target`** CI check rejects pull requests whose head
-  ancestry sits on the **`main`** tip while far behind **`dev`**, and rejects
-  empty, thin, or malformed descriptions; PRs whose title or description
-  mentions `gui` must include a screenshot of the UI change in the description.
-  Contributor PRs (authors without repository push permission) open in draft
-  and stay there until a four-box review-readiness checklist in the
-  description is complete: local CI green, branch on the latest `dev` commit,
-  all correct Codex and CodeRabbit findings fixed, and the ready-for-review
-  confirmation. When all four boxes are ticked the gate marks the PR ready and
-  notifies the maintainers listed in `MAINTAINERS.md` (excluding the author).
-  Completion is bound to the exact commit the PR head pointed at: if new
-  commits are pushed afterwards, the gate moves the PR back to draft, resets
-  the checklist and the notification, and asks the author to test and tick the
-  boxes again against the latest code.
-  Before a completion is accepted, the gate verifies the two checklist claims
-  it can check itself: the head's `ci` check must be green, and the branch
-  must be on the latest `dev` commit or at most 10 commits behind it. A
-  disproved claim unticks the matching box and keeps the PR a draft.
-  Authors with repository push permission skip the ancestry heuristic only. As
-  with the approval requirement above, this is enforced by convention until
-  branch protection is configured (see the note under the change log).
-- A pull request requires approval from at least one maintainer and successful required CI checks
-  before merge.
-- Authors do not approve their own pull requests.
-- Authentication, credential handling, GitHub Actions, release automation, dependency installation,
-  and other security-boundary changes require explicit security review.
-- A new or promoted provider preset is a credential-destination change. Before merge it needs the
-  primary-source evidence listed under [Adding a provider to the
-  catalog](https://opencodex.me/contributing/#evidence-required-for-a-canonical-preset): documented
-  OpenAI-compatible endpoints (including authenticated `GET /v1/models` when the entry declares
-  `liveModels`), terms of service and operating legal entity, resale or routing authorization for
-  aggregators, a named maintenance owner, and a citable verification date. Contributor affiliation
-  with the service is disclosed, not disqualifying, and it does not lower the evidence bar. When the
-  evidence is incomplete, prefer an inert `src/providers/free-directory.ts` reference row over a
-  canonical registry entry.
-- Security-sensitive and release-related changes should be reviewed by both maintainers when
-  practical.
-- Direct pushes are reserved for maintainer-owned integration work, urgent repairs, or incident
-  recovery. The same CI and documentation requirements still apply.
-- Promotion from `dev` to `main` and npm releases is maintainer-controlled.
+### Merge enforcement invariant (external GitHub settings)
 
-## The retired `dev2-go` line
+Merge requirements live in a GitHub **ruleset** on `main` (Settings → Rules →
+Rulesets), not in repository files. Two invariants MUST hold:
 
-`dev2-go` was a parallel integration line that rebuilt the runtime as a Go
-native port, and policy required every merge into `dev` to be rebased onto it
-and ported under `go/`. That policy is withdrawn as of 2026-07-30.
+1. **Owner/admin bypass is guaranteed.** The ruleset lists the *Repository
+   admin* role under "Bypass actors" with bypass mode **Always allow**, so
+   the owner can merge with failing or pending checks and push directly when
+   needed. Classic branch protection with "Include administrators" MUST NOT
+   be used — it removes exactly that escape hatch. If both systems ever
+   coexist, the classic rule must not bind admins either.
+2. **Ordinary contributors get no bypass.** For everyone not on the bypass
+   list, the ruleset requires a pull request and the aggregate **`ci`** check
+   from `.github/workflows/ci.yml`. That workflow has no `paths:` filter, so
+   the required check is created on every pull request and cannot sit Pending
+   forever on an out-of-scope change.
 
-The dual-track cost outran its return: the carry backlog never cleared (17
-commits and 9 open `needs-go-port` issues at the time of the decision, against
-594 commits of divergence), and dogfooding the Go runtime kept producing new
-defects. Bun-native TypeScript on `dev` is the single runtime line again.
+In-repository automation must never add a merge gate that the owner cannot
+bypass through the ruleset's documented Repository-admin exception.
 
-- The branch has been deleted from this repository. Its full history is
-  published at
-  [lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive),
-  and its final tip stays reachable here as the `archive/dev2-go` tag.
-- A merge into `dev` carries no port obligation. The nine open `needs-go-port`
-  issues (#661, #663, #666, #670, #674, #678, #680, #685, #703) were closed as
-  not planned, and the `needs-go-port` label no longer exists on the
-  repository.
-- Future native work is expected to be an incremental module landing on `dev`
-  (Rust via N-API is the current candidate), not a second integration branch.
-  Reopening a parallel runtime line is an owner decision.
+## Review policy
+
+- Reviews are in English, specific, and evidence-backed (see `AGENTS.md`).
+- Authentication, credential handling, GitHub Actions workflows, publishing or
+  release-distribution automation, and dependency-installation changes require explicit security
+  review before merge. On a single-maintainer change this means the security
+  considerations are written down in the PR description, not merely thought
+  about.
+- A new or promoted provider preset is a credential-destination change and
+  needs primary-source evidence (documented OpenAI-compatible endpoints,
+  terms of service, operating entity, a named maintenance owner, and a
+  citable verification date) before merge.
+- Treat token logging/serialization, secret exposure, workflow permission
+  escalation, and unpinned third-party action refs as release blockers.
+
+## Releases
+
+Publishing automation is not included in this repository.
 
 ## Maintainer changes
 
-Adding or removing a maintainer requires:
-
-1. agreement from the project owner,
-2. review by another current maintainer when available, and
-3. updates to this file and [`.github/CODEOWNERS`](./.github/CODEOWNERS).
-
-### Change log
-
-- 2026-07-27 — [@Wibias](https://github.com/Wibias) added as a maintainer.
-  Requirement 1 (agreement from the project owner) is met: the owner requested
-  the addition. **Requirement 2 (review by another current maintainer) was
-  never satisfied in the form this document describes.** The three commits that
-  carried the addition (`a2693c02`, `dc3a4ade`, `02bbd47a`) landed on `dev` as
-  direct owner pushes with no associated pull request, so no second maintainer
-  reviewed them. Requirement 3 is met by this file and `.github/CODEOWNERS`.
-  The addition is in effect regardless: @Wibias holds write access on the
-  repository and has been merging pull requests since 2026-07-26. This entry
-  records the gap rather than papering over it — a later maintainer change
-  should go through a reviewed pull request.
-
-  Scope covers issue and pull-request triage, `dev` integration, and
-  provider/CI maintenance. (This entry originally also described carrying
-  merged `dev` work onto `dev2-go`; that duty ended when the line was retired
-  on 2026-07-30.) Security-boundary ownership in `.github/CODEOWNERS` is
-  deliberately unchanged: authentication, credential handling, GitHub Actions,
-  and release automation keep the two owners already listed for those paths, so
-  this addition does not widen the review surface for them.
-
-  CODEOWNERS requests reviews rather than enforcing them — no branch protection
-  rule is configured on this repository, so code-owner approval is a convention
-  here, not a gate. The same is true of the approval requirement in the review
-  and merge policy above. Widening the security boundary, or enforcing either
-  of these through branch protection, is a separate decision.
+Adding or removing a maintainer requires the owner's agreement and updates to
+this file and [`.github/CODEOWNERS`](./.github/CODEOWNERS) in a reviewed pull
+request.
 
 ## Security reports
 
-Private vulnerability reports are handled by the current maintainers according to
-[`SECURITY.md`](./SECURITY.md). Do not disclose secrets or exploit details in a public issue.
+Private vulnerability reports are handled according to
+[`SECURITY.md`](./SECURITY.md). Do not disclose secrets or exploit details in
+a public issue.

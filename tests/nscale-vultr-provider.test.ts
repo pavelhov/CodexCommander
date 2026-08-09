@@ -15,7 +15,7 @@ import {
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import { routedSlug } from "../src/providers/slug-codec";
 import { routeModel } from "../src/router";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
 import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
 
 const NSCALE_BASE_URL = "https://inference.api.nscale.com/v1";
@@ -43,8 +43,8 @@ function entry(providerId: "nscale" | "vultr") {
 
 function config(
   providerId: "nscale" | "vultr",
-  overrides: Partial<OcxProviderConfig> = {},
-): OcxConfig {
+  overrides: Partial<CodexCommanderProviderConfig> = {},
+): CodexCommanderConfig {
   const baseUrl = providerId === "nscale" ? NSCALE_BASE_URL : VULTR_BASE_URL;
   return {
     port: 10100,

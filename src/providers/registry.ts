@@ -1,4 +1,4 @@
-import type { CodexAccountMode, OcxProviderConfig } from "../types";
+import type { CodexAccountMode, CodexCommanderProviderConfig } from "../types";
 import { OPENCODE_GO_ANTHROPIC_WIRE_MODEL_IDS } from "../types";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "./kiro-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, ANTIGRAVITY_MODEL_EFFORTS } from "./antigravity-models";
@@ -105,7 +105,7 @@ export interface ProviderRegistryEntry {
   label: string;
   adapter: string;
   baseUrl: string;
-  apiKeyTransport?: OcxProviderConfig["apiKeyTransport"];
+  apiKeyTransport?: CodexCommanderProviderConfig["apiKeyTransport"];
   authKind: ProviderAuthKind;
   codexAccountMode?: CodexAccountMode;
   /** OAuth preset may explicitly honor a persisted API-key billing mode. */
@@ -189,13 +189,13 @@ export interface ProviderRegistryEntry {
   statelessResponses?: boolean;
   /**
    * Registry default for the provider's Responses `service_tier` support; see
-   * `OcxProviderConfig.supportsServiceTier`. Registry-only: backfilled (never
+   * `CodexCommanderProviderConfig.supportsServiceTier`. Registry-only: backfilled (never
    * overriding) at enrich/route time and deliberately NOT seeded into saved
    * config, so an explicit user value stays distinguishable from the default
    * (and the canonical openai seed comparison keeps its exact key set).
    */
   supportsServiceTier?: boolean;
-  /** Registry default for plaintext reasoning replay; see `OcxProviderConfig.preserveResponsesReasoningContent`. Registry-only like `supportsServiceTier`. */
+  /** Registry default for plaintext reasoning replay; see `CodexCommanderProviderConfig.preserveResponsesReasoningContent`. Registry-only like `supportsServiceTier`. */
   preserveResponsesReasoningContent?: boolean;
   modelDiscovery?: ProviderModelDiscoverySpec;
   contextWindow?: number;
@@ -203,22 +203,22 @@ export interface ProviderRegistryEntry {
   modelInputModalities?: Record<string, string[]>;
   defaultMaxOutputTokens?: number;
   modelMaxOutputTokens?: Record<string, number>;
-  chatCompletionTokenField?: OcxProviderConfig["chatCompletionTokenField"];
+  chatCompletionTokenField?: CodexCommanderProviderConfig["chatCompletionTokenField"];
   reasoningEfforts?: string[];
   modelReasoningEfforts?: Record<string, string[]>;
   modelDefaultReasoningEfforts?: Record<string, string>;
-  reasoningContentMode?: OcxProviderConfig["reasoningContentMode"];
+  reasoningContentMode?: CodexCommanderProviderConfig["reasoningContentMode"];
   modelSupportsReasoningSummaries?: Record<string, boolean>;
-  modelReasoningSummaryDelivery?: OcxProviderConfig["modelReasoningSummaryDelivery"];
+  modelReasoningSummaryDelivery?: CodexCommanderProviderConfig["modelReasoningSummaryDelivery"];
   reasoningEffortMap?: Record<string, string>;
   modelReasoningEffortMap?: Record<string, Record<string, string>>;
-  reasoningWireFormat?: OcxProviderConfig["reasoningWireFormat"];
+  reasoningWireFormat?: CodexCommanderProviderConfig["reasoningWireFormat"];
   noVisionModels?: string[];
   noReasoningModels?: string[];
   noTemperatureModels?: string[];
   noTopPModels?: string[];
   noPenaltyModels?: string[];
-  /** Opt this provider into parallel tool calls (see OcxProviderConfig.parallelToolCalls). */
+  /** Opt this provider into parallel tool calls (see CodexCommanderProviderConfig.parallelToolCalls). */
   parallelToolCalls?: boolean;
   /** Opt this provider into forwarding prompt_cache_key (OpenAI-specific; strict backends reject it). */
   promptCacheKey?: boolean;
@@ -240,7 +240,7 @@ export interface ProviderRegistryEntry {
 }
 
 export type ProviderConfigSeed = Pick<
-  OcxProviderConfig,
+  CodexCommanderProviderConfig,
   "adapter" | "baseUrl" | "apiKeyTransport" | "responsesPath" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
   | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens" | "chatCompletionTokenField"
@@ -254,15 +254,13 @@ export type ProviderConfigSeed = Pick<
 
 // Shared between the OAuth (Claude account) and API-key Anthropic entries so both expose the
 // same static model seed.
-// 260710 context refresh: Tier-2 evidence in
-// devlog/_plan/260710_provider_hardening/001_research_frontier.md.
+// Model and context-window snapshot refreshed 2026-07-10.
 const ANTHROPIC_MODELS = ["claude-fable-5", "claude-sonnet-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"];
 const ANTHROPIC_MODEL_CONTEXT_WINDOWS: Record<string, number> = { "claude-sonnet-5": 1_000_000, "claude-fable-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000, "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-haiku-4-5": 200_000 };
 
 const ZAI_GLM_52_MODELS = ["glm-5.2", "glm-5.2[1m]"];
 const ZAI_GLM_52_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
-// 260710 MiniMax models and context windows: Tier-2 evidence in
-// devlog/_plan/260710_provider_hardening/002_research_cn.md.
+// MiniMax models and context windows refreshed 2026-07-10.
 const MINIMAX_MODELS = [
   "MiniMax-M3",
   "MiniMax-M2.7", "MiniMax-M2.7-highspeed",
@@ -308,7 +306,7 @@ const OPENAI_API_GPT56_VIRTUAL_MODELS: Record<string, { wireModelId: string; rea
 const OPENAI_API_GPT56_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const OPENROUTER_GPT56_MODELS = OPENAI_GPT56_MODELS.map(id => `openai/${id}`);
 // OpenRouter's live /endpoints routes report 1,050,000; keep this separate from the
-// unverified OpenAI API-key seed. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
+// unverified OpenAI API-key seed.
 const OPENROUTER_GPT56_CONTEXT_WINDOW = 1_050_000;
 const OPENROUTER_GPT56_CONTEXT_WINDOWS = {
   "openai/gpt-5.6-sol": OPENROUTER_GPT56_CONTEXT_WINDOW,
@@ -407,7 +405,7 @@ const OPENCODE_FREE_DEEPSEEK_MODELS = ["deepseek-v4-flash-free"];
  *
  * Zen's roster is discovered live while this list is static, so it is a dated
  * exception list, not a capability model. Re-probe before extending it.
- * Evidence: devlog/_plan/260805_bug_fix_stack/002_zen_modality_probe.md
+ * Snapshot verified 2026-08-05.
  */
 const OPENCODE_ZEN_TEXT_ONLY_MODELS = [
   "big-pickle",
@@ -517,16 +515,15 @@ const TENCENT_CODING_PLAN_MODELS = ["tc-code-latest", "glm-5", "kimi-k2.5", "min
 // image, video, and 3D generation resources. Keep the Codex-facing presets scoped to
 // models documented for text/agent or Coding Plan use.
 //
-// Maintenance owner: @lidge-jun. Verified 2026-08-01 against the vendor's own docs —
+// Verified 2026-08-01 against the vendor's own docs —
 // endpoints https://docs.volcengine.com/docs/82379/1528783 (Coding Plan) and
 // https://docs.volcengine.com/docs/82379/2165245 (Agent Plan); Codex CLI integration
 // https://www.volcengine.com/docs/82379/2556056; supported clients
 // https://www.volcengine.com/docs/82379/2188957; terms https://www.volcengine.com/docs/6256/64903
 // (北京火山引擎科技有限公司). Plan quota is restricted to supported AI coding tools and misuse
 // is documented as grounds for suspension — see the `note` on both Plan entries.
-// Report a break by opening an issue tagging the owner; the three things that rot first are the
-// static catalogs (liveModels:false cannot self-heal), the base URLs, and those Plan terms.
-// Full evidence ledger: devlog/_fin/260801_pr611_volcengine_evidence/000_evidence_ledger.md
+// The static catalogs (liveModels:false cannot self-heal), base URLs, and Plan terms
+// require periodic verification.
 const VOLCENGINE_ARK_MODELS = [
   "doubao-seed-2-1-pro-260628",
   "doubao-seed-2-1-turbo-260628",
@@ -601,9 +598,9 @@ const ALIBABA_INTL_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
 const KIMI_K3_STANDARD_CONTEXT_WINDOW = 262_144;
 const KIMI_K3_1M_CONTEXT_WINDOW = 1_048_576;
 const KIMI_CODING_K3_MODELS = ["k3", "k3[1m]", "k3-256k"];
-const KIMI_LEGACY_API_MODELS = ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"];
-const KIMI_API_MODELS = ["kimi-k3", ...KIMI_LEGACY_API_MODELS];
-const KIMI_CODING_MODELS = [...KIMI_CODING_K3_MODELS, ...KIMI_LEGACY_API_MODELS, "kimi-for-coding"];
+const KIMI_CLASSIC_API_MODELS = ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"];
+const KIMI_API_MODELS = ["kimi-k3", ...KIMI_CLASSIC_API_MODELS];
+const KIMI_CODING_MODELS = [...KIMI_CODING_K3_MODELS, ...KIMI_CLASSIC_API_MODELS, "kimi-for-coding"];
 const KIMI_THINKING_MODELS = KIMI_CODING_MODELS;
 const KIMI_CODING_NO_REASONING_MODELS = KIMI_CODING_MODELS.filter(id => !KIMI_CODING_K3_MODELS.includes(id));
 const KIMI_API_NO_REASONING_MODELS = KIMI_API_MODELS.filter(id => id !== "kimi-k3");
@@ -653,8 +650,7 @@ const NVIDIA_NIM_KIMI_MODELS = [
  * registry is the only source of truth for which models can see images.
  *
  * Two lists, both verified per-model against NVIDIA documentation on 2026-08-04
- * (build.nvidia.com model pages and docs.api.nvidia.com/nim/reference/*). Evidence and
- * the per-id audit: devlog/_fin/260804_stack7_service_vision/011_nim_id_audit.md.
+ * (build.nvidia.com model pages and docs.api.nvidia.com/nim/reference/*).
  *
  * Read `noVisionModels` carefully — it lists models that CANNOT see images, which is
  * what routes them through the proxy's vision sidecar (src/vision/index.ts) and makes the
@@ -732,7 +728,7 @@ const NEURALWATT_REASONING_HISTORY_MODELS = [
 // 260728 Baseten Model APIs: `/v1/models` owns the live lineup, while these hints
 // describe only capabilities that Baseten documents per slug. Unlisted live models
 // intentionally inherit the empty provider ladder instead of being advertised with
-// opencodex's generic reasoning defaults. Audio is omitted because the current proxy
+// CodexCommander's generic reasoning defaults. Audio is omitted because the current proxy
 // request model does not carry OpenAI `audio_url` parts.
 // Evidence: https://docs.baseten.co/inference/model-apis/reasoning
 //           https://docs.baseten.co/inference/model-apis/vision
@@ -902,7 +898,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     authKind: "oauth",
     featured: false,
     dashboardPreset: true,
-    note: "Experimental Cursor bridge. Live transport and live model discovery are enabled after a standalone PKCE browser login via 'ocx login cursor'; native read/write/delete/shell/fetch execution is disabled by default and request text such as Codex sandbox markers never authorizes it. Set \"nativeLocalExec\": \"on\" on providers.cursor in ~/.opencodex/config.json (dashboard: Providers → Cursor → Edit JSON) only for a trusted local experiment where every data-plane caller is trusted. \"off\" denies all, \"codex-sandbox\" is accepted for backwards compatibility but fails closed, and legacy \"unsafeAllowNativeLocalExec\": true still means explicit operator opt-in.",
+    note: "Experimental Cursor bridge. Live transport and live model discovery are enabled after a standalone PKCE browser login via 'ccx login cursor'; native read/write/delete/shell/fetch execution is disabled by default and request text such as Codex sandbox markers never authorizes it. Set \"nativeLocalExec\": \"on\" on providers.cursor in ~/.codexcommander/config.json (dashboard: Providers → Cursor → Edit JSON) only for a trusted local experiment where every data-plane caller is trusted. \"off\" denies all other local execution.",
     models: cursorModelIds(CURSOR_STATIC_MODELS),
     liveModels: true,
     defaultModel: "auto",
@@ -933,15 +929,14 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     jawcodeBundle: "xai",
     note: "Log in with your Grok account",
     // Parallel tool calls: officially supported and default-on per docs.x.ai function-calling
-    // (verified 260709, devlog/_plan/260709_parallel_tool_calls). Streamed calls arrive whole
+    // (verified 2026-07-09). Streamed calls arrive whole
     // per chunk, so the buffered parser assembles them losslessly.
     parallelToolCalls: true,
     // Live /v1/models discovery is the authoritative lineup (verified 260709: returns grok-4.5);
     // the static list below is the logged-out fallback seed.
     liveModels: true,
     // 260709 refresh: lineup + metadata from official docs.x.ai (grok-4.5 announced 07-08);
-    // grok-composer-2.5-fast kept as account-verified (absent from public docs). Evidence:
-    // devlog/model_update/260709_model_refresh/001_xai_lineup.md.
+    // grok-composer-2.5-fast is retained as account-verified despite being absent from public docs.
     // grok-4.20-multi-agent-0309 is intentionally absent: the OAuth chat-completions
     // transport returns 400 ("Multi Agent requests are not allowed on chat completions").
     models: ["grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning", "grok-build-0.1", "grok-composer-2.5-fast"],
@@ -961,7 +956,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     noReasoningModels: ["grok-4.20-0309-non-reasoning", "grok-build-0.1", "grok-composer-2.5-fast"],
     // Replay assistant reasoning_content for grok reasoning models: xAI documents dropped
     // reasoning_content as the top cause of prompt-cache misses on multi-turn conversations
-    // (docs.x.ai prompt-caching/multi-turn, verified 2026-07-13 — devlog/_plan/260713_grok_caching).
+    // (docs.x.ai prompt-caching/multi-turn, verified 2026-07-13).
     // Models that never emit reasoning simply have no thinking parts to replay (no-op).
     preserveReasoningContentModels: ["grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning"],
     // grok-4.5 reasoning is always-on with low/medium/high control (no off tier upstream).
@@ -1220,7 +1215,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     dashboardUrl: "https://portal.neuralwatt.com",
     defaultModel: "glm-5.2",
     // 2026-07-10 live /v1/models: K2.5 rows were removed and GLM-5.2 short variants added.
-    // Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md and https://api.neuralwatt.com/v1/models.
+    // Snapshot from the live /v1/models endpoint.
     models: [
       "glm-5.2", "glm-5.2-fast", "glm-5.2-short", "glm-5.2-short-fast",
       "kimi-k2.6", "kimi-k2.6-fast",
@@ -1261,7 +1256,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     //   and choice-scoped mid-stream error contract.
     // - Cline's official catalog source resolves per-model capabilities through OpenRouter data;
     //   the static context/modality snapshot below was cross-checked against that catalog.
-    // - cline.bot/tos identifies Cline Bot Inc. as the operator. Maintenance owner: @lidge-jun.
+    // - cline.bot/tos identifies Cline Bot Inc. as the operator.
     id: "cline-pass",
     label: "ClinePass",
     adapter: "openai-chat",
@@ -1349,8 +1344,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     note: "Korean enterprise LLM gateway. Per-key allowed models are discovered live from /v1/models. Full catalog: https://bizrouter.ai/models",
   },
   { id: "groq", label: "Groq", adapter: "openai-chat", baseUrl: "https://api.groq.com/openai/v1", authKind: "key", featured: true, dashboardUrl: "https://console.groq.com/keys" },
-  // 2026-07-10 Gemini API refresh: Tier-2 ai.google.dev evidence recorded in
-  // devlog/_plan/260710_provider_hardening/001_research_frontier.md.
+  // Gemini API snapshot refreshed 2026-07-10.
   {
     id: "google", label: "Google Gemini", adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", authKind: "key", featured: true,
     dashboardUrl: "https://aistudio.google.com/apikey", defaultModel: "gemini-3.5-flash", models: ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview"],
@@ -1379,7 +1373,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     authKind: "key",
     dashboardUrl: "https://platform.deepseek.com/api_keys",
     // deepseek-chat/deepseek-reasoner are upstream-deprecated at 2026-07-24 15:59 UTC;
-    // kept until then. Evidence: devlog/_plan/260710_provider_hardening/002_research_cn.md.
+    // kept until then.
     models: ["deepseek-chat", "deepseek-reasoner", ...DEEPSEEK_THINKING_MODELS],
     defaultModel: "deepseek-v4-flash",
     modelContextWindows: { "deepseek-v4-flash": 1_000_000, "deepseek-v4-pro": 1_000_000 },
@@ -1433,7 +1427,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // on their behalf (same treatment as opencode-go's DeepSeek V4 entries above).
     noVisionModels: ["deepseek-chat", "deepseek-reasoner", ...DEEPSEEK_THINKING_MODELS],
   },
-  // llama-3.3-70b was deprecated by Cerebras on 2026-02-16. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
+  // llama-3.3-70b was deprecated by Cerebras on 2026-02-16.
   { id: "cerebras", label: "Cerebras", baseUrl: "https://api.cerebras.ai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://cloud.cerebras.ai/platform/apikeys", defaultModel: "gpt-oss-120b" },
   {
     id: "deepinfra",
@@ -1584,7 +1578,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     },
     // Verified 2026-08-03: public /provider/v1/models returns 51 rows; /chat/completions returns
     // 401 UNAUTHORIZED without a Bearer key. Primary source: https://commandcode.ai/docs/provider.
-    note: "Command Code Provider API (OpenAI-compatible); API access requires the Provider plan. Use `ocx login command-code` for OAuth account login (imports an existing local Command Code CLI credential when present). Docs: https://commandcode.ai/docs/provider.",
+    note: "Command Code Provider API (OpenAI-compatible); API access requires the Provider plan. Use `ccx login command-code` for OAuth account login (imports an existing local Command Code CLI credential when present). Docs: https://commandcode.ai/docs/provider.",
   },
   {
     id: "sambanova",
@@ -1681,7 +1675,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     },
     note: "Shared Generative APIs Serverless Chat Completions only; project-qualified and dedicated deployment hosts require a custom provider.",
   },
-  // FREEZE 2026-07-10: exact serverless ids remain auth-gated/unverified. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
+  // FREEZE 2026-07-10: exact serverless ids remain auth-gated/unverified.
   { id: "together", label: "Together", baseUrl: "https://api.together.xyz/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://api.together.xyz/settings/api-keys" },
   { id: "fireworks", label: "Fireworks", baseUrl: "https://api.fireworks.ai/inference/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://fireworks.ai/account/api-keys" },
   {
@@ -1704,7 +1698,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     preserveReasoningContentModels: KIMI_API_MODELS,
   },
   { id: "huggingface", label: "Hugging Face", baseUrl: "https://router.huggingface.co/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://huggingface.co/settings/tokens" },
-  // 260715 NIM hardening (issue #126, devlog/_plan/260715_issue126_nim_kimi):
+  // 260715 NIM hardening (issue #126):
   // - NIM kimi rejects `parallel_tool_calls: true` with 400 "This model only supports single
   //   tool-calls at once!" (openclaw#37048). NVIDIA's own function-calling docs default the
   //   Boolean to false, so provider-wide `false` is the documented-safe wire value.
@@ -1728,8 +1722,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     note: "Free tier on NVIDIA NIM — API key still required (get a free key at build.nvidia.com).",
   },
   { id: "venice", label: "Venice", baseUrl: "https://api.venice.ai/api/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://venice.ai/settings/api" },
-  // 260710 GLM-5.2 context and path-specific ids: Tier-2 evidence in
-  // devlog/_plan/260710_provider_hardening/002_research_cn.md.
+  // GLM-5.2 context and path-specific IDs refreshed 2026-07-10.
   {
     id: "zai", label: "Z.AI — GLM Coding Plan", baseUrl: "https://api.z.ai/api/coding/paas/v4", adapter: "openai-chat", authKind: "key",
     dashboardUrl: "https://z.ai/manage-apikey/apikey-list", defaultModel: "glm-5.2",
@@ -1897,9 +1890,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     noVisionModels: VOLCENGINE_PLAN_TEXT_ONLY_MODELS,
     note: "Coding tools only. Agent Plan is a subscription endpoint over the native Responses API with a static fallback catalog; Ark plan quota is intended for supported AI coding and agent tools, so avoid using this key as a general-purpose API key.",
   },
-  // 2026-07-10: docs unverified; model data frozen. Evidence: devlog/_plan/260710_provider_hardening/002_research_cn.md.
+  // 2026-07-10: docs unverified; model data frozen.
   { id: "qianfan", label: "Qianfan (Baidu)", baseUrl: "https://qianfan.baidubce.com/v2", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://console.bce.baidu.com/iam/#/iam/apikey/list" },
-  // 2026-07-10: docs unverified; model data frozen. Evidence: devlog/_plan/260710_provider_hardening/002_research_cn.md.
+  // 2026-07-10: docs unverified; model data frozen.
   { id: "alibaba", label: "Alibaba Coding Plan", baseUrl: ALIBABA_CODING_INTL_BASE_URL, adapter: "openai-chat", authKind: "key", allowBaseUrlOverride: true, baseUrlChoices: ALIBABA_CODING_BASE_URL_CHOICES, dashboardUrl: "https://dashscope.console.aliyun.com/apiKey" },
   {
     id: "alibaba-token-plan",
@@ -1969,7 +1962,6 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   },
   // NEEDS_HUMAN 2026-07-10: kept for config compatibility, but this is a dashboard URL,
   // no /models endpoint is documented, and tools are silently ignored upstream per docs.parallel.ai.
-  // Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "parallel", label: "Parallel", baseUrl: "https://platform.parallel.ai", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://platform.parallel.ai" },
   // ZenMux native ids are vendor-namespaced (`<vendor>/<model>`), verified live against
   // https://zenmux.ai/api/v1/models on 2026-07-18. The static seed doubles as the
@@ -2005,7 +1997,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "gpt-oss", "qwen3-coder:480b",
     ],
   },
-  // FREEZE 2026-07-10: codestral-latest is unconfirmed behind auth. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
+  // FREEZE 2026-07-10: codestral-latest is unconfirmed behind auth.
   { id: "mistral", label: "Mistral", baseUrl: "https://api.mistral.ai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://console.mistral.ai/api-keys", defaultModel: "codestral-latest" },
   {
     id: "minimax", label: "MiniMax — Coding Plan", baseUrl: "https://api.minimax.io/v1", adapter: "openai-chat", authKind: "key",
@@ -2158,7 +2150,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     },
     note: "Experimental unofficial Copilot bridge. Logs in via GitHub device flow using the public VS Code OAuth client id, then exchanges for a short-lived Copilot API token (copilot_internal). Requires an active Copilot subscription. GitHub may tighten or revoke this path; do not send confidential material you would not paste into Copilot Chat.",
   },
-  // FREEZE 2026-07-10: no public OpenAI-compatible endpoint is documented. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
+  // FREEZE 2026-07-10: no public OpenAI-compatible endpoint is documented.
   { id: "gitlab-duo", label: "GitLab Duo", baseUrl: "https://cloud.gitlab.com/ai/v1/proxy/openai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://gitlab.com/-/user_settings/personal_access_tokens" },
 ];
 
@@ -2187,7 +2179,7 @@ function normalizedProviderEndpoint(value: string): string {
  */
 export function providerMatchesRegistryTransport(
   id: string,
-  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+  provider: Pick<CodexCommanderProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<CodexCommanderProviderConfig, "authMode">>,
 ): boolean {
   const entry = getProviderRegistryEntry(id);
   if (!entry) return false;
@@ -2214,7 +2206,7 @@ export function providerMatchesRegistryTransport(
  * base URL are skipped, because their configured URL cannot identify one vendor route.
  */
 export function registryEntryForProviderDestination(
-  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+  provider: Pick<CodexCommanderProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<CodexCommanderProviderConfig, "authMode">>,
 ): ProviderRegistryEntry | undefined {
   if (typeof provider.baseUrl !== "string" || !provider.baseUrl) return undefined;
   if (provider.authMode !== undefined && provider.authMode !== "key") return undefined;
@@ -2235,7 +2227,7 @@ export function registryEntryForProviderDestination(
  */
 export function providerModelWireDefault(
   id: string,
-  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+  provider: Pick<CodexCommanderProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<CodexCommanderProviderConfig, "authMode">>,
   modelId: string,
   allowedWires: ReadonlySet<string>,
   inbound: InboundWire,
@@ -2254,7 +2246,7 @@ export function providerModelWireDefault(
 /** Resolve a registry-only upstream-streaming compatibility hint for Responses turns. */
 export function providerModelResponsesUpstreamStreaming(
   id: string,
-  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+  provider: Pick<CodexCommanderProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<CodexCommanderProviderConfig, "authMode">>,
   modelId: string,
 ): boolean | undefined {
   const entry = getProviderRegistryEntry(id);
@@ -2267,7 +2259,7 @@ export function providerModelResponsesUpstreamStreaming(
  * `codexAccountMode` on the provider config wins and a missing/invalid value defaults to
  * `"pool"`. Other providers keep registry-only metadata (there is no mode for `openai-apikey`).
  */
-export function providerCodexAccountMode(id: string, provider?: OcxProviderConfig): CodexAccountMode | undefined {
+export function providerCodexAccountMode(id: string, provider?: CodexCommanderProviderConfig): CodexAccountMode | undefined {
   const registryMode = getProviderRegistryEntry(id)?.codexAccountMode;
   if (id !== "openai") return registryMode;
   const persisted = provider?.codexAccountMode;

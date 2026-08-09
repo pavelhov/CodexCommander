@@ -36,7 +36,7 @@ import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { modelInList, namespacedToolName } from "../../types";
-import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage } from "../../types";
+import type { AdapterEvent, CodexCommanderConfig, CodexCommanderParsedRequest, CodexCommanderProviderConfig, CodexCommanderProviderContinuationState, CodexCommanderUsage } from "../../types";
 import {
   forceRefreshOAuthAccessSnapshot,
   getOAuthCredentialApiBaseUrl,
@@ -212,7 +212,7 @@ export function adapterNeedsForcedContinuation(name: string): boolean {
 }
 
 export function sidecarOutcomeRecorder(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   authCtx: CodexAuthContext,
   threadId?: string | null,
 ): ((outcome: CodexUpstreamOutcome) => void) | undefined {
@@ -248,7 +248,7 @@ function isFixedCodexAccount(authCtx: CodexAuthContext): boolean {
 
 export function usesCodexForwardPoolAuth(
   authCtx: CodexAuthContext,
-  provider: OcxProviderConfig,
+  provider: CodexCommanderProviderConfig,
 ): authCtx is Extract<CodexAuthContext, { kind: "pool" | "main-pool" }> {
   return (authCtx.kind === "pool" || authCtx.kind === "main-pool")
     && provider.authMode === "forward" && provider.adapter === "openai-responses";
@@ -300,9 +300,9 @@ export function shouldRetryCodexPoolAccountQuota(response: Response): boolean {
 
 interface CodexPoolAccountRetryArgs {
   req: Request;
-  config: OcxConfig;
-  route: { providerName: string; modelId: string; provider: OcxProviderConfig };
-  parsed: OcxParsedRequest;
+  config: CodexCommanderConfig;
+  route: { providerName: string; modelId: string; provider: CodexCommanderProviderConfig };
+  parsed: CodexCommanderParsedRequest;
   logCtx: RequestLogContext;
   options: {
     abortSignal?: AbortSignal;
@@ -487,9 +487,9 @@ async function retryCodexPoolOnAlternateAccount(
 
 
 export function codexForwardTerminalOutcomeRecorder(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   authCtx: CodexAuthContext,
-  provider: OcxProviderConfig,
+  provider: CodexCommanderProviderConfig,
   modelId?: string,
   logCtx?: RequestLogContext,
   threadId?: string | null,
@@ -572,7 +572,7 @@ export interface ConsumedComboFailure {
   /** Valid numeric/date value used only for cooldown calculation. */
   retryAfter?: string;
   /** Reserved for 040 usage attribution without adding another body read. */
-  usage?: OcxUsage;
+  usage?: CodexCommanderUsage;
 }
 
 
@@ -640,7 +640,7 @@ export async function consumeComboFailure(
 ): Promise<ConsumedComboFailure> {
   const fallback = `Provider error ${response.status}`;
   let classificationText = fallback;
-  let usage: OcxUsage | undefined;
+  let usage: CodexCommanderUsage | undefined;
   let upstreamCode: string | undefined;
   try {
     const body = await readBoundedResponseBody(response, { signal });
@@ -693,7 +693,7 @@ export async function consumeComboFailure(
 
 
 
-export function usageFromComboFailureText(text: string): OcxUsage | undefined {
+export function usageFromComboFailureText(text: string): CodexCommanderUsage | undefined {
   try {
     const payload = JSON.parse(text) as Record<string, unknown>;
     const nested = payload.response;
@@ -795,7 +795,7 @@ type ResponsesAuthResolution =
  */
 async function resolveResponsesCodexAuth(
   req: Request,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   route: RouteResult,
   options: HandleResponsesOptions,
 ): Promise<ResponsesAuthResolution> {
@@ -866,9 +866,9 @@ async function resolveResponsesCodexAuth(
  * Must run only after subagent fallback has settled the model/provider.
  */
 async function applyFinalRouteRequestNormalization(args: {
-  parsed: OcxParsedRequest;
+  parsed: CodexCommanderParsedRequest;
   route: RouteResult;
-  config: OcxConfig;
+  config: CodexCommanderConfig;
   req: Request;
   logCtx: RequestLogContext;
   inboundWire: InboundWire;
@@ -909,7 +909,7 @@ async function applyFinalRouteRequestNormalization(args: {
       parsed._rawBody = rewrite.body;
       parsed._v2PlaintextCollaborationAlias = true;
     } else if (isInjectionDebugEnabled()) {
-      injectionDebugLog(`[opencodex] native v2 plaintext delivery stayed fail-closed (${rewrite.reason})`);
+      injectionDebugLog(`[codexcommander] native v2 plaintext delivery stayed fail-closed (${rewrite.reason})`);
     }
   }
 
@@ -981,10 +981,10 @@ async function applyFinalRouteRequestNormalization(args: {
     if (guidance) {
       injectDeveloperMessage(parsed, guidance);
       if (isInjectionDebugEnabled()) {
-        injectionDebugLog(`[opencodex] ${route.modelId}: multi-agent guidance injected (surface=${collabSurface(parsed)}, guidanceEnabled=${multiAgentGuidanceEnabled(config)}, ${guidance.length} chars)`);
+        injectionDebugLog(`[codexcommander] ${route.modelId}: multi-agent guidance injected (surface=${collabSurface(parsed)}, guidanceEnabled=${multiAgentGuidanceEnabled(config)}, ${guidance.length} chars)`);
       }
     } else if (isInjectionDebugEnabled() && collabSurface(parsed) !== null) {
-      injectionDebugLog(`[opencodex] ${route.modelId}: collab surface=${collabSurface(parsed)}, guidance silent (effort=${parsed.options.reasoning ?? "unset"}, injectionModel=${config.injectionModel ?? "unset"})`);
+      injectionDebugLog(`[codexcommander] ${route.modelId}: collab surface=${collabSurface(parsed)}, guidance silent (effort=${parsed.options.reasoning ?? "unset"}, injectionModel=${config.injectionModel ?? "unset"})`);
     }
   }
 
@@ -996,11 +996,11 @@ async function applyFinalRouteRequestNormalization(args: {
       if (capped) {
         logCtx.requestedEffort = `${capped.from}->${capped.to}`;
         if (isInjectionDebugEnabled()) {
-          injectionDebugLog(`[opencodex] ${route.modelId}: effort cap applied (${capped.from} -> ${capped.to}, ${capped.subagent ? "sub-agent" : "main"} turn)`);
+          injectionDebugLog(`[codexcommander] ${route.modelId}: effort cap applied (${capped.from} -> ${capped.to}, ${capped.subagent ? "sub-agent" : "main"} turn)`);
         }
       }
     } else if (isInjectionDebugEnabled() && (config.effortCap || config.subagentEffortCap)) {
-      injectionDebugLog(`[opencodex] ${route.modelId}: effort cap skipped (surface=${surface ?? "none"}, v2 feature only)`);
+      injectionDebugLog(`[codexcommander] ${route.modelId}: effort cap skipped (surface=${surface ?? "none"}, v2 feature only)`);
     }
   }
 
@@ -1029,7 +1029,7 @@ export async function handleComboResponses(
   req: Request,
   rawBody: unknown,
   comboId: string,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   logCtx: RequestLogContext,
   options: HandleResponsesOptions,
 ): Promise<Response> {
@@ -1274,7 +1274,7 @@ export async function handleComboResponses(
  * request against a gateway we know nothing about.
  */
 export function applyServiceTierGate(
-  provider: OcxProviderConfig,
+  provider: CodexCommanderProviderConfig,
   rawBody: unknown,
   options: { serviceTier?: string },
 ): void {
@@ -1291,7 +1291,7 @@ export function applyServiceTierGate(
  */
 export async function handleResponses(
   req: Request,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   logCtx: RequestLogContext,
   options: HandleResponsesOptions = {},
 ): Promise<Response> {
@@ -1340,7 +1340,7 @@ function finalizeOwnedTranslatorBudget(
  */
 async function handleResponsesInner(
   req: Request,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   logCtx: RequestLogContext,
   options: HandleResponsesOptions & {
     translatorBudget: TranslatorBudget;
@@ -1393,7 +1393,7 @@ async function handleResponsesInner(
     );
     if (rewritten > 0)
       console.warn(
-        `[opencodex] rewrote ${rewritten} plaintext encrypted_content part(s) to input_text (spawn-message compatibility)`,
+        `[codexcommander] rewrote ${rewritten} plaintext encrypted_content part(s) to input_text (spawn-message compatibility)`,
       );
   }
 
@@ -1440,7 +1440,7 @@ async function handleResponsesInner(
   logCtx.configuredSpeedLabel = requestLogSpeedLabel(logCtx.configuredServiceTier);
 
   // Shadow call intercept: rewrite Codex 0.145.0+ helper calls (gpt-5.6-luna).
-  // Ancient clients using gpt-5.4-mini remain configurable via sourceModels.
+  // Explicit sourceModels overrides support current custom helper identifiers.
   const _sci = config.shadowCallIntercept;
   if (_sci?.enabled && _sci.model && shouldInterceptShadowCall(
     parsed.modelId,
@@ -1536,7 +1536,7 @@ async function handleResponsesInner(
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo = fallback.to;
       if (isInjectionDebugEnabled()) {
-        injectionDebugLog(`[opencodex] subagent model fallback ${fallback.from} -> ${fallback.to}`);
+        injectionDebugLog(`[codexcommander] subagent model fallback ${fallback.from} -> ${fallback.to}`);
       }
     }
     subagentQuotaFailureModel = fallback?.to ?? parsed.modelId;
@@ -1763,8 +1763,8 @@ async function handleResponsesInner(
   const recordTerminalOutcomes = options.recordTerminalOutcomes !== false;
 
   const continuationStateForResponse = (
-    emitted?: OcxProviderContinuationState,
-  ): OcxProviderContinuationState | undefined => {
+    emitted?: CodexCommanderProviderContinuationState,
+  ): CodexCommanderProviderContinuationState | undefined => {
     const cursorConversationId = parsed._cursorConversationId;
     const inherited = parsed._providerContinuation;
     if (!emitted && !inherited && !cursorConversationId) return undefined;
@@ -1807,14 +1807,14 @@ async function handleResponsesInner(
   if ("passthrough" in adapter && adapter.passthrough && !routedCompaction) {
     const imageGenCallAliases = route.provider.authMode === "forward"
       ? new Map<string, { namespace: string; name: string }>()
-      : imageGenToolCallAliases(toolBridgeMaps.toolNsMap, parsed._rawBody, translatorBudget);
+      : imageGenToolCallAliases(toolBridgeMaps.toolNsMap, translatorBudget);
     const plaintextCollaborationClientRewrite = createV2PlaintextCollaborationRestoreRewrite(
       parsed._v2PlaintextCollaborationAlias === true,
     ) ?? createV2PlaintextCollaborationMarkerRewrite(
       plaintextV2DeliveryRequested && !isCanonicalOpenAiForwardProvider(route.provider),
     );
     // Local continuation cache for the ChatGPT passthrough. Codex WS turns chain with
-    // previous_response_id, ocx converts them to internal HTTP requests, and the ChatGPT Codex
+    // previous_response_id, CodexCommander converts them to internal HTTP requests, and the ChatGPT Codex
     // REST backend rejects the parameter — the adapter strips it in forward mode, so the ONLY
     // way a chained turn keeps its earlier context is the local replay expansion. Record
     // completed passthrough responses (force bypasses Codex's blanket store:false) so the next
@@ -1878,7 +1878,7 @@ async function handleResponsesInner(
       return formatErrorResponse(502, "upstream_error", msg);
     };
     try {
-      // Transient-5xx pre-stream retry (devlog/_plan/260716_claudecode_hardening/010):
+      // Transient-5xx pre-stream retry (implementation contract):
       // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.
       // Body is a replayable string; nothing has streamed to the client yet.
       upstreamResponse = await fetchWithTransientRetry(
@@ -2112,7 +2112,7 @@ async function handleResponsesInner(
     // gate; darwin no-rewrite traffic joins it only for explicit
     // Darwin `auto` uses the tested synchronous-pull eager shape only for an
     // activated plaintext-V2 collaboration rewrite. Other Darwin rewrites stay
-    // explicit-only; `legacy-tee` remains the rollback switch.
+    // explicit-only; `safe-tee` remains the rollback switch.
     // Generic no-rewrite traffic on the bundled runtime remains on tee by default.
     if (isEventStream && upstreamResponse.body) {
       const repairConfig = route.provider.responsesItemIdRepair;
@@ -2686,7 +2686,7 @@ async function handleResponsesInner(
             }
           },
           ...(routedCompaction ? {} : {
-            onCompletedResponse: (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) =>
+            onCompletedResponse: (response: Record<string, unknown>, providerState?: CodexCommanderProviderContinuationState) =>
               rememberResponseState(
                 parsed._rawBody,
                 response,
@@ -2714,7 +2714,7 @@ async function handleResponsesInner(
         return formatErrorResponse(502, "upstream_error", redactSecretString(message));
       }
     }
-    let providerState: OcxProviderContinuationState | undefined;
+    let providerState: CodexCommanderProviderContinuationState | undefined;
     const json = buildResponseJSON(events, parsed.modelId, {
       translatorBudget,
       replayCacheScope: parsed._clientThreadId ?? "global",
@@ -2785,7 +2785,7 @@ async function handleResponsesInner(
   // (TypeScript drops narrowing for a `let` captured by a nested function).
   const builtInitialRequest = initialRequest;
   let sameTargetRequest: AdapterRequest | undefined = builtInitialRequest;
-  let sameTargetParsed: OcxParsedRequest | undefined = parsed;
+  let sameTargetParsed: CodexCommanderParsedRequest | undefined = parsed;
   let sameTargetToken = 0;
   let transportToken = 0;
   /**
@@ -2837,7 +2837,7 @@ async function handleResponsesInner(
   let imageTierBias = 0;
   if (!upstreamResponse.ok) {
     // Recovery loop: multi-key 429 failover + at most ONE anthropic 413 tightened retry
-    // (devlog/260714_image_normalization_pipeline/030). One mutable activeAdapter serves
+    // (implementation contract). One mutable activeAdapter serves
     // both paths so a 429→413 sequence never rebuilds against a stale pre-rotation
     // adapter, and imageTierBias — once armed — rides EVERY subsequent rebuild so a
     // 413→429 rotation cannot silently undo the tightening.
@@ -3110,7 +3110,7 @@ async function handleResponsesInner(
    * back to key/account failover; a failure becomes an in-stream adapter error so the client
    * never sees a second hidden HTTP response or an unbounded retry loop.
    */
-  const fetchTerminalGuardContinuation = async function* (nextParsed: OcxParsedRequest): AsyncGenerator<AdapterEvent> {
+  const fetchTerminalGuardContinuation = async function* (nextParsed: CodexCommanderParsedRequest): AsyncGenerator<AdapterEvent> {
     let response: Response | undefined;
     // One-shot recovery label for the next top-of-loop continuation send after a failover rotation.
     let nextContinuationRecoveryKind: AttemptRecoveryKind | undefined;
@@ -3385,7 +3385,7 @@ async function handleResponsesInner(
         // PRE-compaction history, and a later previous_response_id expansion would rehydrate the
         // giant stale chain Codex just replaced.
         ...(routedCompaction ? {} : {
-          onCompletedResponse: (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) =>
+          onCompletedResponse: (response: Record<string, unknown>, providerState?: CodexCommanderProviderContinuationState) =>
             rememberResponseState(
               parsed._rawBody,
               response,
@@ -3422,7 +3422,7 @@ async function handleResponsesInner(
       cleanupUpstreamAbort();
     }
     const { toolNsMap, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
-    let providerState: OcxProviderContinuationState | undefined;
+    let providerState: CodexCommanderProviderContinuationState | undefined;
     const json = buildResponseJSON(events, parsed.modelId, {
       translatorBudget,
       replayCacheScope: parsed._clientThreadId ?? "global",

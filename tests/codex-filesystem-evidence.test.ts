@@ -29,8 +29,8 @@ import {
   type CatalogGatherProviderAuthEvidence,
 } from "../src/codex/catalog/filesystem-evidence";
 import type { CatalogSourceEvidence } from "../src/codex/convergence-types";
-import { saveConfig } from "../src/config";
-import type { OcxConfig } from "../src/types";
+import { getDefaultConfig, saveConfig } from "../src/config";
+import type { CodexCommanderConfig } from "../src/types";
 
 interface ManifestEntry {
   readonly path: string;
@@ -46,12 +46,12 @@ interface ManifestEntry {
 
 let testRoot = "";
 let codexHome = "";
-let opencodexHome = "";
+let codexCommanderHome = "";
 let previousCodexHome: string | undefined;
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 
-function config(): OcxConfig {
-  return { port: 10100, providers: {}, defaultProvider: "openai" };
+function config(): CodexCommanderConfig {
+  return getDefaultConfig();
 }
 
 function recursiveManifest(root: string): readonly ManifestEntry[] {
@@ -89,21 +89,21 @@ function recursiveManifest(root: string): readonly ManifestEntry[] {
 
 beforeEach(() => {
   previousCodexHome = process.env.CODEX_HOME;
-  previousOpencodexHome = process.env.OPENCODEX_HOME;
-  testRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-filesystem-evidence-")));
+  previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+  testRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "ccx-filesystem-evidence-")));
   codexHome = join(testRoot, "codex-home");
-  opencodexHome = join(testRoot, "opencodex-home");
+  codexCommanderHome = join(testRoot, "codexcommander-home");
   mkdirSync(codexHome, { recursive: true });
-  mkdirSync(opencodexHome, { recursive: true });
+  mkdirSync(codexCommanderHome, { recursive: true });
   process.env.CODEX_HOME = codexHome;
-  process.env.OPENCODEX_HOME = opencodexHome;
+  process.env.CODEXCOMMANDER_HOME = codexCommanderHome;
 });
 
 afterEach(() => {
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   rmSync(testRoot, { recursive: true, force: true });
 });
 
@@ -200,7 +200,7 @@ test("populated and scratch gather sessions perform zero filesystem writes", () 
   saveConfig(config());
   const configPath = join(codexHome, "config.toml");
   const activePath = join(codexHome, "active.json");
-  const authPath = join(opencodexHome, "oauth.json");
+  const authPath = join(codexCommanderHome, "oauth.json");
   writeFileSync(configPath, "model_catalog_json = \"active.json\"\n");
   writeFileSync(activePath, JSON.stringify({
     models: [{ slug: "gpt-5.5", base_instructions: "observed" }],

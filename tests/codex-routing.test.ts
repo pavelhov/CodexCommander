@@ -46,24 +46,37 @@ import { CODEX_UNKNOWN_USAGE_SCORE, isCodexQuotaExhausted } from "../src/codex/q
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
 import { routeModel } from "../src/router";
 import { consumeForInspection } from "../src/server/relay";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-routing-test");
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 let previousCodexHome: string | undefined;
 
-function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
-  return {
-    providers: {},
+function makeConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
+  const config = {
+    port: 10100,
+    multiAgentGuidanceEnabled: true,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+      },
+    },
+    defaultProvider: "openai",
     codexAccounts: [
-      { id: "a", email: "a@test", isMain: false },
-      { id: "b", email: "b@test", isMain: false },
+      { id: "a", email: "a@test", logLabel: "p00000a", isMain: false },
+      { id: "b", email: "b@test", logLabel: "p00000b", isMain: false },
     ],
     activeCodexAccountId: "a",
     autoSwitchThreshold: 80,
     upstreamFailoverThreshold: 3,
     ...overrides,
-  } as OcxConfig;
+  } as CodexCommanderConfig;
+  config.codexAccounts = config.codexAccounts?.map((account, index) => account.isMain || account.logLabel
+    ? account
+    : { ...account, logLabel: `p${(index + 1).toString(16).padStart(6, "0")}` });
+  return config;
 }
 
 function saveTestCredential(id: string): void {
@@ -83,10 +96,10 @@ function pendingInspectionStream(): ReadableStream<Uint8Array> {
 
 describe("codex routing", () => {
   beforeEach(() => {
-    previousOpencodexHome = process.env.OPENCODEX_HOME;
+    previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     // Isolate the main-account credential source: TEST_DIR has no auth.json, so the main
     // account is deterministically absent (these cases test the pool-only scenario).
     previousCodexHome = process.env.CODEX_HOME;
@@ -108,8 +121,8 @@ describe("codex routing", () => {
     clearAccountNeedsReauth("a");
     clearAccountNeedsReauth("b");
     clearAccountNeedsReauth("c");
-    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
@@ -978,7 +991,7 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("lru-0", config, now + CODEX_THREAD_AFFINITY_MAX_ENTRIES + 2)).toBe("b");
   });
 
-  test("thread affinity LRU cap includes legacy and native quota scopes", () => {
+  test("thread affinity LRU cap includes unscoped and native quota scopes", () => {
     const config = makeConfig();
     const now = 1_800_000_000_000;
     const threads = Math.floor(CODEX_THREAD_AFFINITY_MAX_ENTRIES / 3) + 1;
@@ -990,7 +1003,7 @@ describe("codex routing", () => {
       expect(resolveCodexAccountForThread(threadId, config, now + i * 3 + 2, "spark")).toBe("a");
     }
 
-    // The oldest legacy entry was evicted, while the same thread's later
+    // The oldest unscoped entry was evicted, while the same thread's later
     // shared and Spark entries remain independently affined to A.
     config.activeCodexAccountId = "b";
     const after = now + threads * 3;
@@ -1168,7 +1181,7 @@ describe("codex routing", () => {
     })).toEqual({ monthlyPercent: 39, monthlyResetAt: 3, monthlyIsPrimaryWindow: true });
   });
 
-  test("WHAM monthly primary preserves a legacy secondary weekly window", () => {
+  test("WHAM monthly primary preserves a secondary weekly window", () => {
     expect(parseUsageQuota({
       plan_type: "team",
       rate_limit: {
@@ -1184,7 +1197,7 @@ describe("codex routing", () => {
     });
   });
 
-  test("WHAM primary window without duration keeps the legacy weekly fallback", () => {
+  test("WHAM primary window without duration keeps the weekly fallback", () => {
     expect(parseUsageQuota({
       plan_type: "team",
       rate_limit: {
@@ -1289,7 +1302,7 @@ describe("codex routing", () => {
     expect(config.activeCodexAccountId).toBe("a");
   });
 
-  // Phase 40 (260630_wsl-account-autoswitch): bound-thread quota re-eval.
+  // Bound threads re-evaluate quota after the configured interval.
   test("bound thread over threshold switches after the re-eval interval", () => {
     const config = makeConfig();
     const now = 1_800_000_000_000;
@@ -1510,10 +1523,10 @@ describe("codex routing", () => {
 
 describe("codex account selection order", () => {
   beforeEach(() => {
-    previousOpencodexHome = process.env.OPENCODEX_HOME;
+    previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     previousCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = TEST_DIR;
     clearThreadAccountMap();
@@ -1533,20 +1546,20 @@ describe("codex account selection order", () => {
     clearPoolRotationState();
     clearAccountNeedsReauth("a");
     clearAccountNeedsReauth("b");
-    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
 
   /** `a` is ordered above `b`; the persisted operator selection is the lower tier. */
-  function orderedConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
+  function orderedConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
     return makeConfig({
       activeCodexAccountId: "b",
       codexAccountPriorities: { a: 1 },
       ...overrides,
-    } as Partial<OcxConfig>);
+    } as Partial<CodexCommanderConfig>);
   }
 
   test("an unbound request moves back up to the higher tier even when it is hotter", () => {
@@ -1618,7 +1631,7 @@ describe("codex account selection order", () => {
   });
 
   test("a manually pinned account outranks selection order", () => {
-    const config = orderedConfig({ activeCodexAccountPinned: "b" } as Partial<OcxConfig>);
+    const config = orderedConfig({ activeCodexAccountPinned: "b" } as Partial<CodexCommanderConfig>);
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 10);
 
@@ -1627,7 +1640,7 @@ describe("codex account selection order", () => {
   });
 
   test("the pin is spent once the pinned account crosses the threshold", () => {
-    const config = orderedConfig({ activeCodexAccountPinned: "b" } as Partial<OcxConfig>);
+    const config = orderedConfig({ activeCodexAccountPinned: "b" } as Partial<CodexCommanderConfig>);
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 90);
 
@@ -1636,7 +1649,7 @@ describe("codex account selection order", () => {
   });
 
   test("a cooldown on the pinned account hands routing back to selection order", () => {
-    const config = orderedConfig({ activeCodexAccountPinned: "b" } as Partial<OcxConfig>);
+    const config = orderedConfig({ activeCodexAccountPinned: "b" } as Partial<CodexCommanderConfig>);
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 10);
     recordCodexUpstreamOutcome(config, "b", 429, { retryAfter: "600" });
@@ -1648,7 +1661,7 @@ describe("codex account selection order", () => {
   // Preview cannot clear a spent pin, so it has to reach the same account by testing
   // pin liveness — the case the resolve-side release was built to converge with.
   test("preview and resolve agree while a drained pin is still stored", () => {
-    const config = orderedConfig({ activeCodexAccountPinned: "b" } as Partial<OcxConfig>);
+    const config = orderedConfig({ activeCodexAccountPinned: "b" } as Partial<CodexCommanderConfig>);
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 90);
 
@@ -1663,7 +1676,7 @@ describe("codex account selection order", () => {
     const config = orderedConfig({
       accountPoolStrategy: "fill-first",
       activeCodexAccountPinned: "b",
-    } as Partial<OcxConfig>);
+    } as Partial<CodexCommanderConfig>);
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 10);
 
@@ -1676,7 +1689,7 @@ describe("codex account selection order", () => {
     const config = orderedConfig({
       accountPoolStrategy: "fill-first",
       activeCodexAccountPinned: "a",
-    } as Partial<OcxConfig>);
+    } as Partial<CodexCommanderConfig>);
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 10);
     expect(resolveCodexAccountForThread(null, config)).toBe("a");
@@ -1691,7 +1704,7 @@ describe("codex account selection order", () => {
       accountPoolStrategy: "round-robin",
       accountPoolStickyLimit: 1,
       activeCodexAccountPinned: "b",
-    } as Partial<OcxConfig>);
+    } as Partial<CodexCommanderConfig>);
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 10);
     expect(resolveCodexAccountForThread(null, config)).toBe("b");
@@ -1705,7 +1718,7 @@ describe("codex account selection order", () => {
   });
 
   test("a pin the request never moves off survives in config", () => {
-    const config = orderedConfig({ activeCodexAccountPinned: "b" } as Partial<OcxConfig>);
+    const config = orderedConfig({ activeCodexAccountPinned: "b" } as Partial<CodexCommanderConfig>);
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 10);
 
@@ -1714,7 +1727,7 @@ describe("codex account selection order", () => {
   });
 
   test("excluding the pinned account releases the pin", () => {
-    const config = orderedConfig({ activeCodexAccountPinned: "b" } as Partial<OcxConfig>);
+    const config = orderedConfig({ activeCodexAccountPinned: "b" } as Partial<CodexCommanderConfig>);
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 10);
 

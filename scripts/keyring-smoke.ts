@@ -25,7 +25,7 @@ export async function runKeyringSmoke({
   createId = randomUUID,
   timeoutMs = 8_000,
 }: KeyringSmokeOptions = {}): Promise<void> {
-  const service = `opencodex.keyring-smoke.${createId()}`;
+  const service = `codexcommander.keyring-smoke.${createId()}`;
   const account = `ci-${createId()}`;
   const secret = createRandomBytes(32);
   let entry: KeyringSmokeEntry | null = null;

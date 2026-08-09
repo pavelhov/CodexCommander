@@ -10,7 +10,7 @@
 - Viewport: 1440 × 1024 CSS px, light/system theme
 - Source pixels: 1487 × 1058; normalized to 1440 × 1024 for comparison
 - Implementation pixels: 1440 × 1024 at 1× CSS density
-- State: three ready providers; Codex App/CLI/SDK, Claude Code, and OpenCode configured; OpenCode selected; remaining detected clients in Available; proxy reachable; 22 models in the OpenCodex catalog; two proxy access keys
+- State: three ready providers; Codex App/CLI/SDK, Claude Code, and OpenCode configured; OpenCode selected; remaining detected clients in Available; proxy reachable; 22 models in the CodexCommander catalog; two proxy access keys
 - Data: local visual-QA fixture only; no provider keys, account identifiers, or user configuration bytes were captured
 
 ## Evidence reviewed
@@ -33,7 +33,7 @@ Primary interactions tested in the in-app browser:
 
 ## Required fidelity surfaces
 
-- Fonts and typography: uses the existing OpenCodex system font stack, weights, caption scale, and heading hierarchy. Long product labels wrap without clipping at tablet/mobile widths.
+- Fonts and typography: uses the existing CodexCommander system font stack, weights, caption scale, and heading hierarchy. Long product labels wrap without clipping at tablet/mobile widths.
 - Spacing and layout rhythm: desktop proportions and section order closely match the source. Tablet collapses the detail column below the catalog; mobile stacks the flow and actions cleanly.
 - Colors and tokens: uses existing `--surface`, border, semantic green/amber/red, and focus tokens. No one-off palette was introduced.
 - Image quality and asset fidelity: all product/provider marks come from the repository’s real provider icon assets or its existing icon library. No emoji, CSS art, inline SVG substitutes, or placeholder image boxes remain.
@@ -74,9 +74,9 @@ Sol’s final audit found no P0/P1 issues and identified truthfulness and resili
 
 - Provider readiness now counts only providers that can actually route, including safe handling for keyless providers and excluding keyed providers with no key.
 - Model and change-history failures render unavailable/stale states instead of looking like fresh empty data.
-- Model counts explicitly say they belong to the shared OpenCodex catalog rather than implying per-client inventory.
+- Model counts explicitly say they belong to the shared CodexCommander catalog rather than implying per-client inventory.
 - Cross-tier provider search suspends tab semantics while grouped results from all tiers are visible.
-- Passive legacy redirects select the correct sidebar destination immediately, and grouped navigation scrolls on short screens.
+- Direct sidebar destinations select immediately, and grouped navigation scrolls on short screens.
 
 The desktop source/implementation comparison, tablet capture, mobile capture, overflow measurements, interaction checks, and console check were repeated after these corrections. No browser console errors or actionable visual regressions remain.
 

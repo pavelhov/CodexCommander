@@ -6,7 +6,7 @@ import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import { handleResponses } from "../src/server/responses";
 import { isEagerRelaySseResponse } from "../src/server/relay";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 setDefaultTimeout(30_000);
@@ -53,9 +53,9 @@ function stubSparseGateway(origin: string): void {
 }
 
 beforeEach(() => {
-  TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-snapshot-repair-server-"));
-  process.env.OPENCODEX_HOME = TEST_DIR;
-  isolated = installIsolatedCodexHome("ocx-snapshot-repair-codex-");
+  TEST_DIR = mkdtempSync(join(tmpdir(), "ccx-snapshot-repair-server-"));
+  process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+  isolated = installIsolatedCodexHome("ccx-snapshot-repair-codex-");
 });
 
 afterEach(async () => {
@@ -83,7 +83,7 @@ describe("responsesSnapshotRepair through /v1/responses", () => {
             responsesSnapshotRepair: true,
           },
         },
-      } as OcxConfig;
+      } as CodexCommanderConfig;
 
       const response = await handleResponses(
         new Request("http://localhost/v1/responses", {
@@ -112,6 +112,7 @@ describe("responsesSnapshotRepair through /v1/responses", () => {
     stubSparseGateway(gateway);
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "sparse",
       providers: {
         sparse: {
@@ -122,7 +123,7 @@ describe("responsesSnapshotRepair through /v1/responses", () => {
           responsesSnapshotRepair: true,
         },
       },
-    } as OcxConfig);
+    } as CodexCommanderConfig);
 
     const server = startServer(0);
     try {
@@ -161,6 +162,7 @@ describe("responsesSnapshotRepair through /v1/responses", () => {
     stubSparseGateway(gateway);
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "sparse",
       providers: {
         sparse: {
@@ -170,7 +172,7 @@ describe("responsesSnapshotRepair through /v1/responses", () => {
           apiKey: "test-key",
         },
       },
-    } as OcxConfig);
+    } as CodexCommanderConfig);
 
     const server = startServer(0);
     try {

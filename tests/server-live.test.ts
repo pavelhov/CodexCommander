@@ -16,12 +16,12 @@ import {
 } from "../src/server/readiness";
 import { startServer } from "../src/server";
 import { beginShutdownDrain, isDraining, resetLifecycleDrainStateForTests } from "../src/server/lifecycle";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
-const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
-const previousOpencodexHome = process.env.OPENCODEX_HOME;
+const previousApiToken = process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+const previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
 const originalFetch = globalThis.fetch;
 const TEST_DIR = join(import.meta.dir, ".tmp-server-live-test");
 let isolatedCodexHome: IsolatedCodexHome | null = null;
@@ -30,9 +30,9 @@ const DIRECT_CHATGPT_TOKEN = fakeChatGptJwt({ chatgpt_account_id: "acct-123" });
 beforeEach(() => {
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   mkdirSync(TEST_DIR, { recursive: true });
-  process.env.OPENCODEX_HOME = TEST_DIR;
-  delete process.env.OPENCODEX_API_AUTH_TOKEN;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-server-live-codex-");
+  process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+  delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-server-live-codex-");
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
   clearAccountNeedsReauth("pool-a");
@@ -42,10 +42,10 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-  else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousApiToken === undefined) delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+  else process.env.CODEXCOMMANDER_API_AUTH_TOKEN = previousApiToken;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   clearCodexUpstreamHealth();
@@ -99,11 +99,11 @@ function fakeLiveUpstream(captured: CapturedRequest[], status = 201, location = 
   return upstream;
 }
 
-function forwardConfig(): OcxConfig {
+function forwardConfig(): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "openai",
-    openaiProviderTierVersion: 2,
     providers: {
       openai: {
         adapter: "openai-responses",
@@ -112,7 +112,7 @@ function forwardConfig(): OcxConfig {
         codexAccountMode: "direct",
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 function multipartLiveBody(
@@ -186,8 +186,8 @@ test("POST /v1/live relays to an OpenAI API-key provider at /v1/realtime/calls",
   const upstream = fakeLiveUpstream(captured, 201, "/v1/realtime/calls/rtc_api");
   saveConfig({
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "openai-apikey",
-    openaiProviderTierVersion: 2,
     providers: {
       "openai-apikey": {
         adapter: "openai-responses",
@@ -195,7 +195,7 @@ test("POST /v1/live relays to an OpenAI API-key provider at /v1/realtime/calls",
         apiKey: "sk-test-live",
       },
     },
-  } as OcxConfig);
+  } as CodexCommanderConfig);
 
   const server = startServer(0);
   try {
@@ -384,11 +384,12 @@ test("OPTIONS preflight allows ChatGPT-Account-Id for voice clients", async () =
 test("POST /v1/live without an OpenAI upstream returns 400", async () => {
   saveConfig({
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "cursor",
     providers: {
       cursor: { adapter: "cursor", baseUrl: "https://api2.cursor.sh", apiKey: "cursor-token" },
     },
-  } as OcxConfig);
+  } as CodexCommanderConfig);
 
   const server = startServer(0);
   try {
@@ -438,11 +439,11 @@ test("a routed pool account's token overrides the caller bearer on the live rela
       },
     },
     codexAccounts: [
-      { id: "main", email: "main@example.test", isMain: true },
-      { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+      { id: "main", email: "main@example.test", logLabel: "p000001", isMain: true },
+      { id: "pool-a", email: "pool@example.test", logLabel: "p00000a", isMain: false, chatgptAccountId: "acct-pool-a" },
     ],
     activeCodexAccountId: "pool-a",
-  } as OcxConfig);
+  } as CodexCommanderConfig);
   saveCodexAccountCredential("pool-a", {
     accessToken: fakeChatGptJwt({ chatgpt_account_id: "acct-pool-a", email: "pool@example.test" }),
     refreshToken: "pool-refresh-token",
@@ -757,12 +758,12 @@ test("sideband relay preserves multibyte UTF-8 frames byte-identically in both d
   }
 });
 
-// The env-gated frame forensic log (OCX_LIVE_FRAME_LOG) records per-frame metadata and
+// The env-gated frame forensic log (CCX_LIVE_FRAME_LOG) records per-frame metadata and
 // U+FFFD presence without writing full payloads — the attribution tool for multibyte
 // transcript corruption reports.
 test("sideband frame log records direction, kind, and U+FFFD context without full payloads", async () => {
   const frameLogPath = join(TEST_DIR, "frames.jsonl");
-  process.env.OCX_LIVE_FRAME_LOG = frameLogPath;
+  process.env.CCX_LIVE_FRAME_LOG = frameLogPath;
   const FFFD_TEXT = "가볍게 ��기핼봐요";
 
   const upstream = Bun.serve({
@@ -849,7 +850,7 @@ test("sideband frame log records direction, kind, and U+FFFD context without ful
 
     client.close();
   } finally {
-    delete process.env.OCX_LIVE_FRAME_LOG;
+    delete process.env.CCX_LIVE_FRAME_LOG;
     globalThis.WebSocket = RealWebSocket;
     await server.stop(true);
     await upstream.stop(true);
@@ -901,14 +902,14 @@ describe("GET /readyz", () => {
       expect(healthzRes.status).toBe(200);
       const healthzBody = (await healthzRes.json()) as { status: string; service: string; pid: number };
       expect(healthzBody.status).toBe("ok");
-      expect(healthzBody.service).toBe("opencodex");
+      expect(healthzBody.service).toBe("codexcommander");
 
       // Readiness is pending right after bind: 503 + Retry-After, sanitized body.
       const readyzRes = await fetch(new URL("/readyz", base));
       expect(readyzRes.status).toBe(503);
       expect(readyzRes.headers.get("retry-after")).toBe("1");
       const readyzBody = (await readyzRes.json()) as Record<string, unknown>;
-      expect(readyzBody.service).toBe("opencodex");
+      expect(readyzBody.service).toBe("codexcommander");
       expect(readyzBody.status).toBe("pending");
       expect(typeof readyzBody.version).toBe("string");
       expect(typeof readyzBody.uptime).toBe("number");
@@ -936,7 +937,7 @@ describe("GET /readyz", () => {
       expect(res.headers.get("retry-after")).toBeNull();
       const body = (await res.json()) as { status: string; service: string };
       expect(body.status).toBe("ready");
-      expect(body.service).toBe("opencodex");
+      expect(body.service).toBe("codexcommander");
     } finally {
       await server.stop(true);
     }
@@ -1009,7 +1010,7 @@ describe("GET /readyz", () => {
       // Pending → 503, but it answered (did NOT demand auth → would be 401).
       expect([200, 503]).toContain(res.status);
       const body = (await res.json()) as { service?: string };
-      expect(body.service).toBe("opencodex");
+      expect(body.service).toBe("codexcommander");
     } finally {
       await server.stop(true);
     }

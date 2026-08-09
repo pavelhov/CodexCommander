@@ -3,7 +3,7 @@ import Foundation
 /// Presentation-only source identity stamped by `build:macos`.
 ///
 /// Release version and source revision answer different questions: two worktrees can
-/// build version 2.10.2 from different commits. Keep the full revision in Info.plist
+/// build version 1.2.3 from different commits. Keep the full revision in Info.plist
 /// and use this bounded form in diagnostics/tooltips.
 public enum BuildProvenance {
     public static func shortRevision(_ raw: Any?) -> String? {

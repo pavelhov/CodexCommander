@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { handleManagementAPI } from "../src/server/management-api";
 import { ManagementRequest as Request } from "./helpers/management-auth";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { deriveStartupHealth } from "../src/codex/autostart-health";
 
-const config = { providers: [] } as unknown as OcxConfig;
+const config = { providers: [] } as unknown as CodexCommanderConfig;
 const managementDeps = {
   resolveCodexRuntime: () => ({
     runtime: { command: "codex-fixture", version: "0.999.0", source: "environment" as const },

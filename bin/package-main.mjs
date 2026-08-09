@@ -1,9 +1,9 @@
-export const packageName = "@bitkyc08/opencodex";
-export const cliCommand = "ocx";
+export const packageName = "codexcommander";
+export const cliCommand = "ccx";
 
 export async function loadBunApi() {
   if (typeof Bun === "undefined") {
-    throw new Error("The opencodex programmatic API requires the Bun runtime. Use `ocx` for the CLI entrypoint.");
+    throw new Error("The CodexCommander programmatic API requires the Bun runtime. Use `ccx` for the CLI entrypoint.");
   }
   return import("../src/index.ts");
 }

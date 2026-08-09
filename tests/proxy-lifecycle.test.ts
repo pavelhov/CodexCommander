@@ -11,9 +11,9 @@ import {
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCES, BUN_RUNTIME_SOURCE_ENV } from "../src/lib/bun-runtime";
 import type { ServiceDiagnostic } from "../src/service";
 import type { LivenessIo } from "../src/server/proxy-liveness";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
-function config(codexAutoStart = true): OcxConfig {
+function config(codexAutoStart = true): CodexCommanderConfig {
   return {
     port: 10100,
     codexAutoStart,
@@ -21,7 +21,7 @@ function config(codexAutoStart = true): OcxConfig {
     providers: {
       mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1" },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 function service(overrides: Partial<ServiceDiagnostic> = {}): ServiceDiagnostic {
@@ -48,7 +48,12 @@ function baseIo(overrides: EnsureProxyLifecycleIo = {}): EnsureProxyLifecycleIo 
     acquireEnsureLock: async () => ({ release: () => {} }),
     diagnoseService: () => service(),
     waitForReady: async () => "ready",
-    syncLive: async () => {},
+    syncLive: async () => ({
+      status: "applied",
+      ok: true,
+      catalogQuality: "live",
+      catalogState: { state: "not_running", processes: [], catalogMtimeMs: null },
+    }),
     ensureCompanion: async () => false,
     ...overrides,
   };
@@ -79,7 +84,15 @@ describe("shared proxy lifecycle authority", () => {
         },
         spawnStart: async () => { calls.push("spawn"); },
         startService: () => { calls.push("service"); return true; },
-        syncLive: async live => { calls.push(`sync:${live.port}`); },
+        syncLive: async live => {
+          calls.push(`sync:${live.port}`);
+          return {
+            status: "applied",
+            ok: true,
+            catalogQuality: "live",
+            catalogState: { state: "not_running", processes: [], catalogMtimeMs: null },
+          };
+        },
         ensureCompanion: async () => { calls.push("companion"); return true; },
       }),
     });
@@ -121,15 +134,15 @@ describe("shared proxy lifecycle authority", () => {
     expect(calls).toEqual(["release", "companion"]);
   });
 
-  test("an older live proxy that lacks /api/sync requires a proxy restart and stays fatal", async () => {
+  test("a failed current sync stays fatal", async () => {
     const result = await ensureProxyLifecycle({
       io: baseIo({
         findLive: async () => ({ pid: 42, port: 10123, source: "runtime" }),
         syncLive: async () => ({
           status: "failed",
           ok: false,
-          lifecycleErrorCode: "PROXY_RESTART_REQUIRED",
-          message: "The running OpenCodex proxy must be restarted before its catalog can be synchronized.",
+          lifecycleErrorCode: "SYNC_FAILED",
+          message: "The running CodexCommander proxy could not synchronize its catalog.",
         }),
       }),
     });
@@ -139,10 +152,30 @@ describe("shared proxy lifecycle authority", () => {
       state: "running",
       pid: 42,
       port: 10123,
-      errorCode: "PROXY_RESTART_REQUIRED",
+      errorCode: "SYNC_FAILED",
     });
-    expect(result.message).toContain("OpenCodex proxy must be restarted");
+    expect(result.message).toContain("could not synchronize");
     expect(result.codexRestartRequired).toBeUndefined();
+  });
+
+  test("a successful sync without the current catalog-state payload fails closed", async () => {
+    const result = await ensureProxyLifecycle({
+      io: baseIo({
+        findLive: async () => ({ pid: 42, port: 10123, source: "runtime" }),
+        syncLive: async () => ({
+          status: "applied",
+          ok: true,
+          catalogQuality: "live",
+        }),
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      state: "running",
+      errorCode: "SYNC_FAILED",
+    });
+    expect(result.message).toContain("invalid catalog state");
   });
 
   test("integration OFF is a converged lifecycle state", async () => {
@@ -154,7 +187,7 @@ describe("shared proxy lifecycle authority", () => {
           skippedReason: "desired_disabled",
           ok: true,
           catalogQuality: "native-only",
-          catalogState: { state: "stale" },
+          catalogState: { state: "stale", processes: [], catalogMtimeMs: null },
         }),
       }),
     });
@@ -172,6 +205,7 @@ describe("shared proxy lifecycle authority", () => {
           ok: true,
           catalogQuality: "native-only",
           message: "External Codex provider preserved.",
+          catalogState: { state: "not_running", processes: [], catalogMtimeMs: null },
         }),
       }),
     });
@@ -188,6 +222,7 @@ describe("shared proxy lifecycle authority", () => {
           ok: true,
           catalogQuality: "native-only",
           message: "Catalog write completed without routed rows.",
+          catalogState: { state: "not_running", processes: [], catalogMtimeMs: null },
         }),
       }),
     });
@@ -245,7 +280,7 @@ describe("shared proxy lifecycle authority", () => {
           catalogQuality: "live",
           catalogWritten: true,
           staleAppServerHint: "restart if stale",
-          catalogState: { state: "fresh" },
+          catalogState: { state: "fresh", processes: [], catalogMtimeMs: null },
         }),
       }),
     });
@@ -264,7 +299,7 @@ describe("shared proxy lifecycle authority", () => {
           ok: false,
           catalogQuality: "retained",
           catalogWritten: true,
-          catalogState: { state: "stale" },
+          catalogState: { state: "stale", processes: [], catalogMtimeMs: null },
           message: "Catalog config injection failed.",
         }),
       }),
@@ -302,6 +337,12 @@ describe("shared proxy lifecycle authority", () => {
         maxActiveSyncs = Math.max(maxActiveSyncs, activeSyncs);
         await Bun.sleep(5);
         activeSyncs -= 1;
+        return {
+          status: "applied",
+          ok: true,
+          catalogQuality: "live",
+          catalogState: { state: "not_running", processes: [], catalogMtimeMs: null },
+        };
       },
     });
 
@@ -414,7 +455,15 @@ describe("shared proxy lifecycle authority", () => {
           calls.push(`ready:${live.pid}`);
           return "ready";
         },
-        syncLive: async live => { calls.push(`sync:${live.pid}`); },
+        syncLive: async live => {
+          calls.push(`sync:${live.pid}`);
+          return {
+            status: "applied",
+            ok: true,
+            catalogQuality: "live",
+            catalogState: { state: "not_running", processes: [], catalogMtimeMs: null },
+          };
+        },
       }),
     });
     expect(result).toMatchObject({ ok: true, pid: 88, port: 10100, changed: true });
@@ -430,7 +479,12 @@ describe("shared proxy lifecycle authority", () => {
         waitForReady: async () => { calls.push("ready:failed"); return "failed"; },
         syncLive: async () => {
           calls.push("sync:retry");
-          return { status: "applied", ok: true, catalogQuality: "retained" };
+          return {
+            status: "applied",
+            ok: true,
+            catalogQuality: "retained",
+            catalogState: { state: "not_running", processes: [], catalogMtimeMs: null },
+          };
         },
       }),
     });
@@ -453,39 +507,51 @@ describe("shared proxy lifecycle authority", () => {
     await spawnDetachedProxyStart({
       port: 10124,
       entry: "/repo/src/cli/index.ts",
-      env: { OCX_SERVICE: "1", OCX_TEST_SENTINEL: "kept" },
+      env: { CCX_SERVICE: "1", CCX_TEST_SENTINEL: "kept" },
       spawnFn,
     });
 
-    expect(spawnedEnv?.OCX_SERVICE).toBe("1");
-    expect(spawnedEnv?.OCX_TEST_SENTINEL).toBe("kept");
+    expect(spawnedEnv?.CCX_SERVICE).toBe("1");
+    expect(spawnedEnv?.CCX_TEST_SENTINEL).toBe("kept");
     expect(spawnedEnv?.[BUN_RUNTIME_PATH_ENV]).toBe(process.execPath);
     expect(BUN_RUNTIME_SOURCES).toContain(spawnedEnv?.[BUN_RUNTIME_SOURCE_ENV]);
     expect(unrefCalled).toBe(true);
   });
 
-  test("macOS companion launch targets only dist/macos or the fixed bundle id", () => {
+  test("macOS companion launch targets the canonical app or fixed bundle id", () => {
     expect(macOSCompanionOpenArguments({
       platform: "darwin",
       env: {},
-      appPath: "/repo/dist/macos/OpenCodex.app",
+      appPath: "/repo/dist/macos/CodexCommander.app",
       exists: () => true,
-    })).toEqual(["-g", "/repo/dist/macos/OpenCodex.app"]);
+    })).toEqual(["-g", "/repo/dist/macos/CodexCommander.app"]);
     expect(macOSCompanionOpenArguments({
       platform: "darwin",
       env: {},
-      appPath: "/repo/dist/macos/OpenCodex.app",
+      appPath: "/repo/dist/macos/CodexCommander.app",
       exists: () => false,
-    })).toEqual(["-g", "-b", "com.opencodex.menubar"]);
+    })).toEqual(["-g", "-b", "com.codexcommander.menubar"]);
+    // Default path prefers the rebranded CodexCommander.app when it exists.
     expect(macOSCompanionOpenArguments({
       platform: "darwin",
-      env: { OCX_SERVICE: "1" },
+      env: {},
+      exists: (p) => p.endsWith("/dist/macos/CodexCommander.app"),
+    })).toEqual(["-g", expect.stringContaining("/dist/macos/CodexCommander.app")]);
+    // No local build at all: open by the rebranded bundle id.
+    expect(macOSCompanionOpenArguments({
+      platform: "darwin",
+      env: {},
+      exists: () => false,
+    })).toEqual(["-g", "-b", "com.codexcommander.menubar"]);
+    expect(macOSCompanionOpenArguments({
+      platform: "darwin",
+      env: { CCX_SERVICE: "1" },
       exists: () => true,
     })).toBeNull();
     expect(JSON.stringify(macOSCompanionOpenArguments({
       platform: "darwin",
       env: {},
-      appPath: "/repo/dist/macos/OpenCodex.app",
+      appPath: "/repo/dist/macos/CodexCommander.app",
       exists: () => true,
     }))).not.toContain("Application Support");
   });

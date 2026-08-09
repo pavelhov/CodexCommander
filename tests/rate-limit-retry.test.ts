@@ -4,39 +4,39 @@ import {
   rateLimitRetryPolicyFor,
 } from "../src/providers/key-failover";
 import { handleResponses } from "../src/server/responses";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
 
 describe("rateLimitRetryPolicyFor", () => {
   test("null when absent or explicitly disabled", () => {
-    expect(rateLimitRetryPolicyFor({} as OcxProviderConfig)).toBeNull();
-    expect(rateLimitRetryPolicyFor({ retryOn429: { enabled: false } } as OcxProviderConfig)).toBeNull();
+    expect(rateLimitRetryPolicyFor({} as CodexCommanderProviderConfig)).toBeNull();
+    expect(rateLimitRetryPolicyFor({ retryOn429: { enabled: false } } as CodexCommanderProviderConfig)).toBeNull();
   });
 
   test("null for OAuth, forward, local, and unknown auth modes (fail closed)", () => {
     expect(rateLimitRetryPolicyFor({
       authMode: "oauth",
       retryOn429: {},
-    } as OcxProviderConfig)).toBeNull();
+    } as CodexCommanderProviderConfig)).toBeNull();
     expect(rateLimitRetryPolicyFor({
       authMode: "forward",
       retryOn429: {},
-    } as OcxProviderConfig)).toBeNull();
+    } as CodexCommanderProviderConfig)).toBeNull();
     expect(rateLimitRetryPolicyFor({
       authMode: "local",
       retryOn429: {},
-    } as OcxProviderConfig)).toBeNull();
+    } as CodexCommanderProviderConfig)).toBeNull();
     expect(rateLimitRetryPolicyFor({
       authMode: "custom-unknown",
       retryOn429: {},
-    } as OcxProviderConfig)).toBeNull();
+    } as CodexCommanderProviderConfig)).toBeNull();
     expect(rateLimitRetryPolicyFor({
       authMode: "key",
       retryOn429: {},
-    } as OcxProviderConfig)).not.toBeNull();
+    } as CodexCommanderProviderConfig)).not.toBeNull();
   });
 
   test("applies defaults when the object is present", () => {
-    expect(rateLimitRetryPolicyFor({ retryOn429: {} } as OcxProviderConfig)).toEqual({
+    expect(rateLimitRetryPolicyFor({ retryOn429: {} } as CodexCommanderProviderConfig)).toEqual({
       enabled: true,
       attempts: 3,
       intervalMs: 5_000,
@@ -48,7 +48,7 @@ describe("rateLimitRetryPolicyFor", () => {
   test("honors explicit values", () => {
     expect(rateLimitRetryPolicyFor({
       retryOn429: { attempts: 10, intervalMs: 1_000, maxIntervalMs: 5_000, respectRetryAfter: false },
-    } as OcxProviderConfig)).toEqual({
+    } as CodexCommanderProviderConfig)).toEqual({
       enabled: true,
       attempts: 10,
       intervalMs: 1_000,
@@ -59,7 +59,7 @@ describe("rateLimitRetryPolicyFor", () => {
 });
 
 describe("rateLimitRetryDelayMs", () => {
-  const policy = rateLimitRetryPolicyFor({ retryOn429: {} } as OcxProviderConfig)!;
+  const policy = rateLimitRetryPolicyFor({ retryOn429: {} } as CodexCommanderProviderConfig)!;
 
   test("fixed interval when no header is present", () => {
     expect(rateLimitRetryDelayMs(policy, null, 1_000_000)).toBe(5_000);
@@ -94,7 +94,7 @@ describe("rateLimitRetryDelayMs", () => {
   test("fixed fallback is capped at maxIntervalMs (a single wait never exceeds the cap)", () => {
     const p = rateLimitRetryPolicyFor({
       retryOn429: { intervalMs: 600_000, maxIntervalMs: 100 },
-    } as OcxProviderConfig)!;
+    } as CodexCommanderProviderConfig)!;
     expect(rateLimitRetryDelayMs(p, null, 1_000_000)).toBe(100);
     expect(rateLimitRetryDelayMs(p, "3600", 1_000_000)).toBe(100);
   });
@@ -106,7 +106,7 @@ describe("rateLimitRetryDelayMs", () => {
   test("respectRetryAfter=false ignores the header", () => {
     const p = rateLimitRetryPolicyFor({
       retryOn429: { respectRetryAfter: false, intervalMs: 111 },
-    } as OcxProviderConfig)!;
+    } as CodexCommanderProviderConfig)!;
     expect(rateLimitRetryDelayMs(p, "2", 1_000_000)).toBe(111);
   });
 });
@@ -150,7 +150,7 @@ describe("retry loop client-abort handling", () => {
           retryOn429: { attempts: 3, intervalMs: 30_000, respectRetryAfter: false },
         },
       },
-    } as OcxConfig;
+    } as CodexCommanderConfig;
 
     const abort = new AbortController();
     const pending = handleResponses(new Request("http://localhost/v1/responses", {
@@ -206,7 +206,7 @@ describe("retry loop client-abort handling", () => {
           retryOn429: { attempts: 3, intervalMs: 30_000, respectRetryAfter: false },
         },
       },
-    } as OcxConfig;
+    } as CodexCommanderConfig;
 
     const abort = new AbortController();
     const pending = handleResponses(new Request("http://localhost/v1/responses", {

@@ -64,7 +64,7 @@ function installLayoutStubs(win: Window): void {
 
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
-  testWindow = new Window({ url: "http://localhost/#debug" });
+  testWindow = new Window({ url: "http://localhost/#logs/debug" });
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: testWindow.document },
     window: { configurable: true, value: testWindow },

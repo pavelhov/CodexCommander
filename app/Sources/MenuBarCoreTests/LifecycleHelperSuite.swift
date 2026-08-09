@@ -6,7 +6,7 @@ enum LifecycleHelperSuite {
         t.test("lifecycle helper: released app prefers its bundled runtime outside the repository") {
             try withTemporaryDirectory { root in
                 let bundle = root.appendingPathComponent(
-                    "Applications/OpenCodex.app",
+                    "Applications/CodexCommander.app",
                     isDirectory: true
                 )
                 let runtime = bundle.appendingPathComponent(
@@ -24,7 +24,7 @@ enum LifecycleHelperSuite {
                     at: bun.deletingLastPathComponent(),
                     withIntermediateDirectories: true
                 )
-                try Data(#"{"name":"@bitkyc08/opencodex"}"#.utf8).write(to: package)
+                try Data(#"{"name":"codexcommander"}"#.utf8).write(to: package)
                 try Data().write(to: entry)
                 try Data("#!/bin/sh\n".utf8).write(to: bun)
                 try FileManager.default.setAttributes(
@@ -49,7 +49,7 @@ enum LifecycleHelperSuite {
         t.test("lifecycle helper: app-owned invocation receives the update boundary marker") {
             try withTemporaryDirectory { root in
                 let executable = root.appendingPathComponent(
-                    "OpenCodex.app/Contents/Resources/runtime/bin/helper",
+                    "CodexCommander.app/Contents/Resources/runtime/bin/helper",
                     isDirectory: false
                 )
                 try FileManager.default.createDirectory(
@@ -58,9 +58,9 @@ enum LifecycleHelperSuite {
                 )
                 let body = """
                 #!/bin/sh
-                if [ "$OCX_APP_RUNTIME" != "1" ]; then exit 9; fi
+                if [ "$CCX_APP_RUNTIME" != "1" ]; then exit 9; fi
                 if [ "$PATH" != "/usr/bin:/bin:/usr/sbin:/sbin" ]; then exit 10; fi
-                printf '{"schemaVersion":1,"action":"%s","ok":true,"state":"running","changed":false,"message":"bundled"}\\n' "$2"
+                printf '{"schemaVersion":1,"action":"%s","ok":true,"state":"running","changed":false,"pid":null,"port":null,"message":"bundled"}\\n' "$2"
                 """
                 try Data(body.utf8).write(to: executable)
                 try FileManager.default.setAttributes(
@@ -86,7 +86,7 @@ enum LifecycleHelperSuite {
             try withTemporaryDirectory { root in
                 let repository = root.appendingPathComponent("repo", isDirectory: true)
                 let bundle = repository.appendingPathComponent(
-                    "dist/macos/OpenCodex.app",
+                    "dist/macos/CodexCommander.app",
                     isDirectory: true
                 )
                 let entry = repository.appendingPathComponent("src/cli/index.ts")
@@ -121,13 +121,13 @@ enum LifecycleHelperSuite {
                 )
                 FileManager.default.createFile(
                     atPath: package.path,
-                    contents: Data(#"{"name":"@bitkyc08/opencodex"}"#.utf8)
+                    contents: Data(#"{"name":"codexcommander"}"#.utf8)
                 )
                 FileManager.default.createFile(atPath: entry.path, contents: Data())
                 FileManager.default.createFile(atPath: bun.path, contents: Data("#!/bin/sh\n".utf8))
                 FileManager.default.createFile(
                     atPath: bundledPackage.path,
-                    contents: Data(#"{"name":"@bitkyc08/opencodex"}"#.utf8)
+                    contents: Data(#"{"name":"codexcommander"}"#.utf8)
                 )
                 FileManager.default.createFile(atPath: bundledEntry.path, contents: Data())
                 FileManager.default.createFile(atPath: bundledBun.path, contents: Data("#!/bin/sh\n".utf8))
@@ -159,7 +159,7 @@ enum LifecycleHelperSuite {
                 )
                 _ = try makeExecutable(
                     in: untrusted,
-                    named: "ocx",
+                    named: "ccx",
                     body: "#!/bin/sh\nexit 0\n"
                 )
                 let invocation = LifecycleHelperDiscovery.discover(
@@ -171,7 +171,7 @@ enum LifecycleHelperSuite {
             }
         }
 
-        t.test("lifecycle helper: fixed install symlink resolves only an OpenCodex package") {
+        t.test("lifecycle helper: fixed install symlink resolves only a CodexCommander package") {
             try withTemporaryDirectory { root in
                 let repository = root.appendingPathComponent("package", isDirectory: true)
                 let bin = repository.appendingPathComponent("bin", isDirectory: true)
@@ -188,18 +188,18 @@ enum LifecycleHelperSuite {
                     withIntermediateDirectories: true
                 )
                 try FileManager.default.createDirectory(at: installedBin, withIntermediateDirectories: true)
-                try Data(#"{"name":"@bitkyc08/opencodex"}"#.utf8).write(
+                try Data(#"{"name":"codexcommander"}"#.utf8).write(
                     to: repository.appendingPathComponent("package.json")
                 )
                 try Data().write(to: entry)
                 let launcher = try makeExecutable(
                     in: bin,
-                    named: "ocx.mjs",
+                    named: "ccx.mjs",
                     body: "#!/usr/bin/env node\n"
                 )
                 _ = try makeExecutable(in: bun.deletingLastPathComponent(), named: "bun", body: "#!/bin/sh\n")
                 try FileManager.default.createSymbolicLink(
-                    at: installedBin.appendingPathComponent("ocx"),
+                    at: installedBin.appendingPathComponent("ccx"),
                     withDestinationURL: launcher
                 )
 
@@ -220,7 +220,7 @@ enum LifecycleHelperSuite {
                     named: "valid-helper",
                     body: """
                     #!/bin/sh
-                    printf '{"schemaVersion":1,"action":"%s","ok":true,"state":"running","changed":true,"pid":42,"port":10100,"message":"OpenCodex proxy started."}\\n' "$2"
+                    printf '{"schemaVersion":1,"action":"%s","ok":true,"state":"running","changed":true,"pid":42,"port":10100,"message":"CodexCommander proxy started."}\\n' "$2"
                     """
                 )
                 let helper = LifecycleHelper(
@@ -235,6 +235,26 @@ enum LifecycleHelperSuite {
                     t.equal(value.port, 10100)
                 case .failure(let error):
                     t.expect(false, "unexpected helper failure: \(error)")
+                }
+            }
+        }
+
+        t.test("lifecycle helper: rejects a result with missing nullable pid or port keys") {
+            try withTemporaryDirectory { root in
+                let script = try makeExecutable(
+                    in: root,
+                    named: "partial-helper",
+                    body: """
+                    #!/bin/sh
+                    printf '{"schemaVersion":1,"action":"%s","ok":true,"state":"running","changed":false,"message":"missing pid and port"}\\n' "$2"
+                    """
+                )
+                let helper = LifecycleHelper(invocation: LifecycleInvocation(executable: script), timeout: 2)
+                let result = sync { try await helper.run(.status) }
+                if case .failure(let error as LifecycleHelperError) = result {
+                    t.equal(error, .invalidResponse)
+                } else {
+                    t.expect(false, "partial lifecycle result must be rejected")
                 }
             }
         }
@@ -399,7 +419,7 @@ enum LifecycleHelperSuite {
 
     private static func withTemporaryDirectory<T>(_ body: (URL) throws -> T) throws -> T {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "OpenCodex-Lifecycle-\(UUID().uuidString)",
+            "CodexCommander-Lifecycle-\(UUID().uuidString)",
             isDirectory: true
         )
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

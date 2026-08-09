@@ -13,12 +13,9 @@
  * - Codex-facing surfaces (catalog entries, picker lists, Codex-bound config picks)
  *   use `routedSlug(provider, id)` — inner slashes become "-".
  * - Internal state (upstream requests, logs, usage, jawcode metadata, combo keys)
- *   keeps the native id. Decoding is an EXACT bijective lookup against the provider's
- *   known native ids — never a blind "-" → "/" replace — with three ordered rules:
- *   native exact match (back-compat with raw full-slash selectors) > unique alias
- *   match > pass-through unchanged (honest upstream error).
- * - Config comparisons are tolerant via `slugEquals`/`slugsEquivalent` so legacy raw
- *   values keep working regardless of which form was stored.
+ *   keeps the native id. The router decodes the current Codex wire selector through an
+ *   exact bijective lookup against the provider's known native ids — never a blind
+ *   "-" → "/" replace. Persisted selectors are always encoded.
  */
 
 /** Separator standing in for "/" inside the model-id portion of a Codex-facing slug. */
@@ -41,7 +38,7 @@ export function routedSlug(provider: string, id: string): string {
 export function decodeRoutedModelId(requested: string, knownIds: Iterable<string>): string {
   let aliasMatch: string | undefined;
   for (const id of knownIds) {
-    if (id === requested) return requested; // native exact (raw selector back-compat)
+    if (id === requested) return requested;
     if (id.includes("/") && encodeRoutedModelId(id) === requested) {
       // Ambiguous alias (e.g. both `a/b` and `a-b` exist): refuse to guess.
       if (aliasMatch !== undefined && aliasMatch !== id) return requested;
@@ -51,17 +48,12 @@ export function decodeRoutedModelId(requested: string, knownIds: Iterable<string
   return aliasMatch ?? requested;
 }
 
-/** Does a stored config slug name this routed model, in either raw or encoded form? */
+/** Does a canonical stored selector name this routed model? */
 export function slugEquals(stored: string, provider: string, id: string): boolean {
-  return stored === `${provider}/${id}` || stored === routedSlug(provider, id);
+  return stored === routedSlug(provider, id);
 }
 
-/** Equivalence between two routed slugs regardless of raw/encoded mix. */
+/** Canonical selectors compare byte-for-byte. */
 export function slugsEquivalent(a: string, b: string): boolean {
-  if (a === b) return true;
-  const pa = a.indexOf("/");
-  const pb = b.indexOf("/");
-  if (pa <= 0 || pb <= 0) return false;
-  if (a.slice(0, pa) !== b.slice(0, pb)) return false;
-  return encodeRoutedModelId(a.slice(pa + 1)) === encodeRoutedModelId(b.slice(pb + 1));
+  return a === b;
 }

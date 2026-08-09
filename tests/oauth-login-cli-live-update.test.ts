@@ -7,7 +7,7 @@ import { loadConfig, saveConfig } from "../src/config";
 import { upsertOAuthProvider } from "../src/oauth";
 import { notifyRunningProxyAfterOAuthLogin } from "../src/oauth/login-cli";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 import { SERVER_BUDGET_MS } from "./helpers/test-budget";
@@ -22,9 +22,10 @@ let previousHome: string | undefined;
 let previousCodexCliPath: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
-function keyModeXaiConfig(port = 0): OcxConfig {
+function keyModeXaiConfig(port = 0): CodexCommanderConfig {
   return {
     port,
+    multiAgentGuidanceEnabled: true,
     hostname: "127.0.0.1",
     defaultProvider: "xai",
     providers: {
@@ -38,22 +39,22 @@ function keyModeXaiConfig(port = 0): OcxConfig {
         models: ["grok-4.5"],
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
   previousCodexCliPath = process.env.CODEX_CLI_PATH;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-oauth-live-codex-");
+  isolatedCodexHome = installIsolatedCodexHome("ccx-oauth-live-codex-");
   process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
-  testDir = mkdtempSync(join(tmpdir(), "ocx-oauth-live-"));
-  process.env.OPENCODEX_HOME = testDir;
+  testDir = mkdtempSync(join(tmpdir(), "ccx-oauth-live-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   saveConfig(keyModeXaiConfig());
 });
 
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
   else process.env.CODEX_CLI_PATH = previousCodexCliPath;
   isolatedCodexHome?.restore();
@@ -63,7 +64,7 @@ afterEach(() => {
 
 describe("CLI OAuth live-update credential preservation", () => {
   test("notify after OAuth login keeps key billing on live and disk configs", async () => {
-    const server = startServer(0, { managementDeps: { refreshCodexCatalog: async () => {} } });
+    const server = startServer(0, { managementApi: { refreshCodexCatalog: async () => {} } });
     try {
       const port = server.port!;
       const boot = loadConfig();
@@ -95,7 +96,7 @@ describe("CLI OAuth live-update credential preservation", () => {
       expect(pool.activeId).toBeTruthy();
       expect(pool.keys.some(entry => entry.active)).toBe(true);
 
-      const disk = JSON.parse(readFileSync(join(testDir, "config.json"), "utf-8")) as OcxConfig;
+      const disk = JSON.parse(readFileSync(join(testDir, "config.json"), "utf-8")) as CodexCommanderConfig;
       expect(disk.providers.xai!.authMode).toBe("key");
       expect(disk.providers.xai!.apiKey).toBe("live-update-sentinel-key");
       expect(disk.providers.xai!.apiKeyPool?.some(entry => entry.key === "live-update-sentinel-key")).toBe(true);

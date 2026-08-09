@@ -18,7 +18,7 @@ const LOCK_CHILD = join(repoRoot, "tests", "helpers", "codex-write-lock-child.ts
 
 let root = "";
 let codexHome = "";
-let opencodexHome = "";
+let codexCommanderHome = "";
 const cleanup: string[] = [];
 
 function seedNative(): void {
@@ -32,8 +32,8 @@ function runInject(port: number, lockTimeoutMs = 0): { success: boolean; status?
     env: {
       ...process.env,
       CODEX_HOME: codexHome,
-      OPENCODEX_HOME: opencodexHome,
-      OCX_INJECT_RACE_PAYLOAD: JSON.stringify({ port, lockTimeoutMs }),
+      CODEXCOMMANDER_HOME: codexCommanderHome,
+      CCX_INJECT_RACE_PAYLOAD: JSON.stringify({ port, lockTimeoutMs }),
     },
   });
   const line = (result.stdout ?? "").trim().split("\n").filter(Boolean).pop() ?? "{}";
@@ -41,12 +41,12 @@ function runInject(port: number, lockTimeoutMs = 0): { success: boolean; status?
 }
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "ocx-inject-race-"));
+  root = mkdtempSync(join(tmpdir(), "ccx-inject-race-"));
   cleanup.push(root);
   codexHome = join(root, ".codex");
-  opencodexHome = join(root, ".opencodex");
+  codexCommanderHome = join(root, ".codexcommander");
   mkdirSync(codexHome, { recursive: true });
-  mkdirSync(opencodexHome, { recursive: true });
+  mkdirSync(codexCommanderHome, { recursive: true });
 });
 
 afterEach(() => {
@@ -58,8 +58,18 @@ describe("the lock is on the production path", () => {
     seedNative();
     const configPath = join(codexHome, "config.toml");
     const before = readFileSync(configPath, "utf8");
-    writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({
-      providers: {}, defaultProvider: "openai", clientIntegrations: { codex: false },
+    writeFileSync(join(codexCommanderHome, "config.json"), JSON.stringify({
+      port: 10100,
+      multiAgentGuidanceEnabled: true,
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      defaultProvider: "openai",
+      clientIntegrations: { codex: false },
     }));
 
     const result = runInject(20200);
@@ -80,7 +90,7 @@ describe("the lock is on the production path", () => {
     `], {
       cwd: repoRoot,
       encoding: "utf8",
-      env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome },
+      env: { ...process.env, CODEX_HOME: codexHome, CODEXCOMMANDER_HOME: codexCommanderHome },
     });
     const row = JSON.parse((state.stdout ?? "{}").trim().split("\n").pop() ?? "{}") as {
       kind?: string;
@@ -112,8 +122,8 @@ describe("the lock is on the production path", () => {
       env: {
         ...process.env,
         CODEX_HOME: codexHome,
-        OPENCODEX_HOME: opencodexHome,
-        OCX_LOCK_CHILD_PAYLOAD: JSON.stringify({ timeoutMs: 5_000, holdMarker, releaseMarker }),
+        CODEXCOMMANDER_HOME: codexCommanderHome,
+        CCX_LOCK_CHILD_PAYLOAD: JSON.stringify({ timeoutMs: 5_000, holdMarker, releaseMarker }),
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -141,37 +151,30 @@ describe("the lock is on the production path", () => {
   }, 30_000);
 });
 
-describe("homes the coordinator cannot adopt keep working", () => {
-  /**
-   * Every install predating this substrate is routed with no coordinator row,
-   * and that row cannot be created over routed bytes. Gating on the lock there
-   * would have broken re-injection for the entire installed base.
-   */
-  test("a pre-substrate routed home still injects, without a coordinator", () => {
-    writeFileSync(join(codexHome, "config.toml"), [
-      'model_provider = "opencodex"',
+describe("uncoordinated routed homes are not adopted", () => {
+  test("routed residue without a current coordinator is refused without mutation", () => {
+    const original = [
+      'model_provider = "codexcommander"',
       'model = "gpt-5.5"',
       "",
-      "[model_providers.opencodex]",
-      'name = "OpenCodex Proxy"',
+      "# Auto-injected by CodexCommander",
+      "[model_providers.codexcommander]",
+      'name = "CodexCommander Proxy"',
       'base_url = "http://127.0.0.1:10100/v1"',
       'wire_api = "responses"',
       "",
-    ].join("\n"));
+    ].join("\n");
+    writeFileSync(join(codexHome, "config.toml"), original);
 
     const result = runInject(10100);
-    expect(result.success).toBeTrue();
-    expect(readFileSync(join(codexHome, "config.toml"), "utf-8")).toContain("openai_base_url");
+    expect(result.success).toBeFalse();
+    expect(result.message).toContain("routing residue exists without a current coordinator");
+    expect(readFileSync(join(codexHome, "config.toml"), "utf-8")).toBe(original);
   });
 });
 
-describe("the transition is resolved, not left pending", () => {
-  /**
-   * `updateCodexHistoryTransition` had no production caller, so every completed
-   * or skipped job left the row permanently `pending` — a transition published
-   * and never resolved. The row must now show what the job actually did.
-   */
-  test("a completed apply leaves a converged row, not a pending one", () => {
+describe("the native transition is published", () => {
+  test("a completed apply records the current native generation", () => {
     seedNative();
     expect(runInject(10100).success).toBeTrue();
 
@@ -181,58 +184,14 @@ describe("the transition is resolved, not left pending", () => {
     `], {
       cwd: repoRoot,
       encoding: "utf8",
-      env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome },
+      env: { ...process.env, CODEX_HOME: codexHome, CODEXCOMMANDER_HOME: codexCommanderHome },
     });
     const row = JSON.parse((state.stdout ?? "{}").trim().split("\n").pop() ?? "{}") as {
       kind?: string;
-      state?: { history?: { status?: string } };
+      state?: { nativeGeneration?: number; currentTxId?: string | null };
     };
     expect(row.kind).toBe("ready");
-    expect(row.state?.history?.status).not.toBe("pending");
-  });
-
-  test("an opted-out apply records the opt-out as converged, not blocked", () => {
-    seedNative();
-    writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({
-      port: 10100,
-      providers: {
-        openai: {
-          adapter: "openai-responses",
-          baseUrl: "https://chatgpt.com/backend-api/codex",
-          authMode: "forward",
-        },
-      },
-      defaultProvider: "openai",
-      syncResumeHistory: false,
-    }, null, 2));
-
-    const result = spawnSync(process.execPath, [CHILD], {
-      cwd: repoRoot,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        CODEX_HOME: codexHome,
-        OPENCODEX_HOME: opencodexHome,
-        OCX_INJECT_RACE_PAYLOAD: JSON.stringify({ port: 10100, lockTimeoutMs: 0 }),
-      },
-    });
-    expect(result.status).toBe(0);
-
-    const state = spawnSync(process.execPath, ["--eval", `
-      const { readCodexTransitionState } = require("./src/codex/transition-state");
-      console.log(JSON.stringify(readCodexTransitionState()));
-    `], {
-      cwd: repoRoot,
-      encoding: "utf8",
-      env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome },
-    });
-    const row = JSON.parse((state.stdout ?? "{}").trim().split("\n").pop() ?? "{}") as {
-      kind?: string;
-      state?: { history?: { status?: string; attempts?: number } };
-    };
-    expect(row.kind).toBe("ready");
-    // Opt-out is a completed decision, not a failure: converged, never blocked,
-    // and never left pending for a job that chose to do nothing.
-    expect(row.state?.history?.status).toBe("converged");
+    expect(row.state?.nativeGeneration).toBe(1);
+    expect(row.state?.currentTxId).toEqual(expect.any(String));
   });
 });

@@ -60,7 +60,7 @@ import {
 } from "./models-shared";
 import { EmptyProviderHint } from "./models-provider-hints";
 import { shadowCallModelOptions } from "./dashboard-shared";
-import { shadowSourceModelBadge, shadowSourceModelLabel } from "./shadow-call-source";
+import { parseShadowCallData, shadowSourceModelBadge, shadowSourceModelLabel } from "./shadow-call-source";
 
 type CachedModelsPage = {
   models: ModelRow[];
@@ -71,6 +71,38 @@ type CachedModelsPage = {
   contextCapValue: number;
 };
 
+function requireProviderContextCaps(
+  data: ProviderContextCapsResponse | undefined,
+  message: string,
+): ProviderContextCapsResponse {
+  if (
+    !data
+    || !Number.isInteger(data.value)
+    || data.value <= 0
+    || data.caps === null
+    || typeof data.caps !== "object"
+    || Array.isArray(data.caps)
+    || Object.values(data.caps).some(value => !Number.isInteger(value) || value <= 0)
+  ) {
+    throw new Error(message);
+  }
+  return data;
+}
+
+function requireV2Status(data: V2Status | undefined, message: string): V2Status {
+  if (
+    !data
+    || typeof data.enabled !== "boolean"
+    || typeof data.agentsMaxThreadsConflict !== "boolean"
+    || (data.maxConcurrentThreadsPerSession !== null
+      && (!Number.isInteger(data.maxConcurrentThreadsPerSession) || data.maxConcurrentThreadsPerSession < 1))
+    || (data.multiAgentMode !== "v1" && data.multiAgentMode !== "default" && data.multiAgentMode !== "v2")
+  ) {
+    throw new Error(message);
+  }
+  return data;
+}
+
 /** Session JSON is untrusted — only seed rows that survive parseComboList (targets always arrays). */
 function readCachedCombos(value: unknown): ComboItem[] | null {
   if (!Array.isArray(value)) return null;
@@ -79,7 +111,7 @@ function readCachedCombos(value: unknown): ComboItem[] | null {
 
 export default function Models({ apiBase }: { apiBase: string }) {
   const t: TFn = useT();
-  const cacheKey = `ocx.models.catalog.v1:${apiBase}`;
+  const cacheKey = `ccx.models.catalog.v1:${apiBase}`;
   const cached = useMemo(() => readSessionListCache<CachedModelsPage>(cacheKey), [cacheKey]);
   const [models, setModels] = useState<ModelRow[]>(() => cached?.models ?? []);
   const [providers, setProviders] = useState<ConfiguredProviderSummary[]>(() => cached?.providers ?? []);
@@ -121,8 +153,9 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const busyRef = useRef(false);
   const loadGenerationRef = useRef(0);
   const loadPendingRef = useRef(false);
-  // multi_agent_v2 / ultra gate. null = endpoint unavailable (older proxy build) -> section hidden.
+  // null while the canonical collaboration settings have not loaded.
   const [v2, setV2] = useState<V2Status | null>(null);
+  const [v2LoadError, setV2LoadError] = useState("");
   const [v2Busy, setV2Busy] = useState(false);
   const [v2Note, setV2Note] = useState("");
   const v2BusyRef = useRef(false);
@@ -148,12 +181,12 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   // Combo summary section. null = cold load with no seed (pending strut). Failed reads stay
   // null + combosError so an API error never masquerades as "no combos configured".
-  const combosCacheKey = `ocx.models.combos.v1:${apiBase}`;
+  const combosCacheKey = `ccx.models.combos.v1:${apiBase}`;
   const seededCombos = useMemo(() => {
     const own = readCachedCombos(readSessionListCache<unknown>(combosCacheKey));
     if (own !== null) return own;
     // Reuse the Combos workspace session snapshot when Models opens first in the session.
-    const workspace = readSessionListCache<{ combos?: unknown }>(`ocx.combos.workspace.v1:${apiBase}`);
+    const workspace = readSessionListCache<{ combos?: unknown }>(`ccx.combos.workspace.v1:${apiBase}`);
     return readCachedCombos(workspace?.combos);
   }, [apiBase, combosCacheKey]);
   const combosResource = useDataSurface<ComboItem[]>(
@@ -199,9 +232,9 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const loadShadowCall = useCallback(async () => {
     try {
       const r = await fetch(`${apiBase}/api/shadow-call-settings`);
-      const data = await readJsonIfOk<ShadowCallData>(r);
-      if (data) setShadowCall(data);
-    } catch { /* old server / network: keep the section disabled */ }
+      const data = await readJsonIfOk<unknown>(r);
+      if (data) setShadowCall(parseShadowCallData(data));
+    } catch { /* network or malformed response: retain the last good setting */ }
   }, [apiBase]);
 
   const loadV2 = useCallback(async () => {
@@ -209,19 +242,18 @@ export default function Models({ apiBase }: { apiBase: string }) {
     if (v2BusyRef.current) return;
     try {
       const r = await fetch(`${apiBase}/api/v2`);
-      if (!(r.headers.get("content-type") ?? "").includes("application/json")) { setV2(null); return; }
-      const data = await readJsonIfOk<V2Status>(r);
-      if (!data || typeof data.enabled !== "boolean") { setV2(null); return; }
-      setV2({
-        enabled: data.enabled,
-        agentsMaxThreadsConflict: data.agentsMaxThreadsConflict === true,
-        maxConcurrentThreadsPerSession: typeof data.maxConcurrentThreadsPerSession === "number" ? data.maxConcurrentThreadsPerSession : null,
-        multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2" ? data.multiAgentMode : "default",
-      });
-    } catch {
-      setV2(null); // old server / network: hide the section instead of guessing
+      const data = requireV2Status(
+        await readJsonOrThrow<V2Status>(r, t("models.loadFail")),
+        t("models.loadFail"),
+      );
+      setV2(data);
+      setV2LoadError("");
+    } catch (error) {
+      // Keep the last confirmed collaboration settings visible. A malformed
+      // successful poll is an error, not evidence that the feature disappeared.
+      setV2LoadError(error instanceof Error ? error.message : t("models.loadFail"));
     }
-  }, [apiBase]);
+  }, [apiBase, t]);
 
   const fetchCatalog = useCallback(async (signal: AbortSignal): Promise<CachedModelsPage> => {
     const [modelsRes, capsRes, providersRes, selectionData] = await Promise.all([
@@ -230,27 +262,24 @@ export default function Models({ apiBase }: { apiBase: string }) {
       fetch(`${apiBase}/api/providers`),
       fetchSelectedModels(apiBase),
     ]);
-    const [data, capsData, providerData] = await Promise.all([
+    const [data, capsPayload, providerData] = await Promise.all([
       readJsonOrThrow<ModelRow[]>(modelsRes),
       readJsonOrThrow<ProviderContextCapsResponse>(capsRes),
       readJsonOrThrow<ConfiguredProviderSummary[]>(providersRes),
     ]);
-    if (data === undefined || capsData === undefined || providerData === undefined) {
+    if (data === undefined || providerData === undefined) {
       throw new Error("models payload missing");
     }
+    const capsData = requireProviderContextCaps(capsPayload, "models payload missing");
     if (signal.aborted) throw new Error("models request aborted");
     const nextDisabled = collectDisabledNamespaced(data);
-    const value = typeof capsData.value === "number" && Number.isFinite(capsData.value) && capsData.value > 0
-      ? capsData.value
-      : (typeof capsData.cap === "number" && Number.isFinite(capsData.cap) && capsData.cap > 0 ? capsData.cap : undefined);
-    const nextCapValue = value !== undefined ? value : 350_000;
     const next = {
       models: data,
       providers: providerData,
       selectedModels: selectionData,
       disabled: [...nextDisabled],
-      contextCaps: capsData.caps ?? {},
-      contextCapValue: nextCapValue,
+      contextCaps: capsData.caps,
+      contextCapValue: capsData.value,
     } satisfies CachedModelsPage;
     writeSessionListCache(cacheKey, next);
     return next;
@@ -406,8 +435,12 @@ export default function Models({ apiBase }: { apiBase: string }) {
         body: JSON.stringify({ provider, enabled }),
       });
       try {
-        const data = await readJsonOrThrow<ProviderContextCapsResponse>(r, t("models.capSaveFailed"));
-        setContextCaps(data?.caps ?? {});
+        const data = requireProviderContextCaps(
+          await readJsonOrThrow<ProviderContextCapsResponse>(r, t("models.capSaveFailed")),
+          t("models.capSaveFailed"),
+        );
+        setContextCapValue(data.value);
+        setContextCaps(data.caps);
         setOk(true);
         setStatus(t("models.capApplied"));
         await load(true);
@@ -449,25 +482,12 @@ export default function Models({ apiBase }: { apiBase: string }) {
         body: JSON.stringify(body),
       });
       try {
-        let data = await readJsonOrThrow<ProviderContextCapsResponse>(r, t("models.capSaveFailed"));
-        const requestedValue = typeof body.value === "number" ? Math.floor(body.value) : null;
-        // Current runtimes apply { value, setAll } atomically. A dashboard can briefly
-        // outlive an older local proxy during an upgrade, whose value branch ignored
-        // setAll; detect that response and finish the explicit user action once.
-        if (
-          requestedValue !== null
-          && body.setAll === true
-          && !routedProviderNames.every(provider => data?.caps?.[provider] === requestedValue)
-        ) {
-          const fallback = await fetch(`${apiBase}/api/provider-context-caps`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ setAll: true }),
-          });
-          data = await readJsonOrThrow<ProviderContextCapsResponse>(fallback, t("models.capSaveFailed"));
-        }
-        if (typeof data?.value === "number" && Number.isFinite(data.value) && data.value > 0) setContextCapValue(data.value);
-        setContextCaps(data?.caps ?? {});
+        const data = requireProviderContextCaps(
+          await readJsonOrThrow<ProviderContextCapsResponse>(r, t("models.capSaveFailed")),
+          t("models.capSaveFailed"),
+        );
+        setContextCapValue(data.value);
+        setContextCaps(data.caps);
         setOk(true);
         setStatus(t("models.capApplied"));
         await load(true);
@@ -524,14 +544,23 @@ export default function Models({ apiBase }: { apiBase: string }) {
 
   const saveShadowCall = async (patch: Partial<ShadowCallData>) => {
     if (!shadowCall || shadowCallSaving) return;
+    const previous = shadowCall;
     setShadowCallSaving(true);
     setShadowCall({ ...shadowCall, ...patch });
     try {
-      await fetch(`${apiBase}/api/shadow-call-settings`, {
+      const response = await fetch(`${apiBase}/api/shadow-call-settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       });
+      const saved = parseShadowCallData(
+        await readJsonOrThrow<unknown>(response, t("models.saveFailed")),
+      );
+      setShadowCall(saved);
+    } catch (error) {
+      setShadowCall(previous);
+      setOk(false);
+      setStatus(error instanceof Error ? error.message : t("models.saveFailed"));
     } finally {
       setShadowCallSaving(false);
     }
@@ -552,17 +581,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
       });
       try {
         const data = await readJsonOrThrow<V2Status & { warnings?: string[] }>(r, t("models.saveFailed"));
-        if (!data || typeof data.enabled !== "boolean") {
-          setOk(false);
-          setStatus(t("models.saveFailed"));
-          return;
-        }
-        setV2({
-          enabled: data.enabled,
-          agentsMaxThreadsConflict: data.agentsMaxThreadsConflict === true,
-          maxConcurrentThreadsPerSession: typeof data.maxConcurrentThreadsPerSession === "number" ? data.maxConcurrentThreadsPerSession : null,
-          multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2" ? data.multiAgentMode : "default",
-        });
+        setV2(requireV2Status(data, t("models.saveFailed")));
         setOk(true);
         setStatus(t("models.v2Applied"));
         setV2Note((data?.warnings ?? []).join(" "));
@@ -597,17 +616,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
       });
       try {
         const data = await readJsonOrThrow<V2Status & { warnings?: string[] }>(r, t("models.saveFailed"));
-        if (!data || typeof data.enabled !== "boolean") {
-          setOk(false);
-          setStatus(t("models.saveFailed"));
-          return;
-        }
-        setV2({
-          enabled: data.enabled,
-          agentsMaxThreadsConflict: data.agentsMaxThreadsConflict === true,
-          maxConcurrentThreadsPerSession: typeof data.maxConcurrentThreadsPerSession === "number" ? data.maxConcurrentThreadsPerSession : null,
-          multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2" ? data.multiAgentMode : "default",
-        });
+        setV2(requireV2Status(data, t("models.saveFailed")));
         setOk(true);
         setStatus(t("models.v2ThreadsApplied"));
         setShowThreadsCustom(false);
@@ -1007,7 +1016,6 @@ export default function Models({ apiBase }: { apiBase: string }) {
     ))
     : providerScopedGroups;
 
-  const multiAgentMode = v2?.multiAgentMode ?? "default";
   const contextStateLabel = contextPolicy.state === "uncapped"
     ? t("models.contextStateUncapped")
     : contextPolicy.state === "limited"
@@ -1028,6 +1036,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const controlsBlock = (
     <section className="models-behavior" aria-labelledby="models-current-behavior">
       <h3 id="models-current-behavior" className="models-section-title">{t("models.currentBehavior")}</h3>
+      {v2LoadError && <Notice tone="err">{v2LoadError}</Notice>}
       <div className={`models-behavior-panel${v2 ? "" : " models-behavior-panel--single"}`}>
         {v2 && (
           <div className="models-behavior-item">
@@ -1044,10 +1053,10 @@ export default function Models({ apiBase }: { apiBase: string }) {
               </button>
             </div>
             <div className="models-behavior-status-row">
-              <span className="models-behavior-pill">{t(`models.modeLabel_${multiAgentMode}` as TKey)}</span>
-              <span className="models-behavior-positive"><IconCheck aria-hidden="true" />{t(`models.modeStatus_${multiAgentMode}` as TKey)}</span>
+              <span className="models-behavior-pill">{t(`models.modeLabel_${v2.multiAgentMode}` as TKey)}</span>
+              <span className="models-behavior-positive"><IconCheck aria-hidden="true" />{t(`models.modeStatus_${v2.multiAgentMode}` as TKey)}</span>
             </div>
-            <p>{t(`models.modeDesc_${multiAgentMode}` as TKey)}</p>
+            <p>{t(`models.modeDesc_${v2.multiAgentMode}` as TKey)}</p>
           </div>
         )}
         <div className="models-behavior-item">
@@ -1086,14 +1095,14 @@ export default function Models({ apiBase }: { apiBase: string }) {
             {(["v1", "default", "v2"] as const).map(mode => (
               <label
                 key={mode}
-                className={`models-mode-option${multiAgentMode === mode ? " models-mode-option--selected" : ""}`}
+                className={`models-mode-option${v2.multiAgentMode === mode ? " models-mode-option--selected" : ""}`}
               >
                 <input
                   className="sr-only models-option-radio"
                   type="radio"
                   name="models-collaboration-mode"
                   value={mode}
-                  checked={multiAgentMode === mode}
+                  checked={v2.multiAgentMode === mode}
                   disabled={v2Busy}
                   onChange={() => void setMultiAgentMode(mode)}
                 />
@@ -1108,13 +1117,13 @@ export default function Models({ apiBase }: { apiBase: string }) {
               <Select
                 value={showThreadsCustom
                   ? CUSTOM_OPTION
-                  : (v2.maxConcurrentThreadsPerSession !== null && v2.maxConcurrentThreadsPerSession !== undefined
+                  : (v2.maxConcurrentThreadsPerSession !== null
                     ? (THREAD_OPTION_SET.has(v2.maxConcurrentThreadsPerSession) ? String(v2.maxConcurrentThreadsPerSession) : CUSTOM_OPTION)
                     : "")}
                 options={[
-                  ...(v2.maxConcurrentThreadsPerSession === null || v2.maxConcurrentThreadsPerSession === undefined
+                  ...(v2.maxConcurrentThreadsPerSession === null
                     ? [{ value: "", label: t("models.v2ThreadsDefault") }] : []),
-                  ...(v2.maxConcurrentThreadsPerSession !== null && v2.maxConcurrentThreadsPerSession !== undefined
+                  ...(v2.maxConcurrentThreadsPerSession !== null
                     && !THREAD_OPTION_SET.has(v2.maxConcurrentThreadsPerSession) && !showThreadsCustom
                     ? [{ value: CUSTOM_OPTION, label: String(v2.maxConcurrentThreadsPerSession) }] : []),
                   ...THREAD_OPTIONS.map(value => ({ value: String(value), label: String(value) })),
@@ -1431,7 +1440,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
               {t("models.v2Help")}
             </div>
             <div className="models-help-link">
-              <a className="text-control" href="https://opencodex.me/guides/sub-agent-surface/" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
+              <a className="text-control" href="https://github.com/pavelhov/CodexCommander/blob/main/docs-site/src/content/docs/guides/sub-agent-surface.md" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
                 {t("models.v2DocsLink")}
               </a>
             </div>

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 // Windows CI under load can spend >5s just binding the proxy + previewing cleanup;
@@ -17,10 +17,11 @@ let testDir = "";
 let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
-function baseConfig(): OcxConfig {
+function baseConfig(): CodexCommanderConfig {
   return {
     port: 0,
     hostname: "127.0.0.1",
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "openai",
     providers: {
       openai: {
@@ -29,7 +30,7 @@ function baseConfig(): OcxConfig {
         authMode: "forward",
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 function seedArchived(codexHome: string): void {
@@ -48,16 +49,16 @@ function seedArchived(codexHome: string): void {
 }
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-api-storage-cleanup-codex-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-api-storage-cleanup-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-api-storage-cleanup-codex-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-api-storage-cleanup-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   saveConfig(baseConfig());
 });
 
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
@@ -219,8 +220,8 @@ describe("POST /api/storage/cleanup", () => {
 
   test("partial permanent purge returns relative trashDir on the wire", async () => {
     seedArchived(isolatedCodexHome!.path);
-    const previous = process.env.OPENCODEX_CLEANUP_TEST_HOOKS;
-    process.env.OPENCODEX_CLEANUP_TEST_HOOKS = "1";
+    const previous = process.env.CCX_CLEANUP_TEST_HOOKS;
+    process.env.CCX_CLEANUP_TEST_HOOKS = "1";
     const server = startServer(0);
     try {
       const previewRes = await fetch(new URL("/api/storage/cleanup/preview", server.url), {
@@ -250,8 +251,8 @@ describe("POST /api/storage/cleanup", () => {
       expect(existsSync(join(trashAbs, "manifest.json"))).toBe(true);
     } finally {
       await server.stop(true);
-      if (previous === undefined) delete process.env.OPENCODEX_CLEANUP_TEST_HOOKS;
-      else process.env.OPENCODEX_CLEANUP_TEST_HOOKS = previous;
+      if (previous === undefined) delete process.env.CCX_CLEANUP_TEST_HOOKS;
+      else process.env.CCX_CLEANUP_TEST_HOOKS = previous;
     }
   });
 });

@@ -29,7 +29,7 @@ import {
   type ProviderRegistryEntry,
 } from "../src/providers/registry";
 import { resolveWireProtocolOverride } from "../src/server/adapter-resolve";
-import { isWirePinnedModel, MODEL_ADAPTER_OVERRIDE_ALLOWED, type OcxConfig, type OcxProviderConfig } from "../src/types";
+import { isWirePinnedModel, MODEL_ADAPTER_OVERRIDE_ALLOWED, type CodexCommanderConfig, type CodexCommanderProviderConfig } from "../src/types";
 import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
 
 const CANONICAL_BASE_URL = "https://opencode.ai/zen/go/v1";
@@ -71,22 +71,22 @@ function registryEntry(): ProviderRegistryEntry {
   return entry;
 }
 
-function canonicalProvider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
+function canonicalProvider(overrides: Partial<CodexCommanderProviderConfig> = {}): CodexCommanderProviderConfig {
   return {
     adapter: "openai-chat",
     baseUrl: CANONICAL_BASE_URL,
     authMode: "key",
     apiKey: "go-test-key",
     ...overrides,
-  } as OcxProviderConfig;
+  } as CodexCommanderProviderConfig;
 }
 
-function canonicalConfig(overrides: Partial<OcxProviderConfig> = {}): OcxConfig {
+function canonicalConfig(overrides: Partial<CodexCommanderProviderConfig> = {}): CodexCommanderConfig {
   return withStubbedProviderFetch({
     port: 10100,
     defaultProvider: "opencode-go",
     providers: { "opencode-go": canonicalProvider(overrides) },
-  } as unknown as OcxConfig);
+  } as unknown as CodexCommanderConfig);
 }
 
 function liveCatalogPayload(extraIds: string[] = []): string {
@@ -186,7 +186,7 @@ describe("OpenCode Go per-model transport registry", () => {
     expect(resolveWireProtocolOverride("opencode-go", "grok-4.5", lookalike).adapter).toBe("openai-chat");
     expect(resolveProviderModelDiscovery("opencode-go", lookalike).spec).toBeUndefined();
 
-    const enriched: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://evil.example/zen/go/v1" };
+    const enriched: CodexCommanderProviderConfig = { adapter: "openai-chat", baseUrl: "https://evil.example/zen/go/v1" };
     enrichProviderFromRegistry("opencode-go", enriched);
     expect(enriched.models).toBeUndefined();
     expect(enriched.liveModels).toBeUndefined();

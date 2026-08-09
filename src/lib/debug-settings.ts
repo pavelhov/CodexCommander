@@ -1,23 +1,20 @@
 /**
  * Runtime-controllable debug flags.
- * Provider debug: `ocx debug provider on|off|status|reset|logs [-f]` (or OCX_DEBUG=1 on start).
- * Usage capture: `ocx debug usage on|off|status|reset|logs [-f]` (or OPENCODEX_USAGE_DEBUG=1).
- * Injection log: `ocx debug injection on|off|status|reset` (or OCX_INJECTION_DEBUG=1) —
+ * Provider debug: `ccx debug provider on|off|status|reset|logs [-f]` (or CCX_DEBUG=1 on start).
+ * Usage capture: `ccx debug usage on|off|status|reset|logs [-f]` (or CCX_USAGE_DEBUG=1).
+ * Injection log: `ccx debug injection on|off|status|reset` (or CCX_INJECTION_DEBUG=1) —
  * multi-agent guidance-injection console lines, default OFF.
- * Claude inbound capture: `ocx debug claude on|off|status|reset` (or OCX_CLAUDE_DEBUG=1) —
+ * Claude inbound capture: `ccx debug claude on|off|status|reset` (or CCX_CLAUDE_DEBUG=1) —
  * allowlist-scalar ring of inbound Anthropic request metadata, default OFF.
- * `/api/debug` and `ocx debug` override env defaults without restart.
+ * `/api/debug` and `ccx debug` override env defaults without restart.
  */
 
 export const DEBUG_ENV = {
-  debug: "OCX_DEBUG",
-  usage: "OPENCODEX_USAGE_DEBUG",
-  injection: "OCX_INJECTION_DEBUG",
-  claude: "OCX_CLAUDE_DEBUG",
+  debug: "CCX_DEBUG",
+  usage: "CCX_USAGE_DEBUG",
+  injection: "CCX_INJECTION_DEBUG",
+  claude: "CCX_CLAUDE_DEBUG",
 } as const;
-
-/** Legacy env var that still enables provider debug logging. */
-const LEGACY_DEBUG_ENV = ["OCX_DEBUG_FRAMES"] as const;
 
 export type DebugFlag = keyof typeof DEBUG_ENV;
 
@@ -36,18 +33,9 @@ function envFlag(name: string): boolean {
   return process.env[name] === "1";
 }
 
-function legacyDebugEnvEnabled(): boolean {
-  return LEGACY_DEBUG_ENV.some(name => envFlag(name));
-}
-
 export function isDebugEnabled(): boolean {
   if (runtimeOverride.debug !== undefined) return runtimeOverride.debug;
-  return envFlag(DEBUG_ENV.debug) || legacyDebugEnvEnabled();
-}
-
-/** @deprecated Use isDebugEnabled(). */
-export function isFramesDebugEnabled(): boolean {
-  return isDebugEnabled();
+  return envFlag(DEBUG_ENV.debug);
 }
 
 export function isUsageDebugEnabled(): boolean {
@@ -75,7 +63,7 @@ export function getDebugSettings(): DebugSettingsView {
     claude: isClaudeDebugEnabled(),
     runtimeOverride: { ...runtimeOverride },
     env: {
-      debug: envFlag(DEBUG_ENV.debug) || legacyDebugEnvEnabled(),
+      debug: envFlag(DEBUG_ENV.debug),
       usage: envFlag(DEBUG_ENV.usage),
       injection: envFlag(DEBUG_ENV.injection),
       claude: envFlag(DEBUG_ENV.claude),

@@ -5,16 +5,15 @@ import { OAUTH_PROVIDERS, runLogin } from "../src/oauth";
 import { getAccountCredential, getAccountSet, saveCredential } from "../src/oauth/store";
 import type { OAuthController, OAuthCredentials } from "../src/oauth/types";
 import { handleManagementAPI } from "../src/server/management-api";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-oauth-reauth-bind");
-const previousHome = process.env.OPENCODEX_HOME;
+const previousHome = process.env.CODEXCOMMANDER_HOME;
 
-function config(): OcxConfig {
+function config(): CodexCommanderConfig {
   return {
     port: 10100,
     defaultProvider: "openai",
-    openaiProviderTierVersion: 2,
     providers: {
       openai: {
         adapter: "openai-responses",
@@ -34,12 +33,12 @@ function config(): OcxConfig {
 beforeEach(() => {
   rmSync(TEST_DIR, { recursive: true, force: true });
   mkdirSync(TEST_DIR, { recursive: true });
-  process.env.OPENCODEX_HOME = TEST_DIR;
+  process.env.CODEXCOMMANDER_HOME = TEST_DIR;
 });
 
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   rmSync(TEST_DIR, { recursive: true, force: true });
 });
 
@@ -109,10 +108,10 @@ describe("OAuth account-scoped reauth", () => {
     expect(getAccountSet("xai")?.accounts).toHaveLength(1);
   });
 
-  test("forced Kiro add-account preserves a legacy identity-less account", async () => {
+  test("forced Kiro add-account preserves an identity-less account", async () => {
     await saveCredential("kiro", {
-      access: "legacy-access",
-      refresh: "legacy-refresh",
+      access: "opaque-access",
+      refresh: "opaque-refresh",
       expires: Date.now() + 60_000,
       source: "local-cli",
     });
@@ -132,18 +131,18 @@ describe("OAuth account-scoped reauth", () => {
 
     const set = getAccountSet("kiro")!;
     expect(set.accounts).toHaveLength(2);
-    expect(set.accounts.some(account => account.credential.access === "legacy-access")).toBe(true);
+    expect(set.accounts.some(account => account.credential.access === "opaque-access")).toBe(true);
     expect(getAccountCredential("kiro", set.activeAccountId)?.access).toBe("identified-access");
   });
 
-  test("non-force Kiro login upgrades a legacy identity-less slot in place", async () => {
+  test("non-force Kiro login appends without overwriting an identity-less slot", async () => {
     await saveCredential("kiro", {
-      access: "legacy-access",
-      refresh: "legacy-refresh",
+      access: "opaque-access",
+      refresh: "opaque-refresh",
       expires: Date.now() + 60_000,
       source: "local-cli",
     });
-    const legacySlotId = getAccountSet("kiro")!.activeAccountId;
+    const opaqueSlotId = getAccountSet("kiro")!.activeAccountId;
     const original = OAUTH_PROVIDERS.kiro.login;
     OAUTH_PROVIDERS.kiro.login = async () => ({
       access: "identified-access",
@@ -159,9 +158,10 @@ describe("OAuth account-scoped reauth", () => {
     }
 
     const set = getAccountSet("kiro")!;
-    expect(set.accounts).toHaveLength(1);
-    expect(set.activeAccountId).toBe(legacySlotId);
-    expect(getAccountCredential("kiro", legacySlotId)?.access).toBe("identified-access");
+    expect(set.accounts).toHaveLength(2);
+    expect(set.activeAccountId).not.toBe(opaqueSlotId);
+    expect(getAccountCredential("kiro", opaqueSlotId)?.access).toBe("opaque-access");
+    expect(getAccountCredential("kiro", set.activeAccountId)?.access).toBe("identified-access");
   });
 
   test("runLogin settles a source-less Kiro credential with its exact raw object identity", async () => {

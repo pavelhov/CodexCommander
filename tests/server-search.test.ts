@@ -18,12 +18,12 @@ import {
 import { loadConfig, saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import { clearRequestLogsForTests, getRequestLogEntries } from "../src/server/request-log";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
-const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
-const previousOpencodexHome = process.env.OPENCODEX_HOME;
+const previousApiToken = process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+const previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
 const originalFetch = globalThis.fetch;
 const TEST_DIR = join(import.meta.dir, ".tmp-server-search-test");
 let isolatedCodexHome: IsolatedCodexHome | null = null;
@@ -32,9 +32,9 @@ const DIRECT_CHATGPT_TOKEN = fakeChatGptJwt({ chatgpt_account_id: "acct-123" });
 beforeEach(() => {
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   mkdirSync(TEST_DIR, { recursive: true });
-  process.env.OPENCODEX_HOME = TEST_DIR;
-  delete process.env.OPENCODEX_API_AUTH_TOKEN;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-server-search-codex-");
+  process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+  delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-server-search-codex-");
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
   clearAccountNeedsReauth("pool-a");
@@ -46,10 +46,10 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-  else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousApiToken === undefined) delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+  else process.env.CODEXCOMMANDER_API_AUTH_TOKEN = previousApiToken;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   clearCodexUpstreamHealth();
@@ -95,11 +95,11 @@ function fakeSearchUpstream(captured: CapturedRequest[], status = 200, payload?:
   return upstream;
 }
 
-function forwardConfig(_baseUrl = ""): OcxConfig {
+function forwardConfig(_baseUrl = ""): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "openai",
-    openaiProviderTierVersion: 2,
     providers: {
       openai: {
         adapter: "openai-responses",
@@ -108,10 +108,10 @@ function forwardConfig(_baseUrl = ""): OcxConfig {
         codexAccountMode: "direct",
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
-function exactSearchConfig(): OcxConfig {
+function exactSearchConfig(): CodexCommanderConfig {
   return {
     ...forwardConfig(),
     providers: {
@@ -124,13 +124,13 @@ function exactSearchConfig(): OcxConfig {
       },
     },
     codexAccounts: [
-      { id: "main", email: "main@example.test", isMain: true },
-      { id: "pool-a", email: "private-a@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
-      { id: "pool-b", email: "private-b@example.test", isMain: false, chatgptAccountId: "acct-pool-b" },
+      { id: "main", email: "main@example.test", logLabel: "p000001", isMain: true },
+      { id: "pool-a", email: "private-a@example.test", logLabel: "p00000a", isMain: false, chatgptAccountId: "acct-pool-a" },
+      { id: "pool-b", email: "private-b@example.test", logLabel: "p00000b", isMain: false, chatgptAccountId: "acct-pool-b" },
     ],
     activeCodexAccountId: "pool-b",
     codexAccountNamespaces: { side: "pool-a" },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 function saveExactSearchCredentials(): void {
@@ -192,11 +192,11 @@ test("a routed pool account's token overrides the caller bearer on the search re
       openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool" },
     },
     codexAccounts: [
-      { id: "main", email: "main@example.test", isMain: true },
-      { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+      { id: "main", email: "main@example.test", logLabel: "p000001", isMain: true },
+      { id: "pool-a", email: "pool@example.test", logLabel: "p00000a", isMain: false, chatgptAccountId: "acct-pool-a" },
     ],
     activeCodexAccountId: "pool-a",
-  } as OcxConfig);
+  } as CodexCommanderConfig);
   saveCodexAccountCredential("pool-a", {
     accessToken: "pool-access-token",
     refreshToken: "pool-refresh-token",
@@ -401,12 +401,12 @@ test("an unauthenticated search request gets 401", async () => {
 test("returns an honest 400 when no ChatGPT forward provider is configured", async () => {
   saveConfig({
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "groq",
-    openaiProviderTierVersion: 2,
     providers: {
       groq: { adapter: "openai-chat", baseUrl: "https://api.groq.example/v1", apiKey: "gsk-x" },
     },
-  } as OcxConfig);
+  } as CodexCommanderConfig);
 
   const server = startServer(0);
   try {
@@ -471,7 +471,7 @@ test("a hung search upstream times out with 504 after config.search.timeoutMs", 
   saveConfig({
     ...forwardConfig(upstream.url.toString().replace(/\/$/, "")),
     search: { timeoutMs: 100 },
-  } as OcxConfig);
+  } as CodexCommanderConfig);
 
   const server = startServer(0);
   try {
@@ -515,7 +515,7 @@ test("a short connectTimeoutMs does NOT cut a slow search (total deadline is sea
   saveConfig({
     ...forwardConfig(upstream.url.toString().replace(/\/$/, "")),
     connectTimeoutMs: 50,
-  } as OcxConfig);
+  } as CodexCommanderConfig);
 
   const server = startServer(0);
   try {
@@ -550,7 +550,7 @@ test("GET /v1/alpha/search still falls through to the JSON 404 guard", async () 
 });
 
 test("search routes require API auth and local Origin on non-loopback bindings", async () => {
-  process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
+  process.env.CODEXCOMMANDER_API_AUTH_TOKEN = "local-secret";
   saveConfig({
     ...forwardConfig("https://chatgpt.example/backend-api/codex"),
     hostname: "0.0.0.0",
@@ -570,7 +570,7 @@ test("search routes require API auth and local Origin on non-loopback bindings",
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-opencodex-api-key": "local-secret",
+        "x-codexcommander-api-key": "local-secret",
         origin: "https://attacker.test",
       },
       body: JSON.stringify({ id: "search-session" }),
@@ -582,7 +582,7 @@ test("search routes require API auth and local Origin on non-loopback bindings",
 });
 
 test("the proxy admission secret is never relayed to the search upstream", async () => {
-  process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
+  process.env.CODEXCOMMANDER_API_AUTH_TOKEN = "local-secret";
   const captured: CapturedRequest[] = [];
   const upstream = fakeSearchUpstream(captured);
   saveConfig({ ...forwardConfig(), hostname: "0.0.0.0" });

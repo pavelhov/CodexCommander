@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -16,7 +16,20 @@ import { join, resolve } from "node:path";
 
 const repoRoot = resolve(import.meta.dir, "..");
 const script = join(repoRoot, "scripts", "build-macos-app.sh");
+const scriptSource = readFileSync(script, "utf8");
 const isMacOS = process.platform === "darwin";
+
+describe("macOS build script bundle contract", () => {
+  test("stages the exact canonical app and launcher names", () => {
+    expect(scriptSource).toContain('app_bundle="$output_root/CodexCommander.app"');
+    expect(scriptSource).toContain('staged_app="$staging_root/CodexCommander.app"');
+    expect(scriptSource).toContain('! -f "$runtime_root/bin/ccx.mjs"');
+    expect(scriptSource).toContain('source_revision="${CCX_BUILD_REVISION:-}"');
+    expect(scriptSource).toContain('assert_safe_tree "$repo_root/gui/dist" "gui/dist" "$repo_root"');
+    expect(scriptSource).toContain('copy_verified_tree "$repo_root/gui/dist" "$runtime_root/gui/dist"');
+    expect(scriptSource).toContain('find -P "$path" -print0');
+  });
+});
 
 async function runScript(outputDir: string, cwd: string = repoRoot) {
   const proc = Bun.spawn(["bash", script], {
@@ -34,11 +47,11 @@ async function runScript(outputDir: string, cwd: string = repoRoot) {
 
 /// Runs `body` with a uniquely named sandbox that this test owns and always removes.
 ///
-/// An earlier version deleted FIXED paths such as `<repo-parent>/ocx-escaped-probe`,
+/// An earlier version deleted FIXED paths such as `<repo-parent>/ccx-escaped-probe`,
 /// which would have destroyed unrelated data if anything already lived there. A test
 /// for a safety boundary must not itself be destructive.
 async function withSandbox<T>(body: (sandbox: string) => Promise<T>): Promise<T> {
-  const sandbox = mkdtempSync(join(tmpdir(), "ocx-containment-"));
+  const sandbox = mkdtempSync(join(tmpdir(), "ccx-containment-"));
   try {
     return await body(sandbox);
   } finally {
@@ -47,12 +60,64 @@ async function withSandbox<T>(body: (sandbox: string) => Promise<T>): Promise<T>
 }
 
 describe.skipIf(!isMacOS)("macOS build script containment", () => {
+  test("fails closed on linked GUI source entries before invoking the build", async () => {
+    await withSandbox(async sandbox => {
+      const guiDist = join(repoRoot, "gui", "dist");
+      const external = join(sandbox, "external.txt");
+      const sourceLink = join(guiDist, `.ccx-unsafe-file-${process.pid}`);
+      writeFileSync(external, "external content must not be copied or chmodded");
+      chmodSync(external, 0o600);
+      symlinkSync(external, sourceLink);
+      try {
+        const { stderr, exitCode } = await runScript(join(sandbox, "output"));
+        expect(exitCode).not.toBe(0);
+        expect(stderr).toContain("Refusing unsafe packaging source");
+        expect(stderr).toContain("symbolic link");
+        expect(readFileSync(external, "utf8")).toBe("external content must not be copied or chmodded");
+      } finally {
+        rmSync(sourceLink, { force: true });
+      }
+    });
+  }, 120_000);
+
+  test("rejects symlinked GUI directories and hard-linked files without modifying the external inode", async () => {
+    await withSandbox(async sandbox => {
+      const guiDist = join(repoRoot, "gui", "dist");
+      const externalDir = join(sandbox, "external-dir");
+      const external = join(sandbox, "external.txt");
+      const directoryLink = join(guiDist, `.ccx-unsafe-dir-${process.pid}`);
+      const hardLink = join(guiDist, `.ccx-unsafe-hardlink-${process.pid}`);
+      mkdirSync(externalDir);
+      writeFileSync(join(externalDir, "asset.js"), "outside");
+      writeFileSync(external, "external hardlink content");
+      chmodSync(external, 0o600);
+      symlinkSync(externalDir, directoryLink);
+      try {
+        let result = await runScript(join(sandbox, "directory-output"));
+        expect(result.exitCode).not.toBe(0);
+        expect(result.stderr).toContain("symbolic link");
+      } finally {
+        rmSync(directoryLink, { force: true });
+      }
+
+      linkSync(external, hardLink);
+      try {
+        const result = await runScript(join(sandbox, "hardlink-output"));
+        expect(result.exitCode).not.toBe(0);
+        expect(result.stderr).toContain("multiply linked");
+        expect(readFileSync(external, "utf8")).toBe("external hardlink content");
+      } finally {
+        rmSync(hardLink, { force: true });
+      }
+    });
+  }, 120_000);
+
   test("refuses a destination outside the repository and creates nothing", async () => {
     // Deliberately NOT derived from process.env.HOME: other suites replace HOME with a
     // temp directory, and temp is a permitted root — so this test built successfully and
     // failed during a full-suite run. A sibling of the repository is stable and is
     // outside every permitted root.
-    const target = resolve(repoRoot, "..", `.ocx-outside-${process.pid}-${Date.now()}`);
+    const target = resolve(repoRoot, "..", `.ccx-outside-${process.pid}-${Date.now()}`);
 
     const { stderr, exitCode } = await runScript(target);
 
@@ -62,8 +127,8 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
   }, 120_000);
 
   test("refuses an unresolved .. traversal before creating any directory", async () => {
-    const intermediate = join(repoRoot, `.ocx-traversal-${process.pid}`);
-    const escapedName = `.ocx-escaped-${process.pid}-${Date.now()}`;
+    const intermediate = join(repoRoot, `.ccx-traversal-${process.pid}`);
+    const escapedName = `.ccx-escaped-${process.pid}-${Date.now()}`;
     const escaped = resolve(repoRoot, "..", escapedName);
 
     // String concatenation, NOT path.join: join() normalises `..` itself, so the script
@@ -82,8 +147,8 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
   }, 120_000);
 
   test("follows a symlink revealed by a .. traversal instead of trusting the link path", async () => {
-    const link = join(repoRoot, `.ocx-link-${process.pid}`);
-    const missing = join(repoRoot, `.ocx-missing-${process.pid}`);
+    const link = join(repoRoot, `.ccx-link-${process.pid}`);
+    const missing = join(repoRoot, `.ccx-missing-${process.pid}`);
 
     const { stderr, exitCode } = await withSandbox(async (sandbox) => {
       const outside = join(sandbox, "outside-target");
@@ -110,10 +175,10 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
   }, 300_000);
 
   test("refuses a symlink that points outside the permitted roots", async () => {
-    const link = join(repoRoot, `.ocx-outward-${process.pid}`);
+    const link = join(repoRoot, `.ccx-outward-${process.pid}`);
     const outside = join(
       process.env.HOME ?? "/Users/shared",
-      `.ocx-symtarget-${process.pid}-${Date.now()}`,
+      `.ccx-symtarget-${process.pid}-${Date.now()}`,
     );
 
     rmSync(link, { recursive: true, force: true });
@@ -133,11 +198,11 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
   // without normalising, so `link -> ../../outside` became `<repo>/../../outside`,
   // satisfied the `<repo>/*` prefix check, and escaped during mkdir -p.
   test("refuses a symlink whose relative target escapes the repository", async () => {
-    const link = join(repoRoot, `.ocx-rel-${process.pid}`);
-    const escaped = resolve(repoRoot, "..", "..", `ocx-rel-target-${process.pid}`);
+    const link = join(repoRoot, `.ccx-rel-${process.pid}`);
+    const escaped = resolve(repoRoot, "..", "..", `ccx-rel-target-${process.pid}`);
 
     rmSync(link, { recursive: true, force: true });
-    symlinkSync(`../../ocx-rel-target-${process.pid}`, link);
+    symlinkSync(`../../ccx-rel-target-${process.pid}`, link);
     try {
       const { stderr, exitCode } = await runScript(link);
 
@@ -154,28 +219,28 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
   // pattern matched nothing and the test passed against the broken implementation too.
   test("treats glob characters as literal path components", async () => {
     await withSandbox(async (sandbox) => {
-      const decoy = join(sandbox, "ocx-glob-decoy-probe");
+      const decoy = join(sandbox, "ccx-glob-decoy-probe");
       mkdirSync(decoy, { recursive: true });
 
-      const { stderr } = await runScript(join(sandbox, "ocx-glob-*-probe"), sandbox);
+      const { stderr } = await runScript(join(sandbox, "ccx-glob-*-probe"), sandbox);
 
       expect(stderr).not.toContain("Refusing to build");
       // The literal-star path is the one that was used, not the decoy it could match.
-      expect(existsSync(join(sandbox, "ocx-glob-*-probe"))).toBe(true);
-      expect(existsSync(join(decoy, "OpenCodex.app"))).toBe(false);
+      expect(existsSync(join(sandbox, "ccx-glob-*-probe"))).toBe(true);
+      expect(existsSync(join(decoy, "CodexCommander.app"))).toBe(false);
     });
   }, 300_000);
 
   test("allows a destination inside the repository", async () => {
-    const inside = join(repoRoot, "dist", `ocx-inside-${process.pid}`);
-    const probeCwd = mkdtempSync(join(tmpdir(), "ocx-bundled-probe-"));
+    const inside = join(repoRoot, "dist", `ccx-inside-${process.pid}`);
+    const probeCwd = mkdtempSync(join(tmpdir(), "ccx-bundled-probe-"));
     try {
       const { stderr, exitCode } = await runScript(inside);
       expect(exitCode).toBe(0);
       expect(stderr).not.toContain("Refusing to build into");
-      const resources = join(inside, "OpenCodex.app", "Contents", "Resources");
+      const resources = join(inside, "CodexCommander.app", "Contents", "Resources");
       const runtime = join(resources, "runtime");
-      expect(existsSync(join(resources, "OpenCodex.png"))).toBe(true);
+      expect(existsSync(join(resources, "CodexCommander.png"))).toBe(true);
       expect(existsSync(join(resources, "LICENSE.txt"))).toBe(true);
       expect(existsSync(join(resources, "THIRD_PARTY_NOTICES.md"))).toBe(true);
       expect(existsSync(join(resources, "provider-icons", "openai.svg"))).toBe(true);
@@ -185,6 +250,7 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
       expect(existsSync(join(resources, "provider-icons", "cursor-color.svg"))).toBe(true);
       expect(existsSync(join(resources, "provider-icons", "gemini-color.svg"))).toBe(true);
       expect(existsSync(join(runtime, "package.json"))).toBe(true);
+      expect(existsSync(join(runtime, "bin", "ccx.mjs"))).toBe(true);
       expect(existsSync(join(runtime, "src", "cli", "index.ts"))).toBe(true);
       const bundledBun = existsSync(join(runtime, "node_modules", "bun", "bin", "bun.exe"))
         ? join(runtime, "node_modules", "bun", "bin", "bun.exe")
@@ -198,7 +264,7 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
           env: {
             HOME: probeCwd,
             PATH: "/usr/bin:/bin",
-            OPENCODEX_HOME: join(probeCwd, "state"),
+            CODEXCOMMANDER_HOME: join(probeCwd, "state"),
           },
           stdout: "pipe",
           stderr: "pipe",
@@ -209,9 +275,9 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
         versionProbe.exited,
       ]);
       expect(versionExit).toBe(0);
-      expect(versionOutput).toContain("opencodex");
-      const info = readFileSync(join(inside, "OpenCodex.app", "Contents", "Info.plist"), "utf8");
-      expect(info).toContain("<key>OpenCodexSourceRevision</key>");
+      expect(versionOutput).toMatch(/codexcommander/i);
+      const info = readFileSync(join(inside, "CodexCommander.app", "Contents", "Info.plist"), "utf8");
+      expect(info).toContain("<key>CodexCommanderSourceRevision</key>");
       expect(info).toMatch(/[0-9a-f]{40}(?:-dirty)?/);
     } finally {
       rmSync(inside, { recursive: true, force: true });

@@ -77,7 +77,7 @@ test("an aborted Startup fetch must not clear loading while its replacement is i
 
   const health = (recommendedCommand: string) => ({
     status: "protected",
-    routingKind: "opencodex-local",
+    routingKind: "codexcommander-local",
     routingInjected: true,
     localRoutingDependency: true,
     autostartEnabled: true,
@@ -96,7 +96,7 @@ test("an aborted Startup fetch must not clear loading while its replacement is i
     platform: "darwin",
     recommendedCommand,
     diagnosticStale: false,
-    commands: { installService: "ocx service install", repairService: "ocx service repair", installShim: "ocx shim install", restoreNative: "ocx restore" },
+    commands: { installService: "ccx service install", repairService: "ccx service repair", installShim: "ccx shim install", restoreNative: "ccx restore" },
   });
   const STALE = health("stale-startup-marker");
   const FRESH = health("fresh-startup-marker");

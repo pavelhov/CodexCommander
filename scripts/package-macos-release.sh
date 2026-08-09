@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Wraps OpenCodex.app for distribution.
+# Wraps CodexCommander.app for distribution.
 #
 # Every step is an assertion rather than a hope: structurally valid ad-hoc archives may be
 # retained as CI/test artifacts, but only a Developer ID-signed, Gatekeeper-accepted, stapled
@@ -37,15 +37,15 @@ fi
 mkdir -p "$output_dir"
 output_dir="$(cd "$output_dir" && pwd)"
 
-build_root="$(mktemp -d "${TMPDIR:-/tmp}/OpenCodex-release.XXXXXX")"
+build_root="$(mktemp -d "${TMPDIR:-/tmp}/CodexCommander-release.XXXXXX")"
 cleanup() { rm -rf "$build_root"; }
 trap cleanup EXIT
 
 OUTPUT_DIR="$build_root" UNIVERSAL="$universal" CONFIGURATION=release \
   bash "$script_dir/build-macos-app.sh" >&2
 
-app_bundle="$build_root/OpenCodex.app"
-executable="$app_bundle/Contents/MacOS/OpenCodexMenuBar"
+app_bundle="$build_root/CodexCommander.app"
+executable="$app_bundle/Contents/MacOS/CodexCommanderMenuBar"
 runtime_root="$app_bundle/Contents/Resources/runtime"
 
 for required_path in \
@@ -113,7 +113,7 @@ else
   architecture_label="${architectures// /-}"
 fi
 
-archive_name="OpenCodex-${package_version}-macos-${architecture_label}.zip"
+archive_name="CodexCommander-${package_version}-macos-${architecture_label}.zip"
 checksum_name="${archive_name}.sha256"
 archive_path="$output_dir/$archive_name"
 checksum_path="$output_dir/$checksum_name"
@@ -126,16 +126,16 @@ ditto -c -k --sequesterRsrc --keepParent "$app_bundle" "$archive_path"
 # An archive that exists but does not contain the executable is the failure mode this
 # assertion exists to catch.
 archive_entries="$(unzip -Z1 "$archive_path")"
-if ! grep -Fqx 'OpenCodex.app/Contents/MacOS/OpenCodexMenuBar' <<< "$archive_entries"; then
-  echo "Packaged archive does not contain the OpenCodex executable." >&2
+if ! grep -Fqx 'CodexCommander.app/Contents/MacOS/CodexCommanderMenuBar' <<< "$archive_entries"; then
+  echo "Packaged archive does not contain the CodexCommander executable." >&2
   echo "Archive entries were:" >&2
   printf '%s\n' "$archive_entries" | head -20 >&2
   exit 1
 fi
 for required_entry in \
-  'OpenCodex.app/Contents/Resources/runtime/package.json' \
-  'OpenCodex.app/Contents/Resources/runtime/src/cli/index.ts' \
-  'OpenCodex.app/Contents/Resources/runtime/gui/dist/index.html'; do
+  'CodexCommander.app/Contents/Resources/runtime/package.json' \
+  'CodexCommander.app/Contents/Resources/runtime/src/cli/index.ts' \
+  'CodexCommander.app/Contents/Resources/runtime/gui/dist/index.html'; do
   if ! grep -Fqx "$required_entry" <<< "$archive_entries"; then
     echo "Packaged archive does not contain required runtime resource: $required_entry" >&2
     exit 1

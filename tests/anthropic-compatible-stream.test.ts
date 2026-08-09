@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createAnthropicAdapter as createAnthropicAdapterProduction } from "../src/adapters/anthropic";
 import { bridgeToResponsesSSE } from "../src/bridge";
 import { responsesSseToAnthropicSse as responsesSseToAnthropicSseProduction } from "../src/claude/outbound";
-import type { AdapterEvent, OcxProviderConfig } from "../src/types";
+import type { AdapterEvent, CodexCommanderProviderConfig } from "../src/types";
 import { createTestTranslatorBudget, withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createAnthropicAdapter = (...args: Parameters<typeof createAnthropicAdapterProduction>) =>
@@ -24,7 +24,7 @@ const provider = {
   baseUrl: "https://api.kimi.com/coding",
   apiKey: "test-key",
   authMode: "key",
-} as OcxProviderConfig;
+} as CodexCommanderProviderConfig;
 
 const kimiCompatibleSse = [
   'event: message_start\ndata: {"type":"message_start","message":{}}',

@@ -1,5 +1,5 @@
 /* ============================================================================
-   opencodex dashboard — design system
+   CodexCommander dashboard — design system
    Infra console in the OpenAI product grammar: white/near-black monochrome
    base, black (light) / white (dark) primary actions, pill buttons, hairline
    borders, flat surfaces, monospace for model ids / urls. Light + dark via
@@ -341,42 +341,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .sidebar-link:hover { background: var(--accent-soft); color: var(--text); text-decoration: none; }
 .sidebar-link svg { width: 16px; height: 16px; }
 
-/* GitHub row: the label keeps the full-width link affordance; the update orb sits
-   at the trailing edge without shrinking the label's hover target. */
+/* GitHub footer link. */
 .sidebar-github-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .sidebar-github-link { flex: 1 1 auto; min-width: 0; }
-.sidebar-github-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
-.sidebar-orb {
-  position: relative;
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 28px; height: 28px; flex: 0 0 28px; padding: 0;
-  border: 1px solid var(--border); border-radius: var(--radius-pill);
-  background: var(--raised); color: var(--muted); cursor: pointer;
-  transition: background var(--motion-fast), color var(--motion-fast), border-color var(--motion-fast);
-}
-.sidebar-orb svg { width: 14px; height: 14px; }
-.sidebar-orb:hover:not(:disabled) { background: var(--accent-soft); color: var(--text); border-color: var(--accent-ring); }
-.sidebar-orb:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
-/* Update pending: the one blue accent in the sidebar, so a waiting release is visible
-   at a glance without shouting like an error state. */
-.sidebar-orb--update {
-  color: var(--blue);
-  border-color: var(--blue);
-  background: var(--blue-soft);
-}
-.sidebar-orb--update:hover:not(:disabled) {
-  color: var(--blue);
-  border-color: var(--blue);
-  background: var(--blue-soft);
-  filter: brightness(1.06);
-}
-/* The dot repeats the "new" signal alongside the accessible name, so the meaning is
-   not carried by color alone. */
-.sidebar-orb-dot {
-  position: absolute; top: 1px; right: 1px;
-  width: 7px; height: 7px; border-radius: 50%;
-  background: var(--blue); border: 1.5px solid var(--rail);
-}
 
 .lang-toggle { display: flex; align-items: center; gap: 9px; padding: 8px 10px; width: 100%; color: var(--muted); font-size: var(--text-control); border-radius: var(--radius-sm); transition: background var(--motion-fast), color var(--motion-fast); position: relative; }
 .lang-toggle:hover { background: var(--accent-soft); color: var(--text); }
@@ -480,7 +447,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   flex: 0 0 auto;
   line-height: 1.3;
 }
-.api-endpoints .ocx-tooltip,
+.api-endpoints .ccx-tooltip,
 .api-endpoints .api-endpoint-url-btn {
   display: block !important;
   position: relative;
@@ -497,8 +464,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   font: inherit;
   cursor: pointer;
 }
-.api-endpoints .ocx-tooltip:focus-within,
-.api-endpoints .ocx-tooltip:hover,
+.api-endpoints .ccx-tooltip:focus-within,
+.api-endpoints .ccx-tooltip:hover,
 .api-endpoints .api-endpoint-url-btn:focus-within,
 .api-endpoints .api-endpoint-url-btn:hover {
   z-index: 5;
@@ -518,7 +485,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 .api-example-copy-btn,
-.ocx-tooltip.api-example-copy-btn {
+.ccx-tooltip.api-example-copy-btn {
   display: block;
   position: relative;
   width: 100%;
@@ -537,8 +504,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 }
 .api-example-copy-btn:hover,
 .api-example-copy-btn:focus-within,
-.ocx-tooltip.api-example-copy-btn:hover,
-.ocx-tooltip.api-example-copy-btn:focus-within {
+.ccx-tooltip.api-example-copy-btn:hover,
+.ccx-tooltip.api-example-copy-btn:focus-within {
   z-index: 5;
 }
 .api-example-copy-btn .api-example-pre {
@@ -554,7 +521,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .api-example-copy-btn:focus-visible .api-example-pre {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }/* Fixed portal tip — escapes overflow:hidden panels/columns. */
-.ocx-tooltip-bubble.api-copy-tip-fixed {
+.ccx-tooltip-bubble.api-copy-tip-fixed {
   position: fixed;
   z-index: var(--z-popover, 40);
   top: 0;
@@ -685,20 +652,6 @@ a.btn, a.btn:hover { text-decoration: none; }
   flex: 0 0 auto;
   justify-content: flex-end;
 }
-/*
-  Focus anchor for the update dialog, not a control: the visible entry point is the sidebar
-  footer orb, which also reports whether an update is waiting. This keeps `#dashboard/update`
-  openable and gives the dialog somewhere to return focus on close, without painting a second
-  button that does the same thing.
-*/
-.maintenance-update-anchor {
-  width: 0;
-  height: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  overflow: hidden;
-}
 .maintenance-notice { margin: 14px 0 0; align-items: flex-start; }
 /*
   Transient action feedback (sync result, model-apply confirmation, …) as a fixed toast.
@@ -746,24 +699,6 @@ a.btn, a.btn:hover { text-decoration: none; }
 }
 .action-toast-dismiss:hover { color: var(--text); background: color-mix(in srgb, var(--muted) 14%, transparent); }
 .action-toast-dismiss:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.update-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-.update-row .field-label { margin: 0; }
-.update-empty { padding: 18px; margin-bottom: 14px; }
-.update-box { display: flex; flex-direction: column; gap: 12px; }
-.update-command { display: flex; align-items: flex-start; gap: 6px; flex-wrap: wrap; font-size: var(--text-label); }
-.update-command .chip {
-  max-width: 100%;
-  min-width: 0;
-  flex: 1 1 auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-  overflow-wrap: anywhere;
-  line-height: 1.5;
-}
-.update-recheck { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.update-recheck .btn { flex: 0 0 auto; }
-.update-recheck-reason { flex: 1 1 200px; min-width: 0; font-size: var(--text-label); color: var(--muted); }
-.update-restart { border-top: 1px solid var(--border-soft); padding-top: 12px; }
 .injection-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .injection-label { font-weight: var(--weight-semibold); }
 
@@ -1478,7 +1413,7 @@ dialog.modal-overlay::backdrop {
 }
 .codex-auto-switch-input { width: 84px; text-align: right; font-variant-numeric: tabular-nums; }
 .codex-auto-switch-input[readonly] { cursor: progress; opacity: 0.7; }
-/* Hide native number spinners — we use .ocx-stepper chevrons instead. */
+/* Hide native number spinners — we use .ccx-stepper chevrons instead. */
 .codex-auto-switch-input::-webkit-outer-spin-button,
 .codex-auto-switch-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .codex-auto-switch-input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
@@ -1493,13 +1428,13 @@ dialog.modal-overlay::backdrop {
 .codex-auto-switch-feedback { flex: 1 0 100%; margin-top: -8px; color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); text-align: right; }
 .codex-auto-switch-feedback.is-error { color: var(--red); }
 
-.ocx-stepper {
+.ccx-stepper {
   display: inline-flex;
   flex-direction: column;
   gap: 2px;
   flex: 0 0 auto;
 }
-.ocx-stepper__btn {
+.ccx-stepper__btn {
   appearance: none;
   display: inline-flex;
   align-items: center;
@@ -1513,18 +1448,18 @@ dialog.modal-overlay::backdrop {
   color: var(--muted);
   cursor: pointer;
 }
-.ocx-stepper__btn:hover:not(:disabled) { color: var(--text); border-color: var(--faint); }
-.ocx-stepper__btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.ocx-stepper__btn:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
-.ocx-stepper__btn svg { display: block; }
+.ccx-stepper__btn:hover:not(:disabled) { color: var(--text); border-color: var(--faint); }
+.ccx-stepper__btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.ccx-stepper__btn:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+.ccx-stepper__btn svg { display: block; }
 
 /* Stepper flush inside the shared input chrome (inbound, not floating outside). */
-.codex-auto-switch-input-wrap .ocx-stepper {
+.codex-auto-switch-input-wrap .ccx-stepper {
   gap: 0;
   border-left: 1px solid var(--border);
   align-self: stretch;
 }
-.codex-auto-switch-input-wrap .ocx-stepper__btn {
+.codex-auto-switch-input-wrap .ccx-stepper__btn {
   flex: 1 1 0;
   width: 26px;
   height: auto;
@@ -1533,14 +1468,14 @@ dialog.modal-overlay::backdrop {
   border-radius: 0;
   background: var(--raised);
 }
-.codex-auto-switch-input-wrap .ocx-stepper__btn + .ocx-stepper__btn {
+.codex-auto-switch-input-wrap .ccx-stepper__btn + .ccx-stepper__btn {
   border-top: 1px solid var(--border);
 }
-.codex-auto-switch-input-wrap .ocx-stepper__btn:hover:not(:disabled) {
+.codex-auto-switch-input-wrap .ccx-stepper__btn:hover:not(:disabled) {
   background: var(--surface);
   border-color: transparent;
 }
-.codex-auto-switch-input-wrap .ocx-stepper__btn:focus-visible {
+.codex-auto-switch-input-wrap .ccx-stepper__btn:focus-visible {
   outline-offset: -2px;
   z-index: 1;
 }
@@ -2211,8 +2146,8 @@ button.prov-account-row.active { cursor: default; }
 .model-tip-actions { display: flex; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-soft); }
 
 /* ---- hover tooltip (styled replacement for native title) ---- */
-.ocx-tooltip { position: relative; display: inline-flex; align-items: center; }
-.ocx-tooltip-bubble {
+.ccx-tooltip { position: relative; display: inline-flex; align-items: center; }
+.ccx-tooltip-bubble {
   position: absolute; z-index: var(--z-popover);
   width: max-content;
   background: color-mix(in oklab, canvas 84%, transparent);
@@ -2227,13 +2162,13 @@ button.prov-account-row.active { cursor: default; }
   line-height: var(--leading-body);
   white-space: normal;
   pointer-events: none;
-  animation: ocx-tooltip-in var(--motion-fast) ease-out;
+  animation: ccx-tooltip-in var(--motion-fast) ease-out;
 }
-.ocx-tooltip-bubble--top { bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); }
-.ocx-tooltip-bubble--bottom { top: calc(100% + 8px); left: 50%; transform: translateX(-50%); }
-.ocx-tooltip-bubble--left { right: calc(100% + 8px); top: 50%; transform: translateY(-50%); }
-.ocx-tooltip-bubble--right { left: calc(100% + 8px); top: 50%; transform: translateY(-50%); }
-@keyframes ocx-tooltip-in {
+.ccx-tooltip-bubble--top { bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); }
+.ccx-tooltip-bubble--bottom { top: calc(100% + 8px); left: 50%; transform: translateX(-50%); }
+.ccx-tooltip-bubble--left { right: calc(100% + 8px); top: 50%; transform: translateY(-50%); }
+.ccx-tooltip-bubble--right { left: calc(100% + 8px); top: 50%; transform: translateY(-50%); }
+@keyframes ccx-tooltip-in {
   from { opacity: 0; }
   to { opacity: 1; }
 }
@@ -2299,25 +2234,25 @@ button.prov-account-row.active { cursor: default; }
    the Grok work-phase) the Grok page's native/routed groups, so the two dense surfaces
    cannot drift apart. This replaced a 4-column kanban: with a real catalog three lanes
    sat empty beside one very tall column. */
-.ocx-group-stack { display: flex; flex-direction: column; gap: 10px; }
-.ocx-group {
+.ccx-group-stack { display: flex; flex-direction: column; gap: 10px; }
+.ccx-group {
   min-width: 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
   overflow: hidden;
 }
-.ocx-group-head {
+.ccx-group-head {
   display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px;
   background: var(--raised);
 }
 /* Only an OPEN group needs the hairline: on a folded one it reads as a stray rule. */
-.ocx-group-head.open { border-bottom: 1px solid var(--border-soft); }
-.ocx-group-heading { flex: 1; min-width: 0; margin: 0; font-size: 14px; }
-.ocx-group-toggle {
+.ccx-group-head.open { border-bottom: 1px solid var(--border-soft); }
+.ccx-group-heading { flex: 1; min-width: 0; margin: 0; font-size: 14px; }
+.ccx-group-toggle {
   display: flex; width: 100%; align-items: baseline; gap: 10px; min-width: 0; padding: 0;
   border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left;
 }
-.ocx-group-name { font-size: 14px; font-weight: 600; }
-.ocx-group-count { flex-shrink: 0; color: var(--muted); font-size: 11.5px; }
-.ocx-chevron { flex-shrink: 0; align-self: center; color: var(--muted); transition: transform var(--motion-fast); }
+.ccx-group-name { font-size: 14px; font-weight: 600; }
+.ccx-group-count { flex-shrink: 0; color: var(--muted); font-size: 11.5px; }
+.ccx-chevron { flex-shrink: 0; align-self: center; color: var(--muted); transition: transform var(--motion-fast); }
 .claude-model-names { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 1px; }
 .claude-model-names strong { display: block; overflow: hidden; color: var(--text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .claude-model-names code {
@@ -2404,7 +2339,7 @@ button.prov-account-row.active { cursor: default; }
   .claude-profile-tools .btn { flex: 1; min-height: 44px; }
   .claude-profile-bar { top: 8px; align-items: stretch; flex-direction: column; }
   .claude-save-actions .btn { flex: 1; min-height: 44px; }
-  .ocx-group-head { align-items: flex-start; }
+  .ccx-group-head { align-items: flex-start; }
   .claude-move-row .input, .claude-move-row .btn { min-height: 44px; }
 }
 

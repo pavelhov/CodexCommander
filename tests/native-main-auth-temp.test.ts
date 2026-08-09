@@ -25,7 +25,7 @@ afterEach(() => {
 });
 
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "ocx-auth-temp-"));
+  const root = mkdtempSync(join(tmpdir(), "ccx-auth-temp-"));
   roots.push(root);
   const codexHome = join(root, "codex");
   mkdirSync(codexHome);
@@ -52,14 +52,14 @@ describe("native-main auth temp startup scrub", () => {
     const authPath = join(f.codexHome, "auth.json");
     const authText = "current-auth-private-value";
     writeFileSync(authPath, authText);
-    const exact = ["auth.json.ocx.123.1.tmp", "auth.json.ocx.456.27.tmp"];
+    const exact = ["auth.json.ccx.123.1.tmp", "auth.json.ccx.456.27.tmp"];
     const near = [
-      "auth.json.ocx.0.1.tmp",
-      "auth.json.ocx.01.1.tmp",
-      "auth.json.ocx.1.0.tmp",
-      "auth.json.ocx.1.01.tmp",
-      "auth.json.ocx.1.1.TMP",
-      "auth.json.ocx.1.1.tmp.bak",
+      "auth.json.ccx.0.1.tmp",
+      "auth.json.ccx.01.1.tmp",
+      "auth.json.ccx.1.0.tmp",
+      "auth.json.ccx.1.01.tmp",
+      "auth.json.ccx.1.1.TMP",
+      "auth.json.ccx.1.1.tmp.bak",
     ];
     for (const name of [...exact, ...near]) writeFileSync(join(f.codexHome, name), `private-${name}`);
 
@@ -72,7 +72,7 @@ describe("native-main auth temp startup scrub", () => {
   test("fails closed without following an exact-name symlink or truncating its target", () => {
     const f = fixture();
     const target = join(f.codexHome, "near-miss-target");
-    const residue = join(f.codexHome, "auth.json.ocx.123.1.tmp");
+    const residue = join(f.codexHome, "auth.json.ccx.123.1.tmp");
     writeFileSync(target, "target-private-value");
     symlinkSync(target, residue, "file");
 
@@ -84,7 +84,7 @@ describe("native-main auth temp startup scrub", () => {
   test("fails closed without truncating a multiply-linked exact-name file", () => {
     const f = fixture();
     const target = join(f.codexHome, "hardlink-target");
-    const residue = join(f.codexHome, "auth.json.ocx.123.1.tmp");
+    const residue = join(f.codexHome, "auth.json.ccx.123.1.tmp");
     writeFileSync(target, "hardlink-private-value");
     linkSync(target, residue);
 
@@ -95,7 +95,7 @@ describe("native-main auth temp startup scrub", () => {
 
   test("detects replacement between inspection and open without truncating either file", () => {
     const f = fixture();
-    const residue = join(f.codexHome, "auth.json.ocx.123.1.tmp");
+    const residue = join(f.codexHome, "auth.json.ccx.123.1.tmp");
     const moved = join(f.codexHome, "moved-residue");
     writeFileSync(residue, "original-private-value");
 
@@ -111,7 +111,7 @@ describe("native-main auth temp startup scrub", () => {
 
   test("fails closed after truncate when removal cannot proceed", () => {
     const f = fixture();
-    const residue = join(f.codexHome, "auth.json.ocx.123.1.tmp");
+    const residue = join(f.codexHome, "auth.json.ccx.123.1.tmp");
     writeFileSync(residue, "private-value");
 
     expectCleanupRequired(() => scrubNativeMainAuthTempResidues(f.context, {
@@ -124,11 +124,11 @@ describe("native-main auth temp startup scrub", () => {
   test("fails closed before modifying an excessive exact-residue set", () => {
     const f = fixture();
     for (let sequence = 1; sequence <= 129; sequence += 1) {
-      writeFileSync(join(f.codexHome, `auth.json.ocx.123.${sequence}.tmp`), "private-value");
+      writeFileSync(join(f.codexHome, `auth.json.ccx.123.${sequence}.tmp`), "private-value");
     }
 
     expectCleanupRequired(() => scrubNativeMainAuthTempResidues(f.context));
-    expect(readFileSync(join(f.codexHome, "auth.json.ocx.123.1.tmp"), "utf8")).toBe("private-value");
-    expect(readFileSync(join(f.codexHome, "auth.json.ocx.123.129.tmp"), "utf8")).toBe("private-value");
+    expect(readFileSync(join(f.codexHome, "auth.json.ccx.123.1.tmp"), "utf8")).toBe("private-value");
+    expect(readFileSync(join(f.codexHome, "auth.json.ccx.123.129.tmp"), "utf8")).toBe("private-value");
   });
 });

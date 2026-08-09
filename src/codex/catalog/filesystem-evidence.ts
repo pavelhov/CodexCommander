@@ -19,7 +19,6 @@ import { defaultCodexHome } from "../home";
 export type CatalogGatherReadableSourceRole =
   | "active-catalog-merge"
   | "hashed-backup-fallback"
-  | "legacy-backup-fallback"
   | "models-cache-fallback"
   | "runtime-selection";
 
@@ -40,7 +39,6 @@ const CONDITIONAL_SOURCE_ROLES = [
   "bundled-catalog-template",
   "active-catalog-merge",
   "hashed-backup-fallback",
-  "legacy-backup-fallback",
   "models-cache-fallback",
   "native-catalog-selection",
   "runtime-selection",

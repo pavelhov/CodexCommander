@@ -7,7 +7,7 @@ These commands configure upstream providers, authenticate accounts, manage crede
 
 ## Providers
 
-### `ocx provider <subcommand>`
+### `ccx provider <subcommand>`
 
 Non-interactive provider management. Registry entries are seeded by name; a custom name requires
 both `--adapter` and `--base-url`.
@@ -27,13 +27,13 @@ both `--adapter` and `--base-url`.
 | `account-mode` | `pool`, `direct`, `--json` | Select pooled or direct Codex account routing. |
 
 ```bash
-ocx provider list --json
-ocx provider test ark
-ocx provider add anthropic --api-key sk-ant-... --set-default --sync
-ocx provider add local-dev --adapter openai-chat --base-url http://localhost:11434/v1
-ocx provider show anthropic --json
-ocx models --provider anthropic --json
-ocx models live --provider ark --json
+ccx provider list --json
+ccx provider test ark
+ccx provider add anthropic --api-key sk-ant-... --set-default --sync
+ccx provider add local-dev --adapter openai-chat --base-url http://localhost:11434/v1
+ccx provider show anthropic --json
+ccx models --provider anthropic --json
+ccx models live --provider ark --json
 ```
 
 :::caution[Custom headers are not a credential channel]
@@ -57,39 +57,39 @@ Use `--api-key` or an OAuth login for anything secret.
 
 ## Authentication
 
-### `ocx login <provider>`
+### `ccx login <provider>`
 
 Start the provider's registered login flow. Depending on the provider, OAuth login opens a browser
-or imports/links a signed-in native CLI session. OpenCodex-owned credentials stored under
-`~/.opencodex/` refresh automatically; linked Grok/Kimi CLI access generations are adopted
+or imports/links a signed-in native CLI session. CodexCommander-owned credentials stored under
+`~/.codexcommander/` refresh automatically; linked Grok/Kimi CLI access generations are adopted
 read-only and the native CLI remains responsible for renewal. API-key login providers open their
 key dashboard, prompt for the key, validate it when possible, and save the resulting provider
 config. The command prints the currently accepted OAuth and API-key provider ids when the name is
 missing or unknown.
 
-Use the same command to **reauthenticate** after `ocx status` / `ocx doctor` reports
+Use the same command to **reauthenticate** after `ccx status` / `ccx doctor` reports
 reauthentication required or a terminal refresh failure (or use Reauthenticate in the dashboard).
-Codex pool accounts are not a public `ocx login` provider — reauthenticate via the dashboard Codex
-account pool (Reauthenticate) or the headless `ocx account reauth` flow instead.
+Codex pool accounts are not a public `ccx login` provider — reauthenticate via the dashboard Codex
+account pool (Reauthenticate) or the headless `ccx account reauth` flow instead.
 
 ```bash
-ocx login xai
-ocx login anthropic
+ccx login xai
+ccx login anthropic
 ```
 
-### `ocx logout <provider>`
+### `ccx logout <provider>`
 
 Remove the stored OAuth credential for a provider.
 
 ## Accounts and key pools
 
-### `ocx account <subcommand>`
+### `ccx account <subcommand>`
 
 List and switch provider accounts and API-key pools through the running proxy. The shipped help
 surface is:
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage: ccx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 current <provider>  Show the active account or key.
@@ -131,7 +131,7 @@ and the plan/label column falls back across plan, masked email, label, and maske
 }
 ```
 
-### `ocx account list [provider] [--json] [--all]`
+### `ccx account list [provider] [--json] [--all]`
 
 Without a provider, lists the Codex pool, OAuth accounts, and configured API-key pools. Empty
 providers are skipped unless `--all` is present. With a provider, lists only that credential family.
@@ -145,7 +145,7 @@ returns:
 { accounts: AccountRow[], notes: string[] }
 ```
 
-### `ocx account current <provider> [--json]`
+### `ccx account current <provider> [--json]`
 
 Shows the active account or key. A Codex pool with no manual pin reports the priority-aware
 automatic selection: the highest-priority eligible tier is chosen, and the lowest-usage account
@@ -156,7 +156,7 @@ that state and still exits 0. `--json` returns:
 { provider, type, activeId: string | null, autoSwitchThreshold?: number, account: AccountRow | null }
 ```
 
-### `ocx account use <provider> <account-or-key-id|main> [--json]`
+### `ccx account use <provider> <account-or-key-id|main> [--json]`
 
 Selects an existing Codex account, OAuth account, or API key. For `openai`, `main` selects the Codex
 App login. A Codex Pool selection clears process-local affinity and applies to the next request,
@@ -165,10 +165,10 @@ unbound, while in-flight requests keep their captured account. This controls Poo
 Direct mode keeps using the caller-owned/native main credential. Usage-based proactive switching,
 401/403 reauthentication, 429/retry-after cooldowns, exclusion, and pre-output 429/402 failure
 recovery may later select another eligible Pool account. Those recovery paths remain active when
-usage-based switching is off. OpenCodex replays the conversation after an account change, but the
+usage-based switching is off. CodexCommander replays the conversation after an account change, but the
 provider-side prompt cache may be cold. Unknown providers or ids exit 1.
 On a **401/403**, App login clears that account's process-local affinity and requires reauthentication.
-On a **429**, opencodex honors `Retry-After`, starts the account cooldown, clears affinity, and may
+On a **429**, CodexCommander honors `Retry-After`, starts the account cooldown, clears affinity, and may
 rotate the request to another eligible Pool account. These failure transitions remain active with
 `autoSwitchThreshold: 0`; that setting disables only usage-based proactive switching.
 `--json` returns:
@@ -177,9 +177,9 @@ rotate the request to another eligible Pool account. These failure transitions r
 { ok: true, provider, type, activeId }
 ```
 
-### `ocx account refresh <provider> [--json]`
+### `ccx account refresh <provider> [--json]`
 
-For the Codex pool, use `ocx account refresh openai [--json]`. It force-refreshes account quotas and
+For the Codex pool, use `ccx account refresh openai [--json]`. It force-refreshes account quotas and
 prints available weekly/monthly percentages and reset times; missing quota data is reported as
 unknown, not 0%. Its JSON envelope is `{ accounts: AccountRow[] }`, with `quota` on each Codex row.
 
@@ -190,7 +190,7 @@ token re-login or a plain account-list re-read. `--json` returns
 failures exit 1; an upstream quota probe that fails or times out degrades to a null or stale report
 instead (exit 0), matching the dashboard's quota bars.
 
-### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
+### `ccx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
 Controls only the `openai` Codex account pool. `on` sets 80%, `off` sets 0%, `status` reads the current
 value, and `threshold <n>` accepts an integer from 0 through 100. Other providers and invalid values
@@ -200,12 +200,12 @@ exit 1. `--json` returns:
 { provider, autoSwitchThreshold: number, enabled: boolean }
 ```
 
-### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
+### `ccx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
 
 Reads or sets one Codex pool account's selection order: **higher is used earlier**, the default is
 `0`, and the range is `-100` through `100`. Only the `openai` Codex pool is ordered, so other
 providers exit 1. `main` targets the Codex Desktop login, which is ordered like any other pool
-account — `ocx account priority openai main last` is how you keep it as the reserve.
+account — `ccx account priority openai main last` is how you keep it as the reserve.
 
 Preset words stand in for small integers: `first` is `+2`, `earlier` is `+1`, `normal` is `0`,
 `later` is `-1`, and `last` is `-2`. `reset` returns the account to the default and drops its stored
@@ -228,12 +228,12 @@ unknown account id, or a value outside the accepted set exits 1. `--json` return
 { ok: true, provider, id, priority: number, preset: string | null }
 ```
 
-### `ocx account login|reauth|code|cancel ...`
+### `ccx account login|reauth|code|cancel ...`
 
 Run browser-based or manual-code account authentication from a headless shell. Use
-`ocx account --help` for the provider-specific command shape.
+`ccx account --help` for the provider-specific command shape.
 
-### `ocx account remove <provider> <id|main> --yes [--json]`
+### `ccx account remove <provider> <id|main> --yes [--json]`
 
 This guarded, non-interactive deletion requires `--yes`. Before deleting, it verifies that the id
 exists; a missing id exits 1 without sending DELETE. The main Codex App login cannot be removed, so
@@ -247,35 +247,35 @@ success and failure shapes are:
 { error: string } // stderr, exit 1
 ```
 
-### `ocx account add-key <provider> [--label <label>] [--json]`
+### `ccx account add-key <provider> [--label <label>] [--json]`
 
 Adds and activates a key for an API-key provider. The key is read only from non-TTY piped/redirected
 stdin; interactive TTY input, empty input, OAuth/Codex providers, and API failures exit 1. The key is
 never echoed, including when it appears inside a label. Prefer a secret manager or a here-string:
 
 ```bash
-ocx account add-key openrouter --label personal <<< "$OPENROUTER_API_KEY"
-security find-generic-password -w openrouter | ocx account add-key openrouter --json
+ccx account add-key openrouter --label personal <<< "$OPENROUTER_API_KEY"
+security find-generic-password -w openrouter | ccx account add-key openrouter --json
 ```
 
 `--json` returns `{ ok: true, id: string | null, label?: string }` and never includes the key.
 
-### `ocx account reset-credits <id|main> [--consume --yes]`
+### `ccx account reset-credits <id|main> [--consume --yes]`
 
 Inspect Codex reset credits for an account. Consuming a credit is destructive and requires both
 `--consume` and `--yes`.
 
-### `ocx account main <subcommand>`
+### `ccx account main <subcommand>`
 
-Manage named native Codex main-login profiles without changing OpenCodex account-pool routing:
+Manage named native Codex main-login profiles without changing CodexCommander account-pool routing:
 
 ```text
-ocx account main doctor [--json]
-ocx account main list [--json]
-ocx account main register <label> [--json]
-ocx account main add <label>
-ocx account main switch <profile-id-or-label> --yes [--json]
-ocx account main recover [--rollback --yes] [--json]
+ccx account main doctor [--json]
+ccx account main list [--json]
+ccx account main register <label> [--json]
+ccx account main add <label>
+ccx account main switch <profile-id-or-label> --yes [--json]
+ccx account main recover [--rollback --yes] [--json]
 ```
 
 Each mutating command reports the canonical effective `CODEX_HOME` returned by the running proxy.
@@ -289,38 +289,29 @@ successful switch preserves local tasks and history, then requires Codex to be r
 `doctor` to inspect profile state and `recover` to finish or roll back an interrupted transition.
 `switch` accepts either the profile ID or its label.
 
-The v1 recovery matrix covers an OpenCodex process exiting after a transaction file has been
+The v1 recovery matrix covers a CodexCommander process exiting after a transaction file has been
 published by rename. It does not claim durability across an OS or kernel crash or sudden power
 loss: `atomicWriteFileAsync()` does not `fsync` either the file or its parent directory.
 
 The encrypted vault, switch journal, recovery marker, and journal quarantine live in the canonical
-`<real CODEX_HOME>/.opencodex-native-main-profiles` directory, so every OpenCodex instance sharing
+`<real CODEX_HOME>/.codexcommander-native-main-profiles` directory, so every CodexCommander instance sharing
 that Codex home observes one owner and one recovery state. Plaintext login staging remains isolated
-under each `<OPENCODEX_HOME>/native-main-profile-staging` directory.
+under each `<CODEXCOMMANDER_HOME>/native-main-profile-staging` directory.
 
 Before native-main traffic or journal recovery is admitted, the lifetime owner takes the exclusive
-credential claim and removes only exact `auth.json.ocx.<pid>.<sequence>.tmp` crash residues. Each
+credential claim and removes only exact `auth.json.ccx.<pid>.<sequence>.tmp` crash residues. Each
 candidate must remain a single-linked regular file under the unchanged canonical `CODEX_HOME`; it is
 truncated, flushed, and then unlinked. Link/reparse substitutions, identity changes, and other
 ambiguity keep native-main traffic closed, while near-miss names are never removed automatically.
-This protects against cooperative OpenCodex crashes, not a malicious process already running as the
+This protects against cooperative CodexCommander crashes, not a malicious process already running as the
 same OS user. That user and the filesystem containing `CODEX_HOME` remain trusted, and truncation
 does not promise physical erasure from copy-on-write storage, snapshots, or SSD remanence.
 
-Preview builds used `<OPENCODEX_HOME>/native-main-profiles`. That layout is never imported silently.
-If `doctor` reports legacy profile state, stop every OpenCodex proxy sharing the same `CODEX_HOME`.
-Then either back up and move the matching `*.vault.json`, `*.journal.json`, recovery marker, and any
-referenced journal-quarantine file together into the canonical directory while preserving owner-only
-permissions, or remove the old preview set and run `ocx account main register` again. Do not choose
-between multiple old roots or run both layouts while any sharing proxy is active.
-On Windows, preview state keyed by the former case-folded home identity must be reset rather than
-moved because its encrypted AAD and operating-system keyring identity are intentionally not reused.
-
 ## Models
 
-### `ocx models [subcommand]` · `ocx model <subcommand>`
+### `ccx models [subcommand]` · `ccx model <subcommand>`
 
-`ocx model` is an alias of `ocx models`. With no subcommand, list the models statically seeded in
+`ccx model` is an alias of `ccx models`. With no subcommand, list the models statically seeded in
 configured providers. `--provider` filters one configured provider and `--json` returns model
 metadata. `live` reads the running catalog; `add`, `edit`, `remove`, and `list-custom` manage manual
 catalog entries; `enable`, `disable`, and `provider` control visibility; `selected` controls a
@@ -330,7 +321,7 @@ shadow-call interception.
 Every per-model operation the dashboard offers is available here, so a headless install never needs
 the GUI to manage a catalog. `add`, `remove`, and `list-custom` work against the config file and apply
 to a running proxy through a catalog sync; the rest talk to the live management API and require the
-proxy to be running (`ocx start`, or an installed service).
+proxy to be running (`ccx start`, or an installed service).
 
 | Subcommand | Supported flags | Action |
 | --- | --- | --- |
@@ -345,18 +336,18 @@ proxy to be running (`ocx start`, or an installed service).
 | `provider <name> <on\|off>` | `--json` | Enable or disable every model of one provider in a single write. |
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | Read or replace the provider model allowlist. `--clear` removes the allowlist so every model is offered. |
 | `context <status\|value <tokens>\|provider <name> <on\|off>\|all <on\|off>>` | `--json` | Read or set the context-window cap, globally or per provider. |
-| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Read or set the replacement model for Codex's background helper calls. `-` clears the model. `status` also reports `sourceModels`, the helper slugs the proxy intercepts (default: `gpt-5.6-luna`; clients through 0.144.x used `gpt-5.4-mini`, which an explicit `sourceModels` override can restore). |
+| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Read or set the replacement model for Codex's background helper calls. `-` clears the model. `status` also reports `sourceModels`, the helper slugs the proxy intercepts (default: `gpt-5.6-luna`; use an explicit override only for current custom helper ids). |
 
 ```bash
-ocx models live --json                                  # what Codex can actually see right now
-ocx models disable anthropic/claude-haiku-4             # hide one routed model
-ocx models enable gpt-5.6-sol                           # no slash, so it is treated as native
-ocx models provider zenmux off                          # hide a noisy provider wholesale
-ocx models selected anthropic --set claude-opus-5,claude-fable-5
-ocx models selected anthropic --clear                   # drop the allowlist again
-ocx models add deepseek deepseek-v4 --display-name 'DeepSeek V4' --context-window 128000 --modalities text,image
-ocx models list-custom --json                           # read the custom-id for edit/remove
-ocx models remove deepseek/deepseek-v4 --yes
+ccx models live --json                                  # what Codex can actually see right now
+ccx models disable anthropic/claude-haiku-4             # hide one routed model
+ccx models enable gpt-5.6-sol                           # no slash, so it is treated as native
+ccx models provider zenmux off                          # hide a noisy provider wholesale
+ccx models selected anthropic --set claude-opus-5,claude-fable-5
+ccx models selected anthropic --clear                   # drop the allowlist again
+ccx models add deepseek deepseek-v4 --display-name 'DeepSeek V4' --context-window 128000 --modalities text,image
+ccx models list-custom --json                           # read the custom-id for edit/remove
+ccx models remove deepseek/deepseek-v4 --yes
 ```
 
 A model selector with a slash is routed (`anthropic/claude-opus-5`); a bare id is treated as a

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildClaudeDesktopState } from "../src/server/management/shared";
 import { DESKTOP_SUPPORTS_1M_THRESHOLD } from "../src/claude/desktop-3p";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 import { installIsolatedCodexHome } from "./helpers/isolated-codex-home";
 
@@ -20,7 +20,7 @@ const config = {
   port: 10100,
   defaultProvider: "openai",
   providers: {},
-} as unknown as OcxConfig;
+} as unknown as CodexCommanderConfig;
 
 test("the DTO and the writer share one threshold constant", () => {
   // If someone changes one side, this fails — that is the point.
@@ -28,11 +28,11 @@ test("the DTO and the writer share one threshold constant", () => {
 });
 
 test("supports1m is true at and above the threshold, false below it", async () => {
-  const home = mkdtempSync(join(tmpdir(), "ocx-desktop-1m-"));
-  const prev = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+  const home = mkdtempSync(join(tmpdir(), "ccx-desktop-1m-"));
+  const prev = process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR;
   const previousCodexCliPath = process.env.CODEX_CLI_PATH;
-  const isolatedCodexHome = installIsolatedCodexHome("ocx-desktop-1m-codex-");
-  process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = home;
+  const isolatedCodexHome = installIsolatedCodexHome("ccx-desktop-1m-codex-");
+  process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR = home;
   process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
   try {
     const state = await buildClaudeDesktopState(config);
@@ -51,8 +51,8 @@ test("supports1m is true at and above the threshold, false below it", async () =
     expect(983_616 >= DESKTOP_SUPPORTS_1M_THRESHOLD).toBe(false);
     expect(1_000_000 >= DESKTOP_SUPPORTS_1M_THRESHOLD).toBe(true);
   } finally {
-    if (prev === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
-    else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = prev;
+    if (prev === undefined) delete process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR;
+    else process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR = prev;
     if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
     else process.env.CODEX_CLI_PATH = previousCodexCliPath;
     isolatedCodexHome.restore();

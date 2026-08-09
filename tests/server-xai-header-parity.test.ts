@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { deriveXaiConvId } from "../src/providers/xai-transport";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -18,24 +18,25 @@ let originalFetch: typeof fetch;
 
 beforeEach(() => {
   originalFetch = globalThis.fetch;
-  previousHome = process.env.OPENCODEX_HOME;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-xai-parity-codex-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-xai-parity-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-xai-parity-codex-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-xai-parity-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
 });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
 });
 
-function config(connectTimeoutMs = 1_000): OcxConfig {
+function config(connectTimeoutMs = 1_000): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     hostname: "127.0.0.1",
     connectTimeoutMs,
     defaultProvider: "xai",
@@ -48,7 +49,7 @@ function config(connectTimeoutMs = 1_000): OcxConfig {
         defaultModel: "grok-test",
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 function post(serverUrl: string): Promise<Response> {

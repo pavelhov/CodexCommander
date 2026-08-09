@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Assembles OpenCodex.app by hand.
+# Assembles CodexCommander.app by hand.
 #
 # No Xcode project, so there is nothing to keep in sync with the package manifest. The
 # bundle is staged in a temp directory and moved into place at the end, so an interrupted
 # build never leaves a half-written .app that launches and misbehaves.
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "$script_dir/.." && pwd)"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+repo_root="$(cd "$script_dir/.." && pwd -P)"
 package_dir="$repo_root/app"
 output_root="${OUTPUT_DIR:-$repo_root/dist/macos}"
 configuration="${CONFIGURATION:-release}"
@@ -17,6 +17,91 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "build:macos requires macOS." >&2
   exit 1
 fi
+
+die_unsafe_source() {
+  echo "Refusing unsafe packaging source ($2): $1" >&2
+  exit 1
+}
+
+physical_existing_path() {
+  local path="$1" parent base
+  parent="$(cd "$(dirname "$path")" && pwd -P)" || return 1
+  base="$(basename "$path")"
+  printf '%s/%s' "${parent%/}" "$base"
+}
+
+assert_within_root() {
+  local path="$1" label="$2" allowed_root="$3" physical
+  physical="$(physical_existing_path "$path")" || die_unsafe_source "$path" "$label"
+  case "$physical" in
+    "$allowed_root"|"$allowed_root"/*) ;;
+    *) die_unsafe_source "$path escapes its trusted root" "$label" ;;
+  esac
+}
+
+link_count() {
+  stat -f '%l' "$1"
+}
+
+assert_safe_file() {
+  local path="$1" label="$2" allowed_root="$3" links
+  [[ ! -L "$path" ]] || die_unsafe_source "$path is a symbolic link" "$label"
+  [[ -f "$path" ]] || die_unsafe_source "$path is not a regular file" "$label"
+  links="$(link_count "$path")" || die_unsafe_source "$path cannot be inspected" "$label"
+  [[ "$links" == "1" ]] || die_unsafe_source "$path is multiply linked" "$label"
+  assert_within_root "$path" "$label" "$allowed_root"
+}
+
+assert_safe_tree() {
+  local path="$1" label="$2" allowed_root="$3" entry links
+  [[ ! -L "$path" ]] || die_unsafe_source "$path is a symbolic link" "$label"
+  [[ -d "$path" ]] || die_unsafe_source "$path is not a physical directory" "$label"
+  assert_within_root "$path" "$label" "$allowed_root"
+
+  # -P is explicit: this must never recurse through a symlink even if a platform's
+  # find default changes. The entire source tree is checked before the first copy.
+  while IFS= read -r -d '' entry; do
+    [[ ! -L "$entry" ]] || die_unsafe_source "$entry is a symbolic link" "$label"
+    assert_within_root "$entry" "$label" "$allowed_root"
+    if [[ -d "$entry" ]]; then
+      continue
+    fi
+    [[ -f "$entry" ]] || die_unsafe_source "$entry is not a regular file" "$label"
+    links="$(link_count "$entry")" || die_unsafe_source "$entry cannot be inspected" "$label"
+    [[ "$links" == "1" ]] || die_unsafe_source "$entry is multiply linked" "$label"
+  done < <(find -P "$path" -print0)
+}
+
+copy_verified_file() {
+  local source="$1" destination="$2" label="$3" source_root="$4" destination_root="$5"
+  assert_safe_file "$source" "$label" "$source_root"
+  # -P is required even after validation: if a source path changes into a link between
+  # lstat and copy, stage the link itself and let the post-copy assertion fail closed.
+  cp -P "$source" "$destination"
+  assert_safe_file "$destination" "staged $label" "$destination_root"
+}
+
+copy_verified_tree() {
+  local source="$1" destination="$2" label="$3" source_root="$4" destination_root="$5"
+  assert_safe_tree "$source" "$label" "$source_root"
+  cp -RP "$source" "$destination"
+  assert_safe_tree "$destination" "staged $label" "$destination_root"
+}
+
+# Package only physical, single-link repository inputs. This checks source roots before
+# the Swift build as well as immediately around each copy, then verifies the clean staging
+# tree again. A stale or compromised GUI output cannot smuggle host files into the app.
+assert_safe_file "$repo_root/package.json" "package.json" "$repo_root"
+assert_safe_file "$repo_root/bun.lock" "bun.lock" "$repo_root"
+assert_safe_file "$repo_root/app/Info.plist" "app/Info.plist" "$repo_root"
+assert_safe_file "$repo_root/gui/public/logo.png" "gui/public/logo.png" "$repo_root"
+assert_safe_file "$repo_root/gui/public/favicon.png" "gui/public/favicon.png" "$repo_root"
+assert_safe_file "$repo_root/LICENSE" "LICENSE" "$repo_root"
+assert_safe_file "$repo_root/THIRD_PARTY_NOTICES.md" "THIRD_PARTY_NOTICES.md" "$repo_root"
+assert_safe_tree "$repo_root/src" "src" "$repo_root"
+assert_safe_tree "$repo_root/bin" "bin" "$repo_root"
+assert_safe_tree "$repo_root/gui/dist" "gui/dist" "$repo_root"
+assert_safe_tree "$repo_root/gui/public/provider-icons" "gui/public/provider-icons" "$repo_root"
 
 # Validate BEFORE creating anything, so the script cannot leave a directory behind at a
 # path it then refuses to build into.
@@ -91,7 +176,7 @@ resolve_physical() {
 }
 
 output_root="$(resolve_physical "$output_root")"
-app_bundle="$output_root/OpenCodex.app"
+app_bundle="$output_root/CodexCommander.app"
 
 # The build deletes whatever sits at $app_bundle, so the destination must be somewhere
 # this project owns. Comparing $app_bundle against $output_root proves nothing — both
@@ -117,7 +202,7 @@ esac
 
 mkdir -p "$output_root"
 
-swift_args=(--package-path "$package_dir" -c "$configuration" --product OpenCodexMenuBar)
+swift_args=(--package-path "$package_dir" -c "$configuration" --product CodexCommanderMenuBar)
 
 if [[ "${UNIVERSAL:-0}" == "1" ]]; then
   developer_dir="$(xcode-select -p 2>/dev/null || true)"
@@ -134,22 +219,24 @@ fi
 echo "==> Building ($configuration)…"
 swift build "${swift_args[@]}"
 bin_dir="$(swift build "${swift_args[@]}" --show-bin-path)"
-executable="$bin_dir/OpenCodexMenuBar"
+executable="$bin_dir/CodexCommanderMenuBar"
 
 if [[ ! -x "$executable" ]]; then
   echo "Build did not produce an executable at $executable" >&2
   exit 1
 fi
 
-staging_root="$(mktemp -d "$output_root/.OpenCodex-build.XXXXXX")"
-staged_app="$staging_root/OpenCodex.app"
-iconset="$staging_root/OpenCodex.iconset"
+staging_root="$(mktemp -d "$output_root/.CodexCommander-build.XXXXXX")"
+staged_app="$staging_root/CodexCommander.app"
+iconset="$staging_root/CodexCommander.iconset"
 cleanup() { rm -rf "$staging_root"; }
 trap cleanup EXIT
 
 mkdir -p "$staged_app/Contents/MacOS" "$staged_app/Contents/Resources"
-cp "$executable" "$staged_app/Contents/MacOS/OpenCodexMenuBar"
-cp "$package_dir/Info.plist" "$staged_app/Contents/Info.plist"
+copy_verified_file "$executable" "$staged_app/Contents/MacOS/CodexCommanderMenuBar" \
+  "Swift menu-bar executable" "$bin_dir" "$staging_root"
+copy_verified_file "$package_dir/Info.plist" "$staged_app/Contents/Info.plist" \
+  "app/Info.plist" "$repo_root" "$staging_root"
 
 # A release app owns the proxy runtime. Keep the package-shaped layout intact so Bun
 # can resolve the existing TypeScript entrypoints, workers, and dependency graph without
@@ -157,21 +244,18 @@ cp "$package_dir/Info.plist" "$staged_app/Contents/Info.plist"
 # lockfile-pinned production install for both Darwin architectures; the installed app never
 # repeats this step or performs a first-launch network install.
 runtime_root="$staged_app/Contents/Resources/runtime"
-if [[ ! -f "$repo_root/gui/dist/index.html" ]]; then
-  echo "Missing $repo_root/gui/dist/index.html; run bun run build:gui before building the macOS app." >&2
-  exit 1
-fi
+assert_safe_file "$repo_root/gui/dist/index.html" "gui/dist/index.html" "$repo_root"
 mkdir -p "$runtime_root"
-cp "$repo_root/package.json" "$runtime_root/package.json"
-cp "$repo_root/bun.lock" "$runtime_root/bun.lock"
-cp -R "$repo_root/src" "$runtime_root/src"
-cp -R "$repo_root/bin" "$runtime_root/bin"
+copy_verified_file "$repo_root/package.json" "$runtime_root/package.json" "package.json" "$repo_root" "$staging_root"
+copy_verified_file "$repo_root/bun.lock" "$runtime_root/bun.lock" "bun.lock" "$repo_root" "$staging_root"
+copy_verified_tree "$repo_root/src" "$runtime_root/src" "src" "$repo_root" "$staging_root"
+copy_verified_tree "$repo_root/bin" "$runtime_root/bin" "bin" "$repo_root" "$staging_root"
 mkdir -p "$runtime_root/gui"
-cp -R "$repo_root/gui/dist" "$runtime_root/gui/dist"
+copy_verified_tree "$repo_root/gui/dist" "$runtime_root/gui/dist" "gui/dist" "$repo_root" "$staging_root"
 
-deps_root="$(mktemp -d "$staging_root/.OpenCodex-runtime-deps.XXXXXX")"
-cp "$repo_root/package.json" "$deps_root/package.json"
-cp "$repo_root/bun.lock" "$deps_root/bun.lock"
+deps_root="$(mktemp -d "$staging_root/.CodexCommander-runtime-deps.XXXXXX")"
+copy_verified_file "$repo_root/package.json" "$deps_root/package.json" "package.json" "$repo_root" "$staging_root"
+copy_verified_file "$repo_root/bun.lock" "$deps_root/bun.lock" "bun.lock" "$repo_root" "$staging_root"
 if ! (cd "$deps_root" && bun install --production --frozen-lockfile --ignore-scripts --os=darwin --cpu='*' --force >/dev/null); then
   echo "Could not resolve lockfile-pinned Darwin production dependencies." >&2
   echo "Retry the build with network access; the installed app never performs this step." >&2
@@ -241,22 +325,35 @@ if [[ "${UNIVERSAL:-0}" == "1" ]]; then
     fi
   done
 fi
-if [[ ! -f "$runtime_root/src/cli/index.ts" || ! -f "$runtime_root/gui/dist/index.html" ]]; then
-  echo "Bundled OpenCodex runtime is incomplete under $runtime_root." >&2
+if [[ ! -f "$runtime_root/bin/ccx.mjs" \
+  || ! -f "$runtime_root/src/cli/index.ts" \
+  || ! -f "$runtime_root/gui/dist/index.html" ]]; then
+  echo "Bundled CodexCommander runtime is incomplete under $runtime_root." >&2
   exit 1
 fi
 
 # Reuse the dashboard's real brand/provider assets. The AppKit surface loads these
 # files directly; no duplicate drawn logos or generated placeholders live in app/.
-mkdir -p "$staged_app/Contents/Resources/provider-icons"
-cp "$repo_root/gui/public/logo.png" "$staged_app/Contents/Resources/OpenCodex.png"
-cp "$repo_root/LICENSE" "$staged_app/Contents/Resources/LICENSE.txt"
-cp "$repo_root/THIRD_PARTY_NOTICES.md" "$staged_app/Contents/Resources/THIRD_PARTY_NOTICES.md"
+mkdir -p "$staged_app/Contents/Resources"
+copy_verified_file "$repo_root/gui/public/logo.png" "$staged_app/Contents/Resources/CodexCommander.png" \
+  "gui/public/logo.png" "$repo_root" "$staging_root"
+copy_verified_file "$repo_root/LICENSE" "$staged_app/Contents/Resources/LICENSE.txt" \
+  "LICENSE" "$repo_root" "$staging_root"
+copy_verified_file "$repo_root/THIRD_PARTY_NOTICES.md" "$staged_app/Contents/Resources/THIRD_PARTY_NOTICES.md" \
+  "THIRD_PARTY_NOTICES.md" "$repo_root" "$staging_root"
 # Quota responses are provider-agnostic, so package the complete existing icon set.
 # Copying only the three featured rows made every additional connected provider fall
 # back to a question mark in release builds even though its real asset existed in-repo.
-cp -R "$repo_root/gui/public/provider-icons/." \
-  "$staged_app/Contents/Resources/provider-icons/"
+copy_verified_tree "$repo_root/gui/public/provider-icons" \
+  "$staged_app/Contents/Resources/provider-icons" "gui/public/provider-icons" "$repo_root" "$staging_root"
+
+# Re-check the copied release inputs as a coherent fresh stage. This is intentionally
+# before dependency installation: package-manager node_modules legitimately contains a
+# small number of executable shim links, while application-owned source assets do not.
+assert_safe_tree "$runtime_root/src" "staged runtime src" "$staging_root"
+assert_safe_tree "$runtime_root/bin" "staged runtime bin" "$staging_root"
+assert_safe_tree "$runtime_root/gui/dist" "staged runtime gui/dist" "$staging_root"
+assert_safe_tree "$staged_app/Contents/Resources/provider-icons" "staged provider icons" "$staging_root"
 
 # The app version comes from package.json, so it can never claim a version the release
 # did not ship.
@@ -276,7 +373,7 @@ fi
 #
 # So the short version is the numeric core, and when CI supplies a run number it becomes
 # the CFBundleVersion outright — a monotonically increasing single integer is both valid
-# and genuinely distinguishing, which "2.7.36.<run>" would not have been.
+# and genuinely distinguishing, which "0.1.0.<run>" would not be.
 version_core="${version%%-*}"
 if [[ ! "$version_core" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "Version core must be three integers for CFBundleShortVersionString: '$version_core'" >&2
@@ -304,7 +401,7 @@ plutil -replace CFBundleVersion            -string "$build_version" "$staged_app
 # Stamp the exact source revision so diagnostics can distinguish them without relying
 # on the bundle path or a release version shared by both copies. A dirty suffix is
 # deliberate: claiming the HEAD commit for uncommitted source would be false provenance.
-source_revision="${OPENCODEX_BUILD_REVISION:-}"
+source_revision="${CCX_BUILD_REVISION:-}"
 if [[ -z "$source_revision" ]]; then
   source_revision="$(git -C "$repo_root" rev-parse --verify HEAD 2>/dev/null || true)"
   # `git diff` ignores untracked source files. Porcelain status covers staged,
@@ -318,11 +415,11 @@ fi
 if [[ -z "$source_revision" ]]; then
   source_revision="unknown"
 elif [[ ! "$source_revision" =~ ^[0-9a-fA-F]{40}(-dirty)?$ ]]; then
-  echo "OPENCODEX_BUILD_REVISION must be a 40-character git SHA with optional -dirty suffix." >&2
+  echo "CCX_BUILD_REVISION must be a 40-character git SHA with optional -dirty suffix." >&2
   exit 1
 fi
-if ! plutil -replace OpenCodexSourceRevision -string "$source_revision" "$staged_app/Contents/Info.plist" 2>/dev/null; then
-  plutil -insert OpenCodexSourceRevision -string "$source_revision" "$staged_app/Contents/Info.plist"
+if ! plutil -replace CodexCommanderSourceRevision -string "$source_revision" "$staged_app/Contents/Info.plist" 2>/dev/null; then
+  plutil -insert CodexCommanderSourceRevision -string "$source_revision" "$staged_app/Contents/Info.plist"
 fi
 
 # Icon: reuse the dashboard favicon rather than adding another binary asset to the repo.
@@ -338,7 +435,7 @@ for size in 16 32 128 256 512; do
   sips -z "$((size * 2))" "$((size * 2))" "$icon_source" \
     --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
 done
-iconutil -c icns "$iconset" -o "$staged_app/Contents/Resources/OpenCodex.icns"
+iconutil -c icns "$iconset" -o "$staged_app/Contents/Resources/CodexCommander.icns"
 
 # Signing. Sign nested Mach-O payloads first and the bundle last. This order is
 # deterministic for Developer ID/notarization and avoids relying on codesign --deep
@@ -360,7 +457,7 @@ nested_code=(
   "$runtime_bun"
   "$runtime_root/node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node"
   "$runtime_root/node_modules/@napi-rs/keyring-darwin-x64/keyring.darwin-x64.node"
-  "$staged_app/Contents/MacOS/OpenCodexMenuBar"
+  "$staged_app/Contents/MacOS/CodexCommanderMenuBar"
 )
 
 if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
@@ -388,4 +485,4 @@ rm -rf "$app_bundle"
 mv "$staged_app" "$app_bundle"
 
 echo "==> Built $app_bundle (release $version, short $version_core, build $build_version, source $source_revision)"
-lipo -archs "$app_bundle/Contents/MacOS/OpenCodexMenuBar"
+lipo -archs "$app_bundle/Contents/MacOS/CodexCommanderMenuBar"

@@ -110,7 +110,7 @@ public final class CatalogUpdateView: NSView {
         default:
             workerText = "Codex background workers are using an older model roster."
         }
-        detail.stringValue = "\(workerText) Applying the update restarts only those workers and may interrupt active answers. OpenCodex remains running."
+        detail.stringValue = "\(workerText) Applying the update restarts only those workers and may interrupt active answers. CodexCommander remains running."
         setAccessibilityLabel("Agent catalog update ready. \(detail.stringValue)")
         isHidden = false
     }
@@ -135,10 +135,10 @@ public final class CatalogUpdateView: NSView {
 
 // MARK: - Status header
 
-/// Brand mark + OpenCodex title + truthful status + active count.
+/// Brand mark + CodexCommander title + truthful status + active count.
 public final class StatusHeaderView: NSView {
     private let brand = NSImageView()
-    private let title = makeLabel("OpenCodex", font: Theme.title, color: Theme.text)
+    private let title = makeLabel("CodexCommander", font: Theme.title, color: Theme.text)
     private let dot = StatusDotView()
     private let status = makeLabel("", font: Theme.captionMedium, color: Theme.muted)
     private let active = makeLabel("", font: Theme.caption, color: Theme.faint)
@@ -179,7 +179,7 @@ public final class StatusHeaderView: NSView {
         ])
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
-        setAccessibilityLabel("OpenCodex status")
+        setAccessibilityLabel("CodexCommander status")
     }
 
     required init?(coder: NSCoder) { nil }
@@ -205,7 +205,7 @@ public final class StatusHeaderView: NSView {
             divider.isHidden = true
         }
 
-        var label = "OpenCodex \(state.title)"
+        var label = "CodexCommander \(state.title)"
         if let activeCount, snapshot.activityLoaded {
             label += ", \(activeCount) active"
         }
@@ -607,8 +607,8 @@ package enum ReferenceQuotaPresentation {
         case "weekly": return "7d"
         case "monthly": return "30d"
         default:
-            let label = window.label?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return label?.isEmpty == false ? label! : "window"
+            let label = window.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            return label.isEmpty ? "window" : label
         }
     }
 
@@ -622,7 +622,7 @@ package enum ReferenceQuotaPresentation {
 
     package static func observationText(_ window: QuotaReferenceWindow) -> String {
         let tokens = "\(Format.count(window.observedTokens)) tokens"
-        let requests = max(0, window.observedRequests ?? 0)
+        let requests = max(0, window.observedRequests)
         let requestText = "\(requests) request\(requests == 1 ? "" : "s")"
         switch window.observationQuality {
         case .none:
@@ -637,13 +637,13 @@ package enum ReferenceQuotaPresentation {
     }
 
     package static func limitTitle(_ event: QuotaObservedLimitEvent) -> String {
-        let raw = event.limitName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let raw = event.limitName.trimmingCharacters(in: .whitespacesAndNewlines)
         let name: String
-        switch raw?.lowercased() {
+        switch raw.lowercased() {
         case "5 hour": name = "5-hour"
         case "weekly": name = "weekly"
         case "monthly": name = "monthly"
-        default: name = raw?.isEmpty == false ? raw! : "Provider"
+        default: name = raw.isEmpty ? "Provider" : raw
         }
         return "Observed \(name) limit"
     }

@@ -1,29 +1,37 @@
 import { expect, test } from "bun:test";
 import { handleManagementAPI } from "../src/server/management-api";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 /**
- * Route contract for devlog/_fin/260803_integrations_toggle_all/011.
+ * Route contract for implementation contract
  *
- * The toggle writes one field of opencodex's own config, so there is nothing to
+ * The toggle writes one field of codexcommander's own config, so there is nothing to
  * snapshot and nothing to journal — turning it back on is the undo. What DOES
  * need proving is that it agrees with the older `PUT /api/claude-code` about the
  * block's invariants, not merely about the flag.
  */
 
-function baseConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
-  return { port: 10100, providers: [], ...overrides } as OcxConfig;
+function baseConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
+  return {
+    port: 10100,
+    multiAgentGuidanceEnabled: true,
+    defaultProvider: "mock",
+    providers: {
+      mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:1/v1", allowPrivateNetwork: true },
+    },
+    ...overrides,
+  } as CodexCommanderConfig;
 }
 
 /**
  * `saveConfigPreservingClaudeCode` is injected as a no-op spy on purpose: the
- * production function writes the developer's real OPENCODEX_HOME, and
+ * production function writes the developer's real CODEXCOMMANDER_HOME, and
  * ManagementApiDeps carries this seam precisely so a fixture config cannot
  * overwrite it (src/server/management/context.ts).
  */
-function dispatch(config: OcxConfig, path: string, init?: RequestInit) {
+function dispatch(config: CodexCommanderConfig, path: string, init?: RequestInit) {
   const url = new URL(`http://127.0.0.1:10100${path}`);
-  const saved: OcxConfig[] = [];
+  const saved: CodexCommanderConfig[] = [];
   const response = handleManagementAPI(
     new Request(url, { ...init, headers: { Host: url.host, ...(init?.headers ?? {}) } }),
     url,
@@ -33,7 +41,7 @@ function dispatch(config: OcxConfig, path: string, init?: RequestInit) {
   return { response, saved };
 }
 
-async function put(config: OcxConfig, enabled: boolean) {
+async function put(config: CodexCommanderConfig, enabled: boolean) {
   const { response, saved } = dispatch(config, "/api/native-integrations/claude", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -73,36 +81,21 @@ test("a toggle to the current value changes nothing and persists nothing", async
   expect(saved).toHaveLength(0);
 });
 
-test("creating the block stamps the auth-mode migration sentinel", async () => {
-  /*
-   * The regression this exists to prevent, found auditing WP1 against the route
-   * it mirrors: the startup migration reads "a claudeCode block with no
-   * authMode" as a pre-upgrade subscriber and pins it to literal subscription.
-   * Toggling Claude on is one of the two ways that block gets CREATED, so a
-   * toggle without the sentinel would silently convert a user's Auto auth mode
-   * into a sticky manual subscription at the next startServer — far from here.
-   */
+test("creating the block stores only the requested toggle", async () => {
   const config = baseConfig();
   expect(config.claudeCode).toBeUndefined();
   await put(config, false);
-  expect(typeof config.claudeCode?.authModeMigratedAt).toBe("string");
-});
-
-test("an existing sentinel is not re-stamped", async () => {
-  const original = "2026-01-01T00:00:00.000Z";
-  const config = baseConfig({ claudeCode: { enabled: true, authModeMigratedAt: original } });
-  await put(config, false);
-  expect(config.claudeCode?.authModeMigratedAt).toBe(original);
+  expect(config.claudeCode).toEqual({ enabled: false });
 });
 
 test("the toggle preserves every other claudeCode field", async () => {
   // It is a toggle, not a settings surface: the Claude tab owns these and a
   // switch that quietly dropped them would be a data-loss bug.
   const config = baseConfig({
-    claudeCode: { enabled: true, model: "anthropic/claude-opus-5", systemEnv: true, injectAgents: false },
+    claudeCode: { enabled: true, smallFastModel: "anthropic/claude-haiku-5", systemEnv: true, injectAgents: false },
   });
   await put(config, false);
-  expect(config.claudeCode?.model).toBe("anthropic/claude-opus-5");
+  expect(config.claudeCode?.smallFastModel).toBe("anthropic/claude-haiku-5");
   expect(config.claudeCode?.systemEnv).toBe(true);
   expect(config.claudeCode?.injectAgents).toBe(false);
 });
@@ -164,8 +157,7 @@ test("enabling WITH a change flips the flag and reports current", async () => {
   expect(body.state).toBe("current");
   expect(config.claudeCode?.enabled).toBe(true);
   expect(saved).toHaveLength(1);
-  // The block was persisted, so the migration sentinel rode along (011).
-  expect(typeof saved[0]!.claudeCode?.authModeMigratedAt).toBe("string");
+  expect(saved[0]!.claudeCode).toEqual({ enabled: true });
 });
 
 test("a held REAL config transaction refuses 409 config_busy, and release lets a retry through", async () => {
@@ -175,19 +167,19 @@ test("a held REAL config transaction refuses 409 config_busy, and release lets a
    * BEGIN IMMEDIATE` the lock itself uses (src/config.ts:1771), so the route's
    * own acquisition fails with SQLITE_BUSY exactly as cross-process contention
    * would. The route runs the REAL saveConfigPreservingClaudeCode — no seam —
-   * against a fixture OPENCODEX_HOME.
+   * against a fixture CODEXCOMMANDER_HOME.
    */
   const { Database } = await import("bun:sqlite");
   const { mkdtempSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
-  const fixtureRoot = mkdtempSync(join(tmpdir(), "ocx-lock-"));
-  const previousHome = process.env.OPENCODEX_HOME;
-  process.env.OPENCODEX_HOME = fixtureRoot;
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "ccx-lock-"));
+  const previousHome = process.env.CODEXCOMMANDER_HOME;
+  process.env.CODEXCOMMANDER_HOME = fixtureRoot;
   const holder = new Database(join(fixtureRoot, "config-mutation.sqlite"), { create: true });
   try {
     holder.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
-    const putReal = (config: OcxConfig) => {
+    const putReal = (config: CodexCommanderConfig) => {
       const url = new URL("http://127.0.0.1:10100/api/native-integrations/claude");
       return handleManagementAPI(
         new Request(url, {
@@ -223,8 +215,8 @@ test("a held REAL config transaction refuses 409 config_busy, and release lets a
   } finally {
     try { holder.exec("ROLLBACK"); } catch { /* already closed */ }
     try { holder.close(); } catch { /* already closed */ }
-    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousHome;
     rmSync(fixtureRoot, { recursive: true, force: true });
   }
 });

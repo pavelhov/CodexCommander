@@ -1,7 +1,7 @@
-import type { OcxProviderConfig } from "../types";
+import type { CodexCommanderProviderConfig } from "../types";
 
 export interface ImageBridgePlan {
-  provider: OcxProviderConfig;
+  provider: CodexCommanderProviderConfig;
   auth: { baseUrl: string; token: string };
   model: string;
   toolNames: Set<string>;
@@ -27,7 +27,7 @@ export interface ImageCallResult {
 
 /** Plan for the video bridge. Same auth/provider shape as image, without image-specific defaults. */
 export interface VideoBridgePlan {
-  provider: OcxProviderConfig;
+  provider: CodexCommanderProviderConfig;
   auth: { baseUrl: string; token: string };
   model: string;
   toolNames: Set<string>;

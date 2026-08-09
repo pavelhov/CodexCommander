@@ -9,7 +9,7 @@
  * Codex threads accumulate screenshots in history, so long sessions cross 20 images
  * easily and any single retina capture (>2000px wide) kills every later turn. The
  * PRIMARY layer is now anthropic-image-normalize.ts (Bun.Image resize/re-encode with an
- * age-tier pyramid — devlog/260714_image_normalization_pipeline/020), which runs before
+ * age-tier pyramid — implementation contract), which runs before
  * this guard; these rules remain the deterministic BACKSTOP for whatever normalization
  * could not shrink (undecodable passthroughs, all-terminal overflow). When this guard
  * must drop, it textifies the OLDEST image blocks — newest screenshots are the ones the
@@ -25,13 +25,10 @@ export const MAX_IMAGES_PER_REQUEST = 100;
  * Anthropic rejects any single image over 5MiB ("image exceeds 5 MB maximum", HTTP 400)
  * regardless of dimensions or count. The unit is the BASE64 STRING LENGTH, not decoded
  * bytes — verified in Claude Code's apiLimits.ts against Anthropic's internal API source
- * (devlog/260714_image_normalization_pipeline/001_prior_art.md §1). A decoded-bytes
+ * (implementation contract §1). A decoded-bytes
  * comparison would let images with base64 length in (5.24MiB, 6.99MiB] through to a 400.
  */
 export const MAX_IMAGE_BASE64_LENGTH = 5 * 1024 * 1024;
-
-/** @deprecated Renamed — the cap is measured in base64 chars. Use MAX_IMAGE_BASE64_LENGTH. */
-export const MAX_IMAGE_FILE_BYTES = MAX_IMAGE_BASE64_LENGTH;
 
 /**
  * Anthropic rejects raw HTTP bodies over ~32MB with 413 request_too_large, and base64

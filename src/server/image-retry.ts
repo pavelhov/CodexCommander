@@ -1,5 +1,5 @@
 /**
- * Upstream-413 tightened-retry gate (devlog/260714_image_normalization_pipeline/030).
+ * Upstream-413 tightened-retry gate (implementation contract).
  *
  * When Anthropic still rejects a normalized request with 413 request_too_large (budget
  * estimate missed: giant text share, tool schemas, ...), the proxy rebuilds the SAME
@@ -8,10 +8,10 @@
  * responses.ts consumes it.
  */
 
-import type { OcxParsedRequest } from "../types";
+import type { CodexCommanderParsedRequest } from "../types";
 
 /** True when the parsed request carries at least one inline (data-URL) image. */
-export function parsedHasInlineImage(parsed: OcxParsedRequest): boolean {
+export function parsedHasInlineImage(parsed: CodexCommanderParsedRequest): boolean {
   const messages = (parsed as { context?: { messages?: unknown[] } }).context?.messages ?? [];
   for (const message of messages) {
     const content = (message as { content?: unknown }).content;
@@ -32,7 +32,7 @@ export function parsedHasInlineImage(parsed: OcxParsedRequest): boolean {
 export function shouldAttemptImageTierRetry(args: {
   status: number;
   adapterName: string;
-  parsed: OcxParsedRequest;
+  parsed: CodexCommanderParsedRequest;
   alreadyAttempted: boolean;
 }): boolean {
   return args.status === 413

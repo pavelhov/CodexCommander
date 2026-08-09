@@ -1,4 +1,4 @@
-import type { OcxProviderConfig } from "../types";
+import type { CodexCommanderProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { redactSecretString } from "../lib/redact";
@@ -50,7 +50,7 @@ export async function describeImage(
   imageUrl: string,
   detail: string | undefined,
   contextText: string,
-  forwardProvider: OcxProviderConfig,
+  forwardProvider: CodexCommanderProviderConfig,
   selectedForwardHeaders: Headers,
   settings: VisionSettings,
   abortSignal?: AbortSignal,

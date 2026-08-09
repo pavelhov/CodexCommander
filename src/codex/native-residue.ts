@@ -1,18 +1,15 @@
-import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import type { Stats } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
-import { Database } from "bun:sqlite";
-
-import { getConfigDir } from "../config";
 import { catalogHasRoutedEntries, parseCatalogJson } from "./catalog/parsing";
 import {
   hasInjectedCodexRouting,
-  OCX_SECTION_MARKER,
+  CCX_SECTION_MARKER,
   providerTableString,
   rootTomlString,
 } from "./injected-marker";
+import { PROVIDER_ID } from "../identity";
 import {
   CODEX_CONFIG_PATH,
   CODEX_MODELS_CACHE_PATH,
@@ -28,9 +25,7 @@ export type NativeResidueSurface =
   | "catalog"
   | "models-cache"
   | "journal"
-  | "partial-write"
-  | "history"
-  | "history-backup";
+  | "partial-write";
 
 export type NativeRoutedResidueResult =
   | { kind: "clean" }
@@ -57,18 +52,12 @@ type ConfigObservation = {
   catalogTargets: CatalogTarget[];
 };
 
-type RolloutReference = {
-  id: string;
-  path: string;
-};
-
 const CONFIG_FILE_NAME = basename(CODEX_CONFIG_PATH);
 const PROFILE_FILE_NAME = basename(CODEX_PROFILE_PATH);
 const CATALOG_FILE_NAME = basename(DEFAULT_CATALOG_PATH);
 const MODELS_CACHE_FILE_NAME = basename(CODEX_MODELS_CACHE_PATH);
-const JOURNAL_FILE_NAME = "opencodex-journal.json";
-const HISTORY_DATABASE_FILE_NAME = "state_5.sqlite";
-const ROUTED_CATALOG_DESCRIPTION_PREFIX = "Routed via opencodex → ";
+const JOURNAL_FILE_NAME = "codexcommander-journal.json";
+const ROUTED_CATALOG_DESCRIPTION_PREFIX = "Routed via CodexCommander → ";
 
 function errorCode(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException | undefined)?.code;
@@ -157,7 +146,7 @@ function classifyToml(
   const result = classify(read.content);
   if (result === "residue") return { kind: "residue", surface, path: read.path };
   if (result === "indeterminate") {
-    return indeterminate(surface, read.path, "OpenCodex-shaped TOML does not match a complete routed grammar");
+    return indeterminate(surface, read.path, "CodexCommander-shaped TOML does not match a complete routed grammar");
   }
   return { kind: "clean" };
 }
@@ -243,14 +232,14 @@ function inspectConfig(codexHome: string, path: string): ConfigObservation {
   if (hasInjectedCodexRouting(read.content)) {
     classification = { kind: "residue", surface: "config", path: read.path };
   } else {
-    const hasMarker = read.content.includes(OCX_SECTION_MARKER);
+    const hasMarker = read.content.includes(CCX_SECTION_MARKER);
     const provider = rootTomlString(read.content, "model_provider");
-    const providerBaseUrl = providerTableString(read.content, "opencodex", "base_url");
-    if (hasMarker || provider === "opencodex" || providerBaseUrl !== null) {
+    const providerBaseUrl = providerTableString(read.content, PROVIDER_ID, "base_url");
+    if (hasMarker || provider === PROVIDER_ID || providerBaseUrl !== null) {
       classification = indeterminate(
         "config",
         read.path,
-        "OpenCodex-shaped TOML does not match a complete routed grammar",
+        "CodexCommander-shaped TOML does not match a complete routed grammar",
       );
     }
   }
@@ -259,16 +248,16 @@ function inspectConfig(codexHome: string, path: string): ConfigObservation {
 
 function classifyProfile(path: string): NativeRoutedResidueResult {
   return classifyToml("profile", path, content => {
-    const generatedFallback = content.startsWith("# OpenCodex proxy fallback config (Design B)")
+    const generatedFallback = content.startsWith("# CodexCommander proxy fallback config (Design B)")
       && rootTomlString(content, "openai_base_url") !== null;
-    const generatedNamedProfile = content.startsWith("# OpenCodex proxy profile — use with:")
+    const generatedNamedProfile = content.startsWith("# CodexCommander proxy profile — use with:")
       && hasInjectedCodexRouting(content);
     if (generatedFallback || generatedNamedProfile) return "residue";
     return "indeterminate";
   });
 }
 
-function isOcxRoutedCatalogEntry(entry: Record<string, unknown>): boolean {
+function isCodexCommanderRoutedCatalogEntry(entry: Record<string, unknown>): boolean {
   return typeof entry.description === "string"
     && entry.description.startsWith(ROUTED_CATALOG_DESCRIPTION_PREFIX);
 }
@@ -287,11 +276,11 @@ function classifyCatalogLike(
   if (read.kind === "indeterminate") return indeterminate(surface, path, read.reason);
   const catalog = parseCatalogJson(read.content);
   if (!catalog) return indeterminate(surface, path, "malformed catalog JSON");
-  if ((catalog.models ?? []).some(isOcxRoutedCatalogEntry)) {
+  if ((catalog.models ?? []).some(isCodexCommanderRoutedCatalogEntry)) {
     return { kind: "residue", surface, path: read.path };
   }
   if (catalogHasRoutedEntries(catalog)) {
-    return indeterminate(surface, read.path, "routed catalog rows lack the OpenCodex authorship signature");
+    return indeterminate(surface, read.path, "routed catalog rows lack the CodexCommander authorship signature");
   }
   return { kind: "clean" };
 }
@@ -345,179 +334,16 @@ function classifyPartialWrites(targetPaths: string[]): NativeRoutedResidueResult
       return indeterminate("partial-write", target.path, errorReason(error));
     }
     for (const name of names) {
-      const match = /^(.*)\.ocx\.\d+\.\d+\.tmp$/.exec(name);
+      const match = /^(.*)\.ccx\.\d+\.\d+\.tmp$/.exec(name);
       if (match?.[1] && target.names.has(match[1])) {
-        return indeterminate("partial-write", join(target.path, name), "OpenCodex atomic-write artifact is still present");
+        return indeterminate("partial-write", join(target.path, name), "CodexCommander atomic-write artifact is still present");
       }
     }
   }
   return { kind: "clean" };
 }
 
-function classifyReferencedRollout(
-  surface: "history" | "history-backup",
-  reference: RolloutReference,
-): NativeRoutedResidueResult {
-  const read = readRegularFile(reference.path);
-  if (read.kind === "absent") {
-    return indeterminate(surface, reference.path, "referenced rollout is absent");
-  }
-  if (read.kind === "indeterminate") return indeterminate(surface, reference.path, read.reason);
-
-  let first: Record<string, unknown> | undefined;
-  let latest: Record<string, unknown> | undefined;
-  for (const line of read.content.split("\n")) {
-    if (!line.trim()) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch (error) {
-      return indeterminate(surface, read.path, `malformed rollout JSONL: ${errorReason(error)}`);
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return indeterminate(surface, read.path, "rollout JSONL record is not an object");
-    }
-    const record = parsed as Record<string, unknown>;
-    if (record.type !== "session_meta") continue;
-    if (!record.payload || typeof record.payload !== "object" || Array.isArray(record.payload)) {
-      return indeterminate(surface, read.path, "session_meta payload has an unknown shape");
-    }
-    const payload = record.payload as Record<string, unknown>;
-    first ??= payload;
-    latest = payload;
-  }
-
-  if (!first || !latest) {
-    return indeterminate(surface, read.path, "referenced rollout has no session_meta metadata");
-  }
-  for (const [position, payload] of [["first", first], ["latest", latest]] as const) {
-    if (payload.id !== reference.id) {
-      return indeterminate(surface, read.path, `${position} session_meta does not identify the referenced thread`);
-    }
-    if (typeof payload.model_provider !== "string" || !payload.model_provider) {
-      return indeterminate(surface, read.path, `${position} session_meta has no provider metadata`);
-    }
-    if (payload.model_provider === "opencodex") {
-      return { kind: "residue", surface, path: read.path };
-    }
-  }
-  return { kind: "clean" };
-}
-
-function classifyReferencedRollouts(
-  surface: "history" | "history-backup",
-  references: RolloutReference[],
-): NativeRoutedResidueResult {
-  for (const reference of references) {
-    const result = classifyReferencedRollout(surface, reference);
-    if (result.kind !== "clean") return result;
-  }
-  return { kind: "clean" };
-}
-
-function classifyHistoryDatabase(path: string): NativeRoutedResidueResult {
-  const resolved = resolveRegularFile(path);
-  if (resolved.kind === "absent") {
-    for (const suffix of ["-wal", "-shm"]) {
-      const sidecar = resolveRegularFile(`${path}${suffix}`);
-      if (sidecar.kind !== "absent") {
-        const reason = sidecar.kind === "indeterminate"
-          ? sidecar.reason
-          : "SQLite sidecar exists without its history database";
-        return indeterminate("history", `${path}${suffix}`, reason);
-      }
-    }
-    return { kind: "clean" };
-  }
-  if (resolved.kind === "indeterminate") return indeterminate("history", path, resolved.reason);
-  let database: Database | undefined;
-  try {
-    database = new Database(resolved.path, { readonly: true });
-    database.exec("PRAGMA busy_timeout = 100");
-    const rows = database.query<{ id: string; rollout_path: string; model_provider: string }, []>(`
-      SELECT id, rollout_path, model_provider
-      FROM threads
-    `).all();
-    for (const row of rows) {
-      if (typeof row.id !== "string" || !row.id || typeof row.rollout_path !== "string" || !row.rollout_path) {
-        return indeterminate("history", resolved.path, "history row has an unknown rollout reference");
-      }
-      if (typeof row.model_provider !== "string" || !row.model_provider) {
-        return indeterminate("history", resolved.path, "history row has no provider metadata");
-      }
-    }
-    const rollouts = classifyReferencedRollouts(
-      "history",
-      rows.map(row => ({ id: row.id, path: row.rollout_path })),
-    );
-    if (rollouts.kind !== "clean") return rollouts;
-    const after = statSync(resolved.path);
-    if (!sameStat(resolved.stat, after)) {
-      return indeterminate("history", resolved.path, "history database changed while it was being observed");
-    }
-    return rows.some(row => row.model_provider === "opencodex")
-      ? { kind: "residue", surface: "history", path: resolved.path }
-      : { kind: "clean" };
-  } catch (error) {
-    return indeterminate("history", resolved.path, `unreadable history database: ${errorReason(error)}`);
-  } finally {
-    try { database?.close(); } catch { /* the observation already failed closed */ }
-  }
-}
-
-function historyBackupPath(stateDatabasePath: string): string {
-  const normalized = process.platform === "win32"
-    ? resolve(stateDatabasePath).toLowerCase()
-    : resolve(stateDatabasePath);
-  const id = createHash("sha256").update(normalized).digest("hex").slice(0, 16);
-  return join(getConfigDir(), `codex-history-backup-${id}.json`);
-}
-
-function classifyHistoryBackup(path: string, stateDatabasePath: string): NativeRoutedResidueResult {
-  const read = readRegularFile(path);
-  if (read.kind === "absent") return { kind: "clean" };
-  if (read.kind === "indeterminate") return indeterminate("history-backup", path, read.reason);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(read.content);
-  } catch (error) {
-    return indeterminate("history-backup", read.path, `malformed history backup JSON: ${errorReason(error)}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return indeterminate("history-backup", read.path, "history backup has an unknown shape");
-  }
-  const manifest = parsed as Record<string, unknown>;
-  if (manifest.version !== 1 || !manifest.entries || typeof manifest.entries !== "object" || Array.isArray(manifest.entries)) {
-    return indeterminate("history-backup", read.path, "history backup has an unknown shape");
-  }
-  if (typeof manifest.stateDbPath === "string") {
-    const expected = process.platform === "win32" ? resolve(stateDatabasePath).toLowerCase() : resolve(stateDatabasePath);
-    const actual = process.platform === "win32" ? resolve(manifest.stateDbPath).toLowerCase() : resolve(manifest.stateDbPath);
-    if (actual !== expected) {
-      return indeterminate("history-backup", read.path, "history backup names a different state database");
-    }
-  }
-  const entries = Object.values(manifest.entries as Record<string, unknown>);
-  const references: RolloutReference[] = [];
-  for (const entry of entries) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      return indeterminate("history-backup", read.path, "history backup entry has an unknown shape");
-    }
-    const candidate = entry as Record<string, unknown>;
-    if (typeof candidate.id !== "string" || !candidate.id
-      || typeof candidate.rolloutPath !== "string" || !candidate.rolloutPath) {
-      return indeterminate("history-backup", read.path, "history backup entry has an unknown rollout reference");
-    }
-    references.push({ id: candidate.id, path: candidate.rolloutPath });
-  }
-  const rollouts = classifyReferencedRollouts("history-backup", references);
-  if (rollouts.kind !== "clean") return rollouts;
-  return entries.length > 0
-    ? { kind: "residue", surface: "history-backup", path: read.path }
-    : { kind: "clean" };
-}
-
-/** Read-only, fail-closed observation of every OpenCodex-routed Codex surface. */
+/** Read-only, fail-closed observation of every CodexCommander-routed Codex surface. */
 export function classifyNativeRoutedResidue(): NativeRoutedResidueResult {
   let codexHome: string;
   try {
@@ -527,7 +353,6 @@ export function classifyNativeRoutedResidue(): NativeRoutedResidueResult {
     return indeterminate("partial-write", unresolved, `CODEX_HOME cannot be resolved: ${errorReason(error)}`);
   }
 
-  const stateDatabasePath = join(codexHome, HISTORY_DATABASE_FILE_NAME);
   const configPath = join(codexHome, CONFIG_FILE_NAME);
   const profilePath = join(codexHome, PROFILE_FILE_NAME);
   const modelsCachePath = join(codexHome, MODELS_CACHE_FILE_NAME);
@@ -547,8 +372,6 @@ export function classifyNativeRoutedResidue(): NativeRoutedResidueResult {
     ...config.catalogTargets.map(target => () => classifyCatalogLike("catalog", target.path, target.configured)),
     () => classifyCatalogLike("models-cache", modelsCachePath),
     () => classifyJournal(journalPath),
-    () => classifyHistoryDatabase(stateDatabasePath),
-    () => classifyHistoryBackup(historyBackupPath(stateDatabasePath), stateDatabasePath),
   ];
   const results = classifiers.map(classify => classify());
   return results.find(result => result.kind === "indeterminate")

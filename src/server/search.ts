@@ -22,7 +22,7 @@ import { codexAccountNamespaceForModel } from "../codex/account-namespace-match"
 import { formatCodexProviderForLog } from "../codex/routing";
 import { signalWithTimeout } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import {
   listOpenAiForwardSidecarCandidates,
   resolveFirstUsableOpenAiSidecar,
@@ -48,7 +48,7 @@ const SEARCH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 export async function handleSearch(
   req: Request,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   logCtx: RequestLogContext,
   turnAdmissionLease?: AdmissionLease,
 ): Promise<Response> {
@@ -97,7 +97,7 @@ export async function handleSearch(
     return formatErrorResponse(
       400,
       "invalid_request_error",
-      "Built-in web search needs a ChatGPT forward provider, but none is configured in opencodex. "
+      "Built-in web search needs a ChatGPT forward provider, but none is configured in CodexCommander. "
       + "Routed and OpenAI API-key providers cannot serve /v1/alpha/search.",
     );
   }

@@ -1,6 +1,6 @@
 /**
  * The export clients the API tab renders, and the envelope shape the route
- * returns for each (devlog 260802/010 §Client list ownership).
+ * returns for each (implementation contract §Client list ownership).
  *
  * This list is deliberately local. `EXPORT_CLIENT_IDS` lives in
  * `src/clients/config-export.ts`, which is backend code — importing it here

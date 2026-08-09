@@ -1,54 +1,34 @@
 ---
 title: macOS メニューバーコンパニオン
-description: OpenCodex のネイティブなステータス、エージェントアクティビティ、プロバイダークォータのコンパニオンをインストールして使用します。
+description: CodexCommander のネイティブなステータス、エージェントアクティビティ、プロバイダークォータのコンパニオンをインストールして使用します。
 ---
 
 macOS コンパニオンは、プロキシを置き換えたり Web ダッシュボードを重複させたりせずに、最も
-有用な OpenCodex の状態をメニューバーに表示します。ネイティブの Swift/AppKit
-アプリケーションであり、同じ Mac 上で実行されている OpenCodex インスタンスとのみ通信します。
+有用な CodexCommander の状態をメニューバーに表示します。ネイティブの Swift/AppKit
+アプリケーションであり、同じ Mac 上で実行されている CodexCommander インスタンスとのみ通信します。
 
 ## インストール
 
-1. 対応する GitHub リリースから <code>OpenCodex-&lt;version&gt;-macos-universal.zip</code> と
-   その <code>.sha256</code> ファイルをダウンロードします。
-2. アーカイブを検証します。
-
-       shasum -a 256 -c OpenCodex-<version>-macos-universal.zip.sha256
-
-3. 展開して <code>OpenCodex.app</code> を**アプリケーション**に移動します。
-4. アプリを開きます。アプリには Bun ランタイム、プロキシ、依存関係、ダッシュボードが含まれるため、
-   別途 npm、Bun、<code>ocx</code> をインストールする必要はありません。アイコンはメニューバーに表示され、
-   Dock アイコンは追加されません。安定した場所からの初回起動では **Launch at Login** が有効になります。
-
-バンドルされたランタイムは既存のユーザー状態（<code>~/.opencodex</code> と <code>~/.codex</code>）を使用します。
-認証情報をアプリバンドルや Keychain にコピーすることはありません。プロバイダーの OAuth と API キー設定は
-ローカルダッシュボードで行います。
-
-バンドル内のランタイムは読み取り専用です。更新は署名済みの最新 <code>OpenCodex.app</code> を置き換えて行い、
-署名済みの <code>Contents/Resources</code> に対して npm、Bun、ソース更新を実行しません。
-
-リリースが Developer ID で署名され、公証されるまでは、macOS がダウンロード後の初回起動を
-ブロックする場合があります。アプリを Control-クリックして**開く**を選び、もう一度**開く**を
-確認してください。ローカルで作成したビルドには、ダウンロードファイルの隔離属性は付きません。
+パッケージ済み macOS アプリは現在公開されていません。[ソースからビルド](#ソースからビルド)の手順で既存のチェックアウトから実行してください。開発アプリは `dist/macos/CodexCommander.app` に置き、Application Support へコピーしないでください。
 
 ## 起動モード
 
 - **Desktop** — サインイン時にメニューアプリを開き、1 つのサーバーを確認または起動します。
-- **Headless** — メニューアプリは開かず、別途インストールした `ocx service` だけを起動します。
-- **Off** — 自動起動せず、アプリまたは `ocx start` で手動起動します。
+- **Headless** — メニューアプリは開かず、別途インストールした `ccx service` だけを起動します。
+- **Off** — 自動起動せず、アプリまたは `ccx start` で手動起動します。
 
 設定行から **Launch at Login** を切り替えられます。承認が必要な場合は macOS の Login Items
 設定を直接開けます。この切り替えはバックグラウンドサービスをインストール、停止、削除しません。
 
-表示中のアプリとバックグラウンドプロキシは別々に動作します。OpenCodex パネルがアクティブなとき、
-**Quit Menu Bar**（`⌘Q`）はコンパニオン UI だけを閉じ、ルーティングを継続します。**Stop OpenCodex and Quit…**
+表示中のアプリとバックグラウンドプロキシは別々に動作します。CodexCommander パネルがアクティブなとき、
+**Quit Menu Bar**（`⌘Q`）はコンパニオン UI だけを閉じ、ルーティングを継続します。**Stop CodexCommander and Quit…**
 （`⌥⌘Q`）は明示的な破壊的終了で、確認後にプロキシとサービスを停止してネイティブ Codex
 ルーティングを復元し、停止を確認できた場合にのみコンパニオンを終了します。
 
 ## パネルに表示される内容
 
 - **エージェントアクティビティ** — 現在のアクティブ数とライブのモデル/プロバイダー行です。
-  OpenCodex がリクエストメタデータからアクティブな親を証明できる場合にのみ、生成された子が
+  CodexCommander がリクエストメタデータからアクティブな親を証明できる場合にのみ、生成された子が
   ネストされます。それ以外の場合は独立したサブエージェントとして表示されます。コンパニオンは、
   キュー済み、レビュー中、レート制限中、または完了済みの履歴を作り上げることはありません。
 - **プロバイダークォータ** — 利用可能な場合、プロバイダーが報告した 5 時間、週間、月間、または
@@ -59,7 +39,7 @@ macOS コンパニオンは、プロキシを置き換えたり Web ダッシュ
 - **管理** — 選択したプロバイダーの Accounts または API Keys タブを開きます。OAuth、API キー
   入力、再認証、アカウント切り替え、プロバイダー設定は引き続きダッシュボードで行います。
 - **Agent catalog update ready** — 実行中の Codex バックグラウンドワーカーが古いモデル一覧を
-  保持しているときに表示される、永続的で非致命的なカードです。OpenCodex プロキシは正常に実行を続けます。
+  保持しているときに表示される、永続的で非致命的なカードです。CodexCommander プロキシは正常に実行を続けます。
 - **Apply agent catalog…** — 可能な場合は最新のリクエストアクティビティを表示し、回答が中断される
   可能性を警告する確認画面を開きます。選択肢は **Apply Now** と **Later** です。
 - **Stop Proxy…** — 常に確認を求め、アクティブなクライアントとサブエージェントのリクエストを中断し、
@@ -69,7 +49,7 @@ macOS コンパニオンは、プロキシを置き換えたり Web ダッシュ
   新しいプロセスがアイデンティティチェックに合格するまでアプリが待機します。
 - **Quit Menu Bar** — コンパニオン UI だけを閉じます。プロキシ、サービス、クライアントの
   ルーティングは停止しません。パネルがアクティブなときの安全な `⌘Q` 操作です。
-- **Stop OpenCodex and Quit…** — 中断を確認し、バックグラウンドプロキシとサービスを停止して
+- **Stop CodexCommander and Quit…** — 中断を確認し、バックグラウンドプロキシとサービスを停止して
   ネイティブ Codex ルーティングを復元します。停止を確認できた場合にのみ終了し、失敗時は
   コンパニオンを開いたままエラーを表示します。パネルがアクティブなときのショートカットは `⌥⌘Q` です。
 
@@ -85,42 +65,42 @@ Provider 設定を開けます。リンクされた Grok または Kimi CLI の�
 
 ## エージェントカタログの更新
 
-アプリを開くと、現在 OpenCodex に設定されているプロバイダーから Codex モデルカタログを自動的に
+アプリを開くと、現在 CodexCommander に設定されているプロバイダーから Codex モデルカタログを自動的に
 同期します。Codex ワーカーが実行されていなければ、新しい一覧は次の Codex タスクで使用されます。
-長時間実行中のワーカーが古い一覧を読み込んでいる場合も OpenCodex は動作を続け、パネルには非致命的な
+長時間実行中のワーカーが古い一覧を読み込んでいる場合も CodexCommander は動作を続け、パネルには非致命的な
 **Agent catalog update ready** カードが表示され続けます。
 
 中断の可能性を確認するには **Apply agent catalog…** を選びます。可能な場合は直前にアクティブな
 リクエスト数を取得しますが、ゼロ件でも Codex がアイドルである証明とは表示しません。処理開始前に
 新しいリクエストが始まる可能性があるためです。**Apply Now** はもう一度同期し、現在のユーザーが所有する
 正確な `codex … app-server` と `codex-code-mode-host` の一致だけに `SIGTERM` を送り、古いプロセス ID が
-終了したことを短時間確認します。広範な `pkill` は使わず、OpenCodex プロキシを再起動せず、メニュー
+終了したことを短時間確認します。広範な `pkill` は使わず、CodexCommander プロキシを再起動せず、メニュー
 アプリも閉じません。次のタスクで Codex が新しいバックグラウンドホストを作成し、最新の一覧を読み込みます。
 
-このリリースには **Apply when idle** はありません。回答が進行中なら **Later** を選び、準備ができてから
+現在のコンパニオンには **Apply when idle** はありません。回答が進行中なら **Later** を選び、準備ができてから
 更新してください。カードは表示されたままです。上級者向けの CLI フォールバックは次のとおりです。
 
 ```bash
-ocx sync --restart-codex
+ccx sync --restart-codex
 ```
 
 ## 認証とプライバシー
 
-コンパニオンは別のログインシステムを作らず、macOS Keychain への移行やそこからのプロバイダー
-認証情報の読み取りも行いません。
+コンパニオンは別のログインシステムを作らず、macOS Keychain を使用せず、そこからプロバイダー
+認証情報を読み取ることもありません。
 
-現在の OpenCodex バージョンは、<code>~/.opencodex/admin-api-token</code>（または
-<code>$OPENCODEX_HOME/admin-api-token</code>）に独立した管理用認証情報を生成します。
+現在の CodexCommander バージョンは、<code>~/.codexcommander/admin-api-token</code>（または
+<code>$CODEXCOMMANDER_HOME/admin-api-token</code>）に独立した管理用認証情報を生成します。
 コンパニオンは、シンボリックリンクをたどらないよう検証されたファイルディスクリプターを通じて
 既存のファイルを読み取り、値をプロセスメモリ内だけに保持し、アイデンティティが検証された
-ループバックの OpenCodex プロセスにのみ送信します。トークンを表示、ログ記録、コピー、保存したり、
+ループバックの CodexCommander プロセスにのみ送信します。トークンを表示、ログ記録、コピー、保存したり、
 ブラウザー URL に入れたりすることはありません。
 
-プロバイダー認証情報の管理は引き続き OpenCodex が担います。コンパニオンは ChatGPT、Kimi、
+プロバイダー認証情報の管理は引き続き CodexCommander が担います。コンパニオンは ChatGPT、Kimi、
 Grok、Anthropic、その他のプロバイダートークンを読み取らず、プロバイダーのログイン
 エンドポイントを直接呼び出すこともありません。
 
-<code>OPENCODEX_ADMIN_AUTH_TOKEN</code> だけで構成されたインストールは、その変数をアプリ
+<code>CODEXCOMMANDER_ADMIN_AUTH_TOKEN</code> だけで構成されたインストールは、その変数をアプリ
 プロセスが継承している場合に動作します。Finder から起動したアプリは通常、シェル変数を
 継承しません。保護されたトークンファイルがない場合、コンパニオンはトークン入力フォームを
 表示せず、管理認証が利用できないことを報告します。
@@ -133,7 +113,7 @@ Grok、Anthropic、その他のプロバイダートークンを読み取らず�
 ## ポーリング
 
 パネルが開いている間、アプリは軽量なアクティビティ情報を頻繁に更新し、閉じると頻度を
-下げます。プロバイダークォータは別のより遅い間隔で更新され、OpenCodex が報告するアップ
+下げます。プロバイダークォータは別のより遅い間隔で更新され、CodexCommander が報告するアップ
 ストリームのタイムスタンプを使用します。失敗が繰り返されると自動的にバックオフし、重複する
 更新はまとめられます。
 
@@ -141,40 +121,38 @@ Grok、Anthropic、その他のプロバイダートークンを読み取らず�
 
 ## ソースからビルド
 
-macOS 13 以降と Xcode Command Line Tools が必要です。Intel + Apple silicon のユニバーサル
-リリースビルドには完全版の Xcode が必要です。
+macOS 13 以降と Xcode Command Line Tools が必要です。Intel + Apple silicon のユニバーサルビルドには完全版の Xcode が必要です。
 
 ```bash
-git clone https://github.com/pavelhov/opencodex.git
-cd opencodex
+cd /path/to/CodexCommander
 bun install
 bun run test:macos
 bun run build:macos
-open dist/macos/OpenCodex.app
+open dist/macos/CodexCommander.app
 ```
 
-ソースアプリの場所は `dist/macos/OpenCodex.app` です。同じ checkout の Bun と CLI を使うため、
+ソースアプリの場所は `dist/macos/CodexCommander.app` です。同じ checkout の Bun と CLI を使うため、
 先に `bun install` が必要です。開発中はこの場所に置き、Application Support へコピーしないでください。
 ダブルクリックするとプロキシの起動を試みますが、オフラインまたは起動失敗でもアプリは閉じず、
 パネルと **Start** コントロールは利用できます。
-各ビルドは正確な Git リビジョンをバンドルの `Info.plist` の `OpenCodexSourceRevision` に記録し、
+各ビルドは正確な Git リビジョンをバンドルの `Info.plist` の `CodexCommanderSourceRevision` に記録し、
 ビルド完了時にも表示します。未コミットのソースには `-dirty` が付くため、最終配布ビルドの前に
 コミットしてください。
 
 ## トラブルシューティング
 
-- **プロキシが利用できない** — <code>ocx start</code> で起動するか、
-  <code>ocx service install</code> でバックグラウンドサービスをインストールします。
-- **認証が利用できない** — <code>ocx doctor</code> を実行します。OpenCodex の状態ディレクトリと
+- **プロキシが利用できない** — <code>ccx start</code> で起動するか、
+  <code>ccx service install</code> でバックグラウンドサービスをインストールします。
+- **認証が利用できない** — <code>ccx doctor</code> を実行します。CodexCommander の状態ディレクトリと
   <code>admin-api-token</code> が自分のユーザーの所有物であり、グループおよびその他のユーザーから
   アクセスできないことを確認してください。
 - **クォータが利用できない** — プロバイダーの**管理**先を開き、アカウントを接続するか再認証
   します。Grok に**ログインの更新が必要**と表示された場合は <code>grok</code> でログインを完了し、
-  OpenCodex で**更新**してください。Kimi の場合は <code>kimi</code> を使用します。一部のプロバイダーは
+  CodexCommander で**更新**してください。Kimi の場合は <code>kimi</code> を使用します。一部のプロバイダーは
   クォータ API を公開していません。
-- **再起動後に復旧しない** — **Logs** を開き、<code>ocx status</code> を実行します。コンパニオンは
+- **再起動後に復旧しない** — **Logs** を開き、<code>ccx status</code> を実行します。コンパニオンは
   フォールバックとしてプロセスを強制終了したり、サービス状態を書き換えたりしません。
-- **停止・更新・コールドスタート後にネイティブモデルしか表示されない** — OpenCodex を再度開いて
+- **停止・Codex 更新・コールドスタート後にネイティブモデルしか表示されない** — CodexCommander を再度開いて
   ください。起動時にカタログを自動同期し、プロバイダー検出が一時的に空でも、保護された最終正常
   カタログから現在も設定されているルートモデルを復元します。**Agent catalog update ready** が残る場合は
   **Apply agent catalog…** を選ぶか、[エージェントカタログの更新](#エージェントカタログの更新)にある
@@ -182,7 +160,7 @@ open dist/macos/OpenCodex.app
 
 ## アンインストール
 
-**Launch at Login** をオフにしてからコンパニオンを終了し、<code>OpenCodex.app</code> をゴミ箱に
+**Launch at Login** をオフにしてからコンパニオンを終了し、<code>CodexCommander.app</code> をゴミ箱に
 移動します。プロバイダー認証情報を保存せず、Keychain 項目も作成しません。コンパニオンを
-アンインストールしても OpenCodex プロキシは停止または削除されません。ヘッドレスサービスも
-削除する場合のみ、別途 <code>ocx service uninstall</code> を実行してください。
+アンインストールしても CodexCommander プロキシは停止または削除されません。ヘッドレスサービスも
+削除する場合のみ、別途 <code>ccx service uninstall</code> を実行してください。

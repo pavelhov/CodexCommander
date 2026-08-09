@@ -1,19 +1,19 @@
 ---
 title: Claude Code の使い方
-description: Claude Code でルーティングされたすべてのモデルを使います。opencodex は同じポートで Anthropic Messages API とゲートウェイモデル検索を提供します。
+description: Claude Code でルーティングされたすべてのモデルを使います。CodexCommander は同じポートで Anthropic Messages API とゲートウェイモデル検索を提供します。
 ---
 
-opencodex は `/v1/responses` と共に `POST /v1/messages`(`count_tokens` も)を提供します。そのため Claude
+CodexCommander は `/v1/responses` と共に `POST /v1/messages`(`count_tokens` も)を提供します。そのため Claude
 Code から OAuth ログイン、アカウントプール、キーフェイルオーバー、サイドカーを含むすべてのルーティングプロバイダーを別途の
 認証作業なしで使えます。
 
 ## クイックスタート
 
 ```bash
-ocx claude
+ccx claude
 ```
 
-`ocx claude` はプロキシが実行中か確認した後、環境を接続して Claude Code を実行します。
+`ccx claude` はプロキシが実行中か確認した後、環境を接続して Claude Code を実行します。
 
 | 変数 | 値 |
  --- | --- |
@@ -21,26 +21,23 @@ ocx claude
 | `ANTHROPIC_AUTH_TOKEN` | プロキシに API キーが必要なときのみ設定します。それ以外は設定せず、claude.ai ログイン(サブスクリプション + コネクター)を維持します |
 | `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` | `1` (デフォルトの `/model` ピッカーのモデル検索) |
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | 自動コンテキスト圧縮のしきい値(デフォルト `350000`)。自動コンテキストがオンのときのみ注入します |
-| `ANTHROPIC_MODEL` | `claudeCode.model` (任意) |
-| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (任意、従来の `ANTHROPIC_SMALL_FAST_MODEL` もサポート) |
-| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (任意) |
-| `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort` がオンなら `1` (条件付き) |
-| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | `maxContextTokens` が設定された場合の従来コンテキスト上書き値 (条件付き) |
-直接 export した変数が常に優先します。追加引数はそのまま渡されます: `ocx claude -p "hello"`。
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` / `ANTHROPIC_SMALL_FAST_MODEL` | 設定時の `claudeCode.smallFastModel` |
+
+直接 export した変数が常に優先します。追加引数はそのまま渡されます: `ccx claude -p "hello"`。
 
 ## システム環境統合(macOS)
 
-`claudeCode.systemEnv` を `true` に設定すると(デフォルト: **オフ`)`ocx start` が `launchctl setenv` を
+`claudeCode.systemEnv` を `true` に設定すると(デフォルト: **オフ`)`ccx start` が `launchctl setenv` を
 使い `ANTHROPIC_BASE_URL` と関連 Claude Code 環境変数をシステム全体に注入します。そのため新規
-ターミナルのウィンドウとタブでは `ocx claude` ラッパーなしでも通常の `claude` コマンドがプロキシを経由します。すでに開いている
+ターミナルのウィンドウとタブでは `ccx claude` ラッパーなしでも通常の `claude` コマンドがプロキシを経由します。すでに開いている
 シェルには適用されないので開き直す必要があります。
 
-`ocx stop` とプロキシ終了は**注入されたキーを解除します**。以前の値を復元せず、opencodex が
-注入したキーのみ削除します。プロキシは `~/.opencodex/claude-env.sh` も書き出し、`ocx start` はこのファイルを
+`ccx stop` とプロキシ終了は**注入されたキーを解除します**。以前の値を復元せず、CodexCommander が
+注入したキーのみ削除します。プロキシは `~/.codexcommander/claude-env.sh` も書き出し、`ccx start` はこのファイルを
 自動で読み込む `.zshrc` source hook をインストールします。
 
 設定で `claudeCode.systemEnv: false` に指定するか GUI トグルでオフにできます。この機能は macOS
-専用で、他のプラットフォームでは `ocx claude` を使ってください。
+専用で、他のプラットフォームでは `ccx claude` を使ってください。
 
 ## ネイティブ Claude パススルー(サブスクリプション直接接続)
 
@@ -50,12 +47,12 @@ ocx claude
 ネイティブ状態で維持され、同じセッションでピッカーエイリアスを使ってルーティングモデルも引き続き使えます。
 
 **ヘッダー処理:** hop-by-hop ヘッダーと `host`、`content-length`、`accept-encoding`、
-`x-opencodex-api-key`、`origin` は転送前に削除します。それ以外のヘッダー(`anthropic-beta`、
+`x-codexcommander-api-key`、`origin` は転送前に削除します。それ以外のヘッダー(`anthropic-beta`、
 `anthropic-version` を含む)はそのまま転送します。
 
 次の 4 つの条件を**すべて**満たすとパススルーが動作します。`nativePassthrough` が `false` でなく、
 モデル名が `claude` または `anthropic` で始まり、bearer または `x-api-key` が `sk-ant-` で
-始まり、エイリアス/モデルマップ解決結果が変更されていない同じモデルであること。そのため `ocx claude` を
+始まり、エイリアス/モデルマップ解決結果が変更されていない同じモデルであること。そのため `ccx claude` を
 使うとき "claude.ai connectors are disabled" 警告ももう表示されません。
 
 `claudeCode.nativePassthrough: false` でオフにでき、`claudeCode.anthropicBaseUrl` で別のアドレスを
@@ -65,28 +62,25 @@ ocx claude
 
 Claude Code 2.1.129 以降は `GET /v1/models?limit=1000` でゲートウェイモデルを探し、デフォルトの `/model`
 ピッカーの "From gateway" 項目に表示します。ピッカーは `claude` または `anthropic` で始まる ID のみ
-受け付けるため、opencodex はルーティングモデルを安定で元に戻せるエイリアスとして公開します。
+受け付けるため、CodexCommander はルーティングモデルを安定で元に戻せるエイリアスとして公開します。
 
 | 画面 | 形式 | 例 |
 | --- | --- | --- |
-| Claude Code CLI | `claude-ocx-<provider>--<model>` (plain) または `claude-ocx2-…` (escaped) | `claude-ocx-native--gpt-5.6-sol` |
+| Claude Code CLI | `claude-ccx2-<provider>--<model>` (plain) または `claude-ccx2-…` (escaped) | `claude-ccx2-native--gpt-5.6-sol` |
 | Claude Desktop 3P | `claude-opus-4-8-<code>` (3 桁の base36 ハッシュ) | `claude-opus-4-8-ncb` |
 
 プロキシはリクエストごとに系列を選びます。`?ids=cli` または `?ids=desktop` が優先し、指定しないと
 `claude-code/*` user-agent には読みやすい CLI 形式を、他のクライアントには Desktop ハッシュを
-提供します。両系列は継続してデコードできるため、どちらの形式でも `settings.json` に保存したモデルは
-引き続き動作します。
+提供します。現在の両系列は実行中のエイリアスレジストリで解決されます。
 
 Claude Desktop のフッターピッカーで実行中の 3P 会話のモデルが切り替わらない場合は、その会話で
-`/model <id>` を使用してください。OpenCodex はピッカーの状態を直接参照できず、各リクエストに
+`/model <id>` を使用してください。CodexCommander はピッカーの状態を直接参照できず、各リクエストに
 含まれるモデル ID をルーティングします。結果は **Logs → requestedModel** で確認できます。
 
 **エイリアス構文ルール:** provider には `/` や `--` を含められず `native` と同じでもいけません。
-`/` も `~` も含まない plain な model ID は v1 接頭辞 `claude-ocx-…` のままです。`/` または `~` を含む
-model ID は v2 接頭辞 `claude-ocx2-…` で発行し、エスケープします(`/` → `~s`、`~` → `~t`)。例:
-`openrouter/anthropic/claude-opus-4-8` → `claude-ocx2-openrouter--anthropic~sclaude-opus-4-8`。
-v1 エイリアスはリテラルにデコードします(歴史的に model ID に含まれていた 2 文字列 `~s` / `~t` も保持)。
-v2 エイリアスはエスケープを展開します。読みやすい形式で表現できないルートはハッシュエイリアスに
+現在の `claude-ccx2-…` エンコードでは `/` を `~s`、`~` を `~t` にエスケープします。例:
+`openrouter/anthropic/claude-opus-4-8` → `claude-ccx2-openrouter--anthropic~sclaude-opus-4-8`。
+読みやすい形式で表現できないルートはハッシュエイリアスに
 置き換えます。モデル ID には `--` を含め**られます**(解析時は最初の `--` だけを基準に分割します)。
 `--` を含むネイティブスラッグはハッシュ形式に置き換えます。
 
@@ -113,11 +107,10 @@ Claude Code は未知モデルのコンテキストを 200k トークンとし�
 2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW`(デフォルト `350000`、範囲 `100000`–`1000000`)を注入し、該当
    地点で会話を自動要約します。
 
-設定状態は 3 つです。
+設定状態は 2 つです。
 
 - **なし / `true`:** 使用(デフォルト)
 - **`false`:** 使用不可。標識も付かず圧縮ウィンドウも注入しません
-- **従来の `maxContextTokens` 設定:** 自動コンテキストを自動でオフにします
 
 Claude ページで圧縮値を調整できます。**警告:** モデルの実際のコンテキストウィンドウより大きく上げると
 要約を開始する前にチャットエラーが発生します。
@@ -127,38 +120,36 @@ Claude ページで圧縮値を調整できます。**警告:** モデルの実�
 
 ### 実モデル環境
 
-`effectiveModelEnv` は `ocx claude` / システム環境 / シェルファイルが注入するスロット 6 つを計算します。
-`ANTHROPIC_MODEL`、4 つの `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU,FABLE}_MODEL`、従来
-`ANTHROPIC_SMALL_FAST_MODEL` です。実際の Haiku 値は `tierModels.haiku ?? smallFastModel` で、
-両 Haiku 変数に入ります。
+`effectiveModelEnv` は `ccx claude`、システム環境、シェルファイルが注入する 2 つのヘルパースロット
+`ANTHROPIC_DEFAULT_HAIKU_MODEL` と `ANTHROPIC_SMALL_FAST_MODEL` を計算します。どちらにも
+`claudeCode.smallFastModel` が入ります。
 
-`tierModels.haiku` と `smallFastModel` の両方がない場合、OpenCodex は 2 つのヘルパーモデル変数を未設定のままにします。その後 Claude Code がネイティブのヘルパーモデル（現在は Sonnet）を選択し、ネイティブプロバイダーで料金が発生する可能性があります。
+`smallFastModel` がない場合、CodexCommander は 2 つのヘルパーモデル変数を未設定のままにします。その後 Claude Code がネイティブのヘルパーモデルを選択し、ネイティブプロバイダーで料金が発生する可能性があります。
 
 ## ロスターエージェント(injectAgents)
 
-`ocx claude` とシステム環境デーモンは推奨サブエージェントロスター(Subagents タブ、最大 5 モデル)と
-`ocx-self` を `~/.claude/agents/ocx-*.md` に同期します。
+`ccx claude` とシステム環境デーモンは推奨サブエージェントロスター(Subagents タブ、最大 5 モデル)と
+`ccx-self` を `~/.claude/agents/ccx-*.md` に同期します。
 
-- **`ocx-self`** は `/model` ピッカーのデフォルトを固定し、値がない場合は `claudeCode.model` を使います。
-  両方ない場合は作成しません。モデル継承は使いません。
-- 各エージェント本文には `<!-- ocx-route: <model> -->` ディレクティブが含まれます。プロキシはこのディレクティブで
+- **`ccx-self`** は `/model` ピッカーのデフォルトを固定します。ピッカーのデフォルトがない場合は作成せず、モデル継承も使いません。
+- 各エージェント本文には `<!-- ccx-route: <model> -->` ディレクティブが含まれます。プロキシはこのディレクティブで
   実際のルートを固定します。そのため Agent ツールの `model` 引数は機能せず、プレースホルダとして
   `"haiku"` を渡してください。
 - frontmatter にはエイリアスが入り、ルーティングはディレクティブに従います。
-- `generated-by: opencodex` が含まれる標識検証済み `ocx-*.md` ファイルのみ上書きまたは整理します。
+- `generated-by: codexcommander` が含まれる標識検証済み `ccx-*.md` ファイルのみ上書きまたは整理します。
   ユーザー作成のエージェントは触りません。
 - ファイルごとに原子的に同期します(write + rename)。
 - `enabled: false` または `injectAgents: false` を設定すると所有権確認済みの定義をすべて整理します。
 - GUI PUT とロスター変更は即座に再同期し、launcher/system-env は実行時に同期します。
 
-ディスパッチ例: `subagent_type: "ocx-gpt-5-6-sol"`。1M をサポートする対象には `[1m]` が自動で
+ディスパッチ例: `subagent_type: "ccx-gpt-5-6-sol"`。1M をサポートする対象には `[1m]` が自動で
 付きます。
 
 ## バンドルスキルの省略(blockedSkills)
 
 Claude Code のバンドル `claude-api` スキルは Anthropic ドキュメント約 840KB(約 136k トークン)を注入し、
 Claude モデルに言及すると自動実行されます。ルーティングモデルはこのバンドルで学習されていないため、
-opencodex はデフォルトで**ルーティングされた**リクエストのスキル内容を短いスタブに差し替えます。ネイティブ
+CodexCommander はデフォルトで**ルーティングされた**リクエストのスキル内容を短いスタブに差し替えます。ネイティブ
 Anthropic パススルーはそのまま維持します。
 
 **2 つの配信形式を処理します。**
@@ -190,7 +181,7 @@ Anthropic パススルーはそのまま維持します。
 
 ## サイドカーマトリクス: ウェブ検索と画像理解
 
-ルーティングモデルごとに使えるホスト型ツールと画像サポート範囲が異なります。opencodex はメインモデルが
+ルーティングモデルごとに使えるホスト型ツールと画像サポート範囲が異なります。CodexCommander はメインモデルが
 応答する前に不足機能を次の 2 つのサイドカーで補います。
 
 - **ウェブ検索サイドカー**は実際のホスト型検索を実行した後、回答と出典をツール結果としてルーティングモデルに
@@ -316,7 +307,7 @@ role、`tool_use_id` のない `tool_result`、id/name のない `tool_use`、na
 
 ## デバッグキャプチャ
 
-`ocx debug claude on|off|status|reset`、`OCX_CLAUDE_DEBUG=1` または
+`ccx debug claude on|off|status|reset`、`CCX_CLAUDE_DEBUG=1` または
 `PUT /api/debug {"claude": true}` で入力キャプチャを制御します。`GET /api/claude/inbound-debug` は
 `{enabled, entries}` を返します(最新項目から、20 件の循環バッファ)。
 
@@ -332,7 +323,7 @@ role、`tool_use_id` のない `tool_result`、id/name のない `tool_use`、na
 ラベルはすべての言語で意図的に同じです。ページには次の項目が表示されます。
 
 - 入力遮断スイッチ(使用トグル)
-- クイックスタート(`ocx claude`)と手動環境ブロック
+- クイックスタート(`ccx claude`)と手動環境ブロック
 - Fast Mode セレクター(Auto / ON / OFF)
 - 自動コンテキストトグルと圧縮しきい値ドロップダウン
 - サブエージェント自動登録トグル
@@ -347,8 +338,8 @@ ID、エイリアス、ポートを返します。`PUT /api/claude-code` は部�
 
 **Claude Code に "Did 0 searches" と表示される** — 現在バージョンは完了した Responses
 `web_search_call` を Anthropic の `server_tool_use` と `web_search_tool_result` ブロック対に変換し、
-`usage.server_tool_use.web_search_requests` も同時に記録します。検索は行われたのに 0 回と表示される古い
-バージョンを使っている場合は opencodex を更新してください。
+`usage.server_tool_use.web_search_requests` も同時に記録します。検索は行われたのに 0 回と表示される場合は、
+実行中の CodexCommander プロセスが現在のチェックアウトから再ビルドされたものか確認してください。
 
 **サイドカーが起動しない** — `backend: "openai"` の場合 ChatGPT ログインと有効化された
 `authMode: "forward"` プロバイダーが両方あるか確認してください。`backend: "anthropic"` の場合保存された
@@ -356,27 +347,27 @@ Anthropic OAuth アクティブアカウントが `needsReauth` 状態でない�
 Anthropic バックエンドを明示すると意図的に失敗後停止します。
 
 **"claude.ai connectors are disabled"** — シェルに `ANTHROPIC_API_KEY` または
-`ANTHROPIC_AUTH_TOKEN` が設定されています。`ocx claude` は意図的に `ANTHROPIC_API_KEY` を
-設定しないため、直接 export していれば解除してください。`ocx claude` 使用時は
+`ANTHROPIC_AUTH_TOKEN` が設定されています。`ccx claude` は意図的に `ANTHROPIC_API_KEY` を
+設定しないため、直接 export していれば解除してください。`ccx claude` 使用時は
 `ANTHROPIC_BASE_URL`、検索、自動コンテキスト、設定されたモデルスロットを注入しますが
 `ANTHROPIC_API_KEY` は絶対に注入しません。
 
 **/model ピッカーにモデルが表示されない** — `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` が
-設定されているか確認してください(`ocx claude` では自動)。`ocx claude` を実行して
+設定されているか確認してください(`ccx claude` では自動)。`ccx claude` を実行して
 `~/.claude/cache/gateway-models.json` のゲートウェイモデルキャッシュを更新してください。
 `claudeCode.enabled` が `false` でないかも確認してください。
 
 **ポート変更後に古い環境が残る** — プロキシポートが変わった場合、既存シェルの
-`ANTHROPIC_BASE_URL` が古い値の可能性があります。新規ターミナルを開くか `ocx claude` を再実行してください。
+`ANTHROPIC_BASE_URL` が古い値の可能性があります。新規ターミナルを開くか `ccx claude` を再実行してください。
 
 **大型モデルなのにコンテキストが 200k に制限される** — ピッカーで `[1m]` 変種を選ぶか、デフォルトでオンの
 自動コンテキストを使ってください。ピッカーに `[1m]` 行がない場合はモデルの公式コンテキストウィンドウが
 自動圧縮しきい値より小さい可能性があります。
 
 **スキル呼び出し時のトークン数が多い** — バンドル `claude-api` スキル(約 136k トークン)は Claude モデルに
-言及すると自動で読み込まれます。ネイティブパススルーでは正常で、ルーティングモデルでは opencodex が
+言及すると自動で読み込まれます。ネイティブパススルーでは正常で、ルーティングモデルでは CodexCommander が
 デフォルトでスタブに差し替えます(`blockedSkills: ["claude-api"]`)。
 
-**サブエージェントが誤ったモデルにディスパッチされる** — ロスターエージェント(`ocx-*`)は Agent ツールの `model`
-引数ではなく `<!-- ocx-route: ... -->` ディレクティブを使います。ディレクティブが希望ルートと一致するか確認し、
+**サブエージェントが誤ったモデルにディスパッチされる** — ロスターエージェント(`ccx-*`)は Agent ツールの `model`
+引数ではなく `<!-- ccx-route: ... -->` ディレクティブを使います。ディレクティブが希望ルートと一致するか確認し、
 モデルプレースホルダとして `"haiku"` を渡してください。

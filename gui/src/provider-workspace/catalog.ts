@@ -76,10 +76,7 @@ export interface WorkspaceSections {
 
 const CODEX_FORWARD_BASE_URL = "https://chatgpt.com/backend-api/codex";
 
-/**
- * The single canonical OpenAI forward provider id. Legacy ids are migration-only
- * and must never be revived as account-provider workspace rows.
- */
+/** The single public OpenAI forward provider id. */
 const CANONICAL_FORWARD_PROVIDER = "openai";
 
 /**
@@ -262,18 +259,13 @@ export function binProviderStatus(p: WorkspaceProvider | WorkspaceItem): Provide
 }
 
 /**
- * Hide the legacy `chatgpt` row when canonical `openai` already covers the same
- * ChatGPT passthrough. Backend may still keep both ids (OAuth scratch / images);
- * the workspace should show one row per passthrough surface.
+ * Keep the backend's internal ChatGPT OAuth scratch provider out of public
+ * configuration workspaces. `openai` is the only configurable forward id.
  */
-export function hideRedundantChatGptForwardProviders<T extends WorkspaceProvider>(
+export function publicWorkspaceProviders<T extends WorkspaceProvider>(
   providers: Record<string, T>,
 ): Record<string, T> {
-  const openai = providers.openai;
-  const chatgpt = providers.chatgpt;
-  if (!openai || !chatgpt) return providers;
-  if (!isAccountProvider("openai", openai)) return providers;
-  if (!isCanonicalForwardShape(chatgpt)) return providers;
+  if (!Object.hasOwn(providers, "chatgpt")) return providers;
   const rest = { ...providers };
   delete rest.chatgpt;
   return rest;

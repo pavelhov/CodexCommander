@@ -13,7 +13,7 @@ import { providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
 import { resolveWireProtocolOverride } from "../src/server/adapter-resolve";
 import { handleResponses } from "../src/server/responses/core";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
 
 const RESPONSES_ONLY = [
   "gpt-5.3-codex",
@@ -29,7 +29,7 @@ const CHAT_SERVED = ["gpt-4o", "gpt-4.1", "gpt-4.1-mini", "claude-sonnet-4", "ge
 
 const INBOUNDS = ["responses", "chat", "anthropic"] as const;
 
-function copilotProvider(): OcxProviderConfig {
+function copilotProvider(): CodexCommanderProviderConfig {
   // The entry's allowKeyAuthOverride lets tests use key auth instead of live OAuth.
   return { ...providerConfigSeed(getProviderRegistryEntry("github-copilot")!), authMode: "key", apiKey: "sk-test" };
 }
@@ -82,7 +82,7 @@ describe("explicit modelAdapters beat the registry default in both directions", 
 
 describe("the registry default is isolated to the copilot provider", () => {
   test("a same-named model on another provider is untouched", () => {
-    const other: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://example.com/v1", apiKey: "sk-test" };
+    const other: CodexCommanderProviderConfig = { adapter: "openai-chat", baseUrl: "https://example.com/v1", apiKey: "sk-test" };
     for (const inbound of INBOUNDS) {
       expect(resolveWireProtocolOverride("some-custom", "gpt-5.4", other, inbound).adapter)
         .toBe("openai-chat");
@@ -115,7 +115,7 @@ describe("the wire default survives the handleResponses replay", () => {
 
   async function drive(model: string, inboundWire?: "responses" | "chat" | "anthropic"): Promise<string> {
     const urls = captureUpstreamUrl();
-    const config = { providers: { "github-copilot": copilotProvider() } } as unknown as OcxConfig;
+    const config = { providers: { "github-copilot": copilotProvider() } } as unknown as CodexCommanderConfig;
     await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",

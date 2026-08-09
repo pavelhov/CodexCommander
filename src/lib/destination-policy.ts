@@ -1,7 +1,7 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { getProviderRegistryEntry } from "../providers/registry";
-import type { OcxProviderConfig } from "../types";
+import type { CodexCommanderProviderConfig } from "../types";
 
 const BLOCKED_METADATA_HOSTS = new Set([
   "instance-data.ec2.internal",
@@ -144,12 +144,12 @@ function registryAllowsPrivateNetwork(name: string): boolean {
  */
 export function providerAllowsPrivateNetwork(
   name: string,
-  provider: Pick<OcxProviderConfig, "allowPrivateNetwork">,
+  provider: Pick<CodexCommanderProviderConfig, "allowPrivateNetwork">,
 ): boolean {
   return provider.allowPrivateNetwork === true || registryAllowsPrivateNetwork(name);
 }
 
-export function providerDestinationConfigError(name: string, provider: Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork">): string | null {
+export function providerDestinationConfigError(name: string, provider: Pick<CodexCommanderProviderConfig, "baseUrl" | "allowPrivateNetwork">): string | null {
   const assessment = assessDestination(provider.baseUrl);
   if (!assessment) return null;
   if (assessment.kind === "public" || assessment.kind === "hostname") return null;
@@ -158,7 +158,7 @@ export function providerDestinationConfigError(name: string, provider: Pick<OcxP
   return `baseUrl points to a ${assessment.detail}; set allowPrivateNetwork:true only for intentionally local/self-hosted providers`;
 }
 
-export function assertProviderDestinationAllowed(name: string, provider: Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork">): void {
+export function assertProviderDestinationAllowed(name: string, provider: Pick<CodexCommanderProviderConfig, "baseUrl" | "allowPrivateNetwork">): void {
   const error = providerDestinationConfigError(name, provider);
   if (error) throw new Error(`provider ${name} ${error}`);
 }
@@ -170,7 +170,7 @@ export function assertProviderDestinationAllowed(name: string, provider: Pick<Oc
  * PR #96 — the sync path must stay literal-only because the router hot path and
  * config load are synchronous). DNS failures return null: config-time validation is
  * advisory and must not hard-fail offline startups. DNS rebinding after validation is
- * a recorded residual for this loopback proxy (devlog 260712_pr_batch_landing 000).
+ * a recorded residual for this loopback proxy (implementation contract 000).
  *
  * `allowBenchmarkAddresses` is only for the exact canonical ChatGPT Codex seed under
  * Clash fake-IP DNS (198.18.0.0/15). Every other non-public answer — including mixed
@@ -178,7 +178,7 @@ export function assertProviderDestinationAllowed(name: string, provider: Pick<Oc
  */
 export async function providerDestinationResolvedError(
   name: string,
-  provider: Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork">,
+  provider: Pick<CodexCommanderProviderConfig, "baseUrl" | "allowPrivateNetwork">,
   options?: { allowBenchmarkAddresses?: boolean },
 ): Promise<string | null> {
   const syncError = providerDestinationConfigError(name, provider);

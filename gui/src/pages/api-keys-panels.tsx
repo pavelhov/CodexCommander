@@ -316,7 +316,7 @@ export function ApiKeysUsagePanel({
   const sampleInput = JSON.stringify(t("api.usageSampleInput"));
 
   const chatExample = `curl ${endpoints.chatCompletions} \\
-  -H "x-opencodex-api-key: ocx_YOUR_KEY_HERE" \\
+  -H "x-codexcommander-api-key: ccx_YOUR_KEY_HERE" \\
   -H "Content-Type: application/json" \\
   -d '{
     "model": "gpt-5.4",
@@ -324,7 +324,7 @@ export function ApiKeysUsagePanel({
   }'`;
 
   const responsesExample = `curl ${endpoints.responses} \\
-  -H "x-opencodex-api-key: ocx_YOUR_KEY_HERE" \\
+  -H "x-codexcommander-api-key: ccx_YOUR_KEY_HERE" \\
   -H "Content-Type: application/json" \\
   -d '{
     "model": "gpt-5.4",
@@ -332,7 +332,7 @@ export function ApiKeysUsagePanel({
   }'`;
 
   const messagesExample = `curl ${endpoints.messages} \\
-  -H "x-opencodex-api-key: ocx_YOUR_KEY_HERE" \\
+  -H "x-codexcommander-api-key: ccx_YOUR_KEY_HERE" \\
   -H "Content-Type: application/json" \\
   -d '{
     "model": "claude-sonnet-4-6",

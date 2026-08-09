@@ -1,5 +1,5 @@
 /**
- * Ownership predicates for `~/.codex/config.toml`: does opencodex own the routing
+ * Ownership predicates for `~/.codex/config.toml`: does CodexCommander own the routing
  * currently written there?
  *
  * These live in their own leaf module rather than in `inject.ts` because
@@ -7,7 +7,12 @@
  * them here breaks that cycle. `inject.ts` imports them back and re-exports the
  * two public predicates, so external callers see no change.
  */
-export const OCX_SECTION_MARKER = "# Auto-injected by opencodex";
+/** Marker written into Codex config.toml for sections CodexCommander owns. */
+export const CCX_SECTION_MARKER = "# Auto-injected by CodexCommander";
+/** True when a line carries the CodexCommander injection marker. */
+export function isSectionMarkerLine(line: string): boolean {
+  return line.includes(CCX_SECTION_MARKER);
+}
 
 export function isRootOpenaiBaseUrlLine(line: string): boolean {
   return /^\s*openai_base_url\s*=/.test(line);
@@ -55,18 +60,19 @@ export function hasInjectedOpenaiBaseUrl(content: string): boolean {
   const firstTable = lines.findIndex(l => /^\s*\[/.test(l));
   const rootEnd = firstTable === -1 ? lines.length : firstTable;
   for (let i = 1; i < rootEnd; i++) {
-    if (isRootOpenaiBaseUrlLine(lines[i]!) && lines[i - 1]!.includes(OCX_SECTION_MARKER)) return true;
+    if (isRootOpenaiBaseUrlLine(lines[i]!) && isSectionMarkerLine(lines[i - 1]!)) return true;
   }
   return false;
 }
 
 /**
- * True when the active Codex config is owned by opencodex routing. Covers the
- * loopback Design B root override and the legacy/non-loopback provider table.
+ * True when the active Codex config is owned by CodexCommander routing. Covers the
+ * loopback Design B root override and the non-loopback provider table.
  * A user-owned `openai_base_url` is intentionally not classified as injected.
  */
 export function hasInjectedCodexRouting(content: string): boolean {
   if (hasInjectedOpenaiBaseUrl(content)) return true;
-  return rootTomlString(content, "model_provider") === "opencodex"
-    && providerTableString(content, "opencodex", "base_url") !== null;
+  const provider = rootTomlString(content, "model_provider");
+  return provider === "codexcommander"
+    && providerTableString(content, provider, "base_url") !== null;
 }

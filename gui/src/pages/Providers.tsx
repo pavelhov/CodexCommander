@@ -31,7 +31,7 @@ import type { WorkspaceItem } from "../provider-workspace/catalog";
 
 export default function Providers({ apiBase }: { apiBase: string }) {
   const t = useT();
-  const configCacheKey = `ocx.providers.config.v1:${apiBase}`;
+  const configCacheKey = `ccx.providers.config.v1:${apiBase}`;
   const [config, setConfig] = useState<ProvidersConfig | null>(
     () => readSessionListCache<ProvidersConfig>(configCacheKey),
   );
@@ -228,10 +228,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       openai: {
         loggedIn: codexLoggedIn,
         ...(codexEmail ? { email: codexEmail } : {}),
-        ...(codexActiveNeedsReauth ? { needsReauth: true } : {}),
       },
     };
-  }, [oauthStatus, codexPool.accounts, codexPool.loadState, codexActiveNeedsReauth]);
+  }, [oauthStatus, codexPool.accounts, codexPool.loadState]);
 
   const pools = useProviderAccountPools({
     apiBase, t: t as unknown as Parameters<typeof useProviderAccountPools>[0]["t"],
@@ -465,7 +464,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         onAdded={(name) => {
           setAdding(false);
           setAddIntent(null);
-          notify(t("prov.added", { name, cmd: "ocx sync" }), true);
+          notify(t("prov.added", { name, cmd: "ccx sync" }), true);
           fetchConfig();
           fetchOauth();
           fetchProviderQuotas(true);
@@ -478,7 +477,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         onCloseCodexLogin={() => setCodexLoginOpen(false)}
         onCodexAdded={() => {
           setCodexLoginOpen(false);
-          notify(t("prov.loginOk", { provider: formatProviderDisplayName("openai", t), cmd: "ocx sync" }), true);
+          notify(t("prov.loginOk", { provider: formatProviderDisplayName("openai", t), cmd: "ccx sync" }), true);
           void fetchConfig();
           void fetchOauth();
           void fetchProviderQuotas(true);

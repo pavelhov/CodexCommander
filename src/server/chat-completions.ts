@@ -21,7 +21,7 @@ import { estimateTokens } from "../lib/token-estimate";
 import { NoEligiblePolicyCandidateError, routeModel } from "../router";
 import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import { readJsonRequestBody } from "./request-decompress";
 import {
   addFinalRequestLog,
@@ -57,7 +57,7 @@ async function readChatBody(req: Request, budget: TranslatorBudget): Promise<unk
 
 export async function handleChatCompletions(
   req: Request,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   logCtx: RequestLogContext,
   logIds?: { requestId: string; start: number; turnAdmissionLease?: ActiveTurnLease },
 ): Promise<Response> {
@@ -75,7 +75,7 @@ export async function handleChatCompletions(
 
 async function handleChatCompletionsWithBudget(
   req: Request,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   logCtx: RequestLogContext,
   translatorBudget: TranslatorBudget,
   logIds?: { requestId: string; start: number; turnAdmissionLease?: ActiveTurnLease },
@@ -103,7 +103,9 @@ async function handleChatCompletionsWithBudget(
   // Best-effort Grok attribution: the managed fence stamps this header on every model
   // it registers (extra_headers, sent verbatim by upstream Grok). Dashboard usage
   // bucketing only — never an auth or billing signal.
-  if (req.headers.get("x-opencodex-grok") === "1") logCtx.surface = "grok";
+  if (req.headers.get("x-codexcommander-grok") === "1") {
+    logCtx.surface = "grok";
+  }
   // Routed adapters only support streamed turns; always stream internally and fold
   // for non-streaming clients.
   internalBody.stream = true;

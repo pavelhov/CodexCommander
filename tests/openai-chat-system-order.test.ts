@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
-import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 
-const provider: OcxProviderConfig = {
+const provider: CodexCommanderProviderConfig = {
   adapter: "openai-chat",
   baseUrl: "http://localhost:1234/v1",
   apiKey: "local",
 };
 
-function buildMessages(context: OcxParsedRequest["context"]): Array<Record<string, unknown>> {
+function buildMessages(context: CodexCommanderParsedRequest["context"]): Array<Record<string, unknown>> {
   const request = createOpenAIChatAdapter(provider).buildRequest({
     modelId: "local-model",
     context,

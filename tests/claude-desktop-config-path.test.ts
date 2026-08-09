@@ -13,7 +13,7 @@ import {
 
 /**
  * GitHub #539. Claude Desktop derives its configLibrary through `GE()`, which has
- * three branches; opencodex only implemented the third and hardcoded the macOS
+ * three branches; codexcommander only implemented the third and hardcoded the macOS
  * shape, so `CLAUDE_USER_DATA_DIR` users and every Windows user got a path Desktop
  * never reads.
  *
@@ -77,18 +77,18 @@ describe("Claude Desktop configLibrary resolution", () => {
     expect(dir).not.toContain("-3p-3p");
   });
 
-  test("OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR wins over every branch and is used verbatim", () => {
+  test("CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR wins over every branch and is used verbatim", () => {
     // Returned without join(): tests point this straight at a temp dir.
     const dir = resolveConfigLibraryDir({
       env: {
-        OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: "/tmp/ocx-override",
+        CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR: "/tmp/ccx-override",
         CLAUDE_USER_DATA_DIR: "/custom/user-data",
         LOCALAPPDATA: "C:\\local",
       },
       platform: "win32",
       home: HOME,
     });
-    expect(dir).toBe("/tmp/ocx-override");
+    expect(dir).toBe("/tmp/ccx-override");
   });
 
   test("the runtime wrapper delegates to the pure resolver (wiring proof)", () => {
@@ -101,16 +101,16 @@ describe("Claude Desktop configLibrary resolution", () => {
 });
 
 /**
- * Desktop reads ONLY the profile named by `_meta.json`'s appliedId, so an opencodex
+ * Desktop reads ONLY the profile named by `_meta.json`'s appliedId, so an codexcommander
  * entry that merely exists is not proof that Desktop is using it. Before this,
  * /api/claude-desktop/status matched on entry name alone and reported "applied"
  * while Desktop served someone else's profile.
  */
 describe("Claude Desktop status reports whether our profile is the active one", () => {
   async function statusWithMeta(meta: unknown): Promise<{ activeProfile: boolean | null }> {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-desktop-active-"));
-    const previous = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
-    process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = dir;
+    const dir = mkdtempSync(join(tmpdir(), "ccx-desktop-active-"));
+    const previous = process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR;
+    process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR = dir;
     if (meta !== undefined) writeFileSync(join(dir, "_meta.json"), JSON.stringify(meta));
     const server = startServer(0);
     try {
@@ -118,8 +118,8 @@ describe("Claude Desktop status reports whether our profile is the active one", 
       return await res.json() as { activeProfile: boolean | null };
     } finally {
       server.stop(true);
-      if (previous === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
-      else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previous;
+      if (previous === undefined) delete process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR;
+      else process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR = previous;
       rmSync(dir, { recursive: true, force: true });
     }
   }
@@ -129,7 +129,7 @@ describe("Claude Desktop status reports whether our profile is the active one", 
       appliedId: "11111111-1111-4111-8111-111111111111",
       entries: [
         { id: "11111111-1111-4111-8111-111111111111", name: "Default" },
-        { id: "22222222-2222-4222-8222-222222222222", name: "opencodex" },
+        { id: "22222222-2222-4222-8222-222222222222", name: "codexcommander" },
       ],
     });
     expect(body.activeProfile).toBe(false);
@@ -140,13 +140,13 @@ describe("Claude Desktop status reports whether our profile is the active one", 
       appliedId: "22222222-2222-4222-8222-222222222222",
       entries: [
         { id: "11111111-1111-4111-8111-111111111111", name: "Default" },
-        { id: "22222222-2222-4222-8222-222222222222", name: "opencodex" },
+        { id: "22222222-2222-4222-8222-222222222222", name: "codexcommander" },
       ],
     });
     expect(body.activeProfile).toBe(true);
   });
 
-  test("a readable appliedId with no opencodex entry is a known false, not unknown", async () => {
+  test("a readable appliedId with no codexcommander entry is a known false, not unknown", async () => {
     // The distinction matters: null renders the same as "no metadata at all", which
     // would preserve the silent false report this change exists to remove.
     const body = await statusWithMeta({
@@ -162,7 +162,7 @@ describe("Claude Desktop status reports whether our profile is the active one", 
 
   test("metadata without appliedId leaves activeProfile undeterminable", async () => {
     const body = await statusWithMeta({
-      entries: [{ id: "22222222-2222-4222-8222-222222222222", name: "opencodex" }],
+      entries: [{ id: "22222222-2222-4222-8222-222222222222", name: "codexcommander" }],
     });
     expect(body.activeProfile).toBe(null);
   });

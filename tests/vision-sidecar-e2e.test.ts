@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 
@@ -22,10 +22,10 @@ let sidecar: ReturnType<typeof Bun.serve> | null = null;
 const originalFetch = globalThis.fetch;
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-vision-e2e-codex-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-vision-e2e-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-vision-e2e-codex-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-vision-e2e-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   globalThis.fetch = originalFetch;
 });
 
@@ -35,15 +35,15 @@ afterEach(() => {
   sidecar?.stop(true);
   sidecar = null;
   globalThis.fetch = originalFetch;
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
 });
 
 const PNG_DATA_URL = "data:image/png;base64,aGVsbG8taW1hZ2UtYnl0ZXM=";
-const CAPTION = "A red square logo with the word OPENCODEX in white monospace text.";
+const CAPTION = "A red square logo with the word CODEXCOMMANDER in white monospace text.";
 
 /** Fake ChatGPT forward backend: answers /responses with an SSE caption stream. */
 function serveSidecar(onRequest: (req: Request, bodyText: string) => void) {
@@ -112,8 +112,9 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
       return originalFetch(input, init);
     }) as typeof fetch;
 
-    const config: OcxConfig = {
-      port: 0, hostname: "127.0.0.1", defaultProvider: "textonly", openaiProviderTierVersion: 2,
+    const config: CodexCommanderConfig = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "textonly",
+      multiAgentGuidanceEnabled: true,
       providers: {
         textonly: {
           adapter: "openai-chat",
@@ -129,7 +130,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
           codexAccountMode: "direct",
         },
       },
-    } as OcxConfig;
+    } as CodexCommanderConfig;
     saveConfig(config);
     const server = startServer(0);
     try {
@@ -167,8 +168,9 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
     upstream = serveUpstream(b => { upstreamBody = b; });
     sidecar = serveSidecar(() => { sidecarHits += 1; });
 
-    const config: OcxConfig = {
-      port: 0, hostname: "127.0.0.1", defaultProvider: "seeing", openaiProviderTierVersion: 2,
+    const config: CodexCommanderConfig = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "seeing",
+      multiAgentGuidanceEnabled: true,
       providers: {
         seeing: {
           adapter: "openai-chat",
@@ -179,7 +181,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
         },
         openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
       },
-    } as OcxConfig;
+    } as CodexCommanderConfig;
     saveConfig(config);
     const server = startServer(0);
     try {
@@ -205,7 +207,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
    * omission marker is there instead.
    *
    * `big-pickle` is the id that reproduced the reported 400 verbatim against the
-   * live endpoint (devlog/_plan/260805_bug_fix_stack/002_zen_modality_probe.md).
+   * live endpoint (implementation contract).
    */
   test("a text-only Zen model has its image stripped before the upstream request (#1043)", async () => {
     let upstreamBody = "";
@@ -214,8 +216,9 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
     const zen = PROVIDER_REGISTRY.find(p => p.id === "opencode-zen");
     expect(zen?.noVisionModels).toContain("big-pickle");
 
-    const config: OcxConfig = {
-      port: 0, hostname: "127.0.0.1", defaultProvider: "zenlike", openaiProviderTierVersion: 2,
+    const config: CodexCommanderConfig = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "zenlike",
+      multiAgentGuidanceEnabled: true,
       providers: {
         // A custom provider carrying the REGISTRY's list verbatim. The built-in
         // opencode-zen entry pins its own baseUrl, so it cannot be aimed at a local
@@ -230,7 +233,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
         },
         openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
       },
-    } as OcxConfig;
+    } as CodexCommanderConfig;
     saveConfig(config);
     const server = startServer(0);
     try {
@@ -256,8 +259,9 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
     // Measured as accepting images; classifying it would silently degrade it.
     expect(zen?.noVisionModels).not.toContain("mimo-v2.5-free");
 
-    const config: OcxConfig = {
-      port: 0, hostname: "127.0.0.1", defaultProvider: "zenlike", openaiProviderTierVersion: 2,
+    const config: CodexCommanderConfig = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "zenlike",
+      multiAgentGuidanceEnabled: true,
       providers: {
         zenlike: {
           adapter: "openai-chat",
@@ -268,7 +272,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
         },
         openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
       },
-    } as OcxConfig;
+    } as CodexCommanderConfig;
     saveConfig(config);
     const server = startServer(0);
     try {

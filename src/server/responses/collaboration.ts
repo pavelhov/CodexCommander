@@ -27,7 +27,7 @@ import {
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { modelInList, namespacedToolName } from "../../types";
-import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage } from "../../types";
+import type { AdapterEvent, CodexCommanderConfig, CodexCommanderParsedRequest, CodexCommanderProviderConfig, CodexCommanderProviderContinuationState, CodexCommanderUsage } from "../../types";
 import {
   forceRefreshOAuthAccessSnapshot,
   getOAuthCredentialApiBaseUrl,
@@ -100,7 +100,7 @@ import type { EffectiveSubagentModel, EffectiveSubagentRoster, SpawnAgentSurface
 import type { TranslatorBudget } from "../../lib/translator-budget";
 
 
-export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: TranslatorBudget): {
+export function buildToolBridgeMaps(parsed: CodexCommanderParsedRequest, budget?: TranslatorBudget): {
   toolNsMap: Map<string, { namespace: string; name: string }>;
   freeformToolNames: Set<string>;
   toolSearchToolNames: Set<string>;
@@ -136,13 +136,13 @@ export const PROACTIVE_MULTI_AGENT_MODE_TEXT = [
   "This mode remains active until a later multi-agent mode developer message changes it.",
 ].join(" ");
 
-export function isV1CollabSurface(parsed: OcxParsedRequest): boolean {
+export function isV1CollabSurface(parsed: CodexCommanderParsedRequest): boolean {
   return collabSurface(parsed) === "v1";
 }
 
 
 
-export function collabSurface(parsed: OcxParsedRequest): "v1" | "v2" | null {
+export function collabSurface(parsed: CodexCommanderParsedRequest): "v1" | "v2" | null {
   let namespacedSpawn = false;
   let flatSpawn = false;
   let v1Only = false;
@@ -162,13 +162,13 @@ export function collabSurface(parsed: OcxParsedRequest): "v1" | "v2" | null {
   if (v1Only && v2Only) return null;               // contradictory companions
   if (v1Only) return "v1";
   if (v2Only) return "v2";
-  return namespacedSpawn ? "v1" : "v2"; // companionless fallbacks (legacy defaults)
+  return namespacedSpawn ? "v1" : "v2"; // companionless shape follows spawn_agent namespacing
 }
 
 
 
 export interface MultiAgentGuidanceOptions {
-  multiAgentGuidanceEnabled?: boolean;
+  multiAgentGuidanceEnabled: boolean;
   /** True when this parent route sends delegated V2 tasks as native encrypted_content. */
   encryptedCodexTasks?: boolean;
   codexAccountNamespace?: string;
@@ -194,7 +194,7 @@ export interface MultiAgentGuidanceDeps {
 async function defaultCollectCatalogState(): Promise<{ state: "fresh" | "stale" | "not_running" | "unknown" }> {
   // Explicit override for tests and diagnostics: process state is global and
   // would otherwise leak the host machine's app-server into hermetic tests.
-  const override = process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
+  const override = process.env.CCX_APP_SERVER_CATALOG_STATE_OVERRIDE;
   if (override === "fresh" || override === "stale" || override === "not_running" || override === "unknown") {
     return { state: override };
   }
@@ -225,11 +225,11 @@ async function createRequestScopedSubagentRosterResolver(): Promise<NonNullable<
 
 
 export async function multiAgentGuidanceText(
-  parsed: OcxParsedRequest,
-  options: MultiAgentGuidanceOptions = {},
+  parsed: CodexCommanderParsedRequest,
+  options: MultiAgentGuidanceOptions,
   deps: MultiAgentGuidanceDeps = {},
 ): Promise<string | null> {
-  if (options.multiAgentGuidanceEnabled === false) return null;
+  if (options.multiAgentGuidanceEnabled !== true) return null;
   const {
     injectionModel,
     encryptedCodexTasks,
@@ -325,7 +325,7 @@ export async function multiAgentGuidanceText(
         : soleBarePreferred;
 
     if (isInjectionDebugEnabled() && effective.excluded.length > 0) {
-      injectionDebugLog(`[opencodex] multi-agent guidance excluded: ${effective.excluded
+      injectionDebugLog(`[codexcommander] multi-agent guidance excluded: ${effective.excluded
         .map(item => `${item.configured}:${item.reason}`)
         .join(", ")}`);
     }
@@ -333,21 +333,12 @@ export async function multiAgentGuidanceText(
     for (const model of subagentModelFallback ?? []) {
       if (await encryptedTaskCompatible(model)) compatibleFallback.push(model);
     }
-    const fallbackGuidance = subagentFallbackGuidanceText({ subagentModelFallback: compatibleFallback } as OcxConfig);
+    const fallbackGuidance = subagentFallbackGuidanceText({ subagentModelFallback: compatibleFallback } as CodexCommanderConfig);
     const hasCompatibleGuidance = preferred !== undefined || roster !== "" || fallbackGuidance !== "";
-    // Preserve the legacy custom-prompt escape hatch for a configured model on
-    // plaintext-compatible parents. Encrypted parents must not emit a prompt with
-    // an incompatible/blank model placeholder.
-    const hasLegacyPromptModel = encryptedCodexTasks !== true && injectionModel !== undefined;
-    if (!hasCompatibleGuidance && !hasLegacyPromptModel) return null;
-    if (injectionPrompt) {
-      // Bare ids must resolve to a unique/current-route candidate. Preserve the legacy raw
-      // fallback only for explicit routed/account-qualified ids.
-      const promptModel = preferred?.model
-        ?? (!encryptedCodexTasks && injectionModel?.includes("/") ? injectionModel : undefined);
-      return `<multi_agent_mode>${applyInjectionPlaceholders(injectionPrompt, promptModel, injectionEffort, roster, fallbackGuidance)}</multi_agent_mode>`;
-    }
     if (!hasCompatibleGuidance) return null;
+    if (injectionPrompt) {
+      return `<multi_agent_mode>${applyInjectionPlaceholders(injectionPrompt, preferred?.model, injectionEffort, roster, fallbackGuidance)}</multi_agent_mode>`;
+    }
     let text = "When the active spawn_agent tool supports optional \"model\" or \"reasoning_effort\" overrides, "
       + "use only models listed for this collaboration surface. "
       + "When setting either override, set fork_turns to \"none\" "
@@ -415,7 +406,7 @@ function isGeneratedDeveloperItem(item: unknown, text: string): boolean {
   return isRecord(part) && part.type === "input_text" && part.text === text;
 }
 
-export function injectDeveloperMessage(parsed: OcxParsedRequest, text: string): void {
+export function injectDeveloperMessage(parsed: CodexCommanderParsedRequest, text: string): void {
   const raw = parsed._rawBody as { input?: unknown } | undefined;
   const devItem = { type: "message", role: "developer", content: [{ type: "input_text", text }] };
   if (raw && Array.isArray(raw.input)) {

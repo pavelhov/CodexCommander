@@ -63,7 +63,7 @@ export default function ProviderOverview({
       : t("prov.disabledBadge");
   const requests = usageTotals?.requests;
   const tokens = usageTotals?.totalTokens;
-  const quota = accountQuotaFromReport(quotaReport);
+  const quota = quotaReport ? accountQuotaFromReport(quotaReport) : null;
   const connectionProbeKey = JSON.stringify([
     apiBase ?? null,
     item.name,

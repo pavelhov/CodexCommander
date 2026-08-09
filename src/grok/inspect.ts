@@ -1,5 +1,5 @@
 /**
- * The non-mutating Grok inspector (WP2, devlog 260803_integrations_toggle_all/012).
+ * The non-mutating Grok inspector.
  *
  * Exists because GET /api/native-integrations must not write, and the only code
  * that could answer "would a disable be refused?" used to be `stripGrokConfig`,

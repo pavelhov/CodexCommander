@@ -13,15 +13,15 @@ import {
 } from "./account-api";
 
 const USAGE = `Usage:
-  ocx account main doctor [--json]
-  ocx account main list [--json]
-  ocx account main register <label> [--json]
-  ocx account main add <label>
-  ocx account main switch <profile-id-or-label> --yes [--json]
-  ocx account main recover [--rollback --yes] [--json]
+  ccx account main doctor [--json]
+  ccx account main list [--json]
+  ccx account main register <label> [--json]
+  ccx account main add <label>
+  ccx account main switch <profile-id-or-label> --yes [--json]
+  ccx account main recover [--rollback --yes] [--json]
 
 Native main login profiles change the physical Codex App/CLI login in the effective CODEX_HOME.
-They are independent from the OpenCodex Pool selected by 'ocx account use openai'.`;
+They are independent from the CodexCommander Pool selected by 'ccx account use openai'.`;
 
 const STAGE_LEASE_SAFETY_MARGIN_MS = 30_000;
 
@@ -234,9 +234,7 @@ export async function cmdNativeMainAccount(args: string[], deps: AccountDeps): P
       console.error(`Starting official Codex login in restricted staging home: ${stagingHome}`);
       const child = deps.spawnCodexLoginImpl
         ? deps.spawnCodexLoginImpl(stagingHome)
-        : deps.runCodexLoginImpl
-          ? { exited: deps.runCodexLoginImpl(stagingHome), kill: () => {} }
-          : spawnOfficialCodexLogin(stagingHome);
+        : spawnOfficialCodexLogin(stagingHome);
       const heartbeatAbort = new AbortController();
       const heartbeat = maintainStageLease(
         deps,

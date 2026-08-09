@@ -14,7 +14,7 @@ Both paths reject redirects and expose only credential-stripped final-address gu
 does not cover ordinary requests, streaming, retries, or per-hop redirect review on those paths.
 Caller-owned `provider.fetch` executors are also deferred: they receive literal/config checks and
 redirect blocking, but cannot inherit DNS classification or peer pinning without a verified-peer
-executor contract. Main-request migration must not treat that branch as fixed-transport equivalent.
+executor contract. Main-request adoption must not treat that branch as fixed-transport equivalent.
 
 ## Responses HTTP/SSE
 
@@ -47,13 +47,13 @@ Native passthrough SSE has TWO shapes, selected per request in
 - **Terminal-aware eager bounded relay** (`src/server/relay-eager.ts`). Windows
   uses this single-reader shape for rewrite traffic and for no-rewrite traffic
   selected by `selectEagerPath` in `src/lib/bun-stream-caps.ts`; the latter keeps
-  `legacy-tee` and known-bad-runtime `auto` on tee as documented. When selected,
+  `safe-tee` and known-bad-runtime `auto` on tee as documented. When selected,
   `response.completed` closes the client stream even if upstream keeps HTTP/SSE
   alive. Darwin `auto` uses it only when the exact native plaintext-V2
   collaboration schema activated its client rewrite and the process runs the
   specifically validated bundled Bun; an unvalidated Bun fails closed to tee
   with a startup warning. Explicit `eager-relay` remains available for other
-  eligible Darwin SSE turns, and `legacy-tee` always disables this auto path.
+  eligible Darwin SSE turns, and `safe-tee` always disables this auto path.
   One eager reader + byte-bounded client queue + post-cancel bounded
   discard-drain replaces the tee. Its synchronous `pull()` body goes directly
   to the response: owned translator-budget cleanup transfers to the producer's
@@ -110,18 +110,21 @@ separately billed generation.
 
 On non-loopback binds, data-plane authentication and origin policy cover both Images routes. An
 explicit keyed Images provider accepts the proxy admission secret as either an OpenAI-style bearer
-or `x-opencodex-api-key` because the provider key replaces caller authorization before fetch. The
+or `x-codexcommander-api-key` because the provider key replaces caller authorization before fetch. The
 ChatGPT forward path still requires the dedicated header so its upstream bearer remains distinct.
 
 The API-key `openai-responses` path also adapts Codex's private standalone image tool to the public
-Responses tool surface. A complete `image_gen` namespace is lowered to safe
-`image_gen__<inner-name>` function aliases even when no hosted image tool is present, because public
-Responses runtimes may reserve the namespace itself and reject dotted function names. Native and
-legacy dotted calls replayed in `body.input` are encoded to the same aliases. When any client
-image-gen declaration is replaced by a usable `image_gen__<inner-name>` alias, the adapter also drops
-hosted `image_generation` and deduplicates aliases in stable container order. Empty or malformed
-namespaces do not remove the hosted fallback. Discovery and normalization span both top-level
-`body.tools` and Codex Desktop Responses Lite `input[].type = "additional_tools"` containers.
+Responses tool surface. A canonical `{ type: "namespace", name: "image_gen", tools: [...] }`
+declaration is lowered to safe `image_gen__<inner-name>` function aliases even when no hosted image
+tool is present, because public Responses runtimes may reserve the namespace itself. Existing
+`image_gen__*` aliases remain idempotent. Because the selector schema has no namespace field, an
+`image_gen.<inner-name>` tool-choice selector is rewritten only when it exactly names a function in
+that explicit namespace. Standalone dotted function declarations, dotted replay calls in
+`body.input`, and dotted upstream response-call names are not recovered. When a canonical namespace
+declaration is replaced by a usable alias, the adapter also drops hosted `image_generation` and
+deduplicates aliases in stable container order. Empty or malformed namespaces do not remove the
+hosted fallback. Discovery and normalization span both top-level `body.tools` and Codex Desktop
+Responses Lite `input[].type = "additional_tools"` containers.
 
 For a model explicitly listed in `modelPreferHostedTools`, a non-forward Responses provider may opt
 to remove colliding client `image_gen` declarations before this normalization and rewrite their
@@ -162,21 +165,21 @@ conflicts with `modelSupportsReasoningSummaries: false` for the same model.
 
 The Desktop profile writer and the management status probe share
 `resolveDesktop3pConfigLibraryPath`. The resolver reproduces Desktop's own rule rather than a guess:
-an explicit `CLAUDE_USER_DATA_DIR` (or the opencodex override) wins; on Windows
+an explicit `CLAUDE_USER_DATA_DIR` (or the CodexCommander override) wins; on Windows
 `%LOCALAPPDATA%\Claude-3p` wins; otherwise the Electron user-data path gains a `-3p` suffix if it
 does not already have one. `configLibrary` is appended to that root.
 
 `Claude-3p` is Desktop's real directory name, assembled at runtime from `"Claude" + "-3p"`, which is
-why searching the app bundle for the literal string finds nothing. It is not a legacy path to migrate
-away from. Resolution stays a pure function of (env, platform, home) so the Windows branch is
+why searching the app bundle for the literal string finds nothing. Resolution stays a pure function
+of (env, platform, home) so the Windows branch is
 testable on any host: stubbing `process.platform` does not propagate to `os.platform()` under Bun.
 
 [Decision Log]
 - 목적과 의도: 생성된 Claude Desktop 프로필이 설치된 Desktop이 실제로 읽는 디렉터리에 떨어지고, 대시보드 상태가 그 쓰기 대상과 일치하게 한다.
 - 기존 구현 및 제약 조건: 두 호출자가 경로 계산을 각자 복제했고, Desktop이 실제로 참조하는 `CLAUDE_USER_DATA_DIR`와 Windows `LOCALAPPDATA` 분기가 빠져 있었다(#539). 사용자가 프로필 루트를 직접 지정하는 경우도 있다.
-- 검토한 주요 대안: `-3p` 접미사를 구버전 잔재로 보고 제거; 두 디렉터리를 모두 스캔; 레거시 파일을 자동 이전; 크로스플랫폼 해석기를 한 곳에 둔다.
+- 검토한 주요 대안: 고정 경로를 사용; 두 디렉터리를 모두 스캔; 크로스플랫폼 해석기를 한 곳에 둔다.
 - 선택한 방식: Desktop 번들의 해석 규칙을 그대로 이식한 override 인지 해석기를 한 곳에 두고, 쓰기 경로와 상태 조회가 같은 함수를 쓴다.
-- 다른 대안 대신 이 방식을 선택한 이유: `-3p`는 Desktop의 정상 동작이므로 제거는 회귀였다. 해석기를 한 곳에 두면 두 호출자의 드리프트가 불가능해지고, 파괴적 이전 없이 상태와 쓰기 대상이 일치한다.
+- 다른 대안 대신 이 방식을 선택한 이유: `-3p`는 Desktop의 정상 동작이다. 해석기를 한 곳에 두면 두 호출자의 드리프트가 불가능해지고 상태와 쓰기 대상이 일치한다.
 - 장점, 단점 및 영향: 지원 플랫폼 전부에서 apply 결과가 Desktop에 보인다. 비표준 레이아웃 사용자는 문서화된 override를 써야 하고, 해석기는 Desktop 번들의 규칙 변경을 따라가야 한다.
 
 ## Cursor Native Exec
@@ -184,16 +187,16 @@ testable on any host: stubbing `process.platform` does not propagate to `os.plat
 Cursor's experimental live transport can receive server-driven local read/write/delete/ls/grep,
 shell, and fetch exec frames. These frames are denied by default because they bypass Codex's normal
 approval and sandbox path. `nativeLocalExec: "on"` is the explicit config-owner opt-in for trusted
-local experiments; `off` and the backwards-compatible `codex-sandbox` spelling both fail closed.
+local experiments; `off` and an unset value fail closed.
 MCP, screen recording, and computer-use stay on their separate explicit executor/MCP config paths.
 
 [Decision Log]
 - 목적과 의도: prevent caller-controlled Responses text from authorizing Cursor native local shell, filesystem, or fetch execution.
-- 기존 구현 및 제약 조건: the adapter preserved top-level `instructions`, system messages, and developer messages, then treated a `sandbox_mode ... danger-full-access` prose marker as an exec allow signal in `codex-sandbox` mode.
+- 기존 구현 및 제약 조건: Request instructions and developer messages can contain a `sandbox_mode ... danger-full-access` prose marker, but request text is caller-controlled.
 - 검토한 주요 대안: keep marker-based authorization, require a future trustworthy attestation channel, or restrict authorization to server-local config.
-- 선택한 방식: keep marker detection only as diagnostic/context and make `nativeLocalExec: "on"` the only non-legacy mode that enables built-in local exec; unset, `off`, and `codex-sandbox` all deny.
-- 다른 대안 대신 이 방식을 선택한 이유: opencodex has no trustworthy per-request sandbox attestation in request text or headers, so any prompt-carried marker is spoofable by data-plane callers.
-- 장점, 단점 및 영향: this closes prompt-to-native-exec escalation while preserving an explicit operator escape hatch; existing configs that relied on `codex-sandbox` must switch to `nativeLocalExec: "on"` for trusted local experiments.
+- 선택한 방식: Keep marker detection only as diagnostic/context and make `nativeLocalExec: "on"` the only mode that enables built-in local exec; unset and `off` deny.
+- 다른 대안 대신 이 방식을 선택한 이유: CodexCommander has no trustworthy per-request sandbox attestation in request text or headers, so any prompt-carried marker is spoofable by data-plane callers.
+- 장점, 단점 및 영향: This closes prompt-to-native-exec escalation while preserving an explicit operator escape hatch for trusted local experiments.
 
 ## WebSocket
 
@@ -205,7 +208,7 @@ The WebSocket endpoint exists at `/v1/responses`, but discovery is opt-in:
 }
 ```
 
-`websocketsEnabled(config)` is true only for an explicit `true`. When false, opencodex removes
+`websocketsEnabled(config)` is true only for an explicit `true`. When false, CodexCommander removes
 `supports_websockets` from injected provider tables and routed catalog entries, keeping Codex on
 HTTP/SSE. When true, Codex may use Responses WebSocket frames handled by `src/server/ws-bridge.ts`.
 If Codex still attempts a WebSocket upgrade while the feature is disabled, `/v1/responses` rejects
@@ -264,7 +267,7 @@ ordinary 5xx errors are not replayed. Completion fallback rebuilds only replayab
 the original user/tool-result turn for reasoning-only attempts, supplies neutral non-empty carriers
 for empty tool output, and validates role alternation plus tool-use/result pairing before transport.
 
-Provider-level `retryOn429` (devlog 260802_429_same_target_retry) is the generic, opt-in
+Provider-level `retryOn429` is the generic, opt-in
 same-target 429 retry for API-key providers (`authMode: "key"`), primarily single-key pools
 that cannot use multi-key failover. In the pre-stream recovery loop, a 429 waits (`Retry-After`
 or the fixed interval, capped at `maxIntervalMs`) and replays the identical request on the same
@@ -299,7 +302,7 @@ the cancel if the interval elapses first (bounded by the same `attempts` budget)
 - 다른 대안 대신 이 방식을 선택한 이유: Native stop metadata has mislabeled progress, wording is language-dependent, global serialization harms healthy concurrency, client-only retries amplify bursts, and empty structural turns are rejected upstream.
 - 장점, 단점 및 영향: Completion phase is deterministic and throttled concurrency recovers without a request storm; some clean Kiro stops pay one bounded validation call and an exactly repeated completion answer may be shown twice to preserve `final_answer` semantics.
 
-Historical `web_search_call` output items from previous Responses turns are not converted into
+Replayed `web_search_call` output items from previous Responses turns are not converted into
 assistant text. They are UI/search-cell evidence, not a replayable search result payload; turning
 them into strings risks routed models echoing an internal marker or implying a current search ran
 when the sidecar is unavailable. The active sidecar path is the only place that emits new
@@ -327,7 +330,7 @@ It also repairs the opposite direction (260718): an assistant `tool_calls` round
 by an intervening user/developer barrier or an interrupted turn — is closed by deferring barrier
 messages until the round completes, reattaching real results to their original call occurrence,
 and synthesizing explicit "no tool result was recorded" answers only when no real result exists
-(Kimi/Moonshot 400 `ocx-mrqaiw05-269`; unit `devlog/_fin/260718_dangling_toolcall_hardening`).
+(Kimi/Moonshot 400 `ccx-mrqaiw05-269`).
 
 Forward-mode OpenAI passthrough also repairs replayed `call_id` values longer than the Responses
 API's 64-character limit. Sidechat/fork replay can namespace routed-provider ids beyond that limit,
@@ -349,11 +352,9 @@ All four route to the `default` Cursor wire model. Explicit variants additionall
 parameterized-model channel used by current Cursor clients. Router rows are static capabilities and
 must survive a live `GetUsableModels` response that omits `default`.
 
-`cursor/grok-4.5-fast` is also a stable Codex-facing row, but current Cursor clients do not request
-it as a flat model slug. OpenCodex sends `grok-4.5` through `requested_model` with separate `effort`
-and `fast=true` parameters, leaving legacy `model_details` unset for that parameterized external
-selection. Live discovery still recognizes Cursor's flattened `cursor-grok-4.5-{effort}-fast`
-variants, plus the older `grok-4.5-fast-{effort}` ordering, as availability evidence only.
+`cursor/grok-4.5-fast` is also a stable Codex-facing row. CodexCommander sends `grok-4.5` through
+`requested_model` with separate `effort` and `fast=true` parameters, leaving `model_details` unset
+for that parameterized external selection.
 
 ## Cursor active-context usage
 
@@ -363,7 +364,7 @@ before Cursor emits a new checkpoint; those turns carry forward the last observe
 Cursor conversation instead of reporting only the tiny current-turn output delta. The carry-forward
 cache is process-local, numeric-only, bounded, and keyed by Cursor conversation id. Compaction
 boundaries clear the carry so pre-compaction totals are not reused after Codex replaces history.
-Historical compaction markers restored by `previous_response_id` expansion are acknowledged as a
+Compaction markers restored by `previous_response_id` expansion are acknowledged as a
 replayed prefix and do not clear a fresh post-compaction checkpoint again on every later turn.
 Compaction summarizer turns may still report their own checkpoint for that response, but their
 pre-compaction checkpoint is not persisted for later carry-forward.
@@ -373,15 +374,15 @@ pre-compaction checkpoint is not persisted for later carry-forward.
 - 목적과 의도: Keep Codex's visible "context left" indicator aligned with Cursor's active-context usage on client-tool turns that finalize before a checkpoint arrives.
 - 기존 구현 및 제약 조건: Checkpoint turns reported totalTokens correctly, but no-checkpoint client-tool finalize fell back to output-only usage and could overwrite a meaningful prior total with values like 109 tokens.
 - 검토한 주요 대안: Add a longer wait for late checkpoints; infer prior+output totals; store full prompt/history state; carry forward only the last numeric checkpoint per Cursor conversation.
-- 선택한 방식: Carry forward the last numeric absolute checkpoint per Cursor conversation with bounded LRU/TTL storage, update it only from live checkpoint frames, and clear/suppress it once when a newly appended compaction boundary starts an epoch; previous_response replay provenance acknowledges historical markers without serializing private metadata upstream.
-- 다른 대안 대신 이 방식을 선택한 이유: It fixes the UI regression without delaying tool turns, fabricating token growth, storing prompt/tool content, or repeatedly clearing valid post-compaction usage when historical markers replay; one-time compaction resets still prevent stale over-report when history is replaced.
+- 선택한 방식: Carry forward the last numeric absolute checkpoint per Cursor conversation with bounded LRU/TTL storage, update it only from live checkpoint frames, and clear/suppress it once when a newly appended compaction boundary starts an epoch; previous_response replay provenance acknowledges restored markers without serializing private metadata upstream.
+- 다른 대안 대신 이 방식을 선택한 이유: It fixes the UI regression without delaying tool turns, fabricating token growth, storing prompt/tool content, or repeatedly clearing valid post-compaction usage when restored markers replay; one-time compaction resets still prevent stale over-report when history is replaced.
 - 장점, 단점 및 영향: Active-context reporting stays monotonic within an uncompacted Cursor conversation; no-checkpoint turns remain estimated; a process restart loses the numeric cache, and when neither a checkpoint nor a carry-forward is available the turn reports a request-local estimate derived from the same pruned payload sent to Cursor (#373 — reporting output-only usage made Codex read the context as nearly empty). Estimates are never persisted or promoted into checkpoint carry-forward; only live checkpoint frames update the cache.
 ```
 
 ## OpenRouter provider routing
 
 The canonical OpenRouter `openai-chat` transport may carry optional provider-routing preferences
-from `OcxProviderConfig.openRouterRouting`, with exact model-id replacements in
+from `CodexCommanderProviderConfig.openRouterRouting`, with exact model-id replacements in
 `modelOpenRouterRouting`. The adapter maps camel-case config to OpenRouter's request wire
 (`order`, `only`, `allow_fallbacks`) after the Codex-facing routed slug has been decoded to the
 native model id.
@@ -404,7 +405,7 @@ keyless. An explicit provider-level `promptCacheKey: false` continues to opt out
 persisted through `providerConfigSeed`/`enrichProviderFromRegistry` for new configs; key-pool 429
 rotation keeps it — along with every other registry backfill — because the retry inherits the
 request's routed provider and swaps only the API key (`rotateProviderTransportOn429` in
-src/providers/key-failover.ts). If an opted-in upstream rejects the field, OpenCodex does not strip it and retry or mutate the
+src/providers/key-failover.ts). If an opted-in upstream rejects the field, CodexCommander does not strip it and retry or mutate the
 saved configuration. Other OpenAI-compatible providers remain deny-by-default because strict
 backends may reject the OpenAI-specific field.
 
@@ -416,19 +417,16 @@ URL keeps the generic `max_tokens` default unless it opts in explicitly.
 
 ## xAI Grok hardening (official Grok Build contract parity)
 
-Grounded in the open-sourced official client (xai-org/grok-build); unit + evidence:
-`devlog/_fin/260716_grok_build_hardening/`.
-
 - **Reasoning folding:** the Responses parser folds `reasoning` items into the FOLLOWING
   assistant turn (`pendingReasoning` in `src/responses/parser.ts`) so the Grok chat wire carries
   ONE assistant message with `reasoning_content` — exact-prefix cache stability. Unsigned
-  siblings newline-join; `ocxr1`-signed siblings stay separate parts (Anthropic replay keeps
+  siblings newline-join; `ccxr1`-signed siblings stay separate parts (Anthropic replay keeps
   each signature on its own text); boundaries (user/tool-result/agent) clear pending state;
   call items fold pending reasoning into the same turn.
 - **Grok CLI credential ownership:** `source:"local-cli"` xAI credentials re-read
   `~/.grok/auth.json` (read-only) and adopt a newer usable generation with zero IdP calls
-  (`shouldAdoptGrokGeneration`, later-expiresAt authority). OpenCodex never submits the native
-  CLI refresh token; a separate browser OAuth login creates an OpenCodex-owned `source:"oauth"`
+  (`shouldAdoptGrokGeneration`, later-expiresAt authority). CodexCommander never submits the native
+  CLI refresh token; a separate browser OAuth login creates a CodexCommander-owned `source:"oauth"`
   credential instead of detaching a linked CLI credential during refresh. A terminal stale-CLI
   result marks only the rejected stored generation as needing attention and is projected to quota
   clients as the fixed `local_cli_refresh_required` reason; it never serializes the OAuth exception,
@@ -464,7 +462,7 @@ that measurement; older Claude, deepseek, minimax, glm, and qwen entries adverti
 fields at all. The handling below keys off the wire field, not the model id, so any model that
 sends `redactedContent` round-trips.
 
-- The blob rides the existing `ocxr1:` envelope as `krc` (`src/responses/reasoning-envelope.ts`) on
+- The blob rides the existing `ccxr1:` envelope as `krc` (`src/responses/reasoning-envelope.ts`) on
   an envelope-only reasoning item — `summary: []`, no text deltas — so it stays invisible in the
   Codex app while round-tripping, exactly like the hidden-thinking path.
 - **Pairing is backwards.** Kiro emits `reasoningContentEvent` at the END of an assistant turn,
@@ -472,7 +470,7 @@ sends `redactedContent` round-trips.
   closed, so the parser attaches it to the PRECEDING assistant message rather than folding it into
   the following turn like ordinary reasoning (`src/responses/parser.ts`). With no assistant turn to
   own it, the blob is dropped rather than mis-paired.
-- The blob lives on `OcxAssistantMessage.kiroRedactedReasoning`, not on a thinking content part, so
+- The blob lives on `CodexCommanderAssistantMessage.kiroRedactedReasoning`, not on a thinking content part, so
   no other adapter replays provider-private state if the conversation switches providers.
 
 Kiro reports context pressure in its own `contextUsageEvent`, which is the authoritative source. On
@@ -495,18 +493,17 @@ deltas, id-only-first-chunk continuations, and whole-chunk multi-call frames all
 
 Parallel tool calls are DEFAULT-ON for openai-chat providers: the adapter follows Codex's
 request-level `parallel_tool_calls` bit (default true) and routed catalog entries advertise
-`supports_parallel_tool_calls`. `OcxProviderConfig.parallelToolCalls: false` is the per-provider
+`supports_parallel_tool_calls`. `CodexCommanderProviderConfig.parallelToolCalls: false` is the per-provider
 opt-out (registry-seeded, router-backfilled; an explicit user value always wins). Non-chat
 adapters advertise the catalog bit only on explicit `true`; cursor keeps its own special-casing.
-Providers with flaky parallel streaming can be opted out individually. Evidence and provider
-ledger: `devlog/_fin/260709_parallel_tool_calls/`.
+Providers with flaky parallel streaming can be opted out individually.
 
 ## Reasoning display parity (hideThinkingSummary)
 
 `hideThinkingSummary` (request reasoning summary absent/"none" — the routed catalog default) is
 honored by BOTH reasoning paths: anthropic `thinking_delta` AND raw `reasoning_raw_delta`
 (openai-chat `reasoning_content`, kiro tags). Hidden reasoning emits an envelope-only reasoning
-item (`summary: []`, txt-only `ocxr1:` `encrypted_content`, no text deltas) — invisible in the
+item (`summary: []`, txt-only `ccxr1:` `encrypted_content`, no text deltas) — invisible in the
 Codex app, so tool cells group like native models — while the text still round-trips for
 `preserveReasoningContentModels` replay. Visible mode (any requested summary other than `none`)
 keeps the raw `content[reasoning_text]` shape by default. An `openai-chat` provider may instead set
@@ -515,8 +512,6 @@ reasoning-summary events when visible. The canonical Kimi Code K3 presets use th
 mode. `hideThinkingSummary` always takes precedence over the provider hint, emits no visible
 summary/raw deltas, and retains the same replay envelope. The setting is presentation-only: it
 does not change reasoning effort or manufacture progress, percentage, ETA, or heartbeat text.
-Diagnosis and codex-rs grouping evidence:
-`devlog/_fin/260709_native_response_pattern/`.
 
 ## Chat-to-Responses message phase inference
 
@@ -579,7 +574,7 @@ surface is listed here so a maintainer can find the owner without grepping:
 | --- | --- | --- |
 | Azure OpenAI Responses | `src/adapters/azure.ts` | Deployment-shaped URLs on top of the Responses contract. |
 | Google / Vertex / Antigravity | `src/adapters/google.ts`, `src/adapters/google-http.ts`, `src/adapters/google-wire-compiler.ts`, `src/adapters/google-tool-schema.ts`, `src/adapters/google-truncation.ts`, `src/adapters/google-errors.ts`, `src/adapters/google-antigravity-wire.ts`, `src/adapters/google-antigravity-replay.ts` | Vertex and Antigravity install a Google-family `fetchResponse` and so own their retry policy, while AI Studio Gemini leaves it undefined and uses the default server fetch path. The Google-family wrapper reuses the shared abort/deadline helpers (`src/lib/upstream-retry.ts`), wire-body repair, and upstream error normalization. |
-| Mimo Free | `src/adapters/mimo-free.ts` | Client identity and JWT handling are transport-local; the per-install client id lives in the opencodex state root. |
+| Mimo Free | `src/adapters/mimo-free.ts` | Client identity and JWT handling are transport-local; the per-install client id lives in the CodexCommander state root. |
 | Anthropic image ingress | `src/adapters/anthropic-image-guard.ts`, `src/adapters/anthropic-image-normalize.ts` | Oversized or unsupported images are normalized or rejected before reaching upstream. |
 | Adapter execution support | `src/adapters/run-turn-queue.ts`, `src/adapters/tool-catalog-nudge.ts`, `src/adapters/identity.ts`, `src/adapters/image.ts`, `src/adapters/upstream-http-error.ts` | Shared machinery: turn ordering, tool-catalog nudging, client fingerprinting, image conversion, upstream error normalization. |
 | Cursor (beyond the sections above) | `src/adapters/cursor/live-transport.ts`, `src/adapters/cursor/transport-retry.ts`, `src/adapters/cursor/mcp-manager.ts`, `src/adapters/cursor/thread-continuity.ts` | Thread continuity is the point: a retry must not start a new Cursor thread. |
@@ -589,7 +584,6 @@ surface is listed here so a maintainer can find the owner without grepping:
 | Image/video generation loop | `src/images/loop.ts`, `src/images/plan.ts`, `src/images/fulfill.ts`, `src/images/xai-client.ts`, `src/images/xai-video-client.ts`, `src/images/artifacts.ts` | A provider-returned image URL is downloaded into a local artifact once, then served locally; warnings stay URL-free because provider CDN URLs may embed credentials. |
 | GitHub Copilot | `src/providers/xai-transport.ts` (`resolveProviderTransport`), `src/providers/github-copilot-transport.ts` | `resolveProviderTransport` selects the Copilot transport when the routed provider name is `github-copilot`; the Copilot module then resolves its headers and base URL, and the registry seeds the provider row and model fallback. |
 | API-key pools | `src/providers/key-failover.ts` | A 429 rotates the active key and records a cooldown; `provider.apiKey` keeps mirroring the active entry so routing stays single-key. |
-| Alibaba regions | `src/providers/alibaba-region-backup.ts`, `src/providers/alibaba-region-migration.ts`, `src/providers/alibaba-region-startup.ts` | Region migration backs up before rewriting and is idempotent across restarts. |
 | Discovery and quota | `src/providers/model-discovery.ts`, `src/providers/quota.ts` | Discovery rejects a response over 4 MiB or past 2,000 raw rows before caching it. |
 
 ## Sidecars

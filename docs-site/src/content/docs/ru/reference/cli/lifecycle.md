@@ -1,55 +1,55 @@
 ---
 title: Жизненный цикл CLI
-description: Настройка, запуск, остановка, служба, диагностика, sync и update-команды.
+description: Настройка, запуск, остановка, служба, диагностика и sync-команды.
 ---
 
-Эти команды устанавливают, запускают, проверяют, ремонтируют и обновляют локальный прокси
-opencodex и его интеграцию с Codex.
+Эти команды устанавливают, запускают, проверяют и ремонтируют локальный прокси
+CodexCommander и его интеграцию с Codex.
 
 ## Настройка
 
-### `ocx init` · `ocx setup`
+### `ccx init` · `ccx setup`
 
 Интерактивный мастер настройки (`setup` — alias команды `init`). Он спрашивает провайдера
 (preset или custom), API-key (буквально или `${ENV}`), модель по умолчанию и порт прокси,
-сохраняет `~/.opencodex/config.json`; при желании внедряет прокси в
+сохраняет `~/.codexcommander/config.json`; при желании внедряет прокси в
 `$CODEX_HOME/config.toml` (по умолчанию `~/.codex/config.toml`) и при необходимости
 устанавливает shim автозапуска Codex.
 
 ## Жизненный цикл прокси
 
-### `ocx start [--port <port>]`
+### `ccx start [--port <port>]`
 
-Запустить proxy server (предпочтительный порт `10100`). Если этот порт занят, opencodex выбирает и
+Запустить proxy server (предпочтительный порт `10100`). Если этот порт занят, CodexCommander выбирает и
 записывает другой свободный порт. При запуске пишется состояние PID/runtime-port, а попытка
 поднять второй живой экземпляр отвергается. На старте прокси синхронизирует модели каждого
 провайдера в каталог Codex. При shutdown он восстанавливает native Codex — если только прокси не
-был запущен как managed service (`OCX_SERVICE=1`).
+был запущен как managed service (`CCX_SERVICE=1`).
 
 ```bash
-ocx start
-ocx start --port 8080
+ccx start
+ccx start --port 8080
 ```
 
-### `ocx stop`
+### `ccx stop`
 
 Остановить работающий прокси (по PID), удалить PID-file и восстановить native Codex. Если
-установлена managed background service, `ocx stop` сначала останавливает и её, чтобы она не
+установлена managed background service, `ccx stop` сначала останавливает и её, чтобы она не
 перезапустила прокси обратно. То же действие доступно из кнопки **Stop** в веб-дашборде
 (`POST /api/stop`).
 
-### `ocx restart`
+### `ccx restart`
 
 Выполнить `stop`, затем `ensure`: остановить прокси/службу, восстановить native Codex, поднять
 прокси в фоне и синхронизировать живой порт обратно в Codex.
 
-### `ocx ensure`
+### `ccx ensure`
 
 Идемпотентно убедиться, что фоновый прокси запущен, а затем синхронизировать его живой каталог
 моделей. Если `codexAutoStart` равен `false`, команда сообщает, что автозапуск отключён, и ничего
 не делает.
 
-### `ocx restore [back]` · `ocx eject [back]`
+### `ccx restore [back]` · `ccx eject [back]`
 
 Восстановить native Codex **без** остановки прокси — удалить внедрённые строки конфигурации и
 маршрутизируемые записи каталога, чтобы обычный `codex` снова работал нативно. `eject` — alias
@@ -59,26 +59,20 @@ ocx start --port 8080
 прокси, не меняя жизненный цикл самого прокси:
 
 ```bash
-ocx restore back
-ocx eject back
+ccx restore back
+ccx eject back
 ```
 
-### `ocx recover-history --legacy-openai`
-
-Явное восстановление для старых development-сборок, которые переназначали историю Codex App ещё
-до появления обратимого backup-механизма. Если база истории Codex заблокирована, сначала
-закройте Codex.
-
-### `ocx uninstall` · `ocx remove`
+### `ccx uninstall` · `ccx remove`
 
 Остановить службу и прокси, удалить службу и Codex shim, восстановить native Codex, а затем
-удалить локальную конфигурацию opencodex только если все шаги восстановления завершились успешно.
+удалить локальную конфигурацию CodexCommander только если все шаги восстановления завершились успешно.
 `remove` — alias команды `uninstall`. Очистка конфигурации требует ownership metadata, созданных
-при свежей установке; legacy- или shared-directory остаются на месте.
+канонической метадатой владения; каталоги без владельца или shared-directory остаются на месте.
 
 ## Status и health
 
-### `ocx status [--json]`
+### `ccx status [--json]`
 
 Печатает read-only диагностическую сводку: PID прокси, достижимость `/healthz`, URL дашборда,
 путь к конфигу, провайдера по умолчанию, настройку автозапуска Codex, состояние службы, состояние
@@ -94,8 +88,8 @@ redacted-строкой на каждый нездоровый аккаунт (�
 контракт `--json` этот health-блок пока не входит.
 
 ```bash
-ocx status
-ocx status --json
+ccx status
+ccx status --json
 ```
 
 Сокращённая форма JSON:
@@ -116,8 +110,8 @@ ocx status --json
     "url": "http://localhost:10100/"
   },
   "paths": {
-    "config": "/Users/example/.opencodex/config.json",
-    "pid": "/Users/example/.opencodex/ocx.pid",
+    "config": "/Users/example/.codexcommander/config.json",
+    "pid": "/Users/example/.codexcommander/codexcommander.pid",
     "runtime": "/path/to/bun"
   },
   "runtime": {
@@ -133,7 +127,7 @@ ocx status --json
   "codexAutostart": true,
   "defaultProvider": "openai",
   "service": {
-    "summary": "not installed (logs: /Users/example/.opencodex/service.log)"
+    "summary": "not installed (logs: /Users/example/.codexcommander/service.log)"
   },
   "codexShim": {
     "summary": "Codex autostart shim: not installed"
@@ -147,68 +141,68 @@ ocx status --json
 включает API-key'и, OAuth-token'ы, заголовки авторизации, содержимое запросов, email и
 идентификаторы аккаунтов.
 
-### `ocx health [--json]`
+### `ccx health [--json]`
 
 Identity-check живого прокси. Текстовый вывод сообщает PID/порт; `--json` отдаёт
 `{ok, pid, port}`. Команда завершается кодом 0 только когда прокси здоров, и 1 во всех остальных
 случаях, поэтому подходит для service probe.
 
-### `ocx ready [--json] [--wait [--timeout <seconds>]]`
+### `ccx ready [--json] [--wait [--timeout <seconds>]]`
 
 Проверяет готовность после синхронизации через не требующий аутентификации `GET /readyz`. При
 готовности возвращается `200`; для `pending` и терминального `failed` возвращается `503` с
 `Retry-After: 1`. Санитизированные поля HTTP-ответа: `{service, version, uptime, pid, port, status}`.
-Старые прокси без `/readyz` fail-closed как `unreachable`; `/healthz` — отдельная проверка liveness,
-а не готовности. По умолчанию команда выполняет одну пробу. `--wait` опрашивает до готовности или
+`/healthz` — отдельная проверка liveness, а не готовности. По умолчанию команда выполняет одну пробу.
+`--wait` опрашивает до готовности или
 тайм-аута, но при терминальном `failed` завершается немедленно. Тайм-аут по умолчанию — 45 секунд;
 `--timeout <seconds>` требует `--wait` и принимает целые положительные значения 1–300 секунд. CLI JSON выдаёт
 `{ready, status, pid, port}`, где `status` — `ready`, `pending`, `failed` или
 `unreachable`. Коды завершения: 0 — готово; 1 — не готово, pending, failed, тайм-аут или
 недоступность; 64 — недопустимые аргументы.
 
-### `ocx doctor`
+### `ccx doctor`
 
 Запускает read-only диагностику среды и связности: пути состояний и тип файловой системы,
 двойные установки WSL, proxy environment/config, достижимость ChatGPT, предупреждения о plugin'е
-и project-config Codex, а также ожидающую миграцию истории. Раздел, касающийся app-home Codex,
-тоже обнаруживает узкий mismatch runtime-home Windows Orca и при необходимости объясняет миграцию
-службы. Пути в этом выводе маскируют имя пользователя ОС. Doctor печатает подсказки по ремонту,
-но ничего не меняет.
+и project-config Codex. Раздел, касающийся app-home Codex, тоже обнаруживает узкий mismatch
+runtime-home Windows Orca и при необходимости показывает ручные шаги удаления, настройки окружения
+и повторной установки. Пути в этом выводе маскируют имя пользователя ОС. Doctor печатает подсказки
+по ремонту, но ничего не меняет.
 
 Раздел **OAuth reliability** показывает, можно ли записывать credential storage, удаётся ли
-создавать refresh single-flight/lock file'ы в `OPENCODEX_HOME`, есть ли нездоровые OAuth- или
+создавать refresh single-flight/lock file'ы в `CODEXCOMMANDER_HOME`, есть ли нездоровые OAuth- или
 Codex-pool-аккаунты (с masked-id) с подсказкой `Action:`, а также статическое OK-подтверждение,
 что путь Codex forward не подделывает metadata официального клиента. Doctor никогда не мутирует
 credential'ы и не выполняет repair.
 
 ## Синхронизация каталога
 
-### `ocx sync [--restart-codex]`
+### `ccx sync [--restart-codex]`
 
 Получить живой список моделей от каждого настроенного провайдера и заново внедрить объединённый
 каталог в Codex. Запускайте после добавления провайдера или когда нужно обновить доступные
 модели.
 
-Если всё ещё работают долгоживущие процессы Codex `app-server`, `ocx sync` предупредит, что они
+Если всё ещё работают долгоживущие процессы Codex `app-server`, `ccx sync` предупредит, что они
 могут продолжать отдавать старый in-memory список моделей, хотя файлы
-`opencodex-catalog.json` / `models_cache.json` уже обновлены. Передайте `--restart-codex`, чтобы
+`codexcommander-catalog.json` / `models_cache.json` уже обновлены. Передайте `--restart-codex`, чтобы
 послать `SIGTERM` только подходящим процессам `codex … app-server` и `codex-code-mode-host`,
 принадлежащим текущему пользователю (активные turn'ы при этом могут оборваться). Широкий
 `pkill -f codex` намеренно не используется.
 
-### `ocx sync-cache [--restart-codex]`
+### `ccx sync-cache [--restart-codex]`
 
 Инвалидировать локальный кэш model picker'а Codex, чтобы он пересобрался из активного каталога
-opencodex. Предупреждение о stale-`app-server` и optional `--restart-codex` работают так же, как
-и у `ocx sync`.
+CodexCommander. Предупреждение о stale-`app-server` и optional `--restart-codex` работают так же, как
+и у `ccx sync`.
 
 ## Фоновая служба
 
-### `ocx service [install|repair|start|stop|status|uninstall|remove]`
+### `ccx service [install|repair|start|stop|status|uninstall|remove]`
 
-Запустить opencodex как login-managed background service (macOS **launchd**, Linux **systemd user
+Запустить CodexCommander как login-managed background service (macOS **launchd**, Linux **systemd user
 unit**, Windows **Task Scheduler**), которая автоматически стартует при логине и сама
-перезапускается при crash. Запуски службы выставляют `OCX_SERVICE=1`, чтобы restart не дёргал
+перезапускается при crash. Запуски службы выставляют `CCX_SERVICE=1`, чтобы restart не дёргал
 конфиг Codex.
 
 | Подкоманда | Действие |
@@ -223,37 +217,37 @@ unit**, Windows **Task Scheduler**), которая автоматически �
 | `remove` | Alias команды `uninstall`. |
 
 ```bash
-ocx service
-ocx service install
-ocx service repair
-ocx service status
-ocx service uninstall
+ccx service
+ccx service install
+ccx service repair
+ccx service status
+ccx service uninstall
 ```
 
-На Windows `ocx service status` отдельно показывает регистрацию в Task Scheduler и
-identity-проверенную достижимость прокси OpenCodex. Он не печатает локализованную таблицу
+На Windows `ccx service status` отдельно показывает регистрацию в Task Scheduler и
+identity-проверенную достижимость прокси CodexCommander. Он не печатает локализованную таблицу
 `schtasks`, чтобы сводка оставалась читаемой на любых code page Windows.
 
 На Windows создание записи в Task Scheduler требует elevation. Когда распознан локализованный
 текст access-denied, остаётся прежний путь guidance. Если текст неразборчив, fallback использует
-владение command-shape `/create /tn opencodex-proxy /xml <non-empty-path> /f`, status 1 и
+владение command-shape `/create /tn codexcommander-proxy /xml <non-empty-path> /f`, status 1 и
 подтверждённый non-elevated token; после этого действие Startup Safety в дашборде может само
 запросить UAC. Если fallback не смог определить состояние token'а, он оставляет исходную
 scheduler-error. Чужие задачи и чужие операции никогда не получают automatic-elevation marker.
-Либо подтвердите UAC через дашборд, либо заново выполните `ocx service install` в elevated
+Либо подтвердите UAC через дашборд, либо заново выполните `ccx service install` в elevated
 окне PowerShell.
 
-### `ocx codex-shim <install|status|uninstall|remove>`
+### `ccx codex-shim <install|status|uninstall|remove>`
 
 Обернуть script-based launcher `codex` на `PATH` лёгким автозапусковым скриптом. Настоящие
 target'ы `codex.exe` не трогаются, чтобы не ломать точные вызовы исполняемого файла.
 
 Если завершённое внешнее обновление Codex перезаписало установленный shim, следующая обычная
-команда `ocx` сохранит новый стабильный launcher и восстановит shim перед выполнением запроса.
+команда `ccx` сохранит новый стабильный launcher и восстановит shim перед выполнением запроса.
 Launcher, который всё ещё меняется, не трогается, а попытка откладывается до следующего раза.
 Сбои repair'а приводят только к warning и не ломают запрошенную команду; ручной запасной путь —
-`ocx codex-shim install`. Чтобы отключить автоматику, задайте `codexShimAutoRestore: false` или
-установите `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`.
+`ccx codex-shim install`. Чтобы отключить автоматику, задайте `codexShimAutoRestore: false` или
+установите `CODEXCOMMANDER_CODEX_SHIM_AUTO_RESTORE=0`.
 
 | Подкоманда | Действие |
 | --- | --- |
@@ -263,18 +257,18 @@ Launcher, который всё ещё меняется, не трогается
 | `status` | Показать состояние shim'а (installed, stale или missing). |
 
 ```bash
-ocx codex-shim install
-ocx codex-shim status
-ocx codex-shim uninstall
+ccx codex-shim install
+ccx codex-shim status
+ccx codex-shim uninstall
 ```
 
 :::tip[Service vs Shim]
-Используйте `ocx service` для всегда работающего фонового прокси (рекомендуется). Используйте
-`ocx codex-shim` для лёгкого on-demand запуска без демона — в этом случае прокси стартует только
+Используйте `ccx service` для всегда работающего фонового прокси (рекомендуется). Используйте
+`ccx codex-shim` для лёгкого on-demand запуска без демона — в этом случае прокси стартует только
 когда запускается `codex`.
 :::
 
-### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
+### `ccx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
 
 Установить и управлять Windows tray icon со статусом. Иконка стартует при логине в Windows и даёт
 one-click управление прокси. `start` и `stop` управляют только иконкой; самим прокси нужно
@@ -283,27 +277,7 @@ one-click управление прокси. `start` и `stop` управляю�
 
 ## Дашборд
 
-### `ocx gui`
+### `ccx gui`
 
 Открыть [веб-дашборд](/guides/web-dashboard/) по адресу `http://localhost:<port>`, автоматически
 запустив прокси, если он ещё не работает.
-
-## Обновление
-
-### `ocx update [--tag latest|preview]`
-
-Самообновить opencodex из npm. Стабильные установки используют `@latest`; preview-установки
-остаются на `@preview`, если только вы не передадите `--tag latest|preview`. Команда распознаёт
-source checkout и предлагает вместо этого `git pull && bun install`, а если у вас уже новейшая
-версия для выбранного тега, становится no-op. Перед заменой файлов работающий прокси
-останавливается; установленная служба автоматически пересобирается и запускается заново, а для
-foreground-установки печатается подсказка `ocx start`.
-
-```bash
-ocx update
-ocx update --tag preview
-```
-
-Новые версии становятся доступны, когда
-[Release workflow](https://github.com/lidge-jun/opencodex/actions/workflows/release.yml)
-публикует их в npm.

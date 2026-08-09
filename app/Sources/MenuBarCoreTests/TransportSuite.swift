@@ -100,13 +100,15 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
 }
 enum TransportSuite {
     private static let identity =
-        #"{"status":"ok","service":"opencodex","version":"2.10.0","pid":42,"port":10100}"#
+        #"{"status":"ok","service":"codexcommander","version":"0.1.0","pid":42,"port":10100}"#
+
+    private static let startupHealth = #"{"status":"protected","routingKind":"codexcommander-local","routingInjected":true,"localRoutingDependency":true,"autostartEnabled":false,"rebootSafe":true,"protection":"service","serviceInstalled":true,"serviceViable":true,"serviceEnabled":true,"serviceRunning":true,"serviceStale":false,"serviceConflict":false,"shimInstalled":false,"shimHealthy":false,"shimCoverage":"none","serviceSupported":true,"platform":"darwin","diagnosticStale":false,"recommendedCommand":null,"commands":{"installService":"ccx service install","repairService":"ccx service repair","installShim":"ccx codex-shim install","restoreNative":"ccx restore"}}"#
 
     static func run(_ t: TestRunner) {
         t.test("transport: validates identity immediately before a credential-bearing request") {
             StubProtocol.reset([
                 .init(status: 200, body: identity),
-                .init(status: 200, body: #"{"status":"protected"}"#),
+                .init(status: 200, body: startupHealth),
             ])
             let client = makeClient(credential: "admin-secret")
             let status: String? = sync { try? await client.health().status }
@@ -115,14 +117,18 @@ enum TransportSuite {
             t.equal(requests.count, 2)
             t.equal(requests[0].url?.path, "/healthz")
             t.isNil(
-                requests[0].value(forHTTPHeaderField: "x-opencodex-api-key"),
+                requests[0].value(forHTTPHeaderField: "x-codexcommander-api-key"),
                 "health credential"
             )
             t.equal(requests[1].url?.path, "/api/startup-health")
             t.equal(
-                requests[1].value(forHTTPHeaderField: "x-opencodex-api-key"),
+                requests[1].value(forHTTPHeaderField: "x-codexcommander-api-key"),
                 "admin-secret"
             )
+            let credentialHeaders = (requests[1].allHTTPHeaderFields ?? [:]).filter {
+                $0.key.lowercased().hasSuffix("-api-key") && $0.value == "admin-secret"
+            }
+            t.equal(credentialHeaders.count, 1, "one management credential header")
         }
 
         t.test("transport: a foreign health response blocks the token completely") {
@@ -137,7 +143,7 @@ enum TransportSuite {
             t.equal(error, .identityMismatch)
             t.equal(StubProtocol.recorded.count, 1)
             t.isNil(
-                StubProtocol.recorded[0].value(forHTTPHeaderField: "x-opencodex-api-key"),
+                StubProtocol.recorded[0].value(forHTTPHeaderField: "x-codexcommander-api-key"),
                 "foreign health credential"
             )
         }
@@ -155,7 +161,7 @@ enum TransportSuite {
                 .init(status: 200, body: identity),
                 .init(status: 401),
                 .init(status: 200, body: identity),
-                .init(status: 200, body: #"{"status":"protected"}"#),
+                .init(status: 200, body: startupHealth),
             ])
             let client = makeClient(credential: "admin-secret")
             let status: String? = sync { try? await client.health().status }

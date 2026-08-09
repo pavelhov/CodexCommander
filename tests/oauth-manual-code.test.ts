@@ -13,10 +13,10 @@ import {
 import { parseCallbackInput } from "../src/oauth/callback-server";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-oauth-manual-code-test");
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 
 function b64url(input: Buffer | string): string {
   return Buffer.from(input).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -53,18 +53,18 @@ describe("parseCallbackInput kinds", () => {
 
 describe("OAuth manual login code fallback", () => {
   beforeEach(() => {
-    previousOpencodexHome = process.env.OPENCODEX_HOME;
+    previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     clearLoginState("xai");
   });
 
   afterEach(() => {
     cancelLoginFlow("xai");
     clearLoginState("xai");
-    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
 
@@ -180,7 +180,7 @@ describe("OAuth manual login code fallback", () => {
       expect(verifier).toBeTruthy();
       expect(b64url(createHash("sha256").update(verifier).digest())).toBe(challenge);
 
-      // Credential persisted under OPENCODEX_HOME.
+      // Credential persisted under CODEXCOMMANDER_HOME.
       const authFile = join(TEST_DIR, "auth.json");
       expect(existsSync(authFile)).toBe(true);
       expect(readFileSync(authFile, "utf8")).toContain("refresh-1");
@@ -231,10 +231,11 @@ describe("OAuth manual login code fallback", () => {
   test("route POST /api/oauth/login/code: 400 unknown provider, 400 oversized, 409 no login", async () => {
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       hostname: "127.0.0.1",
       defaultProvider: "xai",
       providers: { xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", authMode: "oauth" } },
-    } as OcxConfig);
+    } as CodexCommanderConfig);
     const server = startServer(0);
     try {
       const post = (body: unknown) => fetch(new URL("/api/oauth/login/code", server.url), {

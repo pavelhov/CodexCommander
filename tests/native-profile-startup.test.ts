@@ -28,7 +28,7 @@ import type {
   NativeProfileKeyProvider,
   NativeProfileSwitchJournalV1,
 } from "../src/codex/native-profile-types";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import {
   initializeNativeMainStartupGate,
   isNativeMainTrafficBlocked,
@@ -45,16 +45,16 @@ import {
 } from "../src/server/lifecycle";
 
 const roots: string[] = [];
-const previousOpencodexHome = process.env.OPENCODEX_HOME;
+const previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
 const previousCodexHome = process.env.CODEX_HOME;
 
-function restoreEnv(name: "OPENCODEX_HOME" | "CODEX_HOME", value: string | undefined): void {
+function restoreEnv(name: "CODEXCOMMANDER_HOME" | "CODEX_HOME", value: string | undefined): void {
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
 }
 
 afterEach(() => {
-  restoreEnv("OPENCODEX_HOME", previousOpencodexHome);
+  restoreEnv("CODEXCOMMANDER_HOME", previousCodexCommanderHome);
   restoreEnv("CODEX_HOME", previousCodexHome);
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -92,10 +92,10 @@ interface Fixture {
 }
 
 async function fixture(phase: Phase, observation: Observation, activePool = false): Promise<Fixture> {
-  const root = mkdtempSync(join(tmpdir(), "ocx-native-startup-"));
+  const root = mkdtempSync(join(tmpdir(), "ccx-native-startup-"));
   roots.push(root);
   const codexHome = join(root, "codex");
-  const configDir = join(root, "opencodex");
+  const configDir = join(root, "codexcommander");
   mkdirSync(codexHome, { recursive: true });
   mkdirSync(configDir, { recursive: true });
   writeFileSync(join(codexHome, "config.toml"), 'cli_auth_credentials_store = "file"\n');
@@ -167,10 +167,11 @@ async function fixture(phase: Phase, observation: Observation, activePool = fals
             : "{}\n";
   writeFileSync(manager.context.authPath, observed);
 
-  process.env.OPENCODEX_HOME = configDir;
+  process.env.CODEXCOMMANDER_HOME = configDir;
   process.env.CODEX_HOME = codexHome;
   const config = {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     hostname: "127.0.0.1",
     defaultProvider: "openai",
     providers: {
@@ -181,10 +182,12 @@ async function fixture(phase: Phase, observation: Observation, activePool = fals
         codexAccountMode: "pool",
       },
     },
-    codexAccounts: activePool ? [{ id: "pool-a", email: "pool@test", isMain: false }] : [],
+    codexAccounts: activePool
+      ? [{ id: "pool-a", email: "pool@test", logLabel: "p000001", isMain: false }]
+      : [],
     activeCodexAccountId: activePool ? "pool-a" : MAIN_CODEX_ACCOUNT_ID,
     autoSwitchThreshold: 0,
-  } as OcxConfig;
+  } as CodexCommanderConfig;
   saveConfig(config);
   if (activePool) {
     saveCodexAccountCredential("pool-a", {
@@ -194,7 +197,7 @@ async function fixture(phase: Phase, observation: Observation, activePool = fals
       chatgptAccountId: "pool-account",
     });
   }
-  restoreEnv("OPENCODEX_HOME", previousOpencodexHome);
+  restoreEnv("CODEXCOMMANDER_HOME", previousCodexCommanderHome);
   restoreEnv("CODEX_HOME", previousCodexHome);
   return { root, codexHome, configDir, key, manager, target, sourceProfileId: sourceRecord.id, targetProfileId: targetRecord.id };
 }
@@ -238,9 +241,9 @@ function spawnChild(f: Fixture, paths: ReturnType<typeof childPaths>): ReturnTyp
     cwd: join(import.meta.dir, ".."),
     env: {
       ...process.env,
-      OPENCODEX_HOME: f.configDir,
+      CODEXCOMMANDER_HOME: f.configDir,
       CODEX_HOME: f.codexHome,
-      OPENCODEX_ADMIN_AUTH_TOKEN: "startup-test-admin",
+      CODEXCOMMANDER_ADMIN_AUTH_TOKEN: "startup-test-admin",
       NATIVE_STARTUP_CODEX_HOME: f.codexHome,
       NATIVE_STARTUP_CONFIG_DIR: f.configDir,
       NATIVE_STARTUP_KEY: f.key.toString("base64"),
@@ -400,7 +403,7 @@ describe("native-main startup journal gate", () => {
       method: "POST",
       body: JSON.stringify({ target: f.targetProfileId, confirmedStopped: true }),
     });
-    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, {
+    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, {
       manager: faultingManager,
     });
 
@@ -430,7 +433,7 @@ describe("native-main startup journal gate", () => {
       method: "POST",
       body: JSON.stringify({ target: "missing-after-recovery", confirmedStopped: true }),
     });
-    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, {
+    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, {
       manager: f.manager,
     });
 
@@ -451,7 +454,7 @@ describe("native-main startup journal gate", () => {
       method: "POST",
       body: JSON.stringify({ target: "missing-after-recovery", confirmedStopped: true }),
     });
-    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, {
+    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, {
       manager: f.manager,
     });
 
@@ -473,7 +476,7 @@ describe("native-main startup journal gate", () => {
       homeId: f.manager.context.homeId,
     });
 
-    const otherConfigDir = join(f.root, "opencodex-other");
+    const otherConfigDir = join(f.root, "codexcommander-other");
     mkdirSync(otherConfigDir, { mode: 0o700 });
     const otherManager = new NativeProfileManager({
       codexHome: f.codexHome,
@@ -493,7 +496,7 @@ describe("native-main startup journal gate", () => {
       method: "POST",
       body: JSON.stringify({ rollback: false }),
     });
-    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, {
+    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, {
       manager: f.manager,
     });
 
@@ -553,7 +556,7 @@ describe("native-main startup journal gate", () => {
         writeFileSync(join(f.codexHome, "auth.json"), f.target);
         const recovered = await fetch(`http://127.0.0.1:${port}/api/native-main-profiles/recover`, {
           method: "POST",
-          headers: { "content-type": "application/json", "x-opencodex-api-key": "startup-test-admin" },
+          headers: { "content-type": "application/json", "x-codexcommander-api-key": "startup-test-admin" },
           body: JSON.stringify({ rollback: false }),
         });
         expect(recovered.status).toBe(200);

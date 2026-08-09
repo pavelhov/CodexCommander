@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { startupInstallArgv, type StartupInstallAction } from "../src/server/startup-action-control";
 import { handleManagementAPI } from "../src/server/management-api";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
-const config = { port: 10100, providers: {}, defaultProvider: "openai", codexAutoStart: true } as OcxConfig;
+const config = { port: 10100, providers: {}, defaultProvider: "openai", codexAutoStart: true } as CodexCommanderConfig;
 
 describe("startup install actions", () => {
   test("maps the allowlisted actions to fixed CLI argv", () => {

@@ -6,17 +6,17 @@
  * recycle to reclaim RSS, not a teardown.
  *
  * Respawn policy (matches real supervisor configs in src/service.ts):
- * - Supervised child (`OCX_SERVICE=1` + viable service): exit(1) so
+ * - Supervised child (`CCX_SERVICE=1` + viable service): exit(1) so
  *   failure-only supervisors (systemd Restart=on-failure, WinSW onfailure,
  *   Task Scheduler ERRORLEVEL loop) bring the proxy back.
- * - Otherwise: detached `ocx start --port <live>` (bypasses ensure's
+ * - Otherwise: detached `ccx start --port <live>` (bypasses ensure's
  *   codexAutoStart gate), mark recycle so exit cleanup keeps injection, exit(0).
  *   Installed-but-stale/missing service assets are NOT treated as supervised —
  *   exit(1) would leave the proxy dead with `Service: installed, stale or missing
  *   service assets` and a /healthz timeout.
  * - If detached spawn fails (sync throw or pre-start `error`): exit(1) without
  *   markRecycling — after drain the listen socket is already closed, so a latch
- *   reset cannot recover serving. Clear inherited `OCX_SERVICE` so exit cleanup
+ *   reset cannot recover serving. Clear inherited `CCX_SERVICE` so exit cleanup
  *   can restore Codex/Grok fences (ensure/tray daemons set the marker without a
  *   real supervisor). Log only a stable errno code — never the raw message
  *   (paths in ENOENT often include the OS username).
@@ -64,10 +64,8 @@ export interface SystemRestartIo {
   exitProcess?: (code: number) => void;
   schedule?: (fn: () => void | Promise<void>, ms: number) => void;
   scheduleDeadline?: (fn: () => void, ms: number) => () => void;
-  isDraining?: () => boolean;
   isShutdownDraining?: () => boolean;
-  beginShutdownDrain?: () => boolean;
-  setDraining?: (value: boolean) => void;
+  beginShutdownDrain?: () => void;
   getActiveTurnCount?: () => number;
   listenPort?: () => number | undefined;
   now?: () => number;
@@ -148,7 +146,7 @@ function resolveListenPort(): number | undefined {
 }
 
 function isSupervisedServiceChild(io: SystemRestartIo = {}): boolean {
-  if (process.env.OCX_SERVICE !== "1") return false;
+  if (process.env.CCX_SERVICE !== "1") return false;
   // Presence is not enough: stale/missing service assets report installed but will not
   // respawn after exit(1). Dashboard status/recovery must fall through to detached start.
   return (io.isServiceViable ?? isServiceViable)();
@@ -227,7 +225,7 @@ function spawnDetachedStart(
         detached: true,
         stdio: "ignore",
         windowsHide: true,
-        env: withProcessRuntimeProvenance({ ...process.env, OCX_SERVICE: "1" }),
+        env: withProcessRuntimeProvenance({ ...process.env, CCX_SERVICE: "1" }),
       });
     } catch (err) {
       reject(err);
@@ -295,7 +293,7 @@ async function completeDeferredParentExitHandoff(
     console.warn(
       `Drain-and-restart ${phase} spawn failed (${spawnFailureCode(err)}); exiting without replacement`,
     );
-    delete process.env.OCX_SERVICE;
+    delete process.env.CCX_SERVICE;
     exitProcess(1);
     return;
   }
@@ -345,9 +343,7 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo): {
   activeTurnCount: number;
   drainTimeoutMs: number;
 } {
-  const shutdownActive = io.isShutdownDraining
-    ?? io.isDraining
-    ?? isShutdownDraining;
+  const shutdownActive = io.isShutdownDraining ?? isShutdownDraining;
   const alreadyDraining = restartAccepted || shutdownActive();
   const activeTurnCount = (io.getActiveTurnCount ?? getActiveTurnCount)();
   const schedule = io.schedule ?? ((fn, ms) => { setTimeout(() => { void fn(); }, ms); });
@@ -357,9 +353,7 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo): {
     const now = io.now ?? Date.now;
     const restartDeadlineMs = now() + MEMORY_DRAIN_RESTART_MS;
     // Reject new data-plane traffic immediately (503), before the 200ms response-flush delay.
-    if (io.beginShutdownDrain) io.beginShutdownDrain();
-    else if (io.setDraining) io.setDraining(true);
-    else beginShutdownDrain();
+    (io.beginShutdownDrain ?? beginShutdownDrain)();
     schedule(async () => {
       // Preserve the live binding before drainAndShutdown (or its deadline race)
       // closes the listener and makes both the server ref and runtime metadata stale.
@@ -411,9 +405,9 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo): {
           `⚠️  Drain-and-restart spawn failed (${spawnFailureCode(err)}); exiting without replacement`,
         );
         // Listen socket is already stopped; do not markRecycling — no child to inherit fences.
-        // ensure/tray children inherit OCX_SERVICE=1 without an installed service; clear it so
+        // ensure/tray children inherit CCX_SERVICE=1 without an installed service; clear it so
         // syncCleanup can restore Codex/Grok fences instead of leaving clients pointed at a dead port.
-        delete process.env.OCX_SERVICE;
+        delete process.env.CCX_SERVICE;
         exitProcess(1);
         return;
       }

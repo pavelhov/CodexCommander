@@ -10,11 +10,11 @@ description: 默认提供方选择、模型解析顺序、组合别名、目标�
 | 字段 | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
 | `defaultProvider` | `string` | `"openai"` | 当没有更早的模型规则匹配时使用的最终提供方。它必须是一个已启用且已配置的提供方名称。 |
-| `combos?` | `Record<string, OcxComboConfig>` | `{}` | 由有序的提供方/模型目标构建出来的虚拟 `combo/<id>` 模型。 |
+| `combos?` | `Record<string, CodexCommanderComboConfig>` | `{}` | 由有序的提供方/模型目标构建出来的虚拟 `combo/<id>` 模型。 |
 
 ## 模型解析顺序
 
-opencodex 按以下顺序解析请求的模型：
+CodexCommander 按以下顺序解析请求的模型：
 
 1. 已配置的 `<account-selector>/<native-openai-model>` 命名空间，只会路由到映射的已存储 Codex
    账户。无效或不可用的精确目标会以 fail closed 方式失败。
@@ -80,7 +80,7 @@ selector 校验、冲突规则和隐私说明见[提供方配置](/reference/con
 
 ### 目录可列出性
 
-即使某个 combo 不能被列出，它仍然可以直接路由。只有当所有目标都暴露出可以交集的能力时，`ocx sync`、`/v1/models` 和 Codex 选择器才会列出它：
+即使某个 combo 不能被列出，它仍然可以直接路由。只有当所有目标都暴露出可以交集的能力时，`ccx sync`、`/v1/models` 和 Codex 选择器才会列出它：
 
 - 一个正的 `contextWindow`，来源可以是实时元数据、注册表提示，或提供方的
   `modelContextWindows` / `contextWindow`；以及
@@ -94,7 +94,7 @@ selector 校验、冲突规则和隐私说明见[提供方配置](/reference/con
 
 显式请求的 `policy/<id>`（或配置的别名）会在固定的候选白名单中，根据硬性能力要求与确定性、可解释的评分进行选择。现有模型 ID 永远不会隐式经过配置文件。支持 `candidates`（显式白名单）、可选 `alias`、`require`（`minContextWindow`、`minQuotaHeadroom`、`tools`、`imageInput`、`structuredOutput`、`localOnly`、`remoteAllowed`、`encryptedCodexTasks`、`reasoningEffort`、`serviceTier`）、`optimize`（latency/health/cost/quota 权重）、`limits.maxEstimatedCostUsd`、`unknownEvidence`（allow/penalize/exclude）。未知不会被当作零或免费。
 
-CLI：`ocx route policy list`、`ocx route policy show <id>`、`ocx route policy dry-run <id> --model-context <tokens> --tools`、`ocx route policy evaluate <id>`。
+CLI：`ccx route policy list`、`ccx route policy show <id>`、`ccx route policy dry-run <id> --model-context <tokens> --tools`、`ccx route policy evaluate <id>`。
 
 组合是显式的有序/加权目标路由与故障转移；策略配置文件是基于证据在候选之间进行选择。
 
@@ -107,8 +107,8 @@ CLI：`ocx route policy list`、`ocx route policy show <id>`、`ocx route policy
 
 返回的历史记录与路由决策负载仅暴露已脱敏的请求元数据（例如不透明的 `apiKeyId` 标签）。不包含凭证、原始提示正文或提供商密钥。
 
-CLI：`ocx logs explain <request-id>`、`ocx logs rebuild-index`、`ocx logs index-status`。
+CLI：`ccx logs explain <request-id>`、`ccx logs rebuild-index`、`ccx logs index-status`。
 
-## 迁移
+## 现有数据
 
-`routingProfiles` 是可选的增量配置：现有配置文件与旧 `usage.jsonl` 行均可原样加载。索引是一次性的——删除后会在下次查询时从 `usage.jsonl` 自动重建。系统不会自动调优。
+`routingProfiles` 是可选的增量配置：现有配置文件与不含 `routeDecision` 的 `usage.jsonl` 行均可加载。索引是一次性的——删除后会在下次查询时从 `usage.jsonl` 自动重建。系统不会自动调优。

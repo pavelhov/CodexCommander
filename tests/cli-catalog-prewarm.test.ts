@@ -1,5 +1,5 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { scheduleCatalogPrewarm } from "../src/cli/catalog-prewarm";
 
 const root = new URL("../", import.meta.url);
@@ -10,8 +10,8 @@ async function readText(path: string): Promise<string> {
 
 describe("catalog prewarm on handleStart bind", () => {
   test("scheduleCatalogPrewarm calls gatherRoutedModels(loadConfig()) once", async () => {
-    const config = { port: 9_001, providers: {}, defaultProvider: "fixture" } as OcxConfig;
-    const gatherRoutedModels = mock(async (_config: OcxConfig) => []);
+    const config = { port: 9_001, providers: {}, defaultProvider: "fixture" } as CodexCommanderConfig;
+    const gatherRoutedModels = mock(async (_config: CodexCommanderConfig) => []);
     const load = mock(() => config);
     const importCatalog = mock(async () => ({ gatherRoutedModels }));
 
@@ -29,7 +29,7 @@ describe("catalog prewarm on handleStart bind", () => {
       throw new Error("discovery failed");
     });
     scheduleCatalogPrewarm({
-      loadConfig: () => ({ port: 9_002, providers: {}, defaultProvider: "fixture" }) as OcxConfig,
+      loadConfig: () => ({ port: 9_002, providers: {}, defaultProvider: "fixture" }) as CodexCommanderConfig,
       importCatalog: async () => ({ gatherRoutedModels }),
     });
     await Bun.sleep(0);
@@ -40,7 +40,7 @@ describe("catalog prewarm on handleStart bind", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       scheduleCatalogPrewarm({
-        loadConfig: () => ({ port: 9_003, providers: {}, defaultProvider: "fixture" }) as OcxConfig,
+        loadConfig: () => ({ port: 9_003, providers: {}, defaultProvider: "fixture" }) as CodexCommanderConfig,
         importCatalog: async () => ({ gatherRoutedModels: async () => { throw Object.assign(new Error("busy"), { code: "catalog_busy" }); } }),
       });
       await Bun.sleep(0);

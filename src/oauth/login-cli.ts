@@ -4,14 +4,15 @@ import { loadConfig, saveConfig } from "../config";
 import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
 import { isPublicOAuthProvider, listOAuthProviders, runLogin } from "./index";
 import { KEY_LOGIN_PROVIDERS, isKeyLoginProvider, validateApiKey, type KeyLoginProvider } from "./key-providers";
-import type { OcxProviderConfig } from "../types";
+import type { CodexCommanderProviderConfig } from "../types";
 import { configuredAdminToken } from "../lib/admin-secrets";
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
+import { API_KEY_HEADER } from "../identity";
 
 export function runningProxyUpdateHeaders(): Headers {
   const headers = new Headers({ "Content-Type": "application/json" });
   const adminToken = configuredAdminToken();
-  if (adminToken) headers.set("X-OpenCodex-API-Key", adminToken);
+  if (adminToken) headers.set(API_KEY_HEADER, adminToken);
   return headers;
 }
 
@@ -50,7 +51,7 @@ export async function handleLogin(provider?: string): Promise<void> {
   if (isPublicOAuthProvider(name)) return handleOAuthLogin(name);
   if (isKeyLoginProvider(name)) return handleKeyLogin(name);
   console.error(
-    `Usage: ocx login <provider>\n` +
+    `Usage: ccx login <provider>\n` +
       `  OAuth login:   ${listOAuthProviders().join(", ")}\n` +
       `  API-key login: ${Object.keys(KEY_LOGIN_PROVIDERS).join(", ")}`,
   );
@@ -74,10 +75,10 @@ async function handleOAuthLogin(name: string): Promise<void> {
     rl.close();
   }
   await notifyRunningProxyAfterOAuthLogin(name);
-  console.log(`\n✅ Logged in to ${name}. Try: ocx sync`);
+  console.log(`\n✅ Logged in to ${name}. Try: ccx sync`);
 }
 
-export function providerConfigFromKeyLoginProvider(def: KeyLoginProvider, key: string, baseUrlOverride?: string): OcxProviderConfig {
+export function providerConfigFromKeyLoginProvider(def: KeyLoginProvider, key: string, baseUrlOverride?: string): CodexCommanderProviderConfig {
   return {
     adapter: def.adapter,
     baseUrl: baseUrlOverride ?? def.baseUrl,
@@ -152,7 +153,7 @@ async function handleKeyLogin(name: string): Promise<void> {
   config.providers[name] = provider;
   saveConfig(config);
   await notifyRunningProxy(name, provider);
-  console.log(`✅ ${def.label} added. Try: ocx sync`);
+  console.log(`✅ ${def.label} added. Try: ccx sync`);
 }
 
 function cloneRecordOfArrays(input: Record<string, string[]>): Record<string, string[]> {
