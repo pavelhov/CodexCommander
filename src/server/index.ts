@@ -1,4 +1,5 @@
 import { markActivity } from "../lib/sidecar-tracker";
+import { darwinPlaintextEagerRuntimeWarning } from "../lib/bun-stream-caps";
 import {
   buildWarmupCompletionFrames,
   buildWsErrorFrame,
@@ -341,9 +342,12 @@ function attachLiveSidebandUpstream(
 // const repairConfig = route.provider.responsesItemIdRepair;
 // const needsClientRewrite = imageGenCallAliases.size > 0
 // #314 gated shape: win32 always uses the terminal-aware eager relay so a keep-alive
-// upstream cannot hold Codex open after response.completed; darwin no-rewrite traffic
-// requires explicit config-eager opt-in (`auto` always stays tee on darwin).
-// selectEagerPath(process.platform, needsClientRewrite, config.streamMode ?? "auto")
+// upstream cannot hold Codex open after response.completed. Darwin `auto` admits
+// only the exact validated plaintext-V2 collaboration rewrite; every other
+// Darwin shape requires explicit config-eager opt-in.
+// selectEagerPath(process.platform, { needsClientRewrite,
+// plaintextCollaborationRewrite: plaintextCollaborationClientRewrite !== undefined },
+// config.streamMode ?? "auto")
 // relaySseEagerBounded(upstreamResponse.body, turnAc,
 // new Response(eagerBody,
 // Default shape (tee + background inspection):
@@ -399,6 +403,12 @@ export function consumeStartupCacheInvalidationWrite(): boolean {
 export function startServer(port?: number, deps: StartServerDeps = {}): Server<WsData> {
   const localAttestationSecret = deps.localAttestationSecret ?? createLocalAttestationSecret();
   const config = runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig()));
+  const eagerRuntimeWarning = darwinPlaintextEagerRuntimeWarning(
+    process.platform,
+    config.streamMode ?? "auto",
+    config.multiAgentV2MessageDelivery ?? "encrypted",
+  );
+  if (eagerRuntimeWarning) console.warn(`⚠️  ${eagerRuntimeWarning}`);
   setLiveStateStoreConfig(config);
   applyProxyEnv(config);
   assertServerAuthConfig(config);

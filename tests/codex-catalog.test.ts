@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { augmentRoutedModelsWithJawcodeMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, comboCatalogOmissionReason, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels as gatherRoutedModelsDirect, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_OPENAI_MODELS, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests, shouldExposeRoutedModel } from "../src/codex/catalog";
+import { augmentRoutedModelsWithJawcodeMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, comboCatalogOmissionReason, deriveComboCatalogModel, effectiveSubagentRoster, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels as gatherRoutedModelsDirect, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_OPENAI_MODELS, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests, shouldExposeRoutedModel } from "../src/codex/catalog";
 import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
 import {
   CURSOR_STATIC_MODELS,
@@ -1220,6 +1220,85 @@ describe("Codex catalog routed normalization", () => {
     expect(luna?.priority).toBe(3); // upstream priority restored for the upgraded entry
     expect(sol?.genuine_marker).toBe("from-installed-catalog");
     expect(sol?.priority).toBe(1);
+  });
+
+  // Proven bug: convergence's buildCatalogEntries kept genuine upstream priorities for
+  // UNFEATURED natives (gpt-5.6-terra=2, gpt-5.6-luna=3), letting them displace configured
+  // routed models from Codex's priority-sorted five-slot spawn_agent window. One shared
+  // native priority policy now backs both buildCatalogEntries and mergeCatalogEntriesForSync.
+  const FEATURED_ROSTER = [
+    "gpt-5.6-sol",
+    "opencode-go/glm-5.2",
+    "kimi/k3[1m]",
+    "xai/grok-4.5",
+    "opencode-go/deepseek-v4-flash",
+  ];
+  const ROSTER_NATIVE_SLUGS = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
+  const ROSTER_ROUTED_MODELS = [
+    { provider: "opencode-go", id: "glm-5.2", owned_by: "opencode" },
+    { provider: "kimi", id: "k3[1m]", owned_by: "kimi" },
+    { provider: "xai", id: "grok-4.5", owned_by: "xai" },
+    { provider: "opencode-go", id: "deepseek-v4-flash", owned_by: "opencode" },
+  ];
+  const topFiveVisibleSlugs = (entries: Array<{ slug?: unknown; priority?: unknown; visibility?: unknown }>) =>
+    entries
+      .filter(entry => entry.visibility === "list")
+      .sort((left, right) => Number(left.priority) - Number(right.priority))
+      .slice(0, 5)
+      .map(entry => String(entry.slug));
+
+  test("convergence-style build keeps exactly the featured five in the spawn_agent window", () => {
+    const entries = buildCatalogEntries(nativeTemplate(), ROSTER_NATIVE_SLUGS, ROSTER_ROUTED_MODELS, FEATURED_ROSTER);
+
+    // Unfeatured natives sort strictly below the featured block: upstream priorities
+    // (terra=2, luna=3) may NOT leak into the window.
+    expect(topFiveVisibleSlugs(entries)).toEqual(FEATURED_ROSTER);
+    expect(entries.find(e => e.slug === "gpt-5.6-terra")?.priority as number)
+      .toBeGreaterThan(FEATURED_ROSTER.length - 1);
+    expect(entries.find(e => e.slug === "gpt-5.6-luna")?.priority as number)
+      .toBeGreaterThan(FEATURED_ROSTER.length - 1);
+
+    for (const surface of ["v1", "v2"] as const) {
+      const roster = effectiveSubagentRoster(FEATURED_ROSTER, surface, entries);
+      expect(roster.advertised.map(model => model.model)).toEqual(FEATURED_ROSTER);
+      expect(roster.excluded).toEqual([]);
+    }
+  });
+
+  test("no featured roster preserves genuine upstream native priorities in the build", () => {
+    const entries = buildCatalogEntries(nativeTemplate(), ROSTER_NATIVE_SLUGS, ROSTER_ROUTED_MODELS);
+
+    expect(entries.find(e => e.slug === "gpt-5.6-sol")?.priority).toBe(1);
+    expect(entries.find(e => e.slug === "gpt-5.6-terra")?.priority).toBe(2);
+    expect(entries.find(e => e.slug === "gpt-5.6-luna")?.priority).toBe(3);
+  });
+
+  test("full merge path agrees with the build on the shared native priority policy", () => {
+    // Genuine on-disk natives (real display names — the upstream-upgrade branch is NOT
+    // taken) plus the featured routed rows, merged the way syncCatalogModels does it.
+    const nativesOnDisk = buildCatalogEntries(nativeTemplate(), ROSTER_NATIVE_SLUGS, []);
+    const routedEntries = buildCatalogEntries(nativeTemplate(), [], ROSTER_ROUTED_MODELS, FEATURED_ROSTER);
+    const baseline = new Map([
+      ["gpt-5.6-sol", 1],
+      ["gpt-5.6-terra", 2],
+      ["gpt-5.6-luna", 3],
+    ]);
+
+    const merged = mergeCatalogEntriesForSync(
+      nativesOnDisk, routedEntries, baseline, FEATURED_ROSTER, false, new Set(), nativeTemplate(),
+    );
+    expect(topFiveVisibleSlugs(merged)).toEqual(FEATURED_ROSTER);
+    const roster = effectiveSubagentRoster(FEATURED_ROSTER, "v1", merged);
+    expect(roster.advertised.map(model => model.model)).toEqual(FEATURED_ROSTER);
+    expect(roster.excluded).toEqual([]);
+
+    // No roster: genuine baseline priorities stay untouched through the merge.
+    const mergedNoRoster = mergeCatalogEntriesForSync(
+      nativesOnDisk, routedEntries, baseline, [], false, new Set(), nativeTemplate(),
+    );
+    expect(mergedNoRoster.find(e => e.slug === "gpt-5.6-sol")?.priority).toBe(1);
+    expect(mergedNoRoster.find(e => e.slug === "gpt-5.6-terra")?.priority).toBe(2);
+    expect(mergedNoRoster.find(e => e.slug === "gpt-5.6-luna")?.priority).toBe(3);
   });
 
   test("routed entries drop stale native max context with the template window (#992)", () => {

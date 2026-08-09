@@ -45,7 +45,7 @@ export default function SubagentDelegationSection({
           <Select
             value={model}
             options={[
-              { value: "", label: t("dash.injectionNone") },
+              { value: "", label: t("sub.policy.noPreferred") },
               ...available.map(m => ({ value: m.namespaced, label: formatNamespacedModelId(`${m.provider}/${m.model}`, t) })),
             ]}
             onChange={v => onSave({ model: v || null, effort: effort || null })}

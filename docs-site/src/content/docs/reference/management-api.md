@@ -70,11 +70,11 @@ route-specific results rather than repeating this table.
 
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
-| `GET, PUT /api/v2` | Read or change native multi-agent v2 mode and thread settings | 400 invalid settings; 502 transition or persistence failure |
-| `GET, PUT /api/injection-model` | Read or set the injected sub-agent model, effort, prompt, and guidance settings | 400 invalid model, effort, or body |
+| `GET, PUT /api/v2` | Read or change the agent protocol, V2 message delivery, and thread settings. `multiAgentV2MessageDelivery` accepts `plaintext` or the `encrypted` default; sending `encrypted` or `null` removes the explicit plaintext override. Start a new session after changing delivery. `maxConcurrentThreadsPerSession: null` restores the Codex default | 400 invalid settings; 502 transition or persistence failure |
+| `GET, PUT /api/injection-model` | Read or set the preferred guidance model, effort, prompt, and guidance settings; this is advisory unless native-default sync is enabled | 400 invalid model, effort, or body |
 | `GET, PUT /api/effort-caps` | Read or set global and sub-agent reasoning-effort ceilings | 400 invalid ladder value |
-| `GET, PUT /api/subagent-models` | Read or order the models advertised to sub-agents | 400 invalid list or more than five models |
-| `GET, PUT /api/subagent-model-fallback` | Read or set the ordered fallback chain and poll interval | 400 invalid list or poll interval |
+| `GET, PUT /api/subagent-models` | Read or order up to five requested `spawn_agent` quick picks; this does not force routing. Responses keep the persisted `chosen` list separate from the effective `advertised` list and report any `excluded` choices | 400 invalid list or more than five models |
+| `GET, PUT /api/subagent-model-fallback` | Read or set the ordered global fallback chain for spawned child turns and its poll interval | 400 invalid list or poll interval |
 | `GET /api/grok` | Read Grok managed-config status and candidate models | 400 status read failure |
 | `PUT /api/grok/selection` | Persist the excluded Grok models | 400 invalid or oversized selection |
 | `POST /api/grok/apply` | Apply persisted Grok configuration through the managed sync | 409 `grok_apply_busy`; 400/500 apply failure |
@@ -107,7 +107,7 @@ See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and rou
 | `POST /api/startup-action` | Install or repair the service or Codex shim | 400 invalid action; 500 action failure |
 | `GET, POST /api/windows-tray` | Read Windows tray state or install/start/stop/uninstall it | 400 unsupported platform/action; 500 operation failure |
 | `GET /api/diagnostics/project-config` | Read cached project configuration warnings | — |
-| `POST /api/sync` | Sync the current model catalog into Codex | 500 failed sync |
+| `POST /api/sync` | Sync the current model catalog into Codex; returns `catalogQuality` (`live`, `retained`, or `native-only`), `rehydrated`, current Codex app-server `catalogState`, and a restart hint when stale | 409 refused write authority; 500 failed sync |
 | `GET /api/update/check` | Check the `latest` or `preview` update channel | 400 invalid tag |
 | `POST /api/update/run` | Start an update job, optionally followed by restart | 400 invalid body; job-specific conflict/error status |
 | `GET /api/update/status` | Poll an update job by id | 404 unknown job |

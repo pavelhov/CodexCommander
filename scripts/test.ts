@@ -64,6 +64,23 @@ export function resolveTestShardSize(raw = process.env.OCX_TEST_SHARD_SIZE): num
   return parsed;
 }
 
+export function resolveTestStartShard(
+  shardCount: number,
+  raw = process.env.OCX_TEST_START_SHARD,
+): number {
+  if (!Number.isSafeInteger(shardCount) || shardCount < 1) {
+    throw new Error(`test shard count must be a positive integer, received ${shardCount}`);
+  }
+  if (raw === undefined || raw.trim() === "") return 1;
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > shardCount) {
+    throw new Error(
+      `OCX_TEST_START_SHARD must be an integer from 1 to ${shardCount}, received ${JSON.stringify(raw)}`,
+    );
+  }
+  return parsed;
+}
+
 export function partitionTestFiles(files: readonly string[], shardSize: number): string[][] {
   if (!Number.isSafeInteger(shardSize) || shardSize < 1) {
     throw new Error(`test shard size must be a positive integer, received ${shardSize}`);
@@ -180,18 +197,35 @@ if (import.meta.main) {
       exitCode = runIsolatedTestProcess(requestedTests.length > 0 ? requestedTests : ["./tests/"]);
     } else {
       const files = listRepositoryTestFiles();
-      const shards = partitionTestFiles(files, resolveTestShardSize());
+      const shardSize = resolveTestShardSize();
+      const shards = partitionTestFiles(files, shardSize);
       if (shards.length === 0) throw new Error("no test files found under ./tests");
+      const startShard = resolveTestStartShard(shards.length);
 
-      for (const [index, shard] of shards.entries()) {
+      if (startShard > 1) {
+        console.warn(
+          `[test] resuming at shard ${startShard}/${shards.length}; this is a partial run. `
+          + `Combine it only with a prior green 1-${startShard - 1} run from the same revision and worktree.`,
+        );
+      }
+
+      for (let index = startShard - 1; index < shards.length; index += 1) {
+        const shard = shards[index]!;
         console.warn(`[test] shard ${index + 1}/${shards.length} (${shard.length} files)`);
         exitCode = runIsolatedTestProcess(shard);
         if (exitCode !== 0) {
           console.error(`[test] shard ${index + 1}/${shards.length} failed; stopping.`);
+          console.error(
+            `[test] after fixing the failure, set OCX_TEST_START_SHARD to ${index + 1} `
+            + `and OCX_TEST_SHARD_SIZE to ${shardSize}, then run bun run test.`,
+          );
           break;
         }
       }
-      if (exitCode === 0) console.warn(`[test] all ${shards.length} shards passed.`);
+      if (exitCode === 0) {
+        if (startShard === 1) console.warn(`[test] all ${shards.length} shards passed.`);
+        else console.warn(`[test] resumed shards ${startShard}-${shards.length} passed (partial run).`);
+      }
     }
 
     const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);

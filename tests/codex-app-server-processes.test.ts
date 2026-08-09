@@ -308,6 +308,24 @@ describe("Codex app-server process matching (#476)", () => {
     expect(result.failed).toEqual([]);
   });
 
+  test("restartCodexAppServers skips same-command PID reuse when a birth time was captured", () => {
+    const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const result = restartCodexAppServers(
+      [{ pid: 42, commandLine: "codex app-server", startedAtMs: 1_000 }],
+      {
+        listSnapshots: () => [{ pid: 42, commandLine: "codex app-server" }],
+        // Same PID and command line, but a replacement worker started later.
+        readStartMs: () => 2_000,
+        kill: (pid, signal) => { signals.push({ pid, signal }); },
+        isAlive: () => true,
+        waitExit: () => false,
+      },
+    );
+
+    expect(signals).toEqual([]);
+    expect(result).toEqual({ requested: [42], stopped: [], surviving: [], failed: [] });
+  });
+
   test("afterCatalogWriteHandleAppServers warns by default and restarts when requested", () => {
     const errors: string[] = [];
     const logs: string[] = [];
@@ -381,12 +399,16 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
     expect(syncCacheCase.replace(gatedBlock, "")).not.toContain("afterCatalogWriteHandleAppServers");
   });
 
-  test("POST /api/sync attaches staleAppServerHint only after a write and never enumerates processes", () => {
+  test("POST /api/sync attaches the current catalog state and never enumerates processes directly", () => {
     const syncHandler = configRoutesSource.slice(
       configRoutesSource.indexOf('url.pathname === "/api/sync"'),
       configRoutesSource.indexOf('url.pathname === "/api/update/check"'),
     );
     expect(syncHandler).toContain("attachStaleAppServerHint(result)");
+    expect(syncHandler).toContain("deps.resetCodexAppServerCatalogStateCache ?? resetCodexAppServerCatalogStateCache");
+    expect(syncHandler).toContain("deps.collectCodexAppServerCatalogState ?? collectCodexAppServerCatalogState");
+    expect(syncHandler.indexOf("deps.resetCodexAppServerCatalogStateCache"))
+      .toBeLessThan(syncHandler.indexOf("deps.collectCodexAppServerCatalogState"));
     expect(syncHandler).not.toContain("listCodexAppServerProcesses");
     expect(syncHandler).not.toContain("afterCatalogWriteHandleAppServers");
     expect(STALE_CODEX_APP_SERVER_HINT).toContain("ocx sync --restart-codex");

@@ -260,15 +260,24 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
 
   if (url.pathname === "/api/sync" && req.method === "POST") {
     const { syncModelsToCodex } = await import("../../codex/sync");
-    const { attachStaleAppServerHint } = await import("../../codex/app-server-processes");
+    const {
+      attachStaleAppServerHint,
+      collectCodexAppServerCatalogState,
+      resetCodexAppServerCatalogStateCache,
+    } = await import("../../codex/app-server-processes");
     const { readRuntimePort, loadConfig } = await import("../../config");
     // Never use the server-captured startup object for a durable integration
     // decision. A toggle may have persisted while this process was gathering.
-    const runtime = readRuntimePort(process.pid);
-    const result = await syncModelsToCodex(runtime?.port, loadConfig(), null);
+    const runtime = (deps.readRuntimePort ?? readRuntimePort)(process.pid);
+    const result = await (deps.syncModelsToCodex ?? syncModelsToCodex)(runtime?.port, loadConfig(), null);
+    // A read taken before this sync can be memoized for five seconds. Drop it
+    // before classifying the just-written catalog so launch-time update
+    // readiness cannot be masked by a pre-write `fresh` snapshot.
+    (deps.resetCodexAppServerCatalogStateCache ?? resetCodexAppServerCatalogStateCache)();
     const status = result.status === "refused" ? 409 : (result.status === "skipped" || result.ok ? 200 : 500);
     return jsonResponse({
       ...attachStaleAppServerHint(result),
+      catalogState: (deps.collectCodexAppServerCatalogState ?? collectCodexAppServerCatalogState)(),
       ...(result.ok ? {} : { error: result.message }),
     }, status);
   }

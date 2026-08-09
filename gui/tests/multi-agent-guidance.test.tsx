@@ -130,7 +130,7 @@ test("sends model clearing through the shared save path", async () => {
   const model = host.querySelector<HTMLButtonElement>('button[role="combobox"][aria-label="Sub-agent delegation"]')!;
   await act(async () => { model.click(); });
   const none = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="option"]'))
-    .find(option => option.textContent === "None")!;
+    .find(option => option.textContent === en["sub.policy.noPreferred"])!;
   await act(async () => {
     none.click();
     await Promise.resolve();

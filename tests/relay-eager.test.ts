@@ -6,7 +6,12 @@
  */
 import { describe, expect, test } from "bun:test";
 import { createSseInspector, MAX_TAIL_ERROR_MESSAGE_CHARS } from "../src/server/relay";
-import { relaySseEagerBounded, type EagerRelayHooks } from "../src/server/relay-eager";
+import {
+  getEagerRelayCounters,
+  relaySseEagerBounded,
+  resetEagerRelayCountersForTest,
+  type EagerRelayHooks,
+} from "../src/server/relay-eager";
 import { createTranslatorBudget } from "../src/lib/translator-budget";
 import type { RequestLogContext } from "../src/server/request-log";
 
@@ -270,18 +275,34 @@ describe("relaySseEagerBounded — inline payload rewrite (#864)", () => {
     const budget = createTranslatorBudget();
     const up = controlledUpstream();
     const ac = new AbortController();
-    const { hooks } = makeHooks();
+    const { hooks, rec } = makeHooks();
+    let resolveDone!: () => void;
+    const done = new Promise<void>(resolve => { resolveDone = resolve; });
+    const previousOnDone = hooks.onDone;
+    hooks.onDone = () => {
+      previousOnDone();
+      resolveDone();
+    };
     hooks.rewritePayload = (payload: string) => payload;
     relaySseEagerBounded(up.stream, ac, hooks, { rewriteBudget: budget });
 
     up.push(enc.encode(`data: {"type":"unterminated"`));
-    await settle();
     // The shared terminal boundary now owns incomplete SSE framing, so the
     // downstream rewrite stage never retains an unterminated block.
     expect(budget.snapshot().currentBytes).toBe(0);
     ac.abort(new Error("test abort"));
-    await settle();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      done,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("relay cleanup timed out")), 2_000);
+      }),
+    ]).finally(() => {
+      if (timeout) clearTimeout(timeout);
+    });
     expect(budget.snapshot().currentBytes).toBe(0);
+    expect(rec.dones).toBe(1);
+    budget.dispose();
   });
 
   test("blocks without a data field pass through untouched before the terminal", async () => {
@@ -336,6 +357,31 @@ function joinBytes(chunks: Uint8Array[]): Uint8Array {
 }
 
 describe("relaySseEagerBounded — side-effect parity", () => {
+  test("exports scalar-only queue and lifecycle counters", async () => {
+    resetEagerRelayCountersForTest();
+    const { hooks } = makeHooks();
+    const up = controlledUpstream();
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    up.push(sse(DELTA));
+    up.push(sse(COMPLETED));
+    up.close();
+    await readAll(relayed);
+    await settle();
+
+    expect(getEagerRelayCounters()).toEqual({
+      starts: 1,
+      inFlight: 0,
+      maxInFlight: 1,
+      clientCancels: 0,
+      upstreamAborts: 0,
+      upstreamErrors: 0,
+      syntheticTerminals: 0,
+      currentQueuedBytes: 0,
+      queueHighWaterBytes: expect.any(Number),
+    });
+    expect(getEagerRelayCounters().queueHighWaterBytes).toBeGreaterThan(0);
+  });
+
   test("(a) relays bytes verbatim; terminal recorded once; completed captured; onDone once", async () => {
     const { hooks, rec } = makeHooks();
     const up = controlledUpstream();
@@ -483,6 +529,28 @@ describe("relaySseEagerBounded — bounded queue", () => {
 });
 
 describe("relaySseEagerBounded — #44 cancel semantics", () => {
+  test("counts a client cancel and its bounded upstream abort without retaining queue bytes", async () => {
+    resetEagerRelayCountersForTest();
+    const { hooks } = makeHooks();
+    const up = controlledUpstream();
+    const upstreamAc = new AbortController();
+    const reader = relaySseEagerBounded(up.stream, upstreamAc, hooks, {
+      postCancelDrainMs: 10,
+    }).getReader();
+    up.push(sse(DELTA));
+    await reader.read();
+    await reader.cancel();
+    await settle(40);
+
+    expect(getEagerRelayCounters()).toMatchObject({
+      starts: 1,
+      inFlight: 0,
+      clientCancels: 1,
+      upstreamAborts: 1,
+      currentQueuedBytes: 0,
+    });
+  });
+
   test("(c) post-cancel late terminal → recorded as completed, onClientCancel NOT fired", async () => {
     const { hooks, rec } = makeHooks();
     const up = controlledUpstream();

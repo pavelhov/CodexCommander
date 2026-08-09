@@ -565,6 +565,101 @@ describe("multiAgentGuidanceText", () => {
     expect(v1).not.toContain("Available models"); // v1 stays lean: Proactive text only
   });
 
+  test("native encrypted V2 guidance advertises only routes with encrypted-task capability", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [
+      { slug: "gpt-native", efforts: ["high", "max"], priority: 0 },
+      { slug: "xai/routed", efforts: ["high", "max"], priority: 1 },
+    ]);
+    const compatible = new Set(["gpt-native"]);
+    const checked: string[] = [];
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        encryptedCodexTasks: true,
+        injectionModel: "xai/routed",
+        subagentModels: ["gpt-native", "xai/routed"],
+        subagentModelFallback: ["xai/routed", "gpt-native"],
+      },
+      {
+        isEncryptedTaskCompatibleModel: model => {
+          checked.push(model);
+          return compatible.has(model);
+        },
+      },
+    );
+
+    expect(text).toContain('"gpt-native"');
+    expect(text).not.toContain("xai/routed");
+    expect(text).not.toContain("Preferred sub-agent");
+    expect(text).toContain("Subagent model fallback chain");
+    // The incompatible exact id is inspected for guidance only; the resolver
+    // receives the configured id unchanged and no route/catalog mutation occurs.
+    expect(checked).toContain("xai/routed");
+  });
+
+  test("native encrypted V2 guidance stays silent for an incompatible custom preferred model", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{ slug: "xai/routed", efforts: ["high", "max"] }]);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        encryptedCodexTasks: true,
+        injectionModel: "xai/routed",
+        subagentModels: ["xai/routed"],
+        subagentModelFallback: ["xai/routed"],
+        injectionPrompt: "CUSTOM model={{model}} roster={{roster}} fallback={{fallback}}",
+      },
+      { isEncryptedTaskCompatibleModel: () => false },
+    );
+
+    expect(text).toBeNull();
+  });
+
+  test("routed/plaintext-compatible V2 guidance keeps the full configured roster", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [
+      { slug: "gpt-native", efforts: ["high", "max"], priority: 0 },
+      { slug: "xai/routed", efforts: ["high", "max"], priority: 1 },
+    ]);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        encryptedCodexTasks: false,
+        injectionModel: "xai/routed",
+        subagentModels: ["gpt-native", "xai/routed"],
+        subagentModelFallback: ["xai/routed"],
+      },
+      { isEncryptedTaskCompatibleModel: () => false },
+    );
+
+    expect(text).toContain('Preferred sub-agent: model "xai/routed"');
+    expect(text).toContain('"gpt-native"');
+    expect(text).toContain('"xai/routed"');
+  });
+
+  test("encrypted-task compatibility filtering does not alter V1 Proactive guidance", async () => {
+    codexHomeFixture(V2_ON);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({
+        reasoning: "max",
+        tools: [
+          { name: "spawn_agent", namespace: "agents" },
+          { name: "send_input", namespace: "agents" },
+        ],
+      }),
+      {
+        encryptedCodexTasks: true,
+        injectionModel: "xai/routed",
+        subagentModels: ["xai/routed"],
+      },
+      { isEncryptedTaskCompatibleModel: () => false },
+    );
+
+    expect(text).toContain("Proactive multi-agent delegation is active");
+    expect(text).not.toContain("xai/routed");
+  });
+
   test("roster is silent when unset or nothing resolves in the catalog", async () => {
     const dir = codexHomeFixture(V2_ON);
     catalogFixture(dir, [{ slug: "gpt-5.5", efforts: ["low", "medium"] }]);

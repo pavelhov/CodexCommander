@@ -47,6 +47,7 @@ function baseIo(overrides: EnsureProxyLifecycleIo = {}): EnsureProxyLifecycleIo 
     reconcile: () => {},
     acquireEnsureLock: async () => ({ release: () => {} }),
     diagnoseService: () => service(),
+    waitForReady: async () => "ready",
     syncLive: async () => {},
     ensureCompanion: async () => false,
     ...overrides,
@@ -91,6 +92,191 @@ describe("shared proxy lifecycle authority", () => {
       port: 10123,
     });
     expect(calls).toEqual(["lock", "sync:10123", "release", "companion"]);
+  });
+
+  test("an already-live sync refusal is surfaced while the healthy proxy stays running", async () => {
+    const calls: string[] = [];
+    const result = await ensureProxyLifecycle({
+      io: baseIo({
+        findLive: async () => ({ pid: 42, port: 10123, source: "runtime" }),
+        acquireEnsureLock: async () => ({ release: () => { calls.push("release"); } }),
+        syncLive: async () => ({
+          status: "refused",
+          ok: false,
+          message: "Catalog publication was refused safely.",
+        }),
+        ensureCompanion: async () => { calls.push("companion"); return true; },
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      state: "running",
+      changed: false,
+      pid: 42,
+      port: 10123,
+      errorCode: "SYNC_FAILED",
+      message: "Catalog publication was refused safely.",
+    });
+    expect(calls).toEqual(["release", "companion"]);
+  });
+
+  test("an older live proxy that lacks /api/sync requires a proxy restart and stays fatal", async () => {
+    const result = await ensureProxyLifecycle({
+      io: baseIo({
+        findLive: async () => ({ pid: 42, port: 10123, source: "runtime" }),
+        syncLive: async () => ({
+          status: "failed",
+          ok: false,
+          lifecycleErrorCode: "PROXY_RESTART_REQUIRED",
+          message: "The running OpenCodex proxy must be restarted before its catalog can be synchronized.",
+        }),
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      state: "running",
+      pid: 42,
+      port: 10123,
+      errorCode: "PROXY_RESTART_REQUIRED",
+    });
+    expect(result.message).toContain("OpenCodex proxy must be restarted");
+    expect(result.codexRestartRequired).toBeUndefined();
+  });
+
+  test("integration OFF is a converged lifecycle state", async () => {
+    const result = await ensureProxyLifecycle({
+      io: baseIo({
+        findLive: async () => ({ pid: 42, port: 10123, source: "runtime" }),
+        syncLive: async () => ({
+          status: "skipped",
+          skippedReason: "desired_disabled",
+          ok: true,
+          catalogQuality: "native-only",
+          catalogState: { state: "stale" },
+        }),
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: true, state: "running", pid: 42 });
+  });
+
+  test("an explicitly external-provider native-only result is converged", async () => {
+    const result = await ensureProxyLifecycle({
+      io: baseIo({
+        findLive: async () => ({ pid: 42, port: 10123, source: "runtime" }),
+        syncLive: async () => ({
+          status: "skipped",
+          skippedReason: "external_provider",
+          ok: true,
+          catalogQuality: "native-only",
+          message: "External Codex provider preserved.",
+        }),
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: true, state: "running", pid: 42 });
+  });
+
+  test("an unclassified native-only result fails closed", async () => {
+    const result = await ensureProxyLifecycle({
+      io: baseIo({
+        findLive: async () => ({ pid: 42, port: 10123, source: "runtime" }),
+        syncLive: async () => ({
+          status: "applied",
+          ok: true,
+          catalogQuality: "native-only",
+          message: "Catalog write completed without routed rows.",
+        }),
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      state: "running",
+      pid: 42,
+      errorCode: "SYNC_FAILED",
+    });
+  });
+
+  test("a stale Codex worker catalog is a nonfatal update-ready notice", async () => {
+    const result = await ensureProxyLifecycle({
+      io: baseIo({
+        findLive: async () => ({ pid: 42, port: 10123, source: "runtime" }),
+        syncLive: async () => ({
+          status: "applied",
+          ok: true,
+          catalogQuality: "retained",
+          catalogWritten: true,
+          catalogState: {
+            state: "stale",
+            catalogMtimeMs: 2_000,
+            processes: [
+              { pid: 81, startedAtMs: 1_000 },
+              { pid: 82, startedAtMs: 3_000 },
+            ],
+          },
+        }),
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      state: "running",
+      pid: 42,
+      errorCode: "CODEX_RESTART_REQUIRED",
+      catalogUpdated: true,
+      codexRestartRequired: true,
+      staleWorkerCount: 1,
+      stoppedWorkerCount: 0,
+      survivingWorkerCount: 1,
+    });
+    expect(result.message).toContain("update ready");
+  });
+
+  test("a generic post-write hint cannot override an explicit fresh worker state", async () => {
+    const result = await ensureProxyLifecycle({
+      io: baseIo({
+        findLive: async () => ({ pid: 42, port: 10123, source: "runtime" }),
+        syncLive: async () => ({
+          status: "applied",
+          ok: true,
+          catalogQuality: "live",
+          catalogWritten: true,
+          staleAppServerHint: "restart if stale",
+          catalogState: { state: "fresh" },
+        }),
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: true, state: "running", pid: 42 });
+    expect(result.errorCode).toBeUndefined();
+    expect(result.codexRestartRequired).toBeUndefined();
+  });
+
+  test("a real sync failure remains fatal even when worker state is stale", async () => {
+    const result = await ensureProxyLifecycle({
+      io: baseIo({
+        findLive: async () => ({ pid: 42, port: 10123, source: "runtime" }),
+        syncLive: async () => ({
+          status: "applied",
+          ok: false,
+          catalogQuality: "retained",
+          catalogWritten: true,
+          catalogState: { state: "stale" },
+          message: "Catalog config injection failed.",
+        }),
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      state: "running",
+      pid: 42,
+      errorCode: "SYNC_FAILED",
+      message: "Catalog config injection failed.",
+    });
   });
 
   test("already-live ensure callers serialize managed-client sync", async () => {
@@ -224,11 +410,33 @@ describe("shared proxy lifecycle authority", () => {
           calls.push(`wait:${timeout}`);
           return { pid: 88, port: 10100, source: "runtime" };
         },
+        waitForReady: async live => {
+          calls.push(`ready:${live.pid}`);
+          return "ready";
+        },
         syncLive: async live => { calls.push(`sync:${live.pid}`); },
       }),
     });
     expect(result).toMatchObject({ ok: true, pid: 88, port: 10100, changed: true });
-    expect(calls).toEqual(["spawn:10100", "wait:20000", "sync:88"]);
+    expect(calls).toEqual(["spawn:10100", "wait:20000", "ready:88", "sync:88"]);
+  });
+
+  test("failed startup readiness retries catalog convergence and never tears down the live proxy", async () => {
+    const calls: string[] = [];
+    const result = await ensureProxyLifecycle({
+      io: baseIo({
+        spawnStart: async () => { calls.push("spawn"); },
+        waitForProxy: async () => ({ pid: 88, port: 10100, source: "runtime" }),
+        waitForReady: async () => { calls.push("ready:failed"); return "failed"; },
+        syncLive: async () => {
+          calls.push("sync:retry");
+          return { status: "applied", ok: true, catalogQuality: "retained" };
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: true, state: "running", changed: true, pid: 88 });
+    expect(calls).toEqual(["spawn", "ready:failed", "sync:retry"]);
   });
 
   test("the shared detached launcher preserves caller env and stamps runtime provenance", async () => {

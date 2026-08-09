@@ -76,22 +76,28 @@ v1에서는 opencodex가 `max` 또는 `ultra` 추론 강도에서만 업스트�
 
 Codex는 v2 네이티브→라우팅 자식 작업을 백엔드 암호화된 `encrypted_content`로만 보낼 수 있습니다. 이 페이로드는 네이티브 ChatGPT 백엔드가 읽을 수 있지만 외부 프로바이더는 읽을 수 없습니다. 이것이 알려진 [#92 제한](https://github.com/lidge-jun/opencodex/issues/92)입니다.
 
+이는 기본값인 `multiAgentV2MessageDelivery: "encrypted"`의 동작입니다. 실험적인 `"plaintext"`를 선택하면 OpenCodex는 완전하게 인식된 V2 스키마만 비예약 네임스페이스로 변환하고 Codex 응답에서 다시 `collaboration`으로 복원합니다. 따라서 Sol 같은 네이티브 부모가 V2 수명주기를 유지한 채 Kimi, Grok, DeepSeek에 위임할 수 있습니다. 단, 네이티브 자식에게 보내는 메시지를 포함해 해당 부모의 모든 V2 메시지가 평문이 됩니다. 저장 후 새 세션을 시작해야 하며, 알 수 없거나 부분적인 스키마는 변환하지 않고 안전하게 실패합니다.
+
 opencodex는 읽을 수 없거나 빈 작업을 그대로 넘기지 않고 안전하게 실패합니다.
 
 - 비네이티브 직접 라우팅은 HTTP 400과 `error.code = "unreadable_encrypted_agent_task"`를 반환하며, 암호문을 에코하지 않습니다.
 - 콤보는 해당 작업에 대해 재시도를 포함해 정규 네이티브 ChatGPT 대상만 고려합니다. 사용할 수 있는 대상이 없으면 같은 400 오류를 반환합니다.
 - 읽을 수 있는 평문 작업은 정상 라우트와 폴백 동작을 그대로 유지합니다.
 
-복구 방법은 네이티브 ChatGPT 자식을 선택하거나, 콤보에 네이티브 ChatGPT 대상을 추가하거나, 이종 프로바이더 위임에는 v1을 사용하거나, 호출자를 제어할 수 있을 때 작업을 평문 v2 `agent_message` 콘텐츠로 다시 보내는 것입니다.
+복구 방법은 네이티브 ChatGPT 자식을 선택하거나, 콤보에 네이티브 ChatGPT 대상을 추가하거나, 이종 프로바이더 위임에는 v1을 사용하거나, **Subagents → Run Policy**에서 **Plaintext compatibility**를 활성화한 뒤 새 세션을 시작하는 것입니다.
 
 ## 모드 변경
 
 ### GUI
 
 - **Dashboard** → 첫 번째 상태 셀: **v1**, **base**, **v2**를 고릅니다.
-- **Models** → **Current behavior** → **Collaboration**: **Classic v1**, **Automatic**(base), **Concurrent v2** 중에서 고릅니다.
-- **Dashboard** → **Sub-agent delegation**: 가이드 모델/추론 강도와 네이티브 기본값 사용 여부를 설정합니다.
-- **Subagents**: 로스터를 선택하고 순서를 정한 뒤 전역 폴백 체인을 설정합니다.
+- **Models** → **Current behavior** → **Collaboration**: **Classic v1**, **Codex 기본값 따르기**(base), **Concurrent v2** 중에서 고릅니다.
+- **Subagents** → **Agent Command Center**:
+  - **Active Roster**는 `spawn_agent`에 가장 먼저 알려지는 다섯 개의 모델 오버라이드를 선택하고 순서를 정합니다. 행을 드래그하거나, 화살표 버튼을 쓰거나, <kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd>를 누르세요.
+  - **Agent Library**는 현재 모델 카탈로그를 검색하고 reasoning, long context, vision, tool support 같은 사실 기반 capability로 필터링합니다. 라우트가 사용 가능하면 다섯 칸 로스터 밖의 항목도 정확한 id로 지정할 수 있습니다.
+  - **Run Policy**는 에이전트 프로토콜, V2 메시지 전달, 선호 안내 모델과 강도, 생성된 하위 작업의 전역 폴백 체인, 헬스 재확인 간격, 스레드 제한, 서브에이전트 강도 상한, 로스터 안내, 네이티브 Codex 기본값 동기화를 스테이징합니다. 정책 변경은 로스터 변경과 별도로 저장하세요.
+
+**스레드 한도**를 비워 두면 Codex 기본값으로 돌아갑니다. V2는 루트를 포함한 전체 스레드 수를, V1은 하위 스레드 수를 셉니다. 프로토콜과 한도는 새 세션에, 안내와 폴백은 이후 하위 작업에 적용되며, 실행 중인 Codex app-server에 오래된 카탈로그가 남아 있으면 페이지가 이를 알립니다.
 
 ### CLI
 

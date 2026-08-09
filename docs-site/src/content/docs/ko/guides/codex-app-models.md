@@ -104,7 +104,7 @@ Codex의 모델 캐시를 강제로 오래된 상태로 만듭니다.
 
 ## 멀티 에이전트 서피스 모드
 
-Models 페이지는 세 협업 선택지를 **Classic v1**, **Automatic**(base/upstream 기본값), **Concurrent v2**로
+Models 페이지는 세 협업 선택지를 **Classic v1**, **Follow Codex defaults**(base/upstream 동작), **Concurrent v2**로
 표시합니다. 이 컨트롤은 각 피커 항목이 사용하는 Codex 협업 서피스를 바꿉니다. 기준 모드, delegation,
 상속, 폴백, 암호화된 작업 동작은 [서브에이전트 서피스](/guides/sub-agent-surface/)를 참고하세요.
 
@@ -139,15 +139,13 @@ fast_mode = true
 ## 서브에이전트 선택
 
 Codex는 선택기에 보이는 카탈로그 항목을 `priority` 오름차순으로 정렬한 뒤 처음 다섯 개를
-`spawn_agent` model override로 노출합니다. 대시보드 Subagents 페이지에서는 bare native id 또는
-routed `provider/model` id를 최대 다섯 개 선택하고 저장할 수 있습니다. 수동으로 설정한
-`subagentModels`는 account-qualified `<selector>/<native-openai-model>` id도 지원하지만,
-대시보드는 이러한 exact id를 제공하지 않으며 페이지를 저장하면 목록이 대시보드에 표시되는 선택 항목으로
-교체됩니다. opencodex는 선택한 순서대로 낮은 카탈로그 priority를 부여합니다. account selector가
-활성화되어 있으면 bare native 선택은 selector-qualified 그룹으로 확장됩니다. 다른 모델도 정확한 id로
-직접 호출할 수 있습니다.
+`spawn_agent` model override로 노출합니다. 대시보드의 **Agent Command Center**에서는 bare native id 또는
+routed `provider/model` id를 최대 다섯 개 선택하고 저장할 수 있습니다. 이미 설정된 account-qualified
+`<selector>/<native-openai-model>` id도 보존하며 각 저장 항목이 실제로 노출됐는지 제외됐는지 보고합니다.
+opencodex는 선택한 순서대로 낮은 카탈로그 priority를 부여합니다. account selector가 활성화되어 있으면
+bare native 선택은 selector-qualified 그룹으로 확장됩니다. 다른 모델도 정확한 id로 직접 호출할 수 있습니다.
 
-featured-model 목록은 Dashboard의 **Sub-agent delegation** 선택과 별개입니다. Codex가 먼저 보여 줄
+Active Roster는 Dashboard의 **Sub-agent delegation** 선택과 별개입니다. Codex가 먼저 보여 줄
 override를 정할 뿐, 모델을 고르거나 delegation을 시작하지는 않습니다.
 
 ## 모델 상태 새로고침

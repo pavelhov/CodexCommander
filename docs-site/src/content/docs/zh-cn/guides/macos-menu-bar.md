@@ -9,19 +9,25 @@ macOS 伴侣会在菜单栏中显示最有用的 OpenCodex 状态，同时不会
 
 ## 安装
 
-1. 按照常规方式安装并启动 OpenCodex。
-2. 从对应的 GitHub 发行版下载 <code>OpenCodex-&lt;version&gt;-macos-universal.zip</code> 及其
+1. 从对应的 GitHub 发行版下载 <code>OpenCodex-&lt;version&gt;-macos-universal.zip</code> 及其
    <code>.sha256</code> 文件。
-3. 验证归档文件：
+2. 验证归档文件：
 
        shasum -a 256 -c OpenCodex-<version>-macos-universal.zip.sha256
 
-4. 解压，然后将 <code>OpenCodex.app</code> 移到**应用程序**。
-5. 打开该应用。其图标会出现在菜单栏中；它不会添加 Dock 图标。从稳定位置首次启动时会启用
+3. 解压，然后将 <code>OpenCodex.app</code> 移到**应用程序**。
+4. 打开该应用。应用已包含 Bun 运行时、代理、生产依赖和仪表板资源，因此无需另行安装 npm、Bun 或
+   <code>ocx</code>。其图标会出现在菜单栏中；它不会添加 Dock 图标。从稳定位置首次启动时会启用
    **Launch at Login**。
+
+内置运行时继续使用现有用户状态 <code>~/.opencodex</code> 和 <code>~/.codex</code>，不会将凭据复制到
+应用包或 Keychain。提供商 OAuth 和 API 密钥仍在本地仪表板中配置。
 
 在发行版使用 Developer ID 签名并完成公证之前，macOS 可能会阻止首次启动下载的应用。按住
 Control 键点按该应用，选择**打开**，然后确认**打开**。本地构建不会带有下载文件的隔离属性。
+
+内置运行时为只读。更新时应替换为最新签名的 <code>OpenCodex.app</code>；npm、Bun 或源码更新不会
+修改已签名的 <code>Contents/Resources</code>。
 
 ## 启动模式
 
@@ -47,6 +53,10 @@ Control 键点按该应用，选择**打开**，然后确认**打开**。本地�
 - **Dashboard 和 Logs** — 在默认浏览器中打开对应的本地控制面板视图。
 - **管理** — 打开所选提供商的 Accounts 或 API Keys 标签页。OAuth、API 密钥输入、重新认证、
   账户切换和提供商配置仍在控制面板中进行。
+- **Agent catalog update ready** — 当正在运行的 Codex 后台工作进程仍持有旧模型列表时显示的
+  持久、非故障卡片。OpenCodex 代理会保持健康并继续运行。
+- **Apply agent catalog…** — 打开确认窗口，在可用时显示最新请求活动，警告应用更新可能中断
+  回答，并提供 **Apply Now** 和 **Later**。
 - **Stop Proxy…** — 始终请求确认，会中断活动客户端和子智能体请求、恢复原生 Codex，并让菜单栏应用保持打开。
 - **Restart Proxy…** — 请求确认，允许代理用最多 60 秒排空活动请求，然后重新连接到替代进程。接受重启
   请求不会被显示为完成；应用会等待新进程通过身份检查。
@@ -60,6 +70,25 @@ Control 键点按该应用，选择**打开**，然后确认**打开**。本地�
 `grok` 或 `kimi`，然后点击**刷新**。被拒绝的登录显示为**需要登录**，网络或上游故障显示为
 **暂时不可用**。这些是本地代理返回的固定隐私安全原因代码，不是原始提供商错误。
 **查看所有提供商**会打开完整的 Providers 工作区。
+
+## 智能体目录更新
+
+打开应用时，它会自动将 Codex 模型目录与 OpenCodex 当前配置的提供商同步。如果没有 Codex 工作
+进程在运行，新列表会在下一个 Codex 任务中生效。如果长时间运行的工作进程载入了旧列表，OpenCodex
+仍会继续运行，面板会持续显示非故障的 **Agent catalog update ready** 卡片。
+
+选择 **Apply agent catalog…** 可查看中断风险。确认前会尽可能获取最新的活动请求数量，但请求数为
+零不会被描述为 Codex 已空闲的证明，因为操作执行前仍可能开始新请求。**Apply Now** 会再次同步，
+仅向当前用户所有、精确匹配 `codex … app-server` 和 `codex-code-mode-host` 的进程发送 `SIGTERM`，并
+短暂验证旧进程 ID 已退出。它不会使用宽泛的 `pkill`，不会重启 OpenCodex 代理，也不会关闭菜单栏
+应用。Codex 会在下一个任务中创建新的后台主机并载入当前列表。
+
+此发行版不包含 **Apply when idle**。如果回答仍在进行，请选择 **Later**，并在准备好后应用更新；
+卡片会继续保留。高级 CLI 回退命令如下：
+
+```bash
+ocx sync --restart-codex
+```
 
 ## 身份验证与隐私
 
@@ -121,6 +150,10 @@ open dist/macos/OpenCodex.app
   中点击**刷新**；Kimi 的对应操作使用 <code>kimi</code>。
 - **重启后未恢复** — 打开 **Logs** 并运行 <code>ocx status</code>。伴侣绝不会将终止进程或重写
   服务状态作为回退措施。
+- **停止、更新或冷启动后只显示原生模型** — 重新打开 OpenCodex。启动时会自动同步目录；即使
+  提供商发现暂时为空，OpenCodex 也会从受保护的最近正常目录中恢复仍在配置中的路由模型。如果
+  **Agent catalog update ready** 仍然显示，请选择 **Apply agent catalog…**，或使用
+  [智能体目录更新](#智能体目录更新)中的 CLI 回退命令。
 
 ## 卸载
 

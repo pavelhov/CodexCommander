@@ -1,16 +1,18 @@
 /**
  * Bun runtime stream-capability gate for eager SSE passthrough (#314).
  *
- * The eager bounded relay (src/server/relay-eager.ts) uses a JS async producer
- * loop — the exact shape of the Bun#32111 use-after-free (fixed upstream by Bun
- * PR #32120, merged 2026-06-21). No RELEASED Bun version is proven to carry
- * that fix yet, so `MIN_FIXED_BUN_VERSION` is null: every runtime is
- * "known-bad" until a bundle-bump commit sets it. Windows no-rewrite traffic
- * follows this runtime/config decision, preserving the explicit legacy-tee
- * safety pin. Darwin no-rewrite traffic stays on tee
- * for `auto` regardless of runtime capability and reaches eager relay only via
- * explicit `streamMode: "eager-relay"` opt-in (see
- * devlog/_fin/260731_macos_rss_retention/100_darwin_eager_optin.md).
+ * Generic JS streams with an async `pull()` remain exposed to Bun#32111 (fixed
+ * upstream by Bun PR #32120, merged 2026-06-21). No RELEASED Bun version is
+ * proven to carry that fix yet, so `MIN_FIXED_BUN_VERSION` is null: generic
+ * eager selection remains "known-bad" until a bundle-bump commit sets it.
+ *
+ * The plaintext-V2 Darwin relay is a narrower, product-owned exception: its
+ * exact single-reader implementation has a synchronous `pull()` and was
+ * positive-control tested against the bundled Bun below. `auto` may use that
+ * exact shape only for an activated plaintext collaboration rewrite; every
+ * other Darwin rewrite remains explicit-only, and `legacy-tee` is the kill
+ * switch. A Bun bump must update the validated version in the same reviewed
+ * commit after re-running the abort/backpressure diagnostic.
  *
  * Prerelease conservatism: a version carrying a prerelease suffix (e.g.
  * `1.4.0-canary.3`) is NEVER treated as fixed even when its numeric triple
@@ -23,6 +25,9 @@
  * verified to include Bun PR #32120. null = no released version is known-fixed.
  */
 export const MIN_FIXED_BUN_VERSION: string | null = null;
+
+/** Exact bundled runtime used for the Darwin plaintext-V2 relay validation. */
+export const DARWIN_PLAINTEXT_EAGER_VALIDATED_BUN_VERSION = "1.3.14";
 
 export type StreamMode = "auto" | "legacy-tee" | "eager-relay";
 
@@ -70,7 +75,18 @@ export function bunHasAsyncPullCancelFix(
 
 export type EagerRelayDecision = {
   useEagerRelay: boolean;
-  reason: "config-legacy" | "config-eager" | "auto-fixed-runtime" | "auto-known-bad";
+  reason:
+    | "config-legacy"
+    | "config-eager"
+    | "auto-fixed-runtime"
+    | "auto-known-bad"
+    | "auto-darwin-plaintext-v2";
+};
+
+export type EagerRelayRequestShape = {
+  needsClientRewrite: boolean;
+  /** The exact, fully recognized native V2 collaboration namespace was aliased. */
+  plaintextCollaborationRewrite: boolean;
 };
 
 /**
@@ -91,25 +107,53 @@ export function decideEagerRelay(
 
 /**
  * Apply the two-platform eager-relay policy to the runtime/config capability.
- * Windows preserves the decision for no-rewrite traffic. Darwin permits only
- * explicit config opt-in; `auto` remains tee even on a future fixed runtime.
- * Returns the normalized effective decision, or null when platform policy,
- * rewrite needs, or a Darwin non-config-eager mode selects tee.
+ * Windows preserves the decision for no-rewrite traffic. Darwin permits
+ * explicit config opt-in for every shape and admits `auto` only for the exact
+ * validated plaintext-V2 collaboration rewrite. Returns the normalized
+ * effective decision, or null when platform/shape policy selects tee.
  */
 export function selectEagerPath(
   platform: NodeJS.Platform,
-  needsClientRewrite: boolean,
+  shape: EagerRelayRequestShape,
   mode: StreamMode,
   version: string = Bun.version,
   minFixed: string | null = MIN_FIXED_BUN_VERSION,
 ): EagerRelayDecision | null {
-  if (needsClientRewrite || (platform !== "win32" && platform !== "darwin")) {
+  if (platform !== "win32" && platform !== "darwin") {
     return null;
   }
 
   const decision = decideEagerRelay(mode, version, minFixed);
-  if (platform === "win32") return decision;
-  return decision.reason === "config-eager" ? decision : null;
+  if (platform === "win32") return shape.needsClientRewrite ? null : decision;
+  if (decision.reason === "config-eager") return decision;
+  if (
+    mode === "auto"
+    && shape.needsClientRewrite
+    && shape.plaintextCollaborationRewrite
+    && version.trim() === DARWIN_PLAINTEXT_EAGER_VALIDATED_BUN_VERSION
+  ) {
+    return { useEagerRelay: true, reason: "auto-darwin-plaintext-v2" };
+  }
+  return null;
+}
+
+/**
+ * Privacy-safe startup diagnostic for custom/unvalidated Bun runtimes. The
+ * selector already fails closed to tee; this merely explains why.
+ */
+export function darwinPlaintextEagerRuntimeWarning(
+  platform: NodeJS.Platform,
+  mode: StreamMode,
+  delivery: "encrypted" | "plaintext",
+  version: string = Bun.version,
+): string | null {
+  if (
+    platform !== "darwin"
+    || mode !== "auto"
+    || delivery !== "plaintext"
+    || version.trim() === DARWIN_PLAINTEXT_EAGER_VALIDATED_BUN_VERSION
+  ) return null;
+  return `macOS plaintext V2 auto relay was validated on Bun ${DARWIN_PLAINTEXT_EAGER_VALIDATED_BUN_VERSION}; running Bun ${version} stays on legacy tee. Set streamMode to \"eager-relay\" only after validating this runtime.`;
 }
 
 /**

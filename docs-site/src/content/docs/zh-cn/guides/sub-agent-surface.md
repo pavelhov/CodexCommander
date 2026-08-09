@@ -76,22 +76,28 @@ fallback 不会让不兼容的加密任务变得可读。当子任务为 ChatGPT
 
 Codex 只能把 v2 原生到路由的子任务作为后端加密的 `encrypted_content` 发送。这个载荷可以被原生 ChatGPT 后端读取，但外部 provider 不能读取。这就是已知的 [#92](https://github.com/lidge-jun/opencodex/issues/92) 限制。
 
+这是默认 `multiAgentV2MessageDelivery: "encrypted"` 的行为。选择实验性的 `"plaintext"` 后，OpenCodex 只会把完整且已识别的 V2 协议转换到非保留命名空间，并在返回 Codex 前恢复为 `collaboration`。这样 Sol 等原生父级可以在保留 V2 生命周期的同时委派给 Kimi、Grok 和 DeepSeek。代价是该父级的所有 V2 消息都会成为明文，包括发给原生子级的消息。保存后必须启动新会话；未知或不完整的协议不会被猜测转换，而是继续安全失败。
+
 opencodex 会安全失败，而不是转发空任务或不可读任务：
 
 - 直接的非原生路由会返回 HTTP 400，并且 `error.code = "unreadable_encrypted_agent_task"`，不会回显密文。
 - 对于该任务，combo 只会考虑规范的原生 ChatGPT 目标，包括重试。如果没有可用目标，则返回相同的 400 错误。
 - 可读的明文任务会保持正常的路由和 fallback 行为。
 
-恢复选项是选择原生 ChatGPT 子级、在 combo 中添加原生 ChatGPT 目标、在异构 provider 委派中使用 v1，或者在你控制调用方时将任务作为明文 v2 `agent_message` 内容重新发送。
+恢复选项是选择原生 ChatGPT 子级、在 combo 中添加原生 ChatGPT 目标、在异构 provider 委派中使用 v1，或者在 **Subagents → Run Policy** 中启用 **Plaintext compatibility** 并启动新会话。
 
 ## 更改模式
 
 ### GUI
 
 - **Dashboard** → 第一个状态单元：选择 **v1**、**base** 或 **v2**。
-- **Models** → **Current behavior** → **Collaboration**：选择 **Classic v1**、**Automatic**（base）或 **Concurrent v2**。
-- **Dashboard** → **Sub-agent delegation**：设置指引模型/effort，以及原生默认值启用项。
-- **Subagents**：选择并排序 roster，并配置全局 fallback chain。
+- **Models** → **Current behavior** → **Collaboration**：选择 **Classic v1**、**遵循 Codex 默认值**（base）或 **Concurrent v2**。
+- **Subagents** → **Agent Command Center**：
+  - **Active Roster** 选择并排序最先向 `spawn_agent` 公布的五个模型 override。拖动行、使用箭头按钮，或按 <kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd>。
+  - **Agent Library** 搜索当前模型目录，并按事实能力进行筛选，例如推理、长上下文、视觉和工具支持。路由可用时，五个槽位 roster 之外的条目仍可通过精确 id 指定。
+  - **Run Policy** 暂存代理协议、V2 消息传递、首选指导模型和 effort、已生成子任务的全局回退链、健康复查间隔、线程限制、子代理 effort 上限、名单指导，以及原生 Codex 默认值同步。策略变更与 roster 变更分开保存。
+
+将 **线程上限** 留空可恢复 Codex 默认值。V2 计算包含根代理的总线程数，V1 计算子线程数。协议和上限适用于新会话，指导和回退适用于之后生成的子任务；如果正在运行的 Codex app-server 仍保留过时的 catalog，页面会予以报告。
 
 ### CLI
 

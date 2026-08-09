@@ -108,12 +108,18 @@ have expanded into selector-qualified groups.
 
 ## Changing the order
 
-The supported way to customize leading model order is to reorder `subagentModels`. The dashboard's
-**Sub-agents** page can reorder bare native and routed ids. Use `ocx agent subagents set` or edit the
-opencodex configuration for exact `<selector>/<native-openai-model>` choices; the dashboard does not
-list those choices and omits them if it saves the roster. Use at most five configured ids. With
-account selectors, one bare native choice can expand into multiple selector-qualified catalog rows,
-so configured choices and advertised rows are not necessarily one-to-one.
+The supported way to customize leading model order is to reorder `subagentModels`. In the dashboard,
+open **Subagents** → **Agent Command Center** and reorder the **Active Roster** by dragging, with the
+arrow buttons, or with <kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd>. The searchable **Agent Library** may
+contain far more than five catalog models; entries remain addressable by exact id when their route is
+available, while the five-slot limit applies only to the overrides advertised first to `spawn_agent`.
+
+Use `ocx agent subagents set` or edit the opencodex configuration to add exact
+`<selector>/<native-openai-model>` choices that are not in the live library. The command center
+preserves and can reorder already-configured exact selectors even while their provider is
+temporarily unavailable. With account selectors, one bare native choice can expand into multiple
+selector-qualified catalog rows, so configured choices and advertised rows are not necessarily
+one-to-one.
 
 There is currently no general `modelOrder`, `providerOrder`, or priority-map setting in `OcxConfig`.
 The supported ordering field is `subagentModels`; `disabledModels` and each provider's

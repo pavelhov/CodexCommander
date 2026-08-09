@@ -368,10 +368,16 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     const subRes = await handleManagementAPI(
       new Request("http://localhost/api/subagent-models"), new URL("http://localhost/api/subagent-models"), config,
     );
-    const sub = await subRes!.json() as { available: string[] };
+    const sub = await subRes!.json() as {
+      available: string[];
+      advertised: string[];
+      excluded: Array<{ configured: string; reason: string }>;
+    };
     // Bare disabled slugs flow through the existing namespaced-string filter automatically.
     expect(sub.available).not.toContain("gpt-5.6-sol");
     expect(sub.available).toContain("gpt-5.6-terra");
+    expect(sub.advertised).toEqual([]);
+    expect(sub.excluded).toEqual([]);
   });
 });
 import { ManagementRequest as Request } from "./helpers/management-auth";

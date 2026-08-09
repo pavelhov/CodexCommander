@@ -71,11 +71,11 @@ GUI-сессия в стиле loopback не выпускается.
 
 | Метод и путь | Назначение | Особые ошибки |
 | --- | --- | --- |
-| `GET, PUT /api/v2` | Прочитать или изменить нативный multi-agent v2 mode и thread settings | 400 invalid settings; 502 transition or persistence failure |
-| `GET, PUT /api/injection-model` | Прочитать или задать injected sub-agent model, effort, prompt и guidance settings | 400 invalid model, effort or body |
+| `GET, PUT /api/v2` | Прочитать или изменить протокол агента, доставку сообщений V2 и настройки потоков. `multiAgentV2MessageDelivery` принимает `plaintext` или значение по умолчанию `encrypted`; `encrypted` или `null` удаляет явное переопределение открытого текста. После изменения доставки начните новую сессию. `maxConcurrentThreadsPerSession: null` восстанавливает значение Codex по умолчанию | 400 invalid settings; 502 transition or persistence failure |
+| `GET, PUT /api/injection-model` | Прочитать или задать предпочтительную модель подсказки, effort, prompt и guidance settings; без синхронизации нативных значений это только рекомендация | 400 invalid model, effort or body |
 | `GET, PUT /api/effort-caps` | Прочитать или задать глобальный и sub-agent потолок reasoning effort | 400 invalid ladder value |
-| `GET, PUT /api/subagent-models` | Прочитать или упорядочить модели, рекламируемые подагентам | 400 invalid list or more than five models |
-| `GET, PUT /api/subagent-model-fallback` | Прочитать или задать упорядоченную fallback chain и poll interval | 400 invalid list or poll interval |
+| `GET, PUT /api/subagent-models` | Прочитать или упорядочить до пяти быстрых вариантов для `spawn_agent`; маршрутизацию это не принуждает. Ответ разделяет сохранённый список `chosen` и фактически объявленный `advertised`, а неприменённые варианты сообщает в `excluded` | 400 invalid list or more than five models |
+| `GET, PUT /api/subagent-model-fallback` | Прочитать или задать глобальный порядок fallback для созданных дочерних задач и poll interval | 400 invalid list or poll interval |
 | `GET /api/grok` | Прочитать статус управляемой конфигурации Grok и кандидатные модели | 400 status read failure |
 | `PUT /api/grok/selection` | Сохранить список исключённых моделей Grok | 400 invalid or oversized selection |
 | `POST /api/grok/apply` | Применить сохранённую конфигурацию Grok через managed sync | 409 `grok_apply_busy`; 400/500 apply failure |
@@ -108,7 +108,7 @@ GUI-сессия в стиле loopback не выпускается.
 | `POST /api/startup-action` | Установить или починить службу или Codex shim | 400 invalid action; 500 action failure |
 | `GET, POST /api/windows-tray` | Прочитать состояние Windows tray или установить/запустить/остановить/удалить её | 400 unsupported platform/action; 500 operation failure |
 | `GET /api/diagnostics/project-config` | Прочитать кэшированные предупреждения project config | — |
-| `POST /api/sync` | Синхронизировать текущий каталог моделей в Codex | 500 failed sync |
+| `POST /api/sync` | Синхронизировать каталог моделей в Codex; возвращает `catalogQuality`, `rehydrated`, `catalogState` app-server и подсказку о перезапуске | 409 отказ в праве записи; 500 ошибка синхронизации |
 | `GET /api/update/check` | Проверить канал обновлений `latest` или `preview` | 400 invalid tag |
 | `POST /api/update/run` | Запустить update job, при желании с последующим restart | 400 invalid body; job-specific conflict/error status |
 | `GET /api/update/status` | Опрашивать update job по id | 404 unknown job |

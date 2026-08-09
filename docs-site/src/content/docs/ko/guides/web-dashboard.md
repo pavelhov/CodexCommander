@@ -41,8 +41,8 @@ bun run dev:gui
 | **Providers** | 프로바이더를 추가, 편집, 기본으로 설정(활성만), 활성화/비활성화, 제거하고, 지원되는 OAuth 계정 풀과 API key 풀을 관리합니다. 현재 기본 프로바이더를 제거하면 남아 있는 첫 번째 활성 프로바이더로 전환됩니다(있는 경우); 없으면 삭제가 거부되고 현재 기본이 유지됩니다. Claude(Anthropic) OAuth 풀에서는 로그인한 계정마다 자체 5시간·주간 한도 막대가 표시되며(사용량은 자격 증명 단위), 조회 실패 시 마지막 값을 유지하고 일시 불가 상태로 표시합니다. |
 | **Add provider** | 레지스트리 기반 프리셋에서 계정 로그인, API key 서비스, 로컬 서버, custom endpoint를 검색합니다. 검색어는 Accounts, Free, Paid를 함께 찾고 탭은 둘러보기에 사용됩니다. |
 | **Codex Auth** | ChatGPT/Codex 풀 계정을 추가하고, 다음 세션 계정을 선택하고, 5시간 / 주간 / 30일 할당량을 갱신하며, 할당량 자동 전환을 켜거나 끄고 1~100% 임계값과 일시적 실패 failover를 설정합니다. |
-| **Subagents** | `spawn_agent` override 목록에 네이티브 또는 라우팅 모델을 최대 5개까지 우선 노출합니다. |
-| **Models** | 네이티브 GPT와 라우팅 모델을 켜고 끄고, 프로바이더 allowlist와 컨텍스트 상한을 설정하며, **Classic v1**, **Automatic**(base), **Concurrent v2**를 선택하고 v2 thread 수를 설정합니다. Current behavior 카드는 컨텍스트를 **Uncapped**, **Limited**, **Mixed limits**로 표시합니다. 각 라우팅 프로바이더에는 **자동 검색 켜짐** 또는 **정적 카탈로그만** 상태와 해당 프로바이더 설정 링크가 표시됩니다. |
+| **Subagents** | **Agent Command Center**에서 `spawn_agent`에 노출할 다섯 모델을 선택하고 순서를 정하며, 현재 카탈로그를 검색하고 프로토콜·V2 전달·안내·폴백·스레드 제한의 Run Policy를 설정합니다. 저장됐지만 노출되지 않은 항목은 명시적으로 보고됩니다. |
+| **Models** | 네이티브 GPT와 라우팅 모델을 켜고 끄고, 프로바이더 allowlist와 컨텍스트 상한을 설정하며, **Classic v1**, **Follow Codex defaults**, **Concurrent v2**를 선택하고 v2 thread 수를 설정합니다. Current behavior 카드는 컨텍스트를 **Uncapped**, **Limited**, **Mixed limits**로 표시합니다. 각 라우팅 프로바이더에는 **자동 검색 켜짐** 또는 **정적 카탈로그만** 상태와 해당 프로바이더 설정 링크가 표시됩니다. |
 | **Client Apps** | 설정된 로컬 클라이언트와 연결 가능한 클라이언트를 확인하고, 지원되는 관리 설정을 적용하거나 제거하며 백업을 검토합니다. Codex, Claude Code/Desktop, Grok Build, OpenCode와 파일 관리 클라이언트를 프로바이더와 구분해 한곳에서 찾을 수 있습니다. |
 | **API Access** | 다른 앱이 OpenCodex 프록시에 인증할 키를 발급하고 관리합니다. 업스트림 프로바이더 자격 증명은 Providers에 남습니다. |
 | **Logs** | 토큰, 요청한 강도와 (사용 가능한 경우) 실제 전송 강도, 실제 모델, 프로바이더, 상태, 요청 id, 소요 시간, 오류 상세가 포함된 최근 요청을 자동 갱신합니다. 어댑터가 reasoning 매개변수를 전송한 경우 상세 보기에 정확한 wire field도 표시됩니다. 클라이언트가 보낸 불투명 대화/세션 id로 필터하면 현재 로드된 Logs 링의 토큰·추정 정가 합계를 볼 수 있습니다. |

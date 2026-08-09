@@ -1,13 +1,11 @@
 /**
  * Eager bounded single-reader SSE relay (#314 mitigation, WP2).
  *
- * Replaces the tee()+background-inspection passthrough shape on runtimes where
- * the Bun#32111 async-pull cancel fix is present (src/lib/bun-stream-caps.ts):
- * ONE eager producer loop reads upstream, feeds every chunk through the shared
- * SSE inspector (terminal outcome, quota, request log, context cache), and
- * enqueues it into a byte-bounded client queue. When the queue is full the
- * producer pauses — no unbounded tee branch queue can build up behind a slow
- * client.
+ * Replaces the tee()+background-inspection passthrough shape on selected
+ * requests with ONE eager producer loop. The returned stream deliberately has
+ * a synchronous `pull()`; wrapping it in an async-pull stream reintroduces the
+ * Bun#32111 client-abort crash. The producer feeds every upstream chunk through
+ * shared inspection and enqueues it into a byte-bounded client queue.
  *
  * Honesty caveats (audit M5): full leak relief additionally assumes the
  * runtime carries the Bun#29831 fetch receive-backpressure fix and that Bun's
@@ -81,6 +79,41 @@ export type EagerRelayOptions = {
 const DEFAULT_MAX_QUEUE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_DRAIN_MS = 15_000;
 const DEFAULT_DRAIN_BYTES = 32 * 1024 * 1024;
+
+export type EagerRelayCounters = {
+  starts: number;
+  inFlight: number;
+  maxInFlight: number;
+  clientCancels: number;
+  upstreamAborts: number;
+  upstreamErrors: number;
+  syntheticTerminals: number;
+  currentQueuedBytes: number;
+  queueHighWaterBytes: number;
+};
+
+const eagerRelayCounters: EagerRelayCounters = {
+  starts: 0,
+  inFlight: 0,
+  maxInFlight: 0,
+  clientCancels: 0,
+  upstreamAborts: 0,
+  upstreamErrors: 0,
+  syntheticTerminals: 0,
+  currentQueuedBytes: 0,
+  queueHighWaterBytes: 0,
+};
+
+/** Scalar-only transport health; never contains payloads or request identity. */
+export function getEagerRelayCounters(): EagerRelayCounters {
+  return { ...eagerRelayCounters };
+}
+
+export function resetEagerRelayCountersForTest(): void {
+  for (const key of Object.keys(eagerRelayCounters) as Array<keyof EagerRelayCounters>) {
+    eagerRelayCounters[key] = 0;
+  }
+}
 
 /**
  * Relay `body` to the returned stream with eager bounded reading and inline
@@ -162,6 +195,20 @@ export function relaySseEagerBounded(
     return rewriteEncoder!.encode(tail);
   };
   let queuedBytes = 0;
+  let accountedQueuedBytes = 0;
+  const setQueuedBytes = (next: number) => {
+    const normalized = Math.max(0, next);
+    eagerRelayCounters.currentQueuedBytes = Math.max(
+      0,
+      eagerRelayCounters.currentQueuedBytes + normalized - accountedQueuedBytes,
+    );
+    accountedQueuedBytes = normalized;
+    queuedBytes = normalized;
+    eagerRelayCounters.queueHighWaterBytes = Math.max(
+      eagerRelayCounters.queueHighWaterBytes,
+      eagerRelayCounters.currentQueuedBytes,
+    );
+  };
   let cancelled = false;
   let done = false;
   const terminalSentinel = new TextEncoder().encode("data: [DONE]\n\n");
@@ -174,12 +221,41 @@ export function relaySseEagerBounded(
   upstream.signal.addEventListener("abort", wakeUp, { once: true });
 
   let controllerRef: ReadableStreamDefaultController<Uint8Array> | null = null;
+  const enqueueClient = (chunk: Uint8Array): boolean => {
+    if (!controllerRef) return false;
+    try {
+      controllerRef.enqueue(chunk);
+      setQueuedBytes(queuedBytes + chunk.byteLength);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const markClientCancelled = () => {
+    if (cancelled) return;
+    cancelled = true;
+    eagerRelayCounters.clientCancels += 1;
+  };
   let doneFired = false;
   let drainTimer: ReturnType<typeof setTimeout> | null = null;
+  eagerRelayCounters.starts += 1;
+  eagerRelayCounters.inFlight += 1;
+  eagerRelayCounters.maxInFlight = Math.max(eagerRelayCounters.maxInFlight, eagerRelayCounters.inFlight);
+  let upstreamAbortRecorded = false;
+  const recordUpstreamAbort = () => {
+    if (upstreamAbortRecorded) return;
+    upstreamAbortRecorded = true;
+    eagerRelayCounters.upstreamAborts += 1;
+  };
+  if (upstream.signal.aborted) recordUpstreamAbort();
+  else upstream.signal.addEventListener("abort", recordUpstreamAbort, { once: true });
   const fireDone = () => {
     if (doneFired) return;
     doneFired = true;
     if (drainTimer) { clearTimeout(drainTimer); drainTimer = null; }
+    upstream.signal.removeEventListener("abort", recordUpstreamAbort);
+    setQueuedBytes(0);
+    eagerRelayCounters.inFlight = Math.max(0, eagerRelayCounters.inFlight - 1);
     try { hooks.onDone(); } catch { /* lifecycle callbacks must not break teardown */ }
   };
   // A silent upstream after cancel would park the drain loop in reader.read();
@@ -225,12 +301,10 @@ export function relaySseEagerBounded(
             const rewritten = rewriteOutbound(boundedTail);
             const tail = joinUint8Arrays(rewritten, flushRewriteTail());
             if (tail.byteLength > 0 && !cancelled) {
-              queuedBytes += tail.byteLength;
-              try { controllerRef?.enqueue(tail); } catch { /* client already gone */ }
+              enqueueClient(tail);
             }
           } else if (boundedTail.byteLength > 0 && !cancelled) {
-            queuedBytes += boundedTail.byteLength;
-            try { controllerRef?.enqueue(boundedTail); } catch { /* client already gone */ }
+            enqueueClient(boundedTail);
           }
           if (!hooks.sawTerminal() && !cancelled && !upstream.signal.aborted) {
             syntheticKind = "incomplete";
@@ -249,12 +323,9 @@ export function relaySseEagerBounded(
         const terminalBounded = terminalBoundary.feed(value);
         const outbound = activeRewrite ? rewriteOutbound(terminalBounded) : terminalBounded;
         if (outbound.byteLength > 0) {
-          queuedBytes += outbound.byteLength;
-          try {
-            controllerRef?.enqueue(outbound);
-          } catch {
+          if (!enqueueClient(outbound)) {
             // Controller already torn down (client went away without cancel()).
-            cancelled = true;
+            markClientCancelled();
             drainDeadline = now() + drainMs;
             armDrainTimer();
             continue;
@@ -265,8 +336,7 @@ export function relaySseEagerBounded(
           // gateway keeps its HTTP connection alive. Add the conventional
           // sentinel and stop the single-reader relay at that protocol boundary.
           if (!terminalBoundary.doneSeen()) {
-            queuedBytes += terminalSentinel.byteLength;
-            try { controllerRef?.enqueue(terminalSentinel); } catch { /* client already gone */ }
+            enqueueClient(terminalSentinel);
           }
           reader.cancel("Responses terminal event received").catch(() => {});
           break;
@@ -276,6 +346,7 @@ export function relaySseEagerBounded(
         }
       }
     } catch (err) {
+      if (!cancelled && !upstream.signal.aborted) eagerRelayCounters.upstreamErrors += 1;
       // Upstream read failure. Distinguish genuine mid-stream reset from
       // abort-driven teardown (shutdown/cancel-expiry) — audit M3.
       if (!hooks.sawTerminal() && !cancelled && !upstream.signal.aborted) {
@@ -288,8 +359,7 @@ export function relaySseEagerBounded(
         );
         if (!hooks.sawTerminal() && !cancelled && !upstream.signal.aborted) {
           syntheticKind = "failed";
-          queuedBytes += tail.byteLength;
-          try { controllerRef?.enqueue(tail); } catch { /* client already torn down */ }
+          enqueueClient(tail);
           try { controllerRef?.close(); } catch { /* client already torn down */ }
         }
       }
@@ -302,7 +372,10 @@ export function relaySseEagerBounded(
         frameBufferBytes = 0;
       }
       terminalBoundary.dispose();
-      if (syntheticKind) hooks.onSynthetic(syntheticKind);
+      if (syntheticKind) {
+        eagerRelayCounters.syntheticTerminals += 1;
+        hooks.onSynthetic(syntheticKind);
+      }
       if (cancelled && !hooks.sawTerminal()) {
         hooks.onClientCancel();
       }
@@ -331,11 +404,11 @@ export function relaySseEagerBounded(
       // The client consumed from the queue; approximate accounting: reset on
       // pull below cap. desiredSize reflects internal queue in chunks, not
       // bytes, so we track bytes ourselves and drain optimistically.
-      queuedBytes = 0;
+      setQueuedBytes(0);
       wakeUp();
     },
     cancel() {
-      cancelled = true;
+      markClientCancelled();
       drainDeadline = now() + drainMs;
       armDrainTimer();
       wakeUp();

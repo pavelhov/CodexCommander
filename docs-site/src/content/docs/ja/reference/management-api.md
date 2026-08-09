@@ -56,11 +56,11 @@ Authorization: Bearer <admin-token>
 
 |メソッドとパス |目的 |注目すべきエラー |
 | --- | --- | --- |
-| `GET, PUT /api/v2` |ネイティブ マルチエージェント v2 モードおよびスレッド設定の読み取りまたは変更 | 400 の無効な設定。 502 移行または永続化の失敗 |
-| `GET, PUT /api/injection-model` |挿入されたサブエージェント モデル、作業量、プロンプト、およびガイダンス設定を読み取りまたは設定します。 400 無効なモデル、エフォート、またはボディ |
+| `GET, PUT /api/v2` |エージェントプロトコル、V2 メッセージ配信、スレッド設定を読み取りまたは変更します。`multiAgentV2MessageDelivery` は `plaintext` または既定の `encrypted` を受け付け、`encrypted` か `null` で明示的な平文オーバーライドを解除します。配信変更後は新しいセッションを開始してください。`maxConcurrentThreadsPerSession: null` で Codex のデフォルトに戻ります | 400 の無効な設定。 502 移行または永続化の失敗 |
+| `GET, PUT /api/injection-model` |優先ガイダンスモデル、エフォート、プロンプト、ガイダンス設定を読み取りまたは設定します。ネイティブ既定値の同期を有効にしない限り助言的です | 400 無効なモデル、エフォート、またはボディ |
 | `GET, PUT /api/effort-caps` |グローバルおよびサブエージェントの推論工数の上限を読み取りまたは設定する | 400 無効なラダー値 |
-| `GET, PUT /api/subagent-models` |サブエージェントにアドバタイズされたモデルを読むか注文する | 400 の無効なリストまたは 5 つ以上のモデル |
-| `GET, PUT /api/subagent-model-fallback` |順序付けされたフォールバック チェーンとポーリング間隔を読み取るか設定します。 400 無効なリストまたはポーリング間隔 |
+| `GET, PUT /api/subagent-models` | `spawn_agent` のクイック候補を最大 5 モデルまで読み取り、または順序付けします。ルーティングは強制しません。応答では保存済みの `chosen` と実際に有効な `advertised` を分け、反映されなかった候補を `excluded` で報告します | 400 の無効なリストまたは 5 つ以上のモデル |
+| `GET, PUT /api/subagent-model-fallback` |生成された子タスク用のグローバルな順序付きフォールバックとポーリング間隔を読み取るか設定します。 | 400 無効なリストまたはポーリング間隔 |
 | `GET /api/grok` | Grok 管理対象設定のステータスと候補モデルを読む | 400 ステータス読み取り失敗 |
 | `PUT /api/grok/selection` |除外された Grok モデルを永続化します。 400 個の無効な選択またはサイズが大きすぎる選択 |
 | `POST /api/grok/apply` |管理された同期を通じて永続的な Grok 設定を適用する | 409 `grok_apply_busy`; 400/500 適用失敗 |
@@ -92,7 +92,7 @@ Authorization: Bearer <admin-token>
 | `POST /api/startup-action` |サービスまたは Codex シムをインストールまたは修復する | 400 無効なアクション。 500 アクション失敗 |
 | `GET, POST /api/windows-tray` | Windows トレイの状態を読み取るか、インストール/起動/停止/アンインストールする | 400 のサポートされていないプラットフォーム/アクション。 500 操作失敗 |
 | `GET /api/diagnostics/project-config` |キャッシュされたプロジェクト設定の読み取りに関する警告 | — |
-| `POST /api/sync` |現在のモデル カタログを Codex に同期する | 500 回の同期に失敗しました |
+| `POST /api/sync` | 現在のモデルカタログを Codex に同期し、`catalogQuality`、`rehydrated`、Codex app-server の `catalogState`、必要な再起動ヒントを返す | 409 書き込み権限の拒否、500 同期失敗 |
 | `GET /api/update/check` | `latest` または `preview` 更新チャネルを確認してください。 400 無効なタグ |
 | `POST /api/update/run` |更新ジョブを開始し、必要に応じて再起動します。 400 無効な本文。ジョブ固有の競合/エラーのステータス |
 | `GET /api/update/status` | ID によって更新ジョブをポーリングする | 404 不明なジョブ |

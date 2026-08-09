@@ -17,12 +17,13 @@ Choose the mode for **new sessions**. Existing sessions keep the surface they st
 | Mode | What Codex gets | Who should pick it |
 | --- | --- | --- |
 | **v1** | Classic namespaced `spawn_agent`, `send_input`, `resume_agent`, and `close_agent` tools. A spawn can select another model directly. | Beginners who need reliable delegation across different providers, especially native-to-routed children. |
-| **base** (default) | Upstream model pins: GPT-5.6 Sol/Terra use v2, Luna uses v1, and unpinned models follow Codex's `multi_agent_v2` feature flag. | Most users. It follows Codex's intended surface for each model without forcing one globally. |
-| **v2** | Flat `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`, and agent-list tools, with concurrent sessions. | Users who want the newer concurrent workflow and understand model inheritance and the encrypted-task limitation below. |
+| **base** (default; **Follow Codex defaults** in the GUI) | Upstream model pins: GPT-5.6 Sol/Terra use v2, Luna uses v1, and unpinned models follow Codex's `multi_agent_v2` feature flag. | Most users. It follows Codex's intended surface for each model without forcing one globally. |
+| **v2** | Flat `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`, and agent-list tools, with concurrent sessions. | Users who want the newer concurrent workflow. Mixed-provider parents must also choose the plaintext compatibility delivery policy described below. |
 
 :::tip[Not sure?]
-Start with **base**. Choose **v1** when cross-provider delegation must work predictably. Force **v2**
-only when you specifically want its newer session model across every catalog entry.
+Start with **base**. Choose **v1** for the established cross-provider path. Force **v2** only when
+you specifically want its newer session model; enable plaintext compatibility when that V2 parent
+must delegate to Kimi, Grok, DeepSeek, or another external provider.
 :::
 
 ## How it works
@@ -94,11 +95,12 @@ skips candidates that are disabled, unroutable, backed by a disabled provider, m
 inside a cooldown, missing a usable pooled Codex account, or beyond the configured quota threshold.
 Availability probes are cached for `subagentModelFallbackPollMs` (60 seconds by default).
 
-Fallback does not make incompatible encrypted tasks readable. When the child task is encrypted for
-ChatGPT, selection is restricted to canonical native ChatGPT targets even if an external model
-appears earlier in the chain.
+Fallback does not make incompatible encrypted tasks readable. Under the default encrypted policy,
+selection is restricted to canonical native ChatGPT targets even if an external model appears
+earlier in the chain. A successfully negotiated plaintext-compatibility V2 session can use the
+normal heterogeneous fallback chain.
 
-## Encrypted v2 task delivery
+## V2 task delivery
 
 Codex may send a v2 native-to-routed child task only as backend-encrypted `encrypted_content`. That
 payload can be read by the native ChatGPT backend, but not by an external provider. This is the
@@ -112,18 +114,46 @@ opencodex fails safely instead of forwarding an empty or unreadable task:
   is available, it returns the same 400 error.
 - A readable plaintext task keeps the normal route and fallback behavior.
 
-Recovery options are to select a native ChatGPT child, add a native ChatGPT target to the combo, use
-v1 for heterogeneous-provider delegation, or resend the task as plaintext v2 `agent_message`
-content when you control the caller.
+`multiAgentV2MessageDelivery` controls the V2 parent wire policy:
+
+| Policy | Behavior |
+| --- | --- |
+| `"encrypted"` (default) | Preserves ChatGPT's reserved encrypted collaboration schema and the fail-closed behavior above. Use native ChatGPT workers or v1 for external workers. |
+| `"plaintext"` | Experimental mixed-provider V2 compatibility. For ChatGPT parents, OpenCodex presents a non-reserved plaintext collaboration namespace and restores the canonical namespace on the client-facing response. For routed parents, it marks only completed V2 message calls as plaintext. Both paths activate Codex's plaintext V2 handler, while its graph, mailbox, wait, follow-up, and completion lifecycle remain native. |
+
+The plaintext decision is made when the parent tool schema is created, before the worker model is
+known. Consequently **every** V2 `spawn_agent`, `send_message`, and `followup_task` message from that
+parent is plaintext, including messages to native ChatGPT workers. OpenCodex suppresses those
+arguments from usage-debug body samples, but the trusted local Codex runtime and proxy necessarily
+handle the plaintext to deliver it.
+
+For a canonical ChatGPT parent, plaintext compatibility activates only with the complete recognized
+V2 schema. For a routed parent, OpenCodex marks only the exact `collaboration` message calls listed
+above; lifecycle and unrelated tools remain untouched. A partial, changed, malformed, or colliding
+native schema is not guessed: OpenCodex leaves it untouched and retains the encrypted fail-closed
+guard. Delivery changes affect subsequent requests, so start a new session after saving instead of
+switching an active conversation in place.
 
 ## Changing the mode
 
 ### GUI
 
 - **Dashboard** → first stat cell: choose **v1**, **base**, or **v2**.
-- **Models** → **Current behavior** → **Collaboration**: choose **Classic v1**, **Automatic** (base), or **Concurrent v2**.
-- **Dashboard** → **Sub-agent delegation**: set guidance model/effort and the native-default opt-in.
-- **Subagents**: choose and order the roster and configure the global fallback chain.
+- **Models** → **Current behavior** → **Collaboration**: choose **Classic v1**, **Follow Codex defaults** (base), or **Concurrent v2**.
+- **Subagents** → **Agent Command Center**:
+  - **Active Roster** chooses and orders the five model overrides advertised first to `spawn_agent`.
+    Drag rows, use the arrow buttons, or press <kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd>.
+  - **Agent Library** searches the current model catalog and filters factual capabilities such as
+    reasoning, long context, vision, and tool support. Entries remain addressable by exact id when
+    their route is available, including models outside the five-slot roster.
+  - **Run Policy** stages the agent protocol, V2 message-delivery policy, preferred guidance model and effort, ordered global
+    child fallback chain, health recheck interval, thread limit, sub-agent effort ceiling, roster
+    guidance, and native Codex-default sync. Save policy changes separately from roster changes.
+
+Leaving **Thread limit** blank restores the Codex default. V2 counts total threads including the root;
+V1 counts child threads. Protocol and thread-limit changes apply to new sessions; guidance and
+fallback apply to future spawned child turns. The page reports when a running Codex app-server still
+has a stale catalog.
 
 ### CLI
 
@@ -156,18 +186,21 @@ The management API exposes matching `GET` and `PUT` endpoints:
 
 | Endpoint | Manages |
 | --- | --- |
-| `/api/v2` | Surface mode, native feature flag, and thread settings |
+| `/api/v2` | Surface mode, V2 message delivery, native feature flag, and thread settings |
 | `/api/injection-model` | Preferred model, effort, custom prompt, guidance, and native-default sync |
 | `/api/effort-caps` | Main-agent and sub-agent effort ceilings |
 | `/api/subagent-models` | Ordered roster of up to five models |
 | `/api/subagent-model-fallback` | Global fallback order and poll interval |
+
+Sending `multiAgentV2MessageDelivery: "encrypted"` or `null` to `PUT /api/v2` removes the explicit
+override and restores the encrypted default.
 
 For example:
 
 ```bash
 curl -X PUT http://localhost:10100/api/v2 \
   -H 'Content-Type: application/json' \
-  -d '{"multiAgentMode":"v2"}'
+  -d '{"multiAgentMode":"v2","multiAgentV2MessageDelivery":"plaintext"}'
 
 curl -X PUT http://localhost:10100/api/injection-model \
   -H 'Content-Type: application/json' \
@@ -195,6 +228,12 @@ to v1. A `"v2"`, `null`, or absent surface value is eligible; a real `"v1"` pin 
 
 No. Start a new Codex session after changing the mode. If a long-running App host still shows stale
 catalog state, run `ocx sync` and restart that Codex surface.
+
+### Can Sol V2 delegate to Kimi, Grok, or DeepSeek?
+
+Yes, with **V2 message delivery → Plaintext compatibility** and a fresh session. The policy keeps
+the V2 lifecycle but makes that parent's delegated messages plaintext. Leave delivery encrypted for
+the native-only confidentiality contract, or use Classic v1 for the older cross-provider surface.
 
 ### Reasoning effort
 

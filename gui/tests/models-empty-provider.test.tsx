@@ -263,7 +263,7 @@ test("Models page combines final visibility, atomic actions, discovery status, a
       automaticRadio.click();
       await new Promise(resolve => testWindow.setTimeout(resolve, 0));
     });
-    expect(container.textContent).toContain("Automatic");
+    expect(container.textContent).toContain("Follow Codex defaults");
     expect(automaticRadio.checked).toBe(true);
     await act(async () => collaborationChange.click());
 

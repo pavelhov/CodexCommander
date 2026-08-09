@@ -15,7 +15,6 @@ import {
 } from "../config";
 import { currentExternalCodexModelProvider, restoreNativeCodex } from "../codex/inject";
 import { reconcileJournal } from "../codex/journal";
-import { syncModelsToCodex } from "../codex/sync";
 import { stripGrokConfig } from "../grok/inject";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { stopProxy } from "../lib/process-control";
@@ -26,10 +25,16 @@ import {
   startServiceIfInstalled,
   stopServiceIfInstalled,
 } from "../service";
-import { findLiveProxy, type LiveProxy } from "../server/proxy-liveness";
+import {
+  findLiveProxy,
+  probeHostname,
+  probeReadiness,
+  type LiveProxy,
+} from "../server/proxy-liveness";
 import { acquireProxyEnsureLock } from "../server/proxy-start-lock";
 import { injectSystemEnv, revertSystemEnv } from "../server/system-env";
 import type { OcxConfig } from "../types";
+import { RuntimeApiError, runtimeRequest } from "./runtime-api";
 
 export type ProxyLifecycleAction = "status" | "ensure" | "start" | "stop" | "restart";
 export type ProxyLifecycleState = "running" | "stopped" | "disabled" | "blocked" | "failed";
@@ -43,7 +48,40 @@ export interface ProxyLifecycleResult {
   pid: number | null;
   port: number | null;
   message: string;
-  errorCode?: "AUTOSTART_DISABLED" | "SERVICE_BLOCKED" | "START_FAILED" | "STOP_FAILED";
+  /** Additive catalog-apply fields consumed by the native companion. */
+  catalogUpdated?: boolean;
+  codexRestartRequired?: boolean;
+  staleWorkerCount?: number;
+  stoppedWorkerCount?: number;
+  survivingWorkerCount?: number;
+  errorCode?:
+    | "AUTOSTART_DISABLED"
+    | "SERVICE_BLOCKED"
+    | "START_FAILED"
+    | "STOP_FAILED"
+    | "SYNC_FAILED"
+    | "PROXY_RESTART_REQUIRED"
+    | "CODEX_RESTART_REQUIRED";
+}
+
+export type ProxyStartupReadiness = "ready" | "failed" | "legacy" | "timeout";
+
+export interface ProxyCatalogSyncOutcome {
+  status?: "applied" | "skipped" | "refused" | "failed";
+  ok: boolean;
+  skippedReason?: "desired_disabled" | "external_provider";
+  message?: string;
+  warning?: string;
+  catalogQuality?: "live" | "retained" | "native-only";
+  catalogWritten?: boolean;
+  cacheSynced?: boolean;
+  staleAppServerHint?: string;
+  catalogState?: {
+    state?: "fresh" | "stale" | "not_running" | "unknown";
+    processes?: Array<{ pid?: number; startedAtMs?: number | null }>;
+    catalogMtimeMs?: number | null;
+  };
+  lifecycleErrorCode?: "SYNC_FAILED" | "PROXY_RESTART_REQUIRED";
 }
 
 export interface ProxyLifecycleLogger {
@@ -72,7 +110,12 @@ export interface EnsureProxyLifecycleIo {
   startService?: () => boolean;
   spawnStart?: (port?: number, env?: NodeJS.ProcessEnv) => Promise<void>;
   waitForProxy?: (timeoutMs?: number) => Promise<LiveProxy | null>;
-  syncLive?: (live: LiveProxy, config: OcxConfig, logger: ProxyLifecycleLogger) => Promise<void>;
+  waitForReady?: (live: LiveProxy, timeoutMs?: number) => Promise<ProxyStartupReadiness>;
+  syncLive?: (
+    live: LiveProxy,
+    config: OcxConfig,
+    logger: ProxyLifecycleLogger,
+  ) => Promise<ProxyCatalogSyncOutcome | void>;
   ensureCompanion?: () => Promise<boolean>;
   reconcile?: () => void;
   acquireEnsureLock?: () => Promise<{ release(): void }>;
@@ -119,6 +162,11 @@ function lifecycleResult(
     live?: LiveProxy | null;
     message: string;
     errorCode?: ProxyLifecycleResult["errorCode"];
+    catalogUpdated?: boolean;
+    codexRestartRequired?: boolean;
+    staleWorkerCount?: number;
+    stoppedWorkerCount?: number;
+    survivingWorkerCount?: number;
   },
 ): ProxyLifecycleResult {
   return {
@@ -130,6 +178,13 @@ function lifecycleResult(
     pid: options.live?.pid ?? null,
     port: options.live?.port ?? null,
     message: options.message.slice(0, 240),
+    ...(options.catalogUpdated !== undefined ? { catalogUpdated: options.catalogUpdated } : {}),
+    ...(options.codexRestartRequired !== undefined
+      ? { codexRestartRequired: options.codexRestartRequired }
+      : {}),
+    ...(options.staleWorkerCount !== undefined ? { staleWorkerCount: options.staleWorkerCount } : {}),
+    ...(options.stoppedWorkerCount !== undefined ? { stoppedWorkerCount: options.stoppedWorkerCount } : {}),
+    ...(options.survivingWorkerCount !== undefined ? { survivingWorkerCount: options.survivingWorkerCount } : {}),
     ...(options.errorCode ? { errorCode: options.errorCode } : {}),
   };
 }
@@ -182,6 +237,36 @@ export async function waitForProxy(timeoutMs = 12_000): Promise<LiveProxy | null
     await Bun.sleep(150);
   }
   return null;
+}
+
+/**
+ * Let the proxy-owned startup convergence finish before asking it to converge
+ * again through the management plane. A live legacy proxy has no `/readyz`;
+ * three identity-adjacent misses classify that case quickly instead of spending
+ * the whole startup budget polling an endpoint it cannot serve.
+ */
+export async function waitForProxyReadiness(
+  live: LiveProxy,
+  timeoutMs = 20_000,
+): Promise<ProxyStartupReadiness> {
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+  let consecutiveMisses = 0;
+  while (Date.now() < deadline) {
+    const result = await probeReadiness(live.port, {
+      ...(live.hostname ? { hostname: live.hostname } : {}),
+      ...(live.pid ? { expectedPid: live.pid } : {}),
+    });
+    if (result?.status === "ready") return "ready";
+    if (result?.status === "failed") return "failed";
+    if (result === null) {
+      consecutiveMisses += 1;
+      if (consecutiveMisses >= 3) return "legacy";
+    } else {
+      consecutiveMisses = 0;
+    }
+    await Bun.sleep(200);
+  }
+  return "timeout";
 }
 
 /** Fixed LaunchServices argv for the repo-built companion (or a registered release app). */
@@ -246,10 +331,33 @@ async function syncLiveProxy(
   live: LiveProxy,
   config: OcxConfig,
   logger: ProxyLifecycleLogger,
-): Promise<void> {
-  await syncModelsToCodex(live.port).catch(error => {
-    logger.warn(`Model sync skipped: ${error instanceof Error ? error.message : String(error)}`);
-  });
+): Promise<ProxyCatalogSyncOutcome> {
+  let catalogSync: ProxyCatalogSyncOutcome;
+  try {
+    catalogSync = await runtimeRequest<ProxyCatalogSyncOutcome>("/api/sync", {
+      method: "POST",
+      signal: AbortSignal.timeout(45_000),
+    }, {
+      baseUrl: `http://${probeHostname(live.hostname)}:${live.port}`,
+    });
+  } catch (error) {
+    const body = error instanceof RuntimeApiError && error.body && typeof error.body === "object"
+      ? error.body as Partial<ProxyCatalogSyncOutcome>
+      : null;
+    const runningProxyNeedsRestart = error instanceof RuntimeApiError && error.status === 404;
+    catalogSync = {
+      status: body?.status ?? "failed",
+      ok: false,
+      message: runningProxyNeedsRestart
+        ? "The running OpenCodex proxy must be restarted before its catalog can be synchronized."
+        : (typeof body?.message === "string" && body.message
+          ? body.message
+          : "OpenCodex is running, but its Codex model catalog did not synchronize."),
+      ...(typeof body?.warning === "string" ? { warning: body.warning } : {}),
+      lifecycleErrorCode: runningProxyNeedsRestart ? "PROXY_RESTART_REQUIRED" : "SYNC_FAILED",
+    };
+    logger.warn(catalogSync.message ?? "Model catalog sync failed.");
+  }
   await injectSystemEnv(live.port, config).catch(() => {});
   try {
     const { syncGrokConfig } = await import("../grok/sync");
@@ -263,6 +371,88 @@ async function syncLiveProxy(
   } catch (error) {
     logger.warn(`Grok Build config sync failed: ${error instanceof Error ? error.message : String(error)}`);
   }
+  return catalogSync;
+}
+
+function catalogSyncFailure(
+  result: ProxyCatalogSyncOutcome | void,
+): {
+  errorCode: "SYNC_FAILED" | "PROXY_RESTART_REQUIRED";
+  message: string;
+} | null {
+  // Test seams written before this contract returned void. Production always
+  // returns a structured result from the live management plane.
+  if (result === undefined) return null;
+  if (result.lifecycleErrorCode) {
+    return {
+      errorCode: result.lifecycleErrorCode,
+      message: result.message ?? "OpenCodex model catalog synchronization failed.",
+    };
+  }
+  const intentionalNativeOnly = result.status === "skipped"
+    && (result.skippedReason === "desired_disabled" || result.skippedReason === "external_provider")
+    && result.ok;
+  if (intentionalNativeOnly) return null;
+  if (
+    !result.ok
+    || result.status === "refused"
+    || (result.warning !== undefined && result.warning !== "")
+    || result.catalogQuality === "native-only"
+  ) {
+    return {
+      errorCode: "SYNC_FAILED",
+      message: result.message
+        ?? "OpenCodex is running, but its Codex model catalog did not converge. Run `ocx sync` and retry.",
+    };
+  }
+  return null;
+}
+
+interface CatalogSyncNotice {
+  errorCode: "CODEX_RESTART_REQUIRED";
+  message: string;
+  catalogUpdated: boolean;
+  codexRestartRequired: true;
+  staleWorkerCount: number;
+  stoppedWorkerCount: 0;
+  survivingWorkerCount: number;
+}
+
+function staleCatalogWorkerCount(result: ProxyCatalogSyncOutcome): number {
+  const status = result.catalogState;
+  if (status?.state !== "stale" || !Array.isArray(status.processes)) return 0;
+  const mtime = status.catalogMtimeMs;
+  if (typeof mtime !== "number" || !Number.isFinite(mtime)) return 0;
+  return status.processes.filter(process => (
+    typeof process.startedAtMs === "number"
+    && Number.isFinite(process.startedAtMs)
+    && process.startedAtMs <= mtime
+  )).length;
+}
+
+/** A stale Codex worker roster is actionable, but the OpenCodex proxy is healthy. */
+function catalogSyncNotice(result: ProxyCatalogSyncOutcome | void): CatalogSyncNotice | null {
+  if (!result) return null;
+  const intentionalNativeOnly = result.status === "skipped"
+    && (result.skippedReason === "desired_disabled" || result.skippedReason === "external_provider")
+    && result.ok;
+  if (intentionalNativeOnly) return null;
+  // Current proxies report catalogState. The hint-only branch retains compatibility
+  // with an older live proxy without letting a generic post-write hint override a
+  // current proxy's explicit fresh/not_running/unknown classification.
+  const updateReady = result.catalogState?.state === "stale"
+    || (result.catalogState === undefined && result.staleAppServerHint !== undefined);
+  if (!updateReady) return null;
+  const staleWorkerCount = staleCatalogWorkerCount(result);
+  return {
+    errorCode: "CODEX_RESTART_REQUIRED",
+    message: "Agent catalog update ready. Codex workers are using an older model roster.",
+    catalogUpdated: result.catalogWritten === true || result.cacheSynced === true,
+    codexRestartRequired: true,
+    staleWorkerCount,
+    stoppedWorkerCount: 0,
+    survivingWorkerCount: staleWorkerCount,
+  };
 }
 
 export async function proxyLifecycleStatus(
@@ -298,6 +488,8 @@ export async function ensureProxyLifecycle(
 
   let live = await findLive();
   let startedHere = false;
+  let syncProblem: ReturnType<typeof catalogSyncFailure> = null;
+  let syncNotice: ReturnType<typeof catalogSyncNotice> = null;
   if (!live && options.honorAutoStart && !codexAutoStartEnabled(config)) {
     return lifecycleResult(action, "disabled", {
       ok: true,
@@ -381,12 +573,46 @@ export async function ensureProxyLifecycle(
       }
       startedHere = true;
     }
-    await (io.syncLive ?? syncLiveProxy)(live, config, logger);
+    if (startedHere) {
+      const readiness = await (io.waitForReady ?? waitForProxyReadiness)(
+        live,
+        Math.min(options.waitTimeoutMs ?? 20_000, 20_000),
+      );
+      if (readiness !== "ready") {
+        logger.warn(`Startup catalog readiness was ${readiness}; retrying through the live proxy.`);
+      }
+    }
+    const syncResult = await (io.syncLive ?? syncLiveProxy)(live, config, logger);
+    syncProblem = catalogSyncFailure(syncResult);
+    syncNotice = catalogSyncNotice(syncResult);
   } finally {
     ensureLock.release();
   }
   if (options.ensureCompanion !== false) {
     await (io.ensureCompanion ?? ensureMacOSCompanionApp)().catch(() => false);
+  }
+  if (syncProblem) {
+    return lifecycleResult(action, "running", {
+      ok: false,
+      changed: startedHere,
+      live,
+      message: syncProblem.message,
+      errorCode: syncProblem.errorCode,
+    });
+  }
+  if (syncNotice) {
+    return lifecycleResult(action, "running", {
+      ok: true,
+      changed: startedHere,
+      live,
+      message: syncNotice.message,
+      errorCode: syncNotice.errorCode,
+      catalogUpdated: syncNotice.catalogUpdated,
+      codexRestartRequired: syncNotice.codexRestartRequired,
+      staleWorkerCount: syncNotice.staleWorkerCount,
+      stoppedWorkerCount: syncNotice.stoppedWorkerCount,
+      survivingWorkerCount: syncNotice.survivingWorkerCount,
+    });
   }
   return lifecycleResult(action, "running", {
     ok: true,

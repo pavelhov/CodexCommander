@@ -7,6 +7,8 @@ import {
   TRANSLATOR_MAX_CALL_ARGUMENT_BYTES,
   TRANSLATOR_MAX_TURN_BYTES,
   createTranslatorBudget,
+  finalizeTranslatorBudgetResponse,
+  markTranslatorBudgetSelfFinalizingBody,
   translatorObservedBufferSnapshot,
 } from "../src/lib/translator-budget";
 import type { AdapterEvent } from "../src/types";
@@ -20,6 +22,43 @@ async function textWithin(stream: ReadableStream<Uint8Array>, timeoutMs = 2_000)
 }
 
 describe("translator budget", () => {
+  test("self-finalizing body marker survives Response reconstruction and preserves identity", async () => {
+    const budget = createTranslatorBudget();
+    let fallbackFinalizations = 0;
+    const body = markTranslatorBudgetSelfFinalizingBody(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("ok"));
+        controller.close();
+      },
+    }));
+    const original = new Response(body, { headers: { "x-test": "original" } });
+    const reconstructed = new Response(original.body, { headers: { "x-test": "reconstructed" } });
+    const finalized = finalizeTranslatorBudgetResponse(reconstructed, budget, () => {
+      fallbackFinalizations += 1;
+      budget.dispose();
+    });
+
+    expect(finalized).toBe(reconstructed);
+    expect(await finalized.text()).toBe("ok");
+    expect(fallbackFinalizations).toBe(0);
+    budget.dispose();
+  });
+
+  test("ordinary response finalization settles its owned budget exactly once", async () => {
+    const budget = createTranslatorBudget();
+    let finalizations = 0;
+    const response = finalizeTranslatorBudgetResponse(
+      new Response("ok"),
+      budget,
+      () => {
+        finalizations += 1;
+        budget.dispose();
+      },
+    );
+    expect(await response.text()).toBe("ok");
+    expect(finalizations).toBe(1);
+  });
+
   test("one one-shot tool call admits exactly 2 MiB and rejects one byte over", () => {
     const exact = createTranslatorBudget();
     exact.openCall("call");

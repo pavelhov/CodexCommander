@@ -26,6 +26,7 @@ public final class PopoverViewController: NSViewController {
     // Scrolling body
     private let scrollView = NSScrollView()
     private let body = NSStackView()
+    private let catalogUpdate = CatalogUpdateView()
     private let activity = AgentActivityView()
     private let quotas = ProviderQuotaAccordionView()
     private let resultBanner = makeLabel("", font: Theme.caption, color: Theme.muted)
@@ -46,6 +47,7 @@ public final class PopoverViewController: NSViewController {
     public var onStart: (() -> Void)?
     public var onStop: (() -> Void)?
     public var onRestart: (() -> Void)?
+    public var onApplyCodexCatalog: (() -> Void)?
     public var onQuitMenuBar: (() -> Void)?
     public var onStopAndQuit: (() -> Void)?
     public var onLaunchAtLoginChange: ((Bool) -> Void)?
@@ -81,16 +83,19 @@ public final class PopoverViewController: NSViewController {
         startupMode.onOpenSettings = { [weak self] in
             self?.onOpenLoginSettings?()
         }
+        catalogUpdate.onApply = { [weak self] in
+            self?.onApplyCodexCatalog?()
+        }
 
         body.orientation = .vertical
         body.alignment = .leading
         body.spacing = Theme.sectionGap
         body.setViews(
-            [activity, activitySeparator, quotas, resultBanner, guidanceLabel, commandField],
+            [catalogUpdate, activity, activitySeparator, quotas, resultBanner, guidanceLabel, commandField],
             in: .top
         )
         body.translatesAutoresizingMaskIntoConstraints = false
-        for item in [activity, activitySeparator, quotas, resultBanner, guidanceLabel, commandField] {
+        for item in [catalogUpdate, activity, activitySeparator, quotas, resultBanner, guidanceLabel, commandField] {
             item.translatesAutoresizingMaskIntoConstraints = false
             item.widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
         }
@@ -272,6 +277,20 @@ public final class PopoverViewController: NSViewController {
         restartButton.alphaValue = restartButton.isEnabled ? 1 : 0.45
     }
 
+    public func showCatalogUpdate(staleWorkerCount: Int?) {
+        catalogUpdate.update(staleWorkerCount: staleWorkerCount)
+        refreshSize()
+    }
+
+    public func hideCatalogUpdate() {
+        catalogUpdate.hide()
+        refreshSize()
+    }
+
+    public func setCatalogApplyEnabled(_ enabled: Bool) {
+        catalogUpdate.setApplyEnabled(enabled)
+    }
+
     public func setLifecycleControlsEnabled(_ enabled: Bool) {
         lifecycleControlsAllowed = enabled
         lifecycleButton.isEnabled = enabled && snapshot.map { lifecycleActionable($0.state) } == true
@@ -410,6 +429,17 @@ public final class PopoverViewController: NSViewController {
     package var activityView: AgentActivityView { activity }
     package var headerView: StatusHeaderView { header }
     package var startupModeView: StartupModeView { startupMode }
+    package var catalogUpdateVisible: Bool { !catalogUpdate.isHidden }
+    package var catalogUpdateDetail: String { catalogUpdate.detailText }
+    package var catalogUpdateButtonTitle: String { catalogUpdate.buttonTitle }
+    package var catalogUpdateButtonEnabled: Bool { catalogUpdate.buttonEnabled }
+    package var catalogUpdateAccessibilityLabel: String? {
+        catalogUpdate.accessibilityLabel()
+    }
+    package var catalogUpdateButtonAccessibilityLabel: String? {
+        catalogUpdate.buttonAccessibilityLabel
+    }
+    package func activateCatalogUpdateForTesting() { catalogUpdate.activateForTesting() }
     package var footerTitles: [String] {
         [
             dashboardButton.title,

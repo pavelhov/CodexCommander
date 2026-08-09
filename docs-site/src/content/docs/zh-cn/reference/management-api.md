@@ -56,11 +56,11 @@ Authorization: Bearer <admin-token>
 
 | 方法和路径 | 用途 | 典型错误 |
 | --- | --- | --- |
-| `GET, PUT /api/v2` | 读取或更改原生多代理 v2 模式和线程设置 | 400 无效设置；502 过渡或持久化失败 |
-| `GET, PUT /api/injection-model` | 读取或设置注入的子代理模型、努力程度、提示词和指导设置 | 400 无效模型、努力程度或请求体 |
+| `GET, PUT /api/v2` | 读取或更改代理协议、V2 消息传递和线程设置。`multiAgentV2MessageDelivery` 接受 `plaintext` 或默认的 `encrypted`；发送 `encrypted` 或 `null` 会移除显式明文覆盖。更改传递后请启动新会话。`maxConcurrentThreadsPerSession: null` 恢复 Codex 默认值 | 400 无效设置；502 过渡或持久化失败 |
+| `GET, PUT /api/injection-model` | 读取或设置首选指导模型、努力程度、提示词和指导设置；未启用原生默认值同步时仅供指导 | 400 无效模型、努力程度或请求体 |
 | `GET, PUT /api/effort-caps` | 读取或设置全局和子代理推理努力上限 | 400 无效的阶梯值 |
-| `GET, PUT /api/subagent-models` | 读取或排序向子代理公开的模型 | 400 无效列表或超过五个模型 |
-| `GET, PUT /api/subagent-model-fallback` | 读取或设置有序回退链和轮询间隔 | 400 无效列表或轮询间隔 |
+| `GET, PUT /api/subagent-models` | 读取或排序最多五个 `spawn_agent` 快速选择；不会强制路由。响应会区分已保存的 `chosen` 列表与实际生效的 `advertised` 列表，并在 `excluded` 中报告未生效的选择 | 400 无效列表或超过五个模型 |
+| `GET, PUT /api/subagent-model-fallback` | 读取或设置已生成子任务的全局回退顺序和轮询间隔 | 400 无效列表或轮询间隔 |
 | `GET /api/grok` | 读取 Grok 托管配置状态和候选模型 | 400 状态读取失败 |
 | `PUT /api/grok/selection` | 持久化被排除的 Grok 模型 | 400 选择无效或超出大小限制 |
 | `POST /api/grok/apply` | 通过托管同步应用已持久化的 Grok 配置 | 409 `grok_apply_busy`；400/500 应用失败 |
@@ -92,7 +92,7 @@ Authorization: Bearer <admin-token>
 | `POST /api/startup-action` | 安装或修复服务或 Codex shim | 400 无效动作；500 动作失败 |
 | `GET, POST /api/windows-tray` | 读取 Windows 托盘状态，或安装、启动、停止、卸载它 | 400 不支持的平台/动作；500 操作失败 |
 | `GET /api/diagnostics/project-config` | 读取缓存的项目配置警告 | — |
-| `POST /api/sync` | 将当前模型目录同步到 Codex | 500 同步失败 |
+| `POST /api/sync` | 将当前模型目录同步到 Codex，并返回 `catalogQuality`、`rehydrated`、Codex app-server `catalogState` 和所需的重启提示 | 409 写入权限被拒绝；500 同步失败 |
 | `GET /api/update/check` | 检查 `latest` 或 `preview` 更新通道 | 400 无效标签 |
 | `POST /api/update/run` | 启动更新任务，可选随后重启 | 400 无效请求体；任务特定的冲突/错误状态 |
 | `GET /api/update/status` | 按 id 轮询更新任务 | 404 未知任务 |

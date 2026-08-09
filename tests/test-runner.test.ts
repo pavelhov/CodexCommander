@@ -8,6 +8,7 @@ import {
   listRepositoryTestFiles,
   partitionTestFiles,
   resolveTestShardSize,
+  resolveTestStartShard,
 } from "../scripts/test";
 
 describe("test runner isolation", () => {
@@ -40,10 +41,33 @@ describe("test runner isolation", () => {
   });
 
   test("uses a bounded default shard size and validates overrides", () => {
-    expect(resolveTestShardSize(undefined)).toBe(DEFAULT_TEST_SHARD_SIZE);
+    const originalShardSize = process.env.OCX_TEST_SHARD_SIZE;
+    delete process.env.OCX_TEST_SHARD_SIZE;
+    try {
+      expect(resolveTestShardSize()).toBe(DEFAULT_TEST_SHARD_SIZE);
+    } finally {
+      if (originalShardSize === undefined) delete process.env.OCX_TEST_SHARD_SIZE;
+      else process.env.OCX_TEST_SHARD_SIZE = originalShardSize;
+    }
     expect(resolveTestShardSize("17")).toBe(17);
     expect(() => resolveTestShardSize("0")).toThrow("positive integer");
     expect(() => resolveTestShardSize("many")).toThrow("positive integer");
+  });
+
+  test("uses an explicit bounded start shard for safe manual resume", () => {
+    const originalStartShard = process.env.OCX_TEST_START_SHARD;
+    delete process.env.OCX_TEST_START_SHARD;
+    try {
+      expect(resolveTestStartShard(12)).toBe(1);
+    } finally {
+      if (originalStartShard === undefined) delete process.env.OCX_TEST_START_SHARD;
+      else process.env.OCX_TEST_START_SHARD = originalStartShard;
+    }
+    expect(resolveTestStartShard(12, "7")).toBe(7);
+    expect(() => resolveTestStartShard(12, "0")).toThrow("integer from 1 to 12");
+    expect(() => resolveTestStartShard(12, "13")).toThrow("integer from 1 to 12");
+    expect(() => resolveTestStartShard(12, "later")).toThrow("integer from 1 to 12");
+    expect(() => resolveTestStartShard(0, "1")).toThrow("positive integer");
   });
 
   test("discovers Bun test filename patterns in stable order", () => {

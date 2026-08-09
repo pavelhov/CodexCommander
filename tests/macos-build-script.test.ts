@@ -168,11 +168,13 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
 
   test("allows a destination inside the repository", async () => {
     const inside = join(repoRoot, "dist", `ocx-inside-${process.pid}`);
+    const probeCwd = mkdtempSync(join(tmpdir(), "ocx-bundled-probe-"));
     try {
       const { stderr, exitCode } = await runScript(inside);
       expect(exitCode).toBe(0);
       expect(stderr).not.toContain("Refusing to build into");
       const resources = join(inside, "OpenCodex.app", "Contents", "Resources");
+      const runtime = join(resources, "runtime");
       expect(existsSync(join(resources, "OpenCodex.png"))).toBe(true);
       expect(existsSync(join(resources, "LICENSE.txt"))).toBe(true);
       expect(existsSync(join(resources, "THIRD_PARTY_NOTICES.md"))).toBe(true);
@@ -182,11 +184,38 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
       expect(existsSync(join(resources, "provider-icons", "claude-color.svg"))).toBe(true);
       expect(existsSync(join(resources, "provider-icons", "cursor-color.svg"))).toBe(true);
       expect(existsSync(join(resources, "provider-icons", "gemini-color.svg"))).toBe(true);
+      expect(existsSync(join(runtime, "package.json"))).toBe(true);
+      expect(existsSync(join(runtime, "src", "cli", "index.ts"))).toBe(true);
+      const bundledBun = existsSync(join(runtime, "node_modules", "bun", "bin", "bun.exe"))
+        ? join(runtime, "node_modules", "bun", "bin", "bun.exe")
+        : join(runtime, "node_modules", "bun", "bin", "bun");
+      expect(existsSync(bundledBun)).toBe(true);
+      expect(existsSync(join(runtime, "gui", "dist", "index.html"))).toBe(true);
+      const versionProbe = Bun.spawn(
+        [bundledBun, join(runtime, "src", "cli", "index.ts"), "--version"],
+        {
+          cwd: probeCwd,
+          env: {
+            HOME: probeCwd,
+            PATH: "/usr/bin:/bin",
+            OPENCODEX_HOME: join(probeCwd, "state"),
+          },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const [versionOutput, versionExit] = await Promise.all([
+        new Response(versionProbe.stdout).text(),
+        versionProbe.exited,
+      ]);
+      expect(versionExit).toBe(0);
+      expect(versionOutput).toContain("opencodex");
       const info = readFileSync(join(inside, "OpenCodex.app", "Contents", "Info.plist"), "utf8");
       expect(info).toContain("<key>OpenCodexSourceRevision</key>");
       expect(info).toMatch(/[0-9a-f]{40}(?:-dirty)?/);
     } finally {
       rmSync(inside, { recursive: true, force: true });
+      rmSync(probeCwd, { recursive: true, force: true });
     }
   }, 300_000);
 

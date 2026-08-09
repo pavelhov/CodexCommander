@@ -66,6 +66,13 @@ function powerShellSingleQuotedIgnoreCaseMatch(patternSource: string): string {
 export interface CodexAppServerProcess {
   pid: number;
   commandLine: string;
+  /**
+   * Optional process birth time captured by callers that need a stronger PID
+   * reuse fence. Ordinary listings stay cheap and omit it; a restart target
+   * that supplies it is signalled only when the same birth time can be read
+   * again immediately before SIGTERM.
+   */
+  startedAtMs?: number;
 }
 
 export interface ProcessSnapshot {
@@ -683,6 +690,18 @@ export function restartCodexAppServers(
       // Original target exited (or identity changed); do not signal a replacement.
       if (!isAlive(proc.pid)) stopped.push(proc.pid);
       continue;
+    }
+    if (proc.startedAtMs !== undefined) {
+      const currentStartedAtMs = (io.readStartMs ?? (pid => readProcessStartMs(pid, io.platform ?? process.platform)))(
+        proc.pid,
+      );
+      if (currentStartedAtMs !== proc.startedAtMs) {
+        // A same-command process can recycle a PID between classification and
+        // signal. The app-owned apply action supplies a birth time and fails
+        // closed when it changed or became unreadable.
+        if (!isAlive(proc.pid)) stopped.push(proc.pid);
+        continue;
+      }
     }
     try {
       kill(proc.pid, "SIGTERM");

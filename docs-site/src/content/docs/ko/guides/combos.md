@@ -153,7 +153,7 @@ Codex v2 서브에이전트에는 중요한 제한이 하나 있습니다([issue
 1. 자식에게 네이티브 ChatGPT 모델을 선택합니다.
 2. 콤보에 정식 네이티브 ChatGPT 대상을 추가합니다.
 3. 서로 다른 공급자 사이의 위임에는 v1 경로를 사용합니다.
-4. 호출자를 직접 제어할 수 있다면 작업을 평문 v2 `agent_message` content로 다시 보냅니다.
+4. **Subagents → Run Policy**에서 **Plaintext compatibility**를 활성화한 뒤 새 세션을 시작합니다.
 
 v1/base/v2 모드와 암호화된 작업의 전체 흐름은 [Sub-agent Surface](/guides/sub-agent-surface/)를 보십시오.
 

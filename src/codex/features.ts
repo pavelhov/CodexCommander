@@ -936,10 +936,10 @@ function transitionConfigError(content: string): string | null {
 export function transitionMultiAgentV2(
   enabled: boolean,
   toggleFeature: (enabled: boolean) => void,
-  options: { configPath?: string; threadLimit?: number } = {},
+  options: { configPath?: string; threadLimit?: number | null } = {},
 ): MultiAgentV2TransitionResult {
-  if (options.threadLimit !== undefined && (!Number.isInteger(options.threadLimit) || options.threadLimit < 1)) {
-    return { ok: false, error: "thread limit must be an integer >= 1" };
+  if (options.threadLimit !== undefined && options.threadLimit !== null && (!Number.isInteger(options.threadLimit) || options.threadLimit < 1)) {
+    return { ok: false, error: "thread limit must be an integer >= 1, or null to clear it" };
   }
   const path = options.configPath ?? activeCodexConfigPath();
   const original = readConfigText(path);
@@ -948,16 +948,18 @@ export function transitionMultiAgentV2(
   if (preflightError) return { ok: false, error: preflightError };
   const beforeEnabled = isMultiAgentV2Enabled(path);
   // A caller-supplied limit is already in the DESTINATION backend's units and is
-  // never translated. A discovered limit carries the units of the storage it was
-  // read from and crosses the root-slot boundary only when those units differ
-  // from the destination's — which covers both backend flips and same-state
-  // storage migrations (legacy-only under V2, V2-only under V1). The range
-  // check runs only when a translation is actually needed, and before the try
-  // block so an out-of-range stored value is a normal error result rather than
-  // a RangeError escaping the rollback contract.
+  // never translated; an explicit null is a caller request to CLEAR the active
+  // limit, distinguishable from an omitted key (discover and migrate as before).
+  // A discovered limit carries the units of the storage it was read from and
+  // crosses the root-slot boundary only when those units differ from the
+  // destination's — which covers both backend flips and same-state storage
+  // migrations (legacy-only under V2, V2-only under V1). The range check runs
+  // only when a translation is actually needed, and before the try block so an
+  // out-of-range stored value is a normal error result rather than a RangeError
+  // escaping the rollback contract.
   const discovered = discoverStoredThreadLimit(path);
   const destinationUnits: ThreadLimitUnits = enabled ? "v2-total" : "v1-child";
-  let threadLimit = options.threadLimit ?? discovered?.value ?? null;
+  let threadLimit = options.threadLimit !== undefined ? options.threadLimit : discovered?.value ?? null;
   if (options.threadLimit === undefined && discovered !== null && discovered.units !== destinationUnits) {
     const translatable = discovered.units === "v1-child" ? isTranslatableV1ChildLimit : isTranslatableV2TotalLimit;
     if (!translatable(discovered.value)) {

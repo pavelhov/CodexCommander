@@ -14,6 +14,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     private var escapeMonitor: Any?
     private var restartInFlight = false
     private var lifecycleInFlight = false
+    private var catalogActionInFlight = false
+    private var catalogUpdateReady = false
     private let launchAtLoginController = LaunchAtLoginController()
     private lazy var executableFingerprint = ExecutableFingerprint.current()
     private lazy var sourceRevision = BuildProvenance.shortRevision(
@@ -70,6 +72,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         controller.onStart = { [weak self] in self?.startProxy() }
         controller.onStop = { [weak self] in self?.stopProxy() }
         controller.onRestart = { [weak self] in self?.restartProxy() }
+        controller.onApplyCodexCatalog = { [weak self] in self?.applyCodexCatalog() }
         controller.onQuitMenuBar = { [weak self] in self?.quitMenuBar(nil) }
         controller.onStopAndQuit = { [weak self] in self?.stopOpenCodexAndQuit(nil) }
         controller.onLaunchAtLoginChange = { [weak self] enabled in
@@ -154,10 +157,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         let build = sourceRevision.map { " · build \($0)" } ?? ""
         statusItem?.button?.toolTip = "OpenCodex — \(snapshot.state.title) (\(snapshot.endpoint.display))\(build)"
         controller.apply(snapshot)
-        if !restartInFlight && !lifecycleInFlight {
+        if !restartInFlight && !lifecycleInFlight && !catalogActionInFlight {
             controller.setRestartEnabled(snapshot.state.isRunning)
             controller.setLifecycleControlsEnabled(true)
         }
+        refreshCatalogApplyAvailability()
         updateApplicationMenu()
     }
 
@@ -276,7 +280,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         if menuItem.action == #selector(stopOpenCodexAndQuit(_:)) {
             return LifecycleActionAvailability.canStopAndQuit(
                 state: latest?.state,
-                controlsAllowed: !lifecycleInFlight && !restartInFlight
+                controlsAllowed: !lifecycleInFlight && !restartInFlight && !catalogActionInFlight
             )
         }
         return true
@@ -285,10 +289,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     /// Finder launch is the app-level start contract. It uses the fixed TS helper and
     /// keeps the menu app alive even when startup fails, so Start remains available.
     private func ensureProxyOnLaunch() {
-        guard !lifecycleInFlight, !restartInFlight else { return }
+        guard !lifecycleInFlight, !restartInFlight, !catalogActionInFlight else { return }
         lifecycleInFlight = true
         updateApplicationMenu()
         controller.setLifecycleControlsEnabled(false)
+        refreshCatalogApplyAvailability()
         Task { [actions, coordinator] in
             let outcome = await actions?.ensure() ?? .failed("Lifecycle control is unavailable.")
             await coordinator?.forceRefresh()
@@ -296,19 +301,28 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                 guard let self else { return }
                 self.lifecycleInFlight = false
                 self.updateApplicationMenu()
-                if case .failed(let message) = outcome {
+                switch outcome {
+                case .running:
+                    self.clearCatalogUpdate()
+                case .catalogUpdateReady(let count):
+                    self.presentCatalogUpdate(staleWorkerCount: count)
+                case .stopped:
+                    break
+                case .failed(let message):
                     self.controller.showResult(message, isError: true)
                 }
                 self.controller.setLifecycleControlsEnabled(true)
+                self.refreshCatalogApplyAvailability()
             }
         }
     }
 
     private func startProxy() {
-        guard !lifecycleInFlight, !restartInFlight else { return }
+        guard !lifecycleInFlight, !restartInFlight, !catalogActionInFlight else { return }
         lifecycleInFlight = true
         updateApplicationMenu()
         controller.setLifecycleControlsEnabled(false)
+        refreshCatalogApplyAvailability()
         controller.showResult("Starting OpenCodex…", isError: false)
         Task { [actions, coordinator] in
             let outcome = await actions?.start() ?? .failed("Lifecycle control is unavailable.")
@@ -319,19 +333,23 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                 self.updateApplicationMenu()
                 switch outcome {
                 case .running:
+                    self.clearCatalogUpdate()
                     self.controller.showResult("OpenCodex started.", isError: false)
                 case .stopped:
                     self.controller.showResult("OpenCodex did not start.", isError: true)
+                case .catalogUpdateReady(let count):
+                    self.presentCatalogUpdate(staleWorkerCount: count)
                 case .failed(let message):
                     self.controller.showResult(message, isError: true)
                 }
                 self.controller.setLifecycleControlsEnabled(true)
+                self.refreshCatalogApplyAvailability()
             }
         }
     }
 
     private func stopProxy() {
-        guard !lifecycleInFlight, !restartInFlight else { return }
+        guard !lifecycleInFlight, !restartInFlight, !catalogActionInFlight else { return }
         guard confirm(.stopProxy) else { return }
         performStop(quitWhenStopped: false)
     }
@@ -339,7 +357,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     /// Explicit destructive exit: stop routing first and terminate the companion only
     /// after the lifecycle helper confirms that the proxy and service are stopped.
     @objc private func stopOpenCodexAndQuit(_ sender: Any?) {
-        guard !lifecycleInFlight, !restartInFlight else { return }
+        guard !lifecycleInFlight, !restartInFlight, !catalogActionInFlight else { return }
         guard confirm(.stopAndQuit) else { return }
         performStop(quitWhenStopped: true)
     }
@@ -348,6 +366,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         lifecycleInFlight = true
         updateApplicationMenu()
         controller.setLifecycleControlsEnabled(false)
+        refreshCatalogApplyAvailability()
         controller.showResult("Stopping OpenCodex…", isError: false)
         Task { [actions, coordinator] in
             let outcome = await actions?.stop() ?? .failed("Lifecycle control is unavailable.")
@@ -364,16 +383,21 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                 }
                 switch outcome {
                 case .stopped:
+                    self.clearCatalogUpdate()
                     self.controller.showResult(
                         "Proxy stopped. The menu bar app is still open.",
                         isError: false
                     )
                 case .running:
                     self.controller.showResult("OpenCodex is still running.", isError: true)
+                case .catalogUpdateReady(let count):
+                    self.presentCatalogUpdate(staleWorkerCount: count)
+                    self.controller.showResult("OpenCodex is still running.", isError: true)
                 case .failed(let message):
                     self.controller.showResult(message, isError: true)
                 }
                 self.controller.setLifecycleControlsEnabled(true)
+                self.refreshCatalogApplyAvailability()
             }
         }
     }
@@ -381,13 +405,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     /// Restart is destructive to in-flight work, so it always confirms first and only
     /// reports success after ActionCoordinator confirms a replacement process.
     private func restartProxy() {
-        guard !restartInFlight, !lifecycleInFlight else { return }
+        guard !restartInFlight, !lifecycleInFlight, !catalogActionInFlight else { return }
         guard confirm(.restartProxy) else { return }
 
         restartInFlight = true
         updateApplicationMenu()
         controller.setRestartEnabled(false)
         controller.setLifecycleControlsEnabled(false)
+        refreshCatalogApplyAvailability()
         controller.showResult("Restart accepted…", isError: false)
 
         Task { [actions, coordinator] in
@@ -408,8 +433,127 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                     self?.controller.setRestartEnabled(true)
                 }
                 self?.controller.setLifecycleControlsEnabled(true)
+                self?.refreshCatalogApplyAvailability()
             }
         }
+    }
+
+    /// Refreshes activity immediately before confirmation, then invokes the fixed
+    /// catalog helper. A missing activity response is presented as unknown, never idle.
+    private func applyCodexCatalog() {
+        guard catalogUpdateReady,
+              !catalogActionInFlight,
+              !lifecycleInFlight,
+              !restartInFlight
+        else { return }
+
+        catalogActionInFlight = true
+        updateApplicationMenu()
+        controller.setLifecycleControlsEnabled(false)
+        controller.setCatalogApplyEnabled(false)
+
+        Task { [actions, client, coordinator] in
+            let activity: CatalogUpdateActivity
+            if let client {
+                do {
+                    activity = CatalogUpdateActivity(snapshot: try await client.activity())
+                } catch {
+                    activity = .unknown
+                }
+            } else {
+                activity = .unknown
+            }
+
+            let choice = await MainActor.run { [weak self] in
+                self?.confirmCatalogUpdate(activity: activity) ?? .later
+            }
+            guard choice == .applyNow else {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.catalogActionInFlight = false
+                    self.updateApplicationMenu()
+                    self.controller.setLifecycleControlsEnabled(true)
+                    self.refreshCatalogApplyAvailability()
+                }
+                return
+            }
+
+            await MainActor.run { [weak self] in
+                self?.controller.showResult("Applying agent catalog…", isError: false)
+            }
+            let outcome = await actions?.applyCodexCatalog()
+                ?? .failed("Catalog lifecycle control is unavailable.")
+            await coordinator?.forceRefresh()
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.catalogActionInFlight = false
+                self.updateApplicationMenu()
+                switch outcome {
+                case .applied(let summary):
+                    self.clearCatalogUpdate()
+                    if summary.stoppedWorkerCount == 0 {
+                        let message = summary.catalogUpdated
+                            ? "Agent catalog updated. No Codex background worker restart was needed."
+                            : "Agent catalog is already current."
+                        self.controller.showResult(message, isError: false)
+                    } else {
+                        let workers = summary.stoppedWorkerCount == 1
+                            ? "1 stale Codex background worker"
+                            : "\(summary.stoppedWorkerCount) stale Codex background workers"
+                        let pronoun = summary.stoppedWorkerCount == 1 ? "it" : "them"
+                        let applied = summary.catalogUpdated
+                            ? "Agent catalog updated."
+                            : "Agent catalog applied."
+                        self.controller.showResult(
+                            "\(applied) Stopped \(workers); Codex will recreate \(pronoun) when needed.",
+                            isError: false
+                        )
+                    }
+                case .incomplete(let message, let stopped, let surviving):
+                    self.presentCatalogUpdate(staleWorkerCount: surviving > 0 ? surviving : nil)
+                    if surviving > 0 {
+                        let stoppedText: String
+                        if stopped == 1 {
+                            stoppedText = " One stale worker stopped."
+                        } else if stopped > 1 {
+                            stoppedText = " \(stopped) stale workers stopped."
+                        } else {
+                            stoppedText = ""
+                        }
+                        self.controller.showResult(
+                            "Agent catalog updated, but \(surviving) Codex background worker\(surviving == 1 ? " is" : "s are") still running.\(stoppedText)",
+                            isError: true
+                        )
+                    } else {
+                        self.controller.showResult(message, isError: true)
+                    }
+                case .failed(let message):
+                    self.controller.showResult(message, isError: true)
+                }
+                self.controller.setLifecycleControlsEnabled(true)
+                self.refreshCatalogApplyAvailability()
+            }
+        }
+    }
+
+    private func presentCatalogUpdate(staleWorkerCount: Int?) {
+        catalogUpdateReady = true
+        controller.showCatalogUpdate(staleWorkerCount: staleWorkerCount)
+        refreshCatalogApplyAvailability()
+    }
+
+    private func clearCatalogUpdate() {
+        catalogUpdateReady = false
+        controller.hideCatalogUpdate()
+        controller.setCatalogApplyEnabled(false)
+    }
+
+    private func refreshCatalogApplyAvailability() {
+        controller.setCatalogApplyEnabled(CatalogUpdateActionAvailability.canApply(
+            updateReady: catalogUpdateReady,
+            state: latest?.state,
+            controlsAllowed: !catalogActionInFlight && !lifecycleInFlight && !restartInFlight
+        ))
     }
 
     private func confirm(_ confirmation: LifecycleConfirmation) -> Bool {
@@ -422,6 +566,20 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
             panel.makeKeyAndOrderFront(nil)
         }
         return response == confirmation.confirmationResponse
+    }
+
+    private func confirmCatalogUpdate(activity: CatalogUpdateActivity) -> CatalogUpdateChoice {
+        let confirmation = CatalogUpdateConfirmation(activity: activity)
+        let alert = confirmation.makeAlert()
+        panel.isPresentingModal = true
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        panel.isPresentingModal = false
+        let choice = confirmation.choice(for: response)
+        if choice == .later, panel.isShown {
+            panel.makeKeyAndOrderFront(nil)
+        }
+        return choice
     }
 }
 

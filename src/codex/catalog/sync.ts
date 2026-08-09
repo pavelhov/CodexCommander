@@ -30,7 +30,7 @@ import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
-import { activeCodexModelsCachePath, applyJawcodeCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline } from "./parsing";
+import { activeCodexModelsCachePath, applyJawcodeCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline, readRetainedRoutedCatalog, retainedRoutedCatalogPath, writeRetainedRoutedCatalog } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
 import { applyNativeVisibility, disabledNativeSlugs, isUnsupportedOpenAiNativeSlug, nativeOpenAiSlugs, NATIVE_OPENAI_MODELS, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, shouldUpgradeToUpstreamEntry, SUPPORTED_NATIVE_OPENAI_SLUGS, upstreamNativeEntry } from "./metadata";
 import {
@@ -58,6 +58,19 @@ import { codexRuntimeStatePath } from "../runtime";
 import { accountBoundNativeDisplayName, CODEX_ACCOUNT_BOUND_CATALOG_KIND, trustedAccountBoundNativeCatalogSlug, visibleCodexAccountSelectors } from "./account-models";
 
 export const MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5;
+
+/**
+ * Where the routed rows in the committed Codex catalog came from.
+ *
+ * - `live`: routed rows were gathered live from providers this sync.
+ * - `retained`: the live gather yielded nothing and the on-disk catalog had no
+ *   routed rows, so rows were rehydrated from the OpenCodex-owned last-known-good
+ *   snapshot for providers still configured.
+ * - `native-only`: the committed catalog has no OpenCodex-routed rows (nothing to
+ *   restore); with routed providers configured this is a degraded state and must
+ *   surface an actionable warning rather than a false fully-ready success.
+ */
+export type CatalogQuality = "live" | "retained" | "native-only";
 
 export type SpawnAgentSurface = "v1" | "v2";
 
@@ -192,6 +205,33 @@ export function finishUpstreamNativeEntry(clone: RawEntry, priority: number): Ra
   // (wire-clamped to xhigh). Ultra is always advertised regardless of v2 toggle.
   if (!isGpt56NativeSlug(String(clone.slug ?? ""))) ensureUltraReasoningLevel(clone);
   return ensureStrictCatalogFields(normalizeServiceTiers(clone));
+}
+
+/**
+ * The ONE native-priority policy shared by buildCatalogEntries (fresh/convergence
+ * builds) and mergeCatalogEntriesForSync (on-disk merge):
+ *
+ * 1. A featured exact rank always wins (featured = the configured subagent roster).
+ * 2. When a nonempty featured roster exists, an unfeatured native sorts STRICTLY
+ *    BELOW the featured block — Codex's models-manager sorts by priority ASC and
+ *    advertises only the first 5 to spawn_agent, so a genuine upstream priority
+ *    (gpt-5.6-terra=2, gpt-5.6-luna=3) would otherwise displace configured routed
+ *    models from that five-slot window.
+ * 3. With no featured roster, the genuine upstream/baseline priority is preserved
+ *    untouched.
+ */
+export function nativeCatalogEntryPriority(
+  slug: string,
+  rank: ReadonlyMap<string, number>,
+  featuredCount: number,
+  baselinePriority: number,
+): number {
+  const featuredRank = rank.get(slug);
+  if (featuredRank !== undefined) return featuredRank;
+  if (featuredCount > 0) {
+    return Math.max(typeof baselinePriority === "number" ? baselinePriority : 9, featuredCount + 100);
+  }
+  return baselinePriority;
 }
 
 export function isExactComboCatalogModel(
@@ -337,7 +377,15 @@ export function buildCatalogEntries(
     .map(catalogModelSlug));
   for (const slug of gptSlugs) {
     const e = deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9);
-    if (rank.has(slug)) e.priority = rank.get(slug)!;
+    // deriveEntry keeps the genuine upstream snapshot priority for snapshot-backed
+    // natives (terra=2, luna=3); route it through the shared native policy so an
+    // unfeatured native can never outrank the featured block (spawn_agent top-5).
+    e.priority = nativeCatalogEntryPriority(
+      slug,
+      rank,
+      featured?.length ?? 0,
+      typeof e.priority === "number" ? e.priority : 9,
+    );
     out.push(e);
     nativeEntries.push(e);
   }
@@ -443,6 +491,53 @@ function isOcxAuthoredRoutedEntry(entry: RawEntry): boolean {
   return slug.includes("/") && desc.startsWith("Routed via opencodex → ");
 }
 
+/**
+ * Whether the config has at least one enabled provider that can contribute
+ * routed catalog rows. Forward passthrough providers (the canonical OpenAI
+ * Codex-OAuth backend) never produce routed rows, and a static provider with an
+ * empty `models` list intentionally publishes zero rows — a native-only catalog
+ * is legitimate for both, so neither may trigger the native-only warning.
+ */
+export function hasRoutedCapableProviders(config: Pick<OcxConfig, "providers">): boolean {
+  for (const [, provider] of Object.entries(config.providers ?? {})) {
+    if (provider.disabled === true) continue;
+    if (provider.authMode === "forward") continue;
+    if (provider.liveModels === false && (provider.models ?? []).length === 0) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a retained snapshot row may be rehydrated into the active catalog:
+ * it must be OpenCodex-authored, its provider (or combo) must still be
+ * configured and enabled, and it must survive the same model-level
+ * disabled/selected filters the live gather path applies.
+ */
+function retainedRowStillConfigured(
+  entry: RawEntry,
+  config: OcxConfig,
+  gatheredProviderNames: ReadonlySet<string>,
+): boolean {
+  if (!isOcxAuthoredRoutedEntry(entry)) return false;
+  const slug = typeof entry.slug === "string" ? entry.slug : "";
+  const slash = slug.indexOf("/");
+  if (slash <= 0) return false;
+  const provider = slug.slice(0, slash);
+  const model = slug.slice(slash + 1);
+  for (const stored of config.disabledModels ?? []) {
+    if (slugEquals(stored, provider, model)) return false;
+  }
+  if (provider === COMBO_NAMESPACE) return getCombo(config, model) !== undefined;
+  if (!gatheredProviderNames.has(provider)) return false;
+  const providerConfig = config.providers?.[provider];
+  if (!providerConfig || providerConfig.disabled === true || providerConfig.authMode === "forward") return false;
+  if (providerConfig.liveModels === false && (providerConfig.models ?? []).length === 0) return false;
+  const selected = providerConfig.selectedModels;
+  if (Array.isArray(selected) && selected.length > 0 && !modelInList(selected, model)) return false;
+  return true;
+}
+
 export function mergeCatalogEntriesForSync(
   catalogModels: RawEntry[],
   routedEntries: RawEntry[],
@@ -474,25 +569,20 @@ export function mergeCatalogEntriesForSync(
       && !isUnsupportedOpenAiNativeSlug(m.slug as string))
     .map(m => {
       const slug = m.slug as string;
-      // Featured models rank first (rank order); non-featured natives are pushed below the featured
-      // block when any model is featured, else keep their pristine baseline priority.
       const baselinePriority = baseline.get(slug) ?? (m.priority as number);
-      const priority = rank.has(slug)
-        ? rank.get(slug)!
-        : featured.length > 0
-          ? Math.max(typeof baselinePriority === "number" ? baselinePriority : 9, featured.length + 100)
-          : baselinePriority;
+      const priority = nativeCatalogEntryPriority(slug, rank, featured.length, baselinePriority);
       // Fallback-quality entries (ocx synthesis / codex-rs model_info fallback: display_name
       // stamped with the bare slug) are upgraded to the pinned upstream snapshot entry so a
       // previously synthesized ladder (e.g. luna advertising ultra) self-heals on sync. A
       // genuine catalog entry (real display name) is preserved untouched.
       if (shouldUpgradeToUpstreamEntry(m)) {
         const upstream = upstreamNativeEntry(slug)!;
-        const upgradePriority = rank.has(slug)
-          ? rank.get(slug)!
-          : featured.length > 0
-            ? Math.max(typeof upstream.priority === "number" ? upstream.priority : 9, featured.length + 100)
-            : typeof upstream.priority === "number" ? upstream.priority : priority;
+        const upgradePriority = nativeCatalogEntryPriority(
+          slug,
+          rank,
+          featured.length,
+          typeof upstream.priority === "number" ? upstream.priority : priority,
+        );
         const finished = finishUpstreamNativeEntry(upstream, 9);
         finished.priority = upgradePriority;
         return finished;
@@ -513,11 +603,7 @@ export function mergeCatalogEntriesForSync(
   for (const slug of availableNativeSlugs) {
     if (nativeSlugs.has(slug)) continue;
     nativeSlugs.add(slug);
-    const priority = rank.has(slug)
-      ? rank.get(slug)!
-      : featured.length > 0
-        ? featured.length + 100
-        : 9;
+    const priority = nativeCatalogEntryPriority(slug, rank, featured.length, 9);
     native.push(deriveEntry(template ? JSON.parse(JSON.stringify(template)) : null, slug, "OpenAI native model (Codex OAuth passthrough).", priority));
   }
   }
@@ -655,6 +741,9 @@ interface RetainedCatalogSyncResult {
   path: string;
   catalogWritten: boolean;
   comboOmissions: ComboCatalogOmission[];
+  catalogQuality: CatalogQuality;
+  /** Routed rows rehydrated from the retained last-known-good snapshot this sync. */
+  rehydrated: number;
   /** `desired_disabled` observed under K after the provider await; nothing was written. */
   skippedReason?: "desired_disabled";
 }
@@ -700,6 +789,7 @@ function retainedCatalogSyncEvidence(
     catalogPath,
     catalog,
     catalogBytes: optionalFileBytes(catalogPath),
+    retainedBytes: optionalFileBytes(retainedRoutedCatalogPath()),
     hashedBackupBytes: optionalFileBytes(catalogBackupPathFor(catalogPath)),
     legacyBackupBytes: isDefaultCatalogPath(catalogPath)
       ? optionalFileBytes(legacyCatalogBackupPath()) : null,
@@ -870,9 +960,43 @@ function writeRetainedCatalogSync({
       accountSelectors,
     ).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined)
     : [];
+  // Rehydration: fill provider-level gaps from the last-known-good OpenCodex
+  // snapshot. A stop-like native restore plus a total outage restores every
+  // still-configured provider; a partial live gather keeps its fresh providers
+  // and restores only providers that returned no rows. If the active catalog
+  // still has routes and the gather is wholly empty, the existing #855 on-disk
+  // preservation path remains authoritative.
+  const liveRoutedEntries = goEntries;
+  const retainedRows: RawEntry[] = [];
+  const onDiskHasRoutedEntries = catalogHasRoutedEntries({ models: catalogModelsForMerge });
+  if (liveRoutedEntries.length > 0 || !onDiskHasRoutedEntries) {
+    const liveProviders = new Set(liveRoutedEntries.flatMap(entry => {
+      const slug = typeof entry.slug === "string" ? entry.slug : "";
+      const slash = slug.indexOf("/");
+      return slash > 0 ? [slug.slice(0, slash)] : [];
+    }));
+    const retained = readRetainedRoutedCatalog();
+    if (retained) {
+      for (const entry of retained.models ?? []) {
+        const slug = typeof entry.slug === "string" ? entry.slug : "";
+        const slash = slug.indexOf("/");
+        const provider = slash > 0 ? slug.slice(0, slash) : "";
+        if (
+          provider
+          && !liveProviders.has(provider)
+          && retainedRowStillConfigured(entry, config, gatheredProviderNames)
+        ) {
+          retainedRows.push(entry);
+        }
+      }
+    }
+  }
+  const routedEntriesForMerge = liveRoutedEntries.length > 0
+    ? [...liveRoutedEntries, ...retainedRows]
+    : retainedRows;
   catalog.models = mergeCatalogEntriesForSync(
     catalogModelsForMerge,
-    goEntries,
+    routedEntriesForMerge,
     baseline,
     featured,
     wsEnabled,
@@ -889,15 +1013,39 @@ function writeRetainedCatalogSync({
   );
   clampCatalogModelsToCodexSupport(catalog.models, deps);
 
+  const ocxAuthoredRouted = catalog.models.filter(isOcxAuthoredRoutedEntry);
+  const retainedSlugs = new Set(retainedRows.flatMap(entry =>
+    typeof entry.slug === "string" ? [entry.slug] : []
+  ));
+  const rehydrated = ocxAuthoredRouted.filter(entry =>
+    typeof entry.slug === "string" && retainedSlugs.has(entry.slug)
+  ).length;
+  const catalogQuality: CatalogQuality = retainedRows.length > 0
+    ? "retained"
+    : liveRoutedEntries.length > 0
+      ? "live"
+      : ocxAuthoredRouted.length > 0
+        ? "retained"
+        : "native-only";
   replaceActiveCodexCatalog(permit, owningCodexHome, {
     path: catalogPath,
     content: `${JSON.stringify(catalog, null, 2)}\n`,
   });
+  // Persist the last-known-good snapshot ONLY from a successful live routed sync.
+  // An empty or failed gather never touches it, so a later rehydrate still sees the
+  // rows that were actually verified against live provider discovery.
+  if (liveRoutedEntries.length > 0) {
+    try {
+      writeRetainedRoutedCatalog(ocxAuthoredRouted);
+    } catch { /* snapshot is best-effort; the catalog write is the primary artifact */ }
+  }
   return {
     added: goEntries.length + accountBoundEntries.length,
     path: catalogPath,
     catalogWritten: true,
     comboOmissions,
+    catalogQuality,
+    rehydrated,
   };
 }
 
@@ -961,6 +1109,8 @@ export async function syncCatalogModels(
       path: readCodexCatalogPath(),
       catalogWritten: false,
       comboOmissions: [],
+      catalogQuality: "native-only",
+      rehydrated: 0,
     };
   }
 
@@ -995,6 +1145,8 @@ export async function syncCatalogModels(
         path: prepared.catalogPath,
         catalogWritten: false,
         comboOmissions,
+        catalogQuality: "native-only" as const,
+        rehydrated: 0,
         skippedReason: "desired_disabled" as const,
       };
     }
@@ -1017,6 +1169,8 @@ export async function syncCatalogModels(
     path: prepared.catalogPath,
     catalogWritten: false,
     comboOmissions,
+    catalogQuality: "native-only",
+    rehydrated: 0,
   };
 }
 

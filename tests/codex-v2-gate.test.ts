@@ -31,6 +31,7 @@ import {
 } from "../src/codex/features";
 import { cmdV2, codexFeaturesInvocation, v2StatusLine, multiAgentModeLine } from "../src/cli/v2";
 import { handleManagementAPI } from "../src/server/management-api";
+import { loadConfig } from "../src/config";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 function template(): Record<string, unknown> {
@@ -345,6 +346,130 @@ describe("thread-limit-preserving v1/v2 transition", () => {
   });
 });
 
+describe("nullable thread-limit reset (explicit null clears the active key)", () => {
+  const flipTableFlag = (path: string) => (enabled: boolean) => {
+    const content = readFileSync(path, "utf8");
+    writeFileSync(path, content.replace(/^enabled\s*=\s*(?:true|false)$/m, `enabled = ${enabled}`));
+  };
+
+  test("transition: explicit null clears the active V2 key; omitted preserves it", () => {
+    const clearedPath = fixtureConfig("[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 64\n");
+    let calls = 0;
+    const cleared = transitionMultiAgentV2(true, () => { calls++; }, { configPath: clearedPath, threadLimit: null });
+    expect(cleared).toEqual({ ok: true, changed: true, threadLimit: null });
+    expect(calls).toBe(0); // same-state: no feature toggle
+    expect(getMaxConcurrentThreads(clearedPath)).toBe(null);
+    expect(getLogicalMaxThreads(clearedPath)).toBe(null);
+    expect(isMultiAgentV2Enabled(clearedPath)).toBe(true);
+
+    const keptPath = fixtureConfig("[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 64\n");
+    const kept = transitionMultiAgentV2(true, () => { calls++; }, { configPath: keptPath });
+    expect(kept).toMatchObject({ ok: true, threadLimit: 64 });
+    expect(getMaxConcurrentThreads(keptPath)).toBe(64);
+  });
+
+  test("transition: explicit null clears the active V1 key; omitted preserves it", () => {
+    const clearedPath = fixtureConfig("[agents]\nmax_threads = 100\nmax_depth = 2\n");
+    let calls = 0;
+    const cleared = transitionMultiAgentV2(false, () => { calls++; }, { configPath: clearedPath, threadLimit: null });
+    expect(cleared).toEqual({ ok: true, changed: true, threadLimit: null });
+    expect(calls).toBe(0);
+    expect(getAgentsMaxThreads(clearedPath)).toBe(null);
+    expect(getLogicalMaxThreads(clearedPath)).toBe(null);
+    expect(readFileSync(clearedPath, "utf8")).toContain("max_depth = 2");
+
+    const keptPath = fixtureConfig("[agents]\nmax_threads = 100\n");
+    const kept = transitionMultiAgentV2(false, () => { calls++; }, { configPath: keptPath });
+    expect(kept).toMatchObject({ ok: true, threadLimit: 100 });
+    expect(getAgentsMaxThreads(keptPath)).toBe(100);
+  });
+
+  test("transition: explicit null also clears a limit stored in the OTHER backend", () => {
+    // Boot-conflict shape: V2 enabled with the legacy key still present. A null
+    // reset must leave NO thread limit in either storage.
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n\n[agents]\nmax_threads = 100\n");
+    const result = transitionMultiAgentV2(true, () => { /* already enabled */ }, { configPath: path, threadLimit: null });
+    expect(result).toEqual({ ok: true, changed: true, threadLimit: null });
+    expect(getMaxConcurrentThreads(path)).toBe(null);
+    expect(getAgentsMaxThreads(path)).toBe(null);
+  });
+
+  test("transition: invalid thread limits are still rejected; null is not", () => {
+    const path = fixtureConfig("[agents]\nmax_threads = 100\n");
+    expect(transitionMultiAgentV2(false, () => {}, { configPath: path, threadLimit: 0 }).ok).toBe(false);
+    expect(transitionMultiAgentV2(false, () => {}, { configPath: path, threadLimit: 2.5 }).ok).toBe(false);
+    expect(transitionMultiAgentV2(false, () => {}, { configPath: path, threadLimit: null }).ok).toBe(true);
+  });
+
+  test("PUT /api/v2 with maxConcurrentThreadsPerSession:null clears the V2 key and returns null", async () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 64\n");
+    const oldCodexHome = process.env.CODEX_HOME;
+    const oldOcxHome = process.env.OPENCODEX_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    process.env.OPENCODEX_HOME = mkdtempSync(join(tmpdir(), "ocx-api-config-"));
+    const config = { providers: [] } as never;
+    const deps = {
+      toggleCodexMultiAgentV2: flipTableFlag(path),
+      createManagementConvergeCodex: catalogConvergenceFactory(),
+    };
+    const put = (payload: unknown) => new Request("http://localhost/api/v2", {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+    });
+    try {
+      const cleared = await handleManagementAPI(put({ maxConcurrentThreadsPerSession: null }), new URL("http://localhost/api/v2"), config, deps);
+      expect(cleared?.status).toBe(200);
+      expect(await cleared?.json()).toMatchObject({ ok: true, enabled: true, maxConcurrentThreadsPerSession: null });
+      expect(getMaxConcurrentThreads(path)).toBe(null);
+      expect(getLogicalMaxThreads(path)).toBe(null);
+
+      // A follow-up GET reports the cleared state.
+      const get = await handleManagementAPI(new Request("http://localhost/api/v2"), new URL("http://localhost/api/v2"), config, deps);
+      expect(await get?.json()).toMatchObject({ enabled: true, maxConcurrentThreadsPerSession: null });
+
+      // Integer behavior is unchanged after a reset.
+      const set = await handleManagementAPI(put({ maxConcurrentThreadsPerSession: 33 }), new URL("http://localhost/api/v2"), config, deps);
+      expect(set?.status).toBe(200);
+      expect(getMaxConcurrentThreads(path)).toBe(33);
+
+      // Non-null invalid values are still 400.
+      expect((await handleManagementAPI(put({ maxConcurrentThreadsPerSession: 0 }), new URL("http://localhost/api/v2"), config, deps))?.status).toBe(400);
+      expect((await handleManagementAPI(put({ maxConcurrentThreadsPerSession: "8" }), new URL("http://localhost/api/v2"), config, deps))?.status).toBe(400);
+      expect(getMaxConcurrentThreads(path)).toBe(33);
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+      if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcxHome;
+    }
+  });
+
+  test("PUT /api/v2 with maxConcurrentThreadsPerSession:null clears the V1 key and returns null", async () => {
+    const path = fixtureConfig("[agents]\nmax_threads = 50\n");
+    const oldCodexHome = process.env.CODEX_HOME;
+    const oldOcxHome = process.env.OPENCODEX_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    process.env.OPENCODEX_HOME = mkdtempSync(join(tmpdir(), "ocx-api-config-"));
+    const config = { providers: [] } as never;
+    let toggles = 0;
+    const deps = {
+      toggleCodexMultiAgentV2: () => { toggles++; },
+      createManagementConvergeCodex: catalogConvergenceFactory(),
+    };
+    try {
+      const req = new Request("http://localhost/api/v2", {
+        method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ maxConcurrentThreadsPerSession: null }),
+      });
+      const res = await handleManagementAPI(req, new URL(req.url), config, deps);
+      expect(res?.status).toBe(200);
+      expect(await res?.json()).toMatchObject({ ok: true, enabled: false, maxConcurrentThreadsPerSession: null });
+      expect(toggles).toBe(0); // V1 stays active: no feature flip
+      expect(getAgentsMaxThreads(path)).toBe(null);
+      expect(getLogicalMaxThreads(path)).toBe(null);
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+      if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcxHome;
+    }
+  });
+});
+
 describe("v1<->v2 root-slot translation", () => {
   const flipTableFlag = (path: string) => (enabled: boolean) => {
     const content = readFileSync(path, "utf8");
@@ -655,6 +780,51 @@ describe("config-surface parity: agents.enabled, max_depth, subagent_developer_i
 });
 
 describe("management API logical v1/v2 switching", () => {
+  test("persists and clears the explicit V2 message-delivery policy", async () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
+    const oldCodexHome = process.env.CODEX_HOME;
+    const oldOcxHome = process.env.OPENCODEX_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    process.env.OPENCODEX_HOME = mkdtempSync(join(tmpdir(), "ocx-api-delivery-"));
+    const config = { providers: [], multiAgentV2MessageDelivery: "encrypted" } as never;
+    const deps = { createManagementConvergeCodex: catalogConvergenceFactory() };
+    try {
+      const setPlaintext = new Request("http://localhost/api/v2", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ multiAgentV2MessageDelivery: "plaintext" }),
+      });
+      const response = await handleManagementAPI(setPlaintext, new URL(setPlaintext.url), config, deps);
+      expect(response?.status).toBe(200);
+      expect(await response?.json()).toMatchObject({ multiAgentV2MessageDelivery: "plaintext" });
+      expect(loadConfig().multiAgentV2MessageDelivery).toBe("plaintext");
+
+      const get = new Request("http://localhost/api/v2");
+      const getResponse = await handleManagementAPI(get, new URL(get.url), config, deps);
+      expect(await getResponse?.json()).toMatchObject({ multiAgentV2MessageDelivery: "plaintext" });
+
+      const clear = new Request("http://localhost/api/v2", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ multiAgentV2MessageDelivery: null }),
+      });
+      const clearResponse = await handleManagementAPI(clear, new URL(clear.url), config, deps);
+      expect(clearResponse?.status).toBe(200);
+      expect(await clearResponse?.json()).toMatchObject({ multiAgentV2MessageDelivery: "encrypted" });
+      expect(loadConfig().multiAgentV2MessageDelivery).toBeUndefined();
+
+      const invalid = new Request("http://localhost/api/v2", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ multiAgentV2MessageDelivery: "automatic" }),
+      });
+      expect((await handleManagementAPI(invalid, new URL(invalid.url), config, deps))?.status).toBe(400);
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+      if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcxHome;
+    }
+  });
+
   test("mode-only switches translate the limit across the root-slot boundary in both directions", async () => {
     const path = fixtureConfig("[agents]\nmax_threads = 100\nmax_depth = 2\n");
     const oldCodexHome = process.env.CODEX_HOME;
@@ -1157,6 +1327,45 @@ describe("mock-max wire clamp (nativeEffortClamp)", () => {
 });
 
 describe("3-state multi-agent mode", () => {
+  test("Sol/Luna/Kimi/Grok/DeepSeek roster keeps exact v1/default/v2 protocol semantics", () => {
+    const native = ["gpt-5.6-sol", "gpt-5.6-luna"];
+    const routed = [
+      { id: "k3[1m]", provider: "kimi", reasoningEfforts: ["low", "high", "max"] },
+      { id: "grok-4.5", provider: "xai", reasoningEfforts: ["low", "high", "max"] },
+      { id: "deepseek-v4-flash", provider: "opencode-go", reasoningEfforts: ["low", "high", "max"] },
+    ];
+    const roster = [
+      "gpt-5.6-sol",
+      "gpt-5.6-luna",
+      "kimi/k3[1m]",
+      "xai/grok-4.5",
+      "opencode-go/deepseek-v4-flash",
+    ];
+
+    const entriesFor = (mode: MultiAgentMode) => buildCatalogEntries(
+      template(),
+      native,
+      routed as never,
+      [],
+      false,
+      mode,
+    );
+
+    for (const entry of entriesFor("v1").filter(candidate => roster.includes(candidate.slug))) {
+      expect(entry.multi_agent_version).toBe("v1");
+    }
+    for (const entry of entriesFor("v2").filter(candidate => roster.includes(candidate.slug))) {
+      expect(entry.multi_agent_version).toBe("v2");
+    }
+
+    const defaults = new Map(entriesFor("default").map(entry => [entry.slug, entry.multi_agent_version]));
+    expect(defaults.get("gpt-5.6-sol")).toBe("v2");
+    expect(defaults.get("gpt-5.6-luna")).toBe("v1");
+    expect(defaults.get("kimi/k3[1m]")).toBeUndefined();
+    expect(defaults.get("xai/grok-4.5")).toBeUndefined();
+    expect(defaults.get("opencode-go/deepseek-v4-flash")).toBeUndefined();
+  });
+
   test("mode v1: ALL entries get multi_agent_version = v1 (overrides upstream pins)", () => {
     const entries = buildCatalogEntries(template(), ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5"], [], [], false, "v1");
     for (const e of entries) {

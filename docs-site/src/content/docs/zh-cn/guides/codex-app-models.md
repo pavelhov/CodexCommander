@@ -73,7 +73,7 @@ visibility = "list"
 
 ## 多代理界面模式
 
-Models 页面将三个协作选项标为 **Classic v1**、**Automatic**（base/upstream 默认值）和 **Concurrent v2**。该控件会改变每个选择器条目使用的 Codex 协作界面；有关规范模式、委派、继承、fallback 以及加密任务行为，请参见 [Sub-agent Surface](/guides/sub-agent-surface/)。
+Models 页面将三个协作选项标为 **Classic v1**、**Follow Codex defaults**（base/upstream 行为）和 **Concurrent v2**。该控件会改变每个选择器条目使用的 Codex 协作界面；有关规范模式、委派、继承、fallback 以及加密任务行为，请参见 [Sub-agent Surface](/guides/sub-agent-surface/)。
 
 ## 推理顶档
 
@@ -96,9 +96,9 @@ fast_mode = true
 
 ## 子代理选择
 
-Codex 会按 `priority` 升序对选择器可见的目录条目排序，并把前五个作为 `spawn_agent` 模型 override 暴露出来。仪表盘 Subagents 页面最多可以选择并保存五个裸原生 id 或路由 `provider/model` id。手动设置的 `subagentModels` 也支持账户限定的 `<selector>/<native-openai-model>` id，但仪表盘不会提供这些精确 id；保存该页面会用仪表盘中可见的选项替换整个列表。opencodex 会按所选顺序分配较低的目录 priority；启用账户 selector 时，裸原生选择会展开为 selector-qualified 分组。其他模型仍然可以通过精确 id 调用。
+Codex 会按 `priority` 升序对选择器可见的目录条目排序，并把前五个作为 `spawn_agent` 模型 override 暴露出来。仪表盘的 **Agent Command Center** 最多可以选择并保存五个裸原生 id 或路由 `provider/model` id，也会保留已配置的账户限定 `<selector>/<native-openai-model>` id，并报告每个保存项是否实际公开或被排除。opencodex 会按所选顺序分配较低的目录 priority；启用账户 selector 时，裸原生选择会展开为 selector-qualified 分组。其他模型仍然可以通过精确 id 调用。
 
-精选模型列表与 Dashboard 的 **Sub-agent delegation** 选择彼此独立。它只决定 Codex 先提供哪些 override；它不会自己选择模型，也不会触发委派。
+Active Roster 与 Dashboard 的 **Sub-agent delegation** 选择彼此独立。它只决定 Codex 先提供哪些 override；它不会自己选择模型，也不会触发委派。
 
 ## 刷新模型状态
 

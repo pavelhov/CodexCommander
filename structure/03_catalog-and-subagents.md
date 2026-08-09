@@ -21,6 +21,15 @@
   rather than assuming a single file;
 - invalidates `$CODEX_HOME/models_cache.json` when model visibility changes.
 
+Every successful live routed sync also writes an OpenCodex-owned, mode-600 last-known-good snapshot
+at `$OPENCODEX_HOME/codex-routed-retained.json`. Stop/restore still removes routed rows from the
+active Codex catalog so plain Codex works normally; it does not delete this OpenCodex snapshot. On
+the next start, an empty provider gather rehydrates still-configured routed rows from the snapshot,
+and a partial gather combines fresh providers with retained rows only for providers that returned no
+models. Removed, disabled, forward-only, intentionally empty, model-filtered, and compatibility-
+excluded rows are never resurrected. The snapshot participates in the retained-sync filesystem
+evidence and is updated only when the current gather produced live routed rows.
+
 On the default `opencodex-catalog.json` path, sync deliberately uses two catalog sources: Codex's
 bundled catalog supplies a current native entry template, while the actual on-disk catalog supplies
 the rows being merged. This split is required because empty or partial provider discovery must
@@ -53,6 +62,25 @@ accepts positive integer seconds from 1–300. CLI `--json` emits
 exit 1 covers not-ready, pending, failed, timeout, and unreachable; exit 64 means invalid arguments.
 Older proxies without `/readyz` fail closed as unreachable. `/healthz` remains the separate
 liveness contract.
+
+Catalog convergence also reports `catalogQuality`: `live` means the active routed rows came from
+the current provider gather, `retained` means at least one provider was recovered from durable or
+already-active last-known-good rows, and `native-only` means no OpenCodex-authored routed rows are
+active. `native-only` with an enabled routed-capable provider is an actionable sync warning, not a
+fully-ready result. The macOS lifecycle waits for startup readiness, retries convergence through the
+live management API, and automatically synchronizes the catalog on app launch. A worker roster that
+predates the committed catalog is a nonfatal, persistent **Agent catalog update ready** state; it does
+not make OpenCodex appear stopped or unhealthy. The confirmed **Apply agent catalog** action performs
+another sync, sends `SIGTERM` only to exact current-user `codex … app-server` and
+`codex-code-mode-host` matches, verifies the old workers' exits, and leaves the OpenCodex proxy and
+menu app running. Release one does not promise idle deferral: activity is warning context, **Apply
+Now** is explicit consent to possible interruption, and **Later** leaves the update pending.
+
+The CLI remains the advanced fallback:
+
+```bash
+ocx sync --restart-codex
+```
 
 ## Entry shape
 
@@ -115,12 +143,26 @@ ensures `normalizeRoutedCatalogEntry` (which deletes `multi_agent_version` from 
 not clobber the forced value.
 
 CLI: `ocx v2 mode v1|default|v2`. GUI: **Models → Current behavior → Collaboration**, labeled
-**Classic v1**, **Automatic**, and **Concurrent v2**. API: `GET/PUT /api/v2` with
+**Classic v1**, **Follow Codex defaults**, and **Concurrent v2**. API: `GET/PUT /api/v2` with
 `multiAgentMode` field.
 
 The `multi_agent_v2` feature flag and the logical maximum thread count are separate from
 `multiAgentMode` (`src/codex/features.ts`): the mode decides which surface Codex advertises, while
 the flag and thread count decide what the native runtime allows.
+
+`OcxConfig.multiAgentV2MessageDelivery` is a separate request-time policy. `encrypted` is the
+default and preserves ChatGPT's reserved collaboration schema plus the unreadable-ciphertext
+fail-closed guard. `plaintext` opts the whole V2 parent session into mixed-provider compatibility:
+canonical ChatGPT requests atomically alias the complete known collaboration namespace, strip only
+the three message encryption markers, then restore the namespace and add Codex's
+`encrypted_function_args: []` plaintext sentinel on the response. Routed adapters add that sentinel
+only to completed `spawn_agent`, `send_message`, and `followup_task` calls at the bridge boundary.
+Lifecycle and unrelated tools remain unchanged. Because the parent schema is fixed before worker
+selection, all V2 delegation messages in that parent session become plaintext, including native
+children; usage-debug body sampling is suppressed for those turns. Changes affect subsequent
+requests, so the operator must start a new session rather than switch an active conversation.
+Partial, future, malformed, or colliding native schemas stay encrypted and retain the existing
+fail-closed guard.
 
 ## Ultra reasoning level
 

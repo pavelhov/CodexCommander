@@ -78,6 +78,26 @@ function routedCatalog(): string {
   return JSON.stringify({ models }, null, 2) + "\n";
 }
 
+function deterministicCatalogDeps() {
+  return {
+    // These tests exercise production catalog publication and residue
+    // classification. Keep the unrelated Codex bundled-model probe in-process
+    // so filesystem behavior is not coupled to subprocess scheduling.
+    commandCandidates: () => ["codex-fixture"],
+    execFileSync: () => JSON.stringify({
+      models: [{
+        slug: "gpt-5.5",
+        display_name: "gpt-5.5",
+        description: "native",
+        priority: 0,
+        visibility: "list",
+        base_instructions: "You are Codex, a coding agent based on GPT-5.",
+        supported_reasoning_levels: [{ effort: "medium", description: "m" }],
+      }],
+    }),
+  };
+}
+
 function sessionMeta(id: string, modelProvider: string): string {
   return JSON.stringify({
     timestamp: "2026-08-04T00:00:00.000Z",
@@ -228,7 +248,7 @@ test("a routed catalog at the configured nested path refuses coordinator initial
     },
   };
 
-  const sync = await syncCatalogModels(config);
+  const sync = await syncCatalogModels(config, deterministicCatalogDeps());
 
   expect(sync).toMatchObject({ path: catalogPath, catalogWritten: true });
   expect(classifyNativeRoutedResidue()).toMatchObject({
@@ -380,7 +400,7 @@ for (const shape of productionCatalogLeafShapes) {
       },
     };
 
-    const sync = await syncCatalogModels(config);
+    const sync = await syncCatalogModels(config, deterministicCatalogDeps());
     const catalog = JSON.parse(readFileSync(catalogPath, "utf8")) as {
       models: Array<Record<string, unknown>>;
     };
@@ -571,7 +591,7 @@ test(`production-generated arbitrary bare combo alias ${arbitraryComboAlias} is 
     },
   };
 
-  const sync = await syncCatalogModels(config);
+  const sync = await syncCatalogModels(config, deterministicCatalogDeps());
   const catalog = JSON.parse(readFileSync(catalogPath, "utf8")) as {
     models: Array<Record<string, unknown>>;
   };

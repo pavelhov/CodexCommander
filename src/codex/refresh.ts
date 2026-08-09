@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { invalidateCodexModelsCache, syncCatalogModels } from "./catalog";
 import type { ComboCatalogOmission } from "./catalog/aggregation";
+import type { CatalogQuality } from "./catalog/sync";
 import { CODEX_MODELS_CACHE_PATH } from "./paths";
 import { atomicWriteFile } from "../config";
 import type { OcxConfig } from "../types";
@@ -12,6 +13,10 @@ export interface CodexCatalogRefreshResult {
   catalogWritten: boolean;
   cacheSynced: boolean;
   comboOmissions: ComboCatalogOmission[];
+  /** Where the routed rows in the committed catalog came from (`live` | `retained` | `native-only`). */
+  catalogQuality: CatalogQuality;
+  /** Routed rows rehydrated from the retained last-known-good snapshot this refresh. */
+  rehydrated: number;
   /** Desired OFF observed under K during the catalog commit; no cache write either. */
   skippedReason?: "desired_disabled";
 }

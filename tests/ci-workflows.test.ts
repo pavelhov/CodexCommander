@@ -470,6 +470,8 @@ describe("GitHub Actions hardening", () => {
         permissions?: Record<string, string>;
         needs?: string[];
         if?: string;
+        outputs?: Record<string, string>;
+        steps?: Array<{ name?: string; uses?: string; run?: string }>;
         "timeout-minutes"?: number;
         "runs-on"?: string;
       }>;
@@ -533,16 +535,43 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c");
     expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
 
-    // macOS packaging is tokenless and independent from npm publish; only the
-    // join job receives contents:write, and only for real releases.
+    // macOS packaging is tokenless and independent from npm publish. A clean
+    // hosted runner installs the locked dependencies and builds gui/dist before
+    // assembly. Only a Developer-ID-signed, Gatekeeper-accepted, stapled artifact
+    // can cross the contents:write join into a public release.
     expect(parsed.jobs?.["package-macos"]?.permissions).toEqual({ contents: "read" });
     expect(parsed.jobs?.["package-macos"]?.["timeout-minutes"]).toBe(20);
+    expect(parsed.jobs?.["package-macos"]?.outputs?.distribution_ready).toBe(
+      "${{ steps.package.outputs.distribution_ready }}",
+    );
+    const macSteps = parsed.jobs?.["package-macos"]?.steps ?? [];
+    expect(macSteps.find(step => step.name === "Setup Bun")?.uses).toBe(
+      "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6",
+    );
+    expect(macSteps.find(step => step.name === "Install locked dependencies")?.run).toBe(
+      "bun install --frozen-lockfile",
+    );
+    expect(macSteps.find(step => step.name === "Build the bundled dashboard")?.run).toBe(
+      "bun run build:gui",
+    );
     expect(parsed.jobs?.["attach-macos"]?.permissions).toEqual({ contents: "write" });
     expect(parsed.jobs?.["attach-macos"]?.needs).toEqual(["publish", "package-macos"]);
-    expect(parsed.jobs?.["attach-macos"]?.if).toBe("${{ inputs.dry-run != true }}");
+    expect(parsed.jobs?.["attach-macos"]?.if).toBe(
+      "${{ inputs.dry-run != true && needs.package-macos.outputs.distribution_ready == 'true' }}",
+    );
     expect(parsed.jobs?.["attach-macos"]?.["timeout-minutes"]).toBe(10);
     expect(workflow).toContain("shasum -a 256 -c ./*.sha256");
     expect(workflow).toContain("GH_REPO: ${{ github.repository }}");
+
+    const macBuildScript = await readText("scripts/build-macos-app.sh");
+    const macPackageScript = await readText("scripts/package-macos-release.sh");
+    expect(macBuildScript).toContain('nested_code=(');
+    expect(macBuildScript).toContain('keyring-darwin-arm64/keyring.darwin-arm64.node');
+    expect(macBuildScript).toContain('keyring-darwin-x64/keyring.darwin-x64.node');
+    expect(macBuildScript).not.toContain("codesign --force --deep");
+    expect(macPackageScript).toContain("Authority=Developer ID Application:");
+    expect(macPackageScript).toContain('xcrun stapler validate "$app_bundle"');
+    expect(macPackageScript).toContain("distribution_ready=$distribution_ready");
 
     // Workflow-dispatch inputs must reach shell code via env, never by direct
     // interpolation into run: source (script-injection hardening).

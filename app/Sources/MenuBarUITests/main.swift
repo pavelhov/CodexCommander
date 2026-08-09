@@ -131,6 +131,49 @@ runner.test("ui: footer exposes navigation, proxy lifecycle, and both exit contr
     )
 }
 
+runner.test("ui: catalog update is a persistent action outside the proxy footer") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    controller.apply(makeSnapshot())
+    runner.equal(controller.catalogUpdateVisible, false, "hidden until stale workers are known")
+
+    var applied = false
+    controller.onApplyCodexCatalog = { applied = true }
+    controller.showCatalogUpdate(staleWorkerCount: 2)
+    runner.equal(controller.catalogUpdateVisible, true)
+    runner.equal(controller.catalogUpdateButtonTitle, "Apply agent catalog…")
+    runner.expect(
+        controller.catalogUpdateDetail.contains("2 Codex background workers"),
+        "card reports a count without exposing process identifiers"
+    )
+    runner.expect(
+        controller.catalogUpdateDetail.contains("OpenCodex remains running"),
+        "card distinguishes the catalog action from a proxy restart"
+    )
+    runner.expect(
+        controller.catalogUpdateAccessibilityLabel?.contains("Agent catalog update ready") == true,
+        "catalog card has an accessible state label"
+    )
+    runner.expect(
+        controller.catalogUpdateButtonAccessibilityLabel?.contains("restarting only Codex") == true,
+        "catalog action explains its narrow restart boundary"
+    )
+    controller.apply(makeSnapshot())
+    runner.equal(
+        controller.catalogUpdateVisible,
+        true,
+        "ordinary snapshot rendering preserves catalog readiness"
+    )
+    controller.activateCatalogUpdateForTesting()
+    runner.equal(applied, true)
+
+    controller.setCatalogApplyEnabled(false)
+    runner.equal(controller.catalogUpdateButtonEnabled, false)
+    controller.hideCatalogUpdate()
+    runner.equal(controller.catalogUpdateVisible, false)
+    runner.equal(controller.footerTitles.count, 7, "catalog action stays outside footer indexing")
+}
+
 runner.test("ui: startup control exposes desktop, headless, off, and approval states") {
     let controller = PopoverViewController()
     _ = controller.view
@@ -588,6 +631,53 @@ runner.test("ui: lifecycle confirmations default to Cancel and mark stop actions
     )
 }
 
+runner.test("ui: catalog confirmation is activity-aware and defaults to Later") {
+    let busy = CatalogUpdateConfirmation(activity: .active(2))
+    let busyAlert = busy.makeAlert()
+    runner.equal(busyAlert.messageText, "Apply the agent catalog update?")
+    runner.equal(busyAlert.buttons.map(\.title), ["Apply Now", "Later"])
+    runner.expect(
+        busyAlert.informativeText.contains("2 active agent requests"),
+        "busy confirmation names current activity"
+    )
+    runner.expect(
+        busyAlert.informativeText.contains("OpenCodex remains running"),
+        "confirmation keeps proxy restart separate"
+    )
+    runner.equal(busyAlert.buttons[0].hasDestructiveAction, true)
+    let laterCell = busyAlert.buttons[1].cell as? NSButtonCell
+    runner.expect(busyAlert.window.defaultButtonCell === laterCell, "Later is the default")
+    runner.expect(
+        busyAlert.window.initialFirstResponder === busyAlert.buttons[1],
+        "Later receives initial focus"
+    )
+    runner.equal(busy.choice(for: .alertFirstButtonReturn), .applyNow)
+    runner.equal(busy.choice(for: .alertSecondButtonReturn), .later)
+
+    let zero = CatalogUpdateConfirmation(activity: .noActiveRequests).makeAlert()
+    runner.expect(
+        zero.informativeText.contains("no active agent requests"),
+        "zero evidence is stated precisely"
+    )
+    runner.equal(
+        zero.informativeText.lowercased().contains("idle"),
+        false,
+        "zero is never labelled idle"
+    )
+    runner.expect(
+        zero.informativeText.contains("new request can still begin"),
+        "zero copy explains the observation race"
+    )
+    runner.equal(zero.buttons[0].hasDestructiveAction, true)
+
+    let unknown = CatalogUpdateConfirmation(activity: .unknown).makeAlert()
+    runner.expect(
+        unknown.informativeText.contains("could not verify"),
+        "missing activity never becomes a false zero"
+    )
+    runner.equal(unknown.buttons[0].hasDestructiveAction, true)
+}
+
 runner.test("ui: application menu keeps Command-Q safe and provides explicit destructive exit") {
     let target = ApplicationMenuTarget()
     let menu = ApplicationMenuFactory.make(
@@ -642,6 +732,52 @@ runner.test("ui: destructive menu availability follows proxy and in-flight state
             controlsAllowed: false
         ),
         false
+    )
+}
+
+runner.test("ui: catalog apply requires readiness and a confirmed running proxy") {
+    let running = makeSnapshot().state
+    runner.equal(
+        CatalogUpdateActionAvailability.canApply(
+            updateReady: true,
+            state: running,
+            controlsAllowed: true
+        ),
+        true
+    )
+    for state in [
+        ProxyState.unreachable,
+        .degraded("Unconfirmed"),
+        .unauthorized,
+        .loading,
+    ] {
+        runner.equal(
+            CatalogUpdateActionAvailability.canApply(
+                updateReady: true,
+                state: state,
+                controlsAllowed: true
+            ),
+            false,
+            "non-running state cannot apply"
+        )
+    }
+    runner.equal(
+        CatalogUpdateActionAvailability.canApply(
+            updateReady: false,
+            state: running,
+            controlsAllowed: true
+        ),
+        false,
+        "no update readiness"
+    )
+    runner.equal(
+        CatalogUpdateActionAvailability.canApply(
+            updateReady: true,
+            state: running,
+            controlsAllowed: false
+        ),
+        false,
+        "another action is in flight"
     )
 }
 

@@ -58,10 +58,17 @@ runtime the leak itself remains an upstream problem:
   service supervisor respawn) without tearing down Codex injection. That is a
   longer, informed recycle than the short drain on `POST /api/stop`.
 - **A gated alternative stream path** — a bounded single-reader relay that
-  removes the unbounded buffering shape entirely. On Windows it becomes the
-  default automatically once a bundled Bun release verifiably carries the
-  #32111 fix; today it is opt-in only (see below). On macOS it stays opt-in
-  even after such a release — flipping macOS `auto` is a separate decision.
+  removes the tee + JavaScript rewrite chain. Windows rewrite traffic already
+  uses it; ordinary Windows traffic remains runtime-gated. On macOS, `auto`
+  uses the exact synchronous-`pull()` relay only when opt-in plaintext V2
+  collaboration actually activates its client rewrite and the process runs the
+  specifically validated bundled Bun 1.3.14. That narrow path fixes the
+  terminal-delivery hang tracked in
+  [#1127](https://github.com/lidge-jun/opencodex/issues/1127) without claiming
+  that Bun 1.3.14 contains the generic #32111 fix. Other macOS rewrites remain
+  explicit-only. The memory endpoint includes scalar eager-relay in-flight,
+  cancel, abort, error, and queue-watermark counters; it never includes bodies
+  or request identity.
 
 Real-world RSS improvement from these changes is **awaiting verification by
 Windows users** — we do not claim the leak is fixed.
@@ -74,8 +81,8 @@ restart it.
 
 1. **Wait for a bundled runtime update.** Once a Bun release verifiably
    carries the fixes, opencodex will bump the bundled runtime and the safer
-   stream path turns on automatically on Windows (macOS keeps requiring the
-   explicit opt-in below).
+   no-rewrite stream path turns on automatically on Windows. The narrow macOS
+   plaintext-V2 `auto` exception described above is independently version-pinned.
 
 2. **Run a Bun runtime you trust with `OPENCODEX_BUN_PATH`.** This is
    unvalidated territory — you are running opencodex on a runtime we have not
@@ -88,12 +95,14 @@ restart it.
 3. **Opt into the bounded relay with `streamMode: "eager-relay"`.** Two ways:
    edit `config.json` (add `"streamMode": "eager-relay"`), or call the
    management API — a `PUT /api/settings` with `{"streamMode":"eager-relay"}`
-   applies to new turns without a restart. **Crash risk warning:** on Bun
-   1.3.14 this uses the stream shape affected by #32111, which can crash the
-   process mid-stream (on any OS, not just Windows). The service manager will
-   restart it, but in-flight requests fail. `"legacy-tee"` pins the current
-   default. On Windows, `"auto"` (default) lets the runtime gate decide. On
-   macOS, `"auto"` always stays on tee; explicit `"eager-relay"` is the opt-in.
+   applies to new turns without a restart. **Crash risk warning:** generic
+   async-pull streams on Bun 1.3.14 remain affected by #32111, so forcing eager
+   relay for unvalidated shapes can still crash the process on any OS. The
+   service manager will restart it, but in-flight requests fail. `"legacy-tee"`
+   pins tee and also disables the macOS plaintext-V2 auto exception. On Windows,
+   `"auto"` (default) lets the runtime gate decide. On macOS, `"auto"` stays on
+   tee except for the exact validated plaintext-V2 collaboration rewrite;
+   explicit `"eager-relay"` opts other eligible SSE turns in.
 
 If you try any of these on a real Windows workload, please report the before
 and after `ocx doctor` memory sections on

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
-import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
+import { catalogModelSlug, effectiveSubagentRoster, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import {
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
@@ -226,6 +226,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       agentsMaxThreadsConflict: enabled && hasAgentsMaxThreads(),
       maxConcurrentThreadsPerSession: getLogicalMaxThreads(),
       multiAgentMode: config.multiAgentMode ?? "default",
+      multiAgentV2MessageDelivery: config.multiAgentV2MessageDelivery ?? "encrypted",
       agentsEnabled: getAgentsEnabled(),
       agentsMaxDepth: getAgentsMaxDepth(),
       subagentDeveloperInstructions: getSubagentDeveloperInstructions(),
@@ -239,6 +240,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       enabled?: unknown;
       maxConcurrentThreadsPerSession?: unknown;
       multiAgentMode?: unknown;
+      multiAgentV2MessageDelivery?: unknown;
       agentsEnabled?: unknown;
       agentsMaxDepth?: unknown;
       subagentDeveloperInstructions?: unknown;
@@ -247,18 +249,28 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const wantsFlag = body.enabled !== undefined;
     const wantsThreads = body.maxConcurrentThreadsPerSession !== undefined;
     const wantsMode = body.multiAgentMode !== undefined;
+    const wantsMessageDelivery = body.multiAgentV2MessageDelivery !== undefined;
     const wantsAgentsEnabled = body.agentsEnabled !== undefined;
     const wantsMaxDepth = body.agentsMaxDepth !== undefined;
     const wantsSubagentInstructions = body.subagentDeveloperInstructions !== undefined;
-    if (!wantsFlag && !wantsThreads && !wantsMode && !wantsAgentsEnabled && !wantsMaxDepth && !wantsSubagentInstructions) {
-      return jsonResponse({ error: "body must set enabled, multiAgentMode, maxConcurrentThreadsPerSession, agentsEnabled, agentsMaxDepth, and/or subagentDeveloperInstructions" }, 400);
+    if (!wantsFlag && !wantsThreads && !wantsMode && !wantsMessageDelivery && !wantsAgentsEnabled && !wantsMaxDepth && !wantsSubagentInstructions) {
+      return jsonResponse({ error: "body must set enabled, multiAgentMode, multiAgentV2MessageDelivery, maxConcurrentThreadsPerSession, agentsEnabled, agentsMaxDepth, and/or subagentDeveloperInstructions" }, 400);
     }
     if (wantsFlag && typeof body.enabled !== "boolean") return jsonResponse({ error: "body.enabled must be a boolean" }, 400);
     if (wantsMode && body.multiAgentMode !== "v1" && body.multiAgentMode !== "default" && body.multiAgentMode !== "v2") {
       return jsonResponse({ error: "body.multiAgentMode must be 'v1', 'default', or 'v2'" }, 400);
     }
-    if (wantsThreads && (typeof body.maxConcurrentThreadsPerSession !== "number" || !Number.isInteger(body.maxConcurrentThreadsPerSession) || body.maxConcurrentThreadsPerSession < 1)) {
-      return jsonResponse({ error: "body.maxConcurrentThreadsPerSession must be an integer >= 1" }, 400);
+    if (wantsMessageDelivery
+      && body.multiAgentV2MessageDelivery !== null
+      && body.multiAgentV2MessageDelivery !== "encrypted"
+      && body.multiAgentV2MessageDelivery !== "plaintext") {
+      return jsonResponse({ error: "body.multiAgentV2MessageDelivery must be 'encrypted', 'plaintext', or null" }, 400);
+    }
+    // null clears the active thread-limit key (same unset contract as the other
+    // nullable fields below); an integer keeps the existing set behavior.
+    if (wantsThreads && body.maxConcurrentThreadsPerSession !== null
+        && (typeof body.maxConcurrentThreadsPerSession !== "number" || !Number.isInteger(body.maxConcurrentThreadsPerSession) || body.maxConcurrentThreadsPerSession < 1)) {
+      return jsonResponse({ error: "body.maxConcurrentThreadsPerSession must be an integer >= 1, or null to clear it" }, 400);
     }
     // Validate every new field BEFORE any write, so each 400 leaves config untouched.
     // null unsets the key; "" is a meaningful value for instructions and must not be
@@ -295,7 +307,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       toggle = (enabled: boolean) => runCodexFeaturesCommand(enabled ? "enable" : "disable");
       }
       const result = transitionMultiAgentV2(targetFlag, toggle, {
-        ...(wantsThreads ? { threadLimit: body.maxConcurrentThreadsPerSession as number } : {}),
+        ...(wantsThreads ? { threadLimit: body.maxConcurrentThreadsPerSession as number | null } : {}),
       });
       if (!result.ok) return jsonResponse({ error: `multi_agent_v2 transition failed: ${result.error}` }, 502);
       if (result.changed && result.threadLimit !== null) warnings.push(`Thread limit ${result.threadLimit} preserved for ${targetFlag ? "v2" : "v1"}.`);
@@ -303,9 +315,17 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     if (wantsMode) {
       if (mode === "default") delete config.multiAgentMode;
       else config.multiAgentMode = mode;
-      saveConfigPreservingClaudeCode(config);
       warnings.push(`Multi-agent mode set to '${mode}'. Applies to new sessions.`);
     }
+    if (wantsMessageDelivery) {
+      if (body.multiAgentV2MessageDelivery === "plaintext") {
+        config.multiAgentV2MessageDelivery = "plaintext";
+      } else {
+        delete config.multiAgentV2MessageDelivery;
+      }
+      warnings.push("V2 message delivery changes affect subsequent requests. Start a new session instead of switching an active conversation.");
+    }
+    if (wantsMode || wantsMessageDelivery) saveConfigPreservingClaudeCode(config);
     // New-key scalar writes: each writer is individually atomic, so apply them in
     // sequence after the transition. A failure here is a persistence failure (the
     // writers' ok:false result or a throw from the underlying atomic write helper),
@@ -345,6 +365,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       agentsMaxThreadsConflict: enabled && hasAgentsMaxThreads(),
       maxConcurrentThreadsPerSession: getLogicalMaxThreads(),
       multiAgentMode: config.multiAgentMode ?? "default",
+      multiAgentV2MessageDelivery: config.multiAgentV2MessageDelivery ?? "encrypted",
       agentsEnabled: getAgentsEnabled(),
       agentsMaxDepth: getAgentsMaxDepth(),
       subagentDeveloperInstructions: getSubagentDeveloperInstructions(),
@@ -552,8 +573,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     return jsonResponse({ ok: true, effortCap: config.effortCap ?? null, subagentEffortCap: config.subagentEffortCap ?? null });
   }
 
-  // Subagent model picker: which ≤5 routed models Codex's spawn_agent advertises (it shows the
-  // first 5 routed catalog entries). PUT reorders the injected catalog so the chosen ones lead.
+  // Subagent model picker: persist up to five requested quick picks. Codex advertises the first
+  // five picker-visible catalog rows, so the response reports the effective V2 projection rather
+  // than implying every saved choice necessarily entered that window. PUT reprioritizes the
+  // injected catalog so eligible chosen rows lead.
   if (url.pathname === "/api/subagent-models" && req.method === "GET") {
     const models = await fetchAllModels(config);
     const disabled = new Set(config.disabledModels ?? []);
@@ -573,7 +596,14 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     // in-memory catalog than the one on disk.
     const { collectCodexAppServerCatalogState } = await import("../../codex/app-server-processes");
     const catalogState = collectCodexAppServerCatalogState();
-    return jsonResponse({ chosen: config.subagentModels ?? [], available, catalogState });
+    const effectiveV2 = effectiveSubagentRoster(config.subagentModels ?? [], "v2");
+    return jsonResponse({
+      chosen: config.subagentModels ?? [],
+      available,
+      catalogState,
+      advertised: effectiveV2.advertised.map(model => model.model),
+      excluded: effectiveV2.excluded,
+    });
   }
   if (url.pathname === "/api/subagent-models" && req.method === "PUT") {
     let body: { models?: unknown };
@@ -585,7 +615,14 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const catalogRefresh = await convergeCodexCatalog();
     await syncClaudeAgentDefsBestEffort();
     await autoApplyDesktopBestEffort();
-    return jsonResponse({ ok: true, applied: chosen, catalogRefresh });
+    const effectiveV2 = effectiveSubagentRoster(chosen, "v2");
+    return jsonResponse({
+      ok: true,
+      applied: chosen,
+      catalogRefresh,
+      advertised: effectiveV2.advertised.map(model => model.model),
+      excluded: effectiveV2.excluded,
+    });
   }
 
   // Priority-ordered subagent model fallback chain for quota-aware spawn routing.

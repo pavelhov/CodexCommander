@@ -61,6 +61,76 @@ package enum LifecycleConfirmation {
     }
 }
 
+/// Fresh activity evidence used only to explain the risk of applying a catalog update.
+/// A zero count is deliberately not called "idle": another request can begin between
+/// the observation and the confirmed worker restart.
+package enum CatalogUpdateActivity: Equatable, Sendable {
+    case active(Int)
+    case noActiveRequests
+    case unknown
+
+    package init(snapshot: AgentActivitySnapshot?) {
+        guard let snapshot, snapshot.isSupported, snapshot.activeTurnCount >= 0 else {
+            self = .unknown
+            return
+        }
+        self = snapshot.activeTurnCount > 0
+            ? .active(snapshot.activeTurnCount)
+            : .noActiveRequests
+    }
+}
+
+package enum CatalogUpdateChoice: Equatable, Sendable {
+    case applyNow
+    case later
+}
+
+/// Confirmation for restarting only Codex's catalog-caching workers.
+///
+/// This stays separate from proxy lifecycle confirmation because the proxy remains
+/// running and a future activity monitor can add an Apply-when-idle choice here.
+package struct CatalogUpdateConfirmation {
+    package let activity: CatalogUpdateActivity
+
+    package init(activity: CatalogUpdateActivity) {
+        self.activity = activity
+    }
+
+    package var messageText: String { "Apply the agent catalog update?" }
+
+    package var informativeText: String {
+        let activityText: String
+        switch activity {
+        case .active(let count):
+            let requests = count == 1 ? "1 active agent request" : "\(count) active agent requests"
+            activityText = "OpenCodex currently reports \(requests)."
+        case .noActiveRequests:
+            activityText = "OpenCodex currently reports no active agent requests. A new request can still begin before the update is applied."
+        case .unknown:
+            activityText = "OpenCodex could not verify whether agent requests are active."
+        }
+        return "\(activityText) Applying now restarts only Codex background workers and may interrupt an answer. OpenCodex remains running."
+    }
+
+    package func makeAlert() -> NSAlert {
+        let alert = NSAlert()
+        alert.messageText = messageText
+        alert.informativeText = informativeText
+        alert.alertStyle = .warning
+        let apply = alert.addButton(withTitle: "Apply Now")
+        let later = alert.addButton(withTitle: "Later")
+        // Even a fresh zero is only an observation; a request can start before apply.
+        apply.hasDestructiveAction = true
+        alert.window.defaultButtonCell = later.cell as? NSButtonCell
+        alert.window.initialFirstResponder = later
+        return alert
+    }
+
+    package func choice(for response: NSApplication.ModalResponse) -> CatalogUpdateChoice {
+        response == .alertFirstButtonReturn ? .applyNow : .later
+    }
+}
+
 package enum CompanionShortcut {
     package static let keyEquivalent = "q"
     package static let quitModifiers: NSEvent.ModifierFlags = [.command]
@@ -77,6 +147,16 @@ package enum LifecycleActionAvailability {
         case .running, .unauthorized, .degraded: return true
         case .loading, .unreachable: return false
         }
+    }
+}
+
+package enum CatalogUpdateActionAvailability {
+    package static func canApply(
+        updateReady: Bool,
+        state: ProxyState?,
+        controlsAllowed: Bool
+    ) -> Bool {
+        updateReady && controlsAllowed && state?.isRunning == true
     }
 }
 

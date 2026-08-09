@@ -95,7 +95,13 @@ import {
   prepareSameTarget429Wait,
 } from "../../lib/upstream-retry";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../auth-cors";
-import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
+import {
+  createTranslatorBudget,
+  finalizeTranslatorBudgetResponse,
+  isTranslatorBudgetExceededError,
+  markTranslatorBudgetSelfFinalizingBody,
+  type TranslatorBudget,
+} from "../../lib/translator-budget";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { slugsEquivalent } from "../../providers/slug-codec";
@@ -192,6 +198,11 @@ import {
 } from "../sse-payload-rewrite";
 import { responsesJsonToSseBody } from "../responses-json-events";
 import { guardTerminalEventStream } from "./terminal-guard";
+import {
+  createV2PlaintextCollaborationMarkerRewrite,
+  createV2PlaintextCollaborationRestoreRewrite,
+  rewriteV2PlaintextCollaborationRequest,
+} from "../../responses/v2-plaintext-collaboration";
 
 /**
  * Adapters whose continuation state must survive Codex's store:false requests.
@@ -888,6 +899,20 @@ async function applyFinalRouteRequestNormalization(args: {
   logCtx.providerAdapter = route.provider.adapter;
   logCtx.routeDecision = route.routeDecision;
 
+  if (
+    config.multiAgentV2MessageDelivery === "plaintext"
+    && isCanonicalOpenAiForwardProvider(route.provider)
+    && collabSurface(parsed) === "v2"
+  ) {
+    const rewrite = rewriteV2PlaintextCollaborationRequest(parsed._rawBody);
+    if (rewrite.activated) {
+      parsed._rawBody = rewrite.body;
+      parsed._v2PlaintextCollaborationAlias = true;
+    } else if (isInjectionDebugEnabled()) {
+      injectionDebugLog(`[opencodex] native v2 plaintext delivery stayed fail-closed (${rewrite.reason})`);
+    }
+  }
+
   if (responsesUpstreamStreaming === false && route.provider.adapter === "openai-responses") {
     parsed.stream = false;
     if (parsed._rawBody && typeof parsed._rawBody === "object") {
@@ -914,15 +939,45 @@ async function applyFinalRouteRequestNormalization(args: {
   applyServiceTierGate(route.provider, parsed._rawBody, parsed.options);
 
   {
+    const encryptedCodexTasks = isCanonicalOpenAiForwardProvider(route.provider)
+      && parsed._v2PlaintextCollaborationAlias !== true;
     const guidance = await multiAgentGuidanceText(parsed, {
       multiAgentGuidanceEnabled: config.multiAgentGuidanceEnabled,
+      encryptedCodexTasks,
       codexAccountNamespace: route.codexAccountNamespace,
       injectionModel: config.injectionModel,
       injectionEffort: config.injectionEffort,
       subagentModels: config.subagentModels,
       subagentModelFallback: config.subagentModelFallback,
       injectionPrompt: config.injectionPrompt,
-    });
+    }, encryptedCodexTasks
+      ? {
+        isEncryptedTaskCompatibleModel: (model: string): boolean => {
+          try {
+            const candidate = routeModel(config, model);
+            if (!isCanonicalOpenAiForwardProvider(candidate.provider)) return false;
+            // A combo can select a native target now and still fail over to an
+            // external target later. Only advertise it for encrypted parents when
+            // every concrete target can consume native ciphertext.
+            if (candidate.combo) {
+              const combo = getCombo(config, candidate.combo.comboId);
+              return combo?.targets.every(target => {
+                try {
+                  return isCanonicalOpenAiForwardProvider(
+                    routeModel(config, `${target.provider}/${target.model}`).provider,
+                  );
+                } catch {
+                  return false;
+                }
+              }) ?? false;
+            }
+            return true;
+          } catch {
+            return false;
+          }
+        },
+      }
+      : undefined);
     if (guidance) {
       injectDeveloperMessage(parsed, guidance);
       if (isInjectionDebugEnabled()) {
@@ -1208,51 +1263,6 @@ export async function handleComboResponses(
 
 
 
-function finalizeOwnedTranslatorBudget(response: Response, budget: TranslatorBudget): Response {
-  if (!response.body) {
-    budget.dispose();
-    return response;
-  }
-  const reader = response.body.getReader();
-  let finalized = false;
-  const finalize = () => {
-    if (finalized) return;
-    finalized = true;
-    budget.dispose();
-  };
-  const body = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const result = await reader.read();
-        if (result.done) {
-          finalize();
-          controller.close();
-        } else {
-          controller.enqueue(result.value);
-        }
-      } catch (error) {
-        finalize();
-        controller.error(error);
-      }
-    },
-    async cancel(reason) {
-      try { await reader.cancel(reason); } finally { finalize(); }
-    },
-  });
-  const finalizedResponse = new Response(body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
-  if (isNativePassthroughSseResponse(response)) {
-    markNativePassthroughSseResponse(finalizedResponse);
-  }
-  if (isEagerRelaySseResponse(response)) {
-    markEagerRelaySseResponse(finalizedResponse);
-  }
-  return finalizedResponse;
-}
-
 /**
  * Service-tier capability gate, applied after the final route/wire is settled. A
  * provider explicitly documented as NOT supporting `service_tier` must never
@@ -1287,13 +1297,41 @@ export async function handleResponses(
 ): Promise<Response> {
   const ownsBudget = options.translatorBudget === undefined;
   const translatorBudget = options.translatorBudget ?? createTranslatorBudget();
+  let ownedBudgetSettled = false;
+  const settleOwnedTranslatorBudget = () => {
+    if (!ownsBudget || ownedBudgetSettled) return;
+    ownedBudgetSettled = true;
+    translatorBudget.dispose();
+  };
   try {
-    const response = await handleResponsesInner(req, config, logCtx, { ...options, translatorBudget });
-    return ownsBudget ? finalizeOwnedTranslatorBudget(response, translatorBudget) : response;
+    const response = await handleResponsesInner(req, config, logCtx, {
+      ...options,
+      translatorBudget,
+      ...(ownsBudget ? { settleOwnedTranslatorBudget } : {}),
+    });
+    return ownsBudget
+      ? finalizeOwnedTranslatorBudget(response, translatorBudget, settleOwnedTranslatorBudget)
+      : response;
   } catch (error) {
-    if (ownsBudget) translatorBudget.dispose();
+    settleOwnedTranslatorBudget();
     throw error;
   }
+}
+
+function finalizeOwnedTranslatorBudget(
+  response: Response,
+  budget: TranslatorBudget,
+  settle: () => void,
+): Response {
+  const finalizedResponse = finalizeTranslatorBudgetResponse(response, budget, settle);
+  if (finalizedResponse === response) return response;
+  if (isNativePassthroughSseResponse(response)) {
+    markNativePassthroughSseResponse(finalizedResponse);
+  }
+  if (isEagerRelaySseResponse(response)) {
+    markEagerRelaySseResponse(finalizedResponse);
+  }
+  return finalizedResponse;
 }
 
 /**
@@ -1304,7 +1342,11 @@ async function handleResponsesInner(
   req: Request,
   config: OcxConfig,
   logCtx: RequestLogContext,
-  options: HandleResponsesOptions & { translatorBudget: TranslatorBudget },
+  options: HandleResponsesOptions & {
+    translatorBudget: TranslatorBudget;
+    /** Present only when this invocation owns the budget lifecycle. */
+    settleOwnedTranslatorBudget?: () => void;
+  },
 ): Promise<Response> {
   // The Chat and Anthropic surfaces replay through here with a Responses-shaped body,
   // so an omitted value means a genuine Responses inbound.
@@ -1372,6 +1414,13 @@ async function handleResponsesInner(
       });
     }
     return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
+  }
+  const plaintextV2DeliveryRequested = config.multiAgentV2MessageDelivery === "plaintext"
+    && collabSurface(parsed) === "v2";
+  if (plaintextV2DeliveryRequested) {
+    // Collaboration arguments intentionally become readable to the local Codex runtime. Keep
+    // them out of the separate opt-in usage-debug persistence surface on every provider route.
+    logCtx.suppressUsageDebugBodySample = true;
   }
   // Prefer a pre-populated id (routed Claude) over Responses headers that may be
   // absent or synthetically injected (session_id from prompt_cache_key).
@@ -1759,6 +1808,11 @@ async function handleResponsesInner(
     const imageGenCallAliases = route.provider.authMode === "forward"
       ? new Map<string, { namespace: string; name: string }>()
       : imageGenToolCallAliases(toolBridgeMaps.toolNsMap, parsed._rawBody, translatorBudget);
+    const plaintextCollaborationClientRewrite = createV2PlaintextCollaborationRestoreRewrite(
+      parsed._v2PlaintextCollaborationAlias === true,
+    ) ?? createV2PlaintextCollaborationMarkerRewrite(
+      plaintextV2DeliveryRequested && !isCanonicalOpenAiForwardProvider(route.provider),
+    );
     // Local continuation cache for the ChatGPT passthrough. Codex WS turns chain with
     // previous_response_id, ocx converts them to internal HTTP requests, and the ChatGPT Codex
     // REST backend rejects the parameter — the adapter strips it in forward mode, so the ONLY
@@ -2056,21 +2110,28 @@ async function handleResponsesInner(
     // background for terminal-outcome/quota inspection only.
     // #314 alternative shape: win32 no-rewrite traffic follows the runtime/config
     // gate; darwin no-rewrite traffic joins it only for explicit
-    // `streamMode: "eager-relay"` opt-in. Darwin `auto` always stays tee. The
-    // eager shape skips tee and uses one bounded reader with inline inspection
-    // (src/server/relay-eager.ts; policy:
-    // devlog/_fin/260731_macos_rss_retention/100_darwin_eager_optin.md).
-    // The bundled known-bad runtime remains on tee by default on both platforms.
+    // Darwin `auto` uses the tested synchronous-pull eager shape only for an
+    // activated plaintext-V2 collaboration rewrite. Other Darwin rewrites stay
+    // explicit-only; `legacy-tee` remains the rollback switch.
+    // Generic no-rewrite traffic on the bundled runtime remains on tee by default.
     if (isEventStream && upstreamResponse.body) {
       const repairConfig = route.provider.responsesItemIdRepair;
       const snapshotRepairEnabled = hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair);
-      const needsClientRewrite = imageGenCallAliases.size > 0 || hasResponsesItemIdRepair(repairConfig) || snapshotRepairEnabled;
-      // Compose opt-in payload rewrites into one parse/stringify pass (image-gen restore first).
-      const payloadRewrites = [
+      const needsClientRewrite = imageGenCallAliases.size > 0
+        || hasResponsesItemIdRepair(repairConfig)
+        || snapshotRepairEnabled
+        || plaintextCollaborationClientRewrite !== undefined;
+      // Snapshot repair may inject outbound tool defaults after ordinary payload rewrites. Keep
+      // plaintext alias restoration/marker injection as the final client-facing pass.
+      const preSnapshotPayloadRewrites = [
         createImageGenCallRestoreRewrite(imageGenCallAliases),
         hasResponsesItemIdRepair(repairConfig)
           ? createResponsesItemIdPayloadRewrite(repairConfig!, translatorBudget)
           : undefined,
+      ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
+      const payloadRewrites = [
+        ...preSnapshotPayloadRewrites,
+        plaintextCollaborationClientRewrite,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
       // #893: sparse-snapshot gateways get field backfills AND lifecycle event
       // injection at the block level, after payload rewrites. Defaults come
@@ -2085,8 +2146,11 @@ async function handleResponsesInner(
       })();
       const clientBlockRewrite = snapshotRepairEnabled
         ? composeSseBlockRewrites(
-          payloadRewriteAsBlockRewrite(composeSsePayloadRewrites(...payloadRewrites)),
+          payloadRewriteAsBlockRewrite(composeSsePayloadRewrites(...preSnapshotPayloadRewrites)),
           createResponsesSnapshotBlockRewrite(snapshotDefaultsRequest, translatorBudget),
+          ...(plaintextCollaborationClientRewrite
+            ? [payloadRewriteAsBlockRewrite(plaintextCollaborationClientRewrite)]
+            : []),
         )
         : undefined;
       // #864: win32 rewrite traffic must never enter the tee()+JS-pull chain
@@ -2095,9 +2159,14 @@ async function handleResponsesInner(
       const win32EagerRewrite = isWin32EagerRewrite(process.platform, needsClientRewrite);
       const eagerPath = selectEagerPath(
         process.platform,
-        needsClientRewrite,
+        {
+          needsClientRewrite,
+          plaintextCollaborationRewrite: plaintextCollaborationClientRewrite !== undefined,
+        },
         config.streamMode ?? "auto",
       );
+      const inlineEagerRewrite = needsClientRewrite
+        && (win32EagerRewrite || eagerPath?.useEagerRelay === true);
       if (eagerPath?.useEagerRelay || win32EagerRewrite) {
         const turnAc = new AbortController();
         linkAbortSignal(upstream, turnAc.signal);
@@ -2137,7 +2206,7 @@ async function handleResponsesInner(
           // Stream lifetime follows the protocol terminal even when this request
           // has no outcome callback configured (reported() would stay false).
           sawTerminal: () => inspector.terminalSeen(),
-          ...(win32EagerRewrite
+          ...(inlineEagerRewrite
             ? { rewritePayload: composeSsePayloadRewrites(...payloadRewrites) }
             : {}),
           ...(clientBlockRewrite
@@ -2155,15 +2224,20 @@ async function handleResponsesInner(
             }
           },
           onClientCancel: () => options.onNativePassthroughCancel?.(),
-          onDone: () => unregisterTurn(turnAc),
-        }, win32EagerRewrite ? { rewriteBudget: translatorBudget } : undefined);
+          onDone: () => {
+            try { unregisterTurn(turnAc); } finally { options.settleOwnedTranslatorBudget?.(); }
+          },
+        }, inlineEagerRewrite ? { rewriteBudget: translatorBudget } : undefined);
         // When selected, this relay closes response.completed even if upstream
-        // keeps the connection alive. Windows rewrite traffic applies its
-        // payload transform inline — never via the Bun#32111-unsafe
-        // tee()+JS-pull chain (#864).
+        // keeps the connection alive. Windows forced-rewrite traffic and Darwin
+        // explicit/validated-plaintext eager traffic apply client rewrites
+        // inline rather than via the tee()+JS-pull chain.
         if (!headers.has("content-type")) headers.set("content-type", "text/event-stream");
+        const clientBody = options.settleOwnedTranslatorBudget
+          ? markTranslatorBudgetSelfFinalizingBody(eagerBody)
+          : eagerBody;
         return markEagerRelaySseResponse(
-          markNativePassthroughSseResponse(new Response(eagerBody, {
+          markNativePassthroughSseResponse(new Response(clientBody, {
             status: upstreamResponse.status,
             headers,
           })),
@@ -2261,15 +2335,24 @@ async function handleResponsesInner(
         } catch { /* non-JSON despite content-type; recording is best-effort */ }
       }
       const clientJson = (() => {
-        const restored = restoreImageGenCallsInJson(text, imageGenCallAliases);
-        if (!hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair)) return restored;
+        const imageRestored = restoreImageGenCallsInJson(text, imageGenCallAliases);
+        if (!hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair)) {
+          return plaintextCollaborationClientRewrite
+            ? plaintextCollaborationClientRewrite(imageRestored)
+            : imageRestored;
+        }
         let outbound: unknown;
         try {
           outbound = JSON.parse(request.body);
         } catch {
           outbound = undefined;
         }
-        return repairResponsesSnapshotJson(restored, outbound);
+        const repaired = repairResponsesSnapshotJson(imageRestored, outbound);
+        // Snapshot repair can reintroduce outbound alias defaults, so apply the plaintext
+        // client rewrite exactly once and only after repair, matching the SSE block order.
+        return plaintextCollaborationClientRewrite
+          ? plaintextCollaborationClientRewrite(repaired)
+          : repaired;
       })();
       // #875: the transport-neutral reliability policy forced a bounded JSON
       // upstream for a client that asked for SSE. Reframe the completed JSON
@@ -2323,6 +2406,13 @@ async function handleResponsesInner(
         statusText: upstreamResponse.statusText,
         headers,
       });
+    }
+    if (plaintextCollaborationClientRewrite !== undefined && upstreamResponse.ok) {
+      return formatErrorResponse(
+        502,
+        "upstream_error",
+        "V2 plaintext delivery received an unsupported response content type",
+      );
     }
     const body = relayWithAbort(upstreamResponse.body, upstream);
     const turnAc = new AbortController();
@@ -2583,6 +2673,7 @@ async function handleResponsesInner(
           ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
           stallTimeoutSec: config.stallTimeoutSec,
           hideThinkingSummary: parsed.options.hideThinkingSummary,
+          plaintextV2Collaboration: plaintextV2DeliveryRequested,
           ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
           ...(routedCompaction ? { compaction: true } : {}),
           onUsage: usage => {
@@ -2628,6 +2719,7 @@ async function handleResponsesInner(
       translatorBudget,
       replayCacheScope: parsed._clientThreadId ?? "global",
       hideThinkingSummary: parsed.options.hideThinkingSummary,
+      plaintextV2Collaboration: plaintextV2DeliveryRequested,
       toolNsMap,
       freeformToolNames,
       toolSearchToolNames,
@@ -3278,6 +3370,7 @@ async function handleResponsesInner(
         ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
         stallTimeoutSec: config.stallTimeoutSec,
         hideThinkingSummary: parsed.options.hideThinkingSummary,
+        plaintextV2Collaboration: plaintextV2DeliveryRequested,
         ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
         ...(routedCompaction ? { compaction: true } : {}),
         onUsage: usage => {
@@ -3334,6 +3427,7 @@ async function handleResponsesInner(
       translatorBudget,
       replayCacheScope: parsed._clientThreadId ?? "global",
       hideThinkingSummary: parsed.options.hideThinkingSummary,
+      plaintextV2Collaboration: plaintextV2DeliveryRequested,
       toolNsMap,
       freeformToolNames,
       toolSearchToolNames,

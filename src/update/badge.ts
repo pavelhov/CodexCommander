@@ -52,11 +52,11 @@ export function readUpdateBadge(deps: UpdateBadgeDeps = defaultDeps): UpdateBadg
     currentVersion: current,
     latestVersion: null,
     channel,
-    canUpdate: installer !== "source",
+    canUpdate: installer !== "source" && installer !== "app",
     unknown: true,
   };
   // A source checkout has nothing to compare against, so "unknown" is not useful there.
-  if (installer === "source" || current === "?" || isSourceBuildVersion(current)) {
+  if (installer === "source" || installer === "app" || current === "?" || isSourceBuildVersion(current)) {
     return { ...base, canUpdate: false, unknown: false };
   }
 

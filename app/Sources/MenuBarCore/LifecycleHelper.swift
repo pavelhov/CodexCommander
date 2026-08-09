@@ -7,6 +7,7 @@ public enum LifecycleAction: String, Codable, Sendable {
     case start
     case stop
     case restart
+    case applyCodexCatalog
 }
 
 public enum LifecycleState: String, Codable, Sendable {
@@ -27,6 +28,13 @@ public struct LifecycleCommandResult: Codable, Equatable, Sendable {
     public let port: Int?
     public let message: String
     public let errorCode: String?
+    /// Catalog-action fields are additive so older lifecycle results remain decodable.
+    /// The app deliberately receives counts rather than process identifiers.
+    public let catalogUpdated: Bool?
+    public let codexRestartRequired: Bool?
+    public let staleWorkerCount: Int?
+    public let stoppedWorkerCount: Int?
+    public let survivingWorkerCount: Int?
 
     public init(
         schemaVersion: Int = 1,
@@ -37,7 +45,12 @@ public struct LifecycleCommandResult: Codable, Equatable, Sendable {
         pid: Int? = nil,
         port: Int? = nil,
         message: String,
-        errorCode: String? = nil
+        errorCode: String? = nil,
+        catalogUpdated: Bool? = nil,
+        codexRestartRequired: Bool? = nil,
+        staleWorkerCount: Int? = nil,
+        stoppedWorkerCount: Int? = nil,
+        survivingWorkerCount: Int? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.action = action
@@ -48,6 +61,11 @@ public struct LifecycleCommandResult: Codable, Equatable, Sendable {
         self.port = port
         self.message = message
         self.errorCode = errorCode
+        self.catalogUpdated = catalogUpdated
+        self.codexRestartRequired = codexRestartRequired
+        self.staleWorkerCount = staleWorkerCount
+        self.stoppedWorkerCount = stoppedWorkerCount
+        self.survivingWorkerCount = survivingWorkerCount
     }
 }
 
@@ -92,8 +110,17 @@ public enum LifecycleHelperDiscovery {
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
         fileManager: FileManager = .default
     ) -> LifecycleInvocation? {
+        // The repository build is deliberately live: while developing, edits in the
+        // checkout must take effect without rebuilding the copied Resources snapshot.
         if let source = sourceInvocation(bundleURL: bundleURL, fileManager: fileManager) {
             return source
+        }
+
+        // A released companion carries the complete Bun + OpenCodex package under
+        // Contents/Resources/runtime. Resolve it before global installs so a copied app
+        // never accidentally controls a different checkout or npm installation.
+        if let bundled = bundledInvocation(bundleURL: bundleURL, fileManager: fileManager) {
+            return bundled
         }
 
         // Release companions may be launched outside the source tree. Only inspect
@@ -123,6 +150,19 @@ public enum LifecycleHelperDiscovery {
             }
         }
         return nil
+    }
+
+    private static func bundledInvocation(
+        bundleURL: URL,
+        fileManager: FileManager
+    ) -> LifecycleInvocation? {
+        let bundle = bundleURL.resolvingSymlinksInPath()
+        guard bundle.pathExtension == "app" else { return nil }
+        let runtime = bundle
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Resources", isDirectory: true)
+            .appendingPathComponent("runtime", isDirectory: true)
+        return repositoryInvocation(runtime, fileManager: fileManager)
     }
 
     private static func sourceInvocation(
@@ -263,7 +303,7 @@ public actor LifecycleHelper: LifecycleCommandRunning {
                 process.arguments = invocation.prefixArguments + ["__macos-lifecycle", action.rawValue]
                 process.standardOutput = pipe
                 process.standardError = FileHandle.nullDevice
-                process.environment = Self.controlledEnvironment()
+                process.environment = Self.controlledEnvironment(for: invocation.executable)
                 pipe.fileHandleForReading.readabilityHandler = { handle in
                     output.append(handle.availableData)
                 }
@@ -313,6 +353,15 @@ public actor LifecycleHelper: LifecycleCommandRunning {
                       result.message.utf8.count <= 240,
                       result.pid.map({ $0 > 0 }) ?? true,
                       result.port.map({ (1...65_535).contains($0) }) ?? true,
+                      result.staleWorkerCount.map({ $0 >= 0 }) ?? true,
+                      result.stoppedWorkerCount.map({ $0 >= 0 }) ?? true,
+                      result.survivingWorkerCount.map({ $0 >= 0 }) ?? true,
+                      action != .applyCodexCatalog || !result.ok || (
+                          result.catalogUpdated != nil
+                              && result.codexRestartRequired != nil
+                              && result.stoppedWorkerCount != nil
+                              && result.survivingWorkerCount != nil
+                      ),
                       (process.terminationStatus == 0) == result.ok
                 else {
                     continuation.resume(throwing: LifecycleHelperError.invalidResponse)
@@ -325,9 +374,14 @@ public actor LifecycleHelper: LifecycleCommandRunning {
 
     /// Preserve OpenCodex/Codex configuration while removing runtime preloads and an
     /// attacker-controlled PATH from this privileged fixed-action bridge.
-    private nonisolated static func controlledEnvironment() -> [String: String] {
+    private nonisolated static func controlledEnvironment(for executable: URL) -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
+        if executable.path.contains("/Contents/Resources/runtime/") {
+            // The app-owned runtime must never enter npm/source self-update paths.
+            // This marker is inherited by the Bun proxy process and its management API.
+            environment["OCX_APP_RUNTIME"] = "1"
+        }
         for key in [
             "BUN_OPTIONS", "BUN_INSPECT", "BUN_INSPECT_CONNECT_TO",
             "NODE_OPTIONS", "NODE_PATH", "LD_PRELOAD",

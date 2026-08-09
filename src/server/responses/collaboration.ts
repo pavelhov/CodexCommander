@@ -169,6 +169,8 @@ export function collabSurface(parsed: OcxParsedRequest): "v1" | "v2" | null {
 
 export interface MultiAgentGuidanceOptions {
   multiAgentGuidanceEnabled?: boolean;
+  /** True when this parent route sends delegated V2 tasks as native encrypted_content. */
+  encryptedCodexTasks?: boolean;
   codexAccountNamespace?: string;
   injectionModel?: string;
   injectionEffort?: string;
@@ -185,6 +187,8 @@ export interface MultiAgentGuidanceDeps {
     surface: SpawnAgentSurface,
   ) => EffectiveSubagentRoster | Promise<EffectiveSubagentRoster>;
   collectCatalogState?: () => { state: "fresh" | "stale" | "not_running" | "unknown" };
+  /** Resolve whether a candidate route can consume native ChatGPT task ciphertext. */
+  isEncryptedTaskCompatibleModel?: (model: string) => boolean | Promise<boolean>;
 }
 
 async function defaultCollectCatalogState(): Promise<{ state: "fresh" | "stale" | "not_running" | "unknown" }> {
@@ -228,6 +232,7 @@ export async function multiAgentGuidanceText(
   if (options.multiAgentGuidanceEnabled === false) return null;
   const {
     injectionModel,
+    encryptedCodexTasks,
     injectionEffort,
     codexAccountNamespace,
     subagentModels,
@@ -259,6 +264,15 @@ export async function multiAgentGuidanceText(
     ];
     const resolveRoster = deps.resolveEffectiveSubagentRoster
       ?? await createRequestScopedSubagentRosterResolver();
+    // Native ChatGPT parents may hand a child only backend-encrypted task content.
+    // Filter automatic guidance to routes with the same capability, while leaving
+    // exact model ids and the downstream fail-closed guard untouched. If capability
+    // evidence is unavailable, fail closed for guidance rather than guessing from a
+    // provider/model name.
+    const encryptedTaskCompatible = async (model: string): Promise<boolean> => {
+      if (encryptedCodexTasks !== true) return true;
+      return (await deps.isEncryptedTaskCompatibleModel?.(model)) === true;
+    };
     const effective = await resolveRoster(configuredForGuidance, "v2");
     // Resolve the roster and preferred roles independently so a bare native can project onto its
     // generated account rows without making an unrelated provider/gpt-* row look equivalent.
@@ -289,8 +303,15 @@ export async function multiAgentGuidanceText(
     const rosterModels = (subagentEffective?.advertised ?? [])
       .filter(withinCandidateWindow)
       .filter(allowedForCurrentRoute);
-    const roster = subagentRosterText(rosterModels);
-    const preferredCandidates = (preferredEffective?.advertised ?? []).filter(withinCandidateWindow);
+    const compatibleRosterModels: EffectiveSubagentModel[] = [];
+    for (const candidate of rosterModels) {
+      if (await encryptedTaskCompatible(candidate.model)) compatibleRosterModels.push(candidate);
+    }
+    const roster = subagentRosterText(compatibleRosterModels);
+    const preferredCandidates: EffectiveSubagentModel[] = [];
+    for (const candidate of (preferredEffective?.advertised ?? []).filter(withinCandidateWindow)) {
+      if (await encryptedTaskCompatible(candidate.model)) preferredCandidates.push(candidate);
+    }
     const soleBarePreferred = preferredCandidates.length === 1
       && !preferredCandidates[0]!.model.includes("/")
       ? preferredCandidates[0]
@@ -308,16 +329,25 @@ export async function multiAgentGuidanceText(
         .map(item => `${item.configured}:${item.reason}`)
         .join(", ")}`);
     }
-    const fallbackGuidance = subagentFallbackGuidanceText({ subagentModelFallback } as OcxConfig);
-    if (!injectionModel && roster === "" && fallbackGuidance === "") return null;
+    const compatibleFallback: string[] = [];
+    for (const model of subagentModelFallback ?? []) {
+      if (await encryptedTaskCompatible(model)) compatibleFallback.push(model);
+    }
+    const fallbackGuidance = subagentFallbackGuidanceText({ subagentModelFallback: compatibleFallback } as OcxConfig);
+    const hasCompatibleGuidance = preferred !== undefined || roster !== "" || fallbackGuidance !== "";
+    // Preserve the legacy custom-prompt escape hatch for a configured model on
+    // plaintext-compatible parents. Encrypted parents must not emit a prompt with
+    // an incompatible/blank model placeholder.
+    const hasLegacyPromptModel = encryptedCodexTasks !== true && injectionModel !== undefined;
+    if (!hasCompatibleGuidance && !hasLegacyPromptModel) return null;
     if (injectionPrompt) {
       // Bare ids must resolve to a unique/current-route candidate. Preserve the legacy raw
       // fallback only for explicit routed/account-qualified ids.
       const promptModel = preferred?.model
-        ?? (injectionModel?.includes("/") ? injectionModel : undefined);
+        ?? (!encryptedCodexTasks && injectionModel?.includes("/") ? injectionModel : undefined);
       return `<multi_agent_mode>${applyInjectionPlaceholders(injectionPrompt, promptModel, injectionEffort, roster, fallbackGuidance)}</multi_agent_mode>`;
     }
-    if (!preferred && roster === "" && fallbackGuidance === "") return null;
+    if (!hasCompatibleGuidance) return null;
     let text = "When the active spawn_agent tool supports optional \"model\" or \"reasoning_effort\" overrides, "
       + "use only models listed for this collaboration surface. "
       + "When setting either override, set fork_turns to \"none\" "

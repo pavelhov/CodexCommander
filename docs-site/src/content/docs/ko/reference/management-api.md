@@ -56,11 +56,11 @@ Authorization: Bearer <admin-token>
 
 | Method and path | 목적 | 주요 오류 |
 | --- | --- | --- |
-| `GET, PUT /api/v2` | native multi-agent v2 모드와 thread 설정을 읽거나 변경합니다 | 400 잘못된 설정; 502 전환 또는 영속화 실패 |
-| `GET, PUT /api/injection-model` | 주입된 sub-agent 모델, effort, prompt, guidance 설정을 읽거나 설정합니다 | 400 잘못된 모델, effort, 또는 본문 |
+| `GET, PUT /api/v2` | 에이전트 프로토콜, V2 메시지 전달, thread 설정을 읽거나 변경합니다. `multiAgentV2MessageDelivery`는 `plaintext` 또는 기본값 `encrypted`를 받으며, `encrypted` 또는 `null`을 보내면 명시적 평문 재정의가 제거됩니다. 전달 변경 후에는 새 세션을 시작하세요. `maxConcurrentThreadsPerSession: null`은 Codex 기본값을 복원합니다 | 400 잘못된 설정; 502 전환 또는 영속화 실패 |
+| `GET, PUT /api/injection-model` | 선호 안내 모델, effort, prompt, guidance 설정을 읽거나 설정합니다. 네이티브 기본값 동기화를 켜지 않으면 자문용입니다 | 400 잘못된 모델, effort, 또는 본문 |
 | `GET, PUT /api/effort-caps` | 전역 및 sub-agent reasoning-effort 상한을 읽거나 설정합니다 | 400 잘못된 ladder 값 |
-| `GET, PUT /api/subagent-models` | sub-agent에 광고되는 모델을 읽거나 순서를 조정합니다 | 400 잘못된 목록 또는 모델 5개 초과 |
-| `GET, PUT /api/subagent-model-fallback` | 정렬된 fallback 체인과 poll interval을 읽거나 설정합니다 | 400 잘못된 목록 또는 poll interval |
+| `GET, PUT /api/subagent-models` | `spawn_agent` 빠른 선택 모델을 최대 5개까지 읽거나 순서를 조정합니다. 라우팅을 강제하지 않습니다. 응답은 저장된 `chosen` 목록과 실제 `advertised` 목록을 구분하고 반영되지 않은 선택을 `excluded`로 보고합니다 | 400 잘못된 목록 또는 모델 5개 초과 |
+| `GET, PUT /api/subagent-model-fallback` | 생성된 하위 작업의 전역 fallback 순서와 poll interval을 읽거나 설정합니다 | 400 잘못된 목록 또는 poll interval |
 | `GET /api/grok` | Grok 관리 구성 상태와 후보 모델을 읽습니다 | 400 상태 읽기 실패 |
 | `PUT /api/grok/selection` | 제외할 Grok 모델을 영속화합니다 | 400 잘못되었거나 너무 큰 선택 |
 | `POST /api/grok/apply` | 관리형 동기화를 통해 영속화된 Grok 구성을 적용합니다 | 409 `grok_apply_busy`; 400/500 적용 실패 |
@@ -92,7 +92,7 @@ Authorization: Bearer <admin-token>
 | `POST /api/startup-action` | 서비스 또는 Codex shim을 설치하거나 복구합니다 | 400 잘못된 작업; 500 작업 실패 |
 | `GET, POST /api/windows-tray` | Windows tray 상태를 읽거나 설치, 시작, 중지, 제거합니다 | 400 지원되지 않는 플랫폼/작업; 500 작업 실패 |
 | `GET /api/diagnostics/project-config` | 캐시된 프로젝트 구성 경고를 읽습니다 | — |
-| `POST /api/sync` | 현재 model catalog를 Codex에 동기화합니다 | 500 동기화 실패 |
+| `POST /api/sync` | 현재 모델 카탈로그를 Codex에 동기화하고 `catalogQuality`, `rehydrated`, Codex app-server `catalogState`, 필요한 재시작 힌트를 반환합니다 | 409 쓰기 권한 거부, 500 동기화 실패 |
 | `GET /api/update/check` | `latest` 또는 `preview` 업데이트 채널을 확인합니다 | 400 잘못된 태그 |
 | `POST /api/update/run` | 선택적으로 restart를 뒤따르게 할 수 있는 업데이트 작업을 시작합니다 | 400 잘못된 본문; 작업별 충돌/오류 상태 |
 | `GET /api/update/status` | id로 업데이트 작업을 조회합니다 | 404 알 수 없는 작업 |

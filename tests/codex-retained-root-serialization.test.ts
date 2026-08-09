@@ -20,6 +20,35 @@ import { claimOwnedServiceHome } from "./helpers/owned-service-home";
 
 const repoRoot = resolve(import.meta.dir, "..");
 const sandboxes: Sandbox[] = [];
+const spawnedChildren = new Set<Bun.Subprocess>();
+const CHILD_TERMINATION_GRACE_MS = 500;
+
+function trackChild<T extends Bun.Subprocess>(child: T): T {
+  spawnedChildren.add(child);
+  void child.exited.then(
+    () => { spawnedChildren.delete(child); },
+    () => { spawnedChildren.delete(child); },
+  );
+  return child;
+}
+
+async function terminateRemainingChildren(): Promise<void> {
+  const remaining = [...spawnedChildren];
+  await Promise.all(remaining.map(async child => {
+    if (child.exitCode === null) {
+      try { child.kill("SIGTERM"); } catch { /* child exited between checks */ }
+      const exitedAfterTerm = await Promise.race([
+        child.exited.then(() => true, () => true),
+        Bun.sleep(CHILD_TERMINATION_GRACE_MS).then(() => false),
+      ]);
+      if (!exitedAfterTerm && child.exitCode === null) {
+        try { child.kill("SIGKILL"); } catch { /* child exited between checks */ }
+      }
+    }
+    try { await child.exited; } catch { /* cleanup must still remove the sandbox */ }
+    spawnedChildren.delete(child);
+  }));
+}
 
 interface Sandbox {
   readonly root: string;
@@ -100,12 +129,12 @@ async function runChild(
   sandbox: Sandbox,
   script: string,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const child = Bun.spawn([process.execPath, "--eval", script], {
+  const child = trackChild(Bun.spawn([process.execPath, "--eval", script], {
     cwd: repoRoot,
     env: sandbox.env,
     stdout: "pipe",
     stderr: "pipe",
-  });
+  }));
   const [exitCode, stdout, stderr] = await Promise.all([
     child.exited,
     new Response(child.stdout).text(),
@@ -131,12 +160,12 @@ async function holdCatalogLock(sandbox: Sandbox): Promise<{
     });
     if (outcome.kind !== "completed") throw new Error(JSON.stringify(outcome));
   `;
-  const child = Bun.spawn([process.execPath, "--eval", script], {
+  const child = trackChild(Bun.spawn([process.execPath, "--eval", script], {
     cwd: repoRoot,
     env: sandbox.env,
     stdout: "pipe",
     stderr: "pipe",
-  });
+  }));
   await waitForPath(ready);
   return { release: () => writeFileSync(release, "release"), child };
 }
@@ -148,7 +177,8 @@ function seedCatalog(sandbox: Sandbox, bytes = catalogBytes()): string {
   return path;
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await terminateRemainingChildren();
   const identity = resolveEffectiveUserIdentity();
   for (const sandbox of sandboxes.splice(0)) {
     const database = resolveCodexCatalogSerializationDatabasePath(identity, sandbox.codexHome);
@@ -232,11 +262,38 @@ async function runPublisher(
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   if (kind === "retained") {
     return runChild(sandbox, `
-      const { handleManagementAPI } = await import("./src/server/management-api.ts");
       const config = ${JSON.stringify(config)};
-      const req = new Request("http://localhost/api/sync", { method: "POST", headers: { Host: "localhost" } });
-      const response = await handleManagementAPI(req, new URL(req.url), config);
-      console.log(JSON.stringify({ status: response.status, body: await response.json() }));
+      // The first /api/sync request already proves the HTTP boundary and remains
+      // suspended in the parent-owned provider. This competing writer needs to
+      // exercise the retained catalog commit, not make a second request to the
+      // same deliberately held test server. Give it an in-process provider seam
+      // so the race is controlled only by K and filesystem evidence.
+      config.providers.fixture.fetch = async () => Response.json({
+        data: [{ id: "publisher-model" }],
+      });
+      const { syncCatalogModels } = await import("./src/codex/catalog/sync.ts");
+      const result = await syncCatalogModels(config, {
+        // This race covers retained catalog serialization, not Codex binary
+        // discovery. Keep the bundled native template in-process so subprocess
+        // scheduling cannot consume the fixed race deadline.
+        commandCandidates: () => ["codex-fixture"],
+        execFileSync: () => JSON.stringify({ models: [{
+          slug: "gpt-5.5",
+          display_name: "gpt-5.5",
+          description: "native",
+          priority: 0,
+          visibility: "list",
+          supported_in_api: true,
+          shell_type: "shell_command",
+          base_instructions: "You are Codex, a coding agent based on GPT-5.",
+          supported_reasoning_levels: [{ effort: "medium", description: "medium" }],
+        }] }),
+      });
+      // Provider discovery owns bounded cache timers that are irrelevant after
+      // the committed bytes and result are available. Flush the diagnostic frame
+      // before exiting so this serialization test never waits for those timers.
+      await Bun.write(Bun.stdout, JSON.stringify(result) + "\\n");
+      process.exit(0);
     `);
   }
   return runChild(sandbox, `
@@ -287,19 +344,40 @@ for (const publisher of ["convergence", "retained"] as const) {
     };
     writeFileSync(join(sandbox.opencodexHome, "config.json"), JSON.stringify(config));
     try {
-      const sync = Bun.spawn([process.execPath, "--eval", `
+      const sync = trackChild(Bun.spawn([process.execPath, "--eval", `
         const config = ${JSON.stringify(config)};
-        const { handleManagementAPI } = await import("./src/server/management-api.ts");
+        // Exercise the production route that owns /api/sync without cold-loading
+        // every unrelated management route into this deadline-bound child.
+        const { handleConfigRoutes } = await import("./src/server/management/config-routes.ts");
         const req = new Request("http://localhost/api/sync", { method: "POST", headers: { Host: "localhost" } });
-        const response = await handleManagementAPI(req, new URL(req.url), config);
+        const response = await handleConfigRoutes({
+          req,
+          url: new URL(req.url),
+          config,
+          deps: {
+            // Catalog/process staleness is covered in its own unit suite. Keep
+            // this filesystem race independent from the host's real Codex
+            // workers and bounded ps/launchctl probes.
+            resetCodexAppServerCatalogStateCache: () => {},
+            collectCodexAppServerCatalogState: () => ({
+              state: "not_running",
+              processes: [],
+              catalogMtimeMs: null,
+            }),
+          },
+          convergeCodexCatalog: async () => { throw new Error("unexpected convergence route"); },
+          syncClaudeAgentDefsBestEffort: async () => {},
+        });
+        if (!response) throw new Error("/api/sync was not handled");
         console.log(JSON.stringify({ status: response.status, body: await response.json() }));
-      `], { cwd: repoRoot, env: sandbox.env, stdout: "pipe", stderr: "pipe" });
+      `], { cwd: repoRoot, env: sandbox.env, stdout: "pipe", stderr: "pipe" }));
+      const stdoutText = new Response(sync.stdout).text();
+      const stderrText = new Response(sync.stderr).text();
 
       await Promise.race([
         waitForPath(requested),
         sync.exited.then(async exitCode => {
-          const stdout = await new Response(sync.stdout).text();
-          const stderr = await new Response(sync.stderr).text();
+          const [stdout, stderr] = await Promise.all([stdoutText, stderrText]);
           throw new Error(`sync exited before provider barrier (${exitCode})\nstdout=${stdout}\nstderr=${stderr}`);
         }),
       ]);
@@ -313,8 +391,8 @@ for (const publisher of ["convergence", "retained"] as const) {
       writeFileSync(release, "release");
       const [exitCode, stdout, stderr] = await Promise.all([
         sync.exited,
-        new Response(sync.stdout).text(),
-        new Response(sync.stderr).text(),
+        stdoutText,
+        stderrText,
       ]);
       expect({ exitCode, stdout, stderr }).toMatchObject({ exitCode: 0 });
       expect(readFileSync(catalogPath, "utf8")).toBe(newer);
@@ -366,7 +444,7 @@ test("a persisted runtime selection moved by another process during the await bl
     },
   };
 
-  const sync = Bun.spawn([process.execPath, "--eval", `
+  const sync = trackChild(Bun.spawn([process.execPath, "--eval", `
     import { existsSync, writeFileSync } from "node:fs";
     const config = ${JSON.stringify(config)};
     config.providers.together.fetch = async () => {
@@ -376,13 +454,14 @@ test("a persisted runtime selection moved by another process during the await bl
     };
     const { syncCatalogModels } = await import("./src/codex/catalog/sync.ts");
     console.log(JSON.stringify(await syncCatalogModels(config)));
-  `], { cwd: repoRoot, env: sandbox.env, stdout: "pipe", stderr: "pipe" });
+  `], { cwd: repoRoot, env: sandbox.env, stdout: "pipe", stderr: "pipe" }));
+  const stdoutText = new Response(sync.stdout).text();
+  const stderrText = new Response(sync.stderr).text();
 
   await Promise.race([
     waitForPath(requested),
     sync.exited.then(async exitCode => {
-      const stdout = await new Response(sync.stdout).text();
-      const stderr = await new Response(sync.stderr).text();
+      const [stdout, stderr] = await Promise.all([stdoutText, stderrText]);
       throw new Error(`sync exited before provider barrier (${exitCode})\nstdout=${stdout}\nstderr=${stderr}`);
     }),
   ]);
@@ -399,8 +478,8 @@ test("a persisted runtime selection moved by another process during the await bl
   writeFileSync(release, "release");
   const [exitCode, stdout, stderr] = await Promise.all([
     sync.exited,
-    new Response(sync.stdout).text(),
-    new Response(sync.stderr).text(),
+    stdoutText,
+    stderrText,
   ]);
   expect({ exitCode, stderr }).toMatchObject({ exitCode: 0 });
   expect(JSON.parse(stdout.trim())).toMatchObject({ catalogWritten: false });
@@ -434,10 +513,10 @@ test("two processes at the post-approval management seam serialize instead of in
   // Warm the config ownership + mutation database in a single process first.
   // Two cold processes otherwise race to create `.opencodex-owner.json` and both
   // die with EEXIST before approval, which would make this test vacuous.
-  const warm = Bun.spawn([process.execPath, "--eval", `
+  const warm = trackChild(Bun.spawn([process.execPath, "--eval", `
     const { withConfigMutationLockSync } = await import("./src/config.ts");
     withConfigMutationLockSync(() => undefined);
-  `], { cwd: repoRoot, env: sandbox.env, stdout: "pipe", stderr: "pipe" });
+  `], { cwd: repoRoot, env: sandbox.env, stdout: "pipe", stderr: "pipe" }));
   expect(await warm.exited).toBe(0);
 
   const routeScript = (marker: string) => `
@@ -479,10 +558,10 @@ test("two processes at the post-approval management seam serialize instead of in
     console.log(JSON.stringify({ status: response.status, catalogRefresh: body.catalogRefresh }));
   `;
 
-  const children = (["a", "b"] as const).map(marker => Bun.spawn(
+  const children = (["a", "b"] as const).map(marker => trackChild(Bun.spawn(
     [process.execPath, "--eval", routeScript(marker)],
     { cwd: repoRoot, env: sandbox.env, stdout: "pipe", stderr: "pipe" },
-  ));
+  )));
 
   const results = await Promise.all(children.map(async child => {
     const [exitCode, stdout, stderr] = await Promise.all([

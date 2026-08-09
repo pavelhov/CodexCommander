@@ -361,7 +361,8 @@ describe("WP13 composed toggle acceptance", () => {
     const server = await fx.start();
     try {
       const ensure = await fx.runCli(["ensure"]);
-      expect(ensure.exitCode).toBe(0);
+      expect(ensure.exitCode).toBe(1);
+      expect(`${ensure.stdout}\n${ensure.stderr}`).toMatch(/catalog|service|ownership|synchron/i);
       const sync = await fx.request(server.runtime, "/api/sync", { method: "POST" });
       expect(sync.status).toBe(409);
       expect(String(sync.body.message ?? sync.body.error)).toMatch(/Refusing|service|ownership/i);

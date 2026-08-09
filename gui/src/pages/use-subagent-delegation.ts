@@ -6,7 +6,7 @@
  * the Dashboard keeps a one-line summary that links here. Both surfaces read the same
  * endpoint, so this hook is the single owner of the fetch/patch pair.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { requireJson } from "./dashboard-shared";
 import { normalizeInjectionSelection } from "./dashboard-core-poll";
 
@@ -31,12 +31,14 @@ type DelegationResponse = {
 export function useSubagentDelegation(apiBase: string) {
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
   const [efforts, setEfforts] = useState<string[]>([]);
   const [available, setAvailable] = useState<DelegationModelOption[]>([]);
   const [guidanceEnabled, setGuidanceEnabled] = useState(true);
   const [syncCodexDefaults, setSyncCodexDefaults] = useState(false);
+  const savingRef = useRef(false);
 
   const apply = useCallback((data: DelegationResponse) => {
     const normalized = normalizeInjectionSelection(data);
@@ -48,6 +50,20 @@ export function useSubagentDelegation(apiBase: string) {
     if (Array.isArray(data.available)) setAvailable(data.available);
   }, []);
 
+  const reload = useCallback(async (): Promise<boolean> => {
+    try {
+      const res = await fetch(`${apiBase}/api/injection-model`);
+      apply(await requireJson<DelegationResponse>(res));
+      setLoaded(true);
+      setError(null);
+      return true;
+    } catch (cause) {
+      setLoaded(true);
+      setError(cause instanceof Error ? cause.message : String(cause));
+      return false;
+    }
+  }, [apiBase, apply]);
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -56,15 +72,21 @@ export function useSubagentDelegation(apiBase: string) {
         const data = await requireJson<DelegationResponse>(res);
         if (cancelled) return;
         apply(data);
-      } catch { /* keep defaults; the panel still renders and can be retried by saving */ }
-      finally { if (!cancelled) setLoaded(true); }
+        setError(null);
+      } catch (cause) {
+        if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
+      } finally {
+        if (!cancelled) setLoaded(true);
+      }
     })();
     return () => { cancelled = true; };
   }, [apiBase, apply]);
 
-  const save = useCallback(async (patch: DelegationPatch) => {
-    if (saving) return;
+  const save = useCallback(async (patch: DelegationPatch): Promise<boolean> => {
+    if (savingRef.current) return false;
+    savingRef.current = true;
     setSaving(true);
+    setError(null);
     try {
       const res = await fetch(`${apiBase}/api/injection-model`, {
         method: "PUT",
@@ -76,12 +98,18 @@ export function useSubagentDelegation(apiBase: string) {
       // model actually supports, so the echo can differ from what was sent.
       const getRes = await fetch(`${apiBase}/api/injection-model`);
       apply(await requireJson<DelegationResponse>(getRes));
-    } catch { /* keep the last committed UI state */ }
-    finally { setSaving(false); }
-  }, [apiBase, apply, saving]);
+      return true;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      return false;
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }, [apiBase, apply]);
 
   return {
-    loaded, saving, model, effort, efforts, available,
-    guidanceEnabled, syncCodexDefaults, save,
+    loaded, saving, error, model, effort, efforts, available,
+    guidanceEnabled, syncCodexDefaults, save, reload,
   };
 }

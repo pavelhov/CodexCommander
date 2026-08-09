@@ -58,6 +58,8 @@ export interface OcxParsedRequest {
    * provider-private continuation caches again on every later turn.
    */
   _contextCompactionBoundary?: boolean;
+  /** True only when the native ChatGPT request activated the plaintext V2 wire alias. */
+  _v2PlaintextCollaborationAlias?: boolean;
 }
 
 export interface OcxContext {
@@ -704,6 +706,12 @@ export interface OcxConfig {
    * - "v2": force ALL models to v2 surface (override upstream pins)
    */
   multiAgentMode?: "v1" | "default" | "v2";
+  /**
+   * V2 collaboration message delivery across native and routed parent providers.
+   * `encrypted` (default) preserves Codex's reserved backend contract.
+   * `plaintext` opts the whole V2 parent session into the mixed-provider compatibility shim.
+   */
+  multiAgentV2MessageDelivery?: "encrypted" | "plaintext";
   /** Provider-level Codex-visible context caps. Values only lower known model context windows. */
   providerContextCaps?: Record<string, number>;
   /** Global Codex-visible context cap value (tokens). Falls back to DEFAULT_PROVIDER_CONTEXT_CAP. */

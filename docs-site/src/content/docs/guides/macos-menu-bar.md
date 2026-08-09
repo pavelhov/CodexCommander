@@ -9,16 +9,25 @@ the OpenCodex instance running on the same Mac.
 
 ## Install
 
-1. Install and start OpenCodex normally.
-2. Download <code>OpenCodex-&lt;version&gt;-macos-universal.zip</code> and its
+1. Download <code>OpenCodex-&lt;version&gt;-macos-universal.zip</code> and its
    <code>.sha256</code> file from the matching GitHub release.
-3. Verify the archive:
+2. Verify the archive:
 
        shasum -a 256 -c OpenCodex-<version>-macos-universal.zip.sha256
 
-4. Unzip it and move <code>OpenCodex.app</code> to **Applications**.
-5. Open the app. Its icon appears in the menu bar; it does not add a Dock icon. The first stable
-   launch enables **Launch at Login** so the icon returns after the next sign-in.
+3. Unzip it and move <code>OpenCodex.app</code> to **Applications**.
+4. Open the app. It contains the OpenCodex Bun runtime, proxy source, production dependencies, and
+   dashboard assets, so a separate npm, Bun, or <code>ocx</code> install is not required. Its icon
+   appears in the menu bar; it does not add a Dock icon. The first stable launch enables
+   **Launch at Login** so the icon returns after the next sign-in.
+
+The bundled runtime still uses the existing user-owned state at <code>~/.opencodex</code> and
+<code>~/.codex</code>. It does not copy credentials into the app bundle or Keychain. Provider OAuth
+and API-key setup remains in the local dashboard.
+
+The bundled runtime is read-only in place. **Update** reports that the latest signed app release
+must replace the bundle; it never runs npm, Bun, or a source checkout update against signed
+<code>Contents/Resources</code>.
 
 The current release package is a ZIP. Unless its release owner supplies a Developer ID signing
 identity, the bundle is ad-hoc signed; it is not a signed and notarized DMG. macOS may block the
@@ -26,6 +35,9 @@ first downloaded launch, so Control-click the app, choose **Open**, then confirm
 notarized DMG is a later commercial-distribution step that needs the distributor's own certificate,
 notarization credentials, package metadata, and update channel. A build made locally does not carry
 the downloaded-file quarantine attribute.
+
+The ZIP is a public-release attachment only when built with a Developer ID identity and validated
+by Gatekeeper plus a stapled notarization ticket. Ad-hoc ZIPs are Actions/test artifacts only.
 
 An installed release may live in **Applications**. Do not use Application Support as an app-install
 directory. During active source development, use the repository build in the next section as the one
@@ -71,6 +83,10 @@ override it.
 - **Dashboard and Logs** — open the corresponding local dashboard view in your default browser.
 - **Manage** — opens the selected provider's Accounts or API Keys tab. OAuth, API-key entry,
   reauthentication, account switching, and provider configuration stay in the dashboard.
+- **Agent catalog update ready** — a persistent, nonfatal card shown when running Codex background
+  workers still hold an older model roster. The OpenCodex proxy remains healthy and running.
+- **Apply agent catalog…** — opens a confirmation that reports fresh request activity when
+  available, warns that applying may interrupt an answer, and offers **Apply Now** or **Later**.
 - **Stop Proxy…** — always asks for confirmation, interrupts active client and sub-agent requests,
   restores native Codex, and leaves the menu app open.
 - **Restart Proxy…** — always asks for confirmation, lets the proxy drain active requests for up to 60
@@ -90,6 +106,28 @@ stale, the row instead says **Login needs refresh** and tells you to run `grok` 
 **Refresh**. A rejected account login says **Sign-in required**; a network or upstream failure says
 **Temporarily unavailable**. These states are fixed, privacy-safe reason codes from the local proxy,
 not raw provider errors. **View all providers** opens the complete Providers workspace.
+
+## Agent catalog updates
+
+Opening the app automatically synchronizes the Codex model catalog with the providers currently
+configured in OpenCodex. If no Codex worker is running, the new roster is ready for the next Codex
+task. If a long-lived worker loaded an older roster, OpenCodex stays running and the panel keeps the
+nonfatal **Agent catalog update ready** card visible.
+
+Choose **Apply agent catalog…** to review the interruption risk. The confirmation requests a fresh
+active-request count when possible, but zero active requests is not presented as proof that Codex is
+idle: another request can begin before the action runs. **Apply Now** synchronizes once more, sends
+`SIGTERM` only to exact current-user `codex … app-server` and `codex-code-mode-host` process matches,
+and briefly verifies that the old process IDs exited. It never uses a broad `pkill`, restarts the
+OpenCodex proxy, or closes the menu app. Codex creates a fresh background host on the next task and
+loads the current roster.
+
+This release does not include **Apply when idle**. If an answer is active, choose **Later** and apply
+the update when you are ready; the card remains available. The advanced CLI fallback is:
+
+```bash
+ocx sync --restart-codex
+```
 
 ## Authentication and privacy
 
@@ -151,8 +189,8 @@ making a final distributable bundle.
 
 ## Troubleshooting
 
-- **Proxy unavailable** — start it with <code>ocx start</code> or install the background service
-  with <code>ocx service install</code>.
+- **Proxy unavailable** — use **Start Proxy** in the bundled app. Source builds can also use
+  <code>ocx start</code> or install the background service with <code>ocx service install</code>.
 - **Menu icon missing after login** — open the app, check its **Launch at Login** row, and follow the
   **Open Settings** action if macOS reports that approval is required.
 - **Authentication unavailable** — run <code>ocx doctor</code>; verify that the OpenCodex state
@@ -162,8 +200,13 @@ making a final distributable bundle.
   the account. If Grok says **Login needs refresh**, run <code>grok</code>, complete its login, then
   use **Refresh** in OpenCodex; use <code>kimi</code> for the equivalent Kimi state. Some providers do
   not expose a quota API.
-- **Restart did not recover** — open **Logs** and run <code>ocx status</code>. The companion never
+- **Restart did not recover** — open **Logs** and use the app's status panel. The companion never
   kills a process or rewrites service state as a fallback.
+- **Only native models appear after a stop, update, or cold start** — reopen OpenCodex. Launch
+  automatically synchronizes the catalog and restores still-configured routed models from its
+  protected last-known-good catalog when live provider discovery is temporarily empty. If **Agent
+  catalog update ready** remains visible, choose **Apply agent catalog…**, or use the CLI fallback in
+  [Agent catalog updates](#agent-catalog-updates).
 
 ## Uninstall
 
