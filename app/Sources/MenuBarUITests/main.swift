@@ -47,7 +47,8 @@ func currentHealth(
     protection: String = "none",
     serviceInstalled: Bool = false,
     serviceEnabled: Bool = false,
-    diagnosticStale: Bool = false
+    diagnosticStale: Bool = false,
+    recommendedCommand: String? = nil
 ) -> StartupHealth {
     StartupHealth(
         status: status,
@@ -69,7 +70,7 @@ func currentHealth(
         shimCoverage: "none",
         rebootSafe: serviceEnabled,
         diagnosticStale: diagnosticStale,
-        recommendedCommand: nil,
+        recommendedCommand: recommendedCommand,
         commands: .init(
             installService: "ccx service install",
             repairService: "ccx service repair",
@@ -105,6 +106,7 @@ func makeSnapshot(
     activity: AgentActivitySnapshot? = nil,
     providers: [ProviderSummary] = [],
     health: StartupHealth = currentHealth(),
+    recommendedCommand: String? = nil,
     providersLoaded: Bool = false,
     quotasLoaded: Bool = true,
     activityLoaded: Bool = true
@@ -117,10 +119,16 @@ func makeSnapshot(
         activity: activity,
         providers: providers,
         lastUpdated: Date(),
+        recommendedCommand: recommendedCommand,
         providersLoaded: providersLoaded,
         quotasLoaded: quotasLoaded,
         activityLoaded: activityLoaded
     )
+}
+
+func textFields(in view: NSView) -> [NSTextField] {
+    let own = (view as? NSTextField).map { [$0] } ?? []
+    return own + view.subviews.flatMap(textFields(in:))
 }
 
 // MARK: - Hierarchy / sizing
@@ -141,17 +149,32 @@ runner.test("ui: nonactivating panel remains key-capable for Escape and keyboard
     runner.equal(panel.contentViewController?.preferredContentSize.width, 387)
 }
 
-runner.test("ui: menu-bar glyph distinguishes every operational state") {
+runner.test("ui: running proxy keeps the terminal glyph regardless of service protection") {
+    runner.equal(
+        StatusIcon.symbolName(for: .running(currentHealth())),
+        "terminal.fill",
+        "protected running keeps the terminal glyph"
+    )
+    runner.equal(
+        StatusIcon.symbolName(for: .running(currentHealth(status: "at-risk"))),
+        "terminal.fill",
+        "unprotected running must not degrade to a warning triangle"
+    )
+    runner.equal(
+        StatusIcon.symbolName(for: .degraded("Unavailable")),
+        "exclamationmark.triangle",
+        "the warning triangle is reserved for an actually degraded state"
+    )
+
     let states: [ProxyState] = [
         .loading,
         .running(currentHealth()),
-        .running(currentHealth(status: "at-risk")),
         .unreachable,
         .unauthorized,
         .degraded("Unavailable"),
     ]
     let symbols = states.map(StatusIcon.symbolName(for:))
-    runner.equal(Set(symbols).count, states.count, "one symbol per state")
+    runner.equal(Set(symbols).count, states.count, "every other operational state stays distinct")
 }
 
 runner.test("ui: footer exposes navigation, proxy lifecycle, and both exit contracts") {
@@ -262,6 +285,53 @@ runner.test("ui: startup control forwards explicit preference changes") {
     runner.equal(requested, true)
     controller.startupModeView.onOpenSettings?()
     runner.equal(openedSettings, true)
+}
+
+runner.test("ui: running snapshot with recommended guidance offers Startup options, not a raw command") {
+    let controller = PopoverViewController()
+    _ = controller.view
+
+    controller.apply(makeSnapshot())
+    runner.equal(controller.startupOptionsVisible, false, "no guidance without a recommendation")
+    runner.isNil(controller.commandText, "no raw command when healthy")
+
+    var opened = false
+    controller.onOpenStartupOptions = { opened = true }
+    controller.apply(makeSnapshot(recommendedCommand: "ccx service install"))
+    runner.equal(controller.startupOptionsVisible, true, "recommendation surfaces an actionable control")
+    runner.equal(controller.startupOptionsTitle, "Startup options…")
+    runner.equal(controller.commandText, nil, "raw remediation command is not the primary UI")
+    runner.expect(
+        controller.guidanceText?.isEmpty == false,
+        "guidance names the recommendation without printing the command"
+    )
+    runner.expect(
+        controller.startupOptionsAccessibilityLabel?.contains("startup options") == true,
+        "control names its dashboard destination"
+    )
+    controller.activateStartupOptionsForTesting()
+    runner.equal(opened, true, "control invokes the startup handoff")
+
+    controller.apply(makeSnapshot())
+    runner.equal(controller.startupOptionsVisible, false, "control clears once guidance clears")
+}
+
+runner.test("ui: stopped proxy keeps the raw start command as guidance") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    var stopped = ProxySnapshot(state: .unreachable, endpoint: .default)
+    stopped.lastKnownStartCommand = "ccx service start"
+    controller.apply(stopped)
+    runner.equal(controller.guidanceText, "Start it again with:")
+    runner.equal(controller.commandText, "ccx service start", "raw command survives for the stopped case")
+    runner.equal(controller.startupOptionsVisible, false, "startup options are not shown while stopped")
+}
+
+runner.test("ui: startup options handoff targets the dashboard startup page") {
+    let delegate = AppDelegate()
+    let url = delegate.startupOptionsURL()
+    runner.equal(url.fragment, "startup", "dashboard hash")
+    runner.expect(url.absoluteString.hasPrefix("http://127.0.0.1:"), "loopback")
 }
 
 // MARK: - Accordion / no duplicates
@@ -507,6 +577,47 @@ runner.test("ui: activity empty and unavailable states stay compact") {
     controller.apply(makeSnapshot(activity: empty))
     // Should not crash and should keep preferred width.
     runner.equal(controller.preferredContentSize.width, 387, "width stable")
+}
+
+runner.test("ui: activity rows render once and elapsed timers clear the scrollbar") {
+    let now = Int64(Date().timeIntervalSince1970 * 1_000)
+    let activity = activitySnapshot(
+        activities: """
+        {"id":"child-1","role":"subagent","provider":"kimi","model":"k3[1m]",
+         "phase":"running","startedAt":\(now)}
+        """,
+        unattributed: 1
+    )
+    let controller = PopoverViewController()
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 387, height: 468),
+        styleMask: .borderless,
+        backing: .buffered,
+        defer: false
+    )
+    window.contentViewController = controller
+    window.orderFront(nil)
+    controller.apply(makeSnapshot(activity: activity))
+    controller.view.layoutSubtreeIfNeeded()
+
+    let fields = textFields(in: controller.activityView)
+    runner.expect(
+        fields.allSatisfy { !$0.stringValue.localizedCaseInsensitiveContains("unattributed") },
+        "already-rendered subagents should not be counted again in a footer"
+    )
+
+    let elapsed = runner.notNil(
+        fields.first { $0.alignment == .right },
+        "elapsed timer"
+    )
+    if let elapsed, let container = elapsed.superview {
+        let frame = container.convert(elapsed.frame, to: controller.activityView)
+        let clearance = controller.activityView.bounds.maxX - frame.maxX
+        runner.expect(
+            clearance >= 15,
+            "elapsed timer should clear the overlay scrollbar (clearance: \(clearance))"
+        )
+    }
 }
 
 runner.test("ui: accessibility labels exist on header and accordion") {
@@ -847,6 +958,100 @@ runner.test("ui: provider icon loader returns real SVG-backed images for known p
     _ = runner.notNil(ResourceAssets.providerIcon(for: "kimi"), "kimi icon")
     _ = runner.notNil(ResourceAssets.providerIcon(for: "xai"), "grok icon")
     runner.isNil(ResourceAssets.providerIcon(for: "definitely-not-a-provider"), "unknown stays nil")
+}
+
+// MARK: - Companion heartbeat
+
+final class HeartbeatRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _statuses: [LaunchAtLoginStatus] = []
+
+    var statuses: [LaunchAtLoginStatus] {
+        lock.lock()
+        defer { lock.unlock() }
+        return _statuses
+    }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _statuses.count
+    }
+
+    func record(_ status: LaunchAtLoginStatus) {
+        lock.lock()
+        defer { lock.unlock() }
+        _statuses.append(status)
+    }
+}
+
+func spinMainRunLoop(seconds: TimeInterval) {
+    let deadline = Date().addingTimeInterval(seconds)
+    while Date() < deadline {
+        RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.002))
+    }
+}
+
+@MainActor
+func runCompanionHeartbeatTests(_ runner: TestRunner) {
+    // The first run-loop drain of this process does not service timers (verified
+    // empirically: the first spin always reports zero fires, the second fires
+    // normally). Drain once up front so the timer assertions are deterministic.
+    spinMainRunLoop(seconds: 0.02)
+
+    runner.test("ui: companion heartbeat runs a single timer and stops cleanly") {
+        // The production cadence is 30s; a short injected interval keeps the single-timer
+        // and stop() guarantees observable in-process without waiting half a minute.
+        let recorder = HeartbeatRecorder()
+        let heartbeat = CompanionHeartbeat(
+            interval: 0.02,
+            sample: { .enabled },
+            send: { status in recorder.record(status) }
+        )
+
+        heartbeat.start()
+        heartbeat.start()
+        heartbeat.start()
+        spinMainRunLoop(seconds: 0.12)
+        let during = recorder.count
+        runner.expect(during >= 1, "the repeating timer fires at least once (got \(during))")
+        // One 20ms timer over 120ms fires ~6 times; stacked duplicates would fire ~18.
+        runner.expect(during <= 9, "repeated start() must not duplicate the timer (got \(during))")
+        runner.equal(recorder.statuses.first, .enabled, "the sampled status is what gets reported")
+
+        heartbeat.stop()
+        let stoppedCount = recorder.count
+        spinMainRunLoop(seconds: 0.10)
+        runner.equal(recorder.count, stoppedCount, "stop() cancels the timer")
+    }
+
+    runner.test("ui: companion heartbeat coalesces in-flight reports and reports again after") {
+        let recorder = HeartbeatRecorder()
+        let heartbeat = CompanionHeartbeat(
+            interval: 60, // never fires during this test
+            sample: { .requiresApproval },
+            send: { status in
+                try? await Task.sleep(nanoseconds: 30_000_000)
+                recorder.record(status)
+            }
+        )
+
+        heartbeat.reportNow()
+        heartbeat.reportNow()
+        spinMainRunLoop(seconds: 0.10)
+        runner.equal(recorder.count, 1, "a report while one is in flight is coalesced away")
+
+        heartbeat.reportNow()
+        spinMainRunLoop(seconds: 0.10)
+        runner.equal(recorder.count, 2, "a later reportNow fires after the previous completed")
+        runner.equal(recorder.statuses[0], .requiresApproval, "the freshly sampled status is reported")
+        heartbeat.stop()
+    }
+}
+
+// Top-level code runs on the process main thread, so the MainActor hop is safe here.
+MainActor.assumeIsolated {
+    runCompanionHeartbeatTests(runner)
 }
 
 exit(runner.summarize())

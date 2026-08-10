@@ -34,7 +34,7 @@ bun run dev:gui
 | **Sub-agent delegation** | 选择供 CodexCommander 委派指引与可选的 Codex 原生子代理默认值共用的原生/路由模型和可选 reasoning 强度。它不是逐次生成的路由器，详见下文。 |
 | **Sidecar** | 选择 web-search 模型及强度，以及图像描述模型；更改从下一次请求开始生效。 |
 | **Maintenance** | 重新同步 Codex 模型目录并查看项目级配置绕过警告。 |
-| **启动安全** | 显示注入的 Codex 路由能否在重启后继续工作，并分别显示服务、launcher shim 状态和准确的修复命令。 |
+| **启动** | 显示路由由 CodexCommander 应用、后台服务还是 launcher shim 启动。常规 macOS 应用配置显示为 **应用管理**，后台服务则单独作为可选的崩溃恢复功能。高级修复命令仍然可用，但不会占据页面主体。 |
 | **Windows 托盘** | 安装用户登录托盘，一键控制代理启动、停止、重启、面板和状态。托盘不是代理重启服务。 |
 | **Codex 自动启动** | 允许已安装的 Codex launcher shim 运行 `ccx ensure`。此开关不会安装 shim 或后台服务。 |
 | **Providers** | 添加、编辑、设为默认（仅已启用）、启用/禁用、删除 provider，并在支持时管理 OAuth 账号池和 API key 池。删除当前默认时，会切换到剩余的第一个已启用 provider（若存在）；否则拒绝删除并保留当前默认。Claude（Anthropic）OAuth 池中，每个已登录账号显示各自的 5 小时与周限额条（用量按凭证计）；探测失败时保留上次已知数值并标记为暂时不可用。 |
@@ -115,7 +115,8 @@ GUI 是代理 JSON 管理 API 之上的轻量客户端。常用 endpoint 包括�
 | Endpoint | 用途 |
 | --- | --- |
 | `GET` / `PUT /api/settings` | 读取设置或切换 Codex 自动启动。 |
-| `GET /api/startup-health` | 读取不含秘密信息的路由、服务、shim 和重启安全诊断。 |
+| `GET /api/startup-health` | 读取不含秘密信息的路由、启动方式、崩溃恢复、服务、shim 和重启安全诊断。 |
+| `PUT /api/startup-health/companion` | 让已认证的原生伴侣应用刷新仅保存在内存中的短期“登录时启动”观测。该端点需要原始管理令牌，并拒绝浏览器 GUI 会话。 |
 | `GET` / `POST /api/windows-tray` | 读取或更改 Windows 托盘安装和显示状态；POST 支持 `install`、`start`、`stop`、`uninstall`。 |
 | `POST /api/sync` | 重建共享模型目录，并把 Codex 模型缓存标记为过期。 |
 | `GET` / `PUT /api/sidecar-settings` | 读取或设置 search/vision sidecar 模型。 |

@@ -6,12 +6,13 @@ import { Notice } from "../ui";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import {
-  StartupDetailsSection,
+  StartupAdvancedSection,
   StartupHeroSection,
-  StartupRecoverySection,
+  StartupPrimarySection,
   StartupTraySection,
 } from "./startup-sections";
 import {
+  deriveStartupView,
   isTrayStatusData,
   type StartupHealthData,
   type StartupInstallAction,
@@ -192,6 +193,7 @@ export default function Startup({ apiBase }: { apiBase: string }) {
   // warm revisits where `data` is already seeded from session cache.
   const loading = loadState.refreshing;
   const failed = Boolean(data?.diagnosticStale) || loadState.showError;
+  const view = data ? deriveStartupView(data, failed) : null;
 
   useEffect(() => {
     if (!data?.diagnosticStale) return;
@@ -303,15 +305,16 @@ export default function Startup({ apiBase }: { apiBase: string }) {
               )}
             </div>
           )}
-          <StartupHeroSection failed={failed} data={data} />
-          <StartupDetailsSection
+          {view && <StartupHeroSection failed={failed} data={data} view={view} />}
+          {view && <StartupPrimarySection
             data={data}
+            view={view}
             failed={failed}
             loading={loading}
             installBusy={installBusy}
             installResult={installResult}
             onInstall={(action, opts) => { void runInstallAction(action, opts); }}
-          />
+          />}
           {data.platform === "win32" && (
             <StartupTraySection
               tray={tray}
@@ -321,7 +324,16 @@ export default function Startup({ apiBase }: { apiBase: string }) {
               onTrayAction={(action) => { void runTrayAction(action); }}
             />
           )}
-          <StartupRecoverySection data={data} copied={copied} onCopy={(command) => { void copyCommand(command); }} />
+          {view && <StartupAdvancedSection
+            data={data}
+            failed={failed}
+            loading={loading}
+            installBusy={installBusy}
+            onInstall={(action, opts) => { void runInstallAction(action, opts); }}
+            copied={copied}
+            onCopy={(command) => { void copyCommand(command); }}
+            defaultOpen={view.advancedDefaultOpen}
+          />}
         </>
       ) : null}
     </>

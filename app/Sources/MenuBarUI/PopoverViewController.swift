@@ -37,6 +37,7 @@ public final class PopoverViewController: NSViewController {
         field.preferredMaxLayoutWidth = Theme.width - Theme.gutter * 2
         return field
     }()
+    private let startupOptionsButton = NSButton()
     private let commandField = NSTextField(labelWithString: "")
     private let activitySeparator = makeSeparator()
     private let quotaSeparator = makeSeparator()
@@ -48,6 +49,7 @@ public final class PopoverViewController: NSViewController {
     public var onStop: (() -> Void)?
     public var onRestart: (() -> Void)?
     public var onApplyCodexCatalog: (() -> Void)?
+    public var onOpenStartupOptions: (() -> Void)?
     public var onQuitMenuBar: (() -> Void)?
     public var onStopAndQuit: (() -> Void)?
     public var onLaunchAtLoginChange: ((Bool) -> Void)?
@@ -67,6 +69,7 @@ public final class PopoverViewController: NSViewController {
     public override func loadView() {
         configureControls()
         resultBanner.isHidden = true
+        startupOptionsButton.isHidden = true
         resultBanner.lineBreakMode = .byWordWrapping
         resultBanner.maximumNumberOfLines = 3
         resultBanner.preferredMaxLayoutWidth = Theme.width - Theme.gutter * 2
@@ -91,11 +94,11 @@ public final class PopoverViewController: NSViewController {
         body.alignment = .leading
         body.spacing = Theme.sectionGap
         body.setViews(
-            [catalogUpdate, activity, activitySeparator, quotas, resultBanner, guidanceLabel, commandField],
+            [catalogUpdate, activity, activitySeparator, quotas, resultBanner, guidanceLabel, startupOptionsButton, commandField],
             in: .top
         )
         body.translatesAutoresizingMaskIntoConstraints = false
-        for item in [catalogUpdate, activity, activitySeparator, quotas, resultBanner, guidanceLabel, commandField] {
+        for item in [catalogUpdate, activity, activitySeparator, quotas, resultBanner, guidanceLabel, startupOptionsButton, commandField] {
             item.translatesAutoresizingMaskIntoConstraints = false
             item.widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
         }
@@ -178,6 +181,7 @@ public final class PopoverViewController: NSViewController {
         styleFooterButton(dashboardButton, title: "Dashboard", symbol: "square.grid.2x2")
         styleFooterButton(logsButton, title: "Logs", symbol: "list.bullet.rectangle")
         styleFooterButton(refreshButton, title: "Refresh", symbol: "arrow.clockwise")
+        styleFooterButton(startupOptionsButton, title: "Startup options…", symbol: "gearshape.2")
         styleFooterButton(lifecycleButton, title: "Start Proxy", symbol: "play.fill")
         styleFooterButton(restartButton, title: "Restart Proxy…", symbol: "power")
         styleFooterButton(quitMenuBarButton, title: "Quit Menu Bar", symbol: "xmark.circle")
@@ -191,6 +195,7 @@ public final class PopoverViewController: NSViewController {
         dashboardButton.action = #selector(dashboardTapped)
         logsButton.action = #selector(logsTapped)
         refreshButton.action = #selector(refreshTapped)
+        startupOptionsButton.action = #selector(startupOptionsTapped)
         lifecycleButton.action = #selector(lifecycleTapped)
         restartButton.action = #selector(restartTapped)
         quitMenuBarButton.action = #selector(quitMenuBarTapped)
@@ -204,6 +209,7 @@ public final class PopoverViewController: NSViewController {
         dashboardButton.setAccessibilityLabel("Open dashboard")
         logsButton.setAccessibilityLabel("Open logs")
         refreshButton.setAccessibilityLabel("Refresh")
+        startupOptionsButton.setAccessibilityLabel("Open startup options in the dashboard")
         lifecycleButton.setAccessibilityLabel("Start CodexCommander proxy")
         restartButton.setAccessibilityLabel("Restart CodexCommander proxy")
         quitMenuBarButton.setAccessibilityLabel(
@@ -309,12 +315,13 @@ public final class PopoverViewController: NSViewController {
     private func applyGuidance(_ snapshot: ProxySnapshot) {
         var guidance: String?
         var command: String?
+        var showStartupOptions = false
 
         switch snapshot.nextAction {
         case .none:
-            if case .running = snapshot.state, let recommended = snapshot.recommendedCommand {
-                guidance = "Recommended:"
-                command = recommended
+            if case .running = snapshot.state, snapshot.recommendedCommand != nil {
+                guidance = "Recommended startup changes are available."
+                showStartupOptions = true
             }
         case .runCommand(let value):
             guidance = "Start it again with:"
@@ -330,6 +337,7 @@ public final class PopoverViewController: NSViewController {
         guidanceLabel.stringValue = guidance ?? ""
         commandField.isHidden = command == nil
         commandField.stringValue = command ?? ""
+        startupOptionsButton.isHidden = !showStartupOptions
         if let command {
             commandField.setAccessibilityLabel("Command to run: \(command)")
         }
@@ -387,6 +395,7 @@ public final class PopoverViewController: NSViewController {
     @objc private func dashboardTapped() { onDashboard?() }
     @objc private func logsTapped() { onLogs?() }
     @objc private func refreshTapped() { onRefresh?() }
+    @objc private func startupOptionsTapped() { onOpenStartupOptions?() }
     @objc private func lifecycleTapped() {
         guard let state = snapshot?.state else { return }
         if lifecycleStops(state) { onStop?() }
@@ -440,6 +449,20 @@ public final class PopoverViewController: NSViewController {
         catalogUpdate.buttonAccessibilityLabel
     }
     package func activateCatalogUpdateForTesting() { catalogUpdate.activateForTesting() }
+    package var guidanceText: String? {
+        guidanceLabel.isHidden ? nil : guidanceLabel.stringValue
+    }
+    package var commandText: String? {
+        commandField.isHidden ? nil : commandField.stringValue
+    }
+    package var startupOptionsVisible: Bool { !startupOptionsButton.isHidden }
+    package var startupOptionsTitle: String { startupOptionsButton.title }
+    package var startupOptionsAccessibilityLabel: String? {
+        startupOptionsButton.accessibilityLabel()
+    }
+    package func activateStartupOptionsForTesting() {
+        startupOptionsButton.performClick(nil)
+    }
     package var footerTitles: [String] {
         [
             dashboardButton.title,

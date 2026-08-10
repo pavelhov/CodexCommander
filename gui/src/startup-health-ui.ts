@@ -90,8 +90,13 @@ export function mapStartupHealthProbe(data: {
   diagnosticStale?: unknown;
 }): StartupHealthStatus | null {
   const status = data.status;
-  const valid = status === "native" || status === "protected" || status === "at-risk";
+  const valid = status === "native" || status === "protected" || status === "caution" || status === "at-risk";
   if (!valid) return null;
+  // "caution" is the app-managed login state (companion starts at login, no crash
+  // recovery). The dashboard chip only promises availability after restart, which
+  // app-managed login satisfies, so it collapses to "protected" here; the Startup
+  // page renders the full caution nuance.
+  if (status === "caution") return "protected";
   return status;
 }
 
@@ -109,13 +114,13 @@ export function probeNeedsFastRetry(probe: StartupHealthProbe | undefined | null
  */
 export function seedStartupHealthFromSettings(
   previous: StartupHealthStatus | null,
-  seeded: { status: "native" | "protected" | "at-risk"; diagnosticStale: boolean } | null | undefined,
+  seeded: { status: "native" | "protected" | "caution" | "at-risk"; diagnosticStale: boolean } | null | undefined,
 ): StartupHealthStatus | null {
   if (!seeded) return previous;
   // A prior hard "error" (or unknown) may be replaced by a settings seed; a real
   // status from the dedicated probe must not be overwritten.
   if (previous !== null && previous !== "error") return previous;
-  return seeded.status;
+  return seeded.status === "caution" ? "protected" : seeded.status;
 }
 
 /** Single owner cadence for project-config diagnostics (ms). */

@@ -23,12 +23,17 @@ public enum StatusIcon {
 
     /// Keep every operational state distinguishable while the panel is closed. The
     /// tooltip and VoiceOver description carry words; shape is the ambient visual cue.
+    ///
+    /// A running proxy always wears the terminal glyph: missing background-service
+    /// protection is a startup-quality concern for the dashboard startup page, not a
+    /// degraded-looking tray icon. The warning triangle is reserved for an actually
+    /// degraded state, and every other state keeps its own distinct shape.
     package static func symbolName(for state: ProxyState) -> String {
         switch state {
         case .loading:
             return "ellipsis.circle"
-        case .running(let health):
-            return health.isProtected ? "terminal.fill" : "exclamationmark.triangle.fill"
+        case .running:
+            return "terminal.fill"
         case .unreachable:
             return "terminal"
         case .unauthorized:

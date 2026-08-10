@@ -103,7 +103,8 @@ See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and rou
 | `GET /api/config` | Return the redacted, management-safe configuration DTO | — |
 | `PUT /api/config` | Disabled full-config replacement guard | 405; use focused endpoints instead |
 | `GET, PUT /api/settings` | Read runtime/startup settings or update auto-start, stream mode, and app-owned memory budget | 400 invalid or empty update |
-| `GET /api/startup-health` | Read cached service/shim startup health | — |
+| `GET /api/startup-health` | Read cached base startup health decorated with current companion evidence | — |
+| `PUT /api/startup-health/companion` | Refresh the native companion's memory-only Launch at Login lease; raw admin-token principal only | 400 invalid report; 403 GUI session or non-admin principal |
 | `POST /api/startup-action` | Install or repair the service or Codex shim | 400 invalid action; 500 action failure |
 | `GET, POST /api/windows-tray` | Read Windows tray state or install/start/stop/uninstall it | 400 unsupported platform/action; 500 operation failure |
 | `GET /api/diagnostics/project-config` | Read cached project configuration warnings | — |

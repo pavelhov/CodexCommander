@@ -64,6 +64,11 @@ import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
 import { applySystemEnvToggle } from "../system-env";
 import { getCachedStartupHealth, invalidateStartupHealthCache } from "../startup-health-cache";
+import {
+  decorateStartupHealth,
+  parseCompanionStartupBody,
+  recordCompanionLease,
+} from "../companion-startup-state";
 import { runWindowsTrayAction } from "../windows-tray-control";
 import { runStartupInstallAction, type StartupInstallAction } from "../startup-action-control";
 import { displayCodexRuntimePath, effortClampAppliesToRuntime, loadLastEffortClamp, resolveCodexRuntime } from "../../codex/runtime";
@@ -129,7 +134,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hostname: config.hostname ?? "127.0.0.1",
       streamMode: config.streamMode ?? "auto",
       appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
-      startupHealth: await (deps.getCachedStartupHealth ?? getCachedStartupHealth)(config),
+      startupHealth: decorateStartupHealth(await (deps.getCachedStartupHealth ?? getCachedStartupHealth)(config)),
       codexRuntime: {
         path: displayCodexRuntimePath(resolved.runtime.command),
         version: resolved.runtime.version,
@@ -151,7 +156,27 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/startup-health" && req.method === "GET") {
-    return jsonResponse(await getCachedStartupHealth(config));
+    return jsonResponse(decorateStartupHealth(await getCachedStartupHealth(config)));
+  }
+
+  if (url.pathname === "/api/startup-health/companion" && req.method === "PUT") {
+    // The native app reports launch-at-login state with the admin token. Anything
+    // that is not the raw admin token — browser GUI sessions and direct-dispatch
+    // requests without an explicit principal — fails closed with 403.
+    if (ctx.principal !== "admin-token") {
+      return jsonResponse({ error: "companion startup state requires the admin token" }, 403);
+    }
+    let raw: unknown;
+    try {
+      raw = await readManagementJsonBody(req);
+    } catch (error) {
+      rethrowManagementBodyTooLarge(error);
+      return jsonResponse({ error: "invalid JSON body" }, 400);
+    }
+    const parsed = parseCompanionStartupBody(raw);
+    if (!parsed.ok) return jsonResponse({ error: parsed.error }, 400);
+    recordCompanionLease(parsed.launchAtLogin);
+    return new Response(null, { status: 204 });
   }
 
   if (url.pathname === "/api/startup-action" && req.method === "POST") {
@@ -248,7 +273,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexAutoStart: codexAutoStartEnabled(config),
       streamMode: config.streamMode ?? "auto",
       appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
-      startupHealth: await getCachedStartupHealth(config),
+      startupHealth: decorateStartupHealth(await getCachedStartupHealth(config)),
     });
   }
 

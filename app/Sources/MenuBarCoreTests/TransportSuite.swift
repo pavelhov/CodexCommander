@@ -246,6 +246,55 @@ enum TransportSuite {
             t.equal(snapshot?.activities[1].parentId, "opaque-a")
             t.equal(snapshot?.activities[1].phase, .starting)
         }
+
+        t.test("transport: companion startup report PUTs the locked body with the admin token") {
+            StubProtocol.reset([
+                .init(status: 200, body: identity),
+                .init(status: 204),
+            ])
+            let client = makeClient(credential: "admin-secret")
+            let outcome = sync { await proxyError {
+                try await client.reportCompanionStartupState(launchAtLogin: .enabled)
+            } }
+            t.isNil(outcome, "a 204 is success")
+            let requests = StubProtocol.recorded
+            t.equal(requests.count, 2)
+            t.equal(requests[1].httpMethod, "PUT")
+            t.equal(requests[1].url?.path, "/api/startup-health/companion")
+            t.equal(
+                requests[1].value(forHTTPHeaderField: "x-codexcommander-api-key"),
+                "admin-secret"
+            )
+            let bodyData = requests[1].httpBody
+                ?? requestStreamBodyData(requests[1])
+            let body = bodyData.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            t.equal(body?["version"] as? Int, 1, "locked version")
+            t.equal(body?["launchAtLogin"] as? String, "enabled", "wire launch-at-login value")
+            t.equal(body?.count ?? 0, 2, "no client timestamps, TTLs, or metadata accepted")
+        }
+
+        t.test("transport: companion report maps every launch-at-login state to the wire contract") {
+            t.equal(LaunchAtLoginStatus.enabled.companionWireValue, "enabled")
+            t.equal(LaunchAtLoginStatus.disabled.companionWireValue, "disabled")
+            t.equal(LaunchAtLoginStatus.requiresApproval.companionWireValue, "requires-approval")
+            t.equal(LaunchAtLoginStatus.unavailable.companionWireValue, "unavailable")
+        }
+
+        t.test("transport: companion report failure surfaces as a proxy error, never a body") {
+            StubProtocol.reset([
+                .init(status: 200, body: identity),
+                .init(status: 403, body: "COMPANION-SECRET-CONFIG"),
+            ])
+            let client = makeClient(credential: "admin-secret")
+            let error = sync { await proxyError {
+                try await client.reportCompanionStartupState(launchAtLogin: .enabled)
+            } }
+            t.equal(error, .http(403))
+            t.expect(
+                !(error?.userMessage.contains("COMPANION") ?? false),
+                "error text must not echo response bodies"
+            )
+        }
     }
 
     private static func makeClient(credential: String?) -> ProxyClient {
@@ -256,6 +305,23 @@ enum TransportSuite {
             session: session,
             credentials: StaticCredentialStore(credential)
         )
+    }
+
+    /// URLSession can move a small httpBody into httpBodyStream before the URLProtocol
+    /// sees the request; drain whichever representation is present.
+    private static func requestStreamBodyData(_ request: URLRequest) -> Data? {
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        let bufferSize = 1024
+        var buffer = [UInt8](repeating: 0, count: bufferSize)
+        while stream.hasBytesAvailable {
+            let read = stream.read(&buffer, maxLength: bufferSize)
+            if read <= 0 { break }
+            data.append(buffer, count: read)
+        }
+        return data
     }
 
     private static func proxyError<T>(

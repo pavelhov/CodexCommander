@@ -42,7 +42,7 @@ the browser or password manager's decision.
 | **Sub-agent delegation** | Choose a native or routed model and optional reasoning effort shared by CodexCommander delegation guidance and the separate native-default opt-in. This is not a proxy-side per-spawn router; see below. |
 | **Sidecars** | Choose the web-search model and effort plus the vision-description model. Changes apply on the next request. |
 | **Maintenance** | Resync the Codex model catalog and inspect project-local config bypass warnings. |
-| **Startup safety** | Show whether injected Codex routing survives a restart, with separate service and launcher-shim health plus exact repair commands. |
+| **Startup** | Show whether routing is started by the CodexCommander app, a background service, or a launcher shim. The normal macOS app setup is **App-managed**; the service is offered separately as optional crash recovery. Advanced repair commands stay available without dominating the page. |
 | **Windows tray** | Install a per-user login tray for one-click proxy start, stop, restart, dashboard access, and status. The tray is a controller, not a proxy restart service. |
 | **Codex autostart** | Allow an already-installed Codex launcher shim to run `ccx ensure`. This toggle does not install a shim or background service. |
 | **Providers** | Add, edit, set the default (enabled providers only), enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Removing the current default switches to the first remaining enabled provider when one exists; otherwise deletion is refused and the current default is kept. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. |
@@ -169,7 +169,8 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | --- | --- |
 | `GET` / `PUT /api/settings` | Read settings or toggle Codex autostart. |
 | `GET /api/integrations/opencode` · `POST /api/integrations/opencode/apply` · `POST /api/integrations/opencode/restore` | Inspect, safely apply, or restore the managed OpenCode connection. |
-| `GET /api/startup-health` | Read secret-free routing, service, shim, and restart-safety diagnostics. |
+| `GET /api/startup-health` | Read secret-free routing, startup-method, crash-recovery, service, shim, and restart-safety diagnostics. |
+| `PUT /api/startup-health/companion` | Let the authenticated native companion refresh its short-lived, memory-only Launch at Login observation. This endpoint requires the raw admin token; a browser GUI session is rejected. |
 | `POST /api/startup-action` | Install the background service or Codex launcher shim through fixed, allowlisted actions. |
 | `GET` / `POST /api/windows-tray` | Read or change the Windows tray installation and visible-process state. POST accepts `install`, `start`, `stop`, or `uninstall`. |
 | `POST /api/sync` | Rebuild the shared model catalog and stale the Codex model cache. |

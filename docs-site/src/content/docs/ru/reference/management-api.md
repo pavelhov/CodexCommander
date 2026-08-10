@@ -104,7 +104,8 @@ GUI-сессия в стиле loopback не выпускается.
 | `GET /api/config` | Вернуть redacted DTO конфигурации, безопасный для management API | — |
 | `PUT /api/config` | Отключённая защита от полной замены конфигурации | 405; используйте вместо этого узкие endpoint'ы |
 | `GET, PUT /api/settings` | Прочитать runtime/startup setting'и или обновить auto-start, stream mode и budget app-owned memory | 400 invalid or empty update |
-| `GET /api/startup-health` | Прочитать кэшированное startup health службы/shim'а | — |
+| `GET /api/startup-health` | Прочитать кэшированное базовое состояние запуска с текущими данными компаньона | — |
+| `PUT /api/startup-health/companion` | Обновить хранящуюся в памяти аренду Launch at Login нативного компаньона; только исходный токен администратора | 400 недопустимый отчёт; 403 GUI-сессия или не администратор |
 | `POST /api/startup-action` | Установить или починить службу или Codex shim | 400 invalid action; 500 action failure |
 | `GET, POST /api/windows-tray` | Прочитать состояние Windows tray или установить/запустить/остановить/удалить её | 400 unsupported platform/action; 500 operation failure |
 | `GET /api/diagnostics/project-config` | Прочитать кэшированные предупреждения project config | — |

@@ -314,11 +314,7 @@ public final class AgentActivityView: NSView {
         if visible.isEmpty {
             body.isHidden = true
             empty.isHidden = false
-            if activity.unattributedActiveCount > 0 {
-                empty.stringValue = "\(activity.unattributedActiveCount) active turn\(activity.unattributedActiveCount == 1 ? "" : "s") unattributed"
-            } else {
-                empty.stringValue = "No active agents"
-            }
+            empty.stringValue = "No active agents"
             setAccessibilityLabel(empty.stringValue)
             return
         }
@@ -358,14 +354,6 @@ public final class AgentActivityView: NSView {
 
         if activity.truncated {
             let note = makeLabel("Showing active subset", font: Theme.micro, color: Theme.faint)
-            body.addArrangedSubview(note)
-        }
-        if activity.unattributedActiveCount > 0 {
-            let note = makeLabel(
-                "+\(activity.unattributedActiveCount) unattributed",
-                font: Theme.micro,
-                color: Theme.faint
-            )
             body.addArrangedSubview(note)
         }
 
@@ -441,7 +429,10 @@ final class AgentActivityRowView: NSView {
         NSLayoutConstraint.activate([
             row.topAnchor.constraint(equalTo: topAnchor, constant: 1),
             row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: leading),
-            row.trailingAnchor.constraint(equalTo: trailingAnchor),
+            row.trailingAnchor.constraint(
+                equalTo: trailingAnchor,
+                constant: -Theme.scrollbarClearance
+            ),
             row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -1),
             heightAnchor.constraint(greaterThanOrEqualToConstant: 30),
         ])

@@ -175,12 +175,25 @@ mismatch stays on tee and emits a startup warning (`src/lib/bun-stream-caps.ts`)
 
 ## Startup safety
 
-**Startup safety** is reachable by route (`/#startup`) and rendered by the app, but it is not a
-sidebar entry: it is entered from the dashboard's startup-state row, which links there whether the
-current state needs remediation or merely reports how routing is protected. Its warning state is derived from active
-Codex routing plus the actual service and launcher-shim installation state; the
-`codexAutoStart` preference alone is never presented as proof of restart protection. The page shows
-copyable repair commands (`ccx service repair` for an installed service or `ccx service install` when none is registered, `ccx codex-shim install`, and `ccx restore`). On
+**Startup safety** is reachable by route (`/#startup`) and is a permanent entry in the dashboard's
+System navigation. The dashboard's startup-state row also links there whether the current state
+needs remediation or merely reports how routing is started. Its state is derived from active Codex
+routing plus the actual service and launcher-shim installation state. On macOS, the companion can
+also report its current Launch at Login presentation through an admin-token-only, memory-only lease.
+A fresh enabled lease identifies the normal desktop setup as `caution` + `companion`: it is restart
+safe at sign-in, but it does not provide crash supervision. A viable background service wins over
+the companion and reports `protected` + `service`; it is presented as the optional crash-recovery
+upgrade. Stale diagnostics, custom-local routing, and unknown routing remain fail-closed and cannot
+be upgraded by companion evidence. The `codexAutoStart` preference alone is never presented as proof
+of restart protection.
+
+The base service/shim diagnosis is cached, but companion state is merged into every response from a
+server-timestamped lease and is never persisted. `PUT /api/startup-health/companion` accepts only the
+raw admin-token principal, not GUI sessions; reports are advisory and cannot authorize requests,
+change routing, or suppress repair for routes the proxy does not own. The page keeps direct service
+actions available and moves copyable advanced repair commands (`ccx service repair`,
+`ccx service install`, `ccx codex-shim install`, and `ccx restore`) behind an accessible disclosure.
+True at-risk repair guidance stays visible. On
 Windows it can also install an owned, per-user system tray. The resident tray owns only its icon,
 home-scoped singleton, and HKCU Run registration; fixed proxy actions delegate to the CLI so drain,
 service conflict handling, native restore, and PID identity remain centralized. Tray presence never

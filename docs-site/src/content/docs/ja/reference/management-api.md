@@ -88,7 +88,8 @@ Authorization: Bearer <admin-token>
 | `GET /api/config` |編集された、管理上安全な構成 DTO を返します。 — |
 | `PUT /api/config` |フルコンフィグ置換ガードを無効にする | 405;代わりにフォーカスされたエンドポイントを使用してください。
 | `GET, PUT /api/settings` |ランタイム/起動設定の読み取り、または自動起動、ストリーム モード、アプリ所有のメモリ バジェットの更新 | 400 無効または空の更新 |
-| `GET /api/startup-health` |キャッシュされたサービス/シムの起動状態を読み取る | — |
+| `GET /api/startup-health` | キャッシュされた基本起動状態に現在のコンパニオン証拠を加えて読み取る | — |
+| `PUT /api/startup-health/companion` | ネイティブコンパニオンのメモリ内 Launch at Login リースを更新（raw 管理トークンのみ） | 400 無効な報告、403 GUI セッションまたは管理者以外 |
 | `POST /api/startup-action` |サービスまたは Codex シムをインストールまたは修復する | 400 無効なアクション。 500 アクション失敗 |
 | `GET, POST /api/windows-tray` | Windows トレイの状態を読み取るか、インストール/起動/停止/アンインストールする | 400 のサポートされていないプラットフォーム/アクション。 500 操作失敗 |
 | `GET /api/diagnostics/project-config` |キャッシュされたプロジェクト設定の読み取りに関する警告 | — |
