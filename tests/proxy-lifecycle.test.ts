@@ -235,6 +235,46 @@ describe("shared proxy lifecycle authority", () => {
     });
   });
 
+  test("a canonical OpenAI-only catalog reaches the stale-worker update path", async () => {
+    const nativeConfig = {
+      port: 10100,
+      codexAutoStart: true,
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+    } as CodexCommanderConfig;
+    const result = await ensureProxyLifecycle({
+      io: baseIo({
+        loadConfig: () => nativeConfig,
+        findLive: async () => ({ pid: 42, port: 10123, source: "runtime" }),
+        syncLive: async () => ({
+          status: "applied",
+          ok: true,
+          catalogQuality: "native-only",
+          catalogWritten: true,
+          catalogState: {
+            state: "stale",
+            catalogMtimeMs: 2_000,
+            processes: [{ pid: 81, startedAtMs: 1_000 }],
+          },
+        }),
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      state: "running",
+      errorCode: "CODEX_RESTART_REQUIRED",
+      codexRestartRequired: true,
+      staleWorkerCount: 1,
+    });
+  });
+
   test("a stale Codex worker catalog is a nonfatal update-ready notice", async () => {
     const result = await ensureProxyLifecycle({
       io: baseIo({

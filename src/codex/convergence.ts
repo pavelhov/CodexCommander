@@ -170,11 +170,13 @@ function prepareCatalog(
     name === "openai" && isCanonicalOpenAiForwardProvider(provider)
   ));
   const disabledNative = disabledNativeSlugs(config);
+  const nativeSlugsFrom = (models: RawCatalog["models"]): string[] => [...new Set((models ?? []).flatMap(entry => (
+    typeof entry.slug === "string" && !entry.slug.includes("/") && !disabledNative.has(entry.slug)
+      ? [entry.slug] : []
+  )))];
+  const activeNativeSlugs = nativeSlugsFrom(active?.models);
   const nativeSlugs = includeNativeOpenAi
-    ? [...new Set((active?.models ?? catalog.models ?? []).flatMap(entry => (
-        typeof entry.slug === "string" && !entry.slug.includes("/") && !disabledNative.has(entry.slug)
-          ? [entry.slug] : []
-      )))]
+    ? (activeNativeSlugs.length > 0 ? activeNativeSlugs : nativeSlugsFrom(catalog.models))
     : [];
   const entries = buildCatalogEntries(
     template ? JSON.parse(JSON.stringify(template)) : null,

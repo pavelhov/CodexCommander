@@ -73,7 +73,7 @@ function syncResultFailed(result: CodexSyncResult | undefined): boolean {
   return !result.ok
     || result.status === "refused"
     || (result.warning !== undefined && result.warning.length > 0)
-    || result.catalogQuality === "native-only";
+    || (result.catalogQuality === "native-only" && result.catalogWritten !== true);
 }
 
 function unknownCatalogState(): CodexAppServerCatalogStatus {

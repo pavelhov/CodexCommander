@@ -19,6 +19,7 @@ import { getCredential } from "../src/oauth/store";
 import * as oauthStore from "../src/oauth/store";
 import { armClaudeCodeBaseline, loadConfig, readConfigDiagnostics, saveConfig, saveConfigPreservingClaudeCode } from "../src/config";
 import { isApiAuthRequired, requireApiAuth } from "../src/server/auth-cors";
+import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-oauth-public-surface");
 const previousHome = process.env.CODEXCOMMANDER_HOME;
@@ -284,6 +285,7 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
   for (const provider of ["xai", "kimi"] as const) {
     test(`management ${provider} OAuth creates and reconciles a fresh-home config`, async () => {
       const liveConfig = config();
+      let catalogConvergences = 0;
       expect(readConfigDiagnostics().source).toBe("default");
       const originalLogin = OAUTH_PROVIDERS[provider].login;
       OAUTH_PROVIDERS[provider].login = async (ctrl) => {
@@ -306,7 +308,11 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ provider }),
         });
-        const response = await handleManagementAPI(request, new URL(request.url), liveConfig);
+        const response = await handleManagementAPI(request, new URL(request.url), liveConfig, {
+          createManagementConvergeCodex: catalogConvergenceFactory(() => {
+            catalogConvergences += 1;
+          }),
+        });
         expect(response?.status).toBe(200);
         expect(await response?.json()).toEqual({
           url: `https://auth.example.test/${provider}`,
@@ -318,8 +324,16 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
         expect(status).toMatchObject({ done: true, loggedIn: true });
         expect(status.error).toBeUndefined();
         expect(readConfigDiagnostics().source).toBe("file");
-        expect(loadConfig().providers[provider]).toEqual(OAUTH_PROVIDERS[provider].providerConfig);
+        const persisted = loadConfig();
+        expect(persisted.defaultProvider).toBe("openai");
+        expect(Object.keys(persisted.providers).sort()).toEqual(["openai", provider].sort());
+        expect(persisted.providers.openai).toEqual(config().providers.openai);
+        expect(persisted.providers[provider]).toEqual(OAUTH_PROVIDERS[provider].providerConfig);
+        expect(liveConfig.defaultProvider).toBe("openai");
+        expect(Object.keys(liveConfig.providers).sort()).toEqual(["openai", provider].sort());
+        expect(liveConfig.providers.openai).toEqual(config().providers.openai);
         expect(liveConfig.providers[provider]).toEqual(OAUTH_PROVIDERS[provider].providerConfig);
+        expect(catalogConvergences).toBe(1);
       } finally {
         OAUTH_PROVIDERS[provider].login = originalLogin;
         clearLoginState(provider);

@@ -206,6 +206,48 @@ test("used process-local authority drift rejects before every catalog target wri
   expect(existsSync(join(codexHome, "models_cache.json"))).toBe(false);
 });
 
+test("a routed-only active catalog cannot hide native Codex models from the source catalog", async () => {
+  const live = config();
+  live.providers.xai = {
+    adapter: "openai-chat",
+    baseUrl: "https://api.x.ai/v1",
+    authMode: "oauth",
+    liveModels: false,
+    models: ["grok-4.5"],
+  };
+  saveConfig(live);
+  writeFileSync(join(codexHome, "codexcommander-catalog.json"), `${JSON.stringify({
+    models: [{
+      slug: "xai/grok-4.5",
+      description: "Routed via CodexCommander → xai (xai).",
+      priority: 5,
+    }],
+  }, null, 2)}\n`);
+
+  const runtime = { command: "/tmp/codex", version: "0.146.0", source: "environment" as const };
+  setCodexRuntimeResolveCacheForTests({ runtime, failures: [] });
+  setBundledCatalogCacheForTests(runtime, JSON.parse(sourceCatalog("bundled")) as never);
+
+  const gathered = await gatherCodexCatalogCandidate(captureCatalogAdmissionSnapshot(live));
+  expect(gathered.kind).toBe("candidate");
+  const committed = await commitCodexCatalogCandidate(
+    (gathered as Extract<typeof gathered, { kind: "candidate" }>).candidate,
+    1_000,
+  );
+  expect(committed.kind).toBe("committed");
+
+  const slugs = (JSON.parse(readFileSync(join(codexHome, "codexcommander-catalog.json"), "utf8")) as {
+    models: Array<{ slug: string }>;
+  }).models.map(model => model.slug);
+  expect(slugs).toContain("gpt-5.6-sol");
+  expect(slugs).toContain("xai/grok-4.5");
+  const cachedSlugs = (JSON.parse(readFileSync(join(codexHome, "models_cache.json"), "utf8")) as {
+    models: Array<{ slug: string }>;
+  }).models.map(model => model.slug);
+  expect(cachedSlugs).toContain("gpt-5.6-sol");
+  expect(cachedSlugs).toContain("xai/grok-4.5");
+});
+
 test("catalog-only commit never creates the native pair or routing artifacts", async () => {
   const gathered = await candidate();
   expect((await commitCodexCatalogCandidate(gathered, 1_000)).kind).toBe("committed");

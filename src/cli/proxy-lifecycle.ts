@@ -14,6 +14,7 @@ import {
   removeRuntimePortIfPidIs,
 } from "../config";
 import { currentExternalCodexModelProvider, restoreNativeCodex } from "../codex/inject";
+import { hasRoutedCapableProviders } from "../codex/catalog/sync";
 import { reconcileJournal } from "../codex/journal";
 import { stripGrokConfig } from "../grok/inject";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
@@ -385,6 +386,7 @@ function isCurrentCatalogState(value: ProxyCatalogSyncOutcome["catalogState"]): 
 
 function catalogSyncFailure(
   result: ProxyCatalogSyncOutcome,
+  config: Pick<CodexCommanderConfig, "providers">,
 ): {
   errorCode: "SYNC_FAILED";
   message: string;
@@ -405,11 +407,13 @@ function catalogSyncFailure(
     && (result.skippedReason === "desired_disabled" || result.skippedReason === "external_provider")
     && result.ok;
   if (intentionalNativeOnly) return null;
+  const missingConfiguredRoutes = result.catalogQuality === "native-only"
+    && hasRoutedCapableProviders(config);
   if (
     !result.ok
     || result.status === "refused"
     || (result.warning !== undefined && result.warning !== "")
-    || result.catalogQuality === "native-only"
+    || missingConfiguredRoutes
   ) {
     return {
       errorCode: "SYNC_FAILED",
@@ -590,7 +594,7 @@ export async function ensureProxyLifecycle(
       }
     }
     const syncResult = await (io.syncLive ?? syncLiveProxy)(live, config, logger);
-    syncProblem = catalogSyncFailure(syncResult);
+    syncProblem = catalogSyncFailure(syncResult, config);
     syncNotice = catalogSyncNotice(syncResult);
   } finally {
     ensureLock.release();

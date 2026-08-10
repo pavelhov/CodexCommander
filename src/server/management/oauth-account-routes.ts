@@ -113,7 +113,7 @@ function validateKeyName(
 }
 
 export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config, deps, syncClaudeAgentDefsBestEffort } = ctx;
+  const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
   // Which providers support real OAuth login (drives the GUI's "Log in with …" buttons).
   if (url.pathname === "/api/oauth/providers" && req.method === "GET") {
@@ -164,9 +164,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         // startLoginFlow returns the authorization URL before background persistence completes.
         // Three-way reconcile settled disk changes so a failed login cannot leave a provider
         // live-only and an in-flight management mutation cannot be erased before it saves.
-        onSettled: () => {
+        onSettled: async () => {
           reconcileLiveConfigFromDisk(config, persistedBaseline);
           reconcileLiveStateStores();
+          // Provider login is a provider mutation just like add/edit/delete. Publish the
+          // reconciled provider roster immediately so Codex never keeps an older routed-only
+          // catalog until a separate manual sync.
+          await convergeCodexCatalog();
         },
       });
       if (authUrl && !deviceCode) {
