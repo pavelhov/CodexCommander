@@ -37,7 +37,16 @@ public enum ProxyState: Equatable, Sendable {
     public var tone: Tone {
         switch self {
         case .loading: return .neutral
-        case .running(let health): return health.isProtected ? .good : .warning
+        case .running(let health):
+            // Startup assurance and live proxy health are separate signals. The normal
+            // app-managed (`caution`) setup is healthy while running, so it must not
+            // paint the menu-bar header amber. Reserve warning for a verified at-risk
+            // startup state; unknown future states stay neutral instead of guessing.
+            switch health.status {
+            case "native", "protected", "caution": return .good
+            case "at-risk": return .warning
+            default: return .neutral
+            }
         case .unreachable: return .bad
         case .unauthorized: return .warning
         case .degraded: return .warning

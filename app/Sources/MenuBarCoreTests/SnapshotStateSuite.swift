@@ -48,9 +48,12 @@ enum SnapshotStateSuite {
             t.equal(ProxyState.unauthorized.title, "Authentication unavailable")
         }
 
-        t.test("state: an unprotected but running proxy reads as a warning, not healthy") {
+        t.test("state: app-managed running is healthy; only verified at-risk startup warns") {
             t.equal(ProxyState.running(health("protected")).tone, .good)
+            t.equal(ProxyState.running(health("caution")).tone, .good)
+            t.equal(ProxyState.running(health("native")).tone, .good)
             t.equal(ProxyState.running(health("at-risk")).tone, .warning)
+            t.equal(ProxyState.running(health("some-future-state")).tone, .neutral)
             t.equal(ProxyState.unreachable.tone, .bad)
         }
 

@@ -35,7 +35,7 @@ export interface SettingsData {
   /** IANA zone of the machine running the proxy, used to render log timestamps (#725). */
   timeZone?: string;
   startupHealth?: {
-    status: "native" | "protected" | "at-risk";
+    status: "native" | "protected" | "caution" | "at-risk";
     routingKind: StartupRoutingKind;
     autostartEnabled: boolean;
     shimCoverage: "full" | "cli-only" | "none";

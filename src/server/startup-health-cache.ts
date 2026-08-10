@@ -16,13 +16,19 @@ let inflight: Promise<StartupHealth> | null = null;
 let generation = 0;
 
 export function markStartupHealthDiagnosticStale(value: StartupHealth): StartupHealth {
-  if (!value.localRoutingDependency) return { ...value, diagnosticStale: true };
+  if (!value.localRoutingDependency) {
+    return { ...value, diagnosticStale: true, companion: null };
+  }
   return {
     ...value,
     status: "at-risk",
+    startupMethod: "none",
     rebootSafe: false,
+    crashRecovery: false,
     protection: "none",
     diagnosticStale: true,
+    // A stale probe must never be decorated back into a companion caution.
+    companion: null,
     // Mirror deriveStartupHealth's choice: an already-registered service is refreshed in
     // place. Hardcoding installService here silently undid that for every stale-cache
     // read, which is the path the dashboard hits while a probe is revalidating.

@@ -95,6 +95,31 @@ public struct RestartAccepted: Decodable, Equatable, Sendable {
     }
 }
 
+/// Body for `PUT /api/startup-health/companion`. The server accepts exactly this
+/// locked shape: no client timestamps, TTLs, PIDs, paths, or bundle metadata.
+public struct CompanionStartupReport: Encodable, Equatable, Sendable {
+    public let version: Int
+    public let launchAtLogin: String
+
+    public init(launchAtLogin: String) {
+        self.version = 1
+        self.launchAtLogin = launchAtLogin
+    }
+}
+
+public extension LaunchAtLoginStatus {
+    /// Wire value for the companion report. The server contract is kebab-case
+    /// (`requires-approval`), which differs from the Swift case raw values.
+    var companionWireValue: String {
+        switch self {
+        case .enabled: return "enabled"
+        case .disabled: return "disabled"
+        case .requiresApproval: return "requires-approval"
+        case .unavailable: return "unavailable"
+        }
+    }
+}
+
 /// A management client that proves local CodexCommander identity immediately before every
 /// credential-bearing request. Discovery is repeated for each request and retry, so a
 /// restart never reuses stale descriptors, endpoint metadata, or token bytes.
@@ -185,6 +210,17 @@ public actor ProxyClient {
         } catch {
             throw ProxyError.decoding
         }
+    }
+
+    /// Advisory launch-at-login report to the proxy (`PUT /api/startup-health/companion`).
+    /// Success is a 204 with no body; callers treat any thrown error as non-blocking.
+    public func reportCompanionStartupState(launchAtLogin: LaunchAtLoginStatus) async throws {
+        let payload = CompanionStartupReport(launchAtLogin: launchAtLogin.companionWireValue)
+        _ = try await authenticatedSend(
+            method: "PUT",
+            path: "api/startup-health/companion",
+            body: payload
+        )
     }
 
     public func liveness(timeout: TimeInterval = 1.5) async -> Liveness {

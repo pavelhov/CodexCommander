@@ -88,7 +88,8 @@ Authorization: Bearer <admin-token>
 | `GET /api/config` | redacted된 management-safe configuration DTO를 반환합니다 | — |
 | `PUT /api/config` | 전체 구성 교체 방지 기능이 비활성화되어 있습니다 | 405; 대신 집중된 엔드포인트를 사용하십시오 |
 | `GET, PUT /api/settings` | 런타임/시작 설정을 읽거나 auto-start, stream mode, 앱 소유 memory budget을 업데이트합니다 | 400 잘못되었거나 비어 있는 업데이트 |
-| `GET /api/startup-health` | 캐시된 서비스/shim 시작 상태를 읽습니다 | — |
+| `GET /api/startup-health` | 캐시된 기본 시작 상태에 현재 컴패니언 증거를 적용해 읽습니다 | — |
+| `PUT /api/startup-health/companion` | 네이티브 컴패니언의 메모리 내 Launch at Login 리스를 갱신합니다(원본 관리 토큰만 허용) | 400 잘못된 보고, 403 GUI 세션 또는 비관리자 |
 | `POST /api/startup-action` | 서비스 또는 Codex shim을 설치하거나 복구합니다 | 400 잘못된 작업; 500 작업 실패 |
 | `GET, POST /api/windows-tray` | Windows tray 상태를 읽거나 설치, 시작, 중지, 제거합니다 | 400 지원되지 않는 플랫폼/작업; 500 작업 실패 |
 | `GET /api/diagnostics/project-config` | 캐시된 프로젝트 구성 경고를 읽습니다 | — |

@@ -14,7 +14,7 @@ import Integrations from "./pages/Integrations";
 import Startup from "./pages/Startup";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRoute } from "./icons";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRoute, IconTerminal } from "./icons";
 import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n/shared";
 import { Select } from "./ui";
 import { installApiAuthFetch } from "./api";
@@ -81,7 +81,13 @@ const NAV_SECTIONS: NavSection[] = [
       { id: "usage", tkey: "nav.usage", Icon: IconActivity },
     ],
   },
-  { labelKey: "nav.group.system", entries: [{ id: "storage", tkey: "nav.storage", Icon: IconHardDrive }] },
+  {
+    labelKey: "nav.group.system",
+    entries: [
+      { id: "startup", tkey: "nav.startup", Icon: IconTerminal },
+      { id: "storage", tkey: "nav.storage", Icon: IconHardDrive },
+    ],
+  },
 ];
 
 const NAV = NAV_SECTIONS.flatMap(section => section.entries);
@@ -295,7 +301,7 @@ export default function App() {
       </aside>
 
       <main className="main" inert={navOpen}>
-        <div className={`main-inner${page === "combos" ? " main-inner--combos" : ""}${page === "integrations" ? " main-inner--client-apps" : ""}`}>
+        <div className={`main-inner${page === "combos" ? " main-inner--combos" : ""}${page === "integrations" ? " main-inner--client-apps" : ""}${page === "startup" ? " main-inner--startup" : ""}`}>
           <ErrorBoundary
             key={page}
             pageName={t(PAGE_TKEY[page])}

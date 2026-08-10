@@ -36,6 +36,8 @@ enum Theme {
     static let rowGap: CGFloat = 8
     static let tightGap: CGFloat = 5
     static let sectionGap: CGFloat = 9
+    /// Keep trailing row content clear of the popover's overlay scroll indicator.
+    static let scrollbarClearance: CGFloat = 18
     static let radius: CGFloat = 12
     static let cardRadius: CGFloat = 7
     static let width: CGFloat = 387

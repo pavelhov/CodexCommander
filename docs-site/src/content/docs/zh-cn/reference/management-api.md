@@ -88,7 +88,8 @@ Authorization: Bearer <admin-token>
 | `GET /api/config` | 返回已脱敏、对管理安全的配置 DTO | — |
 | `PUT /api/config` | 禁用的完整配置替换保护 | 405；请改用聚焦端点 |
 | `GET, PUT /api/settings` | 读取运行时/启动设置，或更新自动启动、流模式和应用拥有的内存预算 | 400 无效或空更新 |
-| `GET /api/startup-health` | 读取缓存的服务/shim 启动健康状态 | — |
+| `GET /api/startup-health` | 读取缓存的基础启动状态，并应用当前伴侣应用证据 | — |
+| `PUT /api/startup-health/companion` | 刷新原生伴侣应用仅保存在内存中的 Launch at Login 租约；仅允许原始管理令牌 | 400 报告无效；403 GUI 会话或非管理员 |
 | `POST /api/startup-action` | 安装或修复服务或 Codex shim | 400 无效动作；500 动作失败 |
 | `GET, POST /api/windows-tray` | 读取 Windows 托盘状态，或安装、启动、停止、卸载它 | 400 不支持的平台/动作；500 操作失败 |
 | `GET /api/diagnostics/project-config` | 读取缓存的项目配置警告 | — |

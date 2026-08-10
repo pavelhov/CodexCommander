@@ -18,7 +18,7 @@ checkout using [Build from source](#build-from-source). Keep the development app
 The panel has one **Launch at Login** switch and reports the resulting mode:
 
 - **Desktop** — the CodexCommander menu app launches when you sign in and ensures or attaches to exactly
-  one server. This is the default desktop experience.
+  one server. This is the default desktop experience and is reported as **App-managed** in Startup.
 - **Headless** — the menu app is not a login item, but an independently installed
   `ccx service` continues starting and supervising the server.
 - **Off** — neither the menu app nor a background service starts automatically; open the app or run
@@ -31,6 +31,13 @@ the proxy and service, restores native Codex routing, and closes the companion o
 therefore list CodexCommander under both **Open at Login** and **Allow in the Background**; those are two
 responsibilities of one installation, not duplicate app copies. Turning off Launch at Login never
 installs, removes, starts, or stops the background service.
+
+App-managed startup and the background service solve different problems. The app starts the proxy at
+sign-in, which is enough for normal desktop use. The optional background service additionally
+supervises the proxy and restarts it after a crash, so the dashboard labels it **Background
+recovery** instead of presenting it as a requirement. The companion periodically reports its current
+Launch at Login state to the local proxy; that short-lived report is kept only in memory and is used
+only for startup diagnostics.
 
 If macOS requires approval, the startup row links directly to **System Settings → General → Login
 Items & Extensions**. CodexCommander reflects a revocation made there instead of repeatedly trying to
@@ -47,6 +54,8 @@ override it.
   observations, never an invented live balance. Missing data is shown as unavailable, never as zero
   usage or unlimited capacity.
 - **Dashboard and Logs** — open the corresponding local dashboard view in your default browser.
+- **Startup options…** — opens the dashboard's Startup page when an optional startup upgrade or
+  repair is available; the panel does not make a raw CLI command the primary action.
 - **Manage** — opens the selected provider's Accounts or API Keys tab. OAuth, API-key entry,
   reauthentication, account switching, and provider configuration stay in the dashboard.
 - **Agent catalog update ready** — a persistent, nonfatal card shown when running Codex background
@@ -72,6 +81,10 @@ stale, the row instead says **Login needs refresh** and tells you to run `grok` 
 **Refresh**. A rejected account login says **Sign-in required**; a network or upstream failure says
 **Temporarily unavailable**. These states are fixed, privacy-safe reason codes from the local proxy,
 not raw provider errors. **View all providers** opens the complete Providers workspace.
+
+While the proxy is running, the menu-bar item uses the normal terminal icon whether startup is
+app-managed or service-managed. The warning triangle is reserved for a genuinely degraded proxy;
+missing optional crash recovery does not turn a healthy running app into an alarm state.
 
 ## Agent catalog updates
 

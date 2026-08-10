@@ -16,6 +16,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     private var lifecycleInFlight = false
     private var catalogActionInFlight = false
     private var catalogUpdateReady = false
+    private var companionHeartbeat: CompanionHeartbeat?
     private let launchAtLoginController = LaunchAtLoginController()
     private lazy var executableFingerprint = ExecutableFingerprint.current()
     private lazy var sourceRevision = BuildProvenance.shortRevision(
@@ -57,6 +58,53 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         }
     }
 
+    /// Advisory launch-at-login reporting. The sample reads SMAppService freshly on
+    /// every tick and every transition; failures are swallowed so a missing or
+    /// restarting proxy can never alarm the user or block the transition.
+    @MainActor
+    private func makeCompanionHeartbeat(client: ProxyClient) -> CompanionHeartbeat {
+        CompanionHeartbeat(
+            sample: { [weak self] in
+                guard let self else { return .unavailable }
+                return self.launchAtLoginController.currentPresentation(
+                    registrationAllowed: self.launchAtLoginRegistrationAllowed
+                ).status
+            },
+            send: { [weak client] status in
+                guard let client else { return }
+                do {
+                    try await client.reportCompanionStartupState(launchAtLogin: status)
+                } catch {
+                    // Best-effort by design: never surface a heartbeat failure.
+                }
+            }
+        )
+    }
+
+    /// AppDelegate methods are nonisolated; these transitions are already on the main
+    /// thread, so a MainActor hop preserves the immediate-report contract.
+    private func startCompanionHeartbeat() {
+        Task { @MainActor [weak self] in
+            guard let self, let client = self.client else { return }
+            let heartbeat = self.companionHeartbeat ?? self.makeCompanionHeartbeat(client: client)
+            self.companionHeartbeat = heartbeat
+            heartbeat.start()
+            heartbeat.reportNow()
+        }
+    }
+
+    private func reportCompanionHeartbeat() {
+        Task { @MainActor [weak self] in
+            self?.companionHeartbeat?.reportNow()
+        }
+    }
+
+    private func stopCompanionHeartbeat() {
+        Task { @MainActor [weak self] in
+            self?.companionHeartbeat?.stop()
+        }
+    }
+
     private func wire(controller: PopoverViewController, coordinator: PollingCoordinator) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = StatusIcon.image(for: .loading)
@@ -73,6 +121,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         controller.onStop = { [weak self] in self?.stopProxy() }
         controller.onRestart = { [weak self] in self?.restartProxy() }
         controller.onApplyCodexCatalog = { [weak self] in self?.applyCodexCatalog() }
+        controller.onOpenStartupOptions = { [weak self] in self?.openStartupOptions() }
         controller.onQuitMenuBar = { [weak self] in self?.quitMenuBar(nil) }
         controller.onStopAndQuit = { [weak self] in self?.stopCodexCommanderAndQuit(nil) }
         controller.onLaunchAtLoginChange = { [weak self] enabled in
@@ -105,6 +154,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                 registrationAllowed: launchAtLoginRegistrationAllowed
             )
         )
+        startCompanionHeartbeat()
         ensureProxyOnLaunch()
     }
 
@@ -114,6 +164,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                 registrationAllowed: launchAtLoginRegistrationAllowed
             )
         )
+        reportCompanionHeartbeat()
     }
 
     public func applicationShouldHandleReopen(
@@ -126,6 +177,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
 
     public func applicationWillTerminate(_ notification: Notification) {
         pollTask?.cancel()
+        stopCompanionHeartbeat()
         removeEscapeMonitor()
         panel.dismiss()
     }
@@ -221,6 +273,19 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         openHash("logs")
     }
 
+    /// The dashboard owns startup remediation (service install/repair, shim, routing
+    /// decisions), so the tray hands the recommendation off instead of surfacing a raw
+    /// `ccx service install` command the app would never execute.
+    private func openStartupOptions() {
+        NSWorkspace.shared.open(startupOptionsURL())
+    }
+
+    /// Package-visible seam so the UI tests can pin the destination without opening a
+    /// browser.
+    package func startupOptionsURL() -> URL {
+        DeepLinks.url(endpoint: endpoint, hash: "startup")
+    }
+
     private func openProvider(_ provider: String) {
         let summary = latest?.providers.first(where: { $0.name == provider })
         let tab = ResourceAssets.supportsAccountsTab(provider, summary: summary)
@@ -247,6 +312,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
             registrationAllowed: launchAtLoginRegistrationAllowed
         )
         controller.applyLaunchAtLogin(presentation)
+        reportCompanionHeartbeat()
         if let error = presentation.errorMessage {
             controller.showResult(error, isError: true)
         } else if presentation.needsApproval {
@@ -304,7 +370,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                 switch outcome {
                 case .running:
                     self.clearCatalogUpdate()
+                    self.companionHeartbeat?.reportNow()
                 case .catalogUpdateReady(let count):
+                    // The proxy is running with a pending catalog refresh; report now so
+                    // a failed pre-ensure report is retried right after startup.
+                    self.companionHeartbeat?.reportNow()
                     self.presentCatalogUpdate(staleWorkerCount: count)
                 case .stopped:
                     break
@@ -334,10 +404,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                 switch outcome {
                 case .running:
                     self.clearCatalogUpdate()
+                    self.companionHeartbeat?.reportNow()
                     self.controller.showResult("CodexCommander started.", isError: false)
                 case .stopped:
                     self.controller.showResult("CodexCommander did not start.", isError: true)
                 case .catalogUpdateReady(let count):
+                    // Start succeeded with a pending catalog refresh; report now so the
+                    // just-started proxy gets the companion lease immediately.
+                    self.companionHeartbeat?.reportNow()
                     self.presentCatalogUpdate(staleWorkerCount: count)
                 case .failed(let message):
                     self.controller.showResult(message, isError: true)
@@ -423,6 +497,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                 self?.updateApplicationMenu()
                 switch outcome {
                 case .restarted:
+                    self?.companionHeartbeat?.reportNow()
                     self?.controller.showResult("CodexCommander restarted.", isError: false)
                 case .failed(let message):
                     self?.controller.showResult(message, isError: true)
@@ -580,6 +655,83 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
             panel.makeKeyAndOrderFront(nil)
         }
         return choice
+    }
+}
+
+/// Best-effort, non-blocking reporter of the native app's launch-at-login state.
+///
+/// The proxy treats the report as advisory: it stamps its own observation time and
+/// expires the lease after 90s, so this app never needs to know about TTLs. Failures
+/// are swallowed on purpose — a missing or restarting proxy must never alarm the user
+/// or block the transition that triggered the report. A single repeating timer owns
+/// the 30s cadence; repeated `start()` calls cancel any existing timer instead of
+/// stacking duplicates, and `stop()` cancels it on termination.
+@MainActor
+public final class CompanionHeartbeat {
+    public typealias Sample = @Sendable () -> LaunchAtLoginStatus
+    public typealias SendReport = @Sendable (LaunchAtLoginStatus) async -> Void
+
+    public nonisolated static let targetInterval: TimeInterval = 30
+    private let sample: Sample
+    private let send: SendReport
+    private let interval: TimeInterval
+    private var timer: Timer?
+    private var inFlight = false
+    private var active = false
+    private var generation = 0
+
+    public init(
+        interval: TimeInterval = CompanionHeartbeat.targetInterval,
+        sample: @escaping Sample,
+        send: @escaping SendReport
+    ) {
+        self.interval = interval
+        self.sample = sample
+        self.send = send
+    }
+
+    /// Starts the repeating best-effort timer. Safe to call repeatedly: any existing
+    /// timer is cancelled first, so concurrent duplication is impossible.
+    public func start() {
+        cancelTimer()
+        active = true
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tick() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    /// Immediately reports a freshly sampled status. Used after launch-at-login
+    /// reconciliation, app activation, login-item changes, and successful proxy
+    /// start/restart.
+    public func reportNow() {
+        tick(requiresActive: false)
+    }
+
+    /// Cancels the repeating timer; call on termination.
+    public func stop() {
+        cancelTimer()
+        active = false
+        generation += 1
+        inFlight = false
+    }
+
+    private func cancelTimer() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func tick(requiresActive: Bool = true) {
+        guard !requiresActive || active, !inFlight else { return }
+        inFlight = true
+        let status = sample()
+        let generationAtStart = generation
+        Task { @MainActor [weak self] in
+            guard let self, self.generation == generationAtStart else { return }
+            await self.send(status)
+            self.inFlight = false
+        }
     }
 }
 

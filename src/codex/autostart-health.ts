@@ -4,9 +4,27 @@ import type { CodexCommanderConfig } from "../types";
 import { getCodexRoutingKind, type CodexRoutingKind } from "./inject";
 import { diagnoseCodexShim, type CodexShimDiagnostic } from "./shim";
 
-export type StartupProtection = "service" | "shim" | "none";
-export type StartupHealthStatus = "native" | "protected" | "at-risk";
+export type StartupProtection = "service" | "shim" | "companion" | "none";
+export type StartupHealthStatus = "native" | "protected" | "caution" | "at-risk";
 export type ShimCoverage = "full" | "cli-only" | "none";
+/**
+ * Which mechanism actually keeps Codex routing alive across a reboot or proxy
+ * crash. `companion` is advisory (a fresh native-app lease), never a substitute
+ * for a service diagnostic. The CLI-only shim stays conservative.
+ */
+export type StartupMethod = "native" | "service" | "companion" | "shim" | "none";
+
+/**
+ * The native app's launch-at-login self-report, kebab-cased on the wire. This is
+ * advisory state the server never trusts for `custom-local`/`unknown` routing.
+ */
+export type LaunchAtLoginReport = "enabled" | "disabled" | "requires-approval" | "unavailable";
+
+export interface CompanionHealthInfo {
+  launchAtLogin: LaunchAtLoginReport;
+  /** Server-side observation timestamp in epoch milliseconds; client timestamps are never accepted. */
+  observedAt: number;
+}
 
 export interface StartupHealthInputs {
   routingKind: CodexRoutingKind;
@@ -26,12 +44,18 @@ export interface StartupHealthInputs {
 
 export interface StartupHealth {
   status: StartupHealthStatus;
+  /** Effective startup mechanism after response-time decoration (base keeps `none`). */
+  startupMethod: StartupMethod;
+  /** Whether the active mechanism survives a proxy crash without user action. */
+  crashRecovery: boolean;
   routingKind: CodexRoutingKind;
   routingInjected: boolean;
   localRoutingDependency: boolean;
   autostartEnabled: boolean;
   rebootSafe: boolean;
   protection: StartupProtection;
+  /** Fresh native-app launch-at-login lease, decorated at response time. */
+  companion: CompanionHealthInfo | null;
   serviceInstalled: boolean;
   serviceViable: boolean;
   serviceEnabled: boolean;
@@ -80,6 +104,16 @@ export function deriveStartupHealth(inputs: StartupHealthInputs): StartupHealth 
       ? "shim"
       : "none";
   const rebootSafe = !localRoutingDependency || (ownsLocalRouting && inputs.serviceViable);
+  // Base diagnosis never knows about the native companion: the server decorates the
+  // lease only at response time, so the cached probe output stays companion-free.
+  const startupMethod: StartupMethod = !localRoutingDependency
+    ? "native"
+    : ownsLocalRouting && inputs.serviceViable
+      ? "service"
+      : ownsLocalRouting && shimEffective
+        ? "shim"
+        : "none";
+  const crashRecovery = ownsLocalRouting && inputs.serviceViable;
   const status: StartupHealthStatus = !localRoutingDependency
     ? "native"
     : rebootSafe
@@ -103,8 +137,11 @@ export function deriveStartupHealth(inputs: StartupHealthInputs): StartupHealth 
     routingInjected,
     localRoutingDependency,
     status,
+    startupMethod,
+    crashRecovery,
     rebootSafe,
     protection,
+    companion: null,
     shimCoverage,
     recommendedCommand,
     commands: { ...COMMANDS },
@@ -144,6 +181,9 @@ export function startupHealthSummary(health: StartupHealth): string {
   if (health.status === "native") return health.routingKind === "custom-remote"
     ? "custom remote Codex routing (no local restart dependency)"
     : "native Codex routing (no CodexCommander restart dependency)";
+  if (health.status === "caution") {
+    return "running via the menu bar companion (launch at login is enabled; service install is optional for crash recovery)";
+  }
   if (health.protection === "service") return "protected by background service";
   const command = health.recommendedCommand ?? health.commands.restoreNative;
   if (health.routingKind === "unknown") return `AT RISK after restart (Codex routing could not be verified; run '${command}')`;
