@@ -63,7 +63,8 @@ non-trivial change. CI runs these on Linux, Windows, and macOS.
 
 ## Issues and pull requests (agents)
 
-Agent-created issues and PRs must use the repository templates.
+Agent-created issues must use the repository templates. Pull requests use
+commit-derived drafts and the review guidance below.
 
 - **Creating an issue:** open it through the template chooser and use the
   matching form in `.github/ISSUE_TEMPLATE/` — `bug_report.yml` (Bug report),
@@ -72,12 +73,13 @@ Agent-created issues and PRs must use the repository templates.
   compatibility). Keep the form's section headings exactly as generated.
   `.github/ISSUE_TEMPLATE/config.yml` disables blank issues, so there is no
   freeform fallback.
-- **Opening a pull request:** fill every section of
-  `.github/PULL_REQUEST_TEMPLATE.md` (Summary, Verification, Checklist).
-  A PR that changes the GUI should include a screenshot of the UI change in
-  the description. When the PR resolves an issue, add `Closes #<number>` to
-  link it; GitHub auto-closes the linked issue when the PR merges into the
-  default branch (`main`).
+- **Opening a pull request:** let the PR creation tool derive the initial title
+  and description from the branch commits; do not add fixed boilerplate.
+  Before submitting, make the description review-ready by stating what changed,
+  why, and which commands or checks verified it. A PR that changes the GUI
+  should include a screenshot of the UI change in the description. When the PR
+  resolves an issue, add `Closes #<number>` to link it; GitHub auto-closes the
+  linked issue when the PR merges into the default branch (`main`).
 
 ## Branch policy
 
