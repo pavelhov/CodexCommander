@@ -3,7 +3,7 @@
  *
  * Ported in spirit from jawcode's packages/ai/src/model-manager.ts (the "always load the latest
  * model list" resolver): live fetch when the cache is stale, serve the cache while it is fresh,
- * and fall back to the last-known-good list when a live fetch fails. opencodex's proxy is a single
+ * and fall back to the last-known-good list when a live fetch fails. codexcommander's proxy is a single
  * long-running process and the on-disk Codex catalog already persists the last sync across
  * restarts, so an in-memory cache is sufficient here (no SQLite layer needed).
  */

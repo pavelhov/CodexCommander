@@ -5,7 +5,7 @@ import { identityFromKimiTokens, refreshKimiToken } from "../src/oauth/kimi";
 import { getCredential, listAccounts, saveCredential } from "../src/oauth/store";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-kimi-oauth-identity-test");
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 
 function jwtWithClaims(claims: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
@@ -79,15 +79,15 @@ describe("Kimi token-response wiring (production parseTokenPayload path)", () =>
 
 describe("Kimi multiauth via saveCredential", () => {
   beforeEach(() => {
-    previousOpencodexHome = process.env.OPENCODEX_HOME;
+    previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
   });
 
   afterEach(() => {
-    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
 
@@ -159,17 +159,15 @@ describe("Kimi multiauth via saveCredential", () => {
     expect(listAccounts("kimi").some(a => a.credential.accountId === "kimi-keep")).toBe(true);
   });
 
-  test("first identified login migrates the legacy identity-less row instead of duplicating it", async () => {
-    // Pre-fix state: one identity-less Kimi row (stored before user_id extraction shipped).
+  test("an identified login appends without overwriting an identity-less active row", async () => {
     await saveCredential("kimi", {
-      access: "legacy-access",
-      refresh: "legacy-refresh",
+      access: "opaque-access",
+      refresh: "opaque-refresh",
       expires: Date.now() + 3600_000,
     });
     expect(listAccounts("kimi").length).toBe(1);
 
-    // Post-fix re-login of the same human: identity present → upgrade in place, no duplicate.
-    const access = jwtWithClaims({ user_id: "migrated-user" });
+    const access = jwtWithClaims({ user_id: "identified-user" });
     await saveCredential("kimi", {
       access,
       refresh: "new-refresh",
@@ -178,11 +176,11 @@ describe("Kimi multiauth via saveCredential", () => {
     });
 
     const accounts = listAccounts("kimi");
-    expect(accounts.length).toBe(1);
-    expect(accounts[0]?.credential.accountId).toBe("migrated-user");
-    expect(accounts[0]?.credential.access).toBe(access);
+    expect(accounts.length).toBe(2);
+    expect(getCredential("kimi")?.accountId).toBe("identified-user");
+    expect(accounts.some(a => a.credential.access === "opaque-access")).toBe(true);
 
-    // A second DISTINCT user still appends normally after the migration.
+    // A second distinct identified user appends normally too.
     const accessB = jwtWithClaims({ user_id: "second-user" });
     await saveCredential("kimi", {
       access: accessB,
@@ -190,6 +188,6 @@ describe("Kimi multiauth via saveCredential", () => {
       expires: Date.now() + 3600_000,
       ...identityFromKimiTokens(accessB),
     });
-    expect(listAccounts("kimi").length).toBe(2);
+    expect(listAccounts("kimi").length).toBe(3);
   });
 });

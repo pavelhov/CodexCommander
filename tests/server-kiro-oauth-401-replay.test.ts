@@ -7,7 +7,7 @@ import { encodeMessage } from "../src/lib/eventstream-decoder";
 import { saveConfig } from "../src/config";
 import { saveCredential } from "../src/oauth/store";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 const enc = new TextEncoder();
@@ -16,7 +16,7 @@ const REFRESH_ENDPOINT = "https://prod.us-east-1.auth.desktop.kiro.dev/refreshTo
 
 let testDir = "";
 let emptyHome = "";
-let previousOpenCodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 let previousHome: string | undefined;
 let previousRegion: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
@@ -24,21 +24,21 @@ let originalFetch: typeof fetch;
 
 beforeEach(() => {
   originalFetch = globalThis.fetch;
-  previousOpenCodexHome = process.env.OPENCODEX_HOME;
+  previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
   previousHome = process.env.HOME;
   previousRegion = process.env.KIRO_REGION;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-kiro-401-codex-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-kiro-401-"));
-  emptyHome = mkdtempSync(join(tmpdir(), "ocx-kiro-401-home-"));
-  process.env.OPENCODEX_HOME = testDir;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-kiro-401-codex-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-kiro-401-"));
+  emptyHome = mkdtempSync(join(tmpdir(), "ccx-kiro-401-home-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   process.env.HOME = emptyHome;
   process.env.KIRO_REGION = "us-east-1";
 });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  if (previousOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpenCodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   if (previousHome === undefined) delete process.env.HOME;
   else process.env.HOME = previousHome;
   if (previousRegion === undefined) delete process.env.KIRO_REGION;
@@ -49,9 +49,10 @@ afterEach(() => {
   rmSync(emptyHome, { recursive: true, force: true });
 });
 
-function config(): OcxConfig {
+function config(): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     hostname: "127.0.0.1",
     defaultProvider: "kiro",
     providers: {
@@ -62,7 +63,7 @@ function config(): OcxConfig {
         models: ["claude-sonnet-4.5"],
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 function eventFrame(eventType: string, payload: Record<string, unknown>): Uint8Array {

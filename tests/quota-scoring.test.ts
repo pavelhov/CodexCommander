@@ -8,26 +8,26 @@ import { quotaEvidenceForCandidate, quotaScore } from "../src/routing/quota";
 import { evaluatePolicyProfile, QUOTA_UNKNOWN_PENALTY_SCORE } from "../src/routing/evaluator";
 import { routeModel } from "../src/router";
 import { closeRequestHistoryIndex } from "../src/routing/history/indexer";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 let testDir = "";
 let previousHome: string | undefined;
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  testDir = mkdtempSync(join(tmpdir(), "ocx-quota-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  testDir = mkdtempSync(join(tmpdir(), "ccx-quota-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
 });
 
 afterEach(() => {
   clearAccountQuotaCache();
   closeRequestHistoryIndex();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
 });
 
-function config(overrides: Partial<OcxConfig> = {}): OcxConfig {
+function config(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
   return {
     port: 10100,
     defaultProvider: "a",

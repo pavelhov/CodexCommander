@@ -3,14 +3,13 @@ title: 공급자 설정
 description: 공급자 항목, 인증, 엔드포인트, 모델 카탈로그, 할당량, 컨텍스트 상한, 공급자별 옵션.
 ---
 
-공급자는 opencodex에 모델의 위치, 사용하는 와이어 어댑터, 요청 인증 방식을 알려줍니다.
+공급자는 CodexCommander에 모델의 위치, 사용하는 와이어 어댑터, 요청 인증 방식을 알려줍니다.
 
 ## 공급자 관련 최상위 필드
 
 | 필드 | 타입 | 기본값 | 의미 |
 | --- | --- | --- | --- |
-| `providers` | `Record<string, OcxProviderConfig>` | — | 공급자 이름을 공급자 설정에 매핑합니다. |
-| `openaiProviderTierVersion?` | `2` | 마이그레이션으로 설정됨 | 옵션을 인식하는 단일 OpenAI 투영이 완료되었음을 표시합니다. |
+| `providers` | `Record<string, CodexCommanderProviderConfig>` | — | 공급자 이름을 공급자 설정에 매핑합니다. |
 | `disabledModels?` | `string[]` | — | Codex catalog와 `/v1/models`에서는 숨기지만 직접 proxy 호출은 차단하지 않습니다. routed id는 목록에서 제거됩니다. account-qualified native id는 해당 selector row만 숨기고, bare native GPT id는 bare row와 그 model의 모든 account-selector row를 숨깁니다. Models 페이지에는 bare native 행과 routed 행만 표시됩니다. selector-qualified 행 하나만 숨기려면 이 설정 필드에 직접 추가하세요. |
 | `providerContextCaps?` | `Record<string, number>` | `{}` | 공급자별 Codex 표시 컨텍스트 상한입니다. 상한은 이미 알려진 컨텍스트 윈도만 낮춥니다. |
 | `contextCapValue?` | `number` | `350000` | 대시보드의 컨텍스트 상한 컨트롤이 사용하는 값입니다. 이 값을 바꾸면 활성화된 모든 `providerContextCaps` 항목이 함께 갱신됩니다. |
@@ -18,16 +17,16 @@ description: 공급자 항목, 인증, 엔드포인트, 모델 카탈로그, 할
 | `pausedCodexAccountIds?` | `string[]` | `[]` | 일시 중지된 `__main__` 계정을 포함해, 재개될 때까지 Pool 선택에서 제외되는 계정입니다. |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | 임의의 공개 model selector를 저장된 Codex 계정 target에 연결하는 선택적 map입니다. target이 존재하는 각 selector는 Codex picker에 별도의 `<selector>/<native-openai-model>` row를 추가하며, 각 row는 해당 계정만 사용합니다. selector가 하나라도 활성화되면 bare native row는 picker에서 숨겨지지만, 명시적으로 비활성화하지 않는 한 해당 id는 계속 routing 가능하고 raw `/v1/models`에 표시됩니다. |
 | `activeCodexAccountId?` | `string` | — | 다음 요청에 수동으로 선택한 Pool 계정입니다. 선택하면 thread 결속이 해제되며, 진행 중인 요청은 캡처한 자격 증명을 유지합니다. |
-| `codexAccountPriorities?` | `Record<string,number>` | — | Codex pool의 계정별 선택 순서. 계정 ID → `-100`부터 `100`까지의 정수이며 **값이 클수록 먼저** 쓰이고, 항목이 없으면 `0`입니다. 이는 eligibility 경계가 아니라 순서 경계입니다. 선택은 이미 적격한 계정들을 quota 여유가 남은 최상위 tier로 좁히고, 그 tier 안에서 `accountPoolStrategy`가 계정을 고릅니다. tier를 건너뛰는 경우는 그 구성원 전부가 `autoSwitchThreshold` 초과, cooldown, soft-avoid, 일시 중지 또는 재인증 대기일 때뿐이며, usage를 알 수 없다고 해서 tier가 소진되지는 않습니다. 순서는 부적격 계정을 선택 가능하게 만들지 않고, 이미 계정에 묶인 thread를 다시 bind하지도 않습니다. 메인 `__main__` 계정도 동일한 조건으로 참여하므로 Codex Desktop 로그인을 마지막에 쓰도록 둘 수 있습니다. 항목이 하나도 없으면 동작은 이전과 같습니다. map이 잘못된 경우 경고를 출력하고 순서 지정을 끕니다(config 복구는 하지 않습니다). `ocx account priority`와 Codex Auth 페이지에서 관리합니다. |
+| `codexAccountPriorities?` | `Record<string,number>` | — | Codex pool의 계정별 선택 순서. 계정 ID → `-100`부터 `100`까지의 정수이며 **값이 클수록 먼저** 쓰이고, 항목이 없으면 `0`입니다. 이는 eligibility 경계가 아니라 순서 경계입니다. 선택은 이미 적격한 계정들을 quota 여유가 남은 최상위 tier로 좁히고, 그 tier 안에서 `accountPoolStrategy`가 계정을 고릅니다. tier를 건너뛰는 경우는 그 구성원 전부가 `autoSwitchThreshold` 초과, cooldown, soft-avoid, 일시 중지 또는 재인증 대기일 때뿐이며, usage를 알 수 없다고 해서 tier가 소진되지는 않습니다. 순서는 부적격 계정을 선택 가능하게 만들지 않고, 이미 계정에 묶인 thread를 다시 bind하지도 않습니다. 메인 `__main__` 계정도 동일한 조건으로 참여하므로 Codex Desktop 로그인을 마지막에 쓰도록 둘 수 있습니다. 항목이 하나도 없으면 모든 계정의 우선순위가 `0`입니다. map이 잘못된 경우 경고를 출력하고 순서 지정을 끕니다(config 복구는 하지 않습니다). `ccx account priority`와 Codex Auth 페이지에서 관리합니다. |
 | `autoSwitchThreshold?` | `number` | `80` | 사용량 기반 선제 전환 임계값입니다. `quota`는 바인딩된 작업과 바인딩 없는 작업의 다음 요청을 모두 재평가할 수 있고, `fill-first`는 바인딩 없는 작업 배정의 소진 기준으로만 사용하며, 기본 `round-robin` 선택은 이 값을 사용하지 않습니다. 알려진 5시간, 주간, 30일 quota window 중 가장 높은 점수를 씁니다. `0`은 사용량 기반 전환만 끄며 바인딩 없는 작업 배정이나 실패 복구는 끄지 않습니다. |
 | `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 새 작업/바인딩 없는 Codex 요청의 계정 배정 전략입니다. `(parent thread id, quota scope)`의 live affinity가 없으면 바인딩 없는 요청이며, 프록시 재시작이나 affinity 초기화 뒤에는 기존에 보이던 작업도 바인딩이 없어질 수 있습니다. `quota`는 활성 계정이 없을 때 알려진 usage가 가장 낮은 적격 계정을 선택하고, 적격 활성 계정이 `autoSwitchThreshold` 미만이면 유지합니다. 임계값 도달 뒤에는 바인딩 없는 요청이나 바인딩된 작업의 다음 요청을 usage가 더 낮은 적격 계정으로 옮길 수 있습니다. `round-robin`은 바인딩 없는 요청을 균등 분배하고, `fill-first`는 cooldown, 사용 불가 또는 drain threshold까지 활성 계정에 배정합니다. |
 | `accountPoolStickyLimit?` | `number` | `1` | 한 round-robin 선택이 다음으로 넘어가기 전에 유지하는 새 작업/바인딩 없는 작업 배정 수입니다. 카운터는 업스트림 성공 뒤가 아니라 작업을 바인딩할 때 증가합니다. 범위 1–100이며 `accountPoolStrategy`가 `round-robin`일 때만 적용됩니다. |
 | `upstreamFailoverThreshold?` | `number` | `3` | 연속된 일시적 실패가 이 횟수에 도달하면 이후 새 세션은 failover됩니다. `0`으로 두면 비활성화됩니다. 입증된 연결 전 DNS/TCP 도달 불가 실패는 provider-host 범위로 기록되며 계정 상태, 쿨다운, 스레드/세션 선호도, 활성 계정 선택 또는 Pool 라우팅에 영향을 주지 않고 이 임계값에도 집계되지 않습니다. |
 | `modelCacheTtlMs?` | `number` | `300000` | 공급자별 `/models` 캐시의 최신성 창입니다. |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic 프롬프트 캐시 정책입니다. 비활성, 5분짜리 임시, 1시간짜리 확장 중 하나입니다. |
-| `tokenGuardian?` | `OcxTokenGuardianConfig` | 꺼짐 | 선택적 선제 OAuth 갱신과 Codex 계정 워밍업 정책입니다. |
+| `tokenGuardian?` | `CodexCommanderTokenGuardianConfig` | 꺼짐 | 선택적 선제 OAuth 갱신과 Codex 계정 워밍업 정책입니다. |
 
-selector 이름은 사용자가 정하는 공개 label이며, opencodex는 여기에 계정 역할 의미를 부여하지 않습니다.
+selector 이름은 사용자가 정하는 공개 label이며, CodexCommander는 여기에 계정 역할 의미를 부여하지 않습니다.
 `codexAccountNamespaces` 키는 길이가 1~64자이고 시작과 끝은 ASCII 영숫자여야
 하며, 내부에는 영숫자, `.`, `_`, `-`를 사용할 수 있습니다. 예약된 JavaScript object 이름은 거부됩니다.
 값은 유효한 pool account id(내부 `__main__` 제외)이거나 Codex Desktop 계정을 나타내는 `"@main"`입니다.
@@ -41,17 +40,15 @@ target도 selector로 재사용할 수 없습니다. raw account id와 email은 
 
 `openai`와 `openai-apikey`는 고정 예약 id입니다. `openai.codexAccountMode`의 기본값은 `"pool"`이며, 메인 계정과 추가된 계정 전체에서 선택합니다. `"direct"`는 현재 호출자/메인 로그인만 사용합니다. API는 설정된 API 키 또는 키 풀만 사용합니다. 모델 이름만 쓰거나 `openai-apikey/<model>`을 사용하십시오. 다른 라우트의 자격 증명으로는 대체하지 않습니다. API GPT-5.6 행에는 1,050,000 컨텍스트 / 922,000 최대 입력 메타데이터가 들어가며, Pro 가상 id는 기본 와이어 모델로 다시 쓰면서 `reasoning.mode: "pro"`를 적용합니다.
 
-`openaiProviderTierVersion: 2`는 현재의 단일 공급자 투영을 표시합니다. 출시된 v1 설정을 마이그레이션하기 전에 opencodex는 `config.json.pre-openai-tiers-v2.bak`를 만들고, 기존에 다른 백업이 있더라도 덮어쓰지 않으며, 알려진 레거시 네임스페이스 지정 선택 id를 bare id로 다시 씁니다.
-
-## 공급자 항목 (`OcxProviderConfig`)
+## 공급자 항목 (`CodexCommanderProviderConfig`)
 
 | 필드 | 타입 | 의미 |
 | --- | --- | --- |
-| `adapter` | `string` | `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai` 중 하나이며, `azure`는 별칭입니다. |
+| `adapter` | `string` | `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai` 중 하나입니다. |
 | `baseUrl` | `string` | 상위 API 기본 URL입니다. 대부분의 내장 고정 엔드포인트는 불일치를 무시합니다. 충돌 안전 키 프리셋은 같은 이름의 이전 사용자 지정 목적지를 보존합니다. |
 | `responsesPath?` | `string` | 키 인증 `openai-responses` 요청의 상대 리소스 경로입니다. 반드시 `/`로 시작해야 하며 스킴, query, fragment를 포함하면 안 됩니다. |
 | `supportsServiceTier?` | `boolean` | `service_tier` 케이퍼빌리티 3상태입니다. `true`: fast 모드가 주입할 수 있고 호출자 값도 보존합니다. `false`: 필드를 제거하고 절대 주입하지 않습니다(미지원으로 문서화된 업스트림에는 볼 수 없습니다). 미설정: 미분류 — 호출자가 준 값은 그대로 보존하고 fast 모드는 주입하지 않습니다. 레지스트리는 정식 OpenAI(`true`), DeepSeek, Volcengine Ark(`false`)를 분류하며, 실제로 티어를 지원하는 커스텀 게이트웨이에만 명시적으로 설정하세요. |
-| `preserveResponsesReasoningContent?` | `boolean` | 리플레이되는 Responses reasoning 항목의 평문 reasoning 내용을 지우지 않고 유지합니다(지우는 것은 ChatGPT 백엔드 규칙입니다). DeepSeek처럼 reasoning 리플레이를 허용하는 업스트림에 켜세요. 프록시가 만든 `ocxr1` 봉투는 항상 제거됩니다. |
+| `preserveResponsesReasoningContent?` | `boolean` | 리플레이되는 Responses reasoning 항목의 평문 reasoning 내용을 지우지 않고 유지합니다(지우는 것은 ChatGPT 백엔드 규칙입니다). DeepSeek처럼 reasoning 리플레이를 허용하는 업스트림에 켜세요. 프록시가 만든 `ccxr1` 봉투는 항상 제거됩니다. |
 | `disabled?` | `boolean` | 공급자를 디스크에는 남기되, 라우팅과 모델/카탈로그 목록에서는 제외합니다. |
 | `apiKey?` | `string` | API 키 또는 요청 시점에 해석되는 `${ENV_VAR}` / `$ENV_VAR` 참조입니다. |
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic 키 헤더 형식입니다. 기본값은 네이티브 `x-api-key`이며, 키 인증 `anthropic` 공급자에만 유효합니다. |
@@ -103,16 +100,15 @@ target도 selector로 재사용할 수 없습니다. raw account id와 email은 
 | `location?` | `string` | Vertex 위치입니다. 환경 변수 폴백은 `GOOGLE_CLOUD_LOCATION`입니다. |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | Cursor 전용입니다. stdio 또는 Streamable HTTP MCP 서버입니다. |
 | `desktopExecutor?` | `DesktopExecutorConfig` | Cursor 전용입니다. 외부 computer-use 및 record-screen 명령입니다. |
-| `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 레거시 불리언입니다. 더 새로운 필드가 설정되지 않았을 때만 `nativeLocalExec: "on"`과 같습니다. |
-| `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 로컬 실행 정책입니다. 기본값은 `off`입니다. `codex-sandbox`는 현재 `off`처럼 실패를 닫습니다. |
+| `nativeLocalExec?` | `"off" \| "on"` | Cursor 로컬 실행 정책입니다. 기본값은 `off`입니다. |
 
-API 키 공급자는 리터럴 키나 환경 참조를 둘 수 있습니다. OAuth 공급자는 `ocx login`으로 채워지는 자격 증명 저장소를 사용합니다. 구독 기반 Claude Code 실행 동작은 [`claudeCode.authMode`](/reference/configuration/server/#claude-code)에서 설정합니다.
+API 키 공급자는 리터럴 키나 환경 참조를 둘 수 있습니다. OAuth 공급자는 `ccx login`으로 채워지는 자격 증명 저장소를 사용합니다. 구독 기반 Claude Code 실행 동작은 [`claudeCode.authMode`](/reference/configuration/server/#claude-code)에서 설정합니다.
 
 ## 공급자 진단용 외부 요청 안전성
 
-대시보드 연결 테스트와 라이브 모델 발견은 범위가 제한된 GET 전용 전송을 사용합니다. 아웃바운드 프록시가 없으면 opencodex는 호스트 이름을 한 번만 확인하고, 검증된 주소로만 연결합니다. HTTPS는 원래 Host, SNI, 인증서 검증을 유지하며, 공급자 설정으로 인증서 검사를 끌 수는 없습니다.
+대시보드 연결 테스트와 라이브 모델 발견은 범위가 제한된 GET 전용 전송을 사용합니다. 아웃바운드 프록시가 없으면 CodexCommander는 호스트 이름을 한 번만 확인하고, 검증된 주소로만 연결합니다. HTTPS는 원래 Host, SNI, 인증서 검증을 유지하며, 공급자 설정으로 인증서 검사를 끌 수는 없습니다.
 
-`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`가 적용되면 이 작업들은 Bun의 네이티브 fetch를 그대로 사용합니다. URL과 리터럴 주소 검사는 계속 실행되지만, 최종 경로, DNS 응답, 피어는 프록시가 고르므로 opencodex는 그 피어를 고정하거나 검증할 수 없습니다. 이는 명시적인 보안 한계입니다.
+`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`가 적용되면 이 작업들은 Bun의 네이티브 fetch를 그대로 사용합니다. URL과 리터럴 주소 검사는 계속 실행되지만, 최종 경로, DNS 응답, 피어는 프록시가 고르므로 CodexCommander는 그 피어를 고정하거나 검증할 수 없습니다. 이는 명시적인 보안 한계입니다.
 
 사설/로컬 목적지는 `allowPrivateNetwork: true`가 필요하며, 아웃바운드 프록시가 활성화된 경우에는 일치하는 `NO_PROXY` 항목도 필요합니다. loopback은 자동으로 추가됩니다. CIDR 항목은 해석하지 않으므로 각 LAN 호스트는 따로 적어야 합니다. matcher는 정확한 호스트, 도메인 접미사, 선택적 포트, 괄호로 감싼 IPv6, `*`를 지원합니다. 예를 들면 `192.168.1.50`은 따로 적어야 합니다. 메타데이터와 link-local 목적지는 계속 차단됩니다. 진단 요청은 리디렉션을 거부하고, 자격 증명이 제거된 대상만 보고합니다. 일반적인 공급자 요청의 리디렉션 검토는 이 진단 가드와 별도로 유지됩니다.
 
@@ -159,14 +155,14 @@ affinity 초기화 뒤의 기존 작업도 포함될 수 있습니다. 출력 �
 활성화되면 429 레코드가 `Retry-After` 또는 기본 backoff에서 제한된 쿨다운을 기록하고, 요청 안에서 회전할 수 있습니다. 결속은 프로세스 로컬이며 크기가 제한됩니다. 자격 증명 401/403은 해당 계정이 재인증이 필요함을 표시합니다. 적격한 계정이 모두 쿨다운 중이면, 클라이언트는 인증 오류가 아니라 알려진 경우 `Retry-After`가 포함된 429를 받습니다.
 
 :::caution[실험적 기능]
-Anthropic 계정 정책 위험을 이해하지 못한다면 이 기능은 꺼두십시오. 확신이 없으면 수동 `ocx account use anthropic <id>` 전환을 우선하십시오.
+Anthropic 계정 정책 위험을 이해하지 못한다면 이 기능은 꺼두십시오. 확신이 없으면 수동 `ccx account use anthropic <id>` 전환을 우선하십시오.
 :::
 
 ### 관리되는 레코드 구조
 
 `apiKeys[]` 항목에는 `id`, `name`, 생성된 `key`, ISO 형식 `createdAt` 문자열이 들어갑니다. `codexAccounts[]` 항목에는 `id`, `email`, `isMain`이 필요하고, 선택적으로 `plan`, `chatgptAccountId`, 개인정보를 해치지 않는 `logLabel`을 둘 수 있습니다. 이런 레코드는 보통 대시보드가 관리합니다.
 
-### `tokenGuardian` (`OcxTokenGuardianConfig`)
+### `tokenGuardian` (`CodexCommanderTokenGuardianConfig`)
 
 | 필드 | 타입 | 기본값 | 의미 |
 | --- | --- | --- | --- |
@@ -192,7 +188,7 @@ Anthropic 계정 정책 위험을 이해하지 못한다면 이 기능은 꺼두
 
 어댑터는 나중에 해석된 URL을 조정할 수 있습니다. 예를 들어 Kiro는 가져온 자격 증명의 API 지역을 따라 정식 `runtime.{region}.kiro.dev`를 사용합니다. [Adapters](/reference/adapters/)를 보십시오.
 
-라우팅이 `baseUrl`을 버리면 opencodex는 레지스트리 엔드포인트와 설정된 origin만 기록합니다. 설정된 path 자체에 자격 증명이 들어 있을 수도 있습니다. 쓰지 않는 URL은 지우거나, 의도한 지역과 맞는 공급자 항목을 고르십시오. `alibaba-token-plan`은 베이징에 고정되어 있고, `alibaba-token-plan-intl`은 국제 엔드포인트를 담당합니다.
+라우팅이 `baseUrl`을 버리면 CodexCommander는 레지스트리 엔드포인트와 설정된 origin만 기록합니다. 설정된 path 자체에 자격 증명이 들어 있을 수도 있습니다. 쓰지 않는 URL은 지우거나, 의도한 지역과 맞는 공급자 항목을 고르십시오. `alibaba-token-plan`은 베이징에 고정되어 있고, `alibaba-token-plan-intl`은 국제 엔드포인트를 담당합니다.
 
 깨진 `openai-responses` 게이트웨이는 공급자 객체에서 복구해야 합니다.
 
@@ -217,7 +213,7 @@ Anthropic 계정 정책 위험을 이해하지 못한다면 이 기능은 꺼두
 
 ## Cursor 공급자 (`adapter: "cursor"`)
 
-Cursor 브리지는 실험적입니다. `ocx login cursor`를 실행한 뒤 `providers.cursor`를 추가하거나 수정하십시오. Cursor Router의 최적화 단계는 선택기가 Cursor 전용 모델 매개변수를 렌더링하지 못하므로 별도의 Codex id로 노출됩니다.
+Cursor 브리지는 실험적입니다. `ccx login cursor`를 실행한 뒤 `providers.cursor`를 추가하거나 수정하십시오. Cursor Router의 최적화 단계는 선택기가 Cursor 전용 모델 매개변수를 렌더링하지 못하므로 별도의 Codex id로 노출됩니다.
 
 | Codex 모델 | Cursor Router 모드 |
 | --- | --- |
@@ -232,8 +228,6 @@ Cursor 서버 주도 로컬 도구는 기본값으로 비활성화됩니다. Cod
 
 - `"off"`(기본값)는 Cursor 네이티브 `read`, `write`, `delete`, `ls`, `grep`, `shell`, `fetch` 실행을 거부합니다.
 - `"on"`은 신뢰된 로컬 실행을 허용하고, Codex 승인/샌드박스 의미를 우회합니다.
-- `"codex-sandbox"`는 호환성을 위해 남아 있지만 `"off"`처럼 실패를 닫습니다. 요청 문구는 신뢰할 수 있는 샌드박스 증명이 아닙니다.
-
 ```json
 {
   "providers": {
@@ -248,7 +242,7 @@ Cursor 서버 주도 로컬 도구는 기본값으로 비활성화됩니다. Cod
 }
 ```
 
-필드는 최상위가 아니라 `providers.cursor`에 설정하십시오. 대시보드에서는 **Providers → Cursor → Edit JSON**을 사용해 저장한 뒤 다시 시작합니다. 레거시 `unsafeAllowNativeLocalExec: true`는 `nativeLocalExec`이 설정되지 않았을 때만 `nativeLocalExec: "on"`과 같습니다. MCP, 화면 녹화, computer use는 `mcpServers`와 `desktopExecutor`가 따로 제어합니다.
+필드는 최상위가 아니라 `providers.cursor`에 설정하십시오. 대시보드에서는 **Providers → Cursor → Edit JSON**을 사용해 저장한 뒤 다시 시작합니다. MCP, 화면 녹화, computer use는 `mcpServers`와 `desktopExecutor`가 따로 제어합니다.
 
 각 `mcpServers.<name>`는 `command`(stdio) 또는 `url`(Streamable HTTP) 중 하나를 받습니다. stdio는 `args`, `env`, `cwd`도 받습니다. HTTP는 `headers`를 받습니다. 둘 다 `enabled`(기본값 true)와 `toolPrefix`를 지원합니다. `desktopExecutor`는 `computerUseCommand`, `recordScreenCommand`, `cwd`, `env`, `timeoutMs`(기본값 `30000`)를 받습니다. 명령은 `sh -c`를 거치며 stdin에서 JSON 요청 하나를 읽고, stdout에 JSON 결과 하나를 써야 합니다.
 
@@ -284,7 +278,7 @@ OpenRouter는 하나의 모델을 여러 추론 공급자로 제공할 수 있�
 }
 ```
 
-모델 키는 외부 opencodex 공급자 접두사 없이, 정확한 네이티브 OpenRouter id여야 합니다. `openrouter/anthropic-claude-sonnet-5`를 선택하면 모델 규칙을 적용하기 전에 네이티브 `anthropic/claude-sonnet-5`로 되돌아갑니다.
+모델 키는 외부 CodexCommander 공급자 접두사 없이, 정확한 네이티브 OpenRouter id여야 합니다. `openrouter/anthropic-claude-sonnet-5`를 선택하면 모델 규칙을 적용하기 전에 네이티브 `anthropic/claude-sonnet-5`로 되돌아갑니다.
 
 ## 정적 모델 허용 목록
 

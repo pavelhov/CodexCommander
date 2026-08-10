@@ -88,13 +88,6 @@ describe("provider deep-link resolution", () => {
     expect(resolved.replaceTo).toBe("providers/openai/overview");
   });
 
-  test("legacy providers/workspace remains a redirect, not a deep link", () => {
-    expect(hashBelongsToPage("providers/workspace", "providers")).toBe(false);
-    expect(resolveAppHashChange("providers/workspace")).toEqual({
-      page: "providers",
-      replaceTo: "providers",
-    });
-  });
 });
 
 describe("provider deep-link history semantics", () => {

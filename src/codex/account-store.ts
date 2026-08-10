@@ -5,17 +5,23 @@ import {
   ConfigMutationLockError,
   getConfigDir,
   atomicWriteFile,
-  backupInvalidConfig,
   hardenConfigDir,
   hardenExistingSecret,
   withConfigMutationLockSync,
 } from "../config";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import type { CodexAccountCredentialRecord, CodexAccountCredentials } from "../types";
+import { isValidCodexAccountId } from "./account-id";
 
-type LegacyCodexAccountStore = Record<string, CodexAccountCredentials>;
+type CodexAccountCredentialsById = Record<string, CodexAccountCredentials>;
 type CodexAccountStore = Record<string, CodexAccountCredentialRecord>;
-type RawCodexAccountStore = Record<string, CodexAccountCredentials | CodexAccountCredentialRecord>;
+
+export const CODEX_ACCOUNT_STORE_SCHEMA_VERSION = 1 as const;
+
+interface PersistedCodexAccountStore {
+  readonly schemaVersion: typeof CODEX_ACCOUNT_STORE_SCHEMA_VERSION;
+  readonly accounts: CodexAccountStore;
+}
 
 const REFRESH_SKEW_MS = 60_000;
 const REFRESH_LOCK_STALE_MS = 60_000;
@@ -26,37 +32,76 @@ function codexAccountsPath(): string {
   return join(getConfigDir(), "codex-accounts.json");
 }
 
-export function loadCodexAccountStore(): LegacyCodexAccountStore {
+export function loadCodexAccountStore(): CodexAccountCredentialsById {
   const records = loadCodexAccountRecordStore();
-  const credentials: LegacyCodexAccountStore = {};
+  const credentials: CodexAccountCredentialsById = {};
   for (const [id, record] of Object.entries(records)) {
     if (record.deletedAt == null && record.credential) credentials[id] = record.credential;
   }
   return credentials;
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === expected.length && expected.every(key => Object.hasOwn(value, key));
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  const allowedKeys = new Set(allowed);
+  return Object.keys(value).every(key => allowedKeys.has(key));
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function assertValidAccountId(id: string): void {
+  if (!isValidCodexAccountId(id)) throw new Error("Cannot persist an invalid Codex account store");
 }
 
 function isCredential(value: unknown): value is CodexAccountCredentials {
-  return isObject(value)
+  return isPlainRecord(value)
+    && hasExactKeys(value, ["accessToken", "refreshToken", "expiresAt", "chatgptAccountId"])
     && typeof value.accessToken === "string"
     && typeof value.refreshToken === "string"
-    && typeof value.expiresAt === "number"
+    && isFiniteNumber(value.expiresAt)
     && typeof value.chatgptAccountId === "string";
 }
 
 function isCredentialRecord(value: unknown): value is CodexAccountCredentialRecord {
-  return isObject(value)
-    && typeof value.generation === "number"
-    && (value.credential === undefined || isCredential(value.credential))
-    && (value.refreshGrantFingerprint === undefined || typeof value.refreshGrantFingerprint === "string")
-    && (value.deletedAt === undefined || typeof value.deletedAt === "number")
-    && (value.replacedAt === undefined || typeof value.replacedAt === "number")
-    && (value.lastCodexValidatedAt === undefined || typeof value.lastCodexValidatedAt === "number")
-    && (value.lastCodexValidationStatus === undefined || value.lastCodexValidationStatus === "ok" || value.lastCodexValidationStatus === "failed")
-    && (value.lastCodexValidationError === undefined || typeof value.lastCodexValidationError === "string");
+  if (!isPlainRecord(value)
+    || typeof value.generation !== "number"
+    || !Number.isInteger(value.generation)
+    || value.generation < 1
+    || !(value.replacedAt === undefined || isFiniteNumber(value.replacedAt))
+    || !(value.lastCodexValidatedAt === undefined || isFiniteNumber(value.lastCodexValidatedAt))
+    || !(value.lastCodexValidationStatus === undefined || value.lastCodexValidationStatus === "ok" || value.lastCodexValidationStatus === "failed")
+    || !(value.lastCodexValidationError === undefined || typeof value.lastCodexValidationError === "string")) {
+    return false;
+  }
+  if (value.credential !== undefined) {
+    return hasOnlyKeys(value, [
+      "credential",
+      "generation",
+      "refreshGrantFingerprint",
+      "replacedAt",
+      "lastCodexValidatedAt",
+      "lastCodexValidationStatus",
+      "lastCodexValidationError",
+    ])
+      && isCredential(value.credential)
+      && typeof value.refreshGrantFingerprint === "string"
+      && /^[0-9a-f]{64}$/.test(value.refreshGrantFingerprint)
+      && value.deletedAt === undefined;
+  }
+  return hasExactKeys(value, ["generation", "deletedAt"])
+    && isFiniteNumber(value.deletedAt);
 }
 
 export function refreshGrantFingerprintForToken(refreshToken: string): string {
@@ -64,25 +109,20 @@ export function refreshGrantFingerprintForToken(refreshToken: string): string {
 }
 
 function recordGrantFingerprint(record: CodexAccountCredentialRecord): string | undefined {
-  return record.refreshGrantFingerprint ?? (
-    record.credential ? refreshGrantFingerprintForToken(record.credential.refreshToken) : undefined
-  );
+  return record.refreshGrantFingerprint;
 }
 
-function normalizeRecord(value: CodexAccountCredentials | CodexAccountCredentialRecord | undefined): CodexAccountCredentialRecord | undefined {
-  if (!value) return undefined;
-  if (isCredentialRecord(value)) {
-    const refreshGrantFingerprint = recordGrantFingerprint(value);
-    return refreshGrantFingerprint ? { ...value, refreshGrantFingerprint } : value;
+function parsePersistedCodexAccountStore(raw: unknown): CodexAccountStore | null {
+  if (!isPlainRecord(raw)
+    || !hasExactKeys(raw, ["schemaVersion", "accounts"])
+    || raw.schemaVersion !== CODEX_ACCOUNT_STORE_SCHEMA_VERSION
+    || !isPlainRecord(raw.accounts)) {
+    return null;
   }
-  if (isCredential(value)) {
-    return {
-      credential: value,
-      generation: 0,
-      refreshGrantFingerprint: refreshGrantFingerprintForToken(value.refreshToken),
-    };
+  for (const [id, value] of Object.entries(raw.accounts)) {
+    if (!isValidCodexAccountId(id) || !isCredentialRecord(value)) return null;
   }
-  return undefined;
+  return raw.accounts as CodexAccountStore;
 }
 
 function loadCodexAccountRecordStore(): CodexAccountStore {
@@ -91,15 +131,9 @@ function loadCodexAccountRecordStore(): CodexAccountStore {
   hardenExistingSecret(path);
   if (!existsSync(path)) return {};
   try {
-    const raw = JSON.parse(readFileSync(path, "utf-8")) as RawCodexAccountStore;
-    const normalized: CodexAccountStore = {};
-    for (const [id, value] of Object.entries(raw)) {
-      const record = normalizeRecord(value);
-      if (record) normalized[id] = record;
-    }
-    return normalized;
+    const raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+    return parsePersistedCodexAccountStore(raw) ?? {};
   } catch {
-    backupInvalidConfig(path);
     return {};
   }
 }
@@ -108,7 +142,14 @@ function persist(store: CodexAccountStore): void {
   const dir = getConfigDir();
   assertNotRealHomeUnderTest(dir);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  atomicWriteFile(codexAccountsPath(), JSON.stringify(store, null, 2) + "\n");
+  const persisted: PersistedCodexAccountStore = {
+    schemaVersion: CODEX_ACCOUNT_STORE_SCHEMA_VERSION,
+    accounts: store,
+  };
+  if (!parsePersistedCodexAccountStore(persisted)) {
+    throw new Error("Cannot persist an invalid Codex account store");
+  }
+  atomicWriteFile(codexAccountsPath(), JSON.stringify(persisted, null, 2) + "\n");
 }
 
 function preservedValidationMetadata(record: CodexAccountCredentialRecord | undefined): Pick<
@@ -129,12 +170,11 @@ export function getCodexAccountCredential(id: string): CodexAccountCredentials |
 }
 
 export function saveCodexAccountCredential(id: string, cred: CodexAccountCredentials): void {
+  assertValidAccountId(id);
   withCredentialMutationLockSync(() => {
     const store = loadCodexAccountRecordStore();
     const current = store[id];
-    const refreshGrantFingerprint = current?.credential?.refreshToken === cred.refreshToken
-      ? current.refreshGrantFingerprint ?? refreshGrantFingerprintForToken(cred.refreshToken)
-      : refreshGrantFingerprintForToken(cred.refreshToken);
+    const refreshGrantFingerprint = refreshGrantFingerprintForToken(cred.refreshToken);
     store[id] = {
       credential: cred,
       generation: (current?.generation ?? 0) + 1,
@@ -147,6 +187,7 @@ export function saveCodexAccountCredential(id: string, cred: CodexAccountCredent
 }
 
 export function markCodexAccountValidated(id: string, atMs: number = Date.now()): void {
+  assertValidAccountId(id);
   withCredentialMutationLockSync(() => {
     const store = loadCodexAccountRecordStore();
     const current = store[id];
@@ -162,6 +203,7 @@ export function markCodexAccountValidated(id: string, atMs: number = Date.now())
 }
 
 export function markCodexAccountValidationFailed(id: string, reason: string): void {
+  assertValidAccountId(id);
   withCredentialMutationLockSync(() => {
     const store = loadCodexAccountRecordStore();
     const current = store[id];
@@ -184,6 +226,7 @@ export function listCodexAccountIds(): string[] {
 }
 
 export function readCodexAccountRecord(id: string): CodexAccountCredentialRecord | null {
+  if (!isValidCodexAccountId(id)) return null;
   return loadCodexAccountRecordStore()[id] ?? null;
 }
 
@@ -197,15 +240,14 @@ export function saveCodexAccountCredentialIfGeneration(
   generation: number,
   cred: CodexAccountCredentials,
 ): boolean {
+  assertValidAccountId(id);
   return withCredentialMutationLockSync(() => {
     const store = loadCodexAccountRecordStore();
     const current = store[id];
     if (!current || current.generation !== generation || current.deletedAt != null || !current.credential) {
       return false;
     }
-    const refreshGrantFingerprint = current.credential.refreshToken === cred.refreshToken
-      ? current.refreshGrantFingerprint ?? refreshGrantFingerprintForToken(cred.refreshToken)
-      : refreshGrantFingerprintForToken(cred.refreshToken);
+    const refreshGrantFingerprint = refreshGrantFingerprintForToken(cred.refreshToken);
     store[id] = {
       credential: cred,
       generation: generation + 1,
@@ -219,6 +261,7 @@ export function saveCodexAccountCredentialIfGeneration(
 }
 
 export function tombstoneCodexAccount(id: string): number {
+  assertValidAccountId(id);
   return withCredentialMutationLockSync(() => {
     const store = loadCodexAccountRecordStore();
     const current = store[id];

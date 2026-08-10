@@ -1,7 +1,7 @@
-/** `ocx account` — list and switch provider credentials (issue #180). */
+/** `ccx account` — list and switch provider credentials (issue #180). */
 import { loadConfig } from "../config";
 import { providerCodexAccountMode } from "../providers/registry";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import { cmdAddKey, cmdAlias, cmdAutoSwitch, cmdClearCooldown, cmdPriority, cmdRefresh, cmdRemove } from "./account-extended";
 import { apiError, apiJson, classifyAccount, fetchRows, proxyUnreachable, resolveBaseUrl, type AccountDeps, type AccountRow, type AccountType, type ApiResult }
   from "./account-api";
@@ -16,21 +16,21 @@ const MAIN_CODEX_ID = "__main__";
 const REPLACEMENT_STYLE_OAUTH = new Set(["kiro"]);
 
 const ACCOUNT_USAGE = `Usage:
-  ocx account list [provider] [--json] [--all]
-  ocx account current <provider> [--json]
-  ocx account use <provider> <account-or-key-id|main> [--json]
-  ocx account refresh <provider> [--json]
-  ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
-  ocx account alias <provider> <account-or-key-id> <display-name|-> [--json]
-  ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
-  ocx account remove <provider> <account-or-key-id|main> --yes [--json]
-  ocx account clear-cooldown <provider> <account-id|main> [--json]
-  ocx account add-key <provider> [--label <label>] [--json]
-  ocx account login <provider> [--id <account-id>] [--reauth] [--code -] [--no-wait] [--json]
-  ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
-  ocx account cancel <provider> [--flow <flow-id>] [--json]
-  ocx account reset-credits <account-id|main> [--consume --yes] [--json]
-  ocx account main <doctor|list|register|add|switch|recover> ...
+  ccx account list [provider] [--json] [--all]
+  ccx account current <provider> [--json]
+  ccx account use <provider> <account-or-key-id|main> [--json]
+  ccx account refresh <provider> [--json]
+  ccx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
+  ccx account alias <provider> <account-or-key-id> <display-name|-> [--json]
+  ccx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
+  ccx account remove <provider> <account-or-key-id|main> --yes [--json]
+  ccx account clear-cooldown <provider> <account-id|main> [--json]
+  ccx account add-key <provider> [--label <label>] [--json]
+  ccx account login <provider> [--id <account-id>] [--reauth] [--code -] [--no-wait] [--json]
+  ccx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
+  ccx account cancel <provider> [--flow <flow-id>] [--json]
+  ccx account reset-credits <account-id|main> [--consume --yes] [--json]
+  ccx account main <doctor|list|register|add|switch|recover> ...
 
 List and switch provider accounts and API-key pools (masked output only).
 'main' selects the Codex App login for the openai account pool.`;
@@ -51,7 +51,7 @@ function leftoverArgsError(args: string[]): string | null {
     : `Unexpected argument(s): ${args.join(", ")}`;
 }
 
-function candidateNames(config: OcxConfig): string {
+function candidateNames(config: CodexCommanderConfig): string {
   const names = new Set<string>(["openai"]);
   for (const n of Object.keys(config.providers ?? {})) names.add(n);
   return [...names].join(", ");

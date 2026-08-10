@@ -22,16 +22,16 @@ import {
   setProviderQuotaBeforePublishForTests,
   supportsProviderQuotaReporting,
 } from "../src/providers/quota";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const originalFetch = globalThis.fetch;
-const previousOpencodexHome = process.env.OPENCODEX_HOME;
+const previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
 const previousCodexHome = process.env.CODEX_HOME;
 
-let opencodexHome: string;
+let codexCommanderHome: string;
 let codexHome: string;
 
-function testConfig(): OcxConfig {
+function testConfig(): CodexCommanderConfig {
   return {
     defaultProvider: "openai",
     providers: {
@@ -73,13 +73,13 @@ function testConfig(): OcxConfig {
         disabled: true,
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 beforeEach(() => {
-  opencodexHome = mkdtempSync(join(tmpdir(), "ocx-quota-"));
+  codexCommanderHome = mkdtempSync(join(tmpdir(), "ccx-quota-"));
   codexHome = mkdtempSync(join(tmpdir(), "codex-quota-"));
-  process.env.OPENCODEX_HOME = opencodexHome;
+  process.env.CODEXCOMMANDER_HOME = codexCommanderHome;
   process.env.CODEX_HOME = codexHome;
   mkdirSync(codexHome, { recursive: true });
   writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
@@ -96,11 +96,11 @@ afterEach(() => {
   clearAccountQuota();
   clearProviderQuotaCache();
   setProviderQuotaBeforePublishForTests(null);
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
-  rmSync(opencodexHome, { recursive: true, force: true });
+  rmSync(codexCommanderHome, { recursive: true, force: true });
   rmSync(codexHome, { recursive: true, force: true });
 });
 
@@ -139,53 +139,44 @@ describe("fetchProviderQuotaReports", () => {
     })).toBe(true);
   });
 
-  test("reports a stale Grok CLI link as actionable without leaking its auth error", async () => {
-    const previousGrokHome = process.env.GROK_HOME;
-    process.env.GROK_HOME = join(opencodexHome, "missing-grok-home");
+  test("reports an expired xAI credential's transient refresh failure without leaking secrets", async () => {
     let upstreamCalls = 0;
     globalThis.fetch = (async () => {
       upstreamCalls += 1;
       return new Response("unexpected", { status: 500 });
     }) as typeof fetch;
-    try {
-      await saveCredential("xai", {
-        access: "stale-grok-access",
-        refresh: "native-grant-must-be-scrubbed",
-        expires: Date.now() - 1,
-        accountId: "linked-grok-account",
-        source: "local-cli",
-      });
-      const config = {
-        defaultProvider: "xai",
-        providers: {
-          xai: {
-            adapter: "openai-chat",
-            authMode: "oauth",
-            baseUrl: "https://api.x.ai/v1",
-          },
+    await saveCredential("xai", {
+      access: "stale-xai-access",
+      refresh: "xai-refresh-must-be-scrubbed",
+      expires: Date.now() - 1,
+      accountId: "linked-xai-account",
+    });
+    const config = {
+      defaultProvider: "xai",
+      providers: {
+        xai: {
+          adapter: "openai-chat",
+          authMode: "oauth",
+          baseUrl: "https://api.x.ai/v1",
         },
-      } as OcxConfig;
+      },
+    } as CodexCommanderConfig;
 
-      const result = await fetchProviderQuotaReports(config, true);
+    const result = await fetchProviderQuotaReports(config, true);
 
-      expect(result.reports).toEqual([]);
-      expect(result.availability).toEqual([{
-        provider: "xai",
-        status: "unavailable",
-        reason: "local_cli_refresh_required",
-        checkedAt: expect.any(Number),
-      }]);
-      expect(getLoginStatus("xai").needsReauth).toBe(true);
-      expect(upstreamCalls).toBe(0);
-      const serialized = JSON.stringify(result);
-      expect(serialized).not.toContain("stale-grok-access");
-      expect(serialized).not.toContain("native-grant-must-be-scrubbed");
-      expect(serialized).not.toContain("linked-grok-account");
-      expect(serialized).not.toContain("Grok CLI-linked credential is stale");
-    } finally {
-      if (previousGrokHome === undefined) delete process.env.GROK_HOME;
-      else process.env.GROK_HOME = previousGrokHome;
-    }
+    expect(result.reports).toEqual([]);
+    expect(result.availability).toEqual([{
+      provider: "xai",
+      status: "unavailable",
+      reason: "upstream_unavailable",
+      checkedAt: expect.any(Number),
+    }]);
+    expect(getLoginStatus("xai").needsReauth).toBeUndefined();
+    expect(upstreamCalls).toBe(1);
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("stale-xai-access");
+    expect(serialized).not.toContain("xai-refresh-must-be-scrubbed");
+    expect(serialized).not.toContain("linked-xai-account");
   });
 
   test("a rejected Grok login drops last-good quota instead of hiding auth failure behind it", async () => {
@@ -203,7 +194,7 @@ describe("fetchProviderQuotaReports", () => {
           baseUrl: "https://api.x.ai/v1",
         },
       },
-    } as OcxConfig;
+    } as CodexCommanderConfig;
     let rejected = false;
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -245,7 +236,7 @@ describe("fetchProviderQuotaReports", () => {
 
   test("reports a stale Kimi CLI link with the same actionable privacy-safe reason", async () => {
     const previousKimiHome = process.env.KIMI_CODE_HOME;
-    process.env.KIMI_CODE_HOME = join(opencodexHome, "missing-kimi-code-home");
+    process.env.KIMI_CODE_HOME = join(codexCommanderHome, "missing-kimi-code-home");
     let upstreamCalls = 0;
     globalThis.fetch = (async () => {
       upstreamCalls += 1;
@@ -429,20 +420,20 @@ describe("fetchProviderQuotaReports", () => {
     expect(seen.find(row => row.url === "https://api.kimi.com/coding/v1/usages")?.authorization).toBe("Bearer kimi-access-secret");
   });
 
-  function kimiOnlyConfig(baseUrl = "https://api.kimi.com/coding/v1"): OcxConfig {
+  function kimiOnlyConfig(baseUrl = "https://api.kimi.com/coding/v1"): CodexCommanderConfig {
     return {
       defaultProvider: "kimi",
       providers: { kimi: { adapter: "openai-chat", authMode: "oauth", baseUrl } },
-    } as OcxConfig;
+    } as CodexCommanderConfig;
   }
 
-  function a6apiOnlyConfig(baseUrl = "https://api.a6api.com/v1"): OcxConfig {
+  function a6apiOnlyConfig(baseUrl = "https://api.a6api.com/v1"): CodexCommanderConfig {
     return {
       defaultProvider: "a6api",
       providers: {
         a6api: { adapter: "openai-chat", authMode: "key", baseUrl, apiKey: "a6api-secret" },
       },
-    } as OcxConfig;
+    } as CodexCommanderConfig;
   }
 
   test("A6API quota converts provider units to USD and exposes a displayable credit window", async () => {
@@ -571,7 +562,7 @@ describe("fetchProviderQuotaReports", () => {
       authMode: "key",
       baseUrl: "https://example.com/v1",
       apiKey: 42,
-    } as unknown as OcxConfig["providers"][string];
+    } as unknown as CodexCommanderConfig["providers"][string];
 
     const result = await fetchProviderQuotaReports(config, true);
 
@@ -838,7 +829,7 @@ describe("fetchProviderQuotaReports", () => {
           apiKey: "sk-kimi-quota-secret",
         },
       },
-    } as OcxConfig, true);
+    } as CodexCommanderConfig, true);
 
     expect(result.reports).toHaveLength(1);
     expect(result.reports[0]?.provider).toBe("kimi-code");
@@ -867,7 +858,7 @@ describe("fetchProviderQuotaReports", () => {
           apiKey: "sk-kimi-quota-secret",
         },
       },
-    } as OcxConfig, true);
+    } as CodexCommanderConfig, true);
 
     expect(result.reports).toEqual([]);
     expect(seen).toEqual([]);
@@ -887,11 +878,11 @@ describe("fetchProviderQuotaReports", () => {
           adapter: "openai-chat",
           authMode: "key",
           baseUrl: "https://api.kimi.com/coding/v1",
-          apiKey: "${OCX_TEST_MISSING_KIMI_KEY}",
+          apiKey: "${CCX_TEST_MISSING_KIMI_KEY}",
           apiKeyPool: [{ key: "sk-pool-other-account" }],
         },
       },
-    } as OcxConfig, true);
+    } as CodexCommanderConfig, true);
 
     // No probe at all: attributing the pool key's quota to the active slot would lie.
     expect(result.reports).toEqual([]);
@@ -914,7 +905,7 @@ describe("fetchProviderQuotaReports", () => {
           baseUrl: "https://api.kimi.com/coding/v1",
         },
       },
-    } as OcxConfig, true);
+    } as CodexCommanderConfig, true);
 
     expect(result.reports).toEqual([]);
     expect(seen).toEqual([]);
@@ -1006,7 +997,7 @@ describe("fetchProviderQuotaReports", () => {
       chatgptAccountId: "added-chatgpt-id",
     });
     const config = testConfig();
-    config.codexAccounts = [{ id: "added", email: "a@example.test", plan: "prolite", isMain: false }];
+    config.codexAccounts = [{ id: "added", email: "a@example.test", logLabel: "p000001", plan: "prolite", isMain: false }];
     config.activeCodexAccountId = "added";
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const headers = init?.headers as Record<string, string> | undefined;
@@ -1036,7 +1027,7 @@ describe("fetchProviderQuotaReports", () => {
     });
     const config = testConfig();
     config.providers = { openai: config.providers.openai };
-    config.codexAccounts = [{ id: "added", email: "a@example.test", plan: "prolite", isMain: false }];
+    config.codexAccounts = [{ id: "added", email: "a@example.test", logLabel: "p000001", plan: "prolite", isMain: false }];
     const calls = new Map<string, number>();
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const accountId = (init?.headers as Record<string, string> | undefined)?.["ChatGPT-Account-Id"] ?? "main";
@@ -1059,7 +1050,7 @@ describe("fetchProviderQuotaReports", () => {
     });
     const config = testConfig();
     config.providers = { openai: config.providers.openai };
-    config.codexAccounts = [{ id: "added", email: "a@example.test", plan: "prolite", isMain: false }];
+    config.codexAccounts = [{ id: "added", email: "a@example.test", logLabel: "p000001", plan: "prolite", isMain: false }];
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const accountId = (init?.headers as Record<string, string> | undefined)?.["ChatGPT-Account-Id"];
       return new Response(JSON.stringify({
@@ -1086,7 +1077,7 @@ describe("fetchProviderQuotaReports", () => {
     clearMainAccountInfoCache();
     const config = testConfig();
     config.providers = { openai: config.providers.openai };
-    config.codexAccounts = [{ id: "missing", email: "missing@example.test", plan: "plus", isMain: false }];
+    config.codexAccounts = [{ id: "missing", email: "missing@example.test", logLabel: "p000001", plan: "plus", isMain: false }];
 
     const result = await fetchProviderQuotaReports(config);
     const openai = result.reports.find(row => row.provider === "openai");
@@ -1108,7 +1099,7 @@ describe("fetchProviderQuotaReports", () => {
     });
     const config = testConfig();
     config.providers = { openai: config.providers.openai };
-    config.codexAccounts = [{ id: "added", email: "a@example.test", plan: "prolite", isMain: false }];
+    config.codexAccounts = [{ id: "added", email: "a@example.test", logLabel: "p000001", plan: "prolite", isMain: false }];
     config.activeCodexAccountId = "added";
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const added = (init?.headers as Record<string, string> | undefined)?.["ChatGPT-Account-Id"] === "added-chatgpt-id";
@@ -1152,7 +1143,7 @@ describe("fetchProviderQuotaReports", () => {
     });
     const config = testConfig();
     config.providers = { openai: config.providers.openai };
-    config.codexAccounts = [{ id: "added", email: "a@example.test", plan: "prolite", isMain: false }];
+    config.codexAccounts = [{ id: "added", email: "a@example.test", logLabel: "p000001", plan: "prolite", isMain: false }];
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const added = (init?.headers as Record<string, string> | undefined)?.["ChatGPT-Account-Id"] === "added-chatgpt-id";
       return new Response(JSON.stringify({
@@ -1175,7 +1166,7 @@ describe("fetchProviderQuotaReports", () => {
     });
     const config = testConfig();
     config.providers = { openai: config.providers.openai };
-    config.codexAccounts = [{ id: "added", email: "a@example.test", plan: "prolite", isMain: false }];
+    config.codexAccounts = [{ id: "added", email: "a@example.test", logLabel: "p000001", plan: "prolite", isMain: false }];
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const added = (init?.headers as Record<string, string> | undefined)?.["ChatGPT-Account-Id"] === "added-chatgpt-id";
       return new Response(JSON.stringify({
@@ -1200,7 +1191,7 @@ describe("fetchProviderQuotaReports", () => {
     });
     const config = testConfig();
     config.providers = { openai: config.providers.openai };
-    config.codexAccounts = [{ id: "added", email: "a@example.test", plan: "prolite", isMain: false }];
+    config.codexAccounts = [{ id: "added", email: "a@example.test", logLabel: "p000001", plan: "prolite", isMain: false }];
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const added = (init?.headers as Record<string, string> | undefined)?.["ChatGPT-Account-Id"] === "added-chatgpt-id";
       return new Response(JSON.stringify({
@@ -1223,7 +1214,7 @@ describe("fetchProviderQuotaReports", () => {
     });
     const config = testConfig();
     config.providers = { openai: config.providers.openai };
-    config.codexAccounts = [{ id: "added", email: "a@example.test", plan: "prolite", isMain: false }];
+    config.codexAccounts = [{ id: "added", email: "a@example.test", logLabel: "p000001", plan: "prolite", isMain: false }];
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const id = (init?.headers as Record<string, string> | undefined)?.["ChatGPT-Account-Id"];
       const plan = id === "added-chatgpt-id" ? "prolite" : id === "second-chatgpt-id" ? "business" : "plus";
@@ -1239,18 +1230,18 @@ describe("fetchProviderQuotaReports", () => {
       accessToken: "second-access", refreshToken: "second-refresh",
       expiresAt: Date.now() + 3600_000, chatgptAccountId: "second-chatgpt-id",
     });
-    config.codexAccounts.push({ id: "second", email: "b@example.test", plan: "business", isMain: false });
+    config.codexAccounts.push({ id: "second", email: "b@example.test", logLabel: "p000002", plan: "business", isMain: false });
     expect((await fetchProviderQuotaReports(config)).reports[0]?.aggregation?.includedAccounts).toBe(3);
     config.codexAccounts = config.codexAccounts.filter(account => account.id !== "second");
     expect((await fetchProviderQuotaReports(config)).reports[0]?.aggregation?.includedAccounts).toBe(2);
   });
 
   test("direct mode reports main without reading or repairing the added-account store", async () => {
-    const accountStore = join(opencodexHome, "codex-accounts.json");
+    const accountStore = join(codexCommanderHome, "codex-accounts.json");
     writeFileSync(accountStore, "invalid-added-account-store");
     const config = testConfig();
     config.providers.openai.codexAccountMode = "direct";
-    config.codexAccounts = [{ id: "added", email: "a@example.test", isMain: false }];
+    config.codexAccounts = [{ id: "added", email: "a@example.test", logLabel: "p000001", isMain: false }];
     config.activeCodexAccountId = "added";
     globalThis.fetch = (async () => new Response(JSON.stringify({
       rate_limit: { secondary_window: { used_percent: 12, reset_at: 1_789_000_000 } },
@@ -1280,14 +1271,14 @@ describe("fetchProviderQuotaReports", () => {
           baseUrl: "https://api.anthropic.com/v1",
         },
       },
-    } as OcxConfig, true);
+    } as CodexCommanderConfig, true);
 
     expect(result.reports).toEqual([]);
     expect(seen.some(url => url.includes("/v1/oauth/token"))).toBe(true);
     expect(seen.some(url => url.includes("/api/oauth/usage"))).toBe(false);
   });
 
-  function cursorOnlyConfig(): OcxConfig {
+  function cursorOnlyConfig(): CodexCommanderConfig {
     return {
       defaultProvider: "cursor",
       providers: {
@@ -1297,7 +1288,7 @@ describe("fetchProviderQuotaReports", () => {
           baseUrl: "https://api2.cursor.sh",
         },
       },
-    } as OcxConfig;
+    } as CodexCommanderConfig;
   }
 
   test("cursor falls back to usage-summary when period-usage fails", async () => {
@@ -1383,7 +1374,7 @@ describe("fetchProviderQuotaReports", () => {
       providers: {
         openai: full.providers.openai!,
       },
-    } as OcxConfig;
+    } as CodexCommanderConfig;
     globalThis.fetch = (async () => Response.json({
       plan_type: "plus",
       rate_limit: { secondary_window: { used_percent: 61 } },
@@ -1474,7 +1465,7 @@ describe("fetchProviderQuotaReports", () => {
     const configB = {
       defaultProvider: "xai",
       providers: { xai: { adapter: "openai-chat", authMode: "oauth", baseUrl: "https://api.x.ai/v1" } },
-    } as OcxConfig;
+    } as CodexCommanderConfig;
 
     const a1 = fetchProviderQuotaReports(configA, false); // A inflight opens
     await fetchProviderQuotaReports(configB, false); // B must not evict A's inflight entry
@@ -1521,7 +1512,7 @@ describe("fetchProviderQuotaReports", () => {
     });
     const config = testConfig();
     config.providers = { openai: config.providers.openai };
-    config.codexAccounts = [{ id: "added", email: "a@example.test", plan: "prolite", isMain: false }];
+    config.codexAccounts = [{ id: "added", email: "a@example.test", logLabel: "p000001", plan: "prolite", isMain: false }];
     const responseFor = (init?: RequestInit) => {
       const added = (init?.headers as Record<string, string> | undefined)?.["ChatGPT-Account-Id"] === "added-chatgpt-id";
       return new Response(JSON.stringify({
@@ -1608,7 +1599,7 @@ describe("fetchProviderQuotaReports", () => {
     const disabledConfig = {
       ...cursorOnlyConfig(),
       providers: { cursor: { ...cursorOnlyConfig().providers.cursor, disabled: true } },
-    } as OcxConfig;
+    } as CodexCommanderConfig;
     const pruned = await fetchProviderQuotaReports(disabledConfig, true);
     expect(pruned.reports).toEqual([]);
   });

@@ -5,7 +5,7 @@
  * for THIS plan), so the routed catalog reflects reality instead of a static superset. Failures are
  * classified so callers can surface the reason before applying their existing degradation policy.
  *
- * Protocol notes (hard-won, see devlog 350.110):
+ * Protocol notes (hard-won, see implementation contract):
  * - content-type `application/proto` + `connect-protocol-version: 1` (NOT `application/connect+proto`,
  *   which the endpoint rejects with 415).
  * - The request body is the EMPTY `GetUsableModelsRequest` → 0 bytes. It MUST be sent with `req.end()`
@@ -39,7 +39,7 @@ const DISCOVERY_RETRY_TIMEOUT_MS = 3_000;
  * session each attempt). Completed non-2xx responses ("http"), auth, decode, and empty are
  * deterministic and never retried. The retry attempt's deadline is capped so a cache-miss
  * catalog poll cannot stall much past the primary timeout (~11.5s worst case, accepted in
- * devlog 260723_cursor_context_continuity/030).
+ * implementation contract).
  */
 export async function fetchCursorUsableModels(opts: CursorUsableModelsOptions): Promise<CursorUsableModelsResult> {
   const first = await fetchCursorUsableModelsOnce(opts);

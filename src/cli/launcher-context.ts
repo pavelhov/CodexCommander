@@ -2,10 +2,10 @@
  * Trusted facts captured by the plain-Node npm launcher before Bun auto-loads
  * project dotenv files. The random proof travels in argv while the context
  * travels in the environment, so a project `.env` cannot forge the pair during
- * an ordinary `ocx ...` invocation.
+ * an ordinary `ccx ...` invocation.
  */
-export const NODE_LAUNCH_CONTEXT_ENV = "OCX_NODE_LAUNCH_CONTEXT";
-export const NODE_LAUNCH_PROOF_PREFIX = "--ocx-internal-launch-proof=";
+export const NODE_LAUNCH_CONTEXT_ENV = "CCX_NODE_LAUNCH_CONTEXT";
+export const NODE_LAUNCH_PROOF_PREFIX = "--ccx-internal-launch-proof=";
 
 export const ANTHROPIC_PARENT_ENV_SLOTS = [
   "ANTHROPIC_API_KEY",
@@ -40,9 +40,6 @@ export function initializeNodeLauncherContext(
 
   const raw = env[NODE_LAUNCH_CONTEXT_ENV];
   delete env[NODE_LAUNCH_CONTEXT_ENV];
-  // Older launchers used this unauthenticated marker. Never let a project
-  // dotenv resurrect it as a trusted provenance channel.
-  delete env.OCX_PRE_BUN_ANTHROPIC_ENV;
   trustedContext = null;
 
   if (proofArgs.length !== 1 || !raw || raw.length > 2048) return null;

@@ -6,7 +6,7 @@ import { atomicWriteFile, expandUserPath, getConfigDir, websocketsEnabled } from
 import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readRootTomlString, resolveCodexConfigPath } from "../paths";
 import { clearModelCache, DEFAULT_MODEL_CACHE_TTL_MS, getFreshCached, getStaleCached, isModelsFetchCoolingDown, markModelsFetchFailure, setCached } from "../model-cache";
 import { buildModelsRequest, resolveModelsAuthToken } from "../../oauth";
-import type { OcxConfig, OcxProviderConfig } from "../../types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJawcodeModelMetadata, resolveJawcodeProvider } from "../../generated/jawcode-model-metadata";
@@ -112,18 +112,18 @@ export function hasComboTargets(config: { combos?: Record<string, { targets?: un
   return Object.values(combos).some(c => Array.isArray(c?.targets) && c!.targets!.length > 0);
 }
 
-export function disabledNativeSlugs(config: Pick<OcxConfig, "disabledModels">): Set<string> {
+export function disabledNativeSlugs(config: Pick<CodexCommanderConfig, "disabledModels">): Set<string> {
   return new Set((config.disabledModels ?? []).filter(id => !id.includes("/")));
 }
 
-export function visibleNativeSlugs(config: Pick<OcxConfig, "disabledModels">): string[] {
+export function visibleNativeSlugs(config: Pick<CodexCommanderConfig, "disabledModels">): string[] {
   const disabled = disabledNativeSlugs(config);
   return nativeOpenAiSlugs().filter(slug => !disabled.has(slug));
 }
 
 /** Whether an enabled canonical OpenAI provider can serve exact account-qualified routes. */
 export function shouldIncludeAccountBoundNativeOpenAi(
-  config: Pick<OcxConfig, "providers">,
+  config: Pick<CodexCommanderConfig, "providers">,
 ): boolean {
   const provider = config.providers[OPENAI_CODEX_PROVIDER_ID];
   if (!provider || provider.disabled === true) return false;
@@ -135,7 +135,7 @@ export function shouldIncludeAccountBoundNativeOpenAi(
 }
 
 /** Whether native ChatGPT/Codex rows belong in this provider configuration. */
-export function shouldIncludeNativeOpenAi(config: Pick<OcxConfig, "providers">): boolean {
+export function shouldIncludeNativeOpenAi(config: Pick<CodexCommanderConfig, "providers">): boolean {
   const hasEnabledProvider = Object.values(config.providers)
     .some(provider => provider.disabled !== true);
   // Preserve the existing no-enabled-provider catalog bootstrap, but do not use that bootstrap
@@ -144,12 +144,12 @@ export function shouldIncludeNativeOpenAi(config: Pick<OcxConfig, "providers">):
 }
 
 /** Native slugs exposed to Claude Desktop show/export/apply (opt-out via claudeCode.desktopNativeModels). */
-export function desktopVisibleNativeSlugs(config: Pick<OcxConfig, "claudeCode" | "disabledModels">): string[] {
+export function desktopVisibleNativeSlugs(config: Pick<CodexCommanderConfig, "claudeCode" | "disabledModels">): string[] {
   if (config.claudeCode?.desktopNativeModels === false) return [];
   return visibleNativeSlugs(config);
 }
 
-export function nativeModelRows(config: Pick<OcxConfig, "disabledModels">): Array<{ slug: string; disabled: boolean; contextWindow?: number }> {
+export function nativeModelRows(config: Pick<CodexCommanderConfig, "disabledModels">): Array<{ slug: string; disabled: boolean; contextWindow?: number }> {
   const disabled = disabledNativeSlugs(config);
   return NATIVE_OPENAI_MODELS.map(slug => {
     const contextWindow = nativeOpenAiContextWindow(slug);

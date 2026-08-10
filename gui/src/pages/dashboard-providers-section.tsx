@@ -15,7 +15,7 @@ export function DashboardProvidersSection({
     <>
       <div className="h-section">{t("dash.activeProviders")} <span className="count">{providers.length}</span></div>
       {providers.length === 0 ? (
-        <EmptyState title={<Trans k="dash.noProviders" cmd="ocx init" />} />
+        <EmptyState title={<Trans k="dash.noProviders" cmd="ccx init" />} />
       ) : (
         <div className="tbl-wrap">
           <table className="tbl">

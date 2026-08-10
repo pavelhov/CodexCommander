@@ -2,26 +2,15 @@
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 
-// Canonical GitHub Pages custom domain. The site is served at the domain root,
-// so Starlight must not emit the former /opencodex project-site prefix.
-const SITE_URL = "https://opencodex.me";
-
-// NOTE: the WebSite / SoftwareApplication JSON-LD deliberately does NOT live here.
-// Google only reads site-name markup from the home page of a site, and a global
-// `head` entry would replay one `#website` entity (with the root `url`) on every
-// docs page and every locale. Duplicated, conflicting WebSite objects are exactly
-// what makes Google fall back to the domain ("opencodex.me") for the site name.
-// The markup is emitted once per locale home page from `src/components/SiteJsonLd.astro`.
-
 export default defineConfig({
-  site: SITE_URL,
+  base: "/",
   trailingSlash: "ignore",
   // lightningcss merges animation-timeline into the `animation` shorthand,
   // which Chrome cannot parse — the scroll-driven animations die silently.
   vite: { build: { cssMinify: "esbuild" } },
   integrations: [
     starlight({
-      title: "opencodex",
+      title: "CodexCommander",
       description:
         "Universal provider proxy for OpenAI Codex & Claude Code — use any LLM with Codex CLI, App, SDK, and Claude Code.",
       tagline: "Use any LLM with OpenAI Codex and Claude Code.",
@@ -43,19 +32,14 @@ export default defineConfig({
       head: [
         // Google favicon guidelines: PNG at a multiple of 48px, exposed via rel="icon".
         { tag: "link", attrs: { rel: "icon", type: "image/png", sizes: "192x192", href: "/favicon.png" } },
-        { tag: "meta", attrs: { property: "og:image", content: `${SITE_URL}/og.png` } },
-        { tag: "meta", attrs: { property: "og:image:width", content: "1200" } },
-        { tag: "meta", attrs: { property: "og:image:height", content: "630" } },
-        { tag: "meta", attrs: { name: "twitter:card", content: "summary_large_image" } },
-        { tag: "meta", attrs: { name: "twitter:image", content: `${SITE_URL}/og.png` } },
         { tag: "meta", attrs: { name: "theme-color", media: "(prefers-color-scheme: light)", content: "#ffffff" } },
         { tag: "meta", attrs: { name: "theme-color", media: "(prefers-color-scheme: dark)", content: "#212121" } },
       ],
       social: [
-        { icon: "github", label: "GitHub", href: "https://github.com/lidge-jun/opencodex" },
+        { icon: "github", label: "GitHub", href: "https://github.com/pavelhov/CodexCommander" },
       ],
       editLink: {
-        baseUrl: "https://github.com/lidge-jun/opencodex/edit/main/docs-site/",
+        baseUrl: "https://github.com/pavelhov/CodexCommander/edit/main/docs-site/",
       },
       lastUpdated: true,
       // English at the site root; Korean under /ko, Simplified Chinese under /zh-cn, Russian under /ru, Japanese under /ja.

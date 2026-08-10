@@ -5,7 +5,7 @@ import { deriveStartupHealth, type StartupHealth } from "../codex/autostart-heal
 import { getCodexRoutingKind } from "../codex/inject";
 import { diagnoseCodexShim } from "../codex/shim";
 import { durableBunPath } from "../lib/bun-runtime";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import { truncateRetainedUtf8 } from "../lib/admission";
 
 const CACHE_TTL_MS = 30_000;
@@ -34,7 +34,7 @@ export function markStartupHealthDiagnosticStale(value: StartupHealth): StartupH
   };
 }
 
-function conservativeFallback(config: Pick<OcxConfig, "codexAutoStart">): StartupHealth {
+function conservativeFallback(config: Pick<CodexCommanderConfig, "codexAutoStart">): StartupHealth {
   const shim = diagnoseCodexShim();
   return deriveStartupHealth({
     routingKind: getCodexRoutingKind(),
@@ -53,7 +53,7 @@ function conservativeFallback(config: Pick<OcxConfig, "codexAutoStart">): Startu
   });
 }
 
-function runProbe(config: Pick<OcxConfig, "codexAutoStart">): Promise<StartupHealth> {
+function runProbe(config: Pick<CodexCommanderConfig, "codexAutoStart">): Promise<StartupHealth> {
   const bun = durableBunPath();
   const cli = join(import.meta.dir, "..", "cli", "index.ts");
   return new Promise(resolve => {
@@ -93,7 +93,7 @@ function runProbe(config: Pick<OcxConfig, "codexAutoStart">): Promise<StartupHea
   });
 }
 
-function refreshInBackground(config: Pick<OcxConfig, "codexAutoStart">): void {
+function refreshInBackground(config: Pick<CodexCommanderConfig, "codexAutoStart">): void {
   if (inflight) return;
   const startedGeneration = generation;
   const probe = runProbe(config).then(value => {
@@ -106,7 +106,7 @@ function refreshInBackground(config: Pick<OcxConfig, "codexAutoStart">): void {
 }
 
 /** Stale-while-revalidate: service-manager probes never hold open a model/UI request. */
-export async function getCachedStartupHealth(config: Pick<OcxConfig, "codexAutoStart">): Promise<StartupHealth> {
+export async function getCachedStartupHealth(config: Pick<CodexCommanderConfig, "codexAutoStart">): Promise<StartupHealth> {
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) return cached.value;
   refreshInBackground(config);
   return cached ? markStartupHealthDiagnosticStale(cached.value) : conservativeFallback(config);

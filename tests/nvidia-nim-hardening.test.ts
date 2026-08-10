@@ -1,32 +1,32 @@
 // 260715 issue #126: NVIDIA NIM hardening — parallel_tool_calls opt-out, kimi
 // reasoning_effort suppression, and openai-chat formatErrorBody detail surfacing.
-// Plan/evidence: devlog/_plan/260715_issue126_nim_kimi.
+// Plan/evidence: implementation contract
 // 260804 issue #956: NIM vision classification — text-only models activate the sidecar,
 // natively image-capable models do not. Plan/evidence:
-// devlog/_fin/260804_stack7_service_vision (010 design, 011 per-id audit).
+// implementation contract (010 design, 011 per-id audit).
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter, formatOpenAIChatErrorBody } from "../src/adapters/openai-chat";
 import { applyProviderConfigHints, normalizeRoutedCatalogEntry } from "../src/codex/catalog";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import { parseRequest } from "../src/responses/parser";
 import { routeModel } from "../src/router";
-import type { OcxConfig, OcxParsedRequest, OcxTool } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderParsedRequest, CodexCommanderTool } from "../src/types";
 import { planVisionSidecar } from "../src/vision";
 
-const tools: OcxTool[] = [{ name: "shell", description: "run", parameters: { type: "object" } }];
+const tools: CodexCommanderTool[] = [{ name: "shell", description: "run", parameters: { type: "object" } }];
 
-function nvidiaConfig(): OcxConfig {
+function nvidiaConfig(): CodexCommanderConfig {
   return {
     port: 10100,
     defaultProvider: "nvidia",
     providers: {
-      // Bare persisted config, like `ocx init` writes: registry seeds must backfill the flags.
+      // Bare persisted config, like `ccx init` writes: registry seeds must backfill the flags.
       nvidia: { adapter: "openai-chat", baseUrl: "https://integrate.api.nvidia.com/v1", apiKey: "k" },
     },
   };
 }
 
-function parsedFor(modelId: string, options: Partial<OcxParsedRequest["options"]> = {}): Parameters<ReturnType<typeof createOpenAIChatAdapter>["buildRequest"]>[0] {
+function parsedFor(modelId: string, options: Partial<CodexCommanderParsedRequest["options"]> = {}): Parameters<ReturnType<typeof createOpenAIChatAdapter>["buildRequest"]>[0] {
   return {
     modelId,
     context: {

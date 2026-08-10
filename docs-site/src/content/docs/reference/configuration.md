@@ -1,19 +1,19 @@
 ---
 title: Configuration Reference
-description: Where opencodex stores configuration, how edits are applied, and links to every configuration domain.
+description: Where CodexCommander stores configuration, how edits are applied, and links to every configuration domain.
 ---
 
-opencodex stores its persistent configuration in `$OPENCODEX_HOME/config.json`, normally
-`~/.opencodex/config.json`. On Windows, the default is
-`%USERPROFILE%\.opencodex\config.json`.
+CodexCommander stores its persistent configuration in `$CODEXCOMMANDER_HOME/config.json`, normally
+`~/.codexcommander/config.json`. On Windows, the default is
+`%USERPROFILE%\.codexcommander\config.json`.
 
 ## Ways to edit configuration
 
 Choose the editing channel that fits the task:
 
 - **Dashboard:** use the web UI for guided provider, model, agent, access, and storage settings.
-- **CLI:** `ocx init` creates the initial file, while commands such as `ocx provider`, `ocx models`,
-  `ocx combo`, `ocx agent`, and `ocx config` update or inspect their owned settings.
+- **CLI:** `ccx init` creates the initial file, while commands such as `ccx provider`, `ccx models`,
+  `ccx combo`, `ccx agent`, and `ccx config` update or inspect their owned settings.
 - **File:** edit `config.json` directly for fields without a dedicated UI or CLI command. The file must
   remain valid JSON.
 
@@ -23,14 +23,14 @@ later live save can rewrite unrelated hand edits from its snapshot. Live saves m
 `claudeCode` and listener-binding fields where those paths have explicit conflict protection, but that
 protection does not cover every subtree.
 
-If the file cannot be parsed, opencodex backs it up as
+If the file cannot be parsed, CodexCommander backs it up as
 `config.json.invalid-<timestamp>`, warns on the console, and starts with defaults. A missing file also
 uses the fresh-install default: one `openai` forward provider.
 
 ## Precedence and defaults
 
 Valid values in `config.json` override built-in defaults. Missing optional fields use the defaults
-documented on the domain pages. `OPENCODEX_HOME` takes precedence over the default configuration
+documented on the domain pages. `CODEXCOMMANDER_HOME` takes precedence over the default configuration
 directory. Fields that accept an environment reference, such as `apiKey: "${PROVIDER_API_KEY}"`,
 resolve that variable at request time. For outbound proxying, an already-set `HTTP_PROXY` or
 `HTTPS_PROXY` takes precedence over the top-level `proxy` field.
@@ -56,8 +56,8 @@ stored in separate credential stores rather than in `config.json`. Account ids a
 remain private; use public selector aliases where supported.
 
 :::note[Atomic writes]
-opencodex writes managed `config.toml` and `opencodex-catalog.json` files through a temporary file
+CodexCommander writes managed `config.toml` and `codexcommander-catalog.json` files through a temporary file
 followed by rename (`atomicWriteFile`).
-This prevents partial files when concurrent writers, such as `ocx stop` and the proxy shutdown handler,
+This prevents partial files when concurrent writers, such as `ccx stop` and the proxy shutdown handler,
 restore Codex at the same time.
 :::

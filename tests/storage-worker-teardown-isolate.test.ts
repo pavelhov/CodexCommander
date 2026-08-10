@@ -69,18 +69,18 @@ function seedArchived(codexHome: string): void {
 }
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-worker-teardown-codex-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-worker-teardown-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-worker-teardown-codex-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-worker-teardown-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
 });
 
 afterEach(async () => {
   await resetStorageCleanupPolicyJobForTestsAsync();
   setStorageCleanupPolicyJobTestHooks(null);
   await drainStorageWorkers();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
@@ -124,7 +124,7 @@ test.skipIf(skipNonWindowsWorkerSpawn)("repeated Windows-style spawn/reset cycle
     // Fresh CODEX_HOME each cycle so a prior worker's SQLite handle cannot
     // leave the seed DB locked/EBUSY on Windows after terminate.
     isolatedCodexHome?.restore();
-    isolatedCodexHome = installIsolatedCodexHome(`ocx-worker-teardown-cycle-${i}-`);
+    isolatedCodexHome = installIsolatedCodexHome(`ccx-worker-teardown-cycle-${i}-`);
     setStorageCleanupPolicyJobTestHooks({ blockMs: 200 });
     seedArchived(isolatedCodexHome.path);
     const started = requestStorageCleanupPolicyRun({
@@ -150,7 +150,7 @@ test.skipIf(skipNonWindowsWorkerSpawn)("async beforeEach-style join between cycl
     expect(liveStorageWorkerCount()).toBe(0);
 
     isolatedCodexHome?.restore();
-    isolatedCodexHome = installIsolatedCodexHome(`ocx-worker-teardown-beforeeach-${i}-`);
+    isolatedCodexHome = installIsolatedCodexHome(`ccx-worker-teardown-beforeeach-${i}-`);
     setStorageCleanupPolicyJobTestHooks({ blockMs: 250 });
     seedArchived(isolatedCodexHome.path);
     const started = requestStorageCleanupPolicyRun({

@@ -1,5 +1,5 @@
 /**
- * Per-server readiness gate for the opencodex proxy.
+ * Per-server readiness gate for the CodexCommander proxy.
  *
  * `GET /healthz` answers "is the process alive and serving HTTP?" the instant the
  * listener binds. Readiness is stricter: the proxy is "ready" only after the

@@ -1,9 +1,9 @@
 /**
  * features.ts — codex feature-flag view for $CODEX_HOME/config.toml.
  *
- * Scope boundary: this module mirrors only the flags opencodex has to READ
+ * Scope boundary: this module mirrors only the flags codexcommander has to READ
  * directly from config.toml:
- *   - `multi_agent_v2`, because opencodex migrates its concurrency value across
+ *   - `multi_agent_v2`, because codexcommander migrates its concurrency value across
  *     the v1/v2 boundary and exposes the multi-agent config surface;
  *   - `default_mode_request_user_input` (Codex Auth page toggle), because the
  *     management API needs a live reader for the flag it manages.
@@ -13,17 +13,17 @@
  * Upstream reshapes flags freely: in the 1f0566d3f..5a1097ed2 range alone,
  * `code_mode_host` changed from a boolean to a table (it is Stage::Stable and
  * default-enabled upstream), `enable_fanout` and `item_ids` were retired to
- * Stage::Removed ("useless but kept for backward compatibility"), and several
- * under-development flags were added. Delegation is what keeps opencodex out of
+ * Stage::Removed, and several
+ * under-development flags were added. Delegation is what keeps codexcommander out of
  * that churn.
  *
- * Used by the catalog v2-gated-ultra policy (devlog/260709_v2_gated_ultra) and the
- * `ocx v2` toggle surface. The FLAG itself is never written here — toggling goes
+ * Used by the catalog v2-gated-ultra policy and the `ccx v2` toggle surface. The
+ * FLAG itself is never written here — toggling goes
  * through the official `codex features enable|disable` CLI (format-preserving).
  * The one write this module owns is the numeric
  * `features.multi_agent_v2.max_concurrent_threads_per_session` scalar
  * (setMaxConcurrentThreads): the codex CLI has no persisted setter for nested
- * feature config (`-c` is per-invocation only), so ocx does a scoped,
+ * feature config (`-c` is per-invocation only), so ccx does a scoped,
  * EOL-preserving line edit — same practice as codex/inject.ts.
  *
  * CODEX_HOME is resolved at CALL time (activeCodexConfigPath pattern, mirrors
@@ -154,7 +154,7 @@ export function isDefaultModeRequestUserInputEnabled(configPath?: string): boole
  * TRUE when config.toml still carries `[agents] max_threads` — codex-rs REFUSES to
  * boot with that key while multi_agent_v2 is enabled ("agents.max_threads cannot be
  * set when features.multi_agent_v2 is enabled", core/src/config/mod.rs:1421). The
- * `ocx v2 on` flow warns about it instead of editing config itself.
+ * `ccx v2 on` flow warns about it instead of editing config itself.
  */
 export function hasAgentsMaxThreads(configPath?: string): boolean {
   const content = readConfigText(configPath);
@@ -164,7 +164,7 @@ export function hasAgentsMaxThreads(configPath?: string): boolean {
   return /^\s*max_threads\s*=/m.test(agents);
 }
 
-/** Current legacy v1 `[agents] max_threads`, or null when absent/invalid. */
+/** Current V1 `[agents] max_threads`, or null when absent/invalid. */
 export function getAgentsMaxThreads(configPath?: string): number | null {
   const content = readConfigText(configPath);
   if (content === null) return null;
@@ -244,7 +244,7 @@ export function isTranslatableV2TotalLimit(limit: number): boolean {
 }
 
 /**
- * Upstream counts the root agent inside the V2 thread limit but not inside the legacy
+ * Upstream counts the root agent inside the V2 thread limit but not inside the V1
  * `[agents]` limit (codex-rs core/src/config/mod.rs resolve_multi_agent_v2_config applies
  * saturating_add(1) to the [agents] value; the inverse saturating_sub(1) appears at
  * mod.rs:1555). These helpers keep our migrations on the same side of that boundary.
@@ -258,7 +258,7 @@ export function v1ChildLimitToV2TotalLimit(childLimit: number): number {
 
 /**
  * Inverse of `v1ChildLimitToV2TotalLimit`. A V2 total of 1 means "root only, no
- * children", which has no representable legacy child count >= 1, so it clamps to 1
+ * children", which has no representable V1 child count >= 1, so it clamps to 1
  * rather than writing 0 and tripping upstream's `>= 1` validation.
  */
 export function v2TotalLimitToV1ChildLimit(totalLimit: number): number {
@@ -288,7 +288,7 @@ export function setMaxConcurrentThreads(value: number, configPath?: string, migr
   const headerIdx = lines.findIndex(l => headerRe.test(l));
   if (headerIdx === -1) {
     const featuresHeader = lines.findIndex(l => /^\s*\[features\]\s*(?:#.*)?$/.test(l));
-    if (featuresHeader === -1) return { ok: false, error: "multi_agent_v2 feature config not found — enable v2 first (ocx v2 on)" };
+    if (featuresHeader === -1) return { ok: false, error: "multi_agent_v2 feature config not found — enable v2 first (ccx v2 on)" };
     let featuresEnd = lines.length;
     for (let i = featuresHeader + 1; i < lines.length; i++) {
       if (/^\s*\[/.test(lines[i])) { featuresEnd = i; break; }
@@ -313,7 +313,7 @@ export function setMaxConcurrentThreads(value: number, configPath?: string, migr
       atomicWriteFile(path, applyEol(lines.join("\n"), eol));
       return { ok: true, changed: true };
     }
-    return { ok: false, error: "multi_agent_v2 feature config not found — enable v2 first (ocx v2 on)" };
+    return { ok: false, error: "multi_agent_v2 feature config not found — enable v2 first (ccx v2 on)" };
   }
   let end = lines.length;
   for (let i = headerIdx + 1; i < lines.length; i++) {
@@ -802,7 +802,7 @@ function ensureDisabledV2Config(value: number | null, configPath?: string, migra
  * limit. The active backend's own key wins; the other backend's key is translated
  * across the root-agent slot. Display path only — never throws: a stored value
  * outside the translatable range is returned raw (at that magnitude the ±1 root
- * slot is already below float precision, and crashing `ocx v2 status` or
+ * slot is already below float precision, and crashing `ccx v2 status` or
  * `GET /api/v2` is not a price worth paying for a translation that means nothing).
  * Migration code uses `discoverStoredThreadLimit` instead, which keeps provenance.
  */
@@ -810,12 +810,12 @@ export function getLogicalMaxThreads(configPath?: string): number | null {
   if (isMultiAgentV2Enabled(configPath)) {
     const v2 = getMaxConcurrentThreads(configPath);
     if (v2 !== null) return v2;
-    const legacy = getAgentsMaxThreads(configPath);
-    if (legacy === null) return null;
-    return isTranslatableV1ChildLimit(legacy) ? v1ChildLimitToV2TotalLimit(legacy) : legacy;
+    const v1 = getAgentsMaxThreads(configPath);
+    if (v1 === null) return null;
+    return isTranslatableV1ChildLimit(v1) ? v1ChildLimitToV2TotalLimit(v1) : v1;
   }
-  const legacy = getAgentsMaxThreads(configPath);
-  if (legacy !== null) return legacy;
+  const v1 = getAgentsMaxThreads(configPath);
+  if (v1 !== null) return v1;
   const v2 = getMaxConcurrentThreads(configPath);
   if (v2 === null) return null;
   return isTranslatableV2TotalLimit(v2) ? v2TotalLimitToV1ChildLimit(v2) : v2;
@@ -834,17 +834,17 @@ function discoverStoredThreadLimit(configPath?: string): { value: number; units:
   if (isMultiAgentV2Enabled(configPath)) {
     const v2 = getMaxConcurrentThreads(configPath);
     if (v2 !== null) return { value: v2, units: "v2-total" };
-    const legacy = getAgentsMaxThreads(configPath);
-    return legacy === null ? null : { value: legacy, units: "v1-child" };
+    const v1 = getAgentsMaxThreads(configPath);
+    return v1 === null ? null : { value: v1, units: "v1-child" };
   }
-  const legacy = getAgentsMaxThreads(configPath);
-  if (legacy !== null) return { value: legacy, units: "v1-child" };
+  const v1 = getAgentsMaxThreads(configPath);
+  if (v1 !== null) return { value: v1, units: "v1-child" };
   const v2 = getMaxConcurrentThreads(configPath);
   return v2 === null ? null : { value: v2, units: "v2-total" };
 }
 
 function activeThreadComment(content: string, v2Enabled: boolean): string | undefined {
-  const legacy = tomlTableBody(content, "agents")?.match(/^\s*max_threads\s*=\s*\d+(\s*#.*)$/m)?.[1];
+  const v1 = tomlTableBody(content, "agents")?.match(/^\s*max_threads\s*=\s*\d+(\s*#.*)$/m)?.[1];
   const dedicated = tomlTableBody(content, "features.multi_agent_v2")
     ?.match(/^\s*max_concurrent_threads_per_session\s*=\s*\d+(\s*#.*)$/m)?.[1];
   const features = tomlTableBody(content, "features");
@@ -852,7 +852,7 @@ function activeThreadComment(content: string, v2Enabled: boolean): string | unde
   const inline = inlineLine && /(?:^|,)\s*max_concurrent_threads_per_session\s*=\s*\d+\s*(?:,|$)/.test(inlineLine[1])
     ? inlineLine[2]
     : undefined;
-  return v2Enabled ? dedicated ?? inline ?? legacy : legacy ?? dedicated ?? inline;
+  return v2Enabled ? dedicated ?? inline ?? v1 : v1 ?? dedicated ?? inline;
 }
 
 let migrationEditSeq = 0;
@@ -866,7 +866,7 @@ export function isAtomicResidualError(error: unknown): boolean {
 function applyConfigEditsAtomically(path: string, edit: (tempPath: string) => ConfigEditResult): ConfigEditResult {
   const content = readConfigText(path);
   if (content === null) return { ok: false, error: `config.toml not readable at ${path}` };
-  const tempPath = `${path}.ocx-migration.${process.pid}.${++migrationEditSeq}`;
+  const tempPath = `${path}.ccx-migration.${process.pid}.${++migrationEditSeq}`;
   // An inner residual temp (AtomicWriteResidualTempError) keeps its
   // destination-keyed memo: fail-closed while the residual exists.
   let innerResidual = false;
@@ -953,7 +953,7 @@ export function transitionMultiAgentV2(
   // A discovered limit carries the units of the storage it was read from and
   // crosses the root-slot boundary only when those units differ from the
   // destination's — which covers both backend flips and same-state storage
-  // migrations (legacy-only under V2, V2-only under V1). The range check runs
+  // migrations (V1-only under V2, V2-only under V1). The range check runs
   // only when a translation is actually needed, and before the try block so an
   // out-of-range stored value is a normal error result rather than a RangeError
   // escaping the rollback contract.

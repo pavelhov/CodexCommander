@@ -48,18 +48,18 @@ function seedArchived(codexHome: string): void {
 }
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-worker-lifecycle-codex-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-worker-lifecycle-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-worker-lifecycle-codex-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-worker-lifecycle-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
 });
 
 afterEach(async () => {
   await resetStorageCleanupPolicyJobForTestsAsync();
   setStorageCleanupPolicyJobTestHooks(null);
   await drainStorageWorkers();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });

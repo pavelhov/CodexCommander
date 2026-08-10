@@ -4,7 +4,7 @@ import { Trans } from "../i18n/provider";
 import { Select } from "../ui";
 import { formatNamespacedModelId } from "../provider-icons";
 import { navigateHash } from "../hash-routing";
-import { EFFORT_CAP_LEVELS, requireJson, shadowCallModelOptions, sidecarBackendForModel, updateJobLabel } from "./dashboard-shared";
+import { EFFORT_CAP_LEVELS, requireJson, shadowCallModelOptions, sidecarBackendForModel } from "./dashboard-shared";
 import { shadowSourceModelBadge } from "./shadow-call-source";
 import type { useDashboardData } from "./use-dashboard-data";
 
@@ -145,8 +145,7 @@ export function DashboardInjectionPanel({ d }: { apiBase: string; d: Dash }) {
 
 export function DashboardMaintenancePanel({ d }: { d: Dash }) {
   const {
-    t, runSync, syncing, updateTriggerRef, openUpdateDialog, updateLoading, updateOpen,
-    syncResult, syncError, updateJob, reconnecting, clearSyncFeedback,
+    t, runSync, syncing, syncResult, syncError, clearSyncFeedback,
   } = d;
 
   // A sync result that carries actionable guidance (generic warning, native subagent
@@ -212,38 +211,8 @@ export function DashboardMaintenancePanel({ d }: { d: Dash }) {
             <button type="button" className="btn btn-ghost btn-sm" onClick={handleRunSync} disabled={syncing}>
               <IconRefresh className={syncing ? "spin-icon" : undefined} /> {syncing ? t("dash.syncing") : t("dash.syncRun")}
             </button>
-            {/*
-              The update flow lives in the sidebar footer, which reports whether one is waiting
-              and is reachable from every page. A second button here duplicated it without
-              adding that signal. The trigger stays as a zero-size anchor so the deep link
-              (`#dashboard/update`) still has something to open against and the dialog has a
-              focus target to return to on close.
-            */}
-            <button
-              ref={updateTriggerRef}
-              type="button"
-              className="maintenance-update-anchor"
-              onClick={openUpdateDialog}
-              disabled={updateLoading}
-              aria-haspopup="dialog"
-              aria-controls="dashboard-update-dialog"
-              aria-expanded={updateOpen}
-              aria-label={t("dash.checkUpdate")}
-              tabIndex={-1}
-            />
           </div>
         </div>
-        {updateJob && (
-          <div className={`notice ${updateJob.status === "failed" ? "notice-err" : "notice-ok"} maintenance-notice`} role="status">
-            {updateJob.status === "failed" ? <IconAlert /> : <IconRefresh />}
-            <span>
-              {updateJobLabel(updateJob.status, t)}
-              {updateJob.latestVersion ? ` ${t("dash.updateVersionTransition", { currentVersion: updateJob.currentVersion, latestVersion: updateJob.latestVersion })}` : ""}
-              {reconnecting ? ` ${t("dash.updateReconnecting")}` : ""}
-              {updateJob.error ? ` ${updateJob.error}` : ""}
-            </span>
-          </div>
-        )}
       </div>
       {!syncToastDismissed && syncResult && (
         <div className={`action-toast notice ${syncHoldsWarning ? "notice-warn" : "notice-ok"}`} role="status" aria-live="polite">
@@ -252,7 +221,7 @@ export function DashboardMaintenancePanel({ d }: { d: Dash }) {
             {t("dash.syncOk", { count: syncResult.added })}
             {syncResult.warning ? ` ${syncResult.warning}` : ""}
             {syncResult.nativeSubagentDefaultsWarning ? ` ${syncResult.nativeSubagentDefaultsWarning}` : ""}
-            {syncResult.staleAppServerHint ? <>{" "}<Trans k="dash.syncStaleHint" cmd="ocx sync --restart-codex" /></> : null}
+            {syncResult.staleAppServerHint ? <>{" "}<Trans k="dash.syncStaleHint" cmd="ccx sync --restart-codex" /></> : null}
           </span>
           <button type="button" className="action-toast-dismiss" onClick={dismissSyncToast} aria-label={t("api.dismiss")}>
             <IconX width={13} height={13} aria-hidden="true" />

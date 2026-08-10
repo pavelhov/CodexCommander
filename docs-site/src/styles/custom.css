@@ -1,6 +1,6 @@
 /* ============================================================================
-   opencodex docs — liquid-glass skin over Starlight
-   Same grammar as the ocx dashboard (gui/src/styles.css): white/near-black
+   codexcommander docs — liquid-glass skin over Starlight
+   Same grammar as the ccx dashboard (gui/src/styles.css): white/near-black
    monochrome, hairline borders, pill controls, glass ONLY on the chrome
    layers (header, sidebar rail, dropdowns, search modal). Content stays
    solid. One ambient tri-radial wash per viewport, refracted by the glass.
@@ -33,17 +33,17 @@
   --sl-color-backdrop-overlay: rgba(23, 23, 23, 0.55);
 
   /* glass material (chrome layers only) */
-  --ocx-glass-rail: rgba(23, 23, 23, 0.55);
-  --ocx-glass-panel: rgba(38, 38, 38, 0.96);
-  --ocx-glass-blur: saturate(1.5) blur(40px);
-  --ocx-surface: #262626;
-  --ocx-raised: #303030;
-  --ocx-hover: rgba(255, 255, 255, 0.05);
-  --ocx-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 28px rgba(0, 0, 0, 0.3);
+  --ccx-glass-rail: rgba(23, 23, 23, 0.55);
+  --ccx-glass-panel: rgba(38, 38, 38, 0.96);
+  --ccx-glass-blur: saturate(1.5) blur(40px);
+  --ccx-surface: #262626;
+  --ccx-raised: #303030;
+  --ccx-hover: rgba(255, 255, 255, 0.05);
+  --ccx-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 28px rgba(0, 0, 0, 0.3);
 
-  --ocx-radius: 12px;
-  --ocx-radius-sm: 8px;
-  --ocx-radius-pill: 999px;
+  --ccx-radius: 12px;
+  --ccx-radius-sm: 8px;
+  --ccx-radius-pill: 999px;
 
   --sl-font: "Geist Variable", "Pretendard Variable", -apple-system,
     BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, "Helvetica Neue",
@@ -77,12 +77,12 @@
   --sl-color-hairline: #f0f0f0;
   --sl-color-backdrop-overlay: rgba(249, 249, 249, 0.5);
 
-  --ocx-glass-rail: rgba(249, 249, 249, 0.55);
-  --ocx-glass-panel: rgba(255, 255, 255, 0.96);
-  --ocx-surface: #ffffff;
-  --ocx-raised: #f4f4f4;
-  --ocx-hover: rgba(13, 13, 13, 0.04);
-  --ocx-shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 10px 28px rgba(16, 24, 40, 0.07);
+  --ccx-glass-rail: rgba(249, 249, 249, 0.55);
+  --ccx-glass-panel: rgba(255, 255, 255, 0.96);
+  --ccx-surface: #ffffff;
+  --ccx-raised: #f4f4f4;
+  --ccx-hover: rgba(13, 13, 13, 0.04);
+  --ccx-shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 10px 28px rgba(16, 24, 40, 0.07);
 }
 
 /* ---- ambient wash (one per viewport; glass chrome refracts it) ---------- */
@@ -129,9 +129,9 @@ header.header > .header {
 
 /* ---- glass chrome: sidebar rail ----------------------------------------- */
 #starlight__sidebar {
-  background-color: var(--ocx-glass-rail);
-  backdrop-filter: var(--ocx-glass-blur);
-  -webkit-backdrop-filter: var(--ocx-glass-blur);
+  background-color: var(--ccx-glass-rail);
+  backdrop-filter: var(--ccx-glass-blur);
+  -webkit-backdrop-filter: var(--ccx-glass-blur);
   border-inline-end: 1px solid var(--sl-color-hairline-light);
 }
 
@@ -139,11 +139,11 @@ header.header > .header {
 .sidebar-content .top-level a,
 .sidebar-content summary,
 .sidebar-content a {
-  border-radius: var(--ocx-radius-sm);
+  border-radius: var(--ccx-radius-sm);
 }
 .sidebar-content a:hover,
 .sidebar-content a:focus-visible {
-  background-color: var(--ocx-hover);
+  background-color: var(--ccx-hover);
   color: var(--sl-color-white);
 }
 .sidebar-content a[aria-current='page'] {
@@ -159,7 +159,7 @@ header.header > .header {
 
 /* ---- search: pill trigger + glass modal ---------------------------------- */
 button[data-open-modal] {
-  border-radius: var(--ocx-radius-pill);
+  border-radius: var(--ccx-radius-pill);
   background-color: color-mix(in oklab, var(--sl-color-black) 55%, transparent);
   border: 1px solid var(--sl-color-gray-5);
   backdrop-filter: blur(12px) saturate(1.3);
@@ -171,11 +171,11 @@ button[data-open-modal]:hover {
 }
 dialog[aria-label] {
   border: 1px solid var(--sl-color-gray-5);
-  border-radius: var(--ocx-radius);
-  background-color: var(--ocx-glass-panel);
-  backdrop-filter: var(--ocx-glass-blur);
-  -webkit-backdrop-filter: var(--ocx-glass-blur);
-  box-shadow: var(--ocx-shadow);
+  border-radius: var(--ccx-radius);
+  background-color: var(--ccx-glass-panel);
+  backdrop-filter: var(--ccx-glass-blur);
+  -webkit-backdrop-filter: var(--ccx-glass-blur);
+  box-shadow: var(--ccx-shadow);
 }
 dialog::backdrop {
   background-color: var(--sl-color-backdrop-overlay);
@@ -198,27 +198,27 @@ article.card {
   /* kill Starlight's rotating orange/purple/green tints: monochrome surface */
   --sl-card-border: var(--sl-color-gray-5) !important;
   --sl-card-bg: transparent !important;
-  background-color: var(--ocx-surface);
+  background-color: var(--ccx-surface);
   border: 1px solid var(--sl-color-gray-5);
-  border-radius: var(--ocx-radius);
+  border-radius: var(--ccx-radius);
   box-shadow: none;
 }
 article.card .title { color: var(--sl-color-white); }
 
 .sl-link-card {
-  background-color: var(--ocx-surface);
+  background-color: var(--ccx-surface);
   border: 1px solid var(--sl-color-gray-5);
-  border-radius: var(--ocx-radius);
+  border-radius: var(--ccx-radius);
   box-shadow: none;
 }
 .sl-link-card:hover {
-  background-color: var(--ocx-surface);
+  background-color: var(--ccx-surface);
   border-color: var(--sl-color-gray-4);
 }
 
 /* asides/callouts: quiet monochrome-tinted, keep semantic hue only on the bar */
 .starlight-aside {
-  border-radius: var(--ocx-radius-sm);
+  border-radius: var(--ccx-radius-sm);
   border-inline-start-width: 2px;
 }
 
@@ -227,7 +227,7 @@ code:not(:where(.expressive-code *)) {
   border-radius: 6px;
 }
 .expressive-code .frame {
-  --ec-brdRad: var(--ocx-radius);
+  --ec-brdRad: var(--ccx-radius);
 }
 
 /* tables: hairline, rounded wrap */
@@ -396,7 +396,7 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   align-items: center;
   gap: 0.5rem;
   padding: 0.7rem 1.4rem;
-  border-radius: var(--ocx-radius-pill);
+  border-radius: var(--ccx-radius-pill);
   background-color: #0d0d0d;
   color: #ffffff;
   font-weight: 500;
@@ -408,7 +408,7 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   display: inline-flex;
   align-items: center;
   padding: 0.7rem 1.4rem;
-  border-radius: var(--ocx-radius-pill);
+  border-radius: var(--ccx-radius-pill);
   border: 0;
   background-color: #ffffff;
   color: #0d0d0d;
@@ -459,7 +459,7 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
 }
 .lp-chips li {
   padding: 0.35rem 0.9rem;
-  border-radius: var(--ocx-radius-pill);
+  border-radius: var(--ccx-radius-pill);
   border: 0;
   background-color: rgba(255, 255, 255, 0.95);
   color: #1a1a1a;
@@ -489,7 +489,7 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   display: block;
   width: 100%;
   height: auto;
-  border-radius: var(--ocx-radius) var(--ocx-radius) 0 0;
+  border-radius: var(--ccx-radius) var(--ccx-radius) 0 0;
   border: 1px solid rgba(0, 0, 0, 0.18);
   border-bottom: 0;
   box-shadow: 0 -8px 40px rgba(0, 0, 0, 0.14);
@@ -505,7 +505,7 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
 /* opaque sheet surfaces so stacking reads as window transitions */
 .lp-quick,
 .lp-rail {
-  background-color: var(--ocx-surface);
+  background-color: var(--ccx-surface);
   border: 1px solid var(--sl-color-hairline-light);
   border-radius: 24px;
   overflow: hidden;
@@ -565,10 +565,10 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
 .lp-inline-link:hover { text-decoration: underline; text-underline-offset: 3px; }
 .lp-terminal {
   border: 1px solid var(--sl-color-gray-5);
-  border-radius: var(--ocx-radius);
+  border-radius: var(--ccx-radius);
   background-color: light-dark(#1a1a1a, #171717);
   overflow: hidden;
-  box-shadow: var(--ocx-shadow);
+  box-shadow: var(--ccx-shadow);
 }
 :root[data-theme='light'] .lp-terminal { background-color: #1a1a1a; }
 .lp-terminal-bar {
@@ -617,7 +617,7 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   max-width: min(58rem, 100%);
   width: 100%;
   height: auto;
-  border-radius: var(--ocx-radius);
+  border-radius: var(--ccx-radius);
   border: 1px solid var(--sl-color-hairline-light);
 }
 .lp-scrub-poster {
@@ -625,7 +625,7 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   max-width: min(58rem, 100%);
   width: 100%;
   height: auto;
-  border-radius: var(--ocx-radius);
+  border-radius: var(--ccx-radius);
   border: 1px solid var(--sl-color-hairline-light);
 }
 .lp-scrub-caption {
@@ -661,8 +661,8 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   gap: 0.5rem;
   padding: 1.25rem 1.375rem;
   border: 1px solid var(--sl-color-gray-5);
-  border-radius: var(--ocx-radius);
-  background-color: var(--ocx-surface);
+  border-radius: var(--ccx-radius);
+  background-color: var(--ccx-surface);
   min-width: 0;
   overflow: hidden;
 }
@@ -686,7 +686,7 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   margin-top: auto;
   width: 100%;
   height: auto;
-  border-radius: var(--ocx-radius-sm);
+  border-radius: var(--ccx-radius-sm);
   border: 1px solid var(--sl-color-hairline-light);
   max-height: 15rem;
   object-fit: cover;
@@ -751,8 +751,8 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   gap: 1.5rem;
   padding: 1.5rem 1.75rem;
   border: 1px solid var(--sl-color-gray-5);
-  border-radius: var(--ocx-radius);
-  background-color: var(--ocx-surface);
+  border-radius: var(--ccx-radius);
+  background-color: var(--ccx-surface);
 }
 @media (max-width: 64rem) { .lp-next-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 40rem) { .lp-next-grid { grid-template-columns: 1fr; } }
@@ -790,7 +790,7 @@ footer.sl-flex .meta { color: var(--sl-color-gray-4); }
 /* ---- motion (all gated) ---------------------------------------------------- */
 @media (prefers-reduced-motion: no-preference) {
   /* landing entrance choreography (the one signature moment) */
-  @keyframes ocx-fade-up {
+  @keyframes ccx-fade-up {
     from { opacity: 0; transform: translateY(14px); }
     to { opacity: 1; transform: translateY(0); }
   }
@@ -799,13 +799,13 @@ footer.sl-flex .meta { color: var(--sl-color-gray-4); }
   .lp-cta,
   .lp-chips,
   .lp-stage-in img {
-    animation: ocx-fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: ccx-fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
   }
   .lp-sub { animation-delay: 0.07s; }
   .lp-cta { animation-delay: 0.14s; }
   .lp-chips { animation-delay: 0.21s; }
   /* per-chip stagger on top of the group entrance */
-  .lp-chips li { animation: ocx-fade-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; }
+  .lp-chips li { animation: ccx-fade-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; }
   .lp-chips li:nth-child(1) { animation-delay: 0.22s; }
   .lp-chips li:nth-child(2) { animation-delay: 0.26s; }
   .lp-chips li:nth-child(3) { animation-delay: 0.3s; }
@@ -828,7 +828,7 @@ footer.sl-flex .meta { color: var(--sl-color-gray-4); }
   .sl-link-card:hover,
   article.card:hover {
     transform: translateY(-2px);
-    box-shadow: var(--ocx-shadow);
+    box-shadow: var(--ccx-shadow);
   }
   .lp-btn-primary, .lp-btn-ghost { transition: transform 0.15s, opacity 0.15s, border-color 0.15s; }
   .lp-btn-primary:hover, .lp-btn-ghost:hover { transform: translateY(-1px); }
@@ -839,7 +839,7 @@ footer.sl-flex .meta { color: var(--sl-color-gray-4); }
     .lp-next h2,
     .lp-next-grid,
     .lp-disclaimer {
-      animation: ocx-fade-up linear both;
+      animation: ccx-fade-up linear both;
       animation-timeline: view();
       animation-range: entry 0% entry 45%;
     }
@@ -861,7 +861,7 @@ footer.sl-flex .meta { color: var(--sl-color-gray-4); }
         overflow: hidden;
         transform-origin: 50% 15%;
         box-shadow: 0 -12px 48px rgba(0, 0, 0, 0.12);
-        animation: ocx-scene-sink linear both;
+        animation: ccx-scene-sink linear both;
         animation-timeline: --scene;
         animation-range: exit 5% exit 100%;
       }
@@ -871,23 +871,23 @@ footer.sl-flex .meta { color: var(--sl-color-gray-4); }
       /* kinetic type wipes in line by line while the sheet settles */
       .lp-kline {
         clip-path: inset(0 100% 0 0);
-        animation: ocx-text-wipe linear both;
+        animation: ccx-text-wipe linear both;
         animation-timeline: --scene;
       }
       .lp-kline:nth-child(1) { animation-range: cover 22% cover 38%; }
       .lp-kline:nth-child(2) { animation-range: cover 30% cover 46%; }
       .lp-kline:nth-child(3) { animation-range: cover 38% cover 54%; }
-      @keyframes ocx-text-wipe { to { clip-path: inset(0 0 0 0); } }
-      @keyframes ocx-scene-sink {
+      @keyframes ccx-text-wipe { to { clip-path: inset(0 0 0 0); } }
+      @keyframes ccx-scene-sink {
         to { opacity: 0.12; transform: scale(0.94) translateY(-1.5%); }
       }
       /* the field photo pushes in while the hero scene sinks */
       .lp-field-bg img {
-        animation: ocx-field-push linear both;
+        animation: ccx-field-push linear both;
         animation-timeline: --scene;
         animation-range: exit 0% exit 100%;
       }
-      @keyframes ocx-field-push { to { transform: scale(1.08); } }
+      @keyframes ccx-field-push { to { transform: scale(1.08); } }
       /* scrub canvas fills the stage height without overflowing the sheet */
       .lp-scene-inner.lp-scrub .lp-scrub-canvas,
       .lp-scene-inner.lp-scrub .lp-scrub-poster {

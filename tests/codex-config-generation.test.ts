@@ -15,6 +15,7 @@ import { Database } from "bun:sqlite";
 
 import {
   bumpConfigGeneration,
+  getDefaultConfig,
   mutatePersistedConfig,
   observeConfigGeneration,
   readConfigGeneration,
@@ -22,7 +23,7 @@ import {
   saveConfigPreservingClaudeCode,
   withExpectedConfigGenerationSync,
 } from "../src/config";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const CHILD_TIMEOUT_MS = 10_000;
 const configModuleUrl = pathToFileURL(join(import.meta.dir, "../src/config.ts")).href;
@@ -30,7 +31,7 @@ const generationGuardRaceScript = `
   import { existsSync, writeFileSync } from "node:fs";
   import { withExpectedConfigGenerationSync } from ${JSON.stringify(configModuleUrl)};
 
-  const payload = JSON.parse(process.env.OCX_TEST_PAYLOAD);
+  const payload = JSON.parse(process.env.CCX_TEST_PAYLOAD);
   const waitFor = path => {
     const deadline = Date.now() + ${CHILD_TIMEOUT_MS};
     while (!existsSync(path)) {
@@ -52,10 +53,10 @@ const generationGuardRaceScript = `
 
 let testRoot = "";
 let previousCodexHome: string | undefined;
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 
-function config(port = 10100): OcxConfig {
-  return { port, providers: {}, defaultProvider: "openai" };
+function config(port = 10100): CodexCommanderConfig {
+  return { ...getDefaultConfig(), port };
 }
 
 async function waitForPaths(paths: readonly string[]): Promise<void> {
@@ -85,26 +86,26 @@ async function collectGuardRaceChild(
 
 beforeEach(() => {
   previousCodexHome = process.env.CODEX_HOME;
-  previousOpencodexHome = process.env.OPENCODEX_HOME;
+  previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
   testRoot = mkdtempSync(join(import.meta.dir, ".tmp-codex-config-generation-"));
   process.env.CODEX_HOME = testRoot;
-  process.env.OPENCODEX_HOME = testRoot;
+  process.env.CODEXCOMMANDER_HOME = testRoot;
 });
 
 afterEach(() => {
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   rmSync(testRoot, { recursive: true, force: true });
 });
 
 test("observe-only generation reports a missing database without creating or chmodding paths", () => {
   const absentParent = join(testRoot, "missing-parent");
-  const absentHome = join(absentParent, "opencodex-home");
+  const absentHome = join(absentParent, "codexcommander-home");
   const rootBefore = statSync(testRoot, { bigint: true });
   process.env.CODEX_HOME = absentHome;
-  process.env.OPENCODEX_HOME = absentHome;
+  process.env.CODEXCOMMANDER_HOME = absentHome;
 
   const absentObservation = observeConfigGeneration();
   expect(existsSync(join(absentHome, "config-mutation.sqlite"))).toBeFalse();
@@ -126,7 +127,7 @@ test("observe-only generation reports a missing database without creating or chm
   chmodSync(existingHome, 0o751);
   const existingMode = statSync(existingHome).mode & 0o777;
   process.env.CODEX_HOME = existingHome;
-  process.env.OPENCODEX_HOME = existingHome;
+  process.env.CODEXCOMMANDER_HOME = existingHome;
 
   const existingObservation = observeConfigGeneration();
   expect(existsSync(join(existingHome, "config-mutation.sqlite"))).toBeFalse();
@@ -274,8 +275,8 @@ test("two real processes racing one generation run exactly one callback", async 
       env: {
         ...process.env,
         HOME: testRoot,
-        OPENCODEX_HOME: testRoot,
-        OCX_TEST_PAYLOAD: JSON.stringify(payload),
+        CODEXCOMMANDER_HOME: testRoot,
+        CCX_TEST_PAYLOAD: JSON.stringify(payload),
       },
       stdin: "ignore",
       stdout: "pipe",

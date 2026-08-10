@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { opendir } from "node:fs/promises";
-import type { AdapterEvent, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTool, OcxUsage } from "../types";
+import type { AdapterEvent, CodexCommanderContentPart, CodexCommanderMessage, CodexCommanderParsedRequest, CodexCommanderProviderConfig, CodexCommanderTool, CodexCommanderUsage } from "../types";
 import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolAllowedByChoice, toolChoiceAliases } from "../types";
 import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
 import type { TranslatorBudget } from "../lib/translator-budget";
@@ -22,7 +22,7 @@ const COMMAND_CODE_MODEL_ALIASES: Readonly<Record<string, string>> = {
 };
 
 /** Flatten tool-result content for the text-only wire output, keeping an `[image]` marker per image part in content order. */
-function toolResultText(content: string | OcxContentPart[]): string {
+function toolResultText(content: string | CodexCommanderContentPart[]): string {
   if (typeof content === "string") return content;
   return content.map(part => (part.type === "text" ? part.text : "[image]")).join("");
 }
@@ -44,7 +44,7 @@ function wireImagePart(imageUrl: string): Record<string, unknown> {
   return { type: "image", image: imageUrl, ...(mediaType ? { mediaType } : {}) };
 }
 
-function wireMessages(messages: OcxMessage[]): Array<Record<string, unknown>> {
+function wireMessages(messages: CodexCommanderMessage[]): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
   for (const message of messages) {
     if (message.role === "assistant") {
@@ -84,7 +84,7 @@ function wireMessages(messages: OcxMessage[]): Array<Record<string, unknown>> {
   return out;
 }
 
-function visibleTools(parsed: OcxParsedRequest): OcxTool[] {
+function visibleTools(parsed: CodexCommanderParsedRequest): CodexCommanderTool[] {
   const choice = parsed.options.toolChoice;
   if (choice === "none") return [];
   const tools = parsed.context.tools ?? [];
@@ -98,7 +98,7 @@ function visibleTools(parsed: OcxParsedRequest): OcxTool[] {
   return tools;
 }
 
-function toolChoiceInstruction(parsed: OcxParsedRequest): string | undefined {
+function toolChoiceInstruction(parsed: CodexCommanderParsedRequest): string | undefined {
   const choice = parsed.options.toolChoice;
   if (choice === "required" || (isAllowedToolChoice(choice) && choice.mode === "required")) {
     return "Tool choice is required for this turn. Make at least one call from the advertised tool catalog before answering.";
@@ -112,7 +112,7 @@ function toolChoiceInstruction(parsed: OcxParsedRequest): string | undefined {
   return undefined;
 }
 
-function wireTools(tools: OcxTool[]): Array<Record<string, unknown>> {
+function wireTools(tools: CodexCommanderTool[]): Array<Record<string, unknown>> {
   return tools.map(tool => ({
     name: namespacedToolName(tool.namespace, tool.name),
     description: tool.description,
@@ -212,7 +212,7 @@ async function commandCodeConfig(cwd: string | undefined): Promise<Record<string
   };
 }
 
-function usage(value: unknown): OcxUsage | undefined {
+function usage(value: unknown): CodexCommanderUsage | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const row = value as Record<string, unknown>;
   const inputTokens = typeof row.inputTokens === "number" ? row.inputTokens : 0;
@@ -313,7 +313,7 @@ async function fetchCommandCode(request: AdapterRequest, ctx: AdapterFetchContex
   }
 }
 
-function supportedCommandCodeEffort(provider: OcxProviderConfig, modelId: string, requested: string | undefined): string | undefined {
+function supportedCommandCodeEffort(provider: CodexCommanderProviderConfig, modelId: string, requested: string | undefined): string | undefined {
   if (!requested || requested === "none") return undefined;
   // Compatibility ids (deepseek-v4-flash / glm-5.2) must resolve to their canonical
   // Command Code id before the effort lookup, or legacy requests silently lose the
@@ -327,12 +327,12 @@ function supportedCommandCodeEffort(provider: OcxProviderConfig, modelId: string
   return supported.includes(wire) ? wire : undefined;
 }
 
-export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderAdapter {
-  const executor = (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? globalThis.fetch;
+export function createCommandCodeAdapter(provider: CodexCommanderProviderConfig): ProviderAdapter {
+  const executor = (provider as CodexCommanderProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? globalThis.fetch;
   return {
     name: "command-code",
-    async buildRequest(parsed: OcxParsedRequest): Promise<AdapterRequest> {
-      if (!provider.apiKey) throw new Error("Command Code credential missing — run ocx login command-code");
+    async buildRequest(parsed: CodexCommanderParsedRequest): Promise<AdapterRequest> {
+      if (!provider.apiKey) throw new Error("Command Code credential missing — run ccx login command-code");
       const cwd = currentWorkingDirectory();
       const tools = visibleTools(parsed);
       const toolNudge = buildNonOpenAIToolCatalogNudgeForTools(tools, parsed.options.toolChoice);

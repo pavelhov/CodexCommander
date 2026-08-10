@@ -9,7 +9,6 @@ describe("buildApiAccessEndpoints", () => {
   test("builds the external gateway URLs from hostname and port", () => {
     expect(buildApiAccessEndpoints({ hostname: "127.0.0.1", port: 10100 })).toEqual({
       baseUrl: "http://127.0.0.1:10100/v1",
-      endpoint: "http://127.0.0.1:10100/v1/responses",
       responsesEndpoint: "http://127.0.0.1:10100/v1/responses",
       chatCompletionsEndpoint: "http://127.0.0.1:10100/v1/chat/completions",
       messagesEndpoint: "http://127.0.0.1:10100/v1/messages",
@@ -21,7 +20,6 @@ describe("buildApiAccessEndpoints", () => {
   test("falls back to the default bind when config fields are missing", () => {
     expect(buildApiAccessEndpoints({})).toEqual({
       baseUrl: "http://127.0.0.1:10100/v1",
-      endpoint: "http://127.0.0.1:10100/v1/responses",
       responsesEndpoint: "http://127.0.0.1:10100/v1/responses",
       chatCompletionsEndpoint: "http://127.0.0.1:10100/v1/chat/completions",
       messagesEndpoint: "http://127.0.0.1:10100/v1/messages",
@@ -33,7 +31,6 @@ describe("buildApiAccessEndpoints", () => {
   test("brackets IPv6 hostnames for URL display", () => {
     expect(buildApiAccessEndpoints({ hostname: "::1", port: 10100 })).toEqual({
       baseUrl: "http://[::1]:10100/v1",
-      endpoint: "http://[::1]:10100/v1/responses",
       responsesEndpoint: "http://[::1]:10100/v1/responses",
       chatCompletionsEndpoint: "http://[::1]:10100/v1/chat/completions",
       messagesEndpoint: "http://[::1]:10100/v1/messages",

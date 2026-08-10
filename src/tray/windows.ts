@@ -4,19 +4,19 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync,
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { expandUserPath, getConfigDir } from "../config";
-import { durableBunRuntime } from "../lib/bun-runtime";
+import { BUN_RUNTIME_SOURCES, durableBunRuntime } from "../lib/bun-runtime";
 import type { BunRuntimeSource } from "../lib/bun-runtime";
 import { forgetEphemeralSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 
 const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_PARENT_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion";
-const TRAY_STATE_VERSION = 1;
+const TRAY_STATE_VERSION = 3;
 const FOREIGN_RUN_VALUE = "<foreign-or-unreadable-registry-value>";
 const TRAY_ICON_FILES = [
-  "opencodex-tray-online.ico",
-  "opencodex-tray-warning.ico",
-  "opencodex-tray-offline.ico",
+  "codexcommander-tray-online.ico",
+  "codexcommander-tray-warning.ico",
+  "codexcommander-tray-offline.ico",
 ] as const;
 
 export interface WindowsTrayEntry {
@@ -25,13 +25,13 @@ export interface WindowsTrayEntry {
   bunRuntimeSource: BunRuntimeSource;
   cli: string;
   script: string;
+  launcherPath: string;
   codexHome: string;
-  opencodexHome: string;
+  codexCommanderHome: string;
 }
 
 interface WindowsTrayState extends WindowsTrayEntry {
-  version: 1;
-  launcherPath?: string;
+  version: 3;
   runValue: string;
   runCommand: string;
 }
@@ -53,7 +53,7 @@ function trayHeartbeatPath(): string {
 }
 
 function installedTrayScriptPath(): string {
-  return join(getConfigDir(), "opencodex-tray.ps1");
+  return join(getConfigDir(), "codexcommander-tray.ps1");
 }
 
 function installedTrayIconPaths(): string[] {
@@ -61,13 +61,13 @@ function installedTrayIconPaths(): string[] {
 }
 
 export function windowsTrayStatePathsOwned(
-  state: Pick<WindowsTrayEntry, "script" | "opencodexHome"> & { launcherPath?: string },
+  state: Pick<WindowsTrayEntry, "script" | "launcherPath" | "codexCommanderHome">,
   configDir = getConfigDir(),
 ): boolean {
-  if (resolve(state.opencodexHome) !== resolve(configDir)) return false;
-  if (resolve(state.script) !== resolve(join(configDir, "opencodex-tray.ps1"))) return false;
-  return state.launcherPath === undefined
-    || resolve(state.launcherPath) === resolve(join(configDir, "opencodex-tray.vbs"));
+  if (resolve(state.codexCommanderHome) !== resolve(configDir)) return false;
+  const scriptOwned = resolve(state.script) === resolve(join(configDir, "codexcommander-tray.ps1"));
+  if (!scriptOwned) return false;
+  return resolve(state.launcherPath) === resolve(join(configDir, "codexcommander-tray.vbs"));
 }
 
 function sourceTrayScriptPath(): string {
@@ -90,14 +90,15 @@ function currentEntry(): WindowsTrayEntry {
     bunRuntimeSource: runtime.source,
     cli: join(import.meta.dir, "..", "cli", "index.ts"),
     script: installedTrayScriptPath(),
+    launcherPath: installedTrayLauncherPath(),
     codexHome: currentCodexHome(),
-    opencodexHome: getConfigDir(),
+    codexCommanderHome: getConfigDir(),
   };
 }
 
-export function windowsTrayRunValue(opencodexHome: string): string {
-  const normalized = resolve(opencodexHome).replace(/[\\/](?:\.)?[\\/]*$/, "").toLowerCase();
-  return `OpenCodexTray-${createHash("sha256").update(normalized).digest("hex").slice(0, 12)}`;
+export function windowsTrayRunValue(codexCommanderHome: string): string {
+  const normalized = resolve(codexCommanderHome).replace(/[\\/](?:\.)?[\\/]*$/, "").toLowerCase();
+  return `CodexCommanderTray-${createHash("sha256").update(normalized).digest("hex").slice(0, 12)}`;
 }
 
 export function windowsPowerShellPath(systemRoot = process.env.SystemRoot): string {
@@ -144,7 +145,7 @@ export function windowsTrayProcessArgs(entry: WindowsTrayEntry, mode: "Run" | "S
     "-BunRuntimeSource", entry.bunRuntimeSource,
     "-CliPath", safePath(entry.cli),
     "-CodexHome", safePath(entry.codexHome),
-    "-OpenCodexHome", safePath(entry.opencodexHome),
+    "-CodexCommanderHome", safePath(entry.codexCommanderHome),
     "-Mode", mode,
   ];
   if (Number.isSafeInteger(hostPid) && (hostPid ?? 0) > 0) args.push("-HostPid", String(hostPid));
@@ -157,7 +158,7 @@ function quoteRunValue(value: string): string {
 }
 
 function installedTrayLauncherPath(): string {
-  return join(getConfigDir(), "opencodex-tray.vbs");
+  return join(getConfigDir(), "codexcommander-tray.vbs");
 }
 
 function quoteVbsPath(value: string): string {
@@ -179,13 +180,13 @@ export function buildWindowsTrayPowerShellCommand(entry: WindowsTrayEntry, power
     "-BunRuntimeSource", entry.bunRuntimeSource,
     "-CliPath", quoteRunValue(entry.cli),
     "-CodexHome", quoteRunValue(entry.codexHome),
-    "-OpenCodexHome", quoteRunValue(entry.opencodexHome),
+    "-CodexCommanderHome", quoteRunValue(entry.codexCommanderHome),
     "-Mode", "Run",
   ].join(" ");
 }
 
 /** Short HKCU Run command (must stay ≤260 chars under long Windows user/npm paths). */
-export function buildWindowsTrayRunCommand(entry: WindowsTrayEntry & { launcherPath: string }): string {
+export function buildWindowsTrayRunCommand(entry: WindowsTrayEntry): string {
   const wscript = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "wscript.exe");
   return `${quoteRunValue(wscript)} //B //NoLogo ${quoteRunValue(entry.launcherPath)}`;
 }
@@ -194,31 +195,26 @@ export function buildWindowsTrayLauncherScript(entry: WindowsTrayEntry, powershe
   const command = buildWindowsTrayPowerShellCommand(entry, powershell);
   // VBS CreateObject("WScript.Shell").Run command, 0, False — hidden, non-blocking.
   return [
-    "' OpenCodex owned tray launcher — do not edit by hand.",
+    "' CodexCommander-owned tray launcher — do not edit by hand.",
     `CreateObject("WScript.Shell").Run "${quoteVbsPath(command)}", 0, False`,
     "",
   ].join("\r\n");
-}
-
-/** @deprecated Prefer buildWindowsTrayPowerShellCommand; kept for callers that still expect the long form. */
-export function buildWindowsTrayLegacyRunCommand(entry: WindowsTrayEntry, powershell = windowsPowerShellPath()): string {
-  return buildWindowsTrayPowerShellCommand(entry, powershell);
 }
 
 function readState(): WindowsTrayState | null {
   try {
     const state = JSON.parse(readFileSync(trayStatePath(), "utf8")) as Partial<WindowsTrayState>;
     if (state.version !== TRAY_STATE_VERSION) return null;
-    for (const key of ["bun", "cli", "script", "codexHome", "opencodexHome", "runValue", "runCommand"] as const) {
+    for (const key of ["bun", "cli", "script", "launcherPath", "codexHome", "codexCommanderHome", "runValue", "runCommand"] as const) {
       if (typeof state[key] !== "string" || state[key].length === 0) return null;
     }
-    if (state.launcherPath !== undefined && typeof state.launcherPath !== "string") return null;
+    if (!BUN_RUNTIME_SOURCES.some(source => source === state.bunRuntimeSource)) return null;
     const valid = state as WindowsTrayState;
-    for (const value of [valid.bun, valid.cli, valid.script, valid.codexHome, valid.opencodexHome]) safePath(value);
+    for (const value of [valid.bun, valid.cli, valid.script, valid.launcherPath, valid.codexHome, valid.codexCommanderHome]) safePath(value);
     // State is advisory, not an authority for executable or deletion paths. In
     // particular, never let a forged state file redirect PowerShell -File.
     if (!windowsTrayStatePathsOwned(valid)) return null;
-    if (valid.runValue !== windowsTrayRunValue(valid.opencodexHome)) return null;
+    if (valid.runValue !== windowsTrayRunValue(valid.codexCommanderHome)) return null;
     return valid;
   } catch {
     return null;
@@ -269,7 +265,7 @@ export function replaceWindowsTrayOwnedFile(
 }
 
 function writeState(
-  entry: WindowsTrayEntry & { launcherPath: string },
+  entry: WindowsTrayEntry,
   runValue: string,
   runCommand: string,
 ): void {
@@ -444,7 +440,7 @@ function trayStatusFrom(registered: string | null): WindowsTrayStatus {
   const running = heartbeatProcessAlive(heartbeat);
   const registrationOwned = state !== null
     && registered === state.runCommand
-    && [state.bun, state.cli, state.script, ...(state.launcherPath ? [state.launcherPath] : []), ...installedTrayIconPaths()]
+    && [state.bun, state.cli, state.script, state.launcherPath, ...installedTrayIconPaths()]
       .every(path => existsSync(path));
   const stale = windowsTrayRegistrationIsStale({
     registered: registered !== null,
@@ -480,13 +476,13 @@ export async function getWindowsTrayStatusAsync(): Promise<WindowsTrayStatus> {
 }
 
 function assertWindows(): void {
-  if (process.platform !== "win32") throw new Error(`The opencodex tray is Windows-only (current platform: ${process.platform}).`);
+  if (process.platform !== "win32") throw new Error(`The CodexCommander tray is Windows-only (current platform: ${process.platform}).`);
 }
 
 const DETACHED_TRAY_HOST_LAUNCHER = [
   "$startInfo = New-Object System.Diagnostics.ProcessStartInfo",
-  "$startInfo.FileName = $env:OCX_TRAY_HOST_BUN",
-  "$startInfo.Arguments = $env:OCX_TRAY_HOST_ARGS",
+  "$startInfo.FileName = $env:CCX_TRAY_HOST_BUN",
+  "$startInfo.Arguments = $env:CCX_TRAY_HOST_ARGS",
   "$startInfo.UseShellExecute = $true",
   "$startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden",
   "$child = [System.Diagnostics.Process]::Start($startInfo)",
@@ -496,9 +492,10 @@ const DETACHED_TRAY_HOST_LAUNCHER = [
 
 const DETACHED_TRAY_HOST_LAUNCHER_B64 = Buffer.from(DETACHED_TRAY_HOST_LAUNCHER, "utf16le").toString("base64");
 
-export function launchWindowsTrayHost(state: WindowsTrayEntry): void {
-  const bun = safePath(state.bun);
-  const cli = safePath(state.cli);
+export function launchWindowsTrayHost(entry: WindowsTrayEntry): void {
+  const validated = validateWindowsTrayHostEntry(entry);
+  const bun = validated.bun;
+  const cli = validated.cli;
   execFileSync(windowsPowerShellPath(), [
     "-NoLogo",
     "-NoProfile",
@@ -511,9 +508,9 @@ export function launchWindowsTrayHost(state: WindowsTrayEntry): void {
     timeout: 15_000,
     env: {
       ...process.env,
-      OCX_TRAY_HOST_BUN: bun,
-      OCX_TRAY_HOST_ARGS: `${quoteRunValue(cli)} __tray-host`,
-      OCX_TRAY_ENTRY_B64: Buffer.from(JSON.stringify(state), "utf8").toString("base64"),
+      CCX_TRAY_HOST_BUN: bun,
+      CCX_TRAY_HOST_ARGS: `${quoteRunValue(cli)} __tray-host`,
+      CCX_TRAY_ENTRY_B64: Buffer.from(JSON.stringify(validated), "utf8").toString("base64"),
     },
   });
 }
@@ -522,24 +519,30 @@ function spawnTray(state: WindowsTrayEntry): void {
   launchWindowsTrayHost(state);
 }
 
-function parseTrayHostEntry(): WindowsTrayEntry {
-  const encoded = process.env.OCX_TRAY_ENTRY_B64;
-  if (!encoded) throw new Error("Missing tray host entry.");
-  const value = JSON.parse(Buffer.from(encoded, "base64").toString("utf8")) as Partial<WindowsTrayEntry>;
-  for (const key of ["bun", "cli", "script", "codexHome", "opencodexHome"] as const) {
-    if (typeof value[key] !== "string") throw new Error(`Invalid tray host field: ${key}`);
+function validateWindowsTrayHostEntry(value: Partial<WindowsTrayEntry>): WindowsTrayEntry {
+  for (const key of ["bun", "cli", "script", "launcherPath", "codexHome", "codexCommanderHome"] as const) {
+    if (typeof value[key] !== "string" || value[key].length === 0) throw new Error(`Invalid tray host field: ${key}`);
     safePath(value[key]);
   }
+  if (!BUN_RUNTIME_SOURCES.some(source => source === value.bunRuntimeSource)) {
+    throw new Error("Invalid tray host field: bunRuntimeSource");
+  }
   return value as WindowsTrayEntry;
+}
+
+export function parseWindowsTrayHostEntry(encoded: string | undefined): WindowsTrayEntry {
+  if (!encoded) throw new Error("Missing tray host entry.");
+  const value = JSON.parse(Buffer.from(encoded, "base64").toString("utf8")) as Partial<WindowsTrayEntry>;
+  return validateWindowsTrayHostEntry(value);
 }
 
 /** Detached Bun host keeps the attached WinForms PowerShell process alive. */
 export async function runWindowsTrayHost(): Promise<void> {
   assertWindows();
-  const entry = parseTrayHostEntry();
-  delete process.env.OCX_TRAY_ENTRY_B64;
-  delete process.env.OCX_TRAY_HOST_BUN;
-  delete process.env.OCX_TRAY_HOST_ARGS;
+  const entry = parseWindowsTrayHostEntry(process.env.CCX_TRAY_ENTRY_B64);
+  delete process.env.CCX_TRAY_ENTRY_B64;
+  delete process.env.CCX_TRAY_HOST_BUN;
+  delete process.env.CCX_TRAY_HOST_ARGS;
   const child = spawn(windowsPowerShellPath(), windowsTrayProcessArgs(entry, "Run", process.pid), {
     stdio: "ignore",
     windowsHide: true,
@@ -554,11 +557,11 @@ export async function runWindowsTrayHost(): Promise<void> {
   });
 }
 
-function signalTrayStop(): ReturnType<typeof readHeartbeat> {
+function signalTrayStop(entry: WindowsTrayEntry = currentEntry()): ReturnType<typeof readHeartbeat> {
   const previous = readHeartbeat();
   // The stop event name depends only on the current home. Never execute paths
   // recovered from tray-state.json while attempting cleanup or repair.
-  execFileSync(windowsPowerShellPath(), windowsTrayProcessArgs(currentEntry(), "Stop"), {
+  execFileSync(windowsPowerShellPath(), windowsTrayProcessArgs(entry, "Stop"), {
     stdio: "ignore",
     windowsHide: true,
     timeout: 15_000,
@@ -576,13 +579,12 @@ export function installWindowsTray(startNow = true): WindowsTrayStatus {
   }
   recordOwnedConfigPath(getConfigDir(), trayStatePath());
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true, mode: 0o700 });
-  const launcherPath = installedTrayLauncherPath();
-  const entryWithLauncher = { ...entry, launcherPath };
-  const runCommand = buildWindowsTrayRunCommand(entryWithLauncher);
+  const launcherPath = entry.launcherPath;
+  const runCommand = buildWindowsTrayRunCommand(entry);
   if (runCommand.length > 260) {
     throw new Error(`Tray Run command exceeds the Windows 260-character limit (${runCommand.length} chars).`);
   }
-  const runValue = windowsTrayRunValue(entry.opencodexHome);
+  const runValue = windowsTrayRunValue(entry.codexCommanderHome);
   const existing = readOwnedRunValue(runValue);
   const state = readState();
   if (existing && (!state || existing !== state.runCommand)) {
@@ -591,7 +593,7 @@ export function installWindowsTray(startNow = true): WindowsTrayStatus {
   if (existsSync(entry.script) && (!state || resolve(state.script) !== resolve(entry.script))) {
     throw new Error(`Refusing to overwrite an unowned tray script at ${entry.script}.`);
   }
-  if (existsSync(launcherPath) && (!state?.launcherPath || resolve(state.launcherPath) !== resolve(launcherPath))) {
+  if (existsSync(launcherPath) && (!state || resolve(state.launcherPath) !== resolve(launcherPath))) {
     throw new Error(`Refusing to overwrite an unowned tray launcher at ${launcherPath}.`);
   }
   if (!state && iconPairs.some(pair => existsSync(pair.installed))) {
@@ -651,7 +653,7 @@ export function installWindowsTray(startNow = true): WindowsTrayStatus {
     for (const pair of iconPairs) replaceWindowsTrayOwnedFile(pair.installed, readFileSync(pair.source));
     replaceWindowsTrayOwnedFile(launcherPath, Buffer.from("\uFEFF" + buildWindowsTrayLauncherScript(entry), "utf16le"));
     runRegistry(["add", RUN_KEY, "/v", runValue, "/t", "REG_SZ", "/d", runCommand, "/f", "/reg:64"]);
-    writeState(entryWithLauncher, runValue, runCommand);
+    writeState(entry, runValue, runCommand);
   } catch (error) {
     restorePreviousInstall();
     throw error;
@@ -698,9 +700,12 @@ export function uninstallWindowsTray(): WindowsTrayStatus {
   }
   if (!waitForTrayExit(previous)) throw new Error("The tray did not exit; refusing to remove its owned registration or state.");
   if (existing) runRegistry(["delete", RUN_KEY, "/v", state?.runValue ?? windowsTrayRunValue(getConfigDir()), "/f", "/reg:64"]);
-  const ownedPaths = [trayStatePath(), trayHeartbeatPath(), ...(state?.launcherPath ? [state.launcherPath] : [])];
+  const ownedPaths = [trayStatePath(), trayHeartbeatPath(), ...(state ? [state.launcherPath] : [])];
   if (state?.script && resolve(state.script) === resolve(installedTrayScriptPath())) ownedPaths.push(state.script);
   if (state) ownedPaths.push(...installedTrayIconPaths());
+  for (const path of [installedTrayScriptPath(), installedTrayLauncherPath()]) {
+    try { if (existsSync(path)) ownedPaths.push(path); } catch { /* best effort */ }
+  }
   for (const path of ownedPaths) {
     try { if (existsSync(path)) unlinkSync(path); } catch { /* best-effort */ }
   }
@@ -719,7 +724,7 @@ export async function windowsTrayCommand(args: string[]): Promise<void> {
   const values = args.filter(value => value !== "--json" && value !== "--no-start");
   const sub = values[0] ?? "status";
   if (args.includes("--no-start") && sub !== "install" || values.length > 1 || !["install", "start", "stop", "status", "uninstall", "remove"].includes(sub)) {
-    console.error("Usage: ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]");
+    console.error("Usage: ccx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]");
     process.exitCode = 1;
     return;
   }

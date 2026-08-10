@@ -1,10 +1,10 @@
 ---
 title: API управления
-description: Аутентификация, ошибки и справочник эндпоинтов плоскости управления opencodex.
+description: Аутентификация, ошибки и справочник эндпоинтов плоскости управления CodexCommander.
 ---
 
-Management API — это control plane opencodex. Дашборд на `http://localhost:10100` — лишь один из
-его клиентов; headless-команды `ocx` для провайдеров, моделей, combo, аккаунтов, настроек,
+Management API — это control plane CodexCommander. Дашборд на `http://localhost:10100` — лишь один из
+его клиентов; headless-команды `ccx` для провайдеров, моделей, combo, аккаунтов, настроек,
 диагностики и lifecycle тоже используют его. API доступен только пока прокси запущен.
 
 Для интерактивной работы используйте [Веб-дашборд](/guides/web-dashboard/), а этот справочник
@@ -14,10 +14,10 @@ Management API — это control plane opencodex. Дашборд на `http://l
 ## Модель аутентификации
 
 У Management API свой admin credential, независимый от data-plane API-key'ов. При старте
-opencodex разрешает его в таком порядке:
+CodexCommander разрешает его в таком порядке:
 
-1. `OPENCODEX_ADMIN_AUTH_TOKEN`, если переменная задана.
-2. Сгенерированный токен `ocx_admin_*` в hardened secret file.
+1. `CODEXCOMMANDER_ADMIN_AUTH_TOKEN`, если переменная задана.
+2. Сгенерированный токен `ccx_admin_*` в hardened secret file.
 
 Токен из файла принимается только после того, как каталог и файл подтверждённо получили
 hardened-permissions или ACL. Если это гарантировать нельзя, management-аутентификация
@@ -26,7 +26,7 @@ hardened-permissions или ACL. Если это гарантировать не
 Передавайте admin-token в любой из двух форм:
 
 ```http
-X-OpenCodex-API-Key: <admin-token>
+X-CodexCommander-API-Key: <admin-token>
 ```
 
 ```http
@@ -41,7 +41,7 @@ Claude Code или любого другого клиента моделей; о
 
 ### Loopback-сессии дашборда
 
-На loopback-привязке bootstrap дашборда может получить short-lived credential `ocx_session_*`.
+На loopback-привязке bootstrap дашборда может получить short-lived credential `ccx_session_*`.
 Каждая такая сессия живёт пять минут и привязана к точному origin дашборда. Safe-запросы должны
 совпадать с этим origin. Для unsafe-method'ов браузер дополнительно обязан передать `Origin` и
 CSRF-token этой сессии.
@@ -57,7 +57,7 @@ GUI-сессия в стиле loopback не выпускается.
 
 | Статус | Тип или код | Значение |
 | --- | --- | --- |
-| 401 | `opencodex admin token required` | Admin-token или GUI-session отсутствуют, неверны, просрочены, не совпадают по origin или не содержат CSRF-подтверждение |
+| 401 | `codexcommander admin token required` | Admin-token или GUI-session отсутствуют, неверны, просрочены, не совпадают по origin или не содержат CSRF-подтверждение |
 | 403 | `cross-origin request blocked` | Origin запроса вне allowlist management API |
 | 404 | `not_found` | Ни один management-route не совпал по method и path |
 | 413 | `request body too large` | Тело POST, PUT или PATCH превысило лимит management API в 2 MiB |
@@ -80,7 +80,7 @@ GUI-сессия в стиле loopback не выпускается.
 | `PUT /api/grok/selection` | Сохранить список исключённых моделей Grok | 400 invalid or oversized selection |
 | `POST /api/grok/apply` | Применить сохранённую конфигурацию Grok через managed sync | 409 `grok_apply_busy`; 400/500 apply failure |
 | `GET, PUT /api/claude-desktop` | Прочитать или сохранить routed/native-профиль Claude Desktop | 400 invalid or unavailable assignment |
-| `POST /api/claude-desktop/apply` | Записать сохранённый профиль в managed config Claude Desktop | 400/500 write failure |
+| `POST /api/claude-desktop/apply` | Записать сохранённый профиль в managed config Claude Desktop. Нужен JSON-объект с явным `mode`: `static`, `hybrid` или `discovery` | 400 invalid body/mode; 500 write failure |
 | `GET /api/claude-desktop/status` | Проверить согласованность saved-vs-applied profile и здоровье Desktop | 400 status read failure |
 | `GET, PUT /api/claude-code` | Прочитать или обновить настройки gateway, auth-mode, model-map, context, agent и sidecar для Claude Code | 400 invalid field or shape |
 
@@ -109,9 +109,6 @@ GUI-сессия в стиле loopback не выпускается.
 | `GET, POST /api/windows-tray` | Прочитать состояние Windows tray или установить/запустить/остановить/удалить её | 400 unsupported platform/action; 500 operation failure |
 | `GET /api/diagnostics/project-config` | Прочитать кэшированные предупреждения project config | — |
 | `POST /api/sync` | Синхронизировать каталог моделей в Codex; возвращает `catalogQuality`, `rehydrated`, `catalogState` app-server и подсказку о перезапуске | 409 отказ в праве записи; 500 ошибка синхронизации |
-| `GET /api/update/check` | Проверить канал обновлений `latest` или `preview` | 400 invalid tag |
-| `POST /api/update/run` | Запустить update job, при желании с последующим restart | 400 invalid body; job-specific conflict/error status |
-| `GET /api/update/status` | Опрашивать update job по id | 404 unknown job |
 | `GET, PUT /api/sidecar-settings` | Прочитать или обновить model/backend-settings web-search и vision sidecar'ов | 400 invalid shape, backend or limit |
 | `GET, PUT /api/shadow-call-settings` | Прочитать или обновить настройки shadow-call interception | 400 invalid shape or value |
 
@@ -195,12 +192,6 @@ Endpoint'ы storage cleanup могут перемещать или навсег�
 `provider_has_dependent_combos` — это safety-барьер: сначала удалите или отредактируйте
 зависящие combo, и лишь потом удаляйте их провайдера.
 
-### Sidebar
-
-| Метод и путь | Назначение | Особые ошибки |
-| --- | --- | --- |
-| `GET /api/update/badge` | Прочитать дешёвое состояние update-badge в sidebar | — |
-
 ### Жизненный цикл системы
 
 | Метод и путь | Назначение | Особые ошибки |
@@ -221,7 +212,7 @@ Endpoint'ы storage cleanup могут перемещать или навсег�
 | `PUT /api/codex-auth/accounts/pause` | Поставить один аккаунт на паузу или снять её | 400 invalid account/state; 404 missing account |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Поставить на паузу аккаунты с исчерпанной квотой | Сбои mutation-lock превращаются в 503 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | Очистить runtime cooldown для одного аккаунта или для всех | 400 invalid id |
-| `GET, PUT /api/codex-auth/active` | Прочитать или выбрать активный аккаунт | 400 invalid or missing account; 409 paused/legacy-row conflict |
+| `GET, PUT /api/codex-auth/active` | Прочитать или выбрать активный аккаунт | 400 invalid or missing account; 409 paused account |
 | `PUT /api/codex-auth/auto-switch` | Задать порог квоты для автоматического переключения аккаунтов | 400 invalid threshold |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Обновить стратегию выбора в пуле аккаунтов Codex | 400 invalid strategy/config |
 | `PUT /api/codex-auth/failover` | Задать порог failover аккаунтов | 400 invalid threshold |
@@ -241,6 +232,6 @@ Endpoint'ы storage cleanup могут перемещать или навсег�
 
 Для обычного администрирования самый безопасный guided-workflow даёт
 [Веб-дашборд](/guides/web-dashboard/). Для headless-host'ов и automation используйте
-соответствующие команды `ocx`: они обращаются к тому же живому API и возвращают ненулевой код,
+соответствующие команды `ccx`: они обращаются к тому же живому API и возвращают ненулевой код,
 если прокси недоступен или операция завершилась неудачей. Прямой HTTP полезнее всего там, где
 интеграции нужен точный контракт endpoint'ов, описанный выше.

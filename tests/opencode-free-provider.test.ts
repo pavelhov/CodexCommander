@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import { providerConfigSeed, deriveKeyLoginMap, deriveFeaturedProviderIds } from "../src/providers/derive";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
-import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 
-function minimalRequest(model = "kimi-k2.7-code"): OcxParsedRequest {
+function minimalRequest(model = "kimi-k2.7-code"): CodexCommanderParsedRequest {
   return {
     modelId: model,
     stream: false,
@@ -50,7 +50,7 @@ describe("opencode-free provider", () => {
   });
 
   test("adapter sends no auth header with no apiKey configured", () => {
-    const provider: OcxProviderConfig = providerConfigSeed(entry!);
+    const provider: CodexCommanderProviderConfig = providerConfigSeed(entry!);
     const adapter = createOpenAIChatAdapter(provider);
     const req = adapter.buildRequest(minimalRequest());
     const headers = req.headers as Record<string, string>;
@@ -60,7 +60,7 @@ describe("opencode-free provider", () => {
   });
 
   test("user-supplied apiKey is sent when configured", () => {
-    const provider: OcxProviderConfig = {
+    const provider: CodexCommanderProviderConfig = {
       ...providerConfigSeed(entry!),
       apiKey: "user-secret-key",
     };
@@ -72,7 +72,7 @@ describe("opencode-free provider", () => {
   });
 
   test("the provider client marker still applies when a user apiKey is present", () => {
-    const provider: OcxProviderConfig = {
+    const provider: CodexCommanderProviderConfig = {
       ...providerConfigSeed(entry!),
       apiKey: "user-secret-key",
     };
@@ -91,7 +91,7 @@ describe("opencode-free provider", () => {
   });
 
   test("DeepSeek Free preserves reasoning content for tool-call history", () => {
-    const provider: OcxProviderConfig = providerConfigSeed(entry!);
+    const provider: CodexCommanderProviderConfig = providerConfigSeed(entry!);
     const request = adapterRequest("deepseek-v4-flash-free");
     const body = JSON.parse(createOpenAIChatAdapter(provider).buildRequest(request).body as string) as {
       messages: Array<Record<string, unknown> & { reasoning_content?: string }>;
@@ -101,8 +101,8 @@ describe("opencode-free provider", () => {
   });
 
   test("Zen-bound tool schemas are normalized to an object root", () => {
-    const provider: OcxProviderConfig = providerConfigSeed(entry!);
-    const request: OcxParsedRequest = {
+    const provider: CodexCommanderProviderConfig = providerConfigSeed(entry!);
+    const request: CodexCommanderParsedRequest = {
       modelId: "deepseek-v4-flash-free",
       stream: false,
       context: {

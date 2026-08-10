@@ -14,14 +14,14 @@ import {
 } from "./runtime-api";
 
 const USAGE = `Usage:
-  ocx models live [--provider <name>] [--json]
-  ocx models edit <custom-id> [--model-id <id>] [--display-name <name|->]
+  ccx models live [--provider <name>] [--json]
+  ccx models edit <custom-id> [--model-id <id>] [--display-name <name|->]
       [--context-window <tokens|0>] [--modalities <text,image,audio|->] [--json]
-  ocx models <enable|disable> <provider/model|native-model> [--native] [--json]
-  ocx models provider <name> <on|off> [--json]
-  ocx models selected <provider> [--set <id,id...>|--clear] [--json]
-  ocx models context <status|value <tokens>|provider <name> <on|off>|all <on|off>> [--json]
-  ocx models shadow <status|set> [model|-] [--enabled <on|off>] [--json]`;
+  ccx models <enable|disable> <provider/model|native-model> [--native] [--json]
+  ccx models provider <name> <on|off> [--json]
+  ccx models selected <provider> [--set <id,id...>|--clear] [--json]
+  ccx models context <status|value <tokens>|provider <name> <on|off>|all <on|off>> [--json]
+  ccx models shadow <status|set> [model|-] [--enabled <on|off>] [--json]`;
 
 type ModelRow = {
   provider?: string;

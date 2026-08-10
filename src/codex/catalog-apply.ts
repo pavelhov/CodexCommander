@@ -73,7 +73,7 @@ function syncResultFailed(result: CodexSyncResult | undefined): boolean {
   return !result.ok
     || result.status === "refused"
     || (result.warning !== undefined && result.warning.length > 0)
-    || result.catalogQuality === "native-only";
+    || (result.catalogQuality === "native-only" && result.catalogWritten !== true);
 }
 
 function unknownCatalogState(): CodexAppServerCatalogStatus {
@@ -154,13 +154,13 @@ function fixedMessage(options: {
 /**
  * Apply the on-disk Codex catalog, classify long-lived workers, and terminate
  * only workers proven stale. This is the implementation behind the fixed
- * macOS helper action; it never starts, stops, or restarts the OpenCodex proxy.
+ * macOS helper action; it never starts, stops, or restarts the CodexCommander proxy.
  */
 export async function applyCodexCatalog(
   deps: ApplyCodexCatalogDeps = defaultDeps,
 ): Promise<ApplyCodexCatalogLifecycleResult> {
   const live = await deps.findLiveProxy().catch(() => null);
-  // This fixed app action is offered only from a healthy OpenCodex state. If
+  // This fixed app action is offered only from a healthy CodexCommander state. If
   // that identity vanished before confirmation, refuse without touching the
   // catalog or any Codex process; the standalone CLI keeps its own offline
   // synchronization behavior.
@@ -173,7 +173,7 @@ export async function applyCodexCatalog(
       changed: false,
       pid: null,
       port: null,
-      message: "OpenCodex is not running; the agent catalog was not changed.",
+      message: "CodexCommander is not running; the agent catalog was not changed.",
       errorCode: "SYNC_FAILED",
       catalogUpdated: false,
       codexRestartRequired: false,

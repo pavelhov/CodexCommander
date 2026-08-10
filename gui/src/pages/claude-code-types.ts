@@ -31,8 +31,8 @@ export interface ClaudeCodeState {
   enabled: boolean;
   /** Three-state intent. "auto" resolves from detected Claude auth on every launch. */
   authMode: "auto" | "subscription" | "proxy";
-  /** Resolved: does the opencodex dummy marker get injected. Not a native-auth claim. */
-  markerMode?: "proxy" | "subscription";
+  /** Resolved: does the CodexCommander dummy marker get injected. Not a native-auth claim. */
+  markerMode: "proxy" | "subscription";
   authModeOrigin?: "manual" | "auto-present" | "auto-absent" | "auto-unknown";
   authFoundBy?: string;
   authDetectionUnknown?: boolean;
@@ -43,13 +43,10 @@ export interface ClaudeCodeState {
   autoConnectSupported: boolean;
   systemEnv: boolean;
   fastMode: boolean | null;
-  /** Legacy config override (no GUI control anymore) — still disables auto-context when hand-set. */
-  maxContextTokens: number | null;
   autoContext: boolean;
   autoCompactWindow: number | null;
   injectAgents: boolean;
   smallFastModel: string;
-  tierModels?: { haiku?: string };
   effectiveModelEnv: Record<string, string>;
   available: string[];
   aliases: { id: string; display_name: string }[];

@@ -1,5 +1,5 @@
 /**
- * Render-state classification for data surfaces (WP2 / 010_loading_contract.md).
+ * Render-state classification for data surfaces.
  *
  * Request ownership stays in `client-resource`; this module only translates a store snapshot
  * into the three decisions a page actually makes: replace the content with a skeleton, show

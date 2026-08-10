@@ -1,17 +1,17 @@
 ---
 title: Client Apps
-description: Connect OpenCodex to Codex, Claude Code, Grok Build, OpenCode, Pi, Hermes, OpenClaw, Kimi Code and Gajae Code without mixing client setup with provider credentials.
+description: Connect CodexCommander to Codex, Claude Code, Grok Build, OpenCode, Pi, Hermes, OpenClaw, Kimi Code and Gajae Code without mixing client setup with provider credentials.
 ---
 
 The dashboard calls this area **Client Apps**. It answers “where do I work?” while
 **Providers** answers “where does model access come from?” and **API Access** manages
-credentials that a client uses to reach the OpenCodex proxy.
+credentials that a client uses to reach the CodexCommander proxy.
 
 | Area | Owns |
 | --- | --- |
 | **Providers** | Upstream accounts, OAuth logins, API keys, subscription gateways and local model servers |
 | **Models** | The enabled/visible catalog exported through the proxy |
-| **Routing** | How a request is resolved after it reaches OpenCodex |
+| **Routing** | How a request is resolved after it reaches CodexCommander |
 | **Client Apps** | Codex App/CLI/SDK, Claude Code/Desktop, Grok Build, OpenCode and other local clients |
 | **API Access** | Proxy access keys for clients; never upstream provider credentials |
 
@@ -22,25 +22,25 @@ catalog and a selected-client detail pane.
 :::note[OpenCode is not OpenCode Go]
 **OpenCode** is a client app. **OpenCode Go** is a paid model provider and is added under
 Providers. OpenCode Go currently uses the API key issued by the OpenCode console; the
-OpenCodex registry does not expose an OpenCode Go OAuth login. **OpenCode Free** is a
+CodexCommander registry does not expose an OpenCode Go OAuth login. **OpenCode Free** is a
 separate keyless provider preset.
 :::
 
-For the five shared file-managed clients, Client Apps writes OpenCodex's provider block
+For the five shared file-managed clients, Client Apps writes CodexCommander's provider block
 into the client's own config file and removes it again through the same reversible
 writer. Each has a switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
-| Pi | `~/.pi/agent/models.json` | JSON | new sessions | `OPENCODEX_API_KEY` |
-| Hermes | `~/.hermes/config.yaml` | YAML | new sessions | `OPENCODEX_HERMES_API_KEY` |
-| OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | immediately, on a running gateway | `OPENCODEX_OPENCLAW_API_KEY` |
+| Pi | `~/.pi/agent/models.json` | JSON | new sessions | `CODEXCOMMANDER_API_KEY` |
+| Hermes | `~/.hermes/config.yaml` | YAML | new sessions | `CODEXCOMMANDER_HERMES_API_KEY` |
+| OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | immediately, on a running gateway | `CODEXCOMMANDER_OPENCLAW_API_KEY` |
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | on restart, or `/reload` | loopback placeholder |
-| Gajae Code | `~/.gjc/agent/models.yml` | YAML | new sessions, or when you open `/model` |`OPENCODEX_GAJAE_API_KEY` |
+| Gajae Code | `~/.gjc/agent/models.yml` | YAML | new sessions, or when you open `/model` |`CODEXCOMMANDER_GAJAE_API_KEY` |
 
 OpenCode has its own detail flow because it needs stronger persistence semantics than
 the shared switch. It resolves the active global `opencode.jsonc` or `opencode.json`,
-owns only `provider.opencodex`, stores the proxy admission token in protected OpenCodex
+owns only `provider.codexcommander`, stores the proxy admission token in protected CodexCommander
 state, and writes a `{file:…}` reference instead of embedding the token. The page also
 offers auto-connect, one-click Desktop launch, safe refresh, and restore. Restore is
 byte-exact while the file is untouched and becomes provider-only after unrelated user
@@ -54,22 +54,22 @@ OpenClaw has several, and they do different jobs. `OPENCLAW_CONFIG_PATH` selects
 file; `OPENCLAW_STATE_DIR`, `OPENCLAW_PROFILE` and `OPENCLAW_HOME` select the state
 directory, which is also what detection looks at — so a profile or relocated home
 still reads as installed, while a config-path override moves only the file. If you
-are still on the older `.clawdbot` layout, that is found too: the modern directory
-wins when it exists, and the legacy one is used when it is the only one there.
+use the `.clawdbot` layout, that is found too: the modern directory wins when it exists, and
+`.clawdbot` is used when it is the only one there.
 
 These must be **absolute paths** or start with `~`. A relative one is refused rather
 than resolved, because it would mean whatever directory each process happened to
 start in — and that path is stored with the backup, so it has to name the same file
 tomorrow as it did today.
 
-opencodex reads these from its own environment. If your gateway runs with a profile
-or a relocated home, start opencodex with the same variables set, or it will
+CodexCommander reads these from its own environment. If your gateway runs with a profile
+or a relocated home, start CodexCommander with the same variables set, or it will
 correctly follow a different installation.
 
 ## The other four surfaces use different controls
 
-**API Access** manages opencodex's own client-facing credentials and is not a client at
-all. **Codex CLI** is wired by the proxy service itself — starting opencodex applies it,
+**API Access** manages CodexCommander's own client-facing credentials and is not a client at
+all. **Codex CLI** is wired by the proxy service itself — starting CodexCommander applies it,
 stopping it restores native routing — so there is no per-file switch. **Claude** keeps
 its own enable flag and Desktop's Save/Apply flow, and **Grok Build** keeps its
 select-then-apply model fence. Those semantics predate this catalog and are unchanged.
@@ -77,14 +77,14 @@ select-then-apply model fence. Those semantics predate this catalog and are unch
 ## Which models each client receives
 
 Client Apps does not create a second model catalog. Each integration consumes the
-enabled, visible OpenCodex catalog, with the client-specific encoding it requires:
+enabled, visible CodexCommander catalog, with the client-specific encoding it requires:
 
 - Codex App, CLI and SDK read the shared Codex catalog.
 - Claude Code 2.1.129+ discovers the gateway catalog through `/v1/models`; older builds
   can still use routed ids through `/model` or environment overrides.
-- Grok Build's managed fence is regenerated from the visible catalog when OpenCodex
+- Grok Build's managed fence is regenerated from the visible catalog when CodexCommander
   starts/ensures, and can be refreshed after catalog changes.
-- `ocx opencode` generates OpenCode's runtime provider block from the visible catalog on
+- `ccx opencode` generates OpenCode's runtime provider block from the visible catalog on
   every launch. A block applied to disk is a snapshot and must be refreshed after model
   visibility changes.
 
@@ -104,7 +104,7 @@ always recoverable:
 - Ten backups are kept per client. Beyond that, the oldest snapshot files are removed
   and their history rows read **Backup expired**.
 
-Disable removes only the entries opencodex recorded as its own. If your file changed
+Disable removes only the entries CodexCommander recorded as its own. If your file changed
 after we wrote it, the switch locks and disable refuses rather than guessing which
 edits were yours.
 
@@ -125,18 +125,18 @@ disk will have moved. Editing that file by hand still works; it is only our
 automatic rewrite that declines.
 
 **Pi, Kimi Code and Gajae Code only work against a loopback bind.** None of their config
-schemas has a place for the `x-opencodex-api-key` header that a non-loopback bind
+schemas has a place for the `x-codexcommander-api-key` header that a non-loopback bind
 requires, so a generated config would simply be rejected — and writing one by hand does
 not help, because there is nowhere in the file to put the header either. Reaching a
-remote opencodex from these clients is not supported directly; give them loopback access
+remote CodexCommander from these clients is not supported directly; give them loopback access
 instead, through an SSH tunnel or a local forwarder that adds the header.
 
 **Kimi Code cannot hold an environment reference,** so its config carries an
-`opencodex-loopback` placeholder rather than a key. No real credential is ever written
+`codexcommander-loopback` placeholder rather than a key. No real credential is ever written
 into any client config.
 
-**For `ocx opencode`, the launcher's provider block wins.** That launcher injects
-`provider.opencodex` through `OPENCODE_CONFIG_CONTENT`, which outranks the same entry on
+**For `ccx opencode`, the launcher's provider block wins.** That launcher injects
+`provider.codexcommander` through `OPENCODE_CONFIG_CONTENT`, which outranks the same entry on
 disk — the rest of your opencode config still applies as usual. The switch here is what
 matters when you launch `opencode` directly.
 
@@ -145,17 +145,13 @@ matters when you launch `opencode` directly.
 The same operations are available headlessly:
 
 ```bash
-ocx integration client status
-ocx integration client enable --client hermes
-ocx integration client disable --client hermes
-ocx integration client history --client hermes
-ocx integration client restore --op <opId> [--confirm-drift]
+ccx integration client status
+ccx integration client enable --client hermes
+ccx integration client disable --client hermes
+ccx integration client history --client hermes
+ccx integration client restore --op <opId> [--confirm-drift]
 ```
 
 `--confirm-drift` is never assumed. If the file changed after the operation you are
 restoring, the command refuses and tells you, because replacing your newer edits is your
 decision to make.
-
-Client details were verified against each project's own configuration format; see the
-research notes in `devlog/_fin/260802_client_toggle_api/002_client_toggle_matrix.md`
-for what was checked and when.

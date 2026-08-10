@@ -6,13 +6,13 @@ import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, isRealBunBinary, bundledB
 
 // realpath the temp root: on macOS /var is a symlink to /private/var, so a path built
 // from mkdtemp compares unequal to the same path resolved through process.cwd().
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "ocx-bun-runtime-")));
-const previousOverride = process.env.OPENCODEX_BUN_PATH;
+const tmp = realpathSync(mkdtempSync(join(tmpdir(), "ccx-bun-runtime-")));
+const previousOverride = process.env.CCX_BUN_PATH;
 const previousRuntimeSource = process.env[BUN_RUNTIME_SOURCE_ENV];
 const previousRuntimePath = process.env[BUN_RUNTIME_PATH_ENV];
 afterEach(() => {
-  if (previousOverride === undefined) delete process.env.OPENCODEX_BUN_PATH;
-  else process.env.OPENCODEX_BUN_PATH = previousOverride;
+  if (previousOverride === undefined) delete process.env.CCX_BUN_PATH;
+  else process.env.CCX_BUN_PATH = previousOverride;
   if (previousRuntimeSource === undefined) delete process.env[BUN_RUNTIME_SOURCE_ENV];
   else process.env[BUN_RUNTIME_SOURCE_ENV] = previousRuntimeSource;
   if (previousRuntimePath === undefined) delete process.env[BUN_RUNTIME_PATH_ENV];
@@ -54,35 +54,35 @@ describe("bundledBunPath / durableBunPath", () => {
     writeFileSync(real, Buffer.alloc(1_000_000));
     writeFileSync(stub, "stub");
 
-    process.env.OPENCODEX_BUN_PATH = stub;
+    process.env.CCX_BUN_PATH = stub;
     expect(durableBunRuntime().source).not.toBe("override");
 
-    process.env.OPENCODEX_BUN_PATH = real;
+    process.env.CCX_BUN_PATH = real;
     delete process.env[BUN_RUNTIME_SOURCE_ENV];
     delete process.env[BUN_RUNTIME_PATH_ENV];
     expect(durableBunRuntime().path).not.toBe(real);
     expect(durableBunRuntime().source).not.toBe("override");
-    if (previousOverride === undefined) delete process.env.OPENCODEX_BUN_PATH;
-    else process.env.OPENCODEX_BUN_PATH = previousOverride;
+    if (previousOverride === undefined) delete process.env.CCX_BUN_PATH;
+    else process.env.CCX_BUN_PATH = previousOverride;
   });
 
   it("preserves a launcher-selected runtime and ignores a later relative override", () => {
     const launcherCwd = join(tmp, "launcher-cwd");
     const real = join(launcherCwd, "relative-bun.exe");
     const previousCwd = process.cwd();
-    const inheritedOverride = process.env.OPENCODEX_BUN_PATH;
+    const inheritedOverride = process.env.CCX_BUN_PATH;
     mkdirSync(launcherCwd, { recursive: true });
     writeFileSync(real, Buffer.alloc(1_000_000));
 
     try {
       process.chdir(launcherCwd);
-      process.env.OPENCODEX_BUN_PATH = "  relative-bun.exe  ";
+      process.env.CCX_BUN_PATH = "  relative-bun.exe  ";
       process.env[BUN_RUNTIME_SOURCE_ENV] = "override";
       process.env[BUN_RUNTIME_PATH_ENV] = process.execPath;
       expect(durableBunRuntime()).toEqual({
         path: process.execPath,
         source: "override",
-        overrideEnv: "OPENCODEX_BUN_PATH",
+        overrideEnv: "CCX_BUN_PATH",
       });
       expect(durableBunPath()).toBe(process.execPath);
     } finally {
@@ -91,8 +91,8 @@ describe("bundledBunPath / durableBunPath", () => {
       else process.env[BUN_RUNTIME_SOURCE_ENV] = previousRuntimeSource;
       if (previousRuntimePath === undefined) delete process.env[BUN_RUNTIME_PATH_ENV];
       else process.env[BUN_RUNTIME_PATH_ENV] = previousRuntimePath;
-      if (inheritedOverride === undefined) delete process.env.OPENCODEX_BUN_PATH;
-      else process.env.OPENCODEX_BUN_PATH = inheritedOverride;
+      if (inheritedOverride === undefined) delete process.env.CCX_BUN_PATH;
+      else process.env.CCX_BUN_PATH = inheritedOverride;
     }
   });
 
@@ -105,8 +105,8 @@ describe("bundledBunPath / durableBunPath", () => {
   });
 
   it("durableBunPath returns the bundled path when present, else process.execPath", () => {
-    const inheritedOverride = process.env.OPENCODEX_BUN_PATH;
-    delete process.env.OPENCODEX_BUN_PATH;
+    const inheritedOverride = process.env.CCX_BUN_PATH;
+    delete process.env.CCX_BUN_PATH;
     try {
       const bundled = bundledBunPath();
       const durable = durableBunPath();
@@ -115,8 +115,8 @@ describe("bundledBunPath / durableBunPath", () => {
       if (bundled) expect(durable).toBe(bundled);
       else expect(durable).toBe(process.execPath);
     } finally {
-      if (inheritedOverride === undefined) delete process.env.OPENCODEX_BUN_PATH;
-      else process.env.OPENCODEX_BUN_PATH = inheritedOverride;
+      if (inheritedOverride === undefined) delete process.env.CCX_BUN_PATH;
+      else process.env.CCX_BUN_PATH = inheritedOverride;
     }
   });
 });
@@ -155,11 +155,11 @@ describe("reportedBunRuntimeSource (#848 launch-time provenance)", () => {
   });
 
   it("does not fall back to the current environment when the marker is missing", () => {
-    const inherited = process.env.OPENCODEX_BUN_PATH;
+    const inherited = process.env.CCX_BUN_PATH;
     const real = join(tmp, "provenance-bun.exe");
     mkdirSync(join(tmp), { recursive: true });
     writeFileSync(real, "x".repeat(2 * 1024 * 1024));
-    process.env.OPENCODEX_BUN_PATH = real;
+    process.env.CCX_BUN_PATH = real;
     try {
       // The durable selector ignores this late value, and the reporter must also
       // stay unknown without a source/path pair naming the running executable.
@@ -168,8 +168,8 @@ describe("reportedBunRuntimeSource (#848 launch-time provenance)", () => {
       expect(durableBunRuntime().source).not.toBe("override");
       expect(reportedBunRuntimeSource({})).toBeUndefined();
     } finally {
-      if (inherited === undefined) delete process.env.OPENCODEX_BUN_PATH;
-      else process.env.OPENCODEX_BUN_PATH = inherited;
+      if (inherited === undefined) delete process.env.CCX_BUN_PATH;
+      else process.env.CCX_BUN_PATH = inherited;
     }
   });
 });
@@ -181,7 +181,7 @@ describe("withProcessRuntimeProvenance (execPath relaunch paths)", () => {
   const executingOrigin = bundledBunPath() === process.execPath ? "bundled" : "process";
 
   it("records the executable's real origin when the relaunching parent carries no marker", () => {
-    // `ocx ensure`, GUI start, restart, and update-relaunch all re-exec
+    // `ccx ensure`, GUI start, restart, and update-relaunch all re-exec
     // process.execPath. Without this they would hand the daemon no provenance at
     // all, and doctor would report unknown for an origin the launcher knew.
     expect(withProcessRuntimeProvenance({})[BUN_RUNTIME_SOURCE_ENV]).toBe(executingOrigin);
@@ -198,9 +198,9 @@ describe("withProcessRuntimeProvenance (execPath relaunch paths)", () => {
     };
     expect(withProcessRuntimeProvenance(overrideEnv)[BUN_RUNTIME_SOURCE_ENV]).toBe("override");
 
-    // Crucially this holds with no OPENCODEX_BUN_PATH in the environment at all: an
+    // Crucially this holds with no CCX_BUN_PATH in the environment at all: an
     // installed service keeps neither the shell that installed it nor its variables.
-    expect(overrideEnv).not.toHaveProperty("OPENCODEX_BUN_PATH");
+    expect(overrideEnv).not.toHaveProperty("CCX_BUN_PATH");
 
     // The pair is re-stamped for the child, so the next relaunch can do the same check.
     expect(withProcessRuntimeProvenance(overrideEnv)[BUN_RUNTIME_PATH_ENV]).toBe(process.execPath);
@@ -225,8 +225,8 @@ describe("withProcessRuntimeProvenance (execPath relaunch paths)", () => {
   });
 
   it("leaves every other variable untouched", () => {
-    const result = withProcessRuntimeProvenance({ OCX_SERVICE: "1", PATH: "/usr/bin" });
-    expect(result.OCX_SERVICE).toBe("1");
+    const result = withProcessRuntimeProvenance({ CCX_SERVICE: "1", PATH: "/usr/bin" });
+    expect(result.CCX_SERVICE).toBe("1");
     expect(result.PATH).toBe("/usr/bin");
   });
 
@@ -237,7 +237,6 @@ describe("withProcessRuntimeProvenance (execPath relaunch paths)", () => {
       ["src/cli/proxy-lifecycle.ts", /spawnFn\(process\.execPath/g],
       ["src/cli/claude.ts", /spawn\(process\.execPath/g],
       ["src/server/management/system-restart.ts", /spawn\(process\.execPath/g],
-      ["src/update/index.ts", /spawn\(process\.execPath/g],
     ];
     for (const [relative, spawnPattern] of launchers) {
       const text = readFileSync(join(import.meta.dir, "..", relative), "utf8");

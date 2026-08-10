@@ -134,10 +134,10 @@ test("Client Apps explains the provider → proxy → client relationship", asyn
   await mountWorkspace();
   const text = container.textContent ?? "";
   expect(text).toContain("Provider accounts");
-  expect(text).toContain("OpenCodex proxy");
+  expect(text).toContain("CodexCommander proxy");
   expect(text).toContain("Client apps");
   expect(text).toContain("Configuration readiness, not inferred app activity.");
-  expect(text).toContain("15 in OpenCodex catalog");
+  expect(text).toContain("15 in CodexCommander catalog");
 });
 
 test("configured clients and available clients are separate, with OpenCode explained", async () => {
@@ -184,7 +184,7 @@ test("provider readiness excludes keyed providers with no key and preserves keyl
 test("failed model reads are unavailable while retaining explicitly stale counts", async () => {
   expect(deriveModelReadiness("failed-with-stale", 15)).toBe("unavailable");
   await mountWorkspace({ modelState: "unavailable" });
-  expect(container.textContent).toContain("15 in last-known OpenCodex catalog");
+  expect(container.textContent).toContain("15 in last-known CodexCommander catalog");
   const modelCheck = [...container.querySelectorAll(".client-apps-check-row")]
     .find(element => element.textContent?.includes("At least one model is visible"));
   expect(modelCheck?.textContent).toContain("Unavailable");
@@ -200,7 +200,7 @@ test("failed history reads show an error instead of a fresh empty state", async 
   expect(container.textContent).not.toContain("No apply history yet");
 });
 
-test("the legacy integration detail routes remain mounted behind Client Apps", async () => {
+test("the integration detail surfaces remain mounted behind Client Apps", async () => {
   const src = await Bun.file(new URL("../src/pages/Integrations.tsx", import.meta.url)).text();
   expect(src).toContain("<ClientAppsPage apiBase={apiBase} active={active} />");
   expect(src).toContain('<Claude apiBase={apiBase} active={active} />');

@@ -3,11 +3,11 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
-const ADMISSION_TOKEN = "ocx_test_integration_admission_secret";
+const ADMISSION_TOKEN = "ccx_test_integration_admission_secret";
 
-function config(): OcxConfig {
+function config(): CodexCommanderConfig {
   return {
     port: 10100,
     hostname: "127.0.0.1",
@@ -23,7 +23,7 @@ function config(): OcxConfig {
         modelContextWindows: { "gpt-5.6-luna": 1_000_000 },
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 describe("OpenCode integration management API", () => {
@@ -31,15 +31,15 @@ describe("OpenCode integration management API", () => {
   let previous: Record<string, string | undefined>;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "ocx-opencode-api-"));
+    root = mkdtempSync(join(tmpdir(), "ccx-opencode-api-"));
     previous = {
-      OPENCODEX_HOME: process.env.OPENCODEX_HOME,
+      CODEXCOMMANDER_HOME: process.env.CODEXCOMMANDER_HOME,
       XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
-      OPENCODEX_API_AUTH_TOKEN: process.env.OPENCODEX_API_AUTH_TOKEN,
+      CODEXCOMMANDER_API_AUTH_TOKEN: process.env.CODEXCOMMANDER_API_AUTH_TOKEN,
     };
-    process.env.OPENCODEX_HOME = join(root, "ocx-state");
+    process.env.CODEXCOMMANDER_HOME = join(root, "ccx-state");
     process.env.XDG_CONFIG_HOME = join(root, "xdg");
-    process.env.OPENCODEX_API_AUTH_TOKEN = ADMISSION_TOKEN;
+    process.env.CODEXCOMMANDER_API_AUTH_TOKEN = ADMISSION_TOKEN;
   });
 
   afterEach(() => {
@@ -87,8 +87,8 @@ describe("OpenCode integration management API", () => {
 
     const configPath = join(root, "xdg", "opencode", "opencode.json");
     const applied = readFileSync(configPath, "utf8");
-    const journal = readFileSync(join(root, "ocx-state", "integrations", "opencode", "journal.json"), "utf8");
-    expect(applied).toContain('"opencodex"');
+    const journal = readFileSync(join(root, "ccx-state", "integrations", "opencode", "journal.json"), "utf8");
+    expect(applied).toContain('"codexcommander"');
     expect(applied).toContain("{file:");
     expect(applied).not.toContain(ADMISSION_TOKEN);
     expect(journal).not.toContain(ADMISSION_TOKEN);

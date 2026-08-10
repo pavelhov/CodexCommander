@@ -5,7 +5,7 @@ import { describeImage } from "../src/vision/describe";
 import { parseRequest } from "../src/responses/parser";
 import { headersForCodexAuthContext } from "../src/codex/auth-context";
 import type { ProviderAdapter } from "../src/adapters/base";
-import type { OcxProviderConfig } from "../src/types";
+import type { CodexCommanderProviderConfig } from "../src/types";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
 
 function runWithWebSearch(
@@ -22,7 +22,7 @@ function runWithWebSearch(
 
 const originalFetch = globalThis.fetch;
 
-const forwardProvider: OcxProviderConfig = {
+const forwardProvider: CodexCommanderProviderConfig = {
   adapter: "openai-responses",
   baseUrl: "https://chatgpt.test",
   authMode: "forward",

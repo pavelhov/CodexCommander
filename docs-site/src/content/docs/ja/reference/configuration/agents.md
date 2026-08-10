@@ -3,7 +3,7 @@ title: エージェント構成
 description: マルチエージェント サーフェス、委任ガイダンス、優先モデル、フォールバック チェーン、ネイティブとデフォルトの同期、およびエフォート キャップ。
 ---
 
-エージェント設定は、どの Codex コラボレーション サーフェスをアドバタイズするか、および opencodex が委任された作業をどのようにガイド、ルーティング、制限するかを制御します。
+エージェント設定は、どの Codex コラボレーション サーフェスをアドバタイズするか、および CodexCommander が委任された作業をどのようにガイド、ルーティング、制限するかを制御します。
 
 ## エージェントフィールド
 
@@ -11,18 +11,18 @@ description: マルチエージェント サーフェス、委任ガイダンス
 | --- | --- | --- | --- |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` はすべてのカタログ モデルを v1 としてスタンプします。 `v2` はすべてのモデルを v2 としてスタンプします。 `default` はアップストリーム ピン (Sol/Terra v2、Luna v1) を復元し、それ以外の場合はネイティブの `multi_agent_v2` フラグに従います。新しいセッションに適用されます。 |
 | `multiAgentV2MessageDelivery?` | `"encrypted" \| "plaintext"` | `"encrypted"` | V2 親メッセージの配信方針です。`encrypted` は ChatGPT の予約済み暗号化契約を維持します。実験的な `plaintext` は以降の V2 親リクエストを複数プロバイダー互換にし、その親の全委任メッセージを平文にします。ルーティングされた親のメッセージ呼び出しにも Codex の平文マーカーを付与します。変更後は新しいセッションを開始してください。 |
-| `subagentModels?` | `string[]` | `gpt-5.5`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.4-mini` | 最大 5 つの bare native id、account-qualified `<selector>/<native-openai-model>` id、または routed `provider/model` id をサブエージェント ピッカーで優先公開します。ダッシュボードは account-qualified を含む設定済みの exact selector を保持し、保存された項目のうち実際に公開されたものと除外されたものを表示します。現在のカタログにない選択には `ocx agent subagents set` を使用するか、設定を直接編集してください。明示的な空リストも保持されます。 |
+| `subagentModels?` | `string[]` | `gpt-5.5`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.4-mini` | 最大 5 つの bare native id、account-qualified `<selector>/<native-openai-model>` id、または routed `provider/model` id をサブエージェント ピッカーで優先公開します。ダッシュボードは account-qualified を含む設定済みの exact selector を保持し、保存された項目のうち実際に公開されたものと除外されたものを表示します。現在のカタログにない選択には `ccx agent subagents set` を使用するか、設定を直接編集してください。明示的な空リストも保持されます。 |
 | `injectionModel?` | `string` | — |プロキシ作成の v2 委任ガイダンスで使用される、優先されるネイティブまたはルーティングされたサブエージェント モデル。 |
 | `injectionEffort?` | `string` | — |優先努力 (`low` ～ `ultra`)。`injectionModel` でのみ意味があります。 |
 | `injectionPrompt?` | `string` | — | 組み込みの v2 ガイダンス本文を置き換えます。`{{model}}`、`{{effort}}`、`{{roster}}`、`{{fallback}}`をサポートします。`injectionModel` が設定されていればカスタムプロンプトが生成されます。 |
-| `multiAgentGuidanceEnabled?` | `boolean` | `true` | opencodex が作成した v1/v2 開発者ガイダンスのみを制御します。ネイティブ エージェントのデフォルト、ツール、ルーティング、ロスター、またはエフォート キャップは変更されません。 |
+| `multiAgentGuidanceEnabled` | `boolean` | `true` | CodexCommander が作成した v1/v2 開発者ガイダンスのみを制御します。ネイティブ エージェントのデフォルト、ツール、ルーティング、ロスター、またはエフォート キャップは変更されません。 |
 | `syncCodexSubagentDefaults?` | `boolean` | `false` |同期/再起動中に、Codex のネイティブ デフォルトとして `injectionModel` およびオプションの `injectionEffort` を書き込むようにオプトインします。 `injectionModel`が必要です。 |
 | `subagentModelFallback?` | `string[]` | `[]` |生成された子ターンの優先順位付きグローバル フォールバック モデル。 |
 | `subagentModelFallbackPollMs?` | `number` | `60000` |可用性プローブのキャッシュ間隔。 1000 ミリ秒未満の値はデフォルトに戻ります。 |
 | `effortCap?` | `string` | — | v2 のメイン ターンとマークされた子ターンの条件を満たすためのハード シーリング。 `low` ～ `ultra` を受け入れます。 |
 | `subagentEffortCap?` | `string` | — |スポーンされた子のターンのみの追加の上限。両方の上限が適用される場合は、低い方が優先されます。 |
 
-ダッシュボードまたは `ocx v2 status|on|off|mode <v1|default|v2>|threads <n>` でサーフェスを管理します。モードの変更は新しいセッションに適用されます。 `maxConcurrentThreadsPerSession` は `PUT /api/v2` フィールドであり、`config.json` キーではありません。 `ocx v2 threads <n>` は、v2 が有効になった後、Codex の `$CODEX_HOME/config.toml` の `[features.multi_agent_v2]` の下に `max_concurrent_threads_per_session` を書き込みます。
+ダッシュボードまたは `ccx v2 status|on|off|mode <v1|default|v2>|threads <n>` でサーフェスを管理します。モードの変更は新しいセッションに適用されます。 `maxConcurrentThreadsPerSession` は `PUT /api/v2` フィールドであり、`config.json` キーではありません。 `ccx v2 threads <n>` は、v2 が有効になった後、Codex の `$CODEX_HOME/config.toml` の `[features.multi_agent_v2]` の下に `max_concurrent_threads_per_session` を書き込みます。
 
 管理 API は、`GET`/`PUT /api/v2`、`/api/injection-model`、`/api/effort-caps`、`/api/subagent-models`、および `/api/subagent-model-fallback` を公開します。インジェクションモデルの更新は部分的です。カスタム プロンプトは、その API の `prompt` フィールドです。
 
@@ -48,7 +48,7 @@ V1 ガイダンスは、`max` または `ultra` でのみプロアクティブ �
 2. ロールレベル `model_fallback` から `$CODEX_HOME/agents/*.toml`;それから
 3. グローバル `subagentModelFallback` エントリ。
 
-opencodex は、無効、ルーティング不能、異常、冷却期間、またはクォータしきい値の候補をスキップします。可用性スナップショットは `subagentModelFallbackPollMs` に対してキャッシュされます。暗号化された子タスクは、チェーンを正規のネイティブ ChatGPT ターゲットに制限できます。暗号化されたペイロードを読み取ることができる人がいない場合、読み取り不可能な暗号文が別の場所にルーティングされる代わりに、リクエストは失敗します。
+CodexCommander は、無効、ルーティング不能、異常、冷却期間、またはクォータしきい値の候補をスキップします。可用性スナップショットは `subagentModelFallbackPollMs` に対してキャッシュされます。暗号化された子タスクは、チェーンを正規のネイティブ ChatGPT ターゲットに制限できます。暗号化されたペイロードを読み取ることができる人がいない場合、読み取り不可能な暗号文が別の場所にルーティングされる代わりに、リクエストは失敗します。
 
 ```json
 {
@@ -68,6 +68,6 @@ opencodex は、無効、ルーティング不能、異常、冷却期間、ま�
 
 キャップは v2 コラボレーション機能にのみ適用されます。メイン ターンは、そのツールが v2 を公開するときに資格を持ちますが、子ターンは、リーフ ツールがコラボレーションを公開しなくなった場合でも、`x-codex-turn-metadata` に正確な codex-rs `x-openai-subagent: collab_spawn` または `"subagent_kind": "thread_spawn"` マーカーが含まれるときに資格を持ちます。 V1 メイン ターン、`multiAgentMode: "v1"`、圧縮、レビュー、およびメモリ統合ターンはバイパス キャップです。
 
-キャップは労力を軽減するだけです。これらは、キャップまたはキャップの下で宣伝されている最も高い段にスナップします。モデルにエフォート制御がない場合、またはサポートされているラングフィットがない場合、opencodex はエフォートを削除し、プロバイダーのデフォルトを適用します。 `max` および `ultra` が受け入れられますが、ダッシュボードでは `low` から `xhigh` が提供されます。
+キャップは労力を軽減するだけです。これらは、キャップまたはキャップの下で宣伝されている最も高い段にスナップします。モデルにエフォート制御がない場合、またはサポートされているラングフィットがない場合、CodexCommander はエフォートを削除し、プロバイダーのデフォルトを適用します。 `max` および `ultra` が受け入れられますが、ダッシュボードでは `low` から `xhigh` が提供されます。
 
 v1、デフォルト、および v2 の動作に関する初心者向けの説明については、「[サブエージェントサーフェス](/guides/sub-agent-surface/)」を参照してください。

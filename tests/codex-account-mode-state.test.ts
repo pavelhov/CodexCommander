@@ -17,7 +17,7 @@ describe("OpenAI provider account-mode presentation state", () => {
     expect(codexAccountModeState({ providers })).toBe("absent");
   });
 
-  test("does not revive a legacy Multi-only configuration", () => {
-    expect(codexAccountModeState({ providers: { "openai-multi": { disabled: false } } })).toBe("absent");
+  test("ignores unrelated provider configurations", () => {
+    expect(codexAccountModeState({ providers: { "custom-forward": { disabled: false } } })).toBe("absent");
   });
 });

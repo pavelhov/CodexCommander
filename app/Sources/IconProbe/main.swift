@@ -4,9 +4,23 @@ import AppKit
 import MenuBarCore
 import MenuBarUI
 
+func currentHealth(_ status: String) -> StartupHealth {
+    StartupHealth(
+        status: status, protection: "none", platform: "darwin",
+        routingKind: "codexcommander-local", routingInjected: true,
+        localRoutingDependency: true, autostartEnabled: false, serviceRunning: false,
+        serviceInstalled: false, serviceViable: false, serviceEnabled: false,
+        serviceStale: false, serviceConflict: false, serviceSupported: true,
+        shimInstalled: false, shimHealthy: false, shimCoverage: "none", rebootSafe: false,
+        diagnosticStale: false, recommendedCommand: nil,
+        commands: .init(installService: "ccx service install", repairService: "ccx service repair",
+                        installShim: "ccx codex-shim install", restoreNative: "ccx restore")
+    )
+}
+
 let states: [(String, ProxyState)] = [
-    ("protected", .running(StartupHealth(status: "protected"))),
-    ("at-risk", .running(StartupHealth(status: "at-risk"))),
+    ("protected", .running(currentHealth("protected"))),
+    ("at-risk", .running(currentHealth("at-risk"))),
     ("loading", .loading),
     ("stopped", .unreachable),
 ]

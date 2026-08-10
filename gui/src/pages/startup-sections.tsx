@@ -1,4 +1,4 @@
-import { useI18n, type TKey } from "../i18n/shared";
+import { useI18n } from "../i18n/shared";
 import { startupRiskDetailKey } from "../startup-health-ui";
 import { IconAlert, IconCheck, IconPower, IconTerminal } from "../icons";
 import type {
@@ -8,6 +8,7 @@ import type {
 } from "./startup-shared";
 import {
   PROTECTION_KEYS,
+  startupRoutingKey,
   STATUS_KEYS,
   SUMMARY_KEYS,
 } from "./startup-shared";
@@ -33,11 +34,7 @@ export function StartupHeroSection({
         : "startup-hero--native";
   const StatusIcon = failed || data.status === "at-risk" ? IconAlert : IconCheck;
 
-  const routingKey: TKey = data.routingKind === "opencodex-local" ? "startup.routing.proxy"
-    : data.routingKind === "custom-local" ? "startup.routing.customLocal"
-      : data.routingKind === "custom-remote" ? "startup.routing.customRemote"
-        : data.routingKind === "unknown" ? "startup.routing.unknown"
-          : "startup.routing.native";
+  const routingKey = startupRoutingKey(data.routingKind);
 
   return (
     <>

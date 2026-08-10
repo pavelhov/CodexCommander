@@ -6,7 +6,7 @@ description: Control how Codex spawns and manages sub-agents across all models.
 ## What sub-agents are
 
 A sub-agent is a separate Codex worker that the main agent can create for a focused task. It has its
-own context and tools, so several independent tasks can run in parallel. opencodex controls which
+own context and tools, so several independent tasks can run in parallel. CodexCommander controls which
 Codex collaboration surface exposes those workers, which models Codex offers for them, and how a
 failed model can fall back. It does not decide when your main agent must delegate.
 
@@ -34,7 +34,7 @@ The selected mode controls the `multi_agent_version` field in every catalog entr
 - **base** restores upstream pins. Unpinned entries follow the native `multi_agent_v2` feature flag.
 - **v2** stamps `multi_agent_version = "v2"` on every model.
 
-opencodex applies this as the final pass to both the live `/v1/models` catalog and the catalog synced
+CodexCommander applies this as the final pass to both the live `/v1/models` catalog and the catalog synced
 to disk. That is why a mode change affects newly created App, CLI, and TUI sessions consistently.
 
 For a v2 roster, eligibility has three states: an entry stamped `"v2"`, explicitly set to `null`, or
@@ -45,11 +45,11 @@ that the model belongs to the other collaboration surface.
 
 The dashboard's **Sub-agent delegation** controls three related settings:
 
-- `injectionModel` is the preferred worker model named in opencodex guidance.
+- `injectionModel` is the preferred worker model named in CodexCommander guidance.
 - `injectionEffort` is the optional `reasoning_effort` to request for that model.
 - `injectionPrompt` replaces the built-in v2 guidance text.
 
-`multiAgentGuidanceEnabled` defaults to on and is the master switch for opencodex-authored guidance
+`multiAgentGuidanceEnabled` defaults to on and is the master switch for CodexCommander-authored guidance
 on both surfaces. Turning it off suppresses both the v2 designation block and v1 proactive text.
 
 These are instructions to the main agent, not a proxy-side spawn router. On v2, a full-history fork
@@ -66,31 +66,31 @@ Custom `injectionPrompt` text can use all four placeholders:
 | `{{roster}}` | The resolved picker-visible, surface-compatible roster |
 | `{{fallback}}` | The configured global fallback guidance |
 
-The built-in v2 guidance has a 700-character budget. If it would exceed the budget, opencodex drops
+The built-in v2 guidance has a 700-character budget. If it would exceed the budget, CodexCommander drops
 the roster first rather than truncating the core spawn instructions. Built-in guidance fires only
 when a preferred model, eligible roster, or fallback chain resolves. A configured `injectionModel`
 is sufficient to render a custom prompt; if a bare value cannot resolve uniquely, `{{model}}`
 expands to an empty string.
 
-On v1, opencodex injects only the upstream-style proactive delegation guidance at `max` or `ultra`
+On v1, CodexCommander injects only the upstream-style proactive delegation guidance at `max` or `ultra`
 effort. It does not add a preferred model, roster, fallback list, or custom prompt on v1.
 
-The default-off `syncCodexSubagentDefaults` option is separate from guidance. When opencodex owns
+The default-off `syncCodexSubagentDefaults` option is separate from guidance. When CodexCommander owns
 active Codex routing, sync or restart can write the selected values as marker-owned
 `[agents] default_subagent_model` and `default_subagent_reasoning_effort` entries in Codex TOML.
-opencodex updates or removes only fields bearing its markers. If either target field is user-owned,
+CodexCommander updates or removes only fields bearing its markers. If either target field is user-owned,
 the pair is left unchanged rather than partially written; ambiguous TOML is rejected without a
 write. External provider managers and user-owned root routing also remain authoritative.
 
 ## Fallback chains
 
-For a spawned worker, opencodex builds this priority order:
+For a spawned worker, CodexCommander builds this priority order:
 
 1. The requested primary model.
 2. The role's `model_fallback` list from its `$CODEX_HOME/agents/*.toml` definition.
-3. The global `subagentModelFallback` list in opencodex config.
+3. The global `subagentModelFallback` list in CodexCommander config.
 
-Duplicate model ids are removed while preserving the first occurrence. During selection, opencodex
+Duplicate model ids are removed while preserving the first occurrence. During selection, CodexCommander
 skips candidates that are disabled, unroutable, backed by a disabled provider, marked unhealthy,
 inside a cooldown, missing a usable pooled Codex account, or beyond the configured quota threshold.
 Availability probes are cached for `subagentModelFallbackPollMs` (60 seconds by default).
@@ -104,9 +104,9 @@ normal heterogeneous fallback chain.
 
 Codex may send a v2 native-to-routed child task only as backend-encrypted `encrypted_content`. That
 payload can be read by the native ChatGPT backend, but not by an external provider. This is the
-known [#92 limitation](https://github.com/lidge-jun/opencodex/issues/92).
+known [#92 limitation](https://github.com/pavelhov/CodexCommander/issues/92).
 
-opencodex fails safely instead of forwarding an empty or unreadable task:
+CodexCommander fails safely instead of forwarding an empty or unreadable task:
 
 - A direct non-native route returns HTTP 400 with
   `error.code = "unreadable_encrypted_agent_task"` and does not echo the ciphertext.
@@ -119,18 +119,18 @@ opencodex fails safely instead of forwarding an empty or unreadable task:
 | Policy | Behavior |
 | --- | --- |
 | `"encrypted"` (default) | Preserves ChatGPT's reserved encrypted collaboration schema and the fail-closed behavior above. Use native ChatGPT workers or v1 for external workers. |
-| `"plaintext"` | Experimental mixed-provider V2 compatibility. For ChatGPT parents, OpenCodex presents a non-reserved plaintext collaboration namespace and restores the canonical namespace on the client-facing response. For routed parents, it marks only completed V2 message calls as plaintext. Both paths activate Codex's plaintext V2 handler, while its graph, mailbox, wait, follow-up, and completion lifecycle remain native. |
+| `"plaintext"` | Experimental mixed-provider V2 compatibility. For ChatGPT parents, CodexCommander presents a non-reserved plaintext collaboration namespace and restores the canonical namespace on the client-facing response. For routed parents, it marks only completed V2 message calls as plaintext. Both paths activate Codex's plaintext V2 handler, while its graph, mailbox, wait, follow-up, and completion lifecycle remain native. |
 
 The plaintext decision is made when the parent tool schema is created, before the worker model is
 known. Consequently **every** V2 `spawn_agent`, `send_message`, and `followup_task` message from that
-parent is plaintext, including messages to native ChatGPT workers. OpenCodex suppresses those
+parent is plaintext, including messages to native ChatGPT workers. CodexCommander suppresses those
 arguments from usage-debug body samples, but the trusted local Codex runtime and proxy necessarily
 handle the plaintext to deliver it.
 
 For a canonical ChatGPT parent, plaintext compatibility activates only with the complete recognized
-V2 schema. For a routed parent, OpenCodex marks only the exact `collaboration` message calls listed
+V2 schema. For a routed parent, CodexCommander marks only the exact `collaboration` message calls listed
 above; lifecycle and unrelated tools remain untouched. A partial, changed, malformed, or colliding
-native schema is not guessed: OpenCodex leaves it untouched and retains the encrypted fail-closed
+native schema is not guessed: CodexCommander leaves it untouched and retains the encrypted fail-closed
 guard. Delivery changes affect subsequent requests, so start a new session after saving instead of
 switching an active conversation in place.
 
@@ -157,27 +157,27 @@ has a stale catalog.
 
 ### CLI
 
-Use `ocx v2` for the collaboration surface and native feature settings:
+Use `ccx v2` for the collaboration surface and native feature settings:
 
 ```bash
-ocx v2 status
-ocx v2 mode v1
-ocx v2 mode default
-ocx v2 mode v2
-ocx v2 threads 8
+ccx v2 status
+ccx v2 mode v1
+ccx v2 mode default
+ccx v2 mode v2
+ccx v2 threads 8
 ```
 
-Use `ocx agent` for delegation, roster, effort-cap, and fallback settings:
+Use `ccx agent` for delegation, roster, effort-cap, and fallback settings:
 
 ```bash
-ocx agent status
-ocx agent injection set --model anthropic/claude-sonnet-5 --effort xhigh
-ocx agent subagents set gpt-5.6-sol,anthropic/claude-sonnet-5
-ocx agent fallback set gpt-5.4-mini,xai/grok-4.5 --poll-ms 60000
-ocx agent effort set --subagent max
+ccx agent status
+ccx agent injection set --model anthropic/claude-sonnet-5 --effort xhigh
+ccx agent subagents set gpt-5.6-sol,anthropic/claude-sonnet-5
+ccx agent fallback set gpt-5.4-mini,xai/grok-4.5 --poll-ms 60000
+ccx agent effort set --subagent max
 ```
 
-Pass `-` to clear a nullable `ocx agent injection` value, or use the relevant `clear` action for a
+Pass `-` to clear a nullable `ccx agent injection` value, or use the relevant `clear` action for a
 roster or fallback list. See the [CLI reference](/reference/cli/) for all command families.
 
 ### API
@@ -227,7 +227,7 @@ to v1. A `"v2"`, `null`, or absent surface value is eligible; a real `"v1"` pin 
 ### Do mode changes affect running sessions?
 
 No. Start a new Codex session after changing the mode. If a long-running App host still shows stale
-catalog state, run `ocx sync` and restart that Codex surface.
+catalog state, run `ccx sync` and restart that Codex surface.
 
 ### Can Sol V2 delegate to Kimi, Grok, or DeepSeek?
 
@@ -239,7 +239,7 @@ the native-only confidentiality contract, or use Classic v1 for the older cross-
 
 `injectionEffort` affects only delegated-worker guidance and, when explicitly enabled, native Codex
 sub-agent defaults. It does not change the parent session's effort. `ultra` is a client-facing top
-tier that Codex converts to `max`; opencodex then maps or clamps the value for the selected provider.
+tier that Codex converts to `max`; CodexCommander then maps or clamps the value for the selected provider.
 
 ### Context cap
 

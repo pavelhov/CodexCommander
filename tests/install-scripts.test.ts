@@ -1,10 +1,12 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Windows CI runners spawn Node/Bun child processes slowly ("Slow filesystem detected");
-// the package-main import test measured 9.4s there vs bun's 5s default. Same remedy as
-// codex-history-provider / cursor-mcp-stdio.
+// the package-main import test measured 9.4s there vs bun's 5s default.
 setDefaultTimeout(30_000);
 
 const root = new URL("../", import.meta.url);
@@ -14,9 +16,10 @@ async function readText(path: string): Promise<string> {
   return await Bun.file(new URL(path, root)).text();
 }
 
-describe("install scripts", () => {
+describe("package launcher", () => {
   test("npm package main is a Node-safe wrapper while Bun keeps the TypeScript API", async () => {
     const pkg = JSON.parse(await readText("package.json")) as {
+      private?: boolean;
       main?: string;
       exports?: { "."?: { bun?: string; default?: string } };
       dependencies?: Record<string, string>;
@@ -25,6 +28,7 @@ describe("install scripts", () => {
       files?: string[];
     };
 
+    expect(pkg.private).toBe(true);
     expect(pkg.main).toBe("./bin/package-main.mjs");
     expect(pkg.exports?.["."]?.bun).toBe("./src/index.ts");
     expect(pkg.exports?.["."]?.default).toBe("./bin/package-main.mjs");
@@ -38,14 +42,13 @@ describe("install scripts", () => {
     expect(pkg.scripts?.prepack).toBe("bun run prepare:package");
     expect(pkg.files).toContain("assets/banner.png");
     expect(pkg.files).toContain("assets/architecture.png");
-    expect(pkg.files).toContain("assets/claude-code-models.gif");
     expect(pkg.files).toContain("assets/codex-app-picker.png");
   });
 
   test("Node can import the package main without executing the CLI", () => {
     const result = spawnSync("node", [
       "-e",
-      "import('./bin/package-main.mjs').then(m => { if (m.cliCommand !== 'ocx') process.exit(2); })",
+      "import('./bin/package-main.mjs').then(m => { if (m.cliCommand !== 'ccx' || m.packageName !== 'codexcommander') process.exit(2); })",
     ], {
       cwd: repoRoot,
       encoding: "utf8",
@@ -61,58 +64,55 @@ describe("install scripts", () => {
 
     expect(npmignore).toContain("gui/README.md");
     expect(guiNpmignore).toContain("README.md");
-    expect(guiReadme).toContain("opencodex dashboard");
+    expect(guiReadme).toContain("CodexCommander dashboard");
     expect(guiReadme).toContain("bun run dev:proxy");
     expect(guiReadme).toContain("bun run dev:gui");
     expect(guiReadme).not.toContain("This template provides a minimal setup");
   });
 
-  test("POSIX installer matches the Node launcher prerequisite", async () => {
-    const script = await readText("scripts/install.sh");
+  test("Node launcher has no package-registry self-update boundary", async () => {
+    const launcher = await readText("bin/ccx.mjs");
 
-    expect(script).toContain("Node.js 18+ is required");
-    expect(script).toContain("npm install -g @bitkyc08/opencodex");
-    expect(script).toContain("command -v ocx");
-    expect(script).toContain("ocx help");
-    expect(script).not.toContain("bun install -g @bitkyc08/opencodex");
-    expect(script).not.toContain("bun.sh/install");
+    expect(launcher).not.toContain("npmInvocation");
+    expect(launcher).not.toContain("runNpmSelfUpdate");
+    expect(launcher).not.toContain('process.argv[2] === "update"');
+    expect(launcher).not.toContain('["view",');
+    expect(launcher).not.toContain('["install", "-g",');
+    expect(launcher).not.toContain("src/update/");
+    expect(launcher).not.toContain("codex-history-backup-");
+    expect(launcher).not.toContain("resume history");
+    expect(launcher.match(/spawnSync\(process\.execPath/g)).toHaveLength(1);
   });
 
-  test("PowerShell installer matches the Node launcher prerequisite", async () => {
-    const script = await readText("scripts/install.ps1");
+  test("an update argv is forwarded as an unknown CLI command without touching runtime state", () => {
+    const home = mkdtempSync(join(tmpdir(), "ccx-no-updater-"));
+    const stateDir = join(home, "state");
+    const sentinel = join(stateDir, "codexcommander.pid");
+    try {
+      mkdirSync(stateDir, { recursive: true });
+      writeFileSync(sentinel, "do-not-stop\n", { encoding: "utf8", flag: "wx" });
+      for (const argv of [["update"], ["update", "--help"]]) {
+        const result = spawnSync("node", [fileURLToPath(new URL("bin/ccx.mjs", root)), ...argv], {
+          cwd: repoRoot,
+          encoding: "utf8",
+          timeout: 30_000,
+          env: {
+            ...process.env,
+            HOME: home,
+            USERPROFILE: home,
+            CODEXCOMMANDER_HOME: stateDir,
+            CCX_BUN_PATH: process.execPath,
+          },
+        });
 
-    expect(script).toContain("Node.js 18+ is required");
-    expect(script).toContain("& $npm.Source install -g @bitkyc08/opencodex");
-    expect(script).toContain("$LASTEXITCODE");
-    expect(script).toContain("Get-Command ocx.cmd");
-    expect(script).toContain("Get-Command ocx");
-    expect(script).toContain("& $ocx.Source help");
-    expect(script).not.toContain("bun install -g @bitkyc08/opencodex");
-    expect(script).not.toContain("bun.sh/install.ps1");
-  });
-
-  test("Node launcher handles npm self-update before starting Bun", async () => {
-    const launcher = await readText("bin/ocx.mjs");
-
-    expect(launcher).toContain('process.argv[2] === "update"');
-    expect(launcher).toContain('["install", "-g", `${PKG}@${tag}`]');
-    expect(launcher).toContain('return String(currentVersion).includes("-preview.") ? "preview" : "latest"');
-    expect(launcher).toContain("!isBunGlobalInstall()");
-    expect(launcher).toContain("repairCodexShimIfNeeded()");
-    expect(launcher).toContain("runNpmSelfUpdate()");
-  });
-
-  test("release helper watches the workflow run it just dispatched", async () => {
-    const script = await readText("scripts/release.ts");
-
-    expect(script).toContain("waitForReleaseWorkflowRun");
-    // The invariant is that the dispatched run is located by workflow, branch
-    // and commit — not that the call is a shell string. Every external command
-    // now goes through the shared launcher as an argv array, because Bun.$
-    // resolved PATH itself and walked past the Windows `.cmd` test shims.
-    expect(script).toContain('"gh", "run", "list", "--workflow", "release.yml", "--branch"');
-    expect(script).toContain('"--commit"');
-    expect(script).toContain("createdAt,databaseId,headSha,status,url");
-    expect(script).toContain("await watchRun(releaseRun.databaseId)");
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("Unknown command: update");
+        expect(result.stdout).not.toContain("Updating");
+        expect(result.stderr).not.toContain("npm");
+        expect(existsSync(sentinel)).toBe(true);
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

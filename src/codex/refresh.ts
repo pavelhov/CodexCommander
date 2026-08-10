@@ -4,7 +4,7 @@ import type { ComboCatalogOmission } from "./catalog/aggregation";
 import type { CatalogQuality } from "./catalog/sync";
 import { CODEX_MODELS_CACHE_PATH } from "./paths";
 import { atomicWriteFile } from "../config";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 
 export interface CodexCatalogRefreshResult {
   added: number;
@@ -45,7 +45,7 @@ export function syncCodexModelsCacheFromCatalog(catalogPath: string): void {
  * inconsistent with the CLI models-manager cache path.
  */
 export async function refreshCodexModelCatalog(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   deps: RefreshDeps = defaultDeps,
 ): Promise<CodexCatalogRefreshResult> {
   const result = await deps.syncCatalogModels(config);

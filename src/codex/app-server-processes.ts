@@ -1,6 +1,6 @@
 /**
  * Detect / optionally terminate long-lived Codex app-server processes that keep an
- * in-memory model catalog after `ocx sync` rewrites on-disk files (#476).
+ * in-memory model catalog after `ccx sync` rewrites on-disk files (#476).
  *
  * Matching is intentionally narrow: require `app-server` as the Codex subcommand
  * (not merely as a substring in some later argument) or `codex-code-mode-host`.
@@ -13,7 +13,7 @@ import { isProcessAlive, waitForExit } from "../lib/process-control";
 import { readCodexCatalogPath } from "./catalog/parsing";
 
 export const STALE_CODEX_APP_SERVER_HINT =
-  "If Codex still shows an older model list, restart its long-lived app-server process after sync (ocx sync --restart-codex).";
+  "If Codex still shows an older model list, restart its long-lived app-server process after sync (ccx sync --restart-codex).";
 
 /** Attach the shared dashboard hint only after a catalog or models_cache write. */
 export function attachStaleAppServerHint<T extends {
@@ -330,7 +330,7 @@ export function listWindowsSnapshots(): ProcessSnapshot[] {
   // Codex candidates only: basename token codex / codex.exe / codex.cmd /
   // official target-triple binaries (optional closing quote after the
   // basename), or code-mode-host — not incidental substrings like a repo
-  // path with "opencodex".
+  // path with "codexcommander".
   const basenameMatch = powerShellSingleQuotedIgnoreCaseMatch(WINDOWS_CODEX_BASENAME_CANDIDATE_RE.source);
   const codeModeMatch = powerShellSingleQuotedIgnoreCaseMatch(WINDOWS_CODEX_CODE_MODE_HOST_CANDIDATE_RE.source);
   const psCommand = [
@@ -344,12 +344,12 @@ export function listWindowsSnapshots(): ProcessSnapshot[] {
     "} | ForEach-Object {",
     "  try {",
     "    $o=Invoke-CimMethod -InputObject $_ -MethodName GetOwner -ErrorAction Stop",
-    "    if($null -eq $o -or $o.ReturnValue -ne 0 -or [string]::IsNullOrWhiteSpace($o.User)){\"__OCX_ENUM_INCOMPLETE__\"; return}",
+    "    if($null -eq $o -or $o.ReturnValue -ne 0 -or [string]::IsNullOrWhiteSpace($o.User)){\"__CCX_ENUM_INCOMPLETE__\"; return}",
     "    $owner=if($o.Domain){\"$($o.Domain)\\$($o.User)\"}else{$o.User}",
     "    if($owner -ine $me){return}",
     "    $cmd=($_.CommandLine -replace \"`t\",\" \")",
     "    \"{0}`t{1}`t{2}\" -f $_.ProcessId, $cmd, $owner",
-    "  } catch { \"__OCX_ENUM_INCOMPLETE__\" }",
+    "  } catch { \"__CCX_ENUM_INCOMPLETE__\" }",
     "}",
   ].join("\n");
   // Top-level exec failure propagates (see listDarwinSnapshots note).
@@ -362,7 +362,7 @@ export function listWindowsSnapshots(): ProcessSnapshot[] {
     // A candidate whose owner could not be verified makes the whole
     // enumeration incomplete — the staleness collector must not read the
     // partial result as "nothing running".
-    if (line.trim() === "__OCX_ENUM_INCOMPLETE__") throw new Error("windows_enum_incomplete");
+    if (line.trim() === "__CCX_ENUM_INCOMPLETE__") throw new Error("windows_enum_incomplete");
     const tab = line.indexOf("\t");
     if (tab <= 0) continue;
     const tab2 = line.indexOf("\t", tab + 1);
@@ -421,7 +421,7 @@ export function formatStaleCodexAppServerWarning(
   return (
     `WARNING: ${processes.length} Codex app-server process(es) still running (PID${processes.length === 1 ? "" : "s"}: ${pids}). `
     + "Disk catalog/cache were updated, but Codex may keep showing the old model list until those processes restart. "
-    + "Re-run with `ocx sync --restart-codex` (or `ocx sync-cache --restart-codex`) to send SIGTERM only to matching app-server processes. "
+    + "Re-run with `ccx sync --restart-codex` (or `ccx sync-cache --restart-codex`) to send SIGTERM only to matching app-server processes. "
     + "Active turns may be interrupted."
   );
 }
@@ -569,7 +569,7 @@ const CATALOG_STATE_TTL_MS = 5_000;
 /**
  * Compare the on-disk catalog mtime against the start time of running Codex
  * app-servers (#857): a server that started before the catalog changed keeps
- * an in-memory copy that disagrees with what ocx advertises.
+ * an in-memory copy that disagrees with what ccx advertises.
  *
  * Cost note: a cold call synchronously runs the platform listing plus ONE
  * batched start-time query (hard bounds: ~5s+3s macOS, ~8s+5s Windows,
@@ -790,7 +790,7 @@ export function afterCatalogWriteHandleAppServers(
  *
  * - It never signals anything. Killing an app-server on an unattended boot would
  *   interrupt whatever turn the user has in flight. A human typing
- *   `ocx sync --restart-codex` is consenting to that; a login is not.
+ *   `ccx sync --restart-codex` is consenting to that; a login is not.
  * - It never warns about a merely-running app-server. It asks the mtime
  *   classifier whether one is actually stale, so a boot with Codex open and a
  *   current catalog stays quiet.

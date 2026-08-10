@@ -104,14 +104,14 @@ function rememberLarge(id: string, text: string, providers?: Parameters<typeof r
 }
 
 describe("Responses previous_response_id state", () => {
-  // Sandbox OPENCODEX_HOME: the state store now snapshots to disk, and these tests must never
-  // touch the real ~/.opencodex.
+  // Sandbox CODEXCOMMANDER_HOME: the state store now snapshots to disk, and these tests must never
+  // touch the real ~/.codexcommander.
   let home: string;
-  const priorHome = process.env["OPENCODEX_HOME"];
+  const priorHome = process.env["CODEXCOMMANDER_HOME"];
 
   beforeEach(() => {
-    home = mkdtempSync(join(tmpdir(), "ocx-state-test-"));
-    process.env["OPENCODEX_HOME"] = home;
+    home = mkdtempSync(join(tmpdir(), "ccx-state-test-"));
+    process.env["CODEXCOMMANDER_HOME"] = home;
     clearResponseStateMemoryForTests();
   });
 
@@ -123,8 +123,8 @@ describe("Responses previous_response_id state", () => {
     setResponseStateByteCapForTests(null);
     clearResponseStateForTests();
     rmSync(home, { recursive: true, force: true });
-    if (priorHome === undefined) delete process.env["OPENCODEX_HOME"];
-    else process.env["OPENCODEX_HOME"] = priorHome;
+    if (priorHome === undefined) delete process.env["CODEXCOMMANDER_HOME"];
+    else process.env["CODEXCOMMANDER_HOME"] = priorHome;
   });
 
   test("expands later input with stored prior input and output", () => {
@@ -657,7 +657,7 @@ describe("Responses previous_response_id state", () => {
 
   test("spill temp cleanup forgets successful ACL memos and retains failed removals", () => {
     const previousUsername = process.env.USERNAME;
-    process.env.USERNAME = "ocx-test-user";
+    process.env.USERNAME = "ccx-test-user";
     resetHardenedStateForTests();
     setPlatformForTests("win32");
     setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
@@ -850,12 +850,12 @@ describe("Responses previous_response_id state", () => {
     expect(row?.items).toBeUndefined();
   });
 
-  test("small entries retain the legacy v2 debounced snapshot representation", async () => {
-    rememberLarge("resp_legacy_small", "small");
+  test("small entries retain the compact current debounced snapshot representation", async () => {
+    rememberLarge("resp_current_small", "small");
     await flushResponseState();
     const snapshot = JSON.parse(readFileSync(join(home, "responses-state.json"), "utf8")) as { version: number; states: [string, Record<string, unknown>][] };
     expect(snapshot.version).toBe(2);
-    const row = snapshot.states.find(([id]) => id === "resp_legacy_small")?.[1];
+    const row = snapshot.states.find(([id]) => id === "resp_current_small")?.[1];
     expect(row).toMatchObject({ items: expect.any(Array) });
     expect(row?.kind).toBeUndefined();
     expect(row?.sizeBytes).toBeUndefined();
@@ -1057,7 +1057,7 @@ describe("Responses previous_response_id state", () => {
   test("persistent snapshot I/O failure does not schedule background retry passes", async () => {
     const blockedHome = join(home, "not-a-directory");
     writeFileSync(blockedHome, "file blocks config directory creation");
-    process.env["OPENCODEX_HOME"] = blockedHome;
+    process.env["CODEXCOMMANDER_HOME"] = blockedHome;
     rememberLarge("resp_persist_failure", "payload");
     expect(responseStatePersistPendingForTests()).toBe(true);
 
@@ -1239,7 +1239,7 @@ describe("Responses previous_response_id state", () => {
     const old = new Date(Date.now() - 20 * 60_000);
     utimesSync(tempPath, old, old);
     const previousUsername = process.env.USERNAME;
-    process.env.USERNAME = "ocx-test-user";
+    process.env.USERNAME = "ccx-test-user";
     resetHardenedStateForTests();
     setPlatformForTests("win32");
     setIcaclsRunnerForTests(() => ({ success: false, exitCode: null, timedOut: true, stdout: "" }));
@@ -1406,7 +1406,7 @@ describe("Responses previous_response_id state", () => {
       { type: "text_delta", text: "hi" },
       { type: "done" },
     ], "gpt-5.5");
-    rememberResponseState(firstBody, first, "cursor_conv_9");
+    rememberResponseState(firstBody, first, { cursor: { conversationId: "cursor_conv_9" } });
     await flushResponseState();
 
     // Simulate restart: wipe memory, keep the snapshot file.
@@ -1429,12 +1429,12 @@ describe("Responses previous_response_id state", () => {
   test("recovers only old response-state temps owned by dead processes", () => {
     const old = new Date(Date.now() - 60 * 60 * 1_000);
     const deadPid = process.pid === 4242 ? 4243 : 4242;
-    const stale = join(home, `responses-state.json.ocx.${deadPid}.1.tmp`);
-    const live = join(home, "responses-state.json.ocx.5252.2.tmp");
-    const current = join(home, `responses-state.json.ocx.${process.pid}.3.tmp`);
-    const young = join(home, "responses-state.json.ocx.6262.4.tmp");
-    const unrelated = join(home, "responses-state.json.ocx.7272.tmp");
-    const directory = join(home, "responses-state.json.ocx.8282.5.tmp");
+    const stale = join(home, `responses-state.json.ccx.${deadPid}.1.tmp`);
+    const live = join(home, "responses-state.json.ccx.5252.2.tmp");
+    const current = join(home, `responses-state.json.ccx.${process.pid}.3.tmp`);
+    const young = join(home, "responses-state.json.ccx.6262.4.tmp");
+    const unrelated = join(home, "responses-state.json.ccx.7272.tmp");
+    const directory = join(home, "responses-state.json.ccx.8282.5.tmp");
     for (const path of [stale, live, current, young, unrelated]) writeFileSync(path, "private state");
     mkdirSync(directory);
     for (const path of [stale, live, current, unrelated, directory]) utimesSync(path, old, old);
@@ -1452,7 +1452,7 @@ describe("Responses previous_response_id state", () => {
   test("load sweeps stale temps in a symlinked snapshot's real directory", () => {
     // Atomic writes place their temp beside the RESOLVED target, so a dotfiles-managed
     // config dir strands temps where a scan of the literal home would never find them.
-    const realDir = mkdtempSync(join(tmpdir(), "ocx-state-real-"));
+    const realDir = mkdtempSync(join(tmpdir(), "ccx-state-real-"));
     const realSnapshot = join(realDir, "responses-state.json");
     writeFileSync(realSnapshot, JSON.stringify({ version: 2, states: [] }));
     symlinkSync(realSnapshot, join(home, "responses-state.json"));
@@ -1473,7 +1473,7 @@ describe("Responses previous_response_id state", () => {
       }
     }
     expect(deadPid).toBeGreaterThan(0);
-    const stranded = join(realDir, `responses-state.json.ocx.${deadPid}.1.tmp`);
+    const stranded = join(realDir, `responses-state.json.ccx.${deadPid}.1.tmp`);
     writeFileSync(stranded, "private state");
     const old = new Date(Date.now() - 60 * 60 * 1_000);
     utimesSync(stranded, old, old);
@@ -1487,7 +1487,7 @@ describe("Responses previous_response_id state", () => {
 
   test("stale temp recovery is best-effort when unlink fails", () => {
     const deadPid = process.pid === 4242 ? 4243 : 4242;
-    const path = join(home, `responses-state.json.ocx.${deadPid}.1.tmp`);
+    const path = join(home, `responses-state.json.ccx.${deadPid}.1.tmp`);
     writeFileSync(path, "private state");
     const old = new Date(Date.now() - 60 * 60 * 1_000);
     utimesSync(path, old, old);
@@ -1503,8 +1503,8 @@ describe("Responses previous_response_id state", () => {
 
   test("stale temp recovery stops at injectable enumeration and cleanup caps", () => {
     const old = new Date(Date.now() - 60 * 60 * 1_000);
-    const first = "responses-state.json.ocx.7001.1.tmp";
-    const second = "responses-state.json.ocx.7002.2.tmp";
+    const first = "responses-state.json.ccx.7001.1.tmp";
+    const second = "responses-state.json.ccx.7002.2.tmp";
     for (const name of [first, second]) {
       const path = join(home, name);
       writeFileSync(path, "private state");
@@ -1540,7 +1540,7 @@ describe("Responses previous_response_id state", () => {
     expect(result).toEqual({ matched: 0, removed: 0, failed: 0, bytesRemoved: 0 });
   });
 
-  test("v1 Cursor snapshot migrates to versioned provider state", () => {
+  test("non-current snapshots are ignored", () => {
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, "responses-state.json"), JSON.stringify({
       version: 1,
@@ -1552,10 +1552,8 @@ describe("Responses previous_response_id state", () => {
       }]],
     }));
 
-    expect(previousResponseProviderState("resp_v1")).toEqual({
-      cursor: { conversationId: "cursor_v1", checkpointUsable: false },
-    });
-    expect(previousResponseConversationId("resp_v1")).toBe("cursor_v1");
+    expect(previousResponseProviderState("resp_v1")).toBeUndefined();
+    expect(previousResponseConversationId("resp_v1")).toBeUndefined();
   });
 
   test("persists provider-keyed Cursor and Kiro continuation state across restart", async () => {
@@ -1674,7 +1672,7 @@ describe("Responses previous_response_id state", () => {
       { type: "done" },
     ], "cursor/auto");
 
-    rememberResponseState(firstBody, first, "cursor_conversation_1");
+    rememberResponseState(firstBody, first, { cursor: { conversationId: "cursor_conversation_1" } });
 
     expect(previousResponseConversationId(first.id as string)).toBe("cursor_conversation_1");
   });
@@ -1687,7 +1685,7 @@ describe("Responses previous_response_id state", () => {
       { type: "done" },
     ], "cursor/auto");
 
-    rememberResponseState(firstBody, first, "cursor_conversation_1");
+    rememberResponseState(firstBody, first, { cursor: { conversationId: "cursor_conversation_1" } });
 
     // The conversation id MUST survive a tool-call response so the following tool-result turn
     // continues the SAME Cursor conversation. The Cursor checkpoint is not reusable (the agent turn
@@ -1708,7 +1706,7 @@ describe("Responses previous_response_id state", () => {
       { type: "text_delta", text: "post-compaction answer" },
       { type: "done" },
     ], "cursor/auto");
-    rememberResponseState(firstBody, first, conversationId);
+    rememberResponseState(firstBody, first, { cursor: { conversationId } });
 
     const tracker = createCursorContextUsageTracker();
     tracker.record(conversationId, 5_000);
@@ -1826,11 +1824,11 @@ describe("Responses previous_response_id state", () => {
 
 describe("Responses state admission boundary (oversized direct-spill)", () => {
   let home: string;
-  const priorHome = process.env["OPENCODEX_HOME"];
+  const priorHome = process.env["CODEXCOMMANDER_HOME"];
 
   beforeEach(() => {
-    home = mkdtempSync(join(tmpdir(), "ocx-state-admission-"));
-    process.env["OPENCODEX_HOME"] = home;
+    home = mkdtempSync(join(tmpdir(), "ccx-state-admission-"));
+    process.env["CODEXCOMMANDER_HOME"] = home;
     clearResponseStateMemoryForTests();
   });
 
@@ -1840,8 +1838,8 @@ describe("Responses state admission boundary (oversized direct-spill)", () => {
     setResponseSpillPayloadCapForTests(null);
     clearResponseStateForTests();
     rmSync(home, { recursive: true, force: true });
-    if (priorHome === undefined) delete process.env["OPENCODEX_HOME"];
-    else process.env["OPENCODEX_HOME"] = priorHome;
+    if (priorHome === undefined) delete process.env["CODEXCOMMANDER_HOME"];
+    else process.env["CODEXCOMMANDER_HOME"] = priorHome;
   });
 
   function completedResponse(id: string, text: string) {

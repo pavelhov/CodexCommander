@@ -1,9 +1,9 @@
 import type { ProviderAdapter } from "../../src/adapters/base";
 import type { CursorTransportFactoryInput } from "../../src/adapters/cursor/transport";
-import type { OcxParsedRequest } from "../../src/types";
+import type { CodexCommanderParsedRequest } from "../../src/types";
 
 declare const adapter: ProviderAdapter;
-declare const parsed: OcxParsedRequest;
+declare const parsed: CodexCommanderParsedRequest;
 declare const response: Response;
 declare const emit: Parameters<NonNullable<ProviderAdapter["runTurn"]>>[2];
 

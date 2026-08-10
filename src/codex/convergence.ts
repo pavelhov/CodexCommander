@@ -4,7 +4,7 @@ import { getConfigDir, websocketsEnabled, withExpectedConfigGenerationSync } fro
 import { COMBO_NAMESPACE } from "../combos";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { getAuthStorePath } from "../oauth/store";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import { captureCatalogAdmissionSnapshot } from "./catalog-admission";
 import {
   type CatalogSourceForGather,
@@ -31,7 +31,6 @@ import {
   catalogBackupPathFor,
   catalogHasRoutedEntries,
   findNativeTemplate,
-  legacyCatalogBackupPath,
   parseCatalogJson,
   type RawCatalog,
 } from "./catalog/parsing";
@@ -45,7 +44,6 @@ import { codexRuntimeStatePath, peekCodexRuntimeProcessCache } from "./runtime";
 import { withCatalogWriteSerialization } from "./catalog-write-serialization";
 import {
   publishHashedCodexCatalogBackup,
-  publishLegacyCodexCatalogBackup,
   replaceActiveCodexCatalog,
   replaceCodexModelsCache,
   type PreparedCatalogFileWrite,
@@ -64,7 +62,6 @@ import type {
 
 export interface CatalogWriteReceipt {
   readonly keyedBackup: "written" | "preserved" | "not-requested";
-  readonly legacyBackup: "written" | "preserved" | "not-requested";
   readonly catalog: "written" | "not-written";
   readonly cache: "written" | "not-written";
 }
@@ -95,7 +92,6 @@ interface CandidateState {
   readonly catalog: PreparedCatalogFileWrite;
   readonly cache: PreparedCatalogFileWrite;
   readonly keyedBackup?: PreparedCatalogFileWrite;
-  readonly legacyBackup?: PreparedCatalogFileWrite;
   readonly changed: boolean;
   readonly notices: readonly CatalogNotice[];
 }
@@ -137,28 +133,25 @@ function processEvidence(source: CatalogSourceForGather): CatalogProcessLocalEvi
 function bindGatherPaths(
   session: CatalogFilesystemEvidenceSession,
   snapshot: CatalogAdmissionSnapshot,
-): Readonly<{ catalog: string; cache: string; keyedBackup: string; legacyBackup?: string }> {
+): Readonly<{ catalog: string; cache: string; keyedBackup: string }> {
   const catalog = targetPath(snapshot.targets.catalog);
   const cache = targetPath(snapshot.targets.cache);
   const keyedBackup = targetPath(snapshot.targets.catalogBackups[0]!);
-  const legacyBackup = snapshot.targets.catalogBackups[1]
-    ? targetPath(snapshot.targets.catalogBackups[1]) : undefined;
   const configPath = snapshot.sourceEvidence.required["catalog-target-selection"].logicalPath;
 
   acceptCatalogGatherSourcePath(session, "catalog-target-selection", configPath);
   readCatalogGatherSource(session, "catalog-target-selection");
   acceptCatalogGatherSourcePath(session, "active-catalog-merge", catalog);
   acceptCatalogGatherSourcePath(session, "hashed-backup-fallback", keyedBackup);
-  acceptCatalogGatherSourcePath(session, "legacy-backup-fallback", legacyBackup ?? legacyCatalogBackupPath());
   acceptCatalogGatherSourcePath(session, "models-cache-fallback", cache);
   acceptCatalogGatherSourcePath(session, "runtime-selection", codexRuntimeStatePath(getConfigDir()));
   acceptCatalogGatherSourcePath(session, "provider-auth-selection", getAuthStorePath());
   acceptCatalogGatherSourcePath(session, "native-catalog-selection", catalog);
-  return { catalog, cache, keyedBackup, ...(legacyBackup ? { legacyBackup } : {}) };
+  return { catalog, cache, keyedBackup };
 }
 
 function prepareCatalog(
-  config: Readonly<OcxConfig>,
+  config: Readonly<CodexCommanderConfig>,
   source: Extract<CatalogSourceForGather, { kind: "available" }>,
   active: RawCatalog | null,
   routedModels: Awaited<ReturnType<typeof gatherRoutedModelsForCatalogGather>>,
@@ -177,11 +170,13 @@ function prepareCatalog(
     name === "openai" && isCanonicalOpenAiForwardProvider(provider)
   ));
   const disabledNative = disabledNativeSlugs(config);
+  const nativeSlugsFrom = (models: RawCatalog["models"]): string[] => [...new Set((models ?? []).flatMap(entry => (
+    typeof entry.slug === "string" && !entry.slug.includes("/") && !disabledNative.has(entry.slug)
+      ? [entry.slug] : []
+  )))];
+  const activeNativeSlugs = nativeSlugsFrom(active?.models);
   const nativeSlugs = includeNativeOpenAi
-    ? [...new Set((active?.models ?? catalog.models ?? []).flatMap(entry => (
-        typeof entry.slug === "string" && !entry.slug.includes("/") && !disabledNative.has(entry.slug)
-          ? [entry.slug] : []
-      )))]
+    ? (activeNativeSlugs.length > 0 ? activeNativeSlugs : nativeSlugsFrom(catalog.models))
     : [];
   const entries = buildCatalogEntries(
     template ? JSON.parse(JSON.stringify(template)) : null,
@@ -193,7 +188,9 @@ function prepareCatalog(
       if (typeof entry.slug !== "string" || !entry.slug.includes("/")) return false;
       const provider = entry.slug.slice(0, entry.slug.indexOf("/"));
       const description = typeof entry.description === "string" ? entry.description : "";
-      return configuredProviders.has(provider) || !description.startsWith("Routed via opencodex → ");
+      return configuredProviders.has(provider)
+        || !(description.startsWith("Routed via CodexCommander → ")
+          || description.startsWith("Routed via codexcommander → "));
     });
     entries.push(...preserved);
   }
@@ -228,8 +225,6 @@ export async function gatherCodexCatalogCandidate(
     const activeBytes = readCatalogGatherSource(session, "active-catalog-merge");
     const cacheBytes = readCatalogGatherSource(session, "models-cache-fallback");
     const keyedBackupBytes = readCatalogGatherSource(session, "hashed-backup-fallback");
-    const legacyBackupBytes = paths.legacyBackup
-      ? readCatalogGatherSource(session, "legacy-backup-fallback") : null;
     if (Object.keys(snapshot.config.combos ?? {}).length > 0) {
       readCatalogGatherSource(session, "native-catalog-selection");
     }
@@ -285,8 +280,6 @@ export async function gatherCodexCatalogCandidate(
       catalog: { path: paths.catalog, content: preparedCatalogBytes },
       cache: { path: paths.cache, content: preparedCacheBytes },
       ...(pristineBytes ? { keyedBackup: { path: paths.keyedBackup, content: pristineBytes } } : {}),
-      ...(pristineBytes && paths.legacyBackup
-        ? { legacyBackup: { path: paths.legacyBackup, content: pristineBytes } } : {}),
       changed: Buffer.from(activeBytes ?? []).toString("utf8") !== preparedCatalogBytes
         || Buffer.from(cacheBytes ?? []).toString("utf8") !== preparedCacheBytes,
       notices: Object.freeze([...notices]),
@@ -360,16 +353,12 @@ function revalidateCandidate(state: CandidateState): CodexCatalogCommitResult | 
 function fixedCommit(state: CandidateState, permit: Parameters<typeof replaceActiveCodexCatalog>[0]): CodexCatalogCommitResult {
   let writes: CatalogWriteReceipt = {
     keyedBackup: "not-requested",
-    legacyBackup: "not-requested",
     catalog: "not-written",
     cache: "not-written",
   };
   try {
     if (state.keyedBackup) {
       writes = { ...writes, keyedBackup: publishHashedCodexCatalogBackup(permit, state.home, state.keyedBackup) };
-    }
-    if (state.legacyBackup) {
-      writes = { ...writes, legacyBackup: publishLegacyCodexCatalogBackup(permit, state.home, state.legacyBackup) };
     }
     replaceActiveCodexCatalog(permit, state.home, state.catalog);
     writes = { ...writes, catalog: "written" };
@@ -414,7 +403,7 @@ function projectCommit(result: CommitAttempt, notices: readonly CatalogNotice[])
   if (result.kind === "stale") return { status: "skipped", reason: "stale", retryable: true };
   if (result.kind === "refused") return { status: "skipped", reason: "refused", retryable: false };
   const partialWrite = result.writes.keyedBackup === "written"
-    || result.writes.legacyBackup === "written" || result.writes.catalog === "written";
+    || result.writes.catalog === "written";
   return { status: "failed", reason: "disk", phase: "commit", retryable: false, partialWrite };
 }
 

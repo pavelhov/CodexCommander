@@ -17,7 +17,7 @@ import { resetKiroThrottleStateForTests } from "../src/adapters/kiro-retry";
 import { encodeMessage } from "../src/lib/eventstream-decoder";
 import { estimateTokens } from "../src/lib/token-estimate";
 import { createTranslatorBudget } from "../src/lib/translator-budget";
-import type { OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../src/types";
+import type { CodexCommanderParsedRequest, CodexCommanderProviderConfig, CodexCommanderUsage } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
 function createKiroAdapter(...args: Parameters<typeof createKiroAdapterProduction>) {
@@ -31,7 +31,7 @@ const origApiRegion = process.env.KIRO_API_REGION;
 const origArn = process.env.KIRO_PROFILE_ARN;
 const origCredsFile = process.env.KIRO_CREDS_FILE;
 const origCredentialsFile = process.env.KIRO_CREDENTIALS_FILE;
-const origDebugFrames = process.env.OCX_DEBUG_FRAMES;
+const origDebugFrames = process.env.CCX_DEBUG;
 const realFetch = globalThis.fetch;
 let tmp: string;
 
@@ -43,7 +43,7 @@ beforeEach(() => {
   delete process.env.KIRO_PROFILE_ARN;
   delete process.env.KIRO_CREDS_FILE;
   delete process.env.KIRO_CREDENTIALS_FILE;
-  delete process.env.OCX_DEBUG_FRAMES;
+  delete process.env.CCX_DEBUG;
 });
 afterEach(() => {
   globalThis.fetch = realFetch;
@@ -54,15 +54,15 @@ afterEach(() => {
   if (origArn === undefined) delete process.env.KIRO_PROFILE_ARN; else process.env.KIRO_PROFILE_ARN = origArn;
   if (origCredsFile === undefined) delete process.env.KIRO_CREDS_FILE; else process.env.KIRO_CREDS_FILE = origCredsFile;
   if (origCredentialsFile === undefined) delete process.env.KIRO_CREDENTIALS_FILE; else process.env.KIRO_CREDENTIALS_FILE = origCredentialsFile;
-  if (origDebugFrames === undefined) delete process.env.OCX_DEBUG_FRAMES; else process.env.OCX_DEBUG_FRAMES = origDebugFrames;
+  if (origDebugFrames === undefined) delete process.env.CCX_DEBUG; else process.env.CCX_DEBUG = origDebugFrames;
   rmSync(tmp, { recursive: true, force: true });
 });
 
-const provider = { adapter: "kiro", baseUrl: "https://runtime.us-east-1.kiro.dev", authMode: "oauth", apiKey: "tok-123" } as unknown as OcxProviderConfig;
+const provider = { adapter: "kiro", baseUrl: "https://runtime.us-east-1.kiro.dev", authMode: "oauth", apiKey: "tok-123" } as unknown as CodexCommanderProviderConfig;
 const bashTool = { name: "bash", description: "Run a shell command", parameters: { type: "object" } };
 
-function parsedWith(messages: unknown[], tools?: unknown[], modelId = "claude-sonnet-4.5"): OcxParsedRequest {
-  return { modelId, stream: true, options: {}, context: { messages, tools } } as unknown as OcxParsedRequest;
+function parsedWith(messages: unknown[], tools?: unknown[], modelId = "claude-sonnet-4.5"): CodexCommanderParsedRequest {
+  return { modelId, stream: true, options: {}, context: { messages, tools } } as unknown as CodexCommanderParsedRequest;
 }
 
 function inferredEventType(obj: unknown): string {
@@ -102,8 +102,8 @@ function completionFrames(answer: string, id = "complete-1"): Uint8Array[] {
   ];
 }
 
-async function doneUsage(adapter: ReturnType<typeof createKiroAdapter>, ...frames: Uint8Array[]): Promise<OcxUsage> {
-  let done: OcxUsage | undefined;
+async function doneUsage(adapter: ReturnType<typeof createKiroAdapter>, ...frames: Uint8Array[]): Promise<CodexCommanderUsage> {
+  let done: CodexCommanderUsage | undefined;
   for await (const e of adapter.parseStream(new Response(streamOf(...frames)))) {
     if (e.type === "done") done = e.usage;
   }
@@ -1108,7 +1108,7 @@ describe("kiro adapter — parseStream", () => {
     }
     expect(errors).toHaveLength(1);
     expect(errors[0]).toContain("kiro_profile_required");
-    expect(errors[0]).toContain("ocx account login kiro --reauth");
+    expect(errors[0]).toContain("ccx account login kiro --reauth");
   });
 
   test("auth and model exceptions become actionable Kiro errors", async () => {
@@ -1711,14 +1711,14 @@ describe("kiro adapter — parseStream", () => {
   });
 
   test("buildRequest emits only redacted Kiro diagnostic breadcrumbs when enabled", async () => {
-    process.env.OCX_DEBUG_FRAMES = "1";
+    process.env.CCX_DEBUG = "1";
     process.env.KIRO_PROFILE_ARN = "arn:aws:codewhisperer:us-east-1:123456789012:profile/demo";
     const error = spyOn(console, "error").mockImplementation(() => {});
     try {
       await createKiroAdapter(provider).buildRequest(parsedWith([{ role: "user", content: "secret prompt body" }], [bashTool]));
       expect(error).toHaveBeenCalledTimes(1);
       const line = String(error.mock.calls[0]?.[0] ?? "");
-      expect(line).toContain("[ocx:kiro:request]");
+      expect(line).toContain("[ccx:kiro:request]");
       expect(line).toContain("\"region\":\"us-east-1\"");
       expect(line).toContain("\"hasProfileArn\":true");
       expect(line).not.toContain("secret prompt body");

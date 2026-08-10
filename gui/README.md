@@ -1,6 +1,6 @@
-# opencodex dashboard
+# CodexCommander dashboard
 
-This is the Vite/React dashboard used by `ocx gui` in packaged installs.
+This is the Vite/React dashboard used by `ccx gui` in packaged installs.
 
 ## Source checkout development
 
@@ -27,7 +27,7 @@ bun run build:gui
 ```
 
 That command installs/builds this dashboard and copies the production assets into
-the package layout used by `ocx gui`.
+the package layout used by `ccx gui`.
 
 ## Lint and React Doctor
 

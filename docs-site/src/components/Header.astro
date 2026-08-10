@@ -237,11 +237,11 @@ const contributing: NavLink = {
 		align-items: center;
 		height: 100%;
 		/* floating glass pill, detached from the viewport edges */
-		border-radius: var(--ocx-radius-pill, 999px);
+		border-radius: var(--ccx-radius-pill, 999px);
 		border: 1px solid var(--sl-color-hairline-light);
-		background-color: var(--ocx-glass-rail, canvas);
-		backdrop-filter: var(--ocx-glass-blur, blur(22px));
-		-webkit-backdrop-filter: var(--ocx-glass-blur, blur(22px));
+		background-color: var(--ccx-glass-rail, canvas);
+		backdrop-filter: var(--ccx-glass-blur, blur(22px));
+		-webkit-backdrop-filter: var(--ccx-glass-blur, blur(22px));
 		box-shadow: 0 4px 24px rgb(0 0 0 / 0.07);
 		padding-inline: 1rem;
 	}
@@ -288,7 +288,7 @@ const contributing: NavLink = {
 		min-height: 2.25rem;
 		padding: 0.375rem 0.75rem;
 		border: 0;
-		border-radius: var(--ocx-radius-pill, 999px);
+		border-radius: var(--ccx-radius-pill, 999px);
 		background: transparent;
 		color: var(--sl-color-gray-2);
 		font: inherit;
@@ -301,7 +301,7 @@ const contributing: NavLink = {
 	}
 	.preference-control:hover,
 	.preference-control[aria-expanded='true'] {
-		background-color: var(--ocx-hover, rgba(128, 128, 128, 0.1));
+		background-color: var(--ccx-hover, rgba(128, 128, 128, 0.1));
 		color: var(--sl-color-white);
 	}
 	.preference-control:focus:not(:focus-visible) {
@@ -334,11 +334,11 @@ const contributing: NavLink = {
 		min-width: 12rem;
 		padding: 0.375rem;
 		border: 1px solid var(--sl-color-gray-5);
-		border-radius: var(--ocx-radius, 12px);
-		background-color: var(--ocx-glass-panel, canvas);
-		backdrop-filter: var(--ocx-glass-blur, blur(22px));
-		-webkit-backdrop-filter: var(--ocx-glass-blur, blur(22px));
-		box-shadow: var(--ocx-shadow, 0 10px 28px rgba(0, 0, 0, 0.2));
+		border-radius: var(--ccx-radius, 12px);
+		background-color: var(--ccx-glass-panel, canvas);
+		backdrop-filter: var(--ccx-glass-blur, blur(22px));
+		-webkit-backdrop-filter: var(--ccx-glass-blur, blur(22px));
+		box-shadow: var(--ccx-shadow, 0 10px 28px rgba(0, 0, 0, 0.2));
 		opacity: 0;
 		visibility: hidden;
 		translate: 0 -0.25rem;
@@ -358,7 +358,7 @@ const contributing: NavLink = {
 	.language-menu a {
 		display: block;
 		padding: 0.5rem 0.75rem;
-		border-radius: var(--ocx-radius-sm, 8px);
+		border-radius: var(--ccx-radius-sm, 8px);
 		color: var(--sl-color-gray-2);
 		font-size: var(--sl-text-sm);
 		text-decoration: none;
@@ -367,7 +367,7 @@ const contributing: NavLink = {
 	.language-menu a:hover,
 	.language-menu a:focus-visible,
 	.language-menu a[aria-checked='true'] {
-		background-color: var(--ocx-hover, rgba(128, 128, 128, 0.1));
+		background-color: var(--ccx-hover, rgba(128, 128, 128, 0.1));
 		color: var(--sl-color-white);
 	}
 	.language-menu a:focus:not(:focus-visible) {
@@ -408,7 +408,7 @@ const contributing: NavLink = {
 			gap: 0.375rem;
 			padding: 0.375rem 0.875rem;
 			border: 0;
-			border-radius: var(--ocx-radius-pill, 999px);
+			border-radius: var(--ccx-radius-pill, 999px);
 			background: transparent;
 			color: var(--sl-color-gray-2);
 			font: inherit;
@@ -423,7 +423,7 @@ const contributing: NavLink = {
 		.nav-link svg { opacity: 0.55; transition: transform 0.15s; }
 		.nav-item:hover .nav-link,
 		.nav-item:focus-within .nav-link {
-			background-color: var(--ocx-hover, rgba(128, 128, 128, 0.1));
+			background-color: var(--ccx-hover, rgba(128, 128, 128, 0.1));
 			color: var(--sl-color-white);
 		}
 		.nav-item:hover .nav-link svg,
@@ -453,16 +453,16 @@ const contributing: NavLink = {
 			padding: 0.375rem;
 			min-width: 15rem;
 			border: 1px solid var(--sl-color-gray-5);
-			border-radius: var(--ocx-radius, 12px);
-			background-color: var(--ocx-glass-panel, canvas);
-			backdrop-filter: var(--ocx-glass-blur, blur(22px));
-			-webkit-backdrop-filter: var(--ocx-glass-blur, blur(22px));
-			box-shadow: var(--ocx-shadow, 0 10px 28px rgba(0, 0, 0, 0.2));
+			border-radius: var(--ccx-radius, 12px);
+			background-color: var(--ccx-glass-panel, canvas);
+			backdrop-filter: var(--ccx-glass-blur, blur(22px));
+			-webkit-backdrop-filter: var(--ccx-glass-blur, blur(22px));
+			box-shadow: var(--ccx-shadow, 0 10px 28px rgba(0, 0, 0, 0.2));
 		}
 		.nav-drop a {
 			display: block;
 			padding: 0.5rem 0.75rem;
-			border-radius: var(--ocx-radius-sm, 8px);
+			border-radius: var(--ccx-radius-sm, 8px);
 			color: var(--sl-color-gray-2);
 			font-size: var(--sl-text-sm);
 			text-decoration: none;
@@ -470,7 +470,7 @@ const contributing: NavLink = {
 		}
 		.nav-drop a:hover,
 		.nav-drop a:focus-visible {
-			background-color: var(--ocx-hover, rgba(128, 128, 128, 0.1));
+			background-color: var(--ccx-hover, rgba(128, 128, 128, 0.1));
 			color: var(--sl-color-white);
 		}
 	}
@@ -494,7 +494,7 @@ const contributing: NavLink = {
 		width: 2.25rem;
 		height: 2.25rem;
 		border: 0;
-		border-radius: var(--ocx-radius-pill, 999px);
+		border-radius: var(--ccx-radius-pill, 999px);
 		background: transparent;
 		color: var(--sl-color-gray-2);
 		cursor: pointer;
@@ -502,7 +502,7 @@ const contributing: NavLink = {
 	}
 	.lp-menu-btn:hover,
 	.lp-menu-btn[aria-expanded='true'] {
-		background-color: var(--ocx-hover, rgba(128, 128, 128, 0.1));
+		background-color: var(--ccx-hover, rgba(128, 128, 128, 0.1));
 		color: var(--sl-color-white);
 	}
 	.lp-menu-panel {
@@ -514,11 +514,11 @@ const contributing: NavLink = {
 		overflow-y: auto;
 		padding: 0.875rem;
 		border: 1px solid var(--sl-color-gray-5);
-		border-radius: var(--ocx-radius, 12px);
-		background-color: var(--ocx-glass-panel, canvas);
-		backdrop-filter: var(--ocx-glass-blur, blur(40px));
-		-webkit-backdrop-filter: var(--ocx-glass-blur, blur(40px));
-		box-shadow: var(--ocx-shadow, 0 10px 28px rgb(0 0 0 / 0.2));
+		border-radius: var(--ccx-radius, 12px);
+		background-color: var(--ccx-glass-panel, canvas);
+		backdrop-filter: var(--ccx-glass-blur, blur(40px));
+		-webkit-backdrop-filter: var(--ccx-glass-blur, blur(40px));
+		box-shadow: var(--ccx-shadow, 0 10px 28px rgb(0 0 0 / 0.2));
 		opacity: 0;
 		visibility: hidden;
 		translate: 0 -4px;
@@ -543,7 +543,7 @@ const contributing: NavLink = {
 	.lp-menu-contrib {
 		display: block;
 		padding: 0.4rem 0.5rem;
-		border-radius: var(--ocx-radius-sm, 8px);
+		border-radius: var(--ccx-radius-sm, 8px);
 		color: var(--sl-color-gray-2);
 		font-size: var(--sl-text-sm);
 		text-decoration: none;
@@ -554,7 +554,7 @@ const contributing: NavLink = {
 	.lp-menu-group a:focus-visible,
 	.lp-menu-contrib:hover,
 	.lp-menu-contrib:focus-visible {
-		background-color: var(--ocx-hover, rgba(128, 128, 128, 0.1));
+		background-color: var(--ccx-hover, rgba(128, 128, 128, 0.1));
 		color: var(--sl-color-white);
 	}
 	@media (prefers-reduced-motion: reduce) {

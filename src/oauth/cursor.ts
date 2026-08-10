@@ -1,7 +1,7 @@
 /**
  * Cursor OAuth — PKCE poll flow. Standalone: talks directly to cursor.com / api2.cursor.sh,
  * with no dependency on a local Cursor IDE/CLI install or on jawcode. Ported from jawcode
- * packages/ai/src/utils/oauth/cursor.ts and adapted to opencodex's OAuthController (see kimi.ts).
+ * packages/ai/src/utils/oauth/cursor.ts and adapted to CodexCommander's OAuthController (see kimi.ts).
  *
  * Security: the login URL carries only the PKCE challenge (SHA-256 of the verifier); the verifier
  * is sent only to /auth/poll. Tokens and the verifier are never logged — thrown errors and progress

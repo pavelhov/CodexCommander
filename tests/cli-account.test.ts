@@ -15,7 +15,7 @@ import {
   MAX_ACCOUNT_PRIORITY as GUI_MAX_PRIORITY,
   MIN_ACCOUNT_PRIORITY as GUI_MIN_PRIORITY,
 } from "../gui/src/account-priority";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const RAW_SENTINEL = "test-key-rawsentinel1234567890";
 const MASKED_SENTINEL = "test****7890";
@@ -64,7 +64,7 @@ let originalLog: typeof console.log;
 let originalError: typeof console.error;
 const requests: RecordedRequest[] = [];
 
-function fixtureConfig(): OcxConfig {
+function fixtureConfig(): CodexCommanderConfig {
   return {
     port: 10100,
     defaultProvider: "openai",
@@ -426,7 +426,7 @@ afterEach(() => {
   console.error = originalError;
 });
 
-describe("ocx account CLI (issue #180 matrix)", () => {
+describe("ccx account CLI (issue #180 matrix)", () => {
   test("1: list renders all three account families, main alias, and padded columns", async () => {
     const result = await run(["list"]);
 
@@ -522,7 +522,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     expect(result.stderr).toContain("anthropic account nope was not found");
   });
 
-  test("10: proxy-down exits one with ocx start and ensure guidance", async () => {
+  test("10: proxy-down exits one with ccx start and ensure guidance", async () => {
     const result = await run(
       ["list"],
       {
@@ -533,8 +533,8 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     );
 
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain("ocx start");
-    expect(result.stderr).toContain("ocx ensure");
+    expect(result.stderr).toContain("ccx start");
+    expect(result.stderr).toContain("ccx ensure");
   });
 
   test("11: list projects only masked API-key DTO fields", async () => {
@@ -564,10 +564,10 @@ describe("ocx account CLI (issue #180 matrix)", () => {
 
     expect(bare.code).toBe(1);
     expect(bare.stderr).toContain("Usage:");
-    expect(bare.stderr).toContain("ocx account list");
+    expect(bare.stderr).toContain("ccx account list");
     expect(missingId.code).toBe(1);
     expect(missingId.stderr).toContain("Usage:");
-    expect(missingId.stderr).toContain("ocx account use");
+    expect(missingId.stderr).toContain("ccx account use");
   });
 
   test("14: fan-out skips local/forward providers while explicit ollama errors", async () => {
@@ -771,7 +771,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     );
 
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain("ocx account remove openai chatgpt_1 --yes");
+    expect(result.stderr).toContain("ccx account remove openai chatgpt_1 --yes");
     expect(calls).toHaveLength(0);
   });
 
@@ -1194,7 +1194,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
 
       expect(result.code).toBe(1);
       expect(result.stderr).toContain("Usage:");
-      expect(result.stderr).toContain("ocx account priority");
+      expect(result.stderr).toContain("ccx account priority");
       expect(priorityRequests()).toEqual([]);
     });
 
@@ -1216,8 +1216,8 @@ describe("ocx account CLI (issue #180 matrix)", () => {
       expect(result.code).toBe(1);
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain("Proxy not reachable");
-      expect(result.stderr).toContain("ocx start");
-      expect(result.stderr).toContain("ocx ensure");
+      expect(result.stderr).toContain("ccx start");
+      expect(result.stderr).toContain("ccx ensure");
     });
 
     test("the advisory note goes to stderr so --json stdout stays parseable", async () => {
@@ -1470,7 +1470,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     });
 
     test("a stdin that already ended fails at once instead of waiting out the timeout", async () => {
-      // `something | something-else | ocx account code <p>` can hand over a
+      // `something | something-else | ccx account code <p>` can hand over a
       // stream that is already drained. Listening on it hears nothing, so the
       // command sat for the full two minutes and then blamed a slow paste.
       const drained = new PassThrough() as AccountStdin;
@@ -1531,7 +1531,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
 
     test("a plain login still opens the browser flow instead of waiting on stdin", async () => {
       // The stdin default belongs to `account code`. If it reached `login`,
-      // every ordinary `ocx account login <provider>` would block on a prompt.
+      // every ordinary `ccx account login <provider>` would block on a prompt.
       const silent = new PassThrough() as AccountStdin;
       silent.isTTY = false;
       const result = await run(

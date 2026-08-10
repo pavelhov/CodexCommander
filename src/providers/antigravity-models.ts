@@ -1,8 +1,8 @@
 // Google Antigravity (Cloud Code Assist) bundled model list.
 //
 // Single source of truth: the Antigravity `:fetchAvailableModels` backend, the same one the `agy`
-// CLI resolves labels against. The ids below separate CCA wire ids, collapsed picker entries,
-// and hidden compatibility aliases for saved selections. The CCA envelope's `model` field must
+// CLI resolves labels against. The ids below separate CCA wire ids and collapsed picker entries.
+// The CCA envelope's `model` field must
 // receive the wire id (for example "Gemini 3.1 Pro (High)" => gemini-pro-agent), while the
 // picker exposes collapsed base models with reasoning-effort routing.
 
@@ -55,33 +55,6 @@ function resolveAntigravityThinkingLevel(effort: string): string | undefined {
   return ANTIGRAVITY_THINKING_LEVELS.has(effort) ? effort : undefined;
 }
 
-// ── Visible client aliases (kept for saved-config compat, not picker-visible) ──
-const ANTIGRAVITY_VISIBLE_MODEL_ALIASES: Record<string, string> = {
-  "gemini-3.1-pro-high": "gemini-pro-agent",
-  "gemini-3.1-pro-preview": "gemini-pro-agent",
-};
-
-// ── Hidden compatibility aliases for saved selections ──
-// Wire suffix IDs are identity aliases — they resolve to themselves so saved configs
-// with explicit suffixes (e.g. gemini-3.6-flash-low) continue to work.
-const ANTIGRAVITY_COMPATIBILITY_MODEL_ALIASES: Record<string, string> = {
-  "gemini-3.6-flash-low": "gemini-3.6-flash-low",
-  "gemini-3.6-flash-medium": "gemini-3.6-flash-medium",
-  "gemini-3.6-flash-high": "gemini-3.6-flash-high",
-  "gemini-3.1-pro-low": "gemini-3.1-pro-low",
-  "gemini-pro-agent": "gemini-pro-agent",
-  "gemini-3.5-flash-extra-low": "gemini-3.6-flash-low",
-  "gemini-3.5-flash-low": "gemini-3.6-flash-medium",
-  "gemini-3.5-flash-mid": "gemini-3.6-flash-medium",
-  "gemini-3.5-flash-high": "gemini-3.6-flash-high",
-  "gemini-3-flash-agent": "gemini-3.6-flash-high",
-};
-
-export const ANTIGRAVITY_MODEL_ALIASES: Record<string, string> = {
-  ...ANTIGRAVITY_VISIBLE_MODEL_ALIASES,
-  ...ANTIGRAVITY_COMPATIBILITY_MODEL_ALIASES,
-};
-
 // Picker-visible: collapsed base models only.
 export const ANTIGRAVITY_MODELS = [
   "gemini-3.6-flash",
@@ -109,22 +82,12 @@ export const ANTIGRAVITY_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Collapsed base IDs — explicit entries for the picker.
   "gemini-3.6-flash": 1_048_576,
   "gemini-3.1-pro": 1_048_576,
-  // Wire IDs and aliases via derivation.
+  // Current CCA wire IDs.
   ...ANTIGRAVITY_WIRE_MODEL_CONTEXT_WINDOWS,
-  ...Object.fromEntries(
-    Object.entries(ANTIGRAVITY_MODEL_ALIASES).map(([alias, wire]) => [
-      alias,
-      ANTIGRAVITY_WIRE_MODEL_CONTEXT_WINDOWS[wire],
-    ]),
-  ),
 };
 
-export function resolveAntigravityWireModelId(modelId: string): string {
-  return ANTIGRAVITY_MODEL_ALIASES[modelId] ?? modelId;
-}
-
 /**
- * Whether the given model ID is a suffix wire ID or compat alias that already encodes
+ * Whether the given model ID is a CCA wire ID that already encodes
  * an effort level. For these IDs, the caller must NOT send thinkingConfig — the suffix
  * IS the effort, and sending both creates a contradictory request.
  */
@@ -136,19 +99,19 @@ export function isAntigravitySuffixModelId(modelId: string): boolean {
  * Resolve a picker-visible base model + optional reasoning effort to the CCA wire model ID.
  *
  * Precedence (evaluated in order):
- * 1. Suffix wire ID or compat alias → resolve via `resolveAntigravityWireModelId`, no thinkingConfig.
+ * 1. Wire ID → preserve it without a thinkingConfig.
  * 2. Mapped Gemini base with effort → return mapped wire ID + thinkingLevel.
  * 3. Mapped Gemini base without effort → return default-effort wire ID, no thinkingConfig.
  * 4. Claude Opus with effort → return identity + thinkingLevel (no suffix variants exist).
- * 5. All other IDs → return `resolveAntigravityWireModelId(modelId)`, no thinkingConfig.
+ * 5. All other IDs → preserve the supplied wire model, no thinkingConfig.
  */
 export function resolveAntigravityEffortWireModel(
   modelId: string,
   effort?: string,
 ): { wireModelId: string; thinkingLevel?: string } {
-  // Rule 1: suffix/compat alias — suffix IS the effort.
+  // Rule 1: wire ID — its suffix IS the effort.
   if (isAntigravitySuffixModelId(modelId)) {
-    return { wireModelId: resolveAntigravityWireModelId(modelId) };
+    return { wireModelId: modelId };
   }
 
   // Rule 2/3: mapped Gemini base model.
@@ -168,14 +131,13 @@ export function resolveAntigravityEffortWireModel(
   }
 
   // Rule 5: everything else.
-  return { wireModelId: resolveAntigravityWireModelId(modelId) };
+  return { wireModelId: modelId };
 }
 
 
 // ── Usage aggregation reverse map (picker/call base identity) ──
-// Effort wire IDs and compatibility aliases must collapse to the same picker-visible
-// base model that users invoke after effort routing. Historical logs store suffix IDs;
-// summary aggregation consults this reverse map so one call model = one usage row.
+// Effort wire IDs collapse to the picker-visible base model that users invoke after effort
+// routing, so one current call model produces one usage row.
 const ANTIGRAVITY_USAGE_BASE_BY_ID: Record<string, string> = (() => {
   const rev: Record<string, string> = {};
   for (const base of ANTIGRAVITY_MODELS) rev[base] = base;
@@ -183,14 +145,6 @@ const ANTIGRAVITY_USAGE_BASE_BY_ID: Record<string, string> = (() => {
     rev[base] = base;
     for (const wire of Object.values(effortMap)) rev[wire] = base;
   }
-  for (const [alias, wire] of Object.entries(ANTIGRAVITY_MODEL_ALIASES)) {
-    const base = rev[wire] ?? rev[alias];
-    if (base) rev[alias] = base;
-    // If alias is itself a base/wire already mapped, keep that mapping.
-    else if (rev[wire]) rev[alias] = rev[wire]!;
-  }
-  // Visible aliases that only appear in ANTIGRAVITY_VISIBLE_MODEL_ALIASES are already
-  // included via ANTIGRAVITY_MODEL_ALIASES. Identity bases without effort maps remain.
   return rev;
 })();
 

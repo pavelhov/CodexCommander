@@ -30,31 +30,31 @@ afterEach(() => {
 
 test("renders stable password-manager-compatible sign-in fields", async () => {
   const pending = promptForAdminToken(async () => "accepted");
-  const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog");
+  const dialog = document.querySelector<HTMLDialogElement>("#codexcommander-admin-token-dialog");
   const form = dialog?.querySelector<HTMLFormElement>("form");
   const username = form?.elements.namedItem("username") as HTMLInputElement | null;
   const password = form?.elements.namedItem("password") as HTMLInputElement | null;
 
   expect(dialog).not.toBeNull();
-  expect(dialog?.querySelector("h3")?.textContent).toBe("OpenCodex admin token (OPENCODEX_ADMIN_AUTH_TOKEN)");
+  expect(dialog?.querySelector("h3")?.textContent).toBe("CodexCommander admin token (CODEXCOMMANDER_ADMIN_AUTH_TOKEN)");
   expect(form?.method).toBe("post");
   expect(form?.autocomplete).toBe("on");
-  expect(username?.id).toBe("opencodex-admin-token-dialog-username");
+  expect(username?.id).toBe("codexcommander-admin-token-dialog-username");
   expect(form?.querySelector(`label[for="${username?.id}"]`)?.textContent).toBe("Account");
   expect(username?.autocomplete).toBe("username");
   expect(username?.readOnly).toBe(true);
-  expect(username?.value).toBe("OpenCodex");
-  expect(password?.id).toBe("opencodex-admin-token-dialog-password");
+  expect(username?.value).toBe("CodexCommander");
+  expect(password?.id).toBe("codexcommander-admin-token-dialog-password");
   expect(form?.querySelector(`label[for="${password?.id}"]`)?.textContent).toBe("Admin token");
   expect(password?.type).toBe("password");
   expect(password?.autocomplete).toBe("current-password");
   expect(password?.required).toBe(true);
 
-  password!.value = "  ocx_admin_test  ";
+  password!.value = "  ccx_admin_test  ";
   form!.dispatchEvent(new testWindow.Event("submit", { bubbles: true, cancelable: true }));
 
-  expect(await pending).toBe("ocx_admin_test");
-  expect(document.querySelector("#opencodex-admin-token-dialog")).toBeNull();
+  expect(await pending).toBe("ccx_admin_test");
+  expect(document.querySelector("#codexcommander-admin-token-dialog")).toBeNull();
   expect(localStorage.length).toBe(0);
 });
 
@@ -64,7 +64,7 @@ test("cancel resolves null and restores the previous focus target", async () => 
   focusTarget.focus();
 
   const pending = promptForAdminToken(async () => "accepted");
-  const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog");
+  const dialog = document.querySelector<HTMLDialogElement>("#codexcommander-admin-token-dialog");
   dialog!.dispatchEvent(new testWindow.Event("cancel", { cancelable: true }));
 
   expect(await pending).toBeNull();
@@ -82,7 +82,7 @@ test("keeps the dialog open for whitespace and rejected tokens until one is acce
     settled = true;
   });
 
-  const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog")!;
+  const dialog = document.querySelector<HTMLDialogElement>("#codexcommander-admin-token-dialog")!;
   const form = dialog.querySelector<HTMLFormElement>("form")!;
   const password = form.elements.namedItem("password") as HTMLInputElement;
 
@@ -110,11 +110,11 @@ test("keeps the dialog open for whitespace and rejected tokens until one is acce
 });
 
 test("uses the active UI locale instead of re-detecting browser storage", async () => {
-  localStorage.setItem("ocx-lang", "en");
+  localStorage.setItem("ccx-lang", "en");
   setActiveLocale("ko");
 
   const pending = promptForAdminToken(async () => "accepted");
-  const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog")!;
+  const dialog = document.querySelector<HTMLDialogElement>("#codexcommander-admin-token-dialog")!;
   const form = dialog.querySelector<HTMLFormElement>("form")!;
   const username = form.elements.namedItem("username") as HTMLInputElement;
   const password = form.elements.namedItem("password") as HTMLInputElement;

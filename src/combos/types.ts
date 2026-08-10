@@ -1,17 +1,17 @@
 import { isCodexReasoningEffort } from "../reasoning-effort";
 import type {
-  OcxComboConfig,
-  OcxComboDefaultEffort,
-  OcxComboStrategy,
-  OcxComboTarget,
-  OcxConfig,
-  OcxProviderConfig,
+  CodexCommanderComboConfig,
+  CodexCommanderComboDefaultEffort,
+  CodexCommanderComboStrategy,
+  CodexCommanderComboTarget,
+  CodexCommanderConfig,
+  CodexCommanderProviderConfig,
 } from "../types";
 
 export const COMBO_NAMESPACE = "combo";
 
 export function preservesPhysicalComboProvider(
-  config: Pick<OcxConfig, "providers" | "combos">,
+  config: Pick<CodexCommanderConfig, "providers" | "combos">,
 ): boolean {
   return Object.hasOwn(config.providers, COMBO_NAMESPACE)
     && Object.keys(config.combos ?? {}).length === 0;
@@ -37,15 +37,15 @@ export interface ComboValidationIssue {
 }
 
 export interface NormalizedComboConfig {
-  strategy: OcxComboStrategy;
+  strategy: CodexCommanderComboStrategy;
   stickyLimit: number;
-  defaultEffort: OcxComboDefaultEffort | null;
+  defaultEffort: CodexCommanderComboDefaultEffort | null;
   /** Trimmed public alias, or null when the combo keeps the default `combo/<id>` slug. */
   alias: string | null;
-  targets: Array<Required<OcxComboTarget>>;
+  targets: Array<Required<CodexCommanderComboTarget>>;
 }
 
-export function targetKey(target: Pick<OcxComboTarget, "provider" | "model">): string {
+export function targetKey(target: Pick<CodexCommanderComboTarget, "provider" | "model">): string {
   return `${target.provider}/${target.model}`;
 }
 
@@ -67,16 +67,20 @@ export function comboPublicModelId(id: string, combo: { alias?: string | null })
 }
 
 /**
- * Resolve a client-requested model id to a combo config key. The canonical `combo/<id>`
- * form wins first (back-compat); otherwise an exact alias match across configured combos.
+ * Resolve a client-requested public model id to a combo config key. A configured alias
+ * is exclusive; `combo/<id>` is public only while that combo has no alias.
  */
 export function resolveComboId(
-  config: { combos?: Record<string, OcxComboConfig> },
+  config: { combos?: Record<string, CodexCommanderComboConfig> },
   modelId: string,
 ): string | null {
-  const direct = parseComboModelId(modelId);
-  if (direct) return direct;
   const combos = config.combos;
+  const direct = parseComboModelId(modelId);
+  if (direct) {
+    const raw = combos && Object.hasOwn(combos, direct) ? combos[direct] : undefined;
+    const alias = typeof raw?.alias === "string" ? raw.alias.trim() : "";
+    return alias ? null : direct;
+  }
   if (!combos) return null;
   for (const [id, raw] of Object.entries(combos)) {
     if (!raw || typeof raw !== "object") continue;
@@ -93,7 +97,7 @@ export function resolveComboId(
 export function comboAliasIssues(
   id: string,
   alias: string,
-  combos: Record<string, OcxComboConfig> | undefined,
+  combos: Record<string, CodexCommanderComboConfig> | undefined,
   options: { excludeComboId?: string } = {},
 ): ComboValidationIssue[] {
   const issues: ComboValidationIssue[] = [];
@@ -132,7 +136,7 @@ export function comboAliasIssues(
 export interface ComboValidationOptions {
   requireEnabledTarget?: boolean;
   /** Full combos map for alias uniqueness checks; omitted during early config load. */
-  combos?: Record<string, OcxComboConfig>;
+  combos?: Record<string, CodexCommanderComboConfig>;
   /** Combo being renamed — its stored alias is excluded from uniqueness checks. */
   excludeComboId?: string;
 }
@@ -140,7 +144,7 @@ export interface ComboValidationOptions {
 export function comboConfigIssues(
   id: string,
   raw: unknown,
-  providers: Record<string, OcxProviderConfig>,
+  providers: Record<string, CodexCommanderProviderConfig>,
   options: ComboValidationOptions = {},
 ): ComboValidationIssue[] {
   const issues: ComboValidationIssue[] = [];
@@ -263,13 +267,13 @@ export function comboConfigIssues(
 export function comboConfigError(
   id: string,
   raw: unknown,
-  providers: Record<string, OcxProviderConfig>,
+  providers: Record<string, CodexCommanderProviderConfig>,
   options: ComboValidationOptions = {},
 ): string | null {
   return comboConfigIssues(id, raw, providers, options)[0]?.message ?? null;
 }
 
-export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig {
+export function normalizeComboConfig(raw: CodexCommanderComboConfig): NormalizedComboConfig {
   const alias = typeof raw.alias === "string" ? raw.alias.trim() : "";
   return {
     strategy: raw.strategy ?? "failover",
@@ -285,14 +289,14 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
 }
 
 export function comboDefaultEffort(
-  config: { combos?: Record<string, OcxComboConfig> },
+  config: { combos?: Record<string, CodexCommanderComboConfig> },
   id: string,
-): OcxComboDefaultEffort | null {
+): CodexCommanderComboDefaultEffort | null {
   const combos = config.combos;
   if (!combos || !Object.hasOwn(combos, id)) return null;
   const value: unknown = combos[id]!.defaultEffort ?? null;
   return typeof value === "string" && isCodexReasoningEffort(value)
-    ? value as OcxComboDefaultEffort
+    ? value as CodexCommanderComboDefaultEffort
     : null;
 }
 
@@ -300,12 +304,12 @@ export function isValidComboId(id: string): boolean {
   return COMBO_ID_PATTERN.test(id);
 }
 
-export function listComboIds(config: { combos?: Record<string, OcxComboConfig> }): string[] {
+export function listComboIds(config: { combos?: Record<string, CodexCommanderComboConfig> }): string[] {
   return Object.keys(config.combos ?? {}).sort((a, b) => a.localeCompare(b));
 }
 
 export function listLiveComboTargetKeys(
-  config: { combos?: Record<string, OcxComboConfig> },
+  config: { combos?: Record<string, CodexCommanderComboConfig> },
 ): ReadonlySet<string> {
   const keys = new Set<string>();
   for (const id of listComboIds(config)) {
@@ -317,7 +321,7 @@ export function listLiveComboTargetKeys(
 }
 
 export function getCombo(
-  config: { combos?: Record<string, OcxComboConfig> },
+  config: { combos?: Record<string, CodexCommanderComboConfig> },
   id: string,
 ): NormalizedComboConfig | undefined {
   const combos = config.combos;

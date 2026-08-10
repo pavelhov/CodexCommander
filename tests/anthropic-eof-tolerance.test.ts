@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createAnthropicAdapter as createAnthropicAdapterProduction } from "../src/adapters/anthropic";
 import { FREE_PROVIDER_DIRECTORY } from "../src/providers/free-directory";
-import type { AdapterEvent, OcxProviderConfig } from "../src/types";
+import type { AdapterEvent, CodexCommanderProviderConfig } from "../src/types";
 import { createTestTranslatorBudget, withTestTranslatorBudget } from "./helpers/translator-budget";
 
 /**
@@ -15,14 +15,14 @@ import { createTestTranslatorBudget, withTestTranslatorBudget } from "./helpers/
 const createAnthropicAdapter = (...args: Parameters<typeof createAnthropicAdapterProduction>) =>
   withTestTranslatorBudget(createAnthropicAdapterProduction(...args));
 
-function providerFor(extra: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
+function providerFor(extra: Partial<CodexCommanderProviderConfig> = {}): CodexCommanderProviderConfig {
   return {
     adapter: "anthropic",
     baseUrl: "https://agentrouter.org",
     apiKey: "test-key",
     authMode: "key",
     ...extra,
-  } as OcxProviderConfig;
+  } as CodexCommanderProviderConfig;
 }
 
 const strict = providerFor();
@@ -34,7 +34,7 @@ function sseResponse(events: string[]): Response {
   return new Response(events.join("\n\n"), { headers: { "content-type": "text/event-stream" } });
 }
 
-async function collect(provider: OcxProviderConfig, events: string[]): Promise<AdapterEvent[]> {
+async function collect(provider: CodexCommanderProviderConfig, events: string[]): Promise<AdapterEvent[]> {
   const out: AdapterEvent[] = [];
   for await (const event of createAnthropicAdapter(provider).parseStream(sseResponse(events))) out.push(event);
   return out;

@@ -31,7 +31,7 @@ type StartupPageCache = {
   tray: TrayStatusData | null;
 };
 
-const STARTUP_PAGE_CACHE_PREFIX = "ocx.startup.page.v1:";
+const STARTUP_PAGE_CACHE_PREFIX = "ccx.startup.page.v1:";
 
 function shellChain(commands: string[], platform: string | undefined): string {
   // Windows PowerShell 5.x rejects bash `&&`; `;` works in PowerShell and cmd.
@@ -51,13 +51,13 @@ function deriveCodexRuntimeNotice(
     ? runtime.catalogClamp?.runtimeVersion
     : runtime.version) ?? runtime.version ?? "unknown";
   const efforts = (runtime.catalogClamp?.removedEfforts ?? []).join(", ");
-  const doctorSync = shellChain(["ocx doctor --fix-codex-runtime", "ocx sync"], platform);
+  const doctorSync = shellChain(["ccx doctor --fix-codex-runtime", "ccx sync"], platform);
   if (clampActive) {
     return {
       warning: efforts
         ? t("startup.codexRuntime.clampHiddenWithEfforts", { version, efforts })
         : t("startup.codexRuntime.clampHidden", { version }),
-      fix: newer ? doctorSync : "ocx sync",
+      fix: newer ? doctorSync : "ccx sync",
     };
   }
   if (newer) {

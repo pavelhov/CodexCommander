@@ -121,14 +121,14 @@ describe("Responses bridge reasoning and usage parity", () => {
     expect(frames.some(f => f.event === "response.reasoning_text.delta")).toBe(false);
   });
 
-  test("usage totalTokens overrides input plus output totals", async () => {
+  test("usage contextTotalTokens overrides input plus output totals", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
-      { type: "done", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 50_000, estimated: true } },
+      { type: "done", usage: { inputTokens: 10, outputTokens: 5, contextTotalTokens: 50_000, estimated: true } },
     ]), "kiro/claude-sonnet-4.5"));
 
     const completed = frames.find(f => f.event === "response.completed")?.data.response as Record<string, unknown>;
     expect(completed.usage).toMatchObject({
-      input_tokens: 10,
+      input_tokens: 49_995,
       output_tokens: 5,
       total_tokens: 50_000,
     });
@@ -793,7 +793,7 @@ describe("Responses bridge reasoning and usage parity", () => {
   test("wire response.heartbeat keeps firing while only adapter heartbeats flow", async () => {
     // Issue #521: web-search buffers semantic events and yields invisible adapter heartbeats from
     // raw-byte progress. Those must not suppress wire keepalives, or Codex Desktop idle-timeouts
-    // (~5 min) while OCX still considers the upstream alive.
+    // (~5 min) while CCX still considers the upstream alive.
     const heartbeatMs = 50;
     const stallTimeoutSec = 1;
     const cycles = 4;

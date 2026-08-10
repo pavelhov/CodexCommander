@@ -11,7 +11,7 @@ import {
   resolveEnvValue,
   withConfigMutationLockSync,
 } from "../config";
-import type { OcxConfig, OcxProviderConfig } from "../types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../types";
 
 const STATE_VERSION = 1 as const;
 const STATE_MAX_BYTES = 128 * 1024;
@@ -85,7 +85,7 @@ function credentialId(key: string): string {
   return createHash("sha256").update(key).digest("hex");
 }
 
-function canonicalOpenCodeGo(provider: OcxProviderConfig): boolean {
+function canonicalOpenCodeGo(provider: CodexCommanderProviderConfig): boolean {
   try {
     const url = new URL(provider.baseUrl);
     return url.protocol === "https:"
@@ -99,14 +99,14 @@ function canonicalOpenCodeGo(provider: OcxProviderConfig): boolean {
   }
 }
 
-function configuredCredential(config: OcxConfig, providerName: string): string | null {
+function configuredCredential(config: CodexCommanderConfig, providerName: string): string | null {
   const provider = config.providers[providerName];
   if (!provider || providerName !== "opencode-go" || !canonicalOpenCodeGo(provider)) return null;
   return resolveEnvValue(provider.apiKey)?.trim() || null;
 }
 
 export function providerCredentialVerification(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   providerName: string,
 ): ProviderCredentialVerification | null {
   const provider = config.providers[providerName];
@@ -123,7 +123,7 @@ export function providerCredentialVerification(
  * small protected metadata write; subsequent requests are memory-only reads.
  */
 export function noteProviderCredentialVerified(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   providerName: string,
   routedKey?: string,
 ): void {

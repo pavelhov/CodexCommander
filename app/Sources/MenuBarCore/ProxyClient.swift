@@ -13,21 +13,21 @@ public enum ProxyError: Error, Equatable, Sendable {
     public var userMessage: String {
         switch self {
         case .unreachable:
-            return "The OpenCodex proxy is not running."
+            return "The CodexCommander proxy is not running."
         case .authenticationUnavailable:
-            return "Management authentication is unavailable. Run `ocx doctor`."
+            return "Management authentication is unavailable. Run `ccx doctor`."
         case .unauthorized:
-            return "OpenCodex rejected its management credential."
+            return "CodexCommander rejected its management credential."
         case .identityMismatch:
-            return "The local port did not identify itself as OpenCodex."
+            return "The local port did not identify itself as CodexCommander."
         case .http(let code):
-            return "OpenCodex returned an unexpected status (\(code))."
+            return "CodexCommander returned an unexpected status (\(code))."
         case .decoding:
-            return "OpenCodex returned a response this app could not read."
+            return "CodexCommander returned a response this app could not read."
         case .transport:
-            return "The connection to OpenCodex failed."
+            return "The connection to CodexCommander failed."
         case .inconclusive:
-            return "OpenCodex did not respond in time."
+            return "CodexCommander did not respond in time."
         }
     }
 }
@@ -75,24 +75,27 @@ private struct EmptyBody: Encodable {}
 
 public struct RestartAccepted: Decodable, Equatable, Sendable {
     public let success: Bool
-    public let activeTurnCount: Int?
-    public let drainTimeoutMs: Int?
-    public let alreadyDraining: Bool?
+    public let message: String
+    public let activeTurnCount: Int
+    public let drainTimeoutMs: Int
+    public let alreadyDraining: Bool
 
     public init(
         success: Bool,
-        activeTurnCount: Int? = nil,
-        drainTimeoutMs: Int? = nil,
-        alreadyDraining: Bool? = nil
+        message: String,
+        activeTurnCount: Int,
+        drainTimeoutMs: Int,
+        alreadyDraining: Bool
     ) {
         self.success = success
+        self.message = message
         self.activeTurnCount = activeTurnCount
         self.drainTimeoutMs = drainTimeoutMs
         self.alreadyDraining = alreadyDraining
     }
 }
 
-/// A management client that proves local OpenCodex identity immediately before every
+/// A management client that proves local CodexCommander identity immediately before every
 /// credential-bearing request. Discovery is repeated for each request and retry, so a
 /// restart never reuses stale descriptors, endpoint metadata, or token bytes.
 public actor ProxyClient {
@@ -118,7 +121,7 @@ public actor ProxyClient {
         self.session = session ?? Self.secureSession()
     }
 
-    /// Compatibility initializer for deterministic transport tests. Production uses
+    /// Deterministic initializer for transport tests. Production uses
     /// the discovery-backed initializer above.
     public init(
         endpoint: ProxyEndpoint,
@@ -312,7 +315,7 @@ public actor ProxyClient {
         )
         guard let identity = try? JSONDecoder().decode(HealthIdentity.self, from: data),
               identity.status == "ok",
-              identity.service == "opencodex",
+              identity.service == "codexcommander",
               !identity.version.isEmpty,
               identity.pid > 0,
               identity.port == installation.endpoint.port,
@@ -348,7 +351,7 @@ public actor ProxyClient {
         request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         request.setValue("no-store", forHTTPHeaderField: "cache-control")
         if let credential {
-            request.setValue(credential, forHTTPHeaderField: "x-opencodex-api-key")
+            request.setValue(credential, forHTTPHeaderField: "x-codexcommander-api-key")
         }
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "content-type")

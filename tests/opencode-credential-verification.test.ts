@@ -8,9 +8,9 @@ import {
   providerCredentialVerification,
   resetCredentialVerificationCacheForTests,
 } from "../src/providers/credential-verification";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
-function config(key = "go-key-one"): OcxConfig {
+function config(key = "go-key-one"): CodexCommanderConfig {
   return {
     port: 10100,
     hostname: "127.0.0.1",
@@ -23,7 +23,7 @@ function config(key = "go-key-one"): OcxConfig {
         apiKey: key,
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 describe("OpenCode Go credential verification", () => {
@@ -31,16 +31,16 @@ describe("OpenCode Go credential verification", () => {
   let previousHome: string | undefined;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "ocx-go-verify-"));
-    previousHome = process.env.OPENCODEX_HOME;
-    process.env.OPENCODEX_HOME = root;
+    root = mkdtempSync(join(tmpdir(), "ccx-go-verify-"));
+    previousHome = process.env.CODEXCOMMANDER_HOME;
+    process.env.CODEXCOMMANDER_HOME = root;
     resetCredentialVerificationCacheForTests();
   });
 
   afterEach(() => {
     resetCredentialVerificationCacheForTests();
-    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousHome;
     rmSync(root, { recursive: true, force: true });
   });
 

@@ -6,7 +6,7 @@ import { saveConfig } from "../src/config";
 import { clearKeyCooldowns } from "../src/providers/key-failover";
 import { deriveXaiConvId } from "../src/providers/xai-transport";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 let testDir = "";
@@ -15,18 +15,18 @@ let isolatedCodexHome: IsolatedCodexHome | null = null;
 let upstream: ReturnType<typeof Bun.serve> | null = null;
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-keyfail-e2e-codex-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-keyfail-e2e-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-keyfail-e2e-codex-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-keyfail-e2e-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   clearKeyCooldowns();
 });
 
 afterEach(() => {
   upstream?.stop(true);
   upstream = null;
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
@@ -61,8 +61,9 @@ describe("server 429 key failover (end-to-end)", () => {
 
     let server: ReturnType<typeof startServer> | null = null;
     try {
-      const config: OcxConfig = {
+      const config: CodexCommanderConfig = {
         port: 0,
+        multiAgentGuidanceEnabled: true,
         hostname: "127.0.0.1",
         defaultProvider: "xai",
         providers: {
@@ -77,7 +78,7 @@ describe("server 429 key failover (end-to-end)", () => {
             ],
           },
         },
-      } as OcxConfig;
+      } as CodexCommanderConfig;
       saveConfig(config);
       server = startServer(0);
       const res = await originalFetch(new URL("/v1/responses", server.url), {
@@ -147,8 +148,9 @@ describe("server 429 key failover (end-to-end)", () => {
 
     let server: ReturnType<typeof startServer> | null = null;
     try {
-      const config: OcxConfig = {
+      const config: CodexCommanderConfig = {
         port: 0,
+        multiAgentGuidanceEnabled: true,
         hostname: "127.0.0.1",
         defaultProvider: "kimi-code",
         providers: {
@@ -164,7 +166,7 @@ describe("server 429 key failover (end-to-end)", () => {
             ],
           },
         },
-      } as OcxConfig;
+      } as CodexCommanderConfig;
       saveConfig(config);
       server = startServer(0);
       const res = await originalFetch(new URL("/v1/responses", server.url), {
@@ -211,8 +213,9 @@ describe("server 429 key failover (end-to-end)", () => {
         }), { headers: { "content-type": "application/json" } });
       },
     });
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 0, hostname: "127.0.0.1", defaultProvider: "pooled",
+      multiAgentGuidanceEnabled: true,
       providers: {
         pooled: {
           adapter: "openai-chat",
@@ -225,7 +228,7 @@ describe("server 429 key failover (end-to-end)", () => {
           ],
         },
       },
-    } as OcxConfig;
+    } as CodexCommanderConfig;
     saveConfig(config);
     const server = startServer(0);
     try {
@@ -263,8 +266,9 @@ describe("server 429 key failover (end-to-end)", () => {
       return originalFetch(input, init);
     }) as typeof fetch;
 
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 0, hostname: "127.0.0.1", defaultProvider: "pooled-network-failure",
+      multiAgentGuidanceEnabled: true,
       providers: {
         "pooled-network-failure": {
           adapter: "openai-chat",
@@ -276,7 +280,7 @@ describe("server 429 key failover (end-to-end)", () => {
           ],
         },
       },
-    } as OcxConfig;
+    } as CodexCommanderConfig;
     saveConfig(config);
     const server = startServer(0);
     try {
@@ -310,8 +314,9 @@ describe("server 429 key failover (end-to-end)", () => {
         }), { headers: { "content-type": "application/json" } });
       },
     });
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 0, hostname: "127.0.0.1", defaultProvider: "textonly",
+      multiAgentGuidanceEnabled: true,
       providers: {
         textonly: {
           adapter: "openai-chat",
@@ -322,7 +327,7 @@ describe("server 429 key failover (end-to-end)", () => {
         },
         // No forward provider in config → planVisionSidecar cannot run.
       },
-    } as OcxConfig;
+    } as CodexCommanderConfig;
     saveConfig(config);
     const server = startServer(0);
     try {

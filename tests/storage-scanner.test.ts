@@ -14,11 +14,11 @@ let previousCodexHome: string | undefined;
 
 /**
  * Builds a synthetic CODEX_HOME mirroring the layout documented in
- * devlog/_fin/500_storage-page-session-cleanup/20_codex-storage-structure.md:
+ * implementation contract
  * date-partitioned sessions/, flat archived_sessions/, versioned state / logs
  * sqlite files with WAL siblings, plus non-session dirs for the "other" bucket.
  */
-function buildFixtureHome(home: string = mkdtempSync(join(tmpdir(), "ocx-storage-fixture-"))): string {
+function buildFixtureHome(home: string = mkdtempSync(join(tmpdir(), "ccx-storage-fixture-"))): string {
 
   mkdirSync(join(home, "sessions", "2026", "05", "27"), { recursive: true });
   mkdirSync(join(home, "sessions", "2026", "06", "01"), { recursive: true });
@@ -32,7 +32,7 @@ function buildFixtureHome(home: string = mkdtempSync(join(tmpdir(), "ocx-storage
   mkdirSync(join(home, "archived_sessions"));
   writeFileSync(join(home, "archived_sessions", "rollout-old.jsonl"), "d".repeat(50));
 
-  // Real state_5.sqlite/logs_2.sqlite are WAL-mode (devlog 20_codex-storage-structure.md: "every
+  // Real state_5.sqlite/logs_2.sqlite are WAL-mode (implementation contract: "every
   // root sqlite has -wal + -shm siblings live while Codex runs"). Checkpoint+truncate here so the
   // fixture starts sidecar-free, like a state_5.sqlite would look after Codex fully quits — the
   // exact starting condition that must NOT gain new -wal/-shm files from a "read-only" scan.
@@ -170,7 +170,7 @@ describe("scanStorage", () => {
    // A literal '#'/'?'/'%' in the path is legal on POSIX filesystems and starts a
    // fragment/query/escape if the immutable file: URI is built by naive string
    // concatenation — it must not silently degrade every row count to null.
-   const parent = mkdtempSync(join(tmpdir(), "ocx-storage-uri-"));
+   const parent = mkdtempSync(join(tmpdir(), "ccx-storage-uri-"));
     // '?' is illegal on NTFS; use only chars valid across all CI platforms.
     const weirdHome = join(parent, "weird#name+with%percent");
     mkdirSync(weirdHome);
@@ -211,7 +211,7 @@ describe("scanStorage", () => {
   }, 15_000);
 
   test("reports empty buckets for a missing or empty home without throwing", () => {
-    fixtureHome = mkdtempSync(join(tmpdir(), "ocx-storage-empty-"));
+    fixtureHome = mkdtempSync(join(tmpdir(), "ccx-storage-empty-"));
     const emptyReport = scanStorage(fixtureHome);
     expect(emptyReport.total).toEqual({ bytes: 0, fileCount: 0 });
     for (const b of emptyReport.buckets) {
@@ -224,7 +224,7 @@ describe("scanStorage", () => {
   }, 15_000);
 
   test("throws when the home exists but is not a directory", () => {
-    fixtureHome = mkdtempSync(join(tmpdir(), "ocx-storage-notdir-"));
+    fixtureHome = mkdtempSync(join(tmpdir(), "ccx-storage-notdir-"));
     const filePath = join(fixtureHome, "home-is-a-file");
     writeFileSync(filePath, "not a directory");
     // A missing home is a normal fresh-machine state (zeros), but a *broken* home

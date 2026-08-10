@@ -3,9 +3,9 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, installCodexShim, isWindowsInteropDir, lastCodexDiscoveryError, uninstallCodexShim } from "../src/codex/shim";
+import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, installCodexShim, isWindowsInteropDir, lastCodexDiscoveryError, parseCodexShimState, uninstallCodexShim } from "../src/codex/shim";
 
-const SHIM_MARKER = "opencodex codex autostart shim";
+const SHIM_MARKER = "codexcommander codex autostart shim";
 const skipStabilityWait = () => {};
 
 function withInstalledShim(run: (paths: {
@@ -15,16 +15,16 @@ function withInstalledShim(run: (paths: {
   backups: string[];
   statePath: string;
 }) => void): void {
-  const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-bin-"));
-  const home = mkdtempSync(join(tmpdir(), "ocx-shim-home-"));
+  const binDir = mkdtempSync(join(tmpdir(), "ccx-shim-bin-"));
+  const home = mkdtempSync(join(tmpdir(), "ccx-shim-home-"));
   const oldPath = process.env.PATH;
-  const oldHome = process.env.OPENCODEX_HOME;
+  const oldHome = process.env.CODEXCOMMANDER_HOME;
   const wrappers = process.platform === "win32"
     ? [join(binDir, "codex.cmd"), join(binDir, "codex.ps1"), join(binDir, "codex")]
     : [join(binDir, "codex")];
   try {
     process.env.PATH = binDir;
-    process.env.OPENCODEX_HOME = home;
+    process.env.CODEXCOMMANDER_HOME = home;
     for (const wrapper of wrappers) {
       writeFileSync(wrapper, process.platform === "win32" ? `real ${wrapper}\n` : "#!/bin/sh\necho real\n", "utf8");
       if (process.platform !== "win32") chmodSync(wrapper, 0o755);
@@ -42,36 +42,66 @@ function withInstalledShim(run: (paths: {
   } finally {
     if (oldPath === undefined) delete process.env.PATH;
     else process.env.PATH = oldPath;
-    if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = oldHome;
+    if (oldHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = oldHome;
     rmSync(binDir, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
   }
 }
 
 describe("Codex autostart shim", () => {
-  test("builds a Unix shim that starts ocx before execing Codex", () => {
-    const script = buildUnixCodexShim("/usr/local/bin/codex-real", "/usr/local/bin/bun", "/opt/opencodex/src/cli.ts", "bundled");
+  test("shim state accepts only the current versioned wrapper-array schema", () => {
+    const wrapper = {
+      wrapperPath: "/usr/local/bin/codex",
+      originalPath: "/usr/local/bin/codex",
+      backupPath: "/usr/local/bin/codex.codexcommander-real",
+    };
+    const current = {
+      version: 1,
+      platform: process.platform,
+      wrappers: [wrapper],
+    };
+
+    expect(parseCodexShimState(JSON.stringify(current))).toEqual(current);
+    expect(parseCodexShimState(JSON.stringify({ platform: process.platform, ...wrapper }))).toBeNull();
+    expect(parseCodexShimState(JSON.stringify({ ...current, wrapperPath: wrapper.wrapperPath }))).toBeNull();
+    expect(parseCodexShimState(JSON.stringify({ ...current, version: 2 }))).toBeNull();
+    expect(parseCodexShimState(JSON.stringify({
+      ...current,
+      wrappers: [{ ...wrapper, unknownField: true }],
+    }))).toBeNull();
+  });
+
+  test("install writes only the current shim-state schema", () => {
+    withInstalledShim(({ statePath }) => {
+      const raw = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
+      expect(Object.keys(raw).sort()).toEqual(["platform", "version", "wrappers"]);
+      expect(parseCodexShimState(readFileSync(statePath))).not.toBeNull();
+    });
+  });
+
+  test("builds a Unix shim that starts ccx before execing Codex", () => {
+    const script = buildUnixCodexShim("/usr/local/bin/codex-real", "/usr/local/bin/bun", "/opt/codexcommander/src/cli/index.ts", "bundled");
 
     expect(script).toContain(SHIM_MARKER);
     expect(script).toContain("ensure");
     expect(script).not.toContain("sync-cache");
     expect(script).toContain("exec '/usr/local/bin/codex-real' \"$@\"");
-    expect(script).toContain("OPENCODEX_API_AUTH_TOKEN");
+    expect(script).toContain("CODEXCOMMANDER_API_AUTH_TOKEN");
   });
 
   test("every shim flavor exports the Bun provenance it was built with (#848)", () => {
-    // The shim reaches the daemon through `ocx ensure`, which inherits this env;
+    // The shim reaches the daemon through `ccx ensure`, which inherits this env;
     // without it a Codex-autostarted service reports no provenance at all.
-    const unix = buildUnixCodexShim("/usr/local/bin/codex-real", "/usr/local/bin/bun", "/opt/opencodex/src/cli.ts", "override", "/tmp/token");
+    const unix = buildUnixCodexShim("/usr/local/bin/codex-real", "/usr/local/bin/bun", "/opt/codexcommander/src/cli/index.ts", "override", "/tmp/token");
     // Source and the binary it describes are stamped as a pair.
-    expect(unix).toContain("OCX_BUN_RUNTIME_SOURCE='override' OCX_BUN_RUNTIME_PATH='/usr/local/bin/bun' '/usr/local/bin/bun' '/opt/opencodex/src/cli.ts' ensure");
+    expect(unix).toContain("CCX_BUN_RUNTIME_SOURCE='override' CCX_BUN_RUNTIME_PATH='/usr/local/bin/bun' '/usr/local/bin/bun' '/opt/codexcommander/src/cli/index.ts' ensure");
 
-    expect(buildWindowsCodexShim("C:\\Tools\\codex-real.exe", "C:\\Bun\\bun.exe", "C:\\ocx\\cli.ts", "override"))
-      .toContain('set "OCX_BUN_RUNTIME_SOURCE=override"');
+    expect(buildWindowsCodexShim("C:\\Tools\\codex-real.exe", "C:\\Bun\\bun.exe", "C:\\ccx\\cli.ts", "override"))
+      .toContain('set "CCX_BUN_RUNTIME_SOURCE=override"');
 
-    expect(buildWindowsPowerShellCodexShim("C:\\Tools\\codex-real.exe", "C:\\Bun\\bun.exe", "C:\\ocx\\cli.ts", "process"))
-      .toContain("$env:OCX_BUN_RUNTIME_SOURCE = 'process'");
+    expect(buildWindowsPowerShellCodexShim("C:\\Tools\\codex-real.exe", "C:\\Bun\\bun.exe", "C:\\ccx\\cli.ts", "process"))
+      .toContain("$env:CCX_BUN_RUNTIME_SOURCE = 'process'");
   });
 
   test("the provenance marker never leaks into the real Codex process (#848 scoping)", () => {
@@ -80,54 +110,54 @@ describe("Codex autostart shim", () => {
     // would then carry provenance describing a binary it is not executing, and the
     // execPath relaunch paths would preserve that contradiction into the daemon.
     const unix = buildUnixCodexShim("/usr/local/bin/codex-real", "/usr/local/bin/bun", "/cli.ts", "override");
-    expect(unix).not.toContain("export OCX_BUN_RUNTIME_SOURCE");
+    expect(unix).not.toContain("export CCX_BUN_RUNTIME_SOURCE");
     // The only occurrence is the one-shot assignment prefixed onto `ensure`.
-    expect((unix.match(/OCX_BUN_RUNTIME_SOURCE/g) ?? []).length).toBe(1);
-    expect((unix.match(/OCX_BUN_RUNTIME_PATH/g) ?? []).length).toBe(1);
-    expect(unix.indexOf("OCX_BUN_RUNTIME_SOURCE")).toBeGreaterThan(unix.indexOf("ocx_subcommand"));
+    expect((unix.match(/CCX_BUN_RUNTIME_SOURCE/g) ?? []).length).toBe(1);
+    expect((unix.match(/CCX_BUN_RUNTIME_PATH/g) ?? []).length).toBe(1);
+    expect(unix.indexOf("CCX_BUN_RUNTIME_SOURCE")).toBeGreaterThan(unix.indexOf("ccx_subcommand"));
 
     // cmd.exe: set inside a setlocal/endlocal pair around `ensure` only.
     const cmd = buildWindowsCodexShim("C:\\codex-real.exe", "C:\\bun.exe", "C:\\cli.ts", "override");
-    const ensureBlock = cmd.slice(cmd.indexOf(":ensure_ocx"), cmd.indexOf(":run_codex"));
+    const ensureBlock = cmd.slice(cmd.indexOf(":ensure_ccx"), cmd.indexOf(":run_codex"));
     expect(ensureBlock).toContain("setlocal");
-    expect(ensureBlock).toContain('set "OCX_BUN_RUNTIME_SOURCE=override"');
+    expect(ensureBlock).toContain('set "CCX_BUN_RUNTIME_SOURCE=override"');
     expect(ensureBlock).toContain("endlocal");
-    expect(ensureBlock).toContain("OCX_BUN_RUNTIME_PATH");
-    expect((cmd.match(/OCX_BUN_RUNTIME_SOURCE/g) ?? []).length).toBe(1);
-    expect((cmd.match(/OCX_BUN_RUNTIME_PATH/g) ?? []).length).toBe(1);
+    expect(ensureBlock).toContain("CCX_BUN_RUNTIME_PATH");
+    expect((cmd.match(/CCX_BUN_RUNTIME_SOURCE/g) ?? []).length).toBe(1);
+    expect((cmd.match(/CCX_BUN_RUNTIME_PATH/g) ?? []).length).toBe(1);
 
     // PowerShell: assigned around the ensure call and restored/removed afterwards.
     const ps = buildWindowsPowerShellCodexShim("C:\\codex-real.ps1", "C:\\bun.exe", "C:\\cli.ts", "override");
-    expect(ps).toContain("$priorRuntimeSource = $env:OCX_BUN_RUNTIME_SOURCE");
-    expect(ps).toContain("Remove-Item Env:\\OCX_BUN_RUNTIME_SOURCE");
-    expect(ps).toContain("$env:OCX_BUN_RUNTIME_SOURCE = $priorRuntimeSource");
-    expect(ps.indexOf("OCX_BUN_RUNTIME_SOURCE")).toBeGreaterThan(ps.indexOf("$skipEnsure"));
+    expect(ps).toContain("$priorRuntimeSource = $env:CCX_BUN_RUNTIME_SOURCE");
+    expect(ps).toContain("Remove-Item Env:\\CCX_BUN_RUNTIME_SOURCE");
+    expect(ps).toContain("$env:CCX_BUN_RUNTIME_SOURCE = $priorRuntimeSource");
+    expect(ps.indexOf("CCX_BUN_RUNTIME_SOURCE")).toBeGreaterThan(ps.indexOf("$skipEnsure"));
   });
 
-  test("builds a Windows shim that starts ocx before running Codex", () => {
-    const script = buildWindowsCodexShim("C:\\Tools\\codex-real.exe", "C:\\Bun\\bun.exe", "C:\\ocx\\cli.ts", "bundled");
+  test("builds a Windows shim that starts ccx before running Codex", () => {
+    const script = buildWindowsCodexShim("C:\\Tools\\codex-real.exe", "C:\\Bun\\bun.exe", "C:\\ccx\\cli.ts", "bundled");
 
     expect(script).toContain(SHIM_MARKER);
     expect(script).toContain("ensure");
     expect(script).not.toContain("sync-cache");
-    expect(script).toContain('set "OCX_REAL_CODEX=C:\\Tools\\codex-real.exe"');
-    expect(script).toContain('set "OCX_API_TOKEN_FILE=');
-    expect(script).toContain('set /p OPENCODEX_API_AUTH_TOKEN=<"%OCX_API_TOKEN_FILE%"');
-    expect(script).toContain('"%OCX_REAL_CODEX%" %*');
+    expect(script).toContain('set "CCX_REAL_CODEX=C:\\Tools\\codex-real.exe"');
+    expect(script).toContain('set "CCX_API_TOKEN_FILE=');
+    expect(script).toContain('set /p CODEXCOMMANDER_API_AUTH_TOKEN=<"%CCX_API_TOKEN_FILE%"');
+    expect(script).toContain('"%CCX_REAL_CODEX%" %*');
   });
 
   test("Windows cmd shim escapes executable paths through variables", () => {
     const script = buildWindowsCodexShim(
       "C:\\Tools&A\\100%codex^\\codex-real.exe",
       "C:\\Bun&Dir\\100%bun^\\bun.exe",
-      "C:\\ocx&Dir\\cli.ts",
+      "C:\\ccx&Dir\\cli.ts",
       "bundled",
     );
 
-    expect(script).toContain('set "OCX_REAL_CODEX=C:\\Tools&A\\100%%codex^^\\codex-real.exe"');
-    expect(script).toContain('set "OCX_BUN=C:\\Bun&Dir\\100%%bun^^\\bun.exe"');
-    expect(script).toContain('set "OCX_CLI=C:\\ocx&Dir\\cli.ts"');
-    expect(script).toContain('"%OCX_BUN%" "%OCX_CLI%" ensure >nul 2>nul');
+    expect(script).toContain('set "CCX_REAL_CODEX=C:\\Tools&A\\100%%codex^^\\codex-real.exe"');
+    expect(script).toContain('set "CCX_BUN=C:\\Bun&Dir\\100%%bun^^\\bun.exe"');
+    expect(script).toContain('set "CCX_CLI=C:\\ccx&Dir\\cli.ts"');
+    expect(script).toContain('"%CCX_BUN%" "%CCX_CLI%" ensure >nul 2>nul');
     expect(script).not.toContain('"C:\\Bun&Dir\\100%bun^\\bun.exe"');
     expect(script).not.toContain('"C:\\Tools&A\\100%codex^\\codex-real.exe" %*');
   });
@@ -139,14 +169,14 @@ describe("Codex autostart shim", () => {
       process.env.USERPROFILE = "C:\\Users\\한글사용자";
       process.env.APPDATA = "C:\\Users\\한글사용자\\AppData\\Roaming";
       const script = buildWindowsCodexShim(
-        "C:\\Users\\한글사용자\\AppData\\Roaming\\npm\\codex.opencodex-real.cmd",
+        "C:\\Users\\한글사용자\\AppData\\Roaming\\npm\\codex.codexcommander-real.cmd",
         "C:\\Users\\한글사용자\\AppData\\Roaming\\npm\\node_modules\\bun\\bin\\bun.exe",
-        "C:\\Users\\한글사용자\\AppData\\Roaming\\npm\\node_modules\\opencodex\\src\\cli.ts",
+        "C:\\Users\\한글사용자\\AppData\\Roaming\\npm\\node_modules\\codexcommander\\src\\cli\\index.ts",
         "bundled",
       );
 
-      expect(script).toContain('set "OCX_REAL_CODEX=%APPDATA%\\npm\\codex.opencodex-real.cmd"');
-      expect(script).toContain('set "OCX_BUN=%APPDATA%\\npm\\node_modules\\bun\\bin\\bun.exe"');
+      expect(script).toContain('set "CCX_REAL_CODEX=%APPDATA%\\npm\\codex.codexcommander-real.cmd"');
+      expect(script).toContain('set "CCX_BUN=%APPDATA%\\npm\\node_modules\\bun\\bin\\bun.exe"');
       expect(script).not.toContain("한글사용자");
       // No chcp in the shim: it runs in the USER's console and must not leak a codepage change.
       expect(script).not.toContain("chcp");
@@ -174,15 +204,15 @@ describe("Codex autostart shim", () => {
 
   test("Unix shim accepts an injected token-file path (Git-Bash shims need forward slashes everywhere)", () => {
     const script = buildUnixCodexShim(
-      "C:/Users/한글사용자/AppData/Roaming/npm/codex.opencodex-real",
+      "C:/Users/한글사용자/AppData/Roaming/npm/codex.codexcommander-real",
       "C:/Users/한글사용자/AppData/Roaming/npm/node_modules/bun/bin/bun.exe",
-      "C:/Users/한글사용자/AppData/Roaming/npm/node_modules/opencodex/src/cli.ts",
+      "C:/Users/한글사용자/AppData/Roaming/npm/node_modules/codexcommander/src/cli/index.ts",
       "bundled",
-      "C:/Users/한글사용자/.opencodex/service-api-token",
+      "C:/Users/한글사용자/.codexcommander/service-api-token",
     );
 
-    expect(script).toContain("exec 'C:/Users/한글사용자/AppData/Roaming/npm/codex.opencodex-real' \"$@\"");
-    expect(script).toContain("[ -f 'C:/Users/한글사용자/.opencodex/service-api-token' ]");
+    expect(script).toContain("exec 'C:/Users/한글사용자/AppData/Roaming/npm/codex.codexcommander-real' \"$@\"");
+    expect(script).toContain("[ -f 'C:/Users/한글사용자/.codexcommander/service-api-token' ]");
     expect(script).not.toContain("\\\\");
   });
 
@@ -190,7 +220,7 @@ describe("Codex autostart shim", () => {
     const unix = buildUnixCodexShim("/bin/codex", "/bin/bun", "/cli.ts", "bundled");
     const win = buildWindowsCodexShim("C:\\codex.exe", "C:\\bun.exe", "C:\\cli.ts", "bundled");
 
-    const dir = mkdtempSync(join(tmpdir(), "ocx-shim-test-"));
+    const dir = mkdtempSync(join(tmpdir(), "ccx-shim-test-"));
     const unixPath = join(dir, "codex-shim");
     const winPath = join(dir, "codex-shim.cmd");
 
@@ -202,7 +232,7 @@ describe("Codex autostart shim", () => {
   });
 
   test("non-shim file does not contain the marker", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-shim-test-"));
+    const dir = mkdtempSync(join(tmpdir(), "ccx-shim-test-"));
     const fakeBinary = join(dir, "codex");
     writeFileSync(fakeBinary, "#!/bin/sh\necho hello\n", "utf8");
 
@@ -211,26 +241,26 @@ describe("Codex autostart shim", () => {
 
   test("Unix shim uses bypass env var to skip proxy start", () => {
     const script = buildUnixCodexShim("/bin/codex", "/bin/bun", "/cli.ts", "bundled");
-    expect(script).toContain("OCX_SHIM_BYPASS");
+    expect(script).toContain("CCX_SHIM_BYPASS");
   });
 
   test("Windows shim uses bypass env var to skip proxy start", () => {
     const script = buildWindowsCodexShim("C:\\codex.exe", "C:\\bun.exe", "C:\\cli.ts", "bundled");
-    expect(script).toContain("OCX_SHIM_BYPASS");
+    expect(script).toContain("CCX_SHIM_BYPASS");
   });
 
   test("PowerShell shim uses bypass env var to skip proxy start", () => {
     const script = buildWindowsPowerShellCodexShim("C:\\codex-real.ps1", "C:\\bun.exe", "C:\\cli.ts", "bundled");
-    expect(script).toContain("OCX_SHIM_BYPASS");
+    expect(script).toContain("CCX_SHIM_BYPASS");
     expect(script).toContain("Test-Path -LiteralPath");
-    expect(script).toContain("OPENCODEX_API_AUTH_TOKEN");
+    expect(script).toContain("CODEXCOMMANDER_API_AUTH_TOKEN");
     expect(script).toContain("& 'C:\\codex-real.ps1' @args");
   });
 
   test("Unix shim treats executable paths as literals instead of shell interpolation", () => {
     if (process.platform === "win32") return;
 
-    const dir = mkdtempSync(join(tmpdir(), "ocx-shim-quote-"));
+    const dir = mkdtempSync(join(tmpdir(), "ccx-shim-quote-"));
     const logPath = join(dir, "calls.log");
     const bunPath = join(dir, "bun-$(touch pwned)");
     const realCodexPath = join(dir, "codex-`touch real-pwned`");
@@ -256,20 +286,20 @@ describe("Codex autostart shim", () => {
   test("Unix shim exports persisted service API token before running Codex", () => {
     if (process.platform === "win32") return;
 
-    const dir = mkdtempSync(join(tmpdir(), "ocx-shim-token-"));
+    const dir = mkdtempSync(join(tmpdir(), "ccx-shim-token-"));
     const logPath = join(dir, "calls.log");
     const bunPath = join(dir, "bun");
     const realCodexPath = join(dir, "codex-real");
     const shimPath = join(dir, "codex");
-    const oldHome = process.env.OPENCODEX_HOME;
-    const oldToken = process.env.OPENCODEX_API_AUTH_TOKEN;
+    const oldHome = process.env.CODEXCOMMANDER_HOME;
+    const oldToken = process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
     try {
-      process.env.OPENCODEX_HOME = dir;
-      delete process.env.OPENCODEX_API_AUTH_TOKEN;
+      process.env.CODEXCOMMANDER_HOME = dir;
+      delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
       writeFileSync(join(dir, "service-api-token"), "local-secret\n", "utf8");
       writeFileSync(bunPath, `#!/usr/bin/env sh\nexit 0\n`, "utf8");
-      writeFileSync(realCodexPath, `#!/usr/bin/env sh\necho "token:$OPENCODEX_API_AUTH_TOKEN" >> "${logPath}"\n`, "utf8");
-      writeFileSync(shimPath, buildUnixCodexShim(realCodexPath, bunPath, "/opt/opencodex/src/cli.ts", "bundled"), "utf8");
+      writeFileSync(realCodexPath, `#!/usr/bin/env sh\necho "token:$CODEXCOMMANDER_API_AUTH_TOKEN" >> "${logPath}"\n`, "utf8");
+      writeFileSync(shimPath, buildUnixCodexShim(realCodexPath, bunPath, "/opt/codexcommander/src/cli/index.ts", "bundled"), "utf8");
       chmodSync(bunPath, 0o755);
       chmodSync(realCodexPath, 0o755);
       chmodSync(shimPath, 0o755);
@@ -279,17 +309,17 @@ describe("Codex autostart shim", () => {
       expect(result.status).toBe(0);
       expect(readFileSync(logPath, "utf8")).toBe("token:local-secret\n");
     } finally {
-      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldHome;
-      if (oldToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-      else process.env.OPENCODEX_API_AUTH_TOKEN = oldToken;
+      if (oldHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = oldHome;
+      if (oldToken === undefined) delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+      else process.env.CODEXCOMMANDER_API_AUTH_TOKEN = oldToken;
     }
   });
 
-  test("Unix shim skips ocx startup only for Codex management commands", () => {
+  test("Unix shim skips ccx startup only for Codex management commands", () => {
     if (process.platform === "win32") return;
 
-    const dir = mkdtempSync(join(tmpdir(), "ocx-shim-test-"));
+    const dir = mkdtempSync(join(tmpdir(), "ccx-shim-test-"));
     const logPath = join(dir, "calls.log");
     const bunPath = join(dir, "bun");
     const realCodexPath = join(dir, "codex-real");
@@ -297,12 +327,12 @@ describe("Codex autostart shim", () => {
 
     writeFileSync(bunPath, `#!/usr/bin/env sh\necho "bun:$*" >> "${logPath}"\n`, "utf8");
     writeFileSync(realCodexPath, `#!/usr/bin/env sh\necho "codex:$*" >> "${logPath}"\n`, "utf8");
-    writeFileSync(shimPath, buildUnixCodexShim(realCodexPath, bunPath, "/opt/opencodex/src/cli.ts", "bundled"), "utf8");
+    writeFileSync(shimPath, buildUnixCodexShim(realCodexPath, bunPath, "/opt/codexcommander/src/cli/index.ts", "bundled"), "utf8");
     chmodSync(bunPath, 0o755);
     chmodSync(realCodexPath, 0o755);
     chmodSync(shimPath, 0o755);
     const env = { ...process.env };
-    delete env.OCX_SHIM_BYPASS;
+    delete env.CCX_SHIM_BYPASS;
 
     const doctor = spawnSync(shimPath, ["doctor"], { encoding: "utf8", env });
     expect(doctor.status).toBe(0);
@@ -321,18 +351,18 @@ describe("Codex autostart shim", () => {
     const exec = spawnSync(shimPath, ["exec", "hello"], { encoding: "utf8", env });
     expect(exec.status).toBe(0);
     expect(readFileSync(logPath, "utf8")).toBe(
-      "codex:doctor\ncodex:-s read-only -a untrusted app-server\nbun:/opt/opencodex/src/cli.ts ensure\ncodex:exec hello\n",
+      "codex:doctor\ncodex:-s read-only -a untrusted app-server\nbun:/opt/codexcommander/src/cli/index.ts ensure\ncodex:exec hello\n",
     );
 
     const prompt = spawnSync(shimPath, ["hello"], { encoding: "utf8", env });
     expect(prompt.status).toBe(0);
     expect(readFileSync(logPath, "utf8")).toBe(
-      "codex:doctor\ncodex:-s read-only -a untrusted app-server\nbun:/opt/opencodex/src/cli.ts ensure\ncodex:exec hello\nbun:/opt/opencodex/src/cli.ts ensure\ncodex:hello\n",
+      "codex:doctor\ncodex:-s read-only -a untrusted app-server\nbun:/opt/codexcommander/src/cli/index.ts ensure\ncodex:exec hello\nbun:/opt/codexcommander/src/cli/index.ts ensure\ncodex:hello\n",
     );
   });
 
-  test("Windows shim skips ocx startup only for Codex management commands", () => {
-    const script = buildWindowsCodexShim("C:\\Tools\\codex-real.exe", "C:\\Bun\\bun.exe", "C:\\ocx\\cli.ts", "bundled");
+  test("Windows shim skips ccx startup only for Codex management commands", () => {
+    const script = buildWindowsCodexShim("C:\\Tools\\codex-real.exe", "C:\\Bun\\bun.exe", "C:\\ccx\\cli.ts", "bundled");
 
     expect(script).toContain(':scan_codex_args');
     expect(script).toContain('if /I "%~1"=="-s" goto skip_option_value');
@@ -343,7 +373,7 @@ describe("Codex autostart shim", () => {
     expect(script).not.toContain('if /I "%~1"=="resume" goto run_codex');
     expect(script).not.toContain('if /I "%~1"=="review" goto run_codex');
     expect(script).toContain('if /I "%~1"=="--help" goto run_codex');
-    expect(script).toContain('"%OCX_REAL_CODEX%" %*');
+    expect(script).toContain('"%CCX_REAL_CODEX%" %*');
   });
 
   test("PowerShell shim scans past value-taking global options", () => {
@@ -360,10 +390,10 @@ describe("Codex autostart shim", () => {
   test("Windows install backs up cmd, ps1, and the bare Git-Bash launcher", () => {
     if (process.platform !== "win32") return;
 
-    const dir = mkdtempSync(join(tmpdir(), "ocx-shim-bin-"));
-    const home = mkdtempSync(join(tmpdir(), "ocx-shim-home-"));
+    const dir = mkdtempSync(join(tmpdir(), "ccx-shim-bin-"));
+    const home = mkdtempSync(join(tmpdir(), "ccx-shim-home-"));
     const oldPath = process.env.PATH;
-    const oldHome = process.env.OPENCODEX_HOME;
+    const oldHome = process.env.CODEXCOMMANDER_HOME;
     const cmd = join(dir, "codex.cmd");
     const ps1 = join(dir, "codex.ps1");
     const bare = join(dir, "codex");
@@ -373,7 +403,7 @@ describe("Codex autostart shim", () => {
 
     try {
       process.env.PATH = dir;
-      process.env.OPENCODEX_HOME = home;
+      process.env.CODEXCOMMANDER_HOME = home;
       writeFileSync(cmd, cmdOriginal, "utf8");
       writeFileSync(ps1, ps1Original, "utf8");
       writeFileSync(bare, bareOriginal, "utf8");
@@ -384,9 +414,9 @@ describe("Codex autostart shim", () => {
       expect(readFileSync(cmd, "utf8")).toContain(SHIM_MARKER);
       expect(readFileSync(ps1, "utf8")).toContain(SHIM_MARKER);
       expect(readFileSync(bare, "utf8")).toContain(SHIM_MARKER);
-      expect(readFileSync(join(dir, "codex.opencodex-real.cmd"), "utf8")).toBe(cmdOriginal);
-      expect(readFileSync(join(dir, "codex.opencodex-real.ps1"), "utf8")).toBe(ps1Original);
-      expect(readFileSync(join(dir, "codex.opencodex-real"), "utf8")).toBe(bareOriginal);
+      expect(readFileSync(join(dir, "codex.codexcommander-real.cmd"), "utf8")).toBe(cmdOriginal);
+      expect(readFileSync(join(dir, "codex.codexcommander-real.ps1"), "utf8")).toBe(ps1Original);
+      expect(readFileSync(join(dir, "codex.codexcommander-real"), "utf8")).toBe(bareOriginal);
 
       const state = JSON.parse(readFileSync(join(home, "codex-shim.json"), "utf8"));
       expect(state.wrappers).toHaveLength(3);
@@ -401,8 +431,8 @@ describe("Codex autostart shim", () => {
       expect(readFileSync(bare, "utf8")).toBe(bareOriginal);
     } finally {
       process.env.PATH = oldPath;
-      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldHome;
+      if (oldHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = oldHome;
       rmSync(dir, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });
     }
@@ -446,20 +476,20 @@ describe("Codex autostart shim", () => {
   });
 
   test("an aged lock held by a live restore owner is never reclaimed", async () => {
-    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-concurrent-bin-"));
-    const home = mkdtempSync(join(tmpdir(), "ocx-shim-concurrent-home-"));
+    const binDir = mkdtempSync(join(tmpdir(), "ccx-shim-concurrent-bin-"));
+    const home = mkdtempSync(join(tmpdir(), "ccx-shim-concurrent-home-"));
     const readyPath = join(home, "first-lock-ready");
     const releasePath = join(home, "release-first-lock");
     const restoreLockPath = join(home, "codex-shim.autorestore.lock");
     const wrapper = join(binDir, process.platform === "win32" ? "codex.cmd" : "codex");
-    const backup = join(binDir, process.platform === "win32" ? "codex.opencodex-real.cmd" : "codex.opencodex-real");
+    const backup = join(binDir, process.platform === "win32" ? "codex.codexcommander-real.cmd" : "codex.codexcommander-real");
     const replacement = "concurrent replacement launcher\n";
     const oldPath = process.env.PATH;
-    const oldHome = process.env.OPENCODEX_HOME;
+    const oldHome = process.env.CODEXCOMMANDER_HOME;
     let first: ReturnType<typeof Bun.spawn> | undefined;
     try {
       process.env.PATH = binDir;
-      process.env.OPENCODEX_HOME = home;
+      process.env.CODEXCOMMANDER_HOME = home;
       writeFileSync(wrapper, process.platform === "win32" ? "@echo off\r\necho original\r\n" : "#!/bin/sh\necho original\n", "utf8");
       if (process.platform !== "win32") chmodSync(wrapper, 0o755);
       expect(installCodexShim().installed).toBe(true);
@@ -490,7 +520,7 @@ describe("Codex autostart shim", () => {
         const { autoRestoreCodexShim } = await import(${JSON.stringify(shimModule)});
         console.log(JSON.stringify(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: () => {} })));
       `;
-      const childEnv = { ...process.env, PATH: binDir, OPENCODEX_HOME: home };
+      const childEnv = { ...process.env, PATH: binDir, CODEXCOMMANDER_HOME: home };
       first = Bun.spawn([process.execPath, "-e", firstScript], {
         cwd: join(import.meta.dir, ".."),
         env: childEnv,
@@ -523,8 +553,8 @@ describe("Codex autostart shim", () => {
       if (first) await first.exited;
       if (oldPath === undefined) delete process.env.PATH;
       else process.env.PATH = oldPath;
-      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldHome;
+      if (oldHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = oldHome;
       rmSync(binDir, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });
     }
@@ -605,7 +635,7 @@ describe("Codex autostart shim", () => {
     withInstalledShim(({ binDir, wrappers, backups, statePath }) => {
       if (wrappers.length === 1) {
         const sibling = join(binDir, "codex.ps1");
-        const siblingBackup = join(binDir, "codex.opencodex-real.ps1");
+        const siblingBackup = join(binDir, "codex.codexcommander-real.ps1");
         writeFileSync(sibling, readFileSync(wrappers[0]));
         chmodSync(sibling, 0o755);
         writeFileSync(siblingBackup, "prior sibling launcher\n", "utf8");
@@ -664,23 +694,21 @@ describe("Codex autostart shim", () => {
   });
 
   test("multi-wrapper restore rolls back when a later sibling fingerprint changes", () => {
-    const home = mkdtempSync(join(tmpdir(), "ocx-shim-transaction-home-"));
-    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-transaction-bin-"));
-    const oldHome = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ccx-shim-transaction-home-"));
+    const binDir = mkdtempSync(join(tmpdir(), "ccx-shim-transaction-bin-"));
+    const oldHome = process.env.CODEXCOMMANDER_HOME;
     try {
-      process.env.OPENCODEX_HOME = home;
+      process.env.CODEXCOMMANDER_HOME = home;
       const wrappers = [join(binDir, "codex.cmd"), join(binDir, "codex.ps1")];
-      const backups = [join(binDir, "codex.opencodex-real.cmd"), join(binDir, "codex.opencodex-real.ps1")];
+      const backups = [join(binDir, "codex.codexcommander-real.cmd"), join(binDir, "codex.codexcommander-real.ps1")];
       const wrapperBytes = ["replacement cmd\n", "replacement ps1\n"];
       const backupBytes = ["prior cmd\n", "prior ps1\n"];
       wrappers.forEach((path, index) => writeFileSync(path, wrapperBytes[index], "utf8"));
       backups.forEach((path, index) => writeFileSync(path, backupBytes[index], "utf8"));
       const statePath = join(home, "codex-shim.json");
       writeFileSync(statePath, JSON.stringify({
+        version: 1,
         platform: process.platform,
-        wrapperPath: wrappers[0],
-        originalPath: wrappers[0],
-        backupPath: backups[0],
         wrappers: wrappers.map((wrapperPath, index) => ({
           wrapperPath,
           originalPath: wrapperPath,
@@ -708,8 +736,8 @@ describe("Codex autostart shim", () => {
       [...wrappers, ...backups].forEach((path, index) => expect(statSync(path).mode & 0o777).toBe(modes[index]));
       expect(readdirSync(binDir).filter(name => name.includes(".autorestore-"))).toEqual([]);
     } finally {
-      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldHome;
+      if (oldHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = oldHome;
       rmSync(home, { recursive: true, force: true });
       rmSync(binDir, { recursive: true, force: true });
     }
@@ -737,10 +765,13 @@ describe("Codex autostart shim", () => {
 
       const otherPlatform = process.platform === "win32" ? "linux" : "win32";
       writeFileSync(statePath, JSON.stringify({
+        version: 1,
         platform: otherPlatform,
-        wrapperPath: wrappers[0],
-        originalPath: wrappers[0],
-        backupPath: backups[0],
+        wrappers: [{
+          wrapperPath: wrappers[0],
+          originalPath: wrappers[0],
+          backupPath: backups[0],
+        }],
       }), "utf8");
       expect(autoRestoreCodexShim({ enabled: () => true }).status).toBe("ineligible");
     });

@@ -1,5 +1,5 @@
 /**
- * Shared loading indicators (WP2 / 010_loading_contract.md).
+ * Shared loading indicators.
  *
  * One live region per loading transition. A skeleton owns the announcement while a surface is
  * cold; a status line owns it during revalidation, and steps down to visual-only when an error

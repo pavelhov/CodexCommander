@@ -7,10 +7,10 @@ import {
   rememberReasoningForCall,
 } from "../src/responses/reasoning-replay-cache";
 import { routeModel } from "../src/router";
-import type { OcxConfig, OcxParsedRequest } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderParsedRequest } from "../src/types";
 
 /**
- * Regression coverage for opencodex issue #950: OpenCode Go DeepSeek V4 Flash
+ * Regression coverage for codexcommander issue #950: OpenCode Go DeepSeek V4 Flash
  * intermittently drops `reasoning_content` on tool-call continuations and the
  * upstream rejects the request with HTTP 400 ("The `reasoning_content` in the
  * thinking mode must be passed back to the API").
@@ -26,7 +26,7 @@ import type { OcxConfig, OcxParsedRequest } from "../src/types";
 const MODEL = "opencode-go/deepseek-v4-flash";
 const REASONING = "I need to inspect files before answering.";
 
-function configFor(): OcxConfig {
+function configFor(): CodexCommanderConfig {
   return {
     port: 10100,
     defaultProvider: "opencode-go",
@@ -45,7 +45,7 @@ function wireFor(input: unknown[]): { messages: Array<Record<string, unknown>> }
   const parsed = parseRequest({ model: MODEL, input, stream: true });
   const route = routeModel(configFor(), parsed.modelId);
   parsed.modelId = route.modelId;
-  const req = createOpenAIChatAdapter(route.provider).buildRequest(parsed as OcxParsedRequest);
+  const req = createOpenAIChatAdapter(route.provider).buildRequest(parsed as CodexCommanderParsedRequest);
   return JSON.parse(req.body as string) as { messages: Array<Record<string, unknown>> };
 }
 
@@ -112,7 +112,7 @@ describe("issue #950 — tool-call reasoning replay invariant (openai-chat wire)
     rememberReasoningForCall("call_1", REASONING);
     const { messages } = wireFor([
       userMessage(),
-      { type: "compaction", encrypted_content: "ocx1:c3VtbWFyeQ==" },
+      { type: "compaction", encrypted_content: "ccx1:c3VtbWFyeQ==" },
       functionCallItem(),
       functionCallOutputItem(),
     ]);
@@ -136,9 +136,9 @@ describe("issue #950 — tool-call reasoning replay invariant (openai-chat wire)
   });
 
   test("documented non-bug: opaque encrypted-only reasoning is intentionally not replayed", () => {
-    // Native (non-ocxr1) encrypted reasoning has no readable text; the parser
+    // Native (non-ccxr1) encrypted reasoning has no readable text; the parser
     // deliberately degrades instead of inventing replayable plaintext. Not a
-    // candidate for the opencode-go path (its reasoning is plaintext/ocxr1).
+    // candidate for the opencode-go path (its reasoning is plaintext/ccxr1).
     const { messages } = wireFor([
       userMessage(),
       { type: "reasoning", id: "rs_1", encrypted_content: "some-opaque-blob" },

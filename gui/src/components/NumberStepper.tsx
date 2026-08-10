@@ -19,10 +19,10 @@ export function NumberStepper({
   decrementLabel,
 }: NumberStepperProps) {
   return (
-    <div className="ocx-stepper" role="group">
+    <div className="ccx-stepper" role="group">
       <button
         type="button"
-        className="ocx-stepper__btn"
+        className="ccx-stepper__btn"
         disabled={disabled}
         aria-label={incrementLabel}
         onMouseDown={(event) => event.preventDefault()}
@@ -32,7 +32,7 @@ export function NumberStepper({
       </button>
       <button
         type="button"
-        className="ocx-stepper__btn"
+        className="ccx-stepper__btn"
         disabled={disabled}
         aria-label={decrementLabel}
         onMouseDown={(event) => event.preventDefault()}

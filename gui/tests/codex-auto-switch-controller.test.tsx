@@ -53,6 +53,19 @@ async function flush(): Promise<void> {
   await Promise.resolve();
 }
 
+function activePayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    activeCodexAccountId: null,
+    pinned: false,
+    pinnedAccountId: null,
+    autoSwitchThreshold: 80,
+    upstreamFailoverThreshold: 3,
+    accountPoolStrategy: "quota",
+    accountPoolStickyLimit: 1,
+    ...overrides,
+  };
+}
+
 function setInputValue(input: HTMLInputElement, value: string): void {
   Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!
     .set!.call(input, value);
@@ -107,12 +120,7 @@ afterEach(async () => {
 
 async function mountHarness(): Promise<Harness> {
   const activeResponses: Array<Promise<Response> | Response> = [
-    Response.json({
-      activeCodexAccountId: null,
-      autoSwitchThreshold: 80,
-      accountPoolStrategy: "quota",
-      accountPoolStickyLimit: 1,
-    }),
+    Response.json(activePayload()),
   ];
   const putResponses: Array<Promise<Response> | Response> = [];
   const writes: number[] = [];
@@ -130,12 +138,7 @@ async function mountHarness(): Promise<Harness> {
     value: () => {},
   });
 
-  const defaultActivePayload = {
-    activeCodexAccountId: null,
-    autoSwitchThreshold: 80,
-    accountPoolStrategy: "quota",
-    accountPoolStickyLimit: 1,
-  };
+  const defaultActivePayload = activePayload();
   const fetchRouter = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const method = init?.method ?? (input instanceof Request ? input.method : "GET");
@@ -256,12 +259,11 @@ describe("Codex auto-switch controller interactions", () => {
     expect(activeReads).toBeGreaterThan(0);
     expect(container.querySelector(".codex-auto-switch-card")).toBeNull();
 
-    active.resolve(Response.json({
-      activeCodexAccountId: null,
+    active.resolve(Response.json(activePayload({
       autoSwitchThreshold: 80,
       accountPoolStrategy: "round-robin",
       accountPoolStickyLimit: 1,
-    }));
+    })));
     await act(flush);
 
     const card = container.querySelector<HTMLElement>(".codex-auto-switch-card");
@@ -298,12 +300,9 @@ describe("Codex auto-switch controller interactions", () => {
       if (url.endsWith("/api/codex-auth/active") && method === "GET") {
         const response = activeResponses.shift();
         if (response) return await response;
-        return Response.json({
-          activeCodexAccountId: null,
+        return Response.json(activePayload({
           autoSwitchThreshold: 55,
-          accountPoolStrategy: "quota",
-          accountPoolStickyLimit: 1,
-        });
+        }));
       }
       if (url.endsWith("/api/codex-auth/pool-strategy") && (method === "PUT" || method === "PATCH")) {
         return Response.json({
@@ -342,12 +341,9 @@ describe("Codex auto-switch controller interactions", () => {
     expect(writes).toEqual([]);
 
     await act(async () => {
-      active.resolve(Response.json({
-        activeCodexAccountId: null,
+      active.resolve(Response.json(activePayload({
         autoSwitchThreshold: 55,
-        accountPoolStrategy: "quota",
-        accountPoolStickyLimit: 1,
-      }));
+      })));
       await flush();
     });
 
@@ -401,7 +397,7 @@ describe("Codex auto-switch controller interactions", () => {
     await act(async () => {
       write.resolve(new Response(null, { status: 204 }));
       await flush();
-      staleRead.resolve(Response.json({ activeCodexAccountId: null, autoSwitchThreshold: 80 }));
+      staleRead.resolve(Response.json(activePayload()));
       await flush();
     });
 

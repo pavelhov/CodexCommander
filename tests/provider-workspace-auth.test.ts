@@ -130,7 +130,7 @@ describe("workspace account integration seam", () => {
   test("gives canonical Codex accounts explicit native switch actions", async () => {
     const source = await Bun.file("gui/src/components/CodexAccountPool.tsx").text();
     expect(source).toContain("codex-account-switch");
-    expect(source).not.toContain('onClick={() => !a.needsReauth && setConfirm(a)}');
+    expect(source).not.toContain("Boolean(account.needsReauth)");
     expect(source).not.toContain('onClick={() => !isMainActive ? setConfirm');
   });
 

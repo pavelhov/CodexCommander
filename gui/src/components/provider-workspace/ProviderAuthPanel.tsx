@@ -108,7 +108,7 @@ export default function ProviderAuthPanel({
       ? t("prov.linkCopyUnavailable")
       : t("prov.copyCode");
   const loggedIn = accounts.length > 0 || oauth?.loggedIn === true;
-  const activeReauthAccount = accounts.find(a => a.active && a.needsReauth);
+  const activeReauthAccount = accounts.find(a => a.active && oauthHealthShowsReauth(a.health?.status));
   const activeNeedsReauth = Boolean(activeReauthAccount);
 
   const submitKey = async () => {
@@ -201,7 +201,7 @@ export default function ProviderAuthPanel({
                   const label = oauthAccountDisplayLabel(accounts, account, t);
                   const switching = switchingAccountId === account.id;
                   const healthStatus = account.health?.status;
-                  const showReauth = Boolean(account.needsReauth) || oauthHealthShowsReauth(healthStatus);
+                  const showReauth = oauthHealthShowsReauth(healthStatus);
                   const inCooldown = oauthHealthIsCooldown(healthStatus);
                   const maskedId = displayAccountId(account.id);
                   const healthLabel = formatOAuthHealthLabel(t, account.health);

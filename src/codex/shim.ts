@@ -28,7 +28,7 @@ import { windowsEnvIndirectBatchValue } from "../lib/win-paths";
 import { isWslRuntime, wslAutomountRoot } from "./home";
 import { truncateRetainedUtf8 } from "../lib/admission";
 
-const SHIM_MARKER = "opencodex codex autostart shim";
+const SHIM_MARKER = "codexcommander codex autostart shim";
 const CODEX_SHIM_PROBE_BYTES = 16 * 1024;
 export const CODEX_SHIM_REPLACEMENT_STABLE_MS = 100;
 export const CODEX_SHIM_STATE_MAX_BYTES = 1024 * 1024;
@@ -78,20 +78,117 @@ const CODEX_GLOBAL_OPTIONS_WITH_VALUE = [
   "-a", "--ask-for-approval",
 ];
 
-interface ShimState {
-  platform: NodeJS.Platform;
-  wrapperPath: string;
-  originalPath: string;
-  backupPath: string;
-  wrappers?: ShimFileState[];
-}
+export const CODEX_SHIM_STATE_VERSION = 1 as const;
 
-interface ShimFileState {
+export interface CodexShimFileState {
   wrapperPath: string;
   originalPath: string;
   backupPath: string;
   realPath?: string;
   preserveOnly?: boolean;
+}
+
+export interface CodexShimState {
+  version: typeof CODEX_SHIM_STATE_VERSION;
+  platform: NodeJS.Platform;
+  wrappers: CodexShimFileState[];
+}
+
+type ShimFileState = CodexShimFileState;
+type ShimState = CodexShimState;
+
+const NODE_PLATFORMS = new Set<string>([
+  "aix",
+  "android",
+  "cygwin",
+  "darwin",
+  "freebsd",
+  "haiku",
+  "linux",
+  "netbsd",
+  "openbsd",
+  "sunos",
+  "win32",
+]);
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === expected.length && expected.every(key => Object.hasOwn(value, key));
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  const allowedKeys = new Set(allowed);
+  return Object.keys(value).every(key => allowedKeys.has(key));
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function parseShimFileState(value: unknown): ShimFileState | null {
+  if (!isPlainRecord(value)
+    || !hasOnlyKeys(value, ["wrapperPath", "originalPath", "backupPath", "realPath", "preserveOnly"])
+    || !Object.hasOwn(value, "wrapperPath")
+    || !Object.hasOwn(value, "originalPath")
+    || !Object.hasOwn(value, "backupPath")
+    || !isNonEmptyString(value.wrapperPath)
+    || !isNonEmptyString(value.originalPath)
+    || !isNonEmptyString(value.backupPath)
+    || !(value.realPath === undefined || isNonEmptyString(value.realPath))
+    || !(value.preserveOnly === undefined || typeof value.preserveOnly === "boolean")) {
+    return null;
+  }
+  return {
+    wrapperPath: value.wrapperPath,
+    originalPath: value.originalPath,
+    backupPath: value.backupPath,
+    ...(value.realPath === undefined ? {} : { realPath: value.realPath }),
+    ...(value.preserveOnly === undefined ? {} : { preserveOnly: value.preserveOnly }),
+  };
+}
+
+/** Parse the one current, versioned Codex shim-state schema without filesystem access. */
+export function parseCodexShimState(bytes: string | Uint8Array): CodexShimState | null {
+  try {
+    const text = typeof bytes === "string" ? bytes : Buffer.from(bytes).toString("utf8");
+    const value = JSON.parse(text) as unknown;
+    if (!isPlainRecord(value)
+      || !hasExactKeys(value, ["version", "platform", "wrappers"])
+      || value.version !== CODEX_SHIM_STATE_VERSION
+      || typeof value.platform !== "string"
+      || !NODE_PLATFORMS.has(value.platform)
+      || !Array.isArray(value.wrappers)
+      || value.wrappers.length === 0) {
+      return null;
+    }
+    const wrappers: ShimFileState[] = [];
+    for (const wrapper of value.wrappers) {
+      const parsed = parseShimFileState(wrapper);
+      if (!parsed) return null;
+      wrappers.push(parsed);
+    }
+    return {
+      version: CODEX_SHIM_STATE_VERSION,
+      platform: value.platform as NodeJS.Platform,
+      wrappers,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function serializeCodexShimState(state: CodexShimState): string {
+  const serialized = `${JSON.stringify(state, null, 2)}\n`;
+  if (!parseCodexShimState(serialized)) {
+    throw new TypeError("Cannot persist an invalid Codex shim state");
+  }
+  return serialized;
 }
 
 interface ShimPathFingerprint {
@@ -122,7 +219,7 @@ export type CodexShimAutoRestoreResult =
   | { status: "restored"; message: string };
 
 function cliEntry(): { bun: string; bunRuntimeSource: BunRuntimeSource; cli: string } {
-  // Bundled Bun path (survives `ocx update`); all three shim builders
+  // Bundled Bun path remains stable for the installed package; all three shim builders
   // (Unix / Windows cmd / Windows PowerShell) receive it via this entry.
   // This module lives in src/codex/, the CLI entry in src/cli/index.ts.
   // Path and provenance resolve together so the marker always describes this binary.
@@ -138,16 +235,20 @@ function commandNames(name: string): string[] {
 
 function isShim(path: string): boolean {
   try {
-    return readFileSync(path, "utf8").includes(SHIM_MARKER);
+    return containsShimMarker(readFileSync(path, "utf8"));
   } catch {
     return false;
   }
 }
 
+function containsShimMarker(content: string): boolean {
+  return content.includes(SHIM_MARKER);
+}
+
 function isHealthyShim(path: string, platform: NodeJS.Platform): boolean {
   try {
     const content = readFileSync(path, "utf8");
-    if (content.length < 180 || !content.includes(SHIM_MARKER) || !content.includes("ensure")) return false;
+    if (content.length < 180 || !containsShimMarker(content) || !content.includes("ensure")) return false;
     if (platform !== "win32" && (lstatSync(path).mode & 0o111) === 0) return false;
     return true;
   } catch {
@@ -234,7 +335,7 @@ function sameStableShimPathProbe(left: StableShimPathProbe, right: StableShimPat
 }
 
 function isHealthyShimProbe(probe: StableShimPathProbe, platform: NodeJS.Platform): boolean {
-  if (probe.prefix.length < 180 || !probe.prefix.includes(SHIM_MARKER) || !probe.prefix.includes("ensure")) return false;
+  if (probe.prefix.length < 180 || !containsShimMarker(probe.prefix) || !probe.prefix.includes("ensure")) return false;
   const mode = probe.fingerprint.target?.mode ?? probe.fingerprint.mode;
   return platform === "win32" || (mode & 0o111) !== 0;
 }
@@ -317,7 +418,7 @@ export function findCodexOnPath(deps: CodexPathScanDeps = {}): string | null {
     lastShimDiscoveryError = truncateRetainedUtf8(
       `Found a Windows codex at ${skippedInterop} via WSL PATH interop, but no Linux-side codex. ` +
       "Refusing to shim a Windows launcher from WSL (a WSL shim breaks Windows invocations). " +
-      "Install codex inside WSL (npm i -g @openai/codex), or run 'ocx ensure' from Windows to shim the Windows side.",
+      "Install codex inside WSL (npm i -g @openai/codex), or run 'ccx ensure' from Windows to shim the Windows side.",
       MAX_DIAGNOSTIC_VALUE_BYTES,
     );
   }
@@ -333,7 +434,7 @@ function findWindowsCodexTargets(): ShimFileState[] | null {
         if (!lstatSync(exe).isDirectory()) {
           lastShimDiscoveryError = truncateRetainedUtf8(
             `Found codex.exe at ${exe}. Refusing to rename a real .exe because exact codex.exe invocations would break; ` +
-            "install a codex.cmd/codex.ps1 launcher or use `ocx service install` for autostart.",
+            "install a codex.cmd/codex.ps1 launcher or use `ccx service install` for autostart.",
             MAX_DIAGNOSTIC_VALUE_BYTES,
           );
           return null;
@@ -362,7 +463,7 @@ function findWindowsCodexTargets(): ShimFileState[] | null {
 
 function backupPathFor(path: string): string {
   const ext = extname(path);
-  return ext ? `${path.slice(0, -ext.length)}.opencodex-real${ext}` : `${path}.opencodex-real`;
+  return ext ? `${path.slice(0, -ext.length)}.codexcommander-real${ext}` : `${path}.codexcommander-real`;
 }
 
 function shQuote(value: string): string {
@@ -383,41 +484,41 @@ export function buildUnixCodexShim(realCodexPath: string, bunPath: string, cliPa
   const valueOptions = CODEX_GLOBAL_OPTIONS_WITH_VALUE.join("|");
   return `#!/usr/bin/env sh
 # ${SHIM_MARKER}
-if [ -z "$OPENCODEX_API_AUTH_TOKEN" ] && [ -f ${shQuote(tokenFile)} ]; then
-  OPENCODEX_API_AUTH_TOKEN="$(cat ${shQuote(tokenFile)})"
-  export OPENCODEX_API_AUTH_TOKEN
+if [ -z "$CODEXCOMMANDER_API_AUTH_TOKEN" ] && [ -f ${shQuote(tokenFile)} ]; then
+  CODEXCOMMANDER_API_AUTH_TOKEN="$(cat ${shQuote(tokenFile)})"
+  export CODEXCOMMANDER_API_AUTH_TOKEN
 fi
-ocx_subcommand=""
-ocx_skip_next=0
-for ocx_arg in "$@"; do
-  if [ "$ocx_skip_next" -eq 1 ]; then
-    ocx_skip_next=0
+ccx_subcommand=""
+ccx_skip_next=0
+for ccx_arg in "$@"; do
+  if [ "$ccx_skip_next" -eq 1 ]; then
+    ccx_skip_next=0
     continue
   fi
-  case "$ocx_arg" in
+  case "$ccx_arg" in
     --)
       break
       ;;
     ${valueOptions})
-      ocx_skip_next=1
+      ccx_skip_next=1
       ;;
     --help|-h|--version|-V)
-      ocx_subcommand="$ocx_arg"
+      ccx_subcommand="$ccx_arg"
       break
       ;;
     -*)
       ;;
     *)
-      ocx_subcommand="$ocx_arg"
+      ccx_subcommand="$ccx_arg"
       break
       ;;
   esac
 done
-case "$ocx_subcommand" in
+case "$ccx_subcommand" in
   ${internalCommands}|--help|-h|--version|-V)
     ;;
   *)
-    if [ -z "$OCX_SHIM_BYPASS" ]; then
+    if [ -z "$CCX_SHIM_BYPASS" ]; then
       ${BUN_RUNTIME_SOURCE_ENV}=${shQuote(bunRuntimeSource)} ${BUN_RUNTIME_PATH_ENV}=${shQuote(bunPath)} ${shQuote(bunPath)} ${shQuote(cliPath)} ensure >/dev/null 2>&1 || true
     fi
     ;;
@@ -448,39 +549,39 @@ export function buildWindowsCodexShim(realCodexPath: string, bunPath: string, cl
   const valueOptionChecks = CODEX_GLOBAL_OPTIONS_WITH_VALUE.map(option => `if /I "%~1"=="${option}" goto skip_option_value`).join("\r\n");
   return `@echo off\r
 rem ${SHIM_MARKER}\r
-${windowsBatchSet("OCX_REAL_CODEX", realCodexPath)}\r
-${windowsBatchSet("OCX_BUN", bunPath)}\r
-${windowsBatchSet("OCX_CLI", cliPath)}\r
-${windowsBatchSet("OCX_API_TOKEN_FILE", serviceApiTokenFilePath())}\r
-if "%OPENCODEX_API_AUTH_TOKEN%"=="" if exist "%OCX_API_TOKEN_FILE%" set /p OPENCODEX_API_AUTH_TOKEN=<"%OCX_API_TOKEN_FILE%"\r
-if not "%OCX_SHIM_BYPASS%"=="" goto run_codex\r
+${windowsBatchSet("CCX_REAL_CODEX", realCodexPath)}\r
+${windowsBatchSet("CCX_BUN", bunPath)}\r
+${windowsBatchSet("CCX_CLI", cliPath)}\r
+${windowsBatchSet("CCX_API_TOKEN_FILE", serviceApiTokenFilePath())}\r
+if "%CODEXCOMMANDER_API_AUTH_TOKEN%"=="" if exist "%CCX_API_TOKEN_FILE%" set /p CODEXCOMMANDER_API_AUTH_TOKEN=<"%CCX_API_TOKEN_FILE%"\r
+if not "%CCX_SHIM_BYPASS%"=="" goto run_codex\r
 goto scan_codex_args\r
 :scan_codex_args\r
-if "%~1"=="" goto ensure_ocx\r
-if "%~1"=="--" goto ensure_ocx\r
+if "%~1"=="" goto ensure_ccx\r
+if "%~1"=="--" goto ensure_ccx\r
 ${valueOptionChecks}\r
 ${internalCommandChecks}\r
 if /I "%~1"=="--help" goto run_codex\r
 if /I "%~1"=="-h" goto run_codex\r
 if /I "%~1"=="--version" goto run_codex\r
 if /I "%~1"=="-V" goto run_codex\r
-set "OCX_SCAN_ARG=%~1"\r
-if "%OCX_SCAN_ARG:~0,1%"=="-" goto shift_codex_arg\r
-goto ensure_ocx\r
+set "CCX_SCAN_ARG=%~1"\r
+if "%CCX_SCAN_ARG:~0,1%"=="-" goto shift_codex_arg\r
+goto ensure_ccx\r
 :skip_option_value\r
 shift\r
-if "%~1"=="" goto ensure_ocx\r
+if "%~1"=="" goto ensure_ccx\r
 :shift_codex_arg\r
 shift\r
 goto scan_codex_args\r
-:ensure_ocx\r
+:ensure_ccx\r
 setlocal\r
 ${windowsBatchSet(BUN_RUNTIME_SOURCE_ENV, bunRuntimeSource)}\r
 ${windowsBatchSet(BUN_RUNTIME_PATH_ENV, bunPath)}\r
-"%OCX_BUN%" "%OCX_CLI%" ensure >nul 2>nul\r
+"%CCX_BUN%" "%CCX_CLI%" ensure >nul 2>nul\r
 endlocal\r
 :run_codex\r
-"%OCX_REAL_CODEX%" %*\r
+"%CCX_REAL_CODEX%" %*\r
 `;
 }
 
@@ -494,8 +595,8 @@ export function buildWindowsPowerShellCodexShim(realCodexPath: string, bunPath: 
   const tokenFile = serviceApiTokenFilePath();
   return `#!/usr/bin/env pwsh
 # ${SHIM_MARKER}
-if (-not $env:OPENCODEX_API_AUTH_TOKEN -and (Test-Path -LiteralPath ${psString(tokenFile)})) {
-  $env:OPENCODEX_API_AUTH_TOKEN = (Get-Content -Raw -LiteralPath ${psString(tokenFile)}).Trim()
+if (-not $env:CODEXCOMMANDER_API_AUTH_TOKEN -and (Test-Path -LiteralPath ${psString(tokenFile)})) {
+  $env:CODEXCOMMANDER_API_AUTH_TOKEN = (Get-Content -Raw -LiteralPath ${psString(tokenFile)}).Trim()
 }
 $internalCommands = @(${internalCommands})
 $valueOptions = @(${valueOptions})
@@ -511,7 +612,7 @@ foreach ($argValue in $args) {
   $subcommand = $argText
   break
 }
-$skipEnsure = $env:OCX_SHIM_BYPASS -or $internalCommands -contains $subcommand -or @("--help", "-h", "--version", "-V") -contains $subcommand
+$skipEnsure = $env:CCX_SHIM_BYPASS -or $internalCommands -contains $subcommand -or @("--help", "-h", "--version", "-V") -contains $subcommand
 if (-not $skipEnsure) {
   $priorRuntimeSource = $env:${BUN_RUNTIME_SOURCE_ENV}
   $priorRuntimePath = $env:${BUN_RUNTIME_PATH_ENV}
@@ -581,29 +682,7 @@ function readStateResult(): ShimStateReadResult {
   const bounded = readBoundedRegularFile(statePath(), CODEX_SHIM_STATE_MAX_BYTES);
   if (!bounded) return { state: null };
   if ("warning" in bounded) return { state: null, warning: bounded.warning };
-  try {
-    const value = JSON.parse(bounded.content) as unknown;
-    if (!value || typeof value !== "object") return { state: null };
-    const state = value as Record<string, unknown>;
-    if (typeof state.platform !== "string") return { state: null };
-    const validFile = (item: unknown): item is ShimFileState => {
-      if (!item || typeof item !== "object") return false;
-      const file = item as Record<string, unknown>;
-      return typeof file.wrapperPath === "string"
-        && typeof file.originalPath === "string"
-        && typeof file.backupPath === "string"
-        && (file.realPath === undefined || typeof file.realPath === "string")
-        && (file.preserveOnly === undefined || typeof file.preserveOnly === "boolean");
-    };
-    if (state.wrappers !== undefined) {
-      if (!Array.isArray(state.wrappers) || state.wrappers.length === 0 || !state.wrappers.every(validFile)) return { state: null };
-    } else if (!validFile(state)) {
-      return { state: null };
-    }
-    return { state: state as unknown as ShimState };
-  } catch {
-    return { state: null };
-  }
+  return { state: parseCodexShimState(bounded.content) };
 }
 
 function readState(): ShimState | null {
@@ -618,7 +697,7 @@ function writeState(state: ShimState): void {
   const path = statePath();
   recordOwnedConfigPath(getConfigDir(), path);
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
-  writeFileSync(path, JSON.stringify(state, null, 2) + "\n", "utf8");
+  writeFileSync(path, serializeCodexShimState(state), "utf8");
 }
 
 /** Git-Bash accepts `C:/...` but not backslashed paths inside sh scripts. */
@@ -651,14 +730,11 @@ function writeShim(wrapperPath: string, realCodexPath: string): void {
 }
 
 function stateFiles(state: ShimState): ShimFileState[] {
-  return state.wrappers?.length
-    ? state.wrappers
-    : [{ wrapperPath: state.wrapperPath, originalPath: state.originalPath, backupPath: state.backupPath }];
+  return state.wrappers;
 }
 
 function primaryState(files: ShimFileState[]): ShimState {
-  const first = files[0];
-  return { platform: process.platform, ...first, wrappers: files };
+  return { version: CODEX_SHIM_STATE_VERSION, platform: process.platform, wrappers: files };
 }
 
 function replaceOwnedBackup(sourcePath: string, backupPath: string): void {
@@ -883,7 +959,7 @@ function planGuardedRefreshTransaction(
       continue;
     }
     if (file.wrapperPath !== file.originalPath
-      || probe.prefix.includes(SHIM_MARKER)
+      || containsShimMarker(probe.prefix)
       || !sameFingerprint(probe.fingerprint, expectedReplacement)) return null;
     operations.push({ file, expectedReplacement, sourcePath: file.wrapperPath });
   }
@@ -1107,7 +1183,7 @@ export function autoRestoreCodexShim(options: {
     if (!existsSync(file.wrapperPath) || !hasUsableBackingPath(file)) return { status: "ineligible" };
     const probe = stableShimPathProbe(file.wrapperPath);
     if (!probe) return { status: "deferred" };
-    if (probe.prefix.includes(SHIM_MARKER)) {
+    if (containsShimMarker(probe.prefix)) {
       if (!isHealthyShimProbe(probe, state.platform)) return { status: "ineligible" };
       healthyCount += 1;
       continue;
@@ -1132,7 +1208,7 @@ export function autoRestoreCodexShim(options: {
     const expectedReplacements = new Map<string, ShimPathFingerprint>();
     for (const [path, firstProbe] of replacementProbes) {
       const secondProbe = stableShimPathProbe(path);
-      if (!secondProbe || secondProbe.prefix.includes(SHIM_MARKER)
+      if (!secondProbe || containsShimMarker(secondProbe.prefix)
         || !sameStableShimPathProbe(firstProbe, secondProbe)) return { status: "deferred" };
       expectedReplacements.set(path, secondProbe.fingerprint);
     }
@@ -1202,7 +1278,7 @@ export function diagnoseCodexShim(): CodexShimDiagnostic {
     const wrapper = existsSync(file.wrapperPath)
       ? isShim(file.wrapperPath)
         ? "shim present"
-        : "present but not an opencodex shim"
+        : "present but not a CodexCommander shim"
       : "missing";
     const backup = existsSync(file.backupPath) ? "present" : "missing";
     return `Codex autostart shim: wrapper ${wrapper} at ${file.wrapperPath}; original backup ${backup} at ${file.backupPath}.`;

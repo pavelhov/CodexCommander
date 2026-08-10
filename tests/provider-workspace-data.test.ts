@@ -3,7 +3,7 @@ import {
   applyActiveAccountReauth,
   binProviderStatus,
   buildProviderWorkspace,
-  hideRedundantChatGptForwardProviders,
+  publicWorkspaceProviders,
   isAccountProvider,
   isFreeProvider,
   providerTier,
@@ -159,7 +159,7 @@ describe("catalog: three-way tiers", () => {
   test("forward passthrough is NOT free — it is an account provider", () => {
     expect(isFreeProvider(forwardProv())).toBe(false);
     expect(isAccountProvider("openai", forwardProv())).toBe(true);
-    expect(isAccountProvider("openai-multi", forwardProv())).toBe(false);
+    expect(isAccountProvider("custom-forward", forwardProv())).toBe(false);
     expect(isAccountProvider("chatgpt", forwardProv())).toBe(false);
     expect(providerTier("openai", forwardProv())).toBe("accounts");
   });
@@ -253,26 +253,24 @@ describe("catalog: sorting", () => {
   });
 });
 
-describe("catalog: chatgpt hiding", () => {
-  test("hides legacy chatgpt only when canonical openai covers the same passthrough", () => {
+describe("catalog: public provider surface", () => {
+  test("always excludes the backend-only ChatGPT scratch provider", () => {
     const both = { openai: forwardProv(), chatgpt: forwardProv() };
-    expect(Object.keys(hideRedundantChatGptForwardProviders(both))).toEqual(["openai"]);
+    expect(Object.keys(publicWorkspaceProviders(both))).toEqual(["openai"]);
 
     const chatgptOnly = { chatgpt: forwardProv() };
-    expect(Object.keys(hideRedundantChatGptForwardProviders(chatgptOnly))).toEqual(["chatgpt"]);
+    expect(Object.keys(publicWorkspaceProviders(chatgptOnly))).toEqual([]);
 
     const nonCanonical = { openai: prov({ authMode: "key" }), chatgpt: forwardProv() };
-    expect(Object.keys(hideRedundantChatGptForwardProviders(nonCanonical)).sort()).toEqual(["chatgpt", "openai"]);
+    expect(Object.keys(publicWorkspaceProviders(nonCanonical))).toEqual(["openai"]);
   });
 
-  test("hiding keeps a repointed chatgpt and never mutates the input map", () => {
-    // chatgpt repointed to a different base URL is NOT redundant — both rows stay.
+  test("filtering never mutates the input map", () => {
     const repointed = { openai: forwardProv(), chatgpt: forwardProv({ baseUrl: "https://proxy.example.com/backend-api/codex" }) };
-    expect(Object.keys(hideRedundantChatGptForwardProviders(repointed)).sort()).toEqual(["chatgpt", "openai"]);
+    expect(Object.keys(publicWorkspaceProviders(repointed))).toEqual(["openai"]);
 
-    // The input map is never mutated even when hiding applies.
     const both = { openai: forwardProv(), chatgpt: forwardProv() };
-    const out = hideRedundantChatGptForwardProviders(both);
+    const out = publicWorkspaceProviders(both);
     expect(Object.keys(both).sort()).toEqual(["chatgpt", "openai"]);
     expect(out).not.toBe(both);
   });
@@ -446,7 +444,6 @@ describe("provider-icons", () => {
   test("single OpenAI provider display names match the registry", () => {
     expect(formatProviderDisplayName("openai", englishT)).toBe("OpenAI (Codex login)");
     expect(formatProviderDisplayName("openai-apikey", englishT)).toBe("OpenAI API");
-    expect(formatProviderDisplayName("chatgpt", englishT)).toBe("ChatGPT");
   });
 
   test("Command Code account and API-key presets use distinct display names", () => {
@@ -476,8 +473,7 @@ describe("provider-icons", () => {
     expect(formatProviderDisplayName("MyProxy", englishT)).toBe("MyProxy");
   });
 
-  test("catalog membership excludes legacy Multi and custom ids", () => {
-    expect(isCatalogProviderId("openai-multi")).toBe(false);
+  test("catalog membership excludes custom ids", () => {
     expect(isCatalogProviderId("my-proxy")).toBe(false);
   });
 

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { applyProxyEnv } from "../src/config";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
-const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "OCX_TEST_PROXY_REF"] as const;
+const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "CCX_TEST_PROXY_REF"] as const;
 let saved: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -20,8 +20,8 @@ afterEach(() => {
   }
 });
 
-function configWithProxy(proxy?: string): OcxConfig {
-  return { proxy, providers: {} } as unknown as OcxConfig;
+function configWithProxy(proxy?: string): CodexCommanderConfig {
+  return { proxy, providers: {} } as unknown as CodexCommanderConfig;
 }
 
 describe("applyProxyEnv", () => {
@@ -59,8 +59,8 @@ describe("applyProxyEnv", () => {
   });
 
   test("resolves ${VAR}-style env references like other config secrets", () => {
-    process.env.OCX_TEST_PROXY_REF = "http://ref-proxy:9999";
-    applyProxyEnv(configWithProxy("${OCX_TEST_PROXY_REF}"));
+    process.env.CCX_TEST_PROXY_REF = "http://ref-proxy:9999";
+    applyProxyEnv(configWithProxy("${CCX_TEST_PROXY_REF}"));
     expect(process.env.HTTP_PROXY).toBe("http://ref-proxy:9999");
   });
 });

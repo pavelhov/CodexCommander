@@ -43,7 +43,7 @@ async function collectFrames(stream: ReadableStream<Uint8Array>): Promise<Array<
 describe("compaction envelope", () => {
   test("round-trips a summary", () => {
     const enc = encodeCompactionSummary("progress: fixed the bug\nnext: run tests");
-    expect(enc.startsWith("ocx1:")).toBe(true);
+    expect(enc.startsWith("ccx1:")).toBe(true);
     expect(decodeCompactionSummary(enc)).toBe("progress: fixed the bug\nnext: run tests");
   });
   test("rejects real (OpenAI-encrypted) blobs", () => {
@@ -69,7 +69,7 @@ describe("parser compaction handling", () => {
     expect(parsed._compactionRequest).toBeUndefined();
   });
 
-  test("ocx1 compaction input item decodes into a summary user message", () => {
+  test("ccx1 compaction input item decodes into a summary user message", () => {
     const parsed = parseRequest({
       model: "anthropic/claude-sonnet-4-6",
       input: [
@@ -171,7 +171,7 @@ describe("COMPACT_PROMPT", () => {
   });
 });
 
-describe("forward-path ocx1 compaction scrub", () => {
+describe("forward-path ccx1 compaction scrub", () => {
   const provider = {
     adapter: "openai-responses",
     baseUrl: "https://chatgpt.example/backend-api/codex",
@@ -186,7 +186,7 @@ describe("forward-path ocx1 compaction scrub", () => {
     return JSON.parse(request.body as string) as { input: Array<Record<string, unknown>> };
   }
 
-  test("ocx1 compaction items become plain user messages before ChatGPT forwarding", () => {
+  test("ccx1 compaction items become plain user messages before ChatGPT forwarding", () => {
     const body = forwardedBody({
       model: "gpt-5.5",
       input: [
@@ -197,10 +197,10 @@ describe("forward-path ocx1 compaction scrub", () => {
     expect(body.input[0].type).toBe("message");
     const content = body.input[0].content as Array<{ text: string }>;
     expect(content[0].text).toContain("routed summary");
-    expect(JSON.stringify(body)).not.toContain("ocx1:");
+    expect(JSON.stringify(body)).not.toContain("ccx1:");
   });
 
-  test("ocx1 context_compaction items are scrubbed the same way", () => {
+  test("ccx1 context_compaction items are scrubbed the same way", () => {
     const body = forwardedBody({
       model: "gpt-5.5",
       input: [
@@ -211,7 +211,7 @@ describe("forward-path ocx1 compaction scrub", () => {
     expect(body.input[0].type).toBe("message");
     const content = body.input[0].content as Array<{ text: string }>;
     expect(content[0].text).toContain("ctx summary");
-    expect(JSON.stringify(body)).not.toContain("ocx1:");
+    expect(JSON.stringify(body)).not.toContain("ccx1:");
   });
 
   test("real OpenAI-encrypted compaction items are forwarded untouched", () => {

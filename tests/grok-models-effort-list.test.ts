@@ -4,20 +4,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 setDefaultTimeout(30_000);
 
-const previousHome = process.env.OPENCODEX_HOME;
+const previousHome = process.env.CODEXCOMMANDER_HOME;
 const previousCodexCliPath = process.env.CODEX_CLI_PATH;
 let testHome = "";
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
-function effortConfig(): OcxConfig {
+function effortConfig(): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     hostname: "127.0.0.1",
     defaultProvider: "kimi",
     providers: {
@@ -37,15 +38,15 @@ function effortConfig(): OcxConfig {
 }
 
 beforeEach(() => {
-  testHome = mkdtempSync(join(tmpdir(), "ocx-grok-effort-list-"));
-  isolatedCodexHome = installIsolatedCodexHome("ocx-grok-effort-list-codex-");
+  testHome = mkdtempSync(join(tmpdir(), "ccx-grok-effort-list-"));
+  isolatedCodexHome = installIsolatedCodexHome("ccx-grok-effort-list-codex-");
   process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
-  process.env.OPENCODEX_HOME = testHome;
+  process.env.CODEXCOMMANDER_HOME = testHome;
 });
 
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
   else process.env.CODEX_CLI_PATH = previousCodexCliPath;
   isolatedCodexHome?.restore();

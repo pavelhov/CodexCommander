@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
 import { compileGoogleWireBody, repairGoogleInvalidRequestBody } from "../src/adapters/google-wire-compiler";
-import type { OcxParsedRequest } from "../src/types";
+import type { CodexCommanderParsedRequest } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createGoogleAdapter = (...args: Parameters<typeof createGoogleAdapterProduction>) =>
@@ -74,7 +74,7 @@ describe("Google wire compiler", () => {
         messages: [{ role: "user", content: "Use the tool" }],
         tools: [{ name: originalName, description: "Test", parameters: { type: "object" } }],
       },
-    } as OcxParsedRequest);
+    } as CodexCommanderParsedRequest);
     const body = JSON.parse(request.body);
     const wireName = body.tools[0].functionDeclarations[0].name as string;
 

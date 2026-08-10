@@ -12,7 +12,7 @@ OpenAI 以外のモデル (Claude、Gemini、Grok など) を介して Codex を
 - **設定で `images.bridgeEnabled: true` を設定してブリッジを有効にします** (これはオフになっています)
 予期しない xAI 請求を避けるためのデフォルト — 以下の [構成](#configuration) を参照してください)。
 - **API キー**を持つ `xai` プロバイダー エントリ。ブリッジはフルフィルメントをレジストリ xAI に固定します
-画像エンドポイント (`https://api.x.ai/v1`);設定された `baseUrl` オーバーライドは、イメージ呼び出しでは無視されます。 OAuth / `ocx login xai` だけではブリッジを準備しません** (Grok CLI OAuth トランスポートはチャット指向であり、`/images/*` には使用されません)。
+画像エンドポイント (`https://api.x.ai/v1`);設定された `baseUrl` オーバーライドは、イメージ呼び出しでは無視されます。 OAuth / `ccx login xai` だけではブリッジを準備しません** (Grok CLI OAuth トランスポートはチャット指向であり、`/images/*` には使用されません)。
 
 「`json { "providers": { "xai": { "adapter": "openai-chat", "apiKey": "xai-…", "authMode": "key" } } } `」
 
@@ -21,7 +21,7 @@ OpenAI 以外のモデル (Claude、Gemini、Grok など) を介して Codex を
 
 ## 構成
 
-Image Bridge オプションは、`~/.opencodex/config.json` の `images` の下にあります。ブリッジングは**オプトイン**です。有料の xAI Grok Imagine 生成を有効にするには、`bridgeEnabled: true` を設定する必要があります。
+Image Bridge オプションは、`~/.codexcommander/config.json` の `images` の下にあります。ブリッジングは**オプトイン**です。有料の xAI Grok Imagine 生成を有効にするには、`bridgeEnabled: true` を設定する必要があります。
 
 ```json
 {
@@ -44,19 +44,19 @@ Image Bridge オプションは、`~/.opencodex/config.json` の `images` の下
 
 ## アーティファクトの保持
 
-生成されたイメージは`~/.opencodex/artifacts/`に書き込まれます。長時間実行セッションで際限なくディスクが増大するのを防ぐため、イメージ呼び出しが実行されるたびに (その呼び出しの完全なバッチがディスク上にあると) ディレクトリは自動的にプルーニングされます。カウントが構成された最大値 (デフォルトは 200、`images.artifactsKeepCount` で構成可能) を超えると、(変更時間による) 最も古いファイルが削除されます。枝刈りを生き残ったパスのみがモデルに返されます。
+生成されたイメージは`~/.codexcommander/artifacts/`に書き込まれます。長時間実行セッションで際限なくディスクが増大するのを防ぐため、イメージ呼び出しが実行されるたびに (その呼び出しの完全なバッチがディスク上にあると) ディレクトリは自動的にプルーニングされます。カウントが構成された最大値 (デフォルトは 200、`images.artifactsKeepCount` で構成可能) を超えると、(変更時間による) 最も古いファイルが削除されます。枝刈りを生き残ったパスのみがモデルに返されます。
 
 ## 仕組み
 
 Image Bridge は、**非 OpenAI** モデルが選択されているときに、`/v1/responses` ツール配列にホストされた `image_generation` ツールを含む **レスポンス** ターンでのみアクティブになります。これは、`/v1/images/generations` (または `/images/edits`) に直接 POST する Codex の組み込み `image_gen` ツールをインターセプトしません**。そのパスについては [Codexの統合](/guides/codex-integration/#built-in-image-generation-image_gen) で別途説明します。
 
-1. 応答リクエストで `tools` に `image_generation` がリストされると、OpenCodex がそれを検出します
+1. 応答リクエストで `tools` に `image_generation` がリストされると、CodexCommander がそれを検出します
 リクエストの前処理中。
 2. ホストされたツールは、ルーティングされたモデルが呼び出すことができる **合成関数ツール** に置き換えられます。
 通常 — モデルは、実行できない不透明なホストされたツールではなく、呼び出し可能なツールを認識します。
-3. モデルがそのツールを呼び出すと、OpenCodex が呼び出しを傍受し、プロンプトを xAI のサーバーに送信します。
+3. モデルがそのツールを呼び出すと、CodexCommander が呼び出しを傍受し、プロンプトを xAI のサーバーに送信します。
 画像生成API。
-4. 生成されたイメージは `~/.opencodex/artifacts/` に保存され、**ローカル ファイル パス**が返されます。
+4. 生成されたイメージは `~/.codexcommander/artifacts/` に保存され、**ローカル ファイル パス**が返されます。
 ツールの結果としてモデルに適用されます。
 5. モデルは、生成された画像とその位置を認識して会話を続けます。
 

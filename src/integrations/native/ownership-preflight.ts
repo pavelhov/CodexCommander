@@ -1,15 +1,15 @@
 /**
  * The service-home preflight for native-client teardown (WP2, audit r1 #5;
- * devlog 260803_integrations_toggle_all/012).
+ * implementation contract).
  *
- * `ocx stop` has honored `ServiceOwnershipError` since it started catching it
+ * `ccx stop` has honored `ServiceOwnershipError` since it started catching it
  * (src/cli/index.ts:464); nothing on the HTTP side ever did. A route that calls
  * `stripGrokConfig` directly would otherwise pull the fence out from under a
- * service running from another CODEX_HOME/OPENCODEX_HOME — the installed
+ * service running from another CODEX_HOME/CODEXCOMMANDER_HOME — the installed
  * service is still live and the shared state belongs to it.
  *
  * ENABLE is not gated by this: writing our own fence is not a shared teardown,
- * and `injectGrokConfig` already runs unguarded from `ocx start`/`ensure`.
+ * and `injectGrokConfig` already runs unguarded from `ccx start`/`ensure`.
  */
 import {
   assertServiceEnvironmentMatchesInstall,
@@ -55,7 +55,7 @@ export function assertNativeTeardownOwned(): NativeTeardownOwnership {
  * "could not read" would become "belongs to me".
  *
  * `owned` here means NO PERSISTENT SERVICE CLAIM WAS OBSERVED. It does not mean
- * this process is the only writer. Two foreground `ocx start` processes on one
+ * this process is the only writer. Two foreground `ccx start` processes on one
  * home both read `owned`, and correctly so, because neither installs a service —
  * keeping them apart is the write lock's job, not this function's.
  */
@@ -69,24 +69,22 @@ export interface OwnershipInspection {
 
 function claimNamesDifferentHome(
   claim: ServiceManagerClaim,
-  current: { codexHome: string; opencodexHome: string },
+  current: { codexHome: string; codexCommanderHome: string },
 ): boolean {
   // A definition that OMITS a home is not a definition that disagrees about it:
   // an install run without CODEX_HOME set writes no such key at all.
   if (claim.homes.codexHome !== null && !serviceHomeMatches(claim.homes.codexHome, current.codexHome)) return true;
-  if (claim.homes.opencodexHome !== null && !serviceHomeMatches(claim.homes.opencodexHome, current.opencodexHome)) return true;
+  if (claim.homes.codexCommanderHome !== null && !serviceHomeMatches(claim.homes.codexCommanderHome, current.codexCommanderHome)) return true;
   return false;
 }
 
 export interface OwnershipDeps extends ProbeDeps {
   /**
-   * Which state paths to consult. Injectable because the default set includes
-   * the DEFAULT home mirror, resolved from `homedir()` — which no test sandbox
-   * moves. Without this a fixture reads the developer's real installation and
-   * calls their own machine foreign.
+   * Which state paths to consult. Injectable so tests never inspect a developer's
+   * real installation.
    */
   readonly statePaths?: readonly string[];
-  readonly currentHomes?: { codexHome: string; opencodexHome: string };
+  readonly currentHomes?: { codexHome: string; codexCommanderHome: string };
 }
 
 export function inspectNativeCodexOwnership(deps: OwnershipDeps = {}): OwnershipInspection {
@@ -105,11 +103,11 @@ export function inspectNativeCodexOwnership(deps: OwnershipDeps = {}): Ownership
   }
 
   const valid = evidence.filter((e): e is Extract<ServiceStateEvidence, { kind: "valid" }> => e.kind === "valid");
-  // Mirrors that disagree with each other are not a majority vote.
+  // Multiple explicitly supplied state paths that disagree are not a majority vote.
   for (const one of valid) {
     for (const other of valid) {
       if (!serviceHomeMatches(one.state.codexHome, other.state.codexHome)
-        || !serviceHomeMatches(one.state.opencodexHome, other.state.opencodexHome)) {
+        || !serviceHomeMatches(one.state.codexCommanderHome, other.state.codexCommanderHome)) {
         return { ownership: "unknown", reason: "two service state files disagree about which homes are installed" };
       }
     }
@@ -117,11 +115,11 @@ export function inspectNativeCodexOwnership(deps: OwnershipDeps = {}): Ownership
 
   const foreign = valid.find(e =>
     !serviceHomeMatches(e.state.codexHome, current.codexHome)
-    || !serviceHomeMatches(e.state.opencodexHome, current.opencodexHome));
+    || !serviceHomeMatches(e.state.codexCommanderHome, current.codexCommanderHome));
   if (foreign) {
     return {
       ownership: "foreign",
-      reason: `a service is installed for CODEX_HOME=${foreign.state.codexHome} / OPENCODEX_HOME=${foreign.state.opencodexHome}`,
+      reason: `a service is installed for CODEX_HOME=${foreign.state.codexHome} / CODEXCOMMANDER_HOME=${foreign.state.codexCommanderHome}`,
     };
   }
 

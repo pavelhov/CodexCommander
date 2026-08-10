@@ -1,25 +1,25 @@
 ---
 title: 管理 API
-description: opencodex コントロール プレーンの認証、エラー、エンドポイント参照。
+description: CodexCommander コントロール プレーンの認証、エラー、エンドポイント参照。
 ---
 
-Management API は opencodex のコントロール プレーンです。 `http://localhost:10100` のダッシュボードはそのクライアントの 1 つです。 headless `ocx` プロバイダー、モデル、コンボ、アカウント、設定、診断、ライフサイクル コマンドもクライアントです。 API はプロキシの実行中にのみ使用できます。
+Management API は CodexCommander のコントロール プレーンです。 `http://localhost:10100` のダッシュボードはそのクライアントの 1 つです。 headless `ccx` プロバイダー、モデル、コンボ、アカウント、設定、診断、ライフサイクル コマンドもクライアントです。 API はプロキシの実行中にのみ使用できます。
 
 対話型クライアントには [ウェブダッシュボード](/guides/web-dashboard/) を使用するか、自動化を構築する場合はこのリファレンスを使用します。永続値は最終的に [構成](/reference/configuration/) に従います。
 
 ## 認証モデル
 
-Management API には、データプレーン API キーとは独立した独自の管理者資格情報があります。起動時に、opencodex は次の順序で解決します。
+Management API には、データプレーン API キーとは独立した独自の管理者資格情報があります。起動時に、CodexCommander は次の順序で解決します。
 
-1. `OPENCODEX_ADMIN_AUTH_TOKEN`、設定時。
-2. 強化されたシークレット ファイル内に生成された `ocx_admin_*` トークン。
+1. `CODEXCOMMANDER_ADMIN_AUTH_TOKEN`、設定時。
+2. 強化されたシークレット ファイル内に生成された `ccx_admin_*` トークン。
 
 ファイルベースのトークンは、そのディレクトリとファイルのアクセス許可または ACL が強化された後にのみ受け入れられます。それが保証できない場合、環境トークンが提供されるかファイルの状態が修復されるまで、管理認証は失敗して閉じられ、API は 503 を返します。
 
 管理者トークンを次のいずれかの形式で送信します。
 
 ```http
-X-OpenCodex-API-Key: <admin-token>
+X-CodexCommander-API-Key: <admin-token>
 ```
 
 ```http
@@ -32,7 +32,7 @@ Authorization: Bearer <admin-token>
 
 ### ループバック ダッシュボード セッション
 
-ループバック バインドでは、ダッシュボード ブートストラップは有効期間の短い `ocx_session_*` 資格情報を受け取ることができます。各セッションは 5 分間続き、正確なダッシュボードのオリジンにバインドされます。安全なリクエストはそのオリジンと一致する必要があります。安全でないメソッドには、ブラウザ `Origin` とセッションの CSRF トークンも必要です。
+ループバック バインドでは、ダッシュボード ブートストラップは有効期間の短い `ccx_session_*` 資格情報を受け取ることができます。各セッションは 5 分間続き、正確なダッシュボードのオリジンにバインドされます。安全なリクエストはそのオリジンと一致する必要があります。安全でないメソッドには、ブラウザ `Origin` とセッションの CSRF トークンも必要です。
 
 リモート バインドを含むデータ プレーン認証が必要な場合、セッションの発行は無効になります。リモート オペレーターは、生の管理トークンを使用して認証する必要があります。ループバック スタイルの GUI セッションは作成されません。
 
@@ -42,7 +42,7 @@ Authorization: Bearer <admin-token>
 
 |ステータス |タイプまたはコード |意味 |
 | --- | --- | --- |
-| 401 | `opencodex admin token required` |管理者トークンまたは GUI セッションが欠落している、無効である、期限切れである、オリジンが一致しない、または CSRF 証拠が欠落している。
+| 401 | `codexcommander admin token required` |管理者トークンまたは GUI セッションが欠落している、無効である、期限切れである、オリジンが一致しない、または CSRF 証拠が欠落している。
 | 403 | `cross-origin request blocked` |リクエストの送信元が管理許可リストの外にあります。
 | 404 | `not_found` |メソッドとパスに一致する管理ルートはありません。
 | 413 | `request body too large` | POST、PUT、または PATCH 本文が 2 MiB の管理制限を超えています。
@@ -65,7 +65,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/grok/selection` |除外された Grok モデルを永続化します。 400 個の無効な選択またはサイズが大きすぎる選択 |
 | `POST /api/grok/apply` |管理された同期を通じて永続的な Grok 設定を適用する | 409 `grok_apply_busy`; 400/500 適用失敗 |
 | `GET, PUT /api/claude-desktop` | Claude Desktop のルーティング/ネイティブ プロファイルを読み取るか永続化する | 400 無効または使用できない割り当て |
-| `POST /api/claude-desktop/apply` |保存したプロファイルを Claude Desktop の管理対象設定に書き込みます。 400/500 書き込み失敗 |
+| `POST /api/claude-desktop/apply` | 保存したプロファイルを Claude Desktop の管理対象設定に書き込みます。JSON オブジェクトと明示的な `mode`（`static`、`hybrid`、`discovery`）が必要です | 400 body/mode 不正、500 書き込み失敗 |
 | `GET /api/claude-desktop/status` |保存済みプロファイルと適用済みプロファイルおよびデスクトップの健全性を検査する | 400 ステータス読み取り失敗 |
 | `GET, PUT /api/claude-code` |クロード コードのゲートウェイ、認証モード、モデル マップ、コンテキスト、エージェント、サイドカー設定の読み取りまたは更新 | 400 無効なフィールドまたは図形 |
 
@@ -93,9 +93,6 @@ Authorization: Bearer <admin-token>
 | `GET, POST /api/windows-tray` | Windows トレイの状態を読み取るか、インストール/起動/停止/アンインストールする | 400 のサポートされていないプラットフォーム/アクション。 500 操作失敗 |
 | `GET /api/diagnostics/project-config` |キャッシュされたプロジェクト設定の読み取りに関する警告 | — |
 | `POST /api/sync` | 現在のモデルカタログを Codex に同期し、`catalogQuality`、`rehydrated`、Codex app-server の `catalogState`、必要な再起動ヒントを返す | 409 書き込み権限の拒否、500 同期失敗 |
-| `GET /api/update/check` | `latest` または `preview` 更新チャネルを確認してください。 400 無効なタグ |
-| `POST /api/update/run` |更新ジョブを開始し、必要に応じて再起動します。 400 無効な本文。ジョブ固有の競合/エラーのステータス |
-| `GET /api/update/status` | ID によって更新ジョブをポーリングする | 404 不明なジョブ |
 | `GET, PUT /api/sidecar-settings` | Web 検索およびビジョンのサイドカー モデル/バックエンド設定の読み取りまたは更新 | 400 無効な形状、バックエンド、または制限 |
 | `GET, PUT /api/shadow-call-settings` |シャドウ コール インターセプト設定の読み取りまたは更新 | 400 無効な形状または値 |
 
@@ -175,12 +172,6 @@ Authorization: Bearer <admin-token>
 
 `provider_has_dependent_combos` は安全バリアです。プロバイダーを削除する前に、依存するコンボを削除または編集してください。
 
-### サイドバー
-
-|メソッドとパス |目的 |注目すべきエラー |
-| --- | --- | --- |
-| `GET /api/update/badge` |安価なサイドバーの更新バッジの状態を読む | — |
-
 ### システムのライフサイクル
 
 |メソッドとパス |目的 |注目すべきエラー |
@@ -200,7 +191,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/codex-auth/accounts/pause` | 1 つのアカウントを一時停止または再開する | 400 無効なアカウント/状態。 404 アカウントが見つかりません |
 | `PUT /api/codex-auth/accounts/pause-exhausted` |クォータを使い果たしたアカウントを一時停止する |ミューテーションロックの失敗は 503 になります |
 | `POST /api/codex-auth/accounts/clear-cooldown` | 1 つのアカウントまたはすべてのアカウントのランタイム クールダウンをクリアする | 400 無効な ID |
-| `GET, PUT /api/codex-auth/active` |アクティブなアカウントを読み取るか選択します | 400 アカウントが無効または欠落しています。 409 一時停止/レガシー行の競合 |
+| `GET, PUT /api/codex-auth/active` |アクティブなアカウントを読み取るか選択します | 400 アカウントが無効または欠落しています。409 一時停止されたアカウント |
 | `PUT /api/codex-auth/auto-switch` |自動アカウント切り替えのクォータしきい値を設定する | 400 無効なしきい値 |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Codex アカウントプールの選択戦略を更新 | 400 無効な戦略/構成 |
 | `PUT /api/codex-auth/failover` |アカウントのフェイルオーバーしきい値を設定する | 400 無効なしきい値 |
@@ -216,4 +207,4 @@ Authorization: Bearer <admin-token>
 
 ## クライアントの選択
 
-通常の管理では、[ウェブダッシュボード](/guides/web-dashboard/) が最も安全なガイド付きワークフローを提供します。ヘッドレス ホストとオートメーションの場合は、対応する `ocx` コマンドを使用します。これらのコマンドは、これと同じライブ API を呼び出し、プロキシに到達できない場合、または操作が失敗した場合にゼロ以外の結果を返します。ダイレクト HTTP は、上記の正確なエンドポイント コントラクトを必要とする統合に最も役立ちます。
+通常の管理では、[ウェブダッシュボード](/guides/web-dashboard/) が最も安全なガイド付きワークフローを提供します。ヘッドレス ホストとオートメーションの場合は、対応する `ccx` コマンドを使用します。これらのコマンドは、これと同じライブ API を呼び出し、プロキシに到達できない場合、または操作が失敗した場合にゼロ以外の結果を返します。ダイレクト HTTP は、上記の正確なエンドポイント コントラクトを必要とする統合に最も役立ちます。

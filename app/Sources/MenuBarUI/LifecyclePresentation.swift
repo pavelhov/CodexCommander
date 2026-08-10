@@ -13,11 +13,11 @@ package enum LifecycleConfirmation {
     package var messageText: String {
         switch self {
         case .stopProxy:
-            return "Stop the OpenCodex proxy?"
+            return "Stop the CodexCommander proxy?"
         case .restartProxy:
-            return "Restart OpenCodex?"
+            return "Restart CodexCommander?"
         case .stopAndQuit:
-            return "Stop OpenCodex and quit?"
+            return "Stop CodexCommander and quit?"
         }
     }
 
@@ -26,9 +26,9 @@ package enum LifecycleConfirmation {
         case .stopProxy:
             return "Active Codex, Claude, OpenCode, and subagent requests will be interrupted. The menu bar app will stay open."
         case .restartProxy:
-            return "Active turns will drain, then OpenCodex will come back on the same port."
+            return "Active turns will drain, then CodexCommander will come back on the same port."
         case .stopAndQuit:
-            return "The background proxy will stop, along with any installed OpenCodex service. Active Codex, Claude, OpenCode, and subagent requests may be interrupted, and Codex will use native routing until OpenCodex is started again."
+            return "The background proxy will stop, along with any installed CodexCommander service. Active Codex, Claude, OpenCode, and subagent requests may be interrupted, and Codex will use native routing until CodexCommander is started again."
         }
     }
 
@@ -103,13 +103,13 @@ package struct CatalogUpdateConfirmation {
         switch activity {
         case .active(let count):
             let requests = count == 1 ? "1 active agent request" : "\(count) active agent requests"
-            activityText = "OpenCodex currently reports \(requests)."
+            activityText = "CodexCommander currently reports \(requests)."
         case .noActiveRequests:
-            activityText = "OpenCodex currently reports no active agent requests. A new request can still begin before the update is applied."
+            activityText = "CodexCommander currently reports no active agent requests. A new request can still begin before the update is applied."
         case .unknown:
-            activityText = "OpenCodex could not verify whether agent requests are active."
+            activityText = "CodexCommander could not verify whether agent requests are active."
         }
-        return "\(activityText) Applying now restarts only Codex background workers and may interrupt an answer. OpenCodex remains running."
+        return "\(activityText) Applying now restarts only Codex background workers and may interrupt an answer. CodexCommander remains running."
     }
 
     package func makeAlert() -> NSAlert {
@@ -168,10 +168,10 @@ package enum ApplicationMenuFactory {
         quitAction: Selector,
         stopAndQuitAction: Selector
     ) -> NSMenu {
-        let applicationMenu = NSMenu(title: "OpenCodex")
+        let applicationMenu = NSMenu(title: "CodexCommander")
 
         let stopAndQuit = NSMenuItem(
-            title: "Stop OpenCodex and Quit…",
+            title: "Stop CodexCommander and Quit…",
             action: stopAndQuitAction,
             keyEquivalent: CompanionShortcut.keyEquivalent
         )
@@ -193,7 +193,7 @@ package enum ApplicationMenuFactory {
         applicationMenu.addItem(quitMenuBar)
 
         let root = NSMenu(title: "Main")
-        let applicationItem = NSMenuItem(title: "OpenCodex", action: nil, keyEquivalent: "")
+        let applicationItem = NSMenuItem(title: "CodexCommander", action: nil, keyEquivalent: "")
         applicationItem.submenu = applicationMenu
         root.addItem(applicationItem)
 

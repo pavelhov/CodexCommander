@@ -3,7 +3,7 @@ title: "组合：故障切换与负载均衡"
 description: 将一个虚拟模型路由到多个 provider，用于故障切换或加权负载均衡。
 ---
 
-**combo** 是一个虚拟模型，它前置了一组按顺序排列的真实 provider/model 目标。你的客户端请求 `combo/<id>`；opencodex 会选择一个目标，将请求重写为那个具体的 `provider/model`，并且在第一个目标出现可重试失败时，可以改试另一个目标。
+**combo** 是一个虚拟模型，它前置了一组按顺序排列的真实 provider/model 目标。你的客户端请求 `combo/<id>`；CodexCommander 会选择一个目标，将请求重写为那个具体的 `provider/model`，并且在第一个目标出现可重试失败时，可以改试另一个目标。
 
 这在以下场景很有用：
 
@@ -17,10 +17,10 @@ combo 位于正常 provider 路由之前。如果你还不熟悉 `provider/model
 这个示例创建 `combo/main`，Anthropic 在前，OpenAI 在后。两个 provider 都必须已经存在并启用。
 
 ```bash
-ocx combo set main --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol
+ccx combo set main --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol
 ```
 
-默认策略是故障切换，所以正常请求会发往 `anthropic/claude-opus-4-8`。如果这次尝试出现可重试失败，opencodex 可以切换到 `openai/gpt-5.6-sol`。
+默认策略是故障切换，所以正常请求会发往 `anthropic/claude-opus-4-8`。如果这次尝试出现可重试失败，CodexCommander 可以切换到 `openai/gpt-5.6-sol`。
 
 在任何你通常会提供模型 id 的地方，都可以使用这个虚拟模型：
 
@@ -34,7 +34,7 @@ ocx combo set main --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol
 确认已保存的定义：
 
 ```bash
-ocx combo show main
+ccx combo show main
 ```
 
 :::tip
@@ -43,7 +43,7 @@ ocx combo show main
 
 ## combo 名称的工作方式
 
-`ocx combo set <id>` 中的 combo id 必须以字母或数字开头。之后可以包含字母、数字、`.`、`_` 或 `-`，总长度最多 64 个字符。其规范模型 id 始终是 `combo/<id>`；例如，id `main` 会变成 `combo/main`。
+`ccx combo set <id>` 中的 combo id 必须以字母或数字开头。之后可以包含字母、数字、`.`、`_` 或 `-`，总长度最多 64 个字符。其规范模型 id 始终是 `combo/<id>`；例如，id `main` 会变成 `combo/main`。
 
 在配置 combo 时，`combo/` 命名空间是保留的。名为 `combo` 的 provider 不能占用它，而 combo id 也不能与已配置的 provider 名称重复。
 
@@ -82,7 +82,7 @@ ocx combo show main
 创建一个 2:1 的 combo，并让每批包含两个成功请求：
 
 ```bash
-ocx combo set balanced \
+ccx combo set balanced \
   --targets anthropic/claude-opus-4-8:2,openai/gpt-5.6-sol:1 \
   --strategy round-robin \
   --sticky 2
@@ -111,7 +111,7 @@ combo 失败分为 **跳转** 失败和 **终止** 失败。
 | 客户端取消（499）、`origin_rejected`、cyber-policy 拒绝、上下文溢出，或无效请求 | 停止并返回错误；换其他目标也无法让请求变得有效。 |
 | 任何其他未分类错误 | 停止并返回错误。 |
 
-被跳过的目标默认会进入 60 秒冷却。如果上游响应包含有效的 `Retry-After` 值，opencodex 会改用该值。数字秒数和 HTTP-date 值都可以接受，而且每次冷却最多只会封顶到 10 分钟。
+被跳过的目标默认会进入 60 秒冷却。如果上游响应包含有效的 `Retry-After` 值，CodexCommander 会改用该值。数字秒数和 HTTP-date 值都可以接受，而且每次冷却最多只会封顶到 10 分钟。
 
 当前请求不会再次重试同一个已经尝试过的目标。后续请求会跳过它，直到冷却结束。如果没有任何合格目标可用，代理会返回 HTTP 503，并带上 `error.code = "combo_unavailable"`。
 
@@ -127,15 +127,15 @@ combo 失败分为 **跳转** 失败和 **终止** 失败。
 2. 调用方没有设置 effort；并且
 3. 选中的目标目录明确声明了该精确的 effort。
 
-如果请求没有 `reasoning` 对象，opencodex 会创建一个。如果 `reasoning` 存在但没有 `effort` 属性，它会保留其他字段并添加默认值。调用方提供的 effort 永远不会被覆盖。
+如果请求没有 `reasoning` 对象，CodexCommander 会创建一个。如果 `reasoning` 存在但没有 `effort` 属性，它会保留其他字段并添加默认值。调用方提供的 effort 永远不会被覆盖。
 
-当目标能力未知，或者不包含配置的 effort 时，opencodex 会省略默认值，并保持目标自身行为不变。支持的值是 `low`、`medium`、`high`、`xhigh`、`max` 和 `ultra`；省略该字段或将其设为 `null`，就会把 effort 完全交给调用方和目标。
+当目标能力未知，或者不包含配置的 effort 时，CodexCommander 会省略默认值，并保持目标自身行为不变。支持的值是 `low`、`medium`、`high`、`xhigh`、`max` 和 `ultra`；省略该字段或将其设为 `null`，就会把 effort 完全交给调用方和目标。
 
 ## 加密的 v2 子代理任务
 
-对于 Codex v2 子代理，有一个重要限制（[issue #92](https://github.com/lidge-jun/opencodex/issues/92)）。原生父进程只能把新启动 worker 的任务，以为原生 ChatGPT 后端生成的密文形式发送出去。外部 provider 无法读取那段负载。
+对于 Codex v2 子代理，有一个重要限制（[issue #92](https://github.com/pavelhov/CodexCommander/issues/92)）。原生父进程只能把新启动 worker 的任务，以为原生 ChatGPT 后端生成的密文形式发送出去。外部 provider 无法读取那段负载。
 
-对于这类请求，combo 会把合格目标筛选为规范的原生 ChatGPT 路由，即使在一次可重试失败之后也是如此。如果 combo 没有任何具备解密能力的目标，opencodex 会在分发前停止，并返回 HTTP 400：
+对于这类请求，combo 会把合格目标筛选为规范的原生 ChatGPT 路由，即使在一次可重试失败之后也是如此。如果 combo 没有任何具备解密能力的目标，CodexCommander 会在分发前停止，并返回 HTTP 400：
 
 ```json
 {
@@ -168,13 +168,13 @@ combo 失败分为 **跳转** 失败和 **终止** 失败。
 主要命令如下：
 
 ```bash
-ocx combo list
-ocx combo show <id>
-ocx combo set <id> --targets provider/model[:weight],...
-ocx combo remove <id> --yes
+ccx combo list
+ccx combo show <id>
+ccx combo set <id> --targets provider/model[:weight],...
+ccx combo remove <id> --yes
 ```
 
-`set` 也接受 `--strategy`、`--sticky`、`--effort`、`--alias` 和 `--rename-from`。将 `--effort` 或 `--alias` 的值设为 `-` 可清除该字段。`create` 和 `update` 是 `set` 的别名；`delete` 是 `remove` 的别名；同样的子命令也可通过 `ocx route combo` 使用。
+`set` 也接受 `--strategy`、`--sticky`、`--effort`、`--alias` 和 `--rename-from`。将 `--effort` 或 `--alias` 的值设为 `-` 可清除该字段。`create` 和 `update` 是 `set` 的别名；`delete` 是 `remove` 的别名；同样的子命令也可通过 `ccx route combo` 使用。
 
 ### Management API
 
@@ -216,7 +216,7 @@ combo 会存储在顶层的 `combos` 对象中，并以 combo id 作为键：
 
 ### 为什么 `combo/<id>` 会返回 404？
 
-combo id 不存在。响应是 HTTP 404，类型为 `invalid_request_error`。运行 `ocx combo list`，检查拼写和大小写，并确认你的管理命令写入的是同一个正在运行、并接收模型请求的 opencodex 实例。
+combo id 不存在。响应是 HTTP 404，类型为 `invalid_request_error`。运行 `ccx combo list`，检查拼写和大小写，并确认你的管理命令写入的是同一个正在运行、并接收模型请求的 CodexCommander 实例。
 
 ### 为什么会收到 `combo_unavailable`？
 

@@ -1,5 +1,5 @@
 /**
- * Durable generation ownership for OpenCodex config bytes.
+ * Durable generation ownership for CodexCommander config bytes.
  *
  * The WP8b C-phase review found that config ABA and moved configuration could
  * not be detected because cooperating saves had no durable counter. This module

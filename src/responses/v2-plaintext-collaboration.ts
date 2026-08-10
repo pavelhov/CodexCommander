@@ -1,4 +1,4 @@
-export const V2_PLAINTEXT_COLLABORATION_NAMESPACE = "ocx_collaboration_plaintext";
+export const V2_PLAINTEXT_COLLABORATION_NAMESPACE = "ccx_collaboration_plaintext";
 
 const CLIENT_COLLABORATION_NAMESPACE = "collaboration";
 const PLAINTEXT_MESSAGE_TOOLS = new Set(["spawn_agent", "send_message", "followup_task"]);

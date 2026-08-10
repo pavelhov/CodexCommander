@@ -9,7 +9,7 @@
  * Test hooks: DOCTOR_DRY_RUN=1 prints the run/skip decision without spawning;
  * DOCTOR_FILES (newline-separated) overrides git-derived changed files;
  * DOCTOR_CMD overrides the spawned command (offline-degradation testing);
- * OCX_DOCTOR_MAX_BUFFER overrides spawnSync maxBuffer (overflow hard-fail testing).
+ * CCX_DOCTOR_MAX_BUFFER overrides spawnSync maxBuffer (overflow hard-fail testing).
  */
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
@@ -36,7 +36,7 @@ export function isDoctorBufferOverflow(code: string | undefined): boolean {
 }
 
 function resolveMaxBuffer(): number {
-  const raw = process.env.OCX_DOCTOR_MAX_BUFFER;
+  const raw = process.env.CCX_DOCTOR_MAX_BUFFER;
   if (raw === undefined || raw === "") return DOCTOR_MAX_BUFFER;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : DOCTOR_MAX_BUFFER;

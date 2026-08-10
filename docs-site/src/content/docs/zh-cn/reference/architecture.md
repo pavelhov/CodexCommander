@@ -1,9 +1,9 @@
 ---
 title: 架构
-description: opencodex 内部机制 —— 模块图、请求解析器、AdapterEvent 桥接与缓存。
+description: CodexCommander 内部机制 —— 模块图、请求解析器、AdapterEvent 桥接与缓存。
 ---
 
-opencodex 运行在单个 Bun 进程中。请求以 OpenAI Responses 格式进入，规范化为内部模型后完成
+CodexCommander 运行在单个 Bun 进程中。请求以 OpenAI Responses 格式进入，规范化为内部模型后完成
 路由，再由 adapter 发送到 provider，最后桥接回 Responses SSE。端到端流程参见
 [工作原理](/zh-cn/getting-started/how-it-works/)。
 
@@ -11,7 +11,7 @@ opencodex 运行在单个 Bun 进程中。请求以 OpenAI Responses 格式进�
 
 ```
 src/
-├── cli/                # ocx command dispatch, init, status, provider commands
+├── cli/                # ccx command dispatch, init, status, provider commands
 ├── server/             # Bun.serve, /v1/* proxy, /api/* management API, WS bridge
 ├── codex/              # Codex config injection, catalog sync, auth/account integration
 ├── providers/          # provider metadata, API-key pool, quota and labels
@@ -21,12 +21,12 @@ src/
 ├── lib/                # runtime, process, retry, privacy, token estimate helpers
 ├── web-search/         # web-search sidecar (synthetic tool, loop, executor, parser)
 ├── vision/             # vision sidecar (describe + plan)
-├── config.ts           # ~/.opencodex/config.json, defaults, PID, env resolution
+├── config.ts           # ~/.codexcommander/config.json, defaults, PID, env resolution
 ├── router.ts           # model id → provider + adapter
 ├── bridge.ts           # AdapterEvent stream → Responses SSE / JSON
 ├── reasoning-effort.ts # reasoning-effort translation, clamping, and catalog levels
 ├── responses/
-│   ├── parser.ts       # Responses request → OcxParsedRequest
+│   ├── parser.ts       # Responses request → CodexCommanderParsedRequest
 │   ├── schema.ts       # Zod validation
 │   └── compaction.ts   # remote compaction prompts, envelopes, compact history
 ├── service.ts          # launchd / systemd / Task Scheduler background service
@@ -34,14 +34,13 @@ src/
 └── index.ts            # public entry
 ```
 
-原先的三个大型入口文件现在是兼容性 facade：`codex/catalog.ts` 导出 7 个
-`codex/catalog/*.ts` 模块，`server/management-api.ts` 分派到 9 个
+`codex/catalog.ts` 导出 7 个 `codex/catalog/*.ts` 模块，`server/management-api.ts` 分派到 9 个
 `server/management/*.ts` 模块，而 `server/responses.ts` 导出 5 个
 `server/responses/*.ts` 模块。
 
 ## 请求流程
 
-`server/index.ts` 负责 HTTP 边界，并把 Responses data plane 交给 `server/responses.ts` facade
+`server/index.ts` 负责 HTTP 边界，并把 Responses data plane 交给 `server/responses.ts`
 及其 `server/responses/*.ts` 模块：
 
 1. `server/index.ts` 应用 CORS 和 API 认证，在 drain 期间拒绝新请求，并记录请求生命周期
@@ -68,9 +67,9 @@ src/
 ## 解析器
 
 `responses/parser.ts` 使用 `responses/schema.ts`（Zod）校验传入请求，然后构建
-`OcxParsedRequest`：
+`CodexCommanderParsedRequest`：
 
-- **消息（Messages）** —— `input` 条目会变成规范化的 `OcxMessage[]`：user / developer /
+- **消息（Messages）** —— `input` 条目会变成规范化的 `CodexCommanderMessage[]`：user / developer /
   assistant / toolResult。`reasoning` 条目变成 thinking block；`function_call`、
   `custom_tool_call`、`tool_search_call` 条目变成工具调用；对应的 `*_output` 条目变成工具结果。
 - **工具（Tools）** —— function 工具直接透传；**带命名空间的（MCP）工具会被扁平化**为
@@ -117,18 +116,18 @@ item，因此 MCP 命名空间、`apply_patch` 风格的 freeform 工具和客�
 CRUD 与 key pool、模型选择/context cap/v2 控制、catalog sync、诊断与 debug log、usage 与
 quota、sidecar 设置、更新、生成客户端 API key、OAuth 登录/状态/登出与账号选择、Codex 账号
 管理，以及 graceful stop。proxy 绑定到 loopback 之外时，`server/auth-cors.ts` 会要求
-`/api/*` 和 `/v1/*` 都提供 `OPENCODEX_API_AUTH_TOKEN`；配置的 `corsAllowOrigins` 会扩展本地
+`/api/*` 和 `/v1/*` 都提供 `CODEXCOMMANDER_API_AUTH_TOKEN`；配置的 `corsAllowOrigins` 会扩展本地
 origin allowlist。
 
 OAuth 实现在 `oauth/` 中；每次路由调用前都会即时加载或刷新 access token，而
 `oauth/token-guardian.ts` 只会主动刷新策略允许的 provider。Codex/ChatGPT pool credential 与
-thread affinity 位于 `codex/` 下，不会出现在管理 API 响应中。请求用量会规范化为 `OcxUsage`，
+thread affinity 位于 `codex/` 下，不会出现在管理 API 响应中。请求用量会规范化为 `CodexCommanderUsage`，
 显示在 Responses 终止 event 中，并由 `usage/` 汇总，供仪表盘和可选的 JSONL 诊断使用。
 
 ## 传输与 compaction
 
 `server/index.ts` 默认在 `/v1/responses` 上提供 HTTP/SSE。当 `websockets` 为 `false` 而 Codex
-尝试 Responses WebSocket upgrade 时，opencodex 会返回 `426 upgrade_required`，Codex 随后在该
+尝试 Responses WebSocket upgrade 时，CodexCommander 会返回 `426 upgrade_required`，Codex 随后在该
 session 中回退到 HTTP。设置 `"websockets": true` 后，同一 endpoint 会接受 upgrade 并使用
 WebSocket bridge。
 
@@ -141,7 +140,7 @@ Codex context compaction 同样适用于路由模型。`server/responses/compact
 
 - `codex/model-cache.ts` 为每个 provider 维护实时 `/models` 结果的内存 TTL 缓存（默认 5 分钟，
   与 Codex 自身缓存一致），获取失败时会回退到旧数据。
-- `codex/catalog.ts` facade 导出的 `codex/catalog/sync.ts` 把路由模型作为带命名空间的条目
+- `codex/catalog.ts` 导出的 `codex/catalog/sync.ts` 把路由模型作为带命名空间的条目
   合并进 Codex 目录，优先排列精选的
   [subagent 模型](/zh-cn/guides/codex-integration/#subagent-选择器)，过滤
   `disabledModels`，并可从一次性备份中完整恢复原始目录。
@@ -159,7 +158,7 @@ Codex context compaction 同样适用于路由模型。`server/responses/compact
 
 ## 核心类型
 
-内部模型位于 `types.ts`：`OcxParsedRequest`、`OcxContext`、`OcxMessage` 联合类型、
-`OcxContentPart`（text / image）、`OcxToolCall`、`OcxTool`、`AdapterEvent`，以及配置类型
-（`OcxConfig`、`OcxProviderConfig`）。两个常用 helper 是 `namespacedToolName()` 和
+内部模型位于 `types.ts`：`CodexCommanderParsedRequest`、`CodexCommanderContext`、`CodexCommanderMessage` 联合类型、
+`CodexCommanderContentPart`（text / image）、`CodexCommanderToolCall`、`CodexCommanderTool`、`AdapterEvent`，以及配置类型
+（`CodexCommanderConfig`、`CodexCommanderProviderConfig`）。两个常用 helper 是 `namespacedToolName()` 和
 `modelInList()`；后者会在匹配 `noVisionModels` / `noReasoningModels` 时容忍 `:size` 标签。

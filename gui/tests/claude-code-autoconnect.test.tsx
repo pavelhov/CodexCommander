@@ -45,13 +45,11 @@ test("Auto-connect reconciliation forces an unsupported stored true off", () => 
   });
 });
 
-test("Auto-connect reconciliation fails closed when the capability field is missing", () => {
-  // stale backend (pre-capability-field proxy): absent autoConnectSupported must
-  // deactivate a persisted systemEnv:true instead of presenting it as active
-  expect(reconcileAutoConnectState({ systemEnv: true })).toEqual({
-    autoConnectSupported: false,
-    systemEnv: false,
-  });
+test("Auto-connect reconciliation rejects an incomplete response", () => {
+  expect(() => reconcileAutoConnectState({ systemEnv: true } as {
+    autoConnectSupported: unknown;
+    systemEnv: unknown;
+  })).toThrow("invalid Claude Code Auto-connect response");
 });
 
 test("Auto-connect renders enabled and checked on a supported host", () => {
@@ -67,5 +65,5 @@ test("Auto-connect renders disabled, unchecked, and explained on an unsupported 
   expect(html).not.toContain('checked=""');
   expect(html).toContain('aria-describedby="claude-system-env-unsupported"');
   expect(html).toContain("macOS only");
-  expect(html).toContain('<code class="chip">ocx claude</code>');
+  expect(html).toContain('<code class="chip">ccx claude</code>');
 });

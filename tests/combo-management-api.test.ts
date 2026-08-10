@@ -37,7 +37,7 @@ import { getConfigPath, readConfigDiagnostics, saveConfig } from "../src/config"
 import { routeModel } from "../src/router";
 import { handleManagementAPI } from "../src/server/management-api";
 import { handleResponses } from "../src/server/responses";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { syncCatalogModels } from "../src/codex/catalog";
 import { injectClaudeAgentDefs } from "../src/claude/agents-inject";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
@@ -45,9 +45,10 @@ import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 
 const VALID_COMBO = { targets: [{ provider: "a", model: "m1" }] };
 
-function baseConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
+function baseConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
   return {
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "a",
     providers: {
       a: { adapter: "openai-chat", baseUrl: "https://a.example/v1", apiKey: "ka", liveModels: false, models: ["m1"] },
@@ -67,7 +68,7 @@ function baseConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
   };
 }
 
-function rrConfig(stickyLimit: number, weights: number[]): OcxConfig {
+function rrConfig(stickyLimit: number, weights: number[]): CodexCommanderConfig {
   const providers = baseConfig().providers;
   const names = ["a", "b", "c"];
   return baseConfig({
@@ -86,7 +87,7 @@ function rrConfig(stickyLimit: number, weights: number[]): OcxConfig {
   });
 }
 
-function successfulPicks(config: OcxConfig, count: number): string[] {
+function successfulPicks(config: CodexCommanderConfig, count: number): string[] {
   const combo = getCombo(config, "free")!;
   return Array.from({ length: count }, () => {
     const pick = pickComboTarget(config, "free")!;
@@ -96,18 +97,18 @@ function successfulPicks(config: OcxConfig, count: number): string[] {
 }
 
 async function withTempHome<T>(run: (dir: string) => Promise<T> | T): Promise<T> {
-  const previousHome = process.env.OPENCODEX_HOME;
+  const previousHome = process.env.CODEXCOMMANDER_HOME;
   const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
   const previousCodexCliPath = process.env.CODEX_CLI_PATH;
-  const dir = mkdtempSync(join(tmpdir(), "ocx-combos-"));
-  process.env.OPENCODEX_HOME = dir;
+  const dir = mkdtempSync(join(tmpdir(), "ccx-combos-"));
+  process.env.CODEXCOMMANDER_HOME = dir;
   process.env.CLAUDE_CONFIG_DIR = join(dir, "claude");
   process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(dir);
   try {
     return await run(dir);
   } finally {
-    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousHome;
     if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
     if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
@@ -121,7 +122,7 @@ function writeRawConfig(config: unknown): void {
 }
 
 async function comboApi(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   method: string,
   path: string,
   body?: unknown,
@@ -137,7 +138,7 @@ async function comboApi(
   });
 }
 
-async function comboApiRaw(config: OcxConfig, method: string, path: string, body: string): Promise<Response | null> {
+async function comboApiRaw(config: CodexCommanderConfig, method: string, path: string, body: string): Promise<Response | null> {
   const req = new Request(`http://localhost${path}`, {
     method,
     headers: { "content-type": "application/json" },
@@ -349,9 +350,7 @@ describe("combo management API", () => {
         injectionModel: "combo/old",
         shadowCallIntercept: { enabled: true, model: "old-public" },
         claudeCode: {
-          model: "combo/old",
           smallFastModel: "old-public",
-          tierModels: { opus: "combo/old", sonnet: "a/m1", haiku: "old-public" },
           modelMap: { inbound: "combo/old", stable: "a/m1" },
         },
         combos: {
@@ -365,7 +364,7 @@ describe("combo management API", () => {
       });
       saveConfig(config);
       injectClaudeAgentDefs(config, {});
-      expect(readdirSync(join(process.env.CLAUDE_CONFIG_DIR!, "agents"))).toContain("ocx-old-public.md");
+      expect(readdirSync(join(process.env.CLAUDE_CONFIG_DIR!, "agents"))).toContain("ccx-old-public.md");
       const oldCombo = getCombo(config, "old")!;
       const oldPick = pickComboTarget(config, "old")!;
       noteComboSuccess("old", oldCombo, oldPick.target);
@@ -400,9 +399,7 @@ describe("combo management API", () => {
       expect(config.injectionModel).toBe("new-public");
       expect(config.shadowCallIntercept).toEqual({ enabled: true, model: "new-public" });
       expect(config.claudeCode).toMatchObject({
-        model: "new-public",
         smallFastModel: "new-public",
-        tierModels: { opus: "new-public", sonnet: "a/m1", haiku: "new-public" },
         modelMap: { inbound: "new-public", stable: "a/m1" },
       });
       const agentBodies = readdirSync(join(process.env.CLAUDE_CONFIG_DIR!, "agents"))
@@ -416,7 +413,7 @@ describe("combo management API", () => {
       expect(pickComboTarget(config, "new")?.target.provider).toBe("b");
       config.combos!.old = config.combos!.new!;
       expect(pickComboTarget(config, "old")?.target.provider).toBe("b");
-      const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as CodexCommanderConfig;
       expect(persisted.combos?.old).toBeUndefined();
       expect(persisted.combos?.new?.alias).toBe("new-public");
       expect(persisted.disabledModels).toEqual(["before", "new-public", "middle", "after"]);
@@ -424,9 +421,7 @@ describe("combo management API", () => {
       expect(persisted.injectionModel).toBe("new-public");
       expect(persisted.shadowCallIntercept).toEqual({ enabled: true, model: "new-public" });
       expect(persisted.claudeCode).toMatchObject({
-        model: "new-public",
         smallFastModel: "new-public",
-        tierModels: { opus: "new-public", sonnet: "a/m1", haiku: "new-public" },
         modelMap: { inbound: "new-public", stable: "a/m1" },
       });
     });
@@ -452,7 +447,7 @@ describe("combo management API", () => {
       expect(response?.status).toBe(200);
       expect(config.disabledModels).toEqual(["before", "stable-public", "after"]);
       expect(config.subagentModels).toEqual(["stable-public", "another"]);
-      const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as CodexCommanderConfig;
       expect(persisted.disabledModels).toEqual(["before", "stable-public", "after"]);
       expect(persisted.subagentModels).toEqual(["stable-public", "another"]);
     });
@@ -601,7 +596,7 @@ describe("combo management API", () => {
       expect(response?.status).toBe(200);
       expect(config.disabledModels).toEqual(["before", "combo/free", "after"]);
       expect(config.subagentModels).toEqual(["combo/free", "another"]);
-      const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as CodexCommanderConfig;
       expect(persisted.disabledModels).toEqual(["before", "combo/free", "after"]);
       expect(persisted.subagentModels).toEqual(["combo/free", "another"]);
     });
@@ -691,7 +686,7 @@ describe("combo management API", () => {
       const codexHome = join(dir, "codex-home");
       mkdirSync(codexHome, { recursive: true });
       process.env.CODEX_HOME = codexHome;
-      const catalogPath = join(codexHome, "opencodex-catalog.json");
+      const catalogPath = join(codexHome, "codexcommander-catalog.json");
       writeFileSync(catalogPath, JSON.stringify({
         models: [{
           slug: "combo/free",

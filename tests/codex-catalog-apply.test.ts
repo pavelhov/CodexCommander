@@ -283,6 +283,79 @@ describe("fixed applyCodexCatalog lifecycle action", () => {
     });
   });
 
+  test("a healthy native-only sync restarts a proven-stale Codex worker", async () => {
+    const calls: string[] = [];
+    const result = await applyCodexCatalog(makeDeps({
+      calls,
+      sync: async () => syncResult({
+        ok: true,
+        catalogWritten: true,
+        cacheSynced: true,
+        catalogQuality: "native-only",
+        warning: undefined,
+      }),
+      states: [
+        {
+          state: "stale",
+          catalogMtimeMs: 200,
+          processes: [{ pid: 10, startedAtMs: 100 }],
+        },
+        {
+          state: "fresh",
+          catalogMtimeMs: 200,
+          processes: [{ pid: 20, startedAtMs: 300 }],
+        },
+      ],
+      workers: [{ pid: 10, commandLine: "/Applications/Codex.app/codex app-server" }],
+      restart: workers => {
+        expect(workers.map(worker => worker.pid)).toEqual([10]);
+        return { requested: [10], stopped: [10], surviving: [], failed: [] };
+      },
+    }));
+
+    expect(calls).toEqual(["reset", "collect", "list", "restart", "reset", "collect"]);
+    expect(result).toMatchObject({
+      ok: true,
+      catalogUpdated: true,
+      codexRestartRequired: false,
+      staleWorkerCount: 1,
+      stoppedWorkerCount: 1,
+      survivingWorkerCount: 0,
+    });
+  });
+
+  test("a native-only sync without a proven catalog write never signals workers", async () => {
+    const calls: string[] = [];
+    const result = await applyCodexCatalog(makeDeps({
+      calls,
+      sync: async () => syncResult({
+        ok: true,
+        catalogWritten: false,
+        cacheSynced: false,
+        catalogQuality: "native-only",
+        warning: undefined,
+      }),
+      states: [{
+        state: "stale",
+        catalogMtimeMs: 200,
+        processes: [{ pid: 10, startedAtMs: 100 }],
+      }],
+      workers: [{ pid: 10, commandLine: "/Applications/Codex.app/codex app-server" }],
+      restart: () => { throw new Error("must not signal"); },
+    }));
+
+    expect(calls).toEqual(["reset", "collect"]);
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: "SYNC_FAILED",
+      catalogUpdated: false,
+      codexRestartRequired: true,
+      staleWorkerCount: 1,
+      stoppedWorkerCount: 0,
+      survivingWorkerCount: 1,
+    });
+  });
+
   test("surviving stale workers keep the final restart-required state true", async () => {
     const stale: CodexAppServerCatalogStatus = {
       state: "stale",

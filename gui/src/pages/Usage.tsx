@@ -735,7 +735,7 @@ function UsageWorkspaceBody({
 const usageMemoryCache = new Map<string, UsageResponse>();
 
 function usageCacheKey(apiBase: string, range: Range, surface: UsageSurface): string {
-  return `ocx.usage.v1:${apiBase}:${range}:${surface}`;
+  return `ccx.usage.v1:${apiBase}:${range}:${surface}`;
 }
 
 function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface): UsageResponse | null {

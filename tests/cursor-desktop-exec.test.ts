@@ -110,7 +110,7 @@ describe("Cursor desktop executor hooks", () => {
     }), {}))[0]);
     expect(computer.message.value.result.case).toBe("error");
     if (computer.message.value.result.case === "error") {
-      expect(computer.message.value.result.value.error).toContain("headless opencodex proxy");
+      expect(computer.message.value.result.value.error).toContain("headless CodexCommander proxy");
     }
 
     const record = decode((await handleCursorNativeExec(execMessage({
@@ -119,12 +119,12 @@ describe("Cursor desktop executor hooks", () => {
     }), {}))[0]);
     expect(record.message.value.result.case).toBe("failure");
     if (record.message.value.result.case === "failure") {
-      expect(record.message.value.result.value.error).toContain("headless opencodex proxy");
+      expect(record.message.value.result.value.error).toContain("headless CodexCommander proxy");
     }
   });
 });
 
-describe("desktop executor platform shell (devlog 260715_cross_platform_audit/020)", () => {
+describe("desktop executor platform shell (implementation contract)", () => {
   test("behavior fixture uses CMD built-ins on win32", () => {
     expect(echoJson('{"durationMs":42}', "win32")).toBe('more >nul & echo {"durationMs":42}');
   });

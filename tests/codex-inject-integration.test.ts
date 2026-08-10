@@ -12,11 +12,11 @@ import {
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
-// Full injectCodexConfig runs in a subprocess with isolated CODEX_HOME/OPENCODEX_HOME so
+// Full injectCodexConfig runs in a subprocess with isolated CODEX_HOME/CODEXCOMMANDER_HOME so
 // module-level path constants bind to the temp dirs (same pattern as codex-journal.test.ts).
 function runInject(
   codexHome: string,
-  ocxHome: string,
+  ccxHome: string,
   configJson = "{}",
   optionsJson = "{}",
 ): { stdout: string; status: number } {
@@ -24,7 +24,7 @@ function runInject(
     const { injectCodexConfig } = require("./src/codex/inject");
     injectCodexConfig(
       10100,
-      JSON.parse(process.env.TEST_OCX_CONFIG),
+      JSON.parse(process.env.TEST_CCX_CONFIG),
       JSON.parse(process.env.TEST_INJECT_OPTIONS),
     ).then(r => {
       console.log(JSON.stringify(r));
@@ -35,8 +35,8 @@ function runInject(
     env: {
       ...process.env,
       CODEX_HOME: codexHome,
-      OPENCODEX_HOME: ocxHome,
-      TEST_OCX_CONFIG: configJson,
+      CODEXCOMMANDER_HOME: ccxHome,
+      TEST_CCX_CONFIG: configJson,
       TEST_INJECT_OPTIONS: optionsJson,
     },
     encoding: "utf8",
@@ -44,14 +44,14 @@ function runInject(
   return { stdout: result.stdout?.trim() ?? "", status: result.status ?? 1 };
 }
 
-function runRestore(codexHome: string, ocxHome: string): { stdout: string; status: number } {
+function runRestore(codexHome: string, ccxHome: string): { stdout: string; status: number } {
   const script = `
     const { restoreNativeCodex } = require("./src/codex/inject");
     console.log(JSON.stringify(restoreNativeCodex()));
   `;
   const result = spawnSync(process.execPath, ["--eval", script], {
     cwd: repoRoot,
-    env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome },
+    env: { ...process.env, CODEX_HOME: codexHome, CODEXCOMMANDER_HOME: ccxHome },
     encoding: "utf8",
   });
   return { stdout: result.stdout?.trim() ?? "", status: result.status ?? 1 };
@@ -59,66 +59,35 @@ function runRestore(codexHome: string, ocxHome: string): { stdout: string; statu
 
 describe("injectCodexConfig integration (Design B)", () => {
   let codexHome: string;
-  let ocxHome: string;
+  let ccxHome: string;
 
   beforeEach(() => {
-    codexHome = mkdtempSync(join(tmpdir(), "ocx-inject-codex-"));
-    ocxHome = mkdtempSync(join(tmpdir(), "ocx-inject-home-"));
+    codexHome = mkdtempSync(join(tmpdir(), "ccx-inject-codex-"));
+    ccxHome = mkdtempSync(join(tmpdir(), "ccx-inject-home-"));
   });
 
   afterEach(() => {
     rmSync(codexHome, { recursive: true, force: true });
-    rmSync(ocxHome, { recursive: true, force: true });
-  });
-
-  test("upgrade path: a legacy-injected config converts to the Design B form in one inject", () => {
-    writeFileSync(join(codexHome, "config.toml"), [
-      'model_provider = "opencodex"',
-      'model = "gpt-5.5"',
-      "",
-      "[features]",
-      "fast_mode = true",
-      "",
-      "# Auto-injected by opencodex",
-      "[model_providers.opencodex]",
-      'name = "OpenCodex Proxy"',
-      'base_url = "http://127.0.0.1:10100/v1"',
-      'wire_api = "responses"',
-      "requires_openai_auth = true",
-      "",
-    ].join("\n"), "utf8");
-
-    const r = runInject(codexHome, ocxHome);
-    expect(r.status).toBe(0);
-    expect(JSON.parse(r.stdout).success).toBe(true);
-
-    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
-    expect(config).toContain('openai_base_url = "http://127.0.0.1:10100/v1"');
-    expect(config).toContain("# Auto-injected by opencodex");
-    expect(config).not.toContain("[model_providers.opencodex]");
-    expect(config).not.toContain('model_provider = "opencodex"');
-    expect(config).toContain('model = "gpt-5.5"');
-    // Exactly one marker survives (the Design B one) — no duplicate accumulation.
-    expect(config.match(/Auto-injected by opencodex/g)?.length).toBe(1);
+    rmSync(ccxHome, { recursive: true, force: true });
   });
 
   test("re-inject over a Design B config is idempotent", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
 
-    expect(runInject(codexHome, ocxHome).status).toBe(0);
+    expect(runInject(codexHome, ccxHome).status).toBe(0);
     const first = readFileSync(join(codexHome, "config.toml"), "utf8");
-    expect(runInject(codexHome, ocxHome).status).toBe(0);
+    expect(runInject(codexHome, ccxHome).status).toBe(0);
     const second = readFileSync(join(codexHome, "config.toml"), "utf8");
 
     expect(second.match(/openai_base_url/g)?.length).toBe(1);
-    expect(second.match(/Auto-injected by opencodex/g)?.length).toBe(1);
+    expect(second.match(/Auto-injected by CodexCommander/g)?.length).toBe(1);
     expect(second).toBe(first);
   });
 
   test("fastMode=false forces fast_mode=false in both config and profile", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
 
-    const r = runInject(codexHome, ocxHome, JSON.stringify({ fastMode: false }));
+    const r = runInject(codexHome, ccxHome, JSON.stringify({ fastMode: false }));
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout).success).toBe(true);
 
@@ -127,7 +96,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(config).toContain("fast_mode = false");
     expect(config).not.toContain("fast_mode = true");
 
-    const profile = readFileSync(join(codexHome, "opencodex.config.toml"), "utf8");
+    const profile = readFileSync(join(codexHome, "codexcommander.config.toml"), "utf8");
     expect(profile).toContain("fast_mode = false");
     expect(profile).not.toContain("fast_mode = true");
   });
@@ -135,7 +104,7 @@ describe("injectCodexConfig integration (Design B)", () => {
   test("fastMode=true adds fast_mode=true to a config without a [features] table", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
 
-    const r = runInject(codexHome, ocxHome, JSON.stringify({ fastMode: true }));
+    const r = runInject(codexHome, ccxHome, JSON.stringify({ fastMode: true }));
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout).success).toBe(true);
 
@@ -143,14 +112,14 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(config).toContain("[features]");
     expect(config).toContain("fast_mode = true");
 
-    const profile = readFileSync(join(codexHome, "opencodex.config.toml"), "utf8");
+    const profile = readFileSync(join(codexHome, "codexcommander.config.toml"), "utf8");
     expect(profile).toContain("fast_mode = true");
   });
 
   test("fastMode unset preserves the user's existing fast_mode setting", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n\n[features]\nfast_mode = false\n', "utf8");
 
-    const r = runInject(codexHome, ocxHome);
+    const r = runInject(codexHome, ccxHome);
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout).success).toBe(true);
 
@@ -158,14 +127,14 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(config).toContain("fast_mode = false");
     expect(config).not.toContain("fast_mode = true");
 
-    const profile = readFileSync(join(codexHome, "opencodex.config.toml"), "utf8");
+    const profile = readFileSync(join(codexHome, "codexcommander.config.toml"), "utf8");
     expect(profile).not.toContain("fast_mode");
   });
 
   test("fastMode unset does not add a [features] table to a config that lacks one", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
 
-    const r = runInject(codexHome, ocxHome);
+    const r = runInject(codexHome, ccxHome);
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout).success).toBe(true);
 
@@ -173,7 +142,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(config).not.toContain("[features]");
     expect(config).not.toContain("fast_mode");
 
-    const profile = readFileSync(join(codexHome, "opencodex.config.toml"), "utf8");
+    const profile = readFileSync(join(codexHome, "codexcommander.config.toml"), "utf8");
     expect(profile).not.toContain("fast_mode");
   });
 
@@ -186,7 +155,7 @@ describe("injectCodexConfig integration (Design B)", () => {
       "",
     ].join("\n"), "utf8");
 
-    const r = runInject(codexHome, ocxHome, JSON.stringify({ fastMode: false }));
+    const r = runInject(codexHome, ccxHome, JSON.stringify({ fastMode: false }));
     expect(r.status).toBe(0);
 
     const config = readFileSync(join(codexHome, "config.toml"), "utf8");
@@ -205,7 +174,7 @@ describe("injectCodexConfig integration (Design B)", () => {
       "",
     ].join("\n"), "utf8");
 
-    const r = runInject(codexHome, ocxHome, JSON.stringify({ fastMode: false }));
+    const r = runInject(codexHome, ccxHome, JSON.stringify({ fastMode: false }));
     expect(r.status).toBe(0);
 
     const config = readFileSync(join(codexHome, "config.toml"), "utf8");
@@ -224,7 +193,7 @@ describe("injectCodexConfig integration (Design B)", () => {
       "",
     ].join("\n"), "utf8");
 
-    const r = runInject(codexHome, ocxHome, JSON.stringify({ fastMode: false }));
+    const r = runInject(codexHome, ccxHome, JSON.stringify({ fastMode: false }));
     expect(r.status).toBe(0);
 
     const config = readFileSync(join(codexHome, "config.toml"), "utf8");
@@ -249,9 +218,9 @@ describe("injectCodexConfig integration (Design B)", () => {
       injectionEffort: "high",
     });
 
-    expect(runInject(codexHome, ocxHome, enabled).status).toBe(0);
+    expect(runInject(codexHome, ccxHome, enabled).status).toBe(0);
     const injected = readFileSync(join(codexHome, "config.toml"), "utf8");
-    const profile = readFileSync(join(codexHome, "opencodex.config.toml"), "utf8");
+    const profile = readFileSync(join(codexHome, "codexcommander.config.toml"), "utf8");
     expect(injected).toContain(MANAGED_SUBAGENT_DEFAULT_MARKER);
     expect(injected).toContain('default_subagent_model = "gpt-5.6-sol"');
     expect(injected).toContain('default_subagent_reasoning_effort = "high"');
@@ -259,15 +228,15 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(profile).not.toContain(MANAGED_SUBAGENT_DEFAULT_MARKER);
     expect(profile).not.toContain("default_subagent_model");
 
-    expect(runInject(codexHome, ocxHome, "{}").status).toBe(0);
+    expect(runInject(codexHome, ccxHome, "{}").status).toBe(0);
     const disabled = readFileSync(join(codexHome, "config.toml"), "utf8");
     expect(disabled).not.toContain(MANAGED_SUBAGENT_DEFAULT_MARKER);
     expect(disabled).not.toContain("default_subagent_model");
     expect(disabled).not.toContain("default_subagent_reasoning_effort");
     expect(disabled).toContain("[notice]\nhide = true");
 
-    expect(runInject(codexHome, ocxHome, enabled).status).toBe(0);
-    expect(runRestore(codexHome, ocxHome).status).toBe(0);
+    expect(runInject(codexHome, ccxHome, enabled).status).toBe(0);
+    expect(runRestore(codexHome, ccxHome).status).toBe(0);
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
   });
 
@@ -283,7 +252,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     ].join("\n");
     writeFileSync(join(codexHome, "config.toml"), original, "utf8");
 
-    const result = runInject(codexHome, ocxHome, JSON.stringify({
+    const result = runInject(codexHome, ccxHome, JSON.stringify({
       syncCodexSubagentDefaults: true,
       injectionModel: "gpt-5.6-sol",
       injectionEffort: "high",
@@ -313,7 +282,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     ].join("\n");
     writeFileSync(join(codexHome, "config.toml"), residue, "utf8");
 
-    const injectedResult = runInject(codexHome, ocxHome, "{}");
+    const injectedResult = runInject(codexHome, ccxHome, "{}");
     expect(injectedResult.status).toBe(0);
     expect(JSON.parse(injectedResult.stdout).success).toBe(true);
     const injected = readFileSync(join(codexHome, "config.toml"), "utf8");
@@ -321,7 +290,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(injected).not.toContain("default_subagent_model");
     expect(() => Bun.TOML.parse(injected)).not.toThrow();
 
-    const restoredResult = runRestore(codexHome, ocxHome);
+    const restoredResult = runRestore(codexHome, ccxHome);
     expect(restoredResult.status).toBe(0);
     expect(JSON.parse(restoredResult.stdout).success).toBe(true);
     const restored = readFileSync(join(codexHome, "config.toml"), "utf8");
@@ -341,15 +310,15 @@ describe("injectCodexConfig integration (Design B)", () => {
     ].join("\n");
     writeFileSync(join(codexHome, "config.toml"), ambiguous, "utf8");
 
-    const result = runInject(codexHome, ocxHome, "{}");
+    const result = runInject(codexHome, ccxHome, "{}");
     expect(result.status).toBe(0);
     const payload = JSON.parse(result.stdout);
     expect(payload.success).toBe(false);
     expect(payload.message).toContain("injection refused");
     expect(payload.message).toContain("orphaned managed subagent default marker");
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(ambiguous);
-    expect(existsSync(join(codexHome, "opencodex.config.toml"))).toBe(false);
-    expect(existsSync(join(codexHome, "opencodex-journal.json"))).toBe(false);
+    expect(existsSync(join(codexHome, "codexcommander.config.toml"))).toBe(false);
+    expect(existsSync(join(codexHome, "codexcommander-journal.json"))).toBe(false);
   });
 
   test("kept-user-base-url: reports routing NOT injected and leaves the user's override alone", () => {
@@ -359,7 +328,7 @@ describe("injectCodexConfig integration (Design B)", () => {
       "",
     ].join("\n"), "utf8");
 
-    const r = runInject(codexHome, ocxHome, JSON.stringify({
+    const r = runInject(codexHome, ccxHome, JSON.stringify({
       syncCodexSubagentDefaults: true,
       injectionModel: "gpt-5.6-sol",
       injectionEffort: "high",
@@ -368,12 +337,12 @@ describe("injectCodexConfig integration (Design B)", () => {
     const result = JSON.parse(r.stdout);
     expect(result.success).toBe(true);
     expect(result.message).toContain("routing NOT injected");
-    expect(result.message).not.toContain("All models now route through opencodex proxy");
+    expect(result.message).not.toContain("All models now route through codexcommander proxy");
     expect(result.nativeSubagentDefaultsWarning).toContain("user-owned root openai_base_url");
 
     const config = readFileSync(join(codexHome, "config.toml"), "utf8");
     expect(config).toContain('openai_base_url = "https://my-own-gateway.example/v1"');
-    expect(config).not.toContain("# Auto-injected by opencodex\nopenai_base_url");
+    expect(config).not.toContain("# Auto-injected by CodexCommander\nopenai_base_url");
     expect(config).not.toContain(MANAGED_SUBAGENT_DEFAULT_MARKER);
     expect(config).not.toContain("default_subagent_model");
   });
@@ -394,7 +363,7 @@ describe("injectCodexConfig integration (Design B)", () => {
 
     const sessionsDir = join(codexHome, "sessions");
     mkdirSync(sessionsDir);
-    const profilePath = join(codexHome, "opencodex.config.toml");
+    const profilePath = join(codexHome, "codexcommander.config.toml");
     const profile = "sentinel profile\n";
     writeFileSync(profilePath, profile, "utf8");
     const rolloutPath = join(sessionsDir, "rollout-custom.jsonl");
@@ -412,7 +381,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     db.run(`INSERT INTO threads VALUES ('thread-custom', ?, 'custom', 'cli', 'hello', 1)`, rolloutPath);
     db.close();
     const dbBefore = readFileSync(dbPath);
-    const journalPath = join(codexHome, "opencodex-journal.json");
+    const journalPath = join(codexHome, "codexcommander-journal.json");
     writeFileSync(journalPath, JSON.stringify({
       version: 1,
       originalConfig: Buffer.from('model_provider = "openai"\n').toString("base64"),
@@ -421,7 +390,7 @@ describe("injectCodexConfig integration (Design B)", () => {
       timestamp: new Date().toISOString(),
     }), "utf8");
 
-    const r = runInject(codexHome, ocxHome, JSON.stringify({
+    const r = runInject(codexHome, ccxHome, JSON.stringify({
       syncCodexSubagentDefaults: true,
       injectionModel: "gpt-5.6-sol",
       injectionEffort: "high",
@@ -448,7 +417,7 @@ describe("injectCodexConfig integration (Design B)", () => {
 
     const r = runInject(
       codexHome,
-      ocxHome,
+      ccxHome,
       "{}",
       JSON.stringify({ expectedExternalProvider: "custom" }),
     );
@@ -459,21 +428,21 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(result.message).toContain("changed before it could be preserved");
     expect(result.message).toContain("no files were changed");
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
-    expect(existsSync(join(codexHome, "opencodex.config.toml"))).toBe(false);
-    expect(existsSync(join(codexHome, "opencodex-journal.json"))).toBe(false);
+    expect(existsSync(join(codexHome, "codexcommander.config.toml"))).toBe(false);
+    expect(existsSync(join(codexHome, "codexcommander-journal.json"))).toBe(false);
   });
 
   // Regression for #1090: the reporter's Windows shape — CRLF line endings, an external
-  // root model_provider, a coexisting [model_providers.opencodex] table, and a [windows]
+  // root model_provider, a coexisting [model_providers.codexcommander] table, and a [windows]
   // section — must survive injectCodexConfig byte-for-byte. The external-provider guard
   // runs on raw (pre-EOL-normalized) content, so CRLF parsing is part of what this proves.
-  test("#1090: CRLF Windows config with external deepseek provider and opencodex table stays byte-for-byte unchanged", () => {
+  test("#1090: CRLF Windows config with external deepseek provider and codexcommander table stays byte-for-byte unchanged", () => {
     const original = [
       'model = "deepseek-v4-flash"',
       'model_provider = "deepseek"',
       "",
-      "[model_providers.opencodex]",
-      'name = "opencodex"',
+      "[model_providers.codexcommander]",
+      'name = "codexcommander"',
       'base_url = "http://127.0.0.1:10100/v1"',
       'wire_api = "responses"',
       'env_key = "CODEX_DEEPSEEK_API_KEY"',
@@ -484,7 +453,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     ].join("\r\n");
     writeFileSync(join(codexHome, "config.toml"), original, "utf8");
 
-    const r = runInject(codexHome, ocxHome);
+    const r = runInject(codexHome, ccxHome);
     expect(r.status).toBe(0);
     const result = JSON.parse(r.stdout);
     expect(result.success).toBe(true);
@@ -498,7 +467,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     const configPath = join(codexHome, "config.toml");
     const config = 'model_provider = "custom"\nmodel = "third-party-model"\n';
     writeFileSync(configPath, config, "utf8");
-    const profilePath = join(codexHome, "opencodex.config.toml");
+    const profilePath = join(codexHome, "codexcommander.config.toml");
     const profile = 'model_provider = "custom"\n';
     writeFileSync(profilePath, profile, "utf8");
 
@@ -520,7 +489,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     db.close();
     const dbBefore = readFileSync(dbPath);
 
-    const journalPath = join(codexHome, "opencodex-journal.json");
+    const journalPath = join(codexHome, "codexcommander-journal.json");
     writeFileSync(journalPath, JSON.stringify({
       version: 1,
       originalConfig: Buffer.from('model_provider = "openai"\n').toString("base64"),
@@ -529,7 +498,7 @@ describe("injectCodexConfig integration (Design B)", () => {
       timestamp: new Date().toISOString(),
     }), "utf8");
 
-    const r = runRestore(codexHome, ocxHome);
+    const r = runRestore(codexHome, ccxHome);
     expect(r.status).toBe(0);
     const result = JSON.parse(r.stdout);
     expect(result.success).toBe(true);
@@ -541,7 +510,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(existsSync(journalPath)).toBe(false);
   });
 
-  test("provider selected through a legacy root profile is also preserved", () => {
+  test("provider selected through a named root profile is also preserved", () => {
     const original = [
       'profile = "work"',
       'model_provider = "openai"',
@@ -552,7 +521,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     ].join("\n");
     writeFileSync(join(codexHome, "config.toml"), original, "utf8");
 
-    const r = runInject(codexHome, ocxHome);
+    const r = runInject(codexHome, ccxHome);
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout).message).toContain('external model_provider "custom"');
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
@@ -562,24 +531,25 @@ describe("injectCodexConfig integration (Design B)", () => {
     const original = 'model_provider = "custom"\n';
     writeFileSync(join(codexHome, "config.toml"), original, "utf8");
 
-    const r = runInject(codexHome, ocxHome, JSON.stringify({ hostname: "192.168.1.20" }));
+    const r = runInject(codexHome, ccxHome, JSON.stringify({ hostname: "192.168.1.20" }));
     expect(r.status).toBe(0);
     const message = JSON.parse(r.stdout).message;
     expect(message).toContain("http://192.168.1.20:10100/v1");
-    expect(message).toContain("x-opencodex-api-key from OPENCODEX_API_AUTH_TOKEN");
+    expect(message).toContain("x-codexcommander-api-key from CODEXCOMMANDER_API_AUTH_TOKEN");
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
   });
 
-  test("non-loopback hostname still uses the legacy provider-table injection", () => {
+  test("non-loopback hostname uses the provider-table injection", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
 
-    const r = runInject(codexHome, ocxHome, JSON.stringify({ hostname: "192.168.1.20" }));
+    const r = runInject(codexHome, ccxHome, JSON.stringify({ hostname: "192.168.1.20" }));
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout).success).toBe(true);
 
     const config = readFileSync(join(codexHome, "config.toml"), "utf8");
-    expect(config).toContain('model_provider = "opencodex"');
-    expect(config).toContain("[model_providers.opencodex]");
+    expect(config).toContain('model_provider = "codexcommander"');
+    expect(config).toContain("[model_providers.codexcommander]");
+    expect(config).toContain('env_http_headers = { "x-codexcommander-api-key" = "CODEXCOMMANDER_API_AUTH_TOKEN" }');
     expect(config).toContain('base_url = "http://192.168.1.20:10100/v1"');
     expect(config).not.toContain("openai_base_url");
   });
@@ -587,7 +557,7 @@ describe("injectCodexConfig integration (Design B)", () => {
   test("CRLF config (Windows-edited) stays uniformly CRLF after injection", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\r\n\r\n[features]\r\nfast_mode = true\r\n', "utf8");
 
-    expect(runInject(codexHome, ocxHome).status).toBe(0);
+    expect(runInject(codexHome, ccxHome).status).toBe(0);
     const config = readFileSync(join(codexHome, "config.toml"), "utf8");
 
     expect(config).toContain('openai_base_url = "http://127.0.0.1:10100/v1"');
@@ -596,14 +566,14 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(config).toContain("\r\n");
 
     // Idempotent re-inject keeps the CRLF form stable.
-    expect(runInject(codexHome, ocxHome).status).toBe(0);
+    expect(runInject(codexHome, ccxHome).status).toBe(0);
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(config);
   });
 
   test("LF config gains no carriage returns from injection", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
 
-    expect(runInject(codexHome, ocxHome).status).toBe(0);
+    expect(runInject(codexHome, ccxHome).status).toBe(0);
     const config = readFileSync(join(codexHome, "config.toml"), "utf8");
 
     expect(config).toContain("openai_base_url");
@@ -613,7 +583,7 @@ describe("injectCodexConfig integration (Design B)", () => {
   test("inject does not turn on multi_agent_v2; fresh installs stay on Codex's default v1 surface until the user opts in", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
 
-    expect(runInject(codexHome, ocxHome).status).toBe(0);
+    expect(runInject(codexHome, ccxHome).status).toBe(0);
     const config = readFileSync(join(codexHome, "config.toml"), "utf8");
 
     expect(config).not.toContain("[features.multi_agent_v2]");

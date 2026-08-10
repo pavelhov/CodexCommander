@@ -3,11 +3,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { readCodexCatalogPath, resetCatalogRuntimeStateForTests, syncCatalogModels } from "../src/codex/catalog";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 setDefaultTimeout(30_000);
 
-async function syncCatalog(config: Pick<OcxConfig, "providers"> & Partial<OcxConfig>): Promise<string> {
+async function syncCatalog(config: Pick<CodexCommanderConfig, "providers"> & Partial<CodexCommanderConfig>): Promise<string> {
   const warnings: string[] = [];
   const warning = spyOn(console, "warn").mockImplementation((...values) => {
     warnings.push(values.map(String).join(" "));
@@ -17,7 +17,7 @@ async function syncCatalog(config: Pick<OcxConfig, "providers"> & Partial<OcxCon
       port: 10100,
       defaultProvider: Object.keys(config.providers)[0] ?? "openai",
       ...config,
-    } as OcxConfig, testCatalogDeps());
+    } as CodexCommanderConfig, testCatalogDeps());
     return warnings.join("\n");
   } finally {
     warning.mockRestore();
@@ -55,36 +55,27 @@ function routedEntry(slug: string, priority: number): Record<string, unknown> {
   };
 }
 
-/** Row shape OpenCodex itself generates for routed models (ownership signature). */
-function ocxAuthoredEntry(slug: string, priority: number): Record<string, unknown> {
+/** Row shape CodexCommander itself generates for routed models (ownership signature). */
+function ccxAuthoredEntry(slug: string, priority: number): Record<string, unknown> {
   return {
     ...routedEntry(slug, priority),
-    description: `Routed via opencodex → ${slug} (test-owner).`,
-  };
-}
-
-/** Legacy generated shape (June–July 2026): provider name, not the full slug. */
-function ocxLegacyAuthoredEntry(slug: string, priority: number): Record<string, unknown> {
-  const provider = slug.slice(0, slug.indexOf("/"));
-  return {
-    ...routedEntry(slug, priority),
-    description: `Routed via opencodex → ${provider} (test-owner).`,
+    description: `Routed via CodexCommander → ${slug} (test-owner).`,
   };
 }
 
 describe("Codex catalog sync hardening", () => {
   let codexHome: string;
-  let opencodexHome: string;
+  let codexCommanderHome: string;
   let previousCodexHome: string | undefined;
-  let previousOpenCodexHome: string | undefined;
+  let previousCodexCommanderHome: string | undefined;
 
   beforeEach(() => {
     previousCodexHome = process.env.CODEX_HOME;
-    previousOpenCodexHome = process.env.OPENCODEX_HOME;
-    codexHome = mkdtempSync(join(tmpdir(), "ocx-sync-home-"));
-    opencodexHome = mkdtempSync(join(tmpdir(), "ocx-sync-ocx-"));
+    previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+    codexHome = mkdtempSync(join(tmpdir(), "ccx-sync-home-"));
+    codexCommanderHome = mkdtempSync(join(tmpdir(), "ccx-sync-ccx-"));
     process.env.CODEX_HOME = codexHome;
-    process.env.OPENCODEX_HOME = opencodexHome;
+    process.env.CODEXCOMMANDER_HOME = codexCommanderHome;
     resetCatalogRuntimeStateForTests();
   });
 
@@ -92,13 +83,13 @@ describe("Codex catalog sync hardening", () => {
     resetCatalogRuntimeStateForTests();
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
-    if (previousOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpenCodexHome;
+    if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
     if (existsSync(codexHome)) rmSync(codexHome, { recursive: true, force: true });
-    if (existsSync(opencodexHome)) rmSync(opencodexHome, { recursive: true, force: true });
+    if (existsSync(codexCommanderHome)) rmSync(codexCommanderHome, { recursive: true, force: true });
   });
 
-  test("Gap B: drops legacy OpenAI-family natives but keeps supported + user natives", async () => {
+  test("Gap B: drops retired OpenAI-family natives but keeps supported + user natives", async () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({
@@ -110,9 +101,9 @@ describe("Codex catalog sync hardening", () => {
         nativeEntry("gpt-5.6-sol", 4),
         nativeEntry("gpt-5.6-terra", 5),
         nativeEntry("gpt-5.6-luna", 6),
-        nativeEntry("gpt-5.3-codex", 104),   // legacy -> drop
-        nativeEntry("gpt-5.2", 104),          // legacy -> drop
-        nativeEntry("codex-auto-review", 104),// legacy -> drop
+        nativeEntry("gpt-5.3-codex", 104),   // retired -> drop
+        nativeEntry("gpt-5.2", 104),          // retired -> drop
+        nativeEntry("codex-auto-review", 104),// retired -> drop
         nativeEntry("user-native", 10),       // user-added -> keep
       ],
     }, null, 2) + "\n");
@@ -128,9 +119,9 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).toContain("gpt-5.6-terra");
     expect(slugs).toContain("gpt-5.6-luna");
     expect(slugs).toContain("user-native");           // genuine user native preserved
-    expect(slugs).not.toContain("gpt-5.3-codex");      // legacy dropped
-    expect(slugs).not.toContain("gpt-5.2");            // legacy dropped
-    expect(slugs).not.toContain("codex-auto-review");  // legacy dropped
+    expect(slugs).not.toContain("gpt-5.3-codex");      // retired dropped
+    expect(slugs).not.toContain("gpt-5.2");            // retired dropped
+    expect(slugs).not.toContain("codex-auto-review");  // retired dropped
   });
 
   test("Gap A: an empty routed fetch preserves existing routed entries on disk", async () => {
@@ -156,7 +147,7 @@ describe("Codex catalog sync hardening", () => {
 
   test("account rows reconcile idempotently and independently from provider outages", async () => {
     const catalogPath = join(codexHome, "catalog.json");
-    const firstCatalogPath = join(opencodexHome, "first-catalog.json");
+    const firstCatalogPath = join(codexCommanderHome, "first-catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     const accountMarker = "account-selector-v1";
     writeFileSync(catalogPath, JSON.stringify({
@@ -188,12 +179,12 @@ describe("Codex catalog sync hardening", () => {
         {
           ...nativeEntry("removed/gpt-5.5", 8),
           description: "Retired generated row",
-          opencodex_catalog_kind: accountMarker,
+          codexcommander_catalog_kind: accountMarker,
         },
       ],
     }, null, 2) + "\n");
 
-    const config: Pick<OcxConfig, "providers"> & Partial<OcxConfig> = {
+    const config: Pick<CodexCommanderConfig, "providers"> & Partial<CodexCommanderConfig> = {
       providers: {
         openai: {
           adapter: "openai-responses",
@@ -226,7 +217,7 @@ describe("Codex catalog sync hardening", () => {
       description?: string;
       visibility?: string;
       comp_hash?: string;
-      opencodex_catalog_kind?: string;
+      codexcommander_catalog_kind?: string;
       base_instructions?: string;
       model_messages?: { instructions_template?: string };
       tool_mode?: string | null;
@@ -257,7 +248,7 @@ describe("Codex catalog sync hardening", () => {
     const team = rows.find(row => row.slug === "team/gpt-5.5");
     expect(team).toMatchObject({
       display_name: "team / 5.5",
-      opencodex_catalog_kind: accountMarker,
+      codexcommander_catalog_kind: accountMarker,
       comp_hash: "native-5.5-hash",
       visibility: "list",
     });
@@ -289,7 +280,7 @@ describe("Codex catalog sync hardening", () => {
       models: [nativeEntry("gpt-5.5", 0)],
     }, null, 2) + "\n");
 
-    const config: Pick<OcxConfig, "providers"> & Partial<OcxConfig> = {
+    const config: Pick<CodexCommanderConfig, "providers"> & Partial<CodexCommanderConfig> = {
       providers: {
         openai: {
           adapter: "openai-responses",
@@ -315,10 +306,10 @@ describe("Codex catalog sync hardening", () => {
 
     const rows = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{
       slug: string;
-      opencodex_catalog_kind?: string;
+      codexcommander_catalog_kind?: string;
     }>;
     expect(rows.filter(row => row.slug === "team/gpt-5.5")).toEqual([
-      expect.objectContaining({ opencodex_catalog_kind: "account-selector-v1" }),
+      expect.objectContaining({ codexcommander_catalog_kind: "account-selector-v1" }),
     ]);
   });
 
@@ -402,23 +393,23 @@ describe("Codex catalog sync hardening", () => {
     const rows = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{
       slug: string;
       visibility?: string;
-      opencodex_catalog_kind?: string;
+      codexcommander_catalog_kind?: string;
     }>;
     expect(rows.find(row => row.slug === "gpt-5.5")?.visibility).toBe("hide");
     // Generated rows recover from stale bare visibility, but still honor explicit native disables.
     expect(rows.find(row => row.slug === "team/gpt-5.5")).toMatchObject({
       visibility: "hide",
-      opencodex_catalog_kind: "account-selector-v1",
+      codexcommander_catalog_kind: "account-selector-v1",
     });
     expect(rows.find(row => row.slug === "desktop/gpt-5.5")).toMatchObject({
       visibility: "list",
-      opencodex_catalog_kind: "account-selector-v1",
+      codexcommander_catalog_kind: "account-selector-v1",
     });
     expect(rows.find(row => row.slug === "team/gpt-5.4")?.visibility).toBe("hide");
   });
 
   test("default catalog path merges from disk instead of replacing it with bundled rows", async () => {
-    const catalogPath = join(codexHome, "opencodex-catalog.json");
+    const catalogPath = join(codexHome, "codexcommander-catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'openai_base_url = "http://127.0.0.1:10100/v1"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({
       models: [
@@ -509,18 +500,18 @@ describe("Codex catalog sync hardening", () => {
   });
 
   /*
-   * #855. Deleting a provider must remove the rows OpenCodex generated for it
+   * #855. Deleting a provider must remove the rows CodexCommander generated for it
    * on the next sync. Rows authored by foreign tooling (Cursor, user edits)
    * stay preserved — the ownership signature in the generated description is
    * what separates the two.
    */
-  test("drops OpenCodex-authored rows of a deleted provider, keeps foreign rows", async () => {
+  test("drops CodexCommander-authored rows of a deleted provider, keeps foreign rows", async () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({
       models: [
         nativeEntry("gpt-5.5", 0),
-        ocxAuthoredEntry("future-grok/old-model", 5),
+        ccxAuthoredEntry("future-grok/old-model", 5),
         routedEntry("cursor/composer-2.5", 6),
       ],
     }, null, 2) + "\n");
@@ -548,8 +539,8 @@ describe("Codex catalog sync hardening", () => {
     writeFileSync(catalogPath, JSON.stringify({
       models: [
         nativeEntry("gpt-5.5", 0),
-        ocxAuthoredEntry("future-grok/old-model", 5),
-        ocxAuthoredEntry("openai/keep-model", 6),
+        ccxAuthoredEntry("future-grok/old-model", 5),
+        ccxAuthoredEntry("openai/keep-model", 6),
         routedEntry("cursor/composer-2.5", 7),
       ],
     }, null, 2) + "\n");
@@ -572,96 +563,6 @@ describe("Codex catalog sync hardening", () => {
     const slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).not.toContain("future-grok/old-model");
     expect(slugs).toContain("openai/keep-model");
-    expect(slugs).toContain("cursor/composer-2.5");
-  });
-
-  test("drops legacy-signature ghost rows in both gather branches", async () => {
-    const catalogPath = join(codexHome, "catalog.json");
-    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
-    writeFileSync(catalogPath, JSON.stringify({
-      models: [
-        nativeEntry("gpt-5.5", 0),
-        ocxLegacyAuthoredEntry("future-grok/legacy-model", 5),
-        routedEntry("cursor/composer-2.5", 6),
-      ],
-    }, null, 2) + "\n");
-
-    // Partial-gather branch: another provider is configured and gathers rows.
-    await syncCatalog({
-      providers: {
-        openai: {
-          adapter: "openai-chat",
-          baseUrl: "https://api.example.test/v1",
-          liveModels: false,
-          models: ["fresh-model"],
-        },
-      },
-    });
-    let slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
-    expect(slugs).not.toContain("future-grok/legacy-model");
-    expect(slugs).toContain("cursor/composer-2.5");
-
-    // Empty-gather branch: re-seed the legacy ghost and gather nothing.
-    writeFileSync(catalogPath, JSON.stringify({
-      models: [
-        nativeEntry("gpt-5.5", 0),
-        ocxLegacyAuthoredEntry("future-grok/legacy-model", 5),
-        routedEntry("cursor/composer-2.5", 6),
-      ],
-    }, null, 2) + "\n");
-    await syncCatalog({ providers: {} });
-    slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
-    expect(slugs).not.toContain("future-grok/legacy-model");
-    expect(slugs).toContain("cursor/composer-2.5");
-  });
-
-  test("drops legacy combo-alias ghost rows in both gather branches", async () => {
-    const legacyComboAlias = {
-      ...routedEntry("vendor/fast", 5),
-      description: "Routed via opencodex → combo (combo).",
-      owned_by: "combo",
-    };
-    const seed = () => writeFileSync(catalogPath, JSON.stringify({
-      models: [
-        nativeEntry("gpt-5.5", 0),
-        legacyComboAlias,
-        routedEntry("cursor/composer-2.5", 6),
-      ],
-    }, null, 2) + "\n");
-    const catalogPath = join(codexHome, "catalog.json");
-    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
-
-    // Partial-gather branch: a PHYSICAL combo provider bypasses the generic
-    // combo cleanup, so only the ownership matcher can remove the alias.
-    seed();
-    await syncCatalog({
-      providers: {
-        combo: {
-          adapter: "openai-chat",
-          baseUrl: "https://api.example.test/v1",
-          liveModels: false,
-          models: ["fresh-model"],
-        },
-      },
-    });
-    let slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
-    expect(slugs).not.toContain("vendor/fast");
-    expect(slugs).toContain("cursor/composer-2.5");
-
-    // Empty-gather branch: physical combo present but gathers zero rows.
-    seed();
-    await syncCatalog({
-      providers: {
-        combo: {
-          adapter: "openai-chat",
-          baseUrl: "https://api.example.test/v1",
-          liveModels: false,
-          models: [],
-        },
-      },
-    });
-    slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
-    expect(slugs).not.toContain("vendor/fast");
     expect(slugs).toContain("cursor/composer-2.5");
   });
 

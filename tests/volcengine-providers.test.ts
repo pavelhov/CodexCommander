@@ -7,7 +7,7 @@ import { deriveProviderPresets, providerConfigSeed } from "../src/providers/deri
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import { safeConfigDTO } from "../src/server/auth-cors";
 import { routeModel } from "../src/router";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { buildProviderPostBody } from "../gui/src/provider-payload";
 import { en } from "../gui/src/i18n/en";
 import { interpolate, type TFn } from "../gui/src/i18n/shared";
@@ -131,7 +131,7 @@ describe("Volcengine Ark providers", () => {
   });
 
   test("routes a minimal Agent Plan config to its native Responses resource", () => {
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "volcengine-agent-plan",
       providers: {
@@ -163,7 +163,7 @@ describe("Volcengine Ark providers", () => {
   ] as const)(
     "preserves an existing same-name custom %s destination",
     (providerId, adapter, baseUrl) => {
-      const config: OcxConfig = {
+      const config: CodexCommanderConfig = {
         port: 10100,
         defaultProvider: providerId,
         providers: {
@@ -183,7 +183,7 @@ describe("Volcengine Ark providers", () => {
   );
 
   test("maps the documented Ark thinking toggle on the pay-as-you-go Chat wire", () => {
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "volcengine",
       providers: {
@@ -214,7 +214,7 @@ describe("Volcengine Ark providers", () => {
   test.each(["deepseek-v4-pro", "deepseek-v4-flash"])(
     "preserves %s tool-call reasoning and maps Codex efforts on Coding Plan",
     modelId => {
-      const config: OcxConfig = {
+      const config: CodexCommanderConfig = {
         port: 10100,
         defaultProvider: "volcengine-coding-plan",
         providers: {
@@ -384,7 +384,7 @@ describe("Volcengine Ark providers", () => {
           apiKey: "sk-test-not-a-real-key",
         },
       },
-    } as unknown as OcxConfig) as { providers: Record<string, { note?: string }> };
+    } as unknown as CodexCommanderConfig) as { providers: Record<string, { note?: string }> };
 
     expect(dto.providers["my-volc"].note).toContain("Coding tools only");
   });
@@ -401,7 +401,7 @@ describe("Volcengine Ark providers", () => {
           apiKey: "sk-test-not-a-real-key",
         },
       },
-    } as unknown as OcxConfig) as { providers: Record<string, { note?: string }> };
+    } as unknown as CodexCommanderConfig) as { providers: Record<string, { note?: string }> };
 
     expect(dto.providers["somewhere-else"].note).toBeUndefined();
   });

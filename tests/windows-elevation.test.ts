@@ -47,13 +47,13 @@ describe("windows elevation helpers", () => {
     const message = formatWindowsSchtasksError(error, [
       "/create",
       "/tn",
-      "opencodex-proxy",
+      "codexcommander-proxy",
       "/xml",
       "task.xml",
       "/f",
     ]);
     expect(message).toContain("Windows access denied while running Task Scheduler.");
-    expect(message).toContain("schtasks /create /tn opencodex-proxy /xml task.xml /f");
+    expect(message).toContain("schtasks /create /tn codexcommander-proxy /xml task.xml /f");
     expect(message).toContain("UAC prompt");
     expect(message).toContain(WINDOWS_SCHTASKS_CREATE_ACCESS_DENIED_MARKER);
     expect(isWindowsSchtasksCreateAccessDenied(message)).toBe(true);
@@ -64,7 +64,7 @@ describe("windows elevation helpers", () => {
       stderr: "Access is denied.",
       stdout: "",
     });
-    const message = formatWindowsSchtasksError(error, ["/run", "/tn", "opencodex-proxy"]);
+    const message = formatWindowsSchtasksError(error, ["/run", "/tn", "codexcommander-proxy"]);
     expect(message).toContain("Windows access denied while running Task Scheduler.");
     expect(message).not.toContain(WINDOWS_SCHTASKS_CREATE_ACCESS_DENIED_MARKER);
     expect(isWindowsSchtasksCreateAccessDenied(message)).toBe(false);
@@ -81,7 +81,7 @@ describe("windows elevation helpers", () => {
     const structured = toWindowsSchtasksError(error, [
       "/create",
       "/tn",
-      "opencodex-proxy",
+      "codexcommander-proxy",
       "/xml",
       "task.xml",
       "/f",
@@ -105,9 +105,9 @@ describe("windows elevation helpers", () => {
       const structured = toWindowsSchtasksError(error, [
         "/create",
         "/tn",
-        "opencodex-proxy",
+        "codexcommander-proxy",
         "/xml",
-        "C:\\Users\\tester\\.opencodex\\opencodex-service-task.xml",
+        "C:\\Users\\tester\\.codexcommander\\codexcommander-service-task.xml",
         "/f",
       ]);
       expect(structured.reason).toBe("access-denied");
@@ -125,7 +125,7 @@ describe("windows elevation helpers", () => {
     });
     setWindowsElevationProbeForTests(() => false);
     try {
-      expect(toWindowsSchtasksError(error, ["/query", "/tn", "opencodex-proxy"]).reason).toBe("other");
+      expect(toWindowsSchtasksError(error, ["/query", "/tn", "codexcommander-proxy"]).reason).toBe("other");
       expect(toWindowsSchtasksError(error, [
         "/create",
         "/tn",
@@ -151,7 +151,7 @@ describe("windows elevation helpers", () => {
       expect(toWindowsSchtasksError(error, [
         "/create",
         "/tn",
-        "opencodex-proxy",
+        "codexcommander-proxy",
         "/xml",
         "task.xml",
         "/f",
@@ -165,7 +165,7 @@ describe("windows elevation helpers", () => {
       expect(toWindowsSchtasksError(error, [
         "/create",
         "/tn",
-        "opencodex-proxy",
+        "codexcommander-proxy",
         "/xml",
         "task.xml",
         "/f",
@@ -179,12 +179,12 @@ describe("windows elevation helpers", () => {
     expect(buildWindowsElevatedArgumentList([
       "/create",
       "/tn",
-      "opencodex-proxy",
+      "codexcommander-proxy",
       "/xml",
-      "C:\\Users\\Jane Doe\\.opencodex\\opencodex-service-task.xml",
+      "C:\\Users\\Jane Doe\\.codexcommander\\codexcommander-service-task.xml",
       "/f",
     ])).toBe(
-      '/create /tn opencodex-proxy /xml "C:\\Users\\Jane Doe\\.opencodex\\opencodex-service-task.xml" /f',
+      '/create /tn codexcommander-proxy /xml "C:\\Users\\Jane Doe\\.codexcommander\\codexcommander-service-task.xml" /f',
     );
   });
 
@@ -197,8 +197,8 @@ describe("windows elevation helpers", () => {
     expect(windowsCmdQuote("C:\\temp dir\\")).toBe('"C:\\temp dir\\\\"');
     expect(windowsCmdQuote("C:\\Users\\한글\\task")).toBe("C:\\Users\\한글\\task");
     expect(windowsCmdQuote("task name with spaces")).toBe('"task name with spaces"');
-    expect(buildWindowsElevatedArgumentList(["/tn", "Open Codex Proxy", ""])).toBe(
-      '/tn "Open Codex Proxy" ""',
+    expect(buildWindowsElevatedArgumentList(["/tn", "CodexCommander Proxy", ""])).toBe(
+      '/tn "CodexCommander Proxy" ""',
     );
   });
 
@@ -211,13 +211,13 @@ describe("windows elevation helpers", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
 
-    const trustedRoot = mkdtempSync(join(tmpdir(), "ocx-trusted-sys-"));
+    const trustedRoot = mkdtempSync(join(tmpdir(), "ccx-trusted-sys-"));
     const trustedSystem32 = join(trustedRoot, "System32");
     mkdirSync(join(trustedSystem32, "WindowsPowerShell", "v1.0"), { recursive: true });
     writeFileSync(join(trustedSystem32, "schtasks.exe"), "");
     writeFileSync(join(trustedSystem32, "WindowsPowerShell", "v1.0", "powershell.exe"), "");
 
-    const evilRoot = mkdtempSync(join(tmpdir(), "ocx-evil-sys-"));
+    const evilRoot = mkdtempSync(join(tmpdir(), "ccx-evil-sys-"));
     const evilSystem32 = join(evilRoot, "System32");
     mkdirSync(join(evilSystem32, "WindowsPowerShell", "v1.0"), { recursive: true });
     writeFileSync(join(evilSystem32, "schtasks.exe"), "evil");
@@ -233,8 +233,8 @@ describe("windows elevation helpers", () => {
 
       const powershell = resolveTrustedWindowsPowerShellExe();
       const schtasks = resolveTrustedWindowsSchtasksExe();
-      expect(powershell.toLowerCase().includes("ocx-evil-sys")).toBe(false);
-      expect(schtasks.toLowerCase().includes("ocx-evil-sys")).toBe(false);
+      expect(powershell.toLowerCase().includes("ccx-evil-sys")).toBe(false);
+      expect(schtasks.toLowerCase().includes("ccx-evil-sys")).toBe(false);
       expect(powershell.toLowerCase()).toContain(trustedSystem32.toLowerCase());
       expect(schtasks.toLowerCase()).toContain(trustedSystem32.toLowerCase());
 

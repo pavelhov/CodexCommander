@@ -48,7 +48,7 @@ function repairableItemType(item: Record<string, unknown>): RepairableItemType |
 }
 
 function mintCanonicalId(type: RepairableItemType, scope: string, outputIndex: number): string {
-  return `${REPAIRABLE_PREFIXES[type]}ocx_${scope}_${outputIndex}`;
+  return `${REPAIRABLE_PREFIXES[type]}ccx_${scope}_${outputIndex}`;
 }
 
 function createRepairState(config: ResponsesItemIdRepairConfig, budget?: TranslatorBudget): ResponsesItemIdRepairState {

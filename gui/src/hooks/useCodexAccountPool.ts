@@ -5,7 +5,7 @@ import type { AccountQuota } from "../codex-quota-utils";
 import { accountNeedsReauth } from "../oauth-health-display";
 
 /**
- * Codex account pool DATA layer (WP3 / 030_account_state_lift.md).
+ * Codex account-pool data layer.
  *
  * Ownership rule: exactly one caller instantiates this hook (Providers.tsx), and every
  * surface that shows Codex accounts — the Providers Overview tab and the Accounts tab —
@@ -20,7 +20,7 @@ export interface CodexAccountEntry {
   id: string;
   email: string;
   alias?: string;
-  plan?: string;
+  plan?: string | null;
   /** Required, not optional: the API always distinguishes the app-login row. */
   isMain: boolean;
   /** Persisted routing exclusion. Paused accounts remain visible but cannot be selected. */
@@ -29,7 +29,6 @@ export interface CodexAccountEntry {
   priority: number;
   hasCredential: boolean;
   quota: AccountQuota | null;
-  needsReauth?: boolean;
   health?: { status: "healthy" | "cooldown" | "reauth_required" | "warning"; reason?: string; until?: string };
   healthLabel?: string;
   healthSummary?: string;
@@ -103,6 +102,108 @@ const REFRESH_INTERVAL_MS = 30_000;
 
 /** In-memory last-good snapshot (not sessionStorage — accounts carry emails/ids). */
 const lastGoodByBase = new Map<string, { accounts: CodexAccountEntry[]; activeId: string | null }>();
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function optionalString(value: unknown): boolean {
+  return value === undefined || typeof value === "string";
+}
+
+function optionalFiniteNumber(value: unknown): boolean {
+  return value === undefined || (typeof value === "number" && Number.isFinite(value));
+}
+
+function isCurrentQuota(value: unknown): value is AccountQuota | null {
+  if (value === null) return true;
+  if (!isRecord(value) || typeof value.updatedAt !== "number" || !Number.isFinite(value.updatedAt)) return false;
+  if (!["weeklyPercent", "fiveHourPercent", "monthlyPercent", "weeklyResetAt", "fiveHourResetAt", "monthlyResetAt", "resetCredits"]
+    .every(key => optionalFiniteNumber(value[key]))) return false;
+  if (value.customWindows !== undefined && (!Array.isArray(value.customWindows) || value.customWindows.some(window => (
+    !isRecord(window)
+    || typeof window.label !== "string"
+    || typeof window.percent !== "number"
+    || !Number.isFinite(window.percent)
+    || !optionalFiniteNumber(window.resetAt)
+  )))) return false;
+  return value.monthlyIsPrimaryWindow === undefined || typeof value.monthlyIsPrimaryWindow === "boolean";
+}
+
+function isCurrentHealth(value: unknown): value is NonNullable<CodexAccountEntry["health"]> {
+  if (!isRecord(value)) return false;
+  switch (value.status) {
+    case "healthy":
+      return value.reason === undefined && value.until === undefined;
+    case "cooldown":
+      return (value.reason === "rate_limit" || value.reason === "quota")
+        && typeof value.until === "string" && value.until.trim() !== "";
+    case "reauth_required":
+      return value.reason === "unauthorized" || value.reason === "forbidden" || value.reason === "refresh_failed";
+    case "warning":
+      return value.reason === "refresh_conflict" || value.reason === "metadata_mismatch" || value.reason === "stale_credentials";
+    default:
+      return false;
+  }
+}
+
+function parseAccountsPayload(value: unknown): CodexAccountEntry[] {
+  if (!isRecord(value) || !Array.isArray(value.accounts)) throw new Error("invalid accounts response");
+  return value.accounts.map(raw => {
+    if (!isRecord(raw)
+      || typeof raw.id !== "string" || raw.id.trim() === ""
+      || typeof raw.email !== "string" || raw.email.trim() === ""
+      || !optionalString(raw.alias)
+      || !(raw.plan === undefined || raw.plan === null || typeof raw.plan === "string")
+      || !optionalString(raw.logLabel)
+      || typeof raw.isMain !== "boolean"
+      || typeof raw.paused !== "boolean"
+      || !Number.isInteger(raw.priority)
+      || normalizeAccountPriority(raw.priority) !== raw.priority
+      || typeof raw.hasCredential !== "boolean"
+      || typeof raw.needsReauth !== "boolean"
+      || !isCurrentQuota(raw.quota)
+      || !isCurrentHealth(raw.health)
+      || typeof raw.healthLabel !== "string" || raw.healthLabel.trim() === ""
+      || typeof raw.healthSummary !== "string" || raw.healthSummary.trim() === ""
+      || !optionalString(raw.healthAction)
+      || !(raw.quotaProbeSkipped === undefined || raw.quotaProbeSkipped === true)) {
+      throw new Error("invalid accounts response");
+    }
+    return raw as unknown as CodexAccountEntry;
+  });
+}
+
+type CurrentActivePayload = Record<string, unknown> & {
+  activeCodexAccountId: string | null;
+  pinned: boolean;
+  pinnedAccountId: string | null;
+  autoSwitchThreshold: number;
+  upstreamFailoverThreshold: number;
+  accountPoolStrategy: "quota" | "round-robin" | "fill-first";
+  accountPoolStickyLimit: number;
+};
+
+function parseActivePayload(value: unknown): CurrentActivePayload {
+  if (!isRecord(value)
+    || !(value.activeCodexAccountId === null || typeof value.activeCodexAccountId === "string")
+    || typeof value.pinned !== "boolean"
+    || !(value.pinnedAccountId === null || typeof value.pinnedAccountId === "string")
+    || !Number.isInteger(value.autoSwitchThreshold)
+    || (value.autoSwitchThreshold as number) < 0
+    || (value.autoSwitchThreshold as number) > 100
+    || !Number.isInteger(value.upstreamFailoverThreshold)
+    || (value.upstreamFailoverThreshold as number) < 0
+    || (value.accountPoolStrategy !== "quota"
+      && value.accountPoolStrategy !== "round-robin"
+      && value.accountPoolStrategy !== "fill-first")
+    || !Number.isInteger(value.accountPoolStickyLimit)
+    || (value.accountPoolStickyLimit as number) < 1
+    || (value.accountPoolStickyLimit as number) > 100) {
+    throw new Error("invalid active-account response");
+  }
+  return value as CurrentActivePayload;
+}
 
 export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccountPoolController {
   const seed = lastGoodByBase.get(apiBase);
@@ -188,14 +289,9 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
         try {
           const response = await fetch(`${apiBase}/api/codex-auth/accounts${refreshQuota ? "?refresh=1" : ""}`);
           if (!response.ok) throw new Error("account load failed");
-          const payload = await response.json();
+          const payload = parseAccountsPayload(await response.json());
           if (loadGenerationRef.current === generation) {
-            // Selection order is required downstream (badge, select). Normalizing here keeps
-            // a payload without it from rendering a NaN order on every card.
-            nextAccounts = ((payload.accounts ?? []) as CodexAccountEntry[]).map(account => ({
-              ...account,
-              priority: normalizeAccountPriority(account.priority),
-            }));
+            nextAccounts = payload;
             setAccounts(nextAccounts);
             hasAccountsRef.current = nextAccounts.length > 0;
             hasLoadedRef.current = true;
@@ -212,9 +308,9 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
         try {
           const response = await fetch(`${apiBase}/api/codex-auth/active`);
           if (!response.ok) throw new Error("active account load failed");
-          const active = await response.json();
+          const active = parseActivePayload(await response.json());
           if (loadGenerationRef.current === generation) {
-            const serverActiveId = active.activeCodexAccountId ?? null;
+            const serverActiveId = active.activeCodexAccountId;
             const pending = pendingActiveIdRef.current;
             if (pending && serverActiveId !== pending.id) {
               // Stale read: keep the accepted value and let the next load reconcile.
@@ -224,7 +320,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
               setActiveId(serverActiveId);
             }
             lastActiveRef.current = { value: active };
-            setActivePinnedId(typeof active.pinnedAccountId === "string" ? active.pinnedAccountId : null);
+            setActivePinnedId(active.pinnedAccountId);
             for (const observer of observers) {
               observer.acceptActiveRead(active, revisions.get(observer)!);
             }

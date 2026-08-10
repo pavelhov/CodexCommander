@@ -19,7 +19,7 @@ body:
         - Codex SDK
         - Claude Code
         - Direct HTTP/API client
-        - OpenCodex dashboard
+        - CodexCommander dashboard
         - Other
     validations:
       required: true
@@ -28,7 +28,7 @@ body:
     id: area
     attributes:
       label: Area
-      description: Which part of OpenCodex is affected?
+      description: Which part of CodexCommander is affected?
       options:
         - CLI
         - Proxy and routing
@@ -62,7 +62,7 @@ body:
       description: |
         Exact commands, steps, configuration shape, and inputs. If the problem is intermittent or not yet consistently reproducible, explain what you have observed and under which conditions.
       placeholder: |
-        1. ocx start --port 10100
+        1. ccx start --port 10100
         2. Send a request to /v1/responses with ...
         3. Observe ...
     validations:
@@ -72,8 +72,8 @@ body:
     id: version
     attributes:
       label: Version
-      description: Installed `@bitkyc08/opencodex` version or commit SHA.
-      placeholder: "2.7.31"
+      description: Installed `codexcommander` version or commit SHA.
+      placeholder: "0.1.0"
     validations:
       required: true
 

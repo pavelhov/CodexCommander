@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { createAnthropicAdapter } from "../src/adapters/anthropic";
-import type { OcxMessage, OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderMessage, CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 
-const provider = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-x", authMode: "apiKey" } as unknown as OcxProviderConfig;
+const provider = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-x", authMode: "apiKey" } as unknown as CodexCommanderProviderConfig;
 
-function parsed(messages: OcxMessage[]): OcxParsedRequest {
+function parsed(messages: CodexCommanderMessage[]): CodexCommanderParsedRequest {
   return {
     modelId: "anthropic/claude-sonnet-4.5",
     stream: false,
@@ -13,7 +13,7 @@ function parsed(messages: OcxMessage[]): OcxParsedRequest {
   };
 }
 
-async function bodyOf(p: OcxParsedRequest): Promise<{ messages: Array<{ role: string; content: unknown }> }> {
+async function bodyOf(p: CodexCommanderParsedRequest): Promise<{ messages: Array<{ role: string; content: unknown }> }> {
   const { body } = await createAnthropicAdapter(provider).buildRequest(p);
   return JSON.parse(typeof body === "string" ? body : JSON.stringify(body)) as { messages: Array<{ role: string; content: unknown }> };
 }

@@ -12,13 +12,13 @@ setDefaultTimeout(30_000);
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
 
-function runStatusJson(opencodexHome: string) {
-  const runtimeDir = mkdtempSync(join(tmpdir(), "ocx-status-runtime-"));
+function runStatusJson(codexCommanderHome: string) {
+  const runtimeDir = mkdtempSync(join(tmpdir(), "ccx-status-runtime-"));
   try {
     const codexCliPath = createCodexRuntimeFixture(runtimeDir);
     return spawnSync(process.execPath, [cliPath, "status", "--json"], {
       cwd: repoRoot,
-      env: { ...process.env, OPENCODEX_HOME: opencodexHome, CODEX_CLI_PATH: codexCliPath },
+      env: { ...process.env, CODEXCOMMANDER_HOME: codexCommanderHome, CODEX_CLI_PATH: codexCliPath },
       encoding: "utf8",
     });
   } finally {
@@ -28,11 +28,12 @@ function runStatusJson(opencodexHome: string) {
 
 describe("CLI status JSON", () => {
   test("status --json prints valid read-only diagnostics without secrets", () => {
-    const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-status-json-"));
+    const codexCommanderHome = mkdtempSync(join(tmpdir(), "ccx-status-json-"));
     try {
-      const configPath = join(opencodexHome, "config.json");
+      const configPath = join(codexCommanderHome, "config.json");
       writeFileSync(configPath, JSON.stringify({
         port: 9,
+        multiAgentGuidanceEnabled: true,
         providers: {
           openai: {
             adapter: "openai-responses",
@@ -45,14 +46,14 @@ describe("CLI status JSON", () => {
         codexAutoStart: false,
       }), "utf8");
 
-      const beforeFiles = readdirSync(opencodexHome).sort();
-      const result = runStatusJson(opencodexHome);
-      const afterFiles = readdirSync(opencodexHome).sort();
+      const beforeFiles = readdirSync(codexCommanderHome).sort();
+      const result = runStatusJson(codexCommanderHome);
+      const afterFiles = readdirSync(codexCommanderHome).sort();
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
       expect(afterFiles).toEqual(beforeFiles);
-      expect(existsSync(join(opencodexHome, "ocx.pid"))).toBe(false);
+      expect(existsSync(join(codexCommanderHome, "codexcommander.pid"))).toBe(false);
 
       const parsed = JSON.parse(result.stdout) as {
         schemaVersion?: unknown;
@@ -104,7 +105,7 @@ describe("CLI status JSON", () => {
       expect(parsed.listen?.port).toBe(9);
       expect(parsed.listen?.source).toBe("config");
       expect(parsed.paths?.config).toBe(configPath);
-      expect(parsed.paths?.pid).toBe(join(opencodexHome, "ocx.pid"));
+      expect(parsed.paths?.pid).toBe(join(codexCommanderHome, "codexcommander.pid"));
       expect(typeof parsed.paths?.runtime).toBe("string");
       expect(typeof parsed.runtime?.source).toBe("string");
       expect(parsed.codexAutostart).toBe(false);
@@ -143,24 +144,24 @@ describe("CLI status JSON", () => {
         expect(serialized).not.toContain(forbidden);
       }
     } finally {
-      rmSync(opencodexHome, { recursive: true, force: true });
+      rmSync(codexCommanderHome, { recursive: true, force: true });
     }
   });
 
   test("status --json reports catalogClamp.runtimeVersion when clamp is active", async () => {
     const { chmodSync } = await import("node:fs");
     const { persistEffortClamp, resetCodexRuntimeResolveCacheForTests } = await import("../src/codex/runtime");
-    const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-status-clamp-"));
+    const codexCommanderHome = mkdtempSync(join(tmpdir(), "ccx-status-clamp-"));
     try {
-      writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({
+      writeFileSync(join(codexCommanderHome, "config.json"), JSON.stringify({
         port: 9,
         providers: {},
         defaultProvider: "openai",
       }), "utf8");
       const fakeCodex = process.platform === "win32"
-        ? join(opencodexHome, "bin", "codex.cmd")
-        : join(opencodexHome, "bin", "codex");
-      mkdirSync(join(opencodexHome, "bin"), { recursive: true });
+        ? join(codexCommanderHome, "bin", "codex.cmd")
+        : join(codexCommanderHome, "bin", "codex");
+      mkdirSync(join(codexCommanderHome, "bin"), { recursive: true });
       if (process.platform === "win32") {
         writeFileSync(fakeCodex, "@echo off\r\necho codex-cli 0.133.0\r\n", "utf8");
       } else {
@@ -172,14 +173,14 @@ describe("CLI status JSON", () => {
         runtimeVersion: "0.133.0",
         removedEfforts: ["max", "ultra"],
         affectedModels: ["gpt-5.6-sol"],
-      }, { configDir: opencodexHome });
+      }, { configDir: codexCommanderHome });
       resetCodexRuntimeResolveCacheForTests();
 
       const result = spawnSync(process.execPath, [cliPath, "status", "--json"], {
         cwd: repoRoot,
         env: {
           ...process.env,
-          OPENCODEX_HOME: opencodexHome,
+          CODEXCOMMANDER_HOME: codexCommanderHome,
           CODEX_CLI_PATH: fakeCodex,
           PATH: "",
         },
@@ -200,14 +201,14 @@ describe("CLI status JSON", () => {
       });
     } finally {
       resetCodexRuntimeResolveCacheForTests();
-      rmSync(opencodexHome, { recursive: true, force: true });
+      rmSync(codexCommanderHome, { recursive: true, force: true });
     }
   });
 
   test("status rejects unknown flags instead of silently printing human text", () => {
-    const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-status-json-"));
+    const codexCommanderHome = mkdtempSync(join(tmpdir(), "ccx-status-json-"));
     try {
-      writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({
+      writeFileSync(join(codexCommanderHome, "config.json"), JSON.stringify({
         port: 9,
         providers: {},
         defaultProvider: "openai",
@@ -215,22 +216,22 @@ describe("CLI status JSON", () => {
 
       const result = spawnSync(process.execPath, [cliPath, "status", "--yaml"], {
         cwd: repoRoot,
-        env: { ...process.env, OPENCODEX_HOME: opencodexHome },
+        env: { ...process.env, CODEXCOMMANDER_HOME: codexCommanderHome },
         encoding: "utf8",
       });
 
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Usage: ocx status [--json]");
+      expect(result.stderr).toContain("Usage: ccx status [--json]");
       expect(result.stdout).toBe("");
     } finally {
-      rmSync(opencodexHome, { recursive: true, force: true });
+      rmSync(codexCommanderHome, { recursive: true, force: true });
     }
   });
 
   test("status --json rejects additional flags", () => {
-    const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-status-json-"));
+    const codexCommanderHome = mkdtempSync(join(tmpdir(), "ccx-status-json-"));
     try {
-      writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({
+      writeFileSync(join(codexCommanderHome, "config.json"), JSON.stringify({
         port: 9,
         providers: {},
         defaultProvider: "openai",
@@ -238,27 +239,27 @@ describe("CLI status JSON", () => {
 
       const result = spawnSync(process.execPath, [cliPath, "status", "--json", "--yaml"], {
         cwd: repoRoot,
-        env: { ...process.env, OPENCODEX_HOME: opencodexHome },
+        env: { ...process.env, CODEXCOMMANDER_HOME: codexCommanderHome },
         encoding: "utf8",
       });
 
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Usage: ocx status [--json]");
+      expect(result.stderr).toContain("Usage: ccx status [--json]");
       expect(result.stdout).toBe("");
     } finally {
-      rmSync(opencodexHome, { recursive: true, force: true });
+      rmSync(codexCommanderHome, { recursive: true, force: true });
     }
   });
 
   test("status --json on malformed config remains read-only and secret-safe", () => {
-    const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-status-json-"));
+    const codexCommanderHome = mkdtempSync(join(tmpdir(), "ccx-status-json-"));
     try {
-      const configPath = join(opencodexHome, "config.json");
+      const configPath = join(codexCommanderHome, "config.json");
       writeFileSync(configPath, '{ "apiKey": "sk-status-secret", invalid json', "utf8");
-      const beforeFiles = readdirSync(opencodexHome).sort();
+      const beforeFiles = readdirSync(codexCommanderHome).sort();
 
-      const result = runStatusJson(opencodexHome);
-      const afterFiles = readdirSync(opencodexHome).sort();
+      const result = runStatusJson(codexCommanderHome);
+      const afterFiles = readdirSync(codexCommanderHome).sort();
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
@@ -277,7 +278,7 @@ describe("CLI status JSON", () => {
       expect(serialized).not.toContain("sk-status-secret");
       expect(serialized).not.toContain("apiKey");
     } finally {
-      rmSync(opencodexHome, { recursive: true, force: true });
+      rmSync(codexCommanderHome, { recursive: true, force: true });
     }
   });
 

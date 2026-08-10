@@ -2,8 +2,7 @@ import { expect, test } from "bun:test";
 
 /**
  * Every contributor entry point must say that building from source needs a local `bun`, and
- * must keep that separate from the bundled runtime that ships inside the npm package. Users
- * who install `ocx` never need their own Bun; contributors always do.
+ * must not claim a registry package exists while package publication remains disabled.
  *
  * Each file is checked as one whole normalized paragraph rather than as scattered fragments.
  * Matching fragments independently across a whole file passes even after the explanatory
@@ -17,21 +16,19 @@ const CASES = [
   {
     path: "../CONTRIBUTING.md",
     paragraph:
-      "Source development requires the `bun` CLI on your `PATH`. The published npm package bundles its own"
-      + " Bun runtime for end users, but contributor commands such as `bun install`, `bun run test`, and"
-      + " `bun run prepush` run from your local Bun installation.",
+      "Source development requires the `bun` CLI on your `PATH`. Contributor commands such as `bun install`,"
+      + " `bun run test`, and `bun run prepush` run from that local Bun installation. No registry package or"
+      + " publishing automation is currently provided.",
   },
   {
     path: "../README.md",
-    paragraph:
-      "Source development requires the `bun` CLI on your `PATH`. This is separate from the published npm"
-      + " package's bundled Bun runtime, which is used only by installed `ocx` commands.",
+    paragraph: "Source development requires the `bun` CLI on your `PATH`.",
   },
   {
     path: "../docs-site/src/content/docs/contributing.md",
     paragraph:
-      "Source development requires the `bun` CLI on your `PATH`. The published npm package bundles its own"
-      + " Bun runtime for users, but this checkout's scripts run through your local Bun installation.",
+      "Source development requires the `bun` CLI on your `PATH`. No registry package is currently published;"
+      + " this checkout's scripts run through your local Bun installation.",
   },
 ] as const;
 
@@ -45,7 +42,7 @@ function normalizedRequirementParagraph(text: string): string | undefined {
   return paragraph.replace(/\s+/g, " ").trim();
 }
 
-test("source development docs require a local Bun CLI while preserving the bundled-runtime distinction", async () => {
+test("source development docs require a local Bun CLI without claiming a published package", async () => {
   for (const entry of CASES) {
     const text = await Bun.file(new URL(entry.path, import.meta.url)).text();
     expect(normalizedRequirementParagraph(text)).toBe(entry.paragraph);

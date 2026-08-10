@@ -17,12 +17,12 @@ public enum ManagementCredentialAvailability: Equatable, Sendable {
         case .file, .inheritedEnvironment:
             return nil
         case .unavailable:
-            return "Management authentication is unavailable. Run `ocx doctor`."
+            return "Management authentication is unavailable. Run `ccx doctor`."
         }
     }
 }
 
-/// A validated endpoint for the local OpenCodex proxy.
+/// A validated endpoint for the local CodexCommander proxy.
 public struct ProxyEndpoint: Equatable, Sendable {
     public static let validPorts = 1...65535
 
@@ -92,10 +92,68 @@ public struct ProxyInstallation: Sendable {
     }
 }
 
+private struct RuntimePortCodingKey: CodingKey, Hashable {
+    let stringValue: String
+    let intValue: Int?
+
+    init(_ stringValue: String) {
+        self.stringValue = stringValue
+        self.intValue = nil
+    }
+
+    init?(stringValue: String) {
+        self.init(stringValue)
+    }
+
+    init?(intValue: Int) {
+        self.stringValue = String(intValue)
+        self.intValue = intValue
+    }
+}
+
 private struct RuntimePortRecord: Decodable {
+    let schemaVersion: Int
     let pid: Int
     let port: Int
     let hostname: String?
+    let attestationSecret: String?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: RuntimePortCodingKey.self)
+        let actualKeys = Set(container.allKeys.map(\.stringValue))
+        let requiredKeys: Set<String> = ["schemaVersion", "pid", "port"]
+        let allowedKeys = requiredKeys.union(["hostname", "attestationSecret"])
+        guard requiredKeys.isSubset(of: actualKeys), actualKeys.isSubset(of: allowedKeys) else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "invalid runtime-port keys")
+            )
+        }
+
+        schemaVersion = try container.decode(Int.self, forKey: RuntimePortCodingKey("schemaVersion"))
+        pid = try container.decode(Int.self, forKey: RuntimePortCodingKey("pid"))
+        port = try container.decode(Int.self, forKey: RuntimePortCodingKey("port"))
+        hostname = actualKeys.contains("hostname")
+            ? try container.decode(String.self, forKey: RuntimePortCodingKey("hostname"))
+            : nil
+        attestationSecret = actualKeys.contains("attestationSecret")
+            ? try container.decode(String.self, forKey: RuntimePortCodingKey("attestationSecret"))
+            : nil
+
+        guard schemaVersion == 1 else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "unsupported runtime-port schema")
+            )
+        }
+        if let attestationSecret,
+           attestationSecret.range(
+             of: "^[A-Za-z0-9_-]{43}$",
+             options: .regularExpression
+           ) == nil {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "invalid runtime-port attestation")
+            )
+        }
+    }
 }
 
 private enum SecureReadError: Error {
@@ -177,12 +235,14 @@ public enum ProxyDiscovery {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         home: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> URL {
-        if let override = environment["OPENCODEX_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+        if let override = environment["CODEXCOMMANDER_HOME"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
            !override.isEmpty {
             return URL(fileURLWithPath: (override as NSString).expandingTildeInPath)
                 .standardizedFileURL
         }
-        return home.appendingPathComponent(".opencodex", isDirectory: true).standardizedFileURL
+        return home.appendingPathComponent(".codexcommander", isDirectory: true)
+            .standardizedFileURL
     }
 
     public static func discover(
@@ -190,7 +250,7 @@ public enum ProxyDiscovery {
         home: URL = FileManager.default.homeDirectoryForCurrentUser
     ) throws -> ProxyInstallation {
         let directoryURL = configDirectory(environment: environment, home: home)
-        let inherited = environment["OPENCODEX_ADMIN_AUTH_TOKEN"]?
+        let inherited = environment["CODEXCOMMANDER_ADMIN_AUTH_TOKEN"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         let directory: SecureDirectory
@@ -249,7 +309,7 @@ public enum ProxyDiscovery {
             }
             let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             let range = NSRange(token.startIndex..<token.endIndex, in: token)
-            let regex = try NSRegularExpression(pattern: "^ocx_admin_[A-Za-z0-9_-]{43}$")
+            let regex = try NSRegularExpression(pattern: "^ccx_admin_[A-Za-z0-9_-]{43}$")
             guard regex.firstMatch(in: token, range: range) != nil else {
                 throw SecureReadError.unsafe
             }
@@ -269,7 +329,7 @@ public enum ProxyDiscovery {
         }
     }
 
-    /// Compatibility helper for display-only callers. Token-bearing callers must use
+    /// Display-only helper. Token-bearing callers must use
     /// `discover()` and preserve its credential/error state.
     public static func resolve(
         environment: [String: String] = ProcessInfo.processInfo.environment,

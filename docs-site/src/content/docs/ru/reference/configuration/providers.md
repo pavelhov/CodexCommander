@@ -3,15 +3,14 @@ title: Конфигурация провайдеров
 description: Записи провайдеров, аутентификация, endpoint'ы, каталоги моделей, quota, context cap'ы и provider-specific options.
 ---
 
-Провайдер сообщает opencodex, где живёт модель, на каком wire-adapter'е она работает и как
+Провайдер сообщает CodexCommander, где живёт модель, на каком wire-adapter'е она работает и как
 аутентифицируются запросы.
 
 ## Верхнеуровневые поля, связанные с провайдерами
 
 | Поле | Тип | По умолчанию | Значение |
 | --- | --- | --- | --- |
-| `providers` | `Record<string, OcxProviderConfig>` | — | Map вида provider name → provider config. |
-| `openaiProviderTierVersion?` | `2` | set by migration | Отмечает, что единая projection OpenAI с учётом режима уже завершена. |
+| `providers` | `Record<string, CodexCommanderProviderConfig>` | — | Map вида provider name → provider config. |
 | `disabledModels?` | `string[]` | — | Модели, скрытые из каталога Codex и `/v1/models`, но не заблокированные для прямых вызовов прокси. Routed-id удаляются из списков. Account-qualified native-id скрывает только строку этого селектора; bare native GPT-id скрывает bare-строку и строки всех селекторов аккаунтов для этой модели. Страница Models показывает только bare native- и routed-строки; чтобы скрыть одну selector-qualified строку, задайте это поле конфигурации напрямую. |
 | `providerContextCaps?` | `Record<string, number>` | `{}` | Context cap'ы, видимые Codex, по каждому провайдеру. Cap может только понижать известное context window. |
 | `contextCapValue?` | `number` | `350000` | Значение, используемое элементами управления context-cap в дашборде; его изменение обновляет все включённые записи `providerContextCaps`. |
@@ -19,16 +18,16 @@ description: Записи провайдеров, аутентификация, 
 | `pausedCodexAccountIds?` | `string[]` | `[]` | Аккаунты, исключённые из выбора Pool до снятия паузы, включая основной аккаунт `__main__`, если он поставлен на паузу. |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | Необязательное сопоставление произвольного публичного селектора модели с сохранённым аккаунтом Codex. Каждый селектор с существующей целью добавляет в model picker Codex отдельные строки `<selector>/<native-openai-model>`; каждая строка использует только этот аккаунт. Если активен хотя бы один селектор, bare native-строки скрываются в picker, но их id остаются маршрутизируемыми и перечисляются raw `/v1/models`, если они не отключены явно. |
 | `activeCodexAccountId?` | `string` | — | Вручную выбранный аккаунт Pool для следующего запроса. Выбор очищает thread affinity; in-flight-запросы сохраняют уже захваченные credential'ы. |
-| `codexAccountPriorities?` | `Record<string,number>` | — | Порядок выбора для каждого аккаунта пула Codex: id аккаунта → целое число от `-100` до `100`, **больше — используется раньше**, отсутствие означает `0`. Это граница порядка, а не пригодности: выбор сужает уже подходящие аккаунты до самого высокого уровня, у которого ещё есть запас квоты, а внутри этого уровня аккаунт выбирает `accountPoolStrategy`. Уровень пропускается, только когда все его аккаунты превысили `autoSwitchThreshold`, находятся в cooldown, под soft-avoid, на паузе или требуют повторной аутентификации; неизвестный usage никогда не исчерпывает уровень. Порядок не делает выбираемым непригодный аккаунт и не перепривязывает поток, у которого аккаунт уже есть. Основной аккаунт `__main__` участвует на равных — именно так логин Codex Desktop можно оставить на самый конец. Без записей поведение остаётся прежним. Некорректная map игнорируется с предупреждением в консоли (порядок отключается, восстановление config не запускается). Управляется через `ocx account priority` и страницу Codex Auth. |
+| `codexAccountPriorities?` | `Record<string,number>` | — | Порядок выбора для каждого аккаунта пула Codex: id аккаунта → целое число от `-100` до `100`, **больше — используется раньше**, отсутствие означает `0`. Это граница порядка, а не пригодности: выбор сужает уже подходящие аккаунты до самого высокого уровня, у которого ещё есть запас квоты, а внутри этого уровня аккаунт выбирает `accountPoolStrategy`. Уровень пропускается, только когда все его аккаунты превысили `autoSwitchThreshold`, находятся в cooldown, под soft-avoid, на паузе или требуют повторной аутентификации; неизвестный usage никогда не исчерпывает уровень. Порядок не делает выбираемым непригодный аккаунт и не перепривязывает поток, у которого аккаунт уже есть. Основной аккаунт `__main__` участвует на равных — именно так логин Codex Desktop можно оставить на самый конец. Без записей приоритет всех аккаунтов равен `0`. Некорректная map игнорируется с предупреждением в консоли (порядок отключается, восстановление config не запускается). Управляется через `ccx account priority` и страницу Codex Auth. |
 | `autoSwitchThreshold?` | `number` | `80` | Порог проактивного переключения по использованию. `quota` может повторно оценить следующий запрос как привязанной, так и непривязанной задачи; `fill-first` использует его только как точку исчерпания для непривязанных назначений; обычный `round-robin` его не использует. Оценка берёт самое горячее из окон 5 часов, недели и 30 дней. `0` отключает только переключение по использованию, но не назначение непривязанных задач и не восстановление после сбоев. |
 | `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Стратегия назначения для новых/непривязанных запросов Codex. Запрос непривязан, если у него нет live affinity `(parent thread id, quota scope)`; видимая существующая задача может стать непривязанной после перезапуска прокси или сброса affinity. `quota` выбирает подходящий аккаунт с наименьшим известным usage, когда активного аккаунта нет, сохраняет подходящий активный аккаунт ниже `autoSwitchThreshold`, а после порога может перевести непривязанный запрос или следующий запрос привязанной задачи на подходящий аккаунт с меньшим usage. `round-robin` равномерно распределяет непривязанные запросы; `fill-first` назначает их активному аккаунту до cooldown, недоступности или порога исчерпания. |
 | `accountPoolStickyLimit?` | `number` | `1` | Число назначений новых/непривязанных задач на одном выборе round-robin перед переходом дальше. Счётчик растёт при привязке задачи, а не после успеха upstream. Диапазон 1–100; только при `accountPoolStrategy` = `round-robin`. |
 | `upstreamFailoverThreshold?` | `number` | `3` | Сколько подряд transient failure допустить, прежде чем новые сессии начнут делать failover. `0` отключает эту логику. Доказанные ошибки доступности DNS/TCP до соединения учитываются на уровне пары «провайдер, хост» и не влияют на здоровье аккаунта, кулдауны, привязку потока/сессии, выбор активного аккаунта или маршрутизацию пула, а также не учитываются в этом пороге. |
 | `modelCacheTtlMs?` | `number` | `300000` | Окно свежести для кэша `/models` на уровне провайдера. |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Политика prompt-cache Anthropic: отключено, 5-минутный ephemeral или 1-часовой extended. |
-| `tokenGuardian?` | `OcxTokenGuardianConfig` | off | Необязательная политика proactive OAuth refresh и warmup'а аккаунтов Codex. |
+| `tokenGuardian?` | `CodexCommanderTokenGuardianConfig` | off | Необязательная политика proactive OAuth refresh и warmup'а аккаунтов Codex. |
 
-Имена селекторов — выбранные пользователем публичные метки; opencodex не придаёт им семантики ролей
+Имена селекторов — выбранные пользователем публичные метки; CodexCommander не придаёт им семантики ролей
 аккаунтов. Ключи `codexAccountNamespaces` имеют длину 1–64 символа. Они должны начинаться и
 заканчиваться ASCII-буквой или цифрой; внутри разрешены буквы, цифры, `.`, `_` и `-`. Зарезервированные
 имена объектов JavaScript запрещены. Значение — допустимый id аккаунта пула (кроме внутреннего `__main__`)
@@ -48,20 +47,15 @@ cross-route credential fallback не существует. Строки API GPT-
 1,050,000 / max input 922,000, а виртуальные Pro-id переписываются в базовую wire-модель с
 `reasoning.mode: "pro"`.
 
-`openaiProviderTierVersion: 2` отмечает текущую single-provider projection. Перед миграцией
-поставляемой v1-конфигурации opencodex создаёт `config.json.pre-openai-tiers-v2.bak`, не
-перезаписывая отличающуюся backup-копию, и переписывает известные legacy namespaced-id,
-выбранные в `selectedModels`, в bare-id.
-
-## Записи провайдеров (`OcxProviderConfig`)
+## Записи провайдеров (`CodexCommanderProviderConfig`)
 
 | Поле | Тип | Значение |
 | --- | --- | --- |
-| `adapter` | `string` | Один из `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai` (или alias `azure`). |
+| `adapter` | `string` | Один из `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai`. |
 | `baseUrl` | `string` | Базовый URL API upstream'а. Большинство built-in fixed-endpoint'ов игнорируют несовпадение; collision-safe key-preset'ы сохраняют старый custom destination с тем же именем. |
 | `responsesPath?` | `string` | Relative resource path для key-auth запросов `openai-responses`. Должен начинаться с `/` и не может содержать scheme, query или fragment. |
 | `supportsServiceTier?` | `boolean` | Три состояния поддержки `service_tier`. `true`: fast mode может подставлять поле, значения вызывающего сохраняются. `false`: поле удаляется и никогда не подставляется (апстрим, для которого задокументировано отсутствие поддержки, не должен его получать). Не задано: провайдер не классифицирован — значения вызывающего сохраняются без изменений, fast mode не подставляет. Registry классифицирует canonical OpenAI (`true`), DeepSeek и Volcengine Ark (`false`); задавайте явно только для custom gateway'ев, реально поддерживающих tier'ы. |
-| `preserveResponsesReasoningContent?` | `boolean` | Сохранять plaintext reasoning content в replay'нутых Responses reasoning item'ах вместо очистки (очистка — правило ChatGPT backend'а). Включайте для upstream'ов, чей контракт принимает reasoning replay, например DeepSeek. Proxy-minted `ocxr1` envelope'ы удаляются всегда. |
+| `preserveResponsesReasoningContent?` | `boolean` | Сохранять plaintext reasoning content в replay'нутых Responses reasoning item'ах вместо очистки (очистка — правило ChatGPT backend'а). Включайте для upstream'ов, чей контракт принимает reasoning replay, например DeepSeek. Proxy-minted `ccxr1` envelope'ы удаляются всегда. |
 | `disabled?` | `boolean` | Сохранить провайдера на диске, но исключить его из routing'а и из model/catalog-listing'ов. |
 | `apiKey?` | `string` | API-key либо ссылка `${ENV_VAR}` / `$ENV_VAR`, разрешаемая при каждом запросе. |
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Header-style для ключа Anthropic. По умолчанию нативный `x-api-key`; допустим только для key-auth-провайдеров `anthropic`. |
@@ -113,24 +107,23 @@ cross-route credential fallback не существует. Строки API GPT-
 | `location?` | `string` | Локация Vertex; fallback через окружение — `GOOGLE_CLOUD_LOCATION`. |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | Только Cursor: MCP-серверы в режимах stdio или Streamable HTTP. |
 | `desktopExecutor?` | `DesktopExecutorConfig` | Только Cursor: команды внешнего computer-use и record-screen. |
-| `unsafeAllowNativeLocalExec?` | `boolean` | Legacy boolean Cursor, эквивалентен `nativeLocalExec: "on"` только если новое поле не задано. |
-| `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Политика local-exec для Cursor. `off` — дефолт; `codex-sandbox` сейчас ведёт себя fail-closed как `off`. |
+| `nativeLocalExec?` | `"off" \| "on"` | Политика local-exec для Cursor. `off` — значение по умолчанию. |
 
 Провайдеры с API-key могут хранить literal key или environment-reference. OAuth-провайдеры
-используют credential store, заполняемый через `ocx login`; поведение subscription-backed launcher'а
+используют credential store, заполняемый через `ccx login`; поведение subscription-backed launcher'а
 Claude Code настраивается через
 [`claudeCode.authMode`](/reference/configuration/server/#claude-code).
 
 ## Безопасность исходящих диагностических запросов
 
 Тест подключения из дашборда и live discovery моделей используют ограниченный transport только для
-GET-запросов. Если outbound-proxy не настроен, opencodex один раз разрешает hostname и затем
+GET-запросов. Если outbound-proxy не настроен, CodexCommander один раз разрешает hostname и затем
 подключается только к этому проверенному адресу. Для HTTPS сохраняются исходные Host, SNI и
 проверка сертификата; отключить проверку сертификата конфигурация провайдера не может.
 
 Если активны `HTTP_PROXY`, `HTTPS_PROXY` или `ALL_PROXY`, эти операции оставляют встроенный fetch
 Bun. Проверки URL и literal-address всё равно выполняются, но итоговый маршрут, DNS-ответ и peer
-всё же выбирает прокси, поэтому opencodex не может зафиксировать или проверить этого peer'а. Это
+всё же выбирает прокси, поэтому CodexCommander не может зафиксировать или проверить этого peer'а. Это
 осознанное ограничение безопасности.
 
 Private/local destination требуют `allowPrivateNetwork: true` и, если активен outbound-proxy,
@@ -193,7 +186,7 @@ backoff и может переключить аккаунт уже внутри 
 :::caution[Experimental]
 Оставляйте эту функцию выключенной, если не понимаете policy-risk аккаунтов Anthropic. Если
 сомневаетесь, безопаснее переключать аккаунты вручную через
-`ocx account use anthropic <id>`.
+`ccx account use anthropic <id>`.
 :::
 
 ### Формы управляемых записей
@@ -202,7 +195,7 @@ backoff и может переключить аккаунт уже внутри 
 Элементы `codexAccounts[]` требуют `id`, `email` и `isMain`, а также могут нести `plan`,
 `chatgptAccountId` и privacy-safe `logLabel`. Обычно этими записями управляет дашборд.
 
-### `tokenGuardian` (`OcxTokenGuardianConfig`)
+### `tokenGuardian` (`CodexCommanderTokenGuardianConfig`)
 
 | Поле | Тип | По умолчанию | Значение |
 | --- | --- | --- | --- |
@@ -234,7 +227,7 @@ registry-endpoint имеет приоритет над настроенным `b
 API-регионом импортированного credential'а и использует канонический `runtime.{region}.kiro.dev`.
 См. [Adapters](/reference/adapters/).
 
-Когда routing выбрасывает `baseUrl`, opencodex пишет в лог registry-endpoint и лишь origin из
+Когда routing выбрасывает `baseUrl`, CodexCommander пишет в лог registry-endpoint и лишь origin из
 конфига; сам настроенный путь может содержать credential. Уберите неиспользуемый URL или
 выберите provider-entry, соответствующий нужному региону. `alibaba-token-plan` закреплён за
 Beijing, а `alibaba-token-plan-intl` обслуживает международные endpoint'ы.
@@ -263,7 +256,7 @@ Beijing, а `alibaba-token-plan-intl` обслуживает междунаро�
 
 ## Провайдер Cursor (`adapter: "cursor"`)
 
-Bridge Cursor экспериментальный. После `ocx login cursor` добавьте или отредактируйте
+Bridge Cursor экспериментальный. После `ccx login cursor` добавьте или отредактируйте
 `providers.cursor`. Optimization ladder Cursor Router раскрывается как отдельные id для Codex,
 потому что picker не умеет показывать специфичные для Cursor model-parameter'ы:
 
@@ -283,9 +276,6 @@ Server-driven local tool'ы Cursor по умолчанию выключены. C
 - `"off"` (по умолчанию) отвергает нативное выполнение `read`, `write`, `delete`, `ls`, `grep`,
   `shell` и `fetch` со стороны Cursor.
 - `"on"` включает trusted local execution и обходит approval/sandbox semantics Codex.
-- `"codex-sandbox"` сохранён ради совместимости, но закрывается с ошибкой так же, как `"off"`; на
-  prose запроса нельзя полагаться как на достоверную sandbox-attestation.
-
 ```json
 {
   "providers": {
@@ -301,10 +291,8 @@ Server-driven local tool'ы Cursor по умолчанию выключены. C
 ```
 
 Задавайте это поле именно в `providers.cursor`, а не на верхнем уровне. В дашборде откройте
-**Providers → Cursor → Edit JSON**, сохраните и затем перезапустите. Legacy-поле
-`unsafeAllowNativeLocalExec: true` эквивалентно `nativeLocalExec: "on"` только если поле
-`nativeLocalExec` не задано. MCP, screen recording и computer use управляются отдельно через
-`mcpServers` и `desktopExecutor`.
+**Providers → Cursor → Edit JSON**, сохраните и затем перезапустите. MCP, screen recording и computer
+use управляются отдельно через `mcpServers` и `desktopExecutor`.
 
 Каждый `mcpServers.<name>` принимает либо `command` (stdio), либо `url` (Streamable HTTP). Для
 stdio также допустимы `args`, `env` и `cwd`; для HTTP — `headers`. Оба типа поддерживают
@@ -354,7 +342,7 @@ OpenRouter может обслуживать одну и ту же модель 
 ```
 
 Ключи моделей здесь должны быть exact native OpenRouter id, без внешнего префикса провайдера
-opencodex. При выборе `openrouter/anthropic-claude-sonnet-5` система сначала восстанавливает
+CodexCommander. При выборе `openrouter/anthropic-claude-sonnet-5` система сначала восстанавливает
 native-id `anthropic/claude-sonnet-5`, а уже затем применяет model rule.
 
 ## Статические allowlist'ы моделей

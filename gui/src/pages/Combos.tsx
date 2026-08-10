@@ -6,7 +6,7 @@ import {
   parseComboList,
   toPutBody,
 } from "../combo-workspace-data";
-import { hideRedundantChatGptForwardProviders } from "../provider-workspace/catalog";
+import { publicWorkspaceProviders } from "../provider-workspace/catalog";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { Notice } from "../ui";
 import { useT } from "../i18n/shared";
@@ -54,7 +54,7 @@ function seedCombos(cacheKey: string): CachedCombosPage | null {
 
 export default function Combos({ apiBase }: { apiBase: string }) {
   const t = useT();
-  const cacheKey = `ocx.combos.workspace.v1:${apiBase}`;
+  const cacheKey = `ccx.combos.workspace.v1:${apiBase}`;
   const cached = useMemo(() => seedCombos(cacheKey), [cacheKey]);
   const [status, setStatus] = useState("");
   const [statusOk, setStatusOk] = useState(false);
@@ -96,14 +96,10 @@ export default function Combos({ apiBase }: { apiBase: string }) {
         : [];
 
     const combos = parseComboList(combosJson);
-    const allProviders = configJson.providers ?? {};
-    // Collapse canonical forward aliases only in the new-member picker. Validation keeps
-    // every configured provider id, including legacy chatgpt members already in a combo.
-    const visibleProviders = hideRedundantChatGptForwardProviders(allProviders);
-    const providers = Object.entries(allProviders).map(([name, p]) => ({
+    const visibleProviders = publicWorkspaceProviders(configJson.providers ?? {});
+    const providers = Object.entries(visibleProviders).map(([name, p]) => ({
       name,
       disabled: !!p.disabled,
-      hiddenFromPicker: !Object.hasOwn(visibleProviders, name),
       authMode: p.authMode,
       adapter: p.adapter,
       baseUrl: p.baseUrl,
@@ -141,7 +137,7 @@ export default function Combos({ apiBase }: { apiBase: string }) {
     }
 
     // Ensure each provider's defaultModel appears even if catalog fetch lagged.
-    for (const [name, provider] of Object.entries(allProviders)) {
+    for (const [name, provider] of Object.entries(visibleProviders)) {
       const defaultModel = typeof provider.defaultModel === "string" ? provider.defaultModel.trim() : "";
       if (!defaultModel || provider.disabled) continue;
       if (!models.some(model => model.provider === name && model.id === defaultModel)) {

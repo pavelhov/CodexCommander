@@ -1,5 +1,5 @@
 /**
- * `ocx export` CLI surface (devlog 260731_client_config_export/020 accept criteria).
+ * `ccx export` CLI surface (implementation contract accept criteria).
  *
  * The serializers themselves are covered by tests/client-config-export.test.ts; this file
  * covers only what the CLI boundary owns: stdout purity under --json, the human framing,
@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { handleExportCommand, exportModelsFromProxyRows } from "../src/cli/export-command";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -21,14 +21,15 @@ const cliPath = join(repoRoot, "src", "cli", "index.ts");
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
 const tempDirs: string[] = [];
 
-function config(extra?: Partial<OcxConfig>): OcxConfig {
+function config(extra?: Partial<CodexCommanderConfig>): CodexCommanderConfig {
   return {
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     hostname: "127.0.0.1",
     defaultProvider: "mock",
     providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" } },
     ...extra,
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 /** Rows in the shape GET /api/models actually returns, including a disabled one. */
@@ -53,7 +54,7 @@ function fakeProxy(rows: unknown = ROWS) {
 }
 
 function tempDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "ocx-export-"));
+  const dir = mkdtempSync(join(tmpdir(), "ccx-export-"));
   tempDirs.push(dir);
   return dir;
 }
@@ -84,7 +85,7 @@ function stdout(): string {
   return logs.map(line => `${line}\n`).join("");
 }
 
-async function run(args: string[], extra: { baseUrl: string; config?: OcxConfig }) {
+async function run(args: string[], extra: { baseUrl: string; config?: CodexCommanderConfig }) {
   const code = await handleExportCommand(args, {
     baseUrl: extra.baseUrl,
     configImpl: () => extra.config ?? config(),
@@ -92,7 +93,7 @@ async function run(args: string[], extra: { baseUrl: string; config?: OcxConfig 
   return { code, stdout: stdout(), stderr: errors.join("\n") };
 }
 
-describe("ocx export --json (accept criterion 1)", () => {
+describe("ccx export --json (accept criterion 1)", () => {
   test("stdout parses as JSON with zero extra bytes, for both clients", async () => {
     const proxy = fakeProxy();
     for (const client of ["opencode", "pi"] as const) {
@@ -111,21 +112,21 @@ describe("ocx export --json (accept criterion 1)", () => {
     const proxy = fakeProxy();
     const result = await run(["--client", "opencode", "--json"], { baseUrl: proxy.baseUrl });
     const parsed = JSON.parse(result.stdout) as { provider: Record<string, { options: { baseURL: string } }> };
-    expect(parsed.provider.opencodex!.options.baseURL).toBe(`http://127.0.0.1:${proxy.port}/v1`);
-    expect(parsed.provider.opencodex!.options.baseURL).not.toContain(":10100/");
+    expect(parsed.provider.codexcommander!.options.baseURL).toBe(`http://127.0.0.1:${proxy.port}/v1`);
+    expect(parsed.provider.codexcommander!.options.baseURL).not.toContain(":10100/");
   });
 
   test("disabled rows never reach the exported config", async () => {
     const proxy = fakeProxy();
     const result = await run(["--client", "pi", "--json"], { baseUrl: proxy.baseUrl });
     const parsed = JSON.parse(result.stdout) as { providers: Record<string, { models: Array<{ id: string }> }> };
-    const ids = parsed.providers.opencodex!.models.map(model => model.id);
+    const ids = parsed.providers.codexcommander!.models.map(model => model.id);
     expect(ids).not.toContain("banned/hidden");
     expect(ids).toEqual(["anthropic/claude-opus-5", "custom/no-context", "gpt-5.6-luna"]);
   });
 });
 
-describe("ocx export human output (accept criterion 2)", () => {
+describe("ccx export human output (accept criterion 2)", () => {
   test("leads with the JSON, then destination, merge warning, env line, and counts", async () => {
     const proxy = fakeProxy();
     const result = await run(["--client", "opencode"], { baseUrl: proxy.baseUrl });
@@ -134,7 +135,7 @@ describe("ocx export human output (accept criterion 2)", () => {
     expect(result.stdout.startsWith("{\n")).toBe(true);
     expect(result.stdout).toContain(join("opencode", "opencode.json"));
     expect(result.stdout).toContain("Merge this provider block into that file; do not replace it.");
-    expect(result.stdout).toContain("export OPENCODEX_OPENCODE_API_KEY=");
+    expect(result.stdout).toContain("export CODEXCOMMANDER_OPENCODE_API_KEY=");
     // Three visible models; only `custom/no-context` lacks an authoritative window.
     expect(result.stdout).toContain("3 models; 1 omit context limits");
   });
@@ -143,11 +144,11 @@ describe("ocx export human output (accept criterion 2)", () => {
     const proxy = fakeProxy();
     const result = await run(["--client", "pi"], { baseUrl: proxy.baseUrl });
     expect(result.stdout).toContain(join(".pi", "agent", "models.json"));
-    expect(result.stdout).toContain("export OPENCODEX_API_KEY=");
+    expect(result.stdout).toContain("export CODEXCOMMANDER_API_KEY=");
   });
 });
 
-describe("ocx export --out (accept criterion 3)", () => {
+describe("ccx export --out (accept criterion 3)", () => {
   test("writes the config to the given path", async () => {
     const proxy = fakeProxy();
     const target = join(tempDir(), "opencode.json");
@@ -182,7 +183,7 @@ describe("ocx export --out (accept criterion 3)", () => {
 
     expect(result.code).toBe(0);
     const written = JSON.parse(readFileSync(target, "utf8")) as { provider: Record<string, unknown> };
-    expect(Object.keys(written.provider)).toEqual(["opencodex"]);
+    expect(Object.keys(written.provider)).toEqual(["codexcommander"]);
   });
 
   test("without --out nothing is written to the real destination path", async () => {
@@ -197,7 +198,7 @@ describe("ocx export --out (accept criterion 3)", () => {
   });
 });
 
-describe("ocx export argument validation (accept criterion 4)", () => {
+describe("ccx export argument validation (accept criterion 4)", () => {
   test("an unknown --client names every valid value", async () => {
     const proxy = fakeProxy();
     const result = await run(["--client", "cursor"], { baseUrl: proxy.baseUrl });
@@ -217,13 +218,13 @@ describe("ocx export argument validation (accept criterion 4)", () => {
     expect(yaml.code).toBe(0);
     const yamlText = readFileSync(yamlTarget, "utf8");
     expect(yamlText.startsWith("providers:")).toBe(true);
-    expect(Bun.YAML.parse(yamlText)).toHaveProperty("providers.opencodex");
+    expect(Bun.YAML.parse(yamlText)).toHaveProperty("providers.codexcommander");
 
     const tomlTarget = join(tempDir(), "kimi-config.toml");
     const toml = await run(["--client", "kimi", "--out", tomlTarget], { baseUrl: proxy.baseUrl });
     expect(toml.code).toBe(0);
     const tomlText = readFileSync(tomlTarget, "utf8");
-    expect(Bun.TOML.parse(tomlText)).toHaveProperty("providers.opencodex");
+    expect(Bun.TOML.parse(tomlText)).toHaveProperty("providers.codexcommander");
     // Exactly one trailing newline, for every format.
     expect(tomlText.endsWith("\n")).toBe(true);
     expect(tomlText.endsWith("\n\n")).toBe(false);
@@ -244,14 +245,14 @@ describe("ocx export argument validation (accept criterion 4)", () => {
   });
 });
 
-describe("ocx export with no live proxy (accept criterion 5)", () => {
+describe("ccx export with no live proxy (accept criterion 5)", () => {
   /**
-   * Run through the real dispatcher in a subprocess with an isolated OPENCODEX_HOME whose
+   * Run through the real dispatcher in a subprocess with an isolated CODEXCOMMANDER_HOME whose
    * configured port has no listener. In-process injection cannot cover this: `findLiveProxy`
    * reads the pid file and config directly, so a proxy running on the developer's machine
    * would be discovered and the assertion would pass for the wrong reason.
    */
-  test("fails through the runtime-api error naming ocx start, emitting no config", () => {
+  test("fails through the runtime-api error naming ccx start, emitting no config", () => {
     const probe = Bun.serve({ port: 0, fetch: () => new Response("") });
     const deadPort = probe.port;
     probe.stop(true);
@@ -263,6 +264,7 @@ describe("ocx export with no live proxy (accept criterion 5)", () => {
       join(home, "config.json"),
       JSON.stringify({
         port: deadPort,
+        multiAgentGuidanceEnabled: true,
         defaultProvider: "mock",
         providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1", allowPrivateNetwork: true } },
       }),
@@ -271,13 +273,13 @@ describe("ocx export with no live proxy (accept criterion 5)", () => {
 
     const result = spawnSync(process.execPath, [cliPath, "export", "--client", "opencode", "--json"], {
       cwd: repoRoot,
-      env: { ...process.env, OPENCODEX_HOME: home },
+      env: { ...process.env, CODEXCOMMANDER_HOME: home },
       encoding: "utf8",
     });
 
     expect(result.status).not.toBe(0);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("ocx start");
+    expect(result.stderr).toContain("ccx start");
     // Routed by the dispatcher, not swallowed by the unknown-command branch.
     expect(result.stderr).not.toContain("Unknown command");
   }, { timeout: 30_000 });
@@ -290,21 +292,21 @@ describe("ocx export with no live proxy (accept criterion 5)", () => {
   });
 });
 
-describe("ocx export never serializes a key (accept criterion 6)", () => {
-  test("no stdout path contains an ocx_ token even when config carries one", async () => {
+describe("ccx export never serializes a key (accept criterion 6)", () => {
+  test("no stdout path contains an ccx_ token even when config carries one", async () => {
     const proxy = fakeProxy();
-    const withKey = config({ apiKeys: [{ id: "k1", name: "default", key: "ocx_liveSecretValue" }] } as Partial<OcxConfig>);
+    const withKey = config({ apiKeys: [{ id: "k1", name: "default", key: "ccx_liveSecretValue" }] } as Partial<CodexCommanderConfig>);
     for (const [args, envRef] of [
-      [["--client", "opencode"], "{env:OPENCODEX_OPENCODE_API_KEY}"],
-      [["--client", "opencode", "--json"], "{env:OPENCODEX_OPENCODE_API_KEY}"],
-      [["--client", "pi"], "$OPENCODEX_API_KEY"],
-      [["--client", "pi", "--json"], "$OPENCODEX_API_KEY"],
+      [["--client", "opencode"], "{env:CODEXCOMMANDER_OPENCODE_API_KEY}"],
+      [["--client", "opencode", "--json"], "{env:CODEXCOMMANDER_OPENCODE_API_KEY}"],
+      [["--client", "pi"], "$CODEXCOMMANDER_API_KEY"],
+      [["--client", "pi", "--json"], "$CODEXCOMMANDER_API_KEY"],
     ] as Array<[string[], string]>) {
       logs = [];
       errors = [];
       const result = await run(args, { baseUrl: proxy.baseUrl, config: withKey });
       expect(result.code).toBe(0);
-      expect(result.stdout).not.toContain("ocx_");
+      expect(result.stdout).not.toContain("ccx_");
       // The env REFERENCE is present; the value it stands for never is.
       expect(result.stdout).toContain(envRef);
     }

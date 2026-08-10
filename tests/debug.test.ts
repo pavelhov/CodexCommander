@@ -7,18 +7,18 @@ import { debugDroppedFrame, debugProviderDiagnostic } from "../src/lib/debug";
 import { resetDebugSettingsForTests, setDebugSettings } from "../src/lib/debug-settings";
 
 describe("debug frame logging", () => {
-  const previous = process.env.OCX_DEBUG;
+  const previous = process.env.CCX_DEBUG;
 
   afterEach(() => {
     resetDebugSettingsForTests();
     resetDebugLogBufferForTests();
     resetInjectionDebugLogBufferForTests();
-    if (previous === undefined) delete process.env.OCX_DEBUG;
-    else process.env.OCX_DEBUG = previous;
+    if (previous === undefined) delete process.env.CCX_DEBUG;
+    else process.env.CCX_DEBUG = previous;
   });
 
   test("debugDroppedFrame redacts payload content", () => {
-    process.env.OCX_DEBUG = "1";
+    process.env.CCX_DEBUG = "1";
     const error = spyOn(console, "error").mockImplementation(() => {});
     try {
       debugDroppedFrame("openai-chat", "secret frame body bearer-token@example.test");
@@ -34,14 +34,14 @@ describe("debug frame logging", () => {
     }
   });
 
-  test("debugProviderDiagnostic emits under OCX_DEBUG with provider prefix and redacts secrets", () => {
-    process.env.OCX_DEBUG = "1";
+  test("debugProviderDiagnostic emits under CCX_DEBUG with provider prefix and redacts secrets", () => {
+    process.env.CCX_DEBUG = "1";
     const error = spyOn(console, "error").mockImplementation(() => {});
     try {
       debugProviderDiagnostic("cursor", "dial", { host: "api2.cursor.sh", authorization: "Bearer secret-cursor-token" });
       expect(error).toHaveBeenCalledTimes(1);
       const line = String(error.mock.calls[0]?.[0] ?? "");
-      expect(line).toContain("[ocx:cursor:dial]");
+      expect(line).toContain("[ccx:cursor:dial]");
       expect(line).toContain("api2.cursor.sh");
       expect(line).not.toContain("secret-cursor-token");
       expect(line).toContain("[REDACTED]");
@@ -50,22 +50,8 @@ describe("debug frame logging", () => {
     }
   });
 
-  test("legacy OCX_DEBUG_FRAMES still enables provider diagnostics", () => {
-    delete process.env.OCX_DEBUG;
-    process.env.OCX_DEBUG_FRAMES = "1";
-    const error = spyOn(console, "error").mockImplementation(() => {});
-    try {
-      debugProviderDiagnostic("cursor", "connected", { connectMs: 12 });
-      expect(error).toHaveBeenCalledTimes(1);
-      expect(String(error.mock.calls[0]?.[0] ?? "")).toContain("[ocx:cursor:connected]");
-    } finally {
-      error.mockRestore();
-    }
-  });
-
   test("debugProviderDiagnostic stays quiet unless explicitly enabled", () => {
-    delete process.env.OCX_DEBUG;
-    delete process.env.OCX_DEBUG_FRAMES;
+    delete process.env.CCX_DEBUG;
     const error = spyOn(console, "error").mockImplementation(() => {});
     try {
       debugProviderDiagnostic("cursor", "dial", { host: "api2.cursor.sh" });
@@ -76,20 +62,20 @@ describe("debug frame logging", () => {
   });
 
   test("debugProviderDiagnostic emits when enabled via runtime settings API", () => {
-    delete process.env.OCX_DEBUG;
+    delete process.env.CCX_DEBUG;
     setDebugSettings({ debug: true });
     const error = spyOn(console, "error").mockImplementation(() => {});
     try {
       debugProviderDiagnostic("cursor", "connected", { connectMs: 42 });
       expect(error).toHaveBeenCalledTimes(1);
-      expect(String(error.mock.calls[0]?.[0] ?? "")).toContain("[ocx:cursor:connected]");
+      expect(String(error.mock.calls[0]?.[0] ?? "")).toContain("[ccx:cursor:connected]");
     } finally {
       error.mockRestore();
     }
   });
 
   test("debugDroppedFrame stays quiet unless explicitly enabled", () => {
-    delete process.env.OCX_DEBUG;
+    delete process.env.CCX_DEBUG;
     const error = spyOn(console, "error").mockImplementation(() => {});
     try {
       debugDroppedFrame("openai-chat", "secret frame body");
@@ -100,7 +86,7 @@ describe("debug frame logging", () => {
   });
 
   test("debugProviderDiagnostic redacts structured secrets", () => {
-    process.env.OCX_DEBUG = "1";
+    process.env.CCX_DEBUG = "1";
     const error = spyOn(console, "error").mockImplementation(() => {});
     try {
       debugProviderDiagnostic("kiro", "request", {
@@ -110,7 +96,7 @@ describe("debug frame logging", () => {
       });
       expect(error).toHaveBeenCalledTimes(1);
       const line = String(error.mock.calls[0]?.[0] ?? "");
-      expect(line).toContain("[ocx:kiro:request]");
+      expect(line).toContain("[ccx:kiro:request]");
       expect(line).toContain("us-east-1");
       expect(line).not.toContain("secret-debug-token");
       expect(line).not.toContain("arn:aws:codewhisperer");
@@ -121,8 +107,8 @@ describe("debug frame logging", () => {
   });
 
   test("appendDebugLogLine supports after/limit queries with monotonic seq", () => {
-    appendDebugLogLine("[ocx:test:one]");
-    appendDebugLogLine("[ocx:test:two]");
+    appendDebugLogLine("[ccx:test:one]");
+    appendDebugLogLine("[ccx:test:two]");
     const all = getDebugLogEntries();
     expect(all).toHaveLength(2);
     expect(all[0]!.seq).toBe(1);
@@ -156,8 +142,8 @@ describe("debug frame logging", () => {
     const now = Date.now();
     const spy = spyOn(Date, "now").mockReturnValue(now);
     try {
-      appendDebugLogLine("[ocx:test:a]");
-      appendDebugLogLine("[ocx:test:b]");
+      appendDebugLogLine("[ccx:test:a]");
+      appendDebugLogLine("[ccx:test:b]");
       const all = getDebugLogEntries();
       const tail = getDebugLogEntries({ after: all[0]!.seq, limit: 10 });
       expect(tail).toHaveLength(1);

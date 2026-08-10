@@ -224,7 +224,7 @@ function runInWorker(opts: {
       ...(opts.restoreTest ? { restoreTest: opts.restoreTest } : {}),
       env: {
         ...(process.env.CODEX_HOME ? { CODEX_HOME: process.env.CODEX_HOME } : {}),
-        ...(process.env.OPENCODEX_HOME ? { OPENCODEX_HOME: process.env.OPENCODEX_HOME } : {}),
+        ...(process.env.CODEXCOMMANDER_HOME ? { CODEXCOMMANDER_HOME: process.env.CODEXCOMMANDER_HOME } : {}),
       },
     });
   })).catch(error => {

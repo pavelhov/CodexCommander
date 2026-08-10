@@ -1,9 +1,9 @@
-import type { OcxProviderConfig } from "../../types";
+import type { CodexCommanderProviderConfig } from "../../types";
 
 /**
- * One MCP server opencodex starts/connects and exposes to the Cursor agent as callable tools.
- * Either `command` (stdio: opencodex spawns the server as a child process) or `url`
- * (streamable-http: opencodex connects to a remote MCP server) must be set.
+ * One MCP server CodexCommander starts/connects and exposes to the Cursor agent as callable tools.
+ * Either `command` (stdio: CodexCommander spawns the server as a child process) or `url`
+ * (streamable-http: CodexCommander connects to a remote MCP server) must be set.
  */
 export interface CursorMcpServerConfig {
   /** stdio: executable to spawn (e.g. "npx", "node", "uvx"). */
@@ -32,7 +32,7 @@ export interface ResolvedMcpServer extends CursorMcpServerConfig {
  * Resolve the enabled, connectable MCP servers from a provider config. A server is
  * connectable only if it declares either a `command` (stdio) or a `url` (http).
  */
-export function resolveMcpServers(provider: OcxProviderConfig): ResolvedMcpServer[] {
+export function resolveMcpServers(provider: CodexCommanderProviderConfig): ResolvedMcpServer[] {
   const raw = provider.mcpServers;
   if (!raw) return [];
   return Object.entries(raw)

@@ -10,7 +10,7 @@ import {
   type DesktopFamily,
   type DesktopProfile,
 } from "../claude/desktop-profile";
-import { writeDesktop3pConfig, type Desktop3pConfigMode, parseDesktop3pModeArgs } from "../claude/desktop-3p";
+import { writeDesktop3pConfig } from "../claude/desktop-3p";
 import { filterCatalogVisibleModels, desktopVisibleNativeSlugs } from "../codex/catalog";
 import { buildClaudeDesktopState, fetchAllModels } from "../server/management-api";
 import { findLiveProxy } from "../server/proxy-liveness";
@@ -22,25 +22,23 @@ function isFamily(value: string | undefined): value is DesktopFamily {
 
 function printDesktopHelp(): void {
   console.log(`Usage:
-  ocx claude desktop [apply] [--static|--hybrid|--discovery-only]
-  ocx claude desktop show [--json]
-  ocx claude desktop move <provider/model> <opus|fable|sonnet|haiku> [--default]
-  ocx claude desktop default <family> <provider/model|none>
-  ocx claude desktop export <path|->
-  ocx claude desktop import <path> [--apply]`);
+  ccx claude desktop apply
+  ccx claude desktop show [--json]
+  ccx claude desktop move <provider/model> <opus|fable|sonnet|haiku> [--default]
+  ccx claude desktop default <family> <provider/model|none>
+  ccx claude desktop export <path|->
+  ccx claude desktop import <path> [--apply]`);
 }
 
 export interface ApplyProfileDeps {
   findLiveProxyImpl?: typeof findLiveProxy;
   postApplyImpl?: (
-    mode: Desktop3pConfigMode,
     profile: DesktopProfile,
   ) => Promise<{ ok?: boolean; path?: string; error?: string }>;
 }
 
 export async function applyProfile(
   profile: DesktopProfile,
-  mode: Desktop3pConfigMode,
   deps: ApplyProfileDeps = {},
 ): Promise<{ ok: boolean; path: string; reason?: string; warning?: string }> {
   // Explicit apply is an enable action. Persist intent before any Desktop write
@@ -56,15 +54,15 @@ export async function applyProfile(
     // #859: the Desktop alias reverse-map is process-local. Applying through the
     // serving process installs the map there; a local-only write leaves the
     // daemon unable to decode aliases, and the provider rejects them (400).
-    const post = deps.postApplyImpl ?? (async (m: Desktop3pConfigMode, p: DesktopProfile) =>
+    const post = deps.postApplyImpl ?? (async (p: DesktopProfile) =>
       runtimeRequest<{ ok?: boolean; path?: string; error?: string; saved?: boolean; warning?: string }>(
         "/api/claude-desktop/apply",
         // The daemon's config may be older than what we just saved, so the
         // profile travels with the request instead of being re-read there.
-        { method: "POST", body: JSON.stringify({ mode: m, profile: p }) },
+        { method: "POST", body: JSON.stringify({ mode: "static", profile: p }) },
       ));
     try {
-      const applied = await post(mode, state.profile);
+      const applied = await post(state.profile);
       if (applied.ok === false) return { ok: false, path: applied.path ?? "", reason: applied.error ?? "daemon apply failed" };
       // Partial success: Desktop was written but the applied marker was not
       // persisted. Pass the degradation up instead of reporting a clean apply.
@@ -96,7 +94,7 @@ export async function applyProfile(
     [...desktopVisibleNativeSlugs(config)],
     routed,
     config.apiKeys?.[0]?.key,
-    mode,
+    "static",
     state.profile,
   );
   return { ok: result.written, path: result.path, reason: result.reason };
@@ -109,21 +107,15 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
     return 0;
   }
 
-  // Legacy mode flags remain apply aliases and are parsed before subcommands.
-  const legacyFlags = argv.filter(arg => ["--static", "--hybrid", "--discovery-only"].includes(arg));
-  const applyInvocation = argv.length === 0 || command === "apply" || legacyFlags.length > 0;
-  if (applyInvocation) {
-    const nonMode = argv.filter(arg => !["apply", "--static", "--hybrid", "--discovery-only"].includes(arg));
-    if (nonMode.length > 0) {
-      console.error(`알 수 없는 인자: ${nonMode.join(" ")}`);
+  if (command === "apply") {
+    if (argv.length !== 1) {
+      console.error("Usage: ccx claude desktop apply");
       return 1;
     }
-    const parsedMode = parseDesktop3pModeArgs(legacyFlags);
-    if ("error" in parsedMode) { console.error(parsedMode.error); return 1; }
     try {
       const config = loadConfig();
       const state = await buildClaudeDesktopState(config);
-      const result = await applyProfile(state.profile, parsedMode.mode, deps);
+      const result = await applyProfile(state.profile, deps);
       if (!result.ok) {
         console.error(`설정 적용 실패: ${result.reason ?? "unknown error"}`);
         console.error("프로필은 저장되었지만 Claude Desktop 설정 파일에는 반영되지 않았습니다. 프록시 상태를 확인한 뒤 다시 적용해 주세요.");
@@ -145,7 +137,7 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
     const config = loadConfig();
     const state = await buildClaudeDesktopState(config);
     if (command === "show") {
-      if (argv.length > 2 || (argv[1] && argv[1] !== "--json")) throw new Error("Usage: ocx claude desktop show [--json]");
+      if (argv.length > 2 || (argv[1] && argv[1] !== "--json")) throw new Error("Usage: ccx claude desktop show [--json]");
       if (argv[1] === "--json") console.log(JSON.stringify(state));
       else {
         for (const family of DESKTOP_FAMILIES) {
@@ -159,7 +151,7 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
     }
     if (command === "move") {
       const [, route, familyRaw, ...flags] = argv;
-      if (!route || !isFamily(familyRaw) || flags.some(flag => flag !== "--default")) throw new Error("Usage: ocx claude desktop move <route> <family> [--default]");
+      if (!route || !isFamily(familyRaw) || flags.some(flag => flag !== "--default")) throw new Error("Usage: ccx claude desktop move <route> <family> [--default]");
       if (!state.models.some(model => model.route === route && model.available)) throw new Error(`현재 사용할 수 없는 모델입니다: ${route}`);
       const profile = moveDesktopRoute(state.profile, route, familyRaw, flags.includes("--default"));
       config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile: profile };
@@ -169,7 +161,7 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
     }
     if (command === "default") {
       const [, familyRaw, routeRaw] = argv;
-      if (!isFamily(familyRaw) || !routeRaw || argv.length !== 3) throw new Error("Usage: ocx claude desktop default <family> <route|none>");
+      if (!isFamily(familyRaw) || !routeRaw || argv.length !== 3) throw new Error("Usage: ccx claude desktop default <family> <route|none>");
       const route = routeRaw === "none" ? null : routeRaw;
       if (route && !state.models.some(model => model.route === route && model.available)) throw new Error(`현재 사용할 수 없는 모델입니다: ${route}`);
       const profile = setDesktopFamilyDefault(state.profile, familyRaw, route);
@@ -180,7 +172,7 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
     }
     if (command === "export") {
       const target = argv[1];
-      if (!target || argv.length !== 2) throw new Error("Usage: ocx claude desktop export <path|->");
+      if (!target || argv.length !== 2) throw new Error("Usage: ccx claude desktop export <path|->");
       const json = JSON.stringify(state.profile, null, 2) + "\n";
       if (target === "-") process.stdout.write(json);
       else writeFileSync(resolve(target), json, { encoding: "utf8", mode: 0o600 });
@@ -189,13 +181,13 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
     if (command === "import") {
       const source = argv[1];
       const flags = argv.slice(2);
-      if (!source || flags.some(flag => flag !== "--apply")) throw new Error("Usage: ocx claude desktop import <path> [--apply]");
+      if (!source || flags.some(flag => flag !== "--apply")) throw new Error("Usage: ccx claude desktop import <path> [--apply]");
       const profile = parseDesktopProfile(JSON.parse(readFileSync(resolve(source), "utf8")));
       const reconciled = (await buildClaudeDesktopState(config, profile)).profile;
       config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile: reconciled };
       saveConfigPreservingClaudeCode(config);
       if (flags.includes("--apply")) {
-        const result = await applyProfile(reconciled, "static", deps);
+        const result = await applyProfile(reconciled, deps);
         if (!result.ok) { console.error(`프로필은 저장했지만 Desktop 적용에 실패했습니다: ${result.reason ?? "unknown error"}`); return 1; }
         if (result.warning) console.warn(`⚠️  ${result.warning}`);
       }

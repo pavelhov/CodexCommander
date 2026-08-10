@@ -39,6 +39,10 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function logsResponse(logs: unknown[], status = 200): Response {
+  return jsonResponse({ timeZone: "America/New_York", total: logs.length, logs }, status);
+}
+
 function installLayoutStubs(win: Window): void {
   const proto = win.HTMLElement.prototype as unknown as HTMLElement;
   Object.defineProperty(proto, "clientHeight", { configurable: true, get() { return 800; } });
@@ -169,7 +173,7 @@ test("Logs: initial failure shows error; silent failure keeps it; retry then rec
     calls.push(url);
     if (!url.includes("/api/logs")) return new Response(null, { status: 404 });
     if (mode === "fail") return jsonResponse({ error: "down" }, 503);
-    return jsonResponse([sampleLog]);
+    return logsResponse([sampleLog]);
   }) as typeof fetch;
 
   const { root, container } = await mountLogs();
@@ -202,19 +206,27 @@ test("Logs: initial failure shows error; silent failure keeps it; retry then rec
 });
 
 test("Logs: silent failure after successful load keeps the table and does not toggle loading or empty state", async () => {
-  let mode: "ok" | "fail" | "updated" = "ok";
+  let mode: "ok" | "malformed" | "fail" | "updated" = "ok";
 
   globalThis.fetch = (async (input) => {
     const url = String(input);
     if (!url.includes("/api/logs")) return new Response(null, { status: 404 });
+    if (mode === "malformed") return jsonResponse({ logs: [updatedLog] });
     if (mode === "fail") return jsonResponse({ error: "down" }, 503);
-    if (mode === "updated") return jsonResponse([updatedLog]);
-    return jsonResponse([sampleLog]);
+    if (mode === "updated") return logsResponse([updatedLog]);
+    return logsResponse([sampleLog]);
   }) as typeof fetch;
 
   const { root, container } = await mountLogs();
   await flushMicrotasks();
   expectTableLoaded(container, "gpt-test");
+
+  // A 200 is not authoritative unless it carries the current envelope. In
+  // particular, the former bare/partial DTO must not overwrite last-good rows.
+  mode = "malformed";
+  await advanceSilentRefresh();
+  expectTableLoaded(container, "gpt-test");
+  expect(container.textContent).not.toContain("gpt-updated");
 
   mode = "fail";
   await act(async () => {
@@ -240,7 +252,7 @@ test("Logs: silent success clears a previous error; later silent failure keeps t
   globalThis.fetch = (async (input) => {
     const url = String(input);
     if (!url.includes("/api/logs")) return new Response(null, { status: 404 });
-    if (mode === "ok") return jsonResponse([sampleLog]);
+    if (mode === "ok") return logsResponse([sampleLog]);
     return jsonResponse({ error: "down" }, 503);
   }) as typeof fetch;
 
@@ -269,7 +281,7 @@ test("Logs: a sustained poll outage says the rows are stale, and a recovery clea
     const url = String(input);
     if (!url.includes("/api/logs")) return new Response(null, { status: 404 });
     if (mode === "fail") return jsonResponse({ error: "down" }, 503);
-    return jsonResponse([sampleLog]);
+    return logsResponse([sampleLog]);
   }) as typeof fetch;
 
   const { root, container } = await mountLogs();
@@ -304,7 +316,7 @@ test("Logs: disabling auto-refresh stops scheduled requests", async () => {
     const url = String(input);
     urls.push(url);
     if (!url.includes("/api/logs")) return new Response(null, { status: 404 });
-    return jsonResponse([sampleLog]);
+    return logsResponse([sampleLog]);
   }) as typeof fetch;
 
   const { root, container } = await mountLogs();
@@ -342,7 +354,7 @@ test("Logs: switching to the Debug tab stops scheduled log requests", async () =
   globalThis.fetch = (async (input) => {
     const url = String(input);
     urls.push(url);
-    if (url.includes("/api/logs")) return jsonResponse([sampleLog]);
+    if (url.includes("/api/logs")) return logsResponse([sampleLog]);
     return jsonResponse({});
   }) as typeof fetch;
 
@@ -430,7 +442,7 @@ test("Logs: attempt details render exact reasoning wire values without legacy pl
   };
   globalThis.fetch = (async (input) => {
     if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
-    return jsonResponse([attemptsLog]);
+    return logsResponse([attemptsLog]);
   }) as typeof fetch;
 
   const { root, container } = await mountLogs();

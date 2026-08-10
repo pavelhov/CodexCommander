@@ -7,7 +7,6 @@ import { pathToFileURL } from "node:url";
 import {
   resolveCodexCoordinatorDatabasePath,
   resolveCodexCatalogSerializationDatabasePath,
-  resolveCodexHistorySerializationDatabasePath,
   resolveEffectiveUserIdentity,
 } from "../src/codex/user-identity";
 
@@ -25,7 +24,7 @@ const identityProbe = `
   } from ${JSON.stringify(userIdentityModuleUrl)};
   import { realpathSync } from "node:fs";
 
-  const canonicalCodexHome = realpathSync.native(process.env.OCX_TEST_CANONICAL_CODEX_HOME);
+  const canonicalCodexHome = realpathSync.native(process.env.CCX_TEST_CANONICAL_CODEX_HOME);
   const identity = resolveEffectiveUserIdentity();
   const databasePath = resolveCodexCoordinatorDatabasePath(identity, canonicalCodexHome);
   process.stdout.write(JSON.stringify({ identity, databasePath }));
@@ -64,7 +63,7 @@ async function runIdentityProbe(
 
 beforeEach(() => {
   previousHome = process.env.HOME;
-  codexHome = mkdtempSync(join(tmpdir(), "ocx-user-identity-codex-home-"));
+  codexHome = mkdtempSync(join(tmpdir(), "ccx-user-identity-codex-home-"));
 });
 
 afterEach(() => {
@@ -107,7 +106,7 @@ test("the coordinator resolver returns the final database path", () => {
 test("real processes resolve one identity and coordinator path across every home/runtime environment", async () => {
   const canonicalHome = realpathSync.native(codexHome);
   const environmentRoots = ["a", "b"].map(label => {
-    const root = mkdtempSync(join(tmpdir(), `ocx-user-identity-env-${label}-`));
+    const root = mkdtempSync(join(tmpdir(), `ccx-user-identity-env-${label}-`));
     const paths = {
       home: join(root, "home"),
       userProfile: join(root, "profile"),
@@ -116,7 +115,7 @@ test("real processes resolve one identity and coordinator path across every home
       xdgRuntime: join(root, "runtime"),
       temp: join(root, "temp"),
       codexHome: join(root, "ambient-codex"),
-      opencodexHome: join(root, "ambient-opencodex"),
+      codexCommanderHome: join(root, "ambient-codexcommander"),
       workingDirectory: join(root, "working-directory"),
     };
     for (const path of Object.values(paths)) mkdirSync(path, { recursive: true });
@@ -149,8 +148,8 @@ test("real processes resolve one identity and coordinator path across every home
         TMP: paths.temp,
         LOCALAPPDATA: paths.temp,
         CODEX_HOME: paths.codexHome,
-        OPENCODEX_HOME: paths.opencodexHome,
-        OCX_TEST_CANONICAL_CODEX_HOME: canonicalHome,
+        CODEXCOMMANDER_HOME: paths.codexCommanderHome,
+        CCX_TEST_CANONICAL_CODEX_HOME: canonicalHome,
         ...accountEnvironment,
       }, paths.workingDirectory);
     }));
@@ -167,44 +166,3 @@ test("real processes resolve one identity and coordinator path across every home
     for (const { root } of environmentRoots) rmSync(root, { recursive: true, force: true });
   }
 }, { timeout: 20_000 });
-
-/**
- * H is keyed by the canonical state database as well as the canonical home.
- *
- * N and K key on the home alone, which fully determines the routing and catalog
- * bytes they guard. History does not work that way: one `CODEX_HOME` can name a
- * different `state_5.sqlite`, and two operations against different history
- * databases are not the same exclusion. Hashing only the home would serialize
- * them together; hashing a raw request path would let two spellings of one
- * database take different locks.
- */
-test("H is keyed by state database identity and is never N's or K's path", () => {
-  const identity = resolveEffectiveUserIdentity();
-  const canonicalHome = realpathSync.native(codexHome);
-  const stateDbA = join(canonicalHome, "state_5.sqlite");
-  const stateDbB = join(canonicalHome, "other", "state_5.sqlite");
-
-  const nativePath = resolveCodexCoordinatorDatabasePath(identity, canonicalHome);
-  const catalogPath = resolveCodexCatalogSerializationDatabasePath(identity, canonicalHome);
-  const historyA = resolveCodexHistorySerializationDatabasePath(identity, canonicalHome, stateDbA);
-  const historyB = resolveCodexHistorySerializationDatabasePath(identity, canonicalHome, stateDbB);
-
-  // Three distinct exclusions, never sharing a database.
-  expect(new Set([nativePath, catalogPath, historyA]).size).toBe(3);
-
-  // A second state database under the SAME home is a different H, while N and K
-  // are unchanged — the property that keying H on the home alone would destroy.
-  expect(historyB).not.toBe(historyA);
-  expect(resolveCodexCoordinatorDatabasePath(identity, canonicalHome)).toBe(nativePath);
-  expect(resolveCodexCatalogSerializationDatabasePath(identity, canonicalHome)).toBe(catalogPath);
-
-  // Stable across calls, and living in its own directory rather than N's or K's.
-  expect(resolveCodexHistorySerializationDatabasePath(identity, canonicalHome, stateDbA))
-    .toBe(historyA);
-  expect(parse(historyA).dir).not.toBe(parse(nativePath).dir);
-  expect(parse(historyA).dir).not.toBe(parse(catalogPath).dir);
-
-  // A relative state database is refused rather than silently keyed on its text.
-  expect(() => resolveCodexHistorySerializationDatabasePath(identity, canonicalHome, "state_5.sqlite"))
-    .toThrow();
-});

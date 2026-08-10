@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import type { IncomingMeta, ProviderAdapter } from "./base";
-import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage } from "../types";
+import { namespacedToolName, type AdapterEvent, type CodexCommanderParsedRequest, type CodexCommanderProviderConfig, type CodexCommanderUsage } from "../types";
 import { catalogModelSupportsReasoningSummaries } from "../codex/catalog";
 import { COMPACT_PROMPT, decodeCompactionSummary, SUMMARY_PREFIX } from "../responses/compaction";
 import { collectResponsesToolGroups } from "../responses/tool-groups";
 import { isHostedToolUnsupportedForModel } from "../responses/hosted-tool-policy";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
-import { OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
+import { CCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
 import { modelRecordValue } from "../reasoning-effort";
 import type { TranslatorBudget } from "../lib/translator-budget";
 
@@ -47,11 +47,11 @@ export function sanitizeReasoningInputContent(
     const rec = item as Record<string, unknown>;
     if (rec.type !== "reasoning") return item;
     const hasRawContent = Array.isArray(rec.content) && rec.content.length > 0;
-    // ocxr1 envelopes are proxy-minted (Anthropic signatures), not OpenAI encryption — the native
+    // ccxr1 envelopes are proxy-minted (Anthropic signatures), not OpenAI encryption — the native
     // backend cannot decrypt them and would reject the request. Strip regardless of content shape.
-    const hasOcxEnvelope = typeof rec.encrypted_content === "string" && rec.encrypted_content.startsWith(OCX_REASONING_PREFIX);
-    if (!hasRawContent && !hasOcxEnvelope) return item;
-    if (hasOcxEnvelope) {
+    const hasCodexCommanderEnvelope = typeof rec.encrypted_content === "string" && rec.encrypted_content.startsWith(CCX_REASONING_PREFIX);
+    if (!hasRawContent && !hasCodexCommanderEnvelope) return item;
+    if (hasCodexCommanderEnvelope) {
       changed = true;
       const next: Record<string, unknown> = { ...rec };
       delete next.encrypted_content;
@@ -137,12 +137,12 @@ function stripItemIdsWhenUnstored(body: unknown): unknown {
 }
 
 /**
- * Replace proxy-minted compaction items (`encrypted_content` starting with `ocx1:`) with plain
+ * Replace proxy-minted compaction items (`encrypted_content` starting with `ccx1:`) with plain
  * user messages before forwarding to the ChatGPT backend. Our envelope is transparent base64, not
  * OpenAI encryption — the native backend cannot decrypt it and would reject the request. Real
  * OpenAI-encrypted compaction items are forwarded untouched.
  */
-function scrubOcxCompactionItems(body: unknown): unknown {
+function scrubCodexCommanderCompactionItems(body: unknown): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
 
   let changed = false;
@@ -166,7 +166,7 @@ function scrubOcxCompactionItems(body: unknown): unknown {
  * Strip unsupported `reasoning` sub-parameters for native slugs that reject them (e.g. Spark).
  * codex-rs injects `reasoning.context` and `reasoning.summary` based on catalog flags; Spark's
  * backend rejects both. The catalog fix prevents `use_responses_lite` from being set, but this
- * is a defense-in-depth guard so stale on-disk catalogs don't break until the user runs `ocx sync`.
+ * is a defense-in-depth guard so stale on-disk catalogs don't break until the user runs `ccx sync`.
  */
 function stripUnsupportedReasoningParams(body: unknown): unknown {
   if (!isPlainObject(body)) return body;
@@ -187,7 +187,7 @@ function stripUnsupportedReasoningParams(body: unknown): unknown {
  */
 function stripDisabledReasoningSummaries(
   body: unknown,
-  provider: OcxProviderConfig,
+  provider: CodexCommanderProviderConfig,
   modelId: string,
 ): unknown {
   if (modelRecordValue(provider.modelSupportsReasoningSummaries, modelId) !== false || !isPlainObject(body)) {
@@ -229,7 +229,7 @@ function stripDisabledReasoningSummaries(
  */
 function normalizeConfiguredReasoningSummaryDelivery(
   body: unknown,
-  provider: OcxProviderConfig,
+  provider: CodexCommanderProviderConfig,
   modelId: string,
 ): unknown {
   const delivery = modelRecordValue(provider.modelReasoningSummaryDelivery, modelId);
@@ -399,7 +399,7 @@ function normalizeToolSchemas(body: unknown): unknown {
 }
 
 const MAX_RESPONSES_CALL_ID_LENGTH = 64;
-const REPAIRED_CALL_ID_PREFIX = "call_ocx_";
+const REPAIRED_CALL_ID_PREFIX = "call_ccx_";
 const REPAIRED_CALL_ID_DIGEST_LENGTH = MAX_RESPONSES_CALL_ID_LENGTH - REPAIRED_CALL_ID_PREFIX.length;
 
 /**
@@ -544,7 +544,7 @@ function repairOrphanedInputItems(body: unknown, dropReasoning: boolean): unknow
  * - the target is the ChatGPT backend (`authMode: "forward"`), whose Codex REST endpoint
  *   categorically rejects the parameter with `{"detail":"Unsupported parameter:
  *   previous_response_id"}` (strict allowlist; it also rejects `metadata` and
- *   `max_output_tokens`). Codex only sends the id on WS turns, and ocx converts those to
+ *   `max_output_tokens`). Codex only sends the id on WS turns, and CodexCommander converts those to
  *   internal HTTP requests, so forwarding it upstream is a guaranteed 400 — stripping is
  *   strictly better even when the local replay state missed. API-key mode keeps the field on
  *   unexpanded requests: the platform `/v1/responses` supports real server-side storage.
@@ -608,40 +608,36 @@ function stripUnsupportedForwardParams(body: unknown): unknown {
 
 const IMAGE_GEN_NAMESPACE = "image_gen";
 const HOSTED_IMAGE_GENERATION_TOOL = "image_generation";
-const IMAGE_GEN_DOTTED_PREFIX = `${IMAGE_GEN_NAMESPACE}.`;
+// Responses tool-choice selectors have no namespace field. This spelling is current only when it
+// resolves to an inner function of an explicitly declared canonical image_gen namespace.
+const IMAGE_GEN_SELECTOR_PREFIX = `${IMAGE_GEN_NAMESPACE}.`;
 const IMAGE_GEN_WIRE_PREFIX = `${IMAGE_GEN_NAMESPACE}__`;
 
-/** Remove a supported client prefix before constructing the canonical image-gen wire alias. */
-function imageGenLocalName(name: string): string {
-  if (name.startsWith(IMAGE_GEN_DOTTED_PREFIX)) return name.slice(IMAGE_GEN_DOTTED_PREFIX.length);
-  if (name.startsWith(IMAGE_GEN_WIRE_PREFIX)) return name.slice(IMAGE_GEN_WIRE_PREFIX.length);
-  return name;
-}
-
 /** Build the flat public-Responses name used only on the upstream wire. */
-function imageGenWireName(name: string): string {
-  return namespacedToolName(IMAGE_GEN_NAMESPACE, imageGenLocalName(name));
+function imageGenWireName(localName: string): string {
+  return namespacedToolName(IMAGE_GEN_NAMESPACE, localName);
 }
 
-/** Match client image-gen declarations across namespace, legacy dotted, and canonical wire forms. */
-function isImageGenClientName(name: string): boolean {
-  return name === IMAGE_GEN_NAMESPACE
-    || name.startsWith(IMAGE_GEN_DOTTED_PREFIX)
-    || name.startsWith(IMAGE_GEN_WIRE_PREFIX);
+/** Match an already-flattened image-gen upstream wire alias. */
+function isImageGenWireName(name: string): boolean {
+  return name.startsWith(IMAGE_GEN_WIRE_PREFIX) && name.length > IMAGE_GEN_WIRE_PREFIX.length;
 }
 
 /** Identify declarations that should activate image-gen request normalization. */
 function declaresImageGenClientTool(tool: unknown): boolean {
   if (!isPlainObject(tool) || typeof tool.name !== "string") return false;
   if (tool.type === "namespace") return tool.name === IMAGE_GEN_NAMESPACE;
-  return isImageGenClientName(tool.name);
+  return tool.type === "function" && isImageGenWireName(tool.name);
 }
 
-/** Rewrite client image-gen selectors to the hosted tool without widening caller restrictions. */
-function preferHostedImageGenToolChoice(toolChoice: unknown): unknown {
+/** Rewrite declared image-gen selectors to the hosted tool without widening caller restrictions. */
+function preferHostedImageGenToolChoice(
+  toolChoice: unknown,
+  declaredAliases: ReadonlyMap<string, string>,
+): unknown {
   if (!isPlainObject(toolChoice)) return toolChoice;
-  if ((toolChoice.type === "function" || toolChoice.type === "custom") && typeof toolChoice.name === "string") {
-    return isImageGenClientName(toolChoice.name) ? { type: HOSTED_IMAGE_GENERATION_TOOL } : toolChoice;
+  if (toolChoice.type === "function" && typeof toolChoice.name === "string") {
+    return declaredAliases.has(toolChoice.name) ? { type: HOSTED_IMAGE_GENERATION_TOOL } : toolChoice;
   }
   if (toolChoice.type !== "allowed_tools" || !Array.isArray(toolChoice.tools)) return toolChoice;
   const hasHostedImageTool = toolChoice.tools.some(tool => isPlainObject(tool) && tool.type === HOSTED_IMAGE_GENERATION_TOOL);
@@ -650,9 +646,9 @@ function preferHostedImageGenToolChoice(toolChoice: unknown): unknown {
   const tools: unknown[] = [];
   for (const tool of toolChoice.tools) {
     const isClientImageTool = isPlainObject(tool)
-      && (tool.type === "function" || tool.type === "custom")
+      && tool.type === "function"
       && typeof tool.name === "string"
-      && isImageGenClientName(tool.name);
+      && declaredAliases.has(tool.name);
     if (!isClientImageTool) {
       tools.push(tool);
       continue;
@@ -673,7 +669,7 @@ function preferHostedImageGenToolChoice(toolChoice: unknown): unknown {
  */
 function preferConfiguredHostedTools(
   body: unknown,
-  provider: OcxProviderConfig,
+  provider: CodexCommanderProviderConfig,
   modelId: string,
   selectedModelId?: string,
 ): unknown {
@@ -689,6 +685,10 @@ function preferConfiguredHostedTools(
   };
   const preferredTools = ownPreference(selectedModelId) ?? ownPreference(modelId);
   if (!preferredTools?.includes(HOSTED_IMAGE_GENERATION_TOOL) || !isPlainObject(body)) return body;
+
+  // Capture selectors before declarations are stripped. A dotted selector is meaningful only when
+  // this exact request declares its matching canonical namespace member.
+  const declaredAliases = imageGenToolChoiceAliases(collectResponsesToolGroups(body));
 
   const stripGroup = (tools: unknown[]): unknown[] => {
     const filtered = tools.filter(tool => !declaresImageGenClientTool(tool));
@@ -723,7 +723,9 @@ function preferConfiguredHostedTools(
   }
 
   const hasToolChoice = Object.hasOwn(body, "tool_choice");
-  const toolChoice = hasToolChoice ? preferHostedImageGenToolChoice(body.tool_choice) : body.tool_choice;
+  const toolChoice = hasToolChoice
+    ? preferHostedImageGenToolChoice(body.tool_choice, declaredAliases)
+    : body.tool_choice;
   const toolChoiceChanged = hasToolChoice && toolChoice !== body.tool_choice;
   const hasHostedImageGenTool = (toolGroup: unknown): boolean => Array.isArray(toolGroup)
     && toolGroup.some(tool => isPlainObject(tool) && tool.type === HOSTED_IMAGE_GENERATION_TOOL);
@@ -795,23 +797,12 @@ function flattenImageGenNamespace(tool: unknown): Record<string, unknown>[] | un
   });
 }
 
-/** Convert a legacy dotted function declaration while preserving all other function metadata. */
-function normalizeFlatImageGenFunction(tool: unknown): unknown {
-  if (
-    !isPlainObject(tool)
-    || tool.type !== "function"
-    || typeof tool.name !== "string"
-    || !tool.name.startsWith(IMAGE_GEN_DOTTED_PREFIX)
-  ) return tool;
-  return { ...tool, name: imageGenWireName(tool.name) };
-}
-
 /** Return the image-gen function name used for stable cross-container deduplication. */
 function imageGenFunctionName(tool: unknown): string | undefined {
   if (!isPlainObject(tool) || tool.type !== "function" || typeof tool.name !== "string") {
     return undefined;
   }
-  return isImageGenClientName(tool.name) ? tool.name : undefined;
+  return isImageGenWireName(tool.name) ? tool.name : undefined;
 }
 
 /** True only when a declaration can yield a callable upstream-safe image-gen function alias. */
@@ -820,14 +811,10 @@ function declaresUsableImageGenAlias(tool: unknown): boolean {
   if (!isPlainObject(tool) || tool.type !== "function" || typeof tool.name !== "string") {
     return false;
   }
-  if (tool.name.startsWith(IMAGE_GEN_DOTTED_PREFIX)) {
-    return tool.name.length > IMAGE_GEN_DOTTED_PREFIX.length;
-  }
-  return tool.name.startsWith(IMAGE_GEN_WIRE_PREFIX)
-    && tool.name.length > IMAGE_GEN_WIRE_PREFIX.length;
+  return isImageGenWireName(tool.name);
 }
 
-/** Collect client tool-choice names and the exact upstream aliases declared for them. */
+/** Collect exact current selectors and upstream aliases from canonical namespace declarations. */
 function imageGenToolChoiceAliases(toolGroups: unknown[][]): Map<string, string> {
   const aliases = new Map<string, string>();
 
@@ -835,9 +822,13 @@ function imageGenToolChoiceAliases(toolGroups: unknown[][]): Map<string, string>
     for (const tool of group) {
       const flattened = flattenImageGenNamespace(tool);
       if (flattened) {
-        for (const candidate of flattened) {
+        const namespaceTools = (tool as { tools: Array<{ name: string }> }).tools;
+        for (let index = 0; index < flattened.length; index++) {
+          const candidate = flattened[index];
           const wireName = candidate.name as string;
-          aliases.set(`${IMAGE_GEN_DOTTED_PREFIX}${imageGenLocalName(wireName)}`, wireName);
+          // The selector schema has no namespace field, so this dotted spelling is the canonical
+          // selector for this explicitly declared namespace member—not a standalone declaration.
+          aliases.set(`${IMAGE_GEN_SELECTOR_PREFIX}${namespaceTools[index].name}`, wireName);
           aliases.set(wireName, wireName);
         }
         continue;
@@ -845,15 +836,7 @@ function imageGenToolChoiceAliases(toolGroups: unknown[][]): Map<string, string>
       if (!isPlainObject(tool) || tool.type !== "function" || typeof tool.name !== "string") {
         continue;
       }
-      if (
-        tool.name.startsWith(IMAGE_GEN_DOTTED_PREFIX)
-        && tool.name.length > IMAGE_GEN_DOTTED_PREFIX.length
-      ) {
-        aliases.set(tool.name, imageGenWireName(tool.name));
-      } else if (
-        tool.name.startsWith(IMAGE_GEN_WIRE_PREFIX)
-        && tool.name.length > IMAGE_GEN_WIRE_PREFIX.length
-      ) {
+      if (isImageGenWireName(tool.name)) {
         aliases.set(tool.name, tool.name);
       }
     }
@@ -888,15 +871,15 @@ function normalizeImageGenToolChoice(
   return changed ? { ...toolChoice, tools } : toolChoice;
 }
 
-/** Identify replayed image-gen calls that require upstream wire encoding. */
+/** Identify canonical or already-flattened replay calls that require upstream wire encoding. */
 function declaresImageGenFunctionCall(item: unknown): boolean {
   if (!isPlainObject(item) || item.type !== "function_call" || typeof item.name !== "string") {
     return false;
   }
-  return item.namespace === IMAGE_GEN_NAMESPACE || isImageGenClientName(item.name);
+  return item.namespace === IMAGE_GEN_NAMESPACE || isImageGenWireName(item.name);
 }
 
-/** Encode native or legacy replay calls to the same flat name used by tool declarations. */
+/** Encode canonical namespace replay calls to the same flat name used by tool declarations. */
 function normalizeImageGenFunctionCall(item: unknown): unknown {
   if (!declaresImageGenFunctionCall(item) || !isPlainObject(item) || typeof item.name !== "string") {
     return item;
@@ -905,9 +888,6 @@ function normalizeImageGenFunctionCall(item: unknown): unknown {
     const { namespace: _namespace, ...rest } = item;
     return { ...rest, name: imageGenWireName(item.name) };
   }
-  if (item.name.startsWith(IMAGE_GEN_DOTTED_PREFIX)) {
-    return { ...item, name: imageGenWireName(item.name) };
-  }
   return item;
 }
 
@@ -915,11 +895,11 @@ function normalizeImageGenFunctionCall(item: unknown): unknown {
  * Normalize Codex's private image-gen tool declaration for API-key Responses providers.
  *
  * A complete `image_gen` namespace is flattened to safe `image_gen__<tool>` aliases even when it is
- * the only image tool in the request. Replayed client calls are encoded to the same alias, including
- * legacy dotted calls from older compatibility attempts. When a usable alias replaces a client
- * image-gen declaration, the duplicate hosted `image_generation` entry is removed. Duplicate aliases
- * are resolved in stable container order: top-level tools first, then Responses Lite
- * `additional_tools` entries.
+ * the only image tool in the request. Canonical namespace replay calls are encoded to the same
+ * alias. Standalone dotted declarations and replay calls are intentionally left untouched. When a
+ * usable alias replaces a client image-gen declaration, the duplicate hosted `image_generation`
+ * entry is removed. Duplicate aliases are resolved in stable container order: top-level tools
+ * first, then Responses Lite `additional_tools` entries.
  *
  * This function is called only on the API-key path. ChatGPT forward mode understands the private
  * namespace and must keep it. Copy-on-write preserves the original request reference when no
@@ -955,15 +935,13 @@ function normalizeImageGenClientTools(body: unknown): unknown {
       if (flattened) groupChanged = true;
 
       for (const candidate of candidates) {
-        const normalizedCandidate = normalizeFlatImageGenFunction(candidate);
-        if (normalizedCandidate !== candidate) groupChanged = true;
-        const functionName = imageGenFunctionName(normalizedCandidate);
+        const functionName = imageGenFunctionName(candidate);
         if (functionName && seenFunctionNames.has(functionName)) {
           groupChanged = true;
           continue;
         }
         if (functionName) seenFunctionNames.add(functionName);
-        normalized.push(normalizedCandidate);
+        normalized.push(candidate);
       }
     }
 
@@ -1064,7 +1042,7 @@ function buildRoutedCompactionBody(body: unknown): unknown {
 }
 
 /** Read the Responses `usage` block, if the gateway sent one. */
-function usageFromResponsesPayload(payload: unknown): OcxUsage | undefined {
+function usageFromResponsesPayload(payload: unknown): CodexCommanderUsage | undefined {
   if (!isPlainObject(payload) || !isPlainObject(payload.usage)) return undefined;
   const usage = payload.usage;
   const inputTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
@@ -1099,12 +1077,12 @@ function responsesErrorMessage(payload: unknown): string {
   return "upstream compaction failed";
 }
 
-export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): ProviderAdapter & { passthrough: true } {
+export function createResponsesPassthroughAdapter(provider: CodexCommanderProviderConfig): ProviderAdapter & { passthrough: true } {
   return {
     name: "openai-responses",
     passthrough: true as const,
 
-    buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta) {
+    buildRequest(parsed: CodexCommanderParsedRequest, incoming: IncomingMeta) {
       const translatorBudget = incoming.translatorBudget;
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       let url: string;
@@ -1182,7 +1160,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       if (parsed._compactionRequest === true && !isCanonicalOpenAiForwardProvider(provider)) {
         outBody = buildRoutedCompactionBody(outBody);
       }
-      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
+      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubCodexCommanderCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
       const body = JSON.stringify(stripDisabledReasoningSummaries(
         normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
         provider,
@@ -1213,7 +1191,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       let deltas = "";
       let doneText = "";
       let snapshot = "";
-      let usage: OcxUsage | undefined;
+      let usage: CodexCommanderUsage | undefined;
       for await (const event of decodeServerSentEvents(response.body, { translatorBudget: budget })) {
         let payload: unknown;
         try { payload = JSON.parse(event.data); } catch { continue; }

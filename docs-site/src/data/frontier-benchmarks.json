@@ -4,7 +4,7 @@
     {
       "id": "deepswe",
       "title": "DeepSWE",
-      "sourceNote": "Illustrative snapshot from the public DeepSWE leaderboard (mini-swe-agent). Scores and costs are not live OpenCodex metering.",
+      "sourceNote": "Illustrative snapshot from the public DeepSWE leaderboard (mini-swe-agent). Scores and costs are not live CodexCommander metering.",
       "updated": "2026-07-16",
       "taskCount": 113,
       "axes": {
@@ -261,7 +261,7 @@
     {
       "id": "aa-coding-agent",
       "title": "AA Coding Agent",
-      "sourceNote": "Artificial Analysis Coding Agent Index snapshot (post GPT-5.6 GA, 2026-07-09). See provenance.url. Not live OpenCodex metering.",
+      "sourceNote": "Artificial Analysis Coding Agent Index snapshot (post GPT-5.6 GA, 2026-07-09). See provenance.url. Not live CodexCommander metering.",
       "updated": "2026-07-09",
       "axes": {
         "xKey": "avgCostUsd",
@@ -413,7 +413,7 @@
     {
       "id": "aa-intelligence-index",
       "title": "AA Intelligence Index",
-      "sourceNote": "Illustrative snapshot inspired by Artificial Analysis Intelligence Index cost-per-task (Answer / Reasoning / Cache write / Cache hit / Input). Totals match published headline figures where noted; segment splits are approximate for charting. Not live OpenCodex metering.",
+      "sourceNote": "Illustrative snapshot inspired by Artificial Analysis Intelligence Index cost-per-task (Answer / Reasoning / Cache write / Cache hit / Input). Totals match published headline figures where noted; segment splits are approximate for charting. Not live CodexCommander metering.",
       "updated": "2026-07-16",
       "axes": {
         "xKey": "avgCostUsd",
@@ -673,7 +673,7 @@
     {
       "id": "frontiercode",
       "title": "FrontierCode",
-      "sourceNote": "Illustrative snapshot from cognition.com/frontiercode (FrontierCode 1.1 Main, Jul 2026). Score = mergeability rubric; cost = mean USD per rollout. Best vs all reasoning modes match Cognition’s leaderboard toggle. Not live OpenCodex metering.",
+      "sourceNote": "Illustrative snapshot from cognition.com/frontiercode (FrontierCode 1.1 Main, Jul 2026). Score = mergeability rubric; cost = mean USD per rollout. Best vs all reasoning modes match Cognition’s leaderboard toggle. Not live CodexCommander metering.",
       "updated": "2026-07-16",
       "taskCount": 100,
       "axes": {
@@ -1395,7 +1395,7 @@
     {
       "id": "frontierswe",
       "title": "FrontierSWE",
-      "sourceNote": "Illustrative snapshot from frontierswe.com (Mean@5 dominance). X-axis uses blended public API $/MTok as a relative cost proxy — not measured $/task. Not live OpenCodex metering.",
+      "sourceNote": "Illustrative snapshot from frontierswe.com (Mean@5 dominance). X-axis uses blended public API $/MTok as a relative cost proxy — not measured $/task. Not live CodexCommander metering.",
       "updated": "2026-07-16",
       "axes": {
         "xKey": "avgCostUsd",
@@ -1605,7 +1605,7 @@
     {
       "id": "terminal-bench-2.1",
       "title": "Terminal Bench 2.1",
-      "sourceNote": "Illustrative mix of Snorkel-verified Terminal-Bench 2.1 rows + published GPT-5.6 figures. Costs are approximate proxies (DeepSWE overlap or API-tier estimates). Not live OpenCodex metering.",
+      "sourceNote": "Illustrative mix of Snorkel-verified Terminal-Bench 2.1 rows + published GPT-5.6 figures. Costs are approximate proxies (DeepSWE overlap or API-tier estimates). Not live CodexCommander metering.",
       "updated": "2026-07-11",
       "taskCount": 89,
       "axes": {
@@ -1826,7 +1826,7 @@
     {
       "id": "program-bench",
       "title": "Program Bench",
-      "sourceNote": "Snapshot from programbench.com extended leaderboard (mini-SWE-agent, 200 tasks). Score = almost-resolved (≥95% tests). Costs = published average API $/task. Not live OpenCodex metering.",
+      "sourceNote": "Snapshot from programbench.com extended leaderboard (mini-SWE-agent, 200 tasks). Score = almost-resolved (≥95% tests). Costs = published average API $/task. Not live CodexCommander metering.",
       "updated": "2026-06-23",
       "taskCount": 200,
       "axes": {
@@ -2003,7 +2003,7 @@
     {
       "id": "swe-marathon",
       "title": "SWE Marathon",
-      "sourceNote": "Illustrative snapshot from swe-marathon.org (pass@1 on 20 ultra-long-horizon tasks). Cost axis is an estimated relative run cost (long trajectories); not published $/task. Not live OpenCodex metering.",
+      "sourceNote": "Illustrative snapshot from swe-marathon.org (pass@1 on 20 ultra-long-horizon tasks). Cost axis is an estimated relative run cost (long trajectories); not published $/task. Not live CodexCommander metering.",
       "updated": "2026-07-09",
       "taskCount": 20,
       "axes": {
@@ -2211,7 +2211,7 @@
     {
       "id": "frontend-code-arena",
       "title": "Frontend Code Arena",
-      "sourceNote": "Illustrative snapshot from arena.ai Code Arena | WebDev (Elo from blind human votes on frontend tasks, Jul 16 2026). X-axis is blended public API $/MTok — preference Elo has no $/task. Not live OpenCodex metering.",
+      "sourceNote": "Illustrative snapshot from arena.ai Code Arena | WebDev (Elo from blind human votes on frontend tasks, Jul 16 2026). X-axis is blended public API $/MTok — preference Elo has no $/task. Not live CodexCommander metering.",
       "updated": "2026-07-16",
       "axes": {
         "xKey": "avgCostUsd",
@@ -2466,7 +2466,7 @@
     {
       "id": "cybench",
       "title": "Cybench",
-      "sourceNote": "Illustrative snapshot from cybench.github.io (unguided % solved on professional CTF tasks). Many rows are system-card / subset results, not one uniform full-suite run. Costs are relative agent-run estimates — Cybench does not publish $/task. Not live OpenCodex metering.",
+      "sourceNote": "Illustrative snapshot from cybench.github.io (unguided % solved on professional CTF tasks). Many rows are system-card / subset results, not one uniform full-suite run. Costs are relative agent-run estimates — Cybench does not publish $/task. Not live CodexCommander metering.",
       "updated": "2026-07-16",
       "taskCount": 40,
       "axes": {

@@ -3,7 +3,7 @@ title: Agent Configuration
 description: Multi-agent surfaces, delegation guidance, preferred models, fallback chains, native-default sync, and effort caps.
 ---
 
-Agent settings control which Codex collaboration surface is advertised and how opencodex guides,
+Agent settings control which Codex collaboration surface is advertised and how CodexCommander guides,
 routes, and limits delegated work.
 
 ## Agent fields
@@ -12,20 +12,20 @@ routes, and limits delegated work.
 | --- | --- | --- | --- |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` stamps every catalog model as v1; `v2` stamps every model as v2. `default` restores upstream pins (Sol/Terra v2, Luna v1) and otherwise follows the native `multi_agent_v2` flag. Applies to new sessions. |
 | `multiAgentV2MessageDelivery?` | `"encrypted" \| "plaintext"` | `"encrypted"` | V2 parent-message delivery. `encrypted` preserves ChatGPT's reserved backend contract and native-only ciphertext guard. `plaintext` opts subsequent V2 parent requests into experimental mixed-provider compatibility; all delegated messages from that parent become plaintext, and routed parents receive the stock Codex plaintext marker on message-bearing collaboration calls. Start a new session after changing it. |
-| `subagentModels?` | `string[]` | `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.4-mini` | Up to five bare native, account-qualified `<selector>/<native-openai-model>`, or routed `provider/model` ids advertised first in the sub-agent picker. The dashboard preserves configured exact selectors, including account-qualified choices, and reports which saved entries are advertised or excluded. Use `ocx agent subagents set` or edit the configuration for choices that are not in the current catalog. An explicit empty list is preserved. |
+| `subagentModels?` | `string[]` | `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.4-mini` | Up to five bare native, account-qualified `<selector>/<native-openai-model>`, or routed `provider/model` ids advertised first in the sub-agent picker. The dashboard preserves configured exact selectors, including account-qualified choices, and reports which saved entries are advertised or excluded. Use `ccx agent subagents set` or edit the configuration for choices that are not in the current catalog. An explicit empty list is preserved. |
 | `injectionModel?` | `string` | — | Preferred native or routed sub-agent model used in proxy-authored v2 delegation guidance. |
 | `injectionEffort?` | `string` | — | Preferred effort (`low` through `ultra`), meaningful only with `injectionModel`. |
 | `injectionPrompt?` | `string` | — | Replaces the built-in v2 guidance body. Supports `{{model}}`, `{{effort}}`, `{{roster}}`, and `{{fallback}}`. A configured `injectionModel` is sufficient to render the custom prompt. |
-| `multiAgentGuidanceEnabled?` | `boolean` | `true` | Controls only opencodex-authored v1/v2 developer guidance; it does not change native agent defaults, tools, routing, rosters, or effort caps. |
+| `multiAgentGuidanceEnabled` | `boolean` | `true` | Controls only CodexCommander-authored v1/v2 developer guidance; it does not change native agent defaults, tools, routing, rosters, or effort caps. |
 | `syncCodexSubagentDefaults?` | `boolean` | `false` | Opt into writing `injectionModel` and optional `injectionEffort` as Codex's native defaults during sync/restart. Requires `injectionModel`. |
 | `subagentModelFallback?` | `string[]` | `[]` | Priority-ordered global fallback models for spawned child turns. |
 | `subagentModelFallbackPollMs?` | `number` | `60000` | Availability-probe cache interval. Values below 1000 ms fall back to the default. |
 | `effortCap?` | `string` | — | Hard ceiling for qualifying v2 main turns and marked spawned-child turns. Accepts `low` through `ultra`. |
 | `subagentEffortCap?` | `string` | — | Additional ceiling for spawned-child turns only. When both caps apply, the lower wins. |
 
-Manage the surface with the dashboard or `ocx v2 status|on|off|mode <v1|default|v2>|threads <n>`.
+Manage the surface with the dashboard or `ccx v2 status|on|off|mode <v1|default|v2>|threads <n>`.
 Mode changes apply to new sessions. `maxConcurrentThreadsPerSession` is a `PUT /api/v2` field, not a
-`config.json` key; `ocx v2 threads <n>` writes `max_concurrent_threads_per_session` under
+`config.json` key; `ccx v2 threads <n>` writes `max_concurrent_threads_per_session` under
 `[features.multi_agent_v2]` in Codex's `$CODEX_HOME/config.toml` after v2 is enabled.
 
 The management API exposes `GET`/`PUT /api/v2`, `/api/injection-model`, `/api/effort-caps`,
@@ -77,7 +77,7 @@ Spawned-child fallback order is:
 2. role-level `model_fallback` from `$CODEX_HOME/agents/*.toml`; then
 3. global `subagentModelFallback` entries.
 
-opencodex skips disabled, unroutable, unhealthy, cooling-down, or quota-threshold candidates. The
+CodexCommander skips disabled, unroutable, unhealthy, cooling-down, or quota-threshold candidates. The
 availability snapshot is cached for `subagentModelFallbackPollMs`. Under encrypted delivery, child tasks can restrict
 the chain to canonical native ChatGPT targets; if none can read the encrypted payload, the request
 fails instead of routing unreadable ciphertext elsewhere. A recognized plaintext-compatibility
@@ -106,7 +106,7 @@ if leaf tools no longer expose collaboration. V1 main turns, `multiAgentMode: "v
 review, and memory-consolidation turns bypass caps.
 
 Caps only lower effort. They snap to the highest advertised rung at or below the cap. If a model has
-no effort control or no supported rung fits, opencodex removes the effort and lets the provider default
+no effort control or no supported rung fits, CodexCommander removes the effort and lets the provider default
 apply. `max` and `ultra` are accepted, while the dashboard offers `low` through `xhigh`.
 
 For a beginner-oriented explanation of v1, default, and v2 behavior, see

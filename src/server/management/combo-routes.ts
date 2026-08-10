@@ -51,7 +51,7 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../../lib/debug-settings";
-import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
+import type { CodexCommanderClaudeCodeConfig, CodexCommanderConfig, CodexCommanderCustomModel, CodexCommanderProviderConfig } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
@@ -121,8 +121,8 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       excludeComboId: renameFrom ?? id,
     });
     if (error) return jsonResponse({ error }, 400);
-    const normalized = normalizeComboConfig(body.combo as import("../../types").OcxComboConfig);
-    const stored: import("../../types").OcxComboConfig = normalized.alias === null
+    const normalized = normalizeComboConfig(body.combo as import("../../types").CodexCommanderComboConfig);
+    const stored: import("../../types").CodexCommanderComboConfig = normalized.alias === null
       ? (({ alias: _alias, ...rest }) => rest)(normalized)
       : normalized;
     const sourceId = renameFrom ?? id;
@@ -171,13 +171,8 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       }
       if (config.claudeCode) {
         const claudeCode = { ...config.claudeCode };
-        for (const field of ["model", "smallFastModel"] as const) {
+        for (const field of ["smallFastModel"] as const) {
           if (claudeCode[field]) claudeCode[field] = migrateAgentReference(claudeCode[field]);
-        }
-        if (claudeCode.tierModels) {
-          claudeCode.tierModels = Object.fromEntries(
-            Object.entries(claudeCode.tierModels).map(([tier, model]) => [tier, migrateAgentReference(model)]),
-          );
         }
         if (claudeCode.modelMap) {
           claudeCode.modelMap = Object.fromEntries(

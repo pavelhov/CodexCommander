@@ -29,7 +29,7 @@ Keep component styling in the existing CSS and React primitives instead of addin
 Tailwind, a component framework, or a remote font. Document the contract under
 `docs/design-system/` and require new visual values to use tokens.
 
-For local integrated visual QA, use Vite's opt-in `OPENCODEX_PROXY_TARGET` proxy so the development
+For local integrated visual QA, use Vite's opt-in `CODEXCOMMANDER_PROXY_TARGET` proxy so the development
 GUI can call the running management API through the same origin without changing production output.
 
 ## Alternatives considered

@@ -1,5 +1,5 @@
 /**
- * Injected tests for `ocx ready` (parseReadyArgs + runReady).
+ * Injected tests for `ccx ready` (parseReadyArgs + runReady).
  *
  * These REPLACE the prior subprocess/network/no-proxy tests for the ready
  * command. Everything is driven over injected findLive / probe / sleep / now /
@@ -677,7 +677,7 @@ describe("handleStart readinessGate wiring (source-level)", () => {
 });
 
 // ── P1: ready pre-parse before maybeAutoRestoreCodexShim (source-level) ────────
-// `ocx ready` must reject invalid arguments with exit 64 BEFORE the global
+// `ccx ready` must reject invalid arguments with exit 64 BEFORE the global
 // maybeAutoRestoreCodexShim preflight (or any discovery/probe/filesystem-capable
 // step) runs. These source-level guards pin that ordering and the single-parse
 // contract so a future edit cannot silently move parsing back into handleReady

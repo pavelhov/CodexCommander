@@ -7,7 +7,7 @@ import { clearKeyCooldowns } from "../src/providers/key-failover";
 import { startServer } from "../src/server";
 import { resetNormalizeStateForTests } from "../src/adapters/anthropic-image-normalize";
 import { sniffImageDimensions } from "../src/adapters/anthropic-image-guard";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 let testDir = "";
@@ -16,10 +16,10 @@ let isolatedCodexHome: IsolatedCodexHome | null = null;
 let upstream: ReturnType<typeof Bun.serve> | null = null;
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-imgretry-e2e-codex-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-imgretry-e2e-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-imgretry-e2e-codex-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-imgretry-e2e-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   clearKeyCooldowns();
   resetNormalizeStateForTests();
 });
@@ -27,8 +27,8 @@ beforeEach(() => {
 afterEach(() => {
   upstream?.stop(true);
   upstream = null;
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
@@ -76,10 +76,11 @@ function scriptedUpstream(statuses: number[], seen: SeenRequest[]): ReturnType<t
   });
 }
 
-function anthropicConfig(baseUrl: string, pool = false): OcxConfig {
+function anthropicConfig(baseUrl: string, pool = false): CodexCommanderConfig {
   return {
     port: 0,
     hostname: "127.0.0.1",
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "anthropic-test",
     providers: {
       "anthropic-test": {
@@ -97,7 +98,7 @@ function anthropicConfig(baseUrl: string, pool = false): OcxConfig {
         defaultModel: "claude-fable-5",
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 async function postImageRequest(serverUrl: string, dataUrl: string): Promise<Response> {

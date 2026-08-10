@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
 import { isVertexTruncatedTurn, isVertexTruncationReason, vertexTruncationErrorMessage } from "../src/adapters/google-truncation";
 import { bridgeToResponsesSSE } from "../src/bridge";
-import type { AdapterEvent, OcxProviderConfig } from "../src/types";
+import type { AdapterEvent, CodexCommanderProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createGoogleAdapter = (...args: Parameters<typeof createGoogleAdapterProduction>) =>
@@ -13,14 +13,14 @@ function sseResponse(chunks: unknown[]): Response {
   return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
-async function collect(provider: OcxProviderConfig, chunks: unknown[]): Promise<AdapterEvent[]> {
+async function collect(provider: CodexCommanderProviderConfig, chunks: unknown[]): Promise<AdapterEvent[]> {
   const adapter = createGoogleAdapter(provider);
   const events: AdapterEvent[] = [];
   for await (const ev of adapter.parseStream(sseResponse(chunks))) events.push(ev);
   return events;
 }
 
-const vertexProvider = { adapter: "google", baseUrl: "https://x", googleMode: "vertex" } as OcxProviderConfig;
+const vertexProvider = { adapter: "google", baseUrl: "https://x", googleMode: "vertex" } as CodexCommanderProviderConfig;
 
 describe("vertex truncation helpers", () => {
   test("classifies cut-off finish reasons", () => {

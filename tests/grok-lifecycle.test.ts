@@ -52,7 +52,7 @@ describe("Grok fence lifecycle wiring", () => {
     expect(stopFn.slice(blockedAt, restoreAt)).toContain("return lifecycleResult");
   });
 
-  test("a refused Grok strip makes ocx stop fail instead of reporting success", () => {
+  test("a refused Grok strip makes ccx stop fail instead of reporting success", () => {
     const restoreFn = sliceFn(LIFECYCLE_SOURCE, "function restoreManagedClientState(", "/** Shared server-side preparation");
     expect(restoreFn).toContain("else if (!grok.ok)");
     expect(restoreFn).toContain("ok = false");
@@ -94,10 +94,10 @@ describe("Grok fence lifecycle wiring", () => {
     expect(restoreFn).toContain("logger.warn(restore.message)");
   });
 
-  test("the daemon's exit cleanup keeps the OCX_SERVICE exclusion and adds the ownership check", () => {
+  test("the daemon's exit cleanup keeps the CCX_SERVICE exclusion and adds the ownership check", () => {
     const startFn = sliceFn(CLI_SOURCE, "const syncCleanup = () => {", "let shuttingDown = false;");
     // Crash/respawn under a service manager must still keep the fence.
-    expect(startFn).toContain("!process.env.OCX_SERVICE && serviceEnvironmentOwnedHere()");
+    expect(startFn).toContain("!process.env.CCX_SERVICE && serviceEnvironmentOwnedHere()");
   });
 
   test("signal shutdown reports and exits nonzero when native Codex restore is incomplete", () => {

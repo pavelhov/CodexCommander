@@ -66,7 +66,7 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../../lib/debug-settings";
-import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
+import type { CodexCommanderClaudeCodeConfig, CodexCommanderConfig, CodexCommanderCustomModel, CodexCommanderProviderConfig } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, filteredRequestLogCount, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
@@ -88,7 +88,7 @@ const USAGE_DAY_MS = 86_400_000;
 function usageEntryMatchesSurface(entry: PersistedUsageEntry, surface: UsageSurface): boolean {
   if (surface === "claude") return entry.surface === "claude" || entry.surface === "claude-desktop";
   if (surface === "grok") return entry.surface === "grok";
-  if (surface === "codex") return entry.surface === undefined;
+  if (surface === "codex") return entry.surface === "codex";
   return true;
 }
 
@@ -281,11 +281,10 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       bytes: preview.bytes,
       digest: preview.digest,
       // Dashboard only lists a handful; count/bytes/digest already bind the full set.
-      candidates: preview.candidates.slice(0, 50).map(({ relPath, bytes, mtimeMs, physicalRelPaths }) => ({
+      candidates: preview.candidates.slice(0, 50).map(({ relPath, bytes, mtimeMs }) => ({
         relPath,
         bytes,
         mtimeMs,
-        physicalRelPaths,
       })),
     });
   }
@@ -303,7 +302,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     }
     const digest = typeof body?.digest === "string" ? body.digest : "";
     const testHooks =
-      process.env.OPENCODEX_CLEANUP_TEST_HOOKS === "1" &&
+      process.env.CCX_CLEANUP_TEST_HOOKS === "1" &&
       body &&
       typeof body === "object" &&
       "_test" in body
@@ -385,7 +384,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
   }
 
   if (url.pathname === "/api/storage/trash/restore/test-stream" && req.method === "GET") {
-    if (process.env.OPENCODEX_CLEANUP_TEST_HOOKS === "1") {
+    if (process.env.CCX_CLEANUP_TEST_HOOKS === "1") {
       const stream = getRestoreTrashTestStreamResponse();
       if (stream) return stream;
     }

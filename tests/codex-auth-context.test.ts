@@ -47,7 +47,7 @@ import {
   clearThreadAccountMap,
   recordCodexUpstreamOutcome,
 } from "../src/codex/routing";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
 import { setIcaclsRunnerForTests } from "../src/lib/windows-secret-acl";
 import {
   completeNativeMainRecovery,
@@ -61,7 +61,7 @@ import {
 } from "../src/server/lifecycle";
 
 let testDir: string;
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 let previousCodexHome: string | undefined;
 
 beforeEach(() => {
@@ -69,9 +69,9 @@ beforeEach(() => {
   // processes are covered elsewhere and can retain temp-dir handles long enough
   // to obscure those assertions under Windows isolated-test load.
   setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
-  testDir = mkdtempSync(join(tmpdir(), "ocx-auth-ctx-"));
-  previousOpencodexHome = process.env.OPENCODEX_HOME;
-  process.env.OPENCODEX_HOME = testDir;
+  testDir = mkdtempSync(join(tmpdir(), "ccx-auth-ctx-"));
+  previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+  process.env.CODEXCOMMANDER_HOME = testDir;
   // Isolate the main-account credential source: testDir has no auth.json, so the main
   // account is deterministically absent (these cases test pool-only fail-closed behavior).
   previousCodexHome = process.env.CODEX_HOME;
@@ -93,15 +93,16 @@ afterEach(() => {
   __resetGuardianState();
   clearAccountNeedsReauth("pool-a");
   clearAccountNeedsReauth("pool-b");
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
 });
 
-function config(): OcxConfig {
+function config(): CodexCommanderConfig {
   return {
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "routed",
     activeCodexAccountId: "pool-a",
     providers: {
@@ -109,13 +110,18 @@ function config(): OcxConfig {
       chatgpt: { adapter: "openai-responses", baseUrl: "https://chatgpt.test/backend-api/codex", authMode: "forward" },
     },
     codexAccounts: [
-      { id: "main", email: "main@example.test", isMain: true },
-      { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "pool_acc" },
+      {
+        id: "pool-a",
+        email: "pool@example.test",
+        logLabel: "p00000a",
+        isMain: false,
+        chatgptAccountId: "pool_acc",
+      },
     ],
   };
 }
 
-function guardianConfig(): OcxConfig {
+function guardianConfig(): CodexCommanderConfig {
   const cfg = config();
   cfg.defaultProvider = "openai";
   cfg.providers = {
@@ -177,7 +183,7 @@ async function occupyCodexRefreshCapacity(): Promise<{
   return { pending, release, fetches: () => fetches };
 }
 
-const forwardProvider: OcxProviderConfig = {
+const forwardProvider: CodexCommanderProviderConfig = {
   adapter: "openai-responses",
   baseUrl: "https://chatgpt.test/backend-api/codex",
   authMode: "forward",
@@ -333,7 +339,7 @@ describe("Codex auth context", () => {
   test("exact account resolution overrides Direct without consulting Pool selection", async () => {
     const cfg = config();
     cfg.activeCodexAccountId = "pool-b";
-    cfg.codexAccounts?.push({ id: "pool-b", email: "pool-b@example.test", isMain: false });
+    cfg.codexAccounts?.push({ id: "pool-b", email: "pool-b@example.test", logLabel: "p00000b", isMain: false });
     saveCodexAccountCredential("pool-a", {
       accessToken: "fixed_pool_token",
       refreshToken: "fixed_pool_refresh",
@@ -380,7 +386,7 @@ describe("Codex auth context", () => {
     // treats it as a hard ceiling and `pickPriorityPreemption` returns null while
     // it has headroom. An exact selector must bypass it all the same.
     cfg.activeCodexAccountPinned = "pool-b";
-    cfg.codexAccounts?.push({ id: "pool-b", email: "pool-b@example.test", isMain: false });
+    cfg.codexAccounts?.push({ id: "pool-b", email: "pool-b@example.test", logLabel: "p00000b", isMain: false });
     saveCodexAccountCredential("pool-a", {
       accessToken: "pool_a_token",
       refreshToken: "pool_a_refresh",
@@ -459,6 +465,7 @@ describe("Codex auth context", () => {
     cfg.codexAccounts?.push({
       id: "pool-b",
       email: "pool-b@example.test",
+      logLabel: "p00000b",
       isMain: false,
       chatgptAccountId: "pool_b_acc",
     });
@@ -507,6 +514,7 @@ describe("Codex auth context", () => {
     cfg.codexAccounts?.push({
       id: "pool-b",
       email: "pool-b@example.test",
+      logLabel: "p00000b",
       isMain: false,
       chatgptAccountId: "pool_b_acc",
     });
@@ -541,7 +549,7 @@ describe("Codex auth context", () => {
   test("exact selection reports reauthentication without falling back to the active Pool account", async () => {
     const cfg = config();
     cfg.activeCodexAccountId = "pool-b";
-    cfg.codexAccounts?.push({ id: "pool-b", email: "pool-b@example.test", isMain: false });
+    cfg.codexAccounts?.push({ id: "pool-b", email: "pool-b@example.test", logLabel: "p00000b", isMain: false });
     saveCodexAccountCredential("pool-a", {
       accessToken: "pool_a_token",
       refreshToken: "pool_a_refresh",
@@ -565,7 +573,7 @@ describe("Codex auth context", () => {
 
   test("exact account failure never falls back to another usable account", async () => {
     const cfg = config();
-    cfg.codexAccounts?.push({ id: "pool-b", email: "pool-b@example.test", isMain: false });
+    cfg.codexAccounts?.push({ id: "pool-b", email: "pool-b@example.test", logLabel: "p00000b", isMain: false });
     saveCodexAccountCredential("pool-b", {
       accessToken: "pool_b_token",
       refreshToken: "pool_b_refresh",
@@ -765,6 +773,7 @@ describe("Codex auth context", () => {
     cfg.codexAccounts?.push({
       id: "pool-b",
       email: "pool-b@example.test",
+      logLabel: "p00000b",
       isMain: false,
       chatgptAccountId: "pool_b_acc",
     });
@@ -1230,7 +1239,7 @@ describe("cooldown error surface", () => {
 
     expect(message).toContain("2026-07-26T10:00:00.000Z");
     expect(message).toContain("reset-derived");
-    expect(message).toContain("ocx account clear-cooldown openai <id>");
+    expect(message).toContain("ccx account clear-cooldown openai <id>");
     // Masked, never raw: /v1/* bodies can reach remote authenticated clients when the
     // proxy binds a non-loopback hostname.
     expect(message).not.toContain("acct_9f3c21");
@@ -1271,7 +1280,7 @@ describe("cooldown error surface", () => {
     expect(response.status).toBe(429);
     expect(response.headers.get("Retry-After")).toBe("90");
     const body = await response.json() as { error?: { message?: string } };
-    expect(body.error?.message).toContain("ocx account clear-cooldown");
+    expect(body.error?.message).toContain("ccx account clear-cooldown");
   });
 
   test("an already-elapsed cooldown still yields a valid Retry-After", () => {

@@ -1,9 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { accountQuotaFromReport, referenceQuotaFromReport } from "../src/provider-workspace/report";
 
+const currentAggregation = () => ({
+  kind: "capacity-weighted-v1",
+  scope: "routable-known",
+  presentation: "coverage-only",
+  incomplete: false,
+  excludedAccounts: 0,
+  unknownPlanAccounts: 0,
+  partialWindowAccounts: 0,
+});
+
 describe("OpenCode Go reference quota reports", () => {
   const report = {
     source: "opencode-go:published-caps-2026-08-05+local-estimate",
+    aggregation: currentAggregation(),
     quota: {
       referenceWindows: [{
         id: "five_hour",
@@ -45,7 +56,7 @@ describe("OpenCode Go reference quota reports", () => {
   });
 
   test("drops malformed rows instead of inventing values", () => {
-    expect(referenceQuotaFromReport({ quota: { referenceWindows: [{
+    expect(referenceQuotaFromReport({ aggregation: currentAggregation(), quota: { referenceWindows: [{
       id: "five_hour",
       label: "5-hour",
       windowSeconds: 18_000,
@@ -56,6 +67,7 @@ describe("OpenCode Go reference quota reports", () => {
 
   test("drops an out-of-range reset timestamp before it reaches Intl formatting", () => {
     const parsed = referenceQuotaFromReport({
+      aggregation: currentAggregation(),
       quota: {
         referenceWindows: report.quota.referenceWindows,
         observedLimitEvent: {
@@ -80,7 +92,7 @@ describe("OpenCode Go reference quota reports", () => {
       pricedRequests: 2,
       unpricedRequests: 1,
     };
-    const parsed = referenceQuotaFromReport({ quota: { referenceWindows: [inconsistent] } });
+    const parsed = referenceQuotaFromReport({ aggregation: currentAggregation(), quota: { referenceWindows: [inconsistent] } });
     expect(parsed?.windows[0]?.coverage).toBe("partial");
   });
 });

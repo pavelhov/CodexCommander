@@ -11,7 +11,7 @@ import {
 const roots: string[] = [];
 
 function sandbox(): { root: string; lockPath: string } {
-  const root = mkdtempSync(join(tmpdir(), "ocx-start-lock-"));
+  const root = mkdtempSync(join(tmpdir(), "ccx-start-lock-"));
   roots.push(root);
   mkdirSync(root, { recursive: true });
   return { root, lockPath: join(root, "proxy-start.lock") };

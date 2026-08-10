@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import {
   cleanStaleSystemEnv,
   injectSystemEnv,
@@ -13,10 +13,11 @@ const originalPlatform = process.platform;
 
 const baseConfig = {
   port: 4096,
+  multiAgentGuidanceEnabled: true,
   providers: {},
   defaultProvider: "test",
   claudeCode: { systemEnv: true },
-} satisfies OcxConfig;
+} satisfies CodexCommanderConfig;
 
 let execSpy: ReturnType<typeof spyOn>;
 let execFileSpy: ReturnType<typeof spyOn>;
@@ -32,8 +33,17 @@ function setPlatform(platform: NodeJS.Platform): void {
   Object.defineProperty(process, "platform", { configurable: true, value: platform });
 }
 
-function tracking(port = 4567): string {
-  return JSON.stringify({ pid: 123, port, injectedAt: "2026-07-11T00:00:00.000Z" });
+function tracking(
+  port = 4567,
+  injectedKeys: string[] = ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "ANTHROPIC_AUTH_TOKEN"],
+): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    pid: 123,
+    port,
+    injectedAt: "2026-07-11T00:00:00.000Z",
+    injectedKeys,
+  });
 }
 
 function launchctlCommands(): string[] {
@@ -90,12 +100,16 @@ describe("system environment injection", () => {
     expect(commands).toContain("launchctl setenv ANTHROPIC_BASE_URL http://127.0.0.1:4567");
     expect(commands).toContain("launchctl setenv CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY 1");
     // Writes include the shell env file and the tracking file (agent-def syncing
-    // may add owned ocx-*.md writes — devlog 070; count is no longer fixed).
+    // may add owned ccx-*.md writes — implementation contract; count is no longer fixed).
     const writePaths = writeSpy.mock.calls.map(call => String(call[0]));
     expect(writePaths.some(p => p.includes("claude-env.sh"))).toBe(true);
     expect(writePaths.some(p => p.endsWith("/.zshrc"))).toBe(true);
     expect(writePaths.some(p => p.includes("system-env-port"))).toBe(true);
-    expect(JSON.parse(trackingFile!)).toMatchObject({ pid: process.pid, port: 4567 });
+    const persisted = JSON.parse(trackingFile!);
+    expect(persisted).toMatchObject({ schemaVersion: 1, pid: process.pid, port: 4567 });
+    expect(Object.keys(persisted).sort()).toEqual([
+      "injectedAt", "injectedKeys", "pid", "port", "schemaVersion",
+    ]);
   });
 
   test("injectSystemEnv invokes launchctl without a command shell", async () => {
@@ -143,7 +157,7 @@ describe("system environment injection", () => {
   });
 
   test("injectSystemEnv includes the first configured API key", async () => {
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       ...baseConfig,
       apiKeys: [{ id: "key-1", name: "Primary", key: "secret-token", createdAt: "2026-07-11T00:00:00.000Z" }],
     };
@@ -153,7 +167,7 @@ describe("system environment injection", () => {
   });
 
   test("injectSystemEnv passes API keys with special characters as one argument", async () => {
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       ...baseConfig,
       apiKeys: [{ id: "key-1", name: "Primary", key: "secret token'quoted", createdAt: "2026-07-11T00:00:00.000Z" }],
     };
@@ -165,10 +179,10 @@ describe("system environment injection", () => {
     );
   });
 
-  // Subscription switch-back cleanup (devlog 260720_claude_authmode_persist, audit R1 #1):
-  // re-injecting without proxy mode must unset ONLY the opencodex-owned dummy token.
+  // Subscription switch-back cleanup (implementation contract, audit R1 #1):
+  // re-injecting without proxy mode must unset ONLY the codexcommander-owned dummy token.
   function trackingWithToken(port = 4567, keys: string[] = ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "ANTHROPIC_AUTH_TOKEN"]): string {
-    return JSON.stringify({ pid: 123, port, injectedAt: "2026-07-11T00:00:00.000Z", injectedKeys: keys });
+    return tracking(port, keys);
   }
 
   function mockAuthTokenGetenv(value: string | undefined): void {
@@ -178,21 +192,21 @@ describe("system environment injection", () => {
   test("re-inject after switching back to subscription unsets the owned dummy token", async () => {
     trackingFile = trackingWithToken();
     launchctlBaseUrl = "http://127.0.0.1:4567";
-    mockAuthTokenGetenv("opencodex-proxy");
+    mockAuthTokenGetenv("codexcommander-proxy");
 
     // EXPLICIT subscription, not auto: this asserts the switch-back strip, and under
     // auto the resolver would read the real machine's Claude auth and could legitimately
-    // decide proxy (devlog 260726_claude_auth_auto/040).
+    // decide proxy (implementation contract).
     const subscription = {
       ...baseConfig,
       claudeCode: { systemEnv: true, authMode: "subscription" },
-    } as unknown as OcxConfig;
+    } as unknown as CodexCommanderConfig;
     expect(await injectSystemEnv(4567, subscription)).toEqual({ injected: true });
     expect(execFileSpy).toHaveBeenCalledWith("/bin/launchctl", ["unsetenv", "ANTHROPIC_AUTH_TOKEN"]);
     expect(JSON.parse(trackingFile!).injectedKeys).not.toContain("ANTHROPIC_AUTH_TOKEN");
   });
 
-  test("re-inject preserves a tracked token whose value is not the opencodex dummy", async () => {
+  test("re-inject preserves a tracked token whose value is not the codexcommander dummy", async () => {
     trackingFile = trackingWithToken();
     launchctlBaseUrl = "http://127.0.0.1:4567";
     mockAuthTokenGetenv("sk-user-real-token");
@@ -203,10 +217,10 @@ describe("system environment injection", () => {
 
   test("re-inject preserves an untracked dummy-valued token it does not own", async () => {
     // Ownership guard independent of the value guard (audit R2 #1): the launchd domain
-    // carries "opencodex-proxy" but WE never injected it (not in injectedKeys).
+    // carries "codexcommander-proxy" but WE never injected it (not in injectedKeys).
     trackingFile = trackingWithToken(4567, ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"]);
     launchctlBaseUrl = "http://127.0.0.1:4567";
-    mockAuthTokenGetenv("opencodex-proxy");
+    mockAuthTokenGetenv("codexcommander-proxy");
 
     expect(await injectSystemEnv(4567, baseConfig)).toEqual({ injected: true });
     expect(launchctlCommands()).not.toContain("launchctl unsetenv ANTHROPIC_AUTH_TOKEN");
@@ -238,26 +252,51 @@ describe("system environment cleanup", () => {
     expect(unlinkSpy).not.toHaveBeenCalled();
   });
 
-  test("revertSystemEnv ignores unrecognized names from a tampered tracking file", () => {
+  test("revertSystemEnv rejects a tampered tracking file instead of salvaging recognized names", () => {
     trackingFile = JSON.stringify({
+      schemaVersion: 1,
       pid: 123,
       port: 4567,
       injectedAt: "2026-07-11T00:00:00.000Z",
       injectedKeys: [
         "ANTHROPIC_BASE_URL",
-        "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
         "UNRELATED_USER_SETTING",
       ],
     });
+    launchctlBaseUrl = "http://127.0.0.1:4567";
+
+    expect(revertSystemEnv()).toEqual({ reverted: false, reason: "no tracking file" });
+    const unsetNames = execFileSpy.mock.calls
+      .filter(call => call[0] === "/bin/launchctl" && (call[1] as string[])[0] === "unsetenv")
+      .map(call => (call[1] as string[])[1]);
+    expect(unsetNames).toEqual([]);
+  });
+
+  test("revertSystemEnv rejects unversioned, incomplete, and extended tracking records", () => {
+    const current = JSON.parse(tracking()) as Record<string, unknown>;
+    for (const invalid of [
+      { ...current, schemaVersion: undefined },
+      { ...current, injectedKeys: undefined },
+      { ...current, removedField: true },
+    ]) {
+      trackingFile = JSON.stringify(invalid);
+      expect(revertSystemEnv()).toEqual({ reverted: false, reason: "no tracking file" });
+    }
+    const unsetNames = execFileSpy.mock.calls
+      .filter(call => call[0] === "/bin/launchctl" && (call[1] as string[])[0] === "unsetenv");
+    expect(unsetNames).toEqual([]);
+  });
+
+  test("revertSystemEnv unsets only the exact keys recorded by the current schema", () => {
+    trackingFile = tracking(4567, ["ANTHROPIC_BASE_URL"]);
     launchctlBaseUrl = "http://127.0.0.1:4567";
 
     expect(revertSystemEnv()).toEqual({ reverted: true });
     const unsetNames = execFileSpy.mock.calls
       .filter(call => call[0] === "/bin/launchctl" && (call[1] as string[])[0] === "unsetenv")
       .map(call => (call[1] as string[])[1]);
-    expect(unsetNames).toContain("ANTHROPIC_BASE_URL");
-    expect(unsetNames).toContain("CLAUDE_CODE_MAX_CONTEXT_TOKENS");
-    expect(unsetNames).not.toContain("UNRELATED_USER_SETTING");
+    expect(unsetNames).toEqual(["ANTHROPIC_BASE_URL"]);
   });
 
   test("revertSystemEnv invokes launchctl without a command shell", () => {
@@ -282,12 +321,7 @@ describe("system environment cleanup", () => {
   });
 });
 
-describe("systemEnv lever keys (devlog 136 B6)", () => {
-  const leverConfig = {
-    ...baseConfig,
-    claudeCode: { systemEnv: true, maxContextTokens: 1_000_000, alwaysEnableEffort: true },
-  } satisfies OcxConfig;
-
+describe("systemEnv helper-model and auto-context keys", () => {
   function capturedWrites(): Array<{ path: string; data: string }> {
     const writes: Array<{ path: string; data: string }> = [];
     writeSpy.mockImplementation(((...args: unknown[]) => {
@@ -297,48 +331,7 @@ describe("systemEnv lever keys (devlog 136 B6)", () => {
     return writes;
   }
 
-  test("injects lever keys, tracks them, and shell file uses conditional exports", async () => {
-    const writes = capturedWrites();
-    expect(await injectSystemEnv(4096, leverConfig)).toEqual({ injected: true });
-    const setCalls = launchctlCommands();
-    expect(setCalls).toContain("launchctl setenv CLAUDE_CODE_MAX_CONTEXT_TOKENS 1000000");
-    expect(setCalls).toContain("launchctl setenv DISABLE_COMPACT 1");
-    expect(setCalls).toContain("launchctl setenv CLAUDE_CODE_ALWAYS_ENABLE_EFFORT 1");
-    const trackingWrite = writes.filter(w => w.path.includes("system-env-port")).at(-1);
-    expect(JSON.parse(trackingWrite!.data).injectedKeys).toEqual(expect.arrayContaining([
-      "CLAUDE_CODE_MAX_CONTEXT_TOKENS", "DISABLE_COMPACT", "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT",
-    ]));
-    // Shell env file: lever keys are CONDITIONAL exports so a shell-only user value wins.
-    const shellWrite = writes.find(w => w.path.includes("claude-env.sh"));
-    expect(shellWrite!.data).toContain(`[ -z "\${CLAUDE_CODE_MAX_CONTEXT_TOKENS+x}" ] && export CLAUDE_CODE_MAX_CONTEXT_TOKENS='1000000'`);
-    expect(shellWrite!.data).toContain(`[ -z "\${DISABLE_COMPACT+x}" ] && export DISABLE_COMPACT='1'`);
-    expect(shellWrite!.data).toContain(`[ -z "\${CLAUDE_CODE_ALWAYS_ENABLE_EFFORT+x}" ] && export CLAUDE_CODE_ALWAYS_ENABLE_EFFORT='1'`);
-  });
-
-  test("user-preset launchctl values are skipped and never tracked (revert cannot delete them)", async () => {
-    const writes = capturedWrites();
-    launchctlEnvValues.CLAUDE_CODE_MAX_CONTEXT_TOKENS = "777000";
-    expect(await injectSystemEnv(4096, leverConfig)).toEqual({ injected: true });
-    const setCalls = launchctlCommands();
-    expect(setCalls).not.toContain("launchctl setenv CLAUDE_CODE_MAX_CONTEXT_TOKENS 1000000");
-    expect(setCalls).toContain("launchctl setenv DISABLE_COMPACT 1");
-    const trackingWrite = writes.filter(w => w.path.includes("system-env-port")).at(-1);
-    const keys = JSON.parse(trackingWrite!.data).injectedKeys as string[];
-    expect(keys).not.toContain("CLAUDE_CODE_MAX_CONTEXT_TOKENS");
-    expect(keys).toContain("DISABLE_COMPACT");
-  });
-
-  test("levers disabled: no lever keys injected or exported", async () => {
-    const writes = capturedWrites();
-    expect(await injectSystemEnv(4096, baseConfig)).toEqual({ injected: true });
-    const setCalls = launchctlCommands();
-    expect(setCalls.some(c => c.includes("CLAUDE_CODE_MAX_CONTEXT_TOKENS"))).toBe(false);
-    expect(setCalls.some(c => c.includes("CLAUDE_CODE_ALWAYS_ENABLE_EFFORT"))).toBe(false);
-    const shellWrite = writes.find(w => w.path.includes("claude-env.sh"));
-    expect(shellWrite!.data).not.toContain("DISABLE_COMPACT");
-  });
-
-  test("auto-context default lever: AUTO_COMPACT_WINDOW 350000 injected, tracked, conditionally exported (devlog 020)", async () => {
+  test("auto-context default lever: AUTO_COMPACT_WINDOW 350000 injected, tracked, conditionally exported (implementation contract)", async () => {
     const writes = capturedWrites();
     expect(await injectSystemEnv(4096, baseConfig)).toEqual({ injected: true });
     const setCalls = launchctlCommands();
@@ -359,28 +352,22 @@ describe("systemEnv lever keys (devlog 136 B6)", () => {
     expect(JSON.parse(trackingWrite!.data).injectedKeys).not.toContain("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
   });
 
-  test("auto-context stays inert while the maxContextTokens lever is set", async () => {
-    capturedWrites();
-    expect(await injectSystemEnv(4096, leverConfig)).toEqual({ injected: true });
-    const setCalls = launchctlCommands();
-    expect(setCalls.some(c => c.startsWith("launchctl setenv CLAUDE_CODE_AUTO_COMPACT_WINDOW"))).toBe(false);
-  });
-
-  test("tier slots inject ANTHROPIC_DEFAULT_*_MODEL via launchctl and conditional shell exports", async () => {
+  test("the helper selector injects both current Haiku variables", async () => {
     const writes = capturedWrites();
-    const tierConfig = {
+    const helperConfig = {
       ...baseConfig,
-      claudeCode: { systemEnv: true, tierModels: { opus: "cursor/gpt-5.6-luna", sonnet: "mock/small" } },
-    } satisfies OcxConfig;
-    expect(await injectSystemEnv(4096, tierConfig)).toEqual({ injected: true });
+      claudeCode: { systemEnv: true, smallFastModel: "mock/small" },
+    } satisfies CodexCommanderConfig;
+    expect(await injectSystemEnv(4096, helperConfig)).toEqual({ injected: true });
     const setCalls = launchctlCommands();
-    expect(setCalls.some(c => c.startsWith("launchctl setenv ANTHROPIC_DEFAULT_OPUS_MODEL"))).toBe(true);
-    expect(setCalls.some(c => c.startsWith("launchctl setenv ANTHROPIC_DEFAULT_SONNET_MODEL"))).toBe(true);
+    expect(setCalls).toContain("launchctl setenv ANTHROPIC_DEFAULT_HAIKU_MODEL mock/small");
+    expect(setCalls).toContain("launchctl setenv ANTHROPIC_SMALL_FAST_MODEL mock/small");
     const trackingWrite = writes.filter(w => w.path.includes("system-env-port")).at(-1);
     expect(JSON.parse(trackingWrite!.data).injectedKeys).toEqual(expect.arrayContaining([
-      "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
     ]));
     const shellWrite = writes.find(w => w.path.includes("claude-env.sh"));
-    expect(shellWrite!.data).toContain('[ -z "${ANTHROPIC_DEFAULT_OPUS_MODEL+x}" ] && export ANTHROPIC_DEFAULT_OPUS_MODEL=');
+    expect(shellWrite!.data).toContain('[ -z "${ANTHROPIC_DEFAULT_HAIKU_MODEL+x}" ] && export ANTHROPIC_DEFAULT_HAIKU_MODEL=');
+    expect(shellWrite!.data).toContain('[ -z "${ANTHROPIC_SMALL_FAST_MODEL+x}" ] && export ANTHROPIC_SMALL_FAST_MODEL=');
   });
 });

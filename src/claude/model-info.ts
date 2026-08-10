@@ -1,6 +1,6 @@
 /**
  * Anthropic-flavor /v1/models entries in the official ModelInfo shape
- * (anthropic-sdk-typescript@9e46760 src/resources/models.ts — devlog 131).
+ * (anthropic-sdk-typescript@9e46760 src/resources/models.ts — implementation contract).
  *
  * Why full ModelInfo: Claude Desktop 3P discovery is the only channel that can
  * carry per-model capabilities (effort ladder / thinking types); the static
@@ -94,8 +94,8 @@ function modelInfo(id: string, displayName: string, ladder: readonly string[], i
 }
 
 /**
- * Which id family the discovery list carries (devlog 050): Claude Code (CLI)
- * gets readable `claude-ocx-*` ids; Claude Desktop keeps the hashed
+ * Which id family the discovery list carries (implementation contract): Claude Code (CLI)
+ * gets readable `claude-ccx2-*` ids; Claude Desktop keeps the hashed
  * `claude-opus-4-8-<code>` family its 3P config was written with. Both families
  * decode in resolveInboundModel regardless of the style served here.
  */
@@ -111,7 +111,7 @@ export function buildAnthropicModelInfos(
 ): AnthropicModelInfo[] {
   const out: AnthropicModelInfo[] = [];
   const seen = new Set<string>();
-  // [1m] picker variant (devlog 260712 B1): Claude Code accounts exactly 1M for ids
+  // [1m] picker variant (implementation contract B1): Claude Code accounts exactly 1M for ids
   // carrying the marker (2.1.207 binary: /\[1m\]/i → 1e6, compaction preserved), so
   // ONLY models with an authoritative >=1M window get a second selectable row —
   // the auto-context widening that let a 372K route carry the marker (and be

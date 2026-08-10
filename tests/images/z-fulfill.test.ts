@@ -6,14 +6,14 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import type { ImageBridgePlan } from "../../src/images/types";
 import type { XaiImageRequest } from "../../src/images/xai-client";
 
-const PREV_HOME = process.env.OPENCODEX_HOME;
+const PREV_HOME = process.env.CODEXCOMMANDER_HOME;
 let fulfillImageCall: typeof import("../../src/images/fulfill")["fulfillImageCall"];
 let imageFulfillmentTailSnapshot: typeof import("../../src/images/fulfill")["imageFulfillmentTailSnapshot"];
 let testHome = "";
 
 beforeAll(async () => {
-  testHome = join(tmpdir(), "ocx-test-" + randomUUID());
-  process.env.OPENCODEX_HOME = testHome;
+  testHome = join(tmpdir(), "ccx-test-" + randomUUID());
+  process.env.CODEXCOMMANDER_HOME = testHome;
   mock.restore();
   mock.module("../../src/images/xai-client", () => ({
     callXaiImages: async (req: XaiImageRequest, _auth: unknown, _signal?: AbortSignal, timeoutMs?: number) => {
@@ -31,7 +31,7 @@ beforeAll(async () => {
   }));
   ({ fulfillImageCall, imageFulfillmentTailSnapshot } = await import(`../../src/images/fulfill?fulfill=${Date.now()}`));
 });
-afterAll(() => { if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = PREV_HOME; mock.restore(); });
+afterAll(() => { if (PREV_HOME === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = PREV_HOME; mock.restore(); });
 
 // --- Mutable mock state (reset() restores defaults before each test) ---
 let xaiResult: { images: Array<{ b64_json?: string; url?: string }> } = { images: [{ b64_json: "dGVzdA==" }] };
@@ -47,7 +47,7 @@ let downloadFn: (i: number) => Promise<string> = async (i) => touchArtifact(`dl-
 let capturedTimeoutMs: number | undefined;
 
 function touchArtifact(name: string): string {
-  const dir = join(testHome || process.env.OPENCODEX_HOME!, "artifacts");
+  const dir = join(testHome || process.env.CODEXCOMMANDER_HOME!, "artifacts");
   mkdirSync(dir, { recursive: true });
   const path = join(dir, name);
   writeFileSync(path, "x");

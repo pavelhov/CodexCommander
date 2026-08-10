@@ -2,16 +2,22 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { ConfigMutationLockError, loadConfig, saveConfig, withConfigMutationLockSync } from "../src/config";
+import {
+  ConfigMutationLockError,
+  getDefaultConfig,
+  loadConfig,
+  saveConfig,
+  withConfigMutationLockSync,
+} from "../src/config";
 import { CodexCredentialRefreshLockTimeoutError, getCodexAccountCredential, saveCodexAccountCredential } from "../src/codex/account-store";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { ManagementRequest, managementHeaders } from "./helpers/management-auth";
 
 let testRoot = "";
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 
-function config(port = 10100): OcxConfig {
-  return { port, providers: {}, defaultProvider: "openai" };
+function config(port = 10100): CodexCommanderConfig {
+  return { ...getDefaultConfig(), port };
 }
 
 async function waitForPath(path: string): Promise<void> {
@@ -34,14 +40,14 @@ async function waitForOwnedChild(child: ReturnType<typeof Bun.spawn>): Promise<n
 }
 
 beforeEach(() => {
-  previousOpencodexHome = process.env.OPENCODEX_HOME;
+  previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
   testRoot = mkdtempSync(join(import.meta.dir, ".tmp-config-mutation-lock-"));
-  process.env.OPENCODEX_HOME = testRoot;
+  process.env.CODEXCOMMANDER_HOME = testRoot;
 });
 
 afterEach(() => {
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   rmSync(testRoot, { recursive: true, force: true });
 });
 
@@ -60,7 +66,7 @@ test("a live cross-process holder is not stolen and runtime writers fail immedia
   `;
   const child = Bun.spawn([process.execPath, "-e", childSource], {
     cwd: join(import.meta.dir, ".."),
-    env: { ...process.env, OPENCODEX_HOME: testRoot },
+    env: { ...process.env, CODEXCOMMANDER_HOME: testRoot },
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
@@ -116,7 +122,7 @@ test("an abruptly exited holder releases the OS-backed transaction without stale
   `;
   const child = Bun.spawn([process.execPath, "-e", childSource], {
     cwd: join(import.meta.dir, ".."),
-    env: { ...process.env, OPENCODEX_HOME: testRoot },
+    env: { ...process.env, CODEXCOMMANDER_HOME: testRoot },
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
@@ -152,7 +158,7 @@ test("management API maps config mutation lock contention to retryable 503", asy
   `;
   const child = Bun.spawn([process.execPath, "-e", childSource], {
     cwd: join(import.meta.dir, ".."),
-    env: { ...process.env, OPENCODEX_HOME: testRoot },
+    env: { ...process.env, CODEXCOMMANDER_HOME: testRoot },
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",

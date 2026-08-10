@@ -27,7 +27,7 @@ import {
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { modelInList, namespacedToolName } from "../../types";
-import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage } from "../../types";
+import type { AdapterEvent, CodexCommanderConfig, CodexCommanderParsedRequest, CodexCommanderProviderConfig, CodexCommanderProviderContinuationState, CodexCommanderUsage } from "../../types";
 import {
   forceRefreshOAuthAccessSnapshot,
   getOAuthCredentialApiBaseUrl,
@@ -130,8 +130,8 @@ export function safeOriginLabel(url: string): string {
 
 
 
-export function providerFetch(provider: OcxProviderConfig): typeof globalThis.fetch {
-  return (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? globalThis.fetch;
+export function providerFetch(provider: CodexCommanderProviderConfig): typeof globalThis.fetch {
+  return (provider as CodexCommanderProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? globalThis.fetch;
 }
 
 

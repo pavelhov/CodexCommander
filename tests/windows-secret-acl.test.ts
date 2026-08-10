@@ -40,7 +40,7 @@ import { NATIVE_MAIN_OWNER_DB, retainNativeMainOwner } from "../src/codex/native
 let testDir = "";
 
 beforeEach(() => {
-  testDir = mkdtempSync(join(tmpdir(), "ocx-acl-test-"));
+  testDir = mkdtempSync(join(tmpdir(), "ccx-acl-test-"));
 });
 
 afterEach(() => {
@@ -122,13 +122,13 @@ describe("ephemeral harden success memo lifecycle", () => {
     // legitimately leave success memos behind; this test asserts exact memo
     // counts, so it must start from a clean slate rather than inherit them.
     resetHardenedStateForTests();
-    const tempA = join(testDir, "config.json.ocx.1.1.tmp");
-    const tempB = join(testDir, "config.json.ocx.1.2.tmp");
+    const tempA = join(testDir, "config.json.ccx.1.1.tmp");
+    const tempB = join(testDir, "config.json.ccx.1.2.tmp");
     writeFileSync(tempA, "first", "utf8");
     writeFileSync(tempB, "second", "utf8");
     setPlatformForTests("win32");
     const previousUsername = process.env.USERNAME;
-    process.env.USERNAME = "ocx-test-user";
+    process.env.USERNAME = "ccx-test-user";
     let grants = 0;
     setIcaclsRunnerForTests(args => {
       if (args.includes("/grant:r")) grants += 1;
@@ -435,7 +435,7 @@ describe("icacls failure paths (injected seams)", () => {
     expect(() => hardenSecretPath(filePath, { required: true })).toThrow(/broad ACL grants still present/);
   });
 
-  test("OPENCODEX_ACL_TIMEOUT_MS overrides the total budget with clamping", () => {
+  test("CODEXCOMMANDER_ACL_TIMEOUT_MS overrides the total budget with clamping", () => {
     const budgets: number[] = [];
     let now = 0;
     setNowForTests(() => now);
@@ -445,27 +445,27 @@ describe("icacls failure paths (injected seams)", () => {
       return ok;
     });
 
-    const prev = process.env.OPENCODEX_ACL_TIMEOUT_MS;
+    const prev = process.env.CODEXCOMMANDER_ACL_TIMEOUT_MS;
     try {
-      process.env.OPENCODEX_ACL_TIMEOUT_MS = "10000";
+      process.env.CODEXCOMMANDER_ACL_TIMEOUT_MS = "10000";
       hardenSecretPath(secretFile("env-a.json"), { required: true });
       expect(budgets[0]).toBeLessThanOrEqual(10_000);
       expect(budgets[0]).toBeGreaterThan(5_000);
 
       budgets.length = 0;
-      process.env.OPENCODEX_ACL_TIMEOUT_MS = "50"; // below floor → clamped to 1000
+      process.env.CODEXCOMMANDER_ACL_TIMEOUT_MS = "50"; // below floor → clamped to 1000
       hardenSecretPath(secretFile("env-b.json"), { required: true });
       expect(budgets[0]).toBeLessThanOrEqual(1_000);
       expect(budgets[0]).toBeGreaterThan(500);
 
       budgets.length = 0;
-      process.env.OPENCODEX_ACL_TIMEOUT_MS = "5000ms"; // malformed → default 5000
+      process.env.CODEXCOMMANDER_ACL_TIMEOUT_MS = "5000ms"; // malformed → default 5000
       hardenSecretPath(secretFile("env-c.json"), { required: true });
       expect(budgets[0]).toBeLessThanOrEqual(5_000);
       expect(budgets[0]).toBeGreaterThan(4_000);
     } finally {
-      if (prev === undefined) delete process.env.OPENCODEX_ACL_TIMEOUT_MS;
-      else process.env.OPENCODEX_ACL_TIMEOUT_MS = prev;
+      if (prev === undefined) delete process.env.CODEXCOMMANDER_ACL_TIMEOUT_MS;
+      else process.env.CODEXCOMMANDER_ACL_TIMEOUT_MS = prev;
     }
   });
 
@@ -582,8 +582,8 @@ describe("async hardenSecretPath (issue #612)", () => {
   test("timeoutMemoKey shares the timeout cache across distinct temp paths", async () => {
     setAsyncIcaclsRunnerForTests(async () => timeout);
     const dest = join(testDir, "responses-state.json");
-    const tempA = join(testDir, "responses-state.json.ocx.1.1.tmp");
-    const tempB = join(testDir, "responses-state.json.ocx.1.2.tmp");
+    const tempA = join(testDir, "responses-state.json.ccx.1.1.tmp");
+    const tempB = join(testDir, "responses-state.json.ccx.1.2.tmp");
     writeFileSync(tempA, "a", "utf-8");
     writeFileSync(tempB, "b", "utf-8");
 
@@ -637,9 +637,9 @@ describe("ephemeral ACL memo release (#840 refinement)", () => {
     // another order, or this test alone, and the harden fails before it ever
     // reaches the memo behavior under test.
     const previousUsername = process.env.USERNAME;
-    process.env.USERNAME = "ocx-test-user";
-    const tempA = join(testDir, "dest.ocx.1.1.tmp");
-    const tempB = join(testDir, "dest.ocx.1.2.tmp");
+    process.env.USERNAME = "ccx-test-user";
+    const tempA = join(testDir, "dest.ccx.1.1.tmp");
+    const tempB = join(testDir, "dest.ccx.1.2.tmp");
     writeFileSync(tempA, "a", "utf-8");
     writeFileSync(tempB, "b", "utf-8");
     try {
@@ -662,7 +662,7 @@ describe("ephemeral ACL memo release (#840 refinement)", () => {
   test("sync atomic write keys timeouts by destination, and the memo survives temp cleanup", () => {
     setPlatformForTests("win32");
     const previousUsername = process.env.USERNAME;
-    process.env.USERNAME = "ocx-test-user";
+    process.env.USERNAME = "ccx-test-user";
     let runnerCalls = 0;
     setIcaclsRunnerForTests(() => {
       runnerCalls += 1;
@@ -765,7 +765,7 @@ const ENTRY_POINTS: readonly EntryPoint[] = [
 async function withWin32(body: () => Promise<void>): Promise<void> {
   setPlatformForTests("win32");
   const previousUsername = process.env.USERNAME;
-  process.env.USERNAME = "ocx-test-user";
+  process.env.USERNAME = "ccx-test-user";
   try {
     await body();
   } finally {
@@ -1032,7 +1032,7 @@ describe("hardenStableLockFile — the production call edge, not just the primit
 
     setPlatformForTests("win32");
     const previousUsername = process.env.USERNAME;
-    process.env.USERNAME = "ocx-test-user";
+    process.env.USERNAME = "ccx-test-user";
     const seen: string[][] = [];
     setAsyncIcaclsRunnerForTests(async args => {
       seen.push(args);
@@ -1065,7 +1065,7 @@ describe("hardenStableLockFile — the production call edge, not just the primit
 
     setPlatformForTests("win32");
     const previousUsername = process.env.USERNAME;
-    process.env.USERNAME = "ocx-test-user";
+    process.env.USERNAME = "ccx-test-user";
     setAsyncIcaclsRunnerForTests(async () => ({
       success: false, exitCode: 5, timedOut: false, stdout: "", stderr: "",
     }));
@@ -1145,7 +1145,7 @@ describe("the production default hardener is reached, with the resolved platform
     const seen: string[][] = [];
     setPlatformForTests("win32");
     const previousUsername = process.env.USERNAME;
-    process.env.USERNAME = "ocx-test-user";
+    process.env.USERNAME = "ccx-test-user";
     setAsyncIcaclsRunnerForTests(async args => {
       seen.push(args);
       if (args.includes("/grant:r")) onGrant();
@@ -1154,7 +1154,7 @@ describe("the production default hardener is reached, with the resolved platform
       if (gate) await gate;
       return { success: true, exitCode: 0, timedOut: false, stdout: "" };
     });
-    const codexHome = mkdtempSync(join(tmpdir(), "ocx-default-harden-"));
+    const codexHome = mkdtempSync(join(tmpdir(), "ccx-default-harden-"));
     try {
       await run(codexHome);
     } finally {
@@ -1257,14 +1257,14 @@ describe("a required hardening failure stops the operation it protects", () => {
   ): Promise<void> => {
     setPlatformForTests("win32");
     const previousUsername = process.env.USERNAME;
-    process.env.USERNAME = "ocx-test-user";
+    process.env.USERNAME = "ccx-test-user";
     setAsyncIcaclsRunnerForTests(async args => {
       // Count only the first step of each sequence, so the counter is attempts
       // rather than icacls invocations.
       if (args.includes("/grant:r")) onAttempt(args);
       return { success: false, exitCode: 5, timedOut: false, stdout: "", stderr: "" };
     });
-    const codexHome = mkdtempSync(join(tmpdir(), "ocx-harden-fail-"));
+    const codexHome = mkdtempSync(join(tmpdir(), "ccx-harden-fail-"));
     try {
       await run(codexHome);
     } finally {
@@ -1385,7 +1385,7 @@ for (const { label, harden, create } of ENTRY_POINTS) {
       create(target);
       setPlatformForTests("win32");
       const previousUsername = process.env.USERNAME;
-      process.env.USERNAME = "ocx-test-user";
+      process.env.USERNAME = "ccx-test-user";
       setIcaclsRunnerForTests(() => result);
       setAsyncIcaclsRunnerForTests(async () => result);
       try {

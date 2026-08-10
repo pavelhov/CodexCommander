@@ -1,10 +1,10 @@
 ---
 title: Management API
-description: Authentication, errors, and endpoint reference for the opencodex control plane.
+description: Authentication, errors, and endpoint reference for the CodexCommander control plane.
 ---
 
-The Management API is opencodex's control plane. The dashboard at
-`http://localhost:10100` is one client of it; headless `ocx` provider, model, combo, account,
+The Management API is CodexCommander's control plane. The dashboard at
+`http://localhost:10100` is one client of it; headless `ccx` provider, model, combo, account,
 settings, diagnostics, and lifecycle commands are clients too. The API is available only while the
 proxy is running.
 
@@ -14,10 +14,10 @@ building automation. Persistent values ultimately follow [Configuration](/refere
 ## Authentication model
 
 The Management API has its own admin credential, independent of data-plane API keys. At startup,
-opencodex resolves it in this order:
+CodexCommander resolves it in this order:
 
-1. `OPENCODEX_ADMIN_AUTH_TOKEN`, when set.
-2. A generated `ocx_admin_*` token in a hardened secret file.
+1. `CODEXCOMMANDER_ADMIN_AUTH_TOKEN`, when set.
+2. A generated `ccx_admin_*` token in a hardened secret file.
 
 The file-backed token is accepted only after its directory and file permissions or ACLs have been
 hardened. If that cannot be guaranteed, management authentication fails closed and the API returns
@@ -26,7 +26,7 @@ hardened. If that cannot be guaranteed, management authentication fails closed a
 Send the admin token in either form:
 
 ```http
-X-OpenCodex-API-Key: <admin-token>
+X-CodexCommander-API-Key: <admin-token>
 ```
 
 ```http
@@ -41,7 +41,7 @@ Claude Code, or another model client; it authorizes control-plane mutations.
 
 ### Loopback dashboard sessions
 
-On a loopback bind, the dashboard bootstrap can receive a short-lived `ocx_session_*` credential.
+On a loopback bind, the dashboard bootstrap can receive a short-lived `ccx_session_*` credential.
 Each session lasts five minutes and is bound to the exact dashboard origin. Safe requests must
 match that origin. Unsafe methods also require the browser `Origin` and the session's CSRF token.
 
@@ -56,7 +56,7 @@ route-specific results rather than repeating this table.
 
 | Status | Type or code | Meaning |
 | --- | --- | --- |
-| 401 | `opencodex admin token required` | The admin token or GUI session is missing, invalid, expired, origin-mismatched, or missing CSRF evidence |
+| 401 | `codexcommander admin token required` | The admin token or GUI session is missing, invalid, expired, origin-mismatched, or missing CSRF evidence |
 | 403 | `cross-origin request blocked` | The request origin is outside the management allowlist |
 | 404 | `not_found` | No management route matched the method and path |
 | 413 | `request body too large` | A POST, PUT, or PATCH body exceeds the 2 MiB management limit |
@@ -79,7 +79,7 @@ route-specific results rather than repeating this table.
 | `PUT /api/grok/selection` | Persist the excluded Grok models | 400 invalid or oversized selection |
 | `POST /api/grok/apply` | Apply persisted Grok configuration through the managed sync | 409 `grok_apply_busy`; 400/500 apply failure |
 | `GET, PUT /api/claude-desktop` | Read or persist the Claude Desktop routed/native profile | 400 invalid or unavailable assignment |
-| `POST /api/claude-desktop/apply` | Write the saved profile to Claude Desktop's managed config | 400/500 write failure |
+| `POST /api/claude-desktop/apply` | Write the saved profile to Claude Desktop's managed config. Requires a JSON object with an explicit `mode`: `static`, `hybrid`, or `discovery` | 400 missing/invalid body or mode; 500 write failure |
 | `GET /api/claude-desktop/status` | Inspect saved-versus-applied profile and Desktop health | 400 status read failure |
 | `GET, PUT /api/claude-code` | Read or update Claude Code gateway, auth-mode, model-map, context, agent, and sidecar settings | 400 invalid field or shape |
 
@@ -96,7 +96,7 @@ For the concepts behind the model roster and encrypted worker-task behavior, see
 
 See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and routing failures.
 
-### Configuration, startup, sync, and updates
+### Configuration, startup, and sync
 
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
@@ -108,9 +108,6 @@ See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and rou
 | `GET, POST /api/windows-tray` | Read Windows tray state or install/start/stop/uninstall it | 400 unsupported platform/action; 500 operation failure |
 | `GET /api/diagnostics/project-config` | Read cached project configuration warnings | — |
 | `POST /api/sync` | Sync the current model catalog into Codex; returns `catalogQuality` (`live`, `retained`, or `native-only`), `rehydrated`, current Codex app-server `catalogState`, and a restart hint when stale | 409 refused write authority; 500 failed sync |
-| `GET /api/update/check` | Check the `latest` or `preview` update channel | 400 invalid tag |
-| `POST /api/update/run` | Start an update job, optionally followed by restart | 400 invalid body; job-specific conflict/error status |
-| `GET /api/update/status` | Poll an update job by id | 404 unknown job |
 | `GET, PUT /api/sidecar-settings` | Read or update web-search and vision sidecar model/backend settings | 400 invalid shape, backend, or limit |
 | `GET, PUT /api/shadow-call-settings` | Read or update shadow-call interception settings | 400 invalid shape or value |
 
@@ -158,12 +155,12 @@ first and submit the returned digest. Prefer quarantine when recovery may be nee
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
 | `GET /api/integrations/opencode` | Read OpenCode installation detection, managed-connection state, target config path, auto-refresh setting, and OpenCode Go key-verification state | — |
-| `POST /api/integrations/opencode/apply` | Generate and surgically apply only `provider.opencodex` to the active OpenCode global JSONC/JSON config; accepts optional `{ "autoConnect": boolean }` | 400 invalid body; 409 malformed, changed, or unsafe external config |
+| `POST /api/integrations/opencode/apply` | Generate and surgically apply only `provider.codexcommander` to the active OpenCode global JSONC/JSON config; accepts optional `{ "autoConnect": boolean }` | 400 invalid body; 409 malformed, changed, or unsafe external config |
 | `PUT /api/integrations/opencode` | Enable or disable opt-in catalog/startup refresh after a connection has been applied | 400 invalid body; 409 no applied connection |
 | `POST /api/integrations/opencode/restore` | Restore the exact pre-Apply bytes when safe, or surgically restore/remove only the managed provider; optional full mode requires current-hash confirmation | 400 invalid mode/body; 409 changed or unsafe external config |
 | `POST /api/integrations/opencode/open` | Apply when needed, then one-click launch detected OpenCode Desktop | 409 missing Desktop or integration needs attention |
 
-The persistent integration owns a protected token file under OpenCodex state and a journal/backup;
+The persistent integration owns a protected token file under CodexCommander state and a journal/backup;
 the OpenCode config receives a `{file:…}` reference, never a serialized proxy key. The API never
 rewrites OpenCode's other config paths or reads its auth store. See [OpenCode](/guides/opencode/) for
 the user workflow.
@@ -212,12 +209,6 @@ shared value atomically.
 `provider_has_dependent_combos` is a safety barrier: remove or edit the dependent combos before
 deleting their provider.
 
-### Sidebar
-
-| Method and path | Purpose | Notable errors |
-| --- | --- | --- |
-| `GET /api/update/badge` | Read the cheap sidebar update-badge state | — |
-
 ### System lifecycle
 
 | Method and path | Purpose | Notable errors |
@@ -238,7 +229,7 @@ manager. Its routes are:
 | `PUT /api/codex-auth/accounts/pause` | Pause or resume one account | 400 invalid account/state; 404 missing account |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Pause accounts whose quota is exhausted | Mutation-lock failures become 503 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | Clear runtime cooldown for one account or all accounts | 400 invalid id |
-| `GET, PUT /api/codex-auth/active` | Read or select the active account | 400 invalid or missing account; 409 paused/legacy-row conflict |
+| `GET, PUT /api/codex-auth/active` | Read or select the active account | 400 invalid or missing account; 409 paused account |
 | `PUT /api/codex-auth/auto-switch` | Set the quota threshold for automatic account switching | 400 invalid threshold |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Update Codex account-pool selection strategy | 400 invalid strategy/config |
 | `PUT /api/codex-auth/failover` | Set the account failover threshold | 400 invalid threshold |
@@ -257,6 +248,6 @@ that response as a permanent account failure.
 ## Choosing a client
 
 For ordinary administration, the [Web Dashboard](/guides/web-dashboard/) gives the safest guided
-workflow. For headless hosts and automation, use the corresponding `ocx` commands: they call this
+workflow. For headless hosts and automation, use the corresponding `ccx` commands: they call this
 same live API and return a nonzero result when the proxy is unreachable or the operation fails.
 Direct HTTP is most useful for integrations that need the exact endpoint contracts above.

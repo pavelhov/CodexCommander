@@ -10,7 +10,7 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
 
 function makeConfig(body: string): { dir: string; configPath: string } {
-  const dir = mkdtempSync(join(tmpdir(), "ocx-codex-home-"));
+  const dir = mkdtempSync(join(tmpdir(), "ccx-codex-home-"));
   const configPath = join(dir, "config.toml");
   writeFileSync(configPath, body, "utf8");
   return { dir, configPath };
@@ -52,7 +52,7 @@ describe("diagnoseCodexBundledPlugins (direct, platform-injected)", () => {
   });
 
   test("healthy: local source with a supported manifest resolves", () => {
-    const marketRoot = mkdtempSync(join(tmpdir(), "ocx-bundled-root-"));
+    const marketRoot = mkdtempSync(join(tmpdir(), "ccx-bundled-root-"));
     mkdirSync(join(marketRoot, ".agents", "plugins"), { recursive: true });
     writeFileSync(join(marketRoot, ".agents", "plugins", "marketplace.json"), "{}", "utf8");
     const { dir, configPath } = makeConfig(
@@ -238,7 +238,7 @@ describe("diagnose path-mismatch (current vs registered)", () => {
   test("registered path differing from the live app path is flagged stale", () => {
     // The registered source must actually resolve to a manifest so we isolate
     // the path-mismatch signal (not the "no longer resolves" branch).
-    const registered = mkdtempSync(join(tmpdir(), "ocx-registered-"));
+    const registered = mkdtempSync(join(tmpdir(), "ccx-registered-"));
     mkdirSync(join(registered, ".agents", "plugins"), { recursive: true });
     writeFileSync(join(registered, ".agents", "plugins", "marketplace.json"), "{}", "utf8");
     const live = "C:\\Users\\bob\\AppData\\Local\\Programs\\@openai\\codex\\app-2.0.6\\plugins\\bundled-marketplaces\\openai-bundled";
@@ -267,7 +267,7 @@ describe("diagnose path-mismatch (current vs registered)", () => {
   });
 
   test("matching live and registered path is healthy (no mismatch)", () => {
-    const shared = mkdtempSync(join(tmpdir(), "ocx-shared-"));
+    const shared = mkdtempSync(join(tmpdir(), "ccx-shared-"));
     mkdirSync(join(shared, ".claude-plugin"), { recursive: true });
     writeFileSync(join(shared, ".claude-plugin", "marketplace.json"), "{}", "utf8");
     const { dir, configPath } = makeConfig(
@@ -291,19 +291,29 @@ describe("diagnose path-mismatch (current vs registered)", () => {
   });
 });
 
-describe("ocx status --json codexPlugins (spawned, read-only)", () => {
+describe("ccx status --json codexPlugins (spawned, read-only)", () => {
   test("status --json includes a codexPlugins block and never writes CODEX_HOME", () => {
-    const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-status-home-"));
-    const codexHome = mkdtempSync(join(tmpdir(), "ocx-codex-home-"));
+    const codexCommanderHome = mkdtempSync(join(tmpdir(), "ccx-status-home-"));
+    const codexHome = mkdtempSync(join(tmpdir(), "ccx-codex-home-"));
     writeFileSync(join(codexHome, "config.toml"), `model = "gpt-5"\n`, "utf8");
-    writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({
-      port: 9, providers: {}, defaultProvider: "openai", codexAutoStart: false,
+    writeFileSync(join(codexCommanderHome, "config.json"), JSON.stringify({
+      port: 9,
+      multiAgentGuidanceEnabled: true,
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      defaultProvider: "openai",
+      codexAutoStart: false,
     }), "utf8");
     try {
       const before = readdirSync(codexHome).sort();
       const result = spawnSync(process.execPath, [cliPath, "status", "--json"], {
         cwd: repoRoot,
-        env: { ...process.env, OPENCODEX_HOME: opencodexHome, CODEX_HOME: codexHome },
+        env: { ...process.env, CODEXCOMMANDER_HOME: codexCommanderHome, CODEX_HOME: codexHome },
         encoding: "utf8",
       });
       const after = readdirSync(codexHome).sort();
@@ -317,7 +327,7 @@ describe("ocx status --json codexPlugins (spawned, read-only)", () => {
       expect(parsed.codexPlugins).toBeDefined();
       expect(typeof parsed.codexPlugins?.applicable).toBe("boolean");
     } finally {
-      rmSync(opencodexHome, { recursive: true, force: true });
+      rmSync(codexCommanderHome, { recursive: true, force: true });
       rmSync(codexHome, { recursive: true, force: true });
     }
   }, { timeout: 20_000 });

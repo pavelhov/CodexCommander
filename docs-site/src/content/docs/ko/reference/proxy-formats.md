@@ -3,7 +3,7 @@ title: 프록시 API 형식
 description: Responses, Chat Completions, Anthropic Messages, 모델 카탈로그, WebSocket, realtime, compaction 표면에 대한 와이어 레벨 참고 문서입니다.
 ---
 
-opencodex는 하나의 로컬 프록시를 여러 클라이언트 방언으로 제공합니다. Codex 클라이언트는
+CodexCommander는 하나의 로컬 프록시를 여러 클라이언트 방언으로 제공합니다. Codex 클라이언트는
 Responses API를 말할 수 있고, OpenAI 호환 앱은 Chat Completions를 말할 수 있으며, Claude Code는
 각 업스트림 공급자가 모든 형식을 구현하지 않아도 Anthropic Messages를 말할 수 있습니다.
 
@@ -33,7 +33,7 @@ Responses 표현이 이 연결의 중심입니다. 네이티브 호환 경로는
 
 ## `POST /v1/responses`
 
-이것이 opencodex의 기본 데이터 평면 형식입니다. 요청 본문은 비어 있지 않은 `model`을 가진 JSON 객체여야
+이것이 CodexCommander의 기본 데이터 평면 형식입니다. 요청 본문은 비어 있지 않은 `model`을 가진 JSON 객체여야
 합니다. `input`은 문자열이거나 Responses 항목 배열일 수 있습니다.
 
 ### 허용되는 요청 필드
@@ -178,7 +178,7 @@ Responses로 변환되어 일반적으로 라우팅된 뒤, Anthropic JSON 또�
 ## `POST /v1/live`와 Realtime sideband
 
 `POST /v1/live`는 ChatGPT/Codex App Frameless call-creation 표면을 받습니다.
-`POST /v1/realtime/calls`는 OpenAI Realtime call-creation 표면을 받습니다. opencodex는 적절한 OpenAI 계열
+`POST /v1/realtime/calls`는 OpenAI Realtime call-creation 표면을 받습니다. CodexCommander는 적절한 OpenAI 계열
 경로를 선택하고, 업스트림 인증 모드에 맞게 call-creation 요청을 정규화한 뒤, 제한된 응답을 릴레이합니다.
 
 call creation 이후 클라이언트는 다음의 지원되는 모든 inbound 형식 중 하나로 sideband WebSocket에 참여할 수
@@ -198,7 +198,7 @@ Compaction은 긴 Responses 대화를 줄여야 하는 클라이언트를 위해
 | 경로 유형 | 동작 |
 | --- | --- |
 | 정식 ChatGPT 또는 공식 OpenAI 경로 | 확인된 계정과 모델 인증을 사용해 요청을 네이티브 `/responses/compact` endpoint로 전달합니다 |
-| 다른 라우팅된 모델 | `compaction_trigger`가 있는 내부 비스트리밍 no-tools compaction 턴을 실행합니다. `encrypted_content`가 `ocx1:` envelope인 synthetic `compaction` 항목이 정확히 하나 있어야 하며, 그 요약을 v1 replacement history로 디코딩합니다 |
+| 다른 라우팅된 모델 | `compaction_trigger`가 있는 내부 비스트리밍 no-tools compaction 턴을 실행합니다. `encrypted_content`가 `ccx1:` envelope인 synthetic `compaction` 항목이 정확히 하나 있어야 하며, 그 요약을 v1 replacement history로 디코딩합니다 |
 
 네이티브 compact 응답은 선언된 `Content-Length`가 이미 한도를 넘는 응답을 포함해 최대 32 MiB로 버퍼링됩니다.
 compact 전용 실패는 다음과 같습니다.
@@ -210,12 +210,12 @@ compact 전용 실패는 다음과 같습니다.
 | 499 | `client_cancelled` | 전달 또는 버퍼링 중에 client가 취소했습니다 |
 | 502 | `compact_response_too_large` | 네이티브 compact 출력이 32 MiB를 초과했습니다 |
 | 502 | `upstream_error` | 연결, 읽기, 또는 synthetic compaction 턴 실패 |
-| 502 | `invalid_response_error` | synthetic 턴이 유효하고 비어 있지 않은 `ocx1:` compaction 항목을 정확히 하나 만들지 못했습니다 |
+| 502 | `invalid_response_error` | synthetic 턴이 유효하고 비어 있지 않은 `ccx1:` compaction 항목을 정확히 하나 만들지 못했습니다 |
 
 ## 인증 매트릭스
 
 loopback 전용 bind에서는 data-plane admission에 설정된 key가 필요하지 않습니다. remote bind에서는 아래
-매트릭스를 사용하십시오. “Dedicated”는 `X-OpenCodex-API-Key`를 뜻하고, 다른 열은 `Authorization: Bearer ...`
+매트릭스를 사용하십시오. “Dedicated”는 `X-CodexCommander-API-Key`를 뜻하고, 다른 열은 `Authorization: Bearer ...`
 와 `x-api-key`를 뜻합니다.
 
 | 표면 | Dedicated | Bearer | `x-api-key` |
@@ -254,13 +254,13 @@ OpenAI 스타일 `origin_rejected` body가 아니라 403 `permission_error`입�
 ## 암호화된 콘텐츠 위생
 
 프록시는 실제 백엔드 암호문을 불투명한 데이터로 취급합니다. 구조적으로 유효한 암호문은 바이트 단위로
-그대로 보존됩니다. opencodex는 이를 복호화하거나, 내용을 번역하거나, 다른 프로바이더용으로 다시
+그대로 보존됩니다. CodexCommander는 이를 복호화하거나, 내용을 번역하거나, 다른 프로바이더용으로 다시
 암호화하지 않습니다.
 
-일부 에이전트 hook은 과거에 평문 제어 텍스트를 `encrypted_content` 슬롯에 넣었습니다. 호환성을 위해
-프록시는 구조적으로 유효한 Fernet 구간은 그대로 유지하면서 해당 평문을 텍스트 파트로 분리합니다.
+일부 에이전트 hook은 평문 제어 텍스트를 `encrypted_content` 슬롯에 넣습니다. 프록시는 구조적으로
+유효한 Fernet 구간은 그대로 유지하면서 해당 평문을 텍스트 파트로 분리합니다.
 이 복구 과정에서 `agent_message`의 암호화된 파트가 모두 사라지면 일반 user message가 됩니다. 현재 v2
 작업이 실제로 암호화된 상태이고 선택된 라우팅 대상이 네이티브 ChatGPT 암호문을 읽을 수 없다면,
-opencodex는 읽을 수 없는 바이트를 프로바이더에 보내는 대신 `unreadable_encrypted_agent_task`로
+CodexCommander는 읽을 수 없는 바이트를 프로바이더에 보내는 대신 `unreadable_encrypted_agent_task`로
 실패합니다. worker task와 관련된 클라이언트 동작은 [서브에이전트 표면](/guides/sub-agent-surface/)을
 참조하세요.

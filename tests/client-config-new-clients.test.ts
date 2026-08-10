@@ -17,11 +17,11 @@ import {
   type OpenclawGeneratedConfig,
 } from "../src/clients/config-export";
 import { serializeDocument } from "../src/integrations/serialize";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 /**
  * Activation coverage for the four clients added in WP1
- * (devlog/_fin/260802_client_toggle_api/010 §2.4, 011 §3).
+ * (implementation contract §2.4, 011 §3).
  */
 const MODELS: ExportModel[] = [
   { namespaced: "anthropic/claude-opus-4-8", provider: "anthropic", id: "claude-opus-4-8", contextWindow: 200_000, displayName: "Claude Opus 4.8" },
@@ -30,14 +30,14 @@ const MODELS: ExportModel[] = [
   { namespaced: "mystery/model", provider: "mystery", id: "model" },
 ];
 
-const LOOPBACK: OcxConfig = {
+const LOOPBACK: CodexCommanderConfig = {
   port: 10100,
   hostname: "127.0.0.1",
   defaultProvider: "mock",
   providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" } },
-} as OcxConfig;
+} as CodexCommanderConfig;
 
-function ctx(config: OcxConfig = LOOPBACK): ExportContext {
+function ctx(config: CodexCommanderConfig = LOOPBACK): ExportContext {
   return { baseUrl: "http://127.0.0.1:10100/v1", models: MODELS, config };
 }
 
@@ -45,7 +45,7 @@ describe("no client config ever carries a credential", () => {
   // Assembled rather than written out: privacy:scan flags token-shaped literals,
   // and it is right to — a fixture is not a reason to commit one.
   const SENTINEL = ["sk", "live", "do", "not", "serialize", "me"].join("-");
-  const withKey = { ...LOOPBACK, apiKeys: [{ key: SENTINEL }] } as OcxConfig;
+  const withKey = { ...LOOPBACK, apiKeys: [{ key: SENTINEL }] } as CodexCommanderConfig;
 
   test.each(EXPORT_CLIENT_IDS)("%s emits a reference or a placeholder, never a key", clientId => {
     const spec = EXPORT_CLIENTS[clientId];
@@ -83,9 +83,9 @@ describe("hermes", () => {
     const loopback = buildClientConfig("hermes", ctx()) as HermesGeneratedConfig;
     expect(loopback.providers[OPENCODE_PROVIDER_ID]!.extra_headers).toBeUndefined();
 
-    const remote = buildClientConfig("hermes", ctx({ ...LOOPBACK, hostname: "0.0.0.0" } as OcxConfig)) as HermesGeneratedConfig;
+    const remote = buildClientConfig("hermes", ctx({ ...LOOPBACK, hostname: "0.0.0.0" } as CodexCommanderConfig)) as HermesGeneratedConfig;
     expect(remote.providers[OPENCODE_PROVIDER_ID]!.extra_headers).toEqual({
-      "x-opencodex-api-key": HERMES_API_KEY_ENV_REF,
+      "x-codexcommander-api-key": HERMES_API_KEY_ENV_REF,
     });
   });
 });

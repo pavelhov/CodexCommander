@@ -240,9 +240,9 @@ describe("codex-rs compat surface (260707)", () => {
     ]);
   });
 
-  test("context_compaction with ocx1 payload replays the stored summary", () => {
+  test("context_compaction with ccx1 payload replays the stored summary", () => {
     const summary = "previous work summary";
-    const encrypted = "ocx1:" + Buffer.from(summary, "utf-8").toString("base64");
+    const encrypted = "ccx1:" + Buffer.from(summary, "utf-8").toString("base64");
     const parsed = parseRequest({ ...base, input: [
       { type: "context_compaction", encrypted_content: encrypted },
       { type: "message", role: "user", content: "next task" },

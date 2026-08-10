@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { charsPerToken, estimateTokens } from "../src/lib/token-estimate";
 
-describe("CJK-aware ratio (devlog 260712 B3)", () => {
+describe("CJK-aware ratio (implementation contract B3)", () => {
   const korean = "한국어 텍스트는 토큰 밀도가 높아서 영어 기준 추정이 과소계산됩니다 ".repeat(10);
   const english = "English text estimates fine at the default four chars per token ratio ".repeat(10);
 

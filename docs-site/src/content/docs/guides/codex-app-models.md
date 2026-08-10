@@ -1,9 +1,9 @@
 ---
 title: Codex App model picker
-description: How opencodex models appear in Codex App, Codex CLI, and Codex TUI through the shared Codex catalog.
+description: How CodexCommander models appear in Codex App, Codex CLI, and Codex TUI through the shared Codex catalog.
 ---
 
-opencodex does not patch Codex App. It writes the same Codex configuration and model catalog that
+CodexCommander does not patch Codex App. It writes the same Codex configuration and model catalog that
 Codex CLI/TUI already use. Because Codex App reads that shared state, routed models can appear in the
 App's model picker as normal Codex catalog entries.
 
@@ -11,7 +11,7 @@ OpenAI entries use two credential routes: native Codex login and the namespaced
 `openai-apikey/<model>` API-key transport. Changing `codexAccountMode` between Pool and Direct by
 itself does not change picker ids. When `codexAccountNamespaces` has eligible selectors whose
 mapped accounts still exist, however,
-opencodex adds separate `<selector>/<native-openai-model>` rows for the mapped accounts and hides
+CodexCommander adds separate `<selector>/<native-openai-model>` rows for the mapped accounts and hides
 the bare native rows from the Codex picker. Selector labels are user-chosen public names with no
 built-in account-role meaning. Selecting a qualified row uses only its mapped account, does not
 change the active Pool account, and fails closed instead of switching accounts when the target is
@@ -32,24 +32,17 @@ gpt-5.6-sol                         # bare Codex-login route via Pool or Direct
 openai-apikey/gpt-5.6-sol           # API key
 ```
 
-Fresh installs and configs with no saved mode default to Pool. Current configs use marker 2 and
-retain the shipped v1 source at `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; restore it with:
-
-```sh
-cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json
-```
-
-Earlier v1 three-provider configurations migrate automatically into the single option-aware row.
+Fresh installs and configs with no saved mode default to Pool.
 
 ## Integration path
 
-`ocx init`, `ocx start`, and `ocx sync` wire the shared Codex config and catalog into the proxy; see
+`ccx init`, `ccx start`, and `ccx sync` wire the shared Codex config and catalog into the proxy; see
 [Codex Integration](/guides/codex-integration/) for config injection, catalog sync, shims, WebSocket
 fallback, and restore mechanics.
 
 ## Why routed models show up
 
-Codex's model picker expects Codex-shaped catalog entries. opencodex builds routed entries by cloning
+Codex's model picker expects Codex-shaped catalog entries. CodexCommander builds routed entries by cloning
 a native Codex model template, then replacing the routed model identity:
 
 ```text
@@ -59,13 +52,13 @@ visibility = "list"
 ```
 
 The clone keeps strict-parser fields such as reasoning levels, shell type, API support flags, and
-base instructions. opencodex then removes native-only capabilities that the route cannot honor,
+base instructions. CodexCommander then removes native-only capabilities that the route cannot honor,
 including OpenAI service-tier metadata.
 
 ## Current stable model coverage
 
 The native fallback set includes `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,
-`gpt-5.3-codex-spark`, and GPT-5.6 Sol/Terra/Luna. For the GPT-5.5/5.4 family, opencodex preserves
+`gpt-5.3-codex-spark`, and GPT-5.6 Sol/Terra/Luna. For the GPT-5.5/5.4 family, CodexCommander preserves
 the installed Codex catalog's richer live entries and only synthesizes a missing entry. The bundled
 upstream snapshot is used only for GPT-5.6, where it supplies the real per-model identity and
 metadata instead of an older-template approximation.
@@ -134,7 +127,7 @@ service_tier = "fast"
 fast_mode = true
 ```
 
-But the model catalog and runtime request tier id use `priority`. opencodex preserves that split.
+But the model catalog and runtime request tier id use `priority`. CodexCommander preserves that split.
 Native OpenAI passthrough models keep fast support; routed providers are capability-gated —
 `service_tier` is stripped only when the provider declares `supportsServiceTier: false` (the registry
 classifies canonical OpenAI as `true`, DeepSeek and Volcengine Ark as `false`), while unclassified
@@ -160,8 +153,8 @@ itself.
 If the picker still shows stale entries, refresh the catalog and restart the target Codex surface:
 
 ```bash
-ocx sync
+ccx sync
 ```
 
-opencodex rewrites `models_cache.json` with a deliberately stale cache wrapper whenever catalog
+CodexCommander rewrites `models_cache.json` with a deliberately stale cache wrapper whenever catalog
 visibility, priority, or metadata changes, so the next Codex model refresh reads the new catalog.

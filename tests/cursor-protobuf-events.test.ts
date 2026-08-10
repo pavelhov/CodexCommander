@@ -42,7 +42,7 @@ function mcpToolCall(toolName: string, args: Record<string, string>) {
           name: toolName,
           toolName,
           toolCallId: "call_1",
-          providerIdentifier: "opencodex-responses",
+          providerIdentifier: "codexcommander-responses",
           args: encoded,
         }),
       }),
@@ -173,7 +173,7 @@ describe("Cursor protobuf tool-call events", () => {
             name: "local",
             toolName: "local",
             toolCallId: "call_local",
-            providerIdentifier: "opencodex",
+            providerIdentifier: "codexcommander",
           }),
         }),
       },
@@ -649,9 +649,9 @@ describe("Cursor protobuf tool-call events", () => {
 });
 
 describe("Cursor MCP display-name alias", () => {
-  test("mcp_opencodex-responses_ prefixed calls resolve to the advertised tool", () => {
+  test("mcp_codexcommander-responses_ prefixed calls resolve to the advertised tool", () => {
     const state = createCursorProtobufEventState({ clientToolNames: ["exec_command"] });
-    const toolCall = mcpToolCall("mcp_opencodex-responses_exec_command", { cmd: "echo ok" });
+    const toolCall = mcpToolCall("mcp_codexcommander-responses_exec_command", { cmd: "echo ok" });
 
     // The prefixed display name must NOT be rejected as an unknown Responses tool.
     expect(mapCursorProtobufServerMessage(interaction({
@@ -669,7 +669,7 @@ describe("Cursor MCP display-name alias", () => {
 
   test("unknown tools are still rejected after normalization", () => {
     const state = createCursorProtobufEventState({ clientToolNames: ["exec_command"] });
-    const toolCall = mcpToolCall("mcp_opencodex-responses_made_up_tool", { x: "1" });
+    const toolCall = mcpToolCall("mcp_codexcommander-responses_made_up_tool", { x: "1" });
     const events = mapCursorProtobufServerMessage(interaction({
       case: "toolCallStarted",
       value: create(ToolCallStartedUpdateSchema, { callId: "call_a2", modelCallId: "m2", toolCall }),

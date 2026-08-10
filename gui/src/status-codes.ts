@@ -14,13 +14,13 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "不正なリクエスト", description: "プロキシがリクエストを解釈できませんでした。再試行前にモデル、メッセージ形式、ヘッダー、JSON 本文を確認してください。" },
   },
   401: {
-    en: { label: "Unauthorized", description: "Credentials are missing, expired, or invalid. Re-login or refresh the account/provider credentials used by opencodex." },
-    ko: { label: "인증 필요", description: "자격 증명이 없거나 만료되었거나 유효하지 않습니다. opencodex에서 사용하는 계정 또는 제공자 자격 증명을 다시 로그인하거나 갱신해야 합니다." },
-    zh: { label: "未授权", description: "凭据缺失、已过期或无效。请重新登录，或刷新 opencodex 使用的账号/提供商凭据。" },
-    de: { label: "Nicht autorisiert", description: "Anmeldedaten fehlen, sind abgelaufen oder ungültig. Melde dich erneut an oder aktualisiere die von opencodex genutzten Konto-/Anbieter-Zugangsdaten." },
-    ru: { label: "Не авторизован", description: "Учётные данные отсутствуют, истекли или недействительны. Войдите заново или обновите учётные данные аккаунта или провайдера, которые использует opencodex." },
+    en: { label: "Unauthorized", description: "Credentials are missing, expired, or invalid. Re-login or refresh the account/provider credentials used by CodexCommander." },
+    ko: { label: "인증 필요", description: "자격 증명이 없거나 만료되었거나 유효하지 않습니다. CodexCommander에서 사용하는 계정 또는 제공자 자격 증명을 다시 로그인하거나 갱신해야 합니다." },
+    zh: { label: "未授权", description: "凭据缺失、已过期或无效。请重新登录，或刷新 CodexCommander 使用的账号/提供商凭据。" },
+    de: { label: "Nicht autorisiert", description: "Anmeldedaten fehlen, sind abgelaufen oder ungültig. Melde dich erneut an oder aktualisiere die von CodexCommander genutzten Konto-/Anbieter-Zugangsdaten." },
+    ru: { label: "Не авторизован", description: "Учётные данные отсутствуют, истекли или недействительны. Войдите заново или обновите учётные данные аккаунта или провайдера, которые использует CodexCommander." },
 
-    ja: { label: "認証が必要", description: "認証情報が不在・期限切れ・無効です。opencodex が使用するアカウントまたはプロバイダー認証情報を再ログインまたは更新してください。" },
+    ja: { label: "認証が必要", description: "認証情報が不在・期限切れ・無効です。CodexCommander が使用するアカウントまたはプロバイダー認証情報を再ログインまたは更新してください。" },
   },
   402: {
     en: { label: "Payment required", description: "The upstream provider rejected the request because billing, credits, or plan access is not available. Add credits, update billing, or switch provider." },
@@ -41,13 +41,13 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "アクセス禁止", description: "アカウントは認証済みですがこのモデルや操作の使用が許可されていません。多くはプラン/サブスクリプション制限（例: Ollama Cloud Pro）、組織ポリシー、モデル権限であり、API キーが不正とは限りません。" },
   },
   404: {
-    en: { label: "Not found", description: "The requested route, model, account, or upstream resource was not found. Verify the model name and opencodex provider configuration." },
-    ko: { label: "찾을 수 없음", description: "요청한 경로, 모델, 계정 또는 업스트림 리소스를 찾을 수 없습니다. 모델 이름과 opencodex 제공자 설정을 확인해야 합니다." },
-    zh: { label: "未找到", description: "找不到请求的路由、模型、账号或上游资源。请确认模型名称和 opencodex 提供商配置。" },
-    de: { label: "Nicht gefunden", description: "Die angeforderte Route, das Modell, das Konto oder die Upstream-Ressource wurde nicht gefunden. Prüfe Modellname und opencodex-Anbieterkonfiguration." },
-    ru: { label: "Не найдено", description: "Запрошенный маршрут, модель, аккаунт или вышестоящий ресурс не найден. Проверьте имя модели и конфигурацию провайдера в opencodex." },
+    en: { label: "Not found", description: "The requested route, model, account, or upstream resource was not found. Verify the model name and CodexCommander provider configuration." },
+    ko: { label: "찾을 수 없음", description: "요청한 경로, 모델, 계정 또는 업스트림 리소스를 찾을 수 없습니다. 모델 이름과 CodexCommander 제공자 설정을 확인해야 합니다." },
+    zh: { label: "未找到", description: "找不到请求的路由、模型、账号或上游资源。请确认模型名称和 CodexCommander 提供商配置。" },
+    de: { label: "Nicht gefunden", description: "Die angeforderte Route, das Modell, das Konto oder die Upstream-Ressource wurde nicht gefunden. Prüfe Modellname und CodexCommander-Anbieterkonfiguration." },
+    ru: { label: "Не найдено", description: "Запрошенный маршрут, модель, аккаунт или вышестоящий ресурс не найден. Проверьте имя модели и конфигурацию провайдера в CodexCommander." },
 
-    ja: { label: "見つかりません", description: "要求されたルート、モデル、アカウント、上流リソースが見つかりませんでした。モデル名と opencodex プロバイダー設定を確認してください。" },
+    ja: { label: "見つかりません", description: "要求されたルート、モデル、アカウント、上流リソースが見つかりませんでした。モデル名と CodexCommander プロバイダー設定を確認してください。" },
   },
   408: {
     en: { label: "Request timeout", description: "The request took too long before the proxy or upstream provider could complete it. Retry with a smaller request or a different provider." },
@@ -86,13 +86,13 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "内容の検証失敗", description: "プロバイダーはリクエスト形式を受け付けましたが内容を拒否しました。モデルオプション、ツール定義、メッセージロール、未サポートのフィールドを確認してください。" },
   },
   424: {
-    en: { label: "Provider dependency failed", description: "A required upstream dependency failed while opencodex was routing the request. Retry later or switch to another configured provider." },
-    ko: { label: "제공자 의존성 실패", description: "opencodex가 요청을 라우팅하는 동안 필요한 업스트림 의존성이 실패했습니다. 나중에 재시도하거나 다른 설정된 제공자로 전환해야 합니다." },
-    zh: { label: "提供商依赖失败", description: "opencodex 路由请求时，必需的上游依赖失败。请稍后重试，或切换到另一个已配置的提供商。" },
-    de: { label: "Anbieter-Abhängigkeit fehlgeschlagen", description: "Eine erforderliche Upstream-Abhängigkeit ist fehlgeschlagen, während opencodex die Anfrage geroutet hat. Später erneut versuchen oder zu einem anderen Anbieter wechseln." },
-    ru: { label: "Сбой зависимости провайдера", description: "Необходимая вышестоящая зависимость дала сбой, пока opencodex маршрутизировал запрос. Повторите попытку позже или переключитесь на другого настроенного провайдера." },
+    en: { label: "Provider dependency failed", description: "A required upstream dependency failed while CodexCommander was routing the request. Retry later or switch to another configured provider." },
+    ko: { label: "제공자 의존성 실패", description: "CodexCommander가 요청을 라우팅하는 동안 필요한 업스트림 의존성이 실패했습니다. 나중에 재시도하거나 다른 설정된 제공자로 전환해야 합니다." },
+    zh: { label: "提供商依赖失败", description: "CodexCommander 路由请求时，必需的上游依赖失败。请稍后重试，或切换到另一个已配置的提供商。" },
+    de: { label: "Anbieter-Abhängigkeit fehlgeschlagen", description: "Eine erforderliche Upstream-Abhängigkeit ist fehlgeschlagen, während CodexCommander die Anfrage geroutet hat. Später erneut versuchen oder zu einem anderen Anbieter wechseln." },
+    ru: { label: "Сбой зависимости провайдера", description: "Необходимая вышестоящая зависимость дала сбой, пока CodexCommander маршрутизировал запрос. Повторите попытку позже или переключитесь на другого настроенного провайдера." },
 
-    ja: { label: "プロバイダー依存の失敗", description: "opencodex がリクエストをルーティング中に必要な上流依存が失敗しました。後で再試行するか、別の設定済みプロバイダーに切り替えてください。" },
+    ja: { label: "プロバイダー依存の失敗", description: "CodexCommander がリクエストをルーティング中に必要な上流依存が失敗しました。後で再試行するか、別の設定済みプロバイダーに切り替えてください。" },
   },
   429: {
     en: { label: "Rate limited", description: "The upstream provider rate or quota limit has been reached. Wait for the quota window to reset or switch account/provider." },
@@ -104,22 +104,22 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "レート制限", description: "上流プロバイダーのレートまたはクォータ制限に達しました。クォータウィンドウがリセットされるまで待つか、アカウント/プロバイダーを切り替えてください。" },
   },
   499: {
-    en: { label: "Client closed request", description: "The client disconnected or canceled the request before opencodex finished routing it. Retry if the cancellation was accidental." },
-    ko: { label: "클라이언트 취소", description: "opencodex가 라우팅을 끝내기 전에 클라이언트 연결이 끊기거나 요청이 취소되었습니다. 의도한 취소가 아니면 다시 시도해야 합니다." },
-    zh: { label: "客户端已取消", description: "opencodex 完成路由前，客户端已断开连接或取消请求。如果不是有意取消，请重试。" },
-    de: { label: "Client hat Anfrage geschlossen", description: "Der Client hat die Verbindung getrennt oder die Anfrage abgebrochen, bevor opencodex das Routing abgeschlossen hat. Bei versehentlichem Abbruch erneut versuchen." },
-    ru: { label: "Запрос закрыт клиентом", description: "Клиент отключился или отменил запрос до того, как opencodex завершил его маршрутизацию. Если отмена была случайной, повторите попытку." },
+    en: { label: "Client closed request", description: "The client disconnected or canceled the request before CodexCommander finished routing it. Retry if the cancellation was accidental." },
+    ko: { label: "클라이언트 취소", description: "CodexCommander가 라우팅을 끝내기 전에 클라이언트 연결이 끊기거나 요청이 취소되었습니다. 의도한 취소가 아니면 다시 시도해야 합니다." },
+    zh: { label: "客户端已取消", description: "CodexCommander 完成路由前，客户端已断开连接或取消请求。如果不是有意取消，请重试。" },
+    de: { label: "Client hat Anfrage geschlossen", description: "Der Client hat die Verbindung getrennt oder die Anfrage abgebrochen, bevor CodexCommander das Routing abgeschlossen hat. Bei versehentlichem Abbruch erneut versuchen." },
+    ru: { label: "Запрос закрыт клиентом", description: "Клиент отключился или отменил запрос до того, как CodexCommander завершил его маршрутизацию. Если отмена была случайной, повторите попытку." },
 
-    ja: { label: "クライアントがリクエストをクローズ", description: "opencodex がルーティングを終える前にクライアントが切断またはキャンセルしました。意図しないキャンセルなら再試行してください。" },
+    ja: { label: "クライアントがリクエストをクローズ", description: "CodexCommander がルーティングを終える前にクライアントが切断またはキャンセルしました。意図しないキャンセルなら再試行してください。" },
   },
   500: {
-    en: { label: "Proxy error", description: "opencodex hit an internal error while handling the request. Retry once, then check proxy logs if it repeats." },
-    ko: { label: "프록시 오류", description: "opencodex가 요청을 처리하는 동안 내부 오류가 발생했습니다. 한 번 재시도하고 반복되면 프록시 로그를 확인해야 합니다." },
-    zh: { label: "代理错误", description: "opencodex 处理请求时发生内部错误。请先重试一次；如果重复出现，请检查代理日志。" },
-    de: { label: "Proxy-Fehler", description: "opencodex ist bei der Anfragebearbeitung auf einen internen Fehler gestoßen. Einmal erneut versuchen, bei Wiederholung Proxy-Logs prüfen." },
-    ru: { label: "Ошибка прокси", description: "В opencodex произошла внутренняя ошибка при обработке запроса. Повторите попытку один раз; если ошибка повторяется, проверьте логи прокси." },
+    en: { label: "Proxy error", description: "CodexCommander hit an internal error while handling the request. Retry once, then check proxy logs if it repeats." },
+    ko: { label: "프록시 오류", description: "CodexCommander가 요청을 처리하는 동안 내부 오류가 발생했습니다. 한 번 재시도하고 반복되면 프록시 로그를 확인해야 합니다." },
+    zh: { label: "代理错误", description: "CodexCommander 处理请求时发生内部错误。请先重试一次；如果重复出现，请检查代理日志。" },
+    de: { label: "Proxy-Fehler", description: "CodexCommander ist bei der Anfragebearbeitung auf einen internen Fehler gestoßen. Einmal erneut versuchen, bei Wiederholung Proxy-Logs prüfen." },
+    ru: { label: "Ошибка прокси", description: "В CodexCommander произошла внутренняя ошибка при обработке запроса. Повторите попытку один раз; если ошибка повторяется, проверьте логи прокси." },
 
-    ja: { label: "プロキシエラー", description: "opencodex がリクエスト処理中に内部エラーに遭遇しました。1 回再試行し、繰り返す場合はプロキシログを確認してください。" },
+    ja: { label: "プロキシエラー", description: "CodexCommander がリクエスト処理中に内部エラーに遭遇しました。1 回再試行し、繰り返す場合はプロキシログを確認してください。" },
   },
   502: {
     en: { label: "Bad upstream response", description: "The upstream provider returned an invalid or failed response through the proxy. Retry or route the request to another provider." },
@@ -170,13 +170,13 @@ const GENERIC_STATUS: { client: LocalizedInfo; server: LocalizedInfo } = {
     ja: { label: "リクエストエラー", description: "プロキシまたは上流プロバイダーがリクエストを拒否しました。リクエスト形式、認証情報、モデル名、プロバイダー設定を確認してください。" },
   },
   server: {
-    en: { label: "Server or upstream error", description: "opencodex or an upstream provider failed while processing the request. Retry later or route the request to another provider." },
-    ko: { label: "서버 또는 업스트림 오류", description: "opencodex 또는 업스트림 제공자가 요청 처리 중 실패했습니다. 나중에 재시도하거나 다른 제공자로 라우팅해야 합니다." },
-    zh: { label: "服务器或上游错误", description: "opencodex 或上游提供商处理请求时失败。请稍后重试，或将请求路由到其他提供商。" },
-    de: { label: "Server- oder Upstream-Fehler", description: "opencodex oder ein Upstream-Anbieter ist bei der Anfragebearbeitung fehlgeschlagen. Später erneut versuchen oder zu einem anderen Anbieter routen." },
-    ru: { label: "Ошибка сервера или провайдера", description: "opencodex или вышестоящий провайдер завершил обработку запроса с ошибкой. Повторите попытку позже или направьте запрос другому провайдеру." },
+    en: { label: "Server or upstream error", description: "CodexCommander or an upstream provider failed while processing the request. Retry later or route the request to another provider." },
+    ko: { label: "서버 또는 업스트림 오류", description: "CodexCommander 또는 업스트림 제공자가 요청 처리 중 실패했습니다. 나중에 재시도하거나 다른 제공자로 라우팅해야 합니다." },
+    zh: { label: "服务器或上游错误", description: "CodexCommander 或上游提供商处理请求时失败。请稍后重试，或将请求路由到其他提供商。" },
+    de: { label: "Server- oder Upstream-Fehler", description: "CodexCommander oder ein Upstream-Anbieter ist bei der Anfragebearbeitung fehlgeschlagen. Später erneut versuchen oder zu einem anderen Anbieter routen." },
+    ru: { label: "Ошибка сервера или провайдера", description: "CodexCommander или вышестоящий провайдер завершил обработку запроса с ошибкой. Повторите попытку позже или направьте запрос другому провайдеру." },
 
-    ja: { label: "サーバーまたは上流エラー", description: "opencodex または上流プロバイダーがリクエスト処理中に失敗しました。後で再試行するか、リクエストを別のプロバイダーにルーティングしてください。" },
+    ja: { label: "サーバーまたは上流エラー", description: "CodexCommander または上流プロバイダーがリクエスト処理中に失敗しました。後で再試行するか、リクエストを別のプロバイダーにルーティングしてください。" },
   },
 };
 

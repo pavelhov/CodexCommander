@@ -18,7 +18,7 @@ import {
   tapAnthropicSseForLog,
 } from "../src/server/claude-messages";
 import { estimateTokens } from "../src/lib/token-estimate";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { SERVER_BUDGET_MS } from "./helpers/test-budget";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
@@ -42,20 +42,20 @@ let isolatedCodexHome: IsolatedCodexHome | null = null;
 const originalFetch = globalThis.fetch;
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-claude-endpoint-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-claude-endpoint-"));
-  process.env.OPENCODEX_HOME = testDir;
-  previousDesktopConfigDir = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
-  process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = join(testDir, "claude-desktop");
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-claude-endpoint-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-claude-endpoint-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
+  previousDesktopConfigDir = process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR;
+  process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR = join(testDir, "claude-desktop");
   globalThis.fetch = originalFetch;
 });
 
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  if (previousDesktopConfigDir === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
-  else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previousDesktopConfigDir;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
+  if (previousDesktopConfigDir === undefined) delete process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR;
+  else process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR = previousDesktopConfigDir;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   globalThis.fetch = originalFetch;
@@ -88,15 +88,16 @@ function mockChatUpstreamCapturing() {
   return { server, captured };
 }
 
-function mockConfig(baseUrl: string, claudeCode?: OcxConfig["claudeCode"]): OcxConfig {
+function mockConfig(baseUrl: string, claudeCode?: CodexCommanderConfig["claudeCode"]): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "mock",
     providers: {
       mock: { adapter: "openai-chat", baseUrl, apiKey: "k", allowPrivateNetwork: true },
     },
     ...(claudeCode ? { claudeCode } : {}),
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 test("POST /v1/messages?beta=true streams an Anthropic-shaped turn end to end", async () => {
@@ -256,8 +257,8 @@ test("native generated-agent passthrough preserves legacy thinking", async () =>
         model: "claude-haiku-4-5",
         max_tokens: 16,
         system: [
-          { type: "text", text: "<!-- ocx-route: claude-haiku-4-5 -->" },
-          { type: "text", text: "<!-- ocx-effort: max -->" },
+          { type: "text", text: "<!-- ccx-route: claude-haiku-4-5 -->" },
+          { type: "text", text: "<!-- ccx-effort: max -->" },
         ],
         thinking: { type: "enabled", budget_tokens: 31999 },
         messages: [{ role: "user", content: "hi" }],
@@ -397,7 +398,7 @@ test("native Anthropic passthrough returns 502 when the upstream connection is r
   }
 });
 
-// --- Body-occupancy guard (devlog 260716_passthrough_followups/010): idle + size, never total-wall-clock ---
+// --- Body-occupancy guard (implementation contract): idle + size, never total-wall-clock ---
 
 const sseEncoder = new TextEncoder();
 
@@ -572,7 +573,7 @@ test("A5: non-stream bounded read classifies stall and overflow, passes clean bo
 });
 
 test("A6: body-guard config normalization — 0 disables, negatives fall back, sub-second clamps to 1s", () => {
-  const guardFor = (claudeCode: OcxConfig["claudeCode"]) =>
+  const guardFor = (claudeCode: CodexCommanderConfig["claudeCode"]) =>
     resolvePassthroughBodyGuard(mockConfig("http://127.0.0.1:1/v1", claudeCode));
   expect(guardFor({ bodyStallSec: 0, bodyMaxBytes: 0 })).toMatchObject({ stallMs: 0, maxBytes: 0 });
   expect(guardFor({ bodyStallSec: -5, bodyMaxBytes: -1 })).toMatchObject({ stallMs: 90_000, maxBytes: 64 * 1024 * 1024 });
@@ -656,11 +657,12 @@ test("native openai-responses route carries prompt_cache_key + synthesized sessi
   });
   saveConfig({
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "native",
     providers: {
       native: { adapter: "openai-responses", baseUrl: `${upstream.url.toString().replace(/\/$/, "")}/v1`, authMode: "forward", allowPrivateNetwork: true },
     },
-  } as OcxConfig);
+  } as CodexCommanderConfig);
   const server = startServer(0);
   try {
     const response = await fetch(new URL("/v1/messages", server.url), {
@@ -679,7 +681,7 @@ test("native openai-responses route carries prompt_cache_key + synthesized sessi
     await response.text();
     // Native ChatGPT route: sampling params + user are stripped, but the cache-affinity
     // pair survives — prompt_cache_key in the body and a synthesized session_id header
-    // (devlog 090: without the header the backend reported cached_tokens: 0 every turn).
+    // (implementation contract: without the header the backend reported cached_tokens: 0 every turn).
     expect(capture.body?.prompt_cache_key).toMatch(/^[0-9a-f]{32}$/);
     expect(capture.body?.user).toBeUndefined();
     expect(capture.body?.max_output_tokens).toBeUndefined();
@@ -774,7 +776,7 @@ test("Claude replay owns optional main enrichment while routed work survives dra
     await server.stop(true);
     saveConfig({
       port: 0,
-      openaiProviderTierVersion: 2,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "openai",
       providers: {
         openai: {
@@ -787,7 +789,7 @@ test("Claude replay owns optional main enrichment while routed work survives dra
       codexAccounts: [],
       activeCodexAccountId: "__main__",
       autoSwitchThreshold: 0,
-    } as OcxConfig);
+    } as CodexCommanderConfig);
     server = startServer(0);
     await waitForNativeMainStartupGate();
     recoveryHomeId = nativeMainStartupGateSnapshot().homeId ?? "claude-main-recovery-home";
@@ -814,7 +816,7 @@ test("routed Claude requests give OpenAI sidecars main auth without leaking it t
   const mainAccessToken = "main-chatgpt-access";
   const mainAccountId = "main-chatgpt-account";
   const imageBytes = "aGVsbG8taW1hZ2UtYnl0ZXM=";
-  const visionCaption = "A red OPENCODEX logo on a white background.";
+  const visionCaption = "A red CODEXCOMMANDER logo on a white background.";
   const sidecarCalls: Array<{ headers: Headers; body: Record<string, any>; kind: "vision" | "web-search" }> = [];
   const routedCalls: Array<{ authorization: string | null; body: Record<string, any> }> = [];
 
@@ -826,7 +828,7 @@ test("routed Claude requests give OpenAI sidecars main auth without leaking it t
         ? "web-search"
         : "vision";
       sidecarCalls.push({ headers: new Headers(req.headers), body, kind });
-      const text = kind === "vision" ? visionCaption : "OpenCodex search results are available.";
+      const text = kind === "vision" ? visionCaption : "CodexCommander search results are available.";
       return new Response([
         `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: text })}\n\n`,
         `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { status: "completed" } })}\n\n`,
@@ -843,7 +845,7 @@ test("routed Claude requests give OpenAI sidecars main auth without leaking it t
         && body.tools.some((tool: Record<string, any>) => tool.function?.name === "web_search");
       const frames = choosesWebSearch
         ? [
-            { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call_search", function: { name: "web_search", arguments: '{"query":"latest opencodex"}' } }] } }] },
+            { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call_search", function: { name: "web_search", arguments: '{"query":"latest codexcommander"}' } }] } }] },
             { choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] },
           ]
         : [
@@ -859,8 +861,8 @@ test("routed Claude requests give OpenAI sidecars main auth without leaking it t
 
   const config = {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "routed",
-    openaiProviderTierVersion: 2,
     providers: {
       openai: {
         adapter: "openai-responses",
@@ -878,7 +880,7 @@ test("routed Claude requests give OpenAI sidecars main auth without leaking it t
     },
     webSearchSidecar: { backend: "openai" },
     visionSidecar: { backend: "openai" },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const url = new URL(requestUrl);
@@ -901,7 +903,7 @@ test("routed Claude requests give OpenAI sidecars main auth without leaking it t
     messages: [{
       role: "user",
       content: [
-        { type: "text", text: "Search for OpenCodex and inspect this logo." },
+        { type: "text", text: "Search for CodexCommander and inspect this logo." },
         { type: "image", source: { type: "base64", media_type: "image/png", data: imageBytes } },
       ],
     }],
@@ -1195,7 +1197,7 @@ async function postMessages(serverUrl: string, body: Record<string, unknown>): P
   });
 }
 
-test("effort safety valve: routes with a definitive no-effort ladder get reasoning stripped (devlog 136 B6)", async () => {
+test("effort safety valve: routes with a definitive no-effort ladder get reasoning stripped (implementation contract B6)", async () => {
   const { server: upstream, captured } = mockChatUpstreamCapturing();
   const base = `${upstream.url.toString().replace(/\/$/, "")}/v1`;
   const config = mockConfig(base);
@@ -1232,8 +1234,8 @@ test("generated agent effort directive restores exact xhigh and max after Claude
         max_tokens: 32000,
         stream: true,
         system: [
-          { type: "text", text: "<!-- ocx-route: claude-ocx-mock--test-model -->" },
-          { type: "text", text: `<!-- ocx-effort: ${effort} -->` },
+          { type: "text", text: "<!-- ccx-route: claude-ccx2-mock--test-model -->" },
+          { type: "text", text: `<!-- ccx-effort: ${effort} -->` },
         ],
         thinking: { type: "enabled", budget_tokens: 31999 },
         messages: [{ role: "user", content: "hi" }],
@@ -1274,7 +1276,7 @@ test("unknown-ladder routes keep the requested effort (no false stripping)", asy
   }
 });
 
-test("defensive [1m] strip: a leaked context-variant marker still routes to the bare model (devlog 138)", async () => {
+test("defensive [1m] strip: a leaked context-variant marker still routes to the bare model (implementation contract)", async () => {
   const { server: upstream, captured } = mockChatUpstreamCapturing();
   saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
   const server = startServer(0);
@@ -1295,7 +1297,7 @@ test("defensive [1m] strip: a leaked context-variant marker still routes to the 
   }
 });
 
-test("count_tokens is CJK-aware: Korean body counts more tokens than equal-length English (devlog 260712 B3)", async () => {
+test("count_tokens is CJK-aware: Korean body counts more tokens than equal-length English (implementation contract B3)", async () => {
   saveConfig(mockConfig("http://127.0.0.1:1/v1"));
   const server = startServer(0);
   try {

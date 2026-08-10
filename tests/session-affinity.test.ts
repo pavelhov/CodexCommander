@@ -2,23 +2,32 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { resolveCodexAccountForThread, clearThreadAccountMap, formatCodexProviderForLog } from "../src/codex/routing";
-import { CODEX_ACCOUNT_LOG_LABEL_RE, fallbackCodexAccountLogLabel } from "../src/codex/account-label";
 import { updateAccountQuota, clearAccountQuota } from "../src/codex/auth-api";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-session-affinity-test");
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 let previousCodexHome: string | undefined;
 
-function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
+function makeConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
   return {
-    providers: {},
+    port: 0,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "pool",
+      },
+    },
+    defaultProvider: "openai",
+    multiAgentGuidanceEnabled: true,
     codexAccounts: [],
     activeCodexAccountId: undefined,
     autoSwitchThreshold: 80,
     ...overrides,
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 function saveTestCredential(id: string): void {
@@ -30,20 +39,25 @@ function saveTestCredential(id: string): void {
   });
 }
 
-function makeActivePoolConfig(active: string, ids: string[] = [active]): OcxConfig {
+function makeActivePoolConfig(active: string, ids: string[] = [active]): CodexCommanderConfig {
   for (const id of ids) saveTestCredential(id);
   return makeConfig({
     activeCodexAccountId: active,
-    codexAccounts: ids.map(id => ({ id, email: `${id}@example.test`, isMain: false })),
+    codexAccounts: ids.map((id, index) => ({
+      id,
+      email: `${id}@example.test`,
+      logLabel: `p${(index + 1).toString(16).padStart(6, "0")}`,
+      isMain: false,
+    })),
   });
 }
 
 describe("resolveCodexAccountForThread", () => {
   beforeEach(() => {
-    previousOpencodexHome = process.env.OPENCODEX_HOME;
+    previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     // Isolate the main-account credential source: TEST_DIR has no auth.json, so the
     // main account is deterministically absent and cannot become a rotation target.
     previousCodexHome = process.env.CODEX_HOME;
@@ -55,8 +69,8 @@ describe("resolveCodexAccountForThread", () => {
   afterEach(() => {
     clearAccountQuota();
     clearThreadAccountMap();
-    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
@@ -106,8 +120,8 @@ describe("resolveCodexAccountForThread", () => {
       activeCodexAccountId: "a",
       autoSwitchThreshold: 80,
       codexAccounts: [
-        { id: "a", email: "a@test", isMain: false },
-        { id: "b", email: "b@test", isMain: false },
+        { id: "a", email: "a@test", logLabel: "p00000a", isMain: false },
+        { id: "b", email: "b@test", logLabel: "p00000b", isMain: false },
       ],
     });
     saveTestCredential("a");
@@ -123,8 +137,8 @@ describe("resolveCodexAccountForThread", () => {
       activeCodexAccountId: "a",
       autoSwitchThreshold: 80,
       codexAccounts: [
-        { id: "a", email: "a@test", isMain: false },
-        { id: "b", email: "b@test", isMain: false },
+        { id: "a", email: "a@test", logLabel: "p00000a", isMain: false },
+        { id: "b", email: "b@test", logLabel: "p00000b", isMain: false },
       ],
     });
     saveTestCredential("a");
@@ -140,8 +154,8 @@ describe("resolveCodexAccountForThread", () => {
       activeCodexAccountId: "a",
       autoSwitchThreshold: 0,
       codexAccounts: [
-        { id: "a", email: "a@test", isMain: false },
-        { id: "b", email: "b@test", isMain: false },
+        { id: "a", email: "a@test", logLabel: "p00000a", isMain: false },
+        { id: "b", email: "b@test", logLabel: "p00000b", isMain: false },
       ],
     });
     saveTestCredential("a");
@@ -157,7 +171,7 @@ describe("formatCodexProviderForLog", () => {
   test("keeps base provider for main passthrough", () => {
     const config = makeConfig({
       codexAccounts: [
-        { id: "pool-a", email: "pool-a@example.test", isMain: false },
+        { id: "pool-a", email: "pool-a@example.test", logLabel: "pabc123", isMain: false },
       ],
     });
     expect(formatCodexProviderForLog("chatgpt", null, config)).toBe("chatgpt");
@@ -166,7 +180,7 @@ describe("formatCodexProviderForLog", () => {
   test("labels pool accounts by stable non-PII labels", () => {
     const config = makeConfig({
       codexAccounts: [
-        { id: "main", email: "main@example.test", isMain: true },
+        { id: "main", email: "main@example.test", logLabel: "p000001", isMain: true },
         { id: "pool-a", email: "pool-a@example.test", isMain: false, logLabel: "pabc123" },
         { id: "pool-b", email: "pool-b@example.test", isMain: false, logLabel: "pdef456" },
       ],
@@ -190,23 +204,10 @@ describe("formatCodexProviderForLog", () => {
     expect(formatCodexProviderForLog("chatgpt", "pool-a", reordered)).toBe("chatgpt-pabc123");
   });
 
-  test("accounts without stored log labels use stable pseudonymous fallback labels", () => {
-    const config = makeConfig({
-      codexAccounts: [
-        { id: "raw-local-account-id", email: "raw@example.test", isMain: false },
-      ],
-    });
-    const label = formatCodexProviderForLog("chatgpt", "raw-local-account-id", config);
-
-    expect(label).toBe(`chatgpt-${fallbackCodexAccountLogLabel("raw-local-account-id")}`);
-    expect(label.replace("chatgpt-", "")).toMatch(CODEX_ACCOUNT_LOG_LABEL_RE);
-    expect(label).not.toContain("raw-local-account-id");
-  });
-
   test("keeps base provider for unknown account ids", () => {
     const config = makeConfig({
       codexAccounts: [
-        { id: "pool-a", email: "pool-a@example.test", isMain: false },
+        { id: "pool-a", email: "pool-a@example.test", logLabel: "pabc123", isMain: false },
       ],
     });
     expect(formatCodexProviderForLog("chatgpt", "missing", config)).toBe("chatgpt");

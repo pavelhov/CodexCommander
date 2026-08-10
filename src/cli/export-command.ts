@@ -1,13 +1,13 @@
 /**
- * `ocx export --client <id>` — print a client config for the live proxy.
+ * `ccx export --client <id>` — print a client config for the live proxy.
  *
  * Six clients, four formats: opencode and Pi are JSON, Hermes and Gajae YAML,
  * OpenClaw JSON5, Kimi TOML.
  *
- * Two consumers, one payload (devlog 260731_client_config_export/020):
+ * Two consumers, one payload (implementation contract):
  *
  * - **Agent** (`--json`): stdout is exactly the client config as JSON and nothing else,
- *   so `ocx export --client pi --json > models.json` is safe to pipe. This is JSON for
+ *   so `ccx export --client pi --json > models.json` is safe to pipe. This is JSON for
  *   every client, including the YAML/JSON5/TOML ones — the flag is about machine
  *   readability, not the client's native format. Every diagnostic — including the
  *   `--out` write note — goes to stderr.
@@ -36,7 +36,7 @@ import {
   type ExportModel,
 } from "../clients/config-export";
 import { opencodeCatalogFromProxyRows, type OpencodeProxyModelRow } from "./opencode";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import {
   CliUsageError,
   RuntimeApiError,
@@ -51,11 +51,11 @@ import {
 } from "./runtime-api";
 
 const USAGE = `Usage:
-  ocx export --client <${EXPORT_CLIENT_IDS.join("|")}> [--json] [--out <path>] [--force]`;
+  ccx export --client <${EXPORT_CLIENT_IDS.join("|")}> [--json] [--out <path>] [--force]`;
 
 export interface ExportCommandDeps extends RuntimeApiDeps {
   /** Live config seam; tests inject a fixture instead of reading the user's config. */
-  configImpl?: () => OcxConfig;
+  configImpl?: () => CodexCommanderConfig;
 }
 
 /**
@@ -81,7 +81,7 @@ function hasContextLimit(model: ExportModel): boolean {
  */
 export function exportModelsFromProxyRows(
   rows: readonly ExportProxyModelRow[],
-  config: OcxConfig,
+  config: CodexCommanderConfig,
 ): ExportModel[] {
   const modalities = new Map<string, string[]>();
   for (const row of rows) {
@@ -109,7 +109,7 @@ export function exportModelsFromProxyRows(
  * `http://host:port/v1` for the proxy that is actually listening.
  *
  * `runtimeBaseUrl` is the identity-checked `findLiveProxy` probe the launcher uses, and it
- * already throws the "Start it with: ocx start" error when nothing answers — so a config
+ * already throws the "Start it with: ccx start" error when nothing answers — so a config
  * with an empty models block can never be emitted.
  *
  * Resolved ONCE and handed back to `runtimeRequest` as `baseUrl`, so the catalog and the

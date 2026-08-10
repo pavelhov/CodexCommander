@@ -81,11 +81,11 @@ describe("Responses passthrough item-id repair", () => {
     const messageDone = events[5].item as Record<string, unknown>;
     const completed = events[6].response as { output: Record<string, unknown>[] };
 
-    expect(reasoningAdded.id).toMatch(/^rs_ocx_[0-9a-f]+_0$/);
+    expect(reasoningAdded.id).toMatch(/^rs_ccx_[0-9a-f]+_0$/);
     expect(reasoningDelta.item_id).toBe(reasoningAdded.id);
     expect(reasoningDone.id).toBe(reasoningAdded.id);
 
-    expect(messageAdded.id).toMatch(/^msg_ocx_[0-9a-f]+_1$/);
+    expect(messageAdded.id).toMatch(/^msg_ccx_[0-9a-f]+_1$/);
     expect(messageDelta.item_id).toBe(messageAdded.id);
     expect(messageDone.id).toBe(messageAdded.id);
 
@@ -135,7 +135,7 @@ describe("Responses passthrough item-id repair", () => {
     const functionDone = events[3].item as Record<string, unknown>;
     const completed = events[4].response as { output: Record<string, unknown>[] };
 
-    expect(reasoning.id).toMatch(/^rs_ocx_[0-9a-f]+_0$/);
+    expect(reasoning.id).toMatch(/^rs_ccx_[0-9a-f]+_0$/);
     expect(events[1].item_id).toBe(reasoning.id);
     expect(functionDelta.item_id).toBe("fc_1");
     expect(functionDelta.call_id).toBe("call_1");
@@ -160,8 +160,8 @@ describe("Responses passthrough item-id repair", () => {
     const reasoningId = (events[0].item as Record<string, unknown>).id;
     const messageId = (events[1].item as Record<string, unknown>).id;
 
-    expect(reasoningId).toMatch(/^rs_ocx_[0-9a-f]+_0$/);
-    expect(messageId).toMatch(/^msg_ocx_[0-9a-f]+_0$/);
+    expect(reasoningId).toMatch(/^rs_ccx_[0-9a-f]+_0$/);
+    expect(messageId).toMatch(/^msg_ccx_[0-9a-f]+_0$/);
     expect(events[2].item_id).toBe(reasoningId);
     expect(events[3].item_id).toBe(messageId);
   });

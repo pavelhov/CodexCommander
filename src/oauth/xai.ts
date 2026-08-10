@@ -1,7 +1,7 @@
 /** xAI OAuth flow (Grok account login). Ported from jawcode oauth/xai.ts. */
 import { OAuthCallbackFlow, type OAuthCallbackFlowOptions } from "./callback-server";
 import { generatePKCE } from "./pkce";
-import type { LocalTokenImportMode, OAuthController, OAuthCredentials } from "./types";
+import type { OAuthController, OAuthCredentials } from "./types";
 
 const XAI_OAUTH_ISSUER = "https://auth.x.ai";
 export const XAI_OAUTH_DISCOVERY_URL = `${XAI_OAUTH_ISSUER}/.well-known/openid-configuration`;
@@ -190,32 +190,7 @@ export class XaiOAuthFlow extends OAuthCallbackFlow {
   }
 }
 
-export async function loginXai(
-  ctrl: OAuthController,
-  opts?: { importLocal?: LocalTokenImportMode },
-): Promise<OAuthCredentials> {
-  const importLocal = opts?.importLocal ?? "off";
-  if (importLocal !== "off") {
-    const { detectGrokCliToken } = await import("./local-token-detect");
-    const local = detectGrokCliToken();
-    if (local && local.expires > Date.now() + 60_000) {
-      ctrl.onProgress?.("Found a fresh Grok CLI token, linking read-only");
-      return local;
-    }
-    if (importLocal === "only") {
-      throw new Error(
-        local
-          ? "Grok CLI token is stale. Run `grok` once to refresh its login, then retry."
-          : "No Grok CLI token found. Run `grok login`, then retry.",
-      );
-    }
-    if (local) {
-      ctrl.onProgress?.(
-        "Grok CLI token is stale, so it cannot be linked safely; continuing with an independent xAI browser login",
-      );
-    }
-  }
-
+export async function loginXai(ctrl: OAuthController): Promise<OAuthCredentials> {
   return new XaiOAuthFlow(ctrl).login();
 }
 

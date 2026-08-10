@@ -13,14 +13,14 @@ import {
   type OpencodeGeneratedConfig,
   type PiGeneratedConfig,
 } from "../src/clients/config-export";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 /**
- * A key that looks exactly like a real one. Every assertion about `ocx_` absence is
+ * A key that looks exactly like a real one. Every assertion about `ccx_` absence is
  * worthless unless the running config actually holds a serializable secret (030 §Security).
  */
-const REAL_LOOKING_KEY = "ocx_live_9f3c7a2b41d84e6fa05c8e17b3d92764";
+const REAL_LOOKING_KEY = "ccx_live_9f3c7a2b41d84e6fa05c8e17b3d92764";
 
 interface ClientConfigEnvelope {
   client: string;
@@ -49,7 +49,7 @@ interface ModelRow {
  * test ever reaches the network. `b/no-context` carries no context window, which is what
  * makes `modelsWithoutLimits` non-zero and therefore actually assertable.
  */
-function baseConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
+function baseConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
   return {
     port: 10100,
     hostname: "127.0.0.1",
@@ -73,10 +73,10 @@ function baseConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
       },
     },
     ...overrides,
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
-async function clientConfigApi(config: OcxConfig, query: string): Promise<Response> {
+async function clientConfigApi(config: CodexCommanderConfig, query: string): Promise<Response> {
   const url = new URL(`http://127.0.0.1:10100/api/client-config${query}`);
   const response = await handleManagementAPI(
     new Request(url, { headers: { Host: url.host } }),
@@ -88,7 +88,7 @@ async function clientConfigApi(config: OcxConfig, query: string): Promise<Respon
   return response!;
 }
 
-async function modelRows(config: OcxConfig): Promise<ModelRow[]> {
+async function modelRows(config: CodexCommanderConfig): Promise<ModelRow[]> {
   const url = new URL("http://127.0.0.1:10100/api/models");
   const response = await handleManagementAPI(
     new Request(url, { headers: { Host: url.host } }),
@@ -125,7 +125,7 @@ describe("GET /api/client-config", () => {
     expect(body.exportHint).toBe(`export ${OPENCODE_API_KEY_ENV}=<your key>`);
 
     // Accept criterion 1: the route's `config` must equal what the shared builder produces
-    // for the same input, so the GUI download and `ocx export` can never disagree.
+    // for the same input, so the GUI download and `ccx export` can never disagree.
     const rows = await modelRows(config);
     const expected = buildClientConfig("opencode", {
       baseUrl: "http://127.0.0.1:10100/v1",
@@ -203,11 +203,11 @@ describe("GET /api/client-config", () => {
   test("no response body serializes a real key", async () => {
     const config = baseConfig();
     // Precondition: the secret really is present in the config this route reads.
-    expect(JSON.stringify(config)).toContain("ocx_");
+    expect(JSON.stringify(config)).toContain("ccx_");
 
     for (const client of ["opencode", "pi"]) {
       const raw = await (await clientConfigApi(config, `?client=${client}`)).text();
-      expect(raw).not.toContain("ocx_");
+      expect(raw).not.toContain("ccx_");
       expect(raw).not.toContain(REAL_LOOKING_KEY);
     }
   }, 15_000);

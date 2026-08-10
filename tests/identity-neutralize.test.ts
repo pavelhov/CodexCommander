@@ -13,16 +13,16 @@ import { createGoogleAdapter } from "../src/adapters/google";
 import { createAnthropicAdapter } from "../src/adapters/anthropic";
 import { createKiroAdapter } from "../src/adapters/kiro";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
-import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 
 const SYS = CODEX_GPT5_IDENTITY_LINE;
 
-function parsed(modelId: string, adapter: string, extra?: Partial<OcxParsedRequest>): OcxParsedRequest {
+function parsed(modelId: string, adapter: string, extra?: Partial<CodexCommanderParsedRequest>): CodexCommanderParsedRequest {
   return {
     modelId, stream: false, options: {},
     context: { systemPrompt: [SYS], messages: [{ role: "user", content: "hi" }] },
     ...extra,
-  } as unknown as OcxParsedRequest;
+  } as unknown as CodexCommanderParsedRequest;
 }
 
 describe("identity neutralization — central helper", () => {
@@ -36,9 +36,9 @@ describe("identity neutralization — central helper", () => {
     expect(neutralizeIdentity("You are Codex, an agent based on GPT-5.4.1.")).toBe(NEUTRAL_IDENTITY_LINE);
   });
 
-  test("never emits the opencodex proxy identity", () => {
+  test("never emits the codexcommander proxy identity", () => {
     const out = neutralizeIdentity(`${SYS}\n\nmore context`);
-    expect(out).not.toMatch(/opencodex proxy/i);
+    expect(out).not.toMatch(/codexcommander proxy/i);
     expect(out).not.toMatch(/served through/i);
     expect(out).not.toMatch(/running via/i);
   });
@@ -119,13 +119,13 @@ describe("identity neutralization — central helper", () => {
 
 describe("identity neutralization — adapters never leak proxy identity", () => {
   test("openai-chat: system message is neutralized, no proxy mention", async () => {
-    const provider = { adapter: "openai-chat", baseUrl: "https://api.example.invalid", apiKey: "key" } as unknown as OcxProviderConfig;
+    const provider = { adapter: "openai-chat", baseUrl: "https://api.example.invalid", apiKey: "key" } as unknown as CodexCommanderProviderConfig;
     const { body } = await createOpenAIChatAdapter(provider).buildRequest(parsed("some/routed-model", "openai-chat"));
     const messages = JSON.parse(body).messages as { role: string; content: string }[];
     const sys = messages.find(m => m.role === "system")!;
     expect(sys.content).toContain("powered by the some/routed-model");
     expect(sys.content).toContain("identify as some/routed-model");
-    expect(sys.content).not.toMatch(/opencodex proxy/i);
+    expect(sys.content).not.toMatch(/codexcommander proxy/i);
     expect(sys.content).not.toContain(SYS);
   });
 
@@ -135,7 +135,7 @@ describe("identity neutralization — adapters never leak proxy identity", () =>
       baseUrl: "https://api.example.invalid",
       apiKey: "key",
       modelSuffixBracketStrip: true,
-    } as unknown as OcxProviderConfig;
+    } as unknown as CodexCommanderProviderConfig;
     const { body } = await createOpenAIChatAdapter(provider).buildRequest(parsed("glm-5.2[1m]", "openai-chat"));
     const payload = JSON.parse(body) as { model: string; messages: Array<{ role: string; content: string }> };
     const sys = payload.messages.find(message => message.role === "system")!;
@@ -149,7 +149,7 @@ describe("identity neutralization — adapters never leak proxy identity", () =>
       adapter: "openai-chat",
       baseUrl: "https://api.example.invalid",
       apiKey: "key",
-    } as unknown as OcxProviderConfig;
+    } as unknown as CodexCommanderProviderConfig;
     const { body } = await createOpenAIChatAdapter(provider).buildRequest(parsed("k3[1m]", "openai-chat"));
     const payload = JSON.parse(body) as { model: string; messages: Array<{ role: string; content: string }> };
     const sys = payload.messages.find(message => message.role === "system")!;
@@ -162,7 +162,7 @@ describe("identity neutralization — adapters never leak proxy identity", () =>
       adapter: "openai-chat",
       baseUrl: "https://api.example.invalid",
       apiKey: "key",
-    } as unknown as OcxProviderConfig;
+    } as unknown as CodexCommanderProviderConfig;
     const { body } = await createOpenAIChatAdapter(provider).buildRequest(parsed("~x-ai/grok-latest", "openai-chat"));
     const payload = JSON.parse(body) as { model: string; messages: Array<{ role: string; content: string }> };
     const sys = payload.messages.find(message => message.role === "system")!;
@@ -175,7 +175,7 @@ describe("identity neutralization — adapters never leak proxy identity", () =>
     const { body } = await createGoogleAdapter(provider).buildRequest(parsed("gemini-3-pro", "google"));
     const sysText = JSON.parse(body).systemInstruction.parts.map((p: { text: string }) => p.text).join("");
     expect(sysText).toContain("identify as gemini-3-pro");
-    expect(sysText).not.toMatch(/opencodex proxy/i);
+    expect(sysText).not.toMatch(/codexcommander proxy/i);
     expect(sysText).not.toContain(SYS);
   });
 
@@ -185,7 +185,7 @@ describe("identity neutralization — adapters never leak proxy identity", () =>
       baseUrl: "https://api.anthropic.com",
       apiKey: "key",
       authMode: "key",
-    } as unknown as OcxProviderConfig;
+    } as unknown as CodexCommanderProviderConfig;
     const { body } = await createAnthropicAdapter(provider).buildRequest(parsed("claude-sonnet-5", "anthropic"));
     const payload = JSON.parse(body) as { system: Array<{ text: string }> };
     expect(payload.system.map(part => part.text).join("\n")).toContain("identify as claude-sonnet-5");
@@ -207,10 +207,10 @@ describe("identity neutralization — adapters never leak proxy identity", () =>
     });
 
     test("system prefix is neutralized, no proxy mention", async () => {
-      const provider = { adapter: "kiro", baseUrl: "https://runtime.us-east-1.kiro.dev", authMode: "oauth", apiKey: "tok-123" } as unknown as OcxProviderConfig;
+      const provider = { adapter: "kiro", baseUrl: "https://runtime.us-east-1.kiro.dev", authMode: "oauth", apiKey: "tok-123" } as unknown as CodexCommanderProviderConfig;
       const { body } = await createKiroAdapter(provider).buildRequest(parsed("claude-sonnet-4.5", "kiro"));
       const serialized = typeof body === "string" ? body : JSON.stringify(body);
-      expect(serialized).not.toMatch(/opencodex proxy/i);
+      expect(serialized).not.toMatch(/codexcommander proxy/i);
       expect(serialized).not.toContain(SYS);
       expect(serialized).toContain("identify as claude-sonnet-4.5");
     });

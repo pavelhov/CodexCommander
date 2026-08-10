@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { gatherRoutedModels as gatherRoutedModelsDirect } from "../src/codex/catalog";
 import { clearModelCache, markModelsFetchFailure, setCached } from "../src/codex/model-cache";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
 
 /** Discovery runs on the pinned transport; hand it back the stubbed global. */
@@ -18,7 +18,7 @@ afterEach(() => {
   warn = undefined;
 });
 
-function vertexProvider(name: string): OcxConfig {
+function vertexProvider(name: string): CodexCommanderConfig {
   return {
     providers: {
       [name]: {
@@ -35,7 +35,7 @@ function vertexProvider(name: string): OcxConfig {
 describe("Vertex catalog configuration", () => {
   test("defaultModel without models survives failed Vertex discovery", async () => {
     globalThis.fetch = (() => { throw new TypeError("offline"); }) as typeof fetch;
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       providers: {
         "vertex-default": {
           adapter: "google",
@@ -57,7 +57,7 @@ describe("Vertex catalog configuration", () => {
 
   test("defaultModel-only Vertex configuration survives authoritative empty discovery", async () => {
     globalThis.fetch = (() => Promise.resolve(Response.json({ data: [] }))) as typeof fetch;
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       providers: {
         "vertex-empty": {
           adapter: "google",
@@ -81,7 +81,7 @@ describe("Vertex catalog configuration", () => {
     globalThis.fetch = (() => { throw new Error("must not fetch"); }) as typeof fetch;
     const provider = "vertex-fresh-empty";
     setCached(provider, []);
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       providers: {
         [provider]: {
           adapter: "google",
@@ -106,7 +106,7 @@ describe("Vertex catalog configuration", () => {
     const provider = "vertex-stale-empty";
     setCached(provider, [], 0);
     markModelsFetchFailure(provider);
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       modelCacheTtlMs: 1,
       providers: {
         [provider]: {
@@ -129,7 +129,7 @@ describe("Vertex catalog configuration", () => {
 
   test("non-Vertex defaultModel without models is not seeded after discovery failure", async () => {
     globalThis.fetch = (() => { throw new TypeError("offline"); }) as typeof fetch;
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       providers: {
         "custom-openai": {
           adapter: "openai-chat",

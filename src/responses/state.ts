@@ -2,7 +2,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, opendirSync, readFileSync,
 import { dirname, join } from "node:path";
 import { atomicWriteFileAsync, getConfigDir, resolveWriteTarget } from "../config";
 import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/app-owned-memory";
-import type { OcxProviderContinuationState } from "../types";
+import type { CodexCommanderProviderContinuationState } from "../types";
 import {
   deleteResponseSpill,
   noteStubSwapForTest,
@@ -21,7 +21,7 @@ const SNAPSHOT_DEBOUNCE_MS = 2_000;
  * continuation chains) stores the full expanded input each turn — ~quadratic bytes per chain —
  * so a count cap alone cannot bound memory. Oldest-first eviction applies past this mark. */
 export const MAX_STORED_RESPONSE_BYTES = 64 * 1024 * 1024;
-/** Legacy snapshot selection only. Spill demotion is governed solely by the RAM cap above. */
+/** Disk-snapshot selection only. Spill demotion is governed solely by the RAM cap above. */
 const SNAPSHOT_ENTRY_MAX_BYTES = 2 * 1024 * 1024;
 const SNAPSHOT_TOTAL_MAX_BYTES = 24 * 1024 * 1024;
 /** Refuse-to-parse ceiling for an existing snapshot file (above the 24 MiB write
@@ -31,21 +31,21 @@ const SNAPSHOT_FILE_MAX_BYTES = 32 * 1024 * 1024;
 const STALE_TEMP_GRACE_MS = 15 * 60 * 1_000;
 const STALE_TEMP_MAX_ENTRIES = 4_096;
 const STALE_TEMP_MAX_CLEANUPS = 512;
-const RESPONSE_STATE_TEMP_NAME = /^responses-state\.json\.ocx\.(\d+)\.(\d+)\.tmp$/;
+const RESPONSE_STATE_TEMP_NAME = /^responses-state\.json\.ccx\.(\d+)\.(\d+)\.tmp$/;
 const MAX_SNAPSHOT_REWRITE_ATTEMPTS = 4;
 
 interface ResidentResponseState {
   kind: "resident";
   createdAt: number;
   items: unknown[];
-  providers?: OcxProviderContinuationState;
+  providers?: CodexCommanderProviderContinuationState;
   sizeBytes: number;
 }
 
 interface SpilledResponseState {
   kind: "spill";
   createdAt: number;
-  providers?: OcxProviderContinuationState;
+  providers?: CodexCommanderProviderContinuationState;
   spill: ResponseSpillRef;
   sizeBytes: number;
 }
@@ -383,12 +383,10 @@ function snapshotPath(): string {
   return join(getConfigDir(), "responses-state.json");
 }
 
-interface LegacySnapshotState {
+interface SnapshotState {
   createdAt?: unknown;
   items?: unknown;
-  providers?: OcxProviderContinuationState;
-  conversationId?: unknown;
-  cursorCheckpointUsable?: unknown;
+  providers?: CodexCommanderProviderContinuationState;
 }
 
 function isSpillRef(value: unknown): value is ResponseSpillRef {
@@ -403,7 +401,7 @@ function isSpillRef(value: unknown): value is ResponseSpillRef {
 
 function loadSnapshotEntry(id: string, value: unknown): void {
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
-  const rec = value as LegacySnapshotState & { kind?: unknown; spill?: unknown };
+  const rec = value as SnapshotState & { kind?: unknown; spill?: unknown };
   if (typeof rec.createdAt !== "number" || !Number.isFinite(rec.createdAt)) return;
   if (rec.kind === "spill") {
     if (!isSpillRef(rec.spill)) return;
@@ -422,16 +420,7 @@ function loadSnapshotEntry(id: string, value: unknown): void {
   }
   if (rec.kind !== undefined && rec.kind !== "resident") return;
   if (!Array.isArray(rec.items)) return;
-  const providers = rec.providers ?? (typeof rec.conversationId === "string"
-    ? {
-        cursor: {
-          conversationId: rec.conversationId,
-          ...(typeof rec.cursorCheckpointUsable === "boolean"
-            ? { checkpointUsable: rec.cursorCheckpointUsable }
-            : {}),
-        },
-      }
-    : undefined);
+  const providers = rec.providers;
   const resident = measureResidentEntry(id, {
     createdAt: rec.createdAt,
     items: rec.items,
@@ -599,7 +588,7 @@ function ensureLoaded(): void {
         admissionCounters.snapshotOversizedRefusals += 1;
       } else {
         const raw = JSON.parse(readFileSync(path, "utf-8")) as { version?: unknown; states?: unknown };
-        if ((raw.version === 1 || raw.version === 2) && Array.isArray(raw.states)) {
+        if (raw.version === 2 && Array.isArray(raw.states)) {
           for (const entry of raw.states) {
             if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string") continue;
             loadSnapshotEntry(entry[0], entry[1]);
@@ -631,7 +620,7 @@ async function writeBoundedSnapshot(path: string): Promise<SnapshotWriteOutcome>
       const revision = stateRevision;
       const entries: Array<[string, unknown]> = [];
       let total = 0;
-      // Newest-first so the most recent chains survive both legacy snapshot caps.
+      // Newest-first so the most recent chains survive both snapshot caps.
       for (const [id, state] of [...states].reverse()) {
         let persistable: unknown;
         if (state.kind === "resident") {
@@ -698,7 +687,7 @@ async function persistNow(path: string, awaitFollowUp = false): Promise<void> {
 }
 
 function schedulePersist(): void {
-  // Resolve the target path NOW: tests (and anything else) may swap OPENCODEX_HOME before the
+  // Resolve the target path NOW: tests (and anything else) may swap CODEXCOMMANDER_HOME before the
   // debounce fires, and a late write must land in the home that owned the recorded state.
   schedulePersistAt(snapshotPath());
 }
@@ -877,7 +866,7 @@ export function previousResponseConversationId(responseId: string | undefined): 
   return previousResponseProviderState(responseId)?.cursor?.conversationId;
 }
 
-export function previousResponseProviderState(responseId: string | undefined): OcxProviderContinuationState | undefined {
+export function previousResponseProviderState(responseId: string | undefined): CodexCommanderProviderContinuationState | undefined {
   if (!responseId) return undefined;
   ensureLoaded();
   pruneResponses();
@@ -950,7 +939,7 @@ export function responseStateMetrics(): ResponseStateMetrics {
 export function rememberResponseState(
   requestBody: unknown,
   response: { id?: unknown; output?: unknown; status?: unknown; incomplete_details?: unknown },
-  providerState?: OcxProviderContinuationState | string,
+  providerState?: CodexCommanderProviderContinuationState,
   opts?: { force?: boolean },
 ): void {
   if (!requestBody || typeof requestBody !== "object" || Array.isArray(requestBody)) return;
@@ -968,9 +957,7 @@ export function rememberResponseState(
       || (details as { reason?: unknown }).reason !== "max_output_tokens") return;
   } else if (response.status !== undefined && response.status !== "completed") return;
   ensureLoaded();
-  const normalizedProviderState: OcxProviderContinuationState = typeof providerState === "string"
-    ? { cursor: { conversationId: providerState } }
-    : structuredClone(providerState ?? {});
+  const normalizedProviderState = structuredClone(providerState ?? {});
   if (normalizedProviderState.cursor?.conversationId) {
     normalizedProviderState.cursor.checkpointUsable = !response.output.some(item => {
       return !!item && typeof item === "object" && (item as { type?: unknown }).type === "function_call";

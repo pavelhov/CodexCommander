@@ -7,15 +7,15 @@ import {
   claudeCodeSessionId,
 } from "../src/adapters/client-fingerprint";
 import { createAnthropicAdapter } from "../src/adapters/anthropic";
-import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 
-function parsed(): OcxParsedRequest {
+function parsed(): CodexCommanderParsedRequest {
   return {
     modelId: "claude-opus-4-6",
     stream: false,
     options: {},
     context: { systemPrompt: ["You are Codex, a coding agent based on GPT-5."], messages: [{ role: "user", content: "hi" }] },
-  } as unknown as OcxParsedRequest;
+  } as unknown as CodexCommanderParsedRequest;
 }
 
 describe("client fingerprint — helpers", () => {
@@ -67,8 +67,8 @@ describe("client fingerprint — helpers", () => {
 });
 
 describe("client fingerprint — anthropic OAuth headers", () => {
-  const oauthProvider = { adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com", apiKey: "oauth-tok-123" } as unknown as OcxProviderConfig;
-  const apiKeyProvider = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-ant-123" } as unknown as OcxProviderConfig;
+  const oauthProvider = { adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com", apiKey: "oauth-tok-123" } as unknown as CodexCommanderProviderConfig;
+  const apiKeyProvider = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-ant-123" } as unknown as CodexCommanderProviderConfig;
 
   test("OAuth request carries the full Claude Code header set", async () => {
     const { headers } = await createAnthropicAdapter(oauthProvider).buildRequest(parsed());
@@ -89,7 +89,7 @@ describe("client fingerprint — anthropic OAuth headers", () => {
   });
 
   test("outgoing session-id header never echoes the raw OAuth token", async () => {
-    const secretProvider = { adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com", apiKey: "oauth-super-secret-xyz" } as unknown as OcxProviderConfig;
+    const secretProvider = { adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com", apiKey: "oauth-super-secret-xyz" } as unknown as CodexCommanderProviderConfig;
     const { headers } = await createAnthropicAdapter(secretProvider).buildRequest(parsed());
     expect(headers["X-Claude-Code-Session-Id"]).not.toContain("oauth-super-secret-xyz");
     expect(headers["X-Claude-Code-Session-Id"]).not.toContain("super-secret");
@@ -119,7 +119,7 @@ describe("client fingerprint — anthropic OAuth headers", () => {
   });
 
   test("Accept negotiates SSE for a streaming request", async () => {
-    const streaming = { ...parsed(), stream: true } as OcxParsedRequest;
+    const streaming = { ...parsed(), stream: true } as CodexCommanderParsedRequest;
     const { headers } = await createAnthropicAdapter(oauthProvider).buildRequest(streaming);
     expect(headers["Accept"]).toBe("text/event-stream");
     expect(headers["User-Agent"]).toBe("@anthropic-ai/sdk/0.74.0");

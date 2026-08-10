@@ -4,7 +4,7 @@ import { copyTextToClipboard } from "../src/oauth-health-display";
 
 /**
  * `navigator.clipboard` only exists in a secure context. A LAN-bound GUI
- * (`hostname: 0.0.0.0` over plain HTTP) is not one, so the legacy execCommand
+ * (`hostname: 0.0.0.0` over plain HTTP) is not one, so the execCommand
  * path is that deployment's only way to copy a login URL or a doctor command.
  */
 
@@ -79,7 +79,7 @@ test("reports failure only when both paths are unavailable", async () => {
   expect(await copyTextToClipboard("https://auth.example/authorize")).toBe(false);
 });
 
-test("prefers the Clipboard API and never touches the legacy path", async () => {
+test("prefers the Clipboard API and never touches the secondary path", async () => {
   const writeText = mock(async () => {});
   useClipboard({ writeText });
   const execCommand = mock(() => true);

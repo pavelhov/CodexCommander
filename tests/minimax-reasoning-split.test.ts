@@ -2,11 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { enrichProviderFromRegistry } from "../src/providers/derive";
 import { routeModel } from "../src/router";
-import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 
-type ReasoningEffort = OcxParsedRequest["options"]["reasoning"];
+type ReasoningEffort = CodexCommanderParsedRequest["options"]["reasoning"];
 
-function parsed(modelId: string, reasoning?: ReasoningEffort): OcxParsedRequest {
+function parsed(modelId: string, reasoning?: ReasoningEffort): CodexCommanderParsedRequest {
   return {
     modelId,
     context: { messages: [{ role: "user", content: "ping", timestamp: 0 }] },
@@ -15,13 +15,13 @@ function parsed(modelId: string, reasoning?: ReasoningEffort): OcxParsedRequest 
   };
 }
 
-function body(provider: OcxProviderConfig, modelId: string, reasoning?: ReasoningEffort): Record<string, unknown> {
+function body(provider: CodexCommanderProviderConfig, modelId: string, reasoning?: ReasoningEffort): Record<string, unknown> {
   const request = createOpenAIChatAdapter(provider).buildRequest(parsed(modelId, reasoning));
   return JSON.parse(request.body as string) as Record<string, unknown>;
 }
 
-function minimaxRoute(modelId = "MiniMax-M3", provider: Partial<OcxProviderConfig> = {}) {
-  const config: OcxConfig = {
+function minimaxRoute(modelId = "MiniMax-M3", provider: Partial<CodexCommanderProviderConfig> = {}) {
+  const config: CodexCommanderConfig = {
     port: 10100,
     defaultProvider: "minimax",
     providers: {
@@ -101,7 +101,7 @@ describe("MiniMax split reasoning", () => {
   });
 
   test("registry enrichment never replaces explicit split-reasoning fields", () => {
-    const provider: OcxProviderConfig = {
+    const provider: CodexCommanderProviderConfig = {
       adapter: "openai-chat",
       baseUrl: "https://api.minimax.io/v1",
       reasoningSplitModels: ["only-user-model"],
@@ -115,7 +115,7 @@ describe("MiniMax split reasoning", () => {
   });
 
   test("unconfigured OpenAI-compatible providers remain unchanged", () => {
-    const provider: OcxProviderConfig = {
+    const provider: CodexCommanderProviderConfig = {
       adapter: "openai-chat",
       baseUrl: "https://example.test/v1",
     };

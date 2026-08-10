@@ -1,9 +1,9 @@
 import type {
   AdapterEvent,
-  OcxAssistantContentPart,
-  OcxAssistantMessage,
-  OcxParsedRequest,
-  OcxUsage,
+  CodexCommanderAssistantContentPart,
+  CodexCommanderAssistantMessage,
+  CodexCommanderParsedRequest,
+  CodexCommanderUsage,
 } from "../../types";
 
 const ACTIONABLE_REQUEST_RE = /(?:\b(?:add|change|check|continue|create|debug|delete|deploy|edit|execute|fix|implement|inspect|keep going|modify|patch|proceed|refactor|remove|review|run|test|update|write)\b|继续|接着|往下|升级|修改|改(?:一下|下)?|修复|实现|添加|新增|删除|重构|更新|运行|执行|检查|查看|排查|调试|创建|写入|提交|推送|部署|看下|改成|修一下)/iu;
@@ -38,7 +38,7 @@ function messageText(value: unknown): string {
     .join("");
 }
 
-function latestUserText(parsed: OcxParsedRequest): string {
+function latestUserText(parsed: CodexCommanderParsedRequest): string {
   for (let i = parsed.context.messages.length - 1; i >= 0; i -= 1) {
     const message = parsed.context.messages[i];
     if (message.role === "user") return messageText(message.content);
@@ -46,7 +46,7 @@ function latestUserText(parsed: OcxParsedRequest): string {
   return "";
 }
 
-function recentTurnHasToolActivity(parsed: OcxParsedRequest): boolean {
+function recentTurnHasToolActivity(parsed: CodexCommanderParsedRequest): boolean {
   let latestUserIndex = -1;
   for (let i = parsed.context.messages.length - 1; i >= 0; i -= 1) {
     if (parsed.context.messages[i]?.role === "user") {
@@ -55,7 +55,7 @@ function recentTurnHasToolActivity(parsed: OcxParsedRequest): boolean {
     }
   }
   if (latestUserIndex < 0) return false;
-  let lastAssistant: OcxAssistantMessage | undefined;
+  let lastAssistant: CodexCommanderAssistantMessage | undefined;
   for (let i = latestUserIndex - 1; i >= 0; i -= 1) {
     const message = parsed.context.messages[i];
     if (message.role === "assistant") {
@@ -86,7 +86,7 @@ function assistantText(events: readonly AdapterEvent[]): string {
     .join("");
 }
 
-export function analyzeTerminalTurn(parsed: OcxParsedRequest, events: readonly AdapterEvent[]): TerminalTurnAnalysis {
+export function analyzeTerminalTurn(parsed: CodexCommanderParsedRequest, events: readonly AdapterEvent[]): TerminalTurnAnalysis {
   const userText = latestUserText(parsed);
   const text = assistantText(events);
   const hasToolCall = events.some(event => event.type === "tool_call_start");
@@ -117,7 +117,7 @@ export function analyzeTerminalTurn(parsed: OcxParsedRequest, events: readonly A
   return { decision: "continue", reason: "suspicious_no_tool", assistantText: text, userText, hasToolCall };
 }
 
-function assistantMessageFromEvents(events: readonly AdapterEvent[]): OcxAssistantMessage | undefined {
+function assistantMessageFromEvents(events: readonly AdapterEvent[]): CodexCommanderAssistantMessage | undefined {
   let text = "";
   let thinking = "";
   let signature: string | undefined;
@@ -128,7 +128,7 @@ function assistantMessageFromEvents(events: readonly AdapterEvent[]): OcxAssista
     else if (event.type === "thinking_signature") signature = event.signature;
     else if (event.type === "redacted_thinking") redacted.push(event.data);
   }
-  const content: OcxAssistantContentPart[] = [];
+  const content: CodexCommanderAssistantContentPart[] = [];
   if (thinking || signature || redacted.length > 0) {
     content.push({ type: "thinking", thinking, ...(signature ? { signature } : {}), ...(redacted.length > 0 ? { redacted } : {}) });
   }
@@ -137,7 +137,7 @@ function assistantMessageFromEvents(events: readonly AdapterEvent[]): OcxAssista
   return { role: "assistant", content, timestamp: Date.now() };
 }
 
-export function buildContinuationRequest(parsed: OcxParsedRequest, events: readonly AdapterEvent[]): OcxParsedRequest {
+export function buildContinuationRequest(parsed: CodexCommanderParsedRequest, events: readonly AdapterEvent[]): CodexCommanderParsedRequest {
   const messages = [...parsed.context.messages];
   const assistant = assistantMessageFromEvents(events);
   if (assistant) messages.push(assistant);
@@ -146,17 +146,17 @@ export function buildContinuationRequest(parsed: OcxParsedRequest, events: reado
 }
 
 export interface GuardedEventStreamOptions {
-  parsed: OcxParsedRequest;
+  parsed: CodexCommanderParsedRequest;
   firstEvents: AsyncIterable<AdapterEvent>;
-  continuation: (parsed: OcxParsedRequest) => AsyncIterable<AdapterEvent> | Promise<AsyncIterable<AdapterEvent>>;
+  continuation: (parsed: CodexCommanderParsedRequest) => AsyncIterable<AdapterEvent> | Promise<AsyncIterable<AdapterEvent>>;
   adapterName?: string;
   maxAutoContinuations?: number;
 }
 
-function mergeUsage(first: OcxUsage | undefined, second: OcxUsage | undefined): OcxUsage | undefined {
+function mergeUsage(first: CodexCommanderUsage | undefined, second: CodexCommanderUsage | undefined): CodexCommanderUsage | undefined {
   if (!first) return second;
   if (!second) return first;
-  const sumOptional = (key: keyof OcxUsage): number | undefined => {
+  const sumOptional = (key: keyof CodexCommanderUsage): number | undefined => {
     const left = first[key];
     const right = second[key];
     return typeof left === "number" || typeof right === "number"
@@ -186,7 +186,7 @@ export async function* guardTerminalEventStream(options: GuardedEventStreamOptio
   const maxContinuations = Math.max(0, Math.min(2, Math.floor(options.maxAutoContinuations ?? 1)));
   let parsed = options.parsed;
   let continuations = 0;
-  let accumulatedUsage: OcxUsage | undefined;
+  let accumulatedUsage: CodexCommanderUsage | undefined;
   let source: AsyncIterable<AdapterEvent> = options.firstEvents;
 
   while (true) {

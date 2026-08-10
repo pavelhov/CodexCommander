@@ -3,7 +3,7 @@ import {
   handleResponses,
   hasUnreadableEncryptedAgentTask,
 } from "../src/server/responses";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const originalFetch = globalThis.fetch;
 
@@ -45,7 +45,7 @@ function agentMessage(content: Array<Record<string, unknown>>): unknown[] {
   }];
 }
 
-function routedConfig(): OcxConfig {
+function routedConfig(): CodexCommanderConfig {
   return {
     port: 0,
     defaultProvider: "xai",
@@ -57,10 +57,10 @@ function routedConfig(): OcxConfig {
         apiKey: "test-xai-key",
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
-function nativeConfig(): OcxConfig {
+function nativeConfig(): CodexCommanderConfig {
   return {
     port: 0,
     defaultProvider: "openai",
@@ -72,10 +72,10 @@ function nativeConfig(): OcxConfig {
         codexAccountMode: "direct",
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
-function mixedComboConfig(): OcxConfig {
+function mixedComboConfig(): CodexCommanderConfig {
   return {
     port: 0,
     defaultProvider: "xai",
@@ -102,11 +102,11 @@ function mixedComboConfig(): OcxConfig {
         ],
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 async function post(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   model: string,
   input: unknown[],
   headers: HeadersInit = {},

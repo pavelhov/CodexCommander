@@ -3,7 +3,7 @@ title: "Sidecar：Web Search 与 Vision"
 description: 通过原生 ChatGPT sidecar，让路由模型获得真实 web search，并让纯文本模型理解图像。
 ---
 
-不同路由模型对托管 **Web Search** 和原生**图像输入**的支持并不相同。opencodex 通过两个
+不同路由模型对托管 **Web Search** 和原生**图像输入**的支持并不相同。CodexCommander 通过两个
 sidecar 补齐这些能力；它们可以使用 ChatGPT 登录（`forward`）provider，也可以使用已存储的
 Anthropic OAuth provider。Sidecar 错误会转换成长度受限的工具结果或图像提示，不会让整个 turn
 失败。
@@ -16,18 +16,18 @@ Anthropic OAuth provider。Sidecar 错误会转换成长度受限的工具结果
 
 ## Web-search sidecar
 
-当 Codex 为非透传的路由模型请求托管 `web_search` 时，opencodex 会：
+当 Codex 为非透传的路由模型请求托管 `web_search` 时，CodexCommander 会：
 
 1. **移除**托管的 `web_search` 工具，改为向路由模型提供一个合成的
    `web_search(query)` function 工具。原托管工具的选项会保留并用于 sidecar 调用。
-2. 让路由模型在一个小型 **agentic 循环**中运行。模型调用 `web_search` 时，opencodex 使用所选
+2. 让路由模型在一个小型 **agentic 循环**中运行。模型调用 `web_search` 时，CodexCommander 使用所选
    后端：OpenAI 默认以 `gpt-5.6-luna` 运行托管 `web_search`；Anthropic 默认以
    `claude-sonnet-5` 运行 `web_search_20250305`。Streaming 答案及引用会解析为工具结果。
 3. **循环**直到模型回答，或真实查询总数达到 `maxSearchesPerTurn`（默认 3）。达到上限后会移除
    search 工具并强制生成最终答案。如果模型调用 `apply_patch` 或 shell 等真实客户端工具，当前
    turn 会结束，以便这些调用到达 Codex。
 
-路由模型的每次迭代都会向上游请求 `stream: true`，但 opencodex 会在决定搜索还是返回最终答案前，
+路由模型的每次迭代都会向上游请求 `stream: true`，但 CodexCommander 会在决定搜索还是返回最终答案前，
 在内部完整缓冲所有语义 event。只有第一次迭代的最终 header/status 和 429 key rotation 会被提前
 取得。因此，合成搜索调用和中间输出不会作为模型输出暴露给客户端。
 
@@ -63,10 +63,10 @@ Anthropic OAuth provider。Sidecar 错误会转换成长度受限的工具结果
 
 ## Vision sidecar
 
-当路由模型列在其 provider 的 `noVisionModels` 中，并且请求包含图像时，opencodex 会在主调用
+当路由模型列在其 provider 的 `noVisionModels` 中，并且请求包含图像时，CodexCommander 会在主调用
 **之前**描述每张图像，并用文字替换图像。Dashboard 和管理 API 当前显示的默认值是
-`gpt-5.6-luna`，启动时也会把明确保存的旧 `gpt-5.4-mini` 值迁移到 Luna。只有在
-`visionSidecar.model` 字段完全不存在时，vision 执行路径才会使用代码中的 `gpt-5.4-mini` 回退值。
+`gpt-5.6-luna`。只有在 `visionSidecar.model` 字段完全不存在时，vision 执行路径才会使用代码中的
+`gpt-5.4-mini` 回退值。
 
 - 图像可以来自 user、developer 和 tool-result message，也包括 Codex 的 `view_image` 结果。
 - 每张图像会以 `reasoning.effort: "low"` 发送给配置的原生 vision 模型，描述结果会就地替换

@@ -1,13 +1,12 @@
 ---
 title: コントリビュート
-description: opencodex の開発環境、構成、規約、プロバイダーとアダプターの追加方法。
+description: CodexCommander の開発環境、構成、規約、プロバイダーとアダプターの追加方法。
 ---
 
 ## セットアップ
 
 ```bash
-git clone https://github.com/pavelhov/opencodex.git
-cd opencodex
+cd /path/to/CodexCommander
 bun install
 bun run dev:proxy    # 開発モードのプロキシ API
 bun run dev:gui      # ダッシュボード dev サーバー(別ターミナル)
@@ -44,12 +43,9 @@ bun run prepare:package           # パッケージランチャー/asset 更新
 cd docs-site && bun install && bun dev
 ```
 
-## ドキュメントのデプロイ
+## ドキュメントサイト
 
-公開ドキュメントは GitHub Pages の <https://opencodex.me/ja/> に公開されます。
-`.github/workflows/deploy-docs.yml` は `main` push で `docs-site/**` またはワークフロー自体が変わると
-実行されます。`docs-site` をビルドした後、生成されたサイトをデプロイします。ドキュメント変更を push する前に以下を
-実行してください。
+ドキュメントは `docs-site/` にあり、現在公開中のホストはありません。ドキュメントの pull request を出す前に、ローカルでビルドしてください。
 
 ```bash
 cd docs-site
@@ -57,42 +53,31 @@ bun install --frozen-lockfile
 bun run build
 ```
 
-## CI とリリース
+公開自動化はこのリポジトリに含まれていません。
 
-GitHub Actions は必要な作業のみを行います。
+## 継続的インテグレーション
 
-- **Cross-platform CI**(`.github/workflows/ci.yml`)はランタイム、テスト、パッケージ、スクリプト、
-  TypeScript、ワークフローファイルが変更された pull request と `main` push で実行されます。Bun matrix は Linux、
-  Windows、macOS で install、typecheck、tests、privacy scan、release helper build smoke、GUI build、
-  `ocx help` を検査します。別途 3 OS レーンはバンドルランタイムを使い、Bun を別途インストールしなくても
-  npm global install が動作するか確認します。
-- **Release**(`.github/workflows/release.yml`)は手動で実行します。2 つ目の完全 CI パイプラインではなく、
-  dry-run や publish 前に正確なリリースコミット(`GITHUB_SHA`)で Cross-platform CI が
-  成功したか確認します。
+すべての pull request と `main` へのすべての push では、自動チェックを **1 つ**だけ実行します:
+**`ci`** (`.github/workflows/ci.yml`)。通常の貢献で必須の自動化はこれだけです。
 
-リリースには helper を使ってください。
+リポジトリ管理者は、保護ルールが意図した管理者操作を阻む場合に GitHub ruleset の
+**Always-allow** bypass を使えます。これは管理者の復旧と例外的な保守用であり、
+コントリビューター作業のレビュー代替ではありません。
 
-```bash
-bun run release <version>           # バージョン bump を commit/push、publish ワークフローはデフォルト dry-run
-bun run release <version> --publish # CI-gated dry-run を確認した後、実際の publish
-bun run release:watch               # 直近の Release ワークフロー run を監視
-```
+## ブランチと pull request
 
-## ブランチ
+- **`main` が唯一の default / 統合 / PR ターゲットです。** 機能修正の PR は `main` に向けてください。
+- 現在の **`main` tip** からブランチを切ってください。
+- 説明文には、何をなぜ変えたかと、検証方法（実行したコマンドと結果）を書いてください。空や
+  プレースホルダーだけの説明ではレビューできません。
+- ダッシュボード UI を触る場合は、説明にスクリーンショットを含めてください。
+- 振る舞い変更には、そのサブシステムの既存テスト近くに集中した回帰テストが必要です。共有
+  ルーティング、アダプター、設定、サーバー変更ではフルスイートを通してください。
 
-- `dev` — 唯一の統合先。すべての PR をここに出します。
-- `main` — リリース専用。`dev` からメンテナーが昇格させるときだけ動きます。機能 PR を直接
-  出さないでください。
-- `preview` — プレリリーストレイン。
+`main` 上の Bun ネイティブ TypeScript が唯一のランタイム線です。
 
-Go ネイティブポートを担っていた `dev2-go` は廃止し、2 本の統合ラインを維持する方針も
-終了しました。履歴は
-[lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive)
-に読み取り専用で残しています。現在は `dev` の Bun ネイティブ TypeScript が単一のランタイム
-ラインです。
-
-リベース PR を歓迎します。古いブランチを現在の head にリベースすることは、ノイズではなく
-通常の貢献です。説明欄に元のコミットを記載してください。
+リベース PR は歓迎します。古いブランチを現在の head に載せ直すのは通常の保守です。説明に
+元コミットを書いてください。
 
 ## 規約
 
@@ -103,7 +88,7 @@ Go ネイティブポートを担っていた `dev2-go` は廃止し、2 本の�
 - **非同期エラーは境界で処理** — サイドカーはリクエストパスにエラーを投げず、適切な marker で
   低下します。
 - **Structure SOT** — 現在のメンテナンス不変条件は `structure/` に置きます。公開ユーザーワークフローは
-  `docs-site/`、過去の調査/診断記録は `docs/` に置きます。
+  `docs-site/`、保守対象の技術・実装ノートは `docs/` に置きます。
 - **export の保存** — 他のモジュールが依存している可能性があります。
 
 ## カタログにプロバイダーを追加
@@ -124,7 +109,7 @@ Go ネイティブポートを担っていた `dev2-go` は廃止し、2 本の�
 },
 ```
 
-`src/providers/derive.ts` はこのエントリを `ocx init`、`ocx provider`、ダッシュボード preset、API キーログイン、
+`src/providers/derive.ts` はこのエントリを `ccx init`、`ccx provider`、ダッシュボード preset、API キーログイン、
 OAuth 設定 seed に供給します。`enrichProviderFromCatalog()` はモデルメタデータと capability 分類を
 保存するプロバイダー設定にコピーします。OAuth プロトコル実装は引き続き `src/oauth/` にあります。
 レジストリメタデータを追加するだけでは OAuth flow は生まれません。
@@ -142,4 +127,4 @@ factory の場合は `src/index.ts` からも export してください。
 
 変更を証明する最も狭いコマンドから実行してください。型は `bun run typecheck`、動作は集中した
 `bun test tests/<name>.test.ts` またはランタイム probe で確認した後、影響範囲に応じた広い gate を
-実行します。opencodex は大きな batch より小さく検証可能な commit を好みます。
+実行します。CodexCommander は大きな batch より小さく検証可能な commit を好みます。

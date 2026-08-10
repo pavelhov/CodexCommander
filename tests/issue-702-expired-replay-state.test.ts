@@ -17,13 +17,13 @@ import {
 } from "../src/responses/state";
 import { responseSpillDirectory } from "../src/responses/spill-store";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 const originalFetch = globalThis.fetch;
-const previousOpencodexHome = process.env.OPENCODEX_HOME;
-const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
+const previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+const previousApiToken = process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
 const EXPIRED_AGE_MS = 2 * 60 * 60 * 1_000;
 const REPLAY_TTL_MS = 60 * 60 * 1_000;
 const FIRST_RESPONSE_ID = "resp_issue_702_first";
@@ -49,12 +49,12 @@ interface ForwardScenario {
 
 type ForwardScenarioMode = "expired" | "fresh" | "ordinary";
 
-function forwardConfig(): OcxConfig {
+function forwardConfig(): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     hostname: "127.0.0.1",
     defaultProvider: "openai",
-    openaiProviderTierVersion: 2,
     providers: {
       openai: {
         adapter: "openai-responses",
@@ -63,7 +63,7 @@ function forwardConfig(): OcxConfig {
         codexAccountMode: "direct",
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 function inputMessage(text: string): Record<string, unknown> {
@@ -220,12 +220,12 @@ async function runForwardScenario(
 }
 
 beforeEach(() => {
-  testHome = mkdtempSync(join(tmpdir(), "ocx-issue-702-"));
-  process.env.OPENCODEX_HOME = testHome;
-  delete process.env.OPENCODEX_API_AUTH_TOKEN;
+  testHome = mkdtempSync(join(tmpdir(), "ccx-issue-702-"));
+  process.env.CODEXCOMMANDER_HOME = testHome;
+  delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
   clearResponseStateMemoryForTests();
   resetSubagentModelFallbackStateForTests();
-  isolatedCodexHome = installIsolatedCodexHome("ocx-issue-702-codex-");
+  isolatedCodexHome = installIsolatedCodexHome("ccx-issue-702-codex-");
 });
 
 afterEach(() => {
@@ -237,10 +237,10 @@ afterEach(() => {
   isolatedCodexHome = null;
   if (testHome) rmSync(testHome, { recursive: true, force: true });
   testHome = "";
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-  else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
+  if (previousApiToken === undefined) delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+  else process.env.CODEXCOMMANDER_API_AUTH_TOKEN = previousApiToken;
 });
 
 describe("Issue #702 expired forward replay state", () => {
@@ -263,13 +263,13 @@ describe("Issue #702 expired forward replay state", () => {
       upstreamCalls += 1;
       throw new Error("upstream must not be called");
     }) as typeof fetch;
-    const routeClasses: Array<{ config: OcxConfig; model: string }> = [
+    const routeClasses: Array<{ config: CodexCommanderConfig; model: string }> = [
       { config: forwardConfig(), model: "gpt-5.6-sol" },
       {
         config: {
           port: 0,
+          multiAgentGuidanceEnabled: true,
           hostname: "127.0.0.1",
-          openaiProviderTierVersion: 2,
           defaultProvider: "kiro-test",
           providers: {
             "kiro-test": {
@@ -280,14 +280,14 @@ describe("Issue #702 expired forward replay state", () => {
               models: ["gpt-5.6-sol"],
             },
           },
-        } as OcxConfig,
+        } as CodexCommanderConfig,
         model: "kiro-test/gpt-5.6-sol",
       },
       {
         config: {
           port: 0,
+          multiAgentGuidanceEnabled: true,
           hostname: "127.0.0.1",
-          openaiProviderTierVersion: 2,
           defaultProvider: "test-openai",
           providers: {
             "test-openai": {
@@ -298,7 +298,7 @@ describe("Issue #702 expired forward replay state", () => {
               models: ["gpt-5.6-sol"],
             },
           },
-        } as OcxConfig,
+        } as CodexCommanderConfig,
         model: "test-openai/gpt-5.6-sol",
       },
     ];
@@ -406,6 +406,7 @@ describe("Issue #702 expired forward replay state", () => {
       });
       saveConfig({
         port: 0,
+        multiAgentGuidanceEnabled: true,
         hostname: "127.0.0.1",
         defaultProvider: "test-openai",
         providers: {
@@ -417,7 +418,7 @@ describe("Issue #702 expired forward replay state", () => {
             defaultModel: "gpt-5.6-sol",
           },
         },
-      } as OcxConfig);
+      } as CodexCommanderConfig);
       server = startServer(0);
 
       const response = await originalFetch(new URL("/v1/responses", server.url), {

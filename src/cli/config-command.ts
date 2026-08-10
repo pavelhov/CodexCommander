@@ -1,17 +1,17 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { clearCodexAccountPin } from "../codex/account-priority";
 import { getConfigPath, readConfigDiagnostics, saveConfig, validateConfigCandidate } from "../config";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import { CliUsageError, printData, rejectArgs, runCliAction, takeFlag } from "./runtime-api";
 
 const USAGE = `Usage:
-  ocx config [show] [--json] [--source]
-  ocx config get <dot.path> [--json]
-  ocx config set <dot.path> <json-or-string> [--json]
-  ocx config unset <dot.path> [--json]
-  ocx config validate [path|-] [--json]
-  ocx config export <path|->
-  ocx config import <path|-> --yes [--json]`;
+  ccx config [show] [--json] [--source]
+  ccx config get <dot.path> [--json]
+  ccx config set <dot.path> <json-or-string> [--json]
+  ccx config unset <dot.path> [--json]
+  ccx config validate [path|-] [--json]
+  ccx config export <path|->
+  ccx config import <path|-> --yes [--json]`;
 
 const SECRET_KEYS = /^(apiKey|key|accessToken|refreshToken|idToken|token|password|clientSecret)$/i;
 const BLOCKED_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
@@ -65,10 +65,18 @@ function loadInput(path: string): unknown {
   catch { throw new CliUsageError(`invalid JSON in ${path}`); }
 }
 
-function validate(value: unknown): OcxConfig {
+function validate(value: unknown): CodexCommanderConfig {
   const result = validateConfigCandidate(value);
   if (!result.ok) throw new CliUsageError(result.error);
   return result.config;
+}
+
+function readableCurrentConfig(): CodexCommanderConfig {
+  const diagnostics = readConfigDiagnostics();
+  if (diagnostics.source === "fallback") {
+    throw new CliUsageError(diagnostics.error ?? "config is invalid");
+  }
+  return diagnostics.config;
 }
 
 export async function handleConfigCommand(argv: string[]): Promise<number> {
@@ -89,7 +97,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       const path = args.shift();
       if (!path) throw new CliUsageError("config path is required", USAGE);
       rejectArgs(args, USAGE);
-      const value = redact(getPath(readConfigDiagnostics().config, path), path.split(".").at(-1));
+      const value = redact(getPath(readableCurrentConfig(), path), path.split(".").at(-1));
       if (wantsJson || typeof value === "object") console.log(JSON.stringify(value, null, 2));
       else console.log(String(value));
       return;
@@ -99,12 +107,12 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       const raw = action === "set" ? args.shift() : undefined;
       if (!path || (action === "set" && raw === undefined)) throw new CliUsageError("config path and value are required", USAGE);
       rejectArgs(args, USAGE);
-      const candidate = structuredClone(readConfigDiagnostics().config) as unknown as Record<string, unknown>;
+      const candidate = structuredClone(readableCurrentConfig()) as unknown as Record<string, unknown>;
       setPath(candidate, path, raw === undefined ? undefined : parseValue(raw), action === "unset");
       const config = validate(candidate);
       const savedValue = action === "unset" ? null : getPath(config, path);
       // Setting the order here is the operator restating it, exactly as through
-      // `ocx account priority` or the management route, so it releases the manual pin
+      // `ccx account priority` or the management route, so it releases the manual pin
       // for the same reason those do: a pin made before any order existed would
       // otherwise outrank every order set afterwards, capping the pool at the pinned
       // account's tier with nothing on any surface explaining why. `import` is
@@ -132,7 +140,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       const path = args.shift();
       if (!path) throw new CliUsageError("export path is required", USAGE);
       rejectArgs(args, USAGE);
-      const content = `${JSON.stringify(readConfigDiagnostics().config, null, 2)}\n`;
+      const content = `${JSON.stringify(readableCurrentConfig(), null, 2)}\n`;
       if (path === "-") process.stdout.write(content);
       else { writeFileSync(path, content, { encoding: "utf8", mode: 0o600 }); console.log(`Exported config to ${path}.`); }
       return;
@@ -144,7 +152,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       if (!yes) throw new CliUsageError("import requires --yes", USAGE);
       rejectArgs(args, USAGE);
       saveConfig(validate(loadInput(path)));
-      printData({ ok: true, source: path }, wantsJson, [`Imported config from ${path}. Restart or run ocx sync if needed.`]);
+      printData({ ok: true, source: path }, wantsJson, [`Imported config from ${path}. Restart or run ccx sync if needed.`]);
       return;
     }
     throw new CliUsageError(`unknown config command ${action}`, USAGE);

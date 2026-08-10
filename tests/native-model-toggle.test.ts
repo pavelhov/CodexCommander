@@ -17,7 +17,7 @@ import {
 } from "../src/codex/catalog";
 import { handleManagementAPI } from "../src/server/management-api";
 import { applyMultiAgentMode, applyNativeOpenAiContextOverride } from "../src/codex/catalog/parsing";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
@@ -26,7 +26,7 @@ let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 beforeEach(() => {
   previousCodexCliPath = process.env.CODEX_CLI_PATH;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-native-toggle-codex-");
+  isolatedCodexHome = installIsolatedCodexHome("ccx-native-toggle-codex-");
   process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
 });
 
@@ -37,8 +37,8 @@ afterEach(() => {
   isolatedCodexHome = null;
 });
 
-function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
-  return { port: 10100, providers: {}, defaultProvider: "openai", ...overrides } as OcxConfig;
+function makeConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
+  return { port: 10100, providers: {}, defaultProvider: "openai", ...overrides } as CodexCommanderConfig;
 }
 
 function nativeTemplate(): Record<string, unknown> {
@@ -105,7 +105,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(bare?.visibility).toBe("hide");
     expect(main).toMatchObject({
       display_name: "main-account / 5.5",
-      opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+      codexcommander_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
       comp_hash: "native-compaction-hash",
       visibility: "list",
       priority: 0,
@@ -168,31 +168,31 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
   test("generated-row ownership uses only the nonsemantic marker and qualified slug shape", () => {
     expect(trustedAccountBoundNativeCatalogSlug({
       slug: "side/gpt-5.6-sol",
-      opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+      codexcommander_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
     })).toBe("gpt-5.6-sol");
     expect(trustedAccountBoundNativeCatalogSlug({ slug: "side/gpt-5.6-sol" })).toBeUndefined();
     expect(trustedAccountBoundNativeCatalogSlug({
       slug: "/gpt-5.6-sol",
-      opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+      codexcommander_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
     })).toBeUndefined();
     expect(trustedAccountBoundNativeCatalogSlug({
       slug: "side/",
-      opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+      codexcommander_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
     })).toBeUndefined();
     expect(trustedAccountBoundNativeCatalogSlug({
       slug: "gpt-5.6-sol",
-      opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+      codexcommander_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
     })).toBeUndefined();
     expect(trustedAccountBoundNativeCatalogSlug({
       slug: "side/nested/gpt-5.6-sol",
-      opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+      codexcommander_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
     })).toBeUndefined();
   });
 
   test("native metadata helpers trust only marked, well-shaped account rows", () => {
     const trusted = {
       slug: "side/gpt-5.6-luna",
-      opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+      codexcommander_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
       context_window: 128_000,
       max_context_window: 128_000,
       auto_compact_token_limit: 115_200,
@@ -205,7 +205,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     const unmarked = {
       ...trusted,
       slug: "provider/gpt-5.6-luna",
-      opencodex_catalog_kind: undefined,
+      codexcommander_catalog_kind: undefined,
     };
 
     applyNativeOpenAiContextOverride(trusted);
@@ -345,7 +345,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
   test("disabled native state is mirrored onto its account-qualified clones", () => {
     const entries = [{
       slug: "side/gpt-5.6-sol",
-      opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+      codexcommander_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
       visibility: "list",
     }];
     applyNativeVisibility(entries, new Set(["gpt-5.6-sol"]), true);

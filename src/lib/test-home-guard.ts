@@ -1,18 +1,19 @@
 /**
- * Fail-closed protection for the user's REAL OpenCodex home while tests run.
+ * Fail-closed protection for the user's real CodexCommander state home while tests run.
  *
  * A management-route unit test once passed an in-memory fixture config to a handler
  * that persisted it through the process-global writer, replacing a live 41KB,
- * ten-provider `~/.opencodex/config.json` with an 874-byte fixture on a real machine.
+ * ten-provider `~/.codexcommander/config.json` with an 874-byte fixture on a real machine.
  * Credentials survived only because the store files are separate; the providers were
  * recoverable only because an unrelated backup snapshot happened to exist.
- * (devlog `_plan/260730_codex_rs_upstream_v2_live_handoff/070`.)
+ * This guard exists because tests must never persist fixture data into a live
+ * CodexCommander state directory.
  *
  * Two properties matter more than breadth here:
  *
  * 1. It must be INERT in production. Guessing "am I a test?" from ecosystem variables
- *    like NODE_ENV would brick `NODE_ENV=test ocx ...` for a user who did nothing
- *    wrong — worse than the bug it prevents. Arming requires OCX_TEST_HOME_GUARD=1,
+ *    like NODE_ENV would brick `NODE_ENV=test ccx ...` for a user who did nothing
+ *    wrong — worse than the bug it prevents. Arming requires CCX_TEST_HOME_GUARD=1,
  *    which only this repository's test preload sets.
  * 2. It must fail CLOSED for code nobody has written yet. So it denies ONE path — the
  *    captured production home — instead of allow-listing known-good test directories.
@@ -23,13 +24,13 @@ import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { realpathSync } from "node:fs";
 
-const GUARD_ENV = "OCX_TEST_HOME_GUARD";
+const GUARD_ENV = "CCX_TEST_HOME_GUARD";
 /**
  * Set by `scripts/test.ts` to the ORIGINAL home before it hands the child a rewritten
  * HOME. On that path `homedir()` already points at the sandbox by the time this module
  * loads, so the true home is only knowable from this hand-off.
  */
-const REAL_HOME_ENV = "OCX_REAL_HOME";
+const REAL_HOME_ENV = "CCX_REAL_HOME";
 
 /**
  * Resolve symlinks so two spellings of one location compare equal — macOS hands out
@@ -58,13 +59,17 @@ function canonicalize(path: string): string {
  * `homedir()` later would return the sandbox and leave the real home unprotected — the
  * guard would be perfectly inverted while its tests still looked green.
  */
-const PROTECTED_HOME = canonicalize(
-  join(process.env[REAL_HOME_ENV]?.trim() || homedir(), ".opencodex"),
-);
+const REAL_HOME = process.env[REAL_HOME_ENV]?.trim() || homedir();
+const PROTECTED_HOMES = [canonicalize(join(REAL_HOME, ".codexcommander"))] as const;
 
 /** The production home this process protects. Exported for the guard's own tests. */
 export function protectedHomeForTests(): string {
-  return PROTECTED_HOME;
+  return PROTECTED_HOMES[0];
+}
+
+/** Canonical state root protected by the test guard. */
+export function protectedHomesForTests(): readonly string[] {
+  return PROTECTED_HOMES;
 }
 
 export function isTestHomeGuardArmed(): boolean {
@@ -72,7 +77,7 @@ export function isTestHomeGuardArmed(): boolean {
 }
 
 /**
- * Throw when an armed test process is about to write the real OpenCodex home.
+ * Throw when an armed test process is about to write a real CodexCommander home.
  *
  * Call FIRST inside a writer, before any mkdir/chmod/write, so a rejected write leaves
  * nothing behind. Silent no-op when disarmed (production) or when `dir` is any other
@@ -81,10 +86,11 @@ export function isTestHomeGuardArmed(): boolean {
  */
 export function assertNotRealHomeUnderTest(dir: string): void {
   if (!isTestHomeGuardArmed()) return;
-  if (canonicalize(dir) !== PROTECTED_HOME) return;
+  const target = canonicalize(dir);
+  if (!PROTECTED_HOMES.includes(target as (typeof PROTECTED_HOMES)[number])) return;
   throw new Error(
-    `refusing to write the real OpenCodex home (${PROTECTED_HOME}) from a test process. `
-    + "Point OPENCODEX_HOME at a temp directory for this test, or inject persistence "
-    + "instead of calling the global writer (see devlog 260730_codex_rs_upstream_v2_live_handoff/070).",
+    `refusing to write a real CodexCommander home (${target}) from a test process. `
+    + "Point CODEXCOMMANDER_HOME at a temp directory for this test, or inject persistence "
+    + "instead of calling the global writer.",
   );
 }

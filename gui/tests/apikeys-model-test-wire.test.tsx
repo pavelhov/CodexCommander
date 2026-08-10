@@ -29,7 +29,7 @@ const KEYS_OK = {
   attributionSince: "2026-07-20T00:00:00.000Z",
   authMatrix: AUTH_MATRIX,
   baseUrl: "http://127.0.0.1:10100/v1",
-  endpoint: "http://127.0.0.1:10100/v1/responses",
+  responsesEndpoint: "http://127.0.0.1:10100/v1/responses",
   responsesEndpoint: "http://127.0.0.1:10100/v1/responses",
   chatCompletionsEndpoint: "http://127.0.0.1:10100/v1/chat/completions",
   messagesEndpoint: "http://127.0.0.1:10100/v1/messages",
@@ -37,7 +37,7 @@ const KEYS_OK = {
   claudeCodeEnabled: true,
 };
 
-const ONE_TIME_KEY = "ocx_data_onetime_secret_value";
+const ONE_TIME_KEY = "ccx_data_onetime_secret_value";
 
 interface SentRequest {
   url: string;
@@ -98,7 +98,7 @@ function installFetch(sent: SentRequest[], dataPlaneStatus = 200): void {
       sent.push({
         url,
         method,
-        key: headers.get("x-opencodex-api-key"),
+        key: headers.get("x-codexcommander-api-key"),
         authorization: headers.get("authorization"),
         body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
       });

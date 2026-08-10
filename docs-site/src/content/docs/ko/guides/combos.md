@@ -3,7 +3,7 @@ title: "콤보: 페일오버와 로드 밸런싱"
 description: "하나의 가상 모델을 여러 공급자에 걸쳐 페일오버나 가중 로드 밸런싱으로 라우팅합니다."
 ---
 
-**콤보**는 정해진 순서로 나열된 실제 공급자/모델 대상 목록 앞에 서는 하나의 가상 모델입니다. 클라이언트는 `combo/<id>`로 요청하고, opencodex는 대상을 하나 선택해 요청을 그 구체적인 `provider/model`로 다시 쓰며, 첫 번째 대상이 재시도 가능한 실패를 내면 다른 대상을 시도할 수 있습니다.
+**콤보**는 정해진 순서로 나열된 실제 공급자/모델 대상 목록 앞에 서는 하나의 가상 모델입니다. 클라이언트는 `combo/<id>`로 요청하고, CodexCommander는 대상을 하나 선택해 요청을 그 구체적인 `provider/model`로 다시 쓰며, 첫 번째 대상이 재시도 가능한 실패를 내면 다른 대상을 시도할 수 있습니다.
 
 이 방식은 다음 두 경우에 유용합니다.
 
@@ -17,10 +17,10 @@ description: "하나의 가상 모델을 여러 공급자에 걸쳐 페일오버
 이 예시는 Anthropic을 먼저, OpenAI를 나중에 두는 `combo/main`을 만듭니다. 두 공급자는 이미 존재하고 활성화되어 있어야 합니다.
 
 ```bash
-ocx combo set main --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol
+ccx combo set main --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol
 ```
 
-기본 전략은 페일오버이므로 일반 요청은 `anthropic/claude-opus-4-8`으로 갑니다. 그 시도가 재시도 가능한 실패를 내면 opencodex는 `openai/gpt-5.6-sol`로 넘어갈 수 있습니다.
+기본 전략은 페일오버이므로 일반 요청은 `anthropic/claude-opus-4-8`으로 갑니다. 그 시도가 재시도 가능한 실패를 내면 CodexCommander는 `openai/gpt-5.6-sol`로 넘어갈 수 있습니다.
 
 가상 모델은 평소에 모델 ID를 넣는 자리 어디서나 사용할 수 있습니다.
 
@@ -34,7 +34,7 @@ ocx combo set main --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol
 저장된 정의를 확인합니다.
 
 ```bash
-ocx combo show main
+ccx combo show main
 ```
 
 :::tip
@@ -43,7 +43,7 @@ ocx combo show main
 
 ## 콤보 이름 동작
 
-`ocx combo set <id>`의 콤보 ID는 문자나 숫자로 시작해야 합니다. 그 뒤에는 문자, 숫자, `.`, `_`, `-`를 포함할 수 있고, 전체 길이는 64자 이하여야 합니다. 정식 모델 ID는 항상 `combo/<id>`입니다. 예를 들어 ID `main`은 `combo/main`이 됩니다.
+`ccx combo set <id>`의 콤보 ID는 문자나 숫자로 시작해야 합니다. 그 뒤에는 문자, 숫자, `.`, `_`, `-`를 포함할 수 있고, 전체 길이는 64자 이하여야 합니다. 정식 모델 ID는 항상 `combo/<id>`입니다. 예를 들어 ID `main`은 `combo/main`이 됩니다.
 
 콤보를 설정하면 `combo/` 네임스페이스는 예약됩니다. 이름이 `combo`인 공급자는 그 자리를 차지할 수 없고, 콤보 ID도 이미 설정된 공급자 이름과 겹칠 수 없습니다.
 
@@ -82,7 +82,7 @@ alias는 클라이언트가 요청하는 공개 이름만 바꿉니다. 콤보�
 성공 요청 두 번씩 묶는 2:1 콤보를 만듭니다.
 
 ```bash
-ocx combo set balanced \
+ccx combo set balanced \
   --targets anthropic/claude-opus-4-8:2,openai/gpt-5.6-sol:1 \
   --strategy round-robin \
   --sticky 2
@@ -111,7 +111,7 @@ ocx combo set balanced \
 | 클라이언트 취소(499), `origin_rejected`, cyber-policy refusal, context overflow, 또는 invalid request | 멈추고 오류를 반환합니다. 다른 대상을 써도 요청이 유효해지지 않기 때문입니다. |
 | 그 밖의 분류되지 않은 오류 | 멈추고 오류를 반환합니다. |
 
-홉된 대상은 기본적으로 60초 동안 쿨다운에 들어갑니다. 상위 응답에 유효한 `Retry-After` 값이 있으면 opencodex는 그 값을 대신 사용합니다. 숫자 초와 HTTP-date 값이 모두 허용되며, 모든 쿨다운은 최대 10분으로 제한됩니다.
+홉된 대상은 기본적으로 60초 동안 쿨다운에 들어갑니다. 상위 응답에 유효한 `Retry-After` 값이 있으면 CodexCommander는 그 값을 대신 사용합니다. 숫자 초와 HTTP-date 값이 모두 허용되며, 모든 쿨다운은 최대 10분으로 제한됩니다.
 
 현재 요청은 이미 시도한 대상을 다시 시도하지 않습니다. 이후 요청은 그 대상의 쿨다운이 끝날 때까지 건너뜁니다. 적합한 대상이 하나도 남지 않으면 프록시는 HTTP 503과 함께 `error.code = "combo_unavailable"`을 반환합니다.
 
@@ -127,15 +127,15 @@ ocx combo set balanced \
 2. 호출자가 effort를 설정하지 않았습니다.
 3. 선택된 대상의 카탈로그가 그 정확한 effort를 광고합니다.
 
-요청에 `reasoning` 객체가 없으면 opencodex가 새로 만듭니다. `reasoning`은 있지만 `effort` 속성이 없으면 다른 필드는 그대로 두고 기본값만 추가합니다. 호출자가 준 effort는 절대 덮어쓰지 않습니다.
+요청에 `reasoning` 객체가 없으면 CodexCommander가 새로 만듭니다. `reasoning`은 있지만 `effort` 속성이 없으면 다른 필드는 그대로 두고 기본값만 추가합니다. 호출자가 준 effort는 절대 덮어쓰지 않습니다.
 
-대상 기능을 알 수 없거나 설정한 effort를 포함하지 않으면 opencodex는 기본값을 생략하고 대상의 동작은 그대로 둡니다. 지원 값은 `low`, `medium`, `high`, `xhigh`, `max`, `ultra`입니다. effort를 호출자와 대상에 완전히 맡기려면 이 필드를 생략하거나 `null`로 설정하십시오.
+대상 기능을 알 수 없거나 설정한 effort를 포함하지 않으면 CodexCommander는 기본값을 생략하고 대상의 동작은 그대로 둡니다. 지원 값은 `low`, `medium`, `high`, `xhigh`, `max`, `ultra`입니다. effort를 호출자와 대상에 완전히 맡기려면 이 필드를 생략하거나 `null`로 설정하십시오.
 
 ## 암호화된 v2 서브에이전트 작업
 
-Codex v2 서브에이전트에는 중요한 제한이 하나 있습니다([issue #92](https://github.com/lidge-jun/opencodex/issues/92)). 네이티브 부모 프로세스는 새로 생성된 작업자에게 보낼 작업을 네이티브 ChatGPT 백엔드용으로 생성한 암호문으로만 전달할 수 있습니다. 외부 공급자는 그 페이로드를 읽을 수 없습니다.
+Codex v2 서브에이전트에는 중요한 제한이 하나 있습니다([issue #92](https://github.com/pavelhov/CodexCommander/issues/92)). 네이티브 부모 프로세스는 새로 생성된 작업자에게 보낼 작업을 네이티브 ChatGPT 백엔드용으로 생성한 암호문으로만 전달할 수 있습니다. 외부 공급자는 그 페이로드를 읽을 수 없습니다.
 
-이런 요청에서 콤보는 재시도 가능한 실패가 나더라도 정식 네이티브 ChatGPT 경로만 적합 대상으로 남깁니다. 콤보에 복호화 가능한 대상이 하나도 없으면 opencodex는 전송 전에 멈추고 HTTP 400을 반환합니다.
+이런 요청에서 콤보는 재시도 가능한 실패가 나더라도 정식 네이티브 ChatGPT 경로만 적합 대상으로 남깁니다. 콤보에 복호화 가능한 대상이 하나도 없으면 CodexCommander는 전송 전에 멈추고 HTTP 400을 반환합니다.
 
 ```json
 {
@@ -168,13 +168,13 @@ v1/base/v2 모드와 암호화된 작업의 전체 흐름은 [Sub-agent Surface]
 주요 명령은 다음과 같습니다.
 
 ```bash
-ocx combo list
-ocx combo show <id>
-ocx combo set <id> --targets provider/model[:weight],...
-ocx combo remove <id> --yes
+ccx combo list
+ccx combo show <id>
+ccx combo set <id> --targets provider/model[:weight],...
+ccx combo remove <id> --yes
 ```
 
-`set`은 `--strategy`, `--sticky`, `--effort`, `--alias`, `--rename-from`도 받습니다. `--effort` 또는 `--alias` 값으로 `-`를 주면 해당 필드를 지울 수 있습니다. `create`와 `update`는 `set`의 별칭이고, `delete`는 `remove`의 별칭입니다. 같은 하위 명령은 `ocx route combo` 아래에서도 사용할 수 있습니다.
+`set`은 `--strategy`, `--sticky`, `--effort`, `--alias`, `--rename-from`도 받습니다. `--effort` 또는 `--alias` 값으로 `-`를 주면 해당 필드를 지울 수 있습니다. `create`와 `update`는 `set`의 별칭이고, `delete`는 `remove`의 별칭입니다. 같은 하위 명령은 `ccx route combo` 아래에서도 사용할 수 있습니다.
 
 ### Management API
 
@@ -217,8 +217,8 @@ ocx combo remove <id> --yes
 ### `combo/<id>`가 404를 반환하는 이유는 무엇인가요?
 
 combo id를 찾을 수 없기 때문입니다. 응답은 HTTP 404와 `invalid_request_error` 유형을 반환합니다.
-`ocx combo list`를 실행하고, 철자와 대소문자를 확인하고, 관리 명령이 모델 요청을 받는 것과 동일한
-opencodex 인스턴스에 기록했는지 확인하세요.
+`ccx combo list`를 실행하고, 철자와 대소문자를 확인하고, 관리 명령이 모델 요청을 받는 것과 동일한
+CodexCommander 인스턴스에 기록했는지 확인하세요.
 
 ### `combo_unavailable`이 발생하는 이유는 무엇인가요?
 

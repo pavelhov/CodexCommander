@@ -2,11 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { applyProviderConfigHints, normalizeRoutedCatalogEntry } from "../src/codex/catalog";
 import { routeModel } from "../src/router";
-import type { OcxConfig, OcxParsedRequest, OcxTool } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderParsedRequest, CodexCommanderTool } from "../src/types";
 
-const tools: OcxTool[] = [{ name: "shell", description: "run", parameters: { type: "object" } }];
+const tools: CodexCommanderTool[] = [{ name: "shell", description: "run", parameters: { type: "object" } }];
 
-function parsedRequest(overrides: Partial<OcxParsedRequest["options"]> = {}): Parameters<ReturnType<typeof createOpenAIChatAdapter>["buildRequest"]>[0] {
+function parsedRequest(overrides: Partial<CodexCommanderParsedRequest["options"]> = {}): Parameters<ReturnType<typeof createOpenAIChatAdapter>["buildRequest"]>[0] {
   return {
     modelId: "grok-4.5",
     context: {
@@ -46,7 +46,7 @@ describe("parallel tool calls provider opt-in (request body)", () => {
 
 describe("stale persisted config backfill (router)", () => {
   test("persisted xai config without the flag inherits registry parallelToolCalls:true", () => {
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "xai",
       providers: {
@@ -64,7 +64,7 @@ describe("stale persisted config backfill (router)", () => {
   });
 
   test("user-persisted explicit false overrides the registry opt-in", () => {
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "xai",
       providers: {

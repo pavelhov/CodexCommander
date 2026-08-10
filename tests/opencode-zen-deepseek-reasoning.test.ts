@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { routeModel } from "../src/router";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
-function configFor(modelId: string): OcxConfig {
+function configFor(modelId: string): CodexCommanderConfig {
   return {
     port: 10110,
     defaultProvider: "opencode-zen",

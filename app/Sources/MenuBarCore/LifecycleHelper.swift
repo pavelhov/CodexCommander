@@ -18,7 +18,7 @@ public enum LifecycleState: String, Codable, Sendable {
     case failed
 }
 
-public struct LifecycleCommandResult: Codable, Equatable, Sendable {
+public struct LifecycleCommandResult: Decodable, Equatable, Sendable {
     public let schemaVersion: Int
     public let action: LifecycleAction
     public let ok: Bool
@@ -28,8 +28,8 @@ public struct LifecycleCommandResult: Codable, Equatable, Sendable {
     public let port: Int?
     public let message: String
     public let errorCode: String?
-    /// Catalog-action fields are additive so older lifecycle results remain decodable.
-    /// The app deliberately receives counts rather than process identifiers.
+    /// These fields are present only for the `applyCodexCatalog` action. The app receives
+    /// counts rather than process identifiers.
     public let catalogUpdated: Bool?
     public let codexRestartRequired: Bool?
     public let staleWorkerCount: Int?
@@ -67,6 +67,44 @@ public struct LifecycleCommandResult: Codable, Equatable, Sendable {
         self.stoppedWorkerCount = stoppedWorkerCount
         self.survivingWorkerCount = survivingWorkerCount
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, action, ok, state, changed, pid, port, message, errorCode
+        case catalogUpdated, codexRestartRequired, staleWorkerCount
+        case stoppedWorkerCount, survivingWorkerCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let action = try values.decode(LifecycleAction.self, forKey: .action)
+        schemaVersion = try values.decode(Int.self, forKey: .schemaVersion)
+        self.action = action
+        ok = try values.decode(Bool.self, forKey: .ok)
+        state = try values.decode(LifecycleState.self, forKey: .state)
+        changed = try values.decode(Bool.self, forKey: .changed)
+        // `decode(Int?.self, ...)` accepts explicit JSON null but rejects a missing key.
+        pid = try values.decode(Int?.self, forKey: .pid)
+        port = try values.decode(Int?.self, forKey: .port)
+        message = try values.decode(String.self, forKey: .message)
+        errorCode = try values.decodeIfPresent(String.self, forKey: .errorCode)
+
+        if action == .applyCodexCatalog {
+            catalogUpdated = try values.decode(Bool.self, forKey: .catalogUpdated)
+            codexRestartRequired = try values.decode(Bool.self, forKey: .codexRestartRequired)
+            staleWorkerCount = try values.decode(Int.self, forKey: .staleWorkerCount)
+            stoppedWorkerCount = try values.decode(Int.self, forKey: .stoppedWorkerCount)
+            survivingWorkerCount = try values.decode(Int.self, forKey: .survivingWorkerCount)
+        } else {
+            // Proxy lifecycle actions may carry the current catalog-sync readiness
+            // extension; absent keys mean no readiness signal. The fixed catalog action
+            // above is stricter because all five fields are its result contract.
+            catalogUpdated = try values.decodeIfPresent(Bool.self, forKey: .catalogUpdated)
+            codexRestartRequired = try values.decodeIfPresent(Bool.self, forKey: .codexRestartRequired)
+            staleWorkerCount = try values.decodeIfPresent(Int.self, forKey: .staleWorkerCount)
+            stoppedWorkerCount = try values.decodeIfPresent(Int.self, forKey: .stoppedWorkerCount)
+            survivingWorkerCount = try values.decodeIfPresent(Int.self, forKey: .survivingWorkerCount)
+        }
+    }
 }
 
 public enum LifecycleHelperError: Error, Equatable, Sendable {
@@ -78,13 +116,13 @@ public enum LifecycleHelperError: Error, Equatable, Sendable {
     public var userMessage: String {
         switch self {
         case .unavailable:
-            return "OpenCodex CLI was not found. Install OpenCodex, then try Start again."
+            return "CodexCommander CLI was not found. Install CodexCommander, then try Start again."
         case .launchFailed:
-            return "OpenCodex could not launch its lifecycle helper."
+            return "CodexCommander could not launch its lifecycle helper."
         case .timedOut:
-            return "OpenCodex lifecycle control timed out. Check Logs or run `ocx status`."
+            return "CodexCommander lifecycle control timed out. Check Logs or run `ccx status`."
         case .invalidResponse:
-            return "OpenCodex returned an invalid lifecycle response."
+            return "CodexCommander returned an invalid lifecycle response."
         }
     }
 }
@@ -116,7 +154,7 @@ public enum LifecycleHelperDiscovery {
             return source
         }
 
-        // A released companion carries the complete Bun + OpenCodex package under
+        // A released companion carries the complete Bun + CodexCommander package under
         // Contents/Resources/runtime. Resolve it before global installs so a copied app
         // never accidentally controls a different checkout or npm installation.
         if let bundled = bundledInvocation(bundleURL: bundleURL, fileManager: fileManager) {
@@ -125,23 +163,25 @@ public enum LifecycleHelperDiscovery {
 
         // Release companions may be launched outside the source tree. Only inspect
         // fixed installation locations, then resolve an npm/bun symlink back to an
-        // actual OpenCodex package root. PATH and version-directory scans would turn
+        // actual CodexCommander package root. PATH and version-directory scans would turn
         // an ambient shell setting into arbitrary process execution from the menu app.
-        let candidates = [
-            "/opt/homebrew/bin/ocx",
-            "/usr/local/bin/ocx",
-            home.appendingPathComponent(".local/bin/ocx").path,
-            home.appendingPathComponent(".npm-global/bin/ocx").path,
-            home.appendingPathComponent(".volta/bin/ocx").path,
-            home.appendingPathComponent(".bun/bin/ocx").path,
-        ]
+        let candidates = ["codexcommander", "ccx"].flatMap { command in
+            [
+                "/opt/homebrew/bin/\(command)",
+                "/usr/local/bin/\(command)",
+                home.appendingPathComponent(".local/bin/\(command)").path,
+                home.appendingPathComponent(".npm-global/bin/\(command)").path,
+                home.appendingPathComponent(".volta/bin/\(command)").path,
+                home.appendingPathComponent(".bun/bin/\(command)").path,
+            ]
+        }
         _ = environment // Explicitly ignored: discovery is independent of ambient PATH.
 
         var seen = Set<String>()
         for candidate in candidates where seen.insert(candidate).inserted {
             guard isExecutable(candidate, fileManager: fileManager) else { continue }
             let launcher = URL(fileURLWithPath: candidate).resolvingSymlinksInPath()
-            guard launcher.lastPathComponent == "ocx.mjs",
+            guard launcher.lastPathComponent == "ccx.mjs",
                   launcher.deletingLastPathComponent().lastPathComponent == "bin"
             else { continue }
             let repository = launcher.deletingLastPathComponent().deletingLastPathComponent()
@@ -157,7 +197,7 @@ public enum LifecycleHelperDiscovery {
         fileManager: FileManager
     ) -> LifecycleInvocation? {
         let bundle = bundleURL.resolvingSymlinksInPath()
-        guard bundle.pathExtension == "app" else { return nil }
+        guard bundle.lastPathComponent == "CodexCommander.app" else { return nil }
         let runtime = bundle
             .appendingPathComponent("Contents", isDirectory: true)
             .appendingPathComponent("Resources", isDirectory: true)
@@ -169,10 +209,11 @@ public enum LifecycleHelperDiscovery {
         bundleURL: URL,
         fileManager: FileManager
     ) -> LifecycleInvocation? {
-        // <repo>/dist/macos/OpenCodex.app -> <repo>. Requiring every fixed path
-        // component keeps a copied/lookalike app from selecting a nearby script.
+        // <repo>/dist/macos/CodexCommander.app -> <repo>.
+        // Requiring every fixed path component keeps a copied/lookalike app from
+        // selecting a nearby script.
         let bundle = bundleURL.resolvingSymlinksInPath()
-        guard bundle.lastPathComponent == "OpenCodex.app",
+        guard bundle.lastPathComponent == "CodexCommander.app",
               bundle.deletingLastPathComponent().lastPathComponent == "macos",
               bundle.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent == "dist"
         else { return nil }
@@ -189,7 +230,7 @@ public enum LifecycleHelperDiscovery {
     ) -> LifecycleInvocation? {
         let package = repository.appendingPathComponent("package.json")
         let entry = repository.appendingPathComponent("src/cli/index.ts")
-        guard isOpenCodexPackage(package, fileManager: fileManager),
+        guard isCodexCommanderPackage(package, fileManager: fileManager),
               isRegularFile(entry.path, fileManager: fileManager)
         else { return nil }
 
@@ -204,7 +245,7 @@ public enum LifecycleHelperDiscovery {
         return LifecycleInvocation(executable: bun, prefixArguments: [entry.path])
     }
 
-    private static func isOpenCodexPackage(
+    private static func isCodexCommanderPackage(
         _ package: URL,
         fileManager: FileManager
     ) -> Bool {
@@ -215,7 +256,8 @@ public enum LifecycleHelperDiscovery {
               let data = try? Data(contentsOf: package, options: [.mappedIfSafe]),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return false }
-        return object["name"] as? String == "@bitkyc08/opencodex"
+        guard let name = object["name"] as? String else { return false }
+        return name == "codexcommander"
     }
 
     private static func isRegularFile(_ path: String, fileManager: FileManager) -> Bool {
@@ -372,7 +414,7 @@ public actor LifecycleHelper: LifecycleCommandRunning {
         }
     }
 
-    /// Preserve OpenCodex/Codex configuration while removing runtime preloads and an
+    /// Preserve CodexCommander/Codex configuration while removing runtime preloads and an
     /// attacker-controlled PATH from this privileged fixed-action bridge.
     private nonisolated static func controlledEnvironment(for executable: URL) -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
@@ -380,7 +422,7 @@ public actor LifecycleHelper: LifecycleCommandRunning {
         if executable.path.contains("/Contents/Resources/runtime/") {
             // The app-owned runtime must never enter npm/source self-update paths.
             // This marker is inherited by the Bun proxy process and its management API.
-            environment["OCX_APP_RUNTIME"] = "1"
+            environment["CCX_APP_RUNTIME"] = "1"
         }
         for key in [
             "BUN_OPTIONS", "BUN_INSPECT", "BUN_INSPECT_CONNECT_TO",

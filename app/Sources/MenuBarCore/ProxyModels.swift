@@ -1,47 +1,96 @@
 import Foundation
 
-// Codable mirrors of the management API payloads inventoried in
-// devlog/_plan/260725_macos_menubar_app/002_api_surface.md.
-//
-// Every field the proxy may omit is optional. The proxy is a fast-moving local service;
-// a companion that fails to decode because one field moved is worse than one that shows
-// an em dash.
+// Codable mirrors of the current management API contract. Required keys deliberately
+// fail decoding when an older or unrelated listener answers this app; nullable keys are
+// optionals only where the server emits JSON null.
 
 /// `GET /api/startup-health`
 public struct StartupHealth: Decodable, Equatable, Sendable {
-    public let status: String?
-    public let protection: String?
-    public let platform: String?
-    public let routingKind: String?
-    public let serviceRunning: Bool?
-    public let serviceInstalled: Bool?
-    public let serviceEnabled: Bool?
-    public let rebootSafe: Bool?
-    public let diagnosticStale: Bool?
+    public let status: String
+    public let protection: String
+    public let platform: String
+    public let routingKind: String
+    public let routingInjected: Bool
+    public let localRoutingDependency: Bool
+    public let autostartEnabled: Bool
+    public let serviceRunning: Bool
+    public let serviceInstalled: Bool
+    public let serviceViable: Bool
+    public let serviceEnabled: Bool
+    public let serviceStale: Bool
+    public let serviceConflict: Bool
+    public let serviceSupported: Bool
+    public let shimInstalled: Bool
+    public let shimHealthy: Bool
+    public let shimCoverage: String
+    public let rebootSafe: Bool
+    public let diagnosticStale: Bool
     public let recommendedCommand: String?
+    public let commands: Commands
+
+    public struct Commands: Decodable, Equatable, Sendable {
+        public let installService: String
+        public let repairService: String
+        public let installShim: String
+        public let restoreNative: String
+
+        public init(
+            installService: String,
+            repairService: String,
+            installShim: String,
+            restoreNative: String
+        ) {
+            self.installService = installService
+            self.repairService = repairService
+            self.installShim = installShim
+            self.restoreNative = restoreNative
+        }
+    }
 
     public init(
-        status: String? = nil,
-        protection: String? = nil,
-        platform: String? = nil,
-        routingKind: String? = nil,
-        serviceRunning: Bool? = nil,
-        serviceInstalled: Bool? = nil,
-        serviceEnabled: Bool? = nil,
-        rebootSafe: Bool? = nil,
-        diagnosticStale: Bool? = nil,
-        recommendedCommand: String? = nil
+        status: String,
+        protection: String,
+        platform: String,
+        routingKind: String,
+        routingInjected: Bool,
+        localRoutingDependency: Bool,
+        autostartEnabled: Bool,
+        serviceRunning: Bool,
+        serviceInstalled: Bool,
+        serviceViable: Bool,
+        serviceEnabled: Bool,
+        serviceStale: Bool,
+        serviceConflict: Bool,
+        serviceSupported: Bool,
+        shimInstalled: Bool,
+        shimHealthy: Bool,
+        shimCoverage: String,
+        rebootSafe: Bool,
+        diagnosticStale: Bool,
+        recommendedCommand: String?,
+        commands: Commands
     ) {
         self.status = status
         self.protection = protection
         self.platform = platform
         self.routingKind = routingKind
+        self.routingInjected = routingInjected
+        self.localRoutingDependency = localRoutingDependency
+        self.autostartEnabled = autostartEnabled
         self.serviceRunning = serviceRunning
         self.serviceInstalled = serviceInstalled
+        self.serviceViable = serviceViable
         self.serviceEnabled = serviceEnabled
+        self.serviceStale = serviceStale
+        self.serviceConflict = serviceConflict
+        self.serviceSupported = serviceSupported
+        self.shimInstalled = shimInstalled
+        self.shimHealthy = shimHealthy
+        self.shimCoverage = shimCoverage
         self.rebootSafe = rebootSafe
         self.diagnosticStale = diagnosticStale
         self.recommendedCommand = recommendedCommand
+        self.commands = commands
     }
 
     /// `status` is treated as an open string: unknown values degrade to a neutral state
@@ -51,41 +100,41 @@ public struct StartupHealth: Decodable, Equatable, Sendable {
     /// The server returns its conservative fallback immediately while a service-manager
     /// probe refreshes in the background. That is a revalidation signal, not by itself
     /// evidence that protection was lost.
-    public var isDiagnosticStale: Bool { diagnosticStale == true }
+    public var isDiagnosticStale: Bool { diagnosticStale }
 
     /// True when a supervisor owns the process lifecycle. Used only for the qualifier
     /// line — it deliberately does not gate any action, because `/api/stop` stops the
     /// service on purpose and nothing restarts the proxy automatically.
     public var isServiceManaged: Bool {
-        (serviceInstalled ?? false) && (serviceEnabled ?? false)
+        serviceInstalled && serviceEnabled
     }
 
     /// The command to show the user when the proxy is not running.
     public var manualStartCommand: String {
-        isServiceManaged ? "ocx service start" : "ocx start"
+        isServiceManaged ? "ccx service start" : "ccx start"
     }
 }
 
 public struct QuotaWindow: Decodable, Equatable, Sendable {
-    public let label: String?
-    public let percent: Double?
+    public let label: String
+    public let percent: Double
     public let resetAt: Double?
 }
 
-/// A published provider cap paired with observations from this local OpenCodex usage
+/// A published provider cap paired with observations from this local CodexCommander usage
 /// log. This is reference data, not a provider-reported balance or remaining percent.
 public struct QuotaReferenceWindow: Decodable, Equatable, Sendable {
-    public let id: String?
-    public let label: String?
-    public let windowSeconds: Double?
-    public let publishedLimitUsd: Double?
+    public let id: String
+    public let label: String
+    public let windowSeconds: Double
+    public let publishedLimitUsd: Double
     public let observedSpendUsd: Double?
-    public let observedTokens: Int64?
-    public let observedRequests: Int?
-    public let pricedRequests: Int?
-    public let unpricedRequests: Int?
-    public let unmeasuredRequests: Int?
-    public let coverage: String?
+    public let observedTokens: Int64
+    public let observedRequests: Int
+    public let pricedRequests: Int
+    public let unpricedRequests: Int
+    public let unmeasuredRequests: Int
+    public let coverage: String
 
     public enum ObservationQuality: Equatable, Sendable {
         case none
@@ -96,14 +145,14 @@ public struct QuotaReferenceWindow: Decodable, Equatable, Sendable {
     }
 
     public var observationQuality: ObservationQuality {
-        let requests = max(0, observedRequests ?? 0)
-        let tokens = max(0, observedTokens ?? 0)
+        let requests = max(0, observedRequests)
+        let tokens = max(0, observedTokens)
         let hasObservation = requests > 0 || tokens > 0 || observedSpendUsd != nil
         guard hasObservation else { return .none }
 
-        let priced = max(0, pricedRequests ?? 0)
-        let unpriced = max(0, unpricedRequests ?? 0)
-        let unmeasured = max(0, unmeasuredRequests ?? 0)
+        let priced = max(0, pricedRequests)
+        let unpriced = max(0, unpricedRequests)
+        let unmeasured = max(0, unmeasuredRequests)
         let internallyComplete = coverage == "complete"
             && requests > 0
             && priced == requests
@@ -114,11 +163,11 @@ public struct QuotaReferenceWindow: Decodable, Equatable, Sendable {
     }
 }
 
-/// A concrete upstream limit response observed by OpenCodex. Unlike reference-window
+/// A concrete upstream limit response observed by CodexCommander. Unlike reference-window
 /// estimates, this event is authoritative evidence that the named provider limit fired.
 public struct QuotaObservedLimitEvent: Decodable, Equatable, Sendable {
-    public let limitName: String?
-    public let observedAt: Double?
+    public let limitName: String
+    public let observedAt: Double
     public let resetAt: Double?
 }
 
@@ -132,15 +181,15 @@ public struct ProviderQuota: Decodable, Equatable, Sendable {
     public let customWindows: [QuotaWindow]?
     public let referenceWindows: [QuotaReferenceWindow]?
     public let observedLimitEvent: QuotaObservedLimitEvent?
-    public let updatedAt: Double?
+    public let updatedAt: Double
 }
 
 public struct QuotaReport: Decodable, Equatable, Sendable {
     public let provider: String
-    public let label: String?
-    public let source: String?
-    public let quota: ProviderQuota?
-    public let updatedAt: Double?
+    public let label: String
+    public let source: String
+    public let quota: ProviderQuota
+    public let updatedAt: Double
 }
 
 public enum ProviderQuotaAvailabilityState: Equatable, Sendable, Decodable {
@@ -179,15 +228,13 @@ public struct ProviderQuotaAvailability: Decodable, Equatable, Sendable {
     public let provider: String
     public let status: ProviderQuotaAvailabilityState
     public let reason: ProviderQuotaUnavailableReason?
-    public let checkedAt: Double?
+    public let checkedAt: Double
 }
 
-/// Additive `/api/provider-quotas` envelope. Older proxies omit `availability`; the
-/// companion preserves its existing generic unavailable fallback in that case.
 public struct ProviderQuotaEnvelope: Decodable, Equatable, Sendable {
-    public let generatedAt: Double?
-    public let reports: [QuotaReport]?
-    public let availability: [ProviderQuotaAvailability]?
+    public let generatedAt: Double
+    public let reports: [QuotaReport]
+    public let availability: [ProviderQuotaAvailability]
 }
 
 public enum AgentActivityRole: String, Decodable, Equatable, Sendable {
@@ -253,10 +300,10 @@ public extension QuotaReport {
         return Date(timeIntervalSince1970: seconds)
     }
 
-    /// Best provider-reported freshness marker. Some adapters place `updatedAt`
-    /// inside the quota object while others place it on the report envelope.
+    /// The current contract carries both report and quota timestamps. The quota timestamp
+    /// is the measurement timestamp; the enclosing report timestamp is publication time.
     var freshnessDate: Date? {
-        Self.date(from: quota?.updatedAt ?? updatedAt)
+        Self.date(from: quota.updatedAt)
     }
 
     /// Every window the provider reported, in display order.
@@ -266,7 +313,7 @@ public extension QuotaReport {
     /// `google-antigravity` carry two `customWindows` each. Returning only one window
     /// would silently hide real quota pressure.
     func normalizedWindows() -> [NormalizedQuota] {
-        let name = label ?? provider
+        let name = label
         var windows: [NormalizedQuota] = []
 
         func append(_ percent: Double?, _ windowLabel: String, _ resetAt: Double?) {
@@ -278,12 +325,12 @@ public extension QuotaReport {
             ))
         }
 
-        append(quota?.fiveHourPercent, "5h", quota?.fiveHourResetAt)
-        append(quota?.weeklyPercent, "week", quota?.weeklyResetAt)
-        append(quota?.monthlyPercent, "month", quota?.monthlyResetAt)
+        append(quota.fiveHourPercent, "5h", quota.fiveHourResetAt)
+        append(quota.weeklyPercent, "week", quota.weeklyResetAt)
+        append(quota.monthlyPercent, "month", quota.monthlyResetAt)
 
-        for window in quota?.customWindows ?? [] {
-            append(window.percent, window.label ?? "window", window.resetAt)
+        for window in quota.customWindows ?? [] {
+            append(window.percent, window.label, window.resetAt)
         }
 
         return windows
@@ -293,11 +340,11 @@ public extension QuotaReport {
     /// windows. In particular, local spend divided by a cap must never become a fake
     /// provider-reported percentage or remaining balance.
     var referenceWindows: [QuotaReferenceWindow] {
-        quota?.referenceWindows ?? []
+        quota.referenceWindows ?? []
     }
 
     var observedLimitEvent: QuotaObservedLimitEvent? {
-        quota?.observedLimitEvent
+        quota.observedLimitEvent
     }
 
     /// The single window that best represents current pressure, for the compact row.
@@ -311,7 +358,7 @@ public extension QuotaReport {
     /// Providers with no numeric window normalize to a nil percent so the UI renders an
     /// em dash rather than a misleading zero.
     func normalized() -> NormalizedQuota {
-        let name = label ?? provider
+        let name = label
         let windows = normalizedWindows()
 
         // Longer horizons rank higher only as a tie-breaker.
@@ -342,14 +389,14 @@ public extension QuotaReport {
 /// `GET /api/providers`. `hasApiKey` is a presence flag; the key never leaves the proxy.
 public struct ProviderSummary: Decodable, Equatable, Sendable {
     public let name: String
-    public let adapter: String?
+    public let adapter: String
     public let authMode: String?
-    public let hasApiKey: Bool?
-    public let disabled: Bool?
-    public let quotaCapable: Bool?
+    public let hasApiKey: Bool
+    public let disabled: Bool
+    public let quotaCapable: Bool
 
-    public var isEnabled: Bool { !(disabled ?? false) }
-    public var supportsQuotaReporting: Bool { isEnabled && quotaCapable == true }
+    public var isEnabled: Bool { !disabled }
+    public var supportsQuotaReporting: Bool { isEnabled && quotaCapable }
 }
 
 /// Tray-only display state. An unavailable row is structurally incapable of carrying

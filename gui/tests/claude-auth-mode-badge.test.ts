@@ -34,7 +34,7 @@ test("every locale carries the auth-mode keys", async () => {
 });
 
 // The select must offer a way BACK to auto: without it, one save converts a user to a
-// sticky manual mode forever (devlog 260726_claude_auth_auto/002 §3).
+// sticky manual mode forever (implementation contract §3).
 test("the auth-mode select offers auto first", async () => {
   const section = await read("../src/pages/claude-code-sections.tsx");
   const optionsBlock = section.slice(section.indexOf("claude.authMode\")"), section.indexOf("claude.effectiveMode.label"));
@@ -55,29 +55,35 @@ test("the reason line renders every origin plus the admission note", async () =>
   }
 });
 
-// The manual snippet follows the daemon resolution under auto, and degrades to the
-// historical default when an older proxy sends no markerMode.
+// The manual snippet follows the daemon resolution under auto.
 test("the manual env snippet follows markerMode under auto", () => {
-  const base = { maxContextTokens: null, autoContext: false, autoCompactWindow: null, effectiveModelEnv: {}, port: 10100 };
+  const base = { autoContext: false, autoCompactWindow: null, effectiveModelEnv: {}, port: 10100 };
 
   const autoProxy = buildManualEnv({ ...base, authMode: "auto", markerMode: "proxy" });
-  expect(autoProxy).toContain("export ANTHROPIC_AUTH_TOKEN=opencodex-proxy");
+  expect(autoProxy).toContain("export ANTHROPIC_AUTH_TOKEN=codexcommander-proxy");
   expect(autoProxy).toContain("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1");
 
   const autoSubscription = buildManualEnv({ ...base, authMode: "auto", markerMode: "subscription" });
-  expect(autoSubscription).not.toContain("ANTHROPIC_AUTH_TOKEN=opencodex-proxy");
+  expect(autoSubscription).not.toContain("ANTHROPIC_AUTH_TOKEN=codexcommander-proxy");
   expect(autoSubscription).not.toContain("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST");
 
-  // Older proxy: no markerMode -> historical subscription default, not a proxy guess.
-  const degraded = buildManualEnv({ ...base, authMode: "auto" });
-  expect(degraded).not.toContain("ANTHROPIC_AUTH_TOKEN=opencodex-proxy");
+});
+
+test("the manual env snippet rejects a payload without markerMode", () => {
+  expect(() => buildManualEnv({
+    authMode: "auto",
+    autoContext: false,
+    autoCompactWindow: null,
+    effectiveModelEnv: {},
+    port: 10100,
+  } as never)).toThrow("markerMode is required");
 });
 
 test("an explicit manual mode still drives the snippet directly", () => {
-  const base = { maxContextTokens: null, autoContext: false, autoCompactWindow: null, effectiveModelEnv: {}, port: 10100 };
+  const base = { autoContext: false, autoCompactWindow: null, effectiveModelEnv: {}, port: 10100 };
   // markerMode is deliberately contradictory here: the explicit choice must win.
   expect(buildManualEnv({ ...base, authMode: "proxy", markerMode: "subscription" }))
-    .toContain("export ANTHROPIC_AUTH_TOKEN=opencodex-proxy");
+    .toContain("export ANTHROPIC_AUTH_TOKEN=codexcommander-proxy");
   expect(buildManualEnv({ ...base, authMode: "subscription", markerMode: "proxy" }))
-    .not.toContain("export ANTHROPIC_AUTH_TOKEN=opencodex-proxy");
+    .not.toContain("export ANTHROPIC_AUTH_TOKEN=codexcommander-proxy");
 });

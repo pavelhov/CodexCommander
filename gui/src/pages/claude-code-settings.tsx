@@ -50,7 +50,7 @@ export function AutoConnectSetting({
           <span className="desc">{t("claude.systemEnvDesc")}</span>
         ) : (
           <span className="desc" id={unsupportedDescriptionId}>
-            <Trans k="claude.systemEnvUnsupported" cmd="ocx claude" />
+            <Trans k="claude.systemEnvUnsupported" cmd="ccx claude" />
           </span>
         )}
         {supported && checked && (
@@ -72,17 +72,14 @@ export function AutoConnectSetting({
 
 export function SmallFastModelSetting({
   value,
-  tierHaikuModel,
   options,
   onChange,
 }: {
   value: string;
-  tierHaikuModel?: string;
   options: SelectOption[];
   onChange: (value: string) => void;
 }) {
   const t = useT();
-  const effectiveHelperModel = tierHaikuModel ?? value;
   // Title lives in ClaudeCode's shared ccw-main-head when mounted in the workspace rail.
   return (
     <>
@@ -96,7 +93,7 @@ export function SmallFastModelSetting({
         label={t("claude.smallFastModel")}
         style={{ maxWidth: 420 }}
       />
-      {effectiveHelperModel === "" && (
+      {value === "" && (
         <p className="notice-warn" role="status" style={{ marginTop: 8 }}>
           {t("claude.smallFastModelNativeWarning")}
         </p>

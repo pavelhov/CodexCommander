@@ -1,15 +1,15 @@
 ---
 title: アーキテクチャ
-description: opencodex の内部構造 — モジュールマップ、AdapterEvent ブリッジ、リクエストパーサー、そしてキャッシュ。
+description: CodexCommander の内部構造 — モジュールマップ、AdapterEvent ブリッジ、リクエストパーサー、そしてキャッシュ。
 ---
 
-opencodex は単一の Bun プロセスです。リクエストは OpenAI Responses として入り、内部モデルに正規化され、ルーティングされたのち、アダプターを経由してプロバイダーに送信され、再び Responses SSE にブリッジされます。エンドツーエンドのフローは [動作の仕組み](/ja/getting-started/how-it-works/) を参照してください。
+CodexCommander は単一の Bun プロセスです。リクエストは OpenAI Responses として入り、内部モデルに正規化され、ルーティングされたのち、アダプターを経由してプロバイダーに送信され、再び Responses SSE にブリッジされます。エンドツーエンドのフローは [動作の仕組み](/ja/getting-started/how-it-works/) を参照してください。
 
 ## モジュールマップ
 
 ```
 src/
-├── cli/                # ocx command dispatch, init, status, provider commands
+├── cli/                # ccx command dispatch, init, status, provider commands
 ├── server/             # Bun.serve, /v1/* proxy, /api/* management API, WS bridge
 ├── codex/              # Codex config injection, catalog sync, auth/account integration
 ├── providers/          # provider metadata, API-key pool, quota and labels
@@ -19,12 +19,12 @@ src/
 ├── lib/                # runtime, process, retry, privacy, token estimate helpers
 ├── web-search/         # web-search sidecar (synthetic tool, loop, executor, parser)
 ├── vision/             # vision sidecar (describe + plan)
-├── config.ts           # ~/.opencodex/config.json, defaults, PID, env resolution
+├── config.ts           # ~/.codexcommander/config.json, defaults, PID, env resolution
 ├── router.ts           # model id → provider + adapter
 ├── bridge.ts           # AdapterEvent stream → Responses SSE / JSON
 ├── reasoning-effort.ts # reasoning-effort translation, clamping, and catalog levels
 ├── responses/
-│   ├── parser.ts       # Responses request → OcxParsedRequest
+│   ├── parser.ts       # Responses request → CodexCommanderParsedRequest
 │   ├── schema.ts       # Zod validation
 │   └── compaction.ts   # remote compaction prompts, envelopes, compact history
 ├── service.ts          # launchd / systemd / Task Scheduler background service
@@ -32,14 +32,13 @@ src/
 └── index.ts            # public entry
 ```
 
-以前の大規模なエントリーファイル 3 つは、現在は互換性 facade です。`codex/catalog.ts` は
-7 個の `codex/catalog/*.ts` モジュールを、`server/management-api.ts` は 9 個の
-`server/management/*.ts` モジュールを、`server/responses.ts` は 5 個の
-`server/responses/*.ts` モジュールを接続します。
+`codex/catalog.ts` は 7 個の `codex/catalog/*.ts` モジュールを、
+`server/management-api.ts` は 9 個の `server/management/*.ts` モジュールを、
+`server/responses.ts` は 5 個の `server/responses/*.ts` モジュールを接続します。
 
 ## リクエスト処理フロー
 
-HTTP の境界は `server/index.ts` が担い、Responses データプレーンは `server/responses.ts` facade と
+HTTP の境界は `server/index.ts` が担い、Responses データプレーンは `server/responses.ts` と
 `server/responses/*.ts` モジュールに渡します。
 
 1. `server/index.ts` で CORS と API 認証を確認し、終了待ち状態なら新規リクエストを拒否したのち、リクエストのライフサイクルを記録します。ここで `GET /v1/models`、`POST /v1/responses`、
@@ -60,9 +59,9 @@ HTTP の境界は `server/index.ts` が担い、Responses データプレーン�
 ## パーサー
 
 `responses/parser.ts` は入ってくるリクエストを `responses/schema.ts`（Zod）で検証したのち
-`OcxParsedRequest` を構成します:
+`CodexCommanderParsedRequest` を構成します:
 
-- **Messages** — `input` 項目は正規化された `OcxMessage[]` になります: user / developer / assistant /
+- **Messages** — `input` 項目は正規化された `CodexCommanderMessage[]` になります: user / developer / assistant /
   toolResult。`reasoning` 項目は thinking ブロックになり、`function_call`、`custom_tool_call`、
   `tool_search_call` 項目はツール呼び出しになり、それに対応する `*_output` はツール結果になります。
 - **Tools** — function ツールはそのまま通過します。**名前空間付き (MCP) ツールは平坦化され**、
@@ -95,7 +94,7 @@ HTTP の境界は `server/index.ts` が担い、Responses データプレーン�
 
 ## 伝送と compaction
 
-`server/index.ts` はデフォルトで `/v1/responses` を HTTP/SSE で提供します。`websockets` が `false` の状態で Codex が Responses WebSocket アップグレードを試みると、opencodex は `426 upgrade_required` を返し、Codex はそのセッションで HTTP にフォールバックします。`"websockets": true` を設定すると同じエンドポイントがアップグレードを受け入れ WebSocket ブリッジを使います。
+`server/index.ts` はデフォルトで `/v1/responses` を HTTP/SSE で提供します。`websockets` が `false` の状態で Codex が Responses WebSocket アップグレードを試みると、CodexCommander は `426 upgrade_required` を返し、Codex はそのセッションで HTTP にフォールバックします。`"websockets": true` を設定すると同じエンドポイントがアップグレードを受け入れ WebSocket ブリッジを使います。
 
 Codex コンテキスト compaction はルーティングされたモデルでも動作します。`server/responses/compact.ts` は
 `POST /v1/responses/compact` を内部ルーティング要約ターンとして扱い、圧縮されたヒストリーを返します。
@@ -104,7 +103,7 @@ Codex コンテキスト compaction はルーティングされたモデルで�
 ## キャッシュとカタログ
 
 - `codex/model-cache.ts` はリアルタイム `/models` 結果をプロバイダー別にメモリで TTL キャッシュし（デフォルト 5 分、Codex 自身のキャッシュと一致）、fetch が失敗すると stale-fallback を提供します。
-- `codex/catalog.ts` facade が公開する `codex/catalog/sync.ts` は、ルーティングされたモデルを名前空間項目として Codex のカタログにマージし、おすすめの [サブエージェントモデル](/ja/guides/codex-integration/#the-subagent-picker) を先にランク付けし、`disabledModels` をフィルタし、一回限りのバックアップから元のカタログを完全に復元できます。
+- `codex/catalog.ts` が公開する `codex/catalog/sync.ts` は、ルーティングされたモデルを名前空間項目として Codex のカタログにマージし、おすすめの [サブエージェントモデル](/ja/guides/codex-integration/#the-subagent-picker) を先にランク付けし、`disabledModels` をフィルタし、一回限りのバックアップから元のカタログを完全に復元できます。
 
 ## Reasoning effort
 
@@ -118,7 +117,7 @@ Codex カタログは Codex が受け入れるラベル（`low` / `medium` / `hi
 
 ## コア型
 
-内部モデルは `types.ts` にあります: `OcxParsedRequest`、`OcxContext`、`OcxMessage` ユニオン、
-`OcxContentPart`（text / image）、`OcxToolCall`、`OcxTool`、`AdapterEvent`、そして設定型
-（`OcxConfig`、`OcxProviderConfig`）。2 つのヘルパーが広く使われます: `namespacedToolName()` と
+内部モデルは `types.ts` にあります: `CodexCommanderParsedRequest`、`CodexCommanderContext`、`CodexCommanderMessage` ユニオン、
+`CodexCommanderContentPart`（text / image）、`CodexCommanderToolCall`、`CodexCommanderTool`、`AdapterEvent`、そして設定型
+（`CodexCommanderConfig`、`CodexCommanderProviderConfig`）。2 つのヘルパーが広く使われます: `namespacedToolName()` と
 `modelInList()`（`noVisionModels` / `noReasoningModels` に対する寛容な `:size` タグマッチング）。

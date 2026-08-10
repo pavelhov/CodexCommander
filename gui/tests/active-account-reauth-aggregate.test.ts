@@ -23,17 +23,15 @@ describe("Codex callback aggregate path", () => {
     const hook = await Bun.file(new URL("../src/hooks/useCodexAccountPool.ts", import.meta.url)).text();
     expect(hook).toContain("const activeAccount = activePoolAccount ?? mainAccount");
     expect(hook).toContain("!activeAccount?.paused && accountNeedsReauth(activeAccount)");
-    expect(hook).not.toMatch(/activePoolAccount\s*\?\s*Boolean\(activePoolAccount\.needsReauth\)/);
+    expect(hook).toContain("accountNeedsReauth(activeAccount)");
   });
 
   test("health-only reauth_required marks the active Codex account", () => {
     // Mirrors CodexAccountPool's activePoolNeedsReauth / controller activeNeedsReauth.
     expect(accountNeedsReauth({
-      needsReauth: undefined,
       health: { status: "reauth_required", reason: "refresh_failed" },
     })).toBe(true);
     expect(accountNeedsReauth({
-      needsReauth: undefined,
       health: { status: "healthy" },
     })).toBe(false);
   });
@@ -53,7 +51,7 @@ describe("generic provider map aggregate path", () => {
           {
             id: "acct_other",
             active: false,
-            needsReauth: true,
+            health: { status: "reauth_required" },
           },
         ],
       },
@@ -84,12 +82,12 @@ describe("generic provider map aggregate path", () => {
     expect(map).toEqual({});
   });
 
-  test("legacy needsReauth and Codex overlay still mark providers", () => {
+  test("structured health and the Codex overlay mark providers", () => {
     const map = buildActiveAccountNeedsReauthMap(
       {
         kimi: {
           activeAccountId: "kimi_1",
-          accounts: [{ id: "kimi_1", active: true, needsReauth: true }],
+          accounts: [{ id: "kimi_1", active: true, health: { status: "reauth_required" } }],
         },
       },
       true,

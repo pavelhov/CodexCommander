@@ -86,21 +86,6 @@ export function conversationIdFromClaudeMetadata(
   return normalizeLogConversationId(metadata.user_id);
 }
 
-/** @deprecated Prefer conversationIdFromClaudeMetadata; kept for call-site clarity. */
-export function conversationIdFromClaudeCacheKey(
-  cacheKeySource: "metadata" | "system" | null | undefined,
-  promptCacheKey: string | undefined,
-): string | undefined {
-  if (cacheKeySource !== "metadata") return undefined;
-  // prompt_cache_key is already sha256(user_id)[:32] from inbound — persist as-is
-  // (do not re-hash) so native and translated paths stay aligned when callers pass
-  // the preimage via conversationIdFromClaudeMetadata instead.
-  const trimmed = sanitizeConversationIdInput(promptCacheKey);
-  if (!trimmed) return undefined;
-  if (trimmed.length === LOG_CONVERSATION_ID_LEN && /^[0-9a-f]+$/i.test(trimmed)) return trimmed.toLowerCase();
-  return normalizeLogConversationId(trimmed);
-}
-
 export interface ConversationLogTotals {
   requests: number;
   totalTokens: number;

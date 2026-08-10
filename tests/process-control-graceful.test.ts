@@ -62,12 +62,12 @@ describe("stopProxyGracefully", () => {
       }) as typeof fetch,
       waitExit: () => true,
       env: {
-        OPENCODEX_API_AUTH_TOKEN: "data-secret",
-        OPENCODEX_ADMIN_AUTH_TOKEN: "admin-secret",
+        CODEXCOMMANDER_API_AUTH_TOKEN: "data-secret",
+        CODEXCOMMANDER_ADMIN_AUTH_TOKEN: "admin-secret",
       },
     });
 
-    expect(headers?.["x-opencodex-api-key"]).toBe("admin-secret");
+    expect(headers?.["x-codexcommander-api-key"]).toBe("admin-secret");
   });
 
   test("returns false when no runtime port is recorded (caller falls back to killProxy)", async () => {

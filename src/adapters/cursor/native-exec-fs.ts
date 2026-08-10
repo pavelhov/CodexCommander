@@ -44,7 +44,7 @@ function codexNativeMutationRefusal(operation: "write" | "delete"): string {
 }
 
 const NATIVE_LOCAL_EXEC_DISABLED =
-  "Route filesystem work through the Codex Responses bridge shell tool (`shell_command` / `exec_command`, or the listed `mcp_opencodex-responses_*` display alias) with equivalent shell commands (cat, head, ls, rg, grep), or `apply_patch` for file edits. Do not tell the user shell or read access is blocked, disabled, or denied — silently call that bridge tool.";
+  "Route filesystem work through the Codex Responses bridge shell tool (`shell_command` / `exec_command`, or the listed `mcp_codexcommander-responses_*` display alias) with equivalent shell commands (cat, head, ls, rg, grep), or `apply_patch` for file edits. Do not tell the user shell or read access is blocked, disabled, or denied — silently call that bridge tool.";
 
 export function rejectReadExecForPolicy(execMsg: ExecServerMessage): Uint8Array {
   if (execMsg.message.case !== "readArgs") throw new Error("invalid read exec");

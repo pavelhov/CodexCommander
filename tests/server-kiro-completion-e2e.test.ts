@@ -6,31 +6,31 @@ import { KIRO_COMPLETION_TOOL_NAME } from "../src/adapters/kiro-constants";
 import { saveConfig } from "../src/config";
 import { encodeMessage } from "../src/lib/eventstream-decoder";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 const enc = new TextEncoder();
 const originalFetch = globalThis.fetch;
 
 let testDir = "";
-let previousOpenCodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 let previousRegion: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 beforeEach(() => {
-  previousOpenCodexHome = process.env.OPENCODEX_HOME;
+  previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
   previousRegion = process.env.KIRO_REGION;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-kiro-completion-codex-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-kiro-completion-"));
-  process.env.OPENCODEX_HOME = testDir;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-kiro-completion-codex-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-kiro-completion-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   process.env.KIRO_REGION = "us-east-1";
   globalThis.fetch = originalFetch;
 });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  if (previousOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpenCodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   if (previousRegion === undefined) delete process.env.KIRO_REGION;
   else process.env.KIRO_REGION = previousRegion;
   isolatedCodexHome?.restore();
@@ -68,9 +68,10 @@ function streamOf(frames: Uint8Array[]): ReadableStream<Uint8Array> {
   });
 }
 
-function kiroConfig(baseUrl: string): OcxConfig {
+function kiroConfig(baseUrl: string): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     hostname: "127.0.0.1",
     defaultProvider: "kiro-test",
     providers: {
@@ -84,7 +85,7 @@ function kiroConfig(baseUrl: string): OcxConfig {
         models: ["gpt-5.6-sol"],
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 function scriptedKiroUpstream(attempts: Uint8Array[][]) {

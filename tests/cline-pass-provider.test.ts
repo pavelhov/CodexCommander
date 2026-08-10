@@ -5,7 +5,7 @@ import { KEY_LOGIN_PROVIDERS } from "../src/oauth/key-providers";
 import { providerConfigSeed } from "../src/providers/derive";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import { routeModel } from "../src/router";
-import type { OcxConfig, OcxParsedRequest } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderParsedRequest } from "../src/types";
 
 const OFFICIAL_CLINE_PASS_MODELS = [
   "cline-pass/glm-5.2",
@@ -21,7 +21,7 @@ const OFFICIAL_CLINE_PASS_MODELS = [
   "cline-pass/qwen3.7-plus",
 ];
 
-function parsed(modelId: string, reasoning: string): OcxParsedRequest {
+function parsed(modelId: string, reasoning: string): CodexCommanderParsedRequest {
   return {
     modelId,
     context: { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
@@ -83,7 +83,7 @@ describe("ClinePass provider", () => {
   });
 
   test("routing keeps the full upstream model slug and emits the Cline gateway reasoning object", () => {
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "cline-pass",
       providers: {
@@ -141,7 +141,7 @@ describe("ClinePass provider", () => {
   });
 
   test("routing preserves an explicitly configured ClinePass reasoning wire format", () => {
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "cline-pass",
       providers: {
@@ -161,7 +161,7 @@ describe("ClinePass provider", () => {
   });
 
   test("same-named custom provider keeps its own destination and credential boundary", () => {
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "cline-pass",
       providers: {

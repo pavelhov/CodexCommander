@@ -7,27 +7,27 @@ import { ManagementRequest } from "./helpers/management-auth";
 import { appendUsageEntry, resetUsageReadCacheForTests, type PersistedUsageEntry } from "../src/usage/log";
 import { closeRequestHistoryIndex } from "../src/routing/history/indexer";
 import { candidateCapabilityEvidence } from "../src/routing/capability";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 let testDir = "";
 let previousHome: string | undefined;
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  testDir = mkdtempSync(join(tmpdir(), "ocx-explain-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  testDir = mkdtempSync(join(tmpdir(), "ccx-explain-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   resetUsageReadCacheForTests();
   closeRequestHistoryIndex();
 });
 
 afterEach(() => {
   closeRequestHistoryIndex();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
 });
 
-function config(): OcxConfig {
+function config(): CodexCommanderConfig {
   return {
     port: 10100,
     defaultProvider: "a",
@@ -80,7 +80,7 @@ function tracedEntry(requestId: string): PersistedUsageEntry {
   };
 }
 
-async function apiGet(path: string, cfg: OcxConfig): Promise<Response> {
+async function apiGet(path: string, cfg: CodexCommanderConfig): Promise<Response> {
   const req = new ManagementRequest(`http://localhost${path}`, { method: "GET" });
   const response = await handleManagementAPI(req, new URL(req.url), cfg, { refreshCodexCatalog: async () => {} });
   expect(response).not.toBeNull();

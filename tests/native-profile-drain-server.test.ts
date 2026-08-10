@@ -19,19 +19,19 @@ import {
   getNativeMainProfileRequestCount,
   resetLifecycleDrainStateForTests,
 } from "../src/server/lifecycle";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 
 const originalFetch = globalThis.fetch;
-const previousOpencodexHome = process.env.OPENCODEX_HOME;
+const previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
 const previousCodexHome = process.env.CODEX_HOME;
-let opencodexHome = "";
+let codexCommanderHome = "";
 let codexHome = "";
 
 beforeEach(() => {
-  opencodexHome = mkdtempSync(join(tmpdir(), "ocx-main-drain-server-"));
-  codexHome = mkdtempSync(join(tmpdir(), "ocx-main-drain-codex-"));
-  process.env.OPENCODEX_HOME = opencodexHome;
+  codexCommanderHome = mkdtempSync(join(tmpdir(), "ccx-main-drain-server-"));
+  codexHome = mkdtempSync(join(tmpdir(), "ccx-main-drain-codex-"));
+  process.env.CODEXCOMMANDER_HOME = codexCommanderHome;
   process.env.CODEX_HOME = codexHome;
   writeFileSync(
     join(codexHome, "auth.json"),
@@ -51,10 +51,10 @@ afterEach(() => {
   clearThreadAccountMap();
   clearMainAccountInfoCache();
   resetMainCodexAccountIdentityTrackingForTests();
-  if (opencodexHome) rmSync(opencodexHome, { recursive: true, force: true });
+  if (codexCommanderHome) rmSync(codexCommanderHome, { recursive: true, force: true });
   if (codexHome) rmSync(codexHome, { recursive: true, force: true });
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
 });
@@ -75,8 +75,8 @@ describe("native main profile scoped server admission", () => {
     }) as typeof fetch;
     const saveMode = (codexAccountMode: "direct" | "pool") => saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "openai",
-      openaiProviderTierVersion: 2,
       websockets: true,
       providers: {
         openai: {
@@ -89,7 +89,7 @@ describe("native main profile scoped server admission", () => {
       codexAccounts: [],
       activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID,
       autoSwitchThreshold: 0,
-    } as OcxConfig);
+    } as CodexCommanderConfig);
     const waitForFrame = (ws: WebSocket, needle: string) => new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(`websocket timeout waiting for ${needle}`)), 2_000);
       const onMessage = (event: MessageEvent) => {
@@ -186,19 +186,25 @@ describe("native main profile scoped server admission", () => {
     });
     const saveMode = (codexAccountMode: "direct" | "pool", activeCodexAccountId: string) => saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "openai",
-      openaiProviderTierVersion: 2,
       providers: { openai: liveProvider(codexAccountMode) },
       activeCodexAccountId,
       autoSwitchThreshold: 0,
       codexAccounts: activeCodexAccountId === "pool-a"
         ? [
-            { id: "main", email: "main@example.test", isMain: true },
-            { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "pool-account" },
+            { id: "main", email: "main@example.test", logLabel: "p000001", isMain: true },
+            {
+              id: "pool-a",
+              email: "pool@example.test",
+              chatgptAccountId: "pool-account",
+              logLabel: "p000002",
+              isMain: false,
+            },
           ]
         : [],
       experimentalRealtimeWsBaseUrl: upstream.url.toString(),
-    } as OcxConfig);
+    } as CodexCommanderConfig);
     const connectEcho = async (
       server: ReturnType<typeof startServer>,
       path: string,
@@ -277,7 +283,7 @@ describe("native main profile scoped server admission", () => {
       const blocked = await handleNativeProfileAPI(
         switchRequest(),
         new URL("http://localhost/api/native-main-profiles/switch"),
-        {} as OcxConfig,
+        {} as CodexCommanderConfig,
         { manager, drainTimeoutMs: 0 },
       );
        expect(blocked?.status).toBe(409);
@@ -291,7 +297,7 @@ describe("native main profile scoped server admission", () => {
       const afterClose = await handleNativeProfileAPI(
         switchRequest(),
         new URL("http://localhost/api/native-main-profiles/switch"),
-        {} as OcxConfig,
+        {} as CodexCommanderConfig,
         { manager, drainTimeoutMs: 0 },
       );
       expect(afterClose?.status).toBe(200);
@@ -368,8 +374,8 @@ describe("native main profile scoped server admission", () => {
 
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "openai",
-      openaiProviderTierVersion: 2,
       providers: {
         openai: {
           adapter: "openai-responses",
@@ -382,7 +388,7 @@ describe("native main profile scoped server admission", () => {
       autoSwitchThreshold: 0,
       codexAccounts: [],
       experimentalRealtimeWsBaseUrl: "ws://uncooperative.invalid/",
-    } as OcxConfig);
+    } as CodexCommanderConfig);
     updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 1, 1);
 
     let upstream: UncooperativeUpstream | undefined;
@@ -436,7 +442,7 @@ describe("native main profile scoped server admission", () => {
           body: JSON.stringify({ target: "target", confirmedStopped: true }),
         }),
         new URL("http://localhost/api/native-main-profiles/switch"),
-        {} as OcxConfig,
+        {} as CodexCommanderConfig,
         { manager, drainTimeoutMs: 75 },
       );
       expect(blocked?.status).toBe(409);

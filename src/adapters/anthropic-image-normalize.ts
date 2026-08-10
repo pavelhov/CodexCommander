@@ -1,6 +1,6 @@
 /**
  * Anthropic image normalization: resize/re-encode images to fit Anthropic's request
- * limits instead of dropping them (devlog/260714_image_normalization_pipeline/020).
+ * limits instead of dropping them (implementation contract).
  *
  * Age-tier pyramid: newest images keep near-full fidelity, older images become
  * progressively smaller JPEG thumbnails, so a whole session's screenshots stay visible
@@ -347,7 +347,7 @@ async function processAt(
 }
 
 /**
- * Wire-neutral image handle (devlog/260714_image_normalization_pipeline/050): the core
+ * Wire-neutral image handle (implementation contract): the core
  * algorithm below normalizes THROUGH this interface so non-Anthropic wire shapes (kiro
  * CodeWhisperer) reuse the exact same tier/cache/demotion machinery. `mediaType` is the
  * canonical lowercased MIME ("image/<format>") — cache identity and pass-through

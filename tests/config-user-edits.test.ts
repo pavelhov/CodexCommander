@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,12 +12,12 @@ import {
   saveConfigPreservingClaudeCode,
 } from "../src/config";
 import { rateLimitRetryPolicyFor } from "../src/providers/key-failover";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 /**
  * A user hand-edits `config.json` while the proxy runs. `saveConfig` serializes the
  * WHOLE object, so ANY later service-time save rewrites `claudeCode` from memory and
- * the edit vanishes with no visible cause (#488, devlog 260726_claude_auth_auto/040 H1).
+ * the edit vanishes with no visible cause (#488, implementation contract H1).
  */
 
 let home: string;
@@ -34,21 +34,31 @@ function diskConfig(): Record<string, unknown> {
   return JSON.parse(readFileSync(getConfigPath(), "utf8")) as Record<string, unknown>;
 }
 
+function loadErrorMessage(): string {
+  try {
+    loadConfig();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  throw new Error("expected loadConfig to reject the invalid current config");
+}
+
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  home = mkdtempSync(join(tmpdir(), "ocx-user-edits-"));
-  process.env.OPENCODEX_HOME = home;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  home = mkdtempSync(join(tmpdir(), "ccx-user-edits-"));
+  process.env.CODEXCOMMANDER_HOME = home;
   saveConfig({
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "test",
     providers: { test: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:1/v1", apiKey: "k", allowPrivateNetwork: true } },
     claudeCode: { authMode: "subscription" },
-  } as unknown as OcxConfig);
+  } as unknown as CodexCommanderConfig);
 });
 
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -77,16 +87,16 @@ test("an unrelated save does not clobber the hand edit", () => {
   expect(diskConfig().disabledModels).toEqual(["test/one"]);
 });
 
-test("an unrelated save does not resurrect an invalid persisted subagent effort", () => {
-  writeDiskConfig({ claudeCode: { authMode: "subscription", subagentEffort: "ultra" } });
+test("an unrelated save refuses to overwrite an invalid persisted subagent effort", () => {
   const live = loadConfig();
   armClaudeCodeBaseline(live);
+  writeDiskConfig({ claudeCode: { authMode: "subscription", subagentEffort: "ultra" } });
 
   live.disabledModels = ["test/one"];
-  saveConfigPreservingClaudeCode(live);
+  expect(() => saveConfigPreservingClaudeCode(live)).toThrow("invalid CodexCommander config");
 
   expect(live.claudeCode).toEqual({ authMode: "subscription" });
-  expect(diskConfig().claudeCode).toEqual({ authMode: "subscription" });
+  expect(diskConfig().claudeCode).toEqual({ authMode: "subscription", subagentEffort: "ultra" });
 });
 
 // R3-2: arming must be eager. A lazy "arm on first save" loses exactly this edit.
@@ -113,7 +123,12 @@ test("an unrelated loadConfig does not refresh the armed baseline", () => {
   expect((diskConfig().claudeCode as Record<string, unknown>).authMode).toBe("proxy");
 });
 
-test("an invalid retryOn429 field degrades at load instead of discarding the config", () => {
+test.each([
+  ["an out-of-range field", { attempts: 0, intervalMs: 120 }],
+  ["an unknown field", { attempt: 5, intervalMs: 120 }],
+  ["a non-object policy", "enabled"],
+  ["an invalid master switch", { enabled: "false", intervalMs: 120 }],
+] as const)("retryOn429 rejects %s instead of normalizing it", (_label, retryOn429) => {
   writeDiskConfig({
     providers: {
       test: {
@@ -121,70 +136,13 @@ test("an invalid retryOn429 field degrades at load instead of discarding the con
         baseUrl: "http://127.0.0.1:1/v1",
         apiKey: "k",
         allowPrivateNetwork: true,
-        retryOn429: { attempts: 0, attempt: 5, intervalMs: 120, respectRetryAfter: false },
+        retryOn429,
       },
     },
   });
-  const live = loadConfig();
-  expect(live.providers.test).toBeDefined();
-  // Invalid field (attempts: 0) and the misnamed key (attempt) dropped with warnings;
-  // valid fields kept; missing fields defaulted.
-  expect(live.providers.test.retryOn429).toEqual({ intervalMs: 120, respectRetryAfter: false });
-});
-
-test("a non-object retryOn429 degrades at load instead of discarding the config", () => {
-  writeDiskConfig({
-    providers: {
-      test: {
-        adapter: "openai-chat",
-        baseUrl: "http://127.0.0.1:1/v1",
-        apiKey: "k",
-        allowPrivateNetwork: true,
-        retryOn429: "enabled",
-      },
-    },
-  });
-  const live = loadConfig();
-  expect(live.providers.test).toBeDefined();
-  expect(live.providers.test.retryOn429).toBeUndefined();
-});
-
-test("an invalid retryOn429 master switch discards the policy instead of enabling it", () => {
-  writeDiskConfig({
-    providers: {
-      test: {
-        adapter: "openai-chat",
-        baseUrl: "http://127.0.0.1:1/v1",
-        apiKey: "k",
-        allowPrivateNetwork: true,
-        retryOn429: { enabled: "false", intervalMs: 120 },
-      },
-    },
-  });
-  const live = loadConfig();
-  expect(live.providers.test).toBeDefined();
-  // A hand-edit that tried to disable retries must not become default-ENABLED.
-  expect(live.providers.test.retryOn429).toBeUndefined();
-});
-
-test("a retryOn429 policy with every field invalid is dropped instead of enabling retries", () => {
-  writeDiskConfig({
-    providers: {
-      test: {
-        adapter: "openai-chat",
-        baseUrl: "http://127.0.0.1:1/v1",
-        apiKey: "k",
-        allowPrivateNetwork: true,
-        // Every supplied field invalid: the sanitizer must NOT write back {} — presence
-        // would opt IN to retries with defaults, the opposite of a disable-oriented
-        // hand-edit like `attempts: 0`.
-        retryOn429: { attempts: 0 },
-      },
-    },
-  });
-  const live = loadConfig();
-  expect(live.providers.test.retryOn429).toBeUndefined();
-  expect(rateLimitRetryPolicyFor(live.providers.test)).toBeNull();
+  const diagnostics = readConfigDiagnostics();
+  expect(diagnostics.source).toBe("fallback");
+  expect(diagnostics.error).toContain("retryOn429");
 });
 
 test("an intentionally empty retryOn429 policy still resolves as enabled (presence = opt-in)", () => {
@@ -212,7 +170,7 @@ test("an intentionally empty retryOn429 policy still resolves as enabled (presen
   });
 });
 
-test("config diagnostics sanitize invalid retryOn429 before schema validation", () => {
+test("config diagnostics reject invalid retryOn429 without normalization", () => {
   writeDiskConfig({
     providers: {
       test: {
@@ -225,135 +183,93 @@ test("config diagnostics sanitize invalid retryOn429 before schema validation", 
     },
   });
   const diagnostics = readConfigDiagnostics();
-  // Without sanitization the schema rejects the config and the diagnostics path returns a
-  // default fallback, which the config command could persist over the user's providers.
-  expect(diagnostics.source).not.toBe("fallback");
-  expect(diagnostics.config.providers.test).toBeDefined();
-  expect(diagnostics.config.providers.test.retryOn429).toBeUndefined();
+  expect(diagnostics.source).toBe("fallback");
+  expect(diagnostics.error).toContain("retryOn429");
 });
 
-test("invalid retryOn429 values never log the raw value", () => {
-  const warn = spyOn(console, "warn").mockImplementation(() => {});
-  try {
-    writeDiskConfig({
-      providers: {
-        test: {
-          adapter: "openai-chat",
-          baseUrl: "http://127.0.0.1:1/v1",
-          apiKey: "k",
-          allowPrivateNetwork: true,
-          retryOn429: "sk-super-secret-abc123",
-        },
+test("invalid retryOn429 errors never expose the raw value", () => {
+  writeDiskConfig({
+    providers: {
+      test: {
+        adapter: "openai-chat",
+        baseUrl: "http://127.0.0.1:1/v1",
+        apiKey: "k",
+        allowPrivateNetwork: true,
+        retryOn429: "sk-super-secret-abc123",
       },
-    });
-    loadConfig();
-    const logged = warn.mock.calls.map(call => call.join(" ")).join("\n");
-    expect(logged).not.toContain("sk-super-secret-abc123");
-    // Anchor the type-only diagnostic to the exact field so unrelated warnings can't satisfy it.
-    expect(logged).toContain('providers."test".retryOn429 (string) is invalid');
-  } finally {
-    warn.mockRestore();
-  }
+    },
+  });
+  const message = loadErrorMessage();
+  expect(message).not.toContain("sk-super-secret-abc123");
+  expect(message).toContain("providers.test.retryOn429");
 });
 
-test("unrecognized retryOn429 field names are redacted before logging", () => {
-  const warn = spyOn(console, "warn").mockImplementation(() => {});
-  try {
-    writeDiskConfig({
-      providers: {
-        test: {
-          adapter: "openai-chat",
-          baseUrl: "http://127.0.0.1:1/v1",
-          apiKey: "k",
-          allowPrivateNetwork: true,
-          retryOn429: { "sk-super-secret-9876": true, intervalMs: 120 },
-        },
+test("unrecognized retryOn429 field names are redacted from load errors", () => {
+  writeDiskConfig({
+    providers: {
+      test: {
+        adapter: "openai-chat",
+        baseUrl: "http://127.0.0.1:1/v1",
+        apiKey: "k",
+        allowPrivateNetwork: true,
+        retryOn429: { "sk-super-secret-9876": true, intervalMs: 120 },
       },
-    });
-    const live = loadConfig();
-    expect(live.providers.test.retryOn429).toEqual({ intervalMs: 120 });
-    const logged = warn.mock.calls.map(call => call.join(" ")).join("\n");
-    // The secret-shaped property NAME must never reach the log; the valid field survives.
-    expect(logged).not.toContain("sk-super-secret-9876");
-    expect(logged).toContain("[REDACTED]");
-  } finally {
-    warn.mockRestore();
-  }
+    },
+  });
+  const message = loadErrorMessage();
+  expect(message).not.toContain("sk-super-secret-9876");
+  expect(message).toContain("unrecognized field");
 });
 
-test("unrecognized retryOn429 field names are JSON-escaped before logging", () => {
-  const warn = spyOn(console, "warn").mockImplementation(() => {});
-  try {
-    writeDiskConfig({
-      providers: {
-        test: {
-          adapter: "openai-chat",
-          baseUrl: "http://127.0.0.1:1/v1",
-          apiKey: "k",
-          allowPrivateNetwork: true,
-          retryOn429: { "evil\nattempt": true, intervalMs: 120 },
-        },
+test("unrecognized retryOn429 field names with control characters are omitted from load errors", () => {
+  writeDiskConfig({
+    providers: {
+      test: {
+        adapter: "openai-chat",
+        baseUrl: "http://127.0.0.1:1/v1",
+        apiKey: "k",
+        allowPrivateNetwork: true,
+        retryOn429: { "evil\nattempt": true, intervalMs: 120 },
       },
-    });
-    const live = loadConfig();
-    expect(live.providers.test.retryOn429).toEqual({ intervalMs: 120 });
-    const logged = warn.mock.calls.map(call => call.join(" ")).join("\n");
-    // The raw control character must never reach the log (no line forging); the escaped form
-    // still names the field for typo debugging.
-    expect(logged).not.toContain("evil\nattempt");
-    expect(logged).toContain('"evil\\nattempt"');
-  } finally {
-    warn.mockRestore();
-  }
+    },
+  });
+  const message = loadErrorMessage();
+  expect(message).not.toContain("evil\nattempt");
+  expect(message).toContain("unrecognized field");
 });
 
-test("provider names are redacted before retryOn429 load warnings", () => {
-  const warn = spyOn(console, "warn").mockImplementation(() => {});
-  try {
-    writeDiskConfig({
-      providers: {
-        "sk-super-secret-9876": {
-          adapter: "openai-chat",
-          baseUrl: "http://127.0.0.1:1/v1",
-          apiKey: "k",
-          allowPrivateNetwork: true,
-          retryOn429: "enabled",
-        },
+test("provider names are redacted from strict-load errors", () => {
+  writeDiskConfig({
+    providers: {
+      "sk-super-secret-9876": {
+        adapter: "openai-chat",
+        baseUrl: "http://127.0.0.1:1/v1",
+        apiKey: "k",
+        allowPrivateNetwork: true,
+        retryOn429: "enabled",
       },
-    });
-    loadConfig();
-    const logged = warn.mock.calls.map(call => call.join(" ")).join("\n");
-    // The sanitizer runs before schema validation, so a secret-shaped provider NAME must
-    // never reach the log either.
-    expect(logged).not.toContain("sk-super-secret-9876");
-    expect(logged).toContain("[REDACTED]");
-  } finally {
-    warn.mockRestore();
-  }
+    },
+  });
+  const message = loadErrorMessage();
+  expect(message).not.toContain("sk-super-secret-9876");
+  expect(message).toContain("[REDACTED]");
 });
 
-test("provider names with control characters are JSON-escaped before retryOn429 load warnings", () => {
-  const warn = spyOn(console, "warn").mockImplementation(() => {});
-  try {
-    writeDiskConfig({
-      providers: {
-        "evil\nprovider": {
-          adapter: "openai-chat",
-          baseUrl: "http://127.0.0.1:1/v1",
-          apiKey: "k",
-          allowPrivateNetwork: true,
-          retryOn429: "enabled",
-        },
+test("provider names with control characters are JSON-escaped in strict-load errors", () => {
+  writeDiskConfig({
+    providers: {
+      "evil\nprovider": {
+        adapter: "openai-chat",
+        baseUrl: "http://127.0.0.1:1/v1",
+        apiKey: "k",
+        allowPrivateNetwork: true,
+        retryOn429: "enabled",
       },
-    });
-    loadConfig();
-    const logged = warn.mock.calls.map(call => call.join(" ")).join("\n");
-    // The raw newline must never forge a log line; the escaped form still names the provider.
-    expect(logged).not.toContain("evil\nprovider");
-    expect(logged).toContain('"evil\\nprovider"');
-  } finally {
-    warn.mockRestore();
-  }
+    },
+  });
+  const message = loadErrorMessage();
+  expect(message).not.toContain("evil\nprovider");
+  expect(message).toContain('"evil\\nprovider"');
 });
 
 // R4-1: the request path. A 429 mid-turn rotates a key and saves, with no user action.
@@ -446,18 +362,26 @@ test("a key-order-only difference is not treated as an external edit", () => {
   expect((diskConfig().claudeCode as Record<string, unknown>).authMode).toBe("proxy");
 });
 
-test("an unreadable config file never fails the save", () => {
+test("an invalid config file blocks the guarded save and remains untouched", () => {
   const live = loadConfig();
   armClaudeCodeBaseline(live);
   writeFileSync(getConfigPath(), "{ not json");
 
   live.claudeCode = { authMode: "proxy" };
-  expect(() => saveConfigPreservingClaudeCode(live)).not.toThrow();
-  expect((diskConfig().claudeCode as Record<string, unknown>).authMode).toBe("proxy");
+  expect(() => saveConfigPreservingClaudeCode(live)).toThrow("invalid_json");
+  expect(readFileSync(getConfigPath(), "utf8")).toBe("{ not json");
 });
 
-// An UNARMED config (a short-lived CLI load) behaves exactly like the old saveConfig.
-test("an unarmed config saves without reconciliation", () => {
+test("an invalid config file also blocks every unarmed save and remains untouched", () => {
+  const live = loadConfig();
+  writeFileSync(getConfigPath(), "{ not json");
+
+  expect(() => saveConfig(live)).toThrow("invalid_json");
+  expect(() => saveConfigPreservingClaudeCode(live)).toThrow("invalid_json");
+  expect(readFileSync(getConfigPath(), "utf8")).toBe("{ not json");
+});
+
+test("an unarmed config may replace a different schema-valid current config", () => {
   const live = loadConfig();
   writeDiskConfig({ claudeCode: { authMode: "proxy" } });
 
@@ -466,14 +390,12 @@ test("an unarmed config saves without reconciliation", () => {
   expect((diskConfig().claudeCode as Record<string, unknown>).authMode).toBe("subscription");
 });
 
-// DOCUMENTED RESIDUAL, asserted so it cannot drift into an assumed guarantee: only the
-// `claudeCode` subtree is reconciled. A hand edit to `providers` is still lost.
-test("a providers hand edit is NOT preserved", () => {
+test("an invalid providers hand edit blocks the guarded save", () => {
   const live = loadConfig();
   armClaudeCodeBaseline(live);
   writeDiskConfig({ providers: { handEdited: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:2/v1", allowPrivateNetwork: true } } });
 
   live.port = 10103;
-  saveConfigPreservingClaudeCode(live);
-  expect(Object.keys(diskConfig().providers as Record<string, unknown>)).toEqual(["test"]);
+  expect(() => saveConfigPreservingClaudeCode(live)).toThrow("defaultProvider");
+  expect(Object.keys(diskConfig().providers as Record<string, unknown>)).toEqual(["handEdited"]);
 });

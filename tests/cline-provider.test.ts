@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import { providerConfigSeed, deriveKeyLoginMap, deriveProviderPresets } from "../src/providers/derive";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
-import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 
-function minimalRequest(model: string): OcxParsedRequest {
+function minimalRequest(model: string): CodexCommanderParsedRequest {
   return {
     modelId: model,
     stream: false,
@@ -49,7 +49,7 @@ describe("cline provider", () => {
   });
 
   test("adapter targets the Cline chat completions endpoint with bearer auth", () => {
-    const provider: OcxProviderConfig = {
+    const provider: CodexCommanderProviderConfig = {
       ...providerConfigSeed(entry!),
       apiKey: "ck-test",
     };

@@ -12,7 +12,7 @@ test("Usage renders every section in one scrollable column with a sticky strip",
 
   expect(page).not.toContain("viewMode");
   expect(page).not.toContain("readViewMode");
-  expect(page).not.toContain("ocx-usage-view");
+  expect(page).not.toContain("ccx-usage-view");
   expect(page).toContain("UsageWorkspaceBody");
   expect(page).toContain("UsageWorkspaceSection");
   expect(page).toContain("usage-workspace-");

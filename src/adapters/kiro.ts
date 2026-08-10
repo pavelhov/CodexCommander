@@ -23,15 +23,15 @@ import {
 } from "../lib/translator-budget";
 import type {
   AdapterEvent,
-  OcxAssistantMessage,
-  OcxContentPart,
-  OcxMessage,
-  OcxParsedRequest,
-  OcxProviderConfig,
-  OcxTextContent,
-  OcxToolCall,
-  OcxToolResultMessage,
-  OcxUsage,
+  CodexCommanderAssistantMessage,
+  CodexCommanderContentPart,
+  CodexCommanderMessage,
+  CodexCommanderParsedRequest,
+  CodexCommanderProviderConfig,
+  CodexCommanderTextContent,
+  CodexCommanderToolCall,
+  CodexCommanderToolResultMessage,
+  CodexCommanderUsage,
 } from "../types";
 import type { ProviderAdapter } from "./base";
 import type { AdapterFetchContext, AdapterRequest } from "./base";
@@ -115,12 +115,12 @@ function kiroToolWireNames(tools: readonly unknown[]): string[] {
     .filter((name): name is string => typeof name === "string");
 }
 
-function userContentText(content: string | OcxContentPart[]): string {
+function userContentText(content: string | CodexCommanderContentPart[]): string {
   if (typeof content === "string") return content;
   return content.map(p => (p.type === "text" ? p.text : "")).filter(Boolean).join("\n");
 }
 
-function usageContentText(content: string | OcxContentPart[]): string {
+function usageContentText(content: string | CodexCommanderContentPart[]): string {
   if (typeof content === "string") return content;
   return content
     .map(p => {
@@ -134,14 +134,14 @@ function usageContentText(content: string | OcxContentPart[]): string {
 function serializeForUsage(value: unknown): string {
   try { return JSON.stringify(value); } catch { return String(value); }
 }
-function currentTurnUsageMessages(messages: OcxMessage[]): OcxMessage[] {
+function currentTurnUsageMessages(messages: CodexCommanderMessage[]): CodexCommanderMessage[] {
   return messages.slice(messages.map(m => m.role).lastIndexOf("assistant") + 1).filter(m => m.role !== "assistant");
 }
-function kiroPayloadMessages(parsed: OcxParsedRequest): OcxMessage[] {
+function kiroPayloadMessages(parsed: CodexCommanderParsedRequest): CodexCommanderMessage[] {
   return parsed.context.messages;
 }
 
-function messageUsageText(msg: OcxMessage): string {
+function messageUsageText(msg: CodexCommanderMessage): string {
   switch (msg.role) {
     case "user":
     case "developer":
@@ -158,7 +158,7 @@ function messageUsageText(msg: OcxMessage): string {
   }
 }
 
-function messageLogText(msg: OcxMessage): string {
+function messageLogText(msg: CodexCommanderMessage): string {
   if (msg.role !== "assistant") return messageUsageText(msg);
   return msg.content.map(part => {
     if (part.type === "text") return part.text;
@@ -213,11 +213,11 @@ function estimateKiroPayloadInputTokens(payload: Record<string, unknown>, modelI
   return estimateKiroTokens(parts.join("\n"), modelId) + imageTokens;
 }
 
-function shouldCountStablePromptOverhead(parsed: OcxParsedRequest): boolean {
+function shouldCountStablePromptOverhead(parsed: CodexCommanderParsedRequest): boolean {
   return !parsed.previousResponseId && !parsed.context.messages.some(m => m.role === "assistant");
 }
 
-function estimateKiroInputTokens(parsed: OcxParsedRequest): number {
+function estimateKiroInputTokens(parsed: CodexCommanderParsedRequest): number {
   const parts = currentTurnUsageMessages(parsed.context.messages)
     .map(messageUsageText)
     .filter(Boolean);
@@ -230,7 +230,7 @@ function estimateKiroInputTokens(parsed: OcxParsedRequest): number {
   return estimateKiroTokens(parts.join("\n"), parsed.modelId);
 }
 
-function estimateKiroLogInputTokens(parsed: OcxParsedRequest): number {
+function estimateKiroLogInputTokens(parsed: CodexCommanderParsedRequest): number {
   const parts = parsed.context.messages.map(messageLogText).filter(Boolean);
   if (parsed.context.systemPrompt?.length) parts.push(...parsed.context.systemPrompt);
   if (parsed.context.tools?.length) parts.push(serializeForUsage(parsed.context.tools));
@@ -246,7 +246,7 @@ function kiroUpstreamContextWindow(modelId: string | undefined): number | undefi
   return typeof window === "number" && Number.isFinite(window) && window > 0 ? window : undefined;
 }
 
-function kiroRuntimeEndpoint(provider: OcxProviderConfig, region: string): string {
+function kiroRuntimeEndpoint(provider: CodexCommanderProviderConfig, region: string): string {
   const configured = new URL(provider.baseUrl);
   if (
     /^runtime\.[a-z]{2}(?:-[a-z]+)+-\d\.kiro\.dev$/i.test(configured.hostname)
@@ -277,7 +277,7 @@ export function kiroReasoningMode(modelId: string): KiroReasoningMode {
   return kiroNativeEffortField(modelId) ? "native" : "emulated";
 }
 
-function kiroThinkingBudget(parsed: OcxParsedRequest): number | undefined {
+function kiroThinkingBudget(parsed: CodexCommanderParsedRequest): number | undefined {
   const effort = parsed.options.reasoning;
   if (!effort || effort === "none") return undefined;
   const maxTokens = parsed.options.maxOutputTokens || 4096;
@@ -293,7 +293,7 @@ function kiroThinkingBudget(parsed: OcxParsedRequest): number | undefined {
   return ratio === undefined ? undefined : Math.max(1, Math.floor(maxTokens * ratio));
 }
 
-function injectKiroThinkingTags(content: string, parsed: OcxParsedRequest): string {
+function injectKiroThinkingTags(content: string, parsed: CodexCommanderParsedRequest): string {
   if (kiroReasoningMode(parsed.modelId) !== "emulated") return content;
   const budget = kiroThinkingBudget(parsed);
   if (!budget) return content;
@@ -311,7 +311,7 @@ function injectKiroThinkingTags(content: string, parsed: OcxParsedRequest): stri
   ].join("\n");
 }
 
-function validateKiroCapabilities(parsed: OcxParsedRequest): void {
+function validateKiroCapabilities(parsed: CodexCommanderParsedRequest): void {
   const choice = parsed.options.toolChoice;
   if (choice !== undefined && choice !== "auto" && choice !== "none") {
     throw new Error("Kiro supports only automatic tool choice or tool_choice:none");
@@ -424,7 +424,7 @@ function kiroCompletionTool(): Record<string, unknown> {
 }
 
 export function buildKiroPayload(
-  parsed: OcxParsedRequest,
+  parsed: CodexCommanderParsedRequest,
   profileArn: string | undefined,
   forcedCompletionMode?: KiroCompletionMode,
   wireClient: KiroWireClient = "ide",
@@ -489,17 +489,17 @@ export function buildKiroPayload(
 
   for (const msg of kiroPayloadMessages(parsed)) {
     if (msg.role === "user" || msg.role === "developer") {
-      const text = userContentText((msg as { content: string | OcxContentPart[] }).content);
-      const images = extractKiroImages((msg as { content: string | OcxContentPart[] }).content);
+      const text = userContentText((msg as { content: string | CodexCommanderContentPart[] }).content);
+      const images = extractKiroImages((msg as { content: string | CodexCommanderContentPart[] }).content);
       pushUser(text, images);
     } else if (msg.role === "assistant") {
-      const aMsg = msg as OcxAssistantMessage;
+      const aMsg = msg as CodexCommanderAssistantMessage;
       const text = (aMsg.content || [])
-        .filter((b): b is OcxTextContent => b.type === "text")
+        .filter((b): b is CodexCommanderTextContent => b.type === "text")
         .map(b => b.text)
         .join("");
       const toolCalls = (aMsg.content || [])
-        .filter((b): b is OcxToolCall => b.type === "toolCall");
+        .filter((b): b is CodexCommanderToolCall => b.type === "toolCall");
       const toolUses: KiroToolUse[] = toolCalls.map(tc => {
         const toolUseId = normalizeToolId(tc.id);
         if (!toolUseId) throw new Error("Kiro history contains a tool call with an empty id");
@@ -515,7 +515,7 @@ export function buildKiroPayload(
       }
       pushAssistant(text, toolUses, aMsg.kiroRedactedReasoning);
     } else if (msg.role === "toolResult") {
-      const tr = msg as OcxToolResultMessage;
+      const tr = msg as CodexCommanderToolResultMessage;
       if (tr.containsEncryptedContent) {
         throw new Error(`Kiro cannot translate encrypted output for tool call ${JSON.stringify(tr.toolCallId)}`);
       }
@@ -632,7 +632,7 @@ export function buildKiroPayload(
 interface KiroAttemptParseResult {
   terminal?: AdapterEvent;
   needsFallback?: boolean;
-  usage?: OcxUsage;
+  usage?: CodexCommanderUsage;
   providerState?: { kiro: { conversationId: string } };
   assistantText: string;
   sawReasoning: boolean;
@@ -739,13 +739,13 @@ type KiroFallbackFactory = (
 ) => Promise<KiroFallbackAttempt>;
 
 function mergeKiroUsage(
-  first: OcxUsage | undefined,
-  second: OcxUsage | undefined,
+  first: CodexCommanderUsage | undefined,
+  second: CodexCommanderUsage | undefined,
   preserveFirstContextGrowth = false,
-): OcxUsage | undefined {
+): CodexCommanderUsage | undefined {
   if (!first) return second;
   if (!second) return first;
-  const sumOptional = (key: keyof OcxUsage): number | undefined => {
+  const sumOptional = (key: keyof CodexCommanderUsage): number | undefined => {
     const a = first[key];
     const b = second[key];
     return typeof a === "number" || typeof b === "number"
@@ -784,7 +784,7 @@ function mergeKiroUsage(
 function retryableKiroIncomplete(
   reason: string,
   message: string,
-  usage: OcxUsage,
+  usage: CodexCommanderUsage,
   providerState: { kiro: { conversationId: string } } | undefined,
   retryable = true,
 ): AdapterEvent {
@@ -899,7 +899,7 @@ async function* parseKiroAttemptEvents(
   let sawRealTool = false;
   let completionAnswer: string | undefined;
   let completionCalls = 0;
-  let authoritativeUsage: OcxUsage | undefined;
+  let authoritativeUsage: CodexCommanderUsage | undefined;
   let stopReason: string | undefined;
   const fallbackEvents: AdapterEvent[] = [];
   const thinking = new KiroThinkingParser(budget);
@@ -924,7 +924,7 @@ async function* parseKiroAttemptEvents(
     const floor = Math.ceil(contextWindowState.value * Math.min(contextUsagePercentage, 100) / 100);
     return Number.isFinite(floor) && floor > 0 ? floor : undefined;
   };
-  const usage = (): OcxUsage => {
+  const usage = (): CodexCommanderUsage => {
     const base = authoritativeUsage ?? {
       inputTokens,
       outputTokens: estimateKiroTokens(outputChars, modelId),
@@ -1692,7 +1692,7 @@ export async function* parseKiroStream(
 }
 
 // Adapter
-export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter {
+export function createKiroAdapter(provider: CodexCommanderProviderConfig): ProviderAdapter {
   // Per-request closure (resolveAdapter builds a fresh adapter per request — server.ts:440 — so this
   // is race-free) carrying the heuristic input-token estimate from buildRequest into the stream.
   let inputTokens = 0;
@@ -1702,12 +1702,12 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
   let toolNameMap: Map<string, string> | undefined;
   let conversationId: string | undefined;
   let completionMode: KiroCompletionMode = "disabled";
-  let requestSnapshot: OcxParsedRequest | undefined;
+  let requestSnapshot: CodexCommanderParsedRequest | undefined;
   let firstRequestBodyBytes = 0;
   let requestAbortSignal: AbortSignal | undefined;
 
   const build = async (
-    parsed: OcxParsedRequest,
+    parsed: CodexCommanderParsedRequest,
     forcedCompletionMode?: KiroCompletionMode,
   ): Promise<{
     request: AdapterRequest;
@@ -1718,7 +1718,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
     contextInputEstimate: number;
   }> => {
     if (typeof provider.apiKey !== "string" || provider.apiKey.trim() === "") {
-      throw new Error("kiro token missing — run ocx login kiro");
+      throw new Error("kiro token missing — run ccx login kiro");
     }
     const region = resolveKiroApiRegion(parsed._kiroAuthContext);
     const resolvedProfileArn = resolveKiroProfileArn(parsed._kiroAuthContext);
@@ -1858,7 +1858,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
 
   return {
     name: "kiro",
-    async buildRequest(parsed: OcxParsedRequest, incoming) {
+    async buildRequest(parsed: CodexCommanderParsedRequest, incoming) {
       const built = await build(parsed);
       modelId = parsed.modelId;
       contextWindow = kiroUpstreamContextWindow(parsed.modelId);

@@ -7,14 +7,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
-const savedHome = process.env.OPENCODEX_HOME;
+const savedHome = process.env.CODEXCOMMANDER_HOME;
 let tempHome: string | null = null;
 
 afterEach(() => {
-  if (savedHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = savedHome;
+  if (savedHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = savedHome;
   if (tempHome) {
     rmSync(tempHome, { recursive: true, force: true });
     tempHome = null;
@@ -22,21 +22,28 @@ afterEach(() => {
 });
 
 function isolatedHome(): void {
-  tempHome = mkdtempSync(join(tmpdir(), "ocx-subagent-fallback-api-"));
-  process.env.OPENCODEX_HOME = tempHome;
+  tempHome = mkdtempSync(join(tmpdir(), "ccx-subagent-fallback-api-"));
+  process.env.CODEXCOMMANDER_HOME = tempHome;
 }
 
-function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
+function makeConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
   return {
     port: 10100,
-    providers: {},
+    multiAgentGuidanceEnabled: true,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+      },
+    },
     defaultProvider: "openai",
     subagentModelFallback: ["gpt-5.6-sol", "kimi/k3"],
     ...overrides,
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
-async function put(config: OcxConfig, body: unknown): Promise<Response> {
+async function put(config: CodexCommanderConfig, body: unknown): Promise<Response> {
   const req = new Request("http://localhost/api/subagent-model-fallback", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -76,6 +83,17 @@ describe("/api/subagent-model-fallback atomic validation", () => {
     const body = await res.json() as { error: string; index: number };
     expect(body.error).toBe("models[1] must be a non-empty string");
     expect(body.index).toBe(1);
+    expect(config.subagentModelFallback).toEqual(previous);
+  });
+
+  test("rejects an old raw nested selector without mutating the chain", async () => {
+    isolatedHome();
+    const previous = ["gpt-5.6-sol", "kimi/k3"];
+    const config = makeConfig({ subagentModelFallback: [...previous] });
+
+    const res = await put(config, { models: ["openrouter/anthropic/claude-sonnet-5"] });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: "models[0] must be a canonical selector", index: 0 });
     expect(config.subagentModelFallback).toEqual(previous);
   });
 

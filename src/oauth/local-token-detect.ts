@@ -1,7 +1,6 @@
 /**
- * Local token auto-detection — reads an existing Grok CLI credential (~/.grok/auth.json).
- * Read-only: never writes to external credential stores.
- * Ported from jawcode packages/ai/src/utils/oauth/local-token-detect.ts (xAI portion).
+ * Local token auto-detection for supported local clients. Read-only: never writes to
+ * external credential stores.
  */
 import { execSync } from "node:child_process";
 import {
@@ -19,9 +18,7 @@ import { join } from "node:path";
 import { identityFromKimiTokens } from "./kimi";
 import type { OAuthCredentials } from "./types";
 
-const XAI_AUTH_KEY_PREFIX = "https://auth.x.ai::";
 const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
-const MAX_GROK_CREDENTIAL_BYTES = 64 * 1024;
 const MAX_KIMI_CREDENTIAL_BYTES = 64 * 1024;
 
 function readBoundedRegularFile(path: string, maxBytes: number): string | null {
@@ -53,58 +50,6 @@ function readBoundedRegularFile(path: string, maxBytes: number): string | null {
   }
 }
 
-/** Grok home: `GROK_HOME` override, else `~/.grok`. */
-function grokHome(): string {
-  const explicit = process.env.GROK_HOME?.trim();
-  return explicit || join(process.env.HOME ?? homedir(), ".grok");
-}
-
-/** Parse a fresh Grok CLI access generation without retaining its rotating refresh grant. */
-export function parseGrokCliCredential(raw: string): OAuthCredentials | null {
-  try {
-    const data = JSON.parse(raw) as Record<string, unknown>;
-    const entry = Object.entries(data).find(([key]) => key.startsWith(XAI_AUTH_KEY_PREFIX))?.[1];
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
-    const fields = entry as Record<string, unknown>;
-    const access = fields.key;
-    const expiresRaw = fields.expires_at;
-    const expires = typeof expiresRaw === "string" ? new Date(expiresRaw).getTime() : 0;
-    const accountId = typeof fields.user_id === "string" && fields.user_id.length > 0
-      ? fields.user_id
-      : typeof fields.principal_id === "string" && fields.principal_id.length > 0
-        ? fields.principal_id
-        : undefined;
-    const email = typeof fields.email === "string" && fields.email.length > 0
-      ? fields.email.toLowerCase()
-      : undefined;
-    if (
-      typeof access !== "string"
-      || access.length === 0
-      || !Number.isFinite(expires)
-      || expires <= 0
-      || (!accountId && !email)
-    ) return null;
-
-    return {
-      access,
-      // Grok owns auth.json and its refresh-token lock. OpenCodex is read-only.
-      refresh: "",
-      expires,
-      ...(accountId ? { accountId } : {}),
-      ...(email ? { email } : {}),
-      source: "local-cli",
-    };
-  } catch {
-    return null;
-  }
-}
-
-/** Read-only detection of the current native Grok CLI access-token generation. */
-export function detectGrokCliToken(): OAuthCredentials | null {
-  const raw = readBoundedRegularFile(join(grokHome(), "auth.json"), MAX_GROK_CREDENTIAL_BYTES);
-  return raw ? parseGrokCliCredential(raw) : null;
-}
-
 /** Kimi Code home: `KIMI_CODE_HOME` override, else `~/.kimi-code`. */
 function kimiCodeHome(): string {
   const explicit = process.env.KIMI_CODE_HOME;
@@ -116,7 +61,7 @@ function kimiCodeHome(): string {
 /**
  * Parse Kimi Code's persisted token without taking ownership of its rotating refresh grant.
  *
- * The refresh token is consulted only for signed account identity, then discarded. OpenCodex
+ * The refresh token is consulted only for signed account identity, then discarded. CodexCommander
  * links to fresh CLI access-token generations read-only; it must never refresh or write Kimi's
  * credential store independently of the CLI's own cross-process lock.
  */
@@ -157,30 +102,6 @@ export function detectKimiCliToken(): OAuthCredentials | null {
   const path = join(kimiCodeHome(), "credentials", "kimi-code.json");
   const raw = readBoundedRegularFile(path, MAX_KIMI_CREDENTIAL_BYTES);
   return raw ? parseKimiCliCredential(raw) : null;
-}
-
-export function hasComparableGrokIdentity(stored: OAuthCredentials, disk: OAuthCredentials): boolean {
-  return Boolean((stored.accountId && disk.accountId) || (stored.email && disk.email));
-}
-
-export function isSameGrokIdentity(stored: OAuthCredentials, disk: OAuthCredentials): boolean {
-  if (stored.accountId && disk.accountId) return stored.accountId === disk.accountId;
-  if (stored.email && disk.email) return stored.email.toLowerCase() === disk.email.toLowerCase();
-  return false;
-}
-
-export function shouldAdoptGrokGeneration(
-  stored: OAuthCredentials,
-  disk: OAuthCredentials,
-  now = Date.now(),
-  refreshSkewMs = 60_000,
-): boolean {
-  if (disk.expires <= now + refreshSkewMs) return false;
-  const bothExpiriesExist = stored.expires > 0 && disk.expires > 0;
-  // The Grok CLI store has no monotonic generation counter. Equal expiry is therefore
-  // ambiguous and may be an older access token copied back over auth.json; fail closed.
-  if (bothExpiriesExist) return disk.expires > stored.expires;
-  return true;
 }
 
 /** Claude Code config dir: `CLAUDE_CONFIG_DIR` override, else `~/.claude`. */

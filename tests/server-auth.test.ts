@@ -35,27 +35,27 @@ import {
 } from "../src/server";
 import { clearRequestLogsForTests, getRequestLogEntries } from "../src/server/request-log";
 import { handleManagementAPI } from "../src/server/management-api";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { configuredAdminToken } from "../src/lib/admin-secrets";
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 import { deriveStartupHealth } from "../src/codex/autostart-health";
 
-const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
-const previousOpencodexHome = process.env.OPENCODEX_HOME;
+const previousApiToken = process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+const previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
 const previousCodexCliPath = process.env.CODEX_CLI_PATH;
 const originalGlobalFetch = globalThis.fetch;
 // A per-run directory, not a fixed path. This used to be
 // join(import.meta.dir, ".tmp-server-auth-test"), the exact same literal that
 // management-provider-validation.test.ts also declared, and both files delete and
-// recreate it while pointing OPENCODEX_HOME there. `bun test --isolate` gives each file
+// recreate it while pointing CODEXCOMMANDER_HOME there. `bun test --isolate` gives each file
 // its own module registry but shares one process and one filesystem, so whichever run was
 // mid-test when the other wiped the directory lost its config and credentials and started
 // answering 401 where the test expected the upstream's original 400. That also breaks two
 // concurrent runs of THIS file alone, which a rename could not fix. mkdtempSync matches the
 // isolation convention already used by tests/helpers/isolated-codex-home.ts.
-const TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-server-auth-"));
+const TEST_DIR = mkdtempSync(join(tmpdir(), "ccx-server-auth-"));
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 const settingsManagementDeps = {
@@ -79,9 +79,10 @@ const settingsManagementDeps = {
   }),
 };
 
-function config(hostname?: string): OcxConfig {
+function config(hostname?: string): CodexCommanderConfig {
   return {
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     hostname,
     defaultProvider: "openai",
     providers: {
@@ -100,7 +101,7 @@ function managementHeaders(initial?: HeadersInit): Headers {
   const token = configuredAdminToken();
   if (!token) throw new Error("management token was not initialized");
   const headers = new Headers(initial);
-  headers.set("x-opencodex-api-key", token);
+  headers.set("x-codexcommander-api-key", token);
   return headers;
 }
 
@@ -111,7 +112,7 @@ const canonicalDirect = {
   codexAccountMode: "direct",
 } as const;
 
-function poolProviders(): OcxConfig["providers"] {
+function poolProviders(): CodexCommanderConfig["providers"] {
   return {
     openai: { ...canonicalDirect, codexAccountMode: "pool" },
   };
@@ -143,16 +144,16 @@ function stubModelDiscoveryFor(...origins: string[]): void {
 }
 
 beforeEach(() => {
-  isolatedCodexHome = installIsolatedCodexHome("ocx-server-auth-codex-");
+  isolatedCodexHome = installIsolatedCodexHome("ccx-server-auth-codex-");
   process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
 });
 
 afterEach(() => {
   globalThis.fetch = originalGlobalFetch;
-  if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-  else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousApiToken === undefined) delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+  else process.env.CODEXCOMMANDER_API_AUTH_TOKEN = previousApiToken;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
   else process.env.CODEX_CLI_PATH = previousCodexCliPath;
   isolatedCodexHome?.restore();
@@ -174,7 +175,7 @@ function unsupportedModelBody(model = POOL_RETRY_MODEL): string {
 }
 
 type PoolRetryHarness = {
-  config: OcxConfig;
+  config: CodexCommanderConfig;
   dispatches: string[];
   request: (init?: {
     stream?: boolean;
@@ -209,7 +210,7 @@ async function startPoolRetryHarness(
   reply: (accountId: string, request: Request) => Response | Promise<Response>,
   options: {
     secondAccount?: boolean;
-    streamMode?: "legacy-tee" | "eager-relay";
+    streamMode?: "safe-tee" | "eager-relay";
     accountMode?: "direct" | "pool";
     activeAccountId?: string;
     accountNamespaces?: Record<string, string>;
@@ -224,7 +225,7 @@ async function startPoolRetryHarness(
 ): Promise<PoolRetryHarness> {
   await removeTestDirBestEffort(TEST_DIR);
   mkdirSync(TEST_DIR, { recursive: true });
-  process.env.OPENCODEX_HOME = TEST_DIR;
+  process.env.CODEXCOMMANDER_HOME = TEST_DIR;
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
   clearAccountQuota();
@@ -253,8 +254,8 @@ async function startPoolRetryHarness(
   const secondAccount = options.secondAccount ?? true;
   const config = {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "openai",
-    openaiProviderTierVersion: 2,
     providers: {
       openai: {
         ...canonicalDirect,
@@ -264,10 +265,10 @@ async function startPoolRetryHarness(
       },
     },
     codexAccounts: [
-      { id: "main", email: "main@example.test", isMain: true },
-      { id: "pool-a", email: "pool-a@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+      { id: "main", email: "main@example.test", logLabel: "p000001", isMain: true },
+      { id: "pool-a", email: "pool-a@example.test", logLabel: "p000002", isMain: false, chatgptAccountId: "acct-pool-a" },
       ...(secondAccount
-        ? [{ id: "pool-b", email: "pool-b@example.test", isMain: false, chatgptAccountId: "acct-pool-b" }]
+        ? [{ id: "pool-b", email: "pool-b@example.test", logLabel: "p000003", isMain: false, chatgptAccountId: "acct-pool-b" }]
         : []),
     ],
     activeCodexAccountId: options.activeAccountId ?? "pool-a",
@@ -276,7 +277,7 @@ async function startPoolRetryHarness(
     ...(options.visionSidecarModel ? { visionSidecar: { model: options.visionSidecarModel } } : {}),
     ...(options.websockets ? { websockets: true } : {}),
     ...(options.streamMode ? { streamMode: options.streamMode } : {}),
-  } as OcxConfig;
+  } as CodexCommanderConfig;
   saveConfig(config);
   if (!options.omitCredentialAccountIds?.includes("pool-a")) {
     saveCodexAccountCredential("pool-a", {
@@ -372,7 +373,7 @@ describe("server local API auth", () => {
     })).toBe(false);
   });
 
-  test("loopback hostnames do not require opencodex API auth", () => {
+  test("loopback hostnames do not require CodexCommander API auth", () => {
     expect(isLoopbackHostname(undefined)).toBe(true);
     expect(isLoopbackHostname("")).toBe(true);
     expect(isLoopbackHostname("localhost")).toBe(true);
@@ -383,41 +384,42 @@ describe("server local API auth", () => {
   });
 
   test("non-loopback binding requires env token before startup", () => {
-    delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
     expect(isApiAuthRequired(config("0.0.0.0"))).toBe(true);
-    expect(() => assertServerAuthConfig(config("0.0.0.0"))).toThrow("OPENCODEX_API_AUTH_TOKEN");
+    expect(() => assertServerAuthConfig(config("0.0.0.0"))).toThrow("CODEXCOMMANDER_API_AUTH_TOKEN");
 
-    process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
+    process.env.CODEXCOMMANDER_API_AUTH_TOKEN = "local-secret";
     expect(() => assertServerAuthConfig(config("0.0.0.0"))).not.toThrow();
   });
 
   test("auth header must match env token when non-loopback auth is required", () => {
-    process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
+    process.env.CODEXCOMMANDER_API_AUTH_TOKEN = "local-secret";
     const cfg = config("0.0.0.0");
 
     expect(hasValidApiAuth(new Request("http://localhost/api/config"), cfg)).toBe(false);
     expect(hasValidApiAuth(new Request("http://localhost/api/config", {
-      headers: { "x-opencodex-api-key": "wrong" },
+      headers: { "x-codexcommander-api-key": "wrong" },
     }), cfg)).toBe(false);
     expect(hasValidApiAuth(new Request("http://localhost/api/config", {
-      headers: { "x-opencodex-api-key": "local-secret" },
+      headers: { "x-codexcommander-api-key": "local-secret" },
     }), cfg)).toBe(true);
   });
 
   test("loopback remains allowed even when env token exists", () => {
-    process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
+    process.env.CODEXCOMMANDER_API_AUTH_TOKEN = "local-secret";
     expect(hasValidApiAuth(new Request("http://localhost/api/config"), config("127.0.0.1"))).toBe(true);
   });
 
-  test("CORS preflight permits the opencodex API key header", () => {
+  test("CORS preflight permits only the CodexCommander management headers", () => {
     const allowed = corsHeaders()["Access-Control-Allow-Headers"];
-    expect(allowed).toContain("X-OpenCodex-API-Key");
+    expect(allowed).toContain("X-CodexCommander-API-Key");
+    expect(allowed).toContain("X-CodexCommander-GUI-Origin");
+    expect(allowed).toContain("X-CodexCommander-CSRF-Token");
     expect(allowed).toContain("ChatGPT-Account-Id");
   });
 
   test("safeConfigDTO redacts provider secrets and exposes booleans", () => {
     const unsafe = config("127.0.0.1");
-    unsafe.openaiProviderTierVersion = 1;
     unsafe.codexAccountNamespaces = { side: "private-account-id" };
     Object.assign(unsafe.providers.openai as unknown as Record<string, unknown>, {
       apiKeyPool: [{ id: "pool-id", key: "pool-secret", label: "private-pool-label" }],
@@ -436,7 +438,7 @@ describe("server local API auth", () => {
     };
     const serialized = JSON.stringify(dto);
     for (const forbidden of [
-      "sk-secret-value", "provider-secret", "openaiProviderTierVersion",
+      "sk-secret-value", "provider-secret",
       "apiKeyPool", "pool-secret", "private-pool-label", "modelMaxInputTokens",
       "virtualModels", "codexAuthContext", "selectedForwardHeaders",
       "sidecarOutcomeRecorder", "recorder-runtime", "_codexAccountOverride",
@@ -474,7 +476,7 @@ describe("server local API auth", () => {
           keyOptional: true,
         },
       },
-    } as OcxConfig) as {
+    } as CodexCommanderConfig) as {
       providers: Record<string, Record<string, unknown>>;
     };
 
@@ -503,7 +505,7 @@ describe("server local API auth", () => {
           apiKey: "sk-secret-value",
         },
       },
-    } as OcxConfig) as { providers: Record<string, { baseUrl: string }> };
+    } as CodexCommanderConfig) as { providers: Record<string, { baseUrl: string }> };
 
     expect(dto.providers.leaky.baseUrl).toBe("https://example.test/v1");
     expect(JSON.stringify(dto)).not.toContain("pass");
@@ -523,7 +525,7 @@ describe("server local API auth", () => {
           baseUrl: "file:///tmp/sk-secret",
         },
       },
-    } as OcxConfig) as { providers: Record<string, { baseUrl: string }> };
+    } as CodexCommanderConfig) as { providers: Record<string, { baseUrl: string }> };
 
     expect(dto.providers.malformed.baseUrl).toBe("(invalid URL)");
     expect(dto.providers.file.baseUrl).toBe("(invalid URL)");
@@ -534,7 +536,7 @@ describe("server local API auth", () => {
   test("root fallback explains missing dashboard build", () => {
     expect(rootFallbackPayload()).toMatchObject({
       status: "ok",
-      service: "opencodex",
+      service: "codexcommander",
       dashboard: { available: false },
       endpoints: {
         health: "/healthz",
@@ -560,10 +562,11 @@ describe("server local API auth", () => {
   test("/v1/models requires API auth and local Origin on non-loopback bindings", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_API_AUTH_TOKEN = "local-secret";
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       hostname: "0.0.0.0",
       defaultProvider: "chatgpt",
       providers: {
@@ -573,7 +576,7 @@ describe("server local API auth", () => {
           authMode: "forward",
         },
       },
-    } as OcxConfig);
+    } as CodexCommanderConfig);
 
     const server = startServer(0);
     const modelsUrl = `http://127.0.0.1:${server.port}/v1/models`;
@@ -582,18 +585,18 @@ describe("server local API auth", () => {
       expect(missingAuth.status).toBe(401);
 
       const badOrigin = await fetch(modelsUrl, {
-        headers: { "x-opencodex-api-key": "local-secret", origin: "https://attacker.test" },
+        headers: { "x-codexcommander-api-key": "local-secret", origin: "https://attacker.test" },
       });
       expect(badOrigin.status).toBe(403);
 
       const ok = await fetch(modelsUrl, {
-        headers: { "x-opencodex-api-key": "local-secret" },
+        headers: { "x-codexcommander-api-key": "local-secret" },
       });
       expect(ok.status).toBe(200);
       expect(await ok.json()).toHaveProperty("data");
 
       const sameOrigin = await fetch(modelsUrl, {
-        headers: { "x-opencodex-api-key": "local-secret", origin: new URL(modelsUrl).origin },
+        headers: { "x-codexcommander-api-key": "local-secret", origin: new URL(modelsUrl).origin },
       });
       expect(sameOrigin.status).toBe(200);
     } finally {
@@ -610,15 +613,15 @@ describe("server local API auth", () => {
         nvidia: { adapter: "openai-chat", baseUrl: "https://integrate.api.nvidia.com/v1", freeTier: true },
         venice: { adapter: "openai-chat", baseUrl: "https://api.venice.ai/api/v1" },
       },
-    } as OcxConfig) as { providers: Record<string, { freeTier?: boolean }> };
+    } as CodexCommanderConfig) as { providers: Record<string, { freeTier?: boolean }> };
     expect(dto.providers.nvidia.freeTier).toBe(true);
     expect(dto.providers.venice.freeTier).toBeUndefined();
   });
   test("management GET rejects non-local Origin even with a valid API key", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_API_AUTH_TOKEN = "local-secret";
     saveConfig({
       ...config("0.0.0.0"),
       port: 0,
@@ -644,8 +647,8 @@ describe("server local API auth", () => {
   test("/api/system/memory rides the management auth gate; /healthz shape unchanged (#314 WP3)", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_API_AUTH_TOKEN = "local-secret";
     saveConfig({
       ...config("0.0.0.0"),
       port: 0,
@@ -678,7 +681,7 @@ describe("server local API auth", () => {
   test("OPTIONS preflight rejects non-local Origin before CORS headers are trusted", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
 
     const server = startServer(0);
@@ -710,7 +713,7 @@ describe("server local API auth", () => {
   test("extension allowlist gates preflight and data-plane requests by authority", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     const extensionOrigin = "chrome-extension://modkelfkcfjpgbfmnbnllalkiogfofh";
     saveConfig({
       ...config("127.0.0.1"),
@@ -772,7 +775,7 @@ describe("server local API auth", () => {
   test("loopback management API rejects host-header same-origin rebinding", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
 
     const server = startServer(0);
@@ -782,7 +785,7 @@ describe("server local API auth", () => {
         headers: {
           host: `attacker.test:${server.port}`,
           origin: attackerOrigin,
-          "x-opencodex-api-key": configuredAdminToken() ?? "missing-admin-token",
+          "x-codexcommander-api-key": configuredAdminToken() ?? "missing-admin-token",
         },
       });
       expect(response.status).toBe(403);
@@ -795,10 +798,10 @@ describe("server local API auth", () => {
   test("management CORS echoes validated loopback Origin and covers delegated codex-auth responses", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
 
-    const server = startServer(0, { managementDeps: settingsManagementDeps });
+    const server = startServer(0, { managementApi: settingsManagementDeps });
     const origin = `http://127.0.0.1:${server.port}`;
     try {
       const settings = await fetch(new URL("/api/settings", server.url), {
@@ -821,14 +824,14 @@ describe("server local API auth", () => {
   test("non-loopback management API allows same-origin GUI requests with API token", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_API_AUTH_TOKEN = "local-secret";
     saveConfig({
       ...config("0.0.0.0"),
       port: 0,
     });
 
-    const server = startServer(0, { managementDeps: settingsManagementDeps });
+    const server = startServer(0, { managementApi: settingsManagementDeps });
     const origin = `http://lan.example.test:${server.port}`;
     try {
       const missing = await fetch(`http://127.0.0.1:${server.port}/api/settings`, {
@@ -855,8 +858,8 @@ describe("server local API auth", () => {
   test("websocket upgrade rejects hostile Origin even with a valid API token", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_API_AUTH_TOKEN = "local-secret";
     saveConfig({
       ...config("0.0.0.0"),
       port: 0,
@@ -878,7 +881,7 @@ describe("server local API auth", () => {
             origin: "https://attacker.test",
             "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
             "sec-websocket-version": "13",
-            "x-opencodex-api-key": "local-secret",
+            "x-codexcommander-api-key": "local-secret",
           },
         }, incoming => {
           let body = "";
@@ -912,8 +915,8 @@ describe("server local API auth", () => {
   test("websocket upgrade returns 426 when the WS transport is disabled", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
     saveConfig({ ...config(), port: 0, websockets: false });
 
     const server = startServer(0);
@@ -939,8 +942,8 @@ describe("server local API auth", () => {
   test("after a 426'd upgrade the same client can immediately fall back to HTTP POST", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
 
     const upstream = Bun.serve({
       port: 0,
@@ -954,6 +957,7 @@ describe("server local API auth", () => {
     });
     saveConfig({
       port: 0, websockets: false, defaultProvider: "routed-fb",
+      multiAgentGuidanceEnabled: true,
       providers: {
         "routed-fb": { adapter: "openai-chat", baseUrl: `http://127.0.0.1:${upstream.port}/v1`, allowPrivateNetwork: true, apiKey: "key-fb-000111222333" },
       },
@@ -984,8 +988,8 @@ describe("server local API auth", () => {
   test("compact v1 on a routed model propagates a summarizer failure instead of fabricating history", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
 
     const upstream = Bun.serve({
       port: 0,
@@ -997,6 +1001,7 @@ describe("server local API auth", () => {
     });
     saveConfig({
       port: 0, defaultProvider: "routed-cmp",
+      multiAgentGuidanceEnabled: true,
       providers: {
         "routed-cmp": { adapter: "openai-chat", baseUrl: `http://127.0.0.1:${upstream.port}/v1`, allowPrivateNetwork: true, apiKey: "key-cmp-000111222333" },
       },
@@ -1024,8 +1029,8 @@ describe("server local API auth", () => {
   test("unknown /v1/* paths return JSON 404, never GUI index.html", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
     saveConfig({ ...config(), port: 0 });
 
     const server = startServer(0);
@@ -1046,8 +1051,8 @@ describe("server local API auth", () => {
   test("POST /v1/responses/compact on a routed model returns v1 replacement history", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
 
     const upstream = Bun.serve({
       port: 0,
@@ -1061,6 +1066,7 @@ describe("server local API auth", () => {
     });
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "anthropic-test",
       providers: {
         "anthropic-test": {
@@ -1071,7 +1077,7 @@ describe("server local API auth", () => {
           defaultModel: "claude-fable-5",
         },
       },
-    } as OcxConfig);
+    } as CodexCommanderConfig);
 
     const server = startServer(0);
     try {
@@ -1096,8 +1102,8 @@ describe("server local API auth", () => {
       const last = json.output[json.output.length - 1];
       expect(last.role).toBe("user");
       expect(last.content?.[0].text).toContain("compact summary body");
-      // No ocx1 envelope may leak into v1 output.
-      expect(JSON.stringify(json)).not.toContain("ocx1:");
+      // No ccx1 envelope may leak into v1 output.
+      expect(JSON.stringify(json)).not.toContain("ccx1:");
     } finally {
       await server.stop(true);
       await upstream.stop(true);
@@ -1110,10 +1116,10 @@ describe("server local API auth", () => {
   test("OpenAI option auth matrix keeps direct, pool, and API credentials independent", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     clearThreadAccountMap();
     clearCodexUpstreamHealth();
-    process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
+    process.env.CODEXCOMMANDER_API_AUTH_TOKEN = "local-secret";
 
     const seen: Array<{ host: string; authorization: string | null; chatgptAccountId: string | null }> = [];
     const upstream = Bun.serve({
@@ -1148,7 +1154,7 @@ describe("server local API auth", () => {
     const request = (server: ReturnType<typeof startServer>, headers?: HeadersInit, model = "gpt-test") => {
       const requestHeaders = new Headers(headers);
       requestHeaders.set("content-type", "application/json");
-      requestHeaders.set("x-opencodex-api-key", "local-secret");
+      requestHeaders.set("x-codexcommander-api-key", "local-secret");
       return fetch(new URL("/v1/responses", server.url), {
         method: "POST",
         headers: requestHeaders,
@@ -1158,7 +1164,7 @@ describe("server local API auth", () => {
     const compact = (server: ReturnType<typeof startServer>, headers?: HeadersInit, model = "gpt-test") => {
       const requestHeaders = new Headers(headers);
       requestHeaders.set("content-type", "application/json");
-      requestHeaders.set("x-opencodex-api-key", "local-secret");
+      requestHeaders.set("x-codexcommander-api-key", "local-secret");
       return fetch(new URL("/v1/responses/compact", server.url), {
         method: "POST",
         headers: requestHeaders,
@@ -1168,7 +1174,7 @@ describe("server local API auth", () => {
     const wsTurn = (server: ReturnType<typeof startServer>, headers?: Record<string, string>, model = "gpt-test") => {
       const url = new URL("/v1/responses", server.url);
       url.protocol = "ws:";
-      const ws = new WebSocket(url, { headers: { "x-opencodex-api-key": "local-secret", ...(headers ?? {}) } } as unknown as string[]);
+      const ws = new WebSocket(url, { headers: { "x-codexcommander-api-key": "local-secret", ...(headers ?? {}) } } as unknown as string[]);
       return new Promise<string>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error("tier websocket timeout")), 5_000);
         ws.addEventListener("open", () => {
@@ -1187,14 +1193,14 @@ describe("server local API auth", () => {
     try {
       const directConfig = {
         port: 0,
+        multiAgentGuidanceEnabled: true,
         hostname: "0.0.0.0",
         websockets: true,
         defaultProvider: "openai",
-        openaiProviderTierVersion: 2,
         providers: { openai: canonicalDirect },
-        codexAccounts: [{ id: "direct-unusable", email: "pool@example.test", isMain: false }],
+        codexAccounts: [{ id: "direct-unusable", email: "pool@example.test", logLabel: "p000001", isMain: false }],
         activeCodexAccountId: "direct-unusable",
-      } as OcxConfig;
+      } as CodexCommanderConfig;
       saveCodexAccountCredential("direct-unusable", {
         accessToken: "unusable-pool-token",
         refreshToken: "unusable-pool-refresh",
@@ -1240,11 +1246,11 @@ describe("server local API auth", () => {
         await direct.stop(true);
       }
 
-      const mainOnlyConfig = (): OcxConfig => ({
+      const mainOnlyConfig = (): CodexCommanderConfig => ({
         port: 0,
+        multiAgentGuidanceEnabled: true,
         websockets: true,
         defaultProvider: "openai",
-        openaiProviderTierVersion: 2,
         providers: poolProviders(),
         codexAccounts: [],
         autoSwitchThreshold: 0,
@@ -1280,15 +1286,15 @@ describe("server local API auth", () => {
 
       saveConfig({
         port: 0,
+        multiAgentGuidanceEnabled: true,
         hostname: "0.0.0.0",
         websockets: true,
         defaultProvider: "openai",
-        openaiProviderTierVersion: 2,
         providers: poolProviders(),
-        codexAccounts: [{ id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" }],
+        codexAccounts: [{ id: "pool-a", email: "pool@example.test", logLabel: "p000001", isMain: false, chatgptAccountId: "acct-pool-a" }],
         activeCodexAccountId: "pool-a",
         autoSwitchThreshold: 0,
-      } as OcxConfig);
+      } as CodexCommanderConfig);
       const beforeMissingPool = seen.length;
       const missingPool = startServer(0);
       try {
@@ -1313,7 +1319,7 @@ describe("server local API auth", () => {
         port: 0,
         defaultProvider: "openai",
         providers: cooldownCfg,
-      } as OcxConfig, "pool-a", 429, { retryAfter: "60" });
+      } as CodexCommanderConfig, "pool-a", 429, { retryAfter: "60" });
       const beforeCooldown = seen.length;
       const cooledMulti = startServer(0);
       try {
@@ -1339,15 +1345,15 @@ describe("server local API auth", () => {
 
       saveConfig({
         port: 0,
+        multiAgentGuidanceEnabled: true,
         hostname: "0.0.0.0",
         websockets: true,
         defaultProvider: "openai-apikey",
-        openaiProviderTierVersion: 2,
         providers: {
           openai: { ...canonicalDirect, disabled: true },
           "openai-apikey": { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", apiKey: "sk-platform" },
         },
-      } as OcxConfig);
+      } as CodexCommanderConfig);
       const api = startServer(0);
       try {
         expect((await request(api, { authorization: "Bearer local-secret" }, "openai-apikey/gpt-test")).status).toBe(200);
@@ -1370,21 +1376,21 @@ describe("server local API auth", () => {
       });
       saveConfig({
         port: 0,
+        multiAgentGuidanceEnabled: true,
         hostname: "0.0.0.0",
         websockets: true,
         defaultProvider: "openai",
-        openaiProviderTierVersion: 2,
         providers: {
           openai: { ...canonicalDirect, codexAccountMode: "pool" },
           "openai-apikey": { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", apiKey: "sk-platform" },
         },
         codexAccounts: [
-          { id: "pool-a", email: "a@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
-          { id: "pool-b", email: "b@example.test", isMain: false, chatgptAccountId: "acct-pool-b" },
+          { id: "pool-a", email: "a@example.test", logLabel: "p000001", isMain: false, chatgptAccountId: "acct-pool-a" },
+          { id: "pool-b", email: "b@example.test", logLabel: "p000002", isMain: false, chatgptAccountId: "acct-pool-b" },
         ],
         activeCodexAccountId: "pool-a",
         autoSwitchThreshold: 0,
-      } as OcxConfig);
+      } as CodexCommanderConfig);
       clearAccountNeedsReauth("pool-a");
       clearAccountNeedsReauth("pool-b");
       const sequential = startServer(0);
@@ -1393,7 +1399,7 @@ describe("server local API auth", () => {
       const beforeHandshake = seen.length;
       const ws = new WebSocket(wsUrl, {
         headers: {
-          "x-opencodex-api-key": "local-secret",
+          "x-codexcommander-api-key": "local-secret",
           authorization: "Bearer caller-codex",
         },
       } as unknown as string[]);
@@ -1455,8 +1461,8 @@ describe("server local API auth", () => {
   test("internal web-search and vision never forward a non-ChatGPT bearer as Direct sidecar auth", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    process.env.OPENCODEX_API_AUTH_TOKEN = "dedicated-x-key";
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_API_AUTH_TOKEN = "dedicated-x-key";
     const outbound: Array<{ url: string; authorization: string | null }> = [];
     globalThis.fetch = (async (input, init) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -1465,10 +1471,15 @@ describe("server local API auth", () => {
     }) as typeof fetch;
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       hostname: "0.0.0.0",
       defaultProvider: "routed",
-      openaiProviderTierVersion: 2,
-      apiKeys: [{ id: "bearer", name: "Bearer admission", key: "bearer-admission-secret", createdAt: "2026-07-17" }],
+      apiKeys: [{
+        id: "bearer",
+        name: "Bearer admission",
+        key: "bearer-admission-secret",
+        createdAt: "2026-07-17T00:00:00.000Z",
+      }],
       providers: {
         routed: {
           adapter: "openai-chat",
@@ -1496,7 +1507,7 @@ describe("server local API auth", () => {
             method: "POST",
             headers: {
               "content-type": "application/json",
-              "x-opencodex-api-key": "dedicated-x-key",
+              "x-codexcommander-api-key": "dedicated-x-key",
               authorization,
               "chatgpt-account-id": "acct-forged",
             },
@@ -1517,8 +1528,8 @@ describe("server local API auth", () => {
   test("internal vision sidecar still accepts a canonical ChatGPT bearer for Direct sidecar auth", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    process.env.OPENCODEX_API_AUTH_TOKEN = "dedicated-x-key";
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_API_AUTH_TOKEN = "dedicated-x-key";
     const outbound: Array<{ url: string; authorization: string | null; accountId: string | null }> = [];
     globalThis.fetch = (async (input, init) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -1545,9 +1556,9 @@ describe("server local API auth", () => {
     }) as typeof fetch;
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       hostname: "0.0.0.0",
       defaultProvider: "routed",
-      openaiProviderTierVersion: 2,
       providers: {
         routed: {
           adapter: "openai-chat",
@@ -1565,7 +1576,7 @@ describe("server local API auth", () => {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-opencodex-api-key": "dedicated-x-key",
+          "x-codexcommander-api-key": "dedicated-x-key",
           authorization: `Bearer ${token}`,
           "chatgpt-account-id": "acct-direct",
         },
@@ -1588,7 +1599,7 @@ describe("server local API auth", () => {
   test("expired thread affinity returns 409 before HTTP passthrough and WS resolves auth per frame", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     clearCodexUpstreamHealth();
     clearThreadAccountMap();
     clearAccountNeedsReauth("pool-a");
@@ -1606,16 +1617,16 @@ describe("server local API auth", () => {
     const now = 1_800_000_000_000;
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "openai",
-      openaiProviderTierVersion: 2,
       websockets: true,
       providers: poolProviders(),
       codexAccounts: [
-        { id: "main", email: "main@example.test", isMain: true },
-        { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+        { id: "main", email: "main@example.test", logLabel: "p000001", isMain: true },
+        { id: "pool-a", email: "pool@example.test", logLabel: "p000002", isMain: false, chatgptAccountId: "acct-pool-a" },
       ],
       activeCodexAccountId: "pool-a",
-    } as OcxConfig);
+    } as CodexCommanderConfig);
     saveCodexAccountCredential("pool-a", {
       accessToken: "pool-access-token",
       refreshToken: "pool-refresh-token",
@@ -1699,7 +1710,7 @@ describe("server local API auth", () => {
   test("websocket passthrough refreshes pool auth for each response.create turn", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     clearCodexUpstreamHealth();
     clearThreadAccountMap();
     clearAccountNeedsReauth("pool-a");
@@ -1719,16 +1730,16 @@ describe("server local API auth", () => {
     const now = 1_800_000_000_000;
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "openai",
-      openaiProviderTierVersion: 2,
       websockets: true,
       providers: poolProviders(),
       codexAccounts: [
-        { id: "main", email: "main@example.test", isMain: true },
-        { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+        { id: "main", email: "main@example.test", logLabel: "p000001", isMain: true },
+        { id: "pool-a", email: "pool@example.test", logLabel: "p000002", isMain: false, chatgptAccountId: "acct-pool-a" },
       ],
       activeCodexAccountId: "pool-a",
-    } as OcxConfig);
+    } as CodexCommanderConfig);
     saveCodexAccountCredential("pool-a", {
       accessToken: "old-access-token",
       refreshToken: "old-refresh-token",
@@ -1796,7 +1807,7 @@ describe("server local API auth", () => {
   test("websocket routed adapter records completed usage in request logs", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
 
     const upstream = Bun.serve({
       port: 0,
@@ -1815,6 +1826,7 @@ describe("server local API auth", () => {
     });
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "anthropic-test",
       websockets: true,
       providers: {
@@ -1826,7 +1838,7 @@ describe("server local API auth", () => {
           defaultModel: "claude-fable-5",
         },
       },
-    } as OcxConfig);
+    } as CodexCommanderConfig);
 
     const server = startServer(0);
     const wsUrl = new URL("/v1/responses", server.url);
@@ -1866,7 +1878,7 @@ describe("server local API auth", () => {
         usage: {
           inputTokens: 25,
           outputTokens: 4,
-          cachedInputTokens: 3,
+          cacheReadInputTokens: 3,
           cacheCreationInputTokens: 2,
         },
       });
@@ -2387,7 +2399,7 @@ describe("server local API auth", () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     try {
-      for (const streamMode of ["legacy-tee", "eager-relay"] as const) {
+      for (const streamMode of ["safe-tee", "eager-relay"] as const) {
         const positive = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
           ? rejectionResponse(unsupportedModelBody())
           : new Response(
@@ -2666,7 +2678,7 @@ describe("server local API auth", () => {
   test("passthrough connect failure records selected pool account health", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     clearCodexUpstreamHealth();
     clearThreadAccountMap();
     clearAccountNeedsReauth("pool-a");
@@ -2674,17 +2686,17 @@ describe("server local API auth", () => {
     redirectCanonicalCodexTo("http://127.0.0.1:9/");
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "openai",
-      openaiProviderTierVersion: 2,
       providers: poolProviders(),
       codexAccounts: [
-        { id: "main", email: "main@example.test", isMain: true },
-        { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+        { id: "main", email: "main@example.test", logLabel: "p000001", isMain: true },
+        { id: "pool-a", email: "pool@example.test", logLabel: "p000002", isMain: false, chatgptAccountId: "acct-pool-a" },
       ],
       activeCodexAccountId: "pool-a",
       upstreamFailoverThreshold: 3,
       connectTimeoutMs: 200,
-    } as OcxConfig);
+    } as CodexCommanderConfig);
     saveCodexAccountCredential("pool-a", {
       accessToken: "pool-access-token",
       refreshToken: "pool-refresh-token",
@@ -2721,7 +2733,7 @@ describe("server local API auth", () => {
   test("passthrough pool send relays a 307 with Location and records no health evidence (#914)", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     clearCodexUpstreamHealth();
     clearThreadAccountMap();
     clearAccountNeedsReauth("pool-a");
@@ -2744,17 +2756,17 @@ describe("server local API auth", () => {
 
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "openai",
-      openaiProviderTierVersion: 2,
       providers: poolProviders(),
       codexAccounts: [
-        { id: "main", email: "main@example.test", isMain: true },
-        { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+        { id: "main", email: "main@example.test", logLabel: "p000001", isMain: true },
+        { id: "pool-a", email: "pool@example.test", logLabel: "p000002", isMain: false, chatgptAccountId: "acct-pool-a" },
       ],
       activeCodexAccountId: "pool-a",
       upstreamFailoverThreshold: 3,
       connectTimeoutMs: 200,
-    } as OcxConfig);
+    } as CodexCommanderConfig);
     saveCodexAccountCredential("pool-a", {
       accessToken: "pool-access-token",
       refreshToken: "pool-refresh-token",
@@ -2795,7 +2807,7 @@ describe("server local API auth", () => {
   test("passthrough SSE terminal failure is recorded without clearing health on initial 200", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     clearCodexUpstreamHealth();
     clearThreadAccountMap();
     clearAccountNeedsReauth("pool-a");
@@ -2812,16 +2824,16 @@ describe("server local API auth", () => {
     redirectCanonicalCodexTo(upstream.url.toString());
     const cfg = {
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "openai",
-      openaiProviderTierVersion: 2,
       providers: poolProviders(),
       codexAccounts: [
-        { id: "main", email: "main@example.test", isMain: true },
-        { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+        { id: "main", email: "main@example.test", logLabel: "p000001", isMain: true },
+        { id: "pool-a", email: "pool@example.test", logLabel: "p000002", isMain: false, chatgptAccountId: "acct-pool-a" },
       ],
       activeCodexAccountId: "pool-a",
       upstreamFailoverThreshold: 3,
-    } as OcxConfig;
+    } as CodexCommanderConfig;
     saveConfig(cfg);
     saveCodexAccountCredential("pool-a", {
       accessToken: "pool-access-token",
@@ -2866,7 +2878,7 @@ describe("server local API auth", () => {
   test("native passthrough SSE records completed usage without pool terminal tracking", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
 
     const upstream = Bun.serve({
       port: 0,
@@ -2884,6 +2896,7 @@ describe("server local API auth", () => {
     });
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "test-openai",
       providers: {
         "test-openai": {
@@ -2894,7 +2907,7 @@ describe("server local API auth", () => {
           defaultModel: "gpt-5.5",
         },
       },
-    } as OcxConfig);
+    } as CodexCommanderConfig);
 
     const server = startServer(0);
     try {
@@ -2916,7 +2929,7 @@ describe("server local API auth", () => {
         usage: {
           inputTokens: 11,
           outputTokens: 7,
-          cachedInputTokens: 3,
+          cacheReadInputTokens: 3,
           reasoningOutputTokens: 2,
         },
       });
@@ -2950,7 +2963,7 @@ describe("server local API auth", () => {
   test("passthrough SSE client cancel aborts the upstream request", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
 
     let releaseAbort!: () => void;
     const upstreamAborted = new Promise<void>(resolve => { releaseAbort = resolve; });
@@ -2982,6 +2995,7 @@ describe("server local API auth", () => {
     }) as typeof fetch;
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "test-openai",
       providers: {
         "test-openai": {
@@ -2991,7 +3005,7 @@ describe("server local API auth", () => {
           defaultModel: "gpt-test",
         },
       },
-    } as OcxConfig);
+    } as CodexCommanderConfig);
 
     const server = startServer(0);
     try {
@@ -3022,7 +3036,7 @@ describe("server local API auth", () => {
   test("non-forward generated stream does not mutate active pool health", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     clearCodexUpstreamHealth();
     clearThreadAccountMap();
     clearAccountNeedsReauth("pool-a");
@@ -3041,6 +3055,7 @@ describe("server local API auth", () => {
     });
     saveConfig({
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "test-openai",
       providers: {
         "test-openai": {
@@ -3052,12 +3067,12 @@ describe("server local API auth", () => {
         },
       },
       codexAccounts: [
-        { id: "main", email: "main@example.test", isMain: true },
-        { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+        { id: "main", email: "main@example.test", logLabel: "p000001", isMain: true },
+        { id: "pool-a", email: "pool@example.test", logLabel: "p000002", isMain: false, chatgptAccountId: "acct-pool-a" },
       ],
       activeCodexAccountId: "pool-a",
       upstreamFailoverThreshold: 3,
-    } as OcxConfig);
+    } as CodexCommanderConfig);
     saveCodexAccountCredential("pool-a", {
       accessToken: "pool-access-token",
       refreshToken: "pool-refresh-token",

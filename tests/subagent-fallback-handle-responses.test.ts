@@ -30,7 +30,7 @@ import {
 import type { CodexAuthContext } from "../src/codex/auth-context";
 import { handleResponses } from "../src/server/responses";
 import { isEagerRelaySseResponse } from "../src/server/relay";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import type { RequestLogContext } from "../src/server/request-log";
 import type { ResponsesTerminalStatus } from "../src/bridge";
 
@@ -39,14 +39,14 @@ setDefaultTimeout(30_000);
 const originalFetch = globalThis.fetch;
 const originalNow = Date.now;
 let testDir: string;
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 let previousCodexHome: string | undefined;
 
 beforeEach(() => {
-  testDir = mkdtempSync(join(tmpdir(), "ocx-subagent-hr-"));
-  previousOpencodexHome = process.env.OPENCODEX_HOME;
+  testDir = mkdtempSync(join(tmpdir(), "ccx-subagent-hr-"));
+  previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
   previousCodexHome = process.env.CODEX_HOME;
-  process.env.OPENCODEX_HOME = testDir;
+  process.env.CODEXCOMMANDER_HOME = testDir;
   process.env.CODEX_HOME = testDir;
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
@@ -62,8 +62,8 @@ afterEach(() => {
   clearAccountQuota();
   resetSubagentModelFallbackStateForTests();
   rmSync(testDir, { recursive: true, force: true });
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
 });
@@ -105,9 +105,10 @@ function spawnHeaders(extra: HeadersInit = {}): Headers {
   });
 }
 
-function poolNativePlusRoutedConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
+function poolNativePlusRoutedConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "openai",
     activeCodexAccountId: "pool-a",
     autoSwitchThreshold: 80,
@@ -132,11 +133,11 @@ function poolNativePlusRoutedConfig(overrides: Partial<OcxConfig> = {}): OcxConf
       },
     },
     codexAccounts: [
-      { id: "main", email: "main@example.test", isMain: true },
-      { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "pool_acc" },
+      { id: "main", email: "main@example.test", logLabel: "p000001", isMain: true },
+      { id: "pool-a", email: "pool@example.test", logLabel: "p000002", isMain: false, chatgptAccountId: "pool_acc" },
     ],
     ...overrides,
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 function installPoolCredential(accountId: string, chatgptAccountId: string, now: number): void {
@@ -180,7 +181,7 @@ function mockSseUpstream(sseBody: string, capture?: { urls: string[] }): void {
 }
 
 async function postSpawn(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   body: Record<string, unknown>,
   options: Parameters<typeof handleResponses>[3] = {},
   logCtx: RequestLogContext = { model: "", provider: "" },
@@ -211,6 +212,7 @@ describe("subagent fallback without primary auth cooldown failure", () => {
     cfg.codexAccounts?.push({
       id: "pool-b",
       email: "pool-b@example.test",
+      logLabel: "p000003",
       isMain: false,
       chatgptAccountId: "pool_b_acc",
     });
@@ -350,8 +352,9 @@ describe("subagent fallback without primary auth cooldown failure", () => {
     const now = 1_800_000_000_000;
     Date.now = () => now;
     installPoolCredential("pool-a", "pool_acc", now);
-    const cfg: OcxConfig = {
+    const cfg: CodexCommanderConfig = {
       port: 0,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "xai",
       activeCodexAccountId: "pool-a",
       autoSwitchThreshold: 80,
@@ -371,8 +374,8 @@ describe("subagent fallback without primary auth cooldown failure", () => {
         },
       },
       codexAccounts: [
-        { id: "main", email: "main@example.test", isMain: true },
-        { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "pool_acc" },
+        { id: "main", email: "main@example.test", logLabel: "p000001", isMain: true },
+        { id: "pool-a", email: "pool@example.test", logLabel: "p000002", isMain: false, chatgptAccountId: "pool_acc" },
       ],
     };
     updateAccountQuota("pool-a", 95, undefined, 20);
@@ -680,9 +683,9 @@ describe("native fallback account preview", () => {
       activeCodexAccountId: "pool-a",
       subagentModelFallback: ["gpt-5.6-terra"],
       codexAccounts: [
-        { id: "main", email: "main@example.test", isMain: true },
-        { id: "pool-a", email: "a@example.test", isMain: false, chatgptAccountId: "pool_acc_a" },
-        { id: "pool-b", email: "b@example.test", isMain: false, chatgptAccountId: "pool_acc_b" },
+        { id: "main", email: "main@example.test", logLabel: "p000001", isMain: true },
+        { id: "pool-a", email: "a@example.test", logLabel: "p000002", isMain: false, chatgptAccountId: "pool_acc_a" },
+        { id: "pool-b", email: "b@example.test", logLabel: "p000003", isMain: false, chatgptAccountId: "pool_acc_b" },
       ],
       providers: {
         xai: {
@@ -737,9 +740,9 @@ describe("native fallback account preview", () => {
       activeCodexAccountId: "pool-a",
       subagentModelFallback: ["gpt-5.6-terra", "xai/grok-3"],
       codexAccounts: [
-        { id: "main", email: "main@example.test", isMain: true },
-        { id: "pool-a", email: "a@example.test", isMain: false, chatgptAccountId: "pool_acc_a" },
-        { id: "pool-b", email: "b@example.test", isMain: false, chatgptAccountId: "pool_acc_b" },
+        { id: "main", email: "main@example.test", logLabel: "p000001", isMain: true },
+        { id: "pool-a", email: "a@example.test", logLabel: "p000002", isMain: false, chatgptAccountId: "pool_acc_a" },
+        { id: "pool-b", email: "b@example.test", logLabel: "p000003", isMain: false, chatgptAccountId: "pool_acc_b" },
       ],
       providers: {
         xai: {
@@ -784,9 +787,9 @@ describe("native fallback account preview", () => {
     const cfg = poolNativePlusRoutedConfig({
       activeCodexAccountId: "pool-a",
       codexAccounts: [
-        { id: "main", email: "main@example.test", isMain: true },
-        { id: "pool-a", email: "a@example.test", isMain: false, chatgptAccountId: "pool_acc_a" },
-        { id: "pool-b", email: "b@example.test", isMain: false, chatgptAccountId: "pool_acc_b" },
+        { id: "main", email: "main@example.test", logLabel: "p000001", isMain: true },
+        { id: "pool-a", email: "a@example.test", logLabel: "p000002", isMain: false, chatgptAccountId: "pool_acc_a" },
+        { id: "pool-b", email: "b@example.test", logLabel: "p000003", isMain: false, chatgptAccountId: "pool_acc_b" },
       ],
     });
     updateAccountQuota("pool-a", 95, undefined, 20);
@@ -919,7 +922,7 @@ describe("native passthrough terminal finalization", () => {
   }
 
   async function runStreamingSpawn(
-    streamMode: "legacy-tee" | "eager-relay",
+    streamMode: "safe-tee" | "eager-relay",
     sseBody: string,
   ): Promise<{
     terminals: ResponsesTerminalStatus[];
@@ -963,7 +966,7 @@ describe("native passthrough terminal finalization", () => {
     }
   }
 
-  for (const streamMode of ["legacy-tee", "eager-relay"] as const) {
+  for (const streamMode of ["safe-tee", "eager-relay"] as const) {
     test(`${streamMode}: 429 failed records health and invokes terminal callback`, async () => {
       const result = await runStreamingSpawn(streamMode, failedSse("rate limited", "rate_limit_error"));
       expect(result.terminals).toEqual(["failed"]);
@@ -1007,7 +1010,7 @@ describe("darwin explicit eager-relay path selection", () => {
     response: { id: "r1", status: "completed", output: [] },
   })}\n\n`;
 
-  async function runDarwinStreamMode(streamMode: "legacy-tee" | "eager-relay"): Promise<Response> {
+  async function runDarwinStreamMode(streamMode: "safe-tee" | "eager-relay"): Promise<Response> {
     const now = 1_800_000_000_000;
     Date.now = () => now;
     installPoolCredential("pool-a", "pool_acc", now);
@@ -1028,9 +1031,9 @@ describe("darwin explicit eager-relay path selection", () => {
   );
 
   test.skipIf(process.platform !== "darwin")(
-    "legacy-tee + no rewrite does not carry the eager marker",
+    "safe-tee + no rewrite does not carry the eager marker",
     async () => {
-      const response = await runDarwinStreamMode("legacy-tee");
+      const response = await runDarwinStreamMode("safe-tee");
       expect(isEagerRelaySseResponse(response)).toBe(false);
       expect(await response.text()).toContain("response.completed");
     },

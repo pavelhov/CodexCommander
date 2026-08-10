@@ -55,7 +55,7 @@ beforeEach(() => {
   });
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   installDeferredClipboard();
-  // No legacy path: a rejected write must not silently succeed through execCommand.
+  // No secondary path: a rejected write must not silently succeed through execCommand.
   Object.defineProperty(win.document, "execCommand", { configurable: true, value: undefined });
   host = win.document.createElement("div") as unknown as HTMLElement;
   win.document.body.appendChild(host as never);

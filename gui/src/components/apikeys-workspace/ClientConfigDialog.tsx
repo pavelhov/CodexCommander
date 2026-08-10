@@ -1,5 +1,5 @@
 /**
- * Detail view for one export client's config (devlog 260802/010).
+ * Detail view for one export client's config (implementation contract).
  *
  * The panel's rows carry the two actions a user actually performs — copy and
  * download. Everything needed to *understand* the payload rather than move it

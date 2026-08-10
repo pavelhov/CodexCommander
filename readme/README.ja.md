@@ -2,39 +2,23 @@
 <p align="center"><b>OpenAI Codex &amp; Claude Code 向けの汎用プロバイダープロキシ</b><br>
 コマンド2つで、Codex と Claude Code の両方が好きな LLM で動きます。</p>
 
-<p align="center">
-  <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="X で @claudeebum をフォロー"></a>
-  <a href="https://www.npmjs.com/package/@bitkyc08/opencodex"><img src="https://img.shields.io/npm/v/@bitkyc08/opencodex?color=cb3837&label=npm&logo=npm" alt="npm version"></a>
-  <a href="https://github.com/lidge-jun/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="license"></a>
-  <img src="https://img.shields.io/node/v/@bitkyc08/opencodex?logo=node.js&label=node" alt="node version">
-</p>
-
 ```bash
-npm install -g @bitkyc08/opencodex
-ocx start        # プロキシ + ダッシュボード: localhost:10100
+bun install
+bun run build:gui
+bun run src/cli/index.ts start
 ```
 
 <p align="center">
-  <img src="../assets/claude-code-models.gif" alt="opencodex 経由でルーティングされたモデルで動作する Claude Code — ステータスバーに gpt-5.6-luna-medium が有効なモデルとして表示" width="820"><br>
-  <sub><b>Claude Code でどんなモデルでも。</b>ピッカーは純正 Claude Code のまま、動いているモデルは自由に。</sub>
+  <img src="../docs-site/public/og.png" alt="CodexCommander — OpenAI Codex と Claude Code 向けの汎用プロバイダープロキシ" width="920">
 </p>
 
 <p align="center">
-  <img src="../assets/demo.gif" alt="opencodex デモ — Codex アプリで非 OpenAI ルーティングモデルでタスクを実行" width="820"><br>
-  <sub><b>Codex でどんなモデルでも。</b>プロバイダーを選ぶだけ — 同じ Codex ワークフローで、違う頭脳。</sub>
-</p>
-
-<p align="center">
-  <a href="../README.md">English</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ru.md">Русский</a> · <b>日本語</b> · 📖 <a href="https://opencodex.me/ja/"><b>完全なドキュメント →</b></a>
-</p>
-
-<p align="center">
-  <img src="../assets/architecture.png" alt="opencodex アーキテクチャ — Codex CLI が opencodex プロキシ経由で任意の LLM プロバイダーにルーティング" width="820">
+  <a href="../README.md">English</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ru.md">Русский</a> · <b>日本語</b> · 📖 <a href="../docs-site/src/content/docs/ja/getting-started/installation.md"><b>完全なドキュメント →</b></a>
 </p>
 
 Claude、Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama など、任意の LLM を Codex で — そして **Claude Code** でも — 使えます。誰かがサポートを追加してくれるのを待つ必要はありません。
 
-opencodex は Codex の Responses API をプロバイダーが話すプロトコルに変換する、軽量なローカルプロキシです。ストリーミング、ツール呼び出し、推論トークン、画像 — すべて双方向で動作します。
+CodexCommander は Codex の Responses API をプロバイダーが話すプロトコルに変換する、軽量なローカルプロキシです。ストリーミング、ツール呼び出し、推論トークン、画像 — すべて双方向で動作します。
 
 Codex 認証のための **ChatGPT アカウントプール**も管理できます。複数の ChatGPT / Codex アカウントを追加し、
 ダッシュボードで 5 時間 / 週間 / 30 日クォータを更新し、新しいセッションを最も使用量の少ない健全なアカウントに自動
@@ -42,7 +26,7 @@ Codex 認証のための **ChatGPT アカウントプール**も管理できま�
 セッションが会話の途中でアカウントを切り替えることはありません。
 
 ```
-Codex CLI / App / SDK ──/v1/responses──▶ opencodex ──▶ Any provider
+Codex CLI / App / SDK ──/v1/responses──▶ codexcommander ──▶ Any provider
                                               │
               Anthropic · Google · xAI · Kimi · Ollama Cloud · Groq
               OpenRouter · Azure · DeepSeek · GLM · …and OpenAI itself
@@ -50,7 +34,7 @@ Codex CLI / App / SDK ──/v1/responses──▶ opencodex ──▶ Any provi
 
 ```mermaid
 flowchart LR
-  codex[Codex セッション<br/>CLI, App, SSH, モバイル] --> proxy[opencodex]
+  codex[Codex セッション<br/>CLI, App, SSH, モバイル] --> proxy[codexcommander]
   proxy --> existing{既存スレッド?}
   existing -->|はい| pinned[同じ ChatGPT<br/>アカウントを維持]
   existing -->|新規セッション| quota[クォータを更新<br/>5h, 週間, 30d]
@@ -71,35 +55,37 @@ flowchart LR
 | Linux (x64 / arm64) | 完全対応 | systemd (user unit) |
 | Windows (x64) | 完全対応 | Task Scheduler (hidden) / オプトインのネイティブサービス (`--native`, WinSW) |
 
-[Node](https://nodejs.org) 18+ が必要です。Bun ランタイムは `npm install` 時に自動でバンドルされるので、別途 Bun をインストールする必要はありません。3 つのプラットフォームすべてがネイティブで動作します(Windows でも WSL 不要)。
+[Bun](https://bun.sh) をインストールしたソースチェックアウトが必要です。3 つのプラットフォームすべてがネイティブで動作します (Windows でも WSL 不要)。npm パッケージは現在公開されていません。
 
 ## クイックスタート
 
 ### 人間向け
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+; the Bun runtime is bundled automatically
-ocx start                            # or `ocx service` to run it in the background
+bun install
+bun run build:gui
+bun run src/cli/index.ts start   # バックグラウンド実行には start の代わりに service
 ```
 
-**http://localhost:10100** を開き、Web ダッシュボードですべてを設定します。40 以上の組み込みプロバイダーまたは OpenAI 互換エンドポイントの追加、モデルの選択、アカウントの管理ができます。`ocx gui` を実行すれば、いつでもダッシュボードを開き直せます。
+**http://localhost:10100** を開き、Web ダッシュボードですべてを設定します。40 以上の組み込みプロバイダーまたは OpenAI 互換エンドポイントの追加、モデルの選択、アカウントの管理ができます。`ccx gui` を実行すれば、いつでもダッシュボードを開き直せます。
 
 ### エージェント向け
 
 ```bash
-npm install -g @bitkyc08/opencodex
-ocx start     # or `ocx service`
-ocx init      # interactive setup: writes ~/.opencodex/config.json and wires Codex
+bun run src/cli/index.ts start
+bun run src/cli/index.ts init
 ```
 
-`ocx init` 自体はプロキシを起動しません。先に起動しても後から起動しても構いませんが、`ocx provider add` や `ocx combo set` などのヘッドレスコマンドは**稼働中の**プロキシと通信し、接続できない場合は非ゼロで終了します。`ocx status` / `ocx doctor` / `ocx health` で稼働状態を確認できます。
+このソースチェックアウトでは、以降の `ccx <args>` を `bun run src/cli/index.ts <args>` として実行できます。
+
+`ccx init` 自体はプロキシを起動しません。先に起動しても後から起動しても構いませんが、`ccx provider add` や `ccx combo set` などのヘッドレスコマンドは**稼働中の**プロキシと通信し、接続できない場合は非ゼロで終了します。`ccx status` / `ccx doctor` / `ccx health` で稼働状態を確認できます。
 
 ## プロバイダーを追加
 
 最も簡単な方法はウェブダッシュボードを使うことです。
 
 ```bash
-ocx gui
+ccx gui
 ```
 
 `http://localhost:10100` のダッシュボードが開きます。ここから:
@@ -111,7 +97,7 @@ ocx gui
 
 追加したプロバイダーは再起動なしで即座に使えます。
 
-`ocx init`(対話型 CLI)や `~/.opencodex/config.json` の直接編集からもプロバイダーを追加できます。
+`ccx init`(対話型 CLI)や `~/.codexcommander/config.json` の直接編集からもプロバイダーを追加できます。
 
 ## モデルルーティング
 
@@ -131,13 +117,13 @@ codex -m "ollama-cloud/glm-5.2" "SQL マイグレーションを書いて"
 codex -m "ollama/llama3" "この関数をリファクタリングして"
 ```
 
-`provider/` 接頭辞を省略すると、opencodex はデフォルトプロバイダーにルーティングするか、モデル名のパターンで自動
+`provider/` 接頭辞を省略すると、codexcommander はデフォルトプロバイダーにルーティングするか、モデル名のパターンで自動
 マッチします(例: `claude-*` は Anthropic、`gpt-*` は OpenAI)。
 
 ルーティングされたモデルは **Codex App** のモデルピッカーにも、モデルごとの推論負荷コントロールと共に表示されます:
 
 現在の Codex ビルドは、モデルが対応を宣言している場合 `low`、`medium`、`high`、`xhigh`、`max`、`ultra` の推論
-コントロールを表示できます。opencodex はプロバイダー config が明示的にエイリアスを指定しない限り
+コントロールを表示できます。codexcommander はプロバイダー config が明示的にエイリアスを指定しない限り
 `xhigh` と `max` を異なる段階として保持します。`ultra` は上流の Codex と同じ意味です:
 クライアントで最大推論と能動的マルチエージェント委任を有効にし、実際のリクエストは `max` に変換されて
 送信されます。ルーティングモデルは `reasoningEfforts` config でオプトインした場合のみ `ultra` を宣言します。
@@ -146,11 +132,11 @@ GPT-5.6 Sol/Terra/Luna は OpenAI API キーおよび OpenRouter プリセット
 シードされます(`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`; OpenRouter は `openai/...` を使用)。
 スペックは upstream models.json スナップショットに従います — Sol/Terra は `ultra` まで、Luna は `max` まで
 宣言し、Sol のデフォルト推論は `low` です。実際の
-利用可否は upstream preview gate に従い、opencodex はアカウント/プロバイダーが提供時に使う
+利用可否は upstream preview gate に従い、codexcommander はアカウント/プロバイダーが提供時に使う
 ルーティング/カタログメタデータを準備しておきます。
 
 <p align="center">
-  <img src="../assets/codex-app-picker.png" alt="推論負荷ピッカーと共に opencodex ルーティングモデルを表示する Codex App" width="480">
+  <img src="../assets/codex-app-picker.png" alt="推論負荷ピッカーと共に codexcommander ルーティングモデルを表示する Codex App" width="480">
 </p>
 
 ## OpenAI プロバイダーのアカウントモード
@@ -165,10 +151,6 @@ GPT-5.6 Sol/Terra/Luna は OpenAI API キーおよび OpenRouter プリセット
 - 新規インストールとモード未設定の config は Pool がデフォルトです。ダッシュボードの **Providers** でモードを変更しても
   `gpt-5.6-sol` のような bare モデル ID はそのままです。
 - `openai-apikey/gpt-5.6-sol` は API を選択し、Codex ログインと API 認証情報の間にフォールバックはありません。
-- 現在のマーカーは `openaiProviderTierVersion: 2` で、オリジナルは
-  `~/.opencodex/config.json.pre-openai-tiers-v2.bak` に保存されます。
-  復元: `cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`
-- 以前の v1 3 プロバイダー config は単一の `openai` 行に自動移行されます。
 - API ティアの GPT-5.6 メタデータは context 1,050,000 / max input 922,000 です。
   `gpt-5.6-sol-pro`、`terra-pro`、`luna-pro` は公開 virtual ID を維持しつつ、wire ではベース ID と
   `reasoning.mode: "pro"` で送信されます。
@@ -176,11 +158,11 @@ GPT-5.6 Sol/Terra/Luna は OpenAI API キーおよび OpenRouter プリセット
 ### Pool アカウントの動作
 
 ダッシュボードの **Codex 認証** を開いてプールアカウントを追加し、次の Codex セッションをどのアカウントが処理するか選んでください。
-opencodex は 2 つの動作を分離して保持します:
+codexcommander は 2 つの動作を分離して保持します:
 
 - **既存セッションはアフィニティを維持します。** スレッド ID が選択されたアカウントにバインドされ、以降のターンで再利用されるため、
   長いリクエストやモバイル/SSH 接続セッションは同じアカウントを使い続けます。
-- **新規セッションは自動ルーティングされます。** 自動切り替えがオンの場合、opencodex は 5 時間・週間・30 日の使用量のうち最も
+- **新規セッションは自動ルーティングされます。** 自動切り替えがオンの場合、codexcommander は 5 時間・週間・30 日の使用量のうち最も
   ホットなクォータ枠を比較し、アクティブアカウントがしきい値を超えると新規セッションを使用量の少ない適格アカウントに送ります。
 - **クォータ照会が組み込まれています。** ダッシュボードで全アカウントのクォータを一括更新でき、リクエストログは
   プールトラフィックを非 PII のアカウント序数でラベリングします。
@@ -190,18 +172,18 @@ opencodex は 2 つの動作を分離して保持します:
 ## 主な機能
 
 - **任意の LLM を Codex で。** 5 つのプロトコルアダプターが Anthropic Messages、Google Gemini、Azure、OpenAI Responses パススルー、そしてすべての OpenAI 互換 Chat Completions エンドポイントをカバーします — つまり組み込みで **40 以上のプロバイダー**です。
-- **Claude Code でも任意の LLM を。** 同じデーモンが Anthropic Messages API(`/v1/messages` + `count_tokens`)を提供します: `ocx claude` が Claude Code を完全に接続された状態で起動し、ルーティングモデルがゲートウェイモデルディスカバリでネイティブ `/model` ピッカーに表示されます(`claude-ocx-<provider>--<model>` エイリアス、Claude Code 2.1.129+)。スロットとモデルマッピングはダッシュボードの Claude ページで設定します。
+- **Claude Code でも任意の LLM を。** 同じデーモンが Anthropic Messages API (`/v1/messages` + `count_tokens`) を提供します。`ccx claude` が Claude Code を接続済みで起動し、現在の正規エイリアスでルーティングモデルを `/model` ピッカーに表示します。モデルマッピングはダッシュボードの Claude ページで設定します。
 - **ChatGPT アカウントを安全にプール。** 既存の Codex スレッドは一つのアカウントに維持しつつ、新規セッションはクォータ更新と非 PII リクエトラベルと共にプールから使用量の少ないアカウントを自動選択できます。
 - **一度ログインすれば API キーは省略可。** xAI、Anthropic、Kimi は OAuth をサポートするので既存アカウントで認証でき、トークンは自動更新されます。または `codex login` を転送、API キーを貼り付け、`${ENV_VAR}` 参照を使えます — 自由に選べます。
 - **Codex が動くすべての場所で。** Codex CLI、TUI、App、SDK に自動で注入されます。ルーティングモデルはネイティブモデルと同様に Codex モデルピッカーに表示されます。
-- **履歴セーフな注入。** ローカルインストールではプロキシは Codex 自身の組み込み `openai` プロバイダーを単一の `openai_base_url` 行で自身に向けるため、新しいスレッドはネイティブのプロバイダータグを維持し、進行中のチャット履歴が再マッピングされることはなく、クリーンでないシャットダウンでも隠せません。(古いバージョンで再タグ付けされたスレッドは初回起動時に一度だけマイグレートされます; リモート/LAN バインドは API キーヘッダーが必要なため、専用のプロバイダーエントリを使用します。)
-- **適切なモデルに委任。** ダッシュボードや config から最大 5 つのルーティング/ネイティブモデルを Codex サブエージェントピッカーに公開し、複雑なタスクは推論モデルへ、高速なタスクは安価なモデルへ送れます。v2 マルチエージェントサーフェス(GPT-5.6 Sol/Terra)ではプロキシが簡潔な委任ガイダンスを注入します。推奨サブエージェントモデル・負荷(`injectionModel` / `injectionEffort`)、公開モデルロスターと各モデルが対応する負荷ラダー、そしてクロスモデル `spawn_agent` オーバーライドを適用する `fork_turns` ルールまで。既知の制限: ネイティブの親がルーティング子をスポーンすると、タスク本文がバックエンド暗号化状態で到着し失われることがあります([#92](https://github.com/lidge-jun/opencodex/issues/92)) — 安定したクロスプロバイダー委任には v1 サーフェスを使ってください。表現を自分で書きたい場合は `injectionPrompt` に `{{model}}` / `{{effort}}` / `{{roster}}` プレースホルダーを入れてください。
+- **履歴セーフな注入。** ローカルインストールではプロキシは Codex 自身の組み込み `openai` プロバイダーを単一の `openai_base_url` 行で自身に向けるため、新しいスレッドはネイティブのプロバイダータグを維持し、進行中のチャット履歴が再マッピングされることはなく、クリーンでないシャットダウンでも隠せません。リモート/LAN バインドは API キーヘッダーが必要なため、専用のプロバイダーエントリを使用します。
+- **適切なモデルに委任。** ダッシュボードや config から最大 5 つのルーティング/ネイティブモデルを Codex サブエージェントピッカーに公開し、複雑なタスクは推論モデルへ、高速なタスクは安価なモデルへ送れます。v2 マルチエージェントサーフェス(GPT-5.6 Sol/Terra)ではプロキシが簡潔な委任ガイダンスを注入します。推奨サブエージェントモデル・負荷(`injectionModel` / `injectionEffort`)、公開モデルロスターと各モデルが対応する負荷ラダー、そしてクロスモデル `spawn_agent` オーバーライドを適用する `fork_turns` ルールまで。既知の制限: ネイティブの親がルーティング子をスポーンすると、タスク本文がバックエンド暗号化状態で到着し失われることがあります([#92](https://github.com/pavelhov/CodexCommander/issues/92)) — 安定したクロスプロバイダー委任には v1 サーフェスを使ってください。表現を自分で書きたい場合は `injectionPrompt` に `{{model}}` / `{{effort}}` / `{{roster}}` プレースホルダーを入れてください。
 - **preview gate された OpenAI ロールアウトに備える。** GPT-5.6 Sol/Terra/Luna の負荷ラダーを保存します。Direct/Multi は 372k Codex 契約を、OpenAI API と OpenRouter は 1.05M メタデータを使います。
 - **任意のモデルに超能力を。** OpenAI 以外のモデルも ChatGPT ログイン上で動く `gpt-5.4-mini` サイドカーで本当のウェブ検索と画像理解を得られます。
 - **画像をネイティブに生成。** Codex の独立型 `image_gen` ツールは生成時に `POST /v1/images/generations`、編集時に `POST /v1/images/edits` を使います。Responses のホスト型 `image_generation` ツールとは別物です。
 - **何が起きているかを可視化。** ウェブダッシュボードがプロバイダー、OAuth 状態、モデル選択、upstream が報告した cached/cache-write トークン数を含むライブリクエストログを表示します — なぜリクエストが失敗したか推測する必要はもうありません。
 - **バックグラウンド実行。** システムサービス(launchd / systemd / Task Scheduler)としてインストールすれば起動時に自動開始され、気にする必要がありません。
-- **クリーンな終了、残留ゼロ。** `ocx stop`(またはダッシュボードの Stop ボタン)はプロキシを終了し、インストールされたバックグラウンドサービスを停止し、Codex を元の設定に復元します。その後 `codex` は残留設定やゾンビプロセスなしに以前と同じように動作します。
+- **クリーンな終了、残留ゼロ。** `ccx stop`(またはダッシュボードの Stop ボタン)はプロキシを終了し、インストールされたバックグラウンドサービスを停止し、Codex を元の設定に復元します。その後 `codex` は残留設定やゾンビプロセスなしに以前と同じように動作します。
 
 ## プロバイダーとアダプター
 
@@ -219,76 +201,65 @@ opencodex は 2 つの動作を分離して保持します:
 | Ollama / vLLM / LM Studio(ローカル) | `openai-chat` | key(通常は空欄) |
 | 任意の OpenAI 互換エンドポイント | `openai-chat` | key |
 
-このほか DeepSeek、Groq、OpenRouter、Together、Fireworks、Cerebras、Mistral、Hugging Face、NVIDIA NIM、MiniMax、Qwen Cloud、Tencent Cloud Coding Plan、SiliconFlow などがあります。完全な一覧は `ocx init` または[プロバイダードキュメント](https://opencodex.me/ja/reference/configuration/)で確認してください。
-
-Cursor サポートは段階的な実験的ブリッジです: `ocx init` とダッシュボードの Add Provider ピッカーに Cursor の静的公開モデルカタログを持つローカル config として表示されます。Cursor アクセストークンを設定するとライブ
-HTTP/2 トランスポートが有効になります。Cursor サーバー駆動のネイティブ
-read/write/delete/ls/grep/shell/fetch 実行は、Codex の承認とサンドボックスパスをバイパスするためデフォルトで無効です; 信頼できるローカル
-実験でのみ `unsafeAllowNativeLocalExec: true` を設定してください。
-MCP、画面録画、computer-use はエグゼキューターフック経由で公開されます; ローカルエグゼキューターが未設定の場合、
-opencodex はポリシーでブロックする代わりに型付きの no-executor 結果を返します。
-Cursor OAuth とライブモデルディスカバリは実験的 Cursor アダプターで有効です。
+このほか DeepSeek、Groq、OpenRouter、Together、Fireworks、Cerebras、Mistral、Hugging Face、NVIDIA NIM、MiniMax、Qwen Cloud、Tencent Cloud Coding Plan、SiliconFlow などがあります。完全な一覧は `ccx init` または[プロバイダードキュメント](../docs-site/src/content/docs/ja/reference/configuration/providers.md)で確認してください。
 
 ## CLI
 
 ```bash
-ocx init                       # 対話型セットアップ
-ocx start [--port 10100]       # プロキシ起動; ポートが使用中なら空きポートに自動切替
-ocx stop                       # プロキシ停止 + Codex を元の設定に復元
-ocx restore                    # 停止せずに復元(エイリアス: ocx eject)
-ocx uninstall                  # service/shim/config を削除 + Codex をオリジナルに復元
-ocx ensure                     # 必要時に起動 + Codex config/cache を更新
-ocx sync                       # モデルを更新 + Codex に再注入
-ocx status                     # プロキシは起動中か?
-ocx login <provider>           # OAuth ログイン(xai, anthropic, kimi, cursor, ...)
-ocx logout <provider>          # 保存されたログインを削除
-ocx account <list|current|use> # アカウント/API キープールの一覧・切替(マスク済み; refresh/auto-switch/remove/add-key 含む)
-ocx gui                        # ウェブダッシュボードを開く
-ocx claude [args...]           # プロキシに接続した Claude Code を起動(モデルディスカバリ オン)
-ocx codex-shim install         # codex 起動時に `ocx ensure` を実行
-ocx service [install|start|stop|status|uninstall]   # バックグラウンドサービスのインストール/更新/開始
-ocx update [--tag preview]     # opencodex を更新; preview インストールは @preview を維持
+ccx init                       # 対話型セットアップ
+ccx start [--port 10100]       # プロキシ起動; ポートが使用中なら空きポートに自動切替
+ccx stop                       # プロキシ停止 + Codex を元の設定に復元
+ccx restore                    # 停止せずに復元(エイリアス: ccx eject)
+ccx uninstall                  # service/shim/config を削除 + Codex をオリジナルに復元
+ccx ensure                     # 必要時に起動 + Codex config/cache を更新
+ccx sync                       # モデルを更新 + Codex に再注入
+ccx status                     # プロキシは起動中か?
+ccx login <provider>           # OAuth ログイン(xai, anthropic, kimi, cursor, ...)
+ccx logout <provider>          # 保存されたログインを削除
+ccx account <list|current|use> # アカウント/API キープールの一覧・切替(マスク済み; refresh/auto-switch/remove/add-key 含む)
+ccx gui                        # ウェブダッシュボードを開く
+ccx claude [args...]           # プロキシに接続した Claude Code を起動(モデルディスカバリ オン)
+ccx codex-shim install         # codex 起動時に `ccx ensure` を実行
+ccx service [install|start|stop|status|uninstall]   # バックグラウンドサービスのインストール/更新/開始
 ```
 
 ### 自動起動: service vs shim
 
-opencodex にはプロキシを自動起動する方法が 2 つあります:
+codexcommander にはプロキシを自動起動する方法が 2 つあります:
 
-| | `ocx service` / `ocx service install` | `ocx codex-shim install` |
+| | `ccx service` / `ccx service install` | `ccx codex-shim install` |
 |---|---|---|
 | **方式** | OS サービスマネージャー(launchd / systemd / schtasks) | `codex` スクリプトランチャーをラップし実際の `codex.exe` は触らない |
-| **タイミング** | ログイン後に常時実行 | オンデマンド — `codex` 起動時に `ocx ensure` を実行 |
+| **タイミング** | ログイン後に常時実行 | オンデマンド — `codex` 起動時に `ccx ensure` を実行 |
 | **再起動** | クラッシュ時に自動再起動 | `codex` 呼び出しごとに 1 回起動 |
-| **Codex 更新** | 影響なし | 安定して置換されたランチャーは次の通常の `ocx` コマンドで修復 |
-| **削除** | `ocx service uninstall` | `ocx codex-shim uninstall` |
+| **Codex 更新** | 影響なし | 安定して置換されたランチャーは次の通常の `ccx` コマンドで修復 |
+| **削除** | `ccx service uninstall` | `ccx codex-shim uninstall` |
 
 常にプロキシを起動しておくには **service**(開発マシン推奨)、軽くオンデマンドで使うには **shim** を使ってください。
 
-外部の Codex 更新でインストール済み shim が上書きされた場合、次の通常の `ocx` コマンドが
+外部の Codex 更新でインストール済み shim が上書きされた場合、次の通常の `ccx` コマンドが
 安定した新しいランチャーをバックアップして shim を復元します。まだ変更中のランチャーには触れず、
 後続のコマンドで再試行します。修復失敗は要求されたコマンドを失敗させず警告だけを表示し、手動の
-代替手段は `ocx codex-shim install` です。自動修復を無効にするには
+代替手段は `ccx codex-shim install` です。自動修復を無効にするには
 `codexShimAutoRestore` を `false` にするか、プロセスで
-`OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` を設定します。
+`CODEXCOMMANDER_CODEX_SHIM_AUTO_RESTORE=0` を設定します。
 shim 自動起動はデフォルトでオンで、GUI ダッシュボードからオフにできます。設定されたプロキシポートが既に使用
-中の場合、`ocx start` が自動的に別の空きローカルポートを選び、Codex の設定もそのポートに更新します。
+中の場合、`ccx start` が自動的に別の空きローカルポートを選び、Codex の設定もそのポートに更新します。
 
 ### アンインストール
 
-npm パッケージを削除する前に、ローカル状態を先に片付けてください:
+ローカル状態を削除するには、まず次を実行してください:
 
 ```bash
-ocx uninstall
-npm uninstall -g @bitkyc08/opencodex
+ccx uninstall
 ```
 
-`ocx uninstall` はプロキシの停止、インストールされた service の削除、Codex shim の削除、Codex config/catalog/history の
-復元、`~/.opencodex` の削除を行います。
+`ccx uninstall` はプロキシの停止、インストールされた service の削除、Codex shim の削除、Codex config/catalog の復元、`~/.codexcommander` の削除を行います。
 
 ## 設定
 
-設定ファイルは `~/.opencodex/config.json` に保存されます。ファイルが壊れている場合(不正な JSON など)
-opencodex は `config.json.invalid-<timestamp>` にバックアップし、警告を出力した上でデフォルトで起動します。
+設定ファイルは `~/.codexcommander/config.json` に保存されます。ファイルが壊れている場合(不正な JSON など)
+codexcommander は `config.json.invalid-<timestamp>` にバックアップし、警告を出力した上でデフォルトで起動します。
 オリジナルファイルが黙って消えることはありません。
 
 最小設定の例:
@@ -323,12 +294,12 @@ Sol/Terra/Luna のフォールバックメタデータは OpenAI API キーと O
 参照してください。
 
 > **Z.AI 経由の GLM-5.2 1M コンテキスト:** `openai-chat` アダプターでは `glm-5.2` と `glm-5.2[1m]` が両方とも
-> 動作します — opencodex がリクエスト前に末尾の `[1m]` 接尾辞を削除するためです(OpenAI 互換エンドポイントは
+> 動作します — codexcommander がリクエスト前に末尾の `[1m]` 接尾辞を削除するためです(OpenAI 互換エンドポイントは
 > 大括弧 ID を拒否、Z.AI 400 code 1211)。`[1m]` 接尾辞は Claude-Code / Anthropic エンドポイントの慣習で、
 > ネイティブに使うには `anthropic` アダプターを Z.AI コーディングベース(`https://api.z.ai/api/coding/paas/v4`)に
 > 向けてください。1M コンテキストウィンドウはモデル名ではなくモデルカタログ(`modelContextWindows`)で設定します。
 
-ローカルモデルも動作します。opencodex をマシンで動いている OpenAI 互換サーバーに向けてください:
+ローカルモデルも動作します。codexcommander をマシンで動いている OpenAI 互換サーバーに向けてください:
 
 ```json
 {
@@ -357,59 +328,44 @@ WebSocket トランスポートはデフォルトでオフです。Codex が HTT
 
 ### リモートアクセス
 
-デフォルトで opencodex は `127.0.0.1`(ループバック)にバインドされ、追加の認証は不要です。
-`"hostname": "0.0.0.0"` で LAN に公開する場合、opencodex は管理 API(`/api/*`)とデータプレーン
+デフォルトで codexcommander は `127.0.0.1`(ループバック)にバインドされ、追加の認証は不要です。
+`"hostname": "0.0.0.0"` で LAN に公開する場合、codexcommander は管理 API(`/api/*`)とデータプレーン
 (`/v1/responses`、`/v1/images/generations`、`/v1/images/edits`)の両方に bearer トークンを要求します:
 
 ```bash
-export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
-ocx start
+export CODEXCOMMANDER_API_AUTH_TOKEN="your-secret-token"
+ccx start
 ```
 
 非ループバックバインド時にこの環境変数がないとプロキシの起動は拒否されます。LAN アクセス用のバックグラウンド
-サービスをインストールする場合も、同じシェルでこの変数を先に設定してから `ocx service install` を実行してください。
+サービスをインストールする場合も、同じシェルでこの変数を先に設定してから `ccx service install` を実行してください。
 クライアント(スクリプト、リモートマシン)はすべてのリクエストにトークンを含める必要があります:
 
 ```
-x-opencodex-api-key: your-secret-token
+x-codexcommander-api-key: your-secret-token
 ```
 
 トークンはタイミング攻撃を防ぐため定数時間で比較されます。
 
-opencodex は Codex resume 履歴を自動でリマップし、古い OpenAI チャットと opencodex が作成したプロジェクト
-スレッドがプロキシ有効中に Codex App に表示され続けるようにします。オリジナルの provider/source メタデータは
-`~/.opencodex/codex-history-backup.json` に記録されます。`ocx stop` / `ocx restore` はバックアップされた OpenAI 行を
-OpenAI に復元し、残った opencodex ユーザースレッドも OpenAI にイジェクトして、ネイティブ Codex が `config.toml` に
-もう存在しないプロバイダーのスレッドを resume しようとして失敗しないようにします。
-
-バックアップ対応ができる前の古い開発ビルドで `syncResumeHistory` がすでに履歴をリマップしていた場合、明示的
-復元コマンドを実行できます:
-
-```bash
-ocx recover-history --legacy-openai
-```
-
-全フィールドの詳細は **[設定リファレンス](https://opencodex.me/ja/reference/configuration/)** を参照してください。
+全フィールドの詳細は **[設定リファレンス](../docs-site/src/content/docs/ja/reference/configuration/server.md)** を参照してください。
 
 ## ドキュメント
 
-公開ドキュメント(インストール、プロバイダー、ルーティング、サイドカー、Codex 統合、Codex App モデルピッカー、CLI/設定リファレンス)は [`docs-site/`](../docs-site) の Astro サイトとしてビルドされ
-**[opencodex.me](https://opencodex.me/ja/)** に公開されます。
+ドキュメント (インストール、プロバイダー、ルーティング、サイドカー、Codex 統合、CLI/設定リファレンス) は [`docs-site/`](../docs-site) にあります。ローカルでビルドでき、このリポジトリには公開自動化は含まれません。
 
-メンテナ用の source of truth は [`structure/`](../structure) に、過去の調査/診断ノートは [`docs/`](../docs) にあります。
+メンテナ向けの不変条件は [`structure/`](../structure) に、保守対象の技術・実装ノートは [`docs/`](../docs) にあります。
 
 ## 開発
 
 ```bash
-git clone https://github.com/pavelhov/opencodex.git
-cd opencodex
+cd /path/to/CodexCommander
 bun install
 bun run dev:proxy    # dev モードでプロキシ API を起動
 bun run dev:gui      # 別のターミナルでダッシュボード dev サーバーを起動
 bun x tsc --noEmit   # 型チェック
 ```
 
-`bun run dev` は互換性のため `bun run dev:proxy` のエイリアスとして残っています。ソースチェックアウトでプロキシ
+`bun run dev` は `bun run dev:proxy` のエイリアスです。ソースチェックアウトでプロキシ
 API は `/healthz`、`/v1/responses`、`POST /v1/images/generations`、`POST /v1/images/edits`、`/api/*` を
 公開し、`GET /` は `bun run build:gui` が `gui/dist` を生成した後にのみパッケージされたダッシュボードを提供します。
 ダッシュボードを編集する際はフロントエンドを別途起動してください:
@@ -418,13 +374,13 @@ API は `/healthz`、`/v1/responses`、`POST /v1/images/generations`、`POST /v1
 bun run dev:gui
 ```
 
-**[コントリビュート](https://opencodex.me/ja/contributing/)** を参照してください。
+**[コントリビュート](../docs-site/src/content/docs/ja/contributing.md)** を参照してください。
 
 ## 免責事項
 
-opencodex は独立したコミュニティプロジェクトであり、**OpenAI、Anthropic などいかなるプロバイダーとも提携したり推奨を受けたりしていません。**
+codexcommander は独立したコミュニティプロジェクトであり、**OpenAI、Anthropic などいかなるプロバイダーとも提携したり推奨を受けたりしていません。**
 
-一部のプロバイダー — 特に Anthropic (Claude) — はサードパーティプロキシ経由の API トラフィックルーティングでアカウントを停止または制限する場合があります。**使用の責任は自己にあります(UAYOR)。** プロバイダーを接続する前に、該当する利用規約でプロキシベースのアクセスが許可されているか確認してください。opencodex メンテナは上流プロバイダーによるアカウント措置について責任を負いません。
+一部のプロバイダー — 特に Anthropic (Claude) — はサードパーティプロキシ経由の API トラフィックルーティングでアカウントを停止または制限する場合があります。**使用の責任は自己にあります(UAYOR)。** プロバイダーを接続する前に、該当する利用規約でプロキシベースのアクセスが許可されているか確認してください。codexcommander メンテナは上流プロバイダーによるアカウント措置について責任を負いません。
 
 ## ライセンス
 

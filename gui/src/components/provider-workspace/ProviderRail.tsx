@@ -92,7 +92,7 @@ export function RailRow({ item, selected, tabbable, modelCount, isDefault, showC
   tabbable: boolean;
   modelCount?: number;
   isDefault?: boolean;
-  /** When display names collide (e.g. openai + chatgpt → ChatGPT), show the config id. */
+  /** When display names collide, show the config id. */
   showConfigId?: boolean;
   onClick: () => void;
   onFocus: () => void;

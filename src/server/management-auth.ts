@@ -13,8 +13,16 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { adminApiTokenFilePath } from "../lib/admin-secrets";
+import {
+  ADMIN_AUTH_REQUIRED_MESSAGE,
+  ADMIN_KEY_PREFIX,
+  API_KEY_HEADER,
+  CSRF_HEADER,
+  GUI_ORIGIN_HEADER,
+  GUI_SESSION_PREFIX,
+} from "../identity";
 import { forgetEphemeralSecretPath, forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import {
   isAllowedManagementOrigin,
   isApiAuthRequired,
@@ -65,7 +73,7 @@ function assertSafeDirectory(path: string): void {
   }
   if (!hardened.ok) {
     throw new Error(
-      "management token directory ACL hardening did not complete; set OPENCODEX_ADMIN_AUTH_TOKEN to use an environment token instead of a file-backed token",
+      "management token directory ACL hardening did not complete; set CODEXCOMMANDER_ADMIN_AUTH_TOKEN to use an environment token instead of a file-backed token",
     );
   }
 }
@@ -84,11 +92,14 @@ function readExistingToken(path: string): string {
   }
   if (!hardened.ok) {
     throw new Error(
-      "management token file ACL hardening did not complete; set OPENCODEX_ADMIN_AUTH_TOKEN to use an environment token instead of a file-backed token",
+      "management token file ACL hardening did not complete; set CODEXCOMMANDER_ADMIN_AUTH_TOKEN to use an environment token instead of a file-backed token",
     );
   }
   const token = readFileSync(path, "utf8").trim();
-  if (!/^ocx_admin_[A-Za-z0-9_-]{43}$/.test(token)) throw new Error("management token file is invalid");
+  const secret = token.startsWith(ADMIN_KEY_PREFIX) ? token.slice(ADMIN_KEY_PREFIX.length) : "";
+  if (secret.length !== 43 || !/^[A-Za-z0-9_-]+$/.test(secret)) {
+    throw new Error("management token file is invalid");
+  }
   return token;
 }
 
@@ -112,7 +123,7 @@ export function removeManagementTokenPathBestEffort(
 
 function createTokenFile(path: string): string {
   const directory = dirname(path);
-  const token = `ocx_admin_${randomBytes(32).toString("base64url")}`;
+  const token = `${ADMIN_KEY_PREFIX}${randomBytes(32).toString("base64url")}`;
   const temporary = join(directory, `.${randomUUID()}.admin-token.tmp`);
   let linked = false;
   let fd: number | null = null;
@@ -132,7 +143,7 @@ function createTokenFile(path: string): string {
     }
     if (!temporaryHardened.ok) {
       throw new Error(
-        "management token temporary ACL hardening did not complete; set OPENCODEX_ADMIN_AUTH_TOKEN to use an environment token instead of a file-backed token",
+        "management token temporary ACL hardening did not complete; set CODEXCOMMANDER_ADMIN_AUTH_TOKEN to use an environment token instead of a file-backed token",
       );
     }
     try {
@@ -150,7 +161,7 @@ function createTokenFile(path: string): string {
     }
     if (!finalHardened.ok) {
       throw new Error(
-        "management token file ACL hardening did not complete; set OPENCODEX_ADMIN_AUTH_TOKEN to use an environment token instead of a file-backed token",
+        "management token file ACL hardening did not complete; set CODEXCOMMANDER_ADMIN_AUTH_TOKEN to use an environment token instead of a file-backed token",
       );
     }
     return token;
@@ -165,15 +176,15 @@ function createTokenFile(path: string): string {
   }
 }
 
-function ready(token: string, source: "environment" | "file", config: OcxConfig): ManagementAuthState {
+function ready(token: string, source: "environment" | "file", config: CodexCommanderConfig): ManagementAuthState {
   if (isDataPlaneAdmissionSecret(token, config)) {
     return fail("management credential conflicts with a data-plane credential");
   }
   return { available: true, token, source, sessions: new Map() };
 }
 
-export function initializeManagementAuthState(config: OcxConfig): ManagementAuthState {
-  const environmentToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN?.trim();
+export function initializeManagementAuthState(config: CodexCommanderConfig): ManagementAuthState {
+  const environmentToken = process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN?.trim();
   if (environmentToken) {
     return ready(environmentToken, "environment", config);
   }
@@ -206,13 +217,13 @@ function removeExpiredSessions(state: Extract<ManagementAuthState, { available: 
   }
 }
 
-function randomSessionSecret(prefix: "ocx_session_"): string {
-  return `${prefix}${randomBytes(32).toString("base64url")}`;
+function randomSessionSecret(): string {
+  return `${GUI_SESSION_PREFIX}${randomBytes(32).toString("base64url")}`;
 }
 
 export function issueGuiSession(
   req: Request,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   state: ManagementAuthState,
 ): GuiSessionBootstrap | null {
   if (isApiAuthRequired(config) || !state.available || req.method !== "GET" || !isAllowedManagementOrigin(req, config)) return null;
@@ -227,7 +238,7 @@ export function issueGuiSession(
     if (!oldest) break;
     state.sessions.delete(oldest);
   }
-  const token = randomSessionSecret("ocx_session_");
+  const token = randomSessionSecret();
   const session: GuiSessionRecord = {
     csrfToken: randomBytes(32).toString("base64url"),
     origin,
@@ -257,10 +268,10 @@ export type ManagementPrincipal = "admin-token" | "gui-session";
 export function managementPrincipal(
   req: Request,
   state: ManagementAuthState,
-  config?: OcxConfig,
+  config?: CodexCommanderConfig,
 ): ManagementPrincipal | null {
   if (!state.available) return null;
-  const actual = req.headers.get("x-opencodex-api-key")?.trim()
+  const actual = req.headers.get(API_KEY_HEADER)?.trim()
     || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
   if (!actual) return null;
   if (equalSecret(actual, state.token)) return "admin-token";
@@ -272,16 +283,16 @@ export function managementPrincipal(
 export function requireManagementAuth(
   req: Request,
   state: ManagementAuthState,
-  config?: OcxConfig,
+  config?: CodexCommanderConfig,
 ): Response | null {
   if (!state.available) {
     return Response.json({
       error: "management API unavailable",
       reason: state.reason,
-      hint: "Set OPENCODEX_ADMIN_AUTH_TOKEN to bypass file-backed admin token ACL hardening",
+      hint: "Set CODEXCOMMANDER_ADMIN_AUTH_TOKEN to bypass file-backed admin token ACL hardening",
     }, { status: 503 });
   }
-  const actual = req.headers.get("x-opencodex-api-key")?.trim()
+  const actual = req.headers.get(API_KEY_HEADER)?.trim()
     || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
   if (actual && equalSecret(actual, state.token)) return null;
   if (actual && config) {
@@ -289,17 +300,17 @@ export function requireManagementAuth(
     const session = state.sessions.get(actual);
     if (session) {
       const requestOrigin = managementRequestOrigin(req, config);
-      const claimedOrigin = req.headers.get("x-opencodex-gui-origin");
+      const claimedOrigin = req.headers.get(GUI_ORIGIN_HEADER);
       const browserOrigin = req.headers.get("Origin");
       const sameOrigin = requestOrigin === session.origin
         && claimedOrigin === session.origin
         && (!browserOrigin || browserOrigin === session.origin);
       const safeMethod = req.method === "GET" || req.method === "HEAD";
-      const csrf = req.headers.get("x-opencodex-csrf-token")?.trim();
+      const csrf = req.headers.get(CSRF_HEADER)?.trim();
       if (sameOrigin && (safeMethod || (browserOrigin === session.origin && !!csrf && equalSecret(csrf, session.csrfToken)))) {
         return null;
       }
     }
   }
-  return Response.json({ error: "opencodex admin token required" }, { status: 401 });
+  return Response.json({ error: ADMIN_AUTH_REQUIRED_MESSAGE }, { status: 401 });
 }

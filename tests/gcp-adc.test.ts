@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { getVertexAccessToken, __resetVertexTokenCache } from "../src/lib/gcp-adc";
 import { createGoogleAdapter } from "../src/adapters/google";
 import { providerManagementConfigError } from "../src/server/auth-cors";
-import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 import { STATE_STORE_REGISTRATIONS } from "../src/lib/state-store-registrations";
 
 const OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -17,17 +17,17 @@ let prevEnv: Record<string, string | undefined> = {};
 let oauthCalls = 0;
 let lastBody = "";
 
-function parsed(modelId = "gemini-3-pro"): OcxParsedRequest {
+function parsed(modelId = "gemini-3-pro"): CodexCommanderParsedRequest {
   return {
     modelId,
     stream: true,
     context: { messages: [{ role: "user", content: "hi" }], systemPrompt: [], tools: [] },
     options: {},
-  } as unknown as OcxParsedRequest;
+  } as unknown as CodexCommanderParsedRequest;
 }
 
 beforeAll(async () => {
-  tmp = mkdtempSync(join(tmpdir(), "ocx-gcp-adc-"));
+  tmp = mkdtempSync(join(tmpdir(), "ccx-gcp-adc-"));
   const kp = await globalThis.crypto.subtle.generateKey(
     { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
     true,
@@ -128,7 +128,7 @@ describe("gcp-adc resolver", () => {
 
 describe("google adapter vertex mode", () => {
   test("vertex + api key -> aiplatform host + x-goog-api-key (no ADC fetch)", async () => {
-    const provider = { adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", googleMode: "vertex", apiKey: "real-key" } as OcxProviderConfig;
+    const provider = { adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", googleMode: "vertex", apiKey: "real-key" } as CodexCommanderProviderConfig;
     const req = await createGoogleAdapter(provider).buildRequest(parsed());
     expect(req.url).toBe("https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3-pro:streamGenerateContent?alt=sse");
     expect(req.headers["x-goog-api-key"]).toBe("real-key");
@@ -137,7 +137,7 @@ describe("google adapter vertex mode", () => {
 
   test("vertex + ADC -> regional host + Authorization Bearer", async () => {
     setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
-    const provider = { adapter: "google", baseUrl: "https://x", googleMode: "vertex", project: "proj-1", location: "us-central1" } as OcxProviderConfig;
+    const provider = { adapter: "google", baseUrl: "https://x", googleMode: "vertex", project: "proj-1", location: "us-central1" } as CodexCommanderProviderConfig;
     const req = await createGoogleAdapter(provider).buildRequest(parsed());
     expect(req.url).toBe("https://us-central1-aiplatform.googleapis.com/v1/projects/proj-1/locations/us-central1/publishers/google/models/gemini-3-pro:streamGenerateContent?alt=sse");
     expect(req.headers["Authorization"]).toBe("Bearer vertex-tok");
@@ -145,7 +145,7 @@ describe("google adapter vertex mode", () => {
 
   test("vertex + ADC + location global -> global aiplatform host", async () => {
     setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
-    const provider = { adapter: "google", baseUrl: "https://x", googleMode: "vertex", project: "proj-1", location: "global" } as OcxProviderConfig;
+    const provider = { adapter: "google", baseUrl: "https://x", googleMode: "vertex", project: "proj-1", location: "global" } as CodexCommanderProviderConfig;
     const req = await createGoogleAdapter(provider).buildRequest(parsed());
     expect(req.url).toBe("https://aiplatform.googleapis.com/v1/projects/proj-1/locations/global/publishers/google/models/gemini-3-pro:streamGenerateContent?alt=sse");
   });
@@ -158,7 +158,7 @@ describe("google adapter vertex mode", () => {
       googleMode: "vertex",
       project: "proj-1",
       location: "attacker.example:443/capture#",
-    } as OcxProviderConfig;
+    } as CodexCommanderProviderConfig;
     await expect(createGoogleAdapter(provider).buildRequest(parsed())).rejects.toThrow(
       "Vertex AI location must be a single lowercase Google Cloud location label",
     );
@@ -171,7 +171,7 @@ describe("google adapter vertex mode", () => {
       baseUrl: "https://aiplatform.googleapis.com",
       googleMode: "vertex",
       location: "attacker.example/path",
-    } as OcxProviderConfig;
+    } as CodexCommanderProviderConfig;
     expect(providerManagementConfigError("custom-vertex", explicit)).toContain(
       "Vertex AI location must be a single lowercase Google Cloud location label",
     );
@@ -180,7 +180,7 @@ describe("google adapter vertex mode", () => {
       adapter: "google",
       baseUrl: "https://aiplatform.googleapis.com",
       location: "attacker.example/path",
-    } as OcxProviderConfig;
+    } as CodexCommanderProviderConfig;
     expect(providerManagementConfigError("google-vertex", registryBackfilled)).toContain(
       "Vertex AI location must be a single lowercase Google Cloud location label",
     );
@@ -193,13 +193,13 @@ describe("google adapter vertex mode", () => {
         baseUrl: "https://aiplatform.googleapis.com",
         googleMode: "vertex",
         location,
-      } as OcxProviderConfig;
+      } as CodexCommanderProviderConfig;
       expect(providerManagementConfigError("custom-vertex", provider)).toBeNull();
     }
   });
 
   test("ai-studio default mode is unchanged (no regression)", async () => {
-    const provider = { adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "ai-key" } as OcxProviderConfig;
+    const provider = { adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "ai-key" } as CodexCommanderProviderConfig;
     const req = await createGoogleAdapter(provider).buildRequest(parsed());
     expect(req.url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro:streamGenerateContent?alt=sse");
     expect(req.headers["x-goog-api-key"]).toBe("ai-key");

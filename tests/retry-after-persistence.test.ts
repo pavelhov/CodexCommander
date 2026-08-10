@@ -3,7 +3,7 @@ import { normalizePersistedRetryAfter } from "../src/usage/log";
 import { recordUpstreamRetryAfter } from "../src/server/request-log";
 import { responseWithDeferredRequestLog } from "../src/server/relay";
 import { handleResponses } from "../src/server/responses/core";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 describe("persisted upstream Retry-After", () => {
   const originalFetch = globalThis.fetch;
@@ -55,7 +55,7 @@ describe("persisted upstream Retry-After", () => {
           apiKey: "test-go-key",
         },
       },
-    } as OcxConfig;
+    } as CodexCommanderConfig;
     const context = { model: "", provider: "" };
     const response = await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",

@@ -6,7 +6,7 @@ import { claudeConfigDir, refreshGatewayModelCacheFromProxy, writeGatewayModelCa
 
 const dirs: string[] = [];
 function tempDir(): string {
-  const d = mkdtempSync(join(tmpdir(), "ocx-gwcache-"));
+  const d = mkdtempSync(join(tmpdir(), "ccx-gwcache-"));
   dirs.push(d);
   return d;
 }
@@ -14,7 +14,7 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-describe("Claude Code gateway-model cache pre-write (devlog 260712 030)", () => {
+describe("Claude Code gateway-model cache pre-write (implementation contract 030)", () => {
   test("writes the CLI's exact schema and mirrors the usable-id filter", () => {
     const dir = tempDir();
     const path = writeGatewayModelCache("http://127.0.0.1:10100", [
@@ -64,14 +64,14 @@ describe("Claude Code gateway-model cache pre-write (devlog 260712 030)", () => 
     try {
       globalThis.fetch = (async (input: RequestInfo | URL) => {
         requestedUrl = String(input);
-        return new Response(JSON.stringify({ data: [{ id: "claude-ocx-native--gpt-5.6-sol", display_name: "gpt-5.6-sol (native)" }] }), {
+        return new Response(JSON.stringify({ data: [{ id: "claude-ccx2-native--gpt-5.6-sol", display_name: "gpt-5.6-sol (native)" }] }), {
           headers: { "content-type": "application/json" },
         });
       }) as typeof fetch;
       const path = await refreshGatewayModelCacheFromProxy(10100, 1000, dir);
       expect(requestedUrl).toContain("ids=cli");
       const body = JSON.parse(readFileSync(path!, "utf8"));
-      expect(body.models[0].id).toBe("claude-ocx-native--gpt-5.6-sol");
+      expect(body.models[0].id).toBe("claude-ccx2-native--gpt-5.6-sol");
     } finally {
       globalThis.fetch = originalFetch;
     }

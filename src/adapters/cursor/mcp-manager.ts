@@ -22,8 +22,6 @@ export class McpPayloadTooLargeError extends Error {
   readonly code = "MCP_PAYLOAD_TOO_LARGE";
   constructor(readonly kind: "result" | "resource") { super(`Cursor MCP ${kind} too large`); this.name = "McpPayloadTooLargeError"; }
 }
-/** Backward-compatible export for existing integrations. */
-export const CursorMcpPayloadTooLargeError = McpPayloadTooLargeError;
 
 function stableJson(value: unknown): string {
   return JSON.stringify(value, (_key, nested) => nested && typeof nested === "object" && !Array.isArray(nested)
@@ -35,7 +33,7 @@ function payloadBytes(value: unknown): number {
   return utf8.encode(stableJson(value)).byteLength;
 }
 
-/** A tool discovered on a connected MCP server, with its opencodex-advertised name. */
+/** A tool discovered on a connected MCP server, with its CodexCommander-advertised name. */
 export interface McpToolHandle {
   serverName: string;
   toolName: string;
@@ -153,7 +151,7 @@ export class CursorMcpManager {
       const transport = this.options.transportFactory
         ? this.options.transportFactory(server)
         : this.createTransport(server);
-      client = new Client({ name: "opencodex", version: "1.0.0" });
+      client = new Client({ name: "codexcommander", version: "1.0.0" });
       await this.withTimeout(client.connect(transport), this.connectTimeoutMs, `connect ${server.serverName}`);
       const indexed = await this.indexTools(server, client);
       return { connection: { server, client }, tools: indexed.tools, bytes: indexed.bytes };

@@ -2,10 +2,10 @@
 import PackageDescription
 
 let package = Package(
-    name: "OpenCodexMenuBar",
+    name: "CodexCommanderMenuBar",
     platforms: [.macOS(.v13)],
     products: [
-        .executable(name: "OpenCodexMenuBar", targets: ["MenuBarApp"]),
+        .executable(name: "CodexCommanderMenuBar", targets: ["MenuBarApp"]),
         .executable(name: "MenuBarCoreTests", targets: ["MenuBarCoreTests"]),
         .executable(name: "MenuBarUITests", targets: ["MenuBarUITests"]),
         .executable(name: "UIProbe", targets: ["UIProbe"]),

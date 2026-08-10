@@ -1,4 +1,4 @@
-import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
+import type { CodexCommanderConfig, CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../types";
 import { modelInList } from "../types";
 import type { SidecarSettings } from "./executor";
 import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
@@ -73,7 +73,7 @@ export function webSearchStallTimeoutSec(
 /** A configured anthropic-adapter OAuth provider whose ACTIVE stored account is usable (not needs-reauth). */
 export interface AnthropicSidecarProvider {
   providerName: string;
-  provider: OcxProviderConfig;
+  provider: CodexCommanderProviderConfig;
 }
 
 /**
@@ -82,7 +82,7 @@ export interface AnthropicSidecarProvider {
  * getAccountSet + the active account's `needsReauth` marker (audit F1: getCredential alone can pick a
  * terminally-invalid account); token refresh happens later at executor time.
  */
-export function findAnthropicSidecarProvider(config: OcxConfig): AnthropicSidecarProvider | undefined {
+export function findAnthropicSidecarProvider(config: CodexCommanderConfig): AnthropicSidecarProvider | undefined {
   for (const [name, prov] of Object.entries(config.providers)) {
     if (prov.disabled === true) continue;
     if (prov.adapter !== "anthropic" || prov.authMode !== "oauth") continue;
@@ -122,8 +122,8 @@ export interface SidecarPlan {
 }
 
 export function shouldResolveOpenAiWebSearchSidecar(
-  config: OcxConfig,
-  parsed: OcxParsedRequest,
+  config: CodexCommanderConfig,
+  parsed: CodexCommanderParsedRequest,
   isPassthrough: boolean,
 ): boolean {
   if (!parsed._webSearch || isPassthrough) return false;
@@ -138,10 +138,10 @@ export function shouldResolveOpenAiWebSearchSidecar(
  * and the caller forwarded ChatGPT auth. Returns undefined otherwise (request takes the normal path).
  */
 export function planWebSearch(
-  config: OcxConfig,
-  parsed: OcxParsedRequest,
+  config: CodexCommanderConfig,
+  parsed: CodexCommanderParsedRequest,
   isPassthrough: boolean,
-  provider: OcxProviderConfig,
+  provider: CodexCommanderProviderConfig,
   modelId: string,
   openAiSidecar?: ResolvedOpenAiForwardSidecar,
 ): SidecarPlan | undefined {

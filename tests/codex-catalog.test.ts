@@ -21,7 +21,7 @@ import {
   setCached,
   type ProviderModelDiscoveryStatus,
 } from "../src/codex/model-cache";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import type { NormalizedComboConfig } from "../src/combos/types";
 import { enrichProviderFromRegistry } from "../src/providers/derive";
 import { handleManagementAPI } from "../src/server/management-api";
@@ -493,7 +493,7 @@ describe("combo catalog capability intersection", () => {
 
   test("gathers sorted rows, filters disabled combos, and deduplicates redacted warnings until reset", async () => {
     const warningSentinel = ["sk", "warning-secret-123456"].join("-");
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "a",
       providers: {
@@ -536,7 +536,7 @@ describe("combo catalog capability intersection", () => {
   }, 15_000);
 
   test("gather warns about disjoint modalities without calling them incomplete (#516)", async () => {
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "a",
       providers: {
@@ -607,7 +607,7 @@ describe("combo catalog capability intersection", () => {
     // fix, memberByKey never contained openai/<slug>, so combos with a native-openai target were
     // silently dropped from the catalog.
     globalThis.fetch = (() => { throw new Error("forward providers must not fetch /models"); }) as typeof fetch;
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "openai",
       providers: {
@@ -651,7 +651,7 @@ describe("combo catalog capability intersection", () => {
     // they must NOT leak into the returned all[] array (they are already emitted via the
     // native catalog / /v1/models path).
     globalThis.fetch = (() => { throw new Error("forward providers must not fetch /models"); }) as typeof fetch;
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "openai",
       providers: {
@@ -928,7 +928,7 @@ test("a custom row inherits provider reasoning metadata from the provider-derive
   }
 });
 
-function openAiApiCatalogConfig(overrides: Record<string, unknown> = {}): OcxConfig {
+function openAiApiCatalogConfig(overrides: Record<string, unknown> = {}): CodexCommanderConfig {
   return {
     port: 10100,
     defaultProvider: "openai-apikey",
@@ -988,7 +988,6 @@ describe("Codex catalog routed normalization", () => {
       defaultProvider: "openai",
     });
     expect(rows).toEqual([]);
-    expect(rows.some(row => row.provider === "openai-multi")).toBe(false);
   });
 
   test("loads bundled Codex catalog from debug models output", () => {
@@ -1001,8 +1000,8 @@ describe("Codex catalog routed normalization", () => {
   });
 
   test("materializes bundled Codex catalog when no on-disk source exists", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-catalog-"));
-    const path = join(dir, "nested", "opencodex-catalog.json");
+    const dir = mkdtempSync(join(tmpdir(), "ccx-catalog-"));
+    const path = join(dir, "nested", "codexcommander-catalog.json");
     try {
       const catalog = materializeBundledCodexCatalog(path, {
         commandCandidates: () => ["codex"],
@@ -1170,7 +1169,7 @@ describe("Codex catalog routed normalization", () => {
     expect(terra?.multi_agent_version).toBe("v2");
     expect(luna?.multi_agent_version).toBe("v1");
 
-    // ocx adaptations: client-version gate stripped; ws preference gated off by default.
+    // ccx adaptations: client-version gate stripped; ws preference gated off by default.
     for (const e of [sol, terra, luna]) {
       expect(e).not.toHaveProperty("minimal_client_version");
       expect(e).not.toHaveProperty("prefer_websockets");
@@ -1189,8 +1188,8 @@ describe("Codex catalog routed normalization", () => {
   });
 
   test("catalog sync upgrades fallback-quality gpt-5.6 entries but preserves genuine ones", () => {
-    // Fallback-quality: display_name stamped with the bare slug (ocx synthesis signature),
-    // wrong ladder (ultra on luna) left by an older ocx version.
+    // Fallback-quality: display_name stamped with the bare slug (ccx synthesis signature),
+    // wrong ladder (ultra on luna) left by an older ccx version.
     const synthesizedLuna = {
       ...nativeTemplate(),
       slug: "gpt-5.6-luna",
@@ -1438,7 +1437,7 @@ describe("Codex catalog routed normalization", () => {
       port: 10100,
       defaultProvider: providerName,
       providers: { [providerName]: provider },
-    } as OcxConfig;
+    } as CodexCommanderConfig;
     let fetchCalls = 0;
     globalThis.fetch = (() => {
       fetchCalls += 1;
@@ -2834,7 +2833,7 @@ describe("OpenAI API trusted catalog augmentation", () => {
 
   test("actual gathering exposes no API rows when the API tier is absent or disabled", async () => {
     globalThis.fetch = async input => { throw new Error(`unexpected fetch: ${String(input)}`); };
-    const absent: OcxConfig = {
+    const absent: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "custom",
       providers: { custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1", liveModels: false, models: ["model"] } },
@@ -2864,7 +2863,7 @@ describe("OpenAI API trusted catalog augmentation", () => {
 
   test("is a no-op when API tier is absent or disabled", () => {
     const source = [{ provider: "other", id: "model" }];
-    const absent: OcxConfig = { port: 10100, defaultProvider: "other", providers: { other: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } } };
+    const absent: CodexCommanderConfig = { port: 10100, defaultProvider: "other", providers: { other: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } } };
     expect(augmentRoutedModelsWithRegistryOpenAiApiRows(source, absent)).toBe(source);
     expect(augmentRoutedModelsWithRegistryOpenAiApiRows(source, openAiApiCatalogConfig({ disabled: true }))).toBe(source);
   });
@@ -2892,7 +2891,7 @@ describe("OpenAI API trusted catalog augmentation", () => {
 });
 
 describe("native slug allowlist", () => {
-  test("drops legacy/internal natives from a live Codex catalog", () => {
+  test("drops retired/internal natives from a live Codex catalog", () => {
     const liveModels = [
       { slug: "gpt-5.5", visibility: "list" },
       { slug: "gpt-5.4", visibility: "list" },

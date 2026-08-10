@@ -4,7 +4,6 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   anthropic: "claude-color.svg",
   "anthropic-apikey": "claude-color.svg",
   "azure-openai": "openai.svg",
-  chatgpt: "openai.svg",
  "cloudflare-ai-gateway": "cloudflare-ai-gateway-color.svg",
   "cloudflare-workers-ai": "cloudflare-ai-gateway-color.svg",
   cline: "cline-color.svg",
@@ -52,12 +51,11 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
 
 /**
  * Canonical brand casing for known provider ids (config keys stay lowercase).
- * Current OpenAI ids follow the registry labels; legacy `chatgpt` keeps its historical label.
+ * Current OpenAI ids follow the registry labels.
  */
 const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   anthropic: "Anthropic Claude",
   "anthropic-apikey": "Anthropic Claude",
-  chatgpt: "ChatGPT",
   openai: "OpenAI (Codex login)",
   "openai-apikey": "OpenAI API",
   "azure-openai": "Azure OpenAI",

@@ -71,7 +71,7 @@ export function CodexAccountPoolMainCard({
     hasCredential: true,
     quota: main?.quota ?? null,
   };
-  const showReauth = Boolean(main?.needsReauth) || oauthHealthShowsReauth(main?.health?.status);
+  const showReauth = oauthHealthShowsReauth(main?.health?.status);
   const inCooldown = oauthHealthIsCooldown(main?.health?.status);
   const healthLabel = formatOAuthHealthLabel(t, main?.health);
   const healthSummary = main

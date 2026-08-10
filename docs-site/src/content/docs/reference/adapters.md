@@ -3,7 +3,7 @@ title: Adapters
 description: The seven provider adapters — what each targets, how it builds requests, and its quirks.
 ---
 
-An **adapter** translates between opencodex's internal request/response model and one provider wire
+An **adapter** translates between CodexCommander's internal request/response model and one provider wire
 format. Every adapter implements the `ProviderAdapter` interface (`src/adapters/base.ts`):
 
 ```ts
@@ -17,7 +17,7 @@ interface ProviderAdapter {
 }
 ```
 
-`buildRequest` lowers an `OcxParsedRequest` into an upstream HTTP request; `parseStream` /
+`buildRequest` lowers an `CodexCommanderParsedRequest` into an upstream HTTP request; `parseStream` /
 `parseResponse` lift the provider's reply back into internal `AdapterEvent`s. `fetchResponse` lets an
 adapter own retries/timeouts, while `runTurn` supports transports that cannot be represented as one
 HTTP fetch followed by one response stream. [`bridge.ts`](/reference/architecture/#the-bridge)
@@ -51,7 +51,7 @@ provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local & cloud),
   K3 presets enable this mode and advertise summary support, so the app can display genuine Kimi
   reasoning deltas as soon as Kimi sends them. It is presentation-only: it neither changes effort
   nor invents percentage, ETA, or heartbeat text. A client request that hides reasoning still wins;
-  opencodex emits no visible reasoning deltas and keeps the existing replay envelope.
+  CodexCommander emits no visible reasoning deltas and keeps the existing replay envelope.
 
 ## `openai-responses`
 
@@ -64,7 +64,7 @@ waits and replays the identical request on the same key before any other handlin
 the translated `openai-chat` / Anthropic request path. Custom `runTurn` transports are not part
 of the HTTP retry loop.
 
-- `forward` URL → `{baseUrl}/responses`. A `key` provider defaults to the legacy `{baseUrl}/v1/responses` construction.
+- `forward` URL → `{baseUrl}/responses`. A `key` provider defaults to `{baseUrl}/v1/responses`.
 - A `key` provider may set a validated relative `responsesPath`; the adapter removes one trailing slash from `baseUrl` and sends `{trimmedBaseUrl}{responsesPath}`. For Ark Agent Plan, use `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` with `responsesPath: "/responses"`.
 - In `forward` mode only a safe header allowlist is relayed (`FORWARD_HEADERS`): authorization,
   ChatGPT account id, and the OpenAI beta/originator/session headers. This is the ChatGPT-login path
@@ -102,9 +102,9 @@ of the HTTP retry loop.
   (`gemini-3.1-flash-image`, `gemini-2.0-flash-preview-image-generation`, or
   `gemini-3-pro-image-preview`), the adapter sends `responseModalities: ["TEXT", "IMAGE"]`.
   Standalone media-generation IDs such as `gemini-3-pro-image` are not included. Returned
-  `inlineData` parts are materialized under the configured OpenCodex `artifacts/` directory and
+  `inlineData` parts are materialized under the configured CodexCommander `artifacts/` directory and
   surfaced as markdown image links to the authenticated opaque route
-  `/v1/opencodex/artifacts/<id>` (not `file:` URIs or host filesystem paths). Each image is capped
+  `/v1/codexcommander/artifacts/<id>` (not `file:` URIs or host filesystem paths). Each image is capped
   at 50 MB and each response at 100 MB of decoded data; malformed base64 payloads are rejected.
   Artifacts are pruned automatically when the count exceeds 200 files.
 
@@ -143,7 +143,7 @@ output. Filtering and guardrail stops surface as filtered incomplete output, and
 that arrives without an actual tool call is reported as a contradiction rather than treated as
 progress.
 
-When an ordinary client tool exists, opencodex adds a private
+When an ordinary client tool exists, CodexCommander adds a private
 `codex_kiro_final_answer` tool to the upstream request; progress text streams as commentary and
 cannot terminate the turn. The adapter consumes the private call, emits its answer as final text,
 and never exposes the private tool to Codex or Claude Code. Because the stop reason only arrives at
@@ -169,7 +169,7 @@ important than cosmetic de-duplication. Tool-free requests retain normal text co
 the request field differently. A selected `low`, `medium`, `high`, `xhigh`, or `max` value is sent
 as `additionalModelRequestFields.reasoning.effort` for `gpt-5.6-sol` and as
 `additionalModelRequestFields.output_config.effort` for `claude-opus-5`. Other Kiro models currently
-use emulated reasoning: opencodex converts the selected level into bounded thinking instructions in
+use emulated reasoning: CodexCommander converts the selected level into bounded thinking instructions in
 the user content because their native effort field has not been verified. Do not interpret an
 advertised effort control on those models as proof of upstream-native reasoning support.
 
@@ -186,15 +186,14 @@ advertised effort control on those models as proof of upstream-native reasoning 
   run request is committed to the wire.
 - Exposes Cursor Router as `cursor/auto` plus explicit `cursor/auto-cost`,
   `cursor/auto-balance`, and `cursor/auto-intelligence` entries. Explicit levels are encoded in
-  `requested_model.parameters` while the legacy `cursor/auto` entry retains the account/team default.
+  `requested_model.parameters` while the base `cursor/auto` entry retains the account/team default.
 - Keeps `cursor/grok-4.5-fast` as a selectable model while sending Cursor's canonical `grok-4.5`
   model with separate `effort` and `fast=true` parameters.
 - Cursor-native local filesystem/shell/network execution is denied by default. Explicit `mcpServers`
   and `desktopExecutor` integrations have separate opt-ins; `nativeLocalExec: "on"` enables the
-  broader built-in executor and bypasses Codex approval/sandbox semantics, and legacy
-  `unsafeAllowNativeLocalExec: true` remains equivalent only when `nativeLocalExec` is unset.
+  broader built-in executor and bypasses Codex approval/sandbox semantics.
 
-## `azure-openai` (alias: `azure`)
+## `azure-openai`
 
 **Targets:** **Azure OpenAI**. Wraps `openai-responses` (so also `passthrough: true`).
 **Auth:** `key` via the `api-key` header (not Bearer).

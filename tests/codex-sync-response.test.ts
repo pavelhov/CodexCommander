@@ -1,20 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type {
   CatalogDisposition,
-  CodexHistoryState,
   CodexObservedState,
   ConvergeOutcome,
 } from "../src/codex/convergence-types";
 import { toSyncResponse } from "../src/server/management/sync-response";
-
-const history: CodexHistoryState = {
-  status: "converged",
-  attempts: 1,
-  nextRetryAt: null,
-  txId: "tx-1",
-  pendingRows: 0,
-  backupEntries: 0,
-};
 
 const catalogRefresh: CatalogDisposition = {
   status: "committed",
@@ -35,12 +25,6 @@ const observed: CodexObservedState = {
     catalog: "applied",
     cache: "applied",
     journal: "absent",
-    history: {
-      state: history,
-      database: "applied",
-      manifest: "applied",
-      rollouts: "applied",
-    },
     provenance: {
       state: "verified",
       nativeGeneration: 4,
@@ -69,10 +53,9 @@ describe("toSyncResponse", () => {
       changed: true,
       observed,
       catalogRefresh,
-      history,
     })).toEqual({
       status: 200,
-      body: { ok: true, changed: true, observed, catalogRefresh, history },
+      body: { ok: true, changed: true, observed, catalogRefresh },
       retryAfter: null,
     });
   });
@@ -86,10 +69,9 @@ describe("toSyncResponse", () => {
       nativeGeneration: 4,
       currentTxId: "tx-1",
       catalogRefresh,
-      history,
     })).toEqual({
       status: 200,
-      body: { ok: true, changed: true, observed, catalogRefresh, history },
+      body: { ok: true, changed: true, observed, catalogRefresh },
       retryAfter: null,
     });
   });
@@ -100,10 +82,9 @@ describe("toSyncResponse", () => {
       reason: "already-converged",
       observed,
       catalogRefresh,
-      history,
     })).toEqual({
       status: 200,
-      body: { ok: true, changed: false, observed, catalogRefresh, history },
+      body: { ok: true, changed: false, observed, catalogRefresh },
       retryAfter: null,
     });
   });
@@ -143,21 +124,19 @@ describe("toSyncResponse", () => {
       kind: "deferred",
       direction: "applied",
       changed: true,
-      unresolved: ["history", "catalog"],
+      unresolved: ["catalog"],
       nativeGeneration: 4,
       currentTxId: "tx-1",
       observed,
       catalogRefresh,
-      history,
     })).toEqual({
       status: 200,
       body: {
         ok: true,
         changed: true,
-        unresolved: ["history", "catalog"],
+        unresolved: ["catalog"],
         observed,
         catalogRefresh,
-        history,
       },
       retryAfter: null,
     });

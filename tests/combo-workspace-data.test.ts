@@ -17,7 +17,6 @@ import {
 const configuredProviders = {
   a: {},
   b: {},
-  chatgpt: {},
   openai: {},
   disabled: { disabled: true },
 } as const;
@@ -377,22 +376,6 @@ describe("combo-workspace-data", () => {
     expect(validate(combo({
       targets: [{ provider: "disabled", model: "m1" }],
     }))).toBe("noEnabledTarget");
-  });
-
-  test("preserves an existing legacy chatgpt member through validation and PUT", () => {
-    const existing = combo({
-      targets: [{ provider: "chatgpt", model: "gpt-5.5" }],
-    });
-
-    expect(validate(existing, {
-      providers: {
-        openai: {},
-        chatgpt: {},
-      },
-    })).toBeNull();
-    expect(toPutBody(existing).combo.targets).toEqual([
-      { provider: "chatgpt", model: "gpt-5.5" },
-    ]);
   });
 
   test("draftEquals includes strategy, sticky limit, effort, order, and weight", () => {

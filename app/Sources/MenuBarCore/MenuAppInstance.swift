@@ -30,7 +30,7 @@ public final class MenuAppInstanceLock {
 
     public static func acquire(
         at url: URL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("com.opencodex.menubar.instance.lock")
+            .appendingPathComponent("com.codexcommander.menubar.instance.lock")
     ) -> MenuAppInstanceLockResult {
         let descriptor = open(
             url.path,

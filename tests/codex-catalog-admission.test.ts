@@ -21,13 +21,12 @@ import type {
   CatalogSourceEvidence,
 } from "../src/codex/convergence-types";
 import { saveConfig } from "../src/config";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const CONDITIONAL_SOURCE_ROLES = [
   "active-catalog-merge",
   "bundled-catalog-template",
   "hashed-backup-fallback",
-  "legacy-backup-fallback",
   "models-cache-fallback",
   "native-catalog-selection",
   "provider-auth-selection",
@@ -51,38 +50,49 @@ const STRUCTURALLY_INVALID_EVIDENCE_ASSIGNABILITY: readonly [
 
 let testRoot = "";
 let codexHome = "";
-let opencodexHome = "";
+let codexCommanderHome = "";
 let previousCodexHome: string | undefined;
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 
-function config(port = 10100): OcxConfig {
-  return { port, providers: {}, defaultProvider: "openai" };
+function config(port = 10100): CodexCommanderConfig {
+  return {
+    port,
+    multiAgentGuidanceEnabled: true,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+      },
+    },
+    defaultProvider: "openai",
+  };
 }
 
 beforeEach(() => {
   previousCodexHome = process.env.CODEX_HOME;
-  previousOpencodexHome = process.env.OPENCODEX_HOME;
-  testRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-catalog-admission-")));
+  previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+  testRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "ccx-catalog-admission-")));
   codexHome = join(testRoot, "codex-home");
-  opencodexHome = join(testRoot, "opencodex-home");
+  codexCommanderHome = join(testRoot, "codexcommander-home");
   mkdirSync(codexHome, { recursive: true });
-  mkdirSync(opencodexHome, { recursive: true });
+  mkdirSync(codexCommanderHome, { recursive: true });
   process.env.CODEX_HOME = codexHome;
-  process.env.OPENCODEX_HOME = opencodexHome;
+  process.env.CODEXCOMMANDER_HOME = codexCommanderHome;
 });
 
 afterEach(() => {
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   rmSync(testRoot, { recursive: true, force: true });
 });
 
 test("captures the given config reference, generation, and catalog target identities", () => {
   saveConfig(config(20200));
   const residentConfig = config(30300);
-  writeFileSync(join(codexHome, "opencodex-catalog.json"), "{}\n");
+  writeFileSync(join(codexHome, "codexcommander-catalog.json"), "{}\n");
   writeFileSync(join(codexHome, "models_cache.json"), "{}\n");
 
   const snapshot = captureCatalogAdmissionSnapshot(residentConfig);
@@ -96,7 +106,7 @@ test("captures the given config reference, generation, and catalog target identi
     snapshotIdentity: expect.any(String),
   });
   expect(JSON.parse(snapshot.targets.catalog)).toMatchObject({
-    path: join(codexHome, "opencodex-catalog.json"),
+    path: join(codexHome, "codexcommander-catalog.json"),
     canonicalParent: codexHome,
     parentIdentity: { device: expect.any(String), inode: expect.any(String) },
     fileIdentity: { device: expect.any(String), inode: expect.any(String) },
@@ -106,7 +116,7 @@ test("captures the given config reference, generation, and catalog target identi
     canonicalParent: codexHome,
     fileIdentity: { device: expect.any(String), inode: expect.any(String) },
   });
-  expect(snapshot.targets.catalogBackups).toHaveLength(2);
+  expect(snapshot.targets.catalogBackups).toHaveLength(1);
 
   expect(snapshot.sourceEvidence.required["catalog-target-selection"]).toEqual({
     state: "absent",

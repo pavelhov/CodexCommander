@@ -238,8 +238,8 @@ public actor PollingCoordinator {
         guard isCurrent(cycle) else { return }
         if let envelope = try? await client.quotas(forceRefresh: forceRefresh) {
             guard isCurrent(cycle) else { return }
-            snapshot.quotas = envelope.reports ?? []
-            snapshot.quotaAvailability = envelope.availability ?? []
+            snapshot.quotas = envelope.reports
+            snapshot.quotaAvailability = envelope.availability
             snapshot.quotasLoaded = true
         }
     }

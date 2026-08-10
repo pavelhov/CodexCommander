@@ -26,9 +26,6 @@ describe("startup prompts without GitHub star prompt", () => {
     const ownership = await readText("src/lib/config-ownership.ts");
     expect(ownership).not.toContain(".star-prompted");
 
-    const notify = await readText("src/update/notify.ts");
-    expect(notify).not.toContain("hasStarPromptRun");
-    expect(notify).not.toContain("star-prompt");
   });
 
   test("service install no longer surfaces a star prompt", async () => {
@@ -38,30 +35,42 @@ describe("startup prompts without GitHub star prompt", () => {
   });
 
   test("management sidebar no longer exposes a star API", async () => {
-    const routes = await readText("src/server/management/sidebar-routes.ts");
-    expect(routes).toContain("/api/update/badge");
-    expect(routes).not.toContain("/api/github/star");
-    expect(routes).not.toContain("agent_consent_required");
-    expect(routes).not.toContain("starRepository");
+    const managementApi = await readText("src/server/management-api.ts");
+    expect(managementApi).not.toContain("handleSidebarRoutes");
+    expect(managementApi).not.toContain("/api/github/star");
+    expect(managementApi).not.toContain("agent_consent_required");
+    expect(managementApi).not.toContain("starRepository");
   });
 
   test("docs and agent guidance no longer require relaying a star prompt", async () => {
     const agents = await readText("AGENTS.md");
     const readme = await readText("README.md");
-    expect(agents).not.toContain("Star lidge-jun/opencodex? Yes / No");
     expect(agents).not.toContain("src/cli/star-prompt.ts");
-    expect(readme).not.toContain("Star lidge-jun/opencodex? Yes / No");
     expect(readme).not.toContain("agent_consent_required");
   });
 
-  test("update prompt eligibility no longer waits on a star marker", async () => {
-    const notify = await readText("src/update/notify.ts");
-    expect(notify).toContain("export function shouldConsider()");
-    expect(notify).toContain("interactiveGuardOk()");
-    expect(notify).not.toContain("hasStarPromptRun()");
+  test("startup has no updater prompt, refresh helper, or worker", async () => {
+    for (const path of [
+      "src/update/index.ts",
+      "src/update/job.ts",
+      "src/update/notify.ts",
+      "src/update/badge.ts",
+    ]) {
+      expect(await Bun.file(new URL(path, root)).exists()).toBe(false);
+    }
+
+    const cli = await readText("src/cli/index.ts");
+    const help = await readText("src/cli/help.ts");
+    expect(cli).not.toContain("maybeShowUpdatePrompt");
+    expect(cli).not.toContain("__refresh-version");
+    expect(cli).not.toContain("__gui-update-worker");
+    expect(cli).not.toContain('case "update"');
+    expect(cli).not.toContain('../update');
+    expect(help).not.toContain("ccx update");
+    expect(help).not.toContain("latest|preview");
   });
 
-  test("ocx init still offers the Codex autostart shim by default", async () => {
+  test("ccx init still offers the Codex autostart shim by default", async () => {
     const init = await readText("src/cli/init.ts");
     expect(init).toContain("Install Codex autostart shim? [Y/n]");
     expect(init).toContain("installCodexShim");

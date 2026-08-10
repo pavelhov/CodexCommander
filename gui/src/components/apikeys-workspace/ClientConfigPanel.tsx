@@ -1,5 +1,5 @@
 /**
- * Client config export panel (devlog 260731_client_config_export/040, reshaped by
+ * Client config export panel (implementation contract, reshaped by
  * 260802/010).
  *
  * One compact row per export client — mark, name, destination, model count, and the
@@ -8,7 +8,7 @@
  * behind `Details`. Both transport actions stay on the surface at all times.
  *
  * Still renders only what `GET /api/client-config` returns; it never builds a config
- * locally, so the bytes copied here are the bytes `ocx export` writes.
+ * locally, so the bytes copied here are the bytes `ccx export` writes.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";

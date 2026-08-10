@@ -98,7 +98,7 @@ beforeEach(() => {
   requests = [];
   journalRows = [];
   mountCount += 1;
-  apiBase = `http://ocx-test-${mountCount}.invalid`;
+  apiBase = `http://ccx-test-${mountCount}.invalid`;
   stateResponse = () => json(status());
   putResponse = () => json({ ok: true, clientId: "hermes", changed: true, state: "absent", message: "disabled" });
   failExtraSources = false;
@@ -355,7 +355,7 @@ test("a refusal routes by reason, not by the state it happened in", async () => 
 
   const text = container.textContent ?? "";
   expect(text).toContain("disk full");
-  expect(text).not.toContain("changed after opencodex wrote it");
+  expect(text).not.toContain("changed after CodexCommander wrote it");
 });
 
 test("a hidden panel makes no request at all", async () => {

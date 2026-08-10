@@ -4,9 +4,6 @@ import { abortError, retryBackoffDelayMs, sleepWithAbort } from "../../lib/upstr
 import { debugProviderDiagnostic } from "../../lib/debug";
 import { safeCursorErrorMessage } from "./cursor-errors";
 
-// Compat: historical name for the shared abortable sleep, kept for external callers.
-export { sleepWithAbort as abortAwareSleep } from "../../lib/upstream-retry";
-
 export const CURSOR_RETRY_ATTEMPTS = 3;
 export const CURSOR_RETRY_BASE_MS = 250;
 export const CURSOR_RETRY_MAX_MS = 2_000;

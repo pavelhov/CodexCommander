@@ -20,7 +20,7 @@ describe("clickjacking response headers", () => {
   });
 
   test("static dashboard responses include the framing policy", () => {
-    const guiDist = mkdtempSync(join(tmpdir(), "ocx-gui-headers-"));
+    const guiDist = mkdtempSync(join(tmpdir(), "ccx-gui-headers-"));
     writeFileSync(join(guiDist, "index.html"), "<!doctype html><title>test</title>");
     try {
       const response = serveGuiFile("/", guiDist);

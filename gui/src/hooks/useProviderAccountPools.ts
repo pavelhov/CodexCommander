@@ -10,13 +10,12 @@ export interface Config {
   providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; models?: string[]; liveModels?: boolean; authMode?: string; keyOptional?: boolean; disabled?: boolean; note?: string; codexAccountMode?: "direct" | "pool" }>;
 }
 
-export interface OAuthStatus { loggedIn: boolean; email?: string; error?: string; done?: boolean; needsReauth?: boolean; activeAccountId?: string | null }
+export interface OAuthStatus { loggedIn: boolean; email?: string; error?: string; done?: boolean; activeAccountId?: string | null }
 export interface OAuthAccount {
   id: string;
   alias?: string;
   email?: string;
   active: boolean;
-  needsReauth?: boolean;
   expiresAt?: number;
   health?: { status: "healthy" | "cooldown" | "reauth_required" | "warning"; reason?: string; until?: string };
   healthLabel?: string;
@@ -131,7 +130,7 @@ export function useProviderAccountPools(deps: {
   }, [apiBase]);
 
   const switchAccount = async (provider: string, account: OAuthAccount) => {
-    if (account.active || account.needsReauth || switchingAccountRef.current) return;
+    if (account.active || accountNeedsReauth(account) || switchingAccountRef.current) return;
     const target = { provider, accountId: account.id };
     switchingAccountRef.current = target;
     setSwitchingAccount(target);

@@ -13,6 +13,7 @@ private actor FakeActionClient: ProxyActionClient {
         restartResult: Result<RestartAccepted, Error> = .success(
             RestartAccepted(
                 success: true,
+                message: "Draining in-flight requests, then restarting.",
                 activeTurnCount: 0,
                 drainTimeoutMs: 0,
                 alreadyDraining: false
@@ -139,7 +140,13 @@ enum ActionSuite {
 
         t.test("restart: an explicit refusal never enters replacement polling") {
             let client = FakeActionClient(
-                restartResult: .success(RestartAccepted(success: false)),
+                restartResult: .success(RestartAccepted(
+                    success: false,
+                    message: "Restart unavailable.",
+                    activeTurnCount: 0,
+                    drainTimeoutMs: 0,
+                    alreadyDraining: false
+                )),
                 liveness: [.reachable(pid: 43)]
             )
             let coordinator = ActionCoordinator(client: client)
@@ -223,14 +230,14 @@ enum ActionSuite {
                 LifecycleCommandResult(
                     action: .ensure, ok: false, state: .running,
                     changed: false, pid: 41, port: 10100,
-                    message: "Legacy Codex restart required.",
+                    message: "Codex restart required.",
                     errorCode: "CODEX_RESTART_REQUIRED"
                 ),
                 LifecycleCommandResult(
                     action: .ensure, ok: false, state: .running,
                     changed: false, pid: 41, port: 10100,
                     message: "Proxy restart required.",
-                    errorCode: "PROXY_RESTART_REQUIRED"
+                    errorCode: "SYNC_FAILED"
                 ),
             ])
             let coordinator = ActionCoordinator(
@@ -239,7 +246,7 @@ enum ActionSuite {
             )
             t.equal(
                 sync { await coordinator.ensure() },
-                .failed("Legacy Codex restart required.")
+                .failed("Codex restart required.")
             )
             t.equal(
                 sync { await coordinator.ensure() },
@@ -255,6 +262,7 @@ enum ActionSuite {
                     message: "Agent catalog updated.",
                     catalogUpdated: true,
                     codexRestartRequired: false,
+                    staleWorkerCount: 2,
                     stoppedWorkerCount: 2,
                     survivingWorkerCount: 0
                 ),
@@ -284,6 +292,7 @@ enum ActionSuite {
                     message: "One Codex worker is still running.",
                     catalogUpdated: true,
                     codexRestartRequired: true,
+                    staleWorkerCount: 2,
                     stoppedWorkerCount: 1,
                     survivingWorkerCount: 1
                 ),

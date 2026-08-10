@@ -18,7 +18,7 @@ import {
 
 const originalHome = process.env.HOME;
 const originalKimiHome = process.env.KIMI_CODE_HOME;
-const originalOcxHome = process.env.OPENCODEX_HOME;
+const originalCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
 const originalKimiRefresh = OAUTH_PROVIDERS.kimi!.refresh;
 const originalFetch = globalThis.fetch;
 let testRoot: string;
@@ -70,11 +70,11 @@ async function seedLinkedCredential(options: {
 }
 
 beforeEach(() => {
-  testRoot = mkdtempSync(join(tmpdir(), "ocx-kimi-local-cli-"));
+  testRoot = mkdtempSync(join(tmpdir(), "ccx-kimi-local-cli-"));
   kimiHome = join(testRoot, "kimi");
   process.env.HOME = testRoot;
   process.env.KIMI_CODE_HOME = kimiHome;
-  process.env.OPENCODEX_HOME = join(testRoot, "ocx");
+  process.env.CODEXCOMMANDER_HOME = join(testRoot, "ccx");
 });
 
 afterEach(() => {
@@ -84,8 +84,8 @@ afterEach(() => {
   else process.env.HOME = originalHome;
   if (originalKimiHome === undefined) delete process.env.KIMI_CODE_HOME;
   else process.env.KIMI_CODE_HOME = originalKimiHome;
-  if (originalOcxHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = originalOcxHome;
+  if (originalCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = originalCodexCommanderHome;
   rmSync(testRoot, { recursive: true, force: true });
 });
 
@@ -303,30 +303,30 @@ describe("Kimi Code CLI linked-token renewal", () => {
     expect(readFileSync(join(kimiHome, "credentials", "kimi-code.json"), "utf8")).toBe(older.bytes);
   });
 
-  test("401 replay keeps normal refresh behavior for OpenCodex-owned Kimi credentials", async () => {
+  test("401 replay keeps normal refresh behavior for CodexCommander-owned Kimi credentials", async () => {
     await saveCredential("kimi", {
-      access: "ocx-old-access",
-      refresh: "ocx-owned-refresh",
+      access: "ccx-old-access",
+      refresh: "ccx-owned-refresh",
       expires: Date.now() + 10 * 60_000,
-      accountId: "ocx-kimi-user",
+      accountId: "ccx-kimi-user",
       source: "oauth",
     });
     const rejected = await getValidAccessTokenSnapshot("kimi");
     let refreshCalls = 0;
     OAUTH_PROVIDERS.kimi!.refresh = async refresh => {
       refreshCalls++;
-      expect(refresh).toBe("ocx-owned-refresh");
+      expect(refresh).toBe("ccx-owned-refresh");
       return {
-        access: "ocx-fresh-access",
-        refresh: "ocx-rotated-refresh",
+        access: "ccx-fresh-access",
+        refresh: "ccx-rotated-refresh",
         expires: Date.now() + 10 * 60_000,
       };
     };
 
     const replay = await forceRefreshOAuthAccessSnapshot(rejected);
 
-    expect(replay.accessToken).toBe("ocx-fresh-access");
+    expect(replay.accessToken).toBe("ccx-fresh-access");
     expect(refreshCalls).toBe(1);
-    expect(getAccountCredential("kimi", rejected.accountId)?.refresh).toBe("ocx-rotated-refresh");
+    expect(getAccountCredential("kimi", rejected.accountId)?.refresh).toBe("ccx-rotated-refresh");
   });
 });

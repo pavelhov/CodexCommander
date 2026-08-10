@@ -8,7 +8,9 @@ import { handleComboCommand } from "../src/cli/combo";
 import { handleConfigCommand } from "../src/cli/config-command";
 import { handleClientIntegrationCommand, handleGrokCommand } from "../src/cli/integrations";
 import { handleModelsRuntimeCommand } from "../src/cli/models-runtime";
+import { handleObserveCommand } from "../src/cli/observe";
 import { handleProviderRuntimeCommand } from "../src/cli/provider-runtime";
+import { handleSystemCommand, SYSTEM_USAGE } from "../src/cli/system-command";
 
 type Recorded = { path: string; method: string; body: unknown };
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
@@ -43,6 +45,53 @@ function sourceFiles(root: string): string[] {
 }
 
 describe("headless GUI parity CLI", () => {
+  test("observe logs accepts only the current logs envelope", async () => {
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const current = fakeRuntime(() => ({
+        timeZone: "America/New_York",
+        total: 1,
+        logs: [{ id: "req-1", timestamp: "2026-08-09T12:00:00.000Z", status: 200 }],
+      }));
+      expect(await handleObserveCommand(["logs", "--json"], current.deps)).toBe(0);
+
+      for (const stale of [
+        [{ id: "req-1" }],
+        { entries: [{ id: "req-1" }] },
+        { requests: [{ id: "req-1" }] },
+        { logs: [{ id: "req-1" }] },
+      ]) {
+        const runtime = fakeRuntime(() => stale);
+        expect(await handleObserveCommand(["logs", "--json"], runtime.deps)).toBe(1);
+      }
+    } finally {
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  test("system update is unknown and performs no management request", async () => {
+    let fetchCalls = 0;
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const code = await handleSystemCommand(["update"], {
+        baseUrl: "http://127.0.0.1:1",
+        fetchImpl: (() => {
+          fetchCalls += 1;
+          throw new Error("unexpected updater request");
+        }) as typeof fetch,
+      });
+      expect(code).toBe(2);
+      expect(fetchCalls).toBe(0);
+      expect(errorSpy.mock.calls.map(call => String(call[0])).join("\n"))
+        .toContain("unknown system command update");
+      expect(SYSTEM_USAGE).not.toContain("update");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   test("every GUI management endpoint belongs to a documented CLI resource", () => {
     const guiRoot = join(import.meta.dir, "..", "gui", "src");
     const endpoints = new Set<string>();
@@ -53,54 +102,53 @@ describe("headless GUI parity CLI", () => {
       }
     }
     const coverage: Array<[string, string]> = [
-      ["/api/claude-code", "ocx claude config"],
-      ["/api/claude-desktop", "ocx claude desktop"],
-      ["/api/claude/", "ocx observe"],
-      ["/api/codex-auth", "ocx account"],
-      ["/api/oauth", "ocx account"],
-      ["/api/providers/keys", "ocx account"],
-      ["/api/providers", "ocx provider"],
-      ["/api/provider-", "ocx provider/models"],
-      ["/api/selected-models", "ocx models"],
-      ["/api/custom-models", "ocx models"],
-      ["/api/model", "ocx models"],
-      ["/api/combos", "ocx combo"],
-      ["/api/client-config", "ocx export"],
-      ["/api/client-integrations", "ocx integration client"],
+      ["/api/claude-code", "ccx claude config"],
+      ["/api/claude-desktop", "ccx claude desktop"],
+      ["/api/claude/", "ccx observe"],
+      ["/api/codex-auth", "ccx account"],
+      ["/api/oauth", "ccx account"],
+      ["/api/providers/keys", "ccx account"],
+      ["/api/providers", "ccx provider"],
+      ["/api/provider-", "ccx provider/models"],
+      ["/api/selected-models", "ccx models"],
+      ["/api/custom-models", "ccx models"],
+      ["/api/model", "ccx models"],
+      ["/api/combos", "ccx combo"],
+      ["/api/client-config", "ccx export"],
+      ["/api/client-integrations", "ccx integration client"],
       // GUI-only for now: the overview card switches for Claude Code and Grok.
       // Their effect is already reachable from the CLI by other names —
-      // `ocx grok apply` regenerates the fence and `ocx stop` strips it, and
-      // the Claude flag flips through `ocx claude config` — so a dedicated
-      // `ocx integration native` verb would duplicate existing commands rather
+      // `ccx grok apply` regenerates the fence and `ccx stop` strips it, and
+      // the Claude flag flips through `ccx claude config` — so a dedicated
+      // `ccx integration native` verb would duplicate existing commands rather
       // than add a capability. Listed so the sweep stays exhaustive.
       ["/api/native-integrations", "(none — GUI-only)"],
-      ["/api/debug", "ocx debug/observe"],
-      ["/api/diagnostics", "ocx system"],
-      ["/api/effort", "ocx agent"],
-      ["/api/grok", "ocx grok"],
-      ["/api/injection", "ocx agent"],
-      ["/api/integrations/opencode", "ocx opencode"],
-      ["/api/keys", "ocx access"],
-      ["/api/logs", "ocx observe"],
-      ["/api/config", "ocx config"],
-      ["/api/settings", "ocx system"],
+      ["/api/debug", "ccx debug/observe"],
+      ["/api/diagnostics", "ccx system"],
+      ["/api/effort", "ccx agent"],
+      ["/api/grok", "ccx grok"],
+      ["/api/injection", "ccx agent"],
+      ["/api/integrations/opencode", "ccx opencode"],
+      ["/api/keys", "ccx access"],
+      ["/api/logs", "ccx observe"],
+      ["/api/config", "ccx config"],
+      ["/api/settings", "ccx system"],
       // Routing Intelligence (RI-04..RI-10): profiles + dry-run are mirrored by
-      // `ocx route policy`. Analytics is GUI-first for now; the same request
+      // `ccx route policy`. Analytics is GUI-first for now; the same request
       // history remains available through observe/index tooling.
-      ["/api/routing-profiles", "ocx route policy"],
-      ["/api/routing-analytics", "(none — GUI analytics surface; history via ocx observe/logs)"],
-      ["/api/shadow", "ocx models"],
-      ["/api/sidecar", "ocx agent"],
-      ["/api/startup", "ocx system"],
-      ["/api/stop", "ocx stop"],
-      ["/api/storage", "ocx observe"],
-      ["/api/subagent", "ocx agent"],
-      ["/api/sync", "ocx system sync"],
-      ["/api/system", "ocx observe/system"],
-      ["/api/update", "ocx system update"],
-      ["/api/usage", "ocx observe usage"],
-      ["/api/v2", "ocx v2/agent"],
-      ["/api/windows-tray", "ocx tray"],
+      ["/api/routing-profiles", "ccx route policy"],
+      ["/api/routing-analytics", "(none — GUI analytics surface; history via ccx observe/logs)"],
+      ["/api/shadow", "ccx models"],
+      ["/api/sidecar", "ccx agent"],
+      ["/api/startup", "ccx system"],
+      ["/api/stop", "ccx stop"],
+      ["/api/storage", "ccx observe"],
+      ["/api/subagent", "ccx agent"],
+      ["/api/sync", "ccx system sync"],
+      ["/api/system", "ccx observe/system"],
+      ["/api/usage", "ccx observe usage"],
+      ["/api/v2", "ccx v2/agent"],
+      ["/api/windows-tray", "ccx tray"],
     ];
     const uncovered = [...endpoints].filter(endpoint => !coverage.some(([prefix]) => endpoint === prefix || endpoint.startsWith(prefix)));
     expect(uncovered).toEqual([]);
@@ -235,7 +283,7 @@ describe("headless GUI parity CLI", () => {
 
   test("API key create returns the one-time key through the access command", async () => {
     const runtime = fakeRuntime((req) => new URL(req.url).pathname === "/api/keys"
-      ? { id: "key-1", name: "deploy", key: "ocx_secret" }
+      ? { id: "key-1", name: "deploy", key: "ccx_secret" }
       : undefined);
     expect(await handleAccessCommand(["key", "create", "deploy", "--json"], runtime.deps)).toBe(0);
     expect(runtime.requests[0]).toEqual({ path: "/api/keys", method: "POST", body: { name: "deploy" } });
@@ -288,12 +336,13 @@ describe("headless GUI parity CLI", () => {
   });
 
   test("config set validates the complete candidate before the atomic write", async () => {
-    const home = mkdtempSync(join(tmpdir(), "ocx-cli-config-"));
-    const previous = process.env.OPENCODEX_HOME;
-    process.env.OPENCODEX_HOME = home;
+    const home = mkdtempSync(join(tmpdir(), "ccx-cli-config-"));
+    const previous = process.env.CODEXCOMMANDER_HOME;
+    process.env.CODEXCOMMANDER_HOME = home;
     try {
       writeFileSync(join(home, "config.json"), JSON.stringify({
         port: 10100,
+        multiAgentGuidanceEnabled: true,
         providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } },
         defaultProvider: "openai",
       }));
@@ -302,21 +351,22 @@ describe("headless GUI parity CLI", () => {
       expect(await handleConfigCommand(["set", "port", "-1", "--json"])).not.toBe(0);
       expect(JSON.parse(readFileSync(join(home, "config.json"), "utf8")).port).toBe(10100);
     } finally {
-      if (previous === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previous;
+      if (previous === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previous;
       rmSync(home, { recursive: true, force: true });
     }
   });
 
   test("config set and import reject an invalid app-owned memory budget without persisting the normalized default", async () => {
-    const home = mkdtempSync(join(tmpdir(), "ocx-cli-memory-budget-"));
-    const previous = process.env.OPENCODEX_HOME;
-    process.env.OPENCODEX_HOME = home;
+    const home = mkdtempSync(join(tmpdir(), "ccx-cli-memory-budget-"));
+    const previous = process.env.CODEXCOMMANDER_HOME;
+    process.env.CODEXCOMMANDER_HOME = home;
     try {
       const configPath = join(home, "config.json");
       const importPath = join(home, "invalid-import.json");
       const original = JSON.stringify({
         port: 10100,
+        multiAgentGuidanceEnabled: true,
         providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } },
         defaultProvider: "openai",
         appOwnedMemoryBudgetMb: 128,
@@ -332,19 +382,37 @@ describe("headless GUI parity CLI", () => {
       expect(await handleConfigCommand(["import", importPath, "--yes", "--json"])).not.toBe(0);
       expect(readFileSync(configPath, "utf8")).toBe(original);
     } finally {
-      if (previous === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previous;
+      if (previous === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previous;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("config set refuses an invalid existing file instead of rebuilding it from defaults", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ccx-cli-invalid-config-"));
+    const previous = process.env.CODEXCOMMANDER_HOME;
+    process.env.CODEXCOMMANDER_HOME = home;
+    const configPath = join(home, "config.json");
+    const invalid = "{ not json";
+    try {
+      writeFileSync(configPath, invalid);
+      expect(await handleConfigCommand(["set", "port", "10101", "--json"])).not.toBe(0);
+      expect(readFileSync(configPath, "utf8")).toBe(invalid);
+    } finally {
+      if (previous === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previous;
       rmSync(home, { recursive: true, force: true });
     }
   });
 
   test("config set releases the manual pin when it writes the selection order", async () => {
-    const home = mkdtempSync(join(tmpdir(), "ocx-cli-priority-pin-"));
-    const previous = process.env.OPENCODEX_HOME;
-    process.env.OPENCODEX_HOME = home;
+    const home = mkdtempSync(join(tmpdir(), "ccx-cli-priority-pin-"));
+    const previous = process.env.CODEXCOMMANDER_HOME;
+    process.env.CODEXCOMMANDER_HOME = home;
     const configPath = join(home, "config.json");
     const base = {
       port: 10100,
+      multiAgentGuidanceEnabled: true,
       providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } },
       defaultProvider: "openai",
       activeCodexAccountPinned: "work",
@@ -371,8 +439,8 @@ describe("headless GUI parity CLI", () => {
       expect(await handleConfigCommand(["set", "autoSwitchThreshold", "50", "--json"])).toBe(0);
       expect(readPin()).toBe("work");
     } finally {
-      if (previous === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previous;
+      if (previous === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previous;
       rmSync(home, { recursive: true, force: true });
     }
   });

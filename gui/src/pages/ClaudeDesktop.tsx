@@ -16,7 +16,7 @@ type Family = typeof FAMILIES[number];
  * Family collapse lives under its own key: the Models page collapses PROVIDERS, and a
  * shared key would make folding "opus" here fold a provider of the same name there.
  */
-const FAMILY_COLLAPSE = makeCollapseStore("ocx.claudeDesktop.collapsedFamilies.v2");
+const FAMILY_COLLAPSE = makeCollapseStore("ccx.claudeDesktop.collapsedFamilies.v2");
 
 interface Assignment {
   family: Family;
@@ -27,7 +27,7 @@ interface DesktopProfile {
   version: 1;
   assignments: Record<string, Assignment>;
   defaults: Record<Family, string | null>;
-  /** Written by the apply route; mirrors OcxClaudeDesktopProfile so a round-trip keeps them. */
+  /** Written by the apply route; mirrors the CodexCommander desktop profile so a round-trip keeps them. */
   appliedFingerprint?: string;
   appliedAt?: string;
 }
@@ -156,7 +156,7 @@ export default function ClaudeDesktop({
 }) {
   const { t, locale } = useI18n();
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
-  const cacheKey = `ocx.claude-desktop.v1:${apiBase}`;
+  const cacheKey = `ccx.claude-desktop.v1:${apiBase}`;
   const resourceKey = `claude-desktop:${apiBase}`;
   const cached = useMemo(() => seedDesktop(cacheKey), [cacheKey]);
   const [draftProfile, setProfile] = useState<DesktopProfile | null>(() => cached.profile);
@@ -258,7 +258,7 @@ export default function ClaudeDesktop({
 
   // The status poll is a separate resource: visibility pauses it without unmounting the
   // profile editor, which keeps its drafts intact across Code/Desktop tab switches.
-  const statusCacheKey = `ocx.claude-desktop.status.v1:${apiBase}`;
+  const statusCacheKey = `ccx.claude-desktop.status.v1:${apiBase}`;
   const statusResourceKey = `claude-desktop-status:${apiBase}`;
   const cachedStatus = readSessionListCache<DesktopStatus>(statusCacheKey);
   const statusResource = useDataSurface<DesktopStatus>(
@@ -320,7 +320,11 @@ export default function ClaudeDesktop({
 
       if (applyAfter) {
         setPending("apply");
-        const applyResponse = await fetch(`${apiBase}/api/claude-desktop/apply`, { method: "POST" });
+        const applyResponse = await fetch(`${apiBase}/api/claude-desktop/apply`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: "static" }),
+        });
         const applyBody = await readJsonOrThrow<{ error?: string; saved?: boolean; warning?: string }>(
           applyResponse,
           t("claudeDesktop.applyFailed"),
@@ -484,7 +488,7 @@ export default function ClaudeDesktop({
         <EmptyState title={t("claudeDesktop.emptyTitle")}>{t("claudeDesktop.emptyHint")}</EmptyState>
       )}
 
-      <div className="ocx-group-stack" aria-label={t("claudeDesktop.assignmentsLabel")}>
+      <div className="ccx-group-stack" aria-label={t("claudeDesktop.assignmentsLabel")}>
         {FAMILIES.map(family => {
           // Render-only narrowing: the lane header, effectiveDefaults and every assignment keep
           // reading the full list, so filtering can never change what Claude Desktop resolves.
@@ -495,32 +499,32 @@ export default function ClaudeDesktop({
           return (
           <section
             key={family}
-            className={`ocx-group${isCollapsed ? " collapsed" : ""}`}
+            className={`ccx-group${isCollapsed ? " collapsed" : ""}`}
             aria-labelledby={`claude-lane-${family}`}
             onDragOver={event => event.preventDefault()}
             onDrop={event => dropOnLane(event, family)}
           >
-            <header className={`ocx-group-head${isCollapsed ? "" : " open"}`}>
+            <header className={`ccx-group-head${isCollapsed ? "" : " open"}`}>
               {/* The button goes INSIDE the heading: a heading is not phrasing content, so
                   nesting it the other way round is invalid. This keeps the family in the
                   a11y tree and gives the toggle its name. */}
-              <h3 id={`claude-lane-${family}`} className="ocx-group-heading">
+              <h3 id={`claude-lane-${family}`} className="ccx-group-heading">
                 <button
                   type="button"
-                  className="ocx-group-toggle"
+                  className="ccx-group-toggle"
                   aria-expanded={!isCollapsed}
                   aria-controls={`claude-lane-body-${family}`}
                   onClick={() => toggleFamily(family)}
                 >
                   <IconChevron
-                    className="ocx-chevron"
+                    className="ccx-chevron"
                     width={14}
                     height={14}
                     aria-hidden="true"
                     style={{ transform: isCollapsed ? "none" : "rotate(90deg)" }}
                   />
-                  <span className="ocx-group-name">{t(FAMILY_KEYS[family])}</span>
-                  <span className="ocx-group-count">
+                  <span className="ccx-group-name">{t(FAMILY_KEYS[family])}</span>
+                  <span className="ccx-group-count">
                     {t(all.length === 1 ? "claudeDesktop.modelCountOne" : "claudeDesktop.modelCountMany", { count: all.length })}
                   </span>
                   {/* Collapsed legibility: the resolved default is what a user opens a
@@ -582,7 +586,7 @@ export default function ClaudeDesktop({
                       onClick={() => setOpenRows(current => ({ ...current, [model.route]: !rowOpen }))}
                     >
                       <IconChevron
-                        className="ocx-chevron"
+                        className="ccx-chevron"
                         width={12}
                         height={12}
                         aria-hidden="true"

@@ -6,11 +6,10 @@ import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
 import { configuredAdminToken } from "../lib/admin-secrets";
 import { readRuntimePort } from "../config";
 import {
-  LOCAL_ATTESTATION_CHALLENGE_HEADER,
-  LOCAL_ATTESTATION_PROOF_HEADER,
   createLocalAttestationChallenge,
   verifyLocalAttestationProof,
 } from "../lib/local-management-attestation";
+import { ATTESTATION_CHALLENGE_HEADER, ATTESTATION_PROOF_HEADER } from "../identity";
 import { maskAccountId } from "../lib/privacy";
 import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
 import { loadAuthStore, peekAuthStore, peekOAuthRefreshIntent, readOAuthRefreshIntent } from "./store";
@@ -89,20 +88,20 @@ export function projectOAuthAccountHealth(input: {
   return { status: "healthy" };
 }
 
-/** Codex pool accounts are not a public `ocx login` provider; reauth is dashboard-driven. */
+/** Codex pool accounts are not a public `ccx login` provider; reauth is dashboard-driven. */
 export const CODEX_REAUTH_ACTION = "reauthenticate via the dashboard Codex account pool";
 
 function actionFor(provider: string, health: OAuthAccountHealth): string | undefined {
   if (health.status === "reauth_required") {
     if (provider === "codex") return CODEX_REAUTH_ACTION;
-    return `run \`ocx login ${provider}\``;
+    return `run \`ccx login ${provider}\``;
   }
   if (health.status === "cooldown") {
     // Keep the transported deadline machine-readable (ISO); presentation layers localize/format.
     return `wait until ${health.until} or start a new session with another eligible account`;
   }
   if (health.status === "warning" && health.reason === "refresh_conflict") {
-    return "re-run `ocx doctor` after ensuring only one proxy process writes the credential store";
+    return "re-run `ccx doctor` after ensuring only one proxy process writes the credential store";
   }
   return undefined;
 }
@@ -360,11 +359,11 @@ async function fetchCodexHealthFromLiveProxy(
       const proofResponse = await fetchImpl(
         `http://${probeHostname(live.hostname)}:${live.port}/healthz`,
         {
-          headers: { [LOCAL_ATTESTATION_CHALLENGE_HEADER]: challenge },
+          headers: { [ATTESTATION_CHALLENGE_HEADER]: challenge },
           signal: AbortSignal.timeout(4000),
         },
       );
-      const proof = proofResponse.headers.get(LOCAL_ATTESTATION_PROOF_HEADER);
+      const proof = proofResponse.headers.get(ATTESTATION_PROOF_HEADER);
       if (!proofResponse.ok || !verifyLocalAttestationProof(
         runtime.attestationSecret,
         challenge,
@@ -409,7 +408,7 @@ export type OAuthCliHealthReport = {
   codexHealthSource: CodexHealthSource;
 };
 
-/** Shown by `ocx status` / `ocx doctor` when the proxy management API is unreachable. */
+/** Shown by `ccx status` / `ccx doctor` when the proxy management API is unreachable. */
 export const CODEX_HEALTH_UNAVAILABLE_NOTE =
   "Codex health: unavailable (proxy not running; live cooldown/reauth requires the management API)";
 export const CODEX_HEALTH_AUTH_FAILED_NOTE =

@@ -1,9 +1,5 @@
-import { describe, expect, spyOn, test } from "bun:test";
-import * as accountLabels from "../src/codex/account-label";
-import {
-  CODEX_ACCOUNT_LOG_LABEL_RE,
-  fallbackCodexAccountLogLabel,
-} from "../src/codex/account-label";
+import { describe, expect, test } from "bun:test";
+import { CODEX_ACCOUNT_LOG_LABEL_RE } from "../src/codex/account-label";
 import {
   codexAccountIdNamespaceCollisionError,
   codexAccountNamespaceProviderCollisionError,
@@ -42,75 +38,31 @@ describe("Codex account namespace foundations", () => {
     expect(publicSelectors).not.toContain(privateId);
   });
 
-  test("gives legacy accounts an independent random selector", () => {
-    const privateId = "legacy-stored-account-id";
-    const namespaces = defaultCodexAccountNamespaces({
-      providers: {},
-      codexAccounts: [{
-        id: privateId,
-        email: "legacy@example.test",
-        alias: "Legacy Display Name",
-        isMain: false,
-      }],
-    });
-    const selector = Object.entries(namespaces)
-      .find(([, accountId]) => accountId === privateId)?.[0];
-
-    expect(selector).toMatch(CODEX_ACCOUNT_LOG_LABEL_RE);
-    expect(selector).not.toBe(fallbackCodexAccountLogLabel(privateId));
-    expect(selector).not.toContain(privateId);
-  });
-
-  test("fails after bounded attempts when no private-safe selector can be allocated", () => {
-    const labelSpy = spyOn(accountLabels, "createCodexAccountLogLabel").mockReturnValue("p111111");
-    try {
-      expect(() => defaultCodexAccountNamespaces({
-        providers: {},
-        codexAccounts: [{ id: "p111111", logLabel: "legacy", isMain: false }],
-      })).toThrow("Unable to allocate a unique Codex account selector");
-      expect(labelSpy).toHaveBeenCalledTimes(16);
-    } finally {
-      labelSpy.mockRestore();
-    }
-  });
-
-  test("never reuses a private account id or its deterministic fallback as a selector", () => {
-    const pShapedId = "p222222";
-    const fallbackId = "legacy-private-account-id";
-    const deterministicFallback = fallbackCodexAccountLogLabel(fallbackId);
+  test("drops account rows without a current privacy label", () => {
+    const privateId = "stored-account-id";
     const namespaces = defaultCodexAccountNamespaces({
       providers: {},
       codexAccounts: [
-        { id: pShapedId, logLabel: pShapedId, isMain: false },
-        { id: fallbackId, logLabel: deterministicFallback, isMain: false },
+        { id: privateId, email: "missing@example.test", isMain: false },
+        { id: "invalid-label", email: "invalid@example.test", logLabel: "invalid", isMain: false },
+        { id: "current-account", email: "current@example.test", logLabel: "p123abc", isMain: false },
       ],
     });
-
-    const selectorFor = (accountId: string) => Object.entries(namespaces)
-      .find(([, target]) => target === accountId)?.[0];
-    expect(selectorFor(pShapedId)).toMatch(CODEX_ACCOUNT_LOG_LABEL_RE);
-    expect(selectorFor(pShapedId)).not.toBe(pShapedId);
-    expect(selectorFor(fallbackId)).toMatch(CODEX_ACCOUNT_LOG_LABEL_RE);
-    expect(selectorFor(fallbackId)).not.toBe(deterministicFallback);
+    expect(namespaces).toEqual({ main: "@main", p123abc: "current-account" });
   });
 
-  test("does not expose another account id or deterministic fallback as a selector", () => {
+  test("does not expose another account id as a selector", () => {
     const pShapedPrivateId = "p444444";
-    const fallbackOwnerId = "other-private-account-id";
-    const otherFallback = fallbackCodexAccountLogLabel(fallbackOwnerId);
     const namespaces = defaultCodexAccountNamespaces({
       providers: {},
       codexAccounts: [
         { id: "first-account", logLabel: pShapedPrivateId, isMain: false },
         { id: pShapedPrivateId, logLabel: "p555555", isMain: false },
-        { id: "third-account", logLabel: otherFallback, isMain: false },
-        { id: fallbackOwnerId, logLabel: "p666666", isMain: false },
       ],
     });
 
     const publicSelectors = Object.keys(namespaces);
     expect(publicSelectors).not.toContain(pShapedPrivateId);
-    expect(publicSelectors).not.toContain(otherFallback);
   });
 
   test("suffix allocation cannot land on another private account id", () => {
@@ -205,7 +157,7 @@ describe("Codex account namespace foundations", () => {
     expect(config.codexAccountNamespaces).toEqual({ mainAccount: "@main" });
   });
 
-  test("never generates targets for legacy account ids rejected by the namespace schema", () => {
+  test("never generates targets for invalid account ids rejected by the namespace schema", () => {
     expect(defaultCodexAccountNamespaces({
       providers: {},
       codexAccounts: [
@@ -226,31 +178,18 @@ describe("Codex account namespace foundations", () => {
     expect(config.codexAccountNamespaces).toEqual({ mainAccount: "@main" });
   });
 
-  test("append avoids every existing private target and deterministic fallback", () => {
+  test("append rejects a label matching an existing private target", () => {
     const existingTarget = "p777777";
-    const fallbackOwnerId = "existing-private-account-id";
-    const fallback = fallbackCodexAccountLogLabel(fallbackOwnerId);
-
-    for (const logLabel of [existingTarget, fallback]) {
-      const config = {
-        providers: {},
-        codexAccountNamespaces: {
-          existing: existingTarget,
-          fallbackOwner: fallbackOwnerId,
-          mainAccount: "@main",
-        },
-      };
-      const newAccountId = `new-account-${logLabel}`;
-      expect(appendDefaultCodexAccountNamespace(config, {
-        id: newAccountId,
-        logLabel,
-        isMain: false,
-      })).toBe(true);
-      const selector = Object.entries(config.codexAccountNamespaces)
-        .find(([, target]) => target === newAccountId)?.[0];
-      expect(selector).toMatch(CODEX_ACCOUNT_LOG_LABEL_RE);
-      expect(selector).not.toBe(logLabel);
-    }
+    const config = {
+      providers: {},
+      codexAccountNamespaces: { existing: existingTarget, mainAccount: "@main" },
+    };
+    expect(appendDefaultCodexAccountNamespace(config, {
+      id: "new-account",
+      logLabel: existingTarget,
+      isMain: false,
+    })).toBe(false);
+    expect(config.codexAccountNamespaces).toEqual({ existing: existingTarget, mainAccount: "@main" });
   });
 
   test("append protects pool accounts omitted from an intentionally incomplete map", () => {
@@ -270,11 +209,8 @@ describe("Codex account namespace foundations", () => {
       id: "new-account-id",
       logLabel: unmappedPrivateId,
       isMain: false,
-    })).toBe(true);
-    const selector = Object.entries(config.codexAccountNamespaces)
-      .find(([, target]) => target === "new-account-id")?.[0];
-    expect(selector).toMatch(CODEX_ACCOUNT_LOG_LABEL_RE);
-    expect(selector).not.toBe(unmappedPrivateId);
+    })).toBe(false);
+    expect(Object.values(config.codexAccountNamespaces)).not.toContain("new-account-id");
 
     expect(appendDefaultCodexAccountNamespace(config, {
       id: "second-new-account-id",

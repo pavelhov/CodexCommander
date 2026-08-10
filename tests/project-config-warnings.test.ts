@@ -7,14 +7,14 @@ import {
   collectProjectCodexConfigWarnings,
   discoverProjectCodexConfigPaths,
   explainProjectConfigBypass,
-  isGlobalOpencodexRoutingActive,
+  isGlobalCodexCommanderRoutingActive,
   invalidateProjectConfigDiagnosticsCache,
   parseTrustedProjectPathsFromCodexConfig,
   relPath,
   resolveEffectiveProjectModelProvider,
 } from "../src/codex/project-config-warnings";
 
-describe("relPath home containment (devlog 260715_cross_platform_audit/030)", () => {
+describe("relPath home containment (implementation contract)", () => {
   let savedUserProfile: string | undefined;
   let savedHome: string | undefined;
 
@@ -70,11 +70,11 @@ let previousHome: string | undefined;
 let previousCodexHome: string | undefined;
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
   previousCodexHome = process.env.CODEX_HOME;
-  testDir = join(tmpdir(), `ocx-proj-warn-${Date.now()}`);
+  testDir = join(tmpdir(), `ccx-proj-warn-${Date.now()}`);
   mkdirSync(testDir, { recursive: true });
-  process.env.OPENCODEX_HOME = testDir;
+  process.env.CODEXCOMMANDER_HOME = testDir;
   // Isolate from the real user config — resolveCodexConfigPath reads CODEX_HOME.
   process.env.CODEX_HOME = join(testDir, "codex-home");
   mkdirSync(process.env.CODEX_HOME, { recursive: true });
@@ -82,8 +82,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
   invalidateProjectConfigDiagnosticsCache();
@@ -94,28 +94,28 @@ function writeGlobalRoutingConfig(extra = ""): void {
   const codexHome = process.env.CODEX_HOME!;
   mkdirSync(codexHome, { recursive: true });
   writeFileSync(join(codexHome, "config.toml"), `
-model_provider = "opencodex"
+model_provider = "codexcommander"
 ${extra}
 `);
 }
 
-describe("isGlobalOpencodexRoutingActive", () => {
+describe("isGlobalCodexCommanderRoutingActive", () => {
   test("detects injected openai_base_url marker", () => {
     const text = `
-# Auto-injected by opencodex
+# Auto-injected by codexcommander
 openai_base_url = "http://127.0.0.1:10100/v1"
-model_provider = "opencodex"
+model_provider = "codexcommander"
 `;
-    expect(isGlobalOpencodexRoutingActive("unused", text)).toBe(true);
+    expect(isGlobalCodexCommanderRoutingActive("unused", text)).toBe(true);
   });
 
-  test("does not treat dormant model_providers.opencodex table as active routing", () => {
+  test("does not treat dormant model_providers.codexcommander table as active routing", () => {
     const text = `
-[model_providers.opencodex]
-name = "opencodex"
+[model_providers.codexcommander]
+name = "codexcommander"
 base_url = "http://127.0.0.1:10100/v1"
 `;
-    expect(isGlobalOpencodexRoutingActive("unused", text)).toBe(false);
+    expect(isGlobalCodexCommanderRoutingActive("unused", text)).toBe(false);
   });
 });
 
@@ -221,7 +221,7 @@ describe("collectProjectCodexConfigWarnings", () => {
     mkdirSync(join(userHome, ".codex"), { recursive: true });
     mkdirSync(join(projectDir, ".codex"), { recursive: true });
     mkdirSync(nestedCwd, { recursive: true });
-    writeFileSync(codexConfigPath, `model_provider = "opencodex-retry"`);
+    writeFileSync(codexConfigPath, `model_provider = "codexcommander-retry"`);
     writeFileSync(projectConfigPath, `model_provider = "anthropic"`);
 
     expect(discoverProjectCodexConfigPaths({ cwd: nestedCwd, codexConfigPath }))
@@ -236,7 +236,7 @@ describe("collectProjectCodexConfigWarnings", () => {
     const projectDir = join(userHome, "work", "project");
     mkdirSync(join(userHome, ".codex"), { recursive: true });
     mkdirSync(projectDir, { recursive: true });
-    writeFileSync(candidatePath, `model_provider = "opencodex-retry"`);
+    writeFileSync(candidatePath, `model_provider = "codexcommander-retry"`);
     symlinkSync(candidatePath, globalAlias);
 
     expect(discoverProjectCodexConfigPaths({ cwd: projectDir, codexConfigPath: globalAlias }))
@@ -301,10 +301,10 @@ describe("explainProjectConfigBypass", () => {
     expect(explainProjectConfigBypass(warningFor("opencode_go"))).toContain("uses OpenCode Go ");
   });
 
-  test("does not mislabel OpenCodex-prefixed provider ids as OpenCode", () => {
-    expect(explainProjectConfigBypass(warningFor("opencodex"))).toContain("uses OpenCodex ");
-    expect(explainProjectConfigBypass(warningFor("opencodex-retry")))
-      .toContain("uses opencodex-retry ");
+  test("does not mislabel the CodexCommander provider id as OpenCode", () => {
+    expect(explainProjectConfigBypass(warningFor("codexcommander"))).toContain("uses CodexCommander ");
+    expect(explainProjectConfigBypass(warningFor("codexcommander-retry")))
+      .toContain("uses codexcommander-retry ");
     expect(explainProjectConfigBypass(warningFor("opencodeish"))).toContain("uses opencodeish ");
   });
 });

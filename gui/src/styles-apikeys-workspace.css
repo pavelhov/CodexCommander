@@ -257,10 +257,10 @@
 }
 
 /* Unscoped on purpose: every copyable code block on this tab gets the same
-   behavior, including the client-config panel that 260731_client_config_export
-   mounts into this same workspace. Scoping these to .awi-usage-panel would let
+   behavior, including the client-config panel mounted in this workspace.
+   Scoping these to .awi-usage-panel would let
    that panel's JSON block fall back to trapping the wheel. */
-.api-example-copy-btn.ocx-tooltip,
+.api-example-copy-btn.ccx-tooltip,
 .api-example-copy-btn {
   display: block;
   min-width: 0;
@@ -421,7 +421,7 @@
   margin-top: 0;
 }
 
-/* ── Client config export (devlog 260731_client_config_export/040) ────── */
+/* ── Client config export (implementation contract) ────── */
 
 /* `.api-panel` clips overflow for every panel on this tab. That is wrong here for the
    same reason it was wrong for the catalog: the JSON block is tall, and a `hidden`

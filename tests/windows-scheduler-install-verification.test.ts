@@ -25,8 +25,8 @@ describe("decodeSchtasksOutput", () => {
     // matches on a Windows host and the decoder assertion fails everywhere else.
     const wscript = "C:\\WINDOWS\\System32\\wscript.exe";
     const xml = buildWindowsTaskXml(
-      "C:\\Users\\x\\.opencodex\\opencodex-service.cmd",
-      "C:\\Users\\x\\.opencodex\\opencodex-service-launcher.vbs",
+      "C:\\Users\\x\\.codexcommander\\codexcommander-service.cmd",
+      "C:\\Users\\x\\.codexcommander\\codexcommander-service-launcher.vbs",
     ).replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
     const utf16 = Buffer.from(`\uFEFF${xml}`, "utf16le");
     const decoded = decodeSchtasksOutput(utf16);
@@ -34,14 +34,14 @@ describe("decodeSchtasksOutput", () => {
     expect(windowsTaskRegistrationHealthy(
       decoded,
       wscript,
-      "C:\\Users\\x\\.opencodex\\opencodex-service-launcher.vbs",
+      "C:\\Users\\x\\.codexcommander\\codexcommander-service-launcher.vbs",
     )).toBe(true);
     // Sanity: the historical utf8 mis-decode is unhealthy.
     expect(windowsTaskRegistrationHealthy(utf16.toString("utf8"))).toBe(false);
   });
 
   test("keeps plain UTF-8 schtasks text listings intact", () => {
-    const text = "Folder: \\\nTaskName: opencodex-proxy";
+    const text = "Folder: \\\nTaskName: codexcommander-proxy";
     expect(decodeSchtasksOutput(Buffer.from(text, "utf8"))).toBe(text);
   });
 });
@@ -50,12 +50,12 @@ describe("windowsSchedulerCsvIncludesTask", () => {
   test("matches quoted Task Scheduler CSV task names", () => {
     const csv = [
       `"TaskName","Next Run Time","Status"`,
-      `"\\opencodex-proxy","N/A","Ready"`,
+      `"\\codexcommander-proxy","N/A","Ready"`,
       `"\\Other Task","N/A","Ready"`,
     ].join("\n");
-    expect(windowsSchedulerCsvIncludesTask(csv, "opencodex-proxy")).toBe(true);
+    expect(windowsSchedulerCsvIncludesTask(csv, "codexcommander-proxy")).toBe(true);
     expect(windowsSchedulerCsvIncludesTask(csv, "missing-task")).toBe(false);
-    expect(windowsSchedulerCsvIncludesTask(csv, "opencodex")).toBe(false);
+    expect(windowsSchedulerCsvIncludesTask(csv, "codexcommander")).toBe(false);
   });
 });
 
@@ -70,11 +70,11 @@ describe("probeWindowsSchedulerTask", () => {
   test("returns present when the specific /tn query includes the task", () => {
     Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
     setQuerySchtasksForTests((args) => {
-      if (args[0] === "/query" && args[1] === "/tn") return "Folder: \\\nTaskName: opencodex-proxy";
+      if (args[0] === "/query" && args[1] === "/tn") return "Folder: \\\nTaskName: codexcommander-proxy";
       throw new Error("unexpected query");
     });
-    expect(probeWindowsSchedulerTask("opencodex-proxy")).toEqual({ status: "present" });
-    expect(windowsSchedulerTaskInstalled("opencodex-proxy")).toBe(true);
+    expect(probeWindowsSchedulerTask("codexcommander-proxy")).toEqual({ status: "present" });
+    expect(windowsSchedulerTaskInstalled("codexcommander-proxy")).toBe(true);
   });
 
   test("recognizes the task without exposing mojibake from localized table output", () => {
@@ -83,16 +83,16 @@ describe("probeWindowsSchedulerTask", () => {
       "����: \\",
       "�۾� �̸�                                ���� ���� �ð�         ����",
       "======================================== ====================== ===============",
-      "opencodex-proxy                          N/A                    �غ�",
+      "codexcommander-proxy                          N/A                    �غ�",
     ].join("\n");
     setQuerySchtasksForTests(() => localizedTable);
 
     const result = formatWindowsSchedulerServiceStatus(
-      probeWindowsSchedulerTask("opencodex-proxy"),
+      probeWindowsSchedulerTask("codexcommander-proxy"),
       { status: "running", port: 10100 },
     );
 
-    expect(result).toBe("✅ service installed (Task Scheduler); OpenCodex proxy running on port 10100.");
+    expect(result).toBe("✅ service installed (Task Scheduler); CodexCommander proxy running on port 10100.");
     expect(result).not.toContain("����");
     expect(result).not.toContain("�۾�");
   });
@@ -102,11 +102,11 @@ describe("probeWindowsSchedulerTask", () => {
     setQuerySchtasksForTests((args) => {
       if (args.includes("/tn")) throw new Error("Access is denied.");
       if (args.includes("CSV")) {
-        return `"TaskName"\n"\\opencodex-proxy"\n`;
+        return `"TaskName"\n"\\codexcommander-proxy"\n`;
       }
       throw new Error("unexpected query");
     });
-    expect(probeWindowsSchedulerTask("opencodex-proxy")).toEqual({ status: "present" });
+    expect(probeWindowsSchedulerTask("codexcommander-proxy")).toEqual({ status: "present" });
   });
 
   test("returns absent when specific query fails and CSV succeeds without the task", () => {
@@ -116,8 +116,8 @@ describe("probeWindowsSchedulerTask", () => {
       if (args.includes("CSV")) return `"TaskName"\n"\\other-task"\n`;
       throw new Error("unexpected query");
     });
-    expect(probeWindowsSchedulerTask("opencodex-proxy")).toEqual({ status: "absent" });
-    expect(windowsSchedulerTaskInstalled("opencodex-proxy")).toBe(false);
+    expect(probeWindowsSchedulerTask("codexcommander-proxy")).toEqual({ status: "absent" });
+    expect(windowsSchedulerTaskInstalled("codexcommander-proxy")).toBe(false);
   });
 
   test("returns unknown with both details when specific query and CSV listing fail", () => {
@@ -127,29 +127,29 @@ describe("probeWindowsSchedulerTask", () => {
       if (args.includes("CSV")) throw new Error("RPC server is unavailable.");
       throw new Error("unexpected query");
     });
-    const probe = probeWindowsSchedulerTask("opencodex-proxy");
+    const probe = probeWindowsSchedulerTask("codexcommander-proxy");
     expect(probe.status).toBe("unknown");
     if (probe.status !== "unknown") throw new Error("expected unknown");
     expect(probe.detail).toContain("Access is denied.");
     expect(probe.detail).toContain("RPC server is unavailable.");
-    expect(windowsSchedulerTaskInstalled("opencodex-proxy")).toBe(false);
+    expect(windowsSchedulerTaskInstalled("codexcommander-proxy")).toBe(false);
   });
 });
 
 describe("formatWindowsSchedulerServiceStatus", () => {
   test("reports task and identity-checked proxy state independently", () => {
     expect(formatWindowsSchedulerServiceStatus({ status: "present" }, { status: "not-running" }))
-      .toBe("⚠️  service installed (Task Scheduler); OpenCodex proxy not running.");
+      .toBe("⚠️  service installed (Task Scheduler); CodexCommander proxy not running.");
     expect(formatWindowsSchedulerServiceStatus({ status: "present" }, { status: "unknown" }))
-      .toBe("⚠️  service installed (Task Scheduler); OpenCodex proxy status unknown.");
+      .toBe("⚠️  service installed (Task Scheduler); CodexCommander proxy status unknown.");
     expect(formatWindowsSchedulerServiceStatus({ status: "absent" }, { status: "running", port: 3593 }))
-      .toBe("❌ service not installed (Task Scheduler); OpenCodex proxy is running independently on port 3593.");
+      .toBe("❌ service not installed (Task Scheduler); CodexCommander proxy is running independently on port 3593.");
     expect(formatWindowsSchedulerServiceStatus({ status: "absent" }, { status: "not-running" }))
       .toBe("❌ service not installed (Task Scheduler).");
     expect(formatWindowsSchedulerServiceStatus({ status: "unknown", detail: "����" }, { status: "running", port: 10100 }))
-      .toBe("⚠️  Task Scheduler registration unknown; OpenCodex proxy running on port 10100.");
+      .toBe("⚠️  Task Scheduler registration unknown; CodexCommander proxy running on port 10100.");
     expect(formatWindowsSchedulerServiceStatus({ status: "unknown", detail: "����" }, { status: "not-running" }))
-      .toBe("⚠️  service status unknown (Task Scheduler query failed); OpenCodex proxy not running.");
+      .toBe("⚠️  service status unknown (Task Scheduler query failed); CodexCommander proxy not running.");
   });
 
   test("keeps scheduler and runtime probe failures locale-independent", async () => {
@@ -166,7 +166,7 @@ describe("formatWindowsSchedulerServiceStatus", () => {
 
 describe("evaluateWindowsSchedulerInstallVerification", () => {
   const wscript = "C:\\Windows\\System32\\wscript.exe";
-  const launcher = "C:\\Users\\Test\\.opencodex\\opencodex-service-launcher.vbs";
+  const launcher = "C:\\Users\\Test\\.codexcommander\\codexcommander-service-launcher.vbs";
   const healthyXml = buildWindowsTaskXml("ignored.cmd", launcher)
     .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
 

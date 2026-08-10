@@ -74,15 +74,13 @@ describe("normalizeCostTokens", () => {
     expect(tokens).toEqual({ input: 80, output: 10, cacheRead: 60, cacheWrite: 20 });
   });
 
-  test("13b. legacy retry: implicit cached contradiction recovers read+write split", () => {
-    const tokens = normalizeCostTokens({
+  test("13b. implicit cached contradiction is rejected", () => {
+    expect(normalizeCostTokens({
       inputTokens: 70,
       outputTokens: 10,
       cachedInputTokens: 60,
       cacheCreationInputTokens: 20,
-    });
-    // canonical R=60,W=20 -> 80>70 contradiction; legacy retry R=40,W=20 -> input 10
-    expect(tokens).toEqual({ input: 10, output: 10, cacheRead: 40, cacheWrite: 20 });
+    })).toBeNull();
   });
 
   test("13c. both readings contradictory is null", () => {
@@ -260,8 +258,8 @@ describe("resolveMatchedPrice", () => {
     expect(resolveMatchedPrice("openrouter", "anthropic-claude-3.5-sonnet")).toBeNull();
   });
 
-  test("16. shipped overlay membership: 53 keys, including Opus 5 and compatibility prices", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(53);
+  test("16. shipped overlay membership: 46 current keys, including Opus 5", () => {
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(46);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [
@@ -273,7 +271,6 @@ describe("resolveMatchedPrice", () => {
       "deepseek/deepseek-chat",
       "deepseek/deepseek-reasoner",
       "google-antigravity/gemini-3.1-pro-low",
-      "google-antigravity/gemini-3.1-pro-high",
       "google-antigravity/gemini-pro-agent",
       "google-antigravity/gemini-3.6-flash",
       "google-antigravity/gemini-3.1-pro",
@@ -281,12 +278,6 @@ describe("resolveMatchedPrice", () => {
       "google-antigravity/gemini-3.6-flash-low",
       "google-antigravity/gemini-3.6-flash-medium",
       "google-antigravity/gemini-3.6-flash-high",
-      "google-antigravity/gemini-3.5-flash-extra-low",
-      "google-antigravity/gemini-3.5-flash-low",
-      "google-antigravity/gemini-3.5-flash-mid",
-      "google-antigravity/gemini-3.5-flash-high",
-      "google-antigravity/gemini-3-flash-agent",
-      "google-antigravity/gemini-3.1-pro-preview",
       "google-antigravity/claude-sonnet-4-6",
       "google-antigravity/claude-opus-4-6-thinking",
       "google-antigravity/claude-opus-4-6",
@@ -324,20 +315,6 @@ describe("resolveMatchedPrice", () => {
       cost4: { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
       status: "verified",
     });
-    for (const modelId of [
-      "gemini-3.5-flash-extra-low",
-      "gemini-3.5-flash-low",
-      "gemini-3.5-flash-mid",
-      "gemini-3.5-flash-high",
-      "gemini-3-flash-agent",
-    ]) {
-      const compatibility = findExpectedPriceOverlay("google-antigravity", modelId);
-      expect(compatibility).toMatchObject({
-        cost4: { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
-        status: "verified-derived",
-      });
-      expect(compatibility?.source).toContain("gemini-3.6-flash");
-    }
   });
 
   test("pool-suffixed google-antigravity provider matches official Anthropic Claude Opus 4.6 overlay", () => {

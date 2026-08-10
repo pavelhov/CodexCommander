@@ -24,36 +24,37 @@ import { hashAuthority } from "../src/codex/admission";
 import { captureCatalogAdmissionSnapshot } from "../src/codex/catalog-admission";
 import { JOURNAL_PATH } from "../src/codex/journal";
 import type { AdmissionSnapshot } from "../src/codex/convergence-types";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 let root = "";
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 const cleanup: string[] = [];
 
-function config(port = 10100): OcxConfig {
+function config(port = 10100): CodexCommanderConfig {
   return {
     port,
+    multiAgentGuidanceEnabled: true,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
         authMode: "forward",
       },
-    } as OcxConfig["providers"],
+    } as CodexCommanderConfig["providers"],
     defaultProvider: "openai",
   };
 }
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "ocx-admission-primitives-"));
+  root = mkdtempSync(join(tmpdir(), "ccx-admission-primitives-"));
   cleanup.push(root);
-  previousOpencodexHome = process.env.OPENCODEX_HOME;
-  process.env.OPENCODEX_HOME = root;
+  previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+  process.env.CODEXCOMMANDER_HOME = root;
 });
 
 afterEach(() => {
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   while (cleanup.length) rmSync(cleanup.pop()!, { recursive: true, force: true });
 });
 
@@ -157,7 +158,7 @@ describe("absence is one state, and being unable to look is another", () => {
     mkdirSync(nested);
     writeFileSync(join(nested, "config-mutation.sqlite"), "");
     chmodSync(nested, 0o000);
-    process.env.OPENCODEX_HOME = nested;
+    process.env.CODEXCOMMANDER_HOME = nested;
     try {
       const observed = observeConfigGeneration();
       // Either it could not stat (unavailable) or the platform let it through;
@@ -165,7 +166,7 @@ describe("absence is one state, and being unable to look is another", () => {
       expect(observed.kind).not.toBe("absent");
     } finally {
       chmodSync(nested, 0o700);
-      process.env.OPENCODEX_HOME = root;
+      process.env.CODEXCOMMANDER_HOME = root;
     }
   });
 
@@ -305,13 +306,12 @@ describe("the journal has one owner", () => {
    * point of the test.
    */
   test("the exported constant is the file journal.ts actually uses", () => {
-    // The old hand-derived path was OPENCODEX_HOME/codex-journal.json — wrong
-    // directory AND wrong basename. Assert both halves. Paths are compared by
-    // shape rather than string equality because macOS resolves the temp root
-    // through /private, which is not the property under test.
-    expect(basename(JOURNAL_PATH)).toBe("opencodex-journal.json");
+    // Assert both path halves. Paths are compared by shape rather than string
+    // equality because macOS resolves the temp root through /private, which is
+    // not the property under test.
+    expect(basename(JOURNAL_PATH)).toBe("codexcommander-journal.json");
     expect(dirname(JOURNAL_PATH).endsWith(".codex")).toBeTrue();
-    expect(dirname(JOURNAL_PATH).endsWith(".opencodex")).toBeFalse();
+    expect(dirname(JOURNAL_PATH).endsWith(".codexcommander")).toBeFalse();
   });
 
   /**
@@ -328,7 +328,6 @@ describe("the journal has one owner", () => {
       join(import.meta.dir, "..", "src", "codex", "admission.ts"),
     ).text();
     expect(source).toContain("JOURNAL_PATH");
-    expect(source).not.toContain("codex-journal.json");
   });
 });
 
@@ -342,17 +341,14 @@ function snapshotWith(overrides: Partial<AdmissionSnapshot>): AdmissionSnapshot 
     externalProvider: null,
     canonicalTargets: {
       codexHome: "/codex",
-      opencodexHome: "/opencodex",
+      codexCommanderHome: "/codexcommander",
       config: "/codex/config.toml",
-      profile: "/codex/opencodex.config.toml",
-      catalog: "/codex/opencodex-catalog.json",
+      profile: "/codex/codexcommander.config.toml",
+      catalog: "/codex/codexcommander-catalog.json",
       cache: "/codex/models_cache.json",
       journal: JOURNAL_PATH,
-      integrationRecord: "/opencodex/integrations/codex.json",
+      integrationRecord: "/codexcommander/integrations/codex.json",
       catalogBackups: [],
-      historyDb: "/codex/state_5.sqlite",
-      historyManifest: "/codex/state_5.sqlite.ocx-backup.json",
-      historyRollouts: [],
     },
     journalIdentity: "absent",
     provenanceIdentity: "absent",

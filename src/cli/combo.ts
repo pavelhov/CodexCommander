@@ -11,13 +11,13 @@ import {
 } from "./runtime-api";
 
 const USAGE = `Usage:
-  ocx combo [list] [--json]
-  ocx combo show <id> [--json]
-  ocx combo set <id> --targets <provider/model[:weight],...>
+  ccx combo [list] [--json]
+  ccx combo show <id> [--json]
+  ccx combo set <id> --targets <provider/model[:weight],...>
       [--strategy <failover|round-robin>] [--sticky <1-100>]
       [--effort <low|medium|high|xhigh|max|ultra|->] [--alias <name|->]
       [--rename-from <id>] [--json]
-  ocx combo remove <id> --yes [--json]`;
+  ccx combo remove <id> --yes [--json]`;
 
 type ComboRow = Record<string, unknown> & { id?: string; model?: string };
 

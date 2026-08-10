@@ -1,16 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { handleManagementAPI } from "../src/server/management-api";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
-/**
- * Route-level proof for the sidebar update-badge endpoint. Badge state is
- * cosmetic and must stay scalar-only: no npm/registry output, paths, or tokens.
- */
 const config = {
   port: 10100,
   defaultProvider: "openai",
   providers: {},
-} as OcxConfig;
+} as CodexCommanderConfig;
 
 async function call(
   method: string,
@@ -29,22 +25,26 @@ async function call(
   return { status: res.status, body: raw ? JSON.parse(raw) : null, raw, routed: true };
 }
 
-describe("GET /api/update/badge", () => {
-  test("is routed and reports scalar badge fields", async () => {
-    const { status, body } = await call("GET", "/api/update/badge");
-    expect(status).toBe(200);
-    const badge = body as Record<string, unknown>;
-    expect(typeof badge.updateAvailable).toBe("boolean");
-    expect(typeof badge.canUpdate).toBe("boolean");
-    expect(typeof badge.unknown).toBe("boolean");
-    expect(["latest", "preview"]).toContain(badge.channel);
+describe("removed updater API", () => {
+  test("check, run, status, and badge endpoints are all unrouted", async () => {
+    for (const [method, path] of [
+      ["GET", "/api/update/check"],
+      ["POST", "/api/update/run"],
+      ["GET", "/api/update/status?jobId=missing"],
+      ["GET", "/api/update/badge"],
+    ] as const) {
+      const result = await call(method, path);
+      expect(result).toEqual({ status: 404, body: null, raw: "", routed: false });
+    }
   });
 
-  test("serializes scalars only — no paths, commands, or registry output", async () => {
-    const { raw } = await call("GET", "/api/update/badge");
-    expect(raw).not.toContain("npm");
-    expect(raw).not.toContain("/Users/");
-    expect(raw).not.toContain("node_modules");
+  test("management dispatch contains no updater or sidebar handler", async () => {
+    const managementApi = await Bun.file(new URL("../src/server/management-api.ts", import.meta.url)).text();
+    const configRoutes = await Bun.file(new URL("../src/server/management/config-routes.ts", import.meta.url)).text();
+    expect(managementApi).not.toContain("handleSidebarRoutes");
+    expect(configRoutes).not.toContain("/api/update/");
+    expect(configRoutes).not.toContain('import("../../update/');
+    expect(await Bun.file(new URL("../src/server/management/sidebar-routes.ts", import.meta.url)).exists()).toBe(false);
   });
 });
 
@@ -57,16 +57,4 @@ describe("route surface", () => {
     }
   });
 
-  test("an unknown method never reaches the badge reader", async () => {
-    const { status, raw } = await call("DELETE", "/api/update/badge");
-    // Whatever the dispatcher decides (405/404), it must not answer with badge data.
-    expect(status).not.toBe(200);
-    expect(raw).not.toContain("updateAvailable");
-  });
-
-  test("the badge route sits behind the cross-origin gate", async () => {
-    const blocked = await call("GET", "/api/update/badge", { origin: "https://evil.example" });
-    expect(blocked.status).toBe(403);
-    expect(blocked.raw).not.toContain("updateAvailable");
-  });
 });

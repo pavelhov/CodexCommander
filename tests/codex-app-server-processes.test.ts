@@ -157,9 +157,9 @@ describe("Codex app-server process matching (#476)", () => {
   test("rejects unrelated processes and app-server / code-mode-host only in later arguments", () => {
     expect(isCodexAppServerCommandLine("hermes-codex-bridge-mcp --port 9")).toBe(false);
     expect(isCodexAppServerCommandLine("hermes-codex-x86_64-unknown-linux-gnu app-server")).toBe(false);
-    expect(isCodexAppServerCommandLine("node ./opencodex/src/cli/index.ts start")).toBe(false);
-    expect(isCodexAppServerCommandLine("opencodex app-server")).toBe(false);
-    expect(isCodexAppServerCommandLine("/usr/bin/opencodex app-server")).toBe(false);
+    expect(isCodexAppServerCommandLine("node ./codexcommander/src/cli/index.ts start")).toBe(false);
+    expect(isCodexAppServerCommandLine("codexcommander app-server")).toBe(false);
+    expect(isCodexAppServerCommandLine("/usr/bin/codexcommander app-server")).toBe(false);
     // Broad codex-* tools without a Rust target-triple shape must stay unmatched.
     expect(isCodexAppServerCommandLine("codex-bridge app-server")).toBe(false);
     expect(isCodexAppServerCommandLine("codex-helper-tool app-server")).toBe(false);
@@ -190,11 +190,11 @@ describe("Codex app-server process matching (#476)", () => {
     expect(isWindowsCodexCandidateCommandLine(
       "C:\\Users\\a\\.codex\\bin\\codex-aarch64-pc-windows-msvc.exe app-server",
     )).toBe(true);
-    // Stay narrow: incidental "opencodex" paths must not pay GetOwner.
+    // Stay narrow: incidental "codexcommander" paths must not pay GetOwner.
     expect(isWindowsCodexCandidateCommandLine(
-      "node C:\\Users\\a\\opencodex\\src\\cli\\index.ts start",
+      "node C:\\Users\\a\\codexcommander\\src\\cli\\index.ts start",
     )).toBe(false);
-    expect(isWindowsCodexCandidateCommandLine("opencodex app-server")).toBe(false);
+    expect(isWindowsCodexCandidateCommandLine("codexcommander app-server")).toBe(false);
     expect(isWindowsCodexCandidateCommandLine("hermes-codex-bridge-mcp")).toBe(false);
     expect(isWindowsCodexCandidateCommandLine("hermes-codex-x86_64-pc-windows-msvc.exe")).toBe(false);
     expect(isWindowsCodexCandidateCommandLine("codex-bridge app-server")).toBe(false);
@@ -344,7 +344,7 @@ describe("Codex app-server process matching (#476)", () => {
     });
     expect(warned.warned).toBe(true);
     expect(errors[0]).toContain(formatStaleCodexAppServerWarning(warned.processes));
-    expect(errors[0]).toContain("ocx sync --restart-codex");
+    expect(errors[0]).toContain("ccx sync --restart-codex");
 
     const restarted = afterCatalogWriteHandleAppServers({
       restart: true,
@@ -364,7 +364,7 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
     "utf8",
   );
 
-  test("ocx sync only handles app-servers after a catalog/cache write and forwards --restart-codex", () => {
+  test("ccx sync only handles app-servers after a catalog/cache write and forwards --restart-codex", () => {
     const syncCase = cliSource.slice(cliSource.indexOf('case "sync":'), cliSource.indexOf('case "v2":'));
     expect(syncCase).toContain('args.slice(1).includes("--restart-codex")');
     expect(syncCase).toContain("synced.catalogWritten || synced.cacheSynced");
@@ -378,7 +378,7 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
     expect(syncCase.replace(gatedBlock, "")).not.toContain("afterCatalogWriteHandleAppServers");
   });
 
-  test("ocx sync-cache only handles app-servers after a successful models_cache write", () => {
+  test("ccx sync-cache only handles app-servers after a successful models_cache write", () => {
     const syncCacheCase = cliSource.slice(
       cliSource.indexOf('case "sync-cache":'),
       cliSource.indexOf('case "gui":'),
@@ -402,7 +402,7 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
   test("POST /api/sync attaches the current catalog state and never enumerates processes directly", () => {
     const syncHandler = configRoutesSource.slice(
       configRoutesSource.indexOf('url.pathname === "/api/sync"'),
-      configRoutesSource.indexOf('url.pathname === "/api/update/check"'),
+      configRoutesSource.indexOf('url.pathname === "/api/sidecar-settings"'),
     );
     expect(syncHandler).toContain("attachStaleAppServerHint(result)");
     expect(syncHandler).toContain("deps.resetCodexAppServerCatalogStateCache ?? resetCodexAppServerCatalogStateCache");
@@ -411,7 +411,7 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
       .toBeLessThan(syncHandler.indexOf("deps.collectCodexAppServerCatalogState"));
     expect(syncHandler).not.toContain("listCodexAppServerProcesses");
     expect(syncHandler).not.toContain("afterCatalogWriteHandleAppServers");
-    expect(STALE_CODEX_APP_SERVER_HINT).toContain("ocx sync --restart-codex");
+    expect(STALE_CODEX_APP_SERVER_HINT).toContain("ccx sync --restart-codex");
   });
 
   test("no-write sync responses omit staleAppServerHint", () => {

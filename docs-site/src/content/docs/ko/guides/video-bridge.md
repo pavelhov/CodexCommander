@@ -5,13 +5,13 @@ description: 비OpenAI 모델을 통해 Grok Imagine Video로 영상을 생성�
 
 ## 개요
 
-Video Bridge는 opencodex가 라우팅한 OpenAI가 아닌 모델로 xAI의 Grok Imagine Video 생성을 사용할 수 있게 합니다. 활성화하면 대화에 합성 `video_gen` 도구가 주입됩니다. 모델은 이를 일반 함수 도구처럼 호출하고, opencodex는 이 호출을 가로채 xAI에 영상 생성 작업을 제출한 뒤 완료될 때까지 폴링하고 결과를 내려받습니다.
+Video Bridge는 CodexCommander가 라우팅한 OpenAI가 아닌 모델로 xAI의 Grok Imagine Video 생성을 사용할 수 있게 합니다. 활성화하면 대화에 합성 `video_gen` 도구가 주입됩니다. 모델은 이를 일반 함수 도구처럼 호출하고, CodexCommander는 이 호출을 가로채 xAI에 영상 생성 작업을 제출한 뒤 완료될 때까지 폴링하고 결과를 내려받습니다.
 
 ## 사전 조건
 
-- API 키가 있는 `xai` provider entry (`ocx login xai`만으로는 충분하지 않습니다. 비디오 브리지는 OAuth가 아니라 키 인증이 필요합니다)
+- API 키가 있는 `xai` provider entry (`ccx login xai`만으로는 충분하지 않습니다. 비디오 브리지는 OAuth가 아니라 키 인증이 필요합니다)
 - 라우팅 대상 provider로 비OpenAI 모델 사용 예시: Anthropic Claude, Google Gemini
-- 비OpenAI provider를 거치도록 opencodex 설정
+- 비OpenAI provider를 거치도록 CodexCommander 설정
 
 > **⚠ Provider key required:** 비디오 브리지는 `xai` provider가
 > API key auth를 사용할 때만 활성화됩니다. 설정에 다음을 추가하십시오:
@@ -24,7 +24,7 @@ Video Bridge는 opencodex가 라우팅한 OpenAI가 아닌 모델로 xAI의 Grok
 > }
 > ```
 >
-> `ocx login xai`(OAuth)로 연결했다면 provider는 계속 `authMode: "oauth"`
+> `ccx login xai`(OAuth)로 연결했다면 provider는 계속 `authMode: "oauth"`
 > 상태이며, 브리지는 아무 경고 없이 활성화되지 않습니다. 환경 변수로 `XAI_API_KEY`를
 > 설정하거나, 위처럼 키를 직접 넣으십시오.
 
@@ -53,9 +53,9 @@ Video Bridge는 opencodex가 라우팅한 OpenAI가 아닌 모델로 xAI의 Grok
 
 ## 동작 방식
 
-1. opencodex는 `videoBridgeEnabled: true`가 켜진 비OpenAI 라우팅 모델을 감지합니다.
+1. CodexCommander는 `videoBridgeEnabled: true`가 켜진 비OpenAI 라우팅 모델을 감지합니다.
 2. 합성 `video_gen` 함수 도구가 대화에 주입됩니다.
-3. 모델이 `video_gen`을 호출하면, opencodex는 xAI의 `/videos/generations`로 작업을 제출합니다.
+3. 모델이 `video_gen`을 호출하면, CodexCommander는 xAI의 `/videos/generations`로 작업을 제출합니다.
 4. 브리지는 5-15초마다 작업 상태를 폴링하고, 스트림을 살리기 위해 heartbeat 메시지를 보냅니다.
 5. 비디오가 준비되면 artifacts 디렉터리로 내려받습니다.
 6. 로컬 파일 경로가 도구 결과로 모델에 반환됩니다.

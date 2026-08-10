@@ -5,6 +5,7 @@
  * This is an unofficial bridge — GitHub may tighten or revoke access. See registry note.
  */
 import type { OAuthController, OAuthCredentials } from "./types";
+import { PACKAGE_SLUG } from "../identity";
 
 /** VS Code's public GitHub OAuth app — required for copilot_internal/v2/token to succeed. */
 export const GITHUB_COPILOT_OAUTH_CLIENT_ID = "Iv1.b507a08c87ecfe98";
@@ -26,12 +27,12 @@ const MIN_POLL_MS = 1000;
 const TERMINAL_OAUTH_ERROR_CODES = new Set(["invalid_grant", "access_denied", "expired_token"]);
 const IDENTITY_RETRY_DELAY_MS = 500;
 
-/** Honest OpenCodex client fingerprint; VS Code-shaped values only if API requires them later. */
+/** Honest CodexCommander client fingerprint; VS Code-shaped values only if API requires them later. */
 export const GITHUB_COPILOT_EDITOR_HEADERS: Readonly<Record<string, string>> = {
-  "Editor-Version": "opencodex/0.1.0",
-  "Editor-Plugin-Version": "opencodex/0.1.0",
+  "Editor-Version": `${PACKAGE_SLUG}/0.1.0`,
+  "Editor-Plugin-Version": `${PACKAGE_SLUG}/0.1.0`,
   "Copilot-Integration-Id": "vscode-chat",
-  "User-Agent": "opencodex",
+  "User-Agent": PACKAGE_SLUG,
   Accept: "application/json",
 };
 
@@ -154,7 +155,7 @@ async function requestDeviceAuthorization(signal?: AbortSignal): Promise<{
     headers: {
       Accept: "application/json",
       "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": "opencodex",
+      "User-Agent": PACKAGE_SLUG,
     },
     body: new URLSearchParams({
       client_id: GITHUB_COPILOT_OAUTH_CLIENT_ID,
@@ -199,7 +200,7 @@ async function pollGithubDeviceToken(
       headers: {
         Accept: "application/json",
         "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": "opencodex",
+        "User-Agent": PACKAGE_SLUG,
       },
       body: new URLSearchParams({
         client_id: GITHUB_COPILOT_OAUTH_CLIENT_ID,
@@ -250,7 +251,7 @@ async function refreshGithubAccessToken(refreshToken: string, signal?: AbortSign
     headers: {
       Accept: "application/json",
       "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": "opencodex",
+      "User-Agent": PACKAGE_SLUG,
     },
     body: new URLSearchParams({
       client_id: GITHUB_COPILOT_OAUTH_CLIENT_ID,
@@ -320,7 +321,7 @@ async function fetchGithubIdentityOnce(githubAccessToken: string, signal?: Abort
     headers: {
       Accept: "application/vnd.github+json",
       Authorization: `Bearer ${githubAccessToken}`,
-      "User-Agent": "opencodex",
+      "User-Agent": PACKAGE_SLUG,
       "X-GitHub-Api-Version": "2022-11-28",
     },
     signal,

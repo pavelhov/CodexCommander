@@ -1,10 +1,9 @@
 import * as readline from "node:readline";
-import { constants as fsConstants, copyFileSync, existsSync, readFileSync, unlinkSync } from "node:fs";
 import { injectCodexConfig } from "../codex/inject";
-import { classifyOpenAiTierBackup, getConfigPath, getDefaultConfig, isValidProviderName, saveConfig } from "../config";
+import { getConfigPath, getDefaultConfig, isValidProviderName, saveConfig } from "../config";
 import { enrichProviderFromCatalog } from "../oauth/key-providers";
 import { deriveInitProviders } from "../providers/derive";
-import type { OcxConfig, OcxProviderConfig } from "../types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../types";
 
 function createPrompt(): { ask(question: string): Promise<string>; close(): void } {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -45,7 +44,7 @@ export interface InitProvider {
 }
 
 /**
- * The full CLI provider menu, derived from the canonical provider registry so `ocx init`,
+ * The full CLI provider menu, derived from the canonical provider registry so `ccx init`,
  * the GUI picker, key-login catalog, OAuth seeds, and metadata aliases cannot drift.
  */
 export function buildInitProviders(): InitProvider[] {
@@ -54,7 +53,7 @@ export function buildInitProviders(): InitProvider[] {
 
 const KIND_HEADING: Record<InitKind, string> = {
   forward: "ChatGPT login",
-  oauth: "Account login (OAuth — then run: ocx login <id>)",
+  oauth: "Account login (OAuth — then run: ccx login <id>)",
   key: "API key (paste a key from the provider's dashboard)",
   local: "Local servers (usually no key)",
 };
@@ -71,37 +70,10 @@ function printMenu(providers: InitProvider[]): void {
 
 const envKeyFor = (id: string) => `${id.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY`;
 
-/** Post-init cleanup of `.pre-openai-tiers-v2.bak` with rollback preservation (issue #257). */
-export function cleanupOpenAiTierBackupAfterInit(configPath = getConfigPath()): void {
-  const backup = `${configPath}.pre-openai-tiers-v2.bak`;
-  try {
-    if (!existsSync(backup)) return;
-    if (classifyOpenAiTierBackup(readFileSync(backup)) === "stale") {
-      unlinkSync(backup);
-      return;
-    }
-    // Publish the preserved snapshot with a no-replace copy (COPYFILE_EXCL) so a
-    // destination collision (frozen/rolled-back clock, pre-created file) can never
-    // silently overwrite another rollback snapshot; retry with a sequence suffix.
-    for (let attempt = 0; attempt < 16; attempt++) {
-      const preserved = `${configPath}.pre-openai-tiers-v1-rollback.${Date.now()}${attempt ? `-${attempt}` : ""}.bak`;
-      try {
-        copyFileSync(backup, preserved, fsConstants.COPYFILE_EXCL);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
-        throw error;
-      }
-      unlinkSync(backup);
-      console.warn(`⚠️  Kept your pre-migration config rollback snapshot at ${preserved}`);
-      return;
-    }
-  } catch { /* cleanup is best-effort; never block init on backup housekeeping */ }
-}
-
 export async function runInit(): Promise<void> {
   const prompt = createPrompt();
   try {
-    console.log("\n🔧 opencodex (ocx) setup\n");
+    console.log("\n🔧 CodexCommander (ccx) setup\n");
 
     const providers = buildInitProviders();
     printMenu(providers);
@@ -110,7 +82,7 @@ export async function runInit(): Promise<void> {
     const idx = parseInt(choice, 10) - 1;
 
     let providerName: string;
-    let providerConfig: OcxProviderConfig;
+    let providerConfig: CodexCommanderProviderConfig;
     let oauthHint = false;
 
     if (idx >= 0 && idx < providers.length) {
@@ -173,7 +145,7 @@ export async function runInit(): Promise<void> {
     const portStr = await prompt.ask("\nProxy port [10100]: ");
     const port = parseInt(portStr, 10) || 10100;
 
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       ...getDefaultConfig(),
       port,
       providers: { [providerName]: providerConfig },
@@ -181,15 +153,8 @@ export async function runInit(): Promise<void> {
     };
 
     saveConfig(config);
-    // Init writes a fresh config, so a stale pre-migration backup from a previous
-    // installation would make the next `ocx start` crash on a stale-backup
-    // collision (issue #257). But only a STALE backup (unparseable, or already a
-    // post-migration v2 snapshot) may be deleted; a backup that still parses as a
-    // valid pre-migration (v1) config is a user-intentional rollback point and is
-    // preserved by renaming it out of the collision path (sol review 260722).
-    cleanupOpenAiTierBackupAfterInit();
-    console.log(`\n✅ Config saved to ~/.opencodex/config.json`);
-    if (oauthHint) console.log(`🔐 Authenticate this provider with:  ocx login ${providerName}`);
+    console.log(`\n✅ Config saved to ${getConfigPath()}`);
+    if (oauthHint) console.log(`🔐 Authenticate this provider with:  ccx login ${providerName}`);
 
     const injectAnswer = await prompt.ask("Inject into Codex config.toml? [Y/n]: ");
     if (injectAnswer.trim().toLowerCase() !== "n") {
@@ -209,11 +174,11 @@ export async function runInit(): Promise<void> {
       }
     }
 
-    console.log(`\n🚀 Setup complete! Run 'ocx start' to start the proxy.`);
+    console.log(`\n🚀 Setup complete! Run 'ccx start' to start the proxy.`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (/stdin (closed|reached EOF)/i.test(message)) {
-      console.error(`\n❌ ${message}. Re-run \`ocx init\` in an interactive terminal.`);
+      console.error(`\n❌ ${message}. Re-run \`ccx init\` in an interactive terminal.`);
       process.exitCode = 1;
       return;
     }

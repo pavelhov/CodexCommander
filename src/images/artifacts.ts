@@ -5,6 +5,7 @@ import { getConfigDir } from "../config";
 import { assessUrlDestination, resolvePublicAddresses } from "../lib/destination-policy";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { pinnedHttpGet, type PinnedAddress } from "../lib/pinned-http";
+import { ARTIFACT_HTTP_PREFIX } from "../identity";
 
 export type { PinnedAddress } from "../lib/pinned-http";
 
@@ -28,7 +29,7 @@ export const MAX_ENCODED_BYTES_PER_IMAGE = Math.ceil(MAX_DECODED_BYTES_PER_IMAGE
 export const DEFAULT_ARTIFACT_KEEP_COUNT = 200;
 
 /** Opaque artifact HTTP path prefix (data-plane, API-auth gated). */
-export const ARTIFACT_HTTP_PREFIX = "/v1/opencodex/artifacts";
+export { ARTIFACT_HTTP_PREFIX };
 
 const ARTIFACT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(png|jpe?g|webp|gif)$/i;
 
@@ -232,7 +233,7 @@ export function guessExtFromMagic(bytes: Uint8Array): string {
   return ext;
 }
 
-/** Prune `OPENCODEX_HOME/artifacts` after a full image batch has been written. */
+/** Prune `CODEXCOMMANDER_HOME/artifacts` after a full image batch has been written. */
 export function pruneArtifacts(keepCount?: number): void {
   pruneOldArtifacts(getArtifactsDir(), keepCount ?? DEFAULT_ARTIFACT_KEEP_COUNT);
 }

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { hashBelongsToPage, readPageFromHash, resolveAppHashChange, DASHBOARD_TAB_HASHES } from "../src/app-routing";
 
 /**
- * WP2 (devlog/_plan/260725_gui_view_consolidation/020_nav_and_dashboard_tabs.md):
+ * WP2 (implementation contract):
  * Dashboard section tabs live in the hash like Logs, so refresh / bookmark /
  * back-forward keep the choice. Overview is the bare "#dashboard".
  */
@@ -35,8 +35,7 @@ test("unknown Dashboard suffixes are still normalized away", () => {
 
 test("registering Dashboard tabs does not disturb the Logs or Providers contracts", () => {
   expect(hashBelongsToPage("logs/debug", "logs")).toBe(true);
-  // WP5: the dual-layout hash is no longer a route — it only exists to be redirected.
-  expect(hashBelongsToPage("providers/workspace", "providers")).toBe(false);
+  expect(hashBelongsToPage("providers/example", "providers")).toBe(true);
   // Cross-page suffixes stay invalid.
   expect(hashBelongsToPage("dashboard/providers", "providers")).toBe(false);
   expect(hashBelongsToPage("logs/debug", "dashboard")).toBe(false);

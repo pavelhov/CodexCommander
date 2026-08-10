@@ -13,12 +13,12 @@ let testWindow: Window;
 const originalFetch = globalThis.fetch;
 
 const API_BASE = "http://localhost";
-const CACHE_KEY = `ocx.startup.page.v1:${API_BASE}`;
+const CACHE_KEY = `ccx.startup.page.v1:${API_BASE}`;
 
 function atRiskHealth() {
   return {
     status: "at-risk",
-    routingKind: "opencodex-local",
+    routingKind: "codexcommander-local",
     routingInjected: true,
     localRoutingDependency: true,
     autostartEnabled: false,
@@ -35,9 +35,9 @@ function atRiskHealth() {
     shimHealthy: false,
     shimCoverage: "none",
     platform: "darwin",
-    recommendedCommand: "ocx service install",
+    recommendedCommand: "ccx service install",
     diagnosticStale: false,
-    commands: { installService: "ocx service install", repairService: "ocx service repair", installShim: "ocx shim install", restoreNative: "ocx restore" },
+    commands: { installService: "ccx service install", repairService: "ccx service repair", installShim: "ccx shim install", restoreNative: "ccx restore" },
   };
 }
 

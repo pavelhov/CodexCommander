@@ -5,9 +5,8 @@ import { isAbsolute, join, posix, win32 } from "node:path";
 import { Database } from "bun:sqlite";
 
 const DEFAULT_EXPIRES_MS = 3600_000;
-const KIRO_CLI_RECOVERY_SUFFIX = ".opencodex-recovery";
-const KIRO_CLI_RECOVERY_HEADER_V1 = Buffer.from("opencodex-kiro-session-v1\n", "utf8");
-const KIRO_CLI_RECOVERY_HEADER = Buffer.from("opencodex-kiro-session-v2\n", "utf8");
+const KIRO_CLI_RECOVERY_SUFFIX = ".codexcommander-recovery";
+const KIRO_CLI_RECOVERY_HEADER = Buffer.from("codexcommander-kiro-session-v3\n", "utf8");
 const KIRO_CLI_RECOVERY_PROCESS_INSTANCE = randomUUID();
 const KIRO_CLI_RECOVERY_PROCESS_INSTANCE_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 const SQLITE_DATABASE_HEADER = Buffer.from("SQLite format 3\0", "binary");
@@ -97,7 +96,7 @@ function parseExpires(value: unknown, present: boolean, hasRefreshToken: boolean
   }
   if (present) {
     console.warn(
-      `[ocx:kiro:credentials] credential expiry is present but unparseable; ${
+      `[codexcommander:kiro:credentials] credential expiry is present but unparseable; ${
         hasRefreshToken ? "treating credential as expired" : "using the default TTL because no refresh token is available"
       }`,
     );
@@ -592,38 +591,31 @@ export function discardKiroCliSessionRecovery(snapshot: KiroCliSessionSnapshot):
 
 interface ParsedKiroCliSessionRecovery {
   ownerPid: number;
-  ownerProcessInstance?: string;
+  ownerProcessInstance: string;
   database: Buffer;
 }
 
 function parseKiroCliSessionRecovery(payload: Buffer): ParsedKiroCliSessionRecovery | null {
-  const isV2 = payload.subarray(0, KIRO_CLI_RECOVERY_HEADER.length).equals(KIRO_CLI_RECOVERY_HEADER);
-  const isV1 = payload.subarray(0, KIRO_CLI_RECOVERY_HEADER_V1.length).equals(KIRO_CLI_RECOVERY_HEADER_V1);
-  if (!isV2 && !isV1) return null;
-  const headerLength = isV2 ? KIRO_CLI_RECOVERY_HEADER.length : KIRO_CLI_RECOVERY_HEADER_V1.length;
-  const ownerEnd = payload.indexOf(0x0a, headerLength);
-  if (ownerEnd <= headerLength) return null;
-  const ownerPid = Number(payload.subarray(headerLength, ownerEnd).toString("utf8"));
-  let databaseStart = ownerEnd + 1;
-  let ownerProcessInstance: string | undefined;
-  if (isV2) {
-    const instanceEnd = payload.indexOf(0x0a, databaseStart);
-    if (instanceEnd <= databaseStart) return null;
-    ownerProcessInstance = payload.subarray(databaseStart, instanceEnd).toString("utf8");
-    if (!KIRO_CLI_RECOVERY_PROCESS_INSTANCE_PATTERN.test(ownerProcessInstance)) return null;
-    databaseStart = instanceEnd + 1;
-  }
-  const database = payload.subarray(databaseStart);
+  if (!payload.subarray(0, KIRO_CLI_RECOVERY_HEADER.length).equals(KIRO_CLI_RECOVERY_HEADER)) return null;
+  const ownerEnd = payload.indexOf(0x0a, KIRO_CLI_RECOVERY_HEADER.length);
+  if (ownerEnd <= KIRO_CLI_RECOVERY_HEADER.length) return null;
+  const ownerPid = Number(payload.subarray(KIRO_CLI_RECOVERY_HEADER.length, ownerEnd).toString("utf8"));
+  const instanceStart = ownerEnd + 1;
+  const instanceEnd = payload.indexOf(0x0a, instanceStart);
+  if (instanceEnd <= instanceStart) return null;
+  const ownerProcessInstance = payload.subarray(instanceStart, instanceEnd).toString("utf8");
+  if (!KIRO_CLI_RECOVERY_PROCESS_INSTANCE_PATTERN.test(ownerProcessInstance)) return null;
+  const database = payload.subarray(instanceEnd + 1);
   if (
     !Number.isSafeInteger(ownerPid) || ownerPid <= 0 ||
     !database.subarray(0, SQLITE_DATABASE_HEADER.length).equals(SQLITE_DATABASE_HEADER)
   ) {
     return null;
   }
-  return { ownerPid, ...(ownerProcessInstance ? { ownerProcessInstance } : {}), database };
+  return { ownerPid, ownerProcessInstance, database };
 }
 
-function isKiroRecoveryOwnerAlive(ownerPid: number, ownerProcessInstance?: string): boolean {
+function isKiroRecoveryOwnerAlive(ownerPid: number, ownerProcessInstance: string): boolean {
   // A restarted supervisor may reuse the exact same PID (commonly PID 1). Only this process
   // instance's nonce proves that a same-PID recovery transaction is still live.
   if (ownerPid === process.pid) return ownerProcessInstance === KIRO_CLI_RECOVERY_PROCESS_INSTANCE;
@@ -639,8 +631,8 @@ function isKiroRecoveryOwnerAlive(ownerPid: number, ownerProcessInstance?: strin
 /** Restore a previously captured CLI database after every kiro-cli child process has exited. */
 export function restoreKiroCliSession(snapshot: KiroCliSessionSnapshot): void {
   const nonce = `${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
-  const staged = `${snapshot.path}.ocx-restore.${nonce}.tmp`;
-  const displacedBase = `${snapshot.path}.ocx-restore.${nonce}.new`;
+  const staged = `${snapshot.path}.ccx-restore.${nonce}.tmp`;
+  const displacedBase = `${snapshot.path}.ccx-restore.${nonce}.new`;
   const displaced: Array<{ current: string; backup: string }> = [];
   let published = false;
   try {

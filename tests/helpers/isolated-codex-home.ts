@@ -7,10 +7,10 @@ export interface IsolatedCodexHome {
   restore(): void;
 }
 
-export function installIsolatedCodexHome(prefix = "ocx-codex-home-"): IsolatedCodexHome {
+export function installIsolatedCodexHome(prefix = "ccx-codex-home-"): IsolatedCodexHome {
   const previousCodexHome = process.env.CODEX_HOME;
   const path = mkdtempSync(join(tmpdir(), prefix));
-  writeFileSync(join(path, "config.toml"), 'model_catalog_json = "opencodex-catalog.json"\n', "utf8");
+  writeFileSync(join(path, "config.toml"), 'model_catalog_json = "codexcommander-catalog.json"\n', "utf8");
   process.env.CODEX_HOME = path;
 
   return {

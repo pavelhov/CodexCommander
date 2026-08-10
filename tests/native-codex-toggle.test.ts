@@ -2,7 +2,7 @@
  * The Codex switch route.
  *
  * The thing worth proving here is not that a boolean lands in a file. It is that
- * turning Codex OFF is not `ocx stop`: the proxy keeps serving, `/healthz` keeps
+ * turning Codex OFF is not `ccx stop`: the proxy keeps serving, `/healthz` keeps
  * answering, other clients keep routing, and only Codex goes back to its own
  * path. A per-client switch that took the whole proxy down would be a kill
  * switch with a misleading label.
@@ -18,34 +18,52 @@ import { join } from "node:path";
 
 import { handleManagementAPI } from "../src/server/management-api";
 import type { ManagementApiDeps } from "../src/server/management/context";
-import type { OcxConfig } from "../src/types";
+import type { CodexSyncResult } from "../src/codex/sync";
+import type { CodexCommanderConfig } from "../src/types";
 
 let fixtureRoot = "";
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 const cleanup: string[] = [];
 
-function baseConfig(): OcxConfig {
+function baseConfig(): CodexCommanderConfig {
   return {
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
         authMode: "forward",
       },
-    } as OcxConfig["providers"],
+    } as CodexCommanderConfig["providers"],
     defaultProvider: "openai",
+  };
+}
+
+function currentSyncResult(): CodexSyncResult {
+  return {
+    status: "applied",
+    ok: true,
+    added: 1,
+    catalogPath: join(fixtureRoot, "models.json"),
+    catalogExists: true,
+    catalogWritten: true,
+    cacheSynced: true,
+    catalogQuality: "live",
+    rehydrated: 0,
+    message: "Codex integration is current",
   };
 }
 
 function testDeps(overrides: Partial<ManagementApiDeps> = {}): ManagementApiDeps {
   return {
     fetchAllModels: async () => [] as never,
+    syncModelsToCodex: async () => currentSyncResult(),
     ...overrides,
   } as ManagementApiDeps;
 }
 
-function dispatch(config: OcxConfig, path: string, init?: RequestInit, deps: ManagementApiDeps = testDeps()) {
+function dispatch(config: CodexCommanderConfig, path: string, init?: RequestInit, deps: ManagementApiDeps = testDeps()) {
   const url = new URL(`http://127.0.0.1:10100${path}`);
   return handleManagementAPI(
     new Request(url, { ...init, headers: { Host: url.host, ...(init?.headers ?? {}) } }),
@@ -55,7 +73,7 @@ function dispatch(config: OcxConfig, path: string, init?: RequestInit, deps: Man
   );
 }
 
-async function put(config: OcxConfig, body: unknown, deps?: ManagementApiDeps) {
+async function put(config: CodexCommanderConfig, body: unknown, deps?: ManagementApiDeps) {
   const res = await dispatch(config, "/api/native-integrations/codex", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -70,22 +88,24 @@ function persistedCodexIntent(): unknown {
 }
 
 beforeEach(() => {
-  previousOpencodexHome = process.env.OPENCODEX_HOME;
-  fixtureRoot = mkdtempSync(join(tmpdir(), "ocx-codex-toggle-"));
+  previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+  fixtureRoot = mkdtempSync(join(tmpdir(), "ccx-codex-toggle-"));
   cleanup.push(fixtureRoot);
-  process.env.OPENCODEX_HOME = fixtureRoot;
+  process.env.CODEXCOMMANDER_HOME = fixtureRoot;
   writeFileSync(join(fixtureRoot, "config.json"), JSON.stringify(baseConfig(), null, 2));
   writeFileSync(join(fixtureRoot, "service-state.json"), JSON.stringify({
-    version: 2,
+    version: 3,
     codexHome: process.env.CODEX_HOME?.trim() || join(homedir(), ".codex"),
-    opencodexHome: fixtureRoot,
+    codexCommanderHome: fixtureRoot,
+    bunPath: process.execPath,
+    cliPath: join(import.meta.dir, "../src/cli/index.ts"),
     backend: "scheduler",
-  }));
+  }), { mode: 0o600 });
 });
 
 afterEach(() => {
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   while (cleanup.length) rmSync(cleanup.pop()!, { recursive: true, force: true });
 });
 
@@ -111,10 +131,9 @@ describe("turning Codex off", () => {
     expect(result.body.artifacts).toMatchObject({
       config: { state: expect.any(String) },
       catalog: { state: expect.any(String) },
-      history: { state: expect.any(String) },
     });
     // The decision is on disk. Without this, an OFF lasts until the next
-    // `ocx start` re-syncs over it, which is the defect this phase exists for.
+    // `ccx start` re-syncs over it, which is the defect this phase exists for.
     expect(persistedCodexIntent()).toBe(false);
   });
 
@@ -157,6 +176,12 @@ describe("turning Codex back on", () => {
 
     const result = await put(baseConfig(), { enabled: true });
     expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      ok: true,
+      clientId: "codex",
+      state: "current",
+      desiredEnabled: true,
+    });
     // Absence is ON, so an untouched config and a re-enabled one are identical.
     expect(persistedCodexIntent()).toBeUndefined();
   });

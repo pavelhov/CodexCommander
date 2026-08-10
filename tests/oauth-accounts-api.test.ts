@@ -5,48 +5,52 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 let testDir = "";
 let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
-function baseConfig(): OcxConfig {
+function baseConfig(): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     hostname: "127.0.0.1",
     defaultProvider: "anthropic",
     providers: {
       anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 function writeAccounts(): void {
   writeFileSync(join(testDir, "auth.json"), JSON.stringify({
-    anthropic: {
-      activeAccountId: "aaaa1111",
-      accounts: [
-        { id: "aaaa1111", credential: { access: "t1", refresh: "r1", expires: 9999999999999, email: "first@example.com", accountId: "acct-1" } },
-        { id: "bbbb2222", credential: { access: "t2", refresh: "r2", expires: 9999999999999, email: "second@example.com", accountId: "acct-2" } },
-      ],
+    schemaVersion: 1,
+    providers: {
+      anthropic: {
+        activeAccountId: "aaaa1111",
+        accounts: [
+          { id: "aaaa1111", credential: { access: "t1", refresh: "r1", expires: 9999999999999, email: "first@example.com", accountId: "acct-1" } },
+          { id: "bbbb2222", credential: { access: "t2", refresh: "r2", expires: 9999999999999, email: "second@example.com", accountId: "acct-2" } },
+        ],
+      },
     },
   }), { mode: 0o600 });
 }
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-oauth-accounts-codex-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-oauth-accounts-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-oauth-accounts-codex-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-oauth-accounts-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   saveConfig(baseConfig());
   writeAccounts();
 });
 
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
@@ -105,21 +109,24 @@ describe("multiauth accounts API", () => {
 
   test("GET projects needsReauth health with action and redacted summary", async () => {
     writeFileSync(join(testDir, "auth.json"), JSON.stringify({
-      anthropic: {
-        activeAccountId: "aaaa1111",
-        accounts: [
-          {
-            id: "aaaa1111",
-            needsReauth: true,
-            credential: {
-              access: "t1",
-              refresh: "r1",
-              expires: 9999999999999,
-              email: "first@example.com",
-              accountId: "acct-1",
+      schemaVersion: 1,
+      providers: {
+        anthropic: {
+          activeAccountId: "aaaa1111",
+          accounts: [
+            {
+              id: "aaaa1111",
+              needsReauth: true,
+              credential: {
+                access: "t1",
+                refresh: "r1",
+                expires: 9999999999999,
+                email: "first@example.com",
+                accountId: "acct-1",
+              },
             },
-          },
-        ],
+          ],
+        },
       },
     }), { mode: 0o600 });
 
@@ -142,7 +149,7 @@ describe("multiauth accounts API", () => {
       expect(account.healthSummary).toMatch(/account-…/);
       expect(account.healthSummary).not.toContain("aaaa1111");
       expect(account.healthSummary).not.toContain("first@example.com");
-      expect(account.healthAction).toContain("ocx login anthropic");
+      expect(account.healthAction).toContain("ccx login anthropic");
     } finally {
       await server.stop(true);
     }

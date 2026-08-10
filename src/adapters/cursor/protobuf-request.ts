@@ -1,7 +1,7 @@
 import { create, fromBinary, toBinary, toJson } from "@bufbuild/protobuf";
 import { fromJson, type JsonValue } from "@bufbuild/protobuf";
 import { ValueSchema } from "@bufbuild/protobuf/wkt";
-import type { OcxAssistantContentPart, OcxMessage, OcxToolResultMessage } from "../../types";
+import type { CodexCommanderAssistantContentPart, CodexCommanderMessage, CodexCommanderToolResultMessage } from "../../types";
 import { namespacedToolName } from "../../types";
 import type { CursorRunRequest } from "./types";
 import { isCursorExternalWireModel } from "./discovery";
@@ -49,7 +49,7 @@ import {
   buildCursorToolDefinitions,
   cursorRequestHasShellAlias,
   CURSOR_SHELL_ALIAS_SYSTEM_NOTE,
-  OCX_RESPONSES_TOOL_PROVIDER,
+  CCX_RESPONSES_TOOL_PROVIDER,
 } from "./tool-definitions";
 
 const encoder = new TextEncoder();
@@ -159,7 +159,7 @@ function systemPromptBlobs(request: CursorRunRequest): RootBlobCandidate[] {
 }
 
 function assistantRootText(
-  message: Extract<OcxMessage, { role: "assistant" }>,
+  message: Extract<CodexCommanderMessage, { role: "assistant" }>,
   includeThinking: boolean,
 ): string {
   if (typeof message.content === "string") return message.content;
@@ -311,7 +311,7 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
   };
 }
 
-function contentText(message: OcxMessage): string {
+function contentText(message: CodexCommanderMessage): string {
   if (message.role === "toolResult") return toolResultToText(message);
   if (typeof message.content === "string") return message.content;
   return message.content
@@ -325,14 +325,14 @@ function contentText(message: OcxMessage): string {
     .join("\n");
 }
 
-function contentToText(content: OcxToolResultMessage["content"]): string {
+function contentToText(content: CodexCommanderToolResultMessage["content"]): string {
   if (typeof content === "string") return content;
   return content
     .map(part => part.type === "text" ? part.text : `[image input unsupported by Cursor adapter phase 3: ${part.detail ?? "auto"}]`)
     .join("\n");
 }
 
-function toolResultToText(message: OcxToolResultMessage): string {
+function toolResultToText(message: CodexCommanderToolResultMessage): string {
   return [
     "[tool_result]",
     `call_id: ${message.toolCallId}`,
@@ -352,9 +352,9 @@ function argBytes(value: unknown): Uint8Array {
 }
 
 function toolCallStep(
-  part: Extract<OcxAssistantContentPart, { type: "toolCall" }>,
+  part: Extract<CodexCommanderAssistantContentPart, { type: "toolCall" }>,
   requestScope: CursorBlobRequestScopeToken,
-  result?: OcxToolResultMessage,
+  result?: CodexCommanderToolResultMessage,
 ): Uint8Array {
   const args: Record<string, Uint8Array> = {};
   for (const [key, value] of Object.entries(part.arguments ?? {})) args[key] = argBytes(value);
@@ -370,7 +370,7 @@ function toolCallStep(
               name: toolName,
               toolName,
               toolCallId: part.id,
-              providerIdentifier: OCX_RESPONSES_TOOL_PROVIDER,
+              providerIdentifier: CCX_RESPONSES_TOOL_PROVIDER,
               args,
             }),
             ...(result ? { result: toolResultPart(result) } : {}),
@@ -381,7 +381,7 @@ function toolCallStep(
   })), requestScope);
 }
 
-function toolResultPart(message: OcxToolResultMessage) {
+function toolResultPart(message: CodexCommanderToolResultMessage) {
   return create(McpToolResultSchema, {
     result: {
       case: "success",
@@ -395,7 +395,7 @@ function toolResultPart(message: OcxToolResultMessage) {
   });
 }
 
-function assistantStep(part: OcxAssistantContentPart, requestScope: CursorBlobRequestScopeToken): Uint8Array | undefined {
+function assistantStep(part: CodexCommanderAssistantContentPart, requestScope: CursorBlobRequestScopeToken): Uint8Array | undefined {
   if (part.type === "toolCall") return toolCallStep(part, requestScope);
   if (part.type === "thinking") {
     return storeCursorBlob(toBinary(ConversationStepSchema, create(ConversationStepSchema, {
@@ -414,7 +414,7 @@ function assistantStep(part: OcxAssistantContentPart, requestScope: CursorBlobRe
   })), requestScope);
 }
 
-function lastActionIndex(messages: readonly OcxMessage[] | undefined): number {
+function lastActionIndex(messages: readonly CodexCommanderMessage[] | undefined): number {
   if (!messages) return -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     const role = messages[i]?.role;
@@ -437,7 +437,7 @@ function conversationTurns(
   const start = externalModel ? Math.max(0, historyMessageStart) : 0;
   const turns: Uint8Array[] = [];
   let current: { userMessage: Uint8Array; steps: Uint8Array[] } | undefined;
-  const pendingToolCalls = new Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>();
+  const pendingToolCalls = new Map<string, Extract<CodexCommanderAssistantContentPart, { type: "toolCall" }>>();
   const flush = () => {
     if (!current) return;
     for (const part of pendingToolCalls.values()) current.steps.push(toolCallStep(part, requestScope));
@@ -669,7 +669,7 @@ function buildPreparedCursorRunRequest(
     // model actually calls the injected tool on gpt-5.6-luna and claude-4.5-sonnet). Phase 42 tried
     // this but assigned the field with the wrong shape and crashed Cursor's binary parser ("illegal
     // tag"); the correct `McpTools` wrapper is wire-compatible (verified — no parse crash on either
-    // model family). See devlog/260711_cursor_browser_bridge/004.
+    // model family). See implementation contract
     //
     // Use the SAME `cursorToolsForActivePrompt`-filtered visible set that RequestContext.tools and
     // the event-state `clientToolNames` use (live-transport.ts). Advertising the raw `request.tools`

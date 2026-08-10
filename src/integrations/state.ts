@@ -6,10 +6,10 @@
  * be reported as ordinary drift. Getting that wrong would let `disable` delete
  * a user's own edits.
  *
- * Design of record: devlog/_fin/260802_client_toggle_api/021 §3.
+ * Design contract.
  */
 import { ClientPathError, EXPORT_CLIENTS, opencodeProxyBaseUrl, type ExportModel, type ManagedContribution } from "../clients/config-export";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import { PARSE_FAILED, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
 import { SNAPSHOT_RETENTION } from "./journal";
 import { canonicalContribution, fingerprint, type OwnershipRecord } from "./ownership";
@@ -128,7 +128,9 @@ export function classifyIntegration(input: {
   if (blockedContainerPath(input.parsed, input.contribution)) {
     return { state: "unsafe", reason: "blocked-container" };
   }
-  if (!hasOurFragments(input.parsed, input.contribution)) return { state: "absent" };
+  if (!hasOurFragments(input.parsed, input.contribution)) {
+    return { state: "absent" };
+  }
   if (!input.record) return { state: "conflict", reason: "unowned-key" };
   /*
    * A record proves ownership of ONE file. Change HOME, XDG_CONFIG_HOME,
@@ -155,7 +157,7 @@ export function classifyIntegration(input: {
 export interface IntegrationStateInput {
   clientId: IntegrationClientId;
   models: readonly ExportModel[];
-  config: OcxConfig;
+  config: CodexCommanderConfig;
   port: number;
   env?: NodeJS.ProcessEnv;
   home?: string;
@@ -166,12 +168,12 @@ export interface IntegrationStateInput {
 
 export function exportContextOf(input: {
   models: readonly ExportModel[];
-  config: OcxConfig;
+  config: CodexCommanderConfig;
   port: number;
-}): { baseUrl: string; models: readonly ExportModel[]; config: OcxConfig } {
+}): { baseUrl: string; models: readonly ExportModel[]; config: CodexCommanderConfig } {
   return {
     /*
-     * Composed through the SAME helper `ocx export` uses. Interpolating the
+     * Composed through the SAME helper `ccx export` uses. Interpolating the
      * hostname by hand looked equivalent and was not: `::1` produced
      * `http://::1:10100/v1` and `::` produced `http://:::10100/v1`, neither of
      * which is a URL, and a `0.0.0.0` bind wrote a wildcard address no client

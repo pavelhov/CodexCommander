@@ -183,7 +183,7 @@ public final class PopoverViewController: NSViewController {
         styleFooterButton(quitMenuBarButton, title: "Quit Menu Bar", symbol: "xmark.circle")
         styleFooterButton(
             stopAndQuitButton,
-            title: "Stop OpenCodex and Quit…",
+            title: "Stop CodexCommander and Quit…",
             symbol: "stop.circle"
         )
         stopAndQuitButton.contentTintColor = Theme.red
@@ -204,13 +204,13 @@ public final class PopoverViewController: NSViewController {
         dashboardButton.setAccessibilityLabel("Open dashboard")
         logsButton.setAccessibilityLabel("Open logs")
         refreshButton.setAccessibilityLabel("Refresh")
-        lifecycleButton.setAccessibilityLabel("Start OpenCodex proxy")
-        restartButton.setAccessibilityLabel("Restart OpenCodex proxy")
+        lifecycleButton.setAccessibilityLabel("Start CodexCommander proxy")
+        restartButton.setAccessibilityLabel("Restart CodexCommander proxy")
         quitMenuBarButton.setAccessibilityLabel(
-            "Quit the OpenCodex menu bar app and leave the proxy running"
+            "Quit the CodexCommander menu bar app and leave the proxy running"
         )
         stopAndQuitButton.setAccessibilityLabel(
-            "Stop the OpenCodex proxy and quit the menu bar app"
+            "Stop the CodexCommander proxy and quit the menu bar app"
         )
 
         commandField.font = Theme.numericSmall
@@ -320,7 +320,7 @@ public final class PopoverViewController: NSViewController {
             guidance = "Start it again with:"
             command = value
         case .openDashboard:
-            guidance = "OpenCodex management authentication is unavailable."
+            guidance = "CodexCommander management authentication is unavailable."
         case .retry:
             guidance = snapshot.dataAge.map { "Showing data from \(Format.age($0)). Retrying automatically." }
                 ?? "Retrying automatically."
@@ -347,7 +347,7 @@ public final class PopoverViewController: NSViewController {
             accessibilityDescription: lifecycleButton.title
         )
         lifecycleButton.setAccessibilityLabel(
-            stopIntent ? "Stop OpenCodex proxy" : "Start OpenCodex proxy"
+            stopIntent ? "Stop CodexCommander proxy" : "Start CodexCommander proxy"
         )
         lifecycleButton.isEnabled = lifecycleControlsAllowed && lifecycleActionable(snapshot.state)
         lifecycleButton.alphaValue = lifecycleButton.isEnabled ? 1 : 0.45

@@ -16,10 +16,8 @@ import {
   applyProxyEnv,
   armClaudeCodeBaseline,
   loadConfig,
-  saveConfig,
   websocketsEnabled,
 } from "../config";
-import { reconcileOAuthProviders } from "../oauth";
 import { withCatalogWriteSerialization } from "../codex/catalog-write-serialization";
 import { invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
 import { getCodexHome } from "../codex/paths";
@@ -45,8 +43,6 @@ import {
 import { setStorageCleanupPolicyLiveSink } from "../storage/policy";
 import { setStorageCleanupPolicyJobLiveApply } from "../storage/policy-job";
 import { scheduleStorageCleanupStartupRun, startStorageCleanupScheduler } from "../storage/policy-scheduler";
-import { runOpenAiTierStartupMigration } from "../providers/openai-tier-startup";
-import { runAlibabaRegionStartupMigration } from "../providers/alibaba-region-startup";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
 import type { StorageCleanupPolicy } from "../types";
@@ -159,7 +155,6 @@ import { handleClaudeCountTokens, handleClaudeMessages } from "./claude-messages
 import { handleChatCompletions } from "./chat-completions";
 import { anthropicErrorResponse } from "../claude/outbound";
 import { buildDesktop3pRegistry } from "../claude/desktop-3p";
-import { runClaudeAuthModeMigration } from "../claude/auth-mode-migration";
 import {
   bindNativeMainStartupLifecycle,
   releaseNativeMainStartupLifecycle,
@@ -172,6 +167,14 @@ import { handleLive, logLiveSidebandFrame, parseLiveSidebandTarget, resolveLiveS
 import { handleSearch } from "./search";
 import { fetchAllModels, handleManagementAPI, VERSION, type ManagementApiDeps } from "./management-api";
 import {
+  AUTH_REQUIRED_MESSAGE,
+  ARTIFACT_HTTP_PREFIX,
+  ATTESTATION_CHALLENGE_HEADER,
+  ATTESTATION_PROOF_HEADER,
+  HEALTH_SERVICE_ID,
+  SESSION_PATH,
+} from "../identity";
+import {
   initializeManagementAuthState,
   issueGuiSession,
   managementPrincipal,
@@ -179,8 +182,6 @@ import {
   type ManagementAuthState,
 } from "./management-auth";
 import {
-  LOCAL_ATTESTATION_CHALLENGE_HEADER,
-  LOCAL_ATTESTATION_PROOF_HEADER,
   createLocalAttestationProof,
   createLocalAttestationSecret,
 } from "../lib/local-management-attestation";
@@ -367,8 +368,6 @@ export interface StartServerDeps {
   managementAuthState?: ManagementAuthState;
   /** Test-only route dependencies, forwarded only after management admission succeeds. */
   managementApi?: ManagementApiDeps;
-  /** Backward-compatible name used by the fork's companion/integration test harnesses. */
-  managementDeps?: ManagementApiDeps;
   /** Test-only native-main recovery dependencies; production constructs the normal manager. */
   nativeMainStartup?: NativeMainStartupGateDeps;
   /** Test-only seam for an upstream that cannot complete its WebSocket close handshake. */
@@ -402,7 +401,7 @@ export function consumeStartupCacheInvalidationWrite(): boolean {
 
 export function startServer(port?: number, deps: StartServerDeps = {}): Server<WsData> {
   const localAttestationSecret = deps.localAttestationSecret ?? createLocalAttestationSecret();
-  const config = runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig()));
+  const config = loadConfig();
   const eagerRuntimeWarning = darwinPlaintextEagerRuntimeWarning(
     process.platform,
     config.streamMode ?? "auto",
@@ -415,38 +414,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   const managementAuth = deps.managementAuthState ?? initializeManagementAuthState(config);
   // Arm synchronously before listen. A pending journal therefore makes __main__ unusable
   // before any request can resolve its physical credential, while health/management/Pool stay live.
-  // Refresh OAuth provider presets (models/noReasoningModels) from the registry so a proxy update
-  // adding/dropping models reaches existing configs on start — not just fresh installs.
-  reconcileOAuthProviders(config);
   reconcileLiveStateStores();
-  // Seed default featured subagent models on first run only (UNSET → defaults). A user-set list,
-  // even [], is left alone so GUI removals persist.
+  // Apply the fresh-install featured roster in memory when the optional field is absent. A user-set
+  // list, including [], remains authoritative, and startup never rewrites persisted config.
   if (config.subagentModels === undefined) {
     config.subagentModels = [...DEFAULT_SUBAGENT_MODELS];
-    saveConfig(config);
-  }
-  // authMode migration (devlog 260726_claude_auth_auto/015): before "auto" existed,
-  // choosing Subscription DELETED the key, so a pre-upgrade block with no authMode is
-  // indistinguishable from "never chose". Pin those to subscription once so an upgrade
-  // never silently moves a deliberate subscriber onto proxy.
-  if (runClaudeAuthModeMigration(config)) saveConfig(config);
-  // Sidecar model migration (KST 2026-07-10 06:00 = UTC 2026-07-09 21:00): auto-migrate the old
-  // gpt-5.4-mini default to gpt-5.6-luna for both search and vision sidecars. Only touches configs
-  // still on the old default — explicit user choices are preserved.
-  {
-    const SIDECAR_MIGRATION_CUTOFF = Date.UTC(2026, 6, 9, 21, 0); // July 9 21:00 UTC = KST July 10 06:00
-    if (Date.now() >= SIDECAR_MIGRATION_CUTOFF) {
-      let migrated = false;
-      if (config.webSearchSidecar?.model === "gpt-5.4-mini") {
-        config.webSearchSidecar = { ...config.webSearchSidecar, model: "gpt-5.6-luna" };
-        migrated = true;
-      }
-      if (config.visionSidecar?.model === "gpt-5.4-mini") {
-        config.visionSidecar = { ...config.visionSidecar, model: "gpt-5.6-luna" };
-        migrated = true;
-      }
-      if (migrated) saveConfig(config);
-    }
   }
   // Startup cache invalidation is best-effort and must never block the server from
   // serving. It now takes K so it cannot race a convergence commit, but both the
@@ -463,15 +435,13 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     // A refused permit is not a write; only a completed run that returned true is.
     startupCacheInvalidationWrote = outcome.kind === "completed" && outcome.value === true;
   } catch { /* no readable Codex home: nothing to invalidate */ }
-  // Arm the `claudeCode` hand-edit guard (devlog 260726_claude_auth_auto/040 H1) BEFORE
-  // the server can serve a request, and AFTER the startup migrations above — those run
-  // against a config nobody else holds and are the documented exception to the save
-  // boundary, so the baseline should reflect what they wrote. Arming is eager on
+  // Arm the `claudeCode` hand-edit guard (implementation contract H1) BEFORE
+  // the server can serve a request. Arming is eager on
   // purpose: a lazy "arm on first save" loses exactly the hand edit made before that
   // first save, which is the case the guard exists for.
   armClaudeCodeBaseline(config);
   // usage.jsonl already persists every request; rehydrate the in-memory Logs ring so
-  // /api/logs (and the GUI) survive `ocx stop` / `ocx start` process restarts.
+  // /api/logs (and the GUI) survive `ccx stop` / `ccx start` process restarts.
   hydrateRequestLogsFromDisk();
   // #314: warn-only RSS observability (unref'd, idempotent — safe under repeated
   // startServer(0) in tests). Snapshot surfaces via GET /api/system/memory.
@@ -619,7 +589,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         }
         const admission = resolveResponsesApiAuth(req, config);
         if (!admission) {
-          return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, config);
+          return withCors(formatErrorResponse(401, "authentication_error", AUTH_REQUIRED_MESSAGE), req, config);
         }
         if (!isAllowedRequestOrigin(req, config)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "WebSocket upgrade blocked: non-local Origin"), req, config);
@@ -644,11 +614,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       if (url.pathname === "/healthz" && req.method === "GET") {
         // service/pid/port let CLI liveness reject foreign 200s and verify pid identity.
         const healthPort = server.port ?? listenPort;
-        const response = jsonResponse({ status: "ok", service: "opencodex", version: VERSION, uptime: process.uptime(), pid: process.pid, port: healthPort }, 200, req, config);
-        const challenge = req.headers.get(LOCAL_ATTESTATION_CHALLENGE_HEADER);
+        const response = jsonResponse({ status: "ok", service: HEALTH_SERVICE_ID, version: VERSION, uptime: process.uptime(), pid: process.pid, port: healthPort }, 200, req, config);
+        const challenge = req.headers.get(ATTESTATION_CHALLENGE_HEADER);
         if (challenge) {
           const proof = createLocalAttestationProof(localAttestationSecret, challenge, process.pid, healthPort);
-          if (proof) response.headers.set(LOCAL_ATTESTATION_PROOF_HEADER, proof);
+          if (proof) response.headers.set(ATTESTATION_PROOF_HEADER, proof);
         }
         return response;
       }
@@ -667,11 +637,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         // A draining proxy must never advertise ready: every data-plane branch
         // answers drainingResponse while isDraining() is set, but the one-shot
         // readiness gate is not mutated on shutdown (it is owned by the startup
-        // sync). Report pending so `ocx ready --wait` and external supervisors
+        // sync). Report pending so `ccx ready --wait` and external supervisors
         // keep polling instead of promoting a proxy that is draining.
         const status = isDraining() ? "pending" : readinessGate.getStatus();
         const body = {
-          service: "opencodex",
+          service: HEALTH_SERVICE_ID,
           version: VERSION,
           uptime: process.uptime(),
           pid: process.pid,
@@ -682,7 +652,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           return jsonResponse(body, 200, req, config);
         }
         // Pending/failed: 503 with a conservative Retry-After so well-behaved clients
-        // (and `ocx ready --wait`) back off instead of hot-looping.
+        // (and `ccx ready --wait`) back off instead of hot-looping.
         const resp = jsonResponse(body, 503, req, config);
         const headers = new Headers(resp.headers);
         headers.set("Retry-After", "1");
@@ -700,7 +670,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           req,
           url,
           config,
-          deps.managementApi ?? deps.managementDeps,
+          deps.managementApi,
           principal,
         );
         if (mgmtResponse) return withManagementCors(mgmtResponse, req, config);
@@ -709,10 +679,10 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
 
       if (url.pathname === "/v1/models" && req.method === "GET") {
         // Model discovery never forwards Authorization upstream, so the broader admission
-        // set (Authorization / x-api-key / x-opencodex-api-key) is safe here and required by
+        // set (Authorization / x-api-key / x-codexcommander-api-key) is safe here and required by
         // remote OpenAI-style bearer clients and Claude gateway discovery (anthropic-version).
         const admission = resolveApiAuth(req, config);
-        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, config);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", AUTH_REQUIRED_MESSAGE), req, config);
         if (!isAllowedRequestOrigin(req, config)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
         }
@@ -740,11 +710,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         const goEnabled = filterCatalogVisibleModels(goModels, config);
         const goOrdered = orderForSubagents(goEnabled, config.subagentModels);
         // Claude Code / Claude Desktop gateway model discovery (GET /v1/models with
-        // Anthropic-style headers; 003 G1-G8 + devlog 131). Entries use the official
+        // Anthropic-style headers; 003 G1-G8 + implementation contract). Entries use the official
         // ModelInfo shape incl. capabilities (effort ladder / thinking) — Desktop 3P can
         // only learn capabilities through discovery, and Claude Code 2.1.207 strips the
         // extra fields (backward-safe). Ids are the claude-opus-4-8-{code} Desktop
-        // aliases; legacy claude-ocx-* ids keep decoding via resolveAlias. Detection:
+        // aliases; legacy claude-ccx2-* ids keep decoding via resolveAlias. Detection:
         // anthropic-version header (Claude Code sends it) or explicit ?flavor=anthropic.
         // Codex catalog (client_version) and the OpenAI list shape below stay byte-identical.
         const wantsAnthropicList = req.headers.get("anthropic-version") !== null
@@ -760,9 +730,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           const { buildAnthropicModelInfos } = await import("../claude/model-info");
           const { resolveAutoContext } = await import("../claude/context-windows");
           const { activeDesktop3pAlias } = await import("../claude/desktop-3p");
-          // Per-surface id family (devlog 050): explicit ?ids= wins; otherwise the
+          // Per-surface id family (implementation contract): explicit ?ids= wins; otherwise the
           // Claude Code CLI discovery UA (`claude-code/<version>`, binary n_()) gets
-          // readable claude-ocx ids and every other client (Desktop 3P) keeps the
+          // readable claude-ccx ids and every other client (Desktop 3P) keeps the
           // hashed family its config was written with. Unknown UA -> hashed (safe).
           const idsParam = url.searchParams.get("ids");
           const idStyle = idsParam === "cli"
@@ -868,7 +838,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           return drainingResponse(req);
         }
         const admission = resolveResponsesApiAuth(req, config);
-        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, config);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", AUTH_REQUIRED_MESSAGE), req, config);
         if (!isAllowedRequestOrigin(req, config)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
         }
@@ -902,7 +872,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           return drainingResponse(req);
         }
         const admission = resolveApiAuth(req, config);
-        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, config);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", AUTH_REQUIRED_MESSAGE), req, config);
         if (!isAllowedRequestOrigin(req, config)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
         }
@@ -921,13 +891,13 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         });
       }
 
-      if (req.method === "GET" && url.pathname.startsWith("/v1/opencodex/artifacts/")) {
+      if (req.method === "GET" && url.pathname.startsWith(`${ARTIFACT_HTTP_PREFIX}/`)) {
         const admission = resolveApiAuth(req, config);
-        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, config);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", AUTH_REQUIRED_MESSAGE), req, config);
         if (!isAllowedRequestOrigin(req, config)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
         }
-        const id = decodeURIComponent(url.pathname.slice("/v1/opencodex/artifacts/".length));
+        const id = decodeURIComponent(url.pathname.slice(ARTIFACT_HTTP_PREFIX.length + 1));
         const { resolveArtifactPath } = await import("../images/artifacts");
         const artifactPath = resolveArtifactPath(id);
         if (!artifactPath) {
@@ -957,7 +927,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           return drainingResponse(req);
         }
         const admission = resolveApiAuth(req, config);
-        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, config);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", AUTH_REQUIRED_MESSAGE), req, config);
         if (!isAllowedRequestOrigin(req, config)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
         }
@@ -982,7 +952,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           return drainingResponse(req);
         }
         const admission = resolveResponsesApiAuth(req, config);
-        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, config);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", AUTH_REQUIRED_MESSAGE), req, config);
         if (!isAllowedRequestOrigin(req, config)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
         }
@@ -1033,7 +1003,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         }
         const admission = resolveApiAuth(req, config);
         if (!admission) {
-          return withCors(anthropicErrorResponse(401, "opencodex API key required", "authentication_error"), req, config);
+          return withCors(anthropicErrorResponse(401, AUTH_REQUIRED_MESSAGE, "authentication_error"), req, config);
         }
         if (!isAllowedRequestOrigin(req, config)) {
           return withCors(anthropicErrorResponse(403, "cross-origin data-plane request blocked", "permission_error"), req, config);
@@ -1048,7 +1018,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         }
         const admission = resolveApiAuth(req, config);
         if (!admission) {
-          return withCors(anthropicErrorResponse(401, "opencodex API key required", "authentication_error"), req, config);
+          return withCors(anthropicErrorResponse(401, AUTH_REQUIRED_MESSAGE, "authentication_error"), req, config);
         }
         if (!isAllowedRequestOrigin(req, config)) {
           return withCors(anthropicErrorResponse(403, "cross-origin data-plane request blocked", "permission_error"), req, config);
@@ -1079,7 +1049,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           return drainingResponse(req);
         }
         const admission = resolveResponsesApiAuth(req, config);
-        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, config);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", AUTH_REQUIRED_MESSAGE), req, config);
         if (!isAllowedRequestOrigin(req, config)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
         }
@@ -1110,7 +1080,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           return drainingResponse(req);
         }
         const admission = resolveApiAuth(req, config);
-        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, config);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", AUTH_REQUIRED_MESSAGE), req, config);
         if (!isAllowedRequestOrigin(req, config)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
         }
@@ -1144,7 +1114,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           return drainingResponse(req);
         }
         const admission = resolveApiAuth(req, config);
-        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, config);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", AUTH_REQUIRED_MESSAGE), req, config);
         if (!isAllowedRequestOrigin(req, config)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "WebSocket upgrade blocked: non-local Origin"), req, config);
         }
@@ -1197,7 +1167,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         : null;
       // Dedicated bootstrap path: answer without requiring a packaged GUI build, so the
       // Vite dev server can mint an origin-bound loopback session on a fresh checkout.
-      if (url.pathname === "/opencodex-session" && guiSessionCandidate) {
+      if (url.pathname === SESSION_PATH && guiSessionCandidate) {
         return serveSessionBootstrap(guiSessionCandidate);
       }
       const guiFile = serveGuiFile(url.pathname, undefined, guiSessionCandidate ?? undefined);
@@ -1440,7 +1410,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   boundPort = actualPort;
   setCorsOrigin(actualPort);
 
-  console.log(`🚀 opencodex proxy running on http://localhost:${actualPort}`);
+  console.log(`🚀 CodexCommander proxy running on http://localhost:${actualPort}`);
   console.log(`   POST /v1/responses → provider translation`);
   console.log(`   POST /v1/chat/completions → OpenAI-compatible clients`);
   console.log(`   GET  /healthz      → health check`);

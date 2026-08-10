@@ -93,12 +93,12 @@ public actor ActionCoordinator {
         } catch let error as LifecycleHelperError {
             return .failed(error.userMessage)
         } catch {
-            return .failed("OpenCodex lifecycle control failed.")
+            return .failed("CodexCommander lifecycle control failed.")
         }
     }
 
     /// Applies the current model catalog and restarts only Codex's catalog-caching
-    /// workers through the fixed lifecycle bridge. The OpenCodex proxy is untouched.
+    /// workers through the fixed lifecycle bridge. The CodexCommander proxy is untouched.
     public func applyCodexCatalog() async -> CodexCatalogApplyOutcome {
         do {
             let result = try await lifecycle.run(.applyCodexCatalog)
@@ -129,12 +129,12 @@ public actor ActionCoordinator {
         } catch let error as LifecycleHelperError {
             return .failed(error.userMessage)
         } catch {
-            return .failed("OpenCodex could not apply the agent catalog update.")
+            return .failed("CodexCommander could not apply the agent catalog update.")
         }
     }
 
     /// Requests the proxy's owned drain-and-restart path and waits for a replacement
-    /// OpenCodex identity. A 202 only means accepted; success requires a newly
+    /// CodexCommander identity. A 202 only means accepted; success requires a newly
     /// identity-validated process (or a refused interval followed by a valid process
     /// when no prior pid was discoverable).
     public func restart() async -> RestartOutcome {
@@ -145,13 +145,13 @@ public actor ActionCoordinator {
         } catch let error as ProxyError {
             return .failed(error.userMessage)
         } catch {
-            return .failed("OpenCodex could not accept the restart request.")
+            return .failed("CodexCommander could not accept the restart request.")
         }
         guard accepted.success else {
-            return .failed("OpenCodex refused the restart request.")
+            return .failed("CodexCommander refused the restart request.")
         }
 
-        let drainSeconds = TimeInterval(accepted.drainTimeoutMs ?? 60_000) / 1_000
+        let drainSeconds = TimeInterval(accepted.drainTimeoutMs) / 1_000
         let deadline = now().addingTimeInterval(min(max(drainSeconds + 15, 20), 80))
         var sawRefused = false
         while now() < deadline {
@@ -172,7 +172,7 @@ public actor ActionCoordinator {
             }
         }
         return .failed(
-            "Restart was accepted, but a replacement OpenCodex process could not be confirmed. Check Logs or run `ocx status`."
+            "Restart was accepted, but a replacement CodexCommander process could not be confirmed. Check Logs or run `ccx status`."
         )
     }
 

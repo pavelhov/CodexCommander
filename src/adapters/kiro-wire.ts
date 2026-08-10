@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { hostname, userInfo } from "node:os";
 import { normalizeKiroModelId } from "../providers/kiro-models";
-import type { OcxParsedRequest } from "../types";
+import type { CodexCommanderParsedRequest } from "../types";
 import { KIRO_COMPLETION_TOOL_NAME } from "./kiro-constants";
 
 let cachedFp: string | undefined;
@@ -109,7 +109,7 @@ export function invocationId(): string {
   return randomUUID();
 }
 
-export function stableConversationId(parsed: OcxParsedRequest): string {
+export function stableConversationId(parsed: CodexCommanderParsedRequest): string {
   const remembered = parsed._providerContinuation?.kiro?.conversationId;
   if (isValidKiroConversationId(remembered)) return remembered;
   const conversationId = randomUUID();

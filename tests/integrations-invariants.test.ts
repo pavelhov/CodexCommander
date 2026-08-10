@@ -9,13 +9,13 @@ import { createIntegrationStateStore, type IntegrationStateStore } from "../src/
 import { readIntegrationState } from "../src/integrations/state";
 import { applyIntegration, disableIntegration, restoreIntegration } from "../src/integrations/writer";
 import { printSubcommandUsage, printUsage } from "../src/cli/help";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 /**
  * Properties that hold ACROSS the whole client-integration feature, which is
  * why they live here rather than inside any one phase's suite.
  *
- * Design of record: devlog/_fin/260802_client_toggle_api/070 §4. The matrix
+ * Design of record: implementation contract §4. The matrix
  * there was rewritten at the A-gate after an audit found three of the
  * original five duplicated existing coverage and one was unfalsifiable; these
  * are the properties nothing else asserts.
@@ -25,12 +25,12 @@ const MODELS: ExportModel[] = [
   { namespaced: "anthropic/claude-opus-4-8", provider: "anthropic", id: "claude-opus-4-8", contextWindow: 200_000 },
 ];
 
-const CONFIG: OcxConfig = {
+const CONFIG: CodexCommanderConfig = {
   port: 10100,
   hostname: "127.0.0.1",
   defaultProvider: "mock",
   providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" } },
-} as unknown as OcxConfig;
+} as unknown as CodexCommanderConfig;
 
 let home: string;
 let store: IntegrationStateStore;
@@ -54,7 +54,7 @@ function installClient(clientId: IntegrationClientId): string {
 }
 
 beforeEach(() => {
-  const base = mkdtempSync(join(tmpdir(), "ocx-integrations-invariants-"));
+  const base = mkdtempSync(join(tmpdir(), "ccx-integrations-invariants-"));
   home = join(base, "home");
   storeRoot = join(base, "store", "integrations");
   mkdirSync(home, { recursive: true });
@@ -71,7 +71,7 @@ describe("the client registries cannot drift apart", () => {
      * The shared export/backend registries and API Access UI name all six
      * clients. The generic Client Apps writer deliberately names only five:
      * OpenCode has a dedicated API and writer that exclusively owns
-     * provider.opencodex. These browser lists are maintained by hand because
+     * provider.codexcommander. These browser lists are maintained by hand because
      * importing the backend registry would pull node:os and node:path into the
      * bundle, so this test keeps both the shared set and the ownership split
      * explicit.
@@ -289,7 +289,7 @@ describe("a container we would have to replace is refused, not overwritten", () 
 
   test("disable refuses a blocked container instead of throwing", () => {
     /*
-     * The GUI locks the switch for `unsafe`, but `ocx integration client
+     * The GUI locks the switch for `unsafe`, but `ccx integration client
      * disable` and direct API callers do not — and the removal path
      * dereferences a record that a blocked container never has, so this threw
      * a TypeError and surfaced as a 500.
@@ -331,14 +331,14 @@ describe("openclaw follows the config path its gateway actually reads", () => {
     expect(applyIntegration(write).ok).toBe(true);
 
     // The overridden file gained our block…
-    expect(readFileSync(relocated, "utf8")).toContain("opencodex");
+    expect(readFileSync(relocated, "utf8")).toContain("codexcommander");
     // …the record points at it, so a later disable cannot go looking elsewhere…
     expect(store.readRecords().openclaw?.configPath).toBe(relocated);
     // …and the default path was never created.
     expect(existsSync(join(home, ".openclaw", "openclaw.json"))).toBe(false);
 
     expect(disableIntegration(write).ok).toBe(true);
-    expect(readFileSync(relocated, "utf8")).not.toContain("opencodex");
+    expect(readFileSync(relocated, "utf8")).not.toContain("codexcommander");
     expect(readFileSync(relocated, "utf8")).toContain("keep-me");
   });
 
@@ -382,7 +382,7 @@ describe("openclaw's legacy layout is discovered, not declared obsolete", () => 
       env, home, store,
     };
     expect(applyIntegration(write).ok).toBe(true);
-    expect(readFileSync(legacyFile, "utf8")).toContain("opencodex");
+    expect(readFileSync(legacyFile, "utf8")).toContain("codexcommander");
     // No modern file conjured beside it.
     expect(existsSync(join(home, ".openclaw", "openclaw.json"))).toBe(false);
   });
@@ -437,7 +437,7 @@ describe("a real user document is not rejected for being richer than ours", () =
     const applied = parseConfig(readFileSync(configPath, "utf8"), "yaml") as Record<string, unknown>;
     const providers = applied.providers as Record<string, Record<string, unknown>>;
     expect(providers.mine!.token).toBeNull();
-    expect(providers.opencodex).toBeDefined();
+    expect(providers.codexcommander).toBeDefined();
 
     expect(disableIntegration(write).ok).toBe(true);
     expect(parseConfig(readFileSync(configPath, "utf8"), "yaml")).toEqual(parseConfig(seed, "yaml"));
@@ -598,7 +598,7 @@ describe("the base URL is composed, never interpolated", () => {
       writeFileSync(configPath, "providers: {}\n");
       const result = applyIntegration({
         clientId: "hermes", models: MODELS, port: 10100,
-        config: { ...CONFIG, hostname } as OcxConfig,
+        config: { ...CONFIG, hostname } as CodexCommanderConfig,
         env: TEST_ENV, home, store,
       });
       expect(result.ok).toBe(true);
@@ -615,7 +615,7 @@ describe("a restore never launders a foreign edit into owned content", () => {
      * The chain: apply, user edits the file by hand, confirmed drift-restore
      * rewinds it (snapshotting the edited bytes first), then undo THAT restore
      * — which puts the user's edited bytes back on disk carrying a record that
-     * describes what opencodex wrote. Overwriting that record's fingerprint
+     * describes what codexcommander wrote. Overwriting that record's fingerprint
      * made the state read `current`, and disable then deleted the user's own
      * field as if it were ours.
      */
@@ -704,6 +704,6 @@ describe("the CLI names every client it supports", () => {
     }
     expect(output).not.toContain("Print an opencode/Pi config");
     // The headless toggle added alongside the WP4 routes is discoverable.
-    expect(output).toContain("ocx integration client");
+    expect(output).toContain("ccx integration client");
   });
 });

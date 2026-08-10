@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { applyProviderConfigHints, gatherRoutedModels } from "../src/codex/catalog";
 import { clearModelCache } from "../src/codex/model-cache";
-import type { OcxProviderConfig } from "../src/types";
+import type { CodexCommanderProviderConfig } from "../src/types";
 import { deriveComboCatalogModel } from "../src/codex/catalog";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import { enrichProviderFromRegistry } from "../src/providers/derive";
 import type { CatalogModel } from "../src/types";
 
-const base: OcxProviderConfig = {
+const base: CodexCommanderProviderConfig = {
   adapter: "openai-chat",
   baseUrl: "https://opencode.ai/zen/go/v1",
   noVisionModels: ["glm-5.2"],
@@ -41,7 +41,7 @@ describe("vision-sidecar catalog modalities", () => {
   });
 
   test("explicit modelInputModalities config still wins as the base, plus image", () => {
-    const prov: OcxProviderConfig = { ...base, modelInputModalities: { "glm-5.2": ["text"] } };
+    const prov: CodexCommanderProviderConfig = { ...base, modelInputModalities: { "glm-5.2": ["text"] } };
     const hinted = applyProviderConfigHints("opencode-go", prov, { id: "glm-5.2", provider: "opencode-go" });
     expect(hinted.inputModalities).toEqual(["text", "image"]);
   });
@@ -220,7 +220,7 @@ describe("vision-capable provider models feed combo modalities", () => {
       adapter: "openai-chat",
       baseUrl: "https://api.x.ai/v1",
       modelInputModalities: { "grok-4.3": ["text"] },
-    } as OcxProviderConfig;
+    } as CodexCommanderProviderConfig;
     enrichProviderFromRegistry("xai", prov);
     // The user's explicit narrowing still wins.
     expect(prov.modelInputModalities?.["grok-4.3"]).toEqual(["text"]);

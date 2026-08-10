@@ -5,19 +5,30 @@ import { join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
 import { setIntegrationEnabled } from "../src/codex/desired-state";
 import type { ManagementApiDeps } from "../src/server/management/context";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 let root = "";
 let library = "";
-let previousHome: string | undefined;
-let previousLibrary: string | undefined;
+let previousCanonicalHome: string | undefined;
+let previousCanonicalLibrary: string | undefined;
+let previousCodexCliPath: string | undefined;
+let isolatedCodexHome: IsolatedCodexHome | null = null;
 
-function config(): OcxConfig {
+function config(): CodexCommanderConfig {
   return {
     port: 10100,
-    providers: {},
+    multiAgentGuidanceEnabled: true,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+      },
+    },
     defaultProvider: "openai",
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 function persistedIntent(): unknown {
@@ -25,7 +36,7 @@ function persistedIntent(): unknown {
   return raw.clientIntegrations?.["claude-desktop"];
 }
 
-async function dispatch(path: string, init?: RequestInit, deps: ManagementApiDeps = {}, inputConfig: OcxConfig = config()) {
+async function dispatch(path: string, init?: RequestInit, deps: ManagementApiDeps = {}, inputConfig: CodexCommanderConfig = config()) {
   const url = new URL(`http://127.0.0.1:10100${path}`);
   return handleManagementAPI(new Request(url, {
     ...init,
@@ -43,20 +54,27 @@ async function toggle(enabled: boolean, deps: ManagementApiDeps = {}) {
 }
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "ocx-desktop-toggle-"));
+  root = mkdtempSync(join(tmpdir(), "ccx-desktop-toggle-"));
   library = join(root, "desktop-library");
-  previousHome = process.env.OPENCODEX_HOME;
-  previousLibrary = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
-  process.env.OPENCODEX_HOME = root;
-  process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = library;
+  previousCanonicalHome = process.env.CODEXCOMMANDER_HOME;
+  previousCanonicalLibrary = process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR;
+  previousCodexCliPath = process.env.CODEX_CLI_PATH;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-desktop-toggle-codex-");
+  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
+  process.env.CODEXCOMMANDER_HOME = root;
+  process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR = library;
   writeFileSync(join(root, "config.json"), JSON.stringify(config()));
 });
 
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  if (previousLibrary === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
-  else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previousLibrary;
+  if (previousCanonicalHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCanonicalHome;
+  if (previousCanonicalLibrary === undefined) delete process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR;
+  else process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR = previousCanonicalLibrary;
+  if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+  else process.env.CODEX_CLI_PATH = previousCodexCliPath;
+  isolatedCodexHome?.restore();
+  isolatedCodexHome = null;
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -86,7 +104,7 @@ test("OFF on a missing or empty library is an idempotent no-op with no footprint
   // A present-but-empty directory has no owned state and stays untouched too.
   const empty = join(root, "empty-library");
   mkdirSync(empty);
-  process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = empty;
+  process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR = empty;
   const again = await toggle(false);
   expect(again.body).toMatchObject({ ok: true, changed: false, desiredEnabled: false });
   expect(existsSync(empty)).toBe(true);
@@ -129,7 +147,7 @@ test("auto-apply re-reads desired state after catalog fetch and skips a concurre
   const id = "selected-owned";
   const { mkdirSync } = await import("node:fs");
   mkdirSync(library);
-  writeFileSync(join(library, "_meta.json"), JSON.stringify({ appliedId: id, entries: [{ id, name: "opencodex" }] }));
+  writeFileSync(join(library, "_meta.json"), JSON.stringify({ appliedId: id, entries: [{ id, name: "codexcommander" }] }));
   writeFileSync(join(library, `${id}.json`), JSON.stringify({
     inferenceProvider: "gateway", inferenceCredentialKind: "static",
     // Shape-only value: deliberately inert; never a credential.
@@ -193,7 +211,7 @@ test("POST /apply enables from a stale OFF server snapshot instead of cancelling
   expect(setIntegrationEnabled("claude-desktop", false).ok).toBe(true);
   expect(persistedIntent()).toBe(false);
   // The server object captured at startup, still carrying the OFF it booted with.
-  const staleSnapshot = { ...config(), clientIntegrations: { "claude-desktop": false } } as OcxConfig;
+  const staleSnapshot = { ...config(), clientIntegrations: { "claude-desktop": false } } as CodexCommanderConfig;
 
   let writes = 0;
   const response = await dispatch("/api/claude-desktop/apply", {
@@ -219,7 +237,7 @@ test("POST /apply leaves the reused server snapshot agreeing with disk", async (
   // request, so a stale snapshot makes the native GET report the opposite of
   // what was persisted, and lets a later whole-snapshot save undo the enable.
   expect(setIntegrationEnabled("claude-desktop", false).ok).toBe(true);
-  const staleSnapshot = { ...config(), clientIntegrations: { "claude-desktop": false } } as OcxConfig;
+  const staleSnapshot = { ...config(), clientIntegrations: { "claude-desktop": false } } as CodexCommanderConfig;
   const deps: ManagementApiDeps = {
     fetchAllModels: async () => [],
     writeDesktop3pConfig: () => ({ written: true, path: join(library, "applied.json"), fingerprint: "fingerprint" }),

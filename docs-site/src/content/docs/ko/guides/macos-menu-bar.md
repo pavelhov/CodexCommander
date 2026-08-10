@@ -1,52 +1,33 @@
 ---
 title: macOS 메뉴 막대 컴패니언
-description: OpenCodex의 네이티브 상태, 에이전트 활동 및 제공자 할당량 컴패니언을 설치하고 사용합니다.
+description: CodexCommander의 네이티브 상태, 에이전트 활동 및 제공자 할당량 컴패니언을 설치하고 사용합니다.
 ---
 
-macOS 컴패니언은 프록시를 대체하거나 웹 대시보드를 중복하지 않으면서 가장 유용한 OpenCodex
+macOS 컴패니언은 프록시를 대체하거나 웹 대시보드를 중복하지 않으면서 가장 유용한 CodexCommander
 상태를 메뉴 막대에 표시합니다. 네이티브 Swift/AppKit 애플리케이션이며 같은 Mac에서 실행 중인
-OpenCodex 인스턴스와만 통신합니다.
+CodexCommander 인스턴스와만 통신합니다.
 
 ## 설치
 
-1. 일치하는 GitHub 릴리스에서 <code>OpenCodex-&lt;version&gt;-macos-universal.zip</code>과
-   해당 <code>.sha256</code> 파일을 다운로드합니다.
-2. 아카이브를 확인합니다.
-
-       shasum -a 256 -c OpenCodex-<version>-macos-universal.zip.sha256
-
-3. 압축을 풀고 <code>OpenCodex.app</code>을 **응용 프로그램**으로 이동합니다.
-4. 앱을 엽니다. 앱에 Bun 런타임, 프록시, 프로덕션 의존성 및 대시보드가 포함되어 있으므로 별도의 npm,
-   Bun 또는 <code>ocx</code> 설치가 필요하지 않습니다. 아이콘은 메뉴 막대에 나타나며 Dock 아이콘은 추가되지
-   않습니다. 안정적인 위치에서 처음 실행하면 **Launch at Login**이 활성화됩니다.
-
-번들 런타임은 기존 사용자 상태인 <code>~/.opencodex</code>와 <code>~/.codex</code>를 사용합니다. 자격 증명을
-앱 번들이나 Keychain으로 복사하지 않습니다. 제공자 OAuth 및 API 키 설정은 로컬 대시보드에서 수행합니다.
-
-릴리스가 Developer ID로 서명되고 공증되기 전까지는 macOS가 다운로드 후 첫 실행을 차단할 수
-있습니다. 앱을 Control-클릭하고 **열기**를 선택한 다음 **열기**를 확인합니다. 로컬에서 만든
-빌드에는 다운로드된 파일의 격리 속성이 없습니다.
-
-번들 런타임은 읽기 전용입니다. 업데이트는 최신 서명된 <code>OpenCodex.app</code> 번들로 교체해야 하며,
-서명된 <code>Contents/Resources</code>에 npm, Bun 또는 소스 업데이트를 실행하지 않습니다.
+패키징된 macOS 앱은 현재 게시되어 있지 않습니다. [소스에서 빌드](#소스에서-빌드)의 절차로 기존 체크아웃에서 실행하세요. 개발 앱은 `dist/macos/CodexCommander.app`에 두고 Application Support로 복사하지 마세요.
 
 ## 시작 모드
 
 - **Desktop** — 로그인할 때 메뉴 앱을 열고 정확히 하나의 서버에 연결하거나 시작합니다.
-- **Headless** — 메뉴 앱 없이 별도로 설치한 `ocx service`만 시작합니다.
-- **Off** — 자동으로 시작하지 않으며 앱 또는 `ocx start`로 수동 시작합니다.
+- **Headless** — 메뉴 앱 없이 별도로 설치한 `ccx service`만 시작합니다.
+- **Off** — 자동으로 시작하지 않으며 앱 또는 `ccx start`로 수동 시작합니다.
 
 시작 행에서 **Launch at Login**을 변경할 수 있습니다. 승인이 필요하면 macOS Login Items 설정을
 직접 엽니다. 이 스위치는 백그라운드 서비스를 설치, 중지 또는 제거하지 않습니다.
 
-표시되는 앱과 백그라운드 프록시는 별도로 동작합니다. OpenCodex 패널이 활성화된 상태에서 **Quit Menu Bar**(`⌘Q`)는 컴패니언 UI만
-닫고 라우팅은 계속 유지합니다. **Stop OpenCodex and Quit…**(`⌥⌘Q`)는 명시적인 파괴적 종료로,
+표시되는 앱과 백그라운드 프록시는 별도로 동작합니다. CodexCommander 패널이 활성화된 상태에서 **Quit Menu Bar**(`⌘Q`)는 컴패니언 UI만
+닫고 라우팅은 계속 유지합니다. **Stop CodexCommander and Quit…**(`⌥⌘Q`)는 명시적인 파괴적 종료로,
 확인 후 프록시와 서비스를 중지하고 네이티브 Codex 라우팅을 복원하며 중지가 확인된 경우에만
 컴패니언을 종료합니다.
 
 ## 패널에 표시되는 내용
 
-- **에이전트 활동** — 현재 활성 수와 실시간 모델/제공자 행입니다. OpenCodex가 요청
+- **에이전트 활동** — 현재 활성 수와 실시간 모델/제공자 행입니다. CodexCommander가 요청
   메타데이터에서 활성 부모를 입증할 수 있을 때만 생성된 자식이 중첩되며, 그렇지 않으면 독립형
   서브에이전트로 표시됩니다. 컴패니언은 대기 중, 검토 중, 속도 제한됨 또는 완료 기록을
   만들어내지 않습니다.
@@ -58,7 +39,7 @@ OpenCodex 인스턴스와만 통신합니다.
 - **관리** — 선택한 제공자의 Accounts 또는 API Keys 탭을 엽니다. OAuth, API 키 입력, 재인증,
   계정 전환 및 제공자 구성은 대시보드에서 계속 처리합니다.
 - **Agent catalog update ready** — 실행 중인 Codex 백그라운드 워커가 이전 모델 목록을 계속 보유할 때
-  표시되는 지속적이고 치명적이지 않은 카드입니다. OpenCodex 프록시는 정상적으로 계속 실행됩니다.
+  표시되는 지속적이고 치명적이지 않은 카드입니다. CodexCommander 프록시는 정상적으로 계속 실행됩니다.
 - **Apply agent catalog…** — 가능한 경우 최신 요청 활동을 표시하고 답변이 중단될 수 있음을 경고하는
   확인 창을 엽니다. 선택지는 **Apply Now**와 **Later**입니다.
 - **Stop Proxy…** — 항상 확인을 요청하고 활성 클라이언트 및 서브에이전트 요청을 중단하며, 네이티브
@@ -68,7 +49,7 @@ OpenCodex 인스턴스와만 통신합니다.
   신원 검사를 통과할 때까지 앱이 기다립니다.
 - **Quit Menu Bar** — 컴패니언 UI만 닫으며 프록시, 서비스 또는 클라이언트 라우팅은 중지하지
   않습니다. 패널이 활성화된 상태에서 안전한 `⌘Q` 동작입니다.
-- **Stop OpenCodex and Quit…** — 중단을 확인한 뒤 백그라운드 프록시와 서비스를 중지하고 네이티브
+- **Stop CodexCommander and Quit…** — 중단을 확인한 뒤 백그라운드 프록시와 서비스를 중지하고 네이티브
   Codex 라우팅을 복원합니다. 중지 상태가 확인된 경우에만 종료하며, 실패하면 컴패니언을 열어 둔
   채 오류를 표시합니다. 패널이 활성화된 상태에서 단축키는 `⌥⌘Q`입니다.
 
@@ -83,40 +64,40 @@ Grok은 접힌 요약으로 표시됩니다. 구성된 할당량 지원 제공�
 
 ## 에이전트 카탈로그 업데이트
 
-앱을 열면 현재 OpenCodex에 구성된 제공자와 Codex 모델 카탈로그를 자동으로 동기화합니다. 실행 중인
+앱을 열면 현재 CodexCommander에 구성된 제공자와 Codex 모델 카탈로그를 자동으로 동기화합니다. 실행 중인
 Codex 워커가 없으면 새 목록은 다음 Codex 작업에서 사용됩니다. 장시간 실행 중인 워커가 이전 목록을
-로드한 경우에도 OpenCodex는 계속 실행되며 패널에는 치명적이지 않은 **Agent catalog update ready** 카드가
+로드한 경우에도 CodexCommander는 계속 실행되며 패널에는 치명적이지 않은 **Agent catalog update ready** 카드가
 계속 표시됩니다.
 
 중단 위험을 검토하려면 **Apply agent catalog…**을 선택합니다. 가능한 경우 확인 직전에 활성 요청 수를
 가져오지만, 요청이 0개여도 Codex가 유휴 상태라는 증거로 표시하지 않습니다. 작업이 실행되기 전에 새
 요청이 시작될 수 있기 때문입니다. **Apply Now**는 다시 동기화한 뒤 현재 사용자가 소유한 정확한
 `codex … app-server` 및 `codex-code-mode-host` 일치 프로세스에만 `SIGTERM`을 보내고, 이전 프로세스 ID가
-종료되었는지 잠시 확인합니다. 광범위한 `pkill`을 사용하거나 OpenCodex 프록시를 재시작하거나 메뉴 앱을
+종료되었는지 잠시 확인합니다. 광범위한 `pkill`을 사용하거나 CodexCommander 프록시를 재시작하거나 메뉴 앱을
 닫지 않습니다. 다음 작업에서 Codex가 새 백그라운드 호스트를 만들고 최신 목록을 로드합니다.
 
-이 릴리스에는 **Apply when idle**이 없습니다. 답변이 진행 중이면 **Later**를 선택하고 준비가 되었을 때
+현재 컴패니언에는 **Apply when idle**이 없습니다. 답변이 진행 중이면 **Later**를 선택하고 준비가 되었을 때
 업데이트를 적용하세요. 카드는 계속 표시됩니다. 고급 CLI 대체 방법은 다음과 같습니다.
 
 ```bash
-ocx sync --restart-codex
+ccx sync --restart-codex
 ```
 
 ## 인증 및 개인정보 보호
 
-컴패니언은 별도의 로그인 시스템을 만들지 않으며 macOS Keychain으로 데이터를 마이그레이션하거나
-제공자 자격 증명을 읽지 않습니다.
+컴패니언은 별도의 로그인 시스템을 만들지 않고 macOS Keychain을 사용하지 않으며,
+Keychain에서 제공자 자격 증명을 읽지도 않습니다.
 
-현재 OpenCodex 버전은 <code>~/.opencodex/admin-api-token</code>(또는
-<code>$OPENCODEX_HOME/admin-api-token</code>)에 독립적인 관리 자격 증명을 생성합니다. 컴패니언은
+현재 CodexCommander 버전은 <code>~/.codexcommander/admin-api-token</code>(또는
+<code>$CODEXCOMMANDER_HOME/admin-api-token</code>)에 독립적인 관리 자격 증명을 생성합니다. 컴패니언은
 심볼릭 링크를 따르지 않도록 검증된 파일 디스크립터를 통해 기존 파일을 읽고, 그 값을 프로세스
-메모리에만 유지하며, 신원이 확인된 루프백 OpenCodex 프로세스에만 보냅니다. 토큰을 표시, 기록,
+메모리에만 유지하며, 신원이 확인된 루프백 CodexCommander 프로세스에만 보냅니다. 토큰을 표시, 기록,
 복사 또는 저장하거나 브라우저 URL에 넣지 않습니다.
 
-제공자 자격 증명은 계속 OpenCodex가 소유합니다. 컴패니언은 ChatGPT, Kimi, Grok, Anthropic 또는
+제공자 자격 증명은 계속 CodexCommander가 소유합니다. 컴패니언은 ChatGPT, Kimi, Grok, Anthropic 또는
 기타 제공자 토큰을 읽지 않으며 제공자 로그인 엔드포인트를 직접 호출하지 않습니다.
 
-<code>OPENCODEX_ADMIN_AUTH_TOKEN</code>만으로 구성된 설치는 앱 프로세스가 해당 변수를 상속받을
+<code>CODEXCOMMANDER_ADMIN_AUTH_TOKEN</code>만으로 구성된 설치는 앱 프로세스가 해당 변수를 상속받을
 때 작동합니다. Finder에서 실행한 앱은 일반적으로 셸 변수를 상속받지 않습니다. 보호된 토큰
 파일이 없으면 컴패니언은 토큰 입력 양식을 표시하는 대신 관리 인증을 사용할 수 없다고
 보고합니다.
@@ -129,7 +110,7 @@ ID, 제공자/모델 식별자, 타임스탬프 및 집계 수가 포함됩니�
 ## 폴링
 
 앱은 패널이 열려 있는 동안 가벼운 활동 정보를 자주 새로 고치고, 패널이 닫히면 속도를 늦춥니다.
-제공자 할당량은 별도의 느린 주기로 새로 고치며 OpenCodex가 보고한 업스트림 타임스탬프를
+제공자 할당량은 별도의 느린 주기로 새로 고치며 CodexCommander가 보고한 업스트림 타임스탬프를
 사용합니다. 반복되는 실패에는 자동으로 백오프가 적용되고 겹치는 새로 고침은 하나로
 통합됩니다.
 
@@ -137,39 +118,37 @@ ID, 제공자/모델 식별자, 타임스탬프 및 집계 수가 포함됩니�
 
 ## 소스에서 빌드
 
-macOS 13 이상과 Xcode Command Line Tools가 필요합니다. Intel + Apple silicon 유니버설 릴리스
-빌드에는 전체 Xcode가 필요합니다.
+macOS 13 이상과 Xcode Command Line Tools가 필요합니다. Intel + Apple silicon 유니버설 빌드에는 전체 Xcode가 필요합니다.
 
 ```bash
-git clone https://github.com/pavelhov/opencodex.git
-cd opencodex
+cd /path/to/CodexCommander
 bun install
 bun run test:macos
 bun run build:macos
-open dist/macos/OpenCodex.app
+open dist/macos/CodexCommander.app
 ```
 
-소스 앱의 위치는 정확히 `dist/macos/OpenCodex.app`입니다. 같은 체크아웃의 Bun과 CLI를
+소스 앱의 위치는 정확히 `dist/macos/CodexCommander.app`입니다. 같은 체크아웃의 Bun과 CLI를
 사용하므로 `bun install` 종속성이 필요합니다. 개발 중에는 이 위치에 두고 Application Support로
 복사하지 마세요. 더블클릭하면 프록시 시작을 시도하지만 오프라인이거나 시작에 실패해도 앱은 닫히지
 않으며 패널과 **Start** 컨트롤을 계속 사용할 수 있습니다.
-각 빌드는 정확한 Git 리비전을 번들의 `Info.plist`에 있는 `OpenCodexSourceRevision`에 기록하고 빌드
-마지막에도 출력합니다. 커밋하지 않은 소스에는 `-dirty`가 붙으므로 최종 배포 번들을 만들기 전에
+각 빌드는 정확한 Git 리비전을 번들의 `Info.plist`에 있는 `CodexCommanderSourceRevision`에 기록하고 빌드
+마지막에도 출력합니다. 커밋하지 않은 소스에는 `-dirty`가 붙으므로 최종 번들을 만들기 전에
 커밋하세요.
 
 ## 문제 해결
 
-- **프록시를 사용할 수 없음** — <code>ocx start</code>로 시작하거나
-  <code>ocx service install</code>로 백그라운드 서비스를 설치합니다.
-- **인증을 사용할 수 없음** — <code>ocx doctor</code>를 실행합니다. OpenCodex 상태 디렉터리와
+- **프록시를 사용할 수 없음** — <code>ccx start</code>로 시작하거나
+  <code>ccx service install</code>로 백그라운드 서비스를 설치합니다.
+- **인증을 사용할 수 없음** — <code>ccx doctor</code>를 실행합니다. CodexCommander 상태 디렉터리와
   <code>admin-api-token</code>이 현재 사용자 소유이며 그룹/기타 사용자가 접근할 수 없는지 확인합니다.
 - **할당량을 사용할 수 없음** — 제공자의 **관리** 대상으로 이동하여 계정을 연결하거나 다시
   인증합니다. Grok에 **로그인 새로 고침 필요**가 표시되면 <code>grok</code>에서 로그인을 완료한 뒤
-  OpenCodex에서 **새로 고침**하세요. Kimi에서는 <code>kimi</code>를 사용합니다. 일부 제공자는 할당량
+  CodexCommander에서 **새로 고침**하세요. Kimi에서는 <code>kimi</code>를 사용합니다. 일부 제공자는 할당량
   API를 노출하지 않습니다.
-- **재시작 후 복구되지 않음** — **Logs**를 열고 <code>ocx status</code>를 실행합니다. 컴패니언은
+- **재시작 후 복구되지 않음** — **Logs**를 열고 <code>ccx status</code>를 실행합니다. 컴패니언은
   대체 수단으로 프로세스를 강제 종료하거나 서비스 상태를 다시 작성하지 않습니다.
-- **중지·업데이트·콜드 스타트 후 네이티브 모델만 표시됨** — OpenCodex를 다시 여세요. 시작 시
+- **중지·Codex 업데이트·콜드 스타트 후 네이티브 모델만 표시됨** — CodexCommander를 다시 여세요. 시작 시
   카탈로그를 자동으로 동기화하고, 제공자 검색 결과가 일시적으로 비어 있어도 보호된 마지막 정상
   카탈로그에서 아직 구성된 라우팅 모델을 복원합니다. **Agent catalog update ready**가 계속 표시되면
   **Apply agent catalog…**을 선택하거나 [에이전트 카탈로그 업데이트](#에이전트-카탈로그-업데이트)의 CLI
@@ -177,7 +156,7 @@ open dist/macos/OpenCodex.app
 
 ## 제거
 
-**Launch at Login**을 끈 다음 컴패니언을 종료하고 <code>OpenCodex.app</code>을 휴지통으로
+**Launch at Login**을 끈 다음 컴패니언을 종료하고 <code>CodexCommander.app</code>을 휴지통으로
 이동합니다. 제공자 자격 증명을 저장하지 않으며 Keychain 항목도 만들지 않습니다. 컴패니언을
-제거해도 OpenCodex 프록시는 중지되거나 제거되지 않습니다. 헤드리스 서비스도 제거하려는 경우에만
-별도로 <code>ocx service uninstall</code>을 실행하십시오.
+제거해도 CodexCommander 프록시는 중지되거나 제거되지 않습니다. 헤드리스 서비스도 제거하려는 경우에만
+별도로 <code>ccx service uninstall</code>을 실행하십시오.

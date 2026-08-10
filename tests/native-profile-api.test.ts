@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { tmpdir, userInfo } from "node:os";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { handleNativeProfileAPI } from "../src/codex/native-profile-api";
 import type { NativeProfileManager } from "../src/codex/native-profile-manager";
 import { NativeProfileError } from "../src/codex/native-profile-types";
@@ -48,7 +48,7 @@ describe("native main profile management API", () => {
       body: JSON.stringify({ target: "target", confirmedStopped: true }),
     });
     try {
-      const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, { manager });
+      const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, { manager });
       expect(response?.status).toBe(200);
       expect(checkedScopedAdmission).toBe(true);
     } finally {
@@ -69,7 +69,7 @@ describe("native main profile management API", () => {
       body: JSON.stringify({ target: "target", confirmedStopped: true }),
     });
     try {
-      const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, {
+      const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, {
         manager,
         drainTimeoutMs: 0,
       });
@@ -98,7 +98,7 @@ describe("native main profile management API", () => {
         method: "POST",
         body: JSON.stringify({ target: "target", confirmedStopped: true }),
       });
-      const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, {
+      const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, {
         manager,
         drainTimeoutMs: 1_000,
         sleep: async () => {
@@ -137,21 +137,21 @@ describe("native main profile management API", () => {
     });
     expect(request.headers.has("content-length")).toBe(false);
 
-    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, { manager });
+    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, { manager });
 
     expect(response?.status).toBe(413);
     expect(registered).toBe(false);
   });
 
   test("constructor failures remain inside the redacted management error boundary", async () => {
-    const missingHome = join(tmpdir(), `ocx-native-profile-missing-${crypto.randomUUID()}`);
+    const missingHome = join(tmpdir(), `ccx-native-profile-missing-${crypto.randomUUID()}`);
     process.env.CODEX_HOME = missingHome;
     const request = new Request("http://localhost/api/native-main-profiles");
 
     const response = await handleNativeProfileAPI(
       request,
       new URL(request.url),
-      {} as OcxConfig,
+      {} as CodexCommanderConfig,
     );
 
     expect(response).not.toBeNull();
@@ -162,7 +162,7 @@ describe("native main profile management API", () => {
   });
 
   test("pending-recovery errors retain actionable public recovery commands", async () => {
-    const message = "A native-profile recovery journal is pending. Run `ocx account main recover` or `ocx account main recover --rollback --yes` before registering or adding profiles.";
+    const message = "A native-profile recovery journal is pending. Run `ccx account main recover` or `ccx account main recover --rollback --yes` before registering or adding profiles.";
     const manager = {
       register: async () => { throw new NativeProfileError("RECOVERY_REQUIRED", message, 409); },
     } as unknown as NativeProfileManager;
@@ -171,7 +171,7 @@ describe("native main profile management API", () => {
       body: JSON.stringify({ label: "personal" }),
     });
 
-    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, { manager });
+    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, { manager });
 
     expect(response?.status).toBe(409);
     const payload = await response?.json() as Record<string, unknown>;
@@ -180,7 +180,7 @@ describe("native main profile management API", () => {
   });
 
   test("finish returns a typed non-200 after server-owned stage cleanup without a cleanup warning", async () => {
-    const message = "A native-profile recovery journal is pending. Run `ocx account main recover` before adding profiles.";
+    const message = "A native-profile recovery journal is pending. Run `ccx account main recover` before adding profiles.";
     const manager = {
       finishStage: async () => { throw new NativeProfileError("RECOVERY_REQUIRED", message, 409); },
     } as unknown as NativeProfileManager;
@@ -189,7 +189,7 @@ describe("native main profile management API", () => {
       body: JSON.stringify({ stageId: "11111111-1111-4111-8111-111111111111", writerToken: "writer-token", label: "work" }),
     });
 
-    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, { manager });
+    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, { manager });
 
     expect(response?.status).toBe(409);
     const payload = await response?.json() as Record<string, unknown>;
@@ -209,7 +209,7 @@ describe("native main profile management API", () => {
       body: JSON.stringify({ stageId: "11111111-1111-4111-8111-111111111111", writerToken: "writer-token", label: "work" }),
     });
 
-    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, { manager });
+    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, { manager });
 
     expect(response?.status).toBe(422);
     expect(await response?.json()).toEqual({
@@ -240,7 +240,7 @@ describe("native main profile management API", () => {
       method: "POST",
       body: JSON.stringify({ target: "target", confirmedStopped: true }),
     });
-    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, {
+    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, {
       manager,
       probeRecoveryState: (() => {
         const states = ["journal", "none"] as const;
@@ -283,7 +283,7 @@ describe("native main profile management API", () => {
       body: JSON.stringify({ target: "target", confirmedStopped: true }),
     });
 
-    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, {
+    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, {
       manager,
       probeRecoveryState: () => "none",
       completeRecovery: id => {
@@ -319,7 +319,7 @@ describe("native main profile management API", () => {
       body: JSON.stringify({ target: "target", confirmedStopped: true }),
     });
 
-    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, {
+    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, {
       manager,
       probeRecoveryState: () => "none",
       completeRecovery: () => { completions += 1; return true; },
@@ -350,7 +350,7 @@ describe("native main profile management API", () => {
       body: JSON.stringify({ target: "target", confirmedStopped: true }),
     });
 
-    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, {
+    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, {
       manager,
       probeRecoveryState: () => "none",
       completeRecovery: () => { completions += 1; return true; },
@@ -382,7 +382,7 @@ describe("native main profile management API", () => {
       body: JSON.stringify({ target: "target", confirmedStopped: true }),
     });
 
-    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, {
+    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, {
       manager,
       probeRecoveryState: () => states.shift() ?? "journal",
       blockRecovery: (id, state) => {
@@ -428,7 +428,7 @@ describe("native main profile management API", () => {
       method: "POST",
       body: JSON.stringify({ target: "target", confirmedStopped: true }),
     });
-    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, {
+    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, {
       manager,
       probeRecoveryState: () => "none",
       blockRecovery: () => { blocks += 1; return true; },
@@ -455,7 +455,7 @@ describe("native main profile management API", () => {
       body: JSON.stringify({ target: "target", confirmedStopped: true }),
     });
 
-    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, {
+    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, {
       manager,
       probeRecoveryState: () => states.shift() ?? "manual",
     });
@@ -480,7 +480,7 @@ describe("native main profile management API", () => {
       body: JSON.stringify({ target: "target", confirmedStopped: true }),
     });
 
-    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, {
+    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, {
       manager,
       probeRecoveryState: () => {
         if (probes++ === 0) return "none";
@@ -512,7 +512,7 @@ describe("native main profile management API", () => {
       method: "POST",
       body: JSON.stringify({ rollback: false }),
     });
-    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, {
+    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, {
       manager,
       probeRecoveryState: () => states.shift() ?? "none",
       completeRecovery: id => {
@@ -549,7 +549,7 @@ describe("native main profile management API", () => {
       method: "POST",
       body: JSON.stringify({ rollback: false }),
     });
-    const retained = await handleNativeProfileAPI(retainedRequest, new URL(retainedRequest.url), {} as OcxConfig, {
+    const retained = await handleNativeProfileAPI(retainedRequest, new URL(retainedRequest.url), {} as CodexCommanderConfig, {
       manager: retainedManager,
       probeRecoveryState: () => "manual",
       completeRecovery: () => { completions += 1; return true; },
@@ -566,7 +566,7 @@ describe("native main profile management API", () => {
       method: "POST",
       body: JSON.stringify({ rollback: false }),
     });
-    const failed = await handleNativeProfileAPI(failedRequest, new URL(failedRequest.url), {} as OcxConfig, {
+    const failed = await handleNativeProfileAPI(failedRequest, new URL(failedRequest.url), {} as CodexCommanderConfig, {
       manager: failedManager,
       probeRecoveryState: () => "manual",
       completeRecovery: () => { completions += 1; return true; },
@@ -589,7 +589,7 @@ describe("native main profile management API", () => {
       method: "POST",
       body: JSON.stringify({ rollback: false }),
     });
-    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, {
+    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, {
       manager,
       probeRecoveryState: () => states.shift() ?? "none",
     });
@@ -603,7 +603,7 @@ describe("native main profile management API", () => {
       list: async () => { throw new Error(secret); },
     } as unknown as NativeProfileManager;
     const request = new Request("http://localhost/api/native-main-profiles");
-    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, { manager });
+    const response = await handleNativeProfileAPI(request, new URL(request.url), {} as CodexCommanderConfig, { manager });
     expect(response?.status).toBe(500);
     const payload = await response?.json() as { code: string; error: string };
     expect(payload).toEqual({ code: "INTERNAL_ERROR", error: "Native-profile operation failed." });

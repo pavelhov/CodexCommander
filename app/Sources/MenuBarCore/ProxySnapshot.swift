@@ -57,7 +57,7 @@ public enum ProxyState: Equatable, Sendable {
         case .unreachable:
             return "The proxy is not running."
         case .unauthorized:
-            return "OpenCodex management authentication is unavailable."
+            return "CodexCommander management authentication is unavailable."
         case .degraded(let message):
             return message
         }
@@ -86,7 +86,7 @@ public struct ProxySnapshot: Equatable, Sendable {
     /// Remembered from the last successful health read, so a stopped proxy can still
     /// tell the user the right start command for their install.
     public var lastKnownStartCommand: String?
-    /// The proxy's own remediation hint (for example `ocx service install`). Displayed
+    /// The proxy's own remediation hint (for example `ccx service install`). Displayed
     /// as selectable text, never executed.
     public var recommendedCommand: String?
     /// Whether a section has actually been read, so "not fetched yet" and "the proxy
@@ -136,7 +136,7 @@ public struct ProxySnapshot: Equatable, Sendable {
         case .loading: return .none
         case .running: return .none
         case .unreachable:
-            return .runCommand(lastKnownStartCommand ?? "ocx start")
+            return .runCommand(lastKnownStartCommand ?? "ccx start")
         case .unauthorized: return .openDashboard
         case .degraded: return .retry
         }

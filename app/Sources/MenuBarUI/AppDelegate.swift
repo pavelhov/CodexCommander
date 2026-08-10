@@ -19,7 +19,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     private let launchAtLoginController = LaunchAtLoginController()
     private lazy var executableFingerprint = ExecutableFingerprint.current()
     private lazy var sourceRevision = BuildProvenance.shortRevision(
-        Bundle.main.object(forInfoDictionaryKey: "OpenCodexSourceRevision")
+        Bundle.main.object(forInfoDictionaryKey: "CodexCommanderSourceRevision")
     )
     private lazy var launchAtLoginRegistrationAllowed =
         LaunchAtLoginEligibility.isStableBundle(Bundle.main.bundleURL)
@@ -40,7 +40,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         } catch {
             // Keep the panel usable after an unsafe/missing discovery result, but retain
             // production rediscovery for the next menu open instead of freezing a
-            // credential-less compatibility client forever.
+            // credential-less bootstrap client forever.
             let fallback = ProxyInstallation(
                 endpoint: .default,
                 credential: nil,
@@ -63,7 +63,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         item.button?.imagePosition = .imageOnly
         item.button?.target = self
         item.button?.action = #selector(togglePopover)
-        item.button?.setAccessibilityLabel("OpenCodex proxy status")
+        item.button?.setAccessibilityLabel("CodexCommander proxy status")
         statusItem = item
 
         controller.onDashboard = { [weak self] in self?.openDashboard() }
@@ -74,7 +74,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         controller.onRestart = { [weak self] in self?.restartProxy() }
         controller.onApplyCodexCatalog = { [weak self] in self?.applyCodexCatalog() }
         controller.onQuitMenuBar = { [weak self] in self?.quitMenuBar(nil) }
-        controller.onStopAndQuit = { [weak self] in self?.stopOpenCodexAndQuit(nil) }
+        controller.onStopAndQuit = { [weak self] in self?.stopCodexCommanderAndQuit(nil) }
         controller.onLaunchAtLoginChange = { [weak self] enabled in
             self?.setLaunchAtLogin(enabled)
         }
@@ -155,7 +155,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         endpoint = snapshot.endpoint
         statusItem?.button?.image = StatusIcon.image(for: snapshot.state)
         let build = sourceRevision.map { " · build \($0)" } ?? ""
-        statusItem?.button?.toolTip = "OpenCodex — \(snapshot.state.title) (\(snapshot.endpoint.display))\(build)"
+        statusItem?.button?.toolTip = "CodexCommander — \(snapshot.state.title) (\(snapshot.endpoint.display))\(build)"
         controller.apply(snapshot)
         if !restartInFlight && !lifecycleInFlight && !catalogActionInFlight {
             controller.setRestartEnabled(snapshot.state.isRunning)
@@ -251,7 +251,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
             controller.showResult(error, isError: true)
         } else if presentation.needsApproval {
             controller.showResult(
-                "Approve OpenCodex under Login Items in System Settings.",
+                "Approve CodexCommander under Login Items in System Settings.",
                 isError: false
             )
         }
@@ -261,7 +261,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         NSApp.mainMenu = ApplicationMenuFactory.make(
             target: self,
             quitAction: #selector(quitMenuBar(_:)),
-            stopAndQuitAction: #selector(stopOpenCodexAndQuit(_:))
+            stopAndQuitAction: #selector(stopCodexCommanderAndQuit(_:))
         )
         updateApplicationMenu()
     }
@@ -277,7 +277,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     }
 
     public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if menuItem.action == #selector(stopOpenCodexAndQuit(_:)) {
+        if menuItem.action == #selector(stopCodexCommanderAndQuit(_:)) {
             return LifecycleActionAvailability.canStopAndQuit(
                 state: latest?.state,
                 controlsAllowed: !lifecycleInFlight && !restartInFlight && !catalogActionInFlight
@@ -323,7 +323,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         updateApplicationMenu()
         controller.setLifecycleControlsEnabled(false)
         refreshCatalogApplyAvailability()
-        controller.showResult("Starting OpenCodex…", isError: false)
+        controller.showResult("Starting CodexCommander…", isError: false)
         Task { [actions, coordinator] in
             let outcome = await actions?.start() ?? .failed("Lifecycle control is unavailable.")
             await coordinator?.forceRefresh()
@@ -334,9 +334,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                 switch outcome {
                 case .running:
                     self.clearCatalogUpdate()
-                    self.controller.showResult("OpenCodex started.", isError: false)
+                    self.controller.showResult("CodexCommander started.", isError: false)
                 case .stopped:
-                    self.controller.showResult("OpenCodex did not start.", isError: true)
+                    self.controller.showResult("CodexCommander did not start.", isError: true)
                 case .catalogUpdateReady(let count):
                     self.presentCatalogUpdate(staleWorkerCount: count)
                 case .failed(let message):
@@ -356,7 +356,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
 
     /// Explicit destructive exit: stop routing first and terminate the companion only
     /// after the lifecycle helper confirms that the proxy and service are stopped.
-    @objc private func stopOpenCodexAndQuit(_ sender: Any?) {
+    @objc private func stopCodexCommanderAndQuit(_ sender: Any?) {
         guard !lifecycleInFlight, !restartInFlight, !catalogActionInFlight else { return }
         guard confirm(.stopAndQuit) else { return }
         performStop(quitWhenStopped: true)
@@ -367,7 +367,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         updateApplicationMenu()
         controller.setLifecycleControlsEnabled(false)
         refreshCatalogApplyAvailability()
-        controller.showResult("Stopping OpenCodex…", isError: false)
+        controller.showResult("Stopping CodexCommander…", isError: false)
         Task { [actions, coordinator] in
             let outcome = await actions?.stop() ?? .failed("Lifecycle control is unavailable.")
             let shouldTerminate = quitWhenStopped
@@ -389,10 +389,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                         isError: false
                     )
                 case .running:
-                    self.controller.showResult("OpenCodex is still running.", isError: true)
+                    self.controller.showResult("CodexCommander is still running.", isError: true)
                 case .catalogUpdateReady(let count):
                     self.presentCatalogUpdate(staleWorkerCount: count)
-                    self.controller.showResult("OpenCodex is still running.", isError: true)
+                    self.controller.showResult("CodexCommander is still running.", isError: true)
                 case .failed(let message):
                     self.controller.showResult(message, isError: true)
                 }
@@ -423,7 +423,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                 self?.updateApplicationMenu()
                 switch outcome {
                 case .restarted:
-                    self?.controller.showResult("OpenCodex restarted.", isError: false)
+                    self?.controller.showResult("CodexCommander restarted.", isError: false)
                 case .failed(let message):
                     self?.controller.showResult(message, isError: true)
                 }

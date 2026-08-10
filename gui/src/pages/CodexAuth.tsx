@@ -98,7 +98,7 @@ type CachedMode = {
  */
 export default function CodexAuth({ apiBase }: { apiBase: string }) {
   const t = useT();
-  const configCacheKey = `ocx.codex-auth.config.v1:${apiBase}`;
+  const configCacheKey = `ccx.codex-auth.config.v1:${apiBase}`;
   const cached = readSessionListCache<CachedMode>(configCacheKey);
   const [bannerState, setBannerState] = useState<OpenAiAccountBannerState>(() => cached?.bannerState ?? null);
   const [accountModeState, setAccountModeState] = useState<CodexAccountModeState | null>(

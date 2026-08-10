@@ -4,7 +4,7 @@ import * as oauthModule from "../src/oauth";
 mock.module("../src/oauth", () => ({ ...oauthModule, getValidAccessToken: async () => "vision-cache-token" }));
 
 import { parseRequest } from "../src/responses/parser";
-import type { OcxConfig, OcxContentPart, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderContentPart, CodexCommanderProviderConfig } from "../src/types";
 import {
   describeImagesInPlace,
   evictOldestVisionDescriptionForBudget,
@@ -20,18 +20,18 @@ import {
 const DATA_A = "data:image/png;base64,YQ==";
 const DATA_B = "data:image/png;base64,Yg==";
 const DATA_C = "data:image/png;base64,Yw==";
-const openaiProvider: OcxProviderConfig = {
+const openaiProvider: CodexCommanderProviderConfig = {
   adapter: "openai-responses",
   authMode: "forward",
   baseUrl: "https://openai-vision.test/v1",
 };
-const anthropicProvider: OcxProviderConfig = {
+const anthropicProvider: CodexCommanderProviderConfig = {
   adapter: "anthropic",
   authMode: "oauth",
   baseUrl: "https://anthropic-vision.test",
 };
 
-const textOnlyProvider: OcxProviderConfig = {
+const textOnlyProvider: CodexCommanderProviderConfig = {
   adapter: "openai-chat",
   baseUrl: "https://routed.test/v1",
   apiKey: "routed",
@@ -55,7 +55,7 @@ function plan(overrides: Partial<VisionPlan> = {}): VisionPlan {
 }
 
 test("vision sidecar auth stays lazy for no-image and disabled branches", () => {
-  const cfg: OcxConfig = { port: 10100, defaultProvider: "routed", providers: { routed: textOnlyProvider } };
+  const cfg: CodexCommanderConfig = { port: 10100, defaultProvider: "routed", providers: { routed: textOnlyProvider } };
   const noImage = parseRequest({ model: "routed/text-model", input: "text only" });
   const withImage = parseRequest({
     model: "routed/text-model",
@@ -109,7 +109,7 @@ function imageCaption(body: Record<string, unknown>): string {
 
 function textParts(request: ReturnType<typeof parsed>, messageIndex = 0): string[] {
   const content = request.context.messages.filter(message => message.role === "user")[messageIndex]?.content;
-  return (content as OcxContentPart[]).filter(part => part.type === "text").map(part => part.text);
+  return (content as CodexCommanderContentPart[]).filter(part => part.type === "text").map(part => part.text);
 }
 
 describe("vision description cache and per-turn cap", () => {

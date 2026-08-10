@@ -92,7 +92,7 @@ async function mount() {
 }
 
 function familyToggle(name: string): HTMLButtonElement {
-  const found = Array.from(container.querySelectorAll("button.ocx-group-toggle"))
+  const found = Array.from(container.querySelectorAll("button.ccx-group-toggle"))
     .find(button => (button.textContent ?? "").includes(name));
   if (!found) throw new Error(`family toggle not found: ${name}`);
   return found as unknown as HTMLButtonElement;
@@ -104,10 +104,10 @@ async function click(element: HTMLElement) {
 
 test("families render as a vertical stack, Opus first", async () => {
   await mount();
-  expect(container.querySelector(".ocx-group-stack")).not.toBeNull();
+  expect(container.querySelector(".ccx-group-stack")).not.toBeNull();
   // The old 4-column kanban container is gone.
   expect(container.querySelector(".claude-lanes")).toBeNull();
-  const names = Array.from(container.querySelectorAll(".ocx-group-name")).map(n => n.textContent);
+  const names = Array.from(container.querySelectorAll(".ccx-group-name")).map(n => n.textContent);
   expect(names).toEqual(["Opus", "Fable", "Sonnet", "Haiku"]);
 });
 
@@ -130,7 +130,7 @@ test("toggling a family hides its body and persists the preference", async () =>
   expect(familyToggle("Opus").getAttribute("aria-expanded")).toBe("false");
   expect(container.querySelector("#claude-lane-body-opus")).toBeNull();
 
-  const stored = testWindow.localStorage.getItem("ocx.claudeDesktop.collapsedFamilies.v2");
+  const stored = testWindow.localStorage.getItem("ccx.claudeDesktop.collapsedFamilies.v2");
   expect(stored).not.toBeNull();
   expect(JSON.parse(stored!)).toContain("opus");
 });
@@ -142,8 +142,8 @@ test("a collapsed family still accepts a dropped model", async () => {
   // Fable is empty, so it is already folded by the load-time default.
   expect(familyToggle("Fable").getAttribute("aria-expanded")).toBe("false");
 
-  const fableSection = Array.from(container.querySelectorAll("section.ocx-group"))
-    .find(section => (section.querySelector(".ocx-group-name")?.textContent ?? "") === "Fable")!;
+  const fableSection = Array.from(container.querySelectorAll("section.ccx-group"))
+    .find(section => (section.querySelector(".ccx-group-name")?.textContent ?? "") === "Fable")!;
 
   await act(async () => {
     const event = new testWindow.Event("drop", { bubbles: true }) as unknown as Event & { dataTransfer: unknown };
@@ -152,7 +152,7 @@ test("a collapsed family still accepts a dropped model", async () => {
   });
 
   // Fable's header count proves the move landed even though the family is folded.
-  const fableCount = fableSection.querySelector(".ocx-group-count")?.textContent ?? "";
+  const fableCount = fableSection.querySelector(".ccx-group-count")?.textContent ?? "";
   expect(fableCount).toContain("1");
 });
 
@@ -161,9 +161,9 @@ test("a collapsed family still accepts a dropped model", async () => {
 test("the header count ignores the search", async () => {
   await mount();
   await click(familyToggle("Opus"));
-  const opusSection = Array.from(container.querySelectorAll("section.ocx-group"))
-    .find(section => (section.querySelector(".ocx-group-name")?.textContent ?? "") === "Opus")!;
-  expect(opusSection.querySelector(".ocx-group-count")?.textContent).toContain("7");
+  const opusSection = Array.from(container.querySelectorAll("section.ccx-group"))
+    .find(section => (section.querySelector(".ccx-group-name")?.textContent ?? "") === "Opus")!;
+  expect(opusSection.querySelector(".ccx-group-count")?.textContent).toContain("7");
 
   const search = opusSection.querySelector("input.claude-lane-search") as unknown as HTMLInputElement;
   await act(async () => {
@@ -171,7 +171,7 @@ test("the header count ignores the search", async () => {
     search.dispatchEvent(new testWindow.Event("input", { bubbles: true }) as never);
   });
 
-  expect(opusSection.querySelector(".ocx-group-count")?.textContent).toContain("7");
+  expect(opusSection.querySelector(".ccx-group-count")?.textContent).toContain("7");
 });
 
 // Regression for the WP1 focused audit: an earlier design derived collapse from the
@@ -179,13 +179,13 @@ test("the header count ignores the search", async () => {
 test("moving a model does not re-fold the family the user is working in", async () => {
   await mount();
   await click(familyToggle("Sonnet"));
-  const sonnetSection = Array.from(container.querySelectorAll("section.ocx-group"))
-    .find(section => (section.querySelector(".ocx-group-name")?.textContent ?? "") === "Sonnet")!;
-  expect(sonnetSection.querySelector("button.ocx-group-toggle")!.getAttribute("aria-expanded")).toBe("true");
+  const sonnetSection = Array.from(container.querySelectorAll("section.ccx-group"))
+    .find(section => (section.querySelector(".ccx-group-name")?.textContent ?? "") === "Sonnet")!;
+  expect(sonnetSection.querySelector("button.ccx-group-toggle")!.getAttribute("aria-expanded")).toBe("true");
 
   // Move Sonnet's only model to Opus by dropping it there.
-  const opusSection = Array.from(container.querySelectorAll("section.ocx-group"))
-    .find(section => (section.querySelector(".ocx-group-name")?.textContent ?? "") === "Opus")!;
+  const opusSection = Array.from(container.querySelectorAll("section.ccx-group"))
+    .find(section => (section.querySelector(".ccx-group-name")?.textContent ?? "") === "Opus")!;
   await act(async () => {
     const event = new testWindow.Event("drop", { bubbles: true });
     Object.defineProperty(event, "dataTransfer", { value: { getData: () => "prov/only-sonnet" } });
@@ -193,14 +193,14 @@ test("moving a model does not re-fold the family the user is working in", async 
   });
 
   // Sonnet is now empty, but it must stay OPEN: the user never asked to fold it.
-  const sonnetAfter = Array.from(container.querySelectorAll("section.ocx-group"))
-    .find(section => (section.querySelector(".ocx-group-name")?.textContent ?? "") === "Sonnet")!;
-  expect(sonnetAfter.querySelector("button.ocx-group-toggle")!.getAttribute("aria-expanded")).toBe("true");
+  const sonnetAfter = Array.from(container.querySelectorAll("section.ccx-group"))
+    .find(section => (section.querySelector(".ccx-group-name")?.textContent ?? "") === "Sonnet")!;
+  expect(sonnetAfter.querySelector("button.ccx-group-toggle")!.getAttribute("aria-expanded")).toBe("true");
 });
 
 test("a stored preference wins over the load-time default", async () => {
   // Only Opus folded — every other family stays open despite the all-collapsed default.
-  testWindow.localStorage.setItem("ocx.claudeDesktop.collapsedFamilies.v2", JSON.stringify(["opus"]));
+  testWindow.localStorage.setItem("ccx.claudeDesktop.collapsedFamilies.v2", JSON.stringify(["opus"]));
   await mount();
   expect(familyToggle("Opus").getAttribute("aria-expanded")).toBe("false");
   expect(familyToggle("Fable").getAttribute("aria-expanded")).toBe("true");

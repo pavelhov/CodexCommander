@@ -12,25 +12,26 @@ import {
 } from "../src/providers/key-failover";
 import { deriveXaiConvId } from "../src/providers/xai-transport";
 import { routeModel } from "../src/router";
-import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 
 let home: string;
 
-function makeConfig(provider: Partial<OcxProviderConfig>): OcxConfig {
+function makeConfig(provider: Partial<CodexCommanderProviderConfig>): CodexCommanderConfig {
   return {
     port: 10199,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "p",
     providers: {
       p: {
         adapter: "openai-chat",
         baseUrl: "https://api.example.com/v1",
         ...provider,
-      } as OcxProviderConfig,
+      } as CodexCommanderProviderConfig,
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
-function pool3(): OcxProviderConfig["apiKeyPool"] {
+function pool3(): CodexCommanderProviderConfig["apiKeyPool"] {
   return [
     { id: "k1", key: "key-alpha-000111222333", addedAt: 1 },
     { id: "k2", key: "key-beta-444555666777", addedAt: 2 },
@@ -39,24 +40,24 @@ function pool3(): OcxProviderConfig["apiKeyPool"] {
 }
 
 beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), "ocx-keyfailover-"));
-  process.env.OPENCODEX_HOME = home;
+  home = mkdtempSync(join(tmpdir(), "ccx-keyfailover-"));
+  process.env.CODEXCOMMANDER_HOME = home;
   clearKeyCooldowns();
 });
 
 afterEach(() => {
-  delete process.env.OPENCODEX_HOME;
+  delete process.env.CODEXCOMMANDER_HOME;
   rmSync(home, { recursive: true, force: true });
   clearKeyCooldowns();
 });
 
 describe("hasKeyPoolFailover", () => {
   test("true only for key-auth providers with 2+ pool entries", () => {
-    expect(hasKeyPoolFailover({ adapter: "openai-chat", baseUrl: "x", apiKeyPool: pool3() } as OcxProviderConfig)).toBe(true);
-    expect(hasKeyPoolFailover({ adapter: "openai-chat", baseUrl: "x", apiKeyPool: [pool3()![0]] } as OcxProviderConfig)).toBe(false);
-    expect(hasKeyPoolFailover({ adapter: "openai-chat", baseUrl: "x" } as OcxProviderConfig)).toBe(false);
-    expect(hasKeyPoolFailover({ adapter: "anthropic", baseUrl: "x", authMode: "oauth", apiKeyPool: pool3() } as OcxProviderConfig)).toBe(false);
-    expect(hasKeyPoolFailover({ adapter: "openai-responses", baseUrl: "x", authMode: "forward", apiKeyPool: pool3() } as OcxProviderConfig)).toBe(false);
+    expect(hasKeyPoolFailover({ adapter: "openai-chat", baseUrl: "x", apiKeyPool: pool3() } as CodexCommanderProviderConfig)).toBe(true);
+    expect(hasKeyPoolFailover({ adapter: "openai-chat", baseUrl: "x", apiKeyPool: [pool3()![0]] } as CodexCommanderProviderConfig)).toBe(false);
+    expect(hasKeyPoolFailover({ adapter: "openai-chat", baseUrl: "x" } as CodexCommanderProviderConfig)).toBe(false);
+    expect(hasKeyPoolFailover({ adapter: "anthropic", baseUrl: "x", authMode: "oauth", apiKeyPool: pool3() } as CodexCommanderProviderConfig)).toBe(false);
+    expect(hasKeyPoolFailover({ adapter: "openai-responses", baseUrl: "x", authMode: "forward", apiKeyPool: pool3() } as CodexCommanderProviderConfig)).toBe(false);
   });
 });
 
@@ -132,7 +133,7 @@ describe("rotateKeyOn429", () => {
 });
 
 describe("rotateProviderTransportOn429", () => {
-  test("keeps Kimi prompt-cache forwarding after rotating a stale pre-upgrade config", () => {
+  test("keeps Kimi prompt-cache forwarding after rotating a current minimal config", () => {
     const promptCacheKey = "stable-kimi-conversation-429";
     const config = makeConfig({
       authMode: "key",
@@ -147,7 +148,7 @@ describe("rotateProviderTransportOn429", () => {
     delete config.providers.p;
     expect(config.providers["kimi-code"].promptCacheKey).toBeUndefined();
 
-    const parsed: OcxParsedRequest = {
+    const parsed: CodexCommanderParsedRequest = {
       modelId: "k3",
       context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
       stream: false,
@@ -177,9 +178,9 @@ describe("rotateProviderTransportOn429", () => {
   });
 
   test("inherits the routed provider's registry backfills; only the key changes", () => {
-    // The persisted config predates the registry scalar flags and merged metadata —
-    // routedProviderConfig backfilled them at request time. Rotation must not fall back
-    // to the bare persisted snapshot and silently drop them for the retried request.
+    // Optional registry-derived fields do not need to be persisted. routeModel supplies
+    // them at request time, and rotation must not fall back to the bare persisted snapshot
+    // and silently drop them for the retried request.
     const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
     const routedProvider = {
       ...config.providers.p,
@@ -188,7 +189,7 @@ describe("rotateProviderTransportOn429", () => {
       parallelToolCalls: false,
       modelContextWindows: { "some-model": 262_144 },
       noTemperatureModels: ["some-model"],
-    } as OcxProviderConfig;
+    } as CodexCommanderProviderConfig;
 
     const rotated = rotateProviderTransportOn429(config, "p", routedProvider, {
       now: 1_000_000,
@@ -214,6 +215,7 @@ describe("rotateProviderTransportOn429", () => {
       apiKeyPool: pool3(),
     });
     config.providers.xai = config.providers.p;
+    config.defaultProvider = "xai";
     delete config.providers.p;
 
     const rotated = rotateProviderTransportOn429(config, "xai", { ...config.providers.xai }, {

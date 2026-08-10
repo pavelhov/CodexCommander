@@ -62,7 +62,7 @@ async function mount(props: Partial<ApiKeysWorkspaceProps>): Promise<HTMLDivElem
     keys: [{
       id: "k1",
       name: "alpha",
-      prefix: "ocx_data_aaaaaaaa...",
+      prefix: "ccx_data_aaaaaaaa...",
       createdAt: "2026-01-01T00:00:00.000Z",
       usage: { requests7d: 0, totalRequests: 0 },
     }],
@@ -267,9 +267,9 @@ test("a protocol result belongs to its own chip", async () => {
 test("a failed delete reports beside the key, and the error does not follow the user", async () => {
   const container = await mount({
     keys: [
-      { id: "k1", name: "alpha", prefix: "ocx_data_aaaaaaaa...", createdAt: "2026-01-01T00:00:00.000Z",
+      { id: "k1", name: "alpha", prefix: "ccx_data_aaaaaaaa...", createdAt: "2026-01-01T00:00:00.000Z",
         usage: { requests7d: 0, totalRequests: 0 } },
-      { id: "k2", name: "beta", prefix: "ocx_data_bbbbbbbb...", createdAt: "2026-01-02T00:00:00.000Z",
+      { id: "k2", name: "beta", prefix: "ccx_data_bbbbbbbb...", createdAt: "2026-01-02T00:00:00.000Z",
         usage: { requests7d: 0, totalRequests: 0 } },
     ],
     onDelete: async () => false,
@@ -301,9 +301,9 @@ test("a pending mutation cannot land its result on another key", async () => {
   let settle!: (ok: boolean) => void;
   const container = await mount({
     keys: [
-      { id: "k1", name: "alpha", prefix: "ocx_data_aaaaaaaa...", createdAt: "2026-01-01T00:00:00.000Z",
+      { id: "k1", name: "alpha", prefix: "ccx_data_aaaaaaaa...", createdAt: "2026-01-01T00:00:00.000Z",
         usage: { requests7d: 0, totalRequests: 0 } },
-      { id: "k2", name: "beta", prefix: "ocx_data_bbbbbbbb...", createdAt: "2026-01-02T00:00:00.000Z",
+      { id: "k2", name: "beta", prefix: "ccx_data_bbbbbbbb...", createdAt: "2026-01-02T00:00:00.000Z",
         usage: { requests7d: 0, totalRequests: 0 } },
     ],
     onDelete: () => new Promise<boolean>(resolve => { settle = resolve; }),
@@ -353,7 +353,7 @@ test("a duplicate-id key reports ambiguity instead of a number", async () => {
     keys: [{
       id: "dup",
       name: "alpha",
-      prefix: "ocx_data_dddddddd...",
+      prefix: "ccx_data_dddddddd...",
       createdAt: "2026-01-01T00:00:00.000Z",
       usage: { ambiguous: true },
     }],

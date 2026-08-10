@@ -133,7 +133,7 @@ function buildHome(opts?: {
   withSatelliteStores?: boolean;
   satellites?: "all" | "logs" | "memories" | "goals";
 }): string {
-  const dir = mkdtempSync(join(tmpdir(), "ocx-cleanup-"));
+  const dir = mkdtempSync(join(tmpdir(), "ccx-cleanup-"));
   mkdirSync(join(dir, "sessions", "2026", "05", "27"), { recursive: true });
   writeFileSync(join(dir, "sessions", "2026", "05", "27", "rollout-active.jsonl"), "ACTIVE".repeat(20));
 
@@ -350,19 +350,6 @@ describe("previewArchivedCleanup", () => {
     expect(preview.digest).toMatch(/^[a-f0-9]{64}$/);
   }, { timeout: STORE_BUDGET_MS });
 
-  test("treats .jsonl and .jsonl.zst as one logical rollout", () => {
-    home = buildHome();
-    writeFileSync(join(home, "archived_sessions", "rollout-old.jsonl.zst"), "ZST");
-    utimesSync(join(home, "archived_sessions", "rollout-old.jsonl.zst"), OLD, OLD);
-    const listed = listArchivedCandidates(home);
-    const old = listed.find(c => c.relPath === "archived_sessions/rollout-old.jsonl");
-    expect(old).toBeTruthy();
-    expect(old!.physicalRelPaths.sort()).toEqual([
-      "archived_sessions/rollout-old.jsonl",
-      "archived_sessions/rollout-old.jsonl.zst",
-    ]);
-    expect(listed.filter(c => c.relPath.includes("rollout-old"))).toHaveLength(1);
-  }, { timeout: STORE_BUDGET_MS });
 });
 
 describe("normalizeArchivedRolloutPath", () => {
@@ -370,8 +357,7 @@ describe("normalizeArchivedRolloutPath", () => {
     home = buildHome();
     expect(normalizeArchivedRolloutPath("archived_sessions/rollout-old.jsonl", home))
       .toBe("archived_sessions/rollout-old.jsonl");
-    expect(normalizeArchivedRolloutPath("archived_sessions/rollout-old.jsonl.zst", home))
-      .toBe("archived_sessions/rollout-old.jsonl");
+    expect(normalizeArchivedRolloutPath("archived_sessions/rollout-old.jsonl.zst", home)).toBeNull();
     expect(normalizeArchivedRolloutPath(join(home, "archived_sessions", "rollout-old.jsonl"), home))
       .toBe("archived_sessions/rollout-old.jsonl");
     expect(normalizeArchivedRolloutPath("sessions/2026/05/27/rollout-active.jsonl", home)).toBeNull();
@@ -600,18 +586,6 @@ describe("executeArchivedCleanup", () => {
     const result = runWithDigest(50, "quarantine", home);
     expect(result.ok).toBe(false);
     expect(result.error).toBe("referenced_history");
-  });
-
-  test("quarantine removes both plain and compressed physical files", () => {
-    home = buildHome();
-    writeFileSync(join(home, "archived_sessions", "rollout-old.jsonl.zst"), "ZST");
-    utimesSync(join(home, "archived_sessions", "rollout-old.jsonl.zst"), OLD, OLD);
-    const result = runWithDigest(50, "quarantine", home, { now: 1_700_000_000_002 });
-    expect(result.ok).toBe(true);
-    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(false);
-    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl.zst"))).toBe(false);
-    expect(existsSync(join(home, ".trash", "1700000000002", "rollout-old.jsonl"))).toBe(true);
-    expect(existsSync(join(home, ".trash", "1700000000002", "rollout-old.jsonl.zst"))).toBe(true);
   });
 
   test("never returns ok with error field or absolute paths in error codes", () => {
@@ -1315,10 +1289,8 @@ describe("listTrashEntries + restoreTrashEntry", () => {
     expect(existsSync(join(home, ".trash", "1700000000600", "rollout-old.jsonl"))).toBe(true);
   });
 
-  test("partial purge survivors restore only remaining physical files", () => {
+  test("partial purge leaves the surviving current JSONL available for restore", () => {
     home = buildHome();
-    writeFileSync(join(home, "archived_sessions", "rollout-old.jsonl.zst"), "ZST");
-    utimesSync(join(home, "archived_sessions", "rollout-old.jsonl.zst"), OLD, OLD);
     const preview = previewArchivedCleanup(50, home);
     const result = executeArchivedCleanup({
       percent: 50,
@@ -1332,11 +1304,9 @@ describe("listTrashEntries + restoreTrashEntry", () => {
     expect(result.trashDir).toBe(".trash/1700000000700");
     const manifest = JSON.parse(
       readFileSync(join(home, ".trash", "1700000000700", "manifest.json"), "utf8"),
-    ) as { entries: Array<{ physicalRelPaths: string[] }> };
-    expect(manifest.entries[0]!.physicalRelPaths).toEqual(["archived_sessions/rollout-old.jsonl"]);
-    // Twin was purged; stage only has the survivor.
+    ) as { entries: Array<{ relPath: string }> };
+    expect(manifest.entries[0]!.relPath).toBe("archived_sessions/rollout-old.jsonl");
     expect(existsSync(join(home, ".trash", "1700000000700", "rollout-old.jsonl"))).toBe(true);
-    expect(existsSync(join(home, ".trash", "1700000000700", "rollout-old.jsonl.zst"))).toBe(false);
 
     const restored = restoreTrashEntry(".trash/1700000000700", { codexHome: home });
     expect(restored.ok).toBe(true);
@@ -1350,6 +1320,7 @@ describe("listTrashEntries + restoreTrashEntry", () => {
     writeFileSync(join(stage, "rollout-old.jsonl"), "OLD-STAGE");
     writeFileSync(join(stage, "rollout-mid.jsonl"), "MID-STAGE");
     writeFileSync(join(stage, "manifest.json"), JSON.stringify({
+      version: 1,
       quarantinedAt: 1_700_000_000_800,
       mode: "quarantine",
       entries: [
@@ -1357,17 +1328,15 @@ describe("listTrashEntries + restoreTrashEntry", () => {
           relPath: "archived_sessions/rollout-old.jsonl",
           bytes: 9,
           mtimeMs: OLD.getTime(),
-          physicalRelPaths: ["archived_sessions/rollout-old.jsonl"],
           threadId: "told",
           rolloutPath: "archived_sessions/rollout-old.jsonl",
           archived: 1,
         },
         {
-          relPath: "archived_sessions/rollout-mid.jsonl",
+          relPath: 7,
           bytes: 9,
           mtimeMs: MID.getTime(),
-          // Malformed: non-string path must reject the entire manifest (no per-entry filter).
-          physicalRelPaths: ["archived_sessions/rollout-mid.jsonl", null],
+          // Malformed: a non-string path rejects the entire manifest.
           threadId: "tmid",
           rolloutPath: "archived_sessions/rollout-mid.jsonl",
           archived: 1,
@@ -1385,182 +1354,6 @@ describe("listTrashEntries + restoreTrashEntry", () => {
     expect(existsSync(join(home, "archived_sessions", "rollout-mid.jsonl"))).toBe(true);
     expect(readFileSync(join(home, "archived_sessions", "rollout-mid.jsonl"), "utf8")).toBe("MID".repeat(20));
   });
-
-  test("legacy quarantine without satellite-backup reconstructs production-shaped thread from rollout", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-cleanup-legacy-"));
-    home = dir;
-    mkdirSync(join(dir, "archived_sessions"), { recursive: true });
-
-    const rolloutBody = [
-      JSON.stringify({
-        type: "session_meta",
-        timestamp: "2026-01-01T00:00:00.000Z",
-        payload: {
-          id: "told",
-          model_provider: "openai",
-          source: "cli",
-          cwd: "/tmp/project",
-        },
-      }),
-      JSON.stringify({
-        type: "event_msg",
-        timestamp: "2026-01-01T00:00:01.000Z",
-        payload: { type: "user_message", message: "restore me please" },
-      }),
-    ].join("\n") + "\n";
-
-    const stage = join(dir, ".trash", "1700000000900");
-    mkdirSync(stage, { recursive: true });
-    writeFileSync(join(stage, "rollout-old.jsonl"), rolloutBody);
-    writeFileSync(join(stage, "manifest.json"), JSON.stringify({
-      quarantinedAt: 1_700_000_000_900,
-      mode: "quarantine",
-      entries: [
-        {
-          relPath: "archived_sessions/rollout-old.jsonl",
-          bytes: Buffer.byteLength(rolloutBody),
-          mtimeMs: OLD.getTime(),
-          physicalRelPaths: ["archived_sessions/rollout-old.jsonl"],
-          threadId: "told",
-          rolloutPath: "archived_sessions/rollout-old.jsonl",
-          archived: 1,
-        },
-      ],
-    }));
-    // Intentionally no satellite-backup.json — Phase-2 legacy quarantine shape.
-
-    const db = new Database(join(dir, "state_5.sqlite"));
-    db.exec(`CREATE TABLE threads (
-      id TEXT PRIMARY KEY,
-      rollout_path TEXT NOT NULL,
-      model_provider TEXT NOT NULL,
-      source TEXT NOT NULL,
-      first_user_message TEXT NOT NULL,
-      has_user_event INTEGER NOT NULL DEFAULT 0,
-      archived INTEGER,
-      archived_at INTEGER
-    )`);
-    db.close();
-
-    const restored = restoreTrashEntry(".trash/1700000000900", { codexHome: home });
-    expect(restored.ok).toBe(true);
-    expect(existsSync(join(dir, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
-    expect(existsSync(stage)).toBe(false);
-
-    const state = new Database(join(dir, "state_5.sqlite"), { readonly: true });
-    const row = state.query<{
-      id: string;
-      rollout_path: string;
-      model_provider: string;
-      source: string;
-      first_user_message: string;
-      has_user_event: number;
-      archived: number | null;
-    }, []>(
-      `SELECT id, rollout_path, model_provider, source, first_user_message, has_user_event, archived
-       FROM threads WHERE id='told'`,
-    ).get();
-    state.close();
-    expect(row).toEqual({
-      id: "told",
-      rollout_path: "archived_sessions/rollout-old.jsonl",
-      model_provider: "openai",
-      source: "cli",
-      first_user_message: "restore me please",
-      has_user_event: 1,
-      archived: 1,
-    });
-  });
-
-  test("legacy compressed-only quarantine restores .jsonl.zst and reconstructs the thread row", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-cleanup-legacy-zst-"));
-    home = dir;
-    mkdirSync(join(dir, "archived_sessions"), { recursive: true });
-
-    const rolloutBody = [
-      JSON.stringify({
-        type: "session_meta",
-        timestamp: "2026-01-01T00:00:00.000Z",
-        payload: {
-          id: "told",
-          model_provider: "openai",
-          source: "cli",
-          cwd: "/tmp/project",
-        },
-      }),
-      JSON.stringify({
-        type: "event_msg",
-        timestamp: "2026-01-01T00:00:01.000Z",
-        payload: { type: "user_message", message: "compressed restore please" },
-      }),
-    ].join("\n") + "\n";
-    const compressed = Bun.zstdCompressSync(Buffer.from(rolloutBody, "utf8"));
-
-    const stage = join(dir, ".trash", "1700000000910");
-    mkdirSync(stage, { recursive: true });
-    // Sparse legacy manifest: no threads snapshot, only the compressed physical file.
-    writeFileSync(join(stage, "rollout-old.jsonl.zst"), compressed);
-    writeFileSync(join(stage, "manifest.json"), JSON.stringify({
-      quarantinedAt: 1_700_000_000_910,
-      mode: "quarantine",
-      entries: [
-        {
-          relPath: "archived_sessions/rollout-old.jsonl",
-          bytes: compressed.byteLength,
-          mtimeMs: OLD.getTime(),
-          physicalRelPaths: ["archived_sessions/rollout-old.jsonl.zst"],
-          threadId: "told",
-          rolloutPath: "archived_sessions/rollout-old.jsonl",
-          archived: 1,
-        },
-      ],
-    }));
-    // Intentionally no satellite-backup.json and no plain .jsonl sibling.
-
-    const db = new Database(join(dir, "state_5.sqlite"));
-    db.exec(`CREATE TABLE threads (
-      id TEXT PRIMARY KEY,
-      rollout_path TEXT NOT NULL,
-      model_provider TEXT NOT NULL,
-      source TEXT NOT NULL,
-      first_user_message TEXT NOT NULL,
-      has_user_event INTEGER NOT NULL DEFAULT 0,
-      archived INTEGER,
-      archived_at INTEGER
-    )`);
-    db.close();
-
-    const restored = restoreTrashEntry(".trash/1700000000910", { codexHome: home });
-    expect(restored.ok).toBe(true);
-    expect(existsSync(join(dir, "archived_sessions", "rollout-old.jsonl.zst"))).toBe(true);
-    // Must not materialize an unbounded plain decompressed sibling on disk.
-    expect(existsSync(join(dir, "archived_sessions", "rollout-old.jsonl"))).toBe(false);
-    expect(existsSync(stage)).toBe(false);
-
-    const state = new Database(join(dir, "state_5.sqlite"), { readonly: true });
-    const row = state.query<{
-      id: string;
-      rollout_path: string;
-      model_provider: string;
-      source: string;
-      first_user_message: string;
-      has_user_event: number;
-      archived: number | null;
-    }, []>(
-      `SELECT id, rollout_path, model_provider, source, first_user_message, has_user_event, archived
-       FROM threads WHERE id='told'`,
-    ).get();
-    state.close();
-    expect(row).toEqual({
-      id: "told",
-      rollout_path: "archived_sessions/rollout-old.jsonl",
-      model_provider: "openai",
-      source: "cli",
-      first_user_message: "compressed restore please",
-      has_user_event: 1,
-      archived: 1,
-    });
-  }, { timeout: STORE_BUDGET_MS });
 
   test.each([
     ["failAfterStateCommit", { failAfterStateCommit: true }, "db_reconcile_failed"],

@@ -56,7 +56,7 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../../lib/debug-settings";
-import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
+import type { CodexCommanderClaudeCodeConfig, CodexCommanderConfig, CodexCommanderCustomModel, CodexCommanderProviderConfig } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
@@ -111,11 +111,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (clampActive) {
       const clampVersion = lastClamp?.runtimeVersion ?? resolved.runtime.version ?? "an older binary";
       warningParts.push(
-        `Some reasoning effort options were hidden because OpenCodex used Codex ${clampVersion}.${resolved.newerAvailable ? " A newer Codex installation is available." : ""}`,
+        `Some reasoning effort options were hidden because CodexCommander used Codex ${clampVersion}.${resolved.newerAvailable ? " A newer Codex installation is available." : ""}`,
       );
     } else if (resolved.newerAvailable) {
       warningParts.push(
-        `OpenCodex is using an older Codex binary (${resolved.runtime.version ?? "unknown"}). A newer Codex installation is available.`,
+        `CodexCommander is using an older Codex binary (${resolved.runtime.version ?? "unknown"}). A newer Codex installation is available.`,
       );
     }
     return jsonResponse({
@@ -214,7 +214,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
     }
     if (body.streamMode !== undefined && !isStreamMode(body.streamMode)) {
-      return jsonResponse({ error: "streamMode must be auto, legacy-tee, or eager-relay" }, 400);
+      return jsonResponse({ error: "streamMode must be auto, safe-tee, or eager-relay" }, 400);
     }
     if (body.appOwnedMemoryBudgetMb !== undefined && (
       typeof body.appOwnedMemoryBudgetMb !== "number"
@@ -231,7 +231,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (body.streamMode === "auto") {
         delete config.streamMode;
       } else {
-        config.streamMode = body.streamMode as "legacy-tee" | "eager-relay";
+        config.streamMode = body.streamMode as "safe-tee" | "eager-relay";
       }
     }
     if (typeof body.appOwnedMemoryBudgetMb === "number") {
@@ -271,7 +271,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     const runtime = (deps.readRuntimePort ?? readRuntimePort)(process.pid);
     const result = await (deps.syncModelsToCodex ?? syncModelsToCodex)(runtime?.port, loadConfig(), null);
     // A read taken before this sync can be memoized for five seconds. Drop it
-    // before classifying the just-written catalog so launch-time update
+    // before classifying the just-written catalog so launch-time catalog
     // readiness cannot be masked by a pre-write `fresh` snapshot.
     (deps.resetCodexAppServerCatalogStateCache ?? resetCodexAppServerCatalogStateCache)();
     const status = result.status === "refused" ? 409 : (result.status === "skipped" || result.ok ? 200 : 500);
@@ -280,42 +280,6 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       catalogState: (deps.collectCodexAppServerCatalogState ?? collectCodexAppServerCatalogState)(),
       ...(result.ok ? {} : { error: result.message }),
     }, status);
-  }
-
-  if (url.pathname === "/api/update/check" && req.method === "GET") {
-    const { checkForUpdate, normalizeUpdateChannel } = await import("../../update/job");
-    const rawTag = url.searchParams.get("tag");
-    if (rawTag && rawTag !== "latest" && rawTag !== "preview") {
-      return jsonResponse({ error: "tag must be latest or preview" }, 400);
-    }
-    return jsonResponse(checkForUpdate(normalizeUpdateChannel(rawTag)));
-  }
-
-  if (url.pathname === "/api/update/run" && req.method === "POST") {
-    const { normalizeUpdateChannel, startUpdateJob, UpdateJobError } = await import("../../update/job");
-    let body: { tag?: unknown; restart?: unknown };
-    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
-    if (body.tag !== undefined && body.tag !== "latest" && body.tag !== "preview") {
-      return jsonResponse({ error: "tag must be latest or preview" }, 400);
-    }
-    if (body.restart !== undefined && typeof body.restart !== "boolean") {
-      return jsonResponse({ error: "restart boolean is required" }, 400);
-    }
-    try {
-      return jsonResponse({ ok: true, job: startUpdateJob(normalizeUpdateChannel(body.tag as string | undefined), body.restart !== false) });
-    } catch (err) {
-      if (err instanceof UpdateJobError) {
-        return jsonResponse({ error: err.message, code: err.code }, err.status);
-      }
-      return jsonResponse({ error: err instanceof Error ? err.message : String(err) }, 500);
-    }
-  }
-
-  if (url.pathname === "/api/update/status" && req.method === "GET") {
-    const { readUpdateJob } = await import("../../update/job");
-    const job = readUpdateJob(url.searchParams.get("jobId"));
-    if (!job) return jsonResponse({ error: "update job not found" }, 404);
-    return jsonResponse({ ok: true, job });
   }
 
   if (url.pathname === "/api/sidecar-settings" && req.method === "GET") {

@@ -5,6 +5,16 @@ import {
   formatQuotaSourceLabel,
 } from "../gui/src/provider-workspace/report";
 
+const AGGREGATION = {
+  kind: "capacity-weighted-v1",
+  scope: "routable-known",
+  presentation: "coverage-only",
+  incomplete: false,
+  excludedAccounts: 0,
+  unknownPlanAccounts: 0,
+  partialWindowAccounts: 0,
+} as const;
+
 describe("workspace detail derived states (WP090)", () => {
   describe("filterModels", () => {
     test("empty base with no default yields an empty list", () => {
@@ -80,18 +90,18 @@ describe("workspace detail derived states (WP090)", () => {
 
   describe("accountQuotaFromReport (quota-unavailable paths)", () => {
     test("missing, malformed, and signal-free reports are null", () => {
-      expect(accountQuotaFromReport(undefined)).toBeNull();
-      expect(accountQuotaFromReport({})).toBeNull();
-      expect(accountQuotaFromReport({ quota: null })).toBeNull();
-      expect(accountQuotaFromReport({ quota: "junk" })).toBeNull();
-      expect(accountQuotaFromReport({ quota: [] })).toBeNull();
+      expect(accountQuotaFromReport({ aggregation: AGGREGATION })).toBeNull();
+      expect(accountQuotaFromReport({ aggregation: AGGREGATION, quota: null })).toBeNull();
+      expect(accountQuotaFromReport({ aggregation: AGGREGATION, quota: "junk" })).toBeNull();
+      expect(accountQuotaFromReport({ aggregation: AGGREGATION, quota: [] })).toBeNull();
       // An object with no numeric window at all carries no signal.
-      expect(accountQuotaFromReport({ quota: { updatedAt: 5 } })).toBeNull();
-      expect(accountQuotaFromReport({ quota: { weeklyPercent: "40" } })).toBeNull();
+      expect(accountQuotaFromReport({ aggregation: AGGREGATION, quota: { updatedAt: 5 } })).toBeNull();
+      expect(accountQuotaFromReport({ aggregation: AGGREGATION, quota: { weeklyPercent: "40" } })).toBeNull();
     });
 
     test("valid windows survive with numbers narrowed and junk custom rows dropped", () => {
       const quota = accountQuotaFromReport({
+        aggregation: AGGREGATION,
         updatedAt: 111,
         quota: {
           weeklyPercent: 40,
@@ -114,8 +124,8 @@ describe("workspace detail derived states (WP090)", () => {
     });
 
     test("quota updatedAt wins over the report timestamp; report fills the gap", () => {
-      expect(accountQuotaFromReport({ updatedAt: 1, quota: { monthlyPercent: 5, updatedAt: 2 } })?.updatedAt).toBe(2);
-      expect(accountQuotaFromReport({ updatedAt: 1, quota: { monthlyPercent: 5 } })?.updatedAt).toBe(1);
+      expect(accountQuotaFromReport({ aggregation: AGGREGATION, updatedAt: 1, quota: { monthlyPercent: 5, updatedAt: 2 } })?.updatedAt).toBe(2);
+      expect(accountQuotaFromReport({ aggregation: AGGREGATION, updatedAt: 1, quota: { monthlyPercent: 5 } })?.updatedAt).toBe(1);
     });
   });
 

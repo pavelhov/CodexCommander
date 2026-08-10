@@ -26,9 +26,12 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
   const t = useT();
   const { locale } = useI18n();
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang ?? "en";
-  const cacheKey = `ocx.claude-code.v1:${apiBase}`;
+  const cacheKey = `ccx.claude-code.v1:${apiBase}`;
   const resourceKey = `claude-code:${apiBase}`;
-  const cached = useMemo(() => readSessionListCache<CachedClaudeCode>(cacheKey), [cacheKey]);
+  const cached = useMemo(() => {
+    const value = readSessionListCache<CachedClaudeCode>(cacheKey);
+    return value?.state.markerMode === "proxy" || value?.state.markerMode === "subscription" ? value : null;
+  }, [cacheKey]);
   const [draftState, setState] = useState<ClaudeCodeState | null>(() => cached?.state ?? null);
   const [draftRows, setRows] = useState<MapRow[]>(() => cached?.rows ?? []);
   const [hasDraftRows, setHasDraftRows] = useState(Boolean(cached));
@@ -55,6 +58,9 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
       t("claude.loadFail"),
     );
     if (!r) throw new Error(t("claude.loadFail"));
+    if (r.markerMode !== "proxy" && r.markerMode !== "subscription") {
+      throw new Error(t("claude.loadFail"));
+    }
     const nextState: ClaudeCodeState = {
       ...r,
       // No coercion: an absent config key is AUTO, and coercing it to subscription is
@@ -62,7 +68,6 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
       authMode: r.authMode === "proxy" || r.authMode === "subscription" ? r.authMode : "auto",
       ...reconcileAutoConnectState(r),
       fastMode: r.fastMode ?? null,
-      maxContextTokens: r.maxContextTokens ?? null,
       autoContext: r.autoContext !== false,
       autoCompactWindow: r.autoCompactWindow ?? null,
       injectAgents: r.injectAgents !== false,
@@ -96,7 +101,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
     [state?.available, t],
   );
 
-  // Auto-compact window presets (devlog 020 + user request): dropdown like the model
+  // Auto-compact window presets (implementation contract + user request): dropdown like the model
   // pickers. "" = 350k default; a saved off-ladder value is surfaced as its own option.
   const autoCompactOptions = useMemo(() => {
     const ladder = [100_000, 200_000, 250_000, 300_000, 350_000, 400_000, 500_000, 600_000, 750_000, 900_000, 1_000_000];
@@ -214,7 +219,6 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
       body: (
         <SmallFastModelSetting
           value={state.smallFastModel}
-          tierHaikuModel={state.tierModels?.haiku}
           options={modelOptions}
           onChange={smallFastModel => setState({ ...state, smallFastModel })}
         />

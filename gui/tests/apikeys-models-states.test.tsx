@@ -24,7 +24,7 @@ const KEYS_OK = {
     { endpoint: "/v1/models", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
   ],
   baseUrl: "http://127.0.0.1:10100/v1",
-  endpoint: "http://127.0.0.1:10100/v1/responses",
+  responsesEndpoint: "http://127.0.0.1:10100/v1/responses",
   claudeCodeEnabled: true,
 };
 
@@ -188,7 +188,7 @@ test("a failed load keeps the rows it already had, with the retry beside them", 
   // A failure that blanks the catalog costs the user information they already
   // had, to tell them about a request that has nothing to do with those rows.
   testWindow.sessionStorage.setItem(
-    "ocx.apikeys.models.v1:http://localhost",
+    "ccx.apikeys.models.v1:http://localhost",
     JSON.stringify([{ id: "cached-model", displayName: "cached-model", provider: "openai", native: true }]),
   );
   const counter = { gets: 0 };
@@ -212,7 +212,7 @@ test("a failed load keeps the rows it already had, with the retry beside them", 
 
 test("a failure is announced, and a cache-backed retry shows progress without losing rows", async () => {
   testWindow.sessionStorage.setItem(
-    "ocx.apikeys.models.v1:http://localhost",
+    "ccx.apikeys.models.v1:http://localhost",
     JSON.stringify([{ id: "cached-model", displayName: "cached-model", provider: "openai", native: true }]),
   );
   const counter = { gets: 0 };

@@ -5,19 +5,19 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleExecutable</key>
-  <string>OpenCodexMenuBar</string>
+  <string>CodexCommanderMenuBar</string>
   <key>CFBundleIdentifier</key>
-  <string>com.opencodex.menubar</string>
+  <string>com.codexcommander.menubar</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>OpenCodex</string>
+  <string>CodexCommander</string>
   <key>CFBundleDisplayName</key>
-  <string>OpenCodex</string>
+  <string>CodexCommander</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleIconFile</key>
-  <string>OpenCodex</string>
+  <string>CodexCommander</string>
   <key>CFBundleShortVersionString</key>
   <string>0.0.0</string>
   <key>CFBundleVersion</key>
@@ -39,6 +39,6 @@
     <true/>
   </dict>
   <key>NSHumanReadableCopyright</key>
-  <string>MIT — opencodex contributors</string>
+  <string>MIT — CodexCommander contributors</string>
 </dict>
 </plist>

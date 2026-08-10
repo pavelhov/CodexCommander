@@ -7,7 +7,7 @@ type DebugScope = "provider" | "usage" | "injection" | "claude";
 async function requireLiveProxy() {
   const live = await findLiveProxy();
   if (!live) {
-    console.error("Proxy is not running. Start it with: ocx start");
+    console.error("Proxy is not running. Start it with: ccx start");
     process.exit(1);
   }
   return live;
@@ -49,11 +49,11 @@ function printScopeStatus(scope: DebugScope, view: DebugSettingsView): void {
   if (scope === "provider") {
     console.log(`Provider debug: ${view.enabled ? "ON" : "off"}`);
     console.log(`  env=${view.env.debug ? "on" : "off"}, runtime=${view.runtimeOverride.debug === undefined ? "env/default" : view.runtimeOverride.debug ? "on" : "off"}`);
-    console.log("  Tail: ocx debug provider logs [-f]");
+    console.log("  Tail: ccx debug provider logs [-f]");
   } else if (scope === "usage") {
     console.log(`Usage debug: ${view.usage ? "ON" : "off"}`);
     console.log(`  env=${view.env.usage ? "on" : "off"}, runtime=${view.runtimeOverride.usage === undefined ? "env/default" : view.runtimeOverride.usage ? "on" : "off"}`);
-    console.log("  Tail: ocx debug usage logs [-f] (via running proxy API)");
+    console.log("  Tail: ccx debug usage logs [-f] (via running proxy API)");
   } else if (scope === "injection") {
     console.log(`Injection debug: ${view.injection ? "ON" : "off"}`);
     console.log(`  env=${view.env.injection ? "on" : "off"}, runtime=${view.runtimeOverride.injection === undefined ? "env/default" : view.runtimeOverride.injection ? "on" : "off"}`);
@@ -61,13 +61,12 @@ function printScopeStatus(scope: DebugScope, view: DebugSettingsView): void {
   } else {
     console.log(`Claude inbound debug: ${view.claude ? "ON" : "off"}`);
     console.log(`  env=${view.env.claude ? "on" : "off"}, runtime=${view.runtimeOverride.claude === undefined ? "env/default" : view.runtimeOverride.claude ? "on" : "off"}`);
-    console.log("  View: ocx observe claude-inbound");
+    console.log("  View: ccx observe claude-inbound");
   }
 }
 
 function envDebugEnabled(): boolean {
-  return process.env.OCX_DEBUG === "1"
-    || process.env.OCX_DEBUG_FRAMES === "1";
+  return process.env[DEBUG_ENV.debug] === "1";
 }
 
 async function printProviderLogs(follow: boolean): Promise<void> {
@@ -118,7 +117,7 @@ async function printUsageLogs(follow: boolean): Promise<void> {
     }
     const entries = await res.json() as { seq: number; line: string }[];
     for (const entry of entries) console.log(entry.line);
-    if (entries.length === 0) console.log("(empty — enable with: ocx debug usage on)");
+    if (entries.length === 0) console.log("(empty — enable with: ccx debug usage on)");
     if (entries.length > 0) after = entries[entries.length - 1]!.seq;
   } catch (err) {
     console.error(`Failed to read usage debug logs: ${err instanceof Error ? err.message : String(err)}`);
@@ -170,8 +169,8 @@ async function handleScopeCommand(scope: DebugScope, actionArgv: string[]): Prom
   if (action === "logs") {
     if (scope === "injection" || scope === "claude") {
       console.error(scope === "claude"
-        ? "Use: ocx observe claude-inbound"
-        : "Injection debug has no buffered log stream; use: ocx observe injection");
+        ? "Use: ccx observe claude-inbound"
+        : "Injection debug has no buffered log stream; use: ccx observe injection");
       process.exit(1);
     }
     const follow = actionArgv.slice(1).some(arg => arg === "-f" || arg === "--follow");
@@ -181,21 +180,21 @@ async function handleScopeCommand(scope: DebugScope, actionArgv: string[]): Prom
   }
 
   console.error(scope === "injection" || scope === "claude"
-    ? `Usage: ocx debug ${scope} on|off|status|reset`
-    : `Usage: ocx debug ${scope} on|off|status|reset|logs [-f]`);
+    ? `Usage: ccx debug ${scope} on|off|status|reset`
+    : `Usage: ccx debug ${scope} on|off|status|reset|logs [-f]`);
   process.exit(1);
 }
 
 function printTopLevelHelp(): void {
   console.log("Debug commands (proxy must be running):");
   console.log("");
-  console.log("  ocx debug provider on|off|status|reset|logs [-f]");
-  console.log("  ocx debug usage on|off|status|reset|logs [-f]");
-  console.log("  ocx debug injection on|off|status|reset");
-  console.log("  ocx debug claude on|off|status|reset");
+  console.log("  ccx debug provider on|off|status|reset|logs [-f]");
+  console.log("  ccx debug usage on|off|status|reset|logs [-f]");
+  console.log("  ccx debug injection on|off|status|reset");
+  console.log("  ccx debug claude on|off|status|reset");
   console.log("");
   console.log("Env defaults on start:");
-  console.log("  provider → OCX_DEBUG=1 (legacy OCX_DEBUG_FRAMES still works)");
+  console.log(`  provider → ${DEBUG_ENV.debug}=1`);
   console.log(`  usage    → ${DEBUG_ENV.usage}=1`);
   console.log(`  injection→ ${DEBUG_ENV.injection}=1`);
   console.log(`  claude   → ${DEBUG_ENV.claude}=1`);
@@ -213,7 +212,7 @@ export async function handleDebugCommand(argv: string[]): Promise<void> {
     const live = await findLiveProxy();
     if (!live) {
       console.log("Proxy is not running — env defaults for the next start:");
-      console.log(`  provider → OCX_DEBUG = ${envDebugEnabled() ? "on" : "off"}`);
+      console.log(`  provider → ${DEBUG_ENV.debug} = ${envDebugEnabled() ? "on" : "off"}`);
       console.log(`  usage    → ${DEBUG_ENV.usage} = ${process.env[DEBUG_ENV.usage] === "1" ? "on" : "off"}`);
       console.log(`  injection→ ${DEBUG_ENV.injection} = ${process.env[DEBUG_ENV.injection] === "1" ? "on" : "off"}`);
       console.log(`  claude   → ${DEBUG_ENV.claude} = ${process.env[DEBUG_ENV.claude] === "1" ? "on" : "off"}`);

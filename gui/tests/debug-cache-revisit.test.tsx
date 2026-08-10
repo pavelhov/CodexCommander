@@ -14,7 +14,7 @@ let testWindow: Window;
 const originalFetch = globalThis.fetch;
 
 const API_BASE = "http://localhost";
-const CACHE_KEY = `ocx.debug.settings.v1:${API_BASE}`;
+const CACHE_KEY = `ccx.debug.settings.v1:${API_BASE}`;
 
 const BASE_SETTINGS: DebugSettings = {
   enabled: true,
@@ -54,7 +54,7 @@ function installLayoutStubs(win: Window): void {
 beforeEach(() => {
   clearClientResourceStoresForTests();
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
-  testWindow = new Window({ url: "http://localhost/#debug" });
+  testWindow = new Window({ url: "http://localhost/#logs/debug" });
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: testWindow.document },
     window: { configurable: true, value: testWindow.window },

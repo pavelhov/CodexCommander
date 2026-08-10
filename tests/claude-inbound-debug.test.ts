@@ -18,7 +18,7 @@ const body = {
   messages: [{ role: "user", content: "top secret prompt text" }],
 };
 
-describe("claude inbound debug capture (devlog 130 B1)", () => {
+describe("claude inbound debug capture (implementation contract B1)", () => {
   test("Claude inbound metadata key 65 and aggregate row overflow are visibly capped and wp5 hooks account exact bytes", () => {
     setDebugSettings({ claude: true });
     const metadata = Object.fromEntries(Array.from({ length: 65 }, (_, index) => [`${index}-${"한".repeat(3000)}`, true]));

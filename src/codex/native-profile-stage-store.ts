@@ -21,7 +21,7 @@ const MAX_STAGE_REGISTRY_BYTES = 1024 * 1024;
 const MAX_STAGES = 32;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const HASH_RE = /^[0-9a-f]{64}$/;
-const TOKEN_DOMAIN = "opencodex-native-stage-writer-v1\0";
+const TOKEN_DOMAIN = "codexcommander-native-stage-writer-v1\0";
 
 export type NativeStageState = "creating" | "open" | "cleanup-required";
 export type NativeStageTerminalOutcome = null | "imported" | "rejected" | "cancelled" | "expired";

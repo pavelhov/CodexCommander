@@ -29,7 +29,7 @@ import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
-import { routedSlug, slugEquals } from "../../providers/slug-codec";
+import { routedSlug } from "../../providers/slug-codec";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
@@ -50,7 +50,7 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../../lib/debug-settings";
-import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
+import type { CodexCommanderClaudeCodeConfig, CodexCommanderConfig, CodexCommanderCustomModel, CodexCommanderProviderConfig } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
@@ -71,6 +71,12 @@ let grokApplyTestHooks: { now?: () => number; run?: () => Promise<unknown> } | n
 
 class GrokApplyBusyError extends Error {}
 
+/** Persisted model selectors are bare native ids or one-slash Codex-facing ids. */
+function isCanonicalPersistedModelSelector(value: string): boolean {
+  const slash = value.indexOf("/");
+  return slash < 0 || (slash > 0 && slash === value.lastIndexOf("/") && slash < value.length - 1);
+}
+
 /**
  * Mirror a durable desired-state transition onto the long-lived server snapshot.
  *
@@ -80,7 +86,7 @@ class GrokApplyBusyError extends Error {}
  * profile PUT does exactly that) write the stale value back over the transition.
  * ON is the ABSENCE of the key, matching `setIntegrationEnabled`'s on-disk shape.
  */
-function mirrorDesiredEnabledOntoSnapshot(config: OcxConfig, client: "claude-desktop", enabled: boolean): void {
+function mirrorDesiredEnabledOntoSnapshot(config: CodexCommanderConfig, client: "claude-desktop", enabled: boolean): void {
   const integrations = { ...(config.clientIntegrations ?? {}) };
   if (enabled) delete integrations[client];
   else integrations[client] = false;
@@ -100,8 +106,8 @@ function mirrorDesiredEnabledOntoSnapshot(config: OcxConfig, client: "claude-des
  * unrelated key another writer just committed.
  */
 function persistDesktopProfileField(
-  config: OcxConfig,
-  desktopProfile: NonNullable<OcxConfig["claudeCode"]>["desktopProfile"],
+  config: CodexCommanderConfig,
+  desktopProfile: NonNullable<CodexCommanderConfig["claudeCode"]>["desktopProfile"],
 ): { ok: true } | { ok: false; reason: "missing" | "invalid" | "conflict" } {
   const outcome = mutatePersistedConfig(persisted => {
     persisted.claudeCode = { ...(persisted.claudeCode ?? {}), desktopProfile };
@@ -443,9 +449,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       .map(slug => ({ provider: "openai", model: slug, namespaced: slug }));
     const routedModels = uniqueCatalogModelsForPublicList(models)
       .map(m => ({ provider: m.provider, model: m.id, namespaced: catalogModelSlug(m) }))
-      .filter(m => ![...disabled].some(stored => (
-        stored === m.namespaced || slugEquals(stored, m.provider, m.model)
-      )));
+      .filter(m => !disabled.has(m.namespaced));
     return jsonResponse({
       multiAgentGuidanceEnabled: multiAgentGuidanceEnabled(config),
       syncCodexSubagentDefaults: subagentDefaultSyncEffective(config),
@@ -496,8 +500,13 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     }
     if ("model" in body) {
       if (body.model === null || body.model === "") nextModel = undefined;
-      else if (typeof body.model === "string" && body.model.trim().length > 0) nextModel = body.model;
-      else return jsonResponse({ error: "model must be a nonblank string or null" }, 400);
+      else if (typeof body.model === "string" && body.model.trim().length > 0) {
+        const selector = body.model.trim();
+        if (!isCanonicalPersistedModelSelector(selector)) {
+          return jsonResponse({ error: "model must be a canonical selector or null" }, 400);
+        }
+        nextModel = selector;
+      } else return jsonResponse({ error: "model must be a nonblank string or null" }, 400);
     }
     if ("effort" in body) {
       if (body.effort === null || body.effort === "") nextEffort = undefined;
@@ -545,7 +554,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     });
   }
 
-  // Hard reasoning-effort caps (devlog/260710_subagent_effort_intercept): a global ceiling and a
+  // Hard reasoning-effort caps (implementation contract): a global ceiling and a
   // sub-agent-only ceiling, enforced per-request in handleResponses (src/server/effort-policy.ts).
   // Key semantics per field: absent -> unchanged; null/"" -> clear; ladder value -> set; else 400.
   if (url.pathname === "/api/effort-caps" && req.method === "GET") {
@@ -584,9 +593,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     // catalog, just buried by priority. List them first so the user can feature them over routed.
     const { listCatalogNativeSlugs } = await import("../../codex/catalog");
     const visibleRouted = [...new Set(models
-      .filter(m => ![...disabled].some(stored =>
-        stored === catalogModelSlug(m) || slugEquals(stored, m.provider, m.id)
-      ))
+      .filter(m => !disabled.has(catalogModelSlug(m)))
       .map(catalogModelSlug))];
     const available = [
       ...listCatalogNativeSlugs().filter(ns => !disabled.has(ns)),
@@ -608,17 +615,22 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   if (url.pathname === "/api/subagent-models" && req.method === "PUT") {
     let body: { models?: unknown };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
-    const chosen = Array.isArray(body.models) ? body.models.filter((m): m is string => typeof m === "string").slice(0, 5) : [];
-    config.subagentModels = chosen;
+    if (!Array.isArray(body.models)) return jsonResponse({ error: "models must be an array" }, 400);
+    const chosen = body.models.slice(0, 5);
+    if (chosen.some(model => typeof model !== "string" || model.trim().length === 0 || !isCanonicalPersistedModelSelector(model.trim()))) {
+      return jsonResponse({ error: "models must contain canonical selectors" }, 400);
+    }
+    const canonicalChosen = chosen.map(model => (model as string).trim());
+    config.subagentModels = canonicalChosen;
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     save(config);
     const catalogRefresh = await convergeCodexCatalog();
     await syncClaudeAgentDefsBestEffort();
     await autoApplyDesktopBestEffort();
-    const effectiveV2 = effectiveSubagentRoster(chosen, "v2");
+    const effectiveV2 = effectiveSubagentRoster(canonicalChosen, "v2");
     return jsonResponse({
       ok: true,
-      applied: chosen,
+      applied: canonicalChosen,
       catalogRefresh,
       advertised: effectiveV2.advertised.map(model => model.model),
       excluded: effectiveV2.excluded,
@@ -631,9 +643,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const disabled = new Set(config.disabledModels ?? []);
     const { listCatalogNativeSlugs } = await import("../../codex/catalog");
     const visibleRouted = [...new Set(models
-      .filter(m => ![...disabled].some(stored =>
-        stored === catalogModelSlug(m) || slugEquals(stored, m.provider, m.id)
-      ))
+      .filter(m => !disabled.has(catalogModelSlug(m)))
       .map(catalogModelSlug))];
     const available = [
       ...listCatalogNativeSlugs().filter(ns => !disabled.has(ns)),
@@ -669,6 +679,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
             index: i,
             value: entry,
           }, 400);
+        }
+        if (!isCanonicalPersistedModelSelector(entry.trim())) {
+          return jsonResponse({ error: `models[${i}] must be a canonical selector`, index: i, value: entry }, 400);
         }
         models.push(entry.trim());
       }
@@ -756,7 +769,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   // Claude Desktop profile: routed/native model assignments for the Desktop 3P config.
   if (url.pathname === "/api/claude-desktop" && req.method === "GET") {
     try {
-      const state = await buildClaudeDesktopState(config);
+      const state = await buildClaudeDesktopState(config, undefined, deps.fetchAllModels);
       const runtimePort = Number(url.port) || config.port;
       return jsonResponse({ ...state, port: runtimePort });
     } catch (error) {
@@ -769,7 +782,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     try {
       const { parseDesktopProfile, reconcileDesktopProfile } = await import("../../claude/desktop-profile");
       const parsed = parseDesktopProfile(body.profile);
-      const current = await buildClaudeDesktopState(config);
+      const current = await buildClaudeDesktopState(config, undefined, deps.fetchAllModels);
       for (const model of current.models.filter(item => !item.available)) {
         const before = current.profile.assignments[model.route];
         const after = parsed.assignments[model.route];
@@ -784,10 +797,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
           throw new Error(`현재 사용할 수 없는 모델은 기본값으로 지정할 수 없습니다: ${nextDefault}`);
         }
       }
-      const state = await buildClaudeDesktopState(config, parsed);
+      const state = await buildClaudeDesktopState(config, parsed, deps.fetchAllModels);
       config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile: reconcileDesktopProfile(state.profile, state.models) };
       saveConfigPreservingClaudeCode(config);
-      const saved = await buildClaudeDesktopState(config);
+      const saved = await buildClaudeDesktopState(config, undefined, deps.fetchAllModels);
       const runtimePort = Number(url.port) || config.port;
       return jsonResponse({ ok: true, ...saved, port: runtimePort });
     } catch (error) {
@@ -796,48 +809,44 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   }
   if (url.pathname === "/api/claude-desktop/apply" && req.method === "POST") {
     try {
+      let parsed: unknown;
+      try {
+        parsed = await readManagementJsonBody(req);
+      } catch (error) {
+        rethrowManagementBodyTooLarge(error);
+        return jsonResponse({ error: "invalid JSON body" }, 400);
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return jsonResponse({ error: "body must be an object" }, 400);
+      }
+      const body = parsed as { mode?: unknown; profile?: unknown };
+      const unknownField = Object.keys(body).find(field => field !== "mode" && field !== "profile");
+      if (unknownField) return jsonResponse({ error: `unknown Claude Desktop apply field: ${unknownField}` }, 400);
+      if (body.mode !== "static" && body.mode !== "hybrid" && body.mode !== "discovery") {
+        return jsonResponse({ error: "mode must be static, hybrid, or discovery" }, 400);
+      }
+      const mode = body.mode;
+
+      // #859: a delegated CLI apply carries the profile it just saved — the
+      // daemon's own config can be older, and building state from it would
+      // apply (and persist) the stale profile over the newer one.
+      let profileOverride: Parameters<typeof buildClaudeDesktopState>[1];
+      if (body.profile !== undefined) {
+        const { parseDesktopProfile } = await import("../../claude/desktop-profile");
+        try {
+          profileOverride = parseDesktopProfile(body.profile);
+        } catch (error) {
+          return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+        }
+      }
+
       const { setIntegrationEnabled, claudeDesktopIntegrationEnabled } = await import("../../codex/desired-state");
       const desired = setIntegrationEnabled("claude-desktop", true);
       if (!desired.ok) return jsonResponse({ error: desired.message }, desired.retryable ? 409 : 500);
       // Disk now says ON; the reused server snapshot must agree, or the native
       // GET reports OFF and a later whole-snapshot save undoes this transition.
       mirrorDesiredEnabledOntoSnapshot(config, "claude-desktop", true);
-      // Disk now says ON; the reused server snapshot must agree, or the native
-      // GET reports OFF and a later whole-snapshot save undoes this transition.
-      // #859: the CLI delegates here so the registry is built in the serving
-      // process. Accept an optional mode; default stays static for back-compat.
-      let mode: "static" | "hybrid" | "discovery" = "static";
-      const rawBody = await req.text();
-      let parsed: unknown;
-      if (rawBody.trim()) {
-        try {
-          parsed = JSON.parse(rawBody);
-        } catch {
-          return jsonResponse({ error: "invalid JSON body" }, 400);
-        }
-        const requested = (parsed as { mode?: unknown } | null)?.mode;
-        if (requested !== undefined) {
-          if (requested === "static" || requested === "hybrid" || requested === "discovery") {
-            mode = requested;
-          } else {
-            return jsonResponse({ error: "mode must be static, hybrid, or discovery" }, 400);
-          }
-        }
-      }
-      // #859: a delegated CLI apply carries the profile it just saved — the
-      // daemon's own config can be older, and building state from it would
-      // apply (and persist) the stale profile over the newer one.
-      const bodyProfile = (parsed as { profile?: unknown } | null)?.profile;
-      let profileOverride: Parameters<typeof buildClaudeDesktopState>[1];
-      if (bodyProfile !== undefined) {
-        const { parseDesktopProfile } = await import("../../claude/desktop-profile");
-        try {
-          profileOverride = parseDesktopProfile(bodyProfile);
-        } catch (error) {
-          return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
-        }
-      }
-      const state = await buildClaudeDesktopState(config, profileOverride);
+      const state = await buildClaudeDesktopState(config, profileOverride, deps.fetchAllModels);
       // `setIntegrationEnabled` above wrote desired ON to DISK; it does not touch
       // this long-lived server snapshot. Saving the snapshot wholesale would carry
       // its stale `clientIntegrations` back over that write and turn the enable
@@ -951,17 +960,14 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const { buildClaudeContextWindows, effectiveModelEnv } = await import("../../claude/context-windows");
     const { visibleNativeSlugs } = await import("../../codex/catalog");
     const disabled = new Set(config.disabledModels ?? []);
-    const isDisabled = (provider: string, id: string) =>
-      [...disabled].some(stored => slugEquals(stored, provider, id));
+    const isDisabled = (provider: string, id: string) => disabled.has(routedSlug(provider, id));
     const available = [
       ...listCatalogNativeSlugs().filter(ns => !disabled.has(ns)),
-      // Claude-facing values stay RAW native selectors (resolved inbound via routeModel,
-      // which accepts the raw full-slash form); only the disabled check goes tolerant.
-      ...models.filter(m => !isDisabled(m.provider, m.id)).map(m => `${m.provider}/${m.id}`),
+      ...models.filter(m => !isDisabled(m.provider, m.id)).map(catalogModelSlug),
     ];
     const aliases: { id: string; display_name: string }[] = [];
     for (const slug of listCatalogNativeSlugs()) {
-      // Readable CLI-surface alias with hash fallback (devlog 050 / audit 051 #2) —
+      // Readable CLI-surface alias with hash fallback (implementation contract / audit 051 #2) —
       // the same shared helper the /v1/models ?ids=cli path uses.
       if (!disabled.has(slug)) aliases.push({ id: claudeCodeNativeAlias(slug), display_name: `${slug} (native)` });
     }
@@ -981,11 +987,11 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const resolvedAuthMode = resolveClaudeAuthMode(config, authDetection);
     return jsonResponse({
       enabled: config.claudeCode?.enabled !== false,
-      // Three-state intent (devlog 260726_claude_auth_auto): an absent key is AUTO, not
+      // Three-state intent (implementation contract): an absent key is AUTO, not
       // subscription. The old coercion made every save convert an untouched auto config
       // into a sticky manual subscription with no way back.
       authMode: authModeIntent(config),
-      /** Does the opencodex dummy marker get injected — NOT a claim about native auth. */
+      /** Does the CodexCommander dummy marker get injected — NOT a claim about native auth. */
       markerMode: resolvedAuthMode.markerMode,
       authModeOrigin: resolvedAuthMode.origin,
       ...(resolvedAuthMode.foundBy ? { authFoundBy: resolvedAuthMode.foundBy } : {}),
@@ -994,14 +1000,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       // of mode, so the GUI must never present subscription as "no token anywhere".
       admissionKeyActive: (config.apiKeys?.length ?? 0) > 0,
       detectionScope: "daemon",
-      model: config.claudeCode?.model ?? "",
       smallFastModel: config.claudeCode?.smallFastModel ?? "",
-      tierModels: config.claudeCode?.tierModels ?? {},
       modelMap: config.claudeCode?.modelMap ?? {},
       systemEnv: config.claudeCode?.systemEnv === true,
       autoConnectSupported: process.platform === "darwin",
-      maxContextTokens: config.claudeCode?.maxContextTokens ?? null,
-      alwaysEnableEffort: config.claudeCode?.alwaysEnableEffort === true,
       autoContext: config.claudeCode?.autoContext !== false,
       autoCompactWindow: config.claudeCode?.autoCompactWindow ?? null,
       blockedSkills: config.claudeCode?.blockedSkills ?? null,
@@ -1021,12 +1023,6 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     });
   }
   if (url.pathname === "/api/claude-code" && req.method === "PUT") {
-    // NOTE: model / tierModels / maxContextTokens / alwaysEnableEffort are
-    // CONFIG-ONLY back-compat fields — the GUI no longer offers controls for them
-    // (default model is owned by Claude Code's /model picker; roster agents
-    // supersede tiers; auto-context supersedes the max-context pair; effort rides
-    // regardless on 2.1.207). PUT keeps validating them so hand-written configs
-    // and older GUIs stay safe; GUI saves omit them and the spread preserves them.
     let parsedBody: unknown;
     try { parsedBody = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const isPlainObject = (value: unknown): value is Record<string, unknown> => {
@@ -1035,7 +1031,14 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       return prototype === Object.prototype || prototype === null;
     };
     if (!isPlainObject(parsedBody)) return jsonResponse({ error: "body must be an object" }, 400);
-    const body = parsedBody as { enabled?: unknown; authMode?: unknown; model?: unknown; smallFastModel?: unknown; modelMap?: unknown; systemEnv?: unknown; fastMode?: unknown; maxContextTokens?: unknown; alwaysEnableEffort?: unknown; tierModels?: unknown; autoContext?: unknown; autoCompactWindow?: unknown; blockedSkills?: unknown; injectAgents?: unknown; webSearchSidecar?: unknown; visionSidecar?: unknown };
+    const body = parsedBody as { enabled?: unknown; authMode?: unknown; smallFastModel?: unknown; modelMap?: unknown; systemEnv?: unknown; fastMode?: unknown; autoContext?: unknown; autoCompactWindow?: unknown; blockedSkills?: unknown; injectAgents?: unknown; webSearchSidecar?: unknown; visionSidecar?: unknown };
+    const allowedFields = new Set([
+      "enabled", "authMode", "smallFastModel", "modelMap", "systemEnv", "fastMode",
+      "autoContext", "autoCompactWindow", "blockedSkills", "injectAgents",
+      "webSearchSidecar", "visionSidecar",
+    ]);
+    const unknownField = Object.keys(parsedBody).find(field => !allowedFields.has(field));
+    if (unknownField) return jsonResponse({ error: `unknown Claude Code setting: ${unknownField}` }, 400);
     for (const field of ["webSearchSidecar", "visionSidecar"] as const) {
       const section = body[field];
       if (section === undefined || section === null) continue;
@@ -1057,7 +1060,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         continue;
       }
       const requested = section as { backend?: "openai" | "anthropic" | null; model?: string };
-      const override: NonNullable<OcxClaudeCodeConfig[typeof field]> = { ...next[field] };
+      const override: NonNullable<CodexCommanderClaudeCodeConfig[typeof field]> = { ...next[field] };
       if (requested.backend === null) delete override.backend;
       else if (requested.backend !== undefined) override.backend = requested.backend;
       if (requested.model === "") delete override.model;
@@ -1085,30 +1088,14 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       if (typeof body.systemEnv !== "boolean") return jsonResponse({ error: "systemEnv must be a boolean" }, 400);
       next.systemEnv = body.systemEnv;
     }
-    if (body.alwaysEnableEffort !== undefined) {
-      if (typeof body.alwaysEnableEffort !== "boolean") return jsonResponse({ error: "alwaysEnableEffort must be a boolean" }, 400);
-      if (body.alwaysEnableEffort) next.alwaysEnableEffort = true;
-      else delete next.alwaysEnableEffort;
-    }
-    if (body.maxContextTokens !== undefined) {
-      // CONFIG-ONLY back-compat (GUI control removed — superseded by auto-context):
-      // null clears; otherwise a positive integer (devlog 136 B6).
-      if (body.maxContextTokens === null) {
-        delete next.maxContextTokens;
-      } else if (typeof body.maxContextTokens !== "number" || !Number.isInteger(body.maxContextTokens) || body.maxContextTokens <= 0) {
-        return jsonResponse({ error: "maxContextTokens must be a positive integer or null" }, 400);
-      } else {
-        next.maxContextTokens = body.maxContextTokens;
-      }
-    }
     if (body.autoContext !== undefined) {
-      // Default-on boolean (devlog 260712 020): true = drop the key, false = store.
+      // Default-on boolean (implementation contract 020): true = drop the key, false = store.
       if (typeof body.autoContext !== "boolean") return jsonResponse({ error: "autoContext must be a boolean" }, 400);
       if (body.autoContext) delete next.autoContext;
       else next.autoContext = false;
     }
     if (body.injectAgents !== undefined) {
-      // Default-on boolean (devlog 260712 070): true = drop the key, false = store.
+      // Default-on boolean (implementation contract 070): true = drop the key, false = store.
       if (typeof body.injectAgents !== "boolean") return jsonResponse({ error: "injectAgents must be a boolean" }, 400);
       if (body.injectAgents) delete next.injectAgents;
       else next.injectAgents = false;
@@ -1126,7 +1113,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     }
     if (body.blockedSkills !== undefined) {
       // null resets to the default (["claude-api"]); an array (possibly empty = off)
-      // must contain non-empty strings (devlog 060).
+      // must contain non-empty strings (implementation contract).
       if (body.blockedSkills === null) {
         delete next.blockedSkills;
       } else if (!Array.isArray(body.blockedSkills) || body.blockedSkills.some(s => typeof s !== "string" || s.trim() === "")) {
@@ -1135,33 +1122,13 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         next.blockedSkills = (body.blockedSkills as string[]).map(s => s.trim());
       }
     }
-    if (body.tierModels !== undefined) {
-      // CONFIG-ONLY back-compat (GUI pickers removed — roster agents supersede tiers).
-      if (body.tierModels === null) {
-        delete next.tierModels;
-      } else if (!isPlainObject(body.tierModels)) {
-        return jsonResponse({ error: "tierModels must be an object with string values, or null" }, 400);
-      } else {
-        for (const [tier, value] of Object.entries(body.tierModels)) {
-          if (typeof value !== "string") return jsonResponse({ error: `tierModels.${tier} must be a string` }, 400);
-        }
-        const tierModels = body.tierModels as Record<string, string>;
-        const tiers: Record<string, string> = {};
-        for (const tier of ["opus", "sonnet", "haiku", "fable"] as const) {
-          const value = tierModels[tier];
-          if (value !== undefined && value.trim() !== "") tiers[tier] = value.trim();
-        }
-        if (Object.keys(tiers).length > 0) next.tierModels = tiers;
-        else delete next.tierModels;
-      }
-    }
     if (body.fastMode !== undefined) {
       if (body.fastMode !== true && body.fastMode !== false && body.fastMode !== null) {
         return jsonResponse({ error: "fastMode must be true, false, or null" }, 400);
       }
       config.fastMode = body.fastMode === null ? undefined : body.fastMode;
     }
-    for (const field of ["model", "smallFastModel"] as const) {
+    for (const field of ["smallFastModel"] as const) {
       const value = body[field];
       if (value === undefined) continue;
       if (typeof value !== "string") return jsonResponse({ error: `${field} must be a string` }, 400);
@@ -1187,20 +1154,12 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }
     }
     config.claudeCode = next;
-    // Stamp the migration sentinel on EVERY persist of this block. The migration reads
-    // "a claudeCode block with no authMode" as a pre-upgrade subscriber and pins it to
-    // literal subscription — correct for a config written before `auto` existed, fatal
-    // for one written after. Without this, choosing Auto (which DELETES authMode) or
-    // merely toggling Claude on (App.tsx PUTs `{enabled}` alone and creates the block)
-    // would be converted into a sticky manual subscription by the next startServer, and
-    // auto would survive exactly one proxy lifetime with no way back.
-    if (!next.authModeMigratedAt) next.authModeMigratedAt = new Date().toISOString();
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     save(config);
     const warnings: string[] = [];
     // authMode changes must reconcile the injected system env too: switching back to
-    // Subscription has to remove the opencodex-owned dummy ANTHROPIC_AUTH_TOKEN
-    // (audit R1 blocker #1/#2, devlog 260720_claude_authmode_persist).
+    // Subscription has to remove the CodexCommander-owned dummy ANTHROPIC_AUTH_TOKEN
+    // (audit R1 blocker #1/#2, implementation contract).
     if (body.systemEnv !== undefined || body.authMode !== undefined) {
       try {
         await applySystemEnvToggle(config, config.port);

@@ -3,7 +3,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { handleManagementAPI } from "../src/server/management-api";
-import { resetLifecycleDrainStateForTests, setDraining } from "../src/server/lifecycle";
+import { resetLifecycleDrainStateForTests } from "../src/server/lifecycle";
 import {
   DEADLINE_LISTENER_STOP_TIMEOUT_MS,
   MEMORY_DRAIN_RESTART_MS,
@@ -12,9 +12,9 @@ import {
   setSystemRestartIoForTests,
   waitForReplacementReady,
 } from "../src/server/management/system-restart";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
-function config(): OcxConfig {
+function config(): CodexCommanderConfig {
   return {
     port: 10100,
     defaultProvider: "openai",
@@ -44,7 +44,7 @@ describe("acceptSystemRestart", () => {
     let now = 10_000;
 
     const result = acceptSystemRestart({
-      isDraining: () => false,
+      isShutdownDraining: () => false,
       getActiveTurnCount: () => 3,
       isSupervisedServiceChild: () => false,
       listenPort: () => 10123,
@@ -55,7 +55,7 @@ describe("acceptSystemRestart", () => {
         return () => { deadlineCancellations += 1; };
       },
       now: () => now,
-      setDraining: (value) => { calls.push(`draining:${value}`); },
+      beginShutdownDrain: () => { calls.push("draining:true"); },
       drainAndShutdown: async (_server, timeoutMs) => {
         calls.push(`drain:${timeoutMs}`);
       },
@@ -90,7 +90,7 @@ describe("acceptSystemRestart", () => {
     let portAvailable = true;
 
     acceptSystemRestart({
-      isDraining: () => false,
+      isShutdownDraining: () => false,
       getActiveTurnCount: () => 0,
       isSupervisedServiceChild: () => false,
       listenPort: () => {
@@ -99,7 +99,7 @@ describe("acceptSystemRestart", () => {
       },
       schedule: (fn) => { scheduled = fn; },
       scheduleDeadline: () => () => {},
-      setDraining: () => { calls.push("latched"); },
+      beginShutdownDrain: () => { calls.push("latched"); },
       drainAndShutdown: async () => {
         calls.push("drain");
         portAvailable = false;
@@ -137,7 +137,7 @@ describe("acceptSystemRestart", () => {
     let now = 1_000;
 
     acceptSystemRestart({
-      isDraining: () => false,
+      isShutdownDraining: () => false,
       getActiveTurnCount: () => 1,
       isSupervisedServiceChild: () => false,
       listenPort: () => 10123,
@@ -153,7 +153,7 @@ describe("acceptSystemRestart", () => {
         return () => {};
       },
       now: () => now,
-      setDraining: () => { calls.push("latched"); },
+      beginShutdownDrain: () => { calls.push("latched"); },
       drainAndShutdown: () => {
         calls.push("drain");
         return new Promise<void>(() => {});
@@ -195,7 +195,7 @@ describe("acceptSystemRestart", () => {
     let now = 5_000;
 
     acceptSystemRestart({
-      isDraining: () => false,
+      isShutdownDraining: () => false,
       getActiveTurnCount: () => 0,
       isSupervisedServiceChild: () => false,
       listenPort: () => 10123,
@@ -205,7 +205,7 @@ describe("acceptSystemRestart", () => {
         return () => {};
       },
       now: () => now,
-      setDraining: () => { calls.push("latched"); },
+      beginShutdownDrain: () => { calls.push("latched"); },
       drainAndShutdown: (_server, timeoutMs) => {
         calls.push(`drain:${timeoutMs}`);
         return new Promise<void>(resolve => { resolveDrain = resolve; });
@@ -230,12 +230,12 @@ describe("acceptSystemRestart", () => {
     let fireDeadline: (() => void) | null = null;
 
     acceptSystemRestart({
-      isDraining: () => false,
+      isShutdownDraining: () => false,
       getActiveTurnCount: () => 0,
       isSupervisedServiceChild: () => true,
       schedule: (fn) => { scheduled = fn; },
       scheduleDeadline: (fn) => { fireDeadline = fn; return () => {}; },
-      setDraining: () => { calls.push("latched"); },
+      beginShutdownDrain: () => { calls.push("latched"); },
       drainAndShutdown: () => {
         calls.push("drain");
         return new Promise<void>(() => {});
@@ -260,12 +260,12 @@ describe("acceptSystemRestart", () => {
     let fireDeadline: (() => void) | null = null;
 
     acceptSystemRestart({
-      isDraining: () => false,
+      isShutdownDraining: () => false,
       getActiveTurnCount: () => 0,
       isSupervisedServiceChild: () => false,
       schedule: (fn) => { scheduled = fn; },
       scheduleDeadline: (fn) => { fireDeadline = fn; return () => {}; },
-      setDraining: () => { calls.push("latched"); },
+      beginShutdownDrain: () => { calls.push("latched"); },
       drainAndShutdown: () => {
         calls.push("drain");
         return new Promise<void>(() => {});
@@ -293,12 +293,12 @@ describe("acceptSystemRestart", () => {
     let fireDeadline: (() => void) | null = null;
 
     acceptSystemRestart({
-      isDraining: () => false,
+      isShutdownDraining: () => false,
       getActiveTurnCount: () => 0,
       isSupervisedServiceChild: () => false,
       schedule: (fn) => { scheduled = fn; },
       scheduleDeadline: (fn) => { fireDeadline = fn; return () => {}; },
-      setDraining: () => { calls.push("latched"); },
+      beginShutdownDrain: () => { calls.push("latched"); },
       drainAndShutdown: () => {
         calls.push("drain");
         return new Promise<void>(() => {});
@@ -330,7 +330,7 @@ describe("acceptSystemRestart", () => {
     let now = 1_000;
 
     acceptSystemRestart({
-      isDraining: () => false,
+      isShutdownDraining: () => false,
       getActiveTurnCount: () => 0,
       isSupervisedServiceChild: () => false,
       listenPort: () => 10123,
@@ -341,7 +341,7 @@ describe("acceptSystemRestart", () => {
         return () => { timer.cancelled = true; };
       },
       now: () => now,
-      setDraining: () => { calls.push("latched"); },
+      beginShutdownDrain: () => { calls.push("latched"); },
       drainAndShutdown: () => {
         calls.push("drain");
         return new Promise<void>(() => {});
@@ -396,13 +396,13 @@ describe("acceptSystemRestart", () => {
     let scheduled: (() => void | Promise<void>) | null = null;
 
     acceptSystemRestart({
-      isDraining: () => false,
+      isShutdownDraining: () => false,
       getActiveTurnCount: () => 0,
       isSupervisedServiceChild: () => false,
       listenPort: () => 10123,
       schedule: (fn) => { scheduled = fn; },
       scheduleDeadline: () => () => {},
-      setDraining: () => {},
+      beginShutdownDrain: () => {},
       drainAndShutdown: async () => { calls.push("drain"); },
       stopListener: async () => {
         calls.push("stop");
@@ -432,11 +432,11 @@ describe("acceptSystemRestart", () => {
     let rejectDrain!: (reason?: unknown) => void;
 
     acceptSystemRestart({
-      isDraining: () => false,
+      isShutdownDraining: () => false,
       getActiveTurnCount: () => 1,
       schedule: (fn) => { scheduled = fn; },
       scheduleDeadline: (fn) => { fireDeadline = fn; return () => {}; },
-      setDraining: () => { calls.push("latched"); },
+      beginShutdownDrain: () => { calls.push("latched"); },
       drainAndShutdown: () => {
         calls.push("drain");
         return new Promise<void>((_resolve, reject) => { rejectDrain = reject; });
@@ -464,7 +464,7 @@ describe("acceptSystemRestart", () => {
     let scheduled: (() => void | Promise<void>) | null = null;
 
     acceptSystemRestart({
-      isDraining: () => false,
+      isShutdownDraining: () => false,
       getActiveTurnCount: () => 0,
       isSupervisedServiceChild: () => true,
       schedule: (fn) => { scheduled = fn; },
@@ -479,21 +479,21 @@ describe("acceptSystemRestart", () => {
     expect(calls).toEqual(["drain", "exit:1"]);
   });
 
-  test("OCX_SERVICE with non-viable Background Service uses detached start", async () => {
+  test("CCX_SERVICE with non-viable Background Service uses detached start", async () => {
     const calls: string[] = [];
     let scheduled: (() => void | Promise<void>) | null = null;
-    const prev = process.env.OCX_SERVICE;
-    process.env.OCX_SERVICE = "1";
+    const prev = process.env.CCX_SERVICE;
+    process.env.CCX_SERVICE = "1";
 
     try {
       acceptSystemRestart({
-        isDraining: () => false,
+        isShutdownDraining: () => false,
         getActiveTurnCount: () => 0,
         // Installed-but-stale assets must NOT count as supervised recovery.
         isServiceViable: () => false,
         listenPort: () => 10123,
         schedule: (fn) => { scheduled = fn; },
-        setDraining: () => {},
+        beginShutdownDrain: () => {},
         drainAndShutdown: async () => { calls.push("drain"); },
         spawnStart: (port) => { calls.push(`start:${port}`); },
         markRecycling: () => { calls.push("recycle"); },
@@ -503,20 +503,20 @@ describe("acceptSystemRestart", () => {
       await scheduled!();
       expect(calls).toEqual(["drain", "start:10123", "recycle", "exit:0"]);
     } finally {
-      if (prev === undefined) delete process.env.OCX_SERVICE;
-      else process.env.OCX_SERVICE = prev;
+      if (prev === undefined) delete process.env.CCX_SERVICE;
+      else process.env.CCX_SERVICE = prev;
     }
   });
 
-  test("OCX_SERVICE with viable Background Service exits 1 for supervisor respawn", async () => {
+  test("CCX_SERVICE with viable Background Service exits 1 for supervisor respawn", async () => {
     const calls: string[] = [];
     let scheduled: (() => void | Promise<void>) | null = null;
-    const prev = process.env.OCX_SERVICE;
-    process.env.OCX_SERVICE = "1";
+    const prev = process.env.CCX_SERVICE;
+    process.env.CCX_SERVICE = "1";
 
     try {
       acceptSystemRestart({
-        isDraining: () => false,
+        isShutdownDraining: () => false,
         getActiveTurnCount: () => 0,
         isServiceViable: () => true,
         schedule: (fn) => { scheduled = fn; },
@@ -529,8 +529,8 @@ describe("acceptSystemRestart", () => {
       await scheduled!();
       expect(calls).toEqual(["drain", "exit:1"]);
     } finally {
-      if (prev === undefined) delete process.env.OCX_SERVICE;
-      else process.env.OCX_SERVICE = prev;
+      if (prev === undefined) delete process.env.CCX_SERVICE;
+      else process.env.CCX_SERVICE = prev;
     }
   });
 
@@ -545,12 +545,12 @@ describe("acceptSystemRestart", () => {
 
     try {
       acceptSystemRestart({
-        isDraining: () => false,
+        isShutdownDraining: () => false,
         getActiveTurnCount: () => 0,
         isSupervisedServiceChild: () => false,
         listenPort: () => 10123,
         schedule: (fn) => { scheduled = fn; },
-        setDraining: () => {},
+        beginShutdownDrain: () => {},
         drainAndShutdown: async () => { calls.push("drain"); },
         spawnStart: () => {
           calls.push("start");
@@ -578,12 +578,12 @@ describe("acceptSystemRestart", () => {
     let scheduled: (() => void | Promise<void>) | null = null;
 
     acceptSystemRestart({
-      isDraining: () => false,
+      isShutdownDraining: () => false,
       getActiveTurnCount: () => 0,
       isSupervisedServiceChild: () => false,
       listenPort: () => 10123,
       schedule: (fn) => { scheduled = fn; },
-      setDraining: () => {},
+      beginShutdownDrain: () => {},
       drainAndShutdown: async () => { calls.push("drain"); },
       spawnStart: async () => {
         calls.push("start");
@@ -602,12 +602,12 @@ describe("acceptSystemRestart", () => {
     let scheduled: (() => void | Promise<void>) | null = null;
 
     acceptSystemRestart({
-      isDraining: () => false,
+      isShutdownDraining: () => false,
       getActiveTurnCount: () => 1,
       isSupervisedServiceChild: () => false,
       listenPort: () => 10123,
       schedule: (fn) => { scheduled = fn; },
-      setDraining: () => { calls.push("latched"); },
+      beginShutdownDrain: () => { calls.push("latched"); },
       drainAndShutdown: async () => {
         calls.push("drain");
         throw new Error("fixture cleanup rejection");
@@ -622,21 +622,21 @@ describe("acceptSystemRestart", () => {
     expect(calls).toEqual(["latched", "drain", "stop", "start:10123", "recycle", "exit:0"]);
   });
 
-  test("spawn failure clears OCX_SERVICE so exit cleanup can restore fences", async () => {
+  test("spawn failure clears CCX_SERVICE so exit cleanup can restore fences", async () => {
     const calls: string[] = [];
     let scheduled: (() => void | Promise<void>) | null = null;
-    const prev = process.env.OCX_SERVICE;
-    process.env.OCX_SERVICE = "1";
+    const prev = process.env.CCX_SERVICE;
+    process.env.CCX_SERVICE = "1";
 
     try {
       acceptSystemRestart({
-        isDraining: () => false,
+        isShutdownDraining: () => false,
         getActiveTurnCount: () => 0,
         // ensure/tray: marker set, but no installed service → unsupervised spawn path
         isSupervisedServiceChild: () => false,
         listenPort: () => 10123,
         schedule: (fn) => { scheduled = fn; },
-        setDraining: () => {},
+        beginShutdownDrain: () => {},
         drainAndShutdown: async () => { calls.push("drain"); },
         spawnStart: () => {
           calls.push("start");
@@ -648,17 +648,17 @@ describe("acceptSystemRestart", () => {
 
       await scheduled!();
       expect(calls).toEqual(["drain", "start", "exit:1"]);
-      expect(process.env.OCX_SERVICE).toBeUndefined();
+      expect(process.env.CCX_SERVICE).toBeUndefined();
     } finally {
-      if (prev === undefined) delete process.env.OCX_SERVICE;
-      else process.env.OCX_SERVICE = prev;
+      if (prev === undefined) delete process.env.CCX_SERVICE;
+      else process.env.CCX_SERVICE = prev;
     }
   });
 
   test("does not schedule a second drain while already draining", async () => {
     let scheduled = 0;
     const result = acceptSystemRestart({
-      isDraining: () => true,
+      isShutdownDraining: () => true,
       getActiveTurnCount: () => 2,
       schedule: () => { scheduled += 1; },
     });
@@ -670,7 +670,7 @@ describe("acceptSystemRestart", () => {
   test("latches so a second accept before drain starts is a no-op", async () => {
     let scheduled = 0;
     const io = {
-      isDraining: () => false,
+      isShutdownDraining: () => false,
       getActiveTurnCount: () => 1,
       schedule: () => { scheduled += 1; },
     };
@@ -762,10 +762,10 @@ describe("replacement readiness budget", () => {
 describe("POST /api/system/restart", () => {
   test("returns 202 with drain timeout and does not tear down injection", async () => {
     setSystemRestartIoForTests({
-      isDraining: () => false,
+      isShutdownDraining: () => false,
       getActiveTurnCount: () => 1,
       schedule: () => {},
-      setDraining: () => {},
+      beginShutdownDrain: () => {},
     });
     const req = new Request("http://127.0.0.1:10100/api/system/restart", { method: "POST" });
     const res = await handleManagementAPI(req, new URL(req.url), config());

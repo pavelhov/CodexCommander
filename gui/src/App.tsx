@@ -42,7 +42,7 @@ const PAGE_TKEY: Record<Page, TKey> = {
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
-const THEME_KEY = "ocx-theme";
+const THEME_KEY = "ccx-theme";
 
 type NavEntry = {
   id: Page;
@@ -215,7 +215,7 @@ export default function App() {
   const brand = (
     <div className="brand">
       <span className="brand-logo" role="img" aria-label={t("app.logoAria")} />
-      <span className="name">opencodex</span>
+      <span className="name">CodexCommander</span>
       <span className="ver">v{displayedVersion}</span>
     </div>
   );
@@ -290,16 +290,7 @@ export default function App() {
             aria-label={t("dash.stop")} title={t("dash.stop")}>
             <IconPower /> <span className="mode">{stopping ? t("dash.stopping") : t("dash.stop")}</span>
           </button>
-          <SidebarGithubRow
-            apiBase={API_BASE}
-            onOpenUpdate={() => {
-              // The update dialog lives on the dashboard maintenance panel. Deep-link to
-              // `#dashboard/update` and let the dashboard own the check/run flow — no
-              // cross-component event bus, and the link survives a refresh.
-              setNavOpen(false);
-              navigateToPage("dashboard", "update");
-            }}
-          />
+          <SidebarGithubRow />
         </div>
       </aside>
 

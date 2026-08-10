@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
-import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 
-function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
+function provider(overrides: Partial<CodexCommanderProviderConfig> = {}): CodexCommanderProviderConfig {
   return {
     adapter: "openai-chat",
     baseUrl: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
@@ -14,7 +14,7 @@ function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig
   };
 }
 
-function parsedWithThinkingHistory(): OcxParsedRequest {
+function parsedWithThinkingHistory(): CodexCommanderParsedRequest {
   return {
     modelId: "qwen3.8-max",
     context: {

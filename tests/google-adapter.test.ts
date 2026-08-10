@@ -1,20 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter } from "../src/adapters/google";
-import type { OcxParsedRequest } from "../src/types";
+import type { CodexCommanderParsedRequest } from "../src/types";
 
 const provider = { adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "key" };
 
-function parsedWith(messages: unknown[], tools?: unknown[]): OcxParsedRequest {
-  return { modelId: "gemini-3-pro", stream: false, options: {}, context: { messages, tools } } as unknown as OcxParsedRequest;
+function parsedWith(messages: unknown[], tools?: unknown[]): CodexCommanderParsedRequest {
+  return { modelId: "gemini-3-pro", stream: false, options: {}, context: { messages, tools } } as unknown as CodexCommanderParsedRequest;
 }
 
-async function geminiContents(parsed: OcxParsedRequest): Promise<{ role: string; parts: Record<string, unknown>[] }[]> {
+async function geminiContents(parsed: CodexCommanderParsedRequest): Promise<{ role: string; parts: Record<string, unknown>[] }[]> {
   // buildRequest is async (google-vertex auth path); await before parsing the body.
   const { body } = await createGoogleAdapter(provider).buildRequest(parsed);
   return JSON.parse(body).contents;
 }
 
-async function geminiBody(parsed: OcxParsedRequest): Promise<Record<string, unknown>> {
+async function geminiBody(parsed: CodexCommanderParsedRequest): Promise<Record<string, unknown>> {
   const { body } = await createGoogleAdapter(provider).buildRequest(parsed);
   return JSON.parse(body);
 }
@@ -180,7 +180,7 @@ describe("google adapter — tool-call ids on the wire", () => {
           { role: "toolResult", toolCallId: "call_xyz", toolName: "bash", content: "ok", isError: false },
         ],
       },
-    } as unknown as OcxParsedRequest;
+    } as unknown as CodexCommanderParsedRequest;
 
     const { body } = await createGoogleAdapter(ccaProvider).buildRequest(parsed);
     const envelope = JSON.parse(body);
@@ -196,13 +196,13 @@ describe("google adapter — tool_choice on the wire", () => {
     { name: "shot", namespace: "mcp__chrome", parameters: { type: "object", properties: {} } },
   ];
 
-  function parsedWithChoice(toolChoice: unknown, tools: unknown[] | null = TOOLS): OcxParsedRequest {
+  function parsedWithChoice(toolChoice: unknown, tools: unknown[] | null = TOOLS): CodexCommanderParsedRequest {
     return {
       modelId: "gemini-3-pro",
       stream: false,
       options: toolChoice === undefined ? {} : { toolChoice },
       context: { messages: [{ role: "user", content: "hi" }], tools: tools ?? undefined },
-    } as unknown as OcxParsedRequest;
+    } as unknown as CodexCommanderParsedRequest;
   }
 
   test('"none" and "required" map to NONE and ANY', async () => {

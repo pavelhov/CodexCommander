@@ -5,11 +5,12 @@
  * a proxy that started on a fallback port was invisible (duplicate starts, Codex synced
  * back to a dead port), and a foreign app answering 200 on the configured port counted
  * as "our proxy". Liveness now (1) prefers the pid + runtime-port record and (2) requires
- * the /healthz body to identify as opencodex.
+ * the /healthz body to identify as CodexCommander.
  *
  * Lives outside cli.ts (which dispatches argv at module top level) so tests can import it.
  */
 import { loadConfig, readAlivePid, readRuntimePort, verifyPidIdentity } from "../config";
+import { isOwnedHealthService } from "../identity";
 
 export interface HealthzIdentity {
   service?: unknown;
@@ -77,16 +78,10 @@ export function probeHostname(hostname: string | undefined): string {
 }
 
 /**
- * True when a /healthz body identifies an opencodex proxy. Accepts the explicit
- * `service: "opencodex"` marker, plus the legacy `{status, version, uptime}` trio so a
- * still-running pre-identity proxy (e.g. right after `ocx update`) is not mistaken for a
- * foreign server and shadow-started over.
+ * True when a /healthz body identifies a CodexCommander proxy.
  */
-export function isOpencodexHealthz(body: HealthzIdentity | null): boolean {
-  if (!body) return false;
-  if (body.service === "opencodex") return true;
-  if (body.service !== undefined) return false;
-  return body.status === "ok" && typeof body.version === "string" && typeof body.uptime === "number";
+export function isCodexCommanderHealthz(body: HealthzIdentity | null): boolean {
+  return body !== null && isOwnedHealthService(body.service);
 }
 
 /** Identity-checked /healthz probe; null when unreachable, non-OK, or not our proxy. */
@@ -114,9 +109,12 @@ export async function proxyIdentityAt(
       });
       if (!res.ok) return null;
       const body = (await res.json().catch(() => null)) as HealthzIdentity | null;
-      if (!isOpencodexHealthz(body)) return null;
-      const pid = typeof body?.pid === "number" ? body.pid : null;
-      if (opts.expectedPid !== undefined && pid !== null && pid !== opts.expectedPid) return null;
+      if (!isCodexCommanderHealthz(body)) return null;
+      const pid = typeof body?.pid === "number" && Number.isSafeInteger(body.pid) && body.pid > 0
+        ? body.pid
+        : null;
+      if (pid === null) return null;
+      if (opts.expectedPid !== undefined && pid !== opts.expectedPid) return null;
       return { pid };
     } catch {
       // Transport failure (timeout / refused) — retry while budget remains; a proxy that
@@ -150,12 +148,6 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
   // The cheap pid is discovery-only. Before it can appear in a returned (killable) result
   // it must pass the full identity check AND the verifier must echo the exact candidate —
   // a pidfile rewrite between discovery and verification can never swap in another process.
-  const killablePid = (candidate: number | null): number | null => {
-    if (candidate === null) return null;
-    const verified = verifyPidFn(candidate);
-    return verified === candidate ? verified : null;
-  };
-
   const verifiedReportedPid = (reported: number | null): number | null => {
     if (reported === null) return null;
     if (!Number.isSafeInteger(reported) || reported <= 0) return null;
@@ -172,25 +164,17 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
       probedPort = runtime.port;
       const identity = await proxyIdentityAt(runtime.port, { hostname: runtime.hostname, expectedPid: pid }, probeIo);
       if (identity) {
-        // healthz confirmed the pid itself → trusted; a pidless legacy body did not,
-        // so the cheap pid must pass full identity verification before it is returned.
-        const trusted = identity.pid === pid ? pid : killablePid(pid);
-        return { pid: trusted, port: runtime.port, hostname: runtime.hostname, source: "runtime" };
+        return { pid, port: runtime.port, hostname: runtime.hostname, source: "runtime" };
       }
     }
   }
 
-  // Orphan recovery: the pid file can be lost/corrupt while the proxy is alive (crash of a
-  // sibling command, manual deletion). The runtime record still says where it listens —
-  // identity-probe it so ensure/update/stop see the live proxy instead of shadowing it.
+  // The pid file can be lost/corrupt while the proxy is alive (crash of a sibling command,
+  // manual deletion). The current runtime record still identifies where it listens.
   const record = readRuntimeFn();
-  if (record?.port && record.port !== probedPort) {
+  if (record?.port && typeof record.pid === "number" && record.port !== probedPort) {
     if (budgetExhausted()) return null;
-    const expectedPid = typeof record.pid === "number" ? record.pid : undefined;
-    const identity = await proxyIdentityAt(record.port, { hostname: record.hostname, expectedPid }, probeIo);
-    // Only the healthz-reported pid is authoritative here. The record's pid may be stale
-    // (its process dead, the port reused by a pidless legacy proxy) — synthesizing it
-    // would hand destructive callers (stopProxy → kill fallback) a reusable pid.
+    const identity = await proxyIdentityAt(record.port, { hostname: record.hostname, expectedPid: record.pid }, probeIo);
     if (identity) {
       return { pid: verifiedReportedPid(identity.pid), port: record.port, hostname: record.hostname, source: "runtime" };
     }
@@ -202,7 +186,7 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
   const identity = await proxyIdentityAt(port, { hostname: config.hostname }, probeIo);
   if (identity) {
     return {
-      pid: verifiedReportedPid(identity.pid) ?? killablePid(pid),
+      pid: verifiedReportedPid(identity.pid),
       port,
       hostname: config.hostname,
       source: "config",
@@ -221,7 +205,8 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
 //
 //  - HTTP 200 is required for status="ready"; HTTP 503 is required for pending
 //    or failed. Any other HTTP/body-status pairing is an invalid contract.
-//  - body.service must be exactly "opencodex".
+//  - body.service must be an owned identity: canonical "codexcommander" or the
+//    exact CodexCommander service identity.
 //  - body.version must be a non-empty string.
 //  - body.uptime must be a finite nonnegative number.
 //  - body.pid must be a positive integer; when `expectedPid` is supplied it must
@@ -229,7 +214,7 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
 //  - body.port must be an integer in 1..65535 and equal the probed port.
 //  - body.status must be exactly one of pending|ready|failed.
 //
-// Any unreachable, foreign, legacy, malformed, mismatched, or self-inconsistent
+// Any unreachable, foreign, non-current, malformed, mismatched, or self-inconsistent
 // response returns `null` so callers can never treat an invalid identity/contract
 // as ready.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -263,7 +248,7 @@ const READYZ_STATUS_VALUES = new Set<"ready" | "pending" | "failed">(["ready", "
 
 /**
  * Validate a parsed /readyz body against the strict contract. Returns the
- * sanitized probe result, or `null` when the body is foreign, legacy,
+ * sanitized probe result, or `null` when the body is foreign, non-current,
  * malformed, or fails the pid/port checks. Pure (no I/O) so it is fully
  * deterministic and unit-testable.
  */
@@ -274,7 +259,7 @@ export function validateReadyzBody(
 ): ReadinessProbeResult | null {
   if (!body || typeof body !== "object") return null;
   const b = body as ReadyzBody;
-  if (b.service !== "opencodex") return null;
+  if (!isOwnedHealthService(b.service)) return null;
   if (typeof b.version !== "string" || b.version.length === 0) return null;
   if (typeof b.uptime !== "number" || !Number.isFinite(b.uptime) || b.uptime < 0) return null;
   if (typeof b.pid !== "number" || !Number.isInteger(b.pid) || b.pid <= 0) return null;
@@ -294,7 +279,7 @@ export function validateReadyzBody(
 /**
  * Identity- and contract-checked /readyz probe. Returns `null` when the
  * endpoint is unreachable or the body fails the strict contract (foreign 200,
- * legacy health-only body, non-JSON, missing/malformed/mismatched fields,
+ * health-only body, non-JSON, missing/malformed/mismatched fields,
  * wrong port/pid, or an HTTP/body-status inconsistency). Returns
  * `{ready:false, ...}` when the body is ours but pending or failed. Returns
  * `{ready:true, ...}` ONLY for a valid 200 body with `status:"ready"` and (when

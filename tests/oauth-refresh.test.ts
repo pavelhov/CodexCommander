@@ -1,22 +1,21 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getValidAccessToken, getValidAccessTokenForAccount, OAuthLoginRequiredError, OAuthTokenRefreshBusyError, OAuthTokenRefreshStaleError, OAUTH_PROVIDERS, refreshAnthropicAccountWithLock, seedOAuthTokenRefreshFlightsForTests, XAI_LOCAL_CLI_REFRESH_REQUIRED } from "../src/oauth";
+import { getValidAccessToken, getValidAccessTokenForAccount, getValidAccessTokenSnapshot, OAuthLoginRequiredError, OAuthTokenRefreshBusyError, OAuthTokenRefreshStaleError, OAUTH_PROVIDERS, refreshAnthropicAccountWithLock, seedOAuthTokenRefreshFlightsForTests } from "../src/oauth";
 import { AnthropicTokenError } from "../src/oauth/anthropic";
 import { credentialGeneration, getAccountCredential, getAccountSet, getAuthRefreshIntentPath, getCredential, markAccountNeedsReauth, readOAuthRefreshIntent, saveCredential, writeOAuthRefreshIntent } from "../src/oauth/store";
 
 const origHome = process.env.HOME;
 const origLocalAppData = process.env.LOCALAPPDATA;
 const origUserProfile = process.env.USERPROFILE;
-const origOcxHome = process.env.OPENCODEX_HOME;
+const origCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
 const origRegion = process.env.KIRO_REGION;
 const origCliDbFile = process.env.KIRO_CLI_DB_FILE;
 const origCliDbPath = process.env.KIROCLI_DB_PATH;
 const origCliTokenKey = process.env.KIROCLI_TOKEN_KEY;
 const origClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
-const origGrokHome = process.env.GROK_HOME;
 const origFetch = globalThis.fetch;
 const origWarn = console.warn;
 let tmp: string;
@@ -28,12 +27,11 @@ beforeEach(() => {
   // Native kiro-cli store resolves per-platform (issue #710); win32 prefers these over HOME.
   process.env.LOCALAPPDATA = join(tmp, "AppData", "Local");
   process.env.USERPROFILE = tmp;
-  process.env.OPENCODEX_HOME = join(tmp, "ocx");
+  process.env.CODEXCOMMANDER_HOME = join(tmp, "ccx");
   process.env.KIRO_REGION = "us-east-1";
   delete process.env.KIRO_CLI_DB_FILE;
   delete process.env.KIROCLI_DB_PATH;
   delete process.env.KIROCLI_TOKEN_KEY;
-  delete process.env.GROK_HOME;
   process.env.CLAUDE_CONFIG_DIR = join(tmp, ".claude");
 });
 
@@ -41,12 +39,11 @@ afterEach(() => {
   if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
   if (origLocalAppData === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = origLocalAppData;
   if (origUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = origUserProfile;
-  if (origOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = origOcxHome;
+  if (origCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = origCodexCommanderHome;
   if (origRegion === undefined) delete process.env.KIRO_REGION; else process.env.KIRO_REGION = origRegion;
   if (origCliDbFile === undefined) delete process.env.KIRO_CLI_DB_FILE; else process.env.KIRO_CLI_DB_FILE = origCliDbFile;
   if (origCliDbPath === undefined) delete process.env.KIROCLI_DB_PATH; else process.env.KIROCLI_DB_PATH = origCliDbPath;
   if (origCliTokenKey === undefined) delete process.env.KIROCLI_TOKEN_KEY; else process.env.KIROCLI_TOKEN_KEY = origCliTokenKey;
-  if (origGrokHome === undefined) delete process.env.GROK_HOME; else process.env.GROK_HOME = origGrokHome;
   if (origClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = origClaudeConfigDir;
   globalThis.fetch = origFetch;
   console.warn = origWarn;
@@ -71,18 +68,6 @@ function seedKiroCliDb(token: {
   db.run("CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT)");
   db.run("INSERT INTO auth_kv (key, value) VALUES (?, ?)", ["kirocli:social:token", JSON.stringify(token)]);
   db.close();
-}
-
-function seedGrokAuth(token: {
-  key: string;
-  refresh_token: string;
-  expires_at: string;
-  user_id?: string;
-  email?: string;
-}) {
-  const dir = join(tmp, ".grok");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "auth.json"), JSON.stringify({ "https://auth.x.ai::test": token }));
 }
 
 function seedClaudeCredentials(access: string, refresh: string, expires: number) {
@@ -164,6 +149,16 @@ describe("oauth refresh hardening", () => {
     await saveCredential("kiro", { access: "aoa-valid", refresh: "rt", expires: Date.now() + 3600_000 });
     await expect(getValidAccessToken("kiro")).resolves.toBe("aoa-valid");
     expect(mock.count()).toBe(0);
+  });
+
+  test("metadata-less Kiro credentials do not borrow environment routing", async () => {
+    process.env.KIRO_REGION = "eu-west-1";
+    await saveCredential("kiro", { access: "aoa-valid", refresh: "rt-valid", expires: Date.now() + 3_600_000 });
+
+    await expect(getValidAccessTokenSnapshot("kiro")).resolves.toMatchObject({
+      accessToken: "aoa-valid",
+      kiro: {},
+    });
   });
 
   test("concurrent expired Kiro refreshes share one request", async () => {
@@ -368,114 +363,6 @@ describe("oauth refresh hardening", () => {
     expect(getCredential("kiro")?.source).toBe("manual");
   });
 
-  test("newer Grok generation is adopted before xAI refresh with zero endpoint calls", async () => {
-    const mock = mockRefreshFetch([new Response("unexpected", { status: 500 })]);
-    await saveCredential("xai", {
-      access: "xai-old", refresh: "rt-old", expires: Date.now() - 1, accountId: "user-1", source: "local-cli",
-    });
-    const accountId = getAccountSet("xai")!.activeAccountId;
-    await markAccountNeedsReauth("xai", accountId, true);
-    seedGrokAuth({
-      key: "xai-disk", refresh_token: "rt-new", expires_at: new Date(Date.now() + 3600_000).toISOString(), user_id: "user-1",
-    });
-
-    await expect(getValidAccessToken("xai")).resolves.toBe("xai-disk");
-    expect(mock.count()).toBe(0);
-    expect(getCredential("xai")?.refresh).toBe("");
-    expect(getCredential("xai")?.source).toBe("local-cli");
-    expect(getAccountSet("xai")!.accounts[0]?.needsReauth).toBeUndefined();
-  });
-
-  test("newer-expiry Grok access token is adopted when refresh generation is unchanged", async () => {
-    const mock = mockRefreshFetch([new Response("unexpected", { status: 500 })]);
-    await saveCredential("xai", {
-      access: "xai-old", refresh: "rt-same", expires: Date.now() - 1, accountId: "user-1", source: "local-cli",
-    });
-    const diskExpires = Date.now() + 3600_000;
-    seedGrokAuth({
-      key: "xai-disk", refresh_token: "rt-same", expires_at: new Date(diskExpires).toISOString(), user_id: "user-1",
-    });
-
-    await expect(getValidAccessToken("xai")).resolves.toBe("xai-disk");
-    expect(mock.count()).toBe(0);
-    expect(getCredential("xai")?.expires).toBe(diskExpires);
-  });
-
-  test("stale Grok generation never spends the native refresh grant", async () => {
-    await saveCredential("xai", {
-      access: "xai-old", refresh: "rt-old", expires: Date.now() - 1, accountId: "user-1", source: "local-cli",
-    });
-    seedGrokAuth({
-      key: "xai-disk", refresh_token: "rt-old", expires_at: new Date(Date.now() - 2_000).toISOString(), user_id: "user-1",
-    });
-    const grokPath = join(tmp, ".grok", "auth.json");
-    const before = readFileSync(grokPath);
-    const mock = mockXaiRefreshFetch();
-    await expect(getValidAccessToken("xai")).rejects.toThrow(XAI_LOCAL_CLI_REFRESH_REQUIRED);
-    expect(mock.discoveryCount()).toBe(0);
-    expect(mock.tokenCount()).toBe(0);
-    expect(getCredential("xai")?.refresh).toBe("");
-    expect(getCredential("xai")?.source).toBe("local-cli");
-    expect(readFileSync(grokPath)).toEqual(before);
-  });
-
-  test("stale different Grok generation with earlier expiry is not adopted", async () => {
-    const storedExpiry = Date.now() - 1;
-    await saveCredential("xai", {
-      access: "xai-ours", refresh: "rt-ours", expires: storedExpiry, accountId: "user-1", source: "local-cli",
-    });
-    seedGrokAuth({
-      key: "xai-disk", refresh_token: "rt-disk", expires_at: new Date(storedExpiry - 10_000).toISOString(), user_id: "user-1",
-    });
-    const mock = mockXaiRefreshFetch();
-
-    await expect(getValidAccessToken("xai")).rejects.toThrow(XAI_LOCAL_CLI_REFRESH_REQUIRED);
-    expect(mock.discoveryCount()).toBe(0);
-    expect(mock.tokenCount()).toBe(0);
-    expect(getCredential("xai")?.refresh).toBe("");
-    expect(getCredential("xai")?.source).toBe("local-cli");
-    expect(getAccountSet("xai")?.accounts[0]?.needsReauth).toBe(true);
-  });
-
-  test("mismatched Grok identity is not adopted into a local-cli account", async () => {
-    await saveCredential("xai", {
-      access: "xai-ours", refresh: "rt-ours", expires: Date.now() - 1, accountId: "user-1", source: "local-cli",
-    });
-    seedGrokAuth({
-      key: "xai-disk", refresh_token: "rt-disk", expires_at: new Date(Date.now() + 3600_000).toISOString(), user_id: "user-2",
-    });
-    const mock = mockXaiRefreshFetch();
-
-    await expect(getValidAccessToken("xai")).rejects.toThrow(
-      "Grok CLI is signed in to a different account",
-    );
-    expect(mock.discoveryCount()).toBe(0);
-    expect(mock.tokenCount()).toBe(0);
-    expect(getCredential("xai")?.refresh).toBe("");
-    expect(getCredential("xai")?.accountId).toBe("user-1");
-    expect(getCredential("xai")?.source).toBe("local-cli");
-  });
-
-  test("concurrent stale xAI local-cli requests share a no-IdP failure", async () => {
-    await saveCredential("xai", {
-      access: "xai-old", refresh: "rt-old", expires: Date.now() - 1, accountId: "user-1", source: "local-cli",
-    });
-    seedGrokAuth({
-      key: "xai-disk", refresh_token: "rt-old", expires_at: new Date(Date.now() - 2_000).toISOString(), user_id: "user-1",
-    });
-    const mock = mockXaiRefreshFetch();
-
-    const results = await Promise.allSettled([getValidAccessToken("xai"), getValidAccessToken("xai")]);
-    expect(results.every(result =>
-      result.status === "rejected"
-      && result.reason instanceof Error
-      && result.reason.message === XAI_LOCAL_CLI_REFRESH_REQUIRED)).toBe(true);
-    expect(mock.discoveryCount()).toBe(0);
-    expect(mock.tokenCount()).toBe(0);
-    expect(getCredential("xai")?.refresh).toBe("");
-    expect(getCredential("xai")?.source).toBe("local-cli");
-  });
-
   test("Anthropic transient failures do not mark needsReauth", async () => {
     for (const [index, error] of [
       new AnthropicTokenError("server", 503, undefined),
@@ -573,7 +460,7 @@ describe("oauth refresh hardening", () => {
   });
 
   test("Anthropic stale flight replacement preserves foreign same-generation intents", async () => {
-    for (const [index, intentFlightId] of ["foreign-owner", undefined].entries()) {
+    for (const [index, intentFlightId] of ["foreign-owner"].entries()) {
       await saveCredential("anthropic", {
         access: `old-${index}`,
         refresh: `rt-old-${index}`,
@@ -603,7 +490,7 @@ describe("oauth refresh hardening", () => {
     }
   });
 
-  test("legacy OAuth refresh intent without flightId remains valid", async () => {
+  test("OAuth refresh intent without flightId is invalid", async () => {
     await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
     const id = getAccountSet("anthropic")!.activeAccountId;
     const legacy = {
@@ -615,15 +502,14 @@ describe("oauth refresh hardening", () => {
     } as const;
     writeFileSync(getAuthRefreshIntentPath("anthropic", id), `${JSON.stringify(legacy)}\n`);
 
-    expect(readOAuthRefreshIntent("anthropic", id)).toEqual(legacy);
-    expect(readOAuthRefreshIntent("anthropic", id)?.uncertain).toBeUndefined();
+    expect(readOAuthRefreshIntent("anthropic", id)).toMatchObject({ uncertain: true });
   });
 
   test("Anthropic never replays an outstanding oauth-source generation across re-entry", async () => {
     await saveCredential("anthropic", { access: "old", refresh: "rt-consumed", expires: 1, accountId: "acct" });
     const id = getAccountSet("anthropic")!.activeAccountId;
     const credential = getAccountCredential("anthropic", id)!;
-    writeOAuthRefreshIntent("anthropic", id, credentialGeneration(credential), Date.now() - 120_001);
+    writeOAuthRefreshIntent("anthropic", id, credentialGeneration(credential), Date.now() - 120_001, "current-intent");
     let refreshCalls = 0;
 
     const attempt = () => refreshAnthropicAccountWithLock("anthropic", id, {
@@ -659,7 +545,7 @@ describe("oauth refresh hardening", () => {
     await saveCredential("anthropic", { access: "old", refresh: "rt-consumed", expires: 1, source: "local-cli" });
     const id = getAccountSet("anthropic")!.activeAccountId;
     const credential = getAccountCredential("anthropic", id)!;
-    writeOAuthRefreshIntent("anthropic", id, credentialGeneration(credential));
+    writeOAuthRefreshIntent("anthropic", id, credentialGeneration(credential), Date.now(), "current-intent");
     seedClaudeCredentials("disk", "rt-new", Date.now() + 3600_000);
     let refreshCalls = 0;
 

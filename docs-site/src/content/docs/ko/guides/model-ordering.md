@@ -1,9 +1,9 @@
 ---
 title: 모델 정렬에 관하여
-description: opencodex가 Codex 모델 선택기와 spawn_agent 모델 override의 순서를 정하는 방식.
+description: CodexCommander가 Codex 모델 선택기와 spawn_agent 모델 override의 순서를 정하는 방식.
 ---
 
-Codex 모델 선택기는 opencodex 설정에 적힌 프로바이더 선언 순서나 모델 배열 순서를 보존하지
+Codex 모델 선택기는 CodexCommander 설정에 적힌 프로바이더 선언 순서나 모델 배열 순서를 보존하지
 않습니다. 최종 순서는 카탈로그 priority로 정해지며, 같은 priority를 가진 라우팅 모델에는 결정적인
 알파벳순 정렬이 적용됩니다.
 
@@ -13,7 +13,7 @@ Codex의 models-manager는 선택기에 표시되는 카탈로그 항목을 `pri
 카탈로그 배열 순서는 버리므로 생성된 JSON 배열에서 항목을 앞으로 옮겨도 선택기에서는 앞으로
 이동하지 않습니다. 이 제약은 `src/codex/catalog/sync.ts`에 직접 기록되어 있습니다.
 
-따라서 opencodex는 배열 위치가 아니라 더 낮은 priority를 부여해 featured 위치를 제어합니다.
+따라서 CodexCommander는 배열 위치가 아니라 더 낮은 priority를 부여해 featured 위치를 제어합니다.
 이 표의 고정값과 아래 예시는 유효한 account selector가 없는 설정을 설명합니다. `N`개의 selector가
 있으면 설정 rank `i`의 featured bare native는 priority `i * N + j`인 selector 행으로 확장되며,
 `j`는 0부터 시작하는 selector 위치입니다. featured routed 행은 `i * N`, exact account-qualified
@@ -67,7 +67,7 @@ Codex의 priority 정렬에서도 이 선두 순서가 보존됩니다.
 3. 카탈로그 병합 과정에서 featured 블록 아래로 밀린 선택되지 않은 네이티브 모델
 
 `subagentModels`가 없으면 라우팅 모델은 priority `5`를 유지하고, 네이티브 GPT 항목은 정상 priority
-(opencodex가 만든 항목은 보통 `9`)를 사용합니다. 라우팅 그룹 내부는 계속 프로바이더/id
+(CodexCommander가 만든 항목은 보통 `9`)를 사용합니다. 라우팅 그룹 내부는 계속 프로바이더/id
 알파벳순입니다.
 
 ## 예시
@@ -110,12 +110,12 @@ account selector가 있으면 bare native 선택이 selector-qualified 그룹으
 **Agent Library**에는 다섯 개를 훨씬 넘는 카탈로그 모델이 있을 수 있습니다. 라우트가 사용 가능할 때
 항목을 정확한 id로 지정할 수 있으며, 다섯 칸 제한은 `spawn_agent`에 가장 먼저 알려지는 오버라이드에만 적용됩니다.
 
-`ocx agent subagents set`을 사용하거나 opencodex 설정을 편집해 라이브 라이브러리에 없는 정확한
+`ccx agent subagents set`을 사용하거나 CodexCommander 설정을 편집해 라이브 라이브러리에 없는 정확한
 `<selector>/<native-openai-model>` 선택지를 추가하세요. 커맨드 센터는 이미 설정된 정확한 selector를
 프로바이더가 일시적으로 사용 불가능한 동안에도 보존하고 순서를 바꿀 수 있습니다. account selector가
 있으면 bare native 하나가 여러 selector-qualified 행으로 확장될 수 있으므로 설정 항목과 노출 행이 항상
 일대일로 대응하지는 않습니다.
 
-현재 `OcxConfig`에는 일반 `modelOrder`, `providerOrder`, priority map 설정이 없습니다. 지원되는 정렬
+현재 `CodexCommanderConfig`에는 일반 `modelOrder`, `providerOrder`, priority map 설정이 없습니다. 지원되는 정렬
 필드는 `subagentModels`입니다. `disabledModels`와 각 프로바이더의 `selectedModels`는 노출
 필드입니다. 따라서 나머지 선택기 순서를 바꾸려면 설정 수정이 아니라 코드 동작 변경이 필요합니다.

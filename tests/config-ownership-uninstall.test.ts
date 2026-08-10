@@ -12,7 +12,7 @@ import { getDefaultConfig, saveConfig } from "../src/config";
 
 describe("owned config uninstall", () => {
   test("first owned write creates a missing config root and its metadata", () => {
-    const parent = mkdtempSync(join(tmpdir(), "ocx-config-first-owned-path-"));
+    const parent = mkdtempSync(join(tmpdir(), "ccx-config-first-owned-path-"));
     const dir = join(parent, "config");
 
     try {
@@ -24,8 +24,8 @@ describe("owned config uninstall", () => {
     }
   });
 
-  test("refuses a legacy config directory without ownership metadata", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-uninstall-legacy-"));
+  test("refuses an unowned config directory without ownership metadata", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ccx-uninstall-unowned-"));
     const configPath = join(dir, "config.json");
     writeFileSync(configPath, '{"keep":true}\n');
 
@@ -40,7 +40,7 @@ describe("owned config uninstall", () => {
   });
 
   test("removes manifest-owned state and the empty config directory", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-uninstall-owned-"));
+    const dir = mkdtempSync(join(tmpdir(), "ccx-uninstall-owned-"));
     const configPath = join(dir, "config.json");
 
     try {
@@ -58,7 +58,7 @@ describe("owned config uninstall", () => {
   });
 
   test("preserves unowned files and reports a partial uninstall", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-uninstall-shared-"));
+    const dir = mkdtempSync(join(tmpdir(), "ccx-uninstall-shared-"));
     const ownedPath = join(dir, "config.json");
     const foreignPath = join(dir, "personal.txt");
 
@@ -78,9 +78,9 @@ describe("owned config uninstall", () => {
   });
 
   test("does not pre-claim the macOS launchd executable name", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-uninstall-launcher-name-"));
+    const dir = mkdtempSync(join(tmpdir(), "ccx-uninstall-launcher-name-"));
     const ownedPath = join(dir, "config.json");
-    const foreignLauncher = join(dir, "OpenCodex");
+    const foreignLauncher = join(dir, "CodexCommander");
 
     try {
       expect(recordOwnedConfigPath(dir, ownedPath)).toBe(true);
@@ -97,7 +97,7 @@ describe("owned config uninstall", () => {
   });
 
   test("recursively removes a manifest-owned state directory", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-uninstall-tree-"));
+    const dir = mkdtempSync(join(tmpdir(), "ccx-uninstall-tree-"));
     const artifacts = join(dir, "artifacts");
 
     try {
@@ -116,7 +116,7 @@ describe("owned config uninstall", () => {
   });
 
   test("unlinks an owned directory link without traversing its external target", () => {
-    const parent = mkdtempSync(join(tmpdir(), "ocx-uninstall-link-"));
+    const parent = mkdtempSync(join(tmpdir(), "ccx-uninstall-link-"));
     const dir = join(parent, "config");
     const external = join(parent, "external");
     const linkedArtifacts = join(dir, "artifacts");
@@ -136,7 +136,7 @@ describe("owned config uninstall", () => {
   });
 
   test("rejects a manifest path that escapes the config directory", () => {
-    const parent = mkdtempSync(join(tmpdir(), "ocx-uninstall-traversal-"));
+    const parent = mkdtempSync(join(tmpdir(), "ccx-uninstall-traversal-"));
     const dir = join(parent, "config");
     const ownedPath = join(dir, "config.json");
     const external = join(parent, "keep.txt");
@@ -160,7 +160,7 @@ describe("owned config uninstall", () => {
   });
 
   test("rejects linked ownership metadata without deleting owned state", () => {
-    const parent = mkdtempSync(join(tmpdir(), "ocx-uninstall-linked-metadata-"));
+    const parent = mkdtempSync(join(tmpdir(), "ccx-uninstall-linked-metadata-"));
     const dir = join(parent, "config");
     const external = join(parent, "external");
     const ownedPath = join(dir, "config.json");
@@ -185,10 +185,10 @@ describe("owned config uninstall", () => {
   });
 
   test("a fresh config save creates ownership metadata and records config.json", () => {
-    const parent = mkdtempSync(join(tmpdir(), "ocx-config-first-write-"));
+    const parent = mkdtempSync(join(tmpdir(), "ccx-config-first-write-"));
     const dir = join(parent, "config");
-    const previous = process.env.OPENCODEX_HOME;
-    process.env.OPENCODEX_HOME = dir;
+    const previous = process.env.CODEXCOMMANDER_HOME;
+    process.env.CODEXCOMMANDER_HOME = dir;
 
     try {
       saveConfig(getDefaultConfig());
@@ -198,20 +198,20 @@ describe("owned config uninstall", () => {
       ) as { paths: string[] };
       expect(manifest.paths).toContain("config.json");
     } finally {
-      if (previous === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previous;
+      if (previous === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previous;
       rmSync(parent, { recursive: true, force: true });
     }
   });
 
   test("an existing nonempty config directory is not retroactively claimed", () => {
-    const parent = mkdtempSync(join(tmpdir(), "ocx-config-legacy-write-"));
+    const parent = mkdtempSync(join(tmpdir(), "ccx-config-write-"));
     const dir = join(parent, "config");
     const foreignPath = join(dir, "personal.txt");
     mkdirSync(dir);
     writeFileSync(foreignPath, "keep me\n");
-    const previous = process.env.OPENCODEX_HOME;
-    process.env.OPENCODEX_HOME = dir;
+    const previous = process.env.CODEXCOMMANDER_HOME;
+    process.env.CODEXCOMMANDER_HOME = dir;
 
     try {
       saveConfig(getDefaultConfig());
@@ -219,8 +219,8 @@ describe("owned config uninstall", () => {
       expect(removeOwnedConfigState(dir).status).toBe("refused");
       expect(readFileSync(foreignPath, "utf8")).toBe("keep me\n");
     } finally {
-      if (previous === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previous;
+      if (previous === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previous;
       rmSync(parent, { recursive: true, force: true });
     }
   });

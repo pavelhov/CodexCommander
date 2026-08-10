@@ -8,7 +8,7 @@ import {
 } from "../src/server/request-decompress";
 import { MANAGEMENT_JSON_BODY_MAX_BYTES } from "../src/server/management/body";
 import { handleManagementAPI } from "../src/server/management-api";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const PAYLOAD = { model: "gpt-5.5", input: "hello", stream: true };
 const PAYLOAD_BYTES = new TextEncoder().encode(JSON.stringify(PAYLOAD));
@@ -120,7 +120,7 @@ describe("readJsonRequestBody", () => {
       headers: { "content-type": "application/json", "content-length": "1", host: "localhost" },
       body,
     });
-    const config = { defaultProvider: "mock", providers: { mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } } } as OcxConfig;
+    const config = { defaultProvider: "mock", providers: { mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } } } as CodexCommanderConfig;
     const response = await handleManagementAPI(req, new URL(req.url), config);
     expect(response?.status).toBe(413);
     expect(await response?.json()).toEqual({ error: "request body too large" });

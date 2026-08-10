@@ -52,7 +52,7 @@ function formatEntryBlock(entries: OAuthHealthEntry[]): string {
   return lines.join("\n");
 }
 
-/** Human-readable OAuth health block for `ocx status` (redacted account ids, no tokens). */
+/** Human-readable OAuth health block for `ccx status` (redacted account ids, no tokens). */
 export function formatOAuthHealthForStatus(
   input: OAuthHealthEntry[] | OAuthCliHealthReport,
 ): string {

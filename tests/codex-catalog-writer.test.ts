@@ -32,7 +32,6 @@ import {
   type CatalogBackupWriteIO,
   type PreparedCatalogFileWrite,
   publishHashedCodexCatalogBackup,
-  publishLegacyCodexCatalogBackup,
   replaceActiveCodexCatalog,
   replaceCodexModelsCache,
 } from "../src/codex/internal/catalog-writer";
@@ -52,7 +51,7 @@ let codexHome = "";
 let otherCodexHome = "";
 let targetDir = "";
 let previousCodexHome: string | undefined;
-let previousOpenCodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 
 function atomicIo(effects: string[]): AtomicWriteIO {
   return {
@@ -119,11 +118,6 @@ const mutators: readonly MutatorCase[] = [
       publishHashedCodexCatalogBackup(permit, home, prepared, backupIo(effects)),
   },
   {
-    name: "legacy backup publication",
-    invoke: (permit, home, prepared, effects) =>
-      publishLegacyCodexCatalogBackup(permit, home, prepared, backupIo(effects)),
-  },
-  {
     name: "models cache replacement",
     invoke: (permit, home, prepared, effects) =>
       replaceCodexModelsCache(permit, home, prepared, atomicIo(effects)),
@@ -161,23 +155,23 @@ function withLivePermit<T>(callback: (permit: CatalogWritePermit) => T): T {
 
 beforeEach(() => {
   previousCodexHome = process.env.CODEX_HOME;
-  previousOpenCodexHome = process.env.OPENCODEX_HOME;
-  testRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-catalog-writer-")));
+  previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+  testRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "ccx-catalog-writer-")));
   codexHome = join(testRoot, "codex-home");
   otherCodexHome = join(testRoot, "other-codex-home");
   targetDir = join(testRoot, "external-catalog-targets");
-  for (const path of [codexHome, otherCodexHome, targetDir, join(testRoot, "opencodex-home")]) {
+  for (const path of [codexHome, otherCodexHome, targetDir, join(testRoot, "codexcommander-home")]) {
     mkdirSync(path, { recursive: true });
   }
   process.env.CODEX_HOME = codexHome;
-  process.env.OPENCODEX_HOME = join(testRoot, "opencodex-home");
+  process.env.CODEXCOMMANDER_HOME = join(testRoot, "codexcommander-home");
 });
 
 afterEach(() => {
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
-  if (previousOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpenCodexHome;
+  if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
 
   const identity = resolveEffectiveUserIdentity();
   for (const home of [codexHome, otherCodexHome]) {
@@ -245,20 +239,15 @@ for (const mutator of mutators) {
   });
 }
 
-for (const [name, publish] of [
-  ["hashed", publishHashedCodexCatalogBackup],
-  ["legacy", publishLegacyCodexCatalogBackup],
-] as const) {
-  test(`${name} create-once backup preserves an existing winner byte-for-byte`, () => {
-    const path = join(targetDir, `${name}.backup.json`);
-    writeFileSync(path, "first winner\n", { mode: 0o600 });
+test("hashed create-once backup preserves an existing winner byte-for-byte", () => {
+  const path = join(targetDir, "hashed.backup.json");
+  writeFileSync(path, "first winner\n", { mode: 0o600 });
 
-    const result = withLivePermit((permit) =>
-      publish(permit, codexHome, { path, content: "late contender\n" })
-    );
+  const result = withLivePermit((permit) =>
+    publishHashedCodexCatalogBackup(permit, codexHome, { path, content: "late contender\n" })
+  );
 
-    expect(result).toBe("preserved");
-    expect(readFileSync(path, "utf8")).toBe("first winner\n");
-    expect(readdirSync(targetDir).filter(entry => entry.endsWith(".tmp"))).toEqual([]);
-  });
-}
+  expect(result).toBe("preserved");
+  expect(readFileSync(path, "utf8")).toBe("first winner\n");
+  expect(readdirSync(targetDir).filter(entry => entry.endsWith(".tmp"))).toEqual([]);
+});

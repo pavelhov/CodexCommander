@@ -1,4 +1,4 @@
-import type { OcxTool } from "../types";
+import type { CodexCommanderTool } from "../types";
 
 /** The function name the chat model sees + the name the loop intercepts. */
 export const IMAGE_GEN_TOOL_NAME = "image_gen";
@@ -69,7 +69,7 @@ export function extractHostedImageGeneration(
  * image_generation. The model calls it like any function; the proxy intercepts the call and runs the
  * real generation via the sidecar (the call is never relayed to Codex). `imageGeneration:true` flags it.
  */
-export function buildImageTool(): OcxTool {
+export function buildImageTool(): CodexCommanderTool {
   return {
     name: IMAGE_GEN_TOOL_NAME,
     description:
@@ -108,7 +108,7 @@ export function isVideoGenName(name: string): boolean {
  * unconditionally injected when the video bridge is enabled. `videoGeneration:true` flags it
  * so the forced-final pass can drop it.
  */
-export function buildVideoTool(): OcxTool {
+export function buildVideoTool(): CodexCommanderTool {
   return {
     name: VIDEO_GEN_TOOL_NAME,
     description:

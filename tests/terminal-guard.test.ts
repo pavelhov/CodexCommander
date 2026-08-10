@@ -5,9 +5,9 @@ import {
   guardTerminalEventStream,
 } from "../src/server/responses/terminal-guard";
 import { buildResponseJSON } from "../src/bridge";
-import type { AdapterEvent, OcxParsedRequest } from "../src/types";
+import type { AdapterEvent, CodexCommanderParsedRequest } from "../src/types";
 
-function parsed(userText: string, withTools = true): OcxParsedRequest {
+function parsed(userText: string, withTools = true): CodexCommanderParsedRequest {
   return {
     modelId: "se-claude-opus-4.8",
     stream: true,

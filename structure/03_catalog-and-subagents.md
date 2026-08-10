@@ -16,21 +16,20 @@
   augmentation, so upstream-advertised but uncallable rows never enter dashboard or Codex pickers;
 - strips native-only service tier and WebSocket metadata unless explicitly enabled;
 - backs up the pristine catalog once per catalog: the copy is keyed by a hash of the catalog path
-  (`catalog-backup-<id>.json`), and the legacy unsuffixed `catalog-backup.json` is retained in
-  addition for the default catalog, so a restore resolves the backup for the catalog it is restoring
+  (`catalog-backup-<id>.json`), so a restore resolves the backup for the catalog it is restoring
   rather than assuming a single file;
 - invalidates `$CODEX_HOME/models_cache.json` when model visibility changes.
 
-Every successful live routed sync also writes an OpenCodex-owned, mode-600 last-known-good snapshot
-at `$OPENCODEX_HOME/codex-routed-retained.json`. Stop/restore still removes routed rows from the
-active Codex catalog so plain Codex works normally; it does not delete this OpenCodex snapshot. On
+Every successful live routed sync also writes a CodexCommander-owned, mode-600 last-known-good snapshot
+at `$CODEXCOMMANDER_HOME/codex-routed-retained.json`. Stop/restore still removes routed rows from the
+active Codex catalog so plain Codex works normally; it does not delete this CodexCommander snapshot. On
 the next start, an empty provider gather rehydrates still-configured routed rows from the snapshot,
 and a partial gather combines fresh providers with retained rows only for providers that returned no
 models. Removed, disabled, forward-only, intentionally empty, model-filtered, and compatibility-
 excluded rows are never resurrected. The snapshot participates in the retained-sync filesystem
 evidence and is updated only when the current gather produced live routed rows.
 
-On the default `opencodex-catalog.json` path, sync deliberately uses two catalog sources: Codex's
+On the default `codexcommander-catalog.json` path, sync deliberately uses two catalog sources: Codex's
 bundled catalog supplies a current native entry template, while the actual on-disk catalog supplies
 the rows being merged. This split is required because empty or partial provider discovery must
 preserve routed entries and genuine user-native rows from the file that will be overwritten; a
@@ -53,33 +52,32 @@ warning becomes failed. State is isolated per server instance.
 
 Exact unauthenticated `GET /readyz` returns sanitized identity fields plus pending, ready, or failed:
 `200` for ready, or `503` with `Retry-After: 1` for pending and terminal failed. The full CLI syntax
-is `ocx ready [--json] [--wait [--timeout <seconds>]]`. The probe validates the service, version,
+is `ccx ready [--json] [--wait [--timeout <seconds>]]`. The probe validates the service, version,
 uptime, PID, port, status, and HTTP/status pairing. The default is one probe. With `--wait`, it
 applies one absolute deadline (45 seconds by default) across discovery, readiness probes, polling,
 and sleeps, but exits immediately on terminal failed. `--timeout <seconds>` requires `--wait` and
 accepts positive integer seconds from 1–300. CLI `--json` emits
 `{ready, status, pid, port}`, with status in `ready|pending|failed|unreachable`. Exit 0 means ready;
 exit 1 covers not-ready, pending, failed, timeout, and unreachable; exit 64 means invalid arguments.
-Older proxies without `/readyz` fail closed as unreachable. `/healthz` remains the separate
-liveness contract.
+`/healthz` remains the separate liveness contract.
 
 Catalog convergence also reports `catalogQuality`: `live` means the active routed rows came from
 the current provider gather, `retained` means at least one provider was recovered from durable or
-already-active last-known-good rows, and `native-only` means no OpenCodex-authored routed rows are
+already-active last-known-good rows, and `native-only` means no CodexCommander-authored routed rows are
 active. `native-only` with an enabled routed-capable provider is an actionable sync warning, not a
 fully-ready result. The macOS lifecycle waits for startup readiness, retries convergence through the
 live management API, and automatically synchronizes the catalog on app launch. A worker roster that
 predates the committed catalog is a nonfatal, persistent **Agent catalog update ready** state; it does
-not make OpenCodex appear stopped or unhealthy. The confirmed **Apply agent catalog** action performs
+not make CodexCommander appear stopped or unhealthy. The confirmed **Apply agent catalog** action performs
 another sync, sends `SIGTERM` only to exact current-user `codex … app-server` and
-`codex-code-mode-host` matches, verifies the old workers' exits, and leaves the OpenCodex proxy and
-menu app running. Release one does not promise idle deferral: activity is warning context, **Apply
+`codex-code-mode-host` matches, verifies the old workers' exits, and leaves the CodexCommander proxy and
+menu app running. The current companion does not promise idle deferral: activity is warning context, **Apply
 Now** is explicit consent to possible interruption, and **Later** leaves the update pending.
 
 The CLI remains the advanced fallback:
 
 ```bash
-ocx sync --restart-codex
+ccx sync --restart-codex
 ```
 
 ## Entry shape
@@ -129,7 +127,7 @@ real turn depends on it (`src/codex/warmup.ts`).
 
 ## Multi-agent surface mode (3-state)
 
-`OcxConfig.multiAgentMode` controls the `multi_agent_version` field stamped on catalog entries:
+`CodexCommanderConfig.multiAgentMode` controls the `multi_agent_version` field stamped on catalog entries:
 
 | Mode | Behavior |
 | --- | --- |
@@ -142,7 +140,7 @@ The override is applied as a final pass in both `buildCatalogEntries` (live `/v1
 ensures `normalizeRoutedCatalogEntry` (which deletes `multi_agent_version` from routed entries) does
 not clobber the forced value.
 
-CLI: `ocx v2 mode v1|default|v2`. GUI: **Models → Current behavior → Collaboration**, labeled
+CLI: `ccx v2 mode v1|default|v2`. GUI: **Models → Current behavior → Collaboration**, labeled
 **Classic v1**, **Follow Codex defaults**, and **Concurrent v2**. API: `GET/PUT /api/v2` with
 `multiAgentMode` field.
 
@@ -150,7 +148,7 @@ The `multi_agent_v2` feature flag and the logical maximum thread count are separ
 `multiAgentMode` (`src/codex/features.ts`): the mode decides which surface Codex advertises, while
 the flag and thread count decide what the native runtime allows.
 
-`OcxConfig.multiAgentV2MessageDelivery` is a separate request-time policy. `encrypted` is the
+`CodexCommanderConfig.multiAgentV2MessageDelivery` is a separate request-time policy. `encrypted` is the
 default and preserves ChatGPT's reserved collaboration schema plus the unreadable-ciphertext
 fail-closed guard. `plaintext` opts the whole V2 parent session into mixed-provider compatibility:
 canonical ChatGPT requests atomically alias the complete known collaboration namespace, strip only
@@ -197,7 +195,7 @@ Codex `spawn_agent` advertises only the highest-priority first five picker-visib
 Use at most five configured `subagentModels` ids; they may contain bare catalog ids, routed
 `provider/model` ids, or exact account-qualified `<selector>/<native-openai-model>` ids. The
 dashboard offers bare native and routed choices; exact account-qualified choices are configured
-through `ocx agent subagents set` or the opencodex configuration.
+through `ccx agent subagents set` or the CodexCommander configuration.
 
 When account selectors are active, one featured bare native id expands into a complete selector row
 group. Catalog priorities use the selector count as a stride so each group stays together without
@@ -210,19 +208,19 @@ the requested model id only; effort remains owned by the caps described under
 [Ultra reasoning level](#ultra-reasoning-level).
 
 `injectionModel` and `injectionEffort` are shared selections with two independent consumers.
-`multiAgentGuidanceEnabled` controls only OpenCodex-authored delegation guidance.
+`multiAgentGuidanceEnabled` controls only CodexCommander-authored delegation guidance.
 `syncCodexSubagentDefaults` is a separate, default-off opt-in that applies the selected values to
-Codex's native `[agents]` defaults on sync/restart for newly created Codex tasks when OpenCodex owns
+Codex's native `[agents]` defaults on sync/restart for newly created Codex tasks when CodexCommander owns
 the active Codex routing; external user-managed provider configs remain untouched. It does not itself
 cause delegation. The TOML edit owns only marker-tagged values, preserves existing unmarked
 user-owned `[agents]` defaults rather than overwriting them, and rejects ambiguous table shapes
 without changing the file.
 
-Claude Code `ocx-*` agent definitions consume the same effective `claudeCode.blockedSkills` policy
+Claude Code `ccx-*` agent definitions consume the same effective `claudeCode.blockedSkills` policy
 as inbound bundle elision. When the list is non-empty (default: `claude-api`), generated definitions
 whose marker-stripped model resolves to a routed id receive a preventive instruction not to invoke
 those skills. Direct `provider/model` selectors are routed even when their inbound resolution is
-identity. The only unguarded `ocx-self` case is an identity-resolved `claude|anthropic` model while
+identity. The only unguarded `ccx-self` case is an identity-resolved `claude|anthropic` model while
 native passthrough is enabled; `modelMap` claims and `nativePassthrough:false` restore the guard. The
 guard avoids creating oversized skill messages before the proxy can intervene; inbound elision remains
 the fallback if a client still sends a blocked bundle. An explicit empty list disables both routed-model

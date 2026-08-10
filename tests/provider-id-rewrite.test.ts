@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { comboConfigError } from "../src/combos";
 import { providerContextCap } from "../src/providers/context-cap";
 import { rewriteProviderReferences } from "../src/providers/provider-id-rewrite";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
 
 const FROM = "alibaba-token-plan";
 const TO = "alibaba-token-plan-intl";
@@ -18,25 +18,23 @@ test("rewrites every routed-string site", () => {
     webSearchSidecar: { model: `${FROM}/qwen3.7-max` },
     visionSidecar: { model: `${FROM}/qwen3.7-max` },
     claudeCode: {
-      model: `${FROM}/qwen3.7-max`,
       smallFastModel: `${FROM}/qwen3.6-flash`,
-      tierModels: { opus: `${FROM}/qwen3.7-max` },
       modelMap: { "claude-opus-5": `${FROM}/qwen3.7-max` },
       webSearchSidecar: { model: `${FROM}/qwen3.7-max` },
       visionSidecar: { model: `${FROM}/qwen3.7-max` },
     },
-  } as unknown as OcxConfig;
+  } as unknown as CodexCommanderConfig;
 
   // 14 sites: defaultProvider, one of two disabledModels, subagentModels,
   // subagentModelFallback, injectionModel, shadowCallIntercept.model,
-  // webSearchSidecar.model, visionSidecar.model, and the six claudeCode entries.
-  expect(rewriteProviderReferences(config, FROM, TO)).toEqual({ changed: 14, collisions: [] });
+  // webSearchSidecar.model, visionSidecar.model, and the four claudeCode entries.
+  expect(rewriteProviderReferences(config, FROM, TO)).toEqual({ changed: 12, collisions: [] });
   expect(JSON.stringify(config)).not.toContain(`"${FROM}/`);
   expect(config.disabledModels).toContain("anthropic/claude-sonnet-5");
 });
 
 test("moves a providerContextCaps entry by key, not by prefix", () => {
-  const config = { providerContextCaps: { [FROM]: 500_000, anthropic: 200_000 } } as unknown as OcxConfig;
+  const config = { providerContextCaps: { [FROM]: 500_000, anthropic: 200_000 } } as unknown as CodexCommanderConfig;
   expect(rewriteProviderReferences(config, FROM, TO)).toEqual({ changed: 1, collisions: [] });
   // Asserted through the consumer, so a shape mistake cannot pass.
   expect(providerContextCap(config, TO)).toBe(500_000);
@@ -45,7 +43,7 @@ test("moves a providerContextCaps entry by key, not by prefix", () => {
 });
 
 test("reports a providerContextCaps collision instead of overwriting it", () => {
-  const config = { providerContextCaps: { [FROM]: 500_000, [TO]: 900_000 } } as unknown as OcxConfig;
+  const config = { providerContextCaps: { [FROM]: 500_000, [TO]: 900_000 } } as unknown as CodexCommanderConfig;
   const result = rewriteProviderReferences(config, FROM, TO);
   expect(result.collisions).toEqual([`providerContextCaps.${TO}`]);
   expect(providerContextCap(config, TO)).toBe(900_000);
@@ -53,9 +51,9 @@ test("reports a providerContextCaps collision instead of overwriting it", () => 
 });
 
 test("re-points combo targets so the migrated config still validates", () => {
-  const providers = { [TO]: { adapter: "openai-chat" } } as unknown as Record<string, OcxProviderConfig>;
+  const providers = { [TO]: { adapter: "openai-chat" } } as unknown as Record<string, CodexCommanderProviderConfig>;
   const combo = { targets: [{ provider: FROM, model: "qwen3.7-max" }] };
-  const config = { providers, combos: { fast: combo } } as unknown as OcxConfig;
+  const config = { providers, combos: { fast: combo } } as unknown as CodexCommanderConfig;
 
   expect(comboConfigError("fast", combo, providers)).toContain("not configured");
   rewriteProviderReferences(config, FROM, TO);
@@ -68,7 +66,7 @@ test("re-points customModels[].provider", () => {
       { id: "a", provider: FROM, modelId: "qwen3.7-max" },
       { id: "b", provider: "anthropic", modelId: "claude-sonnet-5" },
     ],
-  } as unknown as OcxConfig;
+  } as unknown as CodexCommanderConfig;
   expect(rewriteProviderReferences(config, FROM, TO).changed).toBe(1);
   expect(config.customModels!.map(m => m.provider)).toEqual([TO, "anthropic"]);
 });
@@ -82,7 +80,7 @@ test("rewrites both halves of the Desktop profile", () => {
         defaults: { opus: `${FROM}/qwen3.7-max`, fable: null, sonnet: null, haiku: null },
       },
     },
-  } as unknown as OcxConfig;
+  } as unknown as CodexCommanderConfig;
   rewriteProviderReferences(config, FROM, TO);
   const profile = config.claudeCode!.desktopProfile!;
   expect(Object.keys(profile.assignments)).toEqual([`${TO}/qwen3.7-max`]);
@@ -101,7 +99,7 @@ test("reports a Desktop assignment collision instead of overwriting it", () => {
         defaults: { opus: null, fable: null, sonnet: null, haiku: null },
       },
     },
-  } as unknown as OcxConfig;
+  } as unknown as CodexCommanderConfig;
   const result = rewriteProviderReferences(config, FROM, TO);
   expect(result.collisions).toEqual([`claudeCode.desktopProfile.assignments.${TO}/qwen3.7-max`]);
   expect(result.changed).toBe(0);
@@ -113,7 +111,7 @@ test("leaves foreign prefixes and unrelated providers alone", () => {
     defaultProvider: `${FROM}-other`,
     disabledModels: [`${FROM}-other/x`, `${TO}/glm-5.2`],
     providerContextCaps: { [`${FROM}-other`]: 1000 },
-  } as unknown as OcxConfig;
+  } as unknown as CodexCommanderConfig;
   const before = structuredClone(config);
   expect(rewriteProviderReferences(config, FROM, TO)).toEqual({ changed: 0, collisions: [] });
   expect(config).toEqual(before);
@@ -127,7 +125,7 @@ test("does not touch providers[*].selectedModels", () => {
   // unrelated provider's allowlist.
   const config = {
     providers: { openrouter: { adapter: "openai-chat", selectedModels: [`${FROM}/qwen3.7-max`] } },
-  } as unknown as OcxConfig;
+  } as unknown as CodexCommanderConfig;
   expect(rewriteProviderReferences(config, FROM, TO).changed).toBe(0);
   expect(config.providers.openrouter!.selectedModels).toEqual([`${FROM}/qwen3.7-max`]);
 });

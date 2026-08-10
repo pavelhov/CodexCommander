@@ -22,14 +22,14 @@ describe("codex-account-store CRUD", () => {
     // Avoid spawning icacls for every fixture write; its lingering handle makes
     // the fixed fixture directory flaky under `bun test --isolate` on Windows.
     setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
   });
 
   afterEach(() => {
     setIcaclsRunnerForTests(null);
-    delete process.env.OPENCODEX_HOME;
+    delete process.env.CODEXCOMMANDER_HOME;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
 
@@ -42,17 +42,7 @@ describe("codex-account-store CRUD", () => {
     expect(loaded).toEqual(cred);
   });
 
-  test("legacy flat credential JSON loads through the compatibility projection", async () => {
-    const { getCodexAccountCredential, loadCodexAccountStore, readCodexAccountRecord } = await import("../src/codex/account-store");
-    const cred = { accessToken: "legacy_tk", refreshToken: "legacy_rf", expiresAt: Date.now() + 3600_000, chatgptAccountId: "legacy_acc" };
-    writeFileSync(ACCOUNTS_PATH, JSON.stringify({ legacy: cred }, null, 2));
-
-    expect(getCodexAccountCredential("legacy")).toEqual(cred);
-    expect(loadCodexAccountStore()).toEqual({ legacy: cred });
-    expect(readCodexAccountRecord("legacy")).toMatchObject({ credential: cred, generation: 0 });
-  });
-
-  test("malformed credential store is backed up before a new save overwrites it", async () => {
+  test("an authorized fresh save replaces a malformed store with the current envelope", async () => {
     const { saveCodexAccountCredential } = await import("../src/codex/account-store");
     writeFileSync(ACCOUNTS_PATH, "{not valid json", "utf8");
 
@@ -63,19 +53,135 @@ describe("codex-account-store CRUD", () => {
       chatgptAccountId: "new-account",
     });
 
-    const backups = readdirSync(TEST_DIR).filter(name => name.startsWith("codex-accounts.json.invalid-"));
-    expect(backups).toHaveLength(1);
-    expect(readFileSync(join(TEST_DIR, backups[0]), "utf8")).toBe("{not valid json");
+    const raw = JSON.parse(readFileSync(ACCOUNTS_PATH, "utf8")) as Record<string, unknown>;
+    expect(raw.schemaVersion).toBe(1);
+    expect(raw.accounts).toMatchObject({
+      fresh: {
+        credential: {
+          accessToken: "new-access",
+          refreshToken: "new-refresh",
+          chatgptAccountId: "new-account",
+        },
+        generation: 1,
+      },
+    });
+    expect(readdirSync(TEST_DIR).filter(name => name.startsWith("codex-accounts.json.invalid-"))).toHaveLength(0);
   });
 
-  test("new saves write generation wrapper records", async () => {
+  test("malformed JSON fails closed without backup, rewrite, or salvage", async () => {
+    const { loadCodexAccountStore } = await import("../src/codex/account-store");
+    const malformed = "{not valid json";
+    writeFileSync(ACCOUNTS_PATH, malformed, "utf8");
+
+    expect(loadCodexAccountStore()).toEqual({});
+    expect(readFileSync(ACCOUNTS_PATH, "utf8")).toBe(malformed);
+    expect(readdirSync(TEST_DIR).filter(name => name.startsWith("codex-accounts.json.invalid-"))).toHaveLength(0);
+  });
+
+  test("unversioned and non-current envelopes fail closed without migration", async () => {
+    const { loadCodexAccountStore } = await import("../src/codex/account-store");
+    const cred = {
+      accessToken: "stale-access",
+      refreshToken: "stale-refresh",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "stale-account",
+    };
+    const record = {
+      credential: cred,
+      generation: 1,
+      refreshGrantFingerprint: refreshGrantFingerprint(cred.refreshToken),
+    };
+
+    for (const raw of [
+      { stale: record },
+      { accounts: { stale: record } },
+      { schemaVersion: 0, accounts: { stale: record } },
+      { schemaVersion: 2, accounts: { stale: record } },
+    ]) {
+      const encoded = JSON.stringify(raw);
+      writeFileSync(ACCOUNTS_PATH, encoded, "utf8");
+      expect(loadCodexAccountStore()).toEqual({});
+      expect(readFileSync(ACCOUNTS_PATH, "utf8")).toBe(encoded);
+    }
+    expect(readdirSync(TEST_DIR).filter(name => name.startsWith("codex-accounts.json.invalid-"))).toHaveLength(0);
+  });
+
+  test("current envelope and account rows reject unknown keys without salvaging valid siblings", async () => {
+    const { loadCodexAccountStore } = await import("../src/codex/account-store");
+    const cred = {
+      accessToken: "valid-access",
+      refreshToken: "valid-refresh",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "valid-account",
+    };
+    const valid = {
+      credential: cred,
+      generation: 1,
+      refreshGrantFingerprint: refreshGrantFingerprint(cred.refreshToken),
+    };
+    const malformedEnvelopes = [
+      { schemaVersion: 1, accounts: { valid }, unexpected: true },
+      { schemaVersion: 1, accounts: { "invalid/account": valid } },
+      { schemaVersion: 1, accounts: Object.fromEntries([["valid", valid], ["__proto__", valid]]) },
+      { schemaVersion: 1, accounts: { valid, malformed: { ...valid, unexpected: true } } },
+      {
+        schemaVersion: 1,
+        accounts: {
+          valid,
+          malformed: { ...valid, credential: { ...cred, unexpected: true } },
+        },
+      },
+    ];
+
+    for (const raw of malformedEnvelopes) {
+      writeFileSync(ACCOUNTS_PATH, JSON.stringify(raw), "utf8");
+      expect(loadCodexAccountStore()).toEqual({});
+    }
+  });
+
+  test("active records without the current refresh-grant fingerprint are rejected", async () => {
+    const { loadCodexAccountStore } = await import("../src/codex/account-store");
+    writeFileSync(ACCOUNTS_PATH, JSON.stringify({
+      schemaVersion: 1,
+      accounts: {
+        stale: {
+          credential: {
+            accessToken: "stale-access",
+            refreshToken: "stale-refresh",
+            expiresAt: Date.now() + 3600_000,
+            chatgptAccountId: "stale-account",
+          },
+          generation: 1,
+        },
+      },
+    }), "utf8");
+
+    expect(loadCodexAccountStore()).toEqual({});
+    expect(readdirSync(TEST_DIR).filter(name => name.startsWith("codex-accounts.json.invalid-"))).toHaveLength(0);
+  });
+
+  test("new saves write the exact current envelope and generation wrapper records", async () => {
     const { readCodexAccountRecord, saveCodexAccountCredential } = await import("../src/codex/account-store");
     const cred = { accessToken: "tk_a", refreshToken: "rf_a", expiresAt: Date.now() + 3600_000, chatgptAccountId: "acc_a" };
     saveCodexAccountCredential("wrapped", cred);
 
     const raw = JSON.parse(readFileSync(ACCOUNTS_PATH, "utf-8")) as Record<string, unknown>;
-    expect(raw.wrapped).toMatchObject({ credential: cred, generation: 1 });
+    expect(Object.keys(raw)).toEqual(["schemaVersion", "accounts"]);
+    expect(raw.schemaVersion).toBe(1);
+    expect((raw.accounts as Record<string, unknown>).wrapped).toMatchObject({ credential: cred, generation: 1 });
     expect(readCodexAccountRecord("wrapped")).toMatchObject({ credential: cred, generation: 1 });
+  });
+
+  test("credential writers reject invalid account-map keys before changing bytes", async () => {
+    const { saveCodexAccountCredential } = await import("../src/codex/account-store");
+    const cred = { accessToken: "tk_a", refreshToken: "rf_a", expiresAt: Date.now() + 3600_000, chatgptAccountId: "acc_a" };
+    saveCodexAccountCredential("valid", cred);
+    const before = readFileSync(ACCOUNTS_PATH, "utf8");
+
+    for (const id of ["", "invalid/account", "__proto__", "constructor"]) {
+      expect(() => saveCodexAccountCredential(id, cred)).toThrow("Cannot persist an invalid Codex account store");
+      expect(readFileSync(ACCOUNTS_PATH, "utf8")).toBe(before);
+    }
   });
 
   test("remove credential deletes entry", async () => {
@@ -88,16 +194,20 @@ describe("codex-account-store CRUD", () => {
     expect(readCodexAccountRecord("temp")?.deletedAt).toBeNumber();
   });
 
-  test("tokenful tombstone is treated as absent", async () => {
+  test("tokenful tombstones are rejected by the current record schema", async () => {
     const { getCodexAccountCredential, listCodexAccountIds, loadCodexAccountStore } = await import("../src/codex/account-store");
     const cred = { accessToken: "deleted_tk", refreshToken: "deleted_rf", expiresAt: Date.now() + 3600_000, chatgptAccountId: "deleted_acc" };
     writeFileSync(ACCOUNTS_PATH, JSON.stringify({
-      deleted: { credential: cred, generation: 2, deletedAt: Date.now() },
+      schemaVersion: 1,
+      accounts: {
+        deleted: { credential: cred, generation: 2, deletedAt: Date.now() },
+      },
     }, null, 2));
 
     expect(getCodexAccountCredential("deleted")).toBeNull();
     expect(loadCodexAccountStore()).toEqual({});
     expect(listCodexAccountIds()).not.toContain("deleted");
+    expect(readdirSync(TEST_DIR).some(name => name.startsWith("codex-accounts.json.invalid-"))).toBe(false);
   });
 
   test("listCodexAccountIds returns stored ids", async () => {

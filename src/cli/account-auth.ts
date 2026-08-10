@@ -30,16 +30,16 @@ function writeStdoutFully(text: string): void {
 }
 
 const USAGE = `Usage:
-  ocx account login <provider> [--id <account-id>] [--reauth] [--code -] [--no-wait] [--json]
-  ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
-  ocx account cancel <provider> [--flow <flow-id>] [--json]
-  ocx account reset-credits <account-id|main> [--consume --yes] [--json]
+  ccx account login <provider> [--id <account-id>] [--reauth] [--code -] [--no-wait] [--json]
+  ccx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
+  ccx account cancel <provider> [--flow <flow-id>] [--json]
+  ccx account reset-credits <account-id|main> [--consume --yes] [--json]
 
 The redirect URL or authorization code is a short-lived credential. Pipe it in
 rather than passing it as an argument, where it lands in shell history and is
 visible to anyone who can run ps:
-  pbpaste | ocx account code <provider> --flow <flow-id>
-  ocx account login <provider> --code -   (same, for the login flow)`;
+  pbpaste | ccx account code <provider> --flow <flow-id>
+  ccx account login <provider> --code -   (same, for the login flow)`;
 
 const CODEX_NAMES = new Set(["openai", "codex", "chatgpt"]);
 
@@ -89,7 +89,7 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const suppliedCode = takeOptionWithSyntax(args, "--code");
   if (!provider) throw new CliUsageError("provider is required", USAGE);
   rejectArgs(args, USAGE);
-  // Only resolve when --code was actually given: a plain `ocx account login`
+  // Only resolve when --code was actually given: a plain `ccx account login`
   // opens the browser flow and polls, and must not block on stdin.
   const code = await resolveCode(suppliedCode, deps, false);
 
@@ -175,7 +175,7 @@ async function code(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const provider = args.shift()?.trim().toLowerCase();
   // Flags first. Taking the positional before parsing them made
-  // `ocx account code openai --flow f1` read `--flow` as the code and then
+  // `ccx account code openai --flow f1` read `--flow` as the code and then
   // reject `f1` as an unexpected argument.
   const wantsJson = takeFlag(args, "--json");
   const flowId = takeOption(args, "--flow");

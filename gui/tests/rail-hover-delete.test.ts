@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 /**
- * WP4 (devlog/_plan/260725_gui_view_consolidation/040_rail_hover_delete.md):
+ * WP4 (implementation contract):
  * hovering a provider row in the Providers rail reveals a delete accelerator.
  *
  * The row itself is a <button role="option">, so the control must be a SIBLING inside a

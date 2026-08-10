@@ -52,7 +52,7 @@ function useClipboard(available: boolean) {
   });
 }
 
-/** happy-dom ships no execCommand, so the legacy path must be stubbed explicitly. */
+/** happy-dom ships no execCommand, so the secondary path must be stubbed explicitly. */
 function useExecCommand(value: unknown) {
   Object.defineProperty(win.document, "execCommand", { configurable: true, value });
 }
@@ -129,7 +129,7 @@ test("shows the device code and copies it", async () => {
   expect(host.textContent).toContain("Code copied");
 });
 
-test("copies through the legacy path in a non-secure context", async () => {
+test("copies through the secondary path in a non-secure context", async () => {
   useClipboard(false);
   const execCommand = mock(() => true);
   useExecCommand(execCommand);

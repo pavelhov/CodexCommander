@@ -1,4 +1,4 @@
-import type { OcxConfig } from "../../types";
+import type { CodexCommanderConfig } from "../../types";
 import type { NativeProfileApiDeps } from "../../codex/native-profile-api";
 import type { ResolveCodexRuntimeResult } from "../../codex/runtime";
 import type { StartupHealth } from "../../codex/autostart-health";
@@ -17,10 +17,10 @@ import type {
 
 export interface ManagementApiDeps {
   resolveCodexRuntime?: () => ResolveCodexRuntimeResult;
-  getCachedStartupHealth?: (config: Pick<OcxConfig, "codexAutoStart">) => Promise<StartupHealth>;
+  getCachedStartupHealth?: (config: Pick<CodexCommanderConfig, "codexAutoStart">) => Promise<StartupHealth>;
   toggleCodexMultiAgentV2?: (enabled: boolean) => void;
   toggleDefaultModeRequestUserInput?: (enabled: boolean) => void;
-  createManagementConvergeCodex?: (config: Readonly<OcxConfig>) => ConvergeCodex;
+  createManagementConvergeCodex?: (config: Readonly<CodexCommanderConfig>) => ConvergeCodex;
   /**
    * Claude agent-definition sync seam for route tests. Production leaves this
    * unset and uses the real best-effort writer; tests with in-memory configs
@@ -31,16 +31,22 @@ export interface ManagementApiDeps {
    * Persistence seam for route-level tests. Production leaves this unset and uses
    * `saveConfigPreservingClaudeCode`; tests that pass an in-memory fixture config
    * MUST inject a no-op/spy so the fixture can never overwrite the user's real
-   * OPENCODEX_HOME (incident: devlog 260730.../070).
+   * CODEXCOMMANDER_HOME (incident: implementation contract).
    */
-  saveConfigPreservingClaudeCode?: (config: OcxConfig) => void;
+  saveConfigPreservingClaudeCode?: (config: CodexCommanderConfig) => void;
   /**
-   * Catalog seam for the Grok toggle (WP2, devlog 260803_integrations_toggle_all
+   * Catalog seam for the Grok toggle (WP2, implementation contract
    * Rev 3 N2). Production leaves this unset and the route dynamic-imports the
    * real one — a static import would close a cycle with management-api.ts.
    * Tests stub it to orphan the fixture file mid-fetch (the r7 recheck test).
    */
-  fetchAllModels?: (config: OcxConfig) => Promise<CatalogModel[]>;
+  fetchAllModels?: (config: CodexCommanderConfig) => Promise<CatalogModel[]>;
+  /**
+   * Native-model catalog seam for Grok route tests. Resolving the real bundled
+   * Codex catalog may spawn the selected Codex runtime, so fixture-only tests
+   * supply a deterministic list instead of touching host runtime state.
+   */
+  visibleNativeSlugs?: (config: Pick<CodexCommanderConfig, "disabledModels">) => string[];
   /**
    * Writer seam for the Grok toggle: lets a test place the file in any state
    * between the pre-write recheck and the write itself (the r8 post-inspection
@@ -67,7 +73,7 @@ export interface ManagementApiDeps {
   collectCodexAppServerCatalogState?: typeof collectCodexAppServerCatalogState;
   clearThreadAccountMap?: () => void;
   clearProviderQuotaCache?: () => void;
-  primeCodexPoolQuotas?: (config: OcxConfig, reason: string) => Promise<void> | void;
+  primeCodexPoolQuotas?: (config: CodexCommanderConfig, reason: string) => Promise<void> | void;
   runStartupInstallAction?: (
     action: StartupInstallAction,
     options?: { repair?: boolean },
@@ -83,7 +89,7 @@ export interface ManagementApiDeps {
 export interface ManagementContext {
   req: Request;
   url: URL;
-  config: OcxConfig;
+  config: CodexCommanderConfig;
   deps: ManagementApiDeps;
   /**
    * Which credential authorized this request, resolved by the auth gate before

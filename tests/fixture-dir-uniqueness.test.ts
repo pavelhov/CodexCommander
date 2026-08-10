@@ -7,7 +7,7 @@ import { join } from "node:path";
  *
  * `bun test --isolate` gives each file its own module registry, but every file shares one
  * process and one filesystem. Two files that delete and recreate the same path while
- * pointing OPENCODEX_HOME at it will destroy each other's config and credentials whenever
+ * pointing CODEXCOMMANDER_HOME at it will destroy each other's config and credentials whenever
  * the suite happens to overlap them. The failure surfaces as an unrelated assertion (a 401
  * where a 400 was expected) in whichever file lost the race, and the failure count changes
  * from run to run.

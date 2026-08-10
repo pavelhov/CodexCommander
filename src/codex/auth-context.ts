@@ -27,7 +27,7 @@ import type { CodexCooldownSource, CodexQuotaScope } from "./routing";
 import { maskAccountId } from "../lib/privacy";
 import { formatErrorResponse } from "../bridge";
 import { getAccountQuota } from "./quota";
-import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
+import type { CodexAccountMode, CodexCommanderConfig, CodexCommanderProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { captureConfigGeneration } from "../lib/state-store-sweeper";
 
@@ -90,7 +90,7 @@ export function releaseCodexAuthContextProbeLease(ctx: CodexAuthContext | undefi
   else releaseCodexQuotaProbeLease(ctx.accountId!, leaseId);
 }
 
-export type OcxRuntimeProviderConfig = OcxProviderConfig & {
+export type CodexCommanderRuntimeProviderConfig = CodexCommanderProviderConfig & {
   _codexAccountOverride?: { accessToken: string; chatgptAccountId: string };
   _codexAccountRequired?: boolean;
 };
@@ -186,8 +186,8 @@ export function cooldownErrorMessage(err: CodexAccountCooldownError, accountSele
     : `Selected Codex account (${cooldownAccountLabel(err.accountId)})`;
   const recovery = accountSelector
     ? " This request is pinned to that selector and will not switch accounts; choose another account-qualified model or retry later."
-    : " Run 'ocx account list openai' to find the id, then"
-      + " 'ocx account clear-cooldown openai <id>' to lift it, or switch accounts with 'ocx account use openai <id>'.";
+    : " Run 'ccx account list openai' to find the id, then"
+      + " 'ccx account clear-cooldown openai <id>' to lift it, or switch accounts with 'ccx account use openai <id>'.";
   return `${selected}${scope ? ` ${scope} is` : " is"} cooling down until ${until}`
     + ` (source: ${err.cooldownSource ?? "default"}).${recovery}`;
 }
@@ -233,7 +233,7 @@ export interface ResolveCodexAuthContextOptions {
   /** Test-only native credential read seams. */
   isMainAccountTokenLive?: () => boolean;
   getMainAccountToken?: typeof getMainAccountToken;
-  primeCodexPoolQuotas?: (config: OcxConfig, reason: string) => Promise<void>;
+  primeCodexPoolQuotas?: (config: CodexCommanderConfig, reason: string) => Promise<void>;
 }
 
 export interface CodexAccountSelectionAdmission {
@@ -244,7 +244,7 @@ export interface CodexAccountSelectionAdmission {
 
 export async function resolveCodexAuthContext(
   headers: Headers,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   mode: CodexAccountMode,
   options: ResolveCodexAuthContextOptions = {},
 ): Promise<CodexAuthContext> {
@@ -433,10 +433,10 @@ export function assertCodexAuthContextNotCooled(ctx: CodexAuthContext | undefine
 }
 
 export function applyCodexAuthContextToProvider(
-  provider: OcxProviderConfig,
+  provider: CodexCommanderProviderConfig,
   ctx: CodexAuthContext,
   mode: CodexAccountMode | undefined,
-): OcxRuntimeProviderConfig {
+): CodexCommanderRuntimeProviderConfig {
   if (mode !== "pool" || (ctx.kind !== "pool" && ctx.kind !== "main-pool") || provider.authMode !== "forward") return provider;
   return {
     ...provider,
@@ -461,17 +461,17 @@ export function headersForCodexAuthContext(headers: Headers, ctx: CodexAuthConte
   return selected;
 }
 
-export function isCodexAuthContextUsable(ctx: CodexAuthContext, config: OcxConfig): boolean {
+export function isCodexAuthContextUsable(ctx: CodexAuthContext, config: CodexCommanderConfig): boolean {
   if (ctx.kind === "main") return true;
   if (ctx.kind === "main-pool") return isCodexAccountUsable(config, ctx.accountId);
   return isCodexAccountUsable(config, ctx.accountId) && isCodexAccountGenerationLive(ctx.accountId, ctx.generation);
 }
 
-export function stripCodexRuntimeProviderFields(provider: OcxProviderConfig): OcxProviderConfig {
+export function stripCodexRuntimeProviderFields(provider: CodexCommanderProviderConfig): CodexCommanderProviderConfig {
   const {
     _codexAccountOverride: _override,
     _codexAccountRequired: _required,
     ...safeProvider
-  } = provider as OcxRuntimeProviderConfig;
+  } = provider as CodexCommanderRuntimeProviderConfig;
   return safeProvider;
 }

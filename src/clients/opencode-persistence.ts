@@ -1,7 +1,7 @@
 /**
  * Durable OpenCode client integration.
  *
- * OpenCodex owns exactly one JSONC path (`provider.opencodex`) in the user's
+ * CodexCommander owns exactly one JSONC path (`provider.codexcommander`) in the user's
  * global OpenCode config. The original bytes are backed up outside OpenCode's
  * config directory and every mutation is serialized by the process-safe config
  * transaction. Credentials are referenced through a protected file; neither the
@@ -46,13 +46,14 @@ import {
   windowsSecretAclApplies,
 } from "../lib/windows-secret-acl";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/service-secrets";
+import { API_KEY_HEADER, readEnv } from "../identity";
 import type { OpencodeLaunchEnv, OpencodeProviderBlock } from "./config-export";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 
 const JOURNAL_VERSION = 1 as const;
 const MAX_CONFIG_BYTES = 4 * 1024 * 1024;
 const MAX_JOURNAL_BYTES = 128 * 1024;
-const PROVIDER_PATH = ["provider", "opencodex"] as const;
+const PROVIDER_PATH = ["provider", "codexcommander"] as const;
 
 export interface OpencodeIntegrationPaths {
   configJsonPath: string;
@@ -176,7 +177,7 @@ function fsyncDirectory(path: string): void {
 function atomicWriteExternal(path: string, content: string, mode: number): void {
   const parent = dirname(path);
   mkdirSync(parent, { recursive: true, mode: 0o700 });
-  const temp = join(parent, `.ocx.${process.pid}.${randomUUID()}.tmp`);
+  const temp = join(parent, `.ccx.${process.pid}.${randomUUID()}.tmp`);
   let fd: number | undefined;
   try {
     fd = openSync(temp, "wx", mode);
@@ -215,7 +216,7 @@ function ensureStateDirectory(paths: OpencodeIntegrationPaths): void {
     }
     const resolvedPath = realpathSync(path);
     if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(`${resolvedRoot}${sep}`)) {
-      throw new Error(`${path} resolves outside the OpenCodex state directory`);
+      throw new Error(`${path} resolves outside the CodexCommander state directory`);
     }
   }
   try { chmodSync(paths.stateDir, 0o700); } catch { /* platform may ignore chmod */ }
@@ -260,7 +261,7 @@ function parseJsoncObject(text: string, label: string): Record<string, unknown> 
 
 function providerValue(parsed: Record<string, unknown>): unknown {
   const provider = isRecord(parsed.provider) ? parsed.provider : undefined;
-  return provider?.opencodex;
+  return provider?.codexcommander;
 }
 
 function formattingFor(text: string): FormattingOptions {
@@ -293,9 +294,7 @@ function journalIsValid(value: unknown): value is OpencodeIntegrationJournal {
     && typeof value.managedProviderHash === "string" && /^[0-9a-f]{64}$/.test(value.managedProviderHash)
     && typeof value.appliedAt === "string"
     && typeof value.autoConnect === "boolean"
-    // Journals created during pre-release development did not carry this bit;
-    // treating those as eligible preserves their original exact-restore contract.
-    && (value.exactRestoreEligible === undefined || typeof value.exactRestoreEligible === "boolean");
+    && typeof value.exactRestoreEligible === "boolean";
 }
 
 function readJournal(paths: OpencodeIntegrationPaths): OpencodeIntegrationJournal | null {
@@ -311,10 +310,7 @@ function readJournal(paths: OpencodeIntegrationPaths): OpencodeIntegrationJourna
   if (!samePath(dirname(parsed.backupPath), paths.backupsDir)) {
     throw new Error("OpenCode integration journal backup path is outside its owned directory");
   }
-  return {
-    ...parsed,
-    exactRestoreEligible: parsed.exactRestoreEligible !== false,
-  };
+  return parsed;
 }
 
 function writeJournal(paths: OpencodeIntegrationPaths, journal: OpencodeIntegrationJournal): void {
@@ -368,30 +364,30 @@ export function opencodeFileReference(path: string): string {
   return `{file:${absolute}}`;
 }
 
-/** Resolve the same data-plane admission credential used by `ocx opencode`. */
+/** Resolve the same data-plane admission credential used by `ccx opencode`. */
 export function resolveOpencodeAdmissionToken(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   env: OpencodeLaunchEnv = process.env,
 ): string {
-  const environment = env.OPENCODEX_API_AUTH_TOKEN?.trim();
+  const environment = readEnv("CODEXCOMMANDER_API_AUTH_TOKEN", env as NodeJS.ProcessEnv);
   if (environment) return environment;
-  const tokenFileEnv = env.OCX_API_TOKEN_FILE?.trim()
+  const tokenFileEnv = env.CCX_API_TOKEN_FILE?.trim()
     ? env
-    : { ...env, OCX_API_TOKEN_FILE: serviceApiTokenFilePath() };
+    : { ...env, CCX_API_TOKEN_FILE: serviceApiTokenFilePath() };
   const service = loadServiceTokenFromFile(tokenFileEnv)?.trim();
   if (service) return service;
   const configured = config.apiKeys?.[0]?.key?.trim();
   if (configured) return configured;
   // The local loopback data plane accepts the launcher placeholder when no
   // explicit admission credential is configured. A remote bind never may.
-  if (!shouldInjectApiAuthHeader(config)) return "ocx";
+  if (!shouldInjectApiAuthHeader(config)) return "ccx";
   throw new Error("A proxy API key is required before OpenCode can connect to a non-loopback bind");
 }
 
 /** Clone a generated provider block and replace its env reference with a file reference. */
 export function opencodePersistentProviderBlock(
   providerBlock: OpencodeProviderBlock,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   tokenPath: string,
 ): OpencodeProviderBlock {
   const fileReference = opencodeFileReference(tokenPath);
@@ -401,11 +397,11 @@ export function opencodePersistentProviderBlock(
   };
   if (shouldInjectApiAuthHeader(config)) {
     delete options.apiKey;
-    options.headers = { ...(options.headers ?? {}), "x-opencodex-api-key": fileReference };
+    options.headers = { ...(options.headers ?? {}), [API_KEY_HEADER]: fileReference };
   } else {
     options.apiKey = fileReference;
     if (options.headers) {
-      delete options.headers["x-opencodex-api-key"];
+      delete options.headers[API_KEY_HEADER];
       if (Object.keys(options.headers).length === 0) delete options.headers;
     }
   }
@@ -505,7 +501,7 @@ export function applyOpencodeIntegration(
   options: {
     paths?: OpencodeIntegrationPaths;
     autoConnect?: boolean;
-    config?: OcxConfig;
+    config?: CodexCommanderConfig;
   } = {},
 ): ApplyOpencodeIntegrationResult {
   const paths = options.paths ?? opencodeIntegrationPaths();
@@ -549,10 +545,10 @@ export function applyOpencodeIntegration(
       providerBlock,
       options.config ?? ({
         port: 10100,
-        hostname: providerBlock.options.headers?.["x-opencodex-api-key"] ? "0.0.0.0" : "127.0.0.1",
-        defaultProvider: "opencodex",
+        hostname: providerBlock.options.headers?.[API_KEY_HEADER] ? "0.0.0.0" : "127.0.0.1",
+        defaultProvider: "codexcommander",
         providers: {},
-      } as OcxConfig),
+      } as CodexCommanderConfig),
       paths.tokenPath,
     );
     const next = modifyProvider(target.text, persistentBlock);

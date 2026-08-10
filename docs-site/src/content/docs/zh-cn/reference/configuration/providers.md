@@ -3,14 +3,13 @@ title: 提供方配置
 description: 提供者条目、身份验证、端点、模型目录、配额、上下文上限以及提供者特定选项。
 ---
 
-提供者用于告诉 opencodex 模型位于哪里、使用哪种线协议适配器，以及请求如何进行身份验证。
+提供者用于告诉 CodexCommander 模型位于哪里、使用哪种线协议适配器，以及请求如何进行身份验证。
 
 ## 提供者相关顶级字段
 
 | 字段 | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
-| `providers` | `Record<string, OcxProviderConfig>` | — | 提供者名称到提供者配置的映射。 |
-| `openaiProviderTierVersion?` | `2` | 由迁移设置 | 标记单一、可感知选项的 OpenAI 投影已完成。 |
+| `providers` | `Record<string, CodexCommanderProviderConfig>` | — | 提供者名称到提供者配置的映射。 |
 | `disabledModels?` | `string[]` | — | 从 Codex catalog 和 `/v1/models` 中隐藏、但不阻止直接 proxy 调用的 model。routed id 会从列表中移除。account-qualified native id 只隐藏对应 selector row；bare native GPT id 会隐藏 bare row 以及该 model 的所有 account-selector row。Models 页面只显示裸原生行和路由行；若只隐藏一个 selector-qualified 行，请直接设置此配置字段。 |
 | `providerContextCaps?` | `Record<string, number>` | `{}` | 按提供者设置、对 Codex 可见的上下文上限。上限只会降低已知的上下文窗口。 |
 | `contextCapValue?` | `number` | `350000` | 仪表板上下文上限控件使用的值；修改它会更新所有已启用的 `providerContextCaps` 条目。 |
@@ -18,16 +17,16 @@ description: 提供者条目、身份验证、端点、模型目录、配额、�
 | `pausedCodexAccountIds?` | `string[]` | `[]` | 在恢复之前从 Pool 选择中排除的账户，包括被暂停时的主 `__main__` 账户。 |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | 将任意公开 model selector 映射到已保存 Codex account target 的可选配置。target 存在的每个 selector 都会在 Codex picker 中添加独立的 `<selector>/<native-openai-model>` row，且每个 row 只使用对应账户。只要有 selector 生效，bare native row 就会在 picker 中隐藏；但除非显式禁用，其 id 仍可路由，并继续列在 raw `/v1/models` 中。 |
 | `activeCodexAccountId?` | `string` | — | 为下一次请求手动选定的 Pool 账户。选择会清除线程亲和性；进行中的请求会保留捕获到的凭据。 |
-| `codexAccountPriorities?` | `Record<string,number>` | — | Codex pool 各账号的选择顺序：账号 ID → `-100` 到 `100` 的整数，**数值越大越先使用**，未设置即为 `0`。这是顺序边界而非资格边界：选择会把已经合格的账号收窄到仍有 quota 余量的最高 tier，再由 `accountPoolStrategy` 在该 tier 内挑选。只有当某个 tier 的所有成员都超过 `autoSwitchThreshold`、处于 cooldown、被 soft-avoid、已暂停或需要重新认证时，该 tier 才会被跳过；usage 未知不会让 tier 耗尽。顺序不会让不合格的账号变得可选，也不会重新绑定已经绑定账号的 thread。主账号 `__main__` 同样参与排序，因此可以让 Codex Desktop 登录账号最后才被用到。没有任何条目时，行为与以往完全一致。映射格式非法时会打印警告并关闭排序（不会触发 config 修复）。可通过 `ocx account priority` 和 Codex Auth 页面管理。 |
+| `codexAccountPriorities?` | `Record<string,number>` | — | Codex pool 各账号的选择顺序：账号 ID → `-100` 到 `100` 的整数，**数值越大越先使用**，未设置即为 `0`。这是顺序边界而非资格边界：选择会把已经合格的账号收窄到仍有 quota 余量的最高 tier，再由 `accountPoolStrategy` 在该 tier 内挑选。只有当某个 tier 的所有成员都超过 `autoSwitchThreshold`、处于 cooldown、被 soft-avoid、已暂停或需要重新认证时，该 tier 才会被跳过；usage 未知不会让 tier 耗尽。顺序不会让不合格的账号变得可选，也不会重新绑定已经绑定账号的 thread。主账号 `__main__` 同样参与排序，因此可以让 Codex Desktop 登录账号最后才被用到。没有任何条目时，所有账号的优先级均为 `0`。映射格式非法时会打印警告并关闭排序（不会触发 config 修复）。可通过 `ccx account priority` 和 Codex Auth 页面管理。 |
 | `autoSwitchThreshold?` | `number` | `80` | 基于用量的主动切换阈值。`quota` 可在下一次请求中重新评估已绑定和未绑定任务；`fill-first` 仅把它用作未绑定分配的耗尽点；正常 `round-robin` 不使用它。分数取已知 5 小时、周或 30 天 quota window 的最高值。`0` 只关闭基于用量的主动切换，不关闭未绑定任务分配或故障恢复。 |
 | `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新建/未绑定 Codex 请求的分配策略。没有 live `(parent thread id, quota scope)` affinity 的请求属于未绑定；代理重启或 affinity 重置后，已有可见任务也可能未绑定。`quota` 在没有活跃账号时选择已知 usage 最低的合格账号；活跃账号合格且低于 `autoSwitchThreshold` 时继续使用；达到阈值后，可把未绑定请求或已绑定任务的下一次请求切换到 usage 更低的合格账号。`round-robin` 均匀分配未绑定请求；`fill-first` 在 cooldown、不可用或耗尽阈值前持续分配给活跃账号。 |
 | `accountPoolStickyLimit?` | `number` | `1` | 一次 round-robin 选择在推进前保留的新建/未绑定任务分配数。计数在任务绑定时增加，而不是在上游成功后增加。范围 1–100；仅当 `accountPoolStrategy` 为 `round-robin` 时生效。 |
 | `upstreamFailoverThreshold?` | `number` | `3` | 连续发生多少次瞬态故障后，后续新会话会切换到备用上游。设为 `0` 可禁用。已证明的连接前 DNS/TCP 不可达故障按 provider-host 粒度记录，不影响账户健康、冷却、线程/会话亲和性、活动账户选择或 Pool 路由，也不会计入此阈值；未确认的失败仍归属账户。 |
 | `modelCacheTtlMs?` | `number` | `300000` | 每个提供者 `/models` 缓存的新鲜度窗口。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic 提示缓存策略：禁用、5 分钟临时缓存，或 1 小时扩展缓存。 |
-| `tokenGuardian?` | `OcxTokenGuardianConfig` | 关闭 | 可选的主动 OAuth 刷新与 Codex 账户预热策略。 |
+| `tokenGuardian?` | `CodexCommanderTokenGuardianConfig` | 关闭 | 可选的主动 OAuth 刷新与 Codex 账户预热策略。 |
 
-selector 名称是用户自定的公开 label；opencodex 不会为其赋予账户角色语义。
+selector 名称是用户自定的公开 label；CodexCommander 不会为其赋予账户角色语义。
 `codexAccountNamespaces` 的 key 长度为 1–64 个字符，首尾必须是 ASCII 字母或数字，
 中间可使用字母、数字、`.`、`_` 或 `-`；保留的 JavaScript object 名称会被拒绝。value 必须是有效的
 pool account id（不能是内部 `__main__`），或用 `"@main"` 表示 Codex Desktop 账号。与 provider 及
@@ -40,17 +39,15 @@ pool account id（不能是内部 `__main__`），或用 `"@main"` 表示 Codex 
 
 `openai` 和 `openai-apikey` 是固定的保留 id。`openai.codexAccountMode` 默认是 `"pool"`，会在主账户和新增账户之间选择；`"direct"` 只使用当前调用者/主登录态。API 只使用其配置的 API key 或 key 池。请使用裸模型名或 `openai-apikey/<model>`；不存在跨路由凭据回退。API 的 GPT-5.6 行携带 1,050,000 上下文 / 922,000 最大输入元数据，而 Pro 虚拟 id 会重写为基础线协议模型并带上 `reasoning.mode: "pro"`。
 
-`openaiProviderTierVersion: 2` 标记当前的单提供者投影。对已发布的 v1 配置进行迁移之前，opencodex 会创建 `config.json.pre-openai-tiers-v2.bak`，且不会覆盖不同的备份文件，并会把已知的旧式命名空间选择 id 重写为裸 id。
-
-## 提供者条目（`OcxProviderConfig`）
+## 提供者条目（`CodexCommanderProviderConfig`）
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
-| `adapter` | `string` | `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro`、`cursor`、`azure-openai`（或别名 `azure`）之一。 |
+| `adapter` | `string` | `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro`、`cursor`、`azure-openai` 之一。 |
 | `baseUrl` | `string` | 上游 API 基础 URL。大多数内置固定端点会忽略不匹配的值；具备冲突安全键的预设会保留一个更早、同名的自定义目标。 |
 | `responsesPath?` | `string` | 用于 key-auth `openai-responses` 请求的相对资源路径。必须以 `/` 开头，且不能包含 scheme、query 或 fragment。 |
 | `supportsServiceTier?` | `boolean` | `service_tier` 能力的三态。`true`：fast 模式可以注入，调用方提供的值也会被保留。`false`：剥离该字段且绝不注入（已明确不支持的上游不会收到它）。未设置：未分类——调用方提供的值原样保留，fast 模式绝不注入。注册表已对官方 OpenAI（`true`）、DeepSeek 和 Volcengine Ark（`false`）分类；仅对真正支持分层的自定义网关显式设置。 |
-| `preserveResponsesReasoningContent?` | `boolean` | 在重放的 Responses reasoning 项中保留明文 reasoning 内容，而不是清空（清空是 ChatGPT 后端的规则）。对接受 reasoning 重放的上游（如 DeepSeek）启用。代理生成的 `ocxr1` 信封始终会被剥离。 |
+| `preserveResponsesReasoningContent?` | `boolean` | 在重放的 Responses reasoning 项中保留明文 reasoning 内容，而不是清空（清空是 ChatGPT 后端的规则）。对接受 reasoning 重放的上游（如 DeepSeek）启用。代理生成的 `ccxr1` 信封始终会被剥离。 |
 | `disabled?` | `boolean` | 将提供者保留在磁盘上，但从路由和模型/目录列表中排除。 |
 | `apiKey?` | `string` | API key，或在请求时解析的 `${ENV_VAR}` / `$ENV_VAR` 引用。 |
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic key 头部样式。默认使用原生 `x-api-key`；仅对 key-auth `anthropic` 提供者有效。 |
@@ -102,16 +99,15 @@ pool account id（不能是内部 `__main__`），或用 `"@main"` 表示 Codex 
 | `location?` | `string` | Vertex 位置；环境变量回退为 `GOOGLE_CLOUD_LOCATION`。 |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | 仅 Cursor：stdio 或 Streamable HTTP MCP 服务器。 |
 | `desktopExecutor?` | `DesktopExecutorConfig` | 仅 Cursor：外部 computer-use 和录屏命令。 |
-| `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 旧布尔值；仅当更新字段未设置时，等同于 `nativeLocalExec: "on"`。 |
-| `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 本地执行策略。`off` 是默认值；`codex-sandbox` 目前会像 `off` 一样失败关闭。 |
+| `nativeLocalExec?` | `"off" \| "on"` | Cursor 本地执行策略。`off` 是默认值。 |
 
-API key 提供者可以持有字面量 key，或环境引用。OAuth 提供者使用由 `ocx login` 填充的凭据存储；基于订阅的 Claude Code 启动行为在 [`claudeCode.authMode`](/reference/configuration/server/#claude-code) 下配置。
+API key 提供者可以持有字面量 key，或环境引用。OAuth 提供者使用由 `ccx login` 填充的凭据存储；基于订阅的 Claude Code 启动行为在 [`claudeCode.authMode`](/reference/configuration/server/#claude-code) 下配置。
 
 ## 提供者诊断出站安全性
 
-仪表板连接测试和实时模型发现使用受限的、仅 GET 传输。没有出站代理时，opencodex 只会解析一次主机名，并仅连接到该已验证地址。HTTPS 仍会保留原始 Host、SNI 和证书验证；提供者配置不能关闭证书检查。
+仪表板连接测试和实时模型发现使用受限的、仅 GET 传输。没有出站代理时，CodexCommander 只会解析一次主机名，并仅连接到该已验证地址。HTTPS 仍会保留原始 Host、SNI 和证书验证；提供者配置不能关闭证书检查。
 
-当 `HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY` 生效时，这些操作会继续使用 Bun 的原生 fetch。URL 和字面量地址检查仍会执行，但最终路由、DNS 解析结果和对端由代理决定，因此 opencodex 无法固定或验证该对端。这是一个明确的安全限制。
+当 `HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY` 生效时，这些操作会继续使用 Bun 的原生 fetch。URL 和字面量地址检查仍会执行，但最终路由、DNS 解析结果和对端由代理决定，因此 CodexCommander 无法固定或验证该对端。这是一个明确的安全限制。
 
 私有/本地目标需要 `allowPrivateNetwork: true`，并且在出站代理启用时，还需要匹配的 `NO_PROXY` 条目。回环地址会自动加入；每个 LAN 主机都必须显式列出，因为 CIDR 条目不会被解释。匹配器支持精确主机、域后缀、可选端口、带方括号的 IPv6 以及 `*`；例如，应显式列出 `192.168.1.50`。元数据和链路本地目标仍会被阻止。诊断请求会拒绝重定向，并报告一个已剥离凭据的目标。普通提供者请求的重定向审查仍然独立于这个诊断保护。
 
@@ -152,14 +148,14 @@ affinity。这些策略不能规避 provider enforcement。
 启用后，429 会根据 `Retry-After` 记录有界冷却，或者使用默认退避，并且可能在同一请求内轮换。亲和性是进程本地的，并且有大小上限。凭据 401/403 会将账户标记为需要重新认证。如果所有合格账户都在冷却，客户端会在已知时收到带 `Retry-After` 的 429，而不是身份验证错误。
 
 :::caution[Experimental]
-除非你理解 Anthropic 账户策略风险，否则请保持关闭。若不确定，优先手动使用 `ocx account use anthropic <id>` 切换。
+除非你理解 Anthropic 账户策略风险，否则请保持关闭。若不确定，优先手动使用 `ccx account use anthropic <id>` 切换。
 :::
 
 ### 托管记录形状
 
 `apiKeys[]` 条目包含 `id`、`name`、生成的 `key` 以及 ISO 格式的 `createdAt` 字符串。`codexAccounts[]` 条目要求有 `id`、`email` 和 `isMain`，并可选 `plan`、`chatgptAccountId` 和具备隐私安全性的 `logLabel`。这些记录通常由仪表板管理。
 
-### `tokenGuardian`（`OcxTokenGuardianConfig`）
+### `tokenGuardian`（`CodexCommanderTokenGuardianConfig`）
 
 | 字段 | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
@@ -185,7 +181,7 @@ affinity。这些策略不能规避 provider enforcement。
 
 适配器之后可以再调整解析后的 URL。例如，Kiro 会依据导入凭据的 API 区域，遵循规范的 `runtime.{region}.kiro.dev`。参见[适配器](/reference/adapters/)。
 
-当路由丢弃 `baseUrl` 时，opencodex 会记录注册表端点以及仅有的已配置 origin；配置的路径本身也可能包含凭据。请移除未使用的 URL，或选择与预期区域相匹配的提供者条目。`alibaba-token-plan` 锁定在北京，而 `alibaba-token-plan-intl` 覆盖国际端点。
+当路由丢弃 `baseUrl` 时，CodexCommander 会记录注册表端点以及仅有的已配置 origin；配置的路径本身也可能包含凭据。请移除未使用的 URL，或选择与预期区域相匹配的提供者条目。`alibaba-token-plan` 锁定在北京，而 `alibaba-token-plan-intl` 覆盖国际端点。
 
 对于损坏的 `openai-responses` 网关，修复应放在提供者对象上：
 
@@ -210,7 +206,7 @@ affinity。这些策略不能规避 provider enforcement。
 
 ## Cursor 提供者（`adapter: "cursor"`）
 
-Cursor 桥接是实验性的。执行 `ocx login cursor` 之后，添加或编辑 `providers.cursor`。Cursor Router 的优化层级会作为独立的 Codex id 暴露，因为选择器无法渲染 Cursor 特定的模型参数：
+Cursor 桥接是实验性的。执行 `ccx login cursor` 之后，添加或编辑 `providers.cursor`。Cursor Router 的优化层级会作为独立的 Codex id 暴露，因为选择器无法渲染 Cursor 特定的模型参数：
 
 | Codex model | Cursor Router mode |
 | --- | --- |
@@ -225,8 +221,6 @@ Cursor 由服务端驱动的本地工具默认是禁用的。Codex 继续使用�
 
 - `"off"`（默认）会拒绝执行 Cursor 原生的 `read`、`write`、`delete`、`ls`、`grep`、`shell` 和 `fetch`。
 - `"on"` 会启用受信任的本地执行，并绕过 Codex 的审批/沙箱语义。
-- `"codex-sandbox"` 为兼容性保留，但会像 `"off"` 一样失败关闭；请求文案并不是可信的沙箱证明。
-
 ```json
 {
   "providers": {
@@ -241,7 +235,7 @@ Cursor 由服务端驱动的本地工具默认是禁用的。Codex 继续使用�
 }
 ```
 
-请将该字段设置在 `providers.cursor` 上，而不是顶层。在仪表板中，使用 **Providers → Cursor → Edit JSON**，保存，然后重启。旧的 `unsafeAllowNativeLocalExec: true` 仅在未设置 `nativeLocalExec` 时，才等同于 `nativeLocalExec: "on"`。MCP、屏幕录制和 computer use 由 `mcpServers` 和 `desktopExecutor` 单独控制。
+请将该字段设置在 `providers.cursor` 上，而不是顶层。在仪表板中，使用 **Providers → Cursor → Edit JSON**，保存，然后重启。MCP、屏幕录制和 computer use 由 `mcpServers` 和 `desktopExecutor` 单独控制。
 
 每个 `mcpServers.<name>` 都可以接受 `command`（stdio）或 `url`（Streamable HTTP）。stdio 还接受 `args`、`env` 和 `cwd`；HTTP 接受 `headers`。两者都支持 `enabled`（默认 true）和 `toolPrefix`。`desktopExecutor` 接受 `computerUseCommand`、`recordScreenCommand`、`cwd`、`env` 和 `timeoutMs`（默认 `30000`）。命令通过 `sh -c` 执行，从 stdin 读取一个 JSON 请求，并且必须向 stdout 写入一个 JSON 结果。
 
@@ -277,7 +271,7 @@ OpenRouter 可以通过多个推理提供者来提供同一个模型。`openRout
 }
 ```
 
-模型键必须是精确的原生 OpenRouter id，不带外层的 opencodex 提供者前缀。选择 `openrouter/anthropic-claude-sonnet-5` 会在应用模型规则之前，还原为原生 `anthropic/claude-sonnet-5`。
+模型键必须是精确的原生 OpenRouter id，不带外层的 CodexCommander 提供者前缀。选择 `openrouter/anthropic-claude-sonnet-5` 会在应用模型规则之前，还原为原生 `anthropic/claude-sonnet-5`。
 
 ## 静态模型允许列表
 

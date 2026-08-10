@@ -11,26 +11,22 @@ runs helper features around provider requests.
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | Proxy listen port. |
-| `hostname?` | `string` | `"127.0.0.1"` | Bind address. Non-loopback binds require `OPENCODEX_API_AUTH_TOKEN`. |
+| `hostname?` | `string` | `"127.0.0.1"` | Bind address. Non-loopback binds require `CODEXCOMMANDER_API_AUTH_TOKEN`. |
 | `proxy?` | `string` | — | Outbound HTTP(S) proxy URL or `${ENV_VAR}`. Applied to `HTTP_PROXY` / `HTTPS_PROXY` only when those variables are unset; loopback remains in `NO_PROXY`. |
 | `stallTimeoutSec?` | `number` | `300` | Seconds without upstream data before `response.incomplete`. Minimum 1. |
 | `connectTimeoutMs?` | `number` | `200000` | Per-attempt DNS/TCP/TLS/final-header deadline; it ends before body generation. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Graceful drain deadline before active turns are aborted. |
 | `websockets?` | `boolean` | `false` | Advertise `supports_websockets` for the Responses WebSocket path. False keeps HTTP/SSE. |
 | `corsAllowOrigins?` | `string[]` | `[]` | Additional exact origins allowed by CORS. Loopback origins are always allowed. Authority-based browser extension origins such as `chrome-extension://<extension-id>` are supported; `*` is not a wildcard. Firefox and Safari regenerate the extension UUID (per install / per browser launch), so update the entry when the origin changes. |
-| `apiKeys?` | `OcxApiKey[]` | `[]` | Generated `ocx_…` credentials accepted by management and data-plane auth on non-loopback binds. Dashboard-managed. |
+| `apiKeys?` | `CodexCommanderApiKey[]` | `[]` | Generated `ccx_data_…` credentials accepted by data-plane auth on non-loopback binds. Dashboard-managed; these keys never authenticate `/api/*`. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in archived-session cleanup policy. Never enabled implicitly. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | Cap in MiB for evictable app-owned logs, caches, blobs, and continuation payloads. Range 64–4096; not an RSS cap. |
-| `codexAutoStart?` | `boolean` | `true` | Let the Codex shim run `ocx ensure` before launching Codex. False makes ensure a no-op. |
-| `codexShimAutoRestore?` | `boolean` | `true` | Restore an installed shim after a completed external Codex update replaces it. Environment opt-out: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
-| `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility. Original metadata is backed up and restored by `ocx stop` / `ocx restore`. |
-| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Redirect recognized Codex helper/shadow calls to a chosen model at low effort. The default source prefix is `gpt-5.6-luna`; older clients through 0.144.x used `gpt-5.4-mini`, which `sourceModels` can restore. |
-| `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Web-search sidecar options. |
-| `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Image-description sidecar options. |
-| `images?` | `OcxImagesConfig` | automatic OpenAI selection | Standalone Images relay options for Codex `image_gen`. |
-
-If an older development build changed resume-history metadata before backup support existed, run
-`ocx recover-history --legacy-openai` to force native-provider recovery.
+| `codexAutoStart?` | `boolean` | `true` | Let the Codex shim run `ccx ensure` before launching Codex. False makes ensure a no-op. |
+| `codexShimAutoRestore?` | `boolean` | `true` | Restore an installed shim after a completed external Codex update replaces it. Environment opt-out: `CODEXCOMMANDER_CODEX_SHIM_AUTO_RESTORE=0`. |
+| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Redirect recognized Codex helper/shadow calls to a chosen model at low effort. The default source prefix is `gpt-5.6-luna`; `sourceModels` is an explicit current custom-source override. |
+| `webSearchSidecar?` | `CodexCommanderWebSearchSidecarConfig` | on when usable | Web-search sidecar options. |
+| `visionSidecar?` | `CodexCommanderVisionSidecarConfig` | on when usable | Image-description sidecar options. |
+| `images?` | `CodexCommanderImagesConfig` | automatic OpenAI selection | Standalone Images relay options for Codex `image_gen`. |
 
 ## Remote access
 
@@ -38,18 +34,18 @@ The default `127.0.0.1` bind is loopback-only. A non-loopback address such as `0
 token authentication on both `/api/*` and the data plane. Export the token before starting:
 
 ```bash
-export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
-ocx start
+export CODEXCOMMANDER_API_AUTH_TOKEN="your-secret-token"
+ccx start
 ```
 
 The proxy refuses a remote bind without this variable. For a background service, export it before
-`ocx service install` so launchd, systemd, or Task Scheduler receives it. Clients should send:
+`ccx service install` so launchd, systemd, or Task Scheduler receives it. Clients should send:
 
 ```text
-x-opencodex-api-key: your-secret-token
+x-codexcommander-api-key: your-secret-token
 ```
 
-| Endpoint | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
+| Endpoint | `Authorization: Bearer` | `x-codexcommander-api-key` | `x-api-key` |
 | --- | --- | --- | --- |
 | `/v1/responses` | not accepted | **required** | not accepted |
 | `/v1/chat/completions` | not accepted | **required** | not accepted |
@@ -75,7 +71,7 @@ ssh -L 20100:localhost:10100 you@remote
 
 Any local port works. Requests whose Host resolves to `localhost`, `127.0.0.1`, or `::1` remain
 loopback regardless of port, so `http://localhost:20100/v1` works. Set that base URL in the client;
-`ocx` writes only the default local `127.0.0.1` address into managed client config.
+`ccx` writes only the default local `127.0.0.1` address into managed client config.
 
 Provider OAuth callbacks listen on a fixed remote port. Log in on the remote machine or forward that
 port too:
@@ -101,15 +97,14 @@ with `POST /api/storage/cleanup-policy/run`.
 
 ## Claude Code (`claudeCode`)
 
-These settings govern `/v1/messages`, the `ocx claude` launcher, and the Claude dashboard page.
+These settings govern `/v1/messages`, the `ccx claude` launcher, and the Claude dashboard page.
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `claudeCode.bodyStallSec?` | `number` | `90` | Native-passthrough body inactivity budget in seconds while a read is pending, not total duration. Minimum 1; exactly `0` disables. |
 | `claudeCode.bodyMaxBytes?` | `number` | `67108864` | Cumulative native-passthrough body cap for streamed and buffered responses. Exactly `0` disables. |
 | `claudeCode.authMode?` | `"proxy" \| "subscription"` | auto | How launch handles `ANTHROPIC_AUTH_TOKEN`. Auto detects auth each launch; an explicit value is never overridden. |
-| `claudeCode.authModeMigratedAt?` | `string` | unset | Internal one-time upgrade marker. Do not set manually. |
-| `claudeCode.subagentEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | inherit | Effort written to generated `~/.claude/agents/ocx-*.md`; separate from Codex guidance and proxy caps. Restart through `ocx claude` to regenerate. |
+| `claudeCode.subagentEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | inherit | Effort written to generated `~/.claude/agents/ccx-*.md`; separate from Codex guidance and proxy caps. Restart through `ccx claude` to regenerate. |
 
 Auto auth selects subscription when stored Claude auth is found, proxy when none is found, and
 subscription with a warning when detection is inconclusive. See
@@ -119,10 +114,9 @@ subscription with a warning when detection is inconclusive. See
 
 Codex uses small helper models for tasks such as titles and commit messages. Enable
 `shadowCallIntercept` to redirect recognized source-model prefixes to another configured model. The
-replacement runs at low effort. Set `sourceModels` only when a client uses different helper ids.
-Codex 0.145.0+ marks request purpose in `x-codex-turn-metadata`: normal `request_kind: "turn"`
-requests keep the selected model, while recognized maintenance requests can be redirected. Clients
-without that metadata retain the legacy prefix behavior.
+replacement runs at low effort. Set `sourceModels` only as an explicit current custom-source
+override. Only recognized maintenance request kinds in `x-codex-turn-metadata` are eligible;
+normal turns and requests with missing, malformed, or unrecognized metadata are never intercepted.
 
 ```json
 {
@@ -136,7 +130,7 @@ without that metadata retain the legacy prefix behavior.
 
 ## Sidecars
 
-### `images` (`OcxImagesConfig`)
+### `images` (`CodexCommanderImagesConfig`)
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
@@ -147,13 +141,13 @@ Explicit selection fails closed when the provider is missing, disabled, incompat
 usable key; it never falls back to another paid upstream. The endpoint must implement the OpenAI
 Images API paths and response shape expected by Codex.
 
-### `webSearchSidecar` (`OcxWebSearchSidecarConfig`)
+### `webSearchSidecar` (`CodexCommanderWebSearchSidecarConfig`)
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | on when usable | Master switch. |
 | `backend?` | `"openai" \| "anthropic"` | auto | Explicit wins; otherwise usable stored Anthropic OAuth selects `anthropic`, then `openai`. |
-| `model?` | `string` | backend-dependent | `gpt-5.6-luna` for OpenAI or `claude-sonnet-5` for Anthropic. Legacy explicit `gpt-5.4-mini` migrates on start. |
+| `model?` | `string` | backend-dependent | `gpt-5.6-luna` for OpenAI or `claude-sonnet-5` for Anthropic. |
 | `reasoning?` | `string` | `low` | Sidecar effort. `minimal` is rejected with web search. |
 | `maxSearchesPerTurn?` | `number` | `3` | Real searches allowed per main-model turn. |
 | `routedModelStallTimeoutMs?` | `number` | `200000` | Config-file-only routed-model raw-body inactivity deadline. Integer 1–2147483647; every non-empty chunk resets it. |
@@ -169,7 +163,7 @@ Four clocks govern search: base `stallTimeoutSec`, `connectTimeoutMs`, routed-mo
 hosted-search timeout. The effective bridge watchdog is the maximum plus 30 seconds. Routed stall is
 an inactivity guard, not a total generation deadline.
 
-### `visionSidecar` (`OcxVisionSidecarConfig`)
+### `visionSidecar` (`CodexCommanderVisionSidecarConfig`)
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
@@ -185,5 +179,5 @@ credential. Successful `data:` descriptions use a bounded cache keyed by backend
 image bytes, and normalized message context. Hits and same-turn duplicates do not consume the limit.
 Remote `https:` images and failed or empty descriptions are not cached.
 
-Anthropic OAuth sidecars reuse opencodex's existing Claude Code OAuth fingerprint. Soak-test the
+Anthropic OAuth sidecars reuse CodexCommander's existing Claude Code OAuth fingerprint. Soak-test the
 intended account and workload.

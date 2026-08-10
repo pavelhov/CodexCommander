@@ -1,13 +1,12 @@
 ---
 title: 기여하기
-description: opencodex 개발 환경, 구조, 컨벤션, 프로바이더와 어댑터 추가 방법.
+description: CodexCommander 개발 환경, 구조, 규칙, 프로바이더와 어댑터 추가 방법.
 ---
 
 ## 설정
 
 ```bash
-git clone https://github.com/pavelhov/opencodex.git
-cd opencodex
+cd /path/to/CodexCommander
 bun install
 bun run dev:proxy    # 개발 모드 프록시 API
 bun run dev:gui      # 대시보드 dev 서버(다른 터미널)
@@ -44,12 +43,9 @@ subsystem의 기존 테스트 근처에 집중된 회귀 테스트를 추가하�
 cd docs-site && bun install && bun dev
 ```
 
-## 문서 배포
+## 문서 사이트
 
-공개 문서는 GitHub Pages의 <https://opencodex.me/ko/>에 게시됩니다.
-`.github/workflows/deploy-docs.yml`은 `main` push에서 `docs-site/**`나 워크플로 자체가 바뀌면
-실행됩니다. `docs-site`를 빌드한 뒤 생성된 사이트를 배포합니다. 문서 변경을 push하기 전에 다음을
-실행하세요.
+문서는 `docs-site/`에 있으며 현재 게시된 호스트는 없습니다. 문서 PR을 열기 전에 로컬에서 빌드하세요.
 
 ```bash
 cd docs-site
@@ -57,41 +53,31 @@ bun install --frozen-lockfile
 bun run build
 ```
 
-## CI와 릴리즈
+게시 자동화는 이 저장소에 포함되어 있지 않습니다.
 
-GitHub Actions는 필요한 작업만 수행합니다.
+## 지속적 통합
 
-- **Cross-platform CI**(`.github/workflows/ci.yml`)는 런타임, 테스트, 패키지, 스크립트,
-  TypeScript, 워크플로 파일이 바뀐 pull request와 `main` push에서 실행됩니다. Bun matrix는 Linux,
-  Windows, macOS에서 install, typecheck, tests, privacy scan, release helper build smoke, GUI build,
-  `ocx help`를 검사합니다. 별도의 3개 OS lane은 번들 런타임을 사용해 Bun을 따로 설치하지 않아도
-  npm global install이 동작하는지 확인합니다.
-- **Release**(`.github/workflows/release.yml`)는 수동으로 실행합니다. 두 번째 전체 CI 파이프라인이
-  아니며, dry-run이나 publish 전에 정확한 릴리즈 커밋(`GITHUB_SHA`)에서 Cross-platform CI가
-  성공했는지 확인합니다.
+모든 pull request와 `main`으로의 모든 push에는 자동 검사가 **하나** 있습니다: **`ci`**
+(`.github/workflows/ci.yml`). 일반 기여에 필요한 자동화는 이것뿐입니다.
 
-릴리즈에는 helper를 사용하세요.
+저장소 관리자는 보호 규칙이 의도한 관리 작업을 막을 때 GitHub ruleset **Always-allow**
+bypass를 사용할 수 있습니다. 관리자 복구와 예외 유지보수용이며, 기여자 작업의 리뷰를
+대체하지 않습니다.
 
-```bash
-bun run release <version>           # 버전 bump를 commit/push, publish workflow는 기본 dry-run
-bun run release <version> --publish # CI-gated dry-run을 확인한 뒤 실제 publish
-bun run release:watch               # 가장 최근 Release workflow run 감시
-```
+## 브랜치와 pull request
 
-## 브랜치
+- **`main`이 유일한 default/통합/PR 대상입니다.** 기능·수정 PR은 `main`으로 여세요.
+- 현재 **`main` tip**에서 브랜치를 따세요.
+- 설명에는 무엇을 왜 바꿨는지와 검증 방법(실행한 명령과 결과)을 적으세요. 비어 있거나
+  placeholder만 있는 설명은 리뷰 준비가 아닙니다.
+- 대시보드 UI를 건드리면 설명에 스크린샷을 넣으세요.
+- 동작 변경에는 해당 서브시스템 기존 테스트 근처에 집중 회귀 테스트가 필요합니다. 공유
+  라우팅/어댑터/설정/서버 변경은 전체 suite를 통과해야 합니다.
 
-- `dev` — 유일한 통합 대상. 모든 PR을 여기로 올립니다.
-- `main` — 릴리즈 전용. `dev`에서 메인테이너가 승격시킬 때만 움직이며, 기능 PR을 직접
-  올리지 않습니다.
-- `preview` — 프리릴리즈 트레인.
+`main`의 Bun 네이티브 TypeScript가 단일 런타임 라인입니다.
 
-Go 네이티브 포트를 담당했던 `dev2-go`는 정리했고, 두 라인을 동시에 유지하던 정책도
-함께 끝났습니다. 히스토리는
-[lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive)에
-읽기 전용으로 남아 있습니다. 지금은 `dev`의 Bun 네이티브 TypeScript가 단일 런타임입니다.
-
-리베이스 PR은 환영합니다. 오래된 브랜치를 현재 head 위로 리베이스하는 것은 잡음이 아니라
-정상적인 기여입니다. 설명란에 출처 커밋을 적어주세요.
+리베이스 PR은 환영합니다. 오래된 브랜치를 현재 head로 맞추는 것은 평범한 유지보수입니다.
+설명에 출처 커밋을 적어 주세요.
 
 ## 컨벤션
 
@@ -102,7 +88,7 @@ Go 네이티브 포트를 담당했던 `dev2-go`는 정리했고, 두 라인을 
 - **비동기 오류는 경계에서 처리** — 사이드카는 요청 경로로 오류를 던지지 않고 적절한 marker로
   저하됩니다.
 - **Structure SOT** — 현재 유지보수 불변식은 `structure/`에 둡니다. 공개 사용자 워크플로는
-  `docs-site/`, 과거 조사/진단 기록은 `docs/`에 둡니다.
+  `docs-site/`, 유지 관리되는 기술·구현 노트는 `docs/`에 둡니다.
 - **export 보존** — 다른 모듈이 의존할 수 있습니다.
 
 ## 카탈로그에 프로바이더 추가하기
@@ -123,7 +109,7 @@ Go 네이티브 포트를 담당했던 `dev2-go`는 정리했고, 두 라인을 
 },
 ```
 
-`src/providers/derive.ts`는 이 항목을 `ocx init`, `ocx provider`, 대시보드 preset, API 키 로그인,
+`src/providers/derive.ts`는 이 항목을 `ccx init`, `ccx provider`, 대시보드 preset, API 키 로그인,
 OAuth 설정 seed에 공급합니다. `enrichProviderFromCatalog()`는 모델 메타데이터와 capability 분류를
 저장할 프로바이더 설정에 복사합니다. OAuth 프로토콜 구현은 여전히 `src/oauth/`에 있습니다.
 레지스트리 메타데이터만 추가해서 OAuth flow가 생기지는 않습니다.
@@ -141,4 +127,4 @@ factory라면 `src/index.ts`에서도 export합니다.
 
 변경을 증명하는 가장 좁은 명령부터 실행하세요. 타입은 `bun run typecheck`, 동작은 집중된
 `bun test tests/<name>.test.ts` 또는 런타임 probe로 확인한 뒤 영향 범위에 맞는 넓은 gate를
-실행합니다. opencodex는 큰 batch보다 작고 검증 가능한 commit을 선호합니다.
+실행합니다. CodexCommander는 큰 batch보다 작고 검증 가능한 commit을 선호합니다.

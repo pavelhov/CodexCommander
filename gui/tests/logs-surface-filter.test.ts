@@ -14,7 +14,8 @@ test("Logs surface filter matches Usage buckets including Grok", () => {
   expect(logMatchesSurface({ surface: "claude" }, "grok")).toBe(false);
   expect(logMatchesSurface({}, "grok")).toBe(false);
 
-  expect(logMatchesSurface({}, "codex")).toBe(true);
+  expect(logMatchesSurface({ surface: "codex" }, "codex")).toBe(true);
+  expect(logMatchesSurface({}, "codex")).toBe(false);
   expect(logMatchesSurface({ surface: "claude" }, "codex")).toBe(false);
   expect(logMatchesSurface({ surface: "claude-desktop" }, "codex")).toBe(false);
   expect(logMatchesSurface({ surface: "grok" }, "codex")).toBe(false);

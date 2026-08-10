@@ -18,15 +18,15 @@ let previousHome: string | undefined;
 let previousDebug: string | undefined;
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
   previousDebug = process.env[USAGE_DEBUG_ENV];
-  testDir = mkdtempSync(join(tmpdir(), "ocx-usage-debug-"));
-  process.env.OPENCODEX_HOME = testDir;
+  testDir = mkdtempSync(join(tmpdir(), "ccx-usage-debug-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
 });
 
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   if (previousDebug === undefined) delete process.env[USAGE_DEBUG_ENV];
   else process.env[USAGE_DEBUG_ENV] = previousDebug;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
@@ -76,7 +76,7 @@ describe("appendUsageDebug", () => {
   function sample(extra: Partial<{ requestId: string; ts: number }> = {}) {
     return {
       ts: extra.ts ?? 1,
-      requestId: extra.requestId ?? "ocx-debug-1",
+      requestId: extra.requestId ?? "ccx-debug-1",
       provider: "chatgpt",
       model: "gpt-5.5",
       upstreamContentType: "text/event-stream",
@@ -94,7 +94,7 @@ describe("appendUsageDebug", () => {
     const lines = readFileSync(path, "utf-8").split(/\r?\n/).filter(Boolean);
     expect(lines).toHaveLength(1);
     const parsed = JSON.parse(lines[0]) as Record<string, unknown>;
-    expect(parsed.requestId).toBe("ocx-debug-1");
+    expect(parsed.requestId).toBe("ccx-debug-1");
     expect(parsed.bodyKind).toBe("sse");
     expect(parsed.upstreamContentType).toBe("text/event-stream");
     if (process.platform !== "win32") {
@@ -144,15 +144,15 @@ describe("appendUsageDebug", () => {
     // file holds exactly KEEP lines and the most-recent record survives.
     const total = USAGE_DEBUG_MAX_LINES + 1;
     for (let i = 0; i < total; i++) {
-      appendUsageDebug(sample({ requestId: `ocx-${i}`, ts: i }));
+      appendUsageDebug(sample({ requestId: `ccx-${i}`, ts: i }));
     }
     const path = usageDebugPath();
     const lines = readFileSync(path, "utf-8").split(/\r?\n/).filter(Boolean);
     expect(lines).toHaveLength(USAGE_DEBUG_KEEP_LINES);
     const last = JSON.parse(lines[lines.length - 1]) as { requestId: string };
     const first = JSON.parse(lines[0]) as { requestId: string };
-    expect(last.requestId).toBe(`ocx-${total - 1}`);
-    expect(first.requestId).toBe(`ocx-${total - USAGE_DEBUG_KEEP_LINES}`);
+    expect(last.requestId).toBe(`ccx-${total - 1}`);
+    expect(first.requestId).toBe(`ccx-${total - USAGE_DEBUG_KEEP_LINES}`);
   });
 
   test("keeps file size bounded by MAX_LINES across long runs", () => {
@@ -169,7 +169,7 @@ describe("appendUsageDebug", () => {
     // 325 is already the minimum that crosses the rotate threshold twice.
     const total = USAGE_DEBUG_MAX_LINES + USAGE_DEBUG_KEEP_LINES + 25;
     for (let i = 0; i < total; i++) {
-      appendUsageDebug(sample({ requestId: `ocx-${i}`, ts: i }));
+      appendUsageDebug(sample({ requestId: `ccx-${i}`, ts: i }));
     }
     const path = usageDebugPath();
     const lines = readFileSync(path, "utf-8").split(/\r?\n/).filter(Boolean);

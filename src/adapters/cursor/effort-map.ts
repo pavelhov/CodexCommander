@@ -5,7 +5,7 @@
  * tiers differ per model — `claude-4.6-opus` tops out at `-max`, `claude-opus-4-8` at `-xhigh`,
  * `claude-4.6-sonnet` only has `-medium`, and most `composer`/`gemini` models take no suffix at all.
  * Grok Fast puts its mode marker after the effort (`grok-4.5-high-fast`). A bare id for a model that
- * requires a suffix is rejected `ERROR_BAD_MODEL_NAME` (devlog 350.105).
+ * requires a suffix is rejected `ERROR_BAD_MODEL_NAME` (implementation contract).
  *
  * Canonical effort order is always low < medium < high < xhigh < max (max is the top tier, confirmed
  * against Anthropic docs and Cursor's live lineup). Tiers are stored in ascending canonical order.

@@ -1,4 +1,4 @@
-import type { OcxProviderConfig } from "../../types";
+import type { CodexCommanderProviderConfig } from "../../types";
 import type { CursorClientMessage, CursorRunRequest, CursorServerMessage } from "./types";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 
@@ -15,7 +15,7 @@ export interface CursorTransport {
 }
 
 export interface CursorTransportFactoryInput {
-  provider: OcxProviderConfig;
+  provider: CodexCommanderProviderConfig;
   translatorBudget: TranslatorBudget;
   headers?: Headers;
   /** Pre-first-frame deadline (dial + first server frame). Defaults to 30s when omitted. */

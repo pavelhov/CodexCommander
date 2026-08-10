@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { syncModelsToCodex } from "../src/codex/sync";
+import { resolveCodexCoordinatorDatabasePath, resolveEffectiveUserIdentity } from "../src/codex/user-identity";
 import { MANAGED_AGENTS_TABLE_MARKER, MANAGED_SUBAGENT_DEFAULT_MARKER } from "../src/codex/subagent-defaults";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import type { OrcaCodexHomeDiagnostic } from "../src/codex/home";
 import { claimOwnedServiceHome } from "./helpers/owned-service-home";
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
@@ -14,17 +15,19 @@ setDefaultTimeout(30_000);
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-sync-api");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
-const TEST_OCX_HOME = join(TEST_DIR, "ocx");
+const TEST_CCX_HOME = join(TEST_DIR, "ccx");
 const TEST_HOME = join(TEST_DIR, "home");
 const repoRoot = join(import.meta.dir, "..");
 let prevCodexHome: string | undefined;
-let prevOpenCodexHome: string | undefined;
+let prevCodexCommanderHome: string | undefined;
 let prevHome: string | undefined;
 let prevUserProfile: string | undefined;
 let previousCodexCliPath: string | undefined;
+let testCoordinatorPath = "";
 
 const config = {
   port: 0,
+  multiAgentGuidanceEnabled: true,
   defaultProvider: "fixture",
   providers: {
     fixture: {
@@ -35,13 +38,17 @@ const config = {
       models: ["fixture-model"],
     },
   },
-} as OcxConfig;
+} as CodexCommanderConfig;
 
-function claimTempHome(codexHome: string, ocxHome: string, home: string): void {
-  claimOwnedServiceHome(codexHome, ocxHome, home);
+function claimTempHome(codexHome: string, ccxHome: string, home: string): void {
+  claimOwnedServiceHome(codexHome, ccxHome, home);
 }
 
 const admittedSync = () => ({ kind: "admitted" as const });
+const preparedSync = () => ({
+  kind: "ready" as const,
+  state: { nativeGeneration: 0, currentTxId: null },
+});
 
 function homeDiagnostic(overrides: Partial<OrcaCodexHomeDiagnostic> = {}): OrcaCodexHomeDiagnostic {
   return {
@@ -59,54 +66,73 @@ function homeDiagnostic(overrides: Partial<OrcaCodexHomeDiagnostic> = {}): OrcaC
 describe("GUI/CLI Codex sync backend", () => {
   beforeEach(() => {
     prevCodexHome = process.env.CODEX_HOME;
-    prevOpenCodexHome = process.env.OPENCODEX_HOME;
+    prevCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     prevHome = process.env.HOME;
     prevUserProfile = process.env.USERPROFILE;
     previousCodexCliPath = process.env.CODEX_CLI_PATH;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_CODEX_HOME, { recursive: true });
-    mkdirSync(TEST_OCX_HOME, { recursive: true });
+    mkdirSync(TEST_CCX_HOME, { recursive: true });
     mkdirSync(TEST_HOME, { recursive: true });
     process.env.CODEX_HOME = TEST_CODEX_HOME;
-    process.env.OPENCODEX_HOME = TEST_OCX_HOME;
+    process.env.CODEXCOMMANDER_HOME = TEST_CCX_HOME;
     process.env.HOME = TEST_HOME;
     process.env.USERPROFILE = TEST_HOME;
     process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(TEST_DIR);
+    testCoordinatorPath = resolveCodexCoordinatorDatabasePath(
+      resolveEffectiveUserIdentity(),
+      realpathSync.native(TEST_CODEX_HOME),
+    );
+    for (const suffix of ["", "-journal", "-wal", "-shm"]) {
+      rmSync(`${testCoordinatorPath}${suffix}`, { force: true });
+    }
     writeFileSync(join(TEST_CODEX_HOME, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
-    writeFileSync(join(TEST_OCX_HOME, "config.json"), JSON.stringify(config));
-    claimTempHome(TEST_CODEX_HOME, TEST_OCX_HOME, TEST_HOME);
+    writeFileSync(join(TEST_CCX_HOME, "config.json"), JSON.stringify(config));
+    claimTempHome(TEST_CODEX_HOME, TEST_CCX_HOME, TEST_HOME);
   });
 
   afterEach(() => {
     if (prevCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = prevCodexHome;
-    if (prevOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = prevOpenCodexHome;
+    if (prevCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = prevCodexCommanderHome;
     if (prevHome === undefined) delete process.env.HOME;
     else process.env.HOME = prevHome;
     if (prevUserProfile === undefined) delete process.env.USERPROFILE;
     else process.env.USERPROFILE = prevUserProfile;
     if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
     else process.env.CODEX_CLI_PATH = previousCodexCliPath;
+    for (const suffix of ["", "-journal", "-wal", "-shm"]) {
+      rmSync(`${testCoordinatorPath}${suffix}`, { force: true });
+    }
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
   test("returns the structured sync result used by POST /api/sync", async () => {
     let injectedPort = 0;
     let injectedCatalogPath: string | null | undefined;
+    const order: string[] = [];
 
     const logs: string[] = [];
     const errors: string[] = [];
     const result = await syncModelsToCodex(12345, config, { log: line => logs.push(String(line)), error: line => errors.push(String(line)) }, {
       admitCodexWrite: admittedSync,
-      refreshCodexModelCatalog: async () => ({
-        added: 3,
-        path: "/tmp/opencodex-catalog.json",
-        catalogExists: true,
-        catalogWritten: true,
-        cacheSynced: true,
-        comboOmissions: [],
-      }),
+      prepareCodexTransitionState: () => {
+        order.push("coordinator");
+        return { kind: "ready", state: { nativeGeneration: 0, currentTxId: null } };
+      },
+      refreshCodexModelCatalog: async () => {
+        order.push("catalog");
+        return {
+          added: 3,
+          path: "/tmp/codexcommander-catalog.json",
+          catalogExists: true,
+          catalogWritten: true,
+          cacheSynced: true,
+          comboOmissions: [],
+        };
+      },
       injectCodexConfig: async (port, _config, options) => {
+        order.push("inject");
         injectedPort = port;
         injectedCatalogPath = options.catalogPath;
         return { success: true, message: "injected" };
@@ -116,12 +142,13 @@ describe("GUI/CLI Codex sync backend", () => {
     });
 
     expect(injectedPort).toBe(12345);
-    expect(injectedCatalogPath).toBe("/tmp/opencodex-catalog.json");
+    expect(injectedCatalogPath).toBe("/tmp/codexcommander-catalog.json");
+    expect(order).toEqual(["coordinator", "catalog", "inject"]);
     expect(result).toEqual({
       status: "applied",
       ok: true,
       added: 3,
-      catalogPath: "/tmp/opencodex-catalog.json",
+      catalogPath: "/tmp/codexcommander-catalog.json",
       catalogExists: true,
       catalogWritten: true,
       cacheSynced: true,
@@ -131,15 +158,86 @@ describe("GUI/CLI Codex sync backend", () => {
     expect(errors).toEqual([]);
   });
 
+  test("refuses before catalog publication when the current coordinator is unavailable", async () => {
+    let refreshed = false;
+    let injected = false;
+
+    const result = await syncModelsToCodex(12345, config, null, {
+      admitCodexWrite: admittedSync,
+      prepareCodexTransitionState: () => ({ kind: "unavailable", reason: "busy" }),
+      refreshCodexModelCatalog: async () => {
+        refreshed = true;
+        throw new Error("must not refresh");
+      },
+      injectCodexConfig: async () => {
+        injected = true;
+        throw new Error("must not inject");
+      },
+      currentExternalCodexModelProvider: () => null,
+    });
+
+    expect(result).toEqual({
+      status: "refused",
+      ok: false,
+      added: 0,
+      catalogPath: null,
+      catalogExists: false,
+      catalogWritten: false,
+      cacheSynced: false,
+      catalogQuality: "native-only",
+      rehydrated: 0,
+      message: "Codex sync refused before catalog publication because the transition coordinator is busy; retry the sync.",
+    });
+    expect(refreshed).toBe(false);
+    expect(injected).toBe(false);
+  });
+
+  test("surfaces ambiguous coordinator state without publishing catalog residue", async () => {
+    let refreshed = false;
+    let injected = false;
+    const result = await syncModelsToCodex(12345, config, null, {
+      admitCodexWrite: admittedSync,
+      prepareCodexTransitionState: () => ({
+        kind: "state-ambiguous",
+        message: "The current coordinator row is missing.",
+      }),
+      refreshCodexModelCatalog: async () => {
+        refreshed = true;
+        throw new Error("must not refresh");
+      },
+      injectCodexConfig: async () => {
+        injected = true;
+        throw new Error("must not inject");
+      },
+      currentExternalCodexModelProvider: () => null,
+    });
+
+    expect(result).toEqual({
+      status: "refused",
+      ok: false,
+      added: 0,
+      catalogPath: null,
+      catalogExists: false,
+      catalogWritten: false,
+      cacheSynced: false,
+      catalogQuality: "native-only",
+      rehydrated: 0,
+      message: "Codex sync refused before catalog publication: The current coordinator row is missing.",
+    });
+    expect(refreshed).toBe(false);
+    expect(injected).toBe(false);
+  });
+
   test("returns a policy skip without touching the catalog or config", async () => {
     let refreshed = false;
     let injected = false;
-    writeFileSync(join(TEST_OCX_HOME, "config.json"), JSON.stringify({
+    writeFileSync(join(TEST_CCX_HOME, "config.json"), JSON.stringify({
       ...config,
       clientIntegrations: { codex: false },
     }));
     const result = await syncModelsToCodex(12345, config, null, {
       admitCodexWrite: admittedSync,
+      prepareCodexTransitionState: () => { throw new Error("OFF must not prepare the coordinator"); },
       refreshCodexModelCatalog: async () => {
         refreshed = true;
         throw new Error("must not refresh");
@@ -166,17 +264,17 @@ describe("GUI/CLI Codex sync backend", () => {
    * would silently address the suite's isolated home instead of the fixture.
    */
   test("a competing OFF during catalog discovery becomes the discriminated skip", async () => {
-    const raceRoot = mkdtempSync(join(tmpdir(), "ocx-sync-lost-transition-"));
+    const raceRoot = mkdtempSync(join(tmpdir(), "ccx-sync-lost-transition-"));
     const raceCodexHome = join(raceRoot, ".codex");
-    const raceOcxHome = join(raceRoot, ".opencodex");
+    const raceCodexCommanderHome = join(raceRoot, ".codexcommander");
     const raceHome = join(raceRoot, "home");
     mkdirSync(raceCodexHome, { recursive: true });
-    mkdirSync(raceOcxHome, { recursive: true });
+    mkdirSync(raceCodexCommanderHome, { recursive: true });
     mkdirSync(raceHome, { recursive: true });
     try {
       writeFileSync(join(raceCodexHome, "config.toml"), 'model = "gpt-5"\n', "utf8");
-      writeFileSync(join(raceOcxHome, "config.json"), JSON.stringify(config));
-      claimTempHome(raceCodexHome, raceOcxHome, raceHome);
+      writeFileSync(join(raceCodexCommanderHome, "config.json"), JSON.stringify(config));
+      claimTempHome(raceCodexHome, raceCodexCommanderHome, raceHome);
       const script = [
         'const { spawnSync } = require("node:child_process");',
         'const { loadConfig } = require("./src/config");',
@@ -185,6 +283,7 @@ describe("GUI/CLI Codex sync backend", () => {
         '(async () => {',
         '  const snapshot = loadConfig(); // admitted BEFORE the flip: reads as ON',
         '  const result = await syncModelsToCodex(12345, snapshot, null, {',
+        '    prepareCodexTransitionState: () => ({ kind: "ready", state: { nativeGeneration: 0, currentTxId: null } }),',
         '    refreshCodexModelCatalog: async () => {',
         '      // The provider-discovery window: a second real process persists OFF.',
         '      const flip = spawnSync(process.execPath, ["--eval",',
@@ -208,7 +307,7 @@ describe("GUI/CLI Codex sync backend", () => {
           HOME: raceHome,
           USERPROFILE: raceHome,
           CODEX_HOME: raceCodexHome,
-          OPENCODEX_HOME: raceOcxHome,
+          CODEXCOMMANDER_HOME: raceCodexCommanderHome,
         },
         encoding: "utf8",
       });
@@ -229,13 +328,14 @@ describe("GUI/CLI Codex sync backend", () => {
       id: "k3k3",
       targets: ["kimi/k3", "xianyu/kimi-k3"],
       reason: "incomplete_metadata" as const,
-      message: "[opencodex] Combo \"k3k3\" is omitted from the catalog because member capabilities are incomplete: kimi/k3, xianyu/kimi-k3.",
+      message: "[codexcommander] Combo \"k3k3\" is omitted from the catalog because member capabilities are incomplete: kimi/k3, xianyu/kimi-k3.",
     };
     const result = await syncModelsToCodex(12345, config, { log: line => logs.push(String(line)), error: line => errors.push(String(line)) }, {
       admitCodexWrite: admittedSync,
+      prepareCodexTransitionState: preparedSync,
       refreshCodexModelCatalog: async () => ({
         added: 1,
-        path: "/tmp/opencodex-catalog.json",
+        path: "/tmp/codexcommander-catalog.json",
         catalogExists: true,
         catalogWritten: true,
         cacheSynced: true,
@@ -259,13 +359,14 @@ describe("GUI/CLI Codex sync backend", () => {
       id: "disjoint",
       targets: ["a/m1", "b/m2"],
       reason: "incompatible_modalities" as const,
-      message: "[opencodex] Combo \"disjoint\" is omitted from the catalog because members have no common input modalities: a/m1, b/m2.",
+      message: "[codexcommander] Combo \"disjoint\" is omitted from the catalog because members have no common input modalities: a/m1, b/m2.",
     };
     const result = await syncModelsToCodex(12345, config, { log: () => {}, error: line => errors.push(String(line)) }, {
       admitCodexWrite: admittedSync,
+      prepareCodexTransitionState: preparedSync,
       refreshCodexModelCatalog: async () => ({
         added: 0,
-        path: "/tmp/opencodex-catalog.json",
+        path: "/tmp/codexcommander-catalog.json",
         catalogExists: true,
         catalogWritten: true,
         cacheSynced: true,
@@ -291,6 +392,7 @@ describe("GUI/CLI Codex sync backend", () => {
 
     const result = await syncModelsToCodex(undefined, config, null, {
       admitCodexWrite: admittedSync,
+      prepareCodexTransitionState: preparedSync,
       refreshCodexModelCatalog: async () => {
         throw new Error("catalog boom");
       },
@@ -314,9 +416,10 @@ describe("GUI/CLI Codex sync backend", () => {
       error: line => errors.push(String(line)),
     }, {
       admitCodexWrite: admittedSync,
+      prepareCodexTransitionState: preparedSync,
       refreshCodexModelCatalog: async () => ({
         added: 0,
-        path: "/tmp/opencodex-catalog.json",
+        path: "/tmp/codexcommander-catalog.json",
         catalogExists: true,
         catalogWritten: true,
         cacheSynced: true,
@@ -332,16 +435,17 @@ describe("GUI/CLI Codex sync backend", () => {
     expect(result.ok).toBe(true);
     expect(result.catalogQuality).toBe("native-only");
     expect(result.warning).toContain("Codex left native-only");
-    expect(result.warning).toContain("ocx sync");
+    expect(result.warning).toContain("ccx sync");
     expect(errors.join("\n")).toContain("provider discovery returned nothing");
   });
 
   test("retained catalog quality is converged without a native-only warning", async () => {
     const result = await syncModelsToCodex(10100, config, null, {
       admitCodexWrite: admittedSync,
+      prepareCodexTransitionState: preparedSync,
       refreshCodexModelCatalog: async () => ({
         added: 0,
-        path: "/tmp/opencodex-catalog.json",
+        path: "/tmp/codexcommander-catalog.json",
         catalogExists: true,
         catalogWritten: true,
         cacheSynced: true,
@@ -365,9 +469,10 @@ describe("GUI/CLI Codex sync backend", () => {
   test("returns native subagent default conflicts as structured warnings", async () => {
     const result = await syncModelsToCodex(10100, config, null, {
       admitCodexWrite: admittedSync,
+      prepareCodexTransitionState: preparedSync,
       refreshCodexModelCatalog: async () => ({
         added: 0,
-        path: "/tmp/opencodex-catalog.json",
+        path: "/tmp/codexcommander-catalog.json",
         catalogExists: true,
         cacheSynced: true,
       }),
@@ -384,8 +489,8 @@ describe("GUI/CLI Codex sync backend", () => {
   });
 
   test("POST /api/sync exposes an actionable error when native defaults are ambiguous", () => {
-    const ocxHome = join(TEST_DIR, "opencodex");
-    mkdirSync(ocxHome, { recursive: true });
+    const ccxHome = join(TEST_DIR, "codexcommander");
+    mkdirSync(ccxHome, { recursive: true });
     writeFileSync(join(TEST_CODEX_HOME, "config.toml"), [
       MANAGED_AGENTS_TABLE_MARKER,
       "[agents]",
@@ -406,7 +511,7 @@ describe("GUI/CLI Codex sync backend", () => {
       console.log(JSON.stringify({ status: response.status, body: await response.json() }));
     `], {
       cwd: join(import.meta.dir, ".."),
-      env: { ...process.env, CODEX_HOME: TEST_CODEX_HOME, OPENCODEX_HOME: ocxHome },
+      env: { ...process.env, CODEX_HOME: TEST_CODEX_HOME, CODEXCOMMANDER_HOME: ccxHome },
       encoding: "utf8",
     });
 
@@ -438,6 +543,7 @@ describe("GUI/CLI Codex sync backend", () => {
     });
     const result = await syncModelsToCodex(10100, config, { log: line => logs.push(String(line)), error: line => errors.push(String(line)) }, {
       admitCodexWrite: () => { throw new Error("external providers must not enter write admission"); },
+      prepareCodexTransitionState: () => { throw new Error("external providers must not prepare the coordinator"); },
       refreshCodexModelCatalog: async () => {
         refreshed = true;
         throw new Error("must not refresh");
@@ -472,6 +578,99 @@ describe("GUI/CLI Codex sync backend", () => {
       `WARNING: ${mismatch.warning}`,
       `Action: ${mismatch.action}`,
     ]);
+  });
+
+  test("a clean first sync prepares the coordinator before routed catalog residue", async () => {
+    const catalogPath = join(TEST_CODEX_HOME, "codexcommander-catalog.json");
+    expect(existsSync(testCoordinatorPath)).toBe(false);
+    const script = [
+      'const { existsSync, readFileSync, realpathSync, writeFileSync } = require("node:fs");',
+      'const { join } = require("node:path");',
+      'const { loadConfig } = require("./src/config");',
+      'const { injectCodexConfig } = require("./src/codex/inject");',
+      'const { syncModelsToCodex } = require("./src/codex/sync");',
+      'const { readCodexTransitionState } = require("./src/codex/transition-state");',
+      'const { resolveCodexCoordinatorDatabasePath, resolveEffectiveUserIdentity } = require("./src/codex/user-identity");',
+      '(async () => {',
+      '  const codexHome = process.env.CODEX_HOME;',
+      '  const coordinatorPath = resolveCodexCoordinatorDatabasePath(resolveEffectiveUserIdentity(), realpathSync.native(codexHome));',
+      '  const catalogPath = join(codexHome, "codexcommander-catalog.json");',
+      '  const before = existsSync(coordinatorPath);',
+      '  let during;',
+      '  const result = await syncModelsToCodex(12345, loadConfig(), null, {',
+      '    admitCodexWrite: () => ({ kind: "admitted" }),',
+      '    prepareCodexTransitionState: readCodexTransitionState,',
+      '    refreshCodexModelCatalog: async () => {',
+      '      during = readCodexTransitionState();',
+      '      writeFileSync(catalogPath, JSON.stringify({ models: [{ slug: "fixture/fixture-model", description: "Routed via CodexCommander → fixture/fixture-model" }] }));',
+      '      return { added: 1, path: catalogPath, catalogExists: true, catalogWritten: true, cacheSynced: false, catalogQuality: "live", rehydrated: 0, comboOmissions: [] };',
+      '    },',
+      '    injectCodexConfig,',
+      '    currentExternalCodexModelProvider: () => null,',
+      '  });',
+      '  console.log(JSON.stringify({ before, during, result, after: readCodexTransitionState(), config: readFileSync(join(codexHome, "config.toml"), "utf8") }));',
+      '})();',
+    ].join("\n");
+    const child = spawnSync(process.execPath, ["--eval", script], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        HOME: TEST_HOME,
+        USERPROFILE: TEST_HOME,
+        CODEX_HOME: TEST_CODEX_HOME,
+        CODEXCOMMANDER_HOME: TEST_CCX_HOME,
+      },
+      encoding: "utf8",
+    });
+
+    expect(child.status).toBe(0);
+    const payload = JSON.parse(child.stdout.trim()) as {
+      before: boolean;
+      during: { kind: string; state?: { nativeGeneration: number; currentTxId: string | null } };
+      result: { status: string; ok: boolean; catalogWritten: boolean };
+      after: { kind: string; state?: { nativeGeneration: number } };
+      config: string;
+    };
+    expect(payload.before).toBe(false);
+    expect(payload.during).toEqual({
+      kind: "ready",
+      state: { nativeGeneration: 0, currentTxId: null },
+    });
+    expect(payload.result).toMatchObject({ status: "applied", ok: true, catalogWritten: true });
+    expect(payload.after).toMatchObject({ kind: "ready", state: { nativeGeneration: 1 } });
+    expect(payload.config).toContain("CodexCommander");
+    expect(existsSync(catalogPath)).toBe(true);
+  });
+
+  test("service-home refusal happens before coordinator preparation", async () => {
+    let prepared = false;
+    let refreshed = false;
+    let injected = false;
+    const result = await syncModelsToCodex(12345, config, null, {
+      admitCodexWrite: () => ({
+        kind: "refused",
+        authority: "service-home",
+        message: "another service home owns Codex",
+      }),
+      prepareCodexTransitionState: () => {
+        prepared = true;
+        return preparedSync();
+      },
+      refreshCodexModelCatalog: async () => {
+        refreshed = true;
+        throw new Error("must not refresh");
+      },
+      injectCodexConfig: async () => {
+        injected = true;
+        throw new Error("must not inject");
+      },
+      currentExternalCodexModelProvider: () => null,
+    });
+
+    expect(result).toMatchObject({ status: "refused", authority: "service-home", ok: false });
+    expect(prepared).toBe(false);
+    expect(refreshed).toBe(false);
+    expect(injected).toBe(false);
   });
 });
 import { ManagementRequest as Request } from "./helpers/management-auth";

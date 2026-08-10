@@ -3,19 +3,19 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-stale-state-purge-test");
-let prevOpencodexHome: string | undefined;
+let prevCodexCommanderHome: string | undefined;
 
 describe("snapshot-guarded stale-state purge", () => {
   beforeEach(() => {
-    prevOpencodexHome = process.env.OPENCODEX_HOME;
+    prevCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
   });
 
   afterEach(() => {
-    if (prevOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = prevOpencodexHome;
+    if (prevCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = prevCodexCommanderHome;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
 
@@ -37,7 +37,7 @@ describe("snapshot-guarded stale-state purge", () => {
     const { getConfigDir, removeRuntimePortIfPidIs } = await import("../src/config");
     const runtimePath = join(getConfigDir(), "runtime-port.json");
 
-    writeFileSync(runtimePath, JSON.stringify({ pid: 42, port: 58195 }));
+    writeFileSync(runtimePath, JSON.stringify({ schemaVersion: 1, pid: 42, port: 58195 }));
     removeRuntimePortIfPidIs(7); // a different (fresh) record — keep it
     expect(existsSync(runtimePath)).toBe(true);
 
@@ -68,11 +68,8 @@ describe("snapshot-guarded stale-state purge", () => {
     expect(stopFn).not.toContain("removeRuntimePort();");
   });
 
-  test("gui opens the actual bind host and recover-history surfaces a locked DB", () => {
+  test("gui opens the actual bind host", () => {
     const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
     expect(cliSource).toContain("const guiHost = probeHostname(live?.hostname ?? config.hostname)");
-    const recoverFn = cliSource.slice(cliSource.indexOf("function handleRecoverHistory()"), cliSource.indexOf("switch (command)"));
-    expect(recoverFn).toContain("if (r.failed)");
-    expect(recoverFn).toContain("process.exit(1)");
   });
 });

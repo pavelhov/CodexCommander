@@ -11,7 +11,7 @@ import {
 } from "../src/usage/log";
 import { closeRequestHistoryIndex } from "../src/routing/history/indexer";
 import { computeRoutingAnalytics } from "../src/routing/analytics";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -30,21 +30,21 @@ function entry(
 }
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  testDir = mkdtempSync(join(tmpdir(), "ocx-analytics-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  testDir = mkdtempSync(join(tmpdir(), "ccx-analytics-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   resetUsageReadCacheForTests();
   closeRequestHistoryIndex();
 });
 
 afterEach(() => {
   closeRequestHistoryIndex();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
 });
 
-function config(): OcxConfig {
+function config(): CodexCommanderConfig {
   return {
     port: 10100,
     defaultProvider: "a",

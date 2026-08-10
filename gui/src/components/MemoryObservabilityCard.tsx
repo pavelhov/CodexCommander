@@ -16,10 +16,10 @@ interface MemorySample {
   rss: number;
   heapUsed: number;
   heapTotal: number;
-  external?: number;
-  arrayBuffers?: number;
-  observedBytes?: number;
-  observedMetric?: MemoryMetric;
+  external: number;
+  arrayBuffers: number;
+  observedBytes: number;
+  observedMetric: MemoryMetric;
 }
 
 type MemoryMetric = "rss" | "external" | "arrayBuffers";
@@ -39,21 +39,82 @@ interface ResponseState {
 }
 
 interface SystemMemory {
-  pid?: number;
+  pid: number;
   rss: number;
   heapUsed: number;
   heapTotal: number;
-  external?: number;
-  arrayBuffers?: number;
-  observedBytes?: number;
-  observedMetric?: MemoryMetric;
+  external: number;
+  arrayBuffers: number;
+  observedBytes: number;
+  observedMetric: MemoryMetric;
   jscHeap: { heapSize: number; heapCapacity: number; objectCount: number } | null;
-  /** Absent on older proxies whose /api/system/memory predates the continuation-store metrics. */
-  responseState?: ResponseState;
-  /** Absent on older proxies predating the drain-and-restart action (#563). */
-  activeTurnCount?: number;
-  isDraining?: boolean;
-  watchdog: { warnThresholdBytes: number; lastWarnAt: number | null; observedBytes?: number; observedMetric?: MemoryMetric; samples: MemorySample[] } | null;
+  responseState: ResponseState;
+  activeTurnCount: number;
+  isDraining: boolean;
+  watchdog: { warnThresholdBytes: number; lastWarnAt: number | null; observedBytes: number; observedMetric: MemoryMetric; samples: MemorySample[] } | null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isMemoryMetric(value: unknown): value is MemoryMetric {
+  return value === "rss" || value === "external" || value === "arrayBuffers";
+}
+
+/** Reject malformed successful responses instead of inferring old capabilities. */
+function parseSystemMemory(value: unknown): SystemMemory {
+  if (!isRecord(value)) throw new Error("invalid memory response");
+  const responseState = value.responseState;
+  const requiredResponseNumbers: Array<keyof ResponseState> = [
+    "count", "residentCount", "spillStubCount", "tombstoneCount", "totalBytes",
+    "spillPayloadBytes", "largestBytes", "oldestAgeMs", "spillWrites",
+    "spillWriteFailures", "spillReadFailures",
+  ];
+  if (!isRecord(responseState) || requiredResponseNumbers.some(key => !isFiniteNumber(responseState[key]))) {
+    throw new Error("invalid memory response");
+  }
+  const watchdog = value.watchdog;
+  const watchdogValid = watchdog === null || (isRecord(watchdog)
+    && isFiniteNumber(watchdog.warnThresholdBytes)
+    && (watchdog.lastWarnAt === null || isFiniteNumber(watchdog.lastWarnAt))
+    && isFiniteNumber(watchdog.observedBytes)
+    && isMemoryMetric(watchdog.observedMetric)
+    && Array.isArray(watchdog.samples)
+    && watchdog.samples.every(sample => isRecord(sample)
+      && isFiniteNumber(sample.at)
+      && isFiniteNumber(sample.rss)
+      && isFiniteNumber(sample.heapUsed)
+      && isFiniteNumber(sample.heapTotal)
+      && isFiniteNumber(sample.external)
+      && isFiniteNumber(sample.arrayBuffers)
+      && isFiniteNumber(sample.observedBytes)
+      && isMemoryMetric(sample.observedMetric)));
+  if (
+    !Number.isInteger(value.pid) || (value.pid as number) <= 0
+    || !isFiniteNumber(value.rss)
+    || !isFiniteNumber(value.heapUsed)
+    || !isFiniteNumber(value.heapTotal)
+    || !isFiniteNumber(value.external)
+    || !isFiniteNumber(value.arrayBuffers)
+    || !isFiniteNumber(value.observedBytes)
+    || !isMemoryMetric(value.observedMetric)
+    || !Number.isInteger(value.activeTurnCount)
+    || (value.activeTurnCount as number) < 0
+    || typeof value.isDraining !== "boolean"
+    || !(value.jscHeap === null || (isRecord(value.jscHeap)
+      && isFiniteNumber(value.jscHeap.heapSize)
+      && isFiniteNumber(value.jscHeap.heapCapacity)
+      && isFiniteNumber(value.jscHeap.objectCount)))
+    || !watchdogValid
+  ) {
+    throw new Error("invalid memory response");
+  }
+  return value as unknown as SystemMemory;
 }
 
 type RestartPhase = "idle" | "draining" | "reconnecting" | "error";
@@ -104,19 +165,11 @@ function formatAge(ms: number, locale: Locale): string {
 }
 
 function observedMemory(sample: Pick<MemorySample, "rss" | "external" | "arrayBuffers" | "observedBytes">): number {
-  if (typeof sample.observedBytes === "number") return sample.observedBytes;
-  return Math.max(sample.rss, sample.external ?? 0, sample.arrayBuffers ?? 0);
+  return sample.observedBytes;
 }
 
 function observedMetric(data: SystemMemory): MemoryMetric {
-  if (data.observedMetric) return data.observedMetric;
-  if (data.watchdog?.observedMetric) return data.watchdog.observedMetric;
-  const values: Array<{ metric: MemoryMetric; bytes: number }> = [
-    { metric: "rss", bytes: data.rss },
-    { metric: "external", bytes: data.external ?? 0 },
-    { metric: "arrayBuffers", bytes: data.arrayBuffers ?? 0 },
-  ];
-  return values.reduce((best, next) => next.bytes > best.bytes ? next : best, values[0]).metric;
+  return data.observedMetric;
 }
 
 /** Derive observed-memory drift per hour from the bounded watchdog ring (never mutates it). */
@@ -207,7 +260,6 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
   const [restartPhase, setRestartPhase] = useState<RestartPhase>("idle");
   const [restartError, setRestartError] = useState<string | null>(null);
   const [noSupervisor, setNoSupervisor] = useState(false);
-  const [supportsRestart, setSupportsRestart] = useState(false);
   const [restartFromPid, setRestartFromPid] = useState<number | null>(null);
 
   useEffect(() => {
@@ -240,11 +292,10 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
       try {
         const res = await fetch(`${apiBase}/api/system/memory`, { signal: bounded.signal });
         if (!res.ok) throw new Error("memory unavailable");
-        const json = await res.json() as SystemMemory;
+        const json = parseSystemMemory(await res.json());
         if (cancelled) return;
         setData(json);
         setUnavailable(false);
-        setSupportsRestart(typeof json.activeTurnCount === "number");
         if (json.isDraining && restartPhase === "idle") setRestartPhase("draining");
         // Fast recycle can finish between polls with no observed outage — detect pid change.
         if (
@@ -259,7 +310,6 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
           setRestartError(null);
         }
       } catch {
-        // Old servers (pre-#314) 404 this route; degrade to a quiet unavailable note.
         // During drain/restart the proxy goes away — switch to reconnect polling.
         if (cancelled) return;
         if (restartPhase === "draining" || restartPhase === "reconnecting") {
@@ -384,7 +434,7 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
   }
 
   const growth = data?.watchdog ? observedGrowthPerHour(data.watchdog.samples) : null;
-  const observedBytes = data ? data.observedBytes ?? data.watchdog?.observedBytes ?? observedMemory(data) : null;
+  const observedBytes = data ? data.observedBytes : null;
   const observedBy = data ? observedMetric(data) : null;
   // Drift only matters relative to the headroom it eats. Flag it when the current
   // climb would reach the warn threshold within an hour (danger) or a shift (warn);
@@ -399,7 +449,6 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
     if (hoursLeft <= 8) return "warn";
     return undefined;
   })();
-  // Optional on purpose: a 200 from an older proxy may lack the responseState field.
   const responseState = data?.responseState;
   const activeTurns = data?.activeTurnCount;
   const busy = restartPhase === "draining" || restartPhase === "reconnecting";
@@ -413,7 +462,7 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
           <IconActivity width={16} height={16} aria-hidden="true" />
           {t("dash.mem.title")}
         </div>
-        {supportsRestart && (
+        {data && (
           <div className="mem-head-actions">
             <span className="mem-inflight">
               <span className="mem-inflight-label">{t("dash.mem.inFlight")}</span>
@@ -497,7 +546,7 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
 
       {/* Status line only: it stays out of the layout entirely while idle so the
           panel does not reserve a row for a message that is usually absent. */}
-      {supportsRestart && (
+      {data && (
         <div className="mem-status" aria-live="polite">
           {restartPhase === "draining" && (
             <span className="muted text-control">

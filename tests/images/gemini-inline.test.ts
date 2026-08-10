@@ -5,7 +5,7 @@ import { isAbsolute, join } from "node:path";
 import { createImageBudget, guessExtFromMagic, materializeInlineImage } from "../../src/images/artifacts";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../../src/adapters/google";
-import type { AdapterEvent, OcxProviderConfig } from "../../src/types";
+import type { AdapterEvent, CodexCommanderProviderConfig } from "../../src/types";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 
 const createGoogleAdapter = (...args: Parameters<typeof createGoogleAdapterProduction>) =>
@@ -16,15 +16,15 @@ let artifactsDir: string;
 let savedHome: string | undefined;
 
 beforeAll(() => {
-  savedHome = process.env.OPENCODEX_HOME;
-  tempHome = mkdtempSync(join(tmpdir(), "ocx-test-"));
-  process.env.OPENCODEX_HOME = tempHome;
+  savedHome = process.env.CODEXCOMMANDER_HOME;
+  tempHome = mkdtempSync(join(tmpdir(), "ccx-test-"));
+  process.env.CODEXCOMMANDER_HOME = tempHome;
   artifactsDir = join(tempHome, "artifacts");
 });
 
 afterAll(() => {
-  if (savedHome !== undefined) process.env.OPENCODEX_HOME = savedHome;
-  else delete process.env.OPENCODEX_HOME;
+  if (savedHome !== undefined) process.env.CODEXCOMMANDER_HOME = savedHome;
+  else delete process.env.CODEXCOMMANDER_HOME;
   rmSync(tempHome, { recursive: true, force: true });
 });
 
@@ -43,14 +43,14 @@ function jsonResponse(obj: unknown): Response {
   return new Response(JSON.stringify(obj), { status: 200, headers: { "content-type": "application/json" } });
 }
 
-async function collectStream(provider: OcxProviderConfig, chunks: unknown[]): Promise<AdapterEvent[]> {
+async function collectStream(provider: CodexCommanderProviderConfig, chunks: unknown[]): Promise<AdapterEvent[]> {
   const adapter = createGoogleAdapter(provider);
   const events: AdapterEvent[] = [];
   for await (const ev of adapter.parseStream(sseResponse(chunks))) events.push(ev);
   return events;
 }
 
-const aiStudioProvider = { adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "key" } as OcxProviderConfig;
+const aiStudioProvider = { adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "key" } as CodexCommanderProviderConfig;
 
 describe("guessExtFromMagic", () => {
   test("PNG magic bytes → png extension", () => {
@@ -272,7 +272,7 @@ describe("responseModalities gating", () => {
 });
 
 describe("markdown emits authenticated opaque artifact URLs", () => {
-  test("streaming: markdown uses /v1/opencodex/artifacts/<id>, not file: or host paths", async () => {
+  test("streaming: markdown uses /v1/codexcommander/artifacts/<id>, not file: or host paths", async () => {
     const events = await collectStream(aiStudioProvider, [
       { candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: TINY_PNG } }] } }] },
       { candidates: [{ finishReason: "STOP" }], usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 } },
@@ -283,16 +283,16 @@ describe("markdown emits authenticated opaque artifact URLs", () => {
     const match = textEvents[0].text.match(/^\n!\[image\]\((.+)\)\n$/);
     expect(match).not.toBeNull();
     const mdPath = match![1];
-    expect(mdPath.startsWith("/v1/opencodex/artifacts/")).toBe(true);
+    expect(mdPath.startsWith("/v1/codexcommander/artifacts/")).toBe(true);
     expect(mdPath).not.toContain("file:");
     expect(mdPath).not.toContain("~/");
     expect(mdPath).not.toMatch(/[A-Za-z]:\\/);
     expect(mdPath).not.toContain(tempHome);
-    const id = mdPath.slice("/v1/opencodex/artifacts/".length);
+    const id = mdPath.slice("/v1/codexcommander/artifacts/".length);
     expect(existsSync(join(artifactsDir, id))).toBe(true);
   });
 
-  test("non-streaming: markdown uses /v1/opencodex/artifacts/<id>, not file: or host paths", async () => {
+  test("non-streaming: markdown uses /v1/codexcommander/artifacts/<id>, not file: or host paths", async () => {
     const adapter = createGoogleAdapter(aiStudioProvider);
     const events = await adapter.parseResponse(jsonResponse({
       candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/webp", data: TINY_PNG } }] }, finishReason: "STOP" }],
@@ -304,27 +304,27 @@ describe("markdown emits authenticated opaque artifact URLs", () => {
     const match = textEvents[0].text.match(/^\n!\[image\]\((.+)\)\n$/);
     expect(match).not.toBeNull();
     const mdPath = match![1];
-    expect(mdPath.startsWith("/v1/opencodex/artifacts/")).toBe(true);
+    expect(mdPath.startsWith("/v1/codexcommander/artifacts/")).toBe(true);
     expect(mdPath).not.toContain("file:");
     expect(mdPath).not.toContain(tempHome);
-    const id = mdPath.slice("/v1/opencodex/artifacts/".length);
+    const id = mdPath.slice("/v1/codexcommander/artifacts/".length);
     expect(existsSync(join(artifactsDir, id))).toBe(true);
   });
 });
 
-describe("artifact markdown never leaks OPENCODEX_HOME paths", () => {
+describe("artifact markdown never leaks CODEXCOMMANDER_HOME paths", () => {
   let underHome: string;
   let savedHome: string | undefined;
 
   beforeAll(() => {
-    savedHome = process.env.OPENCODEX_HOME;
-    underHome = mkdtempSync(join(homedir(), ".ocx-test-leak-"));
-    process.env.OPENCODEX_HOME = underHome;
+    savedHome = process.env.CODEXCOMMANDER_HOME;
+    underHome = mkdtempSync(join(homedir(), ".ccx-test-leak-"));
+    process.env.CODEXCOMMANDER_HOME = underHome;
   });
 
   afterAll(() => {
-    if (savedHome !== undefined) process.env.OPENCODEX_HOME = savedHome;
-    else delete process.env.OPENCODEX_HOME;
+    if (savedHome !== undefined) process.env.CODEXCOMMANDER_HOME = savedHome;
+    else delete process.env.CODEXCOMMANDER_HOME;
     rmSync(underHome, { recursive: true, force: true });
   });
 
@@ -336,7 +336,7 @@ describe("artifact markdown never leaks OPENCODEX_HOME paths", () => {
     const textEvents = events.filter(e => e.type === "text_delta") as Extract<AdapterEvent, { type: "text_delta" }>[];
     expect(textEvents.length).toBe(1);
     const md = textEvents[0].text;
-    expect(md).toContain("/v1/opencodex/artifacts/");
+    expect(md).toContain("/v1/codexcommander/artifacts/");
     expect(md).not.toContain("file:");
     expect(md).not.toContain("~/");
     expect(md).not.toContain(underHome);
@@ -352,7 +352,7 @@ describe("artifact markdown never leaks OPENCODEX_HOME paths", () => {
     const textEvents = events.filter(e => e.type === "text_delta") as Extract<AdapterEvent, { type: "text_delta" }>[];
     expect(textEvents.length).toBe(1);
     const md = textEvents[0].text;
-    expect(md).toContain("/v1/opencodex/artifacts/");
+    expect(md).toContain("/v1/codexcommander/artifacts/");
     expect(md).not.toContain("file:");
     expect(md).not.toContain(underHome);
   });

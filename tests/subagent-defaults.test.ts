@@ -213,8 +213,8 @@ describe("managed native subagent defaults TOML transform", () => {
   });
 
   test.each([
-    ["basic", 'message = """\n[agents]\n# Managed by opencodex: native subagent default\ndefault_subagent_model = "string/data"\n"""\n'],
-    ["literal", "message = '''\n[agents]\n# Managed by opencodex: native subagent default\ndefault_subagent_model = 'string/data'\n'''\n"],
+    ["basic", 'message = """\n[agents]\n# Managed by codexcommander: native subagent default\ndefault_subagent_model = "string/data"\n"""\n'],
+    ["literal", "message = '''\n[agents]\n# Managed by codexcommander: native subagent default\ndefault_subagent_model = 'string/data'\n'''\n"],
   ])("ignores table, key, and marker text inside %s multiline strings", (_kind, input) => {
     const before = Bun.TOML.parse(input).message;
     const result = apply(input, "managed/model", "high");

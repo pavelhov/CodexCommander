@@ -1,8 +1,8 @@
 import { durableBunRuntime } from "../lib/bun-runtime";
 import { codexAutoStartEnabled, getConfigPath, getPidPath, readConfigDiagnostics, readPid, readRuntimePort, type RuntimePortState } from "../config";
 import { diagnoseCodexBundledPlugins, type CodexPluginsDiagnostic } from "../codex/plugins-doctor";
-import { findLiveProxy, isOpencodexHealthz, probeHostname } from "../server/proxy-liveness";
-import type { OcxConfig } from "../types";
+import { findLiveProxy, isCodexCommanderHealthz, probeHostname } from "../server/proxy-liveness";
+import type { CodexCommanderConfig } from "../types";
 import { diagnoseService, serviceLogPath } from "../service";
 import { collectStartupHealth, type StartupHealth } from "../codex/autostart-health";
 import { getCodexRoutingKind } from "../codex/inject";
@@ -86,7 +86,7 @@ export type ListenTarget = {
 };
 
 export function selectListenTarget(
-  config: Pick<OcxConfig, "port" | "hostname">,
+  config: Pick<CodexCommanderConfig, "port" | "hostname">,
   pid: number | null,
   runtimePort: RuntimePortState | null,
 ): ListenTarget {
@@ -121,8 +121,8 @@ async function checkProxyHealth(target: ListenTarget): Promise<HealthCheck> {
       return { ok: false, url, message, label: `${url} ${message}` };
     }
     const body = await response.json().catch(() => null) as { service?: unknown; status?: unknown; version?: unknown; uptime?: unknown } | null;
-    if (!isOpencodexHealthz(body)) {
-      const message = "responded, but not an opencodex proxy";
+    if (!isCodexCommanderHealthz(body)) {
+      const message = "responded, but not a CodexCommander proxy";
       return { ok: false, url, message, label: `${url} ${message}` };
     }
     const version = typeof body?.version === "string" ? ` v${body.version}` : "";
@@ -140,14 +140,14 @@ async function checkProxyHealth(target: ListenTarget): Promise<HealthCheck> {
 export async function collectStatus(): Promise<CliStatusView> {
   const configDiagnostics = readConfigDiagnostics();
   const config = configDiagnostics.config;
-  // Prefer identity-verified liveness (runtime-port + /healthz) over ocx.pid alone (#618).
+  // Prefer identity-verified liveness (runtime-port + /healthz) over the PID file alone (#618).
   // Pass the already-resolved diagnostics config so findLiveProxy does not re-load and
   // warn on malformed config.json (status --json must stay stderr-clean).
   const live = await findLiveProxy({
     configFn: () => ({ port: config.port, hostname: config.hostname }),
   });
   const pidFile = readPid();
-  // Preserve an authoritative null from orphan/legacy liveness — do not restore pidFile.
+  // Preserve an authoritative null from orphaned or unverified liveness — do not restore pidFile.
   const pid = resolveStatusPid(live, pidFile);
   const listen = live
     ? {
@@ -173,7 +173,7 @@ export async function collectStatus(): Promise<CliStatusView> {
   // either way. `live` was already identity-probed a few lines above, so cross-check
   // rather than print registration as if it were service.
   const serviceSummary = service.installed && !live
-    ? `${service.summary} — registered but NOT serving; see ${serviceLogPath()} and re-run 'ocx service repair'`
+    ? `${service.summary} — registered but NOT serving; see ${serviceLogPath()} and re-run 'ccx service repair'`
     : service.summary;
   const codexShim = diagnoseCodexShim();
   const codexShimSummary = codexShim.summary;
@@ -213,7 +213,7 @@ export async function collectStatus(): Promise<CliStatusView> {
     && resolvedRuntime.replacedConfigured.from.command !== resolvedRuntime.runtime.command
   ) {
     warningParts.push(
-      `Preferred Codex runtime is unavailable; using ${displayCodexRuntimePath(resolvedRuntime.runtime.command)} instead. Run ocx doctor for diagnosis and recovery.`,
+      `Preferred Codex runtime is unavailable; using ${displayCodexRuntimePath(resolvedRuntime.runtime.command)} instead. Run ccx doctor for diagnosis and recovery.`,
     );
   } else if (
     resolvedRuntime.runtime.source === "fallback"
@@ -223,16 +223,16 @@ export async function collectStatus(): Promise<CliStatusView> {
     const detail = resolvedRuntime.failures[0]?.reason;
     warningParts.push(
       detail
-        ? `No validated Codex runtime found (${detail}); falling back to \`codex\`. Run ocx doctor for diagnosis and recovery.`
-        : "No validated Codex runtime found; falling back to `codex`. Run ocx doctor for diagnosis and recovery.",
+        ? `No validated Codex runtime found (${detail}); falling back to \`codex\`. Run ccx doctor for diagnosis and recovery.`
+        : "No validated Codex runtime found; falling back to `codex`. Run ccx doctor for diagnosis and recovery.",
     );
   }
   if (resolvedRuntime.newerAvailable) {
-    warningParts.push("OpenCodex is using an older Codex binary. Run ocx doctor for diagnosis and recovery.");
+    warningParts.push("CodexCommander is using an older Codex binary. Run ccx doctor for diagnosis and recovery.");
   }
   if (clampActive) {
     warningParts.push(
-      `Catalog clamp removed: ${lastClamp!.removedEfforts.join(", ")}. Run ocx doctor for diagnosis and recovery.`,
+      `Catalog clamp removed: ${lastClamp!.removedEfforts.join(", ")}. Run ccx doctor for diagnosis and recovery.`,
     );
   }
   // A Grok fence naming a port we are not listening on is invisible everywhere else:
@@ -242,13 +242,13 @@ export async function collectStatus(): Promise<CliStatusView> {
     try {
       return grokFenceEndpointDrift(readGrokStatus(), health.ok ? listen.port : undefined);
     } catch {
-      return null; // reading grok's config must never break `ocx status`
+      return null; // reading grok's config must never break `ccx status`
     }
   })();
   if (grokDrift) {
     warningParts.push(
       `Grok Build config points at port ${grokDrift.fencePort}, but the proxy is on `
-      + `${grokDrift.livePort}; grok turns will retry against a closed port. Run 'ocx ensure' to repoint it.`,
+      + `${grokDrift.livePort}; grok turns will retry against a closed port. Run 'ccx ensure' to repoint it.`,
     );
   }
   const codexRuntime = {

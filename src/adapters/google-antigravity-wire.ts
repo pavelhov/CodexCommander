@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { OcxContentPart, OcxParsedRequest } from "../types";
+import type { CodexCommanderContentPart, CodexCommanderParsedRequest } from "../types";
 import { antigravityUserAgent } from "./client-fingerprint";
 
 /**
@@ -11,7 +11,7 @@ import { antigravityUserAgent } from "./client-fingerprint";
 export const ANTIGRAVITY_REQUEST_UA = process.env.GOOGLE_ANTIGRAVITY_USER_AGENT || antigravityUserAgent();
 
 /**
- * Whether a stored `OcxToolCall.thoughtSignature` is a REAL upstream Gemini signature versus a
+ * Whether a stored `CodexCommanderToolCall.thoughtSignature` is a REAL upstream Gemini signature versus a
  * foreign id that must not be forwarded to Gemini/Antigravity.
  *
  * Foreign ids that have 400'd Antigravity (`TYPE_BYTES` / Base64 decoding failed) include:
@@ -35,11 +35,11 @@ export function isLikelyRealThoughtSignature(sig: string | undefined): boolean {
   return /^[A-Za-z0-9+/_=-]+$/.test(sig);
 }
 
-function firstUserText(parsed: OcxParsedRequest): string | undefined {
+function firstUserText(parsed: CodexCommanderParsedRequest): string | undefined {
   for (const msg of parsed.context.messages) {
     if (msg.role !== "user") continue;
     if (typeof msg.content === "string") return msg.content;
-    const first = (msg.content as OcxContentPart[]).find(p => p.type === "text" && typeof p.text === "string");
+    const first = (msg.content as CodexCommanderContentPart[]).find(p => p.type === "text" && typeof p.text === "string");
     if (first && first.type === "text") return first.text;
   }
   return undefined;
@@ -50,7 +50,7 @@ function firstUserText(parsed: OcxParsedRequest): string | undefined {
  * CLIProxyAPI `generateStableSessionID`: sha256(firstUserText) → BigEndian uint64 masked with
  * 0x7FFFFFFFFFFFFFFF, prefixed with "-". Falls back to a random "-<digits>" id when there is no text.
  */
-export function antigravitySessionId(parsed: OcxParsedRequest): string {
+export function antigravitySessionId(parsed: CodexCommanderParsedRequest): string {
   // Anchored on the first user message text: this is the one value that stays STABLE across every
   // turn of a conversation, which the replay cache requires (it observes signatures on turn N's
   // response and re-injects them on turn N+1's request, so both turns must map to the same id).

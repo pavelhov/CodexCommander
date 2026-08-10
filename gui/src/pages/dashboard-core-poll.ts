@@ -16,6 +16,7 @@ import {
   type SidecarData,
   type UsageSummary30d,
 } from "./dashboard-shared";
+import { parseShadowCallData } from "./shadow-call-source";
 
 export type InjectionPoll = {
   multiAgentGuidanceEnabled: boolean;
@@ -162,7 +163,7 @@ export async function fetchDashboardSidecars(
   let shadowCall: ShadowCallData | null | undefined = undefined;
   try {
     if (shRes.ok) {
-      const nextShadow = await shRes.json() as ShadowCallData;
+      const nextShadow = parseShadowCallData(await shRes.json());
       if (settingsPollMayCommit(
         { request: shadowRequestEpoch, mutation: shadowMutationEpoch },
         {
@@ -184,16 +185,8 @@ export async function fetchDashboardSidecars(
       shadowCall = null;
     }
   } catch {
-    if (settingsPollMayCommit(
-      { request: shadowRequestEpoch, mutation: shadowMutationEpoch },
-      {
-        request: epochs.shadowCallRequestEpochRef.current,
-        mutation: epochs.shadowCallMutationEpochRef.current,
-        mutationInFlight: epochs.shadowCallMutationInFlightRef.current,
-      },
-    )) {
-      shadowCall = null;
-    }
+    // A malformed successful response is not an empty setting. Leave the prior
+    // snapshot untouched so one bad poll cannot erase last-good state.
   }
 
   return { sidecar, shadowCall };

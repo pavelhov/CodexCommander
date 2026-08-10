@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import { getRequestLogEntries } from "../src/server/request-log";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 let testDir = "";
@@ -13,28 +13,29 @@ let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-claude-529-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-claude-529-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  isolatedCodexHome = installIsolatedCodexHome("ccx-claude-529-");
+  testDir = mkdtempSync(join(tmpdir(), "ccx-claude-529-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
 });
 
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
 });
 
-function nativeConfig(baseUrl: string): OcxConfig {
+function nativeConfig(baseUrl: string): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "native",
     providers: {
       native: { adapter: "openai-responses", baseUrl, authMode: "forward", allowPrivateNetwork: true },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 function messagesBody(): string {

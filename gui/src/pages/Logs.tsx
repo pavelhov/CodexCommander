@@ -24,7 +24,7 @@ import {
 } from "./log-route-decision";
 
 function logsCacheKey(apiBase: string): string {
-  return `ocx.logs.list.v1:${apiBase}`;
+  return `ccx.logs.list.v1:${apiBase}`;
 }
 
 interface UsageBreakdown {
@@ -33,7 +33,6 @@ interface UsageBreakdown {
   /** Absolute active-context snapshot after the response (stateful providers such as Kiro). */
   contextTotalTokens?: number;
   totalTokens?: number;
-  cachedInputTokens?: number;
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
   reasoningOutputTokens?: number;
@@ -198,11 +197,10 @@ function tokensTitle(log: LogEntry, t: TFn): string | undefined {
 
 function displayTokenTotal(log: LogEntry): number | undefined {
   if (!log.usage) return typeof log.totalTokens === "number" ? log.totalTokens : undefined;
-  // inputTokens is inclusive of cache read/write (canonical convention, devlog 070);
-  // never re-add cache detail. max() keeps legacy pre-070 rows honest.
+  // inputTokens is inclusive of cache read/write, so cache detail is never re-added.
   const baseTotal = log.usage.inputTokens + log.usage.outputTokens;
   const explicitTotal = log.usage.totalTokens ?? log.totalTokens;
-  return typeof explicitTotal === "number" ? Math.max(explicitTotal, baseTotal) : baseTotal;
+  return typeof explicitTotal === "number" ? explicitTotal : baseTotal;
 }
 
 /**
@@ -222,16 +220,12 @@ function displayContextTokenTotal(log: LogEntry): number | undefined {
   return Math.max(base ?? 0, contextTotal) || undefined;
 }
 
-/** Cache read/write split; recovers reads from legacy rows that stored read+write combined. */
+/** Current usage rows carry distinct cache read/write fields. */
 function cacheSplit(log: LogEntry): { read?: number; write?: number } {
   const u = log.usage;
   if (!u) return {};
   const write = typeof u.cacheCreationInputTokens === "number" ? u.cacheCreationInputTokens : undefined;
-  const read = typeof u.cacheReadInputTokens === "number"
-    ? u.cacheReadInputTokens
-    : typeof u.cachedInputTokens === "number" && write !== undefined
-      ? Math.max(0, u.cachedInputTokens - write)
-      : u.cachedInputTokens;
+  const read = typeof u.cacheReadInputTokens === "number" ? u.cacheReadInputTokens : undefined;
   return { read, write };
 }
 
@@ -419,33 +413,8 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const [conversationQueryHash, setConversationQueryHash] = useState<string | undefined>();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
-  // The proxy's own zone, so timestamps read the same as the server's logs rather than being
-  // silently shifted into the viewer's zone (#725). Fetched once: it cannot change while the
-  // page is open, so it must not join the 2s log poll. Undefined until it arrives, which
-  // formats browser-local exactly as before.
+  // The logs envelope owns the proxy's timezone, so rows and their formatting advance together.
   const [serverTimeZone, setServerTimeZone] = useState<string | undefined>();
-  useEffect(() => {
-    const controller = new AbortController();
-    // Abort already rejects the in-flight fetch, but the flag keeps the guarantee
-    // local: the setter is visibly gated without having to reason about whether
-    // the abort propagates through the body read.
-    let cancelled = false;
-    fetch(`${apiBase}/api/settings`, { signal: controller.signal })
-      .then(res => (res.ok ? res.json() as Promise<{ timeZone?: unknown }> : null))
-      .then(body => {
-        if (cancelled || !body) return;
-        if (typeof body.timeZone === "string" && body.timeZone.trim()) {
-          setServerTimeZone(body.timeZone.trim());
-        }
-      })
-      .catch(() => {
-        // Offline or an older proxy without the field: keep browser-local formatting.
-      });
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [apiBase]);
   // The hash is the source of truth for the active tab (#logs vs #logs/debug),
   // so refresh/bookmark/back-forward keep the tab choice.
   const [tab, setTab] = useState<LogsTab>(readTabFromHash);
@@ -468,9 +437,23 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const loadLogs = useCallback(async (signal: AbortSignal): Promise<LogEntry[]> => {
     const res = await fetch(`${apiBase}/api/logs?limit=2000`, { signal });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
-    const body = await res.json() as LogEntry[] | { logs?: LogEntry[] };
-    const raw = Array.isArray(body) ? body : (body.logs ?? []);
-    const next = raw.map(sanitizeLogEntryRouteDecision);
+    const body = await res.json() as unknown;
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      throw new Error("invalid logs response");
+    }
+    const envelope = body as Record<string, unknown>;
+    if (
+      typeof envelope.timeZone !== "string"
+      || envelope.timeZone.trim() === ""
+      || !Number.isInteger(envelope.total)
+      || (envelope.total as number) < 0
+      || !Array.isArray(envelope.logs)
+      || envelope.logs.some(row => typeof row !== "object" || row === null || Array.isArray(row))
+    ) {
+      throw new Error("invalid logs response");
+    }
+    const next = (envelope.logs as LogEntry[]).map(sanitizeLogEntryRouteDecision);
+    setServerTimeZone(envelope.timeZone.trim());
     writeSessionListCache(resourceKey, next);
     return next;
   }, [apiBase, resourceKey]);

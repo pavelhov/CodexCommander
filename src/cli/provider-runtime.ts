@@ -13,16 +13,16 @@ import {
 } from "./runtime-api";
 
 const USAGE = `Usage:
-  ocx provider edit <name> [--adapter <id>] [--base-url <url>] [--default-model <id|->]
+  ccx provider edit <name> [--adapter <id>] [--base-url <url>] [--default-model <id|->]
       [--auth-mode <key|forward|oauth|local|->] [--note <text|->]
       [--api-key-transport <x-api-key|bearer|->]
       [--headers <json>] [--enabled <on|off>] [--live-models <on|off>]
       [--allow-private-network <on|off>] [--json]
-  ocx provider test <name> [--json]
-  ocx provider quota [--refresh] [--json]
-  ocx provider presets [--json]
-  ocx provider account-mode <pool|direct> [--json]
-  ocx provider selected <name> [--set <model,model...>] [--clear] [--json]`;
+  ccx provider test <name> [--json]
+  ccx provider quota [--refresh] [--json]
+  ccx provider presets [--json]
+  ccx provider account-mode <pool|direct> [--json]
+  ccx provider selected <name> [--set <model,model...>] [--clear] [--json]`;
 
 function cleared(value: string | undefined): string | undefined {
   return value === "-" ? "" : value;

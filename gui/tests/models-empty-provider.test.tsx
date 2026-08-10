@@ -110,7 +110,7 @@ test("Models page combines final visibility, atomic actions, discovery status, a
     setInterval: { configurable: true, value: recordPoll },
     clearInterval: { configurable: true, value: () => {} },
   });
-  testWindow.localStorage.setItem("ocx-models-collapsed:v2", JSON.stringify([]));
+  testWindow.localStorage.setItem("ccx-models-collapsed:v2", JSON.stringify([]));
   const provider = "fallback-provider";
   const ids = ["claude-opus", "claude-sonnet", "gemini-pro", "gemini-flash", "gpt-oss"];
   let selected = ["gemini-pro", "gemini-flash"];
@@ -126,7 +126,7 @@ test("Models page combines final visibility, atomic actions, discovery status, a
   let resolveModels!: (response: Response) => void;
   const firstModels = new Promise<Response>(resolve => { resolveModels = resolve; });
   const rows = () => ids.map(id => ({ provider, id, namespaced: `${provider}/${id}`, disabled: disabled.has(id) }));
-  testWindow.sessionStorage.setItem("ocx.models.catalog.v1:http://localhost", JSON.stringify({
+  testWindow.sessionStorage.setItem("ccx.models.catalog.v1:http://localhost", JSON.stringify({
     models: rows(),
     providers: [{ name: provider, liveModels: true, models: ids }],
     selectedModels: { [provider]: selected },
@@ -154,9 +154,11 @@ test("Models page combines final visibility, atomic actions, discovery status, a
       if (init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as (typeof contextCapBodies)[number];
         contextCapBodies.push(body);
-        // Emulate the pre-atomic endpoint too: its value branch ignored a sibling setAll.
-        if (typeof body.value === "number") contextCapValue = body.value;
-        else if (body.setAll === true) contextCaps = { [provider]: contextCapValue };
+        if (typeof body.value === "number") {
+          contextCapValue = body.value;
+          if (body.setAll === true) contextCaps = { [provider]: contextCapValue };
+          else if (body.setAll === false) contextCaps = {};
+        } else if (body.setAll === true) contextCaps = { [provider]: contextCapValue };
         else if (body.setAll === false) contextCaps = {};
         else if (typeof body.provider === "string" && typeof body.enabled === "boolean") {
           if (body.enabled) contextCaps[body.provider] = contextCapValue;
@@ -166,7 +168,9 @@ test("Models page combines final visibility, atomic actions, discovery status, a
       return Response.json({ value: contextCapValue, caps: contextCaps });
     }
     if (url.endsWith("/api/combos")) return Response.json({ combos: [] });
-    if (url.endsWith("/api/shadow-call-settings")) return Response.json({ enabled: true, model: `${provider}/gemini-pro` });
+    if (url.endsWith("/api/shadow-call-settings")) {
+      return Response.json({ enabled: true, model: `${provider}/gemini-pro`, sourceModels: ["gpt-5.6-luna"] });
+    }
     if (url.endsWith("/api/v2")) {
       if (init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { multiAgentMode?: "v1" | "default" | "v2" };
@@ -249,10 +253,7 @@ test("Models page combines final visibility, atomic actions, discovery status, a
       buttonText("Apply policy").click();
       await new Promise(resolve => testWindow.setTimeout(resolve, 0));
     });
-    expect(contextCapBodies.slice(-2)).toEqual([
-      { value: 200_000, setAll: true },
-      { setAll: true },
-    ]);
+    expect(contextCapBodies.slice(-1)).toEqual([{ value: 200_000, setAll: true }]);
     expect(container.textContent).toContain("Limited to 200k");
     await act(async () => contextChange.click());
 
@@ -640,7 +641,7 @@ test("a poll that resolves after a forced refresh cannot overwrite newer models"
     setInterval: { configurable: true, value: recordPoll },
     clearInterval: { configurable: true, value: () => {} },
   });
-  testWindow.localStorage.setItem("ocx-models-collapsed:v2", JSON.stringify([]));
+  testWindow.localStorage.setItem("ccx-models-collapsed:v2", JSON.stringify([]));
 
   const provider = "gen-provider";
   const staleIds = ["stale-a", "stale-b"];
@@ -666,9 +667,19 @@ test("a poll that resolves after a forced refresh cannot overwrite newer models"
       const ids = modelFetches <= 1 ? staleIds : freshIds;
       return Response.json({ selected: { [provider]: ids }, available: { [provider]: ids } });
     }
-    if (url.endsWith("/api/provider-context-caps")) return Response.json({ caps: {} });
+    if (url.endsWith("/api/provider-context-caps")) return Response.json({ value: 350_000, caps: {} });
     if (url.endsWith("/api/combos")) return Response.json({ combos: [] });
-    if (url.endsWith("/api/shadow-call-settings")) return Response.json({ enabled: false, model: "" });
+    if (url.endsWith("/api/shadow-call-settings")) {
+      return Response.json({ enabled: false, model: "", sourceModels: ["gpt-5.6-luna"] });
+    }
+    if (url.endsWith("/api/v2")) {
+      return Response.json({
+        enabled: false,
+        agentsMaxThreadsConflict: false,
+        maxConcurrentThreadsPerSession: null,
+        multiAgentMode: "default",
+      });
+    }
     if (url.endsWith("/api/model-visibility") && init?.method === "PUT") return Response.json({ ok: true });
     return new Response(null, { status: 404 });
   }) as typeof fetch;

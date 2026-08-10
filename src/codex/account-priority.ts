@@ -1,6 +1,6 @@
 import { isValidCodexAccountId, MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 import { DEFAULT_ACCOUNT_PRIORITY, normalizeAccountPriority } from "./pool-rotation";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 
 /**
  * Which ids may carry a selection order: any pool account, plus the synthetic
@@ -18,7 +18,7 @@ export function isCodexAccountPriorityKey(key: unknown): key is string {
  * Stored as a config sidecar rather than a `codexAccounts` row field because the
  * Codex Desktop login (`__main__`) has no row and must be orderable too.
  */
-export function getCodexAccountPriority(config: OcxConfig, accountId: string): number {
+export function getCodexAccountPriority(config: CodexCommanderConfig, accountId: string): number {
   return codexAccountPriorityLookup(config)(accountId);
 }
 
@@ -28,7 +28,7 @@ export function getCodexAccountPriority(config: OcxConfig, accountId: string): n
  * Entries are rebuilt through `Object.fromEntries` so a reserved key such as
  * `__proto__` becomes an own data property instead of invoking a prototype setter.
  */
-export function setCodexAccountPriority(config: OcxConfig, accountId: string, priority: number): void {
+export function setCodexAccountPriority(config: CodexCommanderConfig, accountId: string, priority: number): void {
   const entries = new Map(Object.entries(config.codexAccountPriorities ?? {}));
   if (priority === DEFAULT_ACCOUNT_PRIORITY) entries.delete(accountId);
   else entries.set(accountId, priority);
@@ -37,7 +37,7 @@ export function setCodexAccountPriority(config: OcxConfig, accountId: string, pr
   else delete config.codexAccountPriorities;
 }
 
-export function forgetCodexAccountPriority(config: OcxConfig, accountId: string): void {
+export function forgetCodexAccountPriority(config: CodexCommanderConfig, accountId: string): void {
   setCodexAccountPriority(config, accountId, DEFAULT_ACCOUNT_PRIORITY);
 }
 
@@ -46,7 +46,7 @@ export function forgetCodexAccountPriority(config: OcxConfig, accountId: string)
  * hands the closure to `selectPriorityTier`, so a pool without stored order pays
  * a single map read rather than one per candidate.
  */
-export function codexAccountPriorityLookup(config: OcxConfig): (accountId: string) => number {
+export function codexAccountPriorityLookup(config: CodexCommanderConfig): (accountId: string) => number {
   const priorities = config.codexAccountPriorities;
   if (!priorities) return () => DEFAULT_ACCOUNT_PRIORITY;
   return accountId => (
@@ -63,20 +63,20 @@ export function codexAccountPriorityLookup(config: OcxConfig): (accountId: strin
  * accounts are suppressed rather than the pinned one being guaranteed -- and a veto in
  * the quota path, until the account crosses the auto-switch threshold.
  */
-export function pinnedCodexAccountId(config: OcxConfig): string | undefined {
+export function pinnedCodexAccountId(config: CodexCommanderConfig): string | undefined {
   return config.activeCodexAccountPinned;
 }
 
-export function isCodexAccountPinned(config: OcxConfig, accountId: string): boolean {
+export function isCodexAccountPinned(config: CodexCommanderConfig, accountId: string): boolean {
   return config.activeCodexAccountPinned === accountId;
 }
 
-export function setCodexAccountPin(config: OcxConfig, accountId: string): void {
+export function setCodexAccountPin(config: CodexCommanderConfig, accountId: string): void {
   config.activeCodexAccountPinned = accountId;
 }
 
 /** Release the pin. With `accountId` given, only when it is the pinned account. */
-export function clearCodexAccountPin(config: OcxConfig, accountId?: string): void {
+export function clearCodexAccountPin(config: CodexCommanderConfig, accountId?: string): void {
   if (accountId === undefined || config.activeCodexAccountPinned === accountId) {
     delete config.activeCodexAccountPinned;
   }

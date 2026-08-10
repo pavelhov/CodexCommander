@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { createCursorRequest } from "../src/adapters/cursor/request-builder";
 import { cursorEffortSuffix, cursorModelEffortLadder } from "../src/adapters/cursor/effort-map";
-import type { OcxParsedRequest } from "../src/types";
+import type { CodexCommanderParsedRequest } from "../src/types";
 
 function modelIdFor(modelId: string, reasoning?: string): string {
-  const parsed: OcxParsedRequest = {
+  const parsed: CodexCommanderParsedRequest = {
     modelId,
     context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
     stream: false,
@@ -14,7 +14,7 @@ function modelIdFor(modelId: string, reasoning?: string): string {
 }
 
 function selectionFor(modelId: string, reasoning?: string) {
-  const parsed: OcxParsedRequest = {
+  const parsed: CodexCommanderParsedRequest = {
     modelId,
     context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
     stream: false,

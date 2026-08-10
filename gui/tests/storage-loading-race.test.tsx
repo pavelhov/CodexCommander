@@ -156,7 +156,7 @@ test("a cached Storage report stays visible and surfaces a failed revalidation",
   const { createRoot } = await import("react-dom/client");
   const container = document.createElement("div");
   document.body.append(container);
-  testWindow.sessionStorage.setItem("ocx.storage.report.v1:http://localhost", JSON.stringify(REPORT_A));
+  testWindow.sessionStorage.setItem("ccx.storage.report.v1:http://localhost", JSON.stringify(REPORT_A));
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = String(input);
     const side = storageSideResponse(url);

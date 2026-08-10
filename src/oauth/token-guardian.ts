@@ -9,10 +9,10 @@
  *
  * Safety by construction: the guardian only touches a provider whose EFFECTIVE refreshPolicy is
  * "proactive", and the global switch (config.tokenGuardian.enabled) defaults OFF, so a default
- * install adds zero ToS-detection surface. See devlog 260703_oauth-multi-account-refresh-and-tos.
+ * install adds zero ToS-detection surface.
  */
 import { loadConfig } from "../config";
-import type { OcxConfig, OcxTokenGuardianConfig } from "../types";
+import type { CodexCommanderConfig, CodexCommanderTokenGuardianConfig } from "../types";
 import { listAccounts } from "./store";
 import { getValidAccessTokenForAccount, listOAuthProviders, OAuthLoginRequiredError, resolveRefreshPolicy } from "./index";
 import {
@@ -74,7 +74,7 @@ function num(value: number | undefined, fallback: number, min: number): number {
   return typeof value === "number" && Number.isFinite(value) && value >= min ? value : fallback;
 }
 
-function resolved(g: OcxTokenGuardianConfig | undefined) {
+function resolved(g: CodexCommanderTokenGuardianConfig | undefined) {
   return {
     tickSeconds: num(g?.tickSeconds, DEFAULTS.tickSeconds, 60),
     jitterSeconds: num(g?.jitterSeconds, DEFAULTS.jitterSeconds, 0),
@@ -131,7 +131,7 @@ async function runWithConcurrency(tasks: Array<() => Promise<void>>, limit: numb
  */
 export async function guardianSweep(nowMs: number = Date.now()): Promise<GuardianSweepResult> {
   const writerGeneration = captureConfigGeneration();
-  const config: OcxConfig = loadConfig();
+  const config: CodexCommanderConfig = loadConfig();
   const g = config.tokenGuardian;
   const result: GuardianSweepResult = { enabled: !!g?.enabled, refreshed: [], warmed: [], failed: [], skippedBackoff: [] };
   if (!g?.enabled) return result;

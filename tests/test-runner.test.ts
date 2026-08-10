@@ -19,10 +19,10 @@ describe("test runner isolation", () => {
         PATH: "/test/bin",
         HOME: isolated.root,
         USERPROFILE: isolated.root,
-        OPENCODEX_HOME: join(isolated.root, ".opencodex"),
+        CODEXCOMMANDER_HOME: join(isolated.root, ".codexcommander"),
         CODEX_HOME: join(isolated.root, ".codex"),
       });
-      expect(existsSync(isolated.env.OPENCODEX_HOME!)).toBe(true);
+      expect(existsSync(isolated.env.CODEXCOMMANDER_HOME!)).toBe(true);
       expect(existsSync(isolated.env.CODEX_HOME!)).toBe(true);
     } finally {
       isolated.cleanup();
@@ -41,13 +41,13 @@ describe("test runner isolation", () => {
   });
 
   test("uses a bounded default shard size and validates overrides", () => {
-    const originalShardSize = process.env.OCX_TEST_SHARD_SIZE;
-    delete process.env.OCX_TEST_SHARD_SIZE;
+    const originalShardSize = process.env.CCX_TEST_SHARD_SIZE;
+    delete process.env.CCX_TEST_SHARD_SIZE;
     try {
       expect(resolveTestShardSize()).toBe(DEFAULT_TEST_SHARD_SIZE);
     } finally {
-      if (originalShardSize === undefined) delete process.env.OCX_TEST_SHARD_SIZE;
-      else process.env.OCX_TEST_SHARD_SIZE = originalShardSize;
+      if (originalShardSize === undefined) delete process.env.CCX_TEST_SHARD_SIZE;
+      else process.env.CCX_TEST_SHARD_SIZE = originalShardSize;
     }
     expect(resolveTestShardSize("17")).toBe(17);
     expect(() => resolveTestShardSize("0")).toThrow("positive integer");
@@ -55,13 +55,13 @@ describe("test runner isolation", () => {
   });
 
   test("uses an explicit bounded start shard for safe manual resume", () => {
-    const originalStartShard = process.env.OCX_TEST_START_SHARD;
-    delete process.env.OCX_TEST_START_SHARD;
+    const originalStartShard = process.env.CCX_TEST_START_SHARD;
+    delete process.env.CCX_TEST_START_SHARD;
     try {
       expect(resolveTestStartShard(12)).toBe(1);
     } finally {
-      if (originalStartShard === undefined) delete process.env.OCX_TEST_START_SHARD;
-      else process.env.OCX_TEST_START_SHARD = originalStartShard;
+      if (originalStartShard === undefined) delete process.env.CCX_TEST_START_SHARD;
+      else process.env.CCX_TEST_START_SHARD = originalStartShard;
     }
     expect(resolveTestStartShard(12, "7")).toBe(7);
     expect(() => resolveTestStartShard(12, "0")).toThrow("integer from 1 to 12");
@@ -71,7 +71,7 @@ describe("test runner isolation", () => {
   });
 
   test("discovers Bun test filename patterns in stable order", () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-test-discovery-"));
+    const root = mkdtempSync(join(tmpdir(), "ccx-test-discovery-"));
     try {
       mkdirSync(join(root, "nested"));
       for (const path of [

@@ -27,7 +27,7 @@ import {
   POOL_KEY_ANTHROPIC,
   seedPoolRotationAccount,
 } from "../codex/pool-rotation";
-import type { OcxAccountPoolRotationStrategy, OcxConfig } from "../types";
+import type { CodexCommanderAccountPoolRotationStrategy, CodexCommanderConfig } from "../types";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { retainedUtf8Bytes } from "../lib/admission";
 
@@ -47,7 +47,7 @@ export interface AnthropicAccountPoolConfig {
   /** Usage % for new-session pick. Default 80. 0 = disable quota-based pick (active / affinity only). */
   autoSwitchThreshold?: number;
   /** New-session rotation strategy. Default quota (today's behaviour). */
-  strategy?: OcxAccountPoolRotationStrategy;
+  strategy?: CodexCommanderAccountPoolRotationStrategy;
   /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
   stickyLimit?: number;
 }
@@ -70,17 +70,17 @@ function normalizeAffinityComponent(value: string | null | undefined): string {
   return normalized && retainedUtf8Bytes(normalized) <= MAX_AFFINITY_COMPONENT_BYTES ? normalized : "";
 }
 
-export function anthropicAccountPoolConfig(config: OcxConfig): AnthropicAccountPoolConfig {
+export function anthropicAccountPoolConfig(config: CodexCommanderConfig): AnthropicAccountPoolConfig {
   const raw = config.anthropicAccountPool;
   if (!raw || typeof raw !== "object") return {};
   return raw;
 }
 
-export function isAnthropicAccountPoolEnabled(config: OcxConfig): boolean {
+export function isAnthropicAccountPoolEnabled(config: CodexCommanderConfig): boolean {
   return anthropicAccountPoolConfig(config).enabled === true;
 }
 
-export function anthropicAutoSwitchThreshold(config: OcxConfig): number {
+export function anthropicAutoSwitchThreshold(config: CodexCommanderConfig): number {
   const value = anthropicAccountPoolConfig(config).autoSwitchThreshold;
   if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 100) return value;
   return DEFAULT_AUTO_SWITCH_THRESHOLD;
@@ -209,7 +209,7 @@ function pickLowestUsage(excludeId: string | undefined, now: number): string | n
 
 /** Next eligible Anthropic account in stable order after `afterId` (wrapping). */
 function pickNextFillFirstAnthropicAccount(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   afterId: string,
   eligible: string[],
 ): string | null {
@@ -238,7 +238,7 @@ function pickNextFillFirstAnthropicAccount(
 }
 
 function pickAlternateAnthropicAccount(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   excludeId: string,
   now: number,
 ): string | null {
@@ -279,15 +279,15 @@ export interface AnthropicAccountSelection {
   reason: AnthropicAccountSelectionReason;
 }
 
-function stickyLimitForPool(config: OcxConfig): number {
+function stickyLimitForPool(config: CodexCommanderConfig): number {
   return normalizeAccountPoolStickyLimit(anthropicAccountPoolConfig(config).stickyLimit);
 }
 
-function anthropicPoolStrategy(config: OcxConfig): OcxAccountPoolRotationStrategy {
+function anthropicPoolStrategy(config: CodexCommanderConfig): CodexCommanderAccountPoolRotationStrategy {
   return normalizeAccountPoolStrategy(anthropicAccountPoolConfig(config).strategy);
 }
 
-function isActiveUnderFillFirstThreshold(config: OcxConfig, accountId: string): boolean {
+function isActiveUnderFillFirstThreshold(config: CodexCommanderConfig, accountId: string): boolean {
   const threshold = anthropicAutoSwitchThreshold(config);
   if (threshold <= 0) return true;
   // Unknown usage must not force fill-first to abandon the active account.
@@ -299,7 +299,7 @@ function isActiveUnderFillFirstThreshold(config: OcxConfig, accountId: string): 
  * Fill-first: keep eligible active under threshold; otherwise advance to the next
  * eligible id in stable sorted order after the current active (wrapping).
  */
-function pickFillFirstAnthropicAccount(config: OcxConfig, now: number): string | null {
+function pickFillFirstAnthropicAccount(config: CodexCommanderConfig, now: number): string | null {
   const eligible = getEligibleAnthropicAccounts(now);
   if (eligible.length === 0) return null;
 
@@ -322,10 +322,10 @@ function pickFillFirstAnthropicAccount(config: OcxConfig, now: number): string |
 
 /**
  * Unbound new-session pick for round-robin / fill-first. Returns null to fall through
- * to the legacy quota path (or when the strategy is quota).
+ * to the quota-selection path (or when the strategy is quota).
  */
 function pickUnboundStrategyAccount(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   now: number,
 ): { accountId: string; reason: "round-robin" | "fill-first" } | null {
   const strategy = anthropicPoolStrategy(config);
@@ -355,7 +355,7 @@ function pickUnboundStrategyAccount(
  */
 export function resolveAnthropicAccountForSession(
   sessionKey: string | null | undefined,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   now = Date.now(),
 ): AnthropicAccountSelection {
   pruneExpiredAffinity(now);
@@ -472,7 +472,7 @@ export function clearAnthropicSessionAffinityForAccount(accountId: string): void
  * successful retry (or token resolve).
  */
 export function rotateAnthropicAccountOn429(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   failedAccountId: string,
   retryAfterHeader: string | null | undefined,
   sessionKey?: string | null,
@@ -559,7 +559,7 @@ export function formatAnthropicAccountOrdinal(accountId: string): string {
 export function formatAnthropicProviderForLog(
   providerName: string,
   accountId: string | null | undefined,
-  _config?: OcxConfig,
+  _config?: CodexCommanderConfig,
 ): string {
   if (!accountId) return providerName;
   return `${providerName}-${formatAnthropicAccountOrdinal(accountId)}`;

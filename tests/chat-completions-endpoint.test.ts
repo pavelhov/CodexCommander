@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { chatCompletionsToResponsesBody, ChatCompletionsRequestError } from "../src/chat/inbound";
 import { chatCompletionsUsage } from "../src/chat/outbound";
@@ -57,18 +57,18 @@ let isolatedCodexHome: IsolatedCodexHome | null = null;
 const originalFetch = globalThis.fetch;
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
   previousCodexCliPath = process.env.CODEX_CLI_PATH;
-  isolatedCodexHome = installIsolatedCodexHome("ocx-chat-completions-");
+  isolatedCodexHome = installIsolatedCodexHome("ccx-chat-completions-");
   process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
-  testDir = mkdtempSync(join(tmpdir(), "ocx-chat-completions-"));
-  process.env.OPENCODEX_HOME = testDir;
+  testDir = mkdtempSync(join(tmpdir(), "ccx-chat-completions-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
   globalThis.fetch = originalFetch;
 });
 
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
   else process.env.CODEX_CLI_PATH = previousCodexCliPath;
   isolatedCodexHome?.restore();
@@ -145,14 +145,15 @@ function mockDualWireUpstream() {
   return { server, captured };
 }
 
-function mockConfig(baseUrl: string): OcxConfig {
+function mockConfig(baseUrl: string): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "mock",
     providers: {
       mock: { adapter: "openai-chat", baseUrl, apiKey: "k", allowPrivateNetwork: true },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 type StreamedToolCall = {
@@ -527,6 +528,7 @@ test("POST /v1/chat/completions direct mode forwards caller Authorization", asyn
   }) as typeof fetch;
   saveConfig({
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "openai",
     providers: {
       openai: {
@@ -536,7 +538,7 @@ test("POST /v1/chat/completions direct mode forwards caller Authorization", asyn
         codexAccountMode: "direct",
       },
     },
-  } as OcxConfig);
+  } as CodexCommanderConfig);
   const server = startServer(0);
   try {
     const response = await fetch(new URL("/v1/chat/completions", server.url), {
@@ -638,7 +640,7 @@ test("Chat replay owns optional main enrichment while routed work survives drain
     await server.stop(true);
     saveConfig({
       port: 0,
-      openaiProviderTierVersion: 2,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "openai",
       providers: {
         openai: {
@@ -651,7 +653,7 @@ test("Chat replay owns optional main enrichment while routed work survives drain
       codexAccounts: [],
       activeCodexAccountId: "__main__",
       autoSwitchThreshold: 0,
-    } as OcxConfig);
+    } as CodexCommanderConfig);
     server = startServer(0);
     await waitForNativeMainStartupGate();
     recoveryHomeId = nativeMainStartupGateSnapshot().homeId ?? "chat-main-recovery-home";
@@ -702,6 +704,7 @@ test("POST /v1/chat/completions finalizes native passthrough request logs", asyn
   }) as typeof fetch;
   saveConfig({
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "openai",
     providers: {
       openai: {
@@ -711,7 +714,7 @@ test("POST /v1/chat/completions finalizes native passthrough request logs", asyn
         codexAccountMode: "direct",
       },
     },
-  } as OcxConfig);
+  } as CodexCommanderConfig);
   const server = startServer(0);
   try {
     const response = await fetch(new URL("/v1/chat/completions", server.url), {
@@ -1008,6 +1011,7 @@ test("non-streaming /v1/chat/completions returns error status on upstream failur
   }) as typeof fetch;
   saveConfig({
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "openai",
     providers: {
       openai: {
@@ -1017,7 +1021,7 @@ test("non-streaming /v1/chat/completions returns error status on upstream failur
         codexAccountMode: "direct",
       },
     },
-  } as OcxConfig);
+  } as CodexCommanderConfig);
   const server = startServer(0);
   try {
     const response = await fetch(new URL("/v1/chat/completions", server.url), {
@@ -1066,6 +1070,7 @@ test("streaming /v1/chat/completions does not clean-DONE after response.failed",
   }) as typeof fetch;
   saveConfig({
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "openai",
     providers: {
       openai: {
@@ -1075,7 +1080,7 @@ test("streaming /v1/chat/completions does not clean-DONE after response.failed",
         codexAccountMode: "direct",
       },
     },
-  } as OcxConfig);
+  } as CodexCommanderConfig);
   const server = startServer(0);
   try {
     const response = await fetch(new URL("/v1/chat/completions", server.url), {
@@ -1260,7 +1265,7 @@ test("chatCompletionsToResponsesBody recovers tool_calls function.name from earl
   expect(calls.some(c => c.call_id === "call_b" && c.name === "exec_command")).toBe(true);
 });
 
-// Local-stack fixup regressions (Sol audit of #279, devlog 100_merge_records.md WP5):
+// Local-stack fixup regressions (Sol audit of #279, implementation contract WP5):
 // CRLF framing and a terminal event without a trailing blank line must not be reported
 // as truncation now that the shared SSE decoder drives the converter.
 test("responsesSseToChatCompletionsSse accepts CRLF-framed SSE with terminal event at EOF", async () => {
@@ -1386,9 +1391,10 @@ test("collectChatCompletion throws ChatCompletionsStreamError on a stall incompl
 // --- #404: one gateway, two wires. Without a per-model override the provider-wide
 // adapter wins and Grok's hosted web_search is dropped before it ever goes out. ----
 
-function dualWireConfig(baseUrl: string): OcxConfig {
+function dualWireConfig(baseUrl: string): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "mock",
     providers: {
       mock: {
@@ -1399,7 +1405,7 @@ function dualWireConfig(baseUrl: string): OcxConfig {
         modelAdapters: { "grok-4.5": "openai-responses" },
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 test("an overridden model reaches the responses wire with its hosted tool intact (#404)", async () => {
@@ -1508,6 +1514,7 @@ test("/v1/chat/completions non-OK upstream preserves structured model_not_found"
   }) as typeof fetch;
   saveConfig({
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "openai",
     providers: {
       openai: {
@@ -1517,7 +1524,7 @@ test("/v1/chat/completions non-OK upstream preserves structured model_not_found"
         codexAccountMode: "direct",
       },
     },
-  } as OcxConfig);
+  } as CodexCommanderConfig);
   const server = startServer(0);
   try {
     const response = await fetch(new URL("/v1/chat/completions", server.url), {
@@ -1573,6 +1580,7 @@ test("/v1/chat/completions status:failed replay normalizes translation_buffer_li
   }) as typeof fetch;
   saveConfig({
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "openai",
     providers: {
       openai: {
@@ -1582,7 +1590,7 @@ test("/v1/chat/completions status:failed replay normalizes translation_buffer_li
         codexAccountMode: "direct",
       },
     },
-  } as OcxConfig);
+  } as CodexCommanderConfig);
   const server = startServer(0);
   try {
     const response = await fetch(new URL("/v1/chat/completions", server.url), {
@@ -1635,6 +1643,7 @@ test("/v1/chat/completions status:failed replay preserves structured model_not_f
   }) as typeof fetch;
   saveConfig({
     port: 0,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "openai",
     providers: {
       openai: {
@@ -1644,7 +1653,7 @@ test("/v1/chat/completions status:failed replay preserves structured model_not_f
         codexAccountMode: "direct",
       },
     },
-  } as OcxConfig);
+  } as CodexCommanderConfig);
   const server = startServer(0);
   try {
     const response = await fetch(new URL("/v1/chat/completions", server.url), {

@@ -1,6 +1,6 @@
 ---
 title: Model Routing
-description: How opencodex decides which provider serves a given model id.
+description: How CodexCommander decides which provider serves a given model id.
 ---
 
 When Codex asks for a model, `router.ts` resolves it to exactly one configured provider. The rules are
@@ -27,7 +27,7 @@ through to one another.
 
 2. **Combo id or alias** — while at least one combo is configured, a canonical `combo/<id>` or
    configured combo alias selects its concrete target before provider namespaces are checked. With
-   no configured combos, a legacy physical provider literally named `combo` remains a normal
+   no configured combos, a configured provider literally named `combo` is treated like any other
    provider namespace. See [Combos](/guides/combos/) for target selection and failover behavior.
 
 3. **Explicit `provider/model`** — if the id contains `/` and the part before it is the name of a

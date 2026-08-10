@@ -1,3 +1,5 @@
+import { CODEX_ACCOUNT_LOG_LABEL_RE } from "./account-label";
+
 /** Canonical persisted Codex pool-account id format. */
 export const CODEX_ACCOUNT_ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
@@ -19,16 +21,11 @@ export function isValidCodexAccountId(accountId: unknown): accountId is string {
     && !RESERVED_CODEX_ACCOUNT_IDS.has(accountId.toLowerCase());
 }
 
-type CodexAccountIdentityRow = { id: string; isMain: boolean };
+type CodexAccountIdentityRow = { id: string; isMain: boolean; logLabel: string };
 
-/** Legacy invalid rows remain loadable for cleanup, but never participate in routing. */
+/** Only current, non-main pool-account rows can participate in routing. */
 export function isSelectableCodexPoolAccount(account: CodexAccountIdentityRow): boolean {
-  return !account.isMain && isValidCodexAccountId(account.id);
-}
-
-/** A pre-validation pool row that collides with the internal Desktop-account sentinel. */
-export function hasLegacyMainCodexPoolAccount(
-  accounts: readonly CodexAccountIdentityRow[] | undefined,
-): boolean {
-  return accounts?.some(account => !account.isMain && account.id === MAIN_CODEX_ACCOUNT_ID) ?? false;
+  return !account.isMain
+    && isValidCodexAccountId(account.id)
+    && CODEX_ACCOUNT_LOG_LABEL_RE.test(account.logLabel);
 }

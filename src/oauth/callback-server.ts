@@ -2,7 +2,7 @@
  * Abstract base class for OAuth flows with local callback servers.
  * Ported from jawcode packages/ai/src/utils/oauth/callback-server.ts.
  *
- * Change vs source: the success/error page is an inline HTML constant. opencodex's GUI polls
+ * Change vs source: the success/error page is an inline HTML constant. CodexCommander's GUI polls
  * GET /api/oauth/status, so it does not need OAuth state injected into the callback page.
  *
  * Handles: port allocation (preferred → random fallback), callback server, CSRF state,
@@ -17,9 +17,9 @@ const DEFAULT_BIND_HOSTNAME = "127.0.0.1";
 const CALLBACK_PATH = "/callback";
 
 const SUCCESS_HTML =
-  "<!doctype html><html><head><meta charset='utf-8'><title>opencodex</title></head>" +
+  "<!doctype html><html><head><meta charset='utf-8'><title>CodexCommander</title></head>" +
   "<body style='font-family:system-ui,sans-serif;text-align:center;padding:4rem;color:#111'>" +
-  "<h2>&#9989; Login complete</h2><p>You can close this tab and return to opencodex.</p></body></html>";
+  "<h2>&#9989; Login complete</h2><p>You can close this tab and return to CodexCommander.</p></body></html>";
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) =>
@@ -29,7 +29,7 @@ function escapeHtml(s: string): string {
 
 function errorHtml(message: string): string {
   return (
-    "<!doctype html><html><head><meta charset='utf-8'><title>opencodex</title></head>" +
+    "<!doctype html><html><head><meta charset='utf-8'><title>CodexCommander</title></head>" +
     "<body style='font-family:system-ui,sans-serif;text-align:center;padding:4rem;color:#111'>" +
     `<h2>&#9888; Login failed</h2><p>${escapeHtml(message)}</p></body></html>`
   );

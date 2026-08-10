@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AnthropicRequestError, anthropicToResponsesBody, anthropicToResponsesTranslation, effortForThinkingBudget, extractOcxEffortDirective, resolveInboundModel } from "../src/claude/inbound";
+import { AnthropicRequestError, anthropicToResponsesBody, anthropicToResponsesTranslation, effortForThinkingBudget, extractCodexCommanderEffortDirective, resolveInboundModel } from "../src/claude/inbound";
 import { parseRequest } from "../src/responses/parser";
 import { responsesRequestSchema } from "../src/responses/schema";
 
@@ -64,7 +64,7 @@ describe("claude inbound translation", () => {
     expect(body.top_k).toBeUndefined(); // documented drop
     expect(body.stop).toEqual(["STOP"]);
     expect(body.user).toBe("user-abc");
-    // Stable per-session cache-affinity key derived from metadata.user_id (devlog 090)
+    // Stable per-session cache-affinity key derived from metadata.user_id (implementation contract)
     expect(body.prompt_cache_key).toMatch(/^[0-9a-f]{32}$/);
     expect(body.store).toBe(false);
     expect(body.stream).toBe(true);
@@ -103,7 +103,7 @@ describe("claude inbound translation", () => {
     expect(effortForThinkingBudget(30000)).toBe("high");
   });
 
-  test("adaptive /effort wire: output_config.effort maps to reasoning.effort (devlog 080)", () => {
+  test("adaptive /effort wire: output_config.effort maps to reasoning.effort (implementation contract)", () => {
     const base = { model: "m", max_tokens: 10, messages: [{ role: "user", content: "hi" }] };
     const reasoningOf = (body: unknown) => (body as { reasoning?: Record<string, unknown> }).reasoning;
     // Real claude 2.1.207 capture: thinking adaptive + output_config effort
@@ -237,7 +237,7 @@ describe("claude inbound translation", () => {
   });
 });
 
-describe("prompt cache key provenance (devlog 130 B3)", () => {
+describe("prompt cache key provenance (implementation contract B3)", () => {
   const messages = [{ role: "user", content: "hi" }];
 
   test("metadata.user_id wins: key derived from it, source=metadata", () => {
@@ -275,7 +275,7 @@ describe("prompt cache key provenance (devlog 130 B3)", () => {
     }
   });
 
-  test("cache cohort key: model and full tool schemas participate, wire order preserved (devlog 260712 B4)", () => {
+  test("cache cohort key: model and full tool schemas participate, wire order preserved (implementation contract B4)", () => {
     const tool = (desc: string) => ({ name: "Read", description: desc, input_schema: { type: "object", properties: { a: { type: "string" }, b: { type: "number" } } } });
     const base = { max_tokens: 1, messages, system: "be nice" };
     const k = (body: Record<string, unknown>) => anthropicToResponsesTranslation(body).body.prompt_cache_key as string;
@@ -295,12 +295,12 @@ describe("prompt cache key provenance (devlog 130 B3)", () => {
   });
 
   test("[1m] strip works for both alias families before decode", () => {
-    // Legacy claude-ocx-* (pure decode, no registry needed).
-    expect(resolveInboundModel("claude-ocx-cursor--gpt-5.6-luna[1m]")).toBe("cursor/gpt-5.6-luna");
+    // Current claude-ccx2-* readable alias (pure decode, no registry needed).
+    expect(resolveInboundModel("claude-ccx2-cursor--gpt-5.6-luna[1m]")).toBe("cursor/gpt-5.6-luna");
   });
 });
 
-describe("bundled-skill elision for routed models (devlog 260712 060)", () => {
+describe("bundled-skill elision for routed models (implementation contract 060)", () => {
   const BIG = "ANTHROPIC DOC BUNDLE ".repeat(500);
   function requestWithSkill(skillName: string, cc?: { blockedSkills?: string[] }) {
     return {
@@ -408,33 +408,33 @@ describe("bundled-skill elision for routed models (devlog 260712 060)", () => {
   });
 });
 
-describe("ocx-route directive (devlog 072)", () => {
-  const { extractOcxRouteDirective } = require("../src/claude/inbound") as typeof import("../src/claude/inbound");
+describe("ccx-route directive (implementation contract)", () => {
+  const { extractCodexCommanderRouteDirective } = require("../src/claude/inbound") as typeof import("../src/claude/inbound");
 
   test("extracts from string and block-array system; first directive wins", () => {
-    expect(extractOcxRouteDirective({ system: "intro\n<!-- ocx-route: claude-ocx-native--gpt-5.6-sol[1m] -->\nrest" }))
-      .toBe("claude-ocx-native--gpt-5.6-sol[1m]");
-    expect(extractOcxRouteDirective({
+    expect(extractCodexCommanderRouteDirective({ system: "intro\n<!-- ccx-route: claude-ccx2-native--gpt-5.6-sol[1m] -->\nrest" }))
+      .toBe("claude-ccx2-native--gpt-5.6-sol[1m]");
+    expect(extractCodexCommanderRouteDirective({
       system: [
         { type: "text", text: "You are a delegated worker" },
-        { type: "text", text: "<!-- ocx-route: gemini/gemini-3-pro --> and <!-- ocx-route: other -->" },
+        { type: "text", text: "<!-- ccx-route: gemini/gemini-3-pro --> and <!-- ccx-route: other -->" },
       ],
     })).toBe("gemini/gemini-3-pro");
   });
 
   test("extracts only supported generated-agent effort values", () => {
-    expect(extractOcxEffortDirective({ system: "<!-- ocx-effort: max -->" })).toBe("max");
-    expect(extractOcxEffortDirective({
-      system: [{ type: "text", text: "<!-- ocx-effort: xhigh -->" }],
+    expect(extractCodexCommanderEffortDirective({ system: "<!-- ccx-effort: max -->" })).toBe("max");
+    expect(extractCodexCommanderEffortDirective({
+      system: [{ type: "text", text: "<!-- ccx-effort: xhigh -->" }],
     })).toBe("xhigh");
-    expect(extractOcxEffortDirective({ system: "<!-- ocx-effort: ultra -->" })).toBeNull();
+    expect(extractCodexCommanderEffortDirective({ system: "<!-- ccx-effort: ultra -->" })).toBeNull();
   });
 
   test("absent or malformed directives return null", () => {
-    expect(extractOcxRouteDirective({ system: "no directive here" })).toBeNull();
-    expect(extractOcxRouteDirective({ system: [{ type: "text", text: "<!-- ocx-route: -->" }] })).toBeNull();
-    expect(extractOcxRouteDirective({})).toBeNull();
-    expect(extractOcxRouteDirective(null)).toBeNull();
-    expect(extractOcxEffortDirective(null)).toBeNull();
+    expect(extractCodexCommanderRouteDirective({ system: "no directive here" })).toBeNull();
+    expect(extractCodexCommanderRouteDirective({ system: [{ type: "text", text: "<!-- ccx-route: -->" }] })).toBeNull();
+    expect(extractCodexCommanderRouteDirective({})).toBeNull();
+    expect(extractCodexCommanderRouteDirective(null)).toBeNull();
+    expect(extractCodexCommanderEffortDirective(null)).toBeNull();
   });
 });

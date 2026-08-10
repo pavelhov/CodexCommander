@@ -54,7 +54,7 @@ const AUTH_MATRIX = [
 const EXISTING_KEY = {
   id: "key-1",
   name: "existing-key",
-  prefix: "ocx_data_12345678...",
+  prefix: "ccx_data_12345678...",
   createdAt: "2026-01-15T12:00:00.000Z",
   usage: { requests7d: 3, totalRequests: 8, lastUsedAt: "2026-07-30T12:00:00.000Z" },
 };
@@ -64,7 +64,7 @@ const KEYS_OK = {
   attributionSince: "2026-07-20T00:00:00.000Z",
   authMatrix: AUTH_MATRIX,
   baseUrl: "http://127.0.0.1:10100/v1",
-  endpoint: "http://127.0.0.1:10100/v1/responses",
+  responsesEndpoint: "http://127.0.0.1:10100/v1/responses",
   responsesEndpoint: "http://127.0.0.1:10100/v1/responses",
   chatCompletionsEndpoint: "http://127.0.0.1:10100/v1/chat/completions",
   messagesEndpoint: "http://127.0.0.1:10100/v1/messages",
@@ -96,7 +96,7 @@ test("successful key create keeps last-good keys visible when follow-up refresh 
       return new Response("upstream unavailable", { status: 503 });
     }
     if (url.endsWith("/api/keys") && method === "POST") {
-      return Response.json({ key: "ocx_new_secret_value_only_shown_once" });
+      return Response.json({ key: "ccx_new_secret_value_only_shown_once" });
     }
     return new Response(null, { status: 404 });
   }) as typeof fetch;

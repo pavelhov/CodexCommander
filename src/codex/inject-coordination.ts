@@ -18,29 +18,18 @@ import {
   type CodexWriteEvidence,
 } from "./write-coordination";
 
-/** Bounded so a stuck holder cannot wedge `ocx start` indefinitely. */
+/** Bounded so a stuck holder cannot wedge `ccx start` indefinitely. */
 export const DEFAULT_INJECT_LOCK_TIMEOUT_MS = 5_000;
 
 /**
  * Can this home be coordinated at all, decided BEFORE any lock attempt?
  *
- * The order matters and is not stylistic. `assertInitialStateCanBeCreated`
- * refuses to create the first coordinator row while native routing residue
- * exists (`transition-state.ts:268-280`) — correctly, because installing
- * `{0,null}` over routed bytes would erase the only evidence that an
- * interrupted transition needs salvage. But "already routed, no coordinator
- * row" is the state of every install predating this substrate, so a "try the
- * lock, fall back on refusal" shape would attempt acquisition on the entire
- * installed base. Deciding first means that refusal path is never entered.
- *
- * `legacy-uncoordinated` is a temporary boundary, not a design: the
- * compatibility-adoption contract (`005_contract.md:709-779`) records an
- * existing routed home into the coordinator, and once that lands this branch
- * narrows to homes not yet adopted.
+ * A missing coordinator may be initialized only over a clean current-layout
+ * home. Routed or indeterminate bytes without the current coordinator are not
+ * adopted, rewritten, or cleaned up.
  */
 export type CodexWriteCoordinationEligibility =
   | { kind: "coordinated" }
-  | { kind: "legacy-uncoordinated"; reason: string }
   | { kind: "refused"; reason: string };
 
 export function codexWriteCoordinationEligibility(deps: {
@@ -66,26 +55,11 @@ export function codexWriteCoordinationEligibility(deps: {
 
   const residue = deps.residue();
   if (residue.kind === "clean") return { kind: "coordinated" };
-  /*
-   * Everything else keeps the path it has always had.
-   *
-   * `residue` is a pre-substrate routed home; `indeterminate` means the
-   * classifier could not read what is there — a profile it cannot parse, for
-   * instance, which is an ordinary re-injection over an older file rather than
-   * a hazard.
-   *
-   * Neither may CREATE a coordinator row: doing that over unclassified or
-   * routed bytes would erase the evidence an interrupted transition needs. But
-   * refusing the injection outright, which an earlier draft of this function
-   * did for `indeterminate`, breaks re-injection on homes that work today —
-   * caught by the shipped restore tests rather than by review. Declining to
-   * coordinate is the correct scope of the refusal; declining to write is not.
-   */
   return {
-    kind: "legacy-uncoordinated",
+    kind: "refused",
     reason: residue.kind === "residue"
-      ? "this home was routed before write coordination existed and has not been adopted yet"
-      : "the existing native Codex state could not be classified, so it cannot seed a coordinator row",
+      ? "native Codex routing residue exists without a current coordinator"
+      : "the existing native Codex state could not be classified",
   };
 }
 

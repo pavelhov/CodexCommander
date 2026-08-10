@@ -4,11 +4,11 @@ description: Multi-agent, combo, observability, access, integration, system и c
 ---
 
 Эти команды управляют политикой агентов и routing'ом, проверяют живой прокси и подключают
-поддерживаемых клиентов к opencodex.
+поддерживаемых клиентов к CodexCommander.
 
 ## Политика агентов
 
-### `ocx agent <status|injection|effort|subagents|fallback|sidecar> ...`
+### `ccx agent <status|injection|effort|subagents|fallback|sidecar> ...`
 
 Управляйте headless-ростером multi-agent, effort cap'ами, prompt injection, fallback'ом и
 настройками sidecar'ов. Для просмотра текущей политики используйте `status`. Как соотносятся
@@ -16,10 +16,10 @@ surface mode, delegation, effort и fallback, описано в
 [Поверхности подагентов](/guides/sub-agent-surface/).
 
 ```bash
-ocx agent subagents set ark/model-a,openai/gpt-5.5
+ccx agent subagents set ark/model-a,openai/gpt-5.5
 ```
 
-### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
+### `ccx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
 
 Управляйте feature flag'ом Codex `multi_agent_v2` и трёхсостоянием multi-agent surface mode.
 
@@ -34,14 +34,14 @@ ocx agent subagents set ark/model-a,openai/gpt-5.5
 | `threads <n>` | Задать активный v1/v2 thread limit как целое число не меньше 1. |
 
 ```bash
-ocx v2 status
-ocx v2 mode v1
-ocx v2 mode default
-ocx v2 on
-ocx v2 threads 16
+ccx v2 status
+ccx v2 mode v1
+ccx v2 mode default
+ccx v2 on
+ccx v2 threads 16
 ```
 
-Подкоманда `mode` записывает `multiAgentMode` в конфиг opencodex и заново синхронизирует каталог
+Подкоманда `mode` записывает `multiAgentMode` в конфиг CodexCommander и заново синхронизирует каталог
 Codex. При переходах mode и feature flag текущий числовой thread limit переносится между
 допустимыми ключами Codex для v1/v2; если переход не удался, исходный `config.toml`
 восстанавливается. Изменения применяются к новым сессиям Codex, а уже запущенные сохраняют свою
@@ -49,115 +49,114 @@ Codex. При переходах mode и feature flag текущий число�
 
 ## Combo routing
 
-### `ocx combo <list|show|set|remove> ...` · `ocx route combo ...`
+### `ccx combo <list|show|set|remove> ...` · `ccx route combo ...`
 
-Управляйте virtual-моделями combo с failover и round-robin. `ocx route combo` — это иерархический
+Управляйте virtual-моделями combo с failover и round-robin. `ccx route combo` — это иерархический
 alias; на данный момент combo — единственный поддерживаемый routing-resource. Цели используют
 форму `provider/model[:weight],provider/model[:weight]`.
 
 ```bash
-ocx combo list
-ocx route combo set reliable --targets ark/model-a:2,openai/gpt-5.5
+ccx combo list
+ccx route combo set reliable --targets ark/model-a:2,openai/gpt-5.5
 ```
 
 О поведении маршрутизации и рекомендациях по конфигурации см. [Combos](/guides/combos/).
 
 ## Observability и debug
 
-### `ocx observe <logs|usage|storage|memory|debug|claude-inbound|injection> ...`
+### `ccx observe <logs|usage|storage|memory|debug|claude-inbound|injection> ...`
 
 Проверяйте proxy-request'ы, usage, storage, memory и debug-data. Прямые alias'ы:
 
 | Алиас | Эквивалентный ресурс |
 | --- | --- |
-| `ocx logs [filters] [--follow] [--json|--jsonl]` | `ocx observe logs` |
-| `ocx usage [--range <7d|30d|all>] [--surface <all|codex|claude|grok>] [--json]` | `ocx observe usage` |
-| `ocx storage [--json]` | `ocx observe storage` |
-| `ocx memory [--json]` | `ocx observe memory` |
+| `ccx logs [filters] [--follow] [--json|--jsonl]` | `ccx observe logs` |
+| `ccx usage [--range <7d|30d|all>] [--surface <all|codex|claude|grok>] [--json]` | `ccx observe usage` |
+| `ccx storage [--json]` | `ccx observe storage` |
+| `ccx memory [--json]` | `ccx observe memory` |
 
 ```bash
-ocx observe usage --range 30d --json
+ccx observe usage --range 30d --json
 ```
 
-### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
+### `ccx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 
 Прочитать или изменить runtime debug-override'ы через management API работающего прокси.
 
 ```bash
-ocx debug provider on|off|status|reset
-ocx debug provider logs [-f|--follow]
-ocx debug usage on|off|status|reset
-ocx debug usage logs [-f|--follow]
+ccx debug provider on|off|status|reset
+ccx debug provider logs [-f|--follow]
+ccx debug usage on|off|status|reset
+ccx debug usage logs [-f|--follow]
 ```
 
-Без указания scope `ocx debug` печатает usage и, если прокси остановлен, environment-default'ы
-для следующего запуска. Provider debug по умолчанию берётся из `OCX_DEBUG=1`
-(legacy `OCX_DEBUG_FRAMES=1` тоже работает); usage debug — из `OPENCODEX_USAGE_DEBUG=1`.
+Без указания scope `ccx debug` печатает usage и, если прокси остановлен, environment-default'ы
+для следующего запуска. Provider debug по умолчанию берётся из `CCX_DEBUG=1`;
+usage debug — из `CODEXCOMMANDER_USAGE_DEBUG=1`.
 
 ## Доступ к API
 
-### `ocx access <key|endpoints|models|test> ...`
+### `ccx access <key|endpoints|models|test> ...`
 
-Управляйте admission API-key'ами OpenCodex и проверяйте внешние endpoint'ы и модели.
-`ocx api-key <list|create|remove> ...` — alias `ocx access key`.
+Управляйте admission API-key'ами CodexCommander и проверяйте внешние endpoint'ы и модели.
+`ccx api-key <list|create|remove> ...` — alias `ccx access key`.
 
 ```bash
-ocx access key create deployment
+ccx access key create deployment
 ```
 
 ## Интеграции клиентов
 
-### `ocx integration <claude|grok> ...`
+### `ccx integration <claude|grok> ...`
 
 Управляйте поддерживаемыми интеграциями Claude и Grok. Прямые семейства команд ниже
 предоставляют элементы управления, специфичные для каждого клиента.
 
-### `ocx claude [claude args...]`
+### `ccx claude [claude args...]`
 
 Убедиться, что прокси запущен, а затем запустить Claude Code с `ANTHROPIC_BASE_URL`,
-`ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` и model slot'ами из
-`config.claudeCode`. Маршрутизируемые модели появляются в native-picker'е `/model` через стабильные
-slot-alias'ы, начиная с Claude Code 2.1.129. На более старых версиях модель выбирается через
+`ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` и текущими настройками
+аутентификации/helper из `config.claudeCode`. Маршрутизируемые модели появляются в native-picker'е
+`/model` через стабильные alias'ы, начиная с Claude Code 2.1.129. На более старых версиях модель выбирается через
 `ANTHROPIC_MODEL` или `/model <id>`. Пользовательские `ANTHROPIC_*`, экспортированные в окружение,
 всегда имеют приоритет.
 
 Команды для профиля Claude Desktop:
 
 ```text
-ocx claude desktop [apply]                         Save and apply the four-family profile
-ocx claude desktop show [--json]                   Show routes, families, and defaults
-ocx claude desktop move <route> <family> [--default]
-ocx claude desktop default <family> <route|none>
-ocx claude desktop export <path|->                 Export versioned JSON (`-` = stdout)
-ocx claude desktop import <path> [--apply]         Validate and import JSON
+ccx claude desktop apply                           Save and apply the four-family profile
+ccx claude desktop show [--json]                   Show routes, families, and defaults
+ccx claude desktop move <route> <family> [--default]
+ccx claude desktop default <family> <route|none>
+ccx claude desktop export <path|->                 Export versioned JSON (`-` = stdout)
+ccx claude desktop import <path> [--apply]         Validate and import JSON
 ```
 
 Семейства — `opus`, `fable`, `sonnet` и `haiku`; новые маршруты по умолчанию попадают в `opus`.
-`none` допустимо только когда соответствующее семейство пусто. Legacy-flags `--static`,
-`--hybrid` и `--discovery-only` для apply по-прежнему поддерживаются. Для настроек Claude Code
-используйте `ocx claude config <status|set> ...`.
+`none` допустимо только когда соответствующее семейство пусто. Для настроек Claude Code
+используйте `ccx claude config <status|set> ...`.
 
-### `ocx opencode [opencode args...]`
+### `ccx opencode [opencode args...]`
 
 Убедиться, что прокси запущен, и затем запустить opencode со сгенерированным блоком
-`provider.opencodex` в inline runtime layer OpenCode (`OPENCODE_CONFIG_CONTENT`). Существующая
-inline-конфигурация сохраняется, а только `provider.opencodex` заменяется для этого запуска.
+`provider.codexcommander` в inline runtime layer OpenCode (`OPENCODE_CONFIG_CONTENT`). Существующая
+inline-конфигурация сохраняется, а только `provider.codexcommander` заменяется для этого запуска.
 Глобальные или проектные `opencode.json` могут читаться, чтобы выдать warning о существующем
 override, но файлы на диске никогда не меняются. Маршрутизируемые модели появляются как
-`opencodex/<provider>/<model>`. Этот лончер не меняет последующие обычные запуски `opencode`;
-единственный постоянный путь для `provider.opencodex` — отдельная opt-in интеграция Dashboard.
+`codexcommander/<provider>/<model>`. Этот лончер не меняет последующие обычные запуски `opencode`;
+единственный постоянный путь для `provider.codexcommander` — отдельная opt-in интеграция Dashboard.
 
-### `ocx grok <status|exclude|include|set|clear|apply> ...`
+### `ccx grok <status|exclude|include|set|clear|apply> ...`
 
 Управляйте fence'ом моделей для Grok Build и применяйте его.
 
 ## Экспорт client config
 
-### `ocx export --client <opencode|pi>`
+### `ccx export --client <opencode|pi>`
 
 Печатает client config, направленный на работающий прокси. opencode и [Pi](/guides/pi/) читают
 провайдеров из собственных JSON-конфигов, а не из переменных окружения, поэтому команда
-сериализует для вас блок провайдера `opencodex` — base URL, список моделей и env-reference
+сериализует для вас блок провайдера `codexcommander` — base URL, список моделей и env-reference
 конкретного клиента.
 
 Прокси должен быть запущен; команда определяет его живой порт, читает `/api/models` и выводит
@@ -171,9 +170,9 @@ override, но файлы на диске никогда не меняются. 
 | `--force` | Разрешить `--out` заменить существующий файл. |
 
 ```bash
-ocx export --client opencode                     # config plus destination, merge warning, and counts
-ocx export --client pi --json > pi-models.json   # byte-exact JSON for a pipe or a diff
-ocx export --client opencode --out ~/opencodex-opencode.json
+ccx export --client opencode                     # config plus destination, merge warning, and counts
+ccx export --client pi --json > pi-models.json   # byte-exact JSON for a pipe or a diff
+ccx export --client opencode --out ~/codexcommander-opencode.json
 ```
 
 Без `--json` сначала идёт JSON, затем канонический путь назначения, предупреждение о merge, строка
@@ -182,14 +181,14 @@ limit'а (для них клиент применяет собственные d
 
 | Клиент | Канонический путь | Имя скачиваемого файла | Переменная окружения |
 | --- | --- | --- | --- |
-| `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` имеет приоритет, если задан) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
-| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | `OPENCODEX_API_KEY` |
+| `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` имеет приоритет, если задан) | `opencode.json` | `CODEXCOMMANDER_OPENCODE_API_KEY` |
+| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | `CODEXCOMMANDER_API_KEY` |
 
 Имена этих двух env-переменных различаются, и каждый клиент интерполирует только свою. opencode
-читает `{env:OPENCODEX_OPENCODE_API_KEY}`; Pi читает `$OPENCODEX_API_KEY`.
+читает `{env:CODEXCOMMANDER_OPENCODE_API_KEY}`; Pi читает `$CODEXCOMMANDER_API_KEY`.
 
 :::caution[Сливать, а не заменять]
-`ocx export` никогда не пишет в ваш реальный клиентский конфиг. Путь назначения лишь
+`ccx export` никогда не пишет в ваш реальный клиентский конфиг. Путь назначения лишь
 печатается, чтобы вы вручную выполнили merge, а `--out` без `--force` отказывается перезаписать
 существующий файл именно потому, что полная замена уничтожила бы остальные провайдеры, агенты и
 MCP-записи.
@@ -207,15 +206,15 @@ admission key — ссылка просто остаётся неиспольз�
 
 ## Runtime и configuration
 
-### `ocx system <status|settings|startup|diagnostics|sync|update> ...`
+### `ccx system <status|settings|startup|diagnostics|sync> ...`
 
-Управляйте headless runtime-setting'ами, startup, sync, diagnostics и update.
+Управляйте headless runtime-setting'ами, startup, sync и diagnostics.
 
 ```bash
-ocx system settings --stream-mode eager-relay
+ccx system settings --stream-mode eager-relay
 ```
 
-### `ocx config <show|get|set|unset|validate|export|import> ...`
+### `ccx config <show|get|set|unset|validate|export|import> ...`
 
-Проверяйте и безопасно меняйте валидированную конфигурацию OpenCodex. `show` и `get`
+Проверяйте и безопасно меняйте валидированную конфигурацию CodexCommander. `show` и `get`
 маскируют секреты. Импорт выполняет валидацию перед записью и требует `--yes`.

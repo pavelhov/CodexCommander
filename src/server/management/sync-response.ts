@@ -16,7 +16,6 @@ export function toSyncResponse(outcome: ConvergeOutcome): Response {
         changed: outcome.changed,
         observed: outcome.observed,
         catalogRefresh: outcome.catalogRefresh,
-        history: outcome.history,
       });
     case "converged":
       return jsonResponse({
@@ -24,7 +23,6 @@ export function toSyncResponse(outcome: ConvergeOutcome): Response {
         changed: outcome.changed,
         observed: outcome.observed,
         catalogRefresh: outcome.catalogRefresh,
-        history: outcome.history,
       });
     case "skipped":
       return jsonResponse({
@@ -32,7 +30,6 @@ export function toSyncResponse(outcome: ConvergeOutcome): Response {
         changed: false,
         observed: outcome.observed,
         catalogRefresh: outcome.catalogRefresh,
-        history: outcome.history,
       });
     case "refused":
       return jsonResponse({
@@ -57,7 +54,6 @@ export function toSyncResponse(outcome: ConvergeOutcome): Response {
         unresolved: outcome.unresolved,
         observed: outcome.observed,
         catalogRefresh: outcome.catalogRefresh,
-        history: outcome.history,
       });
     case "failed":
       return jsonResponse({ error: outcome.message, surface: outcome.surface }, 500);

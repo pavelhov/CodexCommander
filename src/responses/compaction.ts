@@ -9,13 +9,13 @@
  * (compact_remote_v2.rs) or it fatals with "expected exactly one compaction output item".
  *
  * Routed models cannot produce OpenAI's encrypted blob, so the proxy runs the model as a plain
- * summarizer and wraps the summary text in a transparent envelope: `ocx1:` + base64(utf8 summary).
+ * summarizer and wraps the summary text in a transparent envelope: `ccx1:` + base64(utf8 summary).
  * Codex stores the item and replays it in later input; the parser decodes our envelope back into
- * plain text for routed models. Real OpenAI-encrypted blobs (no `ocx1:` prefix) are opaque —
+ * plain text for routed models. Real OpenAI-encrypted blobs (no `ccx1:` prefix) are opaque —
  * routed models get a short "history was compacted" note instead.
  */
 
-export const OCX_COMPACTION_PREFIX = "ocx1:";
+export const CCX_COMPACTION_PREFIX = "ccx1:";
 
 /** Mirrors codex-rs core/templates/compact/prompt.md (the local-compaction instruction). */
 export const COMPACT_PROMPT = `You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another LLM that will resume the task.
@@ -34,14 +34,14 @@ export const SUMMARY_PREFIX = "Another language model started to solve this prob
 export const OPAQUE_COMPACTION_NOTE = "[earlier conversation was compacted; the summary is stored in a format this model cannot read]";
 
 export function encodeCompactionSummary(summary: string): string {
-  return OCX_COMPACTION_PREFIX + Buffer.from(summary, "utf-8").toString("base64");
+  return CCX_COMPACTION_PREFIX + Buffer.from(summary, "utf-8").toString("base64");
 }
 
-/** Decode an `ocx1:` envelope; returns null for real (OpenAI-encrypted) blobs or garbage. */
+/** Decode a `ccx1:` envelope; returns null for real (OpenAI-encrypted) blobs or garbage. */
 export function decodeCompactionSummary(encryptedContent: string): string | null {
-  if (!encryptedContent.startsWith(OCX_COMPACTION_PREFIX)) return null;
+  if (!encryptedContent.startsWith(CCX_COMPACTION_PREFIX)) return null;
   try {
-    return Buffer.from(encryptedContent.slice(OCX_COMPACTION_PREFIX.length), "base64").toString("utf-8");
+    return Buffer.from(encryptedContent.slice(CCX_COMPACTION_PREFIX.length), "base64").toString("utf-8");
   } catch {
     return null;
   }

@@ -5,7 +5,7 @@ import {
 } from "../src/server/readiness";
 import {
   findLiveProxy,
-  isOpencodexHealthz,
+  isCodexCommanderHealthz,
   probeHostname,
   probeReadiness,
   proxyIdentityAt,
@@ -16,22 +16,18 @@ function healthz(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
 }
 
-const OURS = { status: "ok", service: "opencodex", version: "2.6.17", uptime: 12, pid: 4242, port: 10100 };
+const OURS = { status: "ok", service: "codexcommander", version: "0.1.0", uptime: 12, pid: 4242, port: 10100 };
 
-describe("isOpencodexHealthz", () => {
+describe("isCodexCommanderHealthz", () => {
   test("accepts the explicit service marker", () => {
-    expect(isOpencodexHealthz(OURS)).toBe(true);
-  });
-
-  test("accepts the legacy pre-identity body (still-running old proxy after update)", () => {
-    expect(isOpencodexHealthz({ status: "ok", version: "2.6.16", uptime: 5 })).toBe(true);
+    expect(isCodexCommanderHealthz(OURS)).toBe(true);
   });
 
   test("rejects foreign bodies", () => {
-    expect(isOpencodexHealthz(null)).toBe(false);
-    expect(isOpencodexHealthz({ status: "ok" })).toBe(false);
-    expect(isOpencodexHealthz({ service: "something-else", status: "ok", version: "1", uptime: 1 })).toBe(false);
-    expect(isOpencodexHealthz({ healthy: true } as never)).toBe(false);
+    expect(isCodexCommanderHealthz(null)).toBe(false);
+    expect(isCodexCommanderHealthz({ status: "ok" })).toBe(false);
+    expect(isCodexCommanderHealthz({ service: "something-else", status: "ok", version: "1", uptime: 1 })).toBe(false);
+    expect(isCodexCommanderHealthz({ healthy: true } as never)).toBe(false);
   });
 });
 
@@ -61,6 +57,13 @@ describe("proxyIdentityAt", () => {
     expect(await proxyIdentityAt(10100, {}, { fetchFn: (async () => healthz(OURS, 503)) as typeof fetch })).toBeNull();
     expect(await proxyIdentityAt(10100, { expectedPid: 1 }, { fetchFn: (async () => healthz(OURS)) as typeof fetch })).toBeNull();
     expect(await proxyIdentityAt(10100, {}, { fetchFn: (async () => { throw new Error("refused"); }) as typeof fetch })).toBeNull();
+  });
+
+  test("rejects an identity body without a current process pid", async () => {
+    const { pid: _pid, ...pidless } = OURS;
+    expect(await proxyIdentityAt(10100, {}, {
+      fetchFn: (async () => healthz(pidless)) as typeof fetch,
+    })).toBeNull();
   });
 
   test("retries transport failures and succeeds on a later attempt (#764)", async () => {
@@ -185,19 +188,19 @@ describe("findLiveProxy", () => {
     expect(urls).toEqual(["http://[::1]:58195/healthz"]);
   });
 
-  test("an orphaned record backed by a pidless legacy proxy yields pid null (never a killable stale pid)", async () => {
-    const legacyBody = { status: "ok", version: "2.6.16", uptime: 5 }; // pre-identity healthz: no pid
+  test("ignores a retired runtime hint without a pid", async () => {
     const live = await findLiveProxy({
       readPidFn: () => null,
-      readRuntimeFn: () => ({ pid: 1111, port: 58195, hostname: undefined }),
+      readRuntimeFn: () => ({ port: 58195 }),
       configFn: () => ({ port: 10100 }),
-      fetchFn: (async (url: string | URL | Request) =>
-        String(url).includes("58195") ? healthz(legacyBody) : healthz({ status: "ok" })) as typeof fetch,
+      verifyPidFn: candidate => candidate,
+      fetchFn: (async (url: string | URL | Request) => {
+        if (String(url).includes("58195")) throw new Error("retired hint must not be probed");
+        return healthz(OURS);
+      }) as typeof fetch,
     });
 
-    // The record's pid 1111 may be dead/reused — synthesizing it would let `ocx stop`
-    // kill an unrelated process via the taskkill/kill fallback.
-    expect(live).toEqual({ pid: null, port: 58195, hostname: undefined, source: "runtime" });
+    expect(live).toEqual({ pid: 4242, port: 10100, source: "config" });
   });
 
   test("an orphaned record whose healthz pid mismatches is rejected (config fallback still runs)", async () => {
@@ -225,49 +228,6 @@ describe("findLiveProxy", () => {
     expect(live).toEqual({ pid: null, port: 58195, source: "config" });
   });
 
-  test("a pidless legacy healthz never promotes an unverified cheap pid to a kill target", async () => {
-    const legacyBody = { status: "ok", version: "2.6.16", uptime: 5 }; // no pid in body
-    const live = await findLiveProxy({
-      readPidFn: () => 1111, // cheap discovery says alive — but identity is unverified
-      verifyPidFn: () => null, // full cmdline identity check fails (reused pid)
-      readRuntimeFn: () => ({ port: 58195 }),
-      configFn: () => ({ port: 10100 }),
-      fetchFn: (async () => healthz(legacyBody)) as typeof fetch,
-    });
-
-    expect(live).toEqual({ pid: null, port: 58195, hostname: undefined, source: "runtime" });
-  });
-
-  test("a pidless legacy healthz returns the cheap pid once full identity verification echoes it", async () => {
-    const legacyBody = { status: "ok", version: "2.6.16", uptime: 5 };
-    const verified: number[] = [];
-    const live = await findLiveProxy({
-      readPidFn: () => 1111,
-      verifyPidFn: candidate => {
-        verified.push(candidate);
-        return candidate; // identity confirmed for the exact candidate
-      },
-      readRuntimeFn: () => ({ port: 58195 }),
-      configFn: () => ({ port: 10100 }),
-      fetchFn: (async () => healthz(legacyBody)) as typeof fetch,
-    });
-
-    expect(verified).toEqual([1111]);
-    expect(live).toEqual({ pid: 1111, port: 58195, hostname: undefined, source: "runtime" });
-  });
-
-  test("a verifier answering with a DIFFERENT pid than the candidate is rejected (TOCTOU guard)", async () => {
-    const legacyBody = { status: "ok", version: "2.6.16", uptime: 5 };
-    const live = await findLiveProxy({
-      readPidFn: () => 1111,
-      verifyPidFn: () => 2222, // pidfile rewritten between discovery and verification
-      readRuntimeFn: () => ({ port: 58195 }),
-      configFn: () => ({ port: 10100 }),
-      fetchFn: (async () => healthz(legacyBody)) as typeof fetch,
-    });
-
-    expect(live).toEqual({ pid: null, port: 58195, hostname: undefined, source: "runtime" });
-  });
 });
 
 // ── findLiveProxy single-deadline candidate gating ───────────────────────────
@@ -523,11 +483,16 @@ describe("runStartupReadinessSync", () => {
 
 // ── validateReadyzBody: strict contract (pure) ─────────────────────────────────
 
-const VALID_BODY = { service: "opencodex", version: "2.6.17", uptime: 12, pid: 4242, port: 10100, status: "ready" as const };
+const VALID_BODY = { service: "codexcommander", version: "0.1.0", uptime: 12, pid: 4242, port: 10100, status: "ready" as const };
 
 describe("validateReadyzBody strict contract", () => {
   test("accepts a well-formed ready body and echoes the sanitized fields", () => {
     expect(validateReadyzBody(VALID_BODY, 10100)).toEqual({ ready: true, status: "ready", pid: 4242, port: 10100 });
+  });
+
+  test("accepts the canonical codexcommander service marker", () => {
+    expect(validateReadyzBody({ ...VALID_BODY, service: "codexcommander" }, 10100))
+      .toEqual({ ready: true, status: "ready", pid: 4242, port: 10100 });
   });
 
   test("accepts pending/failed bodies as not-ready with the same fixed status", () => {
@@ -539,12 +504,12 @@ describe("validateReadyzBody strict contract", () => {
     expect(validateReadyzBody({ ...VALID_BODY, service: "other-app" }, 10100)).toBeNull();
   });
 
-  test("rejects a legacy health-only body (status ok, no service marker)", () => {
+  test("rejects a health-only body without a service marker", () => {
     expect(validateReadyzBody({ status: "ok", version: "2.6.16", uptime: 5, pid: 4242, port: 10100 }, 10100)).toBeNull();
   });
 
   test("rejects missing version", () => {
-    expect(validateReadyzBody({ service: "opencodex", uptime: 1, pid: 4242, port: 10100, status: "ready" }, 10100)).toBeNull();
+    expect(validateReadyzBody({ service: "codexcommander", uptime: 1, pid: 4242, port: 10100, status: "ready" }, 10100)).toBeNull();
   });
 
   test("rejects empty-string version", () => {
@@ -556,7 +521,7 @@ describe("validateReadyzBody strict contract", () => {
   });
 
   test("rejects missing pid", () => {
-    expect(validateReadyzBody({ service: "opencodex", version: "v", uptime: 1, port: 10100, status: "ready" }, 10100)).toBeNull();
+    expect(validateReadyzBody({ service: "codexcommander", version: "v", uptime: 1, port: 10100, status: "ready" }, 10100)).toBeNull();
   });
 
   test("rejects non-integer / non-positive pid", () => {
@@ -567,7 +532,7 @@ describe("validateReadyzBody strict contract", () => {
   });
 
   test("rejects missing port", () => {
-    expect(validateReadyzBody({ service: "opencodex", version: "v", uptime: 1, pid: 4242, status: "ready" }, 10100)).toBeNull();
+    expect(validateReadyzBody({ service: "codexcommander", version: "v", uptime: 1, pid: 4242, status: "ready" }, 10100)).toBeNull();
   });
 
   test("rejects out-of-range / non-integer port", () => {
@@ -588,7 +553,7 @@ describe("validateReadyzBody strict contract", () => {
   });
 
   test("rejects missing/malformed status (not a fixed enum value)", () => {
-    expect(validateReadyzBody({ service: "opencodex", version: "v", uptime: 1, pid: 4242, port: 10100 }, 10100)).toBeNull();
+    expect(validateReadyzBody({ service: "codexcommander", version: "v", uptime: 1, pid: 4242, port: 10100 }, 10100)).toBeNull();
     expect(validateReadyzBody({ ...VALID_BODY, status: "ok" }, 10100)).toBeNull();
     expect(validateReadyzBody({ ...VALID_BODY, status: "READY" }, 10100)).toBeNull();
     expect(validateReadyzBody({ ...VALID_BODY, status: 1 }, 10100)).toBeNull();
@@ -608,7 +573,7 @@ describe("validateReadyzBody strict contract", () => {
 
   test("non-object / null bodies are rejected", () => {
     expect(validateReadyzBody(null, 10100)).toBeNull();
-    expect(validateReadyzBody("opencodex", 10100)).toBeNull();
+    expect(validateReadyzBody("codexcommander", 10100)).toBeNull();
     expect(validateReadyzBody(undefined, 10100)).toBeNull();
   });
 });
@@ -619,9 +584,9 @@ function readyz(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-const READY_BODY = { service: "opencodex", version: "2.6.17", uptime: 12, pid: 4242, port: 10100, status: "ready" };
-const PENDING_BODY = { service: "opencodex", version: "2.6.17", uptime: 1, pid: 4242, port: 10100, status: "pending" };
-const FAILED_BODY = { service: "opencodex", version: "2.6.17", uptime: 1, pid: 4242, port: 10100, status: "failed" };
+const READY_BODY = { service: "codexcommander", version: "0.1.0", uptime: 12, pid: 4242, port: 10100, status: "ready" };
+const PENDING_BODY = { service: "codexcommander", version: "0.1.0", uptime: 1, pid: 4242, port: 10100, status: "pending" };
+const FAILED_BODY = { service: "codexcommander", version: "0.1.0", uptime: 1, pid: 4242, port: 10100, status: "failed" };
 
 describe("probeReadiness happy path", () => {
   test("accepts a correct 200 + ready body", async () => {
@@ -663,7 +628,7 @@ describe("probeReadiness adversarial contract (never counts ready)", () => {
     expect(probe).toBeNull();
   });
 
-  test("rejects a legacy health-only body (status ok, no service marker)", async () => {
+  test("rejects a health-only body without a service marker", async () => {
     const probe = await probeReadiness(10100, {}, {
       fetchFn: (async () => readyz({ status: "ok", version: "2.6.16", uptime: 5, pid: 4242, port: 10100 }, 200)) as typeof fetch,
     });
@@ -672,21 +637,21 @@ describe("probeReadiness adversarial contract (never counts ready)", () => {
 
   test("rejects a body missing version", async () => {
     const probe = await probeReadiness(10100, {}, {
-      fetchFn: (async () => readyz({ service: "opencodex", uptime: 1, pid: 4242, port: 10100, status: "ready" }, 200)) as typeof fetch,
+      fetchFn: (async () => readyz({ service: "codexcommander", uptime: 1, pid: 4242, port: 10100, status: "ready" }, 200)) as typeof fetch,
     });
     expect(probe).toBeNull();
   });
 
   test("rejects a body missing pid", async () => {
     const probe = await probeReadiness(10100, {}, {
-      fetchFn: (async () => readyz({ service: "opencodex", version: "v", uptime: 1, port: 10100, status: "ready" }, 200)) as typeof fetch,
+      fetchFn: (async () => readyz({ service: "codexcommander", version: "v", uptime: 1, port: 10100, status: "ready" }, 200)) as typeof fetch,
     });
     expect(probe).toBeNull();
   });
 
   test("rejects a body missing port", async () => {
     const probe = await probeReadiness(10100, {}, {
-      fetchFn: (async () => readyz({ service: "opencodex", version: "v", uptime: 1, pid: 4242, status: "ready" }, 200)) as typeof fetch,
+      fetchFn: (async () => readyz({ service: "codexcommander", version: "v", uptime: 1, pid: 4242, status: "ready" }, 200)) as typeof fetch,
     });
     expect(probe).toBeNull();
   });

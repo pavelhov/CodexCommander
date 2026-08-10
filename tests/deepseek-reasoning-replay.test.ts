@@ -4,14 +4,14 @@
  * assistant message), but the passthrough serializer blanked reasoning `content`
  * for EVERY provider — a rule only the ChatGPT native backend needs. Providers
  * flagged `preserveResponsesReasoningContent` now keep valid replay content while
- * still stripping proxy-minted `ocxr1` envelopes no upstream can decrypt.
+ * still stripping proxy-minted `ccxr1` envelopes no upstream can decrypt.
  */
 import { describe, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction, sanitizeReasoningInputContent } from "../src/adapters/openai-responses";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
-import { OCX_REASONING_PREFIX } from "../src/responses/reasoning-envelope";
-import type { OcxProviderConfig } from "../src/types";
+import { CCX_REASONING_PREFIX } from "../src/responses/reasoning-envelope";
+import type { CodexCommanderProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
@@ -39,15 +39,15 @@ describe("sanitizeReasoningInputContent scoping", () => {
     expect(out[0]!.content).toEqual([{ type: "reasoning_text", text: "think step by step" }]);
   });
 
-  test("preservation still strips an ocxr1 envelope but keeps the plaintext content", () => {
-    const item = reasoningItem({ encrypted_content: `${OCX_REASONING_PREFIX}Zm9v` });
+  test("preservation still strips an ccxr1 envelope but keeps the plaintext content", () => {
+    const item = reasoningItem({ encrypted_content: `${CCX_REASONING_PREFIX}Zm9v` });
     const out = inputOf(sanitizeReasoningInputContent({ model: "m", input: [item] }, { preserveRawReasoningContent: true }));
     expect("encrypted_content" in out[0]!).toBe(false);
     expect(out[0]!.content).toEqual([{ type: "reasoning_text", text: "think step by step" }]);
   });
 
   test("default behavior strips the envelope AND blanks content", () => {
-    const item = reasoningItem({ encrypted_content: `${OCX_REASONING_PREFIX}Zm9v` });
+    const item = reasoningItem({ encrypted_content: `${CCX_REASONING_PREFIX}Zm9v` });
     const out = inputOf(sanitizeReasoningInputContent({ model: "m", input: [item] }));
     expect("encrypted_content" in out[0]!).toBe(false);
     expect(out[0]!.content).toEqual([]);
@@ -55,7 +55,7 @@ describe("sanitizeReasoningInputContent scoping", () => {
 });
 
 describe("DeepSeek Responses replay keeps reasoning on the wire", () => {
-  function buildBody(provider: OcxProviderConfig): Record<string, unknown> {
+  function buildBody(provider: CodexCommanderProviderConfig): Record<string, unknown> {
     const built = createResponsesPassthroughAdapter(provider).buildRequest({
       modelId: "deepseek-v4-flash",
       context: { messages: [] },

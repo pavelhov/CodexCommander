@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { buildWinswXml, ensureWinswBinary, parseWinswStatus, probeScmRegistration, sha256Hex, installWinswService, statusWinswRaw, WINSW_SHA256, WINSW_SERVICE_ID } from "../src/lib/winsw";
-import { parseServiceArgs, serviceInstallArgs, serviceReinstallArgs } from "../src/service";
+import { buildWinswXml, ensureWinswBinary, parseWinswStatus, probeScmRegistration, sha256Hex, installWinswService, statusWinswRaw, winswScmDefinitionOwned, WINSW_SHA256, WINSW_SERVICE_ID } from "../src/lib/winsw";
+import { parseServiceArgs, serviceInstallArgs, serviceRepairArgs } from "../src/service";
 import { loadServiceTokenFromFile } from "../src/lib/service-secrets";
 import { getConfigDir } from "../src/config";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const entry = { bun: "C:\\OpenCodex\\bun.exe", bunRuntimeSource: "bundled" as const, cli: "C:\\Open Codex\\cli & co\\index.ts" };
+const entry = { bun: "C:\\CodexCommander\\bun.exe", bunRuntimeSource: "bundled" as const, cli: "C:\\Codex Commander\\cli & co\\index.ts" };
 
 function winswEnvValue(xml: string, name: string): string | null {
   const match = xml.match(new RegExp(`<env name="${name}" value="([^"]*)"/>`));
@@ -35,30 +35,30 @@ describe("winsw xml", () => {
     expect(xml.toLowerCase()).not.toContain("localsystem");
   });
 
-  test("carries service env: OCX_SERVICE, token file pointer, and escaped PATH parity", () => {
+  test("carries canonical service env, token file pointer, and escaped PATH parity", () => {
     const xml = buildWinswXml(entry, {
       ...env,
       KIMI_CODE_HOME: "C:\\Users\\jun\\.kimi-code & profile",
       GROK_HOME: '  C:\\Users\\jun\\.grok & "profile" <x>  ',
     });
 
-    expect(xml).toContain('<env name="OCX_SERVICE" value="1"/>');
-    expect(xml).toContain('<env name="OCX_API_TOKEN_FILE"');
+    expect(xml).toContain('<env name="CCX_SERVICE" value="1"/>');
+    expect(xml).toContain('<env name="CCX_API_TOKEN_FILE"');
     expect(xml).toContain('<env name="PATH" value="C:\\bin;C:\\tools &amp; more"/>');
-    expect(winswEnvValue(xml, "OPENCODEX_HOME")).toBe(getConfigDir());
+    expect(winswEnvValue(xml, "CODEXCOMMANDER_HOME")).toBe(getConfigDir());
     expect(winswEnvValue(xml, "KIMI_CODE_HOME")).toBe("C:\\Users\\jun\\.kimi-code & profile");
     expect(winswEnvValue(xml, "GROK_HOME")).toBe('C:\\Users\\jun\\.grok & "profile" <x>');
     // Token VALUES never land in the XML — only file pointers / non-secret budgets.
-    expect(xml).not.toContain("OPENCODEX_API_AUTH_TOKEN");
-    expect(xml).not.toContain("OPENCODEX_ADMIN_AUTH_TOKEN");
+    expect(xml).not.toContain("CODEXCOMMANDER_API_AUTH_TOKEN");
+    expect(xml).not.toContain("CODEXCOMMANDER_ADMIN_AUTH_TOKEN");
   });
 
   test("carries the Bun provenance paired with the executable it baked (#848)", () => {
-    expect(buildWinswXml(entry, env)).toContain('<env name="OCX_BUN_RUNTIME_SOURCE" value="bundled"/>');
+    expect(buildWinswXml(entry, env)).toContain('<env name="CCX_BUN_RUNTIME_SOURCE" value="bundled"/>');
     // The marker follows the entry, so an override-baked service says override.
     const overrideEntry = { ...entry, bun: "C:\\Custom\\bun.exe", bunRuntimeSource: "override" as const };
     const overrideXml = buildWinswXml(overrideEntry, env);
-    expect(overrideXml).toContain('<env name="OCX_BUN_RUNTIME_SOURCE" value="override"/>');
+    expect(overrideXml).toContain('<env name="CCX_BUN_RUNTIME_SOURCE" value="override"/>');
     expect(overrideXml).toContain("<executable>C:\\Custom\\bun.exe</executable>");
   });
 
@@ -71,15 +71,15 @@ describe("winsw xml", () => {
   test("bakes install-time ACL timeout and never embeds the admin token (#764)", () => {
     const xml = buildWinswXml(entry, {
       ...env,
-      OPENCODEX_API_AUTH_TOKEN: "api-secret-value",
-      OPENCODEX_ADMIN_AUTH_TOKEN: "admin-secret & more",
-      OPENCODEX_ACL_TIMEOUT_MS: "10000",
+      CODEXCOMMANDER_API_AUTH_TOKEN: "api-secret-value",
+      CODEXCOMMANDER_ADMIN_AUTH_TOKEN: "admin-secret & more",
+      CODEXCOMMANDER_ACL_TIMEOUT_MS: "10000",
     });
 
-    expect(xml).toContain('<env name="OPENCODEX_ACL_TIMEOUT_MS" value="10000"/>');
-    expect(winswEnvValue(xml, "OPENCODEX_HOME")).toBe(getConfigDir());
-    expect(xml).not.toContain("OPENCODEX_ADMIN_AUTH_TOKEN");
-    expect(xml).not.toContain("OPENCODEX_API_AUTH_TOKEN");
+    expect(xml).toContain('<env name="CODEXCOMMANDER_ACL_TIMEOUT_MS" value="10000"/>');
+    expect(winswEnvValue(xml, "CODEXCOMMANDER_HOME")).toBe(getConfigDir());
+    expect(xml).not.toContain("CODEXCOMMANDER_ADMIN_AUTH_TOKEN");
+    expect(xml).not.toContain("CODEXCOMMANDER_API_AUTH_TOKEN");
     expect(xml).not.toContain("admin-secret");
     expect(xml).not.toContain("api-secret-value");
   });
@@ -87,15 +87,15 @@ describe("winsw xml", () => {
   test("escapes executable/arguments and configures restart + graceful stop", () => {
     const xml = buildWinswXml(entry, env);
 
-    expect(xml).toContain("<executable>C:\\OpenCodex\\bun.exe</executable>");
-    expect(xml).toContain("<arguments>&quot;C:\\Open Codex\\cli &amp; co\\index.ts&quot; start --port 10100</arguments>");
+    expect(xml).toContain("<executable>C:\\CodexCommander\\bun.exe</executable>");
+    expect(xml).toContain("<arguments>&quot;C:\\Codex Commander\\cli &amp; co\\index.ts&quot; start --port 10100</arguments>");
     expect(xml).toContain('<onfailure action="restart" delay="5 sec"/>');
     expect(xml).toContain("<stoptimeout>20 sec</stoptimeout>");
     expect(xml).toContain('<log mode="roll-by-size">');
     expect(xml).toContain(`<id>${WINSW_SERVICE_ID}</id>`);
   });
-  test("honors OCX_BAKE_PORT when building WinSW arguments", () => {
-    const xml = buildWinswXml(entry, { ...env, OCX_BAKE_PORT: "14444" });
+  test("honors CCX_BAKE_PORT when building WinSW arguments", () => {
+    const xml = buildWinswXml(entry, { ...env, CCX_BAKE_PORT: "14444" });
     expect(xml).toContain("start --port 14444");
   });
 });
@@ -130,6 +130,13 @@ describe("winsw status parsing", () => {
 });
 
 describe("winsw fail-closed lifecycle", () => {
+  test("SCM ownership requires the exact current WinSW executable", () => {
+    const exe = "C:\\Users\\me\\.codexcommander\\winsw\\codexcommander-native.exe";
+    expect(winswScmDefinitionOwned(`BINARY_PATH_NAME   : "${exe}"`, exe)).toBeTrue();
+    expect(winswScmDefinitionOwned("BINARY_PATH_NAME   : C:\\other\\foreign.exe", exe)).toBeFalse();
+    expect(winswScmDefinitionOwned("SERVICE_START_NAME : LocalSystem", exe)).toBeFalse();
+  });
+
   test("install refuses to guess when the status query fails", async () => {
     await expect(
       installWinswService(entry, {
@@ -230,11 +237,12 @@ describe("winsw install flow", () => {
       interactive: args => { calls.push(["interactive", ...args]); },
       run: args => { calls.push(["run", ...args]); return ""; },
       verifyAccount: () => { calls.push(["verify"]); },
+      assertScmOwnership: () => { calls.push(["ownership"]); },
       status: () => "stopped",
     });
 
     // Uses stopwait (not stop) so the service fully stops before start — avoids STOP_PENDING race.
-    expect(calls).toEqual([["xml"], ["run", "stopwait"], ["run", "start"]]);
+    expect(calls).toEqual([["ownership"], ["xml"], ["run", "stopwait"], ["run", "start"]]);
   });
 });
 
@@ -266,7 +274,7 @@ describe("service refresh args", () => {
   // installed backend itself, so it is backend-agnostic AND needs no elevation on
   // Windows scheduler installs, where `install` always reaches `schtasks /create`.
   test("the update refresh uses repair, not a backend-specific install", () => {
-    expect(serviceReinstallArgs()).toEqual(["service", "repair"]);
+    expect(serviceRepairArgs()).toEqual(["service", "repair"]);
   });
 
   test("explicit installs still preserve the recorded backend", () => {
@@ -276,15 +284,15 @@ describe("service refresh args", () => {
 });
 
 describe("app-side service token loading", () => {
-  test("loads the token from OCX_API_TOKEN_FILE only when the env token is empty", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-token-"));
+  test("loads the token from CCX_API_TOKEN_FILE only when the env token is empty", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ccx-token-"));
     const file = join(dir, "service-api-token");
     writeFileSync(file, "  tok-123  \n");
     try {
-      expect(loadServiceTokenFromFile({ OCX_API_TOKEN_FILE: file })).toBe("tok-123");
-      expect(loadServiceTokenFromFile({ OCX_API_TOKEN_FILE: file, OPENCODEX_API_AUTH_TOKEN: "already" })).toBeNull();
+      expect(loadServiceTokenFromFile({ CCX_API_TOKEN_FILE: file })).toBe("tok-123");
+      expect(loadServiceTokenFromFile({ CCX_API_TOKEN_FILE: file, CODEXCOMMANDER_API_AUTH_TOKEN: "already" })).toBeNull();
       expect(loadServiceTokenFromFile({})).toBeNull();
-      expect(loadServiceTokenFromFile({ OCX_API_TOKEN_FILE: join(dir, "missing") })).toBeNull();
+      expect(loadServiceTokenFromFile({ CCX_API_TOKEN_FILE: join(dir, "missing") })).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

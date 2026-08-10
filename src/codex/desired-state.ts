@@ -1,31 +1,29 @@
 /**
- * Durable desired state for the native Codex integration.
+ * Durable desired state for native client integrations.
  *
- * The switch itself was never the hard part — `ocx restore` already returns Codex
+ * The switch itself was never the hard part — `ccx restore` already returns Codex
  * to its native path without stopping the proxy. What was missing is that the
- * decision did not survive: `ocx start` force-synced unconditionally, so an OFF
- * lasted exactly until the next start. That is the defect this module closes, and
- * it is the same one Grok's shipped toggle still has.
+ * decision did not survive: `ccx start` force-synced unconditionally, so an OFF
+ * lasted exactly until the next start. Codex and Grok now share the durable
+ * intent and startup-gate behavior in this module.
  *
- * ABSENT MEANS ON. A user who never touched a switch, a config written by an
- * older binary, and an explicit `true` are the same state, and none of them may
- * be read as "the user turned this off". Only an explicit `false` is OFF.
+ * ABSENT MEANS ON. This is the current sparse-schema contract: an untouched
+ * config, an empty integration map, and an explicit `true` all mean enabled.
+ * Only an explicit `false` is OFF.
  *
  * This module does NOT own linearization. The plan that predates
  * `src/codex/user-identity.ts` proposed a second per-home lock at
- * `tmpdir()/opencodex-native-locks/sha256(home).sqlite`; that keys on the home
+ * `tmpdir()/codexcommander-native-locks/sha256(home).sqlite`; that keys on the home
  * alone, carries no proof of effective user, and would collide or split
  * depending on the temp root. Convergence takes the write lock; this module only
  * records intent through the config coordinator.
- *
- * Design record: devlog/_plan/260803_codex_desktop_toggle/030_desired_state.md.
  */
 import { loadConfig, mutatePersistedConfig } from "../config";
-import type { OcxClientIntegrationsConfig, OcxConfig } from "../types";
+import type { CodexCommanderClientIntegrationsConfig, CodexCommanderConfig } from "../types";
 import { runStartupReadinessSync, type ReadinessGate, type SyncOutcomeLike } from "../server/readiness";
 
 /** Clients whose durable intent this module owns. */
-export type DurableIntentClientId = keyof OcxClientIntegrationsConfig;
+export type DurableIntentClientId = keyof CodexCommanderClientIntegrationsConfig;
 
 /** Injectable for tests; production passes the real sync. */
 /**
@@ -60,27 +58,23 @@ export type CodexDesiredStateResult =
  * point of admission is that one decision uses one set of bytes.
  */
 export function integrationEnabled(
-  config: Pick<OcxConfig, "clientIntegrations">,
+  config: Pick<CodexCommanderConfig, "clientIntegrations">,
   client: DurableIntentClientId,
 ): boolean {
   return config.clientIntegrations?.[client] !== false;
 }
 
-export function codexIntegrationEnabled(config: Pick<OcxConfig, "clientIntegrations">): boolean {
+export function codexIntegrationEnabled(config: Pick<CodexCommanderConfig, "clientIntegrations">): boolean {
   return integrationEnabled(config, "codex");
 }
 
 /** Whether a Codex sync is permitted for this admitted config snapshot. */
-export function shouldSyncCodexOnStart(config: Pick<OcxConfig, "clientIntegrations">): boolean {
+export function shouldSyncCodexOnStart(config: Pick<CodexCommanderConfig, "clientIntegrations">): boolean {
   return codexIntegrationEnabled(config);
 }
 
-/**
- * Grok's toggle SHIPPED without this, which is the bug: it strips the fence in
- * `~/.grok/config.toml` and records nothing, so the next `ocx start` calls
- * `syncGrokConfig` unconditionally and writes the fence straight back.
- */
-export function grokIntegrationEnabled(config: Pick<OcxConfig, "clientIntegrations">): boolean {
+/** Grok reads the same sparse durable-intent map as the other native clients. */
+export function grokIntegrationEnabled(config: Pick<CodexCommanderConfig, "clientIntegrations">): boolean {
   return integrationEnabled(config, "grok");
 }
 
@@ -148,7 +142,7 @@ export function setGrokIntegrationEnabled(enabled: boolean): CodexDesiredStateRe
 }
 
 /** Whether Claude Desktop's managed gateway profile is wanted. */
-export function claudeDesktopIntegrationEnabled(config: Pick<OcxConfig, "clientIntegrations">): boolean {
+export function claudeDesktopIntegrationEnabled(config: Pick<CodexCommanderConfig, "clientIntegrations">): boolean {
   return integrationEnabled(config, "claude-desktop");
 }
 
@@ -164,7 +158,7 @@ export function setClaudeDesktopIntegrationEnabled(enabled: boolean): CodexDesir
 /**
  * The startup gate, as a function rather than an `if` buried in `handleStart`.
  *
- * `ocx start` used to call `syncModelsToCodex(port).catch(() => {})`
+ * `ccx start` used to call `syncModelsToCodex(port).catch(() => {})`
  * unconditionally, which is exactly why turning Codex off lasted until the next
  * start: the restore worked, and then start put the routing straight back. It
  * lived inline in a 600-line startup function that opens sockets and installs
@@ -182,7 +176,7 @@ export function setClaudeDesktopIntegrationEnabled(enabled: boolean): CodexDesir
  */
 export async function syncCodexOnStartIfEnabled(
   port: number,
-  config: Pick<OcxConfig, "clientIntegrations">,
+  config: Pick<CodexCommanderConfig, "clientIntegrations">,
   sync: CodexStartupSync = defaultStartupSync,
   readinessGate?: ReadinessGate,
 ): Promise<{ ran: boolean; catalogWritten: boolean; cacheSynced: boolean }> {
@@ -216,7 +210,7 @@ async function defaultStartupSync(port: number): Promise<CodexStartupSyncOutcome
 /**
  * The Grok startup gate.
  *
- * Grok's toggle shipped and then `ocx start` called `syncGrokConfig`
+ * Grok's toggle shipped and then `ccx start` called `syncGrokConfig`
  * unconditionally, so switching Grok off lasted exactly one restart — the fence
  * came out of `~/.grok/config.toml` and the next start wrote it straight back.
  * Same defect as Codex had, in a different file.
@@ -225,6 +219,6 @@ async function defaultStartupSync(port: number): Promise<CodexStartupSyncOutcome
  * startup and its diagnostic is worth printing. This only answers whether to
  * attempt the sync at all.
  */
-export function shouldSyncGrokOnStart(config: Pick<OcxConfig, "clientIntegrations">): boolean {
+export function shouldSyncGrokOnStart(config: Pick<CodexCommanderConfig, "clientIntegrations">): boolean {
   return grokIntegrationEnabled(config);
 }

@@ -31,7 +31,7 @@ import type { WorkspaceItem } from "../provider-workspace/catalog";
 
 export default function Providers({ apiBase }: { apiBase: string }) {
   const t = useT();
-  const configCacheKey = `ocx.providers.config.v1:${apiBase}`;
+  const configCacheKey = `ccx.providers.config.v1:${apiBase}`;
   const [config, setConfig] = useState<ProvidersConfig | null>(
     () => readSessionListCache<ProvidersConfig>(configCacheKey),
   );
@@ -55,6 +55,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [modelsRefreshToken, setModelsRefreshToken] = useState(0);
   const [oauthTosPending, setOauthTosPending] = useState<{ provider: string; addAccount: boolean } | null>(null);
   const aliveRef = useRef(true);
+  // Fence provider-status reads that started before a newer local login result.
+  const oauthStatusRevisionRef = useRef(new Map<string, number>());
   // Which apiBase this instance has already bootstrapped. StrictMode double-invokes the mount
   // effect and its deferred load is deliberately uncancellable, so the guard lives here.
   const bootstrapKeyRef = useRef<string | null>(null);
@@ -200,6 +202,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   }, []);
   const { fetchConfig, fetchOauth, fetchProviderQuotas } = useProvidersFetch({
     apiBase, t, setConfig, setOauthProviders, setOauthStatus, notify,
+    oauthStatusRevisionRef,
     invalidateProviderQuotas,
     configCacheKey,
   });
@@ -228,10 +231,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       openai: {
         loggedIn: codexLoggedIn,
         ...(codexEmail ? { email: codexEmail } : {}),
-        ...(codexActiveNeedsReauth ? { needsReauth: true } : {}),
       },
     };
-  }, [oauthStatus, codexPool.accounts, codexPool.loadState, codexActiveNeedsReauth]);
+  }, [oauthStatus, codexPool.accounts, codexPool.loadState]);
 
   const pools = useProviderAccountPools({
     apiBase, t: t as unknown as Parameters<typeof useProviderAccountPools>[0]["t"],
@@ -276,6 +278,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const { cancelLoginOAuth, loginOAuth, logoutOAuth } = useProvidersOAuth({
     apiBase, t, aliveRef, accountSets,
     setBusy, setStatus, setLoginInfo, setOauthStatus, notify,
+    oauthStatusRevisionRef,
     fetchConfig, fetchOauth, fetchAccountSets, fetchProviderQuotas, bumpModelsRefresh,
   });
 
@@ -465,7 +468,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         onAdded={(name) => {
           setAdding(false);
           setAddIntent(null);
-          notify(t("prov.added", { name, cmd: "ocx sync" }), true);
+          notify(t("prov.added", { name, cmd: "ccx sync" }), true);
           fetchConfig();
           fetchOauth();
           fetchProviderQuotas(true);
@@ -478,7 +481,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         onCloseCodexLogin={() => setCodexLoginOpen(false)}
         onCodexAdded={() => {
           setCodexLoginOpen(false);
-          notify(t("prov.loginOk", { provider: formatProviderDisplayName("openai", t), cmd: "ocx sync" }), true);
+          notify(t("prov.loginOk", { provider: formatProviderDisplayName("openai", t), cmd: "ccx sync --restart-codex" }), true);
           void fetchConfig();
           void fetchOauth();
           void fetchProviderQuotas(true);

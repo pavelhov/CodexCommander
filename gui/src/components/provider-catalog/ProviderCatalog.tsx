@@ -16,7 +16,7 @@ import {
   type CatalogPreset,
 } from "./provider-presets";
 
-export type AccountLoginStatus = { loggedIn: boolean; email?: string; error?: string; needsReauth?: boolean };
+export type AccountLoginStatus = { loggedIn: boolean; email?: string; error?: string };
 export type AccountLoginRow = {
   id: string;
   label: string;

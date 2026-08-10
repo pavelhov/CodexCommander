@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "../src/adapters/openai-chat";
 import { routeModel } from "../src/router";
-import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { AdapterEvent, CodexCommanderConfig, CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createOpenAIChatAdapter = (...args: Parameters<typeof createOpenAIChatAdapterProduction>) =>
   withTestTranslatorBudget(createOpenAIChatAdapterProduction(...args));
 
-function parsed(): OcxParsedRequest {
+function parsed(): CodexCommanderParsedRequest {
   return {
     modelId: "test-model",
     context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
@@ -16,7 +16,7 @@ function parsed(): OcxParsedRequest {
   };
 }
 
-function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
+function provider(overrides: Partial<CodexCommanderProviderConfig> = {}): CodexCommanderProviderConfig {
   return {
     adapter: "openai-chat",
     baseUrl: "https://example.test/v1",
@@ -32,7 +32,7 @@ async function collect(stream: AsyncGenerator<AdapterEvent>): Promise<AdapterEve
   return events;
 }
 
-function routedProvider(name: "litellm" | "ollama", apiKey?: string): OcxProviderConfig {
+function routedProvider(name: "litellm" | "ollama", apiKey?: string): CodexCommanderProviderConfig {
   const config = {
     port: 10100,
     defaultProvider: name,
@@ -44,7 +44,7 @@ function routedProvider(name: "litellm" | "ollama", apiKey?: string): OcxProvide
         ...(apiKey !== undefined ? { apiKey } : {}),
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
   return routeModel(config, `${name}/test-model`).provider;
 }
 
@@ -240,7 +240,7 @@ describe("openai-chat credential hardening", () => {
       ["kimi", "oauth"],
       ["kimi-code", "key"],
     ] as const) {
-      const config: OcxConfig = {
+      const config: CodexCommanderConfig = {
         port: 10100,
         defaultProvider: providerName,
         providers: {
@@ -267,7 +267,7 @@ describe("openai-chat credential hardening", () => {
   });
 
   test("an explicit Kimi promptCacheKey false remains an opt-out", () => {
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "kimi",
       providers: {
@@ -337,7 +337,7 @@ describe("openai-chat max output defaults", () => {
         ["k3-256k", "k3-256k"],
         ["kimi-k2.7-code", "kimi-k2.7-code"],
       ] as const) {
-        const config: OcxConfig = {
+        const config: CodexCommanderConfig = {
           port: 10100,
           defaultProvider: providerName,
           providers: {

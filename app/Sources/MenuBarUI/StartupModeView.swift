@@ -27,7 +27,7 @@ public final class StartupModeView: NSView {
         toggle.controlSize = .small
         toggle.target = self
         toggle.action = #selector(toggleChanged)
-        toggle.setAccessibilityLabel("Launch OpenCodex at login")
+        toggle.setAccessibilityLabel("Launch CodexCommander at login")
 
         settingsButton.title = "Open Settings"
         settingsButton.image = NSImage(
@@ -65,7 +65,7 @@ public final class StartupModeView: NSView {
 
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
-        setAccessibilityLabel("OpenCodex startup mode")
+        setAccessibilityLabel("CodexCommander startup mode")
     }
 
     public required init?(coder: NSCoder) { nil }
@@ -87,7 +87,7 @@ public final class StartupModeView: NSView {
         )
         detail.stringValue = presentation.errorMessage ?? summary
         detail.textColor = presentation.errorMessage == nil ? Theme.faint : Theme.red
-        setAccessibilityLabel("OpenCodex startup mode, \(summary)")
+        setAccessibilityLabel("CodexCommander startup mode, \(summary)")
         applying = false
     }
 

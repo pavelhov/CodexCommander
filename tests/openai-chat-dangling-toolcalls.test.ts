@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
-import type { OcxMessage, OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderMessage, CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 
-// 260718 dangling tool_calls hardening (devlog/_plan/260718_dangling_toolcall_hardening):
+// 260718 dangling tool_calls hardening (implementation contract):
 // strict chat providers (Kimi/Moonshot) 400 unless every assistant tool_call is answered
 // immediately by role:"tool" messages. These tests drive the repair branches for real
 // (defer + reattach + last-resort synthesize) and assert the wire-level invariants.
 
-const provider: OcxProviderConfig = {
+const provider: CodexCommanderProviderConfig = {
   adapter: "openai-chat",
   baseUrl: "https://example.test/v1",
   apiKey: "sk-test",
@@ -21,8 +21,8 @@ interface ChatMsg {
   tool_call_id?: string;
 }
 
-function wire(messages: OcxMessage[]): ChatMsg[] {
-  const parsed: OcxParsedRequest = {
+function wire(messages: CodexCommanderMessage[]): ChatMsg[] {
+  const parsed: CodexCommanderParsedRequest = {
     modelId: "test-model",
     context: { messages },
     stream: false,
@@ -32,15 +32,15 @@ function wire(messages: OcxMessage[]): ChatMsg[] {
   return (JSON.parse(req.body) as { messages: ChatMsg[] }).messages;
 }
 
-function user(text: string): OcxMessage {
+function user(text: string): CodexCommanderMessage {
   return { role: "user", content: text, timestamp: 0 };
 }
 
-function developer(text: string): OcxMessage {
+function developer(text: string): CodexCommanderMessage {
   return { role: "developer", content: text, timestamp: 0 };
 }
 
-function assistantWithCalls(calls: { id: string; name: string }[], text = ""): OcxMessage {
+function assistantWithCalls(calls: { id: string; name: string }[], text = ""): CodexCommanderMessage {
   return {
     role: "assistant",
     content: [
@@ -51,7 +51,7 @@ function assistantWithCalls(calls: { id: string; name: string }[], text = ""): O
   };
 }
 
-function toolResult(callId: string, name: string, output = "ok"): OcxMessage {
+function toolResult(callId: string, name: string, output = "ok"): CodexCommanderMessage {
   return { role: "toolResult", toolCallId: callId, toolName: name, content: output, isError: false, timestamp: 0 };
 }
 
@@ -211,7 +211,7 @@ describe("openai-chat dangling tool_calls hardening", () => {
     assertWireInvariants(messages);
     const aIdx = messages.findIndex(m => m.role === "assistant");
     const minted = messages[aIdx].tool_calls?.[0].id ?? "";
-    expect(minted).toMatch(/^call_ocx_minted_\d+$/);
+    expect(minted).toMatch(/^call_ccx_minted_\d+$/);
     expect(messages[aIdx + 1].tool_call_id).toBe(minted);
   });
 

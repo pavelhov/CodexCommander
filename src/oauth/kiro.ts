@@ -5,7 +5,7 @@
  * asks kiro-cli to switch identities in its supported browser flow, then imports that fresh session.
  *
  * Ported from jawcode packages/ai/src/providers/kiro.ts (readKiroCliSqlite, refreshKiroDesktopToken).
- * profileArn/region/client registration are persisted per OCX account so switching the account pool
+ * profileArn/region/client registration are persisted per CodexCommander account so switching the account pool
  * never combines one account's access token with another account's local Kiro profile metadata.
  */
 import type { KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./types";
@@ -27,7 +27,6 @@ import {
   type KiroImportDiagnostic,
 } from "./kiro-credentials";
 import { homedir } from "node:os";
-import { getAccountSet, saveAccountCredential } from "./store";
 
 const DEFAULT_REGION = "us-east-1";
 const REFRESH_URL = "https://prod.{region}.auth.desktop.kiro.dev/refreshToken";
@@ -104,7 +103,7 @@ function logoutKiroCliBestEffort(): void {
   }
 }
 
-/** Settle the external CLI side of a forced login after OCX credential persistence resolves. */
+/** Settle the external CLI side of a forced login after CodexCommander credential persistence resolves. */
 export function settleKiroLoginTransaction(credential: OAuthCredentials, persisted: boolean): void {
   const snapshot = pendingKiroLoginTransactions.get(credential);
   const emptyPrior = pendingKiroEmptyPriorSessions.has(credential);
@@ -236,40 +235,6 @@ export function environmentKiroRoutingMetadata(): Pick<KiroOAuthMetadata, "profi
   };
 }
 
-/**
- * Before Add-account switches the external CLI identity, bind any matching legacy identity-less
- * OCX row to the current CLI session. Unmatched identity-less rows are left alone here so a
- * cancelled browser login cannot destroy the only stored credential; after a successful add they
- * remain selectable but cannot borrow the new CLI identity (and reauth refuses identity-less slots).
- */
-async function bindMatchingLegacyIdentitylessKiroAccounts(
-  runner: KiroCliRunner,
-  signal?: AbortSignal,
-): Promise<void> {
-  const set = getAccountSet("kiro");
-  if (!set) return;
-  const legacyAccounts = set.accounts.filter(
-    account => account.credential.accountId === undefined && account.credential.email === undefined,
-  );
-  if (legacyAccounts.length === 0) return;
-
-  let imported: ImportedKiroCredential | null = null;
-  try {
-    imported = readKiroCliSqliteCredential();
-  } catch {
-    imported = null;
-  }
-  if (!imported?.refresh) return;
-
-  for (const account of legacyAccounts) {
-    const refresh = account.credential.refresh;
-    if (!refresh || imported.refresh !== refresh) continue;
-    const bound = await oauthCredentialFromImported(imported, runner, signal);
-    if (!bound.accountId && !bound.email) continue;
-    await saveAccountCredential("kiro", account.id, bound);
-  }
-}
-
 async function oauthCredentialFromImported(
   imported: ImportedKiroCredential,
   runner: KiroCliRunner,
@@ -349,7 +314,7 @@ export async function loginKiro(ctrl: OAuthController, options: KiroLoginOptions
     const inspected = inspectKiroCliSessionSnapshot();
     if (inspected.blocked) {
       throw new Error(
-        "Kiro CLI session could not be backed up, so OCX will not sign it out. " +
+        "Kiro CLI session could not be backed up, so CodexCommander will not sign it out. " +
           "Repair or remove the unreadable kiro-cli credential database " +
           "(usually `~/.local/share/kiro-cli/data.sqlite3` or " +
           "`~/Library/Application Support/kiro-cli/data.sqlite3`, or " +
@@ -358,7 +323,6 @@ export async function loginKiro(ctrl: OAuthController, options: KiroLoginOptions
       );
     }
     const previousSession = inspected.snapshot;
-    await bindMatchingLegacyIdentitylessKiroAccounts(runner, ctrl.signal);
     if (previousSession) persistKiroCliSessionRecovery(previousSession);
     try {
       const logout = await runner(["logout"], ctrl.signal);
@@ -372,7 +336,7 @@ export async function loginKiro(ctrl: OAuthController, options: KiroLoginOptions
       const credential = await oauthCredentialFromImported(fresh, runner, ctrl.signal);
       throwIfKiroLoginCancelled(ctrl.signal);
       if (!credential.accountId && !credential.email) {
-        throw new Error("Kiro login completed but OCX could not determine a stable account identity.");
+        throw new Error("Kiro login completed but CodexCommander could not determine a stable account identity.");
       }
       if (previousSession) pendingKiroLoginTransactions.set(credential, previousSession);
       else pendingKiroEmptyPriorSessions.add(credential);
@@ -433,14 +397,14 @@ export async function loginKiro(ctrl: OAuthController, options: KiroLoginOptions
   );
 }
 
-/** Account metadata is authoritative; legacy accountless calls use KIRO_REGION → local import → default. */
+/** Account metadata is authoritative; accountless calls use KIRO_REGION → local import → default. */
 export function resolveKiroRegion(account?: KiroOAuthMetadata): string {
   if (account !== undefined) return normalizeKiroRegion(account.ssoRegion) || DEFAULT_REGION;
   if (process.env.KIRO_REGION !== undefined) return requireKiroRegion(process.env.KIRO_REGION);
   return normalizeKiroRegion(readImportedKiroCredential()?.ssoRegion) || DEFAULT_REGION;
 }
 
-/** Account metadata is authoritative; legacy accountless calls may use KIRO_API_REGION/local import. */
+/** Account metadata is authoritative; accountless calls may use KIRO_API_REGION/local import. */
 export function resolveKiroApiRegion(account?: Pick<KiroOAuthMetadata, "apiRegion" | "profileArn" | "ssoRegion">): string {
   if (account !== undefined) {
     return (
@@ -463,7 +427,7 @@ export function resolveKiroApiRegion(account?: Pick<KiroOAuthMetadata, "apiRegio
 
 /**
  * Resolve the CodeWhisperer profileArn for request-time use by the adapter.
- * Account metadata is authoritative. Legacy accountless calls use KIRO_PROFILE_ARN → local import.
+ * Account metadata is authoritative. Accountless calls use KIRO_PROFILE_ARN → local import.
  * Returns undefined if absent (the adapter decides whether that is fatal).
  */
 export function resolveKiroProfileArn(account?: Pick<KiroOAuthMetadata, "profileArn">): string | undefined {
@@ -525,11 +489,11 @@ async function refreshAwsSsoOidcToken(
     // belongs to whichever account kiro-cli is currently signed into.
     if (local?.refresh === refresh) metadata = metadataFromImported(local);
   }
-  // A stored OCX account with no usable `kiro` metadata must still refresh account-scoped: falling
+  // A stored CodexCommander account with no usable `kiro` metadata must still refresh account-scoped: falling
   // through to `resolveKiroRegion(undefined)` would read KIRO_REGION or the local CLI import and
   // borrow an unrelated account's region after a switch. Environment/manual credentials may still
   // honor explicit KIRO_* routing; other stored accounts pin an empty marker (default region).
-  // Only a truly accountless refresh (no stored credential) keeps the legacy env/local fallback.
+  // Only a truly accountless refresh (no stored credential) keeps the env/local fallback.
   if (!metadata && credential) {
     metadata = credential.source === "environment" || credential.source === "manual"
       ? environmentKiroRoutingMetadata() ?? {}
@@ -568,7 +532,7 @@ function matchingRotatedKiroCliCredential(
     if (!local.refresh || local.refresh === refresh) return undefined;
     return local;
   } catch {
-    // An unrelated or malformed local store must not block the stored OCX account.
+    // An unrelated or malformed local store must not block the stored CodexCommander account.
     return undefined;
   }
 }

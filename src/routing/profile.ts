@@ -6,9 +6,9 @@
 
 import { createHash } from "node:crypto";
 import type {
-  OcxConfig,
-  OcxRoutingProfileConfig,
-  OcxRoutingUnknownEvidenceMode,
+  CodexCommanderConfig,
+  CodexCommanderRoutingProfileConfig,
+  CodexCommanderRoutingUnknownEvidenceMode,
 } from "../types";
 import { codexAccountNamespaceEntries } from "../codex/account-namespaces";
 import { listComboIds, resolveComboId } from "../combos";
@@ -27,7 +27,7 @@ export const DEFAULT_PROFILE_WEIGHTS = {
   quota: 0.10,
 } as const;
 
-export const DEFAULT_UNKNOWN_EVIDENCE: Record<"capability" | "health" | "quota" | "cost", OcxRoutingUnknownEvidenceMode> = {
+export const DEFAULT_UNKNOWN_EVIDENCE: Record<"capability" | "health" | "quota" | "cost", CodexCommanderRoutingUnknownEvidenceMode> = {
   capability: "exclude",
   health: "penalize",
   quota: "penalize",
@@ -60,7 +60,7 @@ export interface NormalizedRoutingProfile {
   require: NormalizedRoutingProfileRequirements;
   optimize: { latency: number; health: number; cost: number; quota: number };
   limits: { maxEstimatedCostUsd?: number };
-  unknownEvidence: Record<"capability" | "health" | "quota" | "cost", OcxRoutingUnknownEvidenceMode>;
+  unknownEvidence: Record<"capability" | "health" | "quota" | "cost", CodexCommanderRoutingUnknownEvidenceMode>;
   revision: string;
 }
 
@@ -100,16 +100,20 @@ export function parsePolicyModelId(modelId: string): string | null {
 }
 
 /**
- * Resolve a client-requested model id to a policy profile id. The canonical
- * `policy/<id>` form wins first; otherwise an exact alias match.
+ * Resolve a client-requested public model id to a policy profile id. A configured
+ * alias is exclusive; `policy/<id>` is public only while that profile has no alias.
  */
 export function resolvePolicyProfileId(
-  config: { routingProfiles?: Record<string, OcxRoutingProfileConfig> },
+  config: { routingProfiles?: Record<string, CodexCommanderRoutingProfileConfig> },
   modelId: string,
 ): string | null {
-  const direct = parsePolicyModelId(modelId);
-  if (direct) return direct;
   const profiles = config.routingProfiles;
+  const direct = parsePolicyModelId(modelId);
+  if (direct) {
+    const raw = profiles && Object.hasOwn(profiles, direct) ? profiles[direct] : undefined;
+    const alias = typeof raw?.alias === "string" ? raw.alias.trim() : "";
+    return alias ? null : direct;
+  }
   if (!profiles) return null;
   for (const [id, raw] of Object.entries(profiles)) {
     if (!raw || typeof raw !== "object") continue;
@@ -122,7 +126,7 @@ export function resolvePolicyProfileId(
 function aliasIssues(
   id: string,
   alias: string,
-  config: Pick<OcxConfig, "providers" | "combos" | "routingProfiles" | "codexAccountNamespaces">,
+  config: Pick<CodexCommanderConfig, "providers" | "combos" | "routingProfiles" | "codexAccountNamespaces">,
   options: { excludeProfileId?: string } = {},
 ): RoutingProfileValidationIssue[] {
   const issues: RoutingProfileValidationIssue[] = [];
@@ -181,7 +185,7 @@ function aliasIssues(
 export function routingProfileIssues(
   id: string,
   raw: unknown,
-  config: Pick<OcxConfig, "providers" | "combos" | "routingProfiles" | "codexAccountNamespaces">,
+  config: Pick<CodexCommanderConfig, "providers" | "combos" | "routingProfiles" | "codexAccountNamespaces">,
   options: { excludeProfileId?: string } = {},
 ): RoutingProfileValidationIssue[] {
   const issues: RoutingProfileValidationIssue[] = [];
@@ -338,7 +342,7 @@ export function routingProfileIssues(
   return issues;
 }
 
-function normalizedRequirements(raw: OcxRoutingProfileConfig): NormalizedRoutingProfileRequirements {
+function normalizedRequirements(raw: CodexCommanderRoutingProfileConfig): NormalizedRoutingProfileRequirements {
   const require = raw.require;
   if (!require) return {};
   const out: NormalizedRoutingProfileRequirements = {};
@@ -351,7 +355,7 @@ function normalizedRequirements(raw: OcxRoutingProfileConfig): NormalizedRouting
   return out;
 }
 
-function normalizedUnknownEvidence(raw: OcxRoutingProfileConfig): NormalizedRoutingProfile["unknownEvidence"] {
+function normalizedUnknownEvidence(raw: CodexCommanderRoutingProfileConfig): NormalizedRoutingProfile["unknownEvidence"] {
   const configured = raw.unknownEvidence;
   const out = { ...DEFAULT_UNKNOWN_EVIDENCE };
   if (configured) {
@@ -378,7 +382,7 @@ function profileRevision(profile: Omit<NormalizedRoutingProfile, "revision">): s
   return digest.slice(0, 16);
 }
 
-export function normalizeRoutingProfile(id: string, raw: OcxRoutingProfileConfig): NormalizedRoutingProfile {
+export function normalizeRoutingProfile(id: string, raw: CodexCommanderRoutingProfileConfig): NormalizedRoutingProfile {
   const alias = typeof raw.alias === "string" ? raw.alias.trim() : "";
   const weights = { ...DEFAULT_PROFILE_WEIGHTS, ...(raw.optimize ?? {}) };
   const weightSum = weights.latency + weights.health + weights.cost + weights.quota;
@@ -408,7 +412,7 @@ export function normalizeRoutingProfile(id: string, raw: OcxRoutingProfileConfig
 }
 
 export function getRoutingProfile(
-  config: { routingProfiles?: Record<string, OcxRoutingProfileConfig> },
+  config: { routingProfiles?: Record<string, CodexCommanderRoutingProfileConfig> },
   id: string,
 ): NormalizedRoutingProfile | undefined {
   const profiles = config.routingProfiles;
@@ -416,7 +420,7 @@ export function getRoutingProfile(
   return normalizeRoutingProfile(id, profiles[id]!);
 }
 
-export function listRoutingProfileIds(config: { routingProfiles?: Record<string, OcxRoutingProfileConfig> }): string[] {
+export function listRoutingProfileIds(config: { routingProfiles?: Record<string, CodexCommanderRoutingProfileConfig> }): string[] {
   // Code-unit comparison: deterministic across ICU versions/platforms, which
   // matters for the API/CLI list contract (ids may contain ".", "_", "-").
   return Object.keys(config.routingProfiles ?? {}).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));

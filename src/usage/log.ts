@@ -3,10 +3,12 @@ import { join } from "node:path";
 import { getConfigDir } from "../config";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { usageDisplayTotalTokens } from "./totals";
-import type { OcxUsage } from "../types";
+import type { CodexCommanderUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
 
 export type UsageStatus = "reported" | "unreported" | "unsupported" | "estimated";
+export const USAGE_LOG_SCHEMA_VERSION = 1 as const;
+type UsageSurface = "codex" | "claude" | "claude-desktop" | "grok";
 
 /**
  * Recovery kinds recorded per attempt in the usage log; the GUI renders localized labels
@@ -34,7 +36,7 @@ export interface PersistedUsageAttempt {
   recoveryKinds: AttemptRecoveryKind[];
   usageStatus: UsageStatus;
   inputTokenEstimate?: number;
-  usage?: OcxUsage;
+  usage?: CodexCommanderUsage;
   totalTokens?: number;
   errorCode?: string;
   /** Target-specific reasoning intent and exact adapter-normalized wire parameter. */
@@ -49,7 +51,8 @@ export interface PersistedUsageEntry {
   timestamp: number;
   provider: string;
   model: string;
-  surface?: "claude" | "claude-desktop" | "grok";
+  /** Explicit client product. Every persisted row carries this; `codex` is not implicit. */
+  surface?: UsageSurface;
   /** Matched configured key id; absent for environment/loopback admissions and
    *  for every row written before attribution existed. */
   apiKeyId?: string;
@@ -77,10 +80,10 @@ export interface PersistedUsageEntry {
   /** TTFT relative to the request start (WP4); unset for non-streaming/tool-only. */
   firstOutputMs?: number;
   usageStatus: UsageStatus;
-  usage?: OcxUsage;
+  usage?: CodexCommanderUsage;
   totalTokens?: number;
   attempts?: PersistedUsageAttempt[];
-  // Failure diagnostics (devlog/_plan/260716_claudecode_hardening/030): persisted for
+  // Failure diagnostics (implementation contract): persisted for
   // status>=400 or non-completed terminals so incidents survive the in-memory ring buffer.
   errorCode?: string;
   terminalStatus?: string;
@@ -89,7 +92,7 @@ export interface PersistedUsageEntry {
   upstreamError?: string;
   /**
    * Bounded route-decision trace (RI-01): why this provider/model/account was
-   * selected. Additive field; old rows without it parse unchanged. Never
+   * selected. Optional on current rows that have no captured decision. Never
    * contains prompts, credentials, or hidden reasoning.
    */
   routeDecision?: RouteDecisionTraceV1;
@@ -97,21 +100,14 @@ export interface PersistedUsageEntry {
   upstreamRetryAfter?: string;
 }
 
-const KNOWN_USAGE_SURFACES = new Set<NonNullable<PersistedUsageEntry["surface"]>>([
-  "claude",
-  "claude-desktop",
-  "grok",
-]);
+const KNOWN_USAGE_SURFACES = new Set<UsageSurface>(["codex", "claude", "claude-desktop", "grok"]);
 
 /**
- * The serializer guard for `surface`. Two failure modes shaped this: a literal
- * whitelist ("claude" | "claude-desktop" only) silently dropped every NEW surface at
- * write time, while a plain truthy spread would persist junk values from hand-edited
- * logs. Membership in this set is the middle path: adding a surface here is one edit,
- * and unknown values are still dropped.
+ * Writer guard for the explicitly versioned persisted surface enum. Unknown values are
+ * never written, and readers reject rows that do not carry one of these values.
  */
-export function isKnownUsageSurface(value: unknown): value is NonNullable<PersistedUsageEntry["surface"]> {
-  return typeof value === "string" && KNOWN_USAGE_SURFACES.has(value as NonNullable<PersistedUsageEntry["surface"]>);
+export function isKnownUsageSurface(value: unknown): value is UsageSurface {
+  return typeof value === "string" && KNOWN_USAGE_SURFACES.has(value as UsageSurface);
 }
 
 const KNOWN_ADMISSION_KINDS = new Set<NonNullable<PersistedUsageEntry["admissionKind"]>>([
@@ -136,7 +132,7 @@ export function usageLogPath(): string {
   return join(getConfigDir(), "usage.jsonl");
 }
 
-export function usageTotalTokens(usage: OcxUsage | undefined): number | undefined {
+export function usageTotalTokens(usage: CodexCommanderUsage | undefined): number | undefined {
   return usageDisplayTotalTokens(usage);
 }
 
@@ -150,18 +146,23 @@ function isEstimatedUsageProvider(providerOrAdapter: string): boolean {
     || providerOrAdapter === "cursor" || providerOrAdapter.startsWith("cursor-");
 }
 
-export function usageForFinalLog(provider: string, usage: OcxUsage | undefined): OcxUsage | undefined {
+export function usageForFinalLog(provider: string, usage: CodexCommanderUsage | undefined): CodexCommanderUsage | undefined {
   if (!usage) return undefined;
-  if (usage.estimated || isEstimatedUsageProvider(provider)) return { ...usage, estimated: true };
-  return usage;
+  const { cachedInputTokens: _cachedInputTokens, ...current } = usage;
+  const cacheReadInputTokens = usage.cacheReadInputTokens ?? usage.cachedInputTokens;
+  return {
+    ...current,
+    ...(typeof cacheReadInputTokens === "number" ? { cacheReadInputTokens } : {}),
+    ...(usage.estimated || isEstimatedUsageProvider(provider) ? { estimated: true } : {}),
+  };
 }
 
-export function usageStatusForFinalLog(usage: OcxUsage | undefined): UsageStatus {
+export function usageStatusForFinalLog(usage: CodexCommanderUsage | undefined): UsageStatus {
   if (!usage) return "unreported";
   return usage.estimated ? "estimated" : "reported";
 }
 
-function normalizeUsageValue(usage: OcxUsage | undefined): OcxUsage | undefined {
+function normalizeUsageValue(usage: CodexCommanderUsage | undefined): CodexCommanderUsage | undefined {
   if (!usage) return undefined;
   return {
     inputTokens: usage.inputTokens,
@@ -174,8 +175,12 @@ function normalizeUsageValue(usage: OcxUsage | undefined): OcxUsage | undefined 
     // a checkpoint is not a per-request total and must never be summed across requests.
     ...(typeof usage.contextTotalTokens === "number" ? { contextTotalTokens: usage.contextTotalTokens } : {}),
     ...(typeof usage.totalTokens === "number" ? { totalTokens: usage.totalTokens } : {}),
-    ...(typeof usage.cachedInputTokens === "number" ? { cachedInputTokens: usage.cachedInputTokens } : {}),
-    ...(typeof usage.cacheReadInputTokens === "number" ? { cacheReadInputTokens: usage.cacheReadInputTokens } : {}),
+    // Provider adapters may expose their upstream field as `cachedInputTokens`.
+    // The persisted schema has exactly one cache-read field, so translate that
+    // current wire value at capture time rather than retaining a second ledger form.
+    ...(typeof (usage.cacheReadInputTokens ?? usage.cachedInputTokens) === "number"
+      ? { cacheReadInputTokens: usage.cacheReadInputTokens ?? usage.cachedInputTokens }
+      : {}),
     ...(typeof usage.cacheCreationInputTokens === "number" ? { cacheCreationInputTokens: usage.cacheCreationInputTokens } : {}),
     ...(typeof usage.reasoningOutputTokens === "number" ? { reasoningOutputTokens: usage.reasoningOutputTokens } : {}),
     ...(usage.estimated ? { estimated: true } : {}),
@@ -202,7 +207,7 @@ function isNonNegativeFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
-function normalizeAttemptUsage(raw: unknown): OcxUsage | null {
+function normalizeAttemptUsage(raw: unknown): CodexCommanderUsage | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const usage = raw as Record<string, unknown>;
   if (!isNonNegativeFiniteNumber(usage.inputTokens)
@@ -218,7 +223,7 @@ function normalizeAttemptUsage(raw: unknown): OcxUsage | null {
     if (key in usage && !isNonNegativeFiniteNumber(usage[key])) return null;
   }
   if ("estimated" in usage && typeof usage.estimated !== "boolean") return null;
-  return normalizeUsageValue(usage as unknown as OcxUsage) ?? null;
+  return normalizeUsageValue(usage as unknown as CodexCommanderUsage) ?? null;
 }
 
 function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
@@ -294,8 +299,7 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
 /**
  * Pairing rule for reasoning diagnostics, shared with the live request-log capture path:
  * a non-empty string, a non-negative finite number, or a boolean only for
- * `reasoning.enabled`. The field name itself is validated separately at capture time;
- * persisted rows may carry legacy field names, so this checks only the value shape.
+ * `reasoning.enabled`. The field name itself is validated separately at capture time.
  */
 export function isValidReasoningWireValue(
   wireField: unknown,
@@ -310,6 +314,59 @@ function normalizedAttempts(raw: unknown): PersistedUsageAttempt[] {
   if (!Array.isArray(raw)) return [];
   return raw.map(normalizeUsageAttempt)
     .filter((attempt): attempt is PersistedUsageAttempt => attempt !== null);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(value).every(key => allowed.includes(key));
+}
+
+function isNonEmptyString(value: unknown, max = MAX_METADATA_STRING_LEN): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= max;
+}
+
+function isCurrentUsageValue(raw: unknown): raw is CodexCommanderUsage {
+  if (!isPlainRecord(raw) || !hasOnlyKeys(raw, [
+    "inputTokens", "outputTokens", "contextTotalTokens", "totalTokens",
+    "cacheReadInputTokens", "cacheCreationInputTokens", "reasoningOutputTokens", "estimated",
+  ])) return false;
+  if (!isNonNegativeFiniteNumber(raw.inputTokens) || !isNonNegativeFiniteNumber(raw.outputTokens)) return false;
+  for (const key of [
+    "contextTotalTokens", "totalTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "reasoningOutputTokens",
+  ] as const) {
+    if (key in raw && !isNonNegativeFiniteNumber(raw[key])) return false;
+  }
+  if ("estimated" in raw && typeof raw.estimated !== "boolean") return false;
+  const cacheRead = isNonNegativeFiniteNumber(raw.cacheReadInputTokens) ? raw.cacheReadInputTokens : 0;
+  const cacheWrite = isNonNegativeFiniteNumber(raw.cacheCreationInputTokens) ? raw.cacheCreationInputTokens : 0;
+  return cacheRead + cacheWrite <= raw.inputTokens;
+}
+
+function isCurrentUsageAttempt(raw: unknown): raw is PersistedUsageAttempt {
+  if (!isPlainRecord(raw) || !hasOnlyKeys(raw, [
+    "ordinal", "provider", "model", "adapter", "status", "durationMs", "firstOutputMs", "sendCount",
+    "recoveryKinds", "usageStatus", "inputTokenEstimate", "usage", "totalTokens", "errorCode",
+    "requestedEffort", "effectiveEffort", "reasoningWireField", "reasoningWireValue",
+  ])) return false;
+  if (!Number.isInteger(raw.ordinal) || (raw.ordinal as number) < 1
+    || !isNonEmptyString(raw.provider, 256) || !isNonEmptyString(raw.model, 512) || !isNonEmptyString(raw.adapter, 128)
+    || !Number.isInteger(raw.status) || (raw.status as number) < 100 || (raw.status as number) > 599
+    || !isNonNegativeFiniteNumber(raw.durationMs) || !Number.isInteger(raw.sendCount) || (raw.sendCount as number) < 0
+    || typeof raw.usageStatus !== "string" || !USAGE_STATUSES.has(raw.usageStatus as UsageStatus)
+    || !Array.isArray(raw.recoveryKinds) || !raw.recoveryKinds.every(kind => typeof kind === "string" && ATTEMPT_RECOVERY_KINDS.has(kind as AttemptRecoveryKind))) return false;
+  if (("firstOutputMs" in raw && !isNonNegativeFiniteNumber(raw.firstOutputMs))
+    || ("inputTokenEstimate" in raw && !isNonNegativeFiniteNumber(raw.inputTokenEstimate))
+    || ("totalTokens" in raw && !isNonNegativeFiniteNumber(raw.totalTokens))
+    || ("usage" in raw && !isCurrentUsageValue(raw.usage))
+    || ("errorCode" in raw && !isNonEmptyString(raw.errorCode))
+    || ("requestedEffort" in raw && !isNonEmptyString(raw.requestedEffort))
+    || ("effectiveEffort" in raw && !isNonEmptyString(raw.effectiveEffort))
+    || ("reasoningWireField" in raw && !isNonEmptyString(raw.reasoningWireField))
+    || ("reasoningWireValue" in raw && !isValidReasoningWireValue(raw.reasoningWireField, raw.reasoningWireValue))) return false;
+  return true;
 }
 
 const MAX_METADATA_STRING_LEN = 64;
@@ -339,7 +396,7 @@ export function normalizePersistedRetryAfter(value: unknown): string | undefined
     : undefined;
 }
 
-/** Test seam: the normalization branch old rows take is worth asserting directly. */
+/** Test seam for the write-time, secret-safe serializer. Readers do not use it. */
 export function normalizeUsageEntryForTest(entry: PersistedUsageEntry): PersistedUsageEntry {
   return normalizeUsageEntry(entry);
 }
@@ -354,7 +411,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     timestamp: entry.timestamp,
     provider: entry.provider,
     model: entry.model,
-    ...(isKnownUsageSurface(entry.surface) ? { surface: entry.surface } : {}),
+    // The writer knows the request origin. A missing internal marker is the native
+    // Codex surface, never an ambiguity carried into durable state.
+    surface: isKnownUsageSurface(entry.surface) ? entry.surface : "codex",
     ...(typeof entry.apiKeyId === "string" && entry.apiKeyId.trim()
       // Deliberately NOT capped. `capMetadataString` protects free-form metadata
       // from unbounded growth, but this is a lookup key: truncating it makes the
@@ -421,6 +480,56 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   };
 }
 
+/**
+ * Decode exactly the current durable usage-log shape. This intentionally does
+ * not normalize, fill defaults, split cache fields, or salvage individual
+ * attempts: a row is either a current row or it is ignored.
+ */
+export function decodeUsageRow(raw: unknown): PersistedUsageEntry | null {
+  if (!isPlainRecord(raw) || raw.schemaVersion !== USAGE_LOG_SCHEMA_VERSION || !hasOnlyKeys(raw, [
+    "schemaVersion", "requestId", "timestamp", "provider", "model", "surface", "apiKeyId", "admissionKind",
+    "inboundProtocol", "conversationId", "resolvedModel", "requestedModel", "requestedEffort", "effectiveEffort",
+    "reasoningWireField", "reasoningWireValue", "requestedServiceTier", "requestedSpeedLabel", "configuredServiceTier",
+    "configuredSpeedLabel", "modelSupportsServiceTier", "responseServiceTier", "status", "durationMs", "firstOutputMs",
+    "usageStatus", "usage", "totalTokens", "attempts", "errorCode", "terminalStatus", "closeReason", "upstreamError",
+    "routeDecision", "upstreamRetryAfter",
+  ])) return null;
+  if (!isNonEmptyString(raw.requestId, 256) || !isNonNegativeFiniteNumber(raw.timestamp)
+    || !isNonEmptyString(raw.provider, 256) || !isNonEmptyString(raw.model, 512)
+    || !isKnownUsageSurface(raw.surface) || !Number.isInteger(raw.status)
+    || (raw.status as number) < 100 || (raw.status as number) > 599
+    || !isNonNegativeFiniteNumber(raw.durationMs)
+    || typeof raw.usageStatus !== "string" || !USAGE_STATUSES.has(raw.usageStatus as UsageStatus)) return null;
+  if (("apiKeyId" in raw && !isNonEmptyString(raw.apiKeyId, 512))
+    || ("admissionKind" in raw && !isKnownAdmissionKind(raw.admissionKind))
+    || ("inboundProtocol" in raw && !isKnownInboundProtocol(raw.inboundProtocol))
+    || ("conversationId" in raw && !isNonEmptyString(raw.conversationId, 128))
+    || ("resolvedModel" in raw && !isNonEmptyString(raw.resolvedModel, 512))
+    || ("requestedModel" in raw && !isNonEmptyString(raw.requestedModel, 512))
+    || ("requestedEffort" in raw && !isNonEmptyString(raw.requestedEffort))
+    || ("effectiveEffort" in raw && !isNonEmptyString(raw.effectiveEffort))
+    || ("reasoningWireField" in raw && !isNonEmptyString(raw.reasoningWireField))
+    || ("reasoningWireValue" in raw && !isValidReasoningWireValue(raw.reasoningWireField, raw.reasoningWireValue))
+    || ("requestedServiceTier" in raw && !isNonEmptyString(raw.requestedServiceTier))
+    || ("requestedSpeedLabel" in raw && !isNonEmptyString(raw.requestedSpeedLabel))
+    || ("configuredServiceTier" in raw && !isNonEmptyString(raw.configuredServiceTier))
+    || ("configuredSpeedLabel" in raw && !isNonEmptyString(raw.configuredSpeedLabel))
+    || ("modelSupportsServiceTier" in raw && typeof raw.modelSupportsServiceTier !== "boolean")
+    || ("responseServiceTier" in raw && !isNonEmptyString(raw.responseServiceTier))
+    || ("firstOutputMs" in raw && !isNonNegativeFiniteNumber(raw.firstOutputMs))
+    || ("usage" in raw && !isCurrentUsageValue(raw.usage))
+    || ("totalTokens" in raw && !isNonNegativeFiniteNumber(raw.totalTokens))
+    || ("attempts" in raw && (!Array.isArray(raw.attempts) || raw.attempts.length === 0 || !raw.attempts.every(isCurrentUsageAttempt)))
+    || ("errorCode" in raw && !isNonEmptyString(raw.errorCode))
+    || ("terminalStatus" in raw && !isNonEmptyString(raw.terminalStatus))
+    || ("closeReason" in raw && !["terminal", "client_cancel", "non_stream", "body_stall", "body_overflow"].includes(raw.closeReason as string))
+    || ("upstreamError" in raw && !isNonEmptyString(raw.upstreamError, 500))
+    || ("routeDecision" in raw && !normalizeRouteDecisionTrace(raw.routeDecision))
+    || ("upstreamRetryAfter" in raw && normalizePersistedRetryAfter(raw.upstreamRetryAfter) !== raw.upstreamRetryAfter)) return null;
+  const { schemaVersion: _schemaVersion, ...entry } = raw;
+  return entry as unknown as PersistedUsageEntry;
+}
+
 function ensureUsageLogDir(): void {
   const dir = getConfigDir();
   recordOwnedConfigPath(dir, usageLogPath());
@@ -429,9 +538,15 @@ function ensureUsageLogDir(): void {
 }
 
 export function appendUsageEntry(entry: PersistedUsageEntry): void {
+  const normalized = normalizeUsageEntry(entry);
+  const row = { schemaVersion: USAGE_LOG_SCHEMA_VERSION, ...normalized };
+  // Logging is best effort, but it must never create a row the current reader
+  // cannot understand. Invalid internal capture is dropped instead of becoming
+  // a future compatibility obligation.
+  if (!decodeUsageRow(row)) return;
   ensureUsageLogDir();
   const path = usageLogPath();
-  appendFileSync(path, `${JSON.stringify(normalizeUsageEntry(entry))}\n`, { encoding: "utf-8", mode: 0o600 });
+  appendFileSync(path, `${JSON.stringify(row)}\n`, { encoding: "utf-8", mode: 0o600 });
   try { chmodSync(path, 0o600); } catch { /* best-effort on platforms that ignore chmod */ }
 }
 
@@ -642,10 +757,8 @@ export function readUsageEntries(): PersistedUsageEntry[] {
   for (const line of lines) {
     if (!line.trim()) continue;
     try {
-      const parsed = JSON.parse(line) as PersistedUsageEntry;
-      if (parsed && typeof parsed === "object" && typeof parsed.requestId === "string") {
-        entries.push(normalizeUsageEntry(parsed));
-      }
+      const parsed = decodeUsageRow(JSON.parse(line));
+      if (parsed) entries.push(parsed);
     } catch {
       /* keep reading after a partially written or hand-edited line */
     }
@@ -658,10 +771,8 @@ function parseUsageLines(lines: string[]): PersistedUsageEntry[] {
   for (const line of lines) {
     if (!line.trim()) continue;
     try {
-      const parsed = JSON.parse(line) as PersistedUsageEntry;
-      if (parsed && typeof parsed === "object" && typeof parsed.requestId === "string") {
-        entries.push(normalizeUsageEntry(parsed));
-      }
+      const parsed = decodeUsageRow(JSON.parse(line));
+      if (parsed) entries.push(parsed);
     } catch {
       /* skip partial / hand-edited lines */
     }
@@ -671,7 +782,7 @@ function parseUsageLines(lines: string[]): PersistedUsageEntry[] {
 
 /**
  * Read only the newest `limit` usage.jsonl rows without loading the whole append-only
- * file into memory. Used by request-log hydration on `ocx start`.
+ * file into memory. Used by request-log hydration on `ccx start`.
  */
 export function readRecentUsageEntries(limit: number): PersistedUsageEntry[] {
   if (!Number.isFinite(limit) || limit <= 0) return [];

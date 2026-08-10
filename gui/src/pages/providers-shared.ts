@@ -23,7 +23,6 @@ export interface OAuthStatus {
   email?: string;
   error?: string;
   done?: boolean;
-  needsReauth?: boolean;
   activeAccountId?: string | null;
 }
 
@@ -39,8 +38,8 @@ export interface OAuthAccount {
   alias?: string;
   email?: string;
   active: boolean;
-  needsReauth?: boolean;
   expiresAt?: number;
+  health?: { status: "healthy" | "cooldown" | "reauth_required" | "warning"; reason?: string; until?: string };
 }
 
 const OAUTH_LABELS: Record<string, string> = {

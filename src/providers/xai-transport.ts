@@ -1,12 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { OcxProviderConfig } from "../types";
+import type { CodexCommanderProviderConfig } from "../types";
 import { resolveGithubCopilotTransport } from "./github-copilot-transport";
 
 export const XAI_GROK_CLI_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 
 export const XAI_GROK_COMPATIBILITY = {
   version: "0.2.93",
-  userAgent: "opencodex-grok/0.2.93",
+  userAgent: "codexcommander-grok/0.2.93",
   headers: {
     clientIdentifier: "x-grok-client-identifier",
     clientVersion: "x-grok-client-version",
@@ -22,13 +22,13 @@ export const XAI_GROK_COMPATIBILITY = {
 export const XAI_GROK_CLIENT_VERSION = XAI_GROK_COMPATIBILITY.version;
 export const XAI_CONV_ID_HEADER = XAI_GROK_COMPATIBILITY.headers.conversationId;
 
-export type OcxProviderTransport = OcxProviderConfig & {
+export type CodexCommanderProviderTransport = CodexCommanderProviderConfig & {
   /** Request executor used only at runtime; never persisted. */
   fetch?: typeof globalThis.fetch;
 };
 
 const XAI_GROK_CLI_HEADERS: Readonly<Record<string, string>> = {
-  [XAI_GROK_COMPATIBILITY.headers.clientIdentifier]: "opencodex",
+  [XAI_GROK_COMPATIBILITY.headers.clientIdentifier]: "codexcommander",
   [XAI_GROK_COMPATIBILITY.headers.clientVersion]: XAI_GROK_CLIENT_VERSION,
   [XAI_GROK_COMPATIBILITY.headers.tokenAuth]: "xai-grok-cli",
   [XAI_GROK_COMPATIBILITY.headers.authenticateResponse]: "authenticate-response",
@@ -87,14 +87,14 @@ export function deriveXaiConvId(promptCacheKey: string): string {
  * transport (= per logical request until key rotation), so same-target replays and transient
  * retries carry the same id while a rotated key gets a fresh one.
  * Agent, deployment, model-override, turn, mode, and user identity headers are intentionally
- * omitted because opencodex has no truthful values for the official fields.
+ * omitted because CodexCommander has no truthful values for the official fields.
  */
 export function resolveProviderTransport(
   providerName: string,
-  provider: OcxProviderTransport,
+  provider: CodexCommanderProviderTransport,
   promptCacheKey?: string,
   apiBaseUrl?: string,
-): OcxProviderTransport {
+): CodexCommanderProviderTransport {
   if (providerName === "github-copilot") {
     return resolveGithubCopilotTransport(provider, apiBaseUrl);
   }

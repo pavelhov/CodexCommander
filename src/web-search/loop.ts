@@ -1,5 +1,5 @@
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../adapters/base";
-import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxThinkingContent, OcxUsage, RateLimitRetryPolicy } from "../types";
+import type { AdapterEvent, CodexCommanderMessage, CodexCommanderParsedRequest, CodexCommanderProviderConfig, CodexCommanderThinkingContent, CodexCommanderUsage, RateLimitRetryPolicy } from "../types";
 import { namespacedToolName } from "../types";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { bridgeToResponsesSSE } from "../bridge";
@@ -154,8 +154,8 @@ async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
  * the two never share a stream. Honoring a genuinely mixed stream would need per-segment state,
  * not another accumulator.
  */
-function extractIterationThinking(events: AdapterEvent[]): OcxThinkingContent[] {
-  const parts: OcxThinkingContent[] = [];
+function extractIterationThinking(events: AdapterEvent[]): CodexCommanderThinkingContent[] {
+  const parts: CodexCommanderThinkingContent[] = [];
   let thinking = "";
   let signature: string | undefined;
   let rawReasoning = "";
@@ -208,7 +208,7 @@ function normalizeQuery(q: string): string {
  * gathered this turn. Citation wording is conditional — a failed/empty search still wants an answer,
  * just without fabricated sources.
  */
-function forcedAnswerNudge(): OcxMessage {
+function forcedAnswerNudge(): CodexCommanderMessage {
   return {
     role: "developer",
     content:
@@ -241,15 +241,15 @@ class LoopError extends Error {
  * incoming metadata, and the configured search executor.
  */
 export interface WebSearchLoopDeps {
-  parsed: OcxParsedRequest;
+  parsed: CodexCommanderParsedRequest;
   adapter: ProviderAdapter;
   incomingMeta: IncomingMeta;
   /** Which executor runs searches. Defaults to "openai" so existing callers keep the ChatGPT path (audit F4). */
   backend?: "openai" | "anthropic";
   /** Required for the openai backend; unused (and typically undefined) for the anthropic backend. */
-  forwardProvider?: OcxProviderConfig;
+  forwardProvider?: CodexCommanderProviderConfig;
   /** Required for the anthropic backend: the stored-OAuth provider that runs web_search_20250305. */
-  anthropicSidecar?: { providerName: string; provider: OcxProviderConfig };
+  anthropicSidecar?: { providerName: string; provider: CodexCommanderProviderConfig };
   hostedTool: Record<string, unknown>;
   selectedForwardHeaders: Headers;
   settings: SidecarSettings;
@@ -270,7 +270,7 @@ export interface WebSearchLoopDeps {
   /** One-shot TTFT callback: first non-empty model output observed (WP4). */
   onFirstOutput?: () => void;
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
-  onUsage?: (usage: OcxUsage | undefined) => void;
+  onUsage?: (usage: CodexCommanderUsage | undefined) => void;
   /** Observe the exact adapter request selected for each routed-model iteration. */
   onRequestBuilt?: (request: AdapterRequest) => void;
   /** Called before each routed-model dispatch in the loop, for attempt telemetry. Same-target 429 replays pass the `rate-limit-429` recovery kind. */
@@ -304,7 +304,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     ? Math.floor(deps.stallTimeoutSec * 1000)
     : 300_000;
 
-  const messages: OcxMessage[] = [...parsed.context.messages];
+  const messages: CodexCommanderMessage[] = [...parsed.context.messages];
   const loopT0 = Date.now();
   const allTools = parsed.context.tools ?? [];
   // For the forced-answer pass we drop the synthetic web_search tool so the model MUST answer from the
@@ -358,10 +358,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     // ignores what the search found, which reads to the user as "the search did nothing". Nudge it
     // (iteration-locally — never mutate the shared `messages`) to actually use the gathered results.
     // Only when a REAL search ran (executedSearchCount, not empty-query/limit/repeat placeholders).
-    const iterMessages: OcxMessage[] = forceAnswer && executedSearchCount > 0
+    const iterMessages: CodexCommanderMessage[] = forceAnswer && executedSearchCount > 0
       ? [...messages, forcedAnswerNudge()]
       : messages;
-    const iterParsed: OcxParsedRequest = {
+    const iterParsed: CodexCommanderParsedRequest = {
       ...parsed, stream: true,
       context: { ...parsed.context, messages: iterMessages, tools: forceAnswer ? toolsNoWebSearch : allTools },
     };
@@ -581,7 +581,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   // valid, and surface as ONE search cell carrying every attempted query. A real search (one that
   // hits the sidecar) shows the spinner WHILE the batch runs. Empty/limit/repeat placeholders never
   // emit a cell (matching the prior single-query behavior).
-  async function* runSearchCall(call: WebSearchCall, precedingThinking: OcxThinkingContent[] = []): AsyncGenerator<AdapterEvent> {
+  async function* runSearchCall(call: WebSearchCall, precedingThinking: CodexCommanderThinkingContent[] = []): AsyncGenerator<AdapterEvent> {
     const results: { query: string; outcome: SidecarOutcome }[] = [];
     let beganCell = false;
     if (call.queries.length === 0) {

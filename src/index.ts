@@ -10,13 +10,12 @@ export { createResponsesPassthroughAdapter } from "./adapters/openai-responses";
 export { loadConfig, saveConfig } from "./config";
 export type { ProviderAdapter } from "./adapters/base";
 export type {
-  OcxConfig,
-  OcxContext,
-  OcxMessage,
-  OcxParsedRequest,
-  OcxProviderConfig,
-  OcxRequestOptions,
-  OcxTool,
+  CodexCommanderConfig,
+  CodexCommanderContext,
+  CodexCommanderMessage,
+  CodexCommanderParsedRequest,
+  CodexCommanderProviderConfig,
+  CodexCommanderRequestOptions,
+  CodexCommanderTool,
   AdapterEvent,
 } from "./types";
-// release-train: preview publish gate for v2.7.35-preview.20260723

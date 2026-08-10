@@ -61,7 +61,7 @@ describe("Cursor native exec bridge", () => {
       value: create(McpArgsSchema, {
         name: "mcp__fs__read_file",
         toolName: "mcp__fs__read_file",
-        providerIdentifier: "opencodex-responses",
+        providerIdentifier: "codexcommander-responses",
       }),
     }), {
       mcp: () => {
@@ -82,7 +82,7 @@ describe("Cursor native exec bridge", () => {
     const clientTool = create(McpToolDefinitionSchema, {
       name: "mcp__fs__read_file",
       toolName: "mcp__fs__read_file",
-      providerIdentifier: "opencodex-responses",
+      providerIdentifier: "codexcommander-responses",
       description: "Read a file",
       inputSchema: new TextEncoder().encode("{}"),
     });
@@ -103,7 +103,7 @@ describe("Cursor native exec bridge", () => {
 
 
   test("blocks built-in local fs, shell, and fetch execution by default", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-exec-"));
+    const dir = mkdtempSync(join(tmpdir(), "ccx-cursor-exec-"));
     const path = join(dir, "note.txt");
 
     const deniedRead = decode((await handleCursorNativeExec(execMessage({
@@ -119,7 +119,7 @@ describe("Cursor native exec bridge", () => {
       expect(deniedRead.message.value.result.value.error).toContain("apply_patch");
       expect(deniedRead.message.value.result.value.error).toContain("silently call");
       expect(deniedRead.message.value.result.value.error).toContain("Do not tell the user");
-      expect(deniedRead.message.value.result.value.error).not.toContain("disabled by OpenCodex policy");
+      expect(deniedRead.message.value.result.value.error).not.toContain("disabled by CodexCommander policy");
       expect(deniedRead.message.value.result.value.error).not.toContain("sandbox denial");
     }
 
@@ -132,9 +132,9 @@ describe("Cursor native exec bridge", () => {
     if (deniedShell.message.value.result.case === "failure") {
       expect(deniedShell.message.value.result.value.stderr).toContain("shell_command");
       expect(deniedShell.message.value.result.value.stderr).toContain("exec_command");
-      expect(deniedShell.message.value.result.value.stderr).toContain("mcp_opencodex-responses_*");
+      expect(deniedShell.message.value.result.value.stderr).toContain("mcp_codexcommander-responses_*");
       expect(deniedShell.message.value.result.value.stderr).toContain("Do not tell the user");
-      expect(deniedShell.message.value.result.value.stderr).not.toContain("disabled by OpenCodex policy");
+      expect(deniedShell.message.value.result.value.stderr).not.toContain("disabled by CodexCommander policy");
       expect(deniedShell.message.value.result.value.stderr).not.toContain("sandbox denial");
     }
 
@@ -149,7 +149,7 @@ describe("Cursor native exec bridge", () => {
       .join("\n");
     expect(streamText).toContain("shell_command");
     expect(streamText).toContain("exec_command");
-    expect(streamText).toContain("mcp_opencodex-responses_*");
+    expect(streamText).toContain("mcp_codexcommander-responses_*");
     expect(streamText).toContain("Do not tell the user");
     expect(streamText).not.toContain("sandbox denial");
 
@@ -187,49 +187,30 @@ describe("Cursor native exec bridge", () => {
       expect(deniedFetch.message.value.result.value.error).toContain("shell_command");
       expect(deniedFetch.message.value.result.value.error).toContain("curl");
       expect(deniedFetch.message.value.result.value.error).toContain("wget");
-      expect(deniedFetch.message.value.result.value.error).not.toContain("disabled by OpenCodex policy");
+      expect(deniedFetch.message.value.result.value.error).not.toContain("disabled by CodexCommander policy");
     }
   });
 
-  test("writes and reads files in a temp directory with unsafe opt-in", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-exec-"));
+  test("writes and reads files in a temp directory with explicit opt-in", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ccx-cursor-exec-"));
     const path = join(dir, "note.txt");
 
     const write = decode((await handleCursorNativeExec(execMessage({
       case: "writeArgs",
       value: create(WriteArgsSchema, { path, fileText: "hello\ncursor", returnFileContentAfterWrite: true }),
-    }), { unsafeAllowNativeLocalExec: true }))[0]);
+    }), { nativeLocalExecEnabled: true }))[0]);
     expect(write.message.case).toBe("writeResult");
     expect(readFileSync(path, "utf8")).toBe("hello\ncursor");
 
     const read = decode((await handleCursorNativeExec(execMessage({
       case: "readArgs",
       value: create(ReadArgsSchema, { path }),
-    }), { unsafeAllowNativeLocalExec: true }))[0]);
+    }), { nativeLocalExecEnabled: true }))[0]);
     expect(read.message.case).toBe("readResult");
     expect(read.message.value.result.case).toBe("success");
     if (read.message.value.result.case === "success") {
       expect(read.message.value.result.value.output.case).toBe("content");
       expect(read.message.value.result.value.totalLines).toBe(2);
-    }
-  });
-
-  test("keeps the removed allowNativeLocalExec key inert", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-alias-"));
-    const shell = decode((await handleCursorNativeExec(execMessage({
-      case: "shellArgs",
-      value: create(ShellArgsSchema, { command: "printf alias-ok", workingDirectory: dir }),
-    }), { allowNativeLocalExec: true } as unknown as NonNullable<Parameters<typeof handleCursorNativeExec>[1]>))[0]);
-
-    expect(shell.message.case).toBe("shellResult");
-    expect(shell.message.value.result.case).toBe("failure");
-    if (shell.message.value.result.case === "failure") {
-      expect(shell.message.value.result.value.stdout).toBe("");
-      expect(shell.message.value.result.value.stderr).toContain("shell_command");
-      expect(shell.message.value.result.value.stderr).toContain("exec_command");
-      expect(shell.message.value.result.value.stderr).toContain("mcp_opencodex-responses_*");
-      expect(shell.message.value.result.value.stderr).toContain("Do not tell the user");
-      expect(shell.message.value.result.value.stderr).not.toContain("sandbox denial");
     }
   });
 
@@ -256,7 +237,7 @@ describe("Cursor native exec bridge", () => {
   });
 
   test("rejects native write and delete when apply_patch is available", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-patch-policy-"));
+    const dir = mkdtempSync(join(tmpdir(), "ccx-cursor-patch-policy-"));
     const newPath = join(dir, "new.txt");
     const existingPath = join(dir, "existing.txt");
     writeFileSync(existingPath, "keep");
@@ -265,7 +246,7 @@ describe("Cursor native exec bridge", () => {
       case: "writeArgs",
       value: create(WriteArgsSchema, { path: newPath, fileText: "blocked" }),
     }), {
-      unsafeAllowNativeLocalExec: true,
+      nativeLocalExecEnabled: true,
       rejectNativeFileMutations: true,
     }))[0]);
 
@@ -281,7 +262,7 @@ describe("Cursor native exec bridge", () => {
       case: "readArgs",
       value: create(ReadArgsSchema, { path: existingPath }),
     }), {
-      unsafeAllowNativeLocalExec: true,
+      nativeLocalExecEnabled: true,
       rejectNativeFileMutations: true,
     }))[0]);
 
@@ -292,7 +273,7 @@ describe("Cursor native exec bridge", () => {
       case: "deleteArgs",
       value: create(DeleteArgsSchema, { path: existingPath }),
     }), {
-      unsafeAllowNativeLocalExec: true,
+      nativeLocalExecEnabled: true,
       rejectNativeFileMutations: true,
     }))[0]);
 
@@ -306,28 +287,28 @@ describe("Cursor native exec bridge", () => {
   });
 
   test("deletes only the requested temp file", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-delete-"));
+    const dir = mkdtempSync(join(tmpdir(), "ccx-cursor-delete-"));
     const path = join(dir, "delete-me.txt");
     writeFileSync(path, "temporary");
 
     const deleted = decode((await handleCursorNativeExec(execMessage({
       case: "deleteArgs",
       value: create(DeleteArgsSchema, { path }),
-    }), { unsafeAllowNativeLocalExec: true }))[0]);
+    }), { nativeLocalExecEnabled: true }))[0]);
 
     expect(deleted.message.case).toBe("deleteResult");
     expect(deleted.message.value.result.case).toBe("success");
   });
 
   test("runs harmless shell commands", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-shell-"));
+    const dir = mkdtempSync(join(tmpdir(), "ccx-cursor-shell-"));
     const shell = decode((await handleCursorNativeExec(execMessage({
       case: "shellArgs",
       value: create(ShellArgsSchema, {
         command: "node -e \"process.stdout.write('cursor-ok')\"",
         workingDirectory: dir,
       }),
-    }), { unsafeAllowNativeLocalExec: true }))[0]);
+    }), { nativeLocalExecEnabled: true }))[0]);
 
     expect(shell.message.case).toBe("shellResult");
     expect(shell.message.value.result.case).toBe("success");
@@ -337,14 +318,14 @@ describe("Cursor native exec bridge", () => {
   });
 
   test("returns shell stream events for shellStreamArgs", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-stream-"));
+    const dir = mkdtempSync(join(tmpdir(), "ccx-cursor-stream-"));
     const replies = await handleCursorNativeExec(execMessage({
       case: "shellStreamArgs",
       value: create(ShellArgsSchema, {
         command: "node -e \"process.stdout.write('stream-ok')\"",
         workingDirectory: dir,
       }),
-    }), { unsafeAllowNativeLocalExec: true });
+    }), { nativeLocalExecEnabled: true });
     const decodedAll = replies.map(reply => fromBinary(AgentClientMessageSchema, reply));
     const execFrames = decodedAll
       .flatMap(msg => (msg.message.case === "execClientMessage" ? [msg.message.value] : []));
@@ -361,7 +342,7 @@ describe("Cursor native exec bridge", () => {
   });
 
   test("background shell spawn and stdin receive the same native exec session owner", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-bg-"));
+    const dir = mkdtempSync(join(tmpdir(), "ccx-cursor-bg-"));
     const spawned = decode((await handleCursorNativeExec(execMessage({
       case: "backgroundShellSpawnArgs",
       value: create(BackgroundShellSpawnArgsSchema, {
@@ -369,7 +350,7 @@ describe("Cursor native exec bridge", () => {
         workingDirectory: dir,
         enableWriteShellStdinTool: true,
       }),
-    }), { unsafeAllowNativeLocalExec: true, sessionId: "native-exec-session" }))[0]);
+    }), { nativeLocalExecEnabled: true, sessionId: "native-exec-session" }))[0]);
     expect(spawned.message.case).toBe("backgroundShellSpawnResult");
     expect(spawned.message.value.result.case).toBe("success");
 
@@ -377,7 +358,7 @@ describe("Cursor native exec bridge", () => {
       const stdin = decode((await handleCursorNativeExec(execMessage({
         case: "writeShellStdinArgs",
         value: create(WriteShellStdinArgsSchema, { shellId: spawned.message.value.result.value.shellId, chars: "hello\n" }),
-      }), { unsafeAllowNativeLocalExec: true, sessionId: "native-exec-session" }))[0]);
+      }), { nativeLocalExecEnabled: true, sessionId: "native-exec-session" }))[0]);
       expect(stdin.message.case).toBe("writeShellStdinResult");
       expect(stdin.message.value.result.case).toBe("success");
     }
@@ -395,7 +376,7 @@ describe("Cursor native exec bridge", () => {
     const spawnReply = decode((await handleCursorNativeExec(execMessage({
       case: "backgroundShellSpawnArgs",
       value: create(BackgroundShellSpawnArgsSchema, { command: "must-not-run" }),
-    }), { unsafeAllowNativeLocalExec: true }))[0]);
+    }), { nativeLocalExecEnabled: true }))[0]);
     expect(spawnReply.message.case).toBe("backgroundShellSpawnResult");
     expect(spawnReply.message.value.result.case).toBe("error");
     expect(spawnCalls).toBe(0);
@@ -404,13 +385,13 @@ describe("Cursor native exec bridge", () => {
     const stdinReply = decode((await handleCursorNativeExec(execMessage({
       case: "writeShellStdinArgs",
       value: create(WriteShellStdinArgsSchema, { shellId: 999, chars: "must-not-write" }),
-    }), { unsafeAllowNativeLocalExec: true }))[0]);
+    }), { nativeLocalExecEnabled: true }))[0]);
     expect(stdinReply.message.case).toBe("writeShellStdinResult");
     expect(stdinReply.message.value.result.case).toBe("error");
   });
 
   test("greps temp files with content, file, and count output modes", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-grep-"));
+    const dir = mkdtempSync(join(tmpdir(), "ccx-cursor-grep-"));
     writeFileSync(join(dir, "a.txt"), "alpha\ncursor\ncursor");
     writeFileSync(join(dir, "b.txt"), "beta");
 
@@ -418,7 +399,7 @@ describe("Cursor native exec bridge", () => {
       const grep = decode((await handleCursorNativeExec(execMessage({
         case: "grepArgs",
         value: create(GrepArgsSchema, { pattern: "cursor", path: dir, glob: "*.txt", outputMode }),
-      }), { unsafeAllowNativeLocalExec: true }))[0]);
+      }), { nativeLocalExecEnabled: true }))[0]);
       expect(grep.message.case).toBe("grepResult");
       expect(grep.message.value.result.case).toBe("success");
     }
@@ -429,7 +410,7 @@ describe("Cursor native exec bridge", () => {
       case: "fetchArgs",
       value: create(FetchArgsSchema, { url: "https://example.test/doc" }),
     }), {
-      unsafeAllowNativeLocalExec: true,
+      nativeLocalExecEnabled: true,
       fetch: async () => new Response("ok", { status: 203, headers: { "content-type": "text/plain" } }),
     }))[0]);
 
@@ -444,7 +425,7 @@ describe("Cursor native exec bridge", () => {
   test("opens MCP and computer-use through executor hooks", async () => {
     const synthetic = decode((await handleCursorNativeExec(execMessage({
       case: "mcpArgs",
-      value: create(McpArgsSchema, { name: "read_file", toolName: "read_file", providerIdentifier: "opencodex-responses" }),
+      value: create(McpArgsSchema, { name: "read_file", toolName: "read_file", providerIdentifier: "codexcommander-responses" }),
     }), {
       mcp: async () => {
         throw new Error("synthetic Responses tools must not execute through local MCP");

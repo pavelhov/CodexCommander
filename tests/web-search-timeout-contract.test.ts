@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { AdapterFetchContext, ProviderAdapter } from "../src/adapters/base";
 import { parseRequest } from "../src/responses/parser";
 import { responseWithDeferredRequestLog, type RequestLogEntry } from "../src/server";
-import type { AdapterEvent, OcxProviderConfig } from "../src/types";
+import type { AdapterEvent, CodexCommanderProviderConfig } from "../src/types";
 import { runWithWebSearch as runWithWebSearchProduction, type WebSearchLoopDeps } from "../src/web-search/loop";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
 
@@ -24,7 +24,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-const forwardProvider: OcxProviderConfig = {
+const forwardProvider: CodexCommanderProviderConfig = {
   adapter: "openai-responses",
   baseUrl: "https://chatgpt.test/v1",
   authMode: "forward",
@@ -105,7 +105,7 @@ function terminalFrames(frames: SseFrame[]): SseFrame[] {
 function wrapForLog(response: Response, entries: RequestLogEntry[]): Response {
   return responseWithDeferredRequestLog(
     response,
-    "ocx-web-search-timeout-contract",
+    "ccx-web-search-timeout-contract",
     Date.now(),
     { model: "routed/model", provider: "routed" },
     entry => entries.push(entry),

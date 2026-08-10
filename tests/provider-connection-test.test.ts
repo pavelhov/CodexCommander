@@ -6,43 +6,47 @@ import { handleManagementAPI } from "../src/server/management-api";
 import { saveConfig } from "../src/config";
 import { OAUTH_PROVIDERS } from "../src/oauth";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { withRegistryDiscovery } from "./helpers/provider-registry-discovery";
 
-const TEST_DIR = join(tmpdir(), "ocx-conn-test");
-const previousHome = process.env.OPENCODEX_HOME;
+const TEST_DIR = join(tmpdir(), "ccx-conn-test");
+const previousHome = process.env.CODEXCOMMANDER_HOME;
 const originalFetch = globalThis.fetch;
 
 beforeEach(() => {
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   mkdirSync(TEST_DIR, { recursive: true });
-  process.env.OPENCODEX_HOME = TEST_DIR;
+  process.env.CODEXCOMMANDER_HOME = TEST_DIR;
 });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   rmSync(TEST_DIR, { recursive: true, force: true });
 });
 
-function baseConfig(providers: OcxConfig["providers"]): OcxConfig {
-  if (globalThis.fetch !== originalFetch) {
-    for (const provider of Object.values(providers)) {
-      (provider as typeof provider & { fetch?: typeof fetch }).fetch = globalThis.fetch;
-    }
-  }
+function baseConfig(
+  providers: CodexCommanderConfig["providers"],
+  options: { persist?: boolean } = {},
+): CodexCommanderConfig {
   const config = {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     hostname: "127.0.0.1",
     defaultProvider: Object.keys(providers)[0]!,
     providers,
-  } as OcxConfig;
-  saveConfig(config);
+  } as CodexCommanderConfig;
+  if (options.persist !== false) saveConfig(config);
+  if (globalThis.fetch !== originalFetch) {
+    for (const provider of Object.values(config.providers)) {
+      (provider as typeof provider & { fetch?: typeof fetch }).fetch = globalThis.fetch;
+    }
+  }
   return config;
 }
 
-async function probe(config: OcxConfig, name: string): Promise<{ status: number; body: Record<string, unknown> }> {
+async function probe(config: CodexCommanderConfig, name: string): Promise<{ status: number; body: Record<string, unknown> }> {
   const req = new Request(`http://127.0.0.1/api/providers/test?name=${name}`, { method: "POST" });
   const res = await handleManagementAPI(req, new URL(req.url), config, {});
   if (!res) throw new Error("handler returned no response");
@@ -67,6 +71,9 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
       fetches += 1;
       return new Response(JSON.stringify({ data: [{ id: "should-not-load" }] }), { status: 200 });
     }) as typeof fetch;
+    // The strict persisted-config boundary rejects this URL too. Keep this
+    // fixture in memory so the connectivity probe's own defense-in-depth gate
+    // remains covered independently of config admission.
     const config = baseConfig({
       metadata: {
         adapter: "openai-chat",
@@ -74,7 +81,7 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
         apiKey: "sk-x",
         allowPrivateNetwork: true,
       },
-    });
+    }, { persist: false });
 
     const { body } = await probe(config, "metadata");
 

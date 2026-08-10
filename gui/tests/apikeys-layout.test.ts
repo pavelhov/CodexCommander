@@ -18,7 +18,7 @@ test("ApiKeys uses workspace shell (no classic layout toggle)", async () => {
   expect(page).toContain("ApiKeysWorkspace");
   expect(page).not.toContain("viewMode");
   expect(page).not.toContain("readViewMode");
-  expect(page).not.toContain("ocx-apikeys-view");
+  expect(page).not.toContain("ccx-apikeys-view");
   expect(page).not.toContain("pws.workspaceToggle");
   expect(page).not.toContain("pws.classicToggle");
 
@@ -156,8 +156,8 @@ test("the page owns vertical scroll; the model catalog is the only capped region
   const modelsPanel = css.slice(css.indexOf(".awi-overview-section > .api-models-panel"));
   expect(modelsPanel.slice(0, modelsPanel.indexOf("}"))).toContain("overflow: visible");
 
-  // Cross-unit contract with 260731_client_config_export: its JSON block reuses
-  // these selectors and inherits the wheel behavior. Scoping them to the usage
+  // The client-config JSON block reuses these selectors and inherits the wheel
+  // behavior. Scoping them to the usage
   // panel would silently re-trap that panel's scroll.
   expect(css).toMatch(/^\.api-example-pre \{/m);
   expect(css).toMatch(/^\.api-example-copy-btn \{/m);

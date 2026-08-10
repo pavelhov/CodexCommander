@@ -12,7 +12,7 @@ import {
 import { getProviderRegistryEntry } from "../src/providers/registry";
 import { routeModel } from "../src/router";
 import { providerManagementConfigError } from "../src/server/auth-cors";
-import type { OcxProviderConfig } from "../src/types";
+import type { CodexCommanderProviderConfig } from "../src/types";
 
 describe("Kimi reasoning-content presentation config", () => {
   test("accepts only raw or summary at disk and management validation boundaries", () => {
@@ -21,7 +21,7 @@ describe("Kimi reasoning-content presentation config", () => {
       adapter: "openai-chat",
       baseUrl: "https://example.test/v1",
       reasoningContentMode: "raw",
-    } satisfies OcxProviderConfig;
+    } satisfies CodexCommanderProviderConfig;
 
     expect(validateConfigCandidate({
       ...defaults,
@@ -47,7 +47,7 @@ describe("Kimi reasoning-content presentation config", () => {
       adapter: "openai-chat",
       baseUrl: "https://example.test/v1",
       chatCompletionTokenField: "max_completion_tokens",
-    } satisfies OcxProviderConfig;
+    } satisfies CodexCommanderProviderConfig;
 
     expect(validateConfigCandidate({
       ...defaults,
@@ -95,7 +95,7 @@ describe("Kimi reasoning-content presentation config", () => {
       expect(seed.modelDefaultReasoningEfforts?.k3).toBe("max");
       expect(seed.chatCompletionTokenField).toBe("max_completion_tokens");
 
-      const existing: OcxProviderConfig = {
+      const existing: CodexCommanderProviderConfig = {
         adapter: entry.adapter,
         baseUrl: entry.baseUrl,
       };
@@ -104,7 +104,7 @@ describe("Kimi reasoning-content presentation config", () => {
       expect(existing.modelSupportsReasoningSummaries).toEqual({ k3: true, "k3[1m]": true, "k3-256k": true });
       expect(existing.chatCompletionTokenField).toBe("max_completion_tokens");
 
-      const optedOut: OcxProviderConfig = {
+      const optedOut: CodexCommanderProviderConfig = {
         adapter: entry.adapter,
         baseUrl: entry.baseUrl,
         reasoningContentMode: "raw",
@@ -120,7 +120,7 @@ describe("Kimi reasoning-content presentation config", () => {
     const defaults = getDefaultConfig();
     for (const providerId of ["kimi", "kimi-code"]) {
       const entry = getProviderRegistryEntry(providerId)!;
-      const staleProvider: OcxProviderConfig = {
+      const staleProvider: CodexCommanderProviderConfig = {
         adapter: entry.adapter,
         baseUrl: entry.baseUrl,
         authMode: entry.authKind === "oauth" ? "oauth" : "key",

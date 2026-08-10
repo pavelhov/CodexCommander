@@ -25,7 +25,7 @@ import {
 import { formatCodexProviderForLog } from "../codex/routing";
 import { signalWithTimeout } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import { resolveFirstUsableOpenAiSidecar, selectImagesProvider } from "../providers/openai-sidecar";
 import { getProviderRegistryEntry } from "../providers/registry";
 import { readJsonRequestBody } from "./request-decompress";
@@ -90,7 +90,7 @@ function abortableRace<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> 
 
 async function tryCcaImageGeneration(
   body: unknown,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   logCtx: RequestLogContext,
   signal: AbortSignal,
   endpoint: ImagesEndpoint,
@@ -141,7 +141,7 @@ async function tryCcaImageGeneration(
     // Missing/revoked credential → 401 (re-login required); transient refresh/network → 502.
     const errName = err instanceof Error ? err.name : "";
     if (errName === "OAuthLoginRequiredError") {
-      return formatErrorResponse(401, "invalid_request_error", "Google Antigravity login required: run 'ocx login google-antigravity'");
+      return formatErrorResponse(401, "invalid_request_error", "Google Antigravity login required: run 'ccx login google-antigravity'");
     }
     return formatErrorResponse(502, "upstream_error", "CCA image generation failed: OAuth token refresh failed");
   }
@@ -151,7 +151,7 @@ async function tryCcaImageGeneration(
     return formatErrorResponse(
       400,
       "invalid_request_error",
-      "Antigravity requires a discovered Cloud Code Assist project id (re-run `ocx login google-antigravity`).",
+      "Antigravity requires a discovered Cloud Code Assist project id (re-run `ccx login google-antigravity`).",
     );
   }
 
@@ -170,7 +170,7 @@ async function tryCcaImageGeneration(
     request: {
       contents: [{ role: "user", parts: [{ text: prompt }] }],
       generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
-      sessionId: `ocx-img-${crypto.randomUUID().slice(0, 8)}`,
+      sessionId: `ccx-img-${crypto.randomUUID().slice(0, 8)}`,
     },
   };
   let upstream: Response;
@@ -324,7 +324,7 @@ async function tryCcaImageGeneration(
 
 export async function handleImages(
   req: Request,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   endpoint: ImagesEndpoint,
   logCtx: RequestLogContext,
   turnAdmissionLease?: AdmissionLease,
@@ -369,7 +369,7 @@ export async function handleImages(
       "invalid_request_error",
       "Built-in image generation needs an OpenAI upstream (ChatGPT login or an OpenAI API-key provider) "
       + "or a logged-in Google Antigravity (Cloud Code Assist) provider, "
-      + "but none is configured in opencodex. Add a provider or disable the tool with `codex features disable image_generation`.",
+      + "but none is configured in CodexCommander. Add a provider or disable the tool with `codex features disable image_generation`.",
     );
   }
 

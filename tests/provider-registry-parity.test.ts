@@ -17,7 +17,7 @@ import { FREE_PROVIDER_DIRECTORY } from "../src/providers/free-directory";
 import { applyProviderConfigHints } from "../src/codex/catalog";
 import { routeModel } from "../src/router";
 import { resolveAdapter } from "../src/server";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
 
 function nativeTemplate(): Record<string, unknown> {
   return {
@@ -128,8 +128,9 @@ describe("provider registry parity", () => {
   });
 
   test("OpenAI API route max-input metadata is trusted and user values only lower it", () => {
-    const makeConfig = (value: number, context = 2_000_000): OcxConfig => ({
+    const makeConfig = (value: number, context = 2_000_000): CodexCommanderConfig => ({
       port: 10100,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "openai-apikey",
       providers: {
         "openai-apikey": {
@@ -156,8 +157,9 @@ describe("provider registry parity", () => {
         "glm-5.2": 100_000,
         "glm-5.2[1m]": 800_000,
       };
-      const config: OcxConfig = {
+      const config: CodexCommanderConfig = {
         port: 10100,
+        multiAgentGuidanceEnabled: true,
         defaultProvider: "zai",
         providers: {
           zai: {
@@ -188,8 +190,9 @@ describe("provider registry parity", () => {
         "glm-5.2": 128_000,
         "glm-5.2[1m]": 128_000,
       };
-      const config: OcxConfig = {
+      const config: CodexCommanderConfig = {
         port: 10100,
+        multiAgentGuidanceEnabled: true,
         defaultProvider: "zai",
         providers: {
           zai: {
@@ -340,8 +343,9 @@ describe("provider registry parity", () => {
     expect(providerConfigSeed(zai!).modelSuffixBracketStrip).toBe(true);
     expect(optedInProviders).toEqual(["kimi", "zai", "kimi-code"]);
 
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "zai",
       providers: {
         zai: {
@@ -406,7 +410,7 @@ describe("provider registry parity", () => {
       // one), so the flag must survive seeding/enrichment, not just the router's registry backfill.
       expect(providerConfigSeed(entry!).promptCacheKey).toBe(true);
       expect(providerConfigSeed(entry!).chatCompletionTokenField).toBe("max_completion_tokens");
-      const enriched: OcxProviderConfig = { adapter: "openai-chat", baseUrl: entry!.baseUrl };
+      const enriched: CodexCommanderProviderConfig = { adapter: "openai-chat", baseUrl: entry!.baseUrl };
       enrichProviderFromCatalog(providerId, enriched);
       expect(enriched.promptCacheKey).toBe(true);
       expect(enriched.chatCompletionTokenField).toBe("max_completion_tokens");
@@ -490,12 +494,12 @@ describe("provider registry parity", () => {
     expect(providerConfigSeed(nvidia).freeTier).toBe(true);
 
     // Enrich backfills only when the user config leaves freeTier unset.
-    const unset: OcxProviderConfig = { adapter: nvidia.adapter, baseUrl: nvidia.baseUrl };
+    const unset: CodexCommanderProviderConfig = { adapter: nvidia.adapter, baseUrl: nvidia.baseUrl };
     enrichProviderFromRegistry("nvidia", unset);
     expect(unset.freeTier).toBe(true);
 
     // A user-set explicit false is preserved.
-    const optedOut: OcxProviderConfig = { adapter: nvidia.adapter, baseUrl: nvidia.baseUrl, freeTier: false };
+    const optedOut: CodexCommanderProviderConfig = { adapter: nvidia.adapter, baseUrl: nvidia.baseUrl, freeTier: false };
     enrichProviderFromRegistry("nvidia", optedOut);
     expect(optedOut.freeTier).toBe(false);
 
@@ -557,8 +561,8 @@ describe("provider registry parity", () => {
     });
     expect(cursor?.note).toContain("Live transport");
     expect(cursor?.note).toContain("live model discovery");
-    expect(cursor?.note).toContain("unsafeAllowNativeLocalExec");
-    expect(cursor?.note).toContain("~/.opencodex/config.json");
+    expect(cursor?.note).toContain("nativeLocalExec");
+    expect(cursor?.note).toContain("~/.codexcommander/config.json");
     expect(cursor?.note).toContain("Providers → Cursor → Edit JSON");
     expect(cursor?.models).toContain("auto");
     expect(cursor?.models?.length).toBeGreaterThanOrEqual(38);
@@ -605,7 +609,7 @@ describe("provider registry parity", () => {
     expect(seed.modelReasoningEfforts?.["gpt-5.5"]).toEqual(["low", "medium", "high"]);
     expect(seed.modelReasoningEfforts?.["gpt-5.6-sol"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
 
-    const savedCursor: OcxProviderConfig = { adapter: "cursor", baseUrl: "https://api2.cursor.sh" };
+    const savedCursor: CodexCommanderProviderConfig = { adapter: "cursor", baseUrl: "https://api2.cursor.sh" };
     enrichProviderFromCatalog("cursor", savedCursor);
     expect(savedCursor).toMatchObject({
       liveModels: true,
@@ -699,7 +703,6 @@ describe("provider registry parity", () => {
     expect(presets.filter(p => p.id === "chatgpt" || p.id === "openai" || p.id.startsWith("openai-")).map(p => p.id))
       .toEqual(["openai", "openai-apikey"]);
     expect(presets.find(p => p.id === "openai")).toMatchObject({ label: "OpenAI (Codex login)", codexAccountMode: "pool" });
-    expect(presets.find(p => p.id === "openai-multi")).toBeUndefined();
     expect(presets.find(p => p.id === "openai-apikey")?.label).toBe("OpenAI API");
     expect(presets.at(-1)?.id).toBe("custom");
     expect(presets.find(p => p.id === "cursor")).toMatchObject({
@@ -776,16 +779,6 @@ describe("provider registry parity", () => {
     });
     expect(resolveJawcodeProvider("gemini")).toBe("google");
     expect(resolveJawcodeProvider("minimax-cn")).toBe("minimax");
-  });
-
-  test("legacy azure adapter spelling remains accepted", () => {
-    const adapter = resolveAdapter({
-      adapter: "azure",
-      baseUrl: "https://example.openai.azure.com/openai/deployments/demo",
-      apiKey: "key",
-      defaultModel: "deployment",
-    });
-    expect("passthrough" in adapter && adapter.passthrough).toBe(true);
   });
 
   test("MiniMax metadata lookup tolerates routed lowercase ids", () => {
@@ -953,8 +946,9 @@ describe("free-provider directory isolation", () => {
   });
 
   test("a custom provider named after a directory entry keeps its own destination", () => {
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "qoder",
       providers: {
         qoder: {

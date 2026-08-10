@@ -7,8 +7,8 @@
  * this transform may later remove has its own immediately preceding marker.
  */
 
-export const MANAGED_SUBAGENT_DEFAULT_MARKER = "# Managed by opencodex: native subagent default";
-export const MANAGED_AGENTS_TABLE_MARKER = "# Managed by opencodex: native subagent defaults table";
+export const MANAGED_SUBAGENT_DEFAULT_MARKER = "# Managed by CodexCommander: native subagent default";
+export const MANAGED_AGENTS_TABLE_MARKER = "# Managed by CodexCommander: native subagent defaults table";
 
 export type ManagedSubagentDefaultKey =
   | "default_subagent_model"
@@ -255,6 +255,14 @@ function markerLine(line: SourceLine | undefined, marker: string): boolean {
   return line?.structural === true && line.text.trim() === marker;
 }
 
+function managedDefaultMarkerLine(line: SourceLine | undefined): boolean {
+  return markerLine(line, MANAGED_SUBAGENT_DEFAULT_MARKER);
+}
+
+function managedAgentsTableMarkerLine(line: SourceLine | undefined): boolean {
+  return markerLine(line, MANAGED_AGENTS_TABLE_MARKER);
+}
+
 function targetKeyAt(line: SourceLine | undefined): ManagedSubagentDefaultKey | null {
   if (!line) return null;
   const key = assignmentKeyAt(line);
@@ -332,13 +340,13 @@ function analyzeToml(lines: readonly SourceLine[]): { shape: TomlShape } | { err
       definitions.set(key, {
         key,
         index,
-        owned: markerLine(lines[index - 1], MANAGED_SUBAGENT_DEFAULT_MARKER),
+        owned: managedDefaultMarkerLine(lines[index - 1]),
       });
     }
   }
 
   for (let index = 0; index < lines.length; index += 1) {
-    if (markerLine(lines[index], MANAGED_SUBAGENT_DEFAULT_MARKER)) {
+    if (managedDefaultMarkerLine(lines[index])) {
       const nextKey = targetKeyAt(lines[index + 1]);
       const insideAgents = agentsHeader !== null
         && agentsEnd !== null
@@ -348,7 +356,7 @@ function analyzeToml(lines: readonly SourceLine[]): { shape: TomlShape } | { err
         return { error: "orphaned managed subagent default marker cannot be updated safely" };
       }
     }
-    if (markerLine(lines[index], MANAGED_AGENTS_TABLE_MARKER)) {
+    if (managedAgentsTableMarkerLine(lines[index])) {
       if (index + 1 !== agentsHeader) {
         return { error: "orphaned managed agents table marker cannot be updated safely" };
       }
@@ -359,7 +367,7 @@ function analyzeToml(lines: readonly SourceLine[]): { shape: TomlShape } | { err
     shape: {
       agentsHeader,
       agentsEnd,
-      tableOwned: agentsHeader !== null && markerLine(lines[agentsHeader - 1], MANAGED_AGENTS_TABLE_MARKER),
+      tableOwned: agentsHeader !== null && managedAgentsTableMarkerLine(lines[agentsHeader - 1]),
       definitions,
     },
   };
@@ -411,7 +419,7 @@ function invalidInput(content: string, error: string): ManagedSubagentDefaultsTr
 }
 
 /**
- * Add/update opencodex-owned native subagent defaults, or remove them with
+ * Add/update CodexCommander-owned native subagent defaults, or remove them with
  * `defaults = null`. Unmarked target keys are user-owned: they are retained and
  * returned as conflicts rather than overwritten. Ambiguous TOML is rejected
  * byte-for-byte so callers never have to guess what was changed.
@@ -438,8 +446,8 @@ export function transformManagedSubagentDefaults(
 
   const lines = splitSourceLines(content);
   if (defaults === null && !lines.some(line =>
-    markerLine(line, MANAGED_SUBAGENT_DEFAULT_MARKER)
-      || markerLine(line, MANAGED_AGENTS_TABLE_MARKER))) {
+    managedDefaultMarkerLine(line)
+      || managedAgentsTableMarkerLine(line))) {
     return { ok: true, changed: false, content, conflicts: [] };
   }
   const analysis = analyzeToml(lines);
@@ -483,13 +491,14 @@ export function transformManagedSubagentDefaults(
     if (!definition.owned) {
       continue;
     }
-    if (replaceManagedString(lines[definition.index]!.text, key, value ?? "__opencodex_validation__") === null) {
+    if (replaceManagedString(lines[definition.index]!.text, key, value ?? "__codexcommander_validation__") === null) {
       return invalidInput(content, `managed agents.${key} is not a supported single-line TOML string`);
     }
     if (value === undefined) {
       removals.push(definition.index - 1, definition.index);
       continue;
     }
+    lines[definition.index - 1]!.text = MANAGED_SUBAGENT_DEFAULT_MARKER;
     const replacement = replaceManagedString(lines[definition.index]!.text, key, value);
     if (replacement === null) {
       return invalidInput(content, `managed agents.${key} is not a supported single-line TOML string`);
@@ -526,7 +535,8 @@ export function transformManagedSubagentDefaults(
   // is blank. Comments or unknown keys make it user-extended and preserve it.
   if (shape.tableOwned) {
     const currentHeader = lines.findIndex(exactAgentsHeader);
-    if (currentHeader !== -1 && markerLine(lines[currentHeader - 1], MANAGED_AGENTS_TABLE_MARKER)) {
+    if (currentHeader !== -1 && managedAgentsTableMarkerLine(lines[currentHeader - 1])) {
+      if (defaults !== null) lines[currentHeader - 1]!.text = MANAGED_AGENTS_TABLE_MARKER;
       let currentEnd = lines.length;
       for (let index = currentHeader + 1; index < lines.length; index += 1) {
         if (isAnyTableHeader(lines[index]!)) {

@@ -92,8 +92,7 @@ export function classifyCursorError(message: string): string {
     // gRPC RESOURCE_EXHAUSTED is quota/rate exhaustion unless the detail names a
     // request-size overflow (tool catalog/registration). Only the latter is a
     // client-fixable 400; everything else surfaces as a 429 so Codex backs off
-    // instead of hammering retries (live evidence: 6x 400 retry storm, devlog
-    // 260723_cursor_context_continuity/000_plan.md).
+    // instead of hammering retries (live evidence: 6x 400 retry storm, implementation contract).
     return isCursorRequestTooLargeDetail(lower)
       ? "Cursor resource limit exceeded"
       : "Cursor rate limit exceeded";

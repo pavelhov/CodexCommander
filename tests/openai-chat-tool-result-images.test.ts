@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
-import type { OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderContentPart, CodexCommanderMessage, CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 
 // Issue #888: role:"tool" content is text-only on chat-completions providers, so images inside a
 // tool result were flattened to an "[image]" marker and vision-capable routed models hallucinated
 // what they never saw. Tool-result images now ride in a follow-up user vision message released when
 // the tool round closes, without splitting the round (strict providers reject interleaved users).
 
-const provider: OcxProviderConfig = {
+const provider: CodexCommanderProviderConfig = {
   adapter: "openai-chat",
   baseUrl: "https://example.test/v1",
   apiKey: "sk-test",
@@ -29,8 +29,8 @@ interface ChatMsg {
   tool_call_id?: string;
 }
 
-function wire(messages: OcxMessage[]): ChatMsg[] {
-  const parsed: OcxParsedRequest = {
+function wire(messages: CodexCommanderMessage[]): ChatMsg[] {
+  const parsed: CodexCommanderParsedRequest = {
     modelId: "test-model",
     context: { messages },
     stream: false,
@@ -40,11 +40,11 @@ function wire(messages: OcxMessage[]): ChatMsg[] {
   return (JSON.parse(req.body) as { messages: ChatMsg[] }).messages;
 }
 
-function user(text: string): OcxMessage {
+function user(text: string): CodexCommanderMessage {
   return { role: "user", content: text, timestamp: 0 };
 }
 
-function assistantWithCalls(calls: { id: string; name: string }[]): OcxMessage {
+function assistantWithCalls(calls: { id: string; name: string }[]): CodexCommanderMessage {
   return {
     role: "assistant",
     content: calls.map(c => ({ type: "toolCall" as const, id: c.id, name: c.name, arguments: {} })),
@@ -52,15 +52,15 @@ function assistantWithCalls(calls: { id: string; name: string }[]): OcxMessage {
   };
 }
 
-function toolResult(callId: string, name: string, content: string | OcxContentPart[]): OcxMessage {
+function toolResult(callId: string, name: string, content: string | CodexCommanderContentPart[]): CodexCommanderMessage {
   return { role: "toolResult", toolCallId: callId, toolName: name, content, isError: false, timestamp: 0 };
 }
 
-/** The carrier is a user message whose parts start with an "[ocx]" text label followed by image_url parts. */
+/** The carrier is a user message whose parts start with a CodexCommander label followed by image_url parts. */
 function isImageCarrier(msg: ChatMsg): boolean {
   if (msg.role !== "user" || !Array.isArray(msg.content)) return false;
   const [head, ...rest] = msg.content;
-  return head?.type === "text" && typeof head.text === "string" && head.text.startsWith("[ocx]")
+  return head?.type === "text" && typeof head.text === "string" && head.text.startsWith("[codexcommander]")
     && rest.length > 0 && rest.every(p => p.type === "image_url");
 }
 

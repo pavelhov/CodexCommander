@@ -221,7 +221,7 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
   { id: "gpt-5.4-nano", contextWindow: CONTEXT_272K, supportsReasoningEffort: true },
   { id: "gpt-5.5", contextWindow: CONTEXT_272K, supportsReasoningEffort: true },
   // gpt-5.5-extra: absent from cursor.com docs but SURVIVES the live GetUsableModels filter
-  // (account-verified 260709, devlog/model_update/260709_model_refresh/004_live_snapshot.md).
+  // (account-verified 260709, implementation contract).
   { id: "gpt-5.5-extra", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
   { id: "gpt-5.6-sol", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },
   { id: "gpt-5.6-terra", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },

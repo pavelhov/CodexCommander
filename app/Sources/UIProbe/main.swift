@@ -7,10 +7,32 @@ import AppKit
 import MenuBarCore
 import MenuBarUI
 
+func currentHealth(
+    status: String = "protected",
+    protection: String = "none",
+    serviceRunning: Bool = false,
+    serviceInstalled: Bool = false,
+    serviceEnabled: Bool = false,
+    rebootSafe: Bool = false
+) -> StartupHealth {
+    StartupHealth(
+        status: status, protection: protection, platform: "darwin",
+        routingKind: "codexcommander-local", routingInjected: true,
+        localRoutingDependency: true, autostartEnabled: serviceEnabled,
+        serviceRunning: serviceRunning, serviceInstalled: serviceInstalled,
+        serviceViable: serviceEnabled, serviceEnabled: serviceEnabled,
+        serviceStale: false, serviceConflict: false, serviceSupported: true,
+        shimInstalled: false, shimHealthy: false, shimCoverage: "none", rebootSafe: rebootSafe,
+        diagnosticStale: false, recommendedCommand: nil,
+        commands: .init(installService: "ccx service install", repairService: "ccx service repair",
+                        installShim: "ccx codex-shim install", restoreNative: "ccx restore")
+    )
+}
+
 final class ProbeDelegate: NSObject, NSApplicationDelegate {
     let controller = PopoverViewController()
     var panel: PopoverPanel?
-    var outputPath = "/tmp/opencodex-ui-probe.png"
+    var outputPath = "/tmp/codexcommander-ui-probe.png"
     var lightAppearance = false
 
     func applicationDidFinishLaunching(_ n: Notification) {
@@ -29,7 +51,7 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        host.title = "OpenCodex UIProbe"
+        host.title = "CodexCommander UIProbe"
         host.backgroundColor = NSColor(calibratedRed: 0.72, green: 0.24, blue: 0.05, alpha: 1)
         host.isOpaque = true
         host.center()
@@ -186,9 +208,9 @@ private enum Fixture {
         // expired/transient-probe state that must remain visible without a fake value.
         let providersJSON = """
         [
-          {"name":"openai","authMode":"forward","quotaCapable":true},
-          {"name":"kimi","authMode":"oauth","quotaCapable":true},
-          {"name":"xai","authMode":"oauth","quotaCapable":true}
+          {"name":"openai","adapter":"openai-responses","authMode":"forward","hasApiKey":false,"disabled":false,"quotaCapable":true},
+          {"name":"kimi","adapter":"kimi","authMode":"oauth","hasApiKey":false,"disabled":false,"quotaCapable":true},
+          {"name":"xai","adapter":"openai-chat","authMode":"oauth","hasApiKey":false,"disabled":false,"quotaCapable":true}
         ]
         """
         let availabilityJSON = """
@@ -220,13 +242,9 @@ private enum Fixture {
         )
 
         return ProxySnapshot(
-            state: .running(StartupHealth(
-                status: "protected",
-                protection: "service",
-                serviceRunning: true,
-                serviceInstalled: true,
-                serviceEnabled: true,
-                rebootSafe: true
+            state: .running(currentHealth(
+                protection: "service", serviceRunning: true, serviceInstalled: true,
+                serviceEnabled: true, rebootSafe: true
             )),
             endpoint: endpoint,
             quotas: quotas,

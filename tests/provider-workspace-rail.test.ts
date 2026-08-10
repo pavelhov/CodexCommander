@@ -72,30 +72,23 @@ describe("provider rail source contract", () => {
     expect((css.match(/\.providers-workspace-rail-row\s*\{/g) ?? []).length).toBe(1);
   });
 
-  test("redirects only the exact legacy workspace route and accepts provider deep links", async () => {
+  test("accepts canonical provider deep links and normalizes malformed tabs", async () => {
     const { hashBelongsToPage, resolveAppHashChange } = await import("../gui/src/app-routing");
-    // WP5 (Q1): the dual-layout hash is no longer a Providers route. It must not belong,
-    // and it must be passively replaced so an old bookmark still lands somewhere real.
-    expect(hashBelongsToPage("providers/workspace", "providers")).toBe(false);
     expect(hashBelongsToPage("providers", "providers")).toBe(true);
     // Provider ids are runtime-configured, so syntactically valid ids belong at the
     // App layer. The Providers page resolves availability after config has loaded.
     expect(hashBelongsToPage("providers/other", "providers")).toBe(true);
-    expect(hashBelongsToPage("providers/workspace/extra", "providers")).toBe(true);
+    expect(hashBelongsToPage("providers/other/extra", "providers")).toBe(true);
 
-    const legacy = resolveAppHashChange("providers/workspace");
-    expect(legacy.page).toBe("providers");
-    expect(legacy.replaceTo).toBe("providers");
     expect(resolveAppHashChange("providers/other").replaceTo).toBeNull();
     // A malformed tab is passively canonicalized to the provider overview.
-    expect(resolveAppHashChange("providers/workspace/extra").replaceTo).toBe(
-      "providers/workspace/overview",
+    expect(resolveAppHashChange("providers/other/extra").replaceTo).toBe(
+      "providers/other/overview",
     );
 
     const routing = await Bun.file("gui/src/app-routing.ts").text();
     const routeState = await Bun.file("gui/src/use-app-route-state.ts").text();
     const app = await Bun.file("gui/src/App.tsx").text();
-    expect(routing).toContain('rawHash === "providers/workspace"');
     expect(routing).toContain("hashBelongsToPage(rawHash, nextPage)");
     /*
      * The hook used to re-implement this redirect with its own literal, which

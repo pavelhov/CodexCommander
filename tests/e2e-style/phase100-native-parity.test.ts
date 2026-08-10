@@ -3,7 +3,7 @@ import { bridgeToResponsesSSE } from "../../src/bridge";
 import { buildCatalogEntries } from "../../src/codex/catalog";
 import { parseRequest } from "../../src/responses/parser";
 import { planWebSearch } from "../../src/web-search";
-import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../../src/types";
+import type { AdapterEvent, CodexCommanderConfig, CodexCommanderProviderConfig } from "../../src/types";
 
 function nativeTemplate(): Record<string, unknown> {
   return {
@@ -54,19 +54,19 @@ async function collectSse(stream: ReadableStream<Uint8Array>): Promise<{ event?:
 }
 
 describe("Phase 100 Codex-native parity smoke", () => {
-  test("routed model keeps native-like catalog affordances while runtime routes through opencodex sidecars and bridge errors", async () => {
-    const routedProvider: OcxProviderConfig = {
+  test("routed model keeps native-like catalog affordances while runtime routes through codexcommander sidecars and bridge errors", async () => {
+    const routedProvider: CodexCommanderProviderConfig = {
       adapter: "openai-chat",
       baseUrl: "https://routed.example/v1",
       apiKey: "routed-key",
       noVisionModels: ["deepseek-v4-pro"],
     };
-    const forwardProvider: OcxProviderConfig = {
+    const forwardProvider: CodexCommanderProviderConfig = {
       adapter: "openai-responses",
       baseUrl: "https://chatgpt.example/v1",
       authMode: "forward",
     };
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "opencode-go",
       providers: {

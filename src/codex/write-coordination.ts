@@ -16,7 +16,7 @@
  *
  * What the id covers, and why it is the OUTPUT rather than the inputs: the bytes
  * `injectCodexConfig` emits depend on the port, the resolved catalog path, the
- * hostname, websocket mode, legacy mode and the managed sub-agent defaults. An
+ * hostname, websocket mode, account mode and the managed sub-agent defaults. An
  * enumeration of those was already incomplete once. Hashing the computed
  * candidate bytes closes the class instead of the instance — an input that
  * changes the output changes the id whether or not anyone remembered to list it.
@@ -35,7 +35,7 @@ export interface CodexWriteCandidate {
 export interface CodexWriteEvidence {
   /** sha256 of the `config.toml` bytes this operation read as its input. */
   readonly nativeInputIdentity: string;
-  /** Digest of the persisted OpenCodex config these bytes were derived from. */
+  /** Digest of the persisted CodexCommander config these bytes were derived from. */
   readonly persistedIdentity: string;
   /** Generation as observed before the lock; `present:false` means no coordinator yet. */
   readonly generation: Readonly<{ present: boolean; value: number }>;

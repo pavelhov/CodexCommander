@@ -1,18 +1,18 @@
 name: Feature proposal
-description: Propose a new capability or workflow improvement for OpenCodex.
+description: Propose a new capability or workflow improvement for CodexCommander.
 labels:
   - enhancement
 body:
   - type: markdown
     attributes:
       value: |
-        Describe the workflow you need and what OpenCodex should do. Concrete examples help us evaluate and implement your proposal faster.
+        Describe the workflow you need and what CodexCommander should do. Concrete examples help us evaluate and implement your proposal faster.
 
   - type: dropdown
     id: area
     attributes:
       label: Area
-      description: Which part of OpenCodex does this proposal affect?
+      description: Which part of CodexCommander does this proposal affect?
       options:
         - CLI
         - Proxy and routing
@@ -52,7 +52,7 @@ body:
   - type: textarea
     id: behaviour
     attributes:
-      label: What should OpenCodex do?
+      label: What should CodexCommander do?
       description: Describe the observable behaviour you expect, not internal implementation details.
       placeholder: When I send ... the proxy should ...
     validations:
@@ -66,7 +66,7 @@ body:
         Provide at least one concrete example: a CLI command, configuration fragment, API exchange, UI workflow, or before/after comparison.
       placeholder: |
         ```bash
-        ocx config set routing.fallback_provider anthropic
+        ccx config set routing.fallback_provider anthropic
         ```
     validations:
       required: true
@@ -90,7 +90,7 @@ body:
       options:
         - label: I searched existing issues and documentation.
           required: true
-        - label: This request describes a concrete OpenCodex workflow rather than merely naming a desired technology.
+        - label: This request describes a concrete CodexCommander workflow rather than merely naming a desired technology.
           required: true
         - label: I removed secrets and personal data.
           required: true

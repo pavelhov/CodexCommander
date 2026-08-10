@@ -19,7 +19,7 @@ import {
   CONFIG_UNINSTALL_MANIFEST,
   recordOwnedConfigPath,
 } from "../src/lib/config-ownership";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
 
 const originalFetch = globalThis.fetch;
 
@@ -46,47 +46,48 @@ function catalogDeps() {
   };
 }
 
-function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
+function provider(overrides: Partial<CodexCommanderProviderConfig> = {}): CodexCommanderProviderConfig {
   return {
     adapter: "openai-chat",
     baseUrl: "https://models.example.test/v1",
     ...overrides,
-  } as OcxProviderConfig;
+  } as CodexCommanderProviderConfig;
 }
 
-function config(providers: Record<string, OcxProviderConfig>, overrides: Partial<OcxConfig> = {}): OcxConfig {
+function config(providers: Record<string, CodexCommanderProviderConfig>, overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
   return {
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: Object.keys(providers)[0] ?? "openai",
     providers,
     ...overrides,
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
-function liveEmptyProvider(): OcxProviderConfig {
+function liveEmptyProvider(): CodexCommanderProviderConfig {
   return provider({
     liveModels: true,
     fetch: ((input: RequestInfo | URL) => globalThis.fetch(input)) as typeof fetch,
-  } as Partial<OcxProviderConfig>);
+  } as Partial<CodexCommanderProviderConfig>);
 }
 
 describe("retained routed Codex catalog", () => {
   let codexHome: string;
-  let opencodexHome: string;
+  let codexCommanderHome: string;
   let catalogPath: string;
   let previousCodexHome: string | undefined;
-  let previousOpenCodexHome: string | undefined;
+  let previousCodexCommanderHome: string | undefined;
 
   beforeEach(() => {
     previousCodexHome = process.env.CODEX_HOME;
-    previousOpenCodexHome = process.env.OPENCODEX_HOME;
-    codexHome = mkdtempSync(join(tmpdir(), "ocx-retained-codex-"));
-    opencodexHome = mkdtempSync(join(tmpdir(), "ocx-retained-home-"));
+    previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+    codexHome = mkdtempSync(join(tmpdir(), "ccx-retained-codex-"));
+    codexCommanderHome = mkdtempSync(join(tmpdir(), "ccx-retained-home-"));
     process.env.CODEX_HOME = codexHome;
-    process.env.OPENCODEX_HOME = opencodexHome;
-    // Initialize the same owned-home metadata a normal OpenCodex install has;
+    process.env.CODEXCOMMANDER_HOME = codexCommanderHome;
+    // Initialize the same owned-home metadata a normal CodexCommander install has;
     // the snapshot write itself must add its path to this existing manifest.
-    expect(recordOwnedConfigPath(opencodexHome, join(opencodexHome, "config.json"))).toBe(true);
+    expect(recordOwnedConfigPath(codexCommanderHome, join(codexCommanderHome, "config.json"))).toBe(true);
     catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     writeFileSync(catalogPath, nativeCatalog(), "utf8");
@@ -99,10 +100,10 @@ describe("retained routed Codex catalog", () => {
     resetCatalogRuntimeStateForTests();
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
-    if (previousOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpenCodexHome;
+    if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
     rmSync(codexHome, { recursive: true, force: true });
-    rmSync(opencodexHome, { recursive: true, force: true });
+    rmSync(codexCommanderHome, { recursive: true, force: true });
   });
 
   test("a live routed sync creates an owned mode-600 last-known-good snapshot", async () => {
@@ -117,7 +118,7 @@ describe("retained routed Codex catalog", () => {
     expect(statSync(snapshotPath).mode & 0o777).toBe(0o600);
     const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as { models: Array<{ slug: string }> };
     expect(snapshot.models.map(model => model.slug)).toContain("vendor/alpha");
-    const manifest = JSON.parse(readFileSync(join(opencodexHome, CONFIG_UNINSTALL_MANIFEST), "utf8")) as {
+    const manifest = JSON.parse(readFileSync(join(codexCommanderHome, CONFIG_UNINSTALL_MANIFEST), "utf8")) as {
       paths: string[];
     };
     expect(manifest.paths).toContain("codex-routed-retained.json");

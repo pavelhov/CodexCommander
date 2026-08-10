@@ -5,13 +5,13 @@ description: Grok Imagine Video を使用して非 OpenAI モデルを通じて�
 
 ## 概要
 
-Video Bridge を使用すると、opencodex によってルーティングされる非 OpenAI モデルを通じて xAI の Grok Imagine Video 生成を使用できます。有効にすると、合成 `video_gen` ツールが会話に挿入されます。モデルはこれを他の関数ツールと同様に呼び出します。 opencodex は通話をインターセプトし、ビデオ生成ジョブを xAI に送信し、完了するまでポーリングして、結果をダウンロードします。
+Video Bridge を使用すると、CodexCommander によってルーティングされる非 OpenAI モデルを通じて xAI の Grok Imagine Video 生成を使用できます。有効にすると、合成 `video_gen` ツールが会話に挿入されます。モデルはこれを他の関数ツールと同様に呼び出します。 CodexCommander は通話をインターセプトし、ビデオ生成ジョブを xAI に送信し、完了するまでポーリングして、結果をダウンロードします。
 
 ## 前提条件
 
-- **API キー**を持つ `xai` プロバイダー エントリ (`ocx login xai` だけでは十分ではありません。ビデオ ブリッジには OAuth ではなくキー認証が必要です)
+- **API キー**を持つ `xai` プロバイダー エントリ (`ccx login xai` だけでは十分ではありません。ビデオ ブリッジには OAuth ではなくキー認証が必要です)
 - ルーティングプロバイダーとしての非 OpenAI モデル (例: Anthropic Claude、Google Gemini)
-- opencodex は非 OpenAI プロバイダーを介してルーティングするように構成されています
+- CodexCommander は非 OpenAI プロバイダーを介してルーティングするように構成されています
 
 > **⚠ プロバイダー キーが必要です:** ビデオ ブリッジは、`xai` プロバイダーが使用する場合にのみアクティブになります。
 > APIキー認証。これを設定に追加します。
@@ -24,7 +24,7 @@ Video Bridge を使用すると、opencodex によってルーティングされ
 > }
 > ```
 >
-> `ocx login xai` (OAuth) 経由でオンボードした場合、プロバイダーは `authMode: "oauth"` のままになります。
+> `ccx login xai` (OAuth) 経由でオンボードした場合、プロバイダーは `authMode: "oauth"` のままになります。
 > ブリッジは静かに起動しません。 **または**環境で`XAI_API_KEY`を設定します
 > 上に示したようにキーをハードコーディングします。
 
@@ -53,9 +53,9 @@ Video Bridge を使用すると、opencodex によってルーティングされ
 
 ## 仕組み
 
-1. opencodex は、`videoBridgeEnabled: true` を使用して非 OpenAI ルーティング モデルを検出します
+1. CodexCommander は、`videoBridgeEnabled: true` を使用して非 OpenAI ルーティング モデルを検出します
 2. 合成 `video_gen` 関数ツールが会話に挿入されます
-3. モデルが `video_gen` を呼び出すと、opencodex が xAI の `/videos/generations` にジョブを送信します。
+3. モデルが `video_gen` を呼び出すと、CodexCommander が xAI の `/videos/generations` にジョブを送信します。
 4. ブリッジは 5 ～ 15 秒ごとにジョブ ステータスをポーリングし、ストリームを維持するためにハートビート メッセージを送信します。
 5. ビデオの準備ができたら、アーティファクト ディレクトリにダウンロードされます
 6. ローカル ファイル パスがツールの結果としてモデルに返されます。

@@ -1,4 +1,5 @@
 import { ConfigMutationLockError, loadConfig, mutatePersistedConfig, saveConfigPreservingClaudeCode } from "../config";
+import { readEnv } from "../identity";
 import { withCodexAccountLogLabel } from "./account-label";
 import {
   getCodexAccountCredential,
@@ -85,7 +86,7 @@ export { clearMainAccountInfoCache } from "./main-account-cache";
 import { maskEmail } from "../lib/privacy";
 import { CodexWarmupError, codexWarmupFailureReason, warmCodexAccount } from "./warmup";
 export { maskEmail } from "../lib/privacy";
-import type { CodexAccount, OcxConfig } from "../types";
+import type { CodexAccount, CodexCommanderConfig } from "../types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
 import { readBoundedResponseBody } from "../lib/bounded-body";
@@ -96,8 +97,6 @@ import {
   type OAuthHealthLabel,
 } from "../oauth/health";
 import {
-  CODEX_ACCOUNT_ID_RE,
-  hasLegacyMainCodexPoolAccount,
   isSelectableCodexPoolAccount,
   isValidCodexAccountId,
 } from "./account-id";
@@ -130,8 +129,6 @@ function nativeMainProfileBusyResponse(): Response {
   return response;
 }
 
-const MANUAL_IMPORT_ENV = "OPENCODEX_ENABLE_UNVERIFIED_CODEX_IMPORT";
-
 const MAX_CODEX_LOGIN_STATE_ROWS = 32;
 const CODEX_LOGIN_TERMINAL_TTL_MS = 300_000;
 interface CodexLoginStateRow { status: string; startedAt: number; accountId?: string; email?: string; error?: string; doneAt?: number }
@@ -157,14 +154,14 @@ function pruneCodexLoginState(now = Date.now()): void {
   }
 }
 
-function configuredPoolAccount(config: OcxConfig, accountId: string): CodexAccount | null {
+function configuredPoolAccount(config: CodexCommanderConfig, accountId: string): CodexAccount | null {
   if (!isValidCodexAccountId(accountId)) return null;
   return (config.codexAccounts ?? [])
     .find(account => account.id === accountId && isSelectableCodexPoolAccount(account)) ?? null;
 }
 
 function codexAccountPersistenceConflict(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   accountId: string,
   mode: "create" | "reauth",
 ): string | undefined {
@@ -214,7 +211,7 @@ function poolAccountDto(
     email: maskEmail(account.email) ?? account.email,
     ...(account.alias !== undefined ? { alias: account.alias } : {}),
     ...(account.plan !== undefined ? { plan: account.plan } : {}),
-    ...(account.logLabel !== undefined ? { logLabel: account.logLabel } : {}),
+    logLabel: account.logLabel,
     isMain: false,
     paused,
     priority,
@@ -235,14 +232,11 @@ interface ResetCreditAuth {
 }
 
 async function withResetCreditAuth<T>(
-  runtimeConfig: OcxConfig,
+  runtimeConfig: CodexCommanderConfig,
   accountId: string,
   operation: (auth: ResetCreditAuth) => Promise<T>,
 ): Promise<{ ok: true; value: T } | { ok: false; response: Response }> {
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
-    if (hasLegacyMainCodexPoolAccount(runtimeConfig.codexAccounts)) {
-      return { ok: false, response: jsonResponse({ error: "Remove the legacy __main__ pool row before using the Desktop account" }, 409) };
-    }
     const nativeMainLease = tryAcquireNativeMainProfileClaim();
     if (!nativeMainLease) return { ok: false, response: nativeMainProfileBusyResponse() };
     try {
@@ -314,7 +308,7 @@ function safeResetCreditConsumeDto(input: unknown): { code: string } {
 }
 
 export function isUnverifiedCodexImportEnabled(): boolean {
-  return process.env[MANUAL_IMPORT_ENV] === "1";
+  return readEnv("CODEXCOMMANDER_ENABLE_UNVERIFIED_CODEX_IMPORT") === "1";
 }
 
 function manualImportDisabledResponse(): Response {
@@ -374,18 +368,18 @@ function nonEmptyPlan(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value : null;
 }
 
-function isRuntimeConfig(config: OcxConfig): boolean {
+function isRuntimeConfig(config: CodexCommanderConfig): boolean {
   return !!config && typeof config === "object" && !!config.providers;
 }
 
-function getRuntimeConfig(config: OcxConfig): OcxConfig {
+function getRuntimeConfig(config: CodexCommanderConfig): CodexCommanderConfig {
   return isRuntimeConfig(config) ? config : loadConfig();
 }
 
-function saveRuntimeConfig(sourceConfig: OcxConfig, nextConfig: OcxConfig): void {
+function saveRuntimeConfig(sourceConfig: CodexCommanderConfig, nextConfig: CodexCommanderConfig): void {
   saveConfigPreservingClaudeCode(nextConfig);
   if (sourceConfig === nextConfig || !isRuntimeConfig(sourceConfig)) return;
-  for (const key of Object.keys(sourceConfig) as Array<keyof OcxConfig>) {
+  for (const key of Object.keys(sourceConfig) as Array<keyof CodexCommanderConfig>) {
     delete sourceConfig[key];
   }
   Object.assign(sourceConfig, nextConfig);
@@ -683,7 +677,7 @@ interface FreshPoolPlanUpdate {
  * WHAM requests were in flight. Missing or malformed files fail closed: a read path must not
  * recreate a deleted config from the server's older in-memory snapshot.
  */
-function reconcileFreshPoolAccountPlans(runtimeConfig: OcxConfig, updates: FreshPoolPlanUpdate[]): void {
+function reconcileFreshPoolAccountPlans(runtimeConfig: CodexCommanderConfig, updates: FreshPoolPlanUpdate[]): void {
   if (updates.length === 0) return;
   let outcome: ReturnType<typeof mutatePersistedConfig<FreshPoolPlanUpdate[]>>;
   try {
@@ -838,7 +832,7 @@ async function fetchPoolAccountQuota(accountId: string, forceRefresh = false, co
 let primeInFlight: Promise<void> | null = null;
 let cooldownRecoveryInFlight: Promise<void> | null = null;
 
-export async function runCodexCooldownRecoveryProbes(config: OcxConfig, now = Date.now()): Promise<void> {
+export async function runCodexCooldownRecoveryProbes(config: CodexCommanderConfig, now = Date.now()): Promise<void> {
   const openai = config.providers[OPENAI_CODEX_PROVIDER_ID];
   if (!openai
     || openai.disabled === true
@@ -873,7 +867,7 @@ export async function runCodexCooldownRecoveryProbes(config: OcxConfig, now = Da
   return cooldownRecoveryInFlight;
 }
 
-export function registerCodexCooldownRecoveryProbeWorker(config: OcxConfig): void {
+export function registerCodexCooldownRecoveryProbeWorker(config: CodexCommanderConfig): void {
   registerStateSweepAfterTick({
     name: "codex-cooldown-recovery",
     afterTick: () => { void runCodexCooldownRecoveryProbes(config); },
@@ -907,7 +901,7 @@ function tryAcquireNativeMainPrimeLease(): AdmissionLease | null {
  * are swallowed: a blocked WSL network must never crash startup or a request.
  */
 export async function primeCodexPoolQuotas(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   reason: string,
   options: PrimeCodexPoolQuotasOptions = {},
 ): Promise<void> {
@@ -958,7 +952,7 @@ export async function primeCodexPoolQuotas(
     } catch {
       // Priming is best-effort; never propagate.
     }
-    if (process.env.OPENCODEX_DEBUG_QUOTA === "1") {
+    if (process.env.CODEXCOMMANDER_DEBUG_QUOTA === "1") {
       console.warn(`[codex-quota] prime done (reason=${reason}, pool=${pool.length}, refreshed=${stale.length})`);
     }
   })().finally(() => { primeInFlight = null; });
@@ -976,7 +970,7 @@ export function clearCodexCooldownRecoveryProbeState(): void {
   cooldownRecoveryInFlight = null;
 }
 
-export function effectiveCodexAuthAccountId(config: OcxConfig): string {
+export function effectiveCodexAuthAccountId(config: CodexCommanderConfig): string {
   return getEffectiveActiveCodexAccountId(config) ?? MAIN_CODEX_ACCOUNT_ID;
 }
 
@@ -986,7 +980,7 @@ export interface CodexAuthAccountsSnapshot {
 }
 
 export async function listCodexAuthAccountsSnapshot(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   forceRefresh = false,
 ): Promise<CodexAuthAccountsSnapshot> {
   const runtimeConfig = getRuntimeConfig(config);
@@ -1093,7 +1087,7 @@ export async function listCodexAuthAccountsSnapshot(
   };
 }
 
-export async function listCodexAuthAccounts(config: OcxConfig, forceRefresh = false): Promise<CodexAuthAccountDto[]> {
+export async function listCodexAuthAccounts(config: CodexCommanderConfig, forceRefresh = false): Promise<CodexAuthAccountDto[]> {
   return (await listCodexAuthAccountsSnapshot(config, forceRefresh)).accounts;
 }
 
@@ -1103,12 +1097,12 @@ interface PauseExhaustedResult {
   failedAccountCount: number;
 }
 
-function selectFallbackAfterPause(config: OcxConfig, pausedActiveId: string): void {
+function selectFallbackAfterPause(config: CodexCommanderConfig, pausedActiveId: string): void {
   reconcileCodexActiveAfterExclusion(config, pausedActiveId);
 }
 
 async function pauseExhaustedCodexAccounts(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   persistPausedAccounts: () => void,
 ): Promise<PauseExhaustedResult> {
   const poolAccounts = (config.codexAccounts ?? []).filter(account => !account.isMain);
@@ -1201,7 +1195,7 @@ async function pauseExhaustedCodexAccounts(
 export async function handleCodexAuthAPI(
   req: Request,
   url: URL,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
 ): Promise<Response | null> {
 
   if (url.pathname === "/api/codex-auth/accounts" && req.method === "GET") {
@@ -1260,9 +1254,7 @@ export async function handleCodexAuthAPI(
     const id = url.searchParams.get("id");
     if (!id) return jsonResponse({ error: "Missing id" }, 400);
     const runtimeConfig = getRuntimeConfig(config);
-    const isLegacyPoolAccount = CODEX_ACCOUNT_ID_RE.test(id)
-      && (runtimeConfig.codexAccounts ?? []).some(account => !account.isMain && account.id === id);
-    if (!isValidCodexAccountId(id) && !isLegacyPoolAccount) {
+    if (!isValidCodexAccountId(id)) {
       return jsonResponse({ error: "Invalid account id format" }, 400);
     }
     deleteCodexAccount(runtimeConfig, id);
@@ -1413,9 +1405,6 @@ export async function handleCodexAuthAPI(
     try { body = (await req.json()) as typeof body; } catch { return jsonResponse({ error: "Invalid JSON" }, 400); }
     const runtimeConfig = getRuntimeConfig(config);
     const targetAccountId = body.accountId ?? MAIN_CODEX_ACCOUNT_ID;
-    if (body.accountId === MAIN_CODEX_ACCOUNT_ID && hasLegacyMainCodexPoolAccount(runtimeConfig.codexAccounts)) {
-      return jsonResponse({ error: "Remove the legacy __main__ pool row before selecting the Desktop account" }, 409);
-    }
     if (isCodexAccountPaused(runtimeConfig, targetAccountId)) {
       return jsonResponse({ error: "Account is paused" }, 409);
     }
@@ -1793,12 +1782,12 @@ export async function handleCodexAuthAPI(
 
                 if (existingIdx >= 0) {
                   // Keep the pool id stable; refresh display metadata after a successful login/reauth.
-                  accounts[existingIdx] = withCodexAccountLogLabel({
-                    ...accounts[existingIdx],
+                  accounts[existingIdx] = {
+                    ...accounts[existingIdx]!,
                     email,
-                    plan: plan ?? accounts[existingIdx].plan,
+                    plan: plan ?? accounts[existingIdx]!.plan,
                     isMain: false,
-                  }, accounts);
+                  };
                   latestConfig.codexAccounts = accounts;
                   saveRuntimeConfig(config, latestConfig);
                 } else {
@@ -1898,10 +1887,6 @@ export async function handleCodexAuthAPI(
         return jsonResponse({ status: "done", accountId });
       }
       return jsonResponse(st ? { ...st, email: maskEmail(st.email) ?? undefined } : { status: "expired" });
-    }
-    // Legacy fallback: return latest pending flow
-    for (const [, st] of codexAuthLoginState) {
-      if (st.status === "pending") return jsonResponse({ ...st, email: maskEmail(st.email) ?? undefined });
     }
     return jsonResponse({ status: "idle" });
   }

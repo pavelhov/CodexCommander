@@ -12,19 +12,20 @@ import {
 } from "./runtime-api";
 
 const USAGE = `Usage:
-  ocx observe logs [--provider <name>] [--model <id>] [--status <code>]
+  ccx observe logs [--provider <name>] [--model <id>] [--status <code>]
       [--limit <n>] [--follow] [--json|--jsonl]
-  ocx logs explain <request-id> [--json]
-  ocx logs rebuild-index
-  ocx logs index-status
-  ocx observe usage [--range <7d|30d|all>] [--surface <all|codex|claude|grok>] [--json]
-  ocx observe storage [--json]
-  ocx observe memory [--json]
-  ocx observe debug [--json]
-  ocx observe claude-inbound [--limit <n>] [--json]
-  ocx observe injection [--limit <n>] [--json]`;
+  ccx logs explain <request-id> [--json]
+  ccx logs rebuild-index
+  ccx logs index-status
+  ccx observe usage [--range <7d|30d|all>] [--surface <all|codex|claude|grok>] [--json]
+  ccx observe storage [--json]
+  ccx observe memory [--json]
+  ccx observe debug [--json]
+  ccx observe claude-inbound [--limit <n>] [--json]
+  ccx observe injection [--limit <n>] [--json]`;
 
 type LogEntry = Record<string, unknown> & { id?: string | number; timestamp?: string; provider?: string; model?: string; status?: number };
+type LogEnvelope = { timeZone: string; total: number; logs: LogEntry[] };
 
 function query(params: Record<string, string | number | undefined>): string {
   const search = new URLSearchParams();
@@ -33,13 +34,22 @@ function query(params: Record<string, string | number | undefined>): string {
   return encoded ? `?${encoded}` : "";
 }
 
-function logRows(data: unknown): LogEntry[] {
-  if (Array.isArray(data)) return data as LogEntry[];
-  if (data && typeof data === "object") {
-    const record = data as Record<string, unknown>;
-    for (const key of ["logs", "entries", "requests"]) if (Array.isArray(record[key])) return record[key] as LogEntry[];
+function logEnvelope(data: unknown): LogEnvelope {
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    throw new Error("invalid logs response");
   }
-  return [];
+  const record = data as Record<string, unknown>;
+  if (
+    typeof record.timeZone !== "string"
+    || record.timeZone.trim() === ""
+    || !Number.isInteger(record.total)
+    || (record.total as number) < 0
+    || !Array.isArray(record.logs)
+    || record.logs.some(row => typeof row !== "object" || row === null || Array.isArray(row))
+  ) {
+    throw new Error("invalid logs response");
+  }
+  return { timeZone: record.timeZone, total: record.total as number, logs: record.logs as LogEntry[] };
 }
 
 function formatLog(row: LogEntry): string {
@@ -65,7 +75,7 @@ async function logs(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   let seen = new Set<string>();
   do {
     const data = await runtimeRequest(`/api/logs${query({ provider, model, status, limit })}`, {}, deps);
-    const rows = logRows(data);
+    const rows = logEnvelope(data).logs;
     if (!follow && wantsJson) printData(data, true);
     else {
       for (const row of rows) {

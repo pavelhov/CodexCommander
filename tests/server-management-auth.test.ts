@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { serveGuiFile, serveSessionBootstrap } from "../src/server/gui-static";
 import { isProxyAdmissionSecret } from "../src/server/auth-cors";
 import {
@@ -24,21 +24,21 @@ import {
   hardenSecretDir,
 } from "../src/lib/windows-secret-acl";
 import {
-  LOCAL_ATTESTATION_CHALLENGE_HEADER,
-  LOCAL_ATTESTATION_PROOF_HEADER,
   verifyLocalAttestationProof,
 } from "../src/lib/local-management-attestation";
+import { ATTESTATION_CHALLENGE_HEADER, ATTESTATION_PROOF_HEADER } from "../src/identity";
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 
-const previousHome = process.env.OPENCODEX_HOME;
-const previousDataToken = process.env.OPENCODEX_API_AUTH_TOKEN;
-const previousAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+const previousHome = process.env.CODEXCOMMANDER_HOME;
+const previousDataToken = process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+const previousAdminToken = process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
 const previousCodexCliPath = process.env.CODEX_CLI_PATH;
 let testHome = "";
 
-function remoteConfig(): OcxConfig {
+function remoteConfig(): CodexCommanderConfig {
   return {
     port: 0,
+    multiAgentGuidanceEnabled: true,
     hostname: "0.0.0.0",
     defaultProvider: "test",
     providers: {
@@ -57,7 +57,7 @@ function websocketHandshakeOpens(url: URL, token: string): Promise<boolean> {
     const target = new URL("/v1/responses", url);
     target.protocol = target.protocol === "https:" ? "wss:" : "ws:";
     const socket = new WebSocket(target, {
-      headers: { "X-OpenCodex-API-Key": token },
+      headers: { "X-CodexCommander-API-Key": token },
     } as unknown as string[]);
     let settled = false;
     const finish = (opened: boolean) => {
@@ -75,10 +75,10 @@ function websocketHandshakeOpens(url: URL, token: string): Promise<boolean> {
 }
 
 beforeEach(() => {
-  testHome = mkdtempSync(join(tmpdir(), "ocx-management-auth-"));
-  process.env.OPENCODEX_HOME = testHome;
-  process.env.OPENCODEX_API_AUTH_TOKEN = "data-secret";
-  process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "admin-secret";
+  testHome = mkdtempSync(join(tmpdir(), "ccx-management-auth-"));
+  process.env.CODEXCOMMANDER_HOME = testHome;
+  process.env.CODEXCOMMANDER_API_AUTH_TOKEN = "data-secret";
+  process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = "admin-secret";
   process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(testHome);
 });
 
@@ -86,12 +86,12 @@ afterEach(() => {
   setIcaclsRunnerForTests(null);
   setPlatformForTests(null);
   resetHardenedStateForTests();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  if (previousDataToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-  else process.env.OPENCODEX_API_AUTH_TOKEN = previousDataToken;
-  if (previousAdminToken === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
-  else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdminToken;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
+  if (previousDataToken === undefined) delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+  else process.env.CODEXCOMMANDER_API_AUTH_TOKEN = previousDataToken;
+  if (previousAdminToken === undefined) delete process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
+  else process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = previousAdminToken;
   if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
   else process.env.CODEX_CLI_PATH = previousCodexCliPath;
   if (testHome) rmSync(testHome, { recursive: true, force: true });
@@ -105,9 +105,9 @@ describe("management and data-plane credential separation", () => {
     const server = startServer(0, { localAttestationSecret: secret });
     try {
       const health = await fetch(new URL("/healthz", server.url), {
-        headers: { [LOCAL_ATTESTATION_CHALLENGE_HEADER]: challenge },
+        headers: { [ATTESTATION_CHALLENGE_HEADER]: challenge },
       });
-      const proof = health.headers.get(LOCAL_ATTESTATION_PROOF_HEADER);
+      const proof = health.headers.get(ATTESTATION_PROOF_HEADER);
       expect(verifyLocalAttestationProof(secret, challenge, process.pid, server.port, proof)).toBe(true);
     } finally {
       await server.stop(true);
@@ -117,7 +117,7 @@ describe("management and data-plane credential separation", () => {
   test("management-token temp cleanup forgets successful ACL memos and retains failed removals", () => {
     const temporary = join(testHome, ".admin-token.tmp");
     const previousUsername = process.env.USERNAME;
-    process.env.USERNAME = "ocx-test-user";
+    process.env.USERNAME = "ccx-test-user";
     resetHardenedStateForTests();
     setPlatformForTests("win32");
     setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
@@ -144,7 +144,7 @@ describe("management and data-plane credential separation", () => {
 
   test("stable-path cleanup drops only the success memo; temp cleanup releases all", () => {
     const previousUsername = process.env.USERNAME;
-    process.env.USERNAME = "ocx-test-user";
+    process.env.USERNAME = "ccx-test-user";
     resetHardenedStateForTests();
     setPlatformForTests("win32");
     setIcaclsRunnerForTests(() => ({ success: false, exitCode: null, timedOut: true, stdout: "" }));
@@ -175,8 +175,8 @@ describe("management and data-plane credential separation", () => {
 
   test("final-path timeout memo survives stable-path cleanup (anti-restall)", async () => {
     const previousUsername = process.env.USERNAME;
-    process.env.USERNAME = "ocx-test-user";
-    delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+    process.env.USERNAME = "ccx-test-user";
+    delete process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
     resetHardenedStateForTests();
     setPlatformForTests("win32");
     // The temp harden succeeds; the FINAL path harden times out.
@@ -206,22 +206,22 @@ describe("management and data-plane credential separation", () => {
     const server = startServer(0);
     try {
       const managementWithDataToken = await fetch(new URL("/api/config", server.url), {
-        headers: { "x-opencodex-api-key": "data-secret" },
+        headers: { "x-codexcommander-api-key": "data-secret" },
       });
       expect(managementWithDataToken.status).toBe(401);
 
       const managementWithAdminToken = await fetch(new URL("/api/config", server.url), {
-        headers: { "x-opencodex-api-key": "admin-secret" },
+        headers: { "x-codexcommander-api-key": "admin-secret" },
       });
       expect(managementWithAdminToken.status).toBe(200);
 
       const dataWithDataToken = await fetch(new URL("/v1/models", server.url), {
-        headers: { "x-opencodex-api-key": "data-secret" },
+        headers: { "x-codexcommander-api-key": "data-secret" },
       });
       expect(dataWithDataToken.status).toBe(200);
 
       const dataWithAdminToken = await fetch(new URL("/v1/models", server.url), {
-        headers: { "x-opencodex-api-key": "admin-secret" },
+        headers: { "x-codexcommander-api-key": "admin-secret" },
       });
       expect(dataWithAdminToken.status).toBe(401);
     } finally {
@@ -230,17 +230,17 @@ describe("management and data-plane credential separation", () => {
   });
 
   test("a management token that matches the data environment token closes only the management plane", async () => {
-    process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "data-secret";
+    process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = "data-secret";
     saveConfig(remoteConfig());
     const server = startServer(0);
     try {
       const data = await fetch(new URL("/v1/models", server.url), {
-        headers: { "x-opencodex-api-key": "data-secret" },
+        headers: { "x-codexcommander-api-key": "data-secret" },
       });
       expect(data.status).toBe(200);
 
       const management = await fetch(new URL("/api/config", server.url), {
-        headers: { "x-opencodex-api-key": "data-secret" },
+        headers: { "x-codexcommander-api-key": "data-secret" },
       });
       expect(management.status).toBe(503);
     } finally {
@@ -249,7 +249,7 @@ describe("management and data-plane credential separation", () => {
   });
 
   test("a management token that matches a configured data key closes only the management plane", async () => {
-    delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
     const config = remoteConfig();
     config.apiKeys = [{
       id: "conflict",
@@ -261,12 +261,12 @@ describe("management and data-plane credential separation", () => {
     const server = startServer(0);
     try {
       const data = await fetch(new URL("/v1/models", server.url), {
-        headers: { "x-opencodex-api-key": "admin-secret" },
+        headers: { "x-codexcommander-api-key": "admin-secret" },
       });
       expect(data.status).toBe(200);
 
       const management = await fetch(new URL("/api/config", server.url), {
-        headers: { "x-opencodex-api-key": "admin-secret" },
+        headers: { "x-codexcommander-api-key": "admin-secret" },
       });
       expect(management.status).toBe(503);
     } finally {
@@ -275,20 +275,20 @@ describe("management and data-plane credential separation", () => {
   });
 
   test("a protected management token file is generated and remains management-only", async () => {
-    delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+    delete process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
     saveConfig(remoteConfig());
     const server = startServer(0);
     try {
       const adminToken = readFileSync(join(testHome, "admin-api-token"), "utf8").trim();
-      expect(adminToken).toMatch(/^ocx_admin_[A-Za-z0-9_-]{43}$/);
+      expect(adminToken).toMatch(/^ccx_admin_[A-Za-z0-9_-]{43}$/);
 
       const management = await fetch(new URL("/api/config", server.url), {
-        headers: { "x-opencodex-api-key": adminToken },
+        headers: { "x-codexcommander-api-key": adminToken },
       });
       expect(management.status).toBe(200);
 
       const data = await fetch(new URL("/v1/models", server.url), {
-        headers: { "x-opencodex-api-key": adminToken },
+        headers: { "x-codexcommander-api-key": adminToken },
       });
       expect(data.status).toBe(401);
     } finally {
@@ -297,7 +297,7 @@ describe("management and data-plane credential separation", () => {
   });
 
   test("an icacls timeout keeps the management plane closed without stopping the data plane", async () => {
-    delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+    delete process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
     saveConfig(remoteConfig());
     setPlatformForTests("win32");
     setIcaclsRunnerForTests(args => {
@@ -314,17 +314,17 @@ describe("management and data-plane credential separation", () => {
       expect(health.status).toBe(200);
 
       const data = await fetch(new URL("/v1/models", server.url), {
-        headers: { "x-opencodex-api-key": "data-secret" },
+        headers: { "x-codexcommander-api-key": "data-secret" },
       });
       expect(data.status).toBe(200);
 
       const management = await fetch(new URL("/api/config", server.url), {
-        headers: { "x-opencodex-api-key": "ocx_admin_unhardened" },
+        headers: { "x-codexcommander-api-key": "ccx_admin_unhardened" },
       });
       expect(management.status).toBe(503);
       const body = await management.json() as { error?: string; hint?: string; reason?: string };
       expect(body.error).toBe("management API unavailable");
-      expect(body.hint).toContain("OPENCODEX_ADMIN_AUTH_TOKEN");
+      expect(body.hint).toContain("CODEXCOMMANDER_ADMIN_AUTH_TOKEN");
       expect(typeof body.reason).toBe("string");
       expect(body.reason!.length).toBeGreaterThan(0);
     } finally {
@@ -333,12 +333,12 @@ describe("management and data-plane credential separation", () => {
   });
 
   test("a configured data key satisfies the remote data-plane startup requirement", async () => {
-    delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
     const config = remoteConfig();
     config.apiKeys = [{
       id: "configured",
       name: "Configured data key",
-      key: "ocx_data_configured-secret",
+      key: "ccx_data_configured-secret",
       createdAt: "2026-07-28T00:00:00.000Z",
     }];
     saveConfig(config);
@@ -346,12 +346,12 @@ describe("management and data-plane credential separation", () => {
     const server = startServer(0);
     try {
       const data = await fetch(new URL("/v1/models", server.url), {
-        headers: { "x-opencodex-api-key": "ocx_data_configured-secret" },
+        headers: { "x-codexcommander-api-key": "ccx_data_configured-secret" },
       });
       expect(data.status).toBe(200);
 
       const management = await fetch(new URL("/api/config", server.url), {
-        headers: { "x-opencodex-api-key": "ocx_data_configured-secret" },
+        headers: { "x-codexcommander-api-key": "ccx_data_configured-secret" },
       });
       expect(management.status).toBe(401);
     } finally {
@@ -367,7 +367,7 @@ describe("management and data-plane credential separation", () => {
     try {
       const crossPort = await fetch(new URL("/api/config", server.url), {
         headers: {
-          "x-opencodex-api-key": "admin-secret",
+          "x-codexcommander-api-key": "admin-secret",
           origin: "http://127.0.0.1:65534",
         },
       });
@@ -375,7 +375,7 @@ describe("management and data-plane credential separation", () => {
 
       const sameOrigin = await fetch(new URL("/api/config", server.url), {
         headers: {
-          "x-opencodex-api-key": "admin-secret",
+          "x-codexcommander-api-key": "admin-secret",
           origin: server.url.origin,
         },
       });
@@ -403,22 +403,22 @@ describe("management and data-plane credential separation", () => {
     const page = serveGuiFile("/", guiDist, session ?? undefined);
     expect(page?.headers.get("cache-control")).toBe("no-store");
     const html = await page?.text();
-    expect(html).toContain(`name="opencodex-session-token" content="${session?.token}"`);
-    expect(html).toContain(`name="opencodex-session-csrf" content="${session?.csrfToken}"`);
+    expect(html).toContain(`name="codexcommander-session-token" content="${session?.token}"`);
+    expect(html).toContain(`name="codexcommander-session-csrf" content="${session?.csrfToken}"`);
 
-    // The dev GUI fetches /opencodex-session through Vite so the app shell stays
+    // The dev GUI fetches /codexcommander-session through Vite so the app shell stays
     // Vite-owned. The backend answers that path without requiring gui/dist, so a fresh
     // source checkout (no packaged build) can still mint an origin-bound session.
     const bootstrapPage = serveSessionBootstrap(session!);
     const bootstrapHtml = await bootstrapPage.text();
-    expect(bootstrapHtml).toContain(`name="opencodex-session-origin" content="${session?.origin}"`);
-    expect(bootstrapHtml).toContain(`name="opencodex-session-token" content="${session?.token}"`);
+    expect(bootstrapHtml).toContain(`name="codexcommander-session-origin" content="${session?.origin}"`);
+    expect(bootstrapHtml).toContain(`name="codexcommander-session-token" content="${session?.token}"`);
 
     const sameOriginRead = new Request("http://localhost:10100/api/config", {
       headers: {
         Host: "localhost:10100",
-        "x-opencodex-api-key": session?.token ?? "",
-        "x-opencodex-gui-origin": "http://localhost:10100",
+        "x-codexcommander-api-key": session?.token ?? "",
+        "x-codexcommander-gui-origin": "http://localhost:10100",
       },
     });
     expect(requireManagementAuth(sameOriginRead, state, config)).toBeNull();
@@ -427,8 +427,8 @@ describe("management and data-plane credential separation", () => {
       headers: {
         Host: "localhost:10100",
         Origin: "http://localhost:20100",
-        "x-opencodex-api-key": session?.token ?? "",
-        "x-opencodex-gui-origin": "http://localhost:20100",
+        "x-codexcommander-api-key": session?.token ?? "",
+        "x-codexcommander-gui-origin": "http://localhost:20100",
       },
     });
     expect(requireManagementAuth(crossPortRead, state, config)?.status).toBe(401);
@@ -438,8 +438,8 @@ describe("management and data-plane credential separation", () => {
       headers: {
         Host: "localhost:10100",
         Origin: "http://localhost:10100",
-        "x-opencodex-api-key": session?.token ?? "",
-        "x-opencodex-gui-origin": "http://localhost:10100",
+        "x-codexcommander-api-key": session?.token ?? "",
+        "x-codexcommander-gui-origin": "http://localhost:10100",
       },
     });
     expect(requireManagementAuth(mutationWithoutCsrf, state, config)?.status).toBe(401);
@@ -449,9 +449,9 @@ describe("management and data-plane credential separation", () => {
       headers: {
         Host: "localhost:10100",
         Origin: "http://localhost:10100",
-        "x-opencodex-api-key": session?.token ?? "",
-        "x-opencodex-gui-origin": "http://localhost:10100",
-        "x-opencodex-csrf-token": session?.csrfToken ?? "",
+        "x-codexcommander-api-key": session?.token ?? "",
+        "x-codexcommander-gui-origin": "http://localhost:10100",
+        "x-codexcommander-csrf-token": session?.csrfToken ?? "",
       },
     });
     expect(requireManagementAuth(mutationWithCsrf, state, config)).toBeNull();
@@ -462,13 +462,13 @@ describe("management and data-plane credential separation", () => {
     expect(issueGuiSession(new Request("http://localhost:10100/"), config, state)).toBeNull();
   });
 
-  test("GET /opencodex-session serves the bootstrap document from a live server", async () => {
+  test("GET /codexcommander-session serves the bootstrap document from a live server", async () => {
     const config = remoteConfig();
     config.hostname = "127.0.0.1";
     saveConfig(config);
     const server = startServer(0);
     try {
-      const response = await fetch(new URL("/opencodex-session", server.url), {
+      const response = await fetch(new URL("/codexcommander-session", server.url), {
         headers: { Host: server.url.host },
       });
       expect(response.status).toBe(200);
@@ -479,9 +479,9 @@ describe("management and data-plane credential separation", () => {
       expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
 
       const html = await response.text();
-      expect(html).toContain('name="opencodex-session-token"');
-      expect(html).toContain('name="opencodex-session-csrf"');
-      expect(html).toContain('name="opencodex-session-origin"');
+      expect(html).toContain('name="codexcommander-session-token"');
+      expect(html).toContain('name="codexcommander-session-csrf"');
+      expect(html).toContain('name="codexcommander-session-origin"');
     } finally {
       await server.stop(true);
     }
@@ -498,32 +498,23 @@ describe("management and data-plane credential separation", () => {
 
   test("all local credential shapes are rejected by the upstream-forwarding guard", () => {
     const config = remoteConfig();
-    config.apiKeys = [
-      {
-        id: "manual",
-        name: "Manual data key",
-        key: "manually-configured-data-secret",
-        createdAt: "2026-07-28T00:00:00.000Z",
-      },
-      {
-        id: "legacy",
-        name: "Legacy data key",
-        key: `ocx_${"a".repeat(40)}`,
-        createdAt: "2026-07-28T00:00:00.000Z",
-      },
-    ];
+    config.apiKeys = [{
+      id: "manual",
+      name: "Manual data key",
+      key: "manually-configured-data-secret",
+      createdAt: "2026-07-28T00:00:00.000Z",
+    }];
     for (const secret of [
       "data-secret",
       "admin-secret",
       "manually-configured-data-secret",
-      `ocx_${"a".repeat(40)}`,
-      "ocx_data_generated",
-      "ocx_admin_generated",
-      "ocx_session_generated",
+      "ccx_data_generated",
+      "ccx_admin_generated",
+      "ccx_session_generated",
     ]) {
       expect(isProxyAdmissionSecret(secret, config)).toBe(true);
     }
-    expect(isProxyAdmissionSecret("ocx_provider_upstream", config)).toBe(false);
+    expect(isProxyAdmissionSecret("ccx_provider_upstream", config)).toBe(false);
   });
 
   test("Responses authentication and WebSocket handshakes accept data credentials only", async () => {
@@ -532,12 +523,12 @@ describe("management and data-plane credential separation", () => {
     saveConfig(config);
     const server = startServer(0);
     try {
-      for (const rejected of ["admin-secret", "ocx_session_browser-secret"]) {
+      for (const rejected of ["admin-secret", "ccx_session_browser-secret"]) {
         const response = await fetch(new URL("/v1/responses", server.url), {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            "x-opencodex-api-key": rejected,
+            "x-codexcommander-api-key": rejected,
           },
           body: JSON.stringify({ model: "test/gpt-test", input: "hello" }),
         });
@@ -551,13 +542,13 @@ describe("management and data-plane credential separation", () => {
   });
 
   test("an invalid existing management token file keeps management unavailable", async () => {
-    delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+    delete process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
     saveConfig(remoteConfig());
     writeFileSync(join(testHome, "admin-api-token"), "corrupt-token\n", { mode: 0o600 });
     const server = startServer(0);
     try {
       const management = await fetch(new URL("/api/config", server.url), {
-        headers: { "x-opencodex-api-key": "corrupt-token" },
+        headers: { "x-codexcommander-api-key": "corrupt-token" },
       });
       expect(management.status).toBe(503);
       expect(readFileSync(join(testHome, "admin-api-token"), "utf8")).toBe("corrupt-token\n");
@@ -568,9 +559,9 @@ describe("management and data-plane credential separation", () => {
   }, SERVER_BUDGET_MS); // binds a real server + live fetches; windows runner measured ~5.04s against Bun's 5s default.
 
   test("an existing management token ACL hardening failure keeps management unavailable", async () => {
-    delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+    delete process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
     saveConfig(remoteConfig());
-    const adminToken = `ocx_admin_${"b".repeat(43)}`;
+    const adminToken = `ccx_admin_${"b".repeat(43)}`;
     writeFileSync(join(testHome, "admin-api-token"), `${adminToken}\n`, { mode: 0o600 });
     setPlatformForTests("win32");
     setIcaclsRunnerForTests(args => {
@@ -583,7 +574,7 @@ describe("management and data-plane credential separation", () => {
     const server = startServer(0);
     try {
       const management = await fetch(new URL("/api/config", server.url), {
-        headers: { "x-opencodex-api-key": adminToken },
+        headers: { "x-codexcommander-api-key": adminToken },
       });
       expect(management.status).toBe(503);
       expect((await fetch(new URL("/healthz", server.url))).status).toBe(200);
@@ -592,10 +583,10 @@ describe("management and data-plane credential separation", () => {
     }
   });
 
-  test("directory ACL timeout keeps management unavailable and names OPENCODEX_ADMIN_AUTH_TOKEN", () => {
-    delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+  test("directory ACL timeout keeps management unavailable and names CODEXCOMMANDER_ADMIN_AUTH_TOKEN", () => {
+    delete process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
     saveConfig(remoteConfig());
-    const adminToken = `ocx_admin_${"d".repeat(43)}`;
+    const adminToken = `ccx_admin_${"d".repeat(43)}`;
     writeFileSync(join(testHome, "admin-api-token"), `${adminToken}\n`, { mode: 0o600 });
     process.env.USERNAME ??= "tester";
     setPlatformForTests("win32");
@@ -616,13 +607,13 @@ describe("management and data-plane credential separation", () => {
     const state = initializeManagementAuthState(remoteConfig());
     expect(state.available).toBe(false);
     if (state.available) return;
-    expect(state.reason).toContain("OPENCODEX_ADMIN_AUTH_TOKEN");
+    expect(state.reason).toContain("CODEXCOMMANDER_ADMIN_AUTH_TOKEN");
   });
 
   test("required management harden retries after a soft loadConfig directory timeout", async () => {
-    delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+    delete process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
     saveConfig(remoteConfig());
-    const adminToken = `ocx_admin_${"f".repeat(43)}`;
+    const adminToken = `ccx_admin_${"f".repeat(43)}`;
     writeFileSync(join(testHome, "admin-api-token"), `${adminToken}\n`, { mode: 0o600 });
     process.env.USERNAME ??= "tester";
     setPlatformForTests("win32");
@@ -654,8 +645,8 @@ describe("management and data-plane credential separation", () => {
     expect(requiredPhaseCalls).toBeGreaterThan(0);
   });
 
-  test("OPENCODEX_ADMIN_AUTH_TOKEN bypasses file-backed ACL hardening", async () => {
-    process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "env-admin-secret";
+  test("CODEXCOMMANDER_ADMIN_AUTH_TOKEN bypasses file-backed ACL hardening", async () => {
+    process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = "env-admin-secret";
     saveConfig(remoteConfig());
     process.env.USERNAME ??= "tester";
     setPlatformForTests("win32");
@@ -680,7 +671,7 @@ describe("management and data-plane credential separation", () => {
     const server = startServer(0);
     try {
       const management = await fetch(new URL("/api/config", server.url), {
-        headers: { "x-opencodex-api-key": "env-admin-secret" },
+        headers: { "x-codexcommander-api-key": "env-admin-secret" },
       });
       expect(management.status).toBe(200);
     } finally {

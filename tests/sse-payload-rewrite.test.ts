@@ -82,7 +82,7 @@ describe("SSE payload rewrite composition", () => {
       .map(payload => JSON.parse(payload) as Record<string, unknown>);
 
     const messageAdded = events[0].item as Record<string, unknown>;
-    expect(messageAdded.id).toMatch(/^msg_ocx_[0-9a-f]+_0$/);
+    expect(messageAdded.id).toMatch(/^msg_ccx_[0-9a-f]+_0$/);
 
     const functionAdded = events[1].item as Record<string, unknown>;
     expect(functionAdded).toMatchObject({

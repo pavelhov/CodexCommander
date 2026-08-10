@@ -2,7 +2,7 @@ import { responseStateMetrics } from "../src/responses/state";
 import { getActiveTurnCount } from "../src/server/lifecycle";
 
 export type SampleMode =
-  | "real-proxy-legacy-tee"
+  | "real-proxy-safe-tee"
   | "single-reader-inspection"
   | "direct-http-baseline";
 

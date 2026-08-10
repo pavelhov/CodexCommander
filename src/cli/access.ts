@@ -10,12 +10,12 @@ import {
 } from "./runtime-api";
 
 const USAGE = `Usage:
-  ocx access key [list] [--json]
-  ocx access key create [name] [--json]
-  ocx access key remove <id> --yes [--json]
-  ocx access endpoints [--json]
-  ocx access models [--json]
-  ocx access test <model> [--protocol <chat|responses|messages>] [--json]`;
+  ccx access key [list] [--json]
+  ccx access key create [name] [--json]
+  ccx access key remove <id> --yes [--json]
+  ccx access endpoints [--json]
+  ccx access models [--json]
+  ccx access test <model> [--protocol <chat|responses|messages>] [--json]`;
 
 async function key(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];

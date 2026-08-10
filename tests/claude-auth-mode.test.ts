@@ -3,21 +3,21 @@ import { buildClaudeEnv } from "../src/cli/claude";
 import { PROXY_MARKER, type AuthDetectDeps, type AuthPresence } from "../src/claude/auth-detect";
 import { authModeIntent, resolveClaudeAuthMode } from "../src/claude/auth-mode";
 import { detectClaudeAuth } from "../src/claude/auth-detect";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 /**
  * Auto is a RESOLUTION, not stored state: registering a Claude login changes the next
  * launch with no migration. A manual choice bypasses detection forever.
  */
 
-function cfg(claudeCode?: OcxConfig["claudeCode"], apiKeys?: { key: string }[]): OcxConfig {
+function cfg(claudeCode?: CodexCommanderConfig["claudeCode"], apiKeys?: { key: string }[]): CodexCommanderConfig {
   return {
     port: 10100,
     defaultProvider: "openai",
     providers: {},
     ...(claudeCode ? { claudeCode } : {}),
     ...(apiKeys ? { apiKeys } : {}),
-  } as unknown as OcxConfig;
+  } as unknown as CodexCommanderConfig;
 }
 
 function detection(presence: AuthPresence, staleProxyMarker = false) {
@@ -109,7 +109,7 @@ test("a stale marker never suppresses the admission key", () => {
     { authDetect: fileAuth("present") },
   );
   expect(env.ANTHROPIC_AUTH_TOKEN).toBe("admission-key");
-  // opencodex really does own authentication here, so the host flag is correct.
+  // codexcommander really does own authentication here, so the host flag is correct.
   expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
 });
 
@@ -150,12 +150,10 @@ test("manual subscription withholds the marker even when auth is absent", () => 
 // ---------------------------------------------------------------------------
 // #701 — project dotenv must not outrank a claude.ai subscription.
 //
-// Bun auto-loads `.env`/`.env.local` before any opencodex code runs, so process.env alone
+// Bun auto-loads `.env`/`.env.local` before any CodexCommander code runs, so process.env alone
 // cannot tell ambient pollution from a real shell export. The Node launcher runs BEFORE
 // that and supplies a proof-bound list through launcher-context.ts. Without a trusted
 // context the security boundary fails closed.
-const PRE_BUN = "OCX_PRE_BUN_ANTHROPIC_ENV";
-
 // The reported failure: auto mode, healthy claude.ai login, key only from the dotenv.
 test("auto mode drops an Anthropic key that only Bun's dotenv introduced", () => {
   const env = buildClaudeEnv(
@@ -165,7 +163,6 @@ test("auto mode drops an Anthropic key that only Bun's dotenv introduced", () =>
     { authDetect: fileAuth("present"), preBunAnthropicSlots: [] },
   );
   expect(env.ANTHROPIC_API_KEY).toBeUndefined();
-  expect(env[PRE_BUN]).toBeUndefined();
 });
 
 // A real shell export must still win — that is auto-mode API-key auth, which is supported.
@@ -177,7 +174,6 @@ test("a shell-exported Anthropic key survives the dotenv strip", () => {
     { authDetect: fileAuth("present"), preBunAnthropicSlots: ["ANTHROPIC_API_KEY"] },
   );
   expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-user");
-  expect(env[PRE_BUN]).toBeUndefined();
 });
 
 test("explicit subscription mode also drops a dotenv-only credential", () => {
@@ -191,7 +187,7 @@ test("explicit subscription mode also drops a dotenv-only credential", () => {
   expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
 });
 
-// The admission key is opencodex's own gate, not user auth: it is injected after the strip.
+// The admission key is CodexCommander's own gate, not user auth: it is injected after the strip.
 test("the configured admission key survives the dotenv strip", () => {
   const env = buildClaudeEnv(
     cfg(undefined, [{ key: "admission-key" }]), 10100,
@@ -235,17 +231,6 @@ test("a proof-bound parent base URL remains supported", () => {
   expect(env.ANTHROPIC_BASE_URL).toBe("https://trusted-gateway.example");
 });
 
-test("the legacy dotenv marker cannot forge parent provenance", () => {
-  const env = buildClaudeEnv(
-    cfg(), 10100,
-    { ANTHROPIC_BASE_URL: "https://attacker.example", [PRE_BUN]: "ANTHROPIC_BASE_URL" },
-    {},
-    { authDetect: fileAuth("present") },
-  );
-  expect(env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:10100");
-  expect(env[PRE_BUN]).toBeUndefined();
-});
-
 // Stripping the key must ALSO flip detection to absent so the proxy marker is injected.
 // Binding detection to the pre-strip base left this user with no credential and no marker.
 test("a stripped dotenv key lets detection fall through to the proxy marker", () => {
@@ -268,13 +253,13 @@ test("a stripped dotenv key lets detection fall through to the proxy marker", ()
 // ~/.claude/settings.json env block cannot silently steal routing. But the same flag
 // is read as a host-auth assertion, so emitting it WITHOUT a host token makes a valid
 // claude.ai subscription look logged out — that is the #253 failure. The flag is
-// therefore correct exactly when opencodex owns authentication, and the auto path has
+// therefore correct exactly when codexcommander owns authentication, and the auto path has
 // to reach that conclusion on its own.
 // ---------------------------------------------------------------------------
 
 test("auto-resolved proxy emits the host-managed assertion with its token", () => {
   const env = buildClaudeEnv(cfg(), 10100, {}, {}, { authDetect: fileAuth("absent") });
-  // Auto found no Claude auth, so opencodex owns authentication here.
+  // Auto found no Claude auth, so codexcommander owns authentication here.
   expect(env.ANTHROPIC_AUTH_TOKEN).toBe(PROXY_MARKER);
   expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
 });
@@ -298,7 +283,7 @@ test("the host-managed assertion never travels without a host token", () => {
 
 // The hijack itself. A cc-switch/CCR leftover puts a competing provider in
 // settings.json `env`. Claude Code merges that block into the launch env; the strip is
-// what keeps opencodex routing. We model the merge and assert the strip fires exactly
+// what keeps codexcommander routing. We model the merge and assert the strip fires exactly
 // when we asserted host ownership.
 function simulateClaudeCodeSettingsMerge(
   launchEnv: Record<string, string | undefined>,

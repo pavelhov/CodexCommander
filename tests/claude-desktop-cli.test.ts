@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { applyProfile, handleClaudeDesktopCommand } from "../src/cli/claude-desktop";
 import { buildClaudeDesktopState } from "../src/server/management-api";
 import { loadConfig, saveConfig } from "../src/config";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
@@ -18,28 +18,29 @@ let previousCodexCliPath: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  previousDesktopDir = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  previousDesktopDir = process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR;
   previousCodexCliPath = process.env.CODEX_CLI_PATH;
-  dir = mkdtempSync(join(tmpdir(), "ocx-desktop-cli-"));
-  isolatedCodexHome = installIsolatedCodexHome("ocx-desktop-cli-codex-");
+  dir = mkdtempSync(join(tmpdir(), "ccx-desktop-cli-"));
+  isolatedCodexHome = installIsolatedCodexHome("ccx-desktop-cli-codex-");
   process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
-  process.env.OPENCODEX_HOME = join(dir, "ocx");
-  process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = join(dir, "desktop");
+  process.env.CODEXCOMMANDER_HOME = join(dir, "ccx");
+  process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR = join(dir, "desktop");
   saveConfig({
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "mock",
     providers: {
       mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:1/v1", apiKey: "k", allowPrivateNetwork: true, liveModels: false, models: ["test-model"] },
     },
-  } as OcxConfig);
+  } as CodexCommanderConfig);
 });
 
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  if (previousDesktopDir === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
-  else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previousDesktopDir;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
+  if (previousDesktopDir === undefined) delete process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR;
+  else process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR = previousDesktopDir;
   if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
   else process.env.CODEX_CLI_PATH = previousCodexCliPath;
   isolatedCodexHome?.restore();
@@ -87,12 +88,13 @@ test("import rejects invalid profiles without replacing saved state", async () =
 test("desktopNativeModels:false omits native/* from show and exported profile", async () => {
   saveConfig({
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "mock",
     providers: {
       mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:1/v1", apiKey: "k", allowPrivateNetwork: true, liveModels: false, models: ["test-model"] },
     },
     claudeCode: { desktopNativeModels: false },
-  } as OcxConfig);
+  } as CodexCommanderConfig);
   const log = spyOn(console, "log").mockImplementation(() => {});
   try {
     expect(await handleClaudeDesktopCommand(["show", "--json"])).toBe(0);
@@ -117,19 +119,18 @@ test("desktopNativeModels:false omits native/* from show and exported profile", 
  */
 test("apply delegates to the live proxy management API instead of writing locally", async () => {
   const state = await buildClaudeDesktopState(loadConfig());
-  const posted: Array<{ mode: string; profile: unknown }> = [];
-  const result = await applyProfile(state.profile, "hybrid", {
+  const posted: unknown[] = [];
+  const result = await applyProfile(state.profile, {
     findLiveProxyImpl: async () => ({ pid: 4242, port: 10100, hostname: "127.0.0.1", source: "runtime" }),
-    postApplyImpl: async (mode, profile) => {
-      posted.push({ mode, profile });
+    postApplyImpl: async (profile) => {
+      posted.push(profile);
       return { ok: true, path: "/daemon-side/path" };
     },
   });
   expect(posted.length).toBe(1);
-  expect(posted[0]!.mode).toBe("hybrid");
   // The profile must cross the boundary; dropping it reintroduces #859's
   // stale-daemon variant.
-  expect(posted[0]!.profile).toEqual(state.profile);
+  expect(posted[0]).toEqual(state.profile);
   expect(result.ok).toBe(true);
   expect(result.path).toBe("/daemon-side/path");
   // No local Desktop config write: the daemon performed it.
@@ -140,7 +141,7 @@ test("apply delegates to the live proxy management API instead of writing locall
 
 test("apply writes locally only when no proxy is running", async () => {
   const state = await buildClaudeDesktopState(loadConfig());
-  const result = await applyProfile(state.profile, "static", {
+  const result = await applyProfile(state.profile, {
     findLiveProxyImpl: async () => null,
     postApplyImpl: async () => {
       throw new Error("must not be called without a live proxy");
@@ -150,15 +151,15 @@ test("apply writes locally only when no proxy is running", async () => {
   expect(existsSync(join(dir, "desktop"))).toBe(true);
 });
 
-test("no-arg and legacy mode flags apply Desktop config", async () => {
+test("apply is the single Desktop write command", async () => {
   const log = spyOn(console, "log").mockImplementation(() => {});
   const error = spyOn(console, "error").mockImplementation(() => {});
   try {
     // Deterministic: no live proxy in the test environment, so apply writes locally.
     const noProxy = { findLiveProxyImpl: async () => null };
-    expect(await handleClaudeDesktopCommand([], noProxy)).toBe(0);
-    expect(await handleClaudeDesktopCommand(["--static"], noProxy)).toBe(0);
-    expect(readFileSync(join(process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR!, "_meta.json"), "utf8")).toContain("opencodex");
+    expect(await handleClaudeDesktopCommand(["apply"], noProxy)).toBe(0);
+    expect(await handleClaudeDesktopCommand([], noProxy)).toBe(1);
+    expect(readFileSync(join(process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR!, "_meta.json"), "utf8")).toContain("codexcommander");
     expect(error).not.toHaveBeenCalled();
   } finally {
     log.mockRestore();

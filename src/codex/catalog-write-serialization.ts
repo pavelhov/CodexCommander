@@ -20,9 +20,7 @@
  *
  * K is permanent and is NOT WP11's native write lock. It never reads or
  * advances the native pair. Order is `N -> K -> C`; there is no `C -> K` and no
- * `K -> N` (`005_contract.md:660-762`).
- *
- * Design record: devlog/_fin/260804_codex_write_substrate/005_contract.md §3.
+ * `K -> N` is forbidden.
  */
 import { chmodSync, lstatSync, realpathSync } from "node:fs";
 

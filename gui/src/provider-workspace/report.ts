@@ -11,7 +11,7 @@ export interface ProviderQuotaReportView {
   source?: string;
   updatedAt?: number;
   quota?: unknown;
-  aggregation?: unknown;
+  aggregation: unknown;
 }
 
 export interface CapacityWindowView {
@@ -119,8 +119,8 @@ function validTimestamp(value: unknown): number | undefined {
  * These values are deliberately a distinct shape: turning spend/caps into "remaining" would
  * imply a provider balance that OpenCode Go does not expose.
  */
-export function referenceQuotaFromReport(report?: ProviderQuotaReportView): ProviderReferenceQuotaView | null {
-  const quota = report?.quota;
+export function referenceQuotaFromReport(report: ProviderQuotaReportView): ProviderReferenceQuotaView | null {
+  const quota = report.quota;
   if (!quota || typeof quota !== "object" || Array.isArray(quota)) return null;
   const q = quota as Record<string, unknown>;
   const windows = Array.isArray(q.referenceWindows)
@@ -191,8 +191,8 @@ export function referenceQuotaFromReport(report?: ProviderQuotaReportView): Prov
 }
 
 /** Narrow an unknown quota payload into the AccountQuota display shape (null when unusable). */
-export function accountQuotaFromReport(report?: ProviderQuotaReportView): AccountQuota | null {
-  return quotaFromUnknown(report?.quota, report?.updatedAt);
+export function accountQuotaFromReport(report: ProviderQuotaReportView): AccountQuota | null {
+  return quotaFromUnknown(report.quota, report.updatedAt);
 }
 
 function capacityWindow(value: unknown): CapacityWindowView | undefined {
@@ -209,15 +209,22 @@ function capacityWindow(value: unknown): CapacityWindowView | undefined {
   };
 }
 
-/** Strictly narrows optional weighted-pool metadata; legacy reports return null. */
-export function capacityAggregationFromReport(report?: ProviderQuotaReportView): ProviderCapacityAggregationView | null {
-  const value = report?.aggregation;
+/** Strictly narrow the current weighted-pool metadata contract. */
+export function capacityAggregationFromReport(report: ProviderQuotaReportView): ProviderCapacityAggregationView | null {
+  const value = report.aggregation;
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const row = value as Record<string, unknown>;
   if (row.kind !== "capacity-weighted-v1" || row.scope !== "routable-known") return null;
   const excludedAccounts = finite(row.excludedAccounts);
   const unknownPlanAccounts = finite(row.unknownPlanAccounts);
-  if (excludedAccounts === undefined || unknownPlanAccounts === undefined || typeof row.incomplete !== "boolean") return null;
+  const partialWindowAccounts = finite(row.partialWindowAccounts);
+  const presentation = row.presentation === "aggregate"
+    || row.presentation === "effective-account-fallback"
+    || row.presentation === "coverage-only"
+    ? row.presentation
+    : null;
+  if (excludedAccounts === undefined || unknownPlanAccounts === undefined
+    || partialWindowAccounts === undefined || !presentation || typeof row.incomplete !== "boolean") return null;
   const currentRaw = row.currentAccount && typeof row.currentAccount === "object" && !Array.isArray(row.currentAccount)
     ? row.currentAccount as Record<string, unknown>
     : null;
@@ -232,18 +239,12 @@ export function capacityAggregationFromReport(report?: ProviderQuotaReportView):
   const fiveHour = capacityWindow(row.fiveHour);
   const weekly = capacityWindow(row.weekly);
   const monthly = capacityWindow(row.monthly);
-  const hasAggregateWindow = !!fiveHour || !!weekly || !!monthly || customWindows.length > 0;
-  const presentation = row.presentation === "aggregate"
-    || row.presentation === "effective-account-fallback"
-    || row.presentation === "coverage-only"
-    ? row.presentation
-    : hasAggregateWindow ? "aggregate" : "coverage-only";
   return {
     presentation,
     incomplete: row.incomplete,
     excludedAccounts,
     unknownPlanAccounts,
-    partialWindowAccounts: finite(row.partialWindowAccounts) ?? 0,
+    partialWindowAccounts,
     ...(fiveHour ? { fiveHour } : {}),
     ...(weekly ? { weekly } : {}),
     ...(monthly ? { monthly } : {}),

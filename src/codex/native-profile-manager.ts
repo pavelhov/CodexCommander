@@ -10,7 +10,6 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
   readdirSync,
   realpathSync,
   renameSync,
@@ -19,7 +18,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { atomicWriteFileAsync } from "../config";
 import { hardenSecretDirAsync, hardenSecretPathAsync } from "../lib/windows-secret-acl";
 import { applyConfirmedMainCodexAccountTransition } from "./account-lifecycle";
@@ -35,7 +34,6 @@ import {
   assertUniqueNativeProfileLabel,
   assertNativeProfileLockPath,
   assertNativeProfileMetadataLayout,
-  assertNoLegacyNativeProfileState,
   decryptNativeEnvelope,
   encryptNativeEnvelope,
   inspectNativeProfileJournal,
@@ -75,8 +73,6 @@ import {
 } from "./native-profile-stage-store";
 
 const LOCK_WAIT_MS = 5_000;
-const LEGACY_STAGE_MAX_AGE_MS = 30 * 60_000;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 interface PathIdentity {
   dev: bigint;
@@ -311,7 +307,6 @@ export class NativeProfileManager {
   }
 
   private async withLock<T>(operation: () => Promise<T>): Promise<T> {
-    assertNoLegacyNativeProfileState(this.context);
     assertNativeProfileLockPath(this.context);
     const deadline = this.now() + this.lockWaitMs;
     let database: Database | undefined;
@@ -325,17 +320,17 @@ export class NativeProfileManager {
         candidate = new Database(this.context.lockPath, { create: true });
         const claim = this.uuid();
         candidate.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
-        candidate.exec("CREATE TABLE IF NOT EXISTS ocx_native_profile_lock (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), claim TEXT NOT NULL)");
-        candidate.query("INSERT INTO ocx_native_profile_lock (singleton, claim) VALUES (1, ?) ON CONFLICT(singleton) DO UPDATE SET claim = excluded.claim").run(claim);
+        candidate.exec("CREATE TABLE IF NOT EXISTS ccx_native_profile_lock (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), claim TEXT NOT NULL)");
+        candidate.query("INSERT INTO ccx_native_profile_lock (singleton, claim) VALUES (1, ?) ON CONFLICT(singleton) DO UPDATE SET claim = excluded.claim").run(claim);
         candidate.exec("COMMIT");
         candidate.exec("BEGIN IMMEDIATE");
-        const candidateClaim = candidate.query("SELECT claim FROM ocx_native_profile_lock WHERE singleton = 1").get() as { claim?: unknown } | null;
+        const candidateClaim = candidate.query("SELECT claim FROM ccx_native_profile_lock WHERE singleton = 1").get() as { claim?: unknown } | null;
         let verifier: Database | undefined;
         let pathClaim: { claim?: unknown } | null = null;
         try {
           this.assertStableProfileLockFile(candidateFile);
           verifier = new Database(this.context.lockPath, { readonly: true });
-          pathClaim = verifier.query("SELECT claim FROM ocx_native_profile_lock WHERE singleton = 1").get() as { claim?: unknown } | null;
+          pathClaim = verifier.query("SELECT claim FROM ccx_native_profile_lock WHERE singleton = 1").get() as { claim?: unknown } | null;
         } finally {
           try { verifier?.close(); } catch { /* mismatch below is authoritative */ }
         }
@@ -520,7 +515,7 @@ export class NativeProfileManager {
     if (probeNativeProfileRecoveryState(this.context) === "none") return;
     throw new NativeProfileError(
       "RECOVERY_REQUIRED",
-      "A native-profile recovery journal is pending. Run `ocx account main recover` or `ocx account main recover --rollback --yes` before registering or adding profiles.",
+      "A native-profile recovery journal is pending. Run `ccx account main recover` or `ccx account main recover --rollback --yes` before registering or adding profiles.",
       409,
     );
   }
@@ -542,7 +537,7 @@ export class NativeProfileManager {
     if (nativeIdentityHash(key.key, envelope.accountId) !== active.identityHash) {
       throw new NativeProfileError(
         "ACTIVE_PROFILE_MISMATCH",
-        "The physical native login changed outside OpenCodex; recover or register the expected login before continuing.",
+        "The physical native login changed outside CodexCommander; recover or register the expected login before continuing.",
         409,
       );
     }
@@ -641,7 +636,6 @@ export class NativeProfileManager {
       let stagingCount: number | null = 0;
       try {
         stagingCount = this.stageStore.records().length;
-        if (existsSync(this.context.stagingRoot)) stagingCount += Array.from(new Bun.Glob("*").scanSync({ cwd: this.context.stagingRoot, onlyFiles: false })).filter(name => !UUID_RE.test(name) || !this.stageStore.recordForStage(name)).length;
       } catch {
         stagingSweep = "unreadable";
         stagingCount = null;
@@ -666,20 +660,15 @@ export class NativeProfileManager {
     });
   }
 
-  private stagePath(stageId: string): string {
-    if (!UUID_RE.test(stageId)) throw new NativeProfileError("INVALID_REQUEST", "The staging identifier is invalid.", 400);
-    return join(this.context.stagingRoot, stageId);
-  }
-
   private assertStagingLayout(requireRoot = false): void {
     if (!existsSync(this.context.configDir)) {
       if (requireRoot) throw new NativeProfileError("STAGING_NOT_FOUND", "The native-login staging root is missing.", 404);
       return;
     }
-    const configDir = assertSafeDirectory(this.context.configDir, "The OpenCodex configuration root");
+    const configDir = assertSafeDirectory(this.context.configDir, "The CodexCommander configuration root");
     const stagingBase = dirname(this.context.stagingRoot);
     if (!samePath(stagingBase, join(configDir, "native-main-profile-staging"))) {
-      throw new NativeProfileError("PROFILE_STORAGE_UNSAFE", "The native-login staging root escaped OPENCODEX_HOME.", 409);
+      throw new NativeProfileError("PROFILE_STORAGE_UNSAFE", "The native-login staging root escaped CODEXCOMMANDER_HOME.", 409);
     }
     if (!existsSync(stagingBase)) {
       if (requireRoot) throw new NativeProfileError("STAGING_NOT_FOUND", "The native-login staging root is missing.", 404);
@@ -687,7 +676,7 @@ export class NativeProfileManager {
     }
     const canonicalBase = assertSafeDirectory(stagingBase, "The native-login staging namespace");
     if (!samePath(dirname(this.context.stagingRoot), canonicalBase)) {
-      throw new NativeProfileError("PROFILE_STORAGE_UNSAFE", "The native-login staging root is not contained by OPENCODEX_HOME.", 409);
+      throw new NativeProfileError("PROFILE_STORAGE_UNSAFE", "The native-login staging root is not contained by CODEXCOMMANDER_HOME.", 409);
     }
     if (!existsSync(this.context.stagingRoot)) {
       if (requireRoot) throw new NativeProfileError("STAGING_NOT_FOUND", "The native-login staging root is missing.", 404);
@@ -767,36 +756,6 @@ export class NativeProfileManager {
     this.removeStageTree(path);
   }
 
-  private deleteLegacyStageById(stageId: string, requirePresent = false): void {
-    this.assertStagingLayout(true);
-    const expected = resolve(this.stagePath(stageId));
-    let stageStat: ReturnType<typeof lstatSync>;
-    try { stageStat = lstatSync(expected); } catch (error) {
-      if (errorCode(error) === "ENOENT") {
-        if (requirePresent) throw new NativeProfileError("STAGING_NOT_FOUND", "The native-login staging session is missing.", 404);
-        return;
-      }
-      throw error;
-    }
-    if (stageStat.isSymbolicLink() || !stageStat.isDirectory()) {
-      throw new NativeProfileError(
-        "PROFILE_STORAGE_UNSAFE",
-        "The native-login staging path is not a private directory.",
-        409,
-        false,
-        true,
-        true,
-      );
-    }
-    const canonicalRoot = resolve(realpathSync.native(this.context.stagingRoot));
-    const canonicalExpected = resolve(realpathSync.native(expected));
-    const rel = relative(canonicalRoot, canonicalExpected);
-    if (!rel || rel.startsWith("..") || rel.includes(sep)) {
-      throw new NativeProfileError("STAGING_CLEANUP_REQUIRED", "The staging path could not be safely removed.", 500, false, true, true);
-    }
-    this.deleteStage(canonicalExpected, pathIdentity(canonicalExpected));
-  }
-
   private async cleanupRegisteredStage(
     proof: NativeStageProof,
     outcome: Exclude<NativeStageTerminalOutcome, null>,
@@ -831,11 +790,6 @@ export class NativeProfileManager {
     let cleanupFailed = 0;
     let plaintextMayRemain = false;
     const records = this.stageStore.records();
-    const registeredHere = new Set(
-      records
-        .filter(record => samePath(record.stagingRoot, this.context.stagingRoot))
-        .map(record => record.stageId),
-    );
 
     for (const record of records) {
       if (record.state === "open" && this.now() <= record.leaseExpiresAt) {
@@ -868,46 +822,6 @@ export class NativeProfileManager {
       if (cleanup.removed) removed += 1;
       else cleanupFailed += 1;
       plaintextMayRemain ||= cleanup.plaintextMayRemain;
-    }
-
-    if (existsSync(this.context.stagingRoot)) {
-      this.assertStagingLayout(true);
-      for (const name of readdirSync(this.context.stagingRoot)) {
-        if (!UUID_RE.test(name) || registeredHere.has(name)) continue;
-        const path = this.stagePath(name);
-        let createdAt: number;
-        try {
-          const entry = lstatSync(path);
-          if (!entry.isDirectory() || entry.isSymbolicLink()) {
-            cleanupFailed += 1;
-            plaintextMayRemain = true;
-            continue;
-          }
-          createdAt = entry.mtimeMs;
-          try {
-            const metadata = JSON.parse(readFileSync(join(path, "stage.json"), "utf8")) as Record<string, unknown>;
-            if (typeof metadata.createdAt === "number") createdAt = metadata.createdAt;
-          } catch { /* mtime bounds legacy crash residue */ }
-        } catch (error) {
-          if (errorCode(error) === "ENOENT") continue;
-          cleanupFailed += 1;
-          plaintextMayRemain = true;
-          continue;
-        }
-        if (this.now() - createdAt <= LEGACY_STAGE_MAX_AGE_MS) {
-          live += 1;
-          continue;
-        }
-        try {
-          this.deleteLegacyStageById(name);
-          removed += 1;
-        } catch (error) {
-          cleanupFailed += 1;
-          plaintextMayRemain ||= error instanceof NativeProfileError
-            ? error.plaintextMayRemain !== false
-            : true;
-        }
-      }
     }
 
     return { removed, live, cleanupFailed, plaintextMayRemain };

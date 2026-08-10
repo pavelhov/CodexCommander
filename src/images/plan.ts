@@ -1,4 +1,4 @@
-import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
+import type { CodexCommanderConfig, CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../types";
 import type { ImageBridgePlan, VideoBridgePlan } from "./types";
 import { resolveEnvValue } from "../config";
 import { getProviderRegistryEntry } from "../providers/registry";
@@ -13,7 +13,7 @@ function clampImageTimeoutMs(value: unknown): number | undefined {
   return Math.max(1, Math.min(MAX_IMAGE_TIMEOUT_MS, Math.floor(value)));
 }
 
-export function findXaiProvider(config: OcxConfig): { name: string; provider: OcxProviderConfig } | undefined {
+export function findXaiProvider(config: CodexCommanderConfig): { name: string; provider: CodexCommanderProviderConfig } | undefined {
   // Primary: well-known name "xai"
   const xai = config.providers["xai"];
   if (xai && xai.disabled !== true) return { name: "xai", provider: xai };
@@ -33,16 +33,16 @@ export function findXaiProvider(config: OcxConfig): { name: string; provider: Oc
  * OAuth / Grok CLI proxy transport is not used here (that path is chat-oriented and not a
  * supported Images transport), so oauth-only configs deliberately do not arm the bridge.
  */
-export function resolveXaiImageApiKey(provider: OcxProviderConfig): string | undefined {
+export function resolveXaiImageApiKey(provider: CodexCommanderProviderConfig): string | undefined {
   if (provider.authMode === "oauth") return undefined;
   const apiKey = resolveEnvValue(provider.apiKey)?.trim();
   return apiKey || undefined;
 }
 
 export async function planImageBridge(
-  config: OcxConfig,
-  parsed: OcxParsedRequest,
-  routedProvider: OcxProviderConfig,
+  config: CodexCommanderConfig,
+  parsed: CodexCommanderParsedRequest,
+  routedProvider: CodexCommanderProviderConfig,
 ): Promise<ImageBridgePlan | undefined> {
   if (config.images?.bridgeEnabled !== true) return undefined;
   if (!parsed._imageGeneration) return undefined;
@@ -90,9 +90,9 @@ const DEFAULT_VIDEO_MODEL = "grok-imagine-video";
  *   3. an xAI provider with a valid API key is available
  */
 export async function planVideoBridge(
-  config: OcxConfig,
-  parsed: OcxParsedRequest,
-  routedProvider: OcxProviderConfig,
+  config: CodexCommanderConfig,
+  parsed: CodexCommanderParsedRequest,
+  routedProvider: CodexCommanderProviderConfig,
 ): Promise<VideoBridgePlan | undefined> {
   if (config.images?.videoBridgeEnabled !== true) return undefined;
   // Don't intercept for OpenAI native passthrough

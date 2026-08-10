@@ -7,7 +7,7 @@ description: プロバイダー構成、資格情報、クォータ、および�
 
 ## プロバイダー
 
-### `ocx provider <subcommand>`
+### `ccx provider <subcommand>`
 
 非対話型のプロバイダー管理。レジストリ エントリは名前によってシードされます。カスタム名には `--adapter` と `--base-url` の両方が必要です。
 
@@ -26,13 +26,13 @@ description: プロバイダー構成、資格情報、クォータ、および�
 | `account-mode` | `pool`、`direct`、`--json` |プールされた Codex アカウント ルーティングまたは直接の Codex アカウント ルーティングを選択します。 |
 
 ```bash
-ocx provider list --json
-ocx provider test ark
-ocx provider add anthropic --api-key sk-ant-... --set-default --sync
-ocx provider add local-dev --adapter openai-chat --base-url http://localhost:11434/v1
-ocx provider show anthropic --json
-ocx models --provider anthropic --json
-ocx models live --provider ark --json
+ccx provider list --json
+ccx provider test ark
+ccx provider add anthropic --api-key sk-ant-... --set-default --sync
+ccx provider add local-dev --adapter openai-chat --base-url http://localhost:11434/v1
+ccx provider show anthropic --json
+ccx models --provider anthropic --json
+ccx models live --provider ark --json
 ```
 
 :::caution[カスタムヘッダーは認証情報の経路ではありません]
@@ -54,29 +54,29 @@ ocx models live --provider ark --json
 
 ## 認証
 
-### `ocx login <provider>`
+### `ccx login <provider>`
 
-プロバイダーの登録済みログインフローを開始します。プロバイダーに応じて、OAuth ログインはブラウザーを開くか、サインイン済みのネイティブ CLI セッションを取り込みまたはリンクします。`~/.opencodex/` に保存された OpenCodex 所有の認証情報は自動更新されます。リンクされた Grok/Kimi CLI のアクセス世代は読み取り専用で採用され、更新の責任はネイティブ CLI に残ります。API キーログインプロバイダーはキーダッシュボードを開き、キーの入力を求め、可能な場合は検証し、結果のプロバイダー設定を保存します。名前がないか不明な場合、このコマンドは現在受け付ける OAuth および API キーのプロバイダー ID を出力します。
+プロバイダーの登録済みログインフローを開始します。プロバイダーに応じて、OAuth ログインはブラウザーを開くか、サインイン済みのネイティブ CLI セッションを取り込みまたはリンクします。`~/.codexcommander/` に保存された CodexCommander 所有の認証情報は自動更新されます。リンクされた Grok/Kimi CLI のアクセス世代は読み取り専用で採用され、更新の責任はネイティブ CLI に残ります。API キーログインプロバイダーはキーダッシュボードを開き、キーの入力を求め、可能な場合は検証し、結果のプロバイダー設定を保存します。名前がないか不明な場合、このコマンドは現在受け付ける OAuth および API キーのプロバイダー ID を出力します。
 
-`ocx status` / `ocx doctor` が再認証が必要であるか、端末の更新失敗を報告した後、同じコマンドを使用して **再認証**します (またはダッシュボードで再認証を使用します)。 Codex プール アカウントはパブリック `ocx login` プロバイダーではありません。代わりに、ダッシュボード Codex アカウント プール (再認証) またはヘッドレス `ocx account reauth` フローを介して再認証します。
+`ccx status` / `ccx doctor` が再認証が必要であるか、端末の更新失敗を報告した後、同じコマンドを使用して **再認証**します (またはダッシュボードで再認証を使用します)。 Codex プール アカウントはパブリック `ccx login` プロバイダーではありません。代わりに、ダッシュボード Codex アカウント プール (再認証) またはヘッドレス `ccx account reauth` フローを介して再認証します。
 
 ```bash
-ocx login xai
-ocx login anthropic
+ccx login xai
+ccx login anthropic
 ```
 
-### `ocx logout <provider>`
+### `ccx logout <provider>`
 
 保存されているプロバイダーの OAuth 資格情報を削除します。
 
 ## アカウントとキープール
 
-### `ocx account <subcommand>`
+### `ccx account <subcommand>`
 
 実行中のプロキシを介してプロバイダー アカウントと API キー プールを一覧表示し、切り替えます。出荷されたヘルプ画面は次のとおりです。
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage: ccx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 current <provider>  Show the active account or key.
@@ -111,7 +111,7 @@ Codex pool selection applies to the next request after clearing existing affinit
 }
 ```
 
-### `ocx account list [provider] [--json] [--all]`
+### `ccx account list [provider] [--json] [--all]`
 
 プロバイダーを使用しない場合、Codex プール、OAuth アカウント、および設定された API キー プールが一覧表示されます。 `--all` が存在しない限り、空のプロバイダーはスキップされます。プロバイダーを使用すると、その資格情報ファミリーのみがリストされます。人間の出力では `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS` を使用します。手動で選択した Codex 行には `selected` というマークが付けられます。保存された Kiro アカウントが存在する場合、出力には、Kiro には 1 つのログイン スロットがあり、再度サインインすると現在のアカウントが置き換えられることが示されます。結果が空であっても成功です。 `--json` は次を返します:
 
@@ -119,7 +119,7 @@ Codex pool selection applies to the next request after clearing existing affinit
 { accounts: AccountRow[], notes: string[] }
 ```
 
-### `ocx account current <provider> [--json]`
+### `ccx account current <provider> [--json]`
 
 アクティブなアカウントまたはキーを表示します。手動ピンのない Codex プールは、優先度を考慮した自動選択を報告します。最も優先度の高い適格ティアが選ばれ、そのティア内でクォータルーティングのもと最低使用量のアカウントが選ばれます。アクティブな認証情報を持たない別のファミリーは、その状態を報告し、依然として 0 を終了します。`--json` は次を返します。
 
@@ -127,10 +127,10 @@ Codex pool selection applies to the next request after clearing existing affinit
 { provider, type, activeId: string | null, autoSwitchThreshold?: number, account: AccountRow | null }
 ```
 
-### `ocx account use <provider> <account-or-key-id|main> [--json]`
+### `ccx account use <provider> <account-or-key-id|main> [--json]`
 
 既存の Codex アカウント、OAuth アカウント、または API key を選びます。`openai` で `main` は Codex App ログインを
-選択します。Codex Pool の選択は process-local affinity を消去し、既存の表示タスクを含む次のリクエストから適用されます。プロキシ再起動や affinity eviction 後もタスクは未紐付けになり得ますが、処理中のリクエストは取得済みアカウントを維持します。この選択は Pool routing のみを制御し、Direct mode は caller-owned/native main credential を使い続けます。使用量ベースのプロアクティブ切り替え、401/403 再認証、429/retry-after cooldown、除外、出力前 429/402 の障害回復により、後で別の適格 Pool アカウントが選ばれる場合があります。これらの回復経路は使用量ベース切り替えが off でも有効です。アカウント変更後も OpenCodex は会話コンテキストを再生しますが、provider prompt cache は再ウォームアップが必要な場合があります。
+選択します。Codex Pool の選択は process-local affinity を消去し、既存の表示タスクを含む次のリクエストから適用されます。プロキシ再起動や affinity eviction 後もタスクは未紐付けになり得ますが、処理中のリクエストは取得済みアカウントを維持します。この選択は Pool routing のみを制御し、Direct mode は caller-owned/native main credential を使い続けます。使用量ベースのプロアクティブ切り替え、401/403 再認証、429/retry-after cooldown、除外、出力前 429/402 の障害回復により、後で別の適格 Pool アカウントが選ばれる場合があります。これらの回復経路は使用量ベース切り替えが off でも有効です。アカウント変更後も CodexCommander は会話コンテキストを再生しますが、provider prompt cache は再ウォームアップが必要な場合があります。
 不明なプロバイダーや id は終了コード 1 です。`--json` は次を返します。
 **401/403** では、そのアカウントへのプロセスローカルな affinity を解除し、再認証を要求します。
 **429** では `Retry-After` を尊重してアカウントの cooldown を開始し、affinity を解除したうえで、
@@ -141,13 +141,13 @@ Codex pool selection applies to the next request after clearing existing affinit
 { ok: true, provider, type, activeId }
 ```
 
-### `ocx account refresh <provider> [--json]`
+### `ccx account refresh <provider> [--json]`
 
-Codex プールの場合は、`ocx account refresh openai [--json]` を使用します。アカウント クォータを強制的に更新し、利用可能な週次/月次のパーセンテージとリセット時間を出力します。不足しているクォータ データは、0% ではなく不明として報告されます。その JSON エンベロープは `{ accounts: AccountRow[] }` で、Codex の各行に `quota` があります。
+Codex プールの場合は、`ccx account refresh openai [--json]` を使用します。アカウント クォータを強制的に更新し、利用可能な週次/月次のパーセンテージとリセット時間を出力します。不足しているクォータ データは、0% ではなく不明として報告されます。その JSON エンベロープは `{ accounts: AccountRow[] }` で、Codex の各行に `quota` があります。
 
 OAuth プロバイダーと API キー プロバイダーの場合、これによりプロバイダー クォータ レポート エンドポイントが強制的に更新されます。これは、トークンの再ログインや単純なアカウント リストの再読み取りではありません。 `--json` は `{ provider, report: ProviderQuotaReport | null }` を返します。サポートされているクォータ レポートがないプロバイダーは、`no quota report available for <provider>` を出力して 0 を終了します。不明なプロバイダーと管理 API のエラーは 1 を終了します。失敗またはタイムアウトしたアップストリーム クォータ プローブは、代わりに null または古いレポートに劣化し (終了 0)、ダッシュボードのクォータ バーと一致します。
 
-### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
+### `ccx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
 `openai` Codex アカウント プールのみを制御します。 `on` は 80% を設定し、`off` は 0% を設定します。`status` は現在の値を読み取り、`threshold <n>` は 0 ～ 100 の整数を受け入れます。他のプロバイダーと無効な値は 1 を終了します。`--json` は次を返します。
 
@@ -155,12 +155,12 @@ OAuth プロバイダーと API キー プロバイダーの場合、これに�
 { provider, autoSwitchThreshold: number, enabled: boolean }
 ```
 
-### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
+### `ccx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
 
 Codex pool のアカウント別選択順を読み書きします。**値が大きいほど先に使われ**、既定は `0`、範囲は
 `-100` から `100` です。順序を持つのは `openai` の Codex pool だけなので、他のプロバイダーは終了コード
 1 です。`main` は Codex Desktop ログインを指し、他の pool アカウントと同じように並べ替えられます。
-`ocx account priority openai main last` とすれば予備として最後に回せます。
+`ccx account priority openai main last` とすれば予備として最後に回せます。
 
 プリセット語は小さな整数の別名です。`first` が `+2`、`earlier` が `+1`、`normal` が `0`、`later` が
 `-1`、`last` が `-2` です。`reset` は既定に戻し、保存されたエントリを削除します。**値を省略すると
@@ -178,11 +178,11 @@ preemption が未バインドリクエストを直ちに引き上げます。既
 ```
 
 
-### `ocx account login|reauth|code|cancel ...`
+### `ccx account login|reauth|code|cancel ...`
 
-ヘッドレス シェルからブラウザベースまたは手動コードのアカウント認証を実行します。プロバイダー固有のコマンド形式には `ocx account --help` を使用します。
+ヘッドレス シェルからブラウザベースまたは手動コードのアカウント認証を実行します。プロバイダー固有のコマンド形式には `ccx account --help` を使用します。
 
-### `ocx account remove <provider> <id|main> --yes [--json]`
+### `ccx account remove <provider> <id|main> --yes [--json]`
 
 この保護された非対話型削除には `--yes` が必要です。削除する前に、ID が存在することが確認されます。 ID が欠落している場合は、DELETE を送信せずに 1 が終了します。メインの Codex App ログインは削除できないため、`remove openai main --yes` は拒否されます。削除後、ファミリーは再度読み取られます。固定された Codex アカウントを削除すると、ピンがクリアされ、自動選択に戻ります。 OAuth は最初に残ったアカウントを昇格させるか、何も報告しません。 API キー プールは、最初に残っているキーを昇格するか、何も報告しません。 `--json` の成功と失敗の形状は次のとおりです。
 
@@ -191,32 +191,32 @@ preemption が未バインドリクエストを直ちに引き上げます。既
 { error: string } // stderr, exit 1
 ```
 
-### `ocx account add-key <provider> [--label <label>] [--json]`
+### `ccx account add-key <provider> [--label <label>] [--json]`
 
 API キー プロバイダーのキーを追加してアクティブ化します。キーは、非 TTY パイプ/リダイレクトされた標準入力からの読み取り専用です。インタラクティブ TTY 入力、空の入力、OAuth/Codex プロバイダー、および API エラー終了 1。キーがラベル内に表示される場合も含め、キーがエコーされることはありません。シークレット マネージャーまたはヒア文字列を使用することをお勧めします。
 
 ```bash
-ocx account add-key openrouter --label personal <<< "$OPENROUTER_API_KEY"
-security find-generic-password -w openrouter | ocx account add-key openrouter --json
+ccx account add-key openrouter --label personal <<< "$OPENROUTER_API_KEY"
+security find-generic-password -w openrouter | ccx account add-key openrouter --json
 ```
 
 `--json` は `{ ok: true, id: string | null, label?: string }` を返しますが、キーは決して含まれません。
 
-### `ocx account reset-credits <id|main> [--consume --yes]`
+### `ccx account reset-credits <id|main> [--consume --yes]`
 
 アカウントの Codex リセット クレジットを検査します。クレジットの消費は破壊的であり、`--consume` と `--yes` の両方が必要です。
 
-### `ocx account main <subcommand>`
+### `ccx account main <subcommand>`
 
-OpenCodex のアカウントプールルーティングを変更せずに、名前付きのネイティブ Codex メインログインプロファイルを管理します。
+CodexCommander のアカウントプールルーティングを変更せずに、名前付きのネイティブ Codex メインログインプロファイルを管理します。
 
 ```text
-ocx account main doctor [--json]
-ocx account main list [--json]
-ocx account main register <label> [--json]
-ocx account main add <label>
-ocx account main switch <profile-id-or-label> --yes [--json]
-ocx account main recover [--rollback --yes] [--json]
+ccx account main doctor [--json]
+ccx account main list [--json]
+ccx account main register <label> [--json]
+ccx account main add <label>
+ccx account main switch <profile-id-or-label> --yes [--json]
+ccx account main recover [--rollback --yes] [--json]
 ```
 
 各変更コマンドは、実行中のプロキシが返す正規化済みの有効な `CODEX_HOME` を表示します。このパスは
@@ -225,21 +225,19 @@ ocx account main recover [--rollback --yes] [--json]
 
 バージョン 1 はファイルベースの Codex 認証をサポートし、保存したプロファイルを AES-256-GCM で暗号化し、暗号鍵を OS の資格情報ストアに保持します。`add` は、生成された資格情報を取り込む前に公式 Codex ログインをステージングします。プロファイルを切り替える前に Codex を終了してください。切り替えに成功するとローカルのタスクと履歴は保持されますが、続行する前に Codex の再起動が必要です。`doctor` でプロファイル状態を確認し、`recover` で中断した切り替えを完了またはロールバックできます。`switch` にはプロファイル ID またはラベルを指定できます。
 
-v1 の復旧マトリクスが対象とするのは、トランザクションファイルの rename による公開後に OpenCodex プロセスが終了した場合です。OS またはカーネルのクラッシュや突然の電源断に対する永続性は保証しません。`atomicWriteFileAsync()` はファイルまたは親ディレクトリに `fsync` を実行しません。
+v1 の復旧マトリクスが対象とするのは、トランザクションファイルの rename による公開後に CodexCommander プロセスが終了した場合です。OS またはカーネルのクラッシュや突然の電源断に対する永続性は保証しません。`atomicWriteFileAsync()` はファイルまたは親ディレクトリに `fsync` を実行しません。
 
-暗号化された vault、切り替えジャーナル、復旧マーカー、および journal-quarantine ファイルは、正規の `<real CODEX_HOME>/.opencodex-native-main-profiles` ディレクトリに保存されます。そのため、その Codex ホームを共有するすべての OpenCodex インスタンスは、同じ 1 つの所有者と同じ 1 つの復旧状態を参照します。平文のログインステージングは、各 `<OPENCODEX_HOME>/native-main-profile-staging` ディレクトリ配下にそれぞれ分離されたままです。
+暗号化された vault、切り替えジャーナル、復旧マーカー、および journal-quarantine ファイルは、正規の `<real CODEX_HOME>/.codexcommander-native-main-profiles` ディレクトリに保存されます。そのため、その Codex ホームを共有するすべての CodexCommander インスタンスは、同じ 1 つの所有者と同じ 1 つの復旧状態を参照します。平文のログインステージングは、各 `<CODEXCOMMANDER_HOME>/native-main-profile-staging` ディレクトリ配下にそれぞれ分離されたままです。
 
-native-main トラフィックまたはジャーナル復旧を受け入れる前に、ライフタイム所有者が資格情報に対する排他的な権利を取得し、名前が正確に `auth.json.ocx.<pid>.<sequence>.tmp` と一致するクラッシュ残留ファイルだけを削除します。各候補は、変更されていない正規の `CODEX_HOME` 配下にあり、ハードリンク数が 1 の通常ファイルであり続けなければなりません。その内容を切り詰め、フラッシュしてからリンクを解除します。リンクまたは再解析ポイントへのすり替え、ファイル識別情報の変化、その他の曖昧さがある場合は native-main トラフィックを引き続き拒否し、名前が似ているだけのファイルは自動的には決して削除しません。これは、協調動作する OpenCodex のクラッシュから保護するためのものであり、同じ OS ユーザーとしてすでに実行中の悪意あるプロセスから保護するものではありません。そのユーザーと `CODEX_HOME` を格納するファイルシステムは引き続き信頼対象であり、切り詰めによってコピーオンライト方式のストレージ、スナップショット、または SSD の残留データから物理的に消去されることは保証されません。
-
-プレビュー版では `<OPENCODEX_HOME>/native-main-profiles` を使用していました。このレイアウトが暗黙にインポートされることはありません。`doctor` が旧形式のプロファイル状態を報告した場合は、同じ `CODEX_HOME` を共有するすべての OpenCodex プロキシを停止してください。そのうえで、該当する `*.vault.json`、`*.journal.json`、復旧マーカー、および参照されている journal-quarantine ファイルをバックアップし、所有者だけがアクセスできる権限を維持したまま、すべて一緒に正規ディレクトリへ移動してください。別の方法として、古いプレビュー版の一式を削除し、`ocx account main register` を再度実行することもできます。同じ `CODEX_HOME` を共有するプロキシが 1 つでも稼働している間は、複数の旧ルートから 1 つを選ぶことも、両方のレイアウトを併用することも避けてください。Windows では、以前の大文字小文字を区別しないホーム識別子に紐付いたプレビュー状態は、移動せずリセットする必要があります。暗号化された AAD と OS キーリングの識別子は、意図的に再利用されないためです。
+native-main トラフィックまたはジャーナル復旧を受け入れる前に、ライフタイム所有者が資格情報に対する排他的な権利を取得し、名前が正確に `auth.json.ccx.<pid>.<sequence>.tmp` と一致するクラッシュ残留ファイルだけを削除します。各候補は、変更されていない正規の `CODEX_HOME` 配下にあり、ハードリンク数が 1 の通常ファイルであり続けなければなりません。その内容を切り詰め、フラッシュしてからリンクを解除します。リンクまたは再解析ポイントへのすり替え、ファイル識別情報の変化、その他の曖昧さがある場合は native-main トラフィックを引き続き拒否し、名前が似ているだけのファイルは自動的には決して削除しません。これは、協調動作する CodexCommander のクラッシュから保護するためのものであり、同じ OS ユーザーとしてすでに実行中の悪意あるプロセスから保護するものではありません。そのユーザーと `CODEX_HOME` を格納するファイルシステムは引き続き信頼対象であり、切り詰めによってコピーオンライト方式のストレージ、スナップショット、または SSD の残留データから物理的に消去されることは保証されません。
 
 ## モデル
 
-### `ocx models [subcommand]`・`ocx model <subcommand>`
+### `ccx models [subcommand]`・`ccx model <subcommand>`
 
-`ocx model` は `ocx models` の別名です。サブコマンドを使用しない場合、構成されたプロバイダーに静的にシードされたモデルを一覧表示します。 `--provider` は 1 つの構成済みプロバイダーをフィルターし、`--json` はモデル メタデータを返します。 `live` は実行中のカタログを読み取ります。 `add`、`edit`、`remove`、および `list-custom` は手動カタログ エントリを管理します。 `enable`、`disable`、および `provider` は可視性を制御します。 `selected` はプロバイダー許可リストを制御します。 `context` はプロバイダーのコンテキストの上限を制御します。 `shadow` はバックグラウンドのシャドウ コール インターセプトを管理します。
+`ccx model` は `ccx models` の別名です。サブコマンドを使用しない場合、構成されたプロバイダーに静的にシードされたモデルを一覧表示します。 `--provider` は 1 つの構成済みプロバイダーをフィルターし、`--json` はモデル メタデータを返します。 `live` は実行中のカタログを読み取ります。 `add`、`edit`、`remove`、および `list-custom` は手動カタログ エントリを管理します。 `enable`、`disable`、および `provider` は可視性を制御します。 `selected` はプロバイダー許可リストを制御します。 `context` はプロバイダーのコンテキストの上限を制御します。 `shadow` はバックグラウンドのシャドウ コール インターセプトを管理します。
 
-ダッシュボードが提供するモデルごとの操作はすべてここで利用できるため、ヘッドレスインストールではカタログを管理するために GUI が必要ありません。 `add`、`remove`、および `list-custom` は設定ファイルに対して機能し、カタログ同期を通じて実行中のプロキシに適用されます。残りはライブ管理 API と通信し、プロキシが実行されている必要があります (`ocx start`、またはインストールされたサービス)。
+ダッシュボードが提供するモデルごとの操作はすべてここで利用できるため、ヘッドレスインストールではカタログを管理するために GUI が必要ありません。 `add`、`remove`、および `list-custom` は設定ファイルに対して機能し、カタログ同期を通じて実行中のプロキシに適用されます。残りはライブ管理 API と通信し、プロキシが実行されている必要があります (`ccx start`、またはインストールされたサービス)。
 
 |サブコマンド |サポートされているフラグ |アクション |
 | --- | --- | --- |
@@ -254,18 +252,18 @@ native-main トラフィックまたはジャーナル復旧を受け入れる�
 | `provider <name> <on\|off>` | `--json` | 1 つのプロバイダーのすべてのモデルを 1 回の書き込みで有効または無効にします。 |
 | `selected <provider>` | `--set <id,id...>`、`--clear`、`--json` |プロバイダー モデルのホワイトリストを読み取るか置き換えます。 `--clear` はホワイトリストを削除し、すべてのモデルが提供されるようにします。 |
 | `context <status\|value <tokens>\|provider <name> <on\|off>\|all <on\|off>>` | `--json` |コンテキスト ウィンドウ キャップをグローバルに、またはプロバイダーごとに読み取りまたは設定します。 |
-| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`、`--json` | Codex のバックグラウンド ヘルパー呼び出しの置換モデルを読み取るか、設定します。 `-` はモデルをクリアします。 `status` は `sourceModels` も報告し、プロキシがインターセプトするヘルパースラッグを示します (デフォルト: `gpt-5.6-luna`; 0.144.x 以前のクライアントが使用した `gpt-5.4-mini` は明示的な `sourceModels` オーバーライドで復元できます)。 |
+| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`、`--json` | Codex のバックグラウンド ヘルパー呼び出しの置換モデルを読み取るか、設定します。 `-` はモデルをクリアします。 `status` は `sourceModels` も報告し、プロキシがインターセプトするヘルパースラッグを示します (デフォルト: `gpt-5.6-luna`; 明示的なオーバーライドは現在のカスタム ヘルパー ID にのみ使用します)。 |
 
 ```bash
-ocx models live --json                                  # what Codex can actually see right now
-ocx models disable anthropic/claude-haiku-4             # hide one routed model
-ocx models enable gpt-5.6-sol                           # no slash, so it is treated as native
-ocx models provider zenmux off                          # hide a noisy provider wholesale
-ocx models selected anthropic --set claude-opus-5,claude-fable-5
-ocx models selected anthropic --clear                   # drop the allowlist again
-ocx models add deepseek deepseek-v4 --display-name 'DeepSeek V4' --context-window 128000 --modalities text,image
-ocx models list-custom --json                           # read the custom-id for edit/remove
-ocx models remove deepseek/deepseek-v4 --yes
+ccx models live --json                                  # what Codex can actually see right now
+ccx models disable anthropic/claude-haiku-4             # hide one routed model
+ccx models enable gpt-5.6-sol                           # no slash, so it is treated as native
+ccx models provider zenmux off                          # hide a noisy provider wholesale
+ccx models selected anthropic --set claude-opus-5,claude-fable-5
+ccx models selected anthropic --clear                   # drop the allowlist again
+ccx models add deepseek deepseek-v4 --display-name 'DeepSeek V4' --context-window 128000 --modalities text,image
+ccx models list-custom --json                           # read the custom-id for edit/remove
+ccx models remove deepseek/deepseek-v4 --yes
 ```
 
 スラッシュの付いたモデル セレクターはルーティングされます (`anthropic/claude-opus-5`)。裸の ID はネイティブ OpenAI モデルとして扱われるため、`--native` は、ルーティングされているように見える ID の読み取りを強制する場合にのみ必要です。

@@ -12,7 +12,7 @@ import type { NativeProfileContext } from "./native-profile-store";
 import { NativeProfileError } from "./native-profile-types";
 
 export const NATIVE_MAIN_OWNER_RETRY_MS = 250;
-export const NATIVE_MAIN_OWNER_DB = ".opencodex-native-main.owner.sqlite";
+export const NATIVE_MAIN_OWNER_DB = ".codexcommander-native-main.owner.sqlite";
 
 export type NativeMainOwnerUnavailableReason = "lock-unavailable" | "unsupported-filesystem";
 
@@ -293,7 +293,7 @@ export function assertNativeMainOwner(context: NativeProfileContext): void {
     unavailable ? "NATIVE_MAIN_OWNER_UNAVAILABLE" : "NATIVE_MAIN_OWNER_BUSY",
     unavailable
       ? "This process cannot establish native-main ownership for the effective CODEX_HOME."
-      : "Another OpenCodex process owns the physical native-main login for the effective CODEX_HOME.",
+      : "Another CodexCommander process owns the physical native-main login for the effective CODEX_HOME.",
     503,
     true,
   );

@@ -11,27 +11,22 @@ description: Listener, удалённый доступ, admission key, тайм�
 | Поле | Тип | По умолчанию | Значение |
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | Порт, который слушает прокси. |
-| `hostname?` | `string` | `"127.0.0.1"` | Адрес bind'а. Не-loopback bind требует `OPENCODEX_API_AUTH_TOKEN`. |
+| `hostname?` | `string` | `"127.0.0.1"` | Адрес bind'а. Не-loopback bind требует `CODEXCOMMANDER_API_AUTH_TOKEN`. |
 | `proxy?` | `string` | — | URL исходящего HTTP(S)-прокси или `${ENV_VAR}`. Применяется к `HTTP_PROXY` / `HTTPS_PROXY` только когда эти переменные не заданы; loopback всегда остаётся в `NO_PROXY`. |
 | `stallTimeoutSec?` | `number` | `300` | Секунды без upstream-данных до `response.incomplete`. Минимум 1. |
 | `connectTimeoutMs?` | `number` | `200000` | Дедлайн одной попытки DNS/TCP/TLS/final-header; он завершается до генерации тела ответа. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Дедлайн graceful-drain до принудительного прерывания активных turn'ов. |
 | `websockets?` | `boolean` | `false` | Объявлять `supports_websockets` для WebSocket-пути Responses. Значение false удерживает HTTP/SSE. |
 | `corsAllowOrigins?` | `string[]` | `[]` | Дополнительные точные origin, разрешённые CORS. Loopback-origin разрешены всегда. Поддерживаются authority-based origin браузерных расширений, например `chrome-extension://<extension-id>`; `*` не является маской. Firefox и Safari пересоздают UUID расширения (при каждой установке/запуске браузера), поэтому обновляйте запись при смене origin. |
-| `apiKeys?` | `OcxApiKey[]` | `[]` | Сгенерированные credentials `ocx_…`, принимаемые для management и data-plane auth на не-loopback bind'ах. Управляются через дашборд. |
+| `apiKeys?` | `CodexCommanderApiKey[]` | `[]` | Сгенерированные credentials `ccx_data_…`, принимаемые data-plane auth на не-loopback bind'ах. Управляются через дашборд и не аутентифицируют `/api/*`. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in policy очистки архивированных сессий. Никогда не включается неявно. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | Лимит в MiB для eviction-friendly app-owned log'ов, cache'ей, blob'ов и continuation payload'ов. Это не RSS-cap. Диапазон 64–4096. |
-| `codexAutoStart?` | `boolean` | `true` | Разрешает shim'у Codex запускать `ocx ensure` перед стартом Codex. При false `ensure` становится no-op. |
-| `codexShimAutoRestore?` | `boolean` | `true` | Восстанавливает установленный shim после завершённого внешнего обновления Codex, которое заменило его. Для отключения через окружение: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
-| `syncResumeHistory?` | `boolean` | `true` | Обратимый режим совместимости истории Codex App. Исходные metadata резервируются и восстанавливаются через `ocx stop` / `ocx restore`. |
-| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Перенаправляет распознанные helper/shadow-call'ы Codex на выбранную модель с low effort. Source-prefix по умолчанию: `gpt-5.6-luna`; клиенты до 0.144.x включительно использовали `gpt-5.4-mini`, который можно восстановить через `sourceModels`. |
-| `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Настройки sidecar'а web-search. |
-| `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Настройки sidecar'а описания изображений. |
-| `images?` | `OcxImagesConfig` | automatic OpenAI selection | Настройки standalone Images relay для Codex `image_gen`. |
-
-Если более старая development-сборка изменила metadata resume-history до появления резервного
-backup'а, выполните `ocx recover-history --legacy-openai`, чтобы принудительно вернуть
-native-provider history.
+| `codexAutoStart?` | `boolean` | `true` | Разрешает shim'у Codex запускать `ccx ensure` перед стартом Codex. При false `ensure` становится no-op. |
+| `codexShimAutoRestore?` | `boolean` | `true` | Восстанавливает установленный shim после завершённого внешнего обновления Codex, которое заменило его. Для отключения через окружение: `CODEXCOMMANDER_CODEX_SHIM_AUTO_RESTORE=0`. |
+| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Перенаправляет распознанные helper/shadow-call'ы Codex на выбранную модель с low effort. Source-prefix по умолчанию: `gpt-5.6-luna`; `sourceModels` — явное переопределение для текущего пользовательского источника. |
+| `webSearchSidecar?` | `CodexCommanderWebSearchSidecarConfig` | on when usable | Настройки sidecar'а web-search. |
+| `visionSidecar?` | `CodexCommanderVisionSidecarConfig` | on when usable | Настройки sidecar'а описания изображений. |
+| `images?` | `CodexCommanderImagesConfig` | automatic OpenAI selection | Настройки standalone Images relay для Codex `image_gen`. |
 
 ## Удалённый доступ
 
@@ -39,19 +34,19 @@ native-provider history.
 `0.0.0.0`, требует token-auth и для `/api/*`, и для data plane. Экспортируйте токен перед стартом:
 
 ```bash
-export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
-ocx start
+export CODEXCOMMANDER_API_AUTH_TOKEN="your-secret-token"
+ccx start
 ```
 
 Без этой переменной прокси откажется подниматься на удалённом bind'е. Для фоновой службы
-экспортируйте её до `ocx service install`, чтобы launchd, systemd или Task Scheduler получили
+экспортируйте её до `ccx service install`, чтобы launchd, systemd или Task Scheduler получили
 значение. Затем клиенты должны отправлять:
 
 ```text
-x-opencodex-api-key: your-secret-token
+x-codexcommander-api-key: your-secret-token
 ```
 
-| Эндпоинт | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
+| Эндпоинт | `Authorization: Bearer` | `x-codexcommander-api-key` | `x-api-key` |
 | --- | --- | --- | --- |
 | `/v1/responses` | not accepted | **required** | not accepted |
 | `/v1/chat/completions` | not accepted | **required** | not accepted |
@@ -77,7 +72,7 @@ ssh -L 20100:localhost:10100 you@remote
 
 Локальный порт может быть любым. Если Host в запросе разрешается в `localhost`, `127.0.0.1` или
 `::1`, то запрос остаётся loopback-независимо от порта, так что `http://localhost:20100/v1`
-работает. Укажите этот base URL клиенту; сам `ocx` продолжает записывать в managed client config
+работает. Укажите этот base URL клиенту; сам `ccx` продолжает записывать в managed client config
 только стандартный локальный адрес `127.0.0.1`.
 
 OAuth-callback провайдера слушает на фиксированном remote-port'е. Логиньтесь на удалённой машине
@@ -106,15 +101,14 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 
 ## Claude Code (`claudeCode`)
 
-Эти настройки управляют `/v1/messages`, launcher'ом `ocx claude` и страницей Claude в дашборде.
+Эти настройки управляют `/v1/messages`, launcher'ом `ccx claude` и страницей Claude в дашборде.
 
 | Ключ | Тип | По умолчанию | Описание |
 | --- | --- | --- | --- |
 | `claudeCode.bodyStallSec?` | `number` | `90` | Бюджет бездействия тела ответа в режиме native-passthrough, в секундах, пока чтение ждёт данные; это не общий лимит длительности. Минимум 1; ровно `0` отключает. |
 | `claudeCode.bodyMaxBytes?` | `number` | `67108864` | Совокупный лимит native-passthrough тела для stream- и buffered-ответов. Ровно `0` отключает. |
 | `claudeCode.authMode?` | `"proxy" \| "subscription"` | auto | Как launcher управляет `ANTHROPIC_AUTH_TOKEN`. Auto каждый запуск заново определяет auth; явно заданное значение не переопределяется. |
-| `claudeCode.authModeMigratedAt?` | `string` | unset | Внутренний одноразовый маркер миграции. Не задавайте вручную. |
-| `claudeCode.subagentEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | inherit | Effort, записываемый в сгенерированные `~/.claude/agents/ocx-*.md`; это отдельно от guidance Codex и proxy cap'ов. Чтобы перегенерировать файлы, перезапускайте через `ocx claude`. |
+| `claudeCode.subagentEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | inherit | Effort, записываемый в сгенерированные `~/.claude/agents/ccx-*.md`; это отдельно от guidance Codex и proxy cap'ов. Чтобы перегенерировать файлы, перезапускайте через `ccx claude`. |
 
 Авто-режим аутентификации выбирает subscription, если найдена сохранённая auth Claude, proxy —
 если auth нет, и subscription с предупреждением, если детектировать однозначно не удалось. См.
@@ -124,8 +118,10 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 
 Codex использует маленькие helper-model'и для задач вроде заголовков и commit message. Включите
 `shadowCallIntercept`, чтобы перенаправлять распознанные `sourceModels` на другую настроенную
-модель. Замещающая модель работает с low effort. `sourceModels` задавайте только если клиент
-использует другие helper-id.
+модель. Замещающая модель работает с low effort. `sourceModels` задавайте только как явное
+переопределение текущего пользовательского источника. Перехватываются только распознанные
+служебные запросы из `x-codex-turn-metadata`; обычные запросы и запросы без metadata, с
+повреждёнными или неизвестными metadata не перехватываются.
 
 ```json
 {
@@ -139,7 +135,7 @@ Codex использует маленькие helper-model'и для задач 
 
 ## Sidecar'ы
 
-### `images` (`OcxImagesConfig`)
+### `images` (`CodexCommanderImagesConfig`)
 
 | Поле | Тип | По умолчанию | Значение |
 | --- | --- | --- | --- |
@@ -150,13 +146,13 @@ Codex использует маленькие helper-model'и для задач 
 рабочего ключа; fallback на другой платный upstream здесь невозможен. Endpoint должен
 реализовывать OpenAI Images API-path'и и форму ответа, которую ожидает Codex.
 
-### `webSearchSidecar` (`OcxWebSearchSidecarConfig`)
+### `webSearchSidecar` (`CodexCommanderWebSearchSidecarConfig`)
 
 | Поле | Тип | По умолчанию | Значение |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | on when usable | Главный переключатель. |
 | `backend?` | `"openai" \| "anthropic"` | auto | Явный выбор выигрывает; иначе usable stored Anthropic OAuth выбирает `anthropic`, затем `openai`. |
-| `model?` | `string` | backend-dependent | `gpt-5.6-luna` для OpenAI или `claude-sonnet-5` для Anthropic. Старый явный `gpt-5.4-mini` мигрирует при старте. |
+| `model?` | `string` | backend-dependent | `gpt-5.6-luna` для OpenAI или `claude-sonnet-5` для Anthropic. |
 | `reasoning?` | `string` | `low` | Effort sidecar'а. Значение `minimal` с web search отклоняется. |
 | `maxSearchesPerTurn?` | `number` | `3` | Число реальных поисков, разрешённых за один turn основной модели. |
 | `routedModelStallTimeoutMs?` | `number` | `200000` | Config-file-only дедлайн бездействия raw-body у routed-model. Целое 1–2147483647; каждый непустой chunk сбрасывает таймер. |
@@ -172,7 +168,7 @@ Anthropic-backend без рабочего аккаунта закрываетс�
 routed-model и hosted-search timeout. Эффективный watchdog моста равен максимуму этих значений плюс
 30 секунд. Таймаут routed stall — это защита от бездействия, а не общий дедлайн генерации.
 
-### `visionSidecar` (`OcxVisionSidecarConfig`)
+### `visionSidecar` (`CodexCommanderVisionSidecarConfig`)
 
 | Поле | Тип | По умолчанию | Значение |
 | --- | --- | --- | --- |
@@ -190,4 +186,4 @@ context. Попадания в cache и дубликаты в пределах �
 `https:`-изображения, а также пустые и неуспешные описания не кэшируются.
 
 Sidecar'ы Anthropic OAuth повторно используют уже существующий OAuth fingerprint Claude Code от
-opencodex. Перед использованием прогоните soak-test на нужном аккаунте и ожидаемой нагрузке.
+CodexCommander. Перед использованием прогоните soak-test на нужном аккаунте и ожидаемой нагрузке.

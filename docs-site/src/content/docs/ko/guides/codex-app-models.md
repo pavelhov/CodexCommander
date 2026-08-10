@@ -1,16 +1,16 @@
 ---
 title: Codex App 모델 선택기
-description: 공유 Codex 카탈로그를 통해 opencodex 모델이 Codex App, Codex CLI, Codex TUI에 표시되는 방식.
+description: 공유 Codex 카탈로그를 통해 CodexCommander 모델이 Codex App, Codex CLI, Codex TUI에 표시되는 방식.
 ---
 
-opencodex는 Codex App을 직접 고치지 않습니다. Codex CLI/TUI가 이미 쓰는 Codex 설정과 모델 카탈로그를
+CodexCommander는 Codex App을 직접 고치지 않습니다. Codex CLI/TUI가 이미 쓰는 Codex 설정과 모델 카탈로그를
 같은 위치에 씁니다. Codex App도 이 공유 상태를 읽기 때문에, 라우팅된 모델이 일반 Codex 카탈로그
 항목처럼 App의 모델 선택기에 나타날 수 있습니다.
 
 OpenAI 항목에는 네이티브 Codex 로그인과 네임스페이스가 붙은 `openai-apikey/<model>` API key
 경로라는 두 가지 credential 경로가 있습니다. `codexAccountMode`만 Pool과 Direct 사이에서 바꾸는 것은
 선택기 id를 바꾸지 않습니다. 하지만 `codexAccountNamespaces`에 대상 계정이 존재하는 selector가 있으면,
-opencodex는 매핑된 계정별로 `<selector>/<native-openai-model>` 행을 추가하고 선택기에서 bare native 행을
+CodexCommander는 매핑된 계정별로 `<selector>/<native-openai-model>` 행을 추가하고 선택기에서 bare native 행을
 숨깁니다. Selector 이름은 사용자가 정하는 공개 label이며 내장된 계정 역할 의미가 없습니다. `selector`가
 붙은 행을 선택하면 매핑된 계정만 사용하고 활성 Pool 계정은 바뀌지 않습니다. 대상 계정을 사용할 수 없으면
 다른 계정으로 전환하지 않고 요청이 실패합니다. 자세한 내용은 [명시적 Codex 계정 selector](/reference/configuration/routing/#exact-codex-account-selectors)를
@@ -29,25 +29,17 @@ gpt-5.6-sol                         # Pool 또는 Direct를 통한 bare Codex �
 openai-apikey/gpt-5.6-sol           # API key
 ```
 
-새로 설치한 환경과 저장된 모드가 없는 설정은 Pool이 기본값입니다. 현재 설정은 마커 2를 사용하고,
-출하된 v1 소스를 `~/.opencodex/config.json.pre-openai-tiers-v2.bak`에 보관합니다. 복원하려면 다음을
-실행합니다:
-
-```sh
-cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json
-```
-
-이전 v1의 3-provider 설정은 자동으로 옵션을 인식하는 단일 행으로 마이그레이션됩니다.
+새로 설치한 환경과 저장된 모드가 없는 설정은 Pool이 기본값입니다.
 
 ## 통합 경로
 
-`ocx init`, `ocx start`, `ocx sync`는 공유 Codex 설정과 카탈로그를 프록시에 연결합니다. 설정 주입,
+`ccx init`, `ccx start`, `ccx sync`는 공유 Codex 설정과 카탈로그를 프록시에 연결합니다. 설정 주입,
 카탈로그 동기화, shim, WebSocket 폴백, 복원 메커니즘은 [Codex 통합](/guides/codex-integration/)을
 참고하세요.
 
 ## 라우팅 모델이 표시되는 이유
 
-Codex의 모델 선택기는 Codex 형식의 카탈로그 항목을 기대합니다. opencodex는 네이티브 Codex 모델
+Codex의 모델 선택기는 Codex 형식의 카탈로그 항목을 기대합니다. CodexCommander는 네이티브 Codex 모델
 템플릿을 복제한 뒤 라우팅된 모델의 식별자만 바꿉니다.
 
 ```text
@@ -57,7 +49,7 @@ visibility = "list"
 ```
 
 복제본에는 reasoning level, shell type, API 지원 플래그, base instructions처럼 엄격한 파서가 요구하는
-필드가 그대로 남습니다. 그다음 opencodex는 해당 라우트가 감당할 수 없는 OpenAI service-tier 메타데이터
+필드가 그대로 남습니다. 그다음 CodexCommander는 해당 라우트가 감당할 수 없는 OpenAI service-tier 메타데이터
 같은 네이티브 전용 기능을 제거합니다.
 
 ## 현재 안정 모델 범위
@@ -130,7 +122,7 @@ service_tier = "fast"
 fast_mode = true
 ```
 
-하지만 모델 카탈로그와 런타임 요청 tier id는 `priority`를 씁니다. opencodex는 이 분리를 그대로
+하지만 모델 카탈로그와 런타임 요청 tier id는 `priority`를 씁니다. CodexCommander는 이 분리를 그대로
 유지합니다. 네이티브 OpenAI passthrough 모델은 fast 지원을 유지하고, 라우팅된 프로바이더는
 케이퍼빌리티로 게이트되어 프로바이더가 `supportsServiceTier: false`를 선언한 경우에만
 `service_tier`가 제거됩니다(레지스트리가 정식 OpenAI를 `true`, DeepSeek과 Volcengine Ark를 `false`로 분류). 미분류 커스텀 게이트웨이는 호출자가 준 값을 그대로 보존하고 주입도 받지 않습니다. 따라서
@@ -142,7 +134,7 @@ Codex는 선택기에 보이는 카탈로그 항목을 `priority` 오름차순�
 `spawn_agent` model override로 노출합니다. 대시보드의 **Agent Command Center**에서는 bare native id 또는
 routed `provider/model` id를 최대 다섯 개 선택하고 저장할 수 있습니다. 이미 설정된 account-qualified
 `<selector>/<native-openai-model>` id도 보존하며 각 저장 항목이 실제로 노출됐는지 제외됐는지 보고합니다.
-opencodex는 선택한 순서대로 낮은 카탈로그 priority를 부여합니다. account selector가 활성화되어 있으면
+CodexCommander는 선택한 순서대로 낮은 카탈로그 priority를 부여합니다. account selector가 활성화되어 있으면
 bare native 선택은 selector-qualified 그룹으로 확장됩니다. 다른 모델도 정확한 id로 직접 호출할 수 있습니다.
 
 Active Roster는 Dashboard의 **Sub-agent delegation** 선택과 별개입니다. Codex가 먼저 보여 줄
@@ -153,8 +145,8 @@ override를 정할 뿐, 모델을 고르거나 delegation을 시작하지는 않
 picker에 오래된 항목이 계속 보이면 카탈로그를 새로 쓰고 대상 Codex 서피스를 다시 시작합니다:
 
 ```bash
-ocx sync
+ccx sync
 ```
 
-opencodex는 카탈로그의 visibility, priority, metadata가 바뀔 때마다 `models_cache.json`을 의도적으로
+CodexCommander는 카탈로그의 visibility, priority, metadata가 바뀔 때마다 `models_cache.json`을 의도적으로
 오래된 cache wrapper로 다시 씁니다. 다음 Codex 모델 새로고침이 새 카탈로그를 읽도록 하기 위해서입니다.

@@ -10,7 +10,7 @@
  * how that affects eligibility.
  */
 
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { PROVIDER_REGISTRY } from "../providers/registry";
 import {
@@ -98,8 +98,8 @@ function classifyHostname(hostname: string): "local" | "private" | null {
 
 /**
  * Adapters whose upstream protocol supports function/tool calling. Mirrors
- * the adapter ids the resolver accepts (including the `azure` alias for
- * `azure-openai`); `kiro` and `mimo-free` send/delegate tool calls.
+ * the adapter ids the resolver accepts; `kiro` and `mimo-free` send/delegate
+ * tool calls.
  */
 const TOOL_CAPABLE_ADAPTERS = new Set([
   "openai-chat",
@@ -108,7 +108,6 @@ const TOOL_CAPABLE_ADAPTERS = new Set([
   "cursor",
   "google",
   "azure-openai",
-  "azure",
   "kiro",
   "mimo-free",
   "command-code",
@@ -138,7 +137,7 @@ function localRemoteEvidence(baseUrl: string | undefined): Pick<RouteCapabilityE
  * cached Codex catalog row, native-model metadata.
  */
 export function candidateCapabilityEvidence(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   providerName: string,
   modelId: string,
 ): RouteCapabilityEvidence {

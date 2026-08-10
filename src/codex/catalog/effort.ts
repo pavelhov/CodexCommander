@@ -6,14 +6,13 @@ import { atomicWriteFile, expandUserPath, getConfigDir, websocketsEnabled } from
 import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readRootTomlString, resolveCodexConfigPath } from "../paths";
 import { clearModelCache, DEFAULT_MODEL_CACHE_TTL_MS, getFreshCached, getStaleCached, isModelsFetchCoolingDown, markModelsFetchFailure, setCached } from "../model-cache";
 import { buildModelsRequest, resolveModelsAuthToken } from "../../oauth";
-import type { OcxConfig, OcxProviderConfig } from "../../types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJawcodeModelMetadata, resolveJawcodeProvider } from "../../generated/jawcode-model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import { getProviderRegistryEntry } from "../../providers/registry";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
-import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
 import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
@@ -72,7 +71,7 @@ export function nativeEffortClamp(slug: string, effort: string | undefined): str
 
 export function shouldApplyNativeEffortClamp(
   providerName: string,
-  provider: OcxProviderConfig,
+  provider: CodexCommanderProviderConfig,
   requestedModelId: string,
 ): boolean {
   return !requestedModelId.includes("/")
@@ -87,9 +86,8 @@ export function catalogModelEfforts(slugs: readonly string[]): Map<string, strin
   if (!catalog) return out;
   for (const entry of catalog.models ?? []) {
     if (typeof entry.slug !== "string") continue;
-    // Tolerate raw legacy config slugs (`provider/vendor/model`) against the
-    // Codex-facing encoded catalog slug (`provider/vendor-model`).
-    const callerSlug = slugs.find(s => slugsEquivalent(s, entry.slug as string));
+    // Persisted selections use the exact Codex-facing encoded catalog slug.
+    const callerSlug = slugs.find(s => s === entry.slug);
     if (callerSlug === undefined) continue;
     const levels = Array.isArray(entry.supported_reasoning_levels)
       ? entry.supported_reasoning_levels as Array<{ effort?: string }>
@@ -117,7 +115,7 @@ export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel)
   // displayName is DISPLAY-ONLY: it relabels the picker row but never touches the routing
   // slug, alias, or provider. deriveEntry already stamped the slug as display_name; a
   // configured displayName overrides just the label. The `/` separator is rejected at every
-  // input boundary (CLI `ocx models add`, management API), so the catalog trusts its source.
+  // input boundary (CLI `ccx models add`, management API), so the catalog trusts its source.
   // Combos carry no displayName, and natives never reach here (no CatalogModel), so genuine
   // upstream marketing names and combo alias labels are preserved untouched.
   const displayName = typeof model.displayName === "string" ? model.displayName.trim() : "";
@@ -319,21 +317,21 @@ export function clampCatalogModelsToCodexSupport(models: RawEntry[], deps: Bundl
       runtimeVersion = resolved.runtime.version;
       process.stderr.write(`${formatRuntimeLogLine(resolved.runtime)}\n`);
       if (resolved.persistError) {
-        console.warn(`[opencodex] Codex runtime selection could not be persisted; a later sync may pick a different binary.`);
+        console.warn(`[codexcommander] Codex runtime selection could not be persisted; a later sync may pick a different binary.`);
       }
       if (
         resolved.replacedConfigured
         && resolved.replacedConfigured.from.command !== resolved.runtime.command
       ) {
-        console.warn(`[opencodex] Preferred Codex runtime is unavailable.`);
+        console.warn(`[codexcommander] Preferred Codex runtime is unavailable.`);
         console.warn(
-          `[opencodex] Falling back from ${displayCodexRuntimePath(resolved.replacedConfigured.from.command)} to ${displayCodexRuntimePath(runtimePath)}.`,
+          `[codexcommander] Falling back from ${displayCodexRuntimePath(resolved.replacedConfigured.from.command)} to ${displayCodexRuntimePath(runtimePath)}.`,
         );
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const redacted = redactUserPath(redactSecretString(message)).slice(0, 200);
-      console.warn(`[opencodex] Codex runtime resolve failed during catalog clamp: ${redacted}`);
+      console.warn(`[codexcommander] Codex runtime resolve failed during catalog clamp: ${redacted}`);
     }
   }
 

@@ -52,9 +52,9 @@ async function helper(
 
 describe("proxy lifecycle concurrency", () => {
   test("concurrent ensure helpers converge on one live PID and port", async () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-lifecycle-concurrency-"));
+    const root = mkdtempSync(join(tmpdir(), "ccx-lifecycle-concurrency-"));
     const home = join(root, "home");
-    const configHome = join(root, "opencodex");
+    const configHome = join(root, "codexcommander");
     const codexHome = join(root, "codex");
     mkdirSync(home, { recursive: true, mode: 0o700 });
     mkdirSync(configHome, { recursive: true, mode: 0o700 });
@@ -71,6 +71,7 @@ wire_api = "responses"
     const port = await unusedPort();
     writeFileSync(join(configHome, "config.json"), `${JSON.stringify({
       port,
+      multiAgentGuidanceEnabled: true,
       hostname: "127.0.0.1",
       codexAutoStart: true,
       defaultProvider: "mock",
@@ -89,9 +90,9 @@ wire_api = "responses"
       ...process.env,
       HOME: home,
       USERPROFILE: home,
-      OPENCODEX_HOME: configHome,
+      CODEXCOMMANDER_HOME: configHome,
       CODEX_HOME: codexHome,
-      OCX_DISABLE_COMPANION: "1",
+      CCX_DISABLE_COMPANION: "1",
       NO_COLOR: "1",
     };
     let livePid: number | null = null;
@@ -119,7 +120,7 @@ wire_api = "responses"
       livePid = payloads[0].pid;
       expect(livePid).toBeGreaterThan(0);
 
-      const pidFile = Number(readFileSync(join(configHome, "ocx.pid"), "utf8").trim());
+      const pidFile = Number(readFileSync(join(configHome, "codexcommander.pid"), "utf8").trim());
       const runtime = JSON.parse(readFileSync(join(configHome, "runtime-port.json"), "utf8")) as {
         pid: number;
         port: number;

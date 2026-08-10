@@ -7,7 +7,7 @@ import {
   inspectResponseLogSsePayload,
   type RequestLogContext,
 } from "../src/server/request-log";
-import type { AdapterEvent, OcxConfig } from "../src/types";
+import type { AdapterEvent, CodexCommanderConfig } from "../src/types";
 import {
   createTranslatorBudget,
   translatorLiveBudgetCountForTests,
@@ -20,12 +20,12 @@ import {
 } from "../src/responses/v2-plaintext-collaboration";
 
 const originalFetch = globalThis.fetch;
-const originalUsageDebug = process.env.OPENCODEX_USAGE_DEBUG;
+const originalUsageDebug = process.env.CCX_USAGE_DEBUG;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  if (originalUsageDebug === undefined) delete process.env.OPENCODEX_USAGE_DEBUG;
-  else process.env.OPENCODEX_USAGE_DEBUG = originalUsageDebug;
+  if (originalUsageDebug === undefined) delete process.env.CCX_USAGE_DEBUG;
+  else process.env.CCX_USAGE_DEBUG = originalUsageDebug;
 });
 
 function messageTool(name: string, encrypted = true): Record<string, unknown> {
@@ -208,7 +208,7 @@ describe("native V2 plaintext collaboration response restore", () => {
             type: "function_call",
             namespace: V2_PLAINTEXT_COLLABORATION_NAMESPACE,
             name: "spawn_agent",
-            arguments: "{\"message\":\"keep alias text ocx_collaboration_plaintext\"}",
+            arguments: "{\"message\":\"keep alias text ccx_collaboration_plaintext\"}",
           },
           {
             type: "function_call",
@@ -233,7 +233,7 @@ describe("native V2 plaintext collaboration response restore", () => {
       name: "spawn_agent",
       encrypted_function_args: [],
     });
-    expect(restored.response.output[0]!.arguments).toContain("ocx_collaboration_plaintext");
+    expect(restored.response.output[0]!.arguments).toContain("ccx_collaboration_plaintext");
     expect(restored.response.output[1]).toMatchObject({ namespace: "collaboration", name: "wait_agent" });
     expect(restored.response.output[1]).not.toHaveProperty("encrypted_function_args");
     expect(restored.response.output[2]).toMatchObject({ type: "namespace", name: "collaboration" });
@@ -283,7 +283,7 @@ describe("native V2 plaintext collaboration response restore", () => {
   });
 });
 
-function nativeConfig(delivery: "encrypted" | "plaintext"): OcxConfig {
+function nativeConfig(delivery: "encrypted" | "plaintext"): CodexCommanderConfig {
   return {
     port: 0,
     defaultProvider: "openai",
@@ -296,10 +296,10 @@ function nativeConfig(delivery: "encrypted" | "plaintext"): OcxConfig {
         codexAccountMode: "direct",
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
-function routedResponsesConfig(delivery: "encrypted" | "plaintext"): OcxConfig {
+function routedResponsesConfig(delivery: "encrypted" | "plaintext"): CodexCommanderConfig {
   return {
     port: 0,
     defaultProvider: "responses-native",
@@ -312,7 +312,7 @@ function routedResponsesConfig(delivery: "encrypted" | "plaintext"): OcxConfig {
         apiKey: "test-key",
       },
     },
-  } as OcxConfig;
+  } as CodexCommanderConfig;
 }
 
 function nativeV2Body(stream = true): Record<string, unknown> {
@@ -465,7 +465,7 @@ describe("routed V2 plaintext collaboration bridge", () => {
 
 describe("plaintext V2 usage-debug privacy", () => {
   test("keeps metadata inspection but suppresses persisted JSON and SSE body samples", () => {
-    process.env.OPENCODEX_USAGE_DEBUG = "1";
+    process.env.CCX_USAGE_DEBUG = "1";
     const logCtx: RequestLogContext = {
       model: "kimi/k3[1m]",
       provider: "kimi",

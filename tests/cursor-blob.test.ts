@@ -403,7 +403,7 @@ describe("Cursor blob handshake", () => {
   });
 
   test("keeps exec_command guidance in the system prompt without mutating the user request", () => {
-    const prompt = "Run: echo OCX via your shell tool, report stdout.";
+    const prompt = "Run: echo CCX via your shell tool, report stdout.";
     const bytes = encodeCursorRunRequest({
       modelId: "claude-4.6-sonnet",
       conversationId: "c1",

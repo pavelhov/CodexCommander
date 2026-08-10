@@ -1,21 +1,23 @@
 /**
  * Shared Grok Build config sync: gather the visible model catalog and (re)inject the
- * managed block into ~/.grok/config.toml. Used by `ocx start` (server process) and by
- * `ocx ensure` / `ocx restart` (parent process, after live discovery or child readiness)
+ * managed block into ~/.grok/config.toml. Used by `ccx start` (server process) and by
+ * `ccx ensure` / `ccx restart` (parent process, after live discovery or child readiness)
  * so the fence exists deterministically once the proxy reports healthy.
  *
  * Deps are injectable (mirrors src/codex/sync.ts) so tests can run without a live proxy.
  */
 import { visibleNativeSlugs, filterCatalogVisibleModels, nativeOpenAiContextWindow, type CatalogModel } from "../codex/catalog";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import { injectGrokConfig, type GrokInjectModel, type GrokInjectResult } from "./inject";
 
 export interface GrokSyncDeps {
-  fetchAllModels: (config: OcxConfig) => Promise<CatalogModel[]>;
+  fetchAllModels: (config: CodexCommanderConfig) => Promise<CatalogModel[]>;
   injectGrokConfig: typeof injectGrokConfig;
+  /** Test seam that avoids probing the host Codex runtime for bundled models. */
+  visibleNativeSlugs?: typeof visibleNativeSlugs;
 }
 
-async function defaultFetchAllModels(config: OcxConfig): Promise<CatalogModel[]> {
+async function defaultFetchAllModels(config: CodexCommanderConfig): Promise<CatalogModel[]> {
   const { fetchAllModels } = await import("../server/management-api");
   return fetchAllModels(config);
 }
@@ -28,7 +30,7 @@ async function defaultFetchAllModels(config: OcxConfig): Promise<CatalogModel[]>
  */
 export async function syncGrokConfig(
   port: number,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   opts: { hostname?: string; grokHome?: string } = {},
   deps: GrokSyncDeps = { fetchAllModels: defaultFetchAllModels, injectGrokConfig },
 ): Promise<GrokInjectResult> {
@@ -39,7 +41,7 @@ export async function syncGrokConfig(
       // Native slugs carry their context window too. Without it Grok falls back to its own
       // default (200k) and understates models like gpt-5.6-sol, which is 372k. This is the same
       // accessor the dashboard's native rows use, so the two cannot disagree.
-      ...visibleNativeSlugs(config).map(id => {
+      ...(deps.visibleNativeSlugs ?? visibleNativeSlugs)(config).map(id => {
         const contextWindow = nativeOpenAiContextWindow(id);
         return { id, ...(contextWindow !== undefined ? { contextWindow } : {}) };
       }),

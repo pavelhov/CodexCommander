@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Use this form when a provider endpoint, request format, response format, or client integration does not work correctly through the OpenCodex proxy.
+        Use this form when a provider endpoint, request format, response format, or client integration does not work correctly through the CodexCommander proxy.
 
   - type: dropdown
     id: client
@@ -37,9 +37,9 @@ body:
   - type: input
     id: version
     attributes:
-      label: OpenCodex version
-      description: Installed `@bitkyc08/opencodex` version or commit SHA.
-      placeholder: "2.7.31"
+      label: CodexCommander version
+      description: Installed `codexcommander` version or commit SHA.
+      placeholder: "0.1.0"
     validations:
       required: true
 

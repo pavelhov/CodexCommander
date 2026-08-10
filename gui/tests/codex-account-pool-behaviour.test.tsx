@@ -33,8 +33,35 @@ let nextActiveResponseGate: Promise<void> | null = null;
 let nextActivePutGate: Promise<void> | null = null;
 let activePinned = false;
 let activePinnedAccountId: string | null = null;
-let omitPinnedAccountId = false;
 let activeGetId: string | null = null;
+
+function currentAccount(raw: unknown): unknown {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
+  const row = raw as Record<string, unknown>;
+  const health = row.health ?? { status: "healthy" };
+  return {
+    needsReauth: false,
+    health,
+    healthLabel: health && typeof health === "object" && (health as { status?: unknown }).status === "healthy"
+      ? "Healthy"
+      : "Reauthentication required",
+    healthSummary: "codex account: current health",
+    ...row,
+  };
+}
+
+function currentActive(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    activeCodexAccountId: activeGetId,
+    pinned: activePinned,
+    pinnedAccountId: activePinnedAccountId,
+    autoSwitchThreshold: threshold,
+    upstreamFailoverThreshold: 3,
+    accountPoolStrategy: "quota",
+    accountPoolStickyLimit: 1,
+    ...overrides,
+  };
+}
 
 beforeEach(() => {
   previous = Object.fromEntries(globals.map((k) => [k, Reflect.get(globalThis, k)])) as typeof previous;
@@ -60,7 +87,6 @@ beforeEach(() => {
   nextActivePutGate = null;
   activePinned = false;
   activePinnedAccountId = null;
-  omitPinnedAccountId = false;
   activeGetId = null;
   accounts = [{ id: "a1", email: "account-one", isMain: true, paused: false, priority: 0, hasCredential: true, quota: null }];
   Object.defineProperty(globalThis, "fetch", {
@@ -120,7 +146,7 @@ beforeEach(() => {
         const gate = nextAccountsResponseGate;
         nextAccountsResponseGate = null;
         if (gate) await gate;
-        return { ok: true, json: async () => ({ accounts }) } as unknown as Response;
+        return { ok: true, json: async () => ({ accounts: accounts.map(currentAccount) }) } as unknown as Response;
       }
       if (path.startsWith("codex-auth/active")) {
         if (init?.method === "PUT") {
@@ -139,12 +165,7 @@ beforeEach(() => {
         if (gate) await gate;
         return {
           ok: true,
-          json: async () => ({
-            activeCodexAccountId: activeGetId,
-            pinned: activePinned,
-            ...(omitPinnedAccountId ? {} : { pinnedAccountId: activePinnedAccountId }),
-            autoSwitchThreshold: threshold,
-          }),
+          json: async () => currentActive(),
         } as unknown as Response;
       }
       return { ok: true, json: async () => ({}) } as unknown as Response;
@@ -253,7 +274,7 @@ test("pausing stores the actual fallback account returned by the API", async () 
 
 test("a paused main account does not contribute active reauth state", async () => {
   accounts = [
-    { id: "a1", email: "main", isMain: true, paused: true, priority: 0, hasCredential: true, needsReauth: true, quota: null },
+    { id: "a1", email: "main", isMain: true, paused: true, priority: 0, hasCredential: true, health: { status: "reauth_required" }, quota: null },
     { id: "a2", email: "next", isMain: false, paused: false, priority: 0, hasCredential: true, quota: null },
   ];
   const seen = await mountController();
@@ -364,6 +385,9 @@ test("subscribing never fabricates a server read", async () => {
     pinned: false,
     pinnedAccountId: null,
     autoSwitchThreshold: 80,
+    upstreamFailoverThreshold: 3,
+    accountPoolStrategy: "quota",
+    accountPoolStickyLimit: 1,
   }]);
 });
 
@@ -599,29 +623,35 @@ test("the pinned account id follows /active on each load, ignoring the pinned fl
   expect(seen.current!.activePinnedId).toBeNull();
 });
 
-test("an /active payload with no pinned account id reads as no pin", async () => {
-  // An older build's response omits the field entirely; that must not put the string
-  // "undefined" on a card, and must not latch a pin that no longer exists.
+test("an incomplete /active payload is rejected without clearing the last good pin", async () => {
   const seen = await mountController();
   activePinnedAccountId = "a1";
   await act(async () => { await seen.current!.load(); });
   expect(seen.current!.activePinnedId).toBe("a1");
 
-  omitPinnedAccountId = true;
+  const savedFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    if (String(url).includes("codex-auth/active") && init?.method !== "PUT") {
+      return { ok: true, json: async () => ({ activeCodexAccountId: null }) } as unknown as Response;
+    }
+    return savedFetch(url, init);
+  }) as typeof fetch;
   await act(async () => { await seen.current!.load(); });
-  expect(seen.current!.activePinnedId).toBeNull();
+  expect(seen.current!.activePinnedId).toBe("a1");
 });
 
-test("an account payload without a selection order reads as the default", async () => {
-  accounts = [{ id: "a1", email: "main", isMain: true, paused: false, hasCredential: true, quota: null }];
+test("an account payload without a selection order is rejected without replacing last-good rows", async () => {
   const seen = await mountController();
+  expect(seen.current!.accounts[0]?.priority).toBe(0);
+  accounts = [{ id: "a1", email: "main", isMain: true, paused: false, hasCredential: true, quota: null }];
+  await act(async () => { await seen.current!.load(); });
   expect(seen.current!.accounts[0]?.priority).toBe(0);
 });
 
 test("an order write retires the switch's pending reconciliation", async () => {
   accounts = [
-    { id: "a1", email: "account-one", isMain: true, priority: 0, hasCredential: true, quota: null },
-    { id: "a2", email: "account-two", isMain: false, priority: 0, hasCredential: true, quota: null },
+    { id: "a1", email: "account-one", isMain: true, paused: false, priority: 0, hasCredential: true, quota: null },
+    { id: "a2", email: "account-two", isMain: false, paused: false, priority: 0, hasCredential: true, quota: null },
   ];
   const seen = await mountController();
 
@@ -647,8 +677,8 @@ test("an order write retires the switch's pending reconciliation", async () => {
 test("a mutation updates the one shared controller state", async () => {
   const seen = await mountController();
   accounts = [
-    { id: "a1", email: "account-one", isMain: true, priority: 0, hasCredential: true, quota: null },
-    { id: "a2", email: "account-two", isMain: false, priority: 0, hasCredential: true, quota: null },
+    { id: "a1", email: "account-one", isMain: true, paused: false, priority: 0, hasCredential: true, quota: null },
+    { id: "a2", email: "account-two", isMain: false, paused: false, priority: 0, hasCredential: true, quota: null },
   ];
 
   await act(async () => { await seen.current!.switchAccount("a2"); });
@@ -661,7 +691,7 @@ test("a mutation updates the one shared controller state", async () => {
 });
 
 /**
- * WP2 (260730_gui_hydration_loading_unify/010): the forced quota refresh keeps rows on screen and
+ * A forced quota refresh keeps rows on screen and
  * deliberately does not touch `loadState`, so `refreshing` is the only signal a surface can use to
  * show that a slow wait is in progress. It counts requests rather than tracking one, because the
  * initial load, the 30s poll and an explicit action can overlap.

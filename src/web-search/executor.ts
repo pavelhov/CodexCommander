@@ -1,4 +1,4 @@
-import type { OcxProviderConfig } from "../types";
+import type { CodexCommanderProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { redactSecretString } from "../lib/redact";
@@ -42,7 +42,7 @@ export type SidecarOutcomeRecorder = (outcome: CodexUpstreamOutcome) => void;
 export async function runWebSearch(
   query: string,
   hostedTool: Record<string, unknown>,
-  forwardProvider: OcxProviderConfig,
+  forwardProvider: CodexCommanderProviderConfig,
   selectedForwardHeaders: Headers,
   settings: SidecarSettings,
   abortSignal?: AbortSignal,

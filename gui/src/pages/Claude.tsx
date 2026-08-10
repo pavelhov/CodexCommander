@@ -16,7 +16,7 @@ function readClaudeTab(hash = typeof window !== "undefined" ? window.location.ha
 }
 
 function readCachedDesktopPort(apiBase: string): number | null {
-  const cached = readSessionListCache<{ data?: { port?: number } }>(`ocx.claude-desktop.v1:${apiBase}`);
+  const cached = readSessionListCache<{ data?: { port?: number } }>(`ccx.claude-desktop.v1:${apiBase}`);
   return typeof cached?.data?.port === "number" ? cached.data.port : null;
 }
 

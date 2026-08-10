@@ -22,7 +22,8 @@ import { getConfigDir } from "../../config";
 import { recordOwnedConfigPath } from "../../lib/config-ownership";
 import {
   currentUsageLogRevision,
-  normalizeUsageEntryForTest,
+  decodeUsageRow,
+  USAGE_LOG_SCHEMA_VERSION,
   usageLogPath,
   type PersistedUsageEntry,
   type UsageLogRevision,
@@ -211,18 +212,9 @@ function readCompleteTail(fd: number, fromOffset: number, size: number): { text:
 function parsedEntryFromLine(line: string): PersistedUsageEntry | null {
   if (!line.trim()) return null;
   try {
-    const parsed = JSON.parse(line) as PersistedUsageEntry;
-    if (parsed && typeof parsed === "object"
-      && typeof parsed.requestId === "string"
-      && typeof parsed.timestamp === "number"
-      && typeof parsed.provider === "string"
-      && typeof parsed.model === "string"
-      && typeof parsed.status === "number"
-      && typeof parsed.durationMs === "number") {
-      return parsed;
-    }
+    return decodeUsageRow(JSON.parse(line));
   } catch {
-    /* skip partial / hand-edited lines, same as every other reader */
+    /* skip partial / hand-edited lines, same as every other usage-log reader */
   }
   return null;
 }
@@ -338,15 +330,17 @@ function destroyAndRecreate(path: string, reason: string): Database {
 function openIndexDb(): Database {
   const path = indexDbPath();
   if (db) return db;
+  const fileWasAbsent = !existsSync(path);
   let handle: Database | undefined;
   try {
     handle = new Database(path, { create: true });
     handle.exec("PRAGMA journal_mode = WAL");
     handle.exec("PRAGMA busy_timeout = 5000");
     handle.exec(HISTORY_DDL);
-    if (metaValue(handle, HISTORY_META_KEYS.schemaVersion) === null) {
-      // Fresh database: record the schema version so the next refresh treats
-      // it as current instead of destroying the file we just created.
+    if (fileWasAbsent) {
+      // Only a file this opener created from an absent path may receive the
+      // current version. A pre-existing unversioned database is stale derived
+      // state and must flow through ensureSchemaAndIdentity() for recreation.
       setMeta(handle, HISTORY_META_KEYS.schemaVersion, HISTORY_SCHEMA_VERSION);
       setMeta(handle, HISTORY_META_KEYS.indexedOffset, 0);
       setMeta(handle, HISTORY_META_KEYS.indexedRows, 0);
@@ -525,10 +519,14 @@ function requireDb(): Database {
 function hydrateRow(row: HistoryQueryRow | undefined): PersistedUsageEntry | null {
   if (!row) return null;
   try {
-    const parsed = JSON.parse(row.row_json) as PersistedUsageEntry;
-    if (parsed && typeof parsed === "object" && typeof parsed.requestId === "string") {
-      return normalizeUsageEntryForTest(parsed);
-    }
+    const parsed = JSON.parse(row.row_json) as unknown;
+    // `row_json` is the unwrapped entry stored only after strict JSONL ingress.
+    // Revalidate it as the current row shape; never run durable data back through
+    // the write-time normalizer or silently repair a damaged derived index row.
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const entry = parsed as Record<string, unknown>;
+    if ("schemaVersion" in entry) return null;
+    return decodeUsageRow({ schemaVersion: USAGE_LOG_SCHEMA_VERSION, ...entry });
   } catch {
     /* defensive: a damaged row is skipped, canonical ledger unaffected */
   }

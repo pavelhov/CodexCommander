@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { isAllowedRequestOrigin, isLoopbackRequestHost } from "../src/server/auth-cors";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 // A loopback bind: isApiAuthRequired() is false, so admission runs through the
 // Host/Origin branch these tests exercise.
-const loopbackConfig = { hostname: "127.0.0.1" } as OcxConfig;
+const loopbackConfig = { hostname: "127.0.0.1" } as CodexCommanderConfig;
 
 function request(host: string, origin?: string): Request {
   const headers: Record<string, string> = { Host: host };
@@ -102,7 +102,7 @@ describe("isAllowedRequestOrigin with extension origins", () => {
     const config = {
       ...loopbackConfig,
       corsAllowOrigins: ["chrome-extension://modkelfkcfjpgbfmnbnllalkiogfofh"],
-    } as OcxConfig;
+    } as CodexCommanderConfig;
 
     expect(
       isAllowedRequestOrigin(
@@ -126,7 +126,7 @@ describe("isAllowedRequestOrigin with extension origins", () => {
     expect(
       isAllowedRequestOrigin(
         request("localhost:10100", "chrome-extension://modkelfkcfjpgbfmnbnllalkiogfofh"),
-        { ...loopbackConfig, corsAllowOrigins: ["*"] } as OcxConfig,
+        { ...loopbackConfig, corsAllowOrigins: ["*"] } as CodexCommanderConfig,
       ),
     ).toBe(false);
   });

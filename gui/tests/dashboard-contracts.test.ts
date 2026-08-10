@@ -121,7 +121,7 @@ test("Dashboard workspace pane is a labelled section, not a nested main landmark
   expect(src).toMatch(/<(section)\b[^>]*dashboard-workspace-main/);
 });
 
-test("native Codex subagent defaults stay separate from OpenCodex guidance", async () => {
+test("native Codex subagent defaults stay separate from CodexCommander guidance", async () => {
   const core = await Bun.file(new URL("../src/pages/dashboard-core-poll.ts", import.meta.url)).text();
   // The controls live on the Subagents tab now; the Dashboard keeps only a link to them.
   const sections = await Bun.file(new URL("../src/components/subagents-workspace/SubagentDelegationSection.tsx", import.meta.url)).text();

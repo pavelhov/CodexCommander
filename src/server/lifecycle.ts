@@ -54,7 +54,6 @@ const nativeMainDrainOwners = new Set<symbol>();
 const temporaryDrainWaiters = new Set<() => void>();
 const nativeMainTurns = new Set<ActiveTurnLease>();
 let nativeMainSelections = 0;
-let legacyDrainLease: AdmissionLease | null = null;
 let recyclingForExit = false;
 let _serverRef: ReturnType<typeof Bun.serve> | undefined;
 let serverStopFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
@@ -62,19 +61,6 @@ let serverStartupReleaseFlights = new WeakMap<ReturnType<typeof Bun.serve>, Prom
 let releaseServerStartupLifecycleImpl: typeof releaseNativeMainStartupLifecycle = releaseNativeMainStartupLifecycle;
 
 export function setServerRef(server: ReturnType<typeof Bun.serve> | undefined): void { _serverRef = server; }
-/**
- * Legacy/test-only drain control. Production scoped operations must use a lease,
- * while process shutdown uses the irreversible shutdown latch.
- */
-export function setDraining(value: boolean): void {
-  if (value) {
-    legacyDrainLease ??= acquireTemporaryDrain("legacy");
-  } else {
-    legacyDrainLease?.release();
-    legacyDrainLease = null;
-  }
-}
-
 function temporaryDrainCount(): number {
   return temporaryDrainOwners.size + nativeMainDrainOwners.size;
 }
@@ -152,8 +138,6 @@ async function waitForTemporaryDrainsUntil(deadlineMs: number): Promise<boolean>
 
 /** Test-only process-lifetime reset. Never call from production recovery paths. */
 export function resetLifecycleDrainStateForTests(): void {
-  legacyDrainLease?.release();
-  legacyDrainLease = null;
   temporaryDrainOwners.clear();
   nativeMainDrainOwners.clear();
   nativeMainTurns.clear();
@@ -365,7 +349,7 @@ export function setServerStartupLifecycleReleaseForTests(
 /**
  * Mark this process as a recycle (dashboard drain-and-restart). Exit cleanup
  * must keep Codex/Grok/system-env injection so the replacement process inherits
- * a working fence — unlike an intentional `ocx stop` teardown.
+ * a working fence — unlike an intentional `ccx stop` teardown.
  */
 export function markRecyclingForExit(): void { recyclingForExit = true; }
 export function isRecyclingForExit(): boolean { return recyclingForExit; }

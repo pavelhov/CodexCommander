@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { parseRequest } from "../src/responses/parser";
 import { createGoogleAdapter } from "../src/adapters/google";
 import { createAnthropicAdapter } from "../src/adapters/anthropic";
-import type { OcxProviderConfig } from "../src/types";
+import type { CodexCommanderProviderConfig } from "../src/types";
 
 // A message item whose content blocks do not match their strict schema fails
 // `userMessageItemSchema` / `assistantMessageItemSchema` and falls through to
@@ -133,8 +133,8 @@ describe("responses parser — malformed content blocks", () => {
       { type: "input_image" },
       { type: "input_file" },
     ]));
-    const google = { adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "k" } as unknown as OcxProviderConfig;
-    const anthropic = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-x" } as unknown as OcxProviderConfig;
+    const google = { adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "k" } as unknown as CodexCommanderProviderConfig;
+    const anthropic = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-x" } as unknown as CodexCommanderProviderConfig;
 
     const googleRequest = await createGoogleAdapter(google).buildRequest(parsed);
     // Every malformed block is omitted, so the Google empty-parts guard supplies the placeholder.

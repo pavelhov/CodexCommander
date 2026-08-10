@@ -4,7 +4,7 @@ import {
   buildNonOpenAIToolCatalogNudgeFromNames,
   shouldInjectNonOpenAIToolCatalogNudge,
 } from "../src/adapters/tool-catalog-nudge";
-import type { OcxTool } from "../src/types";
+import type { CodexCommanderTool } from "../src/types";
 
 describe("non-OpenAI tool catalog nudge", () => {
   test("builds a compact catalog-grounding note from wire names", () => {
@@ -25,7 +25,7 @@ describe("non-OpenAI tool catalog nudge", () => {
   });
 
   test("applies tool_choice before listing valid names", () => {
-    const tools: OcxTool[] = [
+    const tools: CodexCommanderTool[] = [
       { name: "exec_command", description: "Run", parameters: {} },
       { name: "read_file", namespace: "mcp__fs", description: "Read", parameters: {} },
     ];

@@ -1,10 +1,10 @@
 ---
 title: Providers
-description: Every way opencodex authenticates and talks to an LLM provider — OAuth, API key, ChatGPT forward, and local.
+description: Every way CodexCommander authenticates and talks to an LLM provider — OAuth, API key, ChatGPT forward, and local.
 ---
 
 A **provider** is one upstream LLM endpoint plus how to reach it: an adapter, a base URL, an auth
-mode, and an optional model list. Providers live under `providers` in `~/.opencodex/config.json`.
+mode, and an optional model list. Providers live under `providers` in `~/.codexcommander/config.json`.
 
 ## OpenAI account modes
 
@@ -44,10 +44,6 @@ This estimate is display-only. It does not change account selection, session aff
 switching, cooldowns, or any other routing decision. Use the [Codex Auth account pool](/guides/web-dashboard/#codex-auth-and-account-pools)
 for the individual account state and routing controls.
 
-Shipped v1 configs migrate automatically to marker 2 and one option-aware row. The original config
-is retained once at `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; restore it with
-`cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`.
-
 ## Auth modes
 
 Provider configs accept three `authMode` values (`key` is the default). The built-in registry also
@@ -57,7 +53,7 @@ labels local presets separately; those normally omit both `authMode` and `apiKey
 | --- | --- | --- |
 | `key` | Sends your API key (`Authorization: Bearer …`, or `x-api-key` / `api-key` per adapter). The key may be a literal or an `${ENV_VAR}` reference. | Most providers. |
 | `forward` | Relays **your incoming Codex auth headers** verbatim to the provider — no key stored. This is the ChatGPT-login passthrough. | OpenAI (`openai-responses` adapter). |
-| `oauth` | Resolves a stored OAuth access token and follows its credential owner. OpenCodex-owned credentials refresh before expiry; linked Grok/Kimi CLI credentials are adopted read-only and remain native-CLI-owned. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor, GitHub Copilot. |
+| `oauth` | Resolves a stored OAuth access token and follows its credential owner. CodexCommander-owned credentials refresh before expiry; linked Grok/Kimi CLI credentials are adopted read-only and remain native-CLI-owned. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor, GitHub Copilot. |
 
 The [`retryOn429`](/reference/configuration/) same-key 429 replay applies only to API-key
 providers (`authMode: "key"`). OAuth, forward, and local presets are excluded — their
@@ -90,40 +86,40 @@ The ChatGPT passthrough catalog also layers in the bare GPT-5.6 Sol/Terra/Luna s
 ## 2. Account login (OAuth)
 
 Seven provider presets use OAuth login — plus GitHub Copilot via an experimental unofficial
-device-flow bridge. opencodex stores their credentials in `~/.opencodex/auth.json`.
-OpenCodex-owned credentials refresh automatically. When a signed-in Grok or Kimi CLI session is
-linked, opencodex adopts its current access generation read-only and the native CLI remains
+device-flow bridge. CodexCommander stores their credentials in `~/.codexcommander/auth.json`.
+CodexCommander-owned credentials refresh automatically. When a signed-in Grok or Kimi CLI session is
+linked, CodexCommander adopts its current access generation read-only and the native CLI remains
 responsible for renewal. `chatgpt` is also accepted by the login CLI; it acquires a ChatGPT
 credential while creating a `forward`-mode provider entry.
 
 ```bash
-ocx login xai          # xAI Grok
-ocx login anthropic    # Anthropic Claude (Pro/Max)
-ocx login kimi         # Moonshot Kimi
-ocx login kiro         # import kiro-cli credentials (or token fallback)
-ocx login google-antigravity
-ocx login cursor       # standalone Cursor PKCE login
-ocx login command-code # Command Code browser OAuth (or import ~/.commandcode/auth.json)
-ocx login github-copilot  # GitHub device flow → Copilot token (Copilot Pro/Business)
-ocx login chatgpt      # standalone ChatGPT OAuth login
-ocx logout <provider>
+ccx login xai          # xAI Grok
+ccx login anthropic    # Anthropic Claude (Pro/Max)
+ccx login kimi         # Moonshot Kimi
+ccx login kiro         # import kiro-cli credentials (or token fallback)
+ccx login google-antigravity
+ccx login cursor       # standalone Cursor PKCE login
+ccx login command-code # Command Code browser OAuth (or import ~/.commandcode/auth.json)
+ccx login github-copilot  # GitHub device flow → Copilot token (Copilot Pro/Business)
+ccx login chatgpt      # standalone ChatGPT OAuth login
+ccx logout <provider>
 ```
 
 | Provider | Adapter | Base URL | Notes |
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://api.x.ai/v1` | Live-first Grok catalog; `grok-4.5` is the fallback default. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude models; live model list fetched from `/v1/models`. |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K3 (`k3`, 1M context), fixed-window `k3-256k`, compatibility alias `k3[1m]`, and legacy K2.7/K2.6/K2.5 coding models. |
-| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Initial login imports the installed, signed-in `kiro-cli` session (on Unix, install with `curl -fsSL https://cli.kiro.dev/install | bash`; on Windows PowerShell, use `irm 'https://cli.kiro.dev/install.ps1' | iex`; then run `kiro-cli login`). **Add account** logs `kiro-cli` out, starts a fresh browser login that switches the account used by `kiro-cli`, and stores account-scoped profile metadata. Existing OpenCodex accounts are preserved, and cancellation or failure restores the previous `kiro-cli` session. |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K3 (`k3`, 1M context), fixed-window `k3-256k`, compatibility alias `k3[1m]`, and K2.7/K2.6/K2.5 coding models. |
+| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Initial login imports the installed, signed-in `kiro-cli` session (on Unix, install with `curl -fsSL https://cli.kiro.dev/install | bash`; on Windows PowerShell, use `irm 'https://cli.kiro.dev/install.ps1' | iex`; then run `kiro-cli login`). **Add account** logs `kiro-cli` out, starts a fresh browser login that switches the account used by `kiro-cli`, and stores account-scoped profile metadata. Existing CodexCommander accounts are preserved, and cancellation or failure restores the previous `kiro-cli` session. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. Uses the maintained six-model static catalog because CCA does not expose the generic `/models` endpoint. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport, and account-filtered model discovery. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |
 
 For the canonical Kimi Coding Plan presets (`kimi` account login and `kimi-code` API key),
-opencodex forwards only a caller-supplied stable `prompt_cache_key` to the Chat Completions request;
+CodexCommander forwards only a caller-supplied stable `prompt_cache_key` to the Chat Completions request;
 it never generates one. Kimi documents a stable session/task key as required to improve Code Plan
 cache hit rates, while requests without a key remain keyless. If an opted-in upstream rejects the
-field, opencodex does not strip it and retry or mutate saved configuration. Other providers remain
+field, CodexCommander does not strip it and retry or mutate saved configuration. Other providers remain
 deny-by-default.
 
 You can also start OAuth from the [web dashboard](/guides/web-dashboard/).
@@ -135,11 +131,11 @@ login. The Providers page shows those accounts in a dropdown, lets you add anoth
 active account without logging the others out. Only identity-less Kimi credentials replace the
 active slot; Kiro accounts are keyed by profile ARN. `chatgpt` is always single-slot because Codex
 pool accounts have a separate ledger.
-Tokens stay in `~/.opencodex/auth.json`; `/api/oauth/accounts` returns masked metadata only.
+Tokens stay in `~/.codexcommander/auth.json`; `/api/oauth/accounts` returns masked metadata only.
 
 ### OAuth reliability
 
-opencodex coordinates token refresh and Codex pool routing so concurrent requests do not race the
+CodexCommander coordinates token refresh and Codex pool routing so concurrent requests do not race the
 credential store. This is reliability and diagnostics work — it does **not** guarantee protection
 from provider enforcement, rate limits, or account actions.
 
@@ -169,44 +165,44 @@ are cleared, and pool selection may rotate — threads are not pinned through a 
 **Codex client metadata.** The ChatGPT forward path passes through the curated `FORWARD_HEADERS`
 allowlist (authorization, `chatgpt-account-id`, originator, session/thread ids, and related Codex
 headers — see [Adapters](/reference/adapters/)). Pool mode overwrites only auth and
-`chatgpt-account-id` to match the selected credential. opencodex does **not** fabricate official
+`chatgpt-account-id` to match the selected credential. CodexCommander does **not** fabricate official
 client identity (for example `originator`, session, or thread headers) when the caller did not send
 them.
 
-**Diagnostics and reauth.** Human `ocx status` prints an OAuth health block (redacted account ids,
-no tokens). `ocx doctor` adds an OAuth reliability section with writable-store / single-flight checks
+**Diagnostics and reauth.** Human `ccx status` prints an OAuth health block (redacted account ids,
+no tokens). `ccx doctor` adds an OAuth reliability section with writable-store / single-flight checks
 and WARN rows that include a recovery Action. When an OAuth provider account needs reauthentication, run
-`ocx login <provider>` (or use Reauthenticate in the dashboard). Codex pool accounts are not an
-`ocx login` provider — reauthenticate via the dashboard Codex account pool. See
-[`ocx status` / `ocx doctor`](/reference/cli/) in the CLI reference.
+`ccx login <provider>` (or use Reauthenticate in the dashboard). Codex pool accounts are not an
+`ccx login` provider — reauthenticate via the dashboard Codex account pool. See
+[`ccx status` / `ccx doctor`](/reference/cli/) in the CLI reference.
 
 ### Kiro credential import
 
 Kiro login expects the Kiro CLI: on Unix, install it with `curl -fsSL https://cli.kiro.dev/install | bash`;
 on Windows PowerShell, use `irm 'https://cli.kiro.dev/install.ps1' | iex`; then sign in with `kiro-cli login`.
-Without a `kiro-cli` session, `ocx login kiro` falls
+Without a `kiro-cli` session, `ccx login kiro` falls
 back to a pasted access token or the `KIRO_ACCESS_TOKEN` environment variable.
 
-The `ocx login kiro` import path searches the platform Kiro CLI stores and opens SQLite databases
+The `ccx login kiro` import path searches the platform Kiro CLI stores and opens SQLite databases
 read-only. Two environment variables make the source and token row selection explicit:
 
 - `KIROCLI_DB_PATH` selects a nonstandard Kiro CLI SQLite database. The path must already exist;
-  during this import path, opencodex does not create or modify the database, WAL, or SHM files.
+  during this import path, CodexCommander does not create or modify the database, WAL, or SHM files.
 - `KIROCLI_TOKEN_KEY` selects the exact `auth_kv` token key when a database contains multiple
   otherwise ambiguous token rows. A missing selection fails login instead of guessing.
 
 On Windows, import looks for `%LOCALAPPDATA%\Kiro-Cli\data.sqlite3`. Forced/add-account login
-also needs the local CLI binary: opencodex first uses `PATH`, then falls back to
+also needs the local CLI binary: CodexCommander first uses `PATH`, then falls back to
 `%LOCALAPPDATA%\Kiro-Cli\kiro-cli.exe` and `C:\Program Files\Kiro-Cli\kiro-cli.exe`.
 
-After a successful import, opencodex persists the imported credential to
-`~/.opencodex/auth.json`.
+After a successful import, CodexCommander persists the imported credential to
+`~/.codexcommander/auth.json`.
 
 Keep these variables and the selected database private. Do not attach database files or raw login
 diagnostics to bug reports.
 
 **Add account** is a separate write workflow: it snapshots the current session, logs `kiro-cli` out,
-and imports the fresh browser login. If the login is cancelled or fails, including while OpenCodex
+and imports the fresh browser login. If the login is cancelled or fails, including while CodexCommander
 persists the credential, rollback replaces the Kiro CLI database and removes its current WAL, SHM,
 and journal sidecars before publishing the previous session snapshot.
 
@@ -219,16 +215,16 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
 
 ## 3. API-key catalog
 
-opencodex ships 76 built-in presets: 64 key-based, eight OAuth, three local, and one default
+CodexCommander ships 76 built-in presets: 64 key-based, eight OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
 **ClinePass** uses a Cline API key with the [official subscription catalog](https://docs.cline.bot/getting-started/clinepass)
 and [Chat Completions endpoint](https://docs.cline.bot/api/chat-completions), operated by Cline Bot Inc. under
 [Cline's terms](https://cline.bot/tos). A routed id such as `cline-pass/cline-pass/kimi-k3` is
-intentional: the first segment selects the opencodex provider, while `cline-pass/kimi-k3` is the
+intentional: the first segment selects the CodexCommander provider, while `cline-pass/kimi-k3` is the
 full model slug sent upstream. ClinePass quota is shared by the account across rolling 5-hour,
-weekly, and monthly limits. opencodex currently advertises the live-verified `low` reasoning tier;
+weekly, and monthly limits. CodexCommander currently advertises the live-verified `low` reasoning tier;
 higher requested tiers clamp to `low` until the gateway publishes or verifies a wider ladder.
 
 **Cline** is the same API key and endpoint on pay-as-you-go usage billing across 100+ models
@@ -289,8 +285,8 @@ Volcengine Agent Plan uses its native Responses endpoint through `openai-respons
 `https://opencode.ai/zen/go/v1`. It is distinct from the OpenCode Desktop/CLI client described in
 [OpenCode](/guides/opencode/). Create its key in the
 [OpenCode console](https://opencode.ai/console), then add **OpenCode Go** from the dashboard's
-**Providers** page or configure the `opencode-go` preset with that key. OpenCodex does not scrape an
-OpenCode authentication store or migrate this key to Keychain.
+**Providers** page or configure the `opencode-go` preset with that key. CodexCommander does not use an
+OpenCode authentication store or Keychain for this key.
 
 The public model catalog is not evidence that a key works, so a saved key is **unverified** until the
 first successful inference using that active key. The provider's published caps are reference caps —
@@ -307,7 +303,7 @@ remaining models over OpenAI Chat Completions. These trust facts attach only to 
 `https://opencode.ai/zen/go/v1` destination; a same-named custom provider keeps its own behavior.
 
 The built-in preset is key-based, so Add Provider groups it under **Paid**, not account-login
-providers, and OpenCodex does not offer an OpenCode Go OAuth flow. It is also separate from both the
+providers, and CodexCommander does not offer an OpenCode Go OAuth flow. It is also separate from both the
 **OpenCode** client under Client Apps and the no-key **OpenCode Free** provider. Add Provider search
 spans Accounts, Free, and Paid, so searching `opencode` from any tab shows all matching presets with
 their tier labels.
@@ -326,7 +322,7 @@ their tier labels.
 > **Volcengine Plan usage restriction:** Volcengine documents Coding Plan and Agent Plan quota as
 > valid only inside supported AI coding tools, and warns that using a plan key for general API
 > calls may suspend the subscription or ban the account. Routing Codex or Claude Code through
-> opencodex is the documented use; pointing other automation at a plan key is not. The
+> CodexCommander is the documented use; pointing other automation at a plan key is not. The
 > pay-as-you-go `volcengine` route carries no such restriction.
 
 **DeepInfra discovery.** The key-based `deepinfra` OpenAI Chat Completions provider uses the
@@ -350,7 +346,7 @@ key from the subscription overview in the [Vultr Console](https://my.vultr.com).
 
 **Command Code discovery.** The preset reads Command Code's `/provider/v1/models` list from
 the fixed Provider API host, preserves provider-native ids, and caps discovery at 256 KiB and 256 raw
-rows. `ocx login command-code` supports OAuth via browser sign-in (with optional local CLI credential
+rows. `ccx login command-code` supports OAuth via browser sign-in (with optional local CLI credential
 import from `~/.commandcode/auth.json` for existing Command Code CLI users); the model catalog is
 account-scoped and comes from the authenticated discovery endpoint after login. Chat requests use the
 configured Bearer key. Create keys at
@@ -392,7 +388,7 @@ deployments require a custom provider. Create an API key in the
 
 A custom `openai-chat` provider using `authMode: "key"` and the canonical
 `https://api.a6api.com` or `https://api.a6api.com/v1` base URL receives an A6API credit meter in
-the dashboard and from `ocx account refresh <provider>`. The provider name is arbitrary; detection
+the dashboard and from `ccx account refresh <provider>`. The provider name is arbitrary; detection
 uses the canonical HTTPS endpoint. The meter converts A6API token units into USD using the account's
 hard credit limit and displays the percentage consumed plus remaining credit. Token expiration is
 not shown as a quota reset because expiration does not imply that credit replenishes.
@@ -430,14 +426,14 @@ management API is `/api/providers/keys` and returns masked keys only.
 
 ### Switching accounts from the terminal
 
-Use `ocx account list`, `ocx account current`, and `ocx account use` to inspect or switch the same
+Use `ccx account list`, `ccx account current`, and `ccx account use` to inspect or switch the same
 Codex, OAuth, and API-key pools without opening the dashboard. See the
-[CLI reference](/reference/cli/#ocx-account-subcommand) for commands, JSON output, and
+[CLI reference](/reference/cli/#ccx-account-subcommand) for commands, JSON output, and
 new-session behavior.
 
 ### GPT-5.6 preview paths
 
-GPT-5.6 Sol/Terra/Luna are seeded in provider fallback lists so `ocx sync` can keep the models
+GPT-5.6 Sol/Terra/Luna are seeded in provider fallback lists so `ccx sync` can keep the models
 visible even while live catalogs lag:
 
 | Codex route | Seeded model ids | Codex-visible context |
@@ -453,39 +449,39 @@ paths remain upstream-gated; Cursor's live discovery additionally filters its st
 the logged-in account can use.
 
 :::note[Gateways & subscription proxies]
-A provider is included when opencodex has a matching wire adapter, **not** based on whether it is an
+A provider is included when CodexCommander has a matching wire adapter, **not** based on whether it is an
 "agent" product. The current adapter ids are `openai-chat`, `openai-responses`, `anthropic`, `google`
-(AI Studio, Vertex, and Antigravity/Cloud Code Assist modes), `azure` / `azure-openai`, `kiro`, and
+(AI Studio, Vertex, and Antigravity/Cloud Code Assist modes), `azure-openai`, `kiro`, and
 `cursor`. A proprietary API without one of these implementations, such as native Amazon Bedrock,
 is not supported directly.
-**GitHub Copilot** is an OAuth provider (`ocx login github-copilot`) that exchanges a GitHub
+**GitHub Copilot** is an OAuth provider (`ccx login github-copilot`) that exchanges a GitHub
 device-flow login for a short-lived Copilot API token — not a pasted API key. **GitLab Duo** remains
 a key/subscription-token gateway on its OpenAI-compatible endpoint. **Cloudflare AI
 Gateway** needs your account + gateway ids filled into the URL.
 
 Copilot fronts a mixed-wire catalog: its GPT-5 family (`gpt-5.3-codex`, `gpt-5.4`,
 `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`) rejects
-`/chat/completions` for agent traffic, so opencodex routes those models over the
+`/chat/completions` for agent traffic, so CodexCommander routes those models over the
 Responses API by built-in default while every other Copilot model stays on chat
 completions. The precedence is: hard wire pin → your explicit
 [`modelAdapters`](/reference/configuration/providers/) entry → registry default →
 provider-wide adapter. To opt a model without a built-in default (for example
 `gpt-5.4-nano`) into Responses, set `"modelAdapters": { "gpt-5.4-nano": "openai-responses" }`.
 
-Cursor is tracked separately as an experimental adapter. `adapter: "cursor"` appears in `ocx init`
+Cursor is tracked separately as an experimental adapter. `adapter: "cursor"` appears in `ccx init`
 and the dashboard Add Provider picker as an experimental local config entry with Cursor's static
-fallback model catalog metadata. When a Cursor access token is configured, opencodex uses Cursor's
+fallback model catalog metadata. When a Cursor access token is configured, CodexCommander uses Cursor's
 live HTTP/2 transport. Its bundled fallback seed includes `gpt-5.6-sol` / `terra` / `luna` (1M context),
 `grok-4.5` / `grok-4.5-fast` (500K), and `kimi-k3` (262K); live discovery decides which remain
 visible for the account. Cursor serves Kimi K3 only as effort-suffixed wire ids, so
 `cursor/kimi-k3` exposes a `low` / `high` / `max` ladder and defaults to `max`, matching the
 model's documented API default. Cursor server-driven native read/write/delete/ls/grep/shell/fetch execution
 is disabled by default because it bypasses Codex's approval and sandbox path; set
-`unsafeAllowNativeLocalExec: true` on the `providers.cursor` object in `~/.opencodex/config.json`
+`nativeLocalExec: "on"` on the `providers.cursor` object in `~/.codexcommander/config.json`
 only for trusted local experiments (or via **Providers → Cursor → Edit JSON** in the dashboard).
 See the [Configuration reference](/reference/configuration/#cursor-provider-adapter-cursor)
 for a full example. MCP, screen recording, and computer-use are available as executor hooks; without a
-configured local executor, opencodex returns typed no-executor results instead of policy-blocking
+configured local executor, CodexCommander returns typed no-executor results instead of policy-blocking
 the request. Cursor OAuth and live model discovery are enabled for this experimental adapter;
 Cursor is still not shown in key-login lists.
 :::
@@ -493,7 +489,7 @@ Cursor is still not shown in key-login lists.
 ### Ollama Cloud
 
 Ollama Cloud is a hosted (not local) Ollama, OpenAI-compatible at `https://ollama.com/v1` with a key
-from [ollama.com/settings/keys](https://ollama.com/settings/keys). opencodex classifies its cloud
+from [ollama.com/settings/keys](https://ollama.com/settings/keys). CodexCommander classifies its cloud
 lineup by vision capability so the [vision sidecar](/guides/sidecars/) only kicks in for
 text-only models. Text-only models (e.g. `glm-5.2`, `deepseek-v4-pro`, `gpt-oss`, `qwen3-coder`,
 `minimax-m2.x`, `nemotron-3-*`) are listed in `noVisionModels`; vision-native models (e.g.
@@ -502,7 +498,7 @@ tolerant of Ollama's `:size` tags, so `gpt-oss` covers `gpt-oss:120b` and `gpt-o
 
 ## 4. Local providers
 
-Point opencodex at a local OpenAI-compatible server — usually with a blank key:
+Point CodexCommander at a local OpenAI-compatible server — usually with a blank key:
 
 | Provider | Base URL |
 | --- | --- |
@@ -513,6 +509,6 @@ Point opencodex at a local OpenAI-compatible server — usually with a blank key
 ## Any OpenAI-compatible endpoint
 
 If a provider speaks Chat Completions, the `openai-chat` adapter handles it — choose **Custom** in the
-dashboard or `custom` in `ocx init` and enter the base URL. See the
+dashboard or `custom` in `ccx init` and enter the base URL. See the
 [Configuration reference](/reference/configuration/) for every provider field
 (`headers`, `noReasoningModels`, `noVisionModels`, `models`, …).

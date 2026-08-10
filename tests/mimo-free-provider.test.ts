@@ -11,9 +11,9 @@ import {
   MIMO_CHAT_URL,
   createMimoFreeAdapter,
 } from "../src/adapters/mimo-free";
-import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 
-function minimalRequest(model = "mimo-auto"): OcxParsedRequest {
+function minimalRequest(model = "mimo-auto"): CodexCommanderParsedRequest {
   return {
     modelId: model,
     stream: false,
@@ -94,10 +94,10 @@ describe("mimo-free client id", () => {
   const { tmpdir } = require("node:os") as typeof import("node:os");
   const { join: joinPath } = require("node:path") as typeof import("node:path");
 
-  test("random UUID persisted under OPENCODEX_HOME and stable across cache resets", () => {
-    const home = mkdtempSync(joinPath(tmpdir(), "ocx-mimo-id-"));
-    const prevHome = process.env["OPENCODEX_HOME"];
-    process.env["OPENCODEX_HOME"] = home;
+  test("random UUID persisted under CODEXCOMMANDER_HOME and stable across cache resets", () => {
+    const home = mkdtempSync(joinPath(tmpdir(), "ccx-mimo-id-"));
+    const prevHome = process.env["CODEXCOMMANDER_HOME"];
+    process.env["CODEXCOMMANDER_HOME"] = home;
     resetMimoClientIdCache();
     try {
       const id1 = getMimoClientId();
@@ -111,28 +111,28 @@ describe("mimo-free client id", () => {
       resetMimoClientIdCache();
       expect(getMimoClientId()).toBe(id1);
     } finally {
-      if (prevHome === undefined) delete process.env["OPENCODEX_HOME"];
-      else process.env["OPENCODEX_HOME"] = prevHome;
+      if (prevHome === undefined) delete process.env["CODEXCOMMANDER_HOME"];
+      else process.env["CODEXCOMMANDER_HOME"] = prevHome;
       resetMimoClientIdCache();
       rmSync(home, { recursive: true, force: true });
     }
   });
 
   test("client id is not derived from machine attributes (two homes differ)", () => {
-    const homeA = mkdtempSync(joinPath(tmpdir(), "ocx-mimo-a-"));
-    const homeB = mkdtempSync(joinPath(tmpdir(), "ocx-mimo-b-"));
-    const prevHome = process.env["OPENCODEX_HOME"];
+    const homeA = mkdtempSync(joinPath(tmpdir(), "ccx-mimo-a-"));
+    const homeB = mkdtempSync(joinPath(tmpdir(), "ccx-mimo-b-"));
+    const prevHome = process.env["CODEXCOMMANDER_HOME"];
     try {
-      process.env["OPENCODEX_HOME"] = homeA;
+      process.env["CODEXCOMMANDER_HOME"] = homeA;
       resetMimoClientIdCache();
       const idA = getMimoClientId();
-      process.env["OPENCODEX_HOME"] = homeB;
+      process.env["CODEXCOMMANDER_HOME"] = homeB;
       resetMimoClientIdCache();
       const idB = getMimoClientId();
       expect(idA).not.toBe(idB);
     } finally {
-      if (prevHome === undefined) delete process.env["OPENCODEX_HOME"];
-      else process.env["OPENCODEX_HOME"] = prevHome;
+      if (prevHome === undefined) delete process.env["CODEXCOMMANDER_HOME"];
+      else process.env["CODEXCOMMANDER_HOME"] = prevHome;
       resetMimoClientIdCache();
       rmSync(homeA, { recursive: true, force: true });
       rmSync(homeB, { recursive: true, force: true });
@@ -254,7 +254,7 @@ describe("mimo-free auth retry predicate", () => {
   });
 
   function adapterForRetry(): ReturnType<typeof createMimoFreeAdapter> {
-    const provider: OcxProviderConfig = providerConfigSeed(PROVIDER_REGISTRY.find(e => e.id === "mimo-free")!);
+    const provider: CodexCommanderProviderConfig = providerConfigSeed(PROVIDER_REGISTRY.find(e => e.id === "mimo-free")!);
     return createMimoFreeAdapter(provider);
   }
 
@@ -320,7 +320,7 @@ describe("mimo-free adapter request building", () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async () => new Response(JSON.stringify({ jwt: fakeJwt }), { status: 200 }));
     try {
-      const provider: OcxProviderConfig = providerConfigSeed(PROVIDER_REGISTRY.find(e => e.id === "mimo-free")!);
+      const provider: CodexCommanderProviderConfig = providerConfigSeed(PROVIDER_REGISTRY.find(e => e.id === "mimo-free")!);
       const adapter = createMimoFreeAdapter(provider);
       const parsed = minimalRequest();
       parsed.options.reasoning = "high";

@@ -10,11 +10,11 @@ description: 기본 provider 선택, model 해석 순서, combo 별칭, 대상 �
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `defaultProvider` | `string` | `"openai"` | 앞선 모델 규칙이 하나도 맞지 않을 때 쓰는 최종 provider입니다. 활성화되어 있고 설정된 provider 이름이어야 합니다. |
-| `combos?` | `Record<string, OcxComboConfig>` | `{}` | 순서가 정해진 provider/model 대상들로 구성한 가상 `combo/<id>` 모델입니다. |
+| `combos?` | `Record<string, CodexCommanderComboConfig>` | `{}` | 순서가 정해진 provider/model 대상들로 구성한 가상 `combo/<id>` 모델입니다. |
 
 ## 모델 해석 순서
 
-opencodex는 요청된 model을 다음 순서로 해석합니다:
+CodexCommander는 요청된 model을 다음 순서로 해석합니다:
 
 1. 설정된 `<account-selector>/<native-openai-model>` 네임스페이스입니다. 매핑된 저장 Codex 계정으로만 routing하며, exact target이 잘못되었거나 사용할 수 없으면 fail closed합니다.
 2. 정규화된 `combo/<id>` 또는 설정된 combo 별칭입니다. 정규화된 id가 별칭보다 먼저 적용됩니다.
@@ -76,7 +76,7 @@ selector는 표시되지 않습니다. selector 검증, 충돌 규칙, privacy g
 
 ### 카탈로그 적격성
 
-combo는 목록에 오를 수 없더라도 계속 직접 라우팅할 수 있습니다. `ocx sync`, `/v1/models`, 그리고 Codex picker는 다음 조건을 모두 만족할 때만 이를 나열합니다:
+combo는 목록에 오를 수 없더라도 계속 직접 라우팅할 수 있습니다. `ccx sync`, `/v1/models`, 그리고 Codex picker는 다음 조건을 모두 만족할 때만 이를 나열합니다:
 
 - live metadata, registry hint, 또는 provider의 `modelContextWindows` / `contextWindow`에서 얻은 양수 `contextWindow`
 - 비어 있지 않은 `inputModalities` 교집합. 생략된 member value는 `["text"]`로 취급합니다.
@@ -87,7 +87,7 @@ context metadata가 없는 bare relay id이거나 modalities가 서로 겹치지
 
 명시적으로 요청된 `policy/<id>`(또는 설정된 별칭)가 고정된 후보 허용 목록에서 하드 능력 요구사항과 결정적·설명 가능한 점수로 선택합니다. 기존 모델 ID가 암시적으로 프로필을 통과하지 않습니다. `candidates`(명시적 허용 목록), 선택적 `alias`, `require`(`minContextWindow`, `minQuotaHeadroom`, `tools`, `imageInput`, `structuredOutput`, `localOnly`, `remoteAllowed`, `encryptedCodexTasks`, `reasoningEffort`, `serviceTier`), `optimize`(latency/health/cost/quota 가중치), `limits.maxEstimatedCostUsd`, `unknownEvidence`(allow/penalize/exclude)를 지원합니다. 알 수 없음은 0이나 무료가 되지 않습니다.
 
-CLI: `ocx route policy list`, `ocx route policy show <id>`, `ocx route policy dry-run <id> --model-context <tokens> --tools`, `ocx route policy evaluate <id>`.
+CLI: `ccx route policy list`, `ccx route policy show <id>`, `ccx route policy dry-run <id> --model-context <tokens> --tools`, `ccx route policy evaluate <id>`.
 
 콤보는 명시적인 순서·가중치 대상 라우팅 및 장애 조치입니다. 정책 프로필은 후보 간 증거 기반 선택입니다.
 
@@ -100,8 +100,8 @@ CLI: `ocx route policy list`, `ocx route policy show <id>`, `ocx route policy dr
 
 반환되는 히스토리와 라우트 결정 페이로드는 마스킹된 요청 메타데이터만 노출합니다(예: 불투명한 `apiKeyId` 라벨). 자격 증명, 원본 프롬프트 본문, 공급자 시크릿은 포함하지 않습니다.
 
-CLI: `ocx logs explain <request-id>`, `ocx logs rebuild-index`, `ocx logs index-status`.
+CLI: `ccx logs explain <request-id>`, `ccx logs rebuild-index`, `ccx logs index-status`.
 
-## 마이그레이션
+## 기존 데이터
 
-`routingProfiles`는 선택적 추가 설정입니다. 기존 설정 파일과 이전 `usage.jsonl` 행은 그대로 읽힙니다. 인덱스는 일회용이며 삭제 시 다음 쿼리에서 `usage.jsonl`로 자동 재구축됩니다. 자동 튜닝은 없습니다.
+`routingProfiles`는 선택적 추가 설정입니다. 기존 설정 파일과 `routeDecision`이 없는 `usage.jsonl` 행도 읽힙니다. 인덱스는 일회용이며 삭제 시 다음 쿼리에서 `usage.jsonl`로 자동 재구축됩니다. 자동 튜닝은 없습니다.

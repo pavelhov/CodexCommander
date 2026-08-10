@@ -1,8 +1,8 @@
 import type { IncomingMeta, ProviderAdapter } from "./base";
-import type { OcxParsedRequest, OcxProviderConfig } from "../types";
+import type { CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../types";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
 
-export function createAzureAdapter(provider: OcxProviderConfig): ProviderAdapter & { passthrough: true } {
+export function createAzureAdapter(provider: CodexCommanderProviderConfig): ProviderAdapter & { passthrough: true } {
   const inner = createResponsesPassthroughAdapter({
     ...provider,
     baseUrl: provider.baseUrl,
@@ -12,7 +12,7 @@ export function createAzureAdapter(provider: OcxProviderConfig): ProviderAdapter
     ...inner,
     name: "azure-openai",
 
-    async buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta) {
+    async buildRequest(parsed: CodexCommanderParsedRequest, incoming: IncomingMeta) {
       if (provider.authMode === "forward") {
         throw new Error("azure-openai does not support forward auth mode");
       }

@@ -1,14 +1,14 @@
 import type {
-  OcxAssistantMessage,
-  OcxContentPart,
-  OcxContext,
-  OcxMessage,
-  OcxParsedRequest,
-  OcxRequestOptions,
-  OcxTextContent,
-  OcxThinkingContent,
-  OcxTool,
-  OcxToolCall,
+  CodexCommanderAssistantMessage,
+  CodexCommanderContentPart,
+  CodexCommanderContext,
+  CodexCommanderMessage,
+  CodexCommanderParsedRequest,
+  CodexCommanderRequestOptions,
+  CodexCommanderTextContent,
+  CodexCommanderThinkingContent,
+  CodexCommanderTool,
+  CodexCommanderToolCall,
 } from "../types";
 import { namespacedToolName } from "../types";
 import { responsesRequestSchema } from "./schema";
@@ -33,12 +33,12 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function inputContentParts(blocks: unknown): string | OcxContentPart[] {
+function inputContentParts(blocks: unknown): string | CodexCommanderContentPart[] {
   if (typeof blocks === "string") return blocks;
   // The catch-all can also hand back a non-array `content` (an object, a number), which would
   // throw at the loop below before any per-block guard runs.
   if (!Array.isArray(blocks)) return [];
-  const parts: OcxContentPart[] = [];
+  const parts: CodexCommanderContentPart[] = [];
   for (const raw of blocks) {
     // A malformed message item fails its strict schema and falls through to inputItemSchema's
     // permissive catch-all, so blocks reaching here are NOT guaranteed to match the declared
@@ -83,10 +83,10 @@ function inputContentParts(blocks: unknown): string | OcxContentPart[] {
 
 type OutputBlock = { type: "output_text"; text: string } | { type: "text"; text: string } | { type: "refusal"; refusal: string };
 
-function outputTextOf(blocks: unknown): OcxTextContent[] {
+function outputTextOf(blocks: unknown): CodexCommanderTextContent[] {
   if (typeof blocks === "string") return blocks.length > 0 ? [{ type: "text", text: blocks }] : [];
   if (!Array.isArray(blocks)) return [];
-  const out: OcxTextContent[] = [];
+  const out: CodexCommanderTextContent[] = [];
   for (const raw of blocks) {
     // Same catch-all caveat as inputContentParts: validate before use.
     if (!isObj(raw)) continue;
@@ -100,7 +100,7 @@ function outputTextOf(blocks: unknown): OcxTextContent[] {
   return out;
 }
 
-function mapToolChoice(value: unknown): OcxRequestOptions["toolChoice"] {
+function mapToolChoice(value: unknown): CodexCommanderRequestOptions["toolChoice"] {
   if (value === undefined || value === null) return undefined;
   if (value === "auto" || value === "none" || value === "required") return value;
   if (isObj(value) && "type" in value) {
@@ -134,15 +134,15 @@ function allowedToolName(tool: unknown): string | undefined {
   return undefined;
 }
 
-function buildTools(tools: unknown[] | undefined): OcxTool[] | undefined {
+function buildTools(tools: unknown[] | undefined): CodexCommanderTool[] | undefined {
   if (!tools) return undefined;
-  const out: OcxTool[] = [];
+  const out: CodexCommanderTool[] = [];
   const normalizeParameters = (raw: unknown): Record<string, unknown> => {
     if (isObj(raw) && raw.type === "object") return raw;
     return { ...(isObj(raw) ? raw : {}), type: "object" };
   };
   const pushFn = (t: Record<string, unknown>, namespace?: string) => {
-    const tool: OcxTool = {
+    const tool: CodexCommanderTool = {
       name: t.name as string,
       description: (t.description as string) ?? "",
       parameters: normalizeParameters(t.parameters),
@@ -192,7 +192,7 @@ function buildTools(tools: unknown[] | undefined): OcxTool[] | undefined {
       });
     }
     else if (typeof t.name === "string" && t.type !== "web_search" && t.type !== "image_generation") {
-      // Any OTHER named tool (e.g. a native/computer-use tool type opencodex doesn't explicitly
+      // Any OTHER named tool (e.g. a native/computer-use tool type CodexCommander doesn't explicitly
       // model) is client-executed — pass it through as a function so the routed model can read and
       // call it naturally; the bridge relays its call as a function_call. Previously such tools were
       // silently dropped, so the model never saw them.
@@ -204,10 +204,10 @@ function buildTools(tools: unknown[] | undefined): OcxTool[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
-function ensureAssistantPlaceholder(messages: OcxMessage[], modelId: string, now: number): OcxAssistantMessage {
+function ensureAssistantPlaceholder(messages: CodexCommanderMessage[], modelId: string, now: number): CodexCommanderAssistantMessage {
   const last = messages[messages.length - 1];
   if (last && last.role === "assistant") return last;
-  const placeholder: OcxAssistantMessage = { role: "assistant", content: [], model: modelId, timestamp: now };
+  const placeholder: CodexCommanderAssistantMessage = { role: "assistant", content: [], model: modelId, timestamp: now };
   messages.push(placeholder);
   return placeholder;
 }
@@ -217,10 +217,10 @@ function ensureAssistantPlaceholder(messages: OcxMessage[], modelId: string, now
  * `input_image` items): returns content parts when any image is present, else a plain joined string.
  * Never inlines an image_url as text (that would explode the token count).
  */
-function outputToToolResultContent(output: string | unknown[] | undefined): string | OcxContentPart[] {
+function outputToToolResultContent(output: string | unknown[] | undefined): string | CodexCommanderContentPart[] {
   if (typeof output === "string") return output;
   if (!Array.isArray(output)) return "";
-  const parts: OcxContentPart[] = [];
+  const parts: CodexCommanderContentPart[] = [];
   let hasImage = false;
   for (const raw of output) {
     if (!isObj(raw)) continue;
@@ -252,7 +252,7 @@ function normalizeImageDetail(detail: string): string {
   return detail === "original" ? "high" : detail;
 }
 
-function findToolById(messages: OcxMessage[], callId: string): { name: string; namespace?: string } {
+function findToolById(messages: CodexCommanderMessage[], callId: string): { name: string; namespace?: string } {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m.role !== "assistant") continue;
@@ -272,9 +272,9 @@ function findToolById(messages: OcxMessage[], callId: string): { name: string; n
  * (issue #950).
  */
 function attachPendingReasoningToCallOwner(
-  messages: OcxMessage[],
+  messages: CodexCommanderMessage[],
   callId: string,
-  pendingReasoning: Array<{ part: OcxThinkingContent; envelopeSigned: boolean }>,
+  pendingReasoning: Array<{ part: CodexCommanderThinkingContent; envelopeSigned: boolean }>,
 ): void {
   if (pendingReasoning.length === 0 || !callId) return;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -293,7 +293,7 @@ function attachPendingReasoningToCallOwner(
 
 const REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
-export function parseRequest(body: unknown): OcxParsedRequest {
+export function parseRequest(body: unknown): CodexCommanderParsedRequest {
   const replayedInputPrefixLength = previousResponseReplayPrefixLength(body);
   const parsed = responsesRequestSchema.safeParse(body);
   if (!parsed.success) {
@@ -301,15 +301,15 @@ export function parseRequest(body: unknown): OcxParsedRequest {
   }
   const data = parsed.data;
   const now = Date.now();
-  const messages: OcxMessage[] = [];
+  const messages: CodexCommanderMessage[] = [];
   const systemPrompt: string[] = [];
   // Responses reasoning siblings belong to the following assistant, including across call items.
   // Keep them off the message list until that assistant arrives; turn boundaries clear the array.
-  const pendingReasoning: Array<{ part: OcxThinkingContent; envelopeSigned: boolean }> = [];
+  const pendingReasoning: Array<{ part: CodexCommanderThinkingContent; envelopeSigned: boolean }> = [];
   // Assistant placeholder that first folds any pending reasoning into the same turn (official
   // grok-build preserves reasoning across call items; Anthropic replay requires thinking to
   // precede tool_use inside one assistant message).
-  const assistantHolderWithReasoning = (): OcxAssistantMessage => {
+  const assistantHolderWithReasoning = (): CodexCommanderAssistantMessage => {
     const holder = ensureAssistantPlaceholder(messages, data.model, now);
     if (pendingReasoning.length > 0) {
       holder.content.push(...pendingReasoning.map(entry => entry.part));
@@ -354,7 +354,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
       }
 
       if (effectiveType === "compaction" || effectiveType === "compaction_summary" || effectiveType === "context_compaction") {
-        // A stored summary from a previous compaction. Decode our ocx1 envelope into plain text so
+        // A stored summary from a previous compaction. Decode our ccx1 envelope into plain text so
         // the routed model keeps the compacted context; real OpenAI-encrypted blobs degrade to a note.
         // `context_compaction` (encrypted_content optional) is codex-rs's local-compaction marker;
         // with no payload it is a pure marker (the summary follows as its own user message), so it
@@ -456,10 +456,10 @@ export function parseRequest(body: unknown): OcxParsedRequest {
           continue;
         }
 
-        // Native/non-ocxr1 encrypted-only reasoning is opaque here. Do not create a detached
+        // Native/non-ccxr1 encrypted-only reasoning is opaque here. Do not create a detached
         // assistant turn or invent replayable plaintext/signatures from the encrypted payload.
         if (thinkingText.length > 0) {
-          const part: OcxThinkingContent = {
+          const part: CodexCommanderThinkingContent = {
             type: "thinking",
             thinking: thinkingText,
             signature: envelope?.sig ?? JSON.stringify(reasoning),
@@ -499,7 +499,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
         // reserved for Gemini/Antigravity opaque thought tokens; forwarding item ids as
         // thoughtSignature 400s Antigravity (Base64 / TYPE_BYTES). Continuity for CCA comes from
         // the in-process replay cache (and any already-real signature stored on the tool call).
-        const toolCall: OcxToolCall = {
+        const toolCall: CodexCommanderToolCall = {
           type: "toolCall", id: call.call_id, name: call.name, arguments: args,
           ...(call.namespace ? { namespace: call.namespace } : {}),
         };
@@ -509,7 +509,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
 
       if (effectiveType === "custom_tool_call") {
         const call = item as { id?: string; call_id: string; name: string; input: string };
-        const toolCall: OcxToolCall = {
+        const toolCall: CodexCommanderToolCall = {
           type: "toolCall", id: call.call_id, name: call.name,
           arguments: { input: call.input ?? "" },
           customWireName: call.name,
@@ -629,13 +629,13 @@ export function parseRequest(body: unknown): OcxParsedRequest {
     .map(t => loadedToolNames.has(namespacedToolName(t.namespace, t.name))
       ? { ...t, loadedFromToolSearch: true }
       : t);
-  const context: OcxContext = {
+  const context: CodexCommanderContext = {
     ...(systemPrompt.length > 0 ? { systemPrompt } : {}),
     messages,
     ...(mergedTools.length > 0 ? { tools: mergedTools } : {}),
   };
 
-  const options: OcxRequestOptions = {};
+  const options: CodexCommanderRequestOptions = {};
   if (data.max_output_tokens !== undefined) options.maxOutputTokens = data.max_output_tokens;
   if (data.temperature !== undefined) options.temperature = data.temperature;
   if (data.top_p !== undefined) options.topP = data.top_p;

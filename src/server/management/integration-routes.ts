@@ -6,7 +6,7 @@
  * belongs to src/integrations/writer.ts. Duplicating any of it here is how the
  * API and the writer would start disagreeing about what happened to a file.
  *
- * Design of record: devlog/_fin/260802_client_toggle_api/040_wp4_management_api.md.
+ * Design contract
  */
 import { readFileSync } from "node:fs";
 import type { IntegrationIO } from "../../integrations/config-io";
@@ -257,7 +257,7 @@ function invalidClientResponse(ctx: ManagementContext): Response {
  * OpenCode has richer persistence semantics than the generic fragment writer:
  * one protected token reference, auto-connect, app launch, and surgical
  * restore. Refusing it here enforces one production writer for
- * `provider.opencodex`, including against historical generic journal rows.
+ * `provider.codexcommander`, including against recorded generic journal rows.
  */
 function dedicatedOpenCodeResponse(ctx: ManagementContext): Response {
   return jsonResponse({

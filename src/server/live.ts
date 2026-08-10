@@ -34,7 +34,7 @@ import {
 import { formatCodexProviderForLog } from "../codex/routing";
 import { signalWithTimeout } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import { resolveFirstUsableOpenAiSidecar, selectOpenAiImagesProvider } from "../providers/openai-sidecar";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
 import type { RequestLogContext } from "./request-log";
@@ -78,13 +78,13 @@ export const LIVE_CLIENT_PROTOCOL_HEADERS = [
 /**
  * Env-gated sideband frame forensics (diagnostic for multibyte transcript corruption).
  *
- * When `OCX_LIVE_FRAME_LOG` is set to a file path, every relayed sideband frame appends one
+ * When `CCX_LIVE_FRAME_LOG` is set to a file path, every relayed sideband frame appends one
  * JSONL record: direction, frame kind, byte length, and whether the payload contains U+FFFD.
  * Privacy: full frame payloads are never written — only when U+FFFD is present, a short
  * excerpt around the first replacement character is included so the corruption point can be
  * attributed (upstream vs relay vs client). Disabled entirely when the env var is unset.
  */
-export const LIVE_FRAME_LOG_ENV = "OCX_LIVE_FRAME_LOG";
+export const LIVE_FRAME_LOG_ENV = "CCX_LIVE_FRAME_LOG";
 const LIVE_FRAME_LOG_CONTEXT_CHARS = 24;
 
 function fffdContext(text: string): string | undefined {
@@ -411,7 +411,7 @@ async function readRequestBodyCapped(req: Request, maxBytes: number): Promise<Ar
  */
 export async function resolveLiveRelay(
   req: Request,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   logCtx: RequestLogContext,
   turnAdmissionLease?: AdmissionLease,
 ): Promise<LiveRelayTarget | Response> {
@@ -430,7 +430,7 @@ export async function resolveLiveRelay(
       400,
       "invalid_request_error",
       "Built-in ChatGPT voice needs an OpenAI upstream (ChatGPT login or an OpenAI API-key provider), "
-        + "but none is configured in opencodex. Routed providers cannot serve voice call-create.",
+        + "but none is configured in CodexCommander. Routed providers cannot serve voice call-create.",
     );
   }
 
@@ -513,7 +513,7 @@ export async function resolveLiveRelay(
 
 export async function handleLive(
   req: Request,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   logCtx: RequestLogContext,
   turnAdmissionLease?: AdmissionLease,
 ): Promise<Response> {
@@ -594,7 +594,7 @@ export async function handleLive(
 /** Resolve sideband upstream WebSocket URL + headers for an accepted upgrade. */
 export async function resolveLiveSidebandUpgrade(
   req: Request,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   logCtx: RequestLogContext,
   target: LiveSidebandTarget,
   turnAdmissionLease?: AdmissionLease,

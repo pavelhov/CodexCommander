@@ -26,30 +26,6 @@ type Capture = {
   body: Record<string, unknown>;
 };
 
-type MigrationReceipt = {
-  backupMatchesOriginal: boolean;
-  backupMode: number;
-  v1BackupUnchanged: boolean;
-  firstProviderIds: string[];
-  firstDefaultProvider: string;
-  mode: string;
-  hiddenLegacy: boolean;
-  marker: number;
-  selectedModels: string[];
-  knownReferencesRewritten: boolean;
-  contextCapsMerged: boolean;
-  warningPathsOnly: boolean;
-  unrelatedProvidersUnchanged: boolean;
-  unrelatedSelectedIdsUnchanged: boolean;
-  secondIdempotent: boolean;
-  secondNoSave: boolean;
-  restoredByteIdentity: boolean;
-  restoredLegacyParse: boolean;
-  remigrated: boolean;
-  absencePreserved: boolean;
-  collisionFailsBeforeSave: boolean;
-};
-
 function hashTree(path: string): string {
   const hash = createHash("sha256");
   if (!existsSync(path)) return hash.update("absent").digest("hex");
@@ -110,14 +86,14 @@ function responsesLifecycle(body: Record<string, unknown>): string {
 
 describe("OpenAI provider-option integration spine", () => {
   test("keeps Pool, Direct, and API ownership stable across transports and management", async () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-provider-option-e2e-"));
-    const opencodexHome = join(root, "opencodex");
+    const root = mkdtempSync(join(tmpdir(), "ccx-provider-option-e2e-"));
+    const codexCommanderHome = join(root, "codexcommander");
     const codexHome = join(root, "codex");
     const claudeConfigDir = join(root, "claude");
     const realClaudeDir = join(homedir(), ".claude");
     const realClaudeHashBefore = hashTree(realClaudeDir);
     const previousEnv = {
-      OPENCODEX_HOME: process.env.OPENCODEX_HOME,
+      CODEXCOMMANDER_HOME: process.env.CODEXCOMMANDER_HOME,
       CODEX_HOME: process.env.CODEX_HOME,
       CODEX_CLI_PATH: process.env.CODEX_CLI_PATH,
       CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
@@ -151,10 +127,10 @@ describe("OpenAI provider-option integration spine", () => {
     ]);
 
     try {
-      for (const dir of [opencodexHome, codexHome, claudeConfigDir]) {
+      for (const dir of [codexCommanderHome, codexHome, claudeConfigDir]) {
         mkdirSync(dir, { recursive: true, mode: 0o700 });
       }
-      process.env.OPENCODEX_HOME = opencodexHome;
+      process.env.CODEXCOMMANDER_HOME = codexCommanderHome;
       process.env.CODEX_HOME = codexHome;
       process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(codexHome);
       process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
@@ -256,8 +232,8 @@ describe("OpenAI provider-option integration spine", () => {
       api.apiKey = "fixture-api-key";
       const config = {
         port: 0,
+        multiAgentGuidanceEnabled: true,
         defaultProvider: "openai",
-        openaiProviderTierVersion: 2 as const,
         websockets: true,
         autoSwitchThreshold: 80,
         providers: { openai, "openai-apikey": api },
@@ -283,12 +259,10 @@ describe("OpenAI provider-option integration spine", () => {
 
       expect(registryModule.PROVIDER_REGISTRY.map(entry => entry.id)).toContain("openai");
       expect(registryModule.PROVIDER_REGISTRY.map(entry => entry.id)).toContain("openai-apikey");
-      expect(registryModule.PROVIDER_REGISTRY.map(entry => entry.id)).not.toContain("openai-multi");
-      expect(deriveModule.deriveProviderPresets().map(entry => entry.id)).not.toContain("openai-multi");
       expect(sidecar.listOpenAiForwardSidecarCandidates(config).map(row => row.providerName)).toEqual(["openai"]);
 
       server = serverModule.startServer(0, {
-        managementDeps: {
+        managementApi: {
           // This test owns management-state behavior, not physical Codex catalog refreshes.
           // Keeping both side effects local also prevents fixture mutations from invoking an
           // installed ChatGPT/Codex runtime or starting background quota work.
@@ -319,7 +293,6 @@ describe("OpenAI provider-option integration spine", () => {
       expect(providerRows.find(row => row.name === "openai")?.codexAccountMode).toBe("pool");
       const configDto = await local("/api/config").then(response => response.json()) as { providers: Record<string, { codexAccountMode?: string }> };
       expect(configDto.providers.openai.codexAccountMode).toBe("pool");
-      expect(configDto.providers["openai-multi"]).toBeUndefined();
 
       const poolHttp = await post("/v1/responses", {
         model: "gpt-5.6-sol", input: "pool fixture", stream: false,
@@ -380,8 +353,8 @@ describe("OpenAI provider-option integration spine", () => {
       expect(await directPatch.json()).toEqual({ success: true, name: "openai", codexAccountMode: "direct" });
       expect((await local("/api/config").then(response => response.json()) as typeof configDto).providers.openai.codexAccountMode).toBe("direct");
       const directBaseline = {
-        config: hashTree(join(opencodexHome, "config.json")),
-        accounts: hashTree(join(opencodexHome, "codex-accounts.json")),
+        config: hashTree(join(codexCommanderHome, "config.json")),
+        accounts: hashTree(join(codexCommanderHome, "codex-accounts.json")),
         active: configModule.loadConfig().activeCodexAccountId,
         mainQuota: authApi.getAccountQuota(mainAccount.MAIN_CODEX_ACCOUNT_ID),
         addedQuota: authApi.getAccountQuota("fixture-pool"),
@@ -408,8 +381,8 @@ describe("OpenAI provider-option integration spine", () => {
       });
       expect(websocketRegistry.getTrackedCodexWebSocketCountForAccount("fixture-pool")).toBe(0);
       const directAfter = {
-        config: hashTree(join(opencodexHome, "config.json")),
-        accounts: hashTree(join(opencodexHome, "codex-accounts.json")),
+        config: hashTree(join(codexCommanderHome, "config.json")),
+        accounts: hashTree(join(codexCommanderHome, "codex-accounts.json")),
         active: configModule.loadConfig().activeCodexAccountId,
         mainQuota: authApi.getAccountQuota(mainAccount.MAIN_CODEX_ACCOUNT_ID),
         addedQuota: authApi.getAccountQuota("fixture-pool"),
@@ -492,7 +465,6 @@ describe("OpenAI provider-option integration spine", () => {
       expect(modelRows.find(row => row.namespaced === selected)?.disabled).toBe(true);
       expect(modelRows.some(row => row.provider === "openai" && row.native === true && row.namespaced === row.id)).toBe(true);
       expect(modelRows.some(row => row.namespaced.startsWith("openai-apikey/"))).toBe(true);
-      expect(modelRows.some(row => row.namespaced.startsWith("openai-multi/"))).toBe(false);
       expect((await put("/api/subagent-models", { models: [selected] })).status).toBe(200);
       expect(await local("/api/subagent-models").then(response => response.json())).toMatchObject({ chosen: [selected] });
       expect((await put("/api/injection-model", { model: selected, effort: "high" })).status).toBe(200);
@@ -509,8 +481,8 @@ describe("OpenAI provider-option integration spine", () => {
         && row.model === "gpt-5.6-sol-pro"
         && row.requestedModel === selected
         && row.resolvedModel === "gpt-5.6-sol")).toBe(true);
-      const usageLines = existsSync(join(opencodexHome, "usage.jsonl"))
-        ? readFileSync(join(opencodexHome, "usage.jsonl"), "utf8").trim().split("\n").filter(Boolean)
+      const usageLines = existsSync(join(codexCommanderHome, "usage.jsonl"))
+        ? readFileSync(join(codexCommanderHome, "usage.jsonl"), "utf8").trim().split("\n").filter(Boolean)
           .map(line => JSON.parse(line) as Record<string, unknown>)
         : [];
       for (const expected of [
@@ -519,54 +491,8 @@ describe("OpenAI provider-option integration spine", () => {
         { provider: "openai-apikey", model: "gpt-5.6-sol-pro", requestedModel: selected, resolvedModel: "gpt-5.6-sol" },
       ]) expect(usageLines.some(row => Object.entries(expected).every(([key, value]) => row[key] === value))).toBe(true);
 
-      const migrationRoot = mkdtempSync(join(tmpdir(), "ocx-provider-option-migration-"));
-      try {
-        const child = Bun.spawn([
-          process.execPath,
-          join(import.meta.dir, "fixtures/openai-provider-option-migration-child.ts"),
-          join(migrationRoot, "opencodex"),
-          join(migrationRoot, "codex"),
-        ], { stdout: "pipe", stderr: "pipe", env: { ...process.env } });
-        const [stdout, stderr, exitCode] = await Promise.all([
-          new Response(child.stdout).text(),
-          new Response(child.stderr).text(),
-          child.exited,
-        ]);
-        expect(stderr).toBe("");
-        expect(exitCode).toBe(0);
-        const receipt = JSON.parse(stdout) as MigrationReceipt;
-        expect(receipt).toEqual({
-          backupMatchesOriginal: true,
-          backupMode: expect.any(Number),
-          v1BackupUnchanged: true,
-          firstProviderIds: ["openai", "openai-apikey", "custom"],
-          firstDefaultProvider: "openai",
-          mode: "pool",
-          hiddenLegacy: true,
-          marker: 2,
-          selectedModels: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
-          knownReferencesRewritten: true,
-          contextCapsMerged: true,
-          warningPathsOnly: true,
-          unrelatedProvidersUnchanged: true,
-          unrelatedSelectedIdsUnchanged: true,
-          secondIdempotent: true,
-          secondNoSave: true,
-          restoredByteIdentity: true,
-          restoredLegacyParse: true,
-          remigrated: true,
-          absencePreserved: true,
-          collisionFailsBeforeSave: false,
-        });
-        if (process.platform !== "win32") {
-          expect(receipt.backupMode).toBe(0o600);
-        }
-      } finally {
-        rmSync(migrationRoot, { recursive: true, force: true });
-      }
-
       expect(captures.every(capture => upstreamTuples.has(`${capture.method} ${capture.url}`))).toBe(true);
-      const evidenceDir = process.env.OCX_EVIDENCE_DIR;
+      const evidenceDir = process.env.CCX_EVIDENCE_DIR;
       if (evidenceDir) {
         mkdirSync(evidenceDir, { recursive: true, mode: 0o700 });
         writeFileSync(join(evidenceDir, "030_e2e.json"), JSON.stringify({
@@ -579,7 +505,6 @@ describe("OpenAI provider-option integration spine", () => {
           websocket: "PASS",
           compact: "PASS",
           apiProIsolation: "PASS",
-          migrationRestore: "PASS",
           oneOpenAiModelGroup: "PASS",
           realClaudeStateUnchanged: true,
         }, null, 2) + "\n", { mode: 0o600 });
@@ -590,7 +515,7 @@ describe("OpenAI provider-option integration spine", () => {
       } finally {
         globalThis.fetch = savedFetch;
         for (const reset of resets) reset();
-        restoreEnv("OPENCODEX_HOME", previousEnv.OPENCODEX_HOME);
+        restoreEnv("CODEXCOMMANDER_HOME", previousEnv.CODEXCOMMANDER_HOME);
         restoreEnv("CODEX_HOME", previousEnv.CODEX_HOME);
         restoreEnv("CODEX_CLI_PATH", previousEnv.CODEX_CLI_PATH);
         restoreEnv("CLAUDE_CONFIG_DIR", previousEnv.CLAUDE_CONFIG_DIR);

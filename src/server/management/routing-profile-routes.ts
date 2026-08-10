@@ -30,7 +30,7 @@ import { isPlainRecord } from "./shared";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
-import type { OcxConfig, OcxRoutingProfileConfig } from "../../types";
+import type { CodexCommanderConfig, CodexCommanderRoutingProfileConfig } from "../../types";
 
 function profileDto(config: Parameters<typeof getRoutingProfile>[0], id: string): Record<string, unknown> | null {
   const profile = getRoutingProfile(config, id);
@@ -100,7 +100,7 @@ function parseCandidateEvidence(raw: unknown): PolicyCandidateEvidence[] | null 
 }
 
 function assembleCandidateEvidence(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   profile: NonNullable<ReturnType<typeof getRoutingProfile>>,
 ): PolicyCandidateEvidence[] {
   // Match execution: fill the same candidate evidence the router would
@@ -144,8 +144,8 @@ function assembleCandidateEvidence(
 
 function storedProfile(
   id: string,
-  raw: OcxRoutingProfileConfig,
-): OcxRoutingProfileConfig {
+  raw: CodexCommanderRoutingProfileConfig,
+): CodexCommanderRoutingProfileConfig {
   const normalized = normalizeRoutingProfile(id, raw);
   const {
     id: _id,
@@ -168,7 +168,7 @@ function storedProfile(
  * model as a key with a different target than the old-alias key's target.
  */
 function modelMapMigrationCollision(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   oldPublicModel: string,
   newPublicModel: string,
 ): string | null {
@@ -190,7 +190,7 @@ function modelMapMigrationCollision(
  * ordinary routing and send the obsolete alias upstream.
  */
 function migrateProfileModelReferences(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   oldPublicModel: string,
   newPublicModel: string,
 ): boolean {
@@ -224,13 +224,8 @@ function migrateProfileModelReferences(
   }
   if (config.claudeCode) {
     const claudeCode = { ...config.claudeCode };
-    for (const field of ["model", "smallFastModel"] as const) {
+    for (const field of ["smallFastModel"] as const) {
       if (claudeCode[field]) claudeCode[field] = migrateAgentReference(claudeCode[field]);
-    }
-    if (claudeCode.tierModels) {
-      claudeCode.tierModels = Object.fromEntries(
-        Object.entries(claudeCode.tierModels).map(([tier, model]) => [tier, migrateAgentReference(model)]),
-      );
     }
     if (claudeCode.modelMap) {
       // Keys are the inbound ids matched for reroute (src/claude/inbound.ts);
@@ -314,7 +309,7 @@ export async function handleRoutingProfileRoutes(ctx: ManagementContext): Promis
     const previousProfile = mode === "update" ? getRoutingProfile(config, id) : undefined;
     if (mode === "update" && previousProfile) {
       const oldPublicModel = policyPublicModelId(id, previousProfile);
-      const newProfile = normalizeRoutingProfile(id, body.profile as OcxRoutingProfileConfig);
+      const newProfile = normalizeRoutingProfile(id, body.profile as CodexCommanderRoutingProfileConfig);
       const newPublicModel = policyPublicModelId(id, newProfile);
       const collision = modelMapMigrationCollision(config, oldPublicModel, newPublicModel);
       if (collision) {
@@ -324,7 +319,7 @@ export async function handleRoutingProfileRoutes(ctx: ManagementContext): Promis
       }
     }
     const nextProfiles = { ...(config.routingProfiles ?? {}) };
-    nextProfiles[id] = storedProfile(id, body.profile as OcxRoutingProfileConfig);
+    nextProfiles[id] = storedProfile(id, body.profile as CodexCommanderRoutingProfileConfig);
     config.routingProfiles = nextProfiles;
     // An alias change on update renames the public model id; rewrite config
     // references (disabledModels, subagentModels, injectionModel,

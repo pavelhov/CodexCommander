@@ -1,12 +1,8 @@
 /**
- * OAuth token store at ~/.opencodex/auth.json, keyed by provider name.
+ * OAuth token store at ~/.codexcommander/auth.json, keyed by provider name.
  *
  * Multiauth shape (260706): each provider value is a ProviderAccountSet
  * `{ activeAccountId, accounts: [{ id, credential, needsReauth?, addedAt? }] }`.
- * Legacy single-credential values (`{ access, refresh, expires, ... }`) normalize on load,
- * and the first new-shape persist writes a one-time `auth.json.pre-multiauth` backup so a
- * downgraded loader (which silently drops unknown shapes) cannot destroy refresh tokens.
- *
  * Exceptions:
  * - `chatgpt` stays single-slot (always replaced): codex-auth-api uses it as a scratch slot
  *   for Codex pool logins, which have their own ledger (codex-accounts.json).
@@ -16,7 +12,7 @@
  *   extracts JWT `sub` — both append distinct accounts under multiauth.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir, atomicWriteFile, backupInvalidConfig, hardenConfigDir, hardenExistingSecret } from "../config";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
@@ -30,6 +26,13 @@ import { validateCopilotApiBaseUrl } from "./github-copilot";
 import type { OAuthCredentialSource, OAuthCredentials, ProviderAccount, ProviderAccountSet } from "./types";
 
 export type AuthStore = Record<string, ProviderAccountSet>;
+
+export const AUTH_STORE_SCHEMA_VERSION = 1 as const;
+
+interface PersistedAuthStore {
+  readonly schemaVersion: typeof AUTH_STORE_SCHEMA_VERSION;
+  readonly providers: AuthStore;
+}
 
 export type AuthStoreBufferSnapshot =
   | { readonly kind: "ready"; readonly store: AuthStore }
@@ -66,7 +69,7 @@ export function getAuthRefreshIntentLockPath(provider: string, accountId: string
 export function getAuthRefreshIntentPath(provider: string, accountId: string): string {
   return `${getAuthRefreshIntentLockPath(provider, accountId)}.json`;
 }
-export interface OAuthRefreshIntent { version: 1; provider: string; accountId: string; generation: string; createdAt: number; flightId?: string; staleOwner?: true; uncertain?: true }
+export interface OAuthRefreshIntent { version: 1; provider: string; accountId: string; generation: string; createdAt: number; flightId: string; staleOwner?: true; uncertain?: true }
 function parseOAuthRefreshIntent(
   provider: string,
   accountId: string,
@@ -79,10 +82,11 @@ function parseOAuthRefreshIntent(
     || value.accountId !== accountId
     || typeof value.generation !== "string"
     || typeof value.createdAt !== "number"
-    || (value.flightId !== undefined && typeof value.flightId !== "string")
+    || typeof value.flightId !== "string"
+    || !value.flightId
     || (value.staleOwner !== undefined && value.staleOwner !== true)
   ) {
-    return { version: 1, provider, accountId, generation: "", createdAt: 0, uncertain: true };
+    return { version: 1, provider, accountId, generation: "", createdAt: 0, flightId: "", uncertain: true };
   }
   return value as OAuthRefreshIntent;
 }
@@ -95,7 +99,7 @@ export function readOAuthRefreshIntent(provider: string, accountId: string): OAu
     return parseOAuthRefreshIntent(provider, accountId, readFileSync(path, "utf8"));
   } catch (error) {
     if (errorCode(error) === "ENOENT") return undefined;
-    return { version: 1, provider, accountId, generation: "", createdAt: 0, uncertain: true };
+    return { version: 1, provider, accountId, generation: "", createdAt: 0, flightId: "", uncertain: true };
   }
 }
 
@@ -106,14 +110,15 @@ export function peekOAuthRefreshIntent(provider: string, accountId: string): OAu
     return parseOAuthRefreshIntent(provider, accountId, readFileSync(path, "utf8"));
   } catch (error) {
     if (errorCode(error) === "ENOENT") return undefined;
-    return { version: 1, provider, accountId, generation: "", createdAt: 0, uncertain: true };
+    return { version: 1, provider, accountId, generation: "", createdAt: 0, flightId: "", uncertain: true };
   }
 }
-export function writeOAuthRefreshIntent(provider: string, accountId: string, generation: string, createdAt = Date.now(), flightId?: string): void {
+export function writeOAuthRefreshIntent(provider: string, accountId: string, generation: string, createdAt = Date.now(), flightId: string): void {
+  if (!flightId) throw new Error("OAuth refresh intent requires a flight id");
   const dir = getConfigDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   hardenConfigDir();
-  const intent: OAuthRefreshIntent = { version: 1, provider, accountId, generation, createdAt, ...(flightId ? { flightId } : {}) };
+  const intent: OAuthRefreshIntent = { version: 1, provider, accountId, generation, createdAt, flightId };
   atomicWriteFile(getAuthRefreshIntentPath(provider, accountId), `${JSON.stringify(intent)}\n`);
 }
 export function markOAuthRefreshIntentStaleOwner(provider: string, accountId: string, generation: string, flightId: string): boolean {
@@ -132,21 +137,23 @@ export function credentialGeneration(cred: OAuthCredentials): string {
   return createHash("sha256").update(JSON.stringify([cred.refresh, cred.access, cred.expires])).digest("hex");
 }
 
-function loadAuthStoreInternal(): { store: AuthStore; hadLegacy: boolean } {
+function loadAuthStoreInternal(): AuthStore {
   const path = getAuthStorePath();
   hardenConfigDir();
   hardenExistingSecret(path);
-  if (!existsSync(path)) return { store: {}, hadLegacy: false };
+  if (!existsSync(path)) return {};
   try {
-    return normalizeAuthStore(JSON.parse(readFileSync(path, "utf-8")));
+    const store = parsePersistedAuthStore(JSON.parse(readFileSync(path, "utf-8")));
+    if (!store) throw new Error("invalid auth store schema");
+    return store;
   } catch {
     backupInvalidConfig(path);
-    return { store: {}, hadLegacy: false };
+    return {};
   }
 }
 
 export function loadAuthStore(): AuthStore {
-  return loadAuthStoreInternal().store;
+  return loadAuthStoreInternal();
 }
 
 /**
@@ -157,13 +164,8 @@ export function normalizeAuthStoreBuffer(buffer: Uint8Array | null): AuthStoreBu
   if (buffer === null) return { kind: "absent" };
   try {
     const parsed: unknown = JSON.parse(authStoreDecoder.decode(buffer));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return { kind: "malformed" };
-    }
-    const { store } = normalizeAuthStore(parsed);
-    if (Object.keys(parsed).length > 0 && Object.keys(store).length === 0) {
-      return { kind: "malformed" };
-    }
+    const store = parsePersistedAuthStore(parsed);
+    if (!store) return { kind: "malformed" };
     return { kind: "ready", store };
   } catch {
     return { kind: "malformed" };
@@ -171,7 +173,7 @@ export function normalizeAuthStoreBuffer(buffer: Uint8Array | null): AuthStoreBu
 }
 
 /**
- * Observe-only auth store read for diagnostics (`ocx doctor` / status).
+ * Observe-only auth store read for diagnostics (`ccx doctor` / status).
  * Does not chmod paths or backup invalid JSON — corrupt files are treated as empty.
  */
 export function peekAuthStore(): AuthStore {
@@ -190,7 +192,14 @@ function persist(store: AuthStore): void {
     try { chmodSync(dir, 0o700); } catch { /* best-effort on existing dir */ }
   }
   hardenConfigDir();
-  atomicWriteFile(getAuthStorePath(), JSON.stringify(store, null, 2) + "\n");
+  const persisted: PersistedAuthStore = {
+    schemaVersion: AUTH_STORE_SCHEMA_VERSION,
+    providers: store,
+  };
+  if (!parsePersistedAuthStore(persisted)) {
+    throw new Error("Refusing to persist an invalid OAuth credential store");
+  }
+  atomicWriteFile(getAuthStorePath(), JSON.stringify(persisted, null, 2) + "\n");
 }
 
 export class OAuthFileLockError extends Error { readonly code = "OAUTH_FILE_LOCK_UNAVAILABLE"; constructor(message: string, options?: { cause?: unknown }) { super(message, options); this.name = "OAuthFileLockError"; } }
@@ -219,94 +228,91 @@ export function createOAuthRefreshIntentLock(provider:string,accountId:string,ov
   });
 }
 
-/**
- * One-time downgrade safety net: the first time we persist the NEW shape over a file that
- * still contains legacy single-credential entries, keep a pristine copy. An older opencodex
- * would silently drop the new shape (normalizeCredential -> null) and then persist an empty
- * store, destroying refresh tokens; the backup makes that recoverable.
- */
-function scrubXaiLocalCliRefreshInRawStore(raw: unknown): boolean {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
-  const xai = (raw as Record<string, unknown>).xai;
-  let scrubbed = false;
-  const scrubCredential = (value: unknown): void => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return;
-    const credential = value as Record<string, unknown>;
-    if (credential.source !== "local-cli" || typeof credential.refresh !== "string" || !credential.refresh) return;
-    credential.refresh = "";
-    scrubbed = true;
-  };
-  if (xai && typeof xai === "object" && !Array.isArray(xai)) {
-    const accounts = (xai as { accounts?: unknown }).accounts;
-    if (Array.isArray(accounts)) {
-      for (const account of accounts) {
-        if (!account || typeof account !== "object" || Array.isArray(account)) continue;
-        scrubCredential((account as { credential?: unknown }).credential);
-      }
-    } else {
-      scrubCredential(xai);
-    }
-  }
-  return scrubbed;
-}
-
-function backupLegacyOnce(): void {
-  const path = getAuthStorePath();
-  const backup = `${path}.pre-multiauth`;
-  if (!existsSync(path) || existsSync(backup)) return;
-  try {
-    const bytes = readFileSync(path, "utf8");
-    const raw = JSON.parse(bytes) as Record<string, unknown>;
-    const backupBytes = scrubXaiLocalCliRefreshInRawStore(raw)
-      ? `${JSON.stringify(raw, null, 2)}\n`
-      : bytes;
-    const fd = openSync(backup, "wx", 0o600);
-    try { writeFileSync(fd, backupBytes, "utf8"); }
-    finally { closeSync(fd); }
-  } catch { /* best-effort */ }
-}
-
-const MAX_LEGACY_AUTH_BACKUP_BYTES = 4 * 1024 * 1024;
-
-/** Remove native Grok refresh grants retained by a backup from an older build. */
-export function scrubExistingXaiLocalCliRefreshBackup(): void {
-  const backup = `${getAuthStorePath()}.pre-multiauth`;
-  let fd: number | undefined;
-  try {
-    const before = lstatSync(backup);
-    if (!before.isFile() || before.nlink !== 1 || before.size > MAX_LEGACY_AUTH_BACKUP_BYTES) return;
-    fd = openSync(backup, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-    const opened = fstatSync(fd);
-    if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== before.dev || opened.ino !== before.ino || opened.size > MAX_LEGACY_AUTH_BACKUP_BYTES) return;
-    // Read at most the observed size plus one byte. The extra byte detects a writer that
-    // extends the file after fstat without allocating the full global bound on every check.
-    const bytes = Buffer.allocUnsafe(Math.min(MAX_LEGACY_AUTH_BACKUP_BYTES + 1, opened.size + 1));
-    let total = 0;
-    while (total < bytes.length) {
-      const count = readSync(fd, bytes, total, bytes.length - total, null);
-      if (count === 0) break;
-      total += count;
-    }
-    closeSync(fd);
-    fd = undefined;
-    if (total === 0 || total > opened.size || total > MAX_LEGACY_AUTH_BACKUP_BYTES) return;
-    const raw = JSON.parse(bytes.toString("utf8", 0, total)) as Record<string, unknown>;
-    if (!scrubXaiLocalCliRefreshInRawStore(raw)) return;
-    const current = lstatSync(backup);
-    if (!current.isFile() || current.nlink !== 1 || current.dev !== opened.dev || current.ino !== opened.ino || current.mtimeMs !== opened.mtimeMs || current.size !== opened.size) return;
-    atomicWriteFile(backup, `${JSON.stringify(raw, null, 2)}\n`);
-  } catch { /* best-effort migration; never follow or replace an unsafe path */ }
-  finally { if (fd !== undefined) try { closeSync(fd); } catch { /* best-effort */ } }
-}
-
 function isCredentialSource(value: unknown): value is OAuthCredentialSource {
   return value === "oauth" || value === "local-cli" || value === "credential-file" || value === "environment" || value === "manual";
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  const allowedSet = new Set(allowed);
+  return Object.keys(value).every(key => allowedSet.has(key));
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function parsePersistedKiroMetadata(value: unknown): OAuthCredentials["kiro"] | null {
+  if (!isPlainRecord(value)) return null;
+  const keys = ["profileArn", "ssoRegion", "apiRegion", "clientId", "clientSecret"] as const;
+  if (!hasOnlyKeys(value, keys)) return null;
+  const limits: Record<(typeof keys)[number], number> = {
+    profileArn: 1024,
+    ssoRegion: 64,
+    apiRegion: 64,
+    clientId: 4096,
+    clientSecret: 4096,
+  };
+  const metadata: NonNullable<OAuthCredentials["kiro"]> = {};
+  for (const key of keys) {
+    const field = value[key];
+    if (field === undefined) continue;
+    if (
+      typeof field !== "string"
+      || field.length === 0
+      || field.length > limits[key]
+      || field.trim() !== field
+      || /[\x00-\x1f\x7f]/.test(field)
+    ) return null;
+    metadata[key] = field;
+  }
+  return Object.keys(metadata).length > 0 ? metadata : null;
+}
+
+function parsePersistedCredential(value: unknown): OAuthCredentials | null {
+  if (!isPlainRecord(value)) return null;
+  const allowed = ["access", "refresh", "expires", "email", "accountId", "source", "projectId", "apiBaseUrl", "kiro"];
+  if (!hasOnlyKeys(value, allowed)) return null;
+  if (typeof value.access !== "string" || typeof value.refresh !== "string" || !isFiniteNumber(value.expires)) return null;
+
+  const credential: OAuthCredentials = {
+    access: value.access,
+    refresh: value.refresh,
+    expires: value.expires,
+  };
+  for (const key of ["email", "accountId", "projectId"] as const) {
+    const field = value[key];
+    if (field === undefined) continue;
+    if (typeof field !== "string" || field.length === 0) return null;
+    credential[key] = field;
+  }
+  if (value.source !== undefined) {
+    if (!isCredentialSource(value.source)) return null;
+    credential.source = value.source;
+  }
+  if (value.apiBaseUrl !== undefined) {
+    if (typeof value.apiBaseUrl !== "string") return null;
+    const validated = validateCopilotApiBaseUrl(value.apiBaseUrl);
+    if (!validated || validated !== value.apiBaseUrl) return null;
+    credential.apiBaseUrl = validated;
+  }
+  if (value.kiro !== undefined) {
+    const metadata = parsePersistedKiroMetadata(value.kiro);
+    if (!metadata) return null;
+    credential.kiro = metadata;
+  }
+  return credential;
 }
 
 function normalizeCredential(cred: unknown): OAuthCredentials | null {
   if (!cred || typeof cred !== "object") return null;
   const candidate = cred as Partial<OAuthCredentials>;
-  if (typeof candidate.access !== "string" || typeof candidate.refresh !== "string" || typeof candidate.expires !== "number") {
+  if (typeof candidate.access !== "string" || typeof candidate.refresh !== "string" || !isFiniteNumber(candidate.expires)) {
     return null;
   }
   const normalized: OAuthCredentials = {
@@ -350,58 +356,64 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
 }
 
 /**
- * Stable short account id. MUST be deterministic for a given credential: legacy
- * single-credential stores are re-normalized on EVERY load without being persisted,
- * so a time-salted id would differ between two loads (getAccountSet vs
- * getAccountCredential), surfacing as a spurious OAuthLoginRequiredError and making
- * refresh persists silently miss the account (rotated refresh token lost).
+ * Stable short account id. It must remain deterministic for a credential so repeated
+ * saves bind the same account and refresh persistence cannot miss a rotated token.
  */
 function newAccountId(cred: OAuthCredentials): string {
   const identity = cred.accountId ?? cred.email ?? cred.refresh;
   return createHash("sha256").update(identity).digest("hex").slice(0, 8);
 }
 
-function normalizeAccount(value: unknown): ProviderAccount | null {
-  if (!value || typeof value !== "object") return null;
-  const candidate = value as Partial<ProviderAccount>;
-  if (typeof candidate.id !== "string" || candidate.id.length === 0) return null;
-  const credential = normalizeCredential(candidate.credential);
+function parsePersistedAccount(value: unknown): ProviderAccount | null {
+  if (!isPlainRecord(value)) return null;
+  if (!hasOnlyKeys(value, ["id", "alias", "credential", "needsReauth", "addedAt"])) return null;
+  if (typeof value.id !== "string" || value.id.length === 0) return null;
+  const credential = parsePersistedCredential(value.credential);
   if (!credential) return null;
-  const account: ProviderAccount = { id: candidate.id, credential };
-  if (typeof candidate.alias === "string" && candidate.alias.trim()) account.alias = candidate.alias.trim();
-  if (candidate.needsReauth === true) account.needsReauth = true;
-  if (typeof candidate.addedAt === "number") account.addedAt = candidate.addedAt;
+  const account: ProviderAccount = { id: value.id, credential };
+  if (value.alias !== undefined) {
+    if (typeof value.alias !== "string" || !value.alias || value.alias.trim() !== value.alias) return null;
+    account.alias = value.alias;
+  }
+  if (value.needsReauth !== undefined) {
+    if (value.needsReauth !== true) return null;
+    account.needsReauth = true;
+  }
+  if (value.addedAt !== undefined) {
+    if (!isFiniteNumber(value.addedAt)) return null;
+    account.addedAt = value.addedAt;
+  }
   return account;
 }
 
-function normalizeAccountSet(raw: unknown): { set: ProviderAccountSet | null; wasLegacy: boolean } {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { set: null, wasLegacy: false };
-  const candidate = raw as Partial<ProviderAccountSet>;
-  if (Array.isArray(candidate.accounts)) {
-    const accounts = candidate.accounts.map(normalizeAccount).filter((a): a is ProviderAccount => a !== null);
-    if (accounts.length === 0) return { set: null, wasLegacy: false };
-    const active = typeof candidate.activeAccountId === "string" && accounts.some(a => a.id === candidate.activeAccountId)
-      ? candidate.activeAccountId
-      : accounts[0]!.id;
-    return { set: { activeAccountId: active, accounts }, wasLegacy: false };
+function parsePersistedAccountSet(raw: unknown): ProviderAccountSet | null {
+  if (!isPlainRecord(raw) || !hasOnlyKeys(raw, ["activeAccountId", "accounts"])) return null;
+  if (typeof raw.activeAccountId !== "string" || raw.activeAccountId.length === 0 || !Array.isArray(raw.accounts) || raw.accounts.length === 0) {
+    return null;
   }
-  // Legacy single-credential value.
-  const cred = normalizeCredential(raw);
-  if (!cred) return { set: null, wasLegacy: false };
-  const id = newAccountId(cred);
-  return { set: { activeAccountId: id, accounts: [{ id, credential: cred }] }, wasLegacy: true };
+  const accounts: ProviderAccount[] = [];
+  const ids = new Set<string>();
+  for (const value of raw.accounts) {
+    const account = parsePersistedAccount(value);
+    if (!account || ids.has(account.id)) return null;
+    ids.add(account.id);
+    accounts.push(account);
+  }
+  if (!ids.has(raw.activeAccountId)) return null;
+  return { activeAccountId: raw.activeAccountId, accounts };
 }
 
-function normalizeAuthStore(raw: unknown): { store: AuthStore; hadLegacy: boolean } {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { store: {}, hadLegacy: false };
+function parsePersistedAuthStore(raw: unknown): AuthStore | null {
+  if (!isPlainRecord(raw) || !hasOnlyKeys(raw, ["schemaVersion", "providers"])) return null;
+  if (raw.schemaVersion !== AUTH_STORE_SCHEMA_VERSION || !isPlainRecord(raw.providers)) return null;
   const normalized: AuthStore = {};
-  let hadLegacy = false;
-  for (const [provider, value] of Object.entries(raw)) {
-    const { set, wasLegacy } = normalizeAccountSet(value);
-    if (set) normalized[provider] = set;
-    if (wasLegacy) hadLegacy = true;
+  for (const [provider, value] of Object.entries(raw.providers)) {
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(provider)) return null;
+    const set = parsePersistedAccountSet(value);
+    if (!set) return null;
+    normalized[provider] = set;
   }
-  return { store: normalized, hadLegacy };
+  return normalized;
 }
 
 /**
@@ -515,9 +527,7 @@ function serializeMutation<T>(work: () => Promise<T>, retainedValues: readonly u
   return result;
 }
 export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
-    const { store, hadLegacy } = loadAuthStoreInternal();
-    if (hadLegacy) backupLegacyOnce();
-    scrubExistingXaiLocalCliRefreshBackup();
+    const store = loadAuthStoreInternal();
     const result = await fn(store);
     persist(store);
     return result;
@@ -540,10 +550,9 @@ export function getCredential(provider: string): OAuthCredentials | null {
 export async function saveCredential(
   provider: string,
   cred: OAuthCredentials,
-  opts: { preserveIdentityless?: boolean } = {},
 ): Promise<void> {
   const safe = normalizeCredential(cred);
-  if (!safe) return;
+  if (!safe) throw new Error("Refusing to persist invalid OAuth credential");
   await mutateStore(store => {
     const set = store[provider];
     const identity = safe.accountId ?? safe.email;
@@ -558,16 +567,6 @@ export async function saveCredential(
         existing.credential = safe;
         delete existing.needsReauth;
         set.activeAccountId = existing.id;
-        return;
-      }
-      // Legacy migration: a pre-identity row (no accountId/email) for this provider is the
-      // SAME human re-logging in after the identity extraction shipped — upgrading the
-      // active identity-less row in place prevents a stale duplicate that stays selectable
-      // and would re-refresh into a second row with the same identity.
-      const active = set.accounts.find(a => a.id === set.activeAccountId);
-      if (!opts.preserveIdentityless && active && active.credential.accountId === undefined && active.credential.email === undefined) {
-        active.credential = safe;
-        delete active.needsReauth;
         return;
       }
       const id = newAccountId(safe);
@@ -632,7 +631,7 @@ export function getAccountCredential(provider: string, accountId: string): OAuth
 /** Persist a refreshed credential for a SPECIFIC account without touching activeAccountId. */
 export async function saveAccountCredential(provider: string, accountId: string, cred: OAuthCredentials): Promise<void> {
   const safe = normalizeCredential(cred);
-  if (!safe) return;
+  if (!safe) throw new Error("Refusing to persist invalid OAuth credential");
   await mutateStore(store => {
     const account = store[provider]?.accounts.find(a => a.id === accountId);
     if (!account) return;

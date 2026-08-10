@@ -3,15 +3,14 @@ title: Provider Configuration
 description: Provider entries, authentication, endpoints, model catalogs, quotas, context caps, and provider-specific options.
 ---
 
-A provider tells opencodex where a model lives, which wire adapter it speaks, and how requests are
+A provider tells CodexCommander where a model lives, which wire adapter it speaks, and how requests are
 authenticated.
 
 ## Provider-related top-level fields
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `providers` | `Record<string, OcxProviderConfig>` | — | Map of provider name to provider config. |
-| `openaiProviderTierVersion?` | `2` | set by migration | Marks the single option-aware OpenAI projection as complete. |
+| `providers` | `Record<string, CodexCommanderProviderConfig>` | — | Map of provider name to provider config. |
 | `disabledModels?` | `string[]` | — | Models hidden from Codex's catalog and `/v1/models`, but not blocked from direct proxy calls. A routed id is removed from listings. An account-qualified native id hides only that selector row; a bare native GPT id hides the bare row and every account-selector row for that model. The dashboard Models page exposes only routed and bare native rows; use this configuration field directly to hide one selector-qualified row. |
 | `providerContextCaps?` | `Record<string, number>` | `{}` | Per-provider Codex-visible context caps. A cap only lowers a known context window. |
 | `contextCapValue?` | `number` | `350000` | Value used by the dashboard context-cap controls; changing it updates every enabled `providerContextCaps` entry. |
@@ -19,7 +18,7 @@ authenticated.
 | `pausedCodexAccountIds?` | `string[]` | `[]` | Accounts excluded from Pool selection until resumed, including the main `__main__` account when paused. |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | Optional map from an arbitrary public model selector to a stored Codex account target. Each selector whose target is present adds separate `<selector>/<native-openai-model>` rows to the Codex picker; each row uses only that account. With any selector active, bare native rows are hidden in the picker, but their ids remain routable and listed by raw `/v1/models` unless explicitly disabled. |
 | `activeCodexAccountId?` | `string` | — | Manually selected Pool account for the next request. Selection clears thread affinity; in-flight requests keep captured credentials. |
-| `codexAccountPriorities?` | `Record<string, number>` | — | Per-account selection order for the Codex pool: account id → integer from `-100` to `100`, **higher is used earlier**, absent means `0`. This is an ordering boundary, not an eligibility one: selection narrows the already-eligible accounts to the highest tier that still has quota headroom, and `accountPoolStrategy` then picks within that tier. A tier is skipped only when every member is over `autoSwitchThreshold`, cooling down, soft-avoided, paused, or needs reauthentication — unknown quota never drains a tier. Ordering never makes an ineligible account selectable and never re-binds a thread that already has an account. The main `__main__` account participates on equal terms, which is how the Codex Desktop login can be set to drain last. With no entries the pool behaves exactly as before. A malformed map is ignored with a console warning (ordering off, no config repair). Managed by `ocx account priority` and the Codex Auth page. |
+| `codexAccountPriorities?` | `Record<string, number>` | — | Per-account selection order for the Codex pool: account id → integer from `-100` to `100`, **higher is used earlier**, absent means `0`. This is an ordering boundary, not an eligibility one: selection narrows the already-eligible accounts to the highest tier that still has quota headroom, and `accountPoolStrategy` then picks within that tier. A tier is skipped only when every member is over `autoSwitchThreshold`, cooling down, soft-avoided, paused, or needs reauthentication — unknown quota never drains a tier. Ordering never makes an ineligible account selectable and never re-binds a thread that already has an account. The main `__main__` account participates on equal terms, which is how the Codex Desktop login can be set to drain last. With no entries the pool behaves exactly as before. A malformed map is ignored with a console warning (ordering off, no config repair). Managed by `ccx account priority` and the Codex Auth page. |
 | `activeCodexAccountPinned?` | `string` | — | Account id the operator last selected by hand. While set, a higher `codexAccountPriorities` tier cannot preempt it until the pin is released by drain, exclusion, deletion, or an explicit failover/promotion away. Ordinary round-robin movement inside the capped tier does not release it. Writing any `codexAccountPriorities` entry also releases the pin, so a pin made before an order existed cannot outrank one set afterward. `GET /api/codex-auth/active` reports both whether the effective account is pinned (`pinned`) and the account carrying the ceiling (`pinnedAccountId`). |
 | `autoSwitchThreshold?` | `number` | `80` | Usage threshold for proactive switching. `quota` can re-evaluate both bound and unbound tasks on their next request; `fill-first` uses it only as the drain point for unbound assignment; normal `round-robin` selection does not use it. The score uses the hottest known 5h, weekly, or 30d quota window. `0` disables usage-based proactive switching only, not unbound assignment or failure recovery. |
 | `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Assignment strategy for new/unbound Codex requests. A request is unbound when it has no live (parent thread id, quota scope) affinity; a visible existing task can become unbound after proxy restart or affinity reset. `quota` picks the lowest-usage eligible account when no active account exists, keeps an eligible active account below `autoSwitchThreshold`, and after the threshold may move an unbound request or proactively rebind a bound task to a lower-usage eligible account. `round-robin` distributes unbound requests evenly; `fill-first` keeps assigning unbound requests to the active account until cooldown, unavailability, or the configured drain threshold. |
@@ -27,9 +26,9 @@ authenticated.
 | `upstreamFailoverThreshold?` | `number` | `3` | Consecutive transient failures before future new sessions fail over. Set `0` to disable. Proven pre-connection DNS/TCP reachability failures are tracked at the provider-host level: they never affect account health, cooldowns, thread/session affinity, active-account selection, or Pool routing, and never count toward this threshold. |
 | `modelCacheTtlMs?` | `number` | `300000` | Freshness window for the per-provider `/models` cache. |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic prompt-cache policy: disabled, 5-minute ephemeral, or 1-hour extended. |
-| `tokenGuardian?` | `OcxTokenGuardianConfig` | off | Optional proactive OAuth refresh and Codex-account warmup policy. |
+| `tokenGuardian?` | `CodexCommanderTokenGuardianConfig` | off | Optional proactive OAuth refresh and Codex-account warmup policy. |
 
-Selector names are user-chosen public labels; opencodex assigns no account-role semantics to them.
+Selector names are user-chosen public labels; CodexCommander assigns no account-role semantics to them.
 `codexAccountNamespaces` keys are 1–64 characters, starting and ending with an
 ASCII letter or number, with letters, numbers, `.`, `_`, or `-` inside. Reserved JavaScript object
 names are rejected. Each value is a valid pool-account id (never internal `__main__`) or `"@main"`
@@ -47,19 +46,15 @@ API uses only its configured API key or key pool. Use a bare model or `openai-ap
 is no cross-route credential fallback. API GPT-5.6 rows carry 1,050,000 context / 922,000 max input
 metadata, and Pro virtual ids rewrite to the base wire model with `reasoning.mode: "pro"`.
 
-`openaiProviderTierVersion: 2` marks the current single-provider projection. Before migrating a
-shipped v1 config, opencodex creates `config.json.pre-openai-tiers-v2.bak` without replacing a
-differing backup and rewrites known legacy namespaced selected ids to bare ids.
-
-## Provider entries (`OcxProviderConfig`)
+## Provider entries (`CodexCommanderProviderConfig`)
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `adapter` | `string` | One of `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai` (or alias `azure`). |
+| `adapter` | `string` | One of `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, or `azure-openai`. |
 | `baseUrl` | `string` | Upstream API base URL. Most built-in fixed endpoints ignore a mismatch; collision-safe key presets preserve an older same-named custom destination. |
 | `responsesPath?` | `string` | Relative resource path for key-auth `openai-responses` requests. It must start with `/` and contain no scheme, query, or fragment. |
 | `supportsServiceTier?` | `boolean` | Tri-state `service_tier` capability. `true`: fast mode may inject and caller values are preserved. `false`: the field is stripped and never injected (the upstream documented as not supporting it must not receive it). Absent: the provider is unclassified — caller-supplied values are preserved untouched and fast mode never injects. The registry classifies canonical OpenAI (`true`), DeepSeek, and Volcengine Ark (`false`); set it explicitly only for custom gateways that genuinely support tiers. |
-| `preserveResponsesReasoningContent?` | `boolean` | Keep plaintext reasoning content on replayed Responses reasoning items instead of blanking it (blanking is the ChatGPT backend's rule). Enable for upstreams whose contract accepts reasoning replay, such as DeepSeek. Proxy-minted `ocxr1` envelopes are always stripped. |
+| `preserveResponsesReasoningContent?` | `boolean` | Keep plaintext reasoning content on replayed Responses reasoning items instead of blanking it (blanking is the ChatGPT backend's rule). Enable for upstreams whose contract accepts reasoning replay, such as DeepSeek. Proxy-minted `ccxr1` envelopes are always stripped. |
 | `disabled?` | `boolean` | Keep the provider on disk but exclude it from routing and model/catalog listings. |
 | `apiKey?` | `string` | API key, or an `${ENV_VAR}` / `$ENV_VAR` reference resolved at request time. |
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic key header style. Defaults to native `x-api-key`; valid only for key-auth `anthropic` providers. |
@@ -111,23 +106,22 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `location?` | `string` | Vertex location; environment fallback is `GOOGLE_CLOUD_LOCATION`. |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | Cursor only: stdio or Streamable HTTP MCP servers. |
 | `desktopExecutor?` | `DesktopExecutorConfig` | Cursor only: external computer-use and record-screen commands. |
-| `unsafeAllowNativeLocalExec?` | `boolean` | Cursor legacy boolean, equivalent to `nativeLocalExec: "on"` only when the newer field is unset. |
-| `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor local-exec policy. `off` is default; `codex-sandbox` currently fails closed like `off`. |
+| `nativeLocalExec?` | `"off" \| "on"` | Cursor local-exec policy. `off` is the default. |
 
 API-key providers may hold a literal key or an environment reference. OAuth providers use the
-credential store populated by `ocx login`; subscription-backed Claude Code launch behavior is
+credential store populated by `ccx login`; subscription-backed Claude Code launch behavior is
 configured under [`claudeCode.authMode`](/reference/configuration/server/#claude-code).
 
 ## Provider diagnostic outbound safety
 
 Dashboard connection tests and live model discovery use a bounded GET-only transport. Without an
-outbound proxy, opencodex resolves the hostname once and connects only to that validated address.
+outbound proxy, CodexCommander resolves the hostname once and connects only to that validated address.
 HTTPS retains the original Host, SNI, and certificate verification; provider config cannot disable
 certificate checks.
 
 When `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` applies, these operations keep Bun's native fetch.
 URL and literal-address checks still run, but the proxy chooses the final route, DNS answer, and peer,
-so opencodex cannot pin or verify that peer. This is an explicit security limitation.
+so CodexCommander cannot pin or verify that peer. This is an explicit security limitation.
 
 Private/local destinations require `allowPrivateNetwork: true` and, when an outbound proxy is active,
 a matching `NO_PROXY` entry. Loopback is added automatically; list each LAN host explicitly because
@@ -151,7 +145,7 @@ changes preserve and replay the conversation context, but provider-side prompt-c
 accounts is not guaranteed and the cache may need to warm again.
 
 On a **401/403**, App login clears that account's process-local affinity and requires reauthentication.
-On a **429**, opencodex honors `Retry-After`, starts the account cooldown, clears affinity, and may
+On a **429**, CodexCommander honors `Retry-After`, starts the account cooldown, clears affinity, and may
 rotate the request to another eligible Pool account. These failure transitions remain active with
 `autoSwitchThreshold: 0`; that setting disables only usage-based proactive switching.
 
@@ -189,7 +183,7 @@ as needing reauthentication. If all eligible accounts are cooling, clients recei
 
 :::caution[Experimental]
 Leave this disabled unless you understand Anthropic account policy risk. Prefer manual
-`ocx account use anthropic <id>` switching when unsure.
+`ccx account use anthropic <id>` switching when unsure.
 :::
 
 ### Managed record shapes
@@ -198,7 +192,7 @@ Leave this disabled unless you understand Anthropic account policy risk. Prefer 
 `codexAccounts[]` entries require `id`, `email`, and `isMain`, with optional `plan`,
 `chatgptAccountId`, and privacy-safe `logLabel`. These records are normally dashboard-managed.
 
-### `tokenGuardian` (`OcxTokenGuardianConfig`)
+### `tokenGuardian` (`CodexCommanderTokenGuardianConfig`)
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
@@ -227,7 +221,7 @@ wins over configured `baseUrl`. Four entry types keep the configured URL:
 Adapters can adjust the resolved URL afterward. Kiro, for example, follows the imported credential's
 API region for canonical `runtime.{region}.kiro.dev`. See [Adapters](/reference/adapters/).
 
-When routing discards `baseUrl`, opencodex logs the registry endpoint and only the configured origin;
+When routing discards `baseUrl`, CodexCommander logs the registry endpoint and only the configured origin;
 a configured path may itself contain a credential. Remove the unused URL or choose the provider entry
 matching the intended region. `alibaba-token-plan` is pinned to Beijing, while
 `alibaba-token-plan-intl` covers international endpoints.
@@ -256,7 +250,7 @@ so passthrough stays byte-for-byte identical.
 
 ## Cursor provider (`adapter: "cursor"`)
 
-The Cursor bridge is experimental. After `ocx login cursor`, add or edit `providers.cursor`.
+The Cursor bridge is experimental. After `ccx login cursor`, add or edit `providers.cursor`.
 Cursor Router's optimization ladder is exposed as separate Codex ids because the picker cannot render
 Cursor-specific model parameters:
 
@@ -276,9 +270,6 @@ Cursor server-driven local tools are disabled by default. Codex continues using 
 - `"off"` (default) rejects Cursor-native `read`, `write`, `delete`, `ls`, `grep`, `shell`, and
   `fetch` execution.
 - `"on"` opts into trusted-local execution and bypasses Codex approval/sandbox semantics.
-- `"codex-sandbox"` is retained for compatibility but fails closed like `"off"`; request prose is
-  not trustworthy sandbox attestation.
-
 ```json
 {
   "providers": {
@@ -294,9 +285,8 @@ Cursor server-driven local tools are disabled by default. Codex continues using 
 ```
 
 Set the field on `providers.cursor`, not at the top level. In the dashboard use **Providers → Cursor
-→ Edit JSON**, save, then restart. Legacy `unsafeAllowNativeLocalExec: true` equals
-`nativeLocalExec: "on"` only when `nativeLocalExec` is unset. MCP, screen recording, and computer use
-are controlled separately by `mcpServers` and `desktopExecutor`.
+→ Edit JSON**, save, then restart. MCP, screen recording, and computer use are controlled separately
+by `mcpServers` and `desktopExecutor`.
 
 Each `mcpServers.<name>` accepts either `command` (stdio) or `url` (Streamable HTTP). Stdio also
 accepts `args`, `env`, and `cwd`; HTTP accepts `headers`. Both support `enabled` (default true) and
@@ -342,7 +332,7 @@ eligible provider after the ordered list. `only` is always an allowlist.
 }
 ```
 
-Model keys are exact native OpenRouter ids, without the outer opencodex provider prefix. Selecting
+Model keys are exact native OpenRouter ids, without the outer CodexCommander provider prefix. Selecting
 `openrouter/anthropic-claude-sonnet-5` restores native `anthropic/claude-sonnet-5` before applying
 the model rule.
 

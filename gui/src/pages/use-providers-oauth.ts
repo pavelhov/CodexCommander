@@ -13,6 +13,7 @@ export function useProvidersOAuth({
   setStatus,
   setLoginInfo,
   setOauthStatus,
+  oauthStatusRevisionRef,
   notify,
   fetchConfig,
   fetchOauth,
@@ -28,6 +29,7 @@ export function useProvidersOAuth({
   setStatus: React.Dispatch<React.SetStateAction<string>>;
   setLoginInfo: React.Dispatch<React.SetStateAction<{ provider: string; url?: string; instructions?: string; deviceCode?: string } | null>>;
   setOauthStatus: React.Dispatch<React.SetStateAction<Record<string, OAuthStatus>>>;
+  oauthStatusRevisionRef: React.MutableRefObject<Map<string, number>>;
   notify: (msg: string, ok: boolean) => void;
   fetchConfig: () => Promise<void>;
   fetchOauth: () => Promise<void>;
@@ -37,6 +39,22 @@ export function useProvidersOAuth({
 }) {
   const oauthLoginGenerationRef = useRef<Map<string, number> | null>(null);
   if (oauthLoginGenerationRef.current === null) oauthLoginGenerationRef.current = new Map();
+
+  const bumpOauthStatusRevision = (provider: string) => {
+    oauthStatusRevisionRef.current.set(provider, (oauthStatusRevisionRef.current.get(provider) ?? 0) + 1);
+  };
+
+  const publishLoginError = (provider: string, message: string) => {
+    bumpOauthStatusRevision(provider);
+    setOauthStatus(prev => ({
+      ...prev,
+      [provider]: {
+        ...(prev[provider] ?? { loggedIn: false }),
+        error: message,
+      },
+    }));
+    notify(message, false);
+  };
 
   const cancelLoginOAuth = useCallback(async (provider: string) => {
     const gen = (oauthLoginGenerationRef.current!.get(provider) ?? 0) + 1;
@@ -64,6 +82,14 @@ export function useProvidersOAuth({
     setBusy(provider);
     setStatus("");
     setLoginInfo(null);
+    bumpOauthStatusRevision(provider);
+    setOauthStatus(prev => {
+      const current = prev[provider];
+      if (!current?.error) return prev;
+      const next = { ...current };
+      delete next.error;
+      return { ...prev, [provider]: next };
+    });
     try {
       const res = await fetch(`${apiBase}/api/oauth/login`, {
         method: "POST",
@@ -77,7 +103,8 @@ export function useProvidersOAuth({
       if (oauthLoginGenerationRef.current!.get(provider) !== generation || !aliveRef.current) return;
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
-        notify(data.error || t("prov.loginFailStart", { provider: oauthLabel(provider) }), false);
+        const message = data.error || t("prov.loginFailStart", { provider: oauthLabel(provider) });
+        publishLoginError(provider, message);
         return;
       }
       const data = await res.json() as { url?: string; instructions?: string; deviceCode?: string };
@@ -95,6 +122,7 @@ export function useProvidersOAuth({
           : null;
         if (!s) continue;
         if (s.error) {
+          bumpOauthStatusRevision(provider);
           setOauthStatus(prev => ({ ...prev, [provider]: s }));
           const cancelled = /cancel/i.test(s.error);
           notify(
@@ -111,6 +139,7 @@ export function useProvidersOAuth({
           ? ((s.accounts?.length ?? 0) > baselineCount || s.done === true)
           : (s.loggedIn || s.done === true);
         if (completed) {
+          bumpOauthStatusRevision(provider);
           setOauthStatus(prev => ({ ...prev, [provider]: s }));
           const target = reauthTargetId
             ? s.accounts?.find(a => a.id === reauthTargetId)
@@ -121,13 +150,13 @@ export function useProvidersOAuth({
             finished = true;
             break;
           }
-          if (target?.needsReauth) {
+          if (target?.health?.status === "reauth_required") {
             notify(t("prov.loginError", { provider: oauthLabel(provider), error: t("prov.reauthIdentityMismatch") }), false);
             setLoginInfo(null);
             finished = true;
             break;
           }
-          notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ocx sync" }), true);
+          notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ccx sync --restart-codex" }), true);
           setLoginInfo(null);
           fetchConfig();
           const knownProviders = Object.keys(accountSets);
@@ -145,12 +174,12 @@ export function useProvidersOAuth({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ provider }),
         }).catch(() => {});
-        notify(t("prov.loginTimeout", { provider: oauthLabel(provider) }), false);
+        publishLoginError(provider, t("prov.loginTimeout", { provider: oauthLabel(provider) }));
         setLoginInfo(null);
       }
     } catch {
       if (oauthLoginGenerationRef.current!.get(provider) === generation) {
-        notify(t("prov.loginRequestFail", { provider: oauthLabel(provider) }), false);
+        publishLoginError(provider, t("prov.loginRequestFail", { provider: oauthLabel(provider) }));
       }
     } finally {
       if (aliveRef.current && oauthLoginGenerationRef.current!.get(provider) === generation) setBusy(null);

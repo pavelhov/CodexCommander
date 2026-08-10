@@ -1,7 +1,7 @@
 /**
  * Anthropic Messages inbound (/v1/messages + /v1/messages/count_tokens) for Claude Code.
  *
- * Translate-and-replay (devlog/260711_claude_inbound/010): the Anthropic request is
+ * Translate-and-replay (implementation contract): the Anthropic request is
  * converted to a /v1/responses body and replayed through handleResponses on an
  * internal Request, so routing/OAuth/account-pool/failover/sidecars are inherited
  * unchanged. The Responses output (SSE or JSON) is converted back to Anthropic shape.
@@ -9,7 +9,8 @@
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { enforceAnthropicImageLimits, sniffImageDimensions } from "../adapters/anthropic-image-guard";
 import { normalizeAnthropicImages } from "../adapters/anthropic-image-normalize";
-import { AnthropicRequestError, anthropicToResponsesTranslation, extractOcxEffortDirective, extractOcxRouteDirective, resolveInboundModel, type ClaudeCacheKeySource } from "../claude/inbound";
+import { API_KEY_HEADER } from "../identity";
+import { AnthropicRequestError, anthropicToResponsesTranslation, extractCodexCommanderEffortDirective, extractCodexCommanderRouteDirective, resolveInboundModel, type ClaudeCacheKeySource } from "../claude/inbound";
 import { resolveDesktop3pAlias } from "../claude/desktop-3p";
 import { recordDesktopRequest } from "../claude/desktop-health";
 import { stripOneMillionMarker } from "../claude/context-windows";
@@ -28,7 +29,7 @@ import { estimateTokens } from "../lib/token-estimate";
 import { NoEligiblePolicyCandidateError, routeModel } from "../router";
 import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import { readJsonRequestBody } from "./request-decompress";
 import { addFinalRequestLog, httpStatusForTerminalStatus, recordFirstOutput, type RequestLogContext, type RequestLogEntry } from "./request-log";
 import { conversationIdFromClaudeMetadata } from "./request-log-conversation";
@@ -50,7 +51,7 @@ function isRec(v: unknown): v is Rec {
 }
 
 /** Resolve Claude-only sidecar overrides without mutating the shared server config. */
-export function buildClaudeReplayConfig(config: OcxConfig): OcxConfig {
+export function buildClaudeReplayConfig(config: CodexCommanderConfig): CodexCommanderConfig {
   return {
     ...config,
     webSearchSidecar: {
@@ -64,7 +65,7 @@ export function buildClaudeReplayConfig(config: OcxConfig): OcxConfig {
   };
 }
 
-function claudeInboundDisabled(config: OcxConfig): Response | null {
+function claudeInboundDisabled(config: CodexCommanderConfig): Response | null {
   if (config.claudeCode?.enabled === false) {
     return anthropicErrorResponse(403, "Claude inbound is disabled (GUI: Claude ON toggle / config.claudeCode.enabled)", "permission_error");
   }
@@ -86,12 +87,12 @@ async function readAnthropicBody(req: Request, budget: TranslatorBudget): Promis
 // Requests for genuine claude/anthropic models that no alias/modelMap claims are
 // forwarded VERBATIM to api.anthropic.com with the caller's credential and all
 // end-to-end headers, so betas/thinking signatures/billing identity stay native.
-// (Evidence: teamclaude --no-mitm + Vercel gateway docs, devlog 003/060.)
+// (Evidence: teamclaude --no-mitm + Vercel gateway docs, implementation contract)
 
 const PASSTHROUGH_STRIP_HEADERS = new Set([
   "connection", "keep-alive", "transfer-encoding", "upgrade", "te", "trailer",
   "proxy-authenticate", "proxy-authorization", "host", "content-length",
-  "accept-encoding", "x-opencodex-api-key", "origin",
+  "accept-encoding", API_KEY_HEADER, "origin",
 ]);
 
 function hasAnthropicNativeCredential(req: Request): boolean {
@@ -100,7 +101,7 @@ function hasAnthropicNativeCredential(req: Request): boolean {
   return bearer.startsWith("sk-ant-") || apiKey.startsWith("sk-ant-");
 }
 
-function wantsNativePassthrough(req: Request, config: OcxConfig, model: unknown): model is string {
+function wantsNativePassthrough(req: Request, config: CodexCommanderConfig, model: unknown): model is string {
   if (config.claudeCode?.nativePassthrough === false) return false;
   if (typeof model !== "string" || !/^(claude|anthropic)/i.test(model)) return false;
   if (!hasAnthropicNativeCredential(req)) return false;
@@ -114,14 +115,14 @@ function uuidFromHex(hex32: string): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
-function anthropicUsageToOcx(usage: Rec | undefined): { inputTokens: number; outputTokens: number; cachedInputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number } | undefined {
+function anthropicUsageToCodexCommander(usage: Rec | undefined): { inputTokens: number; outputTokens: number; cachedInputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number } | undefined {
   if (!usage) return undefined;
   const num = (v: unknown) => typeof v === "number" ? v : 0;
   const hasCache = usage.cache_read_input_tokens !== undefined || usage.cache_creation_input_tokens !== undefined;
   const read = num(usage.cache_read_input_tokens);
   const write = num(usage.cache_creation_input_tokens);
   // Anthropic input_tokens excludes cache read/write; normalize to the canonical
-  // inclusive convention (types.ts OcxUsage / devlog 070). cached = READS only.
+  // inclusive convention (types.ts CodexCommanderUsage / implementation contract). cached = READS only.
   return {
     inputTokens: num(usage.input_tokens) + read + write,
     outputTokens: num(usage.output_tokens),
@@ -133,7 +134,7 @@ function anthropicUsageToOcx(usage: Rec | undefined): { inputTokens: number; out
   };
 }
 
-/** Body-occupancy guard for the native passthrough (devlog 260716_passthrough_followups/010). */
+/** Body-occupancy guard for the native passthrough (implementation contract). */
 export interface PassthroughBodyGuard {
   /** Idle window in ms — raw upstream-byte inactivity while a read is pending. 0 disables. */
   stallMs: number;
@@ -205,7 +206,7 @@ export function tapAnthropicSseForLog(
   let tapController: ReadableStreamDefaultController<Uint8Array> | undefined;
 
   const recordUsage = () => {
-    logCtx.usage = anthropicUsageToOcx(Object.keys(usageAcc).length > 0 ? usageAcc : undefined);
+    logCtx.usage = anthropicUsageToCodexCommander(Object.keys(usageAcc).length > 0 ? usageAcc : undefined);
   };
   const failBody = (closeReason: "body_stall" | "body_overflow", errType: string, message: string) => {
     if (settled) return;
@@ -311,7 +312,7 @@ export function tapAnthropicSseForLog(
 
 async function anthropicNativePassthrough(
   req: Request,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   logCtx: RequestLogContext,
   logIds: { requestId: string; start: number; turnAdmissionLease?: ActiveTurnLease } | undefined,
   body: Rec,
@@ -332,7 +333,7 @@ async function anthropicNativePassthrough(
   const base = (config.claudeCode?.anthropicBaseUrl ?? "https://api.anthropic.com").replace(/\/$/, "");
   const search = new URL(req.url).search;
   // Native passthrough bypasses the anthropic adapter, so the generous image pipeline
-  // (devlog/260714_image_normalization_pipeline/040) must run here: tier-normalize then
+  // (implementation contract) must run here: tier-normalize then
   // guard the already-Anthropic-wire messages before serialization. Applies to
   // count_tokens too — counts must match what the real send will contain, and the 32MB
   // body cap applies to it equally. Non-message bodies pass through untouched.
@@ -418,7 +419,7 @@ async function anthropicNativePassthrough(
   if (upstream.ok) {
     try {
       const parsed = JSON.parse(text) as { usage?: Rec; content?: unknown[] };
-      if (isRec(parsed?.usage)) logCtx.usage = anthropicUsageToOcx(parsed.usage);
+      if (isRec(parsed?.usage)) logCtx.usage = anthropicUsageToCodexCommander(parsed.usage);
       if (Array.isArray(parsed?.content) && parsed.content.length > 0) {
         logIds?.turnAdmissionLease?.markAgentActivityFirstOutput();
       }
@@ -436,11 +437,11 @@ const DEFAULT_BODY_STALL_SEC = 90;
 const DEFAULT_BODY_MAX_BYTES = 64 * 1024 * 1024;
 
 /**
- * Normalize the claudeCode body-guard config (devlog 260716_passthrough_followups/010).
+ * Normalize the claudeCode body-guard config (implementation contract).
  * Policy: exactly 0 disables; finite positive values are honored (stall clamped to
  * min 1s); negative/non-finite/absent values fall back to the defaults.
  */
-export function resolvePassthroughBodyGuard(config: OcxConfig, reqSignal?: AbortSignal): PassthroughBodyGuard {
+export function resolvePassthroughBodyGuard(config: CodexCommanderConfig, reqSignal?: AbortSignal): PassthroughBodyGuard {
   const rawSec = config.claudeCode?.bodyStallSec;
   const stallSec = rawSec === 0
     ? 0
@@ -564,7 +565,7 @@ export async function fetchWithHeaderDeadline(
 
 export async function handleClaudeMessages(
   req: Request,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   logCtx: RequestLogContext,
   logIds?: { requestId: string; start: number; turnAdmissionLease?: ActiveTurnLease },
 ): Promise<Response> {
@@ -582,7 +583,7 @@ export async function handleClaudeMessages(
 
 async function handleClaudeMessagesWithBudget(
   req: Request,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   logCtx: RequestLogContext,
   translatorBudget: TranslatorBudget,
   logIds?: { requestId: string; start: number; turnAdmissionLease?: ActiveTurnLease },
@@ -597,28 +598,28 @@ async function handleClaudeMessagesWithBudget(
   let anthropicBody: unknown;
   let internalBody: Rec;
   let cacheKeySource: ClaudeCacheKeySource = null;
-  let effortOverride: ReturnType<typeof extractOcxEffortDirective> = null;
+  let effortOverride: ReturnType<typeof extractCodexCommanderEffortDirective> = null;
   try {
     anthropicBody = await readAnthropicBody(req, translatorBudget);
-    // Defensive [1m] strip (devlog 138): clients normally remove the context-variant
+    // Defensive [1m] strip (implementation contract): clients normally remove the context-variant
     // marker themselves; the 1M signal we act on is the anthropic-beta header.
     // Case-insensitive — the CLI matches /\[1m\]/i (audit 021 #7).
     if (isRec(anthropicBody) && typeof anthropicBody.model === "string") {
       anthropicBody.model = stripOneMillionMarker(anthropicBody.model);
     }
-    // ocx-route override (devlog 072): injected agent bodies pin their model via a
+    // ccx-route override (implementation contract): injected agent bodies pin their model via a
     // system-prompt directive because 2.1.207 ignores custom ids in agent
     // frontmatter. Must run BEFORE the native-passthrough branch — the CLI sends
     // these subagent turns under a fallback claude model id.
     if (isRec(anthropicBody)) {
-      const routeOverride = extractOcxRouteDirective(anthropicBody);
+      const routeOverride = extractCodexCommanderRouteDirective(anthropicBody);
       if (routeOverride && typeof anthropicBody.model === "string") {
         anthropicBody.model = stripOneMillionMarker(routeOverride);
-        effortOverride = extractOcxEffortDirective(anthropicBody);
+        effortOverride = extractCodexCommanderEffortDirective(anthropicBody);
       }
     }
     // Debug capture (opt-in allowlist scalars) BEFORE the passthrough branch so
-    // native, routed, and disabled-alias paths are all observable (devlog 130 B1).
+    // native, routed, and disabled-alias paths are all observable (implementation contract B1).
     captureClaudeInbound(
       "messages",
       anthropicBody,
@@ -694,7 +695,7 @@ async function handleClaudeMessagesWithBudget(
     if (route.provider.adapter === "cursor" || route.provider.adapter === "kiro") {
       logCtx.usageLogInputTokens = estimateClaudeRequestTokens(anthropicBody as Rec, requestedModel);
     }
-    // Effort safety valve (devlog 136 B6, audit 139 R2#2): opus-shaped aliases make
+    // Effort safety valve (implementation contract B6, audit 139 R2#2): opus-shaped aliases make
     // every routed model look like a reasoning model to Claude clients, so a forced
     // effort (CLAUDE_CODE_ALWAYS_ENABLE_EFFORT) would leak reasoning params to routes
     // that affirmatively expose NO effort control. Strip only on a definitive [] from
@@ -715,7 +716,7 @@ async function handleClaudeMessagesWithBudget(
 
   const headers = new Headers({ "content-type": "application/json" });
   for (const name of FORWARD_HEADERS) {
-    // The caller's bearer is the proxy admission token (ocx claude placeholder), never a
+    // The caller's bearer is the proxy admission token (ccx Claude placeholder), never a
     // ChatGPT credential — forwarding it upstream turns into {"detail":"Unauthorized"}.
     if (name === "authorization") continue;
     const value = req.headers.get(name);
@@ -735,7 +736,7 @@ async function handleClaudeMessagesWithBudget(
   }
   if (nativeRoute) {
     // ChatGPT-backend prompt-cache affinity rides the session_id HEADER (codex
-    // clients always send their session uuid; devlog 090 follow-up: body-level
+    // clients always send their session uuid; implementation contract follow-up: body-level
     // prompt_cache_key alone still yielded cached_tokens:0). Claude Code never sends
     // the header, so synthesize a stable per-session uuid from the same cache key —
     // but ONLY for a real per-session key (metadata.user_id). The system-hash fallback
@@ -932,7 +933,7 @@ function estimateBase64AttachmentTokens(data: string): number {
  * tool_result.content) are counted as a bounded per-attachment estimate instead of raw
  * characters: one 2MB screenshot is ~2.7M base64 chars, which the plain chars/token
  * divide reports as hundreds of thousands of tokens versus a real cost around 1.6k.
- * That breaks the >2x drift bound the estimator is held to (devlog 260711_claude_inbound
+ * That breaks the >2x drift bound the estimator is held to (implementation contract
  * 040 §3). Text and url sources are left in place and counted as characters, as is
  * anything outside protocol content positions (tool_use.input, tool schemas).
  */
@@ -978,7 +979,7 @@ export function estimateClaudeRequestTokens(
   return Math.max(1, estimateTokens(parts.join("\n"), modelId) + attachmentTokens);
 }
 
-export async function handleClaudeCountTokens(req: Request, config: OcxConfig): Promise<Response> {
+export async function handleClaudeCountTokens(req: Request, config: CodexCommanderConfig): Promise<Response> {
   const disabled = claudeInboundDisabled(config);
   if (disabled) return disabled;
 
@@ -1004,8 +1005,8 @@ export async function handleClaudeCountTokens(req: Request, config: OcxConfig): 
     model = stripped;
     raw.model = model;
   }
-  // ocx-route override (devlog 072): keep count_tokens consistent with messages.
-  const countRoute = extractOcxRouteDirective(raw);
+  // ccx-route override (implementation contract): keep count_tokens consistent with messages.
+  const countRoute = extractCodexCommanderRouteDirective(raw);
   if (countRoute) {
     model = stripOneMillionMarker(countRoute);
     raw.model = model;

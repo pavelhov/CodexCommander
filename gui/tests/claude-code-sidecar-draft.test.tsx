@@ -40,7 +40,6 @@ const BASE_STATE: ClaudeCodeState = {
   autoConnectSupported: false,
   systemEnv: false,
   fastMode: null,
-  maxContextTokens: null,
   autoContext: true,
   autoCompactWindow: null,
   injectAgents: true,

@@ -17,7 +17,7 @@ import { getProviderRegistryEntry } from "../src/providers/registry";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../src/adapters/openai-responses";
 import { resolveWireProtocolOverride } from "../src/server/adapter-resolve";
 import { handleResponses } from "../src/server/responses/core";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
@@ -25,7 +25,7 @@ const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResp
 
 const MODEL = "deepseek-v4-flash";
 
-function deepseekProvider(): OcxProviderConfig {
+function deepseekProvider(): CodexCommanderProviderConfig {
   return { ...providerConfigSeed(getProviderRegistryEntry("deepseek")!), apiKey: "sk-test" };
 }
 
@@ -95,7 +95,7 @@ describe("the inbound scope survives the handleResponses replay", () => {
     inboundTransport?: "websocket",
   ): Promise<{ url: string; body: Record<string, unknown> }> {
     const requests = captureUpstreamRequests();
-    const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
+    const config = { providers: { deepseek: deepseekProvider() } } as unknown as CodexCommanderConfig;
     await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -139,7 +139,7 @@ describe("the inbound scope survives the handleResponses replay", () => {
       status: "completed",
       output: [],
     })) as typeof fetch;
-    const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
+    const config = { providers: { deepseek: deepseekProvider() } } as unknown as CodexCommanderConfig;
     const response = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -187,7 +187,7 @@ describe("the inbound scope survives the handleResponses replay", () => {
       });
     }) as typeof fetch;
 
-    const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
+    const config = { providers: { deepseek: deepseekProvider() } } as unknown as CodexCommanderConfig;
     const deadline = AbortSignal.timeout(5_000);
     const response = await handleResponses(
       new Request("http://localhost/v1/responses", {
@@ -222,11 +222,11 @@ describe("the inbound scope survives the handleResponses replay", () => {
    * get canonical ids while streaming and placeholder ids the moment the policy
    * switched the upstream to bounded JSON.
    */
-  function repairingProvider(): OcxProviderConfig {
+  function repairingProvider(): CodexCommanderProviderConfig {
     return {
       ...deepseekProvider(),
       responsesItemIdRepair: { message: ["msg_placeholder"], reasoning: ["rs_placeholder"] },
-    } as OcxProviderConfig;
+    } as CodexCommanderProviderConfig;
   }
 
   function completedWithPlaceholderIds(): Response {
@@ -249,7 +249,7 @@ describe("the inbound scope survives the handleResponses replay", () => {
 
   test("the synthesized terminal SSE carries repaired item ids, not the upstream placeholders", async () => {
     globalThis.fetch = (async () => completedWithPlaceholderIds()) as typeof fetch;
-    const config = { providers: { deepseek: repairingProvider() } } as unknown as OcxConfig;
+    const config = { providers: { deepseek: repairingProvider() } } as unknown as CodexCommanderConfig;
     const response = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -264,13 +264,13 @@ describe("the inbound scope survives the handleResponses replay", () => {
     const text = await response.text();
     expect(text).not.toContain("msg_placeholder");
     expect(text).not.toContain("rs_placeholder");
-    expect(text).toMatch(/"id":"msg_ocx_[0-9a-f]{8}/);
-    expect(text).toMatch(/"id":"rs_ocx_[0-9a-f]{8}/);
+    expect(text).toMatch(/"id":"msg_ccx_[0-9a-f]{8}/);
+    expect(text).toMatch(/"id":"rs_ccx_[0-9a-f]{8}/);
   });
 
   test("the WebSocket bounded-JSON reframe carries the same repaired ids", async () => {
     globalThis.fetch = (async () => completedWithPlaceholderIds()) as typeof fetch;
-    const config = { providers: { deepseek: repairingProvider() } } as unknown as OcxConfig;
+    const config = { providers: { deepseek: repairingProvider() } } as unknown as CodexCommanderConfig;
     const response = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -284,12 +284,12 @@ describe("the inbound scope survives the handleResponses replay", () => {
     const text = await response.text();
     expect(text).not.toContain("msg_placeholder");
     expect(text).not.toContain("rs_placeholder");
-    expect(text).toMatch(/"id":"msg_ocx_[0-9a-f]{8}/);
+    expect(text).toMatch(/"id":"msg_ccx_[0-9a-f]{8}/);
   });
 
   test("a provider without id repair keeps the bounded-JSON body byte-identical", async () => {
     globalThis.fetch = (async () => completedWithPlaceholderIds()) as typeof fetch;
-    const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
+    const config = { providers: { deepseek: deepseekProvider() } } as unknown as CodexCommanderConfig;
     const response = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -313,7 +313,7 @@ describe("the inbound scope survives the handleResponses replay", () => {
       status: 200,
       headers: { "content-type": "application/json" },
     })) as typeof fetch;
-    const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
+    const config = { providers: { deepseek: deepseekProvider() } } as unknown as CodexCommanderConfig;
     const response = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -339,7 +339,7 @@ describe("the inbound scope survives the handleResponses replay", () => {
  * previous_response_id into a full input replay before the adapter runs.
  */
 describe("stateless Responses upstreams get no stateful parameters", () => {
-  function buildBody(provider: OcxProviderConfig, rawBody: Record<string, unknown>): Record<string, unknown> {
+  function buildBody(provider: CodexCommanderProviderConfig, rawBody: Record<string, unknown>): Record<string, unknown> {
     const built = createResponsesPassthroughAdapter(provider).buildRequest({
       modelId: MODEL,
       context: { messages: [] },

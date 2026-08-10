@@ -4,35 +4,35 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { invalidateCodexModelsCache, syncCatalogModels } from "../src/codex/catalog";
 import { refreshCodexModelCatalog } from "../src/codex/refresh";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const config = {
   port: 10100,
   defaultProvider: "openai",
   providers: {},
-} as OcxConfig;
+} as CodexCommanderConfig;
 
 const tempHomes: string[] = [];
 
-function installTempHomes(): { codexHome: string; opencodexHome: string; restore(): void } {
+function installTempHomes(): { codexHome: string; codexCommanderHome: string; restore(): void } {
   const previousCodexHome = process.env.CODEX_HOME;
-  const previousOpenCodexHome = process.env.OPENCODEX_HOME;
-  const codexHome = mkdtempSync(join(tmpdir(), "ocx-refresh-codex-"));
-  const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-refresh-ocx-"));
-  tempHomes.push(codexHome, opencodexHome);
+  const previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+  const codexHome = mkdtempSync(join(tmpdir(), "ccx-refresh-codex-"));
+  const codexCommanderHome = mkdtempSync(join(tmpdir(), "ccx-refresh-ccx-"));
+  tempHomes.push(codexHome, codexCommanderHome);
   process.env.CODEX_HOME = codexHome;
-  process.env.OPENCODEX_HOME = opencodexHome;
+  process.env.CODEXCOMMANDER_HOME = codexCommanderHome;
 
   return {
     codexHome,
-    opencodexHome,
+    codexCommanderHome,
     restore() {
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
-      if (previousOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousOpenCodexHome;
+      if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
       rmSync(codexHome, { recursive: true, force: true });
-      rmSync(opencodexHome, { recursive: true, force: true });
+      rmSync(codexCommanderHome, { recursive: true, force: true });
     },
   };
 }
@@ -63,7 +63,7 @@ describe("Codex catalog refresh", () => {
     const result = await refreshCodexModelCatalog(config, {
       syncCatalogModels: async () => ({
         added: 0,
-        path: "/tmp/opencodex-catalog.json",
+        path: "/tmp/codexcommander-catalog.json",
         catalogWritten: true,
         comboOmissions: [],
       }),
@@ -76,7 +76,7 @@ describe("Codex catalog refresh", () => {
 
     expect(result).toEqual({
       added: 0,
-      path: "/tmp/opencodex-catalog.json",
+      path: "/tmp/codexcommander-catalog.json",
       catalogExists: true,
       catalogWritten: true,
       cacheSynced: true,
@@ -112,7 +112,7 @@ describe("Codex catalog refresh", () => {
     const result = await refreshCodexModelCatalog(config, {
       syncCatalogModels: async () => ({
         added: 0,
-        path: "/tmp/opencodex-catalog.json",
+        path: "/tmp/codexcommander-catalog.json",
         catalogWritten: true,
         comboOmissions: [],
       }),
@@ -173,8 +173,8 @@ describe("Codex catalog refresh", () => {
   test("invalidateCodexModelsCache reports real cache write success and failure cases", () => {
     const success = installTempHomes();
     try {
-      writeFileSync(join(success.codexHome, "config.toml"), 'model_catalog_json = "opencodex-catalog.json"\n', "utf8");
-      writeFileSync(join(success.codexHome, "opencodex-catalog.json"), nativeCatalogFixture("gpt-5.6-sol"), "utf8");
+      writeFileSync(join(success.codexHome, "config.toml"), 'model_catalog_json = "codexcommander-catalog.json"\n', "utf8");
+      writeFileSync(join(success.codexHome, "codexcommander-catalog.json"), nativeCatalogFixture("gpt-5.6-sol"), "utf8");
 
       expect(invalidateCodexModelsCache()).toBe(true);
       const cache = JSON.parse(readFileSync(join(success.codexHome, "models_cache.json"), "utf8"));
@@ -197,8 +197,8 @@ describe("Codex catalog refresh", () => {
 
     const malformedCatalog = installTempHomes();
     try {
-      writeFileSync(join(malformedCatalog.codexHome, "config.toml"), 'model_catalog_json = "opencodex-catalog.json"\n', "utf8");
-      writeFileSync(join(malformedCatalog.codexHome, "opencodex-catalog.json"), "{not-json", "utf8");
+      writeFileSync(join(malformedCatalog.codexHome, "config.toml"), 'model_catalog_json = "codexcommander-catalog.json"\n', "utf8");
+      writeFileSync(join(malformedCatalog.codexHome, "codexcommander-catalog.json"), "{not-json", "utf8");
 
       expect(invalidateCodexModelsCache()).toBe(false);
       expect(existsSync(join(malformedCatalog.codexHome, "models_cache.json"))).toBe(false);
@@ -208,8 +208,8 @@ describe("Codex catalog refresh", () => {
 
     const unwritableCache = installTempHomes();
     try {
-      writeFileSync(join(unwritableCache.codexHome, "config.toml"), 'model_catalog_json = "opencodex-catalog.json"\n', "utf8");
-      writeFileSync(join(unwritableCache.codexHome, "opencodex-catalog.json"), nativeCatalogFixture(), "utf8");
+      writeFileSync(join(unwritableCache.codexHome, "config.toml"), 'model_catalog_json = "codexcommander-catalog.json"\n', "utf8");
+      writeFileSync(join(unwritableCache.codexHome, "codexcommander-catalog.json"), nativeCatalogFixture(), "utf8");
       mkdirSync(join(unwritableCache.codexHome, "models_cache.json"));
 
       expect(invalidateCodexModelsCache()).toBe(false);

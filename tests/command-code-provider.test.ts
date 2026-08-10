@@ -4,10 +4,10 @@ import { loginCommandCode, parseCommandCodeCallback, shouldImportLocalCommandCod
 import { buildModelsRequest, OAUTH_PROVIDERS } from "../src/oauth";
 import { commandCodeReasoningEfforts, resetCommandCodeReasoningEffortsForTest } from "../src/providers/command-code-efforts";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
-import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
 
-const provider: OcxProviderConfig = {
+const provider: CodexCommanderProviderConfig = {
   adapter: "command-code",
   baseUrl: "https://api.commandcode.ai",
   authMode: "oauth",
@@ -15,7 +15,7 @@ const provider: OcxProviderConfig = {
   defaultMaxOutputTokens: 64_000,
 };
 
-function parsed(modelId = "deepseek/deepseek-v4-flash"): OcxParsedRequest {
+function parsed(modelId = "deepseek/deepseek-v4-flash"): CodexCommanderParsedRequest {
   return {
     modelId,
     stream: true,
@@ -245,7 +245,7 @@ describe("Command Code provider", () => {
         ? new Response(JSON.stringify({ error: "unsupported reasoning_effort" }), { status: 400 })
         : new Response("{}", { status: 200 });
     }) as typeof globalThis.fetch;
-    const adapter = createCommandCodeAdapter({ ...provider, fetch } as OcxProviderConfig);
+    const adapter = createCommandCodeAdapter({ ...provider, fetch } as CodexCommanderProviderConfig);
     const request = await adapter.buildRequest({ ...parsed(), options: { reasoning: "max" } });
     const response = await adapter.fetchResponse!(request);
     expect(response.ok).toBe(true);

@@ -3,7 +3,6 @@ import {
   CODEX_ACCOUNT_LOG_LABEL_RE,
   codexAccountLogLabel,
   createCodexAccountLogLabel,
-  fallbackCodexAccountLogLabel,
   withCodexAccountLogLabel,
 } from "../src/codex/account-label";
 
@@ -21,14 +20,6 @@ describe("codex account privacy labels", () => {
     }
   });
 
-  test("preserves an existing valid label", () => {
-    const labelled = withCodexAccountLogLabel(
-      { id: "pool-a", email: "pool-a@example.test", isMain: false, logLabel: "pabc123" },
-      [],
-    );
-    expect(labelled.logLabel).toBe("pabc123");
-  });
-
   test("adds a label to new account records", () => {
     const labelled = withCodexAccountLogLabel(
       { id: "pool-a", email: "pool-a@example.test", isMain: false },
@@ -37,14 +28,7 @@ describe("codex account privacy labels", () => {
     expect(labelled.logLabel).toMatch(CODEX_ACCOUNT_LOG_LABEL_RE);
   });
 
-  test("fallback label is stable and does not include the raw account id", () => {
-    const accountId = "raw-local-account-id";
-    const first = fallbackCodexAccountLogLabel(accountId);
-    const second = fallbackCodexAccountLogLabel(accountId);
-
-    expect(first).toBe(second);
-    expect(first).toMatch(CODEX_ACCOUNT_LOG_LABEL_RE);
-    expect(first).not.toContain(accountId);
-    expect(codexAccountLogLabel({ id: accountId, email: "raw@example.test", isMain: false })).toBe(first);
+  test("rejects invalid labels without synthesizing replacements", () => {
+    expect(codexAccountLogLabel({ id: "invalid-label", email: "invalid@example.test", logLabel: "invalid", isMain: false })).toBeNull();
   });
 });

@@ -3,21 +3,21 @@ title: CLI Agents, Routing, and Integrations
 description: Multi-agent, combo, observability, access, integration, system, and config commands.
 ---
 
-These commands control agent policy and routing, inspect the live proxy, and connect supported clients to opencodex.
+These commands control agent policy and routing, inspect the live proxy, and connect supported clients to CodexCommander.
 
 ## Agent policy
 
-### `ocx agent <status|injection|effort|subagents|fallback|sidecar> ...`
+### `ccx agent <status|injection|effort|subagents|fallback|sidecar> ...`
 
 Manage the headless multi-agent roster, effort caps, prompt injection, fallback, and sidecar settings.
 Use `status` for the current policy. See [Sub-agent surfaces](/guides/sub-agent-surface/) for how
 surface modes, delegation, effort, and fallback behavior fit together.
 
 ```bash
-ocx agent subagents set ark/model-a,openai/gpt-5.5
+ccx agent subagents set ark/model-a,openai/gpt-5.5
 ```
 
-### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
+### `ccx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
 
 Manage the Codex `multi_agent_v2` feature flag and the three-state multi-agent surface mode.
 
@@ -32,126 +32,125 @@ Manage the Codex `multi_agent_v2` feature flag and the three-state multi-agent s
 | `threads <n>` | Set the active v1/v2 thread limit to an integer of at least 1. |
 
 ```bash
-ocx v2 status
-ocx v2 mode v1
-ocx v2 mode default
-ocx v2 on
-ocx v2 threads 16
+ccx v2 status
+ccx v2 mode v1
+ccx v2 mode default
+ccx v2 on
+ccx v2 threads 16
 ```
 
-The `mode` subcommand writes `multiAgentMode` to the opencodex config and resyncs the Codex catalog.
+The `mode` subcommand writes `multiAgentMode` to the CodexCommander config and resyncs the Codex catalog.
 Mode and flag transitions move the current numeric thread limit between the valid v1/v2 Codex keys;
 a failed transition restores the original `config.toml`. Changes apply to new Codex sessions, while
 running sessions keep their pinned surface.
 
 ## Combo routing
 
-### `ocx combo <list|show|set|remove> ...` · `ocx route combo ...`
+### `ccx combo <list|show|set|remove> ...` · `ccx route combo ...`
 
-Manage combo failover and round-robin virtual models. `ocx route combo` is the hierarchical alias;
+Manage combo failover and round-robin virtual models. `ccx route combo` is the hierarchical alias;
 combo is currently the supported routing resource. Targets use
 `provider/model[:weight],provider/model[:weight]`.
 
 ```bash
-ocx combo list
-ocx route combo set reliable --targets ark/model-a:2,openai/gpt-5.5
+ccx combo list
+ccx route combo set reliable --targets ark/model-a:2,openai/gpt-5.5
 ```
 
 See [Combos](/guides/combos/) for routing behavior and configuration guidance.
 
 ## Observability and debug
 
-### `ocx observe <logs|usage|storage|memory|debug|claude-inbound|injection> ...`
+### `ccx observe <logs|usage|storage|memory|debug|claude-inbound|injection> ...`
 
 Inspect proxy requests, usage, storage, memory, and debug data. The direct aliases are:
 
 | Alias | Equivalent resource |
 | --- | --- |
-| `ocx logs [filters] [--follow] [--json|--jsonl]` | `ocx observe logs` |
-| `ocx usage [--range <7d|30d|all>] [--surface <all|codex|claude|grok>] [--json]` | `ocx observe usage` |
-| `ocx storage [--json]` | `ocx observe storage` |
-| `ocx memory [--json]` | `ocx observe memory` |
+| `ccx logs [filters] [--follow] [--json|--jsonl]` | `ccx observe logs` |
+| `ccx usage [--range <7d|30d|all>] [--surface <all|codex|claude|grok>] [--json]` | `ccx observe usage` |
+| `ccx storage [--json]` | `ccx observe storage` |
+| `ccx memory [--json]` | `ccx observe memory` |
 
 ```bash
-ocx observe usage --range 30d --json
+ccx observe usage --range 30d --json
 ```
 
-### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
+### `ccx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 
 Read or change runtime debug overrides through the running proxy's management API.
 
 ```bash
-ocx debug provider on|off|status|reset
-ocx debug provider logs [-f|--follow]
-ocx debug usage on|off|status|reset
-ocx debug usage logs [-f|--follow]
+ccx debug provider on|off|status|reset
+ccx debug provider logs [-f|--follow]
+ccx debug usage on|off|status|reset
+ccx debug usage logs [-f|--follow]
 ```
 
-With no scope, `ocx debug` prints usage and, when the proxy is stopped, the next-start environment
-defaults. Provider debug defaults from `OCX_DEBUG=1` (legacy `OCX_DEBUG_FRAMES=1` also works); usage
-debug defaults from `OPENCODEX_USAGE_DEBUG=1`.
+With no scope, `ccx debug` prints usage and, when the proxy is stopped, the next-start environment
+defaults. Provider debug defaults from `CCX_DEBUG=1`; usage
+debug defaults from `CODEXCOMMANDER_USAGE_DEBUG=1`.
 
 ## API access
 
-### `ocx access <key|endpoints|models|test> ...`
+### `ccx access <key|endpoints|models|test> ...`
 
-Manage OpenCodex admission API keys and inspect external endpoints and models. `ocx api-key
-<list|create|remove> ...` is an alias of `ocx access key`.
+Manage CodexCommander admission API keys and inspect external endpoints and models. `ccx api-key
+<list|create|remove> ...` is an alias of `ccx access key`.
 
 ```bash
-ocx access key create deployment
+ccx access key create deployment
 ```
 
 ## Client integrations
 
-### `ocx integration <claude|grok> ...`
+### `ccx integration <claude|grok> ...`
 
 Manage supported Claude and Grok integrations. The direct command families below expose their
 client-specific controls.
 
-### `ocx claude [claude args...]`
+### `ccx claude [claude args...]`
 
 Ensure the proxy is running, then launch Claude Code with `ANTHROPIC_BASE_URL`,
-`ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, and model slots from
-`config.claudeCode`. Routed models appear in the native `/model` picker through stable slot aliases
+`ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, and the current auth/helper
+settings from `config.claudeCode`. Routed models appear in the native `/model` picker through stable aliases
 with Claude Code 2.1.129 or newer. On older versions, select with `ANTHROPIC_MODEL` or `/model <id>`.
 User-exported `ANTHROPIC_*` variables always take precedence.
 
 Claude Desktop profile commands are:
 
 ```text
-ocx claude desktop [apply]                         Save and apply the four-family profile
-ocx claude desktop show [--json]                   Show routes, families, and defaults
-ocx claude desktop move <route> <family> [--default]
-ocx claude desktop default <family> <route|none>
-ocx claude desktop export <path|->                 Export versioned JSON (`-` = stdout)
-ocx claude desktop import <path> [--apply]         Validate and import JSON
+ccx claude desktop apply                           Save and apply the four-family profile
+ccx claude desktop show [--json]                   Show routes, families, and defaults
+ccx claude desktop move <route> <family> [--default]
+ccx claude desktop default <family> <route|none>
+ccx claude desktop export <path|->                 Export versioned JSON (`-` = stdout)
+ccx claude desktop import <path> [--apply]         Validate and import JSON
 ```
 
 The families are `opus`, `fable`, `sonnet`, and `haiku`; new routes start in `opus`. `none` is valid
-only when that family is empty. Legacy apply flags `--static`, `--hybrid`, and `--discovery-only`
-remain supported. Use `ocx claude config <status|set> ...` for Claude Code settings.
+only when that family is empty. Use `ccx claude config <status|set> ...` for Claude Code settings.
 
-### `ocx opencode [opencode args...]`
+### `ccx opencode [opencode args...]`
 
-Ensure the proxy is running, then launch opencode with a generated `provider.opencodex` block in
+Ensure the proxy is running, then launch opencode with a generated `provider.codexcommander` block in
 OpenCode's inline runtime layer (`OPENCODE_CONFIG_CONTENT`). Existing inline config is preserved and
-only `provider.opencodex` is replaced for this launch. Global or project `opencode.json` files may be
+only `provider.codexcommander` is replaced for this launch. Global or project `opencode.json` files may be
 read to warn about an existing override, but on-disk files are never modified. Routed models appear
-as `opencodex/<provider>/<model>`. This launcher leaves later plain `opencode` launches unchanged;
-the separate opt-in dashboard integration is the only path that persists `provider.opencodex`.
+as `codexcommander/<provider>/<model>`. This launcher leaves later plain `opencode` launches unchanged;
+the separate opt-in dashboard integration is the only path that persists `provider.codexcommander`.
 
-### `ocx grok <status|exclude|include|set|clear|apply> ...`
+### `ccx grok <status|exclude|include|set|clear|apply> ...`
 
 Manage and apply the Grok Build model fence.
 
 ## Client config export
 
-### `ocx export --client <opencode|pi>`
+### `ccx export --client <opencode|pi>`
 
 Print a client config wired to the running proxy. opencode and [Pi](/guides/pi/) read providers
 from their own JSON config rather than environment variables, so this command serializes the
-`opencodex` provider block — base URL, model list, and the client's env reference — for you to
+`codexcommander` provider block — base URL, model list, and the client's env reference — for you to
 merge into that file.
 
 The proxy must be running; the command resolves its live port, reads `/api/models`, and emits only
@@ -165,9 +164,9 @@ models Codex can currently see.
 | `--force` | Allow `--out` to replace an existing file. |
 
 ```bash
-ocx export --client opencode                     # config plus destination, merge warning, and counts
-ocx export --client pi --json > pi-models.json   # byte-exact JSON for a pipe or a diff
-ocx export --client opencode --out ~/opencodex-opencode.json
+ccx export --client opencode                     # config plus destination, merge warning, and counts
+ccx export --client pi --json > pi-models.json   # byte-exact JSON for a pipe or a diff
+ccx export --client opencode --out ~/codexcommander-opencode.json
 ```
 
 Without `--json` the JSON leads, then the canonical destination path, the merge warning, the env
@@ -176,14 +175,14 @@ defaults for those).
 
 | Client | Canonical destination | Download filename | Env var |
 | --- | --- | --- | --- |
-| `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` wins when set) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
-| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | `OPENCODEX_API_KEY` |
+| `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` wins when set) | `opencode.json` | `CODEXCOMMANDER_OPENCODE_API_KEY` |
+| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | `CODEXCOMMANDER_API_KEY` |
 
 The two env var names are different, and each client only interpolates its own. opencode reads
-`{env:OPENCODEX_OPENCODE_API_KEY}`; Pi reads `$OPENCODEX_API_KEY`.
+`{env:CODEXCOMMANDER_OPENCODE_API_KEY}`; Pi reads `$CODEXCOMMANDER_API_KEY`.
 
 :::caution[Merge, never replace]
-`ocx export` never writes your real client config. The destination is printed for you to merge by
+`ccx export` never writes your real client config. The destination is printed for you to merge by
 hand, and `--out` refuses to overwrite an existing file without `--force`, because replacing a
 config destroys the other providers, agents, and MCP entries already in it.
 :::
@@ -200,15 +199,15 @@ the CLI, the API, and the GUI use the same bytes.
 
 ## Runtime and configuration
 
-### `ocx system <status|settings|startup|diagnostics|sync|update> ...`
+### `ccx system <status|settings|startup|diagnostics|sync> ...`
 
-Manage headless runtime settings, startup, sync, diagnostics, and updates.
+Manage headless runtime settings, startup, sync, and diagnostics.
 
 ```bash
-ocx system settings --stream-mode eager-relay
+ccx system settings --stream-mode eager-relay
 ```
 
-### `ocx config <show|get|set|unset|validate|export|import> ...`
+### `ccx config <show|get|set|unset|validate|export|import> ...`
 
-Inspect and safely modify validated OpenCodex configuration. `show` and `get` mask secrets. Import
+Inspect and safely modify validated CodexCommander configuration. `show` and `get` mask secrets. Import
 validates before writing and requires `--yes`.

@@ -1,25 +1,25 @@
 ---
 title: 管理 API
-description: opencodex 控制平面的身份验证、错误和端点参考。
+description: CodexCommander 控制平面的身份验证、错误和端点参考。
 ---
 
-Management API 是 opencodex 的控制平面。`http://localhost:10100` 上的仪表板只是它的一个客户端；无头的 `ocx` provider、model、combo、account、settings、diagnostics 和 lifecycle 命令也是客户端。该 API 仅在代理运行时可用。
+Management API 是 CodexCommander 的控制平面。`http://localhost:10100` 上的仪表板只是它的一个客户端；无头的 `ccx` provider、model、combo、account、settings、diagnostics 和 lifecycle 命令也是客户端。该 API 仅在代理运行时可用。
 
 请使用 [Web 仪表板](/guides/web-dashboard/) 作为交互式客户端，或者在构建自动化时参考本文档。持久化值最终遵循 [配置](/reference/configuration/)。
 
 ## 身份验证模型
 
-Management API 有自己独立的管理员凭证，与数据平面 API 密钥无关。启动时，opencodex 会按以下顺序解析它：
+Management API 有自己独立的管理员凭证，与数据平面 API 密钥无关。启动时，CodexCommander 会按以下顺序解析它：
 
-1. `OPENCODEX_ADMIN_AUTH_TOKEN`，如果已设置。
-2. 在加固后的密钥文件中生成的 `ocx_admin_*` 令牌。
+1. `CODEXCOMMANDER_ADMIN_AUTH_TOKEN`，如果已设置。
+2. 在加固后的密钥文件中生成的 `ccx_admin_*` 令牌。
 
 只有在其目录和文件权限或 ACL 已加固后，才会接受基于文件的令牌。如果无法保证这一点，管理身份验证将以拒绝式失败结束，API 会返回 503，直到提供环境变量令牌或修复文件状态为止。
 
 管理员令牌可用以下任一形式发送：
 
 ```http
-X-OpenCodex-API-Key: <admin-token>
+X-CodexCommander-API-Key: <admin-token>
 ```
 
 ```http
@@ -32,7 +32,7 @@ Authorization: Bearer <admin-token>
 
 ### 回环仪表板会话
 
-在回环绑定上，仪表板引导可以接收一个短期的 `ocx_session_*` 凭证。每个会话持续五分钟，并绑定到精确的仪表板来源。安全请求必须匹配该来源。非安全方法还要求浏览器的 `Origin` 和该会话的 CSRF 令牌。
+在回环绑定上，仪表板引导可以接收一个短期的 `ccx_session_*` 凭证。每个会话持续五分钟，并绑定到精确的仪表板来源。安全请求必须匹配该来源。非安全方法还要求浏览器的 `Origin` 和该会话的 CSRF 令牌。
 
 当需要数据平面身份验证时，会禁用会话签发，这也包括远程绑定。远程操作员必须使用原始管理员令牌进行身份验证；不会签发类似回环的 GUI 会话。
 
@@ -42,7 +42,7 @@ Authorization: Bearer <admin-token>
 
 | 状态 | 类型或代码 | 含义 |
 | --- | --- | --- |
-| 401 | `opencodex admin token required` | 管理员令牌或 GUI 会话缺失、无效、过期、来源不匹配，或缺少 CSRF 证据 |
+| 401 | `codexcommander admin token required` | 管理员令牌或 GUI 会话缺失、无效、过期、来源不匹配，或缺少 CSRF 证据 |
 | 403 | `cross-origin request blocked` | 请求来源不在管理允许列表中 |
 | 404 | `not_found` | 没有任何管理路由匹配该方法和路径 |
 | 413 | `request body too large` | POST、PUT 或 PATCH 请求体超过 2 MiB 的管理限制 |
@@ -65,7 +65,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/grok/selection` | 持久化被排除的 Grok 模型 | 400 选择无效或超出大小限制 |
 | `POST /api/grok/apply` | 通过托管同步应用已持久化的 Grok 配置 | 409 `grok_apply_busy`；400/500 应用失败 |
 | `GET, PUT /api/claude-desktop` | 读取或持久化 Claude Desktop 的路由/原生配置文件 | 400 分配无效或不可用 |
-| `POST /api/claude-desktop/apply` | 将已保存的配置文件写入 Claude Desktop 的托管配置 | 400/500 写入失败 |
+| `POST /api/claude-desktop/apply` | 将已保存的配置文件写入 Claude Desktop 的托管配置。必须提供 JSON 对象及明确的 `mode`：`static`、`hybrid` 或 `discovery` | 400 请求体/mode 无效；500 写入失败 |
 | `GET /api/claude-desktop/status` | 检查已保存与已应用的配置文件以及 Desktop 健康状态 | 400 状态读取失败 |
 | `GET, PUT /api/claude-code` | 读取或更新 Claude Code 的网关、认证模式、模型映射、上下文、代理和 sidecar 设置 | 400 字段或结构无效 |
 
@@ -93,9 +93,6 @@ Authorization: Bearer <admin-token>
 | `GET, POST /api/windows-tray` | 读取 Windows 托盘状态，或安装、启动、停止、卸载它 | 400 不支持的平台/动作；500 操作失败 |
 | `GET /api/diagnostics/project-config` | 读取缓存的项目配置警告 | — |
 | `POST /api/sync` | 将当前模型目录同步到 Codex，并返回 `catalogQuality`、`rehydrated`、Codex app-server `catalogState` 和所需的重启提示 | 409 写入权限被拒绝；500 同步失败 |
-| `GET /api/update/check` | 检查 `latest` 或 `preview` 更新通道 | 400 无效标签 |
-| `POST /api/update/run` | 启动更新任务，可选随后重启 | 400 无效请求体；任务特定的冲突/错误状态 |
-| `GET /api/update/status` | 按 id 轮询更新任务 | 404 未知任务 |
 | `GET, PUT /api/sidecar-settings` | 读取或更新 web 搜索和 vision sidecar 的模型/后端设置 | 400 结构、后端或限制无效 |
 | `GET, PUT /api/shadow-call-settings` | 读取或更新 shadow-call 拦截设置 | 400 结构或值无效 |
 
@@ -175,12 +172,6 @@ Authorization: Bearer <admin-token>
 
 `provider_has_dependent_combos` 是一个安全屏障：在删除 provider 之前，先移除或编辑依赖它的 combos。
 
-### 侧边栏
-
-| 方法和路径 | 用途 | 典型错误 |
-| --- | --- | --- |
-| `GET /api/update/badge` | 读取便宜的侧边栏更新徽标状态 | — |
-
 ### 系统生命周期
 
 | 方法和路径 | 用途 | 典型错误 |
@@ -200,7 +191,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/codex-auth/accounts/pause` | 暂停或恢复一个账户 | 400 账户/状态无效；404 缺少账户 |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | 暂停配额已耗尽的账户 | 变更锁失败会变成 503 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | 清除一个账户或所有账户的运行时冷却 | 400 id 无效 |
-| `GET, PUT /api/codex-auth/active` | 读取或选择当前活跃账户 | 400 账户无效或缺失；409 暂停/旧行冲突 |
+| `GET, PUT /api/codex-auth/active` | 读取或选择当前活跃账户 | 400 账户无效或缺失；409 账户已暂停 |
 | `PUT /api/codex-auth/auto-switch` | 设置自动切换账户的配额阈值 | 400 阈值无效 |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | 更新 Codex 账户池选择策略 | 400 策略/配置无效 |
 | `PUT /api/codex-auth/failover` | 设置账户故障转移阈值 | 400 阈值无效 |
@@ -216,4 +207,4 @@ Authorization: Bearer <admin-token>
 
 ## 如何选择客户端
 
-对于日常管理，[Web 仪表板](/guides/web-dashboard/)提供了最安全的引导式流程。对于无头主机和自动化，请使用相应的 `ocx` 命令：它们调用的是同一个实时 API，并在代理不可达或操作失败时返回非零结果。直接 HTTP 最适合需要上述精确端点契约的集成。
+对于日常管理，[Web 仪表板](/guides/web-dashboard/)提供了最安全的引导式流程。对于无头主机和自动化，请使用相应的 `ccx` 命令：它们调用的是同一个实时 API，并在代理不可达或操作失败时返回非零结果。直接 HTTP 最适合需要上述精确端点契约的集成。

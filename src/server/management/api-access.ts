@@ -1,4 +1,4 @@
-import type { OcxConfig } from "../../types";
+import type { CodexCommanderConfig } from "../../types";
 import { probeHostname } from "../proxy-liveness";
 
 export interface ApiAccessEndpoints {
@@ -8,8 +8,6 @@ export interface ApiAccessEndpoints {
   messagesEndpoint: string;
   modelsEndpoint: string;
   claudeCodeEnabled: boolean;
-  /** Back-compat alias for older GUI clients. */
-  endpoint: string;
 }
 
 export type BuildApiAccessEndpointsOptions = {
@@ -66,7 +64,7 @@ function originBaseUrl(raw: string): string | null {
  * Falls back to loopback only when no usable request context is available.
  */
 export function resolveApiAccessBaseUrl(
-  config: Pick<OcxConfig, "hostname" | "port">,
+  config: Pick<CodexCommanderConfig, "hostname" | "port">,
   opts: BuildApiAccessEndpointsOptions = {},
 ): string {
   const port = config.port ?? 10100;
@@ -107,24 +105,8 @@ export function resolveApiAccessBaseUrl(
   return `http://127.0.0.1:${port}/v1`;
 }
 
-/** @deprecated Prefer resolveApiAccessBaseUrl; retained for focused host-format tests. */
-export function resolveApiAccessDisplayHost(
-  configHostname: string | undefined,
-  opts: BuildApiAccessEndpointsOptions = {},
-): string {
-  if (!isWildcardBindHost(configHostname)) {
-    return probeHostname(configHostname);
-  }
-  try {
-    return new URL(resolveApiAccessBaseUrl({ hostname: configHostname, port: 10100 }, opts)).hostname
-      || "127.0.0.1";
-  } catch {
-    return "127.0.0.1";
-  }
-}
-
 export function buildApiAccessEndpoints(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   opts: BuildApiAccessEndpointsOptions = {},
 ): ApiAccessEndpoints {
   const baseUrl = resolveApiAccessBaseUrl(config, opts);
@@ -136,6 +118,5 @@ export function buildApiAccessEndpoints(
     messagesEndpoint: `${baseUrl}/messages`,
     modelsEndpoint: `${baseUrl}/models`,
     claudeCodeEnabled: config.claudeCode?.enabled !== false,
-    endpoint: responsesEndpoint,
   };
 }

@@ -1,4 +1,4 @@
-import type { OcxUsage } from "../../types";
+import type { CodexCommanderUsage } from "../../types";
 import type { AgentServerMessage, McpArgs, ToolCall } from "./gen/agent_pb";
 import { decodeCursorArgsMap } from "./arg-codec";
 import { normalizeArgKeys } from "./arg-normalize";
@@ -8,7 +8,7 @@ import {
   defaultShellBridgeArgNormalizeSchema,
   isCodexShellBridgeToolName,
   normalizeCursorWireName,
-  OCX_RESPONSES_TOOL_PROVIDER,
+  CCX_RESPONSES_TOOL_PROVIDER,
   resolveShellBridgeAliasKey,
   responsesToolNameFromCursorWire,
 } from "./tool-definitions";
@@ -125,13 +125,13 @@ export function createCursorContextUsageTracker(options: { maxEntries?: number; 
 }
 
 export interface CursorProtobufEventState {
-  usage: OcxUsage;
+  usage: CodexCommanderUsage;
   /**
    * Absolute conversation context size from Cursor's `conversationCheckpointUpdate.usedTokens`
    * (authoritative cumulative context, NOT a per-turn delta). Kept separate from `usage.outputTokens`
    * so it is never folded into the additive per-turn output count. Surfaced as `done.usage.totalTokens`
    * so Codex's `last_token_usage.total_tokens` reflects the real active context. Mirrors the Kiro
-   * contextUsagePercentage SOT fix (devlog 142.10): absolute context and additive output must not
+   * contextUsagePercentage SOT fix (implementation contract): absolute context and additive output must not
    * share one field, or Codex double-counts (e.g. 10000 then 10300 surfacing as 20300).
    */
   contextTokens?: number;
@@ -214,7 +214,7 @@ export function reportableContextTokens(state: CursorProtobufEventState): number
   return Math.max(current, carry);
 }
 
-export function usageFromContextTokens(state: CursorProtobufEventState, contextTokens: number): OcxUsage {
+export function usageFromContextTokens(state: CursorProtobufEventState, contextTokens: number): CodexCommanderUsage {
   return {
     ...state.usage,
     inputTokens: Math.max(0, contextTokens - state.usage.outputTokens),
@@ -226,7 +226,7 @@ export function usageFromContextTokens(state: CursorProtobufEventState, contextT
 export function mcpArgsFromToolCall(toolCall: ToolCall | undefined): McpArgs | undefined {
   if (toolCall?.tool.case !== "mcpToolCall") return undefined;
   const args = toolCall.tool.value.args;
-  return args?.providerIdentifier === OCX_RESPONSES_TOOL_PROVIDER ? args : undefined;
+  return args?.providerIdentifier === CCX_RESPONSES_TOOL_PROVIDER ? args : undefined;
 }
 
 function mcpWireNameFromArgs(args: McpArgs | undefined): string | undefined {
@@ -316,7 +316,7 @@ export function mapSyntheticMcpExecToToolEvents(
   fallbackCallId = "cursor_mcp_exec",
   options: { allowEmptyArgs?: boolean; state?: CursorProtobufEventState } = {},
 ): CursorServerMessage[] {
-  if (args.providerIdentifier !== OCX_RESPONSES_TOOL_PROVIDER) return [];
+  if (args.providerIdentifier !== CCX_RESPONSES_TOOL_PROVIDER) return [];
   if (options.allowEmptyArgs !== true && !hasMcpArgBytes(args)) return [];
   const cursorWireName = mcpWireNameFromArgs(args);
   if (!cursorWireName) return [{ type: "error", message: "Cursor requested a Responses tool without a tool name" }];
@@ -525,7 +525,7 @@ export function mapCursorProtobufServerMessage(
  * then the raw per-turn counters. Shared with the partial-usage path in live-transport
  * so a failed turn reports the same input side as a clean one (#373).
  */
-export function resolvedTurnUsage(state: CursorProtobufEventState): OcxUsage {
+export function resolvedTurnUsage(state: CursorProtobufEventState): CodexCommanderUsage {
   const contextTokens = reportableContextTokens(state);
   if (contextTokens !== undefined) return usageFromContextTokens(state, contextTokens);
   const estimate = state.estimatedInputTokens;

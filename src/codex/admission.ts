@@ -15,8 +15,6 @@
  *
  * READS ONLY. Nothing here creates a directory, a database, or a marker: an
  * admission that manufactures the state it is admitting cannot refuse.
- *
- * Design record: devlog/_fin/260804_codex_write_substrate/040_ownership_convergence.md.
  */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -160,13 +158,12 @@ export function admitCodexWrite(deps: AdmissionDeps = {}): CodexAdmission {
   }
 
   const config = diagnostics.config;
-  const opencodexHome = getConfigDir();
-  const integrationRecord = join(opencodexHome, "integrations", "codex.json");
-  const historyDb = join(codexHome, "state_5.sqlite");
+  const codexCommanderHome = getConfigDir();
+  const integrationRecord = join(codexCommanderHome, "integrations", "codex.json");
 
   const canonicalTargets = {
     codexHome,
-    opencodexHome,
+    codexCommanderHome,
     config: codexConfigPath,
     profile: CODEX_PROFILE_PATH,
     catalog: DEFAULT_CATALOG_PATH,
@@ -175,11 +172,7 @@ export function admitCodexWrite(deps: AdmissionDeps = {}): CodexAdmission {
     // watch a path nothing writes.
     journal: JOURNAL_PATH,
     integrationRecord,
-    // Backups and rollouts are enumerated by their owners, not guessed here.
     catalogBackups: [] as readonly string[],
-    historyDb,
-    historyManifest: `${historyDb}.ocx-backup.json`,
-    historyRollouts: [] as readonly string[],
   } as const;
 
   const snapshot: AdmissionSnapshot = {

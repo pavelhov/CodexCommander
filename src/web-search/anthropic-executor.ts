@@ -1,4 +1,4 @@
-import type { OcxProviderConfig } from "../types";
+import type { CodexCommanderProviderConfig } from "../types";
 import { getValidAccessToken } from "../oauth";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../oauth/anthropic";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "../adapters/client-fingerprint";
@@ -117,7 +117,7 @@ export async function parseAnthropicSidecarSSE(res: Response): Promise<SidecarOu
 export async function runAnthropicWebSearch(
   query: string,
   providerName: string,
-  provider: OcxProviderConfig,
+  provider: CodexCommanderProviderConfig,
   settings: SidecarSettings,
   abortSignal?: AbortSignal,
 ): Promise<SidecarOutcome> {

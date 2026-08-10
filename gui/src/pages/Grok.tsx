@@ -28,7 +28,7 @@ interface GrokStatus {
 }
 
 /** Same collapse store the Desktop page uses; Grok groups start collapsed. */
-const GROUP_COLLAPSE = makeCollapseStore("ocx.grok.collapsedGroups.v2");
+const GROUP_COLLAPSE = makeCollapseStore("ccx.grok.collapsedGroups.v2");
 
 const GROUPS = [
   { id: "native", tkey: "grok.groupNative" as TKey },
@@ -53,7 +53,7 @@ function formatContext(value: number | undefined, t: TFn): string {
  *
  * The page writes ONLY the selection (config.json, via /api/grok/selection) and asks the
  * proxy to re-run the guarded sync (/api/grok/apply). The fence itself is written only
- * by injectGrokConfig — the same path `ocx start`/`ensure`/`restart` use. Aliases shown
+ * by injectGrokConfig — the same path `ccx start`/`ensure`/`restart` use. Aliases shown
  * here come from readGrokStatus (what the writer actually wrote), never computed.
  */
 /**
@@ -64,8 +64,11 @@ function formatContext(value: number | undefined, t: TFn): string {
  */
 export default function Grok({ apiBase, active = true }: { apiBase: string; active?: boolean }) {
   const t = useT();
-  const cacheKey = `ocx.grok.status.v1:${apiBase}`;
-  const cached = readSessionListCache<GrokStatus>(cacheKey);
+  const cacheKey = `ccx.grok.status.v1:${apiBase}`;
+  const cached = useMemo(() => {
+    const value = readSessionListCache<GrokStatus>(cacheKey);
+    return Array.isArray(value?.candidates) && Array.isArray(value?.excluded) ? value : null;
+  }, [cacheKey]);
   // Local edits are an OVERLAY on the server's selection rather than a copy of it. Copying meant
   // reconciling in an effect, which both fought the switches mid-interaction and tripped the
   // cascading-render lint; `null` here means "no unsaved edits, follow the server".
@@ -80,11 +83,11 @@ export default function Grok({ apiBase, active = true }: { apiBase: string; acti
     const response = await fetch(`${apiBase}/api/grok`, { signal });
     const payload = await readJsonOrThrow<GrokStatus & { error?: string }>(response, t("grok.loadFail"));
     if (!payload) throw new Error(t("grok.loadFail"));
-    // Tolerate an older proxy that predates the selection routes: the page degrades
-    // to the read-only fence view instead of crashing on a missing field.
-    const next = { ...payload, candidates: payload.candidates ?? [], excluded: payload.excluded ?? [] };
-    writeSessionListCache(cacheKey, next);
-    return next;
+    if (!Array.isArray(payload.candidates) || !Array.isArray(payload.excluded)) {
+      throw new Error(t("grok.loadFail"));
+    }
+    writeSessionListCache(cacheKey, payload);
+    return payload;
   }, [apiBase, cacheKey, t]);
 
   // Request ownership lives in the shared resource layer, so a route change during the first
@@ -262,7 +265,7 @@ export default function Grok({ apiBase, active = true }: { apiBase: string; acti
       )}
 
       {status && status.candidates.length > 0 && (
-        <div className="ocx-group-stack">
+        <div className="ccx-group-stack">
           <div className="row" style={{ gap: 6, margin: "2px 0 10px" }}>
             <button type="button" className="btn btn-ghost btn-sm text-caption" onClick={() => setAllCollapsed(true)} disabled={pending !== null}>
               <IconChevron width={12} height={12} aria-hidden="true" /> {t("models.collapseAll")}
@@ -276,25 +279,25 @@ export default function Grok({ apiBase, active = true }: { apiBase: string; acti
             if (view.total === 0) return null;
             const isCollapsed = collapsed.has(group.id);
             return (
-              <section key={group.id} className={`ocx-group${isCollapsed ? " collapsed" : ""}`} aria-labelledby={`grok-group-${group.id}`}>
-                <header className={`ocx-group-head${isCollapsed ? "" : " open"}`}>
-                  <h3 id={`grok-group-${group.id}`} className="ocx-group-heading">
+              <section key={group.id} className={`ccx-group${isCollapsed ? " collapsed" : ""}`} aria-labelledby={`grok-group-${group.id}`}>
+                <header className={`ccx-group-head${isCollapsed ? "" : " open"}`}>
+                  <h3 id={`grok-group-${group.id}`} className="ccx-group-heading">
                     <button
                       type="button"
-                      className="ocx-group-toggle"
+                      className="ccx-group-toggle"
                       aria-expanded={!isCollapsed}
                       aria-controls={`grok-group-body-${group.id}`}
                       onClick={() => toggleGroup(group.id)}
                     >
                       <IconChevron
-                        className="ocx-chevron"
+                        className="ccx-chevron"
                         width={14}
                         height={14}
                         aria-hidden="true"
                         style={{ transform: isCollapsed ? "none" : "rotate(90deg)" }}
                       />
-                      <span className="ocx-group-name">{t(group.tkey)}</span>
-                      <span className="ocx-group-count">
+                      <span className="ccx-group-name">{t(group.tkey)}</span>
+                      <span className="ccx-group-count">
                         {t("grok.enabledCount", { on: view.enabled, total: view.total })}
                       </span>
                     </button>

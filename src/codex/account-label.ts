@@ -16,17 +16,14 @@ export function fallbackCodexAccountLogLabel(accountId: string): string {
   return `p${createHash("sha256").update(accountId).digest("hex").slice(0, 6)}`;
 }
 
-export function codexAccountLogLabel(account: CodexAccount): string {
-  return CODEX_ACCOUNT_LOG_LABEL_RE.test(account.logLabel ?? "")
-    ? account.logLabel!
-    : fallbackCodexAccountLogLabel(account.id);
+export function codexAccountLogLabel(account: CodexAccount): string | null {
+  return CODEX_ACCOUNT_LOG_LABEL_RE.test(account.logLabel) ? account.logLabel : null;
 }
 
 export function withCodexAccountLogLabel(
-  account: Omit<CodexAccount, "logLabel"> & Partial<Pick<CodexAccount, "logLabel">>,
+  account: Omit<CodexAccount, "logLabel">,
   existingAccounts: readonly CodexAccount[],
 ): CodexAccount {
-  if (account.logLabel && CODEX_ACCOUNT_LOG_LABEL_RE.test(account.logLabel)) return account as CodexAccount;
   return {
     ...account,
     logLabel: createCodexAccountLogLabel(existingAccounts.map(existing => existing.logLabel)),

@@ -10,7 +10,7 @@ import {
 } from "../src/claude/desktop-3p";
 
 function envFor(path: string): NodeJS.ProcessEnv {
-  return { ...process.env, OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: path };
+  return { ...process.env, CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR: path };
 }
 
 function appliedFingerprint(path: string): string {
@@ -18,7 +18,7 @@ function appliedFingerprint(path: string): string {
 }
 
 test("an absent Desktop library is read-only and OFF is an idempotent no-op", () => {
-  const library = join(mkdtempSync(join(tmpdir(), "ocx-desktop-remove-")), "missing");
+  const library = join(mkdtempSync(join(tmpdir(), "ccx-desktop-remove-")), "missing");
   const options = { env: envFor(library) };
   expect(inspectDesktop3pConfigLibrary(options).kind).toBe("not_installed");
   expect(removeDesktop3pStandardPivot(options)).toMatchObject({ ok: true, changed: false, kind: "noop" });
@@ -26,10 +26,10 @@ test("an absent Desktop library is read-only and OFF is an idempotent no-op", ()
 });
 
 test("OFF selects a credential-free standard profile before deleting the owned profile and backup", () => {
-  const library = mkdtempSync(join(tmpdir(), "ocx-desktop-remove-"));
+  const library = mkdtempSync(join(tmpdir(), "ccx-desktop-remove-"));
   const id = "owned-profile";
   mkdirSync(library, { recursive: true });
-  writeFileSync(join(library, "_meta.json"), JSON.stringify({ appliedId: id, entries: [{ id, name: "opencodex" }] }));
+  writeFileSync(join(library, "_meta.json"), JSON.stringify({ appliedId: id, entries: [{ id, name: "codexcommander" }] }));
   writeFileSync(join(library, `${id}.json`), JSON.stringify({
     inferenceProvider: "gateway",
     inferenceCredentialKind: "static",
@@ -50,7 +50,7 @@ test("OFF selects a credential-free standard profile before deleting the owned p
 });
 
 test("a selected path traversal id is refused without following it", () => {
-  const library = mkdtempSync(join(tmpdir(), "ocx-desktop-remove-"));
+  const library = mkdtempSync(join(tmpdir(), "ccx-desktop-remove-"));
   writeFileSync(join(library, "_meta.json"), JSON.stringify({ appliedId: "../outside", entries: [] }));
   const result = inspectDesktop3pConfigLibrary({ env: envFor(library) });
   expect(result).toMatchObject({ kind: "unsafe", reason: "unsafe_applied_id" });
@@ -58,12 +58,12 @@ test("a selected path traversal id is refused without following it", () => {
 });
 
 test("a selected foreign standard profile is never mutated, but owned residue can be cleaned", () => {
-  const library = mkdtempSync(join(tmpdir(), "ocx-desktop-remove-"));
+  const library = mkdtempSync(join(tmpdir(), "ccx-desktop-remove-"));
   const foreign = "foreign-standard";
   const owned = "owned-residue";
   writeFileSync(join(library, "_meta.json"), JSON.stringify({
     appliedId: foreign,
-    entries: [{ id: foreign, name: "someone-else" }, { id: owned, name: "opencodex" }],
+    entries: [{ id: foreign, name: "someone-else" }, { id: owned, name: "codexcommander" }],
   }));
   writeFileSync(join(library, `${foreign}.json`), "{}\n");
   writeFileSync(join(library, `${owned}.json`), JSON.stringify({
@@ -79,9 +79,9 @@ test("a selected foreign standard profile is never mutated, but owned residue ca
 });
 
 test("an owned but drifted gateway profile is refused without a write", () => {
-  const library = mkdtempSync(join(tmpdir(), "ocx-desktop-remove-"));
+  const library = mkdtempSync(join(tmpdir(), "ccx-desktop-remove-"));
   const id = "drifted-owned";
-  writeFileSync(join(library, "_meta.json"), JSON.stringify({ appliedId: id, entries: [{ id, name: "opencodex" }] }));
+  writeFileSync(join(library, "_meta.json"), JSON.stringify({ appliedId: id, entries: [{ id, name: "codexcommander" }] }));
   writeFileSync(join(library, `${id}.json`), JSON.stringify({
     inferenceProvider: "gateway", inferenceCredentialKind: "static",
     inferenceGatewayBaseUrl: "http://127.0.0.1:10100", inferenceGatewayApiKey: "not-a-secret",
@@ -95,9 +95,9 @@ test("an owned but drifted gateway profile is refused without a write", () => {
 });
 
 test("a delete interruption leaves the standard pivot selected and reports only residual paths", () => {
-  const library = mkdtempSync(join(tmpdir(), "ocx-desktop-remove-"));
+  const library = mkdtempSync(join(tmpdir(), "ccx-desktop-remove-"));
   const id = "owned-profile";
-  writeFileSync(join(library, "_meta.json"), JSON.stringify({ appliedId: id, entries: [{ id, name: "opencodex" }] }));
+  writeFileSync(join(library, "_meta.json"), JSON.stringify({ appliedId: id, entries: [{ id, name: "codexcommander" }] }));
   writeFileSync(join(library, `${id}.json`), JSON.stringify({
     inferenceProvider: "gateway", inferenceCredentialKind: "static",
     inferenceGatewayBaseUrl: "http://127.0.0.1:10100", inferenceGatewayApiKey: "not-a-secret",
@@ -118,13 +118,13 @@ test("a delete interruption leaves the standard pivot selected and reports only 
   expect(JSON.parse(readFileSync(join(library, `${metadata.appliedId}.json`), "utf8"))).toEqual({});
 });
 
-test("interrupted cleanup prefers the selected opencodex row and reports another owned row as residue", () => {
-  const library = mkdtempSync(join(tmpdir(), "ocx-desktop-remove-"));
+test("interrupted cleanup prefers the selected codexcommander row and reports another owned row as residue", () => {
+  const library = mkdtempSync(join(tmpdir(), "ccx-desktop-remove-"));
   const selected = "selected-owned";
   const residual = "residual-owned";
   writeFileSync(join(library, "_meta.json"), JSON.stringify({
     appliedId: selected,
-    entries: [{ id: selected, name: "opencodex" }, { id: residual, name: "opencodex" }],
+    entries: [{ id: selected, name: "codexcommander" }, { id: residual, name: "codexcommander" }],
   }));
   for (const id of [selected, residual]) {
     writeFileSync(join(library, `${id}.json`), JSON.stringify({

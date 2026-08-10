@@ -88,7 +88,7 @@ describe("Cursor MCP live stdio integration", () => {
 
   test("callTool round-trips a real result over the child-process pipe", async () => {
     const deps = mcpDepsFromManager(manager);
-    const args = create(McpArgsSchema, { name: "ping", toolName: "ping", providerIdentifier: "opencodex" });
+    const args = create(McpArgsSchema, { name: "ping", toolName: "ping", providerIdentifier: "codexcommander" });
     args.args = { msg: textEncoder.encode(JSON.stringify("hi")) };
 
     const reply = decode((await handleCursorNativeExec(execMessage({ case: "mcpArgs", value: args }), deps))[0]);
@@ -103,7 +103,7 @@ describe("Cursor MCP live stdio integration", () => {
 
   test("image tool round-trips real bytes over stdio", async () => {
     const deps = mcpDepsFromManager(manager);
-    const args = create(McpArgsSchema, { name: "shot", toolName: "shot", providerIdentifier: "opencodex" });
+    const args = create(McpArgsSchema, { name: "shot", toolName: "shot", providerIdentifier: "codexcommander" });
 
     const reply = decode((await handleCursorNativeExec(execMessage({ case: "mcpArgs", value: args }), deps))[0]);
     expect(reply.message.value.result.case).toBe("success");

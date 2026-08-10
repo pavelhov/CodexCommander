@@ -1,4 +1,4 @@
-import type { OcxConfig } from "../types";
+import type { CodexCommanderConfig } from "../types";
 import { jsonResponse } from "../server/auth-cors";
 import { acquireNativeMainProfileDrain, getNativeMainProfileRequestCount } from "../server/lifecycle";
 import {
@@ -137,7 +137,7 @@ async function withRecoveryGateTransition<T>(
 export async function handleNativeProfileAPI(
   req: Request,
   url: URL,
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   deps: NativeProfileApiDeps = {},
 ): Promise<Response | null> {
   if (!url.pathname.startsWith("/api/native-main-profiles")) return null;

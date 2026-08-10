@@ -20,7 +20,7 @@ export const LOCALES: { code: Locale; name: string; htmlLang: string }[] = [
   { code: "ja", name: "日本語", htmlLang: "ja" },
 ];
 
-const LANG_KEY = "ocx-lang";
+const LANG_KEY = "ccx-lang";
 
 let activeLocale: Locale | null = null;
 

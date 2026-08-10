@@ -8,7 +8,7 @@ import {
   dominantEol,
   setRootOpenaiBaseUrl,
   stripInjectedOpenaiBaseUrl,
-  stripOpencodexConfig,
+  stripCodexCommanderConfig,
   stripRootContextWindowOverrides,
 } from "../src/codex/inject";
 import {
@@ -20,7 +20,7 @@ describe("Codex config injection", () => {
   test("omits provider-level Responses WebSocket support by default", () => {
     const block = buildProviderTableBlock(10100);
 
-    expect(block).toContain("[model_providers.opencodex]");
+    expect(block).toContain("[model_providers.codexcommander]");
     expect(block).toContain('wire_api = "responses"');
     expect(block).toContain("requires_openai_auth = true");
     expect(block).not.toContain("supports_websockets");
@@ -41,7 +41,7 @@ describe("Codex config injection", () => {
   test("can inject Codex provider API auth header from environment for non-loopback proxy mode", () => {
     const block = buildProviderTableBlock(10100, false, true);
 
-    expect(block).toContain('env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }');
+    expect(block).toContain('env_http_headers = { "x-codexcommander-api-key" = "CODEXCOMMANDER_API_AUTH_TOKEN" }');
   });
 
   test("injected base_url matches the actual bind: literal 127.0.0.1 for loopback/wildcard (Windows resolves localhost to ::1 first)", () => {
@@ -57,13 +57,13 @@ describe("Codex config injection", () => {
 
   test("strips stale root context-window overrides on injection so the catalog drives model context (gpt-5.5 regression)", () => {
     const cleaned = stripRootContextWindowOverrides([
-      'model_provider = "opencodex"',
+      'model_provider = "codexcommander"',
       "model_context_window = 1000000",
       "model_auto_compact_token_limit = 900000",
       'model_auto_compact_token_limit_scope = "total"',
       'model = "gpt-5.5"',
       "",
-      "[model_providers.opencodex]",
+      "[model_providers.codexcommander]",
       "# a nested table key must survive",
       "model_context_window = 272000",
       "",
@@ -74,19 +74,19 @@ describe("Codex config injection", () => {
     expect(cleaned).toContain("model_auto_compact_token_limit = 900000");
     expect(cleaned).toContain('model_auto_compact_token_limit_scope = "total"');
     // Non-context-window root keys are untouched.
-    expect(cleaned).toContain('model_provider = "opencodex"');
+    expect(cleaned).toContain('model_provider = "codexcommander"');
     expect(cleaned).toContain('model = "gpt-5.5"');
     // Table-nested keys (after the first [table]) are preserved.
     expect(cleaned).toContain("model_context_window = 272000");
   });
 
   test("preserves user root context-window overrides when restoring native Codex", () => {
-    const stripped = stripOpencodexConfig([
+    const stripped = stripCodexCommanderConfig([
       'model = "gpt-5.5"',
       'model_context_window = 1000000',
       'model_auto_compact_token_limit = 900000',
-      'model_catalog_json = "/tmp/opencodex-catalog.json"',
-      'model_provider = "opencodex"',
+      'model_catalog_json = "/tmp/codexcommander-catalog.json"',
+      'model_provider = "codexcommander"',
       "",
       "[features]",
       "fast_mode = true",
@@ -101,8 +101,8 @@ describe("Codex config injection", () => {
   });
 
   test("removes root routed model names when restoring native Codex", () => {
-    const stripped = stripOpencodexConfig([
-      'model_provider = "opencodex"',
+    const stripped = stripCodexCommanderConfig([
+      'model_provider = "codexcommander"',
       'model = "opencode-go/minimax-m3"',
       'model_verbosity = "high"',
       "",
@@ -115,8 +115,8 @@ describe("Codex config injection", () => {
     expect(stripped).toContain('model_verbosity = "high"');
   });
 
-  test("preserves non-opencodex routed model names during fallback restore", () => {
-    const stripped = stripOpencodexConfig([
+  test("preserves non-codexcommander routed model names during fallback restore", () => {
+    const stripped = stripCodexCommanderConfig([
       'model_provider = "proxy"',
       'model = "openrouter/foo"',
       "",
@@ -136,8 +136,8 @@ describe("Codex config injection", () => {
     const profile = buildProfileFile(10100, null);
 
     expect(profile).toContain('openai_base_url = "http://127.0.0.1:10100/v1"');
-    expect(profile).not.toContain('model_provider = "opencodex"');
-    expect(profile).not.toContain("[model_providers.opencodex]");
+    expect(profile).not.toContain('model_provider = "codexcommander"');
+    expect(profile).not.toContain("[model_providers.codexcommander]");
     expect(profile).not.toContain("model_catalog_json");
   });
 
@@ -159,47 +159,47 @@ describe("Codex config injection", () => {
     expect(loopback).toContain("fast_mode = false");
     expect(loopback).not.toContain("fast_mode = true");
 
-    const legacy = buildProfileFile(10100, null, false, true, "192.168.1.20", false);
-    expect(legacy).toContain("fast_mode = false");
-    expect(legacy).not.toContain("fast_mode = true");
+    const providerTable = buildProfileFile(10100, null, false, true, "192.168.1.20", false);
+    expect(providerTable).toContain("fast_mode = false");
+    expect(providerTable).not.toContain("fast_mode = true");
   });
 
-  test("non-loopback fallback profile keeps the legacy provider-table shape with the injected host", () => {
+  test("non-loopback fallback profile keeps the provider-table shape with the injected host", () => {
     const profile = buildProfileFile(10100, null, false, true, "192.168.1.20");
 
     expect(profile).toContain("proxy at 192.168.1.20:10100");
     expect(profile).toContain('base_url = "http://192.168.1.20:10100/v1"');
-    expect(profile).toContain('model_provider = "opencodex"');
-    expect(profile).toContain("[model_providers.opencodex]");
+    expect(profile).toContain('model_provider = "codexcommander"');
+    expect(profile).toContain("[model_providers.codexcommander]");
   });
 
   test("non-loopback fallback profile mirrors websocket and API auth provider options", () => {
-    const profile = buildProfileFile(10100, "/tmp/opencodex-catalog.json", true, true);
+    const profile = buildProfileFile(10100, "/tmp/codexcommander-catalog.json", true, true);
 
-    expect(profile).toContain('model_catalog_json = "/tmp/opencodex-catalog.json"');
+    expect(profile).toContain('model_catalog_json = "/tmp/codexcommander-catalog.json"');
     expect(profile).toContain("supports_websockets = true");
-    expect(profile).toContain('env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }');
+    expect(profile).toContain('env_http_headers = { "x-codexcommander-api-key" = "CODEXCOMMANDER_API_AUTH_TOKEN" }');
   });
 
   test("honors an explicit unavailable catalog decision", () => {
-    const path = chooseCatalogPathForInjection('model_catalog_json = "/tmp/opencodex-catalog.json"\n', null);
+    const path = chooseCatalogPathForInjection('model_catalog_json = "/tmp/codexcommander-catalog.json"\n', null);
 
     expect(path).toBeNull();
   });
 
   test("strips injected TOML sections without swallowing later indented tables", () => {
-    const stripped = stripOpencodexConfig([
-      'model_provider = "opencodex"',
+    const stripped = stripCodexCommanderConfig([
+      'model_provider = "codexcommander"',
       "",
-      "# Auto-injected by opencodex",
-      " [model_providers.opencodex]",
-      'name = "OpenCodex Proxy"',
+      "# Auto-injected by CodexCommander",
+      " [model_providers.codexcommander]",
+      'name = "CodexCommander Proxy"',
       'base_url = "http://localhost:10100/v1"',
       " [plugins.safe]",
       "enabled = true",
       "",
-      " [profiles.opencodex]",
-      'model_provider = "opencodex"',
+      " [profiles.codexcommander]",
+      'model_provider = "codexcommander"',
       " [profiles.work]",
       'model = "gpt-5.5"',
       "",
@@ -209,12 +209,12 @@ describe("Codex config injection", () => {
     expect(stripped).toContain("enabled = true");
     expect(stripped).toContain("[profiles.work]");
     expect(stripped).toContain('model = "gpt-5.5"');
-    expect(stripped).not.toContain("[model_providers.opencodex]");
-    expect(stripped).not.toContain("[profiles.opencodex]");
+    expect(stripped).not.toContain("[model_providers.codexcommander]");
+    expect(stripped).not.toContain("[profiles.codexcommander]");
   });
 
   test("strip removes only marker-owned native subagent defaults", () => {
-    const stripped = stripOpencodexConfig([
+    const stripped = stripCodexCommanderConfig([
       MANAGED_AGENTS_TABLE_MARKER,
       "[agents]",
       MANAGED_SUBAGENT_DEFAULT_MARKER,
@@ -252,7 +252,7 @@ describe("Design B openai_base_url injection", () => {
 
     expect(keptUserBaseUrl).toBe(false);
     const lines = content.split("\n");
-    const markerIdx = lines.findIndex(l => l.includes("Auto-injected by opencodex"));
+    const markerIdx = lines.findIndex(l => l.includes("Auto-injected by CodexCommander"));
     const keyIdx = lines.findIndex(l => l.startsWith("openai_base_url"));
     const tableIdx = lines.findIndex(l => l.trim() === "[features]");
     expect(markerIdx).toBeGreaterThanOrEqual(0);
@@ -265,7 +265,7 @@ describe("Design B openai_base_url injection", () => {
     const second = setRootOpenaiBaseUrl(first, 10190).content;
 
     expect(second.match(/openai_base_url/g)?.length).toBe(1);
-    expect(second.match(/Auto-injected by opencodex/g)?.length).toBe(1);
+    expect(second.match(/Auto-injected by CodexCommander/g)?.length).toBe(1);
     expect(second).toContain('openai_base_url = "http://127.0.0.1:10190/v1"');
   });
 
@@ -287,23 +287,23 @@ describe("Design B openai_base_url injection", () => {
     const injected = setRootOpenaiBaseUrl("model = \"gpt-5.5\"\n\n[features]\nfast_mode = true\n", 10100).content;
     const stripped = stripInjectedOpenaiBaseUrl(injected);
     expect(stripped).not.toContain("openai_base_url");
-    expect(stripped).not.toContain("Auto-injected by opencodex");
+    expect(stripped).not.toContain("Auto-injected by CodexCommander");
 
     const userOwned = 'openai_base_url = "https://my-own-gateway.example/v1"\n\n[features]\n';
     expect(stripInjectedOpenaiBaseUrl(userOwned)).toBe(userOwned);
   });
 
-  test("stripOpencodexConfig removes the Design B form including routed root models", () => {
+  test("stripCodexCommanderConfig removes the Design B form including routed root models", () => {
     const injected = setRootOpenaiBaseUrl([
       'model = "opencode-go/minimax-m3"',
       'model_verbosity = "high"',
-      'model_catalog_json = "/tmp/opencodex-catalog.json"',
+      'model_catalog_json = "/tmp/codexcommander-catalog.json"',
       "",
       "[features]",
       "fast_mode = true",
       "",
     ].join("\n"), 10100).content;
-    const stripped = stripOpencodexConfig(injected);
+    const stripped = stripCodexCommanderConfig(injected);
 
     expect(stripped).not.toContain("openai_base_url");
     expect(stripped).not.toContain('model = "opencode-go/minimax-m3"'); // routed id useless without proxy
@@ -312,46 +312,6 @@ describe("Design B openai_base_url injection", () => {
     expect(stripped).toContain("[features]");
   });
 
-  test("upgrade path: legacy table + root re-tag coexisting with Design B form all strip cleanly", () => {
-    const legacy = [
-      'model_provider = "opencodex"',
-      "# Auto-injected by opencodex",
-      'openai_base_url = "http://127.0.0.1:10100/v1"',
-      'model = "gpt-5.5"',
-      "",
-      "# Auto-injected by opencodex",
-      "[model_providers.opencodex]",
-      'name = "OpenCodex Proxy"',
-      'base_url = "http://127.0.0.1:10100/v1"',
-      "",
-    ].join("\n");
-    const stripped = stripOpencodexConfig(legacy);
-
-    expect(stripped).not.toContain("opencodex");
-    expect(stripped).not.toContain("openai_base_url");
-    expect(stripped).toContain('model = "gpt-5.5"');
-  });
-
-  test("legacy marker directly before the provider table survives the root strip order (removeOcxSection keeps its anchor)", () => {
-    // No Design B form present — stripInjectedOpenaiBaseUrl must not eat the legacy EOF marker
-    // in a way that leaves the [model_providers.opencodex] table behind.
-    const legacyOnly = [
-      'model_provider = "opencodex"',
-      'model = "gpt-5.5"',
-      "",
-      "# Auto-injected by opencodex",
-      "[model_providers.opencodex]",
-      'name = "OpenCodex Proxy"',
-      'base_url = "http://127.0.0.1:10100/v1"',
-      'wire_api = "responses"',
-      "",
-    ].join("\n");
-    const stripped = stripOpencodexConfig(legacyOnly);
-
-    expect(stripped).not.toContain("opencodex");
-    expect(stripped).not.toContain("[model_providers.opencodex]");
-    expect(stripped).toContain('model = "gpt-5.5"');
-  });
 });
 
 describe("EOL boundary helpers (Windows CRLF configs)", () => {

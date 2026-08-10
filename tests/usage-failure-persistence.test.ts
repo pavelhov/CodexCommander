@@ -9,14 +9,14 @@ let testDir = "";
 let previousHome: string | undefined;
 
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  testDir = mkdtempSync(join(tmpdir(), "ocx-usage-fail-"));
-  process.env.OPENCODEX_HOME = testDir;
+  previousHome = process.env.CODEXCOMMANDER_HOME;
+  testDir = mkdtempSync(join(tmpdir(), "ccx-usage-fail-"));
+  process.env.CODEXCOMMANDER_HOME = testDir;
 });
 
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = previousHome;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
 });
 
@@ -27,7 +27,7 @@ function lastPersistedLine(): Record<string, unknown> {
 
 test("5xx entry persists failure diagnostics to usage.jsonl (survives the ring buffer)", () => {
   addRequestLog({
-    requestId: "ocx-test-502",
+    requestId: "ccx-test-502",
     timestamp: Date.now(),
     model: "gpt-test",
     provider: "openai",
@@ -49,7 +49,7 @@ test("5xx entry persists failure diagnostics to usage.jsonl (survives the ring b
 
 test("successful entry keeps the existing persisted shape (no diagnostic fields)", () => {
   addRequestLog({
-    requestId: "ocx-test-200",
+    requestId: "ccx-test-200",
     timestamp: Date.now(),
     model: "gpt-test",
     provider: "openai",

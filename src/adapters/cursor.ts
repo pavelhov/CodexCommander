@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { AdapterEvent, OcxProviderConfig } from "../types";
+import type { AdapterEvent, CodexCommanderProviderConfig } from "../types";
 import type { ProviderAdapter } from "./base";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { cursorExecDeniedMessage, cursorRequestDeclaresFullAccess } from "./cursor/exec-policy";
@@ -45,14 +45,14 @@ export interface CursorAdapterDeps {
 function safeCursorTransportError(err: unknown): string {
   if (err instanceof CursorTransportDisabledError) return CURSOR_TRANSPORT_DISABLED_MESSAGE;
   if (err instanceof CursorMissingCredentialError) {
-    return "Cursor live transport is enabled, but no Cursor access token is configured. Set provider.apiKey or OPENCODEX_CURSOR_TEST_TOKEN.";
+    return "Cursor live transport is enabled, but no Cursor access token is configured. Set provider.apiKey or CCX_CURSOR_TEST_TOKEN.";
   }
   const message = err instanceof Error ? err.message : typeof err === "string" ? err : undefined;
   if (message) return safeCursorErrorMessage(message);
   return "Cursor upstream error: transport failed before completion.";
 }
 
-export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAdapterDeps = {}): ProviderAdapter {
+export function createCursorAdapter(provider: CodexCommanderProviderConfig, deps: CursorAdapterDeps = {}): ProviderAdapter {
   return {
     name: "cursor",
 
@@ -88,7 +88,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           try {
             const token = resolveCursorToken(provider, incoming.headers);
             _parsed._cursorIdentityScope = createHash("sha256")
-              .update("ocx:cursor:acct:")
+              .update("ccx:cursor:acct:")
               .update(token)
               .digest("hex")
               .slice(0, 16);
@@ -179,7 +179,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         }
       } catch (err) {
         if (isCursorBenignCancelError(err)) return;
-        const partialUsage = (err as { partialUsage?: import("../types").OcxUsage }).partialUsage;
+        const partialUsage = (err as { partialUsage?: import("../types").CodexCommanderUsage }).partialUsage;
         emit({
           type: "error",
           message: isTranslatorBudgetExceededError(err)

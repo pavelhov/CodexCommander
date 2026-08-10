@@ -1,15 +1,15 @@
 /**
  * Claude Code inbound: Anthropic Messages API request -> internal /v1/responses body.
  *
- * Design (devlog/260711_claude_inbound/010, 003_evidence.md):
+ * Design contract:
  *  - translate-and-replay: the produced body MUST pass the real responsesRequestSchema
  *    parse so routing/OAuth/pool/failover are inherited unchanged.
  *  - thinking/redacted_thinking blocks on replay are DROPPED (v1 policy) — routed
- *    providers carry reasoning in Responses items/ocxr1 envelopes instead.
+ *    providers carry reasoning in Responses items/ccxr1 envelopes instead.
  *  - thinking.budget_tokens is NEVER forwarded raw; it maps to an effort tier.
  *  - top_k is accepted and silently dropped (no Responses equivalent, CCR parity).
  */
-import type { OcxClaudeCodeConfig } from "../types";
+import type { CodexCommanderClaudeCodeConfig } from "../types";
 import { resolveAlias } from "./alias";
 import { stripOneMillionMarker } from "./context-windows";
 import { resolveDesktop3pAlias } from "./desktop-3p";
@@ -24,9 +24,9 @@ function isRec(v: unknown): v is Rec {
 }
 
 /** Alias first, then modelMap: exact id, then date-suffix-stripped (`-\d{8}$`), else passthrough. */
-export function resolveInboundModel(model: string, cc?: OcxClaudeCodeConfig): string {
+export function resolveInboundModel(model: string, cc?: CodexCommanderClaudeCodeConfig): string {
   // Defensive: Desktop/CLI strip the [1m] context-variant marker client-side, but a
-  // leaking build must not break alias decode (devlog 138 — the 1M signal is the
+  // leaking build must not break alias decode (implementation contract — the 1M signal is the
   // anthropic-beta header, never the id). Case-insensitive: the CLI matches /\[1m\]/i.
   model = stripOneMillionMarker(model);
   const aliased = resolveAlias(model);
@@ -56,7 +56,7 @@ export function effortForThinkingBudget(budget: number): string {
 }
 
 /**
- * Adaptive-thinking wire (devlog 080): Claude Code /effort sends
+ * Adaptive-thinking wire (implementation contract): Claude Code /effort sends
  * `thinking:{type:"adaptive"}` + `output_config:{effort:"..."}` (verified by local
  * capture of claude 2.1.207 and CLIProxyAPI#1540). Forward the level verbatim when it
  * is a known Responses effort; unknown strings are dropped so downstream defaults win.
@@ -125,7 +125,7 @@ function pushUserMessage(input: Rec[], blocks: Rec[]): void {
 }
 
 /**
- * Bundled-skill elision for routed models (devlog 060). Claude Code loads a skill
+ * Bundled-skill elision for routed models (implementation contract). Claude Code loads a skill
  * by calling the `Skill` tool; the ~136k-token document bundle then rides the
  * paired tool_result on EVERY subsequent turn. Third-party models are not trained
  * on these Anthropic bundles, so for blocked skills we substitute the result body
@@ -135,7 +135,7 @@ function pushUserMessage(input: Rec[], blocks: Rec[]): void {
 export const DEFAULT_BLOCKED_SKILLS = ["claude-api"];
 
 /** Shared effective policy for proxy elision and generated routed-agent guards. */
-export function effectiveBlockedSkillNames(cc?: Pick<OcxClaudeCodeConfig, "blockedSkills">): string[] {
+export function effectiveBlockedSkillNames(cc?: Pick<CodexCommanderClaudeCodeConfig, "blockedSkills">): string[] {
   const names = cc?.blockedSkills ?? DEFAULT_BLOCKED_SKILLS;
   return [...new Set(names
     .filter((name): name is string => typeof name === "string")
@@ -144,14 +144,14 @@ export function effectiveBlockedSkillNames(cc?: Pick<OcxClaudeCodeConfig, "block
 }
 
 /**
- * ocx-route directive (devlog 072): injected agent-definition bodies carry
- * `<!-- ocx-route: <model> -->` because Claude Code 2.1.207 ignores custom
+ * ccx-route directive (implementation contract): injected agent-definition bodies carry
+ * `<!-- ccx-route: <model> -->` because Claude Code 2.1.207 ignores custom
  * gateway ids in agent frontmatter (live-proven fallback to sonnet). The body
  * rides the subagent's system prompt, so the proxy re-routes here. Only the
  * FIRST directive wins; the scan is bounded to the system field.
  */
-const OCX_ROUTE_RE = /<!--\s*ocx-route:\s*([^\s]+)\s*-->/;
-const OCX_EFFORT_RE = /<!--\s*ocx-effort:\s*(low|medium|high|xhigh|max)\s*-->/;
+const CCX_ROUTE_RE = /<!--\s*ccx-route:\s*([^\s]+)\s*-->/;
+const CCX_EFFORT_RE = /<!--\s*ccx-effort:\s*(low|medium|high|xhigh|max)\s*-->/;
 
 function systemText(body: unknown): string | null {
   if (!isRec(body)) return null;
@@ -165,10 +165,10 @@ function systemText(body: unknown): string | null {
   return text || null;
 }
 
-export function extractOcxRouteDirective(body: unknown): string | null {
+export function extractCodexCommanderRouteDirective(body: unknown): string | null {
   const text = systemText(body);
   if (!text) return null;
-  const match = OCX_ROUTE_RE.exec(text);
+  const match = CCX_ROUTE_RE.exec(text);
   return match ? match[1]! : null;
 }
 
@@ -176,13 +176,13 @@ export function extractOcxRouteDirective(body: unknown): string | null {
  * Claude Code 2.1.220 collapses custom-agent frontmatter `effort: max` and
  * `effort: xhigh` into the legacy `thinking.budget_tokens` shape. Preserve the
  * exact generated-agent setting through the same trusted system-body channel as
- * ocx-route so the inbound translator can restore `output_config.effort`.
+ * ccx-route so the inbound translator can restore `output_config.effort`.
  */
-export function extractOcxEffortDirective(body: unknown): NonNullable<OcxClaudeCodeConfig["subagentEffort"]> | null {
+export function extractCodexCommanderEffortDirective(body: unknown): NonNullable<CodexCommanderClaudeCodeConfig["subagentEffort"]> | null {
   const text = systemText(body);
   if (!text) return null;
-  const match = OCX_EFFORT_RE.exec(text);
-  return match ? match[1] as NonNullable<OcxClaudeCodeConfig["subagentEffort"]> : null;
+  const match = CCX_EFFORT_RE.exec(text);
+  return match ? match[1] as NonNullable<CodexCommanderClaudeCodeConfig["subagentEffort"]> : null;
 }
 
 /** Injected-skill payloads below this size are never stubbed (not worth it). */
@@ -199,7 +199,7 @@ interface SkillElisionContext {
 const NO_ELISION: SkillElisionContext = { callIds: new Set(), names: [] };
 
 /**
- * Claude Code 2.1.207 (live capture, devlog 060 follow-up): the Skill tool_result is
+ * Claude Code 2.1.207 (live capture, implementation contract follow-up): the Skill tool_result is
  * a tiny "Launching skill: <name>" note; the actual ~570k-char document bundle rides
  * as a SEPARATE text block in the same user message, whose first line is
  * `Base directory for this skill: <dir>/<skill-name>`. Stub that block when the
@@ -211,15 +211,15 @@ function maybeElideSkillText(text: string, names: readonly string[]): string {
   const firstLineEnd = text.indexOf("\n");
   const dir = text.slice(SKILL_TEXT_MARKER.length, firstLineEnd === -1 ? text.length : firstLineEnd).trim();
   // Windows clients send `C:\Users\...\claude-api`; normalize separators before
-  // basenaming (repo precedent: src/codex/inject.ts isOpencodexCatalogPath).
+  // basenaming (repo precedent: src/codex/inject.ts catalog-path ownership).
   const base = dir.replace(/\\/g, "/").split("/").filter(Boolean).pop()?.toLowerCase() ?? "";
   if (!names.includes(base)) return text;
-  return `[opencodex] '${base}' skill document bundle (${text.length} chars) elided for routed models `
+  return `[codexcommander] '${base}' skill document bundle (${text.length} chars) elided for routed models `
     + "(claudeCode.blockedSkills). The skill is loaded; answer from general knowledge instead of citing the bundle.";
 }
 
 function skillElisionStub(callId: string): string {
-  return "[opencodex] Skill document bundle elided for routed models (claudeCode.blockedSkills). "
+  return "[codexcommander] Skill document bundle elided for routed models (claudeCode.blockedSkills). "
     + `The skill loaded, but its reference documents were removed to save context (call ${callId}). `
     + "Answer from general knowledge instead of citing the bundle.";
 }
@@ -288,7 +288,7 @@ function userMessageToItems(content: unknown, input: Rec[], elide: SkillElisionC
         input.push({
           type: "function_call_output",
           call_id: raw.tool_use_id,
-          // Blocked-skill bundles are stubbed out for routed models (devlog 060).
+          // Blocked-skill bundles are stubbed out for routed models (implementation contract).
           output: elide.callIds.has(raw.tool_use_id) ? skillElisionStub(raw.tool_use_id) : toolResultOutput(raw),
         });
         break;
@@ -403,7 +403,7 @@ export interface ClaudeInboundTranslation {
  * Translate an Anthropic Messages request body into a /v1/responses request body.
  * Throws AnthropicRequestError (-> 400 invalid_request_error) on malformed input.
  */
-export function anthropicToResponsesBody(raw: unknown, cc?: OcxClaudeCodeConfig): Rec {
+export function anthropicToResponsesBody(raw: unknown, cc?: CodexCommanderClaudeCodeConfig): Rec {
   return anthropicToResponsesTranslation(raw, cc).body;
 }
 
@@ -412,7 +412,7 @@ export function anthropicToResponsesBody(raw: unknown, cc?: OcxClaudeCodeConfig)
  * OUT-OF-BODY tuple (audit 133 R3#1 — an in-body marker would leak upstream through
  * the native Responses forward and 400).
  */
-export function anthropicToResponsesTranslation(raw: unknown, cc?: OcxClaudeCodeConfig): ClaudeInboundTranslation {
+export function anthropicToResponsesTranslation(raw: unknown, cc?: CodexCommanderClaudeCodeConfig): ClaudeInboundTranslation {
   if (!isRec(raw)) throw new AnthropicRequestError("request body must be a JSON object");
   if (typeof raw.model !== "string" || raw.model.length === 0) {
     throw new AnthropicRequestError("model is required");
@@ -466,15 +466,15 @@ export function anthropicToResponsesTranslation(raw: unknown, cc?: OcxClaudeCode
     body.user = raw.metadata.user_id;
     // OpenAI-side prompt caching is routed by prompt_cache_key (Codex clients send
     // their session id; without it consecutive /v1/messages turns reported
-    // cached_tokens: 0 on the ChatGPT backend — devlog 090). Claude Code's
+    // cached_tokens: 0 on the ChatGPT backend — implementation contract). Claude Code's
     // metadata.user_id embeds the session uuid, so hashing it yields a stable
     // per-session key with a bounded length/charset.
     body.prompt_cache_key = createHash("sha256").update(raw.metadata.user_id).digest("hex").slice(0, 32);
     cacheKeySource = "metadata";
   } else if (systemParts.length > 0) {
-    // Claude Desktop sends no metadata.user_id (H1, devlog 130): without any key the
+    // Claude Desktop sends no metadata.user_id (H1, implementation contract): without any key the
     // ChatGPT/OpenAI backends reported cached_tokens:0 on every turn. Fall back to a
-    // cache-cohort hash (devlog 260712 B4 + Pro review 012): fingerprint what the
+    // cache-cohort hash (implementation contract B4 + Pro review 012): fingerprint what the
     // upstream actually receives — resolved model, post-translation system, and the
     // FULL translated tool definitions in WIRE ORDER (sorting the hash while sending
     // a different order would break the key↔prefix correspondence). canonical JSON
@@ -507,7 +507,7 @@ export function anthropicToResponsesTranslation(raw: unknown, cc?: OcxClaudeCode
   } else if (isRec(thinking) || outputConfigEffort !== undefined) {
     const reasoning: Rec = { summary: "auto" };
     if (outputConfigEffort !== undefined) {
-      // Adaptive wire: /effort arrives as output_config.effort (devlog 080).
+      // Adaptive wire: /effort arrives as output_config.effort (implementation contract).
       reasoning.effort = outputConfigEffort;
     } else if (isRec(thinking) && thinking.type === "enabled" && typeof thinking.budget_tokens === "number") {
       reasoning.effort = effortForThinkingBudget(thinking.budget_tokens);

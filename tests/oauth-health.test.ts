@@ -20,34 +20,33 @@ import {
   getCodexAccountHealthSnapshot,
   recordCodexUpstreamOutcome,
 } from "../src/codex/routing";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { formatOAuthHealthForStatus } from "../src/cli/status-oauth";
 import {
-  LOCAL_ATTESTATION_CHALLENGE_HEADER,
-  LOCAL_ATTESTATION_PROOF_HEADER,
   createLocalAttestationProof,
 } from "../src/lib/local-management-attestation";
+import { ATTESTATION_CHALLENGE_HEADER, ATTESTATION_PROOF_HEADER } from "../src/identity";
 
 const origHome = process.env.HOME;
-const origOcxHome = process.env.OPENCODEX_HOME;
-const origAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+const origCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+const origAdminToken = process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
 let tmp: string;
 
 beforeEach(() => {
   tmp = join(tmpdir(), `oauth-health-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   mkdirSync(tmp, { recursive: true });
   process.env.HOME = tmp;
-  process.env.OPENCODEX_HOME = join(tmp, "ocx");
+  process.env.CODEXCOMMANDER_HOME = join(tmp, "ccx");
   clearCodexUpstreamHealth();
 });
 
 afterEach(() => {
   if (origHome === undefined) delete process.env.HOME;
   else process.env.HOME = origHome;
-  if (origOcxHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = origOcxHome;
-  if (origAdminToken === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
-  else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = origAdminToken;
+  if (origCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = origCodexCommanderHome;
+  if (origAdminToken === undefined) delete process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
+  else process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = origAdminToken;
   clearCodexUpstreamHealth();
   clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   rmSync(tmp, { recursive: true, force: true });
@@ -120,11 +119,11 @@ describe("collectOAuthHealthEntries", () => {
       provider: "kimi",
       accountId,
       health: { status: "reauth_required", reason: "refresh_failed" },
-      action: "run `ocx login kimi`",
+      action: "run `ccx login kimi`",
     });
   });
 
-  test("Codex reauth action points at the dashboard pool, not ocx login codex", () => {
+  test("Codex reauth action points at the dashboard pool, not ccx login codex", () => {
     markCodexAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
     const entries = collectOAuthHealthEntries();
     const entry = entries.find(e => e.provider === "codex" && e.accountId === MAIN_CODEX_ACCOUNT_ID);
@@ -134,7 +133,7 @@ describe("collectOAuthHealthEntries", () => {
       health: { status: "reauth_required", reason: "refresh_failed" },
       action: CODEX_REAUTH_ACTION,
     });
-    expect(entry!.action).not.toContain("ocx login codex");
+    expect(entry!.action).not.toContain("ccx login codex");
   });
 
   test("kiro manual access-only unexpired credentials are healthy", async () => {
@@ -178,7 +177,7 @@ describe("collectOAuthHealthEntries", () => {
 describe("collectOAuthHealthEntriesForCli", () => {
   test("uses management API Codex health and does not read CLI process maps", async () => {
     markCodexAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
-    process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "ocx-admin-health-test";
+    process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = "ccx-admin-health-test";
     const attestationSecret = "A".repeat(43);
     let authorization: string | null = null;
     const report = await collectOAuthHealthEntriesForCli(Date.now(), {
@@ -186,9 +185,9 @@ describe("collectOAuthHealthEntriesForCli", () => {
       readRuntimePortImpl: () => ({ pid: 4242, port: 19191, attestationSecret }),
       fetchImpl: async (input, init) => {
         if (String(input).endsWith("/healthz")) {
-          const challenge = new Headers(init?.headers).get(LOCAL_ATTESTATION_CHALLENGE_HEADER)!;
+          const challenge = new Headers(init?.headers).get(ATTESTATION_CHALLENGE_HEADER)!;
           const proof = createLocalAttestationProof(attestationSecret, challenge, 4242, 19191)!;
-          return new Response("ok", { headers: { [LOCAL_ATTESTATION_PROOF_HEADER]: proof } });
+          return new Response("ok", { headers: { [ATTESTATION_PROOF_HEADER]: proof } });
         }
         authorization = new Headers(init?.headers).get("authorization");
         return new Response(JSON.stringify({
@@ -203,7 +202,7 @@ describe("collectOAuthHealthEntriesForCli", () => {
         }), { status: 200 });
       },
     });
-    expect(authorization).toBe("Bearer ocx-admin-health-test");
+    expect(authorization).toBe("Bearer ccx-admin-health-test");
     expect(report.codexHealthSource).toBe("management-api");
     expect(report.entries.some(e => e.accountId === MAIN_CODEX_ACCOUNT_ID)).toBe(false);
     const remote = report.entries.find(e => e.accountId === "proxy-codex-acct");
@@ -216,7 +215,7 @@ describe("collectOAuthHealthEntriesForCli", () => {
   });
 
   test("never sends the admin token to a configured-port listener without runtime attestation", async () => {
-    process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "ocx-admin-health-test";
+    process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = "ccx-admin-health-test";
     let fetchCalls = 0;
     const report = await collectOAuthHealthEntriesForCli(Date.now(), {
       findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: 4242, source: "config" }),
@@ -232,7 +231,7 @@ describe("collectOAuthHealthEntriesForCli", () => {
   });
 
   test("an invalid listener proof cannot unlock the bearer-bearing request", async () => {
-    process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "ocx-admin-health-test";
+    process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = "ccx-admin-health-test";
     const attestationSecret = "A".repeat(43);
     let apiCalls = 0;
     const report = await collectOAuthHealthEntriesForCli(Date.now(), {
@@ -241,7 +240,7 @@ describe("collectOAuthHealthEntriesForCli", () => {
       fetchImpl: async (input, init) => {
         expect(new Headers(init?.headers).get("authorization")).toBeNull();
         if (!String(input).endsWith("/healthz")) apiCalls += 1;
-        return new Response("fake", { headers: { [LOCAL_ATTESTATION_PROOF_HEADER]: "B".repeat(43) } });
+        return new Response("fake", { headers: { [ATTESTATION_PROOF_HEADER]: "B".repeat(43) } });
       },
     });
     expect(apiCalls).toBe(0);
@@ -304,7 +303,7 @@ describe("collectOAuthHealthEntriesForCli", () => {
 
 describe("getCodexAccountHealthSnapshot", () => {
   test("exposes active cooldown source without changing write policy", () => {
-    const config = { providers: {} } as OcxConfig;
+    const config = { providers: {} } as CodexCommanderConfig;
     const now = Date.parse("2026-07-23T14:00:00.000Z");
     recordCodexUpstreamOutcome(config, "pool-acct", 429, { retryAfter: "120", now });
 

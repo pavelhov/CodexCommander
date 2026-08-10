@@ -1,4 +1,4 @@
-import type { OcxAccountPoolRotationStrategy } from "../types";
+import type { CodexCommanderAccountPoolRotationStrategy } from "../types";
 import type { GenerationContext } from "../lib/state-store-sweeper";
 
 export const POOL_KEY_CODEX = "codex";
@@ -16,8 +16,8 @@ let lastReconciledGeneration = 0;
 const DEFAULT_STICKY_LIMIT = 1;
 const MIN_STICKY_LIMIT = 1;
 const MAX_STICKY_LIMIT = 100;
-const DEFAULT_STRATEGY: OcxAccountPoolRotationStrategy = "quota";
-const VALID_STRATEGIES = new Set<OcxAccountPoolRotationStrategy>(["quota", "round-robin", "fill-first"]);
+const DEFAULT_STRATEGY: CodexCommanderAccountPoolRotationStrategy = "quota";
+const VALID_STRATEGIES = new Set<CodexCommanderAccountPoolRotationStrategy>(["quota", "round-robin", "fill-first"]);
 
 /** Selection order for an account with no stored preference: one flat tier. */
 export const DEFAULT_ACCOUNT_PRIORITY = 0;
@@ -25,9 +25,9 @@ export const MIN_ACCOUNT_PRIORITY = -100;
 export const MAX_ACCOUNT_PRIORITY = 100;
 
 /** Strict parse for management APIs — returns null instead of defaulting. */
-export function parseAccountPoolStrategy(raw: unknown): OcxAccountPoolRotationStrategy | null {
-  if (typeof raw === "string" && VALID_STRATEGIES.has(raw as OcxAccountPoolRotationStrategy)) {
-    return raw as OcxAccountPoolRotationStrategy;
+export function parseAccountPoolStrategy(raw: unknown): CodexCommanderAccountPoolRotationStrategy | null {
+  if (typeof raw === "string" && VALID_STRATEGIES.has(raw as CodexCommanderAccountPoolRotationStrategy)) {
+    return raw as CodexCommanderAccountPoolRotationStrategy;
   }
   return null;
 }
@@ -40,7 +40,7 @@ export function parseAccountPoolStickyLimit(raw: unknown): number | null {
   return null;
 }
 
-export function normalizeAccountPoolStrategy(raw: unknown): OcxAccountPoolRotationStrategy {
+export function normalizeAccountPoolStrategy(raw: unknown): CodexCommanderAccountPoolRotationStrategy {
   return parseAccountPoolStrategy(raw) ?? DEFAULT_STRATEGY;
 }
 

@@ -12,8 +12,8 @@ import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import type { ExportModel } from "../../clients/config-export";
 import { providerContextCap } from "../../providers/context-cap";
-import { routedSlug, slugEquals } from "../../providers/slug-codec";
-import type { OcxConfig } from "../../types";
+import { routedSlug } from "../../providers/slug-codec";
+import type { CodexCommanderConfig } from "../../types";
 import { fetchAllModels } from "./shared";
 
 /**
@@ -36,7 +36,7 @@ export type ManagementModelRow = Partial<CatalogModel> & {
  * models the GUI's Models tab shows — including this function's `disabled` computation,
  * which the export core (src/clients/config-export.ts) deliberately does not perform.
  */
-export async function listManagementModelRows(config: OcxConfig): Promise<ManagementModelRow[]> {
+export async function listManagementModelRows(config: CodexCommanderConfig): Promise<ManagementModelRow[]> {
   const models = await fetchAllModels(config);
   const disabled = new Set(config.disabledModels ?? []);
   // Native GPT passthrough rows lead (provider "openai", bare-slug namespaced ids): sourced
@@ -55,7 +55,7 @@ export async function listManagementModelRows(config: OcxConfig): Promise<Manage
       provider: cm.provider,
       id: cm.modelId,
       namespaced,
-      disabled: [...disabled].some(stored => slugEquals(stored, cm.provider, cm.modelId)),
+      disabled: disabled.has(namespaced),
       custom: true,
       customId: cm.id,
       displayName: cm.displayName,
@@ -72,16 +72,14 @@ export async function listManagementModelRows(config: OcxConfig): Promise<Manage
   // slug, while a combo keeps the same precedence it has in routing and /v1/models.
   const customNamespaced = new Set(visibleCustomModels.map(c => c.namespaced));
   const dedupedRouted = publicModels.map((m): ManagementModelRow | null => {
-    // Codex-facing slug (one "/", slug-codec); disabledModels compares tolerate both forms.
+    // Codex-facing slug (one "/", slug-codec); disabledModels stores this exact form.
     const namespaced = catalogModelSlug(m);
     if (m.provider !== "combo" && customNamespaced.has(namespaced)) return null;
     const contextCap = providerContextCap(config, m.provider);
     return {
       ...m,
       namespaced,
-      disabled: [...disabled].some(stored => (
-        stored === namespaced || slugEquals(stored, m.provider, m.id)
-      )),
+      disabled: disabled.has(namespaced),
       ...(contextCap !== undefined ? { contextCap, contextCapped: m.contextCapped === true } : {}),
     };
   }).filter((row): row is ManagementModelRow => row !== null);
@@ -111,7 +109,7 @@ export function toExportModel(row: ManagementModelRow): ExportModel {
  * tab is absent from `/v1/models` and exporting it would hand the client a
  * selector the proxy refuses to route.
  */
-export async function loadExportModels(config: OcxConfig): Promise<ExportModel[]> {
+export async function loadExportModels(config: CodexCommanderConfig): Promise<ExportModel[]> {
   const rows = await listManagementModelRows(config);
   return rows.filter(row => !row.disabled).map(toExportModel);
 }

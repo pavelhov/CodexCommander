@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { callXaiImages } from "../../src/images/xai-client";
 
-const PREV_HOME = process.env.OPENCODEX_HOME;
-beforeAll(() => { process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID()); });
-afterAll(() => { if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = PREV_HOME; });
+const PREV_HOME = process.env.CODEXCOMMANDER_HOME;
+beforeAll(() => { process.env.CODEXCOMMANDER_HOME = join(tmpdir(), "ccx-test-" + randomUUID()); });
+afterAll(() => { if (PREV_HOME === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = PREV_HOME; });
 
 const AUTH = { baseUrl: "https://api.x.ai", token: "test-token" };
 const originalFetch = globalThis.fetch;

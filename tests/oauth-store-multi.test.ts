@@ -28,7 +28,7 @@ import {
 import type { OAuthCredentials } from "../src/oauth/types";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-oauth-store-multi-test");
-let previousOpencodexHome: string | undefined;
+let previousCodexCommanderHome: string | undefined;
 
 const cred = (over: Partial<OAuthCredentials> = {}): OAuthCredentials => ({
   access: "access-1",
@@ -39,10 +39,10 @@ const cred = (over: Partial<OAuthCredentials> = {}): OAuthCredentials => ({
 
 describe("multi-account auth store", () => {
   beforeEach(() => {
-    previousOpencodexHome = process.env.OPENCODEX_HOME;
+    previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     resetHardenedStateForTests();
     setIcaclsRunnerForTests(() => ({
       success: true,
@@ -55,41 +55,36 @@ describe("multi-account auth store", () => {
   afterEach(() => {
     setIcaclsRunnerForTests(null);
     resetHardenedStateForTests();
-    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
 
-  test("legacy single-credential auth.json normalizes and round-trips without losing login", async () => {
+  test("flat credential rows are ignored and replaced by the current schema", async () => {
     const authPath = join(TEST_DIR, "auth.json");
     mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
     writeFileSync(authPath, JSON.stringify({
-      xai: { access: "legacy-access", refresh: "legacy-refresh", expires: Date.now() + 1000, email: "old@example.com" },
+      xai: { access: "flat-access", refresh: "flat-refresh", expires: Date.now() + 1000, email: "old@example.com" },
     }));
-    expect(getCredential("xai")?.access).toBe("legacy-access");
-    // Any mutation persists the new shape + writes the downgrade backup.
+    expect(getCredential("xai")).toBeNull();
+
     await saveCredential("xai", cred({ email: "old@example.com", access: "new-access" }));
     expect(getCredential("xai")?.access).toBe("new-access");
     const raw = JSON.parse(readFileSync(authPath, "utf-8"));
-    expect(Array.isArray(raw.xai.accounts)).toBe(true);
-    expect(existsSync(`${authPath}.pre-multiauth`)).toBe(true);
+    expect(raw.schemaVersion).toBe(1);
+    expect(Array.isArray(raw.providers.xai.accounts)).toBe(true);
   });
 
-  test("legacy credential WITHOUT identity gets a deterministic account id across loads", async () => {
-    // Legacy stores are re-normalized on EVERY load without being persisted, so the
-    // derived id must be stable: a time-salted id would make getAccountSet and
-    // getAccountCredential disagree (spurious logout) and refresh persists no-op.
-    const authPath = join(TEST_DIR, "auth.json");
-    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
-    writeFileSync(authPath, JSON.stringify({
-      cursor: { access: "legacy-access", refresh: "legacy-refresh", expires: Date.now() + 3600_000 },
-    }));
+  test("a canonical credential without identity gets a deterministic account id", async () => {
+    await saveCredential("cursor", {
+      access: "opaque-access",
+      refresh: "opaque-refresh",
+      expires: Date.now() + 3600_000,
+    });
     const set = getAccountSet("cursor");
     expect(set).not.toBeNull();
-    // Separate load (fresh normalization) must resolve the SAME account id.
-    expect(getAccountCredential("cursor", set!.activeAccountId)?.access).toBe("legacy-access");
+    expect(getAccountCredential("cursor", set!.activeAccountId)?.access).toBe("opaque-access");
     expect(getAccountSet("cursor")!.activeAccountId).toBe(set!.activeAccountId);
-    // A rotated refresh persisted against that id must land (not silently no-op).
     await saveAccountCredential("cursor", set!.activeAccountId, {
       access: "rotated-access", refresh: "rotated-refresh", expires: Date.now() + 3600_000,
     });
@@ -189,6 +184,27 @@ describe("multi-account auth store", () => {
     expect(getCredential("xai")?.access).toBe("access-b"); // active unchanged
   });
 
+  test("non-finite expiries are rejected without replacing valid persisted credentials", async () => {
+    await saveCredential("xai", cred({ email: "safe@example.com", accountId: "safe", access: "safe-access" }));
+    const accountId = getAccountSet("xai")!.activeAccountId;
+    const authPath = join(TEST_DIR, "auth.json");
+    const before = readFileSync(authPath, "utf8");
+
+    await expect(saveCredential("xai", cred({
+      email: "unsafe@example.com",
+      accountId: "unsafe",
+      access: "unsafe-access",
+      expires: Number.POSITIVE_INFINITY,
+    }))).rejects.toThrow(/invalid OAuth credential/);
+    await expect(saveAccountCredential("xai", accountId, cred({
+      access: "unsafe-refresh",
+      expires: Number.NaN,
+    }))).rejects.toThrow(/invalid OAuth credential/);
+
+    expect(readFileSync(authPath, "utf8")).toBe(before);
+    expect(getCredential("xai")?.access).toBe("safe-access");
+  });
+
   test("removeAccount of active promotes next; last removal deletes provider", async () => {
     await saveCredential("xai", cred({ email: "a@example.com", accountId: "acct-a", access: "access-a" }));
     await saveCredential("xai", cred({ email: "b@example.com", accountId: "acct-b", access: "access-b" }));
@@ -218,19 +234,24 @@ describe("multi-account auth store", () => {
     expect(listAccounts("xai")[0]?.needsReauth).toBeUndefined();
   });
 
-  test("invalid account entries are dropped on load", async () => {
+  test("one invalid account rejects the whole persisted store", async () => {
     const authPath = join(TEST_DIR, "auth.json");
     mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
     writeFileSync(authPath, JSON.stringify({
-      xai: { activeAccountId: "gone", accounts: [
-        { id: "ok", credential: { access: "a", refresh: "r", expires: 1 } },
-        { id: "bad", credential: { access: 42 } },
-        { notAnAccount: true },
-      ] },
+      schemaVersion: 1,
+      providers: {
+        xai: { activeAccountId: "ok", accounts: [
+          { id: "ok", credential: { access: "a", refresh: "r", expires: 1 } },
+          { id: "bad", credential: { access: 42 } },
+        ] },
+      },
     }));
-    const set = getAccountSet("xai")!;
-    expect(set.accounts.length).toBe(1);
-    expect(set.activeAccountId).toBe("ok"); // dangling active healed
+    expect(getAccountSet("xai")).toBeNull();
+
+    await saveCredential("xai", cred({ accountId: "fresh" }));
+    const persisted = JSON.parse(readFileSync(authPath, "utf8"));
+    expect(persisted.schemaVersion).toBe(1);
+    expect(persisted.providers.xai.accounts).toHaveLength(1);
   });
 
   test("queued generation-checked reauth mutation rechecks liveness after reconciliation", async () => {

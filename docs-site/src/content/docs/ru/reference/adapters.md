@@ -3,7 +3,7 @@ title: Адаптеры
 description: Семь адаптеров провайдеров — назначение каждого, способ построения запросов и особенности.
 ---
 
-**Адаптер** выполняет преобразование между внутренней моделью запросов/ответов opencodex и
+**Адаптер** выполняет преобразование между внутренней моделью запросов/ответов CodexCommander и
 wire-форматом одного провайдера. Каждый адаптер реализует интерфейс `ProviderAdapter`
 (`src/adapters/base.ts`):
 
@@ -18,7 +18,7 @@ interface ProviderAdapter {
 }
 ```
 
-`buildRequest` понижает `OcxParsedRequest` до HTTP-запроса к вышестоящему провайдеру;
+`buildRequest` понижает `CodexCommanderParsedRequest` до HTTP-запроса к вышестоящему провайдеру;
 `parseStream` / `parseResponse` поднимают ответ провайдера обратно во внутренние события
 `AdapterEvent`. `fetchResponse` позволяет адаптеру самому управлять повторными попытками и
 таймаутами, а `runTurn` поддерживает транспорты, которые нельзя представить как один HTTP-запрос
@@ -62,7 +62,7 @@ interface ProviderAdapter {
 том же ключе, как и в переводимом пути `openai-chat`/Anthropic. Пользовательские транспорты
 `runTurn` в цикл HTTP-повторов не входят.
 
-- URL для `forward` → `{baseUrl}/responses`. Провайдер с `key` по умолчанию сохраняет прежнее построение `{baseUrl}/v1/responses`.
+- URL для `forward` → `{baseUrl}/responses`. URL по умолчанию для провайдера с `key` — `{baseUrl}/v1/responses`.
 - Провайдер с `key` может задать проверенный относительный `responsesPath`: адаптер удаляет один завершающий `/` из `baseUrl` и отправляет запрос на `{trimmedBaseUrl}{responsesPath}`. Для Ark Agent Plan используйте `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` и `responsesPath: "/responses"`.
 - В режиме `forward` ретранслируется только безопасный allowlist заголовков (`FORWARD_HEADERS`):
   authorization, ChatGPT account id и заголовки OpenAI beta/originator/session. Это путь входа
@@ -123,7 +123,7 @@ Kiro (`https://runtime.{region}.kiro.dev/`).
 неповторяемой ошибкой context-length, фильтрация и срабатывание guardrail — отфильтрованным
 incomplete. `TOOL_USE` без фактического вызова инструмента трактуется как противоречие, а не прогресс.
 
-В ходе с инструментами opencodex добавляет приватный `codex_kiro_final_answer`. Повторная попытка не
+В ходе с инструментами CodexCommander добавляет приватный `codex_kiro_final_answer`. Повторная попытка не
 создаёт пустые assistant/user-сообщения, сохраняет исходный user/tool-result и перед отправкой проверяет
 чередование ролей, непустые структурные сообщения и пары tool use/result. Ответ инструмента завершения
 всегда выдаётся как `final_answer`, даже если он совпадает с предыдущим commentary.
@@ -152,10 +152,10 @@ authorization.
   `grok-4.5`, помещая отдельные значения `effort` и `fast=true` в `requested_model.parameters`.
 - Нативное для Cursor локальное выполнение операций с файловой системой/shell/сетью по умолчанию
   запрещено. Явные интеграции `mcpServers` и `desktopExecutor` включаются отдельно;
-  `unsafeAllowNativeLocalExec` включает более широкий встроенный executor и обходит семантику
+  `nativeLocalExec: "on"` включает более широкий встроенный executor и обходит семантику
   одобрений/песочницы Codex.
 
-## `azure-openai` (алиас: `azure`)
+## `azure-openai`
 
 **Назначение:** **Azure OpenAI**. Обёртка над `openai-responses` (поэтому тоже
 `passthrough: true`).

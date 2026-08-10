@@ -1,4 +1,3 @@
-import { collectResponsesToolGroups } from "../responses/tool-groups";
 import { relaySseWithPayloadRewrite, type SsePayloadRewrite } from "./sse-payload-rewrite";
 import type { TranslatorBudget } from "../lib/translator-budget";
 
@@ -8,21 +7,20 @@ interface NamespacedTool {
 }
 
 const IMAGE_GEN_NAMESPACE = "image_gen";
-const IMAGE_GEN_DOTTED_PREFIX = `${IMAGE_GEN_NAMESPACE}.`;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 /**
- * Restrict the generic bridge map to Codex's standalone image namespace and accept the dotted
- * alias emitted by earlier compatibility attempts. Legacy flat dotted declarations are recovered
- * from the raw request because the generic parser does not assign them a namespace. Exact declared
- * names avoid splitting arbitrary double-underscore function names that belong to unrelated tools.
+ * Restrict the generic bridge map to Codex's canonical standalone image namespace.
+ *
+ * The map is keyed only by the flattened `image_gen__<tool>` upstream wire name produced for an
+ * explicitly declared namespace tool. Standalone dotted declarations and dotted upstream calls are
+ * not part of the current contract and must not be inferred or recovered here.
  */
 export function imageGenToolCallAliases(
   toolNsMap: ReadonlyMap<string, NamespacedTool>,
-  requestBody?: unknown,
   translatorBudget?: TranslatorBudget,
 ): Map<string, NamespacedTool> {
   const aliases = new Map<string, NamespacedTool>();
@@ -40,22 +38,6 @@ export function imageGenToolCallAliases(
   for (const [wireName, tool] of toolNsMap) {
     if (tool.namespace !== IMAGE_GEN_NAMESPACE) continue;
     retainAlias(wireName, tool);
-    retainAlias(`${tool.namespace}.${tool.name}`, tool);
-  }
-  for (const group of collectResponsesToolGroups(requestBody)) {
-    for (const tool of group) {
-      if (
-        !isPlainObject(tool)
-        || tool.type !== "function"
-        || typeof tool.name !== "string"
-        || !tool.name.startsWith(IMAGE_GEN_DOTTED_PREFIX)
-        || tool.name.length === IMAGE_GEN_DOTTED_PREFIX.length
-      ) continue;
-      const localName = tool.name.slice(IMAGE_GEN_DOTTED_PREFIX.length);
-      const target = { namespace: IMAGE_GEN_NAMESPACE, name: localName };
-      retainAlias(`${IMAGE_GEN_NAMESPACE}__${localName}`, target);
-      retainAlias(tool.name, target);
-    }
   }
   return aliases;
 }

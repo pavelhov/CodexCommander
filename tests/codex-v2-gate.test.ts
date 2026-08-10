@@ -31,7 +31,7 @@ import {
 } from "../src/codex/features";
 import { cmdV2, codexFeaturesInvocation, v2StatusLine, multiAgentModeLine } from "../src/cli/v2";
 import { handleManagementAPI } from "../src/server/management-api";
-import { loadConfig } from "../src/config";
+import { getDefaultConfig, loadConfig } from "../src/config";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 function template(): Record<string, unknown> {
@@ -57,7 +57,7 @@ function efforts(entry: { supported_reasoning_levels?: unknown }): string[] {
 }
 
 function fixtureConfig(content: string): string {
-  const dir = mkdtempSync(join(tmpdir(), "ocx-v2-"));
+  const dir = mkdtempSync(join(tmpdir(), "ccx-v2-"));
   const path = join(dir, "config.toml");
   writeFileSync(path, content);
   return path;
@@ -95,7 +95,7 @@ describe("catalog ultra (always-on)", () => {
       ],
       default_reasoning_level: "ultra",
     };
-    const codexHome = mkdtempSync(join(tmpdir(), "ocx-v2-catalog-"));
+    const codexHome = mkdtempSync(join(tmpdir(), "ccx-v2-catalog-"));
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n');
     writeFileSync(join(codexHome, "catalog.json"), JSON.stringify({ models: [diskSol] }));
     const previousCodexHome = process.env.CODEX_HOME;
@@ -247,10 +247,10 @@ describe("thread-limit-preserving v1/v2 transition", () => {
     writeFileSync(path, content.replace(/^enabled\s*=\s*(?:true|false)$/m, `enabled = ${enabled}`));
   };
 
-  test("off -> on carries the active legacy value and removes the boot conflict", () => {
+  test("off -> on carries the active V1 value and removes the boot conflict", () => {
     const path = fixtureConfig("# keep\n[agents]\nmax_threads = 100\nmax_depth = 2\n");
     const result = transitionMultiAgentV2(true, flipTableFlag(path), { configPath: path });
-    // The legacy key counts spawned children; the V2 key also counts the root agent's
+    // The V1 key counts spawned children; the V2 key also counts the root agent's
     // own slot, so crossing the boundary adds 1 (upstream saturating_add(1)).
     expect(result).toEqual({ ok: true, changed: true, threadLimit: 101 });
     expect(isMultiAgentV2Enabled(path)).toBe(true);
@@ -263,7 +263,7 @@ describe("thread-limit-preserving v1/v2 transition", () => {
   test("on -> off carries the active v2 value and removes v2 limit storage", () => {
     const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 64\n\n[agents]\nmax_depth = 2\n");
     const result = transitionMultiAgentV2(false, flipTableFlag(path), { configPath: path });
-    // V2 total 64 = 63 spawned children + the root slot; the legacy key counts only children.
+    // V2 total 64 = 63 spawned children + the root slot; the V1 key counts only children.
     expect(result).toEqual({ ok: true, changed: true, threadLimit: 63 });
     expect(isMultiAgentV2Enabled(path)).toBe(false);
     expect(getAgentsMaxThreads(path)).toBe(63);
@@ -294,7 +294,7 @@ describe("thread-limit-preserving v1/v2 transition", () => {
     expect(getLogicalMaxThreads(targetOnly)).toBe(32);
 
     const equal = fixtureConfig("[features.multi_agent_v2]\nenabled = false\nmax_concurrent_threads_per_session = 64\n\n[agents]\nmax_threads = 64\n");
-    // The legacy key is the active storage under V1, so it is the migration source and
+    // The V1 key is the active storage under V1, so it is the migration source and
     // gains the root slot on the way to V2.
     expect(transitionMultiAgentV2(true, flipTableFlag(equal), { configPath: equal })).toMatchObject({ ok: true, threadLimit: 65 });
     expect(getAgentsMaxThreads(equal)).toBe(null);
@@ -385,7 +385,7 @@ describe("nullable thread-limit reset (explicit null clears the active key)", ()
   });
 
   test("transition: explicit null also clears a limit stored in the OTHER backend", () => {
-    // Boot-conflict shape: V2 enabled with the legacy key still present. A null
+    // Boot-conflict shape: V2 enabled with the V1 key still present. A null
     // reset must leave NO thread limit in either storage.
     const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n\n[agents]\nmax_threads = 100\n");
     const result = transitionMultiAgentV2(true, () => { /* already enabled */ }, { configPath: path, threadLimit: null });
@@ -404,9 +404,9 @@ describe("nullable thread-limit reset (explicit null clears the active key)", ()
   test("PUT /api/v2 with maxConcurrentThreadsPerSession:null clears the V2 key and returns null", async () => {
     const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 64\n");
     const oldCodexHome = process.env.CODEX_HOME;
-    const oldOcxHome = process.env.OPENCODEX_HOME;
+    const oldCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     process.env.CODEX_HOME = dirname(path);
-    process.env.OPENCODEX_HOME = mkdtempSync(join(tmpdir(), "ocx-api-config-"));
+    process.env.CODEXCOMMANDER_HOME = mkdtempSync(join(tmpdir(), "ccx-api-config-"));
     const config = { providers: [] } as never;
     const deps = {
       toggleCodexMultiAgentV2: flipTableFlag(path),
@@ -437,16 +437,16 @@ describe("nullable thread-limit reset (explicit null clears the active key)", ()
       expect(getMaxConcurrentThreads(path)).toBe(33);
     } finally {
       if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
-      if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcxHome;
+      if (oldCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = oldCodexCommanderHome;
     }
   });
 
   test("PUT /api/v2 with maxConcurrentThreadsPerSession:null clears the V1 key and returns null", async () => {
     const path = fixtureConfig("[agents]\nmax_threads = 50\n");
     const oldCodexHome = process.env.CODEX_HOME;
-    const oldOcxHome = process.env.OPENCODEX_HOME;
+    const oldCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     process.env.CODEX_HOME = dirname(path);
-    process.env.OPENCODEX_HOME = mkdtempSync(join(tmpdir(), "ocx-api-config-"));
+    process.env.CODEXCOMMANDER_HOME = mkdtempSync(join(tmpdir(), "ccx-api-config-"));
     const config = { providers: [] } as never;
     let toggles = 0;
     const deps = {
@@ -465,7 +465,7 @@ describe("nullable thread-limit reset (explicit null clears the active key)", ()
       expect(getLogicalMaxThreads(path)).toBe(null);
     } finally {
       if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
-      if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcxHome;
+      if (oldCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = oldCodexCommanderHome;
     }
   });
 });
@@ -498,7 +498,7 @@ describe("v1<->v2 root-slot translation", () => {
     expect(() => v2TotalLimitToV1ChildLimit(0)).toThrow(RangeError);
   });
 
-  test("clamp: V2 total 1 disables to legacy 1, never 0", () => {
+  test("clamp: V2 total 1 disables to V1 1, never 0", () => {
     expect(v2TotalLimitToV1ChildLimit(1)).toBe(1);
     expect(v2TotalLimitToV1ChildLimit(2)).toBe(1);
     const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 1\n");
@@ -515,7 +515,7 @@ describe("v1<->v2 root-slot translation", () => {
     expect(getLogicalMaxThreads(hugeLegacy)).toBe(1e20);
   });
 
-  test("legacy-only under V2: disable preserves an untranslatable value; automatic re-enable is rejected; explicit limit recovers", () => {
+  test("V1-only under V2: disable preserves an untranslatable value; automatic re-enable is rejected; explicit limit recovers", () => {
     const original = "[features.multi_agent_v2]\nenabled = true\n\n[agents]\nmax_threads = 1000001\n";
     const path = fixtureConfig(original);
     // Disable: source and destination are both v1-child, so nothing crosses the
@@ -558,7 +558,7 @@ describe("v1<->v2 root-slot translation", () => {
     expect(getMaxConcurrentThreads(path)).toBe(32);
   });
 
-  test("idempotent re-disable on a V1 config leaves the legacy limit unchanged", () => {
+  test("idempotent re-disable on a V1 config leaves the V1 limit unchanged", () => {
     const path = fixtureConfig("[agents]\nmax_threads = 100\n");
     let calls = 0;
     const result = transitionMultiAgentV2(false, () => { calls++; }, { configPath: path });
@@ -567,7 +567,7 @@ describe("v1<->v2 root-slot translation", () => {
     expect(getAgentsMaxThreads(path)).toBe(100);
   });
 
-  test("same-state storage migration: legacy-only under V2 gains the root slot when the value moves to V2 storage", () => {
+  test("same-state storage migration: V1-only under V2 gains the root slot when the value moves to V2 storage", () => {
     const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n\n[agents]\nmax_threads = 10\n");
     const result = transitionMultiAgentV2(true, () => { /* already enabled */ }, { configPath: path });
     expect(result).toMatchObject({ ok: true, threadLimit: 11 });
@@ -577,7 +577,7 @@ describe("v1<->v2 root-slot translation", () => {
 });
 
 describe("config-surface parity: agents.enabled, max_depth, subagent_developer_instructions", () => {
-  test("opencodex mirrors exactly one upstream feature key", async () => {
+  test("codexcommander mirrors exactly one upstream feature key", async () => {
     const source = await Bun.file(new URL("../src/codex/features.ts", import.meta.url)).text();
     // Upstream feature keys are snake_case, so the underscore requirement is the
     // discriminator: JS member accesses on locals named `features` (features.match,
@@ -589,7 +589,7 @@ describe("config-surface parity: agents.enabled, max_depth, subagent_developer_i
     const referenced = new Set(
       [...source.matchAll(/features\.([a-z0-9]+(?:_[a-z0-9]+)+)/g)].map(m => m[1]),
     );
-    // multi_agent_v2 is deliberately mirrored because opencodex migrates its
+    // multi_agent_v2 is deliberately mirrored because codexcommander migrates its
     // concurrency value across the v1/v2 boundary and exposes the multi-agent
     // config surface. Every other upstream feature flag is delegated to
     // `codex features` and must NOT be hardcoded in src/codex/features.ts: upstream
@@ -615,7 +615,7 @@ describe("config-surface parity: agents.enabled, max_depth, subagent_developer_i
   test("feature toggling delegates to exactly the multi_agent_v2 native key", () => {
     const runtimeDeps = {
       env: { PATH: "" },
-      configDir: mkdtempSync(join(tmpdir(), "ocx-v2-toggle-")),
+      configDir: mkdtempSync(join(tmpdir(), "ccx-v2-toggle-")),
       existsSync: () => false,
       execFileSync: () => "codex-cli 0.999.0",
     };
@@ -783,10 +783,13 @@ describe("management API logical v1/v2 switching", () => {
   test("persists and clears the explicit V2 message-delivery policy", async () => {
     const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
     const oldCodexHome = process.env.CODEX_HOME;
-    const oldOcxHome = process.env.OPENCODEX_HOME;
+    const oldCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     process.env.CODEX_HOME = dirname(path);
-    process.env.OPENCODEX_HOME = mkdtempSync(join(tmpdir(), "ocx-api-delivery-"));
-    const config = { providers: [], multiAgentV2MessageDelivery: "encrypted" } as never;
+    process.env.CODEXCOMMANDER_HOME = mkdtempSync(join(tmpdir(), "ccx-api-delivery-"));
+    const config = {
+      ...getDefaultConfig(),
+      multiAgentV2MessageDelivery: "encrypted" as const,
+    };
     const deps = { createManagementConvergeCodex: catalogConvergenceFactory() };
     try {
       const setPlaintext = new Request("http://localhost/api/v2", {
@@ -821,17 +824,17 @@ describe("management API logical v1/v2 switching", () => {
       expect((await handleManagementAPI(invalid, new URL(invalid.url), config, deps))?.status).toBe(400);
     } finally {
       if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
-      if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcxHome;
+      if (oldCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = oldCodexCommanderHome;
     }
   });
 
   test("mode-only switches translate the limit across the root-slot boundary in both directions", async () => {
     const path = fixtureConfig("[agents]\nmax_threads = 100\nmax_depth = 2\n");
     const oldCodexHome = process.env.CODEX_HOME;
-    const oldOcxHome = process.env.OPENCODEX_HOME;
+    const oldCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     process.env.CODEX_HOME = dirname(path);
-    process.env.OPENCODEX_HOME = mkdtempSync(join(tmpdir(), "ocx-api-config-"));
-    const config = { providers: [] } as never;
+    process.env.CODEXCOMMANDER_HOME = mkdtempSync(join(tmpdir(), "ccx-api-config-"));
+    const config = getDefaultConfig();
     const toggle = (enabled: boolean) => {
       const content = readFileSync(path, "utf8");
       writeFileSync(path, content.replace(/^enabled\s*=\s*(?:true|false)$/m, `enabled = ${enabled}`));
@@ -885,7 +888,7 @@ describe("management API logical v1/v2 switching", () => {
       expect(await getResponse?.json()).toMatchObject({ enabled: false, maxConcurrentThreadsPerSession: 76 });
     } finally {
       if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
-      if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcxHome;
+      if (oldCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = oldCodexCommanderHome;
     }
   });
 
@@ -928,9 +931,9 @@ describe("management API parity surface for the WP2 keys", () => {
   }) => Promise<void>) => {
     const path = fixtureConfig(content);
     const oldCodexHome = process.env.CODEX_HOME;
-    const oldOcxHome = process.env.OPENCODEX_HOME;
+    const oldCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     process.env.CODEX_HOME = dirname(path);
-    process.env.OPENCODEX_HOME = mkdtempSync(join(tmpdir(), "ocx-api-parity-"));
+    process.env.CODEXCOMMANDER_HOME = mkdtempSync(join(tmpdir(), "ccx-api-parity-"));
     const toggle = (enabled: boolean) => {
       const current = readFileSync(path, "utf8");
       writeFileSync(path, current.replace(/^enabled\s*=\s*(?:true|false)$/m, `enabled = ${enabled}`));
@@ -938,7 +941,7 @@ describe("management API parity surface for the WP2 keys", () => {
     return run(path, { toggleCodexMultiAgentV2: toggle, createManagementConvergeCodex: catalogConvergenceFactory() })
       .finally(() => {
         if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
-        if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcxHome;
+        if (oldCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = oldCodexCommanderHome;
       });
   };
   const put = (payload: unknown) => new Request("http://localhost/api/v2", {
@@ -1205,24 +1208,24 @@ describe("cli surface", () => {
     expect(out).not.toContain("V1-only");
   });
 
-  test("codexFeaturesInvocation: POSIX passthrough; win32 .cmd routed through cmd.exe (devlog 260715 020)", () => {
+  test("codexFeaturesInvocation: POSIX passthrough; win32 .cmd routed through cmd.exe (implementation contract 020)", () => {
     const execFileSync = () => "codex-cli 0.145.0";
     expect(codexFeaturesInvocation("enable", "multi_agent_v2", "darwin", {
       env: { PATH: "" },
-      configDir: mkdtempSync(join(tmpdir(), "ocx-v2-inv-posix-")),
+      configDir: mkdtempSync(join(tmpdir(), "ccx-v2-inv-posix-")),
       existsSync: () => false,
       execFileSync,
     })).toEqual({ file: "codex", args: ["features", "enable", "multi_agent_v2"], options: {} });
     expect(codexFeaturesInvocation("enable", "default_mode_request_user_input", "darwin", {
       env: { PATH: "" },
-      configDir: mkdtempSync(join(tmpdir(), "ocx-v2-inv-posix-")),
+      configDir: mkdtempSync(join(tmpdir(), "ccx-v2-inv-posix-")),
       existsSync: () => false,
       execFileSync,
     })).toEqual({ file: "codex", args: ["features", "enable", "default_mode_request_user_input"], options: {} });
     // Explicit CODEX_CLI_PATH pointing at a .cmd (npm-only Windows Codex install).
     const inv = codexFeaturesInvocation("disable", "multi_agent_v2", "win32", {
       env: { CODEX_CLI_PATH: "C:\\npm\\codex.cmd", ComSpec: "C:\\WINDOWS\\system32\\cmd.exe", PATH: "" },
-      configDir: mkdtempSync(join(tmpdir(), "ocx-v2-inv-cmd-")),
+      configDir: mkdtempSync(join(tmpdir(), "ccx-v2-inv-cmd-")),
       existsSync: () => true,
       execFileSync,
       exists: () => { throw new Error("explicit path must not probe PATH"); },
@@ -1233,7 +1236,7 @@ describe("cli surface", () => {
     // Bare `codex` resolving to codex.exe stays a direct spawn.
     const exe = codexFeaturesInvocation("enable", "multi_agent_v2", "win32", {
       env: { PATH: "C:\\bin" },
-      configDir: mkdtempSync(join(tmpdir(), "ocx-v2-inv-exe-")),
+      configDir: mkdtempSync(join(tmpdir(), "ccx-v2-inv-exe-")),
       existsSync: (p: string) => p === "C:\\bin\\codex.exe",
       execFileSync,
       exists: (p: string) => p === "C:\\bin\\codex.exe",
@@ -1244,9 +1247,9 @@ describe("cli surface", () => {
   test("mode v2/v1 translates the limit across the root-slot boundary", async () => {
     const path = fixtureConfig("[agents]\nmax_threads = 100\n");
     const oldCodexHome = process.env.CODEX_HOME;
-    const oldOcxHome = process.env.OPENCODEX_HOME;
+    const oldCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     process.env.CODEX_HOME = dirname(path);
-    process.env.OPENCODEX_HOME = mkdtempSync(join(tmpdir(), "ocx-cli-config-"));
+    process.env.CODEXCOMMANDER_HOME = mkdtempSync(join(tmpdir(), "ccx-cli-config-"));
     const logs: string[] = [];
     const deps = {
       featuresInvocation: (action: "enable" | "disable") => ({
@@ -1282,7 +1285,7 @@ describe("cli surface", () => {
       expect(getLogicalMaxThreads(path)).toBe(76);
     } finally {
       if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
-      if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcxHome;
+      if (oldCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = oldCodexCommanderHome;
     }
   }, 15_000);
 });

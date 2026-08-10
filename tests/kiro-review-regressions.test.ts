@@ -11,9 +11,9 @@ import {
   readKiroCliSqliteCredential,
   restoreStaleKiroCliSessionRecovery,
 } from "../src/oauth/kiro-credentials";
-import { getAccountCredential, getAccountSet, saveCredential, setActiveAccount } from "../src/oauth/store";
+import { getAccountCredential, getAccountSet, saveCredential } from "../src/oauth/store";
 import type { OAuthController, OAuthCredentials } from "../src/oauth/types";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 const ENV_KEYS = [
   "HOME",
@@ -21,7 +21,7 @@ const ENV_KEYS = [
   // so both must be isolated or a Windows runner would read the real user profile.
   "LOCALAPPDATA",
   "USERPROFILE",
-  "OPENCODEX_HOME",
+  "CODEXCOMMANDER_HOME",
   "KIRO_ACCESS_TOKEN",
   "KIRO_REFRESH_TOKEN",
   "KIRO_PROFILE_ARN",
@@ -36,11 +36,10 @@ const ENV_KEYS = [
 const originalEnv = new Map(ENV_KEYS.map(key => [key, process.env[key]]));
 let tmp: string;
 
-function config(): OcxConfig {
+function config(): CodexCommanderConfig {
   return {
     port: 10100,
     defaultProvider: "openai",
-    openaiProviderTierVersion: 2,
     providers: {},
   };
 }
@@ -60,7 +59,7 @@ function kiroCliDbPath(): string {
 }
 
 function kiroCliRecoveryPath(): string {
-  return `${kiroCliDbPath()}.opencodex-recovery`;
+  return `${kiroCliDbPath()}.codexcommander-recovery`;
 }
 
 function amazonQDbPath(): string {
@@ -123,7 +122,7 @@ beforeEach(() => {
   process.env.HOME = tmp;
   process.env.LOCALAPPDATA = join(tmp, "AppData", "Local");
   process.env.USERPROFILE = tmp;
-  process.env.OPENCODEX_HOME = join(tmp, "opencodex");
+  process.env.CODEXCOMMANDER_HOME = join(tmp, "codexcommander");
 });
 
 afterEach(() => {
@@ -291,49 +290,6 @@ describe("Kiro review regressions", () => {
     expect(calls).toEqual([]);
     expect(existsSync(kiroCliDbPath())).toBe(true);
     expect(readFileSync(kiroCliDbPath(), "utf8")).toBe("not-a-sqlite-database");
-  });
-
-  test("Add account binds a legacy identity-less Kiro row before switching and keeps it selectable", async () => {
-    const legacyArn = "arn:aws:codewhisperer:us-east-1:123456789012:profile/legacy";
-    const nextArn = "arn:aws:codewhisperer:us-east-1:123456789012:profile/next";
-    seedKiroCliDb("aoa-legacy", "rt-legacy", { profileArn: legacyArn });
-    await saveCredential("kiro", {
-      access: "aoa-legacy",
-      refresh: "rt-legacy",
-      expires: Date.now() + 60_000,
-      source: "local-cli",
-    });
-    const legacySlot = getAccountSet("kiro")!.activeAccountId;
-
-    const credential = await loginKiro({} as OAuthController, {
-      forceLogin: true,
-      cliRunner: async args => {
-        if (args[0] === "whoami") {
-          return { exitCode: 0, stdout: JSON.stringify({ email: "legacy@example.test" }) };
-        }
-        if (args[0] === "logout") {
-          removeKiroCliDb();
-          return { exitCode: 0, stdout: "" };
-        }
-        if (args[0] === "login") {
-          seedKiroCliDb("aoa-next", "rt-next", { profileArn: nextArn });
-          return { exitCode: 0, stdout: "" };
-        }
-        return { exitCode: 1, stdout: "" };
-      },
-    });
-    await saveCredential("kiro", credential, { preserveIdentityless: true });
-
-    const set = getAccountSet("kiro")!;
-    expect(set.accounts.length).toBeGreaterThanOrEqual(2);
-    const legacy = getAccountCredential("kiro", legacySlot);
-    expect(legacy).toMatchObject({
-      accountId: legacyArn,
-      refresh: "rt-legacy",
-      kiro: { profileArn: legacyArn },
-    });
-    expect(await setActiveAccount("kiro", legacySlot)).toBe(true);
-    expect(getAccountSet("kiro")?.activeAccountId).toBe(legacySlot);
   });
 
   test("Kiro reauth accepts the same email when the refreshed credential gains a profile ARN", async () => {

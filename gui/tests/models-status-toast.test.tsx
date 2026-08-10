@@ -32,8 +32,8 @@ beforeEach(() => {
     setInterval: { configurable: true, value: () => 1 },
     clearInterval: { configurable: true, value: () => {} },
   });
-  testWindow.localStorage.setItem("ocx-models-collapsed:v2", JSON.stringify([]));
-  testWindow.sessionStorage.setItem("ocx.models.catalog.v1:http://localhost", JSON.stringify({
+  testWindow.localStorage.setItem("ccx-models-collapsed:v2", JSON.stringify([]));
+  testWindow.sessionStorage.setItem("ccx.models.catalog.v1:http://localhost", JSON.stringify({
     models: [
       { provider: "anthropic", id: "claude-sonnet-5", namespaced: "anthropic/claude-sonnet-5", disabled: false },
       { provider: "anthropic", id: "claude-opus-4-5", namespaced: "anthropic/claude-opus-4-5", disabled: false },
@@ -54,10 +54,19 @@ beforeEach(() => {
     }
     if (url.endsWith("/api/providers")) return Response.json([{ name: "anthropic", liveModels: true, models: ["claude-sonnet-5", "claude-opus-4-5"] }]);
     if (url.endsWith("/api/selected-models")) return Response.json({ selected: {} });
-    if (url.endsWith("/api/provider-context-caps")) return Response.json({ caps: {} });
+    if (url.endsWith("/api/provider-context-caps")) return Response.json({ value: 350_000, caps: {} });
     if (url.endsWith("/api/combos")) return Response.json({ combos: [] });
-    if (url.endsWith("/api/shadow-call-settings")) return Response.json({ enabled: false, model: "" });
-    if (url.endsWith("/api/v2")) return Response.json({ enabled: false, agentsMaxThreadsConflict: false, multiAgentMode: "default" });
+    if (url.endsWith("/api/shadow-call-settings")) {
+      return Response.json({ enabled: false, model: "", sourceModels: ["gpt-5.6-luna"] });
+    }
+    if (url.endsWith("/api/v2")) {
+      return Response.json({
+        enabled: false,
+        agentsMaxThreadsConflict: false,
+        maxConcurrentThreadsPerSession: null,
+        multiAgentMode: "default",
+      });
+    }
     if (url.endsWith("/api/model-visibility") && init?.method === "PUT") return Response.json({ ok: true });
     return new Response(null, { status: 404 });
   }) as typeof fetch;
@@ -101,6 +110,33 @@ async function fireTimers(ms: number) {
   scheduledTimers = scheduledTimers.filter(t => t.ms !== ms);
   await act(async () => { for (const t of due) t.fn(); });
 }
+
+test("a missing collaboration-settings route is surfaced instead of hiding the controls contract", async () => {
+  const canonicalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    if (String(input).endsWith("/api/v2")) {
+      return Response.json({ error: "missing collaboration settings" }, { status: 404 });
+    }
+    return canonicalFetch(input, init);
+  }) as typeof fetch;
+
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(container);
+    root.render(
+      <LanguageProvider>
+        <Models apiBase="http://localhost" />
+      </LanguageProvider>,
+    );
+  });
+  await act(async () => {
+    await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+    await Promise.resolve();
+  });
+
+  expect(container.querySelector(".models-behavior .notice-err")?.textContent)
+    .toContain("missing collaboration settings");
+});
 
 test("apply feedback renders as a fixed toast, not an inline notice before the workspace", async () => {
   const { createRoot } = await import("react-dom/client");

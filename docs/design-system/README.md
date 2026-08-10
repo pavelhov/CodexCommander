@@ -1,6 +1,6 @@
-# OpenCodex GUI Design System
+# CodexCommander GUI Design System
 
-OpenCodex 관리 GUI의 시각 언어와 구현 규칙을 정의한다. 목표는 화면마다 새 스타일을
+CodexCommander 관리 GUI의 시각 언어와 구현 규칙을 정의한다. 목표는 화면마다 새 스타일을
 만드는 것이 아니라, 같은 역할의 요소가 어떤 페이지에서도 같은 글꼴, 크기, 간격,
 표면, 상태 표현을 사용하게 하는 것이다.
 

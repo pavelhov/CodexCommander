@@ -4,24 +4,18 @@ import { deriveInitProviders, deriveProviderPresets, listRegistryEntries, provid
 import { getProviderRegistryEntry, providerCodexAccountMode } from "../src/providers/registry";
 import {
   isCanonicalOpenAiForwardProvider,
-  LEGACY_CHATGPT_PROVIDER_ID,
-  LEGACY_OPENAI_MULTI_PROVIDER_ID,
   OPENAI_API_PROVIDER_ID,
   OPENAI_CODEX_PROVIDER_ID,
 } from "../src/providers/openai-tiers";
-import { OPENAI_PROVIDER_TIER_VERSION } from "../src/types";
 
 describe("OpenAI single-provider option foundation", () => {
-  test("locks exact ids, modes, and migration version", () => {
+  test("locks exact ids and modes", () => {
     expect(OPENAI_CODEX_PROVIDER_ID).toBe("openai");
-    expect(LEGACY_OPENAI_MULTI_PROVIDER_ID).toBe("openai-multi");
     expect(OPENAI_API_PROVIDER_ID).toBe("openai-apikey");
-    expect(LEGACY_CHATGPT_PROVIDER_ID).toBe("chatgpt");
-    expect(OPENAI_PROVIDER_TIER_VERSION).toBe(2);
     expect(providerCodexAccountMode("openai")).toBe("pool");
     expect(providerCodexAccountMode("openai", { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", codexAccountMode: "direct" })).toBe("direct");
     expect(providerCodexAccountMode("openai-apikey")).toBeUndefined();
-    expect(providerCodexAccountMode("openai-multi")).toBeUndefined();
+    expect(providerCodexAccountMode("custom-forward")).toBeUndefined();
   });
 
   test("accepts canonical transport with either account mode", () => {
@@ -39,7 +33,6 @@ describe("OpenAI single-provider option foundation", () => {
 
   test("publishes one Codex-login registry, preset, init, and default row", () => {
     for (const rows of [listRegistryEntries(), deriveProviderPresets(), deriveInitProviders()]) {
-      expect(rows.some(entry => entry.id === LEGACY_OPENAI_MULTI_PROVIDER_ID)).toBe(false);
       expect(rows.filter(entry => entry.id === OPENAI_CODEX_PROVIDER_ID)).toHaveLength(1);
     }
     const registry = getProviderRegistryEntry(OPENAI_CODEX_PROVIDER_ID)!;

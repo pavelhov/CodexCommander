@@ -1,27 +1,38 @@
-/**
- * Which models the runtime actually intercepts as shadow calls.
- *
- * Codex 0.145.0+ uses gpt-5.6-luna for helper calls. Older clients through
- * 0.144.x used gpt-5.4-mini, which operators can restore through `sourceModels`.
- * The GUI renders whatever the runtime reports rather than a baked-in label;
- * this fallback only covers a runtime too old to send `sourceModels`.
- */
-const FALLBACK_SOURCE_MODELS = ["gpt-5.6-luna"];
+export interface ShadowCallData {
+  enabled: boolean;
+  model: string;
+  sourceModels: string[];
+}
 
-export function shadowSourceModelList(sourceModels?: string[]): string[] {
-  const cleaned = Array.isArray(sourceModels)
-    ? sourceModels.filter(v => typeof v === "string" && v.trim() !== "").map(v => v.trim())
-    : [];
-  return cleaned.length > 0 ? cleaned : FALLBACK_SOURCE_MODELS;
+/** Accept only the current management response; malformed successful reads are failures. */
+export function parseShadowCallData(value: unknown): ShadowCallData {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid shadow-call response");
+  }
+  const row = value as Record<string, unknown>;
+  if (typeof row.enabled !== "boolean" || typeof row.model !== "string" || !Array.isArray(row.sourceModels)) {
+    throw new Error("invalid shadow-call response");
+  }
+  const sourceModels = row.sourceModels.map(model => {
+    if (typeof model !== "string" || model.trim() === "") throw new Error("invalid shadow-call response");
+    return model.trim();
+  });
+  if (sourceModels.length === 0) throw new Error("invalid shadow-call response");
+  return { enabled: row.enabled, model: row.model, sourceModels };
+}
+
+export function shadowSourceModelList(sourceModels?: readonly string[]): string[] {
+  if (!sourceModels) return [];
+  return sourceModels.map(model => model.trim()).filter(Boolean);
 }
 
 /** Comma-joined source models for inline badges and warning text. */
-export function shadowSourceModelLabel(sourceModels?: string[]): string {
+export function shadowSourceModelLabel(sourceModels?: readonly string[]): string {
   return shadowSourceModelList(sourceModels).join(", ");
 }
 
 /** Short badge form: drops the shared `gpt-` prefix to keep the row compact. */
-export function shadowSourceModelBadge(sourceModels?: string[]): string {
+export function shadowSourceModelBadge(sourceModels?: readonly string[]): string {
   return shadowSourceModelList(sourceModels)
     .map(id => id.replace(/^gpt-/, ""))
     .join(", ");

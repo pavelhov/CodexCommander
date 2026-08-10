@@ -8,7 +8,7 @@ function nativeStatus(clientId: NativeStatus["clientId"], overrides: Partial<Nat
     clientId,
     state: "current",
     installed: true,
-    configPath: clientId === "grok" ? "/live/grok/config.toml" : "/live/opencodex/config.json",
+    configPath: clientId === "grok" ? "/live/grok/config.toml" : "/live/codexcommander/config.json",
     disableBlocked: null,
     ...overrides,
   };

@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   chmodSync,
-  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -22,7 +21,7 @@ import {
 } from "../src/codex/catalog/provider-fetch";
 import { clearModelCache } from "../src/codex/model-cache";
 import { getAuthRefreshIntentPath } from "../src/oauth/store";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
 
 interface FileSnapshot {
   readonly bytes: Buffer;
@@ -32,25 +31,28 @@ interface FileSnapshot {
 }
 
 const originalHome = process.env.HOME;
-const originalOpencodexHome = process.env.OPENCODEX_HOME;
+const originalCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
 const originalCodexHome = process.env.CODEX_HOME;
 const originalKimiRefresh = OAUTH_PROVIDERS.kimi!.refresh;
 
 let root: string;
-let opencodexHome: string;
+let codexCommanderHome: string;
 
 function authStoreBytes(expires: number): Buffer {
   return Buffer.from(JSON.stringify({
-    kimi: {
-      activeAccountId: "active",
-      accounts: [{
-        id: "active",
-        credential: {
-          access: "fixture-a",
-          refresh: "fixture-r",
-          expires,
-        },
-      }],
+    schemaVersion: 1,
+    providers: {
+      kimi: {
+        activeAccountId: "active",
+        accounts: [{
+          id: "active",
+          credential: {
+            access: "fixture-a",
+            refresh: "fixture-r",
+            expires,
+          },
+        }],
+      },
     },
   }) + "\n");
 }
@@ -75,7 +77,7 @@ function expectFileUnchanged(path: string, before: FileSnapshot): void {
   });
 }
 
-function liveKimiProvider(onFetch: () => void): OcxProviderConfig {
+function liveKimiProvider(onFetch: () => void): CodexCommanderProviderConfig {
   return {
     ...structuredClone(OAUTH_PROVIDERS.kimi!.providerConfig),
     liveModels: true,
@@ -94,7 +96,7 @@ async function runCatalogGather(
   authStoreBuffer: Uint8Array | null,
   onFetch: () => void,
 ): Promise<{ rows: Awaited<ReturnType<typeof gatherRoutedModelsForCatalogGather>>; outcomes: CatalogGatherProviderAuthOutcome[] }> {
-  const config: OcxConfig = { providers: { kimi: liveKimiProvider(onFetch) } };
+  const config: CodexCommanderConfig = { providers: { kimi: liveKimiProvider(onFetch) } };
   const outcomes: CatalogGatherProviderAuthOutcome[] = [];
   const rows = await gatherRoutedModelsForCatalogGather(
     config,
@@ -105,11 +107,11 @@ async function runCatalogGather(
 }
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "ocx-catalog-auth-observe-"));
-  opencodexHome = join(root, "opencodex");
-  mkdirSync(opencodexHome, { recursive: true, mode: 0o700 });
+  root = mkdtempSync(join(tmpdir(), "ccx-catalog-auth-observe-"));
+  codexCommanderHome = join(root, "codexcommander");
+  mkdirSync(codexCommanderHome, { recursive: true, mode: 0o700 });
   process.env.HOME = join(root, "home");
-  process.env.OPENCODEX_HOME = opencodexHome;
+  process.env.CODEXCOMMANDER_HOME = codexCommanderHome;
   process.env.CODEX_HOME = join(root, "codex");
   clearModelCache();
 });
@@ -119,8 +121,8 @@ afterEach(() => {
   clearModelCache();
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
-  if (originalOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = originalOpencodexHome;
+  if (originalCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+  else process.env.CODEXCOMMANDER_HOME = originalCodexCommanderHome;
   if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = originalCodexHome;
   rmSync(root, { recursive: true, force: true });
@@ -129,7 +131,7 @@ afterEach(() => {
 describe("catalog gather OAuth observation", () => {
   test("expired active token stays typed and gather does not refresh or touch the auth store", async () => {
     const now = Date.now();
-    const authPath = join(opencodexHome, "auth.json");
+    const authPath = join(codexCommanderHome, "auth.json");
     writeFileSync(authPath, authStoreBytes(now - 1), { mode: 0o600 });
     chmodSync(authPath, 0o644);
 
@@ -139,7 +141,7 @@ describe("catalog gather OAuth observation", () => {
 
     const authBefore = snapshotFile(authPath);
     const intentBefore = snapshotFile(intentPath);
-    const listingBefore = readdirSync(opencodexHome).sort();
+    const listingBefore = readdirSync(codexCommanderHome).sort();
     const observedBuffer = readFileSync(authPath);
     let refreshCalls = 0;
     let outboundCalls = 0;
@@ -157,16 +159,15 @@ describe("catalog gather OAuth observation", () => {
     expect(outcomes).toEqual([{ provider: "kimi", state: "expired" }]);
     expectFileUnchanged(authPath, authBefore);
     expectFileUnchanged(intentPath, intentBefore);
-    expect(readdirSync(opencodexHome).sort()).toEqual(listingBefore);
-    expect(readdirSync(opencodexHome).some(name => name.startsWith("auth.json.invalid-"))).toBe(false);
-    expect(existsSync(`${authPath}.pre-multiauth`)).toBe(false);
+    expect(readdirSync(codexCommanderHome).sort()).toEqual(listingBefore);
+    expect(readdirSync(codexCommanderHome).some(name => name.startsWith("auth.json.invalid-"))).toBe(false);
   });
 
   test("unparseable auth-store bytes are typed malformed and never backed up or rewritten", async () => {
-    const authPath = join(opencodexHome, "auth.json");
+    const authPath = join(codexCommanderHome, "auth.json");
     writeFileSync(authPath, "{unparseable\n", { mode: 0o644 });
     const before = snapshotFile(authPath);
-    const listingBefore = readdirSync(opencodexHome).sort();
+    const listingBefore = readdirSync(codexCommanderHome).sort();
     const observedBuffer = readFileSync(authPath);
     let refreshCalls = 0;
     let outboundCalls = 0;
@@ -183,17 +184,16 @@ describe("catalog gather OAuth observation", () => {
     expect(refreshCalls).toBe(0);
     expect(outboundCalls).toBe(0);
     expectFileUnchanged(authPath, before);
-    expect(readdirSync(opencodexHome).sort()).toEqual(listingBefore);
-    expect(readdirSync(opencodexHome).some(name => name.startsWith("auth.json.invalid-"))).toBe(false);
-    expect(existsSync(`${authPath}.pre-multiauth`)).toBe(false);
+    expect(readdirSync(codexCommanderHome).sort()).toEqual(listingBefore);
+    expect(readdirSync(codexCommanderHome).some(name => name.startsWith("auth.json.invalid-"))).toBe(false);
   });
 
   test("available observed token permits live discovery without entering refresh", async () => {
     const now = Date.now();
-    const authPath = join(opencodexHome, "auth.json");
+    const authPath = join(codexCommanderHome, "auth.json");
     writeFileSync(authPath, authStoreBytes(now + 3_600_000), { mode: 0o644 });
     const before = snapshotFile(authPath);
-    const listingBefore = readdirSync(opencodexHome).sort();
+    const listingBefore = readdirSync(codexCommanderHome).sort();
     const observedBuffer = readFileSync(authPath);
     let refreshCalls = 0;
     let outboundCalls = 0;
@@ -210,6 +210,6 @@ describe("catalog gather OAuth observation", () => {
     expect(refreshCalls).toBe(0);
     expect(outboundCalls).toBe(1);
     expectFileUnchanged(authPath, before);
-    expect(readdirSync(opencodexHome).sort()).toEqual(listingBefore);
+    expect(readdirSync(codexCommanderHome).sort()).toEqual(listingBefore);
   });
 });

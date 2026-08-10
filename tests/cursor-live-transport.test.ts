@@ -107,8 +107,8 @@ describe("Cursor live transport", () => {
   });
 
   test("fails before network when no Cursor credential is configured", () => {
-    const prev = process.env.OPENCODEX_CURSOR_TEST_TOKEN;
-    delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
+    const prev = process.env.CCX_CURSOR_TEST_TOKEN;
+    delete process.env.CCX_CURSOR_TEST_TOKEN;
     try {
       expect(() => createLiveCursorTransport({
         provider: { adapter: "cursor", baseUrl: "https://api2.cursor.sh" },
@@ -116,8 +116,8 @@ describe("Cursor live transport", () => {
         headers: new Headers(),
       })).toThrow(CursorMissingCredentialError);
     } finally {
-      if (prev === undefined) delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
-      else process.env.OPENCODEX_CURSOR_TEST_TOKEN = prev;
+      if (prev === undefined) delete process.env.CCX_CURSOR_TEST_TOKEN;
+      else process.env.CCX_CURSOR_TEST_TOKEN = prev;
     }
   });
 
@@ -263,7 +263,7 @@ describe("Cursor end-stream classification", () => {
 
 describe("Cursor token precedence (R2 gap-close guard)", () => {
   test("managed apiKey beats a forwarded Authorization header", () => {
-    // The unauthenticated gap (devlog 350.98/99) reopens if this ever returns the client token.
+    // The unauthenticated gap (implementation contract) reopens if this ever returns the client token.
     const token = resolveCursorToken(
       { adapter: "cursor", baseUrl: "https://api2.cursor.sh", apiKey: "managed-oauth-token" },
       new Headers({ authorization: "Bearer client-forwarded-token" }),
@@ -280,15 +280,15 @@ describe("Cursor token precedence (R2 gap-close guard)", () => {
   });
 
   test("throws CursorMissingCredentialError when no apiKey, no header, and no env token", () => {
-    const prev = process.env.OPENCODEX_CURSOR_TEST_TOKEN;
-    delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
+    const prev = process.env.CCX_CURSOR_TEST_TOKEN;
+    delete process.env.CCX_CURSOR_TEST_TOKEN;
     try {
       expect(() =>
         resolveCursorToken({ adapter: "cursor", baseUrl: "https://api2.cursor.sh" }, new Headers()),
       ).toThrow(CursorMissingCredentialError);
     } finally {
-      if (prev === undefined) delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
-      else process.env.OPENCODEX_CURSOR_TEST_TOKEN = prev;
+      if (prev === undefined) delete process.env.CCX_CURSOR_TEST_TOKEN;
+      else process.env.CCX_CURSOR_TEST_TOKEN = prev;
     }
   });
 });

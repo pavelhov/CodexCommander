@@ -92,7 +92,6 @@ export function providerRouteHash(
  * - `#providers/<id>/<tab>` → detail tab
  * - malformed id / encoding → replace to `#providers`
  * - unknown tab → replace to that provider's overview
- * - `#providers/workspace` is not handled here (legacy redirect lives in app-routing)
  */
 export function resolveProvidersHash(rawHash: string): ProviderHashResolution {
   const raw = normalizeHashPath(rawHash);

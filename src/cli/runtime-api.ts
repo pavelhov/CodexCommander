@@ -43,7 +43,7 @@ export class RuntimeApiError extends Error {
 export async function runtimeBaseUrl(deps: RuntimeApiDeps = {}): Promise<string> {
   if (deps.baseUrl) return deps.baseUrl.replace(/\/$/, "");
   const live = await findLiveProxy();
-  if (!live) throw new RuntimeApiError("Proxy is not running. Start it with: ocx start", 503, null);
+  if (!live) throw new RuntimeApiError("Proxy is not running. Start it with: ccx start", 503, null);
   return `http://${probeHostname(live.hostname)}:${live.port}`;
 }
 
@@ -144,7 +144,7 @@ const SECRET_OPTIONS = ["--code", "--headers"];
  * Replace credential values before they are reported back.
  *
  * Both spellings have to be covered, and the space-separated one spans two
- * tokens: mistyping `ocx account cancel <p> --code <secret>` on a command that
+ * tokens: mistyping `ccx account cancel <p> --code <secret>` on a command that
  * does not parse `--code` leaves the flag AND its value in the leftovers, and
  * reporting them verbatim writes the credential to stderr. Repeating the
  * option does the same with the second value, since the parser takes only the
@@ -193,7 +193,7 @@ function redactSecretArgs(args: string[], redactValues = false): string[] {
 export interface RejectArgsOptions {
   /**
    * Report bare leftovers as `<redacted>`. Set by commands where a stray
-   * positional is plausibly the credential itself — `ocx account code <p>`
+   * positional is plausibly the credential itself — `ccx account code <p>`
    * takes one positional code, so a second one is echoed by the usage error
    * unless it is hidden. Flag-shaped leftovers stay visible, because a
    * mistyped flag is the thing the message needs to name.
@@ -249,7 +249,7 @@ export async function readSecretLine(deps: RuntimeApiDeps, label: string): Promi
   const timeoutMs = deps.stdinTimeoutMs ?? 120_000;
   // A stream that already ended emits nothing more, so attaching listeners
   // would wait out the full timeout and then blame a slow paste. `echo … |
-  // something-else | ocx account code <p>` reaches here that way.
+  // something-else | ccx account code <p>` reaches here that way.
   if (input.readableEnded === true) throw new CliUsageError(`${label} input was empty`);
   const line = await new Promise<string>((resolve, reject) => {
     let buffer = "";

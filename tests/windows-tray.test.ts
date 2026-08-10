@@ -16,6 +16,7 @@ import {
   buildWindowsTrayPowerShellCommand,
   buildWindowsTrayRunCommand,
   launchWindowsTrayHost,
+  parseWindowsTrayHostEntry,
   parseWindowsTrayRunValue,
   readWindowsTrayRunValueWithAsyncRunner,
   readWindowsTrayRunValueWithRunner,
@@ -35,7 +36,7 @@ import {
   setPlatformForTests,
 } from "../src/lib/windows-secret-acl";
 import { handleManagementAPI } from "../src/server/management-api";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "./helpers/test-budget";
 
 const entry: WindowsTrayEntry = {
@@ -43,16 +44,17 @@ const entry: WindowsTrayEntry = {
   bunRuntimeSource: "bundled",
   cli: "C:\\사용자 공간\\%TEMP% ! ^ ( ) & 검증\\src\\cli\\index.ts",
   script: "C:\\사용자 공간\\%TEMP% ! ^ ( ) & 검증\\src\\tray\\windows-tray.ps1",
+  launcherPath: "C:\\사용자 공간\\%TEMP% ! ^ ( ) & 검증\\.codexcommander\\codexcommander-tray.vbs",
   codexHome: "C:\\사용자 공간\\.codex",
-  opencodexHome: "C:\\사용자 공간\\%TEMP% ! ^ ( ) & 검증\\.opencodex",
+  codexCommanderHome: "C:\\사용자 공간\\%TEMP% ! ^ ( ) & 검증\\.codexcommander",
 };
 
 describe("Windows tray packaging and command safety", () => {
   test("owned-file temp cleanup forgets successful ACL memos and retains failed removals", () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-tray-acl-"));
+    const root = mkdtempSync(join(tmpdir(), "ccx-tray-acl-"));
     const target = join(root, "tray-state.json");
     const previousUsername = process.env.USERNAME;
-    process.env.USERNAME = "ocx-test-user";
+    process.env.USERNAME = "ccx-test-user";
     resetHardenedStateForTests();
     setPlatformForTests("win32");
     setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
@@ -102,7 +104,7 @@ describe("Windows tray packaging and command safety", () => {
 
   test("passes the Bun provenance through to the tray host (#848)", () => {
     // The tray relaunches the proxy itself, so a tray-started service would otherwise
-    // reach doctor with no provenance and get the legacy/unknown treatment.
+    // reach doctor with no provenance and be reported as unknown.
     const args = windowsTrayProcessArgs(entry);
     expect(args).toContain("-BunRuntimeSource");
     expect(args[args.indexOf("-BunRuntimeSource") + 1]).toBe("bundled");
@@ -117,13 +119,10 @@ describe("Windows tray packaging and command safety", () => {
   test("quotes metacharacter and Unicode paths without shell interpolation", () => {
     const powershellCommand = buildWindowsTrayPowerShellCommand(entry, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
     expect(powershellCommand).toContain(`-File "${entry.script}"`);
-    expect(powershellCommand).toContain(`-OpenCodexHome "${entry.opencodexHome}"`);
+    expect(powershellCommand).toContain(`-CodexCommanderHome "${entry.codexCommanderHome}"`);
     expect(powershellCommand).not.toContain("cmd /c");
     expect(powershellCommand).not.toContain("-Command");
-    const runCommand = buildWindowsTrayRunCommand({
-      ...entry,
-      launcherPath: `${entry.opencodexHome}\\opencodex-tray.vbs`,
-    });
+    const runCommand = buildWindowsTrayRunCommand(entry);
     expect(runCommand.toLowerCase()).toContain("wscript.exe");
     expect(runCommand.length).toBeLessThanOrEqual(260);
   });
@@ -131,10 +130,12 @@ describe("Windows tray packaging and command safety", () => {
     const uncRoot = "\\\\server\\share";
     const uncEntry: WindowsTrayEntry = {
       bun: `${uncRoot}\\tools\\bun.exe`,
+      bunRuntimeSource: "bundled",
       cli: `${uncRoot}\\repo\\src\\cli\\index.ts`,
       script: `${uncRoot}\\repo\\src\\tray\\windows-tray.ps1`,
+      launcherPath: `${uncRoot}\\codexcommander\\codexcommander-tray.vbs`,
       codexHome: "C:\\Users\\Test\\.codex",
-      opencodexHome: `${uncRoot}\\opencodex`,
+      codexCommanderHome: `${uncRoot}\\codexcommander`,
     };
     const launcher = buildWindowsTrayLauncherScript(uncEntry);
     expect(launcher).toContain(`${uncRoot}\\tools\\bun.exe`);
@@ -151,26 +152,40 @@ describe("Windows tray packaging and command safety", () => {
   });
 
   test("rejects quote and control-character path injection", () => {
-    expect(() => windowsTrayProcessArgs({ ...entry, opencodexHome: 'C:\\bad" -Command whoami' })).toThrow();
+    expect(() => windowsTrayProcessArgs({ ...entry, codexCommanderHome: 'C:\\bad" -Command whoami' })).toThrow();
     expect(() => windowsTrayProcessArgs({ ...entry, cli: "C:\\bad\r\nwhoami" })).toThrow();
   });
 
   test("never trusts state-selected executable or deletion paths", () => {
-    const home = "C:\\Users\\Test\\.opencodex";
+    const home = "C:\\Users\\Test\\.codexcommander";
     expect(windowsTrayStatePathsOwned({
-      opencodexHome: home,
-      script: join(home, "opencodex-tray.ps1"),
-      launcherPath: join(home, "opencodex-tray.vbs"),
+      codexCommanderHome: home,
+      script: join(home, "codexcommander-tray.ps1"),
+      launcherPath: join(home, "codexcommander-tray.vbs"),
     }, home)).toBe(true);
     expect(windowsTrayStatePathsOwned({
-      opencodexHome: home,
+      codexCommanderHome: home,
       script: "C:\\attacker\\payload.ps1",
+      launcherPath: join(home, "codexcommander-tray.vbs"),
     }, home)).toBe(false);
     expect(windowsTrayStatePathsOwned({
-      opencodexHome: home,
-      script: join(home, "opencodex-tray.ps1"),
+      codexCommanderHome: home,
+      script: join(home, "codexcommander-tray.ps1"),
       launcherPath: "C:\\victim\\document.txt",
     }, home)).toBe(false);
+  });
+
+  test("rejects tray host payloads without the current launcher and Bun provenance", () => {
+    const encode = (value: unknown) => Buffer.from(JSON.stringify(value), "utf8").toString("base64");
+    expect(parseWindowsTrayHostEntry(encode(entry))).toEqual(entry);
+
+    const { launcherPath: _launcherPath, ...withoutLauncher } = entry;
+    expect(() => parseWindowsTrayHostEntry(encode(withoutLauncher))).toThrow("launcherPath");
+
+    const { bunRuntimeSource: _bunRuntimeSource, ...withoutProvenance } = entry;
+    expect(() => parseWindowsTrayHostEntry(encode(withoutProvenance))).toThrow("bunRuntimeSource");
+    expect(() => parseWindowsTrayHostEntry(encode({ ...entry, bunRuntimeSource: "unknown" })))
+      .toThrow("bunRuntimeSource");
   });
 
   test("treats a live unregistered tray as stale so uninstall cannot skip it", () => {
@@ -189,12 +204,12 @@ describe("Windows tray packaging and command safety", () => {
   });
 
   test("normalizes equivalent homes to one owned Run value", () => {
-    expect(windowsTrayRunValue("C:\\Users\\Test\\.opencodex"))
-      .toBe(windowsTrayRunValue("C:\\Users\\Test\\.opencodex\\."));
+    expect(windowsTrayRunValue("C:\\Users\\Test\\.codexcommander"))
+      .toBe(windowsTrayRunValue("C:\\Users\\Test\\.codexcommander\\."));
   });
 
   test("treats an unexpected registry type or unreadable value as foreign", () => {
-    const value = "OpenCodexTray-test";
+    const value = "CodexCommanderTray-test";
     const command = '"C:\\Windows\\powershell.exe" -File "C:\\tray.ps1"';
     expect(parseWindowsTrayRunValue(`    ${value}    REG_SZ    ${command}`, value)).toBe(command);
     expect(parseWindowsTrayRunValue(`    ${value}    REG_EXPAND_SZ    ${command}`, value)).not.toBe(command);
@@ -212,7 +227,7 @@ describe("Windows tray packaging and command safety", () => {
   });
 
   test("fails closed when registry absence cannot be proven", async () => {
-    const value = "OpenCodexTray-test";
+    const value = "CodexCommanderTray-test";
     const statusError = (status: number) => Object.assign(new Error(`reg exit ${status}`), { status });
     const codeError = (code: number) => Object.assign(new Error(`reg exit ${code}`), { code });
 
@@ -242,7 +257,7 @@ describe("Windows tray packaging and command safety", () => {
   });
 
   test("proves a missing Run key only through the readable parent path", async () => {
-    const value = "OpenCodexTray-test";
+    const value = "CodexCommanderTray-test";
     const syncCalls: string[][] = [];
     const syncResult = readWindowsTrayRunValueWithRunner(value, args => {
       syncCalls.push(args);
@@ -299,22 +314,31 @@ describe("Windows tray packaging and command safety", () => {
     const typescript = readFileSync(join(import.meta.dir, "..", "src", "tray", "windows.ts"), "utf8");
     const source = readFileSync(join(import.meta.dir, "..", "src", "tray", "windows-tray.ps1"), "utf8");
     expect(typescript).not.toContain("\u0000");
-    expect(typescript).toContain("OCX_TRAY_ENTRY_B64");
+    expect(typescript).toContain("const TRAY_STATE_VERSION = 3");
+    expect(typescript).toContain("CCX_TRAY_ENTRY_B64");
     expect(typescript).toContain("$startInfo.UseShellExecute = $true");
     expect(source).toContain("System.Threading.Mutex");
     expect(source).toContain("System.Threading.EventWaitHandle");
     expect(source).toContain("GetFullPath");
     expect(source).toContain("GetPathRoot");
     expect(source).toContain("$heartbeat.hostPid = $HostPid");
-    expect(source).toContain('Start-OcxCommand @("__tray-restart")');
-    expect(source).toContain('Load-TrayIcon "opencodex-tray-online.ico"');
-    expect(source).toContain('Load-TrayIcon "opencodex-tray-warning.ico"');
-    expect(source).toContain('Load-TrayIcon "opencodex-tray-offline.ico"');
+    expect(source).toContain('Start-CodexCommanderCommand @("__tray-restart")');
+    expect(source).toContain('Load-TrayIcon "codexcommander-tray-online.ico"');
+    expect(source).toContain('Load-TrayIcon "codexcommander-tray-warning.ico"');
+    expect(source).toContain('Load-TrayIcon "codexcommander-tray-offline.ico"');
+    expect(source).toContain('$path = Join-Path $CodexCommanderHome "runtime-port.json"');
+    expect(source).toContain('@("schemaVersion", "pid", "port", "hostname", "attestationSecret")');
+    expect(source).toContain("[int64]$value.schemaVersion -ne 1");
+    expect(source).toContain('throw "invalid runtime-port schema"');
+    expect(source).not.toContain('Join-Path $CodexCommanderHome "config.json"');
     expect(source).toContain("$notify.Icon = $offlineIcon");
     expect(source).not.toContain("$menu.add_Opening({ Update-TrayState })");
     expect(source).not.toContain("Invoke-Expression");
     expect(source).not.toContain("taskkill");
     expect(source).not.toContain("Stop-Process");
+    expect(source).toContain('[Parameter(Mandatory = $true)][ValidateSet("override", "bundled", "process")][ValidateNotNullOrEmpty()][string]$BunRuntimeSource');
+    expect(source).not.toContain('ValidateSet("", "override"');
+    expect(source).not.toContain("if ($BunRuntimeSource)");
   });
 
   // This test really does launch PowerShell, which really does launch a Bun child, and
@@ -335,11 +359,11 @@ describe("Windows tray packaging and command safety", () => {
 
   test("launches the detached tray host without retaining the proxy listen socket", async () => {
     if (process.platform !== "win32") return;
-    const directory = mkdtempSync(join(tmpdir(), "ocx-tray-inheritance-"));
+    const directory = mkdtempSync(join(tmpdir(), "ccx-tray-inheritance-"));
     const pidPath = join(directory, "child.pid");
     const childPath = join(directory, "child & %TEMP% 테스트.ts");
     copyFileSync(join(import.meta.dir, "helpers", "windows-tray-inheritance-child.ts"), childPath);
-    const previousPidPath = process.env.OCX_TRAY_TEST_PID_FILE;
+    const previousPidPath = process.env.CCX_TRAY_TEST_PID_FILE;
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -350,7 +374,7 @@ describe("Windows tray packaging and command safety", () => {
     let replacement: ReturnType<typeof Bun.serve> | undefined;
 
     try {
-      process.env.OCX_TRAY_TEST_PID_FILE = pidPath;
+      process.env.CCX_TRAY_TEST_PID_FILE = pidPath;
       launchWindowsTrayHost({
         ...entry,
         bun: process.execPath,
@@ -380,8 +404,8 @@ describe("Windows tray packaging and command safety", () => {
       expect(replacement.port).toBe(port);
       expect(() => process.kill(childPid, 0)).not.toThrow();
     } finally {
-      if (previousPidPath === undefined) delete process.env.OCX_TRAY_TEST_PID_FILE;
-      else process.env.OCX_TRAY_TEST_PID_FILE = previousPidPath;
+      if (previousPidPath === undefined) delete process.env.CCX_TRAY_TEST_PID_FILE;
+      else process.env.CCX_TRAY_TEST_PID_FILE = previousPidPath;
       if (replacement) await replacement.stop(true);
       await server.stop(true);
       if (childPid > 0) {
@@ -394,7 +418,7 @@ describe("Windows tray packaging and command safety", () => {
   test("ships branded multi-size Windows tray icons", () => {
     const assets = join(import.meta.dir, "..", "src", "tray", "assets");
     for (const name of ["online", "warning", "offline"]) {
-      const path = join(assets, `opencodex-tray-${name}.ico`);
+      const path = join(assets, `codexcommander-tray-${name}.ico`);
       expect(existsSync(path)).toBe(true);
       const bytes = readFileSync(path);
       expect(bytes.readUInt16LE(0)).toBe(0);
@@ -411,7 +435,7 @@ describe("Windows tray packaging and command safety", () => {
     const responsePromise = handleManagementAPI(
       new Request(url),
       url,
-      { port: 10100, providers: {}, defaultProvider: "openai" } as OcxConfig,
+      { port: 10100, providers: {}, defaultProvider: "openai" } as CodexCommanderConfig,
     );
     await Bun.sleep(50);
     expect(timerFired).toBe(true);
@@ -424,10 +448,10 @@ describe("Windows tray packaging and command safety", () => {
     expect(typeof body.running).toBe("boolean");
   });
 
-  test("copies the tray script into the hardened home and gates all update lanes", () => {
+  test("copies the tray script into the hardened home with transactional replacement", () => {
     const root = join(import.meta.dir, "..");
     const tray = readFileSync(join(root, "src", "tray", "windows.ts"), "utf8");
-    expect(tray).toContain('join(getConfigDir(), "opencodex-tray.ps1")');
+    expect(tray).toContain('join(getConfigDir(), "codexcommander-tray.ps1")');
     expect(tray).toContain('join(import.meta.dir, "assets", name)');
     expect(tray).toContain("installedTrayIconPaths()");
     expect(tray).toContain("const hardened = hardenSecretPath(target, { required: true, timeoutMemoKey: path })");
@@ -437,21 +461,10 @@ describe("Windows tray packaging and command safety", () => {
     expect(tray).toContain("restorePreviousInstall");
     expect(tray).toContain("previousStateBytes");
     expect(tray).toContain("previousScriptBytes");
-    expect(tray).toContain('windowsTrayProcessArgs(currentEntry(), "Stop")');
+    expect(tray).toContain('windowsTrayProcessArgs(entry, "Stop")');
     expect(tray).not.toContain("spawnTray(state)");
     expect(tray).toContain("return readWindowsTrayRunValueWithRunner(runValue, runRegistry)");
     expect(tray).toContain("return readWindowsTrayRunValueWithAsyncRunner(runValue, runRegistryAsync)");
-
-    const updateSources = [
-      join(root, "src", "update", "index.ts"),
-      join(root, "src", "update", "job.ts"),
-      join(root, "bin", "ocx.mjs"),
-    ].map(path => readFileSync(path, "utf8"));
-    for (const source of updateSources) {
-      expect(source).toContain("tray");
-      expect(source).toContain("stop");
-      expect(source).toContain("aborting before package replacement");
-    }
   });
 });
 import { ManagementRequest as Request } from "./helpers/management-auth";

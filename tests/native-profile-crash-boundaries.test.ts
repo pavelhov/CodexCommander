@@ -8,20 +8,20 @@ import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
 import { NativeProfileManager, type NativeProfileSwitchBoundary } from "../src/codex/native-profile-manager";
 import { readNativeProfileJournal, readNativeProfileVault } from "../src/codex/native-profile-store";
 import type { NativeProfileKey, NativeProfileKeyProvider } from "../src/codex/native-profile-types";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 import { INTERNAL_DEADLINE_MS } from "./helpers/test-budget";
 
 const roots: string[] = [];
-const oldOcx = process.env.OPENCODEX_HOME;
+const oldCodexCommander = process.env.CODEXCOMMANDER_HOME;
 const oldCodex = process.env.CODEX_HOME;
 
-function restoreEnv(name: "OPENCODEX_HOME" | "CODEX_HOME", value: string | undefined): void {
+function restoreEnv(name: "CODEXCOMMANDER_HOME" | "CODEX_HOME", value: string | undefined): void {
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
 }
 
 afterEach(() => {
-  restoreEnv("OPENCODEX_HOME", oldOcx);
+  restoreEnv("CODEXCOMMANDER_HOME", oldCodexCommander);
   restoreEnv("CODEX_HOME", oldCodex);
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -37,11 +37,11 @@ function envelope(accountId: string, marker: string): string {
 }
 
 async function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "ocx-native-crash-"));
+  const root = mkdtempSync(join(tmpdir(), "ccx-native-crash-"));
   roots.push(root);
   const home = join(root, "home");
   const codexHome = join(home, ".codex");
-  const configDir = join(home, ".opencodex");
+  const configDir = join(home, ".codexcommander");
   mkdirSync(codexHome, { recursive: true });
   mkdirSync(configDir, { recursive: true });
   writeFileSync(join(codexHome, "config.toml"), 'cli_auth_credentials_store = "file"\n');
@@ -62,18 +62,19 @@ async function fixture() {
   const targetProfile = (await manager.finishStage(stage.stageId, stage.writerToken, "target")).profile;
   const initialRevision = readNativeProfileVault(manager.context)!.revision;
 
-  process.env.OPENCODEX_HOME = configDir;
+  process.env.CODEXCOMMANDER_HOME = configDir;
   process.env.CODEX_HOME = codexHome;
   saveConfig({
     port: 0,
+    multiAgentGuidanceEnabled: true,
     hostname: "127.0.0.1",
     defaultProvider: "openai",
     providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool" } },
     codexAccounts: [],
     activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID,
     autoSwitchThreshold: 0,
-  } as OcxConfig);
-  restoreEnv("OPENCODEX_HOME", oldOcx);
+  } as CodexCommanderConfig);
+  restoreEnv("CODEXCOMMANDER_HOME", oldCodexCommander);
   restoreEnv("CODEX_HOME", oldCodex);
   return { root, home, codexHome, configDir, source, target, key, manager, sourceProfile, targetProfile, initialRevision };
 }
@@ -145,7 +146,7 @@ function spawnSwitch(f: Awaited<ReturnType<typeof fixture>>, options: { boundary
       HOME: f.home,
       USERPROFILE: f.home,
       CODEX_HOME: f.codexHome,
-      OPENCODEX_HOME: f.configDir,
+      CODEXCOMMANDER_HOME: f.configDir,
       NATIVE_SWITCH_CODEX_HOME: f.codexHome,
       NATIVE_SWITCH_CONFIG_DIR: f.configDir,
       NATIVE_SWITCH_KEY: f.key.toString("base64"),
@@ -171,8 +172,8 @@ function spawnStartup(
   return Bun.spawn([process.execPath, join(import.meta.dir, "helpers", "native-profile-startup-child.ts")], {
     cwd: join(import.meta.dir, ".."),
     env: {
-      ...process.env, HOME: f.home, USERPROFILE: f.home, CODEX_HOME: f.codexHome, OPENCODEX_HOME: f.configDir,
-      OPENCODEX_ADMIN_AUTH_TOKEN: "crash-test-admin",
+      ...process.env, HOME: f.home, USERPROFILE: f.home, CODEX_HOME: f.codexHome, CODEXCOMMANDER_HOME: f.configDir,
+      CODEXCOMMANDER_ADMIN_AUTH_TOKEN: "crash-test-admin",
       NATIVE_STARTUP_CODEX_HOME: f.codexHome, NATIVE_STARTUP_CONFIG_DIR: f.configDir,
       NATIVE_STARTUP_KEY: f.key.toString("base64"), NATIVE_STARTUP_KEY_REF: "memory:switch-test", NATIVE_STARTUP_PORT: p.port,
       NATIVE_STARTUP_RECOVERY_RELEASE: p.release, NATIVE_STARTUP_SETTLED: p.settled,
@@ -200,8 +201,8 @@ const boundaries: Array<{
   { boundary: "journal-deleted", auth: "target", owner: "target", phase: null },
 ];
 
-describe("native profile OpenCodex process-exit phases", () => {
-  test("hard OpenCodex process exit after each published transaction phase converges exact auth, vault, journal, gate, and runtime bearer", async () => {
+describe("native profile CodexCommander process-exit phases", () => {
+  test("hard CodexCommander process exit after each published transaction phase converges exact auth, vault, journal, gate, and runtime bearer", async () => {
     for (const scenario of boundaries) {
       const f = await fixture();
       const marker = join(f.root, `crash-${scenario.boundary}`);
@@ -300,7 +301,7 @@ describe("native profile OpenCodex process-exit phases", () => {
   test("a stalled startup child is killed by the bounded teardown instead of hanging", async () => {
     const f = await fixture();
     const p = startupPaths(f);
-    const child = spawnStartup(f, p, { OCX_TEST_STALL_ON_STOP: "1" });
+    const child = spawnStartup(f, p, { CCX_TEST_STALL_ON_STOP: "1" });
     try {
       await waitFor(p.port);
       await expect(stopStartup(child, p, 1_000)).rejects.toThrow("startup child did not stop");
@@ -321,7 +322,7 @@ describe("native profile OpenCodex process-exit phases", () => {
    * the wait holds out for something parseable.
    */
   test("waitForJson holds out for a complete document instead of parsing a partial write", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-settled-race-"));
+    const dir = mkdtempSync(join(tmpdir(), "ccx-settled-race-"));
     const target = join(dir, "settled.json");
     try {
       writeFileSync(target, "{\"gate\":");   // what a half-finished write looks like

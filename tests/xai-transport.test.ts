@@ -10,7 +10,7 @@ import {
   XAI_GROK_CLIENT_VERSION,
 } from "../src/providers/xai-transport";
 import { getProviderRegistryEntry } from "../src/providers/registry";
-import type { OcxAssistantMessage, OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderAssistantMessage, CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const OMITTED = [
@@ -22,7 +22,7 @@ const OMITTED = [
   "x-grok-client-mode",
 ] as const;
 
-function provider(authMode: "oauth" | "key"): OcxProviderConfig {
+function provider(authMode: "oauth" | "key"): CodexCommanderProviderConfig {
   return {
     adapter: "openai-chat",
     baseUrl: "https://api.x.ai/v1",
@@ -32,7 +32,7 @@ function provider(authMode: "oauth" | "key"): OcxProviderConfig {
   };
 }
 
-function parsed(): OcxParsedRequest {
+function parsed(): CodexCommanderParsedRequest {
   return {
     modelId: "grok-4.5",
     context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
@@ -50,7 +50,7 @@ describe("xAI auth-mode transport selection", () => {
     expect(request.url).toBe(`${XAI_GROK_CLI_BASE_URL}/chat/completions`);
     expect(request.headers).toMatchObject({
       Authorization: "Bearer oauth-token",
-      "x-grok-client-identifier": "opencodex",
+      "x-grok-client-identifier": "codexcommander",
       "x-grok-client-version": XAI_GROK_CLIENT_VERSION,
       "x-xai-token-auth": "xai-grok-cli",
     });
@@ -62,7 +62,7 @@ describe("xAI auth-mode transport selection", () => {
     expect(request.url).toBe(`${XAI_GROK_CLI_BASE_URL}/models`);
     expect(request.headers).toMatchObject({
       Authorization: "Bearer oauth-token",
-      "x-grok-client-identifier": "opencodex",
+      "x-grok-client-identifier": "codexcommander",
       "x-grok-client-version": XAI_GROK_CLIENT_VERSION,
       "x-xai-token-auth": "xai-grok-cli",
     });
@@ -92,7 +92,7 @@ describe("xAI auth-mode transport selection", () => {
     expect(resolveProviderTransport("xai", custom).headers).toMatchObject({
       "x-grok-client-version": "0.2.94",
       "x-custom": "kept",
-      "x-grok-client-identifier": "opencodex",
+      "x-grok-client-identifier": "codexcommander",
       "x-xai-token-auth": "xai-grok-cli",
     });
   });
@@ -325,7 +325,7 @@ describe("xAI prompt-cache conv-id affinity", () => {
     expect(versionKeys).toEqual(["X-Grok-Client-Version"]);
     expect(resolved.headers?.["X-Grok-Client-Version"]).toBe("0.2.94");
     // Untouched defaults still apply.
-    expect(resolved.headers?.["x-grok-client-identifier"]).toBe("opencodex");
+    expect(resolved.headers?.["x-grok-client-identifier"]).toBe("codexcommander");
   });
 });
 
@@ -335,7 +335,7 @@ function lower(headers: Headers): Record<string, string> {
 
 async function capture(authMode: "oauth" | "key", calls = 1) {
   const seen: Headers[] = [];
-  const configured = provider(authMode) as OcxProviderConfig & { fetch?: typeof globalThis.fetch };
+  const configured = provider(authMode) as CodexCommanderProviderConfig & { fetch?: typeof globalThis.fetch };
   configured.fetch = async (_input, init) => {
     seen.push(new Headers(init?.headers));
     return new Response("{}", { status: 200 });
@@ -359,9 +359,9 @@ describe("xAI outbound compatibility headers", () => {
     expect(lower(seen[0])).toEqual({
       authorization: "Bearer oauth-token",
       "content-type": "application/json",
-      "user-agent": `opencodex-grok/${XAI_GROK_CLIENT_VERSION}`,
+      "user-agent": `codexcommander-grok/${XAI_GROK_CLIENT_VERSION}`,
       "x-authenticateresponse": "authenticate-response",
-      "x-grok-client-identifier": "opencodex",
+      "x-grok-client-identifier": "codexcommander",
       "x-grok-client-version": XAI_GROK_CLIENT_VERSION,
       "x-grok-conv-id": deriveXaiConvId("codex-session-abc"),
       "x-grok-req-id": expect.stringMatching(UUID_V4),
@@ -377,7 +377,7 @@ describe("xAI outbound compatibility headers", () => {
     expect(lower(seen[0])).toEqual({
       authorization: "Bearer xai-api-key",
       "content-type": "application/json",
-      "user-agent": `opencodex-grok/${XAI_GROK_CLIENT_VERSION}`,
+      "user-agent": `codexcommander-grok/${XAI_GROK_CLIENT_VERSION}`,
       "x-grok-conv-id": deriveXaiConvId("codex-session-abc"),
       "x-grok-req-id": expect.stringMatching(UUID_V4),
       "x-grok-session-id": deriveXaiConvId("codex-session-abc"),
@@ -405,14 +405,14 @@ describe("xAI outbound compatibility headers", () => {
     expect(seen[1].get("x-grok-conv-id")).toBe(seen[0].get("x-grok-conv-id"));
     expect(seen[1].get("x-grok-session-id")).toBe(seen[0].get("x-grok-session-id"));
     for (const headers of seen) {
-      expect(headers.get("user-agent")).toBe(`opencodex-grok/${XAI_GROK_CLIENT_VERSION}`);
+      expect(headers.get("user-agent")).toBe(`codexcommander-grok/${XAI_GROK_CLIENT_VERSION}`);
       for (const name of OMITTED) expect(headers.has(name)).toBe(false);
     }
   });
 
   test("mixed-case caller overrides win without duplicates", async () => {
     const seen: Headers[] = [];
-    const configured = provider("oauth") as OcxProviderConfig & { fetch?: typeof globalThis.fetch };
+    const configured = provider("oauth") as CodexCommanderProviderConfig & { fetch?: typeof globalThis.fetch };
     configured.headers = { "user-agent": "custom-agent", "X-Grok-Req-Id": "caller-id" };
     configured.fetch = async (_input, init) => {
       seen.push(new Headers(init?.headers));
@@ -433,7 +433,7 @@ describe("xAI outbound compatibility headers", () => {
   test("blank cache keys omit affinity but retain UA and fresh req-id in both modes", async () => {
     for (const authMode of ["oauth", "key"] as const) {
       const seen: Headers[] = [];
-      const configured = provider(authMode) as OcxProviderConfig & { fetch?: typeof globalThis.fetch };
+      const configured = provider(authMode) as CodexCommanderProviderConfig & { fetch?: typeof globalThis.fetch };
       configured.fetch = async (_input, init) => {
         seen.push(new Headers(init?.headers));
         return new Response("{}", { status: 200 });
@@ -443,7 +443,7 @@ describe("xAI outbound compatibility headers", () => {
       await effective.fetch!(request.url, { headers: request.headers });
       expect(seen[0].has("x-grok-conv-id")).toBe(false);
       expect(seen[0].has("x-grok-session-id")).toBe(false);
-      expect(seen[0].get("user-agent")).toBe(`opencodex-grok/${XAI_GROK_CLIENT_VERSION}`);
+      expect(seen[0].get("user-agent")).toBe(`codexcommander-grok/${XAI_GROK_CLIENT_VERSION}`);
       expect(seen[0].get("x-grok-req-id")).toMatch(UUID_V4);
       for (const name of OMITTED) expect(seen[0].has(name)).toBe(false);
     }
@@ -466,7 +466,7 @@ describe("xAI reasoning_content cache preservation", () => {
   });
 
   test("parseRequest folds summary reasoning into one Grok assistant wire message", () => {
-    const prov: OcxProviderConfig = {
+    const prov: CodexCommanderProviderConfig = {
       ...provider("oauth"),
       preserveReasoningContentModels: getProviderRegistryEntry("xai")?.preserveReasoningContentModels ?? [],
     };
@@ -487,7 +487,7 @@ describe("xAI reasoning_content cache preservation", () => {
   });
 
   test("parseRequest drops opaque encrypted-only reasoning without detaching an assistant wire message", () => {
-    const prov: OcxProviderConfig = {
+    const prov: CodexCommanderProviderConfig = {
       ...provider("oauth"),
       preserveReasoningContentModels: getProviderRegistryEntry("xai")?.preserveReasoningContentModels ?? [],
     };
@@ -509,7 +509,7 @@ describe("xAI reasoning_content cache preservation", () => {
   });
 
   test("parseRequest clears pending reasoning at a user boundary", () => {
-    const prov: OcxProviderConfig = {
+    const prov: CodexCommanderProviderConfig = {
       ...provider("oauth"),
       preserveReasoningContentModels: getProviderRegistryEntry("xai")?.preserveReasoningContentModels ?? [],
     };
@@ -529,7 +529,7 @@ describe("xAI reasoning_content cache preservation", () => {
   });
 
   test("parseRequest folds pending reasoning into the assistant turn that carries the call", () => {
-    const prov: OcxProviderConfig = {
+    const prov: CodexCommanderProviderConfig = {
       ...provider("oauth"),
       preserveReasoningContentModels: getProviderRegistryEntry("xai")?.preserveReasoningContentModels ?? [],
     };
@@ -556,7 +556,7 @@ describe("xAI reasoning_content cache preservation", () => {
   });
 
   test("parseRequest newline-joins reasoning siblings before one assistant", () => {
-    const prov: OcxProviderConfig = {
+    const prov: CodexCommanderProviderConfig = {
       ...provider("oauth"),
       preserveReasoningContentModels: getProviderRegistryEntry("xai")?.preserveReasoningContentModels ?? [],
     };
@@ -570,7 +570,7 @@ describe("xAI reasoning_content cache preservation", () => {
     });
     const body = JSON.parse(createOpenAIChatAdapter(prov).buildRequest(req).body as string) as { messages: Array<Record<string, unknown>> };
     const assistants = body.messages.filter(message => message.role === "assistant");
-    const parsedAssistant = req.context.messages.find(message => message.role === "assistant") as OcxAssistantMessage;
+    const parsedAssistant = req.context.messages.find(message => message.role === "assistant") as CodexCommanderAssistantMessage;
     const thinkingParts = parsedAssistant.content.filter(part => part.type === "thinking");
 
     expect(thinkingParts).toHaveLength(1);

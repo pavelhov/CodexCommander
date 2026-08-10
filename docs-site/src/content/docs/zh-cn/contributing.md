@@ -1,13 +1,12 @@
 ---
 title: 贡献指南
-description: opencodex 的开发环境、结构、约定，以及添加 provider 或 adapter 的方法。
+description: CodexCommander 的开发环境、结构、约定，以及添加 provider 或 adapter 的方法。
 ---
 
 ## 环境搭建
 
 ```bash
-git clone https://github.com/pavelhov/opencodex.git
-cd opencodex
+cd /path/to/CodexCommander
 bun install
 bun run dev:proxy    # 开发模式代理 API
 bun run dev:gui      # 仪表盘 dev 服务器（另一个终端）
@@ -42,11 +41,9 @@ bun run prepare:package           # 刷新 package launcher/asset
 cd docs-site && bun install && bun dev
 ```
 
-## 文档发布
+## 文档站点
 
-公开文档发布到 GitHub Pages：<https://opencodex.me/zh-cn/>。
-`.github/workflows/deploy-docs.yml` 会在 `main` push 中 `docs-site/**` 或 workflow 本身发生变化时
-运行，构建 `docs-site` 并部署生成的网站。推送文档变更前请运行：
+文档位于 `docs-site/`，目前没有已发布的托管地址。提交文档 pull request 前请本地构建：
 
 ```bash
 cd docs-site
@@ -54,38 +51,29 @@ bun install --frozen-lockfile
 bun run build
 ```
 
-## CI 与发布
+本仓库不包含发布自动化。
 
-GitHub Actions 有意只保留必要步骤：
+## 持续集成
 
-- **Cross-platform CI**（`.github/workflows/ci.yml`）会在改动 runtime、test、package、script、
-  TypeScript 或 workflow 文件的 pull request 与 `main` push 上运行。Bun matrix 覆盖 Linux、
-  Windows 和 macOS，执行 install、typecheck、test、privacy scan、release-helper build smoke、GUI
-  build 和 `ocx help`。另一个三系统 lane 使用 package 内置 runtime，验证无需单独安装 Bun 也能
-  完成 npm global install。
-- **Release**（`.github/workflows/release.yml`）只能手动运行。它不是第二套完整 CI；dry-run 或
-  publish 前，精确的 release commit（`GITHUB_SHA`）必须已有成功的 Cross-platform CI run。
+每个 pull request 以及每次推送到 `main` 都只会运行 **一个**自动检查：**`ci`**
+（`.github/workflows/ci.yml`）。普通贡献所需的自动化就是它。
 
-发布请使用 helper：
+仓库管理员可在保护规则挡住有意的管理操作时，使用 GitHub ruleset **Always-allow** bypass。
+它用于管理员恢复与例外维护，不能替代贡献者变更的审查。
 
-```bash
-bun run release <version>           # commit/push 版本 bump；publish workflow 默认 dry-run
-bun run release <version> --publish # 确认 CI-gated dry-run 后真正 publish
-bun run release:watch               # 观察最新的 Release workflow run
-```
+## 分支与 pull request
 
-## 分支
+- **`main` 是唯一的 default / 集成 / PR 目标。** 功能与修复 PR 请提到 `main`。
+- 从当前 **`main` tip** 拉分支。
+- 描述中写清改了什么、为什么，以及如何验证（具体命令与结果）。空描述或仅占位符不算
+  review-ready。
+- 若改动仪表盘 UI，请在描述中附截图。
+- 行为变更需要在对应子系统现有测试附近加入聚焦回归测试；共享 routing、adapter、config
+  或 server 变更需要完整 suite 通过。
 
-- `dev` — 唯一的集成目标。请把所有 PR 提到这里。
-- `main` — 仅用于发布。只有维护者从 `dev` 提升时才会变动，请勿直接提功能 PR。
-- `preview` — 预发布通道。
+`main` 上的 Bun 原生 TypeScript 是唯一 runtime 线。
 
-承载 Go 原生移植的 `dev2-go` 已经退役，同时维护两条集成线的政策也一并结束。其历史以只读
-形式保存在
-[lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive)。
-现在 `dev` 上的 Bun 原生 TypeScript 是唯一的运行时线。
-
-欢迎变基 PR。把陈旧分支变基到当前 head 是正常的贡献而非噪音。请在描述中注明来源提交。
+欢迎 rebase PR。把陈旧分支接到当前 head 是常规维护；请在描述中注明来源提交。
 
 ## 约定
 
@@ -95,7 +83,7 @@ bun run release:watch               # 观察最新的 Release workflow run
   小而专注的 module 位于单一 `index.ts` 之后。
 - **在边界处理异步错误** —— sidecar 不会把异常抛进请求路径，而会降级成合适的 marker。
 - **Structure SOT** —— 当前维护者不变量放在 `structure/`；公开用户流程放在 `docs-site/`；
-  历史调查/诊断记录放在 `docs/`。
+  持续维护的工程与实现笔记放在 `docs/`。
 - **保留 export** —— 其他 module 可能依赖它们。
 
 ## 向目录中添加 provider
@@ -116,7 +104,7 @@ bun run release:watch               # 观察最新的 Release workflow run
 },
 ```
 
-`src/providers/derive.ts` 会把该条目提供给 `ocx init`、`ocx provider`、仪表盘 preset、API-key
+`src/providers/derive.ts` 会把该条目提供给 `ccx init`、`ccx provider`、仪表盘 preset、API-key
 登录和 OAuth config seed。`enrichProviderFromCatalog()` 会把模型 metadata 与 capability 分类复制到
 保存的 provider 配置。OAuth protocol 实现仍位于 `src/oauth/`；只有 registry metadata 并不会
 自动形成 OAuth flow。
@@ -134,4 +122,4 @@ package API，还要从 `src/index.ts` export。
 
 先运行能证明改动的最小命令：类型检查用 `bun run typecheck`，行为检查用聚焦的
 `bun test tests/<name>.test.ts` 或 runtime probe，然后再执行适合影响范围的更宽 gate。
-opencodex 倾向于小而可验证的 commit，而不是大批量改动。
+CodexCommander 倾向于小而可验证的 commit，而不是大批量改动。

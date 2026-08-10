@@ -25,7 +25,7 @@ import {
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
 import { apiKeyPoolEntryId } from "./api-keys";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "./registry";
-import type { OcxConfig, OcxProviderConfig } from "../types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../types";
 import { readUsageSnapshotForManagement, usageTotalTokens, type PersistedUsageEntry } from "../usage/log";
 import { effectiveServiceTier, estimateAttemptCost, estimateRequestCost } from "../usage/cost";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "./openai-tiers";
@@ -150,7 +150,7 @@ export function clearProviderQuotaCache(): void {
   invalidationEpoch += 1;
 }
 
-function cacheKey(config: OcxConfig): string {
+function cacheKey(config: CodexCommanderConfig): string {
   const providers = Object.entries(config.providers)
     .map(([name, provider]) => {
       const resolvedKey = typeof provider.apiKey === "string"
@@ -166,7 +166,7 @@ function cacheKey(config: OcxConfig): string {
 
 type CodexAuthAccountsSnapshotPromise = ReturnType<typeof listCodexAuthAccountsSnapshot>;
 
-function hasCodexPoolProvider(config: OcxConfig): boolean {
+function hasCodexPoolProvider(config: CodexCommanderConfig): boolean {
   return Object.entries(config.providers).some(([name, provider]) => (
     provider.disabled !== true
     && isBuiltInChatGptForwardProvider(name, provider)
@@ -192,7 +192,7 @@ function quotaSignatureValue(quota: CodexCapacityQuota | null): unknown {
 
 /** Hash only presentation-relevant state; account ids and email addresses never enter the key. */
 function cacheKeyWithAggregationState(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   prefetchedSnapshot?: CodexAuthAccountsSnapshotPromise,
 ): string | Promise<string> {
   const base = cacheKey(config);
@@ -356,7 +356,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
-function isBuiltInChatGptForwardProvider(name: string, provider: OcxProviderConfig): boolean {
+function isBuiltInChatGptForwardProvider(name: string, provider: CodexCommanderProviderConfig): boolean {
   return name === OPENAI_CODEX_PROVIDER_ID && isCanonicalOpenAiForwardProvider(provider);
 }
 
@@ -379,7 +379,7 @@ function firstFinite(record: Record<string, unknown> | null, names: string[]): n
   return undefined;
 }
 
-async function fetchA6apiQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+async function fetchA6apiQuota(provider: string, config: CodexCommanderProviderConfig): Promise<ProviderQuotaProbeResult> {
   // Never send a configured API key to a lookalike host or through a redirect.
   if (!isCanonicalA6apiBaseUrl(config.baseUrl)) return null;
   const apiKey = resolveEnvValue(config.apiKey)?.trim();
@@ -462,9 +462,9 @@ function isProviderQuotaReportCurrent(value: ProviderQuotaReport): boolean {
 }
 
 async function fetchChatGptForwardQuota(
-  config: OcxConfig,
+  config: CodexCommanderConfig,
   provider: string,
-  providerConfig: OcxProviderConfig,
+  providerConfig: CodexCommanderProviderConfig,
   forceRefresh: boolean,
   prefetchedSnapshot?: CodexAuthAccountsSnapshotPromise,
 ): Promise<ProviderQuotaReport | null> {
@@ -1001,7 +1001,7 @@ type KimiQuotaBearer = {
 };
 
 async function resolveKimiQuotaBearer(
-  config: OcxProviderConfig,
+  config: CodexCommanderProviderConfig,
 ): Promise<KimiQuotaBearer | ProviderQuotaUnavailable | null> {
   if (config.authMode === "oauth") {
     try {
@@ -1025,7 +1025,7 @@ async function resolveKimiQuotaBearer(
 
 async function fetchKimiQuota(
   provider: string,
-  config: OcxProviderConfig,
+  config: CodexCommanderProviderConfig,
 ): Promise<ProviderQuotaProbeResult> {
   // Never release credentials to a user-edited or lookalike provider host.
   if (!isCanonicalKimiCodeBaseUrl(config.baseUrl)) return null;
@@ -1064,7 +1064,7 @@ async function fetchCursorQuota(provider: string): Promise<ProviderQuotaReport |
   const authHeaders = {
     Accept: "application/json",
     Authorization: `Bearer ${accessToken}`,
-    "User-Agent": "opencodex-quota",
+    "User-Agent": "codexcommander-quota",
   } as const;
 
   // Prefer dashboard period usage (Pro/Team/Ultra spend allowance in USD cents).
@@ -1264,7 +1264,7 @@ function antigravityUsedPercent(quotaInfo: Record<string, unknown>): number | un
   return normalizePercent(100 - remaining);
 }
 
-async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
+async function fetchAntigravityQuota(provider: string, config: CodexCommanderProviderConfig): Promise<ProviderQuotaReport | null> {
   const credential = getCredential("google-antigravity");
   if (!credential?.projectId) return null;
   let accessToken: string;
@@ -1510,7 +1510,7 @@ async function fetchOpenCodeGoReferenceQuota(provider: string): Promise<Provider
  */
 export function supportsProviderQuotaReporting(
   name: string,
-  provider: OcxProviderConfig,
+  provider: CodexCommanderProviderConfig,
 ): boolean {
   if (name === "opencode-go" && isCanonicalOpenCodeGoBaseUrl(provider.baseUrl)) return true;
   if (isBuiltInChatGptForwardProvider(name, provider)) return true;
@@ -1524,8 +1524,8 @@ export function supportsProviderQuotaReporting(
 
 async function maybeFetchProviderQuota(
   name: string,
-  provider: OcxProviderConfig,
-  config: OcxConfig,
+  provider: CodexCommanderProviderConfig,
+  config: CodexCommanderConfig,
   forceRefresh: boolean,
   prefetchedCodexSnapshot?: CodexAuthAccountsSnapshotPromise,
 ): Promise<ProviderQuotaProbeResult> {
@@ -1556,7 +1556,7 @@ async function maybeFetchProviderQuota(
   }
 }
 
-export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh = false): Promise<ProviderQuotaResponse> {
+export async function fetchProviderQuotaReports(config: CodexCommanderConfig, forceRefresh = false): Promise<ProviderQuotaResponse> {
   // A Pool report's cache signature and provider fetch must share one account snapshot.
   // Preserve force semantics when deciding whether that snapshot refreshes upstream data.
   const prefetchedCodexSnapshot = hasCodexPoolProvider(config)

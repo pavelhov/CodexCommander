@@ -74,7 +74,7 @@ test("S5: a user API key or auth token is present", () => {
 });
 
 // THE feedback-loop guard: our own dummy must not read as user auth, or a proxy-mode
-// launch would look authenticated on the next launch (devlog 002 §1).
+// launch would look authenticated on the next launch (implementation contract §1).
 test("S5: our own proxy marker is NOT auth, and is reported as stale", () => {
   const result = detectClaudeAuth(deps({ env: () => ({ ANTHROPIC_AUTH_TOKEN: PROXY_MARKER }) }));
   expect(result.presence).toBe("absent");
@@ -128,7 +128,7 @@ test("claudeConfigDir follows a reassigned HOME instead of the OS user database"
 
 // Same reason for ~/.claude.json: under CLAUDE_CONFIG_DIR it is that dir's SIBLING.
 test("the default claude.json reader stays inside the overridden profile", () => {
-  const dir = mkdtempSync(join(tmpdir(), "ocx-authdetect-"));
+  const dir = mkdtempSync(join(tmpdir(), "ccx-authdetect-"));
   writeFileSync(join(dir, ".claude.json"), JSON.stringify({
     oauthAccount: { emailAddress: "someone@example.com" },
   }));
@@ -189,9 +189,9 @@ test("defaultAuthDetectDeps binds env to the caller-supplied environment", () =>
 });
 
 // MAJOR (round-5 review): the system-env writer exports the CONFIGURED admission key
-// into ANTHROPIC_AUTH_TOKEN. Counting it would make opencodex's own output look like
+// into ANTHROPIC_AUTH_TOKEN. Counting it would make codexcommander's own output look like
 // proof the user can authenticate natively — the marker feedback loop, one variable over.
-test("opencodex's own admission key is not counted as user auth", () => {
+test("codexcommander's own admission key is not counted as user auth", () => {
   const base = {
     readClaudeJson: () => undefined,
     credentialsFileExists: () => false,
@@ -199,23 +199,23 @@ test("opencodex's own admission key is not counted as user auth", () => {
   };
   const own = detectClaudeAuth({
     ...base,
-    env: () => ({ ANTHROPIC_AUTH_TOKEN: "sk-ocx-admission" }),
-    ownTokens: ["sk-ocx-admission"],
+    env: () => ({ ANTHROPIC_AUTH_TOKEN: "sk-ccx-admission" }),
+    ownTokens: ["sk-ccx-admission"],
   });
   expect(own.presence).toBe("absent");
 
   // Same value in ANTHROPIC_API_KEY is ours too.
   expect(detectClaudeAuth({
     ...base,
-    env: () => ({ ANTHROPIC_API_KEY: "sk-ocx-admission" }),
-    ownTokens: ["sk-ocx-admission"],
+    env: () => ({ ANTHROPIC_API_KEY: "sk-ccx-admission" }),
+    ownTokens: ["sk-ccx-admission"],
   }).presence).toBe("absent");
 
   // A DIFFERENT value is genuine user auth and still counts.
   const user = detectClaudeAuth({
     ...base,
     env: () => ({ ANTHROPIC_AUTH_TOKEN: "sk-ant-user" }),
-    ownTokens: ["sk-ocx-admission"],
+    ownTokens: ["sk-ccx-admission"],
   });
   expect(user.presence).toBe("present");
   expect(user.foundBy).toBe("exported-env");

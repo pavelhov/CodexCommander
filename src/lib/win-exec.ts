@@ -1,5 +1,5 @@
 /**
- * Cross-platform command launching (devlog 260715_cross_platform_audit/020).
+ * Cross-platform command launching (implementation contract).
  *
  * Windows npm installs expose CLIs as `.cmd` shims, and Node/Bun refuse shell-less
  * `.cmd` spawns (CVE-2024-27980 hardening). Bare names like `spawn("claude")` also

@@ -7,14 +7,14 @@ import {
   repairResponsesJsonItemIds,
 } from "../src/server/responses-item-id-repair";
 import { handleResponses } from "../src/server/responses/core";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
 
 const UUID_MSG = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
 const UUID_RS = "1b9d6bcd-bbfd-4b2d-9b9d-5c0a2fb41a1b";
 const UUID_FC = "550e8400-e29b-41d4-a716-446655440000";
 
-function deepseekProvider(): OcxProviderConfig {
+function deepseekProvider(): CodexCommanderProviderConfig {
   const provider = { ...providerConfigSeed(getProviderRegistryEntry("deepseek")!), apiKey: "sk-test" };
   enrichProviderFromRegistry("deepseek", provider);
   return provider;
@@ -49,8 +49,8 @@ describe("registry-derived DeepSeek repair policy (#938)", () => {
     });
     const rsId = (reasoningAdded.item as { id: string }).id;
     const msgId = (messageAdded.item as { id: string }).id;
-    expect(rsId).toMatch(/^rs_ocx_[a-f0-9]+_0$/);
-    expect(msgId).toMatch(/^msg_ocx_[a-f0-9]+_1$/);
+    expect(rsId).toMatch(/^rs_ccx_[a-f0-9]+_0$/);
+    expect(msgId).toMatch(/^msg_ccx_[a-f0-9]+_1$/);
 
     // Every lifecycle occurrence of the same index gets the SAME canonical id.
     const textDelta = frame({ type: "response.output_text.delta", item_id: UUID_MSG, output_index: 1, delta: "hi" });
@@ -111,8 +111,8 @@ describe("registry-derived DeepSeek repair policy (#938)", () => {
       createTestTranslatorBudget(),
     );
     const output = repaired.output as { id: string }[];
-    expect(output[0]!.id).toMatch(/^rs_ocx_/);
-    expect(output[1]!.id).toMatch(/^msg_ocx_/);
+    expect(output[0]!.id).toMatch(/^rs_ccx_/);
+    expect(output[1]!.id).toMatch(/^msg_ccx_/);
   });
 });
 
@@ -136,7 +136,7 @@ describe("bounded-JSON HTTP path carries canonical ids (#938 + #875)", () => {
       ],
     })) as typeof fetch;
 
-    const config = { providers: { deepseek: plainSeed } } as unknown as OcxConfig;
+    const config = { providers: { deepseek: plainSeed } } as unknown as CodexCommanderConfig;
     const response = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -151,8 +151,8 @@ describe("bounded-JSON HTTP path carries canonical ids (#938 + #875)", () => {
     const text = await response.text();
     expect(text).not.toContain(UUID_MSG);
     expect(text).not.toContain(UUID_RS);
-    expect(text).toContain("msg_ocx_");
-    expect(text).toContain("rs_ocx_");
+    expect(text).toContain("msg_ccx_");
+    expect(text).toContain("rs_ccx_");
     // function_call identity survives byte-for-byte.
     expect(text).toContain(UUID_FC);
     expect(text).toContain("call_keep");

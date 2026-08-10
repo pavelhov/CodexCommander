@@ -4,7 +4,7 @@
  * Codex sends the SAME GPT-5 identity line to EVERY model at request time (the per-model catalog
  * `base_instructions` is ignored on the wire). For routed, non-OpenAI providers that line is both
  * wrong (the model isn't GPT-5) and a liability: the previous fix replaced it with text that
- * advertised "...served through / running via the opencodex proxy", which leaked our proxy identity
+ * advertised "...served through / running via the CodexCommander proxy", which leaked our proxy identity
  * into the upstream payload — a signature no first-party client (Claude Code, Gemini CLI, Kiro) ever
  * sends, and a likely ToS trigger.
  *
@@ -28,7 +28,7 @@ export const CODEX_GPT5_IDENTITY_LINE_AGENT = "You are Codex, an agent based on 
 const CODEX_GPT5_IDENTITY_RE =
   /You are Codex, (?:a coding agent|an agent) based on GPT-5(?:\.[0-9]+)*\./g;
 
-/** Proxy-neutral replacement: no "opencodex proxy" mention, just the GPT-5/OpenAI disclaimer. */
+/** Proxy-neutral replacement: no proxy-brand mention, just the GPT-5/OpenAI disclaimer. */
 export const NEUTRAL_IDENTITY_LINE = "You are a coding agent. Do not claim to be GPT-5 or to be made by OpenAI.";
 
 /**

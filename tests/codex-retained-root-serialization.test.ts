@@ -16,6 +16,8 @@ import {
   resolveCodexCatalogSerializationDatabasePath,
   resolveEffectiveUserIdentity,
 } from "../src/codex/user-identity";
+import { catalogBackupPathFor } from "../src/codex/catalog/parsing";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 import { claimOwnedServiceHome } from "./helpers/owned-service-home";
 
 const repoRoot = resolve(import.meta.dir, "..");
@@ -53,7 +55,7 @@ async function terminateRemainingChildren(): Promise<void> {
 interface Sandbox {
   readonly root: string;
   readonly codexHome: string;
-  readonly opencodexHome: string;
+  readonly codexCommanderHome: string;
   readonly env: Record<string, string>;
 }
 
@@ -78,7 +80,7 @@ function catalogBytes(visibility = "list", routed = false): string {
       nativeEntry("gpt-5.5", visibility),
       ...(routed ? [{
         ...nativeEntry("vendor/old-model"),
-        description: "Routed via opencodex → vendor.",
+        description: "Routed via codexcommander → vendor.",
       }] : []),
     ],
   }, null, 2)}\n`;
@@ -87,22 +89,23 @@ function catalogBytes(visibility = "list", routed = false): string {
 function makeSandbox(prefix: string): Sandbox {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
   const codexHome = join(root, "codex-home");
-  const opencodexHome = join(root, "opencodex-home");
+  const codexCommanderHome = join(root, "codexcommander-home");
   const home = join(root, "user-home");
   const runtime = join(root, "runtime");
-  for (const path of [codexHome, opencodexHome, home, runtime]) {
+  for (const path of [codexHome, codexCommanderHome, home, runtime]) {
     mkdirSync(path, { recursive: true });
     chmodSync(path, 0o700);
   }
-  const serviceManagerEnv = claimOwnedServiceHome(codexHome, opencodexHome, home).env;
+  const serviceManagerEnv = claimOwnedServiceHome(codexHome, codexCommanderHome, home).env;
   const sandbox = {
     root,
     codexHome,
-    opencodexHome,
+    codexCommanderHome,
     env: {
       ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
       CODEX_HOME: codexHome,
-      OPENCODEX_HOME: opencodexHome,
+      CODEX_CLI_PATH: createCodexRuntimeFixture(runtime),
+      CODEXCOMMANDER_HOME: codexCommanderHome,
       HOME: home,
       USERPROFILE: home,
       TMPDIR: runtime,
@@ -188,7 +191,7 @@ afterEach(async () => {
 });
 
 test("startup and CLI sync-cache cannot write models_cache while another process owns K", async () => {
-  const sandbox = makeSandbox("ocx-retained-cache-");
+  const sandbox = makeSandbox("ccx-retained-cache-");
   seedCatalog(sandbox);
   const cachePath = join(sandbox.codexHome, "models_cache.json");
   const holder = await holdCatalogLock(sandbox);
@@ -233,9 +236,9 @@ test("startup and CLI sync-cache cannot write models_cache while another process
 });
 
 test("native restore cannot read-transform-write the catalog while another process owns K", async () => {
-  const sandbox = makeSandbox("ocx-retained-restore-");
+  const sandbox = makeSandbox("ccx-retained-restore-");
   const catalogPath = seedCatalog(sandbox, catalogBytes("list", true));
-  writeFileSync(join(sandbox.opencodexHome, "catalog-backup.json"), catalogBytes("list", false));
+  writeFileSync(catalogBackupPathFor(catalogPath), catalogBytes("list", false));
   const before = readFileSync(catalogPath, "utf8");
   const holder = await holdCatalogLock(sandbox);
   try {
@@ -310,7 +313,7 @@ async function runPublisher(
 
 for (const publisher of ["convergence", "retained"] as const) {
   test(`POST /api/sync gathered first and acquired K second does not clobber a newer ${publisher} catalog`, async () => {
-    const sandbox = makeSandbox(`ocx-retained-race-${publisher}-`);
+    const sandbox = makeSandbox(`ccx-retained-race-${publisher}-`);
     const catalogPath = seedCatalog(sandbox);
     const initial = readFileSync(catalogPath, "utf8");
     const requested = join(sandbox.root, "provider-requested");
@@ -329,6 +332,7 @@ for (const publisher of ["convergence", "retained"] as const) {
     });
     const config = {
       port: 0,
+      multiAgentGuidanceEnabled: true,
       hostname: "127.0.0.1",
       defaultProvider: "fixture",
       providers: {
@@ -342,7 +346,7 @@ for (const publisher of ["convergence", "retained"] as const) {
       },
       disabledModels: ["gpt-5.5"],
     };
-    writeFileSync(join(sandbox.opencodexHome, "config.json"), JSON.stringify(config));
+    writeFileSync(join(sandbox.codexCommanderHome, "config.json"), JSON.stringify(config));
     try {
       const sync = trackChild(Bun.spawn([process.execPath, "--eval", `
         const config = ${JSON.stringify(config)};
@@ -417,12 +421,12 @@ for (const publisher of ["convergence", "retained"] as const) {
  * why it exists: nothing else in the suite covered that component.
  */
 test("a persisted runtime selection moved by another process during the await blocks the write", async () => {
-  const sandbox = makeSandbox("ocx-retained-runtime-move-");
+  const sandbox = makeSandbox("ccx-retained-runtime-move-");
   const catalogPath = seedCatalog(sandbox);
   const initial = readFileSync(catalogPath, "utf8");
   const requested = join(sandbox.root, "provider-requested");
   const release = join(sandbox.root, "provider-release");
-  const runtimeStatePath = join(sandbox.opencodexHome, "codex-runtime.json");
+  const runtimeStatePath = join(sandbox.codexCommanderHome, "codex-runtime.json");
   writeFileSync(runtimeStatePath, `${JSON.stringify({
     version: 1,
     command: "/usr/local/bin/codex-r1",
@@ -433,6 +437,7 @@ test("a persisted runtime selection moved by another process during the await bl
 
   const config = {
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "together",
     providers: {
       together: {
@@ -505,13 +510,13 @@ test("a persisted runtime selection moved by another process during the await bl
  * that follows approval rather than the edit.
  */
 test("two processes at the post-approval management seam serialize instead of interleaving", async () => {
-  const sandbox = makeSandbox("ocx-post-approval-race-");
+  const sandbox = makeSandbox("ccx-post-approval-race-");
   const catalogPath = seedCatalog(sandbox);
   const seeded = readFileSync(catalogPath, "utf8");
   const barrier = join(sandbox.root, "seam-barrier");
 
   // Warm the config ownership + mutation database in a single process first.
-  // Two cold processes otherwise race to create `.opencodex-owner.json` and both
+  // Two cold processes otherwise race to create `.codexcommander-owner.json` and both
   // die with EEXIST before approval, which would make this test vacuous.
   const warm = trackChild(Bun.spawn([process.execPath, "--eval", `
     const { withConfigMutationLockSync } = await import("./src/config.ts");
@@ -536,6 +541,7 @@ test("two processes at the post-approval management seam serialize instead of in
     };
     const config = {
       port: 10100,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "together",
       providers: {
         together: {

@@ -4,11 +4,10 @@
  * `provider.apiKey` stays the single source of truth for routing — it always mirrors the
  * ACTIVE pool entry, so the router/adapters never learn about the pool. The pool itself
  * lives in `provider.apiKeyPool` in config.json (same file that already holds apiKey).
- * A provider with a legacy bare `apiKey` is seeded into a one-entry pool on first touch.
  */
 import { createHash } from "node:crypto";
 import { saveConfigPreservingClaudeCode } from "../config";
-import type { OcxConfig, OcxProviderConfig } from "../types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../types";
 
 export interface ProviderApiKeyInfo {
   id: string;
@@ -35,7 +34,7 @@ export function apiKeyPoolEntryId(key: string): string {
 }
 
 /** True for providers whose upstream auth is a configured API key (not oauth/forward). */
-export function isKeyAuthProvider(provider: OcxProviderConfig): boolean {
+export function isKeyAuthProvider(provider: CodexCommanderProviderConfig): boolean {
   return provider.authMode !== "oauth" && provider.authMode !== "forward";
 }
 
@@ -46,26 +45,37 @@ export function sanitizeApiKeyValue(value: unknown): string | undefined {
   return trimmed && !/[\r\n]/.test(trimmed) ? trimmed : undefined;
 }
 
-/** Seed the pool from a legacy bare `apiKey`, and keep `apiKey` mirrored to the active entry. */
-function ensurePool(provider: OcxProviderConfig): NonNullable<OcxProviderConfig["apiKeyPool"]> {
-  if (!provider.apiKeyPool) provider.apiKeyPool = [];
-  if (provider.apiKeyPool.length === 0 && provider.apiKey) {
-    provider.apiKeyPool.push({ id: apiKeyPoolEntryId(provider.apiKey), key: provider.apiKey });
+/**
+ * The persisted key shape is canonical only when every pool row is valid and the active
+ * `apiKey` exactly mirrors one row. Old bare keys and malformed pools are intentionally not
+ * repaired: they require an explicit user add/re-auth action.
+ */
+export function currentProviderApiKeyPool(
+  provider: CodexCommanderProviderConfig,
+): NonNullable<CodexCommanderProviderConfig["apiKeyPool"]> | undefined {
+  const pool = provider.apiKeyPool;
+  if (!Array.isArray(pool) || pool.length === 0 || typeof provider.apiKey !== "string") return undefined;
+  if (sanitizeApiKeyValue(provider.apiKey) !== provider.apiKey) return undefined;
+  const ids = new Set<string>();
+  const keys = new Set<string>();
+  for (const entry of pool) {
+    if (!entry || typeof entry !== "object") return undefined;
+    if (typeof entry.id !== "string" || !entry.id || entry.id.trim() !== entry.id || ids.has(entry.id)) return undefined;
+    if (sanitizeApiKeyValue(entry.key) !== entry.key || keys.has(entry.key)) return undefined;
+    if (entry.label !== undefined && (typeof entry.label !== "string" || !entry.label.trim())) return undefined;
+    if (entry.addedAt !== undefined && (!Number.isFinite(entry.addedAt) || entry.addedAt < 0)) return undefined;
+    ids.add(entry.id);
+    keys.add(entry.key);
   }
-  return provider.apiKeyPool;
+  return pool.some(entry => entry.key === provider.apiKey) ? pool : undefined;
 }
 
-function activeEntryId(provider: OcxProviderConfig): string | null {
-  const pool = provider.apiKeyPool ?? [];
-  if (pool.length === 0) return null;
-  return (pool.find(e => e.key === provider.apiKey) ?? pool[0]!).id;
-}
-
-export function listProviderApiKeys(config: OcxConfig, name: string): { activeId: string | null; keys: ProviderApiKeyInfo[] } {
+export function listProviderApiKeys(config: CodexCommanderConfig, name: string): { activeId: string | null; keys: ProviderApiKeyInfo[] } {
   const provider = config.providers[name];
   if (!provider || !isKeyAuthProvider(provider)) return { activeId: null, keys: [] };
-  const pool = ensurePool(provider);
-  const activeId = activeEntryId(provider);
+  const pool = currentProviderApiKeyPool(provider);
+  if (!pool) return { activeId: null, keys: [] };
+  const activeId = pool.find(entry => entry.key === provider.apiKey)!.id;
   return {
     activeId,
     keys: pool.map(entry => ({
@@ -79,13 +89,15 @@ export function listProviderApiKeys(config: OcxConfig, name: string): { activeId
 }
 
 /** Add (or upsert) a key and make it ACTIVE. Persists config. */
-export function addProviderApiKey(config: OcxConfig, name: string, key: string, label?: string): { id: string } | { error: string } {
+export function addProviderApiKey(config: CodexCommanderConfig, name: string, key: string, label?: string): { id: string } | { error: string } {
   const provider = config.providers[name];
   if (!provider || !isKeyAuthProvider(provider)) return { error: "provider does not use API-key auth" };
   if (typeof key !== "string" || !key.trim()) return { error: "key is required" };
   const trimmed = sanitizeApiKeyValue(key);
   if (!trimmed) return { error: "key must not include line breaks" };
-  const pool = ensurePool(provider);
+  // An explicit add is the recovery action for a missing or invalid pool: start fresh
+  // instead of incorporating unverified credential material.
+  const pool = currentProviderApiKeyPool(provider) ? [...provider.apiKeyPool!] : [];
   const id = apiKeyPoolEntryId(trimmed);
   const existing = pool.find(e => e.id === id);
   if (existing) {
@@ -93,16 +105,19 @@ export function addProviderApiKey(config: OcxConfig, name: string, key: string, 
   } else {
     pool.push({ id, key: trimmed, ...(label?.trim() ? { label: label.trim() } : {}), addedAt: Date.now() });
   }
+  provider.apiKeyPool = pool;
   provider.apiKey = trimmed;
   saveConfigPreservingClaudeCode(config);
   return { id };
 }
 
 /** Switch the ACTIVE key (mirrors into `provider.apiKey`). Persists config. */
-export function setActiveProviderApiKey(config: OcxConfig, name: string, id: string): boolean {
+export function setActiveProviderApiKey(config: CodexCommanderConfig, name: string, id: string): boolean {
   const provider = config.providers[name];
   if (!provider || !isKeyAuthProvider(provider)) return false;
-  const entry = ensurePool(provider).find(e => e.id === id);
+  const pool = currentProviderApiKeyPool(provider);
+  if (!pool) return false;
+  const entry = pool.find(e => e.id === id);
   if (!entry) return false;
   provider.apiKey = entry.key;
   saveConfigPreservingClaudeCode(config);
@@ -110,22 +125,26 @@ export function setActiveProviderApiKey(config: OcxConfig, name: string, id: str
 }
 
 /** Rename a key slot without changing its id, secret, or active routing state. */
-export function setProviderApiKeyLabel(config: OcxConfig, name: string, id: string, label: string | undefined): boolean {
+export function setProviderApiKeyLabel(config: CodexCommanderConfig, name: string, id: string, label: string | undefined): boolean {
   const provider = config.providers[name];
   if (!provider || !isKeyAuthProvider(provider)) return false;
-  const entry = ensurePool(provider).find(e => e.id === id);
+  const pool = currentProviderApiKeyPool(provider);
+  if (!pool) return false;
+  const entry = pool.find(e => e.id === id);
   if (!entry) return false;
-  if (label) entry.label = label;
+  const trimmedLabel = label?.trim();
+  if (trimmedLabel) entry.label = trimmedLabel;
   else delete entry.label;
   saveConfigPreservingClaudeCode(config);
   return true;
 }
 
 /** Remove one key; removing the active one promotes the first remaining. Persists config. */
-export function removeProviderApiKey(config: OcxConfig, name: string, id: string): boolean {
+export function removeProviderApiKey(config: CodexCommanderConfig, name: string, id: string): boolean {
   const provider = config.providers[name];
   if (!provider || !isKeyAuthProvider(provider)) return false;
-  const pool = ensurePool(provider);
+  const pool = currentProviderApiKeyPool(provider);
+  if (!pool) return false;
   const entry = pool.find(e => e.id === id);
   if (!entry) return false;
   provider.apiKeyPool = pool.filter(e => e.id !== id);

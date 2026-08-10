@@ -1,4 +1,4 @@
-import type { OcxProviderConfig } from "../types";
+import type { CodexCommanderProviderConfig } from "../types";
 import {
   assessUrlDestination,
   DestinationDnsResolutionError,
@@ -11,7 +11,7 @@ import { outboundProxyConfigured } from "./proxy-env";
 import { publicProviderBaseUrl } from "./provider-url";
 
 type ProviderGetInit = Omit<RequestInit, "body" | "method" | "redirect">;
-type ProviderOutboundConfig = Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork"> & {
+type ProviderOutboundConfig = Pick<CodexCommanderProviderConfig, "baseUrl" | "allowPrivateNetwork"> & {
   fetch?: typeof globalThis.fetch;
 };
 export interface ProviderOutboundDependencies {
@@ -77,7 +77,7 @@ function warnProxyBoundaryOnce(): void {
   if (proxyBoundaryWarned) return;
   proxyBoundaryWarned = true;
   console.warn(
-    "[opencodex] Provider outbound proxy mode preserves Bun proxy/NO_PROXY routing and validates "
+    "[codexcommander] Provider outbound proxy mode preserves Bun proxy/NO_PROXY routing and validates "
     + "the URL plus available local DNS results; the final route and peer cannot be pinned locally.",
   );
 }
@@ -86,7 +86,7 @@ function warnProxyDnsDegradationOnce(): void {
   if (proxyDnsDegradationWarned) return;
   proxyDnsDegradationWarned = true;
   console.warn(
-    "[opencodex] Local DNS could not resolve a proxied provider hostname; continuing after URL/literal checks. "
+    "[codexcommander] Local DNS could not resolve a proxied provider hostname; continuing after URL/literal checks. "
     + "The proxy-selected peer cannot be verified or pinned locally.",
   );
 }
@@ -112,7 +112,7 @@ export async function providerOutboundGet(
   if (provider.fetch) {
     // A caller-owned executor cannot be peer-pinned here. This branch keeps literal/config
     // checks and redirect blocking, but does not provide the resolved-address guarantees of
-    // the built-in transport. Main-request migration must define that executor contract first.
+    // the built-in transport. A future main-request executor must define that contract first.
     const assessment = assessUrlDestination(url);
     if (assessment?.kind === "metadata" || assessment?.kind === "link-local" || assessment?.kind === "unspecified") {
       throw new ProviderOutboundPolicyError(`provider URL targets ${assessment.detail}`);

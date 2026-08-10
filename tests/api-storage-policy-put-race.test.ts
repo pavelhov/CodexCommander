@@ -19,7 +19,7 @@ import {
 let harness: PolicyApiHarness;
 
 beforeEach(async () => {
-  harness = await installPolicyApiHarness("ocx-api-storage-policy-put-race");
+  harness = await installPolicyApiHarness("ccx-api-storage-policy-put-race");
 });
 
 afterEach(async () => {

@@ -22,7 +22,6 @@ const {
   classifyCliInstallFailure,
   clearStartupInstallPartialBlock,
   getStartupInstallState,
-  installFailureDetail,
   resetStartupInstallStateForTests,
   runStartupInstallAction,
   setStartupInstallFinalizeForTests,
@@ -132,7 +131,7 @@ describe("startup install elevation retry", () => {
   });
 
   test("does not elevate for asset-write access denied", async () => {
-    failCli("EACCES: permission denied, open 'C:\\Users\\x\\.opencodex\\opencodex-service.cmd'");
+    failCli("EACCES: permission denied, open 'C:\\Users\\x\\.codexcommander\\codexcommander-service.cmd'");
     await expect(runStartupInstallAction("install-service")).rejects.toThrow(/EACCES/);
     expect(finalizeMock).not.toHaveBeenCalled();
   });
@@ -340,6 +339,5 @@ describe("classifyCliInstallFailure marker transport", () => {
   test("falls back to error.message when streams are empty", () => {
     const failure = classifyCliInstallFailure("", "", new Error("only-message"));
     expect(failure.detail).toBe("only-message");
-    expect(installFailureDetail("", "", new Error("only-message"))).toBe("only-message");
   });
 });

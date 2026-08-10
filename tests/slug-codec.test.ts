@@ -2,7 +2,7 @@
 // (zenmux `moonshotai/kimi-k3-free`, openrouter `anthropic/...`, nvidia `moonshotai/...`).
 // Codex's models-manager metadata lookup tolerates exactly one "/", so two-slash slugs
 // lost tagging; the proxy aliases inner slashes to "_" and decodes bijectively.
-// Plan: devlog/_plan/260718_slash_model_id_codec/000_plan.md.
+// Plan: implementation contract
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
   decodeRoutedModelId,
@@ -16,7 +16,7 @@ import { buildCatalogEntries, resetCatalogRuntimeStateForTests } from "../src/co
 import { clearModelCache } from "../src/codex/model-cache";
 import { getJawcodeModelMetadata } from "../src/generated/jawcode-model-metadata";
 import type { RawEntry } from "../src/codex/catalog";
-import type { OcxConfig } from "../src/types";
+import type { CodexCommanderConfig } from "../src/types";
 
 beforeEach(() => {
   clearModelCache();
@@ -26,12 +26,12 @@ afterEach(() => {
   clearModelCache();
 });
 
-function zenmuxConfig(): OcxConfig {
+function zenmuxConfig(): CodexCommanderConfig {
   return {
     port: 10100,
     defaultProvider: "zenmux",
     providers: {
-      // Bare persisted config, like `ocx init` writes: registry seeds backfill the rest.
+      // Bare persisted config, like `ccx init` writes: registry seeds backfill the rest.
       zenmux: { adapter: "openai-chat", baseUrl: "https://zenmux.ai/api/v1", apiKey: "k" },
     },
   };
@@ -60,7 +60,7 @@ describe("slug-codec primitives", () => {
 
   test("decode precedence: native exact > unique alias > pass-through", () => {
     const known = ["moonshotai/kimi-k3-free", "a-b", "a/b"];
-    // Native exact (raw selector back-compat) — wins even over the alias it collides with.
+    // A current unencoded wire id wins even over the alias it collides with.
     expect(decodeRoutedModelId("a-b", known)).toBe("a-b");
     expect(decodeRoutedModelId("moonshotai/kimi-k3-free", known)).toBe("moonshotai/kimi-k3-free");
     // Unique alias match decodes.
@@ -76,11 +76,11 @@ describe("slug-codec primitives", () => {
     expect(decodeRoutedModelId("x-y-z", known)).toBe("x-y-z");
   });
 
-  test("slugEquals / slugsEquivalent tolerate raw and encoded mixes", () => {
-    expect(slugEquals("zenmux/moonshotai/kimi-k3-free", "zenmux", "moonshotai/kimi-k3-free")).toBe(true);
+  test("stored selectors require the canonical encoded form", () => {
+    expect(slugEquals("zenmux/moonshotai/kimi-k3-free", "zenmux", "moonshotai/kimi-k3-free")).toBe(false);
     expect(slugEquals("zenmux/moonshotai-kimi-k3-free", "zenmux", "moonshotai/kimi-k3-free")).toBe(true);
     expect(slugEquals("zenmux/moonshotai-kimi-k3", "zenmux", "moonshotai/kimi-k3-free")).toBe(false);
-    expect(slugsEquivalent("zenmux/moonshotai/kimi-k3-free", "zenmux/moonshotai-kimi-k3-free")).toBe(true);
+    expect(slugsEquivalent("zenmux/moonshotai/kimi-k3-free", "zenmux/moonshotai-kimi-k3-free")).toBe(false);
     expect(slugsEquivalent("a/b", "c/b")).toBe(false);
     expect(slugsEquivalent("gpt-5.5", "gpt-5.5")).toBe(true);
   });
@@ -93,7 +93,7 @@ describe("routeModel decode (proxy layer)", () => {
     expect(route.modelId).toBe("moonshotai/kimi-k3-free");
   });
 
-  test("raw full-slash selector keeps working (back-compat)", () => {
+  test("raw full-slash selector is decoded only at the router wire boundary", () => {
     const route = routeModel(zenmuxConfig(), "zenmux/moonshotai/kimi-k3-free");
     expect(route.modelId).toBe("moonshotai/kimi-k3-free");
   });
@@ -104,7 +104,7 @@ describe("routeModel decode (proxy layer)", () => {
   });
 
   test("registry model-keyed hint maps seed the decode union (nvidia, no static models list)", () => {
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "nvidia",
       providers: {
@@ -113,12 +113,12 @@ describe("routeModel decode (proxy layer)", () => {
     };
     const route = routeModel(config, "nvidia/moonshotai-kimi-k2.6");
     expect(route.modelId).toBe("moonshotai/kimi-k2.6");
-    // And the raw form still routes to the same native id.
+    // The router also recognizes the current raw wire form.
     expect(routeModel(config, "nvidia/moonshotai/kimi-k2.6").modelId).toBe("moonshotai/kimi-k2.6");
   });
 
   test("defaultModel encoded fallback routes to the native id", () => {
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "other",
       providers: {
@@ -131,7 +131,7 @@ describe("routeModel decode (proxy layer)", () => {
   });
 
   test("models-list encoded fallback routes to the native id", () => {
-    const config: OcxConfig = {
+    const config: CodexCommanderConfig = {
       port: 10100,
       defaultProvider: "other",
       providers: {
@@ -201,13 +201,13 @@ describe("catalog emission (Codex-facing)", () => {
     }
   });
 
-  test("featured rank honors both raw (legacy) and encoded stored picks", () => {
+  test("featured rank uses encoded stored picks only", () => {
     const models = [
       { provider: "zenmux", id: "moonshotai/kimi-k3-free" },
       { provider: "zenmux", id: "moonshotai/kimi-k3" },
     ];
     const rawFeatured = buildCatalogEntries(nativeTemplate(), [], models, ["zenmux/moonshotai/kimi-k3"]);
-    expect(rawFeatured.find(e => e.slug === "zenmux/moonshotai-kimi-k3")?.priority).toBe(0);
+    expect(rawFeatured.find(e => e.slug === "zenmux/moonshotai-kimi-k3")?.priority).not.toBe(0);
     const encodedFeatured = buildCatalogEntries(nativeTemplate(), [], models, ["zenmux/moonshotai-kimi-k3"]);
     expect(encodedFeatured.find(e => e.slug === "zenmux/moonshotai-kimi-k3")?.priority).toBe(0);
   });
