@@ -1,0 +1,104 @@
+{
+  "configurations": [
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:CodexCommander}/app",
+      "name": "Debug CodexCommanderMenuBar (app)",
+      "target": "CodexCommanderMenuBar",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug CodexCommanderMenuBar (app)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:CodexCommander}/app",
+      "name": "Release CodexCommanderMenuBar (app)",
+      "target": "CodexCommanderMenuBar",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release CodexCommanderMenuBar (app)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:CodexCommander}/app",
+      "name": "Debug MenuBarCoreTests (app)",
+      "target": "MenuBarCoreTests",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug MenuBarCoreTests (app)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:CodexCommander}/app",
+      "name": "Release MenuBarCoreTests (app)",
+      "target": "MenuBarCoreTests",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release MenuBarCoreTests (app)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:CodexCommander}/app",
+      "name": "Debug MenuBarUITests (app)",
+      "target": "MenuBarUITests",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug MenuBarUITests (app)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:CodexCommander}/app",
+      "name": "Release MenuBarUITests (app)",
+      "target": "MenuBarUITests",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release MenuBarUITests (app)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:CodexCommander}/app",
+      "name": "Debug UIProbe (app)",
+      "target": "UIProbe",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug UIProbe (app)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:CodexCommander}/app",
+      "name": "Release UIProbe (app)",
+      "target": "UIProbe",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release UIProbe (app)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:CodexCommander}/app",
+      "name": "Debug IconProbe (app)",
+      "target": "IconProbe",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug IconProbe (app)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:CodexCommander}/app",
+      "name": "Release IconProbe (app)",
+      "target": "IconProbe",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release IconProbe (app)"
+    }
+  ]
+}

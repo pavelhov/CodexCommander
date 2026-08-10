@@ -265,16 +265,27 @@ describe("Codex catalog restore", () => {
     }, null, 2) + "\n");
 
     const r = runScript(codexHome, codexCommanderHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
+      const { saveConfig } = require("./src/config");
+      const { captureCatalogAdmissionSnapshot } = require("./src/codex/catalog-admission");
+      const { convergeCodexCatalog } = require("./src/codex/convergence");
       (async () => {
-        const result = await syncCatalogModels({
+        const config = {
           port: 10100,
           multiAgentGuidanceEnabled: true,
-          providers: {},
+          providers: { openai: {
+            adapter: "openai-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            authMode: "forward",
+            disabled: true,
+          } },
           defaultProvider: "openai",
           subagentModels: ["gpt-5.5"],
+        };
+        saveConfig(config);
+        const result = await convergeCodexCatalog(captureCatalogAdmissionSnapshot(config), {
+          action: "converge", scope: "catalog", reason: "api-sync", mode: "explicit", deadlineMs: 1000,
         });
-        console.log(JSON.stringify(result));
+        console.log(JSON.stringify(result.projection));
       })();
     `);
 
@@ -310,16 +321,27 @@ describe("Codex catalog restore", () => {
     }, null, 2) + "\n");
 
     const r = runScript(codexHome, codexCommanderHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
+      const { saveConfig } = require("./src/config");
+      const { captureCatalogAdmissionSnapshot } = require("./src/codex/catalog-admission");
+      const { convergeCodexCatalog } = require("./src/codex/convergence");
       (async () => {
-        const result = await syncCatalogModels({
+        const config = {
           port: 10100,
           multiAgentGuidanceEnabled: true,
-          providers: {},
+          providers: { openai: {
+            adapter: "openai-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            authMode: "forward",
+            disabled: true,
+          } },
           defaultProvider: "openai",
           subagentModels: ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex-spark", "gpt-5.6-sol"],
+        };
+        saveConfig(config);
+        const result = await convergeCodexCatalog(captureCatalogAdmissionSnapshot(config), {
+          action: "converge", scope: "catalog", reason: "api-sync", mode: "explicit", deadlineMs: 1000,
         });
-        console.log(JSON.stringify(result));
+        console.log(JSON.stringify(result.projection));
       })();
     `);
 

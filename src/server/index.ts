@@ -18,9 +18,6 @@ import {
   loadConfig,
   websocketsEnabled,
 } from "../config";
-import { withCatalogWriteSerialization } from "../codex/catalog-write-serialization";
-import { invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
-import { getCodexHome } from "../codex/paths";
 import { shouldSyncCodexOnStart } from "../codex/desired-state";
 import { inspectNativeCodexOwnership } from "../integrations/native/ownership-preflight";
 import { registerCodexCooldownRecoveryProbeWorker } from "../codex/auth-api";
@@ -45,7 +42,7 @@ import { setStorageCleanupPolicyJobLiveApply } from "../storage/policy-job";
 import { scheduleStorageCleanupStartupRun, startStorageCleanupScheduler } from "../storage/policy-scheduler";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
-import type { StorageCleanupPolicy } from "../types";
+import type { CodexCommanderConfig, StorageCleanupPolicy } from "../types";
 import {
   CodexAccountCooldownError,
   cooldownErrorMessage,
@@ -59,7 +56,7 @@ export {
 import { formatCodexProviderForLog } from "../codex/routing";
 import { CatalogGatherBusyError } from "../codex/catalog/provider-fetch";
 import { registerCodexWebSocket, tryReserveCodexWebSocket, unregisterCodexWebSocket, updateCodexWebSocketAuthContext } from "../codex/websocket-registry";
-import { resolveGuiFilePath, rootFallbackPayload, serveGuiFile, serveSessionBootstrap } from "./gui-static";
+import { resolveGuiFilePath, rootFallbackPayload, serveGuiFile } from "./gui-static";
 export { resolveGuiFilePath, rootFallbackPayload } from "./gui-static";
 export { resolveAdapter } from "./adapter-resolve";
 import { formatErrorResponse, type ResponsesTerminalStatus } from "../bridge";
@@ -132,6 +129,8 @@ import {
   isApiAuthRequired,
   isLoopbackHostname,
   jsonResponse,
+  managementRequestOrigin,
+  parseHttpHost,
   admissionFields,
   resolveApiAuth,
   resolveResponsesApiAuth,
@@ -172,11 +171,13 @@ import {
   ATTESTATION_CHALLENGE_HEADER,
   ATTESTATION_PROOF_HEADER,
   HEALTH_SERVICE_ID,
-  SESSION_PATH,
+  GUI_LAUNCH_EXCHANGE_PATH,
+  GUI_LAUNCH_TICKET_PATH,
 } from "../identity";
 import {
+  exchangeGuiLaunchTicket,
   initializeManagementAuthState,
-  issueGuiSession,
+  issueGuiLaunchTicket,
   managementPrincipal,
   requireManagementAuth,
   type ManagementAuthState,
@@ -191,6 +192,100 @@ const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
 const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
 const LIVE_SIDEBAND_PENDING_MAX = 32;
 const LIVE_SIDEBAND_CLOSE_FALLBACK_MS = 1_000;
+const GUI_LAUNCH_BODY_MAX_BYTES = 2 * 1024;
+
+type GuiLaunchBodyResult =
+  | { ok: true; body: Record<string, unknown> }
+  | { ok: false; status: 400 | 413 | 415 };
+
+function acceptsJsonBody(req: Request): boolean {
+  const value = req.headers.get("content-type");
+  if (!value) return false;
+  return value.split(";", 1)[0]?.trim().toLowerCase() === "application/json";
+}
+
+/**
+ * Launch exchange is pre-authenticated by a bearer in its body, so the limit must
+ * be enforced while streaming. `Request.text()` would allocate the entire body
+ * before a post-read size check and therefore would not be a real admission cap.
+ */
+async function readGuiLaunchBody(req: Request): Promise<GuiLaunchBodyResult> {
+  if (!acceptsJsonBody(req)) return { ok: false, status: 415 };
+  const encoding = req.headers.get("content-encoding");
+  if (encoding !== null && encoding.trim().toLowerCase() !== "identity") {
+    return { ok: false, status: 415 };
+  }
+  const declared = req.headers.get("content-length");
+  if (declared !== null) {
+    const normalized = declared.trim();
+    if (!/^\d+$/.test(normalized)) return { ok: false, status: 400 };
+    if (BigInt(normalized) > BigInt(GUI_LAUNCH_BODY_MAX_BYTES)) {
+      return { ok: false, status: 413 };
+    }
+  }
+  if (!req.body) return { ok: false, status: 400 };
+
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > GUI_LAUNCH_BODY_MAX_BYTES) {
+        try { await reader.cancel(); } catch { /* best effort */ }
+        return { ok: false, status: 413 };
+      }
+      chunks.push(value);
+    }
+  } catch {
+    try { await reader.cancel(); } catch { /* best effort */ }
+    return { ok: false, status: 400 };
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? { ok: true, body: parsed as Record<string, unknown> }
+      : { ok: false, status: 400 };
+  } catch {
+    return { ok: false, status: 400 };
+  }
+}
+
+function guiLaunchBodyError(status: 400 | 413 | 415): Response {
+  const message = status === 413
+    ? "GUI launch request is too large."
+    : status === 415
+      ? "GUI launch request must be uncompressed JSON."
+      : "GUI launch request is invalid.";
+  return Response.json({ error: message }, { status });
+}
+
+function noStoreManagementResponse(response: Response, req: Request, config: CodexCommanderConfig): Response {
+  response.headers.set("Cache-Control", "no-store");
+  return withManagementCors(response, req, config);
+}
+
+function hasExactGuiLaunchOrigin(req: Request, config: CodexCommanderConfig): boolean {
+  const host = parseHttpHost(req.headers.get("Host"));
+  const requestOrigin = managementRequestOrigin(req, config);
+  const browserOrigin = req.headers.get("Origin");
+  return !!host
+    && isLoopbackHostname(host.hostname)
+    && requestOrigin !== null
+    && browserOrigin === requestOrigin
+    && isAllowedManagementOrigin(req, config);
+}
 
 type LiveSidebandWebSocketFactory = (
   url: string,
@@ -378,27 +473,6 @@ export interface StartServerDeps {
   readinessGate?: ReadinessGate;
 }
 
-/*
- * #1046. `startServer` rewrites the Codex models cache during boot, and an
- * app-server that started earlier keeps its own in-memory model list. The stale
- * warning is not emitted here: `handleStart` runs a catalog sync moments later,
- * so warning now would read an mtime that write is about to move, and both sites
- * calling the helper independently would warn twice. This records the fact; the
- * CLI start path owns the single decision.
- *
- * A caller that starts a server without `handleStart` (tests, embedded use)
- * deliberately gets no warning — lifecycle diagnostics belong to whoever owns
- * the lifecycle.
- */
-let startupCacheInvalidationWrote = false;
-
-/** #1046: did this process's startup cache invalidation actually write? */
-export function consumeStartupCacheInvalidationWrite(): boolean {
-  const wrote = startupCacheInvalidationWrote;
-  startupCacheInvalidationWrote = false;
-  return wrote;
-}
-
 export function startServer(port?: number, deps: StartServerDeps = {}): Server<WsData> {
   const localAttestationSecret = deps.localAttestationSecret ?? createLocalAttestationSecret();
   const config = loadConfig();
@@ -420,21 +494,6 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   if (config.subagentModels === undefined) {
     config.subagentModels = [...DEFAULT_SUBAGENT_MODELS];
   }
-  // Startup cache invalidation is best-effort and must never block the server from
-  // serving. It now takes K so it cannot race a convergence commit, but both the
-  // home resolution and the acquisition can fail on a machine with no Codex home —
-  // `getCodexHome()` THROWS when CODEX_HOME names a missing directory, which would
-  // otherwise turn "no Codex installed" into "proxy will not start".
-  try {
-    const startupCodexHome = getCodexHome();
-    // #1046: record whether this actually rewrote the cache. `handleStart` ORs this
-    // with the later startup sync and warns ONCE about stale app-servers; warning
-    // here instead would read a catalog mtime the sync is about to move.
-    const outcome = withCatalogWriteSerialization(startupCodexHome, permit =>
-      invalidateCodexModelsCacheWithPermit(permit, startupCodexHome));
-    // A refused permit is not a write; only a completed run that returned true is.
-    startupCacheInvalidationWrote = outcome.kind === "completed" && outcome.value === true;
-  } catch { /* no readable Codex home: nothing to invalidate */ }
   // Arm the `claudeCode` hand-edit guard (implementation contract H1) BEFORE
   // the server can serve a request. Arming is eager on
   // purpose: a lazy "arm on first save" loses exactly the hand edit made before that
@@ -659,6 +718,51 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         return new Response(resp.body, { status: 503, headers });
       }
 
+      // The browser receives a launch ticket only in the URL fragment, then
+      // exchanges it once for a confirmed, origin-bound GUI session. This exact
+      // endpoint sits before the ordinary management gate because the ticket is
+      // the credential being exchanged; every other /api/* route remains closed.
+      if (url.pathname === GUI_LAUNCH_EXCHANGE_PATH) {
+        if (req.method !== "POST") {
+          return noStoreManagementResponse(
+            guiLaunchBodyError(400),
+            req,
+            config,
+          );
+        }
+        if (!hasExactGuiLaunchOrigin(req, config)) {
+          return noStoreManagementResponse(
+            Response.json({ error: "GUI launch confirmation is invalid or expired." }, { status: 401 }),
+            req,
+            config,
+          );
+        }
+        const bodyResult = await readGuiLaunchBody(req);
+        if (!bodyResult.ok) {
+          return noStoreManagementResponse(guiLaunchBodyError(bodyResult.status), req, config);
+        }
+        const body = bodyResult.body;
+        const keys = Object.keys(body);
+        const exactBody = keys.length === 2
+          && keys.includes("ticket")
+          && keys.includes("route");
+        const session = exactBody
+          ? exchangeGuiLaunchTicket(req, body.ticket, body.route, config, managementAuth)
+          : null;
+        if (!session) {
+          return noStoreManagementResponse(
+            Response.json({ error: "GUI launch confirmation is invalid or expired." }, { status: 401 }),
+            req,
+            config,
+          );
+        }
+        return noStoreManagementResponse(
+          Response.json({ session, route: body.route }),
+          req,
+          config,
+        );
+      }
+
       if (url.pathname.startsWith("/api/")) {
         const apiAuthError = requireManagementAuth(req, managementAuth, config);
         if (apiAuthError) return withManagementCors(apiAuthError, req, config);
@@ -666,11 +770,45 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         // gate used. Consent-bearing routes need this: request headers are forgeable
         // by anything holding the admin token, the credential is not.
         const principal = managementPrincipal(req, managementAuth, config) ?? undefined;
+        if (url.pathname === GUI_LAUNCH_TICKET_PATH) {
+          if (req.method !== "POST") {
+            return noStoreManagementResponse(
+              formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`),
+              req,
+              config,
+            );
+          }
+          if (principal !== "admin-token") {
+            return noStoreManagementResponse(
+              Response.json({ error: "GUI launch tickets require the local admin credential." }, { status: 403 }),
+              req,
+              config,
+            );
+          }
+          const bodyResult = await readGuiLaunchBody(req);
+          if (!bodyResult.ok) {
+            return noStoreManagementResponse(guiLaunchBodyError(bodyResult.status), req, config);
+          }
+          const body = bodyResult.body;
+          const keys = Object.keys(body);
+          const exactBody = keys.length === 1 && keys[0] === "route";
+          const ticket = exactBody
+            ? issueGuiLaunchTicket(req, body.route, config, managementAuth)
+            : null;
+          if (!ticket) {
+            return noStoreManagementResponse(
+              Response.json({ error: "A valid loopback dashboard route is required." }, { status: 400 }),
+              req,
+              config,
+            );
+          }
+          return noStoreManagementResponse(Response.json(ticket), req, config);
+        }
         const mgmtResponse = await handleManagementAPI(
           req,
           url,
           config,
-          deps.managementApi,
+          { ...deps.managementApi, readinessGate },
           principal,
         );
         if (mgmtResponse) return withManagementCors(mgmtResponse, req, config);
@@ -1166,15 +1304,18 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         return withCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);
       }
 
-      const guiSessionCandidate = req.method === "GET" && (url.pathname === "/" || !url.pathname.includes("."))
-        ? issueGuiSession(req, config, managementAuth)
-        : null;
       // Dedicated bootstrap path: answer without requiring a packaged GUI build, so the
-      // Vite dev server can mint an origin-bound loopback session on a fresh checkout.
-      if (url.pathname === SESSION_PATH && guiSessionCandidate) {
-        return serveSessionBootstrap(guiSessionCandidate);
+      // Vite dev server can probe auth state on a fresh checkout. Manual pages
+      // receive no management bearer; only the one-time launch exchange does.
+      // Deterministic tombstone for pre-confirmed-launch GUI bundles. Never let
+      // their old bootstrap request fall through to the SPA and look successful.
+      if (url.pathname === "/codexcommander-session") {
+        const response = Response.json({
+          error: "Dashboard session bootstrap was removed. Open the dashboard with `ccx gui` or the menu bar app.",
+        }, { status: 410, headers: { "Cache-Control": "no-store" } });
+        return withCors(response, req, config);
       }
-      const guiFile = serveGuiFile(url.pathname, undefined, guiSessionCandidate ?? undefined);
+      const guiFile = serveGuiFile(url.pathname);
       if (guiFile) return guiFile;
       if (url.pathname === "/" && req.method === "GET") {
         return jsonResponse(rootFallbackPayload());

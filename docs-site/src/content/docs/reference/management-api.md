@@ -23,7 +23,7 @@ The file-backed token is accepted only after its directory and file permissions 
 hardened. If that cannot be guaranteed, management authentication fails closed and the API returns
 503 until an environment token is supplied or the file state is repaired.
 
-Send the admin token in either form:
+Headless API clients send the admin token over a trusted transport in either form:
 
 ```http
 X-CodexCommander-API-Key: <admin-token>
@@ -36,18 +36,33 @@ Authorization: Bearer <admin-token>
 :::caution
 The admin token must differ from every data-plane credential. Startup rejects a management
 credential that conflicts with a proxy admission key. Do not put the admin token in Codex,
-Claude Code, or another model client; it authorizes control-plane mutations.
+Claude Code, or another model client; it authorizes control-plane mutations. A browser may request
+it only on a trusted non-loopback HTTPS origin. Never paste or send it from a plaintext remote page.
 :::
 
-### Loopback dashboard sessions
+### Dashboard launch sessions
 
-On a loopback bind, the dashboard bootstrap can receive a short-lived `ccx_session_*` credential.
-Each session lasts five minutes and is bound to the exact dashboard origin. Safe requests must
-match that origin. Unsafe methods also require the browser `Origin` and the session's CSRF token.
+A manually opened loopback dashboard receives no API credential. The static page shell can load, but
+every `/api/*` request is authenticated and therefore returns `401` until the user reopens the page
+through `ccx gui` or the macOS menu app. A loopback page never prompts for or sends the durable admin
+token; loopback is not an authenticated listener identity or an authentication bypass.
 
-Session issuance is disabled whenever data-plane authentication is required, which includes remote
-binds. A remote operator must authenticate with the raw admin token; no loopback-style GUI session
-is minted.
+Those launchers use the raw admin credential to mint a short-lived, single-use ticket bound to the
+requested route and origin. The ticket travels only in the URL fragment and is removed immediately
+during its one-time exchange. The resulting confirmed GUI session is full-featured, process-memory-
+only, and valid for at most eight hours. It is never renewed: expiry or proxy restart makes the next
+API request return `401`, after which the local launcher flow is required again. The durable admin
+token never enters a URL or web storage.
+
+The raw admin bearer remains valid for ordinary API mutations. Catalog Apply is deliberately stricter:
+`POST /api/codex-catalog/apply` accepts only a confirmed GUI session, so scripts use
+`ccx sync --restart-codex` instead.
+
+A remote operator browser may authenticate with the raw admin token only over trusted HTTPS; a
+plaintext remote page never prompts for or sends it. Without trusted HTTPS, use a local or SSH tunnel
+that presents loopback and open the dashboard through `ccx gui`. Headless API clients retain raw-admin
+authentication over a trusted transport. Confirmed browser sessions are minted only by the
+exact-origin, exact-route local launch-ticket exchange.
 
 ## Common errors
 
@@ -70,10 +85,10 @@ route-specific results rather than repeating this table.
 
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
-| `GET, PUT /api/v2` | Read or change the agent protocol, V2 message delivery, and thread settings. `multiAgentV2MessageDelivery` accepts `plaintext` or the `encrypted` default; sending `encrypted` or `null` removes the explicit plaintext override. Start a new session after changing delivery. `maxConcurrentThreadsPerSession: null` restores the Codex default | 400 invalid settings; 502 transition or persistence failure |
+| `GET, PUT /api/v2` | Read or change the agent protocol, V2 task-message delivery, and thread settings. A protocol/mode/thread boot-config change needs **Apply agent catalog** to replace a running worker, then a new task for its session-bound tool shape. `multiAgentV2MessageDelivery` accepts `plaintext` or the `encrypted` default; sending `encrypted` or `null` removes the explicit plaintext override. Delivery changes need only a new task and do not dirty the catalog. `maxConcurrentThreadsPerSession: null` restores the Codex default | 400 invalid settings; 502 transition or persistence failure |
 | `GET, PUT /api/injection-model` | Read or set the preferred guidance model, effort, prompt, and guidance settings; this is advisory unless native-default sync is enabled | 400 invalid model, effort, or body |
 | `GET, PUT /api/effort-caps` | Read or set global and sub-agent reasoning-effort ceilings | 400 invalid ladder value |
-| `GET, PUT /api/subagent-models` | Read or order up to five requested `spawn_agent` quick picks; this does not force routing. Responses keep the persisted `chosen` list separate from the effective `advertised` list and report any `excluded` choices | 400 invalid list or more than five models |
+| `GET, PUT /api/subagent-models` | Read or order up to five requested `spawn_agent` quick picks; this does not force routing. Responses keep the persisted `chosen` list separate from the effective `advertised` list, report any `excluded` choices, and include additive `activation` evidence for the desired config, on-disk catalog, and running Codex worker | 400 invalid list or more than five models |
 | `GET, PUT /api/subagent-model-fallback` | Read or set the ordered global fallback chain for spawned child turns and its poll interval | 400 invalid list or poll interval |
 | `GET /api/grok` | Read Grok managed-config status and candidate models | 400 status read failure |
 | `PUT /api/grok/selection` | Persist the excluded Grok models | 400 invalid or oversized selection |
@@ -85,6 +100,27 @@ route-specific results rather than repeating this table.
 
 For the concepts behind the model roster and encrypted worker-task behavior, see
 [Sub-agent Surface](/guides/sub-agent-surface/).
+
+#### Catalog activation
+
+The sub-agent roster has three separate facts: the **desired** saved configuration, the
+deterministically generated **on-disk** catalog, and the model catalog loaded by a **running Codex
+worker**. Saving a roster or calling `/api/sync` updates the first two without interrupting active
+work. A task or fork created through an already-running Codex Desktop app-server does not cause it
+to reload the catalog.
+
+Use `GET /api/codex-catalog/status` to decide whether anything is pending. If the endpoint can
+identify verified stale workers, an operator using a confirmed dashboard launch may call
+`POST /api/codex-catalog/apply` with the status response's `expectedDesiredRevision` and explicit
+`confirmInterrupt: true`. Activity count is
+advisory only: an unknown worker identity blocks signaling, while a nonzero count warns about an
+interruption but does not prohibit an informed Apply. Results distinguish already-current, no-worker,
+applied, partial, superseded, and blocked outcomes. The endpoint never accepts a PID, command, or
+path from the caller, never queues an idle apply, and does not persist a separate activation
+snapshot.
+
+For scripts or the native companion, `ccx sync --restart-codex` remains the compatible advanced
+fallback. Quitting and reopening Codex Desktop is the reliable manual worker-replacement boundary.
 
 ### Combos
 
@@ -108,7 +144,9 @@ See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and rou
 | `POST /api/startup-action` | Install or repair the service or Codex shim | 400 invalid action; 500 action failure |
 | `GET, POST /api/windows-tray` | Read Windows tray state or install/start/stop/uninstall it | 400 unsupported platform/action; 500 operation failure |
 | `GET /api/diagnostics/project-config` | Read cached project configuration warnings | — |
-| `POST /api/sync` | Sync the current model catalog into Codex; returns `catalogQuality` (`live`, `retained`, or `native-only`), `rehydrated`, current Codex app-server `catalogState`, and a restart hint when stale | 409 refused write authority; 500 failed sync |
+| `POST /api/sync` | Sync the current model catalog into Codex without interrupting workers; returns `catalogQuality` (`live`, `retained`, or `native-only`), `rehydrated`, current Codex app-server `catalogState`, and additive `activation` evidence | 409 refused write authority; 500 failed sync |
+| `GET /api/codex-catalog/status` | Read the catalog activation state: desired configuration revision, deterministic on-disk catalog evidence, and whether verified current-user Codex workers have loaded it | — |
+| `POST /api/codex-catalog/apply` | Explicitly converge then apply the current catalog to verified stale Codex workers. The body must be `{ "expectedDesiredRevision": "…", "confirmInterrupt": true }`; the revision fence prevents applying a superseded choice. This browser endpoint accepts only the confirmed GUI session created by the single-use launch handoff | 400 invalid confirmation/body; 403 confirmed dashboard launch required; 409 superseded or unsafe worker identity; 503 apply busy (`Retry-After: 1`) |
 | `GET, PUT /api/sidecar-settings` | Read or update web-search and vision sidecar model/backend settings | 400 invalid shape, backend, or limit |
 | `GET, PUT /api/shadow-call-settings` | Read or update shadow-call interception settings | 400 invalid shape or value |
 

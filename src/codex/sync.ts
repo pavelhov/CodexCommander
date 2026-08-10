@@ -1,6 +1,6 @@
 import { currentExternalCodexModelProvider, injectCodexConfig } from "./inject";
 import { printProjectCodexConfigWarnings, groupProjectCodexConfigWarningsByPath, type ProjectCodexConfigWarning } from "./project-config-warnings";
-import { refreshCodexModelCatalog } from "./refresh";
+import { refreshCodexModelCatalog, type CodexCatalogRefreshResult } from "./refresh";
 import { applyProxyEnv, loadConfig } from "../config";
 import type { CodexCommanderConfig } from "../types";
 import { collectOrcaCodexHomeDiagnostic } from "./home";
@@ -9,6 +9,7 @@ import { shouldSyncCodexOnStart } from "./desired-state";
 import { admitCodexWrite, type CodexAdmission } from "./admission";
 import { hasRoutedCapableProviders, type CatalogQuality } from "./catalog/sync";
 import { readCodexTransitionState } from "./transition-state";
+import { reconcileJournal } from "./journal";
 
 export interface CodexSyncResult {
   /** `skipped` is policy truth, never evidence that Codex was written. */
@@ -53,12 +54,18 @@ interface CodexSyncDeps {
   prepareCodexTransitionState: typeof readCodexTransitionState;
   currentExternalCodexModelProvider?: typeof currentExternalCodexModelProvider;
   collectCodexHomeDiagnostic?: typeof collectOrcaCodexHomeDiagnostic;
+  /**
+   * Production recovery boundary. Optional so isolated sync tests with fully
+   * synthetic files never inspect the host journal unless they opt in.
+   */
+  reconcileJournal?: typeof reconcileJournal;
 }
 
 const defaultDeps: CodexSyncDeps = {
   refreshCodexModelCatalog,
   injectCodexConfig,
   prepareCodexTransitionState: readCodexTransitionState,
+  reconcileJournal,
 };
 
 function coordinatorPreparationFailure(
@@ -137,6 +144,13 @@ export async function syncModelsToCodex(
     };
   }
 
+  // One canonical full sync owns legacy recovery. Startup, authenticated
+  // /api/sync, browser Apply, CLI, and the native companion therefore converge
+  // through the same fail-closed journal fence instead of relying on a prior
+  // app-launch side effect. A false result is neutral: coordinator preparation
+  // below remains the authority for a live, replaced, or ambiguous journal.
+  deps.reconcileJournal?.();
+
   // Catalog gathering precedes direct injection and can itself write the native
   // catalog/cache. It therefore needs the same unattended service-home veto as
   // the injector, before it gets a chance to create any artifact. An explicitly
@@ -194,6 +208,12 @@ export async function syncModelsToCodex(
   let rehydrated = 0;
   let warning: string | undefined;
   let comboOmissions: ComboCatalogOmission[] = [];
+  let admittedGeneration: CodexCatalogRefreshResult["admittedGeneration"];
+  let admittedConfigAuthority: CodexCatalogRefreshResult["admittedConfigAuthority"];
+  let staleGeneration = false;
+  let catalogAdmissionFailed = false;
+  let catalogConvergenceNotCommitted = false;
+  let catalogConvergenceChanged = false;
 
   try {
     const cat = await deps.refreshCodexModelCatalog(config);
@@ -203,6 +223,21 @@ export async function syncModelsToCodex(
     cacheSynced = cat.cacheSynced;
     catalogQuality = cat.catalogQuality;
     rehydrated = cat.rehydrated;
+    admittedGeneration = cat.admittedGeneration;
+    admittedConfigAuthority = cat.admittedConfigAuthority;
+    staleGeneration = cat.staleReason === "generation";
+    catalogAdmissionFailed = cat.catalogAdmissionFailed === true;
+    catalogConvergenceChanged = (cat.catalogDisposition?.status === "committed"
+      && cat.catalogDisposition.changed)
+      || cat.catalogWritten
+      || cat.cacheSynced;
+    catalogConvergenceNotCommitted = cat.catalogDisposition !== undefined
+      && cat.catalogDisposition.status !== "committed"
+      // A proven absence is the established native-catalog fallback: continue
+      // config/profile reconciliation with catalogPath=null. Every retryable or
+      // failed canonical disposition remains a hard publication boundary.
+      && !(cat.catalogDisposition.status === "skipped"
+        && cat.catalogDisposition.reason === "catalog-unavailable");
     catalogPathForInjection = cat.catalogExists ? cat.path : null;
     catalogPath = catalogPathForInjection;
     comboOmissions = cat.comboOmissions ?? [];
@@ -214,13 +249,27 @@ export async function syncModelsToCodex(
       warning = "catalog sync skipped: no Codex catalog source found; keeping Codex's native catalog.";
       log?.error(warning);
     }
+    if (cat.catalogDisposition?.status === "skipped" && cat.catalogDisposition.reason !== "catalog-unavailable") {
+      const detail = cat.catalogDisposition.reason === "busy"
+        ? "catalog convergence is busy; retry"
+        : cat.catalogDisposition.reason === "stale"
+          ? "catalog inputs changed during discovery; retry"
+          : "catalog convergence was refused";
+      const message = `catalog sync skipped: ${detail}.`;
+      warning = warning ? `${warning} ${message}` : message;
+      log?.error(message);
+    } else if (cat.catalogDisposition?.status === "failed") {
+      const message = `catalog sync skipped: catalog convergence failed during ${cat.catalogDisposition.phase}.`;
+      warning = warning ? `${warning} ${message}` : message;
+      log?.error(message);
+    }
     // A native-only commit while routed providers are configured is a degraded
     // state, not a success: the live gather returned nothing and there was no
     // retained snapshot to fall back on. Surface it so the readiness gate and
     // /api/sync consumers can act instead of reporting a false fully-ready sync.
     if (
       cat.catalogQuality === "native-only"
-      && cat.catalogWritten
+      && (cat.catalogDisposition?.status === "committed" ? cat.catalogExists : cat.catalogWritten)
       && cat.skippedReason !== "desired_disabled"
       && hasRoutedCapableProviders(config)
     ) {
@@ -240,15 +289,36 @@ export async function syncModelsToCodex(
   } catch (e) {
     warning = `catalog sync skipped: ${e instanceof Error ? e.message : String(e)}`;
     log?.error(warning);
+    // The historical injected refresh seam may deliberately throw and still
+    // exercise native config/profile reconciliation. Production's canonical
+    // funnel must never turn an unexpected catalog failure into an unadmitted
+    // native publish.
+    if (deps.refreshCodexModelCatalog === refreshCodexModelCatalog) {
+      catalogAdmissionFailed = true;
+    }
   }
 
-  const result = await deps.injectCodexConfig(p, config, { catalogPath: catalogPathForInjection });
-  if (result.status === "skipped") {
+  if (staleGeneration) {
+    if (!shouldSyncCodexOnStart(loadConfig())) {
+      return {
+        status: "skipped",
+        skippedReason: "desired_disabled",
+        ok: true,
+        added: 0,
+        catalogPath: null,
+        catalogExists: false,
+        catalogWritten: false,
+        cacheSynced: false,
+        catalogQuality: "native-only",
+        rehydrated: 0,
+        message: "Codex integration is OFF; no Codex config, catalog, cache, or history was changed.",
+      };
+    }
+    const message = "Codex configuration changed during catalog discovery; no stale catalog or Codex config was published. Retry the sync.";
+    log?.error(message);
     return {
-      status: "skipped",
-      // The apply direction's only under-lock policy skip is desired OFF.
-      skippedReason: "desired_disabled",
-      ok: true,
+      status: "refused",
+      ok: false,
       added: 0,
       catalogPath: null,
       catalogExists: false,
@@ -256,7 +326,101 @@ export async function syncModelsToCodex(
       cacheSynced: false,
       catalogQuality: "native-only",
       rehydrated: 0,
+      message,
+    };
+  }
+  if (catalogAdmissionFailed) {
+    const message = "Codex catalog admission could not bind the current configuration; no Codex config was published. Retry the sync.";
+    log?.error(message);
+    return {
+      status: "refused",
+      ok: false,
+      added,
+      catalogPath,
+      catalogExists,
+      catalogWritten,
+      cacheSynced,
+      catalogQuality,
+      rehydrated,
+      message,
+      ...(warning ? { warning } : {}),
+      ...(comboOmissions.length > 0 ? { comboOmissions } : {}),
+    };
+  }
+  if (catalogConvergenceNotCommitted) {
+    if (!shouldSyncCodexOnStart(loadConfig())) {
+      return {
+        status: "skipped",
+        skippedReason: "desired_disabled",
+        ok: true,
+        added: 0,
+        catalogPath: null,
+        catalogExists: false,
+        catalogWritten: false,
+        cacheSynced: false,
+        catalogQuality: "native-only",
+        rehydrated: 0,
+        message: "Codex integration is OFF; no Codex config, catalog, cache, or history was changed.",
+      };
+    }
+    const message = "Codex catalog convergence did not commit; no Codex config was published. Retry the sync.";
+    log?.error(message);
+    return {
+      status: "refused",
+      ok: false,
+      added,
+      catalogPath,
+      catalogExists,
+      catalogWritten,
+      cacheSynced,
+      catalogQuality,
+      rehydrated,
+      message,
+      ...(warning ? { warning } : {}),
+      ...(comboOmissions.length > 0 ? { comboOmissions } : {}),
+    };
+  }
+
+  const result = await deps.injectCodexConfig(p, config, {
+    catalogPath: catalogPathForInjection,
+    ...(admittedConfigAuthority ? { expectedConfigAuthority: admittedConfigAuthority } : {}),
+    ...(admittedGeneration ? { expectedConfigGeneration: admittedGeneration } : {}),
+  });
+  if (result.status === "skipped") {
+    const message = catalogConvergenceChanged
+      ? "Codex integration turned OFF after catalog convergence; catalog changes from this sync were published, but native Codex config was not written."
+      : result.message;
+    return {
+      status: "skipped",
+      // The apply direction's only under-lock policy skip is desired OFF.
+      skippedReason: "desired_disabled",
+      ok: true,
+      added,
+      catalogPath,
+      catalogExists,
+      catalogWritten,
+      cacheSynced,
+      catalogQuality,
+      rehydrated,
+      message,
+      ...(warning ? { warning } : {}),
+      ...(comboOmissions.length > 0 ? { comboOmissions } : {}),
+    };
+  }
+  if (result.status === "stale") {
+    return {
+      status: "refused",
+      ok: false,
+      added,
+      catalogPath,
+      catalogExists,
+      catalogWritten,
+      cacheSynced,
+      catalogQuality,
+      rehydrated,
       message: result.message,
+      ...(warning ? { warning } : {}),
+      ...(comboOmissions.length > 0 ? { comboOmissions } : {}),
     };
   }
   log?.log(result.message);

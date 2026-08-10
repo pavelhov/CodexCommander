@@ -40,7 +40,7 @@ function ownedLocalBase(overrides: Partial<Parameters<typeof deriveStartupHealth
 
 async function companionPut(
   body: unknown,
-  principal?: "admin-token" | "gui-session",
+  principal?: "admin-token" | "confirmed-gui-session",
 ): Promise<{ status: number; raw: string }> {
   const url = new URL("http://127.0.0.1:10100/api/startup-health/companion");
   const req = new Request(url, {
@@ -79,10 +79,10 @@ describe("PUT /api/startup-health/companion security", () => {
     expect(lease!.observedAt).toBeLessThanOrEqual(Date.now());
   });
 
-  test("rejects a GUI session with 403 and records nothing", async () => {
+  test("rejects a confirmed GUI session with 403 and records nothing", async () => {
     const { status } = await companionPut(
       { version: 1, launchAtLogin: "enabled" },
-      "gui-session",
+      "confirmed-gui-session",
     );
     expect(status).toBe(403);
     expect(currentCompanionLease()).toBeNull();

@@ -105,6 +105,38 @@ describe("collectCodexAppServerCatalogState (#857)", () => {
     });
     expect(status.state).toBe("stale");
   });
+
+  test("Darwin same-second fence overlap is unknown, never proven stale", () => {
+    const status = collectCodexAppServerCatalogState({
+      platform: "darwin",
+      listSnapshots: () => [{
+        pid: 42,
+        commandLine: APP_SERVER_CMD,
+        // `ps lstart` reports only the containing second. The real worker may
+        // have started after the 1.5s artifact fence.
+        startedAtMs: 1_000,
+      }],
+      startTimePrecisionMs: 1_000,
+      catalogMtimeMs: () => 1_500,
+    });
+    expect(status.state).toBe("unknown");
+  });
+
+  test("Linux btime same-second fence overlap is unknown by default", () => {
+    const status = collectCodexAppServerCatalogState({
+      platform: "linux",
+      listSnapshots: () => [{
+        pid: 42,
+        commandLine: APP_SERVER_CMD,
+        // `/proc/stat` btime is whole-second epoch evidence. Even though the
+        // per-process tick offset is finer, the absolute wall clock may be up
+        // to one second later than this converted value.
+        startedAtMs: 1_000,
+      }],
+      catalogMtimeMs: () => 1_500,
+    });
+    expect(status.state).toBe("unknown");
+  });
 });
 
 describe("Codex app-server process matching (#476)", () => {
@@ -220,8 +252,8 @@ describe("Codex app-server process matching (#476)", () => {
     const waits: number[] = [];
     const alive = new Set([100, 200]);
     const snapshots = [
-      { pid: 100, commandLine: "codex app-server" },
-      { pid: 200, commandLine: "codex-code-mode-host" },
+      { pid: 100, commandLine: "codex app-server", startedAtMs: 100 },
+      { pid: 200, commandLine: "codex-code-mode-host", startedAtMs: 200 },
     ];
     let now = 1_000;
     const result = restartCodexAppServers(
@@ -252,11 +284,11 @@ describe("Codex app-server process matching (#476)", () => {
     expect(result.failed).toEqual([]);
   });
 
-  test("restartCodexAppServers treats kill-throw on already-dead pid as stopped", () => {
+  test("restartCodexAppServers never claims a natural exit as a stop", () => {
     const result = restartCodexAppServers(
-      [{ pid: 9, commandLine: "codex app-server" }],
+      [{ pid: 9, commandLine: "codex app-server", startedAtMs: 100 }],
       {
-        listSnapshots: () => [{ pid: 9, commandLine: "codex app-server" }],
+        listSnapshots: () => [{ pid: 9, commandLine: "codex app-server", startedAtMs: 100 }],
         kill: () => {
           throw new Error("ESRCH");
         },
@@ -264,17 +296,18 @@ describe("Codex app-server process matching (#476)", () => {
         waitExit: () => true,
       },
     );
-    expect(result.stopped).toEqual([9]);
+    expect(result.signaled).toEqual([]);
+    expect(result.stopped).toEqual([]);
     expect(result.failed).toEqual([]);
     expect(result.surviving).toEqual([]);
   });
 
-  test("restartCodexAppServers skips PIDs whose identity changed before signal", () => {
+  test("restartCodexAppServers skips argv changed after the captured birth check", () => {
     const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
     const result = restartCodexAppServers(
-      [{ pid: 42, commandLine: "codex app-server" }],
+      [{ pid: 42, commandLine: "codex app-server", startedAtMs: 1_000 }],
       {
-        listSnapshots: () => [{ pid: 42, commandLine: "vim README.md" }],
+        readSnapshot: () => ({ pid: 42, commandLine: "vim README.md", startedAtMs: 1_000 }),
         kill: (pid, signal) => {
           signals.push({ pid, signal });
         },
@@ -291,10 +324,14 @@ describe("Codex app-server process matching (#476)", () => {
   test("restartCodexAppServers skips recycled PID that matches a different Codex process", () => {
     const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
     const result = restartCodexAppServers(
-      [{ pid: 42, commandLine: "codex app-server --listen unix://old" }],
+      [{ pid: 42, commandLine: "codex app-server --listen unix://old", startedAtMs: 1_000 }],
       {
         // Same PID, still Codex-shaped, but a different process identity.
-        listSnapshots: () => [{ pid: 42, commandLine: "codex-code-mode-host --session 9" }],
+        readSnapshot: () => ({
+          pid: 42,
+          commandLine: "codex-code-mode-host --session 9",
+          startedAtMs: 1_000,
+        }),
         kill: (pid, signal) => {
           signals.push({ pid, signal });
         },
@@ -323,13 +360,119 @@ describe("Codex app-server process matching (#476)", () => {
     );
 
     expect(signals).toEqual([]);
-    expect(result).toEqual({ requested: [42], stopped: [], surviving: [], failed: [] });
+    expect(result).toEqual({ requested: [42], signaled: [], stopped: [], surviving: [], failed: [] });
+  });
+
+  test("restartCodexAppServers rechecks caller authorization immediately before SIGTERM", () => {
+    const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const result = restartCodexAppServers(
+      [{ pid: 42, commandLine: "codex app-server", startedAtMs: 1_000 }],
+      {
+        listSnapshots: () => [{ pid: 42, commandLine: "codex app-server" }],
+        readStartMs: () => 1_000,
+        authorizeSignal: () => false,
+        kill: (pid, signal) => { signals.push({ pid, signal }); },
+        isAlive: () => true,
+        waitExit: () => false,
+      },
+    );
+
+    expect(signals).toEqual([]);
+    expect(result).toEqual({
+      requested: [42],
+      signaled: [],
+      stopped: [],
+      surviving: [42],
+      failed: [],
+      authorizationRefused: true,
+    });
+  });
+
+  test("authorization completes before the final PID identity snapshot", () => {
+    const calls: string[] = [];
+    let liveBirth = 1_000;
+    const result = restartCodexAppServers(
+      [{ pid: 42, commandLine: "codex app-server", startedAtMs: 1_000 }],
+      {
+        authorizeSignal: () => {
+          calls.push("authorize");
+          // Model PID reuse while a durable revision/consent read is in flight.
+          liveBirth = 2_000;
+          return true;
+        },
+        readSnapshot: () => {
+          calls.push("snapshot");
+          return { pid: 42, commandLine: "codex app-server", startedAtMs: liveBirth };
+        },
+        kill: () => { calls.push("signal"); },
+        isAlive: () => true,
+        waitExit: () => false,
+      },
+    );
+
+    expect(calls).toEqual(["authorize", "snapshot"]);
+    expect(result).toEqual({ requested: [42], signaled: [], stopped: [], surviving: [], failed: [] });
+  });
+
+  test("a successful signal has authorization then final identity then SIGTERM", () => {
+    const calls: string[] = [];
+    const result = restartCodexAppServers(
+      [{ pid: 42, commandLine: "codex app-server", startedAtMs: 1_000 }],
+      {
+        authorizeSignal: () => { calls.push("authorize"); return true; },
+        readSnapshot: () => {
+          calls.push("snapshot");
+          return { pid: 42, commandLine: "codex app-server", startedAtMs: 1_000 };
+        },
+        kill: (_pid, signal) => {
+          calls.push(signal);
+        },
+        isAlive: () => false,
+        waitExit: () => true,
+      },
+    );
+
+    expect(calls).toEqual(["authorize", "snapshot", "SIGTERM"]);
+    expect(result.signaled).toEqual([42]);
+    expect(result.stopped).toEqual([42]);
+  });
+
+  test("authorization refusal stops the operation permanently after an earlier signal", () => {
+    const signals: number[] = [];
+    let authorizations = 0;
+    const snapshots = [
+      { pid: 10, commandLine: "codex app-server --worker one", startedAtMs: 100 },
+      { pid: 20, commandLine: "codex app-server --worker two", startedAtMs: 200 },
+      { pid: 30, commandLine: "codex app-server --worker three", startedAtMs: 300 },
+    ];
+    const result = restartCodexAppServers(snapshots, {
+      readSnapshot: pid => snapshots.find(snapshot => snapshot.pid === pid) ?? null,
+      authorizeSignal: () => ++authorizations === 1,
+      kill: pid => { signals.push(pid); },
+      isAlive: () => true,
+      waitExit: () => false,
+    });
+
+    expect(authorizations).toBe(2);
+    expect(signals).toEqual([10]);
+    expect(result).toEqual({
+      requested: [10, 20, 30],
+      signaled: [10],
+      stopped: [],
+      surviving: [20, 30, 10],
+      failed: [],
+      authorizationRefused: true,
+    });
   });
 
   test("afterCatalogWriteHandleAppServers warns by default and restarts when requested", () => {
     const errors: string[] = [];
     const logs: string[] = [];
-    const snapshots = [{ pid: 7, commandLine: "codex app-server --listen unix://x" }];
+    const snapshots = [{
+      pid: 7,
+      commandLine: "codex app-server --listen unix://x",
+      startedAtMs: 100,
+    }];
     const io = {
       listSnapshots: () => snapshots,
       kill: () => {},
@@ -359,26 +502,36 @@ describe("Codex app-server process matching (#476)", () => {
 
 describe("CLI /api sync wiring for stale app-servers (#476)", () => {
   const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
+  const cliActivationSource = readFileSync(
+    join(import.meta.dir, "..", "src", "cli", "catalog-activation.ts"),
+    "utf8",
+  );
   const configRoutesSource = readFileSync(
     join(import.meta.dir, "..", "src", "server", "management", "config-routes.ts"),
     "utf8",
   );
 
-  test("ccx sync only handles app-servers after a catalog/cache write and forwards --restart-codex", () => {
+  test("ccx sync uses live receipt convergence and revision-fenced stale-worker Apply", () => {
     const syncCase = cliSource.slice(cliSource.indexOf('case "sync":'), cliSource.indexOf('case "v2":'));
     expect(syncCase).toContain('args.slice(1).includes("--restart-codex")');
+    expect(syncCase).toContain("captureCatalogRestartFence");
+    expect(syncCase).toContain("syncCodexCatalogForCli(live)");
+    expect(syncCase).toContain("bindCatalogArtifactsForApply(restartFence)");
+    expect(syncCase).toContain("applySynchronizedCatalogWorkers(");
     expect(syncCase).toContain("synced.catalogWritten || synced.cacheSynced");
-    expect(syncCase).toContain("afterCatalogWriteHandleAppServers");
-    expect(syncCase).toContain("restart: restartCodex");
-    expect(syncCase.indexOf("catalogWritten || synced.cacheSynced"))
-      .toBeLessThan(syncCase.indexOf("afterCatalogWriteHandleAppServers"));
-    // No-write path must not call the handler outside the gate.
-    const gatedBlock = syncCase.slice(syncCase.indexOf("if (synced.catalogWritten"));
-    expect(gatedBlock).toContain("afterCatalogWriteHandleAppServers");
-    expect(syncCase.replace(gatedBlock, "")).not.toContain("afterCatalogWriteHandleAppServers");
+    expect(syncCase.indexOf("captureCatalogRestartFence"))
+      .toBeLessThan(syncCase.indexOf("syncCodexCatalogForCli(live)"));
+    expect(syncCase).not.toContain("afterCatalogWriteHandleAppServers");
+
+    expect(cliActivationSource).toContain('runtimeRequest<unknown>("/api/sync"');
+    expect(cliActivationSource).toContain('live.source !== "runtime" || live.pid === null');
+    expect(cliActivationSource).toContain("return deps.syncModelsToCodex()");
+    expect(cliActivationSource).toContain("captureCodexCatalogDesiredSnapshot().revision === expected.desired.revision");
+    expect(cliActivationSource).toContain("artifactFenceStillMatches: catalogApplyFenceArtifactsStillMatch");
+    expect(cliActivationSource).toContain("applyCodexCatalogWorkers(");
   });
 
-  test("ccx sync-cache only handles app-servers after a successful models_cache write", () => {
+  test("ccx sync-cache keeps its direct write gate and applies only against the cache fence", () => {
     const syncCacheCase = cliSource.slice(
       cliSource.indexOf('case "sync-cache":'),
       cliSource.indexOf('case "gui":'),
@@ -391,12 +544,18 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
     expect(syncCacheCase).toContain("invalidateCodexModelsCacheWithPermit(permit, owningCodexHome)");
     const gate = 'if (invalidated.kind === "completed" && invalidated.value)';
     expect(syncCacheCase).toContain(gate);
-    expect(syncCacheCase).toContain("afterCatalogWriteHandleAppServers");
+    expect(syncCacheCase).toContain("applyInvalidatedCacheWorkers(");
+    expect(syncCacheCase).toContain("bindCacheArtifactForApply(restartFence)");
     expect(syncCacheCase.indexOf(gate))
-      .toBeLessThan(syncCacheCase.indexOf("afterCatalogWriteHandleAppServers"));
+      .toBeLessThan(syncCacheCase.indexOf("applyInvalidatedCacheWorkers("));
     const gatedBlock = syncCacheCase.slice(syncCacheCase.indexOf(gate));
-    expect(gatedBlock).toContain("afterCatalogWriteHandleAppServers");
-    expect(syncCacheCase.replace(gatedBlock, "")).not.toContain("afterCatalogWriteHandleAppServers");
+    expect(gatedBlock).toContain("applyInvalidatedCacheWorkers(");
+    expect(syncCacheCase.replace(gatedBlock, "")).not.toContain("applyInvalidatedCacheWorkers(");
+    expect(syncCacheCase).not.toContain("afterCatalogWriteHandleAppServers");
+
+    expect(cliActivationSource).toContain("const cacheMtimeMs = () =>");
+    expect(cliActivationSource).toContain("cacheApplyFenceArtifactStillMatches(expected)");
+    expect(cliActivationSource).toContain("collectCodexAppServerCatalogState({ catalogMtimeMs: cacheMtimeMs })");
   });
 
   test("POST /api/sync attaches the current catalog state and never enumerates processes directly", () => {
@@ -406,7 +565,8 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
     );
     expect(syncHandler).toContain("attachStaleAppServerHint(result)");
     expect(syncHandler).toContain("deps.resetCodexAppServerCatalogStateCache ?? resetCodexAppServerCatalogStateCache");
-    expect(syncHandler).toContain("deps.collectCodexAppServerCatalogState ?? collectCodexAppServerCatalogState");
+    expect(syncHandler).toContain("deps.collectCodexAppServerCatalogState");
+    expect(syncHandler).toContain("collectCodexCatalogActivationWorkerState");
     expect(syncHandler.indexOf("deps.resetCodexAppServerCatalogStateCache"))
       .toBeLessThan(syncHandler.indexOf("deps.collectCodexAppServerCatalogState"));
     expect(syncHandler).not.toContain("listCodexAppServerProcesses");
@@ -526,11 +686,11 @@ describe("Windows Win32_Process owner enumeration (#476)", () => {
 });
 
 /*
- * #1046. Service startup rewrites the catalog and the models cache while an
- * app-server that booted earlier keeps its own in-memory model list, so the
- * picker shows a roster that no longer exists on disk. The startup path warns;
- * it must never signal, because a boot is not a user consenting to have an
- * in-flight turn interrupted.
+ * #1046. Canonical startup convergence may rewrite the catalog and models cache
+ * while an app-server that booted earlier keeps its own in-memory model list, so
+ * the picker shows a roster that no longer exists on disk. The startup path
+ * warns; it must never signal, because a boot is not a user consenting to have
+ * an in-flight turn interrupted.
  */
 describe("warnIfStaleCodexAppServersAfterStartupWrite (#1046)", () => {
   const APP_SERVER_CMD = "/usr/local/bin/codex app-server";

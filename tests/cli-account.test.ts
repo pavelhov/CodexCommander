@@ -314,7 +314,18 @@ async function mockManagementApi(req: Request): Promise<Response> {
 }
 
 function defaultDeps(): AccountDeps {
-  return { baseUrl, loadConfigImpl: fixtureConfig };
+  const parsed = new URL(baseUrl);
+  return {
+    baseUrl,
+    loadConfigImpl: fixtureConfig,
+    attestLiveManagementProxyImpl: async () => ({
+      pid: 4242,
+      port: Number(parsed.port),
+      hostname: parsed.hostname,
+      source: "runtime",
+      baseUrl,
+    }),
+  };
 }
 
 function stdinFrom(value: string, isTTY = false): AccountStdin {

@@ -44,8 +44,8 @@ ccx v2 threads 16
 Подкоманда `mode` записывает `multiAgentMode` в конфиг CodexCommander и заново синхронизирует каталог
 Codex. При переходах mode и feature flag текущий числовой thread limit переносится между
 допустимыми ключами Codex для v1/v2; если переход не удался, исходный `config.toml`
-восстанавливается. Изменения применяются к новым сессиям Codex, а уже запущенные сохраняют свою
-закреплённую surface.
+восстанавливается. Изменение mode, flag или thread обновляет boot config. Для уже запущенного worker
+используйте `ccx sync --restart-codex` (или **Apply agent catalog** в dashboard), затем начните новый task.
 
 ## Combo routing
 

@@ -9,14 +9,24 @@
  * - 다른 대안 대신 이 방식을 선택한 이유: GUI/CLI의 검증 규칙이 갈라지지 않고 fallback port도 안전하게 찾는다.
  * - 장점, 단점 및 영향: 동작 일관성이 높아지는 대신 live 관리 명령은 실행 중인 proxy가 필요하다.
  */
-import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
+import {
+  attestLiveManagementProxy,
+  findLiveProxy,
+  probeHostname,
+  type ManagementAttestationIo,
+} from "../server/proxy-liveness";
 import { runningProxyUpdateHeaders } from "../oauth/login-cli";
+import { API_KEY_HEADER } from "../identity";
 
 export type CliStdin = NodeJS.ReadableStream & { isTTY?: boolean; readableEnded?: boolean };
 
 export interface RuntimeApiDeps {
   baseUrl?: string;
   fetchImpl?: typeof fetch;
+  /** Injectable discovery/record seams; no option bypasses the proof contract. */
+  managementAttestation?: Omit<ManagementAttestationIo, "fetchFn">;
+  /** Test seam for an explicitly attested transport. */
+  attestLiveManagementProxyImpl?: typeof attestLiveManagementProxy;
   /** Test injection for commands that read a secret from stdin instead of argv. */
   stdinImpl?: CliStdin;
   stdinTimeoutMs?: number;
@@ -63,10 +73,40 @@ export async function runtimeRequest<T = unknown>(
   init: RequestInit = {},
   deps: RuntimeApiDeps = {},
 ): Promise<T> {
-  const baseUrl = await runtimeBaseUrl(deps);
   const headers = runningProxyUpdateHeaders();
   for (const [key, value] of new Headers(init.headers).entries()) headers.set(key, value);
   const fetchImpl = deps.fetchImpl ?? fetch;
+  const method = (init.method ?? "GET").toUpperCase();
+  const credentialHeaders = [
+    API_KEY_HEADER,
+    "authorization",
+    "x-api-key",
+    "cookie",
+    "proxy-authorization",
+  ];
+  const releasesSensitiveRequest = credentialHeaders.some(name => Boolean(headers.get(name)?.trim()))
+    || (init.body !== undefined && init.body !== null)
+    || (method !== "GET" && method !== "HEAD" && method !== "OPTIONS");
+  let baseUrl: string;
+  if (releasesSensitiveRequest) {
+    const attest = deps.attestLiveManagementProxyImpl ?? attestLiveManagementProxy;
+    const target = await attest({
+      ...(deps.managementAttestation ?? {}),
+      fetchFn: fetchImpl,
+    });
+    if (!target) {
+      throw new RuntimeApiError(
+        "Management request refused: the live proxy could not be authenticated from its protected runtime record.",
+        503,
+        null,
+      );
+    }
+    // A caller-provided base URL is discovery/test metadata only. Sensitive bytes
+    // always go to the freshly attested runtime target.
+    baseUrl = target.baseUrl;
+  } else {
+    baseUrl = await runtimeBaseUrl(deps);
+  }
   let response: Response;
   try {
     response = await fetchImpl(`${baseUrl}${path.startsWith("/") ? path : `/${path}`}`, { ...init, headers });

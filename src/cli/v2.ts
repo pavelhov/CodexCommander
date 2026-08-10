@@ -15,8 +15,15 @@ import { dirname } from "node:path";
 import { activeCodexConfigPath, getAgentsEnabled, getAgentsMaxDepth, getLogicalMaxThreads, getSubagentDeveloperInstructions, hasAgentsMaxThreads, isMultiAgentV2Enabled, transitionMultiAgentV2 } from "../codex/features";
 
 import { commandInvocation, type SpawnInvocation } from "../lib/win-exec";
-import { loadConfig, saveConfig } from "../config";
+import {
+  loadConfig,
+  mutatePersistedConfig,
+  readConfigDiagnostics,
+  saveConfig,
+  withConfigMutationLockSync,
+} from "../config";
 import { resolveAndPersistCodexRuntime, type ResolveCodexRuntimeDeps } from "../codex/runtime";
+import type { CodexCommanderConfig } from "../types";
 
 export interface V2CliDeps {
   execFile?: (file: string, args: string[], options?: SpawnInvocation["options"]) => void;
@@ -111,6 +118,57 @@ export function multiAgentModeLine(mode: string): string {
   }
 }
 
+function applyMultiAgentModeField(
+  config: CodexCommanderConfig,
+  mode: "v1" | "default" | "v2",
+): boolean {
+  const next = mode === "default" ? undefined : mode;
+  if (config.multiAgentMode === next) return false;
+  if (next === undefined) delete config.multiAgentMode;
+  else config.multiAgentMode = next;
+  return true;
+}
+
+/**
+ * Persist only the collaboration policy against the newest on-disk config.
+ *
+ * `mutatePersistedConfig` deliberately refuses a missing config. The CLI has a
+ * longstanding first-run contract, though: `ccx v2 mode ...` creates the
+ * default config after a successful Codex feature transition. The narrow
+ * fallback below preserves that behavior without turning a config that
+ * vanished during the (potentially slow) transition into permission to
+ * recreate a stale snapshot. The second attempt and first-run initialization
+ * share the same cross-process mutation transaction, so a config created by a
+ * cooperating writer in between is rebased rather than replaced.
+ */
+function persistMultiAgentMode(
+  mode: "v1" | "default" | "v2",
+  firstRunConfig?: CodexCommanderConfig,
+) {
+  const mutateCurrent = () => mutatePersistedConfig(current => ({
+    changed: applyMultiAgentModeField(current, mode),
+    value: current.multiAgentMode,
+  }));
+
+  let outcome = mutateCurrent();
+  if (outcome.status !== "unavailable" || outcome.reason !== "missing" || !firstRunConfig) {
+    return outcome;
+  }
+
+  outcome = withConfigMutationLockSync(() => {
+    // A writer may have created the file after the first missing observation.
+    // If so, the ordinary field-scoped mutator now rebases onto those bytes.
+    const retry = mutateCurrent();
+    if (retry.status !== "unavailable" || retry.reason !== "missing") return retry;
+
+    const initialized = structuredClone(firstRunConfig);
+    applyMultiAgentModeField(initialized, mode);
+    saveConfig(initialized);
+    return { status: "committed" as const, value: initialized.multiAgentMode };
+  });
+  return outcome;
+}
+
 export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () => Promise<number | undefined>): Promise<number> {
   const log = deps.log ?? console;
   const isEnabled = deps.isEnabled ?? isMultiAgentV2Enabled;
@@ -157,7 +215,10 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
       log.error("v2 mode: expected v1|default|v2");
       return 1;
     }
-    const cfg = loadConfig();
+    // Capture whether this invocation is a genuine first run before the Codex
+    // feature command gets a chance to block while another writer changes disk.
+    const initialDiagnostics = readConfigDiagnostics();
+    const initialConfig = loadConfig();
     if (modeArg !== "default") {
       const target = modeArg === "v2";
       const transition = transitionMultiAgentV2(target, enabled => runCodexFeatures(enabled ? "enable" : "disable", deps));
@@ -166,9 +227,14 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
         return 1;
       }
     }
-    if (modeArg === "default") delete cfg.multiAgentMode;
-    else cfg.multiAgentMode = modeArg as "v1" | "v2";
-    saveConfig(cfg);
+    const persisted = persistMultiAgentMode(
+      modeArg,
+      initialDiagnostics.source === "default" ? initialConfig : undefined,
+    );
+    if (persisted.status === "unavailable") {
+      log.error(`multi-agent mode could not be saved (${persisted.reason})`);
+      return 1;
+    }
     try {
       const sync = deps.sync ?? (await import("../codex/sync")).syncModelsToCodex;
       await sync(findPort ? await findPort() : undefined);

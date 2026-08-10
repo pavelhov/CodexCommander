@@ -1,23 +1,94 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Database } from "bun:sqlite";
 import {
   MANAGED_AGENTS_TABLE_MARKER,
   MANAGED_SUBAGENT_DEFAULT_MARKER,
 } from "../src/codex/subagent-defaults";
+import {
+  resolveCodexCoordinatorDatabasePath,
+  resolveEffectiveUserIdentity,
+} from "../src/codex/user-identity";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
-function runScript(codexHome: string, script: string): { stdout: string; stderr: string; status: number } {
+function runScript(
+  codexHome: string,
+  script: string,
+  codexCommanderHome = join(codexHome, "ccx-state"),
+): { stdout: string; stderr: string; status: number } {
   const result = spawnSync(process.execPath, ["--eval", script], {
     cwd: repoRoot,
-    env: { ...process.env, CODEX_HOME: codexHome },
+    env: {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      CODEXCOMMANDER_HOME: codexCommanderHome,
+    },
     encoding: "utf8",
   });
   return { stdout: result.stdout?.trim() ?? "", stderr: result.stderr?.trim() ?? "", status: result.status ?? 1 };
+}
+
+function contentHash(content: string | null): string | null {
+  return content === null
+    ? null
+    : createHash("sha256").update(content).digest("hex");
+}
+
+function coordinatorPath(codexHome: string): string {
+  return resolveCodexCoordinatorDatabasePath(
+    resolveEffectiveUserIdentity(),
+    realpathSync.native(codexHome),
+  );
+}
+
+function removeCoordinator(codexHome: string): void {
+  const path = coordinatorPath(codexHome);
+  for (const suffix of ["", "-journal", "-wal", "-shm"]) {
+    rmSync(`${path}${suffix}`, { force: true });
+  }
+}
+
+function writeRecoveryJournal(
+  codexHome: string,
+  options: {
+    originalConfig: string;
+    originalProfile?: string | null;
+    injectedConfig: string;
+    injectedProfile: string | null;
+    pid?: number;
+    timestamp?: string;
+  },
+): string {
+  const journalPath = join(codexHome, "codexcommander-journal.json");
+  writeFileSync(journalPath, JSON.stringify({
+    version: 1,
+    originalConfig: Buffer.from(options.originalConfig).toString("base64"),
+    originalProfile: options.originalProfile === undefined || options.originalProfile === null
+      ? null
+      : Buffer.from(options.originalProfile).toString("base64"),
+    injectedConfigHash: contentHash(options.injectedConfig),
+    injectedProfileHash: contentHash(options.injectedProfile),
+    pid: options.pid ?? 999999,
+    timestamp: options.timestamp ?? "2026-08-10T00:00:00.000Z",
+  }), "utf8");
+  return journalPath;
 }
 
 describe("codex-journal", () => {
@@ -29,6 +100,7 @@ describe("codex-journal", () => {
   });
 
   afterEach(() => {
+    removeCoordinator(testDir);
     rmSync(testDir, { recursive: true, force: true });
   });
 
@@ -51,17 +123,21 @@ describe("codex-journal", () => {
   });
 
   test("reconcileJournal restores config when journaled PID is dead", () => {
-    const journalPath = join(testDir, "codexcommander-journal.json");
     const original = "# original config\nmodel_provider = \"openai\"\n";
-    const modified = "# modified\nmodel_provider = \"codexcommander\"\n";
+    const modified = [
+      'model_provider = "codexcommander"',
+      "",
+      "# Auto-injected by CodexCommander",
+      "[model_providers.codexcommander]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
     writeFileSync(join(testDir, "config.toml"), modified, "utf8");
-    writeFileSync(journalPath, JSON.stringify({
-      version: 1,
-      originalConfig: Buffer.from(original).toString("base64"),
-      originalProfile: null,
-      pid: 999999,
-      timestamp: new Date().toISOString(),
-    }), "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: original,
+      injectedConfig: modified,
+      injectedProfile: null,
+    });
 
     const r = runScript(testDir, `
       const { reconcileJournal } = require("./src/codex/journal");
@@ -72,6 +148,435 @@ describe("codex-journal", () => {
     expect(JSON.parse(r.stdout).restored).toBe(true);
     expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(original);
     expect(existsSync(journalPath)).toBe(false);
+  });
+
+  test("writeJournal persists intended postimage hashes before any native write", () => {
+    const original = readFileSync(join(testDir, "config.toml"), "utf8");
+    const intendedConfig = [
+      'model_provider = "codexcommander"',
+      "",
+      "# Auto-injected by CodexCommander",
+      "[model_providers.codexcommander]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    const written = runScript(testDir, `
+      const { writeJournal } = require("./src/codex/journal");
+      writeJournal({ intendedPostimage: {
+        config: ${JSON.stringify(intendedConfig)},
+        profile: null,
+      } });
+      console.log("written");
+    `);
+    expect(written.status).toBe(0);
+
+    const journalPath = join(testDir, "codexcommander-journal.json");
+    const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+    expect(journal.injectedConfigHash).toBe(contentHash(intendedConfig));
+    expect(journal.injectedProfileHash).toBeNull();
+
+    // Crash after journal publication but before either native write, followed
+    // by a human edit: recovery preserves the edit and retires only the stale
+    // authority record.
+    const userEdit = 'model = "gpt-5.6-sol"\n';
+    writeFileSync(join(testDir, "config.toml"), userEdit, "utf8");
+    const reconciled = runScript(testDir, `
+      const { reconcileJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify(reconcileJournal()));
+    `);
+    expect(reconciled.status).toBe(0);
+    expect(JSON.parse(reconciled.stdout)).toBe(true);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(userEdit);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).not.toBe(original);
+    expect(existsSync(journalPath)).toBe(false);
+  });
+
+  test("a legacy hashless journal never replays over divergent user bytes", () => {
+    const journalPath = join(testDir, "codexcommander-journal.json");
+    const userEdit = 'model = "gpt-5.6-terra"\n';
+    writeFileSync(join(testDir, "config.toml"), userEdit, "utf8");
+    writeFileSync(journalPath, JSON.stringify({
+      version: 1,
+      originalConfig: Buffer.from('model = "gpt-5.4"\n').toString("base64"),
+      originalProfile: null,
+      pid: 999999,
+      timestamp: "2026-08-10T00:00:00.000Z",
+    }), "utf8");
+
+    const r = runScript(testDir, `
+      const { reconcileJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify(reconcileJournal()));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toBe(true);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(userEdit);
+    expect(existsSync(journalPath)).toBe(false);
+  });
+
+  test("a legacy hashless routed config with a user edit is preserved and retains authority", () => {
+    const journalPath = join(testDir, "codexcommander-journal.json");
+    const routedWithUserEdit = [
+      'model_provider = "codexcommander"',
+      "",
+      "# Auto-injected by CodexCommander",
+      "[model_providers.codexcommander]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      "",
+      "[tools]",
+      "web_search = true",
+      "",
+    ].join("\n");
+    writeFileSync(join(testDir, "config.toml"), routedWithUserEdit, "utf8");
+    writeFileSync(journalPath, JSON.stringify({
+      version: 1,
+      originalConfig: Buffer.from('model = "gpt-5.4"\n').toString("base64"),
+      originalProfile: null,
+      pid: 999999,
+      timestamp: "2026-08-10T00:00:00.000Z",
+    }), "utf8");
+
+    const r = runScript(testDir, `
+      const { reconcileJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify(reconcileJournal()));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toBe(false);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(routedWithUserEdit);
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
+  test("a legacy hashless generated profile restores because the whole surface is CCX-owned", () => {
+    const originalConfig = readFileSync(join(testDir, "config.toml"), "utf8");
+    const originalProfile = 'model_provider = "openai"\n';
+    const injectedProfile = [
+      "# CodexCommander proxy fallback config (Design B)",
+      'openai_base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    const journalPath = join(testDir, "codexcommander-journal.json");
+    writeFileSync(join(testDir, "codexcommander.config.toml"), injectedProfile, "utf8");
+    writeFileSync(journalPath, JSON.stringify({
+      version: 1,
+      originalConfig: Buffer.from(originalConfig).toString("base64"),
+      originalProfile: Buffer.from(originalProfile).toString("base64"),
+      pid: 999999,
+      timestamp: "2026-08-10T00:00:00.000Z",
+    }), "utf8");
+
+    const r = runScript(testDir, `
+      const { reconcileJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify(reconcileJournal()));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toBe(true);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(originalConfig);
+    expect(readFileSync(join(testDir, "codexcommander.config.toml"), "utf8")).toBe(originalProfile);
+    expect(existsSync(journalPath)).toBe(false);
+  });
+
+  test("a config change after recovery authorization is preserved and retains the journal", () => {
+    const original = 'model = "gpt-5.5"\n';
+    const injected = [
+      'model_provider = "codexcommander"',
+      "",
+      "# Auto-injected by CodexCommander",
+      "[model_providers.codexcommander]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    writeFileSync(join(testDir, "config.toml"), injected, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: original,
+      injectedConfig: injected,
+      injectedProfile: null,
+    });
+    const userEdit = 'model = "gpt-5.6-luna"\n';
+
+    const r = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { reconcileJournal } = require("./src/codex/journal");
+      const reconciled = reconcileJournal({
+        beforeConfigMutationRevalidation: () => fs.writeFileSync(
+          path.join(process.env.CODEX_HOME, "config.toml"),
+          ${JSON.stringify(userEdit)},
+          "utf8",
+        ),
+      });
+      console.log(JSON.stringify(reconciled));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toBe(false);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(userEdit);
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
+  test("a profile change after recovery authorization is preserved and retains the journal", () => {
+    const originalConfig = readFileSync(join(testDir, "config.toml"), "utf8");
+    const originalProfile = 'model_provider = "openai"\n';
+    const injectedProfile = [
+      "# CodexCommander proxy fallback config (Design B)",
+      'openai_base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    writeFileSync(join(testDir, "codexcommander.config.toml"), injectedProfile, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig,
+      originalProfile,
+      injectedConfig: "different injected config",
+      injectedProfile,
+    });
+    const userEdit = 'model_provider = "custom"\n';
+
+    const r = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { reconcileJournal } = require("./src/codex/journal");
+      const reconciled = reconcileJournal({
+        beforeProfileMutationRevalidation: () => fs.writeFileSync(
+          path.join(process.env.CODEX_HOME, "codexcommander.config.toml"),
+          ${JSON.stringify(userEdit)},
+          "utf8",
+        ),
+      });
+      console.log(JSON.stringify(reconciled));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toBe(false);
+    expect(readFileSync(join(testDir, "codexcommander.config.toml"), "utf8")).toBe(userEdit);
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
+  const symlinkTest = process.platform === "win32" ? test.skip : test;
+
+  symlinkTest("recovery preserves a config leaf symlink and restores its captured target", () => {
+    const original = 'model = "gpt-5.5"\n';
+    const injected = [
+      'model_provider = "codexcommander"',
+      "",
+      "# Auto-injected by CodexCommander",
+      "[model_providers.codexcommander]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    const target = join(testDir, "linked-config.toml");
+    writeFileSync(target, injected, "utf8");
+    rmSync(join(testDir, "config.toml"));
+    symlinkSync(target, join(testDir, "config.toml"));
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: original,
+      injectedConfig: injected,
+      injectedProfile: null,
+    });
+
+    const r = runScript(testDir, `
+      const { reconcileJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify(reconcileJournal()));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toBe(true);
+    expect(lstatSync(join(testDir, "config.toml")).isSymbolicLink()).toBe(true);
+    expect(readFileSync(target, "utf8")).toBe(original);
+    expect(existsSync(journalPath)).toBe(false);
+  });
+
+  symlinkTest("recovery preserves a profile leaf symlink and restores its captured target", () => {
+    const originalConfig = readFileSync(join(testDir, "config.toml"), "utf8");
+    const originalProfile = 'model_provider = "openai"\n';
+    const injectedProfile = [
+      "# CodexCommander proxy fallback config (Design B)",
+      'openai_base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    const target = join(testDir, "linked-profile.toml");
+    writeFileSync(target, injectedProfile, "utf8");
+    symlinkSync(target, join(testDir, "codexcommander.config.toml"));
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig,
+      originalProfile,
+      injectedConfig: "different injected config",
+      injectedProfile,
+    });
+
+    const r = runScript(testDir, `
+      const { reconcileJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify(reconcileJournal()));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toBe(true);
+    expect(lstatSync(join(testDir, "codexcommander.config.toml")).isSymbolicLink()).toBe(true);
+    expect(readFileSync(target, "utf8")).toBe(originalProfile);
+    expect(existsSync(journalPath)).toBe(false);
+  });
+
+  symlinkTest("a config link retarget after authorization never overwrites either target", () => {
+    const original = 'model = "gpt-5.5"\n';
+    const injected = [
+      'model_provider = "codexcommander"',
+      "",
+      "# Auto-injected by CodexCommander",
+      "[model_providers.codexcommander]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    const firstTarget = join(testDir, "config-first.toml");
+    const replacementTarget = join(testDir, "config-replacement.toml");
+    const logical = join(testDir, "config.toml");
+    writeFileSync(firstTarget, injected, "utf8");
+    writeFileSync(replacementTarget, 'model = "user-edit"\n', "utf8");
+    rmSync(logical);
+    symlinkSync(firstTarget, logical);
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: original,
+      injectedConfig: injected,
+      injectedProfile: null,
+    });
+
+    const r = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { reconcileJournal } = require("./src/codex/journal");
+      const logical = path.join(process.env.CODEX_HOME, "config.toml");
+      const reconciled = reconcileJournal({ beforeConfigMutationRevalidation: () => {
+        fs.unlinkSync(logical);
+        fs.symlinkSync(path.join(process.env.CODEX_HOME, "config-replacement.toml"), logical);
+      } });
+      console.log(JSON.stringify(reconciled));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toBe(false);
+    expect(readFileSync(firstTarget, "utf8")).toBe(injected);
+    expect(readFileSync(replacementTarget, "utf8")).toBe('model = "user-edit"\n');
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
+  symlinkTest("a profile link retarget after authorization never overwrites either target", () => {
+    const originalConfig = readFileSync(join(testDir, "config.toml"), "utf8");
+    const originalProfile = 'model_provider = "openai"\n';
+    const injectedProfile = [
+      "# CodexCommander proxy fallback config (Design B)",
+      'openai_base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    const firstTarget = join(testDir, "profile-first.toml");
+    const replacementTarget = join(testDir, "profile-replacement.toml");
+    const logical = join(testDir, "codexcommander.config.toml");
+    writeFileSync(firstTarget, injectedProfile, "utf8");
+    writeFileSync(replacementTarget, 'model_provider = "custom"\n', "utf8");
+    symlinkSync(firstTarget, logical);
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig,
+      originalProfile,
+      injectedConfig: "different injected config",
+      injectedProfile,
+    });
+
+    const r = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { reconcileJournal } = require("./src/codex/journal");
+      const logical = path.join(process.env.CODEX_HOME, "codexcommander.config.toml");
+      const reconciled = reconcileJournal({ beforeProfileMutationRevalidation: () => {
+        fs.unlinkSync(logical);
+        fs.symlinkSync(path.join(process.env.CODEX_HOME, "profile-replacement.toml"), logical);
+      } });
+      console.log(JSON.stringify(reconciled));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toBe(false);
+    expect(readFileSync(firstTarget, "utf8")).toBe(injectedProfile);
+    expect(readFileSync(replacementTarget, "utf8")).toBe('model_provider = "custom"\n');
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
+  symlinkTest("an injected profile replaced by a symlink is never unlinked", () => {
+    const originalConfig = readFileSync(join(testDir, "config.toml"), "utf8");
+    const injectedProfile = [
+      "# CodexCommander proxy fallback config (Design B)",
+      'openai_base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    const logical = join(testDir, "codexcommander.config.toml");
+    const userTarget = join(testDir, "user-profile.toml");
+    writeFileSync(logical, injectedProfile, "utf8");
+    writeFileSync(userTarget, injectedProfile, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig,
+      originalProfile: null,
+      injectedConfig: "different injected config",
+      injectedProfile,
+    });
+
+    const r = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { reconcileJournal } = require("./src/codex/journal");
+      const logical = path.join(process.env.CODEX_HOME, "codexcommander.config.toml");
+      const reconciled = reconcileJournal({ beforeProfileMutationRevalidation: () => {
+        fs.unlinkSync(logical);
+        fs.symlinkSync(path.join(process.env.CODEX_HOME, "user-profile.toml"), logical);
+      } });
+      console.log(JSON.stringify(reconciled));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toBe(false);
+    expect(lstatSync(logical).isSymbolicLink()).toBe(true);
+    expect(readFileSync(userTarget, "utf8")).toBe(injectedProfile);
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
+  symlinkTest("a parent-directory symlink swap after authorization cannot redirect recovery", () => {
+    const aliasRoot = mkdtempSync(join(tmpdir(), "ccx-journal-alias-"));
+    const replacementHome = mkdtempSync(join(tmpdir(), "ccx-journal-replacement-"));
+    const alias = join(aliasRoot, "codex-home");
+    const original = 'model = "gpt-5.5"\n';
+    const injected = [
+      'model_provider = "codexcommander"',
+      "",
+      "# Auto-injected by CodexCommander",
+      "[model_providers.codexcommander]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    writeFileSync(join(testDir, "config.toml"), injected, "utf8");
+    const replacementConfig = 'model = "replacement-user"\n';
+    writeFileSync(join(replacementHome, "config.toml"), replacementConfig, "utf8");
+    symlinkSync(testDir, alias);
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: original,
+      injectedConfig: injected,
+      injectedProfile: null,
+    });
+    try {
+      const result = spawnSync(process.execPath, ["--eval", `
+        const fs = require("node:fs");
+        const path = require("node:path");
+        const { reconcileJournal } = require("./src/codex/journal");
+        const alias = process.env.CODEX_HOME;
+        const reconciled = reconcileJournal({ beforeConfigMutationRevalidation: () => {
+          fs.unlinkSync(alias);
+          fs.symlinkSync(process.env.TEST_REPLACEMENT_HOME, alias);
+        } });
+        console.log(JSON.stringify(reconciled));
+      `], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CODEX_HOME: alias,
+          CODEXCOMMANDER_HOME: join(aliasRoot, "ccx-state"),
+          TEST_REPLACEMENT_HOME: replacementHome,
+        },
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout.trim())).toBe(true);
+      expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(original);
+      expect(readFileSync(join(replacementHome, "config.toml"), "utf8")).toBe(replacementConfig);
+      expect(existsSync(journalPath)).toBe(false);
+    } finally {
+      rmSync(aliasRoot, { recursive: true, force: true });
+      rmSync(replacementHome, { recursive: true, force: true });
+    }
   });
 
   test("reconcileJournal handles corrupt JSON gracefully", () => {
@@ -85,7 +590,7 @@ describe("codex-journal", () => {
     `);
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout).restored).toBe(false);
-    expect(existsSync(journalPath)).toBe(false);
+    expect(existsSync(journalPath)).toBe(true);
   });
 
   test("reconcileJournal no-ops when no journal exists", () => {
@@ -96,6 +601,223 @@ describe("codex-journal", () => {
     `);
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout).restored).toBe(false);
+  });
+
+  test("ordinary coordinator initialization safely adopts only an exact empty v0 shell", () => {
+    const path = coordinatorPath(testDir);
+    new Database(path).close();
+
+    const r = runScript(testDir, `
+      const { readCodexTransitionState } = require("./src/codex/transition-state");
+      console.log(JSON.stringify(readCodexTransitionState()));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({
+      kind: "ready",
+      state: { nativeGeneration: 0, currentTxId: null },
+    });
+    const db = new Database(path, { readonly: true });
+    expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(2);
+    db.close();
+  });
+
+  test("an unversioned coordinator with any schema is never adopted by ordinary or recovery paths", () => {
+    const path = coordinatorPath(testDir);
+    const db = new Database(path);
+    db.exec("CREATE TABLE foreign_state (value TEXT)");
+    db.close();
+
+    const ordinary = runScript(testDir, `
+      const { readCodexTransitionState } = require("./src/codex/transition-state");
+      console.log(JSON.stringify(readCodexTransitionState()));
+    `);
+    expect(ordinary.status).toBe(0);
+    expect(JSON.parse(ordinary.stdout)).toMatchObject({ kind: "state-ambiguous" });
+
+    const original = readFileSync(join(testDir, "config.toml"), "utf8");
+    const injected = [
+      'model_provider = "codexcommander"',
+      "",
+      "# Auto-injected by CodexCommander",
+      "[model_providers.codexcommander]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    writeFileSync(join(testDir, "config.toml"), injected, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: original,
+      injectedConfig: injected,
+      injectedProfile: null,
+    });
+    const recovery = runScript(testDir, `
+      const { reconcileJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify(reconcileJournal()));
+    `);
+    expect(recovery.status).toBe(0);
+    expect(JSON.parse(recovery.stdout)).toBe(false);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(injected);
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
+  test("a crash after journal unlink but before coordinator commit leaves a recoverable empty shell", () => {
+    const path = coordinatorPath(testDir);
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: readFileSync(join(testDir, "config.toml"), "utf8"),
+      injectedConfig: "different injected config",
+      injectedProfile: null,
+    });
+    const crashed = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { canonicalizeCodexHome } = require("./src/codex/codex-write-lock");
+      const { beginCodexCoordinatorRecoveryTransaction } = require("./src/codex/transition-state");
+      const { resolveCodexCoordinatorDatabasePath, resolveEffectiveUserIdentity } = require("./src/codex/user-identity");
+      const canonical = canonicalizeCodexHome(process.env.CODEX_HOME);
+      if (!canonical.ok) process.exit(2);
+      const dbPath = resolveCodexCoordinatorDatabasePath(resolveEffectiveUserIdentity(), canonical.home.path);
+      const tx = beginCodexCoordinatorRecoveryTransaction(dbPath, () => true);
+      const expectation = tx.expectation();
+      const version = tx.version();
+      tx.capability.beginTransition(
+        { nativeGeneration: expectation.nativeBefore, currentTxId: version.currentTxId },
+        { txId: expectation.txId },
+      );
+      fs.unlinkSync(path.join(process.env.CODEX_HOME, "codexcommander-journal.json"));
+      process.exit(0);
+    `);
+    expect(crashed.status).toBe(0);
+    expect(existsSync(journalPath)).toBe(false);
+
+    const recovered = runScript(testDir, `
+      const { readCodexTransitionState } = require("./src/codex/transition-state");
+      console.log(JSON.stringify(readCodexTransitionState()));
+    `);
+    expect(recovered.status).toBe(0);
+    expect(JSON.parse(recovered.stdout)).toEqual({
+      kind: "ready",
+      state: { nativeGeneration: 0, currentTxId: null },
+    });
+    const db = new Database(path, { readonly: true });
+    expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(2);
+    db.close();
+  });
+
+  test("global recovery N excludes different CodexCommander homes sharing one CODEX_HOME", () => {
+    const original = readFileSync(join(testDir, "config.toml"), "utf8");
+    const injected = [
+      'model_provider = "codexcommander"',
+      "",
+      "# Auto-injected by CodexCommander",
+      "[model_providers.codexcommander]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    writeFileSync(join(testDir, "config.toml"), injected, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: original,
+      injectedConfig: injected,
+      injectedProfile: null,
+    });
+    const path = coordinatorPath(testDir);
+    const holder = new Database(path);
+    holder.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    try {
+      const blocked = runScript(testDir, `
+        const { reconcileJournal } = require("./src/codex/journal");
+        console.log(JSON.stringify(reconcileJournal()));
+      `, join(testDir, "ccx-state-b"));
+      expect(blocked.status).toBe(0);
+      expect(JSON.parse(blocked.stdout)).toBe(false);
+      expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(injected);
+      expect(existsSync(journalPath)).toBe(true);
+
+      const initializer = runScript(testDir, `
+        const { readCodexTransitionState } = require("./src/codex/transition-state");
+        console.log(JSON.stringify(readCodexTransitionState()));
+      `, join(testDir, "ccx-state-c"));
+      expect(initializer.status).toBe(0);
+      expect(JSON.parse(initializer.stdout).kind).not.toBe("ready");
+    } finally {
+      holder.exec("ROLLBACK");
+      holder.close();
+    }
+
+    const recovered = runScript(testDir, `
+      const { reconcileJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify(reconcileJournal()));
+    `, join(testDir, "ccx-state-d"));
+    expect(recovered.status).toBe(0);
+    expect(JSON.parse(recovered.stdout)).toBe(true);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(original);
+    expect(existsSync(journalPath)).toBe(false);
+
+    const state = runScript(testDir, `
+      const { readCodexTransitionState } = require("./src/codex/transition-state");
+      console.log(JSON.stringify(readCodexTransitionState()));
+    `, join(testDir, "ccx-state-e"));
+    expect(JSON.parse(state.stdout)).toMatchObject({
+      kind: "ready",
+      state: { nativeGeneration: 1 },
+    });
+  });
+
+  test("a paused authorized recovery keeps concurrent recovery and normal initialization excluded", () => {
+    const original = readFileSync(join(testDir, "config.toml"), "utf8");
+    const injected = [
+      'model_provider = "codexcommander"',
+      "",
+      "# Auto-injected by CodexCommander",
+      "[model_providers.codexcommander]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    writeFileSync(join(testDir, "config.toml"), injected, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: original,
+      injectedConfig: injected,
+      injectedProfile: null,
+    });
+    const recoveryProbe = `
+      const { reconcileJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify(reconcileJournal()));
+    `;
+    const initializerProbe = `
+      const { readCodexTransitionState } = require("./src/codex/transition-state");
+      console.log(JSON.stringify(readCodexTransitionState()));
+    `;
+
+    const outer = runScript(testDir, `
+      const { reconcileJournal } = require("./src/codex/journal");
+      let concurrentRecovery;
+      let concurrentInitializer;
+      const reconciled = reconcileJournal({ beforeConfigMutationRevalidation: () => {
+        const recovery = Bun.spawnSync(
+          [process.execPath, "--eval", ${JSON.stringify(recoveryProbe)}],
+          { cwd: ${JSON.stringify(repoRoot)}, env: {
+            ...process.env,
+            CODEXCOMMANDER_HOME: process.env.CODEX_HOME + "/ccx-concurrent-recovery",
+          } },
+        );
+        concurrentRecovery = JSON.parse(new TextDecoder().decode(recovery.stdout).trim());
+        const initializer = Bun.spawnSync(
+          [process.execPath, "--eval", ${JSON.stringify(initializerProbe)}],
+          { cwd: ${JSON.stringify(repoRoot)}, env: {
+            ...process.env,
+            CODEXCOMMANDER_HOME: process.env.CODEX_HOME + "/ccx-concurrent-initializer",
+          } },
+        );
+        concurrentInitializer = JSON.parse(new TextDecoder().decode(initializer.stdout).trim());
+      } });
+      console.log(JSON.stringify({ reconciled, concurrentRecovery, concurrentInitializer }));
+    `, join(testDir, "ccx-authorized-recovery"));
+
+    expect(outer.status).toBe(0);
+    const result = JSON.parse(outer.stdout);
+    expect(result.reconciled).toBe(true);
+    expect(result.concurrentRecovery).toBe(false);
+    expect(result.concurrentInitializer.kind).not.toBe("ready");
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(original);
+    expect(existsSync(journalPath)).toBe(false);
   });
 
   test("reconcileJournal skips when journaled PID is alive", () => {
@@ -121,19 +843,312 @@ describe("codex-journal", () => {
     expect(existsSync(journalPath)).toBe(true);
   });
 
-  test("removeJournal cleans up", () => {
-    const journalPath = join(testDir, "codexcommander-journal.json");
-    writeFileSync(journalPath, "{}", "utf8");
-
+  test("external-provider retirement never unlinks a concurrently replaced journal", () => {
+    const externalConfig = 'model_provider = "custom"\nmodel = "third-party"\n';
+    writeFileSync(join(testDir, "config.toml"), externalConfig, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: 'model_provider = "openai"\n',
+      injectedConfig: "old injected config",
+      injectedProfile: null,
+      pid: process.pid,
+    });
+    const replacementTimestamp = "2026-08-10T17:00:00.000Z";
     const r = runScript(testDir, `
-      const { removeJournal } = require("./src/codex/journal");
-      removeJournal();
-      const fs = require("fs");
-      const path = require("path");
-      console.log(JSON.stringify({ exists: fs.existsSync(path.join(process.env.CODEX_HOME, "codexcommander-journal.json")) }));
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { retireJournalForExternalProvider } = require("./src/codex/journal");
+      const journalPath = path.join(process.env.CODEX_HOME, "codexcommander-journal.json");
+      const replacementPath = path.join(process.env.CODEX_HOME, "replacement-journal.json");
+      const replacement = {
+        version: 1,
+        originalConfig: Buffer.from('model_provider = "replacement"\\n').toString("base64"),
+        originalProfile: null,
+        injectedConfigHash: "replacement-config",
+        injectedProfileHash: null,
+        pid: process.pid,
+        timestamp: ${JSON.stringify(replacementTimestamp)},
+      };
+      const retired = retireJournalForExternalProvider("custom", {
+        beforeRetireRevalidation: () => {
+          fs.writeFileSync(replacementPath, JSON.stringify(replacement), "utf8");
+          fs.renameSync(replacementPath, journalPath);
+        },
+      });
+      console.log(JSON.stringify({ retired, journal: JSON.parse(fs.readFileSync(journalPath, "utf8")) }));
     `);
     expect(r.status).toBe(0);
-    expect(JSON.parse(r.stdout).exists).toBe(false);
+    const result = JSON.parse(r.stdout);
+    expect(result.retired).toBe(false);
+    expect(result.journal.timestamp).toBe(replacementTimestamp);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(externalConfig);
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
+  test("reconcileJournal retires a detached dead-owner journal after preserving clean current native state", () => {
+    const currentConfig = 'model = "gpt-5.5"\n';
+    writeFileSync(join(testDir, "config.toml"), currentConfig, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: 'model = "gpt-5.4"\n',
+      originalProfile: null,
+      injectedConfig: '# Auto-injected by CodexCommander\nopenai_base_url = "http://127.0.0.1:10100/v1"\n',
+      injectedProfile: '# CodexCommander proxy fallback config (Design B)\nopenai_base_url = "http://127.0.0.1:10100/v1"\n',
+    });
+
+    const r = runScript(testDir, `
+      const { reconcileJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify({ reconciled: reconcileJournal() }));
+    `);
+
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ reconciled: true });
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(currentConfig);
+    expect(existsSync(join(testDir, "codexcommander.config.toml"))).toBe(false);
+    expect(existsSync(journalPath)).toBe(false);
+  });
+
+  test("reconcileJournal retires the journal after restoring one unchanged postimage and preserving one clean divergent surface", () => {
+    const originalConfig = 'model = "gpt-5.5"\n';
+    const injectedConfig = '# Auto-injected by CodexCommander\nopenai_base_url = "http://127.0.0.1:10100/v1"\n';
+    writeFileSync(join(testDir, "config.toml"), injectedConfig, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig,
+      originalProfile: null,
+      injectedConfig,
+      injectedProfile: '# CodexCommander proxy fallback config (Design B)\nopenai_base_url = "http://127.0.0.1:10100/v1"\n',
+    });
+
+    const r = runScript(testDir, `
+      const { reconcileJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify({ reconciled: reconcileJournal() }));
+    `);
+
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ reconciled: true });
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(originalConfig);
+    expect(existsSync(join(testDir, "codexcommander.config.toml"))).toBe(false);
+    expect(existsSync(journalPath)).toBe(false);
+  });
+
+  test("reconcileJournal never restores or retires a valid journal whose owner is alive", () => {
+    const injectedConfig = '# Auto-injected by CodexCommander\nopenai_base_url = "http://127.0.0.1:10100/v1"\n';
+    writeFileSync(join(testDir, "config.toml"), injectedConfig, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: 'model = "gpt-5.5"\n',
+      injectedConfig,
+      injectedProfile: null,
+      pid: process.pid,
+    });
+
+    const r = runScript(testDir, `
+      const { reconcileJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify({ reconciled: reconcileJournal() }));
+    `);
+
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ reconciled: false });
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(injectedConfig);
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
+  const detachedRetirementBlockers: Array<{
+    name: string;
+    arrange: (codexHome: string) => void;
+  }> = [
+    {
+      name: "routed config",
+      arrange: codexHome => writeFileSync(join(codexHome, "config.toml"), [
+        "# Auto-injected by CodexCommander",
+        'openai_base_url = "http://127.0.0.1:10100/v1"',
+        "",
+      ].join("\n"), "utf8"),
+    },
+    {
+      name: "generated profile",
+      arrange: codexHome => writeFileSync(join(codexHome, "codexcommander.config.toml"), [
+        "# CodexCommander proxy fallback config (Design B)",
+        'openai_base_url = "http://127.0.0.1:10100/v1"',
+        "",
+      ].join("\n"), "utf8"),
+    },
+    {
+      name: "routed catalog",
+      arrange: codexHome => writeFileSync(join(codexHome, "codexcommander-catalog.json"), JSON.stringify({
+        models: [{ slug: "fixture/model", description: "Routed via CodexCommander → fixture." }],
+      }), "utf8"),
+    },
+    {
+      name: "routed models cache",
+      arrange: codexHome => writeFileSync(join(codexHome, "models_cache.json"), JSON.stringify({
+        models: [{ slug: "fixture/model", description: "Routed via CodexCommander → fixture." }],
+      }), "utf8"),
+    },
+    {
+      name: "journal atomic-write temp",
+      arrange: codexHome => writeFileSync(
+        join(codexHome, "codexcommander-journal.json.ccx.42.7.tmp"),
+        "replacement in flight",
+        "utf8",
+      ),
+    },
+  ];
+
+  for (const fixture of detachedRetirementBlockers) {
+    test(`reconcileJournal retains a detached journal when ${fixture.name} remains`, () => {
+      const currentConfig = 'model = "gpt-5.5"\n';
+      writeFileSync(join(testDir, "config.toml"), currentConfig, "utf8");
+      fixture.arrange(testDir);
+      const arrangedConfig = readFileSync(join(testDir, "config.toml"), "utf8");
+      const journalPath = writeRecoveryJournal(testDir, {
+        originalConfig: 'model = "gpt-5.4"\n',
+        injectedConfig: "different injected config",
+        injectedProfile: "different injected profile",
+      });
+
+      const r = runScript(testDir, `
+        const { reconcileJournal } = require("./src/codex/journal");
+        console.log(JSON.stringify({ reconciled: reconcileJournal() }));
+      `);
+
+      expect(r.status).toBe(0);
+      expect(JSON.parse(r.stdout)).toEqual({ reconciled: false });
+      expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(arrangedConfig);
+      expect(existsSync(journalPath)).toBe(true);
+    });
+  }
+
+  test("reconcileJournal retains a replacement installed after the clean-surface observation", () => {
+    const currentConfig = 'model = "gpt-5.5"\n';
+    writeFileSync(join(testDir, "config.toml"), currentConfig, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: 'model = "gpt-5.4"\n',
+      injectedConfig: "different injected config",
+      injectedProfile: "different injected profile",
+    });
+
+    const r = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { reconcileJournal } = require("./src/codex/journal");
+      const journalPath = path.join(process.env.CODEX_HOME, "codexcommander-journal.json");
+      const replacementPath = path.join(process.env.CODEX_HOME, "replacement-journal.json");
+      const replacement = {
+        version: 1,
+        originalConfig: Buffer.from('model = "replacement"\\n').toString("base64"),
+        originalProfile: null,
+        injectedConfigHash: "replacement-config-hash",
+        injectedProfileHash: "replacement-profile-hash",
+        pid: process.pid,
+        timestamp: "2026-08-10T12:00:00.000Z",
+      };
+      const reconciled = reconcileJournal({
+        beforeRetireRevalidation: () => {
+          fs.writeFileSync(replacementPath, JSON.stringify(replacement), "utf8");
+          fs.renameSync(replacementPath, journalPath);
+        },
+      });
+      const current = JSON.parse(fs.readFileSync(journalPath, "utf8"));
+      console.log(JSON.stringify({ reconciled, pid: current.pid, timestamp: current.timestamp }));
+    `);
+
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({
+      reconciled: false,
+      pid: expect.any(Number),
+      timestamp: "2026-08-10T12:00:00.000Z",
+    });
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(currentConfig);
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
+  test("reconcileJournal never restores or removes a replacement installed before recovery", () => {
+    const originalConfig = 'model = "gpt-5.5"\n';
+    const injectedConfig = '# Auto-injected by CodexCommander\nopenai_base_url = "http://127.0.0.1:10100/v1"\n';
+    writeFileSync(join(testDir, "config.toml"), injectedConfig, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig,
+      injectedConfig,
+      injectedProfile: null,
+    });
+
+    const r = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { reconcileJournal } = require("./src/codex/journal");
+      const journalPath = path.join(process.env.CODEX_HOME, "codexcommander-journal.json");
+      const replacementPath = path.join(process.env.CODEX_HOME, "replacement-journal.json");
+      const replacement = {
+        version: 1,
+        originalConfig: Buffer.from('model = "replacement"\\n').toString("base64"),
+        originalProfile: null,
+        injectedConfigHash: "replacement-config-hash",
+        injectedProfileHash: null,
+        pid: process.pid,
+        timestamp: "2026-08-10T13:00:00.000Z",
+      };
+      const reconciled = reconcileJournal({
+        beforeRecoveryRevalidation: () => {
+          fs.writeFileSync(replacementPath, JSON.stringify(replacement), "utf8");
+          fs.renameSync(replacementPath, journalPath);
+        },
+      });
+      const current = JSON.parse(fs.readFileSync(journalPath, "utf8"));
+      console.log(JSON.stringify({ reconciled, pid: current.pid, timestamp: current.timestamp }));
+    `);
+
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({
+      reconciled: false,
+      pid: expect.any(Number),
+      timestamp: "2026-08-10T13:00:00.000Z",
+    });
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(injectedConfig);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).not.toBe(originalConfig);
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
+  test("reconcileJournal retains a replacement installed after complete normal recovery", () => {
+    const originalConfig = 'model = "gpt-5.5"\n';
+    const injectedConfig = '# Auto-injected by CodexCommander\nopenai_base_url = "http://127.0.0.1:10100/v1"\n';
+    writeFileSync(join(testDir, "config.toml"), injectedConfig, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig,
+      injectedConfig,
+      injectedProfile: null,
+    });
+
+    const r = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { reconcileJournal } = require("./src/codex/journal");
+      const journalPath = path.join(process.env.CODEX_HOME, "codexcommander-journal.json");
+      const replacementPath = path.join(process.env.CODEX_HOME, "replacement-journal.json");
+      const replacement = {
+        version: 1,
+        originalConfig: Buffer.from('model = "replacement"\\n').toString("base64"),
+        originalProfile: null,
+        injectedConfigHash: "replacement-config-hash",
+        injectedProfileHash: null,
+        pid: process.pid,
+        timestamp: "2026-08-10T14:00:00.000Z",
+      };
+      const reconciled = reconcileJournal({
+        beforeRetireRevalidation: () => {
+          fs.writeFileSync(replacementPath, JSON.stringify(replacement), "utf8");
+          fs.renameSync(replacementPath, journalPath);
+        },
+      });
+      const current = JSON.parse(fs.readFileSync(journalPath, "utf8"));
+      console.log(JSON.stringify({ reconciled, pid: current.pid, timestamp: current.timestamp }));
+    `);
+
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({
+      reconciled: false,
+      pid: expect.any(Number),
+      timestamp: "2026-08-10T14:00:00.000Z",
+    });
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(originalConfig);
+    expect(existsSync(journalPath)).toBe(true);
   });
 
   test("removeCodexConfig is a successful no-op when Codex is not installed", () => {
@@ -287,6 +1302,12 @@ describe("codex-journal", () => {
       "",
     ].join("\n");
     writeFileSync(join(testDir, "config.toml"), originalConfig, "utf8");
+    const initialized = runScript(testDir, `
+      const { readCodexTransitionState } = require("./src/codex/transition-state");
+      console.log(JSON.stringify(readCodexTransitionState()));
+    `);
+    expect(initialized.status).toBe(0);
+    expect(JSON.parse(initialized.stdout)).toMatchObject({ kind: "ready" });
     writeFileSync(join(testDir, "codexcommander.config.toml"), originalProfile, "utf8");
 
     const r = runScript(testDir, `
@@ -294,8 +1315,7 @@ describe("codex-journal", () => {
       const path = require("path");
       const { writeJournal } = require("./src/codex/journal");
       const { restoreNativeCodex } = require("./src/codex/inject");
-      writeJournal();
-      fs.writeFileSync(path.join(process.env.CODEX_HOME, "config.toml"), [
+      const injectedConfig = [
         'model_provider = "codexcommander"',
         'model = "opencode-go/glm-5.2"',
         '',
@@ -303,8 +1323,11 @@ describe("codex-journal", () => {
         'name = "CodexCommander Proxy"',
         'base_url = "http://localhost:10100/v1"',
         ''
-      ].join("\\n"), "utf8");
-      fs.writeFileSync(path.join(process.env.CODEX_HOME, "codexcommander.config.toml"), 'model_provider = "codexcommander"\\n', "utf8");
+      ].join("\\n");
+      const injectedProfile = 'model_provider = "codexcommander"\\n';
+      writeJournal({ intendedPostimage: { config: injectedConfig, profile: injectedProfile } });
+      fs.writeFileSync(path.join(process.env.CODEX_HOME, "config.toml"), injectedConfig, "utf8");
+      fs.writeFileSync(path.join(process.env.CODEX_HOME, "codexcommander.config.toml"), injectedProfile, "utf8");
       const result = restoreNativeCodex();
       console.log(JSON.stringify({ success: result.success, message: result.message }));
     `);
@@ -314,6 +1337,55 @@ describe("codex-journal", () => {
     expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(originalConfig);
     expect(readFileSync(join(testDir, "codexcommander.config.toml"), "utf8")).toBe(originalProfile);
     expect(existsSync(join(testDir, "codexcommander-journal.json"))).toBe(false);
+  });
+
+  test("synchronous restore participates in global N across different CodexCommander homes", () => {
+    const original = readFileSync(join(testDir, "config.toml"), "utf8");
+    const initialized = runScript(testDir, `
+      const { readCodexTransitionState } = require("./src/codex/transition-state");
+      console.log(JSON.stringify(readCodexTransitionState()));
+    `, join(testDir, "ccx-restore-init"));
+    expect(JSON.parse(initialized.stdout)).toMatchObject({ kind: "ready" });
+
+    const injected = [
+      'model_provider = "codexcommander"',
+      "",
+      "# Auto-injected by CodexCommander",
+      "[model_providers.codexcommander]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    writeFileSync(join(testDir, "config.toml"), injected, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: original,
+      injectedConfig: injected,
+      injectedProfile: null,
+      pid: process.pid,
+    });
+    const holder = new Database(coordinatorPath(testDir));
+    holder.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    try {
+      const blocked = runScript(testDir, `
+        const { restoreNativeCodex } = require("./src/codex/inject");
+        console.log(JSON.stringify(restoreNativeCodex()));
+      `, join(testDir, "ccx-restore-contender"));
+      expect(blocked.status).toBe(0);
+      expect(JSON.parse(blocked.stdout).success).toBe(false);
+      expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(injected);
+      expect(existsSync(journalPath)).toBe(true);
+    } finally {
+      holder.exec("ROLLBACK");
+      holder.close();
+    }
+
+    const restored = runScript(testDir, `
+      const { restoreNativeCodex } = require("./src/codex/inject");
+      console.log(JSON.stringify(restoreNativeCodex()));
+    `, join(testDir, "ccx-restore-winner"));
+    expect(restored.status).toBe(0);
+    expect(JSON.parse(restored.stdout).success).toBe(true);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(original);
+    expect(existsSync(journalPath)).toBe(false);
   });
 
   test("injectCodexConfig creates a restorable journal for direct sync/init paths", () => {
@@ -380,7 +1452,12 @@ describe("codex-journal", () => {
   test("full lifecycle: write → crash → reconcile restores", () => {
     const r = runScript(testDir, `
       const { writeJournal } = require("./src/codex/journal");
-      writeJournal();
+      writeJournal({
+        intendedPostimage: {
+          config: "# injected codexcommander config\\n",
+          profile: null,
+        },
+      });
       console.log("written");
     `);
     expect(r.status).toBe(0);
@@ -492,6 +1569,11 @@ describe("codex-journal", () => {
       'base_url = "http://127.0.0.1:10100/v1"',
       "",
     ].join("\n");
+    const initialized = runScript(testDir, `
+      const { readCodexTransitionState } = require("./src/codex/transition-state");
+      console.log(JSON.stringify(readCodexTransitionState()));
+    `);
+    expect(initialized.status).toBe(0);
     writeFileSync(join(testDir, "config.toml"), injected, "utf8");
 
     const r = runScript(testDir, `
@@ -507,32 +1589,6 @@ describe("codex-journal", () => {
     const after = readFileSync(join(testDir, "config.toml"), "utf8");
     expect(after).not.toContain("[model_providers.codexcommander]");
     expect(after).not.toContain("Auto-injected by CodexCommander");
-  });
-
-  /**
-   * Documents why no PID-based transaction guard is needed. `ccx sync` and the
-   * `ccx ensure` parent legitimately inject in a process that did not write the
-   * journal, and the only journal a marking process ever meets is hashless —
-   * a refresh rebuilds the record, and a non-refresh means the previous
-   * transaction already completed.
-   */
-  test("a hashless journal from another process can still be marked (#477)", () => {
-    runScript(testDir, `require("./src/codex/journal").writeJournal(); console.log("journaled");`);
-    const journalPath = join(testDir, "codexcommander-journal.json");
-    const first = JSON.parse(readFileSync(journalPath, "utf8"));
-    expect(first.injectedConfigHash).toBeUndefined();
-
-    const r = runScript(testDir, `
-      const { markJournalInjectedState } = require("./src/codex/journal");
-      markJournalInjectedState("# injected\\n", null);
-      console.log(String(process.pid));
-    `);
-    expect(r.status).toBe(0);
-    expect(Number(r.stdout)).not.toBe(first.pid);
-
-    const second = JSON.parse(readFileSync(journalPath, "utf8"));
-    expect(second.pid).toBe(first.pid);              // still the first process's record
-    expect(typeof second.injectedConfigHash).toBe("string"); // marked by the second
   });
 
   test("writeJournal() with no options still snapshots a native config", () => {

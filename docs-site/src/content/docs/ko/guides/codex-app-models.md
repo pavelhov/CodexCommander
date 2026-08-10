@@ -101,7 +101,7 @@ Codex의 모델 캐시를 강제로 오래된 상태로 만듭니다.
 
 ## 멀티 에이전트 서피스 모드
 
-Models 페이지는 세 협업 선택지를 **Classic v1**, **Follow Codex defaults**(base/upstream 동작), **Concurrent v2**로
+Models 페이지는 세 협업 선택지를 **Reliable v1**, **Codex native**(base/default·upstream 동작), **Concurrent v2**로
 표시합니다. 이 컨트롤은 각 피커 항목이 사용하는 Codex 협업 서피스를 바꿉니다. 기준 모드, delegation,
 상속, 폴백, 암호화된 작업 동작은 [서브에이전트 서피스](/guides/sub-agent-surface/)를 참고하세요.
 

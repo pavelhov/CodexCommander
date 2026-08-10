@@ -4,6 +4,7 @@ import {
   runStartupReadinessSync,
 } from "../src/server/readiness";
 import {
+  attestLiveManagementProxy,
   findLiveProxy,
   isCodexCommanderHealthz,
   probeHostname,
@@ -11,6 +12,11 @@ import {
   proxyIdentityAt,
   validateReadyzBody,
 } from "../src/server/proxy-liveness";
+import { createLocalAttestationProof } from "../src/lib/local-management-attestation";
+import {
+  ATTESTATION_CHALLENGE_HEADER,
+  ATTESTATION_PROOF_HEADER,
+} from "../src/identity";
 
 function healthz(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
@@ -128,6 +134,121 @@ describe("proxyIdentityAt", () => {
     expect(identity).toBeNull();
     // First attempt spends the budget; remaining retries must not fire.
     expect(calls).toBe(1);
+  });
+});
+
+describe("attestLiveManagementProxy", () => {
+  const pid = 4242;
+  const port = 19191;
+  const hostname = "127.0.0.1";
+
+  function record(secret: string) {
+    return { pid, port, hostname, attestationSecret: secret };
+  }
+
+  function proofResponse(secret: string, input: string | URL | Request, init?: RequestInit): Response {
+    expect(String(input)).toBe(`http://${hostname}:${port}/healthz`);
+    const headers = new Headers(init?.headers);
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("x-codexcommander-api-key")).toBeNull();
+    expect(init?.body).toBeUndefined();
+    const challenge = headers.get(ATTESTATION_CHALLENGE_HEADER)!;
+    const proof = createLocalAttestationProof(secret, challenge, pid, port)!;
+    return new Response("ignored", { headers: { [ATTESTATION_PROOF_HEADER]: proof } });
+  }
+
+  test("authenticates one exact protected runtime record without reading health JSON", async () => {
+    const secret = "A".repeat(43);
+    const target = await attestLiveManagementProxy({
+      readRuntimeFn: () => record(secret),
+      verifyPidFn: candidate => candidate,
+      fetchFn: (async (input, init) => proofResponse(secret, input, init)) as typeof fetch,
+    });
+    expect(target).toEqual({ pid, port, hostname, source: "runtime", baseUrl: `http://${hostname}:${port}` });
+  });
+
+  test("rejects missing/malformed records and wrong proofs", async () => {
+    let fetchCalls = 0;
+    for (const runtime of [
+      null,
+      { pid, port, hostname },
+      record("short"),
+      { ...record("A".repeat(43)), pid: undefined },
+    ]) {
+      expect(await attestLiveManagementProxy({
+        attempts: 1,
+        readRuntimeFn: () => runtime,
+        verifyPidFn: candidate => candidate,
+        fetchFn: (async () => {
+          fetchCalls += 1;
+          return new Response("should not be reached");
+        }) as typeof fetch,
+      })).toBeNull();
+    }
+    expect(fetchCalls).toBe(0);
+
+    const secret = "A".repeat(43);
+    expect(await attestLiveManagementProxy({
+      attempts: 1,
+      readRuntimeFn: () => record(secret),
+      verifyPidFn: candidate => candidate,
+      fetchFn: (async () => new Response("spoof", {
+        headers: { [ATTESTATION_PROOF_HEADER]: "B".repeat(43) },
+      })) as typeof fetch,
+    })).toBeNull();
+  });
+
+  test("a record rotation retries from a fresh record and challenge", async () => {
+    const first = "A".repeat(43);
+    const second = "B".repeat(43);
+    let reads = 0;
+    let challenges = 0;
+    const target = await attestLiveManagementProxy({
+      attempts: 2,
+      readRuntimeFn: () => {
+        reads += 1;
+        // attempt 1 pre=A, post=B; attempt 2 pre/post=B
+        return record(reads === 1 ? first : second);
+      },
+      verifyPidFn: candidate => candidate,
+      fetchFn: (async (input, init) => {
+        challenges += 1;
+        return proofResponse(challenges === 1 ? first : second, input, init);
+      }) as typeof fetch,
+    });
+    expect(target?.baseUrl).toBe(`http://${hostname}:${port}`);
+    expect(challenges).toBe(2);
+  });
+
+  test("never consumes declared-huge or unbounded streaming spoof bodies", async () => {
+    const secret = "A".repeat(43);
+    let pulls = 0;
+    let cancels = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(new Uint8Array(1024));
+      },
+      cancel() { cancels += 1; },
+    });
+    const target = await attestLiveManagementProxy({
+      attempts: 1,
+      readRuntimeFn: () => record(secret),
+      verifyPidFn: candidate => candidate,
+      fetchFn: (async (_input, init) => {
+        const challenge = new Headers(init?.headers).get(ATTESTATION_CHALLENGE_HEADER)!;
+        const proof = createLocalAttestationProof(secret, challenge, pid, port)!;
+        return new Response(body, {
+          headers: {
+            "content-length": String(1024 ** 3),
+            [ATTESTATION_PROOF_HEADER]: proof,
+          },
+        });
+      }) as typeof fetch,
+    });
+    expect(target).not.toBeNull();
+    expect(cancels).toBe(1);
+    expect(pulls).toBeLessThanOrEqual(1);
   });
 });
 
@@ -414,9 +535,33 @@ describe("createReadinessGate", () => {
     // JSON.stringify of a method-only object returns "{}", so it cannot prove
     // the absence of closure-held diagnostic fields. Assert the own-property
     // surface directly: exactly the three control methods and no data field.
-    expect(Object.keys(gate).sort()).toEqual(["getStatus", "markFailed", "markReady"]);
+    expect(Object.keys(gate).sort()).toEqual(["getStatus", "markFailed", "markReady", "recoverReady"]);
     // The only readable value is the fixed sanitized enum.
     expect(["pending", "ready", "failed"]).toContain(gate.getStatus());
+  });
+
+  test("an explicit successful-sync recovery can promote a failed gate", () => {
+    const gate = createReadinessGate();
+    gate.markFailed();
+    gate.recoverReady();
+    expect(gate.getStatus()).toBe("ready");
+  });
+
+  test("recovery cannot bypass an in-flight pending startup", () => {
+    const gate = createReadinessGate();
+    gate.recoverReady();
+    expect(gate.getStatus()).toBe("pending");
+
+    // Startup remains authoritative and can still settle the pending gate.
+    gate.markFailed();
+    expect(gate.getStatus()).toBe("failed");
+  });
+
+  test("recovery is idempotent once the gate is already ready", () => {
+    const gate = createReadinessGate();
+    gate.markReady();
+    gate.recoverReady();
+    expect(gate.getStatus()).toBe("ready");
   });
 });
 

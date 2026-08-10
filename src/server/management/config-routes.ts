@@ -287,22 +287,111 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     const { syncModelsToCodex } = await import("../../codex/sync");
     const {
       attachStaleAppServerHint,
-      collectCodexAppServerCatalogState,
       resetCodexAppServerCatalogStateCache,
     } = await import("../../codex/app-server-processes");
     const { readRuntimePort, loadConfig } = await import("../../config");
     // Never use the server-captured startup object for a durable integration
     // decision. A toggle may have persisted while this process was gathering.
     const runtime = (deps.readRuntimePort ?? readRuntimePort)(process.pid);
-    const result = await (deps.syncModelsToCodex ?? syncModelsToCodex)(runtime?.port, loadConfig(), null);
+    const currentConfig = loadConfig();
+    const result = await (deps.syncModelsToCodex ?? syncModelsToCodex)(runtime?.port, currentConfig, null);
     // A read taken before this sync can be memoized for five seconds. Drop it
     // before classifying the just-written catalog so launch-time catalog
     // readiness cannot be masked by a pre-write `fresh` snapshot.
     (deps.resetCodexAppServerCatalogStateCache ?? resetCodexAppServerCatalogStateCache)();
+    const {
+      catalogOnlyWorkerStateFromActivation,
+      captureCodexCatalogDesiredSnapshot,
+      collectCodexCatalogActivationWorkerState,
+      inspectCodexCatalogArtifactProof,
+      inspectCodexCatalogActivation,
+      resetCodexCatalogActivationWorkerStateCache,
+    } = await import("../../codex/catalog-activation");
+    const { getCodexRoutingKind } = await import("../../codex/inject");
+    resetCodexCatalogActivationWorkerStateCache();
+    const activationWorkers = (deps.collectCodexAppServerCatalogState
+      ?? collectCodexCatalogActivationWorkerState)();
+    const catalogState = deps.collectCodexAppServerCatalogState
+      ? activationWorkers
+      : catalogOnlyWorkerStateFromActivation(activationWorkers);
+    // Bind the response to the desired generation that exists after the sync.
+    // This also requires the process-local convergence receipt to prove that a
+    // complete catalog/cache publication committed, then verifies the exact
+    // authoritative catalog instead of inferring readiness from roster slugs.
+    // Codex owns models_cache.json and may legitimately refresh it immediately.
+    const captureDesired = () => deps.captureCatalogDesiredSnapshotForActivation?.()
+      ?? captureCodexCatalogDesiredSnapshot();
+    const artifactProof = (desired: ReturnType<typeof captureDesired>) =>
+      deps.catalogArtifactProofForActivation?.()
+      ?? inspectCodexCatalogArtifactProof(desired.config);
+    const routingKind = () => deps.codexRoutingKindForActivation?.()
+      ?? getCodexRoutingKind();
+    const activationDesired = captureDesired();
+    const activationArtifactProof = artifactProof(activationDesired);
+    const activationRoutingKind = routingKind();
+    const activation = inspectCodexCatalogActivation(
+      activationDesired.config,
+      activationWorkers,
+      undefined,
+      activationDesired.authority,
+      activationArtifactProof,
+      activationRoutingKind,
+    );
+
+    // An authenticated manual full sync is the only failed-readiness recovery
+    // boundary. Do not promote from the sync result alone: Save may race the
+    // request, or routing/artifact state may drift after the writer returns.
+    // Re-observe every relevant signal after building the response activation
+    // and require the two post-sync observations to describe the same desired
+    // generation and route. Applied integration additionally needs the exact
+    // process-local publication receipt and authoritative catalog on both reads. Intentional OFF and
+    // external-provider skips have no Commander-owned artifact by design, but
+    // their skip reason must agree exactly with the stable routing state.
+    let recoveryProven = false;
+    if (result.ok === true && (result.warning === undefined || result.warning === "")) {
+      try {
+        const confirmedRoutingKind = routingKind();
+        const confirmedArtifactProof = result.status === "applied"
+          ? artifactProof(activationDesired)
+          : activationArtifactProof;
+        // Recapture desired state last. A Save that races either confirmation
+        // read must change this revision and keep the recovery gate closed.
+        const confirmedDesired = captureDesired();
+        const desiredStable = confirmedDesired.revision === activationDesired.revision;
+        const routingStable = confirmedRoutingKind === activationRoutingKind;
+        const integrationDisabled = activationDesired.config.clientIntegrations?.codex === false
+          && confirmedDesired.config.clientIntegrations?.codex === false;
+        const disabledSkip = result.status === "skipped"
+          && result.skippedReason === "desired_disabled"
+          && integrationDisabled
+          && activation.routing.status === "not_required"
+          // `not_required` is derived from desired OFF and intentionally masks
+          // the raw route in the public activation DTO. OFF is not actually
+          // settled while a stale Commander-owned route remains injected, and
+          // unreadable routing is never positive proof.
+          && activationRoutingKind !== "codexcommander-local"
+          && activationRoutingKind !== "unknown";
+        const externalSkip = result.status === "skipped"
+          && result.skippedReason === "external_provider"
+          && !integrationDisabled
+          && activation.routing.status === "external";
+        const applied = result.status === "applied"
+          && !integrationDisabled
+          && activation.routing.status === "current"
+          && activationArtifactProof === "current"
+          && confirmedArtifactProof === "current";
+        recoveryProven = desiredStable && routingStable && (disabledSkip || externalSkip || applied);
+      } catch {
+        // A torn/unreadable confirmation is not proof. Keep readiness failed;
+        // the structured sync/activation response remains useful diagnostics.
+      }
+    }
+    if (recoveryProven) deps.readinessGate?.recoverReady();
     const status = result.status === "refused" ? 409 : (result.status === "skipped" || result.ok ? 200 : 500);
     return jsonResponse({
       ...attachStaleAppServerHint(result),
-      catalogState: (deps.collectCodexAppServerCatalogState ?? collectCodexAppServerCatalogState)(),
+      catalogState,
+      activation,
       ...(result.ok ? {} : { error: result.message }),
     }, status);
   }

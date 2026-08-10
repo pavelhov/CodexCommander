@@ -1,7 +1,10 @@
 import * as readline from "node:readline";
 import { openUrl } from "../lib/open-url";
 import { loadConfig, saveConfig } from "../config";
-import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
+import {
+  attestLiveManagementProxy,
+  type ManagementAttestationIo,
+} from "../server/proxy-liveness";
 import { isPublicOAuthProvider, listOAuthProviders, runLogin } from "./index";
 import { KEY_LOGIN_PROVIDERS, isKeyLoginProvider, validateApiKey, type KeyLoginProvider } from "./key-providers";
 import type { CodexCommanderProviderConfig } from "../types";
@@ -17,13 +20,17 @@ export function runningProxyUpdateHeaders(): Headers {
 }
 
 /** Push the new provider into a running proxy's live config so it routes without a restart. */
-export async function notifyRunningProxy(name: string, provider: unknown): Promise<void> {
-  // Identity-checked runtime-port lookup: reaches a fallback-port proxy and avoids
-  // posting credentials-adjacent config to whatever else answers on config.port.
-  const live = await findLiveProxy();
-  if (!live) return;
+export async function notifyRunningProxy(
+  name: string,
+  provider: unknown,
+  io: ManagementAttestationIo = {},
+): Promise<void> {
+  // Provider config may contain a durable upstream credential. Release neither the
+  // body nor the admin token until the exact runtime listener proves its secret.
+  const target = await attestLiveManagementProxy(io);
+  if (!target) return;
   try {
-    await fetch(`http://${probeHostname(live.hostname)}:${live.port}/api/providers`, {
+    await (io.fetchFn ?? fetch)(`${target.baseUrl}/api/providers`, {
       method: "POST",
       headers: runningProxyUpdateHeaders(),
       body: JSON.stringify({ name, provider }),
@@ -40,10 +47,13 @@ export async function notifyRunningProxy(name: string, provider: unknown): Promi
  * Must not send `OAUTH_PROVIDERS[name].providerConfig`: POST /api/providers replaces the
  * live entry and saves it, which would drop the preserved key billing state.
  */
-export async function notifyRunningProxyAfterOAuthLogin(name: string): Promise<void> {
+export async function notifyRunningProxyAfterOAuthLogin(
+  name: string,
+  io: ManagementAttestationIo = {},
+): Promise<void> {
   const provider = loadConfig().providers[name];
   if (!provider) return;
-  await notifyRunningProxy(name, provider);
+  await notifyRunningProxy(name, provider, io);
 }
 
 export async function handleLogin(provider?: string): Promise<void> {

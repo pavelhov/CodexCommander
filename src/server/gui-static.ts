@@ -1,7 +1,6 @@
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { browserSecurityHeaders } from "./auth-cors";
-import type { GuiSessionBootstrap } from "./management-auth";
 
 /** CodexCommander version, read from the packaged package.json (same source as the server bootstrap). */
 const VERSION = (() => {
@@ -79,24 +78,6 @@ export function resolveGuiFilePath(guiDist: string, pathname: string): string | 
   return filePath;
 }
 
-/** HTML-attribute escape for values interpolated into meta tags. */
-function escapeHtmlAttribute(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
-/** Shared session meta-tag block, escaped for quoted attribute interpolation. */
-function sessionBootstrapMeta(session: GuiSessionBootstrap): string {
-  return [
-    `<meta name="codexcommander-session-token" content="${escapeHtmlAttribute(session.token)}">`,
-    `<meta name="codexcommander-session-csrf" content="${escapeHtmlAttribute(session.csrfToken)}">`,
-    `<meta name="codexcommander-session-origin" content="${escapeHtmlAttribute(session.origin)}">`,
-  ].join("");
-}
-
 function htmlDocumentResponse(html: string): Response {
   return new Response(html, {
     headers: {
@@ -108,30 +89,13 @@ function htmlDocumentResponse(html: string): Response {
   });
 }
 
-function htmlResponse(path: string, session?: GuiSessionBootstrap): Response {
-  let html = readFileSync(path, "utf8");
-  if (session) {
-    const bootstrap = sessionBootstrapMeta(session);
-    html = html.includes("</head>") ? html.replace("</head>", `${bootstrap}</head>`) : `${bootstrap}${html}`;
-  }
-  return htmlDocumentResponse(html);
-}
-
-/**
- * Minimal session-bootstrap document, independent of any packaged GUI build. The dev
- * GUI (Vite) proxies /codexcommander-session to the backend with the original host so the
- * backend can mint an origin-bound loopback session even when gui/dist does not exist.
- */
-export function serveSessionBootstrap(session: GuiSessionBootstrap): Response {
-  const bootstrap = sessionBootstrapMeta(session);
-  const html = `<!doctype html><html><head><meta charset="utf-8">${bootstrap}</head><body></body></html>`;
-  return htmlDocumentResponse(html);
+function htmlResponse(path: string): Response {
+  return htmlDocumentResponse(readFileSync(path, "utf8"));
 }
 
 export function serveGuiFile(
   pathname: string,
   guiDist = findGuiDist(),
-  session?: GuiSessionBootstrap,
 ): Response | null {
   if (!guiDist) return null;
   const root = physicalGuiDist(guiDist);
@@ -144,7 +108,7 @@ export function serveGuiFile(
     if (!extname(pathname)) {
       const indexPath = safeGuiFile(root, join(root, "index.html"));
       if (indexPath) {
-        return htmlResponse(indexPath, session);
+        return htmlResponse(indexPath);
       }
     }
     return null;
@@ -152,7 +116,7 @@ export function serveGuiFile(
 
   const ext = extname(filePath);
   const contentType = MIME_TYPES[ext] || "application/octet-stream";
-  if (ext === ".html") return htmlResponse(filePath, session);
+  if (ext === ".html") return htmlResponse(filePath);
   return new Response(Bun.file(filePath), {
     headers: { "Content-Type": contentType, ...browserSecurityHeaders() },
   });

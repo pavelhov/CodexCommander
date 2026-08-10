@@ -14,6 +14,14 @@ import type {
   collectCodexAppServerCatalogState,
   resetCodexAppServerCatalogStateCache,
 } from "../../codex/app-server-processes";
+import type { applyCodexCatalogWorkers } from "../../codex/catalog-apply";
+import type {
+  CodexCatalogArtifactProof,
+  CodexCatalogDesiredSnapshot,
+} from "../../codex/catalog-activation";
+import type { ReadinessGate } from "../readiness";
+import type { CodexRoutingKind } from "../../codex/inject";
+import type { reconcileManagementNativeSubagentDefaults } from "../../codex/management-native-defaults";
 
 export interface ManagementApiDeps {
   resolveCodexRuntime?: () => ResolveCodexRuntimeResult;
@@ -71,6 +79,17 @@ export interface ManagementApiDeps {
   syncModelsToCodex?: typeof syncModelsToCodex;
   resetCodexAppServerCatalogStateCache?: typeof resetCodexAppServerCatalogStateCache;
   collectCodexAppServerCatalogState?: typeof collectCodexAppServerCatalogState;
+  applyCodexCatalogWorkers?: typeof applyCodexCatalogWorkers;
+  /** Atomic desired-config + generation seam for Apply race tests. */
+  captureCatalogDesiredSnapshotForActivation?: () => CodexCatalogDesiredSnapshot;
+  /** Exact catalog/cache proof seam for activation route tests. */
+  catalogArtifactProofForActivation?: () => CodexCatalogArtifactProof;
+  /** Read-only native routing observation seam for activation route tests. */
+  codexRoutingKindForActivation?: () => CodexRoutingKind;
+  /** Non-disruptive native-default writer seam for injection-model route tests. */
+  reconcileManagementNativeSubagentDefaults?: typeof reconcileManagementNativeSubagentDefaults;
+  /** Fresh persisted desired-state reader for the consent/revision fence. */
+  loadConfigForCatalogActivation?: () => CodexCommanderConfig;
   clearThreadAccountMap?: () => void;
   clearProviderQuotaCache?: () => void;
   primeCodexPoolQuotas?: (config: CodexCommanderConfig, reason: string) => Promise<void> | void;
@@ -83,6 +102,11 @@ export interface ManagementApiDeps {
    * leaves this unset, so the route creates its normal NativeProfileManager.
    */
   nativeProfileApi?: NativeProfileApiDeps;
+  /**
+   * The live server's private readiness gate. Direct-dispatch tests may inject
+   * the same narrow capability; no diagnostic text or mutable state is exposed.
+   */
+  readinessGate?: Pick<ReadinessGate, "recoverReady">;
 }
 
 
@@ -100,6 +124,6 @@ export interface ManagementContext {
    * tests, which are treated as the untrusted `admin-token` case.
    */
   principal?: ManagementPrincipal;
-  convergeCodexCatalog: () => Promise<CatalogDisposition>;
+  convergeCodexCatalog: (configOverride?: Readonly<CodexCommanderConfig>) => Promise<CatalogDisposition>;
   syncClaudeAgentDefsBestEffort: () => Promise<void>;
 }

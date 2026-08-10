@@ -366,7 +366,10 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(rows[0]?.native).toBe(true);
 
     const subRes = await handleManagementAPI(
-      new Request("http://localhost/api/subagent-models"), new URL("http://localhost/api/subagent-models"), config,
+      new Request("http://localhost/api/subagent-models"),
+      new URL("http://localhost/api/subagent-models"),
+      config,
+      { loadConfigForCatalogActivation: () => config },
     );
     const sub = await subRes!.json() as {
       available: string[];

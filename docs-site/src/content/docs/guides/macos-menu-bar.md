@@ -1,6 +1,6 @@
 ---
 title: macOS Menu Bar Companion
-description: Install and use the native CodexCommander status, agent-activity, and provider-quota companion.
+description: Install and use the native CodexCommander proxy, startup-readiness, Codex-route, live-request, and provider-quota companion.
 ---
 
 The macOS companion puts the most useful CodexCommander state in the menu bar without replacing the
@@ -45,15 +45,24 @@ override it.
 
 ## What the panel shows
 
-- **Agent activity** — the current active count and live model/provider rows. A spawned child is
-  nested only when CodexCommander can prove its active parent from request metadata; otherwise it is
-  shown as a standalone subagent. The companion never invents queued, reviewing, rate-limited, or
-  completed history.
+- **Proxy status** — reports process liveness without treating a running server as proof that startup
+  synchronization finished or that Codex uses the proxy.
+- **Readiness** — reports startup and catalog synchronization as **Checking**, **Starting**, **Ready**,
+  **Startup failed**, or **Unavailable**. This signal is independent of proxy liveness.
+- **Codex route** — reports whether Codex currently routes through CodexCommander, native OpenAI, or
+  another custom route. A running proxy does not by itself mean that Codex is using it.
+- **Live proxy requests** — the current in-flight request count and live model/provider turn rows. A
+  spawned-child request is nested only when CodexCommander can prove its in-flight parent from request
+  metadata; otherwise it is shown as a standalone subagent turn. A row disappears when that model
+  request settles, even if Codex keeps the child thread alive and idle for later work. This is not a
+  persistent Codex agent-lifecycle view, and the companion never invents queued, reviewing,
+  rate-limited, or completed history.
 - **Provider quotas** — provider-reported 5-hour, weekly, monthly, or provider-specific credit
   windows and reset times when available. OpenCode Go instead shows its published caps and local
   observations, never an invented live balance. Missing data is shown as unavailable, never as zero
   usage or unlimited capacity.
-- **Dashboard and Logs** — open the corresponding local dashboard view in your default browser.
+- **Dashboard and Logs** — open the corresponding local dashboard view in your default browser with
+  a one-time launch authorization for full dashboard changes, including catalog Apply.
 - **Startup options…** — opens the dashboard's Startup page when an optional startup upgrade or
   repair is available; the panel does not make a raw CLI command the primary action.
 - **Manage** — opens the selected provider's Accounts or API Keys tab. OAuth, API-key entry,
@@ -97,12 +106,15 @@ Choose **Apply agent catalog…** to review the interruption risk. The confirmat
 active-request count when possible, but zero active requests is not presented as proof that Codex is
 idle: another request can begin before the action runs. **Apply Now** synchronizes once more, sends
 `SIGTERM` only to exact current-user `codex … app-server` and `codex-code-mode-host` process matches,
-and briefly verifies that the old process IDs exited. It never uses a broad `pkill`, restarts the
-CodexCommander proxy, or closes the menu app. Codex creates a fresh background host on the next task and
-loads the current roster.
+and briefly verifies that the old process IDs exited. It is revision-fenced so a changed roster cannot
+be applied accidentally, and it will not signal an unknown worker identity. It never uses a broad
+`pkill`, restarts the CodexCommander proxy, or closes the menu app. Codex creates a fresh background
+host on the next task and loads the current roster.
 
 The current companion does not include **Apply when idle**. If an answer is active, choose **Later** and apply
-the update when you are ready; the card remains available. The advanced CLI fallback is:
+the update when you are ready; the card remains available. A new task or fork inside the same old
+background host is not a catalog-reload boundary. Quitting and reopening Codex Desktop is the reliable
+manual worker-replacement boundary. The advanced CLI fallback is:
 
 ```bash
 ccx sync --restart-codex
@@ -119,6 +131,14 @@ validated, no-follow file descriptor, keeps the value only in process memory, an
 an identity-verified loopback CodexCommander process. It never displays, logs, copies, stores, or places
 the token in a browser URL.
 
+When the companion opens the dashboard, it asks that verified local proxy for a short-lived,
+single-use launch ticket. The ticket appears only in the URL fragment and is removed during its
+one-time exchange; the durable admin token never enters the URL or web storage. The resulting
+full-featured session is process-memory-only, lasts up to eight hours, and is never renewed. Expiry
+or proxy restart makes the next API request return `401`, and the page tells the user to reopen
+through the companion or `ccx gui`. A manually opened loopback dashboard receives no API session and
+never prompts for or sends the durable admin token.
+
 Provider credentials remain owned by CodexCommander. The companion never reads ChatGPT, Kimi, Grok,
 Anthropic, or other provider tokens and never calls provider login endpoints directly.
 
@@ -127,19 +147,19 @@ variable is inherited by the app process. Apps launched from Finder usually do n
 variables; if there is no protected token file, the companion reports that management
 authentication is unavailable instead of presenting a token-entry form.
 
-Live agent records are memory-only. The management response contains process-ephemeral row ids,
+Live request records are memory-only. The management response contains process-ephemeral row ids,
 provider/model identifiers, timestamps, and aggregate counts. It contains no prompts, titles,
 working directories, tool arguments, account identifiers, credentials, request bodies, raw
 thread/session ids, or historical activity.
 
 ## Polling
 
-The app refreshes lightweight activity frequently while the panel is open and slows down when it
+The app refreshes lightweight in-flight request activity frequently while the panel is open and slows down when it
 is closed. Provider quotas refresh at a separate, slower cadence and use the upstream timestamps
 reported by CodexCommander. Repeated failures back off automatically, and overlapping refreshes are
 coalesced.
 
-Use **Refresh** for an immediate activity refresh and a forced quota refresh.
+Use **Refresh** for an immediate live-request refresh and a forced quota refresh.
 
 ## Build from source
 
@@ -154,11 +174,12 @@ bun run build:macos
 open dist/macos/CodexCommander.app
 ```
 
-The source app is exactly `dist/macos/CodexCommander.app`. It discovers the checkout's `src/cli/index.ts`
-and bundled Bun, so it should stay in that location while you work on this repository. Double-clicking
-it attempts to ensure the proxy, but a missing CLI, offline failure, or failed start does not close
-the app: its status panel remains available and **Start** can be retried. This source workflow does
-not install or copy the app into Application Support. A rebuild at the same path is detected on the
+The development app is exactly `dist/macos/CodexCommander.app`. Every build embeds the Bun runtime and
+CodexCommander server resources inside the app bundle; the running app never executes `src/` from the
+checkout. Rebuild the app to pick up source changes. Double-clicking it attempts to ensure the proxy,
+but an offline failure or failed start does not close the app: its status panel remains available and
+**Start** can be retried. This source workflow does not install or copy the app into Application
+Support. A rebuild at the same path is detected on the
 next launch and refreshes the existing Login Item registration only when Launch at Login remains on.
 Each build stamps its exact Git revision into `CodexCommanderSourceRevision` in the bundle's `Info.plist`
 and prints it at the end of the build. Uncommitted source is marked with `-dirty`, so commit before

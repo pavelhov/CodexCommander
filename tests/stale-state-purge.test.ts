@@ -70,6 +70,6 @@ describe("snapshot-guarded stale-state purge", () => {
 
   test("gui opens the actual bind host", () => {
     const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
-    expect(cliSource).toContain("const guiHost = probeHostname(live?.hostname ?? config.hostname)");
+    expect(cliSource).toContain("const guiHost = probeHostname(live.hostname)");
   });
 });

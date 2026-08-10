@@ -9,8 +9,8 @@ description: 멀티 에이전트 표면, 위임 안내, 선호 모델, 대체 �
 
 | 필드 | 형식 | 기본값 | 의미 |
 | --- | --- | --- | --- |
-| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1`은 카탈로그의 모든 모델에 v1을 표시하고, `v2`는 모든 모델에 v2를 표시합니다. `default`는 상위 고정값(Sol/Terra는 v2, Luna는 v1)을 복원하고, 그 외에는 네이티브 `multi_agent_v2` 플래그를 따릅니다. 새 세션에 적용됩니다. |
-| `multiAgentV2MessageDelivery?` | `"encrypted" \| "plaintext"` | `"encrypted"` | V2 부모 메시지 전달 정책입니다. `encrypted`는 ChatGPT의 예약된 암호화 계약을 유지합니다. 실험적인 `plaintext`는 이후 V2 부모 요청을 다중 프로바이더 호환 모드로 전환하며, 해당 부모의 모든 위임 메시지를 평문으로 만듭니다. 라우팅된 부모의 메시지 호출에도 Codex 평문 마커를 추가합니다. 변경 후 새 세션을 시작하세요. |
+| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1`은 카탈로그의 모든 모델에 v1을 표시하고, `v2`는 모든 모델에 v2를 표시합니다. `default`는 상위 고정값(Sol/Terra는 v2, Luna는 v1)을 복원하고, 그 외에는 네이티브 `multi_agent_v2` 플래그를 따릅니다. 변경 후 Apply로 실행 중 worker를 교체하고 새 task를 시작하세요. |
+| `multiAgentV2MessageDelivery?` | `"encrypted" \| "plaintext"` | `"encrypted"` | V2 task 메시지 전달만의 정책이며 자격 증명 암호화가 아닙니다. `encrypted`는 ChatGPT의 예약된 암호화 계약을 유지합니다. 실험적인 `plaintext`는 이후 V2 부모 요청을 다중 프로바이더 호환 모드로 전환하며, 해당 부모의 모든 위임 메시지를 평문으로 만듭니다. 변경 후 새 task만 시작하면 되고 카탈로그를 dirty로 만들거나 Apply할 필요가 없습니다. |
 | `subagentModels?` | `string[]` | `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.4-mini` | 최대 다섯 개의 bare native id, account-qualified `<selector>/<native-openai-model>` id 또는 routed `provider/model` id를 서브에이전트 선택기에 우선 노출합니다. 대시보드는 account-qualified 선택을 포함한 기존 exact selector를 보존하고, 저장된 항목 중 실제로 노출되거나 제외된 항목을 보고합니다. 현재 카탈로그에 없는 선택은 `ccx agent subagents set`을 사용하거나 설정을 직접 편집하세요. 명시적인 빈 목록도 그대로 보존됩니다. |
 | `injectionModel?` | `string` | — | 프록시가 작성한 v2 위임 안내에서 사용하는 선호 네이티브 또는 라우팅된 서브에이전트 모델입니다. |
 | `injectionEffort?` | `string` | — | 선호 노력(`low`부터 `ultra`까지)입니다. `injectionModel`이 있을 때만 의미가 있습니다. |
@@ -22,7 +22,7 @@ description: 멀티 에이전트 표면, 위임 안내, 선호 모델, 대체 �
 | `effortCap?` | `string` | — | 자격을 갖춘 v2 메인 턴과 표시된 생성 하위 턴에 대한 하드 상한입니다. `low`부터 `ultra`까지 허용합니다. |
 | `subagentEffortCap?` | `string` | — | 생성된 하위 턴에만 적용되는 추가 상한입니다. 두 상한이 모두 적용되면 더 낮은 값이 이깁니다. |
 
-이 표면은 대시보드나 `ccx v2 status|on|off|mode <v1|default|v2>|threads <n>`로 관리합니다. 모드 변경은 새 세션에 적용됩니다. `maxConcurrentThreadsPerSession`은 `config.json` 키가 아니라 `PUT /api/v2` 필드입니다. `ccx v2 threads <n>`는 v2가 활성화된 뒤 Codex의 `$CODEX_HOME/config.toml` 안 `[features.multi_agent_v2]` 아래에 `max_concurrent_threads_per_session`을 기록합니다.
+이 표면은 대시보드나 `ccx v2 status|on|off|mode <v1|default|v2>|threads <n>`로 관리합니다. 모드, 프로토콜, thread 변경은 boot config를 바꾸므로 실행 중 worker에는 Apply 후 새 task가 필요합니다. `maxConcurrentThreadsPerSession`은 `config.json` 키가 아니라 `PUT /api/v2` 필드입니다. `ccx v2 threads <n>`는 v2가 활성화된 뒤 Codex의 `$CODEX_HOME/config.toml` 안 `[features.multi_agent_v2]` 아래에 `max_concurrent_threads_per_session`을 기록합니다.
 
 관리 API는 `GET`/`PUT /api/v2`, `/api/injection-model`, `/api/effort-caps`, `/api/subagent-models`, `/api/subagent-model-fallback`를 제공합니다. injection-model 업데이트는 부분 업데이트입니다. 사용자 지정 프롬프트는 이 API의 `prompt` 필드입니다.
 

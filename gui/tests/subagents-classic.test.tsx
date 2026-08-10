@@ -4,6 +4,7 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import Subagents from "../src/pages/Subagents";
 import { LanguageProvider } from "../src/i18n/provider";
+import { setConfirmedGuiLaunchForTests } from "../src/api";
 
 /**
  * Behavioural contract for the denser Subagents workspace: five-slot cap,
@@ -25,10 +26,15 @@ let catalogState: { state: "fresh" | "stale"; processes?: Array<{ pid: number; s
 let policyMode: "v1" | "default" | "v2" = "default";
 let messageDelivery: "encrypted" | "plaintext" = "encrypted";
 let catalogRefresh: Record<string, unknown> = { status: "committed", changed: true };
+let activation: Record<string, unknown> | undefined;
+let saveResponseOverride: Record<string, unknown> | undefined;
+let activityResponse: Response | null = null;
+let failRosterReads = false;
 let caseSequence = 0;
 let apiBase = "";
 
 beforeEach(() => {
+  setConfirmedGuiLaunchForTests(true);
   previousGlobals = Object.fromEntries(globals.map((k) => [k, Reflect.get(globalThis, k)])) as typeof previousGlobals;
   testWindow = new Window({ url: "http://localhost/" });
   Object.defineProperty(testWindow.navigator, "language", { configurable: true, value: "en-US" });
@@ -51,6 +57,10 @@ beforeEach(() => {
   policyMode = "default";
   messageDelivery = "encrypted";
   catalogRefresh = { status: "committed", changed: true };
+  activation = undefined;
+  saveResponseOverride = undefined;
+  activityResponse = null;
+  failRosterReads = false;
   apiBase = `/classic-${++caseSequence}`;
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
@@ -61,10 +71,37 @@ beforeEach(() => {
       if (path.endsWith("/api/subagent-models")) {
         if (method === "PUT") {
           const models = JSON.parse(String(init?.body)).models as string[];
-          chosen = models;
-          return Response.json({ ok: true, applied: models, advertised, excluded, catalogRefresh });
+          const overrideApplied = saveResponseOverride?.applied;
+          const applied = Array.isArray(overrideApplied)
+            ? overrideApplied.filter((model): model is string => typeof model === "string")
+            : models;
+          chosen = applied;
+          return Response.json({
+            ok: true,
+            applied,
+            advertised,
+            excluded,
+            catalogRefresh,
+            activation,
+            ...saveResponseOverride,
+          });
         }
-        return Response.json({ available, chosen, advertised, excluded, catalogState });
+        if (failRosterReads) return Response.json({ error: "refresh failed" }, { status: 503 });
+        return Response.json({ available, chosen, advertised, excluded, catalogState, activation });
+      }
+      if (path.endsWith("/api/agent-activity")) {
+        return activityResponse ?? Response.json({ activeTurnCount: 0 });
+      }
+      if (path.endsWith("/api/codex-catalog/apply")) {
+        activation = {
+          schemaVersion: 1,
+          desired: { revision: "revision-1", chosen, protocol: "v2" },
+          catalog: { status: "current", advertised, excluded },
+          routing: { status: "current", kind: "codexcommander-local" },
+          workers: { status: "current", runningCount: 1, staleCount: 0, evidence: "verified" },
+          apply: { required: false, allowed: false, reason: "already-current" },
+        };
+        return Response.json({ ok: true, outcome: "applied", activation, stoppedWorkerCount: 1, survivingWorkerCount: 0 });
       }
       if (path.endsWith("/api/models")) {
         return Response.json(modelRows);
@@ -93,6 +130,7 @@ afterEach(async () => {
     await act(async () => { current.unmount(); });
     root = null;
   }
+  setConfirmedGuiLaunchForTests(false);
   for (const key of globals) {
     Object.defineProperty(globalThis, key, { configurable: true, value: previousGlobals[key] });
   }
@@ -138,10 +176,17 @@ test("renders one active roster, one agent library, and one run-policy card", as
   expect(container.textContent).toContain("No preferred model — Codex chooses from roster");
 });
 
-test("shows the V2 encryption compatibility notice only for the V2 protocol", async () => {
+test("shows the encrypted V2 compatibility notice for base and V2, but not classic V1", async () => {
   policyMode = "v2";
   await mount();
-  expect(container.textContent).toContain("cannot be read by external providers (#92)");
+  expect(container.textContent).toContain("external providers cannot read (#92)");
+
+  const v2Root = root!;
+  await act(async () => { v2Root.unmount(); });
+  root = null;
+  policyMode = "default";
+  await mount();
+  expect(container.textContent).toContain("external providers cannot read (#92)");
 
   const currentRoot = root!;
   await act(async () => { currentRoot.unmount(); });
@@ -156,7 +201,8 @@ test("shows the plaintext privacy notice when Codex defaults may select V2", asy
   messageDelivery = "plaintext";
   await mount();
   expect(container.textContent).toContain("including messages to native workers");
-  expect(container.textContent).toContain("Start a new session after saving");
+  expect(container.textContent).toContain("V2 task-message delivery from this parent is plaintext");
+  expect(container.textContent).toContain("does not require Apply");
 });
 
 test("caps featured selections at five", async () => {
@@ -208,6 +254,13 @@ test("saves the featured order with PUT and the models payload", async () => {
 
 test("warns when the roster persists but catalog convergence is skipped", async () => {
   catalogRefresh = { status: "skipped", reason: "busy", retryable: true };
+  activation = {
+    desired: { revision: "revision-1", chosen: ["a-1"], protocol: "default" },
+    catalog: { status: "current", advertised: [], excluded: [] },
+    routing: { status: "not_injected", kind: "native" },
+    workers: { status: "not_running" },
+    apply: { required: true, allowed: true, reason: "routing-not-injected" },
+  };
   await mount();
 
   await act(async () => { addToggle("a-1").click(); });
@@ -215,8 +268,311 @@ test("warns when the roster persists but catalog convergence is skipped", async 
     .find((button) => button.textContent?.trim() === "Save roster") as HTMLButtonElement;
   await act(async () => { save.click(); });
 
-  expect(container.textContent).toContain("running catalog did not refresh cleanly");
-  expect(container.textContent).toContain("ccx sync --restart-codex");
+  expect(container.textContent).toContain("catalog could not be refreshed cleanly");
+  expect(container.textContent).toContain("Existing workers were not restarted");
+});
+
+test("shows the latest durable roster when a save is superseded", async () => {
+  saveResponseOverride = { superseded: true, applied: ["a-2"] };
+  await mount();
+
+  await act(async () => { addToggle("a-1").click(); });
+  const save = Array.from(container.querySelectorAll("button"))
+    .find((button) => button.textContent?.trim() === "Save roster") as HTMLButtonElement;
+  await act(async () => { save.click(); });
+
+  expect(container.querySelector(".notice-warn")?.textContent).toContain("superseded by a newer change");
+  expect(container.querySelector(".notice-warn")?.textContent).toContain("latest saved roster is shown");
+  expect(Array.from(container.querySelectorAll(".swi-roster-name")).map(node => node.textContent?.trim())).toEqual(["a-2"]);
+});
+
+test("explains an intentional catalog skip when Codex integration is off", async () => {
+  catalogRefresh = { status: "skipped", reason: "refused", retryable: false };
+  activation = {
+    desired: { revision: "revision-1", chosen: ["a-1"], protocol: "v2" },
+    catalog: { status: "current", advertised: [], excluded: [] },
+    routing: { status: "not_required", kind: "native" },
+    workers: { status: "not_running" },
+    apply: { required: false, allowed: false, reason: "integration-disabled" },
+  };
+  await mount();
+
+  await act(async () => { addToggle("a-1").click(); });
+  const save = Array.from(container.querySelectorAll("button"))
+    .find((button) => button.textContent?.trim() === "Save roster") as HTMLButtonElement;
+  await act(async () => { save.click(); });
+
+  expect(container.textContent).toContain("Codex integration is off");
+  expect(container.textContent).toContain("routing and catalog files were left unchanged");
+  expect(container.textContent).not.toContain("catalog could not be refreshed cleanly");
+});
+
+test("explains that native routing needs an explicit Apply after Save", async () => {
+  catalogRefresh = { status: "skipped", reason: "refused", retryable: false };
+  activation = {
+    desired: { revision: "revision-1", chosen: ["a-1"], protocol: "default" },
+    catalog: { status: "current", advertised: [], excluded: [] },
+    routing: { status: "not_injected", kind: "native" },
+    workers: { status: "not_running" },
+    apply: { required: true, allowed: true, reason: "routing-not-injected" },
+  };
+  await mount();
+
+  await act(async () => { addToggle("a-1").click(); });
+  const save = Array.from(container.querySelectorAll("button"))
+    .find((button) => button.textContent?.trim() === "Save roster") as HTMLButtonElement;
+  await act(async () => { save.click(); });
+
+  expect(container.textContent).toContain("still using native routing");
+  expect(container.textContent).toContain("choose Apply to Codex when you are ready");
+  expect(container.textContent).not.toContain("catalog could not be refreshed cleanly");
+});
+
+test("explains that unowned or unknown routing files are preserved", async () => {
+  catalogRefresh = { status: "skipped", reason: "refused", retryable: false };
+  activation = {
+    desired: { revision: "revision-1", chosen: ["a-1"], protocol: "v2" },
+    catalog: { status: "current", advertised: [], excluded: [] },
+    routing: { status: "unknown", kind: "unknown" },
+    workers: { status: "unknown" },
+    apply: { required: false, allowed: false, reason: "routing-unknown" },
+  };
+  await mount();
+
+  await act(async () => { addToggle("a-1").click(); });
+  const save = Array.from(container.querySelectorAll("button"))
+    .find((button) => button.textContent?.trim() === "Save roster") as HTMLButtonElement;
+  await act(async () => { save.click(); });
+
+  expect(container.textContent).toContain("Existing Codex routing and catalog files were preserved");
+  expect(container.textContent).toContain("could not verify that it owns the current routing");
+  expect(container.textContent).not.toContain("catalog could not be refreshed cleanly");
+});
+
+test("offers guarded Apply for a stale worker catalog and never treats a new task as a reload", async () => {
+  activation = {
+    schemaVersion: 1,
+    desired: { revision: "revision-1", chosen: [], protocol: "v2" },
+    catalog: { status: "current", advertised: [], excluded: [] },
+    routing: { status: "current", kind: "codexcommander-local" },
+    workers: { status: "reload_required", runningCount: 1, staleCount: 1, evidence: "verified" },
+    apply: { required: true, allowed: true, reason: "reload-required" },
+  };
+  await mount();
+
+  expect(container.textContent).toContain("Apply needed");
+  expect(container.textContent).toContain("A new task alone does not reload");
+  const applyButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+    .find(button => button.textContent?.trim() === "Apply to Codex")!;
+  await act(async () => { applyButton.click(); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(container.querySelector('[role="alertdialog"]')?.textContent).toContain("No active proxy work was detected");
+
+  const confirm = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button'))
+    .find(button => button.textContent?.trim() === "Apply to Codex")!;
+  await act(async () => { confirm.click(); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+
+  const applyRequest = requests.find(request => request.url.endsWith("/api/codex-catalog/apply"));
+  expect(applyRequest?.init?.method).toBe("POST");
+  expect(applyRequest?.init?.body).toBe(JSON.stringify({ expectedDesiredRevision: "revision-1", confirmInterrupt: true }));
+  expect(container.textContent).toContain("Applied CodexCommander routing and the catalog to Codex");
+  expect(container.textContent).toContain("Codex workers current");
+  expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent?.trim() === "Apply to Codex")).toBe(false);
+});
+
+test("offers Apply to reconcile a pending catalog before any worker interruption", async () => {
+  activation = {
+    schemaVersion: 1,
+    desired: { revision: "revision-1", chosen: ["a-1"], protocol: "default" },
+    catalog: { status: "pending", advertised: [], excluded: [{ configured: "a-1", reason: "missing_catalog_entry" }] },
+    routing: { status: "current", kind: "codexcommander-local" },
+    workers: { status: "reload_required", runningCount: 1, staleCount: 1, evidence: "verified" },
+    apply: { required: true, allowed: true, reason: "catalog-not-ready" },
+  };
+  await mount();
+
+  expect(container.textContent).toContain("Apply needed");
+  expect(container.textContent).toContain("first synchronizes routing and catalog files");
+  expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent?.trim() === "Apply to Codex")).toBe(true);
+});
+
+test("manual dashboard stays read-only for Apply and names the confirmed launch paths", async () => {
+  setConfirmedGuiLaunchForTests(false);
+  activation = {
+    schemaVersion: 1,
+    desired: { revision: "revision-1", chosen: [], protocol: "v2" },
+    catalog: { status: "current", advertised: [], excluded: [] },
+    routing: { status: "current", kind: "codexcommander-local" },
+    workers: { status: "reload_required", runningCount: 1, staleCount: 1, evidence: "verified" },
+    apply: { required: true, allowed: false, reason: "confirmed-launch-required" },
+  };
+  await mount();
+
+  expect(container.textContent).toContain("read-only for Apply");
+  expect(container.textContent).toContain("ccx gui");
+  expect(container.textContent).toContain("menu bar app");
+  expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent?.trim() === "Apply to Codex")).toBe(false);
+});
+
+test("an omitted Apply permission never enables process interruption", async () => {
+  activation = {
+    desired: { revision: "revision-1", chosen: [], protocol: "v2" },
+    catalog: { status: "current", advertised: [], excluded: [] },
+    routing: { status: "current", kind: "codexcommander-local" },
+    workers: { status: "reload_required" },
+    apply: { required: true, reason: "reload-required" },
+  };
+  await mount();
+
+  expect(container.textContent).toContain("Apply unavailable");
+  expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent?.trim() === "Apply to Codex")).toBe(false);
+});
+
+test("a malformed Apply permission remains unavailable", async () => {
+  activation = {
+    desired: { revision: "revision-1", chosen: [], protocol: "v2" },
+    catalog: { status: "current", advertised: [], excluded: [] },
+    routing: { status: "current", kind: "codexcommander-local" },
+    workers: { status: "reload_required" },
+    apply: { required: true, allowed: "true", reason: "reload-required" },
+  };
+  await mount();
+
+  expect(container.textContent).toContain("Apply unavailable");
+  expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent?.trim() === "Apply to Codex")).toBe(false);
+});
+
+test("an incoherent routing status and kind fail closed", async () => {
+  activation = {
+    desired: { revision: "revision-1", chosen: [], protocol: "v2" },
+    catalog: { status: "current", advertised: [], excluded: [] },
+    routing: { status: "current", kind: "custom-remote" },
+    workers: { status: "reload_required" },
+    apply: { required: true, allowed: true, reason: "reload-required" },
+  };
+  await mount();
+
+  expect(container.textContent).toContain("Apply unavailable");
+  expect(container.textContent).toContain("routing could not be classified safely");
+  expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent?.trim() === "Apply to Codex")).toBe(false);
+});
+
+test("native Codex routing offers full route and catalog reconciliation", async () => {
+  activation = {
+    schemaVersion: 1,
+    desired: { revision: "revision-1", chosen: [], protocol: "default" },
+    catalog: { status: "current", advertised: [], excluded: [] },
+    routing: { status: "not_injected", kind: "native" },
+    workers: { status: "not_running", runningCount: 0, staleCount: 0, evidence: "no-processes" },
+    apply: { required: true, allowed: true, reason: "routing-not-injected" },
+  };
+  await mount();
+
+  expect(container.textContent).toContain("Apply needed");
+  expect(container.textContent).toContain("Codex is still using native routing");
+  expect(container.textContent).toContain("connects Codex to CodexCommander");
+  expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent?.trim() === "Apply to Codex")).toBe(true);
+});
+
+test("external Codex routing is explained and never overwritten by Apply", async () => {
+  activation = {
+    schemaVersion: 1,
+    desired: { revision: "revision-1", chosen: [], protocol: "v2" },
+    catalog: { status: "current", advertised: [], excluded: [] },
+    routing: { status: "external", kind: "custom-remote" },
+    workers: { status: "reload_required", runningCount: 1, staleCount: 1, evidence: "process-start-vs-activation-fence" },
+    apply: { required: true, allowed: false, reason: "external-routing" },
+  };
+  await mount();
+
+  expect(container.textContent).toContain("Apply unavailable");
+  expect(container.textContent).toContain("custom routing that CodexCommander does not own");
+  expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent?.trim() === "Apply to Codex")).toBe(false);
+});
+
+test("unknown Codex routing explains the fail-closed Apply state", async () => {
+  activation = {
+    schemaVersion: 1,
+    desired: { revision: "revision-1", chosen: [], protocol: "v2" },
+    catalog: { status: "current", advertised: [], excluded: [] },
+    routing: { status: "unknown", kind: "unknown" },
+    workers: { status: "current", runningCount: 1, staleCount: 0, evidence: "process-start-vs-activation-fence" },
+    apply: { required: false, allowed: false, reason: "routing-unknown" },
+  };
+  await mount();
+
+  expect(container.textContent).toContain("Apply unavailable");
+  expect(container.textContent).toContain("routing could not be classified safely");
+  expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent?.trim() === "Apply to Codex")).toBe(false);
+});
+
+test("a disabled Codex integration is informational rather than actionable", async () => {
+  activation = {
+    schemaVersion: 1,
+    desired: { revision: "revision-1", chosen: [], protocol: "v2" },
+    catalog: { status: "current", advertised: [], excluded: [] },
+    routing: { status: "not_required", kind: "native" },
+    workers: { status: "reload_required", runningCount: 1, staleCount: 1, evidence: "process-start-vs-activation-fence" },
+    apply: { required: true, allowed: false, reason: "integration-disabled" },
+  };
+  await mount();
+
+  expect(container.textContent).toContain("Codex integration off");
+  expect(container.textContent).toContain("roster remains saved in CodexCommander");
+  expect(container.textContent).not.toContain("Apply unavailable");
+  expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent?.trim() === "Apply to Codex")).toBe(false);
+});
+
+test("keeps the mutation response authoritative when follow-up roster refresh fails", async () => {
+  await mount();
+  await act(async () => { addToggle("a-1").click(); });
+  activation = {
+    desired: { revision: "revision-2", chosen: ["a-1"], protocol: "v2" },
+    catalog: { status: "current", advertised: ["a-1"], excluded: [] },
+    routing: { status: "current", kind: "codexcommander-local" },
+    workers: { status: "reload_required", runningCount: 1, staleCount: 1 },
+    apply: { required: true, allowed: true, reason: "reload-required" },
+  };
+  failRosterReads = true;
+  const save = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+    .find(button => button.textContent?.trim() === "Save roster")!;
+  await act(async () => {
+    save.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+
+  expect(container.textContent).toContain("Apply needed");
+  expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent?.trim() === "Apply to Codex")).toBe(true);
+});
+
+test("confirmation starts on Cancel, restores focus, and Escape closes safely", async () => {
+  activation = {
+    desired: { revision: "revision-1", chosen: [], protocol: "v2" },
+    catalog: { status: "current", advertised: [], excluded: [] },
+    routing: { status: "current", kind: "codexcommander-local" },
+    workers: { status: "reload_required", runningCount: 1, staleCount: 1 },
+    apply: { required: true, allowed: true, reason: "reload-required" },
+  };
+  await mount();
+  const trigger = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+    .find(button => button.textContent?.trim() === "Apply to Codex")!;
+  trigger.focus();
+  await act(async () => {
+    trigger.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+  const dialog = container.querySelector('[role="alertdialog"]')!;
+  const cancel = Array.from(dialog.querySelectorAll<HTMLButtonElement>("button"))
+    .find(button => button.textContent?.trim() === "Cancel")!;
+  expect(document.activeElement).toBe(cancel);
+
+  await act(async () => {
+    window.dispatchEvent(new testWindow.KeyboardEvent("keydown", { key: "Escape" }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+  expect(container.querySelector('[role="alertdialog"]')).toBeNull();
+  expect(document.activeElement).toBe(trigger);
 });
 
 test("shows truthful catalog state, capability filters, and keyboard reordering", async () => {

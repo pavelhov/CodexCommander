@@ -64,7 +64,11 @@ afterEach(() => {
 
 describe("CLI OAuth live-update credential preservation", () => {
   test("notify after OAuth login keeps key billing on live and disk configs", async () => {
-    const server = startServer(0, { managementApi: { refreshCodexCatalog: async () => {} } });
+    const attestationSecret = "A".repeat(43);
+    const server = startServer(0, {
+      localAttestationSecret: attestationSecret,
+      managementApi: { refreshCodexCatalog: async () => {} },
+    });
     try {
       const port = server.port!;
       const boot = loadConfig();
@@ -78,7 +82,16 @@ describe("CLI OAuth live-update credential preservation", () => {
       expect(afterLogin.providers.xai!.authMode).toBe("key");
       expect(afterLogin.providers.xai!.apiKey).toBe("live-update-sentinel-key");
 
-      await notifyRunningProxyAfterOAuthLogin("xai");
+      await notifyRunningProxyAfterOAuthLogin("xai", {
+        fetchFn: globalThis.fetch,
+        readRuntimeFn: () => ({
+          pid: process.pid,
+          port,
+          hostname: "127.0.0.1",
+          attestationSecret,
+        }),
+        verifyPidFn: candidate => candidate,
+      });
 
       const listed = await fetch(new URL("/api/providers", server.url)).then(r => r.json()) as Array<{
         name: string;

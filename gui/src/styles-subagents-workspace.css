@@ -55,6 +55,27 @@
   background: var(--amber-soft);
 }
 
+.subagents-activation-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.subagents-activation-note {
+  margin: calc(-1 * var(--space-1)) 0 var(--space-3);
+  max-width: var(--prose-measure);
+  color: var(--muted);
+  font-size: var(--text-label);
+  line-height: var(--leading-body);
+}
+
+.subagents-apply-dialog p {
+  margin: 0;
+  color: var(--muted);
+  line-height: var(--leading-body);
+}
+
 .subagents-workspace-shell {
   width: 100%;
   min-width: 0;
@@ -873,6 +894,11 @@
 
   .subagents-catalog-badge {
     margin-top: var(--space-2);
+  }
+
+  .subagents-activation-notice {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .swi-card-head,

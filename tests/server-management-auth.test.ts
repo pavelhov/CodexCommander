@@ -3,14 +3,17 @@ import { SERVER_BUDGET_MS } from "./helpers/test-budget";
 import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createConnection } from "node:net";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import type { CodexCommanderConfig } from "../src/types";
-import { serveGuiFile, serveSessionBootstrap } from "../src/server/gui-static";
+import { serveGuiFile } from "../src/server/gui-static";
 import { isProxyAdmissionSecret } from "../src/server/auth-cors";
 import {
   initializeManagementAuthState,
-  issueGuiSession,
+  exchangeGuiLaunchTicket,
+  issueGuiLaunchTicket,
+  managementPrincipal,
   removeManagementTokenPathBestEffort,
   requireManagementAuth,
 } from "../src/server/management-auth";
@@ -71,6 +74,27 @@ function websocketHandshakeOpens(url: URL, token: string): Promise<boolean> {
     socket.addEventListener("error", () => finish(false));
     socket.addEventListener("close", () => finish(false));
     const timer = setTimeout(() => finish(false), 5_000);
+  });
+}
+
+function rawHttpRequest(port: number, request: string): Promise<{ status: number; raw: string }> {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      if (error) return reject(error);
+      const match = raw.match(/^HTTP\/1\.[01] (\d{3})/);
+      resolve({ status: match ? Number(match[1]) : 0, raw });
+    };
+    const socket = createConnection({ host: "127.0.0.1", port }, () => socket.write(request));
+    socket.setEncoding("utf8");
+    socket.setTimeout(5_000, () => finish(new Error("raw HTTP request timed out")));
+    socket.on("data", chunk => { raw += chunk; });
+    socket.on("end", () => finish());
+    socket.on("error", error => finish(error));
   });
 }
 
@@ -386,83 +410,164 @@ describe("management and data-plane credential separation", () => {
     }
   });
 
-  test("a local GUI page receives an origin-bound session with CSRF protection", async () => {
-    const config = remoteConfig();
-    config.hostname = "127.0.0.1";
-    const state = initializeManagementAuthState(config);
-    const pageRequest = new Request("http://localhost:10100/", {
-      headers: { Host: "localhost:10100" },
-    });
-    const session = issueGuiSession(pageRequest, config, state);
-    expect(session).not.toBeNull();
-
+  test("a static GUI page never embeds a management bearer", async () => {
     const guiDist = join(testHome, "gui");
     const { mkdirSync, writeFileSync } = await import("node:fs");
     mkdirSync(guiDist);
     writeFileSync(join(guiDist, "index.html"), "<!doctype html><html><head></head><body></body></html>");
-    const page = serveGuiFile("/", guiDist, session ?? undefined);
+    const page = serveGuiFile("/", guiDist);
     expect(page?.headers.get("cache-control")).toBe("no-store");
     const html = await page?.text();
-    expect(html).toContain(`name="codexcommander-session-token" content="${session?.token}"`);
-    expect(html).toContain(`name="codexcommander-session-csrf" content="${session?.csrfToken}"`);
+    expect(html).not.toContain("codexcommander-session-token");
+    expect(html).not.toContain("codexcommander-session-csrf");
+    expect(html).not.toContain("ccx_session_");
+  });
 
-    // The dev GUI fetches /codexcommander-session through Vite so the app shell stays
-    // Vite-owned. The backend answers that path without requiring gui/dist, so a fresh
-    // source checkout (no packaged build) can still mint an origin-bound session.
-    const bootstrapPage = serveSessionBootstrap(session!);
-    const bootstrapHtml = await bootstrapPage.text();
-    expect(bootstrapHtml).toContain(`name="codexcommander-session-origin" content="${session?.origin}"`);
-    expect(bootstrapHtml).toContain(`name="codexcommander-session-token" content="${session?.token}"`);
-
-    const sameOriginRead = new Request("http://localhost:10100/api/config", {
-      headers: {
-        Host: "localhost:10100",
-        "x-codexcommander-api-key": session?.token ?? "",
-        "x-codexcommander-gui-origin": "http://localhost:10100",
-      },
-    });
-    expect(requireManagementAuth(sameOriginRead, state, config)).toBeNull();
-
-    const crossPortRead = new Request("http://localhost:10100/api/config", {
-      headers: {
-        Host: "localhost:10100",
-        Origin: "http://localhost:20100",
-        "x-codexcommander-api-key": session?.token ?? "",
-        "x-codexcommander-gui-origin": "http://localhost:20100",
-      },
-    });
-    expect(requireManagementAuth(crossPortRead, state, config)?.status).toBe(401);
-
-    const mutationWithoutCsrf = new Request("http://localhost:10100/api/config", {
+  test("launch tickets are single-use, exact-origin/route bound, and create a confirmed principal", () => {
+    const config = remoteConfig();
+    config.hostname = "127.0.0.1";
+    const state = initializeManagementAuthState(config);
+    const now = Date.now();
+    const mintRequest = new Request("http://127.0.0.1:10100/api/gui-launch-ticket", {
       method: "POST",
-      headers: {
-        Host: "localhost:10100",
-        Origin: "http://localhost:10100",
-        "x-codexcommander-api-key": session?.token ?? "",
-        "x-codexcommander-gui-origin": "http://localhost:10100",
-      },
+      headers: { Host: "127.0.0.1:10100" },
     });
-    expect(requireManagementAuth(mutationWithoutCsrf, state, config)?.status).toBe(401);
+    const issued = issueGuiLaunchTicket(mintRequest, "subagents", config, state, now);
+    expect(issued).toMatchObject({
+      origin: "http://127.0.0.1:10100",
+      route: "subagents",
+      expiresAt: now + 30_000,
+    });
+    expect(issued?.ticket).toMatch(/^ccx_launch_[A-Za-z0-9_-]{43}$/);
 
-    const mutationWithCsrf = new Request("http://localhost:10100/api/config", {
+    const wrongOrigin = new Request("http://127.0.0.1:10100/api/gui-launch-exchange", {
       method: "POST",
+      headers: { Host: "127.0.0.1:10100", Origin: "http://localhost:10100" },
+    });
+    expect(exchangeGuiLaunchTicket(
+      wrongOrigin,
+      issued?.ticket,
+      "subagents",
+      config,
+      state,
+      now + 1,
+    )).toBeNull();
+
+    const exactOrigin = new Request("http://127.0.0.1:10100/api/gui-launch-exchange", {
+      method: "POST",
+      headers: { Host: "127.0.0.1:10100", Origin: "http://127.0.0.1:10100" },
+    });
+    // The failed origin attempt consumed the bearer before comparison.
+    expect(exchangeGuiLaunchTicket(
+      exactOrigin,
+      issued?.ticket,
+      "subagents",
+      config,
+      state,
+      now + 2,
+    )).toBeNull();
+
+    const second = issueGuiLaunchTicket(mintRequest, "subagents", config, state, now + 10)!;
+    expect(exchangeGuiLaunchTicket(
+      exactOrigin,
+      second.ticket,
+      "wrong-route",
+      config,
+      state,
+      now + 11,
+    )).toBeNull();
+    expect(exchangeGuiLaunchTicket(
+      exactOrigin,
+      second.ticket,
+      "subagents",
+      config,
+      state,
+      now + 12,
+    )).toBeNull();
+
+    const third = issueGuiLaunchTicket(mintRequest, "subagents", config, state, now + 20)!;
+    const session = exchangeGuiLaunchTicket(
+      exactOrigin,
+      third.ticket,
+      "subagents",
+      config,
+      state,
+      now + 21,
+    );
+    expect(session).toMatchObject({
+      origin: "http://127.0.0.1:10100",
+      confirmedLaunch: true,
+      expiresAt: now + 8 * 60 * 60_000 + 21,
+    });
+    const authorized = new Request("http://127.0.0.1:10100/api/settings", {
+      method: "PUT",
       headers: {
-        Host: "localhost:10100",
-        Origin: "http://localhost:10100",
+        Host: "127.0.0.1:10100",
+        Origin: "http://127.0.0.1:10100",
         "x-codexcommander-api-key": session?.token ?? "",
-        "x-codexcommander-gui-origin": "http://localhost:10100",
+        "x-codexcommander-gui-origin": "http://127.0.0.1:10100",
         "x-codexcommander-csrf-token": session?.csrfToken ?? "",
       },
     });
-    expect(requireManagementAuth(mutationWithCsrf, state, config)).toBeNull();
-
-    expect(issueGuiSession(new Request("http://attacker.test/", {
-      headers: { Host: "attacker.test" },
-    }), config, state)).toBeNull();
-    expect(issueGuiSession(new Request("http://localhost:10100/"), config, state)).toBeNull();
+    expect(requireManagementAuth(authorized, state, config)).toBeNull();
+    expect(managementPrincipal(authorized, state, config)).toBe("confirmed-gui-session");
   });
 
-  test("GET /codexcommander-session serves the bootstrap document from a live server", async () => {
+  test("launch tickets expire, are bounded, and disappear with process state", () => {
+    const config = remoteConfig();
+    config.hostname = "127.0.0.1";
+    const state = initializeManagementAuthState(config);
+    const mintRequest = new Request("http://127.0.0.1:10100/api/gui-launch-ticket", {
+      method: "POST",
+      headers: { Host: "127.0.0.1:10100" },
+    });
+    const exchangeRequest = new Request("http://127.0.0.1:10100/api/gui-launch-exchange", {
+      method: "POST",
+      headers: { Host: "127.0.0.1:10100", Origin: "http://127.0.0.1:10100" },
+    });
+    const expired = issueGuiLaunchTicket(mintRequest, "dashboard", config, state, 10_000)!;
+    expect(exchangeGuiLaunchTicket(
+      exchangeRequest,
+      expired.ticket,
+      "dashboard",
+      config,
+      state,
+      40_000,
+    )).toBeNull();
+
+    const issued = Array.from({ length: 17 }, (_, index) => (
+      issueGuiLaunchTicket(mintRequest, `dashboard/${index}`, config, state, 50_000 + index)!
+    ));
+    expect(exchangeGuiLaunchTicket(
+      exchangeRequest,
+      issued[0]!.ticket,
+      issued[0]!.route,
+      config,
+      state,
+      50_100,
+    )).toBeNull();
+    expect(exchangeGuiLaunchTicket(
+      exchangeRequest,
+      issued[16]!.ticket,
+      issued[16]!.route,
+      config,
+      state,
+      50_100,
+    )?.confirmedLaunch).toBe(true);
+
+    const beforeRestart = issueGuiLaunchTicket(mintRequest, "dashboard", config, state, 60_000)!;
+    const replacementState = initializeManagementAuthState(config);
+    expect(exchangeGuiLaunchTicket(
+      exchangeRequest,
+      beforeRestart.ticket,
+      "dashboard",
+      config,
+      replacementState,
+      60_001,
+    )).toBeNull();
+  });
+
+  test("legacy GUI bootstrap is a no-store tombstone and never returns credentials", async () => {
     const config = remoteConfig();
     config.hostname = "127.0.0.1";
     saveConfig(config);
@@ -471,29 +576,215 @@ describe("management and data-plane credential separation", () => {
       const response = await fetch(new URL("/codexcommander-session", server.url), {
         headers: { Host: server.url.host },
       });
-      expect(response.status).toBe(200);
-      expect(response.headers.get("content-type")).toBe("text/html");
+      expect(response.status).toBe(410);
+      expect(response.headers.get("content-type")).toContain("application/json");
       expect(response.headers.get("cache-control")).toBe("no-store");
-      expect(response.headers.get("pragma")).toBe("no-cache");
       expect(response.headers.get("x-frame-options")).toBe("DENY");
       expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
 
       const html = await response.text();
-      expect(html).toContain('name="codexcommander-session-token"');
-      expect(html).toContain('name="codexcommander-session-csrf"');
-      expect(html).toContain('name="codexcommander-session-origin"');
+      expect(html).not.toContain("codexcommander-session-token");
+      expect(html).not.toContain("ccx_session_");
     } finally {
       await server.stop(true);
     }
   });
 
-  test("a non-loopback binding never issues a GUI session from a forged loopback Host", () => {
+  test("admin launch-ticket mint remains available when data-plane auth is enabled", async () => {
     const config = remoteConfig();
+    config.hostname = "127.0.0.1";
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/api/gui-launch-ticket", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-codexcommander-api-key": "admin-secret",
+        },
+        body: JSON.stringify({ route: "dashboard" }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        origin: server.url.origin,
+        route: "dashboard",
+      });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("pre-auth launch exchange rejects unbound or unbounded bodies before ticket consumption", async () => {
+    const config = remoteConfig();
+    config.hostname = "127.0.0.1";
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const mint = async () => {
+        const response = await fetch(new URL("/api/gui-launch-ticket", server.url), {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-codexcommander-api-key": "admin-secret",
+          },
+          body: JSON.stringify({ route: "dashboard" }),
+        });
+        expect(response.status).toBe(200);
+        return response.json() as Promise<{ ticket: string; route: string }>;
+      };
+      const ticket = await mint();
+      const exchange = new URL("/api/gui-launch-exchange", server.url);
+      const body = JSON.stringify({ ticket: ticket.ticket, route: ticket.route });
+
+      const get = await fetch(exchange);
+      expect(get.status).toBe(400);
+      expect(get.headers.get("cache-control")).toBe("no-store");
+
+      const missingOrigin = await fetch(exchange, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      });
+      expect(missingOrigin.status).toBe(401);
+      expect(missingOrigin.headers.get("cache-control")).toBe("no-store");
+
+      const wrongOrigin = await fetch(exchange, {
+        method: "POST",
+        headers: { Origin: "http://localhost:65534", "content-type": "application/json" },
+        body,
+      });
+      expect(wrongOrigin.status).toBe(401);
+      expect(wrongOrigin.headers.get("access-control-allow-origin")).not.toBe("http://localhost:65534");
+
+      const hostileHost = await fetch(exchange, {
+        method: "POST",
+        headers: { Host: "attacker.test", Origin: "http://attacker.test", "content-type": "application/json" },
+        body,
+      });
+      expect(hostileHost.status).toBe(401);
+      expect(hostileHost.headers.get("access-control-allow-origin")).not.toBe("http://attacker.test");
+
+      const compressed = await fetch(exchange, {
+        method: "POST",
+        headers: {
+          Origin: server.url.origin,
+          "content-type": "application/json",
+          "content-encoding": "gzip",
+        },
+        body,
+      });
+      expect(compressed.status).toBe(415);
+      expect(compressed.headers.get("cache-control")).toBe("no-store");
+
+      const oversized = `${body.slice(0, -1)},"padding":"${"x".repeat(2_100)}"}`;
+      const first = oversized.slice(0, 1_000);
+      const second = oversized.slice(1_000);
+      const rawLarge = await rawHttpRequest(server.port, [
+        "POST /api/gui-launch-exchange HTTP/1.1",
+        `Host: ${server.url.host}`,
+        `Origin: ${server.url.origin}`,
+        "Content-Type: application/json",
+        "Transfer-Encoding: chunked",
+        "Connection: close",
+        "",
+        `${Buffer.byteLength(first).toString(16)}\r\n${first}\r\n${Buffer.byteLength(second).toString(16)}\r\n${second}\r\n0`,
+        "",
+        "",
+      ].join("\r\n"));
+      expect(rawLarge.status).toBe(413);
+      expect(rawLarge.raw.toLowerCase()).toContain("cache-control: no-store");
+
+      const malformedLength = await rawHttpRequest(server.port, [
+        "POST /api/gui-launch-exchange HTTP/1.1",
+        `Host: ${server.url.host}`,
+        `Origin: ${server.url.origin}`,
+        "Content-Type: application/json",
+        "Content-Length: -1",
+        "Connection: close",
+        "",
+        "",
+      ].join("\r\n"));
+      // Bun's HTTP parser may close malformed framing before application code
+      // (status 0) or synthesize 400; either outcome refuses it before body bytes.
+      expect([0, 400]).toContain(malformedLength.status);
+
+      // All preflight/body refusals happened before the live ticket was looked up.
+      const accepted = await fetch(exchange, {
+        method: "POST",
+        headers: { Origin: server.url.origin, "Content-Type": "Application/JSON; Charset=UTF-8" },
+        body,
+      });
+      expect(accepted.status).toBe(200);
+      expect(accepted.headers.get("cache-control")).toBe("no-store");
+    } finally {
+      await server.stop(true);
+    }
+  }, SERVER_BUDGET_MS);
+
+  test("manual GUI requests have no API access while confirmed and admin principals may mutate", async () => {
+    delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+    const config = remoteConfig();
+    config.hostname = "127.0.0.1";
+    saveConfig(config);
     const state = initializeManagementAuthState(config);
-    const request = new Request("http://localhost:10100/", {
-      headers: { Host: "localhost:10100" },
-    });
-    expect(issueGuiSession(request, config, state)).toBeNull();
+    const server = startServer(0, { managementAuthState: state });
+    try {
+      expect((await fetch(new URL("/api/settings", server.url))).status).toBe(401);
+      expect((await fetch(new URL("/api/provider-quotas?refresh=1", server.url))).status).toBe(401);
+      expect((await fetch(new URL("/api/providers?name=test", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ note: "confirmed authorization regression" }),
+      })).status).toBe(401);
+      expect((await fetch(new URL("/api/providers/test?name=test", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      })).status).toBe(401);
+
+      const mintedResponse = await fetch(new URL("/api/gui-launch-ticket", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-codexcommander-api-key": "admin-secret",
+        },
+        body: JSON.stringify({ route: "providers/test/settings" }),
+      });
+      expect(mintedResponse.status).toBe(200);
+      const minted = await mintedResponse.json() as { ticket: string; route: string };
+      const exchangeResponse = await fetch(new URL("/api/gui-launch-exchange", server.url), {
+        method: "POST",
+        headers: { Origin: server.url.origin, "content-type": "application/json" },
+        body: JSON.stringify({ ticket: minted.ticket, route: minted.route }),
+      });
+      expect(exchangeResponse.status).toBe(200);
+      const exchanged = await exchangeResponse.json() as {
+        session: { token: string; csrfToken: string; origin: string; confirmedLaunch: boolean };
+      };
+      expect(exchanged.session.confirmedLaunch).toBe(true);
+      const confirmedHeaders = {
+        Origin: server.url.origin,
+        "content-type": "application/json",
+        "x-codexcommander-api-key": exchanged.session.token,
+        "x-codexcommander-gui-origin": exchanged.session.origin,
+        "x-codexcommander-csrf-token": exchanged.session.csrfToken,
+      };
+      expect((await fetch(new URL("/api/providers?name=test", server.url), {
+        method: "PATCH",
+        headers: confirmedHeaders,
+        body: JSON.stringify({ note: "confirmed authorization regression" }),
+      })).status).toBe(200);
+      expect((await fetch(new URL("/api/providers?name=test", server.url), {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          "x-codexcommander-api-key": "admin-secret",
+        },
+        body: JSON.stringify({ note: "admin authorization regression" }),
+      })).status).toBe(200);
+    } finally {
+      await server.stop(true);
+    }
   });
 
   test("all local credential shapes are rejected by the upstream-forwarding guard", () => {

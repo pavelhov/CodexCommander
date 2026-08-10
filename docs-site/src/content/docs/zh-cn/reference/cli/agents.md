@@ -37,7 +37,7 @@ ccx v2 on
 ccx v2 threads 16
 ```
 
-`mode` 子命令会将 `multiAgentMode` 写入 CodexCommander 配置，并重新同步 Codex 目录。模式和标志的切换会在有效的 v1/v2 Codex 键之间迁移当前的数值线程上限；如果切换失败，会恢复原始的 `config.toml`。更改只会应用于新的 Codex 会话，正在运行的会话会保持其已固定的 surface。
+`mode` 子命令会将 `multiAgentMode` 写入 CodexCommander 配置，并重新同步 Codex 目录。模式和标志的切换会在有效的 v1/v2 Codex 键之间迁移当前的数值线程上限；如果切换失败，会恢复原始的 `config.toml`。模式、标志或 thread 的变更会更新 boot config。要影响运行中的 worker，请使用 `ccx sync --restart-codex`（或 dashboard 中的 **Apply agent catalog**），再启动新 task。
 
 ## Combo routing
 

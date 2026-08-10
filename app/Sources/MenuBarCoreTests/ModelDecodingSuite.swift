@@ -26,6 +26,9 @@ enum ModelDecodingSuite {
      "restoreNative":"ccx restore"}}
     """
 
+    private static let liveReadiness =
+        #"{"service":"codexcommander","version":"0.1.0","uptime":12.5,"pid":42,"port":10100,"status":"ready"}"#
+
     private static let liveQuotas = """
     {"generatedAt":1784915336899,"reports":[
       {"provider":"openai","label":"OpenAI (Codex login)","source":"chatgpt:wham",
@@ -75,6 +78,49 @@ enum ModelDecodingSuite {
 
         t.test("health: rejects a stale partial startup-health payload") {
             t.expect(rejects(StartupHealth.self, #"{"status":"protected"}"#), "partial health must be rejected")
+        }
+
+        t.test("readiness: decodes only the exact public contract and closed statuses") {
+            let ready = try decode(ProxyReadinessObservation.self, liveReadiness)
+            t.equal(ready.status, .ready)
+            t.equal(ready.service, "codexcommander")
+            t.equal(ready.version, "0.1.0")
+            t.equal(ready.uptime, 12.5)
+            t.equal(ready.pid, 42)
+            t.equal(ready.port, 10100)
+
+            let pending = try decode(
+                ProxyReadinessObservation.self,
+                liveReadiness.replacingOccurrences(of: "ready", with: "pending")
+            )
+            t.equal(pending.status, .pending)
+            let failed = try decode(
+                ProxyReadinessObservation.self,
+                liveReadiness.replacingOccurrences(of: "ready", with: "failed")
+            )
+            t.equal(failed.status, .failed)
+
+            t.expect(
+                rejects(
+                    ProxyReadinessObservation.self,
+                    #"{"service":"codexcommander","version":"0.1.0","uptime":1,"pid":42,"port":10100,"status":"warming"}"#
+                ),
+                "unknown readiness status must be rejected"
+            )
+            t.expect(
+                rejects(
+                    ProxyReadinessObservation.self,
+                    #"{"service":"codexcommander","version":"0.1.0","uptime":1,"pid":42,"port":10100,"status":"ready","detail":"extra"}"#
+                ),
+                "extra readiness keys must be rejected"
+            )
+            t.expect(
+                rejects(
+                    ProxyReadinessObservation.self,
+                    #"{"service":"codexcommander","version":"0.1.0","pid":42,"port":10100,"status":"ready"}"#
+                ),
+                "missing readiness keys must be rejected"
+            )
         }
 
         t.test("restart: rejects a partial accepted response") {

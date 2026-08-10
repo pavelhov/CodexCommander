@@ -372,6 +372,8 @@ export interface CatalogGatherAuthorityIdentity {
     readonly generation: ConfigGeneration;
     /** Keyed HMAC of the exact canonical config snapshot, including secret-bearing fields. */
     readonly snapshotIdentity: string;
+    /** Process-keyed identity of the exact persisted config bytes bound to admission. */
+    readonly contentIdentity: string;
   }>;
   readonly authSnapshotIdentity: string;
   readonly discoveryPolicyIdentity: string;

@@ -11,7 +11,11 @@ import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getConfigDir, getConfigPath, readConfigDiagnostics, readPid, readRuntimePort, resolveEnvValue } from "../config";
-import { findLiveProxy } from "../server/proxy-liveness";
+import {
+  attestLiveManagementProxy,
+  findLiveProxy,
+  type ManagementAttestationIo,
+} from "../server/proxy-liveness";
 import { gracefulStopHost } from "../lib/process-control";
 import { BUN_RUNTIME_SOURCES } from "../lib/bun-runtime";
 import type { BunRuntimeSource } from "../lib/bun-runtime";
@@ -608,9 +612,18 @@ export async function fetchServiceMemory(
   port: number,
   token: string | null,
   fetchImpl: typeof fetch = fetch,
+  deps: {
+    managementAttestation?: Omit<ManagementAttestationIo, "fetchFn">;
+    attestLiveManagementProxyImpl?: typeof attestLiveManagementProxy;
+  } = {},
 ): Promise<ServiceMemoryReport> {
   try {
-    const res = await fetchImpl(`http://${host}:${port}/api/system/memory`, {
+    const attest = deps.attestLiveManagementProxyImpl ?? attestLiveManagementProxy;
+    const target = await attest({ ...(deps.managementAttestation ?? {}), fetchFn: fetchImpl });
+    if (!target || target.baseUrl !== `http://${host}:${port}`) {
+      return { status: "unreachable", error: "runtime attestation failed" };
+    }
+    const res = await fetchImpl(`${target.baseUrl}/api/system/memory`, {
       headers: token ? { [API_KEY_HEADER]: token } : {},
       signal: AbortSignal.timeout(SERVICE_MEMORY_TIMEOUT_MS),
     });

@@ -27,6 +27,11 @@ import {
 } from "../src/cli/opencode";
 import type { OpencodeCatalogModel } from "../src/clients/config-export";
 import type { CodexCommanderConfig } from "../src/types";
+import {
+  ATTESTATION_CHALLENGE_HEADER,
+  ATTESTATION_PROOF_HEADER,
+} from "../src/identity";
+import { createLocalAttestationProof } from "../src/lib/local-management-attestation";
 
 function cfg(extra?: Partial<CodexCommanderConfig>): CodexCommanderConfig {
   return {
@@ -260,6 +265,8 @@ describe("ccx opencode proxy model catalog", () => {
     } as CodexCommanderConfig;
 
     const previous = process.env[ENV_KEY];
+    const previousAdmin = process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
+    const previousData = process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
     delete process.env[ENV_KEY];
     clearModelCache(PROVIDER);
     try {
@@ -296,13 +303,27 @@ describe("ccx opencode proxy model catalog", () => {
       expect(block.models[`${PROVIDER}/live-via-proxy-env`]?.limit?.context).toBe(128_000);
       expect(block.models[`${PROVIDER}/live-via-proxy-env`]?.name).toBe("live-via-proxy-env (proxyenv)");
 
+      process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = "admin-management-secret";
+      process.env.CODEXCOMMANDER_API_AUTH_TOKEN = "data-inference-secret";
+      const attestationSecret = "A".repeat(43);
       const fetched = await fetchOpencodeProxyModels(
-        { port: 10100, hostname: "127.0.0.1", pid: 1 },
-        "sk-mgmt",
+        { port: 10100, hostname: "127.0.0.1", pid: 1, source: "runtime" },
         {
+          managementAttestation: {
+            readRuntimeFn: () => ({ pid: 1, port: 10100, hostname: "127.0.0.1", attestationSecret }),
+            verifyPidFn: candidate => candidate,
+          },
           fetchImpl: async (url, init) => {
+            if (String(url).endsWith("/healthz")) {
+              const headers = new Headers(init?.headers);
+              expect(headers.get("X-CodexCommander-API-Key")).toBeNull();
+              const challenge = headers.get(ATTESTATION_CHALLENGE_HEADER)!;
+              const proof = createLocalAttestationProof(attestationSecret, challenge, 1, 10100)!;
+              return new Response("ignored", { headers: { [ATTESTATION_PROOF_HEADER]: proof } });
+            }
             expect(String(url)).toBe("http://127.0.0.1:10100/api/models");
-            expect(new Headers(init?.headers).get("X-CodexCommander-API-Key")).toBe("sk-mgmt");
+            expect(new Headers(init?.headers).get("X-CodexCommander-API-Key")).toBe("admin-management-secret");
+            expect(new Headers(init?.headers).get("X-CodexCommander-API-Key")).not.toBe("data-inference-secret");
             return new Response(JSON.stringify(rows), { status: 200 });
           },
         },
@@ -313,22 +334,32 @@ describe("ccx opencode proxy model catalog", () => {
       clearModelCache(PROVIDER);
       if (previous === undefined) delete process.env[ENV_KEY];
       else process.env[ENV_KEY] = previous;
+      if (previousAdmin === undefined) delete process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
+      else process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = previousAdmin;
+      if (previousData === undefined) delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+      else process.env.CODEXCOMMANDER_API_AUTH_TOKEN = previousData;
     }
   });
 
   test("fetchOpencodeProxyModels aborts stalled /api/models fetch and body reads", async () => {
-    const live = { port: 10100, hostname: "127.0.0.1", pid: 1 };
+    const live = { port: 10100, hostname: "127.0.0.1", pid: 1, source: "runtime" as const };
+    const attested = async () => ({
+      ...live,
+      baseUrl: "http://127.0.0.1:10100",
+    });
     const stall = (init?: RequestInit) => new Promise<Response>((_, reject) => {
       init?.signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")));
     });
 
-    await expect(fetchOpencodeProxyModels(live, "sk-mgmt", {
+    await expect(fetchOpencodeProxyModels(live, {
       timeoutMs: 25,
+      attestLiveManagementProxyImpl: attested,
       fetchImpl: async (_url, init) => stall(init),
     })).rejects.toThrow("Management API timed out while fetching /api/models.");
 
-    await expect(fetchOpencodeProxyModels(live, "sk-mgmt", {
+    await expect(fetchOpencodeProxyModels(live, {
       timeoutMs: 25,
+      attestLiveManagementProxyImpl: attested,
       fetchImpl: async () => ({
         ok: true,
         status: 200,

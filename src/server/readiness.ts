@@ -25,8 +25,10 @@ export type ReadinessStatus = "pending" | "ready" | "failed";
 
 /**
  * Private per-server readiness controller. The status starts at `pending` and
- * transitions at most once (to `ready` or `failed`) when the post-startup sync
- * settles. The gate is owned by the listener closure that requested it.
+ * startup settles it at most once (to `ready` or `failed`). A later explicit
+ * recovery may promote only that terminal `failed` state; it can never bypass
+ * an in-flight startup by promoting `pending`. The gate is owned by the
+ * listener closure that requested it.
  */
 export interface ReadinessGate {
   /** Current sanitized status. */
@@ -35,6 +37,12 @@ export interface ReadinessGate {
   markReady(): void;
   /** Mark the proxy failed. No reason is stored or exposed. */
   markFailed(): void;
+  /**
+   * Promote a live proxy after an authenticated, explicit full sync succeeds.
+   * Startup settlement remains one-shot; this is the deliberate recovery path
+   * for a process whose initial sync failed for a repairable reason.
+   */
+  recoverReady(): void;
 }
 
 /**
@@ -50,6 +58,9 @@ export function createReadinessGate(): ReadinessGate {
     },
     markFailed: () => {
       if (status === "pending") status = "failed";
+    },
+    recoverReady: () => {
+      if (status === "failed") status = "ready";
     },
   };
 }

@@ -12,7 +12,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { captureCatalogAdmissionSnapshot } from "../src/codex/catalog-admission";
+import {
+  captureCatalogAdmissionSnapshot,
+  captureCatalogConfigAuthority,
+} from "../src/codex/catalog-admission";
 import type {
   CatalogConditionalSourceObservations,
   CatalogConditionalSourceRole,
@@ -20,7 +23,7 @@ import type {
   CatalogRequiredSourceRole,
   CatalogSourceEvidence,
 } from "../src/codex/convergence-types";
-import { saveConfig } from "../src/config";
+import { loadConfig, saveConfig } from "../src/config";
 import type { CodexCommanderConfig } from "../src/types";
 
 const CONDITIONAL_SOURCE_ROLES = [
@@ -91,8 +94,8 @@ afterEach(() => {
 });
 
 test("captures the given config reference, generation, and catalog target identities", () => {
-  saveConfig(config(20200));
   const residentConfig = config(30300);
+  saveConfig(residentConfig);
   writeFileSync(join(codexHome, "codexcommander-catalog.json"), "{}\n");
   writeFileSync(join(codexHome, "models_cache.json"), "{}\n");
 
@@ -105,6 +108,7 @@ test("captures the given config reference, generation, and catalog target identi
     referenceIdentity: expect.any(String),
     generation: { value: 1 },
     snapshotIdentity: expect.any(String),
+    contentIdentity: expect.any(String),
   });
   expect(JSON.parse(snapshot.targets.catalog)).toMatchObject({
     path: join(codexHome, "codexcommander-catalog.json"),
@@ -142,6 +146,28 @@ test("captures the given config reference, generation, and catalog target identi
   }
 });
 
+test("config authority initializes generation zero for an existing pre-coordinator config", () => {
+  const existing = config();
+  writeFileSync(
+    join(codexCommanderHome, "config.json"),
+    `${JSON.stringify(existing, null, 2)}\n`,
+  );
+  expect(captureCatalogConfigAuthority(existing)).toEqual({
+    generation: { value: 0 },
+    semanticIdentity: expect.any(String),
+    contentIdentity: expect.any(String),
+  });
+});
+
+test("config authority admits the valid default when config.json is absent", () => {
+  const defaults = loadConfig();
+  expect(captureCatalogConfigAuthority(defaults)).toEqual({
+    generation: { value: 0 },
+    semanticIdentity: expect.any(String),
+    contentIdentity: expect.any(String),
+  });
+});
+
 test("captures PRESENT catalog target-selection evidence from the exact config bytes", () => {
   saveConfig(config());
   const selectedCatalog = join(codexHome, "selected-catalog.json");
@@ -177,14 +203,15 @@ test("captures PRESENT catalog target-selection evidence from the exact config b
 });
 
 test("binds opaque config identity to the exact reference, generation, and snapshot", () => {
-  saveConfig(config());
   const firstConfig = config(20200);
   const equalButDistinctConfig = config(20200);
+  saveConfig(firstConfig);
 
   const first = captureCatalogAdmissionSnapshot(firstConfig).configIdentity;
   const sameReference = captureCatalogAdmissionSnapshot(firstConfig).configIdentity;
   const distinctReference = captureCatalogAdmissionSnapshot(equalButDistinctConfig).configIdentity;
   firstConfig.port = 30300;
+  saveConfig(firstConfig);
   const mutated = captureCatalogAdmissionSnapshot(firstConfig).configIdentity;
 
   expect(sameReference).toEqual(first);
@@ -192,7 +219,8 @@ test("binds opaque config identity to the exact reference, generation, and snaps
   expect(distinctReference.snapshotIdentity).toBe(first.snapshotIdentity);
   expect(mutated.referenceIdentity).toBe(first.referenceIdentity);
   expect(mutated.snapshotIdentity).not.toBe(first.snapshotIdentity);
-  expect(mutated.generation).toEqual(first.generation);
+  expect(mutated.contentIdentity).not.toBe(first.contentIdentity);
+  expect(mutated.generation.value).toBeGreaterThan(first.generation.value);
 });
 
 test("rejects missing home, required, and conditional evidence keys structurally", () => {

@@ -433,7 +433,11 @@ export function resolveCatalogSourceForGather(
     const bytes = evidenceSession.readSource(role);
     if (bytes === null) continue;
     const catalog = parseCatalogJson(Buffer.from(bytes).toString("utf8"));
-    if (!catalog || !findNativeTemplate(catalog)) continue;
+    // Match the retained sync contract: a valid observed catalog is still a
+    // usable merge source when it has no native template (including an empty
+    // bootstrap catalog). Routed entries have a strict fallback constructor;
+    // requiring a native row here would skip provider discovery entirely.
+    if (!catalog) continue;
     return cloneAndDeepFreeze({
       kind: "available" as const,
       source: role,
@@ -452,6 +456,19 @@ export function resolveCatalogSourceForGather(
       bundledCatalog: UNUSED_PROCESS_LOCAL,
     }),
   });
+}
+
+/**
+ * Production orchestration for a cold/fresh home. Existing valid disk sources
+ * remain authoritative; only their absence primes the runtime-backed bundled
+ * memo that the observe-only gather may subsequently consume.
+ */
+export function primeBundledCatalogForGatherIfNeeded(): void {
+  const catalogPath = readCodexCatalogPath();
+  if (readCatalog(catalogPath)
+    || readCatalog(catalogBackupPathFor(catalogPath))
+    || readCatalog(activeCodexModelsCachePath())) return;
+  loadBundledCodexCatalog();
 }
 
 export function materializeBundledCodexCatalog(path: string, deps: BundledCatalogDeps = {}): RawCatalog | null {

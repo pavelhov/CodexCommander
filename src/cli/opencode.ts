@@ -36,10 +36,15 @@ import type {
 import { commandInvocation } from "../lib/win-exec";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/service-secrets";
 import { providerCodexAccountMode } from "../providers/registry";
-import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
+import {
+  attestLiveManagementProxy,
+  type LiveProxy,
+  type ManagementAttestationIo,
+} from "../server/proxy-liveness";
 import type { CodexCommanderConfig } from "../types";
 import { ensureProxyLifecycle } from "./proxy-lifecycle";
 import { API_KEY_HEADER, readEnv } from "../identity";
+import { configuredAdminToken } from "../lib/admin-secrets";
 
 /**
  * The provider-block serializer, its constants, and the config-path helpers now live in
@@ -176,13 +181,31 @@ export const OPENCODE_PROXY_MODELS_TIMEOUT_MS = 8_000;
 /** Fetch the live model catalog from a running proxy's management API. */
 export async function fetchOpencodeProxyModels(
   live: LiveProxy,
-  apiKey: string,
-  deps: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+  deps: {
+    fetchImpl?: typeof fetch;
+    timeoutMs?: number;
+    managementAttestation?: Omit<ManagementAttestationIo, "fetchFn" | "timeoutMs">;
+    attestLiveManagementProxyImpl?: typeof attestLiveManagementProxy;
+  } = {},
 ): Promise<OpencodeProxyModelRow[]> {
-  const baseUrl = `http://${probeHostname(live.hostname)}:${live.port}`;
   const fetchImpl = deps.fetchImpl ?? fetch;
+  const attest = deps.attestLiveManagementProxyImpl ?? attestLiveManagementProxy;
+  const target = await attest({
+    ...(deps.managementAttestation ?? {}),
+    fetchFn: fetchImpl,
+    timeoutMs: deps.timeoutMs ?? OPENCODE_PROXY_MODELS_TIMEOUT_MS,
+  });
+  if (!target
+    || target.port !== live.port
+    || target.hostname !== live.hostname
+    || live.pid === null
+    || target.pid !== live.pid) {
+    throw new Error("Management request refused: the live proxy could not be authenticated from its protected runtime record.");
+  }
   const headers = new Headers({ Accept: "application/json" });
-  const token = apiKey.trim();
+  // `/api/models` is management-plane. The child data-plane admission key must
+  // never be substituted for the independent admin credential.
+  const token = configuredAdminToken();
   if (token) headers.set(API_KEY_HEADER, token);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), deps.timeoutMs ?? OPENCODE_PROXY_MODELS_TIMEOUT_MS);
@@ -202,7 +225,7 @@ export async function fetchOpencodeProxyModels(
   let text: string;
   try {
     response = await Promise.race([
-      fetchImpl(`${baseUrl}/api/models`, {
+      fetchImpl(`${target.baseUrl}/api/models`, {
         headers,
         signal: controller.signal,
       }),
@@ -433,16 +456,16 @@ export async function cmdOpencode(args: string[]): Promise<number> {
     ensureCompanion: true,
     startEnv: opencodeProxyStartEnv(process.env) as NodeJS.ProcessEnv,
   });
-  const live = ensured.ok ? await findLiveProxy() : null;
+  const live = ensured.ok ? await attestLiveManagementProxy() : null;
   if (!live) {
-    console.error(`❌ ${ensured.ok ? "Proxy identity disappeared after starting." : ensured.message}`);
+    console.error(`❌ ${ensured.ok ? "Proxy identity could not be authenticated after starting." : ensured.message}`);
     return 1;
   }
 
   const apiKey = opencodeApiKey(config);
   let proxyModels: OpencodeProxyModelRow[];
   try {
-    proxyModels = await fetchOpencodeProxyModels(live, apiKey);
+    proxyModels = await fetchOpencodeProxyModels(live);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     console.error(`❌ Could not fetch the model catalog from the proxy: ${reason}`);
@@ -470,6 +493,15 @@ export async function cmdOpencode(args: string[]): Promise<number> {
     return 1;
   }
   const env = builtEnv;
+  // Re-prove the exact listener immediately before the child receives the durable
+  // data-plane key and provider config that route request bodies to it.
+  const launchTarget = await attestLiveManagementProxy({ expectedPid: live.pid });
+  if (!launchTarget
+    || launchTarget.port !== live.port
+    || launchTarget.hostname !== live.hostname) {
+    console.error("❌ Proxy identity changed before OpenCode could launch; retry the command.");
+    return 1;
+  }
   return await new Promise<number>(resolve => {
     const inv = commandInvocation("opencode", args);
     const child = spawn(inv.file, inv.args, { stdio: "inherit", env: env as NodeJS.ProcessEnv, ...inv.options });

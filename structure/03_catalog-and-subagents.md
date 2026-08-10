@@ -80,6 +80,53 @@ The CLI remains the advanced fallback:
 ccx sync --restart-codex
 ```
 
+## Catalog activation contract
+
+There are three independently observable truths, in order: (1) the saved desired configuration,
+(2) the authoritative CodexCommander catalog and managed Codex boot settings on disk, and (3) the
+catalog that a running Codex app-server has loaded. Catalog publication also invalidates Codex's
+separate `models_cache.json`, but that file is Codex-owned and may be refreshed immediately; its
+post-publication bytes are therefore not durable activation truth. A successful Save or ordinary
+sync converges only the first two truths and is deliberately non-disruptive. It must not claim that
+an existing worker has reloaded merely because a new task or fork was created: those are not
+catalog-reload boundaries for an already-running app-server.
+
+`GET /api/codex-catalog/status` projects these three truths as additive management state; the
+subagent-roster GET/PUT and ordinary sync response carry the same additive activation observation
+for dashboard convenience. The activation DTO is an observation, not a durable receipt: there is no
+persisted pending-update snapshot, auto-apply daemon, or idle queue. The retained routed-catalog
+snapshot above serves provider-discovery recovery and is unrelated to worker activation.
+
+`POST /api/codex-catalog/apply` is the sole browser Apply action. It accepts only
+`{ expectedDesiredRevision, confirmInterrupt: true }`, re-converges and proves the disk state, then
+may signal only revalidated exact current-user Codex worker identities. It never accepts a PID,
+command, or path from the caller. The expected desired revision fences configuration races;
+unknown worker identity blocks signaling. In-flight proxy request activity is advisory context: it
+warns about possible interruption but does not represent persistent Codex agent lifecycle, and zero
+activity does not prove idleness. Apply reports already-current,
+no-worker, applied, partial, superseded, or blocked evidence and never escalates to `SIGKILL`.
+
+A manually opened loopback dashboard receives no API credential. On every loopback hostname or
+address, the browser never prompts for or transmits the raw admin token; it requires a confirmed GUI
+session instead. `ccx gui` and the macOS companion can use the raw admin credential outside the
+browser to mint a short-lived, single-use launch ticket carried only in the URL fragment. Its one-time
+exact-origin, exact-route exchange creates a process-memory-only confirmed GUI session with an
+eight-hour absolute lifetime. It is never renewed: expiry or proxy restart makes the next API request
+return `401`, after which the dashboard directs the user back to the launcher. The durable admin token
+never enters the URL or web storage. The raw admin principal remains capable of ordinary headless API
+mutations but is deliberately not accepted by the browser Apply endpoint; the companion and CLI keep
+their existing narrow non-browser flows.
+
+The desired revision is semantic rather than a filesystem timestamp. Catalog commits are idempotent:
+JSON-semantic equality ignores insignificant whitespace and object-key order while preserving array
+order, so equivalent catalog/cache artifacts are not rewritten merely to manufacture a newer mtime.
+Worker freshness uses the newer of the catalog and managed Codex boot-config mtimes, which makes the
+activation fence deterministic instead of an artifact of repeated dashboard polling.
+
+For an end user, quitting and reopening Codex Desktop is the reliable manual worker-replacement
+boundary. The companion and `ccx sync --restart-codex` remain compatible callers of the same narrow
+process-safety policy.
+
 ## Entry shape
 
 Routed entries keep Codex-required metadata such as reasoning levels, shell type, API support flags,
@@ -132,7 +179,7 @@ real turn depends on it (`src/codex/warmup.ts`).
 | Mode | Behavior |
 | --- | --- |
 | `"v1"` | Force ALL entries to `multi_agent_version = "v1"` — overrides upstream pins (sol/terra included). |
-| `"default"` (install default) | Respect upstream model pins (sol/terra=v2, luna=v1, others=null → codex feature flag decides). On sync, stale forced values are cleared and upstream pins restored. |
+| `"default"` (install default) | Respect upstream model pins (sol/terra=v2, luna=v1). When the native `multi_agent_v2` flag is enabled, otherwise-unpinned entries are stamped v2; when it is disabled, they remain unpinned. On sync, stale forced values are cleared and upstream pins restored. |
 | `"v2"` | Force ALL entries to `multi_agent_version = "v2"` — overrides upstream pins (luna included). |
 
 The override is applied as a final pass in both `buildCatalogEntries` (live `/v1/models` path) and
@@ -141,16 +188,22 @@ ensures `normalizeRoutedCatalogEntry` (which deletes `multi_agent_version` from 
 not clobber the forced value.
 
 CLI: `ccx v2 mode v1|default|v2`. GUI: **Models → Current behavior → Collaboration**, labeled
-**Classic v1**, **Follow Codex defaults**, and **Concurrent v2**. API: `GET/PUT /api/v2` with
+**Reliable v1**, **Codex native**, and **Concurrent v2**. API: `GET/PUT /api/v2` with
 `multiAgentMode` field.
 
 The `multi_agent_v2` feature flag and the logical maximum thread count are separate from
 `multiAgentMode` (`src/codex/features.ts`): the mode decides which surface Codex advertises, while
 the flag and thread count decide what the native runtime allows.
 
+Forcing V2 means Luna becomes V2-surface eligible in the generated catalog; it does **not** itself
+make Luna live for a current worker. A usable subagent target must be selected, surface-compatible,
+picker-visible and within the advertised five-row window, present in the converged on-disk catalog,
+loaded by the current worker, and successfully routable by the proxy.
+
 `CodexCommanderConfig.multiAgentV2MessageDelivery` is a separate request-time policy. `encrypted` is the
 default and preserves ChatGPT's reserved collaboration schema plus the unreadable-ciphertext
-fail-closed guard. `plaintext` opts the whole V2 parent session into mixed-provider compatibility:
+fail-closed guard. `plaintext` opts the whole V2 parent session into mixed-provider compatibility for
+task-message delivery; it is not a credential or general key-encryption setting:
 canonical ChatGPT requests atomically alias the complete known collaboration namespace, strip only
 the three message encryption markers, then restore the namespace and add Codex's
 `encrypted_function_args: []` plaintext sentinel on the response. Routed adapters add that sentinel

@@ -166,7 +166,7 @@ export default function SubagentRunPolicySection({
       {(policy.error || delegation.error) && <Notice tone="err">{policy.error || delegation.error}</Notice>}
       {feedback === "saved" && <Notice tone="ok">{t("sub.policy.saved")}</Notice>}
       {feedback === "failed" && !policy.error && !delegation.error && <Notice tone="err">{t("sub.policy.saveFailed")}</Notice>}
-      {(policy.mode === "v2" || (policy.mode === "default" && policy.messageDelivery === "plaintext")) && <Notice tone="warn">{t(
+      {policy.mode !== "v1" && <Notice tone="warn">{t(
         policy.messageDelivery === "plaintext"
           ? "sub.policy.compatibilityV2Plaintext"
           : "sub.policy.compatibilityV2",

@@ -23,9 +23,13 @@ bun run dev:gui
 
 ## 로그인
 
-`localhost`나 `127.0.0.1` 같은 loopback 주소에서 연 대시보드는 짧게 유지되는 GUI 세션을 자동으로 받으므로 보통 토큰을 입력할 필요가 없습니다. loopback이 아닌 호스트로 공개한 대시보드에는 `CODEXCOMMANDER_ADMIN_AUTH_TOKEN` 또는 자동 생성되는 `~/.codexcommander/admin-api-token` 파일의 관리자 토큰이 필요합니다.
+`localhost`, `*.localhost`, `127.0.0.0/8`의 모든 주소, `::1`, IPv4-mapped `127/8` 주소 등 어떤 loopback 형식으로 직접 열어도 대시보드에는 API 자격 증명이 없습니다. 페이지 틀은 로드되지만 API 요청은 인증되지 않습니다. `ccx gui` 또는 macOS 메뉴 앱에서 다시 여세요. 다른 로컬 OS 사용자가 비활성 listener를 가장할 수 있으므로 loopback 페이지는 영구 관리자 토큰을 요구하거나 전송하지 않습니다. loopback 브라우저 접근에는 확인된 런처 세션이 필요하며 인증 우회가 아닙니다.
 
-원격 대시보드는 표준 비밀번호 폼을 표시하므로 브라우저 비밀번호 관리자가 토큰 저장과 자동 완성을 제안할 수 있습니다. 대시보드 자체는 토큰을 메모리에만 보관하며 `localStorage`나 `sessionStorage`에 쓰지 않습니다. 저장 여부는 전적으로 브라우저 또는 비밀번호 관리자가 결정합니다.
+전체 기능을 사용하려면 `ccx gui` 또는 macOS 메뉴 앱에서 여세요. 런처는 관리자 권한으로 수명이 짧고 일회용인 티켓을 발급하고 티켓만 URL fragment에 넣습니다. 대시보드는 한 번의 교환 중 즉시 이를 제거합니다. 확인된 세션은 프록시와 브라우저 프로세스 메모리에만 최대 8시간 유지되며 갱신되지 않습니다. 만료 또는 프록시 재시작 후 다음 API 요청은 `401`을 반환하며 loopback 페이지에는 새 런처 handoff가 필요합니다. 영구 관리자 토큰은 URL이나 브라우저 저장소에 들어가지 않습니다.
+
+loopback이 아닌 호스트에서는 `CODEXCOMMANDER_ADMIN_AUTH_TOKEN` 또는 `~/.codexcommander/admin-api-token`의 관리자 토큰을 사용할 수 있지만 브라우저 입력창은 신뢰할 수 있는 HTTPS origin에서만 활성화됩니다. 평문 원격 페이지는 bearer를 요구하거나 전송하지 않습니다. 신뢰할 수 있는 HTTPS가 없다면 대시보드를 loopback으로 보이게 하는 로컬 또는 SSH tunnel을 사용하고 `ccx gui`에서 여세요. 원시 관리자 토큰은 headless management API client에서 계속 사용할 수 있지만 카탈로그 Apply는 확인된 로컬 대시보드 시작으로만 제한됩니다.
+
+신뢰할 수 있는 HTTPS의 원격 대시보드는 표준 비밀번호 폼을 표시하므로 브라우저 비밀번호 관리자가 토큰 저장과 자동 완성을 제안할 수 있습니다. 대시보드 자체는 토큰을 메모리에만 보관하며 `localStorage`나 `sessionStorage`에 쓰지 않습니다. 저장 여부는 전적으로 브라우저 또는 비밀번호 관리자가 결정합니다.
 
 ## 할 수 있는 일
 
@@ -42,7 +46,7 @@ bun run dev:gui
 | **Add provider** | 레지스트리 기반 프리셋에서 계정 로그인, API key 서비스, 로컬 서버, custom endpoint를 검색합니다. 검색어는 Accounts, Free, Paid를 함께 찾고 탭은 둘러보기에 사용됩니다. |
 | **Codex Auth** | ChatGPT/Codex 풀 계정을 추가하고, 다음 세션 계정을 선택하고, 5시간 / 주간 / 30일 할당량을 갱신하며, 할당량 자동 전환을 켜거나 끄고 1~100% 임계값과 일시적 실패 failover를 설정합니다. |
 | **Subagents** | **Agent Command Center**에서 `spawn_agent`에 노출할 다섯 모델을 선택하고 순서를 정하며, 현재 카탈로그를 검색하고 프로토콜·V2 전달·안내·폴백·스레드 제한의 Run Policy를 설정합니다. 저장됐지만 노출되지 않은 항목은 명시적으로 보고됩니다. |
-| **Models** | 네이티브 GPT와 라우팅 모델을 켜고 끄고, 프로바이더 allowlist와 컨텍스트 상한을 설정하며, **Classic v1**, **Follow Codex defaults**, **Concurrent v2**를 선택하고 v2 thread 수를 설정합니다. Current behavior 카드는 컨텍스트를 **Uncapped**, **Limited**, **Mixed limits**로 표시합니다. 각 라우팅 프로바이더에는 **자동 검색 켜짐** 또는 **정적 카탈로그만** 상태와 해당 프로바이더 설정 링크가 표시됩니다. |
+| **Models** | 네이티브 GPT와 라우팅 모델을 켜고 끄고, 프로바이더 allowlist와 컨텍스트 상한을 설정하며, **Reliable v1**, **Codex native**, **Concurrent v2**를 선택하고 v2 thread 수를 설정합니다. Current behavior 카드는 컨텍스트를 **Uncapped**, **Limited**, **Mixed limits**로 표시합니다. 각 라우팅 프로바이더에는 **자동 검색 켜짐** 또는 **정적 카탈로그만** 상태와 해당 프로바이더 설정 링크가 표시됩니다. |
 | **Client Apps** | 설정된 로컬 클라이언트와 연결 가능한 클라이언트를 확인하고, 지원되는 관리 설정을 적용하거나 제거하며 백업을 검토합니다. Codex, Claude Code/Desktop, Grok Build, OpenCode와 파일 관리 클라이언트를 프로바이더와 구분해 한곳에서 찾을 수 있습니다. |
 | **API Access** | 다른 앱이 CodexCommander 프록시에 인증할 키를 발급하고 관리합니다. 업스트림 프로바이더 자격 증명은 Providers에 남습니다. |
 | **Logs** | 토큰, 요청한 강도와 (사용 가능한 경우) 실제 전송 강도, 실제 모델, 프로바이더, 상태, 요청 id, 소요 시간, 오류 상세가 포함된 최근 요청을 자동 갱신합니다. 어댑터가 reasoning 매개변수를 전송한 경우 상세 보기에 정확한 wire field도 표시됩니다. 클라이언트가 보낸 불투명 대화/세션 id로 필터하면 현재 로드된 Logs 링의 토큰·추정 정가 합계를 볼 수 있습니다. |
@@ -62,6 +66,10 @@ bun run dev:gui
 **Models** 스위치는 Codex의 최종 노출 상태를 나타냅니다. 라우팅 모델은 프로바이더 allowlist에 포함되거나 allowlist가 없고, 동시에 비활성화되지 않았을 때만 켜집니다. 모델을 켜면 두 필터를 원자적으로 조정하며, **모두 활성화**는 allowlist를 해제해 새로 발견되는 모델도 켭니다.
 
 업스트림 카탈로그 자동 갱신은 프로바이더별 **Providers → Settings**에서 관리합니다. Models 페이지는 그 상태를 표시하고 바로 연결할 뿐, 별도의 검색 설정을 저장하지 않습니다.
+
+## 카탈로그 활성화
+
+저장은 중단하지 않습니다. 설정과 결정적인 디스크 카탈로그를 갱신하지만 실행 중 Codex worker를 끝내지 않습니다. Agent Command Center는 현재 worker가 그 카탈로그를 읽었는지도 별도로 보여 줍니다. 오래되었다면 **Apply agent catalog**를 명시적으로 선택하거나 Codex Desktop을 종료 후 다시 여세요. 새 task나 fork는 다시 읽기가 아닙니다. 활동 수는 중단 경고일 뿐 유휴 보장이 아니며 자동 적용이나 유휴 큐는 없습니다. 직접 연 loopback 대시보드에 확인 세션이 없거나 세션이 만료되면 `ccx gui` 또는 macOS 메뉴 앱에서 다시 여세요. 원시 관리자 토큰을 loopback 페이지에 붙여 넣지 마세요.
 
 ## 위임 선택기와 스폰 라우팅의 차이
 

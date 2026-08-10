@@ -73,22 +73,47 @@ public struct ProxyEndpoint: Equatable, Sendable {
     }
 }
 
+/// Protected process identity read from `runtime-port.json`. The secret never
+/// leaves the process; it authenticates `/healthz` immediately before the app
+/// sends a management credential or request body.
+public struct ProxyRuntimeAttestation: Equatable, Sendable {
+    public let host: String
+    public let port: Int
+    public let pid: Int
+    let secret: String
+
+    public init?(host: String, port: Int, pid: Int, secret: String) {
+        guard let normalized = ProxyEndpoint.normalizedLoopbackHost(host),
+              ProxyEndpoint.validPorts.contains(port),
+              pid > 0,
+              secret.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil
+        else { return nil }
+        self.host = normalized
+        self.port = port
+        self.pid = pid
+        self.secret = secret
+    }
+}
+
 public struct ProxyInstallation: Sendable {
     public let endpoint: ProxyEndpoint
     public let credential: String?
     public let credentialAvailability: ManagementCredentialAvailability
     public let configDirectory: URL
+    public let runtimeAttestation: ProxyRuntimeAttestation?
 
     public init(
         endpoint: ProxyEndpoint,
         credential: String?,
         credentialAvailability: ManagementCredentialAvailability,
-        configDirectory: URL
+        configDirectory: URL,
+        runtimeAttestation: ProxyRuntimeAttestation? = nil
     ) {
         self.endpoint = endpoint
         self.credential = credential
         self.credentialAvailability = credentialAvailability
         self.configDirectory = configDirectory
+        self.runtimeAttestation = runtimeAttestation
     }
 }
 
@@ -268,6 +293,7 @@ public enum ProxyDiscovery {
         }
 
         let endpoint: ProxyEndpoint
+        let runtimeAttestation: ProxyRuntimeAttestation?
         do {
             let data = try directory.readFile(named: "runtime-port.json", maxBytes: 16 * 1024)
             guard let record = try? JSONDecoder().decode(RuntimePortRecord.self, from: data),
@@ -285,8 +311,17 @@ public enum ProxyDiscovery {
                 throw DiscoveryError.unsafeRuntimeRecord
             }
             endpoint = discovered
+            runtimeAttestation = record.attestationSecret.flatMap {
+                ProxyRuntimeAttestation(
+                    host: record.hostname ?? "127.0.0.1",
+                    port: record.port,
+                    pid: record.pid,
+                    secret: $0
+                )
+            }
         } catch SecureReadError.missing {
             endpoint = .default
+            runtimeAttestation = nil
         } catch let error as DiscoveryError {
             throw error
         } catch {
@@ -298,7 +333,8 @@ public enum ProxyDiscovery {
                 endpoint: endpoint,
                 credential: inherited,
                 credentialAvailability: .inheritedEnvironment,
-                configDirectory: directoryURL
+                configDirectory: directoryURL,
+                runtimeAttestation: runtimeAttestation
             )
         }
 
@@ -317,14 +353,16 @@ public enum ProxyDiscovery {
                 endpoint: endpoint,
                 credential: token,
                 credentialAvailability: .file,
-                configDirectory: directoryURL
+                configDirectory: directoryURL,
+                runtimeAttestation: runtimeAttestation
             )
         } catch {
             return ProxyInstallation(
                 endpoint: endpoint,
                 credential: nil,
                 credentialAvailability: .unavailable,
-                configDirectory: directoryURL
+                configDirectory: directoryURL,
+                runtimeAttestation: runtimeAttestation
             )
         }
     }

@@ -18,6 +18,7 @@ import {
   ADMIN_KEY_PREFIX,
   API_KEY_HEADER,
   CSRF_HEADER,
+  GUI_LAUNCH_TICKET_PREFIX,
   GUI_ORIGIN_HEADER,
   GUI_SESSION_PREFIX,
 } from "../identity";
@@ -25,24 +26,42 @@ import { forgetEphemeralSecretPath, forgetHardenedSecretPath, hardenSecretDir, h
 import type { CodexCommanderConfig } from "../types";
 import {
   isAllowedManagementOrigin,
-  isApiAuthRequired,
   isDataPlaneAdmissionSecret,
   isLoopbackHostname,
   managementRequestOrigin,
   parseHttpHost,
 } from "./auth-cors";
 
-const GUI_SESSION_TTL_MS = 5 * 60_000;
+// A confirmed launch is an explicit local-app handoff. Keep that browser useful
+// for a workday without adding a renewable bearer or persisting capability.
+const CONFIRMED_GUI_SESSION_TTL_MS = 8 * 60 * 60_000;
 const GUI_SESSION_LIMIT = 128;
+const GUI_LAUNCH_TICKET_TTL_MS = 30_000;
+const GUI_LAUNCH_TICKET_LIMIT = 16;
+const GUI_LAUNCH_ROUTE_MAX_LENGTH = 512;
 
 interface GuiSessionRecord {
   csrfToken: string;
   origin: string;
   expiresAt: number;
+  confirmedLaunch?: true;
+}
+
+interface GuiLaunchTicketRecord {
+  origin: string;
+  route: string;
+  expiresAt: number;
 }
 
 export interface GuiSessionBootstrap extends GuiSessionRecord {
   token: string;
+}
+
+export interface GuiLaunchTicket {
+  ticket: string;
+  origin: string;
+  route: string;
+  expiresAt: number;
 }
 
 export type ManagementAuthState =
@@ -51,6 +70,8 @@ export type ManagementAuthState =
     token: string;
     source: "environment" | "file";
     sessions: Map<string, GuiSessionRecord>;
+    /** Optional for compatibility with narrow test fixtures created before launch tickets. */
+    launchTickets?: Map<string, GuiLaunchTicketRecord>;
   }
   | { available: false; reason: string };
 
@@ -180,7 +201,7 @@ function ready(token: string, source: "environment" | "file", config: CodexComma
   if (isDataPlaneAdmissionSecret(token, config)) {
     return fail("management credential conflicts with a data-plane credential");
   }
-  return { available: true, token, source, sessions: new Map() };
+  return { available: true, token, source, sessions: new Map(), launchTickets: new Map() };
 }
 
 export function initializeManagementAuthState(config: CodexCommanderConfig): ManagementAuthState {
@@ -217,21 +238,117 @@ function removeExpiredSessions(state: Extract<ManagementAuthState, { available: 
   }
 }
 
+function launchTicketStore(
+  state: Extract<ManagementAuthState, { available: true }>,
+): Map<string, GuiLaunchTicketRecord> {
+  return state.launchTickets ??= new Map();
+}
+
+function removeExpiredLaunchTickets(
+  state: Extract<ManagementAuthState, { available: true }>,
+  now = Date.now(),
+): void {
+  for (const [ticket, record] of launchTicketStore(state)) {
+    if (record.expiresAt <= now) launchTicketStore(state).delete(ticket);
+  }
+}
+
 function randomSessionSecret(): string {
   return `${GUI_SESSION_PREFIX}${randomBytes(32).toString("base64url")}`;
 }
 
-export function issueGuiSession(
+function randomLaunchTicket(): string {
+  return `${GUI_LAUNCH_TICKET_PREFIX}${randomBytes(32).toString("base64url")}`;
+}
+
+/**
+ * Dashboard hash route accepted by the fixed launch handoff. It is deliberately
+ * relative and fragment-safe: launch tickets can select an in-app destination,
+ * never another origin or a second fragment parser.
+ */
+export function isGuiLaunchRoute(route: unknown): route is string {
+  return typeof route === "string"
+    && route.length > 0
+    && route.length <= GUI_LAUNCH_ROUTE_MAX_LENGTH
+    && !route.startsWith("/")
+    && !route.includes("#")
+    && !/[\u0000-\u001f\u007f]/.test(route);
+}
+
+/**
+ * Mint one short-lived browser handoff after the caller has already passed the
+ * raw admin-token gate. The ticket is process-memory-only and bound to the exact
+ * loopback origin and requested in-app route.
+ */
+export function issueGuiLaunchTicket(
   req: Request,
+  route: unknown,
   config: CodexCommanderConfig,
   state: ManagementAuthState,
-): GuiSessionBootstrap | null {
-  if (isApiAuthRequired(config) || !state.available || req.method !== "GET" || !isAllowedManagementOrigin(req, config)) return null;
+  now = Date.now(),
+): GuiLaunchTicket | null {
+  if (!state.available
+    || req.method !== "POST"
+    || !isAllowedManagementOrigin(req, config)
+    || !isGuiLaunchRoute(route)) return null;
   const host = parseHttpHost(req.headers.get("Host"));
   if (!host || !isLoopbackHostname(host.hostname)) return null;
   const origin = managementRequestOrigin(req, config);
   if (!origin) return null;
-  const now = Date.now();
+
+  removeExpiredLaunchTickets(state, now);
+  const tickets = launchTicketStore(state);
+  while (tickets.size >= GUI_LAUNCH_TICKET_LIMIT) {
+    const oldest = tickets.keys().next().value as string | undefined;
+    if (!oldest) break;
+    tickets.delete(oldest);
+  }
+  const ticket = randomLaunchTicket();
+  const record: GuiLaunchTicketRecord = {
+    origin,
+    route,
+    expiresAt: now + GUI_LAUNCH_TICKET_TTL_MS,
+  };
+  tickets.set(ticket, record);
+  return { ticket, ...record };
+}
+
+/**
+ * Consume a launch ticket exactly once. Once a syntactically valid ticket names
+ * a live record it is deleted before any route/origin check, so failed and raced
+ * exchanges cannot retry it. A successful exchange creates the only browser
+ * management session admitted by the server.
+ */
+export function exchangeGuiLaunchTicket(
+  req: Request,
+  ticket: unknown,
+  route: unknown,
+  config: CodexCommanderConfig,
+  state: ManagementAuthState,
+  now = Date.now(),
+): GuiSessionBootstrap | null {
+  if (!state.available
+    || req.method !== "POST"
+    || typeof ticket !== "string"
+    || !ticket.startsWith(GUI_LAUNCH_TICKET_PREFIX)
+    || !isGuiLaunchRoute(route)) return null;
+  removeExpiredLaunchTickets(state, now);
+  const tickets = launchTicketStore(state);
+  const record = tickets.get(ticket);
+  if (!record) return null;
+  tickets.delete(ticket);
+
+  const host = parseHttpHost(req.headers.get("Host"));
+  const requestOrigin = managementRequestOrigin(req, config);
+  const browserOrigin = req.headers.get("Origin");
+  if (record.expiresAt <= now
+    || record.route !== route
+    || !host
+    || !isLoopbackHostname(host.hostname)
+    || requestOrigin !== record.origin
+    || browserOrigin !== record.origin
+    || !isAllowedManagementOrigin(req, config)) return null;
+
   removeExpiredSessions(state, now);
   while (state.sessions.size >= GUI_SESSION_LIMIT) {
     const oldest = state.sessions.keys().next().value as string | undefined;
@@ -241,8 +358,9 @@ export function issueGuiSession(
   const token = randomSessionSecret();
   const session: GuiSessionRecord = {
     csrfToken: randomBytes(32).toString("base64url"),
-    origin,
-    expiresAt: now + GUI_SESSION_TTL_MS,
+    origin: record.origin,
+    expiresAt: now + CONFIRMED_GUI_SESSION_TTL_MS,
+    confirmedLaunch: true,
   };
   state.sessions.set(token, session);
   return { token, ...session };
@@ -251,13 +369,14 @@ export function issueGuiSession(
 /**
  * Which credential actually authorized a management request.
  *
- * `admin-token` is the raw token from disk/env: anything running as the user can
- * read it, including a coding agent. `gui-session` is a session token this process
- * minted for a browser, and it only authorizes a mutation after the origin and the
- * per-session CSRF token match. Consent-bearing routes must key off this value
- * rather than off request headers, which the token holder can forge freely.
+ * `admin-token` is the raw token from disk/env. `confirmed-gui-session` records a
+ * native/CLI browser handoff, and unsafe requests also require exact origin plus
+ * the per-session CSRF token. This blocks cross-user loopback spoofing, drive-by
+ * CSRF, and accidental raw-API calls; it is not user-presence proof. A malicious
+ * process running as the same trusted OS account can read the admin token, mint a
+ * launch ticket, and complete the exchange itself.
  */
-export type ManagementPrincipal = "admin-token" | "gui-session";
+export type ManagementPrincipal = "admin-token" | "confirmed-gui-session";
 
 /**
  * The principal for a request that already passed `requireManagementAuth`. Kept as a
@@ -277,7 +396,8 @@ export function managementPrincipal(
   if (equalSecret(actual, state.token)) return "admin-token";
   if (!config) return null;
   removeExpiredSessions(state);
-  return state.sessions.has(actual) ? "gui-session" : null;
+  const session = state.sessions.get(actual);
+  return session?.confirmedLaunch === true ? "confirmed-gui-session" : null;
 }
 
 export function requireManagementAuth(
@@ -298,7 +418,7 @@ export function requireManagementAuth(
   if (actual && config) {
     removeExpiredSessions(state);
     const session = state.sessions.get(actual);
-    if (session) {
+    if (session?.confirmedLaunch === true) {
       const requestOrigin = managementRequestOrigin(req, config);
       const claimedOrigin = req.headers.get(GUI_ORIGIN_HEADER);
       const browserOrigin = req.headers.get("Origin");

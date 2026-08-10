@@ -1274,7 +1274,7 @@ describe("Codex catalog routed normalization", () => {
 
   test("full merge path agrees with the build on the shared native priority policy", () => {
     // Genuine on-disk natives (real display names — the upstream-upgrade branch is NOT
-    // taken) plus the featured routed rows, merged the way syncCatalogModels does it.
+    // taken) plus the featured routed rows, merged by canonical convergence.
     const nativesOnDisk = buildCatalogEntries(nativeTemplate(), ROSTER_NATIVE_SLUGS, []);
     const routedEntries = buildCatalogEntries(nativeTemplate(), [], ROSTER_ROUTED_MODELS, FEATURED_ROSTER);
     const baseline = new Map([

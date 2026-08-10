@@ -91,13 +91,13 @@ CodexCommander 会安全失败，而不是转发空任务或不可读任务：
 ### GUI
 
 - **Dashboard** → 第一个状态单元：选择 **v1**、**base** 或 **v2**。
-- **Models** → **Current behavior** → **Collaboration**：选择 **Classic v1**、**遵循 Codex 默认值**（base）或 **Concurrent v2**。
+- **Models** → **Current behavior** → **Collaboration**：选择 **Reliable v1**、**Codex native**（base/default 语义）或 **Concurrent v2**。
 - **Subagents** → **Agent Command Center**：
   - **Active Roster** 选择并排序最先向 `spawn_agent` 公布的五个模型 override。拖动行、使用箭头按钮，或按 <kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd>。
   - **Agent Library** 搜索当前模型目录，并按事实能力进行筛选，例如推理、长上下文、视觉和工具支持。路由可用时，五个槽位 roster 之外的条目仍可通过精确 id 指定。
   - **Run Policy** 暂存代理协议、V2 消息传递、首选指导模型和 effort、已生成子任务的全局回退链、健康复查间隔、线程限制、子代理 effort 上限、名单指导，以及原生 Codex 默认值同步。策略变更与 roster 变更分开保存。
 
-将 **线程上限** 留空可恢复 Codex 默认值。V2 计算包含根代理的总线程数，V1 计算子线程数。协议和上限适用于新会话，指导和回退适用于之后生成的子任务；如果正在运行的 Codex app-server 仍保留过时的 catalog，页面会予以报告。
+将 **线程上限** 留空可恢复 Codex 默认值。V2 计算包含根代理的总线程数，V1 计算子线程数。协议或上限变更会更新 boot config；对于运行中的 worker，先 Apply，再启动新 task。指导和回退适用于之后生成的子任务。仅更改 V2 传递时只需新 task，不会弄脏 catalog。
 
 ### CLI
 
@@ -134,6 +134,8 @@ ccx agent effort set --subagent max
 | `/api/effort-caps` | 主代理和子代理的 effort 上限 |
 | `/api/subagent-models` | 最多五个模型的有序 roster |
 | `/api/subagent-model-fallback` | 全局 fallback 顺序和轮询间隔 |
+| `/api/codex-catalog/status` | 已保存配置、磁盘 catalog 与运行中 worker 的激活状态 |
+| `/api/codex-catalog/apply` | 经确认后将 catalog 显式应用到过时 worker；仅限通过确认的 `ccx gui` 或菜单栏应用启动后的浏览器调用 |
 
 例如：
 
@@ -160,6 +162,10 @@ curl -X PUT http://localhost:10100/api/injection-model \
 ### 为什么配置的模型没有出现在 v2 roster 中？
 
 它可能在 picker 中被隐藏、超出了五个模型的显示上限、从目录中缺失，或者被固定到 v1。`"v2"`、`null` 或缺失的界面值都可以；真正的 `"v1"` 固定值不可以。
+
+### 选择 V2 后 Luna 会立刻可用吗？
+
+不会。强制 V2 会让 Luna 在 V2 界面中具备资格，但不会让正在运行的 worker 重新加载 catalog。模型还必须被选中、可在 picker 中显示、位于五个广告模型窗口内、写入磁盘 catalog、被当前 app-server 加载，并能由 proxy 实际路由。新 task 或 fork 不是重新加载边界。对于过时 worker，请使用 **Apply agent catalog**，或退出并重新打开 Codex Desktop。
 
 ### 模式更改会影响正在运行的会话吗？
 

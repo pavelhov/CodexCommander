@@ -3,6 +3,7 @@ import MenuBarCore
 
 enum DiscoverySuite {
     private static let token = "ccx_admin_" + String(repeating: "a", count: 43)
+    private static let attestationSecret = String(repeating: "S", count: 43)
 
     static func run(_ t: TestRunner) {
         t.test("discovery: accepts only explicit literal loopback and maps wildcards") {
@@ -23,6 +24,9 @@ enum DiscoverySuite {
                     t.equal(found.endpoint.host, expected, host ?? "missing host")
                     t.equal(found.endpoint.port, 18181)
                     t.equal(found.endpoint.expectedPID, 4242)
+                    t.equal(found.runtimeAttestation?.pid, 4242)
+                    t.equal(found.runtimeAttestation?.port, 18181)
+                    t.equal(found.runtimeAttestation?.host, expected)
                 }
             }
         }
@@ -230,9 +234,9 @@ enum DiscoverySuite {
 
     private static func runtimeJSON(host: String?) -> String {
         if let host {
-            return #"{"schemaVersion":1,"pid":4242,"port":18181,"hostname":"\#(host)"}"#
+            return #"{"schemaVersion":1,"pid":4242,"port":18181,"hostname":"\#(host)","attestationSecret":"\#(attestationSecret)"}"#
         }
-        return #"{"schemaVersion":1,"pid":4242,"port":18181}"#
+        return #"{"schemaVersion":1,"pid":4242,"port":18181,"attestationSecret":"\#(attestationSecret)"}"#
     }
 
     private static func writeRuntime(_ root: URL, host: String?) throws {

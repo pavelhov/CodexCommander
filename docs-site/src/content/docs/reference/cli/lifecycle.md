@@ -161,6 +161,13 @@ single-flight/lock files can be created under `CODEXCOMMANDER_HOME`, non-healthy
 accounts (redacted ids) with a recovery `Action:`, and a static OK that the Codex forward path does
 not fabricate official-client metadata. Doctor never mutates credentials or applies repairs.
 
+:::note[One-time upgrade restart]
+An already-running proxy from an older build may have a protected runtime record without an
+`attestationSecret`. Restart that proxy once before using CLI management commands or launching
+credential-bearing Claude/OpenCode clients. Until then, sensitive requests fail closed: no token or
+request body falls back to a listener found only through public health or a configured port.
+:::
+
 ## Catalog sync
 
 ### `ccx sync [--restart-codex]`
@@ -173,6 +180,11 @@ serving the previous in-memory model list even though `codexcommander-catalog.js
 were updated. Pass `--restart-codex` to send `SIGTERM` only to matching `codex … app-server` and
 `codex-code-mode-host` processes owned by the current user (active turns may be interrupted). Broad
 `pkill -f codex` matching is intentionally avoided.
+
+`ccx sync` itself is non-disruptive. Starting a new task or forking one in the same already-running
+Codex app-server does not make it reload the catalog. Use the dashboard's explicit **Apply agent
+catalog**, `ccx sync --restart-codex`, or quit and reopen Codex Desktop; reopening Desktop is the
+reliable manual worker-replacement boundary.
 
 ### `ccx sync-cache [--restart-codex]`
 
@@ -310,4 +322,10 @@ proxy controls. `start` and `stop` control the icon only; use its menu to contro
 ### `ccx gui`
 
 Open the [web dashboard](/guides/web-dashboard/) at `http://localhost:<port>`, auto-starting the proxy
-if it is not running.
+if it is not running. The command mints a short-lived, single-use browser launch ticket so the
+dashboard can make changes, including confirmed **Apply agent catalog**. The ticket travels only in
+the URL fragment and is removed during exchange; the durable admin token never enters the URL or web
+storage. The resulting confirmed session is process-memory-only, lasts up to eight hours, and is not
+renewed. Expiry or proxy restart makes the next API request return `401`; open the page through
+`ccx gui` or the macOS menu app again. Opening `localhost` manually supplies no API session and never
+prompts for or sends the durable admin token.

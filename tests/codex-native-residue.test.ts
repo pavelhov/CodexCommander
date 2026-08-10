@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -17,16 +17,21 @@ import { basename, dirname, join, resolve } from "node:path";
 import {
   buildCatalogEntries,
   readCodexCatalogPath,
-  syncCatalogModels,
 } from "../src/codex/catalog";
 import { buildProfileFile } from "../src/codex/inject";
-import { classifyNativeRoutedResidue } from "../src/codex/native-residue";
+import {
+  classifyNativeRoutedResidue,
+  classifyNativeRoutedResidueWithoutJournal,
+} from "../src/codex/native-residue";
 import { readCodexTransitionState } from "../src/codex/transition-state";
 import {
   resolveCodexCoordinatorDatabasePath,
   resolveEffectiveUserIdentity,
 } from "../src/codex/user-identity";
 import type { CodexCommanderConfig } from "../src/types";
+import { convergeCatalogForTest } from "./helpers/catalog-convergence";
+
+setDefaultTimeout(30_000);
 
 let codexHome = "";
 let codexCommanderHome = "";
@@ -74,26 +79,6 @@ function routedCatalog(): string {
     [{ provider: "fixture-provider", id: "fixture-model" }],
   );
   return JSON.stringify({ models }, null, 2) + "\n";
-}
-
-function deterministicCatalogDeps() {
-  return {
-    // These tests exercise production catalog publication and residue
-    // classification. Keep the unrelated Codex bundled-model probe in-process
-    // so filesystem behavior is not coupled to subprocess scheduling.
-    commandCandidates: () => ["codex-fixture"],
-    execFileSync: () => JSON.stringify({
-      models: [{
-        slug: "gpt-5.5",
-        display_name: "gpt-5.5",
-        description: "native",
-        priority: 0,
-        visibility: "list",
-        base_instructions: "You are Codex, a coding agent based on GPT-5.",
-        supported_reasoning_levels: [{ effort: "medium", description: "m" }],
-      }],
-    }),
-  };
 }
 
 const residueFixtures: Array<{
@@ -149,7 +134,46 @@ for (const fixture of residueFixtures) {
       surface: fixture.surface,
     });
   });
+
+  if (fixture.surface !== "journal") {
+    test(`${fixture.name} remains routed residue when only the journal is ignored`, () => {
+      fixture.arrange();
+      expect(classifyNativeRoutedResidueWithoutJournal()).toMatchObject({
+        kind: "residue",
+        surface: fixture.surface,
+      });
+    });
+  }
 }
+
+test("the recovery observation ignores only a completed journal while the default remains fail-closed", () => {
+  residueFixtures.find(fixture => fixture.surface === "journal")!.arrange();
+
+  expect(classifyNativeRoutedResidue()).toMatchObject({
+    kind: "residue",
+    surface: "journal",
+  });
+  expect(classifyNativeRoutedResidueWithoutJournal()).toEqual({ kind: "clean" });
+  expect(readCodexTransitionState()).toEqual({
+    kind: "state-ambiguous",
+    message: "A missing coordinator row cannot be initialized while native Codex routing residue exists.",
+  });
+});
+
+test("the recovery observation still refuses a journal atomic-write replacement", () => {
+  residueFixtures.find(fixture => fixture.surface === "journal")!.arrange();
+  const tempPath = pathInCodexHome("codexcommander-journal.json.ccx.42.7.tmp");
+  writeFileSync(tempPath, "replacement in flight");
+
+  const classified = classifyNativeRoutedResidueWithoutJournal();
+  expect(classified).toMatchObject({
+    kind: "indeterminate",
+    surface: "partial-write",
+    reason: "CodexCommander atomic-write artifact is still present",
+  });
+  expect(classified.kind === "indeterminate" ? basename(classified.path) : null)
+    .toBe(basename(tempPath));
+});
 
 test("an CodexCommander atomic-write artifact is indeterminate", () => {
   writeFileSync(pathInCodexHome("config.toml.ccx.123.1.tmp"), "partial");
@@ -166,6 +190,7 @@ test("a routed catalog at the configured nested path refuses coordinator initial
   writeFileSync(catalogPath, JSON.stringify({ models: [] }));
   const config: CodexCommanderConfig = {
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "fixture",
     providers: {
       fixture: {
@@ -177,7 +202,7 @@ test("a routed catalog at the configured nested path refuses coordinator initial
     },
   };
 
-  const sync = await syncCatalogModels(config, deterministicCatalogDeps());
+  const sync = await convergeCatalogForTest(config);
 
   expect(sync).toMatchObject({ path: catalogPath, catalogWritten: true });
   expect(classifyNativeRoutedResidue()).toMatchObject({
@@ -318,6 +343,7 @@ for (const shape of productionCatalogLeafShapes) {
     writeFileSync(catalogPath, JSON.stringify({ models: [] }));
     const config: CodexCommanderConfig = {
       port: 10100,
+      multiAgentGuidanceEnabled: true,
       defaultProvider: "fixture",
       providers: {
         fixture: {
@@ -329,7 +355,7 @@ for (const shape of productionCatalogLeafShapes) {
       },
     };
 
-    const sync = await syncCatalogModels(config, deterministicCatalogDeps());
+    const sync = await convergeCatalogForTest(config);
     const catalog = JSON.parse(readFileSync(catalogPath, "utf8")) as {
       models: Array<Record<string, unknown>>;
     };
@@ -502,6 +528,7 @@ test(`production-generated arbitrary bare combo alias ${arbitraryComboAlias} is 
   writeFileSync(catalogPath, JSON.stringify({ models: [] }));
   const config: CodexCommanderConfig = {
     port: 10100,
+    multiAgentGuidanceEnabled: true,
     defaultProvider: "fixture",
     providers: {
       fixture: {
@@ -521,7 +548,7 @@ test(`production-generated arbitrary bare combo alias ${arbitraryComboAlias} is 
     },
   };
 
-  const sync = await syncCatalogModels(config, deterministicCatalogDeps());
+  const sync = await convergeCatalogForTest(config);
   const catalog = JSON.parse(readFileSync(catalogPath, "utf8")) as {
     models: Array<Record<string, unknown>>;
   };
@@ -612,6 +639,16 @@ for (const fixture of indeterminateFixtures) {
       message: "A missing coordinator row cannot be initialized while native Codex routing residue exists.",
     });
   });
+
+  if (fixture.surface !== "journal") {
+    test(`${fixture.name} remains indeterminate when only the journal is ignored`, () => {
+      fixture.arrange();
+      expect(classifyNativeRoutedResidueWithoutJournal()).toMatchObject({
+        kind: "indeterminate",
+        surface: fixture.surface,
+      });
+    });
+  }
 }
 
 const symlinkTest = process.platform === "win32" ? test.skip : test;

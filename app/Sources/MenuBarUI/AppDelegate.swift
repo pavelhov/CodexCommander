@@ -277,7 +277,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     /// decisions), so the tray hands the recommendation off instead of surfacing a raw
     /// `ccx service install` command the app would never execute.
     private func openStartupOptions() {
-        NSWorkspace.shared.open(startupOptionsURL())
+        openHash("startup")
     }
 
     /// Package-visible seam so the UI tests can pin the destination without opening a
@@ -296,12 +296,29 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     }
 
     private func openHash(_ hash: String) {
-        var components = URLComponents(url: endpoint.baseURL, resolvingAgainstBaseURL: false)
-        components?.fragment = hash
-        if let url = components?.url {
-            NSWorkspace.shared.open(url)
-        } else {
-            NSWorkspace.shared.open(endpoint.baseURL)
+        guard let client else {
+            controller.showResult(
+                "Secure dashboard launch is unavailable. Start CodexCommander and try again.",
+                isError: true
+            )
+            return
+        }
+        Task { @MainActor [weak self, client] in
+            let result: Result<URL, Error>
+            do {
+                result = .success(try await client.confirmedGuiLaunchURL(route: hash))
+            } catch {
+                result = .failure(error)
+            }
+            guard let self else { return }
+            switch result {
+            case .success(let launch):
+                NSWorkspace.shared.open(launch)
+            case .failure(let error):
+                let message = (error as? ProxyError)?.userMessage
+                    ?? "Secure dashboard launch failed. Try again."
+                self.controller.showResult(message, isError: true)
+            }
         }
     }
 

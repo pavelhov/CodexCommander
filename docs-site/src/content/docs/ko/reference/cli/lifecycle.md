@@ -163,6 +163,10 @@ single-flight/lock 파일을 만들 수 있는지, 건강하지 않은 OAuth 또
 복구용 `Action:`, 그리고 Codex 전달 경로가 공식 클라이언트 메타데이터를 꾸며 내지 않는다는
 정적 OK를 보고합니다. doctor는 자격 증명을 변경하거나 복구를 적용하지 않습니다.
 
+:::note[업그레이드 후 한 번 재시작]
+이전 빌드에서 계속 실행 중인 프록시는 보호된 런타임 레코드에 `attestationSecret`이 없을 수 있습니다. CLI 관리 명령이나 자격 증명을 전달하는 Claude/OpenCode 클라이언트를 사용하기 전에 해당 프록시를 한 번 재시작하세요. 그전에는 민감한 요청이 fail closed되며, 공개 health 정보나 설정 포트로만 찾은 listener에 token 또는 request body를 보내는 fallback은 없습니다.
+:::
+
 ## 카탈로그 동기화
 
 ### `ccx sync [--restart-codex]`
@@ -175,6 +179,8 @@ single-flight/lock 파일을 만들 수 있는지, 건강하지 않은 OAuth 또
 `--restart-codex`를 붙이면 현재 사용자가 소유한 `codex … app-server`와 `codex-code-mode-host`
 프로세스 중 일치하는 것에만 `SIGTERM`을 보냅니다(활성 작업이 중단될 수 있습니다). 광범위한
 `pkill -f codex` 매칭은 의도적으로 피합니다.
+
+일반 `ccx sync`는 중단하지 않습니다. 같은 app-server에서 새 task를 시작하거나 fork해도 카탈로그를 다시 읽지 않습니다. 대시보드의 **Apply agent catalog**, `ccx sync --restart-codex`, 또는 Codex Desktop을 종료 후 다시 여세요.
 
 ### `ccx sync-cache [--restart-codex]`
 
@@ -260,4 +266,4 @@ Windows 상태 트레이 아이콘을 설치하고 제어합니다. Windows 로�
 ### `ccx gui`
 
 프록시가 실행 중이 아니면 자동으로 시작하면서 [웹 대시보드](/guides/web-dashboard/)를
-`http://localhost:<port>`에서 엽니다.
+`http://localhost:<port>`에서 엽니다. 수명이 짧고 일회용인 브라우저 시작 티켓으로 확인된 **Apply agent catalog**를 포함한 변경 작업을 사용할 수 있습니다. 티켓은 URL fragment로만 전달되고 교환 중 제거됩니다. 영구 관리자 토큰은 URL이나 Web Storage에 들어가지 않습니다. 확인된 세션은 프로세스 메모리에만 최대 8시간 유지되며 갱신되지 않습니다. 만료 또는 프록시 재시작 후 다음 API 요청은 `401`을 반환합니다. `ccx gui` 또는 macOS 메뉴 앱에서 다시 여세요. loopback 페이지를 직접 열면 API 세션이 발급되지 않으며 영구 관리자 토큰을 요구하거나 전송하지 않습니다.

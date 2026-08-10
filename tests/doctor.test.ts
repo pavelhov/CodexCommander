@@ -395,21 +395,30 @@ describe("service memory section (#314 WP4)", () => {
   };
 
   test("fetchServiceMemory: ok / unauthorized / unreachable / malformed", async () => {
+    const attested = {
+      attestLiveManagementProxyImpl: async () => ({
+        pid: 4242,
+        port: 10100,
+        hostname: "127.0.0.1",
+        source: "runtime" as const,
+        baseUrl: "http://127.0.0.1:10100",
+      }),
+    };
     const ok = await fetchServiceMemory("127.0.0.1", 10100, null,
-      (async () => Response.json(baseData)) as typeof fetch);
+      (async () => Response.json(baseData)) as typeof fetch, attested);
     expect(ok.status).toBe("ok");
     if (ok.status === "ok") expect(ok.data.pid).toBe(4242);
 
     const unauthorized = await fetchServiceMemory("127.0.0.1", 10100, "wrong",
-      (async () => new Response("{}", { status: 401 })) as typeof fetch);
+      (async () => new Response("{}", { status: 401 })) as typeof fetch, attested);
     expect(unauthorized.status).toBe("unauthorized");
 
     const unreachable = await fetchServiceMemory("127.0.0.1", 10100, null,
-      (async () => { throw new TypeError("fetch failed"); }) as typeof fetch);
+      (async () => { throw new TypeError("fetch failed"); }) as typeof fetch, attested);
     expect(unreachable.status).toBe("unreachable");
 
     const malformed = await fetchServiceMemory("127.0.0.1", 10100, null,
-      (async () => Response.json({ hello: "world" })) as typeof fetch);
+      (async () => Response.json({ hello: "world" })) as typeof fetch, attested);
     expect(malformed.status).toBe("unreachable");
     if (malformed.status === "unreachable") expect(malformed.error).toBe("malformed response");
   });

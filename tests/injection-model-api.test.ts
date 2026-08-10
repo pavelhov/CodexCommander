@@ -4,9 +4,12 @@
  * model, and GET surfaces `{ effort, efforts }` next to the existing model picker.
  */
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { getConfigPath, getDefaultConfig, loadConfig } from "../src/config";
 import { refreshCodexModelCatalog } from "../src/codex/refresh";
 import { handleManagementAPI } from "../src/server/management-api";
@@ -52,9 +55,139 @@ async function put(config: CodexCommanderConfig, body: unknown): Promise<Respons
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  const res = await handleManagementAPI(req, new URL(req.url), config);
+  const res = await handleManagementAPI(req, new URL(req.url), config, {
+    // This file changes CODEX_HOME after static imports. Keep ordinary route
+    // tests off the developer's native config; the subprocess regression below
+    // loads the real reconciler only after installing its isolated homes.
+    reconcileManagementNativeSubagentDefaults: async () => ({
+      status: "skipped",
+      reason: "routing-not-owned",
+    }),
+  });
   expect(res).not.toBeNull();
   return res!;
+}
+
+const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
+
+function runManagedDefaultsSave(codexHome: string, commanderHome: string): {
+  status: number;
+  stdout: string;
+  stderr: string;
+} {
+  const script = `
+    const { writeFileSync, readFileSync } = require("node:fs");
+    const { join } = require("node:path");
+    const { getDefaultConfig, loadConfig, saveConfigPreservingClaudeCode } = require("./src/config");
+    const { injectCodexConfig, getCodexRoutingKind } = require("./src/codex/inject");
+    const { handleManagementAPI } = require("./src/server/management-api");
+    const { ManagementRequest } = require("./tests/helpers/management-auth");
+
+    const config = {
+      ...getDefaultConfig(),
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      injectionModel: "gpt-5.6-terra",
+      injectionEffort: "high",
+    };
+    saveConfigPreservingClaudeCode(config);
+    writeFileSync(join(process.env.CODEX_HOME, "codexcommander-catalog.json"), '{"models":[]}\\n');
+    const initial = await injectCodexConfig(10100, config);
+    if (!initial.success || getCodexRoutingKind() !== "codexcommander-local") {
+      throw new Error("failed to establish managed routing: " + JSON.stringify(initial));
+    }
+
+    const req = new ManagementRequest("http://localhost/api/injection-model", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ syncCodexSubagentDefaults: true }),
+    });
+    const response = await handleManagementAPI(req, new URL(req.url), config, {
+      loadConfigForCatalogActivation: loadConfig,
+      codexRoutingKindForActivation: getCodexRoutingKind,
+      catalogArtifactProofForActivation: () => "current",
+      collectCodexAppServerCatalogState: () => ({
+        state: "stale",
+        catalogMtimeMs: Date.now(),
+        processes: [{ pid: 4242, commandLine: "codex app-server", startedAtMs: 1 }],
+      }),
+    }, "confirmed-gui-session");
+    console.log(JSON.stringify({
+      status: response.status,
+      body: await response.json(),
+      nativeConfig: readFileSync(join(process.env.CODEX_HOME, "config.toml"), "utf8"),
+    }));
+  `;
+  const result = spawnSync(process.execPath, ["--eval", script], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      CODEXCOMMANDER_HOME: commanderHome,
+    },
+    encoding: "utf8",
+  });
+  return {
+    status: result.status ?? 1,
+    stdout: result.stdout?.trim() ?? "",
+    stderr: result.stderr?.trim() ?? "",
+  };
+}
+
+function runUnownedDefaultsSave(
+  codexHome: string,
+  commanderHome: string,
+  mode: "off" | "native" | "external",
+): { status: number; stdout: string; stderr: string } {
+  const script = `
+    const { readFileSync } = require("node:fs");
+    const { getDefaultConfig, saveConfigPreservingClaudeCode } = require("./src/config");
+    const { getCodexRoutingKind } = require("./src/codex/inject");
+    const { handleManagementAPI } = require("./src/server/management-api");
+    const { ManagementRequest } = require("./tests/helpers/management-auth");
+    const config = {
+      ...getDefaultConfig(),
+      ...(process.env.TEST_MODE === "off" ? { clientIntegrations: { codex: false } } : {}),
+      injectionModel: "gpt-5.6-terra",
+      injectionEffort: "high",
+    };
+    saveConfigPreservingClaudeCode(config);
+    const nativePath = process.env.CODEX_HOME + "/config.toml";
+    const before = readFileSync(nativePath, "utf8");
+    const req = new ManagementRequest("http://localhost/api/injection-model", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ syncCodexSubagentDefaults: true }),
+    });
+    const response = await handleManagementAPI(req, new URL(req.url), config);
+    console.log(JSON.stringify({
+      status: response.status,
+      body: await response.json(),
+      before,
+      after: readFileSync(nativePath, "utf8"),
+      routingKind: getCodexRoutingKind(),
+    }));
+  `;
+  const result = spawnSync(process.execPath, ["--eval", script], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      CODEXCOMMANDER_HOME: commanderHome,
+      TEST_MODE: mode,
+    },
+    encoding: "utf8",
+  });
+  return {
+    status: result.status ?? 1,
+    stdout: result.stdout?.trim() ?? "",
+    stderr: result.stderr?.trim() ?? "",
+  };
 }
 
 describe("/api/injection-model reasoning effort", () => {
@@ -164,6 +297,68 @@ describe("/api/injection-model reasoning effort", () => {
 });
 
 describe("/api/injection-model guidance kill switch + partial update", () => {
+  test.each([
+    ["off", 'model = "gpt-5.6-terra"\n', "integration-disabled", "native"],
+    ["native", 'model = "gpt-5.6-terra"\n', "routing-not-owned", "native"],
+    ["external", 'model_provider = "external"\n\n[model_providers.external]\nbase_url = "https://example.test/v1"\n', "routing-not-owned", "custom-remote"],
+  ] as const)("%s Save preserves unowned native config", (mode, nativeConfig, reason, routingKind) => {
+    const codexHome = mkdtempSync(join(tmpdir(), `ccx-injection-${mode}-codex-`));
+    const commanderHome = mkdtempSync(join(tmpdir(), `ccx-injection-${mode}-home-`));
+    try {
+      writeFileSync(join(codexHome, "config.toml"), nativeConfig, "utf8");
+      const result = runUnownedDefaultsSave(codexHome, commanderHome, mode);
+      expect(result.status, result.stderr).toBe(0);
+      const output = JSON.parse(result.stdout) as {
+        status: number;
+        body: { nativeDefaultsRefresh: { status: string; reason: string } };
+        before: string;
+        after: string;
+        routingKind: string;
+      };
+      expect(output.status).toBe(200);
+      expect(output.body.nativeDefaultsRefresh).toEqual({ status: "skipped", reason });
+      expect(output.after).toBe(output.before);
+      expect(output.routingKind).toBe(routingKind);
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+      rmSync(commanderHome, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("managed Save reconciles native defaults and reports reload-required without signaling", () => {
+    const codexHome = mkdtempSync(join(tmpdir(), "ccx-injection-managed-codex-"));
+    const commanderHome = mkdtempSync(join(tmpdir(), "ccx-injection-managed-home-"));
+    try {
+      writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.6-terra"\n', "utf8");
+      const result = runManagedDefaultsSave(codexHome, commanderHome);
+      expect(result.status, result.stderr).toBe(0);
+      const output = JSON.parse(result.stdout) as {
+        status: number;
+        body: {
+          nativeDefaultsRefresh: { status: string };
+          activation: {
+            workers: { status: string };
+            apply: { required: boolean; allowed: boolean; reason: string };
+          };
+        };
+        nativeConfig: string;
+      };
+      expect(output.status).toBe(200);
+      expect(output.body.nativeDefaultsRefresh).toMatchObject({ status: "reconciled" });
+      expect(output.nativeConfig).toContain("# Managed by CodexCommander: native subagent defaults table");
+      expect(output.nativeConfig).toContain('default_subagent_model = "gpt-5.6-terra"');
+      expect(output.nativeConfig).toContain('default_subagent_reasoning_effort = "high"');
+      expect(output.body.activation.workers.status).toBe("reload_required");
+      expect(output.body.activation.apply).toMatchObject({
+        required: true,
+        allowed: true,
+      });
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+      rmSync(commanderHome, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   test("flag-only PUT preserves model, effort, and prompt in memory and on disk", async () => {
     isolatedHome();
     const config = makeConfig({
@@ -417,11 +612,30 @@ describe("/api/injection-model guidance kill switch + partial update", () => {
 
     let flagSeenBySync: boolean | undefined;
     await refreshCodexModelCatalog(config, {
-      syncCatalogModels: async syncedConfig => {
+      prepareConfigGeneration: () => {},
+      captureCatalogAdmissionSnapshot: syncedConfig => {
         flagSeenBySync = syncedConfig.multiAgentGuidanceEnabled;
-        return { added: 0, path: join(tempHome!, "missing-catalog.json"), catalogWritten: false, comboOmissions: [] };
+        return {} as never;
       },
-      invalidateCodexModelsCache: () => false,
+      convergeCodexCatalog: async () => ({
+        changed: false,
+        catalogRefresh: { status: "committed", changed: false, degraded: false, notices: [] },
+        projection: {
+          admittedGeneration: { value: 0 },
+          admittedConfigAuthority: {
+            generation: { value: 0 },
+            semanticIdentity: "semantic",
+            contentIdentity: "content",
+          },
+          added: 0,
+          path: join(tempHome!, "missing-catalog.json"),
+          catalogWritten: false,
+          cacheSynced: false,
+          comboOmissions: [],
+          catalogQuality: "native-only",
+          rehydrated: 0,
+        },
+      }),
       existsSync: () => false,
     });
     expect(flagSeenBySync).toBe(false);

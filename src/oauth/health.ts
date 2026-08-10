@@ -4,14 +4,13 @@ import { isAccountNeedsReauth } from "../codex/account-runtime-state";
 import { getCodexAccountCredential, listCodexAccountIds } from "../codex/account-store";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
 import { configuredAdminToken } from "../lib/admin-secrets";
-import { readRuntimePort } from "../config";
-import {
-  createLocalAttestationChallenge,
-  verifyLocalAttestationProof,
-} from "../lib/local-management-attestation";
-import { ATTESTATION_CHALLENGE_HEADER, ATTESTATION_PROOF_HEADER } from "../identity";
+import { readRuntimePort, verifyPidIdentity } from "../config";
 import { maskAccountId } from "../lib/privacy";
-import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
+import {
+  attestLiveManagementProxy,
+  findLiveProxy,
+  probeHostname,
+} from "../server/proxy-liveness";
 import { loadAuthStore, peekAuthStore, peekOAuthRefreshIntent, readOAuthRefreshIntent } from "./store";
 import type { ProviderAccount } from "./types";
 
@@ -335,6 +334,7 @@ async function fetchCodexHealthFromLiveProxy(
   fetchImpl: typeof fetch = fetch,
   findLiveProxyImpl: typeof findLiveProxy = findLiveProxy,
   readRuntimePortImpl: typeof readRuntimePort = readRuntimePort,
+  verifyPidIdentityImpl: typeof verifyPidIdentity = verifyPidIdentity,
 ): Promise<LiveProxyCodexHealthResult> {
   const live = await findLiveProxyImpl();
   if (!live) return { source: "unavailable", entries: null };
@@ -343,40 +343,24 @@ async function fetchCodexHealthFromLiveProxy(
   const token = configuredAdminToken();
   const headers: Record<string, string> = {};
   try {
+    let baseUrl = `http://${probeHostname(live.hostname)}:${live.port}`;
     if (token) {
       // Public /healthz identity is intentionally forgeable enough for liveness, not
       // strong enough to receive a bearer. Prove the listener knows the per-process
       // secret stored in the protected runtime record before attaching the admin token.
-      if (live.source !== "runtime" || live.pid === null) {
+      const target = await attestLiveManagementProxy({
+        fetchFn: fetchImpl,
+        readRuntimeFn: readRuntimePortImpl,
+        verifyPidFn: verifyPidIdentityImpl,
+      });
+      if (!target) {
         return { source: "management-api-unavailable", entries: null };
       }
-      const attestedPid = live.pid;
-      const runtime = readRuntimePortImpl(attestedPid);
-      if (!runtime?.attestationSecret || runtime.port !== live.port) {
-        return { source: "management-api-unavailable", entries: null };
-      }
-      const challenge = createLocalAttestationChallenge();
-      const proofResponse = await fetchImpl(
-        `http://${probeHostname(live.hostname)}:${live.port}/healthz`,
-        {
-          headers: { [ATTESTATION_CHALLENGE_HEADER]: challenge },
-          signal: AbortSignal.timeout(4000),
-        },
-      );
-      const proof = proofResponse.headers.get(ATTESTATION_PROOF_HEADER);
-      if (!proofResponse.ok || !verifyLocalAttestationProof(
-        runtime.attestationSecret,
-        challenge,
-        attestedPid,
-        live.port,
-        proof,
-      )) {
-        return { source: "management-api-unavailable", entries: null };
-      }
+      baseUrl = target.baseUrl;
       headers.Authorization = `Bearer ${token}`;
     }
     const res = await fetchImpl(
-      `http://${probeHostname(live.hostname)}:${live.port}/api/codex-auth/accounts`,
+      `${baseUrl}/api/codex-auth/accounts`,
       { headers, signal: AbortSignal.timeout(4000) },
     );
     if (res.status === 401 || res.status === 403) {
@@ -426,6 +410,7 @@ export async function collectOAuthHealthEntriesForCli(
     fetchImpl?: typeof fetch;
     findLiveProxyImpl?: typeof findLiveProxy;
     readRuntimePortImpl?: typeof readRuntimePort;
+    verifyPidIdentityImpl?: typeof verifyPidIdentity;
   } = {},
 ): Promise<OAuthCliHealthReport> {
   const entries = collectOAuthHealthEntries(now, { observeOnly: true, includeLocalCodex: false });
@@ -433,6 +418,7 @@ export async function collectOAuthHealthEntriesForCli(
     deps.fetchImpl,
     deps.findLiveProxyImpl,
     deps.readRuntimePortImpl,
+    deps.verifyPidIdentityImpl,
   );
   if (remote.entries) {
     for (const entry of remote.entries) entries.push(entry);

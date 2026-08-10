@@ -37,7 +37,7 @@ ccx v2 on
 ccx v2 threads 16
 ```
 
-`mode` サブコマンドは、`multiAgentMode` を CodexCommander 設定に書き込み、Codex カタログを再同期します。モードとフラグの遷移により、現在の数値スレッド制限が有効な v1/v2 Codex キー間で移動します。移行が失敗すると、元の `config.toml` が復元されます。変更は新しい Codex セッションに適用されますが、実行中のセッションでは固定されたサーフェスが維持されます。
+`mode` サブコマンドは、`multiAgentMode` を CodexCommander 設定に書き込み、Codex カタログを再同期します。モードとフラグの遷移により、現在の数値スレッド制限が有効な v1/v2 Codex キー間で移動します。移行が失敗すると、元の `config.toml` が復元されます。モード、フラグ、thread の変更は boot config を更新します。実行中 worker に反映するには `ccx sync --restart-codex`（または dashboard の **Apply agent catalog**）を使い、その後に新しい task を開始します。
 
 ## コンボルーティング
 

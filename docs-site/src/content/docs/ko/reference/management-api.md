@@ -16,7 +16,7 @@ Management API에는 데이터 평면 API 키와는 독립된 자체 관리자 �
 
 파일 기반 토큰은 해당 디렉터리와 파일 권한 또는 ACL이 강화된 뒤에만 허용됩니다. 이를 보장할 수 없으면 관리 인증은 실패를 닫는 방식으로 처리되며, 환경 토큰이 제공되거나 파일 상태가 복구될 때까지 API는 503을 반환합니다.
 
-관리자 토큰은 다음 두 형식 중 하나로 보내면 됩니다.
+Headless API client는 신뢰할 수 있는 transport에서 관리자 토큰을 다음 두 형식 중 하나로 보냅니다.
 
 ```http
 X-CodexCommander-API-Key: <admin-token>
@@ -27,14 +27,18 @@ Authorization: Bearer <admin-token>
 ```
 
 :::caution
-관리자 토큰은 모든 데이터 평면 자격 증명과 달라야 합니다. 시작 시 프록시 admission key와 충돌하는 관리 자격 증명은 거부됩니다. 관리자 토큰을 Codex, Claude Code, 또는 다른 모델 클라이언트에 넣지 마십시오. 이 토큰은 제어 평면 변경 권한을 부여합니다.
+관리자 토큰은 모든 데이터 평면 자격 증명과 달라야 합니다. 시작 시 프록시 admission key와 충돌하는 관리 자격 증명은 거부됩니다. 관리자 토큰을 Codex, Claude Code, 또는 다른 모델 클라이언트에 넣지 마십시오. 이 토큰은 제어 평면 변경 권한을 부여합니다. 브라우저는 신뢰할 수 있는 non-loopback HTTPS origin에서만 이를 요청할 수 있습니다. 평문 원격 페이지에 붙여 넣거나 전송하지 마세요.
 :::
 
-### 루프백 대시보드 세션
+### 대시보드 시작 세션
 
-루프백 바인드에서는 대시보드 초기화가 수명이 짧은 `ccx_session_*` 자격 증명을 받을 수 있습니다. 각 세션은 5분 동안 유지되며 정확한 대시보드 origin에 묶입니다. 안전한 요청은 그 origin과 일치해야 합니다. 안전하지 않은 메서드에는 브라우저 `Origin`과 세션의 CSRF 토큰도 필요합니다.
+직접 연 loopback 대시보드에는 API 자격 증명이 없습니다. 정적 페이지 틀은 로드되지만 `ccx gui` 또는 macOS 메뉴 앱에서 다시 열 때까지 모든 `/api/*` 요청은 `401`을 반환합니다. 어떤 loopback hostname/address에서도 영구 관리자 토큰을 요구하거나 전송하지 않습니다. 브라우저 origin은 listener를 소유한 로컬 OS 사용자를 증명하지 않으므로 loopback은 인증된 listener identity도 인증 우회도 아닙니다.
 
-세션 발급은 원격 바인드와 같이 데이터 평면 인증이 필요한 경우에는 항상 비활성화됩니다. 원격 운영자는 원시 관리자 토큰으로 인증해야 하며, 루프백 방식의 GUI 세션은 발급되지 않습니다.
+런처는 원시 관리자 자격 증명을 사용해 요청한 route와 origin에 묶인 수명이 짧고 일회용인 티켓을 발급합니다. 티켓은 URL fragment로만 전달되고 한 번의 교환 중 즉시 제거됩니다. 확인된 GUI 세션은 전체 기능을 제공하며 프로세스 메모리에만 최대 8시간 유지됩니다. 갱신되지 않으며 만료 또는 프록시 재시작 후 다음 API 요청은 `401`을 반환하고 로컬 런처 흐름이 다시 필요합니다. 영구 관리자 토큰은 URL이나 Web Storage에 들어가지 않습니다.
+
+원시 관리자 토큰은 일반 API 변경에 계속 유효합니다. 카탈로그 Apply는 더 엄격하여 `POST /api/codex-catalog/apply`가 확인된 GUI 세션만 허용합니다. 스크립트는 `ccx sync --restart-codex`를 사용합니다.
+
+원격 운영자 브라우저는 신뢰할 수 있는 HTTPS에서만 원시 관리자 토큰으로 인증할 수 있으며 평문 원격 페이지는 이를 요구하거나 전송하지 않습니다. 신뢰할 수 있는 HTTPS가 없다면 loopback으로 보이게 하는 로컬 또는 SSH tunnel을 사용하고 `ccx gui`에서 여세요. Headless API client는 신뢰할 수 있는 transport에서 raw-admin 인증을 계속 사용할 수 있습니다. 확인된 브라우저 세션은 정확한 origin과 route에 묶인 로컬 시작 티켓 교환으로만 발급됩니다.
 
 ## 공통 오류
 
@@ -56,10 +60,10 @@ Authorization: Bearer <admin-token>
 
 | Method and path | 목적 | 주요 오류 |
 | --- | --- | --- |
-| `GET, PUT /api/v2` | 에이전트 프로토콜, V2 메시지 전달, thread 설정을 읽거나 변경합니다. `multiAgentV2MessageDelivery`는 `plaintext` 또는 기본값 `encrypted`를 받으며, `encrypted` 또는 `null`을 보내면 명시적 평문 재정의가 제거됩니다. 전달 변경 후에는 새 세션을 시작하세요. `maxConcurrentThreadsPerSession: null`은 Codex 기본값을 복원합니다 | 400 잘못된 설정; 502 전환 또는 영속화 실패 |
+| `GET, PUT /api/v2` | 에이전트 프로토콜, V2 task 메시지 전달, thread 설정을 읽거나 변경합니다. 모드/프로토콜/thread 변경에는 Apply로 실행 중 worker를 교체한 뒤 새 task가 필요합니다. 전달 변경에는 새 task만 필요하며 카탈로그를 dirty로 만들지 않습니다. `maxConcurrentThreadsPerSession: null`은 Codex 기본값을 복원합니다 | 400 잘못된 설정; 502 전환 또는 영속화 실패 |
 | `GET, PUT /api/injection-model` | 선호 안내 모델, effort, prompt, guidance 설정을 읽거나 설정합니다. 네이티브 기본값 동기화를 켜지 않으면 자문용입니다 | 400 잘못된 모델, effort, 또는 본문 |
 | `GET, PUT /api/effort-caps` | 전역 및 sub-agent reasoning-effort 상한을 읽거나 설정합니다 | 400 잘못된 ladder 값 |
-| `GET, PUT /api/subagent-models` | `spawn_agent` 빠른 선택 모델을 최대 5개까지 읽거나 순서를 조정합니다. 라우팅을 강제하지 않습니다. 응답은 저장된 `chosen` 목록과 실제 `advertised` 목록을 구분하고 반영되지 않은 선택을 `excluded`로 보고합니다 | 400 잘못된 목록 또는 모델 5개 초과 |
+| `GET, PUT /api/subagent-models` | `spawn_agent` 빠른 선택 모델을 최대 5개까지 읽거나 순서를 조정합니다. 라우팅을 강제하지 않습니다. 응답은 저장된 `chosen` 목록과 실제 `advertised` 목록을 구분하고 반영되지 않은 선택 및 추가 `activation` 상태를 보고합니다 | 400 잘못된 목록 또는 모델 5개 초과 |
 | `GET, PUT /api/subagent-model-fallback` | 생성된 하위 작업의 전역 fallback 순서와 poll interval을 읽거나 설정합니다 | 400 잘못된 목록 또는 poll interval |
 | `GET /api/grok` | Grok 관리 구성 상태와 후보 모델을 읽습니다 | 400 상태 읽기 실패 |
 | `PUT /api/grok/selection` | 제외할 Grok 모델을 영속화합니다 | 400 잘못되었거나 너무 큰 선택 |
@@ -93,7 +97,9 @@ Authorization: Bearer <admin-token>
 | `POST /api/startup-action` | 서비스 또는 Codex shim을 설치하거나 복구합니다 | 400 잘못된 작업; 500 작업 실패 |
 | `GET, POST /api/windows-tray` | Windows tray 상태를 읽거나 설치, 시작, 중지, 제거합니다 | 400 지원되지 않는 플랫폼/작업; 500 작업 실패 |
 | `GET /api/diagnostics/project-config` | 캐시된 프로젝트 구성 경고를 읽습니다 | — |
-| `POST /api/sync` | 현재 모델 카탈로그를 Codex에 동기화하고 `catalogQuality`, `rehydrated`, Codex app-server `catalogState`, 필요한 재시작 힌트를 반환합니다 | 409 쓰기 권한 거부, 500 동기화 실패 |
+| `POST /api/sync` | 실행 중 워커를 중단하지 않고 현재 모델 카탈로그를 Codex에 동기화하며 `activation` 상태를 반환합니다 | 409 쓰기 권한 거부, 500 동기화 실패 |
+| `GET /api/codex-catalog/status` | 저장된 설정, 디스크 카탈로그, 실행 중 워커의 로드 상태를 읽습니다 | — |
+| `POST /api/codex-catalog/apply` | `{ "expectedDesiredRevision": "…", "confirmInterrupt": true }`로 확인한 오래된 워커에 명시적으로 적용합니다. 일회용 시작 handoff가 만든 확인된 GUI 세션만 허용합니다 | 400 잘못된 본문, 403 확인된 대시보드 시작 필요, 409 충돌/알 수 없는 신원, 503 busy |
 | `GET, PUT /api/sidecar-settings` | web-search 및 vision sidecar 모델/backend 설정을 읽거나 업데이트합니다 | 400 잘못된 형태, backend, 또는 한도 |
 | `GET, PUT /api/shadow-call-settings` | shadow-call interception 설정을 읽거나 업데이트합니다 | 400 잘못된 형태 또는 값 |
 

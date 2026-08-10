@@ -482,12 +482,8 @@ export function readRetainedRoutedCatalog(): RawCatalog | null {
   return readCatalog(retainedRoutedCatalogPath());
 }
 
-/**
- * Atomically persist routed rows (mode-600 via atomicWriteFile, which also
- * records the write in the CodexCommander config ownership ledger).
- */
-export function writeRetainedRoutedCatalog(models: RawEntry[]): void {
-  const path = retainedRoutedCatalogPath();
+/** Persist an already-admitted retained snapshot to its fixed observed path. */
+export function writeRetainedRoutedCatalogAtPath(path: string, models: RawEntry[]): void {
   const dir = dirname(path);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   atomicWriteFile(path, `${JSON.stringify({ models }, null, 2)}\n`);

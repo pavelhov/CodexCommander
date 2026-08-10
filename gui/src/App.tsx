@@ -16,8 +16,15 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
 import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRoute, IconTerminal } from "./icons";
 import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n/shared";
-import { Select } from "./ui";
-import { installApiAuthFetch } from "./api";
+import { Notice, Select } from "./ui";
+import {
+  installApiAuthFetch,
+  isBrowserLoopbackHostname,
+  isGuiMutationAuthorized,
+  isRawAdminPromptAllowed,
+  subscribeGuiLaunchCapability,
+  whenGuiLaunchCapabilitySettles,
+} from "./api";
 import { resolvedNavigationHash, type Page } from "./app-routing";
 import { useAppRouteState } from "./use-app-route-state";
 import { requestProxyStop } from "./stop-proxy";
@@ -126,6 +133,14 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>(readStoredTheme);
   const { locale, setLocale } = useI18n();
   const t = useT();
+  const [mutationAuthorized, setMutationAuthorized] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    const update = () => setMutationAuthorized(isGuiMutationAuthorized());
+    const unsubscribe = subscribeGuiLaunchCapability(update);
+    void whenGuiLaunchCapabilitySettles().then(update);
+    return unsubscribe;
+  }, []);
 
   // Narrow screens: the sidebar becomes an off-canvas drawer behind a hamburger toggle.
   const [navOpen, setNavOpen] = useState(false);
@@ -302,6 +317,13 @@ export default function App() {
 
       <main className="main" inert={navOpen}>
         <div className={`main-inner${page === "combos" ? " main-inner--combos" : ""}${page === "integrations" ? " main-inner--client-apps" : ""}${page === "startup" ? " main-inner--startup" : ""}`}>
+          {mutationAuthorized === false && (
+            <Notice tone="warn">{t(isRawAdminPromptAllowed()
+              ? "app.adminRequiredDashboard"
+              : isBrowserLoopbackHostname(window.location.hostname)
+                ? "app.launchRequiredDashboard"
+                : "app.secureOriginRequiredDashboard")}</Notice>
+          )}
           <ErrorBoundary
             key={page}
             pageName={t(PAGE_TKEY[page])}

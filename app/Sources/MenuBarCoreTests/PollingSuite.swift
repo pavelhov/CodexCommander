@@ -12,7 +12,8 @@ enum PollingSuite {
             let client = ProxyClient(
                 endpoint: endpoint,
                 session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
-                credentials: StaticCredentialStore("admin-secret")
+                credentials: StaticCredentialStore("admin-secret"),
+                attestationSecret: StubProtocol.attestationSecret
             )
             let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
 
@@ -21,6 +22,7 @@ enum PollingSuite {
             let snapshot = sync { await coordinator.current }
             t.equal(sync { await coordinator.currentInterval }, PollingCoordinator.openInterval)
             t.equal(snapshot.state.isRunning, true)
+            t.equal(snapshot.readiness, .ready)
             t.equal(snapshot.activityLoaded, true)
             t.equal(snapshot.activity?.activities.count, 2)
             t.equal(snapshot.quotasLoaded, true)
@@ -31,6 +33,7 @@ enum PollingSuite {
             StubProtocol.reset([
                 .init(status: 200, body: identity),
                 .init(status: 200, body: startupHealth(status: "protected", diagnosticStale: false)),
+                readinessResponse(status: "ready"),
                 .init(status: 200, body: identity),
                 .init(status: 200, body: """
                     {"schemaVersion":1,"generatedAt":3,"proxyState":"active",
@@ -58,7 +61,8 @@ enum PollingSuite {
             let client = ProxyClient(
                 endpoint: endpoint,
                 session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
-                credentials: StaticCredentialStore("admin-secret")
+                credentials: StaticCredentialStore("admin-secret"),
+                attestationSecret: StubProtocol.attestationSecret
             )
             let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
             sync { await coordinator.refresh() }
@@ -66,20 +70,22 @@ enum PollingSuite {
             sync { await coordinator.refresh() }
             let snapshot = sync { await coordinator.current }
             t.equal(snapshot.state, .unreachable)
+            t.equal(snapshot.readiness, .unavailable)
             t.equal(snapshot.consecutiveFailures, 3)
             t.equal(sync { await coordinator.currentInterval }, PollingCoordinator.backoffInterval)
         }
 
         t.test("polling: stale startup health stays neutral until revalidation completes") {
             StubProtocol.reset(
-                healthResponses(startupHealth(status: "at-risk", diagnosticStale: true))
-                    + healthResponses(startupHealth(status: "protected", diagnosticStale: false))
+                startupResponses(startupHealth(status: "at-risk", diagnosticStale: true))
+                    + startupResponses(startupHealth(status: "protected", diagnosticStale: false))
             )
             let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
             let client = ProxyClient(
                 endpoint: endpoint,
                 session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
-                credentials: StaticCredentialStore("admin-secret")
+                credentials: StaticCredentialStore("admin-secret"),
+                attestationSecret: StubProtocol.attestationSecret
             )
             let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
 
@@ -97,15 +103,16 @@ enum PollingSuite {
 
         t.test("polling: stale revalidation preserves the last known protected state") {
             StubProtocol.reset(
-                healthResponses(startupHealth(status: "protected", diagnosticStale: false))
-                    + healthResponses(startupHealth(status: "at-risk", diagnosticStale: true))
-                    + healthResponses(startupHealth(status: "protected", diagnosticStale: false))
+                startupResponses(startupHealth(status: "protected", diagnosticStale: false))
+                    + startupResponses(startupHealth(status: "at-risk", diagnosticStale: true))
+                    + startupResponses(startupHealth(status: "protected", diagnosticStale: false))
             )
             let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
             let client = ProxyClient(
                 endpoint: endpoint,
                 session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
-                credentials: StaticCredentialStore("admin-secret")
+                credentials: StaticCredentialStore("admin-secret"),
+                attestationSecret: StubProtocol.attestationSecret
             )
             let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
 
@@ -124,7 +131,7 @@ enum PollingSuite {
         }
 
         t.test("polling: persistently stale diagnostics eventually surface at-risk") {
-            let stale = healthResponses(startupHealth(status: "at-risk", diagnosticStale: true))
+            let stale = startupResponses(startupHealth(status: "at-risk", diagnosticStale: true))
             StubProtocol.reset(
                 Array(
                     repeating: stale,
@@ -135,7 +142,8 @@ enum PollingSuite {
             let client = ProxyClient(
                 endpoint: endpoint,
                 session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
-                credentials: StaticCredentialStore("admin-secret")
+                credentials: StaticCredentialStore("admin-secret"),
+                attestationSecret: StubProtocol.attestationSecret
             )
             let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
 
@@ -152,15 +160,16 @@ enum PollingSuite {
 
         t.test("polling: activity failures do not erase successful quota data") {
             var responses = openResponses()
-            // The third logical response is activity's management response (index 3
-            // after health/startup-health and activity health).
-            responses[3] = .init(status: 500)
+            // Readiness follows startup health, so activity's management response is
+            // index 4 (after health/startup-health/readyz and activity health).
+            responses[4] = .init(status: 500)
             StubProtocol.reset(responses)
             let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
             let client = ProxyClient(
                 endpoint: endpoint,
                 session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
-                credentials: StaticCredentialStore("admin-secret")
+                credentials: StaticCredentialStore("admin-secret"),
+                attestationSecret: StubProtocol.attestationSecret
             )
             let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
             sync { await coordinator.setPopoverOpen(true) }
@@ -170,13 +179,56 @@ enum PollingSuite {
             t.equal(snapshot.quotas.count, 2)
         }
 
+        t.test("polling: pending readiness is separate from authenticated liveness") {
+            StubProtocol.reset(startupResponses(
+                startupHealth(status: "protected", diagnosticStale: false),
+                readinessStatus: "pending"
+            ))
+            let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
+            let client = ProxyClient(
+                endpoint: endpoint,
+                session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
+                credentials: StaticCredentialStore("admin-secret"),
+                attestationSecret: StubProtocol.attestationSecret
+            )
+            let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
+            sync { await coordinator.refresh() }
+
+            let snapshot = sync { await coordinator.current }
+            t.equal(snapshot.state.isRunning, true)
+            t.equal(snapshot.readiness, .pending)
+            t.equal(snapshot.consecutiveFailures, 0)
+        }
+
+        t.test("polling: unavailable readiness does not overwrite successful liveness") {
+            StubProtocol.reset(
+                healthResponses(startupHealth(status: "protected", diagnosticStale: false))
+                    + [.init(status: 0, urlError: .timedOut)]
+            )
+            let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
+            let client = ProxyClient(
+                endpoint: endpoint,
+                session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
+                credentials: StaticCredentialStore("admin-secret"),
+                attestationSecret: StubProtocol.attestationSecret
+            )
+            let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
+            sync { await coordinator.refresh() }
+
+            let snapshot = sync { await coordinator.current }
+            t.equal(snapshot.state.isRunning, true)
+            t.equal(snapshot.readiness, .unavailable)
+            t.equal(snapshot.consecutiveFailures, 0)
+        }
+
         t.test("polling: manual refresh bypasses the proxy quota cache") {
             StubProtocol.reset(openResponses())
             let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
             let client = ProxyClient(
                 endpoint: endpoint,
                 session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
-                credentials: StaticCredentialStore("admin-secret")
+                credentials: StaticCredentialStore("admin-secret"),
+                attestationSecret: StubProtocol.attestationSecret
             )
             let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
             sync { await coordinator.setPopoverOpen(true) }
@@ -201,7 +253,8 @@ enum PollingSuite {
             let client = ProxyClient(
                 endpoint: endpoint,
                 session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
-                credentials: StaticCredentialStore("admin-secret")
+                credentials: StaticCredentialStore("admin-secret"),
+                attestationSecret: StubProtocol.attestationSecret
             )
             let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
             let opening = Task { await coordinator.setPopoverOpen(true) }
@@ -246,7 +299,7 @@ enum PollingSuite {
          "availability":[{"provider":"xai","status":"unavailable",
           "reason":"local_cli_refresh_required","checkedAt":1780000000000}]}
         """
-        return healthResponses(startupHealth(status: "protected", diagnosticStale: false))
+        return startupResponses(startupHealth(status: "protected", diagnosticStale: false))
             + healthResponses(activity)
             + healthResponses(#"[{"name":"openai"},{"name":"kimi"}]"#)
             + healthResponses(quotas)
@@ -254,6 +307,23 @@ enum PollingSuite {
 
     private static func healthResponses(_ body: String) -> [StubProtocol.Response] {
         [.init(status: 200, body: identity), .init(status: 200, body: body)]
+    }
+
+    private static func startupResponses(
+        _ body: String,
+        readinessStatus: String = "ready"
+    ) -> [StubProtocol.Response] {
+        healthResponses(body) + [readinessResponse(status: readinessStatus)]
+    }
+
+    private static func readinessResponse(status: String) -> StubProtocol.Response {
+        .init(
+            status: status == "ready" ? 200 : 503,
+            body: """
+            {"service":"codexcommander","version":"0.1.0","uptime":1,
+             "pid":42,"port":10100,"status":"\(status)"}
+            """
+        )
     }
 
     private static func startupHealth(status: String, diagnosticStale: Bool) -> String {

@@ -1,13 +1,20 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 import {
   atomicWriteFile,
   loadConfig,
   observeConfigGeneration,
   readConfigAdmissionSnapshot,
+  readConfigGenerationInCurrentMutationTransaction,
   subagentDefaultSyncEffective,
+  withConfigMutationLockSync,
   websocketsEnabled,
 } from "../config";
-import { CodexWriteLockSkipped, withCodexWriteLock } from "./codex-write-lock";
+import {
+  canonicalizeCodexHome,
+  CodexWriteLockSkipped,
+  withCodexWriteLock,
+} from "./codex-write-lock";
 import { shouldSyncCodexOnStart } from "./desired-state";
 import {
   buildInjectWitness,
@@ -28,13 +35,13 @@ import {
   resolveEffectiveUserIdentity,
 } from "./user-identity";
 import {
-  markJournalInjectedState,
-  removeJournal,
-  restoreJournalState,
+  retireJournalForExternalProvider,
+  restoreJournalStateUnderCoordinatedWrite,
   writeJournal,
 } from "./journal";
 import { withCatalogWriteSerialization } from "./catalog-write-serialization";
 import { restoreCodexCatalogWithPermit } from "./catalog/sync";
+import { beginCodexCoordinatorTransaction } from "./transition-state";
 import {
   isSectionMarkerLine,
   CCX_SECTION_MARKER,
@@ -67,6 +74,11 @@ import {
   type ManagedSubagentDefaults,
 } from "./subagent-defaults";
 import type { CodexCommanderConfig } from "../types";
+import type { ConfigGeneration } from "./convergence-types";
+import {
+  captureCatalogConfigAuthority,
+  type CatalogConfigAuthoritySnapshot,
+} from "./catalog-admission";
 
 // Ownership predicates live in `./injected-marker` so `journal.ts` can reach them
 // without importing this module back. Re-exported for existing external callers.
@@ -132,6 +144,12 @@ export interface InjectCodexOptions {
    * is re-read, refuse before any native injection or journal mutation.
    */
   expectedExternalProvider?: string;
+  /** Catalog admission generation that must still hold at native config publication. */
+  expectedConfigGeneration?: ConfigGeneration;
+  /** Exact catalog-admitted config authority, including non-cooperating byte drift. */
+  expectedConfigAuthority?: CatalogConfigAuthoritySnapshot;
+  /** Preserve-only fence for non-disruptive management reconciliation. */
+  expectedRoutingKind?: CodexRoutingKind;
 }
 
 function configuredManagedSubagentDefaults(
@@ -386,7 +404,9 @@ export function isCodexRoutingInjected(): boolean {
 }
 
 export function getCodexRoutingKind(): CodexRoutingKind {
-  const path = CODEX_CONFIG_PATH;
+  // Status/policy probes run after environment selection in embedded servers
+  // and isolated tests, so resolve the active home at call time.
+  const path = join(getCodexHome(), "config.toml");
   if (!existsSync(path)) return "native";
   try {
     return classifyCodexRouting(readFileSync(path, "utf8"));
@@ -628,9 +648,23 @@ export function chooseCatalogPathForInjection(
 export interface CodexInjectResult {
   success: boolean;
   message: string;
-  status?: "skipped";
+  status?: "skipped" | "stale";
   skippedReason?: "desired_disabled" | "desired_enabled";
   nativeSubagentDefaultsWarning?: string;
+}
+
+class CodexInjectConfigGenerationStale extends Error {
+  constructor() {
+    super("CodexCommander configuration changed before native Codex config publication.");
+    this.name = "CodexInjectConfigGenerationStale";
+  }
+}
+
+class CodexInjectRoutingStale extends Error {
+  constructor() {
+    super("Codex routing ownership changed before native Codex config publication.");
+    this.name = "CodexInjectRoutingStale";
+  }
 }
 
 export async function injectCodexConfig(
@@ -646,6 +680,14 @@ export async function injectCodexConfig(
   }
 
   const rawContent = readFileSync(CODEX_CONFIG_PATH, "utf-8");
+  if (options.expectedRoutingKind !== undefined
+    && classifyCodexRouting(rawContent) !== options.expectedRoutingKind) {
+    return {
+      success: false,
+      status: "stale",
+      message: "Codex routing ownership changed before native Codex config publication; no files were changed.",
+    };
+  }
   const activeProvider = externalCodexModelProvider(rawContent);
   if (
     options.expectedExternalProvider !== undefined
@@ -659,7 +701,7 @@ export async function injectCodexConfig(
   if (activeProvider) {
     // A launcher may have journaled before the provider manager took ownership. Never let shutdown
     // replay that stale snapshot over externally managed config.
-    removeJournal();
+    retireJournalForExternalProvider(activeProvider);
     const nativeSubagentDefaultsWarning = configuredManagedSubagentDefaults(
       config,
     )
@@ -859,84 +901,129 @@ export async function injectCodexConfig(
     };
   }
 
-  const applyNativeArtifacts = (): void => {
+  const applyNativeArtifacts = (preImages: ReturnType<typeof captureCodexPreImages>): void => {
     writeJournal({
       currentStateIsNative: !hasInjectedCodexRouting(rawContent),
       configContent: baselineContent,
+      profileContent: preImages.profile,
+      intendedPostimage: {
+        config: content,
+        profile: profileContent,
+      },
     });
-    atomicWriteFile(CODEX_CONFIG_PATH, content);
-    atomicWriteFile(CODEX_PROFILE_PATH, profileContent);
-    markJournalInjectedState(content, profileContent);
+    if (preImages.config !== content) atomicWriteFile(CODEX_CONFIG_PATH, content);
+    if (preImages.profile !== profileContent) atomicWriteFile(CODEX_PROFILE_PATH, profileContent);
   };
 
   {
-    const coordinated = await withCodexWriteLock(
-      {
-        timeoutMs: options.lockTimeoutMs ?? DEFAULT_INJECT_LOCK_TIMEOUT_MS,
-        admitted: { authoritySnapshotId: witness.comparisonId },
-        readAdmissionUnderLock: () => ({
-          authoritySnapshotId: recomputeInjectWitness({
-            candidate: witness.candidate,
-            canonicalTargets: witness.evidence.canonicalTargets,
-            persistedIdentity,
-            generation,
-            observedOwnership: witness.observedOwnership,
-          }).comparisonId,
-        }),
-      },
-      (ctx) => {
-        if (!shouldSyncCodexOnStart(loadConfig())) {
-          throw new CodexWriteLockSkipped("desired_disabled");
-        }
-        /*
-         * Publish BEFORE touching the filesystem. `assertPublished` runs after this
-         * callback returns and throws unless a transition was recorded, so writing
-         * first would replace every file and only then fail — with SQLite rolling
-         * back and the filesystem staying changed.
-         *
-         * `beginTransition` returns a conflict rather than throwing, so its result
-         * is checked here; ignoring it would reach the same failure by a slower
-         * route.
-         */
-        const published = ctx.coordinator.beginTransition(
-          {
-            nativeGeneration: ctx.expectation.nativeBefore,
-            currentTxId: ctx.currentTxId,
-          },
-          {
-            txId: ctx.expectation.txId,
-          },
-        );
-        if (published.kind !== "updated") {
-          throw new CodexWriteConflictError(
-            `The Codex transition could not be published: ${published.kind}.`,
-          );
-        }
-
-        /*
-         * Exact pre-images, captured under the lock and used for compensation.
-         *
-         * A rolled-back coordinator row is not a rolled-back filesystem: each
-         * `atomicWriteFile` is atomic alone, never across the three together, so a
-         * failure partway leaves earlier replacements in place. `restoreJournalState`
-         * cannot be the undo — it restores whichever journal occupies the path,
-         * which need not be the one this operation wrote.
-         */
-        const preImages = captureCodexPreImages();
-        try {
-          applyNativeArtifacts();
-        } catch (error) {
-          // Compensate, then ALWAYS throw. Returning a partial result would let the
-          // lock commit a row describing an apply that did not finish.
-          const restored = restoreCodexPreImages(preImages);
-          if (!restored.complete) {
-            throw new CodexPartialWriteError(restored.unrestored);
+    let coordinated;
+    try {
+      coordinated = await withCodexWriteLock(
+        {
+          timeoutMs: options.lockTimeoutMs ?? DEFAULT_INJECT_LOCK_TIMEOUT_MS,
+          admitted: { authoritySnapshotId: witness.comparisonId },
+          readAdmissionUnderLock: () => ({
+            authoritySnapshotId: recomputeInjectWitness({
+              candidate: witness.candidate,
+              canonicalTargets: witness.evidence.canonicalTargets,
+              persistedIdentity,
+              generation,
+              observedOwnership: witness.observedOwnership,
+            }).comparisonId,
+          }),
+        },
+        (ctx) => {
+          if (!shouldSyncCodexOnStart(loadConfig())) {
+            throw new CodexWriteLockSkipped("desired_disabled");
           }
-          throw error;
-        }
-        return { kind: "applied" as const };
-      },
-    );
+          if (options.expectedRoutingKind !== undefined
+            && classifyCodexRouting(readFileSync(CODEX_CONFIG_PATH, "utf8"))
+              !== options.expectedRoutingKind) {
+            throw new CodexInjectRoutingStale();
+          }
+          if (options.expectedConfigAuthority) {
+            try {
+              const current = captureCatalogConfigAuthority(config ?? loadConfig());
+              if (
+                current.generation.value !== options.expectedConfigAuthority.generation.value
+                || current.semanticIdentity !== options.expectedConfigAuthority.semanticIdentity
+                || current.contentIdentity !== options.expectedConfigAuthority.contentIdentity
+              ) {
+                throw new CodexInjectConfigGenerationStale();
+              }
+            } catch (error) {
+              if (error instanceof CodexInjectConfigGenerationStale) throw error;
+              throw new CodexInjectConfigGenerationStale();
+            }
+          } else if (
+            options.expectedConfigGeneration
+            && readConfigGenerationInCurrentMutationTransaction().value
+              !== options.expectedConfigGeneration.value
+          ) {
+            throw new CodexInjectConfigGenerationStale();
+          }
+          /*
+           * Publish BEFORE touching the filesystem. `assertPublished` runs after this
+           * callback returns and throws unless a transition was recorded, so writing
+           * first would replace every file and only then fail — with SQLite rolling
+           * back and the filesystem staying changed.
+           *
+           * `beginTransition` returns a conflict rather than throwing, so its result
+           * is checked here; ignoring it would reach the same failure by a slower
+           * route.
+           */
+          const published = ctx.coordinator.beginTransition(
+            {
+              nativeGeneration: ctx.expectation.nativeBefore,
+              currentTxId: ctx.currentTxId,
+            },
+            {
+              txId: ctx.expectation.txId,
+            },
+          );
+          if (published.kind !== "updated") {
+            throw new CodexWriteConflictError(
+              `The Codex transition could not be published: ${published.kind}.`,
+            );
+          }
+
+          /*
+           * Exact pre-images, captured under the lock and used for compensation.
+           *
+           * A rolled-back coordinator row is not a rolled-back filesystem: each
+           * `atomicWriteFile` is atomic alone, never across the three together, so a
+           * failure partway leaves earlier replacements in place. Journal restoration
+           * cannot be the undo — it restores whichever journal occupies the path,
+           * which need not be the one this operation wrote.
+           */
+          const preImages = captureCodexPreImages();
+          try {
+            applyNativeArtifacts(preImages);
+          } catch (error) {
+            // Compensate, then ALWAYS throw. Returning a partial result would let the
+            // lock commit a row describing an apply that did not finish.
+            const restored = restoreCodexPreImages(preImages);
+            if (!restored.complete) {
+              throw new CodexPartialWriteError(restored.unrestored);
+            }
+            throw error;
+          }
+          return { kind: "applied" as const };
+        },
+      );
+    } catch (error) {
+      if (error instanceof CodexInjectConfigGenerationStale
+        || error instanceof CodexInjectRoutingStale) {
+        return {
+          success: false,
+          status: "stale",
+          message: error instanceof CodexInjectRoutingStale
+            ? "Codex routing ownership changed before native Codex config publication; no stale Codex config was written. Retry the sync."
+            : "CodexCommander configuration changed before native Codex config publication; no stale Codex config was written. Retry the sync.",
+        };
+      }
+      throw error;
+    }
 
     if (coordinated.status !== "acquired") {
       return codexInjectLockOutcome(coordinated);
@@ -1190,7 +1277,7 @@ export function skippedRestoreEnvelope(success: boolean, message: string): Codex
 /** The config/profile half of a native restore, reported as one artifact. */
 function restoreCodexConfigInline(): CodexRestoreConfigResult {
   try {
-    const journal = restoreJournalState();
+    const journal = restoreJournalStateUnderCoordinatedWrite();
     const restored = journal.configRestored
       ? { success: true, message: "Codex config restored from the CodexCommander journal." }
       : removeCodexConfig({ preserveProfile: journal.profileRestored || journal.profileChanged });
@@ -1204,6 +1291,99 @@ function restoreCodexConfigInline(): CodexRestoreConfigResult {
       : { state: "failed", changed: false, action: "failed", message: restored.message };
   } catch (error) {
     return { state: "failed", changed: false, action: "failed", message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Synchronous shutdown callers cannot await the retrying lock helper, but they
+ * still participate in the same N -> C authority as injection. A missing
+ * coordinator over journal/residue is refused by the unchanged eligibility
+ * gate; there is no unlocked fallback to read/modify/write config.toml.
+ */
+function restoreCodexConfigCoordinatedSync(
+  revalidateDesiredState: boolean,
+): CodexRestoreConfigResult | { skipped: true } {
+  const canonical = canonicalizeCodexHome(getCodexHome());
+  if (!canonical.ok) {
+    return {
+      state: "failed",
+      changed: false,
+      action: "failed",
+      message: `Codex configuration was not restored: ${canonical.message}`,
+    };
+  }
+  let coordinatorPath: string;
+  try {
+    coordinatorPath = resolveCodexCoordinatorDatabasePath(
+      resolveEffectiveUserIdentity(),
+      canonical.home.path,
+    );
+  } catch (error) {
+    return {
+      state: "failed",
+      changed: false,
+      action: "failed",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+  const eligibility = codexWriteCoordinationEligibility({
+    coordinatorPath: () => coordinatorPath,
+    residue: () => classifyNativeRoutedResidue(),
+    integrationRecord: () => readIntegrationRecord(),
+  });
+  if (eligibility.kind === "refused") {
+    return {
+      state: "failed",
+      changed: false,
+      action: "failed",
+      message: `Codex configuration was not restored: ${eligibility.reason}.`,
+    };
+  }
+
+  let transaction: ReturnType<typeof beginCodexCoordinatorTransaction> | undefined;
+  try {
+    transaction = beginCodexCoordinatorTransaction(coordinatorPath);
+    const expectation = transaction.expectation();
+    const version = transaction.version();
+    const config = withConfigMutationLockSync(() => {
+      if (revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())) {
+        throw new CodexWriteLockSkipped("desired_enabled");
+      }
+      const published = transaction!.capability.beginTransition(
+        {
+          nativeGeneration: expectation.nativeBefore,
+          currentTxId: version.currentTxId,
+        },
+        { txId: expectation.txId },
+      );
+      if (published.kind !== "updated") {
+        throw new CodexWriteConflictError(
+          `The Codex restore transition could not be published: ${published.kind}.`,
+        );
+      }
+      const preImages = captureCodexPreImages();
+      try {
+        return restoreCodexConfigInline();
+      } catch (error) {
+        const compensated = restoreCodexPreImages(preImages);
+        if (!compensated.complete) throw new CodexPartialWriteError(compensated.unrestored);
+        throw error;
+      }
+    });
+    transaction.assertPublished(expectation);
+    transaction.commit();
+    return config;
+  } catch (error) {
+    transaction?.rollback();
+    if (error instanceof CodexWriteLockSkipped) return { skipped: true };
+    return {
+      state: "failed",
+      changed: false,
+      action: "failed",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    transaction?.close();
   }
 }
 
@@ -1248,7 +1428,7 @@ export async function restoreNativeCodexAsync(
   const activeProvider = currentExternalCodexModelProvider();
   if (activeProvider) {
     // External-provider courtesy: only the stale journal is removed.
-    removeJournal();
+    retireJournalForExternalProvider(activeProvider);
     return externalProviderRestoreResult(activeProvider);
   }
 
@@ -1342,13 +1522,17 @@ export async function restoreNativeCodexAsync(
 export function restoreNativeCodex(options: { revalidateDesiredState?: boolean } = {}): CodexNativeRestoreResult {
   const activeProvider = currentExternalCodexModelProvider();
   if (activeProvider) {
-    removeJournal();
+    retireJournalForExternalProvider(activeProvider);
     return externalProviderRestoreResult(activeProvider);
   }
   if (options.revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())) {
     return desiredEnabledRestoreSkip();
   }
-  const config = restoreCodexConfigInline();
+  const coordinatedConfig = restoreCodexConfigCoordinatedSync(
+    options.revalidateDesiredState === true,
+  );
+  if ("skipped" in coordinatedConfig) return desiredEnabledRestoreSkip();
+  const config = coordinatedConfig;
   const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true);
   const message = catalog.removed > 0
     ? `${config.message} Catalog restored to ${catalog.kept} native model(s) (dropped ${catalog.removed} proxy-routed).`

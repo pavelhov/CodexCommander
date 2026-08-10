@@ -8,6 +8,7 @@ import { refreshCodexModelCatalog } from "../src/codex/refresh";
 import { syncModelsToCodex } from "../src/codex/sync";
 import type { CodexCommanderConfig } from "../src/types";
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+import { saveConfig } from "../src/config";
 
 setDefaultTimeout(30_000);
 
@@ -69,12 +70,10 @@ describe("invalidateCodexModelsCache write gate (#476 / #518)", () => {
     expect(cache.models).toEqual([{ slug: "gpt-5.5" }]);
   });
 
-  test("refuses the cache rewrite when desired state flipped OFF between commit and reacquisition", () => {
-    // The commit-path desired-state check runs under the FIRST catalog permit;
-    // refreshCodexModelCatalog then releases K before invalidateCodexModelsCache
-    // reacquires it. An OFF landing in that gap must gate this second write too —
-    // otherwise a routed models_cache survives a completed disable while the
-    // injector honestly reports status:"skipped".
+  test("refuses the explicit cache rewrite while desired state is OFF", () => {
+    // Cache-only sync remains an advanced explicit command, separate from
+    // canonical convergence. It must still honor durable OFF while holding its
+    // write permit or routed cache bytes could survive a completed disable.
     writeFileSync(join(codexHome, "codexcommander-catalog.json"), JSON.stringify({
       models: [{ slug: "gpt-5.5" }],
     }, null, 2) + "\n");
@@ -159,6 +158,9 @@ describe("invalidateCodexModelsCache write gate (#476 / #518)", () => {
     // (A directory at the catalog path: existsSync true, load/write both fail.)
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "broken.json"\n', "utf8");
     mkdirSync(join(codexHome, "broken.json"));
+    // Canonical production refresh binds the supplied decoded config to the
+    // persisted authority before inspecting catalog targets.
+    saveConfig(emptyConfig);
 
     const syncResult = await syncModelsToCodex(10100, emptyConfig, null, {
       prepareCodexTransitionState: () => ({

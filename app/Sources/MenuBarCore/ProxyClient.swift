@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 public enum ProxyError: Error, Equatable, Sendable {
     case unreachable
@@ -73,6 +74,59 @@ private struct HealthIdentity: Decodable {
 
 private struct EmptyBody: Encodable {}
 
+private struct GuiLaunchTicketRequest: Encodable {
+    let route: String
+}
+
+private struct GuiLaunchTicketResponse: Decodable {
+    let ticket: String
+    let origin: String
+    let route: String
+    let expiresAt: Double
+}
+
+private let attestationChallengeHeader = "x-codexcommander-attestation-challenge"
+private let attestationProofHeader = "x-codexcommander-attestation-proof"
+private let attestedHealthBodyLimit = 16 * 1024
+
+private func base64URL(_ data: Data) -> String {
+    data.base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-")
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "=", with: "")
+}
+
+private func decodeBase64URL(_ value: String) -> Data? {
+    guard value.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil else {
+        return nil
+    }
+    var standard = value
+        .replacingOccurrences(of: "-", with: "+")
+        .replacingOccurrences(of: "_", with: "/")
+    standard += String(repeating: "=", count: (4 - standard.count % 4) % 4)
+    return Data(base64Encoded: standard)
+}
+
+private func makeAttestationChallenge() -> String {
+    let key = SymmetricKey(size: .bits256)
+    return base64URL(key.withUnsafeBytes { Data($0) })
+}
+
+private func validAttestationProof(
+    _ proof: String?,
+    challenge: String,
+    runtime: ProxyRuntimeAttestation
+) -> Bool {
+    guard let proof, let bytes = decodeBase64URL(proof) else { return false }
+    let payload = "codexcommander-local-management-v1\n\(challenge)\n\(runtime.pid)\n\(runtime.port)"
+    let key = SymmetricKey(data: Data(runtime.secret.utf8))
+    return HMAC<SHA256>.isValidAuthenticationCode(
+        bytes,
+        authenticating: Data(payload.utf8),
+        using: key
+    )
+}
+
 public struct RestartAccepted: Decodable, Equatable, Sendable {
     public let success: Bool
     public let message: String
@@ -132,6 +186,7 @@ public actor ProxyClient {
 
     private let session: URLSession
     private let discovery: @Sendable () throws -> ProxyInstallation
+    private let attestationChallenge: @Sendable () -> String
     private var installation: ProxyInstallation
 
     public init(
@@ -144,6 +199,7 @@ public actor ProxyClient {
         self.discovery = discovery
         self.installation = try installation ?? discovery()
         self.session = session ?? Self.secureSession()
+        self.attestationChallenge = { makeAttestationChallenge() }
     }
 
     /// Deterministic initializer for transport tests. Production uses
@@ -151,18 +207,29 @@ public actor ProxyClient {
     public init(
         endpoint: ProxyEndpoint,
         session: URLSession? = nil,
-        credentials: CredentialStore
+        credentials: CredentialStore,
+        attestationSecret: String?
     ) {
         let credential = credentials.loadAPIKey()
         let fixed = ProxyInstallation(
             endpoint: endpoint,
             credential: credential,
             credentialAvailability: credential == nil ? .unavailable : .file,
-            configDirectory: URL(fileURLWithPath: "/")
+            configDirectory: URL(fileURLWithPath: "/"),
+            runtimeAttestation: attestationSecret.flatMap { secret in
+                guard let pid = endpoint.expectedPID else { return nil }
+                return ProxyRuntimeAttestation(
+                    host: endpoint.host,
+                    port: endpoint.port,
+                    pid: pid,
+                    secret: secret
+                )
+            }
         )
         self.installation = fixed
         self.discovery = { fixed }
         self.session = session ?? Self.secureSession()
+        self.attestationChallenge = { makeAttestationChallenge() }
     }
 
     public var currentEndpoint: ProxyEndpoint { installation.endpoint }
@@ -182,6 +249,48 @@ public actor ProxyClient {
 
     public func health() async throws -> StartupHealth {
         try await authenticatedGet("api/startup-health")
+    }
+
+    /// Public post-startup readiness. This request intentionally carries no management
+    /// credential, and accepts the endpoint's contractually meaningful 503 response for
+    /// `pending` and `failed` observations.
+    public func readiness(timeout: TimeInterval = 1.5) async throws -> ProxyReadinessObservation {
+        try rediscover()
+        let current = installation
+        let (data, response) = try await performResponse(
+            installation: current,
+            method: "GET",
+            path: "readyz",
+            query: [],
+            body: nil as EmptyBody?,
+            credential: nil,
+            timeout: timeout
+        )
+        guard response.statusCode == 200 || response.statusCode == 503 else {
+            throw ProxyError.http(response.statusCode)
+        }
+
+        let observation: ProxyReadinessObservation
+        do {
+            observation = try JSONDecoder().decode(ProxyReadinessObservation.self, from: data)
+        } catch {
+            throw ProxyError.decoding
+        }
+
+        guard observation.service == "codexcommander",
+              !observation.version.isEmpty,
+              observation.uptime.isFinite,
+              observation.uptime >= 0,
+              observation.pid > 0,
+              observation.port >= 1,
+              observation.port <= 65_535,
+              observation.port == current.endpoint.port,
+              current.endpoint.expectedPID == nil
+                || current.endpoint.expectedPID == observation.pid,
+              (observation.status == .ready && response.statusCode == 200)
+                || (observation.status != .ready && response.statusCode == 503)
+        else { throw ProxyError.identityMismatch }
+        return observation
     }
 
     public func providers() async throws -> [ProviderSummary] {
@@ -210,6 +319,56 @@ public actor ProxyClient {
         } catch {
             throw ProxyError.decoding
         }
+    }
+
+    /// Mint a short-lived, single-use browser handoff through the attested admin
+    /// channel. The returned bearer lives only in the URL fragment and is handed
+    /// directly to NSWorkspace; it is never persisted or logged by the app.
+    public func confirmedGuiLaunchURL(route: String) async throws -> URL {
+        guard !route.isEmpty,
+              route.count <= 512,
+              !route.hasPrefix("/"),
+              !route.contains("#"),
+              route.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
+        else { throw ProxyError.decoding }
+
+        let data = try await authenticatedSend(
+            method: "POST",
+            path: "api/gui-launch-ticket",
+            body: GuiLaunchTicketRequest(route: route)
+        )
+        let ticket: GuiLaunchTicketResponse
+        do {
+            ticket = try JSONDecoder().decode(GuiLaunchTicketResponse.self, from: data)
+        } catch {
+            throw ProxyError.decoding
+        }
+        let now = Date().timeIntervalSince1970 * 1_000
+        guard ticket.route == route,
+              ticket.ticket.range(
+                of: #"^ccx_launch_[A-Za-z0-9_-]{43}$"#,
+                options: .regularExpression
+              ) != nil,
+              ticket.expiresAt > now,
+              ticket.expiresAt <= now + 60_000,
+              var origin = URLComponents(string: ticket.origin),
+              origin.scheme == "http",
+              ProxyEndpoint.normalizedLoopbackHost(origin.host) != nil,
+              origin.host?.lowercased() == installation.endpoint.baseURL.host?.lowercased(),
+              origin.port == installation.endpoint.port,
+              origin.path.isEmpty || origin.path == "/",
+              origin.query == nil,
+              origin.fragment == nil
+        else { throw ProxyError.identityMismatch }
+
+        var fragment = URLComponents()
+        fragment.queryItems = [
+            URLQueryItem(name: "ccx-launch-ticket", value: ticket.ticket),
+            URLQueryItem(name: "ccx-route", value: route),
+        ]
+        origin.percentEncodedFragment = fragment.percentEncodedQuery
+        guard let url = origin.url else { throw ProxyError.decoding }
+        return url
     }
 
     /// Advisory launch-at-login report to the proxy (`PUT /api/startup-health/companion`).
@@ -321,12 +480,31 @@ public actor ProxyClient {
         query: [URLQueryItem],
         body: Body?
     ) async throws -> Data {
-        guard let credential = installation.credential, !credential.isEmpty else {
+        guard installation.credential?.isEmpty == false else {
             throw ProxyError.authenticationUnavailable
         }
-        _ = try await validateHealthIdentity(installation: installation, timeout: 2)
-        return try await perform(
+        guard let runtime = installation.runtimeAttestation,
+              installation.endpoint.expectedPID == runtime.pid,
+              installation.endpoint.host == runtime.host,
+              installation.endpoint.port == runtime.port
+        else { throw ProxyError.identityMismatch }
+        _ = try await validateAttestedHealthIdentity(
             installation: installation,
+            runtime: runtime,
+            timeout: 2
+        )
+
+        // Close the record-rotation window before attaching either the bearer or
+        // body. A restart/port reuse/secret rotation forces a fresh attempt.
+        let current = try discovery()
+        guard current.endpoint == installation.endpoint,
+              current.runtimeAttestation == runtime,
+              let credential = current.credential,
+              !credential.isEmpty
+        else { throw ProxyError.identityMismatch }
+        self.installation = current
+        return try await perform(
+            installation: current,
             method: method,
             path: path,
             query: query,
@@ -361,6 +539,126 @@ public actor ProxyClient {
         return identity
     }
 
+    private func validateAttestedHealthIdentity(
+        installation: ProxyInstallation,
+        runtime: ProxyRuntimeAttestation,
+        timeout: TimeInterval
+    ) async throws -> HealthIdentity {
+        let challenge = attestationChallenge()
+        guard challenge.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil else {
+            throw ProxyError.identityMismatch
+        }
+        let (data, response) = try await boundedAttestedHealthResponse(
+            installation: installation,
+            runtime: runtime,
+            challenge: challenge,
+            timeout: timeout
+        )
+        guard let identity = try? JSONDecoder().decode(HealthIdentity.self, from: data),
+              identity.status == "ok",
+              identity.service == "codexcommander",
+              !identity.version.isEmpty,
+              identity.pid == runtime.pid,
+              identity.port == runtime.port,
+              validAttestationProof(
+                response.value(forHTTPHeaderField: attestationProofHeader),
+                challenge: challenge,
+                runtime: runtime
+              )
+        else { throw ProxyError.identityMismatch }
+        return identity
+    }
+
+    /// Header-first listener proof. A foreign loopback listener never gets to
+    /// choose how much body the app buffers: invalid proof/status/framing cancels
+    /// immediately, and a valid chunked response still has a strict streaming cap.
+    private func boundedAttestedHealthResponse(
+        installation: ProxyInstallation,
+        runtime: ProxyRuntimeAttestation,
+        challenge: String,
+        timeout: TimeInterval
+    ) async throws -> (Data, HTTPURLResponse) {
+        let url = installation.endpoint.baseURL.appendingPathComponent("healthz")
+        guard url.scheme == "http",
+              ProxyEndpoint.normalizedLoopbackHost(url.host) != nil,
+              url.port == installation.endpoint.port
+        else { throw ProxyError.identityMismatch }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = timeout
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.setValue("no-store", forHTTPHeaderField: "cache-control")
+        request.setValue(challenge, forHTTPHeaderField: attestationChallengeHeader)
+
+        do {
+            let (bytes, response) = try await session.bytes(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                bytes.task.cancel()
+                throw ProxyError.decoding
+            }
+            let encoding = http.value(forHTTPHeaderField: "content-encoding")?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            guard http.statusCode == 200,
+                  encoding == nil || encoding == "identity",
+                  validAttestationProof(
+                    http.value(forHTTPHeaderField: attestationProofHeader),
+                    challenge: challenge,
+                    runtime: runtime
+                  )
+            else {
+                bytes.task.cancel()
+                throw ProxyError.identityMismatch
+            }
+
+            let expectedLength: Int?
+            if let rawLength = http.value(forHTTPHeaderField: "content-length") {
+                let normalized = rawLength.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard normalized.range(of: "^[0-9]+$", options: .regularExpression) != nil,
+                      let parsed = Int(normalized),
+                      parsed <= attestedHealthBodyLimit
+                else {
+                    bytes.task.cancel()
+                    throw ProxyError.identityMismatch
+                }
+                expectedLength = parsed
+            } else {
+                expectedLength = nil
+            }
+
+            var data = Data()
+            data.reserveCapacity(expectedLength ?? 512)
+            for try await byte in bytes {
+                guard data.count < attestedHealthBodyLimit else {
+                    bytes.task.cancel()
+                    throw ProxyError.identityMismatch
+                }
+                data.append(byte)
+            }
+            guard expectedLength == nil || expectedLength == data.count else {
+                throw ProxyError.identityMismatch
+            }
+            return (data, http)
+        } catch let error as ProxyError {
+            throw error
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError {
+            switch error.code {
+            case .cancelled:
+                throw CancellationError()
+            case .cannotConnectToHost:
+                throw ProxyError.unreachable
+            case .timedOut, .networkConnectionLost, .notConnectedToInternet,
+                 .cannotFindHost, .dnsLookupFailed:
+                throw ProxyError.inconclusive
+            default:
+                throw ProxyError.transport
+            }
+        }
+    }
+
     private func perform<Body: Encodable>(
         installation: ProxyInstallation,
         method: String,
@@ -368,8 +666,38 @@ public actor ProxyClient {
         query: [URLQueryItem],
         body: Body?,
         credential: String?,
+        headers: [String: String] = [:],
         timeout: TimeInterval
     ) async throws -> Data {
+        let (data, response) = try await performResponse(
+            installation: installation,
+            method: method,
+            path: path,
+            query: query,
+            body: body,
+            credential: credential,
+            headers: headers,
+            timeout: timeout
+        )
+        if response.statusCode == 401 { throw ProxyError.unauthorized }
+        guard (200..<300).contains(response.statusCode) else {
+            throw ProxyError.http(response.statusCode)
+        }
+        return data
+    }
+
+    /// Shared hardened transport. Status interpretation stays with the endpoint so
+    /// `/readyz` can decode its intentional 503 without weakening management calls.
+    private func performResponse<Body: Encodable>(
+        installation: ProxyInstallation,
+        method: String,
+        path: String,
+        query: [URLQueryItem],
+        body: Body?,
+        credential: String?,
+        headers: [String: String] = [:],
+        timeout: TimeInterval
+    ) async throws -> (Data, HTTPURLResponse) {
         guard var components = URLComponents(
             url: installation.endpoint.baseURL.appendingPathComponent(path),
             resolvingAgainstBaseURL: false
@@ -386,6 +714,9 @@ public actor ProxyClient {
         request.timeoutInterval = timeout
         request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         request.setValue("no-store", forHTTPHeaderField: "cache-control")
+        for (name, value) in headers {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
         if let credential {
             request.setValue(credential, forHTTPHeaderField: "x-codexcommander-api-key")
         }
@@ -403,11 +734,7 @@ public actor ProxyClient {
             guard let http = response as? HTTPURLResponse else {
                 throw ProxyError.decoding
             }
-            if http.statusCode == 401 { throw ProxyError.unauthorized }
-            guard (200..<300).contains(http.statusCode) else {
-                throw ProxyError.http(http.statusCode)
-            }
-            return data
+            return (data, http)
         } catch let error as ProxyError {
             throw error
         } catch is CancellationError {

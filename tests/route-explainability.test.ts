@@ -239,6 +239,13 @@ describe("route explainability (RI-09)", () => {
     const calls: Array<{ path: string; init?: RequestInit }> = [];
     const ok = await handleRoutePolicyCommand(["evaluate", "fast", "--tools", "--json"], {
       baseUrl: "http://cli.test",
+      attestLiveManagementProxyImpl: async () => ({
+        pid: 4242,
+        port: 80,
+        hostname: "cli.test",
+        source: "runtime",
+        baseUrl: "http://cli.test",
+      }),
       fetchImpl: async (input, init) => {
         const path = String(input).replace("http://cli.test", "");
         calls.push({ path, init });

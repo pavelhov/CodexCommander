@@ -135,13 +135,15 @@ public final class CatalogUpdateView: NSView {
 
 // MARK: - Status header
 
-/// Brand mark + CodexCommander title + truthful status + active count.
+/// Brand mark + separate proxy-health, readiness, in-flight-request, and Codex-route status.
 public final class StatusHeaderView: NSView {
     private let brand = NSImageView()
     private let title = makeLabel("CodexCommander", font: Theme.title, color: Theme.text)
     private let dot = StatusDotView()
     private let status = makeLabel("", font: Theme.captionMedium, color: Theme.muted)
-    private let active = makeLabel("", font: Theme.caption, color: Theme.faint)
+    private let requestCount = makeLabel("", font: Theme.caption, color: Theme.faint)
+    private let readiness = makeLabel("", font: Theme.micro, color: Theme.faint)
+    private let codexRoute = makeLabel("", font: Theme.micro, color: Theme.faint)
     private let divider: NSView = {
         let view = NSView()
         view.wantsLayer = true
@@ -163,7 +165,11 @@ public final class StatusHeaderView: NSView {
         brand.heightAnchor.constraint(equalToConstant: 25).isActive = true
 
         let left = makeRow([brand, title], spacing: 8)
-        let right = makeRow([dot, status, divider, active], spacing: 7)
+        let proxyState = makeRow([dot, status, divider, requestCount], spacing: 7)
+        let right = NSStackView(views: [proxyState, readiness, codexRoute])
+        right.orientation = .vertical
+        right.alignment = .trailing
+        right.spacing = 1
         let row = NSStackView(views: [left, NSView(), right])
         row.orientation = .horizontal
         row.alignment = .centerY
@@ -187,29 +193,60 @@ public final class StatusHeaderView: NSView {
     func apply(_ snapshot: ProxySnapshot) {
         let state = snapshot.state
         let activeCount = snapshot.activity?.activeTurnCount
-        if state.isRunning, let activeCount, snapshot.activityLoaded {
-            status.stringValue = activeCount > 0 ? "Active" : "Idle"
-        } else {
-            status.stringValue = state.title
-        }
+        status.stringValue = "Proxy \(state.title.lowercased())"
         status.textColor = Theme.color(for: bridge(state.tone))
         dot.tone = bridge(state.tone)
 
         if let activeCount, snapshot.activityLoaded {
-            active.stringValue = activeCount == 1 ? "1 active" : "\(activeCount) active"
-            active.isHidden = false
+            requestCount.stringValue = activeCount == 1 ? "1 in flight" : "\(activeCount) in flight"
+            requestCount.isHidden = false
             divider.isHidden = false
         } else {
-            active.stringValue = ""
-            active.isHidden = true
+            requestCount.stringValue = ""
+            requestCount.isHidden = true
             divider.isHidden = true
         }
 
-        var label = "CodexCommander \(state.title)"
-        if let activeCount, snapshot.activityLoaded {
-            label += ", \(activeCount) active"
+        let readinessText = "Readiness · \(Self.readinessName(snapshot.readiness))"
+        readiness.stringValue = readinessText
+
+        let routeText: String?
+        if case .running(let health) = state {
+            routeText = "Codex route · \(Self.codexRouteName(health))"
+        } else {
+            routeText = nil
         }
+        codexRoute.stringValue = routeText ?? ""
+        codexRoute.isHidden = routeText == nil
+
+        var label = "CodexCommander, proxy \(state.title.lowercased())"
+        if let activeCount, snapshot.activityLoaded {
+            label += ", \(activeCount) request\(activeCount == 1 ? "" : "s") in flight"
+        }
+        label += ", \(readinessText)"
+        if let routeText { label += ", \(routeText)" }
         setAccessibilityLabel(label)
+    }
+
+    private static func readinessName(_ state: ProxyReadinessState) -> String {
+        switch state {
+        case .unknown: return "Checking"
+        case .unavailable: return "Unavailable"
+        case .pending: return "Starting"
+        case .ready: return "Ready"
+        case .failed: return "Startup failed"
+        }
+    }
+
+    private static func codexRouteName(_ health: StartupHealth) -> String {
+        if health.diagnosticStale { return "Unknown" }
+        if health.routingInjected { return "CodexCommander" }
+        switch health.routingKind {
+        case "native": return "Native OpenAI"
+        case "custom-local": return "Custom local"
+        case "custom-remote": return "Custom remote"
+        default: return "Unknown"
+        }
     }
 
     private func bridge(_ tone: ProxyState.Tone) -> ProxyToneBridge {
@@ -219,6 +256,15 @@ public final class StatusHeaderView: NSView {
         case .warning: return .warning
         case .bad: return .bad
         }
+    }
+
+    package var statusText: String { status.stringValue }
+    package var requestCountText: String? {
+        requestCount.isHidden ? nil : requestCount.stringValue
+    }
+    package var readinessText: String { readiness.stringValue }
+    package var codexRouteText: String? {
+        codexRoute.isHidden ? nil : codexRoute.stringValue
     }
 }
 
@@ -247,11 +293,11 @@ final class StatusDotView: NSView {
     }
 }
 
-// MARK: - Agent activity
+// MARK: - Live proxy requests
 
-/// One-level tree of primary agents with emitted children; orphan subagents stand alone.
+/// One-level tree of in-flight primary/child turns; orphan child requests stand alone.
 public final class AgentActivityView: NSView {
-    private let heading = makeLabel("Agent activity", font: Theme.captionMedium, color: Theme.muted)
+    private let heading = makeLabel("Live proxy requests", font: Theme.captionMedium, color: Theme.muted)
     private let body = NSStackView()
     private let empty = makeLabel("", font: Theme.caption, color: Theme.muted)
 
@@ -280,7 +326,7 @@ public final class AgentActivityView: NSView {
         ])
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
-        setAccessibilityLabel("Agent activity")
+        setAccessibilityLabel("Live proxy requests")
     }
 
     required init?(coder: NSCoder) { nil }
@@ -294,16 +340,16 @@ public final class AgentActivityView: NSView {
         guard snapshot.activityLoaded else {
             body.isHidden = true
             empty.isHidden = false
-            empty.stringValue = "Activity unavailable"
-            setAccessibilityLabel("Agent activity unavailable")
+            empty.stringValue = "Request activity unavailable"
+            setAccessibilityLabel("Live proxy requests unavailable")
             return
         }
 
         guard let activity = snapshot.activity, activity.isSupported else {
             body.isHidden = true
             empty.isHidden = false
-            empty.stringValue = "Activity unavailable"
-            setAccessibilityLabel("Agent activity unavailable")
+            empty.stringValue = "Request activity unavailable"
+            setAccessibilityLabel("Live proxy requests unavailable")
             return
         }
 
@@ -314,7 +360,7 @@ public final class AgentActivityView: NSView {
         if visible.isEmpty {
             body.isHidden = true
             empty.isHidden = false
-            empty.stringValue = "No active agents"
+            empty.stringValue = "No requests in flight"
             setAccessibilityLabel(empty.stringValue)
             return
         }
@@ -353,11 +399,11 @@ public final class AgentActivityView: NSView {
         }
 
         if activity.truncated {
-            let note = makeLabel("Showing active subset", font: Theme.micro, color: Theme.faint)
+            let note = makeLabel("Showing in-flight subset", font: Theme.micro, color: Theme.faint)
             body.addArrangedSubview(note)
         }
 
-        setAccessibilityLabel("Agent activity, \(visible.count) shown")
+        setAccessibilityLabel("Live proxy requests, \(visible.count) shown")
     }
 
     private func appendRow(_ activity: AgentActivity, indented: Bool) {
@@ -366,6 +412,9 @@ public final class AgentActivityView: NSView {
         body.addArrangedSubview(row)
         row.widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
     }
+
+    package var headingText: String { heading.stringValue }
+    package var emptyText: String? { empty.isHidden ? nil : empty.stringValue }
 }
 
 final class AgentActivityRowView: NSView {
@@ -405,7 +454,7 @@ final class AgentActivityRowView: NSView {
             font: Theme.caption,
             color: activity.phase == .running ? Theme.green : Theme.muted
         )
-        let role = activity.role == .primary ? "Primary" : "Subagent"
+        let role = activity.role == .primary ? "Primary turn" : "Subagent turn"
         let meta = makeLabel(role, font: Theme.micro, color: Theme.faint)
         let elapsed = makeLabel(elapsedText(since: activity.startedAt), font: Theme.numericSmall, color: Theme.faint)
         elapsed.alignment = .right
@@ -451,7 +500,7 @@ final class AgentActivityRowView: NSView {
 
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
-        setAccessibilityLabel("\(activity.displayName), \(activity.phase.rawValue)")
+        setAccessibilityLabel("\(activity.displayName), \(role), \(activity.phase.rawValue)")
     }
 
     required init?(coder: NSCoder) { nil }

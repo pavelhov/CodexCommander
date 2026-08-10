@@ -31,7 +31,7 @@ import {
 } from "../src/codex/features";
 import { cmdV2, codexFeaturesInvocation, v2StatusLine, multiAgentModeLine } from "../src/cli/v2";
 import { handleManagementAPI } from "../src/server/management-api";
-import { getDefaultConfig, loadConfig } from "../src/config";
+import { getDefaultConfig, loadConfig, saveConfig } from "../src/config";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 function template(): Record<string, unknown> {
@@ -780,6 +780,39 @@ describe("config-surface parity: agents.enabled, max_depth, subagent_developer_i
 });
 
 describe("management API logical v1/v2 switching", () => {
+  test("policy saves preserve unrelated persisted edits made after server startup", async () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = false\n");
+    const oldCodexHome = process.env.CODEX_HOME;
+    const oldCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    process.env.CODEXCOMMANDER_HOME = mkdtempSync(join(tmpdir(), "ccx-api-policy-rebase-"));
+    const serverConfig = getDefaultConfig();
+    saveConfig(serverConfig);
+    const externallyEdited = structuredClone(serverConfig);
+    externallyEdited.port = 20200;
+    saveConfig(externallyEdited);
+    const deps = {
+      toggleCodexMultiAgentV2: (enabled: boolean) => {
+        const content = readFileSync(path, "utf8");
+        writeFileSync(path, content.replace(/^enabled\s*=\s*(?:true|false)$/m, `enabled = ${enabled}`));
+      },
+      createManagementConvergeCodex: catalogConvergenceFactory(),
+    };
+    try {
+      const request = new Request("http://localhost/api/v2", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ multiAgentMode: "v2" }),
+      });
+      const response = await handleManagementAPI(request, new URL(request.url), serverConfig, deps);
+      expect(response?.status).toBe(200);
+      expect(loadConfig()).toMatchObject({ port: 20200, multiAgentMode: "v2" });
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+      if (oldCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = oldCodexCommanderHome;
+    }
+  });
+
   test("persists and clears the explicit V2 message-delivery policy", async () => {
     const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
     const oldCodexHome = process.env.CODEX_HOME;
@@ -790,7 +823,12 @@ describe("management API logical v1/v2 switching", () => {
       ...getDefaultConfig(),
       multiAgentV2MessageDelivery: "encrypted" as const,
     };
-    const deps = { createManagementConvergeCodex: catalogConvergenceFactory() };
+    let catalogConvergences = 0;
+    const deps = {
+      createManagementConvergeCodex: catalogConvergenceFactory(() => { catalogConvergences += 1; }),
+      saveConfigPreservingClaudeCode: saveConfig,
+      loadConfigForCatalogActivation: () => config,
+    };
     try {
       const setPlaintext = new Request("http://localhost/api/v2", {
         method: "PUT",
@@ -815,6 +853,7 @@ describe("management API logical v1/v2 switching", () => {
       expect(clearResponse?.status).toBe(200);
       expect(await clearResponse?.json()).toMatchObject({ multiAgentV2MessageDelivery: "encrypted" });
       expect(loadConfig().multiAgentV2MessageDelivery).toBeUndefined();
+      expect(catalogConvergences).toBe(0);
 
       const invalid = new Request("http://localhost/api/v2", {
         method: "PUT",
@@ -839,7 +878,12 @@ describe("management API logical v1/v2 switching", () => {
       const content = readFileSync(path, "utf8");
       writeFileSync(path, content.replace(/^enabled\s*=\s*(?:true|false)$/m, `enabled = ${enabled}`));
     };
-    const deps = { toggleCodexMultiAgentV2: toggle, createManagementConvergeCodex: catalogConvergenceFactory() };
+    const deps = {
+      toggleCodexMultiAgentV2: toggle,
+      createManagementConvergeCodex: catalogConvergenceFactory(),
+      saveConfigPreservingClaudeCode: saveConfig,
+      loadConfigForCatalogActivation: () => config,
+    };
     try {
       const toV2 = new Request("http://localhost/api/v2", {
         method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ multiAgentMode: "v2" }),
@@ -1288,6 +1332,113 @@ describe("cli surface", () => {
       if (oldCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = oldCodexCommanderHome;
     }
   }, 15_000);
+
+  test("mode default keeps the CLI's explicit first-run config initialization", async () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = false\n");
+    const oldCodexHome = process.env.CODEX_HOME;
+    const oldCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+    const firstRunHome = mkdtempSync(join(tmpdir(), "ccx-cli-v2-first-run-"));
+    process.env.CODEX_HOME = dirname(path);
+    process.env.CODEXCOMMANDER_HOME = firstRunHome;
+    try {
+      expect(await cmdV2(["mode", "default"], {
+        sync: async () => {},
+        log: { log: () => {}, error: () => {} },
+      })).toBe(0);
+      const stored = JSON.parse(readFileSync(join(firstRunHome, "config.json"), "utf8")) as Record<string, unknown>;
+      expect(stored.multiAgentMode).toBeUndefined();
+      expect(stored.providers).toBeDefined();
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+      if (oldCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = oldCodexCommanderHome;
+    }
+  });
+
+  test("mode persistence rebases a roster edit that lands during the feature transition", async () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = false\n");
+    const oldCodexHome = process.env.CODEX_HOME;
+    const oldCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    process.env.CODEXCOMMANDER_HOME = mkdtempSync(join(tmpdir(), "ccx-cli-v2-rebase-"));
+    const initial = getDefaultConfig();
+    saveConfig(initial);
+    const concurrentRoster = ["opencode-go/deepseek-v4-flash"];
+    let syncCalls = 0;
+    const deps = {
+      featuresInvocation: (action: "enable" | "disable") => ({
+        file: "codex-fixture",
+        args: ["features", action, "multi_agent_v2"],
+        options: {},
+      }),
+      execFile: (_file: string, args: string[]) => {
+        // This callback is the deterministic point at which the real CLI can
+        // block. Land an unrelated writer before allowing the flag transition
+        // to return; a stale whole-config save would erase this roster.
+        const concurrent = loadConfig();
+        concurrent.port = 20200;
+        concurrent.subagentModels = [...concurrentRoster];
+        saveConfig(concurrent);
+        const enabled = args[1] === "enable";
+        const content = readFileSync(path, "utf8");
+        writeFileSync(path, content.replace(/^enabled\s*=\s*(?:true|false)$/m, `enabled = ${enabled}`));
+      },
+      sync: async () => { syncCalls += 1; },
+      log: { log: () => {}, error: () => {} },
+    };
+    try {
+      expect(await cmdV2(["mode", "v2"], deps)).toBe(0);
+      expect(loadConfig()).toMatchObject({
+        port: 20200,
+        subagentModels: concurrentRoster,
+        multiAgentMode: "v2",
+      });
+      expect(syncCalls).toBe(1);
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+      if (oldCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = oldCodexCommanderHome;
+    }
+  });
+
+  test("a failed blocking transition preserves its exact TOML rollback and does not persist the mode", async () => {
+    // The V1 limit forces transitionMultiAgentV2 to rewrite TOML before the
+    // injected feature command throws, so byte equality below proves rollback
+    // rather than merely observing an untouched file.
+    const originalToml = "# exact\r\n[agents]\r\nmax_threads = 100 # tuned\r\n";
+    const path = fixtureConfig(originalToml);
+    const oldCodexHome = process.env.CODEX_HOME;
+    const oldCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    process.env.CODEXCOMMANDER_HOME = mkdtempSync(join(tmpdir(), "ccx-cli-v2-rollback-"));
+    saveConfig(getDefaultConfig());
+    let syncCalls = 0;
+    const deps = {
+      featuresInvocation: (action: "enable" | "disable") => ({
+        file: "codex-fixture",
+        args: ["features", action, "multi_agent_v2"],
+        options: {},
+      }),
+      execFile: () => {
+        const concurrent = loadConfig();
+        concurrent.subagentModels = ["opencode-go/deepseek-v4-flash"];
+        saveConfig(concurrent);
+        throw new Error("feature transition blocked");
+      },
+      sync: async () => { syncCalls += 1; },
+      log: { log: () => {}, error: () => {} },
+    };
+    try {
+      expect(await cmdV2(["mode", "v2"], deps)).toBe(1);
+      expect(readFileSync(path, "utf8")).toBe(originalToml);
+      expect(loadConfig()).toMatchObject({
+        subagentModels: ["opencode-go/deepseek-v4-flash"],
+      });
+      expect(loadConfig().multiAgentMode).toBeUndefined();
+      expect(syncCalls).toBe(0);
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+      if (oldCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = oldCodexCommanderHome;
+    }
+  });
 });
 
 describe("mock-max wire clamp (nativeEffortClamp)", () => {

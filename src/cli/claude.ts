@@ -12,7 +12,12 @@ import { injectClaudeAgentDefs } from "../claude/agents-inject";
 import { effectiveModelEnv, resolveAutoContext } from "../claude/context-windows";
 import { refreshGatewayModelCacheFromProxy } from "../claude/gateway-cache";
 import { commandInvocation } from "../lib/win-exec";
-import { findLiveProxy } from "../server/proxy-liveness";
+import {
+  attestLiveManagementProxy,
+  findLiveProxy,
+  type AttestedLiveManagementProxy,
+  type ManagementAttestationIo,
+} from "../server/proxy-liveness";
 import type { CodexCommanderConfig } from "../types";
 import { configuredAdminToken } from "../lib/admin-secrets";
 import { API_KEY_HEADER } from "../identity";
@@ -180,12 +185,19 @@ export function buildClaudeEnv(
  * daemon registers every selector form — audit R3#1). 3s bound + management auth header.
  * (no [1m] marking, conservative).
  */
-export async function fetchClaudeContextWindows(config: CodexCommanderConfig, port: number, timeoutMs = 3_000): Promise<Record<string, number>> {
+export async function fetchClaudeContextWindows(
+  _config: CodexCommanderConfig,
+  port: number,
+  timeoutMs = 3_000,
+  io: ManagementAttestationIo = {},
+): Promise<Record<string, number>> {
   try {
+    const target = await attestLiveManagementProxy({ ...io, timeoutMs });
+    if (!target || target.port !== port) return {};
     const headers = new Headers();
     const token = configuredAdminToken();
     if (token) headers.set(API_KEY_HEADER, token);
-    const res = await fetch(`http://127.0.0.1:${port}/api/claude-code`, {
+    const res = await (io.fetchFn ?? fetch)(`${target.baseUrl}/api/claude-code`, {
       headers,
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -198,9 +210,11 @@ export async function fetchClaudeContextWindows(config: CodexCommanderConfig, po
   }
 }
 
-async function ensureProxyForClaude(): Promise<number | null> {
-  const live = await findLiveProxy();
-  if (live) return live.port;
+async function ensureProxyForClaude(): Promise<AttestedLiveManagementProxy | null> {
+  const attested = await attestLiveManagementProxy();
+  if (attested) return attested;
+  // A lookalike/unattested listener must not receive the Claude launch token.
+  if (await findLiveProxy()) return null;
   const cfgPort = loadConfig().port;
   const pinPort = typeof cfgPort === "number" && cfgPort > 0 ? cfgPort : 10100;
   const child = spawn(process.execPath, [process.argv[1], "start", "--port", String(pinPort)], {
@@ -212,8 +226,8 @@ async function ensureProxyForClaude(): Promise<number | null> {
   child.unref();
   const deadline = Date.now() + 8_000;
   while (Date.now() < deadline) {
-    const started = await findLiveProxy();
-    if (started) return started.port;
+    const started = await attestLiveManagementProxy();
+    if (started) return started;
     await new Promise(resolve => setTimeout(resolve, 250));
   }
   return null;
@@ -240,11 +254,12 @@ export async function cmdClaude(args: string[]): Promise<number> {
     console.error("Claude inbound is disabled (config.claudeCode.enabled=false — flip the Claude ON toggle in the GUI or edit config).");
     return 1;
   }
-  const port = await ensureProxyForClaude();
-  if (!port) {
-    console.error("❌ Proxy did not become healthy after starting.");
+  const target = await ensureProxyForClaude();
+  if (!target) {
+    console.error("❌ Proxy did not become healthy with a protected runtime identity after starting.");
     return 1;
   }
+  const port = target.port;
   const contextWindows = await fetchClaudeContextWindows(config, port);
   const env = buildClaudeEnv(config, port, process.env, contextWindows);
   // Pre-write the CLI's gateway-model cache (implementation contract): without a token the CLI
@@ -267,6 +282,15 @@ export async function cmdClaude(args: string[]): Promise<number> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`⚠ Claude agent definitions could not be synced: ${message}`);
+  }
+  // Re-prove the exact listener immediately before releasing Claude's admission
+  // token and routed request bodies to the child process.
+  const launchTarget = await attestLiveManagementProxy({ expectedPid: target.pid });
+  if (!launchTarget
+    || launchTarget.port !== target.port
+    || launchTarget.hostname !== target.hostname) {
+    console.error("❌ Proxy identity changed before Claude could launch; retry the command.");
+    return 1;
   }
   return await new Promise<number>(resolve => {
     const inv = commandInvocation("claude", args);

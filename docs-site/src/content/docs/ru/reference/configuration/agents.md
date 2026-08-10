@@ -10,8 +10,8 @@ description: Multi-agent surface, guidance при делегировании, pr
 
 | Поле | Тип | По умолчанию | Значение |
 | --- | --- | --- | --- |
-| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` штампует все модели как v1; `v2` штампует все модели как v2. `default` восстанавливает upstream pin'ы (Sol/Terra — v2, Luna — v1) и для остальных следует native flag `multi_agent_v2`. Применяется к новым сессиям. |
-| `multiAgentV2MessageDelivery?` | `"encrypted" \| "plaintext"` | `"encrypted"` | Политика доставки сообщений V2-родителя. `encrypted` сохраняет зарезервированный шифрованный контракт ChatGPT. Экспериментальный `plaintext` включает совместимость между провайдерами для последующих V2-запросов родителя и делает все его сообщения делегирования открытыми; вызовы сообщений маршрутизируемого родителя также получают plaintext-маркер Codex. После изменения начните новую сессию. |
+| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` штампует все модели как v1; `v2` штампует все модели как v2. `default` восстанавливает upstream pin'ы (Sol/Terra — v2, Luna — v1) и для остальных следует native flag `multi_agent_v2`. После изменения замените запущенный worker через Apply и начните новый task. |
+| `multiAgentV2MessageDelivery?` | `"encrypted" \| "plaintext"` | `"encrypted"` | Политика только для доставки V2 task-сообщений, а не шифрования credentials. `encrypted` сохраняет зарезервированный шифрованный контракт ChatGPT. Экспериментальный `plaintext` включает совместимость между провайдерами для последующих V2-запросов родителя и делает все его сообщения делегирования открытыми. После изменения начните новый task; каталог не становится dirty и Apply не нужен. |
 | `subagentModels?` | `string[]` | `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.4-mini` | До пяти bare native-id, account-qualified id `<selector>/<native-openai-model>` или routed-id `provider/model`, которые первыми рекламируются в picker'е подагентов. Дашборд сохраняет настроенные exact selector'ы, включая account-qualified варианты, и показывает, какие сохранённые записи реально рекламируются или исключены. Для вариантов, отсутствующих в текущем каталоге, используйте `ccx agent subagents set` или отредактируйте конфигурацию. Явный пустой список сохраняется. |
 | `injectionModel?` | `string` | — | Предпочитаемая native- или routed-модель подагента, которую proxy использует в собственном guidance v2. |
 | `injectionEffort?` | `string` | — | Предпочитаемый effort (`low`–`ultra`), имеющий смысл только вместе с `injectionModel`. |
@@ -24,7 +24,7 @@ description: Multi-agent surface, guidance при делегировании, pr
 | `subagentEffortCap?` | `string` | — | Дополнительный потолок только для spawned-child turn'ов. Если применимы оба cap'а, выигрывает более низкий. |
 
 Управляйте surface через дашборд или `ccx v2 status|on|off|mode <v1|default|v2>|threads <n>`.
-Смена режима применяется к новым сессиям. `maxConcurrentThreadsPerSession` — это поле
+Смена режима, протокола или thread обновляет boot config: для уже запущенного worker нужен Apply, затем новый task. `maxConcurrentThreadsPerSession` — это поле
 `PUT /api/v2`, а не ключ `config.json`; `ccx v2 threads <n>` записывает
 `max_concurrent_threads_per_session` в `[features.multi_agent_v2]` файла
 `$CODEX_HOME/config.toml` после включения v2.

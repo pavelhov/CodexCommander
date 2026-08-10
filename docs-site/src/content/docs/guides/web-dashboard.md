@@ -23,15 +23,30 @@ bun run dev:gui
 
 ## Sign-in
 
-On the default loopback bind (`localhost` / `127.0.0.1`) the dashboard never asks for a token:
-the proxy mints short-lived GUI sessions into the served page and renews them silently when
-they expire or the proxy restarts. Only a dashboard bound to a non-loopback hostname requires
-the admin token (`CODEXCOMMANDER_ADMIN_AUTH_TOKEN`, or the auto-generated
-`~/.codexcommander/admin-api-token` file).
+A dashboard opened directly through any loopback form—`localhost`, `*.localhost`, any address in
+`127.0.0.0/8`, `::1`, or an IPv4-mapped `127/8` address—receives no API credential. The page shell
+can load, but its API requests remain unauthorized. Reopen it with `ccx gui` or the macOS menu app.
+A loopback page never asks for or transmits the durable admin token because another local OS user
+could impersonate an inactive listener. Loopback browser access requires a confirmed launcher
+session; loopback is not an authentication bypass.
 
-When a remote dashboard needs that credential, it presents a standard password form so a browser
-password manager can offer to save and autofill it. The dashboard itself still keeps the token only
-in memory and does not write it to `localStorage` or `sessionStorage`; whether it is saved is entirely
+For the full dashboard, open it with `ccx gui` or the macOS menu app. The launcher uses admin authority
+to mint a short-lived, single-use ticket, puts only that ticket in the URL fragment, and the dashboard
+removes it immediately as it exchanges it for a confirmed session. A confirmed session lives only in
+the proxy and browser process for up to eight hours and is never renewed. Expiry or a proxy restart
+makes the next API request return `401`, and the loopback page requires a new launcher handoff. The
+durable admin token never enters the URL or browser storage.
+
+A dashboard bound to a non-loopback hostname may use the admin token
+(`CODEXCOMMANDER_ADMIN_AUTH_TOKEN`, or the auto-generated `~/.codexcommander/admin-api-token` file),
+but the browser prompt is enabled only on a trusted HTTPS origin. A plaintext remote page never asks
+for or sends the bearer. Without trusted HTTPS, use a local or SSH tunnel that presents the dashboard
+as loopback, then open it through `ccx gui`. Raw admin remains available to headless management API
+clients, but catalog Apply is deliberately restricted to a confirmed local dashboard launch.
+
+On trusted HTTPS, a remote dashboard presents a standard password form so a browser password manager
+can offer to save and autofill the credential. The dashboard itself still keeps the token only in
+memory and does not write it to `localStorage` or `sessionStorage`; whether it is saved is entirely
 the browser or password manager's decision.
 
 ## What you can do
@@ -48,8 +63,8 @@ the browser or password manager's decision.
 | **Providers** | Add, edit, set the default (enabled providers only), enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Removing the current default switches to the first remaining enabled provider when one exists; otherwise deletion is refused and the current default is kept. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. |
 | **Add provider** | Search registry-backed presets for account login, API-key services, local servers, or a custom endpoint. A query searches Accounts, Free and Paid together while the tabs remain useful for browsing. |
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, select the next-session account, refresh 5h / weekly / 30d quotas, enable or disable quota auto-switch, set its 1–100% threshold, and configure transient-failure failover. |
-| **Subagents** | Open the **Agent Command Center** to choose and order the five models advertised to `spawn_agent`, search the current catalog, and configure Run Policy for protocol, V2 delivery, guidance, fallback, and thread limits. Saved entries that are not advertised are reported explicitly. |
-| **Models** | Toggle native GPT and routed models, set provider allowlists and context caps, choose **Classic v1**, **Follow Codex defaults**, or **Concurrent v2**, and configure the v2 thread limit. The Current behavior card reports context as **Uncapped**, **Limited**, or **Mixed limits**. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. Each routed-provider row reports **Auto-discovery on** or **Static catalog only** and links to the owning Provider setting. |
+| **Subagents** | Open the **Agent Command Center** to choose and order the five models advertised to `spawn_agent`, search the current catalog, and configure Run Policy for protocol, V2 delivery, guidance, fallback, and thread limits. Saved entries that are not advertised are reported explicitly. Its status distinguishes saved configuration, the generated on-disk catalog, and the roster loaded by current Codex workers. |
+| **Models** | Toggle native GPT and routed models, set provider allowlists and context caps, choose **Reliable v1**, **Codex native**, or **Concurrent v2**, and configure the v2 thread limit. The Current behavior card reports context as **Uncapped**, **Limited**, or **Mixed limits**. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. Each routed-provider row reports **Auto-discovery on** or **Static catalog only** and links to the owning Provider setting. |
 | **Client Apps** | Inspect configured and available local clients, apply or remove managed config where supported, review backups, and reach Codex, Claude Code/Desktop, Grok Build, OpenCode and the file-managed clients without treating providers as clients. |
 | **API Access** | Issue and manage keys that authenticate other apps to the CodexCommander proxy. Provider credentials remain under Providers. |
 | **Logs** | Auto-refresh recent requests with tokens, requested effort and (when available) effective outbound effort, resolved model, provider, status, request id, duration, and error details. The detail view includes the exact reasoning wire field when the adapter emits one. Filter by opaque conversation/session id (when the client sends one) to total tokens and estimated list-price cost for the currently loaded Logs ring. |
@@ -79,6 +94,27 @@ providers are capped or their saved values differ. Native OpenAI models always k
 
 Automatic upstream catalog refresh is configured per provider under **Providers → Settings**. The
 Models page shows that state and links directly to it; it does not keep a second discovery setting.
+
+## Catalog activation
+
+Saving model visibility, the featured roster, or collaboration mode is deliberately non-disruptive:
+CodexCommander saves the desired configuration and converges its deterministic catalog on disk. It
+does not terminate Codex while you are working. The **Agent Command Center** then shows whether the
+current Codex app-server has actually loaded that catalog.
+
+If it has not, choose **Apply agent catalog**. The confirmation explains that selected, verified stale
+workers will be replaced and that their active task can be interrupted. Active-work count is useful
+warning context, not an idle guarantee; an unknown worker identity blocks the action rather than
+guessing. Apply does not restart the proxy, kill unrelated processes, queue itself for idle time, or
+save a separate pending-update record. **Later** simply leaves the evidence visible.
+
+If a manually opened loopback dashboard lacks a confirmed session, or its session expired, reopen it
+with `ccx gui` or from the macOS menu app. Never paste the raw admin token into a loopback page; their
+one-time browser launch restores API access without exposing it.
+
+A new task or fork within the same Codex Desktop worker does not reload its model catalog. The
+reliable manual alternative is to quit and reopen Codex Desktop, which replaces that app-server.
+For advanced automation, `ccx sync --restart-codex` remains available.
 
 ## Delegation picker vs spawn routing
 
@@ -173,7 +209,8 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | `PUT /api/startup-health/companion` | Let the authenticated native companion refresh its short-lived, memory-only Launch at Login observation. This endpoint requires the raw admin token; a browser GUI session is rejected. |
 | `POST /api/startup-action` | Install the background service or Codex launcher shim through fixed, allowlisted actions. |
 | `GET` / `POST /api/windows-tray` | Read or change the Windows tray installation and visible-process state. POST accepts `install`, `start`, `stop`, or `uninstall`. |
-| `POST /api/sync` | Rebuild the shared model catalog and stale the Codex model cache. |
+| `POST /api/sync` | Rebuild the shared model catalog and stale the Codex model cache without interrupting workers. |
+| `GET /api/codex-catalog/status` · `POST /api/codex-catalog/apply` | Read catalog activation evidence, then explicitly apply it to verified stale workers with a desired-revision fence and interruption confirmation. A browser GUI session also needs the one-time launch authorization described above. |
 | `GET` / `PUT /api/sidecar-settings` | Read or set search/vision sidecar model settings. |
 | `GET` / `PUT /api/injection-model` | Read or set the shared sub-agent model/effort selection and the independent guidance/native-default switches. |
 | `GET` / `PUT /api/v2` | Read or set the surface mode, Codex feature flag, and v2 thread limit. |

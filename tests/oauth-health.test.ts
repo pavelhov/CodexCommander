@@ -183,6 +183,7 @@ describe("collectOAuthHealthEntriesForCli", () => {
     const report = await collectOAuthHealthEntriesForCli(Date.now(), {
       findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: 4242, source: "runtime" }),
       readRuntimePortImpl: () => ({ pid: 4242, port: 19191, attestationSecret }),
+      verifyPidIdentityImpl: candidate => candidate,
       fetchImpl: async (input, init) => {
         if (String(input).endsWith("/healthz")) {
           const challenge = new Headers(init?.headers).get(ATTESTATION_CHALLENGE_HEADER)!;
@@ -237,6 +238,7 @@ describe("collectOAuthHealthEntriesForCli", () => {
     const report = await collectOAuthHealthEntriesForCli(Date.now(), {
       findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: 4242, source: "runtime" }),
       readRuntimePortImpl: () => ({ pid: 4242, port: 19191, attestationSecret }),
+      verifyPidIdentityImpl: candidate => candidate,
       fetchImpl: async (input, init) => {
         expect(new Headers(init?.headers).get("authorization")).toBeNull();
         if (!String(input).endsWith("/healthz")) apiCalls += 1;

@@ -5,7 +5,12 @@ import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import type { NativeProfileManager } from "../src/codex/native-profile-manager";
 import { startServer } from "../src/server";
-import { initializeManagementAuthState, issueGuiSession, type ManagementAuthState } from "../src/server/management-auth";
+import {
+  exchangeGuiLaunchTicket,
+  initializeManagementAuthState,
+  issueGuiLaunchTicket,
+  type ManagementAuthState,
+} from "../src/server/management-auth";
 import type { CodexCommanderConfig } from "../src/types";
 import { SERVER_BUDGET_MS } from "./helpers/test-budget";
 
@@ -134,11 +139,16 @@ describe("native-main profile routes at the management admission boundary", () =
       managementApi: { nativeProfileApi: { manager: testManager(calls) } },
     });
     try {
-      const session = issueGuiSession(new Request(new URL("/", server.url), {
+      const issued = issueGuiLaunchTicket(new Request(new URL("/api/gui-launch-ticket", server.url), {
+        method: "POST",
         headers: { Host: server.url.host },
-      }), config, managementAuth);
+      }), "startup", config, managementAuth);
+      const session = issued && exchangeGuiLaunchTicket(new Request(new URL("/api/gui-launch-exchange", server.url), {
+        method: "POST",
+        headers: { Host: server.url.host, Origin: server.url.origin },
+      }), issued.ticket, issued.route, config, managementAuth);
       expect(session).not.toBeNull();
-      if (!session) throw new Error("expected a loopback GUI session");
+      if (!session) throw new Error("expected a confirmed GUI session");
 
       for (const operation of operations.filter(operation => operation.method === "POST")) {
         const request = (csrf?: string) => fetch(new URL(operation.path, server.url), {

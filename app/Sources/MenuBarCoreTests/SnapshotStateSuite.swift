@@ -100,6 +100,26 @@ enum SnapshotStateSuite {
             t.equal(snapshot.providers, providers)
         }
 
+        t.test("snapshot: readiness is orthogonal to process and routing state") {
+            let initial = ProxySnapshot(
+                state: .running(health("protected")),
+                endpoint: endpoint
+            )
+            t.equal(initial.readiness, .unknown)
+
+            for readiness: ProxyReadinessState in [
+                .unavailable, .pending, .ready, .failed,
+            ] {
+                let snapshot = ProxySnapshot(
+                    state: .running(health("protected")),
+                    readiness: readiness,
+                    endpoint: endpoint
+                )
+                t.equal(snapshot.state.isRunning, true, "\(readiness) liveness")
+                t.equal(snapshot.readiness, readiness)
+            }
+        }
+
         t.test("polling: the interval backs off only after repeated failures") {
             t.equal(PollingCoordinator.openInterval, 2)
             t.equal(PollingCoordinator.closedInterval, 30)

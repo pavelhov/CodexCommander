@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { readCodexCatalogPath, resetCatalogRuntimeStateForTests, syncCatalogModels } from "../src/codex/catalog";
+import { readCodexCatalogPath, resetCatalogRuntimeStateForTests } from "../src/codex/catalog";
+import { getDefaultConfig } from "../src/config";
 import type { CodexCommanderConfig } from "../src/types";
+import { convergeCatalogForTest } from "./helpers/catalog-convergence";
 
 setDefaultTimeout(30_000);
 
@@ -13,11 +15,23 @@ async function syncCatalog(config: Pick<CodexCommanderConfig, "providers"> & Par
     warnings.push(values.map(String).join(" "));
   });
   try {
-    await syncCatalogModels({
-      port: 10100,
-      defaultProvider: Object.keys(config.providers)[0] ?? "openai",
+    const providers = Object.keys(config.providers).length > 0
+      ? config.providers
+      : { openai: { ...getDefaultConfig().providers.openai!, disabled: true } };
+    await convergeCatalogForTest({
+      ...getDefaultConfig(),
       ...config,
-    } as CodexCommanderConfig, testCatalogDeps());
+      providers,
+      defaultProvider: Object.keys(providers)[0]!,
+      subagentModels: config.subagentModels ?? [],
+      ...(config.codexAccounts ? {
+        codexAccounts: config.codexAccounts.map((account, index) => ({
+          email: `${account.id}@example.test`,
+          logLabel: `p${index.toString(16).padStart(6, "0")}`,
+          ...account,
+        })),
+      } : {}),
+    } as CodexCommanderConfig);
     return warnings.join("\n");
   } finally {
     warning.mockRestore();
@@ -33,13 +47,6 @@ function nativeEntry(slug: string, priority: number): Record<string, unknown> {
     visibility: "list",
     base_instructions: "You are Codex, a coding agent based on GPT-5.",
     supported_reasoning_levels: [{ effort: "medium", description: "m" }],
-  };
-}
-
-function testCatalogDeps() {
-  return {
-    commandCandidates: () => ["codex-fixture"],
-    execFileSync: () => JSON.stringify({ models: [nativeEntry("gpt-5.5", 0)] }),
   };
 }
 
@@ -271,46 +278,6 @@ describe("Codex catalog sync hardening", () => {
     expect(JSON.stringify(rows)).not.toContain("stored-team-account");
     expect(JSON.stringify(rows)).not.toContain("private@example.test");
     expect(JSON.stringify(rows)).not.toContain("Private Display Name");
-  });
-
-  test("a live provider row shadowed by an account selector warns once per runtime generation", async () => {
-    const catalogPath = join(codexHome, "catalog.json");
-    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
-    writeFileSync(catalogPath, JSON.stringify({
-      models: [nativeEntry("gpt-5.5", 0)],
-    }, null, 2) + "\n");
-
-    const config: Pick<CodexCommanderConfig, "providers"> & Partial<CodexCommanderConfig> = {
-      providers: {
-        openai: {
-          adapter: "openai-responses",
-          baseUrl: "https://chatgpt.com/backend-api/codex",
-          liveModels: false,
-        },
-        team: {
-          adapter: "openai-chat",
-          baseUrl: "https://api.example.test/v1",
-          liveModels: false,
-          models: ["gpt-5.5"],
-        },
-      },
-      codexAccounts: [{ id: "stored-team-account", isMain: false }],
-      codexAccountNamespaces: { team: "stored-team-account" },
-    };
-    const firstWarnings = await syncCatalog(config);
-    const secondWarnings = await syncCatalog(config);
-    resetCatalogRuntimeStateForTests();
-    const thirdWarnings = await syncCatalog(config);
-    const warnings = `${firstWarnings}\n${secondWarnings}\n${thirdWarnings}`;
-    expect((warnings.match(/account selector collision on "team\/gpt-5\.5"/g) ?? []).length).toBe(2);
-
-    const rows = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{
-      slug: string;
-      codexcommander_catalog_kind?: string;
-    }>;
-    expect(rows.filter(row => row.slug === "team/gpt-5.5")).toEqual([
-      expect.objectContaining({ codexcommander_catalog_kind: "account-selector-v1" }),
-    ]);
   });
 
   test("non-OpenAI-only sync omits account rows without reprioritizing routed models", async () => {

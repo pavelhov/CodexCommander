@@ -343,6 +343,7 @@ export function forgetHardenedSecretPath(targetPath: string): void {
  * timeout memos are intentional anti-restall state and are not touched here.
  */
 export function forgetEphemeralSecretPath(tempPath: string): void {
+  hardenedDirectories.delete(tempPath);
   hardenedPaths.delete(tempPath);
   timedOutPaths.delete(`required:${tempPath}`);
   timedOutPaths.delete(`optional:${tempPath}`);

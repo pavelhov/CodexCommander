@@ -45,6 +45,8 @@ func decodeQuotaAvailability(_ json: String) -> [ProviderQuotaAvailability] {
 func currentHealth(
     status: String = "protected",
     protection: String = "none",
+    routingKind: String = "codexcommander-local",
+    routingInjected: Bool = true,
     serviceInstalled: Bool = false,
     serviceEnabled: Bool = false,
     diagnosticStale: Bool = false,
@@ -54,9 +56,9 @@ func currentHealth(
         status: status,
         protection: protection,
         platform: "darwin",
-        routingKind: "codexcommander-local",
-        routingInjected: true,
-        localRoutingDependency: true,
+        routingKind: routingKind,
+        routingInjected: routingInjected,
+        localRoutingDependency: routingKind != "native" && routingKind != "custom-remote",
         autostartEnabled: serviceEnabled,
         serviceRunning: serviceEnabled,
         serviceInstalled: serviceInstalled,
@@ -82,6 +84,7 @@ func currentHealth(
 
 func activitySnapshot(
     activities: String,
+    activeTurnCount: Int = 2,
     unattributed: Int = 0,
     truncated: Bool = false
 ) -> AgentActivitySnapshot {
@@ -90,7 +93,7 @@ func activitySnapshot(
       "schemaVersion": 1,
       "generatedAt": 1,
       "proxyState": "running",
-      "activeTurnCount": 2,
+      "activeTurnCount": \(activeTurnCount),
       "displayedActivityCount": 2,
       "unattributedActiveCount": \(unattributed),
       "truncated": \(truncated ? "true" : "false"),
@@ -106,6 +109,7 @@ func makeSnapshot(
     activity: AgentActivitySnapshot? = nil,
     providers: [ProviderSummary] = [],
     health: StartupHealth = currentHealth(),
+    readiness: ProxyReadinessState = .unknown,
     recommendedCommand: String? = nil,
     providersLoaded: Bool = false,
     quotasLoaded: Bool = true,
@@ -113,6 +117,7 @@ func makeSnapshot(
 ) -> ProxySnapshot {
     ProxySnapshot(
         state: .running(health),
+        readiness: readiness,
         endpoint: .default,
         quotas: quotas,
         quotaAvailability: quotaAvailability,
@@ -569,14 +574,80 @@ runner.test("ui: activity empty and unavailable states stay compact") {
 
     let unloaded = makeSnapshot(activityLoaded: false)
     controller.apply(unloaded)
+    runner.equal(controller.activityView.headingText, "Live proxy requests", "request heading")
+    runner.equal(controller.activityView.emptyText, "Request activity unavailable", "unavailable copy")
     runner.expect(controller.activityView.accessibilityLabel()?.contains("unavailable") == true
         || controller.activityView.accessibilityLabel()?.contains("Activity") == true,
         "unavailable label present")
 
-    let empty = activitySnapshot(activities: "")
+    let empty = activitySnapshot(activities: "", activeTurnCount: 0)
     controller.apply(makeSnapshot(activity: empty))
+    runner.equal(controller.activityView.emptyText, "No requests in flight", "empty request copy")
     // Should not crash and should keep preferred width.
     runner.equal(controller.preferredContentSize.width, 387, "width stable")
+}
+
+runner.test("ui: header separates proxy requests from the Codex route") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    let activity = activitySnapshot(activities: "", activeTurnCount: 2)
+
+    controller.apply(makeSnapshot(activity: activity))
+    runner.equal(controller.headerView.statusText, "Proxy running", "proxy status")
+    runner.equal(controller.headerView.requestCountText, "2 in flight", "request count")
+    runner.equal(controller.headerView.readinessText, "Readiness · Checking", "initial readiness")
+    runner.equal(
+        controller.headerView.codexRouteText,
+        "Codex route · CodexCommander",
+        "managed Codex route"
+    )
+
+    controller.apply(makeSnapshot(
+        activity: activity,
+        health: currentHealth(
+            status: "native",
+            routingKind: "native",
+            routingInjected: false
+        )
+    ))
+    runner.equal(controller.headerView.codexRouteText, "Codex route · Native OpenAI", "native route")
+    runner.expect(
+        controller.headerView.accessibilityLabel()?.contains("2 requests in flight") == true,
+        "request count is explicit to assistive technology"
+    )
+
+    controller.apply(makeSnapshot(
+        activity: activity,
+        health: currentHealth(diagnosticStale: true)
+    ))
+    runner.equal(controller.headerView.codexRouteText, "Codex route · Unknown", "stale route fails closed")
+}
+
+runner.test("ui: header keeps readiness separate from liveness and routing") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    let states: [(ProxyReadinessState, String)] = [
+        (.unknown, "Checking"),
+        (.pending, "Starting"),
+        (.ready, "Ready"),
+        (.failed, "Startup failed"),
+        (.unavailable, "Unavailable"),
+    ]
+
+    for (state, label) in states {
+        controller.apply(makeSnapshot(readiness: state))
+        runner.equal(controller.headerView.statusText, "Proxy running", "liveness stays running for \(label)")
+        runner.equal(controller.headerView.readinessText, "Readiness · \(label)", "readiness \(label)")
+        runner.equal(
+            controller.headerView.codexRouteText,
+            "Codex route · CodexCommander",
+            "route stays independent for \(label)"
+        )
+    }
+    runner.expect(
+        controller.headerView.accessibilityLabel()?.contains("Readiness · Unavailable") == true,
+        "readiness is explicit to assistive technology"
+    )
 }
 
 runner.test("ui: activity rows render once and elapsed timers clear the scrollbar") {
@@ -601,6 +672,7 @@ runner.test("ui: activity rows render once and elapsed timers clear the scrollba
     controller.view.layoutSubtreeIfNeeded()
 
     let fields = textFields(in: controller.activityView)
+    runner.expect(fields.contains { $0.stringValue == "Subagent turn" }, "child row is a turn, not a durable agent")
     runner.expect(
         fields.allSatisfy { !$0.stringValue.localizedCaseInsensitiveContains("unattributed") },
         "already-rendered subagents should not be counted again in a footer"

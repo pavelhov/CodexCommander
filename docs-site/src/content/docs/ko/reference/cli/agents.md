@@ -40,7 +40,7 @@ ccx v2 threads 16
 
 `mode` 하위 명령은 `multiAgentMode`를 CodexCommander config에 쓰고 Codex catalog를 다시 동기화합니다.
 mode와 flag 전환은 현재 숫자 thread 한도를 유효한 v1/v2 Codex key 사이로 옮깁니다.
-전환이 실패하면 원래의 `config.toml`이 복원됩니다. 변경은 새 Codex 세션에만 적용되고, 실행 중인 세션은 고정된 surface를 유지합니다.
+전환이 실패하면 원래의 `config.toml`이 복원됩니다. mode, flag, thread 변경은 boot config를 바꿉니다. 실행 중 worker에 반영하려면 `ccx sync --restart-codex`(또는 dashboard의 **Apply agent catalog**)를 사용한 뒤 새 task를 시작하세요.
 
 ## 콤보 라우팅
 

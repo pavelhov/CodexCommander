@@ -134,10 +134,19 @@ public protocol LifecycleCommandRunning: Sendable {
 public struct LifecycleInvocation: Equatable, Sendable {
     public let executable: URL
     public let prefixArguments: [String]
+    public let workingDirectory: URL?
+    public let appOwnedRuntime: Bool
 
-    public init(executable: URL, prefixArguments: [String] = []) {
+    public init(
+        executable: URL,
+        prefixArguments: [String] = [],
+        workingDirectory: URL? = nil,
+        appOwnedRuntime: Bool = false
+    ) {
         self.executable = executable
         self.prefixArguments = prefixArguments
+        self.workingDirectory = workingDirectory
+        self.appOwnedRuntime = appOwnedRuntime
     }
 }
 
@@ -148,17 +157,11 @@ public enum LifecycleHelperDiscovery {
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
         fileManager: FileManager = .default
     ) -> LifecycleInvocation? {
-        // The repository build is deliberately live: while developing, edits in the
-        // checkout must take effect without rebuilding the copied Resources snapshot.
-        if let source = sourceInvocation(bundleURL: bundleURL, fileManager: fileManager) {
-            return source
-        }
-
-        // A released companion carries the complete Bun + CodexCommander package under
-        // Contents/Resources/runtime. Resolve it before global installs so a copied app
-        // never accidentally controls a different checkout or npm installation.
-        if let bundled = bundledInvocation(bundleURL: bundleURL, fileManager: fileManager) {
-            return bundled
+        // Every .app is an app-owned trust boundary, regardless of its display name.
+        // A damaged bundle must fail closed instead of silently executing a mutable
+        // global/dev install with different code than the UI that launched it.
+        if bundleURL.pathExtension.lowercased() == "app" {
+            return bundledInvocation(bundleURL: bundleURL, fileManager: fileManager)
         }
 
         // Release companions may be launched outside the source tree. Only inspect
@@ -197,39 +200,40 @@ public enum LifecycleHelperDiscovery {
         fileManager: FileManager
     ) -> LifecycleInvocation? {
         let bundle = bundleURL.resolvingSymlinksInPath()
-        guard bundle.lastPathComponent == "CodexCommander.app" else { return nil }
-        let runtime = bundle
+        guard isDirectory(bundle.path, fileManager: fileManager) else { return nil }
+        let declaredRuntime = bundle
             .appendingPathComponent("Contents", isDirectory: true)
             .appendingPathComponent("Resources", isDirectory: true)
             .appendingPathComponent("runtime", isDirectory: true)
-        return repositoryInvocation(runtime, fileManager: fileManager)
-    }
-
-    private static func sourceInvocation(
-        bundleURL: URL,
-        fileManager: FileManager
-    ) -> LifecycleInvocation? {
-        // <repo>/dist/macos/CodexCommander.app -> <repo>.
-        // Requiring every fixed path component keeps a copied/lookalike app from
-        // selecting a nearby script.
-        let bundle = bundleURL.resolvingSymlinksInPath()
-        guard bundle.lastPathComponent == "CodexCommander.app",
-              bundle.deletingLastPathComponent().lastPathComponent == "macos",
-              bundle.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent == "dist"
+            .standardizedFileURL
+        let runtime = declaredRuntime.resolvingSymlinksInPath()
+        // Contents, Resources, and runtime itself must be real app-owned directories.
+        // Reject an otherwise plausible bundle whose runtime root redirects elsewhere.
+        guard runtime.path == declaredRuntime.path,
+              isDirectory(runtime.path, fileManager: fileManager)
         else { return nil }
-        let repository = bundle
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        return repositoryInvocation(repository, fileManager: fileManager)
+        return repositoryInvocation(
+            runtime,
+            fileManager: fileManager,
+            containmentRoot: runtime,
+            appOwnedRuntime: true
+        )
     }
 
     private static func repositoryInvocation(
         _ repository: URL,
-        fileManager: FileManager
+        fileManager: FileManager,
+        containmentRoot: URL? = nil,
+        appOwnedRuntime: Bool = false
     ) -> LifecycleInvocation? {
-        let package = repository.appendingPathComponent("package.json")
-        let entry = repository.appendingPathComponent("src/cli/index.ts")
+        let repository = repository.standardizedFileURL.resolvingSymlinksInPath()
+        guard isDirectory(repository.path, fileManager: fileManager) else { return nil }
+        let root = containmentRoot?.standardizedFileURL.resolvingSymlinksInPath()
+        let package = repository.appendingPathComponent("package.json").resolvingSymlinksInPath()
+        let entry = repository.appendingPathComponent("src/cli/index.ts").resolvingSymlinksInPath()
+        if let root {
+            guard isContained(package, in: root), isContained(entry, in: root) else { return nil }
+        }
         guard isCodexCommanderPackage(package, fileManager: fileManager),
               isRegularFile(entry.path, fileManager: fileManager)
         else { return nil }
@@ -239,10 +243,28 @@ public enum LifecycleHelperDiscovery {
             repository.appendingPathComponent("node_modules/bun/bin/bun"),
             repository.appendingPathComponent("node_modules/bun/bin/bun.exe"),
         ]
-        guard let bun = bunCandidates.first(where: {
-            isExecutable($0.path, fileManager: fileManager)
-        }) else { return nil }
-        return LifecycleInvocation(executable: bun, prefixArguments: [entry.path])
+        guard let bun = bunCandidates.lazy
+            .map({ $0.resolvingSymlinksInPath() })
+            .first(where: { candidate in
+                (root.map({ isContained(candidate, in: $0) }) ?? true)
+                    && isExecutable(candidate.path, fileManager: fileManager)
+            })
+        else { return nil }
+        return LifecycleInvocation(
+            executable: bun,
+            prefixArguments: (appOwnedRuntime
+                ? ["--no-install", "--no-env-file", "--config=/dev/null"]
+                : []) + [entry.path],
+            workingDirectory: repository,
+            appOwnedRuntime: appOwnedRuntime
+        )
+    }
+
+    private static func isContained(_ candidate: URL, in root: URL) -> Bool {
+        let rootComponents = root.standardizedFileURL.pathComponents
+        let candidateComponents = candidate.standardizedFileURL.pathComponents
+        return candidateComponents.count > rootComponents.count
+            && candidateComponents.prefix(rootComponents.count).elementsEqual(rootComponents)
     }
 
     private static func isCodexCommanderPackage(
@@ -263,6 +285,13 @@ public enum LifecycleHelperDiscovery {
     private static func isRegularFile(_ path: String, fileManager: FileManager) -> Bool {
         guard let attributes = try? fileManager.attributesOfItem(atPath: path),
               attributes[.type] as? FileAttributeType == .typeRegular
+        else { return false }
+        return true
+    }
+
+    private static func isDirectory(_ path: String, fileManager: FileManager) -> Bool {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: path),
+              attributes[.type] as? FileAttributeType == .typeDirectory
         else { return false }
         return true
     }
@@ -343,9 +372,10 @@ public actor LifecycleHelper: LifecycleCommandRunning {
                 let timeoutState = TimeoutState()
                 process.executableURL = invocation.executable
                 process.arguments = invocation.prefixArguments + ["__macos-lifecycle", action.rawValue]
+                process.currentDirectoryURL = invocation.workingDirectory
                 process.standardOutput = pipe
                 process.standardError = FileHandle.nullDevice
-                process.environment = Self.controlledEnvironment(for: invocation.executable)
+                process.environment = Self.controlledEnvironment(for: invocation)
                 pipe.fileHandleForReading.readabilityHandler = { handle in
                     output.append(handle.availableData)
                 }
@@ -416,10 +446,14 @@ public actor LifecycleHelper: LifecycleCommandRunning {
 
     /// Preserve CodexCommander/Codex configuration while removing runtime preloads and an
     /// attacker-controlled PATH from this privileged fixed-action bridge.
-    private nonisolated static func controlledEnvironment(for executable: URL) -> [String: String] {
+    private nonisolated static func controlledEnvironment(for invocation: LifecycleInvocation) -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
-        if executable.path.contains("/Contents/Resources/runtime/") {
+        if let workingDirectory = invocation.workingDirectory {
+            environment["PWD"] = workingDirectory.path
+        }
+        environment.removeValue(forKey: "CCX_APP_RUNTIME")
+        if invocation.appOwnedRuntime {
             // The app-owned runtime must never enter npm/source self-update paths.
             // This marker is inherited by the Bun proxy process and its management API.
             environment["CCX_APP_RUNTIME"] = "1"

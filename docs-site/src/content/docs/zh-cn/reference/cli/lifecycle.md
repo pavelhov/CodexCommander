@@ -127,6 +127,10 @@ ccx status --json
 
 **OAuth 可靠性** 部分会报告凭据存储是否可写、是否能够在 `CODEXCOMMANDER_HOME` 下创建刷新 single-flight/锁文件、不健康的 OAuth 或 Codex 池账户（脱敏 ID）及其恢复 `Action:`，并给出一条静态 OK，说明 Codex 转发路径不会伪造官方客户端元数据。Doctor 绝不会修改凭据或执行修复。
 
+:::note[升级后一次性重启]
+从旧版本持续运行的代理，其受保护运行时记录中可能没有 `attestationSecret`。在使用 CLI 管理命令或启动会携带凭据的 Claude/OpenCode 客户端之前，请将该代理重启一次。在此之前，敏感请求会 fail closed：token 和 request body 绝不会回退发送到仅通过公开 health 信息或配置端口发现的 listener。
+:::
+
 ## 目录同步
 
 ### `ccx sync [--restart-codex]`
@@ -134,6 +138,8 @@ ccx status --json
 从每个已配置的提供方获取实时模型列表，并将合并后的目录重新注入 Codex。在添加提供方后运行，或用于刷新可用模型。
 
 如果仍有长期运行的 Codex `app-server` 进程，`ccx sync` 会警告它们可能继续提供旧的内存模型列表，即使 `codexcommander-catalog.json` / `models_cache.json` 已更新。传入 `--restart-codex` 会仅向当前用户拥有、匹配 `codex … app-server` 和 `codex-code-mode-host` 的进程发送 `SIGTERM`（当前活跃会话可能会被打断）。故意避免使用宽泛的 `pkill -f codex` 匹配。
+
+普通 `ccx sync` 不会中断工作。同一 app-server 中的新 task 或 fork 不会使其重新加载 catalog。请使用仪表板中的 **Apply agent catalog**、`ccx sync --restart-codex`，或退出并重新打开 Codex Desktop。
 
 ### `ccx sync-cache [--restart-codex]`
 
@@ -199,4 +205,4 @@ ccx codex-shim uninstall
 
 ### `ccx gui`
 
-在 `http://localhost:<port>` 打开 [web dashboard](/guides/web-dashboard/)，如果代理未运行则会自动启动。
+在 `http://localhost:<port>` 打开 [web dashboard](/guides/web-dashboard/)，如果代理未运行则会自动启动。短期、一次性的浏览器启动票据会解锁更改操作，包括确认后的 **Apply agent catalog**。票据只通过 URL fragment 传递，并在交换过程中清除；长期管理员 token 不会进入 URL 或 Web Storage。确认 session 只存在于进程内存中，最长八小时，且不会续期。到期或代理重启后的下一个 API 请求会返回 `401`；请通过 `ccx gui` 或 macOS 菜单栏应用重新打开。手动打开 loopback 页面不会获得 API session，也绝不会请求或发送长期管理员 token。
