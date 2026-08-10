@@ -53,7 +53,8 @@ ccx combo show main
 - 可以是无斜杠形式，例如 `daily-fast`，也可以包含一个 `/`，例如 `team/daily-fast`；
 - 不能是 `combo` 或以 `combo/` 开头；
 - 不能与其他 combo 别名重复；并且
-- 不能是以 `gpt-`、`o1-`、`o3-`、`o4-` 或 `codex-` 开头的裸原生 OpenAI 系列名称。
+- 通常不能是以 `gpt-`、`o1-`、`o3-`、`o4-` 或 `codex-` 开头的裸原生 OpenAI 系列名称；
+  唯一例外是显式启用的 Desktop 兼容模式。
 
 即使设置了别名，规范的 `combo/<id>` 形式仍然可以解析。规范查找会先于别名匹配，因此别名不能抢占另一个 combo 的规范 id。
 
@@ -174,7 +175,9 @@ ccx combo set <id> --targets provider/model[:weight],...
 ccx combo remove <id> --yes
 ```
 
-`set` 也接受 `--strategy`、`--sticky`、`--effort`、`--alias` 和 `--rename-from`。将 `--effort` 或 `--alias` 的值设为 `-` 可清除该字段。`create` 和 `update` 是 `set` 的别名；`delete` 是 `remove` 的别名；同样的子命令也可通过 `ccx route combo` 使用。
+`set` 也接受 `--strategy`、`--sticky`、`--effort`、`--alias`、`--native-alias`、
+`--display-name` 和 `--rename-from`。将 `--effort`、`--alias` 或 `--display-name` 的值设为
+`-` 可清除该字段。`--native-alias` 必须配合当前受支持的裸原生 alias 和非空显示名称使用。
 
 ### Management API
 
@@ -211,6 +214,8 @@ combo 会存储在顶层的 `combos` 对象中，并以 combo id 作为键：
 | `stickyLimit` | 否 | `1` | 每次轮询选择可连续处理的成功请求数，范围为 1 到 100。 |
 | `defaultEffort` | 否 | `null` | `low`、`medium`、`high`、`xhigh`、`max` 或 `ultra`；仅当调用方省略 effort 且目标声明支持时才会应用。 |
 | `alias` | 否 | 无 | 可选的、已修剪的公开模型 id；使用上面的别名规则。空值会以“无别名”形式存储。 |
+| `nativeAlias` | 否 | `false` | 显式允许当前受支持的裸原生 alias 接管路由和 catalog 优先级。 |
+| `displayName` | 否 | 无 | 仅用于 catalog 展示的标签；`nativeAlias` 为 true 时必须非空。 |
 
 ## 故障排查
 

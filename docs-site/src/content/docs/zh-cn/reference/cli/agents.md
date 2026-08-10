@@ -50,6 +50,10 @@ ccx combo list
 ccx route combo set reliable --targets ark/model-a:2,openai/gpt-5.5
 ```
 
+`set` 支持 `--strategy`、`--sticky`、`--effort`、`--alias`、`--rename-from`、`--native-alias`
+以及 `--display-name <label|->`（`-` 会清除标签）。native alias 只会接管一个当前受支持且
+不带限定前缀的 OpenAI 裸 model id；带账号或提供方限定的 OpenAI 路由仍保持独立。
+
 有关路由行为和配置指导，请参见 [Combos](/guides/combos/)。
 
 ## Observability and debug

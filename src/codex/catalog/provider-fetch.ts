@@ -64,7 +64,7 @@ import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } fr
 
 import { JAWCODE_CATALOG_AUGMENT_PROVIDERS, catalogModelSlug, shouldExposeRoutedModel } from "./parsing";
 import type { CatalogModel } from "./parsing";
-import { disabledNativeSlugs, hasComboTargets, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
+import { disabledNativeSlugs, hasComboTargets, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
 import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
 import type { ComboCatalogOmission } from "./aggregation";
 import type { CatalogGatherProviderAuthEvidence } from "./filesystem-evidence";
@@ -618,6 +618,118 @@ export function applyConfigHintsToCachedModels(name: string, prov: CodexCommande
   return models.map(model => applyProviderConfigHints(name, prov, model, contextCap));
 }
 
+/** Last-resort context window for incomplete combo member discovery rows. */
+const COMBO_MEMBER_CONTEXT_FALLBACK = 128_000;
+
+interface ComboCatalogMemberFallback {
+  readonly contextWindow?: number;
+  readonly inputModalities?: readonly string[];
+  readonly reasoningEfforts?: readonly string[];
+}
+
+/**
+ * Resolve a combo target from discovery/config metadata. Native-alias metadata may fill
+ * capability gaps, but never raises an explicit provider window or replaces explicit modalities.
+ */
+export function resolveComboCatalogMember(
+  target: { provider: string; model: string },
+  memberByKey: ReadonlyMap<string, CatalogModel>,
+  providers: ReadonlyMap<string, CodexCommanderProviderConfig>,
+  contextCap?: number,
+  fallback?: ComboCatalogMemberFallback,
+): CatalogModel | undefined {
+  const existing = memberByKey.get(targetKey(target));
+  const prov = providers.get(target.provider);
+  if (prov?.disabled === true) return undefined;
+
+  const withFallbackMetadata = (member: CatalogModel): CatalogModel => {
+    if (!fallback) return member;
+    const contextWindow = typeof member.contextWindow === "number" && member.contextWindow > 0
+      ? member.contextWindow
+      : undefined;
+    const addMaxInput = contextWindow !== undefined
+      && !(typeof member.maxInputTokens === "number" && member.maxInputTokens > 0);
+    const addModalities = (!Array.isArray(member.inputModalities) || member.inputModalities.length === 0)
+      && fallback.inputModalities !== undefined;
+    const addReasoning = member.reasoningEfforts === undefined
+      && fallback.reasoningEfforts !== undefined;
+    if (!addMaxInput && !addModalities && !addReasoning) return member;
+    return {
+      ...member,
+      ...(addMaxInput ? { maxInputTokens: contextWindow } : {}),
+      ...(addModalities ? { inputModalities: [...fallback.inputModalities!] } : {}),
+      ...(addReasoning ? { reasoningEfforts: [...fallback.reasoningEfforts!] } : {}),
+    };
+  };
+
+  if (existing && typeof existing.contextWindow === "number" && existing.contextWindow > 0) {
+    const capped = applyProviderContextCap(existing.contextWindow, contextCap);
+    if (capped === undefined || capped === existing.contextWindow) {
+      return withFallbackMetadata(existing);
+    }
+    const maxInput = typeof existing.maxInputTokens === "number" && existing.maxInputTokens > 0
+      ? Math.min(existing.maxInputTokens, capped)
+      : capped;
+    return withFallbackMetadata({
+      ...existing,
+      contextWindow: capped,
+      maxInputTokens: maxInput,
+      contextCap,
+      contextCapped: true as const,
+    });
+  }
+
+  const base: CatalogModel = existing ?? {
+    id: target.model,
+    provider: target.provider,
+  };
+  const hinted = prov
+    ? applyProviderConfigHints(target.provider, prov, base, contextCap)
+    : base;
+  const hintedContext = typeof hinted.contextWindow === "number" && hinted.contextWindow > 0
+    ? hinted.contextWindow
+    : undefined;
+  const knownMaxInput = typeof hinted.maxInputTokens === "number" && hinted.maxInputTokens > 0
+    ? hinted.maxInputTokens
+    : (typeof base.maxInputTokens === "number" && base.maxInputTokens > 0
+      ? base.maxInputTokens
+      : undefined);
+  const fallbackContext = existing || prov ? fallback?.contextWindow : undefined;
+  const uncappedContext = hintedContext
+    ?? knownMaxInput
+    ?? fallbackContext
+    ?? (existing || prov ? COMBO_MEMBER_CONTEXT_FALLBACK : undefined);
+  if (uncappedContext === undefined) return undefined;
+  const usedFallback = hintedContext === undefined;
+  const cappedContext = applyProviderContextCap(uncappedContext, contextCap);
+  const contextWindow = cappedContext ?? uncappedContext;
+  const fallbackCapped = usedFallback
+    && contextCap !== undefined
+    && cappedContext !== undefined
+    && cappedContext !== uncappedContext;
+
+  const inputModalities = hinted.inputModalities
+    ?? base.inputModalities
+    ?? (fallback?.inputModalities ? [...fallback.inputModalities] : undefined)
+    ?? ["text"];
+  const reasoningEfforts = hinted.reasoningEfforts
+    ?? (prov ? configuredReasoningEfforts(prov, target.model) : undefined)
+    ?? base.reasoningEfforts
+    ?? (fallback?.reasoningEfforts ? [...fallback.reasoningEfforts] : undefined);
+  const maxInputTokens = knownMaxInput !== undefined
+    ? Math.min(knownMaxInput, contextWindow)
+    : contextWindow;
+
+  return {
+    ...hinted,
+    inputModalities,
+    ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
+    contextWindow,
+    maxInputTokens,
+    ...(fallbackCapped ? { contextCap, contextCapped: true as const } : {}),
+  };
+}
+
 export function isDatedVariantId(liveId: string, configuredId: string): boolean {
   if (!liveId.startsWith(`${configuredId}-`)) return false;
   return /^\d{8}$/.test(liveId.slice(configuredId.length + 1));
@@ -1101,11 +1213,12 @@ export function filterCatalogVisibleModels(
     if (Array.isArray(sel) && sel.length > 0) allowByProvider.set(name, new Set(sel));
   }
   return models.filter(m => {
+    const nativeAlias = m.provider === COMBO_NAMESPACE && m.nativeAlias === true;
     // disabledModels accepts public aliases and encoded routed slugs.
     for (const stored of disabled) {
       // Combo management stores the public alias; `combo/<id>` references are
       // matched through slugEquals below.
-      if (m.alias !== undefined && stored === catalogModelSlug(m)) return false;
+      if (m.alias !== undefined && stored === catalogModelSlug(m) && !nativeAlias) return false;
       if (slugEquals(stored, m.provider, m.id)) return false;
     }
     const allow = allowByProvider.get(m.provider);
@@ -1269,8 +1382,15 @@ async function gatherRoutedModelsUncached(
     // configs that will never need it.
   } else {
     const disabled = disabledNativeSlugs(config);
+    const requiredNativeComboTargets = new Set(listComboIds(config).flatMap(id => {
+      const combo = getCombo(config, id);
+      return combo?.targets.flatMap(target => (
+        target.provider === "openai" ? [target.model] : []
+      )) ?? [];
+    }));
     for (const slug of capture.nativeComboSlugs) {
-      if (disabled.has(slug)) continue;
+      // A bare native disable key hides the native row, not a combo that targets it.
+      if (disabled.has(slug) && !requiredNativeComboTargets.has(slug)) continue;
       const contextWindow = nativeOpenAiContextWindow(slug);
       if (contextWindow === undefined) continue;
       const synthetic: CatalogModel = {
@@ -1289,21 +1409,50 @@ async function gatherRoutedModelsUncached(
       if (!memberByKey.has(key)) memberByKey.set(key, synthetic);
     }
   }
+  // Registry-enriched provider clones are shared by combo synthesis and custom-model inheritance.
+  const enrichedByName = new Map(activeProviders.map(provider => [provider.name, provider.provider]));
   for (const id of listComboIds(config)) {
     const combo = getCombo(config, id);
     if (!combo) continue;
+    const nativeContextWindow = combo.nativeAlias && combo.alias
+      ? nativeOpenAiContextWindow(combo.alias)
+      : undefined;
+    const nativeAliasFallback = combo.nativeAlias && combo.alias && nativeContextWindow !== undefined
+      ? {
+        contextWindow: nativeContextWindow,
+        inputModalities: nativeInputModalities(combo.alias),
+        reasoningEfforts: nativeReasoningEfforts(combo.alias),
+      }
+      : undefined;
     const members = combo.targets
-      .map(target => memberByKey.get(targetKey(target)))
+      .map(target => combo.nativeAlias
+        ? resolveComboCatalogMember(
+          target,
+          memberByKey,
+          enrichedByName,
+          providerContextCap(config, target.provider),
+          nativeAliasFallback,
+        )
+        : memberByKey.get(targetKey(target)))
       .filter((member): member is CatalogModel => member !== undefined);
     const derived = deriveComboCatalogModel(id, combo, members);
-    if (derived) all.push(derived);
+    if (derived) {
+      const nativeDefault = combo.nativeAlias && combo.alias
+        ? nativeDefaultReasoningEffort(combo.alias)
+        : undefined;
+      if (combo.defaultEffort === null
+        && nativeDefault
+        && derived.reasoningEfforts?.includes(nativeDefault)) {
+        derived.defaultReasoningEffort = nativeDefault;
+      }
+      all.push(derived);
+    }
     else warnUncataloguedComboOnce(id, combo, members, localOmissions);
   }
   replaceLastComboCatalogOmissions(localOmissions);
   all.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)));
   // Enriched (registry-hydrated) provider clones, keyed by name — the same view used above so
   // custom rows get the same noVisionModels / inputModalities treatment as discovered rows.
-  const enrichedByName = new Map(activeProviders.map(provider => [provider.name, provider.provider]));
   // Provider-derived rows keyed by their Codex-facing slug: a custom override replaces the row
   // with the same slug below, so that row's provider capability metadata is the inheritance source.
   const replacedByRoutedSlug = new Map(all.map(model => [routedSlug(model.provider, model.id), model]));

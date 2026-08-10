@@ -290,6 +290,7 @@ export type CatalogConditionalSourceRole =
   | "active-catalog-merge"
   | "hashed-backup-fallback"
   | "models-cache-fallback"
+  | "retained-routed-fallback"
   | "native-catalog-selection"
   | "runtime-selection"
   | "provider-auth-selection";

@@ -4,6 +4,7 @@ import {
   comboPublicModelId,
   emptyDraft,
   intersectComboEfforts,
+  updateComboAliasDraft,
   validateComboDraft,
 } from "../combo-workspace-data";
 import { IconX } from "../icons";
@@ -76,8 +77,15 @@ export function AddComboModal({
     setError("");
     const id = draft.id.trim();
     const alias = draft.alias?.trim() || null;
+    const displayName = draft.displayName?.trim() || null;
     try {
-      const res = await onSubmit({ ...draft, id, alias, model: comboPublicModelId(id, alias) });
+      const res = await onSubmit({
+        ...draft,
+        id,
+        alias,
+        displayName,
+        model: comboPublicModelId(id, alias),
+      });
       if (!res.ok) {
         setError(res.error || t("cws.saveFailed"));
         return;
@@ -130,11 +138,7 @@ export function AddComboModal({
               value={draft.alias ?? ""}
               placeholder={t("cws.field.aliasPlaceholder")}
               disabled={busy}
-              onChange={(e) => setDraft((d) => ({
-                ...d,
-                alias: e.target.value.trim() ? e.target.value : null,
-                model: comboPublicModelId(d.id, e.target.value),
-              }))}
+              onChange={(e) => setDraft((d) => updateComboAliasDraft(d, e.target.value))}
             />
             <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
               {t("cws.field.aliasHint")}
@@ -143,6 +147,34 @@ export function AddComboModal({
               {t("cws.field.idHint", {
                 model: draft.id.trim() ? comboPublicModelId(draft.id, draft.alias) : "…",
               })}
+            </p>
+          </div>
+          <div className="cwi-field">
+            <label htmlFor="cwi-new-native-alias">
+              <input
+                id="cwi-new-native-alias"
+                type="checkbox"
+                checked={draft.nativeAlias}
+                disabled={busy}
+                onChange={(e) => setDraft((d) => ({ ...d, nativeAlias: e.target.checked }))}
+              /> {t("cws.field.nativeAlias")}
+            </label>
+            <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
+              {t("cws.field.nativeAliasHint")}
+            </p>
+          </div>
+          <div className="cwi-field">
+            <label htmlFor="cwi-new-display-name">{t("cws.field.displayName")}</label>
+            <input
+              id="cwi-new-display-name"
+              className="input"
+              value={draft.displayName ?? ""}
+              maxLength={128}
+              disabled={busy}
+              onChange={(e) => setDraft((d) => ({ ...d, displayName: e.target.value || null }))}
+            />
+            <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
+              {t("cws.field.displayNameHint")}
             </p>
           </div>
           <div className="cwi-field">

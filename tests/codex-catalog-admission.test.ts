@@ -30,6 +30,7 @@ const CONDITIONAL_SOURCE_ROLES = [
   "models-cache-fallback",
   "native-catalog-selection",
   "provider-auth-selection",
+  "retained-routed-fallback",
   "runtime-selection",
 ] as const satisfies readonly CatalogConditionalSourceRole[];
 

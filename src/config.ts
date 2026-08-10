@@ -1035,6 +1035,8 @@ const comboSchema = z.object({
   stickyLimit: z.number().int().min(1).max(100).optional(),
   defaultEffort: z.enum(["low", "medium", "high", "xhigh", "max", "ultra"]).nullable().optional(),
   alias: z.string().optional(),
+  nativeAlias: z.boolean().optional(),
+  displayName: z.string().optional(),
 }).strict();
 
 const routingProfileSchema = z.object({

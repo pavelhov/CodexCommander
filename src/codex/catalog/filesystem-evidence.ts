@@ -20,6 +20,7 @@ export type CatalogGatherReadableSourceRole =
   | "active-catalog-merge"
   | "hashed-backup-fallback"
   | "models-cache-fallback"
+  | "retained-routed-fallback"
   | "runtime-selection";
 
 /** The minimal observe-only source interface consumed by bundled catalog selection. */
@@ -40,6 +41,7 @@ const CONDITIONAL_SOURCE_ROLES = [
   "active-catalog-merge",
   "hashed-backup-fallback",
   "models-cache-fallback",
+  "retained-routed-fallback",
   "native-catalog-selection",
   "runtime-selection",
   "provider-auth-selection",

@@ -12,7 +12,7 @@ import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import type { ExportModel } from "../../clients/config-export";
 import { providerContextCap } from "../../providers/context-cap";
-import { routedSlug } from "../../providers/slug-codec";
+import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import type { CodexCommanderConfig } from "../../types";
 import { fetchAllModels } from "./shared";
 
@@ -76,10 +76,13 @@ export async function listManagementModelRows(config: CodexCommanderConfig): Pro
     const namespaced = catalogModelSlug(m);
     if (m.provider !== "combo" && customNamespaced.has(namespaced)) return null;
     const contextCap = providerContextCap(config, m.provider);
+    const nativeAlias = m.provider === "combo" && m.nativeAlias === true;
     return {
       ...m,
       namespaced,
-      disabled: disabled.has(namespaced),
+      disabled: [...disabled].some(stored => (
+        (!nativeAlias && stored === namespaced) || slugEquals(stored, m.provider, m.id)
+      )),
       ...(contextCap !== undefined ? { contextCap, contextCapped: m.contextCapped === true } : {}),
     };
   }).filter((row): row is ManagementModelRow => row !== null);

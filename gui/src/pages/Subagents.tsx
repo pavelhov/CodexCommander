@@ -36,7 +36,7 @@ type SaveResponse = {
   excluded?: RosterExclusion[];
   catalogRefresh?: {
     ok?: boolean;
-    status?: string;
+    status?: "committed" | "skipped" | "failed";
     notices?: string[];
   };
 };
@@ -108,6 +108,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const snapshot = state.data ?? cached;
   const available = snapshot?.available ?? [];
   const models = snapshot?.models ?? [];
+  const hasRoutedModels = models.some(model => model.native !== true && model.namespaced.includes("/"));
   const catalogState = catalogLive ? snapshot?.catalogState : undefined;
 
   // A warm data-surface cache can skip the loader on a route revisit. Catalog
@@ -181,7 +182,9 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
         catalogState: snapshot?.catalogState,
         metadataLimited: snapshot?.metadataLimited,
       });
-      const refreshFailed = data?.catalogRefresh?.ok === false || data?.catalogRefresh?.status === "failed";
+      const refreshStatus = data?.catalogRefresh?.status;
+      const refreshFailed = data?.catalogRefresh?.ok === false
+        || (refreshStatus !== undefined && refreshStatus !== "committed");
       setStatusTone(refreshFailed || excluded.length > 0 ? "warn" : "ok");
       setStatus(refreshFailed
         ? t("sub.savedRefreshFailed", { n: applied.length, cmd: "ccx sync --restart-codex" })
@@ -237,6 +240,9 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           </span>
         )}
       </div>
+      {hasRoutedModels && (
+        <Notice tone="warn">{t("sub.desktopPickerLimit")}</Notice>
+      )}
       {status && <Notice tone={statusTone}>{status}</Notice>}
       {excluded.length > 0 && (
         <Notice tone="warn">

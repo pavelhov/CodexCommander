@@ -48,6 +48,16 @@ function responseSucceeded(data: unknown): boolean {
     && (data as { success?: unknown }).success === true;
 }
 
+function catalogRefreshNeedsAttention(data: unknown): boolean {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  const refresh = (data as {
+    catalogRefresh?: { ok?: unknown; status?: unknown };
+  }).catalogRefresh;
+  if (!refresh || typeof refresh !== "object") return false;
+  return refresh.ok === false
+    || (typeof refresh.status === "string" && refresh.status !== "committed");
+}
+
 function seedCombos(cacheKey: string): CachedCombosPage | null {
   return readSessionListCache<CachedCombosPage>(cacheKey);
 }
@@ -57,23 +67,23 @@ export default function Combos({ apiBase }: { apiBase: string }) {
   const cacheKey = `ccx.combos.workspace.v1:${apiBase}`;
   const cached = useMemo(() => seedCombos(cacheKey), [cacheKey]);
   const [status, setStatus] = useState("");
-  const [statusOk, setStatusOk] = useState(false);
+  const [statusTone, setStatusTone] = useState<"ok" | "warn" | "err">("ok");
   const [adding, setAdding] = useState(false);
 
-  const notify = (msg: string, ok: boolean) => {
+  const notify = (msg: string, tone: "ok" | "warn" | "err") => {
     setStatus(msg);
-    setStatusOk(ok);
+    setStatusTone(tone);
   };
 
   // Success banners are transient; errors stay until the next notify.
   useEffect(() => {
-    if (!status || !statusOk) return;
+    if (!status || statusTone !== "ok") return;
     const timer = window.setTimeout(() => {
       setStatus("");
-      setStatusOk(false);
+      setStatusTone("ok");
     }, 5000);
     return () => window.clearTimeout(timer);
-  }, [status, statusOk]);
+  }, [status, statusTone]);
 
   const loadCombos = useCallback(async (): Promise<CachedCombosPage> => {
     // Keep all three requests parallel: this workspace is only coherent once every input arrives.
@@ -176,20 +186,24 @@ export default function Combos({ apiBase }: { apiBase: string }) {
       const serverError = responseError(data);
       if (!res.ok || serverError || !responseSucceeded(data)) {
         const err = serverError || t("cws.saveFailed");
-        notify(err, false);
+        notify(err, "err");
         return { ok: false as const, error: err };
       }
       resource.refresh();
-      notify(
-        renameFrom
-          ? t("cws.renamed", { from: comboModelId(renameFrom), to: item.model })
-          : isCreate ? t("cws.created", { model: item.model }) : t("cws.saved"),
-        true,
-      );
+      if (catalogRefreshNeedsAttention(data)) {
+        notify(t("cws.savedRefreshFailed", { cmd: "ccx sync --restart-codex" }), "warn");
+      } else {
+        notify(
+          renameFrom
+            ? t("cws.renamed", { from: comboModelId(renameFrom), to: item.model })
+            : isCreate ? t("cws.created", { model: item.model }) : t("cws.saved"),
+          "ok",
+        );
+      }
       return { ok: true as const };
     } catch {
       const err = t("cws.saveFailed");
-      notify(err, false);
+      notify(err, "err");
       return { ok: false as const, error: err };
     }
   };
@@ -203,15 +217,20 @@ export default function Combos({ apiBase }: { apiBase: string }) {
       const serverError = responseError(data);
       if (!res.ok || serverError || !responseSucceeded(data)) {
         const err = serverError || t("cws.removeFailed");
-        notify(err, false);
+        notify(err, "err");
         return { ok: false as const, error: err };
       }
       resource.refresh();
-      notify(t("cws.removed", { id }), true);
+      notify(
+        catalogRefreshNeedsAttention(data)
+          ? t("cws.savedRefreshFailed", { cmd: "ccx sync --restart-codex" })
+          : t("cws.removed", { id }),
+        catalogRefreshNeedsAttention(data) ? "warn" : "ok",
+      );
       return { ok: true as const };
     } catch {
       const err = t("cws.removeFailed");
-      notify(err, false);
+      notify(err, "err");
       return { ok: false as const, error: err };
     }
   };
@@ -235,7 +254,7 @@ export default function Combos({ apiBase }: { apiBase: string }) {
     <div className="combos-workspace-shell">
       {status && (
         <div className="combos-workspace-shell-banner">
-          <Notice tone={statusOk ? "ok" : "err"}>{status}</Notice>
+          <Notice tone={statusTone}>{status}</Notice>
         </div>
       )}
       {state.showError && (

@@ -171,7 +171,7 @@ describe("combo namespace primitives", () => {
     expect(targetKey({ provider: "a", model: "m1" })).toBe("a/m1");
   });
 
-  test("resolves exactly one current public id for each configured combo", () => {
+  test("resolves canonical combo ids before current public aliases", () => {
     const config = baseConfig({
       combos: {
         free: VALID_COMBO,
@@ -180,11 +180,11 @@ describe("combo namespace primitives", () => {
     });
     expect(resolveComboId(config, "combo/free")).toBe("free");
     expect(resolveComboId(config, "vendor/flash")).toBe("other");
-    expect(resolveComboId(config, "combo/other")).toBeNull();
+    expect(resolveComboId(config, "combo/other")).toBe("other");
     expect(resolveComboId(config, "unknown-bare")).toBeNull();
     expect(resolveComboId(config, "combo/missing")).toBe("missing");
     expect(tryPickComboModel(config, "vendor/flash")?.comboId).toBe("other");
-    expect(tryPickComboModel(config, "combo/other")).toBeNull();
+    expect(tryPickComboModel(config, "combo/other")?.comboId).toBe("other");
     expect(tryPickComboModel(config, "unknown-bare")).toBeNull();
     expect(() => tryPickComboModel(config, "combo/missing")).toThrow(UnknownComboError);
   });
@@ -195,9 +195,9 @@ describe("combo request cloning", () => {
 
   afterEach(() => resetComboEffortWarningStateForTests());
 
-  test("detects only the combo's current public id in raw request records", () => {
+  test("detects canonical and current public combo ids in raw request records", () => {
     const aliased = baseConfig({ combos: { free: { ...VALID_COMBO, alias: "deepseek-v4-flash" } } });
-    expect(comboIdFromRawBody({ model: "combo/free" }, aliased)).toBeNull();
+    expect(comboIdFromRawBody({ model: "combo/free" }, aliased)).toBe("free");
     expect(comboIdFromRawBody({ model: "deepseek-v4-flash" }, aliased)).toBe("free");
     expect(comboIdFromRawBody({ model: "combo/free" }, baseConfig())).toBe("free");
     expect(comboIdFromRawBody({ model: "a/m1" }, aliased)).toBeNull();
@@ -507,6 +507,8 @@ describe("combo validation and normalization", () => {
       stickyLimit: 1,
       defaultEffort: "high",
       alias: null,
+      nativeAlias: false,
+      displayName: null,
       targets: [{ provider: "a", model: "m1", weight: 2 }],
     });
     expect(normalizeComboConfig({ targets: [{ provider: "a", model: "m1" }] }).defaultEffort).toBeNull();

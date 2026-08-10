@@ -21,8 +21,9 @@ import {
   gatherCodexCatalogCandidate,
   type CodexCatalogCandidate,
 } from "../src/codex/convergence";
-import { resetCatalogRuntimeStateForTests } from "../src/codex/catalog";
+import { CODEX_NATIVE_ALIAS_CATALOG_KIND, resetCatalogRuntimeStateForTests } from "../src/codex/catalog";
 import {
+  persistCodexRuntime,
   resetCodexRuntimeResolveCacheForTests,
   setCodexRuntimeResolveCacheForTests,
 } from "../src/codex/runtime";
@@ -198,7 +199,7 @@ test("target identity drift wins before source comparison and writes nothing", a
 
 test("used process-local authority drift rejects before every catalog target write", async () => {
   const runtime = { command: "/tmp/codex", version: "0.146.0", source: "environment" as const };
-  setCodexRuntimeResolveCacheForTests({ runtime, failures: [] });
+  setCodexRuntimeResolveCacheForTests({ runtime, failures: [] }, { discoverAlternatives: false });
   setBundledCatalogCacheForTests(runtime, JSON.parse(sourceCatalog("bundled")) as never);
   const gathered = await candidate();
   invalidateBundledCatalogCache();
@@ -256,6 +257,182 @@ test("catalog-only commit never creates the native pair or routing artifacts", a
   expect(existsSync(join(codexHome, "config.toml"))).toBe(false);
   expect(manifest(root).join("\n")).not.toContain("journal");
 });
+
+test("management convergence restores omitted natives and commits one configured native alias", async () => {
+  const runtime = { command: "/tmp/codex", version: "0.146.0", source: "environment" as const };
+  const bundled = JSON.parse(sourceCatalog("bundled")) as { models: Array<Record<string, unknown>> };
+  bundled.models.push({
+    ...bundled.models[0],
+    slug: "gpt-5.5",
+    display_name: "GPT-5.5",
+  });
+  persistCodexRuntime(runtime, { configDir: codexCommanderHome, now: () => 0 });
+  setCodexRuntimeResolveCacheForTests({ runtime, failures: [] }, { discoverAlternatives: false });
+  setBundledCatalogCacheForTests(runtime, bundled as never);
+
+  writeFileSync(join(codexHome, "codexcommander-catalog.json"), `${JSON.stringify({
+    models: [{
+      ...bundled.models[0],
+      display_name: "Nova1 - Sol",
+      description: "Routed via CodexCommander → combo (combo).",
+      owned_by: "combo",
+      codexcommander_catalog_kind: CODEX_NATIVE_ALIAS_CATALOG_KIND,
+      input_modalities: ["text", "image"],
+    }],
+  }, null, 2)}\n`);
+
+  const live: CodexCommanderConfig = {
+    ...config(),
+    defaultProvider: "Nova1",
+    providers: {
+      ...config().providers,
+      Nova1: {
+        adapter: "openai-chat",
+        baseUrl: "https://nova.example/v1",
+        liveModels: false,
+        models: [],
+      },
+    },
+    combos: {
+      nova: {
+        alias: "gpt-5.6-sol",
+        nativeAlias: true,
+        displayName: "Nova1 - Sol",
+        targets: [{ provider: "Nova1", model: "codex/gpt-5.6-sol" }],
+      },
+    },
+  };
+  saveConfig(live);
+
+  const beforeGather = manifest(root);
+  const gathered = await gatherCodexCatalogCandidate(captureCatalogAdmissionSnapshot(live));
+  expect(gathered.kind).toBe("candidate");
+  expect(manifest(root)).toEqual(beforeGather);
+  if (gathered.kind !== "candidate") throw new Error(JSON.stringify(gathered));
+  const committed = await commitCodexCatalogCandidate(gathered.candidate, 1_000);
+  expect(committed).toMatchObject({ kind: "committed" });
+
+  const written = JSON.parse(readFileSync(join(codexHome, "codexcommander-catalog.json"), "utf8")) as {
+    models: Array<Record<string, unknown>>;
+  };
+  expect(written.models.find(entry => entry.slug === "gpt-5.5")).toMatchObject({
+    display_name: "GPT-5.5",
+  });
+  expect(written.models.filter(entry => entry.slug === "gpt-5.6-sol")).toEqual([
+    expect.objectContaining({
+      display_name: "Nova1 - Sol",
+      owned_by: "combo",
+      codexcommander_catalog_kind: CODEX_NATIVE_ALIAS_CATALOG_KIND,
+    }),
+  ]);
+}, { timeout: 20_000 });
+
+test("management convergence rehydrates a missing configured provider from admitted retained bytes", async () => {
+  const runtime = { command: "/tmp/codex", version: "0.146.0", source: "environment" as const };
+  const bundled = JSON.parse(sourceCatalog("bundled-retained")) as {
+    models: Array<Record<string, unknown>>;
+  };
+  persistCodexRuntime(runtime, { configDir: codexCommanderHome, now: () => 0 });
+  setCodexRuntimeResolveCacheForTests({ runtime, failures: [] }, { discoverAlternatives: false });
+  setBundledCatalogCacheForTests(runtime, bundled as never);
+
+  const retainedPeer = {
+    ...bundled.models[0],
+    slug: "peer/beta",
+    display_name: "peer/beta",
+    description: "Routed via CodexCommander → peer (peer).",
+    owned_by: "peer",
+    input_modalities: ["text"],
+  };
+  writeFileSync(join(codexCommanderHome, "codex-routed-retained.json"), `${JSON.stringify({
+    models: [retainedPeer],
+  }, null, 2)}\n`);
+
+  const live: CodexCommanderConfig = {
+    ...config(),
+    defaultProvider: "vendor",
+    providers: {
+      ...config().providers,
+      vendor: {
+        adapter: "openai-chat",
+        baseUrl: "https://vendor.example/v1",
+        liveModels: false,
+        models: ["alpha"],
+      },
+      peer: {
+        adapter: "openai-chat",
+        baseUrl: "https://peer.example/v1",
+      },
+    },
+  };
+  saveConfig(live);
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input).startsWith("https://peer.example/")) {
+      return new Response("unavailable", { status: 503 });
+    }
+    throw new Error(`unexpected fetch: ${String(input)}`);
+  }) as typeof fetch;
+  try {
+    const beforeGather = manifest(root);
+    const gathered = await gatherCodexCatalogCandidate(captureCatalogAdmissionSnapshot(live));
+    expect(gathered.kind).toBe("candidate");
+    expect(manifest(root)).toEqual(beforeGather);
+    if (gathered.kind !== "candidate") throw new Error(JSON.stringify(gathered));
+    expect((await commitCodexCatalogCandidate(gathered.candidate, 1_000)).kind).toBe("committed");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const written = JSON.parse(readFileSync(join(codexHome, "codexcommander-catalog.json"), "utf8")) as {
+    models: Array<{ slug?: string }>;
+  };
+  const slugs = written.models.map(entry => entry.slug);
+  expect(slugs).toContain("vendor/alpha");
+  expect(slugs).toContain("peer/beta");
+}, { timeout: 20_000 });
+
+test("management convergence clamps routed efforts to the admitted Codex catalog ladder", async () => {
+  const runtime = { command: "/tmp/codex", version: "0.146.0", source: "environment" as const };
+  const bundled = JSON.parse(sourceCatalog("bundled-efforts")) as {
+    models: Array<Record<string, unknown>>;
+  };
+  bundled.models[0]!.supported_reasoning_levels = ["low", "medium", "high", "xhigh"]
+    .map(effort => ({ effort, description: effort }));
+  persistCodexRuntime(runtime, { configDir: codexCommanderHome, now: () => 0 });
+  setCodexRuntimeResolveCacheForTests({ runtime, failures: [] }, { discoverAlternatives: false });
+  setBundledCatalogCacheForTests(runtime, bundled as never);
+
+  const live: CodexCommanderConfig = {
+    ...config(),
+    defaultProvider: "vendor",
+    providers: {
+      ...config().providers,
+      vendor: {
+        adapter: "openai-chat",
+        baseUrl: "https://vendor.example/v1",
+        liveModels: false,
+        models: ["alpha"],
+      },
+    },
+  };
+  saveConfig(live);
+
+  const gathered = await gatherCodexCatalogCandidate(captureCatalogAdmissionSnapshot(live));
+  expect(gathered.kind).toBe("candidate");
+  if (gathered.kind !== "candidate") throw new Error(JSON.stringify(gathered));
+  expect((await commitCodexCatalogCandidate(gathered.candidate, 1_000)).kind).toBe("committed");
+
+  const written = JSON.parse(readFileSync(join(codexHome, "codexcommander-catalog.json"), "utf8")) as {
+    models: Array<{ slug?: string; supported_reasoning_levels?: Array<{ effort?: string }> }>;
+  };
+  const routed = written.models.find(entry => entry.slug === "vendor/alpha");
+  const efforts = routed?.supported_reasoning_levels?.map(level => level.effort) ?? [];
+  expect(efforts).toEqual(["low", "medium", "high", "xhigh"]);
+  expect(efforts).not.toContain("max");
+  expect(efforts).not.toContain("ultra");
+}, { timeout: 20_000 });
 
 test("the total lazy adapter preserves a persisted-success route when factory construction fails", async () => {
   const live = config();

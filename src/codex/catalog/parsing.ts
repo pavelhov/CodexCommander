@@ -31,8 +31,9 @@ import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
-import { NATIVE_OPENAI_CONTEXT_OVERRIDES, SUPPORTED_NATIVE_OPENAI_SLUGS, UPSTREAM_NATIVE_ENTRIES } from "./metadata";
+import { NATIVE_OPENAI_CONTEXT_OVERRIDES, SUPPORTED_NATIVE_OPENAI_SLUGS, UPSTREAM_NATIVE_ENTRIES, nativeMultiAgentVersion } from "./metadata";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
+import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 
 export function catalogBackupPathFor(catalogPath: string): string {
   const normalized = process.platform === "win32" ? resolve(catalogPath).toLowerCase() : resolve(catalogPath);
@@ -86,6 +87,8 @@ export interface CatalogModel {
   provider: string;
   /** Public Codex-facing slug override (used by combo aliases). */
   alias?: string;
+  /** Explicit combo takeover of a bare OpenAI-native catalog id. */
+  nativeAlias?: boolean;
   /**
    * Display-only Codex catalog `display_name` override. Relabels the picker row ONLY — it never
    * affects the routing slug, alias-collision order, native marketing-name precedence, or provider
@@ -189,7 +192,14 @@ export function readCatalog(path: string): RawCatalog | null {
 
 export function findNativeTemplate(catalog: RawCatalog | null): RawEntry | null {
   return catalog?.models?.find(
-    m => typeof m.slug === "string" && !m.slug.includes("/") && "base_instructions" in m,
+    m => typeof m.slug === "string"
+      && !m.slug.includes("/")
+      && "base_instructions" in m
+      && m.codexcommander_catalog_kind !== CODEX_NATIVE_ALIAS_CATALOG_KIND
+      && m.owned_by !== COMBO_NAMESPACE
+      && !(typeof m.description === "string"
+        && (m.description.startsWith("Routed via CodexCommander → ")
+          || m.description.startsWith("Routed via codexcommander → "))),
   ) ?? null;
 }
 
@@ -315,8 +325,10 @@ export function applyMultiAgentMode(entries: RawEntry[], mode: MultiAgentMode, v
     // re-apply upstream pins from the snapshot for native entries that have one.
     for (const entry of entries) {
       const slug = typeof entry.slug === "string" ? entry.slug : "";
-      const upstream = UPSTREAM_NATIVE_ENTRIES.get(trustedAccountBoundNativeCatalogSlug(entry) ?? slug);
-      const upstreamPin = upstream?.multi_agent_version;
+      const nativeAlias = entry.codexcommander_catalog_kind === CODEX_NATIVE_ALIAS_CATALOG_KIND;
+      const upstreamPin = nativeAlias
+        ? nativeMultiAgentVersion(slug)
+        : UPSTREAM_NATIVE_ENTRIES.get(trustedAccountBoundNativeCatalogSlug(entry) ?? slug)?.multi_agent_version;
       if (typeof upstreamPin === "string") {
         entry.multi_agent_version = upstreamPin;
       } else if (v2FeatureEnabled) {
@@ -419,7 +431,8 @@ export function readCatalogBackup(catalogPath: string): RawCatalog | null {
 }
 
 export function catalogHasRoutedEntries(catalog: RawCatalog | null): boolean {
-  return (catalog?.models ?? []).some(m => typeof m.slug === "string" && m.slug.includes("/"));
+  return (catalog?.models ?? []).some(m => typeof m.slug === "string"
+    && (m.slug.includes("/") || m.codexcommander_catalog_kind === CODEX_NATIVE_ALIAS_CATALOG_KIND));
 }
 
 export function writePristineCatalogBackup(backupPath: string, catalogPath: string, catalog: RawCatalog): void {

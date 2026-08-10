@@ -32,7 +32,7 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 import { activeCodexModelsCachePath, applyJawcodeCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline, readRetainedRoutedCatalog, retainedRoutedCatalogPath, writeRetainedRoutedCatalog } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
-import { applyNativeVisibility, disabledNativeSlugs, isUnsupportedOpenAiNativeSlug, nativeOpenAiSlugs, NATIVE_OPENAI_MODELS, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, shouldUpgradeToUpstreamEntry, SUPPORTED_NATIVE_OPENAI_SLUGS, upstreamNativeEntry } from "./metadata";
+import { applyNativeVisibility, CODEX_NATIVE_ALIAS_CATALOG_KIND, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, isNativeAliasCatalogEntry, isUnsupportedOpenAiNativeSlug, nativeOpenAiSlugs, NATIVE_OPENAI_MODELS, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, shouldUpgradeToUpstreamEntry, SUPPORTED_NATIVE_OPENAI_SLUGS, upstreamNativeEntry } from "./metadata";
 import {
   bundledCatalogCacheState,
   loadBundledCodexCatalog,
@@ -359,6 +359,8 @@ export function buildCatalogEntries(
   multiAgentMode: MultiAgentMode = "default",
   exactComboSlugs: ReadonlySet<string> = new Set(),
   accountSelectors: readonly string[] = [],
+  suppressedBareNativeSlugs: ReadonlySet<string> = new Set(),
+  disabledNativeAccountSlugs: ReadonlySet<string> = new Set(),
 ): RawEntry[] {
   // Codex's models-manager sorts by `priority` ASC and advertises the first 5 picker-visible
   // models to spawn_agent (sort_by_key(priority) + MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT=5). Catalog
@@ -369,34 +371,81 @@ export function buildCatalogEntries(
   const out: RawEntry[] = [];
   const nativeEntries: RawEntry[] = [];
   const collisionSkipped = resolveSlugAliasCollisions(goModels);
+  const emittedNativeAliases = new Set<CatalogModel>();
+  const emittedNativeAliasSlugs = new Set<string>();
+  const nativeAliasesBySlug = new Map<string, CatalogModel>();
+  for (const model of goModels) {
+    if (model.provider !== COMBO_NAMESPACE
+      || model.nativeAlias !== true
+      || typeof model.alias !== "string"
+      || model.alias.includes("/")) continue;
+    if (nativeAliasesBySlug.has(model.alias)) {
+      collisionSkipped.add(model);
+      if (!slugAliasCollisionWarnings.has(model.alias)) {
+        slugAliasCollisionWarnings.add(model.alias);
+        console.warn(
+          `[codexcommander] native combo alias collision on "${model.alias}": keeping the first configured combo and omitting later duplicates from the catalog.`,
+        );
+      }
+      continue;
+    }
+    nativeAliasesBySlug.set(model.alias, model);
+  }
   const comboPublicSlugs = new Set(goModels
     .filter(model => model.provider === COMBO_NAMESPACE)
     .map(catalogModelSlug));
   for (const slug of gptSlugs) {
-    const e = deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9);
+    const native = deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9);
     // deriveEntry keeps the genuine upstream snapshot priority for snapshot-backed
     // natives (terra=2, luna=3); route it through the shared native policy so an
     // unfeatured native can never outrank the featured block (spawn_agent top-5).
-    e.priority = nativeCatalogEntryPriority(
+    native.priority = nativeCatalogEntryPriority(
       slug,
       rank,
       featured?.length ?? 0,
-      typeof e.priority === "number" ? e.priority : 9,
+      typeof native.priority === "number" ? native.priority : 9,
     );
-    out.push(e);
-    nativeEntries.push(e);
+    nativeEntries.push(native);
+    const nativeAlias = nativeAliasesBySlug.get(slug);
+    if (!nativeAlias || collisionSkipped.has(nativeAlias)) {
+      if (!suppressedBareNativeSlugs.has(slug)) out.push(native);
+      continue;
+    }
+    const routed = deriveEntry(
+      template,
+      slug,
+      `Routed via CodexCommander → ${nativeAlias.provider} (${nativeAlias.owned_by ?? nativeAlias.provider}).`,
+      5,
+      nativeAlias,
+      exactComboSlugs,
+    );
+    routed.codexcommander_catalog_kind = CODEX_NATIVE_ALIAS_CATALOG_KIND;
+    const rankHit = rank.get(slug) ?? rank.get(`${nativeAlias.provider}/${nativeAlias.id}`);
+    if (rankHit !== undefined) routed.priority = rankHit * priorityStride;
+    else if (accountSelectors.length > 0) {
+      routed.priority = 1_000 + (typeof routed.priority === "number" ? routed.priority : 5);
+    }
+    out.push(routed);
+    emittedNativeAliases.add(nativeAlias);
+    emittedNativeAliasSlugs.add(slug);
   }
   for (const [selectorIndex, selector] of accountSelectors.entries()) {
     for (const [nativeIndex, native] of nativeEntries.entries()) {
-      const e = JSON.parse(JSON.stringify(native)) as RawEntry;
       const nativeSlug = String(native.slug);
+      if (disabledNativeAccountSlugs.has(nativeSlug)) continue;
+      const e = JSON.parse(JSON.stringify(native)) as RawEntry;
       const catalogSlug = `${selector}/${nativeSlug}`;
       e.slug = catalogSlug;
       e.display_name = accountBoundNativeDisplayName(selector, native);
       // Codex ignores this CodexCommander extension; preserve the native comp_hash unchanged.
       e.codexcommander_catalog_kind = CODEX_ACCOUNT_BOUND_CATALOG_KIND;
       const exactRank = rank.get(catalogSlug);
-      const inheritedRank = rank.get(nativeSlug);
+      // A featured bare id belongs to the compatibility combo once shadowed; do not
+      // feature the account-qualified native clone unless it was selected exactly.
+      const inheritedRank = emittedNativeAliasSlugs.has(nativeSlug)
+        || suppressedBareNativeSlugs.has(nativeSlug)
+        ? undefined
+        : rank.get(nativeSlug);
       const featuredRank = exactRank ?? inheritedRank;
       e.priority = featuredRank !== undefined
         ? featuredRank * priorityStride + selectorIndex
@@ -406,7 +455,7 @@ export function buildCatalogEntries(
     }
   }
   for (const m of goModels) {
-    if (collisionSkipped.has(m)) continue;
+    if (collisionSkipped.has(m) || emittedNativeAliases.has(m)) continue;
     const slug = catalogModelSlug(m);
     if (m.provider !== COMBO_NAMESPACE && comboPublicSlugs.has(slug)) {
       warnComboMasqueradeCollisionOnce(slug);
@@ -422,8 +471,11 @@ export function buildCatalogEntries(
       m,
       exactComboSlugs,
     );
+    if (m.provider === COMBO_NAMESPACE && m.nativeAlias === true && !slug.includes("/")) {
+      e.codexcommander_catalog_kind = CODEX_NATIVE_ALIAS_CATALOG_KIND;
+    }
     // Featured picks are canonical Codex-facing selectors.
-    const rankHit = rank.get(slug);
+    const rankHit = rank.get(slug) ?? rank.get(`${m.provider}/${m.id}`);
     if (rankHit !== undefined) e.priority = rankHit * priorityStride;
     else if (accountSelectors.length > 0) {
       // Keep the generated account rows together in Codex's priority-sorted flat picker.
@@ -481,10 +533,41 @@ export function orderForSubagents(goModels: CatalogModel[], featured?: string[])
  * row.
  */
 function isCodexCommanderAuthoredRoutedEntry(entry: RawEntry): boolean {
+  if (isNativeAliasCatalogEntry(entry)) return true;
   const desc = typeof entry.description === "string" ? entry.description : "";
   const slug = typeof entry.slug === "string" ? entry.slug : "";
   return slug.includes("/")
     && desc.startsWith("Routed via CodexCommander → ");
+}
+
+function recoverableNativeSlug(entry: RawEntry): string | null {
+  const slug = typeof entry.slug === "string" ? entry.slug : "";
+  return SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug)
+    && !isNativeAliasCatalogEntry(entry)
+    && entry.owned_by !== COMBO_NAMESPACE
+    ? slug
+    : null;
+}
+
+/** Append missing supported native rows from trusted catalog sources only. */
+export function mergeCatalogModelsWithNativeRecovery(
+  primaryCatalogModels: readonly RawEntry[],
+  nativeRecoverySources: readonly (readonly RawEntry[])[],
+): RawEntry[] {
+  const merged = [...primaryCatalogModels];
+  const recoveredNativeSlugs = new Set(primaryCatalogModels.flatMap(entry => {
+    const slug = recoverableNativeSlug(entry);
+    return slug === null ? [] : [slug];
+  }));
+  for (const source of nativeRecoverySources) {
+    for (const entry of source) {
+      const slug = recoverableNativeSlug(entry);
+      if (slug === null || recoveredNativeSlugs.has(slug)) continue;
+      merged.push(structuredClone(entry) as RawEntry);
+      recoveredNativeSlugs.add(slug);
+    }
+  }
+  return merged;
 }
 
 /**
@@ -512,11 +595,22 @@ export function hasRoutedCapableProviders(config: Pick<CodexCommanderConfig, "pr
  */
 function retainedRowStillConfigured(
   entry: RawEntry,
-  config: CodexCommanderConfig,
+  config: Readonly<CodexCommanderConfig>,
   gatheredProviderNames: ReadonlySet<string>,
 ): boolean {
   if (!isCodexCommanderAuthoredRoutedEntry(entry)) return false;
   const slug = typeof entry.slug === "string" ? entry.slug : "";
+  if (isNativeAliasCatalogEntry(entry)) {
+    const combo = Object.entries(config.combos ?? {}).find(([, raw]) => (
+      raw.nativeAlias === true && raw.alias?.trim() === slug
+    ));
+    return combo !== undefined
+      && !(config.disabledModels ?? []).includes(comboModelId(combo[0]))
+      && combo[1].targets.some(target => (
+        gatheredProviderNames.has(target.provider)
+        && config.providers[target.provider]?.disabled !== true
+      ));
+  }
   const slash = slug.indexOf("/");
   if (slash <= 0) return false;
   const provider = slug.slice(0, slash);
@@ -532,13 +626,56 @@ function retainedRowStillConfigured(
   return true;
 }
 
+/**
+ * Rehydrate provider-level gaps from an already-observed last-known-good snapshot.
+ * The caller owns the snapshot read/evidence; this helper is deliberately pure so
+ * management convergence and the legacy sync path apply the same retention policy.
+ */
+export function mergeLiveRoutedEntriesWithRetained(
+  liveRoutedEntries: readonly RawEntry[],
+  retainedCatalog: RawCatalog | null,
+  config: Readonly<CodexCommanderConfig>,
+  gatheredProviderNames: ReadonlySet<string>,
+  onDiskHasRoutedEntries: boolean,
+): { entries: RawEntry[]; retainedRows: RawEntry[] } {
+  const retainedRows: RawEntry[] = [];
+  if (liveRoutedEntries.length > 0 || !onDiskHasRoutedEntries) {
+    const liveEntryKeys = new Set(liveRoutedEntries.flatMap(entry => {
+      const slug = typeof entry.slug === "string" ? entry.slug : "";
+      if (isNativeAliasCatalogEntry(entry) && slug) return [`native-alias:${slug}`];
+      const slash = slug.indexOf("/");
+      return slash > 0 ? [`provider:${slug.slice(0, slash)}`] : [];
+    }));
+    for (const entry of retainedCatalog?.models ?? []) {
+      const slug = typeof entry.slug === "string" ? entry.slug : "";
+      const slash = slug.indexOf("/");
+      const entryKey = isNativeAliasCatalogEntry(entry) && slug
+        ? `native-alias:${slug}`
+        : slash > 0 ? `provider:${slug.slice(0, slash)}` : "";
+      if (
+        entryKey
+        && !liveEntryKeys.has(entryKey)
+        && retainedRowStillConfigured(entry, config, gatheredProviderNames)
+      ) {
+        retainedRows.push(entry);
+      }
+    }
+  }
+  return {
+    entries: liveRoutedEntries.length > 0
+      ? [...liveRoutedEntries, ...retainedRows]
+      : retainedRows,
+    retainedRows,
+  };
+}
+
 export function mergeCatalogEntriesForSync(
   catalogModels: RawEntry[],
   routedEntries: RawEntry[],
   baseline: Map<string, number>,
   featured: string[],
   wsEnabled: boolean,
-  goIds: Set<string> = new Set(),
+  _goIds: Set<string> = new Set(),
   template: RawEntry | null = null,
   disabledModels: ReadonlySet<string> = new Set(),
   gatheredProviderNames: Set<string> = new Set(routedEntries.flatMap(entry => {
@@ -552,14 +689,21 @@ export function mergeCatalogEntriesForSync(
   includeNativeOpenAi = true,
   accountBoundEntries: readonly RawEntry[] = [],
   availableNativeSlugs: readonly string[] = NATIVE_OPENAI_MODELS,
+  suppressedBareNativeSlugs: ReadonlySet<string> = new Set(
+    routedEntries.flatMap(entry => (
+      isNativeAliasCatalogEntry(entry) && typeof entry.slug === "string" ? [entry.slug] : []
+    )),
+  ),
 ): RawEntry[] {
   const rank = new Map(featured.map((slug, i) => [slug, i] as const));
-  const native = includeNativeOpenAi
+  const freshBareComboAliases = new Set(routedEntries.flatMap(entry => (
+    isNativeAliasCatalogEntry(entry) && typeof entry.slug === "string" ? [entry.slug] : []
+  )));
+  const nativeSourceEntries = includeNativeOpenAi
     ? catalogModels
     .filter(m => typeof m.slug === "string"
       && !(m.slug as string).includes("/")
       && m.owned_by !== COMBO_NAMESPACE
-      && !goIds.has(m.slug as string)
       && !isUnsupportedOpenAiNativeSlug(m.slug as string))
     .map(m => {
       const slug = m.slug as string;
@@ -588,6 +732,10 @@ export function mergeCatalogEntriesForSync(
       return preserved;
     })
     : [];
+  const native = nativeSourceEntries.filter(entry =>
+    typeof entry.slug !== "string"
+      || (!freshBareComboAliases.has(entry.slug) && !suppressedBareNativeSlugs.has(entry.slug))
+  );
 
   // Backfill any native OpenAI slug that the on-disk catalog is missing (e.g. gpt-5.5), so a
   // routed provider exposing the same id can never delete the native OpenAI/Codex base row.
@@ -595,19 +743,19 @@ export function mergeCatalogEntriesForSync(
   const nativeSlugs = new Set(native.flatMap(m => typeof m.slug === "string" ? [m.slug] : []));
   if (includeNativeOpenAi) {
   for (const slug of availableNativeSlugs) {
-    if (nativeSlugs.has(slug)) continue;
+    if (nativeSlugs.has(slug) || freshBareComboAliases.has(slug) || suppressedBareNativeSlugs.has(slug)) continue;
     nativeSlugs.add(slug);
     const priority = nativeCatalogEntryPriority(slug, rank, featured.length, 9);
     native.push(deriveEntry(template ? JSON.parse(JSON.stringify(template)) : null, slug, "OpenAI native model (Codex OAuth passthrough).", priority));
   }
   }
 
-  const nativeBySlug = new Map(native.flatMap(entry =>
+  const nativeSourceBySlug = new Map([...nativeSourceEntries, ...native].flatMap(entry =>
     typeof entry.slug === "string" ? [[entry.slug, entry] as const] : []
   ));
   const alignedAccountBoundEntries = accountBoundEntries.map(entry => {
     const nativeSlug = trustedAccountBoundNativeCatalogSlug(entry);
-    const source = nativeSlug === undefined ? undefined : nativeBySlug.get(nativeSlug);
+    const source = nativeSlug === undefined ? undefined : nativeSourceBySlug.get(nativeSlug);
     if (!source) return entry;
     const aligned = JSON.parse(JSON.stringify(source)) as RawEntry;
     aligned.slug = entry.slug;
@@ -624,7 +772,7 @@ export function mergeCatalogEntriesForSync(
   let finalRoutedEntries = routedEntries;
   const existingRoutedEntries = catalogModels.filter(m =>
     typeof m.slug === "string"
-    && m.slug.includes("/")
+    && (m.slug.includes("/") || isNativeAliasCatalogEntry(m))
     && trustedAccountBoundNativeCatalogSlug(m) === undefined
   );
   const preservingExistingRouted = routedEntries.length === 0
@@ -634,12 +782,17 @@ export function mergeCatalogEntriesForSync(
     // itself authored for a provider that is no longer configured are ghosts,
     // not protected foreign entries.
     finalRoutedEntries = existingRoutedEntries.filter(m => {
+      if (isNativeAliasCatalogEntry(m)) {
+        return typeof m.slug === "string" && exactComboSlugs.has(m.slug);
+      }
       const provider = (m.slug as string).slice(0, (m.slug as string).indexOf("/"));
       return !(isCodexCommanderAuthoredRoutedEntry(m) && !gatheredProviderNames.has(provider));
     });
   } else {
     const preservedForeignRouted = catalogModels.filter(m => {
-      if (typeof m.slug !== "string" || !m.slug.includes("/")) return false;
+      if (typeof m.slug !== "string") return false;
+      if (isNativeAliasCatalogEntry(m)) return exactComboSlugs.has(m.slug) && !freshSlugs.has(m.slug);
+      if (!m.slug.includes("/")) return false;
       if (trustedAccountBoundNativeCatalogSlug(m) !== undefined) return false;
       const provider = m.slug.slice(0, m.slug.indexOf("/"));
       if (gatheredProviderNames.has(provider) || freshSlugs.has(m.slug)) return false;
@@ -653,12 +806,15 @@ export function mergeCatalogEntriesForSync(
     finalRoutedEntries = finalRoutedEntries.filter(entry => {
       const slug = typeof entry.slug === "string" ? entry.slug : "";
       const comboOwned = slug.startsWith(`${COMBO_NAMESPACE}/`) || entry.owned_by === COMBO_NAMESPACE;
-      return !comboOwned || freshSlugs.has(slug);
+      const retainedNativeAlias = isNativeAliasCatalogEntry(entry) && exactComboSlugs.has(slug);
+      return !comboOwned || freshSlugs.has(slug) || retainedNativeAlias;
     });
   }
   finalRoutedEntries = finalRoutedEntries.filter(entry => {
     const slug = typeof entry.slug === "string" ? entry.slug : "";
-    return !exactComboSlugs.has(slug)
+    const retainedNativeAlias = isNativeAliasCatalogEntry(entry) && exactComboSlugs.has(slug);
+    return retainedNativeAlias
+      || !exactComboSlugs.has(slug)
       || (Array.isArray(entry.input_modalities) && entry.input_modalities.length > 0);
   });
   // Reapply final catalog policy to rows preserved from disk. Those rows bypass
@@ -681,7 +837,7 @@ export function mergeCatalogEntriesForSync(
   const managedEntries = [...finalRoutedEntries, ...alignedAccountBoundEntries];
   const mergedEntries = [...native, ...managedEntries].map(m => {
     const normalized = normalizeServiceTiers(m);
-    applyNativeOpenAiContextOverride(normalized);
+    if (!isNativeAliasCatalogEntry(normalized)) applyNativeOpenAiContextOverride(normalized);
     const exactCombo = typeof m.slug === "string" && exactComboSlugs.has(m.slug);
     const e = ensureStrictCatalogFields(normalized, {
       preserveExactInputModalities: exactCombo,
@@ -868,6 +1024,21 @@ function pristineCatalogBytes(read: RetainedCatalogSyncRead): string | null {
     : `${JSON.stringify(read.catalog, null, 2)}\n`;
 }
 
+function catalogModelsForMergeWithNativeRecovery(
+  catalogPath: string,
+  catalog: RawCatalog,
+  onDiskCatalog: RawCatalog | null,
+): RawEntry[] {
+  const primaryCatalogModels = onDiskCatalog?.models ?? catalog.models ?? [];
+  // Native-alias compatibility can omit disabled native rows because Desktop's remote
+  // allowlist ignores `visibility: "hide"`. Recovery sources retain genuine metadata so
+  // re-enabling a native model restores its original row rather than a routed clone.
+  return mergeCatalogModelsWithNativeRecovery(primaryCatalogModels, [
+    catalog.models ?? [],
+    readCatalogBackup(catalogPath)?.models ?? [],
+  ]);
+}
+
 function writeRetainedCatalogSync({
   config,
   goModels,
@@ -879,7 +1050,11 @@ function writeRetainedCatalogSync({
   owningCodexHome,
 }: RetainedCatalogSyncWrite): RetainedCatalogSyncResult {
   const { catalogPath, catalog, onDiskCatalog } = read;
-  const catalogModelsForMerge = onDiskCatalog?.models ?? catalog.models ?? [];
+  const catalogModelsForMerge = catalogModelsForMergeWithNativeRecovery(
+    catalogPath,
+    catalog,
+    onDiskCatalog,
+  );
   const template = findNativeTemplate(catalog);
   try {
     // Once-only: preserve the PRISTINE pre-codexcommander catalog as the native-priority baseline
@@ -900,6 +1075,7 @@ function writeRetainedCatalogSync({
   const orderedGoModels = orderForSubagents(enabledGo, featured); // stable tie-break among equal priorities
   const multiAgentMode: MultiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
   const exactComboSlugs = exactComboCatalogSlugs(config);
+  const suppressedBareNativeSlugs = desktopAllowlistSuppressedNativeSlugs(config);
   const hasPhysicalComboProvider = Object.hasOwn(config.providers, COMBO_NAMESPACE);
   const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
   const includeAccountBoundNativeOpenAi = shouldIncludeAccountBoundNativeOpenAi(config);
@@ -916,6 +1092,8 @@ function writeRetainedCatalogSync({
     multiAgentMode,
     exactComboSlugs,
     accountSelectors,
+    suppressedBareNativeSlugs,
+    new Set(),
   );
   // Keep genuine native entries (gpt-*, codex-*) with their real per-model fields and append
   // routed providers as namespaced slugs. Cursor and other adopted providers can expose model ids
@@ -943,6 +1121,8 @@ function writeRetainedCatalogSync({
       multiAgentMode,
       exactComboSlugs,
       accountSelectors,
+      suppressedBareNativeSlugs,
+      new Set([...disabledNativeSlugs(config)].filter(slug => suppressedBareNativeSlugs.has(slug))),
     ).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined)
     : [];
   // Rehydration: fill provider-level gaps from the last-known-good CodexCommander
@@ -952,33 +1132,14 @@ function writeRetainedCatalogSync({
   // still has routes and the gather is wholly empty, the existing #855 on-disk
   // preservation path remains authoritative.
   const liveRoutedEntries = goEntries;
-  const retainedRows: RawEntry[] = [];
   const onDiskHasRoutedEntries = catalogHasRoutedEntries({ models: catalogModelsForMerge });
-  if (liveRoutedEntries.length > 0 || !onDiskHasRoutedEntries) {
-    const liveProviders = new Set(liveRoutedEntries.flatMap(entry => {
-      const slug = typeof entry.slug === "string" ? entry.slug : "";
-      const slash = slug.indexOf("/");
-      return slash > 0 ? [slug.slice(0, slash)] : [];
-    }));
-    const retained = readRetainedRoutedCatalog();
-    if (retained) {
-      for (const entry of retained.models ?? []) {
-        const slug = typeof entry.slug === "string" ? entry.slug : "";
-        const slash = slug.indexOf("/");
-        const provider = slash > 0 ? slug.slice(0, slash) : "";
-        if (
-          provider
-          && !liveProviders.has(provider)
-          && retainedRowStillConfigured(entry, config, gatheredProviderNames)
-        ) {
-          retainedRows.push(entry);
-        }
-      }
-    }
-  }
-  const routedEntriesForMerge = liveRoutedEntries.length > 0
-    ? [...liveRoutedEntries, ...retainedRows]
-    : retainedRows;
+  const { entries: routedEntriesForMerge, retainedRows } = mergeLiveRoutedEntriesWithRetained(
+    liveRoutedEntries,
+    readRetainedRoutedCatalog(),
+    config,
+    gatheredProviderNames,
+    onDiskHasRoutedEntries,
+  );
   catalog.models = mergeCatalogEntriesForSync(
     catalogModelsForMerge,
     routedEntriesForMerge,
@@ -995,6 +1156,7 @@ function writeRetainedCatalogSync({
     includeNativeOpenAi,
     accountBoundEntries,
     availableNativeSlugs,
+    suppressedBareNativeSlugs,
   );
   clampCatalogModelsToCodexSupport(catalog.models, deps);
 
@@ -1170,11 +1332,15 @@ export function restoreCodexCatalogWithPermit(
   const replacementVisibility = visibleAccountReplacementNatives(catalog.models, disabledModels);
   const backup = readCatalogBackup(catalogPath);
   if (backup && Array.isArray(backup.models)) {
-    const removed = (catalog.models ?? []).filter(m => typeof m.slug === "string" && m.slug.includes("/")).length;
+    const removed = (catalog.models ?? []).filter(m => typeof m.slug === "string"
+      && (m.slug.includes("/") || isNativeAliasCatalogEntry(m))).length;
     const backupSlugs = new Set(backup.models.flatMap(m => typeof m.slug === "string" ? [m.slug] : []));
     const userNativeAdditions = restoreAccountHiddenBareNatives(
       (catalog.models ?? []).filter(m =>
-        typeof m.slug === "string" && !m.slug.includes("/") && !backupSlugs.has(m.slug)
+        typeof m.slug === "string"
+        && !m.slug.includes("/")
+        && !isNativeAliasCatalogEntry(m)
+        && !backupSlugs.has(m.slug)
       ),
       replacementVisibility,
       disabledModels,
@@ -1191,7 +1357,8 @@ export function restoreCodexCatalogWithPermit(
   }
   const before = catalog.models.length;
   const native = restoreAccountHiddenBareNatives(
-    catalog.models.filter(m => !(typeof m.slug === "string" && m.slug.includes("/"))),
+    catalog.models.filter(m => !(typeof m.slug === "string"
+      && (m.slug.includes("/") || isNativeAliasCatalogEntry(m)))),
     replacementVisibility,
     disabledModels,
   );

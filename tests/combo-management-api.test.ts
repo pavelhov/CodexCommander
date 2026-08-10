@@ -301,6 +301,54 @@ describe("combo management API", () => {
     });
   });
 
+  test("PUT round-trips an explicitly labeled native alias", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined, disabledModels: ["gpt-5.6-sol"] });
+      saveConfig(config);
+      const response = await comboApi(config, "PUT", "/api/combos", {
+        id: "nova-sol",
+        combo: {
+          ...VALID_COMBO,
+          alias: "gpt-5.6-sol",
+          nativeAlias: true,
+          displayName: "Nova1 - codex-gpt-5.6-sol",
+        },
+      });
+
+      expect(response?.status).toBe(200);
+      expect(await responseJson(response)).toMatchObject({
+        id: "nova-sol",
+        model: "gpt-5.6-sol",
+        combo: {
+          alias: "gpt-5.6-sol",
+          nativeAlias: true,
+          displayName: "Nova1 - codex-gpt-5.6-sol",
+        },
+      });
+      expect(config.combos?.["nova-sol"]).toMatchObject({
+        nativeAlias: true,
+        displayName: "Nova1 - codex-gpt-5.6-sol",
+      });
+    });
+  });
+
+  test("PUT rejects a native alias without a displayName without mutating config", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined });
+      saveConfig(config);
+      const beforeMemory = structuredClone(config);
+      const beforeDisk = readFileSync(getConfigPath(), "utf8");
+      const response = await comboApi(config, "PUT", "/api/combos", {
+        id: "nova-sol",
+        combo: { ...VALID_COMBO, alias: "gpt-5.6-sol", nativeAlias: true },
+      });
+
+      expect(response?.status).toBe(400);
+      expect(config).toEqual(beforeMemory);
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(beforeDisk);
+    });
+  });
+
   test("PUT rejects aliases owned by a Codex account namespace without mutating config", async () => {
     await withTempHome(async () => {
       const config = baseConfig({ codexAccountNamespaces: { side: "side-account-id" } });
@@ -347,6 +395,7 @@ describe("combo management API", () => {
       const config = baseConfig({
         disabledModels: ["before", "combo/old", "middle", "old-public", "after"],
         subagentModels: ["combo/old", "another", "old-public"],
+        subagentModelFallback: ["old-public", "another", "combo/old"],
         injectionModel: "combo/old",
         shadowCallIntercept: { enabled: true, model: "old-public" },
         claudeCode: {
@@ -396,6 +445,7 @@ describe("combo management API", () => {
       expect(config.combos?.new?.alias).toBe("new-public");
       expect(config.disabledModels).toEqual(["before", "new-public", "middle", "after"]);
       expect(config.subagentModels).toEqual(["new-public", "another"]);
+      expect(config.subagentModelFallback).toEqual(["new-public", "another"]);
       expect(config.injectionModel).toBe("new-public");
       expect(config.shadowCallIntercept).toEqual({ enabled: true, model: "new-public" });
       expect(config.claudeCode).toMatchObject({
@@ -418,6 +468,7 @@ describe("combo management API", () => {
       expect(persisted.combos?.new?.alias).toBe("new-public");
       expect(persisted.disabledModels).toEqual(["before", "new-public", "middle", "after"]);
       expect(persisted.subagentModels).toEqual(["new-public", "another"]);
+      expect(persisted.subagentModelFallback).toEqual(["new-public", "another"]);
       expect(persisted.injectionModel).toBe("new-public");
       expect(persisted.shadowCallIntercept).toEqual({ enabled: true, model: "new-public" });
       expect(persisted.claudeCode).toMatchObject({

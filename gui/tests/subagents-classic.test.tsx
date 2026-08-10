@@ -24,6 +24,7 @@ let modelRows: Array<Record<string, unknown>> = [];
 let catalogState: { state: "fresh" | "stale"; processes?: Array<{ pid: number; startedAtMs: number }> } = { state: "fresh" };
 let policyMode: "v1" | "default" | "v2" = "default";
 let messageDelivery: "encrypted" | "plaintext" = "encrypted";
+let catalogRefresh: Record<string, unknown> = { status: "committed", changed: true };
 let caseSequence = 0;
 let apiBase = "";
 
@@ -49,6 +50,7 @@ beforeEach(() => {
   catalogState = { state: "fresh" };
   policyMode = "default";
   messageDelivery = "encrypted";
+  catalogRefresh = { status: "committed", changed: true };
   apiBase = `/classic-${++caseSequence}`;
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
@@ -60,7 +62,7 @@ beforeEach(() => {
         if (method === "PUT") {
           const models = JSON.parse(String(init?.body)).models as string[];
           chosen = models;
-          return Response.json({ ok: true, applied: models, advertised, excluded, catalogRefresh: { ok: true } });
+          return Response.json({ ok: true, applied: models, advertised, excluded, catalogRefresh });
         }
         return Response.json({ available, chosen, advertised, excluded, catalogState });
       }
@@ -204,6 +206,19 @@ test("saves the featured order with PUT and the models payload", async () => {
   expect(put!.init?.body).toBe(JSON.stringify({ models: ["a-1", "a-2"] }));
 });
 
+test("warns when the roster persists but catalog convergence is skipped", async () => {
+  catalogRefresh = { status: "skipped", reason: "busy", retryable: true };
+  await mount();
+
+  await act(async () => { addToggle("a-1").click(); });
+  const save = Array.from(container.querySelectorAll("button"))
+    .find((button) => button.textContent?.trim() === "Save roster") as HTMLButtonElement;
+  await act(async () => { save.click(); });
+
+  expect(container.textContent).toContain("running catalog did not refresh cleanly");
+  expect(container.textContent).toContain("ccx sync --restart-codex");
+});
+
 test("shows truthful catalog state, capability filters, and keyboard reordering", async () => {
   available = ["reason-agent", "vision-agent", "plain-agent"];
   chosen = ["reason-agent", "vision-agent"];
@@ -295,6 +310,7 @@ test("warns when a fresh catalog does not advertise every saved roster model", a
   await mount();
 
   expect(container.textContent).toContain("Codex workers current");
+  expect(container.textContent).toContain("This roster controls spawn_agent, not the top-level Codex Desktop picker");
   expect(container.textContent).toContain("roster models are not currently advertised");
   expect(container.textContent).toContain("xai/grok-4.5");
   expect(container.textContent).toContain("opencode-go/deepseek-v4-flash");

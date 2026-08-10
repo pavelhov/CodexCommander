@@ -3,9 +3,10 @@ title: Codex App 모델 선택기
 description: 공유 Codex 카탈로그를 통해 CodexCommander 모델이 Codex App, Codex CLI, Codex TUI에 표시되는 방식.
 ---
 
-CodexCommander는 Codex App을 직접 고치지 않습니다. Codex CLI/TUI가 이미 쓰는 Codex 설정과 모델 카탈로그를
-같은 위치에 씁니다. Codex App도 이 공유 상태를 읽기 때문에, 라우팅된 모델이 일반 Codex 카탈로그
-항목처럼 App의 모델 선택기에 나타날 수 있습니다.
+CodexCommander는 Codex App을 직접 고치지 않습니다. Codex CLI/TUI와 같은 Codex 설정과 모델 카탈로그를
+씁니다. app-server는 이 공유 상태를 읽지만, 일부 Codex Desktop 릴리스는 renderer에서 추가 remote
+allowlist를 적용해 routed row를 picker에서 제거할 수 있습니다. 명시적 `nativeAlias: true` combo가
+이 업스트림 버그를 위한 호환 모드입니다.
 
 OpenAI 항목에는 네이티브 Codex 로그인과 네임스페이스가 붙은 `openai-apikey/<model>` API key
 경로라는 두 가지 credential 경로가 있습니다. `codexAccountMode`만 Pool과 Direct 사이에서 바꾸는 것은
@@ -88,7 +89,11 @@ Luna는 `max`에서 멈춥니다. Sol의 기본값은 `low`이고, Terra와 Luna
   `disabledModels`에 추가하면 해당 selector 행만 숨깁니다.
 - Bare native GPT id는 bare slug입니다. 비활성화하면 나중에 다시 켤 수 있도록 카탈로그 항목은
   유지하면서 bare 행과 해당 모델의 모든 account-selector 복제 행을 숨깁니다.
-- 네이티브 행은 지원되는 정적 집합에서 오므로, 비활성화한 네이티브 모델은 대시보드에 계속 보이고 다시
+- native-alias combo가 하나라도 구성되어 있으면 해당 Desktop 릴리스가 hidden 플래그를 무시하므로,
+  비활성화된 bare native 행은 숨긴 채 유지하지 않고 유효 카탈로그에서 제외합니다. native alias가 차지한
+  bare slug도 Models 페이지에서 사라지며, 대체되지 않은 native 행만 토글할 수 있습니다. 다시 활성화하면
+  동기화가 보존된 또는 현재의 native metadata를 복원합니다.
+- 대체되지 않은 native 행은 지원되는 정적 집합에서 오므로, 비활성화한 모델도 대시보드에 남아 다시
   켤 수 있습니다.
 
 표시 여부 처리 단계는 snapshot 업그레이드 뒤에 실행됩니다. 관리 API는 토글 뒤 카탈로그를 다시 쓰고

@@ -195,11 +195,90 @@ test("Combos announces silent revalidation over cached content via aria-busy", a
     release.resolve();
     await Promise.resolve();
   });
-  await act(async () => { await new Promise<void>(r => testWindow.setTimeout(r, 20)); });
+  await act(async () => { await new Promise<void>(r => testWindow.setTimeout(r, 100)); });
+  expect(container.querySelector<HTMLElement>(".combos-workspace-shell-body")?.getAttribute("aria-busy")).toBe("false");
 
   expect(container.querySelector<HTMLElement>(".combos-workspace-shell-body")?.getAttribute("aria-busy")).toBe("false");
   expect(container.querySelector<HTMLElement>(".combos-workspace-shell-body [role='status']")?.textContent?.trim()).toBe("");
 
   await act(async () => { root.unmount(); });
+  container.remove();
+});
+
+test("Combos warns when settings persist but catalog convergence is skipped", async () => {
+  const combo = {
+    id: "existing",
+    model: "combo/existing",
+    alias: null,
+    nativeAlias: false,
+    displayName: null,
+    strategy: "failover" as const,
+    stickyLimit: 1,
+    defaultEffort: null,
+    targets: [{ provider: "openai", model: "gpt-5", clientKey: "ct-existing" }],
+  };
+  writeSessionListCache(CACHE_KEY, { ...CACHED_PAGE, combos: [combo] });
+  let putCount = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/api/combos") && (init?.method ?? "GET") === "PUT") {
+      putCount += 1;
+      return Response.json({
+        success: true,
+        catalogRefresh: { status: "skipped", reason: "busy", retryable: true },
+      });
+    }
+    if (url.endsWith("/api/combos")) return Response.json({ combos: [combo] });
+    if (url.endsWith("/api/config")) {
+      return Response.json({
+        providers: {
+          openai: {
+            adapter: "openai-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            authMode: "forward",
+          },
+        },
+      });
+    }
+    if (url.endsWith("/api/models")) {
+      return Response.json([{ provider: "openai", id: "gpt-5", namespaced: "gpt-5" }]);
+    }
+    return new Response(null, { status: 404 });
+  }) as typeof fetch;
+
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  let root!: Root;
+  await act(async () => {
+    root = createRoot(container);
+    root.render(<LanguageProvider><Combos apiBase={API_BASE} /></LanguageProvider>);
+  });
+  await act(async () => { await new Promise<void>(r => testWindow.setTimeout(r, 100)); });
+  expect(container.querySelector<HTMLElement>(".combos-workspace-shell-body")?.getAttribute("aria-busy")).toBe("false");
+
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(".combos-workspace-rail-row")!.click();
+  });
+  await act(async () => { await new Promise<void>(r => testWindow.setTimeout(r, 0)); });
+  const alias = container.querySelector<HTMLInputElement>("#cwi-edit-alias")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!
+      .set!.call(alias, "edited");
+    alias.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+  });
+  expect(alias.value).toBe("edited");
+  expect(container.querySelector<HTMLButtonElement>("#cwi-edit-save")?.disabled).toBe(false);
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.click();
+  });
+  await act(async () => { await new Promise<void>(r => testWindow.setTimeout(r, 100)); });
+
+  expect(putCount).toBe(1);
+  expect(container.textContent).toContain("running Codex catalog did not refresh cleanly");
+  expect(container.textContent).toContain("ccx sync --restart-codex");
+  expect(container.querySelector(".combos-workspace-shell-banner .notice-warn")).toBeTruthy();
+
+  await act(async () => root.unmount());
   container.remove();
 });
