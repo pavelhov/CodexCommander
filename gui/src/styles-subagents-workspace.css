@@ -70,6 +70,21 @@
   line-height: var(--leading-body);
 }
 
+.subagents-force-restart {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: calc(-1 * var(--space-1)) 0 var(--space-3);
+  max-width: var(--prose-measure);
+  color: var(--muted);
+  font-size: var(--text-label);
+  line-height: var(--leading-body);
+}
+
+.subagents-force-restart .btn {
+  flex: 0 0 auto;
+}
+
 .subagents-apply-dialog p {
   margin: 0;
   color: var(--muted);
@@ -897,6 +912,11 @@
   }
 
   .subagents-activation-notice {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .subagents-force-restart {
     align-items: flex-start;
     flex-direction: column;
   }

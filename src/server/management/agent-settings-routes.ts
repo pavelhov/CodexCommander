@@ -761,7 +761,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       deps.catalogArtifactProofForActivation?.(),
       deps.codexRoutingKindForActivation?.(),
     );
-    return jsonResponse({
+    const response = jsonResponse({
       chosen: rosterConfig.subagentModels ?? [],
       available,
       catalogState,
@@ -769,6 +769,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       excluded: activation.catalog.excluded,
       activation: projectCatalogActivationForPrincipal(activation, ctx.principal),
     });
+    response.headers.set("Cache-Control", "no-store");
+    return response;
   }
   if (url.pathname === "/api/subagent-models" && req.method === "PUT") {
     let body: { models?: unknown };

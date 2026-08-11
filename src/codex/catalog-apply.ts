@@ -18,6 +18,7 @@ import {
 } from "./catalog-activation";
 import { getCodexRoutingKind, type CodexRoutingKind } from "./inject";
 import { syncModelsToCodex, type CodexSyncResult } from "./sync";
+import { recordCodexBootFenceApplied } from "./boot-fence";
 
 export const APPLY_CODEX_CATALOG_ACTION = "applyCodexCatalog" as const;
 
@@ -260,6 +261,7 @@ export interface CodexCatalogApplyCoreDeps {
     authorizeSignal: () => boolean,
     observedBefore: CodexAppServerCatalogStatus,
   ) => Promise<ApplyCodexCatalogWorkersResult>;
+  recordBootFenceApplied?: () => void;
 }
 
 export interface CodexCatalogApplyInput {
@@ -370,6 +372,7 @@ export async function runCodexCatalogApply(
   if (workersBefore.state === "unknown") {
     return blockedResult("worker-state-unknown", catalogUpdated, workersBefore);
   }
+  (deps.recordBootFenceApplied ?? recordCodexBootFenceApplied)();
   if (workersBefore.state === "not_running") {
     return {
       outcome: "no_workers",

@@ -68,7 +68,25 @@ bun run dev:gui
 
 ## Catalog 激活
 
-保存不会中断工作：它会更新配置和确定性的磁盘 catalog，但不会终止当前 Codex worker。Agent Command Center 会单独显示当前 worker 是否已加载它。若 worker 过时，请明确选择 **Apply agent catalog**，或退出并重新打开 Codex Desktop。新 task 或 fork 不会重新加载 catalog。活动数只是中断警告而非空闲保证；没有自动应用或空闲队列。若手动打开的 loopback 仪表盘没有确认 session，或 session 已过期，请通过 `ccx gui` 或 macOS 菜单栏应用重新打开。绝不要把原始管理员 token 粘贴到 loopback 页面。
+保存不会中断工作：它会更新目标配置和确定性的磁盘 catalog，但不会终止当前 ChatGPT
+后台工作器。**Agent Command Center** 会分别显示磁盘 catalog、Codex 路由和运行中工作器所加载
+roster 的状态。
+
+如果磁盘 catalog 已是最新、CodexCommander 路由已注入，而只有已验证的运行中工作器过时，
+推荐操作是完全退出 ChatGPT，重新打开后再开始新任务。这是加载已保存 roster 最可靠的方式。
+仅在原后台工作器中启动新 task 或 fork 并不会重新加载 catalog。仪表盘会保持该状态可见，并在你
+返回后提供**检查状态**。
+
+如果 catalog 状态为 pending 或 unknown，或者路由尚未注入，请先选择**应用到 Codex**，以协调
+catalog 和受管理路由。仅手动重启 ChatGPT 不会修复这些文件。对于外部或未知路由，Apply 仍会被
+阻止，以免覆盖用户配置；集成关闭时，已保存的 roster 仍只保留在 CodexCommander 中。
+
+对于 catalog 与受管理路由均为 current、只有工作器过期的情况，通过 `ccx gui` 或 macOS 菜单栏应用
+打开的仪表盘中的**强制重启工作器**仍是高级备用方案；受保护的 management API 与
+`ccx sync --restart-codex` 亦同。它们只会影响已验证的过期后台工作器，但可能会让 ChatGPT 显示
+**“stopped unexpectedly”**。活动请求数只是中断警告，不是空闲保证；没有自动应用或空闲队列。若
+手动打开的 loopback 仪表盘没有确认 session，或 session 已过期，请通过 `ccx gui` 或 macOS 菜单栏
+应用重新打开。绝不要把原始管理员 token 粘贴到 loopback 页面。
 
 ## 委派选择器与生成路由的区别
 
@@ -127,6 +145,7 @@ GUI 是代理 JSON 管理 API 之上的轻量客户端。常用 endpoint 包括�
 | `PUT /api/startup-health/companion` | 让已认证的原生伴侣应用刷新仅保存在内存中的短期“登录时启动”观测。该端点需要原始管理令牌，并拒绝浏览器 GUI 会话。 |
 | `GET` / `POST /api/windows-tray` | 读取或更改 Windows 托盘安装和显示状态；POST 支持 `install`、`start`、`stop`、`uninstall`。 |
 | `POST /api/sync` | 重建共享模型目录，并把 Codex 模型缓存标记为过期。 |
+| `GET /api/codex-catalog/status` · `POST /api/codex-catalog/apply` | 读取 catalog、路由和工作器的激活证据。受保护的 Apply 会协调 pending catalog 或尚未注入的受管理路由，然后可能在目标修订围栏与明确中断确认后，只强制重启已验证的过期工作器。当二者已是 current、只有工作器过期时，这是可能让 ChatGPT 显示 **stopped unexpectedly** 的高级备用方案；浏览器 session 还需要上文所述的一次性启动授权。 |
 | `GET` / `PUT /api/sidecar-settings` | 读取或设置 search/vision sidecar 模型。 |
 | `GET` / `PUT /api/injection-model` | 读取或设置委派指引模型/强度、指引开关及 Codex 原生子代理默认值同步开关。 |
 | `GET` / `PUT /api/v2` | 读取或设置界面模式、Codex feature flag 和 v2 thread 上限。 |

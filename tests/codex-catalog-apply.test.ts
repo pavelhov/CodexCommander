@@ -789,6 +789,36 @@ describe("shared catalog Apply orchestration", () => {
     });
   });
 
+  test("records the boot fence after proof and before worker signaling", async () => {
+    const calls: string[] = [];
+    await runCodexCatalogApply({}, coreDeps({
+      inspectArtifactProof: () => { calls.push("proof"); return "current"; },
+      recordBootFenceApplied: () => { calls.push("fence"); },
+      applyWorkers: async () => {
+        calls.push("signal");
+        return { outcome: "applied", staleWorkerCount: 1, stoppedWorkerCount: 1, survivingWorkerCount: 0 };
+      },
+    }));
+    expect(calls.indexOf("fence")).toBeGreaterThan(calls.indexOf("proof"));
+    expect(calls.indexOf("fence")).toBeLessThan(calls.indexOf("signal"));
+  });
+
+  test("does not record the boot fence on blocked or early-superseded paths", async () => {
+    for (const overrides of [
+      { syncCatalog: async () => syncResult({ warning: "blocked" }) },
+      { captureDesiredSnapshot: () => ({ ...desired, revision: "newer" }) },
+      { inspectArtifactProof: () => "drifted" as const },
+      { collectWorkerState: () => ({ state: "unknown", catalogMtimeMs: null, processes: [] }) as CodexAppServerCatalogStatus },
+    ]) {
+      let records = 0;
+      await runCodexCatalogApply({ expectedDesiredRevision: desired.revision }, coreDeps({
+        ...overrides,
+        recordBootFenceApplied: () => { records += 1; },
+      }));
+      expect(records).toBe(0);
+    }
+  });
+
   test("no-worker, current, unknown, and partial outcomes are canonical", async () => {
     const cases = [
       {

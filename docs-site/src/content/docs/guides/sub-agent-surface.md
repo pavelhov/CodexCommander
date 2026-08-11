@@ -167,9 +167,11 @@ switching an active conversation in place.
 
 Leaving **Thread limit** blank restores the Codex default. V2 counts total threads including the root;
 V1 counts child threads. A protocol or thread-limit change updates managed boot configuration: use
-**Apply agent catalog** to replace a running worker, then start a new task for the session-bound tool
-shape. Guidance and fallback apply to future spawned child turns. A V2 delivery-only change needs a
-new task but does not dirty the catalog or require Apply.
+the catalog status to choose the reload path. When the catalog and managed routing are current but the
+worker is stale, quit ChatGPT completely, reopen it, and start a new task for the session-bound tool
+shape. If the catalog is pending/unknown or routing is not injected, use **Apply to Codex** to reconcile
+them first; restarting ChatGPT alone is not that repair. Guidance and fallback apply to future spawned
+child turns. A V2 delivery-only change needs a new task but does not dirty the catalog or require Apply.
 
 ### CLI
 
@@ -208,7 +210,7 @@ The management API exposes matching `GET` and `PUT` endpoints:
 | `/api/subagent-models` | Ordered roster of up to five models; saving it is non-disruptive and also reports catalog activation state |
 | `/api/subagent-model-fallback` | Global fallback order and poll interval |
 | `/api/codex-catalog/status` | Read desired configuration, deterministic on-disk catalog evidence, and current-worker activation evidence |
-| `/api/codex-catalog/apply` | Explicitly apply a verified pending catalog to stale Codex workers after confirmation; browser-only through a confirmed `ccx gui` or menu-app launch |
+| `/api/codex-catalog/apply` | Guarded reconciliation for a pending catalog or uninjected managed route, followed when necessary by a confirmed force-restart of verified stale workers. For an already-converged stale worker this is an advanced fallback that may make ChatGPT show **stopped unexpectedly**; browser use requires a confirmed `ccx gui` or menu-app launch |
 
 Sending `multiAgentV2MessageDelivery: "encrypted"` or `null` to `PUT /api/v2` removes the explicit
 override and restores the encrypted default.
@@ -247,17 +249,20 @@ to v1. A `"v2"`, `null`, or absent surface value is eligible; a real `"v1"` pin 
 No. Forced V2 removes Luna's upstream V1 surface pin, so it can be eligible for the V2 roster. It
 still needs to be selected and advertised, written into the catalog, loaded by the current Codex
 worker, and routable through the proxy. Use the dashboard's catalog status to see which condition
-is pending. If the worker is stale, choose **Apply agent catalog**; quitting and reopening Codex
-Desktop is the reliable manual replacement boundary.
+is pending. If the catalog and routing are current and only the worker is stale, quit ChatGPT
+completely, reopen it, and start a new task. If the catalog is pending or routing is not injected,
+use **Apply to Codex** for reconciliation first.
 
 ### Do mode changes affect running sessions?
 
 No. Start a new Codex session after changing the mode. That controls the collaboration protocol but
 does not reload an already-running App host's model catalog. Save writes desired configuration and
-converges the on-disk catalog without interrupting work. When status says an existing worker is
-stale, explicitly choose **Apply agent catalog** (which may interrupt its active task) or quit and
-reopen Codex Desktop. There is intentionally no auto-apply, idle queue, or persisted “pending”
-snapshot to manage.
+converges the on-disk catalog without interrupting work. When the catalog and managed routing are
+current but the worker is stale, quit ChatGPT completely, reopen it, and then start the new task. The
+guarded **Force-restart workers** action and `ccx sync --restart-codex` remain advanced fallbacks and may
+make ChatGPT show **stopped unexpectedly**. A pending catalog or uninjected managed route still needs
+**Apply to Codex** reconciliation first. There is intentionally no auto-apply, idle queue, or persisted
+“pending” snapshot to manage.
 
 ### Can Sol V2 delegate to Kimi, Grok, or DeepSeek?
 

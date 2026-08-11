@@ -229,6 +229,8 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const saveInFlight = useRef(false);
   const catalogRefreshRequested = useRef(false);
   const applyInFlight = useRef(false);
+  /** Last server-persisted roster; the dirty guard for polled revalidations. */
+  const committedChosenRef = useRef<string[]>(cached?.chosen ?? []);
   const applyTriggerRef = useRef<HTMLButtonElement>(null);
   const applyCancelRef = useRef<HTMLButtonElement>(null);
   const applyConfirmRef = useRef<HTMLButtonElement>(null);
@@ -267,7 +269,15 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       activation: parseActivation(response.activation),
       metadataLimited: modelRows === null,
     };
-    setChosen(next.chosen);
+    // The 5s surface poll must never clobber unsaved roster edits: adopt the
+    // server list only while the visible roster matches the last committed one.
+    setChosen(previous => {
+      const committed = committedChosenRef.current;
+      if (previous.length === committed.length && previous.every((model, index) => model === committed[index])) {
+        return nextChosen;
+      }
+      return previous;
+    });
     setCommittedChosen(next.chosen);
     setCatalogLive(true);
     writeSessionListCache(cacheKey, next);
@@ -278,7 +288,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     cacheKey,
     [apiBase],
     loadSubagents,
-    { isEmpty: () => false, initialData: cached ?? undefined },
+    { isEmpty: () => false, initialData: cached ?? undefined, pollMs: 5000 },
   );
   const { state } = resource;
   const load = resource.refresh;
@@ -287,7 +297,11 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const models = snapshot?.models ?? [];
   const hasRoutedModels = models.some(model => model.native !== true && model.namespaced.includes("/"));
   const catalogState = catalogLive ? snapshot?.catalogState : undefined;
-  const activation = snapshot?.activation;
+  // The sessionStorage seed is a warm-cache convenience, not live process state.
+  // Gate activation-derived UI (banners, Apply/force-restart affordances) on the
+  // first live fetch completing — mirroring `catalogState` — so a stale seed can
+  // never paint an actionable banner as final state before revalidation resolves.
+  const activation = catalogLive ? snapshot?.activation : undefined;
   const reloadRequired = activation?.reloadRequired === true;
   const applyAllowed = activation?.applyAllowed === true;
   const integrationDisabled = activation?.routingStatus === "not_required"
@@ -300,6 +314,9 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const routingNotInjected = activation?.routingStatus === "not_injected";
   const catalogReady = activation?.catalogStatus === "current" || activation?.catalogStatus === "degraded";
   const catalogNeedsConvergence = activation?.catalogStatus === "pending" || activation?.catalogStatus === "unknown";
+  const manualRestartRequired = catalogReady
+    && activation?.routingStatus === "current"
+    && activation?.workerState === "reload_required";
   const canApply = applyAllowed && confirmedGuiLaunch;
   const launcherRequired = reloadRequired && !routingBlocked && (
     activation?.applyReason === "confirmed-launch-required" || (applyAllowed && !confirmedGuiLaunch)
@@ -315,6 +332,10 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   useEffect(() => {
     busyRef.current = busy;
   }, [busy]);
+
+  useEffect(() => {
+    committedChosenRef.current = committedChosen;
+  }, [committedChosen]);
 
   useEffect(() => {
     if (!applyDialog) return;
@@ -574,9 +595,11 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
               ? t("sub.catalog.unknown")
               : t("sub.catalog.pending")
           : reloadRequired
-            ? applyAllowed
-              ? t("sub.catalog.applyNeeded")
-              : t("sub.catalog.applyUnavailable")
+            ? manualRestartRequired
+              ? t("sub.catalog.restartChatGPT")
+              : applyAllowed
+                ? t("sub.catalog.applyNeeded")
+                : t("sub.catalog.applyUnavailable")
             : activation.workerState === "current" || activation.workerState === "fresh"
               ? t("sub.catalog.current")
               : activation.workerState === "not_running" && catalogReady
@@ -634,7 +657,35 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       {integrationDisabled && (
         <p className="subagents-activation-note">{t("sub.catalog.integrationDisabledNotice")}</p>
       )}
-      {reloadRequired && !routingBlocked && (
+      {manualRestartRequired && (
+        <Notice tone="warn">
+          <div className="subagents-activation-notice">
+            <span>{t("sub.catalog.restartChatGPTNotice")}</span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => load()}
+              disabled={busy}
+            >{t("sub.catalog.checkStatusAction")}</button>
+          </div>
+        </Notice>
+      )}
+      {manualRestartRequired && launcherRequired && (
+        <Notice tone="warn">{t("sub.catalog.launcherRequiredNotice")}</Notice>
+      )}
+      {manualRestartRequired && canApply && (
+        <div className="subagents-force-restart">
+          <span>{t("sub.catalog.forceRestartNotice")}</span>
+          <button
+            ref={applyTriggerRef}
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => { void prepareApply(); }}
+            disabled={busy || !activation?.desiredRevision}
+          >{t("sub.catalog.forceRestartAction")}</button>
+        </div>
+      )}
+      {reloadRequired && !manualRestartRequired && !routingBlocked && (
         <Notice tone="warn">
           <div className="subagents-activation-notice">
             <span>{t(
@@ -660,7 +711,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           </div>
         </Notice>
       )}
-      {reloadRequired && !routingBlocked && <p className="subagents-activation-note">{t("sub.catalog.newTaskNote")}</p>}
+      {reloadRequired && !manualRestartRequired && !routingBlocked && <p className="subagents-activation-note">{t("sub.catalog.newTaskNote")}</p>}
       {!activation && catalogState?.state === "stale" && (
         <Notice tone="warn">{t("sub.catalog.legacyStaleNotice", { n: catalogState.processes?.length ?? 0, cmd: "ccx sync --restart-codex" })}</Notice>
       )}

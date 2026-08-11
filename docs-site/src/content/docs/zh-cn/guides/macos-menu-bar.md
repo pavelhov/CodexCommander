@@ -41,10 +41,10 @@ macOS 伴侣会在菜单栏中显示最有用的 CodexCommander 状态，同时�
 - **Dashboard 和 Logs** — 在默认浏览器中打开对应的本地控制面板视图，并为包括目录 Apply 在内的更改操作传递一次性启动授权。
 - **管理** — 打开所选提供商的 Accounts 或 API Keys 标签页。OAuth、API 密钥输入、重新认证、
   账户切换和提供商配置仍在控制面板中进行。
-- **Agent catalog update ready** — 当正在运行的 Codex 后台工作进程仍持有旧模型列表时显示的
-  持久、非故障卡片。CodexCommander 代理会保持健康并继续运行。
-- **Apply agent catalog…** — 打开确认窗口，在可用时显示最新请求活动，警告应用更新可能中断
-  回答，并提供 **Apply Now** 和 **Later**。
+- **Restart ChatGPT to load models** — 当正在运行的 Codex 后台工作进程仍持有旧模型列表时显示的
+  持久、非致命提示卡片。CodexCommander 代理会保持健康并继续运行。
+- **Show restart steps…** — 说明推荐的重新加载边界：完全退出 ChatGPT，重新打开后再开始新任务。
+  菜单栏应用不会通过这张卡片强制重启后台工作器。
 - **Stop Proxy…** — 始终请求确认，会中断活动客户端和子智能体请求、恢复原生 Codex，并让菜单栏应用保持打开。
 - **Restart Proxy…** — 请求确认，允许代理用最多 60 秒排空活动请求，然后重新连接到替代进程。接受重启
   请求不会被显示为完成；应用会等待新进程通过身份检查。
@@ -63,16 +63,19 @@ macOS 伴侣会在菜单栏中显示最有用的 CodexCommander 状态，同时�
 
 打开应用时，它会自动将 Codex 模型目录与 CodexCommander 当前配置的提供商同步。如果没有 Codex 工作
 进程在运行，新列表会在下一个 Codex 任务中生效。如果长时间运行的工作进程载入了旧列表，CodexCommander
-仍会继续运行，面板会持续显示非故障的 **Agent catalog update ready** 卡片。
+仍会继续运行，面板会持续显示非致命的 **Restart ChatGPT to load models** 提示卡片。
 
-选择 **Apply agent catalog…** 可查看中断风险。确认前会尽可能获取最新的活动请求数量，但请求数为
-零不会被描述为 Codex 已空闲的证明，因为操作执行前仍可能开始新请求。**Apply Now** 会再次同步，
-仅向当前用户所有、精确匹配 `codex … app-server` 和 `codex-code-mode-host` 的进程发送 `SIGTERM`，并
-短暂验证旧进程 ID 已退出。它不会使用宽泛的 `pkill`，不会重启 CodexCommander 代理，也不会关闭菜单栏
-应用。Codex 会在下一个任务中创建新的后台主机并载入当前列表。
+选择 **Show restart steps…**，完全退出 ChatGPT，重新打开后再开始新任务。这是替换旧工作器时推荐且
+最可预测的方式。CodexCommander 和菜单栏应用在此期间会继续运行。
 
-当前配套应用不包含 **Apply when idle**。如果回答仍在进行，请选择 **Later**，并在准备好后应用更新；
-卡片会继续保留。新 task 或 fork 不会让同一个旧主机重新加载 catalog；可靠的手动边界是退出并重新打开 Codex Desktop。高级 CLI 回退命令如下：
+在同一个旧后台主机中启动新 task 或 fork 并不是 catalog 重新加载边界，因此卡片会一直保留，直到
+状态检查发现工作器已是最新。如果仪表盘显示 catalog 为 pending 或 unknown，或者受管理路由尚未注入，
+请先在那里选择**应用到 Codex**，让它协调并验证这些文件；仅退出 ChatGPT 并不能完成这项修复。
+
+对于 catalog 已经协调、只有工作器过时的情况，仪表盘/API 的**强制重启工作器**操作和 CLI
+仍是高级备用方案。它们会再次同步，使用目标修订围栏，只向当前用户所有、精确匹配
+`codex … app-server` 和 `codex-code-mode-host` 的进程发送信号，并且绝不会升级为宽泛的 `pkill`。
+由于这会绕过 ChatGPT 的正常应用生命周期，ChatGPT 可能显示 **stopped unexpectedly**。CLI 形式为：
 
 ```bash
 ccx sync --restart-codex
@@ -141,8 +144,8 @@ open dist/macos/CodexCommander.app
   服务状态作为回退措施。
 - **停止、Codex 更新或冷启动后只显示原生模型** — 重新打开 CodexCommander。启动时会自动同步目录；即使
   提供商发现暂时为空，CodexCommander 也会从受保护的最近正常目录中恢复仍在配置中的路由模型。如果
-  **Agent catalog update ready** 仍然显示，请选择 **Apply agent catalog…**，或使用
-  [智能体目录更新](#智能体目录更新)中的 CLI 回退命令。
+  **Restart ChatGPT to load models** 仍然显示，请退出并重新打开 ChatGPT，然后开始新任务。只有在手动
+  重启不合适时，才使用[智能体目录更新](#智能体目录更新)中的高级仪表盘/API 或 CLI 备用方案。
 
 ## 卸载
 

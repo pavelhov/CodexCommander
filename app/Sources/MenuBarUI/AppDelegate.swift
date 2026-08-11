@@ -530,9 +530,32 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         }
     }
 
-    /// Refreshes activity immediately before confirmation, then invokes the fixed
-    /// catalog helper. A missing activity response is presented as unknown, never idle.
+    /// Manual ChatGPT restart is the reliable catalog reload boundary. Keep the
+    /// menu action informational; guarded worker-only interruption remains an
+    /// advanced dashboard/CLI fallback.
     private func applyCodexCatalog() {
+        guard catalogUpdateReady,
+              !catalogActionInFlight,
+              !lifecycleInFlight,
+              !restartInFlight
+        else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Restart ChatGPT to load the agent catalog"
+        alert.informativeText = "Quit ChatGPT completely, reopen it, then start a new task. CodexCommander will keep running. After ChatGPT reopens, return here and check the catalog status."
+        alert.addButton(withTitle: "Check status")
+        alert.addButton(withTitle: "Close")
+        panel.isPresentingModal = true
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        panel.isPresentingModal = false
+        if panel.isShown { panel.makeKeyAndOrderFront(nil) }
+        if response == .alertFirstButtonReturn {
+            recheckCodexCatalog()
+        }
+    }
+
+    private func recheckCodexCatalog() {
         guard catalogUpdateReady,
               !catalogActionInFlight,
               !lifecycleInFlight,
@@ -543,82 +566,31 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         updateApplicationMenu()
         controller.setLifecycleControlsEnabled(false)
         controller.setCatalogApplyEnabled(false)
+        controller.showResult("Checking agent catalog…", isError: false)
 
-        Task { [actions, client, coordinator] in
-            let activity: CatalogUpdateActivity
-            if let client {
-                do {
-                    activity = CatalogUpdateActivity(snapshot: try await client.activity())
-                } catch {
-                    activity = .unknown
-                }
-            } else {
-                activity = .unknown
-            }
-
-            let choice = await MainActor.run { [weak self] in
-                self?.confirmCatalogUpdate(activity: activity) ?? .later
-            }
-            guard choice == .applyNow else {
-                await MainActor.run { [weak self] in
-                    guard let self else { return }
-                    self.catalogActionInFlight = false
-                    self.updateApplicationMenu()
-                    self.controller.setLifecycleControlsEnabled(true)
-                    self.refreshCatalogApplyAvailability()
-                }
-                return
-            }
-
-            await MainActor.run { [weak self] in
-                self?.controller.showResult("Applying agent catalog…", isError: false)
-            }
-            let outcome = await actions?.applyCodexCatalog()
-                ?? .failed("Catalog lifecycle control is unavailable.")
+        Task { [actions, coordinator] in
+            let outcome = await actions?.ensure()
+                ?? .failed("Catalog status is unavailable.")
             await coordinator?.forceRefresh()
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.catalogActionInFlight = false
                 self.updateApplicationMenu()
                 switch outcome {
-                case .applied(let summary):
+                case .running:
                     self.clearCatalogUpdate()
-                    if summary.stoppedWorkerCount == 0 {
-                        let message = summary.catalogUpdated
-                            ? "Agent catalog updated. No Codex background worker restart was needed."
-                            : "Agent catalog is already current."
-                        self.controller.showResult(message, isError: false)
-                    } else {
-                        let workers = summary.stoppedWorkerCount == 1
-                            ? "1 stale Codex background worker"
-                            : "\(summary.stoppedWorkerCount) stale Codex background workers"
-                        let pronoun = summary.stoppedWorkerCount == 1 ? "it" : "them"
-                        let applied = summary.catalogUpdated
-                            ? "Agent catalog updated."
-                            : "Agent catalog applied."
-                        self.controller.showResult(
-                            "\(applied) Stopped \(workers); Codex will recreate \(pronoun) when needed.",
-                            isError: false
-                        )
-                    }
-                case .incomplete(let message, let stopped, let surviving):
-                    self.presentCatalogUpdate(staleWorkerCount: surviving > 0 ? surviving : nil)
-                    if surviving > 0 {
-                        let stoppedText: String
-                        if stopped == 1 {
-                            stoppedText = " One stale worker stopped."
-                        } else if stopped > 1 {
-                            stoppedText = " \(stopped) stale workers stopped."
-                        } else {
-                            stoppedText = ""
-                        }
-                        self.controller.showResult(
-                            "Agent catalog updated, but \(surviving) Codex background worker\(surviving == 1 ? " is" : "s are") still running.\(stoppedText)",
-                            isError: true
-                        )
-                    } else {
-                        self.controller.showResult(message, isError: true)
-                    }
+                    self.controller.showResult(
+                        "No stale ChatGPT worker is detected. Start a new task after ChatGPT reopens.",
+                        isError: false
+                    )
+                case .catalogUpdateReady(let count):
+                    self.presentCatalogUpdate(staleWorkerCount: count)
+                    self.controller.showResult(
+                        "ChatGPT is still using the previous agent catalog. Quit it completely, reopen it, then check again.",
+                        isError: false
+                    )
+                case .stopped:
+                    self.controller.showResult("CodexCommander is not running.", isError: true)
                 case .failed(let message):
                     self.controller.showResult(message, isError: true)
                 }

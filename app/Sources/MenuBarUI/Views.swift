@@ -36,7 +36,7 @@ func makeSeparator() -> NSView {
 /// hold an older in-memory model roster.
 public final class CatalogUpdateView: NSView {
     private let title = makeLabel(
-        "Agent catalog update ready",
+        "Restart ChatGPT to load models",
         font: Theme.label,
         color: Theme.amber
     )
@@ -58,10 +58,10 @@ public final class CatalogUpdateView: NSView {
         layer?.borderWidth = 1
         layer?.borderColor = Theme.amber.withAlphaComponent(0.32).cgColor
 
-        applyButton.title = "Apply agent catalog…"
+        applyButton.title = "Show restart steps…"
         applyButton.image = NSImage(
-            systemSymbolName: "arrow.triangle.2.circlepath",
-            accessibilityDescription: "Apply agent catalog update"
+            systemSymbolName: "info.circle",
+            accessibilityDescription: "Show ChatGPT restart steps and check status"
         )
         applyButton.imagePosition = .imageLeading
         applyButton.bezelStyle = .recessed
@@ -72,7 +72,7 @@ public final class CatalogUpdateView: NSView {
         applyButton.target = self
         applyButton.action = #selector(applyTapped)
         applyButton.setAccessibilityLabel(
-            "Apply the agent catalog update by restarting only Codex background workers"
+            "Show how to restart ChatGPT and check the saved agent catalog status"
         )
 
         let column = NSStackView(views: [title, detail, applyButton])
@@ -110,8 +110,8 @@ public final class CatalogUpdateView: NSView {
         default:
             workerText = "Codex background workers are using an older model roster."
         }
-        detail.stringValue = "\(workerText) Applying the update restarts only those workers and may interrupt active answers. CodexCommander remains running."
-        setAccessibilityLabel("Agent catalog update ready. \(detail.stringValue)")
+        detail.stringValue = "\(workerText) Quit and reopen ChatGPT, then start a new task. CodexCommander remains running."
+        setAccessibilityLabel("ChatGPT restart required. \(detail.stringValue)")
         isHidden = false
     }
 

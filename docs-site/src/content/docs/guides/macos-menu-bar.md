@@ -67,10 +67,10 @@ override it.
   repair is available; the panel does not make a raw CLI command the primary action.
 - **Manage** — opens the selected provider's Accounts or API Keys tab. OAuth, API-key entry,
   reauthentication, account switching, and provider configuration stay in the dashboard.
-- **Agent catalog update ready** — a persistent, nonfatal card shown when running Codex background
+- **Restart ChatGPT to load models** — a persistent, nonfatal card shown when running Codex background
   workers still hold an older model roster. The CodexCommander proxy remains healthy and running.
-- **Apply agent catalog…** — opens a confirmation that reports fresh request activity when
-  available, warns that applying may interrupt an answer, and offers **Apply Now** or **Later**.
+- **Show restart steps…** — explains the recommended reload boundary: quit ChatGPT completely, reopen
+  it, and then start a new task. The menu app does not force-restart background workers from this card.
 - **Stop Proxy…** — always asks for confirmation, interrupts active client and sub-agent requests,
   restores native Codex, and leaves the menu app open.
 - **Restart Proxy…** — always asks for confirmation, lets the proxy drain active requests for up to 60
@@ -100,21 +100,22 @@ missing optional crash recovery does not turn a healthy running app into an alar
 Opening the app automatically synchronizes the Codex model catalog with the providers currently
 configured in CodexCommander. If no Codex worker is running, the new roster is ready for the next Codex
 task. If a long-lived worker loaded an older roster, CodexCommander stays running and the panel keeps the
-nonfatal **Agent catalog update ready** card visible.
+nonfatal **Restart ChatGPT to load models** card visible.
 
-Choose **Apply agent catalog…** to review the interruption risk. The confirmation requests a fresh
-active-request count when possible, but zero active requests is not presented as proof that Codex is
-idle: another request can begin before the action runs. **Apply Now** synchronizes once more, sends
-`SIGTERM` only to exact current-user `codex … app-server` and `codex-code-mode-host` process matches,
-and briefly verifies that the old process IDs exited. It is revision-fenced so a changed roster cannot
-be applied accidentally, and it will not signal an unknown worker identity. It never uses a broad
-`pkill`, restarts the CodexCommander proxy, or closes the menu app. Codex creates a fresh background
-host on the next task and loads the current roster.
+Choose **Show restart steps…**, quit ChatGPT completely, reopen it, and then start a new task. This is
+the recommended and most predictable way to replace the old worker. CodexCommander and the menu app
+remain running throughout.
 
-The current companion does not include **Apply when idle**. If an answer is active, choose **Later** and apply
-the update when you are ready; the card remains available. A new task or fork inside the same old
-background host is not a catalog-reload boundary. Quitting and reopening Codex Desktop is the reliable
-manual worker-replacement boundary. The advanced CLI fallback is:
+A new task or fork inside the same old background host is not a catalog-reload boundary. The menu card
+therefore stays available until status observes a current worker. If the dashboard instead reports a
+pending or unknown catalog, or says managed routing is not injected, choose **Apply to Codex** there so
+it can reconcile and prove those files first; quitting ChatGPT alone is not that repair.
+
+For an already-converged stale worker, the dashboard/API **Force-restart workers** action and the CLI
+remain advanced fallbacks. They re-synchronize, use a desired-revision fence, signal only exact
+current-user `codex … app-server` and `codex-code-mode-host` matches, and never escalate to a broad
+`pkill`. Because they bypass ChatGPT's normal app lifecycle, ChatGPT may show **stopped unexpectedly**.
+The CLI form is:
 
 ```bash
 ccx sync --restart-codex
@@ -202,9 +203,10 @@ making a final distributable bundle.
   kills a process or rewrites service state as a fallback.
 - **Only native models appear after a stop, a Codex update, or a cold start** — reopen CodexCommander. Launch
   automatically synchronizes the catalog and restores still-configured routed models from its
-  protected last-known-good catalog when live provider discovery is temporarily empty. If **Agent
-  catalog update ready** remains visible, choose **Apply agent catalog…**, or use the CLI fallback in
-  [Agent catalog updates](#agent-catalog-updates).
+  protected last-known-good catalog when live provider discovery is temporarily empty. If **Restart
+  ChatGPT to load models** remains visible, quit and reopen ChatGPT, then start a new task. Use the
+  advanced dashboard/API or CLI fallback in [Agent catalog updates](#agent-catalog-updates) only if
+  manual restart is unsuitable.
 
 ## Uninstall
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -141,12 +141,17 @@ describe("Codex catalog activation state", () => {
     expect(codexCatalogDesiredRevision(left)).not.toBe(beforeBootChange);
   });
 
-  test("the activation fence includes native Codex boot-config changes", () => {
+  test("the activation fence ignores desktop config churn but includes boot changes", () => {
     const catalogPath = join(codexHome, "codexcommander-catalog.json");
     const configPath = join(codexHome, "config.toml");
     utimesSync(catalogPath, 100, 100);
     utimesSync(configPath, 200, 200);
     expect(codexCatalogActivationFenceMtimeMs()).toBe(200_000);
+    writeFileSync(configPath, `${readFileSync(configPath, "utf8")}\n[marketplaces.fixture]\nlast_updated = 1\n`);
+    utimesSync(configPath, 300, 300);
+    expect(codexCatalogActivationFenceMtimeMs()).toBe(200_000);
+    writeFileSync(configPath, 'openai_base_url = "http://127.0.0.1:20200/v1"\n');
+    expect(codexCatalogActivationFenceMtimeMs()).toBeGreaterThan(200_000);
   });
 
   test("catalog status detects saved roster order that is not reflected on disk", () => {

@@ -97,7 +97,14 @@ CodexCommander 会安全失败，而不是转发空任务或不可读任务：
   - **Agent Library** 搜索当前模型目录，并按事实能力进行筛选，例如推理、长上下文、视觉和工具支持。路由可用时，五个槽位 roster 之外的条目仍可通过精确 id 指定。
   - **Run Policy** 暂存代理协议、V2 消息传递、首选指导模型和 effort、已生成子任务的全局回退链、健康复查间隔、线程限制、子代理 effort 上限、名单指导，以及原生 Codex 默认值同步。策略变更与 roster 变更分开保存。
 
-将 **线程上限** 留空可恢复 Codex 默认值。V2 计算包含根代理的总线程数，V1 计算子线程数。协议或上限变更会更新 boot config；对于运行中的 worker，先 Apply，再启动新 task。指导和回退适用于之后生成的子任务。仅更改 V2 传递时只需新 task，不会弄脏 catalog。
+将 **线程上限** 留空可恢复 Codex 默认值。V2 计算包含根代理的总线程数，V1 计算子线程数。
+协议或上限变更会更新 boot config；保存后请检查激活状态。如果磁盘 catalog 和受管理路由已经是
+最新，而只有运行中工作器过时，请完全退出 ChatGPT，重新打开后再开始新任务。这是推荐且最可靠的
+路径。如果 catalog 为 pending 或 unknown，或者路由尚未注入，请先使用**应用到 Codex**；仅重启
+ChatGPT 并不足够。外部或未知路由仍会被阻止，关闭的集成仍保持关闭。受保护的
+**强制重启工作器**、`/api/codex-catalog/apply` 和 `ccx sync --restart-codex` 是高级备用方案；
+它们可能会让 ChatGPT 显示 **“stopped unexpectedly”**。指导和回退适用于之后生成的子任务。仅更改
+V2 传递时只需新任务，不会弄脏 catalog。
 
 ### CLI
 
@@ -135,7 +142,7 @@ ccx agent effort set --subagent max
 | `/api/subagent-models` | 最多五个模型的有序 roster |
 | `/api/subagent-model-fallback` | 全局 fallback 顺序和轮询间隔 |
 | `/api/codex-catalog/status` | 已保存配置、磁盘 catalog 与运行中 worker 的激活状态 |
-| `/api/codex-catalog/apply` | 经确认后将 catalog 显式应用到过时 worker；仅限通过确认的 `ccx gui` 或菜单栏应用启动后的浏览器调用 |
+| `/api/codex-catalog/apply` | 协调 pending catalog 或尚未注入的受管理路由，然后在需要时经中断确认，只强制重启已验证的过期工作器。当二者已是 current、只有工作器过期时，它属于高级备用方案，且可能让 ChatGPT 显示 **“stopped unexpectedly”**；浏览器调用仅限通过确认的 `ccx gui` 或菜单栏应用启动后使用。 |
 
 例如：
 
@@ -165,11 +172,20 @@ curl -X PUT http://localhost:10100/api/injection-model \
 
 ### 选择 V2 后 Luna 会立刻可用吗？
 
-不会。强制 V2 会让 Luna 在 V2 界面中具备资格，但不会让正在运行的 worker 重新加载 catalog。模型还必须被选中、可在 picker 中显示、位于五个广告模型窗口内、写入磁盘 catalog、被当前 app-server 加载，并能由 proxy 实际路由。新 task 或 fork 不是重新加载边界。对于过时 worker，请使用 **Apply agent catalog**，或退出并重新打开 Codex Desktop。
+不会。强制 V2 会让 Luna 在 V2 界面中具备资格，但不会让正在运行的 worker 重新加载 catalog。
+模型还必须被选中、可在 picker 中显示、位于五个广告模型窗口内、写入磁盘 catalog、被当前
+app-server 加载，并能由 proxy 实际路由。新 task 或 fork 不是重新加载边界。如果磁盘 catalog 和
+路由已经是最新，而只有工作器过时，请完全退出 ChatGPT，重新打开后再开始新任务。如果 catalog
+为 pending/unknown 或路由尚未注入，请先选择**应用到 Codex**；仅手动重启并不足够。
 
 ### 模式更改会影响正在运行的会话吗？
 
-不会。更改模式后请启动一个新的 Codex 会话。如果长时间运行的 App host 仍然显示旧的目录状态，请运行 `ccx sync` 并重启那个 Codex 界面。
+不会。更改模式后请启动一个新的 Codex 会话，但这不会让旧 App host 重新读取 catalog。保存和
+`ccx sync` 都不会中断工作。当磁盘 catalog 和路由已经是最新时，请完全退出 ChatGPT，重新打开后
+再开始新任务，以替换过期工作器。如果 catalog 为 pending/unknown，或受管理路由尚未注入，请先使用
+**应用到 Codex**；重启本身不会完成这项工作。外部或未知路由保持不变，关闭的集成也仍保持关闭。
+强制重启已验证的过期后台工作器仍是高级备用方案，并可能让 ChatGPT 显示
+**“stopped unexpectedly”**。
 
 ### 推理强度
 

@@ -30,6 +30,8 @@ let activation: Record<string, unknown> | undefined;
 let saveResponseOverride: Record<string, unknown> | undefined;
 let activityResponse: Response | null = null;
 let failRosterReads = false;
+let holdRosterReads: Promise<void> | null = null;
+let releaseRosterReads: (() => void) | null = null;
 let caseSequence = 0;
 let apiBase = "";
 
@@ -61,6 +63,8 @@ beforeEach(() => {
   saveResponseOverride = undefined;
   activityResponse = null;
   failRosterReads = false;
+  holdRosterReads = null;
+  releaseRosterReads = null;
   apiBase = `/classic-${++caseSequence}`;
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
@@ -87,6 +91,7 @@ beforeEach(() => {
           });
         }
         if (failRosterReads) return Response.json({ error: "refresh failed" }, { status: 503 });
+        if (holdRosterReads) await holdRosterReads;
         return Response.json({ available, chosen, advertised, excluded, catalogState, activation });
       }
       if (path.endsWith("/api/agent-activity")) {
@@ -349,7 +354,7 @@ test("explains that unowned or unknown routing files are preserved", async () =>
   expect(container.textContent).not.toContain("catalog could not be refreshed cleanly");
 });
 
-test("offers guarded Apply for a stale worker catalog and never treats a new task as a reload", async () => {
+test("makes manual ChatGPT restart primary and keeps guarded worker restart as an advanced fallback", async () => {
   activation = {
     schemaVersion: 1,
     desired: { revision: "revision-1", chosen: [], protocol: "v2" },
@@ -360,12 +365,15 @@ test("offers guarded Apply for a stale worker catalog and never treats a new tas
   };
   await mount();
 
-  expect(container.textContent).toContain("Apply needed");
-  expect(container.textContent).toContain("A new task alone does not reload");
+  expect(container.textContent).toContain("Restart ChatGPT");
+  expect(container.textContent).toContain("Quit ChatGPT completely");
+  expect(container.textContent).toContain("most reliable way to load the roster");
+  expect(requests.some(request => request.url.endsWith("/api/agent-activity"))).toBe(false);
   const applyButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
-    .find(button => button.textContent?.trim() === "Apply to Codex")!;
+    .find(button => button.textContent?.trim() === "Force-restart workers")!;
   await act(async () => { applyButton.click(); });
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(requests.some(request => request.url.endsWith("/api/agent-activity"))).toBe(true);
   expect(container.querySelector('[role="alertdialog"]')?.textContent).toContain("No active proxy work was detected");
 
   const confirm = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button'))
@@ -397,7 +405,7 @@ test("offers Apply to reconcile a pending catalog before any worker interruption
   expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent?.trim() === "Apply to Codex")).toBe(true);
 });
 
-test("manual dashboard stays read-only for Apply and names the confirmed launch paths", async () => {
+test("manual dashboard still gives reliable restart guidance while force restart stays launcher-gated", async () => {
   setConfirmedGuiLaunchForTests(false);
   activation = {
     schemaVersion: 1,
@@ -409,10 +417,146 @@ test("manual dashboard stays read-only for Apply and names the confirmed launch 
   };
   await mount();
 
-  expect(container.textContent).toContain("read-only for Apply");
-  expect(container.textContent).toContain("ccx gui");
-  expect(container.textContent).toContain("menu bar app");
+  expect(container.textContent).toContain("Restart ChatGPT");
+  expect(container.textContent).toContain("Quit ChatGPT completely");
+  expect(container.textContent).toContain("This dashboard is read-only for Apply");
+  expect(container.textContent).toContain("Open it with `ccx gui`");
+  expect(container.textContent).not.toContain("Force-restart workers");
   expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent?.trim() === "Apply to Codex")).toBe(false);
+});
+
+test("confirmed-launch-required keeps Apply read-only even outside the manual-restart branch", async () => {
+  setConfirmedGuiLaunchForTests(false);
+  activation = {
+    schemaVersion: 1,
+    desired: { revision: "revision-1", chosen: [], protocol: "v2" },
+    catalog: { status: "current", advertised: [], excluded: [] },
+    routing: { status: "not_injected", kind: "native" },
+    workers: { status: "not_running", runningCount: 0, staleCount: 0 },
+    apply: { required: true, allowed: false, reason: "confirmed-launch-required" },
+  };
+  await mount();
+
+  expect(container.textContent).toContain("This dashboard is read-only for Apply");
+  expect(container.textContent).toContain("Open it with `ccx gui`");
+  expect(container.textContent).not.toContain("Force-restart workers");
+  expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent?.trim() === "Apply to Codex")).toBe(false);
+});
+
+test("polls the command center on the surface poll interval", async () => {
+  const priorSetInterval = Object.getOwnPropertyDescriptor(globalThis, "setInterval");
+  const priorClearInterval = Object.getOwnPropertyDescriptor(globalThis, "clearInterval");
+  const polls: Array<{ handler: () => void; ms: number }> = [];
+  const recordPoll = (handler: () => void, ms?: number, ..._args: unknown[]) => {
+    polls.push({ handler, ms: typeof ms === "number" ? ms : 0 });
+    return polls.length;
+  };
+  Object.defineProperty(globalThis, "setInterval", { configurable: true, value: recordPoll });
+  Object.defineProperty(globalThis, "clearInterval", { configurable: true, value: () => {} });
+  try {
+    await mount();
+
+    const surfacePoll = polls.find(poll => poll.ms === 5000);
+    expect(surfacePoll).toBeDefined();
+
+    const readsBefore = requests.filter(request => request.url.endsWith("/api/subagent-models") && !request.init?.method).length;
+    await act(async () => {
+      surfacePoll!.handler();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    const readsAfter = requests.filter(request => request.url.endsWith("/api/subagent-models") && !request.init?.method).length;
+    expect(readsAfter).toBeGreaterThan(readsBefore);
+  } finally {
+    if (priorSetInterval) Object.defineProperty(globalThis, "setInterval", priorSetInterval);
+    if (priorClearInterval) Object.defineProperty(globalThis, "clearInterval", priorClearInterval);
+  }
+});
+
+test("polled revalidation never clobbers unsaved roster edits", async () => {
+  const priorSetInterval = Object.getOwnPropertyDescriptor(globalThis, "setInterval");
+  const priorClearInterval = Object.getOwnPropertyDescriptor(globalThis, "clearInterval");
+  const polls: Array<{ handler: () => void; ms: number }> = [];
+  const recordPoll = (handler: () => void, ms?: number, ..._args: unknown[]) => {
+    polls.push({ handler, ms: typeof ms === "number" ? ms : 0 });
+    return polls.length;
+  };
+  Object.defineProperty(globalThis, "setInterval", { configurable: true, value: recordPoll });
+  Object.defineProperty(globalThis, "clearInterval", { configurable: true, value: () => {} });
+  try {
+    await mount();
+    const surfacePoll = polls.find(poll => poll.ms === 5000);
+    expect(surfacePoll).toBeDefined();
+
+    // User toggles a model but does not save; the server still reports the old roster.
+    await act(async () => { addToggle("a-1").click(); });
+    expect(removeButtons().length).toBe(1);
+
+    await act(async () => {
+      surfacePoll!.handler();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+
+    // The unsaved selection survives the polled revalidation.
+    expect(removeButtons().length).toBe(1);
+    expect(Array.from(container.querySelectorAll(".swi-roster-name")).map(node => node.textContent?.trim())).toEqual(["a-1"]);
+  } finally {
+    if (priorSetInterval) Object.defineProperty(globalThis, "setInterval", priorSetInterval);
+    if (priorClearInterval) Object.defineProperty(globalThis, "clearInterval", priorClearInterval);
+  }
+});
+
+test("seeded stale activation never paints an actionable banner before the first live fetch resolves", async () => {
+  const seed = {
+    available,
+    chosen: [],
+    advertised,
+    excluded,
+    models: modelRows,
+    catalogState: { state: "stale", processes: [{ pid: 1001, startedAtMs: 1 }] },
+    activation: {
+      desiredRevision: "revision-1",
+      reloadRequired: true,
+      applyAllowed: false,
+      workerState: "reload_required",
+      catalogStatus: "current",
+      applyReason: "confirmed-launch-required",
+      routingStatus: "current",
+      routingKind: "codexcommander-local",
+      protocol: "v2",
+      advertised: [],
+      excluded: [],
+    },
+    metadataLimited: false,
+  };
+  testWindow.sessionStorage.setItem(`ccx.subagents.v2:${apiBase}`, JSON.stringify(seed));
+
+  holdRosterReads = new Promise<void>(resolve => { releaseRosterReads = resolve; });
+  await mount();
+
+  // While the live revalidation is in flight the seed must not paint stale action banners.
+  expect(container.textContent).not.toContain("Restart ChatGPT");
+  expect(container.textContent).not.toContain("Quit ChatGPT completely");
+  expect(container.textContent).not.toContain("Force-restart workers");
+  expect(container.textContent).not.toContain("Apply to Codex");
+  expect(container.textContent).not.toContain("This dashboard is read-only for Apply");
+
+  // Live state says everything is current; after the fetch resolves the banner updates.
+  activation = {
+    schemaVersion: 1,
+    desired: { revision: "revision-1", chosen: [], protocol: "v2" },
+    catalog: { status: "current", advertised: [], excluded: [] },
+    routing: { status: "current", kind: "codexcommander-local" },
+    workers: { status: "current", runningCount: 1, staleCount: 0 },
+    apply: { required: false, allowed: false, reason: "already-current" },
+  };
+  releaseRosterReads!();
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+
+  expect(container.textContent).toContain("Codex workers current");
+  expect(container.textContent).not.toContain("Quit ChatGPT completely");
+  expect(container.textContent).not.toContain("Force-restart workers");
 });
 
 test("an omitted Apply permission never enables process interruption", async () => {
@@ -425,7 +569,8 @@ test("an omitted Apply permission never enables process interruption", async () 
   };
   await mount();
 
-  expect(container.textContent).toContain("Apply unavailable");
+  expect(container.textContent).toContain("Restart ChatGPT");
+  expect(container.textContent).not.toContain("Force-restart workers");
   expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent?.trim() === "Apply to Codex")).toBe(false);
 });
 
@@ -439,7 +584,8 @@ test("a malformed Apply permission remains unavailable", async () => {
   };
   await mount();
 
-  expect(container.textContent).toContain("Apply unavailable");
+  expect(container.textContent).toContain("Restart ChatGPT");
+  expect(container.textContent).not.toContain("Force-restart workers");
   expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent?.trim() === "Apply to Codex")).toBe(false);
 });
 
@@ -542,8 +688,8 @@ test("keeps the mutation response authoritative when follow-up roster refresh fa
     await new Promise(resolve => setTimeout(resolve, 0));
   });
 
-  expect(container.textContent).toContain("Apply needed");
-  expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent?.trim() === "Apply to Codex")).toBe(true);
+  expect(container.textContent).toContain("Restart ChatGPT");
+  expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent?.trim() === "Force-restart workers")).toBe(true);
 });
 
 test("confirmation starts on Cancel, restores focus, and Escape closes safely", async () => {
@@ -556,7 +702,7 @@ test("confirmation starts on Cancel, restores focus, and Escape closes safely", 
   };
   await mount();
   const trigger = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
-    .find(button => button.textContent?.trim() === "Apply to Codex")!;
+    .find(button => button.textContent?.trim() === "Force-restart workers")!;
   trigger.focus();
   await act(async () => {
     trigger.click();

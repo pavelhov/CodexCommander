@@ -102,19 +102,30 @@ CodexCommander saves the desired configuration and converges its deterministic c
 does not terminate Codex while you are working. The **Agent Command Center** then shows whether the
 current Codex app-server has actually loaded that catalog.
 
-If it has not, choose **Apply agent catalog**. The confirmation explains that selected, verified stale
-workers will be replaced and that their active task can be interrupted. Active-work count is useful
-warning context, not an idle guarantee; an unknown worker identity blocks the action rather than
-guessing. Apply does not restart the proxy, kill unrelated processes, queue itself for idle time, or
-save a separate pending-update record. **Later** simply leaves the evidence visible.
+When the catalog and managed routing are already current and only the running worker is stale, the
+recommended action is to quit ChatGPT completely, reopen it, and then start a new task. The dashboard
+keeps the saved state visible and offers **Check status** after you return.
+
+Do not use restart guidance as a substitute for reconciliation. If the status says the catalog is
+pending or unknown, or CodexCommander routing is not injected, choose **Apply to Codex** first. That
+guarded action synchronizes and proves the catalog and managed routing before it considers interrupting
+a verified stale worker. External or unknown routing stays blocked so CodexCommander does not overwrite
+configuration it does not own.
+
+For an already-converged stale worker, **Force-restart workers** remains an advanced fallback in a
+dashboard opened through `ccx gui` or the macOS menu app. It checks recent activity, asks for explicit
+confirmation, and signals only verified Codex workers. Active-work count is warning context, not an idle
+guarantee; an unknown worker identity blocks the action rather than guessing. It does not restart the
+proxy, kill unrelated processes, queue itself for idle time, or save a separate pending-update record.
+Because this bypasses ChatGPT's normal app lifecycle, ChatGPT may show **stopped unexpectedly**.
 
 If a manually opened loopback dashboard lacks a confirmed session, or its session expired, reopen it
 with `ccx gui` or from the macOS menu app. Never paste the raw admin token into a loopback page; their
 one-time browser launch restores API access without exposing it.
 
-A new task or fork within the same Codex Desktop worker does not reload its model catalog. The
-reliable manual alternative is to quit and reopen Codex Desktop, which replaces that app-server.
-For advanced automation, `ccx sync --restart-codex` remains available.
+A new task or fork within the same ChatGPT worker does not reload its model catalog. Quit and reopen
+ChatGPT first, then start the new task. For advanced automation, `ccx sync --restart-codex` remains
+available with the same worker-interruption caveat as the dashboard fallback.
 
 ## Delegation picker vs spawn routing
 
@@ -210,7 +221,7 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | `POST /api/startup-action` | Install the background service or Codex launcher shim through fixed, allowlisted actions. |
 | `GET` / `POST /api/windows-tray` | Read or change the Windows tray installation and visible-process state. POST accepts `install`, `start`, `stop`, or `uninstall`. |
 | `POST /api/sync` | Rebuild the shared model catalog and stale the Codex model cache without interrupting workers. |
-| `GET /api/codex-catalog/status` · `POST /api/codex-catalog/apply` | Read catalog activation evidence, then explicitly apply it to verified stale workers with a desired-revision fence and interruption confirmation. A browser GUI session also needs the one-time launch authorization described above. |
+| `GET /api/codex-catalog/status` · `POST /api/codex-catalog/apply` | Read catalog, routing, and worker activation evidence. The guarded Apply endpoint reconciles pending catalog or managed-routing state, then may force-restart only verified stale workers behind a desired-revision fence and explicit interruption confirmation. For an already-converged stale worker it is an advanced fallback that may make ChatGPT show **stopped unexpectedly**. A browser GUI session also needs the one-time launch authorization described above. |
 | `GET` / `PUT /api/sidecar-settings` | Read or set search/vision sidecar model settings. |
 | `GET` / `PUT /api/injection-model` | Read or set the shared sub-agent model/effort selection and the independent guidance/native-default switches. |
 | `GET` / `PUT /api/v2` | Read or set the surface mode, Codex feature flag, and v2 thread limit. |

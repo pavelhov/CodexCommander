@@ -196,7 +196,7 @@ runner.test("ui: footer exposes navigation, proxy lifecycle, and both exit contr
     )
 }
 
-runner.test("ui: catalog update is a persistent action outside the proxy footer") {
+runner.test("ui: catalog update presents manual ChatGPT restart outside the proxy footer") {
     let controller = PopoverViewController()
     _ = controller.view
     controller.apply(makeSnapshot())
@@ -206,7 +206,7 @@ runner.test("ui: catalog update is a persistent action outside the proxy footer"
     controller.onApplyCodexCatalog = { applied = true }
     controller.showCatalogUpdate(staleWorkerCount: 2)
     runner.equal(controller.catalogUpdateVisible, true)
-    runner.equal(controller.catalogUpdateButtonTitle, "Apply agent catalog…")
+    runner.equal(controller.catalogUpdateButtonTitle, "Show restart steps…")
     runner.expect(
         controller.catalogUpdateDetail.contains("2 Codex background workers"),
         "card reports a count without exposing process identifiers"
@@ -216,12 +216,16 @@ runner.test("ui: catalog update is a persistent action outside the proxy footer"
         "card distinguishes the catalog action from a proxy restart"
     )
     runner.expect(
-        controller.catalogUpdateAccessibilityLabel?.contains("Agent catalog update ready") == true,
+        controller.catalogUpdateDetail.contains("Quit and reopen ChatGPT"),
+        "card makes the reliable manual reload boundary primary"
+    )
+    runner.expect(
+        controller.catalogUpdateAccessibilityLabel?.contains("ChatGPT restart required") == true,
         "catalog card has an accessible state label"
     )
     runner.expect(
-        controller.catalogUpdateButtonAccessibilityLabel?.contains("restarting only Codex") == true,
-        "catalog action explains its narrow restart boundary"
+        controller.catalogUpdateButtonAccessibilityLabel?.contains("check the saved agent catalog status") == true,
+        "catalog action explains the manual restart and revalidation boundary"
     )
     controller.apply(makeSnapshot())
     runner.equal(

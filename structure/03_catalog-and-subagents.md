@@ -67,12 +67,16 @@ already-active last-known-good rows, and `native-only` means no CodexCommander-a
 active. `native-only` with an enabled routed-capable provider is an actionable sync warning, not a
 fully-ready result. The macOS lifecycle waits for startup readiness, retries convergence through the
 live management API, and automatically synchronizes the catalog on app launch. A worker roster that
-predates the committed catalog is a nonfatal, persistent **Agent catalog update ready** state; it does
-not make CodexCommander appear stopped or unhealthy. The confirmed **Apply agent catalog** action performs
-another sync, sends `SIGTERM` only to exact current-user `codex … app-server` and
-`codex-code-mode-host` matches, verifies the old workers' exits, and leaves the CodexCommander proxy and
-menu app running. The current companion does not promise idle deferral: activity is warning context, **Apply
-Now** is explicit consent to possible interruption, and **Later** leaves the update pending.
+predates the committed catalog is a nonfatal, persistent **Restart ChatGPT to load models** state; it
+does not make CodexCommander appear stopped or unhealthy. **Show restart steps…** explains the default
+reload boundary: quit ChatGPT completely, reopen it, and then start a new task. The companion does not
+signal ChatGPT's background workers from this card.
+
+Guarded Apply remains an advanced dashboard/API fallback. It performs another sync, reconciles managed
+routing when needed, sends `SIGTERM` only to exact current-user `codex … app-server` and
+`codex-code-mode-host` matches, verifies the old workers' exits, and leaves the CodexCommander proxy
+running. Activity is warning context rather than an idle guarantee. Because this bypasses ChatGPT's
+normal app lifecycle, ChatGPT may report that it **stopped unexpectedly**.
 
 The CLI remains the advanced fallback:
 
@@ -97,7 +101,8 @@ for dashboard convenience. The activation DTO is an observation, not a durable r
 persisted pending-update snapshot, auto-apply daemon, or idle queue. The retained routed-catalog
 snapshot above serves provider-discovery recovery and is unrelated to worker activation.
 
-`POST /api/codex-catalog/apply` is the sole browser Apply action. It accepts only
+`POST /api/codex-catalog/apply` is the sole browser Apply action and an advanced force-restart fallback.
+It accepts only
 `{ expectedDesiredRevision, confirmInterrupt: true }`, re-converges and proves the disk state, then
 may signal only revalidated exact current-user Codex worker identities. It never accepts a PID,
 command, or path from the caller. The expected desired revision fences configuration races;
@@ -120,12 +125,19 @@ their existing narrow non-browser flows.
 The desired revision is semantic rather than a filesystem timestamp. Catalog commits are idempotent:
 JSON-semantic equality ignores insignificant whitespace and object-key order while preserving array
 order, so equivalent catalog/cache artifacts are not rewritten merely to manufacture a newer mtime.
-Worker freshness uses the newer of the catalog and managed Codex boot-config mtimes, which makes the
-activation fence deterministic instead of an artifact of repeated dashboard polling.
+Worker freshness uses the newer of the catalog mtime and a content-scoped Codex boot fence. The boot
+fence hashes only parsed worker boot inputs and persists the time that hash last changed, so desktop-
+owned `config.toml` churn does not manufacture a reload requirement while real boot-setting edits do.
+The fence marker is seeded only for CodexCommander-managed homes (injected routing/catalog keys);
+a never-managed home is observed via raw mtime and never written.
 
-For an end user, quitting and reopening Codex Desktop is the reliable manual worker-replacement
-boundary. The companion and `ccx sync --restart-codex` remain compatible callers of the same narrow
-process-safety policy.
+When the catalog and managed routing are already current and only the running worker is stale, the
+recommended end-user boundary is to quit ChatGPT completely, reopen it, and start a new task. A new
+task or fork without that full app restart still reuses the old worker. A pending or unknown catalog,
+or managed routing that is not yet injected, is different: **Apply to Codex** must first reconcile and
+prove the disk/routing state; manual restart guidance must not replace that repair step. The guarded
+dashboard/API action and `ccx sync --restart-codex` remain advanced callers of the same narrow
+process-safety policy and may make ChatGPT show **stopped unexpectedly**.
 
 ## Entry shape
 

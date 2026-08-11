@@ -35,6 +35,7 @@ import {
   isMultiAgentV2Enabled,
 } from "./features";
 import { getCodexRoutingKind, type CodexRoutingKind } from "./inject";
+import { observeCodexBootFence } from "./boot-fence";
 
 export type CodexCatalogProtocol = "v1" | "default" | "v2";
 export type CodexCatalogArtifactProof = "current" | "drifted" | "unproven" | "not-required";
@@ -303,7 +304,8 @@ function activationFenceObservation(): {
 } {
   const catalogPath = readCodexCatalogPath();
   const configPath = activeCodexConfigPath();
-  const mtimes = [fileMtimeMs(catalogPath), fileMtimeMs(configPath)]
+  const bootFenceMtimeMs = observeCodexBootFence().mtimeMs;
+  const mtimes = [fileMtimeMs(catalogPath), bootFenceMtimeMs]
     .filter((value): value is number => value !== null && Number.isFinite(value));
   return {
     identity: `${catalogPath}\0${configPath}`,
