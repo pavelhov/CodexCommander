@@ -1,24 +1,21 @@
-import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
+import { attestLiveManagementProxy, findLiveProxy } from "../server/proxy-liveness";
 import { DEBUG_ENV, type DebugSettingsView } from "../lib/debug-settings";
 import { runningProxyUpdateHeaders } from "../oauth/login-cli";
 
 type DebugScope = "provider" | "usage" | "injection" | "claude";
 
-async function requireLiveProxy() {
-  const live = await findLiveProxy();
-  if (!live) {
-    console.error("Proxy is not running. Start it with: ccx start");
-    process.exit(1);
-  }
-  return live;
+async function fetchAttestedDebug(path: string, init: RequestInit = {}): Promise<Response> {
+  const target = await attestLiveManagementProxy();
+  if (!target) throw new Error("the live proxy could not be authenticated from its protected runtime record");
+  return fetch(`${target.baseUrl}${path}`, {
+    ...init,
+    headers: runningProxyUpdateHeaders(),
+  });
 }
 
 async function fetchDebugSettings(): Promise<DebugSettingsView> {
-  const live = await requireLiveProxy();
   try {
-    const res = await fetch(`http://${probeHostname(live.hostname)}:${live.port}/api/debug`, {
-      headers: runningProxyUpdateHeaders(),
-    });
+    const res = await fetchAttestedDebug("/api/debug");
     if (!res.ok) {
       console.error(`Failed to read debug settings (${res.status})`);
       process.exit(1);
@@ -31,10 +28,8 @@ async function fetchDebugSettings(): Promise<DebugSettingsView> {
 }
 
 async function putDebugSettings(body: Record<string, unknown>): Promise<DebugSettingsView> {
-  const live = await requireLiveProxy();
-  const res = await fetch(`http://${probeHostname(live.hostname)}:${live.port}/api/debug`, {
+  const res = await fetchAttestedDebug("/api/debug", {
     method: "PUT",
-    headers: runningProxyUpdateHeaders(),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -70,12 +65,9 @@ function envDebugEnabled(): boolean {
 }
 
 async function printProviderLogs(follow: boolean): Promise<void> {
-  const live = await requireLiveProxy();
-  const base = `http://${probeHostname(live.hostname)}:${live.port}/api/debug/logs`;
-
   let after = 0;
   try {
-    const res = await fetch(`${base}?limit=500`, { headers: runningProxyUpdateHeaders() });
+    const res = await fetchAttestedDebug("/api/debug/logs?limit=500");
     if (!res.ok) {
       console.error(`Failed to read debug logs (${res.status})`);
       process.exit(1);
@@ -93,7 +85,7 @@ async function printProviderLogs(follow: boolean): Promise<void> {
   while (true) {
     await new Promise(resolve => setTimeout(resolve, 1000));
     try {
-      const res = await fetch(`${base}?after=${after}&limit=500`, { headers: runningProxyUpdateHeaders() });
+      const res = await fetchAttestedDebug(`/api/debug/logs?after=${after}&limit=500`);
       if (!res.ok) continue;
       const entries = await res.json() as { seq: number; line: string }[];
       for (const entry of entries) console.log(entry.line);
@@ -105,12 +97,9 @@ async function printProviderLogs(follow: boolean): Promise<void> {
 }
 
 async function printUsageLogs(follow: boolean): Promise<void> {
-  const live = await requireLiveProxy();
-  const base = `http://${probeHostname(live.hostname)}:${live.port}/api/debug/usage-logs`;
-
   let after = 0;
   try {
-    const res = await fetch(`${base}?limit=500`, { headers: runningProxyUpdateHeaders() });
+    const res = await fetchAttestedDebug("/api/debug/usage-logs?limit=500");
     if (!res.ok) {
       console.error(`Failed to read usage debug logs (${res.status})`);
       process.exit(1);
@@ -129,7 +118,7 @@ async function printUsageLogs(follow: boolean): Promise<void> {
   while (true) {
     await new Promise(resolve => setTimeout(resolve, 1000));
     try {
-      const res = await fetch(`${base}?after=${after}&limit=500`, { headers: runningProxyUpdateHeaders() });
+      const res = await fetchAttestedDebug(`/api/debug/usage-logs?after=${after}&limit=500`);
       if (!res.ok) continue;
       const entries = await res.json() as { seq: number; line: string }[];
       for (const entry of entries) console.log(entry.line);

@@ -165,7 +165,7 @@ test("apply feedback renders as a fixed toast, not an inline notice before the w
   expect(toast).not.toBeNull();
   expect(toast!.className).toContain("notice-ok");
   expect(toast!.getAttribute("role")).toBe("status");
-  expect(toast!.textContent).toContain("Applied");
+  expect(toast!.textContent).toContain("Saved");
   // No inline notice sits in the flow before the workspace anymore.
   const workspace = container.querySelector<HTMLElement>(".models-workspace-root");
   expect(workspace?.previousElementSibling?.classList.contains("action-toast")).toBe(true);

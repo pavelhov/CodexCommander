@@ -69,6 +69,7 @@ import { handleOauthAccountRoutes } from "./management/oauth-account-routes";
 import { handleComboRoutes } from "./management/combo-routes";
 import { handleSystemRoutes } from "./management/system-routes";
 import { handleActivityRoutes } from "./management/activity-routes";
+import { handleCatalogActivationRoutes } from "./management/catalog-activation-routes";
 import { handleIntegrationRoutes } from "./management/integration-routes";
 import { handleOpencodeIntegrationRoutes } from "./management/opencode-integration-routes";
 import { handleNativeIntegrationRoutes } from "./management/native-integration-routes";
@@ -134,7 +135,9 @@ export async function handleManagementAPI(
       return jsonResponse({ error: "request body too large" }, 413, req, config);
     }
   }
-  async function convergeCodexCatalog(): Promise<CatalogDisposition> {
+  async function convergeCodexCatalog(
+    configOverride: Readonly<CodexCommanderConfig> = config,
+  ): Promise<CatalogDisposition> {
     let convergenceInvoked = false;
     let managementConvergeCodex: ConvergeCodex | undefined;
     try {
@@ -142,12 +145,12 @@ export async function handleManagementAPI(
         const factory = deps.createManagementConvergeCodex
           ?? (await import("../codex/management-convergence")).createManagementConvergeCodex;
         if (typeof factory !== "function") throw new TypeError("Catalog convergence factory is unavailable.");
-        let binding = managementConvergenceBindings.get(config);
+        let binding = managementConvergenceBindings.get(configOverride as object);
         if (!binding || binding.factory !== factory) {
-          const created = factory(config);
+          const created = factory(configOverride);
           if (typeof created !== "function") throw new TypeError("Catalog convergence factory returned no function.");
           binding = { factory, converge: created };
-          managementConvergenceBindings.set(config, binding);
+          managementConvergenceBindings.set(configOverride as object, binding);
         }
         managementConvergeCodex = binding.converge;
       }
@@ -160,7 +163,7 @@ export async function handleManagementAPI(
       const disposition = outcome.catalogRefresh;
       try {
         const { reconcileOpencodeIntegrationIfEnabled } = await import("./management/opencode-integration-routes");
-        await reconcileOpencodeIntegrationIfEnabled(config, Number(url.port) || config.port);
+        await reconcileOpencodeIntegrationIfEnabled(configOverride, Number(url.port) || configOverride.port);
       } catch {
         // Optional client integration: catalog/config mutations remain successful when OpenCode
         // is absent or its user-owned config needs attention.
@@ -216,6 +219,7 @@ export async function handleManagementAPI(
     ??     (await handleModelRoutes(ctx))
     ??     (await handleNativeIntegrationRoutes(ctx))
     ??     (await handleAgentSettingsRoutes(ctx))
+    ??     (await handleCatalogActivationRoutes(ctx))
     ??     (await handleOauthAccountRoutes(ctx))
     ??     (await handleComboRoutes(ctx))
     ??     (await handleActivityRoutes(ctx))

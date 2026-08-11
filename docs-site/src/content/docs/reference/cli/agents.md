@@ -41,8 +41,9 @@ ccx v2 threads 16
 
 The `mode` subcommand writes `multiAgentMode` to the CodexCommander config and resyncs the Codex catalog.
 Mode and flag transitions move the current numeric thread limit between the valid v1/v2 Codex keys;
-a failed transition restores the original `config.toml`. Changes apply to new Codex sessions, while
-running sessions keep their pinned surface.
+a failed transition restores the original `config.toml`. Mode, flag, and thread changes update managed
+boot configuration. To affect a running worker, use `ccx sync --restart-codex` (or dashboard **Apply
+agent catalog**) and then start a new task for its session-bound tool shape.
 
 ## Combo routing
 

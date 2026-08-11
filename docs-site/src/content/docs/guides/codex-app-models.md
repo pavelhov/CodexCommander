@@ -121,7 +121,7 @@ forces Codex's model cache stale after a toggle.
 
 ## Multi-agent surface mode
 
-The Models page labels the three collaboration choices **Classic v1**, **Follow Codex defaults** (the
+The Models page labels the three collaboration choices **Reliable v1**, **Codex native** (the
 base/upstream behavior), and **Concurrent v2**. This control changes which Codex collaboration surface each picker
 entry uses; see [Sub-agent Surface](/guides/sub-agent-surface/) for the canonical mode, delegation,
 inheritance, fallback, and encrypted-task behavior.

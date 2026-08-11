@@ -18,21 +18,23 @@ CodexCommander uses three mutually exclusive admission credential classes:
 | --- | --- | --- |
 | Data plane | `CODEXCOMMANDER_API_AUTH_TOKEN`, the `service-api-token` file loaded through `CCX_API_TOKEN_FILE`, and `config.apiKeys` | `/v1/*` HTTP endpoints and new data-plane WebSocket handshakes only |
 | Management plane | `CODEXCOMMANDER_ADMIN_AUTH_TOKEN` or the independent protected `admin-api-token` file | `/api/*` only |
-| GUI session | A short-lived token issued only with a legitimate same-origin local dashboard page | `/api/*` only, bound to the issuing origin |
+| GUI session | A confirmed local-app launch, process-memory-only and origin-bound | Full dashboard methods for up to eight hours; catalog Apply remains confirmed-session-only |
 
 The service token file remains a delivery mechanism for the data-plane environment token; it is not
 a fourth credential class. A management credential that equals any configured data-plane credential
 does not enable management access. The data plane may continue to start, but `/api/*` remains closed.
-CLI health collection follows the same boundary: `ccx status` and `ccx doctor` use the configured
-management credential for `/api/codex-auth/accounts`, never the service/data-plane token. Their
-output distinguishes a missing proxy, rejected management authentication, and an unexpected
-management response so a reachable `401` cannot be reported as "proxy not running."
+Before any TypeScript CLI management request can release a bearer or caller body, the client
+authenticates the exact protected runtime record. The same fence applies at the credential-bearing
+Claude and OpenCode launch boundaries. `ccx status` and `ccx doctor` account-health collection are examples:
+they use the configured management credential for `/api/codex-auth/accounts`, never the
+service/data-plane token, and distinguish a missing proxy, rejected authentication, and an
+unexpected response so a reachable `401` cannot be reported as "proxy not running."
 
-Before either CLI command attaches the management bearer, it challenges the listener and verifies
-an HMAC proof bound to the proxy PID and port. The per-process proof key lives only in the protected
-`runtime-port.json`; the public `/healthz` identity marker alone is never sufficient to receive a
-management credential. Account-health detail is available only through a listener with an attested
-runtime record.
+The client challenges the listener and verifies an HMAC proof bound to the proxy PID and port. The
+per-process proof key lives only in the protected `runtime-port.json`; neither the public `/healthz`
+identity marker nor configured-port discovery can authorize release of a management credential or
+sensitive request body. Account-health detail and client credentials reach only a listener with an
+attested exact runtime record.
 
 [Decision Log]
 - 목적과 의도: Keep a lower-privileged local process from collecting the management bearer by impersonating `/healthz` on an unused port.
@@ -47,12 +49,38 @@ management token creation, validation, or permission hardening fails, every `/ap
 503 while `/v1/*` and unauthenticated `/healthz` continue to operate. Windows ACL hardening results
 must be checked explicitly because an `icacls` timeout is a soft failure in the shared secret helper.
 
-Local dashboard page entry requires a loopback binding, a valid parseable loopback `Host`, and an
-exact request origin. A non-loopback dashboard uses the management token flow instead. The server
-issues an in-memory session for five minutes, capped at 128 live sessions. The session is bound to the
-exact protocol, host, and port; state-changing requests additionally require the session CSRF token.
-The dashboard never attaches its management session to `/v1/*` requests, and pages containing a
-session bootstrap are served with `Cache-Control: no-store`.
+Opening a local dashboard page directly does not mint an API credential. The static shell may load,
+but every `/api/*` request remains behind management authentication; a fresh `ccx gui`/macOS
+companion launch is required. A loopback page never prompts for or transmits the durable admin token,
+because the browser origin does not prove which local OS user owns the listener. There is no
+lower-privilege loopback session, implicit renewal, or loopback authentication bypass. The dashboard
+never attaches a management session to `/v1/*`.
+
+A non-loopback browser may prompt for raw admin only on a trusted HTTPS origin. Plaintext remote pages
+never request or transmit that bearer; operators without trusted HTTPS use a local or SSH tunnel that
+presents loopback and launch through `ccx gui`. This browser rule does not remove raw-admin support for
+headless management API clients using a trusted transport.
+
+`ccx gui` or the macOS companion may use the durable admin credential to mint a short-lived,
+single-use launch ticket bound to the exact route and origin. Only the ticket enters the URL fragment,
+which the dashboard removes immediately during its one-time exchange. The exchange creates a
+confirmed, CSRF-protected GUI session with an eight-hour absolute lifetime. It is process-memory-only
+and never renewed. Expiry or proxy restart makes the next API request return `401`; the browser then
+directs the user to relaunch. The durable admin token never enters the URL, `localStorage`, or
+`sessionStorage`. The
+ticket is a transient capability, not a fourth durable credential class or a general management
+bypass. Its exchange endpoint is the narrow pre-authenticated exception to the `/api/*` gate: the
+single-use ticket itself is the bearer and is bound to the exact origin and route.
+
+Confirmed launch mitigates cross-OS-user loopback listener spoofing, remote drive-by CSRF, and
+accidental clients; it is not proof of user presence and is not stronger than raw admin against a
+malicious process already running as the same trusted OS account described in
+[`02_config-and-codex-home.md`](02_config-and-codex-home.md). In particular, it must not be described
+as blocking a coding agent that already holds the raw admin token.
+
+The raw admin principal remains capable of ordinary management API mutations. Catalog Apply is the
+narrow exception: its browser endpoint accepts only a confirmed GUI session, while the native
+companion and `ccx sync --restart-codex` keep their fixed non-browser flows.
 
 Proxy admission credentials must never reach an upstream provider. The forwarding guard rejects the
 `ccx_data_`, `ccx_admin_`, and `ccx_session_` prefixes, both environment tokens by constant-time
@@ -87,14 +115,14 @@ this document owns is which module holds which area and what invariant that area
 | Key providers | `GET /api/key-providers` exposes API-key provider presets for setup and dashboard flows, and `GET/POST/DELETE /api/keys` owns the proxy's own admission keys. Multi-key pool per key-auth provider: `GET /api/providers/keys`, `POST /api/providers/keys`, `PUT /api/providers/keys/active`, `PUT /api/providers/keys/alias`, `DELETE /api/providers/keys` masked list, add (upsert + activate), switch, rename, and remove keys. `provider.apiKey` always mirrors the active pool entry so routing stays single-key. |
 | OpenAI account mode | Report one OpenAI Codex card with Pool/Direct controls and one API-key card. Mode PATCH persists live without restart or catalog identity changes; Pool owns account/quota controls and Direct uses caller/main login only. Main-account DTOs report real credential presence and terminal `needsReauth` state instead of treating missing/invalid native auth as an unknown quota. Selection order has its own route: `PUT /api/codex-auth/accounts/priority` takes `{ id, priority }`, where `priority` is an integer -100..100 or `null` to restore the default, accepts `__main__`, 404s an unknown id, and echoes the stored value. Re-ordering never clears thread affinity, so the response carries no `appliesImmediately`, but it does release any pin — see [`08_openai-provider-tiers.md`](08_openai-provider-tiers.md) for why. `PUT /api/codex-auth/active` with a null id releases one too, but that drops the operator's account selection along with it, so this route is the only operator-facing way to clear a pin while leaving the selected account in place. `GET /api/codex-auth/active` reports `pinned`, true only while the manually selected account is still the effective active one, plus `pinnedAccountId`, which names the pinned account whether or not it is the active one. Surfaces should render `pinnedAccountId`: under round-robin and fill-first the pin caps the tier ceiling at its own tier while the strategy cursor moves freely inside that tier, so `pinned` goes false on a sibling's turn even though the pin is still suppressing every higher tier — which is why the dashboard badges `pinnedAccountId` and the GUI controller tracks only the id. `pinned` answers the narrower question of whether routing is *currently* on the operator's choice; no surface in this repo asks it, and a new one almost certainly wants the id instead. |
 | OpenCode integration | `src/server/management/opencode-integration-routes.ts` and `src/clients/opencode-persistence.ts` exclusively own `GET /api/integrations/opencode`, Apply, auto-connect, Restore, and Desktop-open actions. The Client Apps workspace reads this dedicated status, while the generic `/api/client-integrations*` collection, mutation, journal, and restore routes exclude OpenCode so only one production writer can touch `provider.codexcommander`. Persistent mode resolves the active global JSONC/JSON target, protects the admission token in CodexCommander state, and emits an OpenCode `{file:…}` reference. JSONC mutation must preserve comments and other keys. A journal + backup enables byte-exact restore while untouched and surgical provider-only restore after user edits; full overwrite requires an explicit current-hash confirmation. `autoConnect` is default-off and only refreshes that managed provider after startup/catalog changes. `src/clients/opencode-installation.ts` detects and launches Desktop; CLI fallback remains `ccx opencode` and never writes disk config. |
-| Subagents | Read/write the featured `subagentModels` list capped at five ids. `GET/PUT /api/injection-model` manages the shared delegation model/effort selection, the independent CodexCommander guidance switch, and the default-off `syncCodexSubagentDefaults` opt-in for native Codex subagent defaults. When CodexCommander owns the active Codex routing, native `[agents]` defaults apply to newly created Codex tasks after sync/restart; external user-managed provider configs remain untouched. The defaults do not cause delegation and preserve existing user-owned defaults rather than overwriting them. PUT is partial-update: absent keys are unchanged, `null` clears, and non-object bodies are rejected with 400 before field validation. `syncCodexSubagentDefaults: true` requires a nonblank `model` and a supported Codex reasoning effort when effort is set; clearing `model` (null/empty) always clears effort and disables native-default sync even when the stored effort was invalid. |
-| Agent activity | `src/server/management/activity-routes.ts` — `GET /api/agent-activity` exposes a bounded, active-only snapshot for local status surfaces. Records contain opaque process-ephemeral ids, privacy-safe model/provider labels, `primary`/`subagent` role, and truthful `starting`/`running` phases; no prompt, path, tool, account, raw request/thread id, error, or historical transcript is retained or serialized. Parent ids are emitted only when the parent appears in the same payload. Counts describe the pre-truncation snapshot, while at most 64 deterministically ordered records are returned. The response is management-authenticated and `Cache-Control: no-store`. The macOS catalog confirmation may use a fresh count to explain interruption risk, but a zero-count observation is not an idle guarantee and release one does not defer catalog application on it. |
-| V2 / Multi-agent mode | `GET/PUT /api/v2` — reports/sets the codex `multi_agent_v2` feature flag, the 3-state `multiAgentMode` override (`v1`/`default`/`v2`), the `multiAgentV2MessageDelivery` policy (`encrypted` default or opt-in `plaintext`), and the logical maximum thread count. Selecting `v2` enables the native flag and moves `[agents] max_threads` to the v2 key; selecting `v1` disables it and moves the same value back. `default` leaves the native flag unchanged. PUT accepts any owned field independently; contradictory mode/flag pairs are rejected before writes. Mode changes apply to new sessions; delivery changes affect subsequent requests and therefore warn the user to start a new session. Every feature transition is rollback-safe and resyncs the catalog. |
+| Subagents | Read/write the featured `subagentModels` list capped at five ids. `GET/PUT /api/injection-model` manages the shared delegation model/effort selection, the independent CodexCommander guidance switch, and the default-off `syncCodexSubagentDefaults` opt-in for native Codex subagent defaults. `GET /api/codex-catalog/status` exposes desired configuration, deterministic on-disk catalog evidence, and current worker activation evidence; `POST /api/codex-catalog/apply` is an authenticated, CSRF-protected, explicit interruption action accepting only `{ expectedDesiredRevision, confirmInterrupt: true }`. It accepts only the confirmed GUI session created by the exchanged single-use launch ticket; the raw admin token is mint authority, not direct browser-Apply authority. CLI and native-companion compatibility remains on their narrow non-browser flows. No caller-supplied PID, command, or path is accepted; stale targets are exact current-user identities revalidated before `SIGTERM`, unknown identity blocks, and busy work returns `503` plus `Retry-After`. The roster GET/PUT and `POST /api/sync` include the same additive activation observation. When CodexCommander owns the active Codex routing, native `[agents]` defaults apply to newly created Codex tasks after sync/restart; external user-managed provider configs remain untouched. The defaults do not cause delegation and preserve existing user-owned defaults rather than overwriting them. PUT is partial-update: absent keys are unchanged, `null` clears, and non-object bodies are rejected with 400 before field validation. `syncCodexSubagentDefaults: true` requires a nonblank `model` and a supported Codex reasoning effort when effort is set; clearing `model` (null/empty) always clears effort and disables native-default sync even when the stored effort was invalid. |
+| Live proxy requests | `src/server/management/activity-routes.ts` — `GET /api/agent-activity` exposes a bounded snapshot of currently admitted proxy request turns, not persistent Codex agent lifecycle. Records contain opaque process-ephemeral ids, privacy-safe model/provider labels, `primary`/`subagent` request classification, and truthful `starting`/`running` phases; a row is removed when its request lease settles even if Codex keeps a child thread alive. No prompt, path, tool, account, raw request/thread id, error, or historical transcript is retained or serialized. Parent ids are emitted only when the parent appears in the same payload. Counts describe the pre-truncation snapshot, while at most 64 deterministically ordered records are returned. The response is management-authenticated and `Cache-Control: no-store`. The macOS catalog confirmation may use a fresh count to explain interruption risk, but a zero-count observation is not an idle guarantee and release one does not defer catalog application on it. |
+| V2 / Multi-agent mode | `GET/PUT /api/v2` — reports/sets the codex `multi_agent_v2` feature flag, the 3-state `multiAgentMode` override (`v1`/`default`/`v2`), the `multiAgentV2MessageDelivery` policy (`encrypted` default or opt-in `plaintext`), and the logical maximum thread count. Selecting `v2` enables the native flag and moves `[agents] max_threads` to the v2 key; selecting `v1` disables it and moves the same value back. `default` leaves the native flag unchanged. PUT accepts any owned field independently; contradictory mode/flag pairs are rejected before writes. A mode/protocol/thread boot-config change requires **Apply agent catalog** to replace a running worker, then a new task for its session-bound tool shape. Delivery changes affect only subsequent V2 task messages: start a new task, but no catalog convergence or Apply is needed. Plaintext concerns task-message delivery only, not stored provider credentials or generic key encryption. Every feature transition is rollback-safe and resyncs the catalog only when it changes catalog/boot configuration. |
 | Logs & Debug | One sidebar entry (`/#logs`) with two tabs. Logs tab: request/runtime logs for local diagnosis. Debug tab (`/#logs/debug`): provider + usage toggles, refresh/follow log viewer. `GET/PUT /api/debug`; `GET /api/debug/logs` and `GET /api/debug/usage-logs` use the monotonic `after` cursor. CLI: `ccx debug provider|usage …` (both streams via running proxy API). |
 | Usage | `GET /api/usage` aggregate read-only summary derived from `~/.codexcommander/usage.jsonl`; measured / reported / unreported / unsupported / estimated counts, daily zero-filled grid, model and provider breakdowns. Never exposes prompts. |
 | System | `POST /api/system/restart` restarts the proxy in place. `GET /api/system/memory` — service-process runtime/memory identity (pid, Bun version/revision, optional `bunRuntimeSource` provenance, platform, RSS/heap/external/ArrayBuffers scalars, observed memory = max(RSS, external, ArrayBuffers), `bun:jsc` heap context, streamMode + ordinary and plaintext-V2 eager-relay gate decisions, scalar eager-relay in-flight/cancel/abort/error/queue counters, watchdog snapshot sliced to the last 60 samples) plus privacy-safe `appOwnedBytes` retained-store totals/counters under static store ids. Scalar-only payload; rides the standard management auth gate and must never move to unauthenticated `/healthz`. Consumed by `ccx doctor`'s Memory/runtime section and the dashboard Memory observability card. |
 | Stop | `POST /api/stop` — restore native Codex, stop any installed service, and exit the proxy. |
-| Diagnostics/sync | `src/server/management/config-routes.ts` — `GET /api/diagnostics/project-config` reports project-level Codex config that bypasses managed routing; `POST /api/sync` re-runs catalog/config sync and reports the current Codex worker catalog state. The diagnostic reports the bypass; it does not rewrite the project file. A stale worker roster is nonfatal lifecycle state, not proxy failure. |
+| Diagnostics/sync | `src/server/management/config-routes.ts` — `GET /api/diagnostics/project-config` reports project-level Codex config that bypasses managed routing; `POST /api/sync` re-runs catalog/config sync and returns activation evidence without interrupting workers. The diagnostic reports the bypass; it does not rewrite the project file. A stale worker roster is nonfatal lifecycle state, not proxy failure; starting a task or fork is not treated as a catalog reload. |
 | Sidecar/shadow-call settings | `src/server/management/config-routes.ts` — `GET/PUT /api/sidecar-settings` and `GET/PUT /api/shadow-call-settings`. PUT accepts model and backend plus optional `webSearch.reasoning` and `vision.maxDescriptionsPerTurn`; the read and PUT-response payload reports model, backend, and the vision per-turn limit. Credentials live in the provider and OAuth stores instead. Both shadow-call responses also report the resolved `sourceModels` — the prefixes the runtime actually intercepts (`src/lib/shadow-call.ts`, default `gpt-5.6-luna`; an explicit override names current custom helper ids), so no client hard-codes a helper slug that a Codex release can invalidate. |
 | Storage | `src/server/management/logs-usage-routes.ts` — `GET /api/storage`, `POST /api/storage/cleanup/preview` and `/api/storage/cleanup`, `GET /api/storage/trash`, `POST /api/storage/trash/restore`, and `GET/PUT /api/storage/cleanup-policy` plus `POST /api/storage/cleanup-policy/run`. `GET /api/storage/cleanup-policy/test-stream` and `GET /api/storage/trash/restore/test-stream` exist for progress-stream testing. Cleanup takes an explicit `mode`: `quarantine` moves to trash and is restorable, `permanent` is not. The caller must name the mode — there is no default that silently deletes. |
 | Provider quotas and tests | `src/server/management/provider-routes.ts` — `GET /api/provider-quotas`, `POST /api/providers/test`, `GET/PUT /api/provider-context-caps`, `GET /api/provider-presets`. A context-cap PUT may combine a positive integer `value` with boolean `setAll` so a staged shared policy is persisted atomically; per-provider writes keep the existing `{ provider, enabled }` shape. A quota read may be served from cache or force-refreshed; absent quota data is reported as unknown rather than as a measured zero. Its additive `availability` list has one entry per enabled quota-capable provider, with `available / stale / unavailable` and only fixed privacy-safe reasons (`reauth_required`, `local_cli_refresh_required`, or `upstream_unavailable`); raw upstream or OAuth errors never cross the management boundary. |
@@ -249,9 +277,10 @@ copies that credential into Keychain. A Finder-launched app cannot inherit an en
 token, so that configuration is reported as unsupported instead of prompting for or persisting a
 duplicate secret.
 
-The active source build is `<repo>/dist/macos/CodexCommander.app`, which discovers the checkout's Bun and
-CLI rather than being copied into Application Support. A packaged bundle build instead prefers its own
-`Contents/Resources/runtime`; neither path shells through an ambient `ccx`. On launch the app runs an
+The active development build is `<repo>/dist/macos/CodexCommander.app`. Every built app runs the Bun
+runtime and server resources embedded in its own `Contents/Resources/runtime`; it never discovers or
+executes checkout `src/`, so developers rebuild the app to pick up source changes. The development app
+is not copied into Application Support, and no bundle shells through an ambient `ccx`. On launch it runs an
 ensure lifecycle action and automatically synchronizes the Codex model catalog, but remains open and
 actionable after an offline or startup failure. **Quit** terminates only the AppKit UI. **Stop** and
 **Restart** are separate confirmation-gated operations: Stop uses the fixed lifecycle helper to
@@ -260,13 +289,15 @@ and reports success only after replacement identity verification.
 
 If running Codex workers still hold the previous roster, the healthy proxy is shown with a
 persistent, nonfatal **Agent catalog update ready** card. **Apply agent catalog** is a third, separate
-fixed lifecycle action: after confirmation it synchronizes the catalog, sends `SIGTERM` only to exact
-current-user `codex … app-server` and `codex-code-mode-host` process identities, waits briefly to
-verify which old workers exited, and reports incomplete survivors without escalating to `SIGKILL`.
+fixed lifecycle action: it sends only the current desired revision and an explicit interruption
+confirmation to the protected management API, which re-converges the catalog and signals `SIGTERM`
+only to exact current-user `codex … app-server` and `codex-code-mode-host` identities. It waits briefly
+to verify which old workers exited and reports incomplete survivors without escalating to `SIGKILL`.
 It never restarts the CodexCommander proxy or closes the menu app. The confirmation reports fresh active
-request evidence when available and still warns that an answer may be interrupted; zero or unknown
-activity is not presented as proof of idleness. The current companion offers **Apply Now** and **Later**, not an
-Apply-when-idle automation. The advanced CLI fallback is exactly:
+request evidence when available and still warns that an answer may be interrupted; zero activity is not
+proof of idleness, and unknown worker identity blocks the action. The current companion offers **Apply
+Now** and **Later**, not an Apply-when-idle automation or persisted pending receipt. A new task or fork
+does not reload the catalog of an existing worker. The advanced CLI fallback is exactly:
 
 ```bash
 ccx sync --restart-codex
@@ -281,7 +312,8 @@ menu controllers. This does not replace or auto-install `com.codexcommander.prox
 remains the optional headless/crash-supervised server path, and service children still never open the
 companion.
 
-The popover is a compact status surface: active primary/subagent work from `/api/agent-activity`, one
+The popover is a compact status surface: proxy liveness, public startup readiness, and Codex route are
+three separate signals, in-flight primary/subagent request turns come from `/api/agent-activity`, one
 provider-quota accordion with ChatGPT first and expanded by default, and fixed links into the full
 dashboard. Provider management opens `#providers/<provider>/<tab>` so login, account, model, usage,
 and settings work remain in the existing authenticated browser UI. Restart is an explicit confirmed

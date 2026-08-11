@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import type { ExportModel } from "../src/clients/config-export";
 import { fileIO, type IntegrationIO } from "../src/integrations/config-io";
@@ -28,24 +27,6 @@ let base = "";
 let home = "";
 let storeRoot = "";
 let store: IntegrationStateStore;
-
-/**
- * The CSRF wire test fetches the real served page, which only exists when the
- * GUI build does. CI runs `bun test` BEFORE `GUI build`, so the artifact is
- * absent on a fresh checkout — build it once here instead of letting the page
- * fall back to the JSON root payload (which silently voids the wire test).
- */
-{
-  if (!existsSync(join(import.meta.dir, "..", "gui", "dist", "index.html"))) {
-    const build = Bun.spawnSync({
-      cmd: ["bun", "run", "build:gui"],
-      cwd: join(import.meta.dir, ".."),
-      stdout: "inherit",
-      stderr: "inherit",
-    });
-    if (build.exitCode !== 0) throw new Error("gui build failed for the wire-level CSRF suite");
-  }
-}
 
 /**
  * The environment the ROUTE resolves paths with — never `process.env`.
@@ -928,7 +909,7 @@ describe("admission", () => {
     expect(store.listOperations("hermes")[0]!.kind).toBe("restore");
   });
 
-  test("a GUI-session mutation without CSRF is rejected before integration dispatch", async () => {
+  test("a confirmed GUI-session mutation without CSRF is rejected before integration dispatch", async () => {
     /*
      * Driven through a REAL listener, the way a browser reaches this route.
      *
@@ -937,17 +918,15 @@ describe("admission", () => {
      * src/server/index.ts stopped calling it before `handleManagementAPI`,
      * which is precisely the regression that would let a CSRF-less GUI
      * mutation reach the writer. So the session is obtained the way the GUI
-     * obtains it — from the meta tags injected into the served page — and both
-     * requests go over the wire.
+     * obtains it — through the one-use confirmed launch exchange — and both
+     * mutation requests go over the wire.
      */
     const previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
     const previousAdmin = process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
     const serverHome = join(base, "csrf-server-home");
     mkdirSync(serverHome, { recursive: true });
     process.env.CODEXCOMMANDER_HOME = serverHome;
-    // A GUI session is only issued when no admin token is configured; with one
-    // set, `isApiAuthRequired` declines and there is no CSRF pair to test.
-    delete process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
+    process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = "csrf-wire-admin-token";
     installHermes();
 
     const { saveConfig } = await import("../src/config");
@@ -956,38 +935,27 @@ describe("admission", () => {
     const server = startServer(0);
     try {
       const origin = new URL(server.url).origin;
-      /*
-       * The session pair comes from the served page's meta tags, exactly as a
-       * browser gets it. That page only exists once `gui/dist` is built, and
-       * CI runs this suite without building the GUI — which is why this test
-       * failed on every CI platform while passing locally against a stale
-       * build. The absent-bundle case is handled explicitly below rather than
-       * asserted away.
-       */
-      const page = await fetch(server.url, { headers: { Accept: "text/html" } });
-      const html = await page.text();
-      const meta = (name: string): string =>
-        new RegExp(`<meta name="${name}" content="([^"]*)">`).exec(html)?.[1] ?? "";
-      const token = meta("codexcommander-session-token");
-      const csrf = meta("codexcommander-session-csrf");
-      if (!token || !csrf) {
-        /*
-         * No built GUI, so no page to carry the session pair. The server owns
-         * the only session map that its own admission will accept, and there
-         * is no wire route to mint one without that page — issuing from a
-         * fresh auth state would hand us a token this server has never seen
-         * and the assertions below would prove nothing.
-         *
-         * The ordering claim is still covered on this platform: the
-         * admin-token test above drives the same listener and asserts an
-         * unauthenticated PUT is refused before the route writes or journals.
-         */
-        // `fileURLToPath`, not `.pathname`: a Windows URL pathname is
-        // `/D:/a/...`, which never exists as a filesystem path and would make
-        // this guard vacuously true.
-        expect(existsSync(fileURLToPath(new URL("../gui/dist/index.html", import.meta.url)))).toBe(false);
-        return;
-      }
+      const mintedResponse = await fetch(new URL("/api/gui-launch-ticket", server.url), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-codexcommander-api-key": "csrf-wire-admin-token",
+        },
+        body: JSON.stringify({ route: "integrations/hermes" }),
+      });
+      expect(mintedResponse.status).toBe(200);
+      const minted = await mintedResponse.json() as { ticket: string; route: string };
+      const exchangeResponse = await fetch(new URL("/api/gui-launch-exchange", server.url), {
+        method: "POST",
+        headers: { Origin: origin, "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify({ ticket: minted.ticket, route: minted.route }),
+      });
+      expect(exchangeResponse.status).toBe(200);
+      const exchanged = await exchangeResponse.json() as {
+        session: { token: string; csrfToken: string };
+      };
+      const token = exchanged.session.token;
+      const csrf = exchanged.session.csrfToken;
 
       const target = new URL("/api/client-integrations/hermes", server.url);
       const guiHeaders = {
@@ -1019,7 +987,8 @@ describe("admission", () => {
       await server.stop(true);
       if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
       else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
-      if (previousAdmin !== undefined) process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = previousAdmin;
+      if (previousAdmin === undefined) delete process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN;
+      else process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = previousAdmin;
     }
   });
 });

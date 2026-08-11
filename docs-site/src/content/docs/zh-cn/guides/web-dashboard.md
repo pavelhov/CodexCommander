@@ -22,9 +22,13 @@ bun run dev:gui
 
 ## 登录
 
-通过 `localhost`、`127.0.0.1` 等 loopback 地址打开仪表盘时，它会自动获得一个短期 GUI session，因此通常无需输入 token。在非 loopback 主机上公开仪表盘时，必须使用 `CODEXCOMMANDER_ADMIN_AUTH_TOKEN` 或自动生成的 `~/.codexcommander/admin-api-token` 文件中的管理员 token。
+手动通过任何 loopback 形式打开的仪表盘都不会获得 API 凭证，包括 `localhost`、`*.localhost`、`127.0.0.0/8` 中的任意地址、`::1` 和 IPv4-mapped `127/8` 地址。页面框架可以加载，但 API 请求仍未通过身份验证。请通过 `ccx gui` 或 macOS 菜单栏应用重新打开。由于另一个本地 OS 用户可以冒充未使用端口上的 listener，loopback 页面绝不会请求或发送长期管理员 token。loopback 浏览器访问需要确认的 launcher session，不能绕过身份验证。
 
-远程仪表盘会显示标准密码表单，浏览器密码管理器可以提示保存并自动填充 token。仪表盘本身只在内存中保存 token，不会写入 `localStorage` 或 `sessionStorage`；是否持久保存完全由浏览器或密码管理器决定。
+要使用完整功能，请通过 `ccx gui` 或 macOS 菜单栏应用打开。launcher 使用管理员权限签发一个短期、一次性票据，只把票据放入 URL fragment；仪表盘会在一次性交换过程中立即将其清除。确认 session 只存在于代理和浏览器进程内存中，最长八小时，且不会续期。到期或代理重启后的下一个 API 请求会返回 `401`，loopback 页面需要新的 launcher handoff。长期管理员 token 绝不会进入 URL 或浏览器存储。
+
+非 loopback 主机可以使用 `CODEXCOMMANDER_ADMIN_AUTH_TOKEN` 或 `~/.codexcommander/admin-api-token` 中的管理员 token，但浏览器输入框仅在受信任的 HTTPS origin 上启用。明文远程页面绝不会请求或发送 bearer。若没有受信任的 HTTPS，请使用把仪表盘呈现为 loopback 的本地或 SSH tunnel，并通过 `ccx gui` 打开。原始管理员 token 仍可供 headless management API client 使用，但 catalog Apply 只允许来自确认的本地仪表盘启动。
+
+受信任 HTTPS 上的远程仪表盘会显示标准密码表单，浏览器密码管理器可以提示保存并自动填充 token。仪表盘本身只在内存中保存 token，不会写入 `localStorage` 或 `sessionStorage`；是否持久保存完全由浏览器或密码管理器决定。
 
 ## 可以完成哪些操作
 
@@ -41,7 +45,7 @@ bun run dev:gui
 | **Add provider** | 搜索 registry preset，选择账号登录、API key 服务、本地服务器或自定义 endpoint。输入搜索词时会同时搜索 Accounts、Free 和 Paid；标签仍可用于浏览。 |
 | **Codex Auth** | 添加 ChatGPT/Codex 池账号，选择下一 session 的账号，刷新 5h / 每周 / 30d 配额，启用或停用配额自动切换，设置其 1–100% 阈值和临时故障 failover。 |
 | **Subagents** | 在 **Agent Command Center** 中选择并排序向 `spawn_agent` 公开的五个模型、搜索当前目录，并配置协议、V2 传递、引导、回退和线程上限等 Run Policy。已保存但未公开的条目会被明确报告。 |
-| **Models** | 开关原生 GPT 与路由模型，配置 provider allowlist 和上下文上限，选择 **Classic v1**、**Follow Codex defaults** 或 **Concurrent v2**，并设置 v2 thread 数量。Current behavior 卡片会将上下文显示为 **Uncapped**、**Limited** 或 **Mixed limits**。每个路由 provider 都会显示 **自动发现已开启** 或 **仅静态目录**，并链接到对应的 provider 设置。 |
+| **Models** | 开关原生 GPT 与路由模型，配置 provider allowlist 和上下文上限，选择 **Reliable v1**、**Codex native** 或 **Concurrent v2**，并设置 v2 thread 数量。Current behavior 卡片会将上下文显示为 **Uncapped**、**Limited** 或 **Mixed limits**。每个路由 provider 都会显示 **自动发现已开启** 或 **仅静态目录**，并链接到对应的 provider 设置。 |
 | **Client Apps** | 查看已配置和可连接的本地客户端；在支持时应用或移除托管配置并检查备份；集中访问 Codex、Claude Code/Desktop、Grok Build、OpenCode 及文件托管客户端，同时避免把客户端与提供商混为一谈。 |
 | **API Access** | 签发和管理其他应用连接 CodexCommander 代理时使用的认证密钥。上游提供商凭据仍归 Providers 管理。 |
 | **Logs** | 自动刷新近期请求，显示 token、请求强度以及（可用时）实际发送强度、实际模型、provider、状态、request id、耗时和错误详情。适配器发送 reasoning 参数时，详情中还会显示准确的 wire field。可按不透明会话/对话 ID（客户端提供时）筛选，并对当前已加载的 Logs 环形缓冲合计 token 与估算标价成本。 |
@@ -61,6 +65,28 @@ bun run dev:gui
 **Models** 开关表示 Codex 中的最终可见状态。路由模型只有在 provider allowlist 中（或未设置 allowlist）且未被禁用时才会开启。开启模型会原子地协调两个过滤条件；**全部开启** 会清除 allowlist，因此以后新发现的模型也会开启。
 
 上游目录自动刷新按 provider 在 **Providers → Settings** 中管理。Models 页面只显示该状态并直接链接到设置，不会保存第二份发现开关。
+
+## Catalog 激活
+
+保存不会中断工作：它会更新目标配置和确定性的磁盘 catalog，但不会终止当前 ChatGPT
+后台工作器。**Agent Command Center** 会分别显示磁盘 catalog、Codex 路由和运行中工作器所加载
+roster 的状态。
+
+如果磁盘 catalog 已是最新、CodexCommander 路由已注入，而只有已验证的运行中工作器过时，
+推荐操作是完全退出 ChatGPT，重新打开后再开始新任务。这是加载已保存 roster 最可靠的方式。
+仅在原后台工作器中启动新 task 或 fork 并不会重新加载 catalog。仪表盘会保持该状态可见，并在你
+返回后提供**检查状态**。
+
+如果 catalog 状态为 pending 或 unknown，或者路由尚未注入，请先选择**应用到 Codex**，以协调
+catalog 和受管理路由。仅手动重启 ChatGPT 不会修复这些文件。对于外部或未知路由，Apply 仍会被
+阻止，以免覆盖用户配置；集成关闭时，已保存的 roster 仍只保留在 CodexCommander 中。
+
+对于 catalog 与受管理路由均为 current、只有工作器过期的情况，通过 `ccx gui` 或 macOS 菜单栏应用
+打开的仪表盘中的**强制重启工作器**仍是高级备用方案；受保护的 management API 与
+`ccx sync --restart-codex` 亦同。它们只会影响已验证的过期后台工作器，但可能会让 ChatGPT 显示
+**“stopped unexpectedly”**。活动请求数只是中断警告，不是空闲保证；没有自动应用或空闲队列。若
+手动打开的 loopback 仪表盘没有确认 session，或 session 已过期，请通过 `ccx gui` 或 macOS 菜单栏
+应用重新打开。绝不要把原始管理员 token 粘贴到 loopback 页面。
 
 ## 委派选择器与生成路由的区别
 
@@ -119,6 +145,7 @@ GUI 是代理 JSON 管理 API 之上的轻量客户端。常用 endpoint 包括�
 | `PUT /api/startup-health/companion` | 让已认证的原生伴侣应用刷新仅保存在内存中的短期“登录时启动”观测。该端点需要原始管理令牌，并拒绝浏览器 GUI 会话。 |
 | `GET` / `POST /api/windows-tray` | 读取或更改 Windows 托盘安装和显示状态；POST 支持 `install`、`start`、`stop`、`uninstall`。 |
 | `POST /api/sync` | 重建共享模型目录，并把 Codex 模型缓存标记为过期。 |
+| `GET /api/codex-catalog/status` · `POST /api/codex-catalog/apply` | 读取 catalog、路由和工作器的激活证据。受保护的 Apply 会协调 pending catalog 或尚未注入的受管理路由，然后可能在目标修订围栏与明确中断确认后，只强制重启已验证的过期工作器。当二者已是 current、只有工作器过期时，这是可能让 ChatGPT 显示 **stopped unexpectedly** 的高级备用方案；浏览器 session 还需要上文所述的一次性启动授权。 |
 | `GET` / `PUT /api/sidecar-settings` | 读取或设置 search/vision sidecar 模型。 |
 | `GET` / `PUT /api/injection-model` | 读取或设置委派指引模型/强度、指引开关及 Codex 原生子代理默认值同步开关。 |
 | `GET` / `PUT /api/v2` | 读取或设置界面模式、Codex feature flag 和 v2 thread 上限。 |

@@ -107,7 +107,7 @@ routed provider-id `provider/model`. Account-qualified id `<selector>/<native-op
 
 ## Режим multi-agent surface
 
-На странице Models три режима collaboration называются **Classic v1**, **Follow Codex defaults**
+На странице Models три режима collaboration называются **Reliable v1**, **Codex native**
 (base/upstream behavior) и **Concurrent v2**. Этот элемент меняет collaboration surface, которую использует каждая
 запись picker'а Codex; каноническое описание режима, делегирования, наследования, fallback и поведения
 encrypted task см. в [Поверхности подагентов](/guides/sub-agent-surface/).

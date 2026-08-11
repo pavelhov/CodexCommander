@@ -1,12 +1,13 @@
 import Foundation
+import Darwin
 import MenuBarCore
 
 enum LifecycleHelperSuite {
     static func run(_ t: TestRunner) {
-        t.test("lifecycle helper: released app prefers its bundled runtime outside the repository") {
+        t.test("lifecycle helper: renamed app resolves only its bundled runtime") {
             try withTemporaryDirectory { root in
                 let bundle = root.appendingPathComponent(
-                    "Applications/CodexCommander.app",
+                    "Applications/My Renamed Commander.app",
                     isDirectory: true
                 )
                 let runtime = bundle.appendingPathComponent(
@@ -42,7 +43,10 @@ enum LifecycleHelperSuite {
                     home: root.appendingPathComponent("outside-repo", isDirectory: true)
                 )
                 t.equal(invocation?.executable.path, bun.path)
-                t.equal(invocation?.prefixArguments, [entry.path])
+                t.equal(invocation?.prefixArguments,
+                    ["--no-install", "--no-env-file", "--config=/dev/null", entry.path])
+                t.equal(invocation?.workingDirectory?.path, runtime.path)
+                t.equal(invocation?.appOwnedRuntime, true)
             }
         }
 
@@ -56,10 +60,14 @@ enum LifecycleHelperSuite {
                     at: executable.deletingLastPathComponent(),
                     withIntermediateDirectories: true
                 )
+                try Data().write(
+                    to: executable.deletingLastPathComponent().appendingPathComponent("trusted-cwd")
+                )
                 let body = """
                 #!/bin/sh
                 if [ "$CCX_APP_RUNTIME" != "1" ]; then exit 9; fi
                 if [ "$PATH" != "/usr/bin:/bin:/usr/sbin:/sbin" ]; then exit 10; fi
+                if [ ! -f trusted-cwd ]; then exit 11; fi
                 printf '{"schemaVersion":1,"action":"%s","ok":true,"state":"running","changed":false,"pid":null,"port":null,"message":"bundled"}\\n' "$2"
                 """
                 try Data(body.utf8).write(to: executable)
@@ -69,7 +77,11 @@ enum LifecycleHelperSuite {
                 )
 
                 let helper = LifecycleHelper(
-                    invocation: LifecycleInvocation(executable: executable),
+                    invocation: LifecycleInvocation(
+                        executable: executable,
+                        workingDirectory: executable.deletingLastPathComponent(),
+                        appOwnedRuntime: true
+                    ),
                     timeout: 2
                 )
                 let result = sync { try await helper.run(.status) }
@@ -82,7 +94,7 @@ enum LifecycleHelperSuite {
             }
         }
 
-        t.test("lifecycle helper: source app resolves the repository Bun entry") {
+        t.test("lifecycle helper: dist app prefers its bundled runtime over the checkout") {
             try withTemporaryDirectory { root in
                 let repository = root.appendingPathComponent("repo", isDirectory: true)
                 let bundle = repository.appendingPathComponent(
@@ -145,8 +157,198 @@ enum LifecycleHelperSuite {
                     environment: ["PATH": ""],
                     home: root
                 )
-                t.equal(invocation?.executable.path, bun.path)
-                t.equal(invocation?.prefixArguments, [entry.path])
+                t.equal(invocation?.executable.path, bundledBun.path)
+                t.equal(invocation?.prefixArguments,
+                    ["--no-install", "--no-env-file", "--config=/dev/null", bundledEntry.path])
+                t.equal(invocation?.workingDirectory?.path, bundledRuntime.path)
+                t.equal(invocation?.appOwnedRuntime, true)
+            }
+        }
+
+        t.test("lifecycle helper: missing or damaged app runtime never falls through to a global install") {
+            try withTemporaryDirectory { root in
+                _ = try installFixedGlobalRuntime(in: root)
+
+                let missingBundle = root.appendingPathComponent("Missing Runtime.app", isDirectory: true)
+                try FileManager.default.createDirectory(at: missingBundle, withIntermediateDirectories: true)
+                t.isNil(LifecycleHelperDiscovery.discover(
+                    bundleURL: missingBundle,
+                    environment: ["PATH": ""],
+                    home: root
+                ), "missing embedded runtime")
+
+                let damagedBundle = root.appendingPathComponent("Damaged Runtime.app", isDirectory: true)
+                let damaged = try makeBundledRuntime(in: damagedBundle)
+                try Data(#"{"name":"not-codexcommander"}"#.utf8).write(
+                    to: damaged.runtime.appendingPathComponent("package.json"),
+                    options: .atomic
+                )
+                t.isNil(LifecycleHelperDiscovery.discover(
+                    bundleURL: damagedBundle,
+                    environment: ["PATH": ""],
+                    home: root
+                ), "damaged embedded runtime")
+            }
+        }
+
+        t.test("lifecycle helper: bundled entry and Bun symlink escapes fail containment") {
+            try withTemporaryDirectory { root in
+                let entryBundle = root.appendingPathComponent("Entry Escape.app", isDirectory: true)
+                let entryRuntime = try makeBundledRuntime(in: entryBundle)
+                try FileManager.default.removeItem(at: entryRuntime.entry)
+                let sibling = root.appendingPathComponent("runtime-evil", isDirectory: true)
+                try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
+                let escapedEntry = sibling.appendingPathComponent("index.ts")
+                try Data().write(to: escapedEntry)
+                try FileManager.default.createSymbolicLink(
+                    at: entryRuntime.entry,
+                    withDestinationURL: escapedEntry
+                )
+                t.isNil(LifecycleHelperDiscovery.discover(bundleURL: entryBundle, home: root),
+                    "runtime-evil entry prefix")
+
+                let bunBundle = root.appendingPathComponent("Bun Escape.app", isDirectory: true)
+                let bunRuntime = try makeBundledRuntime(in: bunBundle)
+                try FileManager.default.removeItem(at: bunRuntime.bun)
+                let escapedBun = try makeExecutable(
+                    in: root,
+                    named: "outside-bun",
+                    body: "#!/bin/sh\nexit 0\n"
+                )
+                try FileManager.default.createSymbolicLink(
+                    at: bunRuntime.bun,
+                    withDestinationURL: escapedBun
+                )
+                t.isNil(LifecycleHelperDiscovery.discover(bundleURL: bunBundle, home: root),
+                    "escaped Bun")
+
+                let runtimeBundle = root.appendingPathComponent("Runtime Escape.app", isDirectory: true)
+                let resources = runtimeBundle.appendingPathComponent(
+                    "Contents/Resources",
+                    isDirectory: true
+                )
+                try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+                let outsideRuntime = root.appendingPathComponent("outside-runtime", isDirectory: true)
+                _ = try makeRuntime(at: outsideRuntime)
+                try FileManager.default.createSymbolicLink(
+                    at: resources.appendingPathComponent("runtime"),
+                    withDestinationURL: outsideRuntime
+                )
+                t.isNil(LifecycleHelperDiscovery.discover(bundleURL: runtimeBundle, home: root),
+                    "escaped runtime root")
+            }
+        }
+
+        t.test("lifecycle helper: bundled Bun ignores ambient and runtime bunfig preloads") {
+            try withTemporaryDirectory { root in
+                let bundle = root.appendingPathComponent("Hermetic.app", isDirectory: true)
+                let bundled = try makeBundledRuntime(in: bundle)
+                guard let projectBun = findProjectBun() else {
+                    t.expect(false, "project Bun executable not found")
+                    return
+                }
+                try FileManager.default.removeItem(at: bundled.bun)
+                do {
+                    try FileManager.default.linkItem(at: projectBun, to: bundled.bun)
+                } catch {
+                    try FileManager.default.copyItem(at: projectBun, to: bundled.bun)
+                }
+
+                let sentinel = root.appendingPathComponent("preload-executed")
+                let preloadSource = "await Bun.write(\(String(reflecting: sentinel.path)), \"executed\");\n"
+                let maliciousConfig = "preload = [\"./preload.ts\"]\n"
+                try Data(preloadSource.utf8).write(
+                    to: bundled.runtime.appendingPathComponent("preload.ts"),
+                    options: .atomic
+                )
+                try Data(maliciousConfig.utf8).write(
+                    to: bundled.runtime.appendingPathComponent("bunfig.toml"),
+                    options: .atomic
+                )
+                let fakeHome = root.appendingPathComponent("home", isDirectory: true)
+                let fakeXDG = root.appendingPathComponent("xdg", isDirectory: true)
+                let globalPreload = root.appendingPathComponent("global-preload.ts")
+                try FileManager.default.createDirectory(at: fakeHome, withIntermediateDirectories: true)
+                try FileManager.default.createDirectory(at: fakeXDG, withIntermediateDirectories: true)
+                try Data(preloadSource.utf8).write(to: globalPreload, options: .atomic)
+                let globalConfig = "preload = [\(String(reflecting: globalPreload.path))]\n"
+                try Data(globalConfig.utf8).write(
+                    to: fakeHome.appendingPathComponent(".bunfig.toml"),
+                    options: .atomic
+                )
+                try Data(globalConfig.utf8).write(
+                    to: fakeXDG.appendingPathComponent(".bunfig.toml"),
+                    options: .atomic
+                )
+                let entrySource = """
+                const action = process.argv.at(-1);
+                const pwdTrusted = process.env.PWD?.endsWith("/Contents/Resources/runtime") === true
+                  && process.cwd().endsWith("/Contents/Resources/runtime");
+                const homeIsolated = process.env.HOME === \(String(reflecting: fakeHome.path));
+                console.log(JSON.stringify({
+                  schemaVersion: 1,
+                  action,
+                  ok: true,
+                  state: "running",
+                  changed: false,
+                  pid: null,
+                  port: null,
+                  message: `hermetic:${pwdTrusted}:${homeIsolated}`
+                }));
+                """
+                try Data(entrySource.utf8).write(to: bundled.entry, options: .atomic)
+
+                let ambient = root.appendingPathComponent("ambient", isDirectory: true)
+                try FileManager.default.createDirectory(at: ambient, withIntermediateDirectories: true)
+                try Data(preloadSource.utf8).write(
+                    to: ambient.appendingPathComponent("preload.ts"),
+                    options: .atomic
+                )
+                try Data(maliciousConfig.utf8).write(
+                    to: ambient.appendingPathComponent("bunfig.toml"),
+                    options: .atomic
+                )
+                let previousHome = getenv("HOME").map { String(cString: $0) }
+                let previousXDG = getenv("XDG_CONFIG_HOME").map { String(cString: $0) }
+                guard setenv("HOME", fakeHome.path, 1) == 0,
+                      setenv("XDG_CONFIG_HOME", fakeXDG.path, 1) == 0
+                else {
+                    t.expect(false, "could not isolate Bun global config homes")
+                    return
+                }
+                defer {
+                    if let previousHome { setenv("HOME", previousHome, 1) } else { unsetenv("HOME") }
+                    if let previousXDG { setenv("XDG_CONFIG_HOME", previousXDG, 1) }
+                    else { unsetenv("XDG_CONFIG_HOME") }
+                }
+                let originalDirectory = FileManager.default.currentDirectoryPath
+                guard FileManager.default.changeCurrentDirectoryPath(ambient.path) else {
+                    t.expect(false, "could not enter ambient test directory")
+                    return
+                }
+                defer { _ = FileManager.default.changeCurrentDirectoryPath(originalDirectory) }
+
+                guard let invocation = LifecycleHelperDiscovery.discover(
+                    bundleURL: bundle,
+                    environment: ["PATH": ""],
+                    home: root
+                ) else {
+                    t.expect(false, "bundled invocation not found")
+                    return
+                }
+                t.equal(invocation.prefixArguments,
+                    ["--no-install", "--no-env-file", "--config=/dev/null", bundled.entry.path])
+                t.equal(invocation.workingDirectory?.path, bundled.runtime.path)
+                let helper = LifecycleHelper(invocation: invocation, timeout: 5)
+                let result = sync { try await helper.run(.status) }
+                switch result {
+                case .success(let value):
+                    t.equal(value.message, "hermetic:true:true")
+                    t.expect(!FileManager.default.fileExists(atPath: sentinel.path),
+                        "no bunfig preload executed")
+                case .failure(let error):
+                    t.expect(false, "unexpected bundled Bun failure: \(error)")
+                }
             }
         }
 
@@ -163,7 +365,7 @@ enum LifecycleHelperSuite {
                     body: "#!/bin/sh\nexit 0\n"
                 )
                 let invocation = LifecycleHelperDiscovery.discover(
-                    bundleURL: root.appendingPathComponent("Copied.app"),
+                    bundleURL: root.appendingPathComponent("Copied.bundle"),
                     environment: ["PATH": untrusted.path],
                     home: root
                 )
@@ -204,12 +406,14 @@ enum LifecycleHelperSuite {
                 )
 
                 let invocation = LifecycleHelperDiscovery.discover(
-                    bundleURL: root.appendingPathComponent("Release.app"),
+                    bundleURL: root.appendingPathComponent("Release.bundle"),
                     environment: ["PATH": ""],
                     home: root
                 )
                 t.equal(invocation?.executable.path, bun.path)
                 t.equal(invocation?.prefixArguments, [entry.path])
+                t.equal(invocation?.workingDirectory?.path, repository.path)
+                t.equal(invocation?.appOwnedRuntime, false)
             }
         }
 
@@ -415,6 +619,104 @@ enum LifecycleHelperSuite {
                 }
             }
         }
+    }
+
+    private static func makeBundledRuntime(
+        in bundle: URL
+    ) throws -> (runtime: URL, entry: URL, bun: URL) {
+        let runtime = bundle.appendingPathComponent(
+            "Contents/Resources/runtime",
+            isDirectory: true
+        )
+        return try makeRuntime(at: runtime)
+    }
+
+    private static func makeRuntime(
+        at runtime: URL
+    ) throws -> (runtime: URL, entry: URL, bun: URL) {
+        let entry = runtime.appendingPathComponent("src/cli/index.ts")
+        let bun = runtime.appendingPathComponent("node_modules/bun/bin/bun")
+        try FileManager.default.createDirectory(
+            at: entry.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: bun.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data(#"{"name":"codexcommander"}"#.utf8).write(
+            to: runtime.appendingPathComponent("package.json"),
+            options: .atomic
+        )
+        try Data().write(to: entry, options: .atomic)
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: bun, options: .atomic)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: bun.path
+        )
+        return (runtime, entry, bun)
+    }
+
+    private static func installFixedGlobalRuntime(
+        in root: URL
+    ) throws -> (entry: URL, bun: URL) {
+        let repository = root.appendingPathComponent("global-package", isDirectory: true)
+        let bin = repository.appendingPathComponent("bin", isDirectory: true)
+        let entry = repository.appendingPathComponent("src/cli/index.ts")
+        let bun = repository.appendingPathComponent("node_modules/.bin/bun")
+        let installedBin = root.appendingPathComponent(".local/bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: entry.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: bun.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(at: installedBin, withIntermediateDirectories: true)
+        try Data(#"{"name":"codexcommander"}"#.utf8).write(
+            to: repository.appendingPathComponent("package.json")
+        )
+        try Data().write(to: entry)
+        let launcher = try makeExecutable(
+            in: bin,
+            named: "ccx.mjs",
+            body: "#!/usr/bin/env node\n"
+        )
+        _ = try makeExecutable(
+            in: bun.deletingLastPathComponent(),
+            named: "bun",
+            body: "#!/bin/sh\nexit 0\n"
+        )
+        try FileManager.default.createSymbolicLink(
+            at: installedBin.appendingPathComponent("ccx"),
+            withDestinationURL: launcher
+        )
+        return (entry, bun)
+    }
+
+    private static func findProjectBun() -> URL? {
+        var directory = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        ).standardizedFileURL
+        for _ in 0..<8 {
+            for relative in [
+                "node_modules/bun/bin/bun.exe",
+                "node_modules/bun/bin/bun",
+                "node_modules/.bin/bun",
+            ] {
+                let candidate = directory.appendingPathComponent(relative).resolvingSymlinksInPath()
+                if FileManager.default.isExecutableFile(atPath: candidate.path) {
+                    return candidate
+                }
+            }
+            let parent = directory.deletingLastPathComponent()
+            if parent.path == directory.path { break }
+            directory = parent
+        }
+        return nil
     }
 
     private static func withTemporaryDirectory<T>(_ body: (URL) throws -> T) throws -> T {

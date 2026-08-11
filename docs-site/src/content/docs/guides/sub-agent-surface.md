@@ -17,7 +17,7 @@ Choose the mode for **new sessions**. Existing sessions keep the surface they st
 | Mode | What Codex gets | Who should pick it |
 | --- | --- | --- |
 | **v1** | Classic namespaced `spawn_agent`, `send_input`, `resume_agent`, and `close_agent` tools. A spawn can select another model directly. | Beginners who need reliable delegation across different providers, especially native-to-routed children. |
-| **base** (default; **Follow Codex defaults** in the GUI) | Upstream model pins: GPT-5.6 Sol/Terra use v2, Luna uses v1, and unpinned models follow Codex's `multi_agent_v2` feature flag. | Most users. It follows Codex's intended surface for each model without forcing one globally. |
+| **base** (default; **Codex native** in the GUI) | Upstream model pins: GPT-5.6 Sol/Terra use v2, Luna uses v1, and unpinned models follow Codex's `multi_agent_v2` feature flag. | Most users. It follows Codex's intended surface for each model without forcing one globally. |
 | **v2** | Flat `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`, and agent-list tools, with concurrent sessions. | Users who want the newer concurrent workflow. Mixed-provider parents must also choose the plaintext compatibility delivery policy described below. |
 
 :::tip[Not sure?]
@@ -36,6 +36,21 @@ The selected mode controls the `multi_agent_version` field in every catalog entr
 
 CodexCommander applies this as the final pass to both the live `/v1/models` catalog and the catalog synced
 to disk. That is why a mode change affects newly created App, CLI, and TUI sessions consistently.
+
+### A mode is not a worker reload
+
+Changing to **v2** makes Luna *eligible for the V2 collaboration surface* because the generated
+catalog stamps it as V2. It does not, by itself, make Luna (or any other model) available to a
+currently running Codex worker. For a model to be usable by `spawn_agent`, all of these must hold:
+
+1. It is selected, surface-compatible, picker-visible, and inside the five-model advertised window.
+2. The deterministic CodexCommander catalog containing it has been written to disk.
+3. The current Codex app-server has loaded that catalog (not an older in-memory copy).
+4. Its proxy route is enabled and can actually serve the request.
+
+This separation is deliberate: protocol selection controls catalog semantics; catalog activation
+controls what an already-running Codex worker has loaded. In particular, opening a **new task** or
+forking a task does **not** reload an existing app-server's model catalog.
 
 For a v2 roster, eligibility has three states: an entry stamped `"v2"`, explicitly set to `null`, or
 with no `multi_agent_version` field is eligible. A genuine `"v1"` pin is excluded because it states
@@ -119,7 +134,7 @@ CodexCommander fails safely instead of forwarding an empty or unreadable task:
 | Policy | Behavior |
 | --- | --- |
 | `"encrypted"` (default) | Preserves ChatGPT's reserved encrypted collaboration schema and the fail-closed behavior above. Use native ChatGPT workers or v1 for external workers. |
-| `"plaintext"` | Experimental mixed-provider V2 compatibility. For ChatGPT parents, CodexCommander presents a non-reserved plaintext collaboration namespace and restores the canonical namespace on the client-facing response. For routed parents, it marks only completed V2 message calls as plaintext. Both paths activate Codex's plaintext V2 handler, while its graph, mailbox, wait, follow-up, and completion lifecycle remain native. |
+| `"plaintext"` | Experimental mixed-provider V2 compatibility. It changes only V2 **task-message delivery** so a routed provider can read the delegated task; it is not a general key or credential setting. For ChatGPT parents, CodexCommander presents a non-reserved plaintext collaboration namespace and restores the canonical namespace on the client-facing response. For routed parents, it marks only completed V2 message calls as plaintext. Both paths activate Codex's plaintext V2 handler, while its graph, mailbox, wait, follow-up, and completion lifecycle remain native. |
 
 The plaintext decision is made when the parent tool schema is created, before the worker model is
 known. Consequently **every** V2 `spawn_agent`, `send_message`, and `followup_task` message from that
@@ -139,7 +154,7 @@ switching an active conversation in place.
 ### GUI
 
 - **Dashboard** → first stat cell: choose **v1**, **base**, or **v2**.
-- **Models** → **Current behavior** → **Collaboration**: choose **Classic v1**, **Follow Codex defaults** (base), or **Concurrent v2**.
+- **Models** → **Current behavior** → **Collaboration**: choose **Reliable v1**, **Codex native** (base/default semantics), or **Concurrent v2**.
 - **Subagents** → **Agent Command Center**:
   - **Active Roster** chooses and orders the five model overrides advertised first to `spawn_agent`.
     Drag rows, use the arrow buttons, or press <kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd>.
@@ -151,9 +166,12 @@ switching an active conversation in place.
     guidance, and native Codex-default sync. Save policy changes separately from roster changes.
 
 Leaving **Thread limit** blank restores the Codex default. V2 counts total threads including the root;
-V1 counts child threads. Protocol and thread-limit changes apply to new sessions; guidance and
-fallback apply to future spawned child turns. The page reports when a running Codex app-server still
-has a stale catalog.
+V1 counts child threads. A protocol or thread-limit change updates managed boot configuration: use
+the catalog status to choose the reload path. When the catalog and managed routing are current but the
+worker is stale, quit ChatGPT completely, reopen it, and start a new task for the session-bound tool
+shape. If the catalog is pending/unknown or routing is not injected, use **Apply to Codex** to reconcile
+them first; restarting ChatGPT alone is not that repair. Guidance and fallback apply to future spawned
+child turns. A V2 delivery-only change needs a new task but does not dirty the catalog or require Apply.
 
 ### CLI
 
@@ -189,8 +207,10 @@ The management API exposes matching `GET` and `PUT` endpoints:
 | `/api/v2` | Surface mode, V2 message delivery, native feature flag, and thread settings |
 | `/api/injection-model` | Preferred model, effort, custom prompt, guidance, and native-default sync |
 | `/api/effort-caps` | Main-agent and sub-agent effort ceilings |
-| `/api/subagent-models` | Ordered roster of up to five models |
+| `/api/subagent-models` | Ordered roster of up to five models; saving it is non-disruptive and also reports catalog activation state |
 | `/api/subagent-model-fallback` | Global fallback order and poll interval |
+| `/api/codex-catalog/status` | Read desired configuration, deterministic on-disk catalog evidence, and current-worker activation evidence |
+| `/api/codex-catalog/apply` | Guarded reconciliation for a pending catalog or uninjected managed route, followed when necessary by a confirmed force-restart of verified stale workers. For an already-converged stale worker this is an advanced fallback that may make ChatGPT show **stopped unexpectedly**; browser use requires a confirmed `ccx gui` or menu-app launch |
 
 Sending `multiAgentV2MessageDelivery: "encrypted"` or `null` to `PUT /api/v2` removes the explicit
 override and restores the encrypted default.
@@ -224,16 +244,31 @@ a positive partial count before passing a model or effort override.
 It may be picker-hidden, outside the five-model display limit, missing from the catalog, or pinned
 to v1. A `"v2"`, `null`, or absent surface value is eligible; a real `"v1"` pin is not.
 
+### Does V2 make Luna available immediately?
+
+No. Forced V2 removes Luna's upstream V1 surface pin, so it can be eligible for the V2 roster. It
+still needs to be selected and advertised, written into the catalog, loaded by the current Codex
+worker, and routable through the proxy. Use the dashboard's catalog status to see which condition
+is pending. If the catalog and routing are current and only the worker is stale, quit ChatGPT
+completely, reopen it, and start a new task. If the catalog is pending or routing is not injected,
+use **Apply to Codex** for reconciliation first.
+
 ### Do mode changes affect running sessions?
 
-No. Start a new Codex session after changing the mode. If a long-running App host still shows stale
-catalog state, run `ccx sync` and restart that Codex surface.
+No. Start a new Codex session after changing the mode. That controls the collaboration protocol but
+does not reload an already-running App host's model catalog. Save writes desired configuration and
+converges the on-disk catalog without interrupting work. When the catalog and managed routing are
+current but the worker is stale, quit ChatGPT completely, reopen it, and then start the new task. The
+guarded **Force-restart workers** action and `ccx sync --restart-codex` remain advanced fallbacks and may
+make ChatGPT show **stopped unexpectedly**. A pending catalog or uninjected managed route still needs
+**Apply to Codex** reconciliation first. There is intentionally no auto-apply, idle queue, or persisted
+“pending” snapshot to manage.
 
 ### Can Sol V2 delegate to Kimi, Grok, or DeepSeek?
 
 Yes, with **V2 message delivery → Plaintext compatibility** and a fresh session. The policy keeps
 the V2 lifecycle but makes that parent's delegated messages plaintext. Leave delivery encrypted for
-the native-only confidentiality contract, or use Classic v1 for the older cross-provider surface.
+the native-only confidentiality contract, or use Reliable v1 for the established cross-provider surface.
 
 ### Reasoning effort
 

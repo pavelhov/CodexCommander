@@ -8,9 +8,9 @@ import {
 } from "./proxy-lifecycle";
 import {
   APPLY_CODEX_CATALOG_ACTION,
-  applyCodexCatalog,
   type ApplyCodexCatalogLifecycleResult,
 } from "../codex/catalog-apply";
+import { applyCodexCatalogForCompanion } from "./catalog-activation";
 
 export const MACOS_LIFECYCLE_HELPER_COMMAND = "__macos-lifecycle";
 export const MACOS_LIFECYCLE_JSON_MAX_BYTES = 2 * 1024;
@@ -88,7 +88,7 @@ async function perform(action: MacOSLifecycleAction): Promise<MacOSLifecycleResu
     case "restart":
       return restartProxyLifecycle({ ensureCompanion: false });
     case APPLY_CODEX_CATALOG_ACTION:
-      return applyCodexCatalog();
+      return applyCodexCatalogForCompanion();
   }
 }
 

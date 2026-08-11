@@ -28,6 +28,13 @@ const server = Bun.serve({
 
 const deps: AccountDeps = {
   baseUrl: `http://127.0.0.1:${server.port}`,
+  attestLiveManagementProxyImpl: async () => ({
+    pid: 4242,
+    port: server.port,
+    hostname: "127.0.0.1",
+    source: "runtime",
+    baseUrl: `http://127.0.0.1:${server.port}`,
+  }),
   loadConfigImpl: () => ({ providers: {} }) as ReturnType<NonNullable<AccountDeps["loadConfigImpl"]>>,
 };
 

@@ -12,7 +12,7 @@ async function call(
   method: string,
   pathname: string,
   headers: Record<string, string> = {},
-  principal?: "admin-token" | "gui-session",
+  principal?: "admin-token" | "confirmed-gui-session",
 ): Promise<{ status: number; body: unknown; raw: string; routed: boolean }> {
   // `isAllowedManagementOrigin` derives the expected origin from the Host header and
   // rejects the request outright when it is missing, so Host is required here. Omitting

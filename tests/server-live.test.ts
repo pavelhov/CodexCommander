@@ -16,6 +16,7 @@ import {
 } from "../src/server/readiness";
 import { startServer } from "../src/server";
 import { beginShutdownDrain, isDraining, resetLifecycleDrainStateForTests } from "../src/server/lifecycle";
+import type { ManagementAuthState } from "../src/server/management-auth";
 import type { CodexCommanderConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -953,6 +954,142 @@ describe("GET /readyz", () => {
       expect(res.status).toBe(503);
       expect(res.headers.get("retry-after")).toBe("1");
       expect(((await res.json()) as { status: string }).status).toBe("failed");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("authenticated full sync recovers a failed live server only after post-sync activation proof", async () => {
+    const desiredConfig = forwardConfig();
+    saveConfig(desiredConfig);
+    const gate = createReadinessGate();
+    gate.markFailed();
+    const adminToken = "ccx_admin_live-readiness-recovery";
+    const managementAuthState: ManagementAuthState = {
+      available: true,
+      token: adminToken,
+      source: "environment",
+      sessions: new Map(),
+    };
+    const server = startServer(0, {
+      readinessGate: gate,
+      managementAuthState,
+      managementApi: {
+        syncModelsToCodex: async () => ({
+          status: "applied",
+          ok: true,
+          added: 0,
+          catalogPath: null,
+          catalogExists: true,
+          catalogWritten: false,
+          cacheSynced: false,
+          catalogQuality: "live",
+          rehydrated: 0,
+          message: "synchronized",
+        }),
+        readRuntimePort: () => null,
+        resetCodexAppServerCatalogStateCache: () => {},
+        collectCodexAppServerCatalogState: () => ({
+          state: "not_running",
+          processes: [],
+          catalogMtimeMs: null,
+        }),
+        captureCatalogDesiredSnapshotForActivation: () => ({
+          config: desiredConfig,
+          authority: {
+            generation: { value: 1 },
+            semanticIdentity: "semantic",
+            contentIdentity: "content",
+            referenceIdentity: "reference",
+          },
+          revision: "stable-live-revision",
+        }) as never,
+        catalogArtifactProofForActivation: () => "current",
+        codexRoutingKindForActivation: () => "codexcommander-local",
+      },
+    });
+    try {
+      const health = await fetch(new URL("/healthz", server.url));
+      expect(health.status).toBe(200);
+      const failed = await fetch(new URL("/readyz", server.url));
+      expect(failed.status).toBe(503);
+      expect(((await failed.json()) as { status: string }).status).toBe("failed");
+
+      const sync = await fetch(new URL("/api/sync", server.url), {
+        method: "POST",
+        headers: { "x-codexcommander-api-key": adminToken },
+      });
+      expect(sync.status).toBe(200);
+
+      const recovered = await fetch(new URL("/readyz", server.url));
+      expect(recovered.status).toBe(200);
+      expect(((await recovered.json()) as { status: string }).status).toBe("ready");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("manual sync cannot promote pending readiness before startup settles", async () => {
+    const desiredConfig = forwardConfig();
+    saveConfig(desiredConfig);
+    const gate = createReadinessGate();
+    const adminToken = "ccx_admin_pending-readiness-overlap";
+    const managementAuthState: ManagementAuthState = {
+      available: true,
+      token: adminToken,
+      source: "environment",
+      sessions: new Map(),
+    };
+    const server = startServer(0, {
+      readinessGate: gate,
+      managementAuthState,
+      managementApi: {
+        syncModelsToCodex: async () => ({
+          status: "applied",
+          ok: true,
+          added: 0,
+          catalogPath: null,
+          catalogExists: true,
+          catalogWritten: false,
+          cacheSynced: false,
+          catalogQuality: "live",
+          rehydrated: 0,
+          message: "synchronized",
+        }),
+        readRuntimePort: () => null,
+        resetCodexAppServerCatalogStateCache: () => {},
+        collectCodexAppServerCatalogState: () => ({
+          state: "not_running",
+          processes: [],
+          catalogMtimeMs: null,
+        }),
+        captureCatalogDesiredSnapshotForActivation: () => ({
+          config: desiredConfig,
+          authority: {
+            generation: { value: 1 },
+            semanticIdentity: "semantic",
+            contentIdentity: "content",
+            referenceIdentity: "reference",
+          },
+          revision: "stable-pending-revision",
+        }) as never,
+        catalogArtifactProofForActivation: () => "current",
+        codexRoutingKindForActivation: () => "codexcommander-local",
+      },
+    });
+    try {
+      const sync = await fetch(new URL("/api/sync", server.url), {
+        method: "POST",
+        headers: { "x-codexcommander-api-key": adminToken },
+      });
+      expect(sync.status).toBe(200);
+      const stillPending = await fetch(new URL("/readyz", server.url));
+      expect(stillPending.status).toBe(503);
+      expect(((await stillPending.json()) as { status: string }).status).toBe("pending");
+
+      // The original startup settlement is still authoritative.
+      gate.markFailed();
+      expect(gate.getStatus()).toBe("failed");
     } finally {
       await server.stop(true);
     }

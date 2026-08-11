@@ -92,7 +92,18 @@ export interface CodexAppServerProcessIo {
   waitExit?: (pid: number, timeoutMs: number) => boolean;
   now?: () => number;
   readStartMs?: (pid: number) => number | null;
+  /**
+   * Uncertainty of `readStartMs` in milliseconds. Injected readers are exact
+   * unless they declare otherwise. Darwin's default `ps lstart` and Linux's
+   * epoch conversion from whole-second `/proc/stat` btime use a one-second
+   * window.
+   */
+  startTimePrecisionMs?: number;
   catalogMtimeMs?: () => number | null;
+  /** Exact current-user process snapshot used by the final per-PID signal fence. */
+  readSnapshot?: (pid: number) => ProcessSnapshot | null;
+  /** Final caller-owned consent/revision fence, evaluated immediately before SIGTERM. */
+  authorizeSignal?: () => boolean;
 }
 
 /** Split a process command line into argv-like tokens (handles simple quotes). */
@@ -252,6 +263,7 @@ function listUnixProcSnapshots(uid: number | undefined): ProcessSnapshot[] {
   // "no processes" — the staleness collector must not read it as not_running.
   if (!existsSync("/proc")) throw new Error("procfs_unavailable");
   const out: ProcessSnapshot[] = [];
+  let candidateVerificationFailed = false;
   for (const ent of readdirSync("/proc")) {
     if (!/^\d+$/.test(ent)) continue;
     const pid = Number(ent);
@@ -259,54 +271,72 @@ function listUnixProcSnapshots(uid: number | undefined): ProcessSnapshot[] {
     try {
       const status = readFileSync(`/proc/${pid}/status`, "utf8");
       const processUid = parseUnixProcStatusUid(status);
-      if (uid !== undefined && processUid !== undefined && processUid !== uid) continue;
+      if (uid !== undefined && processUid !== uid) continue;
       const commandLine = readFileSync(`/proc/${pid}/cmdline`)
         .toString("utf8")
         .replace(/\0/g, " ")
         .trim();
       if (!commandLine) continue;
-      out.push({ pid, commandLine, uid: processUid });
+      if (!isCodexAppServerCommandLine(commandLine)) {
+        out.push({ pid, commandLine, uid: processUid });
+        continue;
+      }
+
+      // Bind argv and birth at one enumeration boundary. If the candidate
+      // changes while it is being read, fail the whole enumeration closed;
+      // omitting it could otherwise be misreported as `not_running`.
+      const startedAtMs = readLinuxProcStartMs(pid);
+      const verifiedCommandLine = readFileSync(`/proc/${pid}/cmdline`)
+        .toString("utf8")
+        .replace(/\0/g, " ")
+        .trim();
+      const verifiedStartedAtMs = readLinuxProcStartMs(pid);
+      if (
+        startedAtMs === null
+        || verifiedStartedAtMs !== startedAtMs
+        || verifiedCommandLine !== commandLine
+      ) {
+        candidateVerificationFailed = true;
+        continue;
+      }
+      out.push({ pid, commandLine, uid: processUid, startedAtMs });
     } catch {
       /* process exited mid-scan */
     }
   }
+  if (candidateVerificationFailed) throw new Error("linux_codex_identity_unverified");
   return out;
 }
 
-function listDarwinSnapshots(uid: number | undefined): ProcessSnapshot[] {
+function parseDarwinSnapshotLine(line: string, expectedUid: number): ProcessSnapshot | null {
+  const match = /^(\d+)\s+(\S+\s+\S+\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/.exec(line);
+  if (!match) return null;
+  const pid = Number(match[1]);
+  const startedAtMs = Date.parse(match[2]!.trim());
+  const commandLine = match[3]!.trim();
+  if (!Number.isSafeInteger(pid) || pid <= 1 || !commandLine) return null;
+  return {
+    pid,
+    commandLine,
+    uid: expectedUid,
+    ...(Number.isFinite(startedAtMs) ? { startedAtMs } : {}),
+  };
+}
+
+function listDarwinSnapshots(uid: number): ProcessSnapshot[] {
   const out: ProcessSnapshot[] = [];
   // Top-level exec failure propagates: callers decide their own safe default
   // (restart flow → treat as none; staleness check → unknown, never "fresh").
-  const output = uid !== undefined
-    ? execFileSync("ps", ["-u", String(uid), "-o", "pid=,command="], {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 5_000,
-    })
-    : execFileSync("ps", ["-axo", "pid=,uid=,command="], {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 5_000,
-    });
+  const output = execFileSync("ps", ["-u", String(uid), "-o", "pid=,lstart=,command="], {
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 5_000,
+  });
   for (const raw of output.split(/\r?\n/)) {
     const line = raw.trim();
     if (!line) continue;
-    if (uid !== undefined) {
-      const match = /^(\d+)\s+(.*)$/.exec(line);
-      if (!match) continue;
-      const pid = Number(match[1]);
-      const commandLine = match[2]?.trim() ?? "";
-      if (!Number.isSafeInteger(pid) || pid <= 1 || !commandLine) continue;
-      out.push({ pid, commandLine, uid });
-      continue;
-    }
-    const match = /^(\d+)\s+(\d+)\s+(.*)$/.exec(line);
-    if (!match) continue;
-    const pid = Number(match[1]);
-    const processUid = Number(match[2]);
-    const commandLine = match[3]?.trim() ?? "";
-    if (!Number.isSafeInteger(pid) || pid <= 1 || !commandLine) continue;
-    out.push({ pid, commandLine, uid: Number.isSafeInteger(processUid) ? processUid : undefined });
+    const snapshot = parseDarwinSnapshotLine(line, uid);
+    if (snapshot) out.push(snapshot);
   }
   return out;
 }
@@ -348,7 +378,8 @@ export function listWindowsSnapshots(): ProcessSnapshot[] {
     "    $owner=if($o.Domain){\"$($o.Domain)\\$($o.User)\"}else{$o.User}",
     "    if($owner -ine $me){return}",
     "    $cmd=($_.CommandLine -replace \"`t\",\" \")",
-    "    \"{0}`t{1}`t{2}\" -f $_.ProcessId, $cmd, $owner",
+    "    $born=$_.CreationDate.ToUniversalTime().ToString(\"o\")",
+    "    \"{0}`t{1}`t{2}`t{3}\" -f $_.ProcessId, $born, $cmd, $owner",
     "  } catch { \"__CCX_ENUM_INCOMPLETE__\" }",
     "}",
   ].join("\n");
@@ -366,20 +397,93 @@ export function listWindowsSnapshots(): ProcessSnapshot[] {
     const tab = line.indexOf("\t");
     if (tab <= 0) continue;
     const tab2 = line.indexOf("\t", tab + 1);
-    if (tab2 <= tab) continue;
+    const tab3 = line.indexOf("\t", tab2 + 1);
+    if (tab2 <= tab || tab3 <= tab2) continue;
     const pid = Number(line.slice(0, tab));
-    const commandLine = line.slice(tab + 1, tab2).trim();
-    const owner = line.slice(tab2 + 1).trim();
+    const startedAtMs = Date.parse(line.slice(tab + 1, tab2).trim());
+    const commandLine = line.slice(tab2 + 1, tab3).trim();
+    const owner = line.slice(tab3 + 1).trim();
     if (!Number.isSafeInteger(pid) || pid <= 1 || !commandLine || !owner) continue;
-    out.push({ pid, commandLine, owner });
+    out.push({ pid, commandLine, owner, ...(Number.isFinite(startedAtMs) ? { startedAtMs } : {}) });
   }
   return out;
 }
 
 function defaultListSnapshots(platform: NodeJS.Platform, getuid: () => number | undefined): ProcessSnapshot[] {
   if (platform === "win32") return listWindowsSnapshots();
-  if (platform === "darwin") return listDarwinSnapshots(getuid());
-  return listUnixProcSnapshots(getuid());
+  const uid = getuid();
+  if (uid === undefined) throw new Error("current_user_unavailable");
+  if (platform === "darwin") return listDarwinSnapshots(uid);
+  return listUnixProcSnapshots(uid);
+}
+
+function defaultReadSnapshot(
+  pid: number,
+  platform: NodeJS.Platform,
+  getuid: () => number | undefined,
+): ProcessSnapshot | null {
+  if (platform !== "darwin" && platform !== "win32") {
+    const expectedUid = getuid();
+    if (expectedUid === undefined) return null;
+    const startedAtMs = readLinuxProcStartMs(pid);
+    const status = readFileSync(`/proc/${pid}/status`, "utf8");
+    const uid = parseUnixProcStatusUid(status);
+    if (uid !== expectedUid) return null;
+    const commandLine = readFileSync(`/proc/${pid}/cmdline`)
+      .toString("utf8")
+      .replace(/\0/g, " ")
+      .trim();
+    const verifiedStartedAtMs = readLinuxProcStartMs(pid);
+    return commandLine && startedAtMs !== null && verifiedStartedAtMs === startedAtMs
+      ? { pid, commandLine, uid, startedAtMs }
+      : null;
+  }
+  if (platform === "darwin") {
+    const expectedUid = getuid();
+    if (expectedUid === undefined) return null;
+    const output = execFileSync("ps", ["-o", "pid=,uid=,lstart=,command=", "-p", String(pid)], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 2_000,
+    }).trim();
+    const match = /^(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/.exec(output);
+    if (!match) return null;
+    const observedPid = Number(match[1]);
+    const uid = Number(match[2]);
+    const startedAtMs = Date.parse(match[3]!.trim());
+    const commandLine = match[4]!.trim();
+    if (observedPid !== pid || !commandLine || uid !== expectedUid || !Number.isFinite(startedAtMs)) return null;
+    return { pid, commandLine, uid, startedAtMs };
+  }
+
+  const psCommand = [
+    "$ErrorActionPreference='Stop'",
+    "$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name",
+    `$p=Get-CimInstance Win32_Process -Filter \"ProcessId=${pid}\"`,
+    "if($null -eq $p){return}",
+    "$o=Invoke-CimMethod -InputObject $p -MethodName GetOwner -ErrorAction Stop",
+    "if($null -eq $o -or $o.ReturnValue -ne 0 -or [string]::IsNullOrWhiteSpace($o.User)){throw 'owner_unavailable'}",
+    "$owner=if($o.Domain){\"$($o.Domain)\\$($o.User)\"}else{$o.User}",
+    "if($owner -ine $me){return}",
+    "$cmd=($p.CommandLine -replace \"`t\",\" \")",
+    "$born=$p.CreationDate.ToUniversalTime().ToString(\"o\")",
+    "\"{0}`t{1}`t{2}`t{3}\" -f $p.ProcessId, $born, $cmd, $owner",
+  ].join("\n");
+  const output = execFileSync("powershell.exe", [
+    "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
+    "-Command", psCommand,
+  ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000, windowsHide: true }).trim();
+  const tab = output.indexOf("\t");
+  const tab2 = output.indexOf("\t", tab + 1);
+  const tab3 = output.indexOf("\t", tab2 + 1);
+  if (tab <= 0 || tab2 <= tab || tab3 <= tab2) return null;
+  const observedPid = Number(output.slice(0, tab));
+  const startedAtMs = Date.parse(output.slice(tab + 1, tab2).trim());
+  const commandLine = output.slice(tab2 + 1, tab3).trim();
+  const owner = output.slice(tab3 + 1).trim();
+  return observedPid === pid && commandLine && owner && Number.isFinite(startedAtMs)
+    ? { pid, commandLine, owner, startedAtMs }
+    : null;
 }
 
 export function listCodexAppServerProcesses(io: CodexAppServerProcessIo = {}): CodexAppServerProcess[] {
@@ -409,7 +513,11 @@ export function listCodexAppServerProcesses(io: CodexAppServerProcessIo = {}): C
     if (seen.has(snapshot.pid)) continue;
     if (!isCodexAppServerCommandLine(snapshot.commandLine)) continue;
     seen.add(snapshot.pid);
-    matched.push({ pid: snapshot.pid, commandLine: snapshot.commandLine });
+    matched.push({
+      pid: snapshot.pid,
+      commandLine: snapshot.commandLine,
+      ...(snapshot.startedAtMs !== undefined ? { startedAtMs: snapshot.startedAtMs } : {}),
+    });
   }
   return matched;
 }
@@ -552,6 +660,80 @@ export interface CodexAppServerCatalogStatus {
   catalogMtimeMs: number | null;
 }
 
+const verifiedProcessesByCatalogStatus = new WeakMap<object, readonly CodexAppServerProcess[]>();
+const startTimePrecisionByCatalogStatus = new WeakMap<object, number>();
+
+function normalizedStartTimePrecision(value: number): number {
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function classifyKnownProcessStarts(
+  processes: readonly { startedAtMs: number | null }[],
+  catalogMtimeMs: number,
+  precisionMs: number,
+): "fresh" | "stale" | "unknown" {
+  let stale = false;
+  for (const process of processes) {
+    const startedAtMs = process.startedAtMs;
+    if (startedAtMs === null) return "unknown";
+    if (precisionMs > 0 && startedAtMs <= catalogMtimeMs && startedAtMs + precisionMs > catalogMtimeMs) {
+      // The artifact fence overlaps the timestamp's uncertainty window. In
+      // particular, Darwin `ps lstart` cannot distinguish a worker that began
+      // just before the write from a replacement that began just after it in
+      // the same second. Neither freshness nor staleness is proven.
+      return "unknown";
+    }
+    if (precisionMs > 0 ? startedAtMs + precisionMs <= catalogMtimeMs : startedAtMs <= catalogMtimeMs) {
+      stale = true;
+    }
+  }
+  return stale ? "stale" : "fresh";
+}
+
+function rememberCatalogStatusEvidence(
+  status: CodexAppServerCatalogStatus,
+  precisionMs: number,
+  verified?: readonly CodexAppServerProcess[],
+): CodexAppServerCatalogStatus {
+  startTimePrecisionByCatalogStatus.set(status as object, precisionMs);
+  if (verified) verifiedProcessesByCatalogStatus.set(status as object, verified);
+  return status;
+}
+
+/** Internal exact identities captured by the same scan that produced a status DTO. */
+export function verifiedCodexAppServerProcessesFromCatalogState(
+  status: CodexAppServerCatalogStatus,
+): CodexAppServerProcess[] | null {
+  const verified = verifiedProcessesByCatalogStatus.get(status as object);
+  return verified ? verified.map(process => ({ ...process })) : null;
+}
+
+/** Reclassify one already-enumerated worker snapshot against another artifact fence. */
+export function reclassifyCodexAppServerCatalogState(
+  observed: CodexAppServerCatalogStatus,
+  catalogMtimeMs: number | null,
+): CodexAppServerCatalogStatus {
+  if (observed.processes.length === 0) {
+    return observed.state === "unknown"
+      ? { state: "unknown", processes: [], catalogMtimeMs: null }
+      : { state: "not_running", processes: [], catalogMtimeMs: null };
+  }
+  if (catalogMtimeMs === null || observed.processes.some(process => process.startedAtMs === null)) {
+    return { state: "unknown", processes: observed.processes, catalogMtimeMs };
+  }
+  const precisionMs = startTimePrecisionByCatalogStatus.get(observed as object) ?? 0;
+  const status: CodexAppServerCatalogStatus = {
+    state: classifyKnownProcessStarts(observed.processes, catalogMtimeMs, precisionMs),
+    processes: observed.processes,
+    catalogMtimeMs,
+  };
+  return rememberCatalogStatusEvidence(
+    status,
+    precisionMs,
+    verifiedProcessesByCatalogStatus.get(observed as object),
+  );
+}
+
 /** Resolve the catalog file Codex app-servers loaded at startup, for staleness checks. */
 function defaultCatalogMtimeMs(): number | null {
   try {
@@ -571,15 +753,14 @@ const CATALOG_STATE_TTL_MS = 5_000;
  * app-servers (#857): a server that started before the catalog changed keeps
  * an in-memory copy that disagrees with what ccx advertises.
  *
- * Cost note: a cold call synchronously runs the platform listing plus ONE
- * batched start-time query (hard bounds: ~5s+3s macOS, ~8s+5s Windows,
- * microseconds on Linux); the 5s TTL then serves repeats. Typical cold cost
- * is tens of milliseconds; fully-async background refresh is deliberately
- * out of scope for this slice.
+ * Cost note: production listings capture start evidence in the same platform
+ * pass. A single batched fallback is used only when an injected/legacy
+ * snapshot omitted it. The 5s TTL then serves repeats; fully-async background
+ * refresh is deliberately out of scope for this slice.
  *
  * - not_running: no app-server process → nothing can disagree.
- * - unknown: catalog unreadable, or any server's start time is unreadable —
- *   callers must treat this conservatively (suppress positive model claims).
+ * - unknown: catalog/start evidence is unreadable, or a coarse start-time
+ *   window overlaps the artifact fence — callers must fail closed.
  * - stale: at least one server predates the catalog mtime.
  */
 export function collectCodexAppServerCatalogState(
@@ -587,7 +768,7 @@ export function collectCodexAppServerCatalogState(
 ): CodexAppServerCatalogStatus {
   const now = (io.now ?? Date.now)();
   const fullyDefault = !io.listSnapshots && !io.readStartMs && !io.catalogMtimeMs
-    && !io.platform && !io.getuid && !io.now;
+    && io.startTimePrecisionMs === undefined && !io.platform && !io.getuid && !io.now;
   if (fullyDefault
     && catalogStateCache && now - catalogStateCache.atMs < CATALOG_STATE_TTL_MS) {
     return catalogStateCache.status;
@@ -629,19 +810,38 @@ export function collectCodexAppServerCatalogState(
         : { state: "not_running", processes: [], catalogMtimeMs: null };
     }
     const catalogMtimeMs = (io.catalogMtimeMs ?? defaultCatalogMtimeMs)();
+    const precisionMs = normalizedStartTimePrecision(
+      io.startTimePrecisionMs
+        ?? (io.readStartMs ? 0 : platform === "darwin" || platform === "linux" ? 1_000 : 0),
+    );
     const withStarts = io.readStartMs
       ? processes.map(proc => ({ pid: proc.pid, startedAtMs: io.readStartMs!(proc.pid) }))
       : (() => {
-        const batch = readProcessStartMsBatch(processes.map(proc => proc.pid), platform);
-        return processes.map(proc => ({ pid: proc.pid, startedAtMs: batch.get(proc.pid) ?? null }));
+        const captured = new Map(
+          snapshots
+            .filter(snapshot => snapshot.startedAtMs !== undefined)
+            .map(snapshot => [snapshot.pid, snapshot.startedAtMs!] as const),
+        );
+        const missing = processes.map(proc => proc.pid).filter(pid => !captured.has(pid));
+        const batch = readProcessStartMsBatch(missing, platform);
+        return processes.map(proc => ({
+          pid: proc.pid,
+          startedAtMs: captured.get(proc.pid) ?? batch.get(proc.pid) ?? null,
+        }));
       })();
     if (catalogMtimeMs === null || withStarts.some(proc => proc.startedAtMs === null)) {
-      return { state: "unknown", processes: withStarts, catalogMtimeMs };
+      const status = { state: "unknown" as const, processes: withStarts, catalogMtimeMs };
+      return rememberCatalogStatusEvidence(status, precisionMs, processes.map(process => ({ ...process })));
     }
-    // `<=` is deliberate: coarse clocks (ps lstart is second-granularity) can
-    // report equal values when the catalog actually changed after startup.
-    const stale = withStarts.some(proc => proc.startedAtMs! <= catalogMtimeMs);
-    return { state: stale ? "stale" : "fresh", processes: withStarts, catalogMtimeMs };
+    const status: CodexAppServerCatalogStatus = {
+      state: classifyKnownProcessStarts(withStarts, catalogMtimeMs, precisionMs),
+      processes: withStarts,
+      catalogMtimeMs,
+    };
+    return rememberCatalogStatusEvidence(status, precisionMs, processes.map((process, index) => ({
+      ...process,
+      startedAtMs: withStarts[index]!.startedAtMs!,
+    })));
   };
   const status = compute();
   if (fullyDefault) {
@@ -657,9 +857,12 @@ export function resetCodexAppServerCatalogStateCache(): void {
 
 export interface RestartCodexAppServersResult {
   requested: number[];
+  /** PIDs that actually received SIGTERM after every identity/authorization fence. */
+  signaled: number[];
   stopped: number[];
   surviving: number[];
   failed: Array<{ pid: number; error: string }>;
+  authorizationRefused?: boolean;
 }
 
 /** Send SIGTERM to matched processes and wait briefly; never escalates to SIGKILL. */
@@ -671,37 +874,61 @@ export function restartCodexAppServers(
   const kill = io.kill ?? ((pid, signal) => { process.kill(pid, signal); });
   const wait = io.waitExit ?? waitForExit;
   const now = io.now ?? Date.now;
+  const platform = io.platform ?? process.platform;
+  const getuid = io.getuid ?? (() => {
+    try {
+      return typeof process.getuid === "function" ? process.getuid() : undefined;
+    } catch {
+      return undefined;
+    }
+  });
+  const readSnapshot = io.readSnapshot
+    ?? (io.listSnapshots
+      ? (pid: number) => io.listSnapshots!().find(snapshot => snapshot.pid === pid) ?? null
+      : (pid: number) => defaultReadSnapshot(pid, platform, getuid));
   const requested = processes.map(process => process.pid);
   const stopped: number[] = [];
   const surviving: number[] = [];
   const failed: Array<{ pid: number; error: string }> = [];
+  let authorizationRefused = false;
 
-  // Re-resolve immediately before signaling so a recycled PID is never killed.
-  // Require the same pid+command-line identity as the original match — a new
-  // Codex-shaped process that reused the PID must not receive SIGTERM.
-  const liveByPid = new Map(
-    listCodexAppServerProcesses(io).map(process => [process.pid, process] as const),
-  );
   const signaled: CodexAppServerProcess[] = [];
 
-  for (const proc of processes) {
-    const live = liveByPid.get(proc.pid);
-    if (!live || codexAppServerProcessIdentity(live) !== codexAppServerProcessIdentity(proc)) {
-      // Original target exited (or identity changed); do not signal a replacement.
-      if (!isAlive(proc.pid)) stopped.push(proc.pid);
+  for (let index = 0; index < processes.length; index += 1) {
+    const proc = processes[index]!;
+    // Caller consent/revision checks may perform durable reads and therefore
+    // take arbitrarily long. Authorize first, then take the final current-user
+    // PID/argv/birth snapshot immediately before SIGTERM. Reversing this order
+    // leaves a PID-reuse window while authorization is in flight.
+    if (io.authorizeSignal && !io.authorizeSignal()) {
+      authorizationRefused = true;
+      if (isAlive(proc.pid)) surviving.push(proc.pid);
+      // Consent/revision revocation is permanent for this operation. Do not
+      // inspect later targets in a way that might accidentally resume signals
+      // if a mutable authorizer flips back to true.
+      for (const remaining of processes.slice(index + 1)) {
+        if (isAlive(remaining.pid)) surviving.push(remaining.pid);
+      }
+      break;
+    }
+    let live: ProcessSnapshot | null = null;
+    try {
+      live = readSnapshot(proc.pid);
+    } catch {
+      // Unreadable ownership/argv is never authorization to signal.
+    }
+    if (!live
+      || !isCodexAppServerCommandLine(live.commandLine)
+      || codexAppServerProcessIdentity(live) !== codexAppServerProcessIdentity(proc)) {
+      // Original target exited (or identity/ownership changed); do not signal a replacement.
       continue;
     }
-    if (proc.startedAtMs !== undefined) {
-      const currentStartedAtMs = (io.readStartMs ?? (pid => readProcessStartMs(pid, io.platform ?? process.platform)))(
-        proc.pid,
-      );
-      if (currentStartedAtMs !== proc.startedAtMs) {
-        // A same-command process can recycle a PID between classification and
-        // signal. The app-owned apply action supplies a birth time and fails
-        // closed when it changed or became unreadable.
-        if (!isAlive(proc.pid)) stopped.push(proc.pid);
-        continue;
-      }
+    const currentStartedAtMs = live.startedAtMs
+      ?? (io.readStartMs ?? (pid => readProcessStartMs(pid, platform)))(proc.pid);
+    if (proc.startedAtMs === undefined || currentStartedAtMs !== proc.startedAtMs) {
+      // Birth evidence is mandatory. An identical argv is not enough to
+      // distinguish a recycled PID from the classified stale worker.
+      continue;
     }
     try {
       kill(proc.pid, "SIGTERM");
@@ -713,8 +940,6 @@ export function restartCodexAppServers(
           error: error instanceof Error ? error.message : String(error),
         });
         surviving.push(proc.pid);
-      } else {
-        stopped.push(proc.pid);
       }
     }
   }
@@ -727,7 +952,14 @@ export function restartCodexAppServers(
     else surviving.push(proc.pid);
   }
 
-  return { requested, stopped, surviving, failed };
+  return {
+    requested,
+    signaled: signaled.map(process => process.pid),
+    stopped: [...new Set(stopped)],
+    surviving: [...new Set(surviving)],
+    failed,
+    ...(authorizationRefused ? { authorizationRefused: true } : {}),
+  };
 }
 
 export interface AfterCatalogWriteAppServerOptions {
@@ -779,11 +1011,11 @@ export function afterCatalogWriteHandleAppServers(
 /**
  * Startup-safe counterpart to {@link afterCatalogWriteHandleAppServers} (#1046).
  *
- * Service startup rewrites the catalog and the models cache, but an app-server
- * that booted earlier keeps an in-memory model list — Codex builds a static
- * manager from the catalog once and never rereads the file — so the picker shows
- * a roster that no longer exists on disk. Every check a user runs reads the file;
- * the picker renders memory.
+ * Canonical startup convergence may rewrite the catalog and models cache, but
+ * an app-server that booted earlier keeps an in-memory model list — Codex builds
+ * a static manager from the catalog once and never rereads the file — so the
+ * picker shows a roster that no longer exists on disk. Every check a user runs
+ * reads the file; the picker renders memory.
  *
  * Two things this deliberately does NOT do, both of which the `--restart-codex`
  * path does:

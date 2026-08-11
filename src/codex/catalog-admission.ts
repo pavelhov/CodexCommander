@@ -10,7 +10,13 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
 
-import { observeConfigGeneration } from "../config";
+import {
+  observeConfigGeneration,
+  readConfigAdmissionSnapshot,
+  readConfigGenerationInCurrentMutationTransaction,
+  validateConfigCandidate,
+  withConfigMutationLockSync,
+} from "../config";
 import type { CodexCommanderConfig } from "../types";
 import type {
   CatalogAdmissionSnapshot,
@@ -54,6 +60,22 @@ export function createCatalogConvergeRequest({
 const CONFIG_IDENTITY_KEY = randomBytes(32);
 const configReferenceIdentities = new WeakMap<object, string>();
 let nextConfigReferenceIdentity = 0;
+
+export class CatalogAdmissionStaleConfigError extends Error {
+  constructor() {
+    super("Cannot capture Codex catalog admission: the supplied config snapshot is stale.");
+    this.name = "CatalogAdmissionStaleConfigError";
+  }
+}
+
+export interface CatalogConfigAuthoritySnapshot {
+  /** Monotonic cooperating-write fence; include this in optimistic revisions. */
+  readonly generation: ConfigGeneration;
+  /** Process-keyed semantic config identity, safe to compare or hash but not decode. */
+  readonly semanticIdentity: string;
+  /** Process-keyed identity of the exact persisted bytes read with this authority. */
+  readonly contentIdentity: string;
+}
 
 function encodeLengthPrefixed(value: string): string {
   return `${Buffer.byteLength(value, "utf8")}:${value}`;
@@ -114,6 +136,7 @@ function keyedConfigIdentity(domain: string, payload: string): string {
 function catalogConfigIdentity(
   config: Readonly<CodexCommanderConfig>,
   generation: ConfigGeneration,
+  authority: CatalogConfigAuthoritySnapshot,
 ): CatalogAdmissionSnapshot["configIdentity"] {
   let referenceIdentity = configReferenceIdentities.get(config);
   if (!referenceIdentity) {
@@ -124,7 +147,50 @@ function catalogConfigIdentity(
   return Object.freeze({
     referenceIdentity,
     generation: Object.freeze({ ...generation }),
-    snapshotIdentity: keyedConfigIdentity("catalog-config-snapshot-v1", canonicalConfigEncoding(config)),
+    snapshotIdentity: authority.semanticIdentity,
+    contentIdentity: authority.contentIdentity,
+  });
+}
+
+/**
+ * Atomically bind a supplied decoded config to the persisted bytes and their
+ * monotonic generation. Direct/manual semantic byte drift is refused even when
+ * a non-cooperating editor did not bump the generation.
+ */
+export function captureCatalogConfigAuthority(
+  config: Readonly<CodexCommanderConfig>,
+): CatalogConfigAuthoritySnapshot {
+  // Unlike full catalog admission, status/revision observation is allowed to
+  // initialize generation zero for a valid pre-coordinator installation.
+  return withConfigMutationLockSync(() => {
+    const persisted = readConfigAdmissionSnapshot();
+    const normalized = validateConfigCandidate(config);
+    const persistedFile = persisted.kind === "read"
+      && persisted.diagnostics.source === "file"
+      && persisted.diagnostics.error === null;
+    const persistedAbsent = persisted.kind === "unreadable"
+      && persisted.diagnostics.source === "default"
+      && persisted.diagnostics.error === null;
+    if (
+      (!persistedFile && !persistedAbsent)
+      || !normalized.ok
+      || canonicalConfigEncoding(persisted.diagnostics.config)
+        !== canonicalConfigEncoding(normalized.config)
+    ) {
+      throw new CatalogAdmissionStaleConfigError();
+    }
+    const normalizedEncoding = canonicalConfigEncoding(normalized.config);
+    return Object.freeze({
+      generation: Object.freeze({ ...readConfigGenerationInCurrentMutationTransaction() }),
+      semanticIdentity: keyedConfigIdentity(
+        "catalog-config-snapshot-v1",
+        normalizedEncoding,
+      ),
+      contentIdentity: keyedConfigIdentity(
+        "catalog-config-content-v1",
+        persistedFile ? persisted.contentSha256 : "absent",
+      ),
+    });
   });
 }
 
@@ -136,8 +202,8 @@ function catalogConfigIdentity(
 export function captureCatalogAdmissionSnapshot(
   config: Readonly<CodexCommanderConfig>,
 ): CatalogAdmissionSnapshot {
-  const generation = observeConfigGeneration();
-  if (generation.kind === "absent") {
+  const observedGeneration = observeConfigGeneration();
+  if (observedGeneration.kind === "absent") {
     /*
      * Absence is refused HERE and admitted elsewhere, and the difference is the
      * lock. Codex write admission may carry an absent generation because it goes
@@ -155,9 +221,12 @@ export function captureCatalogAdmissionSnapshot(
      */
     throw new Error("Cannot capture Codex catalog admission: config generation is database (absent).");
   }
-  if (generation.kind !== "ready") {
-    throw new Error(`Cannot capture Codex catalog admission: config generation is ${generation.reason}.`);
+  if (observedGeneration.kind !== "ready") {
+    throw new Error(`Cannot capture Codex catalog admission: config generation is ${observedGeneration.reason}.`);
   }
+
+  const authority = captureCatalogConfigAuthority(config);
+  const generation = authority.generation;
 
   const evidenceSession = createCatalogGatherEvidenceSession();
   const homeSelection = captureAndSealCatalogHomeSelection(evidenceSession);
@@ -184,8 +253,8 @@ export function captureCatalogAdmissionSnapshot(
 
   return {
     config,
-    generation: generation.generation,
-    configIdentity: catalogConfigIdentity(config, generation.generation),
+    generation,
+    configIdentity: catalogConfigIdentity(config, generation, authority),
     targets,
     sourceEvidence,
   };

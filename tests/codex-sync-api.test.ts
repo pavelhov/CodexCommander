@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { syncModelsToCodex } from "../src/codex/sync";
+import { handleManagementAPI } from "../src/server/management-api";
 import { resolveCodexCoordinatorDatabasePath, resolveEffectiveUserIdentity } from "../src/codex/user-identity";
 import { MANAGED_AGENTS_TABLE_MARKER, MANAGED_SUBAGENT_DEFAULT_MARKER } from "../src/codex/subagent-defaults";
 import type { CodexCommanderConfig } from "../src/types";
@@ -116,6 +117,10 @@ describe("GUI/CLI Codex sync backend", () => {
     const errors: string[] = [];
     const result = await syncModelsToCodex(12345, config, { log: line => logs.push(String(line)), error: line => errors.push(String(line)) }, {
       admitCodexWrite: admittedSync,
+      reconcileJournal: () => {
+        order.push("journal");
+        return false;
+      },
       prepareCodexTransitionState: () => {
         order.push("coordinator");
         return { kind: "ready", state: { nativeGeneration: 0, currentTxId: null } };
@@ -143,7 +148,7 @@ describe("GUI/CLI Codex sync backend", () => {
 
     expect(injectedPort).toBe(12345);
     expect(injectedCatalogPath).toBe("/tmp/codexcommander-catalog.json");
-    expect(order).toEqual(["coordinator", "catalog", "inject"]);
+    expect(order).toEqual(["journal", "coordinator", "catalog", "inject"]);
     expect(result).toEqual({
       status: "applied",
       ok: true,
@@ -251,6 +256,50 @@ describe("GUI/CLI Codex sync backend", () => {
     expect(result).toMatchObject({ status: "skipped", skippedReason: "desired_disabled", ok: true });
     expect(refreshed).toBe(false);
     expect(injected).toBe(false);
+  });
+
+  test("an OFF race after catalog commit preserves truthful artifact receipts", async () => {
+    const result = await syncModelsToCodex(12345, config, null, {
+      admitCodexWrite: admittedSync,
+      prepareCodexTransitionState: preparedSync,
+      refreshCodexModelCatalog: async () => ({
+        added: 2,
+        path: "/tmp/codexcommander-catalog.json",
+        catalogExists: true,
+        catalogWritten: true,
+        cacheSynced: true,
+        comboOmissions: [],
+        catalogQuality: "live" as const,
+        rehydrated: 0,
+        catalogDisposition: {
+          status: "committed" as const,
+          changed: true,
+          degraded: false,
+          notices: [],
+        },
+      }),
+      injectCodexConfig: async () => ({
+        success: true,
+        status: "skipped",
+        skippedReason: "desired_disabled",
+        message: "Codex integration is OFF; no Codex config, catalog, cache, or history was changed.",
+      }),
+      currentExternalCodexModelProvider: () => null,
+    });
+
+    expect(result).toMatchObject({
+      status: "skipped",
+      skippedReason: "desired_disabled",
+      ok: true,
+      added: 2,
+      catalogPath: "/tmp/codexcommander-catalog.json",
+      catalogExists: true,
+      catalogWritten: true,
+      cacheSynced: true,
+      catalogQuality: "live",
+      rehydrated: 0,
+    });
+    expect(result.message).toContain("catalog changes from this sync were published");
   });
 
   /**
@@ -525,6 +574,256 @@ describe("GUI/CLI Codex sync backend", () => {
     expect(payload.body.error).toBe(payload.body.message);
     expect(payload.body.error).toContain("inspect");
     expect(payload.body.error).toContain(join(TEST_CODEX_HOME, "config.toml"));
+  });
+
+  test("POST /api/sync promotes failed readiness only after a clean full sync", async () => {
+    let recovered = 0;
+    const syncResult = {
+      status: "applied" as const,
+      ok: true,
+      added: 0,
+      catalogPath: null,
+      catalogExists: true,
+      catalogWritten: false,
+      cacheSynced: false,
+      catalogQuality: "live" as const,
+      rehydrated: 0,
+      message: "synced",
+    };
+    const request = new Request("http://localhost/api/sync", { method: "POST" });
+    const response = await handleManagementAPI(request, new URL(request.url), config, {
+      syncModelsToCodex: async () => syncResult,
+      readRuntimePort: () => ({ pid: process.pid, port: 10100, hostname: "127.0.0.1", startedAt: new Date().toISOString() }),
+      resetCodexAppServerCatalogStateCache: () => {},
+      collectCodexAppServerCatalogState: () => ({ state: "not_running", processes: [], catalogMtimeMs: null }),
+      captureCatalogDesiredSnapshotForActivation: () => ({
+        config,
+        authority: {
+          generation: { value: 1 },
+          semanticIdentity: "semantic",
+          contentIdentity: "content",
+          referenceIdentity: "reference",
+        },
+        revision: "revision",
+      }) as never,
+      catalogArtifactProofForActivation: () => "current",
+      codexRoutingKindForActivation: () => "codexcommander-local",
+      readinessGate: { recoverReady: () => { recovered += 1; } },
+    });
+
+    expect(response?.status).toBe(200);
+    expect(recovered).toBe(1);
+
+    const degradedRequest = new Request("http://localhost/api/sync", { method: "POST" });
+    await handleManagementAPI(degradedRequest, new URL(degradedRequest.url), config, {
+      syncModelsToCodex: async () => ({ ...syncResult, warning: "provider discovery incomplete" }),
+      readRuntimePort: () => null,
+      resetCodexAppServerCatalogStateCache: () => {},
+      collectCodexAppServerCatalogState: () => ({ state: "not_running", processes: [], catalogMtimeMs: null }),
+      captureCatalogDesiredSnapshotForActivation: () => ({
+        config,
+        authority: {
+          generation: { value: 1 },
+          semanticIdentity: "semantic",
+          contentIdentity: "content",
+          referenceIdentity: "reference",
+        },
+        revision: "revision",
+      }) as never,
+      catalogArtifactProofForActivation: () => "current",
+      codexRoutingKindForActivation: () => "codexcommander-local",
+      readinessGate: { recoverReady: () => { recovered += 1; } },
+    });
+    expect(recovered).toBe(1);
+  });
+
+  test("POST /api/sync never promotes from a torn desired, artifact, or routing observation", async () => {
+    const syncResult = {
+      status: "applied" as const,
+      ok: true,
+      added: 0,
+      catalogPath: null,
+      catalogExists: true,
+      catalogWritten: false,
+      cacheSynced: false,
+      catalogQuality: "live" as const,
+      rehydrated: 0,
+      message: "synced",
+    };
+    const snapshot = (revision: string) => ({
+      config,
+      authority: {
+        generation: { value: 1 },
+        semanticIdentity: "semantic",
+        contentIdentity: "content",
+        referenceIdentity: "reference",
+      },
+      revision,
+    }) as never;
+    const dispatch = async (overrides: {
+      capture: () => never;
+      artifact: () => "current" | "drifted";
+      routing: () => "codexcommander-local" | "native";
+      recover: () => void;
+    }) => {
+      const request = new Request("http://localhost/api/sync", { method: "POST" });
+      return handleManagementAPI(request, new URL(request.url), config, {
+        syncModelsToCodex: async () => syncResult,
+        readRuntimePort: () => null,
+        resetCodexAppServerCatalogStateCache: () => {},
+        collectCodexAppServerCatalogState: () => ({ state: "not_running", processes: [], catalogMtimeMs: null }),
+        captureCatalogDesiredSnapshotForActivation: overrides.capture,
+        catalogArtifactProofForActivation: overrides.artifact,
+        codexRoutingKindForActivation: overrides.routing,
+        readinessGate: { recoverReady: overrides.recover },
+      });
+    };
+
+    let recovered = 0;
+    let desiredReads = 0;
+    await dispatch({
+      capture: () => snapshot(++desiredReads === 1 ? "revision-a" : "revision-b"),
+      artifact: () => "current",
+      routing: () => "codexcommander-local",
+      recover: () => { recovered += 1; },
+    });
+    expect(recovered).toBe(0);
+
+    let artifactReads = 0;
+    await dispatch({
+      capture: () => snapshot("revision-a"),
+      artifact: () => ++artifactReads === 1 ? "current" : "drifted",
+      routing: () => "codexcommander-local",
+      recover: () => { recovered += 1; },
+    });
+    expect(recovered).toBe(0);
+
+    let routingReads = 0;
+    await dispatch({
+      capture: () => snapshot("revision-a"),
+      artifact: () => "current",
+      routing: () => ++routingReads === 1 ? "codexcommander-local" : "native",
+      recover: () => { recovered += 1; },
+    });
+    expect(recovered).toBe(0);
+  });
+
+  test("POST /api/sync recovery accepts only coherent intentional skip states", async () => {
+    const snapshot = (desiredConfig: CodexCommanderConfig) => ({
+      config: desiredConfig,
+      authority: {
+        generation: { value: 1 },
+        semanticIdentity: "semantic",
+        contentIdentity: "content",
+        referenceIdentity: "reference",
+      },
+      revision: "stable-revision",
+    }) as never;
+    const disabledConfig = {
+      ...config,
+      clientIntegrations: { ...config.clientIntegrations, codex: false },
+    } as CodexCommanderConfig;
+    let recovered = 0;
+    const disabledRequest = new Request("http://localhost/api/sync", { method: "POST" });
+    await handleManagementAPI(disabledRequest, new URL(disabledRequest.url), config, {
+      syncModelsToCodex: async () => ({
+        status: "skipped",
+        skippedReason: "desired_disabled",
+        ok: true,
+        added: 0,
+        catalogPath: null,
+        catalogExists: false,
+        catalogWritten: false,
+        cacheSynced: false,
+        catalogQuality: "native-only",
+        rehydrated: 0,
+        message: "disabled",
+      }),
+      readRuntimePort: () => null,
+      resetCodexAppServerCatalogStateCache: () => {},
+      collectCodexAppServerCatalogState: () => ({ state: "not_running", processes: [], catalogMtimeMs: null }),
+      captureCatalogDesiredSnapshotForActivation: () => snapshot(disabledConfig),
+      // No Commander-owned artifact is expected while integration is OFF.
+      catalogArtifactProofForActivation: () => "unproven",
+      codexRoutingKindForActivation: () => "native",
+      readinessGate: { recoverReady: () => { recovered += 1; } },
+    });
+    expect(recovered).toBe(1);
+
+    const staleCommanderRouteRequest = new Request("http://localhost/api/sync", { method: "POST" });
+    await handleManagementAPI(staleCommanderRouteRequest, new URL(staleCommanderRouteRequest.url), config, {
+      syncModelsToCodex: async () => ({
+        status: "skipped",
+        skippedReason: "desired_disabled",
+        ok: true,
+        added: 0,
+        catalogPath: null,
+        catalogExists: false,
+        catalogWritten: false,
+        cacheSynced: false,
+        catalogQuality: "native-only",
+        rehydrated: 0,
+        message: "disabled but stale route remains",
+      }),
+      readRuntimePort: () => null,
+      resetCodexAppServerCatalogStateCache: () => {},
+      collectCodexAppServerCatalogState: () => ({ state: "not_running", processes: [], catalogMtimeMs: null }),
+      captureCatalogDesiredSnapshotForActivation: () => snapshot(disabledConfig),
+      catalogArtifactProofForActivation: () => "unproven",
+      codexRoutingKindForActivation: () => "codexcommander-local",
+      readinessGate: { recoverReady: () => { recovered += 1; } },
+    });
+    expect(recovered).toBe(1);
+
+    const externalRequest = new Request("http://localhost/api/sync", { method: "POST" });
+    await handleManagementAPI(externalRequest, new URL(externalRequest.url), config, {
+      syncModelsToCodex: async () => ({
+        status: "skipped",
+        skippedReason: "external_provider",
+        ok: true,
+        added: 0,
+        catalogPath: null,
+        catalogExists: false,
+        catalogWritten: false,
+        cacheSynced: false,
+        catalogQuality: "native-only",
+        rehydrated: 0,
+        message: "external preserved",
+      }),
+      readRuntimePort: () => null,
+      resetCodexAppServerCatalogStateCache: () => {},
+      collectCodexAppServerCatalogState: () => ({ state: "not_running", processes: [], catalogMtimeMs: null }),
+      captureCatalogDesiredSnapshotForActivation: () => snapshot(config),
+      catalogArtifactProofForActivation: () => "unproven",
+      codexRoutingKindForActivation: () => "custom-remote",
+      readinessGate: { recoverReady: () => { recovered += 1; } },
+    });
+    expect(recovered).toBe(2);
+
+    const incoherentRequest = new Request("http://localhost/api/sync", { method: "POST" });
+    await handleManagementAPI(incoherentRequest, new URL(incoherentRequest.url), config, {
+      syncModelsToCodex: async () => ({
+        status: "skipped",
+        skippedReason: "external_provider",
+        ok: true,
+        added: 0,
+        catalogPath: null,
+        catalogExists: false,
+        catalogWritten: false,
+        cacheSynced: false,
+        catalogQuality: "native-only",
+        rehydrated: 0,
+        message: "incoherent",
+      }),
+      readRuntimePort: () => null,
+      resetCodexAppServerCatalogStateCache: () => {},
+      collectCodexAppServerCatalogState: () => ({ state: "not_running", processes: [], catalogMtimeMs: null }),
+      captureCatalogDesiredSnapshotForActivation: () => snapshot(disabledConfig),
+      catalogArtifactProofForActivation: () => "unproven",
+      codexRoutingKindForActivation: () => "custom-remote",
+      readinessGate: { recoverReady: () => { recovered += 1; } },
+    });
+    expect(recovered).toBe(2);
   });
 
   test("skips catalog refresh before preserving an external provider", async () => {

@@ -147,29 +147,67 @@ function assertInitialStateCanBeCreated(): void {
   }
 }
 
-function initialize(database: Database, databaseWasAbsent: boolean): void {
+function databaseSchemaIsEmpty(database: Database): boolean {
+  return database.query<Record<string, unknown>, []>(
+    "SELECT 1 FROM sqlite_schema LIMIT 1",
+  ).get() === null;
+}
+
+function initialize(database: Database, _databaseWasAbsent: boolean): void {
   const version = database.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version;
-  if (version !== 0 && version !== COORDINATOR_SCHEMA_VERSION) {
-    throw new CodexCoordinatorTransactionError("The coordinator database schema version is unsupported.");
+  if (version === 0) {
+    // First use and a rolled-back recovery bootstrap are intentionally
+    // indistinguishable only when SQLite contains literally no schema object.
+    // Any unversioned table/index/trigger remains ambiguous and is never
+    // adopted. The unchanged native-residue check still runs under BEGIN.
+    if (!databaseSchemaIsEmpty(database)) {
+      throw new CodexCoordinatorStateAmbiguousError(
+        "An existing unversioned coordinator database is unsupported.",
+      );
+    }
+    assertInitialStateCanBeCreated();
+    database.exec(CREATE_TRANSITION_TABLE);
+    database.query(INITIALIZE_TRANSITION_ROW).run(new Date().toISOString());
+    database.exec(`PRAGMA user_version = ${COORDINATOR_SCHEMA_VERSION}`);
+    readState(database);
+    return;
   }
-  if (!databaseWasAbsent && version === 0) {
-    throw new CodexCoordinatorStateAmbiguousError(
-      "An existing unversioned coordinator database is unsupported.",
-    );
+  if (version !== COORDINATOR_SCHEMA_VERSION) {
+    throw new CodexCoordinatorTransactionError("The coordinator database schema version is unsupported.");
   }
   database.exec(CREATE_TRANSITION_TABLE);
   const existing = database.query<TransitionRow, []>(SELECT_TRANSITION_ROW).get();
-  if (!existing && !databaseWasAbsent) {
+  if (!existing) {
     throw new CodexCoordinatorStateAmbiguousError(
       "The existing coordinator database has no authoritative transition row.",
     );
   }
-  if (!existing) {
-    assertInitialStateCanBeCreated();
-    database.query(INITIALIZE_TRANSITION_ROW).run(new Date().toISOString());
-  }
-  if (version === 0) database.exec(`PRAGMA user_version = ${COORDINATOR_SCHEMA_VERSION}`);
   readState(database);
+}
+
+/**
+ * Recovery N may encounter either the authoritative v2 coordinator or the
+ * exact empty SQLite shell left when an earlier bootstrap rolled back/crashed.
+ * It never adopts an unversioned database containing any user schema.
+ */
+function prepareRecoveryCoordinator(
+  database: Database,
+  databaseWasAbsent: boolean,
+): { deferredInitialization: boolean } {
+  const version = database.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version;
+  if (version === COORDINATOR_SCHEMA_VERSION) {
+    initialize(database, databaseWasAbsent);
+    return { deferredInitialization: false };
+  }
+  if (version !== 0) {
+    throw new CodexCoordinatorTransactionError("The coordinator database schema version is unsupported.");
+  }
+  if (!databaseSchemaIsEmpty(database)) {
+    throw new CodexCoordinatorStateAmbiguousError(
+      "An unversioned coordinator database with schema cannot be adopted for recovery.",
+    );
+  }
+  return { deferredInitialization: true };
 }
 
 function createCapability(
@@ -207,13 +245,56 @@ function createCapability(
   };
 }
 
-export function beginCodexCoordinatorTransaction(finalDatabasePath: string): CodexCoordinatorTransactionController {
+function createDeferredRecoveryCapability(
+  database: Database,
+  onResult: (result: TransitionStateUpdate) => void,
+): BrandedCodexCoordinatorTransaction {
+  let consumed = false;
+  return {
+    [codexCoordinatorTransactionBrand]: true,
+    beginTransition(expected, next) {
+      if (consumed) {
+        throw new CodexCoordinatorTransactionError("The coordinator capability has already been consumed.");
+      }
+      consumed = true;
+      if (expected.nativeGeneration !== 0
+        || expected.currentTxId !== null
+        || !next.txId.trim()) {
+        throw new CodexCoordinatorTransactionError("The recovery bootstrap transition is malformed.");
+      }
+      database.exec(CREATE_TRANSITION_TABLE);
+      database.query(INITIALIZE_TRANSITION_ROW).run(new Date().toISOString());
+      database.exec(`PRAGMA user_version = ${COORDINATOR_SCHEMA_VERSION}`);
+      const result = database.query(BEGIN_TRANSITION).run(
+        1,
+        next.txId,
+        new Date().toISOString(),
+        0,
+        null,
+      );
+      const state = readState(database);
+      const update: TransitionStateUpdate = result.changes === 1
+        ? { kind: "updated", state }
+        : { kind: "conflict", current: state };
+      onResult(update);
+      return update;
+    },
+  };
+}
+
+function beginCodexCoordinatorTransactionInternal(
+  finalDatabasePath: string,
+  recovery: boolean,
+  revalidateRecoveryAdmission?: () => boolean,
+  validateSettledRecovery?: () => boolean,
+): CodexCoordinatorTransactionController {
   let database: Database | undefined;
   let transactionOpen = false;
   let closed = false;
   let lastResult: TransitionStateUpdate | undefined;
   let initialIdentity: string | undefined;
   let databaseWasAbsent = false;
+  let deferredRecoveryInitialization = false;
 
   try {
     try {
@@ -277,7 +358,17 @@ export function beginCodexCoordinatorTransaction(finalDatabasePath: string): Cod
     initialIdentity = `${opened.dev}:${opened.ino}`;
     database.exec("PRAGMA busy_timeout = 0; PRAGMA locking_mode = NORMAL; BEGIN IMMEDIATE");
     transactionOpen = true;
-    initialize(database, databaseWasAbsent);
+    if (recovery) {
+      if (!revalidateRecoveryAdmission?.()) {
+        throw new CodexCoordinatorStateAmbiguousError(
+          "The recovery admission changed before the coordinator lock was acquired.",
+        );
+      }
+      deferredRecoveryInitialization = prepareRecoveryCoordinator(database, databaseWasAbsent)
+        .deferredInitialization;
+    } else {
+      initialize(database, databaseWasAbsent);
+    }
   } catch (cause) {
     if (transactionOpen) {
       try { database?.exec("ROLLBACK"); } catch { /* close releases the transaction */ }
@@ -300,11 +391,16 @@ export function beginCodexCoordinatorTransaction(finalDatabasePath: string): Cod
     }
   };
 
-  const capability = createCapability(db, result => { lastResult = result; });
+  const capability = deferredRecoveryInitialization
+    ? createDeferredRecoveryCapability(db, result => { lastResult = result; })
+    : createCapability(db, result => { lastResult = result; });
   return {
     capability,
     expectation() {
       requireOpen();
+      if (deferredRecoveryInitialization && lastResult === undefined) {
+        return { nativeBefore: 0, nativeAfter: 1, txId: randomUUID() };
+      }
       const state = readState(db);
       return {
         nativeBefore: state.nativeGeneration,
@@ -314,6 +410,9 @@ export function beginCodexCoordinatorTransaction(finalDatabasePath: string): Cod
     },
     version() {
       requireOpen();
+      if (deferredRecoveryInitialization && lastResult === undefined) {
+        return { nativeGeneration: 0, currentTxId: null };
+      }
       const state = readState(db);
       return { nativeGeneration: state.nativeGeneration, currentTxId: state.currentTxId };
     },
@@ -330,6 +429,20 @@ export function beginCodexCoordinatorTransaction(finalDatabasePath: string): Cod
     assertStablePath,
     commit() {
       requireOpen();
+      // The recovery-only initializer may publish into an absent/empty shell,
+      // but it cannot COMMIT authority until the ordinary, unchanged clean-home
+      // predicate succeeds after journal recovery and retirement.
+      if (deferredRecoveryInitialization) {
+        if (validateSettledRecovery) {
+          if (!validateSettledRecovery()) {
+            throw new CodexCoordinatorStateAmbiguousError(
+              "The recovered native Codex state did not satisfy its final admission.",
+            );
+          }
+        } else {
+          assertInitialStateCanBeCreated();
+        }
+      }
       assertStablePath();
       db.exec("COMMIT");
       transactionOpen = false;
@@ -349,6 +462,31 @@ export function beginCodexCoordinatorTransaction(finalDatabasePath: string): Cod
       closed = true;
     },
   };
+}
+
+export function beginCodexCoordinatorTransaction(
+  finalDatabasePath: string,
+): CodexCoordinatorTransactionController {
+  return beginCodexCoordinatorTransactionInternal(finalDatabasePath, false);
+}
+
+/**
+ * Recovery-only N acquisition. It shares the exact database/OS lock with every
+ * ordinary writer but may defer initialization over one valid dead journal.
+ * The controller still refuses to commit until ordinary residue admission is
+ * clean; callers cannot use this as a generic adoption escape hatch.
+ */
+export function beginCodexCoordinatorRecoveryTransaction(
+  finalDatabasePath: string,
+  revalidateRecoveryAdmission: () => boolean,
+  validateSettledRecovery?: () => boolean,
+): CodexCoordinatorTransactionController {
+  return beginCodexCoordinatorTransactionInternal(
+    finalDatabasePath,
+    true,
+    revalidateRecoveryAdmission,
+    validateSettledRecovery,
+  );
 }
 
 function currentCoordinatorDatabasePath(): string {

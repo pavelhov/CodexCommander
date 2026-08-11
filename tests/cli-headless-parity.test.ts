@@ -34,7 +34,20 @@ function fakeRuntime(responder?: (req: Request, body: unknown) => unknown) {
     },
   });
   servers.push(server);
-  return { requests, deps: { baseUrl: `http://127.0.0.1:${server.port}` } };
+  const baseUrl = `http://127.0.0.1:${server.port}`;
+  return {
+    requests,
+    deps: {
+      baseUrl,
+      attestLiveManagementProxyImpl: async () => ({
+        pid: 4242,
+        port: server.port,
+        hostname: "127.0.0.1",
+        source: "runtime" as const,
+        baseUrl,
+      }),
+    },
+  };
 }
 
 function sourceFiles(root: string): string[] {
@@ -126,11 +139,17 @@ describe("headless GUI parity CLI", () => {
       ["/api/debug", "ccx debug/observe"],
       ["/api/diagnostics", "ccx system"],
       ["/api/effort", "ccx agent"],
+      // The fragment exchange is the browser half of `ccx gui`; it consumes the
+      // one-time launcher ticket and is not a standalone headless operation.
+      ["/api/gui-launch-exchange", "ccx gui (browser handoff)"],
       ["/api/grok", "ccx grok"],
       ["/api/injection", "ccx agent"],
       ["/api/integrations/opencode", "ccx opencode"],
       ["/api/keys", "ccx access"],
       ["/api/logs", "ccx observe"],
+      // Short-lived proxy request leases are advisory UI telemetry. Persistent
+      // request history remains available through `ccx observe logs`.
+      ["/api/agent-activity", "ccx observe logs"],
       ["/api/config", "ccx config"],
       ["/api/settings", "ccx system"],
       // Routing Intelligence (RI-04..RI-10): profiles + dry-run are mirrored by
@@ -144,6 +163,7 @@ describe("headless GUI parity CLI", () => {
       ["/api/stop", "ccx stop"],
       ["/api/storage", "ccx observe"],
       ["/api/subagent", "ccx agent"],
+      ["/api/codex-catalog", "ccx system sync --restart-codex"],
       ["/api/sync", "ccx system sync"],
       ["/api/system", "ccx observe/system"],
       ["/api/usage", "ccx observe usage"],

@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -75,13 +75,73 @@ describe("injectCodexConfig integration (Design B)", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
 
     expect(runInject(codexHome, ccxHome).status).toBe(0);
-    const first = readFileSync(join(codexHome, "config.toml"), "utf8");
+    const configPath = join(codexHome, "config.toml");
+    const profilePath = join(codexHome, "codexcommander.config.toml");
+    const first = readFileSync(configPath, "utf8");
+    const firstProfile = readFileSync(profilePath, "utf8");
+    const sentinel = new Date("2000-01-01T00:00:00.000Z");
+    utimesSync(configPath, sentinel, sentinel);
+    utimesSync(profilePath, sentinel, sentinel);
+    const configMtime = lstatSync(configPath, { bigint: true }).mtimeNs;
+    const profileMtime = lstatSync(profilePath, { bigint: true }).mtimeNs;
     expect(runInject(codexHome, ccxHome).status).toBe(0);
-    const second = readFileSync(join(codexHome, "config.toml"), "utf8");
+    const second = readFileSync(configPath, "utf8");
 
     expect(second.match(/openai_base_url/g)?.length).toBe(1);
     expect(second.match(/Auto-injected by CodexCommander/g)?.length).toBe(1);
     expect(second).toBe(first);
+    expect(readFileSync(profilePath, "utf8")).toBe(firstProfile);
+    expect(lstatSync(configPath, { bigint: true }).mtimeNs).toBe(configMtime);
+    expect(lstatSync(profilePath, { bigint: true }).mtimeNs).toBe(profileMtime);
+  });
+
+  test("expected config generation fences the post-catalog injection gap", () => {
+    const configPath = join(codexHome, "config.toml");
+    const original = 'model = "gpt-5.5"\n';
+    writeFileSync(configPath, original, "utf8");
+
+    const result = runInject(
+      codexHome,
+      ccxHome,
+      "{}",
+      JSON.stringify({ expectedConfigGeneration: { value: 1 } }),
+    );
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ success: false, status: "stale" });
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+    expect(existsSync(join(codexHome, "codexcommander.config.toml"))).toBe(false);
+    expect(existsSync(join(codexHome, "codexcommander-journal.json"))).toBe(false);
+  });
+
+  test("exact admitted config authority fences a manual byte rewrite before injection", () => {
+    const configPath = join(codexHome, "config.toml");
+    const original = 'model = "gpt-5.5"\n';
+    writeFileSync(configPath, original, "utf8");
+    const script = `
+      const { writeFileSync } = require("node:fs");
+      const { join } = require("node:path");
+      const { loadConfig } = require("./src/config");
+      const { captureCatalogConfigAuthority } = require("./src/codex/catalog-admission");
+      const { injectCodexConfig } = require("./src/codex/inject");
+      const config = loadConfig();
+      const authority = captureCatalogConfigAuthority(config);
+      writeFileSync(
+        join(process.env.CODEXCOMMANDER_HOME, "config.json"),
+        JSON.stringify(config, null, 2) + "\\n",
+      );
+      const result = await injectCodexConfig(10100, config, { expectedConfigAuthority: authority });
+      console.log(JSON.stringify(result));
+    `;
+    const result = spawnSync(process.execPath, ["--eval", script], {
+      cwd: repoRoot,
+      env: { ...process.env, CODEX_HOME: codexHome, CODEXCOMMANDER_HOME: ccxHome },
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toMatchObject({ success: false, status: "stale" });
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+    expect(existsSync(join(codexHome, "codexcommander.config.toml"))).toBe(false);
+    expect(existsSync(join(codexHome, "codexcommander-journal.json"))).toBe(false);
   });
 
   test("fastMode=false forces fast_mode=false in both config and profile", () => {

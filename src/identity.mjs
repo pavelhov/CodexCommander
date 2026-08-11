@@ -29,6 +29,7 @@ export const UNINSTALL_MANIFEST = ".codexcommander-uninstall.json";
 
 export const ADMIN_KEY_PREFIX = "ccx_admin_";
 export const GUI_SESSION_PREFIX = "ccx_session_";
+export const GUI_LAUNCH_TICKET_PREFIX = "ccx_launch_";
 export const DATA_KEY_PREFIX = "ccx_data_";
 
 export const API_KEY_HEADER = "x-codexcommander-api-key";
@@ -41,7 +42,8 @@ export const AUTH_REQUIRED_MESSAGE = "CodexCommander API key required";
 export const ADMIN_AUTH_REQUIRED_MESSAGE = "CodexCommander admin token required";
 
 export const ARTIFACT_HTTP_PREFIX = "/v1/codexcommander/artifacts";
-export const SESSION_PATH = "/codexcommander-session";
+export const GUI_LAUNCH_TICKET_PATH = "/api/gui-launch-ticket";
+export const GUI_LAUNCH_EXCHANGE_PATH = "/api/gui-launch-exchange";
 
 /** Read one canonical environment variable. */
 export function readEnv(name, env = process.env) {

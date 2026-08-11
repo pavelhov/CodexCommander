@@ -5,6 +5,18 @@ function okResponse(): Response {
   return new Response(JSON.stringify({ success: true }), { status: 200 });
 }
 
+function attestedStop(pid: number, port: number, hostname?: string) {
+  return {
+    attestLiveManagementProxyImpl: async () => ({
+      pid,
+      port,
+      hostname,
+      source: "runtime" as const,
+      baseUrl: `http://${hostname === "::1" ? "[::1]" : hostname ?? "127.0.0.1"}:${port}`,
+    }),
+  };
+}
+
 describe("gracefulStopHost", () => {
   test("loopback aliases and wildcard binds answer on IPv4 loopback", () => {
     for (const host of [undefined, "", "  ", "localhost", "LOCALHOST", "127.0.0.1", "0.0.0.0", "::", "[::]"]) {
@@ -25,6 +37,7 @@ describe("stopProxyGracefully", () => {
   test("follows the recorded bind hostname when it names a concrete address", async () => {
     const calls: string[] = [];
     await stopProxyGracefully(9, {
+      ...attestedStop(9, 10100, "::1"),
       readRuntime: () => ({ port: 10100, hostname: "::1" }),
       fetchFn: (async (url: string | URL | Request) => {
         calls.push(String(url));
@@ -39,6 +52,7 @@ describe("stopProxyGracefully", () => {
   test("POSTs /api/stop on 127.0.0.1 with the runtime port, then waits for exit", async () => {
     const calls: { url: string; method?: string }[] = [];
     const result = await stopProxyGracefully(4242, {
+      ...attestedStop(4242, 10123),
       readRuntime: pid => (pid === 4242 ? { port: 10123 } : null),
       fetchFn: (async (url: string | URL | Request, init?: RequestInit) => {
         calls.push({ url: String(url), method: init?.method });
@@ -55,6 +69,7 @@ describe("stopProxyGracefully", () => {
   test("sends the management token instead of the data token", async () => {
     let headers: Record<string, string> | undefined;
     await stopProxyGracefully(1, {
+      ...attestedStop(1, 10100),
       readRuntime: () => ({ port: 10100 }),
       fetchFn: (async (_url: string | URL | Request, init?: RequestInit) => {
         headers = init?.headers as Record<string, string>;
@@ -81,6 +96,7 @@ describe("stopProxyGracefully", () => {
 
   test("returns false when the API call fails or the process never exits", async () => {
     const rejected = await stopProxyGracefully(7, {
+      ...attestedStop(7, 10100),
       readRuntime: () => ({ port: 10100 }),
       fetchFn: (async () => {
         throw new Error("connection refused");
@@ -91,6 +107,7 @@ describe("stopProxyGracefully", () => {
     expect(rejected).toBe(false);
 
     const non200 = await stopProxyGracefully(7, {
+      ...attestedStop(7, 10100),
       readRuntime: () => ({ port: 10100 }),
       fetchFn: (async () => new Response("nope", { status: 401 })) as typeof fetch,
       waitExit: () => true,
@@ -99,6 +116,7 @@ describe("stopProxyGracefully", () => {
     expect(non200).toBe(false);
 
     const noExit = await stopProxyGracefully(7, {
+      ...attestedStop(7, 10100),
       readRuntime: () => ({ port: 10100 }),
       fetchFn: (async () => okResponse()) as typeof fetch,
       waitExit: () => false,

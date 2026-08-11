@@ -3,7 +3,12 @@
  * per-family account readers. Kept separate from account.ts (command handlers)
  * per the 400-line module budget.
  */
-import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
+import {
+  attestLiveManagementProxy,
+  findLiveProxy,
+  probeHostname,
+  type ManagementAttestationIo,
+} from "../server/proxy-liveness";
 import { runningProxyUpdateHeaders } from "../oauth/login-cli";
 import { isPublicOAuthProvider } from "../oauth/index";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "../providers/registry";
@@ -45,6 +50,9 @@ export interface AccountDeps {
   /** Test injection: skip findLiveProxy and call the API at this base URL. */
   baseUrl?: string;
   fetchImpl?: typeof fetch;
+  managementAttestation?: Omit<ManagementAttestationIo, "fetchFn">;
+  /** Test seam for an explicitly attested management transport. */
+  attestLiveManagementProxyImpl?: typeof attestLiveManagementProxy;
   loadConfigImpl?: () => CodexCommanderConfig;
   stdinImpl?: AccountStdin;
   stdinTimeoutMs?: number;
@@ -83,7 +91,7 @@ export interface ApiResult {
 
 export async function apiJson(
   deps: AccountDeps,
-  baseUrl: string,
+  _baseUrl: string,
   method: "GET" | "PUT" | "POST" | "DELETE",
   path: string,
   body?: unknown,
@@ -91,7 +99,13 @@ export async function apiJson(
 ): Promise<ApiResult> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   try {
-    const res = await fetchImpl(`${baseUrl}${path}`, {
+    const attest = deps.attestLiveManagementProxyImpl ?? attestLiveManagementProxy;
+    const target = await attest({
+      ...(deps.managementAttestation ?? {}),
+      fetchFn: fetchImpl,
+    });
+    if (!target) return { status: 0, json: {} };
+    const res = await fetchImpl(`${target.baseUrl}${path}`, {
       method,
       headers: runningProxyUpdateHeaders(),
       body: body === undefined ? undefined : JSON.stringify(body),

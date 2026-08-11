@@ -1,7 +1,9 @@
 import Foundation
+import CryptoKit
 import MenuBarCore
 
 final class StubProtocol: URLProtocol, @unchecked Sendable {
+    static let attestationSecret = String(repeating: "S", count: 43)
     final class RequestGate: @unchecked Sendable {
         private let started = DispatchSemaphore(value: 0)
         private let resumeSignal = DispatchSemaphore(value: 0)
@@ -23,23 +25,27 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         let body: String
         let headers: [String: String]
         let urlError: URLError.Code?
+        let automaticAttestation: Bool
 
         init(
             status: Int,
             body: String = "",
             headers: [String: String] = [:],
-            urlError: URLError.Code? = nil
+            urlError: URLError.Code? = nil,
+            automaticAttestation: Bool = true
         ) {
             self.status = status
             self.body = body
             self.headers = headers
             self.urlError = urlError
+            self.automaticAttestation = automaticAttestation
         }
     }
 
     nonisolated(unsafe) private static var queue: [Response] = []
     nonisolated(unsafe) private static var requests: [URLRequest] = []
     nonisolated(unsafe) private static var nextGate: RequestGate?
+    nonisolated(unsafe) private static var stoppedLoads = 0
     private static let lock = NSLock()
 
     static func reset(_ responses: [Response]) {
@@ -47,6 +53,7 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         queue = responses
         requests = []
         nextGate = nil
+        stoppedLoads = 0
         lock.unlock()
     }
 
@@ -62,6 +69,12 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return requests
+    }
+
+    static var cancellationCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return stoppedLoads
     }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -85,24 +98,86 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
             client?.urlProtocol(self, didFailWithError: URLError(code))
             return
         }
+        var headers = response.headers
+        if response.automaticAttestation,
+           request.url?.path == "/healthz",
+           headers["x-codexcommander-attestation-proof"] == nil,
+           let proof = Self.attestationProof(request: request, body: response.body) {
+            headers["x-codexcommander-attestation-proof"] = proof
+        }
         let http = HTTPURLResponse(
             url: request.url!,
             statusCode: response.status,
             httpVersion: "HTTP/1.1",
-            headerFields: response.headers
+            headerFields: headers
         )!
         client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(response.body.utf8))
         client?.urlProtocolDidFinishLoading(self)
     }
 
-    override func stopLoading() {}
+    override func stopLoading() {
+        Self.lock.lock()
+        Self.stoppedLoads += 1
+        Self.lock.unlock()
+    }
+
+    private static func attestationProof(request: URLRequest, body: String) -> String? {
+        guard let challenge = request.value(
+            forHTTPHeaderField: "x-codexcommander-attestation-challenge"
+        ),
+        challenge.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil,
+        let data = body.data(using: .utf8),
+        let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let pid = json["pid"] as? Int,
+        let port = json["port"] as? Int
+        else { return nil }
+        let payload = "codexcommander-local-management-v1\n\(challenge)\n\(pid)\n\(port)"
+        let key = SymmetricKey(data: Data(attestationSecret.utf8))
+        let digest = Data(HMAC<SHA256>.authenticationCode(
+            for: Data(payload.utf8),
+            using: key
+        ))
+        return digest.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
 }
+
+private final class InstallationSequence: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [ProxyInstallation]
+
+    init(_ values: [ProxyInstallation]) { self.values = values }
+
+    func next() throws -> ProxyInstallation {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !values.isEmpty else { throw ProxyError.identityMismatch }
+        return values.removeFirst()
+    }
+}
+
 enum TransportSuite {
     private static let identity =
         #"{"status":"ok","service":"codexcommander","version":"0.1.0","pid":42,"port":10100}"#
 
     private static let startupHealth = #"{"status":"protected","routingKind":"codexcommander-local","routingInjected":true,"localRoutingDependency":true,"autostartEnabled":false,"rebootSafe":true,"protection":"service","serviceInstalled":true,"serviceViable":true,"serviceEnabled":true,"serviceRunning":true,"serviceStale":false,"serviceConflict":false,"shimInstalled":false,"shimHealthy":false,"shimCoverage":"none","serviceSupported":true,"platform":"darwin","diagnosticStale":false,"recommendedCommand":null,"commands":{"installService":"ccx service install","repairService":"ccx service repair","installShim":"ccx codex-shim install","restoreNative":"ccx restore"}}"#
+
+    private static func readinessBody(
+        status: String,
+        service: String = "codexcommander",
+        version: String = "0.1.0",
+        uptime: Double = 1,
+        pid: Int = 42,
+        port: Int = 10100
+    ) -> String {
+        """
+        {"service":"\(service)","version":"\(version)","uptime":\(uptime),
+         "pid":\(pid),"port":\(port),"status":"\(status)"}
+        """
+    }
 
     static func run(_ t: TestRunner) {
         t.test("transport: validates identity immediately before a credential-bearing request") {
@@ -116,6 +191,12 @@ enum TransportSuite {
             let requests = StubProtocol.recorded
             t.equal(requests.count, 2)
             t.equal(requests[0].url?.path, "/healthz")
+            t.expect(
+                requests[0].value(
+                    forHTTPHeaderField: "x-codexcommander-attestation-challenge"
+                )?.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil,
+                "health challenge"
+            )
             t.isNil(
                 requests[0].value(forHTTPHeaderField: "x-codexcommander-api-key"),
                 "health credential"
@@ -129,6 +210,77 @@ enum TransportSuite {
                 $0.key.lowercased().hasSuffix("-api-key") && $0.value == "admin-secret"
             }
             t.equal(credentialHeaders.count, 1, "one management credential header")
+        }
+
+        t.test("transport: public readiness accepts ready, pending, and failed without credentials") {
+            StubProtocol.reset([
+                .init(status: 200, body: readinessBody(status: "ready")),
+                .init(status: 503, body: readinessBody(status: "pending")),
+                .init(status: 503, body: readinessBody(status: "failed")),
+            ])
+            let client = makeClient(credential: "never-send-publicly")
+            let ready = sync { try? await client.readiness() }
+            let pending = sync { try? await client.readiness() }
+            let failed = sync { try? await client.readiness() }
+            t.equal(ready?.status, .ready)
+            t.equal(pending?.status, .pending)
+            t.equal(failed?.status, .failed)
+
+            let requests = StubProtocol.recorded
+            t.equal(requests.map { $0.url?.path ?? "" }, ["/readyz", "/readyz", "/readyz"])
+            for request in requests {
+                t.isNil(
+                    request.value(forHTTPHeaderField: "x-codexcommander-api-key"),
+                    "public readiness management credential"
+                )
+                t.isNil(
+                    request.value(forHTTPHeaderField: "authorization"),
+                    "public readiness authorization"
+                )
+            }
+        }
+
+        t.test("transport: readiness rejects foreign, stale, and inconsistent contracts") {
+            let cases: [(String, Int, ProxyError, String)] = [
+                (readinessBody(status: "ready", service: "other"), 200, .identityMismatch, "service"),
+                (readinessBody(status: "ready", version: ""), 200, .identityMismatch, "version"),
+                (readinessBody(status: "ready", uptime: -1), 200, .identityMismatch, "uptime"),
+                (readinessBody(status: "ready", pid: 41), 200, .identityMismatch, "pid"),
+                (readinessBody(status: "ready", port: 10101), 200, .identityMismatch, "port"),
+                (readinessBody(status: "ready"), 503, .identityMismatch, "503 ready"),
+                (readinessBody(status: "pending"), 200, .identityMismatch, "200 pending"),
+                (readinessBody(status: "ready"), 500, .http(500), "unexpected HTTP"),
+            ]
+            for (body, status, expected, label) in cases {
+                StubProtocol.reset([.init(status: status, body: body)])
+                let client = makeClient(credential: "never-send-publicly")
+                let error = sync { await proxyError { try await client.readiness() } }
+                t.equal(error, expected, label)
+                t.isNil(
+                    StubProtocol.recorded.first?.value(
+                        forHTTPHeaderField: "x-codexcommander-api-key"
+                    ),
+                    "\(label) credential"
+                )
+            }
+        }
+
+        t.test("transport: readiness rejects non-exact response shapes") {
+            StubProtocol.reset([
+                .init(
+                    status: 200,
+                    body: #"{"service":"codexcommander","version":"0.1.0","uptime":1,"pid":42,"port":10100,"status":"ready","detail":"not-public"}"#
+                ),
+            ])
+            let client = makeClient(credential: "never-send-publicly")
+            let error = sync { await proxyError { try await client.readiness() } }
+            t.equal(error, .decoding)
+            t.isNil(
+                StubProtocol.recorded.first?.value(
+                    forHTTPHeaderField: "x-codexcommander-api-key"
+                ),
+                "non-exact readiness credential"
+            )
         }
 
         t.test("transport: a foreign health response blocks the token completely") {
@@ -146,6 +298,134 @@ enum TransportSuite {
                 StubProtocol.recorded[0].value(forHTTPHeaderField: "x-codexcommander-api-key"),
                 "foreign health credential"
             )
+        }
+
+        t.test("transport: missing or wrong health proof exposes neither token nor body") {
+            let cases: [(StubProtocol.Response, String)] = [
+                (.init(
+                    status: 200,
+                    body: identity,
+                    automaticAttestation: false
+                ), "missing"),
+                (.init(
+                    status: 200,
+                    body: identity,
+                    headers: ["x-codexcommander-attestation-proof": String(repeating: "Z", count: 43)],
+                    automaticAttestation: false
+                ), "wrong"),
+            ]
+            for (response, label) in cases {
+                StubProtocol.reset([response])
+                let client = makeClient(credential: "never-send")
+                let error = sync { await proxyError {
+                    try await client.reportCompanionStartupState(launchAtLogin: .enabled)
+                } }
+                t.equal(error, .identityMismatch, label)
+                t.equal(StubProtocol.recorded.count, 1, "\(label) request count")
+                let request = StubProtocol.recorded[0]
+                t.equal(request.url?.path, "/healthz", "\(label) path")
+                t.isNil(
+                    request.value(forHTTPHeaderField: "x-codexcommander-api-key"),
+                    "\(label) credential"
+                )
+                t.isNil(request.httpBody, "\(label) body")
+                t.isNil(request.httpBodyStream, "\(label) body stream")
+            }
+        }
+
+        t.test("transport: attested health caps chunked and declared response bodies") {
+            let prefix = identity.dropLast()
+            let oversized = "\(prefix),\"padding\":\"\(String(repeating: "x", count: 20_000))\"}"
+            let cases: [(StubProtocol.Response, String)] = [
+                (.init(status: 200, body: oversized), "chunked"),
+                (.init(
+                    status: 200,
+                    body: oversized,
+                    headers: ["Content-Length": "20000"]
+                ), "declared"),
+            ]
+            for (response, label) in cases {
+                StubProtocol.reset([response])
+                let client = makeClient(credential: "never-send")
+                let error = sync { await proxyError { try await client.health() } }
+                t.equal(error, .identityMismatch, label)
+                t.equal(StubProtocol.recorded.count, 1, "\(label) request count")
+                let request = StubProtocol.recorded[0]
+                t.equal(request.url?.path, "/healthz", "\(label) path")
+                t.isNil(
+                    request.value(forHTTPHeaderField: "x-codexcommander-api-key"),
+                    "\(label) credential"
+                )
+                t.isNil(request.httpBody, "\(label) body")
+                t.isNil(request.httpBodyStream, "\(label) body stream")
+                if label == "chunked" {
+                    t.expect(StubProtocol.cancellationCount >= 1, "chunked response cancelled")
+                }
+            }
+        }
+
+        t.test("transport: config-source or pid-less discovery cannot receive a credential") {
+            StubProtocol.reset([])
+            let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100)!
+            let client = ProxyClient(
+                endpoint: endpoint,
+                session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
+                credentials: StaticCredentialStore("never-send"),
+                attestationSecret: StubProtocol.attestationSecret
+            )
+            let error = sync { await proxyError {
+                try await client.reportCompanionStartupState(launchAtLogin: .enabled)
+            } }
+            t.equal(error, .identityMismatch)
+            t.equal(StubProtocol.recorded.count, 0)
+        }
+
+        t.test("transport: runtime record rotation after proof blocks token and body") {
+            let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
+            let firstRuntime = ProxyRuntimeAttestation(
+                host: endpoint.host,
+                port: endpoint.port,
+                pid: 42,
+                secret: StubProtocol.attestationSecret
+            )!
+            let rotatedRuntime = ProxyRuntimeAttestation(
+                host: endpoint.host,
+                port: endpoint.port,
+                pid: 42,
+                secret: String(repeating: "R", count: 43)
+            )!
+            let first = ProxyInstallation(
+                endpoint: endpoint,
+                credential: "never-send",
+                credentialAvailability: .file,
+                configDirectory: URL(fileURLWithPath: "/"),
+                runtimeAttestation: firstRuntime
+            )
+            let rotated = ProxyInstallation(
+                endpoint: endpoint,
+                credential: "never-send",
+                credentialAvailability: .file,
+                configDirectory: URL(fileURLWithPath: "/"),
+                runtimeAttestation: rotatedRuntime
+            )
+            let sequence = InstallationSequence([first, rotated])
+            let session = ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self])
+            let client = try! ProxyClient(
+                installation: first,
+                session: session,
+                discovery: { try sequence.next() }
+            )
+            StubProtocol.reset([.init(status: 200, body: identity)])
+            let error = sync { await proxyError {
+                try await client.reportCompanionStartupState(launchAtLogin: .enabled)
+            } }
+            t.equal(error, .identityMismatch)
+            t.equal(StubProtocol.recorded.count, 1)
+            let request = StubProtocol.recorded[0]
+            t.equal(request.url?.path, "/healthz")
+            t.isNil(request.value(forHTTPHeaderField: "x-codexcommander-api-key"), "credential")
+            t.isNil(request.httpBody, "body")
+            t.isNil(request.httpBodyStream, "body stream")
         }
 
         t.test("transport: missing management auth fails before networking") {
@@ -295,6 +575,59 @@ enum TransportSuite {
                 "error text must not echo response bodies"
             )
         }
+
+        t.test("transport: confirmed GUI launch stays fragment-only and origin-bound") {
+            let expiry = Date().timeIntervalSince1970 * 1_000 + 30_000
+            let launch = """
+            {"ticket":"ccx_launch_\(String(repeating: "a", count: 43))",\
+             "origin":"http://127.0.0.1:10100","route":"subagents",\
+             "expiresAt":\(expiry)}
+            """
+            StubProtocol.reset([
+                .init(status: 200, body: identity),
+                .init(status: 200, body: launch),
+            ])
+            let client = makeClient(credential: "admin-secret")
+            let url = sync { try? await client.confirmedGuiLaunchURL(route: "subagents") }
+            t.equal(url?.scheme, "http")
+            t.equal(url?.host, "127.0.0.1")
+            t.equal(url?.port, 10100)
+            let fragment = URLComponents(string: "http://local/?\(url?.fragment ?? "")")
+            let items: [String: String] = Dictionary(uniqueKeysWithValues: (fragment?.queryItems ?? []).compactMap {
+                guard let value = $0.value else { return nil }
+                return ($0.name, value)
+            })
+            t.equal(items["ccx-route"], "subagents")
+            t.equal(items["ccx-launch-ticket"], "ccx_launch_\(String(repeating: "a", count: 43))")
+
+            let requests = StubProtocol.recorded
+            t.equal(requests.map { $0.url?.path ?? "" }, ["/healthz", "/api/gui-launch-ticket"])
+            t.equal(requests[1].value(forHTTPHeaderField: "x-codexcommander-api-key"), "admin-secret")
+            let bodyData = requests[1].httpBody ?? requestStreamBodyData(requests[1])
+            let body = bodyData.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            t.equal(body?["route"] as? String, "subagents")
+            t.expect(!(requests[1].url?.absoluteString.contains("ccx_launch_") ?? true), "ticket absent from request URL")
+        }
+
+        t.test("transport: a localhost response cannot change a 127.0.0.1 ticket origin") {
+            let expiry = Date().timeIntervalSince1970 * 1_000 + 30_000
+            StubProtocol.reset([
+                .init(status: 200, body: identity),
+                .init(
+                    status: 200,
+                    body: """
+                    {"ticket":"ccx_launch_\(String(repeating: "b", count: 43))",\
+                     "origin":"http://localhost:10100","route":"dashboard",\
+                     "expiresAt":\(expiry)}
+                    """
+                ),
+            ])
+            let client = makeClient(credential: "admin-secret")
+            let error = sync { await proxyError {
+                try await client.confirmedGuiLaunchURL(route: "dashboard")
+            } }
+            t.equal(error, .identityMismatch)
+        }
     }
 
     private static func makeClient(credential: String?) -> ProxyClient {
@@ -303,7 +636,8 @@ enum TransportSuite {
         return ProxyClient(
             endpoint: endpoint,
             session: session,
-            credentials: StaticCredentialStore(credential)
+            credentials: StaticCredentialStore(credential),
+            attestationSecret: StubProtocol.attestationSecret
         )
     }
 

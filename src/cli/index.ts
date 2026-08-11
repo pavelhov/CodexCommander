@@ -33,6 +33,18 @@ import { startTokenGuardian } from "../oauth/token-guardian";
 import { maybeAutoRestoreCodexShim } from "./codex-shim-autorestore";
 import { scheduleCatalogPrewarm } from "./catalog-prewarm";
 import { syncModelsToCodex } from "../codex/sync";
+import {
+  applyInvalidatedCacheWorkers,
+  applySynchronizedCatalogWorkers,
+  bindCacheArtifactForApply,
+  bindCatalogArtifactsForApply,
+  catalogSyncCanApply,
+  captureCatalogRestartFence,
+  reportCatalogWorkerApply,
+  syncCodexCatalogForCli,
+  type CliCodexSyncResult,
+  warnAfterCatalogWrite,
+} from "./catalog-activation";
 import { setIntegrationEnabled, shouldSyncCodexOnStart, shouldSyncGrokOnStart, syncCodexOnStartIfEnabled } from "../codex/desired-state";
 import { collectOrcaCodexHomeDiagnostic } from "../codex/home";
 import { removeOwnedConfigState } from "../lib/config-ownership";
@@ -355,10 +367,10 @@ async function handleStart(options: { block?: boolean } = {}) {
     // Drive readiness from the real startup catalog sync while /healthz remains available.
     const startupSync = await syncCodexOnStartIfEnabled(port, config, undefined, readinessGate);
     if (!startupSync.ran) console.log("   Codex integration OFF; startup left Codex native.");
-    // Warn once, after both startup write sites settle, when a stale Codex app-server may
-    // still be holding the previous model catalog.
-    const { consumeStartupCacheInvalidationWrite } = await import("../server");
-    if (consumeStartupCacheInvalidationWrite() || startupSync.catalogWritten || startupSync.cacheSynced) {
+    // The canonical startup convergence is the only startup catalog/cache writer.
+    // Warn only when that convergence reports a real artifact write; server listen
+    // itself never moves an mtime or manufactures a stale-worker fence.
+    if (startupSync.catalogWritten || startupSync.cacheSynced) {
       const { warnIfStaleCodexAppServersAfterStartupWrite } = await import("../codex/app-server-processes");
       warnIfStaleCodexAppServersAfterStartupWrite({ log: console });
     }
@@ -794,20 +806,47 @@ switch (command) {
   }
   case "sync": {
     const restartCodex = args.slice(1).includes("--restart-codex");
-    const synced = await syncModelsToCodex((await findLiveProxy())?.port);
+    // Capture consent + desired generation before any awaited discovery. The
+    // same opaque fence is checked again immediately before every eligible
+    // SIGTERM by the shared Apply helper.
+    const restartFence = captureCatalogRestartFence(
+      restartCodex && shouldSyncCodexOnStart(loadConfig()),
+    );
+    let synced: CliCodexSyncResult;
+    const live = await findLiveProxy();
+    try {
+      synced = await syncCodexCatalogForCli(live);
+    } catch (error) {
+      process.exitCode = 1;
+      console.error(`Codex sync did not complete: ${error instanceof Error ? error.message : String(error)}`);
+      break;
+    }
     if (synced.status === "skipped") {
       console.log("Codex integration is OFF; sync skipped and no Codex files changed.");
     } else if (!synced.ok) {
       process.exitCode = 1;
       console.error("Codex sync did not complete. Fix the reported Codex config issue and retry.");
+    } else if (live && synced.message) {
+      // Local sync already emits its established progress messages. A live
+      // server intentionally keeps its logs out of this CLI process.
+      console.log(synced.message);
     }
-    // Only warn/restart when a catalog or models_cache write actually happened. This is
-    // deliberately not an `else`: refreshCodexModelCatalog runs before injectCodexConfig,
-    // so a sync can fail (`ok: false`) after the catalog was already rewritten — which is
-    // exactly when a long-lived app-server is holding the stale list.
-    if (synced.catalogWritten || synced.cacheSynced) {
-      const { afterCatalogWriteHandleAppServers } = await import("../codex/app-server-processes");
-      afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
+    const synchronizedCatalogIsUsable = catalogSyncCanApply(synced, live !== null);
+    if (restartCodex && synchronizedCatalogIsUsable) {
+      // Explicit Apply also resolves a worker left stale by an earlier write,
+      // even when this convergence is a semantic no-op with preserved mtimes.
+      const applied = await applySynchronizedCatalogWorkers(
+        bindCatalogArtifactsForApply(restartFence),
+        synced,
+      );
+      if (!applied) {
+        console.error("The saved configuration could not be fenced before synchronization; no Codex worker was stopped.");
+        process.exitCode = 1;
+      } else if (!reportCatalogWorkerApply(applied)) {
+        process.exitCode = 1;
+      }
+    } else if (!restartCodex && (synced.catalogWritten || synced.cacheSynced)) {
+      await warnAfterCatalogWrite("activation");
     }
     break;
   }
@@ -822,22 +861,34 @@ switch (command) {
       console.log("Codex integration is OFF; cache sync skipped and no Codex files changed.");
       break;
     }
+    const restartFence = captureCatalogRestartFence(restartCodex);
     const { withCatalogWriteSerialization } = await import("../codex/catalog-write-serialization");
     const { invalidateCodexModelsCacheWithPermit } = await import("../codex/catalog/sync");
     const { getCodexHome } = await import("../codex/paths");
     const owningCodexHome = getCodexHome();
     const invalidated = withCatalogWriteSerialization(owningCodexHome, permit =>
       invalidateCodexModelsCacheWithPermit(permit, owningCodexHome));
-    // Only warn/restart when models_cache was actually rewritten from a readable catalog.
+    // Cache invalidation remains its own advanced command. Its exact cache mtime
+    // is the evidence boundary, so only workers proven older than this write are
+    // eligible for explicit interruption.
     if (invalidated.kind === "completed" && invalidated.value) {
-      const { afterCatalogWriteHandleAppServers } = await import("../codex/app-server-processes");
-      afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
+      if (restartCodex) {
+        const applied = await applyInvalidatedCacheWorkers(
+          bindCacheArtifactForApply(restartFence),
+        );
+        if (!applied) {
+          console.error("The saved configuration could not be fenced before cache invalidation; no Codex worker was stopped.");
+          process.exitCode = 1;
+        } else if (!reportCatalogWorkerApply(applied)) {
+          process.exitCode = 1;
+        }
+      } else {
+        await warnAfterCatalogWrite("cache");
+      }
     }
     break;
   }
   case "gui": {
-    const cfg = await import("../config");
-    const config = cfg.loadConfig();
     const ensured = await ensureProxyLifecycle({
       honorAutoStart: false,
       ensureCompanion: true,
@@ -854,13 +905,19 @@ switch (command) {
       process.exitCode = 1;
       break;
     }
-    // Open the host the proxy actually binds — `localhost` only answers for
-    // loopback/wildcard binds, not a concrete LAN/IPv6 hostname.
-    const guiHost = probeHostname(live?.hostname ?? config.hostname);
-    const guiUrl = `http://${guiHost === "127.0.0.1" ? "localhost" : guiHost}:${live.port}`;
-    console.log(`Opening ${guiUrl}`);
-    const { openUrl } = await import("../lib/open-url");
-    openUrl(guiUrl);
+    // Mint through the attested admin channel, then hand the short-lived bearer
+    // to the browser without putting it in a launcher argv or console line.
+    const guiHost = probeHostname(live.hostname);
+    const baseUrl = `http://${guiHost}:${live.port}`;
+    try {
+      const { mintConfirmedGuiLaunch, openConfirmedGuiUrl } = await import("./gui-launch");
+      const launch = await mintConfirmedGuiLaunch(baseUrl, live.port, "dashboard");
+      console.log(`Opening ${launch.origin}`);
+      openConfirmedGuiUrl(launch.url);
+    } catch (error) {
+      console.error(`❌ ${error instanceof Error ? error.message : "Could not open the CodexCommander dashboard."}`);
+      process.exitCode = 1;
+    }
     break;
   }
   case "service":

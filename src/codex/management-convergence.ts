@@ -1,6 +1,11 @@
 import type { CodexCommanderConfig } from "../types";
-import { captureCatalogAdmissionSnapshot } from "./catalog-admission";
+import {
+  captureCatalogAdmissionSnapshot,
+  CatalogAdmissionStaleConfigError,
+} from "./catalog-admission";
 import { convergeCodexCatalog } from "./convergence";
+import { primeBundledCatalogForGatherIfNeeded } from "./catalog/bundled";
+import { codexCatalogWritePolicy } from "./management-write-policy";
 import type {
   CatalogDisposition,
   CatalogOnlyOutcome,
@@ -42,6 +47,9 @@ function unexpectedCatalogFailure(commitBegan: boolean): CatalogDisposition {
 }
 
 function admissionFailure(error: unknown): CatalogDisposition {
+  if (error instanceof CatalogAdmissionStaleConfigError) {
+    return { status: "skipped", reason: "stale", retryable: true };
+  }
   const message = error instanceof Error ? error.message : "";
   if (message.includes("config generation is busy") || message.includes("config generation is database")) {
     return { status: "skipped", reason: "busy", retryable: true };
@@ -79,6 +87,20 @@ export function createManagementConvergeCodex(
           catalogRefresh: unexpectedCatalogFailure(false),
         });
       }
+      // The source-prime step may persist runtime evidence, so automatic Save
+      // ownership is decided before admission or any priming side effect. The
+      // same central policy is re-evaluated by convergence at commit time.
+      if (!codexCatalogWritePolicy(retainedConfig, request).allowed) {
+        return projectCatalogOnlyOutcome({
+          changed: false,
+          catalogRefresh: { status: "skipped", reason: "refused", retryable: false },
+        });
+      }
+      // Fail unavailable/stale config authority before any potentially slow
+      // runtime probe. Priming may add persisted runtime evidence, so discard
+      // this preflight and capture the admitted snapshot again afterwards.
+      captureCatalogAdmissionSnapshot(retainedConfig);
+      primeBundledCatalogForGatherIfNeeded();
       const snapshot = captureCatalogAdmissionSnapshot(retainedConfig);
       const result = await convergeCodexCatalog(snapshot, request, {
         onCommitBegin: () => { commitBegan = true; },

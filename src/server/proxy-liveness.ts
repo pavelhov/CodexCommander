@@ -10,7 +10,16 @@
  * Lives outside cli.ts (which dispatches argv at module top level) so tests can import it.
  */
 import { loadConfig, readAlivePid, readRuntimePort, verifyPidIdentity } from "../config";
-import { isOwnedHealthService } from "../identity";
+import {
+  ATTESTATION_CHALLENGE_HEADER,
+  ATTESTATION_PROOF_HEADER,
+  isOwnedHealthService,
+} from "../identity";
+import {
+  createLocalAttestationChallenge,
+  isLocalAttestationSecret,
+  verifyLocalAttestationProof,
+} from "../lib/local-management-attestation";
 
 export interface HealthzIdentity {
   service?: unknown;
@@ -18,6 +27,15 @@ export interface HealthzIdentity {
   version?: unknown;
   uptime?: unknown;
   pid?: unknown;
+  port?: unknown;
+}
+
+export interface RuntimeLivenessRecord {
+  pid?: number;
+  port: number;
+  hostname?: string;
+  /** Protected per-process key used only for the local management challenge. */
+  attestationSecret?: string;
 }
 
 export interface LivenessIo {
@@ -28,7 +46,7 @@ export interface LivenessIo {
    * Destructive callers only ever receive pids that passed this gate.
    */
   verifyPidFn?: (candidatePid: number) => number | null;
-  readRuntimeFn?: (pid?: number) => { pid?: number; port: number; hostname?: string } | null;
+  readRuntimeFn?: (pid?: number) => RuntimeLivenessRecord | null;
   configFn?: () => { port?: number; hostname?: string };
   timeoutMs?: number;
   /**
@@ -64,6 +82,23 @@ export interface LiveProxy {
   hostname?: string;
   /** Whether the successful probe used runtime-port metadata or the configured listen port. */
   source: "runtime" | "config";
+}
+
+export interface AttestedLiveManagementProxy extends LiveProxy {
+  pid: number;
+  source: "runtime";
+  /** Canonical request root derived from the attested runtime record. */
+  baseUrl: string;
+}
+
+export interface ManagementAttestationIo {
+  fetchFn?: typeof fetch;
+  readRuntimeFn?: (pid?: number) => RuntimeLivenessRecord | null;
+  verifyPidFn?: (candidatePid: number) => number | null;
+  timeoutMs?: number;
+  /** Rotation recovery only. Each attempt re-discovers and re-attests from scratch. */
+  attempts?: number;
+  expectedPid?: number;
 }
 
 /**
@@ -191,6 +226,105 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
       hostname: config.hostname,
       source: "config",
     };
+  }
+  return null;
+}
+
+function exactRuntimeRecord(
+  record: RuntimeLivenessRecord | null,
+  expected: { pid: number; port: number; hostname?: string; attestationSecret: string },
+): boolean {
+  return record?.pid === expected.pid
+    && record.port === expected.port
+    && record.hostname === expected.hostname
+    && record.attestationSecret === expected.attestationSecret;
+}
+
+/**
+ * Authenticate the exact listener named by the protected per-process runtime record.
+ *
+ * This is the credential/body release fence for local management clients. Public
+ * `/healthz` identity alone is intentionally insufficient: a lookalike listener can
+ * copy that JSON. The listener must prove possession of the runtime record's random
+ * secret with the existing challenge/PID/port HMAC, and the record must remain byte-
+ * equivalent in all security-relevant fields after the proof. A rotation retries only
+ * by starting discovery and attestation again; no credential or caller body is passed
+ * to either health probe.
+ */
+export async function attestLiveManagementProxy(
+  io: ManagementAttestationIo = {},
+): Promise<AttestedLiveManagementProxy | null> {
+  const fetchFn = io.fetchFn ?? fetch;
+  const readRuntimeFn = io.readRuntimeFn ?? readRuntimePort;
+  const verifyPidFn = io.verifyPidFn ?? verifyPidIdentity;
+  const requestedTimeoutMs = Math.trunc(io.timeoutMs ?? 4_000);
+  const timeoutMs = Number.isNaN(requestedTimeoutMs)
+    ? 4_000
+    : Math.max(1, Math.min(requestedTimeoutMs, 30_000));
+  const requestedAttempts = Math.trunc(io.attempts ?? 2);
+  const attempts = Number.isNaN(requestedAttempts)
+    ? 1
+    : Math.max(1, Math.min(requestedAttempts, 3));
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      // Sensitive discovery starts from the protected record itself. Calling the
+      // public liveness finder here would let a spoof feed an unbounded /healthz body
+      // to its JSON parser before the HMAC fence.
+      const record = readRuntimeFn();
+      if (!record
+        || !Number.isSafeInteger(record.pid)
+        || (record.pid ?? 0) <= 0
+        || !Number.isInteger(record.port)
+        || record.port <= 0
+        || record.port > 65535
+        || !isLocalAttestationSecret(record.attestationSecret)) {
+        continue;
+      }
+      const recordPid = record.pid as number;
+      if (io.expectedPid !== undefined && recordPid !== io.expectedPid) continue;
+      if (verifyPidFn(recordPid) !== recordPid) continue;
+      const snapshot = {
+        pid: recordPid,
+        port: record.port,
+        hostname: record.hostname,
+        attestationSecret: record.attestationSecret,
+      };
+      const challenge = createLocalAttestationChallenge();
+      const baseUrl = `http://${probeHostname(snapshot.hostname)}:${snapshot.port}`;
+      const response = await fetchFn(`${baseUrl}/healthz`, {
+        headers: { [ATTESTATION_CHALLENGE_HEADER]: challenge },
+        redirect: "error",
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      const proof = response.headers.get(ATTESTATION_PROOF_HEADER);
+      const proved = response.ok && verifyLocalAttestationProof(
+          snapshot.attestationSecret,
+          challenge,
+          snapshot.pid,
+          snapshot.port,
+          proof,
+        );
+      // The proof authenticates the exact PID/port; never parse a listener-controlled
+      // body on this credential-release path. Cancellation bounds both declared-huge
+      // and chunked/streaming spoof responses.
+      await response.body?.cancel().catch(() => {});
+      if (!proved) continue;
+
+      // Detect restart/rotation after the proof before a caller can attach a token
+      // or sensitive body. The caller must issue its request immediately on return.
+      if (!exactRuntimeRecord(readRuntimeFn(snapshot.pid), snapshot)) continue;
+      if (verifyPidFn(snapshot.pid) !== snapshot.pid) continue;
+      return {
+        pid: snapshot.pid,
+        port: snapshot.port,
+        hostname: snapshot.hostname,
+        source: "runtime",
+        baseUrl,
+      };
+    } catch {
+      // Retry only by re-reading discovery state and issuing a fresh challenge.
+    }
   }
   return null;
 }

@@ -73,6 +73,27 @@ public enum ProxyState: Equatable, Sendable {
     }
 }
 
+/// Post-startup routing readiness, kept separate from process liveness and startup
+/// protection. A proxy may be running while catalog synchronization is still pending
+/// or has failed.
+public enum ProxyReadinessState: Equatable, Sendable {
+    /// No readiness probe has completed yet.
+    case unknown
+    /// The public readiness endpoint could not be observed or failed validation.
+    case unavailable
+    case pending
+    case ready
+    case failed
+
+    public init(status: ProxyReadinessStatus) {
+        switch status {
+        case .pending: self = .pending
+        case .ready: self = .ready
+        case .failed: self = .failed
+        }
+    }
+}
+
 /// What the user should do next. `loading` deliberately has none — there is nothing to
 /// act on yet — but every other non-running state names one.
 public enum NextAction: Equatable, Sendable {
@@ -85,6 +106,7 @@ public enum NextAction: Equatable, Sendable {
 
 public struct ProxySnapshot: Equatable, Sendable {
     public var state: ProxyState
+    public var readiness: ProxyReadinessState
     public var endpoint: ProxyEndpoint
     public var quotas: [QuotaReport]
     public var quotaAvailability: [ProviderQuotaAvailability]
@@ -107,6 +129,7 @@ public struct ProxySnapshot: Equatable, Sendable {
 
     public init(
         state: ProxyState = .loading,
+        readiness: ProxyReadinessState = .unknown,
         endpoint: ProxyEndpoint,
         quotas: [QuotaReport] = [],
         quotaAvailability: [ProviderQuotaAvailability] = [],
@@ -122,6 +145,7 @@ public struct ProxySnapshot: Equatable, Sendable {
         credentialAvailability: ManagementCredentialAvailability = .unavailable
     ) {
         self.state = state
+        self.readiness = readiness
         self.endpoint = endpoint
         self.quotas = quotas
         self.quotaAvailability = quotaAvailability

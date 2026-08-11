@@ -39,7 +39,6 @@ import { routeModel } from "../src/router";
 import { handleManagementAPI } from "../src/server/management-api";
 import { handleResponses } from "../src/server/responses";
 import type { CodexCommanderConfig } from "../src/types";
-import { syncCatalogModels } from "../src/codex/catalog";
 import { injectClaudeAgentDefs } from "../src/claude/agents-inject";
 import { reconcileComboRotationState } from "../src/combos/resolve";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";

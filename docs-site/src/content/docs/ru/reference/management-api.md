@@ -23,7 +23,7 @@ CodexCommander разрешает его в таком порядке:
 hardened-permissions или ACL. Если это гарантировать нельзя, management-аутентификация
 закрывается, и API возвращает 503, пока вы не зададите env-token или не исправите состояние файла.
 
-Передавайте admin-token в любой из двух форм:
+Headless API-клиенты передают admin-token по доверенному transport в одной из двух форм:
 
 ```http
 X-CodexCommander-API-Key: <admin-token>
@@ -36,19 +36,24 @@ Authorization: Bearer <admin-token>
 :::caution
 Admin-token должен отличаться от любого credential data plane. При старте отвергается
 management-credential, конфликтующий с proxy-admission key. Не записывайте admin-token в Codex,
-Claude Code или любого другого клиента моделей; он даёт право на мутации в control plane.
+Claude Code или любого другого клиента моделей; он даёт право на мутации в control plane. Browser
+может запросить его только на доверенном non-loopback HTTPS origin. Никогда не вставляйте и не
+отправляйте его со страницы по plaintext remote.
 :::
 
-### Loopback-сессии дашборда
+### Сессии запуска дашборда
 
-На loopback-привязке bootstrap дашборда может получить short-lived credential `ccx_session_*`.
-Каждая такая сессия живёт пять минут и привязана к точному origin дашборда. Safe-запросы должны
-совпадать с этим origin. Для unsafe-method'ов браузер дополнительно обязан передать `Origin` и
-CSRF-token этой сессии.
+Вручную открытый loopback-дашборд не получает API-credential. Статическая оболочка страницы может загрузиться, но каждый запрос `/api/*` возвращает `401`, пока страницу не откроют заново через `ccx gui` или приложение строки меню macOS. Ни на одном loopback hostname/address страница не запрашивает и не отправляет постоянный admin-token. Browser origin не доказывает, какой локальный пользователь ОС владеет listener'ом, поэтому loopback не является ни аутентифицированной listener identity, ни обходом аутентификации.
 
-Выдача таких сессий отключена всякий раз, когда для data plane требуется аутентификация, в том
-числе на удалённых bind'ах. Удалённый оператор обязан аутентифицироваться сырым admin-token'ом;
-GUI-сессия в стиле loopback не выпускается.
+Launcher использует сырой admin credential, чтобы выпустить краткоживущий одноразовый ticket, привязанный к запрошенному route и origin. Ticket передаётся только во fragment URL и немедленно удаляется во время однократного обмена. Полученная подтверждённая GUI-сессия полнофункциональна, хранится только в памяти процессов и действует не более восьми часов. Она не продлевается: после истечения срока или перезапуска прокси следующий API-запрос получает `401`, после чего снова нужен локальный launcher flow. Постоянный admin-token не попадает в URL или Web Storage.
+
+Сырой admin-token сохраняет право на обычные API-мутации. Apply каталога намеренно строже: `POST /api/codex-catalog/apply` принимает только подтверждённую GUI-сессию. Для скриптов используйте `ccx sync --restart-codex`.
+
+Browser удалённого operator'а может аутентифицироваться сырым admin-token только по доверенному HTTPS;
+страница по plaintext remote никогда его не запрашивает и не отправляет. Если доверенного HTTPS нет,
+используйте локальный или SSH tunnel, представляющий loopback, и откройте дашборд через `ccx gui`.
+Headless API-клиенты сохраняют raw-admin аутентификацию по доверенному transport. Подтверждённая
+browser-сессия выдаётся только при обмене локального launch-ticket, привязанного к точным origin и route.
 
 ## Общие ошибки
 
@@ -71,10 +76,10 @@ GUI-сессия в стиле loopback не выпускается.
 
 | Метод и путь | Назначение | Особые ошибки |
 | --- | --- | --- |
-| `GET, PUT /api/v2` | Прочитать или изменить протокол агента, доставку сообщений V2 и настройки потоков. `multiAgentV2MessageDelivery` принимает `plaintext` или значение по умолчанию `encrypted`; `encrypted` или `null` удаляет явное переопределение открытого текста. После изменения доставки начните новую сессию. `maxConcurrentThreadsPerSession: null` восстанавливает значение Codex по умолчанию | 400 invalid settings; 502 transition or persistence failure |
+| `GET, PUT /api/v2` | Прочитать или изменить протокол агента, доставку V2 task-сообщений и настройки потоков. Изменение mode/protocol/thread требует Apply для замены запущенного worker, затем нового task. Для изменения доставки нужен только новый task, каталог не становится dirty. `maxConcurrentThreadsPerSession: null` восстанавливает значение Codex по умолчанию | 400 invalid settings; 502 transition or persistence failure |
 | `GET, PUT /api/injection-model` | Прочитать или задать предпочтительную модель подсказки, effort, prompt и guidance settings; без синхронизации нативных значений это только рекомендация | 400 invalid model, effort or body |
 | `GET, PUT /api/effort-caps` | Прочитать или задать глобальный и sub-agent потолок reasoning effort | 400 invalid ladder value |
-| `GET, PUT /api/subagent-models` | Прочитать или упорядочить до пяти быстрых вариантов для `spawn_agent`; маршрутизацию это не принуждает. Ответ разделяет сохранённый список `chosen` и фактически объявленный `advertised`, а неприменённые варианты сообщает в `excluded` | 400 invalid list or more than five models |
+| `GET, PUT /api/subagent-models` | Прочитать или упорядочить до пяти быстрых вариантов для `spawn_agent`; маршрутизацию это не принуждает. Ответ разделяет сохранённый список `chosen` и фактически объявленный `advertised`, сообщает неприменённые варианты в `excluded` и добавляет состояние `activation` | 400 invalid list or more than five models |
 | `GET, PUT /api/subagent-model-fallback` | Прочитать или задать глобальный порядок fallback для созданных дочерних задач и poll interval | 400 invalid list or poll interval |
 | `GET /api/grok` | Прочитать статус управляемой конфигурации Grok и кандидатные модели | 400 status read failure |
 | `PUT /api/grok/selection` | Сохранить список исключённых моделей Grok | 400 invalid or oversized selection |
@@ -109,7 +114,9 @@ GUI-сессия в стиле loopback не выпускается.
 | `POST /api/startup-action` | Установить или починить службу или Codex shim | 400 invalid action; 500 action failure |
 | `GET, POST /api/windows-tray` | Прочитать состояние Windows tray или установить/запустить/остановить/удалить её | 400 unsupported platform/action; 500 operation failure |
 | `GET /api/diagnostics/project-config` | Прочитать кэшированные предупреждения project config | — |
-| `POST /api/sync` | Синхронизировать каталог моделей в Codex; возвращает `catalogQuality`, `rehydrated`, `catalogState` app-server и подсказку о перезапуске | 409 отказ в праве записи; 500 ошибка синхронизации |
+| `POST /api/sync` | Синхронизировать каталог моделей в Codex без прерывания воркеров; возвращает состояние `activation` | 409 отказ в праве записи; 500 ошибка синхронизации |
+| `GET /api/codex-catalog/status` | Прочитать сохранённую конфигурацию, каталог на диске и состояние загрузки текущих воркеров | — |
+| `POST /api/codex-catalog/apply` | Явно применить к подтверждённым устаревшим воркерам с `{ "expectedDesiredRevision": "…", "confirmInterrupt": true }`; принимается только подтверждённая GUI-сессия из одноразового launch-handoff | 400 неверное тело; 403 требуется подтверждённый запуск дашборда; 409 конфликт/неизвестная идентичность; 503 busy |
 | `GET, PUT /api/sidecar-settings` | Прочитать или обновить model/backend-settings web-search и vision sidecar'ов | 400 invalid shape, backend or limit |
 | `GET, PUT /api/shadow-call-settings` | Прочитать или обновить настройки shadow-call interception | 400 invalid shape or value |
 

@@ -2,11 +2,13 @@ import { afterEach, expect, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -175,7 +177,12 @@ async function holdCatalogLock(sandbox: Sandbox): Promise<{
 
 function seedCatalog(sandbox: Sandbox, bytes = catalogBytes()): string {
   const path = join(sandbox.codexHome, "catalog.json");
-  writeFileSync(join(sandbox.codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n');
+  writeFileSync(join(sandbox.codexHome, "config.toml"), [
+    "# Auto-injected by CodexCommander",
+    'openai_base_url = "http://127.0.0.1:10100/v1"',
+    'model_catalog_json = "catalog.json"',
+    "",
+  ].join("\n"));
   writeFileSync(path, bytes);
   return path;
 }
@@ -190,26 +197,78 @@ afterEach(async () => {
   }
 });
 
-test("startup and CLI sync-cache cannot write models_cache while another process owns K", async () => {
+test("server listen preserves a foreign/native-owned models cache before canonical startup sync", async () => {
   const sandbox = makeSandbox("ccx-retained-cache-");
   seedCatalog(sandbox);
   const cachePath = join(sandbox.codexHome, "models_cache.json");
+  // This is a valid external Codex configuration, not a CodexCommander-owned
+  // routing surface. The old startServer-side invalidator ignored that
+  // ownership and rebuilt models_cache from catalog.json before the canonical
+  // startup sync had a chance to preserve the external route.
+  writeFileSync(join(sandbox.codexHome, "config.toml"), [
+    'model_provider = "external"',
+    'model_catalog_json = "catalog.json"',
+    "",
+    "[model_providers.external]",
+    'base_url = "https://external.example.test/v1"',
+    "",
+  ].join("\n"));
+  const nativeCache = '{"native_owned":true,"models":[{"slug":"native-only"}]}\n';
+  writeFileSync(cachePath, nativeCache);
+  const sentinel = new Date("2001-02-03T04:05:06.000Z");
+  utimesSync(cachePath, sentinel, sentinel);
+  const beforeMtime = lstatSync(cachePath, { bigint: true }).mtimeNs;
+
+  const startupProbe = await runChild(sandbox, `
+    const sentinel = new Error("TEST_LISTENER_INTERCEPTED");
+    Bun.serve = () => { throw sentinel; };
+    const { startServer } = await import("./src/server/index.ts");
+    try {
+      startServer(0);
+      throw new Error("startServer unexpectedly reached a listener");
+    } catch (error) {
+      if (error !== sentinel) throw error;
+    }
+  `);
+  expect(startupProbe.exitCode).toBe(0);
+  expect(readFileSync(cachePath, "utf8")).toBe(nativeCache);
+  expect(lstatSync(cachePath, { bigint: true }).mtimeNs).toBe(beforeMtime);
+});
+
+test("server listen preserves an unchanged managed cache mtime and only explicit sync-cache takes K", async () => {
+  const sandbox = makeSandbox("ccx-retained-cache-noop-");
+  const catalogPath = seedCatalog(sandbox);
+  const models = (JSON.parse(readFileSync(catalogPath, "utf8")) as { models: unknown[] }).models;
+  const cachePath = join(sandbox.codexHome, "models_cache.json");
+  const cacheBytes = `${JSON.stringify({
+    fetched_at: "2000-01-01T00:00:00Z",
+    client_version: "0.0.0",
+    models,
+  }, null, 2)}\n`;
+  writeFileSync(cachePath, cacheBytes);
+  const sentinel = new Date("2001-02-03T04:05:06.000Z");
+  utimesSync(cachePath, sentinel, sentinel);
+  const beforeMtime = lstatSync(cachePath, { bigint: true }).mtimeNs;
+
+  const startupProbe = await runChild(sandbox, `
+    const sentinel = new Error("TEST_LISTENER_INTERCEPTED");
+    Bun.serve = () => { throw sentinel; };
+    const { startServer } = await import("./src/server/index.ts");
+    try {
+      startServer(0);
+      throw new Error("startServer unexpectedly reached a listener");
+    } catch (error) {
+      if (error !== sentinel) throw error;
+    }
+  `);
+  expect(startupProbe.exitCode).toBe(0);
+  expect(readFileSync(cachePath, "utf8")).toBe(cacheBytes);
+  // Worker freshness uses artifact mtimes as its evidence boundary. Preserving
+  // this mtime proves a listener-only start cannot manufacture worker staleness.
+  expect(lstatSync(cachePath, { bigint: true }).mtimeNs).toBe(beforeMtime);
+
   const holder = await holdCatalogLock(sandbox);
   try {
-    const startupProbe = await runChild(sandbox, `
-      const sentinel = new Error("TEST_LISTENER_INTERCEPTED");
-      Bun.serve = () => { throw sentinel; };
-      const { startServer } = await import("./src/server/index.ts");
-      try {
-        startServer(0);
-        throw new Error("startServer unexpectedly reached a listener");
-      } catch (error) {
-        if (error !== sentinel) throw error;
-      }
-    `);
-    expect(startupProbe.exitCode).toBe(0);
-    expect(existsSync(cachePath)).toBe(false);
-
     const cli = Bun.spawnSync([process.execPath, "run", "src/cli/index.ts", "sync-cache"], {
       cwd: repoRoot,
       env: sandbox.env,
@@ -217,7 +276,8 @@ test("startup and CLI sync-cache cannot write models_cache while another process
       stderr: "pipe",
     });
     expect(cli.exitCode).toBe(0);
-    expect(existsSync(cachePath)).toBe(false);
+    expect(readFileSync(cachePath, "utf8")).toBe(cacheBytes);
+    expect(lstatSync(cachePath, { bigint: true }).mtimeNs).toBe(beforeMtime);
     const cliSource = readFileSync(join(repoRoot, "src/cli/index.ts"), "utf8");
     const cliStart = cliSource.indexOf('case "sync-cache"');
     const cliRoot = cliSource.slice(cliStart, cliSource.indexOf('case "gui"', cliStart));
@@ -225,10 +285,14 @@ test("startup and CLI sync-cache cannot write models_cache while another process
     expect(cliRoot).toContain("invalidateCodexModelsCacheWithPermit");
 
     const startup = readFileSync(join(repoRoot, "src/server/index.ts"), "utf8");
-    const startupStart = startup.indexOf("const startupCodexHome");
-    const startupRoot = startup.slice(startupStart, startup.indexOf("armClaudeCodeBaseline", startupStart));
-    expect(startupRoot).toContain("withCatalogWriteSerialization(startupCodexHome");
-    expect(startupRoot).toContain("invalidateCodexModelsCacheWithPermit");
+    expect(startup).not.toContain("invalidateCodexModelsCacheWithPermit");
+    expect(startup).not.toContain("consumeStartupCacheInvalidationWrite");
+    const startupSync = cliSource.slice(
+      cliSource.indexOf("const startupSync = await syncCodexOnStartIfEnabled"),
+      cliSource.indexOf("// Build Desktop 3P alias registry"),
+    );
+    expect(startupSync).toContain("if (startupSync.catalogWritten || startupSync.cacheSynced)");
+    expect(startupSync).not.toContain("consumeStartupCacheInvalidationWrite");
   } finally {
     holder.release();
     expect(await holder.child.exited).toBe(0);
@@ -260,60 +324,24 @@ test("native restore cannot read-transform-write the catalog while another proce
 
 async function runPublisher(
   sandbox: Sandbox,
-  kind: "convergence" | "retained",
   config: Record<string, unknown>,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  if (kind === "retained") {
-    return runChild(sandbox, `
-      const config = ${JSON.stringify(config)};
-      // The first /api/sync request already proves the HTTP boundary and remains
-      // suspended in the parent-owned provider. This competing writer needs to
-      // exercise the retained catalog commit, not make a second request to the
-      // same deliberately held test server. Give it an in-process provider seam
-      // so the race is controlled only by K and filesystem evidence.
-      config.providers.fixture.fetch = async () => Response.json({
-        data: [{ id: "publisher-model" }],
-      });
-      const { syncCatalogModels } = await import("./src/codex/catalog/sync.ts");
-      const result = await syncCatalogModels(config, {
-        // This race covers retained catalog serialization, not Codex binary
-        // discovery. Keep the bundled native template in-process so subprocess
-        // scheduling cannot consume the fixed race deadline.
-        commandCandidates: () => ["codex-fixture"],
-        execFileSync: () => JSON.stringify({ models: [{
-          slug: "gpt-5.5",
-          display_name: "gpt-5.5",
-          description: "native",
-          priority: 0,
-          visibility: "list",
-          supported_in_api: true,
-          shell_type: "shell_command",
-          base_instructions: "You are Codex, a coding agent based on GPT-5.",
-          supported_reasoning_levels: [{ effort: "medium", description: "medium" }],
-        }] }),
-      });
-      // Provider discovery owns bounded cache timers that are irrelevant after
-      // the committed bytes and result are available. Flush the diagnostic frame
-      // before exiting so this serialization test never waits for those timers.
-      await Bun.write(Bun.stdout, JSON.stringify(result) + "\\n");
-      process.exit(0);
-    `);
-  }
   return runChild(sandbox, `
     const { withConfigMutationLockSync } = await import("./src/config.ts");
-    const { captureCatalogAdmissionSnapshot, createCatalogConvergeRequest } = await import("./src/codex/catalog-admission.ts");
+    const { captureCatalogAdmissionSnapshot } = await import("./src/codex/catalog-admission.ts");
     const { convergeCodexCatalog } = await import("./src/codex/convergence.ts");
     const config = ${JSON.stringify(config)};
     withConfigMutationLockSync(() => undefined);
     const snapshot = captureCatalogAdmissionSnapshot(config);
-    const result = await convergeCodexCatalog(snapshot, createCatalogConvergeRequest({ deadlineMs: 2000 }));
+    const result = await convergeCodexCatalog(snapshot, {
+      action: "converge", scope: "catalog", reason: "api-sync", mode: "explicit", deadlineMs: 2000,
+    });
     console.log(JSON.stringify(result));
   `);
 }
 
-for (const publisher of ["convergence", "retained"] as const) {
-  test(`POST /api/sync gathered first and acquired K second does not clobber a newer ${publisher} catalog`, async () => {
-    const sandbox = makeSandbox(`ccx-retained-race-${publisher}-`);
+test("catalog convergence gathered first and acquired K second does not clobber a newer converged catalog", async () => {
+    const sandbox = makeSandbox("ccx-retained-race-convergence-");
     const catalogPath = seedCatalog(sandbox);
     const initial = readFileSync(catalogPath, "utf8");
     const requested = join(sandbox.root, "provider-requested");
@@ -350,30 +378,14 @@ for (const publisher of ["convergence", "retained"] as const) {
     try {
       const sync = trackChild(Bun.spawn([process.execPath, "--eval", `
         const config = ${JSON.stringify(config)};
-        // Exercise the production route that owns /api/sync without cold-loading
-        // every unrelated management route into this deadline-bound child.
-        const { handleConfigRoutes } = await import("./src/server/management/config-routes.ts");
-        const req = new Request("http://localhost/api/sync", { method: "POST", headers: { Host: "localhost" } });
-        const response = await handleConfigRoutes({
-          req,
-          url: new URL(req.url),
-          config,
-          deps: {
-            // Catalog/process staleness is covered in its own unit suite. Keep
-            // this filesystem race independent from the host's real Codex
-            // workers and bounded ps/launchctl probes.
-            resetCodexAppServerCatalogStateCache: () => {},
-            collectCodexAppServerCatalogState: () => ({
-              state: "not_running",
-              processes: [],
-              catalogMtimeMs: null,
-            }),
-          },
-          convergeCodexCatalog: async () => { throw new Error("unexpected convergence route"); },
-          syncClaudeAgentDefsBestEffort: async () => {},
+        const { withConfigMutationLockSync } = await import("./src/config.ts");
+        const { captureCatalogAdmissionSnapshot } = await import("./src/codex/catalog-admission.ts");
+        const { convergeCodexCatalog } = await import("./src/codex/convergence.ts");
+        withConfigMutationLockSync(() => undefined);
+        const result = await convergeCodexCatalog(captureCatalogAdmissionSnapshot(config), {
+          action: "converge", scope: "catalog", reason: "api-sync", mode: "explicit", deadlineMs: 2000,
         });
-        if (!response) throw new Error("/api/sync was not handled");
-        console.log(JSON.stringify({ status: response.status, body: await response.json() }));
+        console.log(JSON.stringify(result));
       `], { cwd: repoRoot, env: sandbox.env, stdout: "pipe", stderr: "pipe" }));
       const stdoutText = new Response(sync.stdout).text();
       const stderrText = new Response(sync.stderr).text();
@@ -385,9 +397,9 @@ for (const publisher of ["convergence", "retained"] as const) {
           throw new Error(`sync exited before provider barrier (${exitCode})\nstdout=${stdout}\nstderr=${stderr}`);
         }),
       ]);
-      const published = await runPublisher(sandbox, publisher, config);
+      const published = await runPublisher(sandbox, config);
       if (published.exitCode !== 0) {
-        throw new Error(`${publisher} publisher failed\nstdout=${published.stdout}\nstderr=${published.stderr}`);
+        throw new Error(`convergence publisher failed\nstdout=${published.stdout}\nstderr=${published.stderr}`);
       }
       const newer = readFileSync(catalogPath, "utf8");
       expect(newer).not.toBe(initial);
@@ -403,92 +415,6 @@ for (const publisher of ["convergence", "retained"] as const) {
     } finally {
       provider.stop(true);
     }
-  }, 20_000);
-}
-
-/**
- * Runtime authority can move without touching the catalog at all.
- *
- * The verifier's R1→R2 case: a retained sync prepares from one Codex runtime,
- * and while it is awaiting its provider another process rewrites the persisted
- * runtime selection. Every catalog byte is untouched, so a freshness check built
- * only from catalog/backup/cache bytes sees nothing and commits a candidate that
- * was derived under a runtime that is no longer selected.
- *
- * `codex-runtime.json` is therefore part of the pre-await filesystem evidence,
- * PRESENT or ABSENT. Removing it from `retainedCatalogSyncEvidence` turns this
- * test red while every other retained-root test stays green — which is exactly
- * why it exists: nothing else in the suite covered that component.
- */
-test("a persisted runtime selection moved by another process during the await blocks the write", async () => {
-  const sandbox = makeSandbox("ccx-retained-runtime-move-");
-  const catalogPath = seedCatalog(sandbox);
-  const initial = readFileSync(catalogPath, "utf8");
-  const requested = join(sandbox.root, "provider-requested");
-  const release = join(sandbox.root, "provider-release");
-  const runtimeStatePath = join(sandbox.codexCommanderHome, "codex-runtime.json");
-  writeFileSync(runtimeStatePath, `${JSON.stringify({
-    version: 1,
-    command: "/usr/local/bin/codex-r1",
-    source: "configured",
-    selectedVersion: "1.0.0",
-    updatedAt: new Date(0).toISOString(),
-  }, null, 2)}\n`);
-
-  const config = {
-    port: 10100,
-    multiAgentGuidanceEnabled: true,
-    defaultProvider: "together",
-    providers: {
-      together: {
-        adapter: "openai-chat",
-        baseUrl: "https://api.together.xyz/v1",
-        apiKey: "runtime-move-key",
-        models: ["fallback-model"],
-      },
-    },
-  };
-
-  const sync = trackChild(Bun.spawn([process.execPath, "--eval", `
-    import { existsSync, writeFileSync } from "node:fs";
-    const config = ${JSON.stringify(config)};
-    config.providers.together.fetch = async () => {
-      writeFileSync(${JSON.stringify(requested)}, "requested");
-      while (!existsSync(${JSON.stringify(release)})) await Bun.sleep(5);
-      return Response.json({ data: [{ id: "runtime-move-model" }] });
-    };
-    const { syncCatalogModels } = await import("./src/codex/catalog/sync.ts");
-    console.log(JSON.stringify(await syncCatalogModels(config)));
-  `], { cwd: repoRoot, env: sandbox.env, stdout: "pipe", stderr: "pipe" }));
-  const stdoutText = new Response(sync.stdout).text();
-  const stderrText = new Response(sync.stderr).text();
-
-  await Promise.race([
-    waitForPath(requested),
-    sync.exited.then(async exitCode => {
-      const [stdout, stderr] = await Promise.all([stdoutText, stderrText]);
-      throw new Error(`sync exited before provider barrier (${exitCode})\nstdout=${stdout}\nstderr=${stderr}`);
-    }),
-  ]);
-
-  // Another process selects a different Codex runtime. No catalog byte changes.
-  writeFileSync(runtimeStatePath, `${JSON.stringify({
-    version: 1,
-    command: "/usr/local/bin/codex-r2",
-    source: "configured",
-    selectedVersion: "2.0.0",
-    updatedAt: new Date(1).toISOString(),
-  }, null, 2)}\n`);
-
-  writeFileSync(release, "release");
-  const [exitCode, stdout, stderr] = await Promise.all([
-    sync.exited,
-    stdoutText,
-    stderrText,
-  ]);
-  expect({ exitCode, stderr }).toMatchObject({ exitCode: 0 });
-  expect(JSON.parse(stdout.trim())).toMatchObject({ catalogWritten: false });
-  expect(readFileSync(catalogPath, "utf8")).toBe(initial);
 }, 20_000);
 
 /**

@@ -130,6 +130,10 @@ readiness ではなく別の liveness 確認です。
 
 **OAuth の信頼性** セクションでは、資格情報ストレージが書き込み可能かどうか、リフレッシュ シングルフライト/ロック ファイルが `CODEXCOMMANDER_HOME` で作成できるかどうか、回復 `Action:` を持つ正常でない OAuth または Codex プール アカウント (編集された ID)、および Codex 転送パスが公式クライアント メタデータを作成しない静的 OK が報告されます。 Doctor は資格情報を変更したり、修復を適用したりすることはありません。
 
+:::note[アップグレード時の 1 回限りの再起動]
+古いビルドから実行中のプロキシでは、保護されたランタイムレコードに `attestationSecret` がない場合があります。CLI 管理コマンドや資格情報を渡す Claude/OpenCode クライアントを起動する前に、そのプロキシを 1 回再起動してください。それまでは機密リクエストは fail closed となり、公開 health 情報や設定ポートだけで見つかった listener に token や request body を送る fallback は行いません。
+:::
+
 ## カタログの同期
 
 ### `ccx sync [--restart-codex]`
@@ -137,6 +141,8 @@ readiness ではなく別の liveness 確認です。
 構成されているすべてのプロバイダーからライブ モデル リストを取得し、マージされたカタログを Codex に再挿入します。プロバイダーを追加した後、または利用可能なモデルを更新するために実行します。
 
 存続期間の長い Codex `app-server` プロセスがまだ実行されている場合、`ccx sync` は、`codexcommander-catalog.json` / `models_cache.json` が更新されても、以前のメモリ内モデル リストを提供し続ける可能性があることを警告します。現在のユーザーが所有する一致する `codex … app-server` および `codex-code-mode-host` プロセスにのみ `SIGTERM` を送信するには、`--restart-codex` を渡します (アクティブなターンが中断される可能性があります)。広範な `pkill -f codex` 一致は意図的に回避されます。
+
+通常の `ccx sync` は非中断です。同じ app-server 内で新しいタスクを開始または fork してもカタログは再読み込みされません。ダッシュボードの **Apply agent catalog**、`ccx sync --restart-codex`、または Codex Desktop の終了・再起動を使用します。
 
 ### `ccx sync-cache [--restart-codex]`
 
@@ -202,4 +208,4 @@ Windows ステータス トレイ アイコンをインストールして制御�
 
 ### `ccx gui`
 
-`http://localhost:<port>` で [ウェブダッシュボード](/guides/web-dashboard/) を開き、プロキシが実行されていない場合は自動起動します。
+`http://localhost:<port>` で [ウェブダッシュボード](/guides/web-dashboard/) を開き、必要ならプロキシを自動起動します。短時間・1 回限りのブラウザー起動チケットにより、確認済みの **Apply agent catalog** を含む変更操作が利用できます。チケットは URL フラグメントだけで渡され、交換中に削除されます。永続的な管理トークンが URL や Web Storage に入ることはありません。確認済みセッションはプロセスメモリ内だけに最大 8 時間存在し、更新されません。期限切れまたはプロキシ再起動後の次の API リクエストは `401` になります。`ccx gui` または macOS メニューアプリから開き直してください。ループバックページを手動で開いても API セッションは発行されず、永続的な管理トークンを要求も送信もしません。

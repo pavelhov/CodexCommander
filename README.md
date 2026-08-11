@@ -66,9 +66,11 @@ bun run build:macos
 open dist/macos/CodexCommander.app
 ```
 
-Double-clicking that source build ensures the proxy through the same checkout; if startup fails, the
-menu app stays open so its diagnostics and **Start** control remain available. **Quit** closes only
-the companion UI. **Stop** and **Restart** are separate, confirmation-gated proxy actions.
+Every built app launches only the Bun runtime and server resources embedded in its own
+`Contents/Resources/runtime`; it never executes checkout `src/` or an ambient `ccx`. Rebuild the app
+to pick up source changes. If startup fails, the menu app stays open so its diagnostics and **Start**
+control remain available. **Quit** closes only the companion UI. **Stop** and **Restart** are
+separate, confirmation-gated proxy actions.
 
 On its first launch from `dist/macos` or Applications, the app enables **Launch at Login** so the
 menu icon returns after sign-in. The startup row exposes the actual mode: **Desktop** launches the

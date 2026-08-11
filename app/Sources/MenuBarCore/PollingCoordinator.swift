@@ -116,9 +116,16 @@ public actor PollingCoordinator {
                 await drainPendingRefresh()
                 return
             }
+            let readiness = try await pollReadiness()
+            guard cycle == generation else {
+                refreshInFlight = false
+                await drainPendingRefresh()
+                return
+            }
             snapshot.endpoint = await client.currentEndpoint
             snapshot.credentialAvailability = await client.credentialAvailability
             snapshot.consecutiveFailures = 0
+            snapshot.readiness = readiness
             if health.isDiagnosticStale {
                 diagnosticStaleRefreshes += 1
                 if diagnosticStaleRefreshes <= Self.maxDiagnosticStaleRefreshes {
@@ -244,8 +251,23 @@ public actor PollingCoordinator {
         }
     }
 
+    /// Readiness is an orthogonal observation. Once authenticated startup health has
+    /// succeeded, a public-probe transport or contract failure means "unavailable"—it
+    /// must not be allowed to rewrite the live process as stopped or degraded.
+    private func pollReadiness() async throws -> ProxyReadinessState {
+        do {
+            let observation = try await client.readiness()
+            return ProxyReadinessState(status: observation.status)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return .unavailable
+        }
+    }
+
     private func apply(_ error: ProxyError) {
         diagnosticStaleRefreshes = 0
+        snapshot.readiness = .unavailable
         snapshot.consecutiveFailures += 1
         switch error {
         case .unreachable:

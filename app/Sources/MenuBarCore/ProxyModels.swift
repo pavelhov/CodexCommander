@@ -4,6 +4,72 @@ import Foundation
 // fail decoding when an older or unrelated listener answers this app; nullable keys are
 // optionals only where the server emits JSON null.
 
+/// The three intentional wire states returned by the public `GET /readyz` endpoint.
+/// This is deliberately closed: an unknown value is not treated as ready.
+public enum ProxyReadinessStatus: String, Decodable, Equatable, Sendable {
+    case pending
+    case ready
+    case failed
+}
+
+/// Strict, sanitized identity returned by the public `GET /readyz` endpoint.
+///
+/// Unlike most management responses, the exact key set is part of this endpoint's
+/// contract. Rejecting additions as well as omissions keeps a foreign listener or a
+/// different endpoint from being mistaken for the readiness signal.
+public struct ProxyReadinessObservation: Decodable, Equatable, Sendable {
+    public let service: String
+    public let version: String
+    public let uptime: Double
+    public let pid: Int
+    public let port: Int
+    public let status: ProxyReadinessStatus
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case service
+        case version
+        case uptime
+        case pid
+        case port
+        case status
+    }
+
+    private struct DynamicCodingKey: CodingKey {
+        let stringValue: String
+        let intValue: Int?
+
+        init?(stringValue: String) {
+            self.stringValue = stringValue
+            self.intValue = nil
+        }
+
+        init?(intValue: Int) {
+            self.stringValue = String(intValue)
+            self.intValue = intValue
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: DynamicCodingKey.self)
+        let actualKeys = Set(dynamic.allKeys.map(\.stringValue))
+        let expectedKeys = Set(CodingKeys.allCases.map(\.rawValue))
+        guard actualKeys == expectedKeys else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "Unexpected /readyz response shape"
+            ))
+        }
+
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        service = try values.decode(String.self, forKey: .service)
+        version = try values.decode(String.self, forKey: .version)
+        uptime = try values.decode(Double.self, forKey: .uptime)
+        pid = try values.decode(Int.self, forKey: .pid)
+        port = try values.decode(Int.self, forKey: .port)
+        status = try values.decode(ProxyReadinessStatus.self, forKey: .status)
+    }
+}
+
 /// `GET /api/startup-health`
 public struct StartupHealth: Decodable, Equatable, Sendable {
     public let status: String

@@ -16,7 +16,7 @@ Management API 有自己独立的管理员凭证，与数据平面 API 密钥无
 
 只有在其目录和文件权限或 ACL 已加固后，才会接受基于文件的令牌。如果无法保证这一点，管理身份验证将以拒绝式失败结束，API 会返回 503，直到提供环境变量令牌或修复文件状态为止。
 
-管理员令牌可用以下任一形式发送：
+Headless API client 可通过受信任 transport 用以下任一形式发送管理员 token：
 
 ```http
 X-CodexCommander-API-Key: <admin-token>
@@ -27,14 +27,18 @@ Authorization: Bearer <admin-token>
 ```
 
 :::caution
-管理员令牌必须与所有数据平面凭证都不同。启动时会拒绝与代理准入密钥冲突的管理凭证。不要把管理员令牌放进 Codex、Claude Code 或其他模型客户端；它授权的是控制平面变更。
+管理员 token 必须与所有数据平面凭证都不同。启动时会拒绝与代理准入密钥冲突的管理凭证。不要把管理员 token 放进 Codex、Claude Code 或其他模型客户端；它授权的是控制平面变更。浏览器只能在受信任的 non-loopback HTTPS origin 上请求它。绝不要从明文远程页面粘贴或发送它。
 :::
 
-### 回环仪表板会话
+### 仪表盘启动会话
 
-在回环绑定上，仪表板引导可以接收一个短期的 `ccx_session_*` 凭证。每个会话持续五分钟，并绑定到精确的仪表板来源。安全请求必须匹配该来源。非安全方法还要求浏览器的 `Origin` 和该会话的 CSRF 令牌。
+手动打开的 loopback 仪表盘不会获得 API 凭证。静态页面框架可以加载，但在通过 `ccx gui` 或 macOS 菜单栏应用重新打开之前，每个 `/api/*` 请求都会返回 `401`。任何 loopback hostname/address 都不会请求或发送长期管理员 token。浏览器 origin 无法证明哪个本地 OS 用户拥有 listener，因此 loopback 既不是经过身份验证的 listener identity，也不能绕过身份验证。
 
-当需要数据平面身份验证时，会禁用会话签发，这也包括远程绑定。远程操作员必须使用原始管理员令牌进行身份验证；不会签发类似回环的 GUI 会话。
+launcher 使用原始管理员凭证签发一个绑定到请求 route 和 origin 的短期、一次性票据。票据只通过 URL fragment 传递，并在一次性交换过程中立即清除。得到的确认 GUI session 功能完整，只存在于进程内存中，最长八小时。它不会续期：到期或代理重启后的下一个 API 请求会返回 `401`，之后需要再次使用本地 launcher 流程。长期管理员 token 不会进入 URL 或 Web Storage。
+
+原始管理员 token 仍可执行普通 API 更改。catalog Apply 会更严格：`POST /api/codex-catalog/apply` 只接受确认 GUI session。脚本请使用 `ccx sync --restart-codex`。
+
+远程操作员浏览器只能通过受信任的 HTTPS 使用原始管理员 token 进行身份验证；明文远程页面绝不会请求或发送它。若没有受信任的 HTTPS，请使用呈现 loopback 的本地或 SSH tunnel，并通过 `ccx gui` 打开仪表盘。Headless API client 仍可在受信任 transport 上使用 raw-admin 身份验证。确认的浏览器 session 只通过绑定到精确 origin 和 route 的本地启动票据交换来签发。
 
 ## 常见错误
 
@@ -56,10 +60,10 @@ Authorization: Bearer <admin-token>
 
 | 方法和路径 | 用途 | 典型错误 |
 | --- | --- | --- |
-| `GET, PUT /api/v2` | 读取或更改代理协议、V2 消息传递和线程设置。`multiAgentV2MessageDelivery` 接受 `plaintext` 或默认的 `encrypted`；发送 `encrypted` 或 `null` 会移除显式明文覆盖。更改传递后请启动新会话。`maxConcurrentThreadsPerSession: null` 恢复 Codex 默认值 | 400 无效设置；502 过渡或持久化失败 |
+| `GET, PUT /api/v2` | 读取或更改代理协议、V2 task 消息传递和线程设置。更改模式/协议/thread 时，先用 Apply 替换运行中的 worker，再启动新 task。更改传递只需新 task，不会弄脏 catalog。`maxConcurrentThreadsPerSession: null` 恢复 Codex 默认值 | 400 无效设置；502 过渡或持久化失败 |
 | `GET, PUT /api/injection-model` | 读取或设置首选指导模型、努力程度、提示词和指导设置；未启用原生默认值同步时仅供指导 | 400 无效模型、努力程度或请求体 |
 | `GET, PUT /api/effort-caps` | 读取或设置全局和子代理推理努力上限 | 400 无效的阶梯值 |
-| `GET, PUT /api/subagent-models` | 读取或排序最多五个 `spawn_agent` 快速选择；不会强制路由。响应会区分已保存的 `chosen` 列表与实际生效的 `advertised` 列表，并在 `excluded` 中报告未生效的选择 | 400 无效列表或超过五个模型 |
+| `GET, PUT /api/subagent-models` | 读取或排序最多五个 `spawn_agent` 快速选择；不会强制路由。响应会区分已保存的 `chosen` 列表与实际生效的 `advertised` 列表，在 `excluded` 中报告未生效的选择，并附加 `activation` 状态 | 400 无效列表或超过五个模型 |
 | `GET, PUT /api/subagent-model-fallback` | 读取或设置已生成子任务的全局回退顺序和轮询间隔 | 400 无效列表或轮询间隔 |
 | `GET /api/grok` | 读取 Grok 托管配置状态和候选模型 | 400 状态读取失败 |
 | `PUT /api/grok/selection` | 持久化被排除的 Grok 模型 | 400 选择无效或超出大小限制 |
@@ -93,7 +97,9 @@ Authorization: Bearer <admin-token>
 | `POST /api/startup-action` | 安装或修复服务或 Codex shim | 400 无效动作；500 动作失败 |
 | `GET, POST /api/windows-tray` | 读取 Windows 托盘状态，或安装、启动、停止、卸载它 | 400 不支持的平台/动作；500 操作失败 |
 | `GET /api/diagnostics/project-config` | 读取缓存的项目配置警告 | — |
-| `POST /api/sync` | 将当前模型目录同步到 Codex，并返回 `catalogQuality`、`rehydrated`、Codex app-server `catalogState` 和所需的重启提示 | 409 写入权限被拒绝；500 同步失败 |
+| `POST /api/sync` | 在不中断 worker 的情况下将当前模型目录同步到 Codex，并返回 `activation` 状态 | 409 写入权限被拒绝；500 同步失败 |
+| `GET /api/codex-catalog/status` | 读取已保存配置、磁盘 catalog 和当前 worker 的加载状态 | — |
+| `POST /api/codex-catalog/apply` | 使用 `{ "expectedDesiredRevision": "…", "confirmInterrupt": true }` 显式应用到已确认的过时 worker；只接受一次性启动交接创建的确认 GUI 会话 | 400 无效请求体；403 需要确认的仪表盘启动；409 冲突/未知身份；503 busy |
 | `GET, PUT /api/sidecar-settings` | 读取或更新 web 搜索和 vision sidecar 的模型/后端设置 | 400 结构、后端或限制无效 |
 | `GET, PUT /api/shadow-call-settings` | 读取或更新 shadow-call 拦截设置 | 400 结构或值无效 |
 

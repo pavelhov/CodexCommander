@@ -1,7 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
-import { catalogModelSlug, effectiveSubagentRoster, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
+import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
+import {
+  catalogOnlyWorkerStateFromActivation,
+  captureCodexCatalogDesiredSnapshot,
+  codexCatalogDesiredRevision,
+  collectCodexCatalogActivationWorkerState,
+  inspectCodexCatalogActivation,
+  resetCodexCatalogActivationWorkerStateCache,
+} from "../../codex/catalog-activation";
+import type { CatalogConfigAuthoritySnapshot } from "../../codex/catalog-admission";
+import { resetCodexAppServerCatalogStateCache } from "../../codex/app-server-processes";
 import {
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
@@ -61,6 +71,7 @@ import { applySystemEnvToggle } from "../system-env";
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels, fetchGrokCandidateModels, buildClaudeDesktopState } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
+import { projectCatalogActivationForPrincipal } from "./catalog-activation-routes";
 
 const GROK_APPLY_JOIN_MS = 120_000;
 export const GROK_APPLY_TERMINAL_MS = 10 * 60_000;
@@ -177,6 +188,52 @@ import type { ManagementContext } from "./context";
 export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
+  function resetCatalogWorkerObservation(): void {
+    (deps.resetCodexAppServerCatalogStateCache ?? resetCodexAppServerCatalogStateCache)();
+    resetCodexCatalogActivationWorkerStateCache();
+  }
+
+  function collectCatalogWorkerObservation() {
+    if (deps.collectCodexAppServerCatalogState) {
+      const catalogState = deps.collectCodexAppServerCatalogState();
+      return { catalogState, activationWorkers: catalogState };
+    }
+    const activationWorkers = collectCodexCatalogActivationWorkerState();
+    return {
+      catalogState: catalogOnlyWorkerStateFromActivation(activationWorkers),
+      activationWorkers,
+    };
+  }
+
+  function currentCatalogDesired(): {
+    config: CodexCommanderConfig;
+    revision: string;
+    authority?: CatalogConfigAuthoritySnapshot;
+  } {
+    if (deps.captureCatalogDesiredSnapshotForActivation) {
+      return deps.captureCatalogDesiredSnapshotForActivation();
+    }
+    if (deps.loadConfigForCatalogActivation) {
+      const current = deps.loadConfigForCatalogActivation();
+      return { config: current, revision: codexCatalogDesiredRevision(current) };
+    }
+    // Direct route tests intentionally supply an in-memory persistence seam.
+    if (deps.saveConfigPreservingClaudeCode) {
+      return { config, revision: codexCatalogDesiredRevision(config) };
+    }
+    // Direct management tests can inject a pure convergence factory around an
+    // intentionally non-persisted config fixture. Production never supplies
+    // this seam, so malformed/unreadable persisted state still fails closed.
+    if (deps.createManagementConvergeCodex) {
+      return { config, revision: codexCatalogDesiredRevision(config) };
+    }
+    // A malformed or unreadable persisted config is not permission to report
+    // the server's older startup snapshot as current. Let the management error
+    // boundary surface the read failure instead of manufacturing false catalog
+    // or activation state.
+    return captureCodexCatalogDesiredSnapshot();
+  }
+
   /** Best-effort Desktop 3P config auto-reconcile when providers change. */
   async function autoApplyDesktopBestEffort(): Promise<void> {
     try {
@@ -227,12 +284,13 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       getAgentsEnabled, getAgentsMaxDepth, getSubagentDeveloperInstructions,
     } = await import("../../codex/features");
     const enabled = isMultiAgentV2Enabled();
+    const current = currentCatalogDesired().config;
     return jsonResponse({
       enabled,
       agentsMaxThreadsConflict: enabled && hasAgentsMaxThreads(),
       maxConcurrentThreadsPerSession: getLogicalMaxThreads(),
-      multiAgentMode: config.multiAgentMode ?? "default",
-      multiAgentV2MessageDelivery: config.multiAgentV2MessageDelivery ?? "encrypted",
+      multiAgentMode: current.multiAgentMode ?? "default",
+      multiAgentV2MessageDelivery: current.multiAgentV2MessageDelivery ?? "encrypted",
       agentsEnabled: getAgentsEnabled(),
       agentsMaxDepth: getAgentsMaxDepth(),
       subagentDeveloperInstructions: getSubagentDeveloperInstructions(),
@@ -318,20 +376,52 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       if (!result.ok) return jsonResponse({ error: `multi_agent_v2 transition failed: ${result.error}` }, 502);
       if (result.changed && result.threadLimit !== null) warnings.push(`Thread limit ${result.threadLimit} preserved for ${targetFlag ? "v2" : "v1"}.`);
     }
-    if (wantsMode) {
-      if (mode === "default") delete config.multiAgentMode;
-      else config.multiAgentMode = mode;
-      warnings.push(`Multi-agent mode set to '${mode}'. Applies to new sessions.`);
-    }
-    if (wantsMessageDelivery) {
-      if (body.multiAgentV2MessageDelivery === "plaintext") {
-        config.multiAgentV2MessageDelivery = "plaintext";
+    if (wantsMode || wantsMessageDelivery) {
+      const applyRequestedConfigFields = (current: CodexCommanderConfig): boolean => {
+        let changed = false;
+        if (wantsMode) {
+          const next = mode === "default" ? undefined : mode;
+          if (current.multiAgentMode !== next) changed = true;
+          if (next === undefined) delete current.multiAgentMode;
+          else current.multiAgentMode = next;
+        }
+        if (wantsMessageDelivery) {
+          const next = body.multiAgentV2MessageDelivery === "plaintext" ? "plaintext" as const : undefined;
+          if (current.multiAgentV2MessageDelivery !== next) changed = true;
+          if (next === undefined) delete current.multiAgentV2MessageDelivery;
+          else current.multiAgentV2MessageDelivery = next;
+        }
+        return changed;
+      };
+      if (deps.saveConfigPreservingClaudeCode) {
+        applyRequestedConfigFields(config);
+        deps.saveConfigPreservingClaudeCode(config);
       } else {
-        delete config.multiAgentV2MessageDelivery;
+        const persisted = mutatePersistedConfig(current => ({
+          changed: applyRequestedConfigFields(current),
+          value: {
+            multiAgentMode: current.multiAgentMode,
+            multiAgentV2MessageDelivery: current.multiAgentV2MessageDelivery,
+          },
+        }));
+        if (persisted.status === "unavailable") {
+          const status = persisted.reason === "conflict" ? 503 : 409;
+          const response = jsonResponse({ error: `multi-agent policy could not be saved (${persisted.reason})` }, status);
+          if (status === 503) response.headers.set("Retry-After", "1");
+          return response;
+        }
+        if (persisted.value.multiAgentMode === undefined) delete config.multiAgentMode;
+        else config.multiAgentMode = persisted.value.multiAgentMode;
+        if (persisted.value.multiAgentV2MessageDelivery === undefined) delete config.multiAgentV2MessageDelivery;
+        else config.multiAgentV2MessageDelivery = persisted.value.multiAgentV2MessageDelivery;
       }
-      warnings.push("V2 message delivery changes affect subsequent requests. Start a new session instead of switching an active conversation.");
+      if (wantsMode) {
+        warnings.push(`Multi-agent mode set to '${mode}'. Apply the catalog to Codex, then start a new task.`);
+      }
+      if (wantsMessageDelivery) {
+        warnings.push("V2 task-message delivery changes affect subsequent requests. Start a new task instead of switching an active conversation.");
+      }
     }
-    if (wantsMode || wantsMessageDelivery) saveConfigPreservingClaudeCode(config);
     // New-key scalar writes: each writer is individually atomic, so apply them in
     // sequence after the transition. A failure here is a persistence failure (the
     // writers' ok:false result or a throw from the underlying atomic write helper),
@@ -362,22 +452,45 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     if (getAgentsEnabled() === false && isMultiAgentV2Enabled()) {
       warnings.push("agents.enabled = false has no effect while features.multi_agent_v2 is enabled; upstream keeps V2 active.");
     }
-    const catalogRefresh = await convergeCodexCatalog();
-    if (requestedFlag !== undefined) warnings.push("Applies to new sessions; restart the Codex app or wait out its picker cache to see the ladder change.");
+    const catalogAffectingChange = wantsMode || requestedFlag !== undefined;
+    const activationAffectingChange = catalogAffectingChange
+      || wantsThreads
+      || wantsAgentsEnabled
+      || wantsMaxDepth
+      || wantsSubagentInstructions;
+    const desiredForCatalog = currentCatalogDesired();
+    const catalogRefresh = catalogAffectingChange
+      ? await convergeCodexCatalog(desiredForCatalog.config)
+      : { status: "skipped" as const, reason: "not-requested" as const, retryable: false };
+    if (requestedFlag !== undefined && !wantsMode) {
+      warnings.push("The collaboration protocol changed. Apply the catalog to Codex, then start a new task.");
+    }
+    if (activationAffectingChange) resetCatalogWorkerObservation();
+    const { activationWorkers } = collectCatalogWorkerObservation();
+    const responseDesired = currentCatalogDesired();
+    const activation = inspectCodexCatalogActivation(
+      responseDesired.config,
+      activationWorkers,
+      catalogRefresh,
+      responseDesired.authority,
+      deps.catalogArtifactProofForActivation?.(),
+      deps.codexRoutingKindForActivation?.(),
+    );
     const enabled = isMultiAgentV2Enabled();
     return jsonResponse({
       ok: true,
       enabled,
       agentsMaxThreadsConflict: enabled && hasAgentsMaxThreads(),
       maxConcurrentThreadsPerSession: getLogicalMaxThreads(),
-      multiAgentMode: config.multiAgentMode ?? "default",
-      multiAgentV2MessageDelivery: config.multiAgentV2MessageDelivery ?? "encrypted",
+      multiAgentMode: responseDesired.config.multiAgentMode ?? "default",
+      multiAgentV2MessageDelivery: responseDesired.config.multiAgentV2MessageDelivery ?? "encrypted",
       agentsEnabled: getAgentsEnabled(),
       agentsMaxDepth: getAgentsMaxDepth(),
       subagentDeveloperInstructions: getSubagentDeveloperInstructions(),
       agentsMaxDepthAppliesWhenV2Disabled: !enabled,
       warnings,
       catalogRefresh,
+      activation: projectCatalogActivationForPrincipal(activation, ctx.principal),
     });
   }
 
@@ -485,6 +598,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     let nextModel = config.injectionModel;
     let nextEffort = config.injectionEffort;
     let nextPrompt = config.injectionPrompt;
+    const previousSyncCodexSubagentDefaults = subagentDefaultSyncEffective(config);
 
     if ("multiAgentGuidanceEnabled" in body) {
       if (typeof body.multiAgentGuidanceEnabled !== "boolean") {
@@ -544,6 +658,37 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     else delete config.injectionPrompt;
 
     saveConfigPreservingClaudeCode(config);
+    const nativeDefaultsAffectingChange = "syncCodexSubagentDefaults" in body
+      || (("model" in body || "effort" in body)
+        && (previousSyncCodexSubagentDefaults || nextSyncCodexSubagentDefaults));
+    let nativeDefaultsRefresh;
+    let activation;
+    if (nativeDefaultsAffectingChange) {
+      const desired = currentCatalogDesired();
+      try {
+        const reconcile = deps.reconcileManagementNativeSubagentDefaults
+          ?? (await import("../../codex/management-native-defaults"))
+            .reconcileManagementNativeSubagentDefaults;
+        nativeDefaultsRefresh = await reconcile(desired.config, desired.authority);
+      } catch (error) {
+        nativeDefaultsRefresh = {
+          status: "failed" as const,
+          retryable: false,
+          message: error instanceof Error ? error.message : "Native Codex defaults could not be reconciled.",
+        };
+      }
+      if (nativeDefaultsRefresh.status === "reconciled") resetCatalogWorkerObservation();
+      const { activationWorkers } = collectCatalogWorkerObservation();
+      const responseDesired = currentCatalogDesired();
+      activation = inspectCodexCatalogActivation(
+        responseDesired.config,
+        activationWorkers,
+        { status: "skipped", reason: "not-requested", retryable: false },
+        responseDesired.authority,
+        deps.catalogArtifactProofForActivation?.(),
+        deps.codexRoutingKindForActivation?.(),
+      );
+    }
     return jsonResponse({
       ok: true,
       multiAgentGuidanceEnabled: multiAgentGuidanceEnabled(config),
@@ -551,6 +696,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       model: config.injectionModel ?? null,
       effort: config.injectionEffort ?? null,
       prompt: config.injectionPrompt ?? null,
+      ...(nativeDefaultsRefresh ? { nativeDefaultsRefresh } : {}),
+      ...(activation
+        ? { activation: projectCatalogActivationForPrincipal(activation, ctx.principal) }
+        : {}),
     });
   }
 
@@ -583,12 +732,14 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   }
 
   // Subagent model picker: persist up to five requested quick picks. Codex advertises the first
-  // five picker-visible catalog rows, so the response reports the effective V2 projection rather
+  // five picker-visible catalog rows, so the response reports the protocol-aware projection rather
   // than implying every saved choice necessarily entered that window. PUT reprioritizes the
   // injected catalog so eligible chosen rows lead.
   if (url.pathname === "/api/subagent-models" && req.method === "GET") {
-    const models = await fetchAllModels(config);
-    const disabled = new Set(config.disabledModels ?? []);
+    const rosterDesired = currentCatalogDesired();
+    const rosterConfig = rosterDesired.config;
+    const models = await fetchAllModels(rosterConfig);
+    const disabled = new Set(rosterConfig.disabledModels ?? []);
     // Native gpt (passthrough) are also valid subagent picks — they're picker-visible models in the
     // catalog, just buried by priority. List them first so the user can feature them over routed.
     const { listCatalogNativeSlugs } = await import("../../codex/catalog");
@@ -601,39 +752,89 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     ];
     // #857: let CLI/GUI show when a running Codex app-server keeps an older
     // in-memory catalog than the one on disk.
-    const { collectCodexAppServerCatalogState } = await import("../../codex/app-server-processes");
-    const catalogState = collectCodexAppServerCatalogState();
-    const effectiveV2 = effectiveSubagentRoster(config.subagentModels ?? [], "v2");
-    return jsonResponse({
-      chosen: config.subagentModels ?? [],
+    const { catalogState, activationWorkers } = collectCatalogWorkerObservation();
+    const activation = inspectCodexCatalogActivation(
+      rosterConfig,
+      activationWorkers,
+      undefined,
+      rosterDesired.authority,
+      deps.catalogArtifactProofForActivation?.(),
+      deps.codexRoutingKindForActivation?.(),
+    );
+    const response = jsonResponse({
+      chosen: rosterConfig.subagentModels ?? [],
       available,
       catalogState,
-      advertised: effectiveV2.advertised.map(model => model.model),
-      excluded: effectiveV2.excluded,
+      advertised: activation.catalog.advertised,
+      excluded: activation.catalog.excluded,
+      activation: projectCatalogActivationForPrincipal(activation, ctx.principal),
     });
+    response.headers.set("Cache-Control", "no-store");
+    return response;
   }
   if (url.pathname === "/api/subagent-models" && req.method === "PUT") {
     let body: { models?: unknown };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (!Array.isArray(body.models)) return jsonResponse({ error: "models must be an array" }, 400);
-    const chosen = body.models.slice(0, 5);
+    if (body.models.length > 5) return jsonResponse({ error: "models must contain at most five selectors" }, 400);
+    const chosen = body.models;
     if (chosen.some(model => typeof model !== "string" || model.trim().length === 0 || !isCanonicalPersistedModelSelector(model.trim()))) {
       return jsonResponse({ error: "models must contain canonical selectors" }, 400);
     }
     const canonicalChosen = chosen.map(model => (model as string).trim());
-    config.subagentModels = canonicalChosen;
-    const { saveConfigPreservingClaudeCode: save } = await import("../../config");
-    save(config);
-    const catalogRefresh = await convergeCodexCatalog();
+    if (new Set(canonicalChosen).size !== canonicalChosen.length) {
+      return jsonResponse({ error: "models must not contain duplicate selectors" }, 400);
+    }
+    if (deps.saveConfigPreservingClaudeCode) {
+      config.subagentModels = canonicalChosen;
+      deps.saveConfigPreservingClaudeCode(config);
+    } else {
+      const persisted = mutatePersistedConfig(current => {
+        const previous = current.subagentModels ?? [];
+        const changed = previous.length !== canonicalChosen.length
+          || previous.some((model, index) => model !== canonicalChosen[index]);
+        current.subagentModels = [...canonicalChosen];
+        return { changed, value: [...canonicalChosen] };
+      });
+      if (persisted.status === "unavailable") {
+        const status = persisted.reason === "conflict" ? 503 : 409;
+        const response = jsonResponse({ error: `subagent roster could not be saved (${persisted.reason})` }, status);
+        if (status === 503) response.headers.set("Retry-After", "1");
+        return response;
+      }
+      config.subagentModels = [...persisted.value];
+    }
+    // The field-scoped mutation rebases onto the newest persisted config. Build
+    // from that same authority, not the server's older whole-config snapshot.
+    const catalogDesired = currentCatalogDesired();
+    const catalogRefresh = await convergeCodexCatalog(catalogDesired.config);
     await syncClaudeAgentDefsBestEffort();
     await autoApplyDesktopBestEffort();
-    const effectiveV2 = effectiveSubagentRoster(canonicalChosen, "v2");
+    resetCatalogWorkerObservation();
+    const { catalogState, activationWorkers } = collectCatalogWorkerObservation();
+    const responseDesired = currentCatalogDesired();
+    const responseConfig = responseDesired.config;
+    const currentChosen = [...(responseConfig.subagentModels ?? [])];
+    const superseded = currentChosen.length !== canonicalChosen.length
+      || currentChosen.some((model, index) => model !== canonicalChosen[index]);
+    const activation = inspectCodexCatalogActivation(
+      responseConfig,
+      activationWorkers,
+      catalogRefresh,
+      responseDesired.authority,
+      deps.catalogArtifactProofForActivation?.(),
+      deps.codexRoutingKindForActivation?.(),
+    );
     return jsonResponse({
       ok: true,
-      applied: canonicalChosen,
+      saved: true,
+      ...(superseded ? { superseded: true, requested: canonicalChosen } : {}),
+      applied: currentChosen,
       catalogRefresh,
-      advertised: effectiveV2.advertised.map(model => model.model),
-      excluded: effectiveV2.excluded,
+      catalogState,
+      advertised: activation.catalog.advertised,
+      excluded: activation.catalog.excluded,
+      activation: projectCatalogActivationForPrincipal(activation, ctx.principal),
     });
   }
 

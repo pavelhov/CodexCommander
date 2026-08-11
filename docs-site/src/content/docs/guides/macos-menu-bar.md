@@ -1,6 +1,6 @@
 ---
 title: macOS Menu Bar Companion
-description: Install and use the native CodexCommander status, agent-activity, and provider-quota companion.
+description: Install and use the native CodexCommander proxy, startup-readiness, Codex-route, live-request, and provider-quota companion.
 ---
 
 The macOS companion puts the most useful CodexCommander state in the menu bar without replacing the
@@ -45,23 +45,32 @@ override it.
 
 ## What the panel shows
 
-- **Agent activity** — the current active count and live model/provider rows. A spawned child is
-  nested only when CodexCommander can prove its active parent from request metadata; otherwise it is
-  shown as a standalone subagent. The companion never invents queued, reviewing, rate-limited, or
-  completed history.
+- **Proxy status** — reports process liveness without treating a running server as proof that startup
+  synchronization finished or that Codex uses the proxy.
+- **Readiness** — reports startup and catalog synchronization as **Checking**, **Starting**, **Ready**,
+  **Startup failed**, or **Unavailable**. This signal is independent of proxy liveness.
+- **Codex route** — reports whether Codex currently routes through CodexCommander, native OpenAI, or
+  another custom route. A running proxy does not by itself mean that Codex is using it.
+- **Live proxy requests** — the current in-flight request count and live model/provider turn rows. A
+  spawned-child request is nested only when CodexCommander can prove its in-flight parent from request
+  metadata; otherwise it is shown as a standalone subagent turn. A row disappears when that model
+  request settles, even if Codex keeps the child thread alive and idle for later work. This is not a
+  persistent Codex agent-lifecycle view, and the companion never invents queued, reviewing,
+  rate-limited, or completed history.
 - **Provider quotas** — provider-reported 5-hour, weekly, monthly, or provider-specific credit
   windows and reset times when available. OpenCode Go instead shows its published caps and local
   observations, never an invented live balance. Missing data is shown as unavailable, never as zero
   usage or unlimited capacity.
-- **Dashboard and Logs** — open the corresponding local dashboard view in your default browser.
+- **Dashboard and Logs** — open the corresponding local dashboard view in your default browser with
+  a one-time launch authorization for full dashboard changes, including catalog Apply.
 - **Startup options…** — opens the dashboard's Startup page when an optional startup upgrade or
   repair is available; the panel does not make a raw CLI command the primary action.
 - **Manage** — opens the selected provider's Accounts or API Keys tab. OAuth, API-key entry,
   reauthentication, account switching, and provider configuration stay in the dashboard.
-- **Agent catalog update ready** — a persistent, nonfatal card shown when running Codex background
+- **Restart ChatGPT to load models** — a persistent, nonfatal card shown when running Codex background
   workers still hold an older model roster. The CodexCommander proxy remains healthy and running.
-- **Apply agent catalog…** — opens a confirmation that reports fresh request activity when
-  available, warns that applying may interrupt an answer, and offers **Apply Now** or **Later**.
+- **Show restart steps…** — explains the recommended reload boundary: quit ChatGPT completely, reopen
+  it, and then start a new task. The menu app does not force-restart background workers from this card.
 - **Stop Proxy…** — always asks for confirmation, interrupts active client and sub-agent requests,
   restores native Codex, and leaves the menu app open.
 - **Restart Proxy…** — always asks for confirmation, lets the proxy drain active requests for up to 60
@@ -91,18 +100,22 @@ missing optional crash recovery does not turn a healthy running app into an alar
 Opening the app automatically synchronizes the Codex model catalog with the providers currently
 configured in CodexCommander. If no Codex worker is running, the new roster is ready for the next Codex
 task. If a long-lived worker loaded an older roster, CodexCommander stays running and the panel keeps the
-nonfatal **Agent catalog update ready** card visible.
+nonfatal **Restart ChatGPT to load models** card visible.
 
-Choose **Apply agent catalog…** to review the interruption risk. The confirmation requests a fresh
-active-request count when possible, but zero active requests is not presented as proof that Codex is
-idle: another request can begin before the action runs. **Apply Now** synchronizes once more, sends
-`SIGTERM` only to exact current-user `codex … app-server` and `codex-code-mode-host` process matches,
-and briefly verifies that the old process IDs exited. It never uses a broad `pkill`, restarts the
-CodexCommander proxy, or closes the menu app. Codex creates a fresh background host on the next task and
-loads the current roster.
+Choose **Show restart steps…**, quit ChatGPT completely, reopen it, and then start a new task. This is
+the recommended and most predictable way to replace the old worker. CodexCommander and the menu app
+remain running throughout.
 
-The current companion does not include **Apply when idle**. If an answer is active, choose **Later** and apply
-the update when you are ready; the card remains available. The advanced CLI fallback is:
+A new task or fork inside the same old background host is not a catalog-reload boundary. The menu card
+therefore stays available until status observes a current worker. If the dashboard instead reports a
+pending or unknown catalog, or says managed routing is not injected, choose **Apply to Codex** there so
+it can reconcile and prove those files first; quitting ChatGPT alone is not that repair.
+
+For an already-converged stale worker, the dashboard/API **Force-restart workers** action and the CLI
+remain advanced fallbacks. They re-synchronize, use a desired-revision fence, signal only exact
+current-user `codex … app-server` and `codex-code-mode-host` matches, and never escalate to a broad
+`pkill`. Because they bypass ChatGPT's normal app lifecycle, ChatGPT may show **stopped unexpectedly**.
+The CLI form is:
 
 ```bash
 ccx sync --restart-codex
@@ -119,6 +132,14 @@ validated, no-follow file descriptor, keeps the value only in process memory, an
 an identity-verified loopback CodexCommander process. It never displays, logs, copies, stores, or places
 the token in a browser URL.
 
+When the companion opens the dashboard, it asks that verified local proxy for a short-lived,
+single-use launch ticket. The ticket appears only in the URL fragment and is removed during its
+one-time exchange; the durable admin token never enters the URL or web storage. The resulting
+full-featured session is process-memory-only, lasts up to eight hours, and is never renewed. Expiry
+or proxy restart makes the next API request return `401`, and the page tells the user to reopen
+through the companion or `ccx gui`. A manually opened loopback dashboard receives no API session and
+never prompts for or sends the durable admin token.
+
 Provider credentials remain owned by CodexCommander. The companion never reads ChatGPT, Kimi, Grok,
 Anthropic, or other provider tokens and never calls provider login endpoints directly.
 
@@ -127,19 +148,19 @@ variable is inherited by the app process. Apps launched from Finder usually do n
 variables; if there is no protected token file, the companion reports that management
 authentication is unavailable instead of presenting a token-entry form.
 
-Live agent records are memory-only. The management response contains process-ephemeral row ids,
+Live request records are memory-only. The management response contains process-ephemeral row ids,
 provider/model identifiers, timestamps, and aggregate counts. It contains no prompts, titles,
 working directories, tool arguments, account identifiers, credentials, request bodies, raw
 thread/session ids, or historical activity.
 
 ## Polling
 
-The app refreshes lightweight activity frequently while the panel is open and slows down when it
+The app refreshes lightweight in-flight request activity frequently while the panel is open and slows down when it
 is closed. Provider quotas refresh at a separate, slower cadence and use the upstream timestamps
 reported by CodexCommander. Repeated failures back off automatically, and overlapping refreshes are
 coalesced.
 
-Use **Refresh** for an immediate activity refresh and a forced quota refresh.
+Use **Refresh** for an immediate live-request refresh and a forced quota refresh.
 
 ## Build from source
 
@@ -154,11 +175,12 @@ bun run build:macos
 open dist/macos/CodexCommander.app
 ```
 
-The source app is exactly `dist/macos/CodexCommander.app`. It discovers the checkout's `src/cli/index.ts`
-and bundled Bun, so it should stay in that location while you work on this repository. Double-clicking
-it attempts to ensure the proxy, but a missing CLI, offline failure, or failed start does not close
-the app: its status panel remains available and **Start** can be retried. This source workflow does
-not install or copy the app into Application Support. A rebuild at the same path is detected on the
+The development app is exactly `dist/macos/CodexCommander.app`. Every build embeds the Bun runtime and
+CodexCommander server resources inside the app bundle; the running app never executes `src/` from the
+checkout. Rebuild the app to pick up source changes. Double-clicking it attempts to ensure the proxy,
+but an offline failure or failed start does not close the app: its status panel remains available and
+**Start** can be retried. This source workflow does not install or copy the app into Application
+Support. A rebuild at the same path is detected on the
 next launch and refreshes the existing Login Item registration only when Launch at Login remains on.
 Each build stamps its exact Git revision into `CodexCommanderSourceRevision` in the bundle's `Info.plist`
 and prints it at the end of the build. Uncommitted source is marked with `-dirty`, so commit before
@@ -181,9 +203,10 @@ making a final distributable bundle.
   kills a process or rewrites service state as a fallback.
 - **Only native models appear after a stop, a Codex update, or a cold start** — reopen CodexCommander. Launch
   automatically synchronizes the catalog and restores still-configured routed models from its
-  protected last-known-good catalog when live provider discovery is temporarily empty. If **Agent
-  catalog update ready** remains visible, choose **Apply agent catalog…**, or use the CLI fallback in
-  [Agent catalog updates](#agent-catalog-updates).
+  protected last-known-good catalog when live provider discovery is temporarily empty. If **Restart
+  ChatGPT to load models** remains visible, quit and reopen ChatGPT, then start a new task. Use the
+  advanced dashboard/API or CLI fallback in [Agent catalog updates](#agent-catalog-updates) only if
+  manual restart is unsuitable.
 
 ## Uninstall
 

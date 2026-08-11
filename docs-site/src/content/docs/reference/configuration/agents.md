@@ -10,8 +10,8 @@ routes, and limits delegated work.
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` stamps every catalog model as v1; `v2` stamps every model as v2. `default` restores upstream pins (Sol/Terra v2, Luna v1) and otherwise follows the native `multi_agent_v2` flag. Applies to new sessions. |
-| `multiAgentV2MessageDelivery?` | `"encrypted" \| "plaintext"` | `"encrypted"` | V2 parent-message delivery. `encrypted` preserves ChatGPT's reserved backend contract and native-only ciphertext guard. `plaintext` opts subsequent V2 parent requests into experimental mixed-provider compatibility; all delegated messages from that parent become plaintext, and routed parents receive the stock Codex plaintext marker on message-bearing collaboration calls. Start a new session after changing it. |
+| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` stamps every catalog model as v1; `v2` stamps every model as v2. `default` restores upstream pins (Sol/Terra v2, Luna v1) and otherwise follows the native `multi_agent_v2` flag. After changing it, Apply replaces a running worker; then start a new task for the session-bound tool shape. |
+| `multiAgentV2MessageDelivery?` | `"encrypted" \| "plaintext"` | `"encrypted"` | V2 task-message delivery only, not credential encryption. `encrypted` preserves ChatGPT's reserved backend contract and native-only ciphertext guard. `plaintext` opts subsequent V2 parent requests into experimental mixed-provider compatibility; all delegated messages from that parent become plaintext, and routed parents receive the stock Codex plaintext marker on message-bearing collaboration calls. Start a new task after changing it; it does not dirty the catalog or need Apply. |
 | `subagentModels?` | `string[]` | `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.4-mini` | Up to five bare native, account-qualified `<selector>/<native-openai-model>`, or routed `provider/model` ids advertised first in the sub-agent picker. The dashboard preserves configured exact selectors, including account-qualified choices, and reports which saved entries are advertised or excluded. Use `ccx agent subagents set` or edit the configuration for choices that are not in the current catalog. An explicit empty list is preserved. |
 | `injectionModel?` | `string` | — | Preferred native or routed sub-agent model used in proxy-authored v2 delegation guidance. |
 | `injectionEffort?` | `string` | — | Preferred effort (`low` through `ultra`), meaningful only with `injectionModel`. |
@@ -24,7 +24,8 @@ routes, and limits delegated work.
 | `subagentEffortCap?` | `string` | — | Additional ceiling for spawned-child turns only. When both caps apply, the lower wins. |
 
 Manage the surface with the dashboard or `ccx v2 status|on|off|mode <v1|default|v2>|threads <n>`.
-Mode changes apply to new sessions. `maxConcurrentThreadsPerSession` is a `PUT /api/v2` field, not a
+Mode, protocol, and thread changes update managed Codex boot configuration. If a Codex worker is
+already running, choose **Apply agent catalog** to replace it, then start a new task. `maxConcurrentThreadsPerSession` is a `PUT /api/v2` field, not a
 `config.json` key; `ccx v2 threads <n>` writes `max_concurrent_threads_per_session` under
 `[features.multi_agent_v2]` in Codex's `$CODEX_HOME/config.toml` after v2 is enabled.
 

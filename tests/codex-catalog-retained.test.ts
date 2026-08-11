@@ -12,7 +12,6 @@ import { join } from "node:path";
 
 import {
   resetCatalogRuntimeStateForTests,
-  syncCatalogModels,
 } from "../src/codex/catalog";
 import { retainedRoutedCatalogPath } from "../src/codex/catalog/parsing";
 import {
@@ -20,6 +19,7 @@ import {
   recordOwnedConfigPath,
 } from "../src/lib/config-ownership";
 import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
+import { convergeCatalogForTest } from "./helpers/catalog-convergence";
 
 const originalFetch = globalThis.fetch;
 
@@ -37,13 +37,6 @@ function nativeEntry(slug = "gpt-5.5"): Record<string, unknown> {
 
 function nativeCatalog(): string {
   return `${JSON.stringify({ models: [nativeEntry()] }, null, 2)}\n`;
-}
-
-function catalogDeps() {
-  return {
-    commandCandidates: () => ["codex-fixture"],
-    execFileSync: () => JSON.stringify({ models: [nativeEntry()] }),
-  };
 }
 
 function provider(overrides: Partial<CodexCommanderProviderConfig> = {}): CodexCommanderProviderConfig {
@@ -67,7 +60,6 @@ function config(providers: Record<string, CodexCommanderProviderConfig>, overrid
 function liveEmptyProvider(): CodexCommanderProviderConfig {
   return provider({
     liveModels: true,
-    fetch: ((input: RequestInfo | URL) => globalThis.fetch(input)) as typeof fetch,
   } as Partial<CodexCommanderProviderConfig>);
 }
 
@@ -107,9 +99,9 @@ describe("retained routed Codex catalog", () => {
   });
 
   test("a live routed sync creates an owned mode-600 last-known-good snapshot", async () => {
-    const result = await syncCatalogModels(config({
+    const result = await convergeCatalogForTest(config({
       vendor: provider({ liveModels: false, models: ["alpha"] }),
-    }), catalogDeps());
+    }));
 
     expect(result.catalogQuality).toBe("live");
     expect(result.rehydrated).toBe(0);
@@ -128,12 +120,12 @@ describe("retained routed Codex catalog", () => {
     const liveConfig = config({
       vendor: provider({ liveModels: false, models: ["alpha"] }),
     });
-    await syncCatalogModels(liveConfig, catalogDeps());
+    await convergeCatalogForTest(liveConfig);
     const retainedBefore = readFileSync(retainedRoutedCatalogPath(), "utf8");
 
     writeFileSync(catalogPath, nativeCatalog(), "utf8");
     resetCatalogRuntimeStateForTests();
-    const result = await syncCatalogModels(config({ vendor: liveEmptyProvider() }), catalogDeps());
+    const result = await convergeCatalogForTest(config({ vendor: liveEmptyProvider() }));
 
     expect(result.catalogQuality).toBe("retained");
     expect(result.rehydrated).toBe(1);
@@ -143,17 +135,17 @@ describe("retained routed Codex catalog", () => {
   });
 
   test("partial discovery combines live providers with retained missing providers", async () => {
-    await syncCatalogModels(config({
+    await convergeCatalogForTest(config({
       vendor: provider({ liveModels: false, models: ["alpha"] }),
       peer: provider({ liveModels: false, models: ["beta"] }),
-    }), catalogDeps());
+    }));
 
     writeFileSync(catalogPath, nativeCatalog(), "utf8");
     resetCatalogRuntimeStateForTests();
-    const result = await syncCatalogModels(config({
+    const result = await convergeCatalogForTest(config({
       vendor: provider({ liveModels: false, models: ["alpha"] }),
       peer: liveEmptyProvider(),
-    }), catalogDeps());
+    }));
 
     expect(result.catalogQuality).toBe("retained");
     expect(result.rehydrated).toBe(1);
@@ -164,17 +156,17 @@ describe("retained routed Codex catalog", () => {
   });
 
   test("removed, disabled, and intentionally empty providers are never resurrected", async () => {
-    await syncCatalogModels(config({
+    await convergeCatalogForTest(config({
       vendor: provider({ liveModels: false, models: ["alpha"] }),
       removed: provider({ liveModels: false, models: ["old"] }),
-    }), catalogDeps());
+    }));
 
     writeFileSync(catalogPath, nativeCatalog(), "utf8");
     resetCatalogRuntimeStateForTests();
-    const disabled = await syncCatalogModels(config(
+    const disabled = await convergeCatalogForTest(config(
       { vendor: liveEmptyProvider() },
       { disabledModels: ["vendor/alpha"] },
-    ), catalogDeps());
+    ));
     expect(disabled.catalogQuality).toBe("native-only");
     let active = JSON.parse(readFileSync(catalogPath, "utf8")) as { models: Array<{ slug: string }> };
     expect(active.models.map(model => model.slug)).not.toContain("vendor/alpha");
@@ -182,9 +174,9 @@ describe("retained routed Codex catalog", () => {
 
     writeFileSync(catalogPath, nativeCatalog(), "utf8");
     resetCatalogRuntimeStateForTests();
-    const intentionallyEmpty = await syncCatalogModels(config({
+    const intentionallyEmpty = await convergeCatalogForTest(config({
       vendor: provider({ liveModels: false, models: [] }),
-    }), catalogDeps());
+    }));
     expect(intentionallyEmpty.catalogQuality).toBe("native-only");
     active = JSON.parse(readFileSync(catalogPath, "utf8")) as { models: Array<{ slug: string }> };
     expect(active.models.map(model => model.slug)).not.toContain("vendor/alpha");

@@ -10,6 +10,20 @@ const originalLog = console.log;
 const originalError = console.error;
 const originalCodexHome = process.env.CODEX_HOME;
 const tempRoots: string[] = [];
+const TEST_BASE_URL = "http://127.0.0.1:10100";
+
+function attestedTestTransport() {
+  return {
+    baseUrl: TEST_BASE_URL,
+    attestLiveManagementProxyImpl: async () => ({
+      pid: 4242,
+      port: 10100,
+      hostname: "127.0.0.1",
+      source: "runtime" as const,
+      baseUrl: TEST_BASE_URL,
+    }),
+  };
+}
 
 function tempConfigDir(prefix: string): string {
   const path = mkdtempSync(join(tmpdir(), prefix));
@@ -128,7 +142,7 @@ describe("ccx account main", () => {
       return Response.json({ ok: true });
     };
     const deps = {
-      baseUrl: "http://127.0.0.1:10100",
+      ...attestedTestTransport(),
       fetchImpl,
       spawnCodexLoginImpl: (home: string) => {
         loginHome = home;
@@ -183,7 +197,7 @@ describe("ccx account main", () => {
       const operation = new URL(String(input)).pathname.split("/").at(-1)!;
       return Response.json(responses[operation]);
     };
-    const deps = { baseUrl: "http://127.0.0.1:10100", fetchImpl };
+    const deps = { ...attestedTestTransport(), fetchImpl };
 
     const commands = [
       { args: ["main", "register", "personal", "--json"], result: responses.register },
@@ -216,7 +230,7 @@ describe("ccx account main", () => {
     };
 
     expect(await cmdAccount(["main", "add", "work"], {
-      baseUrl: "http://127.0.0.1:10100",
+      ...attestedTestTransport(),
       fetchImpl,
       spawnCodexLoginImpl: () => ({ exited: Promise.resolve(0), kill: () => {} }),
     })).toBe(1);
@@ -244,7 +258,7 @@ describe("ccx account main", () => {
     };
 
     expect(await cmdAccount(["main", "add", "work"], {
-      baseUrl: "http://127.0.0.1:10100",
+      ...attestedTestTransport(),
       fetchImpl,
       spawnCodexLoginImpl: () => ({ exited: Promise.resolve(0), kill: () => {} }),
     })).toBe(1);
@@ -272,7 +286,7 @@ describe("ccx account main", () => {
     };
 
     expect(await cmdAccount(["main", "add", "work"], {
-      baseUrl: "http://127.0.0.1:10100",
+      ...attestedTestTransport(),
       fetchImpl,
       spawnCodexLoginImpl: () => ({
         exited: Promise.reject(new Error("login aborted")),
@@ -317,7 +331,7 @@ describe("ccx account main", () => {
     };
 
     const running = cmdAccount(["main", "add", "work"], {
-      baseUrl: "http://127.0.0.1:10100",
+      ...attestedTestTransport(),
       fetchImpl,
       stageHeartbeatIntervalMinMs: 10,
       spawnCodexLoginImpl: () => ({ exited, kill: () => {} }),
@@ -386,7 +400,7 @@ describe("ccx account main", () => {
     };
 
     const running = cmdAccount(["main", "add", "work"], {
-      baseUrl: "http://127.0.0.1:10100",
+      ...attestedTestTransport(),
       fetchImpl,
       stageHeartbeatIntervalMinMs: 10,
       stageLeaseClock,

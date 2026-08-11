@@ -9,8 +9,8 @@ description: 多代理界面、委派引导、首选模型、回退链、原生�
 
 | 字段 | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
-| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` 会把目录中的每个模型都标记为 v1；`v2` 会把每个模型都标记为 v2。`default` 会恢复上游固定值（Sol/Terra 为 v2，Luna 为 v1），否则遵循原生 `multi_agent_v2` 标志。适用于新会话。 |
-| `multiAgentV2MessageDelivery?` | `"encrypted" \| "plaintext"` | `"encrypted"` | V2 父级消息传递策略。`encrypted` 保留 ChatGPT 的预留加密协议；实验性的 `plaintext` 为后续 V2 父级请求启用跨提供方兼容，并使该父级的所有委派消息成为明文。路由父级的消息调用也会获得 Codex 明文标记。更改后请启动新会话。 |
+| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` 会把目录中的每个模型都标记为 v1；`v2` 会把每个模型都标记为 v2。`default` 会恢复上游固定值（Sol/Terra 为 v2，Luna 为 v1），否则遵循原生 `multi_agent_v2` 标志。更改后请用 Apply 替换运行中的 worker，再启动新 task。 |
+| `multiAgentV2MessageDelivery?` | `"encrypted" \| "plaintext"` | `"encrypted"` | 仅为 V2 task 消息传递的策略，并非凭据加密。`encrypted` 保留 ChatGPT 的预留加密协议；实验性的 `plaintext` 为后续 V2 父级请求启用跨提供方兼容，并使该父级的所有委派消息成为明文。更改后只需启动新 task；不会弄脏 catalog，也不需要 Apply。 |
 | `subagentModels?` | `string[]` | `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.4-mini` | 最多五个裸原生 id、账户限定的 `<selector>/<native-openai-model>` id 或路由 `provider/model` id 会优先公开在子代理选择器中。仪表盘会保留已配置的精确 selector（包括账户限定选项），并报告哪些已保存条目实际被公开或排除。对于当前目录中不存在的选项，请使用 `ccx agent subagents set` 或直接编辑配置。显式空列表会被保留。 |
 | `injectionModel?` | `string` | — | 在代理生成的 v2 委派引导中使用的首选原生或路由后的子代理模型。 |
 | `injectionEffort?` | `string` | — | 首选 effort（`low` 到 `ultra`），只有在 `injectionModel` 存在时才有意义。 |
@@ -22,7 +22,7 @@ description: 多代理界面、委派引导、首选模型、回退链、原生�
 | `effortCap?` | `string` | — | 对符合条件的 v2 主轮次和标记的派生子轮次设置硬上限。接受 `low` 到 `ultra`。 |
 | `subagentEffortCap?` | `string` | — | 仅针对派生子轮次的额外上限。两个上限同时适用时，较低者生效。 |
 
-通过仪表板或 `ccx v2 status|on|off|mode <v1|default|v2>|threads <n>` 管理该界面。模式变更会应用于新会话。`maxConcurrentThreadsPerSession` 是 `PUT /api/v2` 字段，不是 `config.json` 键；`ccx v2 threads <n>` 会在启用 v2 后，将 `max_concurrent_threads_per_session` 写入 Codex 的 `$CODEX_HOME/config.toml` 中的 `[features.multi_agent_v2]` 下。
+通过仪表板或 `ccx v2 status|on|off|mode <v1|default|v2>|threads <n>` 管理该界面。模式、协议或 thread 的变更会更新 boot config；对于已运行的 worker，先 Apply，再启动新 task。`maxConcurrentThreadsPerSession` 是 `PUT /api/v2` 字段，不是 `config.json` 键；`ccx v2 threads <n>` 会在启用 v2 后，将 `max_concurrent_threads_per_session` 写入 Codex 的 `$CODEX_HOME/config.toml` 中的 `[features.multi_agent_v2]` 下。
 
 管理 API 公开 `GET`/`PUT /api/v2`、`/api/injection-model`、`/api/effort-caps`、`/api/subagent-models` 和 `/api/subagent-model-fallback`。injection-model 更新是部分更新；自定义 prompt 是该 API 上的 `prompt` 字段。
 

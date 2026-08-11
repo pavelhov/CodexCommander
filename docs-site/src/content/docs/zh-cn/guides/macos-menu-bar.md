@@ -1,6 +1,6 @@
 ---
 title: macOS 菜单栏伴侣
-description: 安装并使用原生 CodexCommander 状态、智能体活动和提供商配额伴侣。
+description: 安装并使用显示 CodexCommander 代理状态、启动就绪状态、Codex 路由、实时请求和提供商配额的原生伴侣。
 ---
 
 macOS 伴侣会在菜单栏中显示最有用的 CodexCommander 状态，同时不会取代代理或重复实现 Web
@@ -26,19 +26,25 @@ macOS 伴侣会在菜单栏中显示最有用的 CodexCommander 状态，同时�
 
 ## 面板显示的内容
 
-- **智能体活动** — 当前活动数量以及实时模型/提供商行。只有当 CodexCommander 能够根据请求元数据
-  证明其活动父项时，派生的子项才会嵌套显示；否则，它会显示为独立的子智能体。伴侣绝不会
-  虚构排队中、审阅中、受速率限制或已完成的历史记录。
+- **代理状态** — 显示代理进程是否在运行。服务器正在运行并不能证明启动同步已完成，也不能证明 Codex 正在使用该代理。
+- **就绪状态** — 将启动和目录同步显示为 **Checking**、**Starting**、**Ready**、
+  **Startup failed** 或 **Unavailable**。该信号与代理运行状态相互独立。
+- **Codex 路由** — 显示 Codex 当前是否通过 CodexCommander、原生 OpenAI 或其他自定义路由。
+  代理正在运行本身并不表示 Codex 正在使用它。
+- **实时代理请求** — 显示当前进行中的请求数量以及模型/提供商 turn 行。只有当 CodexCommander 能够
+  根据请求元数据证明其进行中的父请求时，派生的子请求才会嵌套显示；否则，它会显示为独立的
+  子智能体 turn。模型请求结束后，即使 Codex 仍将子线程保持为空闲状态以供后续使用，该行也会消失。
+  这不是持久的 Codex 智能体生命周期视图；伴侣也绝不会虚构排队中、审阅中、受速率限制或已完成的历史记录。
 - **提供商配额** — 在可用时显示提供商报告的 5 小时、每周、每月或特定额度窗口及重置时间。
   OpenCode Go 显示公开上限和本地观测值，不会编造当前余额。缺失数据会显示为不可用，绝不会
   显示为零使用量或无限容量。
-- **Dashboard 和 Logs** — 在默认浏览器中打开对应的本地控制面板视图。
+- **Dashboard 和 Logs** — 在默认浏览器中打开对应的本地控制面板视图，并为包括目录 Apply 在内的更改操作传递一次性启动授权。
 - **管理** — 打开所选提供商的 Accounts 或 API Keys 标签页。OAuth、API 密钥输入、重新认证、
   账户切换和提供商配置仍在控制面板中进行。
-- **Agent catalog update ready** — 当正在运行的 Codex 后台工作进程仍持有旧模型列表时显示的
-  持久、非故障卡片。CodexCommander 代理会保持健康并继续运行。
-- **Apply agent catalog…** — 打开确认窗口，在可用时显示最新请求活动，警告应用更新可能中断
-  回答，并提供 **Apply Now** 和 **Later**。
+- **Restart ChatGPT to load models** — 当正在运行的 Codex 后台工作进程仍持有旧模型列表时显示的
+  持久、非致命提示卡片。CodexCommander 代理会保持健康并继续运行。
+- **Show restart steps…** — 说明推荐的重新加载边界：完全退出 ChatGPT，重新打开后再开始新任务。
+  菜单栏应用不会通过这张卡片强制重启后台工作器。
 - **Stop Proxy…** — 始终请求确认，会中断活动客户端和子智能体请求、恢复原生 Codex，并让菜单栏应用保持打开。
 - **Restart Proxy…** — 请求确认，允许代理用最多 60 秒排空活动请求，然后重新连接到替代进程。接受重启
   请求不会被显示为完成；应用会等待新进程通过身份检查。
@@ -57,16 +63,19 @@ macOS 伴侣会在菜单栏中显示最有用的 CodexCommander 状态，同时�
 
 打开应用时，它会自动将 Codex 模型目录与 CodexCommander 当前配置的提供商同步。如果没有 Codex 工作
 进程在运行，新列表会在下一个 Codex 任务中生效。如果长时间运行的工作进程载入了旧列表，CodexCommander
-仍会继续运行，面板会持续显示非故障的 **Agent catalog update ready** 卡片。
+仍会继续运行，面板会持续显示非致命的 **Restart ChatGPT to load models** 提示卡片。
 
-选择 **Apply agent catalog…** 可查看中断风险。确认前会尽可能获取最新的活动请求数量，但请求数为
-零不会被描述为 Codex 已空闲的证明，因为操作执行前仍可能开始新请求。**Apply Now** 会再次同步，
-仅向当前用户所有、精确匹配 `codex … app-server` 和 `codex-code-mode-host` 的进程发送 `SIGTERM`，并
-短暂验证旧进程 ID 已退出。它不会使用宽泛的 `pkill`，不会重启 CodexCommander 代理，也不会关闭菜单栏
-应用。Codex 会在下一个任务中创建新的后台主机并载入当前列表。
+选择 **Show restart steps…**，完全退出 ChatGPT，重新打开后再开始新任务。这是替换旧工作器时推荐且
+最可预测的方式。CodexCommander 和菜单栏应用在此期间会继续运行。
 
-当前配套应用不包含 **Apply when idle**。如果回答仍在进行，请选择 **Later**，并在准备好后应用更新；
-卡片会继续保留。高级 CLI 回退命令如下：
+在同一个旧后台主机中启动新 task 或 fork 并不是 catalog 重新加载边界，因此卡片会一直保留，直到
+状态检查发现工作器已是最新。如果仪表盘显示 catalog 为 pending 或 unknown，或者受管理路由尚未注入，
+请先在那里选择**应用到 Codex**，让它协调并验证这些文件；仅退出 ChatGPT 并不能完成这项修复。
+
+对于 catalog 已经协调、只有工作器过时的情况，仪表盘/API 的**强制重启工作器**操作和 CLI
+仍是高级备用方案。它们会再次同步，使用目标修订围栏，只向当前用户所有、精确匹配
+`codex … app-server` 和 `codex-code-mode-host` 的进程发送信号，并且绝不会升级为宽泛的 `pkill`。
+由于这会绕过 ChatGPT 的正常应用生命周期，ChatGPT 可能显示 **stopped unexpectedly**。CLI 形式为：
 
 ```bash
 ccx sync --restart-codex
@@ -82,6 +91,8 @@ ccx sync --restart-codex
 验证的回环 CodexCommander 进程。它绝不会显示、记录、复制或存储该令牌，也不会将其放入浏览器
 URL。
 
+伴侣打开仪表盘时，会向经过验证的本地代理请求一个短期、一次性启动票据。票据只出现在 URL fragment 中，并在一次性交换过程中清除；长期管理员 token 不会进入 URL 或 Web Storage。确认的完整功能 session 只存在于进程内存中，最长八小时，且不会续期。到期或代理重启后的下一个 API 请求会返回 `401`，页面会提示通过伴侣或 `ccx gui` 重新打开。手动打开的 loopback 仪表盘没有 API session，也绝不会请求或发送长期管理员 token。
+
 提供商凭据仍由 CodexCommander 管理。伴侣绝不会读取 ChatGPT、Kimi、Grok、Anthropic 或其他
 提供商令牌，也绝不会直接调用提供商登录端点。
 
@@ -89,17 +100,17 @@ URL。
 从 Finder 启动的应用通常不会继承 shell 变量；如果没有受保护的令牌文件，伴侣会报告管理
 身份验证不可用，而不会显示令牌输入表单。
 
-实时智能体记录仅保存在内存中。管理响应包含仅在进程生命周期内有效的行 ID、提供商/模型
+实时请求记录仅保存在内存中。管理响应包含仅在进程生命周期内有效的行 ID、提供商/模型
 标识符、时间戳和汇总计数。它不包含提示词、标题、工作目录、工具参数、账户标识符、凭据、
 请求正文、原始线程/会话 ID 或历史活动。
 
 ## 轮询
 
-面板打开时，应用会频繁刷新轻量级活动信息；面板关闭时则会降低频率。提供商配额按独立且
+面板打开时，应用会频繁刷新轻量级的进行中请求信息；面板关闭时则会降低频率。提供商配额按独立且
 更慢的节奏刷新，并使用 CodexCommander 报告的上游时间戳。重复失败会自动退避，重叠的刷新会被
 合并。
 
-使用**刷新**可立即刷新活动信息并强制刷新配额。
+使用**刷新**可立即刷新进行中的请求并强制刷新配额。
 
 ## 从源代码构建
 
@@ -113,9 +124,10 @@ bun run build:macos
 open dist/macos/CodexCommander.app
 ```
 
-源码应用的唯一位置是 `dist/macos/CodexCommander.app`。它使用同一检出中的 Bun 和 CLI，因此需要先运行
-`bun install`。开发期间请保留在此位置，不要复制到 Application Support。双击会尝试确保代理运行；
-即使离线或启动失败，应用也不会关闭，面板和 **Start** 控件仍可使用。
+开发应用的唯一位置是 `dist/macos/CodexCommander.app`。每次构建都会把 Bun 运行时和 CodexCommander
+服务器资源嵌入应用包；运行中的应用不会直接执行检出目录里的 `src/`。源代码发生变化后请重新构建
+应用。开发期间请保留在此位置，不要复制到 Application Support。双击会尝试确保代理运行；即使离线
+或启动失败，应用也不会关闭，面板和 **Start** 控件仍可使用。
 每次构建都会把准确的 Git 修订写入应用包 `Info.plist` 的 `CodexCommanderSourceRevision`，并在构建结束时
 输出。未提交的源码会带有 `-dirty`，因此制作最终包前请先提交。
 
@@ -132,8 +144,8 @@ open dist/macos/CodexCommander.app
   服务状态作为回退措施。
 - **停止、Codex 更新或冷启动后只显示原生模型** — 重新打开 CodexCommander。启动时会自动同步目录；即使
   提供商发现暂时为空，CodexCommander 也会从受保护的最近正常目录中恢复仍在配置中的路由模型。如果
-  **Agent catalog update ready** 仍然显示，请选择 **Apply agent catalog…**，或使用
-  [智能体目录更新](#智能体目录更新)中的 CLI 回退命令。
+  **Restart ChatGPT to load models** 仍然显示，请退出并重新打开 ChatGPT，然后开始新任务。只有在手动
+  重启不合适时，才使用[智能体目录更新](#智能体目录更新)中的高级仪表盘/API 或 CLI 备用方案。
 
 ## 卸载
 

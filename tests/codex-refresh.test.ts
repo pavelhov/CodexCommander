@@ -2,15 +2,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { invalidateCodexModelsCache, syncCatalogModels } from "../src/codex/catalog";
-import { refreshCodexModelCatalog } from "../src/codex/refresh";
+import { invalidateCodexModelsCache } from "../src/codex/catalog";
+import { getDefaultConfig } from "../src/config";
+import { refreshCodexModelCatalog, type RefreshDeps } from "../src/codex/refresh";
+import type { ConvergeRequest } from "../src/codex/convergence-types";
 import type { CodexCommanderConfig } from "../src/types";
 
-const config = {
-  port: 10100,
-  defaultProvider: "openai",
-  providers: {},
-} as CodexCommanderConfig;
+const config: CodexCommanderConfig = getDefaultConfig();
 
 const tempHomes: string[] = [];
 
@@ -58,92 +56,55 @@ afterEach(() => {
 });
 
 describe("Codex catalog refresh", () => {
-  test("writes an expired Codex models cache whenever the materialized catalog exists", async () => {
-    let invalidated = 0;
+  test("projects the canonical convergence result and fixed explicit request", async () => {
+    let request: ConvergeRequest | undefined;
     const result = await refreshCodexModelCatalog(config, {
-      syncCatalogModels: async () => ({
-        added: 0,
-        path: "/tmp/codexcommander-catalog.json",
-        catalogWritten: true,
-        comboOmissions: [],
-      }),
-      invalidateCodexModelsCache: () => {
-        invalidated += 1;
-        return true;
+      prepareConfigGeneration: () => {},
+      captureCatalogAdmissionSnapshot: () => ({} as never),
+      convergeCodexCatalog: async (_snapshot, received) => {
+        request = received;
+        return {
+          changed: true,
+          catalogRefresh: { status: "committed", changed: true, degraded: false, notices: [] },
+          projection: {
+            admittedGeneration: { value: 7 },
+            admittedConfigAuthority: {
+              generation: { value: 7 },
+              semanticIdentity: "semantic",
+              contentIdentity: "content",
+            },
+            added: 2,
+            path: "/tmp/codexcommander-catalog.json",
+            catalogWritten: true,
+            cacheSynced: true,
+            comboOmissions: [],
+            catalogQuality: "live",
+            rehydrated: 0,
+          },
+        };
       },
       existsSync: () => true,
-    });
+    } as RefreshDeps);
 
-    expect(result).toEqual({
-      added: 0,
+    expect(request).toEqual({
+      action: "converge",
+      scope: "catalog",
+      reason: "api-sync",
+      mode: "explicit",
+      deadlineMs: 1_000,
+    });
+    expect(result).toMatchObject({
+      added: 2,
       path: "/tmp/codexcommander-catalog.json",
       catalogExists: true,
       catalogWritten: true,
       cacheSynced: true,
-      comboOmissions: [],
+      catalogQuality: "live",
+      rehydrated: 0,
     });
-    expect(invalidated).toBe(1);
   });
 
-  test("does not touch the cache when no Codex catalog can be materialized", async () => {
-    let invalidated = 0;
-    const result = await refreshCodexModelCatalog(config, {
-      syncCatalogModels: async () => ({
-        added: 0,
-        path: "/tmp/missing-catalog.json",
-        catalogWritten: false,
-        comboOmissions: [],
-      }),
-      invalidateCodexModelsCache: () => {
-        invalidated += 1;
-        return true;
-      },
-      existsSync: () => false,
-    });
-
-    expect(result.catalogExists).toBe(false);
-    expect(result.catalogWritten).toBe(false);
-    expect(result.cacheSynced).toBe(false);
-    expect(result.comboOmissions).toEqual([]);
-    expect(invalidated).toBe(0);
-  });
-
-  test("reports cacheSynced false when invalidate cannot write", async () => {
-    const result = await refreshCodexModelCatalog(config, {
-      syncCatalogModels: async () => ({
-        added: 0,
-        path: "/tmp/codexcommander-catalog.json",
-        catalogWritten: true,
-        comboOmissions: [],
-      }),
-      invalidateCodexModelsCache: () => false,
-      existsSync: () => true,
-    });
-
-    expect(result.catalogExists).toBe(true);
-    expect(result.catalogWritten).toBe(true);
-    expect(result.cacheSynced).toBe(false);
-    expect(result.comboOmissions).toEqual([]);
-  });
-
-  test("preserves catalogWritten false when the catalog path exists but sync did not write", async () => {
-    const result = await refreshCodexModelCatalog(config, {
-      syncCatalogModels: async () => ({
-        added: 0,
-        path: "/tmp/broken-catalog.json",
-        catalogWritten: false,
-        comboOmissions: [],
-      }),
-      invalidateCodexModelsCache: () => false,
-      existsSync: () => true,
-    });
-
-    expect(result.catalogExists).toBe(true);
-    expect(result.catalogWritten).toBe(false);
-    expect(result.cacheSynced).toBe(false);
-  });
-
-  test("reports catalogWritten true after syncCatalogModels rewrites a real catalog file", async () => {
+  test("reports catalogWritten true after canonical convergence rewrites a real catalog file", async () => {
     const home = installTempHomes();
     try {
       const catalogPath = join(home.codexHome, "nested", "catalog.json");
@@ -152,10 +113,7 @@ describe("Codex catalog refresh", () => {
       writeFileSync(catalogPath, nativeCatalogFixture("gpt-5.6-sol"), "utf8");
       const before = readFileSync(catalogPath, "utf8");
 
-      const result = await syncCatalogModels(config, {
-        commandCandidates: () => ["codex-fixture"],
-        execFileSync: () => nativeCatalogFixture("gpt-5.5"),
-      });
+      const result = await refreshCodexModelCatalog(config);
       const after = readFileSync(catalogPath, "utf8");
       const rewritten = JSON.parse(after);
 

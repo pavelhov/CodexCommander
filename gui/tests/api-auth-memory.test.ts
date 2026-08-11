@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { installApiAuthFetch, resetApiAuthFetchForTests } from "../src/api";
+import {
+  installApiAuthFetch,
+  isBrowserLoopbackHostname,
+  isConfirmedGuiLaunch,
+  resetApiAuthFetchForTests,
+} from "../src/api";
 
-const SESSION_PATHS = new Set(["/codexcommander-session"]);
 const globals = ["document", "window", "navigator", "sessionStorage", "fetch"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
@@ -42,7 +46,72 @@ async function installMockAuthFetch(handler: typeof fetch): Promise<void> {
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: window.fetch });
 }
 
+function useRemoteOperatorOrigin(): void {
+  window.location.href = "https://operator.example/";
+}
+
+test("loopback classification covers aliases and the full OS loopback families", () => {
+  for (const hostname of [
+    "localhost",
+    "LOCALHOST.",
+    "dashboard.localhost",
+    "127.0.0.1",
+    "127.0.0.2",
+    "127.255.255.254",
+    "::1",
+    "[::1]",
+    "::ffff:127.0.0.9",
+    "[::ffff:7f00:1]",
+    "0:0:0:0:0:ffff:7fff:1",
+  ]) {
+    expect(isBrowserLoopbackHostname(hostname)).toBe(true);
+  }
+  for (const hostname of ["example.test", "192.0.2.10", "126.255.255.255", "128.0.0.1", "::2"]) {
+    expect(isBrowserLoopbackHostname(hostname)).toBe(false);
+  }
+});
+
+test("a manual loopback page never prompts for or validates a durable admin token", async () => {
+  let promptCalls = 0;
+  const seenPaths: string[] = [];
+  const mockFetch = (async (input: RequestInfo | URL) => {
+    seenPaths.push(new URL(input instanceof Request ? input.url : String(input), window.location.href).pathname);
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  window.prompt = () => {
+    promptCalls += 1;
+    return "must-not-leave-the-browser";
+  };
+  await installMockAuthFetch(mockFetch);
+
+  expect((await fetch("/api/config")).status).toBe(401);
+  expect(promptCalls).toBe(0);
+  expect(seenPaths).toEqual(["/api/config"]);
+  expect(seenPaths).not.toContain("/api/settings");
+});
+
+test("a plaintext remote page never prompts for or validates a durable admin token", async () => {
+  window.location.href = "http://operator.example/";
+  let promptCalls = 0;
+  const seenPaths: string[] = [];
+  const mockFetch = (async (input: RequestInfo | URL) => {
+    seenPaths.push(new URL(input instanceof Request ? input.url : String(input), window.location.href).pathname);
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  window.prompt = () => {
+    promptCalls += 1;
+    return "must-not-cross-plaintext-http";
+  };
+  await installMockAuthFetch(mockFetch);
+
+  expect((await fetch("/api/config")).status).toBe(401);
+  expect(promptCalls).toBe(0);
+  expect(seenPaths).toEqual(["/api/config"]);
+  expect(seenPaths).not.toContain("/api/settings");
+});
+
 test("prompted API tokens stay memory-only and are not written to sessionStorage", async () => {
+  useRemoteOperatorOrigin();
   let authorized = false;
   const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
@@ -63,6 +132,7 @@ test("prompted API tokens stay memory-only and are not written to sessionStorage
 });
 
 test("validates prompted tokens with a safe read before retrying the failed request", async () => {
+  useRemoteOperatorOrigin();
   const validationResults: string[] = [];
   const seenRequests: Array<[string, string | null]> = [];
   resetApiAuthFetchForTests(async (verifyToken) => {
@@ -94,6 +164,7 @@ test("validates prompted tokens with a safe read before retrying the failed requ
 });
 
 test("cross-origin /api/* requests do not receive the API key or token prompt", async () => {
+  useRemoteOperatorOrigin();
   let promptCalls = 0;
   let phase: "seed" | "cross" = "seed";
   const seenHeaders: Array<string | null> = [];
@@ -125,6 +196,7 @@ test("cross-origin /api/* requests do not receive the API key or token prompt", 
 });
 
 test("concurrent 401s share one token prompt and all retry with the stored token", async () => {
+  useRemoteOperatorOrigin();
   // Repro for #647: many /api/* requests start without a token (dashboard fan-out).
   // Delivering 401s one-by-one after each auth cycle finishes matches the browser case where
   // window.prompt blocks the main thread: each continuation still holds a captured null token
@@ -133,11 +205,6 @@ test("concurrent 401s share one token prompt and all retry with the stored token
   const release401: Array<() => void> = [];
   const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
-    // Session re-bootstrap probe: this fixture never mints sessions, so fail it fast
-    // instead of letting it join the release queue below.
-    if (SESSION_PATHS.has(new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname)) {
-      return new Response("unauthorized", { status: 401 });
-    }
     if (headers.get("X-CodexCommander-API-Key") === "shared-token") {
       return new Response("{}", { status: 200 });
     }
@@ -194,6 +261,7 @@ test("concurrent 401s share one token prompt and all retry with the stored token
 });
 
 test("stale concurrent 401 does not clear a token refreshed by another request", async () => {
+  useRemoteOperatorOrigin();
   // Codex/CodeRabbit race: request A prompts and stores T2; request B still holding stale T1
   // must not wipe T2 (clearTokenIfCurrent) before its re-read / shared gate join.
   let promptCalls = 0;
@@ -252,13 +320,11 @@ test("stale concurrent 401 does not clear a token refreshed by another request",
 });
 
 test("canceling the token prompt once does not reopen it for the rest of the 401 fan-out", async () => {
+  useRemoteOperatorOrigin();
   let promptCalls = 0;
   const release401: Array<() => void> = [];
   const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
-    if (SESSION_PATHS.has(new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname)) {
-      return new Response("unauthorized", { status: 401 });
-    }
     if (headers.get("X-CodexCommander-API-Key")) {
       return new Response("{}", { status: 200 });
     }
@@ -330,96 +396,30 @@ test("data-plane requests never receive the management token or prompt", async (
   expect(promptCalls).toBe(beforeCrossPrompts);
 });
 
-function injectSessionMeta(
-  token: string,
-  csrf: string,
-  origin: string,
-): void {
-  for (const [name, content] of [
-    ["codexcommander-session-token", token],
-    ["codexcommander-session-csrf", csrf],
-    ["codexcommander-session-origin", origin],
-  ] as const) {
-    const meta = document.createElement("meta");
-    meta.setAttribute("name", name);
-    meta.setAttribute("content", content);
-    document.head.appendChild(meta);
-  }
-}
-
-function sessionDocumentHtml(
-  token: string,
-  csrf: string,
-  origin: string,
-): string {
-  return [
-    "<!doctype html><html><head>",
-    `<meta name="codexcommander-session-token" content="${token}">`,
-    `<meta name="codexcommander-session-csrf" content="${csrf}">`,
-    `<meta name="codexcommander-session-origin" content="${origin}">`,
-    "</head><body></body></html>",
-  ].join("");
-}
-
-test("expired session silently re-bootstraps from the served document without prompting", async () => {
-  // Regression for the post-security-hardening UX bug: loopback sessions expire after the
-  // 5-minute TTL (or die on proxy restart), and the dashboard used to demand an admin token
-  // the user never chose. The fetch wrapper must renew the session from a freshly served
-  // document instead — token entry is not part of the default loopback experience.
-  injectSessionMeta("ccx_session_stale", "stale-csrf", "http://localhost");
-
+test("an expired confirmed loopback session fails closed and requires relaunch", async () => {
+  const launchTicket = `ccx_launch_${"A".repeat(43)}`;
+  window.location.hash = `ccx-launch-ticket=${launchTicket}&ccx-route=dashboard`;
   let promptCalls = 0;
-  let bootstrapFetches = 0;
+  let exchangeCalls = 0;
   const seenApiKeys: Array<string | null> = [];
-  const seenGuiOrigins: Array<string | null> = [];
   const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const raw = input instanceof Request ? input.url : String(input);
     const url = new URL(raw, "http://localhost/");
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-    if (url.pathname === "/codexcommander-session") {
-      bootstrapFetches += 1;
-      return new Response(sessionDocumentHtml("ccx_session_fresh", "fresh-csrf", "http://localhost"), {
-        status: 200,
-        headers: { "Content-Type": "text/html" },
+    if (url.pathname === "/api/gui-launch-exchange") {
+      exchangeCalls += 1;
+      return Response.json({
+        route: "dashboard",
+        session: {
+          token: "ccx_session_expired",
+          csrfToken: "expired-csrf",
+          origin: "http://localhost",
+          expiresAt: Date.now() - 1,
+          confirmedLaunch: true,
+        },
       });
     }
     seenApiKeys.push(headers.get("X-CodexCommander-API-Key"));
-    seenGuiOrigins.push(headers.get("X-CodexCommander-GUI-Origin"));
-    if (headers.get("X-CodexCommander-API-Key") === "ccx_session_fresh"
-      && headers.get("X-CodexCommander-GUI-Origin") === "http://localhost") {
-      return new Response("{}", { status: 200 });
-    }
-    return new Response("unauthorized", { status: 401 });
-  }) as typeof fetch;
-  window.prompt = () => {
-    promptCalls += 1;
-    return null;
-  };
-  await installMockAuthFetch(mockFetch);
-
-  const res = await fetch("/api/config");
-  expect(res.status).toBe(200);
-  expect(promptCalls).toBe(0);
-  expect(bootstrapFetches).toBe(1);
-  expect(seenApiKeys).toEqual(["ccx_session_stale", "ccx_session_fresh"]);
-  expect(seenGuiOrigins).toEqual(["http://localhost", "http://localhost"]);
-});
-
-test("a session minted for another origin is rejected and the prompt fallback stays", async () => {
-  // Non-loopback dashboards never get server-minted sessions; a re-bootstrap document whose
-  // origin does not match must not be trusted, and the operator-only prompt remains.
-  let promptCalls = 0;
-  const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const raw = input instanceof Request ? input.url : String(input);
-    const url = new URL(raw, "http://localhost/");
-    const headers = new Headers(init?.headers);
-    if (SESSION_PATHS.has(url.pathname)) {
-      return new Response(sessionDocumentHtml("ccx_session_foreign", "foreign-csrf", "http://192.0.2.10:10100"), {
-        status: 200,
-        headers: { "Content-Type": "text/html" },
-      });
-    }
-    if (headers.get("X-CodexCommander-API-Key") === "manual-admin-token") return new Response("{}", { status: 200 });
     return new Response("unauthorized", { status: 401 });
   }) as typeof fetch;
   window.prompt = () => {
@@ -429,6 +429,42 @@ test("a session minted for another origin is rejected and the prompt fallback st
   await installMockAuthFetch(mockFetch);
 
   const res = await fetch("/api/config");
-  expect(res.status).toBe(200);
-  expect(promptCalls).toBe(1);
+  expect(res.status).toBe(401);
+  expect(promptCalls).toBe(0);
+  expect(exchangeCalls).toBe(1);
+  expect(seenApiKeys).toEqual(["ccx_session_expired"]);
+  expect(isConfirmedGuiLaunch()).toBe(false);
+});
+
+test("a launch exchange session for another origin is rejected without a loopback token prompt", async () => {
+  window.location.hash = `ccx-launch-ticket=ccx_launch_${"B".repeat(43)}&ccx-route=dashboard`;
+  let promptCalls = 0;
+  const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const raw = input instanceof Request ? input.url : String(input);
+    const url = new URL(raw, "http://localhost/");
+    const headers = new Headers(init?.headers);
+    if (url.pathname === "/api/gui-launch-exchange") {
+      return Response.json({
+        route: "dashboard",
+        session: {
+          token: "ccx_session_foreign",
+          csrfToken: "foreign-csrf",
+          origin: "http://192.0.2.10:10100",
+          expiresAt: Date.now() + 60_000,
+          confirmedLaunch: true,
+        },
+      });
+    }
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  window.prompt = () => {
+    promptCalls += 1;
+    return "manual-admin-token";
+  };
+  await installMockAuthFetch(mockFetch);
+
+  const res = await fetch("/api/config");
+  expect(res.status).toBe(401);
+  expect(promptCalls).toBe(0);
+  expect(isConfirmedGuiLaunch()).toBe(false);
 });

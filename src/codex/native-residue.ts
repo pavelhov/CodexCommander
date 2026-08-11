@@ -246,13 +246,18 @@ function inspectConfig(codexHome: string, path: string): ConfigObservation {
   return { classification, catalogTargets: targets };
 }
 
+/** True only for the two complete profile shapes emitted by CodexCommander. */
+export function hasGeneratedCodexProfileRouting(content: string): boolean {
+  const generatedFallback = content.startsWith("# CodexCommander proxy fallback config (Design B)")
+    && rootTomlString(content, "openai_base_url") !== null;
+  const generatedNamedProfile = content.startsWith("# CodexCommander proxy profile — use with:")
+    && hasInjectedCodexRouting(content);
+  return generatedFallback || generatedNamedProfile;
+}
+
 function classifyProfile(path: string): NativeRoutedResidueResult {
   return classifyToml("profile", path, content => {
-    const generatedFallback = content.startsWith("# CodexCommander proxy fallback config (Design B)")
-      && rootTomlString(content, "openai_base_url") !== null;
-    const generatedNamedProfile = content.startsWith("# CodexCommander proxy profile — use with:")
-      && hasInjectedCodexRouting(content);
-    if (generatedFallback || generatedNamedProfile) return "residue";
+    if (hasGeneratedCodexProfileRouting(content)) return "residue";
     return "indeterminate";
   });
 }
@@ -343,8 +348,10 @@ function classifyPartialWrites(targetPaths: string[]): NativeRoutedResidueResult
   return { kind: "clean" };
 }
 
-/** Read-only, fail-closed observation of every CodexCommander-routed Codex surface. */
-export function classifyNativeRoutedResidue(): NativeRoutedResidueResult {
+function classifyNativeRoutedResidueIncluding(
+  includeJournal: boolean,
+  includeConfigAndProfile = true,
+): NativeRoutedResidueResult {
   let codexHome: string;
   try {
     codexHome = getCodexHome();
@@ -367,14 +374,44 @@ export function classifyNativeRoutedResidue(): NativeRoutedResidueResult {
   ];
   const classifiers = [
     () => classifyPartialWrites(atomicWriteTargets),
-    () => config.classification,
-    () => classifyProfile(profilePath),
+    ...(includeConfigAndProfile
+      ? [() => config.classification, () => classifyProfile(profilePath)]
+      : []),
     ...config.catalogTargets.map(target => () => classifyCatalogLike("catalog", target.path, target.configured)),
     () => classifyCatalogLike("models-cache", modelsCachePath),
-    () => classifyJournal(journalPath),
+    ...(includeJournal ? [() => classifyJournal(journalPath)] : []),
   ];
   const results = classifiers.map(classify => classify());
   return results.find(result => result.kind === "indeterminate")
     ?? results.find(result => result.kind === "residue")
     ?? { kind: "clean" };
+}
+
+/** Read-only, fail-closed observation of every CodexCommander-routed Codex surface. */
+export function classifyNativeRoutedResidue(): NativeRoutedResidueResult {
+  return classifyNativeRoutedResidueIncluding(true);
+}
+
+/**
+ * Classify the native surfaces after a dead injection journal has already been
+ * handled as recovery evidence. This is deliberately NOT an option on the
+ * public coordinator classifier: callers must opt into the narrowly named
+ * legacy-recovery observation, while every ordinary admission continues to
+ * treat a journal as residue.
+ *
+ * The journal path remains in `atomicWriteTargets`, so ignoring the completed
+ * journal file never ignores a concurrent `codexcommander-journal.json.ccx.*`
+ * replacement.
+ */
+export function classifyNativeRoutedResidueWithoutJournal(): NativeRoutedResidueResult {
+  return classifyNativeRoutedResidueIncluding(false);
+}
+
+/**
+ * Post-restore observation for config/profile bytes already authenticated by an
+ * exact journal preimage. It still checks every atomic temp, configured/default
+ * catalog, and models cache; ordinary admission never uses this exception.
+ */
+export function classifyNativeRoutedResidueAfterJournalRestore(): NativeRoutedResidueResult {
+  return classifyNativeRoutedResidueIncluding(false, false);
 }

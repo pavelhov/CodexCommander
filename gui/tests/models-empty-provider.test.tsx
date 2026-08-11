@@ -232,7 +232,7 @@ test("Models page combines final visibility, atomic actions, discovery status, a
     expect(discoveryLink?.textContent).toContain("Auto-discovery on");
     expect(discoveryLink?.getAttribute("aria-label")).toContain("Open provider settings");
     expect(container.textContent).not.toContain("Not selected");
-    expect(container.textContent).toContain("Classic v1");
+    expect(container.textContent).toContain("Reliable v1");
     expect(container.textContent).toContain("Flexible model selection");
     expect(container.textContent).toContain("Uncapped");
     expect(container.textContent).toContain("Models use their full advertised window");
@@ -264,7 +264,7 @@ test("Models page combines final visibility, atomic actions, discovery status, a
       automaticRadio.click();
       await new Promise(resolve => testWindow.setTimeout(resolve, 0));
     });
-    expect(container.textContent).toContain("Follow Codex defaults");
+    expect(container.textContent).toContain("Codex native");
     expect(automaticRadio.checked).toBe(true);
     await act(async () => collaborationChange.click());
 
