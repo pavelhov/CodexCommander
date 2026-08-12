@@ -1,6 +1,11 @@
 import AppKit
 import MenuBarCore
 
+private enum CodexRouteConfirmationError: Error {
+    case unavailable
+    case mismatch
+}
+
 public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem?
     private let panel = PopoverPanel()
@@ -414,7 +419,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         updateApplicationMenu()
         controller.setLifecycleControlsEnabled(false)
         refreshCatalogApplyAvailability()
-        controller.showResult("Starting CodexCommander…", isError: false)
+        controller.showProgress("Starting CodexCommander…")
         Task { [actions, coordinator] in
             let outcome = await actions?.start() ?? .failed("Lifecycle control is unavailable.")
             await coordinator?.forceRefresh()
@@ -462,7 +467,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         updateApplicationMenu()
         controller.setLifecycleControlsEnabled(false)
         refreshCatalogApplyAvailability()
-        controller.showResult("Stopping CodexCommander…", isError: false)
+        controller.showProgress("Stopping CodexCommander…")
         Task { [actions, coordinator] in
             let outcome = await actions?.stop() ?? .failed("Lifecycle control is unavailable.")
             let shouldTerminate = quitWhenStopped
@@ -498,22 +503,25 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     }
 
     private func restoreNativeCodex() {
-        performCodexRoute(progressMessage: "Restoring native Codex routing…") { actions in
-            await actions.restoreNativeCodex()
-        }
+        performCodexRoute(
+            destination: .nativeOpenAI,
+            expectedRoutingKind: .native
+        ) { actions in await actions.restoreNativeCodex() }
     }
 
     private func routeCodexThroughProxy() {
-        performCodexRoute(progressMessage: "Routing Codex through CodexCommander…") { actions in
-            await actions.routeCodexThroughProxy()
-        }
+        performCodexRoute(
+            destination: .codexCommander,
+            expectedRoutingKind: .codexCommanderLocal
+        ) { actions in await actions.routeCodexThroughProxy() }
     }
 
     /// The tray is only a command surface for the canonical CLI operations. It keeps
     /// no routing model of its own and reports success only when the structured helper
-    /// result says the operation completed.
+    /// result completes and the fresh routing endpoint confirms the destination.
     private func performCodexRoute(
-        progressMessage: String,
+        destination: CodexRouteDestination,
+        expectedRoutingKind: CodexRoutingKind,
         operation: @escaping @Sendable (ActionCoordinator) async -> CodexRouteOutcome
     ) {
         guard !lifecycleInFlight, !restartInFlight, !catalogActionInFlight else { return }
@@ -521,25 +529,52 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         updateApplicationMenu()
         controller.setLifecycleControlsEnabled(false)
         refreshCatalogApplyAvailability()
-        controller.showResult(progressMessage, isError: false)
+        controller.beginCodexRouteChange(to: destination)
 
         Task { [actions, coordinator] in
             let outcome: CodexRouteOutcome
             if let actions {
                 outcome = await operation(actions)
             } else {
-                outcome = .failed("Lifecycle control is unavailable.")
+                outcome = .failed(
+                    message: "Lifecycle control is unavailable.",
+                    errorCode: nil
+                )
             }
-            await coordinator?.forceRefresh()
+            let routeConfirmationPending: Bool
+            if case .completed = outcome {
+                await MainActor.run { [weak self] in
+                    self?.controller.updateCodexRoutePhase(.confirming)
+                }
+                do {
+                    guard let coordinator else {
+                        throw CodexRouteConfirmationError.unavailable
+                    }
+                    let route = try await coordinator.refreshRouting()
+                    guard route.routingKind == expectedRoutingKind else {
+                        throw CodexRouteConfirmationError.mismatch
+                    }
+                    routeConfirmationPending = false
+                } catch {
+                    await coordinator?.markRoutingConfirmationUnavailable()
+                    routeConfirmationPending = true
+                }
+            } else {
+                routeConfirmationPending = false
+            }
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.lifecycleInFlight = false
                 self.updateApplicationMenu()
                 switch outcome {
-                case .completed(let message):
-                    self.controller.showResult(message, isError: false)
-                case .failed(let message):
-                    self.controller.showResult(message, isError: true)
+                case .completed:
+                    if routeConfirmationPending {
+                        self.controller.showCodexRouteConfirmationPending()
+                    } else {
+                        self.controller.showCodexRouteSaved(destination)
+                    }
+                case .failed(let message, let errorCode):
+                    self.controller.showCodexRouteFailure(message, errorCode: errorCode)
                 }
                 self.controller.setLifecycleControlsEnabled(true)
                 self.refreshCatalogApplyAvailability()
@@ -558,7 +593,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         controller.setRestartEnabled(false)
         controller.setLifecycleControlsEnabled(false)
         refreshCatalogApplyAvailability()
-        controller.showResult("Restarting CodexCommander…", isError: false)
+        controller.showProgress("Restarting CodexCommander…")
 
         Task { [actions, coordinator] in
             let outcome = await actions?.restart() ?? .failed("Unavailable.")
@@ -620,7 +655,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         updateApplicationMenu()
         controller.setLifecycleControlsEnabled(false)
         controller.setCatalogApplyEnabled(false)
-        controller.showResult("Checking agent catalog…", isError: false)
+        controller.showProgress("Checking agent catalog…")
 
         Task { [actions, coordinator] in
             let outcome = await actions?.ensure()

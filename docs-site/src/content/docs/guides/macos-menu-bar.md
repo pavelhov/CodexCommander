@@ -51,7 +51,9 @@ override it.
 - **Readiness** — reports startup and catalog synchronization as **Checking**, **Starting**, **Ready**,
   **Startup failed**, or **Unavailable**. This signal is independent of proxy liveness.
 - **Codex route** — reports whether Codex currently routes through CodexCommander, native OpenAI, or
-  another custom route. A running proxy does not by itself mean that Codex is using it.
+  another custom route. A running proxy does not by itself mean that Codex is using it. After an
+  explicit switch, the companion confirms this value from a fresh uncached read of the route Codex
+  will consume instead of waiting for cached startup diagnostics.
 - **Live proxy requests** — the current in-flight request count and live model/provider turn rows. A
   spawned-child request is nested only when CodexCommander can prove its in-flight parent from request
   metadata; otherwise it is shown as a standalone subagent turn. A row disappears when that model
@@ -88,12 +90,31 @@ override it.
   stopping fails, the companion stays open and reports the error. With the panel active, its shortcut
   is `⌥⌘Q`.
 
+Choosing either route action immediately opens a status card below the header. It shows a spinner,
+elapsed time, and the real orchestration phases: **Changing route** and **Confirming route**. Route
+and lifecycle buttons are disabled while the operation is running, and the button for the already
+active route is disabled while idle. Progress stays visible until the operation finishes. The final
+success or error remains visible until you choose **Dismiss** or start another operation; errors do
+not disappear on a timer.
+
+After **Restore Native Codex** or **Route Codex Through Proxy** reports success, quit ChatGPT
+completely, reopen it, and then start a new task. The route is saved and confirmed at that point, but
+an already-running ChatGPT/Codex host may still hold its previous route.
+
 The native escape is deliberately narrow: it removes only CodexCommander's marker-owned routing and
 owned catalog pointer from <code>$CODEX_HOME/config.toml</code>. After proving that exact route, it also
 clears the proxy-only root <code>provider/model</code> selector. Every unrelated setting remains
 byte-for-byte unchanged. It does not change Codex tasks, history, authentication, or the proxy process,
 and needs neither a repair command nor a coordinator database. Generated catalogs and caches may remain
 on disk, but native Codex no longer references them.
+
+The `codexcommander-journal.json` file is a protected recovery checkpoint, not another routing
+setting. It lets CodexCommander distinguish its exact config/profile write from later user edits
+after an interruption. Repeating **Route Codex Through Proxy** is a safe no-op when that checkpoint
+still belongs to the attested live proxy, its profile evidence still matches, and the managed route
+remains intact. Unrelated Codex preference edits made after sync are allowed. If route ownership is
+changed, custom, ambiguous, or cannot be proved safely, CodexCommander leaves the existing route
+unchanged rather than guessing. Do not delete or edit the journal manually.
 
 ChatGPT appears first and expanded when its quota report is available. Kimi and Grok appear as
 collapsed summaries. A configured quota-capable provider that returns no report stays visible as
@@ -213,6 +234,11 @@ making a final distributable bundle.
   not expose a quota API.
 - **Restart did not recover** — open **Logs** and use the app's status panel. The companion never
   kills a process or rewrites service state as a fallback.
+- **Codex route was not changed / recovery checkpoint could not be verified** — your existing route
+  was deliberately left unchanged because CodexCommander could not prove that the saved recovery
+  checkpoint and current routing files still belong together. Do not delete the journal. Use
+  **Refresh**, retry the intended route once, and if it still fails open **Logs** and run
+  <code>ccx status</code> before changing anything manually.
 - **Only native models appear after a stop, a Codex update, or a cold start** — reopen CodexCommander. Launch
   automatically synchronizes the catalog and restores still-configured routed models from its
   protected last-known-good catalog when live provider discovery is temporarily empty. If **Restart

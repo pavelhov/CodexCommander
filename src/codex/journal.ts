@@ -40,7 +40,9 @@ import {
 import {
   codexRoutingIsIndependentAfterNativeEscape,
   observeCodexRoutingDocument,
+  routingDocumentTable,
 } from "./routing-document";
+import { stripMarkerOwnedRoutingForNativeEscape } from "./native-routing-escape";
 
 /**
  * Exported so that anything reasoning ABOUT the journal points at the journal.
@@ -775,6 +777,130 @@ function externalProviderFromConfig(content: string): string | null {
 export type ExplicitNativeEscapeJournalOwner =
   | { readonly kind: "protected-live"; readonly pid: number }
   | { readonly kind: "dead" };
+
+export type ActiveCodexRoutingJournalClassification =
+  | { readonly kind: "active-managed-postimage" }
+  | { readonly kind: "active-managed-descendant" }
+  | {
+      readonly kind: "not-active-managed-postimage";
+      readonly reason:
+        | "invalid-owner"
+        | "invalid-journal"
+        | "owner-mismatch"
+        | "missing-postimage-proof"
+        | "surface-unavailable"
+        | "postimage-mismatch"
+        | "routing-mismatch"
+        | "changed-during-observation";
+    };
+
+function routedEndpoint(content: string): string | null {
+  const observation = observeCodexRoutingDocument(content);
+  if (observation.kind !== "parsed") return null;
+  if (typeof observation.document.openai_base_url === "string") {
+    return observation.document.openai_base_url;
+  }
+  const provider = typeof observation.document.model_provider === "string"
+    ? observation.document.model_provider
+    : null;
+  const providers = routingDocumentTable(observation.document.model_providers);
+  const table = provider && providers
+    ? routingDocumentTable(providers[provider])
+    : null;
+  return typeof table?.base_url === "string" ? table.base_url : null;
+}
+
+/**
+ * Read-only proof that a live current-home proxy still owns this routed state.
+ * The profile must remain the exact recorded postimage. The config may be that
+ * exact postimage or a stable managed descendant whose one exact marker-owned
+ * route strips to an independently native-safe document; Codex is allowed to
+ * change unrelated preferences while the proxy is live. Legacy hashless
+ * journals and merely recognizable routed documents cannot establish this
+ * active/no-op state.
+ */
+export function classifyActiveCodexRoutingJournal(
+  protectedLiveOwnerPid: number,
+): ActiveCodexRoutingJournalClassification {
+  const refused = (
+    reason: Extract<
+      ActiveCodexRoutingJournalClassification,
+      { kind: "not-active-managed-postimage" }
+    >["reason"],
+  ): ActiveCodexRoutingJournalClassification => ({
+    kind: "not-active-managed-postimage",
+    reason,
+  });
+
+  if (!Number.isSafeInteger(protectedLiveOwnerPid) || protectedLiveOwnerPid <= 0) {
+    return refused("invalid-owner");
+  }
+  const journal = readJournalFileSnapshot();
+  if (!journal) return refused("invalid-journal");
+  if (journal.journal.pid !== protectedLiveOwnerPid) return refused("owner-mismatch");
+  if (
+    journal.journal.injectedConfigHash === undefined
+    || journal.journal.injectedProfileHash === undefined
+  ) return refused("missing-postimage-proof");
+
+  const config = readSurfaceSnapshot(CODEX_CONFIG_PATH);
+  const profile = readSurfaceSnapshot(CODEX_PROFILE_PATH);
+  if (
+    !config
+    || config.kind !== "file"
+    || config.text === null
+    || !profile
+    || (profile.kind === "file" && profile.text === null)
+  ) return refused("surface-unavailable");
+
+  const profileText = profile.kind === "file" ? profile.text : null;
+  if (sha256(profileText) !== journal.journal.injectedProfileHash) {
+    return refused("postimage-mismatch");
+  }
+  const observation = observeCodexRoutingDocument(config.text);
+  if (observation.routingKind !== "codexcommander-local") {
+    return refused("routing-mismatch");
+  }
+  const configPostimageMatches = sha256(config.text) === journal.journal.injectedConfigHash;
+  if (!configPostimageMatches) {
+    // The exact profile is the journal-bound endpoint witness. Without this
+    // equality, another local proxy could replace only config.toml while the
+    // first proxy's live journal remained, and be mistaken for its descendant.
+    const profileEndpoint = profileText === null ? null : routedEndpoint(profileText);
+    if (!profileEndpoint || routedEndpoint(config.text) !== profileEndpoint) {
+      return refused("routing-mismatch");
+    }
+    const native = stripMarkerOwnedRoutingForNativeEscape(
+      config.text,
+      getCodexHome(),
+      observation,
+    );
+    if (!native.changed || !configIsIndependentAfterExplicitNativeEscape(native.content)) {
+      return refused("routing-mismatch");
+    }
+  }
+  if (!explicitRetirementTempsAbsent(config)) {
+    return refused("surface-unavailable");
+  }
+
+  const journalFinal = readJournalFileSnapshot();
+  const configFinal = readSurfaceSnapshot(CODEX_CONFIG_PATH);
+  const profileFinal = readSurfaceSnapshot(CODEX_PROFILE_PATH);
+  if (
+    !journalFinal
+    || !sameJournalFile(journal, journalFinal)
+    || !configFinal
+    || !sameSurfaceSnapshot(config, configFinal)
+    || !profileFinal
+    || !sameSurfaceSnapshot(profile, profileFinal)
+  ) return refused("changed-during-observation");
+
+  return {
+    kind: configPostimageMatches
+      ? "active-managed-postimage"
+      : "active-managed-descendant",
+  };
+}
 
 interface PersistedOffSnapshot {
   readonly contentSha256: string;

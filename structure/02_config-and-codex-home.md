@@ -183,9 +183,24 @@ but are inert once `config.toml` no longer references them. Codex tasks, thread/
 and authentication are outside lifecycle ownership and are never modified by the native escape.
 
 Explicit Start and Route Back are the inverse OFF→ON transition. If a recovery journal exists, they
-retire it only after the existing coordination layer proves the exact journal owner and observed
-surface stale. A refusal leaves integration OFF. Generated catalog/cache artifacts can be reused; no
-broad CODEX_HOME cleanup is part of either transition.
+first classify what it represents. The journal is a protected crash-recovery checkpoint: it records
+the exact config/profile images needed to distinguish CodexCommander's write from unrelated user
+edits. It is not a second routing preference or user-maintained database, and users must not delete
+it manually.
+
+Route Back is idempotent when integration is already ON and the exact attested current-home live
+proxy owns a stable valid journal whose recorded profile postimage still matches the current profile.
+The config must either match its recorded postimage exactly or be a stable exact marker-owned managed
+descendant whose managed route strips to an independently native-safe config. This admits unrelated
+Codex preference edits made after sync without weakening route ownership. The accepted case preserves
+the active journal and succeeds without rewriting the route. From native/OFF, the existing
+coordination path may retire only a journal it proves stale before creating the new routed state. A
+wrong owner or profile, missing proof, tampered/custom/ambiguous routing, temporary write surface, or
+observation race remains fail-closed and leaves integration OFF. Generated catalog/cache artifacts
+can be reused; no broad CODEX_HOME cleanup is part of either transition.
+
+After either Restore Native or Route Back succeeds, the user must quit ChatGPT completely, reopen
+it, and start a new task so the running Codex host consumes the saved route.
 
 Full `ccx uninstall` config cleanup is ownership-manifest based. A fresh config directory receives a
 root-bound owner marker and an uninstall manifest before its first atomic config write. Uninstall

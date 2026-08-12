@@ -64,14 +64,23 @@ macOS 트레이의 **Restart Proxy…**와 동일한 안전한 중지→시작 �
 클라이언트 경로를 해제하려면 `ccx stop` 또는 `ccx uninstall`을 사용하세요.
 
 둘 중 어느 표기든 `back`을 붙이면 이미 실행 중인 프록시를 가리키도록 일반 `codex`를 다시
-연결하되, 프록시 수명 주기는 바꾸지 않습니다. Route Back은 명시적인 ON 전환입니다. recovery journal이
-있다면 기존 coordination이 stale로 증명한 journal만 폐기하며, 증명하지 못하면 Codex를 native/OFF로
-유지합니다.
+연결하되, 프록시 수명 주기는 바꾸지 않습니다. Route Back은 명시적인 ON 전환입니다. recovery journal은
+별도의 라우팅 설정이 아니라 CodexCommander가 쓴 정확한 config/profile의 보호된 복구 체크포인트입니다.
+원하는 연동이 이미 ON이고, 검증된 current-home 실행 중 프록시가 안정된 journal을 소유하며, 기록된 profile
+postimage가 현재 profile과 정확히 일치하면 Route Back은 기록된 config postimage와의 정확한 일치 또는 관리
+라우팅을 제거했을 때 독립적으로 native-safe인 안정적이고 정확한 marker-owned managed descendant를
+허용합니다. 따라서 sync 이후의 관련 없는 Codex 환경설정 변경이 허용됩니다. Route Back은 active journal을
+유지한 채 멱등적인 no-op으로 성공합니다. native/OFF에서는 기존 coordination이 stale로 증명한 journal만
+폐기합니다. 소유자 또는 profile 불일치, 누락된 증명, 변조된/custom/모호한 라우팅, 임시 쓰기 surface 또는
+관찰 중 경합이 있으면 Codex는 native/OFF로 유지됩니다. journal을 수동으로 삭제하거나 편집하지 마세요.
 
 ```bash
 ccx restore back
 ccx eject back
 ```
+
+Restore Native 또는 Route Back이 성공하면 ChatGPT를 완전히 종료하고 다시 연 뒤 새 작업을 시작하여 실행
+중인 Codex 호스트가 저장된 라우팅을 불러오게 하세요.
 
 ### `ccx uninstall` · `ccx remove`
 

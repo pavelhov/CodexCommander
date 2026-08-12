@@ -18,7 +18,7 @@ public enum ProxyControlOutcome: Equatable, Sendable {
 /// success from proxy health or keep a second copy of routing state.
 public enum CodexRouteOutcome: Equatable, Sendable {
     case completed(String)
-    case failed(String)
+    case failed(message: String, errorCode: String?)
 }
 
 public struct CodexCatalogApplySummary: Equatable, Sendable {
@@ -90,12 +90,17 @@ public actor ActionCoordinator {
     private func runCodexRoute(_ action: LifecycleAction) async -> CodexRouteOutcome {
         do {
             let result = try await lifecycle.run(action)
-            guard result.ok else { return .failed(result.message) }
+            guard result.ok else {
+                return .failed(message: result.message, errorCode: result.errorCode)
+            }
             return .completed(result.message)
         } catch let error as LifecycleHelperError {
-            return .failed(error.userMessage)
+            return .failed(message: error.userMessage, errorCode: nil)
         } catch {
-            return .failed("CodexCommander could not update the Codex route.")
+            return .failed(
+                message: "CodexCommander could not update the Codex route.",
+                errorCode: nil
+            )
         }
     }
 

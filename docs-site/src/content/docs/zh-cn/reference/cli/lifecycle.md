@@ -38,12 +38,14 @@ ccx start --port 8080
 
 在**不停止代理**的情况下恢复原生 Codex。原生逃生路径只会从 `$CODEX_HOME/config.toml` 中移除带有 CodexCommander 所有权标记的路由及其拥有的目录指针，并保留所有无关设置。它不会读取或重写目录、任务、历史记录或身份验证，也不需要 `repair` 命令或协调器数据库。`eject` 是 `restore` 的别名。生成的目录和缓存可能仍留在磁盘上，但原生 Codex 不再引用它们。此命令仅作用于 Codex，不会更改 Grok 或任何其他客户端集成。若要拆除所有受管原生客户端路由，请使用 `ccx stop` 或 `ccx uninstall`。
 
-在任一命令后附加 `back`，即可在不改变代理生命周期的前提下，把普通 `codex` 重新指向一个已经在运行的代理。Route Back 是显式的 ON 转换；若存在 recovery journal，只会在现有协调机制证明其已过期后退役，否则会让 Codex 保持 native/OFF：
+在任一命令后附加 `back`，即可在不改变代理生命周期的前提下，把普通 `codex` 重新指向一个已经在运行的代理。Route Back 是显式的 ON 转换。Recovery journal 是 CodexCommander 精确 config/profile 写入的受保护恢复检查点，并非另一个路由设置。当目标集成已为 ON、经过证明的 current-home 运行中代理拥有稳定 journal，且记录的 profile postimage 与当前 profile 完全匹配时，Route Back 接受两种 config：与记录的 postimage 完全一致，或者是稳定、精确、marker-owned 的 managed descendant，且移除受管理路由后可独立得到 native-safe config。因此允许 sync 之后对无关 Codex 偏好设置的修改。Route Back 会保留 active journal，并作为幂等 no-op 成功。若从 native/OFF 开始，现有协调机制只会退役能够证明已过期的 journal。所有者或 profile 错误、证明缺失、被篡改/custom/有歧义的路由、临时写入 surface 或观察竞争都会让 Codex 保持 native/OFF。请勿手动删除或编辑 journal：
 
 ```bash
 ccx restore back
 ccx eject back
 ```
+
+Restore Native 或 Route Back 成功后，请完全退出 ChatGPT，重新打开后再开始新任务，让正在运行的 Codex 主机加载已保存的路由。
 
 ### `ccx uninstall` · `ccx remove`
 

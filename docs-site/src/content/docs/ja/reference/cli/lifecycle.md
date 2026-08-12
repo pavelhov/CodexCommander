@@ -38,12 +38,15 @@ macOS トレイの **Restart Proxy…** と同じ安全な stop→start 処理�
 
 プロキシを停止せずに**ネイティブ Codex を復元**します。ネイティブへの切り替えでは、<code>$CODEX_HOME/config.toml</code> から CodexCommander のマーカーが所有する正確なルートと、その所有対象のカタログポインターだけを削除し、関係のない設定はすべて保持します。カタログ、タスク、履歴、認証を読み取ったり書き換えたりしません。修復コマンドもコーディネーターデータベースも必要ありません。`eject` は `restore` の別名です。生成済みのカタログやキャッシュはディスクに残ることがありますが、ネイティブ Codex からは参照されません。このコマンドは Codex 専用で、Grok やその他のクライアント統合は変更しません。管理対象のすべてのネイティブクライアントルートを停止する場合は、`ccx stop` または `ccx uninstall` を使用してください。
 
-プロキシのライフサイクルを変更せずに、既に実行されているプロキシでプレーン `codex` を再指定するには、`back` をどちらかのスペルに渡します。Route Back は明示的な ON 遷移です。recovery journal が存在する場合は、既存の coordination で stale と証明された journal だけを退役させ、証明できなければ Codex を native/OFF のままにします。
+プロキシのライフサイクルを変更せずに、既に実行されているプロキシへプレーン `codex` を再指定するには、`back` をどちらかのスペルに渡します。Route Back は明示的な ON 遷移です。recovery journal は別のルート設定ではなく、CodexCommander が書いた正確な config/profile の保護された復旧チェックポイントです。目的の統合がすでに ON で、検証済みの current-home 稼働中プロキシが安定した journal を所有し、記録された profile postimage が現在の profile と正確に一致する場合、Route Back は、記録された config postimage との完全一致、または管理対象ルートを除去すると独立して native-safe になる安定した正確な marker-owned managed descendant のいずれかを受け入れます。これにより sync 後の無関係な Codex 設定変更が許可されます。Route Back は active journal を保持して冪等な no-op として成功します。native/OFF からは、既存の coordination が stale と証明した journal だけを退役させます。所有者または profile の不一致、証明の欠落、改ざんされた/custom/曖昧なルーティング、一時書き込み surface、または観測中の競合がある場合、Codex は native/OFF のままです。journal を手動で削除または編集しないでください。
 
 ```bash
 ccx restore back
 ccx eject back
 ```
+
+Restore Native または Route Back が成功したら、ChatGPT を完全に終了し、開き直してから新しいタスクを
+開始し、実行中の Codex ホストに保存済みルートを読み込ませてください。
 
 ### `ccx uninstall`・`ccx remove`
 

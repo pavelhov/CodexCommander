@@ -65,13 +65,24 @@ references them. This command is Codex-only: it does not change Grok or any othe
 Use `ccx stop` or `ccx uninstall` when you intend to tear down every managed native-client route.
 
 Pass `back` to either spelling to re-point plain `codex` at an already-running proxy without changing
-the proxy lifecycle. Route Back is an explicit ON transition; if a recovery journal exists, it retires
-only a journal proven stale under the existing coordination and otherwise leaves Codex native/OFF:
+the proxy lifecycle. Route Back is an explicit ON transition. A recovery journal is a protected
+checkpoint of CodexCommander's exact config/profile write, not a second route setting. When desired
+integration is already ON, the exact attested current-home live proxy owns that stable journal, and
+its recorded profile postimage exactly matches the current profile, Route Back accepts either the
+exact recorded config postimage or a stable exact marker-owned managed descendant whose route strips
+to an independently native-safe config. This allows unrelated Codex preference edits made after sync.
+It preserves the active journal and succeeds as an idempotent no-op. From native/OFF, the existing
+coordination path retires only a journal it proves stale. A wrong owner or profile, missing proof,
+tampered/custom/ambiguous routing, temporary write surface, or observation race leaves Codex
+native/OFF. Do not delete or edit the journal manually.
 
 ```bash
 ccx restore back
 ccx eject back
 ```
+
+After either Restore Native or Route Back reports success, quit ChatGPT completely, reopen it, and
+start a new task so the running Codex host loads the saved route.
 
 ### `ccx uninstall` · `ccx remove`
 

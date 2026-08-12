@@ -104,9 +104,22 @@ public enum NextAction: Equatable, Sendable {
     case retry
 }
 
+/// Epistemic state of the route observation, separate from the route domain value.
+public enum CodexRouteObservation: Equatable, Sendable {
+    /// No focused or startup-health route observation has completed yet.
+    case unobserved
+    /// The backend returned a validated route-document classification.
+    case confirmed(CodexRouteStatus)
+    /// A lifecycle mutation completed, but its fresh confirmation did not.
+    case confirmationUnavailable
+}
+
 public struct ProxySnapshot: Equatable, Sendable {
     public var state: ProxyState
     public var readiness: ProxyReadinessState
+    /// Most recent route-document observation. Unlike startup diagnostics, an
+    /// explicit post-switch refresh can replace this value immediately.
+    public var codexRoute: CodexRouteObservation
     public var endpoint: ProxyEndpoint
     public var quotas: [QuotaReport]
     public var quotaAvailability: [ProviderQuotaAvailability]
@@ -130,6 +143,7 @@ public struct ProxySnapshot: Equatable, Sendable {
     public init(
         state: ProxyState = .loading,
         readiness: ProxyReadinessState = .unknown,
+        codexRoute: CodexRouteObservation = .unobserved,
         endpoint: ProxyEndpoint,
         quotas: [QuotaReport] = [],
         quotaAvailability: [ProviderQuotaAvailability] = [],
@@ -146,6 +160,7 @@ public struct ProxySnapshot: Equatable, Sendable {
     ) {
         self.state = state
         self.readiness = readiness
+        self.codexRoute = codexRoute
         self.endpoint = endpoint
         self.quotas = quotas
         self.quotaAvailability = quotaAvailability

@@ -95,6 +95,7 @@ export interface ProxyLifecycleResult {
     | "START_FAILED"
     | "STOP_FAILED"
     | "SYNC_FAILED"
+    | "ROUTING_RECOVERY_REQUIRED"
     | "CODEX_RESTART_REQUIRED";
 }
 
@@ -143,6 +144,8 @@ export interface ExplicitProxyStartIo {
   retireExternalJournal?: (provider: string) => boolean;
   journalPending?: () => boolean;
   externalProvider?: () => string | null;
+  desiredEnabled?: ExplicitCodexRoutingStartOptions["desiredEnabled"];
+  classifyActiveJournal?: ExplicitCodexRoutingStartOptions["classifyActiveJournal"];
   setEnabled?: typeof setIntegrationEnabled;
 }
 
@@ -232,6 +235,8 @@ export function prepareExplicitProxyStartWithIo(
     retireExternalJournal: io.retireExternalJournal,
     journalPending: io.journalPending,
     externalProvider: io.externalProvider,
+    desiredEnabled: io.desiredEnabled,
+    classifyActiveJournal: io.classifyActiveJournal,
     protectedLiveOwnerPid,
   });
 }
@@ -1359,8 +1364,10 @@ async function restoreBackRoutingLifecycleUnderLock(
       ok: false,
       changed: prepared.changed,
       live,
-      message: prepared.message,
-      errorCode: "SYNC_FAILED",
+    message: prepared.message,
+      errorCode: prepared.reason === "routing-recovery-unverified"
+        ? "ROUTING_RECOVERY_REQUIRED"
+        : "SYNC_FAILED",
     });
   }
   // Production sync runs inside the attested live proxy so the replacement

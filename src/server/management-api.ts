@@ -28,6 +28,7 @@ import { handleCatalogActivationRoutes } from "./management/catalog-activation-r
 import { handleIntegrationRoutes } from "./management/integration-routes";
 import { handleOpencodeIntegrationRoutes } from "./management/opencode-integration-routes";
 import { handleNativeIntegrationRoutes } from "./management/native-integration-routes";
+import { handleCodexRoutingRoutes } from "./management/codex-routing-routes";
 import type { ManagementContext } from "./management/context";
 import type { ManagementPrincipal } from "./management-auth";
 export type { ManagementApiDeps } from "./management/context";
@@ -168,21 +169,22 @@ export async function handleManagementAPI(
   let routed: Response | null;
   try {
     routed = (await handleConfigRoutes(ctx))
-    ??     (await handleLogsUsageRoutes(ctx))
-    ??     (await handleRequestHistoryRoutes(ctx))
-    ??     (await handleRoutingAnalyticsRoutes(ctx))
-    ??     (await handleRoutingProfileRoutes(ctx))
-    ??     (await handleProviderRoutes(ctx))
-    ??     (await handleIntegrationRoutes(ctx))
-    ??     (await handleOpencodeIntegrationRoutes(ctx))
-    ??     (await handleModelRoutes(ctx))
-    ??     (await handleNativeIntegrationRoutes(ctx))
-    ??     (await handleAgentSettingsRoutes(ctx))
-    ??     (await handleCatalogActivationRoutes(ctx))
-    ??     (await handleOauthAccountRoutes(ctx))
-    ??     (await handleComboRoutes(ctx))
-    ??     (await handleActivityRoutes(ctx))
-    ??     (await handleSystemRoutes(ctx));
+      ?? (await handleCodexRoutingRoutes(ctx))
+      ?? (await handleLogsUsageRoutes(ctx))
+      ?? (await handleRequestHistoryRoutes(ctx))
+      ?? (await handleRoutingAnalyticsRoutes(ctx))
+      ?? (await handleRoutingProfileRoutes(ctx))
+      ?? (await handleProviderRoutes(ctx))
+      ?? (await handleIntegrationRoutes(ctx))
+      ?? (await handleOpencodeIntegrationRoutes(ctx))
+      ?? (await handleModelRoutes(ctx))
+      ?? (await handleNativeIntegrationRoutes(ctx))
+      ?? (await handleAgentSettingsRoutes(ctx))
+      ?? (await handleCatalogActivationRoutes(ctx))
+      ?? (await handleOauthAccountRoutes(ctx))
+      ?? (await handleComboRoutes(ctx))
+      ?? (await handleActivityRoutes(ctx))
+      ?? (await handleSystemRoutes(ctx));
   } catch (error) {
     const tooLarge = managementBodyTooLargeResponse(error, req, config);
     if (tooLarge) return tooLarge;

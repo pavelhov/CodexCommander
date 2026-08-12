@@ -22,6 +22,7 @@ public final class PopoverViewController: NSViewController {
     private let stopAndQuitButton = NSButton()
     private let startupMode = StartupModeView()
     private let headerSeparator = makeSeparator()
+    private let operationStatus = OperationStatusView()
     private let footerActions = NSStackView()
     private let column = NSStackView()
 
@@ -31,7 +32,6 @@ public final class PopoverViewController: NSViewController {
     private let catalogUpdate = CatalogUpdateView()
     private let activity = AgentActivityView()
     private let quotas = ProviderQuotaAccordionView()
-    private let resultBanner = makeLabel("", font: Theme.caption, color: Theme.muted)
     private let guidanceLabel: NSTextField = {
         let field = makeLabel("", font: Theme.caption, color: Theme.muted)
         field.lineBreakMode = .byWordWrapping
@@ -63,7 +63,6 @@ public final class PopoverViewController: NSViewController {
 
     private var snapshot: ProxySnapshot?
     private var scrollHeight: NSLayoutConstraint?
-    private var resultToken = 0
     private var lifecycleControlsAllowed = true
     private var launchAtLogin = LaunchAtLoginPresentation(
         status: .disabled,
@@ -72,11 +71,7 @@ public final class PopoverViewController: NSViewController {
 
     public override func loadView() {
         configureControls()
-        resultBanner.isHidden = true
         startupOptionsButton.isHidden = true
-        resultBanner.lineBreakMode = .byWordWrapping
-        resultBanner.maximumNumberOfLines = 3
-        resultBanner.preferredMaxLayoutWidth = Theme.width - Theme.gutter * 2
 
         quotas.onManage = { [weak self] provider in
             self?.onManageProvider?(provider)
@@ -93,16 +88,19 @@ public final class PopoverViewController: NSViewController {
         catalogUpdate.onApply = { [weak self] in
             self?.onApplyCodexCatalog?()
         }
+        operationStatus.onDismiss = { [weak self] in
+            self?.refreshSize()
+        }
 
         body.orientation = .vertical
         body.alignment = .leading
         body.spacing = Theme.sectionGap
         body.setViews(
-            [catalogUpdate, activity, activitySeparator, quotas, resultBanner, guidanceLabel, startupOptionsButton, commandField],
+            [catalogUpdate, activity, activitySeparator, quotas, guidanceLabel, startupOptionsButton, commandField],
             in: .top
         )
         body.translatesAutoresizingMaskIntoConstraints = false
-        for item in [catalogUpdate, activity, activitySeparator, quotas, resultBanner, guidanceLabel, startupOptionsButton, commandField] {
+        for item in [catalogUpdate, activity, activitySeparator, quotas, guidanceLabel, startupOptionsButton, commandField] {
             item.translatesAutoresizingMaskIntoConstraints = false
             item.widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
         }
@@ -152,7 +150,7 @@ public final class PopoverViewController: NSViewController {
         footerActions.alignment = .leading
 
         column.setViews(
-            [header, headerSeparator, scrollView, quotaSeparator, startupMode, footerActions],
+            [header, headerSeparator, operationStatus, scrollView, quotaSeparator, startupMode, footerActions],
             in: .top
         )
         column.orientation = .vertical
@@ -176,6 +174,7 @@ public final class PopoverViewController: NSViewController {
             root.widthAnchor.constraint(equalToConstant: Theme.width),
             header.widthAnchor.constraint(equalToConstant: contentWidth),
             headerSeparator.widthAnchor.constraint(equalToConstant: contentWidth),
+            operationStatus.widthAnchor.constraint(equalToConstant: contentWidth),
             quotaSeparator.widthAnchor.constraint(equalToConstant: contentWidth),
             startupMode.widthAnchor.constraint(equalToConstant: contentWidth),
             footerActions.widthAnchor.constraint(equalToConstant: contentWidth),
@@ -294,18 +293,54 @@ public final class PopoverViewController: NSViewController {
     }
 
     public func showResult(_ text: String, isError: Bool) {
-        resultBanner.stringValue = text
-        resultBanner.textColor = isError ? Theme.red : Theme.muted
-        resultBanner.isHidden = false
+        operationStatus.showResult(title: text, tone: isError ? .error : .success)
         refreshSize()
+    }
 
-        resultToken &+= 1
-        let token = resultToken
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
-            guard let self, self.resultToken == token else { return }
-            self.resultBanner.isHidden = true
-            self.refreshSize()
-        }
+    public func showProgress(_ text: String) {
+        operationStatus.beginOperation(text)
+        refreshSize()
+    }
+
+    public func beginCodexRouteChange(to destination: CodexRouteDestination) {
+        operationStatus.beginRouteChange(to: destination)
+        refreshSize()
+    }
+
+    public func updateCodexRoutePhase(_ phase: CodexRouteOperationPhase) {
+        operationStatus.updateRoutePhase(phase)
+        refreshSize()
+    }
+
+    public func showCodexRouteSaved(_ destination: CodexRouteDestination) {
+        let result = LifecycleResultMessage.codexRouteSaved(destination)
+        operationStatus.showResult(
+            title: result.title,
+            detail: result.detail,
+            tone: .success
+        )
+        refreshSize()
+    }
+
+    public func showCodexRouteFailure(_ rawMessage: String, errorCode: String? = nil) {
+        let result = LifecycleResultMessage.codexRouteFailure(rawMessage, errorCode: errorCode)
+        operationStatus.showResult(
+            title: result.title,
+            detail: result.detail,
+            technicalDetail: result.technicalDetail,
+            tone: .error
+        )
+        refreshSize()
+    }
+
+    public func showCodexRouteConfirmationPending() {
+        let result = LifecycleResultMessage.codexRouteConfirmationPending
+        operationStatus.showResult(
+            title: result.title,
+            detail: result.detail,
+            tone: .warning
+        )
+        refreshSize()
     }
 
     public func setRestartEnabled(_ enabled: Bool) {
@@ -331,8 +366,7 @@ public final class PopoverViewController: NSViewController {
         lifecycleControlsAllowed = enabled
         lifecycleButton.isEnabled = enabled && snapshot.map { lifecycleActionable($0.state) } == true
         restartButton.isEnabled = enabled && snapshot?.state.isRunning == true
-        restoreNativeButton.isEnabled = enabled
-        routeThroughProxyButton.isEnabled = enabled
+        applyCodexRouteAvailability()
         stopAndQuitButton.isEnabled = LifecycleActionAvailability.canStopAndQuit(
             state: snapshot?.state,
             controlsAllowed: enabled
@@ -395,9 +429,8 @@ public final class PopoverViewController: NSViewController {
         lifecycleButton.alphaValue = lifecycleButton.isEnabled ? 1 : 0.45
         restartButton.isEnabled = lifecycleControlsAllowed && snapshot.state.isRunning
         restartButton.alphaValue = restartButton.isEnabled ? 1 : 0.45
-        restoreNativeButton.isEnabled = lifecycleControlsAllowed
+        applyCodexRouteAvailability()
         restoreNativeButton.alphaValue = restoreNativeButton.isEnabled ? 1 : 0.45
-        routeThroughProxyButton.isEnabled = lifecycleControlsAllowed
         routeThroughProxyButton.alphaValue = routeThroughProxyButton.isEnabled ? 1 : 0.45
         quitMenuBarButton.isEnabled = true
         stopAndQuitButton.isEnabled = LifecycleActionAvailability.canStopAndQuit(
@@ -412,6 +445,7 @@ public final class PopoverViewController: NSViewController {
         let bodyHeight = ceil(body.fittingSize.height)
         let fixedViewsHeight = ceil(header.fittingSize.height)
             + ceil(headerSeparator.fittingSize.height)
+            + (operationStatus.isHidden ? 0 : ceil(operationStatus.fittingSize.height))
             + ceil(quotaSeparator.fittingSize.height)
             + ceil(startupMode.fittingSize.height)
             + ceil(footerActions.fittingSize.height)
@@ -426,6 +460,41 @@ public final class PopoverViewController: NSViewController {
         scrollView.hasVerticalScroller = overflowing
         scrollHeight?.constant = max(120, preferred - chrome)
         preferredContentSize = NSSize(width: Theme.width, height: preferred)
+    }
+
+    private func applyCodexRouteAvailability() {
+        guard lifecycleControlsAllowed else {
+            restoreNativeButton.isEnabled = false
+            routeThroughProxyButton.isEnabled = false
+            return
+        }
+
+        guard let snapshot else {
+            restoreNativeButton.isEnabled = true
+            routeThroughProxyButton.isEnabled = false
+            return
+        }
+        switch snapshot.codexRoute {
+        case .confirmed(let route):
+            restoreNativeButton.isEnabled = route.routingKind != .native
+            routeThroughProxyButton.isEnabled =
+                snapshot.state.isRunning && route.routingKind != .codexCommanderLocal
+            return
+        case .confirmationUnavailable:
+            restoreNativeButton.isEnabled = true
+            routeThroughProxyButton.isEnabled = snapshot.state.isRunning
+            return
+        case .unobserved:
+            break
+        }
+        guard case .running(let health) = snapshot.state, !health.diagnosticStale else {
+            restoreNativeButton.isEnabled = true
+            routeThroughProxyButton.isEnabled = false
+            return
+        }
+        let usesProxy = health.routingInjected || health.routingKind == "codexcommander-local"
+        restoreNativeButton.isEnabled = health.routingKind != "native"
+        routeThroughProxyButton.isEnabled = !usesProxy
     }
 
     // MARK: - Actions
@@ -477,6 +546,7 @@ public final class PopoverViewController: NSViewController {
     package var quotaAccordion: ProviderQuotaAccordionView { quotas }
     package var activityView: AgentActivityView { activity }
     package var headerView: StatusHeaderView { header }
+    package var operationStatusView: OperationStatusView { operationStatus }
     package var startupModeView: StartupModeView { startupMode }
     package var catalogUpdateVisible: Bool { !catalogUpdate.isHidden }
     package var catalogUpdateDetail: String { catalogUpdate.detailText }

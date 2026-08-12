@@ -114,7 +114,8 @@ enum ActionSuite {
                 LifecycleCommandResult(
                     action: .restoreNative, ok: false, state: .blocked,
                     changed: false,
-                    message: "Codex configuration was unchanged."
+                    message: "Codex configuration was unchanged.",
+                    errorCode: "ROUTING_RECOVERY_REQUIRED"
                 ),
             ])
             let coordinator = ActionCoordinator(lifecycle: lifecycle)
@@ -129,7 +130,10 @@ enum ActionSuite {
             )
             t.equal(
                 sync { await coordinator.restoreNativeCodex() },
-                .failed("Codex configuration was unchanged.")
+                .failed(
+                    message: "Codex configuration was unchanged.",
+                    errorCode: "ROUTING_RECOVERY_REQUIRED"
+                )
             )
             t.equal(
                 sync { await lifecycle.recordedActions() },

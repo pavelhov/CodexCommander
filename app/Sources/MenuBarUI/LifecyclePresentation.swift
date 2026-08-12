@@ -64,6 +64,43 @@ package enum LifecycleConfirmation {
 package enum LifecycleResultMessage {
     package static let proxyStopped =
         "Proxy stopped. Fully quit ChatGPT and Codex if still open, then reopen them to use native routing."
+
+    package static func codexRouteSaved(_ destination: CodexRouteDestination) -> (
+        title: String,
+        detail: String
+    ) {
+        (
+            "\(destination.name) route saved",
+            "Quit ChatGPT completely, reopen it, then start a new task to use this route."
+        )
+    }
+
+    package static func codexRouteFailure(
+        _ rawMessage: String,
+        errorCode: String? = nil
+    ) -> (
+        title: String,
+        detail: String,
+        technicalDetail: String?
+    ) {
+        if errorCode == "ROUTING_RECOVERY_REQUIRED" {
+            return (
+                "Codex route was not changed",
+                "CodexCommander could not safely verify its previous recovery checkpoint. Your existing route was left unchanged.",
+                rawMessage
+            )
+        }
+        return (
+            "Codex route could not be confirmed",
+            "CodexCommander could not verify the requested route. Check the Codex route shown above before restarting ChatGPT.",
+            rawMessage
+        )
+    }
+
+    package static let codexRouteConfirmationPending = (
+        title: "Route was saved, but confirmation is unavailable",
+        detail: "Refresh to confirm the Codex route shown above before reopening ChatGPT."
+    )
 }
 
 /// Fresh activity evidence used only to explain the risk of applying a catalog update.

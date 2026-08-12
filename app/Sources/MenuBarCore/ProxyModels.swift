@@ -70,6 +70,84 @@ public struct ProxyReadinessObservation: Decodable, Equatable, Sendable {
     }
 }
 
+/// Closed classification of the routing document Codex will consume.
+public enum CodexRoutingKind: String, Decodable, Equatable, Sendable {
+    case native
+    case codexCommanderLocal = "codexcommander-local"
+    case customLocal = "custom-local"
+    case customRemote = "custom-remote"
+    case unknown
+}
+
+/// Fresh, uncached `GET /api/codex-routing` observation.
+///
+/// The exact shape and redundant ownership flag are validated so route-switch
+/// confirmation cannot accidentally accept a partial or internally inconsistent DTO.
+public struct CodexRouteStatus: Decodable, Equatable, Sendable {
+    public let schemaVersion: Int
+    public let routingKind: CodexRoutingKind
+    public let routingInjected: Bool
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case schemaVersion
+        case routingKind
+        case routingInjected
+    }
+
+    private struct DynamicCodingKey: CodingKey {
+        let stringValue: String
+        let intValue: Int?
+
+        init?(stringValue: String) {
+            self.stringValue = stringValue
+            self.intValue = nil
+        }
+
+        init?(intValue: Int) {
+            self.stringValue = String(intValue)
+            self.intValue = intValue
+        }
+    }
+
+    public init(routingKind: CodexRoutingKind) {
+        self.schemaVersion = 1
+        self.routingKind = routingKind
+        self.routingInjected = routingKind == .codexCommanderLocal
+    }
+
+    public init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: DynamicCodingKey.self)
+        let actualKeys = Set(dynamic.allKeys.map(\.stringValue))
+        let expectedKeys = Set(CodingKeys.allCases.map(\.rawValue))
+        guard actualKeys == expectedKeys else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "Unexpected /api/codex-routing response shape"
+            ))
+        }
+
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try values.decode(Int.self, forKey: .schemaVersion)
+        routingKind = try values.decode(CodexRoutingKind.self, forKey: .routingKind)
+        routingInjected = try values.decode(Bool.self, forKey: .routingInjected)
+        guard schemaVersion == 1,
+              routingInjected == (routingKind == .codexCommanderLocal)
+        else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "Invalid /api/codex-routing response"
+            ))
+        }
+    }
+
+    init?(health: StartupHealth) {
+        guard let kind = CodexRoutingKind(rawValue: health.routingKind),
+              health.routingInjected == (kind == .codexCommanderLocal)
+        else { return nil }
+        self.init(routingKind: kind)
+    }
+}
+
 /// `GET /api/startup-health`
 public struct StartupHealth: Decodable, Equatable, Sendable {
     public let status: String

@@ -881,6 +881,121 @@ describe("codex-journal", () => {
     expect(existsSync(journalPath)).toBe(true);
   });
 
+  test("active journal classification accepts only a proven live-owner routed descendant", () => {
+    const routedConfig = [
+      'model_provider = "codexcommander"',
+      "",
+      "# Auto-injected by CodexCommander",
+      "[model_providers.codexcommander]",
+      'name = "CodexCommander Proxy"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'wire_api = "responses"',
+      "requires_openai_auth = true",
+      "",
+    ].join("\n");
+    const routedProfile = [
+      "# CodexCommander proxy fallback config (Design B)",
+      'openai_base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    writeFileSync(join(testDir, "config.toml"), routedConfig, "utf8");
+    writeFileSync(join(testDir, "codexcommander.config.toml"), routedProfile, "utf8");
+    writeRecoveryJournal(testDir, {
+      originalConfig: 'model = "gpt-5.6-sol"\n',
+      injectedConfig: routedConfig,
+      injectedProfile: routedProfile,
+      pid: process.pid,
+    });
+
+    const r = runScript(testDir, `
+      const { classifyActiveCodexRoutingJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify({
+        exact: classifyActiveCodexRoutingJournal(${process.pid}),
+        wrongOwner: classifyActiveCodexRoutingJournal(${process.pid + 1}),
+      }));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({
+      exact: { kind: "active-managed-postimage" },
+      wrongOwner: {
+        kind: "not-active-managed-postimage",
+        reason: "owner-mismatch",
+      },
+    });
+
+    const preferenceUpdatedConfig = [
+      'model_reasoning_effort = "ultra"',
+      'service_tier = "priority"',
+      routedConfig,
+    ].join("\n");
+    writeFileSync(join(testDir, "config.toml"), preferenceUpdatedConfig, "utf8");
+    const changed = runScript(testDir, `
+      const { classifyActiveCodexRoutingJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify(classifyActiveCodexRoutingJournal(${process.pid})));
+    `);
+    expect(changed.status).toBe(0);
+    expect(JSON.parse(changed.stdout)).toEqual({
+      kind: "active-managed-descendant",
+    });
+
+    const prepared = runScript(testDir, `
+      const { prepareExplicitCodexRoutingStart } = require("./src/codex/routing-transition");
+      const { existsSync } = require("node:fs");
+      const { JOURNAL_PATH } = require("./src/codex/journal");
+      const result = prepareExplicitCodexRoutingStart({
+        protectedLiveOwnerPid: ${process.pid},
+        desiredEnabled: () => true,
+        setEnabled: () => ({ ok: true, status: "unchanged", enabled: true }),
+      });
+      console.log(JSON.stringify({ result, journalPreserved: existsSync(JOURNAL_PATH) }));
+    `);
+    expect(prepared.status).toBe(0);
+    expect(JSON.parse(prepared.stdout)).toEqual({
+      result: {
+        success: true,
+        changed: false,
+        message: "Codex is already routing through this live proxy.",
+      },
+      journalPreserved: true,
+    });
+
+    writeFileSync(
+      join(testDir, "config.toml"),
+      preferenceUpdatedConfig.replace(
+        "http://127.0.0.1:10100/v1",
+        "http://127.0.0.1:10199/v1",
+      ),
+      "utf8",
+    );
+    const repointed = runScript(testDir, `
+      const { classifyActiveCodexRoutingJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify(classifyActiveCodexRoutingJournal(${process.pid})));
+    `);
+    expect(repointed.status).toBe(0);
+    expect(JSON.parse(repointed.stdout)).toEqual({
+      kind: "not-active-managed-postimage",
+      reason: "routing-mismatch",
+    });
+
+    writeFileSync(
+      join(testDir, "config.toml"),
+      preferenceUpdatedConfig.replace(
+        'name = "CodexCommander Proxy"',
+        'name = "Unverified Proxy"',
+      ),
+      "utf8",
+    );
+    const unsafe = runScript(testDir, `
+      const { classifyActiveCodexRoutingJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify(classifyActiveCodexRoutingJournal(${process.pid})));
+    `);
+    expect(unsafe.status).toBe(0);
+    expect(JSON.parse(unsafe.stdout)).toEqual({
+      kind: "not-active-managed-postimage",
+      reason: "routing-mismatch",
+    });
+  });
+
   test("explicit native escape retires a matching live journal and preserves inert generated artifacts", () => {
     const nativeConfig = 'model = "gpt-5.5"\n';
     const generatedProfile = [
@@ -924,6 +1039,40 @@ describe("codex-journal", () => {
     expect(readFileSync(join(testDir, "codexcommander.config.toml"), "utf8")).toBe(generatedProfile);
     expect(readFileSync(join(testDir, "codexcommander-catalog.json"), "utf8")).toBe(routedCatalog);
     expect(readFileSync(join(testDir, "models_cache.json"), "utf8")).toBe(routedCatalog);
+  });
+
+  test("explicit native escape bootstraps missing coordinator authority", () => {
+    const nativeConfig = 'model = "gpt-5.6-sol"\n';
+    writeFileSync(join(testDir, "config.toml"), nativeConfig, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: 'model = "gpt-5.5"\n',
+      injectedConfig: "old routed config",
+      injectedProfile: null,
+      pid: process.pid,
+    });
+    removeCoordinator(testDir);
+    expect(existsSync(coordinatorPath(testDir))).toBe(false);
+
+    const r = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { getDefaultConfig, saveConfig } = require("./src/config");
+      const { retireJournalAfterExplicitNativeEscape } = require("./src/codex/journal");
+      saveConfig({ ...getDefaultConfig(), clientIntegrations: { codex: false } });
+      const journalPath = path.join(process.env.CODEX_HOME, "codexcommander-journal.json");
+      const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
+      journal.pid = process.pid;
+      fs.writeFileSync(journalPath, JSON.stringify(journal), "utf8");
+      console.log(JSON.stringify({
+        retired: retireJournalAfterExplicitNativeEscape({ kind: "protected-live", pid: process.pid }),
+      }));
+    `);
+
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ retired: true });
+    expect(existsSync(journalPath)).toBe(false);
+    expect(existsSync(coordinatorPath(testDir))).toBe(true);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(nativeConfig);
   });
 
   test("explicit native escape accepts a proven-dead journal despite inert generated artifacts", () => {

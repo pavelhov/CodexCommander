@@ -251,6 +251,11 @@ public actor ProxyClient {
         try await authenticatedGet("api/startup-health")
     }
 
+    /// Fresh route truth, intentionally separate from cached startup diagnostics.
+    public func codexRouteStatus() async throws -> CodexRouteStatus {
+        try await authenticatedGet("api/codex-routing")
+    }
+
     /// Public post-startup readiness. This request intentionally carries no management
     /// credential, and accepts the endpoint's contractually meaningful 503 response for
     /// `pending` and `failed` observations.

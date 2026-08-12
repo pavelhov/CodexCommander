@@ -7,6 +7,14 @@ import AppKit
 import MenuBarCore
 import MenuBarUI
 
+private enum ProbeState: String {
+    case baseline
+    case routeChanging = "route-changing"
+    case routeConfirming = "route-confirming"
+    case routeSuccess = "route-success"
+    case routeRecoveryError = "route-recovery-error"
+}
+
 func currentHealth(
     status: String = "protected",
     protection: String = "none",
@@ -34,6 +42,7 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate {
     var panel: PopoverPanel?
     var outputPath = "/tmp/codexcommander-ui-probe.png"
     var lightAppearance = false
+    private var probeState: ProbeState = .baseline
 
     func applicationDidFinishLaunching(_ n: Notification) {
         lightAppearance = CommandLine.arguments.contains("--light")
@@ -43,6 +52,21 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate {
 
         if CommandLine.arguments.count > 1 {
             outputPath = CommandLine.arguments[1]
+        }
+
+        if let stateIndex = CommandLine.arguments.firstIndex(of: "--state") {
+            let valueIndex = CommandLine.arguments.index(after: stateIndex)
+            guard valueIndex < CommandLine.arguments.endIndex,
+                  let state = ProbeState(rawValue: CommandLine.arguments[valueIndex])
+            else {
+                fputs(
+                    "UIProbe --state expects baseline, route-changing, route-confirming, route-success, or route-recovery-error\n",
+                    stderr
+                )
+                NSApp.terminate(nil)
+                return
+            }
+            probeState = state
         }
 
         let host = NSWindow(
@@ -64,6 +88,22 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate {
             LaunchAtLoginPresentation(status: .enabled, desiredEnabled: true)
         )
         controller.apply(snap)
+        switch probeState {
+        case .baseline:
+            break
+        case .routeChanging:
+            controller.beginCodexRouteChange(to: .codexCommander)
+        case .routeConfirming:
+            controller.beginCodexRouteChange(to: .codexCommander)
+            controller.updateCodexRoutePhase(.confirming)
+        case .routeSuccess:
+            controller.showCodexRouteSaved(.codexCommander)
+        case .routeRecoveryError:
+            controller.showCodexRouteFailure(
+                "Codex routing recovery could not prove and retire the existing journal.",
+                errorCode: "ROUTING_RECOVERY_REQUIRED"
+            )
+        }
         if CommandLine.arguments.contains("--expand-grok") {
             controller.quotaAccordion.toggleForTesting("xai")
         }
@@ -181,6 +221,7 @@ private enum Fixture {
             "source": "oauth",
             "updatedAt": \(ms),
             "quota": {
+              "updatedAt": \(ms),
               "fiveHourPercent": 38,
               "weeklyPercent": 22,
               "fiveHourResetAt": \(now.addingTimeInterval(2 * 3600 + 14 * 60).timeIntervalSince1970),
@@ -193,6 +234,7 @@ private enum Fixture {
             "source": "oauth",
             "updatedAt": \(ms),
             "quota": {
+              "updatedAt": \(ms),
               "fiveHourPercent": 62,
               "weeklyPercent": 38,
               "monthlyPercent": 41,
@@ -224,22 +266,31 @@ private enum Fixture {
         ]
         """
 
-        let activity = try! JSONDecoder().decode(
-            AgentActivitySnapshot.self,
-            from: Data(activityJSON.utf8)
-        )
-        let quotas = try! JSONDecoder().decode(
-            [QuotaReport].self,
-            from: Data(quotasJSON.utf8)
-        )
-        let providers = try! JSONDecoder().decode(
-            [ProviderSummary].self,
-            from: Data(providersJSON.utf8)
-        )
-        let quotaAvailability = try! JSONDecoder().decode(
-            [ProviderQuotaAvailability].self,
-            from: Data(availabilityJSON.utf8)
-        )
+        let activity: AgentActivitySnapshot
+        let quotas: [QuotaReport]
+        let providers: [ProviderSummary]
+        let quotaAvailability: [ProviderQuotaAvailability]
+        do {
+            activity = try JSONDecoder().decode(
+                AgentActivitySnapshot.self,
+                from: Data(activityJSON.utf8)
+            )
+            quotas = try JSONDecoder().decode(
+                [QuotaReport].self,
+                from: Data(quotasJSON.utf8)
+            )
+            providers = try JSONDecoder().decode(
+                [ProviderSummary].self,
+                from: Data(providersJSON.utf8)
+            )
+            quotaAvailability = try JSONDecoder().decode(
+                [ProviderQuotaAvailability].self,
+                from: Data(availabilityJSON.utf8)
+            )
+        } catch {
+            fputs("UIProbe fixture is invalid: \(error)\n", stderr)
+            exit(EXIT_FAILURE)
+        }
 
         return ProxySnapshot(
             state: .running(currentHealth(

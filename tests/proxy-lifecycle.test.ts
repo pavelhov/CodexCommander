@@ -338,6 +338,139 @@ describe("shared proxy lifecycle authority", () => {
     expect(calls).toEqual(["journal", "explicit:dead", "reconcile", "journal", "enable"]);
   });
 
+  test("repeated Route Back preserves an exact active live-owner journal", () => {
+    const calls: string[] = [];
+    const result = prepareExplicitProxyStart({
+      externalProvider: () => null,
+      journalPending: () => {
+        calls.push("journal");
+        return true;
+      },
+      protectedLiveOwnerPid: 42,
+      desiredEnabled: () => {
+        calls.push("desired");
+        return true;
+      },
+      classifyActiveJournal: pid => {
+        calls.push(`classify:${pid}`);
+        return { kind: "active-managed-postimage" };
+      },
+      retireExplicitJournal: () => {
+        calls.push("retire");
+        return false;
+      },
+      reconcile: () => {
+        calls.push("reconcile");
+        return false;
+      },
+      setEnabled: (_client, enabled) => {
+        calls.push(`enable:${enabled}`);
+        return { ok: true, status: "unchanged", enabled };
+      },
+    });
+
+    expect(result).toEqual({
+      success: true,
+      changed: false,
+      message: "Codex is already routing through this live proxy.",
+    });
+    expect(calls).toEqual(["journal", "desired", "classify:42", "enable:true"]);
+  });
+
+  test("native OFF with a live-owner journal still uses exact retirement", () => {
+    const calls: string[] = [];
+    let pending = true;
+    const result = prepareExplicitProxyStart({
+      externalProvider: () => null,
+      journalPending: () => {
+        calls.push("journal");
+        return pending;
+      },
+      protectedLiveOwnerPid: 42,
+      desiredEnabled: () => {
+        calls.push("desired");
+        return false;
+      },
+      classifyActiveJournal: () => {
+        calls.push("classify");
+        return { kind: "active-managed-postimage" };
+      },
+      retireExplicitJournal: owner => {
+        calls.push(`retire:${owner.kind}`);
+        pending = false;
+        return true;
+      },
+      setEnabled: (_client, enabled) => {
+        calls.push(`enable:${enabled}`);
+        return { ok: true, status: "committed", enabled };
+      },
+    });
+
+    expect(result).toMatchObject({ success: true, changed: true });
+    expect(calls).toEqual([
+      "journal",
+      "desired",
+      "retire:protected-live",
+      "journal",
+      "enable:true",
+    ]);
+  });
+
+  test("an unsafe live-owner journal refuses without enabling", () => {
+    const calls: string[] = [];
+    const result = prepareExplicitProxyStart({
+      externalProvider: () => null,
+      journalPending: () => true,
+      protectedLiveOwnerPid: 42,
+      desiredEnabled: () => true,
+      classifyActiveJournal: () => ({
+        kind: "not-active-managed-postimage",
+        reason: "owner-mismatch",
+      }),
+      retireExplicitJournal: owner => {
+        calls.push(`retire:${owner.kind}`);
+        return false;
+      },
+      reconcile: () => {
+        calls.push("reconcile");
+        return false;
+      },
+      setEnabled: (_client, enabled) => {
+        calls.push(`enable:${enabled}`);
+        return { ok: true, status: "committed", enabled };
+      },
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      changed: false,
+      reason: "routing-recovery-unverified",
+    });
+    expect(calls).toEqual(["retire:protected-live", "retire:dead", "reconcile"]);
+  });
+
+  test("Restore Back exposes a typed recovery refusal to lifecycle clients", async () => {
+    const result = await restoreBackRoutingLifecycle({
+      acquireAuthority: async () => authority(),
+      findLive: async () => ({ pid: 42, port: 10100, source: "runtime" }),
+      journalPending: () => true,
+      desiredEnabled: () => true,
+      classifyActiveJournal: () => ({
+        kind: "not-active-managed-postimage",
+        reason: "owner-mismatch",
+      }),
+      retireExplicitJournal: () => false,
+      reconcile: () => false,
+      setEnabled: (_client, enabled) => ({ ok: true, status: "unchanged", enabled }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      state: "running",
+      errorCode: "ROUTING_RECOVERY_REQUIRED",
+    });
+  });
+
   test("explicit start retires an external-provider journal before enabling", () => {
     const calls: string[] = [];
     let pending = true;

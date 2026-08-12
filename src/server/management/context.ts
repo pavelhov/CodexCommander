@@ -110,6 +110,8 @@ export interface ManagementApiDeps {
   catalogArtifactProofForActivation?: () => CodexCatalogArtifactProof;
   /** Read-only native routing observation seam for activation route tests. */
   codexRoutingKindForActivation?: () => CodexRoutingKind;
+  /** Fresh routing-document observation seam for the narrow status route. */
+  getCodexRoutingKind?: () => CodexRoutingKind;
   /** Non-disruptive native-default writer seam for injection-model route tests. */
   reconcileManagementNativeSubagentDefaults?: typeof reconcileManagementNativeSubagentDefaults;
   /** Fresh persisted desired-state reader for the consent/revision fence. */

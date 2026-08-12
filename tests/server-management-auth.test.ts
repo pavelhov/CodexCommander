@@ -253,6 +253,33 @@ describe("management and data-plane credential separation", () => {
     }
   });
 
+  test("fresh route observation stays behind management auth and is never cached", async () => {
+    saveConfig(remoteConfig());
+    const server = startServer(0, {
+      managementApi: { getCodexRoutingKind: () => "native" },
+    });
+    try {
+      const path = new URL("/api/codex-routing", server.url);
+      expect((await fetch(path)).status).toBe(401);
+      expect((await fetch(path, {
+        headers: { "x-codexcommander-api-key": "data-secret" },
+      })).status).toBe(401);
+
+      const response = await fetch(path, {
+        headers: { "x-codexcommander-api-key": "admin-secret" },
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(await response.json()).toEqual({
+        schemaVersion: 1,
+        routingKind: "native",
+        routingInjected: false,
+      });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("a management token that matches the data environment token closes only the management plane", async () => {
     process.env.CODEXCOMMANDER_ADMIN_AUTH_TOKEN = "data-secret";
     saveConfig(remoteConfig());
