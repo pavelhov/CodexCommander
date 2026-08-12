@@ -20,9 +20,14 @@ macOS 伴侣会在菜单栏中显示最有用的 CodexCommander 状态，同时�
 
 ## 启动模式
 
-- **Desktop** — 登录时打开菜单栏应用，并连接或启动唯一一个服务器。
+- **Desktop** — 登录时打开菜单栏应用，执行显式 Start，启动或连接代理，并让托管的 Codex 经由该代理
+  路由。用户管理的外部提供商会保持不变。
 - **Headless** — 不打开菜单栏应用，只启动另行安装的 `ccx service`。
-- **Off** — 不自动启动；手动打开应用或运行 `ccx start`。
+- **Off** — 不自动启动；手动新启动应用会执行显式 Start 并让托管的 Codex 经由代理路由，运行
+  `ccx start` 会执行同一转换。
+
+在本指南中，**恢复原生路由**是指仅移除 CodexCommander 管理的路由。用户管理的外部 Codex 提供商
+不会被更改。
 
 可在启动行切换 **Launch at Login**。如果需要批准，应用会直接打开 macOS Login Items 设置。
 此开关不会安装、停止或删除后台服务。
@@ -155,7 +160,8 @@ open dist/macos/CodexCommander.app
 
 开发应用的唯一位置是 `dist/macos/CodexCommander.app`。每次构建都会把 Bun 运行时和 CodexCommander
 服务器资源嵌入应用包；运行中的应用不会直接执行检出目录里的 `src/`。源代码发生变化后请重新构建
-应用。开发期间请保留在此位置，不要复制到 Application Support。双击会尝试确保代理运行；即使离线
+应用。开发期间请保留在此位置，不要复制到 Application Support。双击启动新的应用进程时会执行显式
+Start，启动或连接代理，并让托管的 Codex 经由该代理路由；用户管理的外部提供商会保持不变。即使离线
 或启动失败，应用也不会关闭，面板和 **Start** 控件仍可使用。
 每次构建都会把准确的 Git 修订写入应用包 `Info.plist` 的 `CodexCommanderSourceRevision`，并在构建结束时
 输出。未提交的源码会带有 `-dirty`，因此制作最终包前请先提交。

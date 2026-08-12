@@ -164,7 +164,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
             )
         )
         startCompanionHeartbeat()
-        ensureProxyOnLaunch()
+        startProxyOnLaunch()
     }
 
     public func applicationDidBecomeActive(_ notification: Notification) {
@@ -378,16 +378,16 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         return true
     }
 
-    /// Finder launch is the app-level start contract. It uses the fixed TS helper and
-    /// keeps the menu app alive even when startup fails, so Start remains available.
-    private func ensureProxyOnLaunch() {
+    /// Manual and Launch-at-Login openings share the explicit Start contract. A failed
+    /// start leaves the menu app alive so its diagnostics and Start control remain usable.
+    private func startProxyOnLaunch() {
         guard !lifecycleInFlight, !restartInFlight, !catalogActionInFlight else { return }
         lifecycleInFlight = true
         updateApplicationMenu()
         controller.setLifecycleControlsEnabled(false)
         refreshCatalogApplyAvailability()
         Task { [actions, coordinator] in
-            let outcome = await actions?.ensure() ?? .failed("Lifecycle control is unavailable.")
+            let outcome = await CompanionLaunchPolicy.run(using: actions)
             await coordinator?.forceRefresh()
             await MainActor.run { [weak self] in
                 guard let self else { return }
@@ -399,7 +399,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                     self.companionHeartbeat?.reportNow()
                 case .catalogUpdateReady(let count):
                     // The proxy is running with a pending catalog refresh; report now so
-                    // a failed pre-ensure report is retried right after startup.
+                    // a failed pre-start report is retried right after startup.
                     self.companionHeartbeat?.reportNow()
                     self.presentCatalogUpdate(staleWorkerCount: count)
                 case .stopped:

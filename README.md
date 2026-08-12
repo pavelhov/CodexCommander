@@ -85,6 +85,9 @@ This preview requires macOS 13 or later. It is ad-hoc signed and not notarized y
 | **Quit Menu Bar** | Closes only the menu app; the proxy and current route keep running. |
 | **Stop CodexCommander and Quit…** | Restores native Codex, stops the proxy and service, then quits the menu app. |
 
+Here, **Restore Native** means removing CodexCommander-owned routing. A user-managed external Codex
+provider is left unchanged.
+
 Route changes show a spinner, elapsed time, and the real **Changing route → Confirming route**
 phases. After a confirmed route change, quit ChatGPT completely, reopen it, and start a new task.
 
@@ -118,11 +121,13 @@ Codex tasks, history, or authentication, and it does not require a repair comman
 database. Generated catalogs and caches may remain on disk, but native Codex no longer references
 them.
 
-On its first launch, the app enables **Launch at Login** so the
-menu icon returns after sign-in. The startup row exposes the actual mode: **Desktop** launches the
-menu app, **Headless** leaves only an installed background service at login, and **Off** starts
-neither automatically. Rebuilt source apps refresh their login registration in place; they are
-never copied into Application Support. Full
+On its first launch, the app enables **Launch at Login** so the menu icon returns after sign-in.
+On every new manual or Login Item launch, the app performs an explicit **Start**: it starts or
+attaches to the proxy, then routes managed Codex through it. An external user-managed Codex provider
+is preserved. The startup row exposes the actual mode: **Desktop**
+performs this app-managed start, **Headless** leaves only an installed background service at login,
+and **Off** starts neither automatically. Rebuilt source apps refresh their login registration in
+place; they are never copied into Application Support. Full
 setup, Gatekeeper, release packaging, and troubleshooting details are in the
 [macOS menu bar guide](docs-site/src/content/docs/guides/macos-menu-bar.md).
 

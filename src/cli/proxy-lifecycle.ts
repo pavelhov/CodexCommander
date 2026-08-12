@@ -414,6 +414,7 @@ export async function waitForProxyReadiness(
 
 /** Fixed LaunchServices argv for the repo-built companion (or a registered release app). */
 const MACOS_COMPANION_BUNDLE_ID = "com.codexcommander.menubar";
+export const MACOS_COMPANION_PASSIVE_LAUNCH_ARG = "--ccx-passive-launch";
 
 export function macOSCompanionOpenArguments(
   options: {
@@ -434,12 +435,12 @@ export function macOSCompanionOpenArguments(
   const exists = options.exists ?? existsSync;
   if (options.appPath) {
     return exists(options.appPath)
-      ? ["-g", options.appPath]
-      : ["-g", "-b", MACOS_COMPANION_BUNDLE_ID];
+      ? ["-g", options.appPath, "--args", MACOS_COMPANION_PASSIVE_LAUNCH_ARG]
+      : ["-g", "-b", MACOS_COMPANION_BUNDLE_ID, "--args", MACOS_COMPANION_PASSIVE_LAUNCH_ARG];
   }
   const app = join(repoRoot, "dist", "macos", "CodexCommander.app");
-  if (exists(app)) return ["-g", app];
-  return ["-g", "-b", MACOS_COMPANION_BUNDLE_ID];
+  if (exists(app)) return ["-g", app, "--args", MACOS_COMPANION_PASSIVE_LAUNCH_ARG];
+  return ["-g", "-b", MACOS_COMPANION_BUNDLE_ID, "--args", MACOS_COMPANION_PASSIVE_LAUNCH_ARG];
 }
 
 /** Best-effort source/release companion launch. Never starts from service children. */

@@ -1206,25 +1206,37 @@ describe("shared proxy lifecycle authority", () => {
       env: {},
       appPath: "/repo/dist/macos/CodexCommander.app",
       exists: () => true,
-    })).toEqual(["-g", "/repo/dist/macos/CodexCommander.app"]);
+    })).toEqual([
+      "-g", "/repo/dist/macos/CodexCommander.app",
+      "--args", "--ccx-passive-launch",
+    ]);
     expect(macOSCompanionOpenArguments({
       platform: "darwin",
       env: {},
       appPath: "/repo/dist/macos/CodexCommander.app",
       exists: () => false,
-    })).toEqual(["-g", "-b", "com.codexcommander.menubar"]);
+    })).toEqual([
+      "-g", "-b", "com.codexcommander.menubar",
+      "--args", "--ccx-passive-launch",
+    ]);
     // Default path prefers the rebranded CodexCommander.app when it exists.
     expect(macOSCompanionOpenArguments({
       platform: "darwin",
       env: {},
       exists: (p) => p.endsWith("/dist/macos/CodexCommander.app"),
-    })).toEqual(["-g", expect.stringContaining("/dist/macos/CodexCommander.app")]);
+    })).toEqual([
+      "-g", expect.stringContaining("/dist/macos/CodexCommander.app"),
+      "--args", "--ccx-passive-launch",
+    ]);
     // No local build at all: open by the rebranded bundle id.
     expect(macOSCompanionOpenArguments({
       platform: "darwin",
       env: {},
       exists: () => false,
-    })).toEqual(["-g", "-b", "com.codexcommander.menubar"]);
+    })).toEqual([
+      "-g", "-b", "com.codexcommander.menubar",
+      "--args", "--ccx-passive-launch",
+    ]);
     expect(macOSCompanionOpenArguments({
       platform: "darwin",
       env: { CCX_SERVICE: "1" },
