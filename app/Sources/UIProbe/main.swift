@@ -85,7 +85,11 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate {
         realPanel.contentViewController = controller
         let snap = Fixture.referenceSnapshot()
         controller.applyLaunchAtLogin(
-            LaunchAtLoginPresentation(status: .enabled, desiredEnabled: true)
+            LaunchAtLoginPresentation(
+                status: .enabled,
+                desiredEnabled: true,
+                isToggleEnabled: true
+            )
         )
         controller.apply(snap)
         switch probeState {

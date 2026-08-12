@@ -249,7 +249,11 @@ runner.test("ui: startup control exposes desktop, headless, off, and approval st
     _ = controller.view
 
     controller.applyLaunchAtLogin(
-        LaunchAtLoginPresentation(status: .enabled, desiredEnabled: true)
+        LaunchAtLoginPresentation(
+            status: .enabled,
+            desiredEnabled: true,
+            isToggleEnabled: true
+        )
     )
     controller.apply(makeSnapshot(health: currentHealth(
         protection: "service", serviceInstalled: true, serviceEnabled: true
@@ -261,7 +265,11 @@ runner.test("ui: startup control exposes desktop, headless, off, and approval st
     runner.equal(controller.startupModeView.isLaunchAtLoginOn, true)
 
     controller.applyLaunchAtLogin(
-        LaunchAtLoginPresentation(status: .disabled, desiredEnabled: false)
+        LaunchAtLoginPresentation(
+            status: .disabled,
+            desiredEnabled: false,
+            isToggleEnabled: true
+        )
     )
     runner.equal(
         controller.startupModeView.modeText,
@@ -275,24 +283,70 @@ runner.test("ui: startup control exposes desktop, headless, off, and approval st
     )
 
     controller.applyLaunchAtLogin(
-        LaunchAtLoginPresentation(status: .requiresApproval, desiredEnabled: true)
+        LaunchAtLoginPresentation(
+            status: .requiresApproval,
+            desiredEnabled: true,
+            isToggleEnabled: false
+        )
     )
+    runner.equal(controller.startupModeView.isLaunchAtLoginToggleEnabled, false)
     runner.expect(
         controller.startupModeView.showsSettingsButton,
         "approval state should expose Login Items settings"
     )
 }
 
-runner.test("ui: startup control forwards explicit preference changes") {
+runner.test("ui: startup switch uses AppKit target-action for a missing registration") {
     let controller = PopoverViewController()
     _ = controller.view
     var requested: Bool?
-    var openedSettings = false
     controller.onLaunchAtLoginChange = { requested = $0 }
-    controller.onOpenLoginSettings = { openedSettings = true }
+    controller.applyLaunchAtLogin(
+        LaunchAtLoginPresentation(
+            status: .notFound,
+            desiredEnabled: false,
+            isToggleEnabled: true
+        )
+    )
 
-    controller.startupModeView.toggleForTesting(true)
+    runner.equal(controller.startupModeView.isLaunchAtLoginToggleEnabled, true)
+    controller.startupModeView.activateLaunchAtLoginToggleForTesting()
     runner.equal(requested, true)
+}
+
+runner.test("ui: unavailable startup switch ignores AppKit clicks") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    var requested: Bool?
+    controller.onLaunchAtLoginChange = { requested = $0 }
+    controller.applyLaunchAtLogin(
+        LaunchAtLoginPresentation(
+            status: .unavailable,
+            desiredEnabled: false,
+            isToggleEnabled: false
+        )
+    )
+
+    runner.equal(controller.startupModeView.isLaunchAtLoginToggleEnabled, false)
+    controller.startupModeView.activateLaunchAtLoginToggleForTesting()
+    runner.isNil(requested, "a disabled NSSwitch must not dispatch its action")
+}
+
+runner.test("ui: approval disables startup switch and forwards settings") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    var openedSettings = false
+    controller.onOpenLoginSettings = { openedSettings = true }
+    controller.applyLaunchAtLogin(
+        LaunchAtLoginPresentation(
+            status: .requiresApproval,
+            desiredEnabled: true,
+            isToggleEnabled: false
+        )
+    )
+
+    runner.equal(controller.startupModeView.isLaunchAtLoginToggleEnabled, false)
+    runner.equal(controller.startupModeView.showsSettingsButton, true)
     controller.startupModeView.onOpenSettings?()
     runner.equal(openedSettings, true)
 }

@@ -5,21 +5,25 @@ public enum LaunchAtLoginStatus: String, Equatable, Sendable {
     case enabled
     case disabled
     case requiresApproval
+    case notFound
     case unavailable
 }
 
 public struct LaunchAtLoginPresentation: Equatable, Sendable {
     public let status: LaunchAtLoginStatus
     public let desiredEnabled: Bool
+    public let isToggleEnabled: Bool
     public let errorMessage: String?
 
     public init(
         status: LaunchAtLoginStatus,
         desiredEnabled: Bool,
+        isToggleEnabled: Bool,
         errorMessage: String? = nil
     ) {
         self.status = status
         self.desiredEnabled = desiredEnabled
+        self.isToggleEnabled = isToggleEnabled
         self.errorMessage = errorMessage
     }
 
@@ -119,7 +123,7 @@ public final class SystemLaunchAtLoginService: LaunchAtLoginServicing {
         case .enabled: return .enabled
         case .notRegistered: return .disabled
         case .requiresApproval: return .requiresApproval
-        case .notFound: return .unavailable
+        case .notFound: return .notFound
         @unknown default: return .unavailable
         }
     }
@@ -156,6 +160,7 @@ public final class LaunchAtLoginController {
             return LaunchAtLoginPresentation(
                 status: .unavailable,
                 desiredEnabled: preferences.desiredEnabled ?? true,
+                isToggleEnabled: false,
                 errorMessage: "Move CodexCommander to Applications or use its repository build."
             )
         }
@@ -181,9 +186,9 @@ public final class LaunchAtLoginController {
                     try unregisterUnlessConverged()
                     try registerUnlessConverged()
                 }
-            case .disabled, .unavailable:
+            case .disabled, .notFound:
                 try registerUnlessConverged()
-            case .requiresApproval:
+            case .requiresApproval, .unavailable:
                 break
             }
             if service.status == .enabled {
@@ -204,27 +209,44 @@ public final class LaunchAtLoginController {
         guard registrationAllowed else {
             return LaunchAtLoginPresentation(
                 status: .unavailable,
-                desiredEnabled: preferences.desiredEnabled ?? enabled,
+                desiredEnabled: preferences.desiredEnabled ?? false,
+                isToggleEnabled: false,
                 errorMessage: "Move CodexCommander to Applications or use its repository build."
             )
         }
-        preferences.desiredEnabled = enabled
+        let previousDesiredEnabled = preferences.desiredEnabled
+        let previousFingerprint = preferences.registeredExecutableFingerprint
         do {
             if enabled {
-                if service.status != .enabled && service.status != .requiresApproval {
+                switch service.status {
+                case .disabled, .notFound:
                     try registerUnlessConverged()
+                case .enabled, .requiresApproval:
+                    break
+                case .unavailable:
+                    throw LaunchAtLoginTransitionError.unavailable
                 }
+                guard service.status == .enabled || service.status == .requiresApproval else {
+                    throw LaunchAtLoginTransitionError.didNotConverge
+                }
+                preferences.desiredEnabled = true
                 if service.status == .enabled {
                     preferences.registeredExecutableFingerprint = executableFingerprint
                 }
             } else {
-                if service.status != .disabled {
+                if service.status != .disabled && service.status != .notFound {
                     try unregisterUnlessConverged()
                 }
+                guard service.status == .disabled || service.status == .notFound else {
+                    throw LaunchAtLoginTransitionError.didNotConverge
+                }
+                preferences.desiredEnabled = false
                 preferences.registeredExecutableFingerprint = nil
             }
             return presentation()
         } catch {
+            preferences.desiredEnabled = previousDesiredEnabled
+            preferences.registeredExecutableFingerprint = previousFingerprint
             return presentation(error: "CodexCommander could not update Launch at Login.")
         }
     }
@@ -236,6 +258,7 @@ public final class LaunchAtLoginController {
             return LaunchAtLoginPresentation(
                 status: .unavailable,
                 desiredEnabled: preferences.desiredEnabled ?? true,
+                isToggleEnabled: false,
                 errorMessage: "Move CodexCommander to Applications or use its repository build."
             )
         }
@@ -257,17 +280,24 @@ public final class LaunchAtLoginController {
     private func unregisterUnlessConverged() throws {
         do { try service.unregister() }
         catch {
-            if service.status != .disabled { throw error }
+            if service.status != .disabled && service.status != .notFound { throw error }
         }
     }
 
     private func presentation(error: String? = nil) -> LaunchAtLoginPresentation {
-        LaunchAtLoginPresentation(
-            status: service.status,
+        let status = service.status
+        return LaunchAtLoginPresentation(
+            status: status,
             desiredEnabled: preferences.desiredEnabled ?? false,
-            errorMessage: error
+            isToggleEnabled: status == .enabled || status == .disabled || status == .notFound,
+            errorMessage: error ?? (status == .unavailable ? "Launch at Login is unavailable." : nil)
         )
     }
+}
+
+private enum LaunchAtLoginTransitionError: Error {
+    case didNotConverge
+    case unavailable
 }
 
 public enum ExecutableFingerprint {
