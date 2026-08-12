@@ -9,7 +9,14 @@ macOS 伴侣会在菜单栏中显示最有用的 CodexCommander 状态，同时�
 
 ## 安装
 
-目前没有已发布的 macOS 打包应用。请按照[从源代码构建](#从源代码构建)的步骤从现有检出目录运行。开发应用应保留在 `dist/macos/CodexCommander.app`，不要复制到 Application Support。
+下载同时支持 Intel Mac 和 Apple 芯片 Mac 的 **v0.1.0 通用预览版**：
+
+- [CodexCommander-0.1.0-macos-universal.zip](https://github.com/pavelhov/CodexCommander/releases/download/v0.1.0/CodexCommander-0.1.0-macos-universal.zip)
+- [SHA-256 校验和](https://github.com/pavelhov/CodexCommander/releases/download/v0.1.0/CodexCommander-0.1.0-macos-universal.zip.sha256)
+
+这是一个经过临时签名但未公证的预览版。解压 ZIP 文件，然后将 `CodexCommander.app` 移到“应用程序”文件夹。首次启动时，请按住 Control 键点按应用并选择“打开”。如果 macOS 仍然阻止启动，请前往“系统设置”→“隐私与安全性”→“仍要打开”。请勿停用 Gatekeeper。
+
+如需从源码构建，请参阅下方的[从源代码构建](#从源代码构建)。
 
 ## 启动模式
 

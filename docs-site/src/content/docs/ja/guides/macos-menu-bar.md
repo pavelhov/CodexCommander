@@ -9,7 +9,14 @@ macOS コンパニオンは、プロキシを置き換えたり Web ダッシュ
 
 ## インストール
 
-パッケージ済み macOS アプリは現在公開されていません。[ソースからビルド](#ソースからビルド)の手順で既存のチェックアウトから実行してください。開発アプリは `dist/macos/CodexCommander.app` に置き、Application Support へコピーしないでください。
+Intel Mac と Apple シリコンの両方に対応する **v0.1.0 ユニバーサル版プレビュー**をダウンロードします。
+
+- [CodexCommander-0.1.0-macos-universal.zip](https://github.com/pavelhov/CodexCommander/releases/download/v0.1.0/CodexCommander-0.1.0-macos-universal.zip)
+- [SHA-256 チェックサム](https://github.com/pavelhov/CodexCommander/releases/download/v0.1.0/CodexCommander-0.1.0-macos-universal.zip.sha256)
+
+これはアドホック署名済み・未公証のプレビュー版です。ZIP を展開し、`CodexCommander.app` を「アプリケーション」フォルダへ移動してください。初回起動時は Control キーを押しながらアプリをクリックし、「開く」を選択します。macOS に引き続きブロックされる場合は、「システム設定」→「プライバシーとセキュリティ」→「このまま開く」を選択してください。Gatekeeper は無効にしないでください。
+
+ソースからビルドする場合は、以下の[ソースからビルド](#ソースからビルド)を参照してください。
 
 ## 起動モード
 

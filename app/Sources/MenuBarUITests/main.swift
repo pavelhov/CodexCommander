@@ -485,6 +485,35 @@ runner.test("ui: no duplicate provider strip — accordion is the only provider 
     runner.equal(controller.quotaAccordion.providerIDs.count, Set(controller.quotaAccordion.providerIDs).count, "unique providers")
 }
 
+runner.test("ui: overflowing provider content fits the scroll viewport") {
+    let quotas = decodeQuotas("""
+    [
+      \(quotaJSON(provider: "openai", label: "ChatGPT", fiveHour: 38, weekly: 22)),
+      \(quotaJSON(provider: "kimi", label: "Kimi", fiveHour: 62, weekly: 38)),
+      \(quotaJSON(provider: "xai", label: "Grok", monthly: 41))
+    ]
+    """)
+    let controller = PopoverViewController()
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 387, height: 468),
+        styleMask: .borderless,
+        backing: .buffered,
+        defer: false
+    )
+    window.contentViewController = controller
+    window.orderFront(nil)
+    controller.apply(makeSnapshot(quotas: quotas))
+    controller.showCodexRouteSaved(.codexCommander)
+    controller.view.layoutSubtreeIfNeeded()
+
+    runner.expect(controller.hasVerticalScroller, "fixture should overflow vertically")
+    let expectedBodyWidth = controller.scrollContainerWidth - 18
+    runner.expect(
+        controller.scrollingBodyWidth <= expectedBodyWidth + 0.5,
+        "document width \(controller.scrollingBodyWidth) must preserve 18-point scroller clearance from \(controller.scrollContainerWidth)"
+    )
+}
+
 runner.test("ui: OpenCode Go renders published caps and honest local observation semantics") {
     let quotas = decodeQuotas("""
     [{"provider":"opencode-go","label":"OpenCode Go","source":"test","updatedAt":1,"quota":{"updatedAt":1,

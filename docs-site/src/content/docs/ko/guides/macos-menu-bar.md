@@ -9,7 +9,14 @@ CodexCommander 인스턴스와만 통신합니다.
 
 ## 설치
 
-패키징된 macOS 앱은 현재 게시되어 있지 않습니다. [소스에서 빌드](#소스에서-빌드)의 절차로 기존 체크아웃에서 실행하세요. 개발 앱은 `dist/macos/CodexCommander.app`에 두고 Application Support로 복사하지 마세요.
+Intel Mac과 Apple Silicon을 모두 지원하는 **v0.1.0 유니버설 미리 보기**를 다운로드하세요.
+
+- [CodexCommander-0.1.0-macos-universal.zip](https://github.com/pavelhov/CodexCommander/releases/download/v0.1.0/CodexCommander-0.1.0-macos-universal.zip)
+- [SHA-256 체크섬](https://github.com/pavelhov/CodexCommander/releases/download/v0.1.0/CodexCommander-0.1.0-macos-universal.zip.sha256)
+
+이 미리 보기 버전은 애드혹 서명되었지만 공증되지 않았습니다. ZIP 파일의 압축을 풀고 `CodexCommander.app`을 “응용 프로그램” 폴더로 옮기세요. 처음 실행할 때는 앱을 Control-클릭하고 “열기”를 선택하세요. macOS에서 계속 차단하면 “시스템 설정” → “개인정보 보호 및 보안” → “그래도 열기”를 선택하세요. Gatekeeper를 비활성화하지 마세요.
+
+소스에서 빌드하려면 아래의 [소스에서 빌드](#소스에서-빌드)를 따르세요.
 
 ## 시작 모드
 

@@ -166,6 +166,7 @@ public final class PopoverViewController: NSViewController {
         root.addSubview(column)
 
         let contentWidth = Theme.width - Theme.gutter * 2
+        let scrollingContentWidth = contentWidth - Theme.scrollbarClearance
         NSLayoutConstraint.activate([
             column.topAnchor.constraint(equalTo: root.topAnchor),
             column.leadingAnchor.constraint(equalTo: root.leadingAnchor),
@@ -179,7 +180,7 @@ public final class PopoverViewController: NSViewController {
             startupMode.widthAnchor.constraint(equalToConstant: contentWidth),
             footerActions.widthAnchor.constraint(equalToConstant: contentWidth),
             scrollView.widthAnchor.constraint(equalToConstant: contentWidth),
-            body.widthAnchor.constraint(equalToConstant: contentWidth),
+            body.widthAnchor.constraint(equalToConstant: scrollingContentWidth),
         ])
 
         let heightConstraint = scrollView.heightAnchor.constraint(equalToConstant: 320)
@@ -545,6 +546,15 @@ public final class PopoverViewController: NSViewController {
 
     package var quotaAccordion: ProviderQuotaAccordionView { quotas }
     package var activityView: AgentActivityView { activity }
+    package var scrollingBodyWidth: CGFloat {
+        view.layoutSubtreeIfNeeded()
+        return body.frame.width
+    }
+    package var scrollContainerWidth: CGFloat {
+        view.layoutSubtreeIfNeeded()
+        return scrollView.bounds.width
+    }
+    package var hasVerticalScroller: Bool { scrollView.hasVerticalScroller }
     package var headerView: StatusHeaderView { header }
     package var operationStatusView: OperationStatusView { operationStatus }
     package var startupModeView: StartupModeView { startupMode }

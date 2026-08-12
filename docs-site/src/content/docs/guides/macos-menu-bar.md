@@ -9,9 +9,16 @@ the CodexCommander instance running on the same Mac.
 
 ## Install
 
-No packaged macOS app is currently published. Build and run the companion from the existing source
-checkout using [Build from source](#build-from-source). Keep the development app at
-`dist/macos/CodexCommander.app`; do not copy it into Application Support.
+Download the **v0.1.0 universal macOS prerelease** for Intel and Apple silicon:
+
+- [CodexCommander-0.1.0-macos-universal.zip](https://github.com/pavelhov/CodexCommander/releases/download/v0.1.0/CodexCommander-0.1.0-macos-universal.zip)
+- [SHA-256 checksum](https://github.com/pavelhov/CodexCommander/releases/download/v0.1.0/CodexCommander-0.1.0-macos-universal.zip.sha256)
+
+This preview is ad-hoc signed and not notarized. Unzip it, move `CodexCommander.app` to Applications,
+then Control-click the app and choose **Open** on first launch. If macOS still blocks it, choose
+**System Settings → Privacy & Security → Open Anyway**. Do not disable Gatekeeper.
+
+To build from source instead, follow [Build from source](#build-from-source) below.
 
 ## Startup modes
 
