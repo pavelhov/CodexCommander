@@ -7,7 +7,11 @@
 | `bin/ccx.mjs` (launcher filename; reserved package bins are `codexcommander` / `ccx`) | Node launcher used by locally linked or packaged builds. Resolves the bundled or explicit Bun binary before project dotenv can load, stamps its runtime provenance plus a proof-bound Anthropic parent-env snapshot, then execs `src/cli/index.ts` under Bun. No registry package is currently published. |
 | `src/lib/bun-runtime.ts` | Bundled-Bun resolution: `isRealBunBinary()` (size gate vs the ~450-byte placeholder stub), `bundledBunPath()`, and `durableBunPath()` (path baked into service/shim artifacts). Durable selection accepts only the source/path pair already stamped for the running executable; it never re-reads a project-dotenv `CCX_BUN_PATH`. |
 | `src/cli/index.ts` | `ccx` / `codexcommander` CLI. Lifecycle: init, start, stop, restart, status, sync, restore/eject, gui, and service. Configuration: provider, account, models, combo/route, access, integrations, v2. Diagnostics: doctor, debug, observe, health. Windows adds tray. The full command surface is `src/cli/help.ts`; this table names the groups, not every verb. After help/version early exits, ordinary commands run the bounded best-effort Codex-shim auto-restore policy before dispatch. Keeps the `#!/usr/bin/env bun` shebang for from-source dev (`bun run src/cli/index.ts`). |
+| `src/cli/foreground-proxy.ts` | Foreground proxy startup: parse/bind the requested port, initialize provider/catalog state, serve the proxy, and handle bounded shutdown signals. Ordinary starts enter through shared lifecycle authority; a managed service child uses its explicitly delegated parent boundary. |
+| `src/cli/service-command.ts` | Thin service lifecycle controller for install/create, repair, start, stop, status, and uninstall. It holds shared lifecycle authority across native restore, manager operations, delegated proxy shutdown, and final verification; `src/service.ts` remains the OS backend. |
 | `src/cli/macos-lifecycle.ts`, `src/cli/proxy-lifecycle.ts` | Fixed, bounded macOS companion lifecycle bridge and shared proxy ownership. Every built app invokes only its embedded `Contents/Resources/runtime`; it never executes checkout `src/` or a global-install fallback. The allowlist includes the separate `applyCodexCatalog` action; it is not an arbitrary shell-command bridge. |
+| `src/server/proxy-lifecycle-authority.ts`, `src/server/proxy-lifecycle-protocol.ts` | Canonical lifecycle serialization and its narrow delegated HTTP proof. Authority always acquires Ensure (`E`) before Start (`S`), releases `S` before `E`, and retains `E` while Stop checks for an uncontrolled respawn. The protocol forwards only the exact current lease to the proxy being stopped. |
+| `src/codex/routing-document.ts`, `src/codex/native-routing-escape.ts`, `src/codex/routing-transition.ts` | Parse/classify Codex routing once, perform the config-only marker-owned native escape, and own explicit OFF→ON routing transitions. Native escape never consults the recovery journal or transition database; explicit Start/Route Back retires an existing journal only when coordinated stale-owner/surface proof succeeds. |
 | `src/server/index.ts` | Bun server entrypoint: `startServer`, `/v1/responses` HTTP + WebSocket routing (compact handled before generic Responses), exact `POST /v1/images/generations` and `POST /v1/images/edits` routing, `/v1/models`, the Anthropic-shaped `/v1/messages` and OpenAI-shaped `/v1/chat/completions` compatibility surfaces, the Live/Realtime surface, the hosted-search relay, artifact serving, `/healthz`, the `/api/*` auth gate, the `/v1/*` JSON 404 guard, GUI fallback, and facade re-exports for split server modules. |
 | `src/server/images.ts` | Standalone Images data plane: default OpenAI or explicit custom-provider selection, Codex account affinity, bounded opaque request relay, single-attempt upstream fetch, pool health recording, and safe response/cancellation relay. |
 | `src/config.ts` | `~/.codexcommander/config.json`, defaults, PID path, env-value resolution, `websocketsEnabled()`. |
@@ -43,10 +47,12 @@ their own files.
 
 ## Lifecycle
 
-`ccx start` refuses a duplicate PID, starts the proxy, writes `~/.codexcommander/codexcommander.pid`, syncs Codex
-config/catalog, then serves until shutdown. Normal shutdown restores native Codex. Service mode sets
-`CCX_SERVICE=1`, so managed restarts do not repeatedly restore/reinject; explicit service stop and
-uninstall still restore.
+Explicit starts (`ccx start`, companion Start, and service create/`install`/`repair`/`start`) enable
+Codex integration, refuse a duplicate PID, start the proxy, write
+`~/.codexcommander/codexcommander.pid`, and sync Codex config/catalog. Automatic `ensure` preserves an
+intentional OFF state. Normal standalone shutdown restores native routing. Service mode sets
+`CCX_SERVICE=1`, so manager restarts preserve the current route; explicit service stop and uninstall
+restore and verify native routing before terminating anything.
 
 An installed Codex shim is checked on ordinary CLI startup with a regular-file/1 MiB state bound plus
 bounded metadata and prefix reads. A complete replacement must produce identical fingerprints and
@@ -69,8 +75,15 @@ On `error` / incomplete / stall / EOF — and when assembled non-freeform tool a
 an open tool call is cancelled as `status: "incomplete"` without `function_call_arguments.done`, so
 the client never sees a completed call ahead of `response.failed` / `response.incomplete`.
 
-The server exposes `POST /api/stop` which restores native Codex config, stops any installed service
-(to prevent respawn), and exits the process. The GUI sidebar stop button calls this endpoint.
+The server exposes `POST /api/stop`, which first takes shared lifecycle authority, persists Codex
+integration OFF, and applies and verifies the config-only native-routing escape before exiting an
+unsupervised proxy. A raw request refuses with `409` when an installed supervisor owns the proxy; the
+CLI and tray Stop paths hold the same authority, restore native routing, stop the manager first, and
+then delegate the live process shutdown. A failed restore or verification returns `409` and leaves
+the service and proxy running.
+The escape removes only the proven marker-owned route, its owned catalog pointer, and the resulting
+proxy-only root `provider/model` selector; unrelated settings, tasks, history, and authentication stay
+untouched. The GUI sidebar stop button calls this endpoint.
 
 [Decision Log]
 - 목적과 의도: Prevent repository dotenv data from becoming a durable executable or an OAuth-bearing Claude destination.
@@ -82,9 +95,13 @@ The server exposes `POST /api/stop` which restores native Codex config, stops an
 
 The macOS companion starts with an `ensure` attempt when Finder opens it. A failed or offline start
 must leave the menu app alive with its status/Start controls available; it cannot self-terminate just
-because the proxy is unavailable. Its **Quit** action terminates only the AppKit process. **Stop** and
-**Restart** are explicit, confirmation-gated proxy actions; Stop restores native Codex and keeps the
-menu app open, while Restart reports success only after it observes a replacement proxy identity.
+because the proxy is unavailable. Its **Quit** action terminates only the AppKit process. Explicit
+**Start** enables Codex routing through the proxy. **Stop** restores and verifies native routing before
+termination and keeps the menu app open. **Restart** runs the canonical stop→start transaction: it
+restores native routing before terminating the old proxy, then its explicit Start phase launches the
+replacement and routes Codex back through it. A failed restart leaves Codex native.
+**Restore Native Codex** and **Route Codex Through Proxy** change routing without changing proxy
+lifecycle.
 The main app is the default desktop Login Item; launchd remains an independent optional headless
 server supervisor. Login registration never changes provider, proxy, or service configuration.
 

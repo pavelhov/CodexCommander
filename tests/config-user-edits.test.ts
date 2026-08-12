@@ -87,6 +87,33 @@ test("an unrelated save does not clobber the hand edit", () => {
   expect(diskConfig().disabledModels).toEqual(["test/one"]);
 });
 
+test("an unrelated live save cannot resurrect stale Codex ON after Stop persisted OFF", () => {
+  const live = loadConfig();
+  armClaudeCodeBaseline(live);
+  writeDiskConfig({ clientIntegrations: { codex: false, grok: true } });
+
+  live.disabledModels = ["test/one"];
+  saveConfigPreservingClaudeCode(live);
+
+  expect(diskConfig().clientIntegrations).toEqual({ codex: false, grok: true });
+  expect(live.clientIntegrations).toEqual({ codex: false, grok: true });
+});
+
+test("a deliberate live Codex toggle still wins and rebases its integration baseline", () => {
+  const live = loadConfig();
+  armClaudeCodeBaseline(live);
+  writeDiskConfig({ clientIntegrations: { codex: false } });
+  live.clientIntegrations = { codex: true };
+
+  saveConfigPreservingClaudeCode(live);
+  expect(diskConfig().clientIntegrations).toEqual({ codex: true });
+
+  writeDiskConfig({ clientIntegrations: { codex: false, grok: false } });
+  live.disabledModels = ["test/two"];
+  saveConfigPreservingClaudeCode(live);
+  expect(diskConfig().clientIntegrations).toEqual({ codex: false, grok: false });
+});
+
 test("an unrelated save refuses to overwrite an invalid persisted subagent effort", () => {
   const live = loadConfig();
   armClaudeCodeBaseline(live);

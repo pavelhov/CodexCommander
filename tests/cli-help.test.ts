@@ -36,6 +36,16 @@ describe("CLI subcommand help", () => {
     expect(result.stdout).toContain("Start the proxy server and sync models to Codex.");
   });
 
+  test("init help describes proof-bound routing instead of direct config injection", () => {
+    for (const command of ["init", "setup"]) {
+      const result = runCli(["help", command]);
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("optionally route through a proven live proxy");
+      expect(result.stdout).not.toContain("Codex config injection");
+    }
+  });
+
   test("top-level help forms exit before Codex shim auto-restore can mutate launchers", () => {
     const codexCommanderHome = mkdtempSync(join(tmpdir(), "ccx-help-shim-home-"));
     const binDir = mkdtempSync(join(tmpdir(), "ccx-help-shim-bin-"));

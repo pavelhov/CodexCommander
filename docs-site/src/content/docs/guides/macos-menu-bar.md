@@ -26,8 +26,9 @@ The panel has one **Launch at Login** switch and reports the resulting mode:
 
 The visible app and background server remain separate internally. With the CodexCommander panel active,
 **Quit Menu Bar** (`⌘Q`) closes only the companion UI and deliberately leaves routing active.
-**Stop CodexCommander and Quit…** (`⌥⌘Q`) is the explicit destructive exit: after confirmation, it stops
-the proxy and service, restores native Codex routing, and closes the companion only after the stop is verified. macOS may
+**Stop CodexCommander and Quit…** (`⌥⌘Q`) is the explicit destructive exit: after confirmation, it
+restores native Codex routing, stops the proxy and service, and closes the companion only after the
+stop is verified. macOS may
 therefore list CodexCommander under both **Open at Login** and **Allow in the Background**; those are two
 responsibilities of one installation, not duplicate app copies. Turning off Launch at Login never
 installs, removes, starts, or stops the background service.
@@ -71,17 +72,28 @@ override it.
   workers still hold an older model roster. The CodexCommander proxy remains healthy and running.
 - **Show restart steps…** — explains the recommended reload boundary: quit ChatGPT completely, reopen
   it, and then start a new task. The menu app does not force-restart background workers from this card.
-- **Stop Proxy…** — always asks for confirmation, interrupts active client and sub-agent requests,
-  restores native Codex, and leaves the menu app open.
-- **Restart Proxy…** — always asks for confirmation, lets the proxy drain active requests for up to 60
-  seconds, then reconnects to the replacement process. Accepting the restart request is not
-  presented as completion; the app waits until the new process passes identity checks.
+- **Start Proxy** — starts or attaches to the proxy, then routes Codex through the live endpoint.
+- **Stop Proxy…** — always asks for confirmation and restores native Codex routing before it stops the
+  proxy. If the native route cannot be verified, the proxy and service stay running. The menu app stays open.
+- **Restart Proxy…** — always asks for confirmation and runs the same safe stop→start transaction as
+  the CLI. It restores native routing before terminating the old proxy, then its explicit Start phase
+  launches the replacement and routes Codex back through it. If restart fails, Codex remains native.
+- **Restore Native Codex** — switches Codex back to native OpenAI routing without stopping the proxy.
+- **Route Codex Through Proxy** — points Codex at an already-running CodexCommander proxy without
+  restarting it.
 - **Quit Menu Bar** — closes the companion UI only. It does not stop the proxy, service, or client
   routing. With the panel active, this is the safe `⌘Q` action.
-- **Stop CodexCommander and Quit…** — confirms the interruption, stops the background proxy and service,
-  restores native Codex routing, and quits only after the stopped state is confirmed. If stopping
-  fails, the companion stays open and reports the error. With the panel active, its shortcut is
-  `⌥⌘Q`.
+- **Stop CodexCommander and Quit…** — confirms the interruption, first restores native Codex routing,
+  then stops the background proxy and service and quits only after the stopped state is confirmed. If
+  stopping fails, the companion stays open and reports the error. With the panel active, its shortcut
+  is `⌥⌘Q`.
+
+The native escape is deliberately narrow: it removes only CodexCommander's marker-owned routing and
+owned catalog pointer from <code>$CODEX_HOME/config.toml</code>. After proving that exact route, it also
+clears the proxy-only root <code>provider/model</code> selector. Every unrelated setting remains
+byte-for-byte unchanged. It does not change Codex tasks, history, authentication, or the proxy process,
+and needs neither a repair command nor a coordinator database. Generated catalogs and caches may remain
+on disk, but native Codex no longer references them.
 
 ChatGPT appears first and expanded when its quota report is available. Kimi and Grok appear as
 collapsed summaries. A configured quota-capable provider that returns no report stays visible as

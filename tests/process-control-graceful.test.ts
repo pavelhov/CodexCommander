@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { gracefulStopHost, stopProxyGracefully } from "../src/lib/process-control";
+import {
+  PROXY_ENSURE_LEASE_HEADER,
+  PROXY_START_LEASE_HEADER,
+} from "../src/server/proxy-lifecycle-protocol";
 
 function okResponse(): Response {
   return new Response(JSON.stringify({ success: true }), { status: 200 });
@@ -13,6 +17,7 @@ function attestedStop(pid: number, port: number, hostname?: string) {
       hostname,
       source: "runtime" as const,
       baseUrl: `http://${hostname === "::1" ? "[::1]" : hostname ?? "127.0.0.1"}:${port}`,
+      lifecycleLockLeaseV1: true,
     }),
   };
 }
@@ -83,6 +88,41 @@ describe("stopProxyGracefully", () => {
     });
 
     expect(headers?.["x-codexcommander-api-key"]).toBe("admin-secret");
+  });
+
+  test("forwards both lifecycle tokens only to a capable attested proxy", async () => {
+    let headers: Record<string, string> | undefined;
+    const lease = { ensureToken: "ensure-secret", startToken: "start-secret" };
+    const result = await stopProxyGracefully(1, {
+      ...attestedStop(1, 10100),
+      lifecycleLease: lease,
+      readRuntime: () => ({ port: 10100 }),
+      fetchFn: (async (_url: string | URL | Request, init?: RequestInit) => {
+        headers = init?.headers as Record<string, string>;
+        return okResponse();
+      }) as typeof fetch,
+      waitExit: () => true,
+      env: {},
+    });
+    expect(result).toBe(true);
+    expect(headers?.[PROXY_ENSURE_LEASE_HEADER]).toBe(lease.ensureToken);
+    expect(headers?.[PROXY_START_LEASE_HEADER]).toBe(lease.startToken);
+
+    let posts = 0;
+    const oldProxyResult = await stopProxyGracefully(1, {
+      ...attestedStop(1, 10100),
+      attestLiveManagementProxyImpl: async () => ({
+        ...(await attestedStop(1, 10100).attestLiveManagementProxyImpl()),
+        lifecycleLockLeaseV1: false,
+      }),
+      lifecycleLease: lease,
+      readRuntime: () => ({ port: 10100 }),
+      fetchFn: (async () => { posts += 1; return okResponse(); }) as typeof fetch,
+      waitExit: () => true,
+      env: {},
+    });
+    expect(oldProxyResult).toBe(false);
+    expect(posts).toBe(0);
   });
 
   test("returns false when no runtime port is recorded (caller falls back to killProxy)", async () => {

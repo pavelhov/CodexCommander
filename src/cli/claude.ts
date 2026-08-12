@@ -14,7 +14,6 @@ import { refreshGatewayModelCacheFromProxy } from "../claude/gateway-cache";
 import { commandInvocation } from "../lib/win-exec";
 import {
   attestLiveManagementProxy,
-  findLiveProxy,
   type AttestedLiveManagementProxy,
   type ManagementAttestationIo,
 } from "../server/proxy-liveness";
@@ -23,8 +22,8 @@ import { configuredAdminToken } from "../lib/admin-secrets";
 import { API_KEY_HEADER } from "../identity";
 import { PROXY_MARKER, isProxyMarker, ownAdmissionTokens, defaultAuthDetectDeps, detectClaudeAuth, type AuthDetectDeps } from "../claude/auth-detect";
 import { resolveClaudeAuthMode } from "../claude/auth-mode";
-import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { ANTHROPIC_PARENT_ENV_SLOTS, NODE_LAUNCH_CONTEXT_ENV, trustedNodeLauncherContext, type AnthropicParentEnvSlot } from "./launcher-context";
+import { ensureProxyLifecycle } from "./proxy-lifecycle";
 
 export interface ClaudeLaunchEnv {
   [key: string]: string | undefined;
@@ -210,27 +209,33 @@ export async function fetchClaudeContextWindows(
   }
 }
 
-async function ensureProxyForClaude(): Promise<AttestedLiveManagementProxy | null> {
-  const attested = await attestLiveManagementProxy();
-  if (attested) return attested;
-  // A lookalike/unattested listener must not receive the Claude launch token.
-  if (await findLiveProxy()) return null;
-  const cfgPort = loadConfig().port;
-  const pinPort = typeof cfgPort === "number" && cfgPort > 0 ? cfgPort : 10100;
-  const child = spawn(process.execPath, [process.argv[1], "start", "--port", String(pinPort)], {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
-    env: withProcessRuntimeProvenance({ ...process.env, CCX_SERVICE: "1" }),
+export interface ClaudeProxyEnsureDeps {
+  ensureLifecycle?: typeof ensureProxyLifecycle;
+  attestLive?: typeof attestLiveManagementProxy;
+}
+
+export async function ensureProxyForClaude(
+  deps: ClaudeProxyEnsureDeps = {},
+): Promise<AttestedLiveManagementProxy | null> {
+  // Claude needs the proxy even when Codex autostart is disabled, but it must not
+  // turn Codex routing back on. The canonical Ensure path owns lifecycle authority
+  // across discovery, service/direct start, readiness, and convergence, so Stop
+  // cannot finish while this command still has a detached start in flight.
+  const ensured = await (deps.ensureLifecycle ?? ensureProxyLifecycle)({
+    honorAutoStart: false,
+    ensureCompanion: false,
   });
-  child.unref();
-  const deadline = Date.now() + 8_000;
-  while (Date.now() < deadline) {
-    const started = await attestLiveManagementProxy();
-    if (started) return started;
-    await new Promise(resolve => setTimeout(resolve, 250));
-  }
-  return null;
+  if (!ensured.ok || ensured.state !== "running" || ensured.port === null) return null;
+
+  // A lookalike listener must not receive Claude credentials. Bind attestation to
+  // the lifecycle result's PID when one was available, and always to its live port.
+  const target = await (deps.attestLive ?? attestLiveManagementProxy)({
+    ...(ensured.pid === null ? {} : { expectedPid: ensured.pid }),
+  });
+  if (!target
+    || target.port !== ensured.port
+    || (ensured.pid !== null && target.pid !== ensured.pid)) return null;
+  return target;
 }
 
 const CLAUDE_INSTALL_HINT = "❌ `claude` CLI not found. Install it first: npm install -g @anthropic-ai/claude-code";

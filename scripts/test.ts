@@ -2,7 +2,11 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-export const DEFAULT_TEST_SHARD_SIZE = 60;
+// Bun 1.3.x on macOS can leave its event loop spinning after a server-heavy test
+// file completes, preventing the next file in the same process from starting.
+// A fresh process per file keeps the full suite deterministic across file-order
+// changes. CI and local runs can still opt into larger shards explicitly.
+export const DEFAULT_TEST_SHARD_SIZE = 1;
 
 const BUN_TEST_FILE_PATTERN = /(?:\.test|_test|\.spec|_spec)\.(?:js|jsx|ts|tsx)$/;
 

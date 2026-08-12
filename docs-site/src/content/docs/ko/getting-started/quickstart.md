@@ -17,7 +17,7 @@ ccx init
 2. **API 키** — 키를 붙여넣거나 `${ANTHROPIC_API_KEY}` 같은 환경 변수를 참조합니다.
 3. **기본 모델** — 키, 로컬, custom 프로바이더에서는 프리셋을 그대로 쓰거나 모델 ID를 직접 입력합니다.
 4. **프록시 포트** — 기본값은 `10100`입니다.
-5. **Codex에 주입할까요?** — 일반적인 루프백 구성에서는 CodexCommander가 `$CODEX_HOME/config.toml`의 루트(`~/.codex/config.toml`이 기본값)에 `openai_base_url`을 추가해 Codex의 내장 `openai` 프로바이더가 프록시를 바라보게 합니다. 원격/LAN 바인딩에서는 API 인증 헤더를 포함한 전용 프로바이더 항목을 대신 사용합니다.
+5. **실행 중인 프록시를 통해 Codex를 라우팅할까요?** — 보호된 current-home runtime record로 실행 중 프록시가 확인된 경우에만 모델을 동기화하고 Codex를 그 프록시로 향하게 합니다. 확인되지 않으면 Codex는 네이티브 상태로 남고 다음 단계의 명시적 `ccx start`가 프록시를 시작하고 라우팅합니다.
 6. **자동 시작 shim을 설치할까요?** — 켜 두면 `codex`를 실행할 때 먼저 `ccx ensure`가 실행됩니다.
 
 결과는 `$CODEXCOMMANDER_HOME/config.json`(기본값 `~/.codexcommander/config.json`)에 저장됩니다.

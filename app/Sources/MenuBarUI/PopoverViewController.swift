@@ -16,6 +16,8 @@ public final class PopoverViewController: NSViewController {
     private let refreshButton = NSButton()
     private let lifecycleButton = NSButton()
     private let restartButton = NSButton()
+    private let restoreNativeButton = NSButton()
+    private let routeThroughProxyButton = NSButton()
     private let quitMenuBarButton = NSButton()
     private let stopAndQuitButton = NSButton()
     private let startupMode = StartupModeView()
@@ -48,6 +50,8 @@ public final class PopoverViewController: NSViewController {
     public var onStart: (() -> Void)?
     public var onStop: (() -> Void)?
     public var onRestart: (() -> Void)?
+    public var onRestoreNativeCodex: (() -> Void)?
+    public var onRouteCodexThroughProxy: (() -> Void)?
     public var onApplyCodexCatalog: (() -> Void)?
     public var onOpenStartupOptions: (() -> Void)?
     public var onQuitMenuBar: (() -> Void)?
@@ -125,6 +129,13 @@ public final class PopoverViewController: NSViewController {
         lifecycleActions.spacing = Theme.rowGap
         lifecycleActions.alignment = .centerY
 
+        let codexRouteActions = NSStackView(views: [
+            restoreNativeButton, routeThroughProxyButton, NSView()
+        ])
+        codexRouteActions.orientation = .horizontal
+        codexRouteActions.spacing = Theme.rowGap
+        codexRouteActions.alignment = .centerY
+
         let exitActions = NSStackView(views: [
             quitMenuBarButton, NSView(), stopAndQuitButton
         ])
@@ -132,7 +143,10 @@ public final class PopoverViewController: NSViewController {
         exitActions.spacing = Theme.rowGap
         exitActions.alignment = .centerY
 
-        footerActions.setViews([navigationActions, lifecycleActions, exitActions], in: .top)
+        footerActions.setViews(
+            [navigationActions, lifecycleActions, codexRouteActions, exitActions],
+            in: .top
+        )
         footerActions.orientation = .vertical
         footerActions.spacing = 5
         footerActions.alignment = .leading
@@ -184,6 +198,16 @@ public final class PopoverViewController: NSViewController {
         styleFooterButton(startupOptionsButton, title: "Startup options…", symbol: "gearshape.2")
         styleFooterButton(lifecycleButton, title: "Start Proxy", symbol: "play.fill")
         styleFooterButton(restartButton, title: "Restart Proxy…", symbol: "power")
+        styleFooterButton(
+            restoreNativeButton,
+            title: "Restore Native Codex",
+            symbol: "arrow.uturn.backward.circle"
+        )
+        styleFooterButton(
+            routeThroughProxyButton,
+            title: "Route Codex Through Proxy",
+            symbol: "arrow.triangle.2.circlepath"
+        )
         styleFooterButton(quitMenuBarButton, title: "Quit Menu Bar", symbol: "xmark.circle")
         styleFooterButton(
             stopAndQuitButton,
@@ -198,6 +222,8 @@ public final class PopoverViewController: NSViewController {
         startupOptionsButton.action = #selector(startupOptionsTapped)
         lifecycleButton.action = #selector(lifecycleTapped)
         restartButton.action = #selector(restartTapped)
+        restoreNativeButton.action = #selector(restoreNativeTapped)
+        routeThroughProxyButton.action = #selector(routeThroughProxyTapped)
         quitMenuBarButton.action = #selector(quitMenuBarTapped)
         stopAndQuitButton.action = #selector(stopAndQuitTapped)
 
@@ -212,6 +238,10 @@ public final class PopoverViewController: NSViewController {
         startupOptionsButton.setAccessibilityLabel("Open startup options in the dashboard")
         lifecycleButton.setAccessibilityLabel("Start CodexCommander proxy")
         restartButton.setAccessibilityLabel("Restart CodexCommander proxy")
+        restoreNativeButton.setAccessibilityLabel("Restore Codex to its native OpenAI route")
+        routeThroughProxyButton.setAccessibilityLabel(
+            "Route Codex through the CodexCommander proxy"
+        )
         quitMenuBarButton.setAccessibilityLabel(
             "Quit the CodexCommander menu bar app and leave the proxy running"
         )
@@ -301,12 +331,16 @@ public final class PopoverViewController: NSViewController {
         lifecycleControlsAllowed = enabled
         lifecycleButton.isEnabled = enabled && snapshot.map { lifecycleActionable($0.state) } == true
         restartButton.isEnabled = enabled && snapshot?.state.isRunning == true
+        restoreNativeButton.isEnabled = enabled
+        routeThroughProxyButton.isEnabled = enabled
         stopAndQuitButton.isEnabled = LifecycleActionAvailability.canStopAndQuit(
             state: snapshot?.state,
             controlsAllowed: enabled
         )
         lifecycleButton.alphaValue = lifecycleButton.isEnabled ? 1 : 0.45
         restartButton.alphaValue = restartButton.isEnabled ? 1 : 0.45
+        restoreNativeButton.alphaValue = restoreNativeButton.isEnabled ? 1 : 0.45
+        routeThroughProxyButton.alphaValue = routeThroughProxyButton.isEnabled ? 1 : 0.45
         stopAndQuitButton.alphaValue = stopAndQuitButton.isEnabled ? 1 : 0.45
     }
 
@@ -361,6 +395,10 @@ public final class PopoverViewController: NSViewController {
         lifecycleButton.alphaValue = lifecycleButton.isEnabled ? 1 : 0.45
         restartButton.isEnabled = lifecycleControlsAllowed && snapshot.state.isRunning
         restartButton.alphaValue = restartButton.isEnabled ? 1 : 0.45
+        restoreNativeButton.isEnabled = lifecycleControlsAllowed
+        restoreNativeButton.alphaValue = restoreNativeButton.isEnabled ? 1 : 0.45
+        routeThroughProxyButton.isEnabled = lifecycleControlsAllowed
+        routeThroughProxyButton.alphaValue = routeThroughProxyButton.isEnabled ? 1 : 0.45
         quitMenuBarButton.isEnabled = true
         stopAndQuitButton.isEnabled = LifecycleActionAvailability.canStopAndQuit(
             state: snapshot.state,
@@ -402,6 +440,8 @@ public final class PopoverViewController: NSViewController {
         else if state == .unreachable { onStart?() }
     }
     @objc private func restartTapped() { onRestart?() }
+    @objc private func restoreNativeTapped() { onRestoreNativeCodex?() }
+    @objc private func routeThroughProxyTapped() { onRouteCodexThroughProxy?() }
     @objc private func quitMenuBarTapped() { onQuitMenuBar?() }
     @objc private func stopAndQuitTapped() { onStopAndQuit?() }
 
@@ -470,6 +510,8 @@ public final class PopoverViewController: NSViewController {
             refreshButton.title,
             lifecycleButton.title,
             restartButton.title,
+            restoreNativeButton.title,
+            routeThroughProxyButton.title,
             quitMenuBarButton.title,
             stopAndQuitButton.title,
         ]
@@ -494,6 +536,8 @@ public final class PopoverViewController: NSViewController {
             refreshButton,
             lifecycleButton,
             restartButton,
+            restoreNativeButton,
+            routeThroughProxyButton,
             quitMenuBarButton,
             stopAndQuitButton,
         ]

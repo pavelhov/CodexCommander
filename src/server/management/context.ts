@@ -22,8 +22,32 @@ import type {
 import type { ReadinessGate } from "../readiness";
 import type { CodexRoutingKind } from "../../codex/inject";
 import type { reconcileManagementNativeSubagentDefaults } from "../../codex/management-native-defaults";
+import type {
+  AcquireProxyLifecycleAuthorityOptions,
+  ProxyLifecycleAuthority,
+} from "../proxy-lifecycle-authority";
+import type { ProxyLifecycleLockLease } from "../proxy-lifecycle-protocol";
 
 export interface ManagementApiDeps {
+  /** Shared lifecycle seams for Stop, native routing, and full-sync serialization tests. */
+  proxyStopLifecycle?: {
+    acquireAuthority?: (
+      options?: AcquireProxyLifecycleAuthorityOptions,
+    ) => Promise<ProxyLifecycleAuthority>;
+    validateLease?: (lease: ProxyLifecycleLockLease) => boolean;
+    prepareShutdown?: (options?: {
+      allowInstalledServiceStop?: boolean;
+      serviceAlreadyStopped?: boolean;
+    }) => {
+      accepted: boolean;
+      status: 200 | 409;
+      success: boolean;
+      message: string;
+    };
+    drain?: (server: undefined, timeoutMs: number) => Promise<void>;
+    schedule?: (callback: () => void | Promise<void>, delayMs: number) => unknown;
+    exit?: (code: number) => never | void;
+  };
   resolveCodexRuntime?: () => ResolveCodexRuntimeResult;
   getCachedStartupHealth?: (config: Pick<CodexCommanderConfig, "codexAutoStart">) => Promise<StartupHealth>;
   toggleCodexMultiAgentV2?: (enabled: boolean) => void;

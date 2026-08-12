@@ -24,11 +24,11 @@ package enum LifecycleConfirmation {
     package var informativeText: String {
         switch self {
         case .stopProxy:
-            return "Active Codex, Claude, OpenCode, and subagent requests will be interrupted. The menu bar app will stay open."
+            return "Fully quit ChatGPT and Codex before stopping to avoid interrupted work or a cached old endpoint. Reopen them afterward to use native routing. The menu bar app will stay open."
         case .restartProxy:
-            return "Active turns will drain, then CodexCommander will come back on the same port."
+            return "CodexCommander will stop safely and start again on the same port. Active work may be interrupted."
         case .stopAndQuit:
-            return "The background proxy will stop, along with any installed CodexCommander service. Active Codex, Claude, OpenCode, and subagent requests may be interrupted, and Codex will use native routing until CodexCommander is started again."
+            return "Fully quit ChatGPT and Codex before stopping to avoid interrupted work or a cached old endpoint. Reopen them afterward to use native routing. The proxy and any installed service will stop."
         }
     }
 
@@ -59,6 +59,11 @@ package enum LifecycleConfirmation {
         alert.window.initialFirstResponder = cancel
         return alert
     }
+}
+
+package enum LifecycleResultMessage {
+    package static let proxyStopped =
+        "Proxy stopped. Fully quit ChatGPT and Codex if still open, then reopen them to use native routing."
 }
 
 /// Fresh activity evidence used only to explain the risk of applying a catalog update.

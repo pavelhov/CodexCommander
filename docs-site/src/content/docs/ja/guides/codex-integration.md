@@ -9,7 +9,7 @@ CodexCommander は、Codex が読み取る 2 つの内容 (構成 (`$CODEX_HOME/
 
 ## 設定の注入
 
-`ccx init`、`ccx start`、および `ccx sync` はインジェクターを呼び出します。デフォルトのループバック バインドでは、Codex の組み込み `openai` プロバイダー ID を保持し、そのプロバイダーを CodexCommander にポイントします。
+`ccx start` と `ccx sync` はインジェクターを呼び出します。`ccx init` は、保護された current-home runtime record で確認済みの実行中プロキシを経由する場合にだけ同じ処理へ入り、それ以外では明示的な Start まで Codex をネイティブのままにします。デフォルトのループバック バインドでは、Codex の組み込み `openai` プロバイダー ID を保持し、そのプロバイダーを CodexCommander にポイントします。
 
 ```toml
 # root keys, before the first table
@@ -205,7 +205,7 @@ ChatGPT アカウントが Codex アカウント プールに追加されると�
 
 ## ネイティブ Codexの復元
 
-CodexCommander は決してあなたを罠にはめることはありません。 **`ccx stop` は、ネイティブ Codex に完全に戻す単一のコマンドです**。プロキシを停止し、バックグラウンド サービスがインストールされている場合はそれを停止し、挿入されたすべての行とルーティングされたカタログ エントリを削除するため、プレーンな `codex` は、CodexCommander が存在しなかったかのように正確に動作します。
+CodexCommander はユーザーを閉じ込めません。**`ccx stop` は Codex を安全にネイティブルーティングへ戻し、その後 CodexCommander を停止する単一のコマンドです。** 統合を OFF として保存し、`$CODEX_HOME/config.toml` から CodexCommander が所有する正確なルートだけを削除してネイティブルーティングを検証した後、バックグラウンドサービスとプロキシを停止します。検証に失敗した場合は両方とも実行を続けます。タスク、履歴、rollout、認証には触れません。生成済みカタログやキャッシュは残ることがありますが、ネイティブ Codex からは参照されません。
 
 ```bash
 ccx stop       # stop the proxy + service, restore native Codex

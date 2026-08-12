@@ -32,6 +32,7 @@ import {
   ATTESTATION_PROOF_HEADER,
 } from "../src/identity";
 import { createLocalAttestationProof } from "../src/lib/local-management-attestation";
+import { PROXY_DELEGATED_START_ENV } from "../src/server/proxy-lifecycle-protocol";
 
 function cfg(extra?: Partial<CodexCommanderConfig>): CodexCommanderConfig {
   return {
@@ -535,7 +536,8 @@ describe("ccx opencode proxy auto-start env", () => {
     const startEnv = opencodeProxyStartEnv({ CCX_API_TOKEN_FILE: tokenFile });
     expect(startEnv.CODEXCOMMANDER_API_AUTH_TOKEN).toBeUndefined();
     expect(startEnv.CCX_API_TOKEN_FILE).toBe(tokenFile);
-    expect(startEnv.CCX_SERVICE).toBe("1");
+    expect(startEnv[PROXY_DELEGATED_START_ENV]).toBe("1");
+    expect(startEnv.CCX_SERVICE).toBeUndefined();
     expect(JSON.stringify(startEnv)).not.toContain("sk-service-only");
     expect(loadServiceTokenFromFile(startEnv)).toBe("sk-service-only");
     expect(opencodeApiKey(config, startEnv)).toBe("sk-service-only");
@@ -545,7 +547,8 @@ describe("ccx opencode proxy auto-start env", () => {
     const startEnv = opencodeProxyStartEnv({ hostname: "0.0.0.0" });
     expect(startEnv.CODEXCOMMANDER_API_AUTH_TOKEN).toBeUndefined();
     expect(startEnv.CCX_API_TOKEN_FILE).toBe(serviceApiTokenFilePath());
-    expect(startEnv.CCX_SERVICE).toBe("1");
+    expect(startEnv[PROXY_DELEGATED_START_ENV]).toBe("1");
+    expect(startEnv.CCX_SERVICE).toBeUndefined();
   });
 
   test("does not inject CCX_API_TOKEN_FILE when CODEXCOMMANDER_API_AUTH_TOKEN is already set", () => {

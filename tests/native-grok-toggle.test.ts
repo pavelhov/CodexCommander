@@ -6,6 +6,7 @@ import { handleManagementAPI } from "../src/server/management-api";
 import type { ManagementApiDeps } from "../src/server/management/context";
 import { syncGrokConfig } from "../src/grok/sync";
 import { injectGrokConfig, type GrokInjectModel } from "../src/grok/inject";
+import type { ProxyLifecycleAuthority } from "../src/server/proxy-lifecycle-authority";
 import type { CodexCommanderConfig } from "../src/types";
 
 /**
@@ -77,6 +78,24 @@ function baseConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommand
   return { port: 10100, hostname: "127.0.0.1", providers: [], ...overrides } as CodexCommanderConfig;
 }
 
+/** A schema-valid config for tests that must observe the real durable-intent write. */
+function durableConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
+  return {
+    port: 10100,
+    hostname: "127.0.0.1",
+    multiAgentGuidanceEnabled: true,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+      },
+    } as CodexCommanderConfig["providers"],
+    defaultProvider: "openai",
+    ...overrides,
+  };
+}
+
 function configPath(): string {
   return join(grokHome, "config.toml");
 }
@@ -93,6 +112,50 @@ function fencedConfig(userPrefix = "# user's own settings\n"): string {
   return `${userPrefix}${BEGIN}\n[model.ccx-a]\nmodel = "p/m"\n${END}\n`;
 }
 
+function persistedGrokIntent(): unknown {
+  const raw = JSON.parse(readFileSync(join(fixtureRoot, "config.json"), "utf8")) as Record<string, unknown>;
+  return (raw.clientIntegrations as Record<string, unknown> | undefined)?.grok;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function fakeLifecycleAuthority(onRelease: (lock: "S" | "E") => void): ProxyLifecycleAuthority {
+  let ensureHeld = true;
+  let startHeld = true;
+  return {
+    deadlineAt: Date.now() + 1_000,
+    ensure: { token: "ensure", release: () => {} },
+    get start() {
+      return startHeld ? { token: "start", release: () => this.releaseStart() } : undefined;
+    },
+    async acquireStart() {
+      throw new Error("toggle acquires E and S together");
+    },
+    delegatedLease: () => !ensureHeld || !startHeld
+      ? undefined
+      : { ensureToken: "ensure", startToken: "start" },
+    releaseStart() {
+      if (!startHeld) return;
+      startHeld = false;
+      onRelease("S");
+    },
+    releaseAll() {
+      this.releaseStart();
+      if (!ensureHeld) return;
+      ensureHeld = false;
+      onRelease("E");
+    },
+  };
+}
+
 /**
  * Deps every test gets unless it overrides them: the runtime seam reads null so
  * no test depends on the developer's real runtime state file, and the catalog
@@ -100,6 +163,9 @@ function fencedConfig(userPrefix = "# user's own settings\n"): string {
  */
 function testDeps(overrides: ManagementApiDeps = {}): ManagementApiDeps {
   return {
+    proxyStopLifecycle: {
+      acquireAuthority: async () => fakeLifecycleAuthority(() => {}),
+    },
     readRuntimePort: () => null,
     fetchAllModels: async () => [
       { provider: "stub", id: "m1", alias: "fast", contextWindow: 64000 },
@@ -458,6 +524,130 @@ test("a second concurrent PUT gets 409 config_busy and writes nothing", async ()
   // And the flight cleared: a later toggle is served normally.
   const third = await put(config, false, deps);
   expect(third.status).toBe(200);
+});
+
+test("PUT ON queues behind Stop and holds E plus S through intent and fence injection", async () => {
+  const disabled = durableConfig({ clientIntegrations: { grok: false } });
+  writeFileSync(join(fixtureRoot, "config.json"), JSON.stringify(disabled, null, 2));
+  writeConfig("# user only\n");
+  const authorityEntered = deferred<void>();
+  const releaseHeldStop = deferred<void>();
+  const calls: string[] = [];
+
+  const pending = put(disabled, true, testDeps({
+    proxyStopLifecycle: {
+      acquireAuthority: async options => {
+        calls.push("wait-for-stop");
+        expect(options).toEqual({ includeStart: true });
+        authorityEntered.resolve();
+        await releaseHeldStop.promise;
+        calls.push("acquire-E-then-S");
+        return fakeLifecycleAuthority(lock => {
+          calls.push(`release-${lock}`);
+          expect(persistedGrokIntent()).toBeUndefined();
+          expect(readConfig()).toContain(BEGIN);
+        });
+      },
+    },
+    injectGrokConfig: ((...args: Parameters<typeof injectGrokConfig>) => {
+      calls.push("inject-fence");
+      expect(persistedGrokIntent()).toBeUndefined();
+      return injectGrokConfig(...args);
+    }) as typeof injectGrokConfig,
+  }));
+
+  await authorityEntered.promise;
+  expect(persistedGrokIntent()).toBe(false);
+  expect(readConfig()).toBe("# user only\n");
+  expect(calls).toEqual(["wait-for-stop"]);
+
+  releaseHeldStop.resolve();
+  const result = await pending;
+  expect(result.status).toBe(200);
+  expect(calls).toEqual([
+    "wait-for-stop",
+    "acquire-E-then-S",
+    "inject-fence",
+    "release-S",
+    "release-E",
+  ]);
+});
+
+test("PUT OFF queues behind Start and holds E plus S through intent and fence strip", async () => {
+  const enabled = durableConfig();
+  writeFileSync(join(fixtureRoot, "config.json"), JSON.stringify(enabled, null, 2));
+  writeConfig(fencedConfig());
+  const authorityEntered = deferred<void>();
+  const releaseHeldStart = deferred<void>();
+  const calls: string[] = [];
+
+  const pending = put(enabled, false, testDeps({
+    proxyStopLifecycle: {
+      acquireAuthority: async options => {
+        calls.push("wait-for-start");
+        expect(options).toEqual({ includeStart: true });
+        authorityEntered.resolve();
+        await releaseHeldStart.promise;
+        calls.push("acquire-E-then-S");
+        return fakeLifecycleAuthority(lock => {
+          calls.push(`release-${lock}`);
+          expect(persistedGrokIntent()).toBe(false);
+          expect(readConfig()).not.toContain(BEGIN);
+        });
+      },
+    },
+  }));
+
+  await authorityEntered.promise;
+  expect(persistedGrokIntent()).toBeUndefined();
+  expect(readConfig()).toContain(BEGIN);
+  expect(calls).toEqual(["wait-for-start"]);
+
+  releaseHeldStart.resolve();
+  const result = await pending;
+  expect(result.status).toBe(200);
+  expect(calls).toEqual([
+    "wait-for-start",
+    "acquire-E-then-S",
+    "release-S",
+    "release-E",
+  ]);
+});
+
+test("lifecycle-authority refusal returns sanitized config_busy and mutates nothing", async () => {
+  const enabled = durableConfig();
+  writeFileSync(join(fixtureRoot, "config.json"), JSON.stringify(enabled, null, 2));
+  const orphaned = `${BEGIN}\n[model.ccx-a]\n`;
+  writeConfig(orphaned);
+  const calls: string[] = [];
+  const result = await put(enabled, false, testDeps({
+    proxyStopLifecycle: {
+      acquireAuthority: async options => {
+        calls.push(`acquire:${String(options?.includeStart)}`);
+        throw new Error("secret lifecycle path and token");
+      },
+    },
+    fetchAllModels: (async () => {
+      calls.push("fetch-models");
+      return [];
+    }) as never,
+    injectGrokConfig: (() => {
+      calls.push("inject-fence");
+      throw new Error("must not write");
+    }) as never,
+  }));
+
+  expect(result.status).toBe(409);
+  expect(result.body).toMatchObject({
+    error: "native integration change refused",
+    code: "native_integration_refused",
+    clientId: "grok",
+    reason: "config_busy",
+  });
+  expect(JSON.stringify(result.body)).not.toContain("secret lifecycle path and token");
+  expect(persistedGrokIntent()).toBeUndefined();
+  expect(readConfig()).toBe(orphaned);
+  expect(calls).toEqual(["acquire:true"]);
 });
 
 test("no journal row and no snapshot exist for this toggle", () => {

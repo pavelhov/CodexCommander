@@ -69,8 +69,19 @@ open dist/macos/CodexCommander.app
 Every built app launches only the Bun runtime and server resources embedded in its own
 `Contents/Resources/runtime`; it never executes checkout `src/` or an ambient `ccx`. Rebuild the app
 to pick up source changes. If startup fails, the menu app stays open so its diagnostics and **Start**
-control remain available. **Quit** closes only the companion UI. **Stop** and **Restart** are
-separate, confirmation-gated proxy actions.
+control remain available. **Start Proxy** starts the proxy and routes Codex through it. **Stop
+Proxy…** restores native Codex routing before stopping the proxy. **Restart Proxy…** runs the same
+safe stop→start transaction as the CLI: it restores native routing before terminating the old proxy,
+then starts the replacement and routes Codex back through it. If restart fails, Codex remains native.
+**Restore Native Codex** and **Route Codex Through Proxy** switch only the Codex route and leave the
+proxy lifecycle unchanged. **Quit Menu Bar** closes only the companion UI.
+
+The native escape itself removes only CodexCommander's marker-owned routing and owned catalog pointer
+from `$CODEX_HOME/config.toml`; after proving that exact route, it also clears the proxy-only root
+`provider/model` selector. Every unrelated setting remains byte-for-byte unchanged. It does not touch
+Codex tasks, history, or authentication, and it does not require a repair command or coordinator
+database. Generated catalogs and caches may remain on disk, but native Codex no longer references
+them.
 
 On its first launch from `dist/macos` or Applications, the app enables **Launch at Login** so the
 menu icon returns after sign-in. The startup row exposes the actual mode: **Desktop** launches the
@@ -91,12 +102,14 @@ rewrites OpenCode config files. For plain OpenCode or the Desktop app, use the d
 
 ```bash
 bun run src/cli/index.ts start     # or use `service`
-bun run src/cli/index.ts init      # interactive setup: writes ~/.codexcommander/config.json and wires Codex
+bun run src/cli/index.ts init      # interactive setup: writes config; can route through a proven live proxy
 ```
 
-`ccx init` never starts the proxy; start it first (or after — either order works, but headless
-commands like `ccx provider add` and `ccx combo set` talk to the **live** proxy and exit nonzero
-when it is unreachable). `ccx status` / `ccx doctor` / `ccx health` report the running state.
+`ccx init` never starts the proxy. If a current-home proxy is already running and its protected
+runtime identity is proven, the wizard can route Codex through it; otherwise Codex stays native
+until an explicit `ccx start`. Headless commands like `ccx provider add` and `ccx combo set` talk to
+the **live** proxy and exit nonzero when it is unreachable. `ccx status` / `ccx doctor` / `ccx
+health` report the running state.
 
 ## Supported platforms
 
@@ -128,7 +141,8 @@ Running from source requires [Bun](https://bun.sh). Windows runs natively withou
   live request log with cache token counts.
 - **Native macOS glance view** — see active parent/subagent rows and every available session,
   weekly, monthly, or credit quota window without duplicating provider setup outside the dashboard.
-- **Clean exit, zero residue** — `ccx stop` restores Codex to its original configuration.
+- **Safe native escape** — `ccx stop` saves the integration as OFF, proves native Codex routing, and
+  only then stops the service and proxy. It never rewrites tasks, history, or authentication.
 
 ## Model routing
 
@@ -156,8 +170,11 @@ Qwen Cloud, SiliconFlow, and more. Full list: `ccx init` or the
 
 ```bash
 ccx init                       # interactive setup (writes config, wires Codex, offers the shim)
-ccx start [--port 10100]       # start the proxy in the foreground
-ccx stop                       # stop + restore native Codex
+ccx start [--port 10100]       # start the proxy and route Codex through it
+ccx stop                       # restore native Codex, then stop the proxy
+ccx restart                    # CLI stop + start cycle
+ccx restore                    # restore native Codex; leave the proxy unchanged
+ccx restore back               # route Codex through an already-running proxy
 ccx service [install|start|stop|status|uninstall|remove]  # background service
 ccx codex-shim install         # start the proxy on demand whenever `codex` launches
 ccx health [--json]            # check immediate proxy liveness
@@ -200,7 +217,7 @@ daemon. Remove them with `ccx service uninstall` / `ccx codex-shim uninstall`.
 ### Uninstall
 
 ```bash
-ccx uninstall                  # stop, remove service/shim, restore native Codex, clean up state
+ccx uninstall                  # stop, remove service/shim, restore native Codex, clean local artifacts
 ```
 
 ## Remote access

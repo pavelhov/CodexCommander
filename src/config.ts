@@ -2005,7 +2005,7 @@ export function websocketsEnabled(config: Pick<CodexCommanderConfig, "websockets
 }
 
 // ---------------------------------------------------------------------------
-// Hand-edit protection for the `claudeCode` subtree (implementation contract H1).
+// Live-save protection for independently mutated config subtrees.
 //
 // `saveConfig` serializes the WHOLE config object, so ANY service-time save — a model
 // visibility toggle, a 429 key rotation on the request path — rewrites `claudeCode`
@@ -2021,6 +2021,7 @@ export function websocketsEnabled(config: Pick<CodexCommanderConfig, "websockets
  * against, or a later stale save would masquerade as "our own change".
  */
 const claudeCodeBaseline = new WeakMap<CodexCommanderConfig, unknown>();
+const clientIntegrationsBaseline = new WeakMap<CodexCommanderConfig, unknown>();
 
 /**
  * The live config retains the address of the socket Bun actually opened, while
@@ -2039,6 +2040,7 @@ const persistedLiveServerBinding = new WeakMap<CodexCommanderConfig, PersistedSe
  */
 export function armClaudeCodeBaseline(config: CodexCommanderConfig): void {
   claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
+  clientIntegrationsBaseline.set(config, structuredClone(config.clientIntegrations));
 }
 
 /** Test seam only: is this instance armed? */
@@ -2156,8 +2158,11 @@ export function reconcileLiveConfigFromDisk(config: CodexCommanderConfig, persis
   }
   const persisted = diagnostics.config;
   const claudeGuardArmed = claudeCodeBaseline.has(config);
+  const integrationsGuardArmed = clientIntegrationsBaseline.has(config);
   const pendingLiveClaudeMutation = claudeGuardArmed
     && !deepEqual(config.claudeCode, claudeCodeBaseline.get(config));
+  const pendingLiveIntegrationsMutation = integrationsGuardArmed
+    && !deepEqual(config.clientIntegrations, clientIntegrationsBaseline.get(config));
 
   persistedLiveServerBinding.set(config, {
     port: persisted.port,
@@ -2168,13 +2173,23 @@ export function reconcileLiveConfigFromDisk(config: CodexCommanderConfig, persis
     config as unknown as Record<string, unknown>,
     persistedBaseline as unknown as Record<string, unknown>,
     persisted as unknown as Record<string, unknown>,
-    new Set(["hostname", "port", ...(claudeGuardArmed ? ["claudeCode"] : [])]),
+    new Set([
+      "hostname",
+      "port",
+      ...(claudeGuardArmed ? ["claudeCode"] : []),
+      ...(integrationsGuardArmed ? ["clientIntegrations"] : []),
+    ]),
   );
 
   if (claudeGuardArmed && !pendingLiveClaudeMutation) {
     if (persisted.claudeCode === undefined) delete config.claudeCode;
     else config.claudeCode = structuredClone(persisted.claudeCode);
     claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
+  }
+  if (integrationsGuardArmed && !pendingLiveIntegrationsMutation) {
+    if (persisted.clientIntegrations === undefined) delete config.clientIntegrations;
+    else config.clientIntegrations = structuredClone(persisted.clientIntegrations);
+    clientIntegrationsBaseline.set(config, structuredClone(config.clientIntegrations));
   }
 }
 
@@ -2217,6 +2232,15 @@ export function saveConfigPreservingClaudeCode(config: CodexCommanderConfig): vo
         }
       }
     }
+    if (clientIntegrationsBaseline.has(config) && onDisk !== undefined) {
+      const baseline = clientIntegrationsBaseline.get(config);
+      const persistedIntegrations = structuredClone(onDisk.clientIntegrations);
+      const diskChanged = !deepEqual(persistedIntegrations, baseline);
+      const weChanged = !deepEqual(config.clientIntegrations, baseline);
+      if (diskChanged && !weChanged) {
+        config.clientIntegrations = persistedIntegrations;
+      }
+    }
     const persistedBinding = bindingBaseline && onDisk
       ? readPersistedServerBinding(onDisk)
       : bindingBaseline;
@@ -2231,6 +2255,9 @@ export function saveConfigPreservingClaudeCode(config: CodexCommanderConfig): vo
     }
     if (claudeCodeBaseline.has(config)) {
       claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
+    }
+    if (clientIntegrationsBaseline.has(config)) {
+      clientIntegrationsBaseline.set(config, structuredClone(config.clientIntegrations));
     }
   });
 }

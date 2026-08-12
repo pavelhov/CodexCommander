@@ -138,10 +138,15 @@ class Fixture {
     }, null, 2));
   }
 
-  spawnCli(argv: string[], home = this.homeA, userprofile = this.userprofileA) {
+  spawnCli(
+    argv: string[],
+    home = this.homeA,
+    userprofile = this.userprofileA,
+    envOverrides: Record<string, string> = {},
+  ) {
     const child = Bun.spawn([process.execPath, cliPath, ...argv], {
       cwd: this.root,
-      env: this.env(home, userprofile),
+      env: { ...this.env(home, userprofile), ...envOverrides },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -182,8 +187,8 @@ class Fixture {
     });
   }
 
-  async start(): Promise<StartedServer> {
-    const child = this.spawnCli(["start"]);
+  async start(envOverrides: Record<string, string> = {}): Promise<StartedServer> {
+    const child = this.spawnCli(["start"], this.homeA, this.userprofileA, envOverrides);
     const runtimePath = join(this.ccx, "runtime-port.json");
     const runtime = await waitFor(() => {
       if (!existsSync(runtimePath)) return null;
@@ -270,7 +275,7 @@ describe("WP13 composed toggle acceptance", () => {
     mkdirSync(join(fx.homeA, ".grok"));
     writeFileSync(join(fx.homeA, ".grok", "config.toml"), "# user config\n");
     const before = manifest(fx.codex);
-    const server = await fx.start();
+    const server = await fx.start({ CCX_SERVICE: "1" });
     try {
       expect(manifest(fx.codex)).toEqual(before);
       for (const argv of [["ensure"], ["sync"], ["restore"], ["sync-cache"]]) {
@@ -291,10 +296,6 @@ describe("WP13 composed toggle acceptance", () => {
       expect(manifest(fx.codex)).toEqual(before);
       // P08 is intentionally the ON control: it must reach the same running
       // server through the real CLI without passing a port flag.
-      const enabled = await fx.request(server.runtime, "/api/native-integrations/codex", {
-        method: "PUT", body: JSON.stringify({ enabled: true }),
-      });
-      expect(enabled.status).toBe(200);
       const back = await fx.runCli(["restore", "back"]);
       // The fixture records itself as the active service install, so the
       // production ownership preflight admits this home and P08 completes the
@@ -308,8 +309,8 @@ describe("WP13 composed toggle acceptance", () => {
     }
   }, 45_000);
 
-  /** RED: bypass the persisted OFF mutation or the under-lock re-read; stale P19 writes its candidate after gather. */
-  test("B-reduced: a held local provider cannot commit after the HTTP route persists OFF", async () => {
+  /** RED: release E/S around provider gather; a later OFF can interleave with the in-flight sync. */
+  test("B-reduced: a held sync linearizes before a later OFF, which restores native last", async () => {
     const fx = fixture();
     let hold = false;
     let release!: () => void;
@@ -330,12 +331,21 @@ describe("WP13 composed toggle acceptance", () => {
       },
     });
     try {
-      // Keep the asynchronous startup registry from becoming the held flight.
-      // The route reloads this persisted config, so enable discovery only once
-      // its own request is about to begin.
-      fx.writeConfig({ clientIntegrations: { codex: false } });
+      // Startup uses the fixture's static model list and therefore cannot become
+      // the held live-provider flight. Keep desired state ON throughout; the raw
+      // route swaps in live discovery only after startup is healthy.
+      fx.writeConfig({ clientIntegrations: { codex: true } });
       const server = await fx.start();
       try {
+        // /healthz proves only that the listener bound. Wait until startup has
+        // settled and released its lifecycle authority before arming the held
+        // provider, or this test can mistake startup discovery for /api/sync.
+        await waitFor(async () => {
+          const ready = await fx.request(server.runtime, "/readyz");
+          return ready.body.status === "ready" || ready.body.status === "failed"
+            ? ready.body
+            : null;
+        }, "terminal startup readiness");
         writeFileSync(join(fx.codex, "codexcommander-catalog.json"), JSON.stringify({ models: [] }));
         fx.writeConfig({ providers: { fixture: {
           adapter: "openai-chat", baseUrl: `http://127.0.0.1:${provider.port}/v1`, apiKey: "fixture-key",
@@ -349,16 +359,31 @@ describe("WP13 composed toggle acceptance", () => {
             `held /api/sync completed before provider discovery: ${result.status} ${JSON.stringify(result.body)}`,
           ))),
         ]);
-        const off = await fx.request(server.runtime, "/api/native-integrations/codex", {
+        let offSettled = false;
+        const off = fx.request(server.runtime, "/api/native-integrations/codex", {
           method: "PUT", body: JSON.stringify({ enabled: false }),
+        }).then(result => {
+          offSettled = true;
+          return result;
         });
-        expect(off.status).toBe(200);
-        const afterOff = manifest(fx.codex);
+        // Sync already owns E -> S, so OFF must not persist or restore anything
+        // until the gather + commit transaction releases both leases.
+        await Bun.sleep(100);
+        expect(offSettled).toBe(false);
+        expect(JSON.parse(readFileSync(join(fx.ccx, "config.json"), "utf8")))
+          .toMatchObject({ clientIntegrations: { codex: true } });
         release();
-        const result = await stale;
-        expect(result.status).toBe(200);
-        expect(result.body).toMatchObject({ status: "skipped", skippedReason: "desired_disabled", ok: true });
-        expect(manifest(fx.codex)).toEqual(afterOff);
+        const syncResult = await stale;
+        expect(syncResult.status).toBe(200);
+        expect(syncResult.body).toMatchObject({ status: "applied", ok: true });
+        const offResult = await off;
+        expect(offResult.status).toBe(200);
+        expect(offResult.body).toMatchObject({ desiredEnabled: false, state: "absent" });
+        const finalNative = manifest(fx.codex);
+        expect(JSON.parse(readFileSync(join(fx.ccx, "config.json"), "utf8")))
+          .toMatchObject({ clientIntegrations: { codex: false } });
+        await Bun.sleep(100);
+        expect(manifest(fx.codex)).toEqual(finalNative);
       } finally {
         release();
         await fx.stop(server);
@@ -394,6 +419,10 @@ describe("WP13 composed toggle acceptance", () => {
       expect(manifest(fx.codex)).toEqual(before);
       expect(fx.lockAllowlist.some(existsSync)).toBe(false);
     } finally {
+      // The foreground signal path deliberately refuses to tear down while
+      // foreign service-home evidence blocks its durable native restore. Drop
+      // this test's synthetic evidence before asking the fixture to stop.
+      unlinkSync(join(fx.ccx, "service-state.json"));
       await fx.stop(server);
     }
   }, 45_000);

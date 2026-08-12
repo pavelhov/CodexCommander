@@ -1,6 +1,8 @@
 import {
   ensureProxyLifecycle,
   proxyLifecycleStatus,
+  restoreBackRoutingLifecycle,
+  restoreNativeRoutingLifecycle,
   restartProxyLifecycle,
   stopProxyLifecycle,
   type ProxyLifecycleAction,
@@ -24,6 +26,8 @@ const allowedActions = new Set<MacOSLifecycleAction>([
   "start",
   "stop",
   "restart",
+  "restore-native",
+  "restore-back",
   APPLY_CODEX_CATALOG_ACTION,
 ]);
 
@@ -55,7 +59,11 @@ function failedResult(action: MacOSLifecycleAction): MacOSLifecycleResult {
     pid: null,
     port: null,
     message: "CodexCommander lifecycle action failed.",
-    errorCode: action === "stop" ? "STOP_FAILED" : "START_FAILED",
+    errorCode: action === "stop" || action === "restore-native"
+      ? "STOP_FAILED"
+      : action === "restore-back"
+        ? "SYNC_FAILED"
+        : "START_FAILED",
   };
 }
 
@@ -87,6 +95,10 @@ async function perform(action: MacOSLifecycleAction): Promise<MacOSLifecycleResu
       return stopProxyLifecycle();
     case "restart":
       return restartProxyLifecycle({ ensureCompanion: false });
+    case "restore-native":
+      return restoreNativeRoutingLifecycle();
+    case "restore-back":
+      return restoreBackRoutingLifecycle();
     case APPLY_CODEX_CATALOG_ACTION:
       return applyCodexCatalogForCompanion();
   }

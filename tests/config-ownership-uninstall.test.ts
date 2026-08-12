@@ -6,6 +6,7 @@ import {
   CONFIG_OWNER_FILE,
   CONFIG_UNINSTALL_MANIFEST,
   recordOwnedConfigPath,
+  removeOwnedConfigArtifactsRetainingLifecycleRoot,
   removeOwnedConfigState,
 } from "../src/lib/config-ownership";
 import { getDefaultConfig, saveConfig } from "../src/config";
@@ -52,6 +53,53 @@ describe("owned config uninstall", () => {
         residualPaths: [],
       });
       expect(existsSync(dir)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("locked uninstall removes owned artifacts but retains one lifecycle namespace", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ccx-uninstall-retained-root-"));
+    const configPath = join(dir, "config.json");
+    const ensureLock = join(dir, "proxy-ensure.lock");
+
+    try {
+      expect(recordOwnedConfigPath(dir, configPath)).toBe(true);
+      writeFileSync(configPath, '{"owned":true}\n');
+      writeFileSync(ensureLock, '{"held":true}\n', { mode: 0o600 });
+      const owner = readFileSync(join(dir, CONFIG_OWNER_FILE), "utf8");
+      const manifest = readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8");
+
+      expect(removeOwnedConfigArtifactsRetainingLifecycleRoot(dir)).toEqual({
+        status: "retained-root",
+        residualPaths: [],
+      });
+      expect(existsSync(configPath)).toBe(false);
+      expect(readFileSync(ensureLock, "utf8")).toBe('{"held":true}\n');
+      expect(readFileSync(join(dir, CONFIG_OWNER_FILE), "utf8")).toBe(owner);
+      expect(readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8")).toBe(manifest);
+
+      // Once the holder releases E, the retained metadata still authorizes a later
+      // explicit cleanup without recreating or guessing ownership.
+      rmSync(ensureLock);
+      expect(removeOwnedConfigState(dir).status).toBe("removed");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("locked uninstall refuses before deletion when the held E path is absent", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ccx-uninstall-missing-lock-"));
+    const configPath = join(dir, "config.json");
+
+    try {
+      expect(recordOwnedConfigPath(dir, configPath)).toBe(true);
+      writeFileSync(configPath, '{"owned":true}\n');
+
+      const result = removeOwnedConfigArtifactsRetainingLifecycleRoot(dir);
+      expect(result.status).toBe("refused");
+      expect(result.reason).toContain("held lifecycle lock");
+      expect(readFileSync(configPath, "utf8")).toBe('{"owned":true}\n');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

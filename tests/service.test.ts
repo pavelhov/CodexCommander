@@ -3,8 +3,10 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
-import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, ensureLaunchdExecutable, launchdExecutableDiagnostic, launchdExecutablePath, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceInstallState, readWindowsSchedulerXmlState, removeLaunchdExecutable, repairService, resolveServiceListenPort, runLaunchctl, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, startOwnedSystemdUnit, systemdNeedsDaemonReload, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
+import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, ensureLaunchdExecutable, launchdExecutableDiagnostic, launchdExecutablePath, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, launchctlLoadFailed, launchdJobMatchesPlist, parseServiceInstallState, probeLaunchdSupervisor, probeSystemdSupervisor, readWindowsSchedulerXmlState, removeLaunchdExecutable, repairService, resolveServiceListenPort, runLaunchctl, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, startOwnedSystemdUnit, systemdNeedsDaemonReload, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
 import type { ServiceDiagnostic } from "../src/service";
+import { normalizeServiceSubcommand, parseServiceArgs, prepareServiceRoutingForStart, prepareServiceRoutingForTermination, runServiceLifecycleCommand, type ServiceCommandDependencies } from "../src/cli/service-command";
+import type { ProxyLifecycleAuthority } from "../src/server/proxy-lifecycle-authority";
 import { buildWinswXml } from "../src/lib/winsw";
 import { serviceApiTokenFilePath } from "../src/lib/service-secrets";
 import type { CodexCommanderConfig } from "../src/types";
@@ -120,12 +122,7 @@ describe("systemd service unit", () => {
     expect(normalizeServiceSubcommand("start")).toBe("start");
     expect(normalizeServiceSubcommand("nope")).toBe("nope");
 
-    const service = await readText("src/service.ts");
-    const serviceCommand = service.slice(service.indexOf("export async function serviceCommand"));
-    // Args flow through parseServiceArgs (which applies the install default) into the switch.
-    expect(serviceCommand).toContain("const parsed = parseServiceArgs(");
-    expect(serviceCommand).toContain("const command = parsed.sub;");
-    expect(serviceCommand).toContain("switch (command)");
+    expect(parseServiceArgs([])).toEqual({ sub: "install", backend: null, invalid: [] });
   });
 
   test("uses unquoted append targets for service logs", () => {
@@ -871,28 +868,300 @@ describe("launchd service plist", () => {
 });
 
 describe("service lifecycle cleanup ordering", () => {
-  test("direct service stop kills the tracked proxy before restoring native Codex", async () => {
-    const service = await readText("src/service.ts");
-    const stopCase = service.slice(service.indexOf('case "stop":'), service.indexOf('case "status":'));
-
-    expect(stopCase).toContain("ops.stop();");
-    expect(stopCase).toContain("await stopTrackedProxyForServiceCommand();");
-    expect(stopCase).toContain("restoreNativeCodexAsync();");
-    expect(stopCase.indexOf("ops.stop();")).toBeLessThan(stopCase.indexOf("stopTrackedProxyForServiceCommand();"));
-    expect(stopCase.indexOf("stopTrackedProxyForServiceCommand();")).toBeLessThan(stopCase.indexOf("restoreNativeCodexAsync();"));
+  const diagnostic = (
+    registrationState: ServiceDiagnostic["registrationState"] = "present",
+    supervisorState: ServiceDiagnostic["supervisorState"] = "active",
+  ): ServiceDiagnostic => ({
+    supported: true,
+    registrationState,
+    supervisorState,
+    installed: registrationState !== "absent",
+    enabled: supervisorState === "active",
+    running: supervisorState === "active",
+    viable: registrationState === "present" && supervisorState === "active",
+    startable: registrationState === "present" && supervisorState !== "indeterminate",
+    stale: false,
+    conflict: false,
+    backend: "systemd",
+    summary: `${registrationState}/${supervisorState}`,
   });
 
-  test("direct service uninstall kills the tracked proxy before deleting service assets", async () => {
-    const service = await readText("src/service.ts");
-    const uninstallCase = service.slice(service.indexOf('case "uninstall":'), service.indexOf("default:"));
+  function fakeAuthority(calls: string[], initialStartHeld: boolean): ProxyLifecycleAuthority {
+    let startHeld = initialStartHeld;
+    const value: ProxyLifecycleAuthority = {
+      deadlineAt: Number.POSITIVE_INFINITY,
+      ensure: { token: "E", release: () => value.releaseAll() },
+      get start() { return startHeld ? { token: "S", release: () => value.releaseStart() } : undefined; },
+      acquireStart: async () => {
+        calls.push("reacquire-S");
+        startHeld = true;
+        return { token: "S2", release: () => value.releaseStart() };
+      },
+      delegatedLease: () => startHeld ? { ensureToken: "E", startToken: "S" } : undefined,
+      releaseStart: () => {
+        if (!startHeld) return;
+        startHeld = false;
+        calls.push("release-S");
+      },
+      releaseAll: () => {
+        value.releaseStart();
+        calls.push("release-E");
+      },
+    };
+    return value;
+  }
 
-    expect(uninstallCase).toContain("ops.stop();");
-    expect(uninstallCase).toContain("await stopTrackedProxyForServiceCommand();");
-    expect(uninstallCase).toContain("ops.uninstall();");
-    expect(uninstallCase).toContain("restoreNativeCodexAsync();");
-    expect(uninstallCase.indexOf("ops.stop();")).toBeLessThan(uninstallCase.indexOf("stopTrackedProxyForServiceCommand();"));
-    expect(uninstallCase.indexOf("stopTrackedProxyForServiceCommand();")).toBeLessThan(uninstallCase.indexOf("ops.uninstall();"));
-    expect(uninstallCase.indexOf("ops.uninstall();")).toBeLessThan(uninstallCase.indexOf("restoreNativeCodexAsync();"));
+  function commandDeps(calls: string[], diagnoses: ServiceDiagnostic[]): Partial<ServiceCommandDependencies> {
+    return {
+      platform: "linux",
+      acquireAuthority: async includeStart => {
+        calls.push(`acquire-${includeStart ? "ES" : "E"}`);
+        return fakeAuthority(calls, includeStart);
+      },
+      assertEnvironment: () => { calls.push("environment"); },
+      assertAuthEnvironment: () => { calls.push("auth"); },
+      readBackend: () => "scheduler",
+      operations: () => ({
+        install: async () => { calls.push("install"); },
+        start: () => { calls.push("start"); },
+        stop: () => { calls.push("manager-stop"); },
+        uninstall: () => { calls.push("uninstall"); },
+      }),
+      armServiceStartDelegation: ensureToken => {
+        calls.push(`arm-delegation:${ensureToken}`);
+        return {
+          token: "delegation",
+          ensureToken,
+          ownerPid: process.pid,
+          expiresAt: Date.now() + 1_000,
+        };
+      },
+      clearServiceStartDelegation: () => { calls.push("clear-delegation"); },
+      prepareStart: () => { calls.push("route-start"); return { success: true, changed: true, message: "ready" }; },
+      syncStartedService: async lease => {
+        calls.push(`sync-started:${lease.ensureToken}/${lease.startToken}`);
+        return {
+          status: "applied",
+          ok: true,
+          added: 1,
+          catalogPath: "/tmp/models.json",
+          catalogExists: true,
+          catalogWritten: true,
+          cacheSynced: true,
+          catalogQuality: "live",
+          rehydrated: 0,
+          message: "synced",
+          activation: { routing: { status: "current" } },
+        };
+      },
+      prepareTermination: () => {
+        calls.push("route-native");
+        const codex = { success: true, changed: true, message: "native" };
+        return { ...codex, codex, grok: { ok: true, changed: false, message: "native" } };
+      },
+      diagnose: () => {
+        calls.push("diagnose");
+        return diagnoses.shift() ?? diagnostic("present", "inactive");
+      },
+      cleanupTrackedProxy: async () => { calls.push("cleanup"); },
+      stopInstalledService: () => { calls.push("manager-stop"); return true; },
+      uninstallInstalledService: () => { calls.push("uninstall"); return true; },
+      supervisorInactive: value => value.supervisorState === "inactive",
+      probeStopped: async canRespawn => { calls.push(`probe-${canRespawn ? "bounded" : "once"}`); return null; },
+      finalProxyProbe: async () => { calls.push("deletion-probe"); return null; },
+      removeState: () => { calls.push("remove-state"); },
+      removeToken: () => { calls.push("remove-token"); },
+      reportServing: async verb => { calls.push(`serving-${verb}`); return true; },
+      resolveListenPort: () => 10100,
+      statusReport: async () => "status",
+      schedulerStatusReport: async () => "scheduler-status",
+      diagnosticsSummary: () => "diagnostics",
+      repair: async () => { calls.push("repair"); },
+      log: message => { calls.push(`log:${message}`); },
+      error: message => { calls.push(`error:${message}`); },
+      fail: () => { calls.push("fail"); },
+    };
+  }
+
+  test("install, start, and repair remain native during manager mutation, then sync under E+S", async () => {
+    for (const [args, spawn] of [[[], "install"], [["start"], "start"], [["repair"], "repair"]] as const) {
+      const calls: string[] = [];
+      await runServiceLifecycleCommand([...args], commandDeps(calls, []));
+      const nativeAt = calls.indexOf("route-native");
+      const spawnAt = calls.indexOf(spawn);
+      const enabledAt = calls.indexOf("route-start");
+      const syncedAt = calls.indexOf("sync-started:E/S");
+      expect(nativeAt).toBeGreaterThan(-1);
+      expect(nativeAt).toBeLessThan(spawnAt);
+      expect(spawnAt).toBeLessThan(enabledAt);
+      expect(enabledAt).toBeLessThan(syncedAt);
+      expect(calls.slice(nativeAt, spawnAt)).toEqual([
+        "route-native",
+        "arm-delegation:E",
+        "release-S",
+      ]);
+      expect(calls.indexOf("clear-delegation")).toBeGreaterThan(spawnAt);
+      expect(calls.indexOf("clear-delegation")).toBeLessThan(enabledAt);
+      expect(calls.slice(spawnAt, syncedAt)).toContain("reacquire-S");
+    }
+  });
+
+  test("macOS, Linux, and both Windows service parents use the same one-shot child proof", async () => {
+    for (const [platform, backend, args] of [
+      ["darwin", "scheduler", ["start"]],
+      ["linux", "scheduler", ["start"]],
+      ["win32", "scheduler", ["start"]],
+      ["win32", "native", ["install", "--native"]],
+    ] as const) {
+      const calls: string[] = [];
+      await runServiceLifecycleCommand([...args], {
+        ...commandDeps(calls, []),
+        platform,
+        readBackend: () => backend,
+      });
+      const launchAt = Math.max(calls.indexOf("start"), calls.indexOf("install"));
+      expect(calls.indexOf("arm-delegation:E")).toBeLessThan(launchAt);
+      expect(calls.indexOf("release-S")).toBeLessThan(launchAt);
+      expect(calls.indexOf("clear-delegation")).toBeGreaterThan(launchAt);
+      expect(calls.indexOf("clear-delegation")).toBeLessThan(
+        calls.indexOf("route-start"),
+      );
+      expect(calls).not.toContain("fail");
+    }
+  });
+
+  test("service manager start failure leaves the pre-mutation native route in place", async () => {
+    const calls: string[] = [];
+    await runServiceLifecycleCommand(["start"], {
+      ...commandDeps(calls, []),
+      operations: () => ({
+        install: async () => { calls.push("install"); },
+        start: () => { calls.push("start-refused"); throw new Error("manager refused"); },
+        stop: () => {},
+        uninstall: () => {},
+      }),
+    });
+
+    expect(calls).toEqual([
+      "environment", "acquire-E", "reacquire-S", "route-native", "arm-delegation:E",
+      "release-S", "start-refused", "reacquire-S", "clear-delegation",
+      "error:❌ service start failed; Codex remains native/OFF: manager refused",
+      "fail", "release-S", "release-E",
+    ]);
+  });
+
+  test("service readiness timeout leaves the pre-mutation native route in place", async () => {
+    const calls: string[] = [];
+    await runServiceLifecycleCommand(["start"], {
+      ...commandDeps(calls, []),
+      reportServing: async verb => { calls.push(`serving-${verb}:timeout`); return false; },
+    });
+
+    expect(calls).toEqual([
+      "environment", "acquire-E", "reacquire-S", "route-native", "arm-delegation:E",
+      "release-S", "start", "serving-started:timeout", "reacquire-S", "clear-delegation",
+      "error:❌ service start did not become healthy; Codex remains native/OFF.",
+      "fail", "release-S", "release-E",
+    ]);
+  });
+
+  test("service routing preparation short-circuits Grok when Codex native escape fails", () => {
+    const calls: string[] = [];
+    const failed = prepareServiceRoutingForTermination({
+      prepareStop: () => {
+        calls.push("codex");
+        return {
+          success: false,
+          changed: false,
+          desiredChanged: false,
+          configChanged: false,
+          message: "escape refused",
+        };
+      },
+      stripGrok: () => {
+        calls.push("grok");
+        return { ok: true, changed: true, message: "stripped" };
+      },
+    });
+
+    expect(failed.success).toBe(false);
+    expect(failed.grok).toBeNull();
+    expect(calls).toEqual(["codex"]);
+  });
+
+  test("service routing preparation proves Codex before stripping Grok", () => {
+    const calls: string[] = [];
+    const prepared = prepareServiceRoutingForTermination({
+      prepareStop: () => {
+        calls.push("codex");
+        return {
+          success: true,
+          changed: true,
+          desiredChanged: true,
+          configChanged: true,
+          message: "native",
+        };
+      },
+      stripGrok: () => {
+        calls.push("grok");
+        return { ok: true, changed: false, message: "already native" };
+      },
+    });
+
+    expect(prepared.success).toBe(true);
+    expect(calls).toEqual(["codex", "grok"]);
+  });
+
+  test("service start preparation forwards a refusal without running another path", () => {
+    const calls: string[] = [];
+    const result = prepareServiceRoutingForStart({
+      prepareStart: () => {
+        calls.push("prepare");
+        return { success: false, changed: false, message: "journal remains" };
+      },
+    });
+    expect(result).toEqual({ success: false, changed: false, message: "journal remains" });
+    expect(calls).toEqual(["prepare"]);
+  });
+
+  test("stop proves admission before routing and releases S before postconditions", async () => {
+    const calls: string[] = [];
+    await runServiceLifecycleCommand(["stop"], commandDeps(calls, [
+      diagnostic("present", "active"),
+      diagnostic("present", "inactive"),
+    ]));
+    expect(calls).toEqual([
+      "environment", "acquire-ES", "diagnose", "route-native", "manager-stop",
+      "cleanup", "release-S", "diagnose", "probe-once",
+      "log:✅ service stopped + native client routing restored.", "release-E",
+    ]);
+  });
+
+  test("indeterminate admission leaves routing and manager untouched", async () => {
+    const calls: string[] = [];
+    await runServiceLifecycleCommand(["stop"], commandDeps(calls, [
+      diagnostic("indeterminate", "indeterminate"),
+    ]));
+    expect(calls).toEqual([
+      "environment", "acquire-ES", "diagnose",
+      "error:❌ Service stop refused because manager state is indeterminate.",
+      "fail", "release-S", "release-E",
+    ]);
+  });
+
+  test("uninstall releases S for proof and reacquires it for the deletion gate", async () => {
+    const calls: string[] = [];
+    await runServiceLifecycleCommand(["uninstall"], commandDeps(calls, [
+      diagnostic("present", "active"),
+      diagnostic("present", "inactive"),
+      diagnostic("present", "inactive"),
+    ]));
+    expect(calls).toEqual([
+      "environment", "acquire-ES", "diagnose", "route-native", "manager-stop", "cleanup",
+      "release-S", "diagnose", "probe-once", "reacquire-S", "deletion-probe", "diagnose",
+      "uninstall", "remove-state", "remove-token", "log:✅ service uninstalled.",
+      "release-S", "release-E",
+    ]);
   });
 
   test("Windows service install ends the running task before rewriting its assets, with write retry", async () => {
@@ -972,34 +1241,24 @@ describe("service lifecycle cleanup ordering", () => {
     expect(stateRemoved).toBe(false);
   });
 
-  test("service cleanup falls back to findLiveProxy and clears the pid file", async () => {
-    const service = await readText("src/service.ts");
-
-    expect(service).toContain('verifyPidIdentity');
-    expect(service).toContain("removeRuntimePort(pid);");
-    expect(service).toContain('import { isProcessAlive, stopProxy } from "./lib/process-control";');
-    expect(service).toContain('import { findLiveProxy, proxyIdentityAt, SERVICE_STOP_LIVENESS } from "./server/proxy-liveness";');
-    expect(service).toContain('type TrackedProxyCleanupResult = "none" | "stale" | "stopped";');
-    expect(service).toContain("async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult>");
-    expect(service).toContain("...SERVICE_STOP_LIVENESS");
-    expect(service).toContain("deadlineAt:");
-    expect(service).toContain("SERVICE_STOP_LIVENESS");
-    expect(service).toContain("await stopProxy(trackedKillPid);");
-    expect(service).toContain("await stopProxy(liveKillPid);");
-    expect(service).toContain("removePid(pid);");
-    expect(service).toContain('return "stopped";');
-  });
-
-
-  test("Windows scheduler stop does not wait on schtasks /end failure", async () => {
-    const service = await readText("src/service.ts");
-    const stopCase = service.slice(service.indexOf('case "stop":'), service.indexOf('case "status":'));
-    // #764 is an /end that succeeds while the wrapper respawns; waiting only when
-    // /end errors cannot catch that path. Restart-window polling is proxyStillLiveAfterStop.
-    expect(stopCase).not.toContain("WINDOWS_SCHEDULER_WRAPPER_RESTART_MS");
-    expect(stopCase).not.toContain("schedulerEndOk");
-    expect(stopCase).not.toContain("await Bun.sleep(");
-    expect(stopCase).toContain("await proxyStillLiveAfterStop()");
+  test("only the Windows Scheduler backend receives the bounded respawn proof", async () => {
+    for (const [platform, backend, expected] of [
+      ["win32", "scheduler", "probe-bounded"],
+      ["win32", "native", "probe-once"],
+      ["linux", "scheduler", "probe-once"],
+    ] as const) {
+      const calls: string[] = [];
+      const backendDiagnostic = (state: ServiceDiagnostic["supervisorState"]): ServiceDiagnostic => ({
+        ...diagnostic("present", state),
+        backend,
+      });
+      await runServiceLifecycleCommand(["stop"], {
+        ...commandDeps(calls, [backendDiagnostic("active"), backendDiagnostic("inactive")]),
+        platform,
+        readBackend: () => backend,
+      });
+      expect(calls).toContain(expected);
+    }
   });
 
   test("tracked proxy cleanup verifies health-reported pids before stopProxy", async () => {
@@ -1009,12 +1268,14 @@ describe("service lifecycle cleanup ordering", () => {
     expect(service).toContain("const trackedKillPid = verifiedKillTarget(pid);");
   });
   test("service stop refuses success while the proxy is still live", async () => {
-    const service = await readText("src/service.ts");
-    const stopCase = service.slice(service.indexOf('case "stop":'), service.indexOf('case "status":'));
-    expect(stopCase).toContain("await proxyStillLiveAfterStop()");
-    expect(stopCase).toContain("a proxy is still listening on port");
-    expect(stopCase).toContain("Native Codex was NOT restored");
-    expect(stopCase).toContain("process.exitCode = 1");
+    const calls: string[] = [];
+    await runServiceLifecycleCommand(["stop"], {
+      ...commandDeps(calls, [diagnostic("present", "active"), diagnostic("present", "inactive")]),
+      probeStopped: async () => ({ port: 10100 }),
+    });
+    expect(calls.some(call => call.includes("proxy is still listening on port 10100"))).toBe(true);
+    expect(calls).toContain("fail");
+    expect(calls.some(call => call.startsWith("log:✅"))).toBe(false);
   });
 
   test("native install refuses Microsoft-account logins before removing the scheduler backend", async () => {
@@ -1024,13 +1285,30 @@ describe("service lifecycle cleanup ordering", () => {
     expect(service).toContain("Microsoft-account Windows login");
   });
 
-  test("service command cleanup logs kill failures without skipping restore/delete", async () => {
-    const service = await readText("src/service.ts");
+  test("tracked cleanup failure blocks proof and success", async () => {
+    const calls: string[] = [];
+    await runServiceLifecycleCommand(["stop"], {
+      ...commandDeps(calls, [diagnostic("present", "active")]),
+      cleanupTrackedProxy: async () => { calls.push("cleanup"); throw new Error("kill failed"); },
+    });
+    expect(calls.some(call => call.includes("Failed to stop proxy: kill failed"))).toBe(true);
+    expect(calls.some(call => call.startsWith("probe-"))).toBe(false);
+    expect(calls.some(call => call.startsWith("log:✅"))).toBe(false);
+  });
 
-    expect(service).toContain("async function stopTrackedProxyForServiceCommand(): Promise<TrackedProxyCleanupResult>");
-    expect(service).toContain("catch (err)");
-    expect(service).toContain("Failed to stop proxy");
-    expect(service).toContain('return "none";');
+  test("stop and uninstall do not consult start/install platform operations", async () => {
+    for (const command of ["stop", "uninstall"] as const) {
+      const calls: string[] = [];
+      await runServiceLifecycleCommand([command], {
+        ...commandDeps(calls, [
+          diagnostic("absent", "inactive"),
+          diagnostic("absent", "inactive"),
+        ]),
+        operations: () => { throw new Error("start-only platform probe must not run"); },
+      });
+      expect(calls).not.toContain("fail");
+      expect(calls.some(call => call.startsWith("log:✅"))).toBe(true);
+    }
   });
 });
 
@@ -1088,6 +1366,69 @@ describe("service diagnostics", () => {
       recordedBackend: "native",
     });
     expect(mismatchedScheduler).toMatchObject({ backend: "scheduler", stale: true, viable: false, startable: false });
+  });
+
+  test("manager probe failures remain indeterminate instead of becoming absence", () => {
+    expect(probeLaunchdSupervisor({
+      registered: false,
+      run: () => ({ ok: false, stdout: "", stderr: "domain unavailable", status: 112 }),
+    })).toMatchObject({
+      registrationState: "indeterminate",
+      supervisorState: "indeterminate",
+      enabled: null,
+    });
+    expect(probeLaunchdSupervisor({
+      registered: false,
+      run: () => ({ ok: false, stdout: "", stderr: "not found", status: 113 }),
+    })).toMatchObject({
+      registrationState: "absent",
+      supervisorState: "inactive",
+    });
+    expect(probeSystemdSupervisor({
+      registered: false,
+      show: () => { throw new Error("no user bus"); },
+    })).toMatchObject({
+      registrationState: "indeterminate",
+      supervisorState: "indeterminate",
+      enabled: null,
+    });
+    expect(probeSystemdSupervisor({
+      registered: false,
+      show: () => "LoadState=not-found\nActiveState=inactive\nUnitFileState=disabled",
+    })).toMatchObject({
+      registrationState: "absent",
+      supervisorState: "inactive",
+      enabled: false,
+    });
+  });
+
+  test("unknown WinSW presence is not reported as absent or a proven conflict", () => {
+    const unknown = deriveWindowsServiceDiagnostic({
+      ...base,
+      nativeStatus: "unknown",
+      recordedBackend: "native",
+    });
+    expect(unknown).toMatchObject({
+      registrationState: "indeterminate",
+      supervisorState: "indeterminate",
+      installed: true,
+      conflict: false,
+      viable: false,
+      startable: false,
+    });
+    const schedulerWithUnknownNative = deriveWindowsServiceDiagnostic({
+      ...base,
+      ...installedEnabled,
+      recordedBackend: "scheduler",
+      nativeStatus: "unknown",
+    });
+    expect(schedulerWithUnknownNative).toMatchObject({
+      registrationState: "present",
+      supervisorState: "indeterminate",
+      installed: true,
+      conflict: false,
+      viable: false,
+    });
   });
 
   test("rejects malformed service backend state instead of defaulting it to scheduler", () => {
@@ -1155,17 +1496,25 @@ describe("service diagnostics", () => {
   });
 
   test("direct service status prints the diagnostics line", async () => {
-    const service = await readText("src/service.ts");
-    const statusCase = service.slice(service.indexOf('case "status":'), service.indexOf('case "uninstall":'));
-
-    expect(statusCase).toContain("Diagnostics:");
-    expect(statusCase).toContain("serviceDiagnosticsSummary()");
+    const calls: string[] = [];
+    await runServiceLifecycleCommand(["status"], {
+      platform: "linux",
+      readBackend: () => "scheduler",
+      operations: () => ({ install: () => {}, start: () => {}, stop: () => {}, uninstall: () => {} }),
+      statusReport: async () => "status",
+      diagnosticsSummary: () => "diagnostics",
+      log: message => { calls.push(`log:${message}`); },
+    });
+    expect(calls).toContain("log:status");
+    expect(calls).toContain("log:Diagnostics: diagnostics");
   });
 });
 
 describe("service repair", () => {
   const baseDiag = {
     supported: true,
+    registrationState: "present" as const,
+    supervisorState: "active" as const,
     installed: true,
     enabled: true,
     running: true,
@@ -1197,7 +1546,7 @@ describe("service repair", () => {
   test("repair rejects when nothing is installed", async () => {
     await expect(repairService({
       platform: "win32",
-      diagnose: () => ({ ...baseDiag, installed: false, backend: null, summary: "not installed" }),
+      diagnose: () => ({ ...baseDiag, registrationState: "absent", supervisorState: "inactive", installed: false, backend: null, summary: "not installed" }),
       writeSchedulerAssets: () => { throw new Error("should not write"); },
       repairSystemd: () => { throw new Error("should not install systemd"); },
     })).rejects.toThrow(/not installed/i);

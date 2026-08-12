@@ -61,8 +61,9 @@ CodexCommander 상태 파일은 `$CODEXCOMMANDER_HOME`(기본값 `~/.codexcomman
 | `$CODEX_HOME/codexcommander-catalog.json` | Codex가 사용하는 네이티브 및 라우팅 모델 카탈로그. |
 
 :::note
-CodexCommander는 절대 Codex 설정을 삭제하지 않습니다. 모든 주입은 되돌릴 수 있습니다 — `ccx stop`, `ccx restore`,
-또는 `ccx eject`는 CodexCommander가 추가한 줄만 정확히 제거하고 네이티브 Codex를 복원합니다.
+CodexCommander는 Codex 설정을 삭제하지 않습니다. `ccx stop`, `ccx restore`, `ccx eject`는
+`config.toml`에서 마커가 소유한 정확한 라우팅만 제거하고 네이티브 Codex를 복원합니다. 생성된 catalog와
+cache는 남을 수 있지만 네이티브 Codex는 참조하지 않으며 task, history, 인증은 건드리지 않습니다.
 :::
 
 ## 다음

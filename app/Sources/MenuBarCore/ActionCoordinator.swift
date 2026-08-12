@@ -1,13 +1,5 @@
 import Foundation
 
-public protocol ProxyActionClient: Sendable {
-    var currentEndpoint: ProxyEndpoint { get async }
-    func restart() async throws -> RestartAccepted
-    func liveness(timeout: TimeInterval) async -> ProxyClient.Liveness
-}
-
-extension ProxyClient: ProxyActionClient {}
-
 public enum RestartOutcome: Equatable, Sendable {
     case restarted
     case failed(String)
@@ -18,6 +10,14 @@ public enum ProxyControlOutcome: Equatable, Sendable {
     case stopped
     /// The proxy is healthy, but long-lived Codex workers still hold an older roster.
     case catalogUpdateReady(staleWorkerCount: Int?)
+    case failed(String)
+}
+
+/// Result of switching Codex's configuration through the fixed lifecycle helper.
+/// The helper's `ok` field is authoritative; the menu app does not infer routing
+/// success from proxy health or keep a second copy of routing state.
+public enum CodexRouteOutcome: Equatable, Sendable {
+    case completed(String)
     case failed(String)
 }
 
@@ -37,32 +37,14 @@ public enum CodexCatalogApplyOutcome: Equatable, Sendable {
     case failed(String)
 }
 
-/// Executes the panel's confirm-gated restart and reports what actually happened.
-///
-/// Split from the UI because the interesting behaviour is timing, not presentation: a
-/// 202 means accepted, while success requires an identity-validated replacement process.
+/// Executes confirm-gated lifecycle actions through the fixed structured helper.
 public actor ActionCoordinator {
-    public static let pollInterval: TimeInterval = 0.5
-
-    private let client: any ProxyActionClient
     private let lifecycle: any LifecycleCommandRunning
-    private let sleeper: @Sendable (TimeInterval) async -> Void
-    /// Injected so tests can advance time without waiting for it. A no-op sleeper alone
-    /// is not enough: the loop is bounded by a deadline, so the clock has to move too.
-    private let now: @Sendable () -> Date
 
     public init(
-        client: any ProxyActionClient,
-        lifecycle: any LifecycleCommandRunning = LifecycleHelper(),
-        sleeper: @escaping @Sendable (TimeInterval) async -> Void = { seconds in
-            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-        },
-        now: @escaping @Sendable () -> Date = { Date() }
+        lifecycle: any LifecycleCommandRunning = LifecycleHelper()
     ) {
-        self.client = client
         self.lifecycle = lifecycle
-        self.sleeper = sleeper
-        self.now = now
     }
 
     public func ensure() async -> ProxyControlOutcome {
@@ -75,6 +57,14 @@ public actor ActionCoordinator {
 
     public func stop() async -> ProxyControlOutcome {
         await runLifecycle(.stop, expected: .stopped)
+    }
+
+    public func restoreNativeCodex() async -> CodexRouteOutcome {
+        await runCodexRoute(.restoreNative)
+    }
+
+    public func routeCodexThroughProxy() async -> CodexRouteOutcome {
+        await runCodexRoute(.restoreBack)
     }
 
     private func runLifecycle(
@@ -94,6 +84,18 @@ public actor ActionCoordinator {
             return .failed(error.userMessage)
         } catch {
             return .failed("CodexCommander lifecycle control failed.")
+        }
+    }
+
+    private func runCodexRoute(_ action: LifecycleAction) async -> CodexRouteOutcome {
+        do {
+            let result = try await lifecycle.run(action)
+            guard result.ok else { return .failed(result.message) }
+            return .completed(result.message)
+        } catch let error as LifecycleHelperError {
+            return .failed(error.userMessage)
+        } catch {
+            return .failed("CodexCommander could not update the Codex route.")
         }
     }
 
@@ -133,47 +135,20 @@ public actor ActionCoordinator {
         }
     }
 
-    /// Requests the proxy's owned drain-and-restart path and waits for a replacement
-    /// CodexCommander identity. A 202 only means accepted; success requires a newly
-    /// identity-validated process (or a refused interval followed by a valid process
-    /// when no prior pid was discoverable).
+    /// The lifecycle helper owns stop/start serialization and replacement verification.
+    /// Its structured `ok` + `state` result is the only success authority in the app.
     public func restart() async -> RestartOutcome {
-        let previousPID = await client.currentEndpoint.expectedPID
-        let accepted: RestartAccepted
         do {
-            accepted = try await client.restart()
-        } catch let error as ProxyError {
+            let result = try await lifecycle.run(.restart)
+            guard result.ok, result.state == .running else {
+                return .failed(result.message)
+            }
+            return .restarted
+        } catch let error as LifecycleHelperError {
             return .failed(error.userMessage)
         } catch {
-            return .failed("CodexCommander could not accept the restart request.")
+            return .failed("CodexCommander could not restart.")
         }
-        guard accepted.success else {
-            return .failed("CodexCommander refused the restart request.")
-        }
-
-        let drainSeconds = TimeInterval(accepted.drainTimeoutMs) / 1_000
-        let deadline = now().addingTimeInterval(min(max(drainSeconds + 15, 20), 80))
-        var sawRefused = false
-        while now() < deadline {
-            await sleeper(Self.pollInterval)
-            let remaining = deadline.timeIntervalSince(now())
-            guard remaining > 0 else { break }
-            switch await client.liveness(timeout: min(1.5, remaining)) {
-            case .refused:
-                sawRefused = true
-            case .reachable(let pid):
-                if let previousPID {
-                    if pid != previousPID { return .restarted }
-                } else if sawRefused {
-                    return .restarted
-                }
-            case .indeterminate:
-                continue
-            }
-        }
-        return .failed(
-            "Restart was accepted, but a replacement CodexCommander process could not be confirmed. Check Logs or run `ccx status`."
-        )
     }
 
 }

@@ -34,7 +34,8 @@ import {
   getSubagentDeveloperInstructions,
   isMultiAgentV2Enabled,
 } from "./features";
-import { getCodexRoutingKind, type CodexRoutingKind } from "./inject";
+import { getCodexRoutingKind } from "./inject";
+import type { CodexRoutingKind } from "./routing-document";
 import { observeCodexBootFence } from "./boot-fence";
 
 export type CodexCatalogProtocol = "v1" | "default" | "v2";

@@ -61,8 +61,9 @@ CodexCommander の状態ファイルは `$CODEXCOMMANDER_HOME`(デフォルト `
 | `$CODEX_HOME/codexcommander-catalog.json` | Codex が使うネイティブおよびルーティングモデルカタログ。 |
 
 :::note
-CodexCommander は決して Codex 設定を削除しません。すべての注入は元に戻せます — `ccx stop`、`ccx restore`、
-または `ccx eject` は CodexCommander が追加した行だけを正確に削除し、ネイティブ Codex を復元します。
+CodexCommander は Codex 設定を削除しません。`ccx stop`、`ccx restore`、`ccx eject` は
+`config.toml` からマーカー所有の正確なルートだけを削除し、ネイティブ Codex を復元します。生成済みの
+カタログやキャッシュは残ることがありますが、ネイティブ Codex は参照しません。タスク、履歴、認証には触れません。
 :::
 
 ## 次へ

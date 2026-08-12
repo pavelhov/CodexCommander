@@ -1,9 +1,20 @@
 import * as readline from "node:readline";
-import { injectCodexConfig } from "../codex/inject";
-import { getConfigPath, getDefaultConfig, isValidProviderName, saveConfig } from "../config";
+import {
+  getConfigPath,
+  getDefaultConfig,
+  isValidProviderName,
+  mutatePersistedConfig,
+  saveConfig,
+  withConfigMutationLockSync,
+} from "../config";
 import { enrichProviderFromCatalog } from "../oauth/key-providers";
 import { deriveInitProviders } from "../providers/derive";
 import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../types";
+import {
+  restoreBackRoutingLifecycle,
+  type ProxyLifecycleResult,
+  type RoutingLifecycleIo,
+} from "./proxy-lifecycle";
 
 function createPrompt(): { ask(question: string): Promise<string>; close(): void } {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -69,6 +80,74 @@ function printMenu(providers: InitProvider[]): void {
 }
 
 const envKeyFor = (id: string) => `${id.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY`;
+
+/**
+ * Route Codex only through an identity-attested proxy that is already running.
+ *
+ * Setup deliberately does not grow its own lifecycle path: Route Back owns the
+ * E -> S authority order, current-home runtime proof, durable ON transition,
+ * and delegated live sync. A missing or unproven endpoint therefore cannot
+ * leave Codex pointing at a dead listener.
+ */
+export async function routeCodexThroughLiveProxyFromInit(
+  io: RoutingLifecycleIo = {},
+): Promise<ProxyLifecycleResult> {
+  return restoreBackRoutingLifecycle(io);
+}
+
+function replaceSetupConfigPreservingIntegrationIntent(
+  current: CodexCommanderConfig,
+  replacement: CodexCommanderConfig,
+) {
+  const integrations = current.clientIntegrations === undefined
+    ? undefined
+    : structuredClone(current.clientIntegrations);
+  const currentRecord = current as unknown as Record<string, unknown>;
+  for (const key of Object.keys(currentRecord)) delete currentRecord[key];
+  Object.assign(currentRecord, structuredClone(replacement));
+  if (integrations === undefined) delete current.clientIntegrations;
+  else current.clientIntegrations = integrations;
+  return { changed: true, value: undefined };
+}
+
+/**
+ * Replace setup-owned configuration while preserving the latest native-client
+ * intent. In particular, a concurrent Stop may have persisted `codex: false`;
+ * the setup wizard must not turn that back on by replacing the file with a
+ * stale default object whose absent value means ON.
+ */
+export function persistInitConfig(config: CodexCommanderConfig): void {
+  const mutateCurrent = () => mutatePersistedConfig(current => (
+    replaceSetupConfigPreservingIntegrationIntent(current, config)
+  ));
+  const outcome = mutateCurrent();
+  if (outcome.status !== "unavailable") return;
+  if (outcome.reason === "missing") {
+    withConfigMutationLockSync(() => {
+      // A cooperating writer may have created the file after the missing
+      // observation. Rebase through the same field-scoped replacement instead
+      // of erasing the new native-client intent.
+      const retry = mutateCurrent();
+      if (retry.status !== "unavailable" || retry.reason !== "missing") {
+        if (retry.status === "unavailable") {
+          throw new Error(
+            retry.reason === "invalid"
+              ? "Cannot overwrite an invalid CodexCommander config."
+              : "CodexCommander configuration changed repeatedly during setup; retry `ccx init`.",
+          );
+        }
+        return;
+      }
+      saveConfig(config);
+    });
+    return;
+  }
+  throw new Error(
+    outcome.reason === "invalid"
+      ? "Cannot overwrite an invalid CodexCommander config."
+      : "CodexCommander configuration changed repeatedly during setup; retry `ccx init`.",
+  );
+}
 
 export async function runInit(): Promise<void> {
   const prompt = createPrompt();
@@ -152,15 +231,19 @@ export async function runInit(): Promise<void> {
       defaultProvider: providerName,
     };
 
-    saveConfig(config);
+    persistInitConfig(config);
     console.log(`\n✅ Config saved to ${getConfigPath()}`);
     if (oauthHint) console.log(`🔐 Authenticate this provider with:  ccx login ${providerName}`);
 
-    const injectAnswer = await prompt.ask("Inject into Codex config.toml? [Y/n]: ");
-    if (injectAnswer.trim().toLowerCase() !== "n") {
-      console.log("Fetching available models from provider...");
-      const result = await injectCodexConfig(port, config);
-      console.log(result.success ? `✅ ${result.message}` : `⚠️  ${result.message}`);
+    const routeAnswer = await prompt.ask("Route Codex through a running proxy now? [Y/n]: ");
+    if (routeAnswer.trim().toLowerCase() !== "n") {
+      console.log("Verifying the running proxy and synchronizing models...");
+      const result = await routeCodexThroughLiveProxyFromInit();
+      if (result.ok) {
+        console.log(`✅ ${result.message}`);
+      } else {
+        console.log(`⚠️  ${result.message} Codex routing was left unchanged; run 'ccx start' to start and route the proxy.`);
+      }
     }
 
     const shimAnswer = await prompt.ask("Install Codex autostart shim? [Y/n]: ");

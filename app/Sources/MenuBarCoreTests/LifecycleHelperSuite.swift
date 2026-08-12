@@ -443,6 +443,31 @@ enum LifecycleHelperSuite {
             }
         }
 
+        t.test("lifecycle helper: passes the fixed restore-back action") {
+            try withTemporaryDirectory { root in
+                let script = try makeExecutable(
+                    in: root,
+                    named: "restore-helper",
+                    body: """
+                    #!/bin/sh
+                    printf '{"schemaVersion":1,"action":"%s","ok":true,"state":"running","changed":true,"pid":42,"port":10100,"message":"Codex routed through CodexCommander."}\\n' "$2"
+                    """
+                )
+                let helper = LifecycleHelper(
+                    invocation: LifecycleInvocation(executable: script),
+                    timeout: 2
+                )
+                let result = sync { try await helper.run(.restoreBack) }
+                switch result {
+                case .success(let value):
+                    t.equal(value.action, .restoreBack)
+                    t.equal(value.ok, true)
+                case .failure(let error):
+                    t.expect(false, "unexpected restore helper failure: \(error)")
+                }
+            }
+        }
+
         t.test("lifecycle helper: rejects a result with missing nullable pid or port keys") {
             try withTemporaryDirectory { root in
                 let script = try makeExecutable(

@@ -75,6 +75,66 @@ enum PollingSuite {
             t.equal(sync { await coordinator.currentInterval }, PollingCoordinator.backoffInterval)
         }
 
+        t.test("polling: missing post-stop attestation probes liveness and exposes Start") {
+            StubProtocol.reset([
+                .init(status: 0, urlError: .cannotConnectToHost),
+            ])
+            let installation = ProxyInstallation(
+                endpoint: .default,
+                credential: "admin-secret",
+                credentialAvailability: .file,
+                configDirectory: URL(fileURLWithPath: "/tmp"),
+                runtimeAttestation: nil
+            )
+            let client = try! ProxyClient(
+                installation: installation,
+                session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
+                discovery: { installation }
+            )
+            let coordinator = PollingCoordinator(client: client, endpoint: .default)
+
+            sync { await coordinator.refresh() }
+
+            let snapshot = sync { await coordinator.current }
+            t.equal(snapshot.state, .unreachable)
+            t.equal(snapshot.readiness, .unavailable)
+            t.equal(StubProtocol.recorded.count, 1, "only the public liveness probe reaches the socket")
+            t.equal(StubProtocol.recorded.first?.url?.path, "/healthz")
+            t.isNil(
+                StubProtocol.recorded.first?.value(forHTTPHeaderField: "x-codexcommander-api-key"),
+                "stopped-state proof never sends the durable admin credential"
+            )
+        }
+
+        t.test("polling: missing attestation never starts over a reachable listener") {
+            StubProtocol.reset([
+                .init(status: 200, body: identity),
+            ])
+            let installation = ProxyInstallation(
+                endpoint: .default,
+                credential: "admin-secret",
+                credentialAvailability: .file,
+                configDirectory: URL(fileURLWithPath: "/tmp"),
+                runtimeAttestation: nil
+            )
+            let client = try! ProxyClient(
+                installation: installation,
+                session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
+                discovery: { installation }
+            )
+            let coordinator = PollingCoordinator(client: client, endpoint: .default)
+
+            sync { await coordinator.refresh() }
+
+            let snapshot = sync { await coordinator.current }
+            t.equal(snapshot.state, .degraded(ProxyError.identityMismatch.userMessage))
+            t.equal(StubProtocol.recorded.count, 1)
+            t.isNil(
+                StubProtocol.recorded.first?.value(forHTTPHeaderField: "x-codexcommander-api-key"),
+                "reachable-listener proof also remains credential-free"
+            )
+        }
+
         t.test("polling: stale startup health stays neutral until revalidation completes") {
             StubProtocol.reset(
                 startupResponses(startupHealth(status: "at-risk", diagnosticStale: true))

@@ -6,7 +6,9 @@ import {
   buildProviderTableBlock,
   chooseCatalogPathForInjection,
   dominantEol,
+  externalCodexModelProvider,
   setRootOpenaiBaseUrl,
+  stripMarkerOwnedRoutingForNativeEscape,
   stripInjectedOpenaiBaseUrl,
   stripCodexCommanderConfig,
   stripRootContextWindowOverrides,
@@ -17,6 +19,22 @@ import {
 } from "../src/codex/subagent-defaults";
 
 describe("Codex config injection", () => {
+  test("external provider detection uses parsed TOML structure", () => {
+    expect(externalCodexModelProvider([
+      'note = """',
+      'model_provider = "decoy"',
+      '"""',
+      "",
+    ].join("\n"))).toBeNull();
+    expect(externalCodexModelProvider([
+      'profile = "work"',
+      'model_provider = "root-provider"',
+      "[profiles.work]",
+      'model_provider = "profile-provider"',
+      "",
+    ].join("\n"))).toBe("profile-provider");
+  });
+
   test("omits provider-level Responses WebSocket support by default", () => {
     const block = buildProviderTableBlock(10100);
 
@@ -53,6 +71,7 @@ describe("Codex config injection", () => {
     expect(buildProviderTableBlock(10100, false, false, "[::1]")).toContain('base_url = "http://[::1]:10100/v1"');
     expect(buildProviderTableBlock(10100, false, false, "192.168.1.20")).toContain('base_url = "http://192.168.1.20:10100/v1"');
     expect(buildProviderTableBlock(10100, false, false, "2001:db8::5")).toContain('base_url = "http://[2001:db8::5]:10100/v1"');
+    expect(buildProviderTableBlock(10100, false, false, "localhost.")).toContain('base_url = "http://localhost.:10100/v1"');
   });
 
   test("strips stale root context-window overrides on injection so the catalog drives model context (gpt-5.5 regression)", () => {
@@ -235,6 +254,247 @@ describe("Codex config injection", () => {
 });
 
 describe("Design B openai_base_url injection", () => {
+  test("native escape removes only the marker-owned endpoint and CCX catalog bytes", () => {
+    const fixtures = [
+      {
+        name: "LF with final newline",
+        eol: "\n",
+        prefix: "",
+        final: "\n",
+      },
+      {
+        name: "CRLF with BOM and no final newline",
+        eol: "\r\n",
+        prefix: "\uFEFF",
+        final: "",
+      },
+    ];
+    for (const fixture of fixtures) {
+      const before = fixture.prefix + [
+        '# untouched = "exact bytes"',
+        'model_catalog_json = "/tmp/codexcommander-catalog.json"',
+        "# Auto-injected by CodexCommander",
+        'openai_base_url = "http://127.0.0.1:10100/v1"',
+        "",
+        "[features]",
+        "fast_mode = true",
+      ].join(fixture.eol) + fixture.final;
+      const expected = fixture.prefix + [
+        '# untouched = "exact bytes"',
+        "",
+        "[features]",
+        "fast_mode = true",
+      ].join(fixture.eol) + fixture.final;
+
+      const escaped = stripMarkerOwnedRoutingForNativeEscape(before, "/tmp");
+      expect(escaped, fixture.name).toEqual({ content: expected, changed: true });
+      expect(stripMarkerOwnedRoutingForNativeEscape(escaped.content, "/tmp")).toEqual({
+        content: expected,
+        changed: false,
+      });
+    }
+  });
+
+  test("native escape preserves unmarked and near-match routing bytes", () => {
+    const userOwned = [
+      'model = "user/provider-model"',
+      'model_catalog_json = "/tmp/user-catalog.json"',
+      "# Auto-injected by CodexCommander (copied note)",
+      'openai_base_url = "https://gateway.example/v1"',
+      "",
+    ].join("\n");
+    expect(stripMarkerOwnedRoutingForNativeEscape(userOwned)).toEqual({
+      content: userOwned,
+      changed: false,
+    });
+  });
+
+  test("native escape accepts the exact emitted IPv6 loopback endpoint only", () => {
+    const injected = [
+      "# Auto-injected by CodexCommander",
+      'openai_base_url = "http://[::1]:10100/v1"',
+      "",
+    ].join("\n");
+    expect(stripMarkerOwnedRoutingForNativeEscape(injected, "/tmp/codex-home")).toEqual({
+      content: "",
+      changed: true,
+    });
+
+    const arbitrary = injected.replace("[::1]", "192.0.2.10");
+    expect(stripMarkerOwnedRoutingForNativeEscape(arbitrary, "/tmp/codex-home")).toEqual({
+      content: arbitrary,
+      changed: false,
+    });
+  });
+
+  test("native escape removes only the canonical CODEX_HOME catalog pointer", () => {
+    const before = [
+      'model_catalog_json = "/tmp/elsewhere/codexcommander-catalog.json"',
+      "# Auto-injected by CodexCommander",
+      'openai_base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    expect(stripMarkerOwnedRoutingForNativeEscape(before, "/tmp/codex-home").content).toBe(
+      'model_catalog_json = "/tmp/elsewhere/codexcommander-catalog.json"\n',
+    );
+  });
+
+  test("native escape supports the exact marker-owned provider-table shape", () => {
+    const before = [
+      'model_provider = "codexcommander"',
+      'model = "provider/model"',
+      'model_catalog_json = "/tmp/codex-home/codexcommander-catalog.json"',
+      'model_verbosity = "high"',
+      "",
+      "# Auto-injected by CodexCommander",
+      "[model_providers.codexcommander]",
+      'name = "CodexCommander Proxy"',
+      'base_url = "http://192.0.2.10:10100/v1"',
+      'wire_api = "responses"',
+      "requires_openai_auth = true",
+      "",
+      "[features]",
+      "fast_mode = true",
+      "",
+    ].join("\n");
+    expect(stripMarkerOwnedRoutingForNativeEscape(before, "/tmp/codex-home")).toEqual({
+      changed: true,
+      content: [
+        'model_verbosity = "high"',
+        "",
+        "",
+        "[features]",
+        "fast_mode = true",
+        "",
+      ].join("\n"),
+    });
+  });
+
+  test("every emitted provider hostname round-trips through the native escape grammar", () => {
+    for (const hostname of [
+      "127.0.0.1",
+      "::1",
+      "localhost.",
+      "host_name.local",
+      "2001:db8::5",
+      "fe80::1%lo0",
+    ]) {
+      const before = [
+        'model_provider = "codexcommander"',
+        "# Auto-injected by CodexCommander",
+        buildProviderTableBlock(10100, false, false, hostname).trimStart()
+          .replace("# Auto-injected by CodexCommander\n", ""),
+      ].join("\n");
+      expect(stripMarkerOwnedRoutingForNativeEscape(before, "/tmp/codex-home").changed).toBe(true);
+    }
+  });
+
+  test("native escape preserves user comments inside an exact owned provider table", () => {
+    const before = [
+      'model_provider = "codexcommander"',
+      "# Auto-injected by CodexCommander",
+      "[model_providers.codexcommander]",
+      'name = "CodexCommander Proxy"',
+      "# user note must survive",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'wire_api = "responses"',
+      "requires_openai_auth = true",
+      "",
+      "[features]",
+      "fast_mode = true",
+      "",
+    ].join("\n");
+    expect(stripMarkerOwnedRoutingForNativeEscape(before, "/tmp/codex-home")).toEqual({
+      changed: true,
+      content: [
+        "# user note must survive",
+        "",
+        "[features]",
+        "fast_mode = true",
+        "",
+      ].join("\n"),
+    });
+  });
+
+  test("native escape clears a proxy-dependent slash-model after exact route proof", () => {
+    const before = [
+      'model = "user/provider-model"',
+      "# Auto-injected by CodexCommander",
+      'openai_base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    expect(stripMarkerOwnedRoutingForNativeEscape(before, "/tmp/codex-home")).toEqual({
+      changed: true,
+      content: "",
+    });
+  });
+
+  test("native escape preserves a plain native model after exact route proof", () => {
+    const before = [
+      'model = "gpt-5.5"',
+      "# Auto-injected by CodexCommander",
+      'openai_base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    expect(stripMarkerOwnedRoutingForNativeEscape(before, "/tmp/codex-home")).toEqual({
+      changed: true,
+      content: 'model = "gpt-5.5"\n',
+    });
+  });
+
+  test("native escape refuses custom provider-table keys and endpoints", () => {
+    const exact = [
+      'model_provider = "codexcommander"',
+      "# Auto-injected by CodexCommander",
+      "[model_providers.codexcommander]",
+      'name = "CodexCommander Proxy"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'wire_api = "responses"',
+      "requires_openai_auth = true",
+      "",
+    ].join("\n");
+    for (const edited of [
+      exact.replace("http://127.0.0.1:10100/v1", "https://gateway.example/v1"),
+      exact.replace('wire_api = "responses"', 'wire_api = "chat"'),
+      exact.replace("requires_openai_auth = true", 'organization = "user-owned"'),
+      exact.replace('name = "CodexCommander Proxy"\n', ""),
+    ]) {
+      expect(stripMarkerOwnedRoutingForNativeEscape(edited, "/tmp/codex-home")).toEqual({
+        content: edited,
+        changed: false,
+      });
+    }
+  });
+
+  test("native escape refuses formatter variants instead of calling routed config native", () => {
+    const before = [
+      'model_provider = "codexcommander"',
+      "# Auto-injected by CodexCommander",
+      '["model_providers"."codexcommander"] # formatted',
+      'base_url = "http://192.0.2.10:10100/v1"',
+      'wire_api = "responses"',
+      "",
+    ].join("\n");
+    expect(stripMarkerOwnedRoutingForNativeEscape(before, "/tmp/codex-home")).toEqual({
+      content: before,
+      changed: false,
+    });
+  });
+
+  test("native escape never scans marker-looking text inside multiline TOML strings", () => {
+    const before = [
+      'note = """',
+      "# Auto-injected by CodexCommander",
+      'openai_base_url = "http://127.0.0.1:10100/v1"',
+      '"""',
+      "",
+    ].join("\n");
+    expect(stripMarkerOwnedRoutingForNativeEscape(before, "/tmp/codex-home")).toEqual({
+      content: before,
+      changed: false,
+    });
+  });
+
   test("buildOpenaiBaseUrlLine matches the actual bind host", () => {
     expect(buildOpenaiBaseUrlLine(10100)).toBe('openai_base_url = "http://127.0.0.1:10100/v1"');
     expect(buildOpenaiBaseUrlLine(10100, "localhost")).toBe('openai_base_url = "http://127.0.0.1:10100/v1"');

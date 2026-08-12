@@ -18,6 +18,25 @@ import {
 import { APPLY_CODEX_CATALOG_ACTION } from "../src/codex/catalog-apply";
 import type { CodexSyncResult } from "../src/codex/sync";
 import { RuntimeApiError } from "../src/cli/runtime-api";
+import {
+  PROXY_ENSURE_LEASE_HEADER,
+  PROXY_START_LEASE_HEADER,
+} from "../src/server/proxy-lifecycle-protocol";
+import type { ProxyLifecycleAuthority } from "../src/server/proxy-lifecycle-authority";
+
+function authority(events: string[]): ProxyLifecycleAuthority {
+  const ensure = { token: "ensure-token", release: () => {} };
+  const start = { token: "start-token", release: () => {} };
+  return {
+    deadlineAt: 1,
+    ensure,
+    start,
+    acquireStart: async () => start,
+    delegatedLease: () => ({ ensureToken: ensure.token, startToken: start.token }),
+    releaseStart: () => {},
+    releaseAll: () => events.push("release"),
+  };
+}
 
 function syncResult(overrides: Partial<CodexSyncResult> = {}): CodexSyncResult {
   return {
@@ -46,7 +65,8 @@ function liveSyncResult(overrides: Partial<CliCodexSyncResult> = {}): CliCodexSy
 describe("CLI catalog activation orchestration", () => {
   test("a live sync publishes through /api/sync and never falls back to a local writer", async () => {
     let localCalls = 0;
-    const requests: Array<{ path: string; baseUrl: string | undefined }> = [];
+    const events: string[] = [];
+    const requests: Array<{ path: string; baseUrl: string | undefined; headers: Headers }> = [];
     const result = await syncCodexCatalogForCli(
       { pid: 41, port: 14100, hostname: "0.0.0.0", source: "runtime" },
       {
@@ -54,15 +74,24 @@ describe("CLI catalog activation orchestration", () => {
           localCalls += 1;
           return syncResult();
         },
-        runtimeRequest: async (path, _init, deps) => {
-          requests.push({ path, baseUrl: deps.baseUrl });
+        acquireAuthority: async options => {
+          events.push(`acquire:${options.includeStart}`);
+          return authority(events);
+        },
+        runtimeRequest: async (path, init, deps) => {
+          requests.push({ path, baseUrl: deps.baseUrl, headers: new Headers(init.headers) });
           return liveSyncResult({ catalogWritten: false, cacheSynced: false });
         },
       },
     );
 
     expect(localCalls).toBe(0);
-    expect(requests).toEqual([{ path: "/api/sync", baseUrl: "http://127.0.0.1:14100" }]);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.path).toBe("/api/sync");
+    expect(requests[0]?.baseUrl).toBe("http://127.0.0.1:14100");
+    expect(requests[0]?.headers.get(PROXY_ENSURE_LEASE_HEADER)).toBe("ensure-token");
+    expect(requests[0]?.headers.get(PROXY_START_LEASE_HEADER)).toBe("start-token");
+    expect(events).toEqual(["acquire:true", "release"]);
     expect(result.catalogWritten).toBe(false);
   });
 
@@ -78,6 +107,7 @@ describe("CLI catalog activation orchestration", () => {
         runtimeRequest: async () => {
           throw new RuntimeApiError("unreachable", 503, null);
         },
+        acquireAuthority: async () => authority([]),
       },
     )).rejects.toThrow("unreachable");
     expect(localCalls).toBe(0);
@@ -85,6 +115,7 @@ describe("CLI catalog activation orchestration", () => {
 
   test("offline sync uses the canonical local sync facade", async () => {
     let localCalls = 0;
+    const events: string[] = [];
     const result = await syncCodexCatalogForCli(null, {
       syncModelsToCodex: async () => {
         localCalls += 1;
@@ -93,9 +124,14 @@ describe("CLI catalog activation orchestration", () => {
       runtimeRequest: async () => {
         throw new Error("unexpected runtime request");
       },
+      acquireAuthority: async options => {
+        events.push(`acquire:${options.includeStart}`);
+        return authority(events);
+      },
     });
     expect(localCalls).toBe(1);
     expect(result.ok).toBe(true);
+    expect(events).toEqual(["acquire:true", "release"]);
   });
 
   test("a public config-port identity is never treated as a management target", async () => {
@@ -112,6 +148,7 @@ describe("CLI catalog activation orchestration", () => {
           runtimeCalls += 1;
           throw new Error("public identity must not receive a management request");
         },
+        acquireAuthority: async () => authority([]),
       },
     );
 

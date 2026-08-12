@@ -21,8 +21,8 @@ macOS 伴侣会在菜单栏中显示最有用的 CodexCommander 状态，同时�
 此开关不会安装、停止或删除后台服务。
 
 可见应用与后台代理相互独立。当 CodexCommander 面板处于活动状态时，**Quit Menu Bar**（`⌘Q`）只关闭伴侣 UI，并让路由继续运行。
-**Stop CodexCommander and Quit…**（`⌥⌘Q`）是明确的破坏性退出操作：确认后停止代理和服务、恢复
-原生 Codex 路由，并且只有在确认停止成功后才关闭伴侣。
+**Stop CodexCommander and Quit…**（`⌥⌘Q`）是明确的破坏性退出操作：确认后先恢复
+原生 Codex 路由，再停止代理和服务；只有在确认停止成功后才关闭伴侣。
 
 ## 面板显示的内容
 
@@ -45,12 +45,20 @@ macOS 伴侣会在菜单栏中显示最有用的 CodexCommander 状态，同时�
   持久、非致命提示卡片。CodexCommander 代理会保持健康并继续运行。
 - **Show restart steps…** — 说明推荐的重新加载边界：完全退出 ChatGPT，重新打开后再开始新任务。
   菜单栏应用不会通过这张卡片强制重启后台工作器。
-- **Stop Proxy…** — 始终请求确认，会中断活动客户端和子智能体请求、恢复原生 Codex，并让菜单栏应用保持打开。
-- **Restart Proxy…** — 请求确认，允许代理用最多 60 秒排空活动请求，然后重新连接到替代进程。接受重启
-  请求不会被显示为完成；应用会等待新进程通过身份检查。
+- **Start Proxy** — 启动或连接代理，启用 Codex 集成，并让 Codex 通过运行中的端点路由。
+- **Stop Proxy…** — 始终请求确认，并在停止代理前恢复原生 Codex 路由。如果无法验证原生路由，代理和
+  服务会保持运行。菜单栏应用保持打开。
+- **Restart Proxy…** — 请求确认，并执行与 CLI 相同的安全停止→启动事务：先恢复原生 Codex 路由，再
+  终止旧代理；随后由显式 Start 阶段启动新代理，并让 Codex 重新通过它路由。若重启失败，Codex 会保持原生路由。
+- **Restore Native Codex** — 在不停止代理的情况下，把 Codex 切换回原生 OpenAI 路由。
+- **Route Codex Through Proxy** — 在不重启代理的情况下，把 Codex 指向已经运行的 CodexCommander 代理。
 - **Quit Menu Bar** — 只关闭伴侣 UI；不会停止代理、服务或客户端路由。面板处于活动状态时，这是安全的 `⌘Q` 操作。
-- **Stop CodexCommander and Quit…** — 确认中断后停止后台代理和服务、恢复原生 Codex 路由，并且只在
-  确认停止成功后退出。若停止失败，伴侣会保持打开并显示错误。面板处于活动状态时，快捷键为 `⌥⌘Q`。
+- **Stop CodexCommander and Quit…** — 确认中断后先恢复原生 Codex 路由，再停止后台代理和服务，并且
+  只在确认停止成功后退出。若停止失败，伴侣会保持打开并显示错误。面板处于活动状态时，快捷键为 `⌥⌘Q`。
+
+原生逃生路径刻意保持狭窄：它只会移除 <code>$CODEX_HOME/config.toml</code> 中带有 CodexCommander
+所有权标记的路由，不会更改 Codex 任务、历史记录、身份验证或代理进程，也不需要 `repair` 命令或协调器数据库。
+生成的目录和缓存可能仍留在磁盘上，但原生 Codex 不再引用它们。
 
 如果 ChatGPT 的配额报告可用，ChatGPT 会排在最前并默认展开。Kimi 和 Grok 显示为折叠摘要。
 已配置且支持配额的提供商即使未返回报告也不会从列表中消失；该行会显示**配额不可用**，展开后可进入

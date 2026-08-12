@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { claudeNotFoundHint } from "../src/cli/claude";
+import { buildClaudeEnv, claudeNotFoundHint, ensureProxyForClaude } from "../src/cli/claude";
 import { commandInvocation } from "../src/lib/win-exec";
-import { buildClaudeEnv } from "../src/cli/claude";
+import { ensureProxyLifecycle } from "../src/cli/proxy-lifecycle";
+import { PROXY_DELEGATED_START_ENV } from "../src/server/proxy-lifecycle-protocol";
 import type { CodexCommanderConfig } from "../src/types";
 
 function cfg(extra?: Partial<CodexCommanderConfig>): CodexCommanderConfig {
@@ -192,6 +193,179 @@ describe("ccx claude env assembly", () => {
     expect(env.ANTHROPIC_SMALL_FAST_MODEL).toBeUndefined();
   });
 
+});
+
+describe("ccx claude proxy lifecycle", () => {
+  test("uses serialized automatic Ensure without enabling Codex or spawning directly", async () => {
+    const calls: string[] = [];
+    let ensureHeld = false;
+    let startHeld = false;
+    const target = {
+      pid: 42,
+      port: 10123,
+      hostname: "127.0.0.1",
+      source: "runtime" as const,
+      baseUrl: "http://127.0.0.1:10123",
+      lifecycleLockLeaseV1: true,
+    };
+
+    const result = await ensureProxyForClaude({
+      ensureLifecycle: async options => {
+        calls.push("ensure-options");
+        expect(options).toEqual({
+          honorAutoStart: false,
+          ensureCompanion: false,
+        });
+        expect(options.action).toBeUndefined();
+        return ensureProxyLifecycle({
+          ...options,
+          io: {
+            loadConfig: () => cfg({
+              codexAutoStart: false,
+              clientIntegrations: { codex: false },
+            }),
+            acquireAuthority: async () => {
+              calls.push("acquire-E");
+              ensureHeld = true;
+              let released = false;
+              const releaseAll = () => {
+                if (released) return;
+                released = true;
+                if (startHeld) {
+                  startHeld = false;
+                  calls.push("release-S");
+                }
+                ensureHeld = false;
+                calls.push("release-E");
+              };
+              const releaseStart = () => {
+                if (!startHeld) return;
+                startHeld = false;
+                calls.push("release-S");
+              };
+              return {
+                deadlineAt: Number.POSITIVE_INFINITY,
+                ensure: { token: "ensure-token", release: releaseAll },
+                start: undefined,
+                acquireStart: async () => {
+                  expect(ensureHeld).toBe(true);
+                  startHeld = true;
+                  calls.push("acquire-S");
+                  return { token: "start-token", release: releaseStart };
+                },
+                delegatedLease: () => ensureHeld && startHeld
+                  ? { ensureToken: "ensure-token", startToken: "start-token" }
+                  : undefined,
+                releaseStart,
+                releaseAll,
+              };
+            },
+            findLive: async () => {
+              expect(ensureHeld).toBe(true);
+              calls.push("find");
+              return null;
+            },
+            setEnabled: () => {
+              calls.push("enable");
+              throw new Error("automatic Ensure must preserve Codex OFF");
+            },
+            reconcile: () => { calls.push("reconcile"); },
+            journalPending: () => { calls.push("journal"); return true; },
+            diagnoseService: () => ({
+              supported: true,
+              registrationState: "absent",
+              supervisorState: "inactive",
+              installed: false,
+              enabled: false,
+              running: false,
+              viable: false,
+              startable: false,
+              stale: false,
+              conflict: false,
+              backend: null,
+              summary: "not installed",
+            }),
+            spawnStart: async (port, env) => {
+              expect(ensureHeld).toBe(true);
+              expect(port).toBe(10100);
+              expect(env?.[PROXY_DELEGATED_START_ENV]).toBe("1");
+              calls.push("canonical-spawn");
+            },
+            waitForProxy: async () => {
+              expect(ensureHeld).toBe(true);
+              calls.push("wait");
+              return { pid: target.pid, port: target.port, hostname: target.hostname, source: "runtime" };
+            },
+            waitForReady: async () => {
+              expect(ensureHeld).toBe(true);
+              calls.push("ready");
+              return "ready";
+            },
+            syncLive: async (_live, config, _logger, lifecycleLease) => {
+              expect(ensureHeld).toBe(true);
+              expect(startHeld).toBe(true);
+              expect(lifecycleLease).toEqual({
+                ensureToken: "ensure-token",
+                startToken: "start-token",
+              });
+              expect(config.clientIntegrations?.codex).toBe(false);
+              calls.push("sync-off");
+              return {
+                status: "skipped",
+                skippedReason: "desired_disabled",
+                ok: true,
+                catalogQuality: "native-only",
+                catalogState: { state: "not_running", processes: [], catalogMtimeMs: null },
+              };
+            },
+          },
+        });
+      },
+      attestLive: async options => {
+        calls.push("attest");
+        expect(ensureHeld).toBe(false);
+        expect(options).toEqual({ expectedPid: target.pid });
+        return target;
+      },
+    });
+
+    expect(result).toEqual(target);
+    expect(calls).not.toContain("enable");
+    expect(calls).not.toContain("reconcile");
+    expect(calls).not.toContain("journal");
+    expect(calls.filter(call => call === "canonical-spawn")).toHaveLength(1);
+    expect(calls.indexOf("acquire-E")).toBeLessThan(calls.indexOf("canonical-spawn"));
+    expect(calls.indexOf("canonical-spawn")).toBeLessThan(calls.indexOf("acquire-S"));
+    expect(calls.indexOf("acquire-S")).toBeLessThan(calls.indexOf("sync-off"));
+    expect(calls.indexOf("sync-off")).toBeLessThan(calls.indexOf("release-S"));
+    expect(calls.indexOf("release-S")).toBeLessThan(calls.indexOf("release-E"));
+    expect(calls.indexOf("release-E")).toBeLessThan(calls.indexOf("attest"));
+  });
+
+  test("refuses an attested listener that does not match the serialized Ensure result", async () => {
+    const result = await ensureProxyForClaude({
+      ensureLifecycle: async () => ({
+        schemaVersion: 1,
+        action: "ensure",
+        ok: true,
+        state: "running",
+        changed: false,
+        pid: 42,
+        port: 10123,
+        message: "CodexCommander proxy is already running.",
+      }),
+      attestLive: async () => ({
+        pid: 42,
+        port: 10124,
+        hostname: "127.0.0.1",
+        source: "runtime",
+        baseUrl: "http://127.0.0.1:10124",
+        lifecycleLockLeaseV1: true,
+      }),
+    });
+
+    expect(result).toBeNull();
+  });
 });
 
 describe("ccx claude Windows launch (implementation contract)", () => {

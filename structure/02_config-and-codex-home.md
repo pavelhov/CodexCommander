@@ -170,15 +170,31 @@ and `routeModel`, but user config overrides registry defaults per field/key.
 
 ## Restore
 
-`ccx stop`, `ccx restore` / `ccx eject`, `ccx service stop`, and `ccx service uninstall` must strip
-CodexCommander config and routed catalog entries without damaging native Codex state.
+`ccx stop`, `ccx restore` / `ccx eject`, `ccx service stop`, and `ccx service uninstall` persist Codex
+integration OFF and use the narrow native-routing escape. The escape atomically removes only the exact
+marker-owned root route and its owned `model_catalog_json` pointer from `$CODEX_HOME/config.toml`; every
+unrelated byte is preserved. It does not run a repair workflow or require the Codex transition
+coordinator database.
+
+Stop and service-removal paths must restore and verify that native config before terminating the proxy
+or service; failure leaves those processes running. Plain `ccx restore` changes routing without changing
+proxy lifecycle. Existing `codexcommander-catalog.json` and `models_cache.json` files may remain on disk
+but are inert once `config.toml` no longer references them. Codex tasks, thread/history/rollout state,
+and authentication are outside lifecycle ownership and are never modified by the native escape.
+
+Explicit Start and Route Back are the inverse OFF→ON transition. If a recovery journal exists, they
+retire it only after the existing coordination layer proves the exact journal owner and observed
+surface stale. A refusal leaves integration OFF. Generated catalog/cache artifacts can be reused; no
+broad CODEX_HOME cleanup is part of either transition.
 
 Full `ccx uninstall` config cleanup is ownership-manifest based. A fresh config directory receives a
 root-bound owner marker and an uninstall manifest before its first atomic config write. Uninstall
 validates both bounded metadata files, rejects path traversal and a symlink/junction config root,
-and removes only normalized manifest entries. Manifest-owned directory links are unlinked without
-traversing their targets. Unknown files remain in place and make the command report a partial
-uninstall with their exact paths.
+and removes only normalized manifest entries while holding the lifecycle E lock. It retains that lock
+path plus the root-bound owner/manifest pair until E is released, preventing a concurrent Start from
+creating a second lock namespace; the metadata-only root remains afterward. Manifest-owned directory
+links are unlinked without traversing their targets. Unknown files remain in place and make the
+command report a partial uninstall with their exact paths.
 
 Nonempty config directories without canonical ownership metadata are deliberately not claimed. If
 either ownership file is missing, malformed, or bound to another root, uninstall refuses config

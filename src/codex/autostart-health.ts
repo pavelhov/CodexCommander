@@ -1,7 +1,8 @@
 import { codexAutoStartEnabled } from "../config";
 import { diagnoseService, type ServiceDiagnostic } from "../service";
 import type { CodexCommanderConfig } from "../types";
-import { getCodexRoutingKind, type CodexRoutingKind } from "./inject";
+import { getCodexRoutingKind } from "./inject";
+import type { CodexRoutingKind } from "./routing-document";
 import { diagnoseCodexShim, type CodexShimDiagnostic } from "./shim";
 
 export type StartupProtection = "service" | "shim" | "companion" | "none";

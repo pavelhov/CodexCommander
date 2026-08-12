@@ -20,6 +20,7 @@ import {
   isLocalAttestationSecret,
   verifyLocalAttestationProof,
 } from "../lib/local-management-attestation";
+import { PROXY_LIFECYCLE_LEASE_CAPABILITY_HEADER } from "./proxy-start-lock";
 
 export interface HealthzIdentity {
   service?: unknown;
@@ -89,6 +90,8 @@ export interface AttestedLiveManagementProxy extends LiveProxy {
   source: "runtime";
   /** Canonical request root derived from the attested runtime record. */
   baseUrl: string;
+  /** The attested listener understands delegated E/S shutdown leases. */
+  lifecycleLockLeaseV1: boolean;
 }
 
 export interface ManagementAttestationIo {
@@ -298,6 +301,9 @@ export async function attestLiveManagementProxy(
         signal: AbortSignal.timeout(timeoutMs),
       });
       const proof = response.headers.get(ATTESTATION_PROOF_HEADER);
+      const lifecycleLockLeaseV1 = response.headers.get(
+        PROXY_LIFECYCLE_LEASE_CAPABILITY_HEADER,
+      ) === "1";
       const proved = response.ok && verifyLocalAttestationProof(
           snapshot.attestationSecret,
           challenge,
@@ -321,6 +327,7 @@ export async function attestLiveManagementProxy(
         hostname: snapshot.hostname,
         source: "runtime",
         baseUrl,
+        lifecycleLockLeaseV1,
       };
     } catch {
       // Retry only by re-reading discovery state and issuing a fresh challenge.

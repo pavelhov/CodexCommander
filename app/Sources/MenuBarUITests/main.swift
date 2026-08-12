@@ -182,7 +182,7 @@ runner.test("ui: running proxy keeps the terminal glyph regardless of service pr
     runner.equal(Set(symbols).count, states.count, "every other operational state stays distinct")
 }
 
-runner.test("ui: footer exposes navigation, proxy lifecycle, and both exit contracts") {
+runner.test("ui: footer exposes navigation, lifecycle, Codex routing, and both exits") {
     let controller = PopoverViewController()
     _ = controller.view
     let titles = controller.footerTitles
@@ -190,6 +190,7 @@ runner.test("ui: footer exposes navigation, proxy lifecycle, and both exit contr
         titles,
         [
             "Dashboard", "Logs", "Refresh", "Start Proxy", "Restart Proxy…",
+            "Restore Native Codex", "Route Codex Through Proxy",
             "Quit Menu Bar", "Stop CodexCommander and Quit…",
         ],
         "footer titles"
@@ -240,7 +241,7 @@ runner.test("ui: catalog update presents manual ChatGPT restart outside the prox
     runner.equal(controller.catalogUpdateButtonEnabled, false)
     controller.hideCatalogUpdate()
     runner.equal(controller.catalogUpdateVisible, false)
-    runner.equal(controller.footerTitles.count, 7, "catalog action stays outside footer indexing")
+    runner.equal(controller.footerTitles.count, 9, "catalog action stays outside footer indexing")
 }
 
 runner.test("ui: startup control exposes desktop, headless, off, and approval states") {
@@ -705,7 +706,7 @@ runner.test("ui: accessibility labels exist on header and accordion") {
     _ = runner.notNil(controller.quotaAccordion.accessibilityLabel(), "quota a11y")
 }
 
-runner.test("ui: running footer invokes proxy and exit actions independently") {
+runner.test("ui: running footer invokes proxy, Codex route, and exit actions independently") {
     let controller = PopoverViewController()
     _ = controller.view
     controller.apply(makeSnapshot())
@@ -715,12 +716,17 @@ runner.test("ui: running footer invokes proxy and exit actions independently") {
     controller.onRefresh = { calls.append("refresh") }
     controller.onStop = { calls.append("stop") }
     controller.onRestart = { calls.append("restart") }
+    controller.onRestoreNativeCodex = { calls.append("restore-native") }
+    controller.onRouteCodexThroughProxy = { calls.append("restore-back") }
     controller.onQuitMenuBar = { calls.append("quit-menu") }
     controller.onStopAndQuit = { calls.append("stop-and-quit") }
-    for index in 0..<7 { controller.activateFooterForTesting(index) }
+    for index in 0..<9 { controller.activateFooterForTesting(index) }
     runner.equal(
         calls,
-        ["dashboard", "logs", "refresh", "stop", "restart", "quit-menu", "stop-and-quit"]
+        [
+            "dashboard", "logs", "refresh", "stop", "restart",
+            "restore-native", "restore-back", "quit-menu", "stop-and-quit",
+        ]
     )
 }
 
@@ -730,18 +736,26 @@ runner.test("ui: stopped footer offers Start and safe Quit without destructive e
     controller.apply(ProxySnapshot(state: .unreachable, endpoint: .default))
     var started = false
     var restarted = false
+    var restoredNative = false
+    var routedThroughProxy = false
     var quitMenuBar = false
     var stoppedAndQuit = false
     controller.onStart = { started = true }
     controller.onRestart = { restarted = true }
+    controller.onRestoreNativeCodex = { restoredNative = true }
+    controller.onRouteCodexThroughProxy = { routedThroughProxy = true }
     controller.onQuitMenuBar = { quitMenuBar = true }
     controller.onStopAndQuit = { stoppedAndQuit = true }
     controller.activateFooterForTesting(3)
     controller.activateFooterForTesting(4)
     controller.activateFooterForTesting(5)
     controller.activateFooterForTesting(6)
+    controller.activateFooterForTesting(7)
+    controller.activateFooterForTesting(8)
     runner.equal(started, true)
     runner.equal(restarted, false)
+    runner.equal(restoredNative, true)
+    runner.equal(routedThroughProxy, true)
     runner.equal(quitMenuBar, true)
     runner.equal(stoppedAndQuit, false)
 }
@@ -776,8 +790,12 @@ runner.test("ui: polling cannot re-enable lifecycle controls during an action") 
     _ = controller.view
     var stopped = false
     var restarted = false
+    var restoredNative = false
+    var routedThroughProxy = false
     controller.onStop = { stopped = true }
     controller.onRestart = { restarted = true }
+    controller.onRestoreNativeCodex = { restoredNative = true }
+    controller.onRouteCodexThroughProxy = { routedThroughProxy = true }
     controller.apply(makeSnapshot())
     controller.setLifecycleControlsEnabled(false)
 
@@ -785,8 +803,12 @@ runner.test("ui: polling cannot re-enable lifecycle controls during an action") 
     controller.apply(makeSnapshot())
     controller.activateFooterForTesting(3)
     controller.activateFooterForTesting(4)
+    controller.activateFooterForTesting(5)
+    controller.activateFooterForTesting(6)
     runner.equal(stopped, false, "stop remains disabled")
     runner.equal(restarted, false, "restart remains disabled")
+    runner.equal(restoredNative, false, "native restore remains disabled")
+    runner.equal(routedThroughProxy, false, "proxy routing remains disabled")
 
     controller.setLifecycleControlsEnabled(true)
     controller.activateFooterForTesting(3)
@@ -800,21 +822,29 @@ runner.test("ui: exit actions expose clear labels, accessibility, and distinct s
 
     let labels = controller.footerAccessibilityLabels
     runner.expect(
-        labels[5]?.contains("leave the proxy running") == true,
+        labels[5]?.contains("native OpenAI route") == true,
+        "native restore names its destination"
+    )
+    runner.expect(
+        labels[6]?.contains("CodexCommander proxy") == true,
+        "proxy route names its destination"
+    )
+    runner.expect(
+        labels[7]?.contains("leave the proxy running") == true,
         "safe quit explains proxy persistence"
     )
     runner.expect(
-        labels[6]?.contains("Stop the CodexCommander proxy") == true,
+        labels[8]?.contains("Stop the CodexCommander proxy") == true,
         "destructive exit explains proxy stop"
     )
 
     let shortcuts = controller.footerKeyEquivalents
-    runner.equal(shortcuts[5].0, "q", "safe quit key")
-    runner.equal(shortcuts[5].1, [.command], "safe quit modifiers")
-    runner.equal(shortcuts[6].0, "q", "destructive quit key")
-    runner.equal(shortcuts[6].1, [.command, .option], "destructive quit modifiers")
-    runner.equal(controller.footerEnabledStates[5], true, "safe quit enabled")
-    runner.equal(controller.footerEnabledStates[6], true, "destructive exit enabled")
+    runner.equal(shortcuts[7].0, "q", "safe quit key")
+    runner.equal(shortcuts[7].1, [.command], "safe quit modifiers")
+    runner.equal(shortcuts[8].0, "q", "destructive quit key")
+    runner.equal(shortcuts[8].1, [.command, .option], "destructive quit modifiers")
+    runner.equal(controller.footerEnabledStates[7], true, "safe quit enabled")
+    runner.equal(controller.footerEnabledStates[8], true, "destructive exit enabled")
 }
 
 runner.test("ui: lifecycle confirmations default to Cancel and mark stop actions destructive") {
@@ -837,6 +867,14 @@ runner.test("ui: lifecycle confirmations default to Cancel and mark stop actions
         LifecycleConfirmation.stopProxy.confirmationResponse,
         .alertFirstButtonReturn
     )
+    runner.expect(
+        stop.informativeText.contains("Fully quit ChatGPT and Codex before stopping"),
+        "stop confirmation tells the user to quit endpoint-caching clients first"
+    )
+    runner.expect(
+        stop.informativeText.contains("Reopen them afterward to use native routing"),
+        "stop confirmation explains how to resume on native routing"
+    )
 
     let restart = LifecycleConfirmation.restartProxy.makeAlert()
     runner.equal(restart.buttons.map(\.title), ["Restart Proxy", "Cancel"])
@@ -847,8 +885,16 @@ runner.test("ui: lifecycle confirmations default to Cancel and mark stop actions
     runner.equal(stopAndQuit.buttons.map(\.title), ["Stop and Quit", "Cancel"])
     runner.equal(stopAndQuit.buttons[0].hasDestructiveAction, true)
     runner.expect(
-        stopAndQuit.informativeText.contains("Codex will use native routing"),
-        "confirmation explains post-stop routing"
+        stopAndQuit.informativeText.contains("Fully quit ChatGPT and Codex before stopping"),
+        "stop-and-quit confirmation tells the user to quit clients first"
+    )
+    runner.expect(
+        stopAndQuit.informativeText.contains("Reopen them afterward to use native routing"),
+        "stop-and-quit confirmation explains post-stop routing"
+    )
+    runner.equal(
+        LifecycleResultMessage.proxyStopped,
+        "Proxy stopped. Fully quit ChatGPT and Codex if still open, then reopen them to use native routing."
     )
 }
 

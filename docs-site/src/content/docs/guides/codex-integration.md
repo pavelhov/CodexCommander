@@ -13,8 +13,10 @@ Direct uses only the caller/main bearer. The routes do not fall back to one anot
 
 ## Config injection
 
-`ccx init`, `ccx start`, and `ccx sync` call the injector. On the default loopback bind, it keeps
-Codex's built-in `openai` provider id and points that provider at CodexCommander:
+`ccx start` and `ccx sync` call the injector. `ccx init` reaches the same path only through an
+already-running proxy proven by its protected current-home runtime record; otherwise it leaves Codex
+native until explicit Start. On the default loopback bind, injection keeps Codex's built-in `openai`
+provider id and points that provider at CodexCommander:
 
 ```toml
 # root keys, before the first table
@@ -305,9 +307,12 @@ off by default; it runs only when Token Guardian is enabled, the `chatgpt` refre
 
 ## Restoring native Codex
 
-CodexCommander never traps you. **`ccx stop` is the single command that fully reverts to native Codex** — it
-stops the proxy, stops the background service if one is installed, and strips every injected line and
-routed catalog entry so plain `codex` works exactly as if CodexCommander was never there:
+CodexCommander never traps you. **`ccx stop` is the single command that safely returns Codex to native
+routing and then stops CodexCommander.** It saves integration as OFF, removes only the exact
+CodexCommander-owned route from `$CODEX_HOME/config.toml`, verifies native routing, and then stops the
+background service and proxy. If verification fails, both stay running. Tasks, history, rollouts, and
+authentication are untouched. Generated catalogs and caches may remain, but native Codex no longer
+references them:
 
 ```bash
 ccx stop       # stop the proxy + service, restore native Codex

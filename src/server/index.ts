@@ -22,6 +22,7 @@ import { shouldSyncCodexOnStart } from "../codex/desired-state";
 import { inspectNativeCodexOwnership } from "../integrations/native/ownership-preflight";
 import { registerCodexCooldownRecoveryProbeWorker } from "../codex/auth-api";
 import { startMemoryWatchdog } from "./memory-watchdog";
+import { PROXY_LIFECYCLE_LEASE_CAPABILITY_HEADER } from "./proxy-start-lock";
 import {
   reconcileLiveStateStores,
   setLiveStateStoreConfig,
@@ -679,6 +680,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           const proof = createLocalAttestationProof(localAttestationSecret, challenge, process.pid, healthPort);
           if (proof) response.headers.set(ATTESTATION_PROOF_HEADER, proof);
         }
+        response.headers.set(PROXY_LIFECYCLE_LEASE_CAPABILITY_HEADER, "1");
         return response;
       }
 

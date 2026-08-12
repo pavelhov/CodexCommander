@@ -23,6 +23,19 @@ function success(message = "CodexCommander is running."): ProxyLifecycleResult {
 }
 
 describe("macOS lifecycle JSON frame", () => {
+  test("restore actions keep their structured action names", () => {
+    for (const action of ["restore-native", "restore-back"] as const) {
+      const result: ProxyLifecycleResult = {
+        ...success(),
+        action,
+        message: action === "restore-native" ? "Codex now uses native routing." : "Codex now uses the proxy.",
+      };
+      const encoded = encodeMacOSLifecycleResult(action, result);
+      expect(encoded.exitCode).toBe(0);
+      expect(JSON.parse(encoded.frame)).toMatchObject({ action, ok: true });
+    }
+  });
+
   test("normal success keeps a matching zero exit status", () => {
     const encoded = encodeMacOSLifecycleResult("status", success());
     expect(encoded.exitCode).toBe(0);

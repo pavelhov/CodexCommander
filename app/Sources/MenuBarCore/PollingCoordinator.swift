@@ -150,7 +150,10 @@ public actor PollingCoordinator {
             await drainPendingRefresh()
             return
         } catch let error as ProxyError {
-            if cycle == generation { apply(error); publish() }
+            if cycle == generation {
+                await applyHealthFailure(error)
+                publish()
+            }
             refreshInFlight = false
             await drainPendingRefresh()
             return
@@ -278,6 +281,22 @@ public actor PollingCoordinator {
             // A timeout is degraded, not stopped: something may well still be running.
             snapshot.state = .degraded(error.userMessage)
         }
+    }
+
+    /// A normal verified stop removes the runtime attestation before the next poll,
+    /// while the durable admin token may remain. Authenticated startup health then
+    /// fails closed before opening a socket, which by itself cannot distinguish a
+    /// stopped proxy from an untrusted listener. Resolve only that ambiguity with the
+    /// credential-free, identity-validating liveness probe: a refused connection is
+    /// positively stopped; every reachable or inconclusive result keeps the safer
+    /// degraded/authentication state and therefore cannot start a duplicate proxy.
+    private func applyHealthFailure(_ error: ProxyError) async {
+        if error == .authenticationUnavailable || error == .identityMismatch,
+           await client.liveness() == .refused {
+            apply(.unreachable)
+            return
+        }
+        apply(error)
     }
 
     private func publish() {

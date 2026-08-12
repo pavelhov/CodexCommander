@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildWinswXml, ensureWinswBinary, parseWinswStatus, probeScmRegistration, sha256Hex, installWinswService, statusWinswRaw, winswScmDefinitionOwned, WINSW_SHA256, WINSW_SERVICE_ID } from "../src/lib/winsw";
-import { parseServiceArgs, serviceInstallArgs, serviceRepairArgs } from "../src/service";
+import { serviceInstallArgs, serviceRepairArgs } from "../src/service";
+import { parseServiceArgs } from "../src/cli/service-command";
 import { loadServiceTokenFromFile } from "../src/lib/service-secrets";
 import { getConfigDir } from "../src/config";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
@@ -150,12 +151,12 @@ describe("winsw fail-closed lifecycle", () => {
     ).rejects.toThrow(/Could not query the native service state/);
   });
 
-  test("a failed status query is treated as possibly-installed by lifecycle consumers", () => {
-    // stopServiceIfInstalled/installWindows gate on `!== "nonexistent"` — "unknown"
-    // must therefore route INTO stop/uninstall attempts, never skip them.
-    const service = readFileSync(new URL("../src/service.ts", import.meta.url), "utf8");
-    expect(service).not.toContain('statusWinswRaw() === "unknown"');
-    expect((service.match(/statusWinswRaw\(\) !== "nonexistent"/g) ?? []).length).toBeGreaterThanOrEqual(3);
+  test("a failed status query remains indeterminate instead of becoming absence", async () => {
+    const { probeWinswSupervisor } = await import("../src/service");
+    expect(probeWinswSupervisor("unknown")).toEqual(expect.objectContaining({
+      registrationState: "indeterminate",
+      supervisorState: "indeterminate",
+    }));
   });
 
   test("exe missing + non-Windows is confirmed absence; on Windows the SCM is queried", () => {

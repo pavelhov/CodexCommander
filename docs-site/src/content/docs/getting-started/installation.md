@@ -66,8 +66,9 @@ under `$CODEX_HOME` (default `~/.codex`).
 | `$CODEX_HOME/codexcommander-catalog.json` | Synced native and routed model catalog used by Codex. |
 
 :::note
-CodexCommander never deletes your Codex config. Every injection is reversible — `ccx stop`, `ccx restore`,
-or `ccx eject` strip exactly the lines CodexCommander added and restore native Codex.
+CodexCommander never deletes your Codex config. `ccx stop`, `ccx restore`, and `ccx eject` remove only
+the exact marker-owned route from `config.toml` and restore native Codex. Generated catalogs and caches
+may remain, but native Codex no longer references them; tasks, history, and authentication are untouched.
 :::
 
 ## Next

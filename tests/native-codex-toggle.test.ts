@@ -18,6 +18,7 @@ import { join } from "node:path";
 
 import { handleManagementAPI } from "../src/server/management-api";
 import type { ManagementApiDeps } from "../src/server/management/context";
+import type { ProxyLifecycleAuthority } from "../src/server/proxy-lifecycle-authority";
 import type { CodexSyncResult } from "../src/codex/sync";
 import type { CodexCommanderConfig } from "../src/types";
 
@@ -85,6 +86,45 @@ async function put(config: CodexCommanderConfig, body: unknown, deps?: Managemen
 function persistedCodexIntent(): unknown {
   const raw = JSON.parse(readFileSync(join(fixtureRoot, "config.json"), "utf8")) as Record<string, unknown>;
   return (raw.clientIntegrations as Record<string, unknown> | undefined)?.codex;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function fakeLifecycleAuthority(onRelease: (lock: "S" | "E") => void): ProxyLifecycleAuthority {
+  let ensureHeld = true;
+  let startHeld = true;
+  return {
+    deadlineAt: Date.now() + 1_000,
+    ensure: { token: "ensure", release: () => {} },
+    get start() {
+      return startHeld ? { token: "start", release: () => this.releaseStart() } : undefined;
+    },
+    async acquireStart() {
+      throw new Error("toggle acquires E and S together");
+    },
+    delegatedLease: () => !ensureHeld || !startHeld
+      ? undefined
+      : { ensureToken: "ensure", startToken: "start" },
+    releaseStart() {
+      if (!startHeld) return;
+      startHeld = false;
+      onRelease("S");
+    },
+    releaseAll() {
+      this.releaseStart();
+      if (!ensureHeld) return;
+      ensureHeld = false;
+      onRelease("E");
+    },
+  };
 }
 
 beforeEach(() => {
@@ -167,6 +207,39 @@ describe("turning Codex off", () => {
     expect(second.body.changed).toBe(false);
     expect(persistedCodexIntent()).toBe(false);
   });
+
+  test("reports an unsafe native restore as a post-commit HTTP failure, never ok true", async () => {
+    const releases: string[] = [];
+    writeFileSync(join(fixtureRoot, "service-state.json"), JSON.stringify({
+      version: 3,
+      codexHome: join(fixtureRoot, "foreign-codex-home"),
+      codexCommanderHome: join(fixtureRoot, "foreign-commander-home"),
+      bunPath: process.execPath,
+      cliPath: join(import.meta.dir, "../src/cli/index.ts"),
+      backend: "scheduler",
+    }), { mode: 0o600 });
+    const result = await put(baseConfig(), { enabled: false }, testDeps({
+      proxyStopLifecycle: {
+        acquireAuthority: async () => fakeLifecycleAuthority(lock => releases.push(lock)),
+      },
+    }));
+
+    expect(result.status).toBe(500);
+    expect(result.body).not.toHaveProperty("ok", true);
+    expect(result.body).toMatchObject({
+      error: "native integration change failed",
+      code: "native_integration_failed",
+      clientId: "codex",
+      reason: "write_failed",
+      desiredEnabled: false,
+    });
+    expect(result.body.message).toContain("Codex native restore refused");
+    expect(result.body.message).toContain("a service is installed for CODEX_HOME=");
+    // Intent-first remains explicit: the next safe Start still honors OFF.
+    expect(persistedCodexIntent()).toBe(false);
+    // The central authority still releases S before E on the refusal path.
+    expect(releases).toEqual(["S", "E"]);
+  });
 });
 
 describe("turning Codex back on", () => {
@@ -184,5 +257,109 @@ describe("turning Codex back on", () => {
     });
     // Absence is ON, so an untouched config and a re-enabled one are identical.
     expect(persistedCodexIntent()).toBeUndefined();
+  });
+});
+
+describe("shared proxy lifecycle serialization", () => {
+  test("PUT ON queues behind Stop and performs no mutation before E then S are acquired", async () => {
+    const disabled = { ...baseConfig(), clientIntegrations: { codex: false } };
+    writeFileSync(join(fixtureRoot, "config.json"), JSON.stringify(disabled, null, 2));
+    const authorityEntered = deferred<void>();
+    const releaseHeldStop = deferred<void>();
+    const calls: string[] = [];
+
+    const pending = put(disabled, { enabled: true }, testDeps({
+      proxyStopLifecycle: {
+        acquireAuthority: async options => {
+          calls.push("wait-for-stop");
+          expect(options).toEqual({ includeStart: true });
+          authorityEntered.resolve();
+          await releaseHeldStop.promise;
+          calls.push("acquire-E-then-S");
+          return fakeLifecycleAuthority(lock => calls.push(`release-${lock}`));
+        },
+      },
+      syncModelsToCodex: async () => {
+        calls.push("sync-routing");
+        return currentSyncResult();
+      },
+    }));
+
+    await authorityEntered.promise;
+    expect(persistedCodexIntent()).toBe(false);
+    expect(calls).toEqual(["wait-for-stop"]);
+
+    releaseHeldStop.resolve();
+    const result = await pending;
+    expect(result.status).toBe(200);
+    expect(persistedCodexIntent()).toBeUndefined();
+    expect(disabled.clientIntegrations?.codex).toBeUndefined();
+    expect(calls).toEqual([
+      "wait-for-stop",
+      "acquire-E-then-S",
+      "sync-routing",
+      "release-S",
+      "release-E",
+    ]);
+  });
+
+  test("PUT OFF queues behind Start and does not persist OFF before E then S are acquired", async () => {
+    const enabledConfig = baseConfig();
+    const authorityEntered = deferred<void>();
+    const releaseHeldStart = deferred<void>();
+    const calls: string[] = [];
+
+    const pending = put(enabledConfig, { enabled: false }, testDeps({
+      proxyStopLifecycle: {
+        acquireAuthority: async options => {
+          calls.push("wait-for-start");
+          expect(options).toEqual({ includeStart: true });
+          authorityEntered.resolve();
+          await releaseHeldStart.promise;
+          calls.push("acquire-E-then-S");
+          return fakeLifecycleAuthority(lock => calls.push(`release-${lock}`));
+        },
+      },
+    }));
+
+    await authorityEntered.promise;
+    expect(persistedCodexIntent()).toBeUndefined();
+    expect(calls).toEqual(["wait-for-start"]);
+
+    releaseHeldStart.resolve();
+    const result = await pending;
+    expect(result.status).toBe(200);
+    expect(persistedCodexIntent()).toBe(false);
+    expect(enabledConfig.clientIntegrations?.codex).toBe(false);
+    expect(calls).toEqual([
+      "wait-for-start",
+      "acquire-E-then-S",
+      "release-S",
+      "release-E",
+    ]);
+  });
+
+  test("an unavailable lifecycle authority refuses without changing intent or artifacts", async () => {
+    const calls: string[] = [];
+    const result = await put(baseConfig(), { enabled: true }, testDeps({
+      proxyStopLifecycle: {
+        acquireAuthority: async options => {
+          calls.push(`acquire:${String(options?.includeStart)}`);
+          throw new Error("Stop holds lifecycle authority");
+        },
+      },
+      syncModelsToCodex: async () => {
+        calls.push("sync-routing");
+        return currentSyncResult();
+      },
+    }));
+
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({
+      clientId: "codex",
+      reason: "config_busy",
+    });
+    expect(persistedCodexIntent()).toBeUndefined();
+    expect(calls).toEqual(["acquire:true"]);
   });
 });

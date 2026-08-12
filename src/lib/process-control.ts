@@ -13,6 +13,10 @@ import {
   attestLiveManagementProxy,
   type RuntimeLivenessRecord,
 } from "../server/proxy-liveness";
+import {
+  proxyLifecycleLockLeaseHeaders,
+  type ProxyLifecycleLockLease,
+} from "../server/proxy-lifecycle-protocol";
 
 export function isProcessAlive(pid: number): boolean {
   try {
@@ -42,6 +46,7 @@ export interface GracefulStopIo {
   waitExit?: (pid: number, timeoutMs: number) => boolean;
   env?: Record<string, string | undefined>;
   exitTimeoutMs?: number;
+  lifecycleLease?: ProxyLifecycleLockLease;
 }
 
 interface ProtectedRuntimeIdentity {
@@ -66,7 +71,8 @@ export interface StopProxyIo {
   waitExit?: (pid: number, timeoutMs: number) => boolean;
   readRuntime?: (pid?: number) => RuntimeLivenessRecord | null;
   readProcessIdentity?: (pid: number) => ProxySignalIdentity | null;
-  gracefulStop?: (pid: number) => Promise<GracefulStopResult>;
+  gracefulStop?: (pid: number, lease?: ProxyLifecycleLockLease) => Promise<GracefulStopResult>;
+  lifecycleLease?: ProxyLifecycleLockLease;
   signal?: (pid: number, signal: NodeJS.Signals) => void;
   taskkill?: (pid: number) => void;
   waitStoppedPort?: (
@@ -122,10 +128,17 @@ export async function stopProxyGracefully(pid: number, io: GracefulStopIo = {}):
     timeoutMs: io.exitTimeoutMs ? Math.min(io.exitTimeoutMs, 10_000) : 10_000,
   });
   if (!target) return false;
+  // Older proxies do not understand the delegated E/S lease. The caller has
+  // already restored native routing, so fall through to the identity-checked
+  // signal ladder instead of entering the old server-side restore path.
+  if (io.lifecycleLease && !target.lifecycleLockLeaseV1) return false;
   const env = io.env ?? process.env;
   const headers: Record<string, string> = {};
   const token = configuredAdminToken(readEnv(HOME_ENV, env as NodeJS.ProcessEnv), env as NodeJS.ProcessEnv);
   if (token) headers[API_KEY_HEADER] = token;
+  if (io.lifecycleLease) {
+    Object.assign(headers, proxyLifecycleLockLeaseHeaders(io.lifecycleLease));
+  }
   try {
     const res = await fetchFn(`${target.baseUrl}/api/stop`, {
       method: "POST",
@@ -408,8 +421,8 @@ export async function stopProxy(pid: number, io: StopProxyIo = {}): Promise<void
   const readRuntime = io.readRuntime ?? readRuntimePort;
   const runtime = readRuntime(pid);
   const graceful = await (io.gracefulStop
-    ? io.gracefulStop(pid)
-    : stopProxyGracefully(pid, { readRuntime }));
+    ? io.gracefulStop(pid, io.lifecycleLease)
+    : stopProxyGracefully(pid, { readRuntime, lifecycleLease: io.lifecycleLease }));
   if (graceful === "refused") {
     // The proxy refused on purpose (foreign service owns it). Forcing would strip shared
     // config while that service keeps the proxy alive.

@@ -18,9 +18,9 @@ ccx init
 2. **API key** — paste a key, or reference an environment variable like `${ANTHROPIC_API_KEY}`.
 3. **Default model** — for key, local, and custom providers, accept the preset or enter a model id.
 4. **Proxy port** — defaults to `10100`.
-5. **Inject into Codex?** — on a normal loopback setup, CodexCommander adds a root `openai_base_url` to
-   `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`) so Codex's built-in `openai` provider
-   targets the proxy. Remote/LAN binds use a dedicated provider entry with an API-auth header instead.
+5. **Route Codex through a running proxy now?** — if an already-running proxy is proven from its
+   protected current-home runtime record, the wizard synchronizes models and routes Codex through it.
+   Otherwise Codex stays native; the explicit `ccx start` in the next step starts and routes the proxy.
 6. **Install the autostart shim?** — when enabled, launching `codex` runs `ccx ensure` first.
 
 The result is saved to `$CODEXCOMMANDER_HOME/config.json` (default `~/.codexcommander/config.json`).

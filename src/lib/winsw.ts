@@ -360,7 +360,22 @@ export async function installWinswService(entry: WinswEntry, deps: WinswInstallD
 }
 
 export function startWinswService(): void { assertWinswScmDefinitionOwned(); runWinsw(["start"]); }
-export function stopWinswService(): void { assertWinswScmDefinitionOwned(); try { runWinsw(["stopwait"]); } catch { /* not running */ } }
+export function stopWinswService(): void {
+  assertWinswScmDefinitionOwned();
+  const before = statusWinswRaw();
+  if (before === "stopped") return;
+  if (before !== "started") {
+    throw new Error("Could not verify that the native service is running before stop.");
+  }
+  try {
+    runWinsw(["stopwait"]);
+  } catch (error) {
+    if (statusWinswRaw() !== "stopped") throw error;
+  }
+  if (statusWinswRaw() !== "stopped") {
+    throw new Error("Native service did not confirm a stopped state.");
+  }
+}
 export function uninstallWinswService(): void {
   if (!existsSync(winswExePath())) {
     // The binary is gone but the SCM registration can outlive it (quarantine, partial

@@ -16,7 +16,8 @@ import {
   type CodexCatalogArtifactProof,
   type CodexCatalogDesiredSnapshot,
 } from "./catalog-activation";
-import { getCodexRoutingKind, type CodexRoutingKind } from "./inject";
+import { getCodexRoutingKind } from "./inject";
+import type { CodexRoutingKind } from "./routing-document";
 import { syncModelsToCodex, type CodexSyncResult } from "./sync";
 import { recordCodexBootFenceApplied } from "./boot-fence";
 

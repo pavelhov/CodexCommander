@@ -13,8 +13,9 @@ proxy 提供一条裸 `openai` Codex 登录路由，支持 Pool（默认）和 D
 
 ## Config 注入
 
-`ccx init`、`ccx start` 和 `ccx sync` 都会调用注入器。在默认的 loopback 绑定下，它会保留
-Codex 内置的 `openai` provider id，并将该 provider 指向 CodexCommander：
+`ccx start` 和 `ccx sync` 会调用注入器。`ccx init` 只有在当前 home 的受保护 runtime 记录能够证明
+代理已运行时才会进入同一路径；否则 Codex 会保持原生状态直到显式 Start。在默认的 loopback 绑定下，
+注入器会保留 Codex 内置的 `openai` provider id，并将该 provider 指向 CodexCommander：
 
 ```toml
 # root keys, before the first table
@@ -282,9 +283,10 @@ fallback 行为，参见 [Sub-agent Surface](/guides/sub-agent-surface/)。
 
 ## 恢复原生 Codex
 
-CodexCommander 绝不会把你困住。**`ccx stop` 是完全恢复原生 Codex 的单一命令** —— 它会停止 proxy、
-停止后台服务（如已安装），并剥除所有注入的行和路由的目录条目，使普通的 `codex` 完全像 CodexCommander
-从未存在过一样工作：
+CodexCommander 不会把你困住。**`ccx stop` 是先把 Codex 安全恢复到原生路由、再停止
+CodexCommander 的单一命令。** 它会把集成保存为 OFF，只从 `$CODEX_HOME/config.toml` 移除
+CodexCommander 明确拥有的路由，验证原生路由后再停止后台服务和 proxy。若验证失败，两者都会保持运行。
+它不会触碰任务、历史记录、rollout 或身份验证。生成的目录和缓存可能仍会保留，但原生 Codex 不再引用它们：
 
 ```bash
 ccx stop       # stop the proxy + service, restore native Codex

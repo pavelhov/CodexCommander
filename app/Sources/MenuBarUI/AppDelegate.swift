@@ -36,7 +36,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
             self.endpoint = installation.endpoint
             let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
             self.coordinator = coordinator
-            self.actions = ActionCoordinator(client: client)
+            self.actions = ActionCoordinator()
             wire(controller: controller, coordinator: coordinator)
         } catch {
             // Keep the panel usable after an unsafe/missing discovery result, but retain
@@ -53,7 +53,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
             self.endpoint = fallback.endpoint
             let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
             self.coordinator = coordinator
-            self.actions = ActionCoordinator(client: client)
+            self.actions = ActionCoordinator()
             wire(controller: controller, coordinator: coordinator)
         }
     }
@@ -120,6 +120,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         controller.onStart = { [weak self] in self?.startProxy() }
         controller.onStop = { [weak self] in self?.stopProxy() }
         controller.onRestart = { [weak self] in self?.restartProxy() }
+        controller.onRestoreNativeCodex = { [weak self] in self?.restoreNativeCodex() }
+        controller.onRouteCodexThroughProxy = { [weak self] in
+            self?.routeCodexThroughProxy()
+        }
         controller.onApplyCodexCatalog = { [weak self] in self?.applyCodexCatalog() }
         controller.onOpenStartupOptions = { [weak self] in self?.openStartupOptions() }
         controller.onQuitMenuBar = { [weak self] in self?.quitMenuBar(nil) }
@@ -476,7 +480,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                 case .stopped:
                     self.clearCatalogUpdate()
                     self.controller.showResult(
-                        "Proxy stopped. The menu bar app is still open.",
+                        LifecycleResultMessage.proxyStopped,
                         isError: false
                     )
                 case .running:
@@ -493,8 +497,58 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         }
     }
 
+    private func restoreNativeCodex() {
+        performCodexRoute(progressMessage: "Restoring native Codex routing…") { actions in
+            await actions.restoreNativeCodex()
+        }
+    }
+
+    private func routeCodexThroughProxy() {
+        performCodexRoute(progressMessage: "Routing Codex through CodexCommander…") { actions in
+            await actions.routeCodexThroughProxy()
+        }
+    }
+
+    /// The tray is only a command surface for the canonical CLI operations. It keeps
+    /// no routing model of its own and reports success only when the structured helper
+    /// result says the operation completed.
+    private func performCodexRoute(
+        progressMessage: String,
+        operation: @escaping @Sendable (ActionCoordinator) async -> CodexRouteOutcome
+    ) {
+        guard !lifecycleInFlight, !restartInFlight, !catalogActionInFlight else { return }
+        lifecycleInFlight = true
+        updateApplicationMenu()
+        controller.setLifecycleControlsEnabled(false)
+        refreshCatalogApplyAvailability()
+        controller.showResult(progressMessage, isError: false)
+
+        Task { [actions, coordinator] in
+            let outcome: CodexRouteOutcome
+            if let actions {
+                outcome = await operation(actions)
+            } else {
+                outcome = .failed("Lifecycle control is unavailable.")
+            }
+            await coordinator?.forceRefresh()
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.lifecycleInFlight = false
+                self.updateApplicationMenu()
+                switch outcome {
+                case .completed(let message):
+                    self.controller.showResult(message, isError: false)
+                case .failed(let message):
+                    self.controller.showResult(message, isError: true)
+                }
+                self.controller.setLifecycleControlsEnabled(true)
+                self.refreshCatalogApplyAvailability()
+            }
+        }
+    }
+
     /// Restart is destructive to in-flight work, so it always confirms first and only
-    /// reports success after ActionCoordinator confirms a replacement process.
+    /// reports success only after the lifecycle helper confirms a running replacement.
     private func restartProxy() {
         guard !restartInFlight, !lifecycleInFlight, !catalogActionInFlight else { return }
         guard confirm(.restartProxy) else { return }
@@ -504,7 +558,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         controller.setRestartEnabled(false)
         controller.setLifecycleControlsEnabled(false)
         refreshCatalogApplyAvailability()
-        controller.showResult("Restart accepted…", isError: false)
+        controller.showResult("Restarting CodexCommander…", isError: false)
 
         Task { [actions, coordinator] in
             let outcome = await actions?.restart() ?? .failed("Unavailable.")

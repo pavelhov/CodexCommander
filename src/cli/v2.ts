@@ -24,6 +24,9 @@ import {
 } from "../config";
 import { resolveAndPersistCodexRuntime, type ResolveCodexRuntimeDeps } from "../codex/runtime";
 import type { CodexCommanderConfig } from "../types";
+import { acquireProxyLifecycleAuthority, type ProxyLifecycleAuthority } from "../server/proxy-lifecycle-authority";
+import { findLiveProxy } from "../server/proxy-liveness";
+import { runLocalCliCodexSync, syncCodexCatalogForCli } from "./catalog-activation";
 
 export interface V2CliDeps {
   execFile?: (file: string, args: string[], options?: SpawnInvocation["options"]) => void;
@@ -31,6 +34,7 @@ export interface V2CliDeps {
   isEnabled?: typeof isMultiAgentV2Enabled;
   hasMaxThreads?: typeof hasAgentsMaxThreads;
   sync?: (port?: number) => Promise<unknown>;
+  acquireAuthority?: (options: { includeStart: true }) => Promise<ProxyLifecycleAuthority>;
   log?: Pick<Console, "log" | "error">;
 }
 
@@ -236,8 +240,15 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
       return 1;
     }
     try {
-      const sync = deps.sync ?? (await import("../codex/sync")).syncModelsToCodex;
-      await sync(findPort ? await findPort() : undefined);
+      if (deps.sync) {
+        const port = findPort ? await findPort() : undefined;
+        await runLocalCliCodexSync(
+          () => deps.sync!(port),
+          deps.acquireAuthority ?? acquireProxyLifecycleAuthority,
+        );
+      } else {
+        await syncCodexCatalogForCli(await findLiveProxy());
+      }
     } catch (err) {
       log.error(`catalog resync failed: ${err instanceof Error ? err.message : String(err)} — run 'ccx sync' manually.`);
       return 1;
@@ -265,8 +276,15 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
   // Resync catalog so multi-agent surface metadata stays fresh in both the
   // on-disk catalog and models_cache.json after the toggle flip.
   try {
-    const sync = deps.sync ?? (await import("../codex/sync")).syncModelsToCodex;
-    await sync(findPort ? await findPort() : undefined);
+    if (deps.sync) {
+      const port = findPort ? await findPort() : undefined;
+      await runLocalCliCodexSync(
+        () => deps.sync!(port),
+        deps.acquireAuthority ?? acquireProxyLifecycleAuthority,
+      );
+    } else {
+      await syncCodexCatalogForCli(await findLiveProxy());
+    }
   } catch (err) {
     log.error(`catalog resync failed (flag IS flipped): ${err instanceof Error ? err.message : String(err)} — run 'ccx sync' manually.`);
     return 1;

@@ -3,11 +3,11 @@
  */
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
-import { syncModelsToCodex } from "../codex/sync";
 import { hasOwnProvider, isValidProviderName, loadConfig, saveConfig } from "../config";
 import { routedSlug } from "../providers/slug-codec";
 import { findLiveProxy } from "../server/proxy-liveness";
 import type { CodexCommanderConfig, CodexCommanderCustomModel } from "../types";
+import { syncCodexCatalogForCli } from "./catalog-activation";
 
 const ADD_USAGE = "Usage: ccx models add <provider> <modelId> [--display-name <name>] [--context-window <tokens>] [--modalities text,image,audio]";
 const REMOVE_USAGE = "Usage: ccx models remove <customId|provider/modelId> [--yes]";
@@ -102,7 +102,7 @@ function rejectUnexpectedArgs(args: string[], usage: string): void {
 async function syncCustomModelsIfLive(): Promise<void> {
   const live = await findLiveProxy();
   if (!live) return;
-  const synced = await syncModelsToCodex(live.port).catch(error => {
+  const synced = await syncCodexCatalogForCli(live).catch(error => {
     console.error(`Warning: custom model saved, but catalog sync failed: ${error instanceof Error ? error.message : String(error)}`);
     return null;
   });

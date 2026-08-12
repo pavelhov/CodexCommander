@@ -44,7 +44,8 @@ describe("test runner isolation", () => {
     const originalShardSize = process.env.CCX_TEST_SHARD_SIZE;
     delete process.env.CCX_TEST_SHARD_SIZE;
     try {
-      expect(resolveTestShardSize()).toBe(DEFAULT_TEST_SHARD_SIZE);
+      expect(DEFAULT_TEST_SHARD_SIZE).toBe(1);
+      expect(resolveTestShardSize()).toBe(1);
     } finally {
       if (originalShardSize === undefined) delete process.env.CCX_TEST_SHARD_SIZE;
       else process.env.CCX_TEST_SHARD_SIZE = originalShardSize;

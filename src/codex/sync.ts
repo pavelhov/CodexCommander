@@ -1,4 +1,5 @@
-import { currentExternalCodexModelProvider, injectCodexConfig } from "./inject";
+import { injectCodexConfig } from "./inject";
+import { currentExternalCodexModelProvider } from "./routing-transition";
 import { printProjectCodexConfigWarnings, groupProjectCodexConfigWarningsByPath, type ProjectCodexConfigWarning } from "./project-config-warnings";
 import { refreshCodexModelCatalog, type CodexCatalogRefreshResult } from "./refresh";
 import { applyProxyEnv, loadConfig } from "../config";

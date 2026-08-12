@@ -9,13 +9,13 @@ description: 安装、启动、停止、服务、诊断和同步命令。
 
 ### `ccx init` · `ccx setup`
 
-交互式初始化向导（`setup` 是 `init` 的别名）。会提示选择提供方（预设或自定义）、API key（字面量或 `${ENV}`）、默认模型和代理端口；将内容保存到 `~/.codexcommander/config.json`；可选地把代理注入 `$CODEX_HOME/config.toml`（默认 `~/.codex/config.toml`）；并可选安装 Codex 自启动 shim。
+交互式初始化向导（`setup` 是 `init` 的别名）。会提示选择提供方（预设或自定义）、API key（字面量或 `${ENV}`）、默认模型和代理端口，并保存到 `~/.codexcommander/config.json`。它可选择让 Codex 经由一个已运行且由当前 home 的受保护 runtime 记录证明的代理路由，并可安装 Codex 自启动 shim。若无法证明这样的代理，Codex 会保持原生状态，之后由 `ccx start` 明确启动代理并切换路由。`init` 本身不会启动代理，也不会写入指向未经证明 listener 的路由。
 
 ## 代理生命周期
 
 ### `ccx start [--port <port>]`
 
-启动代理服务器（首选端口 `10100`）。如果该端口已被占用，CodexCommander 会选择并记录另一个可用端口。它会写入 PID/运行时端口状态，并拒绝启动第二个存活实例。启动时，它会把每个提供方的模型同步到 Codex 的目录中。关闭时，它会恢复原生 Codex，除非它是作为受管服务启动的（`CCX_SERVICE=1`）。
+启动代理服务器（首选端口 `10100`）。如果该端口已被占用，CodexCommander 会选择并记录另一个可用端口。它会写入 PID/运行时端口状态，并拒绝启动第二个存活实例。显式启动（`ccx start`、托盘中的 Start，以及显式的 `ccx service start`、`install` 或 `repair`）会启用 Codex 集成、把每个提供方的模型同步到 Codex 目录，并让 Codex 通过运行中的代理路由。自动 `ensure` 会保留有意设置的 OFF 状态。正常关闭时，它会恢复原生 Codex，除非它是作为受管服务启动的（`CCX_SERVICE=1`）。
 
 ```bash
 ccx start
@@ -24,11 +24,11 @@ ccx start --port 8080
 
 ### `ccx stop`
 
-停止正在运行的代理（按 PID），移除 PID 文件，并恢复原生 Codex。如果安装了受管后台服务，`ccx stop` 还会先停止该服务，这样它就无法重新拉起代理。Web 仪表盘中的 **Stop** 按钮也提供同样的操作（`POST /api/stop`）。
+先保存原生/OFF 选择并恢复原生 Codex 路由，再停止正在运行的代理（按 PID）并移除 PID 文件。如果无法验证原生路由，代理和服务会保持运行。如果安装了受管后台服务，`ccx stop` 会在恢复路由后停止该服务，使它无法重新拉起代理。Web 仪表盘的 **Stop** 按钮调用原始 `POST /api/stop`：它可以停止没有 supervisor 的代理，但若代理归已安装的 supervisor 所有则会拒绝。此时应使用 CLI 或托盘 Stop，让它在同一生命周期权限下先停止 manager。
 
 ### `ccx restart`
 
-执行 `stop` 然后执行 `ensure`：停止代理/服务，恢复原生 Codex，在后台启动代理，并将当前端口重新同步回 Codex。
+执行与 macOS 菜单栏 **Restart Proxy…** 相同的安全停止→启动事务：先恢复并验证原生 Codex，再终止旧代理/服务；随后由显式 Start 阶段启动新代理，并让 Codex 重新通过它路由。若重启失败，Codex 会保持原生路由。
 
 ### `ccx ensure`
 
@@ -36,9 +36,9 @@ ccx start --port 8080
 
 ### `ccx restore [back]` · `ccx eject [back]`
 
-在**不停止代理**的情况下恢复原生 Codex——移除注入的配置行和路由后的目录条目，让普通 `codex` 重新以原生方式工作。`eject` 是 `restore` 的别名。
+在**不停止代理**的情况下恢复原生 Codex。原生逃生路径只会从 `$CODEX_HOME/config.toml` 中移除带有 CodexCommander 所有权标记的路由及其拥有的目录指针，并保留所有无关设置。它不会读取或重写目录、任务、历史记录或身份验证，也不需要 `repair` 命令或协调器数据库。`eject` 是 `restore` 的别名。生成的目录和缓存可能仍留在磁盘上，但原生 Codex 不再引用它们。此命令仅作用于 Codex，不会更改 Grok 或任何其他客户端集成。若要拆除所有受管原生客户端路由，请使用 `ccx stop` 或 `ccx uninstall`。
 
-在任一命令后附加 `back`，即可在不改变代理生命周期的前提下，把普通 `codex` 重新指向一个已经在运行的代理：
+在任一命令后附加 `back`，即可在不改变代理生命周期的前提下，把普通 `codex` 重新指向一个已经在运行的代理。Route Back 是显式的 ON 转换；若存在 recovery journal，只会在现有协调机制证明其已过期后退役，否则会让 Codex 保持 native/OFF：
 
 ```bash
 ccx restore back
@@ -47,7 +47,7 @@ ccx eject back
 
 ### `ccx uninstall` · `ccx remove`
 
-停止服务和代理，移除服务和 Codex shim，恢复原生 Codex，然后仅在所有恢复步骤都成功时才删除 CodexCommander 本地配置。`remove` 是 `uninstall` 的别名。配置清理需要规范的所有权元数据；无所有者或共享目录会保留原样。
+在一个生命周期事务中停止服务和代理、移除服务和 Codex shim，并恢复且再次验证原生 Codex；仅当所有步骤都成功时才移除 CodexCommander 本地工件。`remove` 是 `uninstall` 的别名。配置清理需要规范的所有权元数据；无所有者或共享目录会保留原样。配置根目录中会保留一小对 owner/manifest 元数据，确保并发 Start 无法创建第二个生命周期锁命名空间。
 
 ## 状态与健康
 
@@ -149,7 +149,7 @@ ccx status --json
 
 ### `ccx service [install|repair|start|stop|status|uninstall|remove]`
 
-将 CodexCommander 作为登录管理的后台服务运行（macOS **launchd**、Linux **systemd user unit**、Windows **Task Scheduler**），在登录时自动启动，在崩溃时自动重启。服务运行会设置 `CCX_SERVICE=1`，因此重启时不会反复改动 Codex 配置。
+将 CodexCommander 作为登录管理的后台服务运行（macOS **launchd**、Linux **systemd user unit**、Windows **Task Scheduler**），在登录时自动启动，在崩溃时自动重启。服务运行会设置 `CCX_SERVICE=1`，因此管理器自动重启时不会反复改动 Codex 配置。显式创建服务以及执行 `install`、`repair` 或 `start` 会启用 Codex 集成，并让 Codex 通过代理路由。
 
 | 子命令 | 操作 |
 | --- | --- |
@@ -157,9 +157,9 @@ ccx status --json
 | `install` | 创建并启动服务。 |
 | `repair` | 就地刷新已安装的服务并重启，不重新注册。 |
 | `start` | 启动已安装的服务。 |
-| `stop` | 停止服务并恢复原生 Codex。 |
+| `stop` | 恢复并验证原生 Codex，再停止服务。如果验证失败，服务和代理会保持运行。 |
 | `status` | 报告服务和代理诊断信息及日志路径。 |
-| `uninstall` | 移除服务并恢复原生 Codex。 |
+| `uninstall` | 恢复并验证原生 Codex，再停止并移除服务。 |
 | `remove` | `uninstall` 的别名。 |
 
 ```bash

@@ -1,6 +1,7 @@
 import type { CodexCommanderConfig } from "../types";
 import { codexIntegrationEnabled } from "./desired-state";
-import { getCodexRoutingKind, type CodexRoutingKind } from "./inject";
+import { getCodexRoutingKind } from "./inject";
+import type { CodexRoutingKind } from "./routing-document";
 import type { ConvergeRequest } from "./convergence-types";
 
 export type NonDisruptiveCodexManagementWritePolicy =

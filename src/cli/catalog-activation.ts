@@ -22,8 +22,17 @@ import {
   restartCodexAppServers,
 } from "../codex/app-server-processes";
 import { activeCodexModelsCachePath, readCodexCatalogPath } from "../codex/catalog/parsing";
-import { getCodexRoutingKind, type CodexRoutingKind } from "../codex/inject";
+import { getCodexRoutingKind } from "../codex/inject";
+import type { CodexRoutingKind } from "../codex/routing-document";
 import { syncModelsToCodex, type CodexSyncResult } from "../codex/sync";
+import {
+  acquireProxyLifecycleAuthority,
+  type ProxyLifecycleAuthority,
+} from "../server/proxy-lifecycle-authority";
+import {
+  proxyLifecycleLockLeaseHeaders,
+  type ProxyLifecycleLockLease,
+} from "../server/proxy-lifecycle-protocol";
 import { RuntimeApiError, runtimeRequest } from "./runtime-api";
 
 interface CatalogActivationReceipt {
@@ -73,9 +82,24 @@ export function catalogSyncCanApply(
 interface CliCatalogSyncDeps {
   syncModelsToCodex: typeof syncModelsToCodex;
   runtimeRequest: typeof runtimeRequest;
+  acquireAuthority?: (options: { includeStart: true }) => Promise<ProxyLifecycleAuthority>;
 }
 
 const defaultCliSyncDeps: CliCatalogSyncDeps = { syncModelsToCodex, runtimeRequest };
+
+/** Serialize every CLI-local Codex mutation under the canonical E -> S hierarchy. */
+export async function runLocalCliCodexSync<T>(
+  sync: () => Promise<T>,
+  acquireAuthority: (options: { includeStart: true }) => Promise<ProxyLifecycleAuthority>
+    = acquireProxyLifecycleAuthority,
+): Promise<T> {
+  const authority = await acquireAuthority({ includeStart: true });
+  try {
+    return await sync();
+  } finally {
+    authority.releaseAll();
+  }
+}
 
 /**
  * Keep catalog publication in the exact runtime-record proxy when one exists.
@@ -86,7 +110,20 @@ const defaultCliSyncDeps: CliCatalogSyncDeps = { syncModelsToCodex, runtimeReque
 export async function syncCodexCatalogForCli(
   live: LiveProxy | null,
   deps: CliCatalogSyncDeps = defaultCliSyncDeps,
+  lifecycleLease?: ProxyLifecycleLockLease,
 ): Promise<CliCodexSyncResult> {
+  if (!lifecycleLease) {
+    const authority = await (deps.acquireAuthority ?? acquireProxyLifecycleAuthority)({
+      includeStart: true,
+    });
+    try {
+      const lease = authority.delegatedLease();
+      if (!lease) throw new Error("CLI Codex sync lost lifecycle authority before mutation.");
+      return await syncCodexCatalogForCli(live, deps, lease);
+    } finally {
+      authority.releaseAll();
+    }
+  }
   // Public /healthz identity at the configured port is not management
   // authority. It may be an unrelated CodexCommander instance using another
   // home (a common test/development collision), and it has no protected
@@ -99,8 +136,10 @@ export async function syncCodexCatalogForCli(
     return deps.syncModelsToCodex();
   }
   try {
+    const headers = proxyLifecycleLockLeaseHeaders(lifecycleLease);
     const response = await deps.runtimeRequest<unknown>("/api/sync", {
       method: "POST",
+      headers,
       signal: AbortSignal.timeout(45_000),
     }, {
       baseUrl: `http://${probeHostname(live.hostname)}:${live.port}`,

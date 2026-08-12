@@ -1,425 +1,198 @@
 /**
- * Dashboard memory-card drain-and-restart (#563).
+ * Dashboard proxy restart admission.
  *
- * Longer than POST /api/stop's short drain: waits up to 60s for active turns,
- * then respawns. Never runs restoreNativeCodex / stripGrokConfig — this is a
- * recycle to reclaim RSS, not a teardown.
- *
- * Respawn policy (matches real supervisor configs in src/service.ts):
- * - Supervised child (`CCX_SERVICE=1` + viable service): exit(1) so
- *   failure-only supervisors (systemd Restart=on-failure, WinSW onfailure,
- *   Task Scheduler ERRORLEVEL loop) bring the proxy back.
- * - Otherwise: detached `ccx start --port <live>` (bypasses ensure's
- *   codexAutoStart gate), mark recycle so exit cleanup keeps injection, exit(0).
- *   Installed-but-stale/missing service assets are NOT treated as supervised —
- *   exit(1) would leave the proxy dead with `Service: installed, stale or missing
- *   service assets` and a /healthz timeout.
- * - If detached spawn fails (sync throw or pre-start `error`): exit(1) without
- *   markRecycling — after drain the listen socket is already closed, so a latch
- *   reset cannot recover serving. Clear inherited `CCX_SERVICE` so exit cleanup
- *   can restore Codex/Grok fences (ensure/tray daemons set the marker without a
- *   real supervisor). Log only a stable errno code — never the raw message
- *   (paths in ENOENT often include the OS username).
+ * The serving process does not drain, stop its listener, mutate routing, or exit.
+ * It only proves that one detached `__tray-restart` helper reached OS spawn. The
+ * helper then uses the same canonical lifecycle as the tray: safe Stop restores
+ * native Codex and persists OFF before termination, followed by explicit Start.
  */
-import { spawn } from "node:child_process";
-import {
-  beginShutdownDrain,
-  drainAndShutdown,
-  getActiveTurnCount,
-  getServerListenPort,
-  isDraining,
-  isShutdownDraining,
-  markRecyclingForExit,
-  stopServerListener,
-} from "../lifecycle";
-import { isServiceViable } from "../../service";
-import { readRuntimePort } from "../../config";
+import { spawn, type ChildProcess } from "node:child_process";
+import { getActiveTurnCount } from "../lifecycle";
 import { withProcessRuntimeProvenance } from "../../lib/bun-runtime";
-import { findLiveProxy } from "../proxy-liveness";
 
-/** Fixed v1 drain window for the memory-card action (not config-driven). */
-export const MEMORY_DRAIN_RESTART_MS = 60_000;
-// Ordinary pinned-port start can spend 60s reclaiming a Windows ghost listener
-// and another 5s settling it. Keep one polling/scheduler margin beyond that.
-export const REPLACEMENT_READY_TIMEOUT_MS = 70_000;
-export const DEADLINE_LISTENER_STOP_TIMEOUT_MS = 5_000;
-const REPLACEMENT_READY_POLL_MS = 150;
+/** The API no longer owns a drain window; retained for the response schema. */
+export const SYSTEM_RESTART_DRAIN_TIMEOUT_MS = 0;
 
-export interface ReplacementReadinessIo {
-  findLive?: typeof findLiveProxy;
-  now?: () => number;
-  sleep?: (ms: number) => Promise<void>;
+const INHERITABLE_HARDENED_BUN_FLAGS = new Set([
+  "--no-install",
+  "--no-env-file",
+  "--config=/dev/null",
+]);
+
+export interface DetachedRestartSpawnOptions {
+  spawnFn?: typeof spawn;
+  entry?: string;
+  execArgv?: readonly string[];
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface SystemRestartIo {
-  drainAndShutdown?: typeof drainAndShutdown;
-  /** True when a background service can actually respawn this process after exit(1). */
-  isServiceViable?: () => boolean;
-  isSupervisedServiceChild?: () => boolean;
-  /** Ordinary start; deadline handoff may defer health until parent exit releases OS locks. */
-  spawnStart?: (port?: number, waitForHealthBeforeParentExit?: boolean) => void | Promise<void>;
-  /** Idempotent listener close; must settle before an ordinary start is spawned. */
-  stopListener?: () => void | Promise<void>;
-  markRecycling?: () => void;
-  exitProcess?: (code: number) => void;
-  schedule?: (fn: () => void | Promise<void>, ms: number) => void;
-  scheduleDeadline?: (fn: () => void, ms: number) => () => void;
-  isShutdownDraining?: () => boolean;
-  beginShutdownDrain?: () => void;
+  /** Resolve only after OS spawn; call onExit if the helper later exits. */
+  spawnHelper?: (onExit: () => void) => Promise<void>;
   getActiveTurnCount?: () => number;
-  listenPort?: () => number | undefined;
-  now?: () => number;
 }
+
+interface SystemRestartAdmissionBase {
+  activeTurnCount: number;
+  drainTimeoutMs: number;
+}
+
+export type SerializedSystemRestartResult =
+  | (SystemRestartAdmissionBase & { kind: "accepted" })
+  | (SystemRestartAdmissionBase & { kind: "already-accepted" })
+  | (SystemRestartAdmissionBase & { kind: "refused"; message: string });
 
 let restartIo: SystemRestartIo = {};
-/** Prevents double-scheduling in the 200ms window before drainAndShutdown sets draining. */
-let restartAccepted = false;
-
-type RestartDrainOutcome = "completed" | "rejected" | "deadline";
-type BoundedSettlementOutcome = "completed" | "rejected" | "deadline";
-
-function waitForRestartDrain(
-  drainPromise: Promise<void>,
-  deadlineMs: number,
-  now: () => number,
-  scheduleDeadline: NonNullable<SystemRestartIo["scheduleDeadline"]>,
-): Promise<RestartDrainOutcome> {
-  const remainingMs = Math.max(0, deadlineMs - now());
-  if (remainingMs === 0) {
-    // Observe any late rejection even though orchestration is already terminal.
-    void drainPromise.catch(() => {});
-    return Promise.resolve("deadline");
-  }
-  return new Promise<RestartDrainOutcome>((resolve) => {
-    let settled = false;
-    let cancelDeadline: (() => void) | undefined;
-    const finish = (outcome: RestartDrainOutcome) => {
-      if (settled) return;
-      settled = true;
-      cancelDeadline?.();
-      resolve(outcome);
-    };
-    cancelDeadline = scheduleDeadline(() => finish("deadline"), remainingMs);
-    if (settled) cancelDeadline();
-    void drainPromise.then(
-      () => finish("completed"),
-      () => finish("rejected"),
-    );
-  });
-}
-
-function waitForBoundedSettlement(
-  promise: Promise<void>,
-  timeoutMs: number,
-  scheduleDeadline: NonNullable<SystemRestartIo["scheduleDeadline"]>,
-): Promise<BoundedSettlementOutcome> {
-  return new Promise<BoundedSettlementOutcome>((resolve) => {
-    let settled = false;
-    let cancelDeadline: (() => void) | undefined;
-    const finish = (outcome: BoundedSettlementOutcome) => {
-      if (settled) return;
-      settled = true;
-      cancelDeadline?.();
-      resolve(outcome);
-    };
-    cancelDeadline = scheduleDeadline(() => finish("deadline"), timeoutMs);
-    if (settled) cancelDeadline();
-    void promise.then(
-      () => finish("completed"),
-      () => finish("rejected"),
-    );
-  });
-}
+let acceptedGeneration: symbol | undefined;
+let restartAdmission: Promise<SerializedSystemRestartResult> | undefined;
 
 /** Test seam — reset between tests. */
 export function setSystemRestartIoForTests(io: SystemRestartIo = {}): void {
   restartIo = io;
-  restartAccepted = false;
-}
-
-function resolveListenPort(): number | undefined {
-  const live = getServerListenPort();
-  if (live) return live;
-  const runtime = readRuntimePort(process.pid);
-  if (runtime && runtime.port > 0) return runtime.port;
-  return undefined;
-}
-
-function isSupervisedServiceChild(io: SystemRestartIo = {}): boolean {
-  if (process.env.CCX_SERVICE !== "1") return false;
-  // Presence is not enough: stale/missing service assets report installed but will not
-  // respawn after exit(1). Dashboard status/recovery must fall through to detached start.
-  return (io.isServiceViable ?? isServiceViable)();
-}
-
-/** Stable, path-free spawn failure label for logs (never interpolate err.message). */
-function spawnFailureCode(err: unknown): string {
-  if (err && typeof err === "object" && "code" in err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (typeof code === "string" && code.length > 0 && code.length <= 64) return code;
-  }
-  return "spawn_failed";
-}
-
-function handoffError(code: string): NodeJS.ErrnoException {
-  const error = new Error(code) as NodeJS.ErrnoException;
-  error.code = code;
-  return error;
-}
-
-export async function waitForReplacementReady(
-  expectedPid: number | undefined,
-  parentPid: number,
-  expectedPort: number | undefined,
-  io: ReplacementReadinessIo = {},
-): Promise<boolean> {
-  const findLive = io.findLive ?? findLiveProxy;
-  const now = io.now ?? Date.now;
-  const sleep = io.sleep ?? Bun.sleep;
-  const deadline = now() + REPLACEMENT_READY_TIMEOUT_MS;
-  while (now() < deadline) {
-    try {
-      const live = await findLive({
-        deadlineAt: deadline,
-        nowFn: now,
-        sleepFn: sleep,
-      });
-      // A probe that began within budget can still return after it. Never accept
-      // delayed health as proof once the shared absolute handoff budget expired.
-      if (now() >= deadline) return false;
-      if (
-        live
-        && live.pid !== null
-        && live.pid !== parentPid
-        && (expectedPid === undefined || live.pid === expectedPid)
-        && (expectedPort === undefined || live.port === expectedPort)
-      ) {
-        return true;
-      }
-    } catch {
-      // A not-yet-bound replacement is indistinguishable from a transient
-      // liveness failure here; keep polling inside the one bounded window.
-    }
-    const remainingMs = deadline - now();
-    if (remainingMs <= 0) break;
-    await sleep(Math.min(REPLACEMENT_READY_POLL_MS, remainingMs));
-  }
-  return false;
-}
-
-function spawnDetachedStart(
-  port?: number,
-  waitForHealthBeforeParentExit = true,
-): Promise<void> {
-  const args = [process.argv[1], "start"];
-  const expectedPort = typeof port === "number" && Number.isFinite(port) && port > 0 && port <= 65535
-    ? Math.trunc(port)
-    : undefined;
-  if (expectedPort !== undefined) {
-    args.push("--port", String(expectedPort));
-  }
-  return new Promise<void>((resolve, reject) => {
-    let child: ReturnType<typeof spawn>;
-    try {
-      child = spawn(process.execPath, args, {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-        env: withProcessRuntimeProvenance({ ...process.env, CCX_SERVICE: "1" }),
-      });
-    } catch (err) {
-      reject(err);
-      return;
-    }
-    let settled = false;
-    const cleanup = () => {
-      child.off("error", onError);
-      child.off("exit", onExit);
-      child.off("spawn", onSpawn);
-    };
-    const finish = (error?: unknown) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      if (error !== undefined) {
-        if (child.exitCode === null && child.signalCode === null) {
-          try { child.kill(); } catch { /* best-effort failed-start cleanup */ }
-        }
-        try { child.unref(); } catch { /* best-effort */ }
-        reject(error);
-        return;
-      }
-      child.unref();
-      resolve();
-    };
-    const onError = (err: Error) => { finish(err); };
-    const onExit = () => { finish(handoffError("child_exit")); };
-    const onSpawn = () => {
-      if (!waitForHealthBeforeParentExit) {
-        // A deadline may have been caused by native-main ownership cleanup.
-        // Let the ordinary child survive parent exit, which releases those OS locks.
-        finish();
-        return;
-      }
-      void waitForReplacementReady(child.pid, process.pid, expectedPort).then(
-        ready => {
-          if (!ready) {
-            console.warn(
-              "Drain-and-restart replacement is still alive after the readiness window; allowing it to continue after parent exit",
-            );
-          }
-          // Never kill a live ordinary start at its valid reclaim boundary. Parent
-          // exit is the final resource release the child may still be waiting for.
-          finish();
-        },
-        err => finish(err),
-      );
-    };
-    child.once("error", onError);
-    child.once("exit", onExit);
-    child.once("spawn", onSpawn);
-  });
-}
-
-async function completeDeferredParentExitHandoff(
-  io: SystemRestartIo,
-  exitProcess: (code: number) => void,
-  port: number | undefined,
-  phase: "deadline" | "listener-stop fallback",
-): Promise<void> {
-  try {
-    await (io.spawnStart ?? spawnDetachedStart)(port, false);
-  } catch (err) {
-    console.warn(
-      `Drain-and-restart ${phase} spawn failed (${spawnFailureCode(err)}); exiting without replacement`,
-    );
-    delete process.env.CCX_SERVICE;
-    exitProcess(1);
-    return;
-  }
-  (io.markRecycling ?? markRecyclingForExit)();
-  exitProcess(0);
-}
-
-async function completeDeadlineRestartHandoff(
-  io: SystemRestartIo,
-  exitProcess: (code: number) => void,
-  port: number | undefined,
-  scheduleDeadline: NonNullable<SystemRestartIo["scheduleDeadline"]>,
-): Promise<void> {
-  const supervised = (io.isSupervisedServiceChild ?? (() => isSupervisedServiceChild(io)))();
-  if (supervised) {
-    // Failure-only supervisors ignore exit(0); intentional non-zero triggers respawn.
-    exitProcess(1);
-    return;
-  }
-
-  const stopPromise = Promise.resolve().then(
-    () => (io.stopListener ?? (() => stopServerListener()))(),
-  );
-  const stopOutcome = await waitForBoundedSettlement(
-    stopPromise,
-    DEADLINE_LISTENER_STOP_TIMEOUT_MS,
-    scheduleDeadline,
-  );
-  if (stopOutcome === "rejected") {
-    console.warn("Drain-and-restart deadline listener stop failed; continuing parent-exit handoff");
-  } else if (stopOutcome === "deadline") {
-    console.warn("Drain-and-restart deadline listener stop timed out; continuing parent-exit handoff");
-  }
-  // The ordinary child must survive parent exit: a failed/pending socket close
-  // or overdue cleanup is completed by process teardown, without a hidden mode.
-  await completeDeferredParentExitHandoff(io, exitProcess, port, "deadline");
+  acceptedGeneration = undefined;
+  restartAdmission = undefined;
 }
 
 /**
- * Accept a drain-and-restart request. Returns immediately; the drain +
- * respawn runs on a short timer so the HTTP response can flush first.
- * Idempotent while already draining: returns the accepted shape again.
+ * Re-exec only the current fixed CLI entry and internal restart command.
+ * Packaged app runtimes retain their three hardened Bun flags; arbitrary debug,
+ * eval, preload, or caller-selected flags are never forwarded.
  */
-export function acceptSystemRestart(io: SystemRestartIo = restartIo): {
-  accepted: true;
-  alreadyDraining: boolean;
-  activeTurnCount: number;
-  drainTimeoutMs: number;
-} {
-  const shutdownActive = io.isShutdownDraining ?? isShutdownDraining;
-  const alreadyDraining = restartAccepted || shutdownActive();
-  const activeTurnCount = (io.getActiveTurnCount ?? getActiveTurnCount)();
-  const schedule = io.schedule ?? ((fn, ms) => { setTimeout(() => { void fn(); }, ms); });
+export function trayRestartHelperArgv(
+  entry = process.argv[1],
+  execArgv: readonly string[] = process.execArgv,
+): string[] {
+  if (!entry) throw new Error("CodexCommander CLI entry is unavailable");
+  const seen = new Set<string>();
+  const safeRuntimeFlags = execArgv.filter((arg) => {
+    if (!INHERITABLE_HARDENED_BUN_FLAGS.has(arg) || seen.has(arg)) return false;
+    seen.add(arg);
+    return true;
+  });
+  return [...safeRuntimeFlags, entry, "__tray-restart"];
+}
 
-  if (!alreadyDraining) {
-    restartAccepted = true;
-    const now = io.now ?? Date.now;
-    const restartDeadlineMs = now() + MEMORY_DRAIN_RESTART_MS;
-    // Reject new data-plane traffic immediately (503), before the 200ms response-flush delay.
-    (io.beginShutdownDrain ?? beginShutdownDrain)();
-    schedule(async () => {
-      // Preserve the live binding before drainAndShutdown (or its deadline race)
-      // closes the listener and makes both the server ref and runtime metadata stale.
-      const restartPort = (io.listenPort ?? resolveListenPort)();
-      const drain = io.drainAndShutdown ?? drainAndShutdown;
-      const remainingMs = Math.max(0, restartDeadlineMs - now());
-      const drainPromise = Promise.resolve().then(() => drain(undefined, remainingMs));
-      const scheduleDeadline = io.scheduleDeadline ?? ((fn, ms) => {
-        const timer = setTimeout(fn, ms);
-        return () => clearTimeout(timer);
-      });
-      const drainOutcome = await waitForRestartDrain(drainPromise, restartDeadlineMs, now, scheduleDeadline);
-      const exitProcess = io.exitProcess ?? ((code: number) => { process.exit(code); });
-      if (drainOutcome === "deadline") {
-        console.warn("Drain-and-restart deadline expired; forcing terminal restart handoff");
-        await completeDeadlineRestartHandoff(io, exitProcess, restartPort, scheduleDeadline);
+/**
+ * Spawn the canonical tray restart helper and resolve only after the child's
+ * `spawn` event. The exit listener intentionally remains after `unref()`: if
+ * the helper refuses before Stop, the old endpoint is still live and may retry.
+ */
+export function spawnDetachedTrayRestart(
+  onExit: () => void,
+  options: DetachedRestartSpawnOptions = {},
+): Promise<void> {
+  const spawnFn = options.spawnFn ?? spawn;
+  const childEnv = { ...(options.env ?? process.env) };
+  // A management helper is never itself a supervised service child. Inheriting
+  // this marker could suppress canonical native cleanup on a failed restart.
+  delete childEnv.CCX_SERVICE;
+
+  return new Promise<void>((resolve, reject) => {
+    let child: ChildProcess;
+    try {
+      child = spawnFn(
+        process.execPath,
+        trayRestartHelperArgv(options.entry, options.execArgv),
+        {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true,
+          env: withProcessRuntimeProvenance(childEnv),
+        },
+      );
+    } catch {
+      reject(new Error("restart_helper_spawn_refused"));
+      return;
+    }
+
+    let spawnProven = false;
+    let settled = false;
+    const rejectBeforeSpawn = () => {
+      if (settled) return;
+      settled = true;
+      child.off("spawn", handleSpawn);
+      child.off("error", handleError);
+      reject(new Error("restart_helper_spawn_refused"));
+    };
+    const handleError = () => {
+      if (spawnProven) {
+        onExit();
         return;
       }
-      if (drainOutcome === "rejected") {
-        // drainAndShutdown stops the listener in finally. Even if ancillary cleanup
-        // rejects, an accepted restart must still reach replacement or terminal exit.
-        console.warn("Drain-and-restart cleanup failed; continuing terminal restart handoff");
-      }
-      const supervised = (io.isSupervisedServiceChild ?? (() => isSupervisedServiceChild(io)))();
-      if (supervised) {
-        // Failure-only supervisors ignore exit(0); intentional non-zero triggers respawn.
-        (io.exitProcess ?? ((code: number) => { process.exit(code); }))(1);
-        return;
-      }
-      try {
-        await (io.stopListener ?? (() => stopServerListener()))();
-      } catch {
-        console.warn("Drain-and-restart listener stop failed; continuing parent-exit handoff");
-        await completeDeferredParentExitHandoff(
-          io,
-          exitProcess,
-          restartPort,
-          "listener-stop fallback",
-        );
-        return;
-      }
-      try {
-        // A rejected drain has uncertain cleanup ownership, so it uses the same
-        // parent-exit handoff as a deadline. Only a fully completed drain waits
-        // for replacement health in the old process.
-        await (io.spawnStart ?? spawnDetachedStart)(restartPort, drainOutcome === "completed");
-      } catch (err) {
-        console.warn(
-          `⚠️  Drain-and-restart spawn failed (${spawnFailureCode(err)}); exiting without replacement`,
-        );
-        // Listen socket is already stopped; do not markRecycling — no child to inherit fences.
-        // ensure/tray children inherit CCX_SERVICE=1 without an installed service; clear it so
-        // syncCleanup can restore Codex/Grok fences instead of leaving clients pointed at a dead port.
-        delete process.env.CCX_SERVICE;
-        exitProcess(1);
-        return;
-      }
-      (io.markRecycling ?? markRecyclingForExit)();
-      exitProcess(0);
-    }, 200);
+      rejectBeforeSpawn();
+    };
+    const handleExit = () => {
+      onExit();
+      if (!spawnProven) rejectBeforeSpawn();
+    };
+    const handleSpawn = () => {
+      if (settled) return;
+      settled = true;
+      spawnProven = true;
+      child.unref();
+      resolve();
+    };
+
+    child.once("error", handleError);
+    child.once("exit", handleExit);
+    child.once("spawn", handleSpawn);
+  });
+}
+
+function snapshot(io: SystemRestartIo): SystemRestartAdmissionBase {
+  return {
+    activeTurnCount: (io.getActiveTurnCount ?? getActiveTurnCount)(),
+    drainTimeoutMs: SYSTEM_RESTART_DRAIN_TIMEOUT_MS,
+  };
+}
+
+function alreadyAccepted(io: SystemRestartIo): SerializedSystemRestartResult {
+  return { kind: "already-accepted", ...snapshot(io) };
+}
+
+async function admitSystemRestart(io: SystemRestartIo): Promise<SerializedSystemRestartResult> {
+  const generation = Symbol("dashboard-restart");
+  let helperExited = false;
+  const onExit = () => {
+    helperExited = true;
+    if (acceptedGeneration === generation) acceptedGeneration = undefined;
+  };
+
+  try {
+    await (io.spawnHelper ?? ((exit) => spawnDetachedTrayRestart(exit)))(onExit);
+    // A child that spawned and died before admission returned is not useful
+    // acceptance; the live parent stays retryable.
+    if (helperExited) throw new Error("restart_helper_exited");
+    acceptedGeneration = generation;
+    return { kind: "accepted", ...snapshot(io) };
+  } catch {
+    if (acceptedGeneration === generation) acceptedGeneration = undefined;
+    return {
+      kind: "refused",
+      ...snapshot(io),
+      message: "Restart helper could not be started; the proxy is still running. Retry Restart.",
+    };
+  }
+}
+
+/**
+ * Single-flight helper spawn admission. Duplicate requests are accepted without
+ * starting another helper. A spawn refusal or early helper exit re-arms retry.
+ */
+export async function acceptSerializedSystemRestart(
+  io: SystemRestartIo = restartIo,
+): Promise<SerializedSystemRestartResult> {
+  if (acceptedGeneration) return alreadyAccepted(io);
+  if (restartAdmission) {
+    const result = await restartAdmission;
+    return result.kind === "accepted" ? alreadyAccepted(io) : result;
   }
 
-  return {
-    accepted: true,
-    alreadyDraining,
-    activeTurnCount,
-    drainTimeoutMs: MEMORY_DRAIN_RESTART_MS,
-  };
+  const admission = admitSystemRestart(io);
+  restartAdmission = admission;
+  try {
+    return await admission;
+  } finally {
+    if (restartAdmission === admission) restartAdmission = undefined;
+  }
 }

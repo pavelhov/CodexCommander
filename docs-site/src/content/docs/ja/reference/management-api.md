@@ -184,8 +184,8 @@ Authorization: Bearer <admin-token>
 |メソッドとパス |目的 |注目すべきエラー |
 | --- | --- | --- |
 | `GET /api/system/memory` |スカラー プロセス、ヒープ、ストリーム、応答状態、ウォッチドッグ、およびアクティブ ターン メトリックを返します。 — |
-| `POST /api/system/restart` |クライアント インジェクションを削除せずに、ドレイン対応プロセスの再起動を開始します。 202 を返します。繰り返しの呼び出しにより、既存の排水が報告されます。
-| `POST /api/stop` |サービスを停止し、ネイティブ Codex を復元し、マネージド Grok インジェクションを削除し、プロキシをドレインします。 409 サービス所有権の競合 |
+| `POST /api/system/restart` | 切り離された正規の再起動ヘルパーを起動します。プロキシを安全に停止して Codex をネイティブ接続に戻し、routing を OFF に保存してから、明示的に再起動して routing を ON にします | 202 helper spawn accepted/already accepted。helper spawn が拒否された場合は 409（現在の endpoint は稼働したままで再試行可能） |
+| `POST /api/stop` | 統合を OFF に保存し、ネイティブ Codex ルーティングを検証し、managed Grok injection を削除して、supervisor のないプロキシを drain します。インストール済み supervisor は、委任された CLI/トレイフローが先に停止する必要があります | 409 lifecycle busy、native restore が安全に検証できない、または installed supervisor ownership |
 
 ### Codex認証の委任
 

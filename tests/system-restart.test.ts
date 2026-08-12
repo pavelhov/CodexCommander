@@ -1,18 +1,29 @@
-/**
- * #563 — memory-card drain-and-restart acceptance + respawn policy.
- */
+/** Dashboard restart delegates to the canonical detached tray helper. */
+import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, test } from "bun:test";
+import { ManagementRequest as Request } from "./helpers/management-auth";
 import { handleManagementAPI } from "../src/server/management-api";
-import { resetLifecycleDrainStateForTests } from "../src/server/lifecycle";
+import { setServerRef } from "../src/server/lifecycle";
 import {
-  DEADLINE_LISTENER_STOP_TIMEOUT_MS,
-  MEMORY_DRAIN_RESTART_MS,
-  REPLACEMENT_READY_TIMEOUT_MS,
-  acceptSystemRestart,
+  acceptSerializedSystemRestart,
   setSystemRestartIoForTests,
-  waitForReplacementReady,
+  spawnDetachedTrayRestart,
+  trayRestartHelperArgv,
 } from "../src/server/management/system-restart";
+import {
+  BUN_RUNTIME_PATH_ENV,
+  BUN_RUNTIME_SOURCES,
+  BUN_RUNTIME_SOURCE_ENV,
+} from "../src/lib/bun-runtime";
 import type { CodexCommanderConfig } from "../src/types";
+
+class FakeChild extends EventEmitter {
+  pid = 222;
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
+  unrefCount = 0;
+  unref(): this { this.unrefCount += 1; return this; }
+}
 
 function config(): CodexCommanderConfig {
   return {
@@ -29,748 +40,163 @@ function config(): CodexCommanderConfig {
   };
 }
 
+function request(): Request {
+  return new Request("http://127.0.0.1:10100/api/system/restart", { method: "POST" });
+}
+
 afterEach(() => {
   setSystemRestartIoForTests();
-  resetLifecycleDrainStateForTests();
+  setServerRef(undefined);
 });
 
-describe("acceptSystemRestart", () => {
-  test("uses the remaining absolute restart budget, spawns start, marks recycle, then exits 0", async () => {
-    const calls: string[] = [];
-    let scheduled: (() => void | Promise<void>) | null = null;
-    let deadlineCallback: (() => void) | null = null;
-    let deadlineDelay = -1;
-    let deadlineCancellations = 0;
-    let now = 10_000;
-
-    const result = acceptSystemRestart({
-      isShutdownDraining: () => false,
-      getActiveTurnCount: () => 3,
-      isSupervisedServiceChild: () => false,
-      listenPort: () => 10123,
-      schedule: (fn) => { scheduled = fn; },
-      scheduleDeadline: (fn, ms) => {
-        deadlineCallback = fn;
-        deadlineDelay = ms;
-        return () => { deadlineCancellations += 1; };
-      },
-      now: () => now,
-      beginShutdownDrain: () => { calls.push("draining:true"); },
-      drainAndShutdown: async (_server, timeoutMs) => {
-        calls.push(`drain:${timeoutMs}`);
-      },
-      stopListener: () => { calls.push("stop"); },
-      spawnStart: (port, waitForHealth) => { calls.push(`start:${port}:${waitForHealth ? "ready" : "deferred"}`); },
-      markRecycling: () => { calls.push("recycle"); },
-      exitProcess: (code) => { calls.push(`exit:${code}`); },
+describe("detached restart helper", () => {
+  test("uses fixed internal argv, retains packaged Bun hardening, and clears CCX_SERVICE", async () => {
+    const child = new FakeChild();
+    let executable: string | undefined;
+    let argv: readonly string[] | undefined;
+    let options: Record<string, unknown> | undefined;
+    const spawned = spawnDetachedTrayRestart(() => {}, {
+      entry: "/app/runtime/src/cli/index.ts",
+      execArgv: ["--inspect", "--no-install", "--no-env-file", "--config=/dev/null", "-e"],
+      env: { CCX_SERVICE: "1", CCX_TEST_SENTINEL: "kept" },
+      spawnFn: ((file: string, args: readonly string[], opts: Record<string, unknown>) => {
+        executable = file;
+        argv = args;
+        options = opts;
+        return child;
+      }) as typeof import("node:child_process").spawn,
     });
 
-    expect(result).toEqual({
-      accepted: true,
-      alreadyDraining: false,
-      activeTurnCount: 3,
-      drainTimeoutMs: MEMORY_DRAIN_RESTART_MS,
-    });
-    // Data-plane reject must arm before the 200ms flush delay runs.
-    expect(calls).toEqual(["draining:true"]);
-    expect(MEMORY_DRAIN_RESTART_MS).toBe(60_000);
-    expect(scheduled).not.toBeNull();
-    now += 15_000;
-    await scheduled!();
-    expect(calls).toEqual(["draining:true", "drain:45000", "stop", "start:10123:ready", "recycle", "exit:0"]);
-    expect(deadlineDelay).toBe(45_000);
-    expect(deadlineCancellations).toBe(1);
-    deadlineCallback?.();
-    expect(calls).toEqual(["draining:true", "drain:45000", "stop", "start:10123:ready", "recycle", "exit:0"]);
-  });
+    let settled = false;
+    void spawned.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    child.emit("spawn");
+    await spawned;
 
-  test("snapshots the restart port before normal drain invalidates listener metadata", async () => {
-    const calls: string[] = [];
-    let scheduled: (() => void | Promise<void>) | null = null;
-    let portAvailable = true;
-
-    acceptSystemRestart({
-      isShutdownDraining: () => false,
-      getActiveTurnCount: () => 0,
-      isSupervisedServiceChild: () => false,
-      listenPort: () => {
-        calls.push(`port:${portAvailable ? 10123 : "gone"}`);
-        return portAvailable ? 10123 : undefined;
-      },
-      schedule: (fn) => { scheduled = fn; },
-      scheduleDeadline: () => () => {},
-      beginShutdownDrain: () => { calls.push("latched"); },
-      drainAndShutdown: async () => {
-        calls.push("drain");
-        portAvailable = false;
-      },
-      stopListener: () => {
-        calls.push("stop");
-        portAvailable = false;
-      },
-      spawnStart: (port) => { calls.push(`start:${port}`); },
-      markRecycling: () => { calls.push("recycle"); },
-      exitProcess: (code) => { calls.push(`exit:${code}`); },
-    });
-
-    await scheduled!();
-    expect(calls).toEqual([
-      "latched",
-      "port:10123",
-      "drain",
-      "stop",
-      "start:10123",
-      "recycle",
-      "exit:0",
+    expect(executable).toBe(process.execPath);
+    expect(argv).toEqual([
+      "--no-install",
+      "--no-env-file",
+      "--config=/dev/null",
+      "/app/runtime/src/cli/index.ts",
+      "__tray-restart",
     ]);
+    expect(options?.detached).toBe(true);
+    expect(options?.stdio).toBe("ignore");
+    expect((options?.env as NodeJS.ProcessEnv).CCX_SERVICE).toBeUndefined();
+    expect((options?.env as NodeJS.ProcessEnv).CCX_TEST_SENTINEL).toBe("kept");
+    expect(BUN_RUNTIME_SOURCES).toContain(
+      (options?.env as NodeJS.ProcessEnv)[BUN_RUNTIME_SOURCE_ENV],
+    );
+    expect((options?.env as NodeJS.ProcessEnv)[BUN_RUNTIME_PATH_ENV]).toBe(process.execPath);
+    expect(child.unrefCount).toBe(1);
   });
 
-  test("never-settling unsupervised drain starts one replacement at the original deadline", async () => {
-    const calls: string[] = [];
-    let scheduled: (() => void | Promise<void>) | null = null;
-    let fireDeadline: (() => void) | null = null;
-    let resolveStop!: () => void;
-    let resolveStart!: () => void;
-    let signalStartEntered!: () => void;
-    const startEntered = new Promise<void>(resolve => { signalStartEntered = resolve; });
-    let deadlineSchedules = 0;
-    let now = 1_000;
-
-    acceptSystemRestart({
-      isShutdownDraining: () => false,
-      getActiveTurnCount: () => 1,
-      isSupervisedServiceChild: () => false,
-      listenPort: () => 10123,
-      schedule: (fn) => { scheduled = fn; },
-      scheduleDeadline: (fn, ms) => {
-        deadlineSchedules += 1;
-        if (deadlineSchedules === 1) {
-          expect(ms).toBe(60_000);
-          fireDeadline = fn;
-        } else {
-          expect(ms).toBe(DEADLINE_LISTENER_STOP_TIMEOUT_MS);
-        }
-        return () => {};
-      },
-      now: () => now,
-      beginShutdownDrain: () => { calls.push("latched"); },
-      drainAndShutdown: () => {
-        calls.push("drain");
-        return new Promise<void>(() => {});
-      },
-      stopListener: () => {
-        calls.push("stop");
-        return new Promise<void>(resolve => { resolveStop = resolve; });
-      },
-      spawnStart: (port, waitForHealth) => {
-        calls.push(`start:${port}:${waitForHealth ? "ready" : "deferred"}`);
-        signalStartEntered();
-        return new Promise<void>(resolve => { resolveStart = resolve; });
-      },
-      markRecycling: () => { calls.push("recycle"); },
-      exitProcess: (code) => { calls.push(`exit:${code}`); },
+  test("a post-spawn child error is treated like early helper exit", async () => {
+    const child = new FakeChild();
+    let exited = 0;
+    const spawned = spawnDetachedTrayRestart(() => { exited += 1; }, {
+      entry: "/safe/index.ts",
+      execArgv: [],
+      spawnFn: (() => child) as typeof import("node:child_process").spawn,
     });
-
-    const running = scheduled!();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(calls).toEqual(["latched", "drain"]);
-    now += 60_000;
-    fireDeadline?.();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(calls).toEqual(["latched", "drain", "stop"]);
-    resolveStop();
-    await startEntered;
-    expect(calls).toEqual(["latched", "drain", "stop", "start:10123:deferred"]);
-    resolveStart();
-    await running;
-    expect(calls).toEqual(["latched", "drain", "stop", "start:10123:deferred", "recycle", "exit:0"]);
+    child.emit("spawn");
+    await spawned;
+    child.emit("error", new Error("fixture post-spawn error"));
+    expect(exited).toBe(1);
   });
 
-  test("exactly elapsed unsupervised deadline starts replacement without waiting for late drain resolution", async () => {
-    const calls: string[] = [];
-    let scheduled: (() => void | Promise<void>) | null = null;
-    let resolveDrain!: () => void;
-    let now = 5_000;
-
-    acceptSystemRestart({
-      isShutdownDraining: () => false,
-      getActiveTurnCount: () => 0,
-      isSupervisedServiceChild: () => false,
-      listenPort: () => 10123,
-      schedule: (fn) => { scheduled = fn; },
-      scheduleDeadline: (_fn, ms) => {
-        expect(ms).toBe(DEADLINE_LISTENER_STOP_TIMEOUT_MS);
-        return () => {};
-      },
-      now: () => now,
-      beginShutdownDrain: () => { calls.push("latched"); },
-      drainAndShutdown: (_server, timeoutMs) => {
-        calls.push(`drain:${timeoutMs}`);
-        return new Promise<void>(resolve => { resolveDrain = resolve; });
-      },
-      stopListener: () => { calls.push("stop"); },
-      spawnStart: (port) => { calls.push(`start:${port}`); },
-      markRecycling: () => { calls.push("recycle"); },
-      exitProcess: (code) => { calls.push(`exit:${code}`); },
-    });
-
-    now += MEMORY_DRAIN_RESTART_MS;
-    await scheduled!();
-    expect(calls).toEqual(["latched", "drain:0", "stop", "start:10123", "recycle", "exit:0"]);
-    resolveDrain();
-    await Promise.resolve();
-    expect(calls).toEqual(["latched", "drain:0", "stop", "start:10123", "recycle", "exit:0"]);
+  test("never forwards arbitrary runtime flags", () => {
+    expect(trayRestartHelperArgv("/safe/index.ts", [
+      "--inspect", "--preload=attacker.ts", "--no-install", "--no-install",
+    ])).toEqual(["--no-install", "/safe/index.ts", "__tray-restart"]);
   });
+});
 
-  test("deadline leaves a supervised child to its failure-only supervisor", async () => {
-    const calls: string[] = [];
-    let scheduled: (() => void | Promise<void>) | null = null;
-    let fireDeadline: (() => void) | null = null;
-
-    acceptSystemRestart({
-      isShutdownDraining: () => false,
-      getActiveTurnCount: () => 0,
-      isSupervisedServiceChild: () => true,
-      schedule: (fn) => { scheduled = fn; },
-      scheduleDeadline: (fn) => { fireDeadline = fn; return () => {}; },
-      beginShutdownDrain: () => { calls.push("latched"); },
-      drainAndShutdown: () => {
-        calls.push("drain");
-        return new Promise<void>(() => {});
-      },
-      stopListener: () => { calls.push("stop"); },
-      spawnStart: () => { calls.push("start"); },
-      markRecycling: () => { calls.push("recycle"); },
-      exitProcess: (code) => { calls.push(`exit:${code}`); },
-    });
-
-    const running = scheduled!();
-    await Promise.resolve();
-    await Promise.resolve();
-    fireDeadline?.();
-    await running;
-    expect(calls).toEqual(["latched", "drain", "exit:1"]);
-  });
-
-  test("deadline spawn failure exits 1 without marking an unsupervised restart recyclable", async () => {
-    const calls: string[] = [];
-    let scheduled: (() => void | Promise<void>) | null = null;
-    let fireDeadline: (() => void) | null = null;
-
-    acceptSystemRestart({
-      isShutdownDraining: () => false,
-      getActiveTurnCount: () => 0,
-      isSupervisedServiceChild: () => false,
-      schedule: (fn) => { scheduled = fn; },
-      scheduleDeadline: (fn) => { fireDeadline = fn; return () => {}; },
-      beginShutdownDrain: () => { calls.push("latched"); },
-      drainAndShutdown: () => {
-        calls.push("drain");
-        return new Promise<void>(() => {});
-      },
-      stopListener: () => { calls.push("stop"); },
-      spawnStart: async () => {
-        calls.push("start");
-        throw Object.assign(new Error("spawn error"), { code: "EACCES" });
-      },
-      markRecycling: () => { calls.push("recycle"); },
-      exitProcess: (code) => { calls.push(`exit:${code}`); },
-    });
-
-    const running = scheduled!();
-    await Promise.resolve();
-    await Promise.resolve();
-    fireDeadline?.();
-    await running;
-    expect(calls).toEqual(["latched", "drain", "stop", "start", "exit:1"]);
-  });
-
-  test("deadline listener-stop failure still hands off to a deferred replacement", async () => {
-    const calls: string[] = [];
-    let scheduled: (() => void | Promise<void>) | null = null;
-    let fireDeadline: (() => void) | null = null;
-
-    acceptSystemRestart({
-      isShutdownDraining: () => false,
-      getActiveTurnCount: () => 0,
-      isSupervisedServiceChild: () => false,
-      schedule: (fn) => { scheduled = fn; },
-      scheduleDeadline: (fn) => { fireDeadline = fn; return () => {}; },
-      beginShutdownDrain: () => { calls.push("latched"); },
-      drainAndShutdown: () => {
-        calls.push("drain");
-        return new Promise<void>(() => {});
-      },
-      stopListener: async () => {
-        calls.push("stop");
-        throw new Error("fixture stop failure");
-      },
-      spawnStart: (_port, waitForHealth) => {
-        calls.push(`start:${waitForHealth ? "ready" : "deferred"}`);
-      },
-      markRecycling: () => { calls.push("recycle"); },
-      exitProcess: (code) => { calls.push(`exit:${code}`); },
-    });
-
-    const running = scheduled!();
-    await Promise.resolve();
-    await Promise.resolve();
-    fireDeadline?.();
-    await running;
-    expect(calls).toEqual(["latched", "drain", "stop", "start:deferred", "recycle", "exit:0"]);
-  });
-
-  test("deadline bounds a never-settling listener stop and ignores its late rejection", async () => {
-    const calls: string[] = [];
-    let scheduled: (() => void | Promise<void>) | null = null;
-    const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
-    let rejectStop!: (reason?: unknown) => void;
-    let now = 1_000;
-
-    acceptSystemRestart({
-      isShutdownDraining: () => false,
-      getActiveTurnCount: () => 0,
-      isSupervisedServiceChild: () => false,
-      listenPort: () => 10123,
-      schedule: (fn) => { scheduled = fn; },
-      scheduleDeadline: (fn, ms) => {
-        const timer = { fn, ms, cancelled: false };
-        timers.push(timer);
-        return () => { timer.cancelled = true; };
-      },
-      now: () => now,
-      beginShutdownDrain: () => { calls.push("latched"); },
-      drainAndShutdown: () => {
-        calls.push("drain");
-        return new Promise<void>(() => {});
-      },
-      stopListener: () => {
-        calls.push("stop");
-        return new Promise<void>((_resolve, reject) => { rejectStop = reject; });
-      },
-      spawnStart: (port, waitForHealth) => {
-        calls.push(`start:${port}:${waitForHealth ? "ready" : "deferred"}`);
-      },
-      markRecycling: () => { calls.push("recycle"); },
-      exitProcess: (code) => { calls.push(`exit:${code}`); },
-    });
-
-    const running = scheduled!();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(timers[0]?.ms).toBe(MEMORY_DRAIN_RESTART_MS);
-    timers[0]!.fn();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(timers[1]?.ms).toBe(DEADLINE_LISTENER_STOP_TIMEOUT_MS);
-    expect(calls).toEqual(["latched", "drain", "stop"]);
-
-    timers[1]!.fn();
-    await running;
-    expect(calls).toEqual([
-      "latched",
-      "drain",
-      "stop",
-      "start:10123:deferred",
-      "recycle",
-      "exit:0",
-    ]);
-
-    rejectStop(new Error("late fixture stop rejection"));
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(calls).toEqual([
-      "latched",
-      "drain",
-      "stop",
-      "start:10123:deferred",
-      "recycle",
-      "exit:0",
-    ]);
-  });
-
-  test("normal unsupervised stop rejection also preserves a replacement", async () => {
-    const calls: string[] = [];
-    let scheduled: (() => void | Promise<void>) | null = null;
-
-    acceptSystemRestart({
-      isShutdownDraining: () => false,
-      getActiveTurnCount: () => 0,
-      isSupervisedServiceChild: () => false,
-      listenPort: () => 10123,
-      schedule: (fn) => { scheduled = fn; },
-      scheduleDeadline: () => () => {},
-      beginShutdownDrain: () => {},
-      drainAndShutdown: async () => { calls.push("drain"); },
-      stopListener: async () => {
-        calls.push("stop");
-        throw new Error("fixture stop rejection");
-      },
-      spawnStart: (port, waitForHealth) => {
-        calls.push(`start:${port}:${waitForHealth ? "ready" : "deferred"}`);
-      },
-      markRecycling: () => { calls.push("recycle"); },
-      exitProcess: (code) => { calls.push(`exit:${code}`); },
-    });
-
-    await scheduled!();
-    expect(calls).toEqual([
-      "drain",
-      "stop",
-      "start:10123:deferred",
-      "recycle",
-      "exit:0",
-    ]);
-  });
-
-  test("late drain rejection after timeout is observed without a second terminal action", async () => {
-    const calls: string[] = [];
-    let scheduled: (() => void | Promise<void>) | null = null;
-    let fireDeadline: (() => void) | null = null;
-    let rejectDrain!: (reason?: unknown) => void;
-
-    acceptSystemRestart({
-      isShutdownDraining: () => false,
-      getActiveTurnCount: () => 1,
-      schedule: (fn) => { scheduled = fn; },
-      scheduleDeadline: (fn) => { fireDeadline = fn; return () => {}; },
-      beginShutdownDrain: () => { calls.push("latched"); },
-      drainAndShutdown: () => {
-        calls.push("drain");
-        return new Promise<void>((_resolve, reject) => { rejectDrain = reject; });
-      },
-      stopListener: () => { calls.push("stop"); },
-      spawnStart: () => { calls.push("start"); },
-      markRecycling: () => { calls.push("recycle"); },
-      exitProcess: (code) => { calls.push(`exit:${code}`); },
-    });
-
-    const running = scheduled!();
-    await Promise.resolve();
-    await Promise.resolve();
-    fireDeadline?.();
-    await running;
-    expect(calls).toEqual(["latched", "drain", "stop", "start", "recycle", "exit:0"]);
-    rejectDrain(new Error("late fixture rejection"));
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(calls).toEqual(["latched", "drain", "stop", "start", "recycle", "exit:0"]);
-  });
-
-  test("supervised service child exits 1 so failure-only supervisors respawn", async () => {
-    const calls: string[] = [];
-    let scheduled: (() => void | Promise<void>) | null = null;
-
-    acceptSystemRestart({
-      isShutdownDraining: () => false,
-      getActiveTurnCount: () => 0,
-      isSupervisedServiceChild: () => true,
-      schedule: (fn) => { scheduled = fn; },
-      drainAndShutdown: async () => { calls.push("drain"); },
-      stopListener: () => { calls.push("stop"); },
-      spawnStart: () => { calls.push("start"); },
-      markRecycling: () => { calls.push("recycle"); },
-      exitProcess: (code) => { calls.push(`exit:${code}`); },
-    });
-
-    await scheduled!();
-    expect(calls).toEqual(["drain", "exit:1"]);
-  });
-
-  test("CCX_SERVICE with non-viable Background Service uses detached start", async () => {
-    const calls: string[] = [];
-    let scheduled: (() => void | Promise<void>) | null = null;
-    const prev = process.env.CCX_SERVICE;
-    process.env.CCX_SERVICE = "1";
-
-    try {
-      acceptSystemRestart({
-        isShutdownDraining: () => false,
-        getActiveTurnCount: () => 0,
-        // Installed-but-stale assets must NOT count as supervised recovery.
-        isServiceViable: () => false,
-        listenPort: () => 10123,
-        schedule: (fn) => { scheduled = fn; },
-        beginShutdownDrain: () => {},
-        drainAndShutdown: async () => { calls.push("drain"); },
-        spawnStart: (port) => { calls.push(`start:${port}`); },
-        markRecycling: () => { calls.push("recycle"); },
-        exitProcess: (code) => { calls.push(`exit:${code}`); },
-      });
-
-      await scheduled!();
-      expect(calls).toEqual(["drain", "start:10123", "recycle", "exit:0"]);
-    } finally {
-      if (prev === undefined) delete process.env.CCX_SERVICE;
-      else process.env.CCX_SERVICE = prev;
-    }
-  });
-
-  test("CCX_SERVICE with viable Background Service exits 1 for supervisor respawn", async () => {
-    const calls: string[] = [];
-    let scheduled: (() => void | Promise<void>) | null = null;
-    const prev = process.env.CCX_SERVICE;
-    process.env.CCX_SERVICE = "1";
-
-    try {
-      acceptSystemRestart({
-        isShutdownDraining: () => false,
-        getActiveTurnCount: () => 0,
-        isServiceViable: () => true,
-        schedule: (fn) => { scheduled = fn; },
-        drainAndShutdown: async () => { calls.push("drain"); },
-        spawnStart: () => { calls.push("start"); },
-        markRecycling: () => { calls.push("recycle"); },
-        exitProcess: (code) => { calls.push(`exit:${code}`); },
-      });
-
-      await scheduled!();
-      expect(calls).toEqual(["drain", "exit:1"]);
-    } finally {
-      if (prev === undefined) delete process.env.CCX_SERVICE;
-      else process.env.CCX_SERVICE = prev;
-    }
-  });
-
-  test("spawn sync throw exits 1 without marking recycle", async () => {
-    const calls: string[] = [];
-    let scheduled: (() => void | Promise<void>) | null = null;
-    const warnings: string[] = [];
-    const originalWarn = console.warn;
-    console.warn = (...args: unknown[]) => {
-      warnings.push(args.map(String).join(" "));
-    };
-
-    try {
-      acceptSystemRestart({
-        isShutdownDraining: () => false,
-        getActiveTurnCount: () => 0,
-        isSupervisedServiceChild: () => false,
-        listenPort: () => 10123,
-        schedule: (fn) => { scheduled = fn; },
-        beginShutdownDrain: () => {},
-        drainAndShutdown: async () => { calls.push("drain"); },
-        spawnStart: () => {
-          calls.push("start");
-          const err = new Error(
-            "ENOENT: no such file or directory, uv_spawn 'C:\\Users\\Alice\\AppData\\Local\\bun\\bun.exe'",
-          ) as NodeJS.ErrnoException;
-          err.code = "ENOENT";
-          throw err;
-        },
-        markRecycling: () => { calls.push("recycle"); },
-        exitProcess: (code) => { calls.push(`exit:${code}`); },
-      });
-
-      await scheduled!();
-      expect(calls).toEqual(["drain", "start", "exit:1"]);
-      expect(warnings.some((w) => w.includes("ENOENT"))).toBe(true);
-      expect(warnings.some((w) => /Alice|AppData|bun\.exe/i.test(w))).toBe(false);
-    } finally {
-      console.warn = originalWarn;
-    }
-  });
-
-  test("replacement readiness rejection exits 1 without marking recycle", async () => {
-    const calls: string[] = [];
-    let scheduled: (() => void | Promise<void>) | null = null;
-
-    acceptSystemRestart({
-      isShutdownDraining: () => false,
-      getActiveTurnCount: () => 0,
-      isSupervisedServiceChild: () => false,
-      listenPort: () => 10123,
-      schedule: (fn) => { scheduled = fn; },
-      beginShutdownDrain: () => {},
-      drainAndShutdown: async () => { calls.push("drain"); },
-      spawnStart: async () => {
-        calls.push("start");
-        throw Object.assign(new Error("replacement never became healthy"), { code: "readiness_timeout" });
-      },
-      markRecycling: () => { calls.push("recycle"); },
-      exitProcess: (code) => { calls.push(`exit:${code}`); },
-    });
-
-    await scheduled!();
-    expect(calls).toEqual(["drain", "start", "exit:1"]);
-  });
-
-  test("drain rejection still reaches one replacement handoff and terminal exit", async () => {
-    const calls: string[] = [];
-    let scheduled: (() => void | Promise<void>) | null = null;
-
-    acceptSystemRestart({
-      isShutdownDraining: () => false,
-      getActiveTurnCount: () => 1,
-      isSupervisedServiceChild: () => false,
-      listenPort: () => 10123,
-      schedule: (fn) => { scheduled = fn; },
-      beginShutdownDrain: () => { calls.push("latched"); },
-      drainAndShutdown: async () => {
-        calls.push("drain");
-        throw new Error("fixture cleanup rejection");
-      },
-      stopListener: () => { calls.push("stop"); },
-      spawnStart: (port) => { calls.push(`start:${port}`); },
-      markRecycling: () => { calls.push("recycle"); },
-      exitProcess: (code) => { calls.push(`exit:${code}`); },
-    });
-
-    await scheduled!();
-    expect(calls).toEqual(["latched", "drain", "stop", "start:10123", "recycle", "exit:0"]);
-  });
-
-  test("spawn failure clears CCX_SERVICE so exit cleanup can restore fences", async () => {
-    const calls: string[] = [];
-    let scheduled: (() => void | Promise<void>) | null = null;
-    const prev = process.env.CCX_SERVICE;
-    process.env.CCX_SERVICE = "1";
-
-    try {
-      acceptSystemRestart({
-        isShutdownDraining: () => false,
-        getActiveTurnCount: () => 0,
-        // ensure/tray: marker set, but no installed service → unsupervised spawn path
-        isSupervisedServiceChild: () => false,
-        listenPort: () => 10123,
-        schedule: (fn) => { scheduled = fn; },
-        beginShutdownDrain: () => {},
-        drainAndShutdown: async () => { calls.push("drain"); },
-        spawnStart: () => {
-          calls.push("start");
-          throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
-        },
-        markRecycling: () => { calls.push("recycle"); },
-        exitProcess: (code) => { calls.push(`exit:${code}`); },
-      });
-
-      await scheduled!();
-      expect(calls).toEqual(["drain", "start", "exit:1"]);
-      expect(process.env.CCX_SERVICE).toBeUndefined();
-    } finally {
-      if (prev === undefined) delete process.env.CCX_SERVICE;
-      else process.env.CCX_SERVICE = prev;
-    }
-  });
-
-  test("does not schedule a second drain while already draining", async () => {
-    let scheduled = 0;
-    const result = acceptSystemRestart({
-      isShutdownDraining: () => true,
+describe("restart admission", () => {
+  test("waits for spawn proof and latches duplicate requests", async () => {
+    let proveSpawn!: () => void;
+    let spawnCount = 0;
+    const io = {
       getActiveTurnCount: () => 2,
-      schedule: () => { scheduled += 1; },
-    });
-    expect(result.alreadyDraining).toBe(true);
-    expect(result.activeTurnCount).toBe(2);
-    expect(scheduled).toBe(0);
-  });
-
-  test("latches so a second accept before drain starts is a no-op", async () => {
-    let scheduled = 0;
-    const io = {
-      isShutdownDraining: () => false,
-      getActiveTurnCount: () => 1,
-      schedule: () => { scheduled += 1; },
-    };
-    const first = acceptSystemRestart(io);
-    const second = acceptSystemRestart(io);
-    expect(first.alreadyDraining).toBe(false);
-    expect(second.alreadyDraining).toBe(true);
-    expect(scheduled).toBe(1);
-  });
-
-  test("profile-first ordering queues and hands off exactly once across repeated accepts", async () => {
-    const calls: string[] = [];
-    let scheduled: (() => void | Promise<void>) | null = null;
-    let scheduleCount = 0;
-    const io = {
-      isShutdownDraining: () => false,
-      getActiveTurnCount: () => 0,
-      beginShutdownDrain: () => { calls.push("shutdown-latched"); return true; },
-      schedule: (fn: () => void | Promise<void>) => { scheduleCount += 1; scheduled = fn; },
-      drainAndShutdown: async () => { calls.push("shutdown"); },
-      isSupervisedServiceChild: () => false,
-      spawnStart: () => { calls.push("start"); },
-      markRecycling: () => { calls.push("recycle"); },
-      exitProcess: (code: number) => { calls.push(`exit:${code}`); },
-    };
-    const first = acceptSystemRestart(io);
-    const second = acceptSystemRestart(io);
-    expect(first.alreadyDraining).toBe(false);
-    expect(second.alreadyDraining).toBe(true);
-    expect(scheduleCount).toBe(1);
-    await scheduled!();
-    expect(calls).toEqual(["shutdown-latched", "shutdown", "start", "recycle", "exit:0"]);
-  });
-});
-
-describe("replacement readiness budget", () => {
-  test("allows the ordinary 65s Windows reclaim boundary without wall-clock delay", async () => {
-    let now = 0;
-    const ready = await waitForReplacementReady(222, 111, 10123, {
-      now: () => now,
-      sleep: async (ms) => { now += ms; },
-      findLive: async () => now >= 65_000
-        ? { pid: 222, port: 10123, source: "runtime" }
-        : null,
-    });
-
-    expect(REPLACEMENT_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(65_000);
-    expect(ready).toBe(true);
-    expect(now).toBeGreaterThanOrEqual(65_000);
-    expect(now).toBeLessThan(REPLACEMENT_READY_TIMEOUT_MS);
-  });
-
-  test("ends the readiness probe at its exact virtual deadline", async () => {
-    let now = 0;
-    const ready = await waitForReplacementReady(222, 111, 10123, {
-      now: () => now,
-      sleep: async (ms) => { now += ms; },
-      findLive: async () => null,
-    });
-
-    expect(ready).toBe(false);
-    expect(now).toBe(REPLACEMENT_READY_TIMEOUT_MS);
-  });
-
-  test("passes the absolute readiness deadline into a delayed internal probe", async () => {
-    let now = 0;
-    let probes = 0;
-    let forwardedDeadline: number | undefined;
-    const ready = await waitForReplacementReady(222, 111, 10123, {
-      now: () => now,
-      sleep: async (ms) => { now += ms; },
-      findLive: async (probeIo) => {
-        probes += 1;
-        forwardedDeadline = probeIo?.deadlineAt;
-        expect(probeIo?.nowFn?.()).toBe(now);
-        expect(typeof probeIo?.sleepFn).toBe("function");
-        now = probeIo!.deadlineAt! + 1;
-        return { pid: 222, port: 10123, source: "runtime" };
+      spawnHelper: async () => {
+        spawnCount += 1;
+        await new Promise<void>(resolve => { proveSpawn = resolve; });
       },
-    });
+    };
+    const firstPending = acceptSerializedSystemRestart(io);
+    const secondPending = acceptSerializedSystemRestart(io);
+    let firstSettled = false;
+    void firstPending.then(() => { firstSettled = true; });
+    await Promise.resolve();
+    expect(firstSettled).toBe(false);
+    expect(spawnCount).toBe(1);
 
-    expect(ready).toBe(false);
-    expect(probes).toBe(1);
-    expect(forwardedDeadline).toBe(REPLACEMENT_READY_TIMEOUT_MS);
-    expect(now).toBe(REPLACEMENT_READY_TIMEOUT_MS + 1);
+    proveSpawn();
+    expect(await firstPending).toEqual({
+      kind: "accepted",
+      activeTurnCount: 2,
+      drainTimeoutMs: 0,
+    });
+    expect(await secondPending).toEqual({
+      kind: "already-accepted",
+      activeTurnCount: 2,
+      drainTimeoutMs: 0,
+    });
+    expect((await acceptSerializedSystemRestart(io)).kind).toBe("already-accepted");
+    expect(spawnCount).toBe(1);
+  });
+
+  test("spawn refusal leaves admission retryable", async () => {
+    let spawnCount = 0;
+    const io = {
+      getActiveTurnCount: () => 1,
+      spawnHelper: async () => {
+        spawnCount += 1;
+        if (spawnCount === 1) throw new Error("fixture refusal");
+      },
+    };
+
+    expect((await acceptSerializedSystemRestart(io)).kind).toBe("refused");
+    expect((await acceptSerializedSystemRestart(io)).kind).toBe("accepted");
+    expect(spawnCount).toBe(2);
+  });
+
+  test("helper exit while the old parent remains re-arms a second restart", async () => {
+    let onExit: (() => void) | undefined;
+    let spawnCount = 0;
+    const io = {
+      getActiveTurnCount: () => 0,
+      spawnHelper: async (exit: () => void) => {
+        spawnCount += 1;
+        onExit = exit;
+      },
+    };
+
+    expect((await acceptSerializedSystemRestart(io)).kind).toBe("accepted");
+    expect(spawnCount).toBe(1);
+    onExit?.();
+    expect((await acceptSerializedSystemRestart(io)).kind).toBe("accepted");
+    expect(spawnCount).toBe(2);
   });
 });
 
 describe("POST /api/system/restart", () => {
-  test("returns 202 with drain timeout and does not tear down injection", async () => {
+  test("returns 202 after helper spawn without draining the listener or exiting the parent", async () => {
+    let listenerStops = 0;
+    setServerRef({
+      port: 10100,
+      stop() { listenerStops += 1; },
+    } as unknown as ReturnType<typeof Bun.serve>);
     setSystemRestartIoForTests({
-      isShutdownDraining: () => false,
-      getActiveTurnCount: () => 1,
-      schedule: () => {},
-      beginShutdownDrain: () => {},
+      getActiveTurnCount: () => 3,
+      spawnHelper: async () => {},
     });
-    const req = new Request("http://127.0.0.1:10100/api/system/restart", { method: "POST" });
-    const res = await handleManagementAPI(req, new URL(req.url), config());
-    expect(res).not.toBeNull();
-    expect(res!.status).toBe(202);
+
+    const res = await handleManagementAPI(request(), new URL(request().url), config());
+    expect(res?.status).toBe(202);
+    expect(listenerStops).toBe(0);
     const body = await res!.json() as {
       success: boolean;
       activeTurnCount: number;
@@ -778,11 +204,48 @@ describe("POST /api/system/restart", () => {
       alreadyDraining: boolean;
       message: string;
     };
-    expect(body.success).toBe(true);
-    expect(body.activeTurnCount).toBe(1);
-    expect(body.drainTimeoutMs).toBe(60_000);
-    expect(body.alreadyDraining).toBe(false);
-    expect(body.message.toLowerCase()).toContain("drain");
+    expect(body).toEqual({
+      success: true,
+      message: "Safe proxy restart accepted.",
+      activeTurnCount: 3,
+      drainTimeoutMs: 0,
+      alreadyDraining: false,
+    });
+    // Reaching this assertion with the same PID is the behavioral proof that
+    // the authenticated API handler did not call process.exit.
+    expect(process.pid).toBeGreaterThan(0);
+  });
+
+  test("returns 409 on spawn refusal and accepts a later retry", async () => {
+    let spawnCount = 0;
+    setSystemRestartIoForTests({
+      getActiveTurnCount: () => 1,
+      spawnHelper: async () => {
+        spawnCount += 1;
+        if (spawnCount === 1) throw new Error("fixture refusal");
+      },
+    });
+
+    const first = await handleManagementAPI(request(), new URL(request().url), config());
+    expect(first?.status).toBe(409);
+    expect((await first!.json() as { success: boolean }).success).toBe(false);
+    const second = await handleManagementAPI(request(), new URL(request().url), config());
+    expect(second?.status).toBe(202);
+    expect(spawnCount).toBe(2);
+  });
+
+  test("returns an already-accepted 202 without spawning a duplicate helper", async () => {
+    let spawnCount = 0;
+    setSystemRestartIoForTests({
+      spawnHelper: async () => { spawnCount += 1; },
+    });
+
+    expect((await handleManagementAPI(request(), new URL(request().url), config()))?.status).toBe(202);
+    const duplicate = await handleManagementAPI(request(), new URL(request().url), config());
+    expect(duplicate?.status).toBe(202);
+    const body = await duplicate!.json() as { alreadyDraining: boolean; message: string };
+    expect(body.alreadyDraining).toBe(true);
+    expect(body.message).toBe("Restart already accepted.");
+    expect(spawnCount).toBe(1);
   });
 });
-import { ManagementRequest as Request } from "./helpers/management-auth";

@@ -1,60 +1,15 @@
-import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { CatalogModel } from "../codex/catalog";
-import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../codex/catalog";
-import {
-  DEFAULT_SUBAGENT_MODELS,
-  codexAutoStartEnabled,
-  hasOwnProvider,
-  isValidProviderName,
-  multiAgentGuidanceEnabled,
-  providerBaseUrlConfigError,
-  providerHeadersConfigError,
-  saveConfigPreservingClaudeCode,
-} from "../config";
-import {
-  clearLoginState,
-  getLoginStatus,
-  isPublicOAuthProvider,
-  listOAuthProviders,
-  startLoginFlow,
-  submitManualLoginCode,
-  upsertOAuthProvider,
-} from "../oauth";
-import { OAuthMutationBusyError, removeCredential } from "../oauth/store";
-import { providerDestinationResolvedError } from "../lib/destination-policy";
-import { enrichProviderFromCatalog, listKeyLoginProviders } from "../oauth/key-providers";
-import { deriveProviderPresets } from "../providers/derive";
-import { providerCodexAccountMode } from "../providers/registry";
-import { routedSlug, slugEquals } from "../providers/slug-codec";
-import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../providers/quota";
-import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
-import { clearThreadAccountMap } from "../codex/routing";
-import { primeCodexPoolQuotas } from "../codex/auth-api";
-import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../providers/context-cap";
-import { resolveCodexHomeDir } from "../codex/home";
-import { readUsageEntries } from "../usage/log";
-import { getUsageDebugLogEntries } from "../usage/debug";
-import { parseRange, parseUsageSurface, summarizeUsage } from "../usage/summary";
-import { stripCodexRuntimeProviderFields } from "../codex/auth-context";
-import { getProviderRegistryEntry } from "../providers/registry";
-import { getDebugLogEntries } from "../lib/debug-log-buffer";
-import { getInjectionDebugLogEntries } from "../lib/injection-debug-log";
-import {
-  clearDebugSettings,
-  clearDebugSetting,
-  getDebugSettings,
-  setDebugSettings,
-  type DebugFlag,
-} from "../lib/debug-settings";
-import type { CodexCommanderClaudeCodeConfig, CodexCommanderClaudeDesktopProfile, CodexCommanderConfig, CodexCommanderCustomModel, CodexCommanderProviderConfig } from "../types";
-import type { DesktopProfileModel } from "../claude/desktop-profile";
+import type { CodexCommanderConfig } from "../types";
+import { OAuthMutationBusyError } from "../oauth/store";
 import { drainAndShutdown } from "./lifecycle";
-import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "./request-log";
-import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../usage/cost";
-import type { PersistedUsageAttempt } from "../usage/log";
-import { isAllowedManagementOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "./auth-cors";
-import { applySystemEnvToggle } from "./system-env";
+import { isAllowedManagementOrigin, jsonResponse } from "./auth-cors";
+import { validateProxyLifecycleLockLease } from "./proxy-start-lock";
+import {
+  acquireProxyLifecycleAuthority,
+  type AcquireProxyLifecycleAuthorityOptions,
+  type ProxyLifecycleAuthority,
+} from "./proxy-lifecycle-authority";
+import { readProxyLifecycleLockLeaseHeaders } from "./proxy-lifecycle-protocol";
 
 import type { ManagementApiDeps } from "./management/context";
 import { handleConfigRoutes } from "./management/config-routes";
@@ -89,6 +44,10 @@ export const VERSION = (() => {
     return "0.0.0";
   }
 })();
+
+function stopLifecycleAuthorityOptions(): AcquireProxyLifecycleAuthorityOptions {
+  return { includeStart: true, waitTimeoutMs: 8_000 };
+}
 
 function isCatalogDisposition(value: unknown): value is CatalogDisposition {
   if (!value || typeof value !== "object" || !("status" in value)) return false;
@@ -242,9 +201,53 @@ export async function handleManagementAPI(
   if (routed) return routed;
 
   if (url.pathname === "/api/stop" && req.method === "POST") {
-    const { prepareExplicitProxyShutdown } = await import("../cli/proxy-lifecycle");
-    const prepared = prepareExplicitProxyShutdown();
+    const lifecycle = deps.proxyStopLifecycle ?? {};
+    const delegatedLease = readProxyLifecycleLockLeaseHeaders(req.headers);
+    let ownedAuthority: ProxyLifecycleAuthority | undefined;
+    if (delegatedLease.kind !== "none") {
+      const valid = delegatedLease.kind === "lease"
+        && (lifecycle.validateLease ?? validateProxyLifecycleLockLease)(delegatedLease.lease);
+      if (!valid) {
+        return jsonResponse(
+          { success: false, message: "Proxy stop lifecycle coordination was refused." },
+          409,
+          req,
+          config,
+        );
+      }
+    } else {
+      try {
+        ownedAuthority = await (lifecycle.acquireAuthority ?? acquireProxyLifecycleAuthority)(
+          stopLifecycleAuthorityOptions(),
+        );
+      } catch {
+        return jsonResponse(
+          { success: false, message: "Proxy lifecycle is busy; use menu or CLI Stop and retry." },
+          409,
+          req,
+          config,
+        );
+      }
+    }
+    let prepared: Awaited<ReturnType<NonNullable<typeof lifecycle.prepareShutdown>>>;
+    try {
+      const prepareShutdown = lifecycle.prepareShutdown
+        ?? (await import("../cli/proxy-lifecycle")).prepareExplicitProxyShutdown;
+      prepared = prepareShutdown({
+        allowInstalledServiceStop: delegatedLease.kind === "lease",
+        serviceAlreadyStopped: delegatedLease.kind === "lease",
+      });
+    } catch {
+      ownedAuthority?.releaseAll();
+      return jsonResponse(
+        { success: false, message: "Proxy stop preparation failed; CodexCommander stayed running." },
+        409,
+        req,
+        config,
+      );
+    }
     if (!prepared.accepted) {
+      ownedAuthority?.releaseAll();
       return jsonResponse(
         { success: false, message: prepared.message },
         prepared.status,
@@ -252,10 +255,30 @@ export async function handleManagementAPI(
         config,
       );
     }
-    setTimeout(async () => {
-      await drainAndShutdown(undefined, config.shutdownTimeoutMs ?? 5000);
-      process.exit(0);
-    }, 200);
+    // The Stop transition is persisted by a fresh locked config mutation. Keep
+    // this long-lived server instance aligned immediately so an already-admitted
+    // whole-config writer cannot re-publish a stale Codex ON value before exit.
+    config.clientIntegrations = { ...config.clientIntegrations, codex: false };
+    try {
+      (lifecycle.schedule ?? setTimeout)(async () => {
+        try {
+          await (lifecycle.drain ?? drainAndShutdown)(undefined, config.shutdownTimeoutMs ?? 5000);
+        } finally {
+          // Production process.exit never returns, so raw-owned E/S remain present
+          // until dead-owner reclamation. A test exit seam may return; release only
+          // after it has observed the still-held authority.
+          try { (lifecycle.exit ?? process.exit)(0); } finally { ownedAuthority?.releaseAll(); }
+        }
+      }, 200);
+    } catch {
+      ownedAuthority?.releaseAll();
+      return jsonResponse(
+        { success: false, message: "Proxy stop scheduling failed; CodexCommander stayed running." },
+        409,
+        req,
+        config,
+      );
+    }
     return jsonResponse({ success: prepared.success, message: prepared.message });
   }
 

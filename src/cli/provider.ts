@@ -14,8 +14,8 @@ import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../providers/regist
 import { providerConfigSeed } from "../providers/derive";
 import type { CodexCommanderProviderConfig } from "../types";
 import { findLiveProxy } from "../server/proxy-liveness";
-import { syncModelsToCodex } from "../codex/sync";
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
+import { syncCodexCatalogForCli } from "./catalog-activation";
 
 // ---------------------------------------------------------------------------
 // Arg helpers
@@ -233,7 +233,7 @@ async function handleAdd(args: string[]): Promise<void> {
   if (wantsSync) {
     const live = await findLiveProxy();
     if (live) {
-      const synced = await syncModelsToCodex(live.port).catch(e => {
+      const synced = await syncCodexCatalogForCli(live).catch(e => {
         console.error(`Warning: sync failed: ${e instanceof Error ? e.message : String(e)}`);
         return null;
       });

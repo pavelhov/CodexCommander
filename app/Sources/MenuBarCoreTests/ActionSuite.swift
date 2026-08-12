@@ -1,50 +1,6 @@
 import Foundation
 import MenuBarCore
 
-private actor FakeActionClient: ProxyActionClient {
-    let currentEndpoint: ProxyEndpoint
-    private var restartResult: Result<RestartAccepted, Error>
-    private var livenessQueue: [ProxyClient.Liveness]
-    private(set) var livenessCalls = 0
-    private(set) var restartCalls = 0
-
-    init(
-        oldPID: Int? = 42,
-        restartResult: Result<RestartAccepted, Error> = .success(
-            RestartAccepted(
-                success: true,
-                message: "Draining in-flight requests, then restarting.",
-                activeTurnCount: 0,
-                drainTimeoutMs: 0,
-                alreadyDraining: false
-            )
-        ),
-        liveness: [ProxyClient.Liveness]
-    ) {
-        currentEndpoint = ProxyEndpoint(
-            host: "127.0.0.1",
-            port: 10100,
-            expectedPID: oldPID
-        )!
-        self.restartResult = restartResult
-        self.livenessQueue = liveness
-    }
-
-    func restart() async throws -> RestartAccepted {
-        restartCalls += 1
-        return try restartResult.get()
-    }
-
-    func liveness(timeout: TimeInterval) async -> ProxyClient.Liveness {
-        livenessCalls += 1
-        return livenessQueue.isEmpty ? .indeterminate : livenessQueue.removeFirst()
-    }
-
-    func counts() -> (restart: Int, liveness: Int) {
-        (restartCalls, livenessCalls)
-    }
-}
-
 private actor FakeLifecycleRunner: LifecycleCommandRunning {
     private var results: [LifecycleCommandResult]
     private(set) var actions: [LifecycleAction] = []
@@ -70,93 +26,38 @@ private actor FakeLifecycleRunner: LifecycleCommandRunning {
     func recordedActions() -> [LifecycleAction] { actions }
 }
 
-private final class TestClock: @unchecked Sendable {
-    private let lock = NSLock()
-    private var instant = Date(timeIntervalSince1970: 1_000)
-
-    func now() -> Date {
-        lock.lock()
-        defer { lock.unlock() }
-        return instant
-    }
-
-    func advance(_ seconds: TimeInterval) {
-        lock.lock()
-        instant = instant.addingTimeInterval(seconds)
-        lock.unlock()
-    }
-}
-
 enum ActionSuite {
     static func run(_ t: TestRunner) {
-        t.test("restart: a 202 is not success until a replacement pid is validated") {
-            let client = FakeActionClient(liveness: [
-                .reachable(pid: 42),
-                .refused,
-                .reachable(pid: 43),
+        t.test("lifecycle: Codex route actions use the fixed bridge spellings") {
+            t.equal(LifecycleAction.restoreNative.rawValue, "restore-native")
+            t.equal(LifecycleAction.restoreBack.rawValue, "restore-back")
+        }
+
+        t.test("restart: delegates to the fixed helper and trusts its running result") {
+            let lifecycle = FakeLifecycleRunner(results: [
+                LifecycleCommandResult(
+                    action: .restart, ok: true, state: .running,
+                    changed: true, pid: 43, port: 10100,
+                    message: "CodexCommander proxy restarted."
+                ),
             ])
-            let clock = TestClock()
-            let coordinator = ActionCoordinator(
-                client: client,
-                sleeper: { seconds in clock.advance(max(seconds, 1)) },
-                now: { clock.now() }
-            )
-            let result = sync { await coordinator.restart() }
-            t.equal(result, .restarted)
-            let counts = sync { await client.counts() }
-            t.equal(counts.restart, 1)
-            t.equal(counts.liveness, 3)
-        }
-
-        t.test("restart: the old process staying alive is reported as unconfirmed") {
-            let client = FakeActionClient(liveness: Array(repeating: .reachable(pid: 42), count: 30))
-            let clock = TestClock()
-            let coordinator = ActionCoordinator(
-                client: client,
-                sleeper: { _ in clock.advance(5) },
-                now: { clock.now() }
-            )
-            let result = sync { await coordinator.restart() }
-            if case .failed(let message) = result {
-                t.expect(message.contains("could not be confirmed"), "unexpected message: \(message)")
-            } else {
-                t.expect(false, "same pid must not be reported as restarted")
-            }
-        }
-
-        t.test("restart: without an old pid, refusal then valid identity proves replacement") {
-            let client = FakeActionClient(
-                oldPID: nil,
-                liveness: [.refused, .reachable(pid: 99)]
-            )
-            let clock = TestClock()
-            let coordinator = ActionCoordinator(
-                client: client,
-                sleeper: { _ in clock.advance(1) },
-                now: { clock.now() }
-            )
+            let coordinator = ActionCoordinator(lifecycle: lifecycle)
             t.equal(sync { await coordinator.restart() }, .restarted)
+            t.equal(sync { await lifecycle.recordedActions() }, [.restart])
         }
 
-        t.test("restart: an explicit refusal never enters replacement polling") {
-            let client = FakeActionClient(
-                restartResult: .success(RestartAccepted(
-                    success: false,
-                    message: "Restart unavailable.",
-                    activeTurnCount: 0,
-                    drainTimeoutMs: 0,
-                    alreadyDraining: false
-                )),
-                liveness: [.reachable(pid: 43)]
+        t.test("restart: surfaces a structured helper refusal") {
+            let lifecycle = FakeLifecycleRunner(results: [
+                LifecycleCommandResult(
+                    action: .restart, ok: false, state: .blocked,
+                    changed: false, message: "Lifecycle coordination is busy."
+                ),
+            ])
+            let coordinator = ActionCoordinator(lifecycle: lifecycle)
+            t.equal(
+                sync { await coordinator.restart() },
+                .failed("Lifecycle coordination is busy.")
             )
-            let coordinator = ActionCoordinator(client: client)
-            let result = sync { await coordinator.restart() }
-            if case .failed(let message) = result {
-                t.expect(message.contains("refused"), "unexpected message: \(message)")
-            } else {
-                t.expect(false, "an explicit refusal must fail")
-            }
-            t.equal(sync { await client.counts() }.liveness, 0)
         }
 
         t.test("lifecycle: ensure, start, and stop use the fixed helper actions") {
@@ -174,10 +75,7 @@ enum ActionSuite {
                     changed: true, message: "stopped"
                 ),
             ])
-            let coordinator = ActionCoordinator(
-                client: FakeActionClient(liveness: []),
-                lifecycle: lifecycle
-            )
+            let coordinator = ActionCoordinator(lifecycle: lifecycle)
             t.equal(sync { await coordinator.ensure() }, .running)
             t.equal(sync { await coordinator.start() }, .running)
             t.equal(sync { await coordinator.stop() }, .stopped)
@@ -194,13 +92,48 @@ enum ActionSuite {
                     changed: false, message: "Service ownership blocked the stop."
                 ),
             ])
-            let coordinator = ActionCoordinator(
-                client: FakeActionClient(liveness: []),
-                lifecycle: lifecycle
-            )
+            let coordinator = ActionCoordinator(lifecycle: lifecycle)
             t.equal(
                 sync { await coordinator.stop() },
                 .failed("Service ownership blocked the stop.")
+            )
+        }
+
+        t.test("lifecycle: Codex route controls delegate to helper results") {
+            let lifecycle = FakeLifecycleRunner(results: [
+                LifecycleCommandResult(
+                    action: .restoreNative, ok: true, state: .running,
+                    changed: true, pid: 41, port: 10100,
+                    message: "Codex now uses its native OpenAI route."
+                ),
+                LifecycleCommandResult(
+                    action: .restoreBack, ok: true, state: .running,
+                    changed: true, pid: 41, port: 10100,
+                    message: "Codex now routes through CodexCommander."
+                ),
+                LifecycleCommandResult(
+                    action: .restoreNative, ok: false, state: .blocked,
+                    changed: false,
+                    message: "Codex configuration was unchanged."
+                ),
+            ])
+            let coordinator = ActionCoordinator(lifecycle: lifecycle)
+
+            t.equal(
+                sync { await coordinator.restoreNativeCodex() },
+                .completed("Codex now uses its native OpenAI route.")
+            )
+            t.equal(
+                sync { await coordinator.routeCodexThroughProxy() },
+                .completed("Codex now routes through CodexCommander.")
+            )
+            t.equal(
+                sync { await coordinator.restoreNativeCodex() },
+                .failed("Codex configuration was unchanged.")
+            )
+            t.equal(
+                sync { await lifecycle.recordedActions() },
+                [.restoreNative, .restoreBack, .restoreNative]
             )
         }
 
@@ -215,10 +148,7 @@ enum ActionSuite {
                     staleWorkerCount: 2
                 ),
             ])
-            let coordinator = ActionCoordinator(
-                client: FakeActionClient(liveness: []),
-                lifecycle: lifecycle
-            )
+            let coordinator = ActionCoordinator(lifecycle: lifecycle)
             t.equal(
                 sync { await coordinator.ensure() },
                 .catalogUpdateReady(staleWorkerCount: 2)
@@ -240,10 +170,7 @@ enum ActionSuite {
                     errorCode: "SYNC_FAILED"
                 ),
             ])
-            let coordinator = ActionCoordinator(
-                client: FakeActionClient(liveness: []),
-                lifecycle: lifecycle
-            )
+            let coordinator = ActionCoordinator(lifecycle: lifecycle)
             t.equal(
                 sync { await coordinator.ensure() },
                 .failed("Codex restart required.")
@@ -267,10 +194,7 @@ enum ActionSuite {
                     survivingWorkerCount: 0
                 ),
             ])
-            let coordinator = ActionCoordinator(
-                client: FakeActionClient(liveness: []),
-                lifecycle: lifecycle
-            )
+            let coordinator = ActionCoordinator(lifecycle: lifecycle)
             t.equal(
                 sync { await coordinator.applyCodexCatalog() },
                 .applied(CodexCatalogApplySummary(
@@ -297,10 +221,7 @@ enum ActionSuite {
                     survivingWorkerCount: 1
                 ),
             ])
-            let coordinator = ActionCoordinator(
-                client: FakeActionClient(liveness: []),
-                lifecycle: lifecycle
-            )
+            let coordinator = ActionCoordinator(lifecycle: lifecycle)
             t.equal(
                 sync { await coordinator.applyCodexCatalog() },
                 .incomplete(
@@ -325,10 +246,7 @@ enum ActionSuite {
                     survivingWorkerCount: 2
                 ),
             ])
-            let coordinator = ActionCoordinator(
-                client: FakeActionClient(liveness: []),
-                lifecycle: lifecycle
-            )
+            let coordinator = ActionCoordinator(lifecycle: lifecycle)
             t.equal(
                 sync { await coordinator.applyCodexCatalog() },
                 .failed("Agent catalog update did not complete.")

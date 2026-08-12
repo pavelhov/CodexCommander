@@ -36,10 +36,11 @@ bun run src/cli/index.ts init
 ```
 
 The wizard writes `$CODEXCOMMANDER_HOME/config.json` (normally
-`~/.codexcommander/config.json`). It can also inject the proxy address into Codex's `config.toml` and
-install the optional Codex autostart shim. `ccx init` never starts the proxy. For a fully
-non-interactive setup, configure providers with `ccx provider add` as shown below instead of driving
-the wizard.
+`~/.codexcommander/config.json`). It can route Codex through an already-running proxy only after its
+protected current-home runtime identity is proven, and it can install the optional Codex autostart
+shim. `ccx init` never starts the proxy or points Codex at an unproven listener; without a proven live
+proxy, Codex remains native until `ccx start`. For a fully non-interactive setup, configure providers
+with `ccx provider add` as shown below instead of driving the wizard.
 
 The source command form is `bun run src/cli/index.ts <command>`. On macOS, the companion built from this checkout stays at
 `dist/macos/CodexCommander.app`; see [macOS Menu Bar Companion](/guides/macos-menu-bar/) instead of
