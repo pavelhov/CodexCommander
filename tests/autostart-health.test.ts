@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { deriveStartupHealth, startupHealthSummary } from "../src/codex/autostart-health";
 import { classifyCodexRouting, hasInjectedCodexRouting } from "../src/codex/inject";
 import { handleManagementAPI } from "../src/server/management-api";
-import { invalidateStartupHealthCache, markStartupHealthDiagnosticStale } from "../src/server/startup-health-cache";
+import { invalidateStartupHealthCache, markStartupHealthDiagnosticStale, reconcileStartupHealthRouting } from "../src/server/startup-health-cache";
 import type { CodexCommanderConfig } from "../src/types";
 
 const base = {
@@ -108,6 +108,56 @@ describe("Codex startup health", () => {
   test("native routing has no codexcommander restart dependency", () => {
     const health = deriveStartupHealth({ ...base, routingKind: "native" });
     expect(health).toMatchObject({ status: "native", rebootSafe: true, protection: "none" });
+  });
+
+  test("reconciles cached diagnostics with fresh routing-derived fields only", () => {
+    const cached = deriveStartupHealth({
+      ...base,
+      serviceInstalled: true,
+      serviceViable: true,
+      serviceEnabled: true,
+      serviceRunning: true,
+    });
+    const native = reconcileStartupHealthRouting(cached, "native");
+    expect(native).toMatchObject({
+      routingKind: "native",
+      routingInjected: false,
+      localRoutingDependency: false,
+      status: "native",
+      rebootSafe: true,
+      protection: "none",
+      serviceInstalled: true,
+      serviceViable: true,
+      serviceEnabled: true,
+      serviceRunning: true,
+    });
+
+    const routedAgain = reconcileStartupHealthRouting(native, "codexcommander-local");
+    expect(routedAgain).toMatchObject({
+      routingKind: "codexcommander-local",
+      routingInjected: true,
+      localRoutingDependency: true,
+      status: "protected",
+      protection: "service",
+    });
+  });
+
+  test("fresh route reconciliation does not turn stale diagnostics green", () => {
+    const stale = markStartupHealthDiagnosticStale(deriveStartupHealth({
+      ...base,
+      routingKind: "native",
+      serviceInstalled: true,
+      serviceViable: true,
+      serviceEnabled: true,
+      serviceRunning: true,
+    }));
+    expect(reconcileStartupHealthRouting(stale, "codexcommander-local")).toMatchObject({
+      routingKind: "codexcommander-local",
+      routingInjected: true,
+      status: "at-risk",
+      protection: "none",
+      diagnosticStale: true,
+    });
   });
 
   test("recognizes canonical marker-owned routing without claiming user overrides", () => {

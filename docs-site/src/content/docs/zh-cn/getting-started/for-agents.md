@@ -33,7 +33,7 @@ bun run src/cli/index.ts init
 
 下文的 `ccx <args>` 在此检出目录中可以写成 `bun run src/cli/index.ts <args>`。
 
-该向导会写入 `$CODEXCOMMANDER_HOME/config.json`（通常是 `~/.codexcommander/config.json`）。它还可以把代理地址注入 Codex 的 `config.toml`，并安装可选的 Codex 自动启动 shim。`ccx init` 从不启动代理。若要完全非交互式地完成设置，请改用下面所示的 `ccx provider add` 来配置提供方，而不是运行向导。
+该向导会写入 `$CODEXCOMMANDER_HOME/config.json`（通常是 `~/.codexcommander/config.json`）。只有在当前 home 的受保护 runtime 记录能够证明代理已运行时，它才会让 Codex 经由该代理路由；它还可以安装可选的 Codex 自动启动 shim。`ccx init` 不会启动代理，也不会写入指向未经证明 listener 的路由；若没有已证明的代理，Codex 会保持原生状态直到执行 `ccx start`。若要完全非交互式地完成设置，请改用下面所示的 `ccx provider add` 来配置提供方，而不是运行向导。
 
 ## 检查无头安装
 

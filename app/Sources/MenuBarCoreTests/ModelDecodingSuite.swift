@@ -123,6 +123,32 @@ enum ModelDecodingSuite {
             )
         }
 
+        t.test("route status: requires the exact v1 contract and consistent ownership") {
+            let native = try decode(
+                CodexRouteStatus.self,
+                #"{"schemaVersion":1,"routingKind":"native","routingInjected":false}"#
+            )
+            t.equal(native.routingKind, .native)
+            t.equal(native.routingInjected, false)
+            let routed = try decode(
+                CodexRouteStatus.self,
+                #"{"schemaVersion":1,"routingKind":"codexcommander-local","routingInjected":true}"#
+            )
+            t.equal(routed.routingKind, .codexCommanderLocal)
+            t.equal(routed.routingInjected, true)
+
+            for invalid in [
+                #"{"routingKind":"native","routingInjected":false}"#,
+                #"{"schemaVersion":2,"routingKind":"native","routingInjected":false}"#,
+                #"{"schemaVersion":1,"routingKind":"native","routingInjected":true}"#,
+                #"{"schemaVersion":1,"routingKind":"codexcommander-local","routingInjected":false}"#,
+                #"{"schemaVersion":1,"routingKind":"future","routingInjected":false}"#,
+                #"{"schemaVersion":1,"routingKind":"native","routingInjected":false,"extra":true}"#,
+            ] {
+                t.expect(rejects(CodexRouteStatus.self, invalid), "invalid route DTO must be rejected")
+            }
+        }
+
         t.test("restart: rejects a partial accepted response") {
             t.expect(
                 rejects(RestartAccepted.self, #"{"success":true,"activeTurnCount":0,"drainTimeoutMs":1000,"alreadyDraining":false}"#),

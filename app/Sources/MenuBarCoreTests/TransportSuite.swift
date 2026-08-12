@@ -7,6 +7,11 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
     final class RequestGate: @unchecked Sendable {
         private let started = DispatchSemaphore(value: 0)
         private let resumeSignal = DispatchSemaphore(value: 0)
+        fileprivate let asynchronous: Bool
+
+        fileprivate init(asynchronous: Bool) {
+            self.asynchronous = asynchronous
+        }
 
         fileprivate func block() {
             started.signal()
@@ -45,6 +50,7 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) private static var queue: [Response] = []
     nonisolated(unsafe) private static var requests: [URLRequest] = []
     nonisolated(unsafe) private static var nextGate: RequestGate?
+    nonisolated(unsafe) private static var nextGatePath: String?
     nonisolated(unsafe) private static var stoppedLoads = 0
     private static let lock = NSLock()
 
@@ -53,14 +59,19 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         queue = responses
         requests = []
         nextGate = nil
+        nextGatePath = nil
         stoppedLoads = 0
         lock.unlock()
     }
 
-    static func pauseNextRequest() -> RequestGate {
-        let gate = RequestGate()
+    static func pauseNextRequest(
+        path: String? = nil,
+        asynchronously: Bool = false
+    ) -> RequestGate {
+        let gate = RequestGate(asynchronous: asynchronously)
         lock.lock()
         nextGate = gate
+        nextGatePath = path
         lock.unlock()
         return gate
     }
@@ -84,16 +95,30 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         Self.lock.lock()
         Self.requests.append(request)
         let response = Self.queue.isEmpty ? nil : Self.queue.removeFirst()
-        let gate = Self.nextGate
-        Self.nextGate = nil
+        let gateMatches = Self.nextGatePath == nil || Self.nextGatePath == request.url?.path
+        let gate = gateMatches ? Self.nextGate : nil
+        if gateMatches {
+            Self.nextGate = nil
+            Self.nextGatePath = nil
+        }
         Self.lock.unlock()
-
-        gate?.block()
 
         guard let response else {
             client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
             return
         }
+        if let gate, gate.asynchronous {
+            DispatchQueue.global().async { [self] in
+                gate.block()
+                deliver(response)
+            }
+            return
+        }
+        gate?.block()
+        deliver(response)
+    }
+
+    private func deliver(_ response: Response) {
         if let code = response.urlError {
             client?.urlProtocol(self, didFailWithError: URLError(code))
             return
@@ -210,6 +235,29 @@ enum TransportSuite {
                 $0.key.lowercased().hasSuffix("-api-key") && $0.value == "admin-secret"
             }
             t.equal(credentialHeaders.count, 1, "one management credential header")
+        }
+
+        t.test("transport: fresh Codex route status uses the attested management path") {
+            StubProtocol.reset([
+                .init(status: 200, body: identity),
+                .init(status: 200, body: #"{"schemaVersion":1,"routingKind":"native","routingInjected":false}"#),
+            ])
+            let client = makeClient(credential: "admin-secret")
+            let route: CodexRouteStatus? = sync { try? await client.codexRouteStatus() }
+            t.equal(route?.routingKind, .native)
+            t.equal(route?.routingInjected, false)
+
+            let requests = StubProtocol.recorded
+            t.equal(requests.map { $0.url?.path ?? "" }, ["/healthz", "/api/codex-routing"])
+            t.isNil(
+                requests[0].value(forHTTPHeaderField: "x-codexcommander-api-key"),
+                "attestation has no credential"
+            )
+            t.equal(
+                requests[1].value(forHTTPHeaderField: "x-codexcommander-api-key"),
+                "admin-secret"
+            )
+            t.equal(requests[1].cachePolicy, .reloadIgnoringLocalAndRemoteCacheData)
         }
 
         t.test("transport: public readiness accepts ready, pending, and failed without credentials") {

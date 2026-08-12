@@ -22,6 +22,9 @@ public actor PollingCoordinator {
     /// Rises on every close and on every new refresh, so results from a superseded or
     /// abandoned cycle can be discarded instead of overwriting fresher state.
     private var generation = 0
+    /// Orders focused route observations independently. A later focused request
+    /// wins even if an older network response returns last.
+    private var routingGeneration = 0
     private var refreshInFlight = false
     /// A refresh requested while another was in flight. Without this, closing and
     /// immediately reopening the popover dropped the reopen's refresh entirely: the old
@@ -108,6 +111,7 @@ public actor PollingCoordinator {
         refreshInFlight = true
         generation &+= 1
         let cycle = generation
+        let routeCycle = routingGeneration
 
         do {
             let health = try await client.health()
@@ -126,6 +130,11 @@ public actor PollingCoordinator {
             snapshot.credentialAvailability = await client.credentialAvailability
             snapshot.consecutiveFailures = 0
             snapshot.readiness = readiness
+            if routeCycle == routingGeneration {
+                snapshot.codexRoute = CodexRouteStatus(health: health)
+                    .map(CodexRouteObservation.confirmed)
+                    ?? .confirmationUnavailable
+            }
             if health.isDiagnosticStale {
                 diagnosticStaleRefreshes += 1
                 if diagnosticStaleRefreshes <= Self.maxDiagnosticStaleRefreshes {
@@ -150,7 +159,10 @@ public actor PollingCoordinator {
             await drainPendingRefresh()
             return
         } catch let error as ProxyError {
-            if cycle == generation { apply(error); publish() }
+            if cycle == generation {
+                await applyHealthFailure(error)
+                publish()
+            }
             refreshInFlight = false
             await drainPendingRefresh()
             return
@@ -192,6 +204,35 @@ public actor PollingCoordinator {
     /// sixty-second cadence and the proxy's five-minute cache exactly once.
     public func forceRefresh() async {
         await performRefresh(includeHeavy: true, forceQuotaRefresh: true)
+    }
+
+    /// Confirm an explicit route switch without waiting on startup diagnostics,
+    /// readiness, providers, activity, or quota aggregation.
+    ///
+    /// The independent route generation prevents an older ordinary or focused read
+    /// from overwriting this observation without disturbing the general refresh mutex.
+    @discardableResult
+    public func refreshRouting() async throws -> CodexRouteStatus {
+        routingGeneration &+= 1
+        let cycle = routingGeneration
+        let route = try await client.codexRouteStatus()
+        guard cycle == routingGeneration else { throw CancellationError() }
+        snapshot.codexRoute = .confirmed(route)
+        snapshot.endpoint = await client.currentEndpoint
+        snapshot.credentialAvailability = await client.credentialAvailability
+        snapshot.lastUpdated = Date()
+        publish()
+        return route
+    }
+
+    /// A lifecycle mutation completed but fresh route verification did not. Replace
+    /// any stale affirmative route with an explicit unknown observation while leaving
+    /// proxy liveness, diagnostics, quotas, and failure counters untouched.
+    public func markRoutingConfirmationUnavailable() {
+        routingGeneration &+= 1
+        snapshot.codexRoute = .confirmationUnavailable
+        snapshot.lastUpdated = Date()
+        publish()
     }
 
     /// Runs a refresh that arrived while another cycle held the lock.
@@ -278,6 +319,22 @@ public actor PollingCoordinator {
             // A timeout is degraded, not stopped: something may well still be running.
             snapshot.state = .degraded(error.userMessage)
         }
+    }
+
+    /// A normal verified stop removes the runtime attestation before the next poll,
+    /// while the durable admin token may remain. Authenticated startup health then
+    /// fails closed before opening a socket, which by itself cannot distinguish a
+    /// stopped proxy from an untrusted listener. Resolve only that ambiguity with the
+    /// credential-free, identity-validating liveness probe: a refused connection is
+    /// positively stopped; every reachable or inconclusive result keeps the safer
+    /// degraded/authentication state and therefore cannot start a duplicate proxy.
+    private func applyHealthFailure(_ error: ProxyError) async {
+        if error == .authenticationUnavailable || error == .identityMismatch,
+           await client.liveness() == .refused {
+            apply(.unreachable)
+            return
+        }
+        apply(error)
     }
 
     private func publish() {

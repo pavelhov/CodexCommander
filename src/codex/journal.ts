@@ -1,18 +1,18 @@
 import { createHash } from "node:crypto";
 import {
   existsSync,
-  lstatSync,
   readFileSync,
-  realpathSync,
-  statSync,
+  readdirSync,
   unlinkSync,
 } from "node:fs";
-import type { Stats } from "node:fs";
-import { join } from "node:path";
-import { atomicWriteFile, withConfigMutationLockSync } from "../config";
+import { basename, dirname, join, resolve } from "node:path";
+import {
+  atomicWriteFile,
+  readConfigAdmissionSnapshot,
+  withConfigMutationLockSync,
+} from "../config";
 import { canonicalizeCodexHome } from "./codex-write-lock";
 import { hasInjectedCodexRouting } from "./injected-marker";
-import { isOwnedProviderId } from "../identity";
 import {
   classifyNativeRoutedResidueAfterJournalRestore,
   classifyNativeRoutedResidue,
@@ -23,14 +23,26 @@ import {
   CODEX_HOME,
   CODEX_CONFIG_PATH,
   CODEX_PROFILE_PATH,
+  DEFAULT_CATALOG_PATH,
   getCodexHome,
 } from "./paths";
 import { beginCodexCoordinatorRecoveryTransaction } from "./transition-state";
-import { resolveEffectiveProjectModelProvider } from "./project-config-warnings";
 import {
   resolveCodexCoordinatorDatabasePath,
   resolveEffectiveUserIdentity,
 } from "./user-identity";
+import {
+  codexSurfaceText,
+  readCodexSurfaceSnapshot,
+  sameCodexSurfaceSnapshot,
+  type CodexSurfaceSnapshot,
+} from "./codex-surface-snapshot";
+import {
+  codexRoutingIsIndependentAfterNativeEscape,
+  observeCodexRoutingDocument,
+  routingDocumentTable,
+} from "./routing-document";
+import { stripMarkerOwnedRoutingForNativeEscape } from "./native-routing-escape";
 
 /**
  * Exported so that anything reasoning ABOUT the journal points at the journal.
@@ -72,19 +84,10 @@ const authorizeUncoordinatedMutation: AuthorizeJournalMutation = () => true;
 interface JournalFileSnapshot {
   readonly content: string;
   readonly journal: Journal;
-  readonly stat: Stats;
+  readonly surface: Extract<CodexSurfaceSnapshot, { kind: "file" }>;
 }
 
-type SurfaceSnapshot =
-  | { readonly kind: "absent" }
-  | {
-      readonly kind: "file";
-      readonly content: string;
-      readonly entryStat: Stats;
-      readonly targetPath: string;
-      readonly targetStat: Stats;
-      readonly symbolicLink: boolean;
-    };
+type SurfaceSnapshot = CodexSurfaceSnapshot;
 
 export interface ReconcileJournalOptions {
   /** Test-only race barrier before recovery starts from the captured journal. */
@@ -117,14 +120,6 @@ function validJournalShape(value: unknown): value is Journal {
     && typeof journal.timestamp === "string";
 }
 
-function sameFileIdentity(left: Stats, right: Stats): boolean {
-  return left.dev === right.dev
-    && left.ino === right.ino
-    && left.size === right.size
-    && left.mtimeMs === right.mtimeMs
-    && left.ctimeMs === right.ctimeMs;
-}
-
 /**
  * Stronger than `readJournal`: stale retirement is destructive, so it accepts
  * only one stable regular file with the complete known shape and retains its
@@ -132,14 +127,12 @@ function sameFileIdentity(left: Stats, right: Stats): boolean {
  */
 function readJournalFileSnapshot(): JournalFileSnapshot | null {
   try {
-    const before = lstatSync(JOURNAL_PATH);
-    if (!before.isFile()) return null;
-    const content = readFileSync(JOURNAL_PATH, "utf-8");
-    const after = lstatSync(JOURNAL_PATH);
-    if (!sameFileIdentity(before, after)) return null;
+    const surface = readCodexSurfaceSnapshot(JOURNAL_PATH, "regular-only");
+    if (!surface || surface.kind !== "file" || surface.text === null) return null;
+    const content = surface.text;
     const parsed: unknown = JSON.parse(content);
     if (!validJournalShape(parsed)) return null;
-    return { content, journal: parsed, stat: after };
+    return { content, journal: parsed, surface };
   } catch {
     return null;
   }
@@ -150,11 +143,7 @@ function sameJournalFile(
   current: JournalFileSnapshot,
 ): boolean {
   return expected.content === current.content
-    && sameFileIdentity(expected.stat, current.stat);
-}
-
-function errorCode(error: unknown): string | undefined {
-  return (error as NodeJS.ErrnoException | undefined)?.code;
+    && sameCodexSurfaceSnapshot(expected.surface, current.surface);
 }
 
 /**
@@ -164,56 +153,21 @@ function errorCode(error: unknown): string | undefined {
  * link a second time.
  */
 function readSurfaceSnapshot(path: string): SurfaceSnapshot | null {
-  try {
-    const entryBefore = lstatSync(path);
-    if (!entryBefore.isFile() && !entryBefore.isSymbolicLink()) return null;
-    const symbolicLink = entryBefore.isSymbolicLink();
-    // Always canonicalize: the leaf can be regular while CODEX_HOME or another
-    // parent component is a symlink, and that parent identity is equally part
-    // of the write authority.
-    const targetPath = realpathSync.native(path);
-    const targetBefore = statSync(targetPath);
-    if (!targetBefore.isFile()) return null;
-    const content = readFileSync(targetPath, "utf-8");
-    const targetAfter = statSync(targetPath);
-    const entryAfter = lstatSync(path);
-    if (
-      !sameFileIdentity(entryBefore, entryAfter)
-      || !sameFileIdentity(targetBefore, targetAfter)
-      || realpathSync.native(path) !== targetPath
-    ) return null;
-    return {
-      kind: "file",
-      content,
-      entryStat: entryAfter,
-      targetPath,
-      targetStat: targetAfter,
-      symbolicLink,
-    };
-  } catch (error) {
-    return errorCode(error) === "ENOENT" ? { kind: "absent" } : null;
-  }
+  return readCodexSurfaceSnapshot(path);
 }
 
 function sameSurfaceSnapshot(
   expected: SurfaceSnapshot,
   current: SurfaceSnapshot,
 ): boolean {
-  if (expected.kind === "absent" || current.kind === "absent") {
-    return expected.kind === current.kind;
-  }
-  return expected.content === current.content
-    && expected.targetPath === current.targetPath
-    && expected.symbolicLink === current.symbolicLink
-    && sameFileIdentity(expected.entryStat, current.entryStat)
-    && sameFileIdentity(expected.targetStat, current.targetStat);
+  return sameCodexSurfaceSnapshot(expected, current);
 }
 
 function surfaceValue(
   snapshot: SurfaceSnapshot,
   absentValue: "" | null,
 ): string | null {
-  return snapshot.kind === "file" ? snapshot.content : absentValue;
+  return codexSurfaceText(snapshot, absentValue);
 }
 
 function journalOwnerIsProvenDead(pid: number): boolean {
@@ -336,7 +290,9 @@ function journalAuthorityStillMatches(
 }
 
 function profileIsLegacyOwned(snapshot: SurfaceSnapshot): boolean {
-  return snapshot.kind === "file" && hasGeneratedCodexProfileRouting(snapshot.content);
+  return snapshot.kind === "file"
+    && snapshot.text !== null
+    && hasGeneratedCodexProfileRouting(snapshot.text);
 }
 
 function restoreJournalStateFromSnapshot(
@@ -431,9 +387,9 @@ function restoreJournalStateFromSnapshot(
         uncertain: true,
       };
     }
-    atomicWriteFile(current.targetPath, originalConfig);
+    atomicWriteFile(current.canonicalTarget, originalConfig);
     const written = readSurfaceSnapshot(CODEX_CONFIG_PATH);
-    configRestored = written?.kind === "file" && written.content === originalConfig;
+    configRestored = written?.kind === "file" && written.text === originalConfig;
     configChanged = !configRestored;
   }
 
@@ -472,7 +428,7 @@ function restoreJournalStateFromSnapshot(
     }
     if (originalProfile !== null) {
       atomicWriteFile(
-        current.kind === "file" ? current.targetPath : CODEX_PROFILE_PATH,
+        current.kind === "file" ? current.canonicalTarget : CODEX_PROFILE_PATH,
         originalProfile,
       );
     } else if (current.kind === "file") {
@@ -815,25 +771,331 @@ export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean
 }
 
 function externalProviderFromConfig(content: string): string | null {
-  const provider = resolveEffectiveProjectModelProvider(content).provider;
-  return provider && provider !== "openai" && !isOwnedProviderId(provider)
-    ? provider
-    : null;
+  return observeCodexRoutingDocument(content).externalProvider;
 }
 
-function retireExternalProviderJournalUnderMutationLock(
-  expectedProvider: string,
+export type ExplicitNativeEscapeJournalOwner =
+  | { readonly kind: "protected-live"; readonly pid: number }
+  | { readonly kind: "dead" };
+
+export type ActiveCodexRoutingJournalClassification =
+  | { readonly kind: "active-managed-postimage" }
+  | { readonly kind: "active-managed-descendant" }
+  | {
+      readonly kind: "not-active-managed-postimage";
+      readonly reason:
+        | "invalid-owner"
+        | "invalid-journal"
+        | "owner-mismatch"
+        | "missing-postimage-proof"
+        | "surface-unavailable"
+        | "postimage-mismatch"
+        | "routing-mismatch"
+        | "changed-during-observation";
+    };
+
+function routedEndpoint(content: string): string | null {
+  const observation = observeCodexRoutingDocument(content);
+  if (observation.kind !== "parsed") return null;
+  if (typeof observation.document.openai_base_url === "string") {
+    return observation.document.openai_base_url;
+  }
+  const provider = typeof observation.document.model_provider === "string"
+    ? observation.document.model_provider
+    : null;
+  const providers = routingDocumentTable(observation.document.model_providers);
+  const table = provider && providers
+    ? routingDocumentTable(providers[provider])
+    : null;
+  return typeof table?.base_url === "string" ? table.base_url : null;
+}
+
+/**
+ * Read-only proof that a live current-home proxy still owns this routed state.
+ * The profile must remain the exact recorded postimage. The config may be that
+ * exact postimage or a stable managed descendant whose one exact marker-owned
+ * route strips to an independently native-safe document; Codex is allowed to
+ * change unrelated preferences while the proxy is live. Legacy hashless
+ * journals and merely recognizable routed documents cannot establish this
+ * active/no-op state.
+ */
+export function classifyActiveCodexRoutingJournal(
+  protectedLiveOwnerPid: number,
+): ActiveCodexRoutingJournalClassification {
+  const refused = (
+    reason: Extract<
+      ActiveCodexRoutingJournalClassification,
+      { kind: "not-active-managed-postimage" }
+    >["reason"],
+  ): ActiveCodexRoutingJournalClassification => ({
+    kind: "not-active-managed-postimage",
+    reason,
+  });
+
+  if (!Number.isSafeInteger(protectedLiveOwnerPid) || protectedLiveOwnerPid <= 0) {
+    return refused("invalid-owner");
+  }
+  const journal = readJournalFileSnapshot();
+  if (!journal) return refused("invalid-journal");
+  if (journal.journal.pid !== protectedLiveOwnerPid) return refused("owner-mismatch");
+  if (
+    journal.journal.injectedConfigHash === undefined
+    || journal.journal.injectedProfileHash === undefined
+  ) return refused("missing-postimage-proof");
+
+  const config = readSurfaceSnapshot(CODEX_CONFIG_PATH);
+  const profile = readSurfaceSnapshot(CODEX_PROFILE_PATH);
+  if (
+    !config
+    || config.kind !== "file"
+    || config.text === null
+    || !profile
+    || (profile.kind === "file" && profile.text === null)
+  ) return refused("surface-unavailable");
+
+  const profileText = profile.kind === "file" ? profile.text : null;
+  if (sha256(profileText) !== journal.journal.injectedProfileHash) {
+    return refused("postimage-mismatch");
+  }
+  const observation = observeCodexRoutingDocument(config.text);
+  if (observation.routingKind !== "codexcommander-local") {
+    return refused("routing-mismatch");
+  }
+  const configPostimageMatches = sha256(config.text) === journal.journal.injectedConfigHash;
+  if (!configPostimageMatches) {
+    // The exact profile is the journal-bound endpoint witness. Without this
+    // equality, another local proxy could replace only config.toml while the
+    // first proxy's live journal remained, and be mistaken for its descendant.
+    const profileEndpoint = profileText === null ? null : routedEndpoint(profileText);
+    if (!profileEndpoint || routedEndpoint(config.text) !== profileEndpoint) {
+      return refused("routing-mismatch");
+    }
+    const native = stripMarkerOwnedRoutingForNativeEscape(
+      config.text,
+      getCodexHome(),
+      observation,
+    );
+    if (!native.changed || !configIsIndependentAfterExplicitNativeEscape(native.content)) {
+      return refused("routing-mismatch");
+    }
+  }
+  if (!explicitRetirementTempsAbsent(config)) {
+    return refused("surface-unavailable");
+  }
+
+  const journalFinal = readJournalFileSnapshot();
+  const configFinal = readSurfaceSnapshot(CODEX_CONFIG_PATH);
+  const profileFinal = readSurfaceSnapshot(CODEX_PROFILE_PATH);
+  if (
+    !journalFinal
+    || !sameJournalFile(journal, journalFinal)
+    || !configFinal
+    || !sameSurfaceSnapshot(config, configFinal)
+    || !profileFinal
+    || !sameSurfaceSnapshot(profile, profileFinal)
+  ) return refused("changed-during-observation");
+
+  return {
+    kind: configPostimageMatches
+      ? "active-managed-postimage"
+      : "active-managed-descendant",
+  };
+}
+
+interface PersistedOffSnapshot {
+  readonly contentSha256: string;
+}
+
+function readPersistedOffSnapshot(): PersistedOffSnapshot | null {
+  const snapshot = readConfigAdmissionSnapshot();
+  if (
+    snapshot.kind !== "read"
+    || snapshot.diagnostics.source !== "file"
+    || snapshot.diagnostics.error !== null
+    || snapshot.diagnostics.config.clientIntegrations?.codex !== false
+  ) return null;
+  return { contentSha256: snapshot.contentSha256 };
+}
+
+function samePersistedOffSnapshot(expected: PersistedOffSnapshot): boolean {
+  return readPersistedOffSnapshot()?.contentSha256 === expected.contentSha256;
+}
+
+function explicitOwnerMatches(journal: Journal, owner: ExplicitNativeEscapeJournalOwner): boolean {
+  if (owner.kind === "dead") return journalOwnerIsProvenDead(journal.pid);
+  return Number.isSafeInteger(owner.pid) && owner.pid > 0 && journal.pid === owner.pid;
+}
+
+/**
+ * Config-only postcondition for an explicit Restore Native. Generated profile,
+ * catalog and cache files are deliberately outside this verdict: once no config
+ * points at them they are inert, and the next normal sync may safely reuse them.
+ */
+function configIsIndependentAfterExplicitNativeEscape(content: string): boolean {
+  const observation = observeCodexRoutingDocument(content);
+  return codexRoutingIsIndependentAfterNativeEscape(
+    observation,
+    path => {
+      try {
+        return resolve(getCodexHome(), path) === resolve(DEFAULT_CATALOG_PATH);
+      } catch {
+        return false;
+      }
+    },
+  );
+}
+
+function regexEscape(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Refuse while an atomic config/journal replacement has unresolved authority. */
+function explicitRetirementTempsAbsent(config: SurfaceSnapshot): boolean {
+  if (config.kind !== "file") return false;
+  const targets = new Map<string, Set<string>>();
+  for (const path of [CODEX_CONFIG_PATH, config.canonicalTarget, JOURNAL_PATH]) {
+    const directory = dirname(path);
+    const names = targets.get(directory) ?? new Set<string>();
+    names.add(basename(path));
+    targets.set(directory, names);
+  }
+  try {
+    for (const [directory, targetNames] of targets) {
+      for (const name of readdirSync(directory)) {
+        for (const targetName of targetNames) {
+          const pattern = new RegExp(`^${regexEscape(targetName)}\\.ccx(?:-native)?\\.\\d+\\.\\d+\\.tmp$`);
+          if (pattern.test(name)) return false;
+        }
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function explicitRetirementAdmissionMatches(
+  expectedJournal: JournalFileSnapshot,
+  expectedConfig: SurfaceSnapshot,
+  expectedOff: PersistedOffSnapshot,
+  owner: ExplicitNativeEscapeJournalOwner,
+): boolean {
+  const journal = readJournalFileSnapshot();
+  const config = readSurfaceSnapshot(CODEX_CONFIG_PATH);
+  return journal !== null
+    && sameJournalFile(expectedJournal, journal)
+    && explicitOwnerMatches(journal.journal, owner)
+    && config !== null
+    && config.kind === "file"
+    && sameSurfaceSnapshot(expectedConfig, config)
+    && config.text !== null
+    && configIsIndependentAfterExplicitNativeEscape(config.text)
+    && samePersistedOffSnapshot(expectedOff)
+    && explicitRetirementTempsAbsent(config);
+}
+
+interface ExplicitRetirementWitness {
+  readonly journal: JournalFileSnapshot;
+  readonly config: Extract<SurfaceSnapshot, { kind: "file" }>;
+  readonly persistedOff: PersistedOffSnapshot;
+  readonly owner: ExplicitNativeEscapeJournalOwner;
+}
+
+function captureExplicitRetirementWitness(
+  owner: ExplicitNativeEscapeJournalOwner,
+): ExplicitRetirementWitness | null {
+  const journal = readJournalFileSnapshot();
+  const config = readSurfaceSnapshot(CODEX_CONFIG_PATH);
+  const persistedOff = readPersistedOffSnapshot();
+  if (
+    !journal
+    || !config
+    || config.kind !== "file"
+    || config.text === null
+    || !persistedOff
+    || !explicitOwnerMatches(journal.journal, owner)
+    || !configIsIndependentAfterExplicitNativeEscape(config.text)
+    || !explicitRetirementTempsAbsent(config)
+  ) return null;
+  return { journal, config, persistedOff, owner };
+}
+
+function explicitRetirementWitnessMatches(
+  witness: ExplicitRetirementWitness,
+): boolean {
+  return explicitRetirementAdmissionMatches(
+    witness.journal,
+    witness.config,
+    witness.persistedOff,
+    witness.owner,
+  );
+}
+
+function retireExplicitNativeEscapeJournalUnderMutationLock(
+  witness: ExplicitRetirementWitness,
   options: ReconcileJournalOptions,
   authorizeMutation: AuthorizeJournalMutation,
 ): boolean {
-  const expectedJournal = readJournalFileSnapshot();
-  const configBefore = readSurfaceSnapshot(CODEX_CONFIG_PATH);
-  if (
-    !expectedJournal
-    || !configBefore
-    || configBefore.kind !== "file"
-    || externalProviderFromConfig(configBefore.content) !== expectedProvider
-  ) return false;
+  if (!explicitRetirementWitnessMatches(witness)) return false;
+  if (!authorizeMutation()) return false;
+  options.beforeRetireRevalidation?.();
+  if (!explicitRetirementWitnessMatches(witness)) return false;
+  try {
+    unlinkSync(JOURNAL_PATH);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Retire only the obsolete journal left by an explicit config-only native
+ * escape. Unlike crash recovery, this never restores a preimage or deletes
+ * generated artifacts. Live authority is accepted only from a protected
+ * current-home runtime PID; otherwise the journal owner must be proven dead.
+ */
+export function retireJournalAfterExplicitNativeEscape(
+  owner: ExplicitNativeEscapeJournalOwner,
+  options: ReconcileJournalOptions = {},
+): boolean {
+  if (!existsSync(JOURNAL_PATH)) return false;
+  const witness = captureExplicitRetirementWitness(owner);
+  if (!witness) return false;
+  const coordinator = coordinatorTargetForCurrentHome();
+  if (!coordinator) return false;
+  return mutateJournalWithCoordinator(
+    coordinator.path,
+    () => explicitRetirementWitnessMatches(witness),
+    () => {
+      if (existsSync(JOURNAL_PATH)) return false;
+      const config = readSurfaceSnapshot(CODEX_CONFIG_PATH);
+      return config !== null
+        && config.kind === "file"
+        && sameSurfaceSnapshot(witness.config, config)
+        && config.text !== null
+        && configIsIndependentAfterExplicitNativeEscape(config.text)
+        && samePersistedOffSnapshot(witness.persistedOff)
+        && explicitRetirementTempsAbsent(config);
+    },
+    authorizeMutation => retireExplicitNativeEscapeJournalUnderMutationLock(
+      witness,
+      options,
+      authorizeMutation,
+    ),
+  );
+}
+
+function retireExternalProviderJournalUnderMutationLock(
+  witness: ExternalRetirementWitness,
+  options: ReconcileJournalOptions,
+  authorizeMutation: AuthorizeJournalMutation,
+): boolean {
+  if (!externalRetirementWitnessMatches(witness)) return false;
+
+  // Refuse before publishing or unlinking when another routed artifact remains.
+  // In particular, an inactive CCX provider table under an external profile is
+  // safe to preserve, but it is not proof that the stale journal can be retired.
+  if (classifyNativeRoutedResidueWithoutJournal().kind !== "clean") return false;
 
   if (!authorizeMutation()) return false;
   options.beforeRetireRevalidation?.();
@@ -842,10 +1104,11 @@ function retireExternalProviderJournalUnderMutationLock(
   if (
     !configFinal
     || configFinal.kind !== "file"
-    || !sameSurfaceSnapshot(configBefore, configFinal)
-    || externalProviderFromConfig(configFinal.content) !== expectedProvider
+    || !sameSurfaceSnapshot(witness.config, configFinal)
+    || configFinal.text === null
+    || externalProviderFromConfig(configFinal.text) !== witness.provider
     || !journalFinal
-    || !sameJournalFile(expectedJournal, journalFinal)
+    || !sameJournalFile(witness.journal, journalFinal)
   ) return false;
   try {
     unlinkSync(JOURNAL_PATH);
@@ -853,6 +1116,41 @@ function retireExternalProviderJournalUnderMutationLock(
   } catch {
     return false;
   }
+}
+
+interface ExternalRetirementWitness {
+  readonly journal: JournalFileSnapshot;
+  readonly config: Extract<SurfaceSnapshot, { kind: "file" }>;
+  readonly provider: string;
+}
+
+function captureExternalRetirementWitness(
+  expectedProvider: string,
+): ExternalRetirementWitness | null {
+  const journal = readJournalFileSnapshot();
+  const config = readSurfaceSnapshot(CODEX_CONFIG_PATH);
+  if (
+    !journal
+    || !config
+    || config.kind !== "file"
+    || config.text === null
+    || externalProviderFromConfig(config.text) !== expectedProvider
+  ) return null;
+  return { journal, config, provider: expectedProvider };
+}
+
+function externalRetirementWitnessMatches(
+  witness: ExternalRetirementWitness,
+): boolean {
+  const journal = readJournalFileSnapshot();
+  const config = readSurfaceSnapshot(CODEX_CONFIG_PATH);
+  return journal !== null
+    && sameJournalFile(witness.journal, journal)
+    && config !== null
+    && config.kind === "file"
+    && sameSurfaceSnapshot(witness.config, config)
+    && config.text !== null
+    && externalProviderFromConfig(config.text) === witness.provider;
 }
 
 /**
@@ -865,39 +1163,25 @@ export function retireJournalForExternalProvider(
   options: ReconcileJournalOptions = {},
 ): boolean {
   if (!expectedProvider || !existsSync(JOURNAL_PATH)) return false;
-  const preliminaryJournal = readJournalFileSnapshot();
-  const preliminaryConfig = readSurfaceSnapshot(CODEX_CONFIG_PATH);
-  if (
-    !preliminaryJournal
-    || !preliminaryConfig
-    || preliminaryConfig.kind !== "file"
-    || externalProviderFromConfig(preliminaryConfig.content) !== expectedProvider
-  ) return false;
+  const witness = captureExternalRetirementWitness(expectedProvider);
+  if (!witness) return false;
   const coordinator = coordinatorTargetForCurrentHome();
   if (!coordinator) return false;
   return mutateJournalWithCoordinator(
     coordinator.path,
-    () => {
-      const journal = readJournalFileSnapshot();
-      const config = readSurfaceSnapshot(CODEX_CONFIG_PATH);
-      return journal !== null
-        && sameJournalFile(preliminaryJournal, journal)
-        && config !== null
-        && config.kind === "file"
-        && sameSurfaceSnapshot(preliminaryConfig, config)
-        && externalProviderFromConfig(config.content) === expectedProvider;
-    },
+    () => externalRetirementWitnessMatches(witness),
     () => {
       if (existsSync(JOURNAL_PATH)) return false;
       const config = readSurfaceSnapshot(CODEX_CONFIG_PATH);
       return config !== null
         && config.kind === "file"
-        && sameSurfaceSnapshot(preliminaryConfig, config)
-        && externalProviderFromConfig(config.content) === expectedProvider
+        && sameSurfaceSnapshot(witness.config, config)
+        && config.text !== null
+        && externalProviderFromConfig(config.text) === witness.provider
         && classifyNativeRoutedResidueWithoutJournal().kind === "clean";
     },
     authorizeMutation => retireExternalProviderJournalUnderMutationLock(
-      expectedProvider,
+      witness,
       options,
       authorizeMutation,
     ),

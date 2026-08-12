@@ -34,9 +34,10 @@ openai-apikey/gpt-5.6-sol           # API key
 
 ## 통합 경로
 
-`ccx init`, `ccx start`, `ccx sync`는 공유 Codex 설정과 카탈로그를 프록시에 연결합니다. 설정 주입,
-카탈로그 동기화, shim, WebSocket 폴백, 복원 메커니즘은 [Codex 통합](/guides/codex-integration/)을
-참고하세요.
+`ccx start`와 `ccx sync`는 공유 Codex 설정과 카탈로그를 프록시에 연결합니다. `ccx init`가 같은
+작업을 할 수 있는 경우는 보호된 runtime record로 확인된 실행 중 프록시가 있을 때뿐이며, 그렇지 않으면
+명시적 Start까지 Codex는 네이티브 상태로 남습니다. 설정 주입, 카탈로그 동기화, shim, WebSocket 폴백,
+복원 메커니즘은 [Codex 통합](/guides/codex-integration/)을 참고하세요.
 
 ## 라우팅 모델이 표시되는 이유
 

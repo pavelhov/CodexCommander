@@ -60,8 +60,9 @@ CodexCommander 状态文件位于 `$CODEXCOMMANDER_HOME`（默认 `~/.codexcomma
 | `$CODEX_HOME/codexcommander-catalog.json` | 供 Codex 使用的原生与已路由模型目录。 |
 
 :::note
-CodexCommander 绝不会删除你的 Codex 配置。每次注入都是可逆的 —— `ccx stop`、`ccx restore`
-或 `ccx eject` 会精确剥离 CodexCommander 所添加的那些行,并恢复原生 Codex。
+CodexCommander 不会删除你的 Codex 配置。`ccx stop`、`ccx restore` 和 `ccx eject` 只会从
+`config.toml` 移除带有所有权标记的明确路由并恢复原生 Codex。生成的目录和缓存可能会保留，但原生
+Codex 不再引用它们；任务、历史记录和身份验证不会被修改。
 :::
 
 ## 下一步

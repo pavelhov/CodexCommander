@@ -17,6 +17,7 @@ import {
   ATTESTATION_CHALLENGE_HEADER,
   ATTESTATION_PROOF_HEADER,
 } from "../src/identity";
+import { PROXY_LIFECYCLE_LEASE_CAPABILITY_HEADER } from "../src/server/proxy-start-lock";
 
 function healthz(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
@@ -146,7 +147,12 @@ describe("attestLiveManagementProxy", () => {
     return { pid, port, hostname, attestationSecret: secret };
   }
 
-  function proofResponse(secret: string, input: string | URL | Request, init?: RequestInit): Response {
+  function proofResponse(
+    secret: string,
+    input: string | URL | Request,
+    init?: RequestInit,
+    lifecycleLease = false,
+  ): Response {
     expect(String(input)).toBe(`http://${hostname}:${port}/healthz`);
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBeNull();
@@ -154,7 +160,9 @@ describe("attestLiveManagementProxy", () => {
     expect(init?.body).toBeUndefined();
     const challenge = headers.get(ATTESTATION_CHALLENGE_HEADER)!;
     const proof = createLocalAttestationProof(secret, challenge, pid, port)!;
-    return new Response("ignored", { headers: { [ATTESTATION_PROOF_HEADER]: proof } });
+    const responseHeaders = new Headers({ [ATTESTATION_PROOF_HEADER]: proof });
+    if (lifecycleLease) responseHeaders.set(PROXY_LIFECYCLE_LEASE_CAPABILITY_HEADER, "1");
+    return new Response("ignored", { headers: responseHeaders });
   }
 
   test("authenticates one exact protected runtime record without reading health JSON", async () => {
@@ -164,7 +172,24 @@ describe("attestLiveManagementProxy", () => {
       verifyPidFn: candidate => candidate,
       fetchFn: (async (input, init) => proofResponse(secret, input, init)) as typeof fetch,
     });
-    expect(target).toEqual({ pid, port, hostname, source: "runtime", baseUrl: `http://${hostname}:${port}` });
+    expect(target).toEqual({
+      pid,
+      port,
+      hostname,
+      source: "runtime",
+      baseUrl: `http://${hostname}:${port}`,
+      lifecycleLockLeaseV1: false,
+    });
+  });
+
+  test("captures the authenticated lifecycle-lease capability header", async () => {
+    const secret = "A".repeat(43);
+    const target = await attestLiveManagementProxy({
+      readRuntimeFn: () => record(secret),
+      verifyPidFn: candidate => candidate,
+      fetchFn: (async (input, init) => proofResponse(secret, input, init, true)) as typeof fetch,
+    });
+    expect(target?.lifecycleLockLeaseV1).toBe(true);
   });
 
   test("rejects missing/malformed records and wrong proofs", async () => {

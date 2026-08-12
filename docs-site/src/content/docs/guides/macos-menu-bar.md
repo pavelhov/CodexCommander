@@ -26,8 +26,9 @@ The panel has one **Launch at Login** switch and reports the resulting mode:
 
 The visible app and background server remain separate internally. With the CodexCommander panel active,
 **Quit Menu Bar** (`⌘Q`) closes only the companion UI and deliberately leaves routing active.
-**Stop CodexCommander and Quit…** (`⌥⌘Q`) is the explicit destructive exit: after confirmation, it stops
-the proxy and service, restores native Codex routing, and closes the companion only after the stop is verified. macOS may
+**Stop CodexCommander and Quit…** (`⌥⌘Q`) is the explicit destructive exit: after confirmation, it
+restores native Codex routing, stops the proxy and service, and closes the companion only after the
+stop is verified. macOS may
 therefore list CodexCommander under both **Open at Login** and **Allow in the Background**; those are two
 responsibilities of one installation, not duplicate app copies. Turning off Launch at Login never
 installs, removes, starts, or stops the background service.
@@ -50,7 +51,9 @@ override it.
 - **Readiness** — reports startup and catalog synchronization as **Checking**, **Starting**, **Ready**,
   **Startup failed**, or **Unavailable**. This signal is independent of proxy liveness.
 - **Codex route** — reports whether Codex currently routes through CodexCommander, native OpenAI, or
-  another custom route. A running proxy does not by itself mean that Codex is using it.
+  another custom route. A running proxy does not by itself mean that Codex is using it. After an
+  explicit switch, the companion confirms this value from a fresh uncached read of the route Codex
+  will consume instead of waiting for cached startup diagnostics.
 - **Live proxy requests** — the current in-flight request count and live model/provider turn rows. A
   spawned-child request is nested only when CodexCommander can prove its in-flight parent from request
   metadata; otherwise it is shown as a standalone subagent turn. A row disappears when that model
@@ -71,17 +74,47 @@ override it.
   workers still hold an older model roster. The CodexCommander proxy remains healthy and running.
 - **Show restart steps…** — explains the recommended reload boundary: quit ChatGPT completely, reopen
   it, and then start a new task. The menu app does not force-restart background workers from this card.
-- **Stop Proxy…** — always asks for confirmation, interrupts active client and sub-agent requests,
-  restores native Codex, and leaves the menu app open.
-- **Restart Proxy…** — always asks for confirmation, lets the proxy drain active requests for up to 60
-  seconds, then reconnects to the replacement process. Accepting the restart request is not
-  presented as completion; the app waits until the new process passes identity checks.
+- **Start Proxy** — starts or attaches to the proxy, then routes Codex through the live endpoint.
+- **Stop Proxy…** — always asks for confirmation and restores native Codex routing before it stops the
+  proxy. If the native route cannot be verified, the proxy and service stay running. The menu app stays open.
+- **Restart Proxy…** — always asks for confirmation and runs the same safe stop→start transaction as
+  the CLI. It restores native routing before terminating the old proxy, then its explicit Start phase
+  launches the replacement and routes Codex back through it. If restart fails, Codex remains native.
+- **Restore Native Codex** — switches Codex back to native OpenAI routing without stopping the proxy.
+- **Route Codex Through Proxy** — points Codex at an already-running CodexCommander proxy without
+  restarting it.
 - **Quit Menu Bar** — closes the companion UI only. It does not stop the proxy, service, or client
   routing. With the panel active, this is the safe `⌘Q` action.
-- **Stop CodexCommander and Quit…** — confirms the interruption, stops the background proxy and service,
-  restores native Codex routing, and quits only after the stopped state is confirmed. If stopping
-  fails, the companion stays open and reports the error. With the panel active, its shortcut is
-  `⌥⌘Q`.
+- **Stop CodexCommander and Quit…** — confirms the interruption, first restores native Codex routing,
+  then stops the background proxy and service and quits only after the stopped state is confirmed. If
+  stopping fails, the companion stays open and reports the error. With the panel active, its shortcut
+  is `⌥⌘Q`.
+
+Choosing either route action immediately opens a status card below the header. It shows a spinner,
+elapsed time, and the real orchestration phases: **Changing route** and **Confirming route**. Route
+and lifecycle buttons are disabled while the operation is running, and the button for the already
+active route is disabled while idle. Progress stays visible until the operation finishes. The final
+success or error remains visible until you choose **Dismiss** or start another operation; errors do
+not disappear on a timer.
+
+After **Restore Native Codex** or **Route Codex Through Proxy** reports success, quit ChatGPT
+completely, reopen it, and then start a new task. The route is saved and confirmed at that point, but
+an already-running ChatGPT/Codex host may still hold its previous route.
+
+The native escape is deliberately narrow: it removes only CodexCommander's marker-owned routing and
+owned catalog pointer from <code>$CODEX_HOME/config.toml</code>. After proving that exact route, it also
+clears the proxy-only root <code>provider/model</code> selector. Every unrelated setting remains
+byte-for-byte unchanged. It does not change Codex tasks, history, authentication, or the proxy process,
+and needs neither a repair command nor a coordinator database. Generated catalogs and caches may remain
+on disk, but native Codex no longer references them.
+
+The `codexcommander-journal.json` file is a protected recovery checkpoint, not another routing
+setting. It lets CodexCommander distinguish its exact config/profile write from later user edits
+after an interruption. Repeating **Route Codex Through Proxy** is a safe no-op when that checkpoint
+still belongs to the attested live proxy, its profile evidence still matches, and the managed route
+remains intact. Unrelated Codex preference edits made after sync are allowed. If route ownership is
+changed, custom, ambiguous, or cannot be proved safely, CodexCommander leaves the existing route
+unchanged rather than guessing. Do not delete or edit the journal manually.
 
 ChatGPT appears first and expanded when its quota report is available. Kimi and Grok appear as
 collapsed summaries. A configured quota-capable provider that returns no report stays visible as
@@ -201,6 +234,11 @@ making a final distributable bundle.
   not expose a quota API.
 - **Restart did not recover** — open **Logs** and use the app's status panel. The companion never
   kills a process or rewrites service state as a fallback.
+- **Codex route was not changed / recovery checkpoint could not be verified** — your existing route
+  was deliberately left unchanged because CodexCommander could not prove that the saved recovery
+  checkpoint and current routing files still belong together. Do not delete the journal. Use
+  **Refresh**, retry the intended route once, and if it still fails open **Logs** and run
+  <code>ccx status</code> before changing anything manually.
 - **Only native models appear after a stop, a Codex update, or a cold start** — reopen CodexCommander. Launch
   automatically synchronizes the catalog and restores still-configured routed models from its
   protected last-known-good catalog when live provider discovery is temporarily empty. If **Restart

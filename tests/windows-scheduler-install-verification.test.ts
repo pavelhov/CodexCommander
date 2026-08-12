@@ -2,12 +2,15 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   buildWindowsTaskXml,
   decodeSchtasksOutput,
+  diagnoseService,
   evaluateWindowsSchedulerInstallVerification,
   formatWindowsSchedulerServiceStatus,
   inspectWindowsSchedulerServiceStatus,
   probeWindowsSchedulerTask,
   schedulerVerificationMaySettle,
   setQuerySchtasksForTests,
+  stopServiceIfInstalled,
+  stopWindows,
   windowsSchedulerCsvIncludesTask,
   windowsSchedulerTaskInstalled,
   windowsTaskRegistrationHealthy,
@@ -133,6 +136,104 @@ describe("probeWindowsSchedulerTask", () => {
     expect(probe.detail).toContain("Access is denied.");
     expect(probe.detail).toContain("RPC server is unavailable.");
     expect(windowsSchedulerTaskInstalled("codexcommander-proxy")).toBe(false);
+  });
+});
+
+describe("Windows scheduler stop admission", () => {
+  const originalPlatform = process.platform;
+  const originalCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+  const originalCodexHome = process.env.CODEX_HOME;
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    if (originalCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = originalCodexCommanderHome;
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
+    setQuerySchtasksForTests(null);
+  });
+
+  function useIsolatedWindowsHomes(): void {
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+    process.env.CODEXCOMMANDER_HOME = `${import.meta.dir}/.tmp-windows-scheduler-stop`;
+    process.env.CODEX_HOME = `${import.meta.dir}/.tmp-windows-scheduler-codex`;
+  }
+
+  test("an unknown scheduler query blocks service stop before any task end", () => {
+    useIsolatedWindowsHomes();
+    let endCalls = 0;
+    setQuerySchtasksForTests((args) => {
+      if (args[0] === "/end") {
+        endCalls += 1;
+        return "";
+      }
+      if (args.includes("/tn")) throw new Error("Access is denied.");
+      if (args.includes("CSV")) throw new Error("RPC server is unavailable.");
+      throw new Error("unexpected scheduler command");
+    });
+
+    expect(() => stopServiceIfInstalled()).toThrow(/presence could not be verified/i);
+    expect(endCalls).toBe(0);
+  });
+
+  test("a non-benign task end failure is propagated", () => {
+    useIsolatedWindowsHomes();
+    const xml = buildWindowsTaskXml();
+    let endCalls = 0;
+    setQuerySchtasksForTests((args) => {
+      if (args[0] === "/end") {
+        endCalls += 1;
+        throw new Error("Access is denied.");
+      }
+      if (args.includes("/xml")) return xml;
+      if (args[0] === "/query" && args.includes("/tn")) {
+        return "TaskName: codexcommander-proxy";
+      }
+      throw new Error("unexpected scheduler command");
+    });
+
+    expect(() => stopWindows()).toThrow();
+    expect(endCalls).toBe(1);
+  });
+
+  test("only an already-stopped task end failure is benign", () => {
+    useIsolatedWindowsHomes();
+    const xml = buildWindowsTaskXml();
+    let endCalls = 0;
+    setQuerySchtasksForTests((args) => {
+      if (args[0] === "/end") {
+        endCalls += 1;
+        throw new Error("ERROR: No running instance of the task.");
+      }
+      if (args.includes("/xml")) return xml;
+      if (args[0] === "/query" && args.includes("/tn")) {
+        return "TaskName: codexcommander-proxy";
+      }
+      throw new Error("unexpected scheduler command");
+    });
+
+    expect(() => stopWindows()).not.toThrow();
+    expect(endCalls).toBe(1);
+  });
+
+  test("an unreadable scheduler XML remains installed with indeterminate runtime truth", () => {
+    useIsolatedWindowsHomes();
+    setQuerySchtasksForTests((args) => {
+      if (args.includes("/xml")) throw new Error("Access is denied.");
+      if (args[0] === "/query" && args.includes("/tn")) {
+        return "TaskName: codexcommander-proxy";
+      }
+      throw new Error("unexpected scheduler command");
+    });
+
+    expect(diagnoseService()).toMatchObject({
+      registrationState: "present",
+      supervisorState: "indeterminate",
+      installed: true,
+      running: false,
+      viable: false,
+      startable: false,
+    });
   });
 });
 

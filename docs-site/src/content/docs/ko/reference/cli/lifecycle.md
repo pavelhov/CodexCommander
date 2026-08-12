@@ -11,8 +11,10 @@ description: 설정, 시작, 중지, 서비스, 진단, 동기화 명령입니�
 
 대화형 설정 마법사입니다 (`setup`은 `init`의 별칭입니다). 공급자(프리셋 또는 사용자 지정),
 API 키(리터럴 또는 `${ENV}`), 기본 모델, 프록시 포트를 묻고 `~/.codexcommander/config.json`에 저장합니다.
-원하면 프록시를 `$CODEX_HOME/config.toml`(기본값 `~/.codex/config.toml`)에 주입하고,
-Codex 자동 시작 shim도 설치합니다.
+원하면 보호된 current-home runtime record로 확인된 실행 중 프록시를 통해 Codex를 라우팅하고,
+Codex 자동 시작 shim도 설치합니다. 확인된 프록시가 없으면 Codex는 네이티브 상태로 남고 이후
+`ccx start`가 명시적인 시작과 라우팅을 수행합니다. `init` 자체는 프록시를 시작하거나 확인되지 않은
+listener로 향하는 route를 쓰지 않습니다.
 
 ## 프록시 수명 주기
 
@@ -20,8 +22,11 @@ Codex 자동 시작 shim도 설치합니다.
 
 프록시 서버를 시작합니다(권장 포트는 `10100`). 해당 포트가 이미 사용 중이면 CodexCommander가 다른
 사용 가능한 포트를 골라 기록합니다. PID와 런타임 포트 상태를 기록하고, 두 번째 활성 인스턴스는 시작하지
-않습니다. 시작할 때는 각 공급자의 모델을 Codex 카탈로그로 동기화합니다. 종료할 때는 기본 Codex를
-복원합니다. 단, 관리형 서비스로 실행한 경우(`CCX_SERVICE=1`)는 예외입니다.
+않습니다. 명시적으로 시작하면 Codex 연동을 활성화하고 각 공급자의 모델을 Codex 카탈로그로 동기화한 뒤,
+Codex가 실행 중인 프록시를 통하도록 라우팅합니다. 여기에는 `ccx start`, 트레이의 Start, 명시적인
+`ccx service start`, `install`, `repair`가 포함됩니다. `ccx ensure`는 의도적으로 비활성화된 연동 상태를
+유지합니다. 일반 독립 실행 종료 시에는 네이티브 Codex를 복원합니다. 단, 관리형 서비스로 실행한
+경우(`CCX_SERVICE=1`)는 예외입니다.
 
 ```bash
 ccx start
@@ -30,14 +35,18 @@ ccx start --port 8080
 
 ### `ccx stop`
 
-실행 중인 프록시를 PID 기준으로 중지하고, PID 파일을 삭제한 뒤 기본 Codex를 복원합니다. 관리형
-백그라운드 서비스가 설치되어 있으면 `ccx stop`이 먼저 그 서비스를 중지하므로 프록시가 다시
-올라올 수 없습니다. 같은 동작은 웹 대시보드의 **Stop** 버튼(`POST /api/stop`)에서도 사용할 수 있습니다.
+먼저 네이티브 Codex 라우팅을 복원한 다음 실행 중인 프록시를 PID 기준으로 중지하고 PID 파일을
+삭제합니다. 네이티브 경로를 검증할 수 없으면 프록시와 서비스는 계속 실행됩니다. 관리형 백그라운드 서비스가
+설치되어 있으면 `ccx stop`이 네이티브 복원 후 서비스를 중지하므로 프록시가 다시 올라올 수 없습니다.
+웹 대시보드의 **Stop** 버튼은 raw `POST /api/stop`을 호출합니다. supervisor가 없는 프록시는
+중지하지만 설치된 supervisor가 소유한 경우에는 거부됩니다. 이때는 같은 lifecycle authority 아래에서
+manager를 먼저 중지할 수 있는 CLI 또는 트레이 Stop을 사용하십시오.
 
 ### `ccx restart`
 
-`stop` 다음에 `ensure`를 실행합니다. 즉, 프록시/서비스를 중지하고 기본 Codex를 복원한 뒤,
-프록시를 백그라운드에서 다시 시작하고 살아 있는 포트를 Codex에 다시 동기화합니다.
+macOS 트레이의 **Restart Proxy…**와 동일한 안전한 중지→시작 트랜잭션을 실행합니다. 기존 프록시/서비스를
+종료하기 전에 네이티브 Codex를 복원하고 검증한 다음, 명시적 Start 단계에서 새 프록시를 시작하고 Codex가
+다시 해당 프록시를 통하도록 라우팅합니다. 재시작에 실패하면 Codex는 네이티브 상태로 유지됩니다.
 
 ### `ccx ensure`
 
@@ -46,23 +55,41 @@ ccx start --port 8080
 
 ### `ccx restore [back]` · `ccx eject [back]`
 
-프록시를 중지하지 않고 기본 Codex를 **복원**합니다. 주입된 설정 줄과 라우팅된 카탈로그 항목을
-제거하므로 일반 `codex`가 다시 네이티브로 동작합니다. `eject`는 `restore`의 별칭입니다.
+프록시를 중지하지 않고 네이티브 Codex를 **복원**합니다. 네이티브 전환은
+<code>$CODEX_HOME/config.toml</code>에서 CodexCommander의 마커가 소유한 정확한 경로와 소유 대상인
+카탈로그 포인터만 제거하고 관련 없는 모든 설정을 보존합니다. 카탈로그, 작업, 기록 또는 인증을 읽거나
+다시 쓰지 않습니다. 복구 명령이나 코디네이터 데이터베이스도 필요하지 않습니다. `eject`는 `restore`의
+별칭입니다. 생성된 catalog와 cache는 디스크에 남을 수 있지만 네이티브 Codex는 더 이상 참조하지 않습니다.
+이 명령은 Codex 전용이며 Grok 또는 다른 클라이언트 연동은 변경하지 않습니다. 관리되는 모든 네이티브
+클라이언트 경로를 해제하려면 `ccx stop` 또는 `ccx uninstall`을 사용하세요.
 
 둘 중 어느 표기든 `back`을 붙이면 이미 실행 중인 프록시를 가리키도록 일반 `codex`를 다시
-연결하되, 프록시 수명 주기는 바꾸지 않습니다.
+연결하되, 프록시 수명 주기는 바꾸지 않습니다. Route Back은 명시적인 ON 전환입니다. recovery journal은
+별도의 라우팅 설정이 아니라 CodexCommander가 쓴 정확한 config/profile의 보호된 복구 체크포인트입니다.
+원하는 연동이 이미 ON이고, 검증된 current-home 실행 중 프록시가 안정된 journal을 소유하며, 기록된 profile
+postimage가 현재 profile과 정확히 일치하면 Route Back은 기록된 config postimage와의 정확한 일치 또는 관리
+라우팅을 제거했을 때 독립적으로 native-safe인 안정적이고 정확한 marker-owned managed descendant를
+허용합니다. 따라서 sync 이후의 관련 없는 Codex 환경설정 변경이 허용됩니다. Route Back은 active journal을
+유지한 채 멱등적인 no-op으로 성공합니다. native/OFF에서는 기존 coordination이 stale로 증명한 journal만
+폐기합니다. 소유자 또는 profile 불일치, 누락된 증명, 변조된/custom/모호한 라우팅, 임시 쓰기 surface 또는
+관찰 중 경합이 있으면 Codex는 native/OFF로 유지됩니다. journal을 수동으로 삭제하거나 편집하지 마세요.
 
 ```bash
 ccx restore back
 ccx eject back
 ```
 
+Restore Native 또는 Route Back이 성공하면 ChatGPT를 완전히 종료하고 다시 연 뒤 새 작업을 시작하여 실행
+중인 Codex 호스트가 저장된 라우팅을 불러오게 하세요.
+
 ### `ccx uninstall` · `ccx remove`
 
-서비스와 프록시를 중지하고, 서비스와 Codex shim을 제거한 뒤, 기본 Codex를 복원합니다. 그 다음
-복원 단계가 모두 성공했을 때만 CodexCommander 로컬 설정을 제거합니다. `remove`는 `uninstall`의
-별칭입니다. 설정 정리에는 새 설치로 만들어진 소유권 메타데이터가 필요하며, 오래된 디렉터리나
-공유 디렉터리는 그대로 남깁니다.
+하나의 수명 주기 트랜잭션으로 서비스와 프록시를 중지하고, 서비스와 Codex shim을 제거한 뒤,
+네이티브 Codex를 복원하고 다시 검증합니다. 모든 단계가 성공했을 때만 CodexCommander 로컬
+아티팩트를 제거합니다. `remove`는 `uninstall`의 별칭입니다. 설정 정리에는 정식 소유권
+메타데이터가 필요하며, 소유되지 않았거나 공유된 디렉터리는 그대로 둡니다. 동시에 실행되는
+Start가 두 번째 수명 주기 잠금 네임스페이스를 만들 수 없도록 작은 owner/manifest 메타데이터
+쌍은 설정 루트에 유지됩니다.
 
 ## 상태 및 헬스
 
@@ -193,7 +220,8 @@ Codex의 로컬 모델 선택기 캐시를 무효화하여, 활성 CodexCommande
 
 로그인 관리형 백그라운드 서비스로 CodexCommander를 실행합니다(macOS **launchd**, Linux **systemd** 사용자
 유닛, Windows **Task Scheduler**). 로그인 시 자동 시작하고 충돌 시 자동 재시작합니다. 서비스 실행은
-`CCX_SERVICE=1`을 설정하므로 재시작해도 Codex 설정이 흔들리지 않습니다.
+`CCX_SERVICE=1`을 설정하므로 서비스 관리자의 자동 재시작은 Codex 설정을 반복해 바꾸지 않습니다.
+명시적인 서비스 생성, `install`, `repair`, `start`는 Codex 연동을 활성화하고 Codex를 프록시로 라우팅합니다.
 
 | 하위 명령 | 동작 |
 | --- | --- |
@@ -201,9 +229,9 @@ Codex의 로컬 모델 선택기 캐시를 무효화하여, 활성 CodexCommande
 | `install` | 서비스를 생성하고 시작합니다. |
 | `repair` | 설치된 서비스를 다시 등록하지 않고 제자리에서 새로 고친 뒤 재시작합니다. |
 | `start` | 설치된 서비스를 시작합니다. |
-| `stop` | 서비스를 중지하고 기본 Codex를 복원합니다. |
+| `stop` | 네이티브 Codex를 복원하고 검증한 뒤 서비스를 중지합니다. 복원을 검증할 수 없으면 서비스와 프록시는 계속 실행됩니다. |
 | `status` | 서비스와 프록시 진단, 로그 경로를 보고합니다. |
-| `uninstall` | 서비스를 제거하고 기본 Codex를 복원합니다. |
+| `uninstall` | 네이티브 Codex를 복원하고 검증한 뒤 서비스를 제거합니다. |
 | `remove` | `uninstall`의 별칭입니다. |
 
 ```bash

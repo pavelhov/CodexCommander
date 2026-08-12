@@ -182,7 +182,7 @@ runner.test("ui: running proxy keeps the terminal glyph regardless of service pr
     runner.equal(Set(symbols).count, states.count, "every other operational state stays distinct")
 }
 
-runner.test("ui: footer exposes navigation, proxy lifecycle, and both exit contracts") {
+runner.test("ui: footer exposes navigation, lifecycle, Codex routing, and both exits") {
     let controller = PopoverViewController()
     _ = controller.view
     let titles = controller.footerTitles
@@ -190,6 +190,7 @@ runner.test("ui: footer exposes navigation, proxy lifecycle, and both exit contr
         titles,
         [
             "Dashboard", "Logs", "Refresh", "Start Proxy", "Restart Proxy…",
+            "Restore Native Codex", "Route Codex Through Proxy",
             "Quit Menu Bar", "Stop CodexCommander and Quit…",
         ],
         "footer titles"
@@ -240,7 +241,7 @@ runner.test("ui: catalog update presents manual ChatGPT restart outside the prox
     runner.equal(controller.catalogUpdateButtonEnabled, false)
     controller.hideCatalogUpdate()
     runner.equal(controller.catalogUpdateVisible, false)
-    runner.equal(controller.footerTitles.count, 7, "catalog action stays outside footer indexing")
+    runner.equal(controller.footerTitles.count, 9, "catalog action stays outside footer indexing")
 }
 
 runner.test("ui: startup control exposes desktop, headless, off, and approval states") {
@@ -627,6 +628,195 @@ runner.test("ui: header separates proxy requests from the Codex route") {
     runner.equal(controller.headerView.codexRouteText, "Codex route · Unknown", "stale route fails closed")
 }
 
+runner.test("ui: fresh route truth overrides stale startup diagnostics immediately") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    var snapshot = makeSnapshot(health: currentHealth(diagnosticStale: true))
+    snapshot.codexRoute = .confirmed(CodexRouteStatus(routingKind: .native))
+    controller.apply(snapshot)
+
+    runner.equal(
+        controller.headerView.codexRouteText,
+        "Codex route · Native OpenAI",
+        "focused route observation"
+    )
+    runner.equal(controller.footerEnabledStates[5], false, "native action follows fresh route")
+    runner.equal(controller.footerEnabledStates[6], true, "proxy action follows fresh route")
+}
+
+runner.test("ui: unconfirmed route truth is explicit and leaves both choices available") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    var snapshot = makeSnapshot()
+    snapshot.codexRoute = .confirmationUnavailable
+    controller.apply(snapshot)
+
+    runner.equal(controller.headerView.codexRouteText, "Codex route · Unconfirmed")
+    runner.equal(controller.footerEnabledStates[5], true, "native recovery remains available")
+    runner.equal(controller.footerEnabledStates[6], true, "proxy recovery remains available")
+}
+
+runner.test("ui: backend-confirmed unknown stays distinct from unavailable confirmation") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    var snapshot = makeSnapshot()
+    snapshot.codexRoute = .confirmed(CodexRouteStatus(routingKind: .unknown))
+    controller.apply(snapshot)
+
+    runner.equal(controller.headerView.codexRouteText, "Codex route · Unknown")
+    runner.equal(controller.footerEnabledStates[5], true)
+    runner.equal(controller.footerEnabledStates[6], true)
+}
+
+runner.test("ui: route progress shows honest phases, elapsed time, and stays visible") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    controller.apply(makeSnapshot())
+
+    controller.beginCodexRouteChange(to: .nativeOpenAI)
+    let status = controller.operationStatusView
+    runner.equal(status.isProgressVisible, true, "spinner visible")
+    runner.equal(status.isDismissVisible, false, "progress cannot be dismissed")
+    runner.equal(status.titleText, "Changing to the Native OpenAI route…")
+    runner.equal(status.elapsedText, "0s")
+    runner.expect(
+        status.accessibilityStatusValue?.contains("Changing to the Native OpenAI route") == true,
+        "accessible value names current phase"
+    )
+
+    status.advanceElapsedForTesting(by: 65)
+    runner.equal(status.elapsedText, "1:05", "elapsed time")
+    controller.updateCodexRoutePhase(.confirming)
+    runner.equal(status.titleText, "Confirming the saved Codex route…")
+    runner.equal(status.isProgressVisible, true, "ordinary updates do not hide progress")
+}
+
+runner.test("ui: saved route with unavailable confirmation stays a caution, not success") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    controller.beginCodexRouteChange(to: .nativeOpenAI)
+    controller.updateCodexRoutePhase(.confirming)
+    controller.showCodexRouteConfirmationPending()
+
+    let status = controller.operationStatusView
+    runner.equal(status.titleText, "Route was saved, but confirmation is unavailable")
+    runner.equal(
+        status.detailText,
+        "Refresh to confirm the Codex route shown above before reopening ChatGPT."
+    )
+    runner.equal(status.stateToneName, "warning", "confirmation caution uses warning tone")
+    runner.expect(
+        status.detailText?.contains("start a new task") == false,
+        "unconfirmed route must not show the success reload instruction"
+    )
+    runner.equal(status.isDismissVisible, true, "caution persists")
+}
+
+runner.test("ui: route success persists with explicit ChatGPT restart step until dismissed") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    controller.apply(makeSnapshot())
+    controller.beginCodexRouteChange(to: .codexCommander)
+    controller.showCodexRouteSaved(.codexCommander)
+
+    let status = controller.operationStatusView
+    runner.equal(status.isProgressVisible, false, "spinner stops")
+    runner.equal(status.isDismissVisible, true, "dismiss action visible")
+    runner.equal(status.titleText, "CodexCommander route saved")
+    runner.equal(
+        status.detailText,
+        "Quit ChatGPT completely, reopen it, then start a new task to use this route.",
+        "restart boundary"
+    )
+
+    // Rendering fresh health must not discard the user's terminal outcome.
+    controller.apply(makeSnapshot())
+    runner.equal(status.titleText, "CodexCommander route saved", "result persists through polling")
+    status.activateDismissForTesting()
+    runner.equal(status.isHidden, true, "explicit dismissal")
+}
+
+runner.test("ui: operation card reclaims hidden stack space after dismissal") {
+    let controller = PopoverViewController()
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 387, height: 468),
+        styleMask: .borderless,
+        backing: .buffered,
+        defer: false
+    )
+    window.contentViewController = controller
+    controller.apply(makeSnapshot())
+    controller.view.layoutSubtreeIfNeeded()
+    let originalPanelSize = controller.preferredContentSize
+
+    controller.showCodexRouteSaved(.nativeOpenAI)
+    controller.view.layoutSubtreeIfNeeded()
+    runner.equal(controller.operationStatusView.isHidden, false, "card enters fixed stack")
+    runner.equal(controller.preferredContentSize.width, originalPanelSize.width, "width remains stable")
+
+    controller.operationStatusView.activateDismissForTesting()
+    controller.view.layoutSubtreeIfNeeded()
+    runner.equal(controller.operationStatusView.isHidden, true, "hidden card leaves fixed stack")
+    runner.equal(controller.preferredContentSize, originalPanelSize, "baseline panel geometry restored")
+    runner.expect(
+        window.firstResponder === window.contentView,
+        "dismiss returns focus to a safe panel container"
+    )
+}
+
+runner.test("ui: routing recovery failure is humanized with secondary technical detail") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    controller.showCodexRouteFailure(
+        "Codex routing recovery could not prove and retire the existing journal.",
+        errorCode: "ROUTING_RECOVERY_REQUIRED"
+    )
+
+    let status = controller.operationStatusView
+    runner.equal(status.titleText, "Codex route was not changed")
+    runner.expect(
+        status.detailText?.contains("previous recovery checkpoint") == true,
+        "plain-language recovery explanation"
+    )
+    runner.expect(
+        status.detailText?.contains("left unchanged") == true,
+        "failure states safe outcome"
+    )
+    runner.expect(
+        status.technicalDetailText?.contains("existing journal") == true,
+        "raw diagnostic remains secondary"
+    )
+    runner.equal(status.isDismissVisible, true, "error persists until dismissed")
+}
+
+runner.test("ui: current Codex route disables only the redundant route action") {
+    let controller = PopoverViewController()
+    _ = controller.view
+
+    controller.apply(makeSnapshot(health: currentHealth(
+        status: "native",
+        routingKind: "native",
+        routingInjected: false
+    )))
+    runner.equal(controller.footerEnabledStates[5], false, "already-native restore disabled")
+    runner.equal(controller.footerEnabledStates[6], true, "proxy route enabled")
+
+    controller.apply(makeSnapshot())
+    runner.equal(controller.footerEnabledStates[5], true, "native restore enabled")
+    runner.equal(controller.footerEnabledStates[6], false, "already-proxied action disabled")
+
+    controller.apply(makeSnapshot(health: currentHealth(
+        routingKind: "custom-remote",
+        routingInjected: false
+    )))
+    runner.equal(controller.footerEnabledStates[5], true, "custom route can restore native")
+    runner.equal(controller.footerEnabledStates[6], true, "custom route can switch to proxy")
+
+    controller.setLifecycleControlsEnabled(false)
+    runner.equal(controller.footerEnabledStates[5], false, "native action disabled in flight")
+    runner.equal(controller.footerEnabledStates[6], false, "proxy action disabled in flight")
+}
+
 runner.test("ui: header keeps readiness separate from liveness and routing") {
     let controller = PopoverViewController()
     _ = controller.view
@@ -705,22 +895,30 @@ runner.test("ui: accessibility labels exist on header and accordion") {
     _ = runner.notNil(controller.quotaAccordion.accessibilityLabel(), "quota a11y")
 }
 
-runner.test("ui: running footer invokes proxy and exit actions independently") {
+runner.test("ui: running footer invokes proxy, Codex route, and exit actions independently") {
     let controller = PopoverViewController()
     _ = controller.view
-    controller.apply(makeSnapshot())
+    controller.apply(makeSnapshot(health: currentHealth(
+        routingKind: "custom-remote",
+        routingInjected: false
+    )))
     var calls: [String] = []
     controller.onDashboard = { calls.append("dashboard") }
     controller.onLogs = { calls.append("logs") }
     controller.onRefresh = { calls.append("refresh") }
     controller.onStop = { calls.append("stop") }
     controller.onRestart = { calls.append("restart") }
+    controller.onRestoreNativeCodex = { calls.append("restore-native") }
+    controller.onRouteCodexThroughProxy = { calls.append("restore-back") }
     controller.onQuitMenuBar = { calls.append("quit-menu") }
     controller.onStopAndQuit = { calls.append("stop-and-quit") }
-    for index in 0..<7 { controller.activateFooterForTesting(index) }
+    for index in 0..<9 { controller.activateFooterForTesting(index) }
     runner.equal(
         calls,
-        ["dashboard", "logs", "refresh", "stop", "restart", "quit-menu", "stop-and-quit"]
+        [
+            "dashboard", "logs", "refresh", "stop", "restart",
+            "restore-native", "restore-back", "quit-menu", "stop-and-quit",
+        ]
     )
 }
 
@@ -730,20 +928,41 @@ runner.test("ui: stopped footer offers Start and safe Quit without destructive e
     controller.apply(ProxySnapshot(state: .unreachable, endpoint: .default))
     var started = false
     var restarted = false
+    var restoredNative = false
+    var routedThroughProxy = false
     var quitMenuBar = false
     var stoppedAndQuit = false
     controller.onStart = { started = true }
     controller.onRestart = { restarted = true }
+    controller.onRestoreNativeCodex = { restoredNative = true }
+    controller.onRouteCodexThroughProxy = { routedThroughProxy = true }
     controller.onQuitMenuBar = { quitMenuBar = true }
     controller.onStopAndQuit = { stoppedAndQuit = true }
     controller.activateFooterForTesting(3)
     controller.activateFooterForTesting(4)
     controller.activateFooterForTesting(5)
     controller.activateFooterForTesting(6)
+    controller.activateFooterForTesting(7)
+    controller.activateFooterForTesting(8)
     runner.equal(started, true)
     runner.equal(restarted, false)
+    runner.equal(restoredNative, true)
+    runner.equal(routedThroughProxy, false)
     runner.equal(quitMenuBar, true)
     runner.equal(stoppedAndQuit, false)
+}
+
+runner.test("ui: stopped proxy keeps native escape available but blocks proxy routing") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    controller.apply(ProxySnapshot(state: .unreachable, endpoint: .default))
+
+    runner.equal(controller.footerEnabledStates[5], true, "native escape remains available")
+    runner.equal(
+        controller.footerEnabledStates[6],
+        false,
+        "proxy route requires an attested running proxy"
+    )
 }
 
 runner.test("ui: degraded and unauthorized states offer Stop without enabling Restart") {
@@ -776,8 +995,12 @@ runner.test("ui: polling cannot re-enable lifecycle controls during an action") 
     _ = controller.view
     var stopped = false
     var restarted = false
+    var restoredNative = false
+    var routedThroughProxy = false
     controller.onStop = { stopped = true }
     controller.onRestart = { restarted = true }
+    controller.onRestoreNativeCodex = { restoredNative = true }
+    controller.onRouteCodexThroughProxy = { routedThroughProxy = true }
     controller.apply(makeSnapshot())
     controller.setLifecycleControlsEnabled(false)
 
@@ -785,8 +1008,12 @@ runner.test("ui: polling cannot re-enable lifecycle controls during an action") 
     controller.apply(makeSnapshot())
     controller.activateFooterForTesting(3)
     controller.activateFooterForTesting(4)
+    controller.activateFooterForTesting(5)
+    controller.activateFooterForTesting(6)
     runner.equal(stopped, false, "stop remains disabled")
     runner.equal(restarted, false, "restart remains disabled")
+    runner.equal(restoredNative, false, "native restore remains disabled")
+    runner.equal(routedThroughProxy, false, "proxy routing remains disabled")
 
     controller.setLifecycleControlsEnabled(true)
     controller.activateFooterForTesting(3)
@@ -800,21 +1027,29 @@ runner.test("ui: exit actions expose clear labels, accessibility, and distinct s
 
     let labels = controller.footerAccessibilityLabels
     runner.expect(
-        labels[5]?.contains("leave the proxy running") == true,
+        labels[5]?.contains("native OpenAI route") == true,
+        "native restore names its destination"
+    )
+    runner.expect(
+        labels[6]?.contains("CodexCommander proxy") == true,
+        "proxy route names its destination"
+    )
+    runner.expect(
+        labels[7]?.contains("leave the proxy running") == true,
         "safe quit explains proxy persistence"
     )
     runner.expect(
-        labels[6]?.contains("Stop the CodexCommander proxy") == true,
+        labels[8]?.contains("Stop the CodexCommander proxy") == true,
         "destructive exit explains proxy stop"
     )
 
     let shortcuts = controller.footerKeyEquivalents
-    runner.equal(shortcuts[5].0, "q", "safe quit key")
-    runner.equal(shortcuts[5].1, [.command], "safe quit modifiers")
-    runner.equal(shortcuts[6].0, "q", "destructive quit key")
-    runner.equal(shortcuts[6].1, [.command, .option], "destructive quit modifiers")
-    runner.equal(controller.footerEnabledStates[5], true, "safe quit enabled")
-    runner.equal(controller.footerEnabledStates[6], true, "destructive exit enabled")
+    runner.equal(shortcuts[7].0, "q", "safe quit key")
+    runner.equal(shortcuts[7].1, [.command], "safe quit modifiers")
+    runner.equal(shortcuts[8].0, "q", "destructive quit key")
+    runner.equal(shortcuts[8].1, [.command, .option], "destructive quit modifiers")
+    runner.equal(controller.footerEnabledStates[7], true, "safe quit enabled")
+    runner.equal(controller.footerEnabledStates[8], true, "destructive exit enabled")
 }
 
 runner.test("ui: lifecycle confirmations default to Cancel and mark stop actions destructive") {
@@ -837,6 +1072,14 @@ runner.test("ui: lifecycle confirmations default to Cancel and mark stop actions
         LifecycleConfirmation.stopProxy.confirmationResponse,
         .alertFirstButtonReturn
     )
+    runner.expect(
+        stop.informativeText.contains("Fully quit ChatGPT and Codex before stopping"),
+        "stop confirmation tells the user to quit endpoint-caching clients first"
+    )
+    runner.expect(
+        stop.informativeText.contains("Reopen them afterward to use native routing"),
+        "stop confirmation explains how to resume on native routing"
+    )
 
     let restart = LifecycleConfirmation.restartProxy.makeAlert()
     runner.equal(restart.buttons.map(\.title), ["Restart Proxy", "Cancel"])
@@ -847,8 +1090,16 @@ runner.test("ui: lifecycle confirmations default to Cancel and mark stop actions
     runner.equal(stopAndQuit.buttons.map(\.title), ["Stop and Quit", "Cancel"])
     runner.equal(stopAndQuit.buttons[0].hasDestructiveAction, true)
     runner.expect(
-        stopAndQuit.informativeText.contains("Codex will use native routing"),
-        "confirmation explains post-stop routing"
+        stopAndQuit.informativeText.contains("Fully quit ChatGPT and Codex before stopping"),
+        "stop-and-quit confirmation tells the user to quit clients first"
+    )
+    runner.expect(
+        stopAndQuit.informativeText.contains("Reopen them afterward to use native routing"),
+        "stop-and-quit confirmation explains post-stop routing"
+    )
+    runner.equal(
+        LifecycleResultMessage.proxyStopped,
+        "Proxy stopped. Fully quit ChatGPT and Codex if still open, then reopen them to use native routing."
     )
 }
 

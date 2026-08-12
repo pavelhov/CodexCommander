@@ -48,7 +48,6 @@ const MEMORY_PAYLOAD = {
   observedMetric: "external",
   jscHeap: null,
   activeTurnCount: 2,
-  isDraining: false,
   responseState: {
     count: 3,
     residentCount: 3,
@@ -132,7 +131,7 @@ test("a healthy payload renders the metrics with binary units", async () => {
   expect(text).toContain("4.0 MiB/h");    // observed drift/hour
   expect(text).toContain("5.0 MiB");      // response-store total
   expect(text).not.toContain("1.5 KB");   // the mislabelled decimal unit must be gone
-  expect(text).toContain("Drain & restart");
+  expect(text).toContain("Restart proxy");
   expect(text).toContain("In-flight");
 
   await act(async () => { root.unmount(); });
@@ -165,7 +164,7 @@ test("a non-OK response degrades to the unavailable note instead of crashing", a
   await act(async () => { root.unmount(); });
 });
 
-test("Drain & restart posts /api/system/restart after confirm", async () => {
+test("Restart proxy warns about interruption and posts /api/system/restart", async () => {
   let restartPosts = 0;
   const { root, container, testWindow } = await mountCard((url) => {
     if (url.includes("/api/system/restart")) {
@@ -173,7 +172,7 @@ test("Drain & restart posts /api/system/restart after confirm", async () => {
       return Response.json({
         success: true,
         activeTurnCount: 2,
-        drainTimeoutMs: 60_000,
+        drainTimeoutMs: 0,
         alreadyDraining: false,
       }, { status: 202 });
     }
@@ -181,10 +180,14 @@ test("Drain & restart posts /api/system/restart after confirm", async () => {
   });
 
   originalConfirm = window.confirm;
-  window.confirm = () => true;
+  let confirmation = "";
+  window.confirm = (message) => {
+    confirmation = String(message);
+    return true;
+  };
 
   const button = Array.from(container.querySelectorAll("button")).find(
-    (el) => (el.textContent ?? "").includes("Drain & restart"),
+    (el) => (el.textContent ?? "").includes("Restart proxy"),
   );
   expect(button).toBeTruthy();
 
@@ -194,7 +197,9 @@ test("Drain & restart posts /api/system/restart after confirm", async () => {
   });
 
   expect(restartPosts).toBe(1);
-  expect(container.textContent ?? "").toContain("Draining");
+  expect(confirmation).toContain("may be interrupted");
+  expect(confirmation).toContain("Finish current work");
+  expect(container.textContent ?? "").toContain("Proxy restarting");
 
   await act(async () => { root.unmount(); });
 });
@@ -202,7 +207,6 @@ test("Drain & restart posts /api/system/restart after confirm", async () => {
 test("an incomplete successful memory response is rejected as unavailable", async () => {
   const incomplete = { ...MEMORY_PAYLOAD } as Record<string, unknown>;
   delete incomplete.activeTurnCount;
-  delete incomplete.isDraining;
 
   const { root, container } = await mountCard((url) => {
     if (url.includes("/api/startup-health")) return Response.json({ protection: "none" });
@@ -210,7 +214,7 @@ test("an incomplete successful memory response is rejected as unavailable", asyn
     return new Response(null, { status: 404 });
   });
 
-  expect(container.textContent ?? "").not.toContain("Drain & restart");
+  expect(container.textContent ?? "").not.toContain("Restart proxy");
   expect(container.textContent ?? "").not.toContain("MiB");
 
   await act(async () => { root.unmount(); });

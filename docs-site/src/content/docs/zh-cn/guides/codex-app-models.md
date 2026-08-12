@@ -22,7 +22,7 @@ openai-apikey/gpt-5.6-sol           # API key
 
 ## 集成路径
 
-`ccx init`、`ccx start` 和 `ccx sync` 会把共享的 Codex 配置和目录接入代理；有关配置注入、目录同步、shim、WebSocket fallback 和恢复机制，请参见 [Codex Integration](/guides/codex-integration/)。
+`ccx start` 和 `ccx sync` 会把共享的 Codex 配置和目录接入代理。`ccx init` 只有在受保护 runtime 记录能够证明代理已运行时才能执行相同操作；否则 Codex 会保持原生状态直到显式 Start。有关配置注入、目录同步、shim、WebSocket fallback 和恢复机制，请参见 [Codex Integration](/guides/codex-integration/)。
 
 ## 为什么路由模型会显示
 

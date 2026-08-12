@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
@@ -57,7 +56,6 @@ import {
   type DebugFlag,
 } from "../../lib/debug-settings";
 import type { CodexCommanderClaudeCodeConfig, CodexCommanderConfig, CodexCommanderCustomModel, CodexCommanderProviderConfig } from "../../types";
-import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
@@ -72,6 +70,9 @@ import {
 import { runWindowsTrayAction } from "../windows-tray-control";
 import { runStartupInstallAction, type StartupInstallAction } from "../startup-action-control";
 import { displayCodexRuntimePath, effortClampAppliesToRuntime, loadLastEffortClamp, resolveCodexRuntime } from "../../codex/runtime";
+import { acquireProxyLifecycleAuthority, type ProxyLifecycleAuthority } from "../proxy-lifecycle-authority";
+import { validateProxyLifecycleLockLease } from "../proxy-start-lock";
+import { readProxyLifecycleLockLeaseHeaders } from "../proxy-lifecycle-protocol";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
@@ -284,116 +285,163 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/sync" && req.method === "POST") {
-    const { syncModelsToCodex } = await import("../../codex/sync");
-    const {
-      attachStaleAppServerHint,
-      resetCodexAppServerCatalogStateCache,
-    } = await import("../../codex/app-server-processes");
-    const { readRuntimePort, loadConfig } = await import("../../config");
-    // Never use the server-captured startup object for a durable integration
-    // decision. A toggle may have persisted while this process was gathering.
-    const runtime = (deps.readRuntimePort ?? readRuntimePort)(process.pid);
-    const currentConfig = loadConfig();
-    const result = await (deps.syncModelsToCodex ?? syncModelsToCodex)(runtime?.port, currentConfig, null);
-    // A read taken before this sync can be memoized for five seconds. Drop it
-    // before classifying the just-written catalog so launch-time catalog
-    // readiness cannot be masked by a pre-write `fresh` snapshot.
-    (deps.resetCodexAppServerCatalogStateCache ?? resetCodexAppServerCatalogStateCache)();
-    const {
-      catalogOnlyWorkerStateFromActivation,
-      captureCodexCatalogDesiredSnapshot,
-      collectCodexCatalogActivationWorkerState,
-      inspectCodexCatalogArtifactProof,
-      inspectCodexCatalogActivation,
-      resetCodexCatalogActivationWorkerStateCache,
-    } = await import("../../codex/catalog-activation");
-    const { getCodexRoutingKind } = await import("../../codex/inject");
-    resetCodexCatalogActivationWorkerStateCache();
-    const activationWorkers = (deps.collectCodexAppServerCatalogState
-      ?? collectCodexCatalogActivationWorkerState)();
-    const catalogState = deps.collectCodexAppServerCatalogState
-      ? activationWorkers
-      : catalogOnlyWorkerStateFromActivation(activationWorkers);
-    // Bind the response to the desired generation that exists after the sync.
-    // This also requires the process-local convergence receipt to prove that a
-    // complete catalog/cache publication committed, then verifies the exact
-    // authoritative catalog instead of inferring readiness from roster slugs.
-    // Codex owns models_cache.json and may legitimately refresh it immediately.
-    const captureDesired = () => deps.captureCatalogDesiredSnapshotForActivation?.()
-      ?? captureCodexCatalogDesiredSnapshot();
-    const artifactProof = (desired: ReturnType<typeof captureDesired>) =>
-      deps.catalogArtifactProofForActivation?.()
-      ?? inspectCodexCatalogArtifactProof(desired.config);
-    const routingKind = () => deps.codexRoutingKindForActivation?.()
-      ?? getCodexRoutingKind();
-    const activationDesired = captureDesired();
-    const activationArtifactProof = artifactProof(activationDesired);
-    const activationRoutingKind = routingKind();
-    const activation = inspectCodexCatalogActivation(
-      activationDesired.config,
-      activationWorkers,
-      undefined,
-      activationDesired.authority,
-      activationArtifactProof,
-      activationRoutingKind,
-    );
-
-    // An authenticated manual full sync is the only failed-readiness recovery
-    // boundary. Do not promote from the sync result alone: Save may race the
-    // request, or routing/artifact state may drift after the writer returns.
-    // Re-observe every relevant signal after building the response activation
-    // and require the two post-sync observations to describe the same desired
-    // generation and route. Applied integration additionally needs the exact
-    // process-local publication receipt and authoritative catalog on both reads. Intentional OFF and
-    // external-provider skips have no Commander-owned artifact by design, but
-    // their skip reason must agree exactly with the stable routing state.
-    let recoveryProven = false;
-    if (result.ok === true && (result.warning === undefined || result.warning === "")) {
+    const lifecycle = deps.proxyStopLifecycle ?? {};
+    const delegatedLease = readProxyLifecycleLockLeaseHeaders(req.headers);
+    let ownedAuthority: ProxyLifecycleAuthority | undefined;
+    if (delegatedLease.kind !== "none") {
+      const valid = delegatedLease.kind === "lease"
+        && (lifecycle.validateLease ?? validateProxyLifecycleLockLease)(delegatedLease.lease);
+      if (!valid) {
+        return jsonResponse({
+          status: "refused",
+          ok: false,
+          added: 0,
+          catalogPath: null,
+          catalogExists: false,
+          catalogWritten: false,
+          cacheSynced: false,
+          catalogQuality: "native-only",
+          rehydrated: 0,
+          message: "Codex sync lifecycle coordination was refused.",
+          error: "Codex sync lifecycle coordination was refused.",
+        }, 409);
+      }
+    } else {
       try {
-        const confirmedRoutingKind = routingKind();
-        const confirmedArtifactProof = result.status === "applied"
-          ? artifactProof(activationDesired)
-          : activationArtifactProof;
-        // Recapture desired state last. A Save that races either confirmation
-        // read must change this revision and keep the recovery gate closed.
-        const confirmedDesired = captureDesired();
-        const desiredStable = confirmedDesired.revision === activationDesired.revision;
-        const routingStable = confirmedRoutingKind === activationRoutingKind;
-        const integrationDisabled = activationDesired.config.clientIntegrations?.codex === false
-          && confirmedDesired.config.clientIntegrations?.codex === false;
-        const disabledSkip = result.status === "skipped"
-          && result.skippedReason === "desired_disabled"
-          && integrationDisabled
-          && activation.routing.status === "not_required"
-          // `not_required` is derived from desired OFF and intentionally masks
-          // the raw route in the public activation DTO. OFF is not actually
-          // settled while a stale Commander-owned route remains injected, and
-          // unreadable routing is never positive proof.
-          && activationRoutingKind !== "codexcommander-local"
-          && activationRoutingKind !== "unknown";
-        const externalSkip = result.status === "skipped"
-          && result.skippedReason === "external_provider"
-          && !integrationDisabled
-          && activation.routing.status === "external";
-        const applied = result.status === "applied"
-          && !integrationDisabled
-          && activation.routing.status === "current"
-          && activationArtifactProof === "current"
-          && confirmedArtifactProof === "current";
-        recoveryProven = desiredStable && routingStable && (disabledSkip || externalSkip || applied);
+        ownedAuthority = await (lifecycle.acquireAuthority
+          ?? acquireProxyLifecycleAuthority)({ includeStart: true });
       } catch {
-        // A torn/unreadable confirmation is not proof. Keep readiness failed;
-        // the structured sync/activation response remains useful diagnostics.
+        return jsonResponse({
+          status: "refused",
+          ok: false,
+          added: 0,
+          catalogPath: null,
+          catalogExists: false,
+          catalogWritten: false,
+          cacheSynced: false,
+          catalogQuality: "native-only",
+          rehydrated: 0,
+          message: "Proxy lifecycle is busy; no Codex catalog or routing changes were made.",
+          error: "Proxy lifecycle is busy; no Codex catalog or routing changes were made.",
+        }, 409);
       }
     }
-    if (recoveryProven) deps.readinessGate?.recoverReady();
-    const status = result.status === "refused" ? 409 : (result.status === "skipped" || result.ok ? 200 : 500);
-    return jsonResponse({
-      ...attachStaleAppServerHint(result),
-      catalogState,
-      activation,
-      ...(result.ok ? {} : { error: result.message }),
-    }, status);
+    try {
+      const { syncModelsToCodex } = await import("../../codex/sync");
+      const {
+        attachStaleAppServerHint,
+        resetCodexAppServerCatalogStateCache,
+      } = await import("../../codex/app-server-processes");
+      const { readRuntimePort, loadConfig } = await import("../../config");
+      // Never use the server-captured startup object for a durable integration
+      // decision. A toggle may have persisted while this process was gathering.
+      const runtime = (deps.readRuntimePort ?? readRuntimePort)(process.pid);
+      const currentConfig = loadConfig();
+      const result = await (deps.syncModelsToCodex ?? syncModelsToCodex)(runtime?.port, currentConfig, null);
+      // A read taken before this sync can be memoized for five seconds. Drop it
+      // before classifying the just-written catalog so launch-time catalog
+      // readiness cannot be masked by a pre-write `fresh` snapshot.
+      (deps.resetCodexAppServerCatalogStateCache ?? resetCodexAppServerCatalogStateCache)();
+      const {
+        catalogOnlyWorkerStateFromActivation,
+        captureCodexCatalogDesiredSnapshot,
+        collectCodexCatalogActivationWorkerState,
+        inspectCodexCatalogArtifactProof,
+        inspectCodexCatalogActivation,
+        resetCodexCatalogActivationWorkerStateCache,
+      } = await import("../../codex/catalog-activation");
+      const { getCodexRoutingKind } = await import("../../codex/inject");
+      resetCodexCatalogActivationWorkerStateCache();
+      const activationWorkers = (deps.collectCodexAppServerCatalogState
+        ?? collectCodexCatalogActivationWorkerState)();
+      const catalogState = deps.collectCodexAppServerCatalogState
+        ? activationWorkers
+        : catalogOnlyWorkerStateFromActivation(activationWorkers);
+      // Bind the response to the desired generation that exists after the sync.
+      // This also requires the process-local convergence receipt to prove that a
+      // complete catalog/cache publication committed, then verifies the exact
+      // authoritative catalog instead of inferring readiness from roster slugs.
+      // Codex owns models_cache.json and may legitimately refresh it immediately.
+      const captureDesired = () => deps.captureCatalogDesiredSnapshotForActivation?.()
+        ?? captureCodexCatalogDesiredSnapshot();
+      const artifactProof = (desired: ReturnType<typeof captureDesired>) =>
+        deps.catalogArtifactProofForActivation?.()
+        ?? inspectCodexCatalogArtifactProof(desired.config);
+      const routingKind = () => deps.codexRoutingKindForActivation?.()
+        ?? getCodexRoutingKind();
+      const activationDesired = captureDesired();
+      const activationArtifactProof = artifactProof(activationDesired);
+      const activationRoutingKind = routingKind();
+      const activation = inspectCodexCatalogActivation(
+        activationDesired.config,
+        activationWorkers,
+        undefined,
+        activationDesired.authority,
+        activationArtifactProof,
+        activationRoutingKind,
+      );
+
+      // An authenticated manual full sync is the only failed-readiness recovery
+      // boundary. Do not promote from the sync result alone: Save may race the
+      // request, or routing/artifact state may drift after the writer returns.
+      // Re-observe every relevant signal after building the response activation
+      // and require the two post-sync observations to describe the same desired
+      // generation and route. Applied integration additionally needs the exact
+      // process-local publication receipt and authoritative catalog on both reads. Intentional OFF and
+      // external-provider skips have no Commander-owned artifact by design, but
+      // their skip reason must agree exactly with the stable routing state.
+      let recoveryProven = false;
+      if (result.ok === true && (result.warning === undefined || result.warning === "")) {
+        try {
+          const confirmedRoutingKind = routingKind();
+          const confirmedArtifactProof = result.status === "applied"
+            ? artifactProof(activationDesired)
+            : activationArtifactProof;
+          // Recapture desired state last. A Save that races either confirmation
+          // read must change this revision and keep the recovery gate closed.
+          const confirmedDesired = captureDesired();
+          const desiredStable = confirmedDesired.revision === activationDesired.revision;
+          const routingStable = confirmedRoutingKind === activationRoutingKind;
+          const integrationDisabled = activationDesired.config.clientIntegrations?.codex === false
+            && confirmedDesired.config.clientIntegrations?.codex === false;
+          const disabledSkip = result.status === "skipped"
+            && result.skippedReason === "desired_disabled"
+            && integrationDisabled
+            && activation.routing.status === "not_required"
+            // `not_required` is derived from desired OFF and intentionally masks
+            // the raw route in the public activation DTO. OFF is not actually
+            // settled while a stale Commander-owned route remains injected, and
+            // unreadable routing is never positive proof.
+            && activationRoutingKind !== "codexcommander-local"
+            && activationRoutingKind !== "unknown";
+          const externalSkip = result.status === "skipped"
+            && result.skippedReason === "external_provider"
+            && !integrationDisabled
+            && activation.routing.status === "external";
+          const applied = result.status === "applied"
+            && !integrationDisabled
+            && activation.routing.status === "current"
+            && activationArtifactProof === "current"
+            && confirmedArtifactProof === "current";
+          recoveryProven = desiredStable && routingStable && (disabledSkip || externalSkip || applied);
+        } catch {
+          // A torn/unreadable confirmation is not proof. Keep readiness failed;
+          // the structured sync/activation response remains useful diagnostics.
+        }
+      }
+      if (recoveryProven) deps.readinessGate?.recoverReady();
+      const status = result.status === "refused" ? 409 : (result.status === "skipped" || result.ok ? 200 : 500);
+      return jsonResponse({
+        ...attachStaleAppServerHint(result),
+        catalogState,
+        activation,
+        ...(result.ok ? {} : { error: result.message }),
+      }, status);
+    } finally {
+      // releaseAll is the canonical S -> E order. A delegated caller retains
+      // its own pair; this route neither releases nor re-acquires it.
+      ownedAuthority?.releaseAll();
+    }
   }
 
   if (url.pathname === "/api/sidecar-settings" && req.method === "GET") {

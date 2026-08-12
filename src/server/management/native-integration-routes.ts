@@ -27,6 +27,10 @@ import { assertNativeTeardownOwned } from "../../integrations/native/ownership-p
 import type { CodexNativeRestoreResult } from "../../codex/inject";
 import type { CodexCommanderConfig } from "../../types";
 import { jsonResponse } from "../auth-cors";
+import {
+  acquireProxyLifecycleAuthority,
+  type ProxyLifecycleAuthority,
+} from "../proxy-lifecycle-authority";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
 
@@ -169,6 +173,18 @@ function codexStatus(config: ManagementContext["config"], configPath: string): N
   };
 }
 
+/** Keep the server's reusable config snapshot aligned with a durable sparse-state write. */
+function mirrorCodexDesiredEnabledOntoSnapshot(
+  config: CodexCommanderConfig,
+  enabled: boolean,
+): void {
+  const integrations = { ...(config.clientIntegrations ?? {}) };
+  if (enabled) delete integrations.codex;
+  else integrations.codex = false;
+  if (Object.keys(integrations).length === 0) delete config.clientIntegrations;
+  else config.clientIntegrations = integrations;
+}
+
 /**
  * Grok's GET row (030 §field table). `disableBlocked` is ADVISORY — the file
  * can change before the PUT, which re-checks with the same inspector and whose
@@ -259,9 +275,10 @@ const NOT_INSTALLED_MESSAGE =
   "Grok home was not found, so there is nothing to change. Install Grok Build first.";
 
 /**
- * One Codex change at a time, for the same reason Grok has this: the guard
- * stands BEFORE the first await, or two concurrent PUTs both pass it while their
- * bodies are still parsing.
+ * One dashboard Codex change at a time. The process-local guard stands BEFORE
+ * the first await, or two concurrent PUTs both pass it while their bodies are
+ * still parsing. Cross-process and cross-surface serialization comes from the
+ * shared E -> S lifecycle authority acquired below.
  */
 let codexToggleFlight: Promise<Response> | null = null;
 
@@ -301,79 +318,108 @@ async function handleCodexToggle(ctx: ManagementContext): Promise<Response> {
     }
     const enabled = body.enabled;
 
-    const { setCodexIntegrationEnabled } = await import("../../codex/desired-state");
-    const persisted = setCodexIntegrationEnabled(enabled);
-    /*
-     * `missing` does not block the switch — see the Grok route for the reasoning.
-     * A user with no config file yet still gets the artifact change; what they
-     * lose is durability across a restart, and the envelope says so rather than
-     * implying the switch failed.
-     */
-    if (!persisted.ok && persisted.reason !== "missing") {
-      return refusal(
-        persisted.retryable ? 409 : 500,
-        "codex",
-        persisted.retryable ? "config_busy" : "write_failed",
-        persisted.message,
-      );
+    let authority: ProxyLifecycleAuthority;
+    try {
+      authority = await (ctx.deps.proxyStopLifecycle?.acquireAuthority
+        ?? acquireProxyLifecycleAuthority)({ includeStart: true });
+    } catch {
+      return refusal(409, "codex", "config_busy",
+        "Another proxy lifecycle change is in flight. Nothing was written — try again in a moment.");
     }
-    const durable = persisted.ok;
 
-    if (enabled) {
-      // The port this process actually BOUND, not what config.json last recorded.
-      // A stale config port would inject a base_url pointing at nothing — the
-      // same trap `runGrokApplyFlight` documents below.
-      const runtime = (ctx.deps.readRuntimePort ?? readRuntimePort)(process.pid);
-      const port = runtime?.port ?? ctx.config.port;
-      const syncModelsToCodex = ctx.deps.syncModelsToCodex
-        ?? (await import("../../codex/sync")).syncModelsToCodex;
-      const applied = await syncModelsToCodex(port);
-      if (applied.status === "skipped") {
+    try {
+      const { setCodexIntegrationEnabled } = await import("../../codex/desired-state");
+      const persisted = setCodexIntegrationEnabled(enabled);
+      /*
+       * `missing` does not block the switch — see the Grok route for the reasoning.
+       * A user with no config file yet still gets the artifact change; what they
+       * lose is durability across a restart, and the envelope says so rather than
+       * implying the switch failed.
+       */
+      if (!persisted.ok && persisted.reason !== "missing") {
+        return refusal(
+          persisted.retryable ? 409 : 500,
+          "codex",
+          persisted.retryable ? "config_busy" : "write_failed",
+          persisted.message,
+        );
+      }
+      const durable = persisted.ok;
+      if (durable) mirrorCodexDesiredEnabledOntoSnapshot(ctx.config, enabled);
+
+      if (enabled) {
+        // The port this process actually BOUND, not what config.json last recorded.
+        // A stale config port would inject a base_url pointing at nothing — the
+        // same trap `runGrokApplyFlight` documents below.
+        const runtime = (ctx.deps.readRuntimePort ?? readRuntimePort)(process.pid);
+        const port = runtime?.port ?? ctx.config.port;
+        const syncModelsToCodex = ctx.deps.syncModelsToCodex
+          ?? (await import("../../codex/sync")).syncModelsToCodex;
+        const applied = await syncModelsToCodex(port);
+        if (applied.status === "skipped") {
+          return jsonResponse({
+            ok: true, clientId: "codex", changed: durable && persisted.status === "committed",
+            state: "absent",
+            desiredEnabled: enabled,
+            message: "Codex integration is OFF; enable did not change Codex.",
+            reason: "apply_incomplete",
+          } satisfies NativeToggleEnvelope);
+        }
         return jsonResponse({
           ok: true, clientId: "codex", changed: durable && persisted.status === "committed",
-          state: "absent",
+          state: applied.ok ? "current" : "absent",
           desiredEnabled: enabled,
-          message: "Codex integration is OFF; enable did not change Codex.",
-          reason: "apply_incomplete",
+          message: applied.ok
+            ? "Codex now routes through CodexCommander"
+            : `Codex intent saved, but applying it did not complete: ${applied.message}`,
+          ...(applied.ok
+            ? (durable ? {} : { reason: "not_durable" })
+            : { reason: "apply_incomplete" }),
         } satisfies NativeToggleEnvelope);
+      }
+
+      // OFF. Restore the native path; the proxy keeps serving every other client.
+      if (durable && persisted.status === "unchanged") {
+        const { classifyNativeRoutedResidue } = await import("../../codex/native-residue");
+        if (classifyNativeRoutedResidue().kind === "clean") {
+          return jsonResponse({
+            ok: true, clientId: "codex", changed: false, state: "absent", desiredEnabled: false,
+            message: "Codex integration is already OFF and native; no Codex files changed.",
+          } satisfies NativeToggleEnvelope);
+        }
+      }
+      const { restoreNativeCodexAsync } = await import("../../codex/inject");
+      const restored = await restoreNativeCodexAsync({ revalidateDesiredState: true });
+      if (!restored.success) {
+        /*
+         * The OFF intent was committed, but the native files were not safely
+         * restored.  This is a post-commit failure, not a degraded success:
+         * dashboard callers key their success path off the HTTP status and an
+         * `ok: true` envelope would close the confirmation dialog without ever
+         * showing the restore refusal.  Keep the established refusal schema so
+         * older dashboards also fail closed and retain the exact restore detail
+         * in `message` for recovery.
+         */
+        return postCommitRefusal(
+          500,
+          "codex",
+          "write_failed",
+          `Codex intent was saved as OFF, but restoring the native path did not complete: ${restored.message}`,
+          { desiredEnabled: false },
+        );
       }
       return jsonResponse({
         ok: true, clientId: "codex", changed: durable && persisted.status === "committed",
-        state: applied.ok ? "current" : "absent",
+        state: "absent",
         desiredEnabled: enabled,
-        message: applied.ok
-          ? "Codex now routes through CodexCommander"
-          : `Codex intent saved, but applying it did not complete: ${applied.message}`,
-        ...(applied.ok
-          ? (durable ? {} : { reason: "not_durable" })
-          : { reason: "apply_incomplete" }),
+        message: "Codex restored to its native path; the proxy is still serving other clients",
+        ...(durable ? {} : { reason: "not_durable" }),
+        artifacts: restored.artifacts,
       } satisfies NativeToggleEnvelope);
+    } finally {
+      // Lifecycle authority owns the sole lock order: release S before E.
+      authority.releaseAll();
     }
-
-    // OFF. Restore the native path; the proxy keeps serving every other client.
-    if (durable && persisted.status === "unchanged") {
-      const { classifyNativeRoutedResidue } = await import("../../codex/native-residue");
-      if (classifyNativeRoutedResidue().kind === "clean") {
-        return jsonResponse({
-          ok: true, clientId: "codex", changed: false, state: "absent", desiredEnabled: false,
-          message: "Codex integration is already OFF and native; no Codex files changed.",
-        } satisfies NativeToggleEnvelope);
-      }
-    }
-    const { restoreNativeCodexAsync } = await import("../../codex/inject");
-    const restored = await restoreNativeCodexAsync({ revalidateDesiredState: true });
-    return jsonResponse({
-      ok: true, clientId: "codex", changed: durable && persisted.status === "committed",
-      state: restored.success ? "absent" : "unsafe",
-      desiredEnabled: enabled,
-      message: restored.success
-        ? "Codex restored to its native path; the proxy is still serving other clients"
-        : `Codex intent saved, but restoring the native path did not complete: ${restored.message}`,
-      ...(restored.success
-        ? (durable ? {} : { reason: "not_durable" })
-        : { reason: "restore_incomplete" }),
-      artifacts: restored.artifacts,
-    } satisfies NativeToggleEnvelope);
   })();
   try {
     return await codexToggleFlight;
@@ -406,15 +452,26 @@ async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
     }
     const enabled = body.enabled;
 
-    /*
-     * The inspector runs BEFORE either delegate, in BOTH directions (012 §In
-     * PUT it is the authoritative preflight): an ambiguous fence never reaches
-     * the code path that would misreport it, and the refusal is identical
-     * whichever direction the user was heading, because the reason is the same.
-     */
-    const seen = inspectGrokConfig();
-    if (seen.kind === "not_installed") return refusal(404, "grok", "not_installed", NOT_INSTALLED_MESSAGE);
-    if (seen.kind === "orphaned_marker") return refusal(409, "grok", "orphaned_marker", ORPHANED_MARKER_MESSAGE);
+    let authority: ProxyLifecycleAuthority;
+    try {
+      authority = await (deps.proxyStopLifecycle?.acquireAuthority
+        ?? acquireProxyLifecycleAuthority)({ includeStart: true });
+    } catch {
+      return refusal(409, "grok", "config_busy",
+        "Another proxy lifecycle change is in flight. Nothing was written — try again in a moment.");
+    }
+
+    try {
+      /*
+       * The inspector runs BEFORE either delegate, in BOTH directions (012 §In
+       * PUT it is the authoritative preflight): an ambiguous fence never reaches
+       * the code path that would misreport it, and the refusal is identical
+       * whichever direction the user was heading, because the reason is the same.
+       * E and S are already held, so Stop/Start cannot invalidate this preflight.
+       */
+      const seen = inspectGrokConfig();
+      if (seen.kind === "not_installed") return refusal(404, "grok", "not_installed", NOT_INSTALLED_MESSAGE);
+      if (seen.kind === "orphaned_marker") return refusal(409, "grok", "orphaned_marker", ORPHANED_MARKER_MESSAGE);
 
     /*
      * Persist the DECISION before touching the fence.
@@ -585,12 +642,16 @@ async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
     if (!result.ok) {
       return postCommitRefusal(500, "grok", "write_failed", result.message, { desiredEnabled });
     }
-    return jsonResponse({
-      ok: true, clientId: "grok", changed: result.changed,
-      state: "current",
-      desiredEnabled,
-      message: result.changed ? "Grok integration enabled — the CodexCommander block was regenerated from the current model list." : "Grok integration is already on",
-    } satisfies NativeToggleEnvelope);
+      return jsonResponse({
+        ok: true, clientId: "grok", changed: result.changed,
+        state: "current",
+        desiredEnabled,
+        message: result.changed ? "Grok integration enabled — the CodexCommander block was regenerated from the current model list." : "Grok integration is already on",
+      } satisfies NativeToggleEnvelope);
+    } finally {
+      // Lifecycle authority owns the sole lock order: release S before E.
+      authority.releaseAll();
+    }
   })();
   try {
     return await grokToggleFlight;

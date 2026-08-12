@@ -11,32 +11,36 @@ type HelpEntry = {
 };
 
 const helpEntries: Record<string, HelpEntry> = {
-  init: { usage: "ccx init", summary: "Interactive setup for providers and Codex config injection." },
-  setup: { usage: "ccx setup", summary: "Interactive setup for providers and Codex config injection (alias of init)." },
+  init: { usage: "ccx init", summary: "Interactive provider setup; optionally route through a proven live proxy." },
+  setup: { usage: "ccx setup", summary: "Interactive provider setup; optionally route through a proven live proxy (alias of init)." },
   start: { usage: "ccx start [--port <port>]", summary: "Start the proxy server and sync models to Codex." },
   stop: { usage: "ccx stop", summary: "Stop the proxy and restore native Codex config." },
   restore: {
     usage: "ccx restore [back]",
-    summary: "Restore native Codex config without stopping the proxy; `restore back` re-points codex at the running proxy.",
+    summary: "Restore native Codex routing without stopping the proxy; `restore back` re-points codex at the running proxy.",
+    details: ["Codex-only: this command does not change Grok or any other client integration."],
   },
   eject: {
     usage: "ccx eject [back]",
-    summary: "Restore native Codex config without stopping the proxy; `eject back` re-points codex at the running proxy.",
+    summary: "Restore native Codex routing without stopping the proxy; `eject back` re-points codex at the running proxy.",
+    details: ["Codex-only: this command does not change Grok or any other client integration."],
   },
   uninstall: {
     usage: "ccx uninstall",
-    summary: "Remove service/shim/config and restore native Codex.",
+    summary: "Remove service/shim/local artifacts and restore native Codex.",
     details: [
       "Alias: ccx remove",
       "Config cleanup requires current ownership metadata; unowned or shared directories are left in place.",
+      "The small owner/manifest metadata pair remains to preserve one lifecycle-lock namespace.",
     ],
   },
   remove: {
     usage: "ccx remove",
-    summary: "Remove service/shim/config and restore native Codex.",
+    summary: "Remove service/shim/local artifacts and restore native Codex.",
     details: [
       "Alias of: ccx uninstall",
       "Config cleanup requires current ownership metadata; unowned or shared directories are left in place.",
+      "The small owner/manifest metadata pair remains to preserve one lifecycle-lock namespace.",
     ],
   },
   service: {
@@ -274,9 +278,9 @@ Usage:
   ccx setup                   Interactive setup (alias: init)
   ccx start [--port <port>]   Start the proxy server (auto-syncs models to Codex)
   ccx stop                    Stop the proxy AND restore native Codex (plain codex works again)
-  ccx restore                 Restore native Codex without stopping (alias: eject)
+  ccx restore                 Restore native Codex routing without stopping (alias: eject)
   ccx restore back            Re-point codex at the running proxy (undo restore)
-  ccx uninstall               Remove service/shim/config and restore native Codex (alias: remove)
+  ccx uninstall               Remove service/shim/local artifacts; restore native Codex (alias: remove)
   ccx service [sub]           Run as a background service (default: install or refresh, then start)
   ccx codex-shim <sub>        Auto-start proxy when \`codex\` launches (install|status|uninstall|remove)
   ccx tray <sub>              Windows status tray (install|start|stop|status|uninstall)
@@ -313,7 +317,7 @@ Usage:
   ccx --version | -v          Print version
 
 Examples:
-  ccx init                    Set up provider and inject into Codex
+  ccx init                    Set up provider; optionally route through a proven live proxy
   ccx start                   Start on default port (10100)
   ccx start --port 8080       Start on custom port
   ccx help service            Show service command help

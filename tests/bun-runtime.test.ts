@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, afterEach } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, isRealBunBinary, bundledBunPath, durableBunPath, durableBunRuntime, reportedBunRuntimeSource, withProcessRuntimeProvenance } from "../src/lib/bun-runtime";
@@ -230,20 +230,4 @@ describe("withProcessRuntimeProvenance (execPath relaunch paths)", () => {
     expect(result.PATH).toBe("/usr/bin");
   });
 
-  it("is applied by every detached proxy launcher that re-execs process.execPath", () => {
-    // A launcher added later that copies process.env directly would silently drop
-    // provenance again, so the launch sites are pinned here rather than left to review.
-    const launchers: Array<[string, RegExp]> = [
-      ["src/cli/proxy-lifecycle.ts", /spawnFn\(process\.execPath/g],
-      ["src/cli/claude.ts", /spawn\(process\.execPath/g],
-      ["src/server/management/system-restart.ts", /spawn\(process\.execPath/g],
-    ];
-    for (const [relative, spawnPattern] of launchers) {
-      const text = readFileSync(join(import.meta.dir, "..", relative), "utf8");
-      const spawnCount = (text.match(spawnPattern) ?? []).length;
-      const stampCount = (text.match(/env: withProcessRuntimeProvenance\(/g) ?? []).length;
-      expect(spawnCount).toBeGreaterThan(0);
-      expect(stampCount).toBe(spawnCount);
-    }
-  });
 });

@@ -184,8 +184,8 @@ launcher 使用原始管理员凭证签发一个绑定到请求 route 和 origin
 | 方法和路径 | 用途 | 典型错误 |
 | --- | --- | --- |
 | `GET /api/system/memory` | 返回标量级的进程、堆、流、响应状态、看门狗和活跃回合指标 | — |
-| `POST /api/system/restart` | 在不移除客户端注入的情况下，开始一次考虑排空的进程重启 | 返回 202；重复调用会报告现有排空 |
-| `POST /api/stop` | 停止服务、恢复原生 Codex、移除受管 Grok 注入并排空代理 | 409 服务所有权冲突 |
+| `POST /api/system/restart` | 启动分离的标准重启 helper。它会安全停止代理、将 Codex 恢复为原生连接并保存 routing OFF，然后显式重新启动并切换为 routing ON | 202 helper spawn accepted/already accepted；helper 启动被拒绝时返回 409（当前 endpoint 保持在线且可重试） |
+| `POST /api/stop` | 将集成保存为 OFF，验证原生 Codex 路由，移除受管 Grok 注入，并排空没有 supervisor 的代理。若已安装 supervisor，必须先由委托的 CLI/托盘流程停止它 | 409 生命周期忙碌、无法安全验证原生恢复，或已安装 supervisor 占有代理 |
 
 ### Codex 身份验证委托
 

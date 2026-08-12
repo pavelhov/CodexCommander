@@ -253,8 +253,8 @@ deleting their provider.
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
 | `GET /api/system/memory` | Return scalar process, heap, stream, response-state, watchdog, and active-turn metrics | — |
-| `POST /api/system/restart` | Begin a drain-aware process restart without removing client injection | Returns 202; repeated calls report the existing drain |
-| `POST /api/stop` | Stop the service, restore native Codex, remove managed Grok injection, and drain the proxy | 409 service ownership conflict |
+| `POST /api/system/restart` | Spawn the detached canonical restart helper. It safely stops the proxy (restoring native Codex and persisting routing OFF), then explicitly starts it again (routing ON) | 202 helper spawn accepted/already accepted; 409 helper spawn refused (the current endpoint stays live and retryable) |
+| `POST /api/stop` | Persist integration OFF, prove native Codex routing, remove managed Grok injection, and drain an unsupervised proxy. An installed supervisor must be stopped first by the delegated CLI/tray flow | 409 lifecycle busy, unsafe native restore, or installed supervisor ownership |
 
 ### Codex authentication delegation
 

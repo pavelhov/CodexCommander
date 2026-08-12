@@ -8,6 +8,7 @@ import { startServer } from "../src/server";
 import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { GROK_APPLY_TERMINAL_MS, runGrokApplyFlightForTests, setGrokApplyFlightTestHooks } from "../src/server/management/agent-settings-routes";
+import type { ProxyLifecycleAuthority } from "../src/server/proxy-lifecycle-authority";
 
 // Full-suite Windows load: startServer + management flows often exceed bun's default
 // 5s per-test budget (same flake class as claude-management-api.test.ts).
@@ -55,14 +56,47 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function lifecycleAuthority(events: string[] = []): ProxyLifecycleAuthority {
+  let ensureHeld = true;
+  let startHeld = true;
+  const authority: ProxyLifecycleAuthority = {
+    deadlineAt: Number.POSITIVE_INFINITY,
+    ensure: { token: "ensure", release: () => authority.releaseAll() },
+    get start() {
+      return startHeld ? { token: "start", release: () => authority.releaseStart() } : undefined;
+    },
+    acquireStart: async () => authority.start!,
+    delegatedLease: () => ensureHeld && startHeld
+      ? { ensureToken: "ensure", startToken: "start" }
+      : undefined,
+    releaseStart: () => {
+      if (!startHeld) return;
+      startHeld = false;
+      events.push("release-S");
+    },
+    releaseAll: () => {
+      authority.releaseStart();
+      if (!ensureHeld) return;
+      ensureHeld = false;
+      events.push("release-E");
+    },
+  };
+  return authority;
+}
+
 const grokApplyResult = { ok: true, changed: false, message: "ok" };
 
 test("concurrent Grok apply requests join the live flight", async () => {
   const gate = deferred<typeof grokApplyResult>();
+  const started = deferred<void>();
   let runs = 0;
-  setGrokApplyFlightTestHooks({ run: () => { runs += 1; return gate.promise; } });
+  setGrokApplyFlightTestHooks({
+    acquireAuthority: async () => lifecycleAuthority(),
+    run: () => { runs += 1; started.resolve(); return gate.promise; },
+  });
   const first = runGrokApplyFlightForTests();
   const second = runGrokApplyFlightForTests();
+  await started.promise;
   expect(runs).toBe(1);
   expect(second).toBe(first);
   gate.resolve(grokApplyResult);
@@ -73,8 +107,14 @@ test("concurrent Grok apply requests join the live flight", async () => {
 test("stale Grok apply is busy until the terminal deadline", async () => {
   let now = 0;
   const gate = deferred<typeof grokApplyResult>();
-  setGrokApplyFlightTestHooks({ now: () => now, run: () => gate.promise });
+  const started = deferred<void>();
+  setGrokApplyFlightTestHooks({
+    now: () => now,
+    acquireAuthority: async () => lifecycleAuthority(),
+    run: () => { started.resolve(); return gate.promise; },
+  });
   const first = runGrokApplyFlightForTests();
+  await started.promise;
   now = 120_001;
   await expect(runGrokApplyFlightForTests()).rejects.toThrow("grok_apply_busy");
   gate.resolve(grokApplyResult);
@@ -84,14 +124,22 @@ test("stale Grok apply is busy until the terminal deadline", async () => {
 test("terminal Grok apply replacement cannot be clobbered by the dropped flight", async () => {
   let now = 0;
   const gates = [deferred<typeof grokApplyResult>(), deferred<typeof grokApplyResult>()];
+  const starts = [deferred<void>(), deferred<void>()];
   let runs = 0;
   setGrokApplyFlightTestHooks({
     now: () => now,
-    run: () => gates[runs++]!.promise,
+    acquireAuthority: async () => lifecycleAuthority(),
+    run: () => {
+      const index = runs++;
+      starts[index]!.resolve();
+      return gates[index]!.promise;
+    },
   });
   const old = runGrokApplyFlightForTests();
+  await starts[0]!.promise;
   now = GROK_APPLY_TERMINAL_MS + 1;
   const replacement = runGrokApplyFlightForTests();
+  await starts[1]!.promise;
   expect(runs).toBe(2);
 
   gates[0]!.resolve(grokApplyResult);

@@ -65,8 +65,9 @@ and grows as CodexCommander claims further paths at runtime — so the manifest,
 bounds uninstall. This table groups the state by purpose; it is not an exhaustive file list.
 
 `$CODEX_HOME` is a separate root with a separate owner, and CodexCommander writes there too: removing the
-CodexCommander state root does not undo those writes. Putting native Codex back is the job of
-`ccx restore`/`eject` and the injection journal, not of deleting a directory.
+CodexCommander state root does not undo those writes. Putting native Codex back is the job of the
+config-only `ccx restore`/`eject` escape, not of deleting a directory or replaying the injection
+journal.
 
 | Path | Owner | Notes |
 | --- | --- | --- |
@@ -85,7 +86,7 @@ CodexCommander state root does not undo those writes. Putting native Codex back 
 | `$CODEX_HOME/config.toml` | Codex, edited by CodexCommander | Active provider and provider table. |
 | `$CODEX_HOME/codexcommander.config.toml` | CodexCommander | Optional profile for explicit Codex opt-in. |
 | `$CODEX_HOME/codexcommander-catalog.json` | CodexCommander | Shared native+routed model catalog. |
-| `$CODEX_HOME/codexcommander-journal.json` | CodexCommander | Injection journal used by restore to strip only marker-owned values while preserving later user edits. |
+| `$CODEX_HOME/codexcommander-journal.json` | CodexCommander | Recovery authority for coordinated injection/crash recovery. The config-only native escape does not replay it; a later explicit Start/Route Back retires it only when the existing coordination and surface evidence prove it stale. |
 | `$CODEX_HOME/models_cache.json` | Codex, invalidated by CodexCommander | Cache invalidated after model/catalog changes. |
 | `$XDG_CONFIG_HOME/opencode/opencode.json[c]` | OpenCode user config, minimally edited by CodexCommander only after explicit integration Apply | OpenCode owns the file. CodexCommander edits only `provider.codexcommander`, preserves unrelated JSONC/JSON content, and never reads an OpenCode auth store. |
 | `dist/`, `gui/dist/`, `node_modules/` | generated | Build output/dependencies. |
@@ -99,7 +100,7 @@ CodexCommander state root does not undo those writes. Putting native Codex back 
 - OpenAI has one `openai` Codex-login provider with Pool(default)/Direct modes and a separate `openai-apikey`; see [`08_openai-provider-tiers.md`](08_openai-provider-tiers.md).
 - Codex `spawn_agent` visibility depends on the first five featured catalog entries.
 - The management plane (`/api/*`) and the data plane (`/v1/*`) never share an admission credential.
-- `ccx stop`, `ccx restore`, and service stop/uninstall must leave native Codex usable.
+- `ccx stop`, `ccx restore`, and service stop/uninstall must leave native Codex usable without modifying tasks, history, rollouts, or authentication.
 
 ## Writing rule
 

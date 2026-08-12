@@ -311,6 +311,44 @@ describe("codex-journal", () => {
     expect(existsSync(journalPath)).toBe(true);
   });
 
+  test("an equal-byte config replacement after recovery authorization is never restored", () => {
+    const original = 'model = "gpt-5.5"\n';
+    const injected = [
+      'model_provider = "codexcommander"',
+      "",
+      "# Auto-injected by CodexCommander",
+      "[model_providers.codexcommander]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    const configPath = join(testDir, "config.toml");
+    writeFileSync(configPath, injected, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: original,
+      injectedConfig: injected,
+      injectedProfile: null,
+    });
+
+    const r = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { reconcileJournal } = require("./src/codex/journal");
+      const configPath = path.join(process.env.CODEX_HOME, "config.toml");
+      const replacement = path.join(process.env.CODEX_HOME, "replacement-config.toml");
+      const reconciled = reconcileJournal({
+        beforeConfigMutationRevalidation: () => {
+          fs.writeFileSync(replacement, fs.readFileSync(configPath));
+          fs.renameSync(replacement, configPath);
+        },
+      });
+      console.log(JSON.stringify(reconciled));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toBe(false);
+    expect(readFileSync(configPath, "utf8")).toBe(injected);
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
   test("a profile change after recovery authorization is preserved and retains the journal", () => {
     const originalConfig = readFileSync(join(testDir, "config.toml"), "utf8");
     const originalProfile = 'model_provider = "openai"\n';
@@ -843,6 +881,513 @@ describe("codex-journal", () => {
     expect(existsSync(journalPath)).toBe(true);
   });
 
+  test("active journal classification accepts only a proven live-owner routed descendant", () => {
+    const routedConfig = [
+      'model_provider = "codexcommander"',
+      "",
+      "# Auto-injected by CodexCommander",
+      "[model_providers.codexcommander]",
+      'name = "CodexCommander Proxy"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'wire_api = "responses"',
+      "requires_openai_auth = true",
+      "",
+    ].join("\n");
+    const routedProfile = [
+      "# CodexCommander proxy fallback config (Design B)",
+      'openai_base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    writeFileSync(join(testDir, "config.toml"), routedConfig, "utf8");
+    writeFileSync(join(testDir, "codexcommander.config.toml"), routedProfile, "utf8");
+    writeRecoveryJournal(testDir, {
+      originalConfig: 'model = "gpt-5.6-sol"\n',
+      injectedConfig: routedConfig,
+      injectedProfile: routedProfile,
+      pid: process.pid,
+    });
+
+    const r = runScript(testDir, `
+      const { classifyActiveCodexRoutingJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify({
+        exact: classifyActiveCodexRoutingJournal(${process.pid}),
+        wrongOwner: classifyActiveCodexRoutingJournal(${process.pid + 1}),
+      }));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({
+      exact: { kind: "active-managed-postimage" },
+      wrongOwner: {
+        kind: "not-active-managed-postimage",
+        reason: "owner-mismatch",
+      },
+    });
+
+    const preferenceUpdatedConfig = [
+      'model_reasoning_effort = "ultra"',
+      'service_tier = "priority"',
+      routedConfig,
+    ].join("\n");
+    writeFileSync(join(testDir, "config.toml"), preferenceUpdatedConfig, "utf8");
+    const changed = runScript(testDir, `
+      const { classifyActiveCodexRoutingJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify(classifyActiveCodexRoutingJournal(${process.pid})));
+    `);
+    expect(changed.status).toBe(0);
+    expect(JSON.parse(changed.stdout)).toEqual({
+      kind: "active-managed-descendant",
+    });
+
+    const prepared = runScript(testDir, `
+      const { prepareExplicitCodexRoutingStart } = require("./src/codex/routing-transition");
+      const { existsSync } = require("node:fs");
+      const { JOURNAL_PATH } = require("./src/codex/journal");
+      const result = prepareExplicitCodexRoutingStart({
+        protectedLiveOwnerPid: ${process.pid},
+        desiredEnabled: () => true,
+        setEnabled: () => ({ ok: true, status: "unchanged", enabled: true }),
+      });
+      console.log(JSON.stringify({ result, journalPreserved: existsSync(JOURNAL_PATH) }));
+    `);
+    expect(prepared.status).toBe(0);
+    expect(JSON.parse(prepared.stdout)).toEqual({
+      result: {
+        success: true,
+        changed: false,
+        message: "Codex is already routing through this live proxy.",
+      },
+      journalPreserved: true,
+    });
+
+    writeFileSync(
+      join(testDir, "config.toml"),
+      preferenceUpdatedConfig.replace(
+        "http://127.0.0.1:10100/v1",
+        "http://127.0.0.1:10199/v1",
+      ),
+      "utf8",
+    );
+    const repointed = runScript(testDir, `
+      const { classifyActiveCodexRoutingJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify(classifyActiveCodexRoutingJournal(${process.pid})));
+    `);
+    expect(repointed.status).toBe(0);
+    expect(JSON.parse(repointed.stdout)).toEqual({
+      kind: "not-active-managed-postimage",
+      reason: "routing-mismatch",
+    });
+
+    writeFileSync(
+      join(testDir, "config.toml"),
+      preferenceUpdatedConfig.replace(
+        'name = "CodexCommander Proxy"',
+        'name = "Unverified Proxy"',
+      ),
+      "utf8",
+    );
+    const unsafe = runScript(testDir, `
+      const { classifyActiveCodexRoutingJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify(classifyActiveCodexRoutingJournal(${process.pid})));
+    `);
+    expect(unsafe.status).toBe(0);
+    expect(JSON.parse(unsafe.stdout)).toEqual({
+      kind: "not-active-managed-postimage",
+      reason: "routing-mismatch",
+    });
+  });
+
+  test("explicit native escape retires a matching live journal and preserves inert generated artifacts", () => {
+    const nativeConfig = 'model = "gpt-5.5"\n';
+    const generatedProfile = [
+      "# CodexCommander proxy fallback config (Design B)",
+      'openai_base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    const routedCatalog = JSON.stringify({
+      models: [{ slug: "fixture/model", description: "Routed via CodexCommander → fixture." }],
+    }) + "\n";
+    writeFileSync(join(testDir, "config.toml"), nativeConfig, "utf8");
+    writeFileSync(join(testDir, "codexcommander.config.toml"), generatedProfile, "utf8");
+    writeFileSync(join(testDir, "codexcommander-catalog.json"), routedCatalog, "utf8");
+    writeFileSync(join(testDir, "models_cache.json"), routedCatalog, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: 'model = "gpt-5.4"\n',
+      injectedConfig: "old routed config",
+      injectedProfile: generatedProfile,
+      pid: process.pid,
+    });
+
+    const r = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { getDefaultConfig, saveConfig } = require("./src/config");
+      const { retireJournalAfterExplicitNativeEscape } = require("./src/codex/journal");
+      saveConfig({ ...getDefaultConfig(), clientIntegrations: { codex: false } });
+      const journalPath = path.join(process.env.CODEX_HOME, "codexcommander-journal.json");
+      const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
+      journal.pid = process.pid;
+      fs.writeFileSync(journalPath, JSON.stringify(journal), "utf8");
+      console.log(JSON.stringify({
+        retired: retireJournalAfterExplicitNativeEscape({ kind: "protected-live", pid: process.pid }),
+      }));
+    `);
+
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ retired: true });
+    expect(existsSync(journalPath)).toBe(false);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(nativeConfig);
+    expect(readFileSync(join(testDir, "codexcommander.config.toml"), "utf8")).toBe(generatedProfile);
+    expect(readFileSync(join(testDir, "codexcommander-catalog.json"), "utf8")).toBe(routedCatalog);
+    expect(readFileSync(join(testDir, "models_cache.json"), "utf8")).toBe(routedCatalog);
+  });
+
+  test("explicit native escape bootstraps missing coordinator authority", () => {
+    const nativeConfig = 'model = "gpt-5.6-sol"\n';
+    writeFileSync(join(testDir, "config.toml"), nativeConfig, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: 'model = "gpt-5.5"\n',
+      injectedConfig: "old routed config",
+      injectedProfile: null,
+      pid: process.pid,
+    });
+    removeCoordinator(testDir);
+    expect(existsSync(coordinatorPath(testDir))).toBe(false);
+
+    const r = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { getDefaultConfig, saveConfig } = require("./src/config");
+      const { retireJournalAfterExplicitNativeEscape } = require("./src/codex/journal");
+      saveConfig({ ...getDefaultConfig(), clientIntegrations: { codex: false } });
+      const journalPath = path.join(process.env.CODEX_HOME, "codexcommander-journal.json");
+      const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
+      journal.pid = process.pid;
+      fs.writeFileSync(journalPath, JSON.stringify(journal), "utf8");
+      console.log(JSON.stringify({
+        retired: retireJournalAfterExplicitNativeEscape({ kind: "protected-live", pid: process.pid }),
+      }));
+    `);
+
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ retired: true });
+    expect(existsSync(journalPath)).toBe(false);
+    expect(existsSync(coordinatorPath(testDir))).toBe(true);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(nativeConfig);
+  });
+
+  test("explicit native escape accepts a proven-dead journal despite inert generated artifacts", () => {
+    const nativeConfig = 'model = "gpt-5.5"\n';
+    const generatedProfile = "# CodexCommander proxy fallback config (Design B)\nopenai_base_url = \"http://127.0.0.1:10100/v1\"\n";
+    const routedCatalog = '{"models":[{"slug":"fixture/model","description":"Routed via CodexCommander → fixture."}]}\n';
+    writeFileSync(join(testDir, "config.toml"), nativeConfig, "utf8");
+    writeFileSync(join(testDir, "codexcommander.config.toml"), generatedProfile, "utf8");
+    writeFileSync(join(testDir, "codexcommander-catalog.json"), routedCatalog, "utf8");
+    writeFileSync(join(testDir, "models_cache.json"), routedCatalog, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: 'model = "gpt-5.4"\n',
+      injectedConfig: "old routed config",
+      injectedProfile: generatedProfile,
+    });
+
+    const r = runScript(testDir, `
+      const { getDefaultConfig, saveConfig } = require("./src/config");
+      const { retireJournalAfterExplicitNativeEscape } = require("./src/codex/journal");
+      saveConfig({ ...getDefaultConfig(), clientIntegrations: { codex: false } });
+      console.log(JSON.stringify({
+        retired: retireJournalAfterExplicitNativeEscape({ kind: "dead" }),
+      }));
+    `);
+
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ retired: true });
+    expect(existsSync(journalPath)).toBe(false);
+    expect(readFileSync(join(testDir, "codexcommander.config.toml"), "utf8")).toBe(generatedProfile);
+    expect(readFileSync(join(testDir, "codexcommander-catalog.json"), "utf8")).toBe(routedCatalog);
+    expect(readFileSync(join(testDir, "models_cache.json"), "utf8")).toBe(routedCatalog);
+  });
+
+  test("explicit native escape retirement retains authority on wrong live PID or missing OFF intent", () => {
+    for (const refusal of ["wrong-pid", "intent-on"] as const) {
+      writeFileSync(join(testDir, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+      const journalPath = writeRecoveryJournal(testDir, {
+        originalConfig: 'model = "gpt-5.4"\n',
+        injectedConfig: "old routed config",
+        injectedProfile: null,
+        pid: process.pid,
+        timestamp: `2026-08-10T18:00:0${refusal === "wrong-pid" ? "0" : "1"}.000Z`,
+      });
+      const r = runScript(testDir, `
+        const fs = require("node:fs");
+        const path = require("node:path");
+        const { getDefaultConfig, saveConfig } = require("./src/config");
+        const { retireJournalAfterExplicitNativeEscape } = require("./src/codex/journal");
+        saveConfig(${refusal === "wrong-pid"
+          ? '{ ...getDefaultConfig(), clientIntegrations: { codex: false } }'
+          : "getDefaultConfig()"});
+        const journalPath = path.join(process.env.CODEX_HOME, "codexcommander-journal.json");
+        const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
+        journal.pid = process.pid;
+        fs.writeFileSync(journalPath, JSON.stringify(journal), "utf8");
+        console.log(JSON.stringify({ retired: retireJournalAfterExplicitNativeEscape({
+          kind: "protected-live",
+          pid: process.pid${refusal === "wrong-pid" ? " + 1" : ""},
+        }) }));
+      `);
+      expect(r.status).toBe(0);
+      expect(JSON.parse(r.stdout)).toEqual({ retired: false });
+      expect(existsSync(journalPath)).toBe(true);
+      rmSync(journalPath, { force: true });
+      removeCoordinator(testDir);
+    }
+  });
+
+  test("explicit native escape retirement retains the journal when config changes at the CAS seam", () => {
+    const nativeConfig = 'model = "gpt-5.5"\n';
+    const changedConfig = 'model = "gpt-5.6-sol"\n';
+    writeFileSync(join(testDir, "config.toml"), nativeConfig, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: 'model = "gpt-5.4"\n',
+      injectedConfig: "old routed config",
+      injectedProfile: null,
+    });
+    const r = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { getDefaultConfig, saveConfig } = require("./src/config");
+      const { retireJournalAfterExplicitNativeEscape } = require("./src/codex/journal");
+      saveConfig({ ...getDefaultConfig(), clientIntegrations: { codex: false } });
+      const configPath = path.join(process.env.CODEX_HOME, "config.toml");
+      console.log(JSON.stringify({ retired: retireJournalAfterExplicitNativeEscape(
+        { kind: "dead" },
+        { beforeRetireRevalidation: () => fs.writeFileSync(configPath, ${JSON.stringify(changedConfig)}, "utf8") },
+      ) }));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ retired: false });
+    expect(existsSync(journalPath)).toBe(true);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(changedConfig);
+  });
+
+  test("explicit native escape retirement rejects an equal-byte config replacement", () => {
+    const nativeConfig = 'model = "gpt-5.5"\n';
+    const configPath = join(testDir, "config.toml");
+    writeFileSync(configPath, nativeConfig, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: 'model = "gpt-5.4"\n',
+      injectedConfig: "old routed config",
+      injectedProfile: null,
+    });
+    const r = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { getDefaultConfig, saveConfig } = require("./src/config");
+      const { retireJournalAfterExplicitNativeEscape } = require("./src/codex/journal");
+      saveConfig({ ...getDefaultConfig(), clientIntegrations: { codex: false } });
+      const configPath = path.join(process.env.CODEX_HOME, "config.toml");
+      const replacement = path.join(process.env.CODEX_HOME, "replacement-config.toml");
+      const retired = retireJournalAfterExplicitNativeEscape({ kind: "dead" }, {
+        beforeRetireRevalidation: () => {
+          fs.writeFileSync(replacement, fs.readFileSync(configPath));
+          fs.renameSync(replacement, configPath);
+        },
+      });
+      console.log(JSON.stringify({ retired }));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ retired: false });
+    expect(readFileSync(configPath, "utf8")).toBe(nativeConfig);
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
+  test("explicit native escape retirement rejects an equal-byte config symlink retarget", () => {
+    if (process.platform === "win32") return;
+    const nativeConfig = 'model = "gpt-5.5"\n';
+    const configPath = join(testDir, "config.toml");
+    const first = join(testDir, "native-first.toml");
+    const second = join(testDir, "native-second.toml");
+    renameSync(configPath, first);
+    writeFileSync(first, nativeConfig, "utf8");
+    writeFileSync(second, nativeConfig, "utf8");
+    symlinkSync(first, configPath, "file");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: 'model = "gpt-5.4"\n',
+      injectedConfig: "old routed config",
+      injectedProfile: null,
+    });
+    const r = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { getDefaultConfig, saveConfig } = require("./src/config");
+      const { retireJournalAfterExplicitNativeEscape } = require("./src/codex/journal");
+      saveConfig({ ...getDefaultConfig(), clientIntegrations: { codex: false } });
+      const configPath = path.join(process.env.CODEX_HOME, "config.toml");
+      const retired = retireJournalAfterExplicitNativeEscape({ kind: "dead" }, {
+        beforeRetireRevalidation: () => {
+          fs.unlinkSync(configPath);
+          fs.symlinkSync(${JSON.stringify(second)}, configPath, "file");
+        },
+      });
+      console.log(JSON.stringify({ retired }));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ retired: false });
+    expect(readFileSync(first, "utf8")).toBe(nativeConfig);
+    expect(readFileSync(second, "utf8")).toBe(nativeConfig);
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
+  test("explicit native escape retirement rejects routed config without restoring preimages", () => {
+    const routed = '# Auto-injected by CodexCommander\nopenai_base_url = "http://127.0.0.1:10100/v1"\n';
+    writeFileSync(join(testDir, "config.toml"), routed, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: 'model = "gpt-5.4"\n',
+      injectedConfig: routed,
+      injectedProfile: null,
+    });
+    const r = runScript(testDir, `
+      const { getDefaultConfig, saveConfig } = require("./src/config");
+      const { retireJournalAfterExplicitNativeEscape } = require("./src/codex/journal");
+      saveConfig({ ...getDefaultConfig(), clientIntegrations: { codex: false } });
+      console.log(JSON.stringify({ retired: retireJournalAfterExplicitNativeEscape({ kind: "dead" }) }));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ retired: false });
+    expect(existsSync(journalPath)).toBe(true);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(routed);
+  });
+
+  test("explicit native escape retirement preserves an active external config and inert CCX artifacts", () => {
+    const external = [
+      'profile = "work"',
+      "# Auto-injected by CodexCommander",
+      "[model_providers.codexcommander]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'wire_api = "responses"',
+      "",
+      "[model_providers.custom]",
+      'base_url = "https://external.example/v1"',
+      'wire_api = "responses"',
+      "",
+      "[profiles.work]",
+      'model_provider = "custom"',
+      "",
+    ].join("\n");
+    writeFileSync(join(testDir, "config.toml"), external, "utf8");
+    writeFileSync(join(testDir, "codexcommander.config.toml"), "# CodexCommander proxy fallback config (Design B)\nopenai_base_url = \"http://127.0.0.1:10100/v1\"\n", "utf8");
+    writeFileSync(join(testDir, "codexcommander-catalog.json"), '{"models":[{"slug":"fixture/model","description":"Routed via CodexCommander → fixture."}]}\n', "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: 'model_provider = "openai"\n',
+      injectedConfig: "old routed config",
+      injectedProfile: null,
+    });
+    const r = runScript(testDir, `
+      const { getDefaultConfig, saveConfig } = require("./src/config");
+      const { retireJournalAfterExplicitNativeEscape } = require("./src/codex/journal");
+      saveConfig({ ...getDefaultConfig(), clientIntegrations: { codex: false } });
+      console.log(JSON.stringify({ retired: retireJournalAfterExplicitNativeEscape({ kind: "dead" }) }));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ retired: true });
+    expect(existsSync(journalPath)).toBe(false);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(external);
+  });
+
+  test("explicit native escape retirement retains a concurrently replaced journal", () => {
+    writeFileSync(join(testDir, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: 'model = "gpt-5.4"\n',
+      injectedConfig: "old routed config",
+      injectedProfile: null,
+    });
+    const replacementTimestamp = "2026-08-10T19:00:00.000Z";
+    const r = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { getDefaultConfig, saveConfig } = require("./src/config");
+      const { retireJournalAfterExplicitNativeEscape } = require("./src/codex/journal");
+      saveConfig({ ...getDefaultConfig(), clientIntegrations: { codex: false } });
+      const journalPath = path.join(process.env.CODEX_HOME, "codexcommander-journal.json");
+      const replacementPath = path.join(process.env.CODEX_HOME, "replacement-journal.json");
+      const replacement = {
+        version: 1,
+        originalConfig: Buffer.from('model = "replacement"\\n').toString("base64"),
+        originalProfile: null,
+        injectedConfigHash: "replacement-config",
+        injectedProfileHash: null,
+        pid: 999998,
+        timestamp: ${JSON.stringify(replacementTimestamp)},
+      };
+      const retired = retireJournalAfterExplicitNativeEscape({ kind: "dead" }, {
+        beforeRetireRevalidation: () => {
+          fs.writeFileSync(replacementPath, JSON.stringify(replacement), "utf8");
+          fs.renameSync(replacementPath, journalPath);
+        },
+      });
+      console.log(JSON.stringify({ retired, journal: JSON.parse(fs.readFileSync(journalPath, "utf8")) }));
+    `);
+    expect(r.status).toBe(0);
+    const result = JSON.parse(r.stdout);
+    expect(result.retired).toBe(false);
+    expect(result.journal.timestamp).toBe(replacementTimestamp);
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
+  test("explicit native escape retirement refuses unresolved config atomic-write residue", () => {
+    writeFileSync(join(testDir, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: 'model = "gpt-5.4"\n',
+      injectedConfig: "old routed config",
+      injectedProfile: null,
+    });
+    writeFileSync(join(testDir, "config.toml.ccx.42.1.tmp"), "replacement in flight", "utf8");
+    const r = runScript(testDir, `
+      const { getDefaultConfig, saveConfig } = require("./src/config");
+      const { retireJournalAfterExplicitNativeEscape } = require("./src/codex/journal");
+      saveConfig({ ...getDefaultConfig(), clientIntegrations: { codex: false } });
+      console.log(JSON.stringify({ retired: retireJournalAfterExplicitNativeEscape({ kind: "dead" }) }));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ retired: false });
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
+  test("external-provider retirement commits on a clean config-only surface", () => {
+    const externalConfig = 'model_provider = "custom"\nmodel = "third-party"\n';
+    writeFileSync(join(testDir, "config.toml"), externalConfig, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: 'model_provider = "openai"\n',
+      injectedConfig: "old injected config",
+      injectedProfile: null,
+      pid: process.pid,
+    });
+    for (const absentPath of [
+      "codexcommander.config.toml",
+      "codexcommander-catalog.json",
+      "models_cache.json",
+      "config.toml.ccx.42.1.tmp",
+    ]) {
+      expect(existsSync(join(testDir, absentPath))).toBe(false);
+    }
+
+    const r = runScript(testDir, `
+      const { retireJournalForExternalProvider } = require("./src/codex/journal");
+      const { readCodexTransitionState } = require("./src/codex/transition-state");
+      const retired = retireJournalForExternalProvider("custom");
+      console.log(JSON.stringify({ retired, coordinator: readCodexTransitionState() }));
+    `);
+
+    expect(r.status).toBe(0);
+    const result = JSON.parse(r.stdout);
+    expect(result).toMatchObject({
+      retired: true,
+      coordinator: { kind: "ready", state: { nativeGeneration: 1 } },
+    });
+    expect(typeof result.coordinator.state.currentTxId).toBe("string");
+    expect(result.coordinator.state.currentTxId.length).toBeGreaterThan(0);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(externalConfig);
+    expect(existsSync(journalPath)).toBe(false);
+  });
+
   test("external-provider retirement never unlinks a concurrently replaced journal", () => {
     const externalConfig = 'model_provider = "custom"\nmodel = "third-party"\n';
     writeFileSync(join(testDir, "config.toml"), externalConfig, "utf8");
@@ -880,6 +1425,97 @@ describe("codex-journal", () => {
     const result = JSON.parse(r.stdout);
     expect(result.retired).toBe(false);
     expect(result.journal.timestamp).toBe(replacementTimestamp);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(externalConfig);
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
+  test("external-provider retirement rejects an equal-byte config replacement", () => {
+    const externalConfig = 'model_provider = "custom"\nmodel = "third-party"\n';
+    const configPath = join(testDir, "config.toml");
+    writeFileSync(configPath, externalConfig, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: 'model_provider = "openai"\n',
+      injectedConfig: "old injected config",
+      injectedProfile: null,
+      pid: process.pid,
+    });
+    const r = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { retireJournalForExternalProvider } = require("./src/codex/journal");
+      const configPath = path.join(process.env.CODEX_HOME, "config.toml");
+      const replacement = path.join(process.env.CODEX_HOME, "replacement-config.toml");
+      const retired = retireJournalForExternalProvider("custom", {
+        beforeRetireRevalidation: () => {
+          fs.writeFileSync(replacement, fs.readFileSync(configPath));
+          fs.renameSync(replacement, configPath);
+        },
+      });
+      console.log(JSON.stringify({ retired }));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ retired: false });
+    expect(readFileSync(configPath, "utf8")).toBe(externalConfig);
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
+  test("external-provider retirement rejects a multiline-string decoy on revalidation", () => {
+    const externalConfig = 'model_provider = "custom"\nmodel = "third-party"\n';
+    const decoyConfig = 'note = """\nmodel_provider = "custom"\n"""\n';
+    writeFileSync(join(testDir, "config.toml"), externalConfig, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: 'model_provider = "openai"\n',
+      injectedConfig: "old injected config",
+      injectedProfile: null,
+      pid: process.pid,
+    });
+    const r = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { retireJournalForExternalProvider } = require("./src/codex/journal");
+      const configPath = path.join(process.env.CODEX_HOME, "config.toml");
+      const retired = retireJournalForExternalProvider("custom", {
+        beforeRetireRevalidation: () => fs.writeFileSync(configPath, ${JSON.stringify(decoyConfig)}, "utf8"),
+      });
+      console.log(JSON.stringify({ retired }));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ retired: false });
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(decoyConfig);
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
+  test("external-provider retirement refuses inactive CCX residue before unlinking journal", () => {
+    const externalConfig = [
+      'profile = "work"',
+      "# Auto-injected by CodexCommander",
+      "[model_providers.codexcommander]",
+      'name = "CodexCommander Proxy"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'wire_api = "responses"',
+      "requires_openai_auth = true",
+      "",
+      "[model_providers.custom]",
+      'base_url = "https://external.example/v1"',
+      'wire_api = "responses"',
+      "",
+      "[profiles.work]",
+      'model_provider = "custom"',
+      "",
+    ].join("\n");
+    writeFileSync(join(testDir, "config.toml"), externalConfig, "utf8");
+    const journalPath = writeRecoveryJournal(testDir, {
+      originalConfig: 'model_provider = "openai"\n',
+      injectedConfig: "old injected config",
+      injectedProfile: null,
+      pid: process.pid,
+    });
+    const r = runScript(testDir, `
+      const { retireJournalForExternalProvider } = require("./src/codex/journal");
+      console.log(JSON.stringify({ retired: retireJournalForExternalProvider("custom") }));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ retired: false });
     expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(externalConfig);
     expect(existsSync(journalPath)).toBe(true);
   });

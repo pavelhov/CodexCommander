@@ -41,6 +41,7 @@ import {
   type LiveProxy,
   type ManagementAttestationIo,
 } from "../server/proxy-liveness";
+import { PROXY_DELEGATED_START_ENV } from "../server/proxy-lifecycle-protocol";
 import type { CodexCommanderConfig } from "../types";
 import { ensureProxyLifecycle } from "./proxy-lifecycle";
 import { API_KEY_HEADER, readEnv } from "../identity";
@@ -400,7 +401,7 @@ export function opencodeProxyStartEnv(base: OpencodeLaunchEnv = process.env): Op
   const withTokenFile = readEnv("CODEXCOMMANDER_API_AUTH_TOKEN", base as NodeJS.ProcessEnv)
     ? base
     : serviceTokenLookupEnv(base);
-  return { ...withTokenFile, CCX_SERVICE: "1" };
+  return { ...withTokenFile, [PROXY_DELEGATED_START_ENV]: "1" };
 }
 
 /**

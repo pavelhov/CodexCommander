@@ -17,7 +17,7 @@ ccx init
 2. **API key** — 粘贴一个 key，或引用一个环境变量，例如 `${ANTHROPIC_API_KEY}`。
 3. **默认模型** — 对于 key、本地和 custom provider，接受预设值或输入模型 id。
 4. **代理端口** — 默认为 `10100`。
-5. **注入到 Codex？** — 在常规 loopback 配置下，CodexCommander 会在 `$CODEX_HOME/config.toml`（默认 `~/.codex/config.toml`）根级添加 `openai_base_url`，让 Codex 内置的 `openai` provider 指向代理。远程/LAN 绑定则改用带 API 认证 header 的专用 provider 条目。
+5. **现在让 Codex 经由运行中的代理路由？** — 只有当当前 home 的受保护 runtime 记录能够证明代理已经运行时，向导才会同步模型并把 Codex 指向它。否则 Codex 保持原生状态，下一步显式执行的 `ccx start` 会启动代理并切换路由。
 6. **安装自启动 shim？** — 启用后，启动 `codex` 会先运行 `ccx ensure`。
 
 结果会保存到 `$CODEXCOMMANDER_HOME/config.json`（默认 `~/.codexcommander/config.json`）。

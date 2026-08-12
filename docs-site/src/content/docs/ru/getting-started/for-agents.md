@@ -37,10 +37,12 @@ bun run src/cli/index.ts init
 
 Далее любую команду `ccx <args>` в этом checkout можно выполнить как `bun run src/cli/index.ts <args>`.
 
-Мастер записывает `$CODEXCOMMANDER_HOME/config.json` (обычно `~/.codexcommander/config.json`). Он также может
-вставить адрес прокси в `config.toml` Codex и установить необязательный shim автозапуска Codex.
-`ccx init` никогда не запускает прокси. Для полностью неинтерактивной настройки вместо мастера
-настройте провайдеров через `ccx provider add`, как показано ниже.
+Мастер записывает `$CODEXCOMMANDER_HOME/config.json` (обычно `~/.codexcommander/config.json`). Он может
+направить Codex только через уже запущенный прокси, подтверждённый защищённой runtime-записью текущего
+home, и установить необязательный shim автозапуска Codex. `ccx init` не запускает прокси и не пишет
+маршрут к неподтверждённому listener; без подтверждённого прокси Codex остаётся native до `ccx start`.
+Для полностью неинтерактивной настройки вместо мастера настройте провайдеров через `ccx provider add`,
+как показано ниже.
 
 ## Проверьте headless-установку
 

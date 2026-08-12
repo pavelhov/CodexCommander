@@ -16,6 +16,7 @@ import {
 } from "../src/server/management/catalog-activation-routes";
 import { handleAgentSettingsRoutes } from "../src/server/management/agent-settings-routes";
 import type { ManagementContext } from "../src/server/management/context";
+import type { ProxyLifecycleAuthority } from "../src/server/proxy-lifecycle-authority";
 import type { CodexCommanderConfig } from "../src/types";
 
 let previousCodexHome: string | undefined;
@@ -64,6 +65,21 @@ function desiredSnapshot(
     config: cfg,
     authority,
     revision: codexCatalogDesiredRevision(cfg, authority),
+  };
+}
+
+function noopLifecycleAuthority(): ProxyLifecycleAuthority {
+  let released = false;
+  return {
+    deadlineAt: Number.POSITIVE_INFINITY,
+    ensure: { token: "ensure", release: () => {} },
+    start: { token: "start", release: () => {} },
+    acquireStart: async () => ({ token: "start", release: () => {} }),
+    delegatedLease: () => released
+      ? undefined
+      : { ensureToken: "ensure", startToken: "start" },
+    releaseStart: () => {},
+    releaseAll: () => { released = true; },
   };
 }
 
@@ -286,6 +302,9 @@ function routeContext(options: {
     config: cfg,
     principal: options.principal,
     deps: {
+      proxyStopLifecycle: {
+        acquireAuthority: async () => noopLifecycleAuthority(),
+      },
       collectCodexAppServerCatalogState: () => workerStatus,
       resetCodexAppServerCatalogStateCache: () => {},
       loadConfigForCatalogActivation: () => cfg,
@@ -353,6 +372,134 @@ describe("catalog activation management routes", () => {
       }));
       expect(response?.status).toBe(403);
     }
+  });
+
+  test("POST waits behind Stop's lifecycle authority and releases S then E after Apply", async () => {
+    const cfg = config({ multiAgentMode: "v2" });
+    const calls: string[] = [];
+    let admitApply!: (authority: ProxyLifecycleAuthority) => void;
+    let acquisitionRequested!: () => void;
+    const requested = new Promise<void>(resolve => { acquisitionRequested = resolve; });
+    const admission = new Promise<ProxyLifecycleAuthority>(resolve => { admitApply = resolve; });
+    let startHeld = true;
+    let ensureHeld = true;
+    const authority: ProxyLifecycleAuthority = {
+      deadlineAt: Number.POSITIVE_INFINITY,
+      ensure: { token: "ensure", release: () => authority.releaseAll() },
+      get start() {
+        return startHeld ? { token: "start", release: () => authority.releaseStart() } : undefined;
+      },
+      acquireStart: async () => authority.start!,
+      delegatedLease: () => ensureHeld && startHeld
+        ? { ensureToken: "ensure", startToken: "start" }
+        : undefined,
+      releaseStart: () => {
+        if (!startHeld) return;
+        startHeld = false;
+        calls.push("release-S");
+      },
+      releaseAll: () => {
+        authority.releaseStart();
+        if (!ensureHeld) return;
+        ensureHeld = false;
+        calls.push("release-E");
+      },
+    };
+    const ctx = routeContext({
+      method: "POST",
+      path: "/api/codex-catalog/apply",
+      principal: "confirmed-gui-session",
+      cfg,
+      body: { expectedDesiredRevision: codexCatalogDesiredRevision(cfg), confirmInterrupt: true },
+      sync: async () => {
+        calls.push("sync");
+        return {
+          status: "applied",
+          ok: true,
+          added: 0,
+          catalogPath: join(codexHome, "codexcommander-catalog.json"),
+          catalogExists: true,
+          catalogWritten: false,
+          cacheSynced: false,
+          catalogQuality: "live",
+          rehydrated: 0,
+          message: "synchronized",
+        };
+      },
+      apply: async () => {
+        calls.push("apply-workers");
+        return { outcome: "applied", staleWorkerCount: 1, stoppedWorkerCount: 1, survivingWorkerCount: 0 };
+      },
+    });
+    ctx.deps.proxyStopLifecycle = {
+      acquireAuthority: async options => {
+        expect(options).toEqual({ includeStart: true });
+        calls.push("apply-waits-for-authority");
+        acquisitionRequested();
+        return admission;
+      },
+    };
+
+    calls.push("stop-holds-authority");
+    const pending = handleCatalogActivationRoutes(ctx);
+    await requested;
+    expect(calls).toEqual(["stop-holds-authority", "apply-waits-for-authority"]);
+
+    calls.push("stop-releases-authority");
+    admitApply(authority);
+    const response = await pending;
+
+    expect(response?.status).toBe(200);
+    expect(calls).toEqual([
+      "stop-holds-authority",
+      "apply-waits-for-authority",
+      "stop-releases-authority",
+      "sync",
+      "apply-workers",
+      "release-S",
+      "release-E",
+    ]);
+  });
+
+  test("POST lifecycle acquisition refusal is retryable and makes zero mutations", async () => {
+    const cfg = config({ multiAgentMode: "v2" });
+    const calls: string[] = [];
+    const ctx = routeContext({
+      method: "POST",
+      path: "/api/codex-catalog/apply",
+      principal: "confirmed-gui-session",
+      cfg,
+      body: { expectedDesiredRevision: codexCatalogDesiredRevision(cfg), confirmInterrupt: true },
+      sync: async () => {
+        calls.push("sync");
+        throw new Error("must not sync without lifecycle authority");
+      },
+      apply: async () => {
+        calls.push("apply-workers");
+        throw new Error("must not signal without lifecycle authority");
+      },
+    });
+    ctx.deps.captureCatalogDesiredSnapshotForActivation = () => {
+      calls.push("capture-desired");
+      return desiredSnapshot(cfg, 1);
+    };
+    ctx.deps.proxyStopLifecycle = {
+      acquireAuthority: async options => {
+        calls.push(`acquire:${String(options?.includeStart)}`);
+        throw new Error("Stop holds lifecycle authority with private lock details");
+      },
+    };
+
+    const response = await handleCatalogActivationRoutes(ctx);
+
+    expect(response?.status).toBe(409);
+    expect(response?.headers.get("retry-after")).toBe("1");
+    expect(response?.headers.get("cache-control")).toBe("no-store");
+    expect(await response?.json()).toEqual({
+      error: "Proxy lifecycle is busy; no Codex catalog or routing changes were made.",
+      retryable: true,
+    });
+    expect(calls).toEqual(["acquire:true"]);
   });
 
   test("POST converges, revalidates, and returns only count-level process results", async () => {

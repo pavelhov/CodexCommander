@@ -51,12 +51,12 @@ runtime the leak itself remains an upstream problem:
   that store. The values are scalar-only — no request bodies, tokens, paths, or
   account identifiers — and the read is side-effect free (it never prunes or
   evicts). The dashboard's **Memory observability** card renders the
-  same fields and offers a confirm-gated **Drain & restart** action: it shows
-  the current active-turn count, waits up to 60s for active turns (reusing
-  the existing 503 + `Retry-After` drain), then aborts any remaining turns and
-  restarts the proxy via `ccx start` on the live port (or a failure-only
-  service supervisor respawn) without tearing down Codex injection. That is a
-  longer, informed recycle than the short drain on `POST /api/stop`.
+  same fields and offers a confirm-gated **Restart proxy** action. It warns that
+  current turns may be interrupted, then spawns the same detached canonical
+  helper used by the tray. The helper performs safe Stop (restore native Codex
+  and persist routing OFF before proxy termination), followed by explicit Start
+  (routing ON). If Stop refuses, the current proxy remains live; if Start fails
+  after Stop, Codex stays native instead of pointing at a dead proxy.
 - **A gated alternative stream path** — a bounded single-reader relay that
   removes the tee + JavaScript rewrite chain. Windows rewrite traffic already
   uses it; ordinary Windows traffic remains runtime-gated. On macOS, `auto`

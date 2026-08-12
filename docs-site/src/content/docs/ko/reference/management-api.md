@@ -184,8 +184,8 @@ Authorization: Bearer <admin-token>
 | Method and path | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET /api/system/memory` | 프로세스, heap, stream, response-state, watchdog, active-turn의 스칼라 메트릭을 반환합니다 | — |
-| `POST /api/system/restart` | 클라이언트 injection을 제거하지 않고 drain-aware 프로세스 재시작을 시작합니다 | 202 반환; 반복 호출은 기존 drain을 보고합니다 |
-| `POST /api/stop` | 서비스를 중지하고, native Codex를 복원하며, 관리형 Grok injection을 제거하고, 프록시를 drain합니다 | 409 서비스 소유권 충돌 |
+| `POST /api/system/restart` | 분리된 정식 재시작 helper를 실행합니다. 프록시를 안전하게 중지해 Codex를 기본 연결로 복원하고 routing OFF를 저장한 다음, 명시적으로 다시 시작해 routing ON으로 전환합니다 | 202 helper spawn accepted/already accepted; helper spawn 거부 시 409(현재 endpoint는 계속 실행되며 재시도 가능) |
+| `POST /api/stop` | 연동을 OFF로 저장하고 native Codex 라우팅을 검증하며, 관리형 Grok injection을 제거한 뒤 supervisor가 없는 프록시를 drain합니다. 설치된 supervisor는 위임된 CLI/트레이 흐름이 먼저 중지해야 합니다 | 409 lifecycle busy, 안전한 native restore 불가 또는 설치된 supervisor 소유권 |
 
 ### Codex 인증 위임
 

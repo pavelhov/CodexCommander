@@ -40,6 +40,37 @@ export function markStartupHealthDiagnosticStale(value: StartupHealth): StartupH
   };
 }
 
+/**
+ * Keep the cheap routing observation fresh without rerunning service/shim probes.
+ * Cached startup diagnostics remain authoritative for their own fields; only values
+ * derived from the routing document are recomputed here. This keeps ordinary polling
+ * current after a route switch without adding another high-frequency API request.
+ */
+export function reconcileStartupHealthRouting(
+  value: StartupHealth,
+  routingKind = getCodexRoutingKind(),
+): StartupHealth {
+  if (value.routingKind === routingKind) return value;
+  const refreshed = deriveStartupHealth({
+    routingKind,
+    autostartEnabled: value.autostartEnabled,
+    serviceInstalled: value.serviceInstalled,
+    serviceViable: value.serviceViable,
+    serviceEnabled: value.serviceEnabled,
+    serviceRunning: value.serviceRunning,
+    serviceStale: value.serviceStale,
+    serviceConflict: value.serviceConflict,
+    serviceSupported: value.serviceSupported,
+    shimInstalled: value.shimInstalled,
+    shimHealthy: value.shimHealthy,
+    platform: value.platform,
+    diagnosticStale: value.diagnosticStale,
+  });
+  return value.diagnosticStale
+    ? markStartupHealthDiagnosticStale(refreshed)
+    : refreshed;
+}
+
 function conservativeFallback(config: Pick<CodexCommanderConfig, "codexAutoStart">): StartupHealth {
   const shim = diagnoseCodexShim();
   return deriveStartupHealth({
@@ -113,9 +144,14 @@ function refreshInBackground(config: Pick<CodexCommanderConfig, "codexAutoStart"
 
 /** Stale-while-revalidate: service-manager probes never hold open a model/UI request. */
 export async function getCachedStartupHealth(config: Pick<CodexCommanderConfig, "codexAutoStart">): Promise<StartupHealth> {
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) return cached.value;
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    return reconcileStartupHealthRouting(cached.value);
+  }
   refreshInBackground(config);
-  return cached ? markStartupHealthDiagnosticStale(cached.value) : conservativeFallback(config);
+  const available = cached
+    ? markStartupHealthDiagnosticStale(cached.value)
+    : conservativeFallback(config);
+  return reconcileStartupHealthRouting(available);
 }
 
 export function invalidateStartupHealthCache(): void {

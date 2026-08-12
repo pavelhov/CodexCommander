@@ -107,7 +107,7 @@ this document owns is which module holds which area and what invariant that area
 | Endpoint area | Responsibility |
 | --- | --- |
 | Config/settings | Read safe config/settings views; mutate supported settings only. Full `PUT /api/config` is disabled so masked secrets are not round-tripped. `PUT /api/settings` accepts `codexAutoStart`, `streamMode`, and/or integer `appOwnedMemoryBudgetMb` (64..4096; each optional, at least one required). Budget changes synchronously enforce the process-wide evictable retained-state cap; this is separate from RSS/native memory. `streamMode` persists the #314 stream-shape selection in config.json (Windows services need persisted input; on macOS `auto` admits only the validated plaintext-V2 rewrite, `eager-relay` opts other eligible SSE turns in, and `safe-tee` is the rollback pin). |
-| Startup safety | `GET /api/startup-health` reports whether injected Codex routing is restart-safe, with secret-free service/shim diagnostics. `POST /api/startup-action` provides allowlisted one-click installation for the background service or launcher shim. On Windows a healthy script shim is CLI-only; Codex Desktop requires the background service for full protection. |
+| Startup safety | `GET /api/startup-health` reports whether injected Codex routing is restart-safe, with secret-free service/shim diagnostics. Its cached service/shim observation is composed with a fresh routing-document classification on every response. Authenticated `GET /api/codex-routing` is the smaller uncached route-confirmation DTO used by the native companion after an explicit switch. `POST /api/startup-action` provides allowlisted one-click installation for the background service or launcher shim. On Windows a healthy script shim is CLI-only; Codex Desktop requires the background service for full protection. |
 | Windows tray | `GET/POST /api/windows-tray` controls an owned, per-user HKCU login tray. The tray delegates fixed actions to the CLI and is never a proxy supervisor or restart-protection signal. |
 | Providers | Create/update/delete ordinary provider configs and enrich registry metadata. The reserved `openai` card exposes Pool(default)/Direct account mode; `openai-apikey` remains the separate API route. |
 | Models | Fetch routed model lists, disabled model visibility, and catalog-facing ids. |
@@ -120,8 +120,8 @@ this document owns is which module holds which area and what invariant that area
 | V2 / Multi-agent mode | `GET/PUT /api/v2` — reports/sets the codex `multi_agent_v2` feature flag, the 3-state `multiAgentMode` override (`v1`/`default`/`v2`), the `multiAgentV2MessageDelivery` policy (`encrypted` default or opt-in `plaintext`), and the logical maximum thread count. Selecting `v2` enables the native flag and moves `[agents] max_threads` to the v2 key; selecting `v1` disables it and moves the same value back. `default` leaves the native flag unchanged. PUT accepts any owned field independently; contradictory mode/flag pairs are rejected before writes. A mode/protocol/thread boot-config change requires **Apply agent catalog** to replace a running worker, then a new task for its session-bound tool shape. Delivery changes affect only subsequent V2 task messages: start a new task, but no catalog convergence or Apply is needed. Plaintext concerns task-message delivery only, not stored provider credentials or generic key encryption. Every feature transition is rollback-safe and resyncs the catalog only when it changes catalog/boot configuration. |
 | Logs & Debug | One sidebar entry (`/#logs`) with two tabs. Logs tab: request/runtime logs for local diagnosis. Debug tab (`/#logs/debug`): provider + usage toggles, refresh/follow log viewer. `GET/PUT /api/debug`; `GET /api/debug/logs` and `GET /api/debug/usage-logs` use the monotonic `after` cursor. CLI: `ccx debug provider|usage …` (both streams via running proxy API). |
 | Usage | `GET /api/usage` aggregate read-only summary derived from `~/.codexcommander/usage.jsonl`; measured / reported / unreported / unsupported / estimated counts, daily zero-filled grid, model and provider breakdowns. Never exposes prompts. |
-| System | `POST /api/system/restart` restarts the proxy in place. `GET /api/system/memory` — service-process runtime/memory identity (pid, Bun version/revision, optional `bunRuntimeSource` provenance, platform, RSS/heap/external/ArrayBuffers scalars, observed memory = max(RSS, external, ArrayBuffers), `bun:jsc` heap context, streamMode + ordinary and plaintext-V2 eager-relay gate decisions, scalar eager-relay in-flight/cancel/abort/error/queue counters, watchdog snapshot sliced to the last 60 samples) plus privacy-safe `appOwnedBytes` retained-store totals/counters under static store ids. Scalar-only payload; rides the standard management auth gate and must never move to unauthenticated `/healthz`. Consumed by `ccx doctor`'s Memory/runtime section and the dashboard Memory observability card. |
-| Stop | `POST /api/stop` — restore native Codex, stop any installed service, and exit the proxy. |
+| System | `POST /api/system/restart` proves spawn of one detached internal `__tray-restart` helper and leaves lifecycle work to the canonical tray path: safe Stop restores native Codex and persists routing OFF before proxy termination, then explicit Start restores routing ON. The serving handler never drains its listener or exits. It returns `202` for a newly accepted or already accepted helper, and `409` only when helper spawn is refused; refusal leaves the current endpoint live and retryable, while an early helper exit re-arms the latch. `GET /api/system/memory` — service-process runtime/memory identity (pid, Bun version/revision, optional `bunRuntimeSource` provenance, platform, RSS/heap/external/ArrayBuffers scalars, observed memory = max(RSS, external, ArrayBuffers), `bun:jsc` heap context, streamMode + ordinary and plaintext-V2 eager-relay gate decisions, scalar eager-relay in-flight/cancel/abort/error/queue counters, watchdog snapshot sliced to the last 60 samples) plus privacy-safe `appOwnedBytes` retained-store totals/counters under static store ids. Scalar-only payload; rides the standard management auth gate and must never move to unauthenticated `/healthz`. Consumed by `ccx doctor`'s Memory/runtime section and the dashboard Memory observability card. |
+| Stop | Raw `POST /api/stop` persists OFF, restores and proves native Codex, and exits an unsupervised proxy. It refuses an installed supervisor; CLI/tray Stop owns the service-manager step and delegates the process shutdown under its exact lifecycle lease. |
 | Diagnostics/sync | `src/server/management/config-routes.ts` — `GET /api/diagnostics/project-config` reports project-level Codex config that bypasses managed routing; `POST /api/sync` re-runs catalog/config sync and returns activation evidence without interrupting workers. The diagnostic reports the bypass; it does not rewrite the project file. A stale worker roster is nonfatal lifecycle state, not proxy failure; starting a task or fork is not treated as a catalog reload. |
 | Sidecar/shadow-call settings | `src/server/management/config-routes.ts` — `GET/PUT /api/sidecar-settings` and `GET/PUT /api/shadow-call-settings`. PUT accepts model and backend plus optional `webSearch.reasoning` and `vision.maxDescriptionsPerTurn`; the read and PUT-response payload reports model, backend, and the vision per-turn limit. Credentials live in the provider and OAuth stores instead. Both shadow-call responses also report the resolved `sourceModels` — the prefixes the runtime actually intercepts (`src/lib/shadow-call.ts`, default `gpt-5.6-luna`; an explicit override names current custom helper ids), so no client hard-codes a helper slug that a Codex release can invalidate. |
 | Storage | `src/server/management/logs-usage-routes.ts` — `GET /api/storage`, `POST /api/storage/cleanup/preview` and `/api/storage/cleanup`, `GET /api/storage/trash`, `POST /api/storage/trash/restore`, and `GET/PUT /api/storage/cleanup-policy` plus `POST /api/storage/cleanup-policy/run`. `GET /api/storage/cleanup-policy/test-stream` and `GET /api/storage/trash/restore/test-stream` exist for progress-stream testing. Cleanup takes an explicit `mode`: `quarantine` moves to trash and is restorable, `permanent` is not. The caller must name the mode — there is no default that silently deletes. |
@@ -158,7 +158,9 @@ when the value is omitted. Ordering invariants live in
 
 The dashboard sidebar includes a stop button that calls `POST /api/stop`. The button shows a
 confirmation prompt, then fires the request and accepts the connection drop (the proxy exits). The
-endpoint restores native Codex config, stops any installed service to prevent respawn, and exits.
+endpoint restores and verifies native Codex config before an unsupervised proxy exits. If an installed
+service owns the proxy, raw API Stop returns `409` and leaves it running; the tray or CLI Stop action
+must stop that manager first and then delegate shutdown under the same lifecycle authority.
 
 ## Bun runtime provenance
 
@@ -173,7 +175,7 @@ halves come from a single `durableBunRuntime()` resolution at each site, so the 
 describe a different binary than the one actually baked.
 
 Launchers that re-exec `process.execPath` instead of resolving a binary — `ccx ensure`, GUI/Claude/
-OpenCode start, and `POST /api/system/restart` — go through
+OpenCode start, and the detached helper spawned by `POST /api/system/restart` — go through
 `withProcessRuntimeProvenance()`. An inherited marker is carried forward only when its recorded
 path is the executable about to run, compared through `realpath` so symlinks, junctions, and
 Windows case differences do not break a valid match. The recorded path is what settles this rather
@@ -284,8 +286,21 @@ is not copied into Application Support, and no bundle shells through an ambient 
 ensure lifecycle action and automatically synchronizes the Codex model catalog, but remains open and
 actionable after an offline or startup failure. **Quit** terminates only the AppKit UI. **Stop** and
 **Restart** are separate confirmation-gated operations: Stop uses the fixed lifecycle helper to
-restore native Codex and leaves the menu app open; Restart uses the drain-aware management restart
-and reports success only after replacement identity verification.
+persist OFF, restore and verify native Codex, stop any manager, and leave the menu app open; Restart
+uses the canonical stop→start transaction and reports success only after replacement identity
+verification. **Restore Native Codex** changes only routing and deliberately leaves the proxy running.
+Both explicit route directions confirm the saved routing document through the fresh route endpoint
+before reporting success. A confirmed route change tells the user to quit ChatGPT completely, reopen
+it, and start a new task; the companion never presents the existing host as already switched.
+
+An explicit route action owns one visible operation card immediately below the header. Its truthful
+orchestration phases are **Changing route** and **Confirming route**, with an indeterminate spinner
+and elapsed time rather than a fabricated percentage. Lifecycle and route controls are disabled
+while an action is in flight. When idle, the action for the already-active route is disabled; an
+unknown or custom route leaves both explicit directions available. Progress remains visible until a
+terminal result replaces it, and success or failure remains until the user dismisses it or starts
+another operation. A typed recovery refusal leads with the unchanged user state; a generic failure
+or unavailable confirmation avoids claiming what changed. Raw recovery detail remains secondary.
 
 If running Codex workers still hold the previous roster, the healthy proxy is shown with a
 persistent, nonfatal **Agent catalog update ready** card. **Apply agent catalog** is a third, separate

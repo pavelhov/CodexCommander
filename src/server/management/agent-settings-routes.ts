@@ -67,6 +67,11 @@ import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerS
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
 import { applySystemEnvToggle } from "../system-env";
+import {
+  acquireProxyLifecycleAuthority,
+  type AcquireProxyLifecycleAuthorityOptions,
+  type ProxyLifecycleAuthority,
+} from "../proxy-lifecycle-authority";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels, fetchGrokCandidateModels, buildClaudeDesktopState } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
@@ -78,9 +83,56 @@ export const GROK_APPLY_TERMINAL_MS = 10 * 60_000;
 const grokApplyEncoder = new TextEncoder();
 let grokApplyFlight: { startedAt: number; promise: Promise<unknown>; bytes: number } | null = null;
 let grokApplyHighWaterBytes = 0;
-let grokApplyTestHooks: { now?: () => number; run?: () => Promise<unknown> } | null = null;
+type LifecycleAuthorityAcquirer = (
+  options?: AcquireProxyLifecycleAuthorityOptions,
+) => Promise<ProxyLifecycleAuthority>;
+
+let grokApplyTestHooks: {
+  now?: () => number;
+  run?: () => Promise<unknown>;
+  acquireAuthority?: LifecycleAuthorityAcquirer;
+} | null = null;
 
 class GrokApplyBusyError extends Error {}
+class AgentSettingsLifecycleBusyError extends Error {}
+
+/**
+ * Serialize every native Codex/Grok mutation with the canonical lifecycle order.
+ * The caller supplies its own sanitized refusal projection because Grok Apply
+ * keeps acquisition inside its joinable single-flight.
+ */
+async function withAgentSettingsLifecycleAuthority<T>(
+  acquireAuthority: LifecycleAuthorityAcquirer | undefined,
+  run: () => Promise<T>,
+  onBusy: () => T | Promise<T>,
+): Promise<T> {
+  let authority: ProxyLifecycleAuthority;
+  try {
+    authority = await (acquireAuthority ?? acquireProxyLifecycleAuthority)({ includeStart: true });
+  } catch {
+    return onBusy();
+  }
+  try {
+    return await run();
+  } finally {
+    // ProxyLifecycleAuthority is the sole owner of release ordering: S, then E.
+    try { authority.releaseAll(); } catch { /* response/result remains authoritative */ }
+  }
+}
+
+function agentSettingsLifecycleBusyResponse(
+  req: Request,
+  config: CodexCommanderConfig,
+): Response {
+  const response = jsonResponse({
+    error: "Proxy lifecycle is busy; no Codex or Grok settings were changed.",
+    reason: "config_busy",
+    retryable: true,
+  }, 409, req, config);
+  response.headers.set("Retry-After", "1");
+  response.headers.set("Cache-Control", "no-store");
+  return response;
+}
 
 /** Persisted model selectors are bare native ids or one-slash Codex-facing ids. */
 function isCanonicalPersistedModelSelector(value: string): boolean {
@@ -139,7 +191,7 @@ export function grokApplyFlightSnapshot(): { currentBytes: number; highWaterByte
   };
 }
 
-function runGrokApplyFlight(): Promise<unknown> {
+function runGrokApplyFlight(acquireAuthority?: LifecycleAuthorityAcquirer): Promise<unknown> {
   const at = grokApplyTestHooks?.now?.() ?? Date.now();
   const current = grokApplyFlight;
   if (current) {
@@ -152,7 +204,7 @@ function runGrokApplyFlight(): Promise<unknown> {
   }
 
   const flight = { startedAt: at, promise: Promise.resolve() as Promise<unknown>, bytes: 0 };
-  flight.promise = (grokApplyTestHooks?.run ?? (async () => {
+  const run = grokApplyTestHooks?.run ?? (async () => {
     const [{ syncGrokConfig }, { readRuntimePort }] = await Promise.all([
       import("../../grok/sync"),
       import("../../config"),
@@ -165,7 +217,12 @@ function runGrokApplyFlight(): Promise<unknown> {
       + grokApplyEncoder.encode(hostname ?? "").byteLength;
     grokApplyHighWaterBytes = Math.max(grokApplyHighWaterBytes, flight.bytes);
     return syncGrokConfig(port, currentConfig, hostname !== undefined ? { hostname } : {});
-  }))().finally(() => {
+  });
+  flight.promise = withAgentSettingsLifecycleAuthority(
+    acquireAuthority ?? grokApplyTestHooks?.acquireAuthority,
+    run,
+    () => { throw new AgentSettingsLifecycleBusyError("lifecycle_busy"); },
+  ).finally(() => {
     if (grokApplyFlight === flight) grokApplyFlight = null;
   });
   grokApplyFlight = flight;
@@ -177,7 +234,11 @@ export function runGrokApplyFlightForTests(): Promise<unknown> {
 }
 
 export function setGrokApplyFlightTestHooks(
-  hooks: { now?: () => number; run?: () => Promise<unknown> } | null,
+  hooks: {
+    now?: () => number;
+    run?: () => Promise<unknown>;
+    acquireAuthority?: LifecycleAuthorityAcquirer;
+  } | null,
 ): void {
   grokApplyTestHooks = hooks;
   grokApplyFlight = null;
@@ -356,6 +417,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     if (wantsFlag && modeFlag !== undefined && body.enabled !== modeFlag) {
       return jsonResponse({ error: `body.enabled conflicts with multiAgentMode '${mode}'` }, 400);
     }
+    return withAgentSettingsLifecycleAuthority(
+      deps.proxyStopLifecycle?.acquireAuthority,
+      async () => {
     const {
       isMultiAgentV2Enabled, hasAgentsMaxThreads, getLogicalMaxThreads, transitionMultiAgentV2,
       getAgentsEnabled, getAgentsMaxDepth, getSubagentDeveloperInstructions,
@@ -492,6 +556,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       catalogRefresh,
       activation: projectCatalogActivationForPrincipal(activation, ctx.principal),
     });
+      },
+      () => agentSettingsLifecycleBusyResponse(req, config),
+    );
   }
 
   // default_mode_request_user_input feature toggle (Codex Auth page). GET reads the
@@ -517,6 +584,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     }
     const body = parsedBody as { enabled?: unknown };
     if (typeof body.enabled !== "boolean") return jsonResponse({ error: "body.enabled must be a boolean" }, 400);
+    const requestedEnabled = body.enabled;
+    return withAgentSettingsLifecycleAuthority(
+      deps.proxyStopLifecycle?.acquireAuthority,
+      async () => {
     const { isDefaultModeRequestUserInputEnabled, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY } = await import("../../codex/features");
     const before = isDefaultModeRequestUserInputEnabled();
     let toggle = deps.toggleDefaultModeRequestUserInput;
@@ -526,7 +597,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     }
     let toggleError: string | null = null;
     try {
-      toggle(body.enabled);
+      toggle(requestedEnabled);
     } catch (error) {
       const err = error as { stderr?: unknown; message?: string };
       const raw = err.stderr;
@@ -536,7 +607,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       toggleError = stderrText || (err.message ?? String(error));
     }
     const enabled = isDefaultModeRequestUserInputEnabled();
-    if (toggleError !== null || enabled !== body.enabled) {
+    if (toggleError !== null || enabled !== requestedEnabled) {
       const reason = toggleError
         ?? `postcondition failed - the installed Codex build may not know the ${DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY} flag yet`;
       return jsonResponse({ error: `default_mode_request_user_input toggle failed: ${reason}` }, 502);
@@ -546,6 +617,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       warnings.push("Applies to new sessions; restart the Codex app or wait out its picker cache to see the change.");
     }
     return jsonResponse({ ok: true, enabled, changed: enabled !== before, warnings });
+      },
+      () => agentSettingsLifecycleBusyResponse(req, config),
+    );
   }
 
   // Subagent prompt injection model: single native or routed model whose info is
@@ -647,6 +721,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       return jsonResponse({ error: "syncCodexSubagentDefaults requires a supported Codex reasoning effort" }, 400);
     }
 
+    return withAgentSettingsLifecycleAuthority(
+      deps.proxyStopLifecycle?.acquireAuthority,
+      async () => {
     config.multiAgentGuidanceEnabled = nextEnabled;
     if (nextSyncCodexSubagentDefaults) config.syncCodexSubagentDefaults = true;
     else delete config.syncCodexSubagentDefaults;
@@ -657,7 +734,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     if (nextPrompt) config.injectionPrompt = nextPrompt;
     else delete config.injectionPrompt;
 
-    saveConfigPreservingClaudeCode(config);
+    (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
     const nativeDefaultsAffectingChange = "syncCodexSubagentDefaults" in body
       || (("model" in body || "effort" in body)
         && (previousSyncCodexSubagentDefaults || nextSyncCodexSubagentDefaults));
@@ -701,6 +778,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         ? { activation: projectCatalogActivationForPrincipal(activation, ctx.principal) }
         : {}),
     });
+      },
+      () => agentSettingsLifecycleBusyResponse(req, config),
+    );
   }
 
   // Hard reasoning-effort caps (implementation contract): a global ceiling and a
@@ -785,6 +865,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     if (new Set(canonicalChosen).size !== canonicalChosen.length) {
       return jsonResponse({ error: "models must not contain duplicate selectors" }, 400);
     }
+    return withAgentSettingsLifecycleAuthority(
+      deps.proxyStopLifecycle?.acquireAuthority,
+      async () => {
     if (deps.saveConfigPreservingClaudeCode) {
       config.subagentModels = canonicalChosen;
       deps.saveConfigPreservingClaudeCode(config);
@@ -836,6 +919,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       excluded: activation.catalog.excluded,
       activation: projectCatalogActivationForPrincipal(activation, ctx.principal),
     });
+      },
+      () => agentSettingsLifecycleBusyResponse(req, config),
+    );
   }
 
   // Priority-ordered subagent model fallback chain for quota-aware spawn routing.
@@ -952,7 +1038,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   // duplicated here. Accepts no body: every input comes from persisted state.
   if (url.pathname === "/api/grok/apply" && req.method === "POST") {
     try {
-      const result = await runGrokApplyFlight() as Awaited<ReturnType<typeof import("../../grok/sync")["syncGrokConfig"]>>;
+      const result = await runGrokApplyFlight(
+        deps.proxyStopLifecycle?.acquireAuthority,
+      ) as Awaited<ReturnType<typeof import("../../grok/sync")["syncGrokConfig"]>>;
       // A policy skip (non-loopback, no ~/.grok) is not a server error: report it as a
       // result the page can explain rather than a 500 the user cannot act on.
       return jsonResponse({
@@ -963,6 +1051,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }, result.ok ? 200 : 500);
     } catch (error) {
       if (error instanceof GrokApplyBusyError) return jsonResponse({ error: "grok_apply_busy" }, 409);
+      if (error instanceof AgentSettingsLifecycleBusyError) {
+        return agentSettingsLifecycleBusyResponse(req, config);
+      }
       return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
   }

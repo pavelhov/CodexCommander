@@ -52,7 +52,7 @@ bun run dev:gui
 | **ログ** | トークン、要求された強度と（利用可能な場合は）実際に送信された強度、実際のモデル、プロバイダー、状態、リクエスト ID、所要時間、エラー詳細を含む最近のリクエストを自動更新します。アダプターが reasoning パラメーターを送信した場合、詳細表示に正確な wire field も表示されます。 |
 | **使用量 / デバッグ** | トークン使用量の測定範囲と推移を見るか、オプションのプロバイダートランスポート/使用量抽出診断をオンにします。 |
 | **ストレージ** | CODEX_HOME のディスク内訳（セッション、アーカイブ、DB、添付）を読み取り専用で表示。任意のアーカイブクリーンアップ: 最古 N% をプレビューし、既定では `CODEX_HOME/.trash` へ隔離、または明示チェックで完全削除。**自動クリーンアップ方針**はオプトインで**既定 OFF**（`storageCleanupPolicy.enabled`）。Storage ページでしきい値/目標/スケジュール/モードを設定するか **今すぐ実行**。隔離エントリは Storage ページから復元可能（JSONL + スレッド）。アクティブセッションは読み取り専用。最新/アクティブな `state_*.sqlite` がロック中はクリーンアップと復元を拒否。 |
-| **停止** | プロキシとインストールされたバックグラウンドサービスを正常終了しネイティブ Codex を復元した後終了します(`POST /api/stop`)。 |
+| **停止** | 統合を OFF に保存し、ネイティブ Codex を復元・検証してから、supervisor のないプロキシを停止します (`POST /api/stop`)。インストール済み supervisor が所有している場合、raw API は拒否します。manager を先に停止するトレイまたは CLI の Stop を使用してください。 |
 
 ### セクションへのリンク
 
@@ -159,7 +159,7 @@ GUI はプロキシの JSON 管理 API を使うシンクライアントです�
 | `POST /api/codex-auth/login` · `GET /api/codex-auth/login-status` | ブラウザログインでプールアカウントを追加します。 |
 | `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | tail、プロバイダー、正確な状態コードまたは状態等級で最近のリクエストメタデータを参照します。`limit`/`offset` は最新行から過去方向にページングします（`offset=0` が最新ページ）。応答は `{ timeZone, total, logs }` で、`total` はページング前の一致件数です。 |
 | `GET` / `PUT /api/subagent-models` | `spawn_agent` に優先公開するモデル 5 つを読むか設定します。 |
-| `POST /api/stop` | プロキシ/サービスを停止しネイティブ Codex を復元した後終了します。 |
+| `POST /api/stop` | OFF を保存し、ネイティブ Codex を復元・検証して、supervisor のないプロキシを停止します。installed supervisor、lifecycle contention、または安全に検証できない native restore は 409。manager-first の委任フローはトレイ/CLI Stop が担当します。 |
 
 :::tip
 ダッシュボードで **Ollama Cloud** のようなカタログプロバイダーを追加するとテキスト/ビジョンモデル分類が保存された

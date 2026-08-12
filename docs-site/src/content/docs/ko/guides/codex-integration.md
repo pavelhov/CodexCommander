@@ -9,7 +9,7 @@ CodexCommander는 Codex가 읽는 두 가지, 즉 설정(`$CODEX_HOME/config.tom
 
 ## 설정 주입
 
-`ccx init`, `ccx start`, `ccx sync`는 모두 인젝터를 호출합니다. 기본 loopback 바인드에서는 Codex의 빌트인 `openai` 프로바이더 id를 그대로 유지한 채, 그 프로바이더가 CodexCommander를 바라보게 합니다.
+`ccx start`와 `ccx sync`는 인젝터를 호출합니다. `ccx init`는 보호된 current-home runtime record로 확인된 실행 중 프록시를 통할 때만 같은 경로를 사용하며, 그렇지 않으면 명시적 Start까지 Codex를 네이티브 상태로 둡니다. 기본 loopback 바인드에서는 Codex의 빌트인 `openai` 프로바이더 id를 그대로 유지한 채, 그 프로바이더가 CodexCommander를 바라보게 합니다.
 
 ```toml
 # root keys, before the first table
@@ -190,7 +190,12 @@ ChatGPT 계정을 Codex account pool에 추가하면, CodexCommander는 이를 �
 
 ## 네이티브 Codex 복원
 
-CodexCommander는 절대 사용자를 가두지 않습니다. **`ccx stop`은 네이티브 Codex로 완전히 되돌리는 단일 명령입니다**. proxy를 중지하고, 설치된 background service가 있으면 그것도 중지한 뒤, 주입된 모든 라인과 라우팅된 catalog 항목을 제거해서 plain `codex`가 CodexCommander가 처음부터 없었던 것처럼 정확히 동작하게 합니다:
+CodexCommander는 사용자를 가두지 않습니다. **`ccx stop`은 Codex를 네이티브 라우팅으로 안전하게
+되돌린 다음 CodexCommander를 중지하는 단일 명령입니다.** 연동을 OFF로 저장하고
+`$CODEX_HOME/config.toml`에서 CodexCommander가 소유한 정확한 경로만 제거해 네이티브 라우팅을 검증한
+뒤 background service와 proxy를 중지합니다. 검증에 실패하면 둘 다 계속 실행됩니다. task, history,
+rollout, 인증은 건드리지 않습니다. 생성된 catalog와 cache는 남을 수 있지만 네이티브 Codex는 더 이상
+참조하지 않습니다:
 
 ```bash
 ccx stop       # stop the proxy + service, restore native Codex

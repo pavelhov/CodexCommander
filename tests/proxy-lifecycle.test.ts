@@ -5,13 +5,49 @@ import {
   ensureProxyLifecycle,
   findLiveProxyForStart,
   macOSCompanionOpenArguments,
+  prepareExplicitProxyStart,
+  restoreBackRoutingLifecycle,
   spawnDetachedProxyStart,
+  stopProxyLifecycle,
   type EnsureProxyLifecycleIo,
 } from "../src/cli/proxy-lifecycle";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCES, BUN_RUNTIME_SOURCE_ENV } from "../src/lib/bun-runtime";
 import type { ServiceDiagnostic } from "../src/service";
 import type { LivenessIo } from "../src/server/proxy-liveness";
 import type { CodexCommanderConfig } from "../src/types";
+import type { ProxyLifecycleAuthority } from "../src/server/proxy-lifecycle-authority";
+import { PROXY_DELEGATED_START_ENV } from "../src/server/proxy-lifecycle-protocol";
+
+function authority(
+  calls: string[] = [],
+  overrides: Partial<ProxyLifecycleAuthority> = {},
+): ProxyLifecycleAuthority {
+  let startHeld = true;
+  const value: ProxyLifecycleAuthority = {
+    deadlineAt: Number.POSITIVE_INFINITY,
+    ensure: { token: "ensure-token", release: () => value.releaseAll() },
+    get start() {
+      return startHeld ? { token: "start-token", release: () => value.releaseStart() } : undefined;
+    },
+    acquireStart: async () => {
+      startHeld = true;
+      return { token: "start-token", release: () => value.releaseStart() };
+    },
+    delegatedLease: () => startHeld
+      ? { ensureToken: "ensure-token", startToken: "start-token" }
+      : undefined,
+    releaseStart: () => {
+      if (!startHeld) return;
+      startHeld = false;
+      calls.push("release-S");
+    },
+    releaseAll: () => {
+      value.releaseStart();
+      calls.push("release-E");
+    },
+  };
+  return Object.assign(value, overrides);
+}
 
 function config(codexAutoStart = true): CodexCommanderConfig {
   return {
@@ -27,6 +63,8 @@ function config(codexAutoStart = true): CodexCommanderConfig {
 function service(overrides: Partial<ServiceDiagnostic> = {}): ServiceDiagnostic {
   return {
     supported: true,
+    registrationState: "absent",
+    supervisorState: "inactive",
     installed: false,
     enabled: false,
     running: false,
@@ -45,9 +83,18 @@ function baseIo(overrides: EnsureProxyLifecycleIo = {}): EnsureProxyLifecycleIo 
     loadConfig: () => config(),
     findLive: async () => null,
     reconcile: () => {},
-    acquireEnsureLock: async () => ({ release: () => {} }),
+    journalPending: () => false,
+    externalProvider: () => null,
+    acquireAuthority: async () => authority(),
     diagnoseService: () => service(),
     waitForReady: async () => "ready",
+    restoreNative: () => ({
+      success: true,
+      changed: true,
+      desiredChanged: true,
+      configChanged: false,
+      message: "native",
+    }),
     syncLive: async () => ({
       status: "applied",
       ok: true,
@@ -60,6 +107,472 @@ function baseIo(overrides: EnsureProxyLifecycleIo = {}): EnsureProxyLifecycleIo 
 }
 
 describe("shared proxy lifecycle authority", () => {
+  test("Stop cannot pass an in-flight explicit Start while E is held", async () => {
+    const calls: string[] = [];
+    let held = false;
+    const waiters: Array<() => void> = [];
+    let nextToken = 0;
+    const acquireAuthority = async () => {
+      while (held) await new Promise<void>(resolve => waiters.push(resolve));
+      held = true;
+      calls.push("acquire-E");
+      nextToken += 1;
+      return authority([], {
+        releaseAll: () => {
+          calls.push("release-S");
+          calls.push("release-E");
+          held = false;
+          waiters.shift()?.();
+        },
+      });
+    };
+    let allowSync!: () => void;
+    const syncBlocked = new Promise<void>(resolve => { allowSync = resolve; });
+    let syncEntered!: () => void;
+    const entered = new Promise<void>(resolve => { syncEntered = resolve; });
+
+    const starting = ensureProxyLifecycle({
+      action: "start",
+      ensureCompanion: false,
+      io: baseIo({
+        acquireAuthority,
+        findLive: async () => ({ pid: 41, port: 10100, source: "runtime" }),
+        setEnabled: (_client, enabled) => {
+          calls.push(`enabled:${enabled}`);
+          return { ok: true, status: "committed", enabled };
+        },
+        syncLive: async () => {
+          calls.push("sync-enter");
+          syncEntered();
+          await syncBlocked;
+          calls.push("sync-exit");
+          return {
+            status: "applied",
+            ok: true,
+            catalogQuality: "live",
+            catalogState: { state: "not_running", processes: [], catalogMtimeMs: null },
+          };
+        },
+      }),
+    });
+    await entered;
+
+    const stopping = stopProxyLifecycle({
+      io: {
+        acquireAuthority,
+        diagnoseService: () => service(),
+        stopService: () => false,
+        restoreNative: () => {
+          calls.push("enabled:false");
+          return {
+            success: true,
+            changed: true,
+            desiredChanged: true,
+            configChanged: true,
+            message: "native",
+          };
+        },
+        stripGrok: () => ({ ok: true, changed: false, message: "native" }),
+        readPid: () => null,
+        readPidFileValue: () => null,
+        readRuntimePort: () => null,
+        findLive: async () => null,
+        findSurvivor: async () => null,
+      },
+    });
+    await Bun.sleep(10);
+    expect(calls).not.toContain("enabled:false");
+
+    allowSync();
+    const [started, stopped] = await Promise.all([starting, stopping]);
+    expect(started.ok).toBe(true);
+    expect(stopped.ok).toBe(true);
+    expect(calls.indexOf("sync-exit")).toBeLessThan(calls.indexOf("release-E"));
+    expect(calls.indexOf("release-E")).toBeLessThan(calls.indexOf("enabled:false"));
+  });
+
+  test("a native escape refusal leaves service and proxy running", async () => {
+    const calls: string[] = [];
+    const result = await stopProxyLifecycle({
+      io: {
+        diagnoseService: () => {
+          calls.push("diagnose");
+          return service({ installed: true, running: true });
+        },
+        restoreNative: () => {
+          calls.push("restore");
+          return {
+            success: false,
+            changed: false,
+            desiredChanged: false,
+            configChanged: false,
+            message: "refused",
+          };
+        },
+        findLive: async () => {
+          calls.push("find-live");
+          return { pid: 42, port: 10100, source: "runtime" };
+        },
+        stopService: () => {
+          calls.push("stop-service");
+          return true;
+        },
+        stopProxy: async () => {
+          calls.push("stop-proxy");
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      action: "stop",
+      ok: false,
+      state: "running",
+      pid: 42,
+      port: 10100,
+      errorCode: "STOP_FAILED",
+    });
+    expect(calls).toEqual(["diagnose", "restore", "find-live"]);
+  });
+
+  test("a desired-state write refusal stops before restore or termination", async () => {
+    const calls: string[] = [];
+    const result = await stopProxyLifecycle({
+      io: {
+        diagnoseService: () => {
+          calls.push("diagnose");
+          return service({ installed: true, running: true });
+        },
+        restoreNative: () => {
+          calls.push("disable");
+          return {
+            success: false,
+            changed: false,
+            desiredChanged: false,
+            configChanged: false,
+            message: "write refused",
+          };
+        },
+        findLive: async () => {
+          calls.push("find-live");
+          return { pid: 42, port: 10100, source: "runtime" };
+        },
+        stopService: () => {
+          calls.push("stop-service");
+          return true;
+        },
+        stopProxy: async () => {
+          calls.push("stop-proxy");
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      action: "stop",
+      ok: false,
+      state: "running",
+      pid: 42,
+      port: 10100,
+      errorCode: "STOP_FAILED",
+    });
+    expect(calls).toEqual(["diagnose", "disable", "find-live"]);
+  });
+
+  test("automatic ensure while Codex is OFF does not prepare, enable, or reconcile", async () => {
+    const calls: string[] = [];
+    const result = await ensureProxyLifecycle({
+      action: "ensure",
+      io: baseIo({
+        loadConfig: () => ({ ...config(), clientIntegrations: { codex: false } }),
+        setEnabled: () => {
+          calls.push("enable");
+          return { ok: true, status: "committed", enabled: true };
+        },
+        reconcile: () => { calls.push("reconcile"); },
+        journalPending: () => { calls.push("journal"); return true; },
+        findLive: async () => {
+          calls.push("find");
+          return { pid: 42, port: 10100, source: "runtime" };
+        },
+        syncLive: async () => {
+          calls.push("sync");
+          return {
+            status: "skipped",
+            skippedReason: "desired_disabled",
+            ok: true,
+            catalogQuality: "native-only",
+            catalogState: { state: "not_running", processes: [], catalogMtimeMs: null },
+          };
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: true, state: "running" });
+    expect(calls).toEqual(["find", "sync"]);
+  });
+
+  test("explicit start strictly retires a pending journal before enabling", () => {
+    const calls: string[] = [];
+    let pending = true;
+    const result = prepareExplicitProxyStart({
+      externalProvider: () => null,
+      journalPending: () => {
+        calls.push("journal");
+        return pending;
+      },
+      retireExplicitJournal: owner => {
+        calls.push(`explicit:${owner.kind}`);
+        return false;
+      },
+      reconcile: () => {
+        calls.push("reconcile");
+        pending = false;
+        return true;
+      },
+      setEnabled: (_client, enabled) => {
+        calls.push("enable");
+        return { ok: true, status: "committed", enabled };
+      },
+    });
+
+    expect(result).toMatchObject({ success: true, changed: true });
+    expect(calls).toEqual(["journal", "explicit:dead", "reconcile", "journal", "enable"]);
+  });
+
+  test("repeated Route Back preserves an exact active live-owner journal", () => {
+    const calls: string[] = [];
+    const result = prepareExplicitProxyStart({
+      externalProvider: () => null,
+      journalPending: () => {
+        calls.push("journal");
+        return true;
+      },
+      protectedLiveOwnerPid: 42,
+      desiredEnabled: () => {
+        calls.push("desired");
+        return true;
+      },
+      classifyActiveJournal: pid => {
+        calls.push(`classify:${pid}`);
+        return { kind: "active-managed-postimage" };
+      },
+      retireExplicitJournal: () => {
+        calls.push("retire");
+        return false;
+      },
+      reconcile: () => {
+        calls.push("reconcile");
+        return false;
+      },
+      setEnabled: (_client, enabled) => {
+        calls.push(`enable:${enabled}`);
+        return { ok: true, status: "unchanged", enabled };
+      },
+    });
+
+    expect(result).toEqual({
+      success: true,
+      changed: false,
+      message: "Codex is already routing through this live proxy.",
+    });
+    expect(calls).toEqual(["journal", "desired", "classify:42", "enable:true"]);
+  });
+
+  test("native OFF with a live-owner journal still uses exact retirement", () => {
+    const calls: string[] = [];
+    let pending = true;
+    const result = prepareExplicitProxyStart({
+      externalProvider: () => null,
+      journalPending: () => {
+        calls.push("journal");
+        return pending;
+      },
+      protectedLiveOwnerPid: 42,
+      desiredEnabled: () => {
+        calls.push("desired");
+        return false;
+      },
+      classifyActiveJournal: () => {
+        calls.push("classify");
+        return { kind: "active-managed-postimage" };
+      },
+      retireExplicitJournal: owner => {
+        calls.push(`retire:${owner.kind}`);
+        pending = false;
+        return true;
+      },
+      setEnabled: (_client, enabled) => {
+        calls.push(`enable:${enabled}`);
+        return { ok: true, status: "committed", enabled };
+      },
+    });
+
+    expect(result).toMatchObject({ success: true, changed: true });
+    expect(calls).toEqual([
+      "journal",
+      "desired",
+      "retire:protected-live",
+      "journal",
+      "enable:true",
+    ]);
+  });
+
+  test("an unsafe live-owner journal refuses without enabling", () => {
+    const calls: string[] = [];
+    const result = prepareExplicitProxyStart({
+      externalProvider: () => null,
+      journalPending: () => true,
+      protectedLiveOwnerPid: 42,
+      desiredEnabled: () => true,
+      classifyActiveJournal: () => ({
+        kind: "not-active-managed-postimage",
+        reason: "owner-mismatch",
+      }),
+      retireExplicitJournal: owner => {
+        calls.push(`retire:${owner.kind}`);
+        return false;
+      },
+      reconcile: () => {
+        calls.push("reconcile");
+        return false;
+      },
+      setEnabled: (_client, enabled) => {
+        calls.push(`enable:${enabled}`);
+        return { ok: true, status: "committed", enabled };
+      },
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      changed: false,
+      reason: "routing-recovery-unverified",
+    });
+    expect(calls).toEqual(["retire:protected-live", "retire:dead", "reconcile"]);
+  });
+
+  test("Restore Back exposes a typed recovery refusal to lifecycle clients", async () => {
+    const result = await restoreBackRoutingLifecycle({
+      acquireAuthority: async () => authority(),
+      findLive: async () => ({ pid: 42, port: 10100, source: "runtime" }),
+      journalPending: () => true,
+      desiredEnabled: () => true,
+      classifyActiveJournal: () => ({
+        kind: "not-active-managed-postimage",
+        reason: "owner-mismatch",
+      }),
+      retireExplicitJournal: () => false,
+      reconcile: () => false,
+      setEnabled: (_client, enabled) => ({ ok: true, status: "unchanged", enabled }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      state: "running",
+      errorCode: "ROUTING_RECOVERY_REQUIRED",
+    });
+  });
+
+  test("explicit start retires an external-provider journal before enabling", () => {
+    const calls: string[] = [];
+    let pending = true;
+    const result = prepareExplicitProxyStart({
+      externalProvider: () => "custom",
+      journalPending: () => {
+        calls.push("journal");
+        return pending;
+      },
+      reconcile: () => { calls.push("reconcile"); return true; },
+      retireExplicitJournal: owner => {
+        calls.push(`explicit:${owner.kind}`);
+        return false;
+      },
+      retireExternalJournal: provider => {
+        calls.push(`retire:${provider}`);
+        pending = false;
+        return true;
+      },
+      setEnabled: (_client, enabled) => {
+        calls.push("enable");
+        return { ok: true, status: "committed", enabled };
+      },
+    });
+
+    expect(result).toMatchObject({ success: true, changed: true });
+    expect(calls).toEqual(["journal", "explicit:dead", "retire:custom", "journal", "enable"]);
+  });
+
+  test("explicit start recovery refusal leaves the durable switch OFF", () => {
+    const calls: string[] = [];
+    const result = prepareExplicitProxyStart({
+      externalProvider: () => null,
+      journalPending: () => true,
+      retireExplicitJournal: () => false,
+      reconcile: () => { calls.push("reconcile"); return false; },
+      setEnabled: (_client, enabled) => {
+        calls.push(`enable:${enabled}`);
+        return { ok: true, status: "committed", enabled };
+      },
+    });
+
+    expect(result).toMatchObject({ success: false, changed: false });
+    expect(calls).toEqual(["reconcile"]);
+  });
+
+  test("explicit start reports a durable ON change even when the proxy was already live", async () => {
+    const result = await ensureProxyLifecycle({
+      action: "start",
+      io: baseIo({
+        setEnabled: (_client, enabled) => ({ ok: true, status: "committed", enabled }),
+        findLive: async () => ({ pid: 42, port: 10100, source: "runtime" }),
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: true, state: "running", changed: true });
+  });
+
+  test("explicit start passes only the protected runtime PID to journal retirement", async () => {
+    const owners: unknown[] = [];
+    let pending = true;
+    const result = await ensureProxyLifecycle({
+      action: "start",
+      io: baseIo({
+        journalPending: () => pending,
+        retireExplicitJournal: owner => {
+          owners.push(owner);
+          pending = false;
+          return true;
+        },
+        setEnabled: (_client, enabled) => ({ ok: true, status: "committed", enabled }),
+        findLive: async () => ({ pid: 42, port: 10100, source: "runtime" }),
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: true, state: "running", pid: 42 });
+    expect(owners).toEqual([{ kind: "protected-live", pid: 42 }]);
+  });
+
+  test("explicit start and Restore Back reject recordless listeners before routing mutation", async () => {
+    const calls: string[] = [];
+    const io = {
+      findLive: async () => ({ pid: 41, port: 10100, source: "config" as const }),
+      journalPending: () => { calls.push("journal"); return true; },
+      setEnabled: () => {
+        calls.push("enable");
+        return { ok: true as const, status: "committed" as const, enabled: true };
+      },
+      syncModels: async () => {
+        calls.push("sync");
+        return { status: "applied" as const, ok: true };
+      },
+      acquireEnsureLock: async () => ({ release: () => {} }),
+    };
+
+    const started = await ensureProxyLifecycle({ action: "start", io: baseIo(io) });
+    const restored = await restoreBackRoutingLifecycle(io);
+    expect(started).toMatchObject({ ok: false, state: "blocked" });
+    expect(restored).toMatchObject({ ok: false, state: "blocked" });
+    expect(calls).toEqual([]);
+  });
+
   test("explicit start probes its requested fallback port without hiding local runtime records", async () => {
     const seen: Array<{ port?: number; hostname?: string } | null> = [];
     const findLive = async (io: LivenessIo = {}) => {
@@ -78,9 +591,9 @@ describe("shared proxy lifecycle authority", () => {
     const result = await ensureProxyLifecycle({
       io: baseIo({
         findLive: async () => ({ pid: 42, port: 10123, source: "runtime" }),
-        acquireEnsureLock: async () => {
+        acquireAuthority: async () => {
           calls.push("lock");
-          return { release: () => { calls.push("release"); } };
+          return authority(calls);
         },
         spawnStart: async () => { calls.push("spawn"); },
         startService: () => { calls.push("service"); return true; },
@@ -104,7 +617,7 @@ describe("shared proxy lifecycle authority", () => {
       pid: 42,
       port: 10123,
     });
-    expect(calls).toEqual(["lock", "sync:10123", "release", "companion"]);
+    expect(calls).toEqual(["lock", "sync:10123", "release-S", "release-E", "companion"]);
   });
 
   test("an already-live sync refusal is surfaced while the healthy proxy stays running", async () => {
@@ -112,7 +625,7 @@ describe("shared proxy lifecycle authority", () => {
     const result = await ensureProxyLifecycle({
       io: baseIo({
         findLive: async () => ({ pid: 42, port: 10123, source: "runtime" }),
-        acquireEnsureLock: async () => ({ release: () => { calls.push("release"); } }),
+        acquireAuthority: async () => authority(calls),
         syncLive: async () => ({
           status: "refused",
           ok: false,
@@ -131,7 +644,7 @@ describe("shared proxy lifecycle authority", () => {
       errorCode: "SYNC_FAILED",
       message: "Catalog publication was refused safely.",
     });
-    expect(calls).toEqual(["release", "companion"]);
+    expect(calls).toEqual(["release-S", "release-E", "companion"]);
   });
 
   test("a failed current sync stays fatal", async () => {
@@ -357,21 +870,21 @@ describe("shared proxy lifecycle authority", () => {
   test("already-live ensure callers serialize managed-client sync", async () => {
     let held = false;
     const waiters: Array<() => void> = [];
-    const acquireEnsureLock = async () => {
+    const acquireAuthority = async () => {
       if (held) await new Promise<void>(resolve => waiters.push(resolve));
       held = true;
-      return {
-        release: () => {
+      return authority([], {
+        releaseAll: () => {
           held = false;
           waiters.shift()?.();
         },
-      };
+      });
     };
     let activeSyncs = 0;
     let maxActiveSyncs = 0;
     const io = baseIo({
       findLive: async () => ({ pid: 42, port: 10123, source: "runtime" }),
-      acquireEnsureLock,
+      acquireAuthority,
       syncLive: async () => {
         activeSyncs += 1;
         maxActiveSyncs = Math.max(maxActiveSyncs, activeSyncs);
@@ -408,11 +921,23 @@ describe("shared proxy lifecycle authority", () => {
     const result = await ensureProxyLifecycle({
       io: baseIo({
         diagnoseService: () => service({
+          registrationState: "present",
+          supervisorState: "inactive",
           installed: true,
           startable: true,
           backend: "launchd",
           summary: "installed",
         }),
+        armServiceStartDelegation: ensureToken => {
+          calls.push(`arm:${ensureToken}`);
+          return {
+            token: "delegation",
+            ensureToken,
+            ownerPid: process.pid,
+            expiresAt: Date.now() + 1_000,
+          };
+        },
+        clearServiceStartDelegation: () => { calls.push("clear"); },
         startService: () => { calls.push("service"); return true; },
         spawnStart: async () => { calls.push("spawn"); },
         waitForProxy: async () => ({ pid: 77, port: 10100, source: "runtime" }),
@@ -420,7 +945,7 @@ describe("shared proxy lifecycle authority", () => {
     });
     expect(result.ok).toBe(true);
     expect(result.changed).toBe(true);
-    expect(calls).toEqual(["service"]);
+    expect(calls).toEqual(["arm:ensure-token", "service", "clear"]);
   });
 
   test("a stale installed service blocks unmanaged fallback", async () => {
@@ -428,6 +953,8 @@ describe("shared proxy lifecycle authority", () => {
     const result = await ensureProxyLifecycle({
       io: baseIo({
         diagnoseService: () => service({
+          registrationState: "present",
+          supervisorState: "inactive",
           installed: true,
           startable: false,
           stale: true,
@@ -448,7 +975,7 @@ describe("shared proxy lifecycle authority", () => {
     const calls: string[] = [];
     const result = await ensureProxyLifecycle({
       io: baseIo({
-        acquireEnsureLock: async () => ({ release: () => { calls.push("release"); } }),
+        acquireAuthority: async () => authority(calls),
         diagnoseService: () => { throw new Error("permission denied"); },
         spawnStart: async () => { calls.push("spawn"); },
       }),
@@ -458,20 +985,50 @@ describe("shared proxy lifecycle authority", () => {
       state: "blocked",
       errorCode: "SERVICE_BLOCKED",
     });
-    expect(calls).toEqual(["release"]);
+    expect(calls).toEqual(["release-S", "release-E"]);
   });
 
   test("an installed service start refusal never falls back to an unmanaged child", async () => {
     const calls: string[] = [];
     const result = await ensureProxyLifecycle({
+      action: "start",
       io: baseIo({
+        setEnabled: (_client, enabled) => {
+          calls.push(`enabled:${enabled}`);
+          return { ok: true, status: "committed", enabled };
+        },
         diagnoseService: () => service({
+          registrationState: "present",
+          supervisorState: "inactive",
           installed: true,
           startable: true,
           backend: "launchd",
         }),
-        startService: () => { throw new Error("launchctl denied start"); },
+        armServiceStartDelegation: ensureToken => {
+          calls.push(`arm:${ensureToken}`);
+          return {
+            token: "delegation",
+            ensureToken,
+            ownerPid: process.pid,
+            expiresAt: Date.now() + 1_000,
+          };
+        },
+        clearServiceStartDelegation: () => { calls.push("clear"); },
+        startService: () => {
+          calls.push("service-refused");
+          throw new Error("launchctl denied start");
+        },
         spawnStart: async () => { calls.push("spawn"); },
+        restoreNative: () => {
+          calls.push("restore-native");
+          return {
+            success: true,
+            changed: true,
+            desiredChanged: true,
+            configChanged: false,
+            message: "external provider preserved",
+          };
+        },
       }),
     });
     expect(result).toMatchObject({
@@ -479,7 +1036,92 @@ describe("shared proxy lifecycle authority", () => {
       state: "blocked",
       errorCode: "SERVICE_BLOCKED",
     });
-    expect(calls).toEqual([]);
+    expect(calls).toEqual([
+      "enabled:true",
+      "arm:ensure-token",
+      "service-refused",
+      "clear",
+      "restore-native",
+    ]);
+    expect(result.message).toContain("Native Codex routing was restored");
+  });
+
+  test("explicit detached spawn refusal rolls routing back before lifecycle authority is released", async () => {
+    const calls: string[] = [];
+    const result = await ensureProxyLifecycle({
+      action: "start",
+      io: baseIo({
+        acquireAuthority: async () => {
+          calls.push("acquire-E");
+          return authority(calls);
+        },
+        setEnabled: (_client, enabled) => {
+          calls.push(`enabled:${enabled}`);
+          return { ok: true, status: "committed", enabled };
+        },
+        spawnStart: async () => {
+          calls.push("spawn-refused");
+          throw new Error("spawn refused");
+        },
+        restoreNative: () => {
+          calls.push("restore-native");
+          return {
+            success: true,
+            changed: true,
+            desiredChanged: true,
+            configChanged: false,
+            message: "external provider bytes preserved",
+          };
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: false, state: "failed", errorCode: "START_FAILED" });
+    expect(result.message).toContain("Native Codex routing was restored");
+    expect(calls).toEqual([
+      "acquire-E", "enabled:true", "spawn-refused", "restore-native", "release-S", "release-E",
+    ]);
+  });
+
+  test("explicit start health timeout restores prior native routing without touching external provider bytes", async () => {
+    const calls: string[] = [];
+    const result = await ensureProxyLifecycle({
+      action: "start",
+      waitTimeoutMs: 5,
+      io: baseIo({
+        acquireAuthority: async () => {
+          calls.push("acquire-E");
+          return authority(calls);
+        },
+        externalProvider: () => "custom-provider",
+        setEnabled: (_client, enabled) => {
+          calls.push(`enabled:${enabled}`);
+          return { ok: true, status: "committed", enabled };
+        },
+        spawnStart: async () => { calls.push("spawn"); },
+        waitForProxy: async timeout => {
+          calls.push(`wait:${timeout}`);
+          return null;
+        },
+        restoreNative: () => {
+          calls.push("restore-native:config-unchanged");
+          return {
+            success: true,
+            changed: true,
+            desiredChanged: true,
+            configChanged: false,
+            message: "external provider preserved byte-for-byte",
+          };
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: false, state: "failed", errorCode: "START_FAILED" });
+    expect(result.message).toContain("Native Codex routing was restored");
+    expect(calls).toEqual([
+      "acquire-E", "enabled:true", "spawn", "wait:5",
+      "restore-native:config-unchanged", "release-S", "release-E",
+    ]);
   });
 
   test("an unmanaged start publishes only after identity-checked health", async () => {
@@ -547,11 +1189,11 @@ describe("shared proxy lifecycle authority", () => {
     await spawnDetachedProxyStart({
       port: 10124,
       entry: "/repo/src/cli/index.ts",
-      env: { CCX_SERVICE: "1", CCX_TEST_SENTINEL: "kept" },
+      env: { [PROXY_DELEGATED_START_ENV]: "1", CCX_TEST_SENTINEL: "kept" },
       spawnFn,
     });
 
-    expect(spawnedEnv?.CCX_SERVICE).toBe("1");
+    expect(spawnedEnv?.[PROXY_DELEGATED_START_ENV]).toBe("1");
     expect(spawnedEnv?.CCX_TEST_SENTINEL).toBe("kept");
     expect(spawnedEnv?.[BUN_RUNTIME_PATH_ENV]).toBe(process.execPath);
     expect(BUN_RUNTIME_SOURCES).toContain(spawnedEnv?.[BUN_RUNTIME_SOURCE_ENV]);

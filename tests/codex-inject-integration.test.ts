@@ -407,7 +407,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(config).not.toContain("default_subagent_model");
   });
 
-  test("external model provider stays byte-for-byte unchanged so its session history remains visible", () => {
+  test("external model provider retains config, session history, and journal when its profile surface is indeterminate", () => {
     const original = [
       'model_provider = "custom"',
       'model = "third-party-model"',
@@ -442,13 +442,14 @@ describe("injectCodexConfig integration (Design B)", () => {
     db.close();
     const dbBefore = readFileSync(dbPath);
     const journalPath = join(codexHome, "codexcommander-journal.json");
-    writeFileSync(journalPath, JSON.stringify({
+    const journal = JSON.stringify({
       version: 1,
       originalConfig: Buffer.from('model_provider = "openai"\n').toString("base64"),
       originalProfile: null,
       pid: process.pid,
       timestamp: new Date().toISOString(),
-    }), "utf8");
+    });
+    writeFileSync(journalPath, journal, "utf8");
 
     const r = runInject(codexHome, ccxHome, JSON.stringify({
       syncCodexSubagentDefaults: true,
@@ -466,10 +467,10 @@ describe("injectCodexConfig integration (Design B)", () => {
 
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
     expect(readFileSync(profilePath, "utf8")).toBe(profile);
-   expect(readFileSync(dbPath).equals(dbBefore)).toBe(true);
-   expect(readFileSync(rolloutPath, "utf8")).toBe(rollout);
-   expect(existsSync(journalPath)).toBe(false);
- });
+    expect(readFileSync(dbPath).equals(dbBefore)).toBe(true);
+    expect(readFileSync(rolloutPath, "utf8")).toBe(rollout);
+    expect(readFileSync(journalPath, "utf8")).toBe(journal);
+  });
 
   test("external-provider preservation refuses a changed provider before any write", () => {
     const original = 'model_provider = "openai"\nmodel = "gpt-5.6-sol"\n';
@@ -523,7 +524,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
   });
 
-  test("restoreNativeCodex removes a stale journal without changing external provider state", () => {
+  test("restoreNativeCodex retains the journal when an external provider has an indeterminate profile surface", () => {
     const configPath = join(codexHome, "config.toml");
     const config = 'model_provider = "custom"\nmodel = "third-party-model"\n';
     writeFileSync(configPath, config, "utf8");
@@ -550,13 +551,14 @@ describe("injectCodexConfig integration (Design B)", () => {
     const dbBefore = readFileSync(dbPath);
 
     const journalPath = join(codexHome, "codexcommander-journal.json");
-    writeFileSync(journalPath, JSON.stringify({
+    const journal = JSON.stringify({
       version: 1,
       originalConfig: Buffer.from('model_provider = "openai"\n').toString("base64"),
       originalProfile: null,
       pid: process.pid,
       timestamp: new Date().toISOString(),
-    }), "utf8");
+    });
+    writeFileSync(journalPath, journal, "utf8");
 
     const r = runRestore(codexHome, ccxHome);
     expect(r.status).toBe(0);
@@ -567,7 +569,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(readFileSync(profilePath, "utf8")).toBe(profile);
     expect(readFileSync(dbPath).equals(dbBefore)).toBe(true);
     expect(readFileSync(rolloutPath, "utf8")).toBe(rollout);
-    expect(existsSync(journalPath)).toBe(false);
+    expect(readFileSync(journalPath, "utf8")).toBe(journal);
   });
 
   test("provider selected through a named root profile is also preserved", () => {
@@ -585,6 +587,26 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout).message).toContain('external model_provider "custom"');
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
+  });
+
+  test("invalid TOML with an apparent external provider fails closed without writing", () => {
+    const configPath = join(codexHome, "config.toml");
+    const original = [
+      'model_provider = "custom"',
+      "[model_providers.custom]",
+      'base_url = "https://external.example/v1"',
+      "broken = [",
+      "",
+    ].join("\n");
+    writeFileSync(configPath, original, "utf8");
+
+    const result = runInject(codexHome, ccxHome);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ success: false });
+    expect(JSON.parse(result.stdout).message).toContain("not valid TOML");
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+    expect(existsSync(join(codexHome, "codexcommander.config.toml"))).toBe(false);
+    expect(existsSync(join(codexHome, "codexcommander-journal.json"))).toBe(false);
   });
 
   test("external provider guidance includes the admission header for non-loopback binds", () => {

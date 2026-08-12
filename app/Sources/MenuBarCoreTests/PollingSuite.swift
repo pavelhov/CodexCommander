@@ -75,6 +75,66 @@ enum PollingSuite {
             t.equal(sync { await coordinator.currentInterval }, PollingCoordinator.backoffInterval)
         }
 
+        t.test("polling: missing post-stop attestation probes liveness and exposes Start") {
+            StubProtocol.reset([
+                .init(status: 0, urlError: .cannotConnectToHost),
+            ])
+            let installation = ProxyInstallation(
+                endpoint: .default,
+                credential: "admin-secret",
+                credentialAvailability: .file,
+                configDirectory: URL(fileURLWithPath: "/tmp"),
+                runtimeAttestation: nil
+            )
+            let client = try! ProxyClient(
+                installation: installation,
+                session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
+                discovery: { installation }
+            )
+            let coordinator = PollingCoordinator(client: client, endpoint: .default)
+
+            sync { await coordinator.refresh() }
+
+            let snapshot = sync { await coordinator.current }
+            t.equal(snapshot.state, .unreachable)
+            t.equal(snapshot.readiness, .unavailable)
+            t.equal(StubProtocol.recorded.count, 1, "only the public liveness probe reaches the socket")
+            t.equal(StubProtocol.recorded.first?.url?.path, "/healthz")
+            t.isNil(
+                StubProtocol.recorded.first?.value(forHTTPHeaderField: "x-codexcommander-api-key"),
+                "stopped-state proof never sends the durable admin credential"
+            )
+        }
+
+        t.test("polling: missing attestation never starts over a reachable listener") {
+            StubProtocol.reset([
+                .init(status: 200, body: identity),
+            ])
+            let installation = ProxyInstallation(
+                endpoint: .default,
+                credential: "admin-secret",
+                credentialAvailability: .file,
+                configDirectory: URL(fileURLWithPath: "/tmp"),
+                runtimeAttestation: nil
+            )
+            let client = try! ProxyClient(
+                installation: installation,
+                session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
+                discovery: { installation }
+            )
+            let coordinator = PollingCoordinator(client: client, endpoint: .default)
+
+            sync { await coordinator.refresh() }
+
+            let snapshot = sync { await coordinator.current }
+            t.equal(snapshot.state, .degraded(ProxyError.identityMismatch.userMessage))
+            t.equal(StubProtocol.recorded.count, 1)
+            t.isNil(
+                StubProtocol.recorded.first?.value(forHTTPHeaderField: "x-codexcommander-api-key"),
+                "reachable-listener proof also remains credential-free"
+            )
+        }
+
         t.test("polling: stale startup health stays neutral until revalidation completes") {
             StubProtocol.reset(
                 startupResponses(startupHealth(status: "at-risk", diagnosticStale: true))
@@ -282,6 +342,151 @@ enum PollingSuite {
             t.isNil(refreshValues[0], "ordinary first-cycle quota query")
             t.equal(refreshValues[1], "1")
         }
+
+        t.test("polling: focused route refresh skips diagnostics, readiness, activity, providers, and quota") {
+            StubProtocol.reset(healthResponses(routeStatus("native")))
+            let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
+            let client = ProxyClient(
+                endpoint: endpoint,
+                session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
+                credentials: StaticCredentialStore("admin-secret"),
+                attestationSecret: StubProtocol.attestationSecret
+            )
+            let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
+
+            let route = sync { try? await coordinator.refreshRouting() }
+
+            t.equal(route?.routingKind, .native)
+            t.equal(
+                sync { await coordinator.current }.codexRoute,
+                .confirmed(CodexRouteStatus(routingKind: .native))
+            )
+            let requests = StubProtocol.recorded
+            t.equal(requests.map { $0.url?.path ?? "" }, ["/healthz", "/api/codex-routing"])
+            t.expect(requests.allSatisfy { $0.url?.query == nil }, "focused route reads have no query")
+        }
+
+        t.test("polling: route verification remains independent while a quota request is paused") {
+            StubProtocol.reset(openResponses() + healthResponses(routeStatus("native")))
+            let gate = StubProtocol.pauseNextRequest(
+                path: "/api/provider-quotas",
+                asynchronously: true
+            )
+            let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
+            let client = ProxyClient(
+                endpoint: endpoint,
+                session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
+                credentials: StaticCredentialStore("admin-secret"),
+                attestationSecret: StubProtocol.attestationSecret
+            )
+            let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
+            let opening = Task { await coordinator.setPopoverOpen(true) }
+            let paused = gate.waitUntilStarted()
+            guard paused else {
+                gate.resume()
+                sync { await opening.value }
+                t.equal(paused, true)
+                return
+            }
+
+            let route = sync { try? await coordinator.refreshRouting() }
+            t.equal(route?.routingKind, .native)
+            t.equal(
+                sync { await coordinator.current }.codexRoute,
+                .confirmed(CodexRouteStatus(routingKind: .native))
+            )
+            gate.resume()
+            sync { await opening.value }
+
+            let paths = StubProtocol.recorded.map { $0.url?.path ?? "" }
+            t.equal(paths.filter { $0 == "/api/provider-quotas" }.count, 1)
+            t.equal(paths.filter { $0 == "/api/codex-routing" }.count, 1)
+        }
+
+        t.test("polling: failed focused refresh preserves prior route and health counters") {
+            StubProtocol.reset(
+                startupResponses(startupHealth(status: "protected", diagnosticStale: false))
+                    + [.init(status: 200, body: identity), .init(status: 500)]
+            )
+            let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
+            let client = ProxyClient(
+                endpoint: endpoint,
+                session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
+                credentials: StaticCredentialStore("admin-secret"),
+                attestationSecret: StubProtocol.attestationSecret
+            )
+            let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
+            sync { await coordinator.refresh() }
+            let before = sync { await coordinator.current }
+
+            let error = sync { await proxyError { try await coordinator.refreshRouting() } }
+            t.equal(error, .http(500))
+            let after = sync { await coordinator.current }
+            t.equal(after.codexRoute, before.codexRoute)
+            t.equal(after.state, before.state)
+            t.equal(after.consecutiveFailures, before.consecutiveFailures)
+            t.equal(after.lastUpdated, before.lastUpdated)
+        }
+
+        t.test("polling: unavailable confirmation replaces stale route without degrading health") {
+            StubProtocol.reset(startupResponses(
+                startupHealth(status: "protected", diagnosticStale: false)
+            ))
+            let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
+            let client = ProxyClient(
+                endpoint: endpoint,
+                session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
+                credentials: StaticCredentialStore("admin-secret"),
+                attestationSecret: StubProtocol.attestationSecret
+            )
+            let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
+            sync { await coordinator.refresh() }
+            let before = sync { await coordinator.current }
+
+            sync { await coordinator.markRoutingConfirmationUnavailable() }
+
+            let after = sync { await coordinator.current }
+            t.equal(after.codexRoute, .confirmationUnavailable)
+            t.equal(after.state, before.state)
+            t.equal(after.consecutiveFailures, before.consecutiveFailures)
+            t.equal(after.readiness, before.readiness)
+            t.equal(StubProtocol.recorded.count, 3, "marking unknown performs no network read")
+        }
+
+        t.test("polling: an older ordinary refresh cannot overwrite newer focused route truth") {
+            StubProtocol.reset([
+                .init(status: 200, body: identity),
+                .init(status: 200, body: identity),
+                .init(status: 200, body: routeStatus("native")),
+                .init(status: 200, body: startupHealth(status: "protected", diagnosticStale: false)),
+            ])
+            let gate = StubProtocol.pauseNextRequest(asynchronously: true)
+            let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
+            let client = ProxyClient(
+                endpoint: endpoint,
+                session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
+                credentials: StaticCredentialStore("admin-secret"),
+                attestationSecret: StubProtocol.attestationSecret
+            )
+            let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
+            let ordinary = Task { await coordinator.refresh() }
+            let paused = gate.waitUntilStarted()
+            guard paused else {
+                gate.resume()
+                sync { await ordinary.value }
+                t.equal(paused, true)
+                return
+            }
+
+            let focused = sync { try? await coordinator.refreshRouting() }
+            t.equal(focused?.routingKind, .native)
+            gate.resume()
+            sync { await ordinary.value }
+            t.equal(
+                sync { await coordinator.current }.codexRoute,
+                .confirmed(CodexRouteStatus(routingKind: .native))
+            )
+        }
     }
 
     private static func openResponses() -> [StubProtocol.Response] {
@@ -336,6 +541,24 @@ enum PollingSuite {
          "recommendedCommand":"ccx service install","commands":{"installService":"ccx service install",
          "repairService":"ccx service repair","installShim":"ccx codex-shim install","restoreNative":"ccx restore"}}
         """
+    }
+
+    private static func routeStatus(_ routingKind: String) -> String {
+        let injected = routingKind == "codexcommander-local" ? "true" : "false"
+        return "{\"schemaVersion\":1,\"routingKind\":\"\(routingKind)\",\"routingInjected\":\(injected)}"
+    }
+
+    private static func proxyError<T>(
+        _ operation: () async throws -> T
+    ) async -> ProxyError? {
+        do {
+            _ = try await operation()
+            return nil
+        } catch let error as ProxyError {
+            return error
+        } catch {
+            return nil
+        }
     }
 
     private static func sync<T>(_ operation: @escaping () async -> T) -> T {

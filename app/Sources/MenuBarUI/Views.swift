@@ -211,10 +211,17 @@ public final class StatusHeaderView: NSView {
         readiness.stringValue = readinessText
 
         let routeText: String?
-        if case .running(let health) = state {
-            routeText = "Codex route · \(Self.codexRouteName(health))"
-        } else {
-            routeText = nil
+        switch snapshot.codexRoute {
+        case .confirmed(let route):
+            routeText = "Codex route · \(Self.codexRouteName(route))"
+        case .confirmationUnavailable:
+            routeText = "Codex route · Unconfirmed"
+        case .unobserved:
+            if case .running(let health) = state {
+                routeText = "Codex route · \(Self.codexRouteName(health))"
+            } else {
+                routeText = nil
+            }
         }
         codexRoute.stringValue = routeText ?? ""
         codexRoute.isHidden = routeText == nil
@@ -246,6 +253,16 @@ public final class StatusHeaderView: NSView {
         case "custom-local": return "Custom local"
         case "custom-remote": return "Custom remote"
         default: return "Unknown"
+        }
+    }
+
+    private static func codexRouteName(_ route: CodexRouteStatus) -> String {
+        switch route.routingKind {
+        case .native: return "Native OpenAI"
+        case .codexCommanderLocal: return "CodexCommander"
+        case .customLocal: return "Custom local"
+        case .customRemote: return "Custom remote"
+        case .unknown: return "Unknown"
         }
     }
 

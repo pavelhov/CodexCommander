@@ -48,14 +48,9 @@ import {
   hasInjectedCodexRouting,
   hasInjectedOpenaiBaseUrl,
   isRootOpenaiBaseUrlLine,
-  providerTableStart,
-  providerTableString,
-  rootTomlString,
-  tomlStringPattern,
 } from "./injected-marker";
 import {
   API_KEY_HEADER,
-  isOwnedProviderId,
   PROVIDER_ID,
 } from "../identity";
 import {
@@ -68,7 +63,6 @@ import {
   resolveCodexConfigPath,
   tomlString,
 } from "./paths";
-import { resolveEffectiveProjectModelProvider } from "./project-config-warnings";
 import {
   transformManagedSubagentDefaults,
   type ManagedSubagentDefaults,
@@ -79,16 +73,49 @@ import {
   captureCatalogConfigAuthority,
   type CatalogConfigAuthoritySnapshot,
 } from "./catalog-admission";
+import {
+  observeCodexRoutingDocument,
+  type CodexRoutingKind,
+} from "./routing-document";
+import {
+  isLoopbackHostname,
+  providerBaseHost,
+  proxyProviderBaseUrl,
+} from "./proxy-endpoint";
+import {
+  restoreNativeCodexRoutingEscape,
+  stripMarkerOwnedRoutingForNativeEscape,
+  type NativeCodexRoutingEscapeOptions,
+  type NativeCodexRoutingEscapeResult,
+} from "./native-routing-escape";
+import {
+  prepareExplicitCodexRoutingStart,
+  restoreNativeCodexRoutingForStop,
+  type ExplicitCodexRoutingStartOptions,
+  type NativeCodexRoutingStopOptions,
+  type NativeCodexRoutingStopResult,
+} from "./routing-transition";
 
 // Ownership predicates live in `./injected-marker` so `journal.ts` can reach them
 // without importing this module back. Re-exported for existing external callers.
 export { hasInjectedCodexRouting, hasInjectedOpenaiBaseUrl };
+export {
+  prepareExplicitCodexRoutingStart,
+  restoreNativeCodexRoutingEscape,
+  restoreNativeCodexRoutingForStop,
+  stripMarkerOwnedRoutingForNativeEscape,
+};
+export type {
+  CodexRoutingKind,
+  ExplicitCodexRoutingStartOptions,
+  NativeCodexRoutingEscapeOptions,
+  NativeCodexRoutingEscapeResult,
+  NativeCodexRoutingStopOptions,
+  NativeCodexRoutingStopResult,
+};
 
 export function externalCodexModelProvider(content: string): string | null {
-  const provider = resolveEffectiveProjectModelProvider(content).provider;
-  return provider && provider !== "openai" && !isOwnedProviderId(provider)
-    ? provider
-    : null;
+  return observeCodexRoutingDocument(content).externalProvider;
 }
 
 export function currentExternalCodexModelProvider(): string | null {
@@ -183,33 +210,7 @@ function configuredManagedSubagentDefaults(
  * Do not use `providerBaseHost` for this decision — it folds wildcards to 127.0.0.1 because it
  * answers "what address do I dial", which is a different question from "is this exposed".
  */
-export function isLoopbackHostname(hostname: string | undefined): boolean {
-  const normalized = (hostname ?? "127.0.0.1").trim().toLowerCase();
-  return (
-    normalized === "" ||
-    normalized === "localhost" ||
-    normalized === "127.0.0.1" ||
-    normalized === "::1" ||
-    normalized === "[::1]"
-  );
-}
-
-export function providerBaseHost(hostname: string | undefined): string {
-  const trimmed = (hostname ?? "127.0.0.1").trim();
-  const lower = trimmed.toLowerCase();
-  // Match what the server actually binds. Writing "localhost" while binding IPv4-only
-  // 127.0.0.1 breaks on Windows, where localhost commonly resolves to ::1 first.
-  if (lower === "::1" || lower === "[::1]") return "[::1]";
-  if (
-    isLoopbackHostname(trimmed) ||
-    trimmed === "0.0.0.0" ||
-    trimmed === "::" ||
-    trimmed === "[::]"
-  )
-    return "127.0.0.1";
-  if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed;
-  return trimmed.includes(":") ? `[${trimmed}]` : trimmed;
-}
+export { isLoopbackHostname, providerBaseHost };
 
 export function shouldInjectApiAuthHeader(
   config: Pick<CodexCommanderConfig, "hostname"> | undefined,
@@ -223,13 +224,12 @@ export function buildProviderTableBlock(
   includeApiAuthHeader = false,
   hostname?: string,
 ): string {
-  const host = providerBaseHost(hostname);
   const lines = [
     "",
     CCX_SECTION_MARKER,
     `[model_providers.${PROVIDER_ID}]`,
     'name = "CodexCommander Proxy"',
-    `base_url = "http://${host}:${port}/v1"`,
+    `base_url = "${proxyProviderBaseUrl(port, hostname)}"`,
     'wire_api = "responses"',
     "requires_openai_auth = true",
   ];
@@ -246,7 +246,7 @@ export function buildOpenaiBaseUrlLine(
   port: number,
   hostname?: string,
 ): string {
-  return `openai_base_url = "http://${providerBaseHost(hostname)}:${port}/v1"`;
+  return `openai_base_url = "${proxyProviderBaseUrl(port, hostname)}"`;
 }
 
 /**
@@ -314,82 +314,9 @@ export function stripInjectedOpenaiBaseUrl(content: string): string {
   return lines.filter((_, i) => !drop.has(i)).join("\n");
 }
 
-export type CodexRoutingKind =
-  "native" | "codexcommander-local" | "custom-local" | "custom-remote" | "unknown";
-
-type RoutingEndpointKind = "local" | "remote" | "unknown";
-
-function ipv4Octets(hostname: string): number[] | null {
-  const dotted = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(hostname);
-  if (dotted) {
-    const octets = dotted.slice(1).map(Number);
-    return octets.some((octet) => octet > 255) ? null : octets;
-  }
-  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(hostname);
-  if (!mapped) return null;
-  const high = Number.parseInt(mapped[1], 16);
-  const low = Number.parseInt(mapped[2], 16);
-  return [high >>> 8, high & 0xff, low >>> 8, low & 0xff];
-}
-
-function classifyRoutingEndpoint(value: string): RoutingEndpointKind {
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return "unknown";
-    const hostname = url.hostname
-      .toLowerCase()
-      .replace(/^\[|\]$/g, "")
-      .replace(/\.$/, "");
-    if (!hostname) return "unknown";
-    if (hostname === "localhost" || hostname.endsWith(".localhost"))
-      return "local";
-    if (hostname === "::" || hostname === "::1" || hostname === "0.0.0.0")
-      return "local";
-    const octets = ipv4Octets(hostname);
-    if (octets) {
-      if (octets.every((octet) => octet === 0)) return "local";
-      if (octets[0] === 127) return "local";
-      return "remote";
-    }
-    if (/^::ffff:/i.test(hostname)) return "unknown";
-    return "remote";
-  } catch {
-    return "unknown";
-  }
-}
-
 /** Classify actual routing dependency separately from codexcommander ownership. */
 export function classifyCodexRouting(content: string): CodexRoutingKind {
-  const rootBaseUrl = rootTomlString(content, "openai_base_url");
-  if (rootBaseUrl) {
-    const endpoint = classifyRoutingEndpoint(rootBaseUrl);
-    if (endpoint === "unknown") return "unknown";
-    if (hasInjectedOpenaiBaseUrl(content)) return "codexcommander-local";
-    return endpoint === "local" ? "custom-local" : "custom-remote";
-  }
-  const rootProvider = rootTomlString(content, "model_provider");
-  if (rootProvider) {
-    const providerTableExists =
-      providerTableStart(content.split("\n"), rootProvider) !== -1;
-    const providerBaseUrl = providerTableString(
-      content,
-      rootProvider,
-      "base_url",
-    );
-    if (providerBaseUrl) {
-      const endpoint = classifyRoutingEndpoint(providerBaseUrl);
-      if (endpoint === "unknown") return "unknown";
-      if (isOwnedProviderId(rootProvider)) return "codexcommander-local";
-      return endpoint === "local" ? "custom-local" : "custom-remote";
-    }
-    if (
-      isOwnedProviderId(rootProvider) ||
-      providerTableExists ||
-      rootProvider !== "openai"
-    )
-      return "unknown";
-  }
-  return "native";
+  return observeCodexRoutingDocument(content).routingKind;
 }
 
 /** Read-only probe used by status, doctor, and the dashboard. */
@@ -680,15 +607,22 @@ export async function injectCodexConfig(
   }
 
   const rawContent = readFileSync(CODEX_CONFIG_PATH, "utf-8");
+  const routingObservation = observeCodexRoutingDocument(rawContent);
+  if (routingObservation.kind === "invalid") {
+    return {
+      success: false,
+      message: "Codex config injection refused because config.toml is not valid TOML; no files were changed.",
+    };
+  }
   if (options.expectedRoutingKind !== undefined
-    && classifyCodexRouting(rawContent) !== options.expectedRoutingKind) {
+    && routingObservation.routingKind !== options.expectedRoutingKind) {
     return {
       success: false,
       status: "stale",
       message: "Codex routing ownership changed before native Codex config publication; no files were changed.",
     };
   }
-  const activeProvider = externalCodexModelProvider(rawContent);
+  const activeProvider = routingObservation.externalProvider;
   if (
     options.expectedExternalProvider !== undefined
     && activeProvider !== options.expectedExternalProvider
@@ -937,8 +871,9 @@ export async function injectCodexConfig(
             throw new CodexWriteLockSkipped("desired_disabled");
           }
           if (options.expectedRoutingKind !== undefined
-            && classifyCodexRouting(readFileSync(CODEX_CONFIG_PATH, "utf8"))
-              !== options.expectedRoutingKind) {
+            && observeCodexRoutingDocument(
+              readFileSync(CODEX_CONFIG_PATH, "utf8"),
+            ).routingKind !== options.expectedRoutingKind) {
             throw new CodexInjectRoutingStale();
           }
           if (options.expectedConfigAuthority) {
@@ -1205,7 +1140,7 @@ export type CodexRestoreArtifactState = "ok" | "skipped" | "failed";
 export interface CodexRestoreConfigResult {
   state: CodexRestoreArtifactState;
   changed: boolean;
-  action: "journal-restored" | "owned-fields-stripped" | "external-provider-preserved" | "failed";
+  action: "journal-restored" | "owned-fields-stripped" | "external-provider-preserved" | "unchanged" | "failed";
   message: string;
 }
 

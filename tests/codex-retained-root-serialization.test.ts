@@ -287,12 +287,11 @@ test("server listen preserves an unchanged managed cache mtime and only explicit
     const startup = readFileSync(join(repoRoot, "src/server/index.ts"), "utf8");
     expect(startup).not.toContain("invalidateCodexModelsCacheWithPermit");
     expect(startup).not.toContain("consumeStartupCacheInvalidationWrite");
-    const startupSync = cliSource.slice(
-      cliSource.indexOf("const startupSync = await syncCodexOnStartIfEnabled"),
-      cliSource.indexOf("// Build Desktop 3P alias registry"),
+    const foregroundSource = readFileSync(join(repoRoot, "src/cli/foreground-proxy.ts"), "utf8");
+    expect(foregroundSource).toContain(
+      "if (startupSync.catalogWritten || startupSync.cacheSynced)",
     );
-    expect(startupSync).toContain("if (startupSync.catalogWritten || startupSync.cacheSynced)");
-    expect(startupSync).not.toContain("consumeStartupCacheInvalidationWrite");
+    expect(foregroundSource).not.toContain("consumeStartupCacheInvalidationWrite");
   } finally {
     holder.release();
     expect(await holder.child.exited).toBe(0);

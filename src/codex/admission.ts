@@ -24,7 +24,7 @@ import { getConfigDir, observeConfigGeneration, readConfigAdmissionSnapshot } fr
 import { inspectNativeCodexOwnership } from "../integrations/native/ownership-preflight";
 import type { AdmissionSnapshot } from "./convergence-types";
 import { codexIntegrationEnabled } from "./desired-state";
-import { externalCodexModelProvider } from "./inject";
+import { observeCodexRoutingDocument } from "./routing-document";
 import { JOURNAL_PATH } from "./journal";
 import {
   CODEX_MODELS_CACHE_PATH,
@@ -144,7 +144,7 @@ export function admitCodexWrite(deps: AdmissionDeps = {}): CodexAdmission {
     // Resolved at call time, not at module load: CODEX_CONFIG_PATH is a const
     // fixed when the module was first imported, so it does not follow a
     // CODEX_HOME that changed afterwards.
-    external = externalCodexModelProvider(readFileSync(codexConfigPath, "utf-8"));
+    external = observeCodexRoutingDocument(readFileSync(codexConfigPath, "utf-8")).externalProvider;
   } catch {
     // No Codex config yet is not an external owner; it is simply nothing to read.
     external = null;

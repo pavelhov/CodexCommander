@@ -9,6 +9,11 @@ import { resolveCodexCoordinatorDatabasePath, resolveEffectiveUserIdentity } fro
 import { MANAGED_AGENTS_TABLE_MARKER, MANAGED_SUBAGENT_DEFAULT_MARKER } from "../src/codex/subagent-defaults";
 import type { CodexCommanderConfig } from "../src/types";
 import type { OrcaCodexHomeDiagnostic } from "../src/codex/home";
+import type { ProxyLifecycleAuthority } from "../src/server/proxy-lifecycle-authority";
+import {
+  PROXY_ENSURE_LEASE_HEADER,
+  PROXY_START_LEASE_HEADER,
+} from "../src/server/proxy-lifecycle-protocol";
 import { claimOwnedServiceHome } from "./helpers/owned-service-home";
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 
@@ -635,6 +640,162 @@ describe("GUI/CLI Codex sync backend", () => {
       readinessGate: { recoverReady: () => { recovered += 1; } },
     });
     expect(recovered).toBe(1);
+  });
+
+  test("raw POST /api/sync waits for E then S and observes OFF before mutation", async () => {
+    let admitAuthority!: (authority: ProxyLifecycleAuthority) => void;
+    let authorityRequested!: () => void;
+    const authorityRequest = new Promise<void>(resolve => { authorityRequested = resolve; });
+    const authorityAdmission = new Promise<ProxyLifecycleAuthority>(resolve => { admitAuthority = resolve; });
+    const releases: string[] = [];
+    let released = false;
+    const authority: ProxyLifecycleAuthority = {
+      deadlineAt: Number.POSITIVE_INFINITY,
+      ensure: { token: "ensure-token", release: () => authority.releaseAll() },
+      start: { token: "start-token", release: () => authority.releaseStart() },
+      acquireStart: async () => authority.start!,
+      delegatedLease: () => released
+        ? undefined
+        : { ensureToken: "ensure-token", startToken: "start-token" },
+      releaseStart: () => { releases.push("S"); },
+      releaseAll: () => {
+        if (released) return;
+        released = true;
+        releases.push("S", "E");
+      },
+    };
+    let syncConfig: CodexCommanderConfig | null = null;
+    let includeStart: boolean | undefined;
+    const request = new Request("http://localhost/api/sync", { method: "POST" });
+    const pending = handleManagementAPI(request, new URL(request.url), config, {
+      proxyStopLifecycle: {
+        acquireAuthority: async options => {
+          includeStart = options?.includeStart;
+          authorityRequested();
+          return authorityAdmission;
+        },
+      },
+      syncModelsToCodex: async (_port, current) => {
+        syncConfig = current;
+        return {
+          status: "skipped",
+          skippedReason: "desired_disabled",
+          ok: true,
+          added: 0,
+          catalogPath: null,
+          catalogExists: false,
+          catalogWritten: false,
+          cacheSynced: false,
+          catalogQuality: "native-only",
+          rehydrated: 0,
+          message: "disabled",
+        };
+      },
+      readRuntimePort: () => null,
+      resetCodexAppServerCatalogStateCache: () => {},
+      collectCodexAppServerCatalogState: () => ({ state: "not_running", processes: [], catalogMtimeMs: null }),
+      captureCatalogDesiredSnapshotForActivation: () => ({
+        config: { ...config, clientIntegrations: { codex: false } },
+        authority: {
+          generation: { value: 1 },
+          semanticIdentity: "semantic",
+          contentIdentity: "content",
+          referenceIdentity: "reference",
+        },
+        revision: "disabled-revision",
+      }) as never,
+      catalogArtifactProofForActivation: () => "unproven",
+      codexRoutingKindForActivation: () => "native",
+    });
+
+    await authorityRequest;
+    expect(includeStart).toBe(true);
+    expect(syncConfig).toBeNull();
+    writeFileSync(join(TEST_CCX_HOME, "config.json"), JSON.stringify({
+      ...config,
+      clientIntegrations: { codex: false },
+    }));
+    admitAuthority(authority);
+
+    const response = await pending;
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).toMatchObject({
+      status: "skipped",
+      skippedReason: "desired_disabled",
+      ok: true,
+    });
+    expect(syncConfig?.clientIntegrations?.codex).toBe(false);
+    expect(releases).toEqual(["S", "E"]);
+  });
+
+  test("POST /api/sync accepts only a validated complete delegated E/S lease", async () => {
+    let syncCalls = 0;
+    let validations = 0;
+    const syncResult = {
+      status: "applied" as const,
+      ok: true,
+      added: 0,
+      catalogPath: null,
+      catalogExists: true,
+      catalogWritten: false,
+      cacheSynced: false,
+      catalogQuality: "live" as const,
+      rehydrated: 0,
+      message: "synced",
+    };
+    const activationSeams = {
+      syncModelsToCodex: async () => { syncCalls += 1; return syncResult; },
+      readRuntimePort: () => null,
+      resetCodexAppServerCatalogStateCache: () => {},
+      collectCodexAppServerCatalogState: () => ({ state: "not_running" as const, processes: [], catalogMtimeMs: null }),
+      captureCatalogDesiredSnapshotForActivation: () => ({
+        config,
+        authority: {
+          generation: { value: 1 },
+          semanticIdentity: "semantic",
+          contentIdentity: "content",
+          referenceIdentity: "reference",
+        },
+        revision: "revision",
+      }) as never,
+      catalogArtifactProofForActivation: () => "current" as const,
+      codexRoutingKindForActivation: () => "codexcommander-local" as const,
+    };
+    const delegated = new Request("http://localhost/api/sync", {
+      method: "POST",
+      headers: {
+        [PROXY_ENSURE_LEASE_HEADER]: "ensure-secret",
+        [PROXY_START_LEASE_HEADER]: "start-secret",
+      },
+    });
+    const accepted = await handleManagementAPI(delegated, new URL(delegated.url), config, {
+      ...activationSeams,
+      proxyStopLifecycle: {
+        validateLease: lease => {
+          validations += 1;
+          return lease.ensureToken === "ensure-secret" && lease.startToken === "start-secret";
+        },
+        acquireAuthority: async () => { throw new Error("delegated sync must not reacquire"); },
+      },
+    });
+    expect(accepted?.status).toBe(200);
+    expect(validations).toBe(1);
+    expect(syncCalls).toBe(1);
+
+    const partial = new Request("http://localhost/api/sync", {
+      method: "POST",
+      headers: { [PROXY_ENSURE_LEASE_HEADER]: "ensure-secret" },
+    });
+    const refused = await handleManagementAPI(partial, new URL(partial.url), config, {
+      ...activationSeams,
+      proxyStopLifecycle: {
+        validateLease: () => { throw new Error("partial proof must fail before validation"); },
+        acquireAuthority: async () => { throw new Error("partial proof must not reacquire"); },
+      },
+    });
+    expect(refused?.status).toBe(409);
+    expect(await refused?.json()).toMatchObject({ status: "refused", ok: false });
+    expect(syncCalls).toBe(1);
   });
 
   test("POST /api/sync never promotes from a torn desired, artifact, or routing observation", async () => {

@@ -6,9 +6,8 @@ import { createBoundedFetch, type BoundedFetch } from "../bounded-fetch";
 
 /**
  * Memory observability card. Polls GET /api/system/memory (#314 WP3) every 5s
- * and renders scalar diagnostics. Also hosts the confirm-gated Drain & restart
- * action (#563): longer 60s drain, then respawn via ensure/service — not the
- * short /api/stop teardown path.
+ * and renders scalar diagnostics. It also hosts the confirm-gated proxy restart
+ * action (#563), which delegates to the canonical tray Stop -> Start lifecycle.
  */
 
 interface MemorySample {
@@ -50,7 +49,6 @@ interface SystemMemory {
   jscHeap: { heapSize: number; heapCapacity: number; objectCount: number } | null;
   responseState: ResponseState;
   activeTurnCount: number;
-  isDraining: boolean;
   watchdog: { warnThresholdBytes: number; lastWarnAt: number | null; observedBytes: number; observedMetric: MemoryMetric; samples: MemorySample[] } | null;
 }
 
@@ -105,7 +103,6 @@ function parseSystemMemory(value: unknown): SystemMemory {
     || !isMemoryMetric(value.observedMetric)
     || !Number.isInteger(value.activeTurnCount)
     || (value.activeTurnCount as number) < 0
-    || typeof value.isDraining !== "boolean"
     || !(value.jscHeap === null || (isRecord(value.jscHeap)
       && isFiniteNumber(value.jscHeap.heapSize)
       && isFiniteNumber(value.jscHeap.heapCapacity)
@@ -117,7 +114,7 @@ function parseSystemMemory(value: unknown): SystemMemory {
   return value as unknown as SystemMemory;
 }
 
-type RestartPhase = "idle" | "draining" | "reconnecting" | "error";
+type RestartPhase = "idle" | "restarting" | "reconnecting" | "error";
 
 /**
  * Render a byte count with a binary-scaled unit; non-finite/zero inputs render as "0 B".
@@ -249,7 +246,6 @@ function MemoryPressure({
   );
 }
 
-const DRAIN_TIMEOUT_S = 60;
 const RECONNECT_POLL_MS = 1500;
 const RECONNECT_GIVE_UP_MS = 120_000;
 
@@ -259,23 +255,7 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
   const [unavailable, setUnavailable] = useState(false);
   const [restartPhase, setRestartPhase] = useState<RestartPhase>("idle");
   const [restartError, setRestartError] = useState<string | null>(null);
-  const [noSupervisor, setNoSupervisor] = useState(false);
   const [restartFromPid, setRestartFromPid] = useState<number | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const res = await fetch(`${apiBase}/api/startup-health`);
-        if (!res.ok || cancelled) return;
-        const json = await res.json() as { protection?: string };
-        if (!cancelled) setNoSupervisor(json.protection === "none");
-      } catch {
-        /* older proxies / offline — leave warning off */
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [apiBase]);
 
   useEffect(() => {
     let cancelled = false;
@@ -296,23 +276,21 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
         if (cancelled) return;
         setData(json);
         setUnavailable(false);
-        if (json.isDraining && restartPhase === "idle") setRestartPhase("draining");
         // Fast recycle can finish between polls with no observed outage — detect pid change.
         if (
-          (restartPhase === "draining" || restartPhase === "reconnecting")
+          (restartPhase === "restarting" || restartPhase === "reconnecting")
           && restartFromPid != null
           && typeof json.pid === "number"
           && json.pid !== restartFromPid
-          && !json.isDraining
         ) {
           setRestartPhase("idle");
           setRestartFromPid(null);
           setRestartError(null);
         }
       } catch {
-        // During drain/restart the proxy goes away — switch to reconnect polling.
+        // During restart the proxy goes away — switch to reconnect polling.
         if (cancelled) return;
-        if (restartPhase === "draining" || restartPhase === "reconnecting") {
+        if (restartPhase === "restarting" || restartPhase === "reconnecting") {
           setRestartPhase("reconnecting");
         } else {
           setUnavailable(true);
@@ -400,19 +378,17 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
 
   const confirmRestart = () => {
     const count = data?.activeTurnCount ?? 0;
-    const lines = [
-      t("dash.mem.restartConfirm", { count, seconds: DRAIN_TIMEOUT_S }),
-    ];
-    if (noSupervisor) lines.push(t("dash.mem.restartNoSupervisor"));
-    if (!window.confirm(lines.join("\n\n"))) return;
+    if (!window.confirm(t("dash.mem.restartConfirm", { count }))) return;
     void (async () => {
       setRestartError(null);
       setRestartFromPid(typeof data?.pid === "number" ? data.pid : null);
-      setRestartPhase("draining");
+      setRestartPhase("restarting");
       try {
         const res = await fetch(`${apiBase}/api/system/restart`, { method: "POST" });
         if (!res.ok) throw new Error("restart_failed");
-        // Proxy will drain then exit; memory poll will trip reconnecting or pid change.
+        // A proven helper spawn now owns canonical safe Stop -> Start. Begin
+        // replacement-PID polling even if the old endpoint has not dropped yet.
+        setRestartPhase("reconnecting");
       } catch {
         setRestartPhase("error");
         setRestartFromPid(null);
@@ -451,7 +427,7 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
   })();
   const responseState = data?.responseState;
   const activeTurns = data?.activeTurnCount;
-  const busy = restartPhase === "draining" || restartPhase === "reconnecting";
+  const busy = restartPhase === "restarting" || restartPhase === "reconnecting";
 
   return (
     <div className="panel" style={{ marginBottom: 24 }}>
@@ -548,9 +524,9 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
           panel does not reserve a row for a message that is usually absent. */}
       {data && (
         <div className="mem-status" aria-live="polite">
-          {restartPhase === "draining" && (
+          {restartPhase === "restarting" && (
             <span className="muted text-control">
-              {t("dash.mem.draining", { count: typeof activeTurns === "number" ? activeTurns : 0 })}
+              {t("dash.mem.restarting")}
             </span>
           )}
           {restartPhase === "reconnecting" && (
@@ -558,9 +534,6 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
           )}
           {restartPhase === "error" && restartError && (
             <span className="text-control" style={{ color: "var(--danger, #c44)" }}>{restartError}</span>
-          )}
-          {noSupervisor && restartPhase === "idle" && (
-            <span className="muted text-control">{t("dash.mem.restartNoSupervisor")}</span>
           )}
         </div>
       )}

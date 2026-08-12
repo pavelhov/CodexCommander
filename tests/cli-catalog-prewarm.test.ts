@@ -1,12 +1,11 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import type { CodexCommanderConfig } from "../src/types";
 import { scheduleCatalogPrewarm } from "../src/cli/catalog-prewarm";
-
-const root = new URL("../", import.meta.url);
-
-async function readText(path: string): Promise<string> {
-  return await Bun.file(new URL(path, root)).text();
-}
+import {
+  runForegroundProxyStart,
+  type ForegroundProxyStartIo,
+} from "../src/cli/foreground-proxy";
+import { foregroundProxyStartIo } from "./helpers/foreground-proxy-start";
 
 describe("catalog prewarm on handleStart bind", () => {
   test("scheduleCatalogPrewarm calls gatherRoutedModels(loadConfig()) once", async () => {
@@ -52,17 +51,17 @@ describe("catalog prewarm on handleStart bind", () => {
   });
 
   test("handleStart schedules catalog prewarm immediately after a successful bind", async () => {
-    const cli = (await readText("src/cli/index.ts")).replace(/\r\n/g, "\n");
-    const bindIdx = cli.indexOf("server = startServer(port");
-    const prewarmIdx = cli.indexOf("scheduleCatalogPrewarm()");
-    const breakIdx = cli.indexOf("\n      break;", bindIdx);
+    const events: string[] = [];
+    const io = foregroundProxyStartIo({
+      startServer: (() => {
+        events.push("bind");
+        return {};
+      }) as NonNullable<ForegroundProxyStartIo["startServer"]>,
+      scheduleCatalogPrewarm: () => events.push("prewarm"),
+      installCrashGuards: () => events.push("next-startup-step"),
+    });
 
-    expect(cli).toContain('from "./catalog-prewarm"');
-    expect(bindIdx).toBeGreaterThan(-1);
-    expect(prewarmIdx).toBeGreaterThan(bindIdx);
-    expect(breakIdx).toBeGreaterThan(prewarmIdx);
-    // Must stay inside the successful-bind try path, not only on a later sync.
-    expect(cli.slice(bindIdx, breakIdx)).toContain("scheduleCatalogPrewarm()");
-    expect(cli).not.toContain('void import("../codex/catalog").then(({ gatherRoutedModels })');
+    expect(await runForegroundProxyStart([], { block: false, io })).toBe(0);
+    expect(events).toEqual(["bind", "prewarm", "next-startup-step"]);
   });
 });

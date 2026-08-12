@@ -52,9 +52,10 @@ for the command, disable-key semantics, and safety constraints.
 
 ## Integration path
 
-`ccx init`, `ccx start`, and `ccx sync` wire the shared Codex config and catalog into the proxy; see
-[Codex Integration](/guides/codex-integration/) for config injection, catalog sync, shims, WebSocket
-fallback, and restore mechanics.
+`ccx start` and `ccx sync` wire the shared Codex config and catalog into the proxy. `ccx init` can do
+so only through an already-running, protected-runtime-proven proxy; otherwise Codex stays native until
+explicit Start. See [Codex Integration](/guides/codex-integration/) for config injection, catalog
+sync, shims, WebSocket fallback, and restore mechanics.
 
 ## Why routed models show up
 

@@ -5,7 +5,7 @@ import { isServiceOwnershipError, ServiceOwnershipError } from "../src/service";
 
 const CLI_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
 const LIFECYCLE_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "proxy-lifecycle.ts"), "utf8");
-const SERVICE_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "service.ts"), "utf8");
+const SERVICE_COMMAND_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "service-command.ts"), "utf8");
 const MANAGEMENT_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "server", "management-api.ts"), "utf8");
 const PROCESS_CONTROL_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "lib", "process-control.ts"), "utf8");
 
@@ -17,19 +17,14 @@ function sliceFn(source: string, start: string, end: string): string {
   return source.slice(from, to);
 }
 
-// `src/cli/index.ts` runs its command switch on import, so the handlers cannot be called from a
-// test. Wiring assertions therefore read the source — the house pattern established by
-// tests/stale-state-purge.test.ts and tests/uninstall.test.ts.
+// `src/cli/index.ts` runs its command switch on import, so the remaining command-dispatch
+// assertions read that thin entrypoint. Foreground startup itself is covered through the
+// dependency-injected module in tests/foreground-proxy.test.ts.
 describe("Grok fence lifecycle wiring", () => {
-  test("handleStart syncs the Grok fence outside the Desktop-3P try", () => {
-    const startFn = sliceFn(CLI_SOURCE, "async function handleStart(", "async function handleEnsure(");
-    const registryAt = startFn.indexOf("buildDesktop3pRegistry(");
-    const registryCatchAt = startFn.indexOf("/* best-effort — registry rebuilds on first /v1/models call */", registryAt);
-    const grokSyncAt = startFn.indexOf('await import("../grok/sync")');
-
-    expect(registryCatchAt).toBeGreaterThan(registryAt);
-    // Nested inside the registry try, a catalog throw skipped the fence entirely.
-    expect(grokSyncAt).toBeGreaterThan(registryCatchAt);
+  test("legacy tray Start uses explicit start semantics instead of automatic ensure", () => {
+    const trayStart = sliceFn(CLI_SOURCE, "async function handleTrayProxyStart(", "async function handleTrayProxyRestart(");
+    expect(trayStart).toContain('action: "start"');
+    expect(trayStart).toContain("honorAutoStart: false");
   });
 
   test("ensure syncs Grok against the observed live bind host", () => {
@@ -38,18 +33,22 @@ describe("Grok fence lifecycle wiring", () => {
     expect(syncFn).toContain("live.hostname ? { hostname: live.hostname }");
   });
 
-  test("handleStop gates shared teardown on ownership but still reverts system env", () => {
+  test("handleStop admits service ownership, restores routing, then terminates", () => {
     const serviceStopFn = sliceFn(LIFECYCLE_SOURCE, "function stopLifecycleService(", "interface ManagedStateRestoreResult");
     const stopFn = sliceFn(LIFECYCLE_SOURCE, "export async function stopProxyLifecycle(", "export async function restartProxyLifecycle(");
 
     expect(serviceStopFn).toContain("isServiceOwnershipError(error)");
     expect(serviceStopFn).toContain("blocked: true");
-    const blockedAt = stopFn.indexOf("if (service.blocked)");
-    const restoreAt = stopFn.indexOf("restoreManagedClientState(logger)");
-    expect(blockedAt).toBeGreaterThan(-1);
-    expect(restoreAt).toBeGreaterThan(blockedAt);
-    expect(stopFn.slice(blockedAt, restoreAt)).toContain("revertSystemEnv()");
-    expect(stopFn.slice(blockedAt, restoreAt)).toContain("return lifecycleResult");
+    const admissionAt = stopFn.indexOf("if (admission.blocked)");
+    const restoreAt = stopFn.indexOf("restoreManagedClientState(logger, io)");
+    const serviceAt = stopFn.indexOf("stopLifecycleService(logger, admission.installed");
+    const terminateAt = stopFn.indexOf("await (io.stopProxy ?? stopProxy)(pid,");
+    expect(admissionAt).toBeGreaterThan(-1);
+    expect(restoreAt).toBeGreaterThan(admissionAt);
+    expect(serviceAt).toBeGreaterThan(restoreAt);
+    expect(terminateAt).toBeGreaterThan(serviceAt);
+    expect(stopFn.slice(restoreAt, serviceAt)).toContain("if (!restored.ok)");
+    expect(stopFn.slice(restoreAt, serviceAt)).toContain("CodexCommander stayed running");
   });
 
   test("a refused Grok strip makes ccx stop fail instead of reporting success", () => {
@@ -74,7 +73,7 @@ describe("Grok fence lifecycle wiring", () => {
   });
 
   test("handleStop returns its outcome so restart and the tray can react", () => {
-    const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
+    const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleStatus(");
     // process.exit() inside handleStop would strand runTrayProxyRestart's start() half.
     expect(stopFn).toContain("process.exitCode = 1");
     expect(stopFn).toContain("return result.ok");
@@ -84,7 +83,7 @@ describe("Grok fence lifecycle wiring", () => {
     expect(restartAt).toBeGreaterThan(-1);
     const restartFn = LIFECYCLE_SOURCE.slice(restartAt);
     expect(restartFn).toContain("if (!stopped.ok) return stopped");
-    expect(restartFn).toContain("ensureProxyLifecycle(");
+    expect(restartFn).toContain("ensureProxyLifecycleUnderLock(");
   });
 
   test("handleStop treats an incomplete native Codex restore as a stop failure", () => {
@@ -94,34 +93,36 @@ describe("Grok fence lifecycle wiring", () => {
     expect(restoreFn).toContain("logger.warn(restore.message)");
   });
 
-  test("the daemon's exit cleanup keeps the CCX_SERVICE exclusion and adds the ownership check", () => {
-    const startFn = sliceFn(CLI_SOURCE, "const syncCleanup = () => {", "let shuttingDown = false;");
-    // Crash/respawn under a service manager must still keep the fence.
-    expect(startFn).toContain("!process.env.CCX_SERVICE && serviceEnvironmentOwnedHere()");
-  });
-
-  test("signal shutdown reports and exits nonzero when native Codex restore is incomplete", () => {
-    const startFn = sliceFn(CLI_SOURCE, "async function handleStart(", "async function handleStop(");
-    expect(startFn).toContain("if (!restored.success)");
-    expect(startFn).toContain("cleanupSucceeded = false");
-    expect(startFn).toContain("Native Codex restore failed during shutdown");
-    expect(startFn).toContain("process.exit(restored ? 0 : 1)");
-  });
 });
 
 describe("service teardown owns both managed configs", () => {
   test("service stop strips the Grok fence and guards the platform stop on installation", () => {
-    const stopCase = sliceFn(SERVICE_SOURCE, 'case "stop":', 'case "status":');
-    expect(stopCase).toContain("assertServiceEnvironmentMatchesInstall()");
-    // An unguarded ops.stop() ran a real launchctl unload even with nothing installed.
-    expect(stopCase).toContain("isServiceInstalled()");
-    expect(stopCase).toContain("stripGrokConfig()");
+    const prepare = sliceFn(
+      SERVICE_COMMAND_SOURCE,
+      "export function prepareServiceRoutingForTermination(",
+      "type ServingVerb",
+    );
+    const quiesce = sliceFn(
+      SERVICE_COMMAND_SOURCE,
+      "async function quiesceForLifecycleCommand(",
+      "export async function runServiceLifecycleCommand(",
+    );
+    expect(prepare).toContain("restoreNativeCodexRoutingForStop");
+    expect(prepare).toContain("stripGrokConfig");
+    // An unguarded manager stop ran a real unload even with nothing installed.
+    expect(quiesce).toContain('before.registrationState === "present"');
+    expect(quiesce).toContain("deps.stopInstalledService()");
   });
 
   test("service uninstall strips the Grok fence too", () => {
-    const uninstallCase = sliceFn(SERVICE_SOURCE, 'case "uninstall":', "    default:");
-    expect(uninstallCase).toContain("stripGrokConfig()");
-    expect(uninstallCase).toContain("removeServiceInstallState()");
+    const command = sliceFn(
+      SERVICE_COMMAND_SOURCE,
+      "export async function runServiceLifecycleCommand(",
+      "export async function serviceCommand(",
+    );
+    expect(command).toContain('command === "uninstall"');
+    expect(command).toContain("quiesceForLifecycleCommand(action, authority, deps)");
+    expect(command).toContain("deps.removeState()");
   });
 });
 
@@ -144,8 +145,11 @@ describe("POST /api/stop teardown", () => {
     const handler = sliceFn(MANAGEMENT_SOURCE, '"/api/stop"', "/api/codex-auth/");
     const prepareFn = sliceFn(LIFECYCLE_SOURCE, "export function prepareExplicitProxyShutdown(", "export async function stopProxyLifecycle(");
 
-    expect(prepareFn).toContain("if (service.blocked)");
+    expect(prepareFn).toContain("if (admission.blocked)");
     expect(prepareFn).toContain("status: 409");
+    expect(prepareFn.indexOf("restoreManagedClientState(quietLogger)"))
+      .toBeLessThan(prepareFn.indexOf("stopLifecycleService(quietLogger, admission.installed)"));
+    expect(prepareFn).toContain("Native client routing could not be restored; CodexCommander stayed running.");
     expect(handler).toContain("prepared.status");
     // The refusal must return BEFORE the shutdown is scheduled: a refused stop keeps running.
     const refusalAt = handler.indexOf("409");
@@ -156,8 +160,9 @@ describe("POST /api/stop teardown", () => {
   test("strips the Grok fence on an accepted stop", () => {
     const handler = sliceFn(MANAGEMENT_SOURCE, '"/api/stop"', "/api/codex-auth/");
     const restoreFn = sliceFn(LIFECYCLE_SOURCE, "function restoreManagedClientState(", "/** Shared server-side preparation");
-    expect(handler).toContain("prepareExplicitProxyShutdown()");
-    expect(restoreFn).toContain("stripGrokConfig()");
+    expect(handler).toContain("lifecycle.prepareShutdown");
+    expect(handler).toContain(".prepareExplicitProxyShutdown");
+    expect(restoreFn).toContain("stripGrokConfig)()");
   });
 
   test("a 409 does not escalate to a forced kill", () => {

@@ -1,6 +1,6 @@
 /**
  * /api/system/* — service-process runtime/memory introspection (#314 WP3)
- * and the memory-card drain-and-restart action (#563).
+ * and the memory-card canonical restart action (#563).
  *
  * Rides the standard management gate: every /api/* request already passed
  * the independent management-auth gate + the origin check before dispatch, so these
@@ -19,7 +19,7 @@
  * response ids, filenames, digests, paths, and payload content never leave the owner.
  *
  * `activeTurnCount` / `isDraining` are scalar lifecycle counters for the
- * dashboard drain-and-restart confirm UX — never request bodies or IDs.
+ * dashboard restart confirm/status UX — never request bodies or IDs.
  */
 import { selectEagerPath } from "../../lib/bun-stream-caps";
 import { reportedBunRuntimeSource } from "../../lib/bun-runtime";
@@ -31,7 +31,7 @@ import { jsonResponse } from "../auth-cors";
 import { getInspectionCounters } from "../relay";
 import { getEagerRelayCounters } from "../relay-eager";
 import type { ManagementContext } from "./context";
-import { acceptSystemRestart } from "./system-restart";
+import { acceptSerializedSystemRestart } from "./system-restart";
 
 const ENDPOINT_SAMPLE_LIMIT = 60;
 
@@ -112,16 +112,27 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/system/restart" && req.method === "POST") {
-    // Longer informed drain than /api/stop; does not tear down Codex/Grok injection.
-    const result = acceptSystemRestart();
+    // The serving endpoint only proves detached helper spawn. The helper owns
+    // canonical safe Stop (native/OFF) -> explicit Start (ON).
+    const result = await acceptSerializedSystemRestart();
+    if (result.kind === "refused") {
+      return jsonResponse({
+        success: false,
+        message: result.message,
+        activeTurnCount: result.activeTurnCount,
+        drainTimeoutMs: result.drainTimeoutMs,
+        alreadyDraining: false,
+      }, 409, req, config);
+    }
+    const alreadyDraining = result.kind === "already-accepted";
     return jsonResponse({
       success: true,
-      message: result.alreadyDraining
-        ? "Drain already in progress."
-        : "Draining in-flight requests, then restarting.",
+      message: alreadyDraining
+        ? "Restart already accepted."
+        : "Safe proxy restart accepted.",
       activeTurnCount: result.activeTurnCount,
       drainTimeoutMs: result.drainTimeoutMs,
-      alreadyDraining: result.alreadyDraining,
+      alreadyDraining,
     }, 202, req, config);
   }
 

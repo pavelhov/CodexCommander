@@ -205,8 +205,8 @@ Endpoint'ы storage cleanup могут перемещать или навсег�
 | Метод и путь | Назначение | Особые ошибки |
 | --- | --- | --- |
 | `GET /api/system/memory` | Вернуть скалярные метрики процесса, heap, stream, response-state, watchdog и active-turn | — |
-| `POST /api/system/restart` | Начать restart процесса с учётом drain, не снимая client injection | Возвращает 202; повторные вызовы сообщают о текущем drain |
-| `POST /api/stop` | Остановить службу, восстановить native Codex, убрать managed Grok injection и выполнить drain прокси | 409 service ownership conflict |
+| `POST /api/system/restart` | Запустить отсоединённый канонический helper перезапуска. Он безопасно останавливает прокси, восстанавливает прямое подключение Codex и сохраняет routing OFF, затем явно запускает прокси с routing ON | 202 helper spawn accepted/already accepted; 409 при отказе запуска helper (текущий endpoint остаётся доступен для повторной попытки) |
+| `POST /api/stop` | Сохранить интеграцию OFF, проверить native-маршрутизацию Codex, убрать managed Grok injection и выполнить drain прокси без supervisor. Установленный supervisor сначала останавливает делегированный CLI/tray flow | 409 lifecycle busy, небезопасный native restore или владение установленным supervisor |
 
 ### Делегирование аутентификации Codex
 

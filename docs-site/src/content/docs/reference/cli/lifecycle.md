@@ -11,8 +11,10 @@ These commands install, run, inspect, and repair the local CodexCommander proxy 
 
 Interactive setup wizard (`setup` is an alias of `init`). Prompts for a provider (preset or custom),
 API key (literal or `${ENV}`), default model, and proxy port; saves `~/.codexcommander/config.json`;
-optionally injects the proxy into `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`); and
-optionally installs the Codex autostart shim.
+optionally routes Codex through an already-running proxy; and optionally installs the Codex
+autostart shim. Routing uses the same lifecycle authority and protected runtime proof as Route Back.
+If no current-home proxy is proven, Codex stays native and `ccx start` performs the later explicit
+start-and-route transition. `init` never starts a proxy or writes a route to an unproven listener.
 
 ## Proxy lifecycle
 
@@ -20,8 +22,11 @@ optionally installs the Codex autostart shim.
 
 Start the proxy server (preferred port `10100`). If that port is occupied, CodexCommander selects and
 records another available port. It writes PID/runtime-port state and refuses to start a second live
-instance. On start it syncs each provider's models into Codex's catalog. On shutdown it restores
-native Codex — unless it was launched as a managed service (`CCX_SERVICE=1`).
+instance. An explicit start enables Codex integration, syncs each provider's models into Codex's
+catalog, and routes Codex through the live proxy. This includes `ccx start`, tray Start, and explicit
+`ccx service start`, `install`, or `repair`; `ccx ensure` preserves an intentionally disabled
+integration. On normal standalone shutdown it restores native Codex — unless it was launched as a
+managed service (`CCX_SERVICE=1`).
 
 ```bash
 ccx start
@@ -30,14 +35,18 @@ ccx start --port 8080
 
 ### `ccx stop`
 
-Stop the running proxy (by PID), remove the PID file, and restore native Codex. If a managed
-background service is installed, `ccx stop` also stops it first so it cannot respawn the proxy.
-The same action is available from the web dashboard's **Stop** button (`POST /api/stop`).
+Restore native Codex routing first, then stop the running proxy (by PID) and remove the PID file. If
+the native route cannot be verified, the proxy and service stay running. If a managed background service is
+installed, `ccx stop` stops it after the native restore so it cannot respawn the proxy.
+The web dashboard's **Stop** button calls raw `POST /api/stop`, which stops an unsupervised proxy but
+refuses when an installed supervisor owns it. In that case, use CLI or tray Stop so the manager is
+stopped first under the same lifecycle authority.
 
 ### `ccx restart`
 
-Run `stop` followed by `ensure`: stop the proxy/service, restore native Codex, start the proxy in the
-background, and sync the live port back into Codex.
+Run the same safe stop→start transaction as the macOS tray's **Restart Proxy…**: restore and verify
+native Codex before terminating the old proxy/service, then run an explicit Start phase that launches
+the replacement and routes Codex back through it. If restart fails, Codex remains native.
 
 ### `ccx ensure`
 
@@ -46,22 +55,42 @@ Idempotently ensure a background proxy is running, then sync its live model cata
 
 ### `ccx restore [back]` · `ccx eject [back]`
 
-Restore native Codex **without** stopping the proxy — strips the injected config lines and routed
-catalog entries so plain `codex` works natively again. `eject` is an alias of `restore`.
+Restore native Codex **without** stopping the proxy. The native escape removes only the exact
+CodexCommander marker-owned route and its owned catalog pointer from `$CODEX_HOME/config.toml`.
+After proving that exact route, it also clears the proxy-only root `provider/model` selector. Every
+unrelated setting remains byte-for-byte unchanged. It does not read or rewrite the catalog, tasks,
+history, or authentication. No repair command or coordinator database is required. `eject` is an
+alias of `restore`. Generated catalogs and caches may remain on disk, but native Codex no longer
+references them. This command is Codex-only: it does not change Grok or any other client integration.
+Use `ccx stop` or `ccx uninstall` when you intend to tear down every managed native-client route.
 
 Pass `back` to either spelling to re-point plain `codex` at an already-running proxy without changing
-the proxy lifecycle:
+the proxy lifecycle. Route Back is an explicit ON transition. A recovery journal is a protected
+checkpoint of CodexCommander's exact config/profile write, not a second route setting. When desired
+integration is already ON, the exact attested current-home live proxy owns that stable journal, and
+its recorded profile postimage exactly matches the current profile, Route Back accepts either the
+exact recorded config postimage or a stable exact marker-owned managed descendant whose route strips
+to an independently native-safe config. This allows unrelated Codex preference edits made after sync.
+It preserves the active journal and succeeds as an idempotent no-op. From native/OFF, the existing
+coordination path retires only a journal it proves stale. A wrong owner or profile, missing proof,
+tampered/custom/ambiguous routing, temporary write surface, or observation race leaves Codex
+native/OFF. Do not delete or edit the journal manually.
 
 ```bash
 ccx restore back
 ccx eject back
 ```
 
+After either Restore Native or Route Back reports success, quit ChatGPT completely, reopen it, and
+start a new task so the running Codex host loads the saved route.
+
 ### `ccx uninstall` · `ccx remove`
 
-Stop the service and proxy, remove the service and Codex shim, restore native Codex, then remove
-CodexCommander local config only if all restore steps succeeded. `remove` is an alias of `uninstall`.
-Config cleanup requires canonical ownership metadata; unowned or shared directories are left in place.
+As one lifecycle transaction, stop the service and proxy, remove the service and Codex shim, restore
+and re-verify native Codex, then remove CodexCommander local artifacts only if every step succeeded.
+`remove` is an alias of `uninstall`. Config cleanup requires canonical ownership metadata; unowned or
+shared directories are left in place. The small owner/manifest metadata pair remains in the config
+root so a concurrent Start can never create a second lifecycle-lock namespace.
 
 ## Status and health
 
@@ -197,7 +226,8 @@ same stale-`app-server` warning and optional `--restart-codex` behavior as `ccx 
 
 Run CodexCommander as a login-managed background service (macOS **launchd**, Linux **systemd user unit**,
 Windows **Task Scheduler**) that auto-starts on login and auto-restarts on crash. Service runs set
-`CCX_SERVICE=1` so a restart does not churn the Codex config.
+`CCX_SERVICE=1` so an automatic manager restart does not churn the Codex config. Explicit service
+creation, `install`, `repair`, and `start` enable Codex integration and route Codex through the proxy.
 
 | Subcommand | Action |
 | --- | --- |
@@ -205,9 +235,9 @@ Windows **Task Scheduler**) that auto-starts on login and auto-restarts on crash
 | `install` | Create and start the service. Registers it, which on Windows needs elevation. |
 | `repair` | Refresh an installed service in place and restart it, without re-registering it. |
 | `start` | Start an installed service. |
-| `stop` | Stop the service and restore native Codex. |
+| `stop` | Restore and verify native Codex, then stop the service. If verification fails, the service and proxy stay running. |
 | `status` | Report service and proxy diagnostics plus log paths. |
-| `uninstall` | Remove the service and restore native Codex. |
+| `uninstall` | Restore and verify native Codex, then stop and remove the service. |
 | `remove` | Alias of `uninstall`. |
 
 ```bash

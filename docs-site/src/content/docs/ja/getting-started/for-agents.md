@@ -33,7 +33,7 @@ bun run src/cli/index.ts init
 
 以降の `ccx <args>` は、このチェックアウトでは `bun run src/cli/index.ts <args>` として実行できます。
 
-ウィザードは `$CODEXCOMMANDER_HOME/config.json` (通常は `~/.codexcommander/config.json`) を書き込みます。プロキシアドレスを Codex の `config.toml` に挿入し、任意で Codex の自動起動 shim をインストールすることもできます。`ccx init` 自体はプロキシを起動しません。完全に非対話型でセットアップする場合は、ウィザードを操作せず、以下のように `ccx provider add` でプロバイダーを設定します。
+ウィザードは `$CODEXCOMMANDER_HOME/config.json` (通常は `~/.codexcommander/config.json`) を書き込みます。保護された current-home runtime record で確認済みの実行中プロキシがある場合だけ Codex をそこへ向け、任意で Codex の自動起動 shim をインストールできます。`ccx init` 自体はプロキシを起動せず、未確認の listener への route も書きません。確認済みプロキシがなければ、`ccx start` まで Codex はネイティブのままです。完全に非対話型でセットアップする場合は、ウィザードを操作せず、以下のように `ccx provider add` でプロバイダーを設定します。
 
 ## ヘッドレスインストールを確認する
 

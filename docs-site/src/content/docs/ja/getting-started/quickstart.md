@@ -17,8 +17,7 @@ ccx init
 2. **API キー** — キーを貼り付けるか、`${ANTHROPIC_API_KEY}` のような環境変数を参照します。
 3. **デフォルト モデル** — キー、ローカル、カスタム プロバイダーの場合は、プリセットを受け入れるか、モデル ID を入力します。
 4. **プロキシ ポート** — デフォルトは `10100` です。
-5. **Codex に挿入しますか?** - 通常のループバック設定では、CodexCommander はルート `openai_base_url` を
-`$CODEX_HOME/config.toml` (デフォルトは `~/.codex/config.toml`) なので、Codex の組み込み `openai` プロバイダーはプロキシをターゲットにします。リモート/LAN バインドでは、代わりに API 認証ヘッダーを持つ専用プロバイダー エントリを使用します。
+5. **実行中のプロキシ経由に Codex を切り替えますか?** — 保護された current-home runtime record で実行中のプロキシを確認できた場合だけ、モデルを同期して Codex をそのプロキシへ向けます。確認できなければ Codex はネイティブのままで、次の明示的な `ccx start` がプロキシを起動してルーティングします。
 6. **自動起動シムをインストールしますか?** — 有効にすると、`codex` を起動すると、最初に `ccx ensure` が実行されます。
 
 結果は `$CODEXCOMMANDER_HOME/config.json` (デフォルトは `~/.codexcommander/config.json`) に保存されます。

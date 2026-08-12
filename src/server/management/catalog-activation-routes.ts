@@ -20,6 +20,10 @@ import type {
 import type { CodexCommanderConfig } from "../../types";
 import { getCodexRoutingKind } from "../../codex/inject";
 import { jsonResponse } from "../auth-cors";
+import {
+  acquireProxyLifecycleAuthority,
+  type ProxyLifecycleAuthority,
+} from "../proxy-lifecycle-authority";
 import type { ManagementContext } from "./context";
 import type { ManagementPrincipal } from "../management-auth";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
@@ -106,6 +110,15 @@ function resetActivationObservation(ctx: ManagementContext): void {
 function noStore(response: Response): Response {
   response.headers.set("Cache-Control", "no-store");
   return response;
+}
+
+function lifecycleBusyResponse(ctx: ManagementContext): Response {
+  const response = jsonResponse({
+    error: "Proxy lifecycle is busy; no Codex catalog or routing changes were made.",
+    retryable: true,
+  }, 409, ctx.req, ctx.config);
+  response.headers.set("Retry-After", "1");
+  return noStore(response);
 }
 
 function applyMessage(outcome: string, stopped: number, surviving: number): string {
@@ -236,12 +249,30 @@ export async function handleCatalogActivationRoutes(ctx: ManagementContext): Pro
   if (raw.confirmInterrupt !== true) {
     return jsonResponse({ error: "confirmInterrupt must be true" }, 400, req, config);
   }
+  const expectedDesiredRevision = raw.expectedDesiredRevision;
   if (catalogApplyFlight) {
     const response = jsonResponse({ error: "catalog apply is already in progress" }, 503, req, config);
     response.headers.set("Retry-After", "1");
     return response;
   }
-  const flight = runApply(ctx, raw.expectedDesiredRevision).finally(() => {
+  const flight = (async (): Promise<Response> => {
+    let authority: ProxyLifecycleAuthority;
+    try {
+      authority = await (ctx.deps.proxyStopLifecycle?.acquireAuthority
+        ?? acquireProxyLifecycleAuthority)({ includeStart: true });
+    } catch {
+      return lifecycleBusyResponse(ctx);
+    }
+    try {
+      // Apply performs its sync locally. Keeping it inside this authority avoids
+      // a nested /api/sync acquisition while serializing desired-state reads,
+      // routing/catalog publication, activation proof, and worker interruption
+      // against Stop and every other E/S lifecycle transition.
+      return await runApply(ctx, expectedDesiredRevision);
+    } finally {
+      try { authority.releaseAll(); } catch { /* best-effort release at response boundary */ }
+    }
+  })().finally(() => {
     if (catalogApplyFlight === flight) catalogApplyFlight = null;
   });
   catalogApplyFlight = flight;

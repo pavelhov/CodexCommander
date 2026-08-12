@@ -26,7 +26,7 @@ const OWNERSHIP_METADATA_FILES = [
 ] as const;
 
 export type ConfigRemovalResult = {
-  status: "absent" | "removed" | "partial" | "refused";
+  status: "absent" | "removed" | "retained-root" | "partial" | "refused";
   reason?: string;
   residualPaths: string[];
 };
@@ -311,7 +311,12 @@ export function recordOwnedConfigPath(configDir: string, candidatePath: string):
   return true;
 }
 
-export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
+const LIFECYCLE_ROOT_LOCK = "proxy-ensure.lock";
+
+function removeOwnedConfigStateInternal(
+  configDir: string,
+  retainLifecycleRoot: boolean,
+): ConfigRemovalResult {
   ownershipCache.delete(ownershipCacheKey(configDir));
   if (!existsSync(configDir)) return { status: "absent", residualPaths: [] };
   const root = lstatSync(configDir);
@@ -342,8 +347,30 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
     }
   }
 
+  let lifecycleLockIdentity: { dev: number; ino: number } | null = null;
+  if (retainLifecycleRoot) {
+    const lifecycleLockPath = join(configDir, LIFECYCLE_ROOT_LOCK);
+    try {
+      const lock = lstatSync(lifecycleLockPath);
+      if (!lock.isFile() || lock.isSymbolicLink() || lock.nlink !== 1) {
+        throw new Error("held lifecycle lock is not a safe regular file");
+      }
+      if (typeof process.getuid === "function" && lock.uid !== process.getuid()) {
+        throw new Error("held lifecycle lock is owned by another user");
+      }
+      lifecycleLockIdentity = { dev: lock.dev, ino: lock.ino };
+    } catch (error) {
+      return {
+        status: "refused",
+        reason: `held lifecycle lock could not be retained: ${error instanceof Error ? error.message : String(error)}`,
+        residualPaths: [configDir],
+      };
+    }
+  }
+
   const rootPath = canonicalRoot(configDir);
   for (const rel of ownership.manifest.paths) {
+    if (retainLifecycleRoot && rel === LIFECYCLE_ROOT_LOCK) continue;
     const path = join(configDir, ...rel.split("/"));
     if (!existsSync(path)) continue;
     try {
@@ -355,6 +382,39 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
         residualPaths: [path],
       };
     }
+  }
+
+  if (retainLifecycleRoot && lifecycleLockIdentity) {
+    const lifecycleLockPath = join(configDir, LIFECYCLE_ROOT_LOCK);
+    try {
+      const lock = lstatSync(lifecycleLockPath);
+      if (!lock.isFile() || lock.isSymbolicLink() || lock.nlink !== 1
+        || lock.dev !== lifecycleLockIdentity.dev || lock.ino !== lifecycleLockIdentity.ino) {
+        throw new Error("held lifecycle lock changed during config cleanup");
+      }
+    } catch (error) {
+      return {
+        status: "partial",
+        reason: error instanceof Error ? error.message : String(error),
+        residualPaths: [configDir],
+      };
+    }
+
+    const expected = new Set<string>([
+      ...OWNERSHIP_METADATA_FILES,
+      LIFECYCLE_ROOT_LOCK,
+    ]);
+    const residualPaths = readdirSync(configDir)
+      .filter(name => !expected.has(name))
+      .map(name => join(configDir, name));
+    if (residualPaths.length > 0) {
+      return {
+        status: "partial",
+        reason: "unowned files remain in the config directory",
+        residualPaths,
+      };
+    }
+    return { status: "retained-root", residualPaths: [] };
   }
 
   try {
@@ -388,4 +448,19 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
     };
   }
   return { status: "removed", residualPaths: [] };
+}
+
+export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
+  return removeOwnedConfigStateInternal(configDir, false);
+}
+
+/**
+ * Remove every manifest-owned artifact except the currently-held lifecycle E lock.
+ * The validated owner/manifest pair and root remain so unlinking E on release cannot
+ * create a second lock namespace for a concurrently waiting Start.
+ */
+export function removeOwnedConfigArtifactsRetainingLifecycleRoot(
+  configDir: string,
+): ConfigRemovalResult {
+  return removeOwnedConfigStateInternal(configDir, true);
 }

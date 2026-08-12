@@ -7,6 +7,8 @@ public enum LifecycleAction: String, Codable, Sendable {
     case start
     case stop
     case restart
+    case restoreNative = "restore-native"
+    case restoreBack = "restore-back"
     case applyCodexCatalog
 }
 
@@ -116,7 +118,7 @@ public enum LifecycleHelperError: Error, Equatable, Sendable {
     public var userMessage: String {
         switch self {
         case .unavailable:
-            return "CodexCommander CLI was not found. Install CodexCommander, then try Start again."
+            return "CodexCommander CLI was not found. Install CodexCommander, then try again."
         case .launchFailed:
             return "CodexCommander could not launch its lifecycle helper."
         case .timedOut:

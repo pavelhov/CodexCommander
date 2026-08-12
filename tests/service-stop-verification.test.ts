@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { proxyStillLiveAfterStop } from "../src/service";
 
 /**
- * #764: `ccx service stop` reported success while the proxy kept running, and native Codex was
- * restored on top of it.
+ * #764: `ccx service stop` reported success while the proxy kept running. Routing is now
+ * restored before any termination attempt, but the command must still detect the survivor and
+ * report that the service itself did not stop.
  *
  * The subtlety is which failure mode matters. PR #780 waited only when `schtasks /end` returned
  * an ERROR -- but the reported case is an /end that SUCCEEDS while the wrapper survives and
@@ -56,7 +57,7 @@ describe("service stop verification (#764)", () => {
 
   test("a genuinely stopped proxy returns null within the bound", async () => {
     // The control. Without it the check could report a survivor every time and block every
-    // legitimate stop -- worse than the bug, since it would strand native Codex unrestored.
+    // legitimate stop -- worse than the original false-success bug.
     const clock = fakeClock();
     let probes = 0;
     const live = await proxyStillLiveAfterStop({

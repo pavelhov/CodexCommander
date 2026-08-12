@@ -22,7 +22,7 @@ openai-apikey/gpt-5.6-sol           # API key
 
 ## 統合パス
 
-`ccx init`、`ccx start`、および `ccx sync` は、共有 Codex 設定とカタログをプロキシに接続します。設定の挿入、カタログの同期、シム、WebSocket フォールバック、および復元の仕組みについては、[Codexの統合](/guides/codex-integration/) を参照してください。
+`ccx start` と `ccx sync` は、共有 Codex 設定とカタログをプロキシに接続します。`ccx init` が同じ処理を行えるのは、保護された runtime record で確認済みの実行中プロキシがある場合だけです。それ以外では明示的な Start まで Codex はネイティブのままです。設定の挿入、カタログの同期、shim、WebSocket フォールバック、および復元の仕組みについては、[Codexの統合](/guides/codex-integration/) を参照してください。
 
 ## 配線されたモデルが表示される理由
 

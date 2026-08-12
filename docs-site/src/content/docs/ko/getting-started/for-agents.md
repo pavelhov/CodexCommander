@@ -33,7 +33,7 @@ bun run src/cli/index.ts init
 
 이후의 `ccx <args>`는 이 체크아웃에서 `bun run src/cli/index.ts <args>`로 실행할 수 있습니다.
 
-이 마법사는 `$CODEXCOMMANDER_HOME/config.json`를 작성합니다(보통 `~/.codexcommander/config.json`). 또한 프록시 주소를 Codex의 `config.toml`에 주입하고, 선택적 Codex 자동 시작 shim을 설치할 수 있습니다. `ccx init`는 프록시를 절대 시작하지 않습니다. 완전히 비대화형으로 설정하려면 아래처럼 마법사를 진행하지 말고 `ccx provider add`로 공급자를 구성하세요.
+이 마법사는 `$CODEXCOMMANDER_HOME/config.json`를 작성합니다(보통 `~/.codexcommander/config.json`). 보호된 current-home runtime record로 확인된 실행 중 프록시가 있는 경우에만 Codex를 그쪽으로 라우팅하며, 선택적 Codex 자동 시작 shim도 설치할 수 있습니다. `ccx init`는 프록시를 시작하거나 확인되지 않은 listener로 향하는 route를 쓰지 않습니다. 확인된 프록시가 없으면 `ccx start`까지 Codex는 네이티브 상태로 남습니다. 완전히 비대화형으로 설정하려면 아래처럼 마법사를 진행하지 말고 `ccx provider add`로 공급자를 구성하세요.
 
 ## 비대화형 설치 확인하기
 
