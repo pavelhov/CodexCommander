@@ -9,10 +9,9 @@ description: Установка и использование нативного
 
 ## Установка
 
-Скачайте **универсальный пререлиз v0.1.0** для Mac с Intel и Apple Silicon:
-
-- [CodexCommander-0.1.0-macos-universal.zip](https://github.com/pavelhov/CodexCommander/releases/download/v0.1.0/CodexCommander-0.1.0-macos-universal.zip)
-- [Контрольная сумма SHA-256](https://github.com/pavelhov/CodexCommander/releases/download/v0.1.0/CodexCommander-0.1.0-macos-universal.zip.sha256)
+Откройте [GitHub Releases](https://github.com/pavelhov/CodexCommander/releases) и скачайте текущую
+универсальную предварительную версию для Mac с Intel и Apple Silicon. Выберите файл
+`CodexCommander-<version>-macos-universal.zip` и соответствующий файл контрольной суммы `.sha256`.
 
 Эта предварительная версия подписана ad-hoc и не нотарифицирована. Распакуйте ZIP и переместите `CodexCommander.app` в папку «Программы». При первом запуске нажмите приложение, удерживая Control, и выберите «Открыть». Если macOS по-прежнему блокирует запуск, выберите «Системные настройки» → «Конфиденциальность и безопасность» → «Все равно открыть». Не отключайте Gatekeeper.
 

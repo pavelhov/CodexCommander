@@ -9,10 +9,9 @@ CodexCommander 인스턴스와만 통신합니다.
 
 ## 설치
 
-Intel Mac과 Apple Silicon을 모두 지원하는 **v0.1.0 유니버설 미리 보기**를 다운로드하세요.
-
-- [CodexCommander-0.1.0-macos-universal.zip](https://github.com/pavelhov/CodexCommander/releases/download/v0.1.0/CodexCommander-0.1.0-macos-universal.zip)
-- [SHA-256 체크섬](https://github.com/pavelhov/CodexCommander/releases/download/v0.1.0/CodexCommander-0.1.0-macos-universal.zip.sha256)
+[GitHub Releases](https://github.com/pavelhov/CodexCommander/releases)를 열고 Intel Mac과 Apple Silicon을
+모두 지원하는 최신 유니버설 미리 보기를 다운로드하세요.
+`CodexCommander-<version>-macos-universal.zip` 파일과 일치하는 `.sha256` 체크섬 파일을 선택하세요.
 
 이 미리 보기 버전은 애드혹 서명되었지만 공증되지 않았습니다. ZIP 파일의 압축을 풀고 `CodexCommander.app`을 “응용 프로그램” 폴더로 옮기세요. 처음 실행할 때는 앱을 Control-클릭하고 “열기”를 선택하세요. macOS에서 계속 차단하면 “시스템 설정” → “개인정보 보호 및 보안” → “그래도 열기”를 선택하세요. Gatekeeper를 비활성화하지 마세요.
 

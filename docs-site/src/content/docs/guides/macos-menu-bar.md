@@ -9,10 +9,9 @@ the CodexCommander instance running on the same Mac.
 
 ## Install
 
-Download the **v0.1.0 universal macOS prerelease** for Intel and Apple silicon:
-
-- [CodexCommander-0.1.0-macos-universal.zip](https://github.com/pavelhov/CodexCommander/releases/download/v0.1.0/CodexCommander-0.1.0-macos-universal.zip)
-- [SHA-256 checksum](https://github.com/pavelhov/CodexCommander/releases/download/v0.1.0/CodexCommander-0.1.0-macos-universal.zip.sha256)
+Open [GitHub Releases](https://github.com/pavelhov/CodexCommander/releases) and download the current
+universal macOS preview for Intel and Apple silicon. Choose the
+`CodexCommander-<version>-macos-universal.zip` file and its matching `.sha256` checksum file.
 
 This preview is ad-hoc signed and not notarized. Unzip it, move `CodexCommander.app` to Applications,
 then Control-click the app and choose **Open** on first launch. If macOS still blocks it, choose

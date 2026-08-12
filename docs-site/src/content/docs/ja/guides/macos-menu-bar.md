@@ -9,10 +9,9 @@ macOS コンパニオンは、プロキシを置き換えたり Web ダッシュ
 
 ## インストール
 
-Intel Mac と Apple シリコンの両方に対応する **v0.1.0 ユニバーサル版プレビュー**をダウンロードします。
-
-- [CodexCommander-0.1.0-macos-universal.zip](https://github.com/pavelhov/CodexCommander/releases/download/v0.1.0/CodexCommander-0.1.0-macos-universal.zip)
-- [SHA-256 チェックサム](https://github.com/pavelhov/CodexCommander/releases/download/v0.1.0/CodexCommander-0.1.0-macos-universal.zip.sha256)
+[GitHub Releases](https://github.com/pavelhov/CodexCommander/releases) を開き、Intel Mac と Apple
+シリコンの両方に対応する最新のユニバーサル版プレビューをダウンロードします。
+`CodexCommander-<version>-macos-universal.zip` と、対応する `.sha256` チェックサムファイルを選択してください。
 
 これはアドホック署名済み・未公証のプレビュー版です。ZIP を展開し、`CodexCommander.app` を「アプリケーション」フォルダへ移動してください。初回起動時は Control キーを押しながらアプリをクリックし、「開く」を選択します。macOS に引き続きブロックされる場合は、「システム設定」→「プライバシーとセキュリティ」→「このまま開く」を選択してください。Gatekeeper は無効にしないでください。
 

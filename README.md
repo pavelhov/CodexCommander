@@ -17,7 +17,7 @@ bun run src/cli/index.ts start
 </p>
 
 <p align="center">
-  <a href="https://github.com/pavelhov/CodexCommander/releases/download/v0.1.0/CodexCommander-0.1.0-macos-universal.zip"><b>Download the macOS preview (Intel + Apple silicon) →</b></a>
+  <a href="https://github.com/pavelhov/CodexCommander/releases"><b>Download the current macOS preview (Intel + Apple silicon) →</b></a>
 </p>
 
 CodexCommander is a lightweight local proxy that translates Codex's Responses API into whatever your
@@ -60,10 +60,9 @@ dashboard for OAuth, API keys, account management, and logs. It is a UI layer ov
 proxy: it does not use Keychain, create a second provider-login system, or store provider credentials
 in the app.
 
-**[Download CodexCommander 0.1.0 for macOS](https://github.com/pavelhov/CodexCommander/releases/download/v0.1.0/CodexCommander-0.1.0-macos-universal.zip)**
-(Intel + Apple silicon) ·
-[SHA-256 checksum](https://github.com/pavelhov/CodexCommander/releases/download/v0.1.0/CodexCommander-0.1.0-macos-universal.zip.sha256) ·
-[Release page](https://github.com/pavelhov/CodexCommander/releases/tag/v0.1.0)
+**[Download the current CodexCommander preview for macOS](https://github.com/pavelhov/CodexCommander/releases)**
+(Intel + Apple silicon). On the release page, download the universal `.zip` and its matching
+`.sha256` checksum file.
 
 This preview requires macOS 13 or later. It is ad-hoc signed and not notarized yet:
 
