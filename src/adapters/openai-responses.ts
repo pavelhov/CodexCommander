@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { IncomingMeta, ProviderAdapter } from "./base";
+import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import { namespacedToolName, type AdapterEvent, type CodexCommanderParsedRequest, type CodexCommanderProviderConfig, type CodexCommanderUsage } from "../types";
 import { catalogModelSupportsReasoningSummaries } from "../codex/catalog";
 import { COMPACT_PROMPT, decodeCompactionSummary, SUMMARY_PREFIX } from "../responses/compaction";
@@ -8,7 +8,12 @@ import { isHostedToolUnsupportedForModel } from "../responses/hosted-tool-policy
 import { decodeServerSentEvents } from "../lib/sse-decoder";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { CCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
-import { modelRecordValue } from "../reasoning-effort";
+import {
+  configuredReasoningEfforts,
+  mapReasoningEffort,
+  modelRecordValue,
+  reasoningEffortMapFor,
+} from "../reasoning-effort";
 import type { TranslatorBudget } from "../lib/translator-budget";
 
 // Headers relayed verbatim from the caller in OAuth-passthrough ("forward") mode.
@@ -1055,6 +1060,55 @@ function usageFromResponsesPayload(payload: unknown): CodexCommanderUsage | unde
   };
 }
 
+/**
+ * Apply a provider-declared reasoning ladder/map at the last Responses wire boundary.
+ *
+ * The passthrough adapter starts from the caller's raw Responses body, unlike the Chat
+ * Completions adapter which constructs its outbound body field-by-field. That means an effort
+ * override can reach this point without ever passing through `mapReasoningEffort`. Only providers
+ * with an explicit model/provider effort contract are safe to rewrite; custom Responses gateways
+ * without metadata keep their payload byte-semantics (apart from the adapter's existing
+ * compatibility sanitizers).
+ *
+ * `effectiveEffort` is the durable request-log schema name. Here it means the exact value
+ * serialized by CodexCommander, not confirmation that the upstream honored the value.
+ */
+function normalizeResponsesReasoningEffort(
+  body: unknown,
+  provider: CodexCommanderProviderConfig,
+  modelId: string,
+): { body: unknown; reasoningLog?: AdapterRequest["reasoningLog"] } {
+  if (!isPlainObject(body) || !isPlainObject(body.reasoning)) return { body };
+  const requested = body.reasoning.effort;
+  if (typeof requested !== "string" || requested.length === 0) return { body };
+
+  const hasDeclaredContract = !isCanonicalOpenAiForwardProvider(provider)
+    && (configuredReasoningEfforts(provider, modelId) !== undefined
+      || reasoningEffortMapFor(provider, modelId) !== undefined);
+  const mapped = hasDeclaredContract
+    ? mapReasoningEffort(provider, modelId, requested)
+    : undefined;
+  const sent = mapped ?? requested;
+  const normalizedBody = mapped !== undefined && mapped !== requested
+    ? { ...body, reasoning: { ...body.reasoning, effort: mapped } }
+    : body;
+
+  return {
+    body: normalizedBody,
+    // Unknown/custom Responses contracts remain wire-transparent, but their arbitrary
+    // caller-controlled strings must not cross into durable request diagnostics.
+    ...(hasDeclaredContract && mapped !== undefined
+      ? {
+          reasoningLog: {
+            effectiveEffort: sent,
+            wireField: "reasoning.effort" as const,
+            wireValue: sent,
+          },
+        }
+      : {}),
+  };
+}
+
 function responsesPayloadText(response: unknown): string {
   if (!isPlainObject(response) || !Array.isArray(response.output)) return "";
   return response.output
@@ -1161,11 +1215,17 @@ export function createResponsesPassthroughAdapter(provider: CodexCommanderProvid
         outBody = buildRoutedCompactionBody(outBody);
       }
       const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubCodexCommanderCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
-      const body = JSON.stringify(stripDisabledReasoningSummaries(
+      const finalBody = stripDisabledReasoningSummaries(
         normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
         provider,
         parsed.modelId,
-      ));
+      );
+      const normalizedReasoning = normalizeResponsesReasoningEffort(
+        finalBody,
+        provider,
+        parsed.modelId,
+      );
+      const body = JSON.stringify(normalizedReasoning.body);
       const releaseBodyObservation = translatorBudget.observeExternallyCapped(
         "passthrough_serialization",
         new TextEncoder().encode(body).byteLength,
@@ -1176,6 +1236,9 @@ export function createResponsesPassthroughAdapter(provider: CodexCommanderProvid
         headers,
         body,
         releaseBodyObservation,
+        ...(normalizedReasoning.reasoningLog
+          ? { reasoningLog: normalizedReasoning.reasoningLog }
+          : {}),
       };
     },
 

@@ -230,7 +230,9 @@ Claude Code 的 `/effort` 设置会完整保留并传递给适配器：
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`，≤16384→`medium`，更高→`high` |
 | `thinking.type: "disabled"` | 完全省略推理参数 |
 
-解析后的值会显示在请求日志的 **Reasoning effort** 列中。
+请求日志会显示解析后的请求值；如果路由 adapter 提供 outbound 诊断，还会在
+**请求 → 已发送**下显示实际序列化的值。“已发送”只确认 CodexCommander 放到了 wire 上，
+并不表示上游 provider 已应用该值。
 
 ## 入站转换（Messages → Responses）
 

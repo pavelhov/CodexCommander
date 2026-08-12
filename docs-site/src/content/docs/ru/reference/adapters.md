@@ -53,8 +53,10 @@ interface ProviderAdapter {
 
 ## `openai-responses`
 
-**Назначение:** OpenAI **Responses API**. **`passthrough: true`** — пересылает исходное тело
-запроса и стримит ответ обратно **без преобразования**.
+**Назначение:** OpenAI **Responses API**. **`passthrough: true`** — сохраняет форму запроса и
+ответа Responses без преобразования через модель Chat Completions. Единственные исключения для
+формы запроса — документированные нормализации совместимости; ответ стримится обратно
+**без преобразования**.
 **Аутентификация:** `forward` (ретрансляция заголовков вызывающей стороны) или `key`.
 
 При `key`-аутентификации [`retryOn429`](/ru/reference/configuration/) действует и здесь: 429 до
@@ -64,6 +66,12 @@ interface ProviderAdapter {
 
 - URL для `forward` → `{baseUrl}/responses`. URL по умолчанию для провайдера с `key` — `{baseUrl}/v1/responses`.
 - Провайдер с `key` может задать проверенный относительный `responsesPath`: адаптер удаляет один завершающий `/` из `baseUrl` и отправляет запрос на `{trimmedBaseUrl}{responsesPath}`. Для Ark Agent Plan используйте `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` и `responsesPath: "/responses"`.
+- На последней исходящей границе известный контракт reasoning для provider/model отображает или
+  ограничивает уже присутствующий `reasoning.effort`. Для неизвестных и пользовательских
+  контрактов значение вызывающей стороны остаётся неизменным и не копируется в постоянную
+  диагностику. Только проверенное значение известного контракта записывается как точные
+  отправленные field/value. **Отправлено** означает, что CodexCommander сериализовал значение,
+  а не подтверждает его применение вышестоящим сервисом.
 - В режиме `forward` ретранслируется только безопасный allowlist заголовков (`FORWARD_HEADERS`):
   authorization, ChatGPT account id и заголовки OpenAI beta/originator/session. Это путь входа
   через ChatGPT, на котором также работают [сайдкары](/ru/guides/sidecars/).
