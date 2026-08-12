@@ -24,12 +24,17 @@ To build from source instead, follow [Build from source](#build-from-source) bel
 
 The panel has one **Launch at Login** switch and reports the resulting mode:
 
-- **Desktop** — the CodexCommander menu app launches when you sign in and ensures or attaches to exactly
-  one server. This is the default desktop experience and is reported as **App-managed** in Startup.
+- **Desktop** — the CodexCommander menu app launches when you sign in, performs an explicit Start,
+  starts or attaches to exactly one proxy, and routes managed Codex through it. An external
+  user-managed Codex provider is preserved. This is the default desktop experience and is reported
+  as **App-managed** in Startup.
 - **Headless** — the menu app is not a login item, but an independently installed
   `ccx service` continues starting and supervising the server.
-- **Off** — neither the menu app nor a background service starts automatically; open the app or run
-  `ccx start` manually.
+- **Off** — neither the menu app nor a background service starts automatically. A new manual app
+  launch performs the same explicit Start-and-route transition as `ccx start`.
+
+Throughout this guide, **restore native** means removing CodexCommander-owned routing. An external
+user-managed Codex provider is left unchanged.
 
 The visible app and background server remain separate internally. With the CodexCommander panel active,
 **Quit Menu Bar** (`⌘Q`) closes only the companion UI and deliberately leaves routing active.
@@ -40,8 +45,9 @@ therefore list CodexCommander under both **Open at Login** and **Allow in the Ba
 responsibilities of one installation, not duplicate app copies. Turning off Launch at Login never
 installs, removes, starts, or stops the background service.
 
-App-managed startup and the background service solve different problems. The app starts the proxy at
-sign-in, which is enough for normal desktop use. The optional background service additionally
+App-managed startup and the background service solve different problems. The app starts or attaches
+to the proxy at sign-in and routes managed Codex through it, which is enough for normal desktop use. The
+optional background service additionally
 supervises the proxy and restarts it after a crash, so the dashboard labels it **Background
 recovery** instead of presenting it as a requirement. The companion periodically reports its current
 Launch at Login state to the local proxy; that short-lived report is kept only in memory and is used
@@ -217,9 +223,11 @@ open dist/macos/CodexCommander.app
 
 The development app is exactly `dist/macos/CodexCommander.app`. Every build embeds the Bun runtime and
 CodexCommander server resources inside the app bundle; the running app never executes `src/` from the
-checkout. Rebuild the app to pick up source changes. Double-clicking it attempts to ensure the proxy,
-but an offline failure or failed start does not close the app: its status panel remains available and
-**Start** can be retried. This source workflow does not install or copy the app into Application
+checkout. Rebuild the app to pick up source changes. Double-clicking it to launch a new app process
+performs an explicit Start: it starts or attaches to the proxy and routes managed Codex through it.
+An external user-managed provider is preserved. An offline failure or failed start
+does not close the app: its status panel remains available and **Start** can be retried. This source
+workflow does not install or copy the app into Application
 Support. A rebuild at the same path is detected on the
 next launch and refreshes the existing Login Item registration only when Launch at Login remains on.
 Each build stamps its exact Git revision into `CodexCommanderSourceRevision` in the bundle's `Info.plist`

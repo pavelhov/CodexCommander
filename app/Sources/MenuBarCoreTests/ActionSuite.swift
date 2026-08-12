@@ -85,6 +85,35 @@ enum ActionSuite {
             )
         }
 
+        t.test("lifecycle: direct companion launch starts routing; passive CLI launch only ensures") {
+            let lifecycle = FakeLifecycleRunner(results: [
+                LifecycleCommandResult(
+                    action: .start, ok: true, state: .running,
+                    changed: true, pid: 41, port: 10100, message: "running"
+                ),
+                LifecycleCommandResult(
+                    action: .ensure, ok: true, state: .running,
+                    changed: false, pid: 41, port: 10100, message: "running"
+                ),
+            ])
+            let coordinator = ActionCoordinator(lifecycle: lifecycle)
+            t.equal(
+                sync { await CompanionLaunchPolicy.run(
+                    using: coordinator,
+                    arguments: ["CodexCommanderMenuBar"]
+                ) },
+                .running
+            )
+            t.equal(
+                sync { await CompanionLaunchPolicy.run(
+                    using: coordinator,
+                    arguments: ["CodexCommanderMenuBar", companionPassiveLaunchArgument]
+                ) },
+                .running
+            )
+            t.equal(sync { await lifecycle.recordedActions() }, [.start, .ensure])
+        }
+
         t.test("lifecycle: a helper refusal is surfaced without changing its message") {
             let lifecycle = FakeLifecycleRunner(results: [
                 LifecycleCommandResult(

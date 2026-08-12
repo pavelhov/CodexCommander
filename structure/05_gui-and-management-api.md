@@ -282,13 +282,19 @@ duplicate secret.
 The active development build is `<repo>/dist/macos/CodexCommander.app`. Every built app runs the Bun
 runtime and server resources embedded in its own `Contents/Resources/runtime`; it never discovers or
 executes checkout `src/`, so developers rebuild the app to pick up source changes. The development app
-is not copied into Application Support, and no bundle shells through an ambient `ccx`. On launch it runs an
-ensure lifecycle action and automatically synchronizes the Codex model catalog, but remains open and
-actionable after an offline or startup failure. **Quit** terminates only the AppKit UI. **Stop** and
+is not copied into Application Support, and no bundle shells through an ambient `ccx`. Every new
+manual or Login Item launch runs the explicit Start lifecycle action: it starts or attaches to the
+owned proxy, routes managed Codex through it while preserving an external user-managed provider, and
+synchronizes the Codex model catalog. The companion remains
+open and actionable after an offline or startup failure. Passive `ensure` remains a separate bridge
+operation for catalog rechecks that must not override a Native route selected during the current app
+session. **Quit** terminates only the AppKit UI. **Stop** and
 **Restart** are separate confirmation-gated operations: Stop uses the fixed lifecycle helper to
 persist OFF, restore and verify native Codex, stop any manager, and leave the menu app open; Restart
 uses the canonical stop→start transaction and reports success only after replacement identity
 verification. **Restore Native Codex** changes only routing and deliberately leaves the proxy running.
+Here and below, restoring native means removing CodexCommander-owned routing; an external
+user-managed Codex provider is preserved.
 Both explicit route directions confirm the saved routing document through the fresh route endpoint
 before reporting success. A confirmed route change tells the user to quit ChatGPT completely, reopen
 it, and start a new task; the companion never presents the existing host as already switched.
