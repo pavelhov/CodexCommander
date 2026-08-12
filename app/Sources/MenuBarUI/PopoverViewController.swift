@@ -66,7 +66,8 @@ public final class PopoverViewController: NSViewController {
     private var lifecycleControlsAllowed = true
     private var launchAtLogin = LaunchAtLoginPresentation(
         status: .disabled,
-        desiredEnabled: false
+        desiredEnabled: false,
+        isToggleEnabled: true
     )
 
     public override func loadView() {

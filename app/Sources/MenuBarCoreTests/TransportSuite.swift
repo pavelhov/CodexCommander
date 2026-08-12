@@ -605,6 +605,7 @@ enum TransportSuite {
             t.equal(LaunchAtLoginStatus.enabled.companionWireValue, "enabled")
             t.equal(LaunchAtLoginStatus.disabled.companionWireValue, "disabled")
             t.equal(LaunchAtLoginStatus.requiresApproval.companionWireValue, "requires-approval")
+            t.equal(LaunchAtLoginStatus.notFound.companionWireValue, "unavailable")
             t.equal(LaunchAtLoginStatus.unavailable.companionWireValue, "unavailable")
         }
 

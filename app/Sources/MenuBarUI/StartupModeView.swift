@@ -76,8 +76,7 @@ public final class StartupModeView: NSView {
     ) {
         applying = true
         toggle.state = presentation.isOn ? .on : .off
-        toggle.isEnabled = presentation.status != .unavailable
-            && presentation.status != .requiresApproval
+        toggle.isEnabled = presentation.isToggleEnabled
         toggle.alphaValue = toggle.isEnabled ? 1 : 0.5
         settingsButton.isHidden = !presentation.needsApproval
 
@@ -92,7 +91,7 @@ public final class StartupModeView: NSView {
     }
 
     @objc private func toggleChanged() {
-        guard !applying else { return }
+        guard !applying, toggle.isEnabled else { return }
         onToggle?(toggle.state == .on)
     }
 
@@ -100,9 +99,7 @@ public final class StartupModeView: NSView {
 
     package var modeText: String { detail.stringValue }
     package var isLaunchAtLoginOn: Bool { toggle.state == .on }
+    package var isLaunchAtLoginToggleEnabled: Bool { toggle.isEnabled }
     package var showsSettingsButton: Bool { !settingsButton.isHidden }
-    package func toggleForTesting(_ enabled: Bool) {
-        toggle.state = enabled ? .on : .off
-        onToggle?(enabled)
-    }
+    package func activateLaunchAtLoginToggleForTesting() { toggle.performClick(nil) }
 }

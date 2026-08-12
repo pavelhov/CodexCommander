@@ -169,6 +169,7 @@ public extension LaunchAtLoginStatus {
         case .enabled: return "enabled"
         case .disabled: return "disabled"
         case .requiresApproval: return "requires-approval"
+        case .notFound: return "unavailable"
         case .unavailable: return "unavailable"
         }
     }
