@@ -32,10 +32,18 @@ session; loopback is not an authentication bypass.
 
 For the full dashboard, open it with `ccx gui` or the macOS menu app. The launcher uses admin authority
 to mint a short-lived, single-use ticket, puts only that ticket in the URL fragment, and the dashboard
-removes it immediately as it exchanges it for a confirmed session. A confirmed session lives only in
-the proxy and browser process for up to eight hours and is never renewed. Expiry or a proxy restart
-makes the next API request return `401`, and the loopback page requires a new launcher handoff. The
-durable admin token never enters the URL or browser storage.
+removes it immediately as it exchanges it for a confirmed session. The server keeps that session in
+process memory for up to eight hours. The browser mirrors only its session token, CSRF token, origin,
+and absolute expiry in `sessionStorage`, so refreshing keeps working while
+the server session remains valid. The session is never renewed. Expiry, a proxy restart, or a rejecting
+`401` clears the browser record and requires a new launcher handoff. Neither the durable admin token
+nor the launch ticket enters browser storage, and authentication never uses `localStorage`.
+
+Same-origin script can read `sessionStorage`. This small reload convenience is therefore not OS-user
+isolation; it does not replace the launcher's listener check or the server's origin and CSRF checks.
+Browsers may copy the record into duplicated or opener-created tabs, or restore it with a restored
+tab; every copy remains bound to the exact origin and CSRF token and is usable only until the fixed
+server expiry, a proxy restart, or a rejecting `401`.
 
 A dashboard bound to a non-loopback hostname may use the admin token
 (`CODEXCOMMANDER_ADMIN_AUTH_TOKEN`, or the auto-generated `~/.codexcommander/admin-api-token` file),
@@ -45,8 +53,8 @@ as loopback, then open it through `ccx gui`. Raw admin remains available to head
 clients, but catalog Apply is deliberately restricted to a confirmed local dashboard launch.
 
 On trusted HTTPS, a remote dashboard presents a standard password form so a browser password manager
-can offer to save and autofill the credential. The dashboard itself still keeps the token only in
-memory and does not write it to `localStorage` or `sessionStorage`; whether it is saved is entirely
+can offer to save and autofill the credential. The dashboard itself still keeps that raw admin token
+only in memory and does not write it to `localStorage` or `sessionStorage`; whether it is saved is entirely
 the browser or password manager's decision.
 
 ## What you can do
@@ -67,7 +75,7 @@ the browser or password manager's decision.
 | **Models** | Toggle native GPT and routed models, set provider allowlists and context caps, choose **Reliable v1**, **Codex native**, or **Concurrent v2**, and configure the v2 thread limit. The Current behavior card reports context as **Uncapped**, **Limited**, or **Mixed limits**. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. Each routed-provider row reports **Auto-discovery on** or **Static catalog only** and links to the owning Provider setting. |
 | **Client Apps** | Inspect configured and available local clients, apply or remove managed config where supported, review backups, and reach Codex, Claude Code/Desktop, Grok Build, OpenCode and the file-managed clients without treating providers as clients. |
 | **API Access** | Issue and manage keys that authenticate other apps to the CodexCommander proxy. Provider credentials remain under Providers. |
-| **Logs** | Auto-refresh recent requests with tokens, requested effort and (when available) effective outbound effort, resolved model, provider, status, request id, duration, and error details. The detail view includes the exact reasoning wire field when the adapter emits one. Filter by opaque conversation/session id (when the client sends one) to total tokens and estimated list-price cost for the currently loaded Logs ring. |
+| **Logs** | Auto-refresh recent requests with tokens, requested → sent outbound effort, resolved model, provider, status, request id, duration, and error details. The detail view includes the exact sent reasoning wire field when the adapter emits one. “Sent” is what CodexCommander serialized; it does not prove that the provider accepted, honored, or applied that effort. Filter by opaque conversation/session id (when the client sends one) to total tokens and estimated list-price cost for the currently loaded Logs ring. |
 | **Usage / Debug** | Inspect token-usage coverage and trends, or enable opt-in provider transport and usage-extraction diagnostics. |
 | **Storage** | Read-only CODEX_HOME disk breakdown (sessions, archives, DBs, attachments). Optional archived cleanup: preview the oldest N%, then quarantine to `CODEX_HOME/.trash` (default) or permanently delete behind an explicit checkbox. **Auto-cleanup policy** is opt-in and **default OFF** (`storageCleanupPolicy.enabled`); configure threshold/target/schedule/mode on the Storage page, or trigger **Run now**. Quarantined entries can be restored from the Storage page (JSONL + threads). Active sessions stay read-only. Cleanup and restore are refused while Codex holds the newest/active `state_*.sqlite` locked. |
 | **Stop** | Persist integration OFF, restore and verify native Codex, then stop an unsupervised proxy (`POST /api/stop`). If an installed supervisor owns it, the raw API refuses; use tray or CLI Stop so that flow stops the manager first. |

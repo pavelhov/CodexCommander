@@ -20,8 +20,11 @@ afterEach(() => {
 });
 
 describe("GUI confirmed launch exchange", () => {
-  test("scrubs the ticket, exchanges once in memory, and leaves data requests untouched", async () => {
+  test("scrubs the ticket, stores only the confirmed session per tab, and leaves data requests untouched", async () => {
     const ticket = `ccx_launch_${"A".repeat(43)}`;
+    const sessionToken = `ccx_session_${"S".repeat(43)}`;
+    const csrfToken = "C".repeat(43);
+    const expiresAt = Date.now() + 60_000;
     const location = new URL(`http://localhost:10100/#ccx-launch-ticket=${ticket}&ccx-route=subagents`);
     const seen: Array<{ url: string; method: string; headers: Headers; body?: BodyInit | null; hash: string }> = [];
     const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -36,23 +39,34 @@ describe("GUI confirmed launch exchange", () => {
         return Response.json({
           route: "subagents",
           session: {
-            token: "ccx_session_browser-secret",
-            csrfToken: "csrf-browser-secret",
+            token: sessionToken,
+            csrfToken,
             origin: "http://localhost:10100",
-            expiresAt: Date.now() + 60_000,
+            expiresAt,
             confirmedLaunch: true,
           },
         });
       }
       return Response.json({ ok: true });
     };
-    let durableWrites = 0;
-    const storage = { getItem: () => null, setItem: () => { durableWrites += 1; }, removeItem: () => { durableWrites += 1; } };
+    const sessionValues = new Map<string, string>();
+    let localStorageWrites = 0;
+    const localStorage = {
+      getItem: () => null,
+      setItem: () => { localStorageWrites += 1; },
+      removeItem: () => { localStorageWrites += 1; },
+    };
+    const sessionStorage = {
+      getItem: (key: string) => sessionValues.get(key) ?? null,
+      setItem: (key: string, value: string) => { sessionValues.set(key, value); },
+      removeItem: (key: string) => { sessionValues.delete(key); },
+    };
     Object.assign(globalThis, {
-      localStorage: storage,
-      sessionStorage: storage,
+      localStorage,
+      sessionStorage,
       window: {
         location,
+        sessionStorage,
         history: {
           state: null,
           replaceState(_state: unknown, _title: string, next: string) {
@@ -77,13 +91,21 @@ describe("GUI confirmed launch exchange", () => {
     expect(seen[0]?.hash).toBe("#subagents");
     expect(seen[0]?.headers.get("x-codexcommander-api-key")).toBeNull();
     expect(JSON.parse(String(seen[0]?.body))).toEqual({ ticket, route: "subagents" });
-    expect(seen[1]?.headers.get("x-codexcommander-api-key")).toBe("ccx_session_browser-secret");
+    expect(seen[1]?.headers.get("x-codexcommander-api-key")).toBe(sessionToken);
     expect(seen[1]?.headers.get("x-codexcommander-gui-origin")).toBe("http://localhost:10100");
     expect(seen[1]?.headers.get("x-codexcommander-csrf-token")).toBeNull();
-    expect(seen[2]?.headers.get("x-codexcommander-api-key")).toBe("ccx_session_browser-secret");
-    expect(seen[2]?.headers.get("x-codexcommander-csrf-token")).toBe("csrf-browser-secret");
+    expect(seen[2]?.headers.get("x-codexcommander-api-key")).toBe(sessionToken);
+    expect(seen[2]?.headers.get("x-codexcommander-csrf-token")).toBe(csrfToken);
     expect(seen[3]?.headers.get("x-codexcommander-api-key")).toBeNull();
     expect(seen[3]?.headers.get("x-codexcommander-gui-origin")).toBeNull();
-    expect(durableWrites).toBe(0);
+    expect(localStorageWrites).toBe(0);
+    expect([...sessionValues.values()].map(value => JSON.parse(value))).toEqual([{
+      version: 1,
+      token: sessionToken,
+      csrfToken,
+      origin: "http://localhost:10100",
+      expiresAt,
+      confirmedLaunch: true,
+    }]);
   });
 });

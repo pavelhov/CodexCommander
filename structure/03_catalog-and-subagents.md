@@ -115,10 +115,17 @@ A manually opened loopback dashboard receives no API credential. On every loopba
 address, the browser never prompts for or transmits the raw admin token; it requires a confirmed GUI
 session instead. `ccx gui` and the macOS companion can use the raw admin credential outside the
 browser to mint a short-lived, single-use launch ticket carried only in the URL fragment. Its one-time
-exact-origin, exact-route exchange creates a process-memory-only confirmed GUI session with an
-eight-hour absolute lifetime. It is never renewed: expiry or proxy restart makes the next API request
-return `401`, after which the dashboard directs the user back to the launcher. The durable admin token
-never enters the URL or web storage. The raw admin principal remains capable of ordinary headless API
+exact-origin, exact-route exchange creates a confirmed GUI session with an eight-hour absolute
+lifetime. The server keeps the session in process memory; the browser mirrors only its session token,
+CSRF token, origin, and absolute expiry in `sessionStorage`, so a reload can rehydrate it while
+the server session remains valid. It is never renewed: expiry, proxy restart, or a rejecting `401`
+invalidates the client copy, which is then cleared before the dashboard directs the user back to the
+launcher. Neither the durable admin token nor the launch ticket enters browser storage, and the
+dashboard never uses `localStorage` for authentication. Because same-origin script can read
+`sessionStorage`, this reload convenience is not OS-user isolation. Browsers may copy the record into
+duplicated or opener-created tabs, or restore it with a restored tab; every copy remains bound to the
+exact origin and CSRF token and is usable only until the fixed server expiry, a proxy restart, or a
+rejecting `401`. The raw admin principal remains capable of ordinary headless API
 mutations but is deliberately not accepted by the browser Apply endpoint; the companion and CLI keep
 their existing narrow non-browser flows.
 

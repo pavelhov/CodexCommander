@@ -18,7 +18,7 @@ CodexCommander uses three mutually exclusive admission credential classes:
 | --- | --- | --- |
 | Data plane | `CODEXCOMMANDER_API_AUTH_TOKEN`, the `service-api-token` file loaded through `CCX_API_TOKEN_FILE`, and `config.apiKeys` | `/v1/*` HTTP endpoints and new data-plane WebSocket handshakes only |
 | Management plane | `CODEXCOMMANDER_ADMIN_AUTH_TOKEN` or the independent protected `admin-api-token` file | `/api/*` only |
-| GUI session | A confirmed local-app launch, process-memory-only and origin-bound | Full dashboard methods for up to eight hours; catalog Apply remains confirmed-session-only |
+| GUI session | A confirmed local-app launch, server-memory-backed and origin-bound; its token, CSRF token, origin, and absolute expiry are mirrored in browser `sessionStorage` | Full dashboard methods for up to eight hours; catalog Apply remains confirmed-session-only |
 
 The service token file remains a delivery mechanism for the data-plane environment token; it is not
 a fourth credential class. A management credential that equals any configured data-plane credential
@@ -50,8 +50,8 @@ management token creation, validation, or permission hardening fails, every `/ap
 must be checked explicitly because an `icacls` timeout is a soft failure in the shared secret helper.
 
 Opening a local dashboard page directly does not mint an API credential. The static shell may load,
-but every `/api/*` request remains behind management authentication; a fresh `ccx gui`/macOS
-companion launch is required. A loopback page never prompts for or transmits the durable admin token,
+but every `/api/*` request remains behind management authentication; unless that same tab can
+rehydrate a still-valid confirmed session, a fresh `ccx gui`/macOS companion launch is required. A loopback page never prompts for or transmits the durable admin token,
 because the browser origin does not prove which local OS user owns the listener. There is no
 lower-privilege loopback session, implicit renewal, or loopback authentication bypass. The dashboard
 never attaches a management session to `/v1/*`.
@@ -64,10 +64,15 @@ headless management API clients using a trusted transport.
 `ccx gui` or the macOS companion may use the durable admin credential to mint a short-lived,
 single-use launch ticket bound to the exact route and origin. Only the ticket enters the URL fragment,
 which the dashboard removes immediately during its one-time exchange. The exchange creates a
-confirmed, CSRF-protected GUI session with an eight-hour absolute lifetime. It is process-memory-only
-and never renewed. Expiry or proxy restart makes the next API request return `401`; the browser then
-directs the user to relaunch. The durable admin token never enters the URL, `localStorage`, or
-`sessionStorage`. The
+confirmed, CSRF-protected GUI session with an eight-hour absolute lifetime. It remains in server
+process memory and is never renewed. The browser mirrors only the confirmed session token, CSRF token,
+exact origin, and absolute expiry in `sessionStorage`; this allows reloads while
+the server session is still valid. Expiry, proxy restart, or a rejecting `401` invalidates that copy;
+the client clears it and directs the user to relaunch. Neither the durable admin token nor the launch
+ticket enters browser storage, and authentication never uses `localStorage`. Browsers may copy the
+record into duplicated or opener-created tabs, or restore it with a restored tab; every copy remains
+bound to the exact origin and CSRF token and is usable only until the fixed server expiry, a proxy
+restart, or a rejecting `401`. The
 ticket is a transient capability, not a fourth durable credential class or a general management
 bypass. Its exchange endpoint is the narrow pre-authenticated exception to the `/api/*` gate: the
 single-use ticket itself is the bearer and is bound to the exact origin and route.
@@ -76,7 +81,9 @@ Confirmed launch mitigates cross-OS-user loopback listener spoofing, remote driv
 accidental clients; it is not proof of user presence and is not stronger than raw admin against a
 malicious process already running as the same trusted OS account described in
 [`02_config-and-codex-home.md`](02_config-and-codex-home.md). In particular, it must not be described
-as blocking a coding agent that already holds the raw admin token.
+as blocking a coding agent that already holds the raw admin token. Same-origin script can read the
+confirmed session record from `sessionStorage`, so that record must not be described as OS-user
+isolation either.
 
 The raw admin principal remains capable of ordinary management API mutations. Catalog Apply is the
 narrow exception: its browser endpoint accepts only a confirmed GUI session, while the native
