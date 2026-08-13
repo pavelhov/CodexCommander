@@ -10,6 +10,7 @@ import {
   resolveTestShardSize,
   resolveTestStartShard,
 } from "../scripts/test";
+import { resolveWorkerCount } from "../scripts/test-parallel";
 
 describe("test runner isolation", () => {
   test("redirects user homes to a disposable root", () => {
@@ -38,6 +39,15 @@ describe("test runner isolation", () => {
     ]);
     expect(partitionTestFiles([], 2)).toEqual([]);
     expect(() => partitionTestFiles(["a"], 0)).toThrow("positive integer");
+  });
+
+  test("parallel runner defaults to a bounded worker count and validates overrides", () => {
+    expect(resolveWorkerCount(undefined, 10)).toBe(4);
+    expect(resolveWorkerCount(undefined, 2)).toBe(2);
+    expect(resolveWorkerCount("8", 10)).toBe(8);
+    expect(() => resolveWorkerCount("0", 10)).toThrow("positive integer");
+    expect(() => resolveWorkerCount("1.5", 10)).toThrow("positive integer");
+    expect(() => resolveWorkerCount("x", 10)).toThrow("positive integer");
   });
 
   test("uses a bounded default shard size and validates overrides", () => {
