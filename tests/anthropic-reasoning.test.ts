@@ -118,6 +118,16 @@ describe("anthropic extended-thinking gate", () => {
     expect(b.output_config).toEqual({ effort: "high" });
   });
 
+  test("non-adaptive model maps ultra to the max thinking budget", async () => {
+    // Default modelId (claude-sonnet-4.5) is NOT an adaptive-thinking family, so ultra
+    // goes through the budget ladder: it must budget like max, above xhigh's 24576.
+    const b = await bodyOf(parsed("ultra"));
+    const thinking = b.thinking as { type: string; budget_tokens: number } | undefined;
+    expect(thinking?.type).toBe("enabled");
+    expect(thinking?.budget_tokens ?? 0).toBeGreaterThan(24_576);
+    expect(b.max_tokens as number).toBeGreaterThan(thinking!.budget_tokens);
+  });
+
   test("Anthropic streaming and JSON responses preserve max_tokens stop reasons", async () => {
     const adapter = createAnthropicAdapter(provider);
     const sse = [

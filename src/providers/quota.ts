@@ -557,7 +557,8 @@ function xaiUserIdFromAccessToken(accessToken: string): string | undefined {
  * Grok Build weekly credits envelope:
  * `{ config: { creditUsagePercent?, currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", end } } }`.
  * Omitted percent is treated as 0 (proto3 default) — the same 0% the grok.com app shows
- * for a fresh weekly pool.
+ * for a fresh weekly pool. NOTE: a schema drift that stops emitting the field would also
+ * read as 0%, indistinguishable from a healthy fresh week; keep this heuristic documented.
  */
 export function parseXaiCreditsResponse(value: unknown): { percent: number; resetAt?: number } | null {
   const body = asRecord(value);
@@ -616,8 +617,13 @@ async function fetchXaiQuota(provider: string): Promise<ProviderQuotaProbeResult
   // upstream #1290); the legacy monthly dollar pool is retained as fallback only.
   const userId = auth.accountId?.trim() || xaiUserIdFromAccessToken(auth.accessToken);
   if (userId) {
+    // Deliberately no 401-replay on the credits probe: getValidAccessTokenSnapshot already
+    // refreshes expired tokens, and a server-side revocation here falls through to the
+    // monthly fallback below, whose replay path force-refreshes and self-heals next cycle.
     const weekly = await fetchXaiWeeklyCredits(auth.accessToken, userId);
     if (weekly) {
+      // Weekly success short-circuits the monthly dollar pool (matches upstream #1290 and
+      // the observed SuperGrok account where the weekly window is the real gate).
       return report(provider, "xai:grok-billing-credits", weekly)
         ?? quotaUnavailable("upstream_unavailable");
     }
@@ -644,9 +650,11 @@ async function fetchXaiQuota(provider: string): Promise<ProviderQuotaProbeResult
     // No positive cap reported: surface observed usage instead of failing closed, so a
     // cap-less (e.g. unified-billing) account never reads as an outage.
     if (usedCents !== undefined && usedCents > 0) {
+      const resetAt = normalizeResetAt(config.billingPeriodEnd);
       const quota: ProviderQuota = {
-        customWindows: [{ label: "No reported cap", percent: 0 }],
-        monthlyResetAt: normalizeResetAt(config.billingPeriodEnd),
+        // Unlocalized display label by precedent (e.g. a6api "Prepaid credits"); the GUI
+        // renders custom windows with their reset time when present.
+        customWindows: [{ label: "No reported cap", percent: 0, ...(resetAt !== undefined ? { resetAt } : {}) }],
         updatedAt: Date.now(),
       };
       return report(provider, "xai:grok-billing", quota)

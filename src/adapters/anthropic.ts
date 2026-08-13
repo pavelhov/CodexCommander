@@ -430,7 +430,7 @@ function reasoningBudget(effort: string): number {
     case "max":
     case "ultra": return 32000; // codex-rs maps ultra -> max before the wire; mirror it.
     case "medium":
-    default: return 8192;
+    default: return 16384; // unknown efforts clamp to "high" on the wire; budget must match.
   }
 }
 

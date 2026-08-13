@@ -1777,7 +1777,11 @@ test("xAI quota reports observed usage when the account reports no cap", async (
     },
   } as CodexCommanderConfig, true);
   expect(result.reports[0]?.source).toBe("xai:grok-billing");
-  expect(result.reports[0]?.quota.customWindows).toEqual([{ label: "No reported cap", percent: 0 }]);
-  expect(result.reports[0]?.quota.monthlyResetAt).toBe(Date.parse("2026-09-01T00:00:00Z"));
+  expect(result.reports[0]?.quota.customWindows).toEqual([{
+    label: "No reported cap",
+    percent: 0,
+    resetAt: Date.parse("2026-09-01T00:00:00Z"),
+  }]);
+  expect(result.reports[0]?.quota.monthlyResetAt).toBeUndefined();
   expect(result.availability?.[0]).toMatchObject({ provider: "xai", status: "available" });
 });
