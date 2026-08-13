@@ -243,7 +243,9 @@ Claude Code の `/effort` 設定はアダプターでも維持されます。
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`、≤16384→`medium`、それより大→`high` |
 | `thinking.type: "disabled"` | 推論パラメータをすべて省略します |
 
-解釈された値はリクエストログの **Reasoning effort** 列に表示されます。
+リクエストログでは、解釈した要求値と、ルーティング先 adapter が outbound 診断を提供する場合は
+実際にシリアライズした値を **要求 → 送信** として表示します。「送信」は CodexCommander が wire に
+載せた値を示すだけで、上流 provider が適用したことの確認ではありません。
 
 ## 入力変換(Messages → Responses)
 

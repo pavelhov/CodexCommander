@@ -21,6 +21,33 @@ const GUI_LAUNCH_TICKET_PARAM = "ccx-launch-ticket";
 const GUI_LAUNCH_ROUTE_PARAM = "ccx-route";
 /** Safe authenticated read used to validate a raw admin token before closing the sign-in form. */
 const ADMIN_TOKEN_VALIDATION_PATH = "/api/settings";
+const CONFIRMED_GUI_SESSION_STORAGE_KEY = "codexcommander.confirmed-gui-session.v1";
+const CONFIRMED_GUI_SESSION_STORAGE_VERSION = 1 as const;
+const CONFIRMED_GUI_SESSION_MAX_TTL_MS = 8 * 60 * 60_000;
+const CONFIRMED_GUI_SESSION_EXPIRY_SKEW_MS = 60_000;
+const GUI_SESSION_TOKEN_PATTERN = /^ccx_session_[A-Za-z0-9_-]{43}$/;
+const GUI_SESSION_CSRF_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
+interface ConfirmedGuiSession {
+  token: string;
+  csrfToken: string;
+  origin: string;
+  expiresAt: number;
+  confirmedLaunch: true;
+}
+
+interface StoredConfirmedGuiSession extends ConfirmedGuiSession {
+  version: typeof CONFIRMED_GUI_SESSION_STORAGE_VERSION;
+}
+
+const STORED_CONFIRMED_GUI_SESSION_KEYS = new Set<keyof StoredConfirmedGuiSession>([
+  "version",
+  "token",
+  "csrfToken",
+  "origin",
+  "expiresAt",
+  "confirmedLaunch",
+]);
 
 /**
  * Loopback is not an authenticated browser origin: another local OS user can
@@ -72,10 +99,15 @@ function needsApiAuth(input: RequestInfo | URL): boolean {
   }
 }
 
-/** In-memory only — never write tokens to web storage (XSS can read sessionStorage/localStorage). */
+/**
+ * Raw admin credentials remain memory-only. A narrowly scoped, server-minted
+ * confirmed GUI session may also be mirrored to this tab's sessionStorage so
+ * a same-tab reload does not discard an otherwise-live eight-hour session.
+ */
 let memoryToken: string | null = null;
 let memoryCsrfToken: string | null = null;
 let memorySessionOrigin: string | null = null;
+let memorySessionExpiresAt: number | null = null;
 let memoryConfirmedGuiLaunch = false;
 let memoryAdminCredential = false;
 let guiLaunchCapabilityReady: Promise<boolean> = Promise.resolve(false);
@@ -93,12 +125,122 @@ function setAdminCredential(admin: boolean): void {
   for (const listener of guiLaunchCapabilityListeners) listener();
 }
 
+function pageSessionStorage(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+function clearStoredConfirmedGuiSession(): void {
+  try {
+    pageSessionStorage()?.removeItem(CONFIRMED_GUI_SESSION_STORAGE_KEY);
+  } catch {
+    // Disabled or policy-blocked storage keeps the dashboard memory-only.
+  }
+}
+
+function isValidSessionExpiry(expiresAt: unknown, now = Date.now()): expiresAt is number {
+  return typeof expiresAt === "number"
+    && Number.isSafeInteger(expiresAt)
+    && expiresAt > now
+    && expiresAt <= now + CONFIRMED_GUI_SESSION_MAX_TTL_MS + CONFIRMED_GUI_SESSION_EXPIRY_SKEW_MS;
+}
+
+function parseConfirmedGuiSession(value: unknown, now = Date.now()): ConfirmedGuiSession | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (record.confirmedLaunch !== true
+    || typeof record.token !== "string"
+    || !GUI_SESSION_TOKEN_PATTERN.test(record.token)
+    || typeof record.csrfToken !== "string"
+    || !GUI_SESSION_CSRF_PATTERN.test(record.csrfToken)
+    || record.origin !== window.location.origin
+    || !isValidSessionExpiry(record.expiresAt, now)) return null;
+  return {
+    token: record.token,
+    csrfToken: record.csrfToken,
+    origin: record.origin,
+    expiresAt: record.expiresAt,
+    confirmedLaunch: true,
+  };
+}
+
+function parseStoredConfirmedGuiSession(value: unknown, now = Date.now()): ConfirmedGuiSession | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (record.version !== CONFIRMED_GUI_SESSION_STORAGE_VERSION
+    || keys.length !== STORED_CONFIRMED_GUI_SESSION_KEYS.size
+    || keys.some(key => !STORED_CONFIRMED_GUI_SESSION_KEYS.has(key as keyof StoredConfirmedGuiSession))) return null;
+  return parseConfirmedGuiSession(record, now);
+}
+
+function persistConfirmedGuiSession(session: ConfirmedGuiSession): void {
+  const storage = pageSessionStorage();
+  if (!storage) return;
+  const record: StoredConfirmedGuiSession = {
+    version: CONFIRMED_GUI_SESSION_STORAGE_VERSION,
+    ...session,
+  };
+  try {
+    storage.setItem(CONFIRMED_GUI_SESSION_STORAGE_KEY, JSON.stringify(record));
+  } catch {
+    // Do not leave an older capability behind when a fresh launch succeeded
+    // but storage is unavailable. The new session remains usable in memory.
+    try { storage.removeItem(CONFIRMED_GUI_SESSION_STORAGE_KEY); } catch { /* best effort */ }
+  }
+}
+
+function activateConfirmedGuiSession(session: ConfirmedGuiSession, persist: boolean): void {
+  memoryToken = session.token;
+  memoryCsrfToken = session.csrfToken;
+  memorySessionOrigin = session.origin;
+  memorySessionExpiresAt = session.expiresAt;
+  setAdminCredential(false);
+  if (persist) persistConfirmedGuiSession(session);
+  setConfirmedGuiLaunch(true);
+}
+
+function rehydrateConfirmedGuiSession(): boolean {
+  const storage = pageSessionStorage();
+  if (!storage) return false;
+  let raw: string | null;
+  try {
+    raw = storage.getItem(CONFIRMED_GUI_SESSION_STORAGE_KEY);
+  } catch {
+    return false;
+  }
+  if (raw === null) return false;
+  try {
+    const session = parseStoredConfirmedGuiSession(JSON.parse(raw));
+    if (!session) {
+      clearStoredConfirmedGuiSession();
+      return false;
+    }
+    activateConfirmedGuiSession(session, false);
+    return true;
+  } catch {
+    clearStoredConfirmedGuiSession();
+    return false;
+  }
+}
+
 function readToken(): string | null {
+  if (memorySessionExpiresAt !== null && memorySessionExpiresAt <= Date.now()) {
+    clearToken();
+    return null;
+  }
   return memoryToken;
 }
 
 function storeToken(token: string): void {
+  clearStoredConfirmedGuiSession();
   memoryToken = token;
+  memoryCsrfToken = null;
+  memorySessionOrigin = null;
+  memorySessionExpiresAt = null;
   setConfirmedGuiLaunch(false);
   setAdminCredential(true);
 }
@@ -107,13 +249,15 @@ function clearToken(): void {
   memoryToken = null;
   memoryCsrfToken = null;
   memorySessionOrigin = null;
+  memorySessionExpiresAt = null;
+  clearStoredConfirmedGuiSession();
   setConfirmedGuiLaunch(false);
   setAdminCredential(false);
 }
 
 /** Clear memory only when it still holds `expected` (avoid wiping a newer concurrent store). */
 function clearTokenIfCurrent(expected: string | null): void {
-  if (expected != null && readToken() === expected) clearToken();
+  if (expected != null && memoryToken === expected) clearToken();
 }
 
 /** Validate and store a server-minted GUI session; rejects anything bound to another origin. */
@@ -121,16 +265,12 @@ function storeSession(
   token: string | null,
   csrfToken: string | null,
   origin: string | null,
+  expiresAt: number | null,
   confirmedLaunch = false,
 ): boolean {
-  if (!token?.startsWith("ccx_session_")
-    || !csrfToken
-    || origin !== window.location.origin) return false;
-  memoryToken = token;
-  memoryCsrfToken = csrfToken;
-  memorySessionOrigin = origin;
-  setAdminCredential(false);
-  setConfirmedGuiLaunch(confirmedLaunch);
+  const session = parseConfirmedGuiSession({ token, csrfToken, origin, expiresAt, confirmedLaunch });
+  if (!session) return false;
+  activateConfirmedGuiSession(session, true);
   return true;
 }
 
@@ -183,6 +323,7 @@ async function exchangeGuiLaunchFragment(
         typeof record.token === "string" ? record.token : null,
         typeof record.csrfToken === "string" ? record.csrfToken : null,
         typeof record.origin === "string" ? record.origin : null,
+        typeof record.expiresAt === "number" ? record.expiresAt : null,
         true,
       );
     return stored;
@@ -205,7 +346,9 @@ async function verifyAdminToken(token: string): ReturnType<AdminTokenVerifier> {
 
 function withToken(input: RequestInfo | URL, init: RequestInit | undefined, token: string): [RequestInfo | URL, RequestInit | undefined] {
   const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-  const isSession = token.startsWith("ccx_session_");
+  const isSession = token === memoryToken
+    && memoryConfirmedGuiLaunch
+    && GUI_SESSION_TOKEN_PATTERN.test(token);
   headers.set("X-CodexCommander-API-Key", token);
   if (memorySessionOrigin && memoryCsrfToken && isSession) {
     headers.set("X-CodexCommander-GUI-Origin", memorySessionOrigin);
@@ -261,7 +404,13 @@ export function installApiAuthFetch(): void {
   const originalFetch = window.fetch.bind(window);
   rawFetch = originalFetch;
   const launch = takeGuiLaunchFragment();
-  guiLaunchCapabilityReady = exchangeGuiLaunchFragment(launch);
+  // Rehydrate first even when a fresh ticket is present. A successful exchange
+  // atomically replaces the stored session; a transient/consumed ticket leaves
+  // an already-valid same-origin session usable until its own expiry.
+  const rehydrated = rehydrateConfirmedGuiSession();
+  guiLaunchCapabilityReady = launch
+    ? exchangeGuiLaunchFragment(launch).then(exchanged => exchanged || rehydrated)
+    : Promise.resolve(rehydrated);
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     if (!needsApiAuth(input)) return originalFetch(input, init);
 
@@ -325,6 +474,7 @@ export function resetApiAuthFetchForTests(adminTokenPrompt: AdminTokenPrompt = p
   memoryToken = null;
   memoryCsrfToken = null;
   memorySessionOrigin = null;
+  memorySessionExpiresAt = null;
   memoryConfirmedGuiLaunch = false;
   memoryAdminCredential = false;
   guiLaunchCapabilityReady = Promise.resolve(false);

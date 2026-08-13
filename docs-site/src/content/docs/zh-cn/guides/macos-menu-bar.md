@@ -124,7 +124,7 @@ ccx sync --restart-codex
 验证的回环 CodexCommander 进程。它绝不会显示、记录、复制或存储该令牌，也不会将其放入浏览器
 URL。
 
-伴侣打开仪表盘时，会向经过验证的本地代理请求一个短期、一次性启动票据。票据只出现在 URL fragment 中，并在一次性交换过程中清除；长期管理员 token 不会进入 URL 或 Web Storage。确认的完整功能 session 只存在于进程内存中，最长八小时，且不会续期。到期或代理重启后的下一个 API 请求会返回 `401`，页面会提示通过伴侣或 `ccx gui` 重新打开。手动打开的 loopback 仪表盘没有 API session，也绝不会请求或发送长期管理员 token。
+伴侣打开仪表盘时，会向经过验证的本地代理请求一个短期、一次性启动票据。票据只出现在 URL fragment 中，并在一次性交换过程中清除。服务器在进程内存中保留确认的完整功能 session，最长八小时。浏览器仅把 session token、CSRF token、origin 和绝对到期时间镜像到同一标签页的 `sessionStorage`，所以服务器 session 有效时可以刷新。session 不会续期。到期、代理重启或拒绝请求的 `401` 会清除浏览器记录，并提示通过伴侣或 `ccx gui` 重新打开。长期管理员 token 和启动票据都不会进入浏览器存储，认证也绝不使用 `localStorage`。同源脚本可以读取 `sessionStorage`，因此这项刷新便利性不构成 OS 用户隔离。手动打开的 loopback 仪表盘没有 API session，也绝不会请求或发送长期管理员 token。
 
 提供商凭据仍由 CodexCommander 管理。伴侣绝不会读取 ChatGPT、Kimi、Grok、Anthropic 或其他
 提供商令牌，也绝不会直接调用提供商登录端点。

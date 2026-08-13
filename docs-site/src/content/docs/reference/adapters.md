@@ -55,8 +55,10 @@ provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local & cloud),
 
 ## `openai-responses`
 
-**Targets:** the OpenAI **Responses API**. **`passthrough: true`** — forwards the raw request body and
-streams the response back **untranslated**.
+**Targets:** the OpenAI **Responses API**. **`passthrough: true`** — preserves the Responses request
+and response shapes instead of translating them through the Chat Completions model. Documented
+compatibility normalizations are the only request-shape exceptions; the response streams back
+untranslated.
 **Auth:** `forward` (relay the caller's headers) or `key`.
 
 For `key` auth, [`retryOn429`](/reference/configuration/) applies here too: a pre-stream 429
@@ -66,6 +68,11 @@ of the HTTP retry loop.
 
 - `forward` URL → `{baseUrl}/responses`. A `key` provider defaults to `{baseUrl}/v1/responses`.
 - A `key` provider may set a validated relative `responsesPath`; the adapter removes one trailing slash from `baseUrl` and sends `{trimmedBaseUrl}{responsesPath}`. For Ark Agent Plan, use `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` with `responsesPath: "/responses"`.
+- At the final outbound boundary, a recognized provider/model reasoning contract maps or clamps an
+  already-present `reasoning.effort`. Unknown and custom contracts keep the caller's value
+  unchanged and do not copy that arbitrary value into durable diagnostics. Only a validated value
+  from a recognized contract is recorded as the exact sent field/value; **sent** means serialized
+  by CodexCommander, not confirmation that the upstream applied it.
 - In `forward` mode only a safe header allowlist is relayed (`FORWARD_HEADERS`): authorization,
   ChatGPT account id, and the OpenAI beta/originator/session headers. This is the ChatGPT-login path
   that also powers the [sidecars](/guides/sidecars/).

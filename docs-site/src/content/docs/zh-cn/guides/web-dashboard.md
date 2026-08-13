@@ -24,11 +24,13 @@ bun run dev:gui
 
 手动通过任何 loopback 形式打开的仪表盘都不会获得 API 凭证，包括 `localhost`、`*.localhost`、`127.0.0.0/8` 中的任意地址、`::1` 和 IPv4-mapped `127/8` 地址。页面框架可以加载，但 API 请求仍未通过身份验证。请通过 `ccx gui` 或 macOS 菜单栏应用重新打开。由于另一个本地 OS 用户可以冒充未使用端口上的 listener，loopback 页面绝不会请求或发送长期管理员 token。loopback 浏览器访问需要确认的 launcher session，不能绕过身份验证。
 
-要使用完整功能，请通过 `ccx gui` 或 macOS 菜单栏应用打开。launcher 使用管理员权限签发一个短期、一次性票据，只把票据放入 URL fragment；仪表盘会在一次性交换过程中立即将其清除。确认 session 只存在于代理和浏览器进程内存中，最长八小时，且不会续期。到期或代理重启后的下一个 API 请求会返回 `401`，loopback 页面需要新的 launcher handoff。长期管理员 token 绝不会进入 URL 或浏览器存储。
+要使用完整功能，请通过 `ccx gui` 或 macOS 菜单栏应用打开。launcher 使用管理员权限签发一个短期、一次性票据，只把票据放入 URL fragment；仪表盘会在一次性交换过程中立即将其清除。服务器在进程内存中保留确认 session，最长八小时。浏览器仅把 session token、CSRF token、origin 和绝对到期时间镜像到当前标签页的 `sessionStorage`，所以服务器 session 有效时，刷新后仍可继续使用。session 不会续期。到期、代理重启或拒绝请求的 `401` 会清除浏览器记录，并要求新的 launcher handoff。长期管理员 token 和启动票据都不会进入浏览器存储，认证也绝不使用 `localStorage`。
+
+同源脚本可以读取 `sessionStorage`。因此，这项刷新便利性不构成 OS 用户隔离，也不能取代 launcher 的 listener 验证或服务器的 origin/CSRF 检查。
 
 非 loopback 主机可以使用 `CODEXCOMMANDER_ADMIN_AUTH_TOKEN` 或 `~/.codexcommander/admin-api-token` 中的管理员 token，但浏览器输入框仅在受信任的 HTTPS origin 上启用。明文远程页面绝不会请求或发送 bearer。若没有受信任的 HTTPS，请使用把仪表盘呈现为 loopback 的本地或 SSH tunnel，并通过 `ccx gui` 打开。原始管理员 token 仍可供 headless management API client 使用，但 catalog Apply 只允许来自确认的本地仪表盘启动。
 
-受信任 HTTPS 上的远程仪表盘会显示标准密码表单，浏览器密码管理器可以提示保存并自动填充 token。仪表盘本身只在内存中保存 token，不会写入 `localStorage` 或 `sessionStorage`；是否持久保存完全由浏览器或密码管理器决定。
+受信任 HTTPS 上的远程仪表盘会显示标准密码表单，浏览器密码管理器可以提示保存并自动填充 token。仪表盘本身只在内存中保存这个原始管理员 token，不会写入 `localStorage` 或 `sessionStorage`；是否持久保存完全由浏览器或密码管理器决定。
 
 ## 可以完成哪些操作
 
@@ -48,7 +50,7 @@ bun run dev:gui
 | **Models** | 开关原生 GPT 与路由模型，配置 provider allowlist 和上下文上限，选择 **Reliable v1**、**Codex native** 或 **Concurrent v2**，并设置 v2 thread 数量。Current behavior 卡片会将上下文显示为 **Uncapped**、**Limited** 或 **Mixed limits**。每个路由 provider 都会显示 **自动发现已开启** 或 **仅静态目录**，并链接到对应的 provider 设置。 |
 | **Client Apps** | 查看已配置和可连接的本地客户端；在支持时应用或移除托管配置并检查备份；集中访问 Codex、Claude Code/Desktop、Grok Build、OpenCode 及文件托管客户端，同时避免把客户端与提供商混为一谈。 |
 | **API Access** | 签发和管理其他应用连接 CodexCommander 代理时使用的认证密钥。上游提供商凭据仍归 Providers 管理。 |
-| **Logs** | 自动刷新近期请求，显示 token、请求强度以及（可用时）实际发送强度、实际模型、provider、状态、request id、耗时和错误详情。适配器发送 reasoning 参数时，详情中还会显示准确的 wire field。可按不透明会话/对话 ID（客户端提供时）筛选，并对当前已加载的 Logs 环形缓冲合计 token 与估算标价成本。 |
+| **Logs** | 自动刷新近期请求，显示 token、请求 → 发送的 outbound 强度、实际模型、provider、状态、request id、耗时和错误详情。适配器发送 reasoning 参数时，详情中还会显示准确的已发送 wire field。“发送”表示 CodexCommander 序列化的值，不能证明 provider 已接受、遵循或应用该强度。可按不透明会话/对话 ID（客户端提供时）筛选，并对当前已加载的 Logs 环形缓冲合计 token 与估算标价成本。 |
 | **Usage / Debug** | 查看 token usage 覆盖率与趋势，或启用可选的 provider transport 和 usage 提取诊断。 |
 | **Storage** | 只读查看 CODEX_HOME 磁盘占用（会话、归档、数据库、附件）。可选归档清理：预览最旧 N%，默认隔离到 `CODEX_HOME/.trash`，或勾选后永久删除。**自动清理策略**为可选且**默认关闭**（`storageCleanupPolicy.enabled`）；可在 Storage 页配置阈值/目标/计划/模式，或点「立即运行」。可在 Storage 页从隔离区恢复（JSONL + 线程）。活动会话保持只读。Codex 锁定最新/活动的 `state_*.sqlite` 时拒绝清理与恢复。 |
 | **Stop** | 将集成保存为 OFF，恢复并验证原生 Codex，再停止没有 supervisor 的代理（`POST /api/stop`）。若已安装 supervisor 占有代理，原始 API 会拒绝；请使用托盘或 CLI Stop，让该流程先停止 manager。 |

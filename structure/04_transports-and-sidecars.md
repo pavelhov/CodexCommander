@@ -33,6 +33,21 @@ within their route; neither route falls through to the other. See
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
 to GUI static serving.
 
+### Responses reasoning effort boundary
+
+`openai-responses` preserves the caller's Responses request shape and the upstream response shape;
+it does not translate them through CodexCommander's internal Chat Completions model. Documented
+compatibility normalizations are the exception to that passthrough contract. At the final outbound
+boundary, a recognized provider/model reasoning contract maps or clamps an already-present
+`reasoning.effort` to the value that contract accepts. An unknown or custom contract is left
+unchanged rather than guessed.
+
+When a recognized contract produces a validated mapped value, the adapter records the exact
+outbound field and serialized value for request diagnostics. The dashboard presents this as
+**Requested → sent**. Unknown/custom values remain wire-transparent but are not copied into durable
+diagnostics. “Sent” proves what CodexCommander put on the wire; it is not evidence that the upstream
+provider applied or surfaced that effort internally.
+
 ### Passthrough SSE stream shapes (#314)
 
 Native passthrough SSE has TWO shapes, selected per request in

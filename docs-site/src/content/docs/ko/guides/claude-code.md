@@ -269,7 +269,9 @@ Claude Code의 `/effort` 설정은 어댑터에서도 유지돼요.
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`, ≤16384→`medium`, 그보다 크면→`high` |
 | `thinking.type: "disabled"` | 추론 매개변수를 모두 생략해요 |
 
-해석된 값은 요청 로그의 **Reasoning effort** 열에 표시돼요.
+요청 로그에는 해석된 요청값과, 라우팅된 adapter가 outbound 진단을 제공할 때 정확히 직렬화한 값이
+**요청 → 전송**으로 표시돼요. “전송”은 CodexCommander가 wire에 넣은 값을 확인할 뿐, 업스트림
+provider가 적용했다는 뜻은 아니에요.
 
 ## 입력 변환(Messages → Responses)
 

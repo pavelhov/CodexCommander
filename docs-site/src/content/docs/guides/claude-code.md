@@ -364,7 +364,9 @@ Claude Code's `/effort` setting is preserved across the adapter:
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`, ≤16384→`medium`, above→`high` |
 | `thinking.type: "disabled"` | Reasoning parameters omitted entirely |
 
-The resolved value appears in the request log's **Reasoning effort** column.
+The request log shows the parsed request and, when the routed adapter exposes an outbound
+diagnostic, the exact serialized value under **Requested → sent**. “Sent” confirms what
+CodexCommander put on the wire, not that the upstream provider applied it.
 
 ## Inbound translation (Messages → Responses)
 

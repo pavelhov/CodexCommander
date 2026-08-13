@@ -156,6 +156,12 @@ Codex context compaction 同样适用于路由模型。`server/responses/compact
 - 解析模型级和 provider 级 `reasoningEffortMap` override，用于自定义 wire 映射。
 - 对 `noReasoningModels` 中的模型完全移除 effort。
 
+转换型 adapter 会在构建请求时应用此契约。Responses passthrough 只会针对已识别的
+provider/model 契约，在最终 outbound 边界应用它；未知或自定义 Responses 契约的
+`reasoning.effort` 会保持不变，但不会把该任意值复制到持久诊断。只有已识别契约生成验证值时，
+请求诊断才会记录准确的 outbound field/value，dashboard 则显示 **请求 → 已发送**。“已发送”
+描述 CodexCommander 序列化到 wire 的值，并不证明上游 provider 已应用该值。
+
 ## 核心类型
 
 内部模型位于 `types.ts`：`CodexCommanderParsedRequest`、`CodexCommanderContext`、`CodexCommanderMessage` 联合类型、

@@ -43,7 +43,9 @@ interface ProviderAdapter {
 
 ## `openai-responses`
 
-**対象:** OpenAI **Responses API**。**`passthrough: true`** — 元のリクエスト本文をそのまま渡し、レスポンスを **変換せずに** ストリーミングします。
+**対象:** OpenAI **Responses API**。**`passthrough: true`** — Responses のリクエストとレスポンスの
+形を Chat Completions モデルへ変換せずに維持します。文書化された互換性正規化だけがリクエスト
+形状の例外で、レスポンスは **変換せずに** ストリーミングします。
 **認証:** `forward`（呼び出し元ヘッダー中継）または `key`。
 
 `key` 認証では、[`retryOn429`](/ja/reference/configuration/) もここに適用されます: プリストリームの
@@ -53,6 +55,11 @@ HTTP リトライ ループの対象外です。
 
 - `forward` URL → `{baseUrl}/responses`。`key` provider のデフォルト URL は `{baseUrl}/v1/responses` です。
 - `key` provider は検証済みの相対 `responsesPath` を設定できます。adapter は `baseUrl` 末尾の `/` を 1 つ除き、`{trimmedBaseUrl}{responsesPath}` に送信します。Ark Agent Plan では `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` と `responsesPath: "/responses"` を使います。
+- 最終送信境界では、認識済みの provider/model reasoning 契約に対して、すでに存在する
+  `reasoning.effort` をマッピングまたはクランプします。不明・カスタム契約では呼び出し元の値を
+  変更せず、その任意の値を永続診断にもコピーしません。認識済み契約による検証済みの値だけを
+  実際に送信した field/value として記録します。**送信**は CodexCommander がシリアライズした
+  値を意味し、上流が適用したことの確認ではありません。
 - `forward` モードでは安全なヘッダー許可リスト（`FORWARD_HEADERS`）だけを中継します。authorization、ChatGPT account id、OpenAI beta/originator/session ヘッダーが対象です。この ChatGPT ログイン経路は [サイドカー](/ja/guides/sidecars/) にも使われます。
 
 ## `anthropic`

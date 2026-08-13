@@ -104,6 +104,105 @@ describe("DeepSeek Responses endpoint contract", () => {
   });
 });
 
+describe("OpenAI Responses reasoning effort wire contract", () => {
+  function buildEffortRequest(
+    upstream: Parameters<typeof createResponsesPassthroughAdapter>[0],
+    modelId: string,
+    effort?: string,
+  ) {
+    return createResponsesPassthroughAdapter(upstream).buildRequest({
+      modelId,
+      context: { messages: [] },
+      stream: true,
+      options: effort ? { reasoning: effort } : {},
+      _rawBody: {
+        model: modelId,
+        input: "ping",
+        ...(effort ? { reasoning: { effort } } : {}),
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+  }
+
+  test("OpenCode Go clamps a stale Grok max request to its declared high ceiling", () => {
+    const opencodeGo = {
+      ...providerConfigSeed(getProviderRegistryEntry("opencode-go")!),
+      apiKey: "sk-test",
+    };
+    const request = buildEffortRequest(opencodeGo, "grok-4.5", "max");
+
+    expect(JSON.parse(request.body).reasoning).toEqual({ effort: "high" });
+    expect(request.reasoningLog).toEqual({
+      effectiveEffort: "high",
+      wireField: "reasoning.effort",
+      wireValue: "high",
+    });
+  });
+
+  test("DeepSeek Responses applies its model aliases and logs the exact sent effort", () => {
+    const deepseek = {
+      ...providerConfigSeed(getProviderRegistryEntry("deepseek")!),
+      apiKey: "sk-test",
+    };
+
+    for (const requested of ["medium", "xhigh"] as const) {
+      const request = buildEffortRequest(deepseek, "deepseek-v4-flash", requested);
+      expect(JSON.parse(request.body).reasoning).toEqual({ effort: "high" });
+      expect(request.reasoningLog).toEqual({
+        effectiveEffort: "high",
+        wireField: "reasoning.effort",
+        wireValue: "high",
+      });
+    }
+
+    const maxRequest = buildEffortRequest(deepseek, "deepseek-v4-flash", "max");
+    expect(JSON.parse(maxRequest.body).reasoning).toEqual({ effort: "max" });
+    expect(maxRequest.reasoningLog).toEqual({
+      effectiveEffort: "max",
+      wireField: "reasoning.effort",
+      wireValue: "max",
+    });
+  });
+
+  test("canonical OpenAI forwarding preserves the native effort without logging raw passthrough input", () => {
+    const openai = {
+      ...providerConfigSeed(getProviderRegistryEntry("openai")!),
+      // Defense-in-depth control: even if future enrichment grows model metadata,
+      // ChatGPT-native forwarding stays byte-semantic rather than adapter-mapped.
+      modelReasoningEfforts: { "gpt-5.6-sol": ["low"] },
+      modelReasoningEffortMap: { "gpt-5.6-sol": { max: "low" } },
+    };
+    const request = buildEffortRequest(openai, "gpt-5.6-sol", "max");
+
+    expect(JSON.parse(request.body).reasoning).toEqual({ effort: "max" });
+    expect(request.reasoningLog).toBeUndefined();
+  });
+
+  test("metadata-free custom gateways preserve effort verbatim without logging caller-controlled text", () => {
+    const custom = {
+      adapter: "openai-responses",
+      baseUrl: "https://responses.example/v1",
+      authMode: "key" as const,
+      apiKey: "sk-test",
+    };
+    const request = buildEffortRequest(custom, "custom-reasoner", "vendor-max");
+
+    expect(JSON.parse(request.body).reasoning).toEqual({ effort: "vendor-max" });
+    expect(request.reasoningLog).toBeUndefined();
+  });
+
+  test("omitting reasoning effort emits no reasoning diagnostic", () => {
+    const request = buildEffortRequest({
+      adapter: "openai-responses",
+      baseUrl: "https://responses.example/v1",
+      authMode: "key",
+      apiKey: "sk-test",
+    }, "custom-reasoner");
+
+    expect(JSON.parse(request.body)).not.toHaveProperty("reasoning");
+    expect(request.reasoningLog).toBeUndefined();
+  });
+});
+
 describe("OpenAI Responses passthrough sanitization", () => {
   test("normalizes top-level function schemas in the serialized raw body (#745)", () => {
     const validParameters = {
