@@ -148,6 +148,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     }, 200, req, config);
   }
 
+  // DEPRECATED route: no GUI or other client calls /api/disabled-models anymore (the
+  // Models page writes through the atomic visibility PUT). Kept for script compatibility;
+  // retained only in tests/docs. Prefer PUT /api/model-visibility.
   // Enable/disable models: which routed models Codex sees. PUT hides them from the catalog +
   // /v1/models and invalidates Codex's 5-min models cache so it applies on the next turn.
   if (url.pathname === "/api/disabled-models" && req.method === "PUT") {

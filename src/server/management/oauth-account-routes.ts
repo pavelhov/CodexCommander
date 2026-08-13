@@ -84,6 +84,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     return jsonResponse({ providers: listOAuthProviders() });
   }
 
+  // DEPRECATED route: no GUI or other client calls /api/key-providers anymore (the key
+  // provider picker now reads /api/providers). Kept for script compatibility; retained
+  // only in tests/docs.
   // API-key "login" providers (open dashboard → paste key). Drives the GUI's key-provider picker.
   if (url.pathname === "/api/key-providers" && req.method === "GET") {
     return jsonResponse({ providers: listKeyLoginProviders() });
