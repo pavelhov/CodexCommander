@@ -2,13 +2,14 @@ import Foundation
 import MenuBarCore
 
 private final class FakeLaunchAtLoginService: LaunchAtLoginServicing {
-    enum Failure: Error { case register }
+    enum Failure: Error { case register, unregister }
 
     var status: LaunchAtLoginStatus
     var registerCalls = 0
     var unregisterCalls = 0
     var settingsCalls = 0
     var failRegistration = false
+    var failUnregistration = false
 
     init(status: LaunchAtLoginStatus) { self.status = status }
 
@@ -20,6 +21,7 @@ private final class FakeLaunchAtLoginService: LaunchAtLoginServicing {
 
     func unregister() throws {
         unregisterCalls += 1
+        if failUnregistration { throw Failure.unregister }
         status = .disabled
     }
 
@@ -72,6 +74,94 @@ enum LaunchAtLoginSuite {
             t.equal(preferences.desiredEnabled, false)
         }
 
+        t.test("login: a missing registration stays off without auto-registering") {
+            let service = FakeLaunchAtLoginService(status: .notFound)
+            let preferences = FakeLaunchAtLoginPreferences(desired: false)
+            let controller = LaunchAtLoginController(
+                service: service,
+                preferences: preferences
+            )
+
+            let result = controller.reconcile(executableFingerprint: "build-a")
+
+            t.equal(result.status, .notFound)
+            t.equal(result.desiredEnabled, false)
+            t.equal(result.isToggleEnabled, true)
+            t.equal(service.registerCalls, 0)
+            t.equal(service.unregisterCalls, 0)
+            t.equal(preferences.desiredEnabled, false)
+        }
+
+        t.test("login: explicitly enabling a missing registration registers it") {
+            let service = FakeLaunchAtLoginService(status: .notFound)
+            let preferences = FakeLaunchAtLoginPreferences(desired: false)
+            let controller = LaunchAtLoginController(
+                service: service,
+                preferences: preferences
+            )
+
+            let result = controller.setEnabled(true, executableFingerprint: "build-a")
+
+            t.equal(result.status, .enabled)
+            t.equal(result.desiredEnabled, true)
+            t.equal(service.registerCalls, 1)
+            t.equal(preferences.desiredEnabled, true)
+            t.equal(preferences.registeredExecutableFingerprint, "build-a")
+        }
+
+        t.test("login: explicit registration failure preserves off intent and can retry") {
+            let service = FakeLaunchAtLoginService(status: .notFound)
+            service.failRegistration = true
+            let preferences = FakeLaunchAtLoginPreferences(desired: false)
+            let controller = LaunchAtLoginController(
+                service: service,
+                preferences: preferences
+            )
+
+            let failed = controller.setEnabled(true, executableFingerprint: "build-a")
+
+            t.equal(failed.status, .notFound)
+            t.equal(failed.desiredEnabled, false)
+            t.equal(failed.isToggleEnabled, true)
+            t.equal(failed.errorMessage, "CodexCommander could not update Launch at Login.")
+            t.equal(preferences.desiredEnabled, false)
+            t.equal(preferences.registeredExecutableFingerprint, nil)
+
+            service.failRegistration = false
+            let retried = controller.setEnabled(true, executableFingerprint: "build-a")
+
+            t.equal(retried.status, .enabled)
+            t.equal(retried.desiredEnabled, true)
+            t.equal(service.registerCalls, 2)
+            t.equal(preferences.registeredExecutableFingerprint, "build-a")
+        }
+
+        t.test("login: unregister failure preserves on intent and fingerprint") {
+            let service = FakeLaunchAtLoginService(status: .enabled)
+            service.failUnregistration = true
+            let preferences = FakeLaunchAtLoginPreferences(desired: true, fingerprint: "build-a")
+            let controller = LaunchAtLoginController(
+                service: service,
+                preferences: preferences
+            )
+
+            let failed = controller.setEnabled(false, executableFingerprint: "build-b")
+
+            t.equal(failed.status, .enabled)
+            t.equal(failed.desiredEnabled, true)
+            t.equal(failed.errorMessage, "CodexCommander could not update Launch at Login.")
+            t.equal(preferences.desiredEnabled, true)
+            t.equal(preferences.registeredExecutableFingerprint, "build-a")
+
+            service.failUnregistration = false
+            let retried = controller.setEnabled(false, executableFingerprint: "build-b")
+
+            t.equal(retried.status, .disabled)
+            t.equal(retried.desiredEnabled, false)
+            t.equal(service.unregisterCalls, 2)
+            t.equal(preferences.registeredExecutableFingerprint, nil)
+        }
+
         t.test("login: failed registration preserves intent without claiming success") {
             let service = FakeLaunchAtLoginService(status: .disabled)
             service.failRegistration = true
@@ -119,6 +209,7 @@ enum LaunchAtLoginSuite {
 
             t.equal(result.status, .requiresApproval)
             t.equal(result.needsApproval, true)
+            t.equal(result.isToggleEnabled, false)
             t.equal(service.registerCalls, 0)
             t.equal(service.unregisterCalls, 0)
             t.equal(service.settingsCalls, 1)
@@ -140,8 +231,34 @@ enum LaunchAtLoginSuite {
 
             t.equal(result.status, .unavailable)
             t.equal(refreshed.status, .unavailable)
+            t.equal(result.isToggleEnabled, false)
+            t.equal(refreshed.isToggleEnabled, false)
             t.equal(service.registerCalls, 0)
             t.equal(preferences.desiredEnabled, nil)
+        }
+
+        t.test("login: unavailable service fails closed without changing intent") {
+            let service = FakeLaunchAtLoginService(status: .unavailable)
+            let preferences = FakeLaunchAtLoginPreferences(
+                desired: false,
+                fingerprint: "build-a"
+            )
+            let controller = LaunchAtLoginController(
+                service: service,
+                preferences: preferences
+            )
+
+            let reconciled = controller.reconcile(executableFingerprint: "build-b")
+            let requested = controller.setEnabled(true, executableFingerprint: "build-b")
+
+            t.equal(reconciled.status, .unavailable)
+            t.equal(reconciled.isToggleEnabled, false)
+            t.equal(requested.status, .unavailable)
+            t.equal(requested.isToggleEnabled, false)
+            t.equal(service.registerCalls, 0)
+            t.equal(service.unregisterCalls, 0)
+            t.equal(preferences.desiredEnabled, false)
+            t.equal(preferences.registeredExecutableFingerprint, "build-a")
         }
 
         t.test("login: external enablement becomes the current preference") {

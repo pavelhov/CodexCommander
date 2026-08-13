@@ -338,9 +338,6 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
 :root[data-theme='dark'] .lp-sub,
 :root:not([data-theme='light']) .lp-sub { color: rgba(244, 244, 244, 0.78); }
 :root[data-theme='light'] .lp-sub { color: rgba(247, 245, 242, 0.82); }
-:lang(ko) .lp-hero-copy h1, :lang(zh-CN) .lp-hero-copy h1 { word-break: keep-all; }
-:lang(ko) .lp-sub, :lang(zh-CN) .lp-sub { word-break: keep-all; }
-
 /* hero product-word drum: a 4-face rotateX cylinder cycling Codex -> Claude.
    The inline-grid stacks every face in one cell, so the slot width equals the
    widest word and the sentence never shifts (CLS 0). Faces sit on a prism
@@ -532,7 +529,6 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   text-wrap: balance;
 }
 .lp-kline-accent { color: var(--sl-color-gray-3); }
-:lang(ko) .lp-kline, :lang(zh-CN) .lp-kline { word-break: keep-all; }
 .lp-quick-side {
   display: flex;
   flex-direction: column;

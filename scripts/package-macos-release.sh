@@ -4,8 +4,8 @@ set -euo pipefail
 # Wraps CodexCommander.app for distribution.
 #
 # Every step is an assertion rather than a hope: structurally valid ad-hoc archives may be
-# retained as CI/test artifacts, but only a Developer ID-signed, Gatekeeper-accepted, stapled
-# archive may be marked ready for public distribution.
+# retained as CI/test artifacts or explicitly labeled unnotarized previews, but only a Developer
+# ID-signed, Gatekeeper-accepted, stapled archive may be marked distribution-ready.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
@@ -76,9 +76,9 @@ fi
 
 codesign --verify --deep --strict --verbose=2 "$app_bundle"
 
-# A public distribution attachment is ready only when a real Developer ID identity,
-# Gatekeeper assessment, and stapled notarization ticket all pass. Ad-hoc archives remain
-# useful Actions/test artifacts, but are never marked ready for public release attachment.
+# A stable public distribution is ready only when a real Developer ID identity, Gatekeeper
+# assessment, and stapled notarization ticket all pass. An ad-hoc archive can be shared only as an
+# explicitly labeled unnotarized preview; it always remains distribution_ready=false.
 distribution_ready=false
 if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
   signature_detail="$(codesign --display --verbose=4 "$app_bundle" 2>&1 || true)"
@@ -97,7 +97,8 @@ if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
   fi
 else
   echo "==> Gatekeeper: rejected (expected for an ad-hoc signature)." >&2
-  echo "    Users must right-click > Open on first launch; archive is an Actions/test artifact only." >&2
+  echo "    Users must Control-click > Open on first launch." >&2
+  echo "    Archive is not distribution-ready; label it as an unnotarized preview if shared." >&2
 fi
 
 architectures="$(lipo -archs "$executable")"

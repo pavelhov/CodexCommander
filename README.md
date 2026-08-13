@@ -16,6 +16,10 @@ bun run src/cli/index.ts start
   <a href="README.md">English</a> · <a href="readme/README.ko.md">한국어</a> · <a href="readme/README.zh-CN.md">简体中文</a> · <a href="readme/README.ru.md">Русский</a> · <a href="readme/README.ja.md">日本語</a> · 📖 <a href="docs-site/src/content/docs/getting-started/installation.md"><b>Full documentation →</b></a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/pavelhov/CodexCommander/releases"><b>Download the current macOS preview (Intel + Apple silicon) →</b></a>
+</p>
+
 CodexCommander is a lightweight local proxy that translates Codex's Responses API into whatever your
 provider speaks — streaming, tool calls, reasoning tokens, images, in both directions. Use Claude,
 Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama, or any other LLM with Codex, Claude Code, Claude
@@ -56,8 +60,39 @@ dashboard for OAuth, API keys, account management, and logs. It is a UI layer ov
 proxy: it does not use Keychain, create a second provider-login system, or store provider credentials
 in the app.
 
-No packaged macOS app is currently published. Build the companion from this checkout and keep that
-one development app at `dist/macos/CodexCommander.app` instead of copying it to Application Support:
+**[Download the current CodexCommander preview for macOS](https://github.com/pavelhov/CodexCommander/releases)**
+(Intel + Apple silicon). On the release page, download the universal `.zip` and its matching
+`.sha256` checksum file.
+
+This preview requires macOS 13 or later. It is ad-hoc signed and not notarized yet:
+
+1. Download and unzip it, then move `CodexCommander.app` to **Applications**.
+2. Control-click the app and choose **Open**.
+3. If macOS still blocks it, open **System Settings → Privacy & Security** and choose **Open
+   Anyway**. Do not disable Gatekeeper. See [Apple's instructions](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac).
+
+<p align="center">
+  <img src="docs-site/public/macos-menu-bar.png" alt="CodexCommander macOS menu bar companion showing a confirmed Codex route, a live request, provider quotas, and proxy controls" width="387">
+</p>
+
+| Action | What it does |
+|---|---|
+| **Start Proxy** | Starts or attaches to the proxy, then routes Codex through it. |
+| **Restore Native Codex** | Switches only Codex back to OpenAI; the proxy keeps running. |
+| **Route Codex Through Proxy** | Switches only the Codex route to the already-running proxy. |
+| **Stop Proxy… / Restart Proxy…** | Restores native routing before stopping; Restart then starts and routes back. |
+| **Quit Menu Bar** | Closes only the menu app; the proxy and current route keep running. |
+| **Stop CodexCommander and Quit…** | Restores native Codex, stops the proxy and service, then quits the menu app. |
+
+Here, **Restore Native** means removing CodexCommander-owned routing. A user-managed external Codex
+provider is left unchanged.
+
+Route changes show a spinner, elapsed time, and the real **Changing route → Confirming route**
+phases. After a confirmed route change, quit ChatGPT completely, reopen it, and start a new task.
+
+#### Build or package it yourself
+
+The development build stays at `dist/macos/CodexCommander.app`:
 
 ```bash
 bun install
@@ -66,15 +101,17 @@ bun run build:macos
 open dist/macos/CodexCommander.app
 ```
 
+To create an Intel + Apple silicon release ZIP and SHA-256 file in `dist/release` (full Xcode
+required):
+
+```bash
+UNIVERSAL=1 bun run package:macos
+```
+
 Every built app launches only the Bun runtime and server resources embedded in its own
 `Contents/Resources/runtime`; it never executes checkout `src/` or an ambient `ccx`. Rebuild the app
 to pick up source changes. If startup fails, the menu app stays open so its diagnostics and **Start**
-control remain available. **Start Proxy** starts the proxy and routes Codex through it. **Stop
-Proxy…** restores native Codex routing before stopping the proxy. **Restart Proxy…** runs the same
-safe stop→start transaction as the CLI: it restores native routing before terminating the old proxy,
-then starts the replacement and routes Codex back through it. If restart fails, Codex remains native.
-**Restore Native Codex** and **Route Codex Through Proxy** switch only the Codex route and leave the
-proxy lifecycle unchanged. **Quit Menu Bar** closes only the companion UI.
+control remain available.
 
 The native escape itself removes only CodexCommander's marker-owned routing and owned catalog pointer
 from `$CODEX_HOME/config.toml`; after proving that exact route, it also clears the proxy-only root
@@ -83,11 +120,13 @@ Codex tasks, history, or authentication, and it does not require a repair comman
 database. Generated catalogs and caches may remain on disk, but native Codex no longer references
 them.
 
-On its first launch from `dist/macos` or Applications, the app enables **Launch at Login** so the
-menu icon returns after sign-in. The startup row exposes the actual mode: **Desktop** launches the
-menu app, **Headless** leaves only an installed background service at login, and **Off** starts
-neither automatically. Rebuilt source apps refresh their login registration in place; they are
-never copied into Application Support. Full
+On its first launch, the app enables **Launch at Login** so the menu icon returns after sign-in.
+On every new manual or Login Item launch, the app performs an explicit **Start**: it starts or
+attaches to the proxy, then routes managed Codex through it. An external user-managed Codex provider
+is preserved. The startup row exposes the actual mode: **Desktop**
+performs this app-managed start, **Headless** leaves only an installed background service at login,
+and **Off** starts neither automatically. Rebuilt source apps refresh their login registration in
+place; they are never copied into Application Support. Full
 setup, Gatekeeper, release packaging, and troubleshooting details are in the
 [macOS menu bar guide](docs-site/src/content/docs/guides/macos-menu-bar.md).
 

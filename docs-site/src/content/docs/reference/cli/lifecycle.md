@@ -354,8 +354,14 @@ proxy controls. `start` and `stop` control the icon only; use its menu to contro
 Open the [web dashboard](/guides/web-dashboard/) at `http://localhost:<port>`, auto-starting the proxy
 if it is not running. The command mints a short-lived, single-use browser launch ticket so the
 dashboard can make changes, including confirmed **Apply agent catalog**. The ticket travels only in
-the URL fragment and is removed during exchange; the durable admin token never enters the URL or web
-storage. The resulting confirmed session is process-memory-only, lasts up to eight hours, and is not
-renewed. Expiry or proxy restart makes the next API request return `401`; open the page through
-`ccx gui` or the macOS menu app again. Opening `localhost` manually supplies no API session and never
-prompts for or sends the durable admin token.
+the URL fragment and is removed during exchange. The confirmed session stays in server process memory
+for up to eight hours; only its token, CSRF token, origin, and absolute expiry are mirrored in the
+browser's `sessionStorage`, so refresh works while the server session remains valid. It is not
+renewed. Expiry, proxy restart, or a rejecting `401` clears the browser record; open the page through
+`ccx gui` or the macOS menu app again. Neither the durable admin token nor the launch ticket enters
+browser storage, and authentication never uses `localStorage`. Same-origin script can read the
+session record, so this convenience is not OS-user isolation. Browsers may copy the record into
+duplicated or opener-created tabs, or restore it with a restored tab; every copy remains bound to the
+exact origin and CSRF token and is usable only until the fixed server expiry, a proxy restart, or a
+rejecting `401`. Opening `localhost` manually supplies
+no API session and never prompts for or sends the durable admin token.

@@ -9,20 +9,31 @@ the CodexCommander instance running on the same Mac.
 
 ## Install
 
-No packaged macOS app is currently published. Build and run the companion from the existing source
-checkout using [Build from source](#build-from-source). Keep the development app at
-`dist/macos/CodexCommander.app`; do not copy it into Application Support.
+Open [GitHub Releases](https://github.com/pavelhov/CodexCommander/releases) and download the current
+universal macOS preview for Intel and Apple silicon. Choose the
+`CodexCommander-<version>-macos-universal.zip` file and its matching `.sha256` checksum file.
+
+This preview is ad-hoc signed and not notarized. Unzip it, move `CodexCommander.app` to Applications,
+then Control-click the app and choose **Open** on first launch. If macOS still blocks it, choose
+**System Settings → Privacy & Security → Open Anyway**. Do not disable Gatekeeper.
+
+To build from source instead, follow [Build from source](#build-from-source) below.
 
 ## Startup modes
 
 The panel has one **Launch at Login** switch and reports the resulting mode:
 
-- **Desktop** — the CodexCommander menu app launches when you sign in and ensures or attaches to exactly
-  one server. This is the default desktop experience and is reported as **App-managed** in Startup.
+- **Desktop** — the CodexCommander menu app launches when you sign in, performs an explicit Start,
+  starts or attaches to exactly one proxy, and routes managed Codex through it. An external
+  user-managed Codex provider is preserved. This is the default desktop experience and is reported
+  as **App-managed** in Startup.
 - **Headless** — the menu app is not a login item, but an independently installed
   `ccx service` continues starting and supervising the server.
-- **Off** — neither the menu app nor a background service starts automatically; open the app or run
-  `ccx start` manually.
+- **Off** — neither the menu app nor a background service starts automatically. A new manual app
+  launch performs the same explicit Start-and-route transition as `ccx start`.
+
+Throughout this guide, **restore native** means removing CodexCommander-owned routing. An external
+user-managed Codex provider is left unchanged.
 
 The visible app and background server remain separate internally. With the CodexCommander panel active,
 **Quit Menu Bar** (`⌘Q`) closes only the companion UI and deliberately leaves routing active.
@@ -33,8 +44,9 @@ therefore list CodexCommander under both **Open at Login** and **Allow in the Ba
 responsibilities of one installation, not duplicate app copies. Turning off Launch at Login never
 installs, removes, starts, or stops the background service.
 
-App-managed startup and the background service solve different problems. The app starts the proxy at
-sign-in, which is enough for normal desktop use. The optional background service additionally
+App-managed startup and the background service solve different problems. The app starts or attaches
+to the proxy at sign-in and routes managed Codex through it, which is enough for normal desktop use. The
+optional background service additionally
 supervises the proxy and restarts it after a crash, so the dashboard labels it **Background
 recovery** instead of presenting it as a requirement. The companion periodically reports its current
 Launch at Login state to the local proxy; that short-lived report is kept only in memory and is used
@@ -167,11 +179,17 @@ the token in a browser URL.
 
 When the companion opens the dashboard, it asks that verified local proxy for a short-lived,
 single-use launch ticket. The ticket appears only in the URL fragment and is removed during its
-one-time exchange; the durable admin token never enters the URL or web storage. The resulting
-full-featured session is process-memory-only, lasts up to eight hours, and is never renewed. Expiry
-or proxy restart makes the next API request return `401`, and the page tells the user to reopen
-through the companion or `ccx gui`. A manually opened loopback dashboard receives no API session and
-never prompts for or sends the durable admin token.
+one-time exchange. The server keeps the resulting full-featured session in process memory for up to
+eight hours. The browser mirrors only its session token, CSRF token, origin, and absolute expiry in
+`sessionStorage`, so a refresh works while that server session remains valid. It is never
+renewed. Expiry, proxy restart, or a rejecting `401` clears the browser record and tells the user to
+reopen through the companion or `ccx gui`. Neither the durable admin token nor the launch ticket enters
+browser storage, and authentication never uses `localStorage`. Same-origin script can read
+`sessionStorage`, so this reload convenience is not OS-user isolation. Browsers may copy the record
+into duplicated or opener-created tabs, or restore it with a restored tab; every copy remains bound
+to the exact origin and CSRF token and is usable only until the fixed server expiry, a proxy restart,
+or a rejecting `401`. A manually opened loopback
+dashboard receives no API session and never prompts for or sends the durable admin token.
 
 Provider credentials remain owned by CodexCommander. The companion never reads ChatGPT, Kimi, Grok,
 Anthropic, or other provider tokens and never calls provider login endpoints directly.
@@ -210,9 +228,11 @@ open dist/macos/CodexCommander.app
 
 The development app is exactly `dist/macos/CodexCommander.app`. Every build embeds the Bun runtime and
 CodexCommander server resources inside the app bundle; the running app never executes `src/` from the
-checkout. Rebuild the app to pick up source changes. Double-clicking it attempts to ensure the proxy,
-but an offline failure or failed start does not close the app: its status panel remains available and
-**Start** can be retried. This source workflow does not install or copy the app into Application
+checkout. Rebuild the app to pick up source changes. Double-clicking it to launch a new app process
+performs an explicit Start: it starts or attaches to the proxy and routes managed Codex through it.
+An external user-managed provider is preserved. An offline failure or failed start
+does not close the app: its status panel remains available and **Start** can be retried. This source
+workflow does not install or copy the app into Application
 Support. A rebuild at the same path is detected on the
 next launch and refreshes the existing Login Item registration only when Launch at Login remains on.
 Each build stamps its exact Git revision into `CodexCommanderSourceRevision` in the bundle's `Info.plist`

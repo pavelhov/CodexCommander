@@ -37,6 +37,25 @@ public enum CodexCatalogApplyOutcome: Equatable, Sendable {
     case failed(String)
 }
 
+public let companionPassiveLaunchArgument = "--ccx-passive-launch"
+
+/// A direct or Login Item launch is an explicit product Start. A CLI that only
+/// ensures the shared proxy passes the fixed passive marker so opening the menu
+/// surface cannot override an intentional Native route.
+public enum CompanionLaunchPolicy {
+    public static func run(
+        using actions: ActionCoordinator?,
+        arguments: [String] = CommandLine.arguments
+    ) async -> ProxyControlOutcome {
+        guard let actions else { return .failed("Lifecycle control is unavailable.") }
+        return if arguments.dropFirst().contains(companionPassiveLaunchArgument) {
+            await actions.ensure()
+        } else {
+            await actions.start()
+        }
+    }
+}
+
 /// Executes confirm-gated lifecycle actions through the fixed structured helper.
 public actor ActionCoordinator {
     private let lifecycle: any LifecycleCommandRunning

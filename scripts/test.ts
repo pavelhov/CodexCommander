@@ -126,7 +126,7 @@ function runIsolatedTestProcess(testArgs: readonly string[]): number {
  * `pgrep` is absent on Windows and may exit non-zero for "no matches"; both cases
  * mean "nothing to warn about" rather than an error worth failing a test run over.
  */
-function findCompetingTestRunners(selfPid: number): number[] {
+export function findCompetingTestRunners(selfPid: number): number[] {
   try {
     const found = Bun.spawnSync(["pgrep", "-f", "bun.*test --isolate"], {
       stdout: "pipe",
@@ -155,7 +155,7 @@ function findCompetingTestRunners(selfPid: number): number[] {
  * which bypasses this file entirely. Waiting is the behavior that survives being
  * worked around. `CCX_TEST_NO_QUEUE=1` opts out for anyone who really wants overlap.
  */
-async function waitForExclusiveRun(selfPid: number): Promise<void> {
+export async function waitForExclusiveRun(selfPid: number): Promise<void> {
   if (process.env.CCX_TEST_NO_QUEUE === "1") return;
   const pollMs = 5_000;
   // Long enough for a full suite plus slack; past this, assume the holder is wedged

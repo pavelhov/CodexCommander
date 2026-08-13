@@ -2,8 +2,9 @@
  * Candidate capability evidence for policy routing (RI-05).
  *
  * Evidence comes from canonical local sources only - provider config maps,
- * the provider registry, the cached Codex catalog file, and the native-model
- * metadata helpers. No live network fetch happens at routing time.
+ * explicit custom-model metadata, the provider registry, and native-model
+ * metadata helpers. No live network fetch or generated-catalog inference
+ * happens at routing time.
  *
  * "Unknown is not zero": any dimension without canonical evidence stays
  * `undefined` (unknown) and the profile's `unknownEvidence` policy decides
@@ -11,68 +12,17 @@
  */
 
 import type { CodexCommanderConfig } from "../types";
+import { modelInList } from "../types";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
-import { PROVIDER_REGISTRY } from "../providers/registry";
+import { PROVIDER_REGISTRY, providerMatchesRegistryTransport } from "../providers/registry";
+import { modelRecordValue, sanitizeCodexReasoningEfforts } from "../reasoning-effort";
+import { applyProviderContextCap, providerContextCap } from "../providers/context-cap";
 import {
   nativeInputModalities,
   nativeOpenAiContextWindow,
-  nativeParallelToolCalls,
   nativeReasoningEfforts,
 } from "../codex/catalog/metadata";
-import { readCatalog, readCodexCatalogPath } from "../codex/catalog/parsing";
-import { statSync } from "node:fs";
 import type { RouteCapabilityEvidence } from "./trace";
-
-type CatalogModelRow = {
-  provider: string;
-  id: string;
-  contextWindow?: number;
-  inputModalities?: string[];
-  reasoningEfforts?: string[];
-  capabilities?: string[];
-};
-
-/**
- * Catalog rows memoized by path + mtime: the cached Codex catalog is stable
- * between refreshes, and re-reading/parsing the whole file per candidate on
- * the request path would multiply a synchronous disk + JSON cost by the
- * profile candidate count for every policy-routed request.
- */
-let catalogCache: { path: string; mtimeMs: number; rows: CatalogModelRow[] } | null = null;
-
-function cachedCatalogModels(): CatalogModelRow[] {
-  try {
-    const path = readCodexCatalogPath();
-    const mtimeMs = statSync(path).mtimeMs;
-    if (catalogCache && catalogCache.path === path && catalogCache.mtimeMs === mtimeMs) {
-      return catalogCache.rows;
-    }
-    const catalog = readCatalog(path);
-    const models = catalog?.models;
-    if (!Array.isArray(models)) return [];
-    const rows = models
-      .filter((model): model is Record<string, unknown> & { id: string; provider: string } =>
-        typeof model === "object" && model !== null && typeof model.id === "string" && typeof model.provider === "string")
-      .map(model => ({
-        provider: model.provider,
-        id: model.id,
-        ...(typeof model.contextWindow === "number" ? { contextWindow: model.contextWindow } : {}),
-        ...(Array.isArray(model.inputModalities)
-          ? { inputModalities: model.inputModalities.filter((value): value is string => typeof value === "string") }
-          : {}),
-        ...(Array.isArray(model.reasoningEfforts)
-          ? { reasoningEfforts: model.reasoningEfforts.filter((value): value is string => typeof value === "string") }
-          : {}),
-        ...(Array.isArray(model.capabilities)
-          ? { capabilities: model.capabilities.filter((value): value is string => typeof value === "string") }
-          : {}),
-      }));
-    catalogCache = { path, mtimeMs, rows };
-    return rows;
-  } catch {
-    return [];
-  }
-}
 
 /**
  * Classify a hostname for locality evidence. `URL.hostname` keeps IPv6
@@ -133,8 +83,8 @@ function localRemoteEvidence(baseUrl: string | undefined): Pick<RouteCapabilityE
 
 /**
  * Assemble canonical capability evidence for one `provider/model` candidate.
- * Sources (in priority order): provider config maps, provider registry hints,
- * cached Codex catalog row, native-model metadata.
+ * Sources (in priority order): provider config maps, explicit custom-model
+ * metadata, provider registry hints, native-model metadata.
  */
 export function candidateCapabilityEvidence(
   config: CodexCommanderConfig,
@@ -142,41 +92,55 @@ export function candidateCapabilityEvidence(
   modelId: string,
 ): RouteCapabilityEvidence {
   const provider = config.providers[providerName];
-  const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
-  const catalogRow = cachedCatalogModels().find(model => model.provider === providerName && model.id === modelId);
+  const registryEntry = provider && providerMatchesRegistryTransport(providerName, provider)
+    ? PROVIDER_REGISTRY.find(entry => entry.id === providerName)
+    : undefined;
+  const customModel = config.customModels?.find(model =>
+    model.provider === providerName && model.modelId === modelId);
   const isNative = providerName === "openai" && !modelId.includes("/");
 
-  const contextWindow = provider?.modelContextWindows?.[modelId]
+  const providerModelContext = modelRecordValue(provider?.modelContextWindows, modelId);
+  const registryModelContext = modelRecordValue(registryEntry?.modelContextWindows, modelId);
+  const uncappedContextWindow = customModel?.contextWindow
+    ?? (providerName === "openai-apikey"
+      && providerModelContext !== undefined
+      && registryModelContext !== undefined
+        ? Math.min(providerModelContext, registryModelContext)
+        : providerModelContext ?? registryModelContext)
     ?? provider?.contextWindow
-    ?? registryEntry?.modelContextWindows?.[modelId]
-    ?? catalogRow?.contextWindow
+    ?? registryEntry?.contextWindow
     ?? (isNative ? nativeOpenAiContextWindow(modelId) : undefined);
+  const contextWindow = customModel?.contextWindow !== undefined
+    ? uncappedContextWindow
+    : applyProviderContextCap(uncappedContextWindow, providerContextCap(config, providerName));
 
-  const modalities = provider?.modelInputModalities?.[modelId]
-    ?? registryEntry?.modelInputModalities?.[modelId]
-    ?? catalogRow?.inputModalities
+  const modalities = customModel?.inputModalities
+    ?? modelRecordValue(provider?.modelInputModalities, modelId)
+    ?? modelRecordValue(registryEntry?.modelInputModalities, modelId)
     ?? (isNative ? nativeInputModalities(modelId) : undefined);
   const image = Array.isArray(modalities)
     ? modalities.includes("image")
     : undefined;
 
-  const capabilities = catalogRow?.capabilities ?? [];
-  // The catalog `capabilities` list is a positive per-model signal; a row
-  // without "tools" is treated as unknown, never as a negative. Without a
-  // catalog row the adapter protocol itself is the signal: tool-capable
-  // adapters run single tool calls even when the parallel-call opt-in is
-  // unset or false. `parallelToolCalls` stays a positive provider-level
-  // override.
-  const tools = capabilities.includes("tools")
-    || isNative
-    || (catalogRow === undefined && provider !== undefined && TOOL_CAPABLE_ADAPTERS.has(provider.adapter))
+  // Adapter protocol support is positive tool evidence even when the provider
+  // does not opt into parallel calls. `parallelToolCalls` remains an explicit
+  // positive override; neither source infers a negative capability.
+  const tools = isNative
+    || (provider !== undefined && TOOL_CAPABLE_ADAPTERS.has(provider.adapter))
     || provider?.parallelToolCalls === true
     || undefined;
 
-  const reasoningEfforts = provider?.modelReasoningEfforts?.[modelId]
-    ?? registryEntry?.modelReasoningEfforts?.[modelId]
-    ?? catalogRow?.reasoningEfforts
-    ?? (isNative ? nativeReasoningEfforts(modelId) : undefined);
+  const reasoningDisabled = modelInList(provider?.noReasoningModels, modelId)
+    || modelInList(registryEntry?.noReasoningModels, modelId);
+  const configuredReasoning = reasoningDisabled
+    ? []
+    : modelRecordValue(provider?.modelReasoningEfforts, modelId)
+      ?? modelRecordValue(registryEntry?.modelReasoningEfforts, modelId)
+      ?? provider?.reasoningEfforts
+      ?? registryEntry?.reasoningEfforts;
+  const reasoningEfforts = configuredReasoning === undefined
+    ? (isNative ? nativeReasoningEfforts(modelId) : undefined)
+    : sanitizeCodexReasoningEfforts(configuredReasoning) ?? [];
 
   const tierSupport = provider?.supportsServiceTier
     ?? registryEntry?.supportsServiceTier;
@@ -196,7 +160,7 @@ export function candidateCapabilityEvidence(
     ...(typeof contextWindow === "number" ? { contextWindow } : {}),
     ...(typeof image === "boolean" ? { image } : {}),
     ...(typeof tools === "boolean" ? { tools } : {}),
-    ...(reasoningEfforts !== undefined && reasoningEfforts.length > 0 ? { reasoningEfforts } : {}),
+    ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
     ...(serviceTier !== "unknown" ? { serviceTier } : {}),
     ...localRemote,
     ...(typeof encryptedCodexTasks === "boolean" ? { encryptedCodexTasks } : {}),

@@ -166,6 +166,14 @@ upstream providers may support only a smaller subset or require a real alias. Th
 - Resolves per-model and per-provider `reasoningEffortMap` overrides for custom wire mappings.
 - Drops the effort entirely for models listed in `noReasoningModels`.
 
+Translated adapters apply this contract while constructing their requests. The Responses
+passthrough applies it at the final outbound boundary only when the provider/model contract is
+recognized; unknown and custom Responses contracts keep their `reasoning.effort` unchanged without
+copying that arbitrary value into durable diagnostics. When a recognized contract produces a
+validated value, request diagnostics record the exact outbound field/value and the dashboard shows
+**Requested → sent**. “Sent” describes what CodexCommander serialized, not proof that the upstream
+provider honored it.
+
 ## Core types
 
 The internal model lives in `types.ts`: `CodexCommanderParsedRequest`, `CodexCommanderContext`, the `CodexCommanderMessage` union,

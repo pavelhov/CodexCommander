@@ -238,12 +238,14 @@ interface ReasoningLogFields {
 
 function effortLabel(log: ReasoningLogFields): string {
   const requested = log.requestedEffort?.replace(/\s*->\s*/g, " → ");
-  const effective = log.effectiveEffort;
-  if (!requested) return effective ?? "-";
+  // `effectiveEffort` is the durable API field name. The dashboard calls it "sent" because
+  // CodexCommander can prove the adapter's final wire value, not whether the upstream applied it.
+  const sent = log.effectiveEffort;
+  if (!requested) return sent ?? "-";
   // requestedEffort may already contain a cap/clamp chain (for example max->high).
   // Only append the adapter result when it differs from that chain's terminal value.
-  if (!effective || requested === effective || requested.split(" → ").at(-1) === effective) return requested;
-  return `${requested} → ${effective}`;
+  if (!sent || requested === sent || requested.split(" → ").at(-1) === sent) return requested;
+  return `${requested} → ${sent}`;
 }
 
 function reasoningWireLabel(log: ReasoningLogFields): string | undefined {
@@ -691,7 +693,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                 <th className="num log-col-rate" title={t("logs.metric.tokPerSecTitle")}>{t("logs.col.tokPerSec")}</th>
                 <th className="num log-col-cost" title={t("logs.metric.estimatedCostTitle")}>{t("logs.col.estimatedCost")}</th>
                <th className="log-col-model">{t("logs.col.model")}</th>
-               <th>{t("logs.col.effort")}</th>
+               <th title={t("logs.metric.effortTitle")}>{t("logs.col.effort")}</th>
                <th>{t("logs.col.provider")}</th>
                <th>{t("logs.col.status")}</th>
                 <th>{t("logs.col.request")}</th>
@@ -910,7 +912,7 @@ function LogDetailDialog({
             <span className="muted">{t("logs.col.model")}</span><span className="mono">{modelLabel(detail.resolvedModel ?? detail.model)}</span>
             <span className="muted">{t("logs.col.provider")}</span><span>{formatProviderDisplayName(detail.provider, t)}</span>
             {(detail.requestedEffort || detail.effectiveEffort) && (
-              <><span className="muted">{t("logs.col.effort")}</span><span className="mono">{effortLabel(detail)}{reasoningWire ? ` (${reasoningWire})` : ""}</span></>
+              <><span className="muted" title={t("logs.metric.effortTitle")}>{t("logs.col.effort")}</span><span className="mono">{effortLabel(detail)}{reasoningWire ? ` (${reasoningWire})` : ""}</span></>
             )}
             {detail.errorCode && (<><span className="muted">{t("logs.col.error")}</span><span className="mono">{detail.errorCode}</span></>)}
             {detail.upstreamError && (<><span className="muted">{t("logs.col.upstreamReason")}</span><span className="mono log-detail-break">{detail.upstreamError}</span></>)}

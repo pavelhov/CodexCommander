@@ -47,12 +47,15 @@ their own files.
 
 ## Lifecycle
 
-Explicit starts (`ccx start`, companion Start, and service create/`install`/`repair`/`start`) enable
-Codex integration, refuse a duplicate PID, start the proxy, write
+Explicit starts (`ccx start`, every new companion launch, companion Start, and service
+create/`install`/`repair`/`start`) enable managed Codex integration, preserve an external user-managed
+provider, refuse a duplicate PID, start the proxy, write
 `~/.codexcommander/codexcommander.pid`, and sync Codex config/catalog. Automatic `ensure` preserves an
 intentional OFF state. Normal standalone shutdown restores native routing. Service mode sets
 `CCX_SERVICE=1`, so manager restarts preserve the current route; explicit service stop and uninstall
 restore and verify native routing before terminating anything.
+In this document, restoring native means removing CodexCommander-owned routing; an external
+user-managed Codex provider is preserved.
 
 An installed Codex shim is checked on ordinary CLI startup with a regular-file/1 MiB state bound plus
 bounded metadata and prefix reads. A complete replacement must produce identical fingerprints and
@@ -93,9 +96,9 @@ untouched. The GUI sidebar stop button calls this endpoint.
 - 다른 대안 대신 이 방식을 선택한 이유: Absolute dotenv expansion bypasses a relative-path check, global dotenv removal breaks supported configuration, and an environment-only marker can itself come from dotenv.
 - 장점, 단점 및 영향: Node-launcher starts preserve genuine shell overrides. Direct Bun launches without a provenance signal fail closed for all three ambient Anthropic slots — credentials included, because subscription mode leaves `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST` unset by design (#253) and a `settings.env` merge can still replace the destination after launch, so a preserved key would travel with it. The cost is that `bun src/cli/index.ts` loses ambient Anthropic values; locally linked or packaged starts through `bin/ccx.mjs` preserve genuine shell exports by proof. Durable artifacts use the running or bundled Bun.
 
-The macOS companion starts with an `ensure` attempt when Finder opens it. A failed or offline start
-must leave the menu app alive with its status/Start controls available; it cannot self-terminate just
-because the proxy is unavailable. Its **Quit** action terminates only the AppKit process. Explicit
+Every new manual or Login Item launch of the macOS companion performs an explicit Start. A failed or
+offline start must leave the menu app alive with its status/Start controls available; it cannot
+self-terminate just because the proxy is unavailable. Its **Quit** action terminates only the AppKit process. Explicit
 **Start** enables Codex routing through the proxy. **Stop** restores and verifies native routing before
 termination and keeps the menu app open. **Restart** runs the canonical stop→start transaction: it
 restores native routing before terminating the old proxy, then its explicit Start phase launches the
@@ -105,7 +108,7 @@ lifecycle.
 The main app is the default desktop Login Item; launchd remains an independent optional headless
 server supervisor. Login registration never changes provider, proxy, or service configuration.
 
-The launch `ensure` also synchronizes the Codex model catalog. Long-lived Codex workers that loaded
+The launch Start also synchronizes the Codex model catalog. Long-lived Codex workers that loaded
 an older roster do not make the proxy unhealthy: the companion keeps a persistent **Agent catalog
 update ready** state and offers the separate, confirmation-gated **Apply agent catalog** action.
 Applying re-synchronizes the catalog, sends `SIGTERM` only to exact current-user `codex … app-server`
