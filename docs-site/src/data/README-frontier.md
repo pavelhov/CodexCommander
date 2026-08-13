@@ -21,11 +21,10 @@ catalog `version`.
 4. Keep `modeKind` honest:
    - `effort` — reasoning ladder (`low` / `high` / `xhigh` / …)
    - `harness` — agent scaffold id (`claude-code` / `codex` / …)
-5. Sync localized board copy under `frontier.board.<id>.*` in
-   `docs-site/src/data/frontier-i18n.ts` (title, axis labels, source note;
-   en/ko/zh-cn/ru/ja).
-6. Run `bun run build` in `docs-site/` and eyeball the Benchmarks page in all
-   five locales (score/$ column only on uniformly measured boards).
+5. Sync board copy under `frontier.board.<id>.*` in
+   `docs-site/src/data/frontier-i18n.ts` (title, axis labels, source note).
+6. Run `bun run build` in `docs-site/` and eyeball the Benchmarks page
+   (score/$ column only on uniformly measured boards).
 
 ## ProgramBench note
 
