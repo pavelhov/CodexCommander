@@ -140,9 +140,9 @@
 .client-apps-flow-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding: 4px 9px;
+  gap: var(--space-1-5);
+  min-height: var(--control-sm);
+  padding: var(--space-1) var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   background: var(--raised);

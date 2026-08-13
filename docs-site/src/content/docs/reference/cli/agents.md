@@ -29,7 +29,7 @@ Manage the Codex `multi_agent_v2` feature flag and the three-state collaboration
 | `mode v1` | Force all models to V1, disable native V2, and preserve the active thread limit. |
 | `mode default` | Respect upstream model surface pins. |
 | `mode v2` | Force all models to V2, enable native V2, and preserve the active thread limit. |
-| `threads <n>` | Set the active v1/v2 thread limit to an integer of at least 1. |
+| `threads <n>` | Set the active V1/V2 thread limit to an integer of at least 1. |
 
 ```bash
 ccx v2 status

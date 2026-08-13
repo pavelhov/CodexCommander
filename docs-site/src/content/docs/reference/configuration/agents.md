@@ -16,7 +16,7 @@ routes, and limits delegated work.
 | `injectionModel?` | `string` | — | Preferred native or routed sub-agent model used in proxy-authored V2 delegation guidance. |
 | `injectionEffort?` | `string` | — | Preferred effort (`low` through `ultra`), meaningful only with `injectionModel`. |
 | `injectionPrompt?` | `string` | — | Replaces the built-in V2 guidance body. Supports `{{model}}`, `{{effort}}`, `{{roster}}`, and `{{fallback}}`. A configured `injectionModel` is sufficient to render the custom prompt. |
-| `multiAgentGuidanceEnabled` | `boolean` | `true` | Controls only CodexCommander-authored v1/v2 developer guidance; it does not change native agent defaults, tools, routing, rosters, or effort caps. |
+| `multiAgentGuidanceEnabled` | `boolean` | `true` | Controls only CodexCommander-authored V1/V2 developer guidance; it does not change native agent defaults, tools, routing, rosters, or effort caps. |
 | `syncCodexSubagentDefaults?` | `boolean` | `false` | Opt into writing `injectionModel` and optional `injectionEffort` as Codex's native defaults during sync/restart. Requires `injectionModel`. |
 | `subagentModelFallback?` | `string[]` | `[]` | Priority-ordered global fallback models for spawned child turns. |
 | `subagentModelFallbackPollMs?` | `number` | `60000` | Availability-probe cache interval. Values below 1000 ms fall back to the default. |

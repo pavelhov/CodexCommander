@@ -30,9 +30,9 @@ must delegate to Kimi, Grok, DeepSeek, or another external provider.
 
 The selected mode controls the `multi_agent_version` field in every catalog entry Codex reads:
 
-- **v1** stamps `multi_agent_version = "v1"` on every model.
+- **V1** stamps `multi_agent_version = "v1"` on every model.
 - **base** restores upstream pins. Unpinned entries follow the native `multi_agent_v2` feature flag.
-- **v2** stamps `multi_agent_version = "v2"` on every model.
+- **V2** stamps `multi_agent_version = "v2"` on every model.
 
 CodexCommander applies this as the final pass to both the live `/v1/models` catalog and the catalog synced
 to disk. That is why a mode change affects newly created App, CLI, and TUI sessions consistently.
