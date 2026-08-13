@@ -1,40 +1,6 @@
-import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import type { CatalogModel } from "../../codex/catalog";
-import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
-import {
-  DEFAULT_SUBAGENT_MODELS,
-  codexAutoStartEnabled,
-  hasOwnProvider,
-  isValidProviderName,
-  multiAgentGuidanceEnabled,
-  providerBaseUrlConfigError,
-  providerHeadersConfigError,
-  saveConfigPreservingClaudeCode,
-} from "../../config";
-import {
-  clearLoginState,
-  getLoginStatus,
-  isPublicOAuthProvider,
-  listOAuthProviders,
-  startLoginFlow,
-  submitManualLoginCode,
-  upsertOAuthProvider,
-} from "../../oauth";
-import { removeCredential } from "../../oauth/store";
-import { providerDestinationResolvedError } from "../../lib/destination-policy";
-import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
-import { deriveProviderPresets } from "../../providers/derive";
-import { providerCodexAccountMode } from "../../providers/registry";
-import { routedSlug, slugEquals } from "../../providers/slug-codec";
-import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
-import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
-import { clearThreadAccountMap } from "../../codex/routing";
-import { primeCodexPoolQuotas } from "../../codex/auth-api";
-import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
 import { scanStorage } from "../../storage/scanner";
-import { executeArchivedCleanup, listTrashEntries, pickWireCleanupTestHooks, previewArchivedCleanup, type CleanupMode, type RestoreErrorCode } from "../../storage/cleanup";
+import { listTrashEntries, pickWireCleanupTestHooks, previewArchivedCleanup, type CleanupMode, type RestoreErrorCode } from "../../storage/cleanup";
 import { runArchivedCleanupJob } from "../../storage/cleanup-job";
 import { getRestoreTrashTestStreamResponse, runRestoreTrashEntryJob } from "../../storage/restore-job";
 import {
@@ -55,8 +21,7 @@ import {
 } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
 import { parseRange, parseUsageSurface, summarizeUsage, type UsageRange, type UsageSummary, type UsageSurface } from "../../usage/summary";
-import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
-import { getProviderRegistryEntry } from "../../providers/registry";
+
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
 import { getInjectionDebugLogEntries } from "../../lib/injection-debug-log";
 import {
@@ -66,16 +31,13 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../../lib/debug-settings";
-import type { CodexCommanderClaudeCodeConfig, CodexCommanderConfig, CodexCommanderCustomModel, CodexCommanderProviderConfig } from "../../types";
-import { drainAndShutdown } from "../lifecycle";
-import { filterRequestLogs, filteredRequestLogCount, getRequestLogEntries, type RequestLogEntry } from "../request-log";
-import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
-import type { PersistedUsageAttempt } from "../../usage/log";
-import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
-import { applySystemEnvToggle } from "../system-env";
 
-import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
-import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
+import { filterRequestLogs, filteredRequestLogCount, getRequestLogEntries } from "../request-log";
+
+import { jsonResponse } from "../auth-cors";
+
+import { parseDebugLogQuery, requestLogDto } from "./shared";
+
 import type { ManagementContext } from "./context";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import {
@@ -121,7 +83,7 @@ function refreshedUsageSummary<T extends UsageSummary & { historyTruncated: bool
 }
 
 export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config, deps, syncClaudeAgentDefsBestEffort } = ctx;
+  const { req, url, config } = ctx;
 
   if (url.pathname === "/api/logs" && req.method === "GET") {
     const all = getRequestLogEntries();

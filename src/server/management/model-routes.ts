@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 
 /**
  * Codex parses a catalog entry's `input_modalities` as a closed enum, and one out-of-enum
@@ -29,80 +28,24 @@ function readInputModalities(raw: unknown): { values?: string[]; error?: string 
   }
   return { values: raw as string[] };
 }
-import type { CatalogModel } from "../../codex/catalog";
-import { catalogModelSlug, configuredNativeAliasSlugs, disabledNativeSlugs, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
+
+import { configuredNativeAliasSlugs, disabledNativeSlugs, nativeModelRows } from "../../codex/catalog";
 import { CatalogGatherBusyError } from "../../codex/catalog/provider-fetch";
 import { getProviderLiveModelCount } from "../../codex/model-cache";
-import {
-  DEFAULT_SUBAGENT_MODELS,
-  codexAutoStartEnabled,
-  hasOwnProvider,
-  isValidProviderName,
-  multiAgentGuidanceEnabled,
-  providerBaseUrlConfigError,
-  providerHeadersConfigError,
-  saveConfigPreservingClaudeCode,
-} from "../../config";
-import {
-  clearLoginState,
-  getLoginStatus,
-  isPublicOAuthProvider,
-  listOAuthProviders,
-  startLoginFlow,
-  submitManualLoginCode,
-  upsertOAuthProvider,
-} from "../../oauth";
-import { removeCredential } from "../../oauth/store";
-import { providerDestinationResolvedError } from "../../lib/destination-policy";
-import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
-import { deriveProviderPresets } from "../../providers/derive";
-import { providerCodexAccountMode } from "../../providers/registry";
+import { hasOwnProvider, isValidProviderName, saveConfigPreservingClaudeCode } from "../../config";
+
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { COMBO_NAMESPACE, comboDisabledModelSelectors, comboModelId, preservesPhysicalComboProvider } from "../../combos";
-import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
-import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
-import { clearThreadAccountMap } from "../../codex/routing";
-import { primeCodexPoolQuotas } from "../../codex/auth-api";
-import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
-import { resolveCodexHomeDir } from "../../codex/home";
-import { readUsageEntries } from "../../usage/log";
-import { getUsageDebugLogEntries } from "../../usage/debug";
-import { parseRange, parseUsageSurface, summarizeUsage } from "../../usage/summary";
-import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
-import { getProviderRegistryEntry } from "../../providers/registry";
-import { getDebugLogEntries } from "../../lib/debug-log-buffer";
-import { getInjectionDebugLogEntries } from "../../lib/injection-debug-log";
-import {
-  clearDebugSettings,
-  clearDebugSetting,
-  getDebugSettings,
-  setDebugSettings,
-  type DebugFlag,
-} from "../../lib/debug-settings";
-import type { CodexCommanderClaudeCodeConfig, CodexCommanderConfig, CodexCommanderCustomModel, CodexCommanderProviderConfig } from "../../types";
-import { drainAndShutdown } from "../lifecycle";
-import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
-import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
-import type { PersistedUsageAttempt } from "../../usage/log";
-import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO, corsHeaders } from "../auth-cors";
-import { applySystemEnvToggle } from "../system-env";
-import {
-  EXPORT_CLIENTS,
-  EXPORT_CLIENT_IDS,
-  OPENCODE_PROVIDER_ID,
-  buildClientConfigText,
-  isExportClientId,
-  opencodeProxyBaseUrl,
-} from "../../clients/config-export";
-import type {
-  ExportClientId,
-  ExportModel,
-  OpencodeGeneratedConfig,
-  PiGeneratedConfig,
-} from "../../clients/config-export";
 
-import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
-import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
+import type { CodexCommanderCustomModel } from "../../types";
+
+import { jsonResponse, corsHeaders } from "../auth-cors";
+
+import { EXPORT_CLIENTS, EXPORT_CLIENT_IDS, buildClientConfigText, isExportClientId, opencodeProxyBaseUrl } from "../../clients/config-export";
+import type { ExportClientId, ExportModel } from "../../clients/config-export";
+
+import { isPlainRecord, fetchAllModels } from "./shared";
+
 import type { ManagementContext } from "./context";
 import { listManagementModelRows, loadExportModels } from "./model-rows";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
@@ -121,7 +64,7 @@ function summarizeExportedModels(client: ExportClientId, document: unknown): { m
 }
 
 export async function handleModelRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
+  const { req, url, config, deps, convergeCodexCatalog } = ctx;
   // A handler persists the exact config object passed in. Production defaults to
   // the real store; tests that pass an in-memory fixture inject a no-op/spy. Do not
   // bypass this seam with a dynamic config import — doing so replaced a user's

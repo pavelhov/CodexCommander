@@ -1,61 +1,13 @@
-import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
-import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
-import {
-  DEFAULT_SUBAGENT_MODELS,
-  codexAutoStartEnabled,
-  hasOwnProvider,
-  isValidProviderName,
-  multiAgentGuidanceEnabled,
-  providerBaseUrlConfigError,
-  providerHeadersConfigError,
-  saveConfigPreservingClaudeCode,
-} from "../../config";
-import {
-  clearLoginState,
-  getLoginStatus,
-  isPublicOAuthProvider,
-  listOAuthProviders,
-  startLoginFlow,
-  submitManualLoginCode,
-  upsertOAuthProvider,
-} from "../../oauth";
-import { removeCredential } from "../../oauth/store";
-import { providerDestinationResolvedError } from "../../lib/destination-policy";
-import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
-import { deriveProviderPresets } from "../../providers/derive";
-import { providerCodexAccountMode } from "../../providers/registry";
-import { routedSlug, slugEquals } from "../../providers/slug-codec";
-import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
-import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
-import { clearThreadAccountMap } from "../../codex/routing";
-import { primeCodexPoolQuotas } from "../../codex/auth-api";
-import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
-import { resolveCodexHomeDir } from "../../codex/home";
-import { readUsageEntries } from "../../usage/log";
-import { getUsageDebugLogEntries } from "../../usage/debug";
-import { parseRange, parseUsageSurface, summarizeUsage } from "../../usage/summary";
-import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
+
 import { getProviderRegistryEntry, providerMatchesRegistryTransport } from "../../providers/registry";
-import { getDebugLogEntries } from "../../lib/debug-log-buffer";
-import { getInjectionDebugLogEntries } from "../../lib/injection-debug-log";
-import {
-  clearDebugSettings,
-  clearDebugSetting,
-  getDebugSettings,
-  setDebugSettings,
-  type DebugFlag,
-} from "../../lib/debug-settings";
-import type { CodexCommanderClaudeCodeConfig, CodexCommanderClaudeDesktopProfile, CodexCommanderConfig, CodexCommanderCustomModel, CodexCommanderProviderConfig } from "../../types";
+
+import type { CodexCommanderClaudeDesktopProfile, CodexCommanderConfig, CodexCommanderProviderConfig } from "../../types";
 import type { DesktopProfileModel } from "../../claude/desktop-profile";
-import { drainAndShutdown } from "../lifecycle";
-import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
+
+import { type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, serviceTierContext, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
-import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
-import { applySystemEnvToggle } from "../system-env";
-
 
 export function isPlainRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
