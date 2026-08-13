@@ -98,7 +98,8 @@
 }
 
 /* Quota-unavailable strip: one full-width row under the Plan & quota grid, never a
-   grid card — providers with no report entry get a reason line + a shared Retry. */
+   grid card — providers with no report entry get a reason line; reauth rows deep-link
+   to the provider (Manage), non-auth rows share one Retry quota check. */
 .dash-plan-quota-unavailable {
   display: flex;
   flex-wrap: wrap;
@@ -116,6 +117,10 @@
 }
 
 .dash-plan-quota-unavailable-item {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
   color: var(--muted);
 }
 

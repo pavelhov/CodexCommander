@@ -40,6 +40,12 @@ export interface DetailSlotData {
   /** Set only when the selected provider's quota is unavailable and has no report. */
   quotaUnavailableReason?: string;
   onRetryQuota?: () => void;
+  /**
+   * True only when the selected provider's ACTIVE account genuinely needs browser
+   * re-authentication (account-health input). Excludes quota-derived attention, so
+   * quota-unavailable reasons never masquerade as auth problems.
+   */
+  accountNeedsReauth: boolean;
   availableModels: string[];
   /** Did the last successful discovery return rows? Server-reported, never inferred. */
   hasLiveModels: boolean;
@@ -534,6 +540,7 @@ export default function ProviderWorkspaceShell({
             quotaReport: quotaReports[selectedItem.name],
             quotaUnavailableReason,
             onRetryQuota: () => refreshQuotas({ force: true }),
+            accountNeedsReauth: activeAccountNeedsReauth?.[selectedItem.name] === true,
             availableModels: availableModels[selectedItem.name] ?? [],
             hasLiveModels: (liveModelCounts[selectedItem.name] ?? 0) > 0,
             selectedModels: selectedModels[selectedItem.name] ?? [],

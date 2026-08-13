@@ -17,6 +17,7 @@ import { useI18n, useT, type TFn, type TKey } from "../i18n/shared";
 import { useProviderQuota } from "../provider-quota-store";
 import { formatProviderDisplayName } from "../provider-icons";
 import { quotaUnavailableReasonKey } from "../quota-unavailable";
+import { providerRouteHash } from "../provider-route";
 import {
   formatQuotaSourceLabel,
   referenceQuotaFromReport,
@@ -91,6 +92,9 @@ export function DashboardPlanQuotaSection({ apiBase }: { apiBase: string }) {
 
   const entries = Object.entries(quota.reports);
   const unavailable = quota.unavailableProviders;
+  const hasRetryableUnavailable = unavailable.some(
+    ({ reason }) => reason !== "reauth_required",
+  );
   return (
     <section className="panel" style={{ marginTop: 16 }} aria-labelledby="dash-plan-quota-title">
       <div className="panel-head">
@@ -118,18 +122,36 @@ export function DashboardPlanQuotaSection({ apiBase }: { apiBase: string }) {
         </div>
       )}
       {unavailable.length > 0 && (
-        <div className="dash-plan-quota-unavailable" role="status">
+        <div className="dash-plan-quota-unavailable">
           <span className="dash-plan-quota-unavailable-label">{t("dash.planQuota.unavailable")}</span>
-          {unavailable.map(({ provider, reason }) => (
-            <span key={provider} className="dash-plan-quota-unavailable-item">
-              {formatProviderDisplayName(provider, t)}
-              {" — "}
-              {t(quotaUnavailableReasonKey(reason))}
-            </span>
-          ))}
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => quota.refresh({ force: true })}>
-            {t("dash.planQuota.retry")}
-          </button>
+          {unavailable.map(({ provider, reason }) => {
+            const display = formatProviderDisplayName(provider, t);
+            return (
+              <span key={provider} className="dash-plan-quota-unavailable-item">
+                <span role="status">
+                  {display}
+                  {" — "}
+                  {t(quotaUnavailableReasonKey(reason))}
+                </span>
+                {reason === "reauth_required" && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <a
+                      className="link-btn"
+                      href={`#${providerRouteHash(provider, "overview")}`}
+                    >
+                      {t("dash.planQuota.manageProvider", { provider: display })}
+                    </a>
+                  </>
+                )}
+              </span>
+            );
+          })}
+          {hasRetryableUnavailable && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => quota.refresh({ force: true })}>
+              {t("dash.planQuota.retry")}
+            </button>
+          )}
         </div>
       )}
       <p className="muted text-caption" style={{ marginTop: 12 }}>{t("dash.planQuota.disclaimer")}</p>

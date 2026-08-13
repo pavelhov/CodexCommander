@@ -229,7 +229,8 @@ export const en = {
   "dash.planQuota.disclaimer": "Provider-reported caps and local estimates — not a billing receipt.",
   "dash.planQuota.referenceIntro": "Published caps vs. traffic observed through this proxy",
   "dash.planQuota.unavailable": "Quota unavailable",
-  "dash.planQuota.retry": "Retry",
+  "dash.planQuota.manageProvider": "Manage {provider}",
+  "dash.planQuota.retry": "Retry quota check",
   // memory observability card (read-only /api/system/memory)
   "dash.mem.title": "Memory observability",
   "dash.mem.hint": "Read-only runtime diagnostics. Observed memory is max(RSS, external, ArrayBuffers) so Windows working-set trimming does not hide committed retention.",

@@ -319,13 +319,14 @@ function openaiReport(): Record<string, unknown> {
   };
 }
 
-test("Plan & quota renders a full-width strip for an unavailable provider", async () => {
+test("Plan & quota renders a full-width strip for unavailable providers with per-reason actions", async () => {
   globalThis.fetch = (async () =>
     new Response(JSON.stringify({
       reports: [openaiReport()],
       availability: [
         { provider: "xai", status: "unavailable", reason: "upstream_unavailable", checkedAt: NOW },
         { provider: "anthropic", status: "unavailable", reason: "reauth_required", checkedAt: NOW },
+        { provider: "kimi", status: "unavailable", reason: "local_cli_refresh_required", checkedAt: NOW },
       ],
     }), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
 
@@ -347,10 +348,63 @@ test("Plan & quota renders a full-width strip for an unavailable provider", asyn
     const text = strip?.textContent ?? "";
     expect(text).toContain("xAI Grok");
     expect(text).toContain("Temporarily unavailable");
-    // Reason mapping matches the Mac app summary for reauth too.
     expect(text).toContain("Anthropic");
     expect(text).toContain("Sign in required");
-    expect(text).toContain("Retry");
+    expect(text).toContain("Kimi");
+    expect(text).toContain("Login needs refresh");
+    // Reauth rows deep-link to the provider; retryable rows share one Retry.
+    expect(text).toContain("Manage Anthropic");
+    expect(text).toContain("Retry quota check");
+    const manageLink = Array.from(strip?.querySelectorAll("a") ?? [])
+      .find(anchor => anchor.textContent?.includes("Manage Anthropic"));
+    expect(manageLink?.getAttribute("href")).toBe("#providers/anthropic/overview");
+    expect(Array.from(strip?.querySelectorAll("button") ?? []).length).toBe(1);
+    // F6: the strip has no live-region role; each message span is the live region
+    // and contains no interactive descendants.
+    expect(strip?.getAttribute("role")).toBeNull();
+    const statusSpans = strip?.querySelectorAll('[role="status"]') ?? [];
+    expect(statusSpans.length).toBe(3);
+    for (const span of Array.from(statusSpans)) {
+      expect(span.querySelector("button, a")).toBeNull();
+    }
+    // F4: grid precedes the strip, strip precedes the disclaimer.
+    expect(strip?.previousElementSibling?.classList.contains("dash-sidecar-grid")).toBe(true);
+    expect(strip?.nextElementSibling?.textContent).toContain("Provider-reported caps and local estimates");
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+  }
+});
+
+test("reauth-only strip deep-links to the provider and offers no quota retry", async () => {
+  const urls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    urls.push(String(input));
+    return new Response(JSON.stringify({
+      reports: [],
+      availability: [
+        { provider: "anthropic", status: "unavailable", reason: "reauth_required", checkedAt: NOW },
+      ],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(
+      <LanguageProvider>
+        <DashboardPlanQuotaSection apiBase="http://plan-quota-reauth-only" />
+      </LanguageProvider>,
+    );
+  });
+  try {
+    await waitFor(() => (container.textContent ?? "").includes("Sign in required"));
+    expect(container.textContent).toContain("Manage Anthropic");
+    expect(Array.from(container.querySelectorAll("button"))
+      .some(button => button.textContent?.includes("Retry"))).toBe(false);
+    expect(urls.every(url => !url.includes("refresh=1"))).toBe(true);
   } finally {
     await act(async () => { root.unmount(); });
     container.remove();
@@ -391,7 +445,7 @@ test("Plan & quota strip Retry forces refresh and disappears once the provider r
     const strip = container.querySelector(".dash-plan-quota-unavailable");
     expect(strip).toBeTruthy();
     const retry = Array.from(container.querySelectorAll("button"))
-      .find(button => button.textContent?.trim() === "Retry");
+      .find(button => button.textContent?.trim() === "Retry quota check");
     expect(retry).toBeTruthy();
     await act(async () => { retry?.click(); });
     await waitFor(() => urls.some(url => url.includes("refresh=1")));

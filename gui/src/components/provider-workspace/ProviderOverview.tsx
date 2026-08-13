@@ -32,6 +32,7 @@ type ConnectionTestState = {
 
 export default function ProviderOverview({
   item, usageTotals, quotaReport, quotaUnavailableReason, onRetryQuota, oauthEmail, oauth,
+  accountNeedsReauth = false,
   apiBase, connectionIdentity,
   onEditSettings, onViewUsage, onUpdateProvider,
   onReauthenticate, onCancelLogin, reauthBusy = false,
@@ -42,6 +43,8 @@ export default function ProviderOverview({
   /** Provider quota is unavailable (no report); reason drives the notice copy. */
   quotaUnavailableReason?: string;
   onRetryQuota?: () => void;
+  /** True only for a genuine active-account reauth need (never quota-derived). */
+  accountNeedsReauth?: boolean;
   oauthEmail?: string;
   /** Login state for OAuth summaries that carry no email (e.g. Cursor/Kimi). */
   oauth?: { loggedIn?: boolean };
@@ -60,6 +63,22 @@ export default function ProviderOverview({
   const timeLabels = relativeTimeLabelsFromT(t);
   const status = binProviderStatus(item);
   const needsAttention = Boolean(item.activeNeedsReauth);
+  /** Genuine account-health reauth need, excluding quota-derived attention. */
+  const genuineAccountNeedsReauth = accountNeedsReauth === true;
+
+  // One owner per problem: quota-unavailable reasons never masquerade as auth needs,
+  // and a genuine browser-reauth need is never hidden by quota state. When a local-CLI
+  // refresh and a real reauth need coexist, both warnings render (distinct actions).
+  const localCliQuotaOwnsAttention =
+    quotaUnavailableReason === "local_cli_refresh_required"
+    && !genuineAccountNeedsReauth;
+  const showAuthWarning = needsAttention && !localCliQuotaOwnsAttention;
+  const reauthQuotaOwnedByAuth =
+    quotaUnavailableReason === "reauth_required"
+    && showAuthWarning;
+  const showQuotaUnavailableNotice =
+    Boolean(quotaUnavailableReason)
+    && !reauthQuotaOwnedByAuth;
   const statusText = status === "ready"
     ? t("pws.status.connected")
     : status === "needs-setup"
@@ -210,13 +229,13 @@ export default function ProviderOverview({
           <h3 className="pws-section-title">{t("pws.rateLimits")}</h3>
           <ProviderCapacityQuota report={quotaReport} pending={false} />
         </section>
-      ) : quotaUnavailableReason ? (
+      ) : showQuotaUnavailableNotice ? (
         <section className="pws-section" aria-label={t("pws.quota.unavailableTitle")}>
           <h3 className="pws-section-title">{t("pws.quota.unavailableTitle")}</h3>
-          <div className="pws-auth-summary pws-auth-summary--warn" role="status">
+          <div className="pws-auth-summary pws-auth-summary--warn">
             <IconAlert style={{ width: 14, height: 14 }} aria-hidden="true" />
             <div className="pws-auth-summary-body">
-              <span>{t(quotaUnavailableReasonKey(quotaUnavailableReason))}</span>
+              <span role="status">{t(quotaUnavailableReasonKey(quotaUnavailableReason))}</span>
               {onRetryQuota && (
                 <button type="button" className="btn btn-ghost btn-sm" onClick={onRetryQuota}>
                   {t("pws.quota.retry")}
@@ -229,11 +248,11 @@ export default function ProviderOverview({
 
       <section className="pws-section" aria-label={t("pws.authSummary")}>
         <h3 className="pws-section-title">{t("pws.authSummary")}</h3>
-        {needsAttention ? (
-          <div className="pws-auth-summary pws-auth-summary--warn" role="status">
+        {showAuthWarning ? (
+          <div className="pws-auth-summary pws-auth-summary--warn">
             <IconAlert style={{ width: 14, height: 14 }} aria-hidden="true" />
             <div className="pws-auth-summary-body">
-              <span>
+              <span role="status">
                 <strong>{t("pws.status.needsAttention")}</strong>
                 {" — "}
                 {item.authMode === "forward"

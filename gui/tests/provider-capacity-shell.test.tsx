@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import ProviderWorkspaceShell from "../src/components/provider-workspace/ProviderWorkspaceShell";
+import type { DetailSlotData } from "../src/components/provider-workspace/ProviderWorkspaceShell";
 import { LanguageProvider } from "../src/i18n/provider";
 import { readSessionListCache, writeSessionListCache } from "../src/session-list-cache";
 import {
@@ -233,6 +234,71 @@ test("quota auth availability immediately moves Grok from connected to needs att
   expect(text).toContain("Needs attention");
   expect(host.querySelector('[title="Needs attention"]')).not.toBeNull();
   expect(text).not.toContain("1Ready");
+});
+
+test("detail slot keeps genuine account reauth separate from quota-derived attention", async () => {
+  quotaPayload = {
+    reports: [],
+    availability: [{
+      provider: "xai",
+      status: "unavailable",
+      reason: "local_cli_refresh_required",
+      checkedAt: Date.now(),
+    }],
+  };
+
+  let capturedItem: { activeNeedsReauth?: boolean } | null = null;
+  let capturedData: DetailSlotData | null = null;
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root ??= createRoot(host);
+    root.render(
+      <LanguageProvider>
+        <ProviderWorkspaceShell
+          providers={grokProvider}
+          apiBase=""
+          defaultProvider="xai"
+          selectedName="xai"
+          onSelect={() => {}}
+          onAddProvider={() => {}}
+          activeAccountNeedsReauth={undefined}
+          detail={(item, data) => {
+            capturedItem = item;
+            capturedData = data;
+            return null;
+          }}
+        />
+      </LanguageProvider>,
+    );
+  });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
+  // Quota-derived attention flips the merged flag, but the provenance slot stays
+  // false because no account-health input says a browser reauth is needed.
+  expect(capturedData?.accountNeedsReauth).toBe(false);
+  expect(capturedItem?.activeNeedsReauth).toBe(true);
+
+  await act(async () => {
+    root?.render(
+      <LanguageProvider>
+        <ProviderWorkspaceShell
+          providers={grokProvider}
+          apiBase=""
+          defaultProvider="xai"
+          selectedName="xai"
+          onSelect={() => {}}
+          onAddProvider={() => {}}
+          activeAccountNeedsReauth={{ xai: true }}
+          detail={(item, data) => {
+            capturedItem = item;
+            capturedData = data;
+            return null;
+          }}
+        />
+      </LanguageProvider>,
+    );
+  });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
+  expect(capturedData?.accountNeedsReauth).toBe(true);
 });
 
 test("provider quota fetch preserves aggregate capacity through shell state and render", async () => {
