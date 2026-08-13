@@ -4,16 +4,21 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
-import { readSessionListCache, writeSessionListCache } from "../src/session-list-cache";
+import {
+  clearUsageReportStoresForTests,
+  seedUsageReportForTests,
+  usageReportKey,
+  useUsageReportStore,
+} from "../src/usage-report-store";
 import Usage from "../src/pages/Usage";
 import type { UsageReport } from "../src/usage-report-validation";
 
 /**
- * Phase 1b contract: the Usage page only ever caches validated successful reports.
- * Error envelopes and malformed summaries are rejected before any persistence, a
- * defined zero cost renders $0.00 (only a genuinely missing legacy field shows
- * "Unavailable"), a cold failure shows the failed-cold Notice with retry, and a
- * failed refresh keeps last-known-good data with the stale/error banner.
+ * Phase 1b contract, now enforced through the usage-report store: only validated
+ * successful reports reach the store (never error envelopes), a defined zero cost
+ * renders $0.00 (only a genuinely missing legacy field shows "Unavailable"), a cold
+ * failure shows the failed-cold Notice with retry, and a failed refresh keeps
+ * last-known-good data with the stale/error banner.
  */
 
 const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "IS_REACT_ACT_ENVIRONMENT", "ResizeObserver"] as const;
@@ -64,6 +69,7 @@ function validReport(overrides: Partial<UsageReport> = {}): UsageReport {
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
   clearClientResourceStoresForTests();
+  clearUsageReportStoresForTests();
   testWindow = new Window({ url: "http://localhost/" });
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: testWindow.document },
@@ -85,6 +91,7 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.fetch = originalFetch;
   clearClientResourceStoresForTests();
+  clearUsageReportStoresForTests();
   testWindow.close();
   for (const key of globals) {
     Object.defineProperty(globalThis, key, { configurable: true, value: previousGlobals[key] });
@@ -131,14 +138,14 @@ test("cost row renders $0.00 for a defined zero", async () => {
 });
 
 test("legacy undefined cost field renders Unavailable", async () => {
+  const key = usageReportKey("http://usage-legacy", "30d", "all");
   const legacy = validReport({ summary: summary({ requests: 3 }) });
-  // Simulate a pre-validation session-cache seed from an older server: no cost fields.
+  // Simulate a pre-validation seed from an older server: no cost fields on the summary.
   const { estimatedCostUsd: _cost, pricedRequests: _priced, unpricedRequests: _unpriced, unmeteredRequests: _unmetered, ...legacySummary } = legacy.summary;
-  const legacyReport = { ...legacy, summary: legacySummary };
-  writeSessionListCache("ccx.usage.v1:http://usage-legacy:30d:all", legacyReport);
-  // The revalidation also answers with the legacy shape, so it is rejected and the
+  seedUsageReportForTests(key, { ...legacy, summary: legacySummary } as unknown as UsageReport);
+  // The quiet revalidation also answers with the legacy shape, so it is rejected and the
   // seeded last-known-good payload (with undefined cost) stays on screen.
-  globalThis.fetch = (async () => Response.json(legacyReport)) as typeof fetch;
+  globalThis.fetch = (async () => Response.json({ ...legacy, summary: legacySummary })) as typeof fetch;
 
   const { container, root } = await renderUsage("http://usage-legacy");
   try {
@@ -151,7 +158,7 @@ test("legacy undefined cost field renders Unavailable", async () => {
 });
 
 test("a 200 response with an error envelope is rejected and never cached", async () => {
-  const key = "ccx.usage.v1:http://usage-error-envelope:30d:all";
+  const key = usageReportKey("http://usage-error-envelope", "30d", "all");
   globalThis.fetch = (async () =>
     Response.json({ error: "read_failed", range: "30d", surface: "all" })) as typeof fetch;
 
@@ -159,8 +166,10 @@ test("a 200 response with an error envelope is rejected and never cached", async
   try {
     await waitFor(() => (container.textContent ?? "").includes("Retry"));
     expect(container.textContent).toContain("Retry");
-    expect(readSessionListCache(key)).toBeNull();
-    expect(testWindow.sessionStorage.getItem(key)).toBeNull();
+    const entry = useUsageReportStore.getState().entries[key];
+    expect(entry?.data).toBeUndefined();
+    expect(entry?.hasSucceeded).toBe(false);
+    expect(entry?.lastAttemptOk).toBe(false);
   } finally {
     await act(async () => { root.unmount(); });
     container.remove();
@@ -182,10 +191,11 @@ test("401 cold failure shows the failed-cold Notice with retry", async () => {
 });
 
 test("refresh failure retains last-good data and shows the stale/error banner", async () => {
-  const key = "ccx.usage.v1:http://usage-stale:30d:all";
+  const key = usageReportKey("http://usage-stale", "30d", "all");
   const good = validReport({ summary: summary({ requests: 42, totalTokens: 9000, estimatedCostUsd: 1.25 }) });
-  // Last-known-good payload is seeded from the session cache; the quiet revalidation fails.
-  writeSessionListCache(key, good);
+  // Last-known-good payload is seeded like a rehydrated session seed; the quiet
+  // revalidation fails and must not wipe it.
+  seedUsageReportForTests(key, good);
   globalThis.fetch = (async () => new Response("boom", { status: 500 })) as typeof fetch;
 
   const { container, root } = await renderUsage("http://usage-stale");
@@ -195,8 +205,8 @@ test("refresh failure retains last-good data and shows the stale/error banner", 
     // The stale/error banner appears next to the retained data.
     await waitFor(() => (container.textContent ?? "").includes("Could not load usage data"));
     expect(container.textContent).toContain("Could not load usage data");
-    // The failed refresh must not have wiped the held cache.
-    expect(readSessionListCache(key)).not.toBeNull();
+    // The failed refresh must not have wiped the store entry.
+    expect(useUsageReportStore.getState().entries[key]?.data).not.toBeUndefined();
   } finally {
     await act(async () => { root.unmount(); });
     container.remove();

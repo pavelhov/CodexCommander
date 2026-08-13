@@ -1,17 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useI18n, type TFn, type Locale } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
 import { formatTokens } from "../format-tokens";
 import { formatEstimatedUsdValue as formatUsdEstimate } from "../intl-formatters";
-import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { EmptyState, Notice } from "../ui";
 import { modelLabel } from "../model-display";
-import { useDataSurface } from "../data-surface";
+import { classifyDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
+import { useUsageReport } from "../usage-report-store";
 import {
-  parseUsageReport,
   type UsageDay,
   type UsageModel,
   type UsageProvider,
@@ -672,52 +671,19 @@ function UsageWorkspaceBody({
   );
 }
 
-/** Held usage payloads so provider/surface tab switches skip a cold ~5s refetch. */
-const usageMemoryCache = new Map<string, UsageReport>();
-
-function usageCacheKey(apiBase: string, range: Range, surface: UsageSurface): string {
-  return `ccx.usage.v1:${apiBase}:${range}:${surface}`;
-}
-
-function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface): UsageReport | null {
-  const key = usageCacheKey(apiBase, range, surface);
-  return usageMemoryCache.get(key) ?? readSessionListCache<UsageReport>(key);
-}
-
-function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, value: UsageReport) {
-  const key = usageCacheKey(apiBase, range, surface);
-  usageMemoryCache.set(key, value);
-  writeSessionListCache(key, value);
-}
-
 export default function Usage({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
   const [range, setRange] = useState<Range>("30d");
   const [surface, setSurface] = useState<UsageSurface>("all");
   const [modelQuery, setModelQuery] = useState("");
 
-  const loadUsage = useCallback(async (signal: AbortSignal): Promise<UsageReport> => {
-    const response = await fetch(`${apiBase}/api/usage?range=${range}&surface=${surface}`, { signal });
-    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
-    // Only validated successful reports may reach the held cache: error envelopes
-    // and malformed summaries throw here and are never persisted.
-    const next = parseUsageReport(await response.json());
-    writeHeldUsage(apiBase, range, surface, next);
-    return next;
-  }, [apiBase, range, surface]);
-
-  const resourceKey = usageCacheKey(apiBase, range, surface);
-  const cached = readHeldUsage(apiBase, range, surface);
-  // Range and surface identify different reports, so the key changes with both. That prevents
-  // a force-loading dependency revalidation from ever showing a previous report as this one.
-  const resource = useDataSurface<UsageReport>(
-    resourceKey,
-    [apiBase, range, surface],
-    loadUsage,
-    { isEmpty: () => false, initialData: cached ?? undefined },
-  );
-  const { state } = resource;
-  const data = state.data ?? cached ?? null;
+  // The usage-report domain store owns fetching, singleflight dedupe, and persistence.
+  // Range and surface identify different reports, so the key changes with both and a
+  // previous report is never shown as this one. The Dashboard's 30d/all selector shares
+  // this exact entry, collapsing what used to be three independent fetches into one.
+  const report = useUsageReport(apiBase, range, surface);
+  const state = classifyDataSurface(report, () => false, true);
+  const data = state.data ?? null;
 
   const heatmap = useMemo(() => buildHeatmap(data?.days ?? []), [data?.days]);
   const weekBars = useMemo(() => lastSevenDays(data?.days ?? []), [data?.days]);
@@ -752,7 +718,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
       ) : state.kind === "failed-cold" ? (
         <Notice tone="err">
           {state.error instanceof Error ? `${t("usage.loadError")} ${state.error.message}` : t("usage.loadError")}{" "}
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => resource.refresh()}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => report.refresh()}>
             {t("common.retry")}
           </button>
         </Notice>
