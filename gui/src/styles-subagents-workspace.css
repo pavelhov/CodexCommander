@@ -301,6 +301,18 @@
   color: var(--red);
 }
 
+/* Exception-only roster status line: quiet text, deliberately NOT a pill/badge
+   so the roster rows stay calm next to the library's capability chips. */
+.swi-roster-status {
+  color: var(--muted);
+  font-size: var(--text-micro);
+  line-height: var(--leading-ui);
+}
+
+.swi-roster-status--neither {
+  color: var(--amber);
+}
+
 .swi-card-footer {
   display: flex;
   align-items: center;
@@ -322,6 +334,100 @@
 .swi-card-footer svg {
   flex-shrink: 0;
   margin-top: 1px;
+}
+
+/* Split notice: one quiet info row between the roster and the footer,
+   mirroring the .swi-card-footer rhythm (icon + text + inline action). */
+.swi-roster-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: var(--space-3) var(--space-4) 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--text-label);
+  line-height: var(--leading-ui);
+}
+
+.swi-roster-note > svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.swi-roster-note-text {
+  min-width: 0;
+  flex: 1;
+}
+
+.swi-roster-note-action {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* Protocol diagnostics disclosure, styled after .swi-policy-details. */
+.swi-roster-diagnostics {
+  margin: var(--space-3) var(--space-4) 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+.swi-roster-diagnostics > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-lg);
+  color: var(--muted);
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.swi-roster-diagnostics > summary:hover {
+  color: var(--text);
+}
+
+.swi-roster-diagnostics > p {
+  margin: 0 0 var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-label);
+  line-height: var(--leading-body);
+}
+
+.swi-roster-matrix {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  list-style: none;
+}
+
+.swi-roster-matrix-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--control-md);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xs);
+  color: var(--muted);
+  font-size: var(--text-label);
+}
+
+.swi-roster-matrix-name {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.swi-roster-matrix-surface {
+  flex-shrink: 0;
 }
 
 .swi-featured-empty {
@@ -977,6 +1083,11 @@
   .swi-card-footer .btn {
     min-height: var(--control-touch);
     width: 100%;
+  }
+
+  .swi-roster-note {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .swi-policy-body {

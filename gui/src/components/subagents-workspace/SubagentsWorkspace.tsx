@@ -10,11 +10,12 @@ import {
   IconSearch,
   IconX,
 } from "../../icons";
-import { useI18n, useT, type Locale } from "../../i18n/shared";
+import { useI18n, useT, type Locale, type TFn } from "../../i18n/shared";
 import { modelLabel } from "../../model-display";
 import { formatNamespacedModelId, providerIconSrc } from "../../provider-icons";
 import SubagentDelegationSection from "./SubagentDelegationSection";
 import type { DelegationPatch, DelegationModelOption } from "../../pages/use-subagent-delegation";
+import type { RosterReachability } from "../../pages/subagent-roster-reachability";
 
 export const FEATURED_MAX = 5;
 export const LONG_CONTEXT_MIN = 200_000;
@@ -46,6 +47,9 @@ export interface SubagentsWorkspaceProps {
   available: string[];
   models: AgentModelRow[];
   chosen: string[];
+  protocol?: "v1" | "default" | "v2" | null;
+  rosterReachability?: ReadonlyMap<string, RosterReachability>;
+  onUseConcurrentV2?: () => void;
   busy?: boolean;
   rosterDirty?: boolean;
   onToggle: (model: string) => void;
@@ -135,10 +139,22 @@ function ModelChips({ model }: { model: AgentModelRow }) {
   );
 }
 
+function surfaceLabel(surface: RosterReachability, t: TFn): string {
+  switch (surface) {
+    case "both": return t("sub.roster.surface.both");
+    case "v1": return t("sub.roster.surface.v1");
+    case "v2": return t("sub.roster.surface.v2");
+    case "neither": return t("sub.roster.surface.none");
+  }
+}
+
 export default function SubagentsWorkspace({
   available,
   models,
   chosen,
+  protocol,
+  rosterReachability,
+  onUseConcurrentV2,
   busy = false,
   rosterDirty = false,
   onToggle,
@@ -213,14 +229,37 @@ export default function SubagentsWorkspace({
     { id: "tools", label: t("sub.filter.tools") },
   ];
 
+  // Per-selector collaboration-surface exceptions among the chosen rows.
+  const rosterStatus = useMemo(() => {
+    const v1: string[] = [];
+    const v2: string[] = [];
+    if (rosterReachability) {
+      for (const selector of chosen) {
+        const state = rosterReachability.get(selector);
+        if (state === "v1") v1.push(selector);
+        else if (state === "v2") v2.push(selector);
+      }
+    }
+    return { v1, v2 };
+  }, [chosen, rosterReachability]);
+
+  // One notice, only when the legacy "default" protocol splits the roster
+  // across surfaces. The gate is inherently map-driven: rosterStatus only
+  // collects entries from a non-empty rosterReachability map, so an empty or
+  // missing map can never produce a notice. "neither" rows are deliberately
+  // not listed by name. Names stay in roster order.
+  const showSplitNotice = protocol === "default" && (rosterStatus.v1.length > 0 || rosterStatus.v2.length > 0);
+  const v1Names = rosterStatus.v1.map(selector => formatNamespacedModelId(selector, t)).join(", ");
+  const v2Names = rosterStatus.v2.map(selector => formatNamespacedModelId(selector, t)).join(", ");
+
   return (
     <div className="subagents-workspace-shell">
       <span className="sr-only" aria-live="polite">{announcement}</span>
       <div className="subagents-command-grid">
-        <section className="subagents-command-card swi-roster" aria-labelledby="active-roster-title">
+        <section className="subagents-command-card swi-roster" aria-labelledby="configured-roster-title">
           <div className="swi-card-head">
             <div>
-              <h2 id="active-roster-title" className="swi-card-title">{t("sub.featured")}</h2>
+              <h2 id="configured-roster-title" className="swi-card-title">{t("sub.featured")}</h2>
               <p className="swi-card-subtitle">{t("sub.rosterCount", { n: chosen.length, max: FEATURED_MAX })}</p>
             </div>
             <button type="button" className="btn btn-ghost btn-sm" onClick={() => searchRef.current?.focus()}>
@@ -238,6 +277,11 @@ export default function SubagentsWorkspace({
             <ol className="swi-roster-list">
               {chosen.map((selector, index) => {
                 const model = modelForSelector(selector, modelBySelector);
+                const state = rosterReachability?.get(selector);
+                // Routed = namespaced row. modelForSelector always returns a
+                // row with native = (no slash), so this stays computable even
+                // when catalog metadata failed to load.
+                const routed = model.native !== true;
                 const dragging = dragIndex === index;
                 const dropTarget = overIndex === index && dragIndex !== null && dragIndex !== index;
                 return (
@@ -294,7 +338,20 @@ export default function SubagentsWorkspace({
                     <ModelMark model={model} />
                     <span className="swi-roster-identity">
                       <span className="swi-roster-name">{formatNamespacedModelId(selector, t)}</span>
-                      <ModelChips model={model} />
+                      {/* No map entry (e.g. unsaved draft row) => no claim at
+                          all; the sr-only "both" line requires an explicit
+                          "both" entry from the server. */}
+                      {state !== undefined && (state === "both" ? (
+                        <span className="sr-only">{t("sub.roster.status.bothSr")}</span>
+                      ) : (
+                        <span className={`swi-roster-status${state === "neither" ? " swi-roster-status--neither" : ""}`}>
+                          {state === "v1"
+                            ? t("sub.roster.status.v1Only")
+                            : state === "v2"
+                              ? routed ? t("sub.roster.status.routedV2") : t("sub.roster.status.v2Only")
+                              : t("sub.roster.status.notAdvertised")}
+                        </span>
+                      ))}
                     </span>
                     <span className="swi-roster-actions">
                       <button
@@ -323,6 +380,50 @@ export default function SubagentsWorkspace({
                 );
               })}
             </ol>
+          )}
+
+          {showSplitNotice && (
+            <div className="swi-roster-note">
+              <IconInfo width={15} height={15} aria-hidden="true" />
+              <span className="swi-roster-note-text">
+                {rosterStatus.v1.length > 0 && rosterStatus.v2.length > 0
+                  ? t("sub.roster.splitNoticeBoth", { v1Models: v1Names, v2Models: v2Names })
+                  : rosterStatus.v1.length > 0
+                    ? t("sub.roster.splitNoticeV2", { models: v1Names })
+                    : t("sub.roster.splitNoticeV1", { models: v2Names })}
+              </span>
+              {/* Focus-only navigation: the button never mutates drafts, so it
+                  stays enabled while the roster is busy. The hint travels via
+                  aria-describedby on a dedicated sr-only span — a reliable
+                  accessible description without re-announcing the full note
+                  text that sits directly adjacent. */}
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm swi-roster-note-action"
+                onClick={() => onUseConcurrentV2?.()}
+                aria-describedby="swi-roster-note-action-hint"
+              >{t("sub.roster.useConcurrentV2")}</button>
+              <span id="swi-roster-note-action-hint" className="sr-only">{t("sub.roster.useConcurrentV2Hint")}</span>
+            </div>
+          )}
+
+          {rosterReachability && rosterReachability.size > 0 && (
+            <details className="swi-roster-diagnostics">
+              <summary>{t("sub.roster.diagnostics")}</summary>
+              <p>{t("sub.roster.diagnosticsHint")}</p>
+              <ul className="swi-roster-matrix">
+                {chosen.map(selector => {
+                  const surface = rosterReachability.get(selector);
+                  if (!surface) return null;
+                  return (
+                    <li className="swi-roster-matrix-row" key={selector}>
+                      <span className="swi-roster-matrix-name">{formatNamespacedModelId(selector, t)}</span>
+                      <span className="swi-roster-matrix-surface">{surfaceLabel(surface, t)}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </details>
           )}
 
           <div className="swi-card-footer">

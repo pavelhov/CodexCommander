@@ -156,8 +156,11 @@ switching an active conversation in place.
 - **Dashboard** → first stat cell: choose **v1**, **base**, or **v2**.
 - **Models** → **Current behavior** → **Collaboration**: choose **Reliable v1**, **Codex native** (base/default semantics), or **Concurrent v2**.
 - **Subagents** → **Agent Command Center**:
-  - **Active Roster** chooses and orders the five model overrides advertised first to `spawn_agent`.
-    Drag rows, use the arrow buttons, or press <kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd>.
+  - **Configured Roster** chooses and orders the five model overrides advertised first to `spawn_agent`.
+    Drag rows, use the arrow buttons, or press <kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd>. The card
+    shows your configured quick picks: a row's status line (for example **V1 under Codex defaults** or
+    **Routed · V2 compatible**) indicates which collaboration surfaces can select it, while rows
+    without a status line are available on both.
   - **Agent Library** searches the current model catalog and filters factual capabilities such as
     reasoning, long context, vision, and tool support. Entries remain addressable by exact id when
     their route is available, including models outside the five-slot roster.

@@ -166,7 +166,7 @@ actually advertised, and assigns low catalog priorities in the selected order. W
 are active, bare native selections expand into selector-qualified groups. Other models remain callable
 by exact id.
 
-The active roster is separate from the Dashboard's **Sub-agent delegation** selection. It
+The configured roster is separate from the Dashboard's **Sub-agent delegation** selection. It
 controls which overrides Codex offers first; it does not select a model or trigger delegation by
 itself.
 
