@@ -252,7 +252,7 @@ export default function OpenCodeIntegrationPage({
             <dl className="integration-facts">
               <div>
                 <dt>{t("integrations.destination")}</dt>
-                <dd><code>{homeDisplayPath(integration.targetPath)}</code></dd>
+                <dd><code title={homeDisplayPath(integration.targetPath)}>{homeDisplayPath(integration.targetPath)}</code></dd>
               </div>
               <div>
                 <dt>{t("integrations.models")}</dt>
