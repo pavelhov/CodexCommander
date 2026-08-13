@@ -16,6 +16,7 @@ import { useEffect } from "react";
 import { useI18n, useT, type TFn, type TKey } from "../i18n/shared";
 import { useProviderQuota } from "../provider-quota-store";
 import { formatProviderDisplayName } from "../provider-icons";
+import { quotaUnavailableReasonKey } from "../quota-unavailable";
 import {
   formatQuotaSourceLabel,
   referenceQuotaFromReport,
@@ -89,6 +90,7 @@ export function DashboardPlanQuotaSection({ apiBase }: { apiBase: string }) {
   }, [ensure]);
 
   const entries = Object.entries(quota.reports);
+  const unavailable = quota.unavailableProviders;
   return (
     <section className="panel" style={{ marginTop: 16 }} aria-labelledby="dash-plan-quota-title">
       <div className="panel-head">
@@ -113,6 +115,21 @@ export function DashboardPlanQuotaSection({ apiBase }: { apiBase: string }) {
               <PlanQuotaReference report={report} locale={locale} />
             </div>
           ))}
+        </div>
+      )}
+      {unavailable.length > 0 && (
+        <div className="dash-plan-quota-unavailable" role="status">
+          <span className="dash-plan-quota-unavailable-label">{t("dash.planQuota.unavailable")}</span>
+          {unavailable.map(({ provider, reason }) => (
+            <span key={provider} className="dash-plan-quota-unavailable-item">
+              {formatProviderDisplayName(provider, t)}
+              {" — "}
+              {t(quotaUnavailableReasonKey(reason))}
+            </span>
+          ))}
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => quota.refresh({ force: true })}>
+            {t("dash.planQuota.retry")}
+          </button>
         </div>
       )}
       <p className="muted text-caption" style={{ marginTop: 12 }}>{t("dash.planQuota.disclaimer")}</p>

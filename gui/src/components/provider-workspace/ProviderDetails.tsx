@@ -31,6 +31,8 @@ export default function ProviderDetails({
   usageTotals,
   modelUsage,
   quotaReport,
+  quotaUnavailableReason,
+  onRetryQuota,
   availableModels,
   hasLiveModels,
   selectedModels,
@@ -62,6 +64,8 @@ export default function ProviderDetails({
   usageTotals?: ProviderUsageTotals;
   modelUsage?: ProviderModelUsageRow[];
   quotaReport?: ProviderQuotaReportView;
+  quotaUnavailableReason?: string;
+  onRetryQuota?: () => void;
   availableModels: string[];
   /** Server-reported live-catalog provenance; see filterModels(). */
   hasLiveModels: boolean;
@@ -257,6 +261,8 @@ export default function ProviderDetails({
             connectionIdentity={connectionIdentity}
             usageTotals={usageTotals}
             quotaReport={quotaReport}
+            quotaUnavailableReason={quotaUnavailableReason}
+            onRetryQuota={onRetryQuota}
             oauthEmail={oauthEmail}
             oauth={oauth}
             onEditSettings={() => switchTab("settings")}

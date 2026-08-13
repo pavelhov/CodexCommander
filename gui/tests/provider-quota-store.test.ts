@@ -27,7 +27,9 @@ Object.defineProperties(globalThis, {
 const {
   clearProviderQuotaStoresForTests,
   PROVIDER_QUOTA_STORAGE_NAME,
+  quotaAvailabilityFromResponse,
   rehydrateProviderQuotaForTests,
+  unavailableQuotaProviders,
   useProviderQuotaStore,
 } = await import("../src/provider-quota-store");
 
@@ -193,4 +195,94 @@ test("stale rehydrated seeds are rejected at rehydrate", async () => {
   const entry = useProviderQuotaStore.getState().entries[""];
   // The stale row was dropped: either no entry, or an entry without reports.
   expect(entry?.reports).toBeUndefined();
+});
+
+test("quotaAvailabilityFromResponse projects provider/status/reason/checkedAt only", () => {
+  const projected = quotaAvailabilityFromResponse([
+    { provider: "xai", status: "unavailable", reason: "upstream_unavailable", checkedAt: 123, email: "x@example.com", accountId: "acct_1" },
+    { provider: "openai", status: "available", checkedAt: 456 },
+    { provider: "anthropic", status: "unavailable", reason: "unknown_reason_code", checkedAt: 789 },
+    { provider: "" },
+    null,
+    "garbage",
+  ]);
+  expect(projected).toEqual({
+    xai: { status: "unavailable", reason: "upstream_unavailable", checkedAt: 123 },
+    openai: { status: "available", checkedAt: 456 },
+    // Unknown reason codes are dropped (never projected onto the DOM path).
+    anthropic: { status: "unavailable", checkedAt: 789 },
+  });
+});
+
+test("unavailableQuotaProviders lists only non-available providers without reports, sorted", () => {
+  const availability = {
+    xai: { status: "unavailable", reason: "upstream_unavailable", checkedAt: 1 },
+    openai: { status: "available", checkedAt: 2 },
+    anthropic: { status: "stale", reason: "reauth_required", checkedAt: 3 },
+    grok: { status: "unavailable", checkedAt: 4 },
+  };
+  const reports = { openai: {}, anthropic: {} };
+  expect(unavailableQuotaProviders(availability, reports)).toEqual([
+    { provider: "grok" },
+    { provider: "xai", reason: "upstream_unavailable" },
+  ]);
+});
+
+test("a successful fetch populates availability; refresh updates it", async () => {
+  globalThis.fetch = (async () => quotaResponse({
+    reports: [report()],
+    availability: [{ provider: "xai", status: "unavailable", reason: "upstream_unavailable", checkedAt: now }],
+  })) as typeof fetch;
+  useProviderQuotaStore.getState().ensure("");
+  await flush();
+  expect(useProviderQuotaStore.getState().entries[""]?.availability).toEqual({
+    xai: { status: "unavailable", reason: "upstream_unavailable", checkedAt: now },
+  });
+
+  globalThis.fetch = (async () => quotaResponse({
+    reports: [report()],
+    availability: [{ provider: "xai", status: "available", checkedAt: now }],
+  })) as typeof fetch;
+  useProviderQuotaStore.getState().refresh("");
+  await flush();
+  expect(useProviderQuotaStore.getState().entries[""]?.availability.xai).toEqual({
+    status: "available",
+    checkedAt: now,
+  });
+});
+
+test("a failed fetch keeps the last-known-good availability", async () => {
+  globalThis.fetch = (async () => quotaResponse({
+    reports: [report()],
+    availability: [{ provider: "xai", status: "unavailable", reason: "upstream_unavailable", checkedAt: now }],
+  })) as typeof fetch;
+  useProviderQuotaStore.getState().ensure("");
+  await flush();
+
+  globalThis.fetch = (async () => new Response("boom", { status: 503 })) as typeof fetch;
+  useProviderQuotaStore.getState().refresh("");
+  await flush();
+  const entry = useProviderQuotaStore.getState().entries[""];
+  expect(entry?.availability.xai.reason).toBe("upstream_unavailable");
+  expect(entry?.lastAttemptOk).toBe(false);
+});
+
+test("availability is never persisted to sessionStorage", async () => {
+  const payload = {
+    reports: [report()],
+    availability: [
+      { provider: "xai", status: "unavailable", reason: "upstream_unavailable", checkedAt: now, email: "x@example.com", accountId: "acct_xai" },
+    ],
+  };
+  globalThis.fetch = (async () => quotaResponse(payload)) as typeof fetch;
+  useProviderQuotaStore.getState().ensure("");
+  await flush();
+
+  const persisted = testWindow.sessionStorage.getItem(PROVIDER_QUOTA_STORAGE_NAME) ?? "";
+  const parsed = JSON.parse(persisted) as { state: { entries: Record<string, unknown> } };
+  const entry = parsed.state.entries[""] as Record<string, unknown>;
+  expect(entry).not.toHaveProperty("availability");
+  expect(persisted).not.toContain("upstream_unavailable");
+  expect(persisted).not.toContain("acct_xai");
+  expect(persisted).not.toContain("x@example.com");
 });

@@ -9,6 +9,7 @@ import { IconAlert, IconCheck } from "../../icons";
 import { binProviderStatus, type WorkspaceItem } from "../../provider-workspace/catalog";
 import { formatRelativeTime, relativeTimeLabelsFromT, formatRequestCount, formatTokenCount } from "../../provider-workspace/usage";
 import { accountQuotaFromReport, formatQuotaSourceLabel, type ProviderQuotaReportView } from "../../provider-workspace/report";
+import { quotaUnavailableReasonKey } from "../../quota-unavailable";
 import type { ProviderUsageTotals } from "./types";
 import { authModeLabel } from "./ProviderRail";
 import type { ProviderUpdatePatch } from "./types";
@@ -30,7 +31,7 @@ type ConnectionTestState = {
 };
 
 export default function ProviderOverview({
-  item, usageTotals, quotaReport, oauthEmail, oauth,
+  item, usageTotals, quotaReport, quotaUnavailableReason, onRetryQuota, oauthEmail, oauth,
   apiBase, connectionIdentity,
   onEditSettings, onViewUsage, onUpdateProvider,
   onReauthenticate, onCancelLogin, reauthBusy = false,
@@ -38,6 +39,9 @@ export default function ProviderOverview({
   item: WorkspaceItem;
   usageTotals?: ProviderUsageTotals;
   quotaReport?: ProviderQuotaReportView;
+  /** Provider quota is unavailable (no report); reason drives the notice copy. */
+  quotaUnavailableReason?: string;
+  onRetryQuota?: () => void;
   oauthEmail?: string;
   /** Login state for OAuth summaries that carry no email (e.g. Cursor/Kimi). */
   oauth?: { loggedIn?: boolean };
@@ -201,12 +205,27 @@ export default function ProviderOverview({
         )}
       </section>
 
-      {quotaReport && (
+      {quotaReport ? (
         <section className="pws-section" aria-label={t("pws.rateLimits")}>
           <h3 className="pws-section-title">{t("pws.rateLimits")}</h3>
           <ProviderCapacityQuota report={quotaReport} pending={false} />
         </section>
-      )}
+      ) : quotaUnavailableReason ? (
+        <section className="pws-section" aria-label={t("pws.quota.unavailableTitle")}>
+          <h3 className="pws-section-title">{t("pws.quota.unavailableTitle")}</h3>
+          <div className="pws-auth-summary pws-auth-summary--warn" role="status">
+            <IconAlert style={{ width: 14, height: 14 }} aria-hidden="true" />
+            <div className="pws-auth-summary-body">
+              <span>{t(quotaUnavailableReasonKey(quotaUnavailableReason))}</span>
+              {onRetryQuota && (
+                <button type="button" className="btn btn-ghost btn-sm" onClick={onRetryQuota}>
+                  {t("pws.quota.retry")}
+                </button>
+              )}
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section className="pws-section" aria-label={t("pws.authSummary")}>
         <h3 className="pws-section-title">{t("pws.authSummary")}</h3>

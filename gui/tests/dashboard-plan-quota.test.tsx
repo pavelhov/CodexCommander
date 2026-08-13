@@ -307,3 +307,146 @@ test("Plan & quota section never persists account identities to sessionStorage",
     container.remove();
   }
 });
+
+function openaiReport(): Record<string, unknown> {
+  return {
+    provider: "openai",
+    label: "OpenAI (Codex login)",
+    source: "chatgpt:wham",
+    updatedAt: NOW,
+    quota: { weeklyPercent: 31, updatedAt: NOW },
+    aggregation,
+  };
+}
+
+test("Plan & quota renders a full-width strip for an unavailable provider", async () => {
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({
+      reports: [openaiReport()],
+      availability: [
+        { provider: "xai", status: "unavailable", reason: "upstream_unavailable", checkedAt: NOW },
+      ],
+    }), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
+
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(
+      <LanguageProvider>
+        <DashboardPlanQuotaSection apiBase="http://plan-quota-unavailable" />
+      </LanguageProvider>,
+    );
+  });
+  try {
+    await waitFor(() => (container.textContent ?? "").includes("Quota unavailable"));
+    const strip = container.querySelector(".dash-plan-quota-unavailable");
+    expect(strip).toBeTruthy();
+    const text = strip?.textContent ?? "";
+    expect(text).toContain("xAI Grok");
+    expect(text).toContain("Temporarily unavailable");
+    expect(text).toContain("Retry");
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+  }
+});
+
+test("Plan & quota strip Retry forces refresh and disappears once the provider reports", async () => {
+  const urls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    urls.push(String(input));
+    if (String(input).includes("refresh=1")) {
+      return new Response(JSON.stringify({
+        reports: [openaiReport(), { ...openaiReport(), provider: "xai", label: "xAI Grok" }],
+        availability: [{ provider: "xai", status: "available", checkedAt: NOW }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify({
+      reports: [openaiReport()],
+      availability: [
+        { provider: "xai", status: "unavailable", reason: "upstream_unavailable", checkedAt: NOW },
+      ],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(
+      <LanguageProvider>
+        <DashboardPlanQuotaSection apiBase="http://plan-quota-retry" />
+      </LanguageProvider>,
+    );
+  });
+  try {
+    await waitFor(() => (container.textContent ?? "").includes("Quota unavailable"));
+    const strip = container.querySelector(".dash-plan-quota-unavailable");
+    expect(strip).toBeTruthy();
+    const retry = Array.from(container.querySelectorAll("button"))
+      .find(button => button.textContent?.trim() === "Retry");
+    expect(retry).toBeTruthy();
+    await act(async () => { retry?.click(); });
+    await waitFor(() => urls.some(url => url.includes("refresh=1")));
+    await waitFor(() => !container.querySelector(".dash-plan-quota-unavailable"));
+    expect((container.textContent ?? "")).toContain("xAI Grok");
+    expect((container.textContent ?? "")).not.toContain("Temporarily unavailable");
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+  }
+});
+
+test("Plan & quota strip stays hidden when providers are available or availability is absent", async () => {
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({
+      reports: [openaiReport()],
+      availability: [{ provider: "xai", status: "available", checkedAt: NOW }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
+
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(
+      <LanguageProvider>
+        <DashboardPlanQuotaSection apiBase="http://plan-quota-available" />
+      </LanguageProvider>,
+    );
+  });
+  try {
+    await waitFor(() => (container.textContent ?? "").includes("Plan & quota"));
+    expect(container.querySelector(".dash-plan-quota-unavailable")).toBeNull();
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+  }
+
+  // No availability data at all: still no strip.
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({
+      reports: [openaiReport()],
+      availability: [],
+    }), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
+  const container2 = document.createElement("div");
+  document.body.append(container2);
+  const root2 = createRoot(container2);
+  await act(async () => {
+    root2.render(
+      <LanguageProvider>
+        <DashboardPlanQuotaSection apiBase="http://plan-quota-no-availability" />
+      </LanguageProvider>,
+    );
+  });
+  try {
+    await waitFor(() => (container2.textContent ?? "").includes("Plan & quota"));
+    expect(container2.querySelector(".dash-plan-quota-unavailable")).toBeNull();
+  } finally {
+    await act(async () => { root2.unmount(); });
+    container2.remove();
+  }
+});

@@ -15,7 +15,7 @@
 
 import { create } from "zustand";
 import { persist, type PersistStorage, type StorageValue } from "zustand/middleware";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import {
   capacityAggregationFromReport,
   type ProviderQuotaReportView,
@@ -28,7 +28,19 @@ const QUOTA_REPORT_MAX_AGE_MS = 30 * 60_000;
 export interface ProviderQuotaData {
   reports: Record<string, ProviderQuotaReportView>;
   authAttention: Record<string, boolean>;
+  /**
+   * In-memory quota availability per provider (status/reason/checkedAt), projected
+   * from the wire. Deliberately NOT persisted: the persisted slice stays reports +
+   * timestamp, so a hostile availability row can never reach sessionStorage.
+   */
+  availability: Record<string, ProviderQuotaAvailability>;
   updatedAt?: number;
+}
+
+export interface ProviderQuotaAvailability {
+  status: string;
+  reason?: string;
+  checkedAt: number;
 }
 
 export interface ProviderQuotaEntry extends ProviderQuotaData {
@@ -48,6 +60,8 @@ export type ProviderQuotaResource = ProviderQuotaData & {
   refreshing: boolean;
   hasSucceeded: boolean;
   lastAttemptOk: boolean;
+  /** Providers whose quota is unavailable and have no report, sorted by name. */
+  unavailableProviders: Array<{ provider: string; reason?: string }>;
   ensure: (opts?: { force?: boolean }) => void;
   refresh: (opts?: { force?: boolean }) => void;
 };
@@ -143,6 +157,54 @@ export function quotaAuthAttentionFromResponse(value: unknown): Record<string, b
   return out;
 }
 
+/** Known, privacy-safe reason codes the UI maps to copy. Anything else is dropped. */
+const KNOWN_QUOTA_UNAVAILABLE_REASONS = new Set([
+  "reauth_required",
+  "local_cli_refresh_required",
+  "upstream_unavailable",
+]);
+
+/**
+ * Project availability rows onto { provider, status, reason?, checkedAt } only —
+ * provider + status + reason + checkedAt, nothing else (no identities, no raw
+ * provider errors). Mirrors the Mac app's ProviderQuotaAvailability decoding.
+ */
+export function quotaAvailabilityFromResponse(value: unknown): Record<string, ProviderQuotaAvailability> {
+  if (!Array.isArray(value)) return {};
+  const out: Record<string, ProviderQuotaAvailability> = {};
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const row = raw as Record<string, unknown>;
+    if (typeof row.provider !== "string" || !row.provider.trim()) continue;
+    if (typeof row.status !== "string" || !row.status.trim()) continue;
+    const checkedAt = finiteNumber(row.checkedAt) ?? Date.now();
+    const reason =
+      typeof row.reason === "string" && KNOWN_QUOTA_UNAVAILABLE_REASONS.has(row.reason)
+        ? row.reason
+        : undefined;
+    out[row.provider] = {
+      status: row.status,
+      ...(reason ? { reason } : {}),
+      checkedAt,
+    };
+  }
+  return out;
+}
+
+/**
+ * Providers with a non-available quota status AND no report entry, sorted by provider
+ * name. A provider with a report (even a stale last-known-good one) is not listed.
+ */
+export function unavailableQuotaProviders(
+  availability: Record<string, ProviderQuotaAvailability>,
+  reports: Record<string, unknown>,
+): Array<{ provider: string; reason?: string }> {
+  return Object.entries(availability)
+    .filter(([provider, row]) => row.status !== "available" && !(provider in reports))
+    .map(([provider, row]) => ({ provider, ...(row.reason ? { reason: row.reason } : {}) }))
+    .sort((a, b) => a.provider.localeCompare(b.provider));
+}
+
 const sessionStorageLazy: PersistStorage<PersistedQuotaSlice> = {
   getItem: (name) => {
     try {
@@ -173,6 +235,7 @@ function emptyEntry(): ProviderQuotaEntry {
   return {
     reports: {},
     authAttention: {},
+    availability: {},
     loading: false,
     refreshing: false,
     hasSucceeded: false,
@@ -369,6 +432,7 @@ function fetchQuotas(
       if (get().inflight[key] !== controller) return;
       const reports = freshQuotaReportsFromResponse(data?.reports);
       const authAttention = quotaAuthAttentionFromResponse(data?.availability);
+      const availability = quotaAvailabilityFromResponse(data?.availability);
       set(state => ({
         inflight: { ...state.inflight, [key]: null },
         entries: {
@@ -376,6 +440,7 @@ function fetchQuotas(
           [key]: {
             reports,
             authAttention,
+            availability,
             updatedAt: Date.now(),
             error: undefined,
             loading: false,
@@ -481,6 +546,12 @@ export function useProviderQuota(apiBase: string): ProviderQuotaResource {
   const entry = useProviderQuotaStore(state => state.entries[key]);
   const ensureAction = useProviderQuotaStore(state => state.ensure);
   const refreshAction = useProviderQuotaStore(state => state.refresh);
+  const availability = entry?.availability ?? {};
+  const reports = entry?.reports ?? {};
+  const unavailableProviders = useMemo(
+    () => unavailableQuotaProviders(availability, reports),
+    [availability, reports],
+  );
 
   const ensure = useCallback(
     (opts?: { force?: boolean }) => ensureAction(key, opts),
@@ -493,8 +564,10 @@ export function useProviderQuota(apiBase: string): ProviderQuotaResource {
 
   return {
     key,
-    reports: entry?.reports ?? {},
+    reports,
     authAttention: entry?.authAttention ?? {},
+    availability,
+    unavailableProviders,
     updatedAt: entry?.updatedAt,
     error: entry?.error,
     loading: entry?.loading ?? false,

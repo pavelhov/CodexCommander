@@ -37,6 +37,9 @@ export interface DetailSlotData {
   usageTotals?: import("./types").ProviderUsageTotals;
   modelUsage?: ProviderModelUsageRow[];
   quotaReport?: ProviderQuotaReportView;
+  /** Set only when the selected provider's quota is unavailable and has no report. */
+  quotaUnavailableReason?: string;
+  onRetryQuota?: () => void;
   availableModels: string[];
   /** Did the last successful discovery return rows? Server-reported, never inferred. */
   hasLiveModels: boolean;
@@ -136,6 +139,9 @@ export default function ProviderWorkspaceShell({
   );
   const quotaAuthAttention = quota.authAttention;
   const quotasLoading = quota.loading && Object.keys(quotaReports).length === 0;
+  const quotaUnavailableReason = quota.unavailableProviders.find(
+    entry => entry.provider === selectedName,
+  )?.reason;
 
   const sections = useMemo(() => {
     const base = buildProviderWorkspace(publicWorkspaceProviders(providers));
@@ -526,6 +532,8 @@ export default function ProviderWorkspaceShell({
             usageTotals: usageTotals[selectedItem.name],
             modelUsage: usageModels[selectedItem.name],
             quotaReport: quotaReports[selectedItem.name],
+            quotaUnavailableReason,
+            onRetryQuota: () => refreshQuotas({ force: true }),
             availableModels: availableModels[selectedItem.name] ?? [],
             hasLiveModels: (liveModelCounts[selectedItem.name] ?? 0) > 0,
             selectedModels: selectedModels[selectedItem.name] ?? [],

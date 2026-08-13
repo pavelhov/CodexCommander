@@ -97,6 +97,28 @@
   min-width: 0;
 }
 
+/* Quota-unavailable strip: one full-width row under the Plan & quota grid, never a
+   grid card — providers with no report entry get a reason line + a shared Retry. */
+.dash-plan-quota-unavailable {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.dash-plan-quota-unavailable-label {
+  font-weight: var(--weight-semibold);
+}
+
+.dash-plan-quota-unavailable-item {
+  color: var(--muted);
+}
+
 .dash-sidecar-card__row .font-semibold {
   min-width: 0;
 }
