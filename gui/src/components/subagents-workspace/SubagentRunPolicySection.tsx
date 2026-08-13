@@ -182,7 +182,6 @@ export default function SubagentRunPolicySection({
             onChange={value => { setFeedback(null); policy.setMode(value as MultiAgentMode); }}
             disabled={saving}
             label={t("sub.policy.mode")}
-            style={{ width: "100%" }}
           />
           <span className="swi-policy-help">{t(`models.modeOptionDesc_${policy.mode}` as TKey)}</span>
         </div>
@@ -199,7 +198,6 @@ export default function SubagentRunPolicySection({
             }}
             disabled={saving}
             label={t("sub.policy.messageDelivery")}
-            style={{ width: "100%" }}
           />
           <span className="swi-policy-help">{t(`sub.policy.messageDeliveryHint_${policy.messageDelivery}` as TKey)}</span>
         </div>
@@ -217,7 +215,6 @@ export default function SubagentRunPolicySection({
             })}
             disabled={saving}
             label={t("sub.policy.preferred")}
-            style={{ width: "100%" }}
           />
           <span className="swi-policy-help">{t("sub.delegation.modelHint")}</span>
         </div>
@@ -236,7 +233,6 @@ export default function SubagentRunPolicySection({
             }}
             disabled={saving}
             label={t("sub.policy.fallback")}
-            style={{ width: "100%" }}
           />
           <span className="swi-policy-help">{t("sub.policy.fallbackHint")}</span>
         </div>
@@ -312,7 +308,7 @@ export default function SubagentRunPolicySection({
                 {policy.fallbackModels.map((model, index) => (
                   <li key={model}>
                     <span className="swi-fallback-rank">{index + 1}</span>
-                    <span className="swi-fallback-name">{formatNamespacedModelId(model, t)}</span>
+                    <span className="swi-fallback-name" title={formatNamespacedModelId(model, t)}>{formatNamespacedModelId(model, t)}</span>
                     <span className="swi-fallback-actions">
                       <button type="button" disabled={saving || index === 0} onClick={() => policy.setFallbackModels(moveValue(policy.fallbackModels, index, -1))} aria-label={t("sub.moveUp", { m: model })}><IconArrowUp aria-hidden="true" /></button>
                       <button type="button" disabled={saving || index === policy.fallbackModels.length - 1} onClick={() => policy.setFallbackModels(moveValue(policy.fallbackModels, index, 1))} aria-label={t("sub.moveDown", { m: model })}><IconArrowDown aria-hidden="true" /></button>

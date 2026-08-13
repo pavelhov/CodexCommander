@@ -108,7 +108,7 @@ export default function StorageWorkspace({ report, locale }: StorageWorkspacePro
                 aria-current={selectedKey === bucket.key ? "true" : undefined}
               >
                 <span className="storage-workspace-rail-primary">
-                  <span className="storage-workspace-rail-name">{bucketLabel(bucket, t)}</span>
+                  <span className="storage-workspace-rail-name" title={bucketLabel(bucket, t)}>{bucketLabel(bucket, t)}</span>
                   <span className="storage-workspace-rail-size">{formatBytes(bucket.bytes, locale)}</span>
                 </span>
                 <span className="storage-workspace-rail-meta">

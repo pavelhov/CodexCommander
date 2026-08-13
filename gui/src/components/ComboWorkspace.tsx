@@ -147,7 +147,7 @@ export default function ComboWorkspace({
                         <span className="combos-workspace-rail-icon" aria-hidden="true">
                           <IconShuffle width={16} height={16} />
                         </span>
-                        <span className="combos-workspace-rail-name">{item.model}</span>
+                        <span className="combos-workspace-rail-name" title={item.model}>{item.model}</span>
                         <span className="combos-workspace-rail-meta">
                           {item.targets.length === 1
                             ? t("cws.targetCountOne")

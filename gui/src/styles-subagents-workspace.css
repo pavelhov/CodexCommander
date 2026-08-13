@@ -256,13 +256,13 @@
 
 .swi-roster-name,
 .swi-library-name {
-  overflow: hidden;
   color: var(--text);
   font-family: var(--mono);
   font-size: var(--text-control);
   line-height: var(--leading-ui);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Model IDs must never be clipped mid-token: let them wrap anywhere instead. */
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .swi-model-chips {
@@ -420,10 +420,9 @@
 
 .swi-roster-matrix-name {
   min-width: 0;
-  overflow: hidden;
   font-family: var(--mono);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .swi-roster-matrix-surface {
@@ -480,10 +479,10 @@
 .swi-library-filters {
   display: flex;
   align-items: center;
+  /* Wrap instead of clipping: chips must never be cut off at the right edge. */
+  flex-wrap: wrap;
   gap: var(--space-2);
   padding: 0 var(--space-4) var(--space-3);
-  overflow-x: auto;
-  scrollbar-width: thin;
 }
 
 .swi-filter {
@@ -606,9 +605,10 @@
 
 .swi-policy-grid {
   display: grid;
-  grid-template-columns: minmax(150px, 0.8fr) minmax(220px, 1.2fr) minmax(200px, 1.05fr) minmax(150px, 0.72fr) auto;
+  grid-template-columns: minmax(170px, 0.8fr) minmax(220px, 1.2fr) minmax(200px, 1.05fr) minmax(170px, 0.72fr) auto;
   gap: var(--space-4);
-  align-items: end;
+  /* Top-align so stacked labels/helpers never form the 30px "label staircase". */
+  align-items: start;
   padding: var(--space-4);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -628,7 +628,7 @@
 }
 
 .swi-policy-guidance-field {
-  grid-column: span 2;
+  grid-column: span 4;
 }
 
 .swi-policy-toggle-row {
@@ -649,14 +649,15 @@
 .swi-policy-help {
   display: block;
   color: var(--muted);
-  font-size: var(--text-micro);
+  font-size: var(--text-label);
   line-height: var(--leading-body);
 }
 
 .swi-policy-save-cell {
   display: flex;
   align-items: flex-end;
-  min-height: calc(var(--control-lg) + 34px);
+  grid-column: 5;
+  min-height: 0;
 }
 
 .swi-policy-save-cell .btn {
@@ -830,11 +831,10 @@
 
 .swi-fallback-name {
   min-width: 0;
-  overflow: hidden;
   font-family: var(--mono);
   font-size: var(--text-label);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .swi-fallback-actions {

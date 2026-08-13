@@ -18,8 +18,10 @@ export function Notice({ tone, children }: { tone: "ok" | "err" | "warn"; childr
   // `warn` is degraded-but-not-failed: the action happened, something adjacent
   // did not. It must not render as the clean success the user did not get.
   const toneClass = tone === "ok" ? "notice-ok" : tone === "warn" ? "notice-warn" : "notice-err";
+  // Errors must be announced immediately (alert); ok/warn stay polite status.
+  const liveRole = tone === "err" ? "alert" : "status";
   return (
-    <div className={`notice ${toneClass}`} role="status">
+    <div className={`notice ${toneClass}`} role={liveRole}>
       {tone === "ok" ? <IconCheck /> : <IconAlert />}
       <span>{children}</span>
     </div>
