@@ -159,7 +159,7 @@ they have been synchronized. See
 [Sub-agent Surface](/guides/sub-agent-surface/) for the canonical V1/base/V2 behavior.
 :::
 
-The spawn override guarantee applies to the **built-in** v2 guidance text. A custom
+The spawn override guarantee applies to the **built-in** V2 guidance text. A custom
 `injectionPrompt` replaces that text entirely and must include `{{model}}` and `{{effort}}`
 placeholders (and optionally `{{roster}}`) or those values will not appear in the injected
 guidance.
@@ -235,7 +235,7 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | `GET /api/codex-catalog/status` · `POST /api/codex-catalog/apply` | Read catalog, routing, and worker activation evidence. The guarded Apply endpoint reconciles pending catalog or managed-routing state, then may force-restart only verified stale workers behind a desired-revision fence and explicit interruption confirmation. For an already-converged stale worker it is an advanced fallback that may make ChatGPT show **stopped unexpectedly**. A browser GUI session also needs the one-time launch authorization described above. |
 | `GET` / `PUT /api/sidecar-settings` | Read or set search/vision sidecar model settings. |
 | `GET` / `PUT /api/injection-model` | Read or set the shared sub-agent model/effort selection and the independent guidance/native-default switches. |
-| `GET` / `PUT /api/v2` | Read or set the surface mode, Codex feature flag, and v2 thread limit. |
+| `GET` / `PUT /api/v2` | Read or set the collaboration protocol, Codex feature flag, and V2 thread limit. |
 | `GET /api/providers` · `POST /api/providers` · `PATCH /api/providers?name=...` · `DELETE /api/providers?name=...` | List, add/replace, enable/disable, set the default, or remove providers. `PATCH` uses standalone `{ "setDefault": true }` on an enabled provider; `POST` may include `setDefault` when creating/replacing (also enabled-only). Deleting the current default reassigns to the first remaining enabled provider when one exists; otherwise the API returns `409` with `code: "last_provider"` and keeps the current default. |
 | `GET /api/models` · `PUT /api/disabled-models` | List native/routed model rows and update the shared disabled-model set. |
 | `GET /api/selected-models` · `PUT /api/model-visibility` | Read provider allowlists and atomically change the final visibility of one model or provider group. |

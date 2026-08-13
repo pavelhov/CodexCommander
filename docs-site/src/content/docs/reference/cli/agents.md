@@ -11,7 +11,7 @@ These commands control agent policy and routing, inspect the live proxy, and con
 
 Manage the headless multi-agent roster, effort caps, prompt injection, fallback, and sidecar settings.
 Use `status` for the current policy. See [Sub-agent surfaces](/guides/sub-agent-surface/) for how
-surface modes, delegation, effort, and fallback behavior fit together.
+the collaboration protocol, delegation, effort, and fallback behavior fit together.
 
 ```bash
 ccx agent subagents set ark/model-a,openai/gpt-5.5
@@ -19,16 +19,16 @@ ccx agent subagents set ark/model-a,openai/gpt-5.5
 
 ### `ccx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
 
-Manage the Codex `multi_agent_v2` feature flag and the three-state multi-agent surface mode.
+Manage the Codex `multi_agent_v2` feature flag and the three-state collaboration protocol.
 
 | Subcommand | Action |
 | --- | --- |
-| `status` (default) | Report the current v2 flag, multi-agent mode, and thread concurrency. |
+| `status` (default) | Report the current V2 flag, multi-agent mode, and thread concurrency. |
 | `on` | Enable the `multi_agent_v2` feature and resync the catalog. |
 | `off` | Disable the `multi_agent_v2` feature and resync the catalog. |
-| `mode v1` | Force all models to v1, disable native v2, and preserve the active thread limit. |
+| `mode v1` | Force all models to V1, disable native V2, and preserve the active thread limit. |
 | `mode default` | Respect upstream model surface pins. |
-| `mode v2` | Force all models to v2, enable native v2, and preserve the active thread limit. |
+| `mode v2` | Force all models to V2, enable native V2, and preserve the active thread limit. |
 | `threads <n>` | Set the active v1/v2 thread limit to an integer of at least 1. |
 
 ```bash

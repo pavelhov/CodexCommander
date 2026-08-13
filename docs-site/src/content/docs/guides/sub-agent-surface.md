@@ -16,12 +16,12 @@ Choose the mode for **new sessions**. Existing sessions keep the surface they st
 
 | Mode | What Codex gets | Who should pick it |
 | --- | --- | --- |
-| **v1** | Classic namespaced `spawn_agent`, `send_input`, `resume_agent`, and `close_agent` tools. A spawn can select another model directly. | Beginners who need reliable delegation across different providers, especially native-to-routed children. |
+| **V1** | Classic namespaced `spawn_agent`, `send_input`, `resume_agent`, and `close_agent` tools. A spawn can select another model directly. | Beginners who need reliable delegation across different providers, especially native-to-routed children. |
 | **base** (default; **Codex native** in the GUI) | Upstream model pins: GPT-5.6 Sol/Terra use V2, Luna uses V1, and unpinned models follow Codex's `multi_agent_v2` feature flag. | Most users. It follows Codex's intended surface for each model without forcing one globally. |
-| **v2** | Flat `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`, and agent-list tools, with concurrent sessions. | Users who want the newer concurrent workflow. Mixed-provider parents must also choose the plaintext compatibility delivery policy described below. |
+| **V2** | Flat `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`, and agent-list tools, with concurrent sessions. | Users who want the newer concurrent workflow. Mixed-provider parents must also choose the plaintext compatibility delivery policy described below. |
 
 :::tip[Not sure?]
-Start with **base**. Choose **v1** for the established cross-provider path. Force **v2** only when
+Start with **base**. Choose **V1** for the established cross-provider path. Force **V2** only when
 you specifically want its newer session model; enable plaintext compatibility when that V2 parent
 must delegate to Kimi, Grok, DeepSeek, or another external provider.
 :::
@@ -39,7 +39,7 @@ to disk. That is why a mode change affects newly created App, CLI, and TUI sessi
 
 ### A mode is not a worker reload
 
-Changing to **v2** makes Luna *eligible for the V2 collaboration surface* because the generated
+Changing to **V2** makes Luna *eligible for the V2 collaboration surface* because the generated
 catalog stamps it as V2. It does not, by itself, make Luna (or any other model) available to a
 currently running Codex worker. For a model to be usable by `spawn_agent`, all of these must hold:
 
@@ -153,7 +153,7 @@ switching an active conversation in place.
 
 ### GUI
 
-- **Dashboard** → first stat cell: choose **v1**, **base**, or **v2**.
+- **Dashboard** → first stat cell: choose **V1**, **base**, or **V2**.
 - **Models** → **Current behavior** → **Collaboration**: choose **Reliable V1**, **Codex native** (base/default semantics), or **Concurrent V2**.
 - **Subagents** → **Agent Command Center**:
   - **Configured Roster** chooses and orders the five model overrides advertised first to `spawn_agent`.
@@ -245,7 +245,7 @@ a positive partial count before passing a model or effort override.
 ### Why is a configured model missing from the V2 roster?
 
 It may be picker-hidden, outside the five-model display limit, missing from the catalog, or pinned
-to v1. A `"v2"`, `null`, or absent surface value is eligible; a real `"v1"` pin is not.
+to V1. A `"v2"`, `null`, or absent surface value is eligible; a real `"v1"` pin is not.
 
 ### Does V2 make Luna available immediately?
 

@@ -10,24 +10,24 @@ routes, and limits delegated work.
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` stamps every catalog model as v1; `v2` stamps every model as v2. `default` restores upstream pins (Sol/Terra v2, Luna v1) and otherwise follows the native `multi_agent_v2` flag. After changing it, Apply replaces a running worker; then start a new task for the session-bound tool shape. |
+| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` stamps every catalog model as V1; `v2` stamps every model as V2. `default` restores upstream pins (Sol/Terra V2, Luna V1) and otherwise follows the native `multi_agent_v2` flag. After changing it, Apply replaces a running worker; then start a new task for the session-bound tool shape. |
 | `multiAgentV2MessageDelivery?` | `"encrypted" \| "plaintext"` | `"encrypted"` | V2 task-message delivery only, not credential encryption. `encrypted` preserves ChatGPT's reserved backend contract and native-only ciphertext guard. `plaintext` opts subsequent V2 parent requests into experimental mixed-provider compatibility; all delegated messages from that parent become plaintext, and routed parents receive the stock Codex plaintext marker on message-bearing collaboration calls. Start a new task after changing it; it does not dirty the catalog or need Apply. |
 | `subagentModels?` | `string[]` | `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.4-mini` | Up to five bare native, account-qualified `<selector>/<native-openai-model>`, or routed `provider/model` ids advertised first in the sub-agent picker. The dashboard preserves configured exact selectors, including account-qualified choices, and reports which saved entries are advertised or excluded. Use `ccx agent subagents set` or edit the configuration for choices that are not in the current catalog. An explicit empty list is preserved. |
-| `injectionModel?` | `string` | — | Preferred native or routed sub-agent model used in proxy-authored v2 delegation guidance. |
+| `injectionModel?` | `string` | — | Preferred native or routed sub-agent model used in proxy-authored V2 delegation guidance. |
 | `injectionEffort?` | `string` | — | Preferred effort (`low` through `ultra`), meaningful only with `injectionModel`. |
-| `injectionPrompt?` | `string` | — | Replaces the built-in v2 guidance body. Supports `{{model}}`, `{{effort}}`, `{{roster}}`, and `{{fallback}}`. A configured `injectionModel` is sufficient to render the custom prompt. |
+| `injectionPrompt?` | `string` | — | Replaces the built-in V2 guidance body. Supports `{{model}}`, `{{effort}}`, `{{roster}}`, and `{{fallback}}`. A configured `injectionModel` is sufficient to render the custom prompt. |
 | `multiAgentGuidanceEnabled` | `boolean` | `true` | Controls only CodexCommander-authored v1/v2 developer guidance; it does not change native agent defaults, tools, routing, rosters, or effort caps. |
 | `syncCodexSubagentDefaults?` | `boolean` | `false` | Opt into writing `injectionModel` and optional `injectionEffort` as Codex's native defaults during sync/restart. Requires `injectionModel`. |
 | `subagentModelFallback?` | `string[]` | `[]` | Priority-ordered global fallback models for spawned child turns. |
 | `subagentModelFallbackPollMs?` | `number` | `60000` | Availability-probe cache interval. Values below 1000 ms fall back to the default. |
-| `effortCap?` | `string` | — | Hard ceiling for qualifying v2 main turns and marked spawned-child turns. Accepts `low` through `ultra`. |
+| `effortCap?` | `string` | — | Hard ceiling for qualifying V2 main turns and marked spawned-child turns. Accepts `low` through `ultra`. |
 | `subagentEffortCap?` | `string` | — | Additional ceiling for spawned-child turns only. When both caps apply, the lower wins. |
 
 Manage the surface with the dashboard or `ccx v2 status|on|off|mode <v1|default|v2>|threads <n>`.
 Mode, protocol, and thread changes update managed Codex boot configuration. If a Codex worker is
 already running, choose **Apply agent catalog** to replace it, then start a new task. `maxConcurrentThreadsPerSession` is a `PUT /api/v2` field, not a
 `config.json` key; `ccx v2 threads <n>` writes `max_concurrent_threads_per_session` under
-`[features.multi_agent_v2]` in Codex's `$CODEX_HOME/config.toml` after v2 is enabled.
+`[features.multi_agent_v2]` in Codex's `$CODEX_HOME/config.toml` after V2 is enabled.
 
 The management API exposes `GET`/`PUT /api/v2`, `/api/injection-model`, `/api/effort-caps`,
 `/api/subagent-models`, and `/api/subagent-model-fallback`. Injection-model updates are partial;
@@ -44,22 +44,22 @@ loudly when the installed Codex build does not know the flag yet.
 
 ## Roster and guidance
 
-The effective v2 roster is the configured, picker-visible, priority-sorted first five models that
-are compatible with v2 and present in the injected catalog. V2 eligibility treats an explicit `"v2"`,
+The effective V2 roster is the configured, picker-visible, priority-sorted first five models that
+are compatible with V2 and present in the injected catalog. V2 eligibility treats an explicit `"v2"`,
 `null`, or absent upstream pin as eligible; a real `"v1"` pin is excluded. Excluded entries remain in
 configuration so they can become eligible later.
 
 Surface detection uses tool shape. A namespaced `spawn_agent` with `send_input`, `resume_agent`, or
-`close_agent` is v1. A flat `spawn_agent` with `send_message`, `followup_task`, `interrupt_agent`, or
-`list_agents` is v2.
+`close_agent` is V1. A flat `spawn_agent` with `send_message`, `followup_task`, `interrupt_agent`, or
+`list_agents` is V2.
 
 V1 guidance is proactive text only at `max` or `ultra`. V2 receives a proxy-authored developer
-message only when a preferred model, eligible roster, or fallback chain exists. Built-in v2 guidance
+message only when a preferred model, eligible roster, or fallback chain exists. Built-in V2 guidance
 has a 700-character budget and drops the roster first if necessary. Guidance is deduplicated across
 replay prefixes and inserted before a trailing `compaction_trigger`.
 
 `injectionModel` and `injectionEffort` are advisory unless native-default sync is enabled. The built-in
-v2 text asks Codex to pass supported model/effort overrides to `spawn_agent` with
+V2 text asks Codex to pass supported model/effort overrides to `spawn_agent` with
 `fork_turns: "none"`. A custom `injectionPrompt` substitutes missing values with an empty string.
 
 ## Native Codex default sync
@@ -100,7 +100,7 @@ session uses the ordinary heterogeneous chain while preserving V2 lifecycle sema
 
 ## Effort caps
 
-Caps apply only to the v2 collaboration feature: a main turn qualifies when its tools expose v2,
+Caps apply only to the V2 collaboration feature: a main turn qualifies when its tools expose V2,
 while a child qualifies when it carries exact codex-rs `x-openai-subagent: collab_spawn` or
 `"subagent_kind": "thread_spawn"` markers in `x-codex-turn-metadata`, even
 if leaf tools no longer expose collaboration. V1 main turns, `multiAgentMode: "v1"`, compaction,
@@ -110,5 +110,5 @@ Caps only lower effort. They snap to the highest advertised rung at or below the
 no effort control or no supported rung fits, CodexCommander removes the effort and lets the provider default
 apply. `max` and `ultra` are accepted, while the dashboard offers `low` through `xhigh`.
 
-For a beginner-oriented explanation of v1, default, and v2 behavior, see
+For a beginner-oriented explanation of V1, default, and V2 behavior, see
 [Sub-agent surfaces](/guides/sub-agent-surface/).
