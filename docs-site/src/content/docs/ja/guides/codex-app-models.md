@@ -100,7 +100,7 @@ fast_mode = true
 
 Codex は、ピッカーに表示されるカタログ エントリを `priority` の昇順で並べ替え、最初の 5 つを `spawn_agent` モデル オーバーライドとしてアドバタイズします。ダッシュボードの **Agent Command Center** では、bare native id または routed `provider/model` id を最大 5 つ選択して保存できます。設定済みの account-qualified `<selector>/<native-openai-model>` id も保持され、各保存項目が実際に公開されたか除外されたかが表示されます。CodexCommander は選択順に低いカタログ priority を割り当てます。account selector が有効な場合、bare native の選択は selector-qualified グループに展開されます。他のモデルは引き続き正確な ID で呼び出すことができます。
 
-Active Roster は、ダッシュボードの **サブエージェント委任** の選択とは別のものです。Codex が最初に提供する override を制御しますが、モデルを選択したり、委任をトリガーしたりすることはありません。
+設定済みロースターは、ダッシュボードの **サブエージェント委任** の選択とは別のものです。Codex が最初に提供する override を制御しますが、モデルを選択したり、委任をトリガーしたりすることはありません。
 
 ## モデルの状態を更新しています
 

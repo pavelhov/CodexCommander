@@ -102,7 +102,7 @@ subagentModels = [
 
 自定义开头模型顺序的受支持方式是重新排列 `subagentModels`。在仪表盘中打开 **Subagents** →
 **Agent Command Center**，通过拖动、箭头按钮或 <kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd> 重新排列
-**Active Roster**。可搜索的 **Agent Library** 可能包含远超五个的目录模型；路由可用时条目仍可通过精确 id
+**已配置名单**。可搜索的 **Agent Library** 可能包含远超五个的目录模型；路由可用时条目仍可通过精确 id
 指定，而五个槽位的限制仅适用于最先向 `spawn_agent` 公布的 override。
 
 使用 `ccx agent subagents set` 或编辑 CodexCommander 配置，添加实时库中没有的精确

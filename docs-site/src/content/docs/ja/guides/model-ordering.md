@@ -106,7 +106,7 @@ account selector がある場合、5 項目の制限は bare native の選択が
 
 先頭モデルの順序を変更するサポート手段は、`subagentModels` を並べ替えることです。ダッシュボードでは
 **Subagents** → **Agent Command Center** を開き、ドラッグ、矢印ボタン、または
-<kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd> で **Active Roster** を並べ替えます。検索可能な
+<kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd> で **設定済みロースター** を並べ替えます。検索可能な
 **Agent Library** には 5 つをはるかに超えるカタログモデルが含まれる場合があります。ルートが利用可能な
 場合にエントリを正確な id で指定でき、5 枠の制限は `spawn_agent` に最初に公開されるオーバーライドにのみ適用されます。
 

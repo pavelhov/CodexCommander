@@ -93,7 +93,7 @@ CodexCommander 会安全失败，而不是转发空任务或不可读任务：
 - **Dashboard** → 第一个状态单元：选择 **v1**、**base** 或 **v2**。
 - **Models** → **Current behavior** → **Collaboration**：选择 **Reliable v1**、**Codex native**（base/default 语义）或 **Concurrent v2**。
 - **Subagents** → **Agent Command Center**：
-  - **Active Roster** 选择并排序最先向 `spawn_agent` 公布的五个模型 override。拖动行、使用箭头按钮，或按 <kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd>。
+  - **已配置名单** 选择并排序最先向 `spawn_agent` 公布的五个模型 override。拖动行、使用箭头按钮，或按 <kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd>。
   - **Agent Library** 搜索当前模型目录，并按事实能力进行筛选，例如推理、长上下文、视觉和工具支持。路由可用时，五个槽位 roster 之外的条目仍可通过精确 id 指定。
   - **Run Policy** 暂存代理协议、V2 消息传递、首选指导模型和 effort、已生成子任务的全局回退链、健康复查间隔、线程限制、子代理 effort 上限、名单指导，以及原生 Codex 默认值同步。策略变更与 roster 变更分开保存。
 

@@ -143,7 +143,7 @@ routed `provider/model` id를 최대 다섯 개 선택하고 저장할 수 있�
 CodexCommander는 선택한 순서대로 낮은 카탈로그 priority를 부여합니다. account selector가 활성화되어 있으면
 bare native 선택은 selector-qualified 그룹으로 확장됩니다. 다른 모델도 정확한 id로 직접 호출할 수 있습니다.
 
-Active Roster는 Dashboard의 **Sub-agent delegation** 선택과 별개입니다. Codex가 먼저 보여 줄
+설정된 로스터는 Dashboard의 **Sub-agent delegation** 선택과 별개입니다. Codex가 먼저 보여 줄
 override를 정할 뿐, 모델을 고르거나 delegation을 시작하지는 않습니다.
 
 ## 모델 상태 새로고침

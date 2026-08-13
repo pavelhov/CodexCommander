@@ -106,7 +106,7 @@ account selector가 있으면 bare native 선택이 selector-qualified 그룹으
 
 선두 모델 순서를 바꾸는 지원 수단은 `subagentModels`를 재정렬하는 것입니다. 대시보드에서
 **Subagents** → **Agent Command Center**를 열고 드래그, 화살표 버튼, 또는
-<kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd>로 **Active Roster**의 순서를 바꿉니다. 검색 가능한
+<kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd>로 **설정된 로스터**의 순서를 바꿉니다. 검색 가능한
 **Agent Library**에는 다섯 개를 훨씬 넘는 카탈로그 모델이 있을 수 있습니다. 라우트가 사용 가능할 때
 항목을 정확한 id로 지정할 수 있으며, 다섯 칸 제한은 `spawn_agent`에 가장 먼저 알려지는 오버라이드에만 적용됩니다.
 

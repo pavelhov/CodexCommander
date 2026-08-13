@@ -12,6 +12,7 @@ import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { useSubagentDelegation } from "./use-subagent-delegation";
 import { useSubagentRunPolicy } from "./use-subagent-run-policy";
+import { deriveRosterReachability, type RosterProjections } from "./subagent-roster-reachability";
 import SubagentRunPolicySection from "../components/subagents-workspace/SubagentRunPolicySection";
 import { setClientResourceData } from "../client-resource";
 import {
@@ -61,6 +62,8 @@ type CatalogActivation = {
   routingStatus: "current" | "not_injected" | "external" | "unknown" | "not_required";
   routingKind: "native" | "codexcommander-local" | "custom-local" | "custom-remote" | "unknown";
   protocol: string | null;
+  projections?: RosterProjections;
+  desiredChosen?: string[];
   advertised: string[];
   excluded: RosterExclusion[];
 };
@@ -176,6 +179,15 @@ function parseActivation(value: unknown): CatalogActivation | undefined {
           : [];
       })
     : [];
+  const desiredChosen = Array.isArray(desired?.chosen)
+    ? desired.chosen.filter((model): model is string => typeof model === "string" && model.length > 0)
+    : undefined;
+  const projectionsValue = catalog?.projections;
+  const projections = projectionsValue !== null
+    && typeof projectionsValue === "object"
+    && !Array.isArray(projectionsValue)
+    ? projectionsValue as RosterProjections
+    : undefined;
   return {
     desiredRevision,
     reloadRequired,
@@ -186,6 +198,8 @@ function parseActivation(value: unknown): CatalogActivation | undefined {
     routingStatus,
     routingKind,
     protocol: typeof desired?.protocol === "string" ? desired.protocol : null,
+    projections,
+    desiredChosen,
     advertised,
     excluded,
   };
@@ -321,6 +335,16 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const launcherRequired = reloadRequired && !routingBlocked && (
     activation?.applyReason === "confirmed-launch-required" || (applyAllowed && !confirmedGuiLaunch)
   );
+  // Reachability is derived from the server-observed roster, never the draft:
+  // a draft row absent from the server's projection computation must get no
+  // reachability claim (deriveRosterReachability returns an empty map for
+  // malformed/absent projections).
+  const serverRoster = activation?.desiredChosen ?? committedChosen;
+  const rosterReachability = useMemo(
+    () => deriveRosterReachability(serverRoster, activation?.projections),
+    [serverRoster, activation?.projections],
+  );
+  const protocol = enumValue(activation?.protocol, ["v1", "default", "v2"] as const);
 
   useEffect(() => {
     const update = () => setConfirmedGuiLaunch(isConfirmedGuiLaunch());
@@ -386,6 +410,17 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     () => chosen.length !== committedChosen.length || chosen.some((model, index) => model !== committedChosen[index]),
     [chosen, committedChosen],
   );
+
+  /** Focus-only affordance: scroll to and focus the protocol mode Select. Never changes or saves the draft. */
+  const useConcurrentV2 = useCallback(() => {
+    const target = document.getElementById("subagent-policy-mode");
+    if (!(target instanceof HTMLButtonElement)) return;
+    const reduced = typeof window.matchMedia === "function"
+      ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      : false;
+    target.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" });
+    target.focus({ preventScroll: true });
+  }, []);
 
   const toggle = (model: string) => {
     if (busy) return;
@@ -726,6 +761,9 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
         chosen={chosen}
         busy={busy}
         rosterDirty={rosterDirty}
+        protocol={protocol}
+        rosterReachability={rosterReachability}
+        onUseConcurrentV2={useConcurrentV2}
         onToggle={toggle}
         onMove={move}
         onReorder={reorder}

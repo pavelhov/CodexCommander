@@ -97,7 +97,7 @@ fast_mode = true
 
 Codex 会按 `priority` 升序对选择器可见的目录条目排序，并把前五个作为 `spawn_agent` 模型 override 暴露出来。仪表盘的 **Agent Command Center** 最多可以选择并保存五个裸原生 id 或路由 `provider/model` id，也会保留已配置的账户限定 `<selector>/<native-openai-model>` id，并报告每个保存项是否实际公开或被排除。CodexCommander 会按所选顺序分配较低的目录 priority；启用账户 selector 时，裸原生选择会展开为 selector-qualified 分组。其他模型仍然可以通过精确 id 调用。
 
-Active Roster 与 Dashboard 的 **Sub-agent delegation** 选择彼此独立。它只决定 Codex 先提供哪些 override；它不会自己选择模型，也不会触发委派。
+已配置名单与 Dashboard 的 **Sub-agent delegation** 选择彼此独立。它只决定 Codex 先提供哪些 override；它不会自己选择模型，也不会触发委派。
 
 ## 刷新模型状态
 
