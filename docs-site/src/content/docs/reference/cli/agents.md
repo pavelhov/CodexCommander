@@ -84,6 +84,12 @@ Inspect proxy requests, usage, storage, memory, and debug data. The direct alias
 ccx observe usage --range 30d --json
 ```
 
+If the proxy cannot read its usage log (a genuine read, stat, or schema
+failure), the underlying `GET /api/usage` responds `503` with
+`{ "error": "read_failed", "range", "surface" }` and `ccx usage` reports the
+error instead of printing a zeroed report. A missing usage log is not an
+error — it still prints an empty (zeroed) report.
+
 ### `ccx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 
 Read or change runtime debug overrides through the running proxy's management API.

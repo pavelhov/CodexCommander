@@ -61,7 +61,7 @@ the browser or password manager's decision.
 
 | Area | What it does |
 | --- | --- |
-| **Dashboard summary** | Multi-agent mode, online state, version, uptime, provider count, 30-day token total, active providers, and available native/routed models. |
+| **Dashboard summary** | Multi-agent mode, online state, version, uptime, provider count, 30-day token total and estimated list-price cost, active providers, and available native/routed models. |
 | **Sub-agent delegation** | Choose a native or routed model and optional reasoning effort shared by CodexCommander delegation guidance and the separate native-default opt-in. This is not a proxy-side per-spawn router; see below. |
 | **Sidecars** | Choose the web-search model and effort plus the vision-description model. Changes apply on the next request. |
 | **Maintenance** | Resync the Codex model catalog and inspect project-local config bypass warnings. |
@@ -87,9 +87,12 @@ addressable instead: `#dashboard` opens Overview, and `#dashboard/providers` and
 `#dashboard/models` open the other two. Reload, bookmark, and Back all keep the section you were
 on. **Logs** works the same way with `#logs` and `#logs/debug`.
 
-Cost values in **Logs** and **Usage** are API list-price equivalents calculated from reported tokens.
-They are not billing receipts or evidence of an actual charge; subscription usage or provider credits
-may apply instead.
+Cost values in **Dashboard**, **Logs**, and **Usage** are API list-price equivalents calculated from
+reported tokens. They are not billing receipts or evidence of an actual charge; subscription usage
+or provider credits may apply instead. The Dashboard's **Plan & quota** section shows
+provider-reported limits (5-hour / weekly / monthly windows), the provider plan, and observed
+reference spend versus published caps — always labeled as provider-reported estimates, never billed
+spend.
 
 ## Model visibility
 
