@@ -72,7 +72,7 @@ the browser or password manager's decision.
 | **Add provider** | Search registry-backed presets for account login, API-key services, local servers, or a custom endpoint. A query searches Accounts, Free and Paid together while the tabs remain useful for browsing. |
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, select the next-session account, refresh 5h / weekly / 30d quotas, enable or disable quota auto-switch, set its 1–100% threshold, and configure transient-failure failover. |
 | **Subagents** | Open the **Agent Command Center** to choose and order the five models advertised to `spawn_agent`, search the current catalog, and configure Run Policy for protocol, V2 delivery, guidance, fallback, and thread limits. Saved entries that are not advertised are reported explicitly. Its status distinguishes saved configuration, the generated on-disk catalog, and the roster loaded by current Codex workers. |
-| **Models** | Toggle native GPT and routed models, set provider allowlists and context caps, choose **Reliable v1**, **Codex native**, or **Concurrent v2**, and configure the v2 thread limit. The Current behavior card reports context as **Uncapped**, **Limited**, or **Mixed limits**. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. Each routed-provider row reports **Auto-discovery on** or **Static catalog only** and links to the owning Provider setting. |
+| **Models** | Toggle native GPT and routed models, set provider allowlists and context caps, choose **Reliable V1**, **Codex native**, or **Concurrent V2**, and configure the V2 thread limit. The Current behavior card reports context as **Uncapped**, **Limited**, or **Mixed limits**. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. Each routed-provider row reports **Auto-discovery on** or **Static catalog only** and links to the owning Provider setting. |
 | **Client Apps** | Inspect configured and available local clients, apply or remove managed config where supported, review backups, and reach Codex, Claude Code/Desktop, Grok Build, OpenCode and the file-managed clients without treating providers as clients. |
 | **API Access** | Issue and manage keys that authenticate other apps to the CodexCommander proxy. Provider credentials remain under Providers. |
 | **Logs** | Auto-refresh recent requests with tokens, requested → sent outbound effort, resolved model, provider, status, request id, duration, and error details. The detail view includes the exact sent reasoning wire field when the adapter emits one. “Sent” is what CodexCommander serialized; it does not prove that the provider accepted, honored, or applied that effort. Filter by opaque conversation/session id (when the client sends one) to total tokens and estimated list-price cost for the currently loaded Logs ring. |
@@ -139,7 +139,7 @@ available with the same worker-interruption caveat as the dashboard fallback.
 
 The Dashboard's **Sub-agent delegation** picker stores `injectionModel` and, optionally,
 `injectionEffort`. **CodexCommander multi-agent guidance** independently controls the delegation
-instructions that use those values. On eligible v2 turns, that guidance tells the parent
+instructions that use those values. On eligible V2 turns, that guidance tells the parent
 agent which exact model and reasoning effort to pass to `spawn_agent`; clearing the model also clears
 the stored effort.
 
@@ -153,7 +153,7 @@ than overwritten, so they may continue to override the requested defaults.
 Neither control is a proxy-side cross-model spawn router. CodexCommander guidance asks Codex to pass
 overrides to `spawn_agent`; native `[agents]` defaults apply only when Codex creates a new task after
 they have been synchronized. See
-[Sub-agent Surface](/guides/sub-agent-surface/) for the canonical v1/base/v2 behavior.
+[Sub-agent Surface](/guides/sub-agent-surface/) for the canonical V1/base/V2 behavior.
 :::
 
 The spawn override guarantee applies to the **built-in** v2 guidance text. A custom

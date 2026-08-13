@@ -213,9 +213,9 @@ default and leaves the target's own behavior unchanged. Supported values are `lo
 `high`, `xhigh`, `max`, and `ultra`; omit the field or set it to `null` to leave effort entirely to
 the caller and target.
 
-## Encrypted v2 sub-agent tasks
+## Encrypted V2 sub-agent tasks
 
-There is one important limitation for Codex v2 sub-agents ([issue #92](https://github.com/pavelhov/CodexCommander/issues/92)).
+There is one important limitation for Codex V2 sub-agents ([issue #92](https://github.com/pavelhov/CodexCommander/issues/92)).
 A native parent can send a newly spawned worker's task only as ciphertext minted for the native
 ChatGPT backend. An external provider cannot read that payload.
 
@@ -239,10 +239,10 @@ You have four recovery options:
 
 1. Select a native ChatGPT model for the child.
 2. Add a canonical native ChatGPT target to the combo.
-3. Use the v1 surface for delegation across different providers.
+3. Use the V1 surface for delegation across different providers.
 4. Enable **Plaintext compatibility** under **Subagents → Run Policy**, then start a new session.
 
-See [Sub-agent Surface](/guides/sub-agent-surface/) for the v1/base/v2 modes and the full encrypted
+See [Sub-agent Surface](/guides/sub-agent-surface/) for the V1/base/V2 modes and the full encrypted
 task workflow.
 
 ## Manage combos
@@ -321,7 +321,7 @@ running CodexCommander instance that receives model requests.
 ### Why do I get `combo_unavailable`?
 
 Every target is currently ineligible: for example, its provider is disabled, it is cooling down,
-it has already been attempted for this request, or an encrypted v2 task excludes it. Check target
+it has already been attempted for this request, or an encrypted V2 task excludes it. Check target
 provider state and recent upstream errors. For cooldowns, wait for the 60-second default or the
 upstream `Retry-After` period (never more than 10 minutes), then retry.
 
