@@ -100,9 +100,22 @@ describe("anthropic extended-thinking gate", () => {
     ["high", 24_576],
     ["xhigh", 32_768],
     ["max", 40_192],
+    ["ultra", 40_192], // ultra mirrors the codex-rs boundary and clamps to max on the wire.
   ])("adaptive-thinking %s effort reserves visible-output headroom", async (effort, expected) => {
     const b = await bodyOf(parsed(effort, {}, "claude-fable-5"));
     expect(b.max_tokens).toBe(expected);
+  });
+
+  test("adaptive-thinking model clamps unsupported 'ultra' effort to 'max'", async () => {
+    const b = await bodyOf(parsed("ultra", {}, "claude-fable-5"));
+    expect(b.thinking).toEqual({ type: "adaptive" });
+    // Anthropic's output_config.effort ladder tops out at max; "ultra" would 400.
+    expect(b.output_config).toEqual({ effort: "max" });
+  });
+
+  test("adaptive-thinking model clamps unknown efforts to 'high'", async () => {
+    const b = await bodyOf(parsed("ludicrous", {}, "claude-fable-5"));
+    expect(b.output_config).toEqual({ effort: "high" });
   });
 
   test("Anthropic streaming and JSON responses preserve max_tokens stop reasons", async () => {
