@@ -238,10 +238,9 @@ describe("GET /api/usage", () => {
     const server = startServer(0);
     try {
       const res = await fetch(new URL("/api/usage?surface=claude", server.url));
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(503);
       const body = await res.json();
       expect(body.surface).toBe("claude");
-      expect(body.summary.requests).toBe(0);
       expect(body.error).toBe("read_failed");
     } finally {
       await server.stop(true);
@@ -258,6 +257,22 @@ describe("GET /api/usage", () => {
       expect(body.summary.measuredRequests).toBe(0);
       expect(body.summary.totalTokens).toBe(0);
       expect(body.summary.coverageRatio).toBe(0);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("success response includes cost and request classification fields", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/usage?range=all", server.url));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(typeof body.summary.estimatedCostUsd).toBe("number");
+      expect(typeof body.summary.pricedRequests).toBe("number");
+      expect(typeof body.summary.unpricedRequests).toBe("number");
+      expect(typeof body.summary.unmeteredRequests).toBe("number");
     } finally {
       await server.stop(true);
     }

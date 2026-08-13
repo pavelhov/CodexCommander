@@ -214,41 +214,12 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       });
       return jsonResponse(summary);
     } catch {
-      return jsonResponse({
-        range,
-        surface,
-        since: null,
-        generatedAt: now,
-        summary: {
-          requests: 0,
-          attemptCount: 0,
-          measuredRequests: 0,
-          reportedRequests: 0,
-          unreportedRequests: 0,
-          unsupportedRequests: 0,
-          estimatedRequests: 0,
-          inputTokens: 0,
-          outputTokens: 0,
-          cachedInputTokens: 0,
-          cacheReadInputTokens: 0,
-          cacheCreationInputTokens: 0,
-          reasoningOutputTokens: 0,
-          totalTokens: 0,
-          coverageRatio: 0,
-          estimatedCostUsd: 0,
-          pricedRequests: 0,
-          unpricedRequests: 0,
-          unmeteredRequests: 0,
-        },
-        days: [],
-        models: [],
-        providers: [],
-        historyTruncated: false,
-        truncatedPrefixBytes: 0,
-        entriesTruncated: false,
-        entriesDropped: 0,
-        error: "read_failed",
-      });
+      // Genuine read/stat/schema failures are errors, not empty data. A missing
+      // log file never reaches this branch (readUsageSnapshotForManagement
+      // returns a zeroed snapshot for a missing file); it only throws on real
+      // failures such as the path being a directory, the file changing mid-read,
+      // or parse/stat errors.
+      return jsonResponse({ error: "read_failed", range, surface }, 503);
     }
   }
 
