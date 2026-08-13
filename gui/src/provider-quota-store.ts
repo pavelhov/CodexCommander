@@ -163,6 +163,8 @@ const KNOWN_QUOTA_UNAVAILABLE_REASONS = new Set([
   "local_cli_refresh_required",
   "upstream_unavailable",
 ]);
+/** Wire availability statuses; anything else is dropped at ingest. */
+const KNOWN_QUOTA_AVAILABILITY_STATUSES = new Set(["available", "stale", "unavailable"]);
 
 /**
  * Project availability rows onto { provider, status, reason?, checkedAt } only —
@@ -176,7 +178,7 @@ export function quotaAvailabilityFromResponse(value: unknown): Record<string, Pr
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
     const row = raw as Record<string, unknown>;
     if (typeof row.provider !== "string" || !row.provider.trim()) continue;
-    if (typeof row.status !== "string" || !row.status.trim()) continue;
+    if (typeof row.status !== "string" || !KNOWN_QUOTA_AVAILABILITY_STATUSES.has(row.status)) continue;
     const checkedAt = finiteNumber(row.checkedAt) ?? Date.now();
     const reason =
       typeof row.reason === "string" && KNOWN_QUOTA_UNAVAILABLE_REASONS.has(row.reason)
@@ -546,8 +548,10 @@ export function useProviderQuota(apiBase: string): ProviderQuotaResource {
   const entry = useProviderQuotaStore(state => state.entries[key]);
   const ensureAction = useProviderQuotaStore(state => state.ensure);
   const refreshAction = useProviderQuotaStore(state => state.refresh);
-  const availability = entry?.availability ?? {};
-  const reports = entry?.reports ?? {};
+  // Stable fallbacks so derived memos don't recompute while the entry is absent
+  // (a fresh `{}` per render would churn unavailableProviders and trip lint).
+  const availability = entry?.availability ?? EMPTY_AVAILABILITY;
+  const reports = entry?.reports ?? EMPTY_REPORTS;
   const unavailableProviders = useMemo(
     () => unavailableQuotaProviders(availability, reports),
     [availability, reports],
@@ -578,6 +582,9 @@ export function useProviderQuota(apiBase: string): ProviderQuotaResource {
     refresh,
   };
 }
+
+const EMPTY_AVAILABILITY: Record<string, ProviderQuotaAvailability> = {};
+const EMPTY_REPORTS: Record<string, ProviderQuotaReportView> = {};
 
 /** Test-only: drop every entry and abort in-flight work so suite order cannot reuse data. */
 export function clearProviderQuotaStoresForTests(): void {

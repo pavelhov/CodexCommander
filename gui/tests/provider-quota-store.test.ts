@@ -202,6 +202,7 @@ test("quotaAvailabilityFromResponse projects provider/status/reason/checkedAt on
     { provider: "xai", status: "unavailable", reason: "upstream_unavailable", checkedAt: 123, email: "x@example.com", accountId: "acct_1" },
     { provider: "openai", status: "available", checkedAt: 456 },
     { provider: "anthropic", status: "unavailable", reason: "unknown_reason_code", checkedAt: 789 },
+    { provider: "banana", status: "hostile_status", checkedAt: 111 },
     { provider: "" },
     null,
     "garbage",
@@ -211,7 +212,10 @@ test("quotaAvailabilityFromResponse projects provider/status/reason/checkedAt on
     openai: { status: "available", checkedAt: 456 },
     // Unknown reason codes are dropped (never projected onto the DOM path).
     anthropic: { status: "unavailable", checkedAt: 789 },
+    // Unknown status strings are dropped too (never treated as unavailable).
+    banana: undefined,
   });
+  expect(projected.banana).toBeUndefined();
 });
 
 test("unavailableQuotaProviders lists only non-available providers without reports, sorted", () => {
@@ -220,9 +224,12 @@ test("unavailableQuotaProviders lists only non-available providers without repor
     openai: { status: "available", checkedAt: 2 },
     anthropic: { status: "stale", reason: "reauth_required", checkedAt: 3 },
     grok: { status: "unavailable", checkedAt: 4 },
+    gemini: { status: "stale", checkedAt: 5 },
   };
   const reports = { openai: {}, anthropic: {} };
   expect(unavailableQuotaProviders(availability, reports)).toEqual([
+    // stale-without-report qualifies (status !== "available").
+    { provider: "gemini" },
     { provider: "grok" },
     { provider: "xai", reason: "upstream_unavailable" },
   ]);

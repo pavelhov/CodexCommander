@@ -325,6 +325,7 @@ test("Plan & quota renders a full-width strip for an unavailable provider", asyn
       reports: [openaiReport()],
       availability: [
         { provider: "xai", status: "unavailable", reason: "upstream_unavailable", checkedAt: NOW },
+        { provider: "anthropic", status: "unavailable", reason: "reauth_required", checkedAt: NOW },
       ],
     }), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
 
@@ -346,6 +347,9 @@ test("Plan & quota renders a full-width strip for an unavailable provider", asyn
     const text = strip?.textContent ?? "";
     expect(text).toContain("xAI Grok");
     expect(text).toContain("Temporarily unavailable");
+    // Reason mapping matches the Mac app summary for reauth too.
+    expect(text).toContain("Anthropic");
+    expect(text).toContain("Sign in required");
     expect(text).toContain("Retry");
   } finally {
     await act(async () => { root.unmount(); });
