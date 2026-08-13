@@ -124,6 +124,13 @@
   color: var(--muted);
 }
 
+.dash-plan-quota-unavailable-manage {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
 .dash-sidecar-card__row .font-semibold {
   min-width: 0;
 }

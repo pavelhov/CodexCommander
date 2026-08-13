@@ -101,25 +101,27 @@ export function DashboardPlanQuotaSection({ apiBase }: { apiBase: string }) {
         <h3 id="dash-plan-quota-title" className="panel-title">{t("dash.planQuota.title")}</h3>
         <span className="muted text-caption">{t("dash.planQuota.hint")}</span>
       </div>
-      {entries.length === 0 ? (
+      {entries.length === 0 && unavailable.length === 0 ? (
         <p className="muted" style={{ marginTop: 10 }}>
           {quota.loading ? t("dash.planQuota.loading") : t("dash.planQuota.empty")}
         </p>
       ) : (
-        <div className="dash-sidecar-grid" style={{ marginTop: 12 }}>
-          {entries.map(([provider, report]) => (
-            <div className="dash-sidecar-card" key={provider}>
-              <div className="dash-sidecar-card__row">
-                <strong>{formatProviderDisplayName(provider, t)}</strong>
-                {report.source?.trim() && (
-                  <span className="muted text-caption">{formatQuotaSourceLabel(report.source)}</span>
-                )}
+        entries.length > 0 && (
+          <div className="dash-sidecar-grid" style={{ marginTop: 12 }}>
+            {entries.map(([provider, report]) => (
+              <div className="dash-sidecar-card" key={provider}>
+                <div className="dash-sidecar-card__row">
+                  <strong>{formatProviderDisplayName(provider, t)}</strong>
+                  {report.source?.trim() && (
+                    <span className="muted text-caption">{formatQuotaSourceLabel(report.source)}</span>
+                  )}
+                </div>
+                <ProviderCapacityQuota report={report} pending={false} />
+                <PlanQuotaReference report={report} locale={locale} />
               </div>
-              <ProviderCapacityQuota report={report} pending={false} />
-              <PlanQuotaReference report={report} locale={locale} />
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )
       )}
       {unavailable.length > 0 && (
         <div className="dash-plan-quota-unavailable">
@@ -134,7 +136,7 @@ export function DashboardPlanQuotaSection({ apiBase }: { apiBase: string }) {
                   {t(quotaUnavailableReasonKey(reason))}
                 </span>
                 {reason === "reauth_required" && (
-                  <>
+                  <span className="dash-plan-quota-unavailable-manage">
                     <span aria-hidden="true">·</span>
                     <a
                       className="link-btn"
@@ -142,7 +144,7 @@ export function DashboardPlanQuotaSection({ apiBase }: { apiBase: string }) {
                     >
                       {t("dash.planQuota.manageProvider", { provider: display })}
                     </a>
-                  </>
+                  </span>
                 )}
               </span>
             );
