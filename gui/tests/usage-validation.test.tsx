@@ -130,6 +130,8 @@ test("cost row renders $0.00 for a defined zero", async () => {
   try {
     await waitFor(() => (container.textContent ?? "").includes("$0.00"));
     expect(container.textContent).toContain("$0.00");
+    // A defined zero must never fall back to the ~$0.0000 estimate rendering.
+    expect(container.textContent).not.toContain("~");
     expect(container.textContent).not.toContain("Unavailable");
   } finally {
     await act(async () => { root.unmount(); });
@@ -184,6 +186,24 @@ test("401 cold failure shows the failed-cold Notice with retry", async () => {
     await waitFor(() => (container.textContent ?? "").includes("Retry"));
     expect(container.textContent).toContain("Retry");
     expect(container.querySelector("button")).not.toBeNull();
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+  }
+});
+
+test("an HTTP 503 cold failure shows the failed-cold Notice with retry and caches nothing", async () => {
+  // The server's genuine read-failure contract answers 503 { error: "read_failed", ... }.
+  globalThis.fetch = (async () => new Response("read_failed", { status: 503 })) as typeof fetch;
+  const key = usageReportKey("http://usage-503", "30d", "all");
+
+  const { container, root } = await renderUsage("http://usage-503");
+  try {
+    await waitFor(() => (container.textContent ?? "").includes("Retry"));
+    expect(container.textContent).toContain("Retry");
+    const entry = useUsageReportStore.getState().entries[key];
+    expect(entry?.data).toBeUndefined();
+    expect(entry?.hasSucceeded).toBe(false);
   } finally {
     await act(async () => { root.unmount(); });
     container.remove();

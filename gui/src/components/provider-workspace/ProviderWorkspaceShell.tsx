@@ -121,11 +121,14 @@ export default function ProviderWorkspaceShell({
   const [usageLoading, setUsageLoading] = useState(() => !readSessionListCache(usageCacheKey));
   const [modelsLoadEpoch, setModelsLoadEpoch] = useState(0);
   const filterWrapRef = useRef<HTMLDivElement>(null);
+  /** Last quota revision the shell acted on; null until the first effect run. */
+  const mountedQuotaRevision = useRef<{ epoch: number; force: boolean } | null>(null);
 
   // Provider quota data lives in the shared provider-quota store (keyed by apiBase);
   // the Dashboard "Plan & quota" section selects the same entry. The workspace keeps
   // its strict display filter (capacity-aggregation rows only) on top of the store.
   const quota = useProviderQuota(apiBase);
+  const ensureQuotas = quota.ensure;
   const refreshQuotas = quota.refresh;
   const quotaReports = useMemo(
     () => freshQuotaReportRecord(quota.reports) ?? {},
@@ -222,11 +225,23 @@ export default function ProviderWorkspaceShell({
   }, [apiBase, usageCacheKey]);
 
   useEffect(() => {
+    // Mount: cold fetch / quiet revalidation via ensure(), which short-circuits on a
+    // healthy entry and never aborts an in-flight request another surface owns.
+    // StrictMode double-invokes this effect with unchanged props — the ref guard makes
+    // the second run a no-op so it does not turn into a replace-refresh.
+    const revisionRef = { epoch: quotaRefreshEpoch, force: quotaForceRefresh };
+    if (mountedQuotaRevision.current === null) {
+      mountedQuotaRevision.current = revisionRef;
+      ensureQuotas({ force: quotaForceRefresh });
+      return;
+    }
+    const previous = mountedQuotaRevision.current;
+    if (previous.epoch === quotaRefreshEpoch && previous.force === quotaForceRefresh) return;
     // A forced bump means a mutation just changed the answer, so the server's TTL has to
-    // be bypassed (?refresh=1). The provider-quota store owns singleflight + persistence;
-    // this effect just maps the shell's revision semantics onto refresh().
+    // be bypassed (?refresh=1). Explicit revision changes always re-read.
+    mountedQuotaRevision.current = revisionRef;
     refreshQuotas({ force: quotaForceRefresh });
-  }, [apiBase, quotaRefreshEpoch, quotaForceRefresh, refreshQuotas]);
+  }, [apiBase, quotaRefreshEpoch, quotaForceRefresh, ensureQuotas, refreshQuotas]);
 
   useEffect(() => {
     if (!filterOpen) return;

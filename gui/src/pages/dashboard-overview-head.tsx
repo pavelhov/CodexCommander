@@ -1,7 +1,7 @@
 import { IconAlert, IconInfo } from "../icons";
 import { type TKey, useT } from "../i18n/shared";
 import { formatTokens } from "../format-tokens";
-import { formatEstimatedUsdValue } from "../intl-formatters";
+import { formatEstimatedUsdValue, formatEstimatedUsdZero } from "../intl-formatters";
 import { formatUptime } from "../formatUptime";
 import type { useDashboardData } from "./use-dashboard-data";
 
@@ -87,12 +87,15 @@ export function DashboardOverviewHead({
             <div className="value mono">
               {usage30d && usage30d.summary.estimatedCostUsd !== undefined
                 ? usage30d.summary.estimatedCostUsd === 0
-                  ? "$0.00"
+                  ? formatEstimatedUsdZero(locale)
                   : formatEstimatedUsdValue(usage30d.summary.estimatedCostUsd, locale)
                 : "—"}
             </div>
             <div className="muted text-label dash-stat-coverage">
               {usage30d && usage30d.summary.estimatedCostUsd !== undefined
+                && (usage30d.summary.pricedRequests
+                  + usage30d.summary.unpricedRequests
+                  + usage30d.summary.unmeteredRequests) > 0
                 ? t("dash.cost30dCoverage", {
                     priced: usage30d.summary.pricedRequests,
                     unpriced: usage30d.summary.unpricedRequests,

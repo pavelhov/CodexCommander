@@ -144,10 +144,17 @@ test("a failed refresh keeps the seeded last-good data", async () => {
   reseed();
   const entry = useUsageReportStore.getState().entries[SEED_KEY];
   expect(entry?.data).toEqual(seedReport);
+  // A rehydrated seed reads as last-known-good: hasSucceeded true, retry armed.
+  expect(entry?.hasSucceeded).toBe(true);
+  expect(entry?.seedNeedsRevalidate).toBe(true);
   globalThis.fetch = (async () => new Response("boom", { status: 503 })) as typeof fetch;
   useUsageReportStore.getState().refresh(SEED_KEY, "http://rehydrate", "30d", "all");
   await flush();
   const after = useUsageReportStore.getState().entries[SEED_KEY];
   expect(after?.data).toEqual(seedReport);
   expect(after?.lastAttemptOk).toBe(false);
+  // The failed revalidation restored the retry flag for the next subscriber and kept
+  // the seed readable as succeeded (healthy display, not a never-succeeded attempt).
+  expect(after?.seedNeedsRevalidate).toBe(true);
+  expect(after?.hasSucceeded).toBe(true);
 });

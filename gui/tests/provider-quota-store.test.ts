@@ -120,12 +120,29 @@ test("singleflight dedupes concurrent subscribers into one fetch", async () => {
 
 test("persists only reports and a timestamp — never account identities", async () => {
   // A hostile/legacy server response carrying account identity fields must never reach
-  // sessionStorage: the store projects the wire shape, not the raw payload.
+  // sessionStorage: the store projects the wire shape, not the raw payload — including
+  // identity fields stashed INSIDE quota or aggregation.
   const payload = {
     reports: [report({
       // Stray identity fields on the wire row (the real server never emits these).
       accountId: "acct_12345",
       account: { email: "acct@example.com" },
+      quota: {
+        weeklyPercent: 20,
+        updatedAt: now,
+        accountId: "acct_12345",
+        account: { email: "acct@example.com" },
+      },
+      aggregation: {
+        ...aggregation,
+        currentAccount: {
+          isMain: true,
+          plan: "pro",
+          quota: { weeklyPercent: 8, updatedAt: now },
+          email: "acct@example.com",
+          accountId: "acct_12345",
+        },
+      },
     })],
     availability: [{ provider: "openai", status: "available", checkedAt: now }],
     // Stray top-level identity fields.

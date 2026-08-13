@@ -141,6 +141,100 @@ function parseSummary(value: unknown): UsageSummaryTotals {
   };
 }
 
+function requireString(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value) {
+    throw new UsageReportValidationError(`usage report ${field} is missing or not a non-empty string`);
+  }
+  return value;
+}
+
+function requireNumber(value: unknown, field: string): number {
+  if (!isFiniteNumber(value)) {
+    throw new UsageReportValidationError(`usage report ${field} is missing or not a finite number`);
+  }
+  return value;
+}
+
+function parseDayModels(value: unknown): UsageDayModel[] {
+  if (!Array.isArray(value)) {
+    throw new UsageReportValidationError("usage report day models must be an array");
+  }
+  return value.map((raw, index) => {
+    if (!isRecord(raw)) {
+      throw new UsageReportValidationError(`usage report day models[${index}] is not an object`);
+    }
+    return {
+      model: requireString(raw.model, `day models[${index}].model`),
+      provider: requireString(raw.provider, `day models[${index}].provider`),
+      requests: requireNumber(raw.requests, `day models[${index}].requests`),
+      totalTokens: requireNumber(raw.totalTokens, `day models[${index}].totalTokens`),
+    };
+  });
+}
+
+function parseDays(value: unknown): UsageDay[] {
+  if (!Array.isArray(value)) {
+    throw new UsageReportValidationError("usage report days must be an array");
+  }
+  return value.map((raw, index) => {
+    if (!isRecord(raw)) {
+      throw new UsageReportValidationError(`usage report days[${index}] is not an object`);
+    }
+    return {
+      date: requireString(raw.date, `days[${index}].date`),
+      requests: requireNumber(raw.requests, `days[${index}].requests`),
+      measuredRequests: requireNumber(raw.measuredRequests, `days[${index}].measuredRequests`),
+      reportedRequests: requireNumber(raw.reportedRequests, `days[${index}].reportedRequests`),
+      totalTokens: requireNumber(raw.totalTokens, `days[${index}].totalTokens`),
+      models: parseDayModels(raw.models),
+    };
+  });
+}
+
+function parseModels(value: unknown): UsageModel[] {
+  if (!Array.isArray(value)) {
+    throw new UsageReportValidationError("usage report models must be an array");
+  }
+  return value.map((raw, index) => {
+    if (!isRecord(raw)) {
+      throw new UsageReportValidationError(`usage report models[${index}] is not an object`);
+    }
+    return {
+      provider: requireString(raw.provider, `models[${index}].provider`),
+      model: requireString(raw.model, `models[${index}].model`),
+      ...(typeof raw.resolvedModel === "string" ? { resolvedModel: raw.resolvedModel } : {}),
+      requests: requireNumber(raw.requests, `models[${index}].requests`),
+      measuredRequests: requireNumber(raw.measuredRequests, `models[${index}].measuredRequests`),
+      reportedRequests: requireNumber(raw.reportedRequests, `models[${index}].reportedRequests`),
+      estimatedRequests: requireNumber(raw.estimatedRequests, `models[${index}].estimatedRequests`),
+      totalTokens: requireNumber(raw.totalTokens, `models[${index}].totalTokens`),
+      inputTokens: requireNumber(raw.inputTokens, `models[${index}].inputTokens`),
+      outputTokens: requireNumber(raw.outputTokens, `models[${index}].outputTokens`),
+      shareRatio: requireNumber(raw.shareRatio, `models[${index}].shareRatio`),
+    };
+  });
+}
+
+function parseProviders(value: unknown): UsageProvider[] {
+  if (!Array.isArray(value)) {
+    throw new UsageReportValidationError("usage report providers must be an array");
+  }
+  return value.map((raw, index) => {
+    if (!isRecord(raw)) {
+      throw new UsageReportValidationError(`usage report providers[${index}] is not an object`);
+    }
+    return {
+      provider: requireString(raw.provider, `providers[${index}].provider`),
+      requests: requireNumber(raw.requests, `providers[${index}].requests`),
+      measuredRequests: requireNumber(raw.measuredRequests, `providers[${index}].measuredRequests`),
+      reportedRequests: requireNumber(raw.reportedRequests, `providers[${index}].reportedRequests`),
+      estimatedRequests: requireNumber(raw.estimatedRequests, `providers[${index}].estimatedRequests`),
+      totalTokens: requireNumber(raw.totalTokens, `providers[${index}].totalTokens`),
+      shareRatio: requireNumber(raw.shareRatio, `providers[${index}].shareRatio`),
+    };
+  });
+}
+
 /**
  * Parse and validate a GET /api/usage success body. Throws
  * `UsageReportValidationError` for error envelopes, non-object bodies, invalid
@@ -162,9 +256,6 @@ export function parseUsageReport(body: unknown): UsageReport {
   if (surface !== "all" && surface !== "codex" && surface !== "claude" && surface !== "grok") {
     throw new UsageReportValidationError("usage report surface is missing or invalid");
   }
-  if (!Array.isArray(body.days) || !Array.isArray(body.models) || !Array.isArray(body.providers)) {
-    throw new UsageReportValidationError("usage report days/models/providers must be arrays");
-  }
   if (!isFiniteNumber(body.generatedAt)) {
     throw new UsageReportValidationError("usage report generatedAt is missing or not a finite number");
   }
@@ -174,9 +265,9 @@ export function parseUsageReport(body: unknown): UsageReport {
     since: isFiniteNumber(body.since) ? body.since : null,
     generatedAt: body.generatedAt,
     summary: parseSummary(body.summary),
-    days: body.days as UsageDay[],
-    models: body.models as UsageModel[],
-    providers: body.providers as UsageProvider[],
+    days: parseDays(body.days),
+    models: parseModels(body.models),
+    providers: parseProviders(body.providers),
     historyTruncated: body.historyTruncated === true,
     truncatedPrefixBytes: isFiniteNumber(body.truncatedPrefixBytes) ? body.truncatedPrefixBytes : 0,
     entriesTruncated: body.entriesTruncated === true,

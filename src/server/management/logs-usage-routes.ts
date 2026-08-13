@@ -44,6 +44,7 @@ import {
   discardUsageSummaryCacheEntry,
   getUsageSummaryCacheEntry,
   setUsageSummaryCacheEntry,
+  type CachedUsageSummary,
 } from "./usage-summary-cache";
 
 const USAGE_DAY_MS = 86_400_000;
@@ -150,39 +151,46 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     const range = parseRange(url.searchParams.get("range"));
     const surface = parseUsageSurface(url.searchParams.get("surface"));
     const now = Date.now();
+    const cacheKey = `${range}:${surface}`;
+    const effectiveReadLimit = config.managementUsageMaxReadBytes ?? 64 * 1024 * 1024;
+    let cachedHit: CachedUsageSummary | null = null;
+    let snapshot: Awaited<ReturnType<typeof readUsageSnapshotForManagement>> | null = null;
     try {
-      const cacheKey = `${range}:${surface}`;
-      const effectiveReadLimit = config.managementUsageMaxReadBytes ?? 64 * 1024 * 1024;
+      // File-read machinery: the log-file revision stat (usageLogRevision) and the
+      // snapshot read. A missing log file returns a zeroed snapshot (not a throw); only
+      // genuine read/stat/schema failures reach this catch and answer with the 503
+      // contract.
       const observedRevisionKey = `${usageLogRevisionKey(currentUsageLogRevision())}\0${effectiveReadLimit}`;
       const cached = getUsageSummaryCacheEntry(cacheKey);
       if (cached && cached.revisionKey === observedRevisionKey && now < cached.expiresAt) {
-        return jsonResponse(refreshedUsageSummary(cached.summary, range, now));
+        cachedHit = cached.summary;
+      } else {
+        if (cached) discardUsageSummaryCacheEntry(cacheKey);
+        snapshot = await readUsageSnapshotForManagement(effectiveReadLimit);
       }
-      if (cached) discardUsageSummaryCacheEntry(cacheKey);
-      const snapshot = await readUsageSnapshotForManagement(effectiveReadLimit);
-      const revisionReadAt = Date.now();
-      const summary = {
-        ...summarizeUsage(snapshot.entries, range, now, surface),
-        historyTruncated: snapshot.truncatedPrefixBytes > 0 || snapshot.entriesTruncated,
-        truncatedPrefixBytes: snapshot.truncatedPrefixBytes,
-        entriesTruncated: snapshot.entriesTruncated,
-        entriesDropped: snapshot.entriesDropped,
-      };
-      setUsageSummaryCacheEntry(cacheKey, {
-        revisionKey: `${usageLogRevisionKey(snapshot.revision)}\0${effectiveReadLimit}`,
-        expiresAt: usageSummaryExpiresAt(snapshot.entries, range, surface, now),
-        revisionReadAt,
-        summary,
-      });
-      return jsonResponse(summary);
     } catch {
-      // Genuine read/stat/schema failures are errors, not empty data. A missing
-      // log file never reaches this branch (readUsageSnapshotForManagement
-      // returns a zeroed snapshot for a missing file); it only throws on real
-      // failures such as the path being a directory, the file changing mid-read,
-      // or parse/stat errors.
       return jsonResponse({ error: "read_failed", range, surface }, 503);
     }
+    // Outside the catch: genuine errors in the derivation/cache layer are server bugs and
+    // must surface as ordinary server errors, never misreported as read_failed.
+    if (cachedHit) {
+      return jsonResponse(refreshedUsageSummary(cachedHit, range, now));
+    }
+    const revisionReadAt = Date.now();
+    const summary = {
+      ...summarizeUsage(snapshot!.entries, range, now, surface),
+      historyTruncated: snapshot!.truncatedPrefixBytes > 0 || snapshot!.entriesTruncated,
+      truncatedPrefixBytes: snapshot!.truncatedPrefixBytes,
+      entriesTruncated: snapshot!.entriesTruncated,
+      entriesDropped: snapshot!.entriesDropped,
+    };
+    setUsageSummaryCacheEntry(cacheKey, {
+      revisionKey: `${usageLogRevisionKey(snapshot!.revision)}\0${effectiveReadLimit}`,
+      expiresAt: usageSummaryExpiresAt(snapshot!.entries, range, surface, now),
+      revisionReadAt,
+      summary,
+    });
+    return jsonResponse(summary);
   }
 
   if (url.pathname === "/api/storage" && req.method === "GET") {

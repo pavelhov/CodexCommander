@@ -170,6 +170,8 @@ test("Dashboard cost stat renders $0.00 for a defined zero and — when absent",
   });
   try {
     expect(zeroContainer.textContent ?? "").toContain("$0.00");
+    // A defined zero must never fall back to the ~$0.0000 estimate rendering.
+    expect(zeroContainer.textContent ?? "").not.toContain("~");
   } finally {
     await act(async () => { zeroRoot.unmount(); });
     zeroContainer.remove();
@@ -271,6 +273,12 @@ test("Plan & quota section never persists account identities to sessionStorage",
           // Stray identity fields the real server never emits.
           accountId: "acct_12345",
           account: { email: "acct@example.com" },
+          quota: {
+            weeklyPercent: 31,
+            updatedAt: NOW,
+            accountId: "acct_12345",
+            account: { email: "acct@example.com" },
+          },
         },
       ],
       availability: [],

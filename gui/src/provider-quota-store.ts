@@ -78,18 +78,20 @@ function quotaReportFromRow(value: unknown, now: number): ProviderQuotaReportVie
   const row = value as Record<string, unknown>;
   if (typeof row.updatedAt !== "number" || !Number.isFinite(row.updatedAt)) return null;
   if (now - row.updatedAt >= QUOTA_REPORT_MAX_AGE_MS) return null;
-  if (!row.quota || typeof row.quota !== "object" || Array.isArray(row.quota)) return null;
+  const quota = projectQuota(row.quota);
+  if (!quota) return null;
   if (row.label !== undefined && typeof row.label !== "string") return null;
   if (row.source !== undefined && typeof row.source !== "string") return null;
+  const aggregation = "aggregation" in row ? projectAggregation(row.aggregation) : null;
   return {
     ...(typeof row.label === "string" ? { label: row.label } : {}),
     ...(typeof row.source === "string" ? { source: row.source } : {}),
     updatedAt: row.updatedAt,
-    quota: row.quota,
+    quota,
     // ProviderQuotaReportView declares aggregation as required; consumers treat
     // undefined as "no capacity aggregation" (capacityAggregationFromReport returns
     // null), so reference-window-only reports stay representable.
-    aggregation: "aggregation" in row ? row.aggregation : undefined,
+    aggregation: aggregation ?? undefined,
   };
 }
 
@@ -179,6 +181,153 @@ function emptyEntry(): ProviderQuotaEntry {
   };
 }
 
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * Project a ProviderQuota row onto the known keys only (percentages, resets, windows,
+ * referenceWindows, observedLimitEvent, updatedAt). A hostile or legacy server that
+ * stashes identity fields inside `quota` can never get them persisted: anything not on
+ * this allowlist is dropped at ingest.
+ */
+function projectQuota(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of ["fiveHourPercent", "fiveHourResetAt", "weeklyPercent", "weeklyResetAt", "monthlyPercent", "monthlyResetAt"] as const) {
+    const n = finiteNumber(row[key]);
+    if (n !== undefined) out[key] = n;
+  }
+  const updatedAt = finiteNumber(row.updatedAt);
+  if (updatedAt !== undefined) out.updatedAt = updatedAt;
+  if (Array.isArray(row.customWindows)) {
+    const windows = row.customWindows.flatMap(raw => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+      const window = raw as Record<string, unknown>;
+      const label = typeof window.label === "string" && window.label.trim() ? window.label : null;
+      const percent = finiteNumber(window.percent);
+      if (!label || percent === undefined) return [];
+      const resetAt = finiteNumber(window.resetAt);
+      return [{ label, percent, ...(resetAt !== undefined ? { resetAt } : {}) }];
+    });
+    if (windows.length > 0) out.customWindows = windows;
+  }
+  if (Array.isArray(row.referenceWindows)) {
+    const windows = row.referenceWindows.flatMap(raw => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+      const window = raw as Record<string, unknown>;
+      const id = window.id;
+      const coverage = window.coverage;
+      const label = typeof window.label === "string" && window.label.trim() ? window.label : null;
+      const windowSeconds = finiteNumber(window.windowSeconds);
+      const publishedLimitUsd = finiteNumber(window.publishedLimitUsd);
+      const observedTokens = finiteNumber(window.observedTokens);
+      const observedRequests = finiteNumber(window.observedRequests);
+      const pricedRequests = finiteNumber(window.pricedRequests);
+      const unpricedRequests = finiteNumber(window.unpricedRequests);
+      const unmeasuredRequests = finiteNumber(window.unmeasuredRequests);
+      const validId = id === "five_hour" || id === "weekly" || id === "monthly";
+      const validCoverage = coverage === "none" || coverage === "complete" || coverage === "partial" || coverage === "unpriced";
+      if (!validId || !validCoverage || !label || windowSeconds === undefined || publishedLimitUsd === undefined
+        || observedTokens === undefined || observedRequests === undefined
+        || pricedRequests === undefined || unpricedRequests === undefined || unmeasuredRequests === undefined) return [];
+      const observedSpendUsd = finiteNumber(window.observedSpendUsd);
+      return [{
+        id,
+        label,
+        windowSeconds,
+        publishedLimitUsd,
+        observedTokens,
+        observedRequests,
+        pricedRequests,
+        unpricedRequests,
+        unmeasuredRequests,
+        coverage,
+        ...(observedSpendUsd !== undefined ? { observedSpendUsd } : {}),
+      }];
+    });
+    if (windows.length > 0) out.referenceWindows = windows;
+  }
+  if (row.observedLimitEvent && typeof row.observedLimitEvent === "object" && !Array.isArray(row.observedLimitEvent)) {
+    const event = row.observedLimitEvent as Record<string, unknown>;
+    const limitName = event.limitName;
+    const observedAt = finiteNumber(event.observedAt);
+    if ((limitName === "5 hour" || limitName === "weekly" || limitName === "monthly") && observedAt !== undefined) {
+      const resetAt = finiteNumber(event.resetAt);
+      out.observedLimitEvent = {
+        limitName,
+        observedAt,
+        ...(resetAt !== undefined ? { resetAt } : {}),
+      };
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function projectCapacityWindow(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const usedPercent = finiteNumber(row.usedPercent);
+  if (usedPercent === undefined) return null;
+  const out: Record<string, unknown> = { usedPercent };
+  for (const key of ["includedAccounts", "excludedAccounts", "nextRecoveryAt", "nextRecoveryPercent"] as const) {
+    const n = finiteNumber(row[key]);
+    if (n !== undefined) out[key] = n;
+  }
+  if (typeof row.incomplete === "boolean") out.incomplete = row.incomplete;
+  const updatedAt = finiteNumber(row.updatedAt);
+  if (updatedAt !== undefined) out.updatedAt = updatedAt;
+  return out;
+}
+
+/**
+ * Project a CodexCapacityAggregation onto its known keys so identity-like fields cannot
+ * ride along into the persisted slice (aggregation carries currentAccount with
+ * plan/quota only; anything else is dropped).
+ */
+function projectAggregation(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  if (row.kind !== "capacity-weighted-v1" || row.scope !== "routable-known") return null;
+  const presentation = row.presentation;
+  if (presentation !== "aggregate" && presentation !== "effective-account-fallback" && presentation !== "coverage-only") return null;
+  const out: Record<string, unknown> = { kind: row.kind, scope: row.scope, presentation };
+  for (const key of ["excludedAccounts", "unknownPlanAccounts", "partialWindowAccounts", "includedAccounts"] as const) {
+    const n = finiteNumber(row[key]);
+    if (n !== undefined) out[key] = n;
+  }
+  if (typeof row.incomplete === "boolean") out.incomplete = row.incomplete;
+  for (const key of ["fiveHour", "weekly", "monthly"] as const) {
+    const window = projectCapacityWindow(row[key]);
+    if (window) out[key] = window;
+  }
+  if (Array.isArray(row.customWindows)) {
+    const windows = row.customWindows.flatMap(raw => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+      const entry = raw as Record<string, unknown>;
+      const label = typeof entry.label === "string" && entry.label.trim() ? entry.label : null;
+      const window = projectCapacityWindow(entry);
+      return label && window ? [{ label, ...window }] : [];
+    });
+    if (windows.length > 0) out.customWindows = windows;
+  }
+  if (row.currentAccount && typeof row.currentAccount === "object" && !Array.isArray(row.currentAccount)) {
+    const account = row.currentAccount as Record<string, unknown>;
+    const projected: Record<string, unknown> = {};
+    if (typeof account.plan === "string" || account.plan === null) projected.plan = account.plan;
+    if (typeof account.isMain === "boolean") projected.isMain = account.isMain;
+    if (account.quota === null) {
+      projected.quota = null;
+    } else {
+      const quota = projectQuota(account.quota);
+      if (quota) projected.quota = quota;
+    }
+    if (Object.keys(projected).length > 0) out.currentAccount = projected;
+  }
+  return out;
+}
+
 function fetchQuotas(
   set: (partial: Partial<ProviderQuotaStoreState> | ((state: ProviderQuotaStoreState) => Partial<ProviderQuotaStoreState>)) => void,
   get: () => ProviderQuotaStoreState,
@@ -263,12 +412,18 @@ export const useProviderQuotaStore = create<ProviderQuotaStoreState>()(
       inflight: {},
       ensure: (apiBase, opts) => {
         const key = apiBase;
-        if (get().inflight[key] && opts?.force !== true) return;
+        // A forced ensure always re-reads (and replaces any in-flight request); it is the
+        // singleflight-visible variant of refresh for callers that only have ensure.
+        if (opts?.force === true) {
+          fetchQuotas(set, get, apiBase, { force: true, replace: true });
+          return;
+        }
+        if (get().inflight[key]) return;
         const entry = get().entries[key];
         // Cold start, rehydrated seed, or a previously cold-failed key: fetch
         // (quiet for a seed, cold otherwise). Singleflight dedupes subscribers.
         if (!entry || entry.seedNeedsRevalidate || !entry.hasSucceeded) {
-          fetchQuotas(set, get, apiBase, { force: opts?.force, replace: opts?.force === true });
+          fetchQuotas(set, get, apiBase, {});
           return;
         }
         // Healthy cached data — nothing to do.

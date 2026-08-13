@@ -31,7 +31,7 @@ export type UsageReportResource = {
   refreshing: boolean;
   hasSucceeded: boolean;
   lastAttemptOk: boolean;
-  refresh: (opts?: { forceLoading?: boolean }) => void;
+  refresh: (opts?: { forceLoading?: boolean; replace?: boolean }) => void;
 };
 
 export interface UsageReportEntry {
@@ -62,7 +62,7 @@ interface UsageReportStoreState {
     apiBase: string,
     range: UsageRange,
     surface: UsageSurface,
-    opts?: { forceLoading?: boolean },
+    opts?: { forceLoading?: boolean; replace?: boolean },
   ) => void;
   clearForTests: () => void;
 }
@@ -126,6 +126,10 @@ function fetchReport(
   const inflight = get().inflight[key];
   // Singleflight: concurrent subscribers dedupe onto the in-flight request.
   if (inflight && options?.replace !== true) return;
+  // Remember whether this request was a quiet revalidation of a rehydrated seed so a
+  // failed revalidation can restore the retry flag for the next subscriber.
+  const existingEntry = get().entries[key];
+  const wasSeed = existingEntry?.seedNeedsRevalidate === true && existingEntry.data !== undefined;
   inflight?.abort();
   const controller = new AbortController();
   set(state => {
@@ -181,6 +185,10 @@ function fetchReport(
             loading: false,
             refreshing: false,
             lastAttemptOk: false,
+            // A failed revalidation of a rehydrated seed keeps the seed as last-known-good
+            // (hasSucceeded) and re-arms the quiet retry for the next subscriber.
+            hasSucceeded: state.entries[key]?.hasSucceeded === true || wasSeed,
+            seedNeedsRevalidate: wasSeed,
           },
         },
       }));
@@ -213,7 +221,7 @@ export const useUsageReportStore = create<UsageReportStoreState>()(
         // Healthy cached data — nothing to do.
       },
       refresh: (key, apiBase, range, surface, opts) => {
-        fetchReport(set, get, key, apiBase, range, surface, { ...opts, replace: true });
+        fetchReport(set, get, key, apiBase, range, surface, { ...opts, replace: opts?.replace !== false });
       },
       clearForTests: () => {
         for (const controller of Object.values(get().inflight)) controller?.abort();
@@ -244,6 +252,9 @@ export const useUsageReportStore = create<UsageReportStoreState>()(
               data: value.data,
               persistedAt: value.persistedAt,
               seedNeedsRevalidate: true,
+              // A rehydrated seed is last-known-good data: it reads as succeeded so the
+              // UI does not mistake "showing a seed" for "never succeeded".
+              hasSucceeded: true,
             };
           }
         }
@@ -273,7 +284,7 @@ export function useUsageReport(
   }, [key, apiBase, range, surface, ensure]);
 
   const refresh = useCallback(
-    (opts?: { forceLoading?: boolean }) => {
+    (opts?: { forceLoading?: boolean; replace?: boolean }) => {
       refreshAction(key, apiBase, range, surface, opts);
     },
     [key, apiBase, range, surface, refreshAction],
@@ -301,7 +312,7 @@ export function seedUsageReportForTests(key: string, data: UsageReport, persiste
   useUsageReportStore.setState(state => ({
     entries: {
       ...state.entries,
-      [key]: { ...emptyEntry(), data, persistedAt, seedNeedsRevalidate: true },
+      [key]: { ...emptyEntry(), data, persistedAt, seedNeedsRevalidate: true, hasSucceeded: true },
     },
   }));
 }

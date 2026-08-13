@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useI18n, type TFn, type Locale } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
 import { formatTokens } from "../format-tokens";
-import { formatEstimatedUsdValue as formatUsdEstimate } from "../intl-formatters";
+import { formatEstimatedUsdValue as formatUsdEstimate, formatEstimatedUsdZero } from "../intl-formatters";
 import { EmptyState, Notice } from "../ui";
 import { modelLabel } from "../model-display";
 import { classifyDataSurface } from "../data-surface";
@@ -226,8 +226,9 @@ function UsageSummaryCards({
       <div className="stat"><div className="muted">{t("usage.card.activeDays")}</div><div className="stat-value">{activeDays}</div></div>
     </div>
       {summary.estimatedCostUsd === undefined ? (
-        // Legacy server without the cost fields: the DTO now requires them, but a
-        // pre-validation session-cache seed may still carry the old shape.
+        // "Unavailable" is reachable ONLY through legacy (unvalidated) seeds: the DTO
+        // requires the cost fields and every fetched report is validated before caching,
+        // so a validated report can never take this branch.
         <div className="usage-cost-row" role="note">
           <span className="muted">{t("usage.cost.total")}</span>
           <span className="stat-value mono usage-cost-value">{t("usage.cost.unavailable")}</span>
@@ -237,7 +238,7 @@ function UsageSummaryCards({
           <span className="muted">{t("usage.cost.total")}</span>
           <span className="stat-value mono usage-cost-value">
             {summary.estimatedCostUsd === 0
-              ? "$0.00"
+              ? formatEstimatedUsdZero(locale)
               : formatUsdEstimate(summary.estimatedCostUsd, locale)}
           </span>
           <span className="muted text-caption">{t("usage.cost.disclaimer")}</span>
@@ -717,8 +718,13 @@ export default function Usage({ apiBase }: { apiBase: string }) {
         <DataSurfaceSkeleton label={t("usage.loading")} rows={5} />
       ) : state.kind === "failed-cold" ? (
         <Notice tone="err">
-          {state.error instanceof Error ? `${t("usage.loadError")} ${state.error.message}` : t("usage.loadError")}{" "}
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => report.refresh()}>
+          {t("usage.loadError")}{" "}
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            title={state.error instanceof Error ? state.error.message : undefined}
+            onClick={() => report.refresh()}
+          >
             {t("common.retry")}
           </button>
         </Notice>

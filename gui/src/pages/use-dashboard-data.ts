@@ -235,6 +235,22 @@ export function useDashboardData(apiBase: string) {
     };
   }, [usageReport.data]);
 
+  // The dashboard used to poll /api/usage?range=30d every 60s. Usage is now owned by the
+  // usage-report store, so while the Dashboard is mounted we quiet-revalidate the 30d/all
+  // entry on the same cadence. replace:false keeps singleflight semantics: a poll skips
+  // when another fetch is in flight and never aborts it, and quiet refreshes retain the
+  // last-good data (no skeleton flash).
+  const refreshUsage30d = usageReport.refresh;
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      // Same pause-when-hidden behavior the old client-resource poll had: a background
+      // tab has nobody reading the paint, so skip the quiet revalidation until visible.
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      refreshUsage30d({ replace: false });
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [refreshUsage30d]);
+
   const diagnosticsPoll = useKeyedClientResource(
     `dashboard-diagnostics:${apiBase}`,
     [apiBase],

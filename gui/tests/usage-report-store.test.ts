@@ -162,3 +162,47 @@ test("persists only validated successful reports with a timestamp", async () => 
   expect(persisted).not.toHaveProperty("loading");
   expect(persisted).not.toHaveProperty("refreshing");
 });
+
+test("a malformed report element is rejected and never persisted", async () => {
+  const key = usageReportKey("http://malformed", "30d", "all");
+  const body = {
+    range: "30d",
+    surface: "all",
+    since: null,
+    generatedAt: 1,
+    summary: {
+      requests: 1,
+      measuredRequests: 1,
+      reportedRequests: 1,
+      unreportedRequests: 0,
+      unsupportedRequests: 0,
+      estimatedRequests: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      reasoningOutputTokens: 0,
+      totalTokens: 10,
+      coverageRatio: 1,
+      estimatedCostUsd: 0,
+      pricedRequests: 1,
+      unpricedRequests: 0,
+      unmeteredRequests: 0,
+    },
+    days: [],
+    // A malformed model row: totalTokens is not a finite number.
+    models: [{ provider: "openai", model: "gpt-5", totalTokens: "many" }],
+    providers: [],
+    historyTruncated: false,
+    truncatedPrefixBytes: 0,
+    entriesTruncated: false,
+    entriesDropped: 0,
+  };
+  globalThis.fetch = (async () => Response.json(body)) as typeof fetch;
+  useUsageReportStore.getState().ensure(key, "http://malformed", "30d", "all");
+  await flush();
+  const entry = useUsageReportStore.getState().entries[key];
+  expect(entry?.data).toBeUndefined();
+  expect(entry?.hasSucceeded).toBe(false);
+  const parsed = JSON.parse(testWindow.sessionStorage.getItem(USAGE_REPORT_STORAGE_NAME) ?? "{}");
+  expect(parsed.state?.entries?.[key]).toBeUndefined();
+});
