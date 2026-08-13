@@ -600,7 +600,7 @@ export const en = {
 
   // subagents
   "sub.pageTitle": "Agent Command Center",
-  "sub.pageSubtitle": "Choose advertised worker models, guidance, and child fallback behavior.",
+  "sub.pageSubtitle": "Choose which models sub-agents may use, which model guides them, and the fallback order.",
   "sub.desktopPickerLimit": "This roster controls spawn_agent, not the top-level Codex Desktop picker. Desktop may hide routed provider ids with its remote allowlist; use Combos → Native OpenAI alias for an explicit compatibility mapping.",
   "sub.featured": "Configured Roster",
   "sub.noneSelected": "No quick picks yet.",

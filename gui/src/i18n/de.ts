@@ -577,7 +577,7 @@ export const de: Record<TKey, string> = {
   "models.allowlistHint": "Nur geprüfte Modelle gehen in den Katalog (leer = alle). Nützlich für Anbieter mit tausenden Modellen.",
   "models.selectedCount": "{n} ausgewählt",
   "sub.pageTitle": "Agenten-Kommandozentrale",
-  "sub.pageSubtitle": "Wähle beworbene Worker-Modelle, Anleitung und Fallbacks für Kindläufe.",
+  "sub.pageSubtitle": "Wähle, welche Modelle Sub-Agents verwenden dürfen, welches Modell sie anleitet und die Fallback-Reihenfolge.",
   "sub.desktopPickerLimit": "Diese Liste steuert spawn_agent, nicht den Modell-Picker von Codex Desktop. Desktop kann geroutete Provider-IDs per Remote-Allowlist ausblenden; verwende Combos → Natives OpenAI-Alias für eine explizite Kompatibilitätszuordnung.",
   "sub.featured": "Konfigurierter Kader",
   "sub.noneSelected": "Noch keine Schnellauswahl.",

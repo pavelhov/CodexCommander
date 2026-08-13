@@ -594,7 +594,7 @@ export const ru: Record<TKey, string> = {
 
   // subagents
   "sub.pageTitle": "Командный центр агентов",
-  "sub.pageSubtitle": "Выберите модели для подсказок воркерам, сами подсказки и цепочку запасных вариантов дочерних задач.",
+  "sub.pageSubtitle": "Выберите, какие модели могут использовать дочерние агенты, какая модель ведёт подсказки и порядок запасных вариантов.",
   "sub.desktopPickerLimit": "Этот roster управляет spawn_agent, а не верхнеуровневым picker Codex Desktop. Desktop может скрывать routed id провайдеров через remote allowlist; используйте Combos → Нативный псевдоним OpenAI для явного совместимого сопоставления.",
   "sub.featured": "Настроенный состав",
   "sub.noneSelected": "Быстрый выбор пока пуст.",

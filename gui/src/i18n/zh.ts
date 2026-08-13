@@ -586,7 +586,7 @@ export const zh: Record<TKey, string> = {
 
   // subagents
   "sub.pageTitle": "代理指挥中心",
-  "sub.pageSubtitle": "选择工作者指导模型、指导方式和子任务回退行为。",
+  "sub.pageSubtitle": "选择子代理可用的模型、指导所用的模型以及回退顺序。",
   "sub.desktopPickerLimit": "此 roster 控制 spawn_agent，而不是 Codex Desktop 顶层模型选择器。Desktop 可能通过远程 allowlist 隐藏路由提供商 id；请使用“组合 → 原生 OpenAI 别名”创建显式兼容映射。",
   "sub.featured": "已配置名单",
   "sub.noneSelected": "尚无快捷选择。",

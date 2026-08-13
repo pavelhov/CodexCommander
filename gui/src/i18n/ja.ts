@@ -562,7 +562,7 @@ export const ja: Record<TKey, string> = {
 
   // subagents
   "sub.pageTitle": "エージェント・コマンドセンター",
-  "sub.pageSubtitle": "ワーカーとして案内するモデル、ガイダンス、子タスクのフォールバックを選びます。",
+  "sub.pageSubtitle": "サブエージェントが使えるモデル、案内に使うモデル、フォールバックの順序を選びます。",
   "sub.desktopPickerLimit": "このロスターは spawn_agent を制御し、Codex Desktop のトップレベルモデルピッカーは制御しません。Desktop が remote allowlist で routed provider id を隠す場合は、Combos → ネイティブ OpenAI エイリアスで明示的な互換マッピングを作成してください。",
   "sub.featured": "設定済みロースター",
   "sub.noneSelected": "クイックピックはまだありません。",

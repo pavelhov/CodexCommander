@@ -656,6 +656,7 @@
 .swi-policy-save-cell {
   display: flex;
   align-items: flex-end;
+  justify-content: flex-end;
   grid-column: 5;
   min-height: 0;
 }

@@ -589,7 +589,7 @@ export const ko: Record<TKey, string> = {
 
   // subagents
   "sub.pageTitle": "에이전트 커맨드 센터",
-  "sub.pageSubtitle": "워커로 안내할 모델, 안내 방식, 하위 작업 폴백을 선택하세요.",
+  "sub.pageSubtitle": "하위 에이전트가 사용할 모델, 안내에 쓸 모델, 폴백 순서를 선택하세요.",
   "sub.desktopPickerLimit": "이 roster는 spawn_agent를 제어하며 Codex Desktop의 최상위 모델 선택기를 제어하지 않습니다. Desktop이 remote allowlist로 routed provider id를 숨기면 Combos → 네이티브 OpenAI 별칭에서 명시적 호환 매핑을 만드세요.",
   "sub.featured": "구성된 로스터",
   "sub.noneSelected": "아직 빠른 선택 항목이 없습니다.",
