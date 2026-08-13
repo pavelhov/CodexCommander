@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
@@ -8,6 +8,7 @@ import { appendUsageEntry, resetUsageReadCacheForTests, type PersistedUsageEntry
 import { closeRequestHistoryIndex } from "../src/routing/history/indexer";
 import { candidateCapabilityEvidence } from "../src/routing/capability";
 import type { CodexCommanderConfig } from "../src/types";
+import { installIsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -198,6 +199,224 @@ describe("route explainability (RI-09)", () => {
   test("absent provider leaves encryptedCodexTasks unknown", () => {
     const evidence = candidateCapabilityEvidence(config(), "missing-provider", "m1");
     expect(Object.prototype.hasOwnProperty.call(evidence, "encryptedCodexTasks")).toBe(false);
+  });
+
+  test("explicit custom-model metadata is trusted without generated-catalog inference", () => {
+    const cfg = config();
+    cfg.providers.custom = {
+      adapter: "openai-chat",
+      baseUrl: "https://custom.example/v1",
+      apiKey: "kc",
+      models: ["vendor/model"],
+      contextWindow: 64_000,
+      modelContextWindows: { "vendor/model": 96_000 },
+      modelInputModalities: { "vendor/model": ["text"] },
+    };
+    cfg.customModels = [{
+      id: "custom-row",
+      provider: "custom",
+      modelId: "vendor/model",
+      contextWindow: 250_000,
+      inputModalities: ["text", "image"],
+    }];
+
+    expect(candidateCapabilityEvidence(cfg, "custom", "vendor/model")).toMatchObject({
+      contextWindow: 250_000,
+      image: true,
+      tools: true,
+    });
+  });
+
+  test("model metadata lookup keeps family and case-fold semantics", () => {
+    const cfg = config();
+    cfg.providers.custom = {
+      adapter: "bare",
+      baseUrl: "https://custom.example/v1",
+      apiKey: "kc",
+      models: ["Model:tag"],
+      modelContextWindows: { Model: 180_000 },
+      modelInputModalities: { "model:TAG": ["text", "image"] },
+      modelReasoningEfforts: { Model: ["low", "high"] },
+    };
+
+    expect(candidateCapabilityEvidence(cfg, "custom", "Model:tag")).toMatchObject({
+      contextWindow: 180_000,
+      image: true,
+      reasoningEfforts: ["low", "high"],
+    });
+  });
+
+  test("provider-wide reasoning metadata remains canonical evidence", () => {
+    const cfg = config();
+    cfg.providers.custom = {
+      adapter: "bare",
+      baseUrl: "https://custom.example/v1",
+      apiKey: "kc",
+      models: ["mystery"],
+      reasoningEfforts: ["high", "low", "not-a-codex-tier"],
+    };
+
+    expect(candidateCapabilityEvidence(cfg, "custom", "mystery").reasoningEfforts)
+      .toEqual(["low", "high"]);
+  });
+
+  test("transport-owned registry-wide reasoning metadata remains canonical evidence", () => {
+    const cfg = config();
+    cfg.providers["cline-pass"] = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.cline.bot/api/v1",
+      apiKey: "kc",
+      models: ["cline-pass/kimi-k3"],
+    };
+
+    expect(candidateCapabilityEvidence(cfg, "cline-pass", "cline-pass/kimi-k3").reasoningEfforts)
+      .toEqual(["low"]);
+  });
+
+  test("provider-wide reasoning takes precedence over registry-wide defaults", () => {
+    const cfg = config();
+    cfg.providers["cline-pass"] = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.cline.bot/api/v1",
+      apiKey: "kc",
+      models: ["cline-pass/kimi-k3"],
+      reasoningEfforts: ["high"],
+    };
+
+    expect(candidateCapabilityEvidence(cfg, "cline-pass", "cline-pass/kimi-k3").reasoningEfforts)
+      .toEqual(["high"]);
+  });
+
+  test("trusted model reasoning and no-reasoning facts beat provider-wide defaults", () => {
+    const cfg = config();
+    cfg.providers["opencode-go"] = {
+      adapter: "openai-chat",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      apiKey: "kc",
+      models: ["deepseek-v4-flash", "kimi-k2.7-code"],
+      reasoningEfforts: ["high"],
+    };
+
+    expect(candidateCapabilityEvidence(cfg, "opencode-go", "deepseek-v4-flash").reasoningEfforts)
+      .toEqual(["low", "high", "max"]);
+    expect(candidateCapabilityEvidence(cfg, "opencode-go", "kimi-k2.7-code").reasoningEfforts)
+      .toEqual([]);
+  });
+
+  test("trusted registry per-model context beats a provider-wide fallback", () => {
+    const cfg = config();
+    cfg.providers["cline-pass"] = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.cline.bot/api/v1",
+      apiKey: "kc",
+      models: ["cline-pass/kimi-k3"],
+      contextWindow: 2_000_000,
+    };
+
+    expect(candidateCapabilityEvidence(cfg, "cline-pass", "cline-pass/kimi-k3").contextWindow)
+      .toBe(1_048_576);
+  });
+
+  test("provider context caps lower trusted policy evidence", () => {
+    const cfg = config();
+    cfg.providerContextCaps = { a: 150_000 };
+
+    expect(candidateCapabilityEvidence(cfg, "a", "m1").contextWindow).toBe(150_000);
+  });
+
+  test("explicit custom-model context remains the user's routing assertion", () => {
+    const cfg = config();
+    cfg.providers.custom = {
+      adapter: "bare",
+      baseUrl: "https://custom.example/v1",
+      apiKey: "kc",
+      models: ["mystery"],
+    };
+    cfg.customModels = [{
+      id: "custom-row",
+      provider: "custom",
+      modelId: "mystery",
+      contextWindow: 250_000,
+    }];
+    cfg.providerContextCaps = { custom: 150_000 };
+
+    expect(candidateCapabilityEvidence(cfg, "custom", "mystery").contextWindow).toBe(250_000);
+  });
+
+  test("same-named custom transports do not inherit registry capabilities", () => {
+    const cfg = config();
+    cfg.providers["opencode-go"] = {
+      adapter: "openai-chat",
+      baseUrl: "https://custom.example/v1",
+      apiKey: "kc",
+      models: ["deepseek-v4-flash"],
+    };
+
+    const evidence = candidateCapabilityEvidence(cfg, "opencode-go", "deepseek-v4-flash");
+    expect(Object.prototype.hasOwnProperty.call(evidence, "contextWindow")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(evidence, "image")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(evidence, "reasoningEfforts")).toBe(false);
+    expect(evidence.tools).toBe(true);
+  });
+
+  test("unknown custom-model facts stay unknown", () => {
+    const cfg = config();
+    cfg.providers.custom = {
+      adapter: "bare",
+      baseUrl: "https://custom.example/v1",
+      apiKey: "kc",
+      models: ["mystery"],
+    };
+    cfg.customModels = [{ id: "custom-row", provider: "custom", modelId: "mystery" }];
+
+    const evidence = candidateCapabilityEvidence(cfg, "custom", "mystery");
+    expect(Object.prototype.hasOwnProperty.call(evidence, "contextWindow")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(evidence, "image")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(evidence, "reasoningEfforts")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(evidence, "tools")).toBe(false);
+  });
+
+  test("persisted catalog rows cannot become routing capability authority", () => {
+    const home = installIsolatedCodexHome("ccx-route-evidence-");
+    try {
+      // Deliberately uses the obsolete in-memory shape the removed reader
+      // accepted. Generated catalog artifacts are presentation state, not
+      // verified provider capability evidence.
+      writeFileSync(join(home.path, "codexcommander-catalog.json"), JSON.stringify({
+        models: [
+          {
+            provider: "custom",
+            id: "vendor/model",
+            contextWindow: 900_000,
+            inputModalities: ["image"],
+            reasoningEfforts: ["low", "max"],
+            capabilities: ["tools"],
+          },
+          { provider: "chat", id: "plain", capabilities: [] },
+        ],
+      }));
+      const cfg = config();
+      cfg.providers.custom = {
+        adapter: "bare",
+        baseUrl: "https://custom.example/v1",
+        apiKey: "kc",
+        models: ["vendor/model"],
+      };
+      cfg.providers.chat = {
+        adapter: "openai-chat",
+        baseUrl: "https://chat.example/v1",
+        apiKey: "kchat",
+        models: ["plain"],
+      };
+
+      const untrusted = candidateCapabilityEvidence(cfg, "custom", "vendor/model");
+      for (const key of ["contextWindow", "image", "reasoningEfforts", "tools"]) {
+        expect(Object.prototype.hasOwnProperty.call(untrusted, key)).toBe(false);
+      }
+      expect(candidateCapabilityEvidence(cfg, "chat", "plain").tools).toBe(true);
+    } finally {
+      home.restore();
+    }
   });
 
   test("CLI logs explain encodes request ids and supports --json", async () => {
