@@ -1,0 +1,301 @@
+import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { Window } from "happy-dom";
+import { act } from "react";
+import type { Root } from "react-dom/client";
+import { LanguageProvider } from "../src/i18n/provider";
+import { clearClientResourceStoresForTests } from "../src/client-resource";
+import {
+  clearProviderQuotaStoresForTests,
+  PROVIDER_QUOTA_STORAGE_NAME,
+  useProviderQuotaStore,
+} from "../src/provider-quota-store";
+import { DashboardOverviewHead } from "../src/pages/dashboard-overview-head";
+import { DashboardPlanQuotaSection } from "../src/pages/dashboard-plan-quota-section";
+import type { UsageSummary30d } from "../src/pages/dashboard-shared";
+
+/**
+ * Phase 1c contract: the Dashboard overview shows a 30-day estimated cost stat with a
+ * request-coverage line ($0.00 for a defined zero, "—" when absent), and the Plan &
+ * quota section renders per-provider plans / quota windows / reference spend from the
+ * provider-quota store — never persisting account identities.
+ */
+
+const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
+let previousGlobals: Record<(typeof globals)[number], unknown>;
+let testWindow: Window;
+const originalFetch = globalThis.fetch;
+
+beforeEach(() => {
+  previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
+  clearClientResourceStoresForTests();
+  clearProviderQuotaStoresForTests();
+  testWindow = new Window({ url: "http://localhost/" });
+  Object.defineProperties(globalThis, {
+    document: { configurable: true, value: testWindow.document },
+    window: { configurable: true, value: testWindow },
+    navigator: { configurable: true, value: testWindow.navigator },
+    localStorage: { configurable: true, value: testWindow.localStorage },
+    sessionStorage: { configurable: true, value: testWindow.sessionStorage },
+  });
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  testWindow.sessionStorage.clear();
+});
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  clearClientResourceStoresForTests();
+  clearProviderQuotaStoresForTests();
+  testWindow.close();
+  for (const key of globals) {
+    Object.defineProperty(globalThis, key, { configurable: true, value: previousGlobals[key] });
+  }
+});
+
+afterAll(() => {
+  globalThis.fetch = originalFetch;
+});
+
+async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) throw new Error("waitFor timed out");
+    await act(async () => {
+      await new Promise<void>(resolve => testWindow.setTimeout(resolve, 10));
+    });
+  }
+}
+
+const NOW = Date.now();
+const aggregation = {
+  kind: "capacity-weighted-v1",
+  scope: "routable-known",
+  presentation: "aggregate",
+  incomplete: false,
+  excludedAccounts: 0,
+  unknownPlanAccounts: 0,
+  partialWindowAccounts: 0,
+  weekly: { usedPercent: 31, includedAccounts: 2, excludedAccounts: 0, incomplete: false, updatedAt: NOW },
+};
+
+test("Dashboard cost stat renders the 30-day estimate and coverage line", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+
+  const usage30d: UsageSummary30d = {
+    summary: {
+      requests: 5,
+      totalTokens: 9000,
+      coverageRatio: 0.8,
+      estimatedCostUsd: 1.25,
+      pricedRequests: 4,
+      unpricedRequests: 1,
+      unmeteredRequests: 0,
+    },
+  };
+  const props = {
+    locale: "en" as const,
+    health: { status: "ok", version: "1.0", uptime: 100 },
+    providers: [],
+    usage30d,
+    usageLoading: false,
+    healthLoading: false,
+    startupHealth: null,
+    projectConfigWarnings: [],
+    maMode: "default" as const,
+    maBusy: false,
+    maHelpTriggerRef: { current: null },
+    maHelpOpen: false,
+    setMaHelpOpen: () => {},
+    switchMaMode: async () => {},
+  };
+  await act(async () => {
+    root.render(
+      <LanguageProvider>
+        <DashboardOverviewHead {...props} />
+      </LanguageProvider>,
+    );
+  });
+  try {
+    const text = container.textContent ?? "";
+    expect(text).toContain("Est. cost (30d)");
+    expect(text).toContain("1.25");
+    expect(text).toContain("4 priced · 1 unpriced · 0 unmetered requests");
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+  }
+});
+
+test("Dashboard cost stat renders $0.00 for a defined zero and — when absent", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const base = {
+    locale: "en" as const,
+    health: { status: "ok", version: "1.0", uptime: 100 },
+    providers: [],
+    usageLoading: false,
+    healthLoading: false,
+    startupHealth: null,
+    projectConfigWarnings: [],
+    maMode: "default" as const,
+    maBusy: false,
+    maHelpTriggerRef: { current: null },
+    maHelpOpen: false,
+    setMaHelpOpen: () => {},
+    switchMaMode: async () => {},
+  };
+  const zeroContainer = document.createElement("div");
+  document.body.append(zeroContainer);
+  const zeroRoot = createRoot(zeroContainer);
+  await act(async () => {
+    zeroRoot.render(
+      <LanguageProvider>
+        <DashboardOverviewHead
+          {...base}
+          usage30d={{
+            summary: {
+              requests: 0,
+              totalTokens: 0,
+              coverageRatio: 1,
+              estimatedCostUsd: 0,
+              pricedRequests: 0,
+              unpricedRequests: 0,
+              unmeteredRequests: 0,
+            },
+          }}
+        />
+      </LanguageProvider>,
+    );
+  });
+  try {
+    expect(zeroContainer.textContent ?? "").toContain("$0.00");
+  } finally {
+    await act(async () => { zeroRoot.unmount(); });
+    zeroContainer.remove();
+  }
+  const absentContainer = document.createElement("div");
+  document.body.append(absentContainer);
+  const absentRoot = createRoot(absentContainer);
+  await act(async () => {
+    absentRoot.render(
+      <LanguageProvider>
+        <DashboardOverviewHead {...base} usage30d={null} />
+      </LanguageProvider>,
+    );
+  });
+  try {
+    expect(absentContainer.textContent ?? "").toContain("—");
+  } finally {
+    await act(async () => { absentRoot.unmount(); });
+    absentContainer.remove();
+  }
+});
+
+test("Plan & quota section renders provider plan, windows, and reference spend", async () => {
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({
+      reports: [
+        {
+          provider: "openai",
+          label: "OpenAI (Codex login)",
+          source: "chatgpt:wham",
+          updatedAt: NOW,
+          quota: { weeklyPercent: 31, updatedAt: NOW },
+          aggregation,
+        },
+        {
+          provider: "opencode-go",
+          label: "OpenCode Go",
+          source: "opencode-go:published-caps-2026-08-05+local-estimate",
+          updatedAt: NOW,
+          quota: {
+            referenceWindows: [{
+              id: "five_hour",
+              label: "5-hour",
+              windowSeconds: 18_000,
+              publishedLimitUsd: 12,
+              observedSpendUsd: 1.25,
+              observedTokens: 42_000,
+              observedRequests: 3,
+              pricedRequests: 2,
+              unpricedRequests: 1,
+              unmeasuredRequests: 0,
+              coverage: "partial",
+            }],
+            updatedAt: NOW,
+          },
+          aggregation: undefined,
+        },
+      ],
+      availability: [],
+    }), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
+
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(
+      <LanguageProvider>
+        <DashboardPlanQuotaSection apiBase="http://plan-quota" />
+      </LanguageProvider>,
+    );
+  });
+  try {
+    await waitFor(() => (container.textContent ?? "").includes("Plan & quota"));
+    await waitFor(() => (container.textContent ?? "").includes("Configured-weight pool estimate"));
+    const text = container.textContent ?? "";
+    expect(text).toContain("OpenAI (Codex login)");
+    expect(text).toContain("31% used");
+    expect(text).toContain("OpenCode Go");
+    expect(text).toContain("$12 published cap");
+    expect(text).toContain("$1.25 observed through CodexCommander");
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+  }
+});
+
+test("Plan & quota section never persists account identities to sessionStorage", async () => {
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({
+      reports: [
+        {
+          provider: "openai",
+          label: "OpenAI (Codex login)",
+          source: "chatgpt:wham",
+          updatedAt: NOW,
+          quota: { weeklyPercent: 31, updatedAt: NOW },
+          aggregation,
+          // Stray identity fields the real server never emits.
+          accountId: "acct_12345",
+          account: { email: "acct@example.com" },
+        },
+      ],
+      availability: [],
+    }), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
+
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(
+      <LanguageProvider>
+        <DashboardPlanQuotaSection apiBase="http://plan-quota-privacy" />
+      </LanguageProvider>,
+    );
+  });
+  try {
+    await waitFor(() => (container.textContent ?? "").includes("OpenAI (Codex login)"));
+    const persisted = testWindow.sessionStorage.getItem(PROVIDER_QUOTA_STORAGE_NAME) ?? "";
+    expect(persisted).not.toContain("acct@example.com");
+    expect(persisted).not.toContain("acct_12345");
+    expect(persisted).not.toContain("accountId");
+    expect(useProviderQuotaStore.getState().entries["http://plan-quota-privacy"]?.reports.openai?.accountId).toBeUndefined();
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+  }
+});

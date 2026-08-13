@@ -227,6 +227,10 @@ export function useDashboardData(apiBase: string) {
         requests: report.summary.requests,
         totalTokens: report.summary.totalTokens,
         coverageRatio: report.summary.coverageRatio,
+        estimatedCostUsd: report.summary.estimatedCostUsd,
+        pricedRequests: report.summary.pricedRequests,
+        unpricedRequests: report.summary.unpricedRequests,
+        unmeteredRequests: report.summary.unmeteredRequests,
       },
     };
   }, [usageReport.data]);

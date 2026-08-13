@@ -1,6 +1,7 @@
 import { IconAlert, IconInfo } from "../icons";
 import { type TKey, useT } from "../i18n/shared";
 import { formatTokens } from "../format-tokens";
+import { formatEstimatedUsdValue } from "../intl-formatters";
 import { formatUptime } from "../formatUptime";
 import type { useDashboardData } from "./use-dashboard-data";
 
@@ -78,6 +79,25 @@ export function DashboardOverviewHead({
             <div className="muted text-label dash-stat-coverage">
               {usage30d && usage30d.summary.requests > 0
                 ? t("dash.coverage").replace("{pct}", `${Math.round(usage30d.summary.coverageRatio * 100)}%`)
+                : "\u00a0"}
+            </div>
+          </div>
+          <div className="stat" aria-busy={usageLoading || undefined}>
+            <div className="label" title={t("dash.cost30dHint")}>{t("dash.cost30d")}</div>
+            <div className="value mono">
+              {usage30d && usage30d.summary.estimatedCostUsd !== undefined
+                ? usage30d.summary.estimatedCostUsd === 0
+                  ? "$0.00"
+                  : formatEstimatedUsdValue(usage30d.summary.estimatedCostUsd, locale)
+                : "—"}
+            </div>
+            <div className="muted text-label dash-stat-coverage">
+              {usage30d && usage30d.summary.estimatedCostUsd !== undefined
+                ? t("dash.cost30dCoverage", {
+                    priced: usage30d.summary.pricedRequests,
+                    unpriced: usage30d.summary.unpricedRequests,
+                    unmetered: usage30d.summary.unmeteredRequests,
+                  })
                 : "\u00a0"}
             </div>
           </div>

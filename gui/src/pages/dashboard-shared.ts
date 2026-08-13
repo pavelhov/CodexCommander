@@ -50,7 +50,17 @@ export interface SidecarPatch {
   vision?: { backend?: SidecarBackend | null; model?: string };
 }
 export type { ShadowCallData } from "./shadow-call-source";
-export interface UsageSummary30d { summary: { requests: number; totalTokens: number; coverageRatio: number } }
+export interface UsageSummary30d {
+  summary: {
+    requests: number;
+    totalTokens: number;
+    coverageRatio: number;
+    estimatedCostUsd: number;
+    pricedRequests: number;
+    unpricedRequests: number;
+    unmeteredRequests: number;
+  };
+}
 export interface SyncResult {
   ok: boolean;
   added: number;
