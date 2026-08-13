@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 /**
- * Subagents ships one command-center layout (active roster + library + policy).
+ * Subagents ships one command-center layout (configured roster + library + policy).
  * Classic stacked cards and the view-mode toggle are gone.
  */
 

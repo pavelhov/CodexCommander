@@ -159,46 +159,46 @@ async function mount() {
 /** Library add/remove toggles are labelled from sub.workspace.addToFeatured / removeFromFeatured. */
 function addToggle(id: string): HTMLButtonElement {
   const row = Array.from(container.querySelectorAll("button"))
-    .find((b) => (b.getAttribute("aria-label") ?? "").includes(`Add ${id} to active roster`));
+    .find((b) => (b.getAttribute("aria-label") ?? "").includes(`Add ${id} to configured roster`));
   if (!row) throw new Error(`add toggle not found: ${id}`);
   return row as unknown as HTMLButtonElement;
 }
 
-/** Active-roster remove only (the library also exposes remove toggles). */
+/** Configured-roster remove only (the library also exposes remove toggles). */
 function removeButtons(): HTMLButtonElement[] {
   return Array.from(container.querySelectorAll(".swi-roster-actions button")).filter((b) =>
     /^Remove /.test(b.getAttribute("aria-label") ?? "")) as unknown as HTMLButtonElement[];
 }
 
-test("renders one active roster, one agent library, and one run-policy card", async () => {
+test("renders one configured roster, one agent library, and one run-policy card", async () => {
   await mount();
   expect(container.querySelector(".subagents-workspace-shell")).toBeTruthy();
   expect(container.querySelectorAll(".subagents-command-card").length).toBe(3);
   const headings = Array.from(container.querySelectorAll(".swi-card-title"))
     .map(node => node.textContent?.trim());
-  expect(headings).toEqual(["Active Roster", "Agent Library", "Run Policy"]);
+  expect(headings).toEqual(["Configured Roster", "Agent Library", "Run Policy"]);
   expect(container.textContent).toContain("Use roster as worker guidance");
-  expect(container.textContent).toContain("No preferred model — Codex chooses from roster");
+  expect(container.textContent).toContain("No preferred model");
 });
 
 test("shows the encrypted V2 compatibility notice for base and V2, but not classic V1", async () => {
   policyMode = "v2";
   await mount();
-  expect(container.textContent).toContain("external providers cannot read (#92)");
+  expect(container.textContent).toContain("V2 tasks are encrypted; external providers cannot read them");
 
   const v2Root = root!;
   await act(async () => { v2Root.unmount(); });
   root = null;
   policyMode = "default";
   await mount();
-  expect(container.textContent).toContain("external providers cannot read (#92)");
+  expect(container.textContent).toContain("V2 tasks are encrypted; external providers cannot read them");
 
   const currentRoot = root!;
   await act(async () => { currentRoot.unmount(); });
   root = null;
   policyMode = "v1";
   await mount();
-  expect(container.textContent).not.toContain("external providers cannot read (#92)");
+  expect(container.textContent).not.toContain("V2 tasks are encrypted");
 });
 
 test("shows the plaintext privacy notice when Codex defaults may select V2", async () => {
@@ -206,7 +206,7 @@ test("shows the plaintext privacy notice when Codex defaults may select V2", asy
   messageDelivery = "plaintext";
   await mount();
   expect(container.textContent).toContain("including messages to native workers");
-  expect(container.textContent).toContain("V2 task-message delivery from this parent is plaintext");
+  expect(container.textContent).toContain("Task-message delivery from this parent is plaintext");
   expect(container.textContent).toContain("does not require Apply");
 });
 
