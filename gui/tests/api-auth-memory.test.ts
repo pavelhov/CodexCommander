@@ -5,9 +5,13 @@ import {
   isBrowserLoopbackHostname,
   isConfirmedGuiLaunch,
   resetApiAuthFetchForTests,
+  whenGuiLaunchCapabilitySettles,
 } from "../src/api";
 
 const globals = ["document", "window", "navigator", "sessionStorage", "fetch"] as const;
+const CONFIRMED_GUI_SESSION_STORAGE_KEY = "codexcommander.confirmed-gui-session.v1";
+const CONFIRMED_GUI_SESSION_TOKEN = `ccx_session_${"S".repeat(43)}`;
+const CONFIRMED_GUI_SESSION_CSRF = "C".repeat(43);
 let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
 let originalPrompt: typeof window.prompt;
@@ -129,6 +133,260 @@ test("prompted API tokens stay memory-only and are not written to sessionStorage
   expect(res.status).toBe(200);
   expect(authorized).toBe(true);
   expect(sessionStorage.length).toBe(0);
+});
+
+test("a confirmed launch session survives a same-tab reload and is ready before the first API request", async () => {
+  const launchTicket = `ccx_launch_${"A".repeat(43)}`;
+  const expiresAt = Date.now() + 60_000;
+  window.location.hash = `ccx-launch-ticket=${launchTicket}&ccx-route=dashboard`;
+  let exchangeCalls = 0;
+  const seenApiRequests: Array<{ key: string | null; origin: string | null; csrf: string | null }> = [];
+  const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+    if (url.pathname === "/api/gui-launch-exchange") {
+      exchangeCalls += 1;
+      return Response.json({
+        route: "dashboard",
+        session: {
+          token: CONFIRMED_GUI_SESSION_TOKEN,
+          csrfToken: CONFIRMED_GUI_SESSION_CSRF,
+          origin: window.location.origin,
+          expiresAt,
+          confirmedLaunch: true,
+        },
+      });
+    }
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    seenApiRequests.push({
+      key: headers.get("X-CodexCommander-API-Key"),
+      origin: headers.get("X-CodexCommander-GUI-Origin"),
+      csrf: headers.get("X-CodexCommander-CSRF-Token"),
+    });
+    return Response.json({ ok: true });
+  }) as typeof fetch;
+
+  await installMockAuthFetch(mockFetch);
+  expect(await whenGuiLaunchCapabilitySettles()).toBe(true);
+  const stored = JSON.parse(sessionStorage.getItem(CONFIRMED_GUI_SESSION_STORAGE_KEY) ?? "null");
+  expect(stored).toEqual({
+    version: 1,
+    token: CONFIRMED_GUI_SESSION_TOKEN,
+    csrfToken: CONFIRMED_GUI_SESSION_CSRF,
+    origin: window.location.origin,
+    expiresAt,
+    confirmedLaunch: true,
+  });
+
+  // Model a module reload while preserving this tab's sessionStorage.
+  resetApiAuthFetchForTests();
+  await installMockAuthFetch(mockFetch);
+  expect(isConfirmedGuiLaunch()).toBe(true);
+  expect(await whenGuiLaunchCapabilitySettles()).toBe(true);
+  expect(exchangeCalls).toBe(1);
+  expect((await fetch("/api/config")).status).toBe(200);
+  expect((await fetch("/api/settings", { method: "PUT", body: "{}" })).status).toBe(200);
+  expect(seenApiRequests).toEqual([
+    { key: CONFIRMED_GUI_SESSION_TOKEN, origin: window.location.origin, csrf: null },
+    { key: CONFIRMED_GUI_SESSION_TOKEN, origin: window.location.origin, csrf: CONFIRMED_GUI_SESSION_CSRF },
+  ]);
+});
+
+test("rehydration rejects and removes malformed, foreign, expired, or overlong session records", async () => {
+  const valid = {
+    version: 1,
+    token: CONFIRMED_GUI_SESSION_TOKEN,
+    csrfToken: CONFIRMED_GUI_SESSION_CSRF,
+    origin: window.location.origin,
+    expiresAt: Date.now() + 60_000,
+    confirmedLaunch: true,
+  };
+  const invalidRecords: string[] = [
+    "{not-json",
+    JSON.stringify({ ...valid, version: 2 }),
+    JSON.stringify({ ...valid, token: "ccx_session_short" }),
+    JSON.stringify({ ...valid, csrfToken: "short" }),
+    JSON.stringify({ ...valid, origin: "http://127.0.0.1" }),
+    JSON.stringify({ ...valid, expiresAt: Date.now() - 1 }),
+    JSON.stringify({ ...valid, expiresAt: Date.now() + (9 * 60 * 60_000) }),
+    JSON.stringify({ ...valid, confirmedLaunch: false }),
+    JSON.stringify({ ...valid, unexpected: true }),
+  ];
+  const seenApiKeys: Array<string | null> = [];
+  const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    seenApiKeys.push(new Headers(init?.headers).get("X-CodexCommander-API-Key"));
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+
+  for (const raw of invalidRecords) {
+    resetApiAuthFetchForTests();
+    sessionStorage.setItem(CONFIRMED_GUI_SESSION_STORAGE_KEY, raw);
+    await installMockAuthFetch(mockFetch);
+    expect(isConfirmedGuiLaunch()).toBe(false);
+    expect((await fetch("/api/config")).status).toBe(401);
+    expect(sessionStorage.getItem(CONFIRMED_GUI_SESSION_STORAGE_KEY)).toBeNull();
+  }
+  expect(seenApiKeys).toEqual(invalidRecords.map(() => null));
+});
+
+test("a 401 clears a rehydrated confirmed session and fails closed on loopback", async () => {
+  sessionStorage.setItem(CONFIRMED_GUI_SESSION_STORAGE_KEY, JSON.stringify({
+    version: 1,
+    token: CONFIRMED_GUI_SESSION_TOKEN,
+    csrfToken: CONFIRMED_GUI_SESSION_CSRF,
+    origin: window.location.origin,
+    expiresAt: Date.now() + 60_000,
+    confirmedLaunch: true,
+  }));
+  const seenApiKeys: Array<string | null> = [];
+  const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    seenApiKeys.push(new Headers(init?.headers).get("X-CodexCommander-API-Key"));
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  await installMockAuthFetch(mockFetch);
+
+  expect(isConfirmedGuiLaunch()).toBe(true);
+  expect((await fetch("/api/config")).status).toBe(401);
+  expect(seenApiKeys).toEqual([CONFIRMED_GUI_SESSION_TOKEN]);
+  expect(isConfirmedGuiLaunch()).toBe(false);
+  expect(sessionStorage.getItem(CONFIRMED_GUI_SESSION_STORAGE_KEY)).toBeNull();
+});
+
+test("an in-memory confirmed session expires before a later request and clears its stored record", async () => {
+  const expiresAt = Date.now() + 60_000;
+  sessionStorage.setItem(CONFIRMED_GUI_SESSION_STORAGE_KEY, JSON.stringify({
+    version: 1,
+    token: CONFIRMED_GUI_SESSION_TOKEN,
+    csrfToken: CONFIRMED_GUI_SESSION_CSRF,
+    origin: window.location.origin,
+    expiresAt,
+    confirmedLaunch: true,
+  }));
+  const seenApiKeys: Array<string | null> = [];
+  const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    seenApiKeys.push(new Headers(init?.headers).get("X-CodexCommander-API-Key"));
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  await installMockAuthFetch(mockFetch);
+  expect(isConfirmedGuiLaunch()).toBe(true);
+
+  const originalDateNow = Date.now;
+  try {
+    Date.now = () => expiresAt;
+    expect((await fetch("/api/config")).status).toBe(401);
+  } finally {
+    Date.now = originalDateNow;
+  }
+  expect(seenApiKeys).toEqual([null]);
+  expect(isConfirmedGuiLaunch()).toBe(false);
+  expect(sessionStorage.getItem(CONFIRMED_GUI_SESSION_STORAGE_KEY)).toBeNull();
+});
+
+test("a successful fresh launch replaces an older stored session", async () => {
+  const oldToken = `ccx_session_${"O".repeat(43)}`;
+  sessionStorage.setItem(CONFIRMED_GUI_SESSION_STORAGE_KEY, JSON.stringify({
+    version: 1,
+    token: oldToken,
+    csrfToken: "D".repeat(43),
+    origin: window.location.origin,
+    expiresAt: Date.now() + 60_000,
+    confirmedLaunch: true,
+  }));
+  window.location.hash = `ccx-launch-ticket=ccx_launch_${"N".repeat(43)}&ccx-route=logs`;
+  const seenApiKeys: Array<string | null> = [];
+  const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+    if (url.pathname === "/api/gui-launch-exchange") {
+      return Response.json({
+        route: "logs",
+        session: {
+          token: CONFIRMED_GUI_SESSION_TOKEN,
+          csrfToken: CONFIRMED_GUI_SESSION_CSRF,
+          origin: window.location.origin,
+          expiresAt: Date.now() + 120_000,
+          confirmedLaunch: true,
+        },
+      });
+    }
+    seenApiKeys.push(new Headers(init?.headers).get("X-CodexCommander-API-Key"));
+    return Response.json({ ok: true });
+  }) as typeof fetch;
+  await installMockAuthFetch(mockFetch);
+
+  expect(await whenGuiLaunchCapabilitySettles()).toBe(true);
+  expect((await fetch("/api/config")).status).toBe(200);
+  expect(seenApiKeys).toEqual([CONFIRMED_GUI_SESSION_TOKEN]);
+  expect(JSON.parse(sessionStorage.getItem(CONFIRMED_GUI_SESSION_STORAGE_KEY) ?? "null").token)
+    .toBe(CONFIRMED_GUI_SESSION_TOKEN);
+});
+
+test("a failed fresh launch falls back to an already-valid stored session", async () => {
+  const storedToken = `ccx_session_${"F".repeat(43)}`;
+  const storedCsrf = "G".repeat(43);
+  const storedRecord = {
+    version: 1,
+    token: storedToken,
+    csrfToken: storedCsrf,
+    origin: window.location.origin,
+    expiresAt: Date.now() + 60_000,
+    confirmedLaunch: true,
+  };
+  sessionStorage.setItem(CONFIRMED_GUI_SESSION_STORAGE_KEY, JSON.stringify(storedRecord));
+  window.location.hash = `ccx-launch-ticket=ccx_launch_${"X".repeat(43)}&ccx-route=logs`;
+  let exchangeCalls = 0;
+  const seenApiKeys: Array<string | null> = [];
+  const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+    if (url.pathname === "/api/gui-launch-exchange") {
+      exchangeCalls += 1;
+      return new Response("expired", { status: 401 });
+    }
+    seenApiKeys.push(new Headers(init?.headers).get("X-CodexCommander-API-Key"));
+    return Response.json({ ok: true });
+  }) as typeof fetch;
+  await installMockAuthFetch(mockFetch);
+
+  expect(await whenGuiLaunchCapabilitySettles()).toBe(true);
+  expect(isConfirmedGuiLaunch()).toBe(true);
+  expect((await fetch("/api/config")).status).toBe(200);
+  expect(exchangeCalls).toBe(1);
+  expect(seenApiKeys).toEqual([storedToken]);
+  expect(JSON.parse(sessionStorage.getItem(CONFIRMED_GUI_SESSION_STORAGE_KEY) ?? "null"))
+    .toEqual(storedRecord);
+});
+
+test("blocked sessionStorage falls back to a memory-only confirmed session", async () => {
+  const blockedStorage = {
+    getItem(): string | null { throw new Error("blocked"); },
+    setItem(): void { throw new Error("blocked"); },
+    removeItem(): void { throw new Error("blocked"); },
+    clear(): void { throw new Error("blocked"); },
+    key(): string | null { return null; },
+    length: 0,
+  } satisfies Storage;
+  Object.defineProperty(window, "sessionStorage", { configurable: true, value: blockedStorage });
+  window.location.hash = `ccx-launch-ticket=ccx_launch_${"B".repeat(43)}&ccx-route=dashboard`;
+  const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+    if (url.pathname === "/api/gui-launch-exchange") {
+      return Response.json({
+        route: "dashboard",
+        session: {
+          token: CONFIRMED_GUI_SESSION_TOKEN,
+          csrfToken: CONFIRMED_GUI_SESSION_CSRF,
+          origin: window.location.origin,
+          expiresAt: Date.now() + 60_000,
+          confirmedLaunch: true,
+        },
+      });
+    }
+    const key = new Headers(init?.headers).get("X-CodexCommander-API-Key");
+    return new Response("{}", { status: key === CONFIRMED_GUI_SESSION_TOKEN ? 200 : 401 });
+  }) as typeof fetch;
+  await installMockAuthFetch(mockFetch);
+
+  expect(await whenGuiLaunchCapabilitySettles()).toBe(true);
+  expect(isConfirmedGuiLaunch()).toBe(true);
+  expect((await fetch("/api/config")).status).toBe(200);
 });
 
 test("validates prompted tokens with a safe read before retrying the failed request", async () => {
@@ -411,8 +669,8 @@ test("an expired confirmed loopback session fails closed and requires relaunch",
       return Response.json({
         route: "dashboard",
         session: {
-          token: "ccx_session_expired",
-          csrfToken: "expired-csrf",
+          token: `ccx_session_${"E".repeat(43)}`,
+          csrfToken: "E".repeat(43),
           origin: "http://localhost",
           expiresAt: Date.now() - 1,
           confirmedLaunch: true,
@@ -432,7 +690,7 @@ test("an expired confirmed loopback session fails closed and requires relaunch",
   expect(res.status).toBe(401);
   expect(promptCalls).toBe(0);
   expect(exchangeCalls).toBe(1);
-  expect(seenApiKeys).toEqual(["ccx_session_expired"]);
+  expect(seenApiKeys).toEqual([null]);
   expect(isConfirmedGuiLaunch()).toBe(false);
 });
 
@@ -447,8 +705,8 @@ test("a launch exchange session for another origin is rejected without a loopbac
       return Response.json({
         route: "dashboard",
         session: {
-          token: "ccx_session_foreign",
-          csrfToken: "foreign-csrf",
+          token: `ccx_session_${"F".repeat(43)}`,
+          csrfToken: "F".repeat(43),
           origin: "http://192.0.2.10:10100",
           expiresAt: Date.now() + 60_000,
           confirmedLaunch: true,

@@ -46,7 +46,8 @@ interface ProviderAdapter {
 
 ## `openai-responses`
 
-**目标：** OpenAI **Responses API**。**`passthrough: true`** —— 转发原始请求 body，并把响应
+**目标：** OpenAI **Responses API**。**`passthrough: true`** —— 保持 Responses 请求和响应的
+结构，不经 Chat Completions 模型转换。只有已记录的兼容性规范化会改变请求结构；响应仍
 **不经转换**地流式传回。
 **认证：** `forward`（转发调用方 header）或 `key`。
 
@@ -56,6 +57,10 @@ interface ProviderAdapter {
 
 - `forward` URL → `{baseUrl}/responses`。`key` provider 的默认 URL 是 `{baseUrl}/v1/responses`。
 - `key` provider 可设置经过验证的相对 `responsesPath`；adapter 会移除 `baseUrl` 末尾的一个 `/`，并向 `{trimmedBaseUrl}{responsesPath}` 发送请求。Ark Agent Plan 使用 `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` 和 `responsesPath: "/responses"`。
+- 在最终 outbound 边界，已识别的 provider/model reasoning 契约会映射或限制已存在的
+  `reasoning.effort`。未知或自定义契约会原样保留调用方的值，但不会把该任意值复制到持久
+  诊断。只有已识别契约生成的验证值才会作为实际发送的 field/value 记录；**已发送**表示
+  CodexCommander 完成了序列化，并不证明上游已应用该值。
 - `forward` 模式只会转发安全的 header allowlist（`FORWARD_HEADERS`）：authorization、ChatGPT
   account id 和 OpenAI beta/originator/session header。这条 ChatGPT 登录路径也为
   [sidecar](/zh-cn/guides/sidecars/) 提供支持。

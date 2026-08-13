@@ -179,11 +179,17 @@ the token in a browser URL.
 
 When the companion opens the dashboard, it asks that verified local proxy for a short-lived,
 single-use launch ticket. The ticket appears only in the URL fragment and is removed during its
-one-time exchange; the durable admin token never enters the URL or web storage. The resulting
-full-featured session is process-memory-only, lasts up to eight hours, and is never renewed. Expiry
-or proxy restart makes the next API request return `401`, and the page tells the user to reopen
-through the companion or `ccx gui`. A manually opened loopback dashboard receives no API session and
-never prompts for or sends the durable admin token.
+one-time exchange. The server keeps the resulting full-featured session in process memory for up to
+eight hours. The browser mirrors only its session token, CSRF token, origin, and absolute expiry in
+`sessionStorage`, so a refresh works while that server session remains valid. It is never
+renewed. Expiry, proxy restart, or a rejecting `401` clears the browser record and tells the user to
+reopen through the companion or `ccx gui`. Neither the durable admin token nor the launch ticket enters
+browser storage, and authentication never uses `localStorage`. Same-origin script can read
+`sessionStorage`, so this reload convenience is not OS-user isolation. Browsers may copy the record
+into duplicated or opener-created tabs, or restore it with a restored tab; every copy remains bound
+to the exact origin and CSRF token and is usable only until the fixed server expiry, a proxy restart,
+or a rejecting `401`. A manually opened loopback
+dashboard receives no API session and never prompts for or sends the durable admin token.
 
 Provider credentials remain owned by CodexCommander. The companion never reads ChatGPT, Kimi, Grok,
 Anthropic, or other provider tokens and never calls provider login endpoints directly.

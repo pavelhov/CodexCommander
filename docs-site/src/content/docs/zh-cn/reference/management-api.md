@@ -34,7 +34,7 @@ Authorization: Bearer <admin-token>
 
 手动打开的 loopback 仪表盘不会获得 API 凭证。静态页面框架可以加载，但在通过 `ccx gui` 或 macOS 菜单栏应用重新打开之前，每个 `/api/*` 请求都会返回 `401`。任何 loopback hostname/address 都不会请求或发送长期管理员 token。浏览器 origin 无法证明哪个本地 OS 用户拥有 listener，因此 loopback 既不是经过身份验证的 listener identity，也不能绕过身份验证。
 
-launcher 使用原始管理员凭证签发一个绑定到请求 route 和 origin 的短期、一次性票据。票据只通过 URL fragment 传递，并在一次性交换过程中立即清除。得到的确认 GUI session 功能完整，只存在于进程内存中，最长八小时。它不会续期：到期或代理重启后的下一个 API 请求会返回 `401`，之后需要再次使用本地 launcher 流程。长期管理员 token 不会进入 URL 或 Web Storage。
+launcher 使用原始管理员凭证签发一个绑定到请求 route 和 origin 的短期、一次性票据。票据只通过 URL fragment 传递，并在一次性交换过程中立即清除。得到的确认 GUI session 功能完整，由服务器在进程内存中保留，最长八小时。浏览器仅把 session token、CSRF token、准确 origin 和绝对到期时间镜像到同一标签页的 `sessionStorage`，所以服务器 session 有效时可以在刷新后恢复。session 不会续期：到期、代理重启或拒绝请求的 `401` 会清除浏览器记录，之后需要再次使用本地 launcher 流程。长期管理员 token 和启动票据都不会进入浏览器存储，认证也绝不使用 `localStorage`。同源脚本可以读取 `sessionStorage`，因此这项便利性不构成 OS 用户隔离。
 
 原始管理员 token 仍可执行普通 API 更改。catalog Apply 会更严格：`POST /api/codex-catalog/apply` 只接受确认 GUI session。脚本请使用 `ccx sync --restart-codex`。
 

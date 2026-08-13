@@ -142,6 +142,13 @@ Codex 카탈로그는 Codex가 수용하는 레이블(`low` / `medium` / `high` 
 - 커스텀 와이어 매핑을 위한 모델별 및 프로바이더별 `reasoningEffortMap` 오버라이드를 해석합니다.
 - `noReasoningModels`에 나열된 모델에 대해서는 effort를 완전히 제거합니다.
 
+변환형 adapter는 요청을 구성할 때 이 계약을 적용합니다. Responses passthrough는 인식된
+provider/model 계약에 한해 최종 outbound 경계에서 적용하며, 알 수 없거나 커스텀인 Responses 계약의
+`reasoning.effort`는 그대로 유지하되 그 임의 값을 영구 진단에 복사하지 않습니다. 인식된 계약이
+검증된 값을 만든 경우에만 요청 진단에 정확한 outbound field/value를 기록하고 dashboard는
+**요청 → 전송**으로 표시합니다. “전송”은 CodexCommander가 직렬화한 값이라는 뜻이며 업스트림
+provider가 이를 적용했다는 증거가 아닙니다.
+
 ## 코어 타입
 
 내부 모델은 `types.ts`에 있습니다: `CodexCommanderParsedRequest`, `CodexCommanderContext`, `CodexCommanderMessage` 유니온,

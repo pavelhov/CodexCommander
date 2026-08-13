@@ -49,10 +49,16 @@ token; loopback is not an authenticated listener identity or an authentication b
 
 Those launchers use the raw admin credential to mint a short-lived, single-use ticket bound to the
 requested route and origin. The ticket travels only in the URL fragment and is removed immediately
-during its one-time exchange. The resulting confirmed GUI session is full-featured, process-memory-
-only, and valid for at most eight hours. It is never renewed: expiry or proxy restart makes the next
-API request return `401`, after which the local launcher flow is required again. The durable admin
-token never enters a URL or web storage.
+during its one-time exchange. The resulting confirmed GUI session is full-featured, kept in server
+process memory, and valid for at most eight hours. The browser mirrors only its session token, CSRF
+token, exact origin, and absolute expiry in `sessionStorage`, so a refresh can rehydrate it
+while the server session remains valid. It is never renewed: expiry, proxy restart, or a rejecting
+`401` clears that browser record, after which the local launcher flow is required again. Neither the
+durable admin token nor the launch ticket enters browser storage, and authentication never uses
+`localStorage`. Same-origin script can read `sessionStorage`, so this convenience is not OS-user
+isolation. Browsers may copy the record into duplicated or opener-created tabs, or restore it with a
+restored tab; every copy remains bound to the exact origin and CSRF token and is usable only until the
+fixed server expiry, a proxy restart, or a rejecting `401`.
 
 The raw admin bearer remains valid for ordinary API mutations. Catalog Apply is deliberately stricter:
 `POST /api/codex-catalog/apply` accepts only a confirmed GUI session, so scripts use

@@ -115,6 +115,13 @@ Codex カタログは Codex が受け入れるラベル（`low` / `medium` / `hi
 - カスタム wire マッピングのためのモデル別・プロバイダー別 `reasoningEffortMap` override を解釈します。
 - `noReasoningModels` に列挙されたモデルについては effort を完全に削除します。
 
+変換型 adapter はリクエストの構築中にこの契約を適用します。Responses passthrough は、認識済みの
+provider/model 契約に限り、最終送信境界で適用します。不明・カスタムの Responses 契約では
+`reasoning.effort` を変更せず、その任意の値を永続診断にもコピーしません。認識済み契約が
+検証済みの値を生成した場合だけ、リクエスト診断に実際の outbound field/value を記録し、
+dashboard では **要求 → 送信** と表示します。「送信」は CodexCommander がシリアライズした
+値であり、上流 provider が適用した証明ではありません。
+
 ## コア型
 
 内部モデルは `types.ts` にあります: `CodexCommanderParsedRequest`、`CodexCommanderContext`、`CodexCommanderMessage` ユニオン、

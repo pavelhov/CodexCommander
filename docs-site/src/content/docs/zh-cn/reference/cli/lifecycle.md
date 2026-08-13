@@ -207,4 +207,4 @@ ccx codex-shim uninstall
 
 ### `ccx gui`
 
-在 `http://localhost:<port>` 打开 [web dashboard](/guides/web-dashboard/)，如果代理未运行则会自动启动。短期、一次性的浏览器启动票据会解锁更改操作，包括确认后的 **Apply agent catalog**。票据只通过 URL fragment 传递，并在交换过程中清除；长期管理员 token 不会进入 URL 或 Web Storage。确认 session 只存在于进程内存中，最长八小时，且不会续期。到期或代理重启后的下一个 API 请求会返回 `401`；请通过 `ccx gui` 或 macOS 菜单栏应用重新打开。手动打开 loopback 页面不会获得 API session，也绝不会请求或发送长期管理员 token。
+在 `http://localhost:<port>` 打开 [web dashboard](/guides/web-dashboard/)，如果代理未运行则会自动启动。短期、一次性的浏览器启动票据会解锁更改操作，包括确认后的 **Apply agent catalog**。票据只通过 URL fragment 传递，并在交换过程中清除。确认 session 由服务器在进程内存中保留，最长八小时；浏览器仅把 token、CSRF token、origin 和绝对到期时间镜像到当前标签页的 `sessionStorage`。因此服务器 session 有效时可以刷新。session 不会续期。到期、代理重启或拒绝请求的 `401` 会清除浏览器记录；请通过 `ccx gui` 或 macOS 菜单栏应用重新打开。长期管理员 token 和启动票据都不会进入浏览器存储，认证也绝不使用 `localStorage`。同源脚本可以读取 session 记录，因此这项便利性不构成 OS 用户隔离。手动打开 loopback 页面不会获得 API session，也绝不会请求或发送长期管理员 token。

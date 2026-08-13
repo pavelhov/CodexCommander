@@ -49,8 +49,9 @@ interface ProviderAdapter {
 
 ## `openai-responses`
 
-**대상:** OpenAI **Responses API**. **`passthrough: true`** — 원본 요청 본문을 전달하고 응답을
-**변환하지 않은 채** 스트리밍합니다.
+**대상:** OpenAI **Responses API**. **`passthrough: true`** — Responses 요청과 응답 형태를
+Chat Completions 모델로 변환하지 않고 유지합니다. 문서화된 호환성 정규화만 요청 형태의 예외이며,
+응답은 **변환하지 않은 채** 스트리밍합니다.
 **인증:** `forward`(호출자 헤더 중계) 또는 `key`.
 
 `key` 인증에서는 [`retryOn429`](/ko/reference/configuration/)도 여기에 적용됩니다: 사전 스트림
@@ -60,6 +61,11 @@ interface ProviderAdapter {
 
 - `forward` URL → `{baseUrl}/responses`. `key` provider의 기본 URL은 `{baseUrl}/v1/responses`입니다.
 - `key` provider는 검증된 상대 `responsesPath`를 설정할 수 있습니다. adapter는 `baseUrl` 끝의 `/` 하나를 제거하고 `{trimmedBaseUrl}{responsesPath}`로 전송합니다. Ark Agent Plan은 `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"`와 `responsesPath: "/responses"`를 사용합니다.
+- 최종 outbound 경계에서 인식된 provider/model reasoning 계약은 이미 존재하는
+  `reasoning.effort`를 매핑하거나 클램핑합니다. 알 수 없거나 커스텀인 계약은 호출자의 값을 그대로
+  유지하며 그 임의 값을 영구 진단에 복사하지 않습니다. 인식된 계약이 만든 검증된 값만 정확히
+  전송한 field/value로 기록합니다. **전송**은 CodexCommander가 직렬화했다는 뜻이지 업스트림이 이를
+  적용했다는 확인이 아닙니다.
 - `forward` 모드에서는 안전한 헤더 허용 목록(`FORWARD_HEADERS`)만 중계합니다. authorization,
   ChatGPT account id, OpenAI beta/originator/session 헤더가 대상입니다. 이 ChatGPT 로그인 경로는
   [사이드카](/ko/guides/sidecars/)에도 쓰입니다.
