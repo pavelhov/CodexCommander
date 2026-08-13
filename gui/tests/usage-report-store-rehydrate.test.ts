@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterAll, afterEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 
 /**
@@ -11,6 +11,11 @@ import { Window } from "happy-dom";
  * is invoked explicitly instead of relying on creation-time hydration.
  */
 const testWindow = new Window({ url: "http://localhost/" });
+const originalFetch = globalThis.fetch;
+const INSTALLED_GLOBALS = ["document", "window", "navigator", "sessionStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
+const previousGlobals = Object.fromEntries(
+  INSTALLED_GLOBALS.map(key => [key, Reflect.get(globalThis, key)]),
+) as Record<(typeof INSTALLED_GLOBALS)[number], unknown>;
 Object.defineProperties(globalThis, {
   document: { configurable: true, value: testWindow.document },
   window: { configurable: true, value: testWindow },
@@ -69,6 +74,18 @@ const {
   rehydrateUsageReportForTests,
   useUsageReportStore,
 } = await import("../src/usage-report-store");
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  clearUsageReportStoresForTests();
+});
+
+afterAll(() => {
+  testWindow.close();
+  for (const key of INSTALLED_GLOBALS) {
+    Object.defineProperty(globalThis, key, { configurable: true, value: previousGlobals[key] });
+  }
+});
 
 // Re-run persist rehydration against the seeded sessionStorage above.
 rehydrateUsageReportForTests();

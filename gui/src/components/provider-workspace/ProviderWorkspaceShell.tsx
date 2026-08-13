@@ -22,7 +22,8 @@ import { providerKind } from "../../provider-workspace/kind";
 import { readJsonIfOk, readJsonOrThrow } from "../../fetch-json";
 import { readSessionListCache, writeSessionListCache } from "../../session-list-cache";
 import { countAvailableModels, parseAvailableModels, parseLiveModelCounts, parseSelectedModels, type ProviderAvailableModels, type ProviderLiveModelCounts, type ProviderModelCounts, type ProviderSelectedModels } from "../../provider-workspace/usage";
-import { capacityAggregationFromReport, type ProviderQuotaReportView } from "../../provider-workspace/report";
+import type { ProviderQuotaReportView } from "../../provider-workspace/report";
+import { freshQuotaReportRecord, useProviderQuota } from "../../provider-quota-store";
 import { formatProviderDisplayName } from "../../provider-icons";
 import { RailRow } from "./ProviderRail";
 import type { PricingFilter, ProviderModelUsageRow, ProviderUsageTotals, StatusFilter, TypeFilter } from "./types";
@@ -52,72 +53,6 @@ const SORT_DEFS: { id: ProviderSortMode; labelKey: "pws.sort.az" | "pws.sort.za"
   { id: "paid-free", labelKey: "pws.sort.paidFree" },
   { id: "accounts-first", labelKey: "pws.sort.accountsFirst" },
 ];
-
-const QUOTA_REPORT_MAX_AGE_MS = 30 * 60_000;
-
-function freshQuotaReport(value: unknown, now: number): ProviderQuotaReportView | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const row = value as Record<string, unknown>;
-  if (typeof row.updatedAt !== "number" || !Number.isFinite(row.updatedAt)) return null;
-  if (now - row.updatedAt >= QUOTA_REPORT_MAX_AGE_MS) return null;
-  if (!("quota" in row)) return null;
-  if (!("aggregation" in row)) return null;
-  if (row.label !== undefined && typeof row.label !== "string") return null;
-  if (row.source !== undefined && typeof row.source !== "string") return null;
-  const report: ProviderQuotaReportView = {
-    ...(typeof row.label === "string" ? { label: row.label } : {}),
-    ...(typeof row.source === "string" ? { source: row.source } : {}),
-    updatedAt: row.updatedAt,
-    quota: row.quota,
-    aggregation: row.aggregation,
-  };
-  return capacityAggregationFromReport(report) ? report : null;
-}
-
-function freshQuotaReportRecord(value: unknown, now = Date.now()): Record<string, ProviderQuotaReportView> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const out: Record<string, ProviderQuotaReportView> = {};
-  for (const [provider, raw] of Object.entries(value)) {
-    const report = freshQuotaReport(raw, now);
-    if (provider.trim() && report) out[provider] = report;
-  }
-  return out;
-}
-
-function readFreshQuotaReportCache(key: string): Record<string, ProviderQuotaReportView> | null {
-  return freshQuotaReportRecord(readSessionListCache<unknown>(key));
-}
-
-function freshQuotaReportsFromResponse(value: unknown, now = Date.now()): Record<string, ProviderQuotaReportView> {
-  if (!Array.isArray(value)) return {};
-  const out: Record<string, ProviderQuotaReportView> = {};
-  for (const raw of value) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
-    const provider = (raw as Record<string, unknown>).provider;
-    const report = freshQuotaReport(raw, now);
-    if (typeof provider === "string" && provider.trim() && report) out[provider] = report;
-  }
-  return out;
-}
-
-/**
- * The quota endpoint may discover an auth problem after the account list was read.
- * Project only fixed, privacy-safe reason codes into workspace readiness so an open
- * Providers page cannot keep saying Connected until its next account refresh.
- */
-function quotaAuthAttentionFromResponse(value: unknown): Record<string, boolean> {
-  if (!Array.isArray(value)) return {};
-  const out: Record<string, boolean> = {};
-  for (const raw of value) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
-    const row = raw as Record<string, unknown>;
-    if (typeof row.provider !== "string" || !row.provider.trim()) continue;
-    if (row.reason === "reauth_required" || row.reason === "local_cli_refresh_required") {
-      out[row.provider] = true;
-    }
-  }
-  return out;
-}
 
 export default function ProviderWorkspaceShell({
   providers,
@@ -176,7 +111,6 @@ export default function ProviderWorkspaceShell({
   const [selectedModels, setSelectedModels] = useState<ProviderSelectedModels>({});
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsLoadFailed, setModelsLoadFailed] = useState(false);
-  const quotasCacheKey = `ccx.providers.quotas.v1:${apiBase}`;
   const usageCacheKey = `ccx.providers.usage.v1:${apiBase}`;
   const [usageTotals, setUsageTotals] = useState<Record<string, ProviderUsageTotals>>(() => (
     readSessionListCache<{ totals: Record<string, ProviderUsageTotals> }>(usageCacheKey)?.totals ?? {}
@@ -184,17 +118,21 @@ export default function ProviderWorkspaceShell({
   const [usageModels, setUsageModels] = useState<Record<string, ProviderModelUsageRow[]>>(() => (
     readSessionListCache<{ models: Record<string, ProviderModelUsageRow[]> }>(usageCacheKey)?.models ?? {}
   ));
-  const [quotaReports, setQuotaReports] = useState<Record<string, ProviderQuotaReportView>>(() => (
-    readFreshQuotaReportCache(quotasCacheKey) ?? {}
-  ));
-  const [quotaAuthAttention, setQuotaAuthAttention] = useState<Record<string, boolean>>({});
   const [usageLoading, setUsageLoading] = useState(() => !readSessionListCache(usageCacheKey));
-  const [quotasLoading, setQuotasLoading] = useState(() => {
-    const cached = readFreshQuotaReportCache(quotasCacheKey);
-    return !cached || Object.keys(cached).length === 0;
-  });
   const [modelsLoadEpoch, setModelsLoadEpoch] = useState(0);
   const filterWrapRef = useRef<HTMLDivElement>(null);
+
+  // Provider quota data lives in the shared provider-quota store (keyed by apiBase);
+  // the Dashboard "Plan & quota" section selects the same entry. The workspace keeps
+  // its strict display filter (capacity-aggregation rows only) on top of the store.
+  const quota = useProviderQuota(apiBase);
+  const refreshQuotas = quota.refresh;
+  const quotaReports = useMemo(
+    () => freshQuotaReportRecord(quota.reports) ?? {},
+    [quota.reports],
+  );
+  const quotaAuthAttention = quota.authAttention;
+  const quotasLoading = quota.loading && Object.keys(quotaReports).length === 0;
 
   const sections = useMemo(() => {
     const base = buildProviderWorkspace(publicWorkspaceProviders(providers));
@@ -284,43 +222,11 @@ export default function ProviderWorkspaceShell({
   }, [apiBase, usageCacheKey]);
 
   useEffect(() => {
-    let cancelled = false;
-    const timeout = window.setTimeout(() => {
-      const cached = readFreshQuotaReportCache(quotasCacheKey);
-      if (!cached || Object.keys(cached).length === 0) setQuotasLoading(true);
-      // A forced bump means a mutation just changed the answer, so the server's TTL has to
-      // be bypassed. The old derived-key effect always read the cached view, which is why a
-      // switch could leave the bars showing the previous account's quota.
-      void fetch(`${apiBase}/api/provider-quotas${quotaForceRefresh ? "?refresh=1" : ""}`)
-        .then(r => readJsonIfOk<{
-          reports?: Array<{ provider: string; label?: string; source?: string; updatedAt?: number; quota?: unknown; aggregation: unknown }>;
-          availability?: unknown;
-        }>(r))
-        .then((data) => {
-          if (cancelled || !data) return;
-          // A successful endpoint response is authoritative, including an empty report list.
-          const next = freshQuotaReportsFromResponse(data.reports);
-          setQuotaReports(next);
-          setQuotaAuthAttention(quotaAuthAttentionFromResponse(data.availability));
-          writeSessionListCache(quotasCacheKey, next);
-        })
-        .catch(() => {
-          if (cancelled) return;
-          // Keep last-good only inside the same server freshness bound.
-          setQuotaReports(prev => {
-            const next = freshQuotaReportRecord(prev) ?? {};
-            writeSessionListCache(quotasCacheKey, next);
-            return next;
-          });
-        })
-        .finally(() => { if (!cancelled) setQuotasLoading(false); });
-    }, 0);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timeout);
-    };
-    // Keyed on the explicit revision: account arrival is silent, real mutations re-read.
-  }, [apiBase, quotaRefreshEpoch, quotaForceRefresh, quotasCacheKey]);
+    // A forced bump means a mutation just changed the answer, so the server's TTL has to
+    // be bypassed (?refresh=1). The provider-quota store owns singleflight + persistence;
+    // this effect just maps the shell's revision semantics onto refresh().
+    refreshQuotas({ force: quotaForceRefresh });
+  }, [apiBase, quotaRefreshEpoch, quotaForceRefresh, refreshQuotas]);
 
   useEffect(() => {
     if (!filterOpen) return;

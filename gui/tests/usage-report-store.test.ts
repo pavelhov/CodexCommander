@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 
 /**
@@ -9,6 +9,11 @@ import { Window } from "happy-dom";
  * captures it (Bun isolates module registries per test file).
  */
 const testWindow = new Window({ url: "http://localhost/" });
+const originalFetch = globalThis.fetch;
+const INSTALLED_GLOBALS = ["document", "window", "navigator", "sessionStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
+const previousGlobals = Object.fromEntries(
+  INSTALLED_GLOBALS.map(key => [key, Reflect.get(globalThis, key)]),
+) as Record<(typeof INSTALLED_GLOBALS)[number], unknown>;
 Object.defineProperties(globalThis, {
   document: { configurable: true, value: testWindow.document },
   window: { configurable: true, value: testWindow },
@@ -68,7 +73,16 @@ beforeEach(() => {
 
 afterEach(() => {
   clearUsageReportStoresForTests();
-  globalThis.fetch = undefined as unknown as typeof fetch;
+  globalThis.fetch = originalFetch;
+});
+
+afterAll(() => {
+  // The default bun test runner shares one global scope across files: restore every
+  // global installed at module load so sibling files never inherit a closed window.
+  testWindow.close();
+  for (const key of INSTALLED_GLOBALS) {
+    Object.defineProperty(globalThis, key, { configurable: true, value: previousGlobals[key] });
+  }
 });
 
 async function flush(times = 3): Promise<void> {

@@ -5,6 +5,11 @@ import type { Root } from "react-dom/client";
 import ProviderWorkspaceShell from "../src/components/provider-workspace/ProviderWorkspaceShell";
 import { LanguageProvider } from "../src/i18n/provider";
 import { readSessionListCache, writeSessionListCache } from "../src/session-list-cache";
+import {
+  clearProviderQuotaStoresForTests,
+  PROVIDER_QUOTA_STORAGE_NAME,
+  rehydrateProviderQuotaForTests,
+} from "../src/provider-quota-store";
 
 const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previous: Record<(typeof globals)[number], unknown>;
@@ -146,6 +151,7 @@ function aggregateWindowPayload(weeklyIncomplete: boolean, monthlyIncomplete: bo
 }
 
 beforeEach(() => {
+  clearProviderQuotaStoresForTests();
   previous = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previous;
   originalFetch = globalThis.fetch;
   win = new Window({ url: "http://localhost/" });
@@ -248,29 +254,51 @@ test("provider quota fetch preserves aggregate capacity through shell state and 
   expect(text).not.toMatch(/configured units|weighted units|units remaining|projected/i);
 });
 
-test("successful empty quota response removes cached providers and updates session cache", async () => {
+test("successful empty quota response clears persisted quota data", async () => {
   const seeded = (aggregatePayload().reports[0]);
-  const { provider: _provider, ...cached } = seeded;
-  writeSessionListCache(QUOTA_CACHE_KEY, { openai: cached });
+  const { provider: _provider, ...report } = seeded;
+  // A session-cache revisit seeds through the provider-quota store's persisted slice.
+  win.sessionStorage.setItem(PROVIDER_QUOTA_STORAGE_NAME, JSON.stringify({
+    state: {
+      entries: {
+        "": { reports: { openai: report }, updatedAt: Date.now() },
+      },
+    },
+    version: 0,
+  }));
+  rehydrateProviderQuotaForTests();
   quotaPayload = { reports: [] };
 
   await mountShell();
 
   expect(host.textContent ?? "").not.toContain("Configured-weight pool estimate");
-  expect(readSessionListCache(QUOTA_CACHE_KEY)).toEqual({});
+  // The empty authoritative response removed the provider from the persisted slice.
+  const persisted = JSON.parse(win.sessionStorage.getItem(PROVIDER_QUOTA_STORAGE_NAME) ?? "{}");
+  expect(persisted.state?.entries?.[""]).toBeUndefined();
 });
 
 test("expired session quota is rejected and a failed fetch cannot keep it rendered", async () => {
   const old = Date.now() - 31 * 60_000;
-  writeSessionListCache(QUOTA_CACHE_KEY, {
-    openai: {
-      label: "OpenAI (Codex login)",
-      source: "chatgpt:wham",
-      updatedAt: old,
-      quota: { weeklyPercent: 99, updatedAt: old },
-      aggregation: { ...aggregatePayload().reports[0].aggregation, presentation: "aggregate" },
+  win.sessionStorage.setItem(PROVIDER_QUOTA_STORAGE_NAME, JSON.stringify({
+    state: {
+      entries: {
+        "": {
+          reports: {
+            openai: {
+              label: "OpenAI (Codex login)",
+              source: "chatgpt:wham",
+              updatedAt: old,
+              quota: { weeklyPercent: 99, updatedAt: old },
+              aggregation: { ...aggregatePayload().reports[0].aggregation, presentation: "aggregate" },
+            },
+          },
+          updatedAt: old,
+        },
+      },
     },
-  });
+    version: 0,
+  }));
+  rehydrateProviderQuotaForTests();
   rejectQuotaFetch = true;
 
   await mountShell();
@@ -278,7 +306,9 @@ test("expired session quota is rejected and a failed fetch cannot keep it render
   const text = host.textContent ?? "";
   expect(text).not.toContain("Configured-weight pool estimate");
   expect(text).not.toContain("99% used");
-  expect(readSessionListCache(QUOTA_CACHE_KEY)).toEqual({});
+  // The stale seed was rejected at rehydrate, and the failed fetch persisted nothing.
+  const persisted = JSON.parse(win.sessionStorage.getItem(PROVIDER_QUOTA_STORAGE_NAME) ?? "{}");
+  expect(persisted.state?.entries?.[""]).toBeUndefined();
 });
 
 test("a cancelled superseded quota rejection cannot rewrite state or session cache", async () => {
