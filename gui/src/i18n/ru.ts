@@ -770,6 +770,7 @@ export const ru: Record<TKey, string> = {
   "logs.metric.effortTitle": "Запрошенный уровень → точное значение, отправленное CodexCommander; применение провайдером не подтверждено",
   "logs.metric.estimatedCostTitle": "Эквивалент стоимости по прайс-листу API, а не фактическое списание; если цену не удалось сопоставить, значение недоступно",
   "usage.cost.total": "Эквивалент стоимости по прайс-листу API (за этот период)",
+  "usage.cost.unavailable": "Недоступно",
   "usage.cost.disclaimer": "Не является счётом. Расходы могут покрываться подпиской или кредитами провайдера.",
   "usage.cost.unpricedNote": "Исключено {count} запросов (нет цены или данных использования)",
   "logs.detail.section.basic": "Основная информация",

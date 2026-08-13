@@ -10,86 +10,18 @@ import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
+import {
+  parseUsageReport,
+  type UsageDay,
+  type UsageModel,
+  type UsageProvider,
+  type UsageRange,
+  type UsageReport,
+  type UsageSummaryTotals,
+  type UsageSurface,
+} from "../usage-report-validation";
 
-type Range = "all" | "30d" | "7d";
-type UsageSurface = "all" | "codex" | "claude" | "grok";
-
-interface UsageSummaryTotals {
-  requests: number;
-  measuredRequests: number;
-  reportedRequests: number;
-  unreportedRequests: number;
-  unsupportedRequests: number;
-  estimatedRequests: number;
-  inputTokens: number;
-  outputTokens: number;
-  cachedInputTokens: number;
-  cacheReadInputTokens?: number;
-  cacheCreationInputTokens?: number;
-  reasoningOutputTokens: number;
-  totalTokens: number;
-  coverageRatio: number;
-  estimatedCostUsd?: number;
-  pricedRequests?: number;
-  unpricedRequests?: number;
-  unmeteredRequests?: number;
-}
-
-interface UsageDay {
-  date: string;
-  requests: number;
-  measuredRequests: number;
-  reportedRequests: number;
-  totalTokens: number;
-  models: UsageDayModel[];
-}
-
-interface UsageDayModel {
-  model: string;
-  provider: string;
-  requests: number;
-  totalTokens: number;
-}
-
-interface UsageModel {
-  provider: string;
-  model: string;
-  resolvedModel?: string;
-  requests: number;
-  measuredRequests: number;
-  reportedRequests: number;
-  estimatedRequests: number;
-  totalTokens: number;
-  inputTokens: number;
-  outputTokens: number;
-  shareRatio: number;
-}
-
-interface UsageProvider {
-  provider: string;
-  requests: number;
-  measuredRequests: number;
-  reportedRequests: number;
-  estimatedRequests: number;
-  totalTokens: number;
-  shareRatio: number;
-}
-
-interface UsageResponse {
-  range: Range;
-  surface: UsageSurface;
-  since: number | null;
-  generatedAt: number;
-  summary: UsageSummaryTotals;
-  days: UsageDay[];
-  models: UsageModel[];
-  providers: UsageProvider[];
-  historyTruncated: boolean;
-  truncatedPrefixBytes: number;
-  entriesTruncated: boolean;
-  entriesDropped: number;
-  error?: string;
-}
+type Range = UsageRange;
 
 function formatPct(ratio: number): string {
   return `${Math.round(ratio * 100)}%`;
@@ -294,11 +226,20 @@ function UsageSummaryCards({
       <div className="stat"><div className="muted">{t("usage.card.coverage")}</div><div className="stat-value">{formatPct(summary.coverageRatio)}</div></div>
       <div className="stat"><div className="muted">{t("usage.card.activeDays")}</div><div className="stat-value">{activeDays}</div></div>
     </div>
-      {summary.estimatedCostUsd !== undefined && (
+      {summary.estimatedCostUsd === undefined ? (
+        // Legacy server without the cost fields: the DTO now requires them, but a
+        // pre-validation session-cache seed may still carry the old shape.
+        <div className="usage-cost-row" role="note">
+          <span className="muted">{t("usage.cost.total")}</span>
+          <span className="stat-value mono usage-cost-value">{t("usage.cost.unavailable")}</span>
+        </div>
+      ) : (
         <div className="usage-cost-row" role="note">
           <span className="muted">{t("usage.cost.total")}</span>
           <span className="stat-value mono usage-cost-value">
-            {formatUsdEstimate(summary.estimatedCostUsd, locale)}
+            {summary.estimatedCostUsd === 0
+              ? "$0.00"
+              : formatUsdEstimate(summary.estimatedCostUsd, locale)}
           </span>
           <span className="muted text-caption">{t("usage.cost.disclaimer")}</span>
           {((summary.unpricedRequests ?? 0) + (summary.unmeteredRequests ?? 0)) > 0 && (
@@ -658,7 +599,7 @@ function UsageWorkspaceBody({
   locale,
   t,
 }: {
-  data: UsageResponse | null;
+  data: UsageReport | null;
   heatmap: ReturnType<typeof buildHeatmap>;
   weekBars: UsageDay[];
   activeDays: number;
@@ -732,18 +673,18 @@ function UsageWorkspaceBody({
 }
 
 /** Held usage payloads so provider/surface tab switches skip a cold ~5s refetch. */
-const usageMemoryCache = new Map<string, UsageResponse>();
+const usageMemoryCache = new Map<string, UsageReport>();
 
 function usageCacheKey(apiBase: string, range: Range, surface: UsageSurface): string {
   return `ccx.usage.v1:${apiBase}:${range}:${surface}`;
 }
 
-function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface): UsageResponse | null {
+function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface): UsageReport | null {
   const key = usageCacheKey(apiBase, range, surface);
-  return usageMemoryCache.get(key) ?? readSessionListCache<UsageResponse>(key);
+  return usageMemoryCache.get(key) ?? readSessionListCache<UsageReport>(key);
 }
 
-function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, value: UsageResponse) {
+function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, value: UsageReport) {
   const key = usageCacheKey(apiBase, range, surface);
   usageMemoryCache.set(key, value);
   writeSessionListCache(key, value);
@@ -755,10 +696,12 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   const [surface, setSurface] = useState<UsageSurface>("all");
   const [modelQuery, setModelQuery] = useState("");
 
-  const loadUsage = useCallback(async (signal: AbortSignal): Promise<UsageResponse> => {
+  const loadUsage = useCallback(async (signal: AbortSignal): Promise<UsageReport> => {
     const response = await fetch(`${apiBase}/api/usage?range=${range}&surface=${surface}`, { signal });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
-    const next = await response.json() as UsageResponse;
+    // Only validated successful reports may reach the held cache: error envelopes
+    // and malformed summaries throw here and are never persisted.
+    const next = parseUsageReport(await response.json());
     writeHeldUsage(apiBase, range, surface, next);
     return next;
   }, [apiBase, range, surface]);
@@ -767,7 +710,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   const cached = readHeldUsage(apiBase, range, surface);
   // Range and surface identify different reports, so the key changes with both. That prevents
   // a force-loading dependency revalidation from ever showing a previous report as this one.
-  const resource = useDataSurface<UsageResponse>(
+  const resource = useDataSurface<UsageReport>(
     resourceKey,
     [apiBase, range, surface],
     loadUsage,

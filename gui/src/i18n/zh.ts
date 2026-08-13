@@ -762,6 +762,7 @@ export const zh: Record<TKey, string> = {
   "logs.metric.effortTitle": "请求的推理强度 → CodexCommander 发送的确切值；不代表提供商已应用",
   "logs.metric.estimatedCostTitle": "按 API 标价估算，并非实际扣费；价格无法匹配时不显示",
   "usage.cost.total": "API 标价折算（当前范围）",
+  "usage.cost.unavailable": "不可用",
   "usage.cost.disclaimer": "这不是账单或扣费凭证。实际可能计入订阅用量或消耗服务商额度。",
   "usage.cost.unpricedNote": "已排除 {count} 个无法计费的请求",
   "logs.detail.section.basic": "基本信息",
