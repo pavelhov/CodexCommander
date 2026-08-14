@@ -959,8 +959,18 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // (docs.x.ai prompt-caching/multi-turn, verified 2026-07-13).
     // Models that never emit reasoning simply have no thinking parts to replay (no-op).
     preserveReasoningContentModels: ["grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning"],
-    // grok-4.5 reasoning is always-on with low/medium/high control (no off tier upstream).
-    modelReasoningEfforts: { "grok-4.5": ["low", "medium", "high"] },
+    // grok reasoning is always-on with low/medium/high control (no off tier upstream);
+    // grok-4.6+ extends the ladder with xhigh per docs.x.ai. xAI rejects max/ultra outright
+    // (400 "Invalid reasoning effort"), so every grok reasoning model clamps ultra/max down
+    // to its real top tier. The provider default covers all other reasoning models (incl.
+    // live-discovered ones); per-model entries exist only to raise the ceiling where verified.
+    modelReasoningEfforts: {
+      "grok-4.5": ["low", "medium", "high"],
+      "grok-4.6": ["low", "medium", "high", "xhigh"],
+    },
+    // Provider default for live-discovered reasoning models: clamp to the verified xAI
+    // ladder unless a per-model entry raises it (noReasoningModels stay effort-free).
+    reasoningEfforts: ["low", "medium", "high"],
     modelContextWindows: {
       "grok-4.5": 500_000,
       "grok-4.3": 1_000_000,

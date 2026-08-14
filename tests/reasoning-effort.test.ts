@@ -4,6 +4,7 @@ import { createAnthropicAdapter } from "../src/adapters/anthropic";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import type { AdapterRequest } from "../src/adapters/base";
 import { configuredReasoningEfforts, mapReasoningEffort, sanitizeCodexReasoningEfforts } from "../src/reasoning-effort";
+import { enrichProviderFromRegistry } from "../src/providers/derive";
 import { routeModel } from "../src/router";
 import { resolveWireProtocolOverride } from "../src/server/adapter-resolve";
 import type { CodexCommanderConfig, CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../src/types";
@@ -698,6 +699,47 @@ describe("ultra reasoning effort (upstream codex-rs parity)", () => {
     // upstream core/src/client.rs reasoning_effort_for_request (Ultra => Max).
     expect(mapReasoningEffort({ ...base, reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"] }, "m", "ultra")).toBe("max");
     expect(mapReasoningEffort(base, "m", "ultra")).toBe("max");
+  });
+
+  test("xAI registry ladder clamps max/ultra on the real route path (grok-4.6)", () => {
+    // xAI reasoning_effort accepts low|medium|high (xhigh on grok-4.6+ only); max and ultra
+    // are rejected with 400 "Invalid reasoning effort" (observed via the proxy request log:
+    // grok-4.6 + wireValue "max" -> 400). This exercises the REAL registry entry through the
+    // route path, so it fails on a registry that omits the grok-4.6 ladder.
+    const config = {
+      defaultProvider: "xai",
+      providers: {
+        xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", authMode: "oauth" },
+      },
+    } as unknown as CodexCommanderConfig;
+    const route = routeModel(config, "xai/grok-4.6");
+    expect(route.provider.modelReasoningEfforts?.["grok-4.6"]).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(mapReasoningEffort(route.provider, "grok-4.6", "ultra")).toBe("xhigh");
+    expect(mapReasoningEffort(route.provider, "grok-4.6", "max")).toBe("xhigh");
+    expect(mapReasoningEffort(route.provider, "grok-4.6", "xhigh")).toBe("xhigh");
+    const older = routeModel(config, "xai/grok-4.5");
+    expect(mapReasoningEffort(older.provider, "grok-4.5", "ultra")).toBe("high");
+    expect(mapReasoningEffort(older.provider, "grok-4.5", "max")).toBe("high");
+    // Live-discovered models without a per-model entry fall back to the provider ladder.
+    expect(mapReasoningEffort(route.provider, "grok-4.7", "ultra")).toBe("high");
+    // noReasoningModels members stay effort-free.
+    expect(mapReasoningEffort(route.provider, "grok-build-0.1", "max")).toBeUndefined();
+  });
+
+  test("enrichProviderFromRegistry merges new ladder keys into a partially saved map", () => {
+    // A config saved when the registry only knew grok-4.5 must pick up the grok-4.6 xhigh
+    // tier from the current registry for catalog advertisement, without overwriting the
+    // saved per-model entry (saved entries always win per key).
+    const provider: CodexCommanderProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.x.ai/v1",
+      authMode: "oauth",
+      modelReasoningEfforts: { "grok-4.5": ["low", "medium", "high"] },
+    };
+    enrichProviderFromRegistry("xai", provider);
+    expect(provider.modelReasoningEfforts?.["grok-4.5"]).toEqual(["low", "medium", "high"]);
+    expect(provider.modelReasoningEfforts?.["grok-4.6"]).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(provider.reasoningEfforts).toEqual(["low", "medium", "high"]);
   });
 
   test("a max wire alias applies to converted ultra; a raw ultra alias never bypasses the boundary", () => {
