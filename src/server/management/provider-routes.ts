@@ -1,32 +1,9 @@
-import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import type { CatalogModel } from "../../codex/catalog";
-import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
-import {
-  DEFAULT_SUBAGENT_MODELS,
-  codexAutoStartEnabled,
-  hasOwnProvider,
-  isValidProviderName,
-  multiAgentGuidanceEnabled,
-  providerBaseUrlConfigError,
-  providerHeadersConfigError,
-  saveConfigPreservingClaudeCode,
-  withConfigMutationLockSync,
-} from "../../config";
-import {
-  clearLoginState,
-  getLoginStatus,
-  isPublicOAuthProvider,
-  listOAuthProviders,
-  startLoginFlow,
-  submitManualLoginCode,
-  upsertOAuthProvider,
-} from "../../oauth";
-import { removeCredential } from "../../oauth/store";
+import { hasOwnProvider, isValidProviderName, providerHeadersConfigError, saveConfigPreservingClaudeCode, withConfigMutationLockSync } from "../../config";
+
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { ProviderOutboundPolicyError, providerOutboundGet, providerRedirectError } from "../../lib/provider-outbound";
-import { enrichProviderFromCatalog, isPublicCatalogOnlyKeyValidation, listKeyLoginProviders } from "../../oauth/key-providers";
+import { enrichProviderFromCatalog, isPublicCatalogOnlyKeyValidation } from "../../oauth/key-providers";
 import { providerCredentialVerification } from "../../providers/credential-verification";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode, providerMatchesRegistryTransport } from "../../providers/registry";
@@ -36,7 +13,7 @@ import {
   readBoundedDiscoveryJson,
   resolveProviderModelDiscovery,
 } from "../../providers/model-discovery";
-import { routedSlug, slugEquals } from "../../providers/slug-codec";
+
 import {
   clearProviderQuotaCache,
   fetchProviderQuotaReports,
@@ -47,32 +24,17 @@ import { codexAccountNamespaceProviderCollisionError } from "../../codex/account
 import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import { getProviderDiscoveryStatus } from "../../codex/model-cache";
-import { globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
-import { resolveCodexHomeDir } from "../../codex/home";
-import { readUsageEntries } from "../../usage/log";
-import { getUsageDebugLogEntries } from "../../usage/debug";
-import { parseRange, parseUsageSurface, summarizeUsage } from "../../usage/summary";
+import { globalContextCapValue, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
+
 import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
 import { getProviderRegistryEntry } from "../../providers/registry";
-import { getDebugLogEntries } from "../../lib/debug-log-buffer";
-import { getInjectionDebugLogEntries } from "../../lib/injection-debug-log";
-import {
-  clearDebugSettings,
-  clearDebugSetting,
-  getDebugSettings,
-  setDebugSettings,
-  type DebugFlag,
-} from "../../lib/debug-settings";
-import type { CodexCommanderClaudeCodeConfig, CodexCommanderConfig, CodexCommanderCustomModel, CodexCommanderProviderConfig } from "../../types";
-import { drainAndShutdown } from "../lifecycle";
-import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
-import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
-import type { PersistedUsageAttempt } from "../../usage/log";
-import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
-import { applySystemEnvToggle } from "../system-env";
 
-import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
-import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../../types";
+
+import { jsonResponse, providerManagementConfigError, publicProviderBaseUrl } from "../auth-cors";
+
+import { isPlainRecord, stripRegistryOnlyStaticHeaders } from "./shared";
+
 import type { ManagementContext } from "./context";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 
@@ -238,7 +200,7 @@ function applyProviderPatchFields(
 }
 
 export async function handleProviderRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
+  const { req, url, config, deps, convergeCodexCatalog } = ctx;
 
   if (url.pathname === "/api/provider-quotas" && req.method === "GET") {
     const forceRefresh = url.searchParams.get("refresh") === "1" || url.searchParams.get("refresh") === "true";

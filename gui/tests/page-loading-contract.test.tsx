@@ -48,6 +48,13 @@ const MIGRATED = [
 test("every migrated surface subscribes through the shared resource layer", async () => {
   for (const surface of MIGRATED) {
     const source = await read(surface.file);
+    if (surface.name === "Usage") {
+      // PR1 moved Usage onto the usage-report domain store. It still classifies render
+      // state through the shared data-surface machine (classifyDataSurface), so the
+      // contract holds; only the subscription mechanism changed.
+      expect(source, surface.name).toContain("classifyDataSurface");
+      continue;
+    }
     expect(source, surface.name).toContain("useDataSurface");
   }
 });

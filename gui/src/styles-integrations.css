@@ -8,7 +8,7 @@
 .integration-badge--danger { background: var(--red-soft); color: var(--red); }
 .integration-badge--danger-outline { background: transparent; color: var(--red); border-color: var(--red); }
 
-.integration-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--raised); margin-bottom: 14px; }
+.integration-summary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius); background: var(--raised); margin-bottom: 14px; }
 .integration-summary-cell { display: flex; flex-direction: column; gap: 2px; }
 .integration-summary-label { font-size: var(--text-caption); color: var(--muted); }
 .integration-summary .btn { margin-left: auto; }
@@ -91,8 +91,8 @@
 }
 .client-apps-page-head h2 { margin: 0; font-size: var(--text-display); letter-spacing: -0.025em; }
 .client-apps-page-head p { margin: 5px 0 0; color: var(--muted); font-size: var(--text-body); }
-.client-apps-page-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
-.client-apps-page-actions .btn { display: inline-flex; align-items: center; gap: 7px; }
+.client-apps-page-actions { display: flex; align-items: center; gap: var(--space-2); flex: 0 0 auto; }
+.client-apps-page-actions .btn { display: inline-flex; align-items: center; gap: var(--space-1-5); }
 .client-apps-page-actions svg { width: 15px; height: 15px; }
 
 .client-apps-flow {
@@ -134,15 +134,15 @@
 .client-apps-flow-stage small { color: var(--green); font-size: var(--text-caption); font-weight: var(--weight-semibold); }
 .client-apps-flow-stage em { flex: 1 0 100%; color: var(--muted); font-size: var(--text-caption); font-style: normal; line-height: var(--leading-body); }
 .client-apps-flow-arrow { color: var(--faint); text-align: center; font-size: 19px; }
-.client-apps-flow-chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; min-width: 0; }
+.client-apps-flow-chips { display: flex; flex-wrap: wrap; gap: var(--space-1-5); margin-top: var(--space-3); min-width: 0; }
 .client-apps-flow-chips--providers { grid-column: 1; }
 .client-apps-flow-chips--clients { grid-column: 5; }
 .client-apps-flow-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding: 4px 9px;
+  gap: var(--space-1-5);
+  min-height: var(--control-sm);
+  padding: var(--space-1) var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   background: var(--raised);
@@ -228,10 +228,10 @@ button.client-apps-flow-chip:hover { border-color: var(--accent-ring); color: va
 .client-apps-mark svg { width: 19px; height: 19px; color: var(--muted); }
 .client-apps-row-copy { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .client-apps-row-title { font-size: var(--text-control); font-weight: var(--weight-semibold); }
-.client-apps-row-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; color: var(--muted); font-size: var(--text-caption); }
+.client-apps-row-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1-5) var(--space-2); color: var(--muted); font-size: var(--text-caption); }
 .client-apps-row-meta .badge { font-size: var(--text-caption); }
 .client-apps-row-actions { display: flex; align-items: center; justify-content: flex-end; }
-.client-apps-row-actions .btn { min-height: 34px; white-space: nowrap; }
+.client-apps-row-actions .btn { min-height: var(--control-md); white-space: nowrap; }
 .client-apps-row > .notice,
 .client-apps-row-refusal { grid-column: 1 / -1; }
 .client-apps-row-refusal { margin: 0; color: var(--red); font-size: var(--text-caption); line-height: var(--leading-body); }
@@ -253,7 +253,7 @@ button.client-apps-flow-chip:hover { border-color: var(--accent-ring); color: va
 .client-apps-available-main > span:last-child { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .client-apps-available-main strong { font-size: var(--text-control); }
 .client-apps-available-main small { color: var(--muted); font-size: var(--text-caption); }
-.client-apps-available-row .btn { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; min-height: 34px; padding-inline: 10px; }
+.client-apps-available-row .btn { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; min-height: var(--control-md); padding-inline: var(--space-2); }
 .client-apps-available-row .btn svg { width: 13px; height: 13px; }
 
 .client-apps-detail { position: sticky; top: 20px; min-width: 0; overflow: hidden; }

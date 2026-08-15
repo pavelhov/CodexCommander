@@ -34,26 +34,29 @@ test("Dashboard wires a single project-config diagnostics owner outside the sett
   expect(overviewBody).not.toContain("diagnostics/project-config");
 });
 
-test("Dashboard usage polling cannot delay core health and settings", async () => {
+test("Dashboard usage is owned by the shared usage-report store, not a dashboard poll", async () => {
   const core = await Bun.file(new URL("../src/pages/dashboard-core-poll.ts", import.meta.url)).text();
   const hook = await Bun.file(new URL("../src/pages/use-dashboard-data.ts", import.meta.url)).text();
   const overviewFnStart = core.indexOf("export async function fetchDashboardOverview");
-  const usageFnStart = core.indexOf("export async function fetchDashboardUsage");
   const sidecarsFnStart = core.indexOf("export async function fetchDashboardSidecars");
   expect(overviewFnStart).toBeGreaterThan(-1);
-  expect(usageFnStart).toBeGreaterThan(-1);
   expect(sidecarsFnStart).toBeGreaterThan(-1);
+  // The overview poll must never own the usage endpoint.
   expect(core.slice(overviewFnStart, core.indexOf("export async function fetchDashboardMultiAgent"))).not.toContain("/api/usage?range=30d");
   expect(core.slice(overviewFnStart, core.indexOf("export async function fetchDashboardMultiAgent"))).not.toContain("/api/sidecar-settings");
   expect(core.slice(overviewFnStart, core.indexOf("export async function fetchDashboardMultiAgent"))).not.toContain("/api/shadow-call-settings");
   expect(core.slice(sidecarsFnStart)).toContain("/api/sidecar-settings");
-  expect(hook).toContain("dashboard-usage:${apiBase}");
+  // Usage lives in the domain store: the dashboard selects the same `${apiBase}:30d:all`
+  // entry the Usage page uses, so both surfaces dedupe into one in-flight fetch. No
+  // client-resource poll and no dashboard session-cache remain for usage.
+  expect(hook).toContain('useUsageReport(apiBase, "30d", "all")');
+  expect(hook).not.toContain("dashboard-usage:${apiBase}");
+  expect(hook).not.toContain("USAGE_CACHE_PREFIX");
+  expect(hook).not.toContain("fetchDashboardUsage");
   expect(hook).toContain("dashboard-sidecars:${apiBase}");
   expect(hook).toContain("dashboard-overview:${apiBase}");
-  expect(hook).toContain("fetchDashboardUsage(apiBase, signal)");
   expect(hook).toContain("fetchDashboardSidecars");
   expect(hook).toContain("fetchDashboardOverview");
-  expect(hook).toMatch(/dashboard-usage:\$\{apiBase\}[\s\S]*pollMs: 60_000/);
 });
 
 test("Dashboard interactive controls load independently of health/providers", async () => {

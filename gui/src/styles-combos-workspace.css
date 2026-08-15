@@ -87,7 +87,7 @@
 .combos-workspace-rail-group-head {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--space-1-5);
   padding: 8px 16px 6px;
   color: var(--muted);
   font-size: var(--text-caption);
@@ -232,7 +232,7 @@
   font-size: var(--text-control);
   font-weight: 500;
   color: var(--muted);
-  padding: 8px 12px;
+  padding: var(--space-2) var(--space-3);
   cursor: pointer;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
@@ -295,8 +295,8 @@
 .cwi-count-pill {
   display: inline-flex;
   align-items: baseline;
-  gap: 6px;
-  padding: 8px 12px;
+  gap: var(--space-1-5);
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
   background: var(--raised);
@@ -508,7 +508,7 @@
 .pwi-json-unsaved-title,
 .pwi-remove-confirm-title { margin: 0 0 8px; font-size: var(--text-subtitle); font-weight: 650; color: var(--text); }
 .pwi-json-unsaved-desc,
-.pwi-remove-confirm-desc { margin: 0 0 18px; font-size: var(--text-control); line-height: 1.45; }
+.pwi-remove-confirm-desc { margin: 0 0 var(--space-4); font-size: var(--text-control); line-height: 1.45; /* deliberate: between --leading-ui and --leading-body */ }
 .pwi-json-unsaved-actions,
 .pwi-remove-confirm-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .pwi-remove-confirm-danger { background: var(--red) !important; color: #fff !important; border-color: transparent !important; }

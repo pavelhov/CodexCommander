@@ -84,7 +84,7 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 }
 ```
 
-For strategy behavior, retryable failures, cooldowns, encrypted v2 task limits, and management
+For strategy behavior, retryable failures, cooldowns, encrypted V2 task limits, and management
 commands, see [Combos](/guides/combos/).
 
 ## Routing policy profiles (`config.routingProfiles`)

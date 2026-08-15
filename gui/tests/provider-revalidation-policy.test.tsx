@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import Providers from "../src/pages/Providers";
 import { LanguageProvider } from "../src/i18n/provider";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
+import { clearProviderQuotaStoresForTests } from "../src/provider-quota-store";
 
 /**
  * Quota revalidation policy.
@@ -30,6 +31,9 @@ const PROVIDERS = ["anthropic", "cursor", "kimi"];
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map(k => [k, Reflect.get(globalThis, k)])) as typeof previousGlobals;
   clearClientResourceStoresForTests();
+  // Quota lives in the shared provider-quota store now; a sibling case's healthy entry
+  // would short-circuit the cold read this file pins (ensure() is a no-op on healthy data).
+  clearProviderQuotaStoresForTests();
   testWindow = new Window({ url: "http://localhost/#providers" });
   Object.defineProperty(testWindow.navigator, "language", { configurable: true, value: "en-US" });
   Object.defineProperties(globalThis, {
@@ -99,6 +103,7 @@ afterEach(async () => {
     root = null;
   }
   clearClientResourceStoresForTests();
+  clearProviderQuotaStoresForTests();
   for (const key of globals) {
     Object.defineProperty(globalThis, key, { configurable: true, value: previousGlobals[key] });
   }

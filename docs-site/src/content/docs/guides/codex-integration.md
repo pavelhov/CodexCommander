@@ -293,7 +293,7 @@ it is not; `ccx doctor` reports restart safety (service/shim coverage).
 
 ## The subagent picker
 
-Catalog sync makes the selected sub-agent models available to Codex; see [Codex App model picker](/guides/codex-app-models/#subagent-selection) for picker ordering and [Sub-agent Surface](/guides/sub-agent-surface/) for v1/base/v2 delegation and fallback behavior.
+Catalog sync makes the selected sub-agent models available to Codex; see [Codex App model picker](/guides/codex-app-models/#subagent-selection) for picker ordering and [Sub-agent Surface](/guides/sub-agent-surface/) for V1/base/V2 delegation and fallback behavior.
 
 ## Codex account warmup
 

@@ -1640,7 +1640,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
               onClick={() => setSelectedProvider(null)}
               aria-current={selectedProvider === null ? "true" : undefined}
             >
-              <span className="models-workspace-rail-name">{t("models.workspace.allProviders")}</span>
+              <span className="models-workspace-rail-name" title={t("models.workspace.allProviders")}>{t("models.workspace.allProviders")}</span>
               <span className="models-workspace-rail-meta">{t("models.active", { active: effectiveVisibleCount, total: models.length })}</span>
             </button>
             {groups.map(group => {
@@ -1661,7 +1661,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
                   onClick={() => setSelectedProvider(provider)}
                   aria-current={selectedProvider === provider ? "true" : undefined}
                 >
-                  <span className="models-workspace-rail-name">{formatProviderDisplayName(provider, t)}</span>
+                  <span className="models-workspace-rail-name" title={formatProviderDisplayName(provider, t)}>{formatProviderDisplayName(provider, t)}</span>
                   <span className="models-workspace-rail-meta">{t("models.active", { active: activeCount, total: rows.length })}</span>
                 </button>
               );

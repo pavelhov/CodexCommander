@@ -113,7 +113,7 @@ async function mount() {
 
 function addToggle(id: string): HTMLButtonElement {
   const row = Array.from(container.querySelectorAll("button")).find((b) =>
-    (b.getAttribute("aria-label") ?? "").includes(`Add ${id} to active roster`),
+    (b.getAttribute("aria-label") ?? "").includes(`Add ${id} to configured roster`),
   );
   if (!row) throw new Error(`add toggle not found: ${id}`);
   return row as unknown as HTMLButtonElement;

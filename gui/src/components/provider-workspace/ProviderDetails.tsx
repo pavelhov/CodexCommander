@@ -22,7 +22,7 @@ import { UnsavedLeaveDialog } from "./ProviderDialogs";
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
 import type { AccountLoadState, ProviderModelUsageRow, ProviderUsageTotals, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers, ProviderUpdatePatch } from "./types";
 import type { ProviderRouteTab } from "../../provider-route";
-import { accountNeedsReauth } from "../../oauth-health-display";
+import { accountNeedsReauth as accountNeedsReauthHealth } from "../../oauth-health-display";
 
 type Tab = ProviderRouteTab;
 
@@ -31,6 +31,9 @@ export default function ProviderDetails({
   usageTotals,
   modelUsage,
   quotaReport,
+  quotaUnavailableReason,
+  onRetryQuota,
+  accountNeedsReauth,
   availableModels,
   hasLiveModels,
   selectedModels,
@@ -62,6 +65,10 @@ export default function ProviderDetails({
   usageTotals?: ProviderUsageTotals;
   modelUsage?: ProviderModelUsageRow[];
   quotaReport?: ProviderQuotaReportView;
+  quotaUnavailableReason?: string;
+  onRetryQuota?: () => void;
+  /** True only for a genuine active-account reauth need (never quota-derived). */
+  accountNeedsReauth?: boolean;
   availableModels: string[];
   /** Server-reported live-catalog provenance; see filterModels(). */
   hasLiveModels: boolean;
@@ -257,6 +264,9 @@ export default function ProviderDetails({
             connectionIdentity={connectionIdentity}
             usageTotals={usageTotals}
             quotaReport={quotaReport}
+            quotaUnavailableReason={quotaUnavailableReason}
+            onRetryQuota={onRetryQuota}
+            accountNeedsReauth={accountNeedsReauth}
             oauthEmail={oauthEmail}
             oauth={oauth}
             onEditSettings={() => switchTab("settings")}
@@ -269,8 +279,8 @@ export default function ProviderDetails({
                 ? () => {
                     if (item.authMode === "oauth") {
                       const rows = accounts ?? [];
-                      const active = rows.find(a => a.active && accountNeedsReauth(a))
-                        ?? rows.find(a => accountNeedsReauth(a));
+                      const active = rows.find(a => a.active && accountNeedsReauthHealth(a))
+                        ?? rows.find(a => accountNeedsReauthHealth(a));
                       void authHandlers?.onReauth(item.name, active?.id);
                       return;
                     }
@@ -291,7 +301,7 @@ export default function ProviderDetails({
             selectedModels={selectedModels}
             modelsLoading={modelsLoading}
             modelsLoadFailed={modelsLoadFailed}
-            reauthRequired={(accounts ?? []).some(account => account.active && accountNeedsReauth(account))}
+            reauthRequired={(accounts ?? []).some(account => account.active && accountNeedsReauthHealth(account))}
             onRetryModels={onRetryModels}
             onOpenAccounts={authSurface ? () => switchTab("accounts") : undefined}
           />

@@ -122,14 +122,14 @@ forces Codex's model cache stale after a toggle.
 
 ## Multi-agent surface mode
 
-The Models page labels the three collaboration choices **Reliable v1**, **Codex native** (the
-base/upstream behavior), and **Concurrent v2**. This control changes which Codex collaboration surface each picker
+The Models page labels the three collaboration choices **Reliable V1**, **Codex native** (the
+base/upstream behavior), and **Concurrent V2**. This control changes which Codex collaboration surface each picker
 entry uses; see [Sub-agent Surface](/guides/sub-agent-surface/) for the canonical mode, delegation,
 inheritance, fallback, and encrypted-task behavior.
 
 ## Reasoning top tiers
 
-Reasoning-tier visibility is independent of the v1/base/v2 surface mode. Generated reasoning-capable
+Reasoning-tier visibility is independent of the V1/base/V2 surface mode. Generated reasoning-capable
 entries advertise `max` so direct sub-agent effort overrides validate; current generated routed
 entries and older native GPT entries also advertise `ultra`. Exact upstream GPT-5.6 ladders are
 preserved, so Luna has `max` but no `ultra`.

@@ -1,40 +1,6 @@
-import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import type { CatalogModel } from "../../codex/catalog";
-import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
-import {
-  DEFAULT_SUBAGENT_MODELS,
-  codexAutoStartEnabled,
-  hasOwnProvider,
-  isValidProviderName,
-  multiAgentGuidanceEnabled,
-  providerBaseUrlConfigError,
-  providerHeadersConfigError,
-  saveConfigPreservingClaudeCode,
-} from "../../config";
-import {
-  clearLoginState,
-  getLoginStatus,
-  isPublicOAuthProvider,
-  listOAuthProviders,
-  startLoginFlow,
-  submitManualLoginCode,
-  upsertOAuthProvider,
-} from "../../oauth";
-import { removeCredential } from "../../oauth/store";
-import { providerDestinationResolvedError } from "../../lib/destination-policy";
-import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
-import { deriveProviderPresets } from "../../providers/derive";
-import { providerCodexAccountMode } from "../../providers/registry";
-import { routedSlug, slugEquals } from "../../providers/slug-codec";
-import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
-import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
-import { clearThreadAccountMap } from "../../codex/routing";
-import { primeCodexPoolQuotas } from "../../codex/auth-api";
-import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
 import { scanStorage } from "../../storage/scanner";
-import { executeArchivedCleanup, listTrashEntries, pickWireCleanupTestHooks, previewArchivedCleanup, type CleanupMode, type RestoreErrorCode } from "../../storage/cleanup";
+import { listTrashEntries, pickWireCleanupTestHooks, previewArchivedCleanup, type CleanupMode, type RestoreErrorCode } from "../../storage/cleanup";
 import { runArchivedCleanupJob } from "../../storage/cleanup-job";
 import { getRestoreTrashTestStreamResponse, runRestoreTrashEntryJob } from "../../storage/restore-job";
 import {
@@ -55,8 +21,7 @@ import {
 } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
 import { parseRange, parseUsageSurface, summarizeUsage, type UsageRange, type UsageSummary, type UsageSurface } from "../../usage/summary";
-import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
-import { getProviderRegistryEntry } from "../../providers/registry";
+
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
 import { getInjectionDebugLogEntries } from "../../lib/injection-debug-log";
 import {
@@ -66,22 +31,20 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../../lib/debug-settings";
-import type { CodexCommanderClaudeCodeConfig, CodexCommanderConfig, CodexCommanderCustomModel, CodexCommanderProviderConfig } from "../../types";
-import { drainAndShutdown } from "../lifecycle";
-import { filterRequestLogs, filteredRequestLogCount, getRequestLogEntries, type RequestLogEntry } from "../request-log";
-import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
-import type { PersistedUsageAttempt } from "../../usage/log";
-import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
-import { applySystemEnvToggle } from "../system-env";
 
-import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
-import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
+import { filterRequestLogs, filteredRequestLogCount, getRequestLogEntries } from "../request-log";
+
+import { jsonResponse } from "../auth-cors";
+
+import { parseDebugLogQuery, requestLogDto } from "./shared";
+
 import type { ManagementContext } from "./context";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import {
   discardUsageSummaryCacheEntry,
   getUsageSummaryCacheEntry,
   setUsageSummaryCacheEntry,
+  type CachedUsageSummary,
 } from "./usage-summary-cache";
 
 const USAGE_DAY_MS = 86_400_000;
@@ -121,7 +84,7 @@ function refreshedUsageSummary<T extends UsageSummary & { historyTruncated: bool
 }
 
 export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config, deps, syncClaudeAgentDefsBestEffort } = ctx;
+  const { req, url, config } = ctx;
 
   if (url.pathname === "/api/logs" && req.method === "GET") {
     const all = getRequestLogEntries();
@@ -188,68 +151,46 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     const range = parseRange(url.searchParams.get("range"));
     const surface = parseUsageSurface(url.searchParams.get("surface"));
     const now = Date.now();
+    const cacheKey = `${range}:${surface}`;
+    const effectiveReadLimit = config.managementUsageMaxReadBytes ?? 64 * 1024 * 1024;
+    let cachedHit: CachedUsageSummary | null = null;
+    let snapshot: Awaited<ReturnType<typeof readUsageSnapshotForManagement>> | null = null;
     try {
-      const cacheKey = `${range}:${surface}`;
-      const effectiveReadLimit = config.managementUsageMaxReadBytes ?? 64 * 1024 * 1024;
+      // File-read machinery: the log-file revision stat (usageLogRevision) and the
+      // snapshot read. A missing log file returns a zeroed snapshot (not a throw); only
+      // genuine read/stat/schema failures reach this catch and answer with the 503
+      // contract.
       const observedRevisionKey = `${usageLogRevisionKey(currentUsageLogRevision())}\0${effectiveReadLimit}`;
       const cached = getUsageSummaryCacheEntry(cacheKey);
       if (cached && cached.revisionKey === observedRevisionKey && now < cached.expiresAt) {
-        return jsonResponse(refreshedUsageSummary(cached.summary, range, now));
+        cachedHit = cached.summary;
+      } else {
+        if (cached) discardUsageSummaryCacheEntry(cacheKey);
+        snapshot = await readUsageSnapshotForManagement(effectiveReadLimit);
       }
-      if (cached) discardUsageSummaryCacheEntry(cacheKey);
-      const snapshot = await readUsageSnapshotForManagement(effectiveReadLimit);
-      const revisionReadAt = Date.now();
-      const summary = {
-        ...summarizeUsage(snapshot.entries, range, now, surface),
-        historyTruncated: snapshot.truncatedPrefixBytes > 0 || snapshot.entriesTruncated,
-        truncatedPrefixBytes: snapshot.truncatedPrefixBytes,
-        entriesTruncated: snapshot.entriesTruncated,
-        entriesDropped: snapshot.entriesDropped,
-      };
-      setUsageSummaryCacheEntry(cacheKey, {
-        revisionKey: `${usageLogRevisionKey(snapshot.revision)}\0${effectiveReadLimit}`,
-        expiresAt: usageSummaryExpiresAt(snapshot.entries, range, surface, now),
-        revisionReadAt,
-        summary,
-      });
-      return jsonResponse(summary);
     } catch {
-      return jsonResponse({
-        range,
-        surface,
-        since: null,
-        generatedAt: now,
-        summary: {
-          requests: 0,
-          attemptCount: 0,
-          measuredRequests: 0,
-          reportedRequests: 0,
-          unreportedRequests: 0,
-          unsupportedRequests: 0,
-          estimatedRequests: 0,
-          inputTokens: 0,
-          outputTokens: 0,
-          cachedInputTokens: 0,
-          cacheReadInputTokens: 0,
-          cacheCreationInputTokens: 0,
-          reasoningOutputTokens: 0,
-          totalTokens: 0,
-          coverageRatio: 0,
-          estimatedCostUsd: 0,
-          pricedRequests: 0,
-          unpricedRequests: 0,
-          unmeteredRequests: 0,
-        },
-        days: [],
-        models: [],
-        providers: [],
-        historyTruncated: false,
-        truncatedPrefixBytes: 0,
-        entriesTruncated: false,
-        entriesDropped: 0,
-        error: "read_failed",
-      });
+      return jsonResponse({ error: "read_failed", range, surface }, 503);
     }
+    // Outside the catch: genuine errors in the derivation/cache layer are server bugs and
+    // must surface as ordinary server errors, never misreported as read_failed.
+    if (cachedHit) {
+      return jsonResponse(refreshedUsageSummary(cachedHit, range, now));
+    }
+    const revisionReadAt = Date.now();
+    const summary = {
+      ...summarizeUsage(snapshot!.entries, range, now, surface),
+      historyTruncated: snapshot!.truncatedPrefixBytes > 0 || snapshot!.entriesTruncated,
+      truncatedPrefixBytes: snapshot!.truncatedPrefixBytes,
+      entriesTruncated: snapshot!.entriesTruncated,
+      entriesDropped: snapshot!.entriesDropped,
+    };
+    setUsageSummaryCacheEntry(cacheKey, {
+      revisionKey: `${usageLogRevisionKey(snapshot!.revision)}\0${effectiveReadLimit}`,
+      expiresAt: usageSummaryExpiresAt(snapshot!.entries, range, surface, now),
+      revisionReadAt,
+      summary,
+    });
+    return jsonResponse(summary);
   }
 
   if (url.pathname === "/api/storage" && req.method === "GET") {

@@ -16,12 +16,12 @@ import {
   fetchDashboardOverview,
   fetchDashboardSettings,
   fetchDashboardSidecars,
-  fetchDashboardUsage,
   fetchProjectConfigDiagnostics,
   fetchStartupHealth,
   normalizeInjectionSelection,
   type DashboardEpochRefs,
 } from "./dashboard-core-poll";
+import { useUsageReport } from "../usage-report-store";
 import {
   type DashboardSection,
   type HealthData,
@@ -43,7 +43,6 @@ import {
 
 const CONTROLS_CACHE_PREFIX = "ccx.dash.controls.v1:";
 const OVERVIEW_CACHE_PREFIX = "ccx.dash.overview.v1:";
-const USAGE_CACHE_PREFIX = "ccx.dash.usage30d.v1:";
 const STARTUP_CACHE_PREFIX = "ccx.dash.startup.v1:";
 const MA_MODE_CACHE_PREFIX = "ccx.dash.maMode.v1:";
 
@@ -78,10 +77,6 @@ export function useDashboardData(apiBase: string) {
     () => readSessionListCache<CachedOverview>(`${OVERVIEW_CACHE_PREFIX}${apiBase}`),
     [apiBase],
   );
-  const cachedUsage = useMemo(
-    () => readSessionListCache<UsageSummary30d>(`${USAGE_CACHE_PREFIX}${apiBase}`),
-    [apiBase],
-  );
   const cachedStartup = useMemo(() => {
     const cached = readSessionListCache<StartupHealthStatus>(`${STARTUP_CACHE_PREFIX}${apiBase}`);
     return cached === "error" ? null : cached;
@@ -97,7 +92,6 @@ export function useDashboardData(apiBase: string) {
   const [settings, setSettings] = useState<SettingsData | null>(() => cachedControls?.settings ?? null);
   const [sidecar, setSidecar] = useState<SidecarData | null>(() => cachedControls?.sidecar ?? null);
   const [shadowCall, setShadowCall] = useState<ShadowCallData | null>(() => cachedControls?.shadowCall ?? null);
-  const [usage30d, setUsage30d] = useState<UsageSummary30d | null>(() => cachedUsage);
   const [sidecarSaving, setSidecarSaving] = useState(false);
   const [shadowCallSaving, setShadowCallSaving] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -221,12 +215,41 @@ export function useDashboardData(apiBase: string) {
     { pollMs: 5000, enabled: overviewReady },
   );
 
-  const usagePoll = useKeyedClientResource(
-    `dashboard-usage:${apiBase}`,
-    [apiBase],
-    (signal) => fetchDashboardUsage(apiBase, signal),
-    { pollMs: 60_000, enabled: overviewReady },
-  );
+  // Usage is owned by the shared usage-report store (key `${apiBase}:30d:all`). The Usage
+  // page selects the same entry, so both surfaces dedupe into one in-flight fetch. Keeping
+  // it out of the client-resource polls means usage can never delay health/settings commits.
+  const usageReport = useUsageReport(apiBase, "30d", "all");
+  const usage30d = useMemo<UsageSummary30d | null>(() => {
+    const report = usageReport.data;
+    if (!report) return null;
+    return {
+      summary: {
+        requests: report.summary.requests,
+        totalTokens: report.summary.totalTokens,
+        coverageRatio: report.summary.coverageRatio,
+        estimatedCostUsd: report.summary.estimatedCostUsd,
+        pricedRequests: report.summary.pricedRequests,
+        unpricedRequests: report.summary.unpricedRequests,
+        unmeteredRequests: report.summary.unmeteredRequests,
+      },
+    };
+  }, [usageReport.data]);
+
+  // The dashboard used to poll /api/usage?range=30d every 60s. Usage is now owned by the
+  // usage-report store, so while the Dashboard is mounted we quiet-revalidate the 30d/all
+  // entry on the same cadence. replace:false keeps singleflight semantics: a poll skips
+  // when another fetch is in flight and never aborts it, and quiet refreshes retain the
+  // last-good data (no skeleton flash).
+  const refreshUsage30d = usageReport.refresh;
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      // Same pause-when-hidden behavior the old client-resource poll had: a background
+      // tab has nobody reading the paint, so skip the quiet revalidation until visible.
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      refreshUsage30d({ replace: false });
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [refreshUsage30d]);
 
   const diagnosticsPoll = useKeyedClientResource(
     `dashboard-diagnostics:${apiBase}`,
@@ -335,13 +358,6 @@ export function useDashboardData(apiBase: string) {
       });
     }
   }, [settingsPoll.data, apiBase]);
-
-  useEffect(() => {
-    if (usagePoll.data !== undefined) {
-      setUsage30d(usagePoll.data);
-      writeSessionListCache(`${USAGE_CACHE_PREFIX}${apiBase}`, usagePoll.data);
-    }
-  }, [usagePoll.data, apiBase]);
 
   useEffect(() => {
     if (diagnosticsPoll.data) setProjectConfigWarnings(diagnosticsPoll.data);
@@ -544,7 +560,7 @@ export function useDashboardData(apiBase: string) {
     modelQuery, setModelQuery,
     expandedProviders, setExpandedProviders,
     health, startupHealth, providers, models, settings, sidecar, shadowCall, usage30d,
-    usageLoading: usagePoll.loading && !usage30d,
+    usageLoading: usageReport.loading && !usage30d,
     healthLoading: overviewPoll.loading && !health,
     sidecarSaving, shadowCallSaving, modelsLoading, settingsSaving, syncing,
     maMode, maModeResolved, maBusy, setMaHelpOpen, maHelpOpen,

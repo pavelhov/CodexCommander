@@ -337,7 +337,7 @@ export default function SubagentsWorkspace({
                     <span className="swi-roster-rank" aria-hidden="true">{index + 1}</span>
                     <ModelMark model={model} />
                     <span className="swi-roster-identity">
-                      <span className="swi-roster-name">{formatNamespacedModelId(selector, t)}</span>
+                    <span className="swi-roster-name" title={formatNamespacedModelId(selector, t)}>{formatNamespacedModelId(selector, t)}</span>
                       {/* No map entry (e.g. unsaved draft row) => no claim at
                           all; the sr-only "both" line requires an explicit
                           "both" entry from the server. */}
@@ -417,7 +417,7 @@ export default function SubagentsWorkspace({
                   if (!surface) return null;
                   return (
                     <li className="swi-roster-matrix-row" key={selector}>
-                      <span className="swi-roster-matrix-name">{formatNamespacedModelId(selector, t)}</span>
+                      <span className="swi-roster-matrix-name" title={formatNamespacedModelId(selector, t)}>{formatNamespacedModelId(selector, t)}</span>
                       <span className="swi-roster-matrix-surface">{surfaceLabel(surface, t)}</span>
                     </li>
                   );
@@ -469,7 +469,7 @@ export default function SubagentsWorkspace({
                 <li className={`swi-library-row${selected ? " swi-library-row--selected" : ""}`} key={selector}>
                   <ModelMark model={model} />
                   <span className="swi-library-identity">
-                    <span className="swi-library-name">{formatNamespacedModelId(selector, t)}</span>
+                    <span className="swi-library-name" title={formatNamespacedModelId(selector, t)}>{formatNamespacedModelId(selector, t)}</span>
                     <ModelChips model={model} />
                   </span>
                   {priority && <span className="swi-library-priority">#{priority}</span>}

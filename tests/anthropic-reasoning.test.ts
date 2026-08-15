@@ -97,12 +97,38 @@ describe("anthropic extended-thinking gate", () => {
   });
 
   test.each([
+    ["medium", 16_384], // medium keeps its 8192 budget + headroom; never falls through to unknown.
     ["high", 24_576],
     ["xhigh", 32_768],
     ["max", 40_192],
+    ["ultra", 40_192], // ultra mirrors the codex-rs boundary and clamps to max on the wire.
   ])("adaptive-thinking %s effort reserves visible-output headroom", async (effort, expected) => {
     const b = await bodyOf(parsed(effort, {}, "claude-fable-5"));
     expect(b.max_tokens).toBe(expected);
+  });
+
+  test("adaptive-thinking model clamps unsupported 'ultra' effort to 'max'", async () => {
+    const b = await bodyOf(parsed("ultra", {}, "claude-fable-5"));
+    expect(b.thinking).toEqual({ type: "adaptive" });
+    // Anthropic's output_config.effort ladder tops out at max; "ultra" would 400.
+    expect(b.output_config).toEqual({ effort: "max" });
+  });
+
+  test("adaptive-thinking model clamps unknown efforts to 'high'", async () => {
+    const b = await bodyOf(parsed("ludicrous", {}, "claude-fable-5"));
+    expect(b.output_config).toEqual({ effort: "high" });
+    // Unknown clamps to high on the wire AND budgets like high (16384 + headroom).
+    expect(b.max_tokens).toBe(24_576);
+  });
+
+  test("non-adaptive model maps ultra to the max thinking budget", async () => {
+    // Default modelId (claude-sonnet-4.5) is NOT an adaptive-thinking family, so ultra
+    // goes through the budget ladder: it must budget like max, above xhigh's 24576.
+    const b = await bodyOf(parsed("ultra"));
+    const thinking = b.thinking as { type: string; budget_tokens: number } | undefined;
+    expect(thinking?.type).toBe("enabled");
+    expect(thinking?.budget_tokens ?? 0).toBeGreaterThan(24_576);
+    expect(b.max_tokens as number).toBeGreaterThan(thinking!.budget_tokens);
   });
 
   test("Anthropic streaming and JSON responses preserve max_tokens stop reasons", async () => {

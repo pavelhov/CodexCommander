@@ -164,6 +164,7 @@ test("an aborted Usage fetch must not clear loading while its replacement is in 
     requests: 0, measuredRequests: 0, reportedRequests: 0, unreportedRequests: 0,
     unsupportedRequests: 0, estimatedRequests: 0, inputTokens: 0, outputTokens: 0,
     cachedInputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0, coverageRatio: 1,
+    estimatedCostUsd: 0, pricedRequests: 0, unpricedRequests: 0, unmeteredRequests: 0,
   };
   const usage = (generatedAt: number) => ({
     range: "7d", surface: "all", since: null, generatedAt,

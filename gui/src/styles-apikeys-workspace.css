@@ -161,8 +161,8 @@
 }
 
 .awi-overview .api-panel {
-  padding: 18px;
-  gap: 10px;
+  padding: var(--space-4);
+  gap: var(--space-2);
 }
 
 .awi-overview .api-auth-list {

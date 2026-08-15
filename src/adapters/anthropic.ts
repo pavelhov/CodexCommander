@@ -427,9 +427,10 @@ function reasoningBudget(effort: string): number {
     case "low": return 4096;
     case "high": return 16384;
     case "xhigh": return 24576;
-    case "max": return 32000;
-    case "medium":
-    default: return 8192;
+    case "max":
+    case "ultra": return 32000; // codex-rs maps ultra -> max before the wire; mirror it.
+    case "medium": return 8192;
+    default: return 16384; // unknown efforts clamp to "high" on the wire; budget must match.
   }
 }
 
@@ -510,9 +511,25 @@ function supportsExplicitThinkingDisable(modelId: string): boolean {
   return meetsFamilyMinimum(modelId, EXPLICIT_THINKING_DISABLE_FAMILY_MINIMUMS);
 }
 
-/** `output_config.effort` accepts low|medium|high|xhigh|max — "minimal" is rejected with a 400. */
+/**
+ * `output_config.effort` accepts low|medium|high|xhigh|max — "minimal" and anything
+ * above the ladder (e.g. "ultra") are rejected with a 400 ("Invalid reasoning effort").
+ * "ultra" mirrors the codex-rs boundary (ultra -> max); unknown values clamp to "high"
+ * so the proxy never forwards an invalid effort to Anthropic.
+ */
 function adaptiveEffort(effort: string): string {
-  return effort === "minimal" ? "low" : effort;
+  switch (effort) {
+    case "minimal": return "low";
+    case "ultra": return "max";
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+    case "max":
+      return effort;
+    default:
+      return "high";
+  }
 }
 
 function usageFromAnthropic(usage: Record<string, number> | undefined): CodexCommanderUsage | undefined {

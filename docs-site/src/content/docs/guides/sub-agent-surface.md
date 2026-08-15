@@ -1,5 +1,5 @@
 ---
-title: Sub-agent Surface (v1 / base / v2)
+title: Sub-agent Surface (V1 / base / V2)
 description: Control how Codex spawns and manages sub-agents across all models.
 ---
 
@@ -16,12 +16,12 @@ Choose the mode for **new sessions**. Existing sessions keep the surface they st
 
 | Mode | What Codex gets | Who should pick it |
 | --- | --- | --- |
-| **v1** | Classic namespaced `spawn_agent`, `send_input`, `resume_agent`, and `close_agent` tools. A spawn can select another model directly. | Beginners who need reliable delegation across different providers, especially native-to-routed children. |
-| **base** (default; **Codex native** in the GUI) | Upstream model pins: GPT-5.6 Sol/Terra use v2, Luna uses v1, and unpinned models follow Codex's `multi_agent_v2` feature flag. | Most users. It follows Codex's intended surface for each model without forcing one globally. |
-| **v2** | Flat `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`, and agent-list tools, with concurrent sessions. | Users who want the newer concurrent workflow. Mixed-provider parents must also choose the plaintext compatibility delivery policy described below. |
+| **V1** | Classic namespaced `spawn_agent`, `send_input`, `resume_agent`, and `close_agent` tools. A spawn can select another model directly. | Beginners who need reliable delegation across different providers, especially native-to-routed children. |
+| **base** (default; **Codex native** in the GUI) | Upstream model pins: GPT-5.6 Sol/Terra use V2, Luna uses V1, and unpinned models follow Codex's `multi_agent_v2` feature flag. | Most users. It follows Codex's intended surface for each model without forcing one globally. |
+| **V2** | Flat `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`, and agent-list tools, with concurrent sessions. | Users who want the newer concurrent workflow. Mixed-provider parents must also choose the plaintext compatibility delivery policy described below. |
 
 :::tip[Not sure?]
-Start with **base**. Choose **v1** for the established cross-provider path. Force **v2** only when
+Start with **base**. Choose **V1** for the established cross-provider path. Force **V2** only when
 you specifically want its newer session model; enable plaintext compatibility when that V2 parent
 must delegate to Kimi, Grok, DeepSeek, or another external provider.
 :::
@@ -30,16 +30,16 @@ must delegate to Kimi, Grok, DeepSeek, or another external provider.
 
 The selected mode controls the `multi_agent_version` field in every catalog entry Codex reads:
 
-- **v1** stamps `multi_agent_version = "v1"` on every model.
+- **V1** stamps `multi_agent_version = "v1"` on every model.
 - **base** restores upstream pins. Unpinned entries follow the native `multi_agent_v2` feature flag.
-- **v2** stamps `multi_agent_version = "v2"` on every model.
+- **V2** stamps `multi_agent_version = "v2"` on every model.
 
 CodexCommander applies this as the final pass to both the live `/v1/models` catalog and the catalog synced
 to disk. That is why a mode change affects newly created App, CLI, and TUI sessions consistently.
 
 ### A mode is not a worker reload
 
-Changing to **v2** makes Luna *eligible for the V2 collaboration surface* because the generated
+Changing to **V2** makes Luna *eligible for the V2 collaboration surface* because the generated
 catalog stamps it as V2. It does not, by itself, make Luna (or any other model) available to a
 currently running Codex worker. For a model to be usable by `spawn_agent`, all of these must hold:
 
@@ -52,7 +52,7 @@ This separation is deliberate: protocol selection controls catalog semantics; ca
 controls what an already-running Codex worker has loaded. In particular, opening a **new task** or
 forking a task does **not** reload an existing app-server's model catalog.
 
-For a v2 roster, eligibility has three states: an entry stamped `"v2"`, explicitly set to `null`, or
+For a V2 roster, eligibility has three states: an entry stamped `"v2"`, explicitly set to `null`, or
 with no `multi_agent_version` field is eligible. A genuine `"v1"` pin is excluded because it states
 that the model belongs to the other collaboration surface.
 
@@ -62,12 +62,12 @@ The dashboard's **Sub-agent delegation** controls three related settings:
 
 - `injectionModel` is the preferred worker model named in CodexCommander guidance.
 - `injectionEffort` is the optional `reasoning_effort` to request for that model.
-- `injectionPrompt` replaces the built-in v2 guidance text.
+- `injectionPrompt` replaces the built-in V2 guidance text.
 
 `multiAgentGuidanceEnabled` defaults to on and is the master switch for CodexCommander-authored guidance
-on both surfaces. Turning it off suppresses both the v2 designation block and v1 proactive text.
+on both surfaces. Turning it off suppresses both the V2 designation block and V1 proactive text.
 
-These are instructions to the main agent, not a proxy-side spawn router. On v2, a full-history fork
+These are instructions to the main agent, not a proxy-side spawn router. On V2, a full-history fork
 inherits the parent model and rejects model or effort overrides. Guidance therefore tells Codex to
 use `fork_turns: "none"` (or a positive partial turn count such as `"3"`) when passing `model` or
 `reasoning_effort`, and to make the task message self-contained.
@@ -81,14 +81,14 @@ Custom `injectionPrompt` text can use all four placeholders:
 | `{{roster}}` | The resolved picker-visible, surface-compatible roster |
 | `{{fallback}}` | The configured global fallback guidance |
 
-The built-in v2 guidance has a 700-character budget. If it would exceed the budget, CodexCommander drops
+The built-in V2 guidance has a 700-character budget. If it would exceed the budget, CodexCommander drops
 the roster first rather than truncating the core spawn instructions. Built-in guidance fires only
 when a preferred model, eligible roster, or fallback chain resolves. A configured `injectionModel`
 is sufficient to render a custom prompt; if a bare value cannot resolve uniquely, `{{model}}`
 expands to an empty string.
 
-On v1, CodexCommander injects only the upstream-style proactive delegation guidance at `max` or `ultra`
-effort. It does not add a preferred model, roster, fallback list, or custom prompt on v1.
+On V1, CodexCommander injects only the upstream-style proactive delegation guidance at `max` or `ultra`
+effort. It does not add a preferred model, roster, fallback list, or custom prompt on V1.
 
 The default-off `syncCodexSubagentDefaults` option is separate from guidance. When CodexCommander owns
 active Codex routing, sync or restart can write the selected values as marker-owned
@@ -117,7 +117,7 @@ normal heterogeneous fallback chain.
 
 ## V2 task delivery
 
-Codex may send a v2 native-to-routed child task only as backend-encrypted `encrypted_content`. That
+Codex may send a V2 native-to-routed child task only as backend-encrypted `encrypted_content`. That
 payload can be read by the native ChatGPT backend, but not by an external provider. This is the
 known [#92 limitation](https://github.com/pavelhov/CodexCommander/issues/92).
 
@@ -133,7 +133,7 @@ CodexCommander fails safely instead of forwarding an empty or unreadable task:
 
 | Policy | Behavior |
 | --- | --- |
-| `"encrypted"` (default) | Preserves ChatGPT's reserved encrypted collaboration schema and the fail-closed behavior above. Use native ChatGPT workers or v1 for external workers. |
+| `"encrypted"` (default) | Preserves ChatGPT's reserved encrypted collaboration schema and the fail-closed behavior above. Use native ChatGPT workers or V1 for external workers. |
 | `"plaintext"` | Experimental mixed-provider V2 compatibility. It changes only V2 **task-message delivery** so a routed provider can read the delegated task; it is not a general key or credential setting. For ChatGPT parents, CodexCommander presents a non-reserved plaintext collaboration namespace and restores the canonical namespace on the client-facing response. For routed parents, it marks only completed V2 message calls as plaintext. Both paths activate Codex's plaintext V2 handler, while its graph, mailbox, wait, follow-up, and completion lifecycle remain native. |
 
 The plaintext decision is made when the parent tool schema is created, before the worker model is
@@ -153,8 +153,8 @@ switching an active conversation in place.
 
 ### GUI
 
-- **Dashboard** → first stat cell: choose **v1**, **base**, or **v2**.
-- **Models** → **Current behavior** → **Collaboration**: choose **Reliable v1**, **Codex native** (base/default semantics), or **Concurrent v2**.
+- **Dashboard** → first stat cell: choose **V1**, **base**, or **V2**.
+- **Models** → **Current behavior** → **Collaboration**: choose **Reliable V1**, **Codex native** (base/default semantics), or **Concurrent V2**.
 - **Subagents** → **Agent Command Center**:
   - **Configured Roster** chooses and orders the five model overrides advertised first to `spawn_agent`.
     Drag rows, use the arrow buttons, or press <kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd>. The card
@@ -237,15 +237,15 @@ curl -X PUT http://localhost:10100/api/injection-model \
 No. Guidance can recommend a model, and native-default sync can provide a Codex default, but the
 main agent still decides whether to delegate.
 
-### Why did my v2 child use the parent model?
+### Why did my V2 child use the parent model?
 
-A full-history v2 fork inherits the parent model. Use a spawn that sets `fork_turns` to `"none"` or
+A full-history V2 fork inherits the parent model. Use a spawn that sets `fork_turns` to `"none"` or
 a positive partial count before passing a model or effort override.
 
-### Why is a configured model missing from the v2 roster?
+### Why is a configured model missing from the V2 roster?
 
 It may be picker-hidden, outside the five-model display limit, missing from the catalog, or pinned
-to v1. A `"v2"`, `null`, or absent surface value is eligible; a real `"v1"` pin is not.
+to V1. A `"v2"`, `null`, or absent surface value is eligible; a real `"v1"` pin is not.
 
 ### Does V2 make Luna available immediately?
 
@@ -271,7 +271,7 @@ make ChatGPT show **stopped unexpectedly**. A pending catalog or uninjected mana
 
 Yes, with **V2 message delivery → Plaintext compatibility** and a fresh session. The policy keeps
 the V2 lifecycle but makes that parent's delegated messages plaintext. Leave delivery encrypted for
-the native-only confidentiality contract, or use Reliable v1 for the established cross-provider surface.
+the native-only confidentiality contract, or use Reliable V1 for the established cross-provider surface.
 
 ### Reasoning effort
 

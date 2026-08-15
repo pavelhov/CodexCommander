@@ -14,7 +14,6 @@ import {
   type SettingsData,
   type ShadowCallData,
   type SidecarData,
-  type UsageSummary30d,
 } from "./dashboard-shared";
 import { parseShadowCallData } from "./shadow-call-source";
 
@@ -132,14 +131,6 @@ export async function fetchDashboardModels(apiBase: string, signal: AbortSignal)
   // Throw on non-OK / empty so client-resource retains the prior snapshot instead of
   // treating an HTTP error as a successful empty list.
   return requireJson<ModelInfo[]>(response);
-}
-
-export async function fetchDashboardUsage(apiBase: string, signal: AbortSignal): Promise<UsageSummary30d> {
-  const response = await fetch(`${apiBase}/api/usage?range=30d`, { signal });
-  // Usage can be expensive on an older server. Keeping it in its own resource means
-  // it cannot delay health/provider/settings commits, and a failed refresh retains
-  // the last good usage snapshot.
-  return requireJson<UsageSummary30d>(response);
 }
 
 /** Web-search / vision sidecar + shadow-call — config reads, typically sub-10ms. */

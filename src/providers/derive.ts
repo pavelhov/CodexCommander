@@ -90,6 +90,24 @@ function cloneRecordOfArrays(input: Record<string, string[]>): Record<string, st
 }
 
 /**
+ * Per-key merge of record-of-arrays metadata: the seed (registry) fills keys missing from
+ * the saved map, while saved entries always win per key. Mirrors the request-time merge in
+ * router.ts so the catalog advertises the same ladder the wire clamps to — a partially
+ * saved map (e.g. an older grok-4.5-only ladder) still picks up new registry tiers.
+ */
+function mergeRecordOfArrays(
+  seed?: Record<string, string[]>,
+  saved?: Record<string, string[]>,
+): Record<string, string[]> | undefined {
+  if (!seed) return saved ? { ...saved } : undefined;
+  const out: Record<string, string[]> = { ...(saved ?? {}) };
+  for (const [key, value] of Object.entries(seed)) {
+    if (out[key] === undefined) out[key] = [...value];
+  }
+  return out;
+}
+
+/**
  * Fill registry defaults BENEATH the user's per-model entries.
  *
  * Capability maps are keyed per model, so an all-or-nothing fill lets a single
@@ -273,7 +291,9 @@ export function enrichProviderFromRegistry(name: string, prov: CodexCommanderPro
     prov.chatCompletionTokenField = seed.chatCompletionTokenField;
   }
   if (!prov.reasoningEfforts && seed.reasoningEfforts) prov.reasoningEfforts = [...seed.reasoningEfforts];
-  if (!prov.modelReasoningEfforts && seed.modelReasoningEfforts) prov.modelReasoningEfforts = cloneRecordOfArrays(seed.modelReasoningEfforts);
+  if (seed.modelReasoningEfforts) {
+    prov.modelReasoningEfforts = mergeRecordOfArrays(seed.modelReasoningEfforts, prov.modelReasoningEfforts);
+  }
   if (!prov.modelDefaultReasoningEfforts && seed.modelDefaultReasoningEfforts) prov.modelDefaultReasoningEfforts = { ...seed.modelDefaultReasoningEfforts };
   if (prov.reasoningContentMode === undefined && seed.reasoningContentMode !== undefined) prov.reasoningContentMode = seed.reasoningContentMode;
   if (seed.modelSupportsReasoningSummaries) {

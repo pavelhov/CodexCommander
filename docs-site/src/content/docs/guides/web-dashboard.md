@@ -61,7 +61,7 @@ the browser or password manager's decision.
 
 | Area | What it does |
 | --- | --- |
-| **Dashboard summary** | Multi-agent mode, online state, version, uptime, provider count, 30-day token total, active providers, and available native/routed models. |
+| **Dashboard summary** | Multi-agent mode, online state, version, uptime, provider count, 30-day token total and estimated list-price cost, active providers, and available native/routed models. |
 | **Sub-agent delegation** | Choose a native or routed model and optional reasoning effort shared by CodexCommander delegation guidance and the separate native-default opt-in. This is not a proxy-side per-spawn router; see below. |
 | **Sidecars** | Choose the web-search model and effort plus the vision-description model. Changes apply on the next request. |
 | **Maintenance** | Resync the Codex model catalog and inspect project-local config bypass warnings. |
@@ -72,7 +72,7 @@ the browser or password manager's decision.
 | **Add provider** | Search registry-backed presets for account login, API-key services, local servers, or a custom endpoint. A query searches Accounts, Free and Paid together while the tabs remain useful for browsing. |
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, select the next-session account, refresh 5h / weekly / 30d quotas, enable or disable quota auto-switch, set its 1–100% threshold, and configure transient-failure failover. |
 | **Subagents** | Open the **Agent Command Center** to choose and order the five models advertised to `spawn_agent`, search the current catalog, and configure Run Policy for protocol, V2 delivery, guidance, fallback, and thread limits. Saved entries that are not advertised are reported explicitly. Its status distinguishes saved configuration, the generated on-disk catalog, and the roster loaded by current Codex workers. |
-| **Models** | Toggle native GPT and routed models, set provider allowlists and context caps, choose **Reliable v1**, **Codex native**, or **Concurrent v2**, and configure the v2 thread limit. The Current behavior card reports context as **Uncapped**, **Limited**, or **Mixed limits**. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. Each routed-provider row reports **Auto-discovery on** or **Static catalog only** and links to the owning Provider setting. |
+| **Models** | Toggle native GPT and routed models, set provider allowlists and context caps, choose **Reliable V1**, **Codex native**, or **Concurrent V2**, and configure the V2 thread limit. The Current behavior card reports context as **Uncapped**, **Limited**, or **Mixed limits**. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. Each routed-provider row reports **Auto-discovery on** or **Static catalog only** and links to the owning Provider setting. |
 | **Client Apps** | Inspect configured and available local clients, apply or remove managed config where supported, review backups, and reach Codex, Claude Code/Desktop, Grok Build, OpenCode and the file-managed clients without treating providers as clients. |
 | **API Access** | Issue and manage keys that authenticate other apps to the CodexCommander proxy. Provider credentials remain under Providers. |
 | **Logs** | Auto-refresh recent requests with tokens, requested → sent outbound effort, resolved model, provider, status, request id, duration, and error details. The detail view includes the exact sent reasoning wire field when the adapter emits one. “Sent” is what CodexCommander serialized; it does not prove that the provider accepted, honored, or applied that effort. Filter by opaque conversation/session id (when the client sends one) to total tokens and estimated list-price cost for the currently loaded Logs ring. |
@@ -87,9 +87,12 @@ addressable instead: `#dashboard` opens Overview, and `#dashboard/providers` and
 `#dashboard/models` open the other two. Reload, bookmark, and Back all keep the section you were
 on. **Logs** works the same way with `#logs` and `#logs/debug`.
 
-Cost values in **Logs** and **Usage** are API list-price equivalents calculated from reported tokens.
-They are not billing receipts or evidence of an actual charge; subscription usage or provider credits
-may apply instead.
+Cost values in **Dashboard**, **Logs**, and **Usage** are API list-price equivalents calculated from
+reported tokens. They are not billing receipts or evidence of an actual charge; subscription usage
+or provider credits may apply instead. The Dashboard's **Plan & quota** section shows
+provider-reported limits (5-hour / weekly / monthly windows), the provider plan, and observed
+reference spend versus published caps — always labeled as provider-reported estimates, never billed
+spend.
 
 ## Model visibility
 
@@ -139,7 +142,7 @@ available with the same worker-interruption caveat as the dashboard fallback.
 
 The Dashboard's **Sub-agent delegation** picker stores `injectionModel` and, optionally,
 `injectionEffort`. **CodexCommander multi-agent guidance** independently controls the delegation
-instructions that use those values. On eligible v2 turns, that guidance tells the parent
+instructions that use those values. On eligible V2 turns, that guidance tells the parent
 agent which exact model and reasoning effort to pass to `spawn_agent`; clearing the model also clears
 the stored effort.
 
@@ -153,10 +156,10 @@ than overwritten, so they may continue to override the requested defaults.
 Neither control is a proxy-side cross-model spawn router. CodexCommander guidance asks Codex to pass
 overrides to `spawn_agent`; native `[agents]` defaults apply only when Codex creates a new task after
 they have been synchronized. See
-[Sub-agent Surface](/guides/sub-agent-surface/) for the canonical v1/base/v2 behavior.
+[Sub-agent Surface](/guides/sub-agent-surface/) for the canonical V1/base/V2 behavior.
 :::
 
-The spawn override guarantee applies to the **built-in** v2 guidance text. A custom
+The spawn override guarantee applies to the **built-in** V2 guidance text. A custom
 `injectionPrompt` replaces that text entirely and must include `{{model}}` and `{{effort}}`
 placeholders (and optionally `{{roster}}`) or those values will not appear in the injected
 guidance.
@@ -232,7 +235,7 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | `GET /api/codex-catalog/status` · `POST /api/codex-catalog/apply` | Read catalog, routing, and worker activation evidence. The guarded Apply endpoint reconciles pending catalog or managed-routing state, then may force-restart only verified stale workers behind a desired-revision fence and explicit interruption confirmation. For an already-converged stale worker it is an advanced fallback that may make ChatGPT show **stopped unexpectedly**. A browser GUI session also needs the one-time launch authorization described above. |
 | `GET` / `PUT /api/sidecar-settings` | Read or set search/vision sidecar model settings. |
 | `GET` / `PUT /api/injection-model` | Read or set the shared sub-agent model/effort selection and the independent guidance/native-default switches. |
-| `GET` / `PUT /api/v2` | Read or set the surface mode, Codex feature flag, and v2 thread limit. |
+| `GET` / `PUT /api/v2` | Read or set the collaboration protocol, Codex feature flag, and V2 thread limit. |
 | `GET /api/providers` · `POST /api/providers` · `PATCH /api/providers?name=...` · `DELETE /api/providers?name=...` | List, add/replace, enable/disable, set the default, or remove providers. `PATCH` uses standalone `{ "setDefault": true }` on an enabled provider; `POST` may include `setDefault` when creating/replacing (also enabled-only). Deleting the current default reassigns to the first remaining enabled provider when one exists; otherwise the API returns `409` with `code: "last_provider"` and keeps the current default. |
 | `GET /api/models` · `PUT /api/disabled-models` | List native/routed model rows and update the shared disabled-model set. |
 | `GET /api/selected-models` · `PUT /api/model-visibility` | Read provider allowlists and atomically change the final visibility of one model or provider group. |

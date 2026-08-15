@@ -68,3 +68,17 @@ export function formatEstimatedUsdValue(value: number, locale?: string): string 
   }).format(value);
   return `~${formatted}`;
 }
+
+/**
+ * Format a DEFINED zero USD estimate for display (locale-aware "$0.00"-equivalent, 2
+ * fraction digits). A defined zero must read as a zeroed amount — never "Unavailable"
+ * and never the ~$0.0000 estimate rendering.
+ */
+export function formatEstimatedUsdZero(locale?: string): string {
+  return cachedNumberFormat(locale, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(0);
+}

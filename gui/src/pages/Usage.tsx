@@ -1,95 +1,26 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useI18n, type TFn, type Locale } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
 import { formatTokens } from "../format-tokens";
-import { formatEstimatedUsdValue as formatUsdEstimate } from "../intl-formatters";
-import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
+import { formatEstimatedUsdValue as formatUsdEstimate, formatEstimatedUsdZero } from "../intl-formatters";
 import { EmptyState, Notice } from "../ui";
 import { modelLabel } from "../model-display";
-import { useDataSurface } from "../data-surface";
+import { classifyDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
+import { useUsageReport } from "../usage-report-store";
+import {
+  type UsageDay,
+  type UsageModel,
+  type UsageProvider,
+  type UsageRange,
+  type UsageReport,
+  type UsageSummaryTotals,
+  type UsageSurface,
+} from "../usage-report-validation";
 
-type Range = "all" | "30d" | "7d";
-type UsageSurface = "all" | "codex" | "claude" | "grok";
-
-interface UsageSummaryTotals {
-  requests: number;
-  measuredRequests: number;
-  reportedRequests: number;
-  unreportedRequests: number;
-  unsupportedRequests: number;
-  estimatedRequests: number;
-  inputTokens: number;
-  outputTokens: number;
-  cachedInputTokens: number;
-  cacheReadInputTokens?: number;
-  cacheCreationInputTokens?: number;
-  reasoningOutputTokens: number;
-  totalTokens: number;
-  coverageRatio: number;
-  estimatedCostUsd?: number;
-  pricedRequests?: number;
-  unpricedRequests?: number;
-  unmeteredRequests?: number;
-}
-
-interface UsageDay {
-  date: string;
-  requests: number;
-  measuredRequests: number;
-  reportedRequests: number;
-  totalTokens: number;
-  models: UsageDayModel[];
-}
-
-interface UsageDayModel {
-  model: string;
-  provider: string;
-  requests: number;
-  totalTokens: number;
-}
-
-interface UsageModel {
-  provider: string;
-  model: string;
-  resolvedModel?: string;
-  requests: number;
-  measuredRequests: number;
-  reportedRequests: number;
-  estimatedRequests: number;
-  totalTokens: number;
-  inputTokens: number;
-  outputTokens: number;
-  shareRatio: number;
-}
-
-interface UsageProvider {
-  provider: string;
-  requests: number;
-  measuredRequests: number;
-  reportedRequests: number;
-  estimatedRequests: number;
-  totalTokens: number;
-  shareRatio: number;
-}
-
-interface UsageResponse {
-  range: Range;
-  surface: UsageSurface;
-  since: number | null;
-  generatedAt: number;
-  summary: UsageSummaryTotals;
-  days: UsageDay[];
-  models: UsageModel[];
-  providers: UsageProvider[];
-  historyTruncated: boolean;
-  truncatedPrefixBytes: number;
-  entriesTruncated: boolean;
-  entriesDropped: number;
-  error?: string;
-}
+type Range = UsageRange;
 
 function formatPct(ratio: number): string {
   return `${Math.round(ratio * 100)}%`;
@@ -294,11 +225,21 @@ function UsageSummaryCards({
       <div className="stat"><div className="muted">{t("usage.card.coverage")}</div><div className="stat-value">{formatPct(summary.coverageRatio)}</div></div>
       <div className="stat"><div className="muted">{t("usage.card.activeDays")}</div><div className="stat-value">{activeDays}</div></div>
     </div>
-      {summary.estimatedCostUsd !== undefined && (
+      {summary.estimatedCostUsd === undefined ? (
+        // "Unavailable" is reachable ONLY through legacy (unvalidated) seeds: the DTO
+        // requires the cost fields and every fetched report is validated before caching,
+        // so a validated report can never take this branch.
+        <div className="usage-cost-row" role="note">
+          <span className="muted">{t("usage.cost.total")}</span>
+          <span className="stat-value mono usage-cost-value">{t("usage.cost.unavailable")}</span>
+        </div>
+      ) : (
         <div className="usage-cost-row" role="note">
           <span className="muted">{t("usage.cost.total")}</span>
           <span className="stat-value mono usage-cost-value">
-            {formatUsdEstimate(summary.estimatedCostUsd, locale)}
+            {summary.estimatedCostUsd === 0
+              ? formatEstimatedUsdZero(locale)
+              : formatUsdEstimate(summary.estimatedCostUsd, locale)}
           </span>
           <span className="muted text-caption">{t("usage.cost.disclaimer")}</span>
           {((summary.unpricedRequests ?? 0) + (summary.unmeteredRequests ?? 0)) > 0 && (
@@ -658,7 +599,7 @@ function UsageWorkspaceBody({
   locale,
   t,
 }: {
-  data: UsageResponse | null;
+  data: UsageReport | null;
   heatmap: ReturnType<typeof buildHeatmap>;
   weekBars: UsageDay[];
   activeDays: number;
@@ -731,50 +672,19 @@ function UsageWorkspaceBody({
   );
 }
 
-/** Held usage payloads so provider/surface tab switches skip a cold ~5s refetch. */
-const usageMemoryCache = new Map<string, UsageResponse>();
-
-function usageCacheKey(apiBase: string, range: Range, surface: UsageSurface): string {
-  return `ccx.usage.v1:${apiBase}:${range}:${surface}`;
-}
-
-function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface): UsageResponse | null {
-  const key = usageCacheKey(apiBase, range, surface);
-  return usageMemoryCache.get(key) ?? readSessionListCache<UsageResponse>(key);
-}
-
-function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, value: UsageResponse) {
-  const key = usageCacheKey(apiBase, range, surface);
-  usageMemoryCache.set(key, value);
-  writeSessionListCache(key, value);
-}
-
 export default function Usage({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
   const [range, setRange] = useState<Range>("30d");
   const [surface, setSurface] = useState<UsageSurface>("all");
   const [modelQuery, setModelQuery] = useState("");
 
-  const loadUsage = useCallback(async (signal: AbortSignal): Promise<UsageResponse> => {
-    const response = await fetch(`${apiBase}/api/usage?range=${range}&surface=${surface}`, { signal });
-    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
-    const next = await response.json() as UsageResponse;
-    writeHeldUsage(apiBase, range, surface, next);
-    return next;
-  }, [apiBase, range, surface]);
-
-  const resourceKey = usageCacheKey(apiBase, range, surface);
-  const cached = readHeldUsage(apiBase, range, surface);
-  // Range and surface identify different reports, so the key changes with both. That prevents
-  // a force-loading dependency revalidation from ever showing a previous report as this one.
-  const resource = useDataSurface<UsageResponse>(
-    resourceKey,
-    [apiBase, range, surface],
-    loadUsage,
-    { isEmpty: () => false, initialData: cached ?? undefined },
-  );
-  const { state } = resource;
-  const data = state.data ?? cached ?? null;
+  // The usage-report domain store owns fetching, singleflight dedupe, and persistence.
+  // Range and surface identify different reports, so the key changes with both and a
+  // previous report is never shown as this one. The Dashboard's 30d/all selector shares
+  // this exact entry, collapsing what used to be three independent fetches into one.
+  const report = useUsageReport(apiBase, range, surface);
+  const state = classifyDataSurface(report, () => false, true);
+  const data = state.data ?? null;
 
   const heatmap = useMemo(() => buildHeatmap(data?.days ?? []), [data?.days]);
   const weekBars = useMemo(() => lastSevenDays(data?.days ?? []), [data?.days]);
@@ -808,8 +718,13 @@ export default function Usage({ apiBase }: { apiBase: string }) {
         <DataSurfaceSkeleton label={t("usage.loading")} rows={5} />
       ) : state.kind === "failed-cold" ? (
         <Notice tone="err">
-          {state.error instanceof Error ? `${t("usage.loadError")} ${state.error.message}` : t("usage.loadError")}{" "}
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => resource.refresh()}>
+          {t("usage.loadError")}{" "}
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            title={state.error instanceof Error ? state.error.message : undefined}
+            onClick={() => report.refresh()}
+          >
             {t("common.retry")}
           </button>
         </Notice>

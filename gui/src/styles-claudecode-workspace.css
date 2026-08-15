@@ -29,7 +29,7 @@
   padding: 0 16px 12px;
   margin-top: -4px;
   font-size: var(--text-caption);
-  line-height: 1.45;
+  line-height: 1.45; /* deliberate: between --leading-ui and --leading-body */
   color: var(--muted);
   border-bottom: 1px solid var(--border-soft);
 }
@@ -43,7 +43,7 @@
   color: var(--faint);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  font-size: 10.5px;
+  font-size: 10.5px; /* deliberate: micro-caption tuning */
 }
 
 /* ── Rail ─────────────────────────────────────────────── */
@@ -183,7 +183,7 @@
   align-items: baseline;
   gap: 6px;
   margin: 0 0 5px;
-  font-size: 10.5px;
+  font-size: 10.5px; /* deliberate: micro-caption tuning */
   font-weight: var(--weight-semibold);
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -223,7 +223,7 @@
 
 .claude-aliases-chip-id {
   font-family: var(--font-code);
-  font-size: 11px;
+  font-size: var(--text-caption);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

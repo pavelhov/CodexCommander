@@ -272,7 +272,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
                 onClick={() => setSelectedSection(s.id)}
                 aria-current={selectedSection === s.id ? "true" : undefined}
               >
-                <span className="claudecode-workspace-rail-name">{s.label}</span>
+                <span className="claudecode-workspace-rail-name" title={s.label}>{s.label}</span>
               </button>
             ))}
           </div>
