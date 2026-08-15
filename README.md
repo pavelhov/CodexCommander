@@ -286,7 +286,8 @@ Source development requires the `bun` CLI on your `PATH`.
 cd /path/to/CodexCommander
 bun install
 bun run typecheck
-bun run test
+bun run test:parallel   # preferred — much faster (parallel runner)
+bun run test            # serial fallback
 ```
 
 See **[Contributing](./CONTRIBUTING.md)**.

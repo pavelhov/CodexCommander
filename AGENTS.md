@@ -52,14 +52,16 @@ tracked directory.
 ```bash
 bun install
 bun run typecheck      # bun x tsc --noEmit (strict)
-bun run test           # full tests/ suite
+bun run test:parallel  # full tests/ suite (preferred — much faster)
+bun run test           # full tests/ suite (serial fallback)
 bun run lint:gui       # GUI eslint
 bun run privacy:scan   # credential/privacy scan used by CI
 bun run build:gui      # Vite GUI build
 ```
 
-Run `bun run typecheck` and `bun run test` before proposing or approving any
-non-trivial change. CI runs these on Linux, Windows, and macOS.
+Run `bun run typecheck` and `bun run test:parallel` (fall back to
+`bun run test` if the parallel runner misbehaves) before proposing or
+approving any non-trivial change. CI runs these on Linux, Windows, and macOS.
 
 ## Issues and pull requests (agents)
 
