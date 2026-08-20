@@ -12,6 +12,7 @@ import {
   getRuntimePortPath,
   isValidProviderName,
   isCodexCommanderStartCommandLine,
+  initializeConfigIfMissing,
   loadConfig,
   multiAgentGuidanceEnabled,
   parsePidFile,
@@ -21,6 +22,7 @@ import {
   readRuntimePort,
   removePid,
   removeRuntimePort,
+  setConfigInitializationBeforePublishForTests,
   validateConfigCandidate,
   writeRuntimePort,
   writePid,
@@ -38,6 +40,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setConfigInitializationBeforePublishForTests(null);
   if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
   else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   previousCodexCommanderHome = undefined;
@@ -101,6 +104,107 @@ function writeAccountNamespaceConfig(
     ...overrides,
   });
 }
+
+describe("create-only config initialization", () => {
+  test("creates the canonical candidate only when config.json is absent", () => {
+    const candidate = getDefaultConfig();
+    expect(initializeConfigIfMissing(candidate)).toEqual({ status: "created" });
+    expect(JSON.parse(readFileSync(getConfigPath(), "utf8"))).toEqual(candidate);
+    expect(lstatSync(getConfigPath()).isFile()).toBe(true);
+    if (process.platform !== "win32") {
+      expect(lstatSync(getConfigPath()).mode & 0o077).toBe(0);
+    }
+  });
+
+  test("keeps an existing valid config byte-for-byte", () => {
+    const bytes = `${JSON.stringify({ ...getDefaultConfig(), port: 12001 })}\n`;
+    writeFileSync(getConfigPath(), bytes, { mode: 0o600 });
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "existing" });
+    expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
+  });
+
+  test("refuses malformed and schema-invalid config without rewriting", () => {
+    for (const bytes of ["{", '{"port":10100,"providers":{},"defaultProvider":"missing"}']) {
+      writeFileSync(getConfigPath(), bytes, "utf8");
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+        status: "refused",
+        reason: "existing-invalid",
+      });
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
+      unlinkSync(getConfigPath());
+    }
+  });
+
+  test("rejects an invalid candidate without creating config state", () => {
+    const invalid = { ...getDefaultConfig(), defaultProvider: "missing" };
+    expect(initializeConfigIfMissing(invalid)).toEqual({
+      status: "refused",
+      reason: "candidate-invalid",
+    });
+    expect(existsSync(getConfigPath())).toBe(false);
+  });
+
+  test("refuses linked and non-regular destinations", () => {
+    const real = join(testDir, "real-config.json");
+    writeFileSync(real, `${JSON.stringify(getDefaultConfig())}\n`, "utf8");
+    symlinkSync(real, getConfigPath());
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+      status: "refused",
+      reason: "existing-unsafe",
+    });
+    unlinkSync(getConfigPath());
+    mkdirSync(getConfigPath());
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+      status: "refused",
+      reason: "existing-unsafe",
+    });
+  });
+
+  test("refuses an inaccessible existing file without replacing it", () => {
+    if (process.platform === "win32") return;
+    writeFileSync(getConfigPath(), `${JSON.stringify(getDefaultConfig())}\n`, { mode: 0o600 });
+    chmodSync(getConfigPath(), 0o000);
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+        status: "refused",
+        reason: "existing-inaccessible",
+      });
+    } finally {
+      chmodSync(getConfigPath(), 0o600);
+    }
+  });
+
+  test("refuses to claim a nonempty unowned configuration root", () => {
+    const foreign = join(testDir, "foreign.txt");
+    writeFileSync(foreign, "keep", "utf8");
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+      status: "refused",
+      reason: "existing-unsafe",
+    });
+    expect(readFileSync(foreign, "utf8")).toBe("keep");
+    expect(existsSync(getConfigPath())).toBe(false);
+  });
+
+  test("adopts a valid file that wins immediately before no-clobber publish", () => {
+    const winner = { ...getDefaultConfig(), port: 12002 };
+    setConfigInitializationBeforePublishForTests(() => {
+      writeFileSync(getConfigPath(), `${JSON.stringify(winner)}\n`, { mode: 0o600 });
+    });
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "existing" });
+    expect(JSON.parse(readFileSync(getConfigPath(), "utf8"))).toEqual(winner);
+  });
+
+  test("refuses an invalid file that wins immediately before publish", () => {
+    setConfigInitializationBeforePublishForTests(() => {
+      writeFileSync(getConfigPath(), "{", { mode: 0o600 });
+    });
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+      status: "refused",
+      reason: "existing-invalid",
+    });
+    expect(readFileSync(getConfigPath(), "utf8")).toBe("{");
+  });
+});
 
 describe("CodexCommander config defaults", () => {
   test("usage and MCP config overrides change the effective bound while defaults remain compatible", () => {

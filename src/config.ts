@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
@@ -1635,6 +1635,138 @@ function readConfigFileSnapshot(): ConfigFileSnapshot {
 
 export function readConfigDiagnostics(): ConfigDiagnostics {
   return readConfigFileSnapshot().diagnostics;
+}
+
+export type ConfigInitializationRefusal =
+  | "candidate-invalid"
+  | "existing-invalid"
+  | "existing-inaccessible"
+  | "existing-unsafe"
+  | "coordination-unavailable";
+
+export type ConfigInitializationResult =
+  | { status: "created" }
+  | { status: "existing" }
+  | { status: "refused"; reason: ConfigInitializationRefusal };
+
+type ConfigEntryProbe =
+  | { kind: "missing" }
+  | { kind: "valid" }
+  | {
+    kind: "refused";
+    reason: Exclude<
+      ConfigInitializationRefusal,
+      "candidate-invalid" | "coordination-unavailable"
+    >;
+  };
+
+function probeConfigEntry(): ConfigEntryProbe {
+  let entry;
+  try {
+    entry = lstatSync(getConfigPath());
+  } catch (error) {
+    return isMissingPathError(error)
+      ? { kind: "missing" }
+      : { kind: "refused", reason: "existing-inaccessible" };
+  }
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
+    return { kind: "refused", reason: "existing-unsafe" };
+  }
+  try {
+    return configDiagnosticsFromRaw(readFileSync(getConfigPath(), "utf8")).source === "file"
+      ? { kind: "valid" }
+      : { kind: "refused", reason: "existing-invalid" };
+  } catch {
+    return { kind: "refused", reason: "existing-inaccessible" };
+  }
+}
+
+let configInitializationBeforePublishForTests: (() => void) | null = null;
+
+/** Test-only one-shot seam: inject a competing writer immediately before no-clobber publication. */
+export function setConfigInitializationBeforePublishForTests(hook: (() => void) | null): void {
+  configInitializationBeforePublishForTests = hook;
+}
+
+function publishConfigNoReplace(path: string, bytes: string): boolean {
+  recordOwnedConfigPath(resolveConfigDir(), path);
+  const target = resolveWriteTarget(path);
+  assertResolvedTargetAllowed(path, target);
+  const temp = `${target}.ccx.${process.pid}.${++_atomicSeq}.create.tmp`;
+  let published = false;
+  try {
+    writeFileSync(temp, bytes, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    try { chmodSync(temp, 0o600); } catch { /* filesystem may ignore chmod */ }
+    if (process.platform === "win32") {
+      hardenSecretPath(temp, { required: true, timeoutMemoKey: path });
+    }
+    const hook = configInitializationBeforePublishForTests;
+    configInitializationBeforePublishForTests = null;
+    hook?.();
+    try {
+      linkSync(temp, target);
+      published = true;
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw error;
+    }
+  } finally {
+    try {
+      unlinkSync(temp);
+      forgetEphemeralSecretPath(temp);
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        // After link succeeds, temp and destination are the same inode. Never
+        // truncate the temp in that state because it would erase config.json too.
+        if (!published) {
+          try { truncateSync(temp, 0); } catch { /* residual error below is authoritative */ }
+        }
+        throw new AtomicWriteSecretResidualError(temp, { cause: error });
+      }
+    }
+  }
+}
+
+export function initializeConfigIfMissing(
+  candidate: CodexCommanderConfig,
+): ConfigInitializationResult {
+  const validated = validateConfigCandidate(candidate);
+  if (!validated.ok) return { status: "refused", reason: "candidate-invalid" };
+  const observed = probeConfigEntry();
+  if (observed.kind === "valid") return { status: "existing" };
+  if (observed.kind === "refused") return { status: "refused", reason: observed.reason };
+  try {
+    if (!recordOwnedConfigPath(getConfigDir(), getConfigPath())) {
+      return { status: "refused", reason: "existing-unsafe" };
+    }
+  } catch {
+    return { status: "refused", reason: "existing-inaccessible" };
+  }
+
+  try {
+    return withConfigMutationLockSync(() => {
+      const current = probeConfigEntry();
+      if (current.kind === "valid") return { status: "existing" } as const;
+      if (current.kind === "refused") {
+        return { status: "refused", reason: current.reason } as const;
+      }
+      const bytes = `${JSON.stringify(validated.config, null, 2)}\n`;
+      const published = publishConfigNoReplace(getConfigPath(), bytes);
+      if (!published) {
+        const winner = probeConfigEntry();
+        if (winner.kind === "valid") return { status: "existing" } as const;
+        return {
+          status: "refused",
+          reason: winner.kind === "refused" ? winner.reason : "coordination-unavailable",
+        } as const;
+      }
+      bumpGenerationForCooperatingConfigWrite();
+      return { status: "created" } as const;
+    });
+  } catch {
+    return { status: "refused", reason: "coordination-unavailable" };
+  }
 }
 
 /**
