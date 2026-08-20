@@ -34,3 +34,17 @@ No known policy concerns. Full-suite aggregate completion remains unconfirmed
 because unrelated long-running tests prevented the parallel runner from
 exiting in a reasonable time; focused policy tests and strict typecheck are
 clean.
+
+## Fix round 1
+
+Addressed review feedback by replacing injected-only branch coverage with four
+isolated subprocess probes. Each probe sets temporary `CODEXCOMMANDER_HOME` and
+`CODEX_HOME` before importing the production policy, blocks `fetch`, runs the
+real initializer/classifier, and asserts exact app config bytes, app metadata
+entries, Codex config bytes, and Codex directory entries for its branch.
+
+Validation:
+
+- `bun test tests/macos-first-run.test.ts` — 4 pass, 0 fail (22 assertions).
+- `bun run typecheck` — pass.
+- `git diff --check` — pass.
