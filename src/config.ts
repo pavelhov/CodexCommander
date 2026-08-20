@@ -40,7 +40,7 @@ import {
   hardenSecretPathAsync,
   windowsSecretAclApplies,
 } from "./lib/windows-secret-acl";
-import { recordOwnedConfigPath } from "./lib/config-ownership";
+import { inspectPhysicalConfigRoot, recordOwnedConfigPath } from "./lib/config-ownership";
 import { assertNotRealHomeUnderTest } from "./lib/test-home-guard";
 import { isLocalAttestationSecret } from "./lib/local-management-attestation";
 import { providerDestinationConfigError } from "./lib/destination-policy";
@@ -1663,8 +1663,8 @@ type ConfigEntryProbe =
 type ConfigRootIdentity = {
   path: string;
   canonicalPath: string;
-  dev: number;
-  ino: number;
+  dev: bigint;
+  ino: bigint;
 };
 
 type ConfigRootProbe =
@@ -1689,13 +1689,13 @@ function probeConfigRoot(): ConfigRootProbe {
   const path = getConfigDir();
   let entry;
   try {
-    entry = lstatSync(path);
+    entry = inspectPhysicalConfigRoot(path);
   } catch (error) {
     return isMissingPathError(error)
       ? { kind: "missing" }
       : { kind: "refused", reason: "existing-inaccessible" };
   }
-  if (!entry.isDirectory() || entry.isSymbolicLink()) {
+  if (entry.kind !== "valid") {
     return { kind: "refused", reason: "existing-unsafe" };
   }
   try {
@@ -1704,8 +1704,7 @@ function probeConfigRoot(): ConfigRootProbe {
       identity: {
         path,
         canonicalPath: realpathSync.native(path),
-        dev: entry.dev,
-        ino: entry.ino,
+        ...entry.identity,
       },
     };
   } catch {

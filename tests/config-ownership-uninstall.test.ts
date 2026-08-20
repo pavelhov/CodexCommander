@@ -8,6 +8,7 @@ import {
   recordOwnedConfigPath,
   removeOwnedConfigArtifactsRetainingLifecycleRoot,
   removeOwnedConfigState,
+  setConfigRootIdentityOverrideForTests,
 } from "../src/lib/config-ownership";
 import { getDefaultConfig, saveConfig } from "../src/config";
 
@@ -22,6 +23,20 @@ describe("owned config uninstall", () => {
       expect(existsSync(join(dir, CONFIG_UNINSTALL_MANIFEST))).toBe(true);
     } finally {
       rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("does not establish ownership without a stable nonzero root inode", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ccx-config-zero-root-inode-"));
+    setConfigRootIdentityOverrideForTests((_path, actual) => ({ ...actual, ino: 0n }));
+
+    try {
+      expect(recordOwnedConfigPath(dir, join(dir, "config.json"))).toBe(false);
+      expect(existsSync(join(dir, CONFIG_OWNER_FILE))).toBe(false);
+      expect(existsSync(join(dir, CONFIG_UNINSTALL_MANIFEST))).toBe(false);
+    } finally {
+      setConfigRootIdentityOverrideForTests(null);
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

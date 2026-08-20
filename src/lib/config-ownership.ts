@@ -51,9 +51,43 @@ type ConfigOwnership = {
 
 type ConfigOwnershipRootIdentity = {
   canonicalPath: string;
-  dev: number;
-  ino: number;
+  dev: bigint;
+  ino: bigint;
 };
+
+export type ConfigRootFileIdentity = {
+  dev: bigint;
+  ino: bigint;
+};
+
+type ConfigRootIdentityOverride = (
+  path: string,
+  actual: ConfigRootFileIdentity,
+) => ConfigRootFileIdentity;
+
+let configRootIdentityOverrideForTests: ConfigRootIdentityOverride | null = null;
+
+/** Test-only seam for simulating filesystem identifiers that local fixtures cannot produce. */
+export function setConfigRootIdentityOverrideForTests(
+  override: ConfigRootIdentityOverride | null,
+): void {
+  configRootIdentityOverrideForTests = override;
+}
+
+export type PhysicalConfigRootInspection =
+  | { kind: "unsafe" }
+  | { kind: "valid"; identity: ConfigRootFileIdentity };
+
+/** Inspect a root without following links and retain its filesystem identity losslessly. */
+export function inspectPhysicalConfigRoot(path: string): PhysicalConfigRootInspection {
+  const root = lstatSync(path, { bigint: true });
+  if (!root.isDirectory() || root.isSymbolicLink()) return { kind: "unsafe" };
+  const actual = { dev: root.dev, ino: root.ino };
+  const identity = configRootIdentityOverrideForTests?.(path, actual) ?? actual;
+  // Some filesystems report ino=0 when no stable file identifier is available.
+  if (identity.ino === 0n) return { kind: "unsafe" };
+  return { kind: "valid", identity };
+}
 
 const METADATA_MAX_BYTES = 64 * 1024;
 const MANIFEST_MAX_PATHS = 1024;
@@ -171,14 +205,13 @@ function canonicalRoot(configDir: string): string {
 }
 
 function configOwnershipRootIdentity(configDir: string): ConfigOwnershipRootIdentity {
-  const root = lstatSync(configDir);
-  if (!root.isDirectory() || root.isSymbolicLink()) {
+  const root = inspectPhysicalConfigRoot(configDir);
+  if (root.kind !== "valid") {
     throw new Error("config ownership root is not a physical directory");
   }
   return {
     canonicalPath: canonicalRoot(configDir),
-    dev: root.dev,
-    ino: root.ino,
+    ...root.identity,
   };
 }
 
