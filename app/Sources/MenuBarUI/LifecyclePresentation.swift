@@ -65,6 +65,24 @@ package enum LifecycleResultMessage {
     package static let proxyStopped =
         "Proxy stopped. Fully quit ChatGPT and Codex if still open, then reopen them to use native routing."
 
+    package static func setupRequired(_ requirement: ProxySetupRequirement) -> (
+        title: String,
+        detail: String
+    ) {
+        switch requirement {
+        case .codexFirstRun:
+            return (
+                "Open Codex to finish setup",
+                "CodexCommander is running. Open Codex once, then choose Route Codex Through Proxy."
+            )
+        case .unknown:
+            return (
+                "CodexCommander setup is required",
+                "The proxy is running. Update CodexCommander for setup instructions."
+            )
+        }
+    }
+
     package static func codexRouteSaved(_ destination: CodexRouteDestination) -> (
         title: String,
         detail: String

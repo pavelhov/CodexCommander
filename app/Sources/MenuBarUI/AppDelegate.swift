@@ -397,6 +397,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                 case .running:
                     self.clearCatalogUpdate()
                     self.companionHeartbeat?.reportNow()
+                case .setupRequired(let requirement):
+                    self.clearCatalogUpdate()
+                    self.companionHeartbeat?.reportNow()
+                    self.controller.showSetupRequired(requirement)
                 case .catalogUpdateReady(let count):
                     // The proxy is running with a pending catalog refresh; report now so
                     // a failed pre-start report is retried right after startup.
@@ -432,6 +436,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                     self.clearCatalogUpdate()
                     self.companionHeartbeat?.reportNow()
                     self.controller.showResult("CodexCommander started.", isError: false)
+                case .setupRequired(let requirement):
+                    self.clearCatalogUpdate()
+                    self.companionHeartbeat?.reportNow()
+                    self.controller.showSetupRequired(requirement)
                 case .stopped:
                     self.controller.showResult("CodexCommander did not start.", isError: true)
                 case .catalogUpdateReady(let count):
@@ -489,6 +497,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                         isError: false
                     )
                 case .running:
+                    self.controller.showResult("CodexCommander is still running.", isError: true)
+                case .setupRequired:
                     self.controller.showResult("CodexCommander is still running.", isError: true)
                 case .catalogUpdateReady(let count):
                     self.presentCatalogUpdate(staleWorkerCount: count)
@@ -672,6 +682,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                         "No stale ChatGPT worker is detected. Start a new task after ChatGPT reopens.",
                         isError: false
                     )
+                case .setupRequired(let requirement):
+                    self.clearCatalogUpdate()
+                    self.companionHeartbeat?.reportNow()
+                    self.controller.showSetupRequired(requirement)
                 case .catalogUpdateReady(let count):
                     self.presentCatalogUpdate(staleWorkerCount: count)
                     self.controller.showResult(

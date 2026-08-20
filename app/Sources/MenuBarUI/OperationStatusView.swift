@@ -61,6 +61,7 @@ package final class OperationStatusView: NSView {
     private var startedAt: Date?
     private var destination: CodexRouteDestination?
     private var phase: CodexRouteOperationPhase?
+    package private(set) var lastRenderedTone: OperationStatusTone?
 
     var onDismiss: (() -> Void)?
 
@@ -203,6 +204,7 @@ package final class OperationStatusView: NSView {
         tone: OperationStatusTone
     ) {
         stopTimer()
+        lastRenderedTone = tone
         destination = nil
         phase = nil
         spinner.stopAnimation(nil)

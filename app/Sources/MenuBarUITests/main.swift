@@ -795,6 +795,36 @@ runner.test("ui: saved route with unavailable confirmation stays a caution, not 
     runner.equal(status.isDismissVisible, true, "caution persists")
 }
 
+runner.test("ui: first-run guidance warns without disabling proxy route recovery") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    let snapshot = makeSnapshot(health: currentHealth(
+        routingKind: "native",
+        routingInjected: false
+    ))
+    controller.apply(snapshot)
+
+    controller.showSetupRequired(.codexFirstRun)
+
+    runner.equal(controller.operationStatusTitle, "Open Codex to finish setup")
+    runner.equal(
+        controller.operationStatusDetail,
+        "CodexCommander is running. Open Codex once, then choose Route Codex Through Proxy."
+    )
+    runner.equal(controller.operationStatusTone, .warning)
+    runner.expect(controller.routeThroughProxyEnabled, "route retry remains available")
+    runner.equal(
+        controller.operationStatusView.accessibilityLabel(),
+        "Open Codex to finish setup",
+        "setup warning has a concise accessible label"
+    )
+    runner.equal(
+        controller.operationStatusView.accessibilityStatusValue,
+        "Open Codex to finish setup. CodexCommander is running. Open Codex once, then choose Route Codex Through Proxy.",
+        "setup warning exposes the complete recovery instruction"
+    )
+}
+
 runner.test("ui: route success persists with explicit ChatGPT restart step until dismissed") {
     let controller = PopoverViewController()
     _ = controller.view
@@ -1186,6 +1216,22 @@ runner.test("ui: lifecycle confirmations default to Cancel and mark stop actions
     )
 }
 
+runner.test("ui: setup requirements present actionable and forward-compatible guidance") {
+    let firstRun = LifecycleResultMessage.setupRequired(.codexFirstRun)
+    runner.equal(firstRun.title, "Open Codex to finish setup")
+    runner.equal(
+        firstRun.detail,
+        "CodexCommander is running. Open Codex once, then choose Route Codex Through Proxy."
+    )
+
+    let future = LifecycleResultMessage.setupRequired(.unknown("future-setup"))
+    runner.equal(future.title, "CodexCommander setup is required")
+    runner.equal(
+        future.detail,
+        "The proxy is running. Update CodexCommander for setup instructions."
+    )
+}
+
 runner.test("ui: catalog confirmation is activity-aware and defaults to Later") {
     let busy = CatalogUpdateConfirmation(activity: .active(2))
     let busyAlert = busy.makeAlert()
@@ -1355,6 +1401,11 @@ runner.test("ui: app menu starts with destructive exit disabled and safe quit en
 runner.test("ui: stop-and-quit exits only after a confirmed stopped outcome") {
     runner.equal(StopAndQuitPolicy.shouldTerminate(after: .stopped), true)
     runner.equal(StopAndQuitPolicy.shouldTerminate(after: .running), false)
+    runner.equal(
+        StopAndQuitPolicy.shouldTerminate(after: .setupRequired(.codexFirstRun)),
+        false,
+        "first-run guidance never turns a failed stop into termination"
+    )
     runner.equal(
         StopAndQuitPolicy.shouldTerminate(after: .failed("still running")),
         false

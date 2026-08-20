@@ -299,6 +299,16 @@ public final class PopoverViewController: NSViewController {
         refreshSize()
     }
 
+    public func showSetupRequired(_ requirement: ProxySetupRequirement) {
+        let result = LifecycleResultMessage.setupRequired(requirement)
+        operationStatus.showResult(
+            title: result.title,
+            detail: result.detail,
+            tone: .warning
+        )
+        refreshSize()
+    }
+
     public func showProgress(_ text: String) {
         operationStatus.beginOperation(text)
         refreshSize()
@@ -558,6 +568,12 @@ public final class PopoverViewController: NSViewController {
     package var hasVerticalScroller: Bool { scrollView.hasVerticalScroller }
     package var headerView: StatusHeaderView { header }
     package var operationStatusView: OperationStatusView { operationStatus }
+    package var operationStatusTitle: String { operationStatus.titleText }
+    package var operationStatusDetail: String? { operationStatus.detailText }
+    package var operationStatusTone: OperationStatusTone? {
+        operationStatus.lastRenderedTone
+    }
+    package var routeThroughProxyEnabled: Bool { routeThroughProxyButton.isEnabled }
     package var startupModeView: StartupModeView { startupMode }
     package var catalogUpdateVisible: Bool { !catalogUpdate.isHidden }
     package var catalogUpdateDetail: String { catalogUpdate.detailText }
