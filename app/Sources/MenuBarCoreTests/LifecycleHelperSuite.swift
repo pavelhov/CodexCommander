@@ -4,6 +4,26 @@ import MenuBarCore
 
 enum LifecycleHelperSuite {
     static func run(_ t: TestRunner) {
+        t.test("lifecycle result: setup requirement is optional and preserves unknown strings") {
+            let absent = try JSONDecoder().decode(
+                LifecycleCommandResult.self,
+                from: Data(#"{"schemaVersion":1,"action":"start","ok":true,"state":"running","changed":false,"pid":42,"port":10100,"message":"running"}"#.utf8)
+            )
+            t.isNil(absent.setupRequired, "absent setup requirement")
+
+            let known = try JSONDecoder().decode(
+                LifecycleCommandResult.self,
+                from: Data(#"{"schemaVersion":1,"action":"start","ok":true,"state":"running","changed":true,"pid":42,"port":10100,"message":"setup","setupRequired":"codex-first-run"}"#.utf8)
+            )
+            t.equal(known.setupRequired, "codex-first-run")
+
+            let unknown = try JSONDecoder().decode(
+                LifecycleCommandResult.self,
+                from: Data(#"{"schemaVersion":1,"action":"start","ok":true,"state":"running","changed":false,"pid":42,"port":10100,"message":"setup","setupRequired":"future-setup"}"#.utf8)
+            )
+            t.equal(unknown.setupRequired, "future-setup")
+        }
+
         t.test("lifecycle helper: renamed app resolves only its bundled runtime") {
             try withTemporaryDirectory { root in
                 let bundle = root.appendingPathComponent(

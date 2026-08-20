@@ -271,7 +271,11 @@ package enum ApplicationMenuFactory {
 /// A failed or ambiguous stop leaves the UI alive so the user can see and recover.
 package enum StopAndQuitPolicy {
     package static func shouldTerminate(after outcome: ProxyControlOutcome) -> Bool {
-        if case .stopped = outcome { return true }
-        return false
+        switch outcome {
+        case .stopped:
+            return true
+        case .running, .setupRequired, .catalogUpdateReady, .failed:
+            return false
+        }
     }
 }

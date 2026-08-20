@@ -5,9 +5,19 @@ public enum RestartOutcome: Equatable, Sendable {
     case failed(String)
 }
 
+public enum ProxySetupRequirement: Equatable, Sendable {
+    case codexFirstRun
+    case unknown(String)
+
+    init(rawValue: String) {
+        self = rawValue == "codex-first-run" ? .codexFirstRun : .unknown(rawValue)
+    }
+}
+
 public enum ProxyControlOutcome: Equatable, Sendable {
     case running
     case stopped
+    case setupRequired(ProxySetupRequirement)
     /// The proxy is healthy, but long-lived Codex workers still hold an older roster.
     case catalogUpdateReady(staleWorkerCount: Int?)
     case failed(String)
@@ -97,6 +107,11 @@ public actor ActionCoordinator {
             }
             guard result.ok, result.state == expected else {
                 return .failed(result.message)
+            }
+            if expected == .running,
+               let rawSetup = result.setupRequired,
+               !rawSetup.isEmpty {
+                return .setupRequired(ProxySetupRequirement(rawValue: rawSetup))
             }
             return expected == .running ? .running : .stopped
         } catch let error as LifecycleHelperError {

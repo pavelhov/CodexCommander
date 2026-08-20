@@ -177,6 +177,7 @@ enum ActionSuite {
                     changed: true, pid: 41, port: 10100,
                     message: "Restart ChatGPT to load the routed models.",
                     errorCode: "CODEX_RESTART_REQUIRED",
+                    setupRequired: "codex-first-run",
                     codexRestartRequired: true,
                     staleWorkerCount: 2
                 ),
@@ -185,6 +186,38 @@ enum ActionSuite {
             t.equal(
                 sync { await coordinator.ensure() },
                 .catalogUpdateReady(staleWorkerCount: 2)
+            )
+        }
+
+        t.test("lifecycle: known setup requirement becomes a typed outcome") {
+            let lifecycle = FakeLifecycleRunner(results: [
+                LifecycleCommandResult(
+                    action: .start, ok: true, state: .running,
+                    changed: true, pid: 41, port: 10100,
+                    message: "Complete Codex setup to continue.",
+                    setupRequired: "codex-first-run"
+                ),
+            ])
+            let coordinator = ActionCoordinator(lifecycle: lifecycle)
+            t.equal(
+                sync { await coordinator.start() },
+                .setupRequired(.codexFirstRun)
+            )
+        }
+
+        t.test("lifecycle: unknown setup requirement remains forward-compatible") {
+            let lifecycle = FakeLifecycleRunner(results: [
+                LifecycleCommandResult(
+                    action: .start, ok: true, state: .running,
+                    changed: false, pid: 41, port: 10100,
+                    message: "Complete a future setup step.",
+                    setupRequired: "future-setup"
+                ),
+            ])
+            let coordinator = ActionCoordinator(lifecycle: lifecycle)
+            t.equal(
+                sync { await coordinator.start() },
+                .setupRequired(.unknown("future-setup"))
             )
         }
 
