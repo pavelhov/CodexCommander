@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -13,14 +13,21 @@ type ProductionSnapshot = {
   appConfig: unknown;
   appEntries: string[];
   codexRaw: string | null;
-  codexEntries: string[];
+  codexEntries: string[] | null;
+  codexHomeIsFile: boolean;
+  childStdout: string;
+  childStderr: string;
 };
 
 /**
  * Import the production policy only after both homes are configured. The child
  * also replaces fetch so an accidental provider/network call fails the probe.
  */
-function runProductionScenario(options: { appRaw?: string; codexRaw?: string }): ProductionSnapshot {
+function runProductionScenario(options: {
+  appRaw?: string;
+  codexRaw?: string;
+  codexHomeFileRaw?: string;
+}): ProductionSnapshot {
   const root = mkdtempSync(join(tmpdir(), "ccx-macos-first-run-"));
   const appHome = join(root, "app-home");
   const codexHome = join(root, "codex-home");
@@ -31,19 +38,14 @@ function runProductionScenario(options: { appRaw?: string; codexRaw?: string }):
 
   const script = `
     globalThis.fetch = () => { throw new Error("network blocked by macOS first-run test"); };
-    const { existsSync, readFileSync, readdirSync } = await import("node:fs");
-    const { join } = await import("node:path");
+    const { rmSync, writeFileSync } = await import("node:fs");
     const { getDefaultConfig, validateConfigCandidate } = await import("./src/config.ts");
     const { prepareMacOSAppStart } = await import("./src/cli/macos-first-run.ts");
-    const appHome = process.env.CODEXCOMMANDER_HOME;
     const codexHome = process.env.CODEX_HOME;
-    const appPath = join(appHome, "config.json");
-    const codexPath = join(codexHome, "config.toml");
-    const raw = path => existsSync(path) ? readFileSync(path, "utf8") : null;
-    const parse = value => {
-      if (value === null) return null;
-      try { return JSON.parse(value); } catch { return null; }
-    };
+    if (process.env.CCX_TEST_REPLACE_CODEX_HOME === "1") {
+      rmSync(codexHome, { recursive: true, force: true });
+      writeFileSync(codexHome, process.env.CCX_TEST_CODEX_SENTINEL ?? "", "utf8");
+    }
     console.log(JSON.stringify({
       result: prepareMacOSAppStart(),
       expectedDefault: validateConfigCandidate(getDefaultConfig()).config,
@@ -51,33 +53,66 @@ function runProductionScenario(options: { appRaw?: string; codexRaw?: string }):
         ...getDefaultConfig(),
         clientIntegrations: { codex: false },
       }).config,
-      appRaw: raw(appPath),
-      appConfig: parse(raw(appPath)),
-      appEntries: readdirSync(appHome).sort(),
-      codexRaw: raw(codexPath),
-      codexEntries: readdirSync(codexHome).sort(),
     }));
   `;
   try {
+    const childEnv = {
+      ...process.env,
+      CODEXCOMMANDER_HOME: appHome,
+      CODEX_HOME: codexHome,
+      CCX_TEST_NETWORK_BLOCKED: "1",
+      ...(options.codexHomeFileRaw === undefined
+        ? {}
+        : {
+          CCX_TEST_REPLACE_CODEX_HOME: "1",
+          CCX_TEST_CODEX_SENTINEL: options.codexHomeFileRaw,
+        }),
+    };
     const child = Bun.spawnSync([process.execPath, "--eval", script], {
       cwd: REPO_ROOT,
-      env: {
-        ...process.env,
-        CODEXCOMMANDER_HOME: appHome,
-        CODEX_HOME: codexHome,
-        CCX_TEST_NETWORK_BLOCKED: "1",
-      },
+      env: childEnv,
       stdout: "pipe",
       stderr: "pipe",
     });
-    const stdout = new TextDecoder().decode(child.stdout).trim();
-    const stderr = new TextDecoder().decode(child.stderr).trim();
+    const stdout = new TextDecoder().decode(child.stdout);
+    const stderr = new TextDecoder().decode(child.stderr);
     if (child.exitCode !== 0) {
       throw new Error(`production probe failed (${child.exitCode}): ${stderr || stdout}`);
     }
-    const line = stdout.split("\n").at(-1);
-    if (!line) throw new Error(`production probe returned no JSON: ${stderr}`);
-    return JSON.parse(line) as ProductionSnapshot;
+    if (stderr !== "") throw new Error(`production probe wrote stderr: ${stderr}`);
+    let payload: Pick<ProductionSnapshot, "result" | "expectedDefault" | "expectedMissing">;
+    try {
+      payload = JSON.parse(stdout) as typeof payload;
+    } catch (error) {
+      throw new Error(`production probe returned non-JSON stdout: ${JSON.stringify(stdout)}`, { cause: error });
+    }
+
+    const appPath = join(appHome, "config.json");
+    const appRaw = existsSync(appPath) ? readFileSync(appPath, "utf8") : null;
+    const appConfig = appRaw === null ? null : (() => {
+      try { return JSON.parse(appRaw); } catch { return null; }
+    })();
+    const appEntries = readdirSync(appHome).sort();
+    const codexHomeStat = lstatSync(codexHome);
+    const codexHomeIsFile = codexHomeStat.isFile();
+    const codexRaw = codexHomeIsFile
+      ? readFileSync(codexHome, "utf8")
+      : (() => {
+        const codexPath = join(codexHome, "config.toml");
+        return existsSync(codexPath) ? readFileSync(codexPath, "utf8") : null;
+      })();
+    const codexEntries = codexHomeIsFile ? null : readdirSync(codexHome).sort();
+    return {
+      ...payload,
+      appRaw,
+      appConfig,
+      appEntries,
+      codexRaw,
+      codexEntries,
+      codexHomeIsFile,
+      childStdout: stdout,
+      childStderr: stderr,
+    };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -111,6 +146,25 @@ describe("macOS first-run preparation (production filesystem paths)", () => {
     ]);
     expect(snapshot.codexRaw).toBe(codexConfigBytes);
     expect(snapshot.codexEntries).toEqual(["config.toml"]);
+  });
+
+  test("an ENOTDIR Codex home is present-or-unreadable, not missing", () => {
+    const codexSentinel = "codex-home-file-sentinel";
+    const snapshot = runProductionScenario({ codexHomeFileRaw: codexSentinel });
+    expect(snapshot.result).toEqual({ ok: true, changed: true, enableCodexRouting: true });
+    expect(snapshot.appConfig).toEqual(snapshot.expectedDefault);
+    expect(snapshot.appRaw).toBe(`${JSON.stringify(snapshot.expectedDefault, null, 2)}\n`);
+    expect(snapshot.appEntries).toEqual([
+      ".codexcommander-owner.json",
+      ".codexcommander-uninstall.json",
+      "config-mutation.sqlite",
+      "config.json",
+    ]);
+    expect(snapshot.codexHomeIsFile).toBe(true);
+    expect(snapshot.codexRaw).toBe(codexSentinel);
+    expect(snapshot.codexEntries).toBeNull();
+    expect(snapshot.childStdout).not.toContain(codexSentinel);
+    expect(snapshot.childStderr).toBe("");
   });
 
   test("fresh app plus missing Codex persists integration off and requests setup", () => {
@@ -148,7 +202,8 @@ describe("macOS first-run preparation (production filesystem paths)", () => {
   });
 
   test("typed initialization refusals become a secret-free app error", () => {
-    const invalidAppBytes = "{\n";
+    const secretSentinel = "macos-first-run-secret-sentinel";
+    const invalidAppBytes = `{"secret":"${secretSentinel}"\n`;
     const snapshot = runProductionScenario({ appRaw: invalidAppBytes, codexRaw: codexConfigBytes });
     expect(snapshot.result).toEqual({
       ok: false,
@@ -160,5 +215,7 @@ describe("macOS first-run preparation (production filesystem paths)", () => {
     expect(snapshot.appEntries).toEqual(["config.json"]);
     expect(snapshot.codexRaw).toBe(codexConfigBytes);
     expect(snapshot.codexEntries).toEqual(["config.toml"]);
+    expect(snapshot.childStdout).not.toContain(secretSentinel);
+    expect(snapshot.childStderr).toBe("");
   });
 });

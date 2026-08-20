@@ -48,3 +48,22 @@ Validation:
 - `bun test tests/macos-first-run.test.ts` — 4 pass, 0 fail (22 assertions).
 - `bun run typecheck` — pass.
 - `git diff --check` — pass.
+
+## Fix round 2
+
+Added a production-path `ENOTDIR` probe: the child imports the policy while
+`CODEX_HOME` is a directory, replaces that path with a sentinel-bearing file,
+then runs startup so `lstatSync(CODEX_CONFIG_PATH)` receives `ENOTDIR`. The
+probe verifies normal routing, no setup requirement, canonical default app
+bytes, and unchanged Codex sentinel bytes.
+
+The child harness now requires empty stderr and parses the complete stdout as
+one JSON document (no last-line fallback). Fixture bytes are inspected by the
+parent after the child exits, so the refusal fixture's secret sentinel can be
+asserted absent from both child streams.
+
+Validation:
+
+- `bun test tests/macos-first-run.test.ts` — 5 pass, 0 fail (33 assertions).
+- `bun run typecheck` — pass.
+- `git diff --check` — pass.
