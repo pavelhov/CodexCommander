@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   CODEX_SHIM_AUTO_RESTORE_ENV,
   codexAutoStartEnabled,
@@ -203,6 +204,126 @@ describe("create-only config initialization", () => {
       reason: "existing-invalid",
     });
     expect(readFileSync(getConfigPath(), "utf8")).toBe("{");
+  });
+
+  test("two processes racing initialization publish once and adopt the winner", async () => {
+    const raceRoot = join(testDir, "raced-home");
+    const releasePath = join(testDir, "race-release");
+    const configModuleUrl = pathToFileURL(join(import.meta.dir, "../src/config.ts")).href;
+    const children = ["a", "b"].map(id => {
+      const readyPath = join(testDir, `race-${id}-ready`);
+      const childSource = `
+        import { existsSync, writeFileSync } from "node:fs";
+        import {
+          getDefaultConfig,
+          initializeConfigIfMissing,
+        } from ${JSON.stringify(configModuleUrl)};
+        writeFileSync(${JSON.stringify(readyPath)}, "ready");
+        while (!existsSync(${JSON.stringify(releasePath)})) Bun.sleepSync(5);
+        console.log(JSON.stringify(initializeConfigIfMissing(getDefaultConfig())));
+      `;
+      return {
+        child: Bun.spawn([process.execPath, "-e", childSource], {
+          cwd: join(import.meta.dir, ".."),
+          env: { ...process.env, CODEXCOMMANDER_HOME: raceRoot },
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        }),
+        readyPath,
+      };
+    });
+
+    try {
+      for (let attempt = 0; attempt < 1_000; attempt += 1) {
+        if (children.every(({ readyPath }) => existsSync(readyPath))) break;
+        await Bun.sleep(5);
+      }
+      expect(children.every(({ readyPath }) => existsSync(readyPath))).toBe(true);
+      writeFileSync(releasePath, "go");
+      const results = await Promise.all(children.map(async ({ child }) => {
+        const exitCode = await Promise.race([
+          child.exited,
+          Bun.sleep(10_000).then(() => null),
+        ]);
+        if (exitCode === null) {
+          child.kill();
+          await child.exited;
+          throw new Error("Timed out waiting for config initializer child");
+        }
+        const stdout = await new Response(child.stdout).text();
+        const stderr = await new Response(child.stderr).text();
+        if (exitCode !== 0) {
+          throw new Error(`Config initializer child exited ${exitCode}: ${stderr}`);
+        }
+        return JSON.parse(stdout.trim()) as ReturnType<typeof initializeConfigIfMissing>;
+      }));
+
+      expect(results.map(result => result.status).sort()).toEqual(["created", "existing"]);
+      const finalPath = join(raceRoot, "config.json");
+      expect(JSON.parse(readFileSync(finalPath, "utf8"))).toEqual(getDefaultConfig());
+      expect(lstatSync(finalPath).nlink).toBe(1);
+    } finally {
+      writeFileSync(releasePath, "go");
+      for (const { child } of children) {
+        if (child.exitCode === null) child.kill();
+        await child.exited;
+      }
+    }
+  }, { timeout: 20_000 });
+
+  test("refuses a linked configuration root even when its target has valid ownership", () => {
+    const realRoot = join(testDir, "owned-real-root");
+    const linkedRoot = join(testDir, "linked-root");
+    mkdirSync(realRoot);
+    process.env.CODEXCOMMANDER_HOME = realRoot;
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "created" });
+    unlinkSync(getConfigPath());
+    symlinkSync(realRoot, linkedRoot, process.platform === "win32" ? "junction" : "dir");
+    process.env.CODEXCOMMANDER_HOME = linkedRoot;
+
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+      status: "refused",
+      reason: "existing-unsafe",
+    });
+    expect(existsSync(join(realRoot, "config.json"))).toBe(false);
+  });
+
+  test("refuses a configuration root replaced after ownership was cached", () => {
+    const displacedRoot = `${testDir}.displaced`;
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "created" });
+    unlinkSync(getConfigPath());
+    setConfigInitializationBeforePublishForTests(() => {
+      renameSync(testDir, displacedRoot);
+      mkdirSync(testDir, { mode: 0o700 });
+    });
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+        status: "refused",
+        reason: "existing-unsafe",
+      });
+      expect(existsSync(getConfigPath())).toBe(false);
+      expect(existsSync(join(displacedRoot, "config.json"))).toBe(false);
+    } finally {
+      rmSync(displacedRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("does not reuse cached ownership after the configuration root was replaced", () => {
+    const displacedRoot = `${testDir}.cached-root`;
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "created" });
+    unlinkSync(getConfigPath());
+    renameSync(testDir, displacedRoot);
+    mkdirSync(testDir, { mode: 0o700 });
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+        status: "refused",
+        reason: "existing-unsafe",
+      });
+      expect(existsSync(getConfigPath())).toBe(false);
+    } finally {
+      rmSync(displacedRoot, { recursive: true, force: true });
+    }
   });
 });
 

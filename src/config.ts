@@ -1660,6 +1660,64 @@ type ConfigEntryProbe =
     >;
   };
 
+type ConfigRootIdentity = {
+  path: string;
+  canonicalPath: string;
+  dev: number;
+  ino: number;
+};
+
+type ConfigRootProbe =
+  | { kind: "missing" }
+  | { kind: "valid"; identity: ConfigRootIdentity }
+  | { kind: "refused"; reason: "existing-inaccessible" | "existing-unsafe" };
+
+const CONFIG_INITIALIZATION_WAIT_MS = 2_000;
+const CONFIG_INITIALIZATION_POLL_MS = 10;
+
+function samePhysicalConfigRoot(left: ConfigRootIdentity, right: ConfigRootIdentity): boolean {
+  const sameCanonicalPath = process.platform === "win32"
+    ? left.canonicalPath.toLowerCase() === right.canonicalPath.toLowerCase()
+    : left.canonicalPath === right.canonicalPath;
+  return left.path === right.path
+    && sameCanonicalPath
+    && left.dev === right.dev
+    && left.ino === right.ino;
+}
+
+function probeConfigRoot(): ConfigRootProbe {
+  const path = getConfigDir();
+  let entry;
+  try {
+    entry = lstatSync(path);
+  } catch (error) {
+    return isMissingPathError(error)
+      ? { kind: "missing" }
+      : { kind: "refused", reason: "existing-inaccessible" };
+  }
+  if (!entry.isDirectory() || entry.isSymbolicLink()) {
+    return { kind: "refused", reason: "existing-unsafe" };
+  }
+  try {
+    return {
+      kind: "valid",
+      identity: {
+        path,
+        canonicalPath: realpathSync.native(path),
+        dev: entry.dev,
+        ino: entry.ino,
+      },
+    };
+  } catch {
+    return { kind: "refused", reason: "existing-inaccessible" };
+  }
+}
+
+function configRootStillMatches(expected: ConfigRootIdentity): boolean {
+  const current = probeConfigRoot();
+  return current.kind === "valid" && samePhysicalConfigRoot(expected, current.identity);
+}
+
 function probeConfigEntry(): ConfigEntryProbe {
   let entry;
   try {
@@ -1689,7 +1747,6 @@ export function setConfigInitializationBeforePublishForTests(hook: (() => void) 
 }
 
 function publishConfigNoReplace(path: string, bytes: string): boolean {
-  recordOwnedConfigPath(resolveConfigDir(), path);
   const target = resolveWriteTarget(path);
   assertResolvedTargetAllowed(path, target);
   const temp = `${target}.ccx.${process.pid}.${++_atomicSeq}.create.tmp`;
@@ -1700,9 +1757,6 @@ function publishConfigNoReplace(path: string, bytes: string): boolean {
     if (process.platform === "win32") {
       hardenSecretPath(temp, { required: true, timeoutMemoKey: path });
     }
-    const hook = configInitializationBeforePublishForTests;
-    configInitializationBeforePublishForTests = null;
-    hook?.();
     try {
       linkSync(temp, target);
       published = true;
@@ -1728,44 +1782,153 @@ function publishConfigNoReplace(path: string, bytes: string): boolean {
   }
 }
 
+function configInitializationContenderObservation(
+  expectedRoot: ConfigRootIdentity,
+): ConfigInitializationResult | ConfigEntryProbe {
+  if (!configRootStillMatches(expectedRoot)) {
+    return { status: "refused", reason: "existing-unsafe" };
+  }
+  const current = probeConfigEntry();
+  if (!configRootStillMatches(expectedRoot)) {
+    return { status: "refused", reason: "existing-unsafe" };
+  }
+  if (current.kind === "valid") return { status: "existing" };
+  if (current.kind === "refused" && current.reason === "existing-invalid") {
+    return { status: "refused", reason: current.reason };
+  }
+  return current;
+}
+
+function waitForConfigInitializationWinner(
+  expectedRoot: ConfigRootIdentity,
+  deadline: number,
+  fallback: ConfigInitializationRefusal,
+): ConfigInitializationResult {
+  let lastRefusal: ConfigInitializationRefusal | null = null;
+  for (;;) {
+    const observed = configInitializationContenderObservation(expectedRoot);
+    if ("status" in observed) return observed;
+    if (observed.kind === "refused") lastRefusal = observed.reason;
+    if (performance.now() >= deadline) {
+      return { status: "refused", reason: lastRefusal ?? fallback };
+    }
+    Bun.sleepSync(CONFIG_INITIALIZATION_POLL_MS);
+  }
+}
+
 export function initializeConfigIfMissing(
   candidate: CodexCommanderConfig,
 ): ConfigInitializationResult {
   const validated = validateConfigCandidate(candidate);
   if (!validated.ok) return { status: "refused", reason: "candidate-invalid" };
+  const deadline = performance.now() + CONFIG_INITIALIZATION_WAIT_MS;
+  const initialRoot = probeConfigRoot();
+  if (initialRoot.kind === "refused") {
+    return { status: "refused", reason: initialRoot.reason };
+  }
   const observed = probeConfigEntry();
+  if (initialRoot.kind === "valid" && !configRootStillMatches(initialRoot.identity)) {
+    return { status: "refused", reason: "existing-unsafe" };
+  }
   if (observed.kind === "valid") return { status: "existing" };
   if (observed.kind === "refused") return { status: "refused", reason: observed.reason };
+  let ownershipFailure: ConfigInitializationRefusal | null = null;
   try {
     if (!recordOwnedConfigPath(getConfigDir(), getConfigPath())) {
-      return { status: "refused", reason: "existing-unsafe" };
+      ownershipFailure = "existing-unsafe";
     }
   } catch {
-    return { status: "refused", reason: "existing-inaccessible" };
+    ownershipFailure = "existing-inaccessible";
   }
 
-  try {
-    return withConfigMutationLockSync(() => {
-      const current = probeConfigEntry();
-      if (current.kind === "valid") return { status: "existing" } as const;
-      if (current.kind === "refused") {
-        return { status: "refused", reason: current.reason } as const;
+  const ownedRoot = probeConfigRoot();
+  if (ownedRoot.kind !== "valid") {
+    return {
+      status: "refused",
+      reason: ownedRoot.kind === "refused" ? ownedRoot.reason : "existing-unsafe",
+    };
+  }
+  if (
+    initialRoot.kind === "valid"
+    && !samePhysicalConfigRoot(initialRoot.identity, ownedRoot.identity)
+  ) {
+    return { status: "refused", reason: "existing-unsafe" };
+  }
+  if (!ownershipFailure) {
+    try {
+      if (!recordOwnedConfigPath(getConfigDir(), getConfigPath())) {
+        ownershipFailure = "existing-unsafe";
       }
-      const bytes = `${JSON.stringify(validated.config, null, 2)}\n`;
-      const published = publishConfigNoReplace(getConfigPath(), bytes);
-      if (!published) {
-        const winner = probeConfigEntry();
-        if (winner.kind === "valid") return { status: "existing" } as const;
+    } catch {
+      ownershipFailure = "existing-inaccessible";
+    }
+    if (!configRootStillMatches(ownedRoot.identity)) {
+      return { status: "refused", reason: "existing-unsafe" };
+    }
+  }
+  if (ownershipFailure) {
+    return waitForConfigInitializationWinner(ownedRoot.identity, deadline, ownershipFailure);
+  }
+
+  let lastContentionRefusal: ConfigInitializationRefusal | null = null;
+  for (;;) {
+    if (!configRootStillMatches(ownedRoot.identity)) {
+      return { status: "refused", reason: "existing-unsafe" };
+    }
+    try {
+      return withConfigMutationLockSync(() => {
+        if (!configRootStillMatches(ownedRoot.identity)) {
+          return { status: "refused", reason: "existing-unsafe" } as const;
+        }
+        const current = probeConfigEntry();
+        if (current.kind === "valid") return { status: "existing" } as const;
+        if (current.kind === "refused") {
+          return { status: "refused", reason: current.reason } as const;
+        }
+
+        const hook = configInitializationBeforePublishForTests;
+        configInitializationBeforePublishForTests = null;
+        hook?.();
+        if (!configRootStillMatches(ownedRoot.identity)) {
+          return { status: "refused", reason: "existing-unsafe" } as const;
+        }
+        const afterHook = probeConfigEntry();
+        if (afterHook.kind === "valid") return { status: "existing" } as const;
+        if (afterHook.kind === "refused") {
+          return { status: "refused", reason: afterHook.reason } as const;
+        }
+
+        const bytes = `${JSON.stringify(validated.config, null, 2)}\n`;
+        if (!configRootStillMatches(ownedRoot.identity)) {
+          return { status: "refused", reason: "existing-unsafe" } as const;
+        }
+        const published = publishConfigNoReplace(getConfigPath(), bytes);
+        if (!published) {
+          const winner = probeConfigEntry();
+          if (winner.kind === "valid") return { status: "existing" } as const;
+          return {
+            status: "refused",
+            reason: winner.kind === "refused" ? winner.reason : "coordination-unavailable",
+          } as const;
+        }
+        bumpGenerationForCooperatingConfigWrite();
+        return { status: "created" } as const;
+      });
+    } catch (error) {
+      if (!(error instanceof ConfigMutationLockError)) {
+        return { status: "refused", reason: "coordination-unavailable" };
+      }
+      const contender = configInitializationContenderObservation(ownedRoot.identity);
+      if ("status" in contender) return contender;
+      if (contender.kind === "refused") lastContentionRefusal = contender.reason;
+      if (performance.now() >= deadline) {
         return {
           status: "refused",
-          reason: winner.kind === "refused" ? winner.reason : "coordination-unavailable",
-        } as const;
+          reason: lastContentionRefusal ?? "coordination-unavailable",
+        };
       }
-      bumpGenerationForCooperatingConfigWrite();
-      return { status: "created" } as const;
-    });
-  } catch {
-    return { status: "refused", reason: "coordination-unavailable" };
+      Bun.sleepSync(CONFIG_INITIALIZATION_POLL_MS);
+    }
   }
 }
 

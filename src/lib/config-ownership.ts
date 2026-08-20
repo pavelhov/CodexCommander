@@ -46,6 +46,13 @@ type ConfigOwnership = {
   manifest: ConfigUninstallManifest;
   ownerFile: string;
   manifestFile: string;
+  rootIdentity: ConfigOwnershipRootIdentity;
+};
+
+type ConfigOwnershipRootIdentity = {
+  canonicalPath: string;
+  dev: number;
+  ino: number;
 };
 
 const METADATA_MAX_BYTES = 64 * 1024;
@@ -163,6 +170,27 @@ function canonicalRoot(configDir: string): string {
   return realpathSync.native(resolve(configDir));
 }
 
+function configOwnershipRootIdentity(configDir: string): ConfigOwnershipRootIdentity {
+  const root = lstatSync(configDir);
+  if (!root.isDirectory() || root.isSymbolicLink()) {
+    throw new Error("config ownership root is not a physical directory");
+  }
+  return {
+    canonicalPath: canonicalRoot(configDir),
+    dev: root.dev,
+    ino: root.ino,
+  };
+}
+
+function sameConfigOwnershipRoot(
+  left: ConfigOwnershipRootIdentity,
+  right: ConfigOwnershipRootIdentity,
+): boolean {
+  return samePath(left.canonicalPath, right.canonicalPath)
+    && left.dev === right.dev
+    && left.ino === right.ino;
+}
+
 function isWithinRoot(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === "" || (
@@ -199,7 +227,8 @@ function loadOwnership(configDir: string): ConfigOwnership | null {
   try {
     const owner = readBoundedJson(ownerPath);
     const manifest = readBoundedJson(manifestPath);
-    const root = canonicalRoot(configDir);
+    const rootIdentity = configOwnershipRootIdentity(configDir);
+    const root = rootIdentity.canonicalPath;
     if (
       !isOwner(owner)
       || !isManifest(manifest)
@@ -212,6 +241,7 @@ function loadOwnership(configDir: string): ConfigOwnership | null {
       manifest,
       ownerFile: ownerName,
       manifestFile: manifestName,
+      rootIdentity,
     };
   } catch {
     return null;
@@ -219,12 +249,17 @@ function loadOwnership(configDir: string): ConfigOwnership | null {
 }
 
 function createOwnership(configDir: string): ConfigOwnership | null {
-  const rootStat = lstatSync(configDir);
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink() || readdirSync(configDir).length !== 0) return null;
+  let rootIdentity: ConfigOwnershipRootIdentity;
+  try {
+    rootIdentity = configOwnershipRootIdentity(configDir);
+  } catch {
+    return null;
+  }
+  if (readdirSync(configDir).length !== 0) return null;
   const owner: ConfigOwner = {
     version: 1,
     ownerId: randomUUID(),
-    root: canonicalRoot(configDir),
+    root: rootIdentity.canonicalPath,
   };
   const manifest: ConfigUninstallManifest = { ...owner, paths: [...INITIAL_OWNED_PATHS] };
   writeFileSync(join(configDir, CONFIG_OWNER_FILE), `${JSON.stringify(owner, null, 2)}\n`, {
@@ -247,6 +282,7 @@ function createOwnership(configDir: string): ConfigOwnership | null {
     manifest,
     ownerFile: CONFIG_OWNER_FILE,
     manifestFile: CONFIG_UNINSTALL_MANIFEST,
+    rootIdentity,
   };
 }
 
@@ -296,6 +332,16 @@ export function recordOwnedConfigPath(configDir: string, candidatePath: string):
     mkdirSync(configDir, { recursive: true, mode: 0o700 });
   }
   let ownership = ownershipCache.get(cacheKey);
+  if (ownership) {
+    try {
+      if (!sameConfigOwnershipRoot(
+        ownership.rootIdentity,
+        configOwnershipRootIdentity(configDir),
+      )) return false;
+    } catch {
+      return false;
+    }
+  }
   if (ownership === undefined) {
     ownership = loadOwnership(configDir) ?? createOwnership(configDir);
     ownershipCache.set(cacheKey, ownership);
