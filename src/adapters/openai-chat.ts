@@ -543,6 +543,24 @@ function isXaiSchemaTarget(provider: CodexCommanderProviderConfig): boolean {
   }
 }
 
+// Moonshot's strict validator ("moonshot flavored json schema") 400s any schema
+// node that carries a `$ref` next to sibling keys:
+//   At path '$defs.__schema20': when using $ref, type should be defined in the
+//   referenced schema instead of the parent schema
+// Codex emits exactly that shape for deferred/dynamic tools with recursive
+// parameter schemas (zod-style serialization: `$defs.__schemaN` with a `$ref`
+// plus a sibling `type`/`description`). Bare `$ref`s are accepted, so the
+// sanitizer below only rewrites ref-with-siblings nodes.
+const MOONSHOT_SCHEMA_HOSTNAMES = new Set(["api.moonshot.ai", "api.moonshot.cn", "api.kimi.com"]);
+
+function isMoonshotSchemaTarget(provider: CodexCommanderProviderConfig): boolean {
+  try {
+    return MOONSHOT_SCHEMA_HOSTNAMES.has(new URL(provider.baseUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
 // Volcengine Ark regional endpoints. Ark validates an assistant message's text field as a
 // REQUIRED parameter and treats "" as absent, so a tool-call-only assistant in history 400s with
 // `MissingParameter: input.content.text` (#796). Every other OpenAI-compatible provider accepts
@@ -599,7 +617,9 @@ function ensureRootObjectType(parameters: unknown): Record<string, unknown> {
   return { ...obj, type: "object" };
 }
 
-function resolveXaiLocalSchemaRef(
+/** Resolve a local `#/...` JSON Pointer against a schema document. Shared by the
+ * xAI root expansion and the Moonshot `$ref`-sibling inlining. */
+function resolveLocalSchemaRef(
   ref: string,
   document: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
@@ -616,6 +636,81 @@ function resolveXaiLocalSchemaRef(
     : undefined;
 }
 
+/**
+ * Merge `$ref` siblings into the resolved target. Object-valued `properties`
+ * merge per key and `required` unions so inlined constraints are not lost;
+ * every other sibling key wins over the target's value.
+ */
+function mergeRefSiblings(
+  target: Record<string, unknown>,
+  siblings: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...target };
+  for (const [key, value] of Object.entries(siblings)) {
+    const existing = merged[key];
+    if (key === "properties" && existing && typeof existing === "object" && !Array.isArray(existing)
+      && value && typeof value === "object" && !Array.isArray(value)) {
+      merged[key] = { ...existing as Record<string, unknown>, ...value as Record<string, unknown> };
+    } else if (key === "required" && Array.isArray(existing) && Array.isArray(value)) {
+      merged[key] = [...new Set([...existing, ...value])];
+    } else {
+      merged[key] = value;
+    }
+  }
+  return merged;
+}
+
+/**
+ * Rewrite every schema node that carries a `$ref` next to sibling keys so the
+ * emitted document never mixes the two (Moonshot 400s that shape). A bare
+ * `$ref` is left untouched, which keeps recursive schemas intact.
+ *
+ * A sibling-carrying ref is inlined from its local target when that is safe:
+ * resolvable, acyclic (`expanding` tracks the refs on the current path), and
+ * the target itself fully resolves. Anything else — external refs, missing
+ * targets, cycles — collapses to the bare `$ref`, dropping the siblings; that
+ * keeps the document valid at the cost of the sibling annotations.
+ */
+function resolveMoonshotRefSiblings(
+  value: unknown,
+  document: Record<string, unknown>,
+  expanding: ReadonlySet<string>,
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map(entry => resolveMoonshotRefSiblings(entry, document, expanding));
+  }
+  if (!value || typeof value !== "object") return value;
+  const obj = value as Record<string, unknown>;
+  const ref = obj.$ref;
+  if (typeof ref === "string") {
+    const siblings = Object.fromEntries(Object.entries(obj).filter(([key]) => key !== "$ref"));
+    if (Object.keys(siblings).length === 0) return { $ref: ref };
+    const target = resolveLocalSchemaRef(ref, document);
+    if (target && !expanding.has(ref)) {
+      const next = new Set(expanding);
+      next.add(ref);
+      const walkedTarget = resolveMoonshotRefSiblings(target, document, next) as Record<string, unknown>;
+      if (typeof walkedTarget.$ref !== "string") {
+        const walkedSiblings = resolveMoonshotRefSiblings(siblings, document, next) as Record<string, unknown>;
+        return mergeRefSiblings(walkedTarget, walkedSiblings);
+      }
+    }
+    return { $ref: ref };
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(obj)) {
+    out[key] = resolveMoonshotRefSiblings(child, document, expanding);
+  }
+  return out;
+}
+
+function normalizeMoonshotToolParameters(parameters: unknown): Record<string, unknown> {
+  const document = parameters && typeof parameters === "object" && !Array.isArray(parameters)
+    ? parameters as Record<string, unknown>
+    : {};
+  return ensureRootObjectType(resolveMoonshotRefSiblings(parameters, document, new Set()));
+}
+
 function expandXaiRootObjectSchemas(
   schema: unknown,
   document: Record<string, unknown>,
@@ -625,7 +720,7 @@ function expandXaiRootObjectSchemas(
   const obj = schema as Record<string, unknown>;
   if (obj.$ref !== undefined) {
     if (typeof obj.$ref !== "string" || seenRefs.has(obj.$ref)) return undefined;
-    const target = resolveXaiLocalSchemaRef(obj.$ref, document);
+    const target = resolveLocalSchemaRef(obj.$ref, document);
     if (!target) return undefined;
     const nextSeen = new Set(seenRefs);
     nextSeen.add(obj.$ref);
@@ -676,10 +771,13 @@ function toolsToChatFormat(parsed: CodexCommanderParsedRequest, provider: CodexC
     : parsed.context.tools;
   if (tools.length === 0) return undefined;
   const xaiTarget = isXaiSchemaTarget(provider);
+  const moonshotTarget = isMoonshotSchemaTarget(provider);
   const formatted = tools.flatMap(t => {
     const parameters = xaiTarget
       ? normalizeXaiToolParameters(t.parameters)
-      : ensureRootObjectType(t.parameters);
+      : moonshotTarget
+        ? normalizeMoonshotToolParameters(t.parameters)
+        : ensureRootObjectType(t.parameters);
 
     if (parameters === undefined) return [];
     return [{
