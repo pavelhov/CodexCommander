@@ -40,7 +40,11 @@ import {
   hardenSecretPathAsync,
   windowsSecretAclApplies,
 } from "./lib/windows-secret-acl";
-import { inspectPhysicalConfigRoot, recordOwnedConfigPath } from "./lib/config-ownership";
+import {
+  inspectPhysicalConfigRoot,
+  recordOwnedConfigPath,
+  sameConfigRootFileIdentity,
+} from "./lib/config-ownership";
 import { assertNotRealHomeUnderTest } from "./lib/test-home-guard";
 import { isLocalAttestationSecret } from "./lib/local-management-attestation";
 import { providerDestinationConfigError } from "./lib/destination-policy";
@@ -1681,8 +1685,7 @@ function samePhysicalConfigRoot(left: ConfigRootIdentity, right: ConfigRootIdent
     : left.canonicalPath === right.canonicalPath;
   return left.path === right.path
     && sameCanonicalPath
-    && left.dev === right.dev
-    && left.ino === right.ino;
+    && sameConfigRootFileIdentity(left, right);
 }
 
 function probeConfigRoot(): ConfigRootProbe {

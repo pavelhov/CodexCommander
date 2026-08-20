@@ -60,18 +60,18 @@ export type ConfigRootFileIdentity = {
   ino: bigint;
 };
 
-type ConfigRootIdentityOverride = (
-  path: string,
-  actual: ConfigRootFileIdentity,
-) => ConfigRootFileIdentity;
+export function stableConfigRootFileIdentity(
+  identity: ConfigRootFileIdentity,
+): ConfigRootFileIdentity | null {
+  // Some filesystems report ino=0 when no stable file identifier is available.
+  return identity.ino === 0n ? null : identity;
+}
 
-let configRootIdentityOverrideForTests: ConfigRootIdentityOverride | null = null;
-
-/** Test-only seam for simulating filesystem identifiers that local fixtures cannot produce. */
-export function setConfigRootIdentityOverrideForTests(
-  override: ConfigRootIdentityOverride | null,
-): void {
-  configRootIdentityOverrideForTests = override;
+export function sameConfigRootFileIdentity(
+  left: ConfigRootFileIdentity,
+  right: ConfigRootFileIdentity,
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
 }
 
 export type PhysicalConfigRootInspection =
@@ -82,10 +82,8 @@ export type PhysicalConfigRootInspection =
 export function inspectPhysicalConfigRoot(path: string): PhysicalConfigRootInspection {
   const root = lstatSync(path, { bigint: true });
   if (!root.isDirectory() || root.isSymbolicLink()) return { kind: "unsafe" };
-  const actual = { dev: root.dev, ino: root.ino };
-  const identity = configRootIdentityOverrideForTests?.(path, actual) ?? actual;
-  // Some filesystems report ino=0 when no stable file identifier is available.
-  if (identity.ino === 0n) return { kind: "unsafe" };
+  const identity = stableConfigRootFileIdentity({ dev: root.dev, ino: root.ino });
+  if (!identity) return { kind: "unsafe" };
   return { kind: "valid", identity };
 }
 
@@ -220,8 +218,7 @@ function sameConfigOwnershipRoot(
   right: ConfigOwnershipRootIdentity,
 ): boolean {
   return samePath(left.canonicalPath, right.canonicalPath)
-    && left.dev === right.dev
-    && left.ino === right.ino;
+    && sameConfigRootFileIdentity(left, right);
 }
 
 function isWithinRoot(root: string, candidate: string): boolean {

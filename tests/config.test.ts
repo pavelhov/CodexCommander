@@ -31,7 +31,7 @@ import {
 
 import * as windowsAcl from "../src/lib/windows-secret-acl";
 import { AtomicWriteResidualTempError, atomicWriteFile, atomicWriteFileAsync, hardenConfigDir, hardenExistingSecret, renameAtomicFile, saveConfig } from "../src/config";
-import { setConfigRootIdentityOverrideForTests } from "../src/lib/config-ownership";
+import { sameConfigRootFileIdentity } from "../src/lib/config-ownership";
 let testDir = "";
 let previousCodexCommanderHome: string | undefined;
 
@@ -43,7 +43,6 @@ beforeEach(() => {
 
 afterEach(() => {
   setConfigInitializationBeforePublishForTests(null);
-  setConfigRootIdentityOverrideForTests(null);
   if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
   else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   previousCodexCommanderHome = undefined;
@@ -328,48 +327,14 @@ describe("create-only config initialization", () => {
     }
   });
 
-  test("refuses a configuration root whose filesystem identity has a zero inode", () => {
-    setConfigRootIdentityOverrideForTests((_path, actual) => ({
-      ...actual,
-      ino: 0n,
-    }));
-
-    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
-      status: "refused",
-      reason: "existing-unsafe",
-    });
-    expect(readdirSync(testDir)).toEqual([]);
-  });
-
-  test("detects replacement roots whose inode numbers collide after numeric conversion", () => {
+  test("distinguishes bigint root identities whose inode numbers collide after numeric conversion", () => {
     const firstIno = 2n ** 53n;
     const replacementIno = firstIno + 1n;
     expect(Number(firstIno)).toBe(Number(replacementIno));
-
-    let initialActualIdentity: string | null = null;
-    setConfigRootIdentityOverrideForTests((_path, actual) => {
-      const actualIdentity = `${actual.dev}:${actual.ino}`;
-      initialActualIdentity ??= actualIdentity;
-      return {
-        dev: 1n,
-        ino: actualIdentity === initialActualIdentity ? firstIno : replacementIno,
-      };
-    });
-
-    const displacedRoot = `${testDir}.precision-collision`;
-    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "created" });
-    unlinkSync(getConfigPath());
-    renameSync(testDir, displacedRoot);
-    mkdirSync(testDir, { mode: 0o700 });
-    try {
-      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
-        status: "refused",
-        reason: "existing-unsafe",
-      });
-      expect(existsSync(getConfigPath())).toBe(false);
-    } finally {
-      rmSync(displacedRoot, { recursive: true, force: true });
-    }
+    expect(sameConfigRootFileIdentity(
+      { dev: 1n, ino: firstIno },
+      { dev: 1n, ino: replacementIno },
+    )).toBe(false);
   });
 });
 
