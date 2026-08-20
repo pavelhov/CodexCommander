@@ -2,12 +2,16 @@ import { describe, expect, test } from "bun:test";
 import {
   MACOS_LIFECYCLE_JSON_MAX_BYTES,
   encodeMacOSLifecycleResult,
+  performMacOSLifecycleAction,
 } from "../src/cli/macos-lifecycle";
 import {
   APPLY_CODEX_CATALOG_ACTION,
   type ApplyCodexCatalogLifecycleResult,
 } from "../src/codex/catalog-apply";
-import type { ProxyLifecycleResult } from "../src/cli/proxy-lifecycle";
+import {
+  ensureProxyLifecycle,
+  type ProxyLifecycleResult,
+} from "../src/cli/proxy-lifecycle";
 
 function success(message = "CodexCommander is running."): ProxyLifecycleResult {
   return {
@@ -23,6 +27,37 @@ function success(message = "CodexCommander is running."): ProxyLifecycleResult {
 }
 
 describe("macOS lifecycle JSON frame", () => {
+  test("only direct native start installs first-run preparation", async () => {
+    const calls: string[] = [];
+    const ensure = async (options: Parameters<typeof ensureProxyLifecycle>[0]) => {
+      calls.push(`${options.action}:${options.io?.prepareStart ? "prepared" : "plain"}`);
+      return { ...success(), action: options.action ?? "ensure" };
+    };
+    await performMacOSLifecycleAction("ensure", { ensureProxyLifecycle: ensure });
+    await performMacOSLifecycleAction("start", {
+      ensureProxyLifecycle: ensure,
+      prepareMacOSAppStart: () => ({ ok: true, changed: false, enableCodexRouting: true }),
+    });
+    expect(calls).toEqual(["ensure:plain", "start:prepared"]);
+  });
+
+  test("Codex first-run setup remains a bounded zero-exit running result", () => {
+    const result: ProxyLifecycleResult = {
+      ...success("CodexCommander is running. Open Codex once, then route Codex through the proxy."),
+      action: "start",
+      setupRequired: "codex-first-run",
+    };
+    const encoded = encodeMacOSLifecycleResult("start", result);
+    expect(encoded.exitCode).toBe(0);
+    expect(Buffer.byteLength(encoded.frame, "utf8")).toBeLessThanOrEqual(MACOS_LIFECYCLE_JSON_MAX_BYTES);
+    expect(JSON.parse(encoded.frame)).toMatchObject({
+      action: "start",
+      ok: true,
+      state: "running",
+      setupRequired: "codex-first-run",
+    });
+  });
+
   test("restore actions keep their structured action names", () => {
     for (const action of ["restore-native", "restore-back"] as const) {
       const result: ProxyLifecycleResult = {
