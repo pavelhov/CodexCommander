@@ -85,6 +85,7 @@ function baseIo(overrides: EnsureProxyLifecycleIo = {}): EnsureProxyLifecycleIo 
     reconcile: () => {},
     journalPending: () => false,
     externalProvider: () => null,
+    setEnabled: (_client, enabled) => ({ ok: true, status: "unchanged", enabled }),
     acquireAuthority: async () => authority(),
     diagnoseService: () => service(),
     waitForReady: async () => "ready",
@@ -189,6 +190,165 @@ describe("shared proxy lifecycle authority", () => {
     expect(stopped.ok).toBe(true);
     expect(calls.indexOf("sync-exit")).toBeLessThan(calls.indexOf("release-E"));
     expect(calls.indexOf("release-E")).toBeLessThan(calls.indexOf("enabled:false"));
+  });
+
+  test("app preparation runs under E before config load and routing preparation", async () => {
+    const calls: string[] = [];
+    const result = await ensureProxyLifecycle({
+      action: "start",
+      ensureCompanion: false,
+      io: baseIo({
+        acquireAuthority: async () => {
+          calls.push("acquire-E");
+          return authority(calls);
+        },
+        prepareStart: () => {
+          calls.push("prepare-app");
+          return { ok: true, changed: true, enableCodexRouting: true };
+        },
+        loadConfig: () => {
+          calls.push("load-config");
+          return config();
+        },
+        findLive: async () => ({ pid: 42, port: 10100, source: "runtime" }),
+        setEnabled: (_client, enabled) => {
+          calls.push(`enable:${enabled}`);
+          return { ok: true, status: "unchanged", enabled };
+        },
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(calls.indexOf("acquire-E")).toBeLessThan(calls.indexOf("prepare-app"));
+    expect(calls.indexOf("prepare-app")).toBeLessThan(calls.indexOf("load-config"));
+    expect(calls.indexOf("load-config")).toBeLessThan(calls.indexOf("enable:true"));
+  });
+
+  test("refused app preparation exits before load, probe, or spawn", async () => {
+    const calls: string[] = [];
+    const result = await ensureProxyLifecycle({
+      action: "start",
+      io: baseIo({
+        prepareStart: () => ({
+          ok: false,
+          changed: false,
+          message: "CodexCommander configuration needs repair; no files were changed.",
+          errorCode: "CONFIGURATION_REQUIRED",
+        }),
+        loadConfig: () => {
+          calls.push("load");
+          return config();
+        },
+        findLive: async () => {
+          calls.push("find");
+          return null;
+        },
+        spawnStart: async () => {
+          calls.push("spawn");
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({
+      action: "start",
+      ok: false,
+      state: "blocked",
+      errorCode: "CONFIGURATION_REQUIRED",
+    });
+    expect(calls).toEqual([]);
+  });
+
+  test("fresh missing-Codex preparation starts without enabling routing", async () => {
+    const calls: string[] = [];
+    const result = await ensureProxyLifecycle({
+      action: "start",
+      ensureCompanion: false,
+      io: baseIo({
+        prepareStart: () => ({
+          ok: true,
+          changed: true,
+          enableCodexRouting: false,
+          setupRequired: "codex-first-run",
+        }),
+        loadConfig: () => ({ ...config(), clientIntegrations: { codex: false } }),
+        setEnabled: () => {
+          calls.push("enable");
+          return { ok: true, status: "committed", enabled: true };
+        },
+        findLive: async () => ({ pid: 42, port: 10100, source: "runtime" }),
+        syncLive: async () => ({
+          status: "skipped",
+          skippedReason: "desired_disabled",
+          ok: true,
+          catalogQuality: "native-only",
+          catalogState: { state: "not_running", processes: [], catalogMtimeMs: null },
+        }),
+      }),
+    });
+
+    expect(calls).toEqual([]);
+    expect(result).toMatchObject({
+      action: "start",
+      ok: true,
+      state: "running",
+      changed: true,
+      setupRequired: "codex-first-run",
+    });
+  });
+
+  test("a proven running proxy reports missing Codex as setup instead of generic sync failure", async () => {
+    const result = await ensureProxyLifecycle({
+      action: "start",
+      io: baseIo({
+        prepareStart: () => ({
+          ok: true,
+          changed: false,
+          enableCodexRouting: true,
+          setupRequired: "codex-first-run",
+        }),
+        findLive: async () => ({ pid: 42, port: 10100, source: "runtime" }),
+        syncLive: async () => ({
+          status: "refused",
+          ok: false,
+          message: "Codex configuration is unavailable.",
+          lifecycleErrorCode: "SYNC_FAILED",
+        }),
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      state: "running",
+      pid: 42,
+      setupRequired: "codex-first-run",
+    });
+    expect(result.errorCode).toBeUndefined();
+  });
+
+  test("app preparation still preserves an external Codex provider", async () => {
+    const calls: string[] = [];
+    const result = await ensureProxyLifecycle({
+      action: "start",
+      io: baseIo({
+        prepareStart: () => ({ ok: true, changed: true, enableCodexRouting: true }),
+        externalProvider: () => "external-owner",
+        findLive: async () => ({ pid: 42, port: 10100, source: "runtime" }),
+        setEnabled: (_client, enabled) => {
+          calls.push(`enabled:${enabled}`);
+          return { ok: true, status: "unchanged", enabled };
+        },
+        syncLive: async () => ({
+          status: "skipped",
+          skippedReason: "external_provider",
+          ok: true,
+          catalogQuality: "native-only",
+          catalogState: { state: "not_running", processes: [], catalogMtimeMs: null },
+        }),
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: true, state: "running" });
+    expect(calls).toEqual(["enabled:true"]);
   });
 
   test("a native escape refusal leaves service and proxy running", async () => {
