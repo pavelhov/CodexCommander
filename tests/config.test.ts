@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import * as nodeFs from "node:fs";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -300,6 +301,51 @@ describe("create-only config initialization", () => {
     }
   }, { timeout: 20_000 });
 
+  test("only adopts the exact two-link publication inode transitioning to one link", () => {
+    const bytes = `${JSON.stringify(getDefaultConfig())}\n`;
+
+    for (const replacement of [false, true]) {
+      const extraLink = join(testDir, `config-publication-${replacement}.tmp`);
+      writeFileSync(getConfigPath(), bytes, { mode: 0o600 });
+      nodeFs.linkSync(getConfigPath(), extraLink);
+      const observedIdentity = lstatSync(getConfigPath(), { bigint: true });
+      let intercepted = false;
+      const originalLstat = nodeFs.lstatSync;
+      const lstatSpy = spyOn(nodeFs, "lstatSync").mockImplementation(((...args: unknown[]) => {
+        const result = (originalLstat as (...values: unknown[]) => unknown)(...args);
+        if (!intercepted && args[0] === "config.json") {
+          intercepted = true;
+          if (replacement) {
+            unlinkSync(getConfigPath());
+            unlinkSync(extraLink);
+            writeFileSync(getConfigPath(), bytes, { mode: 0o600 });
+          } else {
+            unlinkSync(extraLink);
+          }
+        }
+        return result;
+      }) as typeof nodeFs.lstatSync);
+
+      try {
+        const result = initializeConfigIfMissing(getDefaultConfig());
+        const finalIdentity = lstatSync(getConfigPath(), { bigint: true });
+        if (replacement) {
+          expect(result).toEqual({ status: "refused", reason: "existing-unsafe" });
+          expect(sameConfigRootFileIdentity(observedIdentity, finalIdentity)).toBe(false);
+        } else {
+          expect(result).toEqual({ status: "existing" });
+          expect(sameConfigRootFileIdentity(observedIdentity, finalIdentity)).toBe(true);
+        }
+        expect(finalIdentity.nlink).toBe(1n);
+        expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
+      } finally {
+        lstatSpy.mockRestore();
+        rmSync(getConfigPath(), { force: true });
+        rmSync(extraLink, { force: true });
+      }
+    }
+  });
+
   test("a subprocess paused after the final root check leaves a swapped-in root untouched", async () => {
     const displacedRoot = `${testDir}.barrier-boundary`;
     const readyPath = `${testDir}.barrier-ready`;
@@ -378,12 +424,11 @@ describe("create-only config initialization", () => {
     writeFileSync(externalTarget, "external bytes", { mode: 0o600 });
     writeFileSync(releasePath, "release", { mode: 0o600 });
 
+    const originalOpen = nodeFs.openSync;
     const originalWrite = nodeFs.writeFileSync;
     let swap: "pending" | "replaced" | "blocked" = "pending";
-    const writeSpy = spyOn(nodeFs, "writeFileSync").mockImplementation(((...args: unknown[]) => {
-      if (args[0] === readyPath) {
-        symlinkSync(externalTarget, "config.json");
-      } else if (
+    const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((...args: unknown[]) => {
+      if (
         swap === "pending"
         && typeof args[0] === "string"
         && args[0].endsWith(".create.tmp")
@@ -392,6 +437,12 @@ describe("create-only config initialization", () => {
         if (isAbsolute(args[0])) {
           throw new Error("publication escaped the admitted root");
         }
+      }
+      return (originalOpen as (...values: unknown[]) => number)(...args);
+    }) as typeof nodeFs.openSync);
+    const writeSpy = spyOn(nodeFs, "writeFileSync").mockImplementation(((...args: unknown[]) => {
+      if (args[0] === readyPath) {
+        symlinkSync(externalTarget, "config.json");
       }
       return (originalWrite as (...values: unknown[]) => unknown)(...args);
     }) as typeof nodeFs.writeFileSync);
@@ -408,6 +459,7 @@ describe("create-only config initialization", () => {
       if (swap === "replaced") expect(readdirSync(testDir)).toEqual([]);
       else expect(swap).toBe("blocked");
     } finally {
+      openSpy.mockRestore();
       writeSpy.mockRestore();
       rmSync(displacedRoot, { recursive: true, force: true });
       rmSync(externalDir, { recursive: true, force: true });
@@ -504,9 +556,9 @@ describe("create-only config initialization", () => {
   test("leaves a replacement root untouched when replacement lands after the final publication check", () => {
     const previousCwd = process.cwd();
     const displacedRoot = `${testDir}.publication-boundary`;
-    const originalWrite = nodeFs.writeFileSync;
+    const originalOpen = nodeFs.openSync;
     let swap: "pending" | "replaced" | "blocked" = "pending";
-    const writeSpy = spyOn(nodeFs, "writeFileSync").mockImplementation(((...args: unknown[]) => {
+    const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((...args: unknown[]) => {
       if (
         swap === "pending"
         && typeof args[0] === "string"
@@ -514,8 +566,8 @@ describe("create-only config initialization", () => {
       ) {
         swap = replaceAnchoredRoot(testDir, displacedRoot, 0o700);
       }
-      return (originalWrite as (...values: unknown[]) => unknown)(...args);
-    }) as typeof nodeFs.writeFileSync);
+      return (originalOpen as (...values: unknown[]) => number)(...args);
+    }) as typeof nodeFs.openSync);
 
     try {
       const result = initializeConfigIfMissing(getDefaultConfig());
@@ -530,7 +582,7 @@ describe("create-only config initialization", () => {
       }
       expect(process.cwd()).toBe(previousCwd);
     } finally {
-      writeSpy.mockRestore();
+      openSpy.mockRestore();
       rmSync(displacedRoot, { recursive: true, force: true });
     }
   });
@@ -538,15 +590,15 @@ describe("create-only config initialization", () => {
   test("restores the previous cwd when bound publication throws", () => {
     const previousCwd = process.cwd();
     const expectedBoundCwd = realpathSync.native(testDir);
-    const originalWrite = nodeFs.writeFileSync;
+    const originalOpen = nodeFs.openSync;
     let observedWriteCwd: string | null = null;
-    const writeSpy = spyOn(nodeFs, "writeFileSync").mockImplementation(((...args: unknown[]) => {
+    const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((...args: unknown[]) => {
       if (typeof args[0] === "string" && args[0].endsWith(".create.tmp")) {
         observedWriteCwd = realpathSync.native(process.cwd());
         throw new Error("publication fixture failure");
       }
-      return (originalWrite as (...values: unknown[]) => unknown)(...args);
-    }) as typeof nodeFs.writeFileSync);
+      return (originalOpen as (...values: unknown[]) => number)(...args);
+    }) as typeof nodeFs.openSync);
 
     try {
       expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
@@ -556,7 +608,93 @@ describe("create-only config initialization", () => {
       expect(observedWriteCwd).toBe(expectedBoundCwd);
       expect(process.cwd()).toBe(previousCwd);
     } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  test("does not remove a pre-existing publication temp after exclusive create fails", () => {
+    const originalOpen = nodeFs.openSync;
+    const originalWrite = nodeFs.writeFileSync;
+    let tempName: string | null = null;
+    let injected = false;
+    const injectForeignTemp = (path: unknown): void => {
+      if (
+        !injected
+        && typeof path === "string"
+        && path.endsWith(".create.tmp")
+      ) {
+        injected = true;
+        tempName = path;
+        originalWrite(path, "foreign temp", { mode: 0o600 });
+      }
+    };
+    const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((...args: unknown[]) => {
+      injectForeignTemp(args[0]);
+      return (originalOpen as (...values: unknown[]) => number)(...args);
+    }) as typeof nodeFs.openSync);
+    const writeSpy = spyOn(nodeFs, "writeFileSync").mockImplementation(((...args: unknown[]) => {
+      injectForeignTemp(args[0]);
+      return (originalWrite as (...values: unknown[]) => unknown)(...args);
+    }) as typeof nodeFs.writeFileSync);
+
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+        status: "refused",
+        reason: "coordination-unavailable",
+      });
+      expect(tempName).not.toBeNull();
+      expect(readFileSync(join(testDir, tempName!), "utf8")).toBe("foreign temp");
+      expect(existsSync(getConfigPath())).toBe(false);
+    } finally {
+      openSpy.mockRestore();
       writeSpy.mockRestore();
+      if (tempName !== null) rmSync(join(testDir, tempName), { force: true });
+    }
+  });
+
+  test("never unlinks or truncates a substituted publication temp", () => {
+    const originalOpen = nodeFs.openSync;
+    const originalWrite = nodeFs.writeFileSync;
+    let tempName: string | null = null;
+    let displacedTemp: string | null = null;
+    let substituted = false;
+    const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((...args: unknown[]) => {
+      if (typeof args[0] === "string" && args[0].endsWith(".create.tmp")) {
+        tempName = args[0];
+      }
+      return (originalOpen as (...values: unknown[]) => number)(...args);
+    }) as typeof nodeFs.openSync);
+    const writeSpy = spyOn(nodeFs, "writeFileSync").mockImplementation(((...args: unknown[]) => {
+      if (typeof args[0] === "string" && args[0].endsWith(".create.tmp")) {
+        tempName = args[0];
+      }
+      const result = (originalWrite as (...values: unknown[]) => unknown)(...args);
+      if (!substituted && tempName !== null && (
+        args[0] === tempName || typeof args[0] === "number"
+      )) {
+        substituted = true;
+        displacedTemp = `${tempName}.owned-displaced`;
+        renameSync(tempName, displacedTemp);
+        originalWrite(tempName, "replacement temp", { mode: 0o600 });
+      }
+      return result;
+    }) as typeof nodeFs.writeFileSync);
+
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+        status: "refused",
+        reason: "coordination-unavailable",
+      });
+      expect(tempName).not.toBeNull();
+      expect(displacedTemp).not.toBeNull();
+      expect(readFileSync(join(testDir, tempName!), "utf8")).toBe("replacement temp");
+      expect(lstatSync(join(testDir, displacedTemp!)).size).toBe(0);
+      expect(existsSync(getConfigPath())).toBe(false);
+    } finally {
+      openSpy.mockRestore();
+      writeSpy.mockRestore();
+      if (tempName !== null) rmSync(join(testDir, tempName), { force: true });
+      if (displacedTemp !== null) rmSync(join(testDir, displacedTemp), { force: true });
     }
   });
 
@@ -602,6 +740,100 @@ describe("create-only config initialization", () => {
     } finally {
       process.chdir(originalCwd);
       rmSync(hostileCwd, { recursive: true, force: true });
+    }
+  });
+
+  test("final config bytes ignore serialization methods installed during the first pass", () => {
+    const defaults = getDefaultConfig();
+    const desktopProfile = Object.assign(Object.create({
+      toJSON(): unknown {
+        Object.defineProperty(Object.prototype, "toJSON", {
+          configurable: true,
+          value(this: unknown, key: string): unknown {
+            return key === "" ? undefined : this;
+          },
+        });
+        return {
+          version: 1,
+          assignments: {},
+          defaults: { opus: null, fable: null, sonnet: null, haiku: null },
+        };
+      },
+    }) as object, {
+      version: 1,
+      assignments: {},
+      defaults: { opus: null, fable: null, sonnet: null, haiku: null },
+    });
+    const candidate = {
+      ...defaults,
+      claudeCode: { ...defaults.claudeCode, desktopProfile },
+    } as typeof defaults;
+
+    try {
+      expect(initializeConfigIfMissing(candidate)).toEqual({ status: "created" });
+      const bytes = readFileSync(getConfigPath(), "utf8");
+      expect(validateConfigCandidate(JSON.parse(bytes))).toMatchObject({ ok: true });
+      expect(JSON.parse(bytes)).toEqual({
+        ...candidate,
+        claudeCode: {
+          ...candidate.claudeCode,
+          desktopProfile: {
+            version: 1,
+            assignments: {},
+            defaults: { opus: null, fable: null, sonnet: null, haiku: null },
+          },
+        },
+      });
+    } finally {
+      delete (Object.prototype as { toJSON?: unknown }).toJSON;
+    }
+  });
+
+  test("uses one absolute deadline for SQLite acquisition and commit", () => {
+    const originalChmod = nodeFs.chmodSync;
+    const originalLink = nodeFs.linkSync;
+    const originalExec = Database.prototype.exec;
+    let fakeNow = 1_000;
+    let setupAdvanced = false;
+    let publicationAdvanced = false;
+    const busyTimeouts: number[] = [];
+    const nowSpy = spyOn(performance, "now").mockImplementation(() => fakeNow);
+    const chmodSpy = spyOn(nodeFs, "chmodSync").mockImplementation(((...args: unknown[]) => {
+      if (!setupAdvanced && args[0] === "." && args[1] === 0o700) {
+        setupAdvanced = true;
+        fakeNow += 600;
+      }
+      return (originalChmod as (...values: unknown[]) => void)(...args);
+    }) as typeof nodeFs.chmodSync);
+    const linkSpy = spyOn(nodeFs, "linkSync").mockImplementation(((...args: unknown[]) => {
+      if (!publicationAdvanced && args[1] === "config.json") {
+        publicationAdvanced = true;
+        fakeNow += 1_500;
+      }
+      return (originalLink as (...values: unknown[]) => void)(...args);
+    }) as typeof nodeFs.linkSync);
+    const execSpy = spyOn(Database.prototype, "exec").mockImplementation(function(
+      this: Database,
+      sql: string,
+    ): void {
+      for (const match of sql.matchAll(/PRAGMA busy_timeout = (\d+)/g)) {
+        busyTimeouts.push(Number(match[1]));
+      }
+      originalExec.call(this, sql);
+    });
+
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "created" });
+      expect({ setupAdvanced, publicationAdvanced, busyTimeouts }).toEqual({
+        setupAdvanced: true,
+        publicationAdvanced: true,
+        busyTimeouts: [1_400, 0],
+      });
+    } finally {
+      execSpy.mockRestore();
+      linkSpy.mockRestore();
+      chmodSpy.mockRestore();
+      nowSpy.mockRestore();
     }
   });
 

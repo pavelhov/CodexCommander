@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, copyFileSync, existsSync, fchmodSync, fstatSync, ftruncateSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Database } from "bun:sqlite";
@@ -1656,14 +1656,14 @@ export type ConfigInitializationResult =
 
 type ConfigEntryProbe =
   | { kind: "missing" }
-  | { kind: "valid" }
+  | { kind: "valid"; identity: ConfigRootFileIdentity }
+  | { kind: "publishing"; identity: ConfigRootFileIdentity }
   | {
     kind: "refused";
     reason: Exclude<
       ConfigInitializationRefusal,
       "candidate-invalid" | "coordination-unavailable"
     >;
-    retryablePublicationState?: boolean;
   };
 
 type ConfigRootIdentity = {
@@ -1800,27 +1800,31 @@ function withBoundConfigRootSync<T>(
 function probeConfigEntry(path = getConfigPath()): ConfigEntryProbe {
   let entry;
   try {
-    entry = lstatSync(path);
+    entry = lstatSync(path, { bigint: true });
   } catch (error) {
     return isMissingPathError(error)
       ? { kind: "missing" }
       : { kind: "refused", reason: "existing-inaccessible" };
   }
-  if (!entry.isFile() || entry.isSymbolicLink()) {
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.ino === 0n) {
     return { kind: "refused", reason: "existing-unsafe" };
   }
-  if (entry.nlink !== 1) {
-    return {
-      kind: "refused",
-      reason: "existing-unsafe",
-      // The no-clobber publisher has exactly two links only between link() and
-      // temp cleanup. Other link counts remain a static unsafe destination.
-      retryablePublicationState: entry.nlink === 2,
-    };
-  }
+  const identity = { dev: entry.dev, ino: entry.ino };
+  if (entry.nlink === 2n) return { kind: "publishing", identity };
+  if (entry.nlink !== 1n) return { kind: "refused", reason: "existing-unsafe" };
   try {
-    return configDiagnosticsFromRaw(readFileSync(path, "utf8")).source === "file"
-      ? { kind: "valid" }
+    const raw = readFileSync(path, "utf8");
+    const afterRead = lstatSync(path, { bigint: true });
+    if (
+      !afterRead.isFile()
+      || afterRead.isSymbolicLink()
+      || afterRead.nlink !== 1n
+      || !sameConfigRootFileIdentity(identity, afterRead)
+    ) {
+      return { kind: "refused", reason: "existing-unsafe" };
+    }
+    return configDiagnosticsFromRaw(raw).source === "file"
+      ? { kind: "valid", identity }
       : { kind: "refused", reason: "existing-invalid" };
   } catch {
     return { kind: "refused", reason: "existing-inaccessible" };
@@ -1850,6 +1854,22 @@ function unlinkPublishedConfigIfUnchanged(
   unlinkSync(path);
 }
 
+function publicationPathMatchesOwnedFile(
+  path: string,
+  expected: ConfigRootFileIdentity,
+  expectedLinks: bigint,
+): boolean {
+  try {
+    const current = lstatSync(path, { bigint: true });
+    return current.isFile()
+      && !current.isSymbolicLink()
+      && current.nlink === expectedLinks
+      && sameConfigRootFileIdentity(expected, current);
+  } catch {
+    return false;
+  }
+}
+
 function publishConfigNoReplace(
   bytes: string,
   expectedRoot: ConfigRootIdentity,
@@ -1861,18 +1881,29 @@ function publishConfigNoReplace(
   const temp = `${target}.ccx.${process.pid}.${++_atomicSeq}.create.tmp`;
   let published = false;
   let collision = false;
+  let created = false;
+  let descriptor: number | undefined;
   let publishedIdentity: ConfigRootFileIdentity | null = null;
+  let cleanupFailure: unknown = null;
   try {
-    writeFileSync(temp, bytes, { encoding: "utf8", mode: 0o600, flag: "wx" });
-    try { chmodSync(temp, 0o600); } catch { /* filesystem may ignore chmod */ }
-    if (process.platform === "win32") {
-      hardenSecretPath(temp, { required: true, timeoutMemoKey: target });
-    }
-    const source = lstatSync(temp, { bigint: true });
-    if (!source.isFile() || source.isSymbolicLink() || source.nlink !== 1n) {
+    descriptor = openSync(temp, "wx", 0o600);
+    created = true;
+    const source = fstatSync(descriptor, { bigint: true });
+    if (!source.isFile() || source.ino === 0n || source.nlink !== 1n) {
       throw new Error("Configuration publication source is not a private regular file");
     }
     publishedIdentity = { dev: source.dev, ino: source.ino };
+    writeFileSync(descriptor, bytes, { encoding: "utf8" });
+    try { fchmodSync(descriptor, 0o600); } catch { /* filesystem may ignore chmod */ }
+    if (process.platform === "win32") {
+      if (!publicationPathMatchesOwnedFile(temp, publishedIdentity, 1n)) {
+        throw new Error("Configuration publication source identity changed before hardening");
+      }
+      hardenSecretPath(temp, { required: true, timeoutMemoKey: target });
+    }
+    if (!publicationPathMatchesOwnedFile(temp, publishedIdentity, 1n)) {
+      throw new Error("Configuration publication source identity changed before linking");
+    }
     try {
       linkSync(temp, target);
       published = true;
@@ -1882,17 +1913,30 @@ function publishConfigNoReplace(
     }
   } finally {
     try {
-      unlinkSync(temp);
-      forgetEphemeralSecretPath(temp);
-    } catch (error) {
-      if (!isMissingPathError(error)) {
-        // After link succeeds, temp and destination are the same inode. Never
-        // truncate the temp in that state because it would erase config.json too.
-        if (!published) {
-          try { truncateSync(temp, 0); } catch { /* residual error below is authoritative */ }
+      if (created) {
+        if (
+          !publishedIdentity
+          || !publicationPathMatchesOwnedFile(temp, publishedIdentity, published ? 2n : 1n)
+        ) {
+          throw new Error("Configuration publication temp identity changed before cleanup");
         }
-        throw new AtomicWriteSecretResidualError(temp, { cause: error });
+        unlinkSync(temp);
+        forgetEphemeralSecretPath(temp);
       }
+    } catch (error) {
+      cleanupFailure = error;
+      // After link succeeds, descriptor and destination are the same inode. Never
+      // truncate the descriptor in that state because it would erase config.json too.
+      if (!published && descriptor !== undefined) {
+        try { ftruncateSync(descriptor, 0); } catch { /* residual error below is authoritative */ }
+      }
+    } finally {
+      if (descriptor !== undefined) {
+        try { closeSync(descriptor); } catch (error) { cleanupFailure ??= error; }
+      }
+    }
+    if (cleanupFailure !== null) {
+      throw new AtomicWriteSecretResidualError(temp, { cause: cleanupFailure });
     }
   }
   if (collision) return false;
@@ -1941,12 +1985,46 @@ function waitForConfigInitializationWinner(
   expectedRoot: ConfigRootIdentity,
   deadline: number,
   fallback: ConfigInitializationRefusal,
+  initialPublicationIdentity?: ConfigRootFileIdentity,
 ): ConfigInitializationResult {
   let lastRefusal: ConfigInitializationRefusal | null = null;
+  let publicationIdentity = initialPublicationIdentity;
   for (;;) {
-    const observed = configInitializationContenderObservation(expectedRoot);
-    if ("status" in observed) return observed;
-    if (observed.kind === "refused") lastRefusal = observed.reason;
+    if (!configRootStillMatches(expectedRoot)) {
+      return { status: "refused", reason: "existing-unsafe" };
+    }
+    const observed = probeConfigEntry();
+    if (!configRootStillMatches(expectedRoot)) {
+      return { status: "refused", reason: "existing-unsafe" };
+    }
+    if (publicationIdentity) {
+      if (
+        observed.kind === "valid"
+        && sameConfigRootFileIdentity(publicationIdentity, observed.identity)
+      ) return { status: "existing" };
+      if (
+        observed.kind === "publishing"
+        && sameConfigRootFileIdentity(publicationIdentity, observed.identity)
+      ) {
+        // The exact inode is still in the publisher's two-link cleanup window.
+      } else {
+        return {
+          status: "refused",
+          reason: observed.kind === "refused"
+            ? observed.reason
+            : "existing-unsafe",
+        };
+      }
+    } else if (observed.kind === "valid") {
+      return { status: "existing" };
+    } else if (observed.kind === "publishing") {
+      publicationIdentity = observed.identity;
+    } else if (observed.kind === "refused") {
+      if (observed.reason === "existing-invalid") {
+        return { status: "refused", reason: observed.reason };
+      }
+      lastRefusal = observed.reason;
+    }
     if (performance.now() >= deadline) {
       return { status: "refused", reason: lastRefusal ?? fallback };
     }
@@ -1977,7 +2055,61 @@ type PreparedConfigInitialization =
     reason: "candidate-invalid" | "coordination-unavailable";
   }>;
 
+type ConfigInitializationMutationResult =
+  | ConfigInitializationResult
+  | Readonly<{
+    status: "awaiting-publication";
+    identity: ConfigRootFileIdentity;
+  }>;
+
 let configInitializationPreparationDepth = 0;
+
+type ConfigInitializationJsonData =
+  | null
+  | boolean
+  | number
+  | string
+  | ConfigInitializationJsonData[]
+  | { [key: string]: ConfigInitializationJsonData };
+
+function copyConfigInitializationJsonData(
+  value: unknown,
+): ConfigInitializationJsonData | undefined {
+  if (
+    value === null
+    || typeof value === "string"
+    || typeof value === "boolean"
+  ) return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (Array.isArray(value)) {
+    const copy = new Array<ConfigInitializationJsonData>(value.length);
+    for (let index = 0; index < value.length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor || !("value" in descriptor)) return undefined;
+      const item = copyConfigInitializationJsonData(descriptor.value);
+      if (item === undefined) return undefined;
+      copy[index] = item;
+    }
+    Object.setPrototypeOf(copy, null);
+    return copy;
+  }
+  if (typeof value !== "object") return undefined;
+
+  const copy = Object.create(null) as { [key: string]: ConfigInitializationJsonData };
+  for (const key of Object.keys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !("value" in descriptor)) return undefined;
+    const item = copyConfigInitializationJsonData(descriptor.value);
+    if (item === undefined) return undefined;
+    Object.defineProperty(copy, key, {
+      configurable: true,
+      enumerable: true,
+      value: item,
+      writable: true,
+    });
+  }
+  return copy;
+}
 
 function canonicalConfigInitializationBytes(
   candidate: CodexCommanderConfig,
@@ -1997,7 +2129,15 @@ function canonicalConfigInitializationBytes(
   const privateCandidate = JSON.parse(serialized) as unknown;
   const canonical = validateConfigCandidate(privateCandidate);
   if (!canonical.ok) return null;
-  return `${JSON.stringify(canonical.config, null, 2)}\n`;
+  const dataOnlyCandidate = copyConfigInitializationJsonData(canonical.config);
+  if (dataOnlyCandidate === undefined) return null;
+  const exactCandidate = validateConfigCandidate(dataOnlyCandidate);
+  if (!exactCandidate.ok) return null;
+  const finalJson = JSON.stringify(dataOnlyCandidate, null, 2);
+  if (finalJson === undefined) return null;
+  const finalBytes = `${finalJson}\n`;
+  const finalCandidate = validateConfigCandidate(JSON.parse(finalBytes) as unknown);
+  return finalCandidate.ok ? finalBytes : null;
 }
 
 function snapshotConfigInitializationTestAction(
@@ -2113,6 +2253,14 @@ function initializeConfigInBoundRoot(
     throw new ConfigRootChangedDuringInitializationError();
   }
   if (observed.kind === "valid") return { status: "existing" };
+  if (observed.kind === "publishing") {
+    return waitForConfigInitializationWinner(
+      expectedRoot,
+      deadline,
+      "existing-unsafe",
+      observed.identity,
+    );
+  }
   if (observed.kind === "refused") return { status: "refused", reason: observed.reason };
 
   let ownershipFailure: ConfigInitializationRefusal | null = null;
@@ -2145,13 +2293,15 @@ function initializeConfigInBoundRoot(
       throw new ConfigRootChangedDuringInitializationError();
     }
     try {
-      const remainingWaitMs = Math.max(0, Math.ceil(deadline - performance.now()));
-      return withConfigMutationLockAtDirSync(".", () => {
+      const mutationResult: ConfigInitializationMutationResult = withConfigMutationLockAtDirSync(".", () => {
         if (!boundConfigRootStillMatches(expectedRoot) || !configRootStillMatches(expectedRoot)) {
           throw new ConfigRootChangedDuringInitializationError();
         }
         const current = probeConfigEntry(configPath);
         if (current.kind === "valid") return { status: "existing" } as const;
+        if (current.kind === "publishing") {
+          return { status: "awaiting-publication", identity: current.identity } as const;
+        }
         if (current.kind === "refused") {
           return { status: "refused", reason: current.reason } as const;
         }
@@ -2174,6 +2324,9 @@ function initializeConfigInBoundRoot(
           }
           const winner = probeConfigEntry(configPath);
           if (winner.kind === "valid") return { status: "existing" } as const;
+          if (winner.kind === "publishing") {
+            return { status: "awaiting-publication", identity: winner.identity } as const;
+          }
           return {
             status: "refused",
             reason: winner.kind === "refused" ? winner.reason : "coordination-unavailable",
@@ -2181,7 +2334,16 @@ function initializeConfigInBoundRoot(
         }
         bumpGenerationForCooperatingConfigWrite();
         return { status: "created" } as const;
-      }, remainingWaitMs);
+      }, deadline);
+      if (mutationResult.status === "awaiting-publication") {
+        return waitForConfigInitializationWinner(
+          expectedRoot,
+          deadline,
+          "existing-unsafe",
+          mutationResult.identity,
+        );
+      }
+      return mutationResult;
     } catch (error) {
       if (error instanceof ConfigRootChangedDuringInitializationError) throw error;
       if (!(error instanceof ConfigMutationLockError)) {
@@ -2189,6 +2351,14 @@ function initializeConfigInBoundRoot(
       }
       const contender = configInitializationContenderObservation(expectedRoot);
       if ("status" in contender) return contender;
+      if (contender.kind === "publishing") {
+        return waitForConfigInitializationWinner(
+          expectedRoot,
+          deadline,
+          "existing-unsafe",
+          contender.identity,
+        );
+      }
       if (contender.kind === "refused") lastContentionRefusal = contender.reason;
       if (performance.now() >= deadline) {
         return {
@@ -2253,15 +2423,16 @@ function initializeConfigIfMissingInternal(
       return observed;
     });
     if (preflight.kind === "valid") return { status: "existing" };
-    if (preflight.kind === "refused") {
-      if (!preflight.retryablePublicationState) {
-        return { status: "refused", reason: preflight.reason };
-      }
+    if (preflight.kind === "publishing") {
       return waitForConfigInitializationWinner(
         admittedRoot.identity,
         deadline,
-        preflight.reason,
+        "existing-unsafe",
+        preflight.identity,
       );
+    }
+    if (preflight.kind === "refused") {
+      return { status: "refused", reason: preflight.reason };
     }
 
     const hook = configInitializationBeforePublishForTests;
@@ -2411,7 +2582,7 @@ export function withConfigMutationLockSync<T>(fn: () => T): T {
 function withConfigMutationLockAtDirSync<T>(
   dir: string,
   fn: () => T,
-  busyTimeoutMs = 0,
+  deadline?: number,
 ): T {
   if (configMutationLockDepth > 0) {
     configMutationLockDepth += 1;
@@ -2422,12 +2593,15 @@ function withConfigMutationLockAtDirSync<T>(
     }
   }
   const path = configMutationDatabasePath(dir);
+  const remainingBusyTimeoutMs = (): number => deadline === undefined
+    ? 0
+    : Math.max(0, Math.ceil(deadline - performance.now()));
   let database: Database | undefined;
   let transactionOpen = false;
   try {
     database = new Database(path, { create: true });
     try { chmodSync(path, 0o600); } catch { /* platform may ignore chmod */ }
-    database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}; BEGIN IMMEDIATE`);
+    database.exec(`PRAGMA busy_timeout = ${remainingBusyTimeoutMs()}; BEGIN IMMEDIATE`);
     transactionOpen = true;
     initializeConfigGeneration(database);
   } catch (cause) {
@@ -2448,7 +2622,7 @@ function withConfigMutationLockAtDirSync<T>(
   configMutationDatabase = database;
   try {
     const value = fn();
-    database.exec("COMMIT");
+    database.exec(`PRAGMA busy_timeout = ${remainingBusyTimeoutMs()}; COMMIT`);
     transactionOpen = false;
     return value;
   } catch (error) {
