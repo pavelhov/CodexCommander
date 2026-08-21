@@ -9,26 +9,39 @@ public enum LaunchAtLoginStatus: String, Equatable, Sendable {
     case unavailable
 }
 
+public enum LaunchAtLoginRemediation: Equatable, Sendable {
+    case openSystemSettings
+    case openApplications
+}
+
 public struct LaunchAtLoginPresentation: Equatable, Sendable {
     public let status: LaunchAtLoginStatus
     public let desiredEnabled: Bool
     public let isToggleEnabled: Bool
     public let errorMessage: String?
+    public let relocationRequired: Bool
 
     public init(
         status: LaunchAtLoginStatus,
         desiredEnabled: Bool,
         isToggleEnabled: Bool,
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        relocationRequired: Bool = false
     ) {
         self.status = status
         self.desiredEnabled = desiredEnabled
         self.isToggleEnabled = isToggleEnabled
         self.errorMessage = errorMessage
+        self.relocationRequired = relocationRequired
     }
 
     public var isOn: Bool { status == .enabled }
     public var needsApproval: Bool { status == .requiresApproval }
+    public var remediation: LaunchAtLoginRemediation? {
+        if relocationRequired { return .openApplications }
+        if needsApproval { return .openSystemSettings }
+        return nil
+    }
 }
 
 public enum DesktopStartupMode: String, Equatable, Sendable {
@@ -161,7 +174,7 @@ public final class LaunchAtLoginController {
                 status: .unavailable,
                 desiredEnabled: preferences.desiredEnabled ?? true,
                 isToggleEnabled: false,
-                errorMessage: "Move CodexCommander to Applications or use its repository build."
+                relocationRequired: true
             )
         }
         if preferences.desiredEnabled == nil {
@@ -211,7 +224,7 @@ public final class LaunchAtLoginController {
                 status: .unavailable,
                 desiredEnabled: preferences.desiredEnabled ?? false,
                 isToggleEnabled: false,
-                errorMessage: "Move CodexCommander to Applications or use its repository build."
+                relocationRequired: true
             )
         }
         let previousDesiredEnabled = preferences.desiredEnabled
@@ -259,7 +272,7 @@ public final class LaunchAtLoginController {
                 status: .unavailable,
                 desiredEnabled: preferences.desiredEnabled ?? true,
                 isToggleEnabled: false,
-                errorMessage: "Move CodexCommander to Applications or use its repository build."
+                relocationRequired: true
             )
         }
         if service.status == .enabled, preferences.desiredEnabled == false {
@@ -315,24 +328,38 @@ public enum ExecutableFingerprint {
     }
 }
 
+public enum AppBundleLocation: Equatable, Sendable {
+    case stable
+    case relocatable
+    case translocated
+}
+
 public enum LaunchAtLoginEligibility {
+    public static func classify(
+        _ bundleURL: URL,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> AppBundleLocation {
+        let bundle = bundleURL.resolvingSymlinksInPath()
+        let path = bundle.path
+        if path.contains("/AppTranslocation/") { return .translocated }
+        guard bundle.pathExtension == "app",
+              bundle.lastPathComponent == "CodexCommander.app"
+        else { return .relocatable }
+
+        if path.hasPrefix("/Applications/") { return .stable }
+        let userApplications = home.appendingPathComponent("Applications", isDirectory: true).path
+        if path.hasPrefix("\(userApplications)/") { return .stable }
+
+        let sourceBuild = bundle.deletingLastPathComponent().lastPathComponent == "macos"
+            && bundle.deletingLastPathComponent()
+                .deletingLastPathComponent().lastPathComponent == "dist"
+        return sourceBuild ? .stable : .relocatable
+    }
+
     public static func isStableBundle(
         _ bundleURL: URL,
         home: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> Bool {
-        let bundle = bundleURL.resolvingSymlinksInPath()
-        let path = bundle.path
-        guard bundle.pathExtension == "app",
-              bundle.lastPathComponent == "CodexCommander.app",
-              !path.contains("/AppTranslocation/")
-        else { return false }
-
-        if path.hasPrefix("/Applications/") { return true }
-        let userApplications = home.appendingPathComponent("Applications", isDirectory: true).path
-        if path.hasPrefix("\(userApplications)/") { return true }
-
-        return bundle.deletingLastPathComponent().lastPathComponent == "macos"
-            && bundle.deletingLastPathComponent()
-                .deletingLastPathComponent().lastPathComponent == "dist"
+        classify(bundleURL, home: home) == .stable
     }
 }

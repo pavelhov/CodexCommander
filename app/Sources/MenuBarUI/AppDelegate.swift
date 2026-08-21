@@ -23,14 +23,27 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     private var catalogUpdateReady = false
     private var companionHeartbeat: CompanionHeartbeat?
     private let launchAtLoginController = LaunchAtLoginController()
+    private let appBundleLocation: AppBundleLocation
     private lazy var executableFingerprint = ExecutableFingerprint.current()
     private lazy var sourceRevision = BuildProvenance.shortRevision(
         Bundle.main.object(forInfoDictionaryKey: "CodexCommanderSourceRevision")
     )
     private lazy var launchAtLoginRegistrationAllowed =
-        LaunchAtLoginEligibility.isStableBundle(Bundle.main.bundleURL)
+        appBundleLocation == .stable
 
-    public override init() { super.init() }
+    public override init() {
+        appBundleLocation = LaunchAtLoginEligibility.classify(Bundle.main.bundleURL)
+        super.init()
+    }
+
+    package init(
+        appBundleLocation: AppBundleLocation,
+        actions: ActionCoordinator?
+    ) {
+        self.appBundleLocation = appBundleLocation
+        self.actions = actions
+        super.init()
+    }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         installApplicationMenu()
@@ -136,8 +149,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         controller.onLaunchAtLoginChange = { [weak self] enabled in
             self?.setLaunchAtLogin(enabled)
         }
-        controller.onOpenLoginSettings = { [weak self] in
-            self?.launchAtLoginController.openSystemSettings()
+        controller.onLaunchAtLoginRemediation = { [weak self] remediation in
+            self?.performLaunchAtLoginRemediation(remediation)
         }
         controller.onManageProvider = { [weak self] provider in
             self?.openProvider(provider)
@@ -349,6 +362,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         }
     }
 
+    private func performLaunchAtLoginRemediation(_ remediation: LaunchAtLoginRemediation) {
+        switch remediation {
+        case .openSystemSettings:
+            launchAtLoginController.openSystemSettings()
+        case .openApplications:
+            NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications", isDirectory: true))
+        }
+    }
+
     private func installApplicationMenu() {
         NSApp.mainMenu = ApplicationMenuFactory.make(
             target: self,
@@ -381,6 +403,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     /// Manual and Launch-at-Login openings share the explicit Start contract. A failed
     /// start leaves the menu app alive so its diagnostics and Start control remain usable.
     private func startProxyOnLaunch() {
+        guard appBundleLocation != .translocated else {
+            controller.showAppTranslocated()
+            return
+        }
         guard !lifecycleInFlight, !restartInFlight, !catalogActionInFlight else { return }
         lifecycleInFlight = true
         updateApplicationMenu()
@@ -418,6 +444,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     }
 
     private func startProxy() {
+        guard appBundleLocation != .translocated else {
+            controller.showAppTranslocated()
+            return
+        }
         guard !lifecycleInFlight, !restartInFlight, !catalogActionInFlight else { return }
         lifecycleInFlight = true
         updateApplicationMenu()
@@ -748,6 +778,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         }
         return choice
     }
+
+    package var presentationControllerForTesting: PopoverViewController { controller }
+    package func startProxyOnLaunchForTesting() { startProxyOnLaunch() }
+    package func startProxyForTesting() { startProxy() }
 }
 
 /// Best-effort, non-blocking reporter of the native app's launch-at-login state.

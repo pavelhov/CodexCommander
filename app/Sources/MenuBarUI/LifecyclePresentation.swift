@@ -64,6 +64,10 @@ package enum LifecycleConfirmation {
 package enum LifecycleResultMessage {
     package static let proxyStopped =
         "Proxy stopped. Fully quit ChatGPT and Codex if still open, then reopen them to use native routing."
+    package static let appTranslocated = (
+        title: "Move CodexCommander to Applications",
+        detail: "This temporary macOS launch location cannot safely run the background proxy. Move the app, then reopen it."
+    )
 
     package static func setupRequired(_ requirement: ProxySetupRequirement) -> (
         title: String,

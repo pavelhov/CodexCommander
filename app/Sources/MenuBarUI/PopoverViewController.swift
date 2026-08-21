@@ -57,7 +57,7 @@ public final class PopoverViewController: NSViewController {
     public var onQuitMenuBar: (() -> Void)?
     public var onStopAndQuit: (() -> Void)?
     public var onLaunchAtLoginChange: ((Bool) -> Void)?
-    public var onOpenLoginSettings: (() -> Void)?
+    public var onLaunchAtLoginRemediation: ((LaunchAtLoginRemediation) -> Void)?
     public var onManageProvider: ((String) -> Void)?
     public var onViewAllProviders: (() -> Void)?
 
@@ -83,8 +83,8 @@ public final class PopoverViewController: NSViewController {
         startupMode.onToggle = { [weak self] enabled in
             self?.onLaunchAtLoginChange?(enabled)
         }
-        startupMode.onOpenSettings = { [weak self] in
-            self?.onOpenLoginSettings?()
+        startupMode.onRemediation = { [weak self] remediation in
+            self?.onLaunchAtLoginRemediation?(remediation)
         }
         catalogUpdate.onApply = { [weak self] in
             self?.onApplyCodexCatalog?()
@@ -301,6 +301,16 @@ public final class PopoverViewController: NSViewController {
 
     public func showSetupRequired(_ requirement: ProxySetupRequirement) {
         let result = LifecycleResultMessage.setupRequired(requirement)
+        operationStatus.showResult(
+            title: result.title,
+            detail: result.detail,
+            tone: .warning
+        )
+        refreshSize()
+    }
+
+    public func showAppTranslocated() {
+        let result = LifecycleResultMessage.appTranslocated
         operationStatus.showResult(
             title: result.title,
             detail: result.detail,
