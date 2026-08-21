@@ -1101,7 +1101,7 @@ t.equal(
 )
 t.equal(
     LaunchAtLoginEligibility.classify(
-        URL(fileURLWithPath: "/Users/example/Downloads/CodexCommander.app"),
+        URL(fileURLWithPath: "/tmp/codexcommander-fixture-home/Downloads/CodexCommander.app"),
         home: home
     ),
     .relocatable

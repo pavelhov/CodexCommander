@@ -5,6 +5,11 @@ description: Configure your first provider and route OpenAI Codex through CodexC
 
 This guide takes you from a fresh install to running Codex against a non-OpenAI model.
 
+This page documents the source/headless CLI path. A packaged macOS app has a separate app-only
+bootstrap: direct **Start** creates the secret-free ChatGPT passthrough default on a fresh install,
+without running `ccx init`. It is the only path that creates the CodexCommander config automatically;
+the CLI requires the setup wizard below and never creates Codex's config for you.
+
 ## 1. Run the setup wizard
 
 ```bash
@@ -24,6 +29,11 @@ ccx init
 6. **Install the autostart shim?** — when enabled, launching `codex` runs `ccx ensure` first.
 
 The result is saved to `$CODEXCOMMANDER_HOME/config.json` (default `~/.codexcommander/config.json`).
+
+If the CodexCommander config is missing, invalid, unreadable, or unsafe, repair it before retrying;
+the CLI refuses to start and existing bytes are not replaced. Do not work around this by hand-writing
+JSON or TOML. Codex's own config is never created automatically, and an external Codex provider is
+left untouched.
 
 :::note[GPT-5.6 rollout entries]
 The current source tree seeds GPT-5.6 Sol/Terra/Luna for ChatGPT passthrough, OpenAI API-key,
@@ -49,6 +59,11 @@ On start, CodexCommander:
 
 If the requested port is busy, `ccx start` selects a free port, records it in `runtime-port.json`,
 and updates Codex to use the live listener.
+
+When the packaged macOS app starts before Codex has created `~/.codex/config.toml`, it still starts
+the proxy and dashboard but leaves Codex native. Open Codex once, return to the menu bar companion,
+and choose **Route Codex Through Proxy**. Existing CodexCommander and Codex configuration remains
+untouched unless you explicitly choose a route.
 
 Check it:
 

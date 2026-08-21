@@ -57,6 +57,30 @@ restore and verify native routing before terminating anything.
 In this document, restoring native means removing CodexCommander-owned routing; an external
 user-managed Codex provider is preserved.
 
+Direct packaged macOS **Start** is the only lifecycle entrypoint with an app-only configuration
+bootstrap. `src/cli/macos-lifecycle.ts` passes `prepareMacOSAppStart` through the canonical lifecycle
+authority before config load, liveness probing, routing mutation, proxy launch, or catalog sync. The
+authority acquires Ensure (`E`) first; the preparation hook may then acquire the shared config-mutation
+lock, preserving the required E-lock → config-mutation-lock ordering. Ordinary CLI `ccx start` and
+service paths do not call this hook: they require `ccx init` to have created a configuration and refuse
+a missing one.
+
+The app hook validates the canonical secret-free ChatGPT passthrough default and initializes only a
+missing CodexCommander config. Publication is create-only/no-clobber: an existing valid, invalid,
+unreadable, or unsafe config is never overwritten, and a concurrent race loser adopts the winner's
+valid bytes rather than replacing them. If Codex has not created its config yet on this fresh app
+start, the proxy and dashboard still run while Codex routing stays native; the result carries
+`setupRequired: "codex-first-run"` so the companion tells the user to open Codex once and then choose
+**Route Codex Through Proxy**. The hook never creates Codex configuration and never copies provider
+secrets, API keys, or OAuth accounts. Existing external Codex providers remain outside its ownership.
+
+The native companion classifies its physical bundle location before dispatching either automatic or
+manual Start. `/Applications`, `~/Applications`, and the source-build bundle are stable; ordinary
+physical copies such as Desktop or Downloads are relocatable and may run for the current session while
+showing neutral move-to-Applications guidance. Users must quit before moving a running app, and the app
+never moves itself. True macOS App Translocation blocks Start before proxy launch and requires the user
+to move the app and reopen it.
+
 An installed Codex shim is checked on ordinary CLI startup with a regular-file/1 MiB state bound plus
 bounded metadata and prefix reads. A complete replacement must produce identical fingerprints and
 prefixes across a 100 ms observation interval; changing launchers are silently deferred, while mixed

@@ -20,6 +20,36 @@ $CODEX_HOME/.codexcommander-native-main-profiles/
 Never assume macOS-only paths. Windows, service installs, and app-launched Codex can all depend on
 the resolved `CODEX_HOME`.
 
+## macOS app first-run bootstrap
+
+The direct packaged macOS companion **Start** path is the only app-only configuration bootstrap. It
+uses `getDefaultConfig()`'s canonical secret-free ChatGPT passthrough provider and calls
+`initializeConfigIfMissing` with create-only/no-clobber semantics. The initializer validates the
+candidate before touching disk, refuses existing invalid, unreadable, inaccessible, or unsafe state,
+and never overwrites an existing valid file. A concurrent contender that loses publication adopts the
+winner's valid bytes; it never replaces the winner. Providers, API keys, OAuth accounts, and Codex
+configuration are not copied or created by this bootstrap.
+
+Lifecycle authority acquires the Ensure lock (`E`) before the app preparation hook; the hook acquires
+the shared `config-mutation.sqlite` lock only after E is held. This E → config-mutation-lock ordering
+is an invariant: it keeps direct app bootstrap serialized with lifecycle start while preserving the
+config writer's cross-process race protections. Ordinary CLI and service startup do not call the app
+hook and require `ccx init` to create a valid CodexCommander config; a missing config is refused rather
+than synthesized.
+
+When the app observes that `$CODEX_HOME/config.toml` is missing on a fresh app bootstrap, it writes
+only the app-owned default with `clientIntegrations.codex=false`. The proxy and dashboard still start,
+but Codex remains native and the result reports `setupRequired: "codex-first-run"`; the companion tells
+the user to open Codex once and then choose **Route Codex Through Proxy**. No Codex file is created
+automatically. Existing Codex config, including an external provider route, remains untouched.
+
+The companion's physical bundle classifier is part of this contract. `/Applications`, `~/Applications`,
+and the source-build path are stable for Launch at Login; Desktop or Downloads copies are relocatable,
+allowed for the current session, and presented with neutral guidance to move to Applications. The user
+must quit CodexCommander before moving a running app, and the app never moves it. True App
+Translocation is a hard pre-dispatch prohibition: Start stops before proxy launch and requires move and
+reopen.
+
 Native-main profile ownership is bound to the real `CODEX_HOME`, not to a CodexCommander instance.
 Its encrypted vault, transaction journal, recovery marker, and referenced quarantine files live in
 the owner-only `.codexcommander-native-main-profiles` directory. The unchanged

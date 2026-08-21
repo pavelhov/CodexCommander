@@ -19,6 +19,26 @@ then Control-click the app and choose **Open** on first launch. If macOS still b
 
 To build from source instead, follow [Build from source](#build-from-source) below.
 
+## First run and app location
+
+Direct **Start** in the packaged app owns the macOS first-run bootstrap. On a fresh Mac it creates
+CodexCommander's canonical secret-free ChatGPT passthrough default without copying providers, API keys,
+or OAuth accounts from another Mac. The initializer is create-only/no-clobber: an existing valid,
+invalid, unreadable, or unsafe CodexCommander config is never overwritten, so repair an invalid or
+inaccessible config before trying again. The app never creates `~/.codex/config.toml` (or any other
+Codex config) automatically, and an external user-managed Codex provider remains untouched.
+
+If Codex has not created `~/.codex/config.toml` yet, the proxy and dashboard still start while Codex
+remains native. Open Codex once, then return to the companion and choose **Route Codex Through Proxy**.
+The warning is nonfatal: the proxy stays running and the route button remains available.
+
+An app in `/Applications` or `~/Applications` is eligible for **Launch at Login**. A physical copy in
+Desktop or Downloads is allowed to run for the current session, but the startup row presents neutral
+guidance to move it to Applications for login startup. Quit CodexCommander before moving a running app,
+then reopen it from the new location; CodexCommander never moves the app itself. True macOS App
+Translocation is different: **Start** is blocked before proxy launch and the companion tells you to move
+the app and reopen it. The ad-hoc Gatekeeper steps above remain unchanged.
+
 ## Startup modes
 
 The panel has one **Launch at Login** switch and reports the resulting mode:
@@ -239,10 +259,22 @@ Each build stamps its exact Git revision into `CodexCommanderSourceRevision` in 
 and prints it at the end of the build. Uncommitted source is marked with `-dirty`, so commit before
 making a final distributable bundle.
 
+The source-build `.app` is a thin development artifact for the current checkout, not the public
+distribution format. Use the universal release archive for public installation. A source app in the
+supported `dist/macos` location may run the same session-start behavior; copies elsewhere remain
+relocatable and are not moved automatically.
+
 ## Troubleshooting
 
 - **Proxy unavailable** — use **Start Proxy** in the bundled app. Source builds can also use
   <code>ccx start</code> or install the background service with <code>ccx service install</code>.
+- **Open Codex to finish setup** — the proxy is running while Codex remains native because Codex had
+  not created its config yet. Open Codex once, return to the companion, and choose **Route Codex Through
+  Proxy**.
+- **Move CodexCommander to Applications** — a Desktop/Downloads copy can run for this session but is
+  not eligible for login startup. Quit CodexCommander before moving it, move it yourself, and reopen it.
+- **Start is blocked after a temporary macOS launch** — App Translocation is active. Move the app out of
+  the translocated location and reopen it; CodexCommander never moves it automatically.
 - **Menu icon missing after login** — open the app, check its **Launch at Login** row, and follow the
   **Open Settings** action if macOS reports that approval is required.
 - **Authentication unavailable** — run <code>ccx doctor</code>; verify that the CodexCommander state

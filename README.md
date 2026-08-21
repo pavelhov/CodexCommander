@@ -71,6 +71,22 @@ This preview requires macOS 13 or later. It is ad-hoc signed and not notarized y
 3. If macOS still blocks it, open **System Settings → Privacy & Security** and choose **Open
    Anyway**. Do not disable Gatekeeper. See [Apple's instructions](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac).
 
+On a fresh Mac, a direct app launch creates CodexCommander's secret-free ChatGPT passthrough default
+automatically. If Codex has not created `~/.codex/config.toml` yet, the proxy and dashboard still start
+while Codex remains native; open Codex once, then choose **Route Codex Through Proxy** from the menu.
+The app never creates Codex configuration automatically. Existing valid, invalid, unreadable, or
+unsafe CodexCommander configuration is preserved and is never overwritten; repair an invalid or
+inaccessible configuration before trying again. Providers, API keys, and OAuth accounts are not copied
+from another Mac. Public distribution uses the universal release archive above, not the thin
+development `.app` produced by a source checkout.
+
+Applications and `~/Applications` support **Launch at Login**. A copy launched from Desktop or
+Downloads is allowed to run for the current session, but the app shows neutral guidance to move it to
+Applications for login startup. Quit CodexCommander before moving a running app, then reopen it from
+its new location; the app never moves itself. If macOS launches the app through App Translocation,
+**Start** is blocked before the proxy launches: move the app and reopen it. These location rules do not
+change the ad-hoc Gatekeeper steps above.
+
 <p align="center">
   <img src="docs-site/public/macos-menu-bar.png" alt="CodexCommander macOS menu bar companion showing a confirmed Codex route, a live request, provider quotas, and proxy controls" width="387">
 </p>
@@ -149,6 +165,12 @@ runtime identity is proven, the wizard can route Codex through it; otherwise Cod
 until an explicit `ccx start`. Headless commands like `ccx provider add` and `ccx combo set` talk to
 the **live** proxy and exit nonzero when it is unreachable. `ccx status` / `ccx doctor` / `ccx
 health` report the running state.
+
+The source/headless path requires `ccx init` (or the equivalent `bun run src/cli/index.ts init`) to
+create CodexCommander's configuration before ordinary CLI starts. Ordinary CLI startup does not own
+the macOS app's automatic bootstrap and refuses a missing configuration; it never creates a Codex
+config or a hand-written JSON substitute. Existing Codex configuration, including an external provider,
+is left untouched unless you explicitly choose a CodexCommander route.
 
 ## Supported platforms
 
