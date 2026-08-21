@@ -72,13 +72,13 @@ http://localhost:10100에서 웹 대시보드를 열어 프로바이더, 모델,
 ### 에이전트용
 
 ```bash
-bun run src/cli/index.ts start
 bun run src/cli/index.ts init
+bun run src/cli/index.ts start
 ```
 
 이 소스 체크아웃에서는 아래의 `ccx <args>` 명령을 `bun run src/cli/index.ts <args>`로 실행할 수 있습니다.
 
-`ccx init`은 프록시를 시작하지 않습니다. 먼저 시작하세요(또는 나중에 해도 됩니다. 순서는 상관없지만, `ccx provider add`와 `ccx combo set` 같은 헤드리스 명령은 **실행 중인** 프록시와 통신하며 접근할 수 없으면 nonzero로 종료합니다). `ccx status` / `ccx doctor` / `ccx health`는 실행 상태를 보고합니다.
+`ccx init`은 프록시를 시작하지 않으므로 일반 CLI 또는 service를 시작하기 전에 먼저 실행해야 합니다. 초기화하지 않은 상태에서 일반 시작을 시도하면 설정이 없다는 이유로 거부됩니다. `ccx provider add`와 `ccx combo set` 같은 헤드리스 명령은 **실행 중인** 프록시와 통신하며 접근할 수 없으면 nonzero로 종료합니다. `ccx status` / `ccx doctor` / `ccx health`는 실행 상태를 보고합니다.
 
 ## 프로바이더 추가하기
 

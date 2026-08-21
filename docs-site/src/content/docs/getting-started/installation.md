@@ -20,6 +20,7 @@ vision and web-search sidecars can also use your ChatGPT login when a routed mod
 ```bash
 bun install
 bun run build:gui
+bun run src/cli/index.ts init
 bun run src/cli/index.ts start
 ```
 

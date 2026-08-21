@@ -5,6 +5,7 @@ Two commands, and every one of them runs any LLM you point it at.</p>
 ```bash
 bun install
 bun run build:gui
+bun run src/cli/index.ts init
 bun run src/cli/index.ts start
 ```
 
@@ -34,6 +35,7 @@ account while existing threads stay pinned to the account that started them.
 ```bash
 bun install
 bun run build:gui
+bun run src/cli/index.ts init
 bun run src/cli/index.ts start   # or use `service` instead of `start`
 ```
 
@@ -93,7 +95,7 @@ change the ad-hoc Gatekeeper steps above.
 
 | Action | What it does |
 |---|---|
-| **Start Proxy** | Starts or attaches to the proxy, then routes Codex through it. |
+| **Start Proxy** | Starts or attaches to the proxy, then routes Codex through it when Codex configuration exists; on a fresh missing-Codex start, leaves Codex native and shows setup guidance. |
 | **Restore Native Codex** | Switches only Codex back to OpenAI; the proxy keeps running. |
 | **Route Codex Through Proxy** | Switches only the Codex route to the already-running proxy. |
 | **Stop Proxy… / Restart Proxy…** | Restores native routing before stopping; Restart then starts and routes back. |
@@ -136,10 +138,13 @@ Codex tasks, history, or authentication, and it does not require a repair comman
 database. Generated catalogs and caches may remain on disk, but native Codex no longer references
 them.
 
-On its first launch, the app enables **Launch at Login** so the menu icon returns after sign-in.
-On every new manual or Login Item launch, the app performs an explicit **Start**: it starts or
-attaches to the proxy, then routes managed Codex through it. An external user-managed Codex provider
-is preserved. The startup row exposes the actual mode: **Desktop**
+On its first launch from **Applications**, `~/Applications`, or the supported source-build location,
+the app enables **Launch at Login** so the menu icon returns after sign-in. A Desktop or Downloads copy
+may run for the current session but is not eligible for login startup. On every new manual or Login Item
+launch, the app performs an explicit **Start**: it starts or attaches to the proxy, then routes managed
+Codex through it when Codex configuration exists. If Codex has not created its config yet, the proxy and
+dashboard still run with Codex native and the app shows setup guidance to open Codex once, then choose
+**Route Codex Through Proxy**. An external user-managed Codex provider is preserved. The startup row exposes the actual mode: **Desktop**
 performs this app-managed start, **Headless** leaves only an installed background service at login,
 and **Off** starts neither automatically. Rebuilt source apps refresh their login registration in
 place; they are never copied into Application Support. Full
@@ -156,8 +161,8 @@ rewrites OpenCode config files. For plain OpenCode or the Desktop app, use the d
 ### For agents
 
 ```bash
-bun run src/cli/index.ts start     # or use `service`
 bun run src/cli/index.ts init      # interactive setup: writes config; can route through a proven live proxy
+bun run src/cli/index.ts start     # or use `service`, after init
 ```
 
 `ccx init` never starts the proxy. If a current-home proxy is already running and its protected

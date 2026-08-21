@@ -18,7 +18,13 @@ bun run build:gui
 bun run src/cli/index.ts --version
 ```
 
-Choose one way to run the proxy:
+Initialize the source/headless configuration before starting the proxy:
+
+```bash
+bun run src/cli/index.ts init
+```
+
+Then choose one way to run the proxy:
 
 ```bash
 # Foreground: blocks this terminal until stopped.
@@ -26,13 +32,6 @@ bun run src/cli/index.ts start
 
 # Background: installs or updates the service, then starts it.
 bun run src/cli/index.ts service
-```
-
-Run `ccx init` in an interactive terminal. If `ccx start` is occupying the foreground, use a
-second terminal:
-
-```bash
-bun run src/cli/index.ts init
 ```
 
 The wizard writes `$CODEXCOMMANDER_HOME/config.json` (normally

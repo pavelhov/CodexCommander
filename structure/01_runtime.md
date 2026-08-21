@@ -48,14 +48,20 @@ their own files.
 ## Lifecycle
 
 Explicit starts (`ccx start`, every new companion launch, companion Start, and service
-create/`install`/`repair`/`start`) enable managed Codex integration, preserve an external user-managed
-provider, refuse a duplicate PID, start the proxy, write
+create/`install`/`repair`/`start`) normally enable managed Codex integration, preserve an external
+user-managed provider, refuse a duplicate PID, start the proxy, write
 `~/.codexcommander/codexcommander.pid`, and sync Codex config/catalog. Automatic `ensure` preserves an
 intentional OFF state. Normal standalone shutdown restores native routing. Service mode sets
 `CCX_SERVICE=1`, so manager restarts preserve the current route; explicit service stop and uninstall
 restore and verify native routing before terminating anything.
 In this document, restoring native means removing CodexCommander-owned routing; an external
 user-managed Codex provider is preserved.
+
+The fresh direct app-start exception is deliberate: when the app-only bootstrap creates the
+CodexCommander config before Codex has created `$CODEX_HOME/config.toml`, it starts the proxy and
+dashboard but leaves Codex native and returns `setupRequired: "codex-first-run"`. The companion then
+asks the user to open Codex once and choose **Route Codex Through Proxy**. Passive companion `ensure`
+does not install or invoke this bootstrap hook; it preserves the existing OFF/native intent.
 
 Direct packaged macOS **Start** is the only lifecycle entrypoint with an app-only configuration
 bootstrap. `src/cli/macos-lifecycle.ts` passes `prepareMacOSAppStart` through the canonical lifecycle

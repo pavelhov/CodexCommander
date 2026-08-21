@@ -76,16 +76,16 @@ bun run src/cli/index.ts start   # для фонового режима испо
 ### Для агентов
 
 ```bash
-bun run src/cli/index.ts start
 bun run src/cli/index.ts init
+bun run src/cli/index.ts start
 ```
 
 В этом checkout любую приведённую ниже команду `ccx <args>` можно выполнить как `bun run src/cli/index.ts <args>`.
 
-`ccx init` никогда не запускает прокси; сначала запустите его сами (или после — оба порядка
-работают, но headless-команды вроде `ccx provider add` и `ccx combo set` обращаются к **живому**
-прокси и завершаются с ненулевым кодом, если он недоступен). Состояние запущенного прокси
-показывают `ccx status`, `ccx doctor` и `ccx health`.
+`ccx init` никогда не запускает прокси, поэтому сначала выполните инициализацию, а затем запускайте
+обычный CLI или service. Запуск без созданной конфигурации завершается отказом. Headless-команды
+вроде `ccx provider add` и `ccx combo set` обращаются к **живому** прокси и завершаются с ненулевым
+кодом, если он недоступен. Состояние запущенного прокси показывают `ccx status`, `ccx doctor` и `ccx health`.
 
 ## Добавление провайдера
 

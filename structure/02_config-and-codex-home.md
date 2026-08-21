@@ -212,8 +212,12 @@ proxy lifecycle. Existing `codexcommander-catalog.json` and `models_cache.json` 
 but are inert once `config.toml` no longer references them. Codex tasks, thread/history/rollout state,
 and authentication are outside lifecycle ownership and are never modified by the native escape.
 
-Explicit Start and Route Back are the inverse OFF→ON transition. If a recovery journal exists, they
-first classify what it represents. The journal is a protected crash-recovery checkpoint: it records
+Explicit Start and Route Back are the inverse OFF→ON transition once Codex configuration exists. The
+fresh direct app-start bootstrap is the exception: if Codex has not created `$CODEX_HOME/config.toml`,
+the app starts the proxy and dashboard with Codex native, returns `setupRequired: "codex-first-run"`,
+and waits for the user to open Codex once before choosing **Route Codex Through Proxy**. Passive
+companion `ensure` does not install or invoke the bootstrap hook. If a recovery journal exists, Start
+and Route Back first classify what it represents. The journal is a protected crash-recovery checkpoint: it records
 the exact config/profile images needed to distinguish CodexCommander's write from unrelated user
 edits. It is not a second routing preference or user-maintained database, and users must not delete
 it manually.

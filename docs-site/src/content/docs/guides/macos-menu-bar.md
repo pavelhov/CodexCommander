@@ -44,13 +44,15 @@ the app and reopen it. The ad-hoc Gatekeeper steps above remain unchanged.
 The panel has one **Launch at Login** switch and reports the resulting mode:
 
 - **Desktop** — the CodexCommander menu app launches when you sign in, performs an explicit Start,
-  starts or attaches to exactly one proxy, and routes managed Codex through it. An external
-  user-managed Codex provider is preserved. This is the default desktop experience and is reported
-  as **App-managed** in Startup.
+  starts or attaches to exactly one proxy, and routes managed Codex through it when Codex
+  configuration exists. On a fresh missing-Codex start, it leaves Codex native while the proxy runs
+  and setup guidance is shown. An external user-managed Codex provider is preserved. This is the
+  default desktop experience and is reported as **App-managed** in Startup.
 - **Headless** — the menu app is not a login item, but an independently installed
   `ccx service` continues starting and supervising the server.
 - **Off** — neither the menu app nor a background service starts automatically. A new manual app
-  launch performs the same explicit Start-and-route transition as `ccx start`.
+  launch performs the same explicit Start transition as `ccx start`; it routes Codex when Codex
+  configuration exists, or leaves Codex native with setup guidance when Codex has not run yet.
 
 Throughout this guide, **restore native** means removing CodexCommander-owned routing. An external
 user-managed Codex provider is left unchanged.
@@ -65,8 +67,10 @@ responsibilities of one installation, not duplicate app copies. Turning off Laun
 installs, removes, starts, or stops the background service.
 
 App-managed startup and the background service solve different problems. The app starts or attaches
-to the proxy at sign-in and routes managed Codex through it, which is enough for normal desktop use. The
-optional background service additionally
+to the proxy at sign-in and routes managed Codex through it when Codex configuration exists, which is
+enough for normal desktop use. On a fresh missing-Codex start, the proxy remains running while Codex
+stays native until the user opens Codex once and chooses **Route Codex Through Proxy**. The optional
+background service additionally
 supervises the proxy and restarts it after a crash, so the dashboard labels it **Background
 recovery** instead of presenting it as a requirement. The companion periodically reports its current
 Launch at Login state to the local proxy; that short-lived report is kept only in memory and is used
@@ -106,7 +110,9 @@ override it.
   workers still hold an older model roster. The CodexCommander proxy remains healthy and running.
 - **Show restart steps…** — explains the recommended reload boundary: quit ChatGPT completely, reopen
   it, and then start a new task. The menu app does not force-restart background workers from this card.
-- **Start Proxy** — starts or attaches to the proxy, then routes Codex through the live endpoint.
+- **Start Proxy** — starts or attaches to the proxy, then routes Codex through the live endpoint when
+  Codex configuration exists. If Codex has not run yet, the proxy stays running, Codex remains native,
+  and the setup-required card explains how to finish setup.
 - **Stop Proxy…** — always asks for confirmation and restores native Codex routing before it stops the
   proxy. If the native route cannot be verified, the proxy and service stay running. The menu app stays open.
 - **Restart Proxy…** — always asks for confirmation and runs the same safe stop→start transaction as
@@ -249,8 +255,9 @@ open dist/macos/CodexCommander.app
 The development app is exactly `dist/macos/CodexCommander.app`. Every build embeds the Bun runtime and
 CodexCommander server resources inside the app bundle; the running app never executes `src/` from the
 checkout. Rebuild the app to pick up source changes. Double-clicking it to launch a new app process
-performs an explicit Start: it starts or attaches to the proxy and routes managed Codex through it.
-An external user-managed provider is preserved. An offline failure or failed start
+performs an explicit Start: it starts or attaches to the proxy and routes managed Codex through it when
+Codex configuration exists. If Codex has not run yet, it leaves Codex native while the proxy runs and
+shows setup guidance. An external user-managed provider is preserved. An offline failure or failed start
 does not close the app: its status panel remains available and **Start** can be retried. This source
 workflow does not install or copy the app into Application
 Support. A rebuild at the same path is detected on the
