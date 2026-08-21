@@ -1487,8 +1487,12 @@ runner.test("ui: stop-and-quit exits only after a confirmed stopped outcome") {
 
 runner.test("ui: translocated automatic launch shows move guidance without starting lifecycle") {
     let lifecycle = RecordingLifecycleRunner()
+    let location = LaunchAtLoginEligibility.classify(
+        URL(fileURLWithPath: "/private/var/folders/xx/AppTranslocation/CodexCommander.app")
+    )
+    runner.equal(location, .translocated)
     let delegate = AppDelegate(
-        appBundleLocation: .translocated,
+        appBundleLocation: location,
         actions: ActionCoordinator(lifecycle: lifecycle)
     )
 
@@ -1524,6 +1528,23 @@ runner.test("ui: relocatable automatic launch continues through Start for this s
     let lifecycle = RecordingLifecycleRunner()
     let delegate = AppDelegate(
         appBundleLocation: .relocatable,
+        actions: ActionCoordinator(lifecycle: lifecycle)
+    )
+
+    delegate.startProxyOnLaunchForTesting()
+    spinMainRunLoop(seconds: 0.10)
+
+    runner.equal(lifecycle.recordedActions, [.start])
+}
+
+runner.test("ui: ordinary AppTranslocation folder-name collision still starts this session") {
+    let lifecycle = RecordingLifecycleRunner()
+    let location = LaunchAtLoginEligibility.classify(
+        URL(fileURLWithPath: "/Users/example/Downloads/AppTranslocation/CodexCommander.app")
+    )
+    runner.equal(location, .relocatable)
+    let delegate = AppDelegate(
+        appBundleLocation: location,
         actions: ActionCoordinator(lifecycle: lifecycle)
     )
 

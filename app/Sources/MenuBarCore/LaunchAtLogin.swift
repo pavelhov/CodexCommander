@@ -341,13 +341,17 @@ public enum LaunchAtLoginEligibility {
     ) -> AppBundleLocation {
         let bundle = bundleURL.resolvingSymlinksInPath()
         let path = bundle.path
-        if path.contains("/AppTranslocation/") { return .translocated }
+        if path.hasPrefix("/private/var/folders/"),
+           path.contains("/AppTranslocation/") {
+            return .translocated
+        }
         guard bundle.pathExtension == "app",
               bundle.lastPathComponent == "CodexCommander.app"
         else { return .relocatable }
 
         if path.hasPrefix("/Applications/") { return .stable }
-        let userApplications = home.appendingPathComponent("Applications", isDirectory: true).path
+        let userApplications = home.resolvingSymlinksInPath()
+            .appendingPathComponent("Applications", isDirectory: true).path
         if path.hasPrefix("\(userApplications)/") { return .stable }
 
         let sourceBuild = bundle.deletingLastPathComponent().lastPathComponent == "macos"

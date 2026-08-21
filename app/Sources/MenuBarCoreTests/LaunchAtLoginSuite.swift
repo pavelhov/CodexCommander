@@ -375,6 +375,14 @@ enum LaunchAtLoginSuite {
             )
             t.equal(
                 LaunchAtLoginEligibility.classify(
+                    URL(fileURLWithPath: "/Users/example/Downloads/AppTranslocation/CodexCommander.app"),
+                    home: home
+                ),
+                .relocatable,
+                "an ordinary folder-name collision is not macOS App Translocation"
+            )
+            t.equal(
+                LaunchAtLoginEligibility.classify(
                     URL(fileURLWithPath: "/private/var/folders/xx/AppTranslocation/CodexCommander.app"),
                     home: home
                 ),
@@ -415,6 +423,32 @@ enum LaunchAtLoginSuite {
                 ),
                 false,
                 "compatibility wrapper remains stable-only"
+            )
+        }
+
+        t.test("menu app: symlinked home keeps its Applications bundle stable") {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "CodexCommander-Home-\(UUID().uuidString)",
+                isDirectory: true
+            )
+            let physicalHome = root.appendingPathComponent("physical-home", isDirectory: true)
+            let linkedHome = root.appendingPathComponent("linked-home", isDirectory: true)
+            let bundle = linkedHome
+                .appendingPathComponent("Applications", isDirectory: true)
+                .appendingPathComponent("CodexCommander.app", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: physicalHome.appendingPathComponent("Applications/CodexCommander.app"),
+                withIntermediateDirectories: true
+            )
+            try FileManager.default.createSymbolicLink(
+                at: linkedHome,
+                withDestinationURL: physicalHome
+            )
+            defer { try? FileManager.default.removeItem(at: root) }
+
+            t.equal(
+                LaunchAtLoginEligibility.classify(bundle, home: linkedHome),
+                .stable
             )
         }
 
