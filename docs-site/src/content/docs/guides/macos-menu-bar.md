@@ -51,8 +51,9 @@ The panel has one **Launch at Login** switch and reports the resulting mode:
 - **Headless** — the menu app is not a login item, but an independently installed
   `ccx service` continues starting and supervising the server.
 - **Off** — neither the menu app nor a background service starts automatically. A new manual app
-  launch performs the same explicit Start transition as `ccx start`; it routes Codex when Codex
-  configuration exists, or leaves Codex native with setup guidance when Codex has not run yet.
+  launch uses the app-owned Start path, including its first-run preparation; it routes Codex when Codex
+  configuration exists, or leaves Codex native with setup guidance when Codex has not run yet. The
+  ordinary CLI path is separate: run `ccx init` before `ccx start` or `ccx service`.
 
 Throughout this guide, **restore native** means removing CodexCommander-owned routing. An external
 user-managed Codex provider is left unchanged.

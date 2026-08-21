@@ -129,10 +129,14 @@ untouched. The GUI sidebar stop button calls this endpoint.
 Every new manual or Login Item launch of the macOS companion performs an explicit Start. A failed or
 offline start must leave the menu app alive with its status/Start controls available; it cannot
 self-terminate just because the proxy is unavailable. Its **Quit** action terminates only the AppKit process. Explicit
-**Start** enables Codex routing through the proxy. **Stop** restores and verifies native routing before
-termination and keeps the menu app open. **Restart** runs the canonical stop→start transaction: it
-restores native routing before terminating the old proxy, then its explicit Start phase launches the
-replacement and routes Codex back through it. A failed restart leaves Codex native.
+**Start** enables Codex routing through the proxy when usable Codex configuration exists. On the
+fresh app-first-run path where Codex has not created its config, Start still starts the proxy and
+dashboard but leaves Codex native and returns `setupRequired: "codex-first-run"`; it does not enable
+routing until the user opens Codex once and chooses **Route Codex Through Proxy**. **Stop** restores and
+verifies native routing before termination and keeps the menu app open. **Restart** runs the canonical
+stop→start transaction: it restores native routing before terminating the old proxy, then its explicit
+Start phase launches the replacement and routes Codex back through it when configuration is usable. A
+failed restart leaves Codex native.
 **Restore Native Codex** and **Route Codex Through Proxy** change routing without changing proxy
 lifecycle.
 The main app is the default desktop Login Item; launchd remains an independent optional headless

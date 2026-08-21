@@ -5,6 +5,7 @@
 ```bash
 bun install
 bun run build:gui
+bun run src/cli/index.ts init
 bun run src/cli/index.ts start
 ```
 
@@ -63,6 +64,7 @@ flowchart LR
 ```bash
 bun install
 bun run build:gui
+bun run src/cli/index.ts init
 bun run src/cli/index.ts start   # 后台运行时用 service 代替 start
 ```
 
