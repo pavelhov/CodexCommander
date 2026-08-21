@@ -387,12 +387,27 @@ export function spawnDetachedProxyStart(options: SpawnDetachedProxyOptions = {})
   });
 }
 
-export async function waitForProxy(timeoutMs = 12_000): Promise<LiveProxy | null> {
-  const deadline = Date.now() + Math.max(0, timeoutMs);
-  while (Date.now() < deadline) {
-    const live = await findLiveProxy();
-    if (live) return live;
-    await Bun.sleep(150);
+export interface WaitForProxyIo {
+  findLive?: typeof findLiveProxy;
+  now?: () => number;
+  sleep?: (milliseconds: number) => Promise<void>;
+}
+
+export async function waitForProxy(
+  timeoutMs = 12_000,
+  io: WaitForProxyIo = {},
+): Promise<LiveProxy | null> {
+  const now = io.now ?? Date.now;
+  const sleep = io.sleep ?? Bun.sleep;
+  const findLive = io.findLive ?? findLiveProxy;
+  const deadline = now() + Math.max(0, timeoutMs);
+  while (now() < deadline) {
+    const live = await findLive();
+    // Bun starts answering /healthz before the child publishes its protected
+    // runtime record. Config-port discovery is therefore evidence of progress,
+    // not post-spawn ownership; keep waiting for the runtime identity fence.
+    if (live?.source === "runtime" && live.pid !== null) return live;
+    await sleep(150);
   }
   return null;
 }

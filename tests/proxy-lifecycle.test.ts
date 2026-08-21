@@ -9,6 +9,7 @@ import {
   restoreBackRoutingLifecycle,
   spawnDetachedProxyStart,
   stopProxyLifecycle,
+  waitForProxy,
   type EnsureProxyLifecycleIo,
 } from "../src/cli/proxy-lifecycle";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCES, BUN_RUNTIME_SOURCE_ENV } from "../src/lib/bun-runtime";
@@ -108,6 +109,27 @@ function baseIo(overrides: EnsureProxyLifecycleIo = {}): EnsureProxyLifecycleIo 
 }
 
 describe("shared proxy lifecycle authority", () => {
+  test("post-spawn wait ignores config fallback until runtime ownership is published", async () => {
+    const observations = [
+      { pid: 77, port: 10123, source: "config" as const },
+      { pid: 77, port: 10123, source: "runtime" as const },
+    ];
+    let now = 0;
+    let probes = 0;
+
+    const result = await waitForProxy(500, {
+      findLive: async () => {
+        probes += 1;
+        return observations.shift() ?? null;
+      },
+      now: () => now,
+      sleep: async milliseconds => { now += milliseconds; },
+    });
+
+    expect(result).toEqual({ pid: 77, port: 10123, source: "runtime" });
+    expect(probes).toBe(2);
+  });
+
   test("Stop cannot pass an in-flight explicit Start while E is held", async () => {
     const calls: string[] = [];
     let held = false;
