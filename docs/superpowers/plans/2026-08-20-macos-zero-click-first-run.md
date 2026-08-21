@@ -4,7 +4,7 @@
 
 **Goal:** Make a direct packaged macOS app launch safely create CodexCommander's secret-free default configuration, start the proxy, and route initialized Codex without terminal setup.
 
-**Architecture:** A no-clobber initializer in the TypeScript configuration layer remains the only code that can create `config.json`. A macOS-only policy supplies `getDefaultConfig()` and a typed start preparation that runs under existing lifecycle authority; the bounded JSON bridge carries setup state to Swift, where the menu presents nonfatal guidance. App-location classification remains native and blocks only ephemeral App Translocation startup.
+**Architecture:** A no-clobber initializer in the TypeScript configuration layer remains the only app-bootstrap code that can create `config.json`; under config mutation coordination it directly opens the final entry with `wx`, writes and flushes through the owned descriptor, and never overwrites. A macOS-only policy supplies trusted `getDefaultConfig()` data and a typed start preparation that runs under existing lifecycle authority; the bounded JSON bridge carries setup state to Swift, where the menu presents nonfatal guidance. App-location classification remains native and blocks only ephemeral App Translocation startup.
 
 **Tech Stack:** Bun-native strict TypeScript, Bun test, Swift 5.9/AppKit/ServiceManagement, the existing bounded lifecycle JSON bridge, Astro/Starlight Markdown documentation.
 
@@ -15,6 +15,7 @@
 - macOS remains version 13.0 or later; do not add a newer framework requirement.
 - `getDefaultConfig()` remains the single source of truth for the fresh provider and settings.
 - Bootstrap may create only a genuinely absent `$CODEXCOMMANDER_HOME/config.json`; it must never overwrite a valid, invalid, unreadable, linked, or non-regular entry.
+- The bootstrap candidate is trusted in-process policy data and is validated for correctness. Active same-user filesystem mutation after the coordinated probe is out of scope; do not add descriptor-relative root anchoring, pathname-swap barriers, or hostile-object test seams.
 - Bootstrap must not create or repair `$CODEX_HOME/config.toml`.
 - The generated configuration contains no API key, OAuth credential, account identity, or copied machine state.
 - Ordinary CLI Start/Ensure, passive companion launches, Stop/Restore, and `setIntegrationEnabled()` retain their current missing-config behavior.
@@ -51,11 +52,11 @@
 ### Task 1: Add a no-clobber configuration initializer
 
 **Files:**
-- Modify: `src/config.ts:1599-1638,1887-1937`
-- Test: `tests/config.test.ts:1-55,730-790`
+- Modify: `src/config.ts:1645-1855,1950-2025`
+- Test: `tests/config.test.ts:1-35,110-410`
 
 **Interfaces:**
-- Consumes: `validateConfigCandidate(value)`, `withConfigMutationLockSync(fn)`, `bumpGenerationForCooperatingConfigWrite()`, `recordOwnedConfigPath(configDir, path)`, and the existing secret-path hardening functions.
+- Consumes: `validateConfigCandidate(value)`, the existing config mutation transaction (with a private initializer-only bounded timeout), `bumpGenerationForCooperatingConfigWrite()`, `recordOwnedConfigPath(configDir, path)`, and the existing secret-path hardening functions.
 - Produces:
 
 ```ts
@@ -74,15 +75,11 @@ export type ConfigInitializationResult =
 export function initializeConfigIfMissing(
   candidate: CodexCommanderConfig,
 ): ConfigInitializationResult;
-
-export function setConfigInitializationBeforePublishForTests(
-  hook: (() => void) | null,
-): void;
 ```
 
 - [ ] **Step 1: Write failing tests for missing, existing, and invalid entries**
 
-Add imports for `initializeConfigIfMissing` and `setConfigInitializationBeforePublishForTests`, then add a focused describe block:
+Add an import for `initializeConfigIfMissing`, then add a focused describe block:
 
 ```ts
 describe("create-only config initialization", () => {
@@ -130,7 +127,7 @@ describe("create-only config initialization", () => {
 
 Run: `bun test tests/config.test.ts --test-name-pattern "create-only config initialization"`
 
-Expected: FAIL because `initializeConfigIfMissing` and its test seam are not exported.
+Expected: FAIL because `initializeConfigIfMissing` is not exported.
 
 - [ ] **Step 3: Add unsafe-entry and no-clobber race tests**
 
@@ -178,30 +175,71 @@ test("refuses to claim a nonempty unowned configuration root", () => {
   expect(existsSync(getConfigPath())).toBe(false);
 });
 
-test("adopts a valid file that wins immediately before no-clobber publish", () => {
+test("adopts a valid file that wins exclusive final creation", () => {
   const winner = { ...getDefaultConfig(), port: 12002 };
-  setConfigInitializationBeforePublishForTests(() => {
-    writeFileSync(getConfigPath(), `${JSON.stringify(winner)}\n`, { mode: 0o600 });
-  });
-  expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "existing" });
-  expect(JSON.parse(readFileSync(getConfigPath(), "utf8"))).toEqual(winner);
+  const winnerBytes = `${JSON.stringify(winner)}\n`;
+  const originalOpen = nodeFs.openSync;
+  const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((...args: unknown[]) => {
+    if (args[0] === getConfigPath() && args[1] === "wx") {
+      writeFileSync(getConfigPath(), winnerBytes, { mode: 0o600 });
+      throw Object.assign(new Error("winner created config"), { code: "EEXIST" });
+    }
+    return (originalOpen as (...values: unknown[]) => number)(...args);
+  }) as typeof nodeFs.openSync);
+  try {
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "existing" });
+    expect(readFileSync(getConfigPath(), "utf8")).toBe(winnerBytes);
+  } finally {
+    openSpy.mockRestore();
+  }
 });
 
-test("refuses an invalid file that wins immediately before publish", () => {
-  setConfigInitializationBeforePublishForTests(() => {
-    writeFileSync(getConfigPath(), "{", { mode: 0o600 });
-  });
-  expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
-    status: "refused",
-    reason: "existing-invalid",
-  });
-  expect(readFileSync(getConfigPath(), "utf8")).toBe("{");
+test("refuses an invalid file that wins exclusive final creation", () => {
+  const originalOpen = nodeFs.openSync;
+  const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((...args: unknown[]) => {
+    if (args[0] === getConfigPath() && args[1] === "wx") {
+      writeFileSync(getConfigPath(), "{", { mode: 0o600 });
+      throw Object.assign(new Error("invalid winner created config"), { code: "EEXIST" });
+    }
+    return (originalOpen as (...values: unknown[]) => number)(...args);
+  }) as typeof nodeFs.openSync);
+  try {
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+      status: "refused",
+      reason: "existing-invalid",
+    });
+    expect(readFileSync(getConfigPath(), "utf8")).toBe("{");
+  } finally {
+    openSpy.mockRestore();
+  }
+});
+
+test("rechecks a transient incomplete preflight under coordination", () => {
+  expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "created" });
+  unlinkSync(getConfigPath());
+  const bytes = `${JSON.stringify({ ...getDefaultConfig(), port: 12003 })}\n`;
+  writeFileSync(getConfigPath(), bytes, { mode: 0o600 });
+  const originalRead = nodeFs.readFileSync;
+  let injected = false;
+  const readSpy = spyOn(nodeFs, "readFileSync").mockImplementation(((...args: unknown[]) => {
+    if (!injected && args[0] === getConfigPath()) {
+      injected = true;
+      return "{";
+    }
+    return (originalRead as (...values: unknown[]) => unknown)(...args);
+  }) as typeof nodeFs.readFileSync);
+  try {
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "existing" });
+    expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
+  } finally {
+    readSpy.mockRestore();
+  }
 });
 ```
 
 - [ ] **Step 4: Implement typed probing and exclusive publication**
 
-Use `lstatSync` before every read, treat only `ENOENT` as missing, and keep raw bytes private. Add `linkSync` using the existing no-clobber pattern from service persistence so publication never renames over a race winner. The implementation shape is:
+Use `lstatSync` before every read, treat only `ENOENT` as missing, and keep raw bytes private. Under the existing config mutation coordination, open the final `config.json` directly with `openSync(path, "wx", 0o600)`, write and flush through that descriptor, and never overwrite. Keep the public runtime mutation lock at `busy_timeout=0`; initializer-only acquisition may use the bounded 2-second timeout required for the two-process `created`/`existing` result. The implementation shape is:
 
 ```ts
 type ConfigEntryProbe =
@@ -247,14 +285,14 @@ export function initializeConfigIfMissing(
   }
 
   try {
-    return withConfigMutationLockSync(() => {
+    return withConfigMutationLockTimeoutSync(() => {
       const current = probeConfigEntry();
       if (current.kind === "valid") return { status: "existing" } as const;
       if (current.kind === "refused") {
         return { status: "refused", reason: current.reason } as const;
       }
       const bytes = `${JSON.stringify(validated.config, null, 2)}\n`;
-      const published = publishConfigNoReplace(getConfigPath(), bytes);
+      const published = createConfigExclusive(getConfigPath(), bytes);
       if (!published) {
         const winner = probeConfigEntry();
         if (winner.kind === "valid") return { status: "existing" } as const;
@@ -265,7 +303,7 @@ export function initializeConfigIfMissing(
       }
       bumpGenerationForCooperatingConfigWrite();
       return { status: "created" } as const;
-    });
+    }, CONFIG_INITIALIZATION_WAIT_MS);
   } catch {
     return { status: "refused", reason: "coordination-unavailable" };
   }
@@ -275,48 +313,39 @@ export function initializeConfigIfMissing(
 Implement the private publisher explicitly:
 
 ```ts
-function publishConfigNoReplace(path: string, bytes: string): boolean {
-  recordOwnedConfigPath(resolveConfigDir(), path);
-  const target = resolveWriteTarget(path);
-  assertResolvedTargetAllowed(path, target);
-  const temp = `${target}.ccx.${process.pid}.${++_atomicSeq}.create.tmp`;
-  let published = false;
+function createConfigExclusive(path: string, bytes: string): boolean {
+  let descriptor: number;
   try {
-    writeFileSync(temp, bytes, { encoding: "utf8", mode: 0o600, flag: "wx" });
-    try { chmodSync(temp, 0o600); } catch { /* filesystem may ignore chmod */ }
+    descriptor = openSync(path, "wx", 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw error;
+  }
+
+  let complete = false;
+  let descriptorOpen = true;
+  try {
+    writeFileSync(descriptor, bytes, { encoding: "utf8" });
+    try { fchmodSync(descriptor, 0o600); } catch { /* filesystem may ignore chmod */ }
+    fsyncSync(descriptor);
+    closeSync(descriptor);
+    descriptorOpen = false;
     if (process.platform === "win32") {
-      hardenSecretPath(temp, { required: true, timeoutMemoKey: path });
+      hardenSecretPath(path, { required: true, timeoutMemoKey: path });
     }
-    const hook = configInitializationBeforePublishForTests;
-    configInitializationBeforePublishForTests = null;
-    hook?.();
-    try {
-      linkSync(temp, target);
-      published = true;
-      return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
-      throw error;
-    }
+    complete = true;
+    return true;
   } finally {
-    try {
-      unlinkSync(temp);
-      forgetEphemeralSecretPath(temp);
-    } catch (error) {
-      if (!isMissingPathError(error)) {
-        // After link succeeds, temp and destination are the same inode. Never
-        // truncate the temp in that state because it would erase config.json too.
-        if (!published) {
-          try { truncateSync(temp, 0); } catch { /* residual error below is authoritative */ }
-        }
-        throw new AtomicWriteSecretResidualError(temp, { cause: error });
-      }
-    }
+    if (descriptorOpen) try { closeSync(descriptor); } catch { /* original error wins */ }
+    if (!complete) try { unlinkSync(path); } catch { /* later probes refuse residue */ }
   }
 }
 ```
 
-Export the one-shot setter, reset the hook in `afterEach`, and import `linkSync`. The destination has two hard links only during publication; removing the temp leaves a private single-link `config.json`.
+Do not add a production test callback or CWD/root-anchoring seam. The trust boundary is the
+coordinated CodexCommander process and its trusted policy candidate; active same-user pathname swaps
+after admission are explicitly out of scope. On `EEXIST`, re-probe exactly once and adopt only a
+complete valid ordinary single-link file.
 
 - [ ] **Step 5: Run focused and regression tests**
 
@@ -325,6 +354,7 @@ Run:
 ```bash
 bun test tests/config.test.ts --test-name-pattern "create-only config initialization"
 bun test tests/codex-desired-state.test.ts --test-name-pattern "missing config refuses"
+bun test tests/config.test.ts --test-name-pattern "two processes racing initialization" --rerun-each 300 --only-failures
 bun run typecheck
 ```
 
@@ -1421,7 +1451,8 @@ Expected: both smokes pass without provider network calls and leave only files i
 
 Confirm from the diff and tests:
 
-- the initializer publishes with no-replace semantics;
+- the initializer creates the final entry directly with `wx`, writes and flushes through the
+  owned descriptor, and re-probes once after `EEXIST` without overwriting;
 - linked/non-regular/invalid config is refused;
 - lifecycle preparation runs while E is held;
 - the bridge contains no path, credentials, or raw config;

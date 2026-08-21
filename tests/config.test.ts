@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import * as nodeFs from "node:fs";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   CODEX_SHIM_AUTO_RESTORE_ENV,
@@ -16,7 +15,6 @@ import {
   isValidProviderName,
   isCodexCommanderStartCommandLine,
   initializeConfigIfMissing,
-  initializeConfigIfMissingForTests,
   loadConfig,
   multiAgentGuidanceEnabled,
   parsePidFile,
@@ -26,9 +24,7 @@ import {
   readRuntimePort,
   removePid,
   removeRuntimePort,
-  setConfigInitializationBeforePublishForTests,
   validateConfigCandidate,
-  withConfigMutationLockSync,
   writeRuntimePort,
   writePid,
 } from "../src/config";
@@ -46,7 +42,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  setConfigInitializationBeforePublishForTests(null);
   if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
   else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
   previousCodexCommanderHome = undefined;
@@ -56,25 +51,6 @@ afterEach(() => {
 
 function backupNames(): string[] {
   return readdirSync(testDir).filter(name => name.startsWith("config.json.invalid-"));
-}
-
-function replaceAnchoredRoot(
-  root: string,
-  displacedRoot: string,
-  replacementMode: number,
-): "replaced" | "blocked" {
-  try {
-    renameSync(root, displacedRoot);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (
-      process.platform === "win32"
-      && (code === "EACCES" || code === "EBUSY" || code === "EPERM")
-    ) return "blocked";
-    throw error;
-  }
-  mkdirSync(root, { mode: replacementMode });
-  return "replaced";
 }
 
 function writeConfig(content: unknown): void {
@@ -162,6 +138,29 @@ describe("create-only config initialization", () => {
     }
   });
 
+  test("rechecks a transient incomplete preflight under coordination", () => {
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "created" });
+    unlinkSync(getConfigPath());
+    const bytes = `${JSON.stringify({ ...getDefaultConfig(), port: 12003 })}\n`;
+    writeFileSync(getConfigPath(), bytes, { mode: 0o600 });
+    const originalRead = nodeFs.readFileSync;
+    let injected = false;
+    const readSpy = spyOn(nodeFs, "readFileSync").mockImplementation(((...args: unknown[]) => {
+      if (!injected && args[0] === getConfigPath()) {
+        injected = true;
+        return "{";
+      }
+      return (originalRead as (...values: unknown[]) => unknown)(...args);
+    }) as typeof nodeFs.readFileSync);
+
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "existing" });
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
   test("rejects an invalid candidate without creating config state", () => {
     const invalid = { ...getDefaultConfig(), defaultProvider: "missing" };
     expect(initializeConfigIfMissing(invalid)).toEqual({
@@ -169,6 +168,62 @@ describe("create-only config initialization", () => {
       reason: "candidate-invalid",
     });
     expect(existsSync(getConfigPath())).toBe(false);
+  });
+
+  test("refuses when exclusive creation of the final config entry fails", () => {
+    const originalOpen = nodeFs.openSync;
+    const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((...args: unknown[]) => {
+      if (args[0] === getConfigPath() && args[1] === "wx") {
+        throw Object.assign(new Error("exclusive final create failed"), { code: "EACCES" });
+      }
+      return (originalOpen as (...values: unknown[]) => number)(...args);
+    }) as typeof nodeFs.openSync);
+
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+        status: "refused",
+        reason: "coordination-unavailable",
+      });
+      expect(existsSync(getConfigPath())).toBe(false);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  test("refuses and removes its incomplete file when descriptor write fails", () => {
+    const originalWrite = nodeFs.writeFileSync;
+    const writeSpy = spyOn(nodeFs, "writeFileSync").mockImplementation(((...args: unknown[]) => {
+      if (typeof args[0] === "number") {
+        throw Object.assign(new Error("descriptor write failed"), { code: "EIO" });
+      }
+      return (originalWrite as (...values: unknown[]) => unknown)(...args);
+    }) as typeof nodeFs.writeFileSync);
+
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+        status: "refused",
+        reason: "coordination-unavailable",
+      });
+      expect(existsSync(getConfigPath())).toBe(false);
+    } finally {
+      writeSpy.mockRestore();
+    }
+  });
+
+  test("refuses and removes its incomplete file when descriptor flush fails", () => {
+    const fsyncSpy = spyOn(nodeFs, "fsyncSync").mockImplementation(() => {
+      throw Object.assign(new Error("flush failed"), { code: "EIO" });
+    });
+
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+        status: "refused",
+        reason: "coordination-unavailable",
+      });
+      expect(existsSync(getConfigPath())).toBe(false);
+    } finally {
+      fsyncSpy.mockRestore();
+    }
   });
 
   test("refuses linked and non-regular destinations", () => {
@@ -185,6 +240,20 @@ describe("create-only config initialization", () => {
       status: "refused",
       reason: "existing-unsafe",
     });
+  });
+
+  test("refuses a hard-linked destination without changing either link", () => {
+    const real = join(testDir, "hard-linked-config.json");
+    const bytes = `${JSON.stringify(getDefaultConfig())}\n`;
+    writeFileSync(real, bytes, { mode: 0o600 });
+    nodeFs.linkSync(real, getConfigPath());
+
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+      status: "refused",
+      reason: "existing-unsafe",
+    });
+    expect(readFileSync(real, "utf8")).toBe(bytes);
+    expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
   });
 
   test("refuses an inaccessible existing file without replacing it", () => {
@@ -212,24 +281,45 @@ describe("create-only config initialization", () => {
     expect(existsSync(getConfigPath())).toBe(false);
   });
 
-  test("adopts a valid file that wins immediately before no-clobber publish", () => {
+  test("adopts a valid file that wins exclusive final creation", () => {
     const winner = { ...getDefaultConfig(), port: 12002 };
-    setConfigInitializationBeforePublishForTests(() => {
-      writeFileSync(getConfigPath(), `${JSON.stringify(winner)}\n`, { mode: 0o600 });
-    });
-    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "existing" });
-    expect(JSON.parse(readFileSync(getConfigPath(), "utf8"))).toEqual(winner);
+    const winnerBytes = `${JSON.stringify(winner)}\n`;
+    const originalOpen = nodeFs.openSync;
+    const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((...args: unknown[]) => {
+      if (args[0] === getConfigPath() && args[1] === "wx") {
+        writeFileSync(getConfigPath(), winnerBytes, { mode: 0o600 });
+        throw Object.assign(new Error("winner created config"), { code: "EEXIST" });
+      }
+      return (originalOpen as (...values: unknown[]) => number)(...args);
+    }) as typeof nodeFs.openSync);
+
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "existing" });
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(winnerBytes);
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 
-  test("refuses an invalid file that wins immediately before publish", () => {
-    setConfigInitializationBeforePublishForTests(() => {
-      writeFileSync(getConfigPath(), "{", { mode: 0o600 });
-    });
-    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
-      status: "refused",
-      reason: "existing-invalid",
-    });
-    expect(readFileSync(getConfigPath(), "utf8")).toBe("{");
+  test("refuses an invalid file that wins exclusive final creation", () => {
+    const originalOpen = nodeFs.openSync;
+    const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((...args: unknown[]) => {
+      if (args[0] === getConfigPath() && args[1] === "wx") {
+        writeFileSync(getConfigPath(), "{", { mode: 0o600 });
+        throw Object.assign(new Error("invalid winner created config"), { code: "EEXIST" });
+      }
+      return (originalOpen as (...values: unknown[]) => number)(...args);
+    }) as typeof nodeFs.openSync);
+
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+        status: "refused",
+        reason: "existing-invalid",
+      });
+      expect(readFileSync(getConfigPath(), "utf8")).toBe("{");
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 
   test("two processes racing initialization publish once and adopt the winner", async () => {
@@ -301,173 +391,6 @@ describe("create-only config initialization", () => {
     }
   }, { timeout: 20_000 });
 
-  test("only adopts the exact two-link publication inode transitioning to one link", () => {
-    const bytes = `${JSON.stringify(getDefaultConfig())}\n`;
-
-    for (const replacement of [false, true]) {
-      const extraLink = join(testDir, `config-publication-${replacement}.tmp`);
-      writeFileSync(getConfigPath(), bytes, { mode: 0o600 });
-      nodeFs.linkSync(getConfigPath(), extraLink);
-      const observedIdentity = lstatSync(getConfigPath(), { bigint: true });
-      let intercepted = false;
-      const originalLstat = nodeFs.lstatSync;
-      const lstatSpy = spyOn(nodeFs, "lstatSync").mockImplementation(((...args: unknown[]) => {
-        const result = (originalLstat as (...values: unknown[]) => unknown)(...args);
-        if (!intercepted && args[0] === "config.json") {
-          intercepted = true;
-          if (replacement) {
-            unlinkSync(getConfigPath());
-            unlinkSync(extraLink);
-            writeFileSync(getConfigPath(), bytes, { mode: 0o600 });
-          } else {
-            unlinkSync(extraLink);
-          }
-        }
-        return result;
-      }) as typeof nodeFs.lstatSync);
-
-      try {
-        const result = initializeConfigIfMissing(getDefaultConfig());
-        const finalIdentity = lstatSync(getConfigPath(), { bigint: true });
-        if (replacement) {
-          expect(result).toEqual({ status: "refused", reason: "existing-unsafe" });
-          expect(sameConfigRootFileIdentity(observedIdentity, finalIdentity)).toBe(false);
-        } else {
-          expect(result).toEqual({ status: "existing" });
-          expect(sameConfigRootFileIdentity(observedIdentity, finalIdentity)).toBe(true);
-        }
-        expect(finalIdentity.nlink).toBe(1n);
-        expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
-      } finally {
-        lstatSpy.mockRestore();
-        rmSync(getConfigPath(), { force: true });
-        rmSync(extraLink, { force: true });
-      }
-    }
-  });
-
-  test("a subprocess paused after the final root check leaves a swapped-in root untouched", async () => {
-    const displacedRoot = `${testDir}.barrier-boundary`;
-    const readyPath = `${testDir}.barrier-ready`;
-    const releasePath = `${testDir}.barrier-release`;
-    const configModuleUrl = pathToFileURL(join(import.meta.dir, "../src/config.ts")).href;
-    const childSource = `
-      import {
-        getDefaultConfig,
-        initializeConfigIfMissingForTests,
-      } from ${JSON.stringify(configModuleUrl)};
-      const cwdBefore = process.cwd();
-      const result = initializeConfigIfMissingForTests(getDefaultConfig(), {
-        kind: "barrier",
-        stage: "after-final-root-check",
-        readyPath: ${JSON.stringify(readyPath)},
-        releasePath: ${JSON.stringify(releasePath)},
-      });
-      console.log(JSON.stringify({ result, cwdBefore, cwdAfter: process.cwd() }));
-    `;
-    const child = Bun.spawn([process.execPath, "-e", childSource], {
-      cwd: join(import.meta.dir, ".."),
-      env: { ...process.env, CODEXCOMMANDER_HOME: testDir },
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-
-    try {
-      for (let attempt = 0; attempt < 1_000; attempt += 1) {
-        if (existsSync(readyPath) || child.exitCode !== null) break;
-        await Bun.sleep(5);
-      }
-      if (!existsSync(readyPath)) {
-        const stderr = await new Response(child.stderr).text();
-        throw new Error(`Initializer exited before the root-swap barrier: ${stderr}`);
-      }
-      const swap = replaceAnchoredRoot(testDir, displacedRoot, 0o700);
-      writeFileSync(releasePath, "release");
-
-      const exitCode = await Promise.race([
-        child.exited,
-        Bun.sleep(10_000).then(() => null),
-      ]);
-      expect(exitCode).toBe(0);
-      const stdout = await new Response(child.stdout).text();
-      const payload = JSON.parse(stdout.trim()) as {
-        result: ReturnType<typeof initializeConfigIfMissing>;
-        cwdBefore: string;
-        cwdAfter: string;
-      };
-      expect(payload.cwdAfter).toBe(payload.cwdBefore);
-      if (swap === "replaced") {
-        expect(payload.result).toEqual({ status: "refused", reason: "existing-unsafe" });
-        expect(readdirSync(testDir)).toEqual([]);
-      } else {
-        expect(payload.result).toEqual({ status: "created" });
-        expect(JSON.parse(readFileSync(getConfigPath(), "utf8"))).toEqual(getDefaultConfig());
-      }
-    } finally {
-      writeFileSync(releasePath, "release");
-      if (child.exitCode === null) child.kill();
-      await child.exited;
-      rmSync(displacedRoot, { recursive: true, force: true });
-      rmSync(readyPath, { force: true });
-      rmSync(releasePath, { force: true });
-    }
-  }, { timeout: 20_000 });
-
-  test("a contender symlink cannot move publication outside the admitted root", () => {
-    const displacedRoot = `${testDir}.contender-root`;
-    const externalDir = `${testDir}.contender-external`;
-    const externalTarget = join(externalDir, "external-config.json");
-    const readyPath = `${testDir}.contender-ready`;
-    const releasePath = `${testDir}.contender-release`;
-    mkdirSync(externalDir, { mode: 0o700 });
-    writeFileSync(externalTarget, "external bytes", { mode: 0o600 });
-    writeFileSync(releasePath, "release", { mode: 0o600 });
-
-    const originalOpen = nodeFs.openSync;
-    const originalWrite = nodeFs.writeFileSync;
-    let swap: "pending" | "replaced" | "blocked" = "pending";
-    const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((...args: unknown[]) => {
-      if (
-        swap === "pending"
-        && typeof args[0] === "string"
-        && args[0].endsWith(".create.tmp")
-      ) {
-        swap = replaceAnchoredRoot(testDir, displacedRoot, 0o700);
-        if (isAbsolute(args[0])) {
-          throw new Error("publication escaped the admitted root");
-        }
-      }
-      return (originalOpen as (...values: unknown[]) => number)(...args);
-    }) as typeof nodeFs.openSync);
-    const writeSpy = spyOn(nodeFs, "writeFileSync").mockImplementation(((...args: unknown[]) => {
-      if (args[0] === readyPath) {
-        symlinkSync(externalTarget, "config.json");
-      }
-      return (originalWrite as (...values: unknown[]) => unknown)(...args);
-    }) as typeof nodeFs.writeFileSync);
-
-    try {
-      expect(initializeConfigIfMissingForTests(getDefaultConfig(), {
-        kind: "barrier",
-        stage: "after-final-root-check",
-        readyPath,
-        releasePath,
-      })).toEqual({ status: "refused", reason: "existing-unsafe" });
-      expect(readFileSync(externalTarget, "utf8")).toBe("external bytes");
-      expect(readdirSync(externalDir)).toEqual(["external-config.json"]);
-      if (swap === "replaced") expect(readdirSync(testDir)).toEqual([]);
-      else expect(swap).toBe("blocked");
-    } finally {
-      openSpy.mockRestore();
-      writeSpy.mockRestore();
-      rmSync(displacedRoot, { recursive: true, force: true });
-      rmSync(externalDir, { recursive: true, force: true });
-      rmSync(readyPath, { force: true });
-      rmSync(releasePath, { force: true });
-    }
-  });
-
   test("refuses a linked configuration root even when its target has valid ownership", () => {
     const realRoot = join(testDir, "owned-real-root");
     const linkedRoot = join(testDir, "linked-root");
@@ -485,26 +408,6 @@ describe("create-only config initialization", () => {
     expect(existsSync(join(realRoot, "config.json"))).toBe(false);
   });
 
-  test("refuses a configuration root replaced after ownership was cached", () => {
-    const displacedRoot = `${testDir}.displaced`;
-    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "created" });
-    unlinkSync(getConfigPath());
-    setConfigInitializationBeforePublishForTests(() => {
-      renameSync(testDir, displacedRoot);
-      mkdirSync(testDir, { mode: 0o700 });
-    });
-    try {
-      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
-        status: "refused",
-        reason: "existing-unsafe",
-      });
-      expect(existsSync(getConfigPath())).toBe(false);
-      expect(existsSync(join(displacedRoot, "config.json"))).toBe(false);
-    } finally {
-      rmSync(displacedRoot, { recursive: true, force: true });
-    }
-  });
-
   test("does not reuse cached ownership after the configuration root was replaced", () => {
     const displacedRoot = `${testDir}.cached-root`;
     expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "created" });
@@ -520,390 +423,6 @@ describe("create-only config initialization", () => {
     } finally {
       rmSync(displacedRoot, { recursive: true, force: true });
     }
-  });
-
-  test("leaves a replacement root untouched when replacement lands at lock acquisition", () => {
-    const previousCwd = process.cwd();
-    const displacedRoot = `${testDir}.lock-boundary`;
-    const originalChmod = nodeFs.chmodSync;
-    let swap: "pending" | "replaced" | "blocked" = "pending";
-    const chmodSpy = spyOn(nodeFs, "chmodSync").mockImplementation(((...args: unknown[]) => {
-      if (swap === "pending" && (args[0] === testDir || args[0] === ".") && args[1] === 0o700) {
-        swap = replaceAnchoredRoot(testDir, displacedRoot, 0o755);
-      }
-      return (originalChmod as (...values: unknown[]) => void)(...args);
-    }) as typeof nodeFs.chmodSync);
-
-    try {
-      const result = initializeConfigIfMissing(getDefaultConfig());
-      if (swap === "replaced") {
-        expect({ result, replacementEntries: readdirSync(testDir) }).toEqual({
-          result: { status: "refused", reason: "existing-unsafe" },
-          replacementEntries: [],
-        });
-        expect(lstatSync(testDir).mode & 0o777).toBe(0o755);
-      } else {
-        expect(swap).toBe("blocked");
-        expect(result).toEqual({ status: "created" });
-      }
-      expect(process.cwd()).toBe(previousCwd);
-    } finally {
-      chmodSpy.mockRestore();
-      rmSync(displacedRoot, { recursive: true, force: true });
-    }
-  });
-
-  test("leaves a replacement root untouched when replacement lands after the final publication check", () => {
-    const previousCwd = process.cwd();
-    const displacedRoot = `${testDir}.publication-boundary`;
-    const originalOpen = nodeFs.openSync;
-    let swap: "pending" | "replaced" | "blocked" = "pending";
-    const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((...args: unknown[]) => {
-      if (
-        swap === "pending"
-        && typeof args[0] === "string"
-        && args[0].endsWith(".create.tmp")
-      ) {
-        swap = replaceAnchoredRoot(testDir, displacedRoot, 0o700);
-      }
-      return (originalOpen as (...values: unknown[]) => number)(...args);
-    }) as typeof nodeFs.openSync);
-
-    try {
-      const result = initializeConfigIfMissing(getDefaultConfig());
-      if (swap === "replaced") {
-        expect({ result, replacementEntries: readdirSync(testDir) }).toEqual({
-          result: { status: "refused", reason: "existing-unsafe" },
-          replacementEntries: [],
-        });
-      } else {
-        expect(swap).toBe("blocked");
-        expect(result).toEqual({ status: "created" });
-      }
-      expect(process.cwd()).toBe(previousCwd);
-    } finally {
-      openSpy.mockRestore();
-      rmSync(displacedRoot, { recursive: true, force: true });
-    }
-  });
-
-  test("restores the previous cwd when bound publication throws", () => {
-    const previousCwd = process.cwd();
-    const expectedBoundCwd = realpathSync.native(testDir);
-    const originalOpen = nodeFs.openSync;
-    let observedWriteCwd: string | null = null;
-    const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((...args: unknown[]) => {
-      if (typeof args[0] === "string" && args[0].endsWith(".create.tmp")) {
-        observedWriteCwd = realpathSync.native(process.cwd());
-        throw new Error("publication fixture failure");
-      }
-      return (originalOpen as (...values: unknown[]) => number)(...args);
-    }) as typeof nodeFs.openSync);
-
-    try {
-      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
-        status: "refused",
-        reason: "coordination-unavailable",
-      });
-      expect(observedWriteCwd).toBe(expectedBoundCwd);
-      expect(process.cwd()).toBe(previousCwd);
-    } finally {
-      openSpy.mockRestore();
-    }
-  });
-
-  test("does not remove a pre-existing publication temp after exclusive create fails", () => {
-    const originalOpen = nodeFs.openSync;
-    const originalWrite = nodeFs.writeFileSync;
-    let tempName: string | null = null;
-    let injected = false;
-    const injectForeignTemp = (path: unknown): void => {
-      if (
-        !injected
-        && typeof path === "string"
-        && path.endsWith(".create.tmp")
-      ) {
-        injected = true;
-        tempName = path;
-        originalWrite(path, "foreign temp", { mode: 0o600 });
-      }
-    };
-    const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((...args: unknown[]) => {
-      injectForeignTemp(args[0]);
-      return (originalOpen as (...values: unknown[]) => number)(...args);
-    }) as typeof nodeFs.openSync);
-    const writeSpy = spyOn(nodeFs, "writeFileSync").mockImplementation(((...args: unknown[]) => {
-      injectForeignTemp(args[0]);
-      return (originalWrite as (...values: unknown[]) => unknown)(...args);
-    }) as typeof nodeFs.writeFileSync);
-
-    try {
-      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
-        status: "refused",
-        reason: "coordination-unavailable",
-      });
-      expect(tempName).not.toBeNull();
-      expect(readFileSync(join(testDir, tempName!), "utf8")).toBe("foreign temp");
-      expect(existsSync(getConfigPath())).toBe(false);
-    } finally {
-      openSpy.mockRestore();
-      writeSpy.mockRestore();
-      if (tempName !== null) rmSync(join(testDir, tempName), { force: true });
-    }
-  });
-
-  test("never unlinks or truncates a substituted publication temp", () => {
-    const originalOpen = nodeFs.openSync;
-    const originalWrite = nodeFs.writeFileSync;
-    let tempName: string | null = null;
-    let displacedTemp: string | null = null;
-    let substituted = false;
-    const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((...args: unknown[]) => {
-      if (typeof args[0] === "string" && args[0].endsWith(".create.tmp")) {
-        tempName = args[0];
-      }
-      return (originalOpen as (...values: unknown[]) => number)(...args);
-    }) as typeof nodeFs.openSync);
-    const writeSpy = spyOn(nodeFs, "writeFileSync").mockImplementation(((...args: unknown[]) => {
-      if (typeof args[0] === "string" && args[0].endsWith(".create.tmp")) {
-        tempName = args[0];
-      }
-      const result = (originalWrite as (...values: unknown[]) => unknown)(...args);
-      if (!substituted && tempName !== null && (
-        args[0] === tempName || typeof args[0] === "number"
-      )) {
-        substituted = true;
-        displacedTemp = `${tempName}.owned-displaced`;
-        renameSync(tempName, displacedTemp);
-        originalWrite(tempName, "replacement temp", { mode: 0o600 });
-      }
-      return result;
-    }) as typeof nodeFs.writeFileSync);
-
-    try {
-      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
-        status: "refused",
-        reason: "coordination-unavailable",
-      });
-      expect(tempName).not.toBeNull();
-      expect(displacedTemp).not.toBeNull();
-      expect(readFileSync(join(testDir, tempName!), "utf8")).toBe("replacement temp");
-      expect(lstatSync(join(testDir, displacedTemp!)).size).toBe(0);
-      expect(existsSync(getConfigPath())).toBe(false);
-    } finally {
-      openSpy.mockRestore();
-      writeSpy.mockRestore();
-      if (tempName !== null) rmSync(join(testDir, tempName), { force: true });
-      if (displacedTemp !== null) rmSync(join(testDir, displacedTemp), { force: true });
-    }
-  });
-
-  test("canonicalizes inherited toJSON before config mutation and blocks reentry", () => {
-    const originalCwd = process.cwd();
-    process.chdir(testDir);
-    const callerCwd = process.cwd();
-    const hostileCwd = `${testDir}.hostile-cwd`;
-    mkdirSync(hostileCwd, { mode: 0o700 });
-    let toJsonCwd: string | null = null;
-    let reentrantResult: ReturnType<typeof initializeConfigIfMissing> | null = null;
-    const profilePrototype = {
-      toJSON(): never {
-        toJsonCwd = process.cwd();
-        reentrantResult = initializeConfigIfMissing(getDefaultConfig());
-        process.chdir(hostileCwd);
-        throw new Error("hostile inherited toJSON");
-      },
-    };
-    const desktopProfile = Object.assign(Object.create(profilePrototype) as object, {
-      version: 1,
-      assignments: {},
-      defaults: { opus: null, fable: null, sonnet: null, haiku: null },
-    });
-    const defaults = getDefaultConfig();
-    const candidate = {
-      ...defaults,
-      claudeCode: { ...defaults.claudeCode, desktopProfile },
-    } as typeof defaults;
-
-    try {
-      expect(initializeConfigIfMissing(candidate)).toEqual({
-        status: "refused",
-        reason: "candidate-invalid",
-      });
-      expect(toJsonCwd).toBe(callerCwd);
-      expect(reentrantResult).toEqual({
-        status: "refused",
-        reason: "coordination-unavailable",
-      });
-      expect(process.cwd()).toBe(callerCwd);
-      expect(readdirSync(testDir)).toEqual([]);
-    } finally {
-      process.chdir(originalCwd);
-      rmSync(hostileCwd, { recursive: true, force: true });
-    }
-  });
-
-  test("final config bytes ignore serialization methods installed during the first pass", () => {
-    const defaults = getDefaultConfig();
-    const desktopProfile = Object.assign(Object.create({
-      toJSON(): unknown {
-        Object.defineProperty(Object.prototype, "toJSON", {
-          configurable: true,
-          value(this: unknown, key: string): unknown {
-            return key === "" ? undefined : this;
-          },
-        });
-        return {
-          version: 1,
-          assignments: {},
-          defaults: { opus: null, fable: null, sonnet: null, haiku: null },
-        };
-      },
-    }) as object, {
-      version: 1,
-      assignments: {},
-      defaults: { opus: null, fable: null, sonnet: null, haiku: null },
-    });
-    const candidate = {
-      ...defaults,
-      claudeCode: { ...defaults.claudeCode, desktopProfile },
-    } as typeof defaults;
-
-    try {
-      expect(initializeConfigIfMissing(candidate)).toEqual({ status: "created" });
-      const bytes = readFileSync(getConfigPath(), "utf8");
-      expect(validateConfigCandidate(JSON.parse(bytes))).toMatchObject({ ok: true });
-      expect(JSON.parse(bytes)).toEqual({
-        ...candidate,
-        claudeCode: {
-          ...candidate.claudeCode,
-          desktopProfile: {
-            version: 1,
-            assignments: {},
-            defaults: { opus: null, fable: null, sonnet: null, haiku: null },
-          },
-        },
-      });
-    } finally {
-      delete (Object.prototype as { toJSON?: unknown }).toJSON;
-    }
-  });
-
-  test("uses one absolute deadline for SQLite acquisition and commit", () => {
-    const originalChmod = nodeFs.chmodSync;
-    const originalLink = nodeFs.linkSync;
-    const originalExec = Database.prototype.exec;
-    let fakeNow = 1_000;
-    let setupAdvanced = false;
-    let publicationAdvanced = false;
-    const busyTimeouts: number[] = [];
-    const nowSpy = spyOn(performance, "now").mockImplementation(() => fakeNow);
-    const chmodSpy = spyOn(nodeFs, "chmodSync").mockImplementation(((...args: unknown[]) => {
-      if (!setupAdvanced && args[0] === "." && args[1] === 0o700) {
-        setupAdvanced = true;
-        fakeNow += 600;
-      }
-      return (originalChmod as (...values: unknown[]) => void)(...args);
-    }) as typeof nodeFs.chmodSync);
-    const linkSpy = spyOn(nodeFs, "linkSync").mockImplementation(((...args: unknown[]) => {
-      if (!publicationAdvanced && args[1] === "config.json") {
-        publicationAdvanced = true;
-        fakeNow += 1_500;
-      }
-      return (originalLink as (...values: unknown[]) => void)(...args);
-    }) as typeof nodeFs.linkSync);
-    const execSpy = spyOn(Database.prototype, "exec").mockImplementation(function(
-      this: Database,
-      sql: string,
-    ): void {
-      for (const match of sql.matchAll(/PRAGMA busy_timeout = (\d+)/g)) {
-        busyTimeouts.push(Number(match[1]));
-      }
-      originalExec.call(this, sql);
-    });
-
-    try {
-      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "created" });
-      expect({ setupAdvanced, publicationAdvanced, busyTimeouts }).toEqual({
-        setupAdvanced: true,
-        publicationAdvanced: true,
-        busyTimeouts: [1_400, 0],
-      });
-    } finally {
-      execSpy.mockRestore();
-      linkSpy.mockRestore();
-      chmodSpy.mockRestore();
-      nowSpy.mockRestore();
-    }
-  });
-
-  test("snapshots mutable test-action getters once before entering the cwd fence", () => {
-    const callerCwd = process.cwd();
-    const readyPath = `${testDir}.mutable-action-ready`;
-    const releasePath = `${testDir}.mutable-action-release`;
-    const hostileCwd = `${testDir}.mutable-action-cwd`;
-    writeFileSync(releasePath, "release", { mode: 0o600 });
-    mkdirSync(hostileCwd, { mode: 0o700 });
-    const reads = { kind: 0, stage: 0, readyPath: 0, releasePath: 0 };
-    const observedCwds: string[] = [];
-    let reentrantResult: ReturnType<typeof initializeConfigIfMissing> | null = null;
-    const action: Parameters<typeof initializeConfigIfMissingForTests>[1] = {
-      get kind(): "barrier" {
-        reads.kind += 1;
-        observedCwds.push(process.cwd());
-        reentrantResult = initializeConfigIfMissing(getDefaultConfig());
-        process.chdir(hostileCwd);
-        return "barrier";
-      },
-      get stage(): "after-final-root-check" {
-        reads.stage += 1;
-        observedCwds.push(process.cwd());
-        return "after-final-root-check";
-      },
-      get readyPath(): string {
-        reads.readyPath += 1;
-        observedCwds.push(process.cwd());
-        return reads.readyPath <= 2 ? readyPath : getConfigPath();
-      },
-      get releasePath(): string {
-        reads.releasePath += 1;
-        observedCwds.push(process.cwd());
-        return releasePath;
-      },
-    };
-
-    try {
-      expect(initializeConfigIfMissingForTests(getDefaultConfig(), action)).toEqual({
-        status: "created",
-      });
-      expect(reads).toEqual({ kind: 1, stage: 1, readyPath: 1, releasePath: 1 });
-      expect(observedCwds).toEqual(Array(4).fill(callerCwd));
-      expect(reentrantResult).toEqual({
-        status: "refused",
-        reason: "coordination-unavailable",
-      });
-      expect(JSON.parse(readFileSync(getConfigPath(), "utf8"))).toEqual(getDefaultConfig());
-      expect(readFileSync(readyPath, "utf8")).toBe("ready");
-      expect(process.cwd()).toBe(callerCwd);
-    } finally {
-      rmSync(readyPath, { force: true });
-      rmSync(releasePath, { force: true });
-      rmSync(hostileCwd, { recursive: true, force: true });
-    }
-  });
-
-  test("refuses reentrant initialization without entering the cwd fence", () => {
-    const previousCwd = process.cwd();
-    let result: ReturnType<typeof initializeConfigIfMissing> | undefined;
-
-    withConfigMutationLockSync(() => {
-      result = initializeConfigIfMissing(getDefaultConfig());
-      expect(process.cwd()).toBe(previousCwd);
-    });
-
-    expect(result).toEqual({ status: "refused", reason: "coordination-unavailable" });
-    expect(existsSync(getConfigPath())).toBe(false);
-    expect(process.cwd()).toBe(previousCwd);
   });
 
   test("distinguishes bigint root identities whose inode numbers collide after numeric conversion", () => {

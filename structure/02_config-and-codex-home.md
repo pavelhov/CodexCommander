@@ -26,9 +26,18 @@ The direct packaged macOS companion **Start** path is the only app-only configur
 uses `getDefaultConfig()`'s canonical secret-free ChatGPT passthrough provider and calls
 `initializeConfigIfMissing` with create-only/no-clobber semantics. The initializer validates the
 candidate before touching disk, refuses existing invalid, unreadable, inaccessible, or unsafe state,
-and never overwrites an existing valid file. A concurrent contender that loses publication adopts the
-winner's valid bytes; it never replaces the winner. Providers, API keys, OAuth accounts, and Codex
-configuration are not copied or created by this bootstrap.
+and never overwrites an existing valid file. At the coordinated missing-entry probe it opens the final
+`config.json` directly with `wx` and mode `0600`, writes and flushes through the owned descriptor, and
+re-probes once after `EEXIST`; only a complete valid ordinary single-link winner is adopted. Providers,
+API keys, OAuth accounts, and Codex configuration are not copied or created by this bootstrap.
+An incomplete first read in an already owned root is rechecked only after acquiring mutation
+coordination, so one CodexCommander process never adopts or rejects another's partial descriptor write.
+
+The bootstrap candidate is trusted in-process policy data and is validated for schema correctness.
+Static unsafe state remains fail-closed: linked roots, symlinked/nonregular/hard-linked entries,
+inaccessible state, and unowned roots are refused. Active same-user filesystem mutation after the
+coordinated probe is outside this narrow bootstrap boundary; the initializer does not anchor process
+CWD or promise descriptor-relative defense against a same-user pathname swap.
 
 Lifecycle authority acquires the Ensure lock (`E`) before the app preparation hook; the hook acquires
 the shared `config-mutation.sqlite` lock only after E is held. This E → config-mutation-lock ordering

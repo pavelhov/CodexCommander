@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, closeSync, copyFileSync, existsSync, fchmodSync, fstatSync, ftruncateSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, copyFileSync, existsSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import * as z from "zod/v4";
 import {
@@ -43,10 +43,8 @@ import {
 import {
   inspectPhysicalConfigRoot,
   recordOwnedConfigPath,
-  sameConfigRootFileIdentity,
-  type ConfigRootFileIdentity,
 } from "./lib/config-ownership";
-import { assertNotRealHomeUnderTest, isTestHomeGuardArmed } from "./lib/test-home-guard";
+import { assertNotRealHomeUnderTest } from "./lib/test-home-guard";
 import { isLocalAttestationSecret } from "./lib/local-management-attestation";
 import { providerDestinationConfigError } from "./lib/destination-policy";
 import { redactSecretString } from "./lib/redact";
@@ -1656,8 +1654,7 @@ export type ConfigInitializationResult =
 
 type ConfigEntryProbe =
   | { kind: "missing" }
-  | { kind: "valid"; identity: ConfigRootFileIdentity }
-  | { kind: "publishing"; identity: ConfigRootFileIdentity }
+  | { kind: "valid" }
   | {
     kind: "refused";
     reason: Exclude<
@@ -1666,37 +1663,13 @@ type ConfigEntryProbe =
     >;
   };
 
-type ConfigRootIdentity = {
-  path: string;
-  canonicalPath: string;
-  dev: bigint;
-  ino: bigint;
-};
-
 type ConfigRootProbe =
   | { kind: "missing" }
-  | { kind: "valid"; identity: ConfigRootIdentity }
+  | { kind: "valid" }
   | { kind: "refused"; reason: "existing-inaccessible" | "existing-unsafe" };
-
-class ConfigRootChangedDuringInitializationError extends Error {
-  constructor() {
-    super("Configuration root changed during initialization");
-    this.name = "ConfigRootChangedDuringInitializationError";
-  }
-}
 
 const CONFIG_INITIALIZATION_WAIT_MS = 2_000;
 const CONFIG_INITIALIZATION_POLL_MS = 10;
-const CONFIG_INITIALIZATION_CONFIG_PATH = "config.json";
-
-function samePhysicalConfigRoot(left: ConfigRootIdentity, right: ConfigRootIdentity): boolean {
-  const sameCanonicalPath = process.platform === "win32"
-    ? left.canonicalPath.toLowerCase() === right.canonicalPath.toLowerCase()
-    : left.canonicalPath === right.canonicalPath;
-  return left.path === right.path
-    && sameCanonicalPath
-    && sameConfigRootFileIdentity(left, right);
-}
 
 function probeConfigRoot(): ConfigRootProbe {
   const path = getConfigDir();
@@ -1711,320 +1684,77 @@ function probeConfigRoot(): ConfigRootProbe {
   if (entry.kind !== "valid") {
     return { kind: "refused", reason: "existing-unsafe" };
   }
-  try {
-    return {
-      kind: "valid",
-      identity: {
-        path,
-        canonicalPath: realpathSync.native(path),
-        ...entry.identity,
-      },
-    };
-  } catch {
-    return { kind: "refused", reason: "existing-inaccessible" };
-  }
+  return { kind: "valid" };
 }
 
-function configRootStillMatches(expected: ConfigRootIdentity): boolean {
-  const current = probeConfigRoot();
-  return current.kind === "valid" && samePhysicalConfigRoot(expected, current.identity);
-}
-
-function boundConfigRootStillMatches(expected: ConfigRootIdentity): boolean {
-  try {
-    const current = inspectPhysicalConfigRoot(".");
-    return current.kind === "valid"
-      && sameConfigRootFileIdentity(expected, current.identity);
-  } catch {
-    return false;
-  }
-}
-
-function relativePathWithin(root: string, candidate: string): string | null {
-  const rel = relative(root, candidate);
-  if (
-    rel === ""
-    || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
-  ) return rel;
-  return null;
-}
-
-/**
- * Run one strictly synchronous initializer section with `.` anchored to the admitted
- * physical root. Relative filesystem operations keep resolving through that directory
- * object if its absolute name is renamed and replaced. No user callback or await may
- * enter this section.
- */
-function withBoundConfigRootSync<T>(
-  expected: ConfigRootIdentity,
-  operation: () => T,
-): T {
-  const previousCwd = process.cwd();
-  const canonicalPreviousCwd = realpathSync.native(previousCwd);
-  const previousRelativeToRoot = relativePathWithin(
-    expected.canonicalPath,
-    canonicalPreviousCwd,
-  );
-  let entered = false;
-  try {
-    if (previousRelativeToRoot === null) {
-      process.chdir(expected.path);
-    } else if (previousRelativeToRoot !== "") {
-      const depth = previousRelativeToRoot.split(sep).filter(Boolean).length;
-      process.chdir(Array.from({ length: depth }, () => "..").join(sep));
-    }
-    entered = true;
-    if (!boundConfigRootStillMatches(expected) || !configRootStillMatches(expected)) {
-      throw new ConfigRootChangedDuringInitializationError();
-    }
-    return operation();
-  } catch (error) {
-    if (
-      !entered
-      && !(error instanceof ConfigRootChangedDuringInitializationError)
-    ) {
-      throw new ConfigRootChangedDuringInitializationError();
-    }
-    throw error;
-  } finally {
-    if (entered) {
-      if (previousRelativeToRoot === null) {
-        process.chdir(previousCwd);
-      } else if (previousRelativeToRoot !== "") {
-        process.chdir(previousRelativeToRoot);
-      }
-    }
-  }
-}
-
-function probeConfigEntry(path = getConfigPath()): ConfigEntryProbe {
+function probeConfigEntry(): ConfigEntryProbe {
   let entry;
   try {
-    entry = lstatSync(path, { bigint: true });
+    entry = lstatSync(getConfigPath());
   } catch (error) {
     return isMissingPathError(error)
       ? { kind: "missing" }
       : { kind: "refused", reason: "existing-inaccessible" };
   }
-  if (!entry.isFile() || entry.isSymbolicLink() || entry.ino === 0n) {
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
     return { kind: "refused", reason: "existing-unsafe" };
   }
-  const identity = { dev: entry.dev, ino: entry.ino };
-  if (entry.nlink === 2n) return { kind: "publishing", identity };
-  if (entry.nlink !== 1n) return { kind: "refused", reason: "existing-unsafe" };
   try {
-    const raw = readFileSync(path, "utf8");
-    const afterRead = lstatSync(path, { bigint: true });
-    if (
-      !afterRead.isFile()
-      || afterRead.isSymbolicLink()
-      || afterRead.nlink !== 1n
-      || !sameConfigRootFileIdentity(identity, afterRead)
-    ) {
-      return { kind: "refused", reason: "existing-unsafe" };
-    }
-    return configDiagnosticsFromRaw(raw).source === "file"
-      ? { kind: "valid", identity }
+    return configDiagnosticsFromRaw(readFileSync(getConfigPath(), "utf8")).source === "file"
+      ? { kind: "valid" }
       : { kind: "refused", reason: "existing-invalid" };
   } catch {
     return { kind: "refused", reason: "existing-inaccessible" };
   }
 }
 
-let configInitializationBeforePublishForTests: (() => void) | null = null;
-
-/** Test-only one-shot seam: inject a competing writer between preflight and bound mutation. */
-export function setConfigInitializationBeforePublishForTests(hook: (() => void) | null): void {
-  configInitializationBeforePublishForTests = hook;
-}
-
-function unlinkPublishedConfigIfUnchanged(
-  path: string,
-  expected: ConfigRootFileIdentity,
-): void {
-  const current = lstatSync(path, { bigint: true });
-  if (
-    !current.isFile()
-    || current.isSymbolicLink()
-    || current.nlink !== 1n
-    || !sameConfigRootFileIdentity(expected, current)
-  ) {
-    throw new Error("Published configuration identity changed before cleanup");
-  }
-  unlinkSync(path);
-}
-
-function publicationPathMatchesOwnedFile(
-  path: string,
-  expected: ConfigRootFileIdentity,
-  expectedLinks: bigint,
-): boolean {
+function createConfigExclusive(path: string, bytes: string): boolean {
+  let descriptor: number;
   try {
-    const current = lstatSync(path, { bigint: true });
-    return current.isFile()
-      && !current.isSymbolicLink()
-      && current.nlink === expectedLinks
-      && sameConfigRootFileIdentity(expected, current);
-  } catch {
-    return false;
+    descriptor = openSync(path, "wx", 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw error;
   }
-}
 
-function publishConfigNoReplace(
-  bytes: string,
-  expectedRoot: ConfigRootIdentity,
-): boolean {
-  // This literal directory entry is already validated by the initializer. Resolving it
-  // would follow a contender symlink or turn it into an absolute pathname that can escape
-  // the admitted physical root after that root is renamed.
-  const target = CONFIG_INITIALIZATION_CONFIG_PATH;
-  const temp = `${target}.ccx.${process.pid}.${++_atomicSeq}.create.tmp`;
-  let published = false;
-  let collision = false;
-  let created = false;
-  let descriptor: number | undefined;
-  let publishedIdentity: ConfigRootFileIdentity | null = null;
-  let cleanupFailure: unknown = null;
+  let complete = false;
+  let descriptorOpen = true;
   try {
-    descriptor = openSync(temp, "wx", 0o600);
-    created = true;
-    const source = fstatSync(descriptor, { bigint: true });
-    if (!source.isFile() || source.ino === 0n || source.nlink !== 1n) {
-      throw new Error("Configuration publication source is not a private regular file");
-    }
-    publishedIdentity = { dev: source.dev, ino: source.ino };
     writeFileSync(descriptor, bytes, { encoding: "utf8" });
     try { fchmodSync(descriptor, 0o600); } catch { /* filesystem may ignore chmod */ }
+    fsyncSync(descriptor);
+    closeSync(descriptor);
+    descriptorOpen = false;
     if (process.platform === "win32") {
-      if (!publicationPathMatchesOwnedFile(temp, publishedIdentity, 1n)) {
-        throw new Error("Configuration publication source identity changed before hardening");
-      }
-      hardenSecretPath(temp, { required: true, timeoutMemoKey: target });
+      hardenSecretPath(path, { required: true, timeoutMemoKey: path });
     }
-    if (!publicationPathMatchesOwnedFile(temp, publishedIdentity, 1n)) {
-      throw new Error("Configuration publication source identity changed before linking");
-    }
-    try {
-      linkSync(temp, target);
-      published = true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") collision = true;
-      else throw error;
-    }
+    complete = true;
+    return true;
   } finally {
-    try {
-      if (created) {
-        if (
-          !publishedIdentity
-          || !publicationPathMatchesOwnedFile(temp, publishedIdentity, published ? 2n : 1n)
-        ) {
-          throw new Error("Configuration publication temp identity changed before cleanup");
-        }
-        unlinkSync(temp);
-        forgetEphemeralSecretPath(temp);
-      }
-    } catch (error) {
-      cleanupFailure = error;
-      // After link succeeds, descriptor and destination are the same inode. Never
-      // truncate the descriptor in that state because it would erase config.json too.
-      if (!published && descriptor !== undefined) {
-        try { ftruncateSync(descriptor, 0); } catch { /* residual error below is authoritative */ }
-      }
-    } finally {
-      if (descriptor !== undefined) {
-        try { closeSync(descriptor); } catch (error) { cleanupFailure ??= error; }
-      }
+    if (descriptorOpen) {
+      try { closeSync(descriptor); } catch { /* the create/write error remains authoritative */ }
     }
-    if (cleanupFailure !== null) {
-      throw new AtomicWriteSecretResidualError(temp, { cause: cleanupFailure });
+    if (!complete) {
+      try { unlinkSync(path); } catch { /* a later static probe will refuse any residue */ }
     }
   }
-  if (collision) return false;
-  if (!published || !publishedIdentity) {
-    throw new Error("Configuration publication did not establish a destination");
-  }
-  let destinationValid = false;
-  try {
-    const destination = lstatSync(target, { bigint: true });
-    destinationValid = destination.isFile()
-      && !destination.isSymbolicLink()
-      && destination.nlink === 1n
-      && sameConfigRootFileIdentity(publishedIdentity, destination)
-      && readFileSync(target, "utf8") === bytes;
-  } catch {
-    destinationValid = false;
-  }
-  const rootValid = boundConfigRootStillMatches(expectedRoot)
-    && configRootStillMatches(expectedRoot);
-  if (!destinationValid || !rootValid) {
-    unlinkPublishedConfigIfUnchanged(target, publishedIdentity);
-    if (!rootValid) throw new ConfigRootChangedDuringInitializationError();
-    throw new Error("Published configuration could not be verified");
-  }
-  return true;
 }
 
-function configInitializationContenderObservation(
-  expectedRoot: ConfigRootIdentity,
-): ConfigInitializationResult | ConfigEntryProbe {
-  if (!configRootStillMatches(expectedRoot)) {
-    return { status: "refused", reason: "existing-unsafe" };
-  }
+function configInitializationContenderObservation(): ConfigInitializationResult | ConfigEntryProbe {
   const current = probeConfigEntry();
-  if (!configRootStillMatches(expectedRoot)) {
-    return { status: "refused", reason: "existing-unsafe" };
-  }
   if (current.kind === "valid") return { status: "existing" };
-  if (current.kind === "refused" && current.reason === "existing-invalid") {
-    return { status: "refused", reason: current.reason };
-  }
   return current;
 }
 
 function waitForConfigInitializationWinner(
-  expectedRoot: ConfigRootIdentity,
   deadline: number,
   fallback: ConfigInitializationRefusal,
-  initialPublicationIdentity?: ConfigRootFileIdentity,
 ): ConfigInitializationResult {
   let lastRefusal: ConfigInitializationRefusal | null = null;
-  let publicationIdentity = initialPublicationIdentity;
   for (;;) {
-    if (!configRootStillMatches(expectedRoot)) {
-      return { status: "refused", reason: "existing-unsafe" };
-    }
-    const observed = probeConfigEntry();
-    if (!configRootStillMatches(expectedRoot)) {
-      return { status: "refused", reason: "existing-unsafe" };
-    }
-    if (publicationIdentity) {
-      if (
-        observed.kind === "valid"
-        && sameConfigRootFileIdentity(publicationIdentity, observed.identity)
-      ) return { status: "existing" };
-      if (
-        observed.kind === "publishing"
-        && sameConfigRootFileIdentity(publicationIdentity, observed.identity)
-      ) {
-        // The exact inode is still in the publisher's two-link cleanup window.
-      } else {
-        return {
-          status: "refused",
-          reason: observed.kind === "refused"
-            ? observed.reason
-            : "existing-unsafe",
-        };
-      }
-    } else if (observed.kind === "valid") {
-      return { status: "existing" };
-    } else if (observed.kind === "publishing") {
-      publicationIdentity = observed.identity;
-    } else if (observed.kind === "refused") {
-      if (observed.reason === "existing-invalid") {
-        return { status: "refused", reason: observed.reason };
-      }
-      lastRefusal = observed.reason;
-    }
+    const observed = configInitializationContenderObservation();
+    if ("status" in observed) return observed;
+    if (observed.kind === "refused") lastRefusal = observed.reason;
     if (performance.now() >= deadline) {
       return { status: "refused", reason: lastRefusal ?? fallback };
     }
@@ -2032,301 +1762,68 @@ function waitForConfigInitializationWinner(
   }
 }
 
-export type ConfigInitializationTestAction = {
-  kind: "barrier";
-  stage: "after-final-root-check";
-  readyPath: string;
-  releasePath: string;
-};
-
-type PreparedConfigInitializationTestAction = Readonly<{
-  readyPath: string;
-  releasePath: string;
-}>;
-
-type PreparedConfigInitialization =
-  | Readonly<{
-    kind: "ready";
-    bytes: string;
-    testAction?: PreparedConfigInitializationTestAction;
-  }>
-  | Readonly<{
-    kind: "refused";
-    reason: "candidate-invalid" | "coordination-unavailable";
-  }>;
-
-type ConfigInitializationMutationResult =
-  | ConfigInitializationResult
-  | Readonly<{
-    status: "awaiting-publication";
-    identity: ConfigRootFileIdentity;
-  }>;
-
-let configInitializationPreparationDepth = 0;
-
-type ConfigInitializationJsonData =
-  | null
-  | boolean
-  | number
-  | string
-  | ConfigInitializationJsonData[]
-  | { [key: string]: ConfigInitializationJsonData };
-
-function copyConfigInitializationJsonData(
-  value: unknown,
-): ConfigInitializationJsonData | undefined {
-  if (
-    value === null
-    || typeof value === "string"
-    || typeof value === "boolean"
-  ) return value;
-  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
-  if (Array.isArray(value)) {
-    const copy = new Array<ConfigInitializationJsonData>(value.length);
-    for (let index = 0; index < value.length; index += 1) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-      if (!descriptor || !("value" in descriptor)) return undefined;
-      const item = copyConfigInitializationJsonData(descriptor.value);
-      if (item === undefined) return undefined;
-      copy[index] = item;
-    }
-    Object.setPrototypeOf(copy, null);
-    return copy;
-  }
-  if (typeof value !== "object") return undefined;
-
-  const copy = Object.create(null) as { [key: string]: ConfigInitializationJsonData };
-  for (const key of Object.keys(value)) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (!descriptor || !("value" in descriptor)) return undefined;
-    const item = copyConfigInitializationJsonData(descriptor.value);
-    if (item === undefined) return undefined;
-    Object.defineProperty(copy, key, {
-      configurable: true,
-      enumerable: true,
-      value: item,
-      writable: true,
-    });
-  }
-  return copy;
-}
-
-function canonicalConfigInitializationBytes(
+export function initializeConfigIfMissing(
   candidate: CodexCommanderConfig,
-  callerCwd: string,
-): string | null {
-  process.chdir(callerCwd);
-  const validated = validateConfigCandidate(candidate);
-  process.chdir(callerCwd);
-  if (!validated.ok) return null;
-
-  // `desktopProfile` is deliberately `unknown` at the Zod boundary. Serialize it while
-  // still outside both CWD fences, then parse and validate that private data-only copy.
-  // The second stringify cannot reach caller getters or inherited `toJSON` methods.
-  const serialized = JSON.stringify(validated.config);
-  process.chdir(callerCwd);
-  if (serialized === undefined) return null;
-  const privateCandidate = JSON.parse(serialized) as unknown;
-  const canonical = validateConfigCandidate(privateCandidate);
-  if (!canonical.ok) return null;
-  const dataOnlyCandidate = copyConfigInitializationJsonData(canonical.config);
-  if (dataOnlyCandidate === undefined) return null;
-  const exactCandidate = validateConfigCandidate(dataOnlyCandidate);
-  if (!exactCandidate.ok) return null;
-  const finalJson = JSON.stringify(dataOnlyCandidate, null, 2);
-  if (finalJson === undefined) return null;
-  const finalBytes = `${finalJson}\n`;
-  const finalCandidate = validateConfigCandidate(JSON.parse(finalBytes) as unknown);
-  return finalCandidate.ok ? finalBytes : null;
-}
-
-function snapshotConfigInitializationTestAction(
-  action: ConfigInitializationTestAction,
-  configRootPath: string,
-  callerCwd: string,
-): PreparedConfigInitializationTestAction | null {
-  if (!isTestHomeGuardArmed()) return null;
-
-  process.chdir(callerCwd);
-  const keys = Reflect.ownKeys(action as object);
-  process.chdir(callerCwd);
-  const kind = action.kind;
-  process.chdir(callerCwd);
-  const stage = action.stage;
-  process.chdir(callerCwd);
-  const readyPath = action.readyPath;
-  process.chdir(callerCwd);
-  const releasePath = action.releasePath;
-  process.chdir(callerCwd);
-
-  const expectedKeys = new Set(["kind", "stage", "readyPath", "releasePath"]);
-  if (
-    keys.length !== expectedKeys.size
-    || keys.some(key => typeof key !== "string" || !expectedKeys.has(key))
-    || kind !== "barrier"
-    || stage !== "after-final-root-check"
-    || typeof readyPath !== "string"
-    || typeof releasePath !== "string"
-    || !isAbsolute(readyPath)
-    || !isAbsolute(releasePath)
-    || readyPath === releasePath
-    || relativePathWithin(configRootPath, readyPath) !== null
-    || relativePathWithin(configRootPath, releasePath) !== null
-  ) return null;
-
-  return Object.freeze({ readyPath, releasePath });
-}
-
-function prepareConfigInitialization(
-  candidate: CodexCommanderConfig,
-  action: ConfigInitializationTestAction | undefined,
-  configRootPath: string,
-): PreparedConfigInitialization {
-  const callerCwd = process.cwd();
-  let prepared: PreparedConfigInitialization = {
-    kind: "refused",
-    reason: "candidate-invalid",
-  };
-  let restoreFailed = false;
-  configInitializationPreparationDepth = 1;
-  try {
-    let bytes: string | null = null;
-    try {
-      bytes = canonicalConfigInitializationBytes(candidate, callerCwd);
-    } catch {
-      bytes = null;
-    }
-    if (bytes !== null) {
-      let testAction: PreparedConfigInitializationTestAction | undefined;
-      let actionValid = true;
-      if (action !== undefined) {
-        try {
-          testAction = snapshotConfigInitializationTestAction(
-            action,
-            configRootPath,
-            callerCwd,
-          ) ?? undefined;
-          actionValid = testAction !== undefined;
-        } catch {
-          actionValid = false;
-        }
-      }
-      prepared = actionValid
-        ? Object.freeze({ kind: "ready", bytes, ...(testAction ? { testAction } : {}) })
-        : { kind: "refused", reason: "coordination-unavailable" };
-    }
-  } finally {
-    try {
-      process.chdir(callerCwd);
-    } catch {
-      restoreFailed = true;
-    }
-    configInitializationPreparationDepth = 0;
-  }
-  return restoreFailed
-    ? { kind: "refused", reason: "coordination-unavailable" }
-    : prepared;
-}
-
-function runConfigInitializationTestAction(
-  action: PreparedConfigInitializationTestAction,
-): void {
-  writeFileSync(action.readyPath, "ready", { encoding: "utf8", flag: "wx", mode: 0o600 });
-  const deadline = performance.now() + 10_000;
-  while (!existsSync(action.releasePath)) {
-    if (performance.now() >= deadline) {
-      throw new Error("Config initialization test barrier timed out");
-    }
-    Bun.sleepSync(5);
-  }
-}
-
-function initializeConfigInBoundRoot(
-  bytes: string,
-  expectedRoot: ConfigRootIdentity,
-  deadline: number,
-  testAction?: PreparedConfigInitializationTestAction,
 ): ConfigInitializationResult {
-  const configPath = CONFIG_INITIALIZATION_CONFIG_PATH;
-  const observed = probeConfigEntry(configPath);
-  if (!boundConfigRootStillMatches(expectedRoot) || !configRootStillMatches(expectedRoot)) {
-    throw new ConfigRootChangedDuringInitializationError();
+  const validated = validateConfigCandidate(candidate);
+  if (!validated.ok) return { status: "refused", reason: "candidate-invalid" };
+  const deadline = performance.now() + CONFIG_INITIALIZATION_WAIT_MS;
+  const initialRoot = probeConfigRoot();
+  if (initialRoot.kind === "refused") {
+    return { status: "refused", reason: initialRoot.reason };
   }
+  const observed = probeConfigEntry();
   if (observed.kind === "valid") return { status: "existing" };
-  if (observed.kind === "publishing") {
-    return waitForConfigInitializationWinner(
-      expectedRoot,
-      deadline,
-      "existing-unsafe",
-      observed.identity,
-    );
+  if (observed.kind === "refused" && observed.reason !== "existing-invalid") {
+    return { status: "refused", reason: observed.reason };
   }
-  if (observed.kind === "refused") return { status: "refused", reason: observed.reason };
-
   let ownershipFailure: ConfigInitializationRefusal | null = null;
   try {
-    if (!recordOwnedConfigPath(".", configPath)) ownershipFailure = "existing-unsafe";
+    if (!recordOwnedConfigPath(getConfigDir(), getConfigPath())) {
+      ownershipFailure = "existing-unsafe";
+    }
   } catch {
     ownershipFailure = "existing-inaccessible";
   }
-  if (!boundConfigRootStillMatches(expectedRoot) || !configRootStillMatches(expectedRoot)) {
-    throw new ConfigRootChangedDuringInitializationError();
+
+  const ownedRoot = probeConfigRoot();
+  if (ownedRoot.kind !== "valid") {
+    return {
+      status: "refused",
+      reason: ownedRoot.kind === "refused" ? ownedRoot.reason : "existing-unsafe",
+    };
   }
   if (!ownershipFailure) {
     try {
-      if (!recordOwnedConfigPath(".", configPath)) ownershipFailure = "existing-unsafe";
+      if (!recordOwnedConfigPath(getConfigDir(), getConfigPath())) {
+        ownershipFailure = "existing-unsafe";
+      }
     } catch {
       ownershipFailure = "existing-inaccessible";
     }
-    if (!boundConfigRootStillMatches(expectedRoot) || !configRootStillMatches(expectedRoot)) {
-      throw new ConfigRootChangedDuringInitializationError();
-    }
   }
   if (ownershipFailure) {
-    return waitForConfigInitializationWinner(expectedRoot, deadline, ownershipFailure);
+    if (observed.kind === "refused" && observed.reason === "existing-invalid") {
+      return { status: "refused", reason: observed.reason };
+    }
+    return waitForConfigInitializationWinner(deadline, ownershipFailure);
   }
 
   let lastContentionRefusal: ConfigInitializationRefusal | null = null;
-  let pendingTestAction = testAction;
   for (;;) {
-    if (!boundConfigRootStillMatches(expectedRoot) || !configRootStillMatches(expectedRoot)) {
-      throw new ConfigRootChangedDuringInitializationError();
-    }
     try {
-      const mutationResult: ConfigInitializationMutationResult = withConfigMutationLockAtDirSync(".", () => {
-        if (!boundConfigRootStillMatches(expectedRoot) || !configRootStillMatches(expectedRoot)) {
-          throw new ConfigRootChangedDuringInitializationError();
-        }
-        const current = probeConfigEntry(configPath);
+      return withConfigMutationLockTimeoutSync(() => {
+        const current = probeConfigEntry();
         if (current.kind === "valid") return { status: "existing" } as const;
-        if (current.kind === "publishing") {
-          return { status: "awaiting-publication", identity: current.identity } as const;
-        }
         if (current.kind === "refused") {
           return { status: "refused", reason: current.reason } as const;
         }
 
-        if (!boundConfigRootStillMatches(expectedRoot) || !configRootStillMatches(expectedRoot)) {
-          throw new ConfigRootChangedDuringInitializationError();
-        }
-        const action = pendingTestAction;
-        pendingTestAction = undefined;
-        if (action) {
-          runConfigInitializationTestAction(action);
-          if (!boundConfigRootStillMatches(expectedRoot) || !configRootStillMatches(expectedRoot)) {
-            throw new ConfigRootChangedDuringInitializationError();
-          }
-        }
-        const published = publishConfigNoReplace(bytes, expectedRoot);
+        const bytes = `${JSON.stringify(validated.config, null, 2)}\n`;
+        const published = createConfigExclusive(getConfigPath(), bytes);
         if (!published) {
-          if (!boundConfigRootStillMatches(expectedRoot) || !configRootStillMatches(expectedRoot)) {
-            throw new ConfigRootChangedDuringInitializationError();
-          }
-          const winner = probeConfigEntry(configPath);
+          const winner = probeConfigEntry();
           if (winner.kind === "valid") return { status: "existing" } as const;
-          if (winner.kind === "publishing") {
-            return { status: "awaiting-publication", identity: winner.identity } as const;
-          }
           return {
             status: "refused",
             reason: winner.kind === "refused" ? winner.reason : "coordination-unavailable",
@@ -2334,31 +1831,13 @@ function initializeConfigInBoundRoot(
         }
         bumpGenerationForCooperatingConfigWrite();
         return { status: "created" } as const;
-      }, deadline);
-      if (mutationResult.status === "awaiting-publication") {
-        return waitForConfigInitializationWinner(
-          expectedRoot,
-          deadline,
-          "existing-unsafe",
-          mutationResult.identity,
-        );
-      }
-      return mutationResult;
+      }, CONFIG_INITIALIZATION_WAIT_MS);
     } catch (error) {
-      if (error instanceof ConfigRootChangedDuringInitializationError) throw error;
       if (!(error instanceof ConfigMutationLockError)) {
         return { status: "refused", reason: "coordination-unavailable" };
       }
-      const contender = configInitializationContenderObservation(expectedRoot);
+      const contender = configInitializationContenderObservation();
       if ("status" in contender) return contender;
-      if (contender.kind === "publishing") {
-        return waitForConfigInitializationWinner(
-          expectedRoot,
-          deadline,
-          "existing-unsafe",
-          contender.identity,
-        );
-      }
       if (contender.kind === "refused") lastContentionRefusal = contender.reason;
       if (performance.now() >= deadline) {
         return {
@@ -2369,105 +1848,6 @@ function initializeConfigInBoundRoot(
       Bun.sleepSync(CONFIG_INITIALIZATION_POLL_MS);
     }
   }
-}
-
-function initializeConfigIfMissingInternal(
-  candidate: CodexCommanderConfig,
-  testAction?: ConfigInitializationTestAction,
-): ConfigInitializationResult {
-  // Reject reentry before inspecting caller-owned candidate/action values. Preparation
-  // itself may run hostile getters or `toJSON`, but only at the restored caller CWD and
-  // before any configuration-root mutation.
-  if (configInitializationPreparationDepth > 0 || configMutationLockDepth > 0) {
-    return { status: "refused", reason: "coordination-unavailable" };
-  }
-  const configRootPath = getConfigDir();
-  const prepared = prepareConfigInitialization(candidate, testAction, configRootPath);
-  if (prepared.kind === "refused") {
-    return { status: "refused", reason: prepared.reason };
-  }
-  const deadline = performance.now() + CONFIG_INITIALIZATION_WAIT_MS;
-  const initialRoot = probeConfigRoot();
-  if (initialRoot.kind === "refused") {
-    return { status: "refused", reason: initialRoot.reason };
-  }
-  if (initialRoot.kind === "missing") {
-    try {
-      assertNotRealHomeUnderTest(getConfigDir());
-      mkdirSync(getConfigDir(), { recursive: true, mode: 0o700 });
-    } catch {
-      return { status: "refused", reason: "existing-inaccessible" };
-    }
-  }
-  const admittedRoot = probeConfigRoot();
-  if (admittedRoot.kind !== "valid") {
-    return {
-      status: "refused",
-      reason: admittedRoot.kind === "refused" ? admittedRoot.reason : "existing-unsafe",
-    };
-  }
-  if (
-    initialRoot.kind === "valid"
-    && !samePhysicalConfigRoot(initialRoot.identity, admittedRoot.identity)
-  ) {
-    return { status: "refused", reason: "existing-unsafe" };
-  }
-
-  try {
-    const preflight = withBoundConfigRootSync(admittedRoot.identity, () => {
-      const observed = probeConfigEntry(CONFIG_INITIALIZATION_CONFIG_PATH);
-      if (!boundConfigRootStillMatches(admittedRoot.identity)
-        || !configRootStillMatches(admittedRoot.identity)) {
-        throw new ConfigRootChangedDuringInitializationError();
-      }
-      return observed;
-    });
-    if (preflight.kind === "valid") return { status: "existing" };
-    if (preflight.kind === "publishing") {
-      return waitForConfigInitializationWinner(
-        admittedRoot.identity,
-        deadline,
-        "existing-unsafe",
-        preflight.identity,
-      );
-    }
-    if (preflight.kind === "refused") {
-      return { status: "refused", reason: preflight.reason };
-    }
-
-    const hook = configInitializationBeforePublishForTests;
-    configInitializationBeforePublishForTests = null;
-    hook?.();
-
-    return withBoundConfigRootSync(admittedRoot.identity, () =>
-      initializeConfigInBoundRoot(
-        prepared.bytes,
-        admittedRoot.identity,
-        deadline,
-        prepared.testAction,
-      ));
-  } catch (error) {
-    return {
-      status: "refused",
-      reason: error instanceof ConfigRootChangedDuringInitializationError
-        ? "existing-unsafe"
-        : "coordination-unavailable",
-    };
-  }
-}
-
-export function initializeConfigIfMissing(
-  candidate: CodexCommanderConfig,
-): ConfigInitializationResult {
-  return initializeConfigIfMissingInternal(candidate);
-}
-
-/** Explicit, immutable test action; production initialization has no mutable root seam. */
-export function initializeConfigIfMissingForTests(
-  candidate: CodexCommanderConfig,
-  action: ConfigInitializationTestAction,
-): ConfigInitializationResult {
-  return initializeConfigIfMissingInternal(candidate, action);
 }
 
 /**
@@ -2531,7 +1911,8 @@ export class ConfigMutationLockError extends Error {
   }
 }
 
-function configMutationDatabasePath(dir = getConfigDir()): string {
+function configMutationDatabasePath(): string {
+  const dir = getConfigDir();
   // First statement on purpose: a rejected mutation must leave nothing behind, not a
   // freshly created/chmod'd directory or database. See src/lib/test-home-guard.ts.
   assertNotRealHomeUnderTest(dir);
@@ -2576,13 +1957,12 @@ let configMutationDatabase: Database | null = null;
  * Reentrancy is limited to the current synchronous call stack; never return a Promise from `fn`.
  */
 export function withConfigMutationLockSync<T>(fn: () => T): T {
-  return withConfigMutationLockAtDirSync(getConfigDir(), fn);
+  return withConfigMutationLockTimeoutSync(fn, 0);
 }
 
-function withConfigMutationLockAtDirSync<T>(
-  dir: string,
+function withConfigMutationLockTimeoutSync<T>(
   fn: () => T,
-  deadline?: number,
+  busyTimeoutMs: number,
 ): T {
   if (configMutationLockDepth > 0) {
     configMutationLockDepth += 1;
@@ -2592,16 +1972,13 @@ function withConfigMutationLockAtDirSync<T>(
       configMutationLockDepth -= 1;
     }
   }
-  const path = configMutationDatabasePath(dir);
-  const remainingBusyTimeoutMs = (): number => deadline === undefined
-    ? 0
-    : Math.max(0, Math.ceil(deadline - performance.now()));
+  const path = configMutationDatabasePath();
   let database: Database | undefined;
   let transactionOpen = false;
   try {
     database = new Database(path, { create: true });
     try { chmodSync(path, 0o600); } catch { /* platform may ignore chmod */ }
-    database.exec(`PRAGMA busy_timeout = ${remainingBusyTimeoutMs()}; BEGIN IMMEDIATE`);
+    database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}; BEGIN IMMEDIATE`);
     transactionOpen = true;
     initializeConfigGeneration(database);
   } catch (cause) {
@@ -2622,7 +1999,7 @@ function withConfigMutationLockAtDirSync<T>(
   configMutationDatabase = database;
   try {
     const value = fn();
-    database.exec(`PRAGMA busy_timeout = ${remainingBusyTimeoutMs()}; COMMIT`);
+    database.exec("COMMIT");
     transactionOpen = false;
     return value;
   } catch (error) {

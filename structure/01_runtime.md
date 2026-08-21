@@ -72,10 +72,13 @@ service paths do not call this hook: they require `ccx init` to have created a c
 a missing one.
 
 The app hook validates the canonical secret-free ChatGPT passthrough default and initializes only a
-missing CodexCommander config. Publication is create-only/no-clobber: an existing valid, invalid,
-unreadable, or unsafe config is never overwritten, and a concurrent race loser adopts the winner's
-valid bytes rather than replacing them. If Codex has not created its config yet on this fresh app
-start, the proxy and dashboard still run while Codex routing stays native; the result carries
+missing CodexCommander config. Publication is create-only/no-clobber: under config mutation
+coordination it directly opens the final entry with `wx`, writes and flushes through the owned
+descriptor, and never overwrites an existing valid, invalid, unreadable, or unsafe config. An
+`EEXIST` loser re-probes once and adopts only a complete valid ordinary single-link winner. The
+trusted candidate comes from in-process app policy; active same-user filesystem mutation after the
+coordinated probe is outside this bootstrap boundary. If Codex has not created its config yet on this
+fresh app start, the proxy and dashboard still run while Codex routing stays native; the result carries
 `setupRequired: "codex-first-run"` so the companion tells the user to open Codex once and then choose
 **Route Codex Through Proxy**. The hook never creates Codex configuration and never copies provider
 secrets, API keys, or OAuth accounts. Existing external Codex providers remain outside its ownership.

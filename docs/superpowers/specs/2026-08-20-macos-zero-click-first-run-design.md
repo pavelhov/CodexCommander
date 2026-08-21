@@ -85,9 +85,19 @@ The primitive owns:
 - the existing configuration mutation lock;
 - an under-lock re-read immediately before committing;
 - schema validation of the candidate;
-- atomic persistence;
+- direct exclusive creation of the final `config.json` entry with `wx`, owner-only
+  permissions, descriptor-based writing, and a descriptor flush before success;
 - state-directory permissions and existing ownership metadata behavior; and
 - stable, non-secret refusal reason codes.
+
+The candidate is trusted in-process data produced by the app bootstrap policy. Validation
+still proves schema correctness, but the initializer is not an isolation boundary against
+hostile getters, serialization methods, or an active same-user filesystem process. Under the
+configuration mutation transaction it probes the final entry, opens that final entry directly
+with exclusive-create semantics, and never overwrites. If exclusive creation reports `EEXIST`,
+it re-probes once and adopts only a complete valid ordinary single-link configuration.
+An incomplete preflight read in an already owned root is not adopted or rejected before
+coordination; the under-lock probe is authoritative so a cooperating initializer can finish.
 
 It does not import macOS, lifecycle, provider-selection, or Codex-path logic. It does
 not change `mutatePersistedConfig()`.
@@ -228,8 +238,12 @@ If an invalid object now exists, refuse it. Never overwrite the winner.
 - If CodexCommander configuration disappears after bootstrap but before routing intent
   is saved, the existing field-scoped mutation refusal remains authoritative.
 - If another process creates CodexCommander configuration between the initial read and
-  commit, the under-lock re-read adopts or refuses that object instead of replacing it.
+  exclusive creation, the one post-`EEXIST` probe adopts a complete valid ordinary file or
+  refuses the observed state instead of replacing it.
 - No retry loop recreates a file that vanished during an admitted mutation.
+- Active same-user mutation after the coordinated probe is outside this initializer's trust
+  boundary. Such a process already has authority to alter the resulting file immediately after
+  initialization; this bootstrap does not add descriptor-relative or pathname-swap defenses for it.
 
 ## Error handling
 
@@ -250,9 +264,12 @@ troubleshooting surfaces.
 - The bootstrap candidate comes only from checked-in runtime defaults.
 - The default contains no API key or OAuth credential.
 - Existing configuration is never used as a stale base for a replacement write.
-- Bootstrap uses existing filesystem-hardening, atomic-write, mutation-lock, and
-  ownership-metadata paths.
+- Bootstrap uses the existing mutation lock and ownership metadata, then creates the final file
+  directly with `wx`, mode `0600`, descriptor-based writing, and a flush before success.
 - Missing, invalid, unreadable, and conflicting states remain distinct.
+- The same-user active-filesystem-adversary case is explicitly out of scope; static symlinks,
+  nonregular entries, hard links, linked roots, inaccessible state, and unowned roots are still
+  refused before creation.
 - External Codex routes and recovery journals stay under existing ownership checks.
 - The native bridge remains bounded and secret-free.
 - No new telemetry, logs, or persistent onboarding identifiers are introduced.
@@ -275,8 +292,12 @@ first-run bootstrap.
 - Existing valid file is unchanged byte-for-byte.
 - Invalid JSON and schema-invalid files are refused unchanged.
 - A directory, unreadable object, unsafe link, or ownership failure is refused.
-- A competing valid creation wins and is adopted.
-- A competing invalid creation wins and is refused.
+- An `EEXIST` winner is re-probed once: a complete valid ordinary single-link file is adopted,
+  while an invalid or unsafe winner is refused.
+- A transient incomplete preflight in an already owned root is rechecked under the mutation
+  transaction before it can be classified as invalid.
+- Two coordinated CodexCommander processes produce exactly one `created` and one `existing`,
+  with canonical bytes and a final single-link file.
 - The state directory and file retain the existing hardened permissions/ownership
   behavior.
 - Candidate schema validation occurs before persistence.
