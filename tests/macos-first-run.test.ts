@@ -29,33 +29,33 @@ function runProductionScenario(options: {
   codexHomeFileRaw?: string;
 }): ProductionSnapshot {
   const root = mkdtempSync(join(tmpdir(), "ccx-macos-first-run-"));
-  const appHome = join(root, "app-home");
-  const codexHome = join(root, "codex-home");
-  mkdirSync(appHome);
-  mkdirSync(codexHome);
-  if (options.appRaw !== undefined) writeFileSync(join(appHome, "config.json"), options.appRaw, "utf8");
-  if (options.codexRaw !== undefined) writeFileSync(join(codexHome, "config.toml"), options.codexRaw, "utf8");
-
-  const script = `
-    globalThis.fetch = () => { throw new Error("network blocked by macOS first-run test"); };
-    const { rmSync, writeFileSync } = await import("node:fs");
-    const { getDefaultConfig, validateConfigCandidate } = await import("./src/config.ts");
-    const { prepareMacOSAppStart } = await import("./src/cli/macos-first-run.ts");
-    const codexHome = process.env.CODEX_HOME;
-    if (process.env.CCX_TEST_REPLACE_CODEX_HOME === "1") {
-      rmSync(codexHome, { recursive: true, force: true });
-      writeFileSync(codexHome, process.env.CCX_TEST_CODEX_SENTINEL ?? "", "utf8");
-    }
-    console.log(JSON.stringify({
-      result: prepareMacOSAppStart(),
-      expectedDefault: validateConfigCandidate(getDefaultConfig()).config,
-      expectedMissing: validateConfigCandidate({
-        ...getDefaultConfig(),
-        clientIntegrations: { codex: false },
-      }).config,
-    }));
-  `;
   try {
+    const appHome = join(root, "app-home");
+    const codexHome = join(root, "codex-home");
+    mkdirSync(appHome);
+    mkdirSync(codexHome);
+    if (options.appRaw !== undefined) writeFileSync(join(appHome, "config.json"), options.appRaw, "utf8");
+    if (options.codexRaw !== undefined) writeFileSync(join(codexHome, "config.toml"), options.codexRaw, "utf8");
+
+    const script = `
+      globalThis.fetch = () => { throw new Error("network blocked by macOS first-run test"); };
+      const { rmSync, writeFileSync } = await import("node:fs");
+      const { getDefaultConfig, validateConfigCandidate } = await import("./src/config.ts");
+      const { prepareMacOSAppStart } = await import("./src/cli/macos-first-run.ts");
+      const codexHome = process.env.CODEX_HOME;
+      if (process.env.CCX_TEST_REPLACE_CODEX_HOME === "1") {
+        rmSync(codexHome, { recursive: true, force: true });
+        writeFileSync(codexHome, process.env.CCX_TEST_CODEX_SENTINEL ?? "", "utf8");
+      }
+      console.log(JSON.stringify({
+        result: prepareMacOSAppStart(),
+        expectedDefault: validateConfigCandidate(getDefaultConfig()).config,
+        expectedMissing: validateConfigCandidate({
+          ...getDefaultConfig(),
+          clientIntegrations: { codex: false },
+        }).config,
+      }));
+    `;
     const childEnv = {
       ...process.env,
       CODEXCOMMANDER_HOME: appHome,
