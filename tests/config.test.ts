@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import * as nodeFs from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -25,6 +26,7 @@ import {
   removeRuntimePort,
   setConfigInitializationBeforePublishForTests,
   validateConfigCandidate,
+  withConfigMutationLockSync,
   writeRuntimePort,
   writePid,
 } from "../src/config";
@@ -52,6 +54,25 @@ afterEach(() => {
 
 function backupNames(): string[] {
   return readdirSync(testDir).filter(name => name.startsWith("config.json.invalid-"));
+}
+
+function replaceAnchoredRoot(
+  root: string,
+  displacedRoot: string,
+  replacementMode: number,
+): "replaced" | "blocked" {
+  try {
+    renameSync(root, displacedRoot);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (
+      process.platform === "win32"
+      && (code === "EACCES" || code === "EBUSY" || code === "EPERM")
+    ) return "blocked";
+    throw error;
+  }
+  mkdirSync(root, { mode: replacementMode });
+  return "replaced";
 }
 
 function writeConfig(content: unknown): void {
@@ -109,8 +130,10 @@ function writeAccountNamespaceConfig(
 
 describe("create-only config initialization", () => {
   test("creates the canonical candidate only when config.json is absent", () => {
+    const previousCwd = process.cwd();
     const candidate = getDefaultConfig();
     expect(initializeConfigIfMissing(candidate)).toEqual({ status: "created" });
+    expect(process.cwd()).toBe(previousCwd);
     expect(JSON.parse(readFileSync(getConfigPath(), "utf8"))).toEqual(candidate);
     expect(lstatSync(getConfigPath()).isFile()).toBe(true);
     if (process.platform !== "win32") {
@@ -273,6 +296,74 @@ describe("create-only config initialization", () => {
     }
   }, { timeout: 20_000 });
 
+  test("a subprocess paused after the final root check leaves a swapped-in root untouched", async () => {
+    const displacedRoot = `${testDir}.barrier-boundary`;
+    const readyPath = `${testDir}.barrier-ready`;
+    const releasePath = `${testDir}.barrier-release`;
+    const configModuleUrl = pathToFileURL(join(import.meta.dir, "../src/config.ts")).href;
+    const childSource = `
+      import {
+        getDefaultConfig,
+        initializeConfigIfMissingForTests,
+      } from ${JSON.stringify(configModuleUrl)};
+      const cwdBefore = process.cwd();
+      const result = initializeConfigIfMissingForTests(getDefaultConfig(), {
+        kind: "barrier",
+        stage: "after-final-root-check",
+        readyPath: ${JSON.stringify(readyPath)},
+        releasePath: ${JSON.stringify(releasePath)},
+      });
+      console.log(JSON.stringify({ result, cwdBefore, cwdAfter: process.cwd() }));
+    `;
+    const child = Bun.spawn([process.execPath, "-e", childSource], {
+      cwd: join(import.meta.dir, ".."),
+      env: { ...process.env, CODEXCOMMANDER_HOME: testDir },
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    try {
+      for (let attempt = 0; attempt < 1_000; attempt += 1) {
+        if (existsSync(readyPath) || child.exitCode !== null) break;
+        await Bun.sleep(5);
+      }
+      if (!existsSync(readyPath)) {
+        const stderr = await new Response(child.stderr).text();
+        throw new Error(`Initializer exited before the root-swap barrier: ${stderr}`);
+      }
+      const swap = replaceAnchoredRoot(testDir, displacedRoot, 0o700);
+      writeFileSync(releasePath, "release");
+
+      const exitCode = await Promise.race([
+        child.exited,
+        Bun.sleep(10_000).then(() => null),
+      ]);
+      expect(exitCode).toBe(0);
+      const stdout = await new Response(child.stdout).text();
+      const payload = JSON.parse(stdout.trim()) as {
+        result: ReturnType<typeof initializeConfigIfMissing>;
+        cwdBefore: string;
+        cwdAfter: string;
+      };
+      expect(payload.cwdAfter).toBe(payload.cwdBefore);
+      if (swap === "replaced") {
+        expect(payload.result).toEqual({ status: "refused", reason: "existing-unsafe" });
+        expect(readdirSync(testDir)).toEqual([]);
+      } else {
+        expect(payload.result).toEqual({ status: "created" });
+        expect(JSON.parse(readFileSync(getConfigPath(), "utf8"))).toEqual(getDefaultConfig());
+      }
+    } finally {
+      writeFileSync(releasePath, "release");
+      if (child.exitCode === null) child.kill();
+      await child.exited;
+      rmSync(displacedRoot, { recursive: true, force: true });
+      rmSync(readyPath, { force: true });
+      rmSync(releasePath, { force: true });
+    }
+  }, { timeout: 20_000 });
+
   test("refuses a linked configuration root even when its target has valid ownership", () => {
     const realRoot = join(testDir, "owned-real-root");
     const linkedRoot = join(testDir, "linked-root");
@@ -325,6 +416,110 @@ describe("create-only config initialization", () => {
     } finally {
       rmSync(displacedRoot, { recursive: true, force: true });
     }
+  });
+
+  test("leaves a replacement root untouched when replacement lands at lock acquisition", () => {
+    const previousCwd = process.cwd();
+    const displacedRoot = `${testDir}.lock-boundary`;
+    const originalChmod = nodeFs.chmodSync;
+    let swap: "pending" | "replaced" | "blocked" = "pending";
+    const chmodSpy = spyOn(nodeFs, "chmodSync").mockImplementation(((...args: unknown[]) => {
+      if (swap === "pending" && (args[0] === testDir || args[0] === ".") && args[1] === 0o700) {
+        swap = replaceAnchoredRoot(testDir, displacedRoot, 0o755);
+      }
+      return (originalChmod as (...values: unknown[]) => void)(...args);
+    }) as typeof nodeFs.chmodSync);
+
+    try {
+      const result = initializeConfigIfMissing(getDefaultConfig());
+      if (swap === "replaced") {
+        expect({ result, replacementEntries: readdirSync(testDir) }).toEqual({
+          result: { status: "refused", reason: "existing-unsafe" },
+          replacementEntries: [],
+        });
+        expect(lstatSync(testDir).mode & 0o777).toBe(0o755);
+      } else {
+        expect(swap).toBe("blocked");
+        expect(result).toEqual({ status: "created" });
+      }
+      expect(process.cwd()).toBe(previousCwd);
+    } finally {
+      chmodSpy.mockRestore();
+      rmSync(displacedRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("leaves a replacement root untouched when replacement lands after the final publication check", () => {
+    const previousCwd = process.cwd();
+    const displacedRoot = `${testDir}.publication-boundary`;
+    const originalWrite = nodeFs.writeFileSync;
+    let swap: "pending" | "replaced" | "blocked" = "pending";
+    const writeSpy = spyOn(nodeFs, "writeFileSync").mockImplementation(((...args: unknown[]) => {
+      if (
+        swap === "pending"
+        && typeof args[0] === "string"
+        && args[0].endsWith(".create.tmp")
+      ) {
+        swap = replaceAnchoredRoot(testDir, displacedRoot, 0o700);
+      }
+      return (originalWrite as (...values: unknown[]) => unknown)(...args);
+    }) as typeof nodeFs.writeFileSync);
+
+    try {
+      const result = initializeConfigIfMissing(getDefaultConfig());
+      if (swap === "replaced") {
+        expect({ result, replacementEntries: readdirSync(testDir) }).toEqual({
+          result: { status: "refused", reason: "existing-unsafe" },
+          replacementEntries: [],
+        });
+      } else {
+        expect(swap).toBe("blocked");
+        expect(result).toEqual({ status: "created" });
+      }
+      expect(process.cwd()).toBe(previousCwd);
+    } finally {
+      writeSpy.mockRestore();
+      rmSync(displacedRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("restores the previous cwd when bound publication throws", () => {
+    const previousCwd = process.cwd();
+    const expectedBoundCwd = realpathSync.native(testDir);
+    const originalWrite = nodeFs.writeFileSync;
+    let observedWriteCwd: string | null = null;
+    const writeSpy = spyOn(nodeFs, "writeFileSync").mockImplementation(((...args: unknown[]) => {
+      if (typeof args[0] === "string" && args[0].endsWith(".create.tmp")) {
+        observedWriteCwd = realpathSync.native(process.cwd());
+        throw new Error("publication fixture failure");
+      }
+      return (originalWrite as (...values: unknown[]) => unknown)(...args);
+    }) as typeof nodeFs.writeFileSync);
+
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+        status: "refused",
+        reason: "coordination-unavailable",
+      });
+      expect(observedWriteCwd).toBe(expectedBoundCwd);
+      expect(process.cwd()).toBe(previousCwd);
+    } finally {
+      writeSpy.mockRestore();
+    }
+  });
+
+  test("refuses reentrant initialization without entering the cwd fence", () => {
+    const previousCwd = process.cwd();
+    let result: ReturnType<typeof initializeConfigIfMissing> | undefined;
+
+    withConfigMutationLockSync(() => {
+      result = initializeConfigIfMissing(getDefaultConfig());
+      expect(process.cwd()).toBe(previousCwd);
+    });
+
+    expect(result).toEqual({ status: "refused", reason: "coordination-unavailable" });
+    expect(existsSync(getConfigPath())).toBe(false);
+    expect(process.cwd()).toBe(previousCwd);
   });
 
   test("distinguishes bigint root identities whose inode numbers collide after numeric conversion", () => {
