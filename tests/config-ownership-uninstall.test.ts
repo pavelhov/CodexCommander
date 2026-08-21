@@ -2,12 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as configOwnership from "../src/lib/config-ownership";
 import {
   CONFIG_OWNER_FILE,
   CONFIG_UNINSTALL_MANIFEST,
   recordOwnedConfigPath,
   removeOwnedConfigArtifactsRetainingLifecycleRoot,
   removeOwnedConfigState,
+  stableConfigRootFileIdentity,
 } from "../src/lib/config-ownership";
 import { getDefaultConfig, saveConfig } from "../src/config";
 
@@ -23,6 +25,18 @@ describe("owned config uninstall", () => {
     } finally {
       rmSync(parent, { recursive: true, force: true });
     }
+  });
+
+  test("classifies a zero root inode as an unavailable stable identity", () => {
+    expect(stableConfigRootFileIdentity({ dev: 1n, ino: 0n })).toBeNull();
+    expect(stableConfigRootFileIdentity({ dev: 0n, ino: 1n })).toEqual({
+      dev: 0n,
+      ino: 1n,
+    });
+  });
+
+  test("does not expose a mutable root-identity override", () => {
+    expect("setConfigRootIdentityOverrideForTests" in configOwnership).toBe(false);
   });
 
   test("refuses an unowned config directory without ownership metadata", () => {

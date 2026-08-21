@@ -58,6 +58,7 @@ import {
 } from "../server/proxy-start-lock";
 import { injectSystemEnv, revertSystemEnv } from "../server/system-env";
 import type { CodexCommanderConfig } from "../types";
+import type { ProxySetupRequirement, ProxyStartPreparation } from "./macos-first-run";
 import { RuntimeApiError, runtimeRequest } from "./runtime-api";
 
 export type ProxyLifecycleAction =
@@ -79,6 +80,7 @@ export interface ProxyLifecycleResult {
   pid: number | null;
   port: number | null;
   message: string;
+  setupRequired?: ProxySetupRequirement;
   /** Additive catalog-apply fields consumed by the native companion. */
   catalogUpdated?: boolean;
   codexRestartRequired?: boolean;
@@ -96,7 +98,8 @@ export interface ProxyLifecycleResult {
     | "STOP_FAILED"
     | "SYNC_FAILED"
     | "ROUTING_RECOVERY_REQUIRED"
-    | "CODEX_RESTART_REQUIRED";
+    | "CODEX_RESTART_REQUIRED"
+    | "CONFIGURATION_REQUIRED";
 }
 
 export type ProxyStartupReadiness = "ready" | "failed" | "timeout";
@@ -150,6 +153,7 @@ export interface ExplicitProxyStartIo {
 }
 
 export interface EnsureProxyLifecycleIo extends ExplicitProxyStartIo {
+  prepareStart?: () => ProxyStartPreparation;
   findLive?: () => Promise<LiveProxy | null>;
   loadConfig?: () => CodexCommanderConfig;
   diagnoseService?: typeof diagnoseService;
@@ -314,6 +318,7 @@ function lifecycleResult(
     live?: LiveProxy | null;
     message: string;
     errorCode?: ProxyLifecycleResult["errorCode"];
+    setupRequired?: ProxySetupRequirement;
     catalogUpdated?: boolean;
     codexRestartRequired?: boolean;
     staleWorkerCount?: number;
@@ -330,6 +335,7 @@ function lifecycleResult(
     pid: options.live?.pid ?? null,
     port: options.live?.port ?? null,
     message: options.message.slice(0, 240),
+    ...(options.setupRequired ? { setupRequired: options.setupRequired } : {}),
     ...(options.catalogUpdated !== undefined ? { catalogUpdated: options.catalogUpdated } : {}),
     ...(options.codexRestartRequired !== undefined
       ? { codexRestartRequired: options.codexRestartRequired }
@@ -381,12 +387,27 @@ export function spawnDetachedProxyStart(options: SpawnDetachedProxyOptions = {})
   });
 }
 
-export async function waitForProxy(timeoutMs = 12_000): Promise<LiveProxy | null> {
-  const deadline = Date.now() + Math.max(0, timeoutMs);
-  while (Date.now() < deadline) {
-    const live = await findLiveProxy();
-    if (live) return live;
-    await Bun.sleep(150);
+export interface WaitForProxyIo {
+  findLive?: typeof findLiveProxy;
+  now?: () => number;
+  sleep?: (milliseconds: number) => Promise<void>;
+}
+
+export async function waitForProxy(
+  timeoutMs = 12_000,
+  io: WaitForProxyIo = {},
+): Promise<LiveProxy | null> {
+  const now = io.now ?? Date.now;
+  const sleep = io.sleep ?? Bun.sleep;
+  const findLive = io.findLive ?? findLiveProxy;
+  const deadline = now() + Math.max(0, timeoutMs);
+  while (now() < deadline) {
+    const live = await findLive();
+    // Bun starts answering /healthz before the child publishes its protected
+    // runtime record. Config-port discovery is therefore evidence of progress,
+    // not post-spawn ownership; keep waiting for the runtime identity fence.
+    if (live?.source === "runtime" && live.pid !== null) return live;
+    await sleep(150);
   }
   return null;
 }
@@ -680,8 +701,19 @@ async function ensureProxyLifecycleUnderLock(
   const logger = options.logger ?? quietLogger;
   const io = options.io ?? {};
   const findLive = io.findLive ?? findLiveProxy;
+  const startPreparation: ProxyStartPreparation = action === "start"
+    ? io.prepareStart?.() ?? { ok: true, changed: false, enableCodexRouting: true }
+    : { ok: true, changed: false, enableCodexRouting: action === "restart" };
+  if (!startPreparation.ok) {
+    return lifecycleResult(action, "blocked", {
+      ok: false,
+      changed: startPreparation.changed,
+      message: startPreparation.message,
+      errorCode: startPreparation.errorCode,
+    });
+  }
   let config = (io.loadConfig ?? loadConfig)();
-  let preparedChanged = false;
+  let preparedChanged = startPreparation.changed;
   // Probe before mutating durable intent. Only this home's protected runtime
   // record may authorize retirement of a journal whose owner is still alive.
   let live = action === "start" ? await findLive() : null;
@@ -693,17 +725,17 @@ async function ensureProxyLifecycleUnderLock(
       errorCode: "START_FAILED",
     });
   }
-  if (action === "start") {
+  if (action === "start" && startPreparation.enableCodexRouting) {
     const prepared = prepareExplicitProxyStartWithIo(io, live?.pid ?? undefined);
     if (!prepared.success) {
       return lifecycleResult(action, "blocked", {
         ok: false,
-        changed: prepared.changed,
+        changed: preparedChanged || prepared.changed,
         message: prepared.message,
         errorCode: "START_FAILED",
       });
     }
-    preparedChanged = prepared.changed;
+    preparedChanged ||= prepared.changed;
     try {
       config = (io.loadConfig ?? loadConfig)();
     } catch {
@@ -898,6 +930,15 @@ async function ensureProxyLifecycleUnderLock(
   );
   syncProblem = catalogSyncFailure(syncResult, config);
   syncNotice = catalogSyncNotice(syncResult);
+  if (action === "start" && startPreparation.setupRequired) {
+    return lifecycleResult(action, "running", {
+      ok: true,
+      changed: preparedChanged || startedHere,
+      live,
+      message: "CodexCommander is running. Open Codex once, then route Codex through the proxy.",
+      setupRequired: startPreparation.setupRequired,
+    });
+  }
   if (syncProblem) {
     return lifecycleResult(action, "running", {
       ok: false,

@@ -19,18 +19,41 @@ then Control-click the app and choose **Open** on first launch. If macOS still b
 
 To build from source instead, follow [Build from source](#build-from-source) below.
 
+## First run and app location
+
+Direct **Start** in the packaged app owns the macOS first-run bootstrap. On a fresh Mac it creates
+CodexCommander's canonical secret-free ChatGPT passthrough default without copying providers, API keys,
+or OAuth accounts from another Mac. The initializer is create-only/no-clobber: an existing valid,
+invalid, unreadable, or unsafe CodexCommander config is never overwritten, so repair an invalid or
+inaccessible config before trying again. The app never creates `~/.codex/config.toml` (or any other
+Codex config) automatically, and an external user-managed Codex provider remains untouched.
+
+If Codex has not created `~/.codex/config.toml` yet, the proxy and dashboard still start while Codex
+remains native. Open Codex once, then return to the companion and choose **Route Codex Through Proxy**.
+The warning is nonfatal: the proxy stays running and the route button remains available.
+
+An app in `/Applications` or `~/Applications` is eligible for **Launch at Login**. A physical copy in
+Desktop or Downloads is allowed to run for the current session, but the startup row presents neutral
+guidance to move it to Applications for login startup. Quit CodexCommander before moving a running app,
+then reopen it from the new location; CodexCommander never moves the app itself. True macOS App
+Translocation is different: **Start** is blocked before proxy launch and the companion tells you to move
+the app and reopen it. The ad-hoc Gatekeeper steps above remain unchanged.
+
 ## Startup modes
 
 The panel has one **Launch at Login** switch and reports the resulting mode:
 
 - **Desktop** — the CodexCommander menu app launches when you sign in, performs an explicit Start,
-  starts or attaches to exactly one proxy, and routes managed Codex through it. An external
-  user-managed Codex provider is preserved. This is the default desktop experience and is reported
-  as **App-managed** in Startup.
+  starts or attaches to exactly one proxy, and routes managed Codex through it when Codex
+  configuration exists. On a fresh missing-Codex start, it leaves Codex native while the proxy runs
+  and setup guidance is shown. An external user-managed Codex provider is preserved. This is the
+  default desktop experience and is reported as **App-managed** in Startup.
 - **Headless** — the menu app is not a login item, but an independently installed
   `ccx service` continues starting and supervising the server.
 - **Off** — neither the menu app nor a background service starts automatically. A new manual app
-  launch performs the same explicit Start-and-route transition as `ccx start`.
+  launch uses the app-owned Start path, including its first-run preparation; it routes Codex when Codex
+  configuration exists, or leaves Codex native with setup guidance when Codex has not run yet. The
+  ordinary CLI path is separate: run `ccx init` before `ccx start` or `ccx service`.
 
 Throughout this guide, **restore native** means removing CodexCommander-owned routing. An external
 user-managed Codex provider is left unchanged.
@@ -45,8 +68,10 @@ responsibilities of one installation, not duplicate app copies. Turning off Laun
 installs, removes, starts, or stops the background service.
 
 App-managed startup and the background service solve different problems. The app starts or attaches
-to the proxy at sign-in and routes managed Codex through it, which is enough for normal desktop use. The
-optional background service additionally
+to the proxy at sign-in and routes managed Codex through it when Codex configuration exists, which is
+enough for normal desktop use. On a fresh missing-Codex start, the proxy remains running while Codex
+stays native until the user opens Codex once and chooses **Route Codex Through Proxy**. The optional
+background service additionally
 supervises the proxy and restarts it after a crash, so the dashboard labels it **Background
 recovery** instead of presenting it as a requirement. The companion periodically reports its current
 Launch at Login state to the local proxy; that short-lived report is kept only in memory and is used
@@ -86,7 +111,9 @@ override it.
   workers still hold an older model roster. The CodexCommander proxy remains healthy and running.
 - **Show restart steps…** — explains the recommended reload boundary: quit ChatGPT completely, reopen
   it, and then start a new task. The menu app does not force-restart background workers from this card.
-- **Start Proxy** — starts or attaches to the proxy, then routes Codex through the live endpoint.
+- **Start Proxy** — starts or attaches to the proxy, then routes Codex through the live endpoint when
+  Codex configuration exists. If Codex has not run yet, the proxy stays running, Codex remains native,
+  and the setup-required card explains how to finish setup.
 - **Stop Proxy…** — always asks for confirmation and restores native Codex routing before it stops the
   proxy. If the native route cannot be verified, the proxy and service stay running. The menu app stays open.
 - **Restart Proxy…** — always asks for confirmation and runs the same safe stop→start transaction as
@@ -229,8 +256,9 @@ open dist/macos/CodexCommander.app
 The development app is exactly `dist/macos/CodexCommander.app`. Every build embeds the Bun runtime and
 CodexCommander server resources inside the app bundle; the running app never executes `src/` from the
 checkout. Rebuild the app to pick up source changes. Double-clicking it to launch a new app process
-performs an explicit Start: it starts or attaches to the proxy and routes managed Codex through it.
-An external user-managed provider is preserved. An offline failure or failed start
+performs an explicit Start: it starts or attaches to the proxy and routes managed Codex through it when
+Codex configuration exists. If Codex has not run yet, it leaves Codex native while the proxy runs and
+shows setup guidance. An external user-managed provider is preserved. An offline failure or failed start
 does not close the app: its status panel remains available and **Start** can be retried. This source
 workflow does not install or copy the app into Application
 Support. A rebuild at the same path is detected on the
@@ -239,10 +267,22 @@ Each build stamps its exact Git revision into `CodexCommanderSourceRevision` in 
 and prints it at the end of the build. Uncommitted source is marked with `-dirty`, so commit before
 making a final distributable bundle.
 
+The source-build `.app` is a thin development artifact for the current checkout, not the public
+distribution format. Use the universal release archive for public installation. A source app in the
+supported `dist/macos` location may run the same session-start behavior; copies elsewhere remain
+relocatable and are not moved automatically.
+
 ## Troubleshooting
 
 - **Proxy unavailable** — use **Start Proxy** in the bundled app. Source builds can also use
   <code>ccx start</code> or install the background service with <code>ccx service install</code>.
+- **Open Codex to finish setup** — the proxy is running while Codex remains native because Codex had
+  not created its config yet. Open Codex once, return to the companion, and choose **Route Codex Through
+  Proxy**.
+- **Move CodexCommander to Applications** — a Desktop/Downloads copy can run for this session but is
+  not eligible for login startup. Quit CodexCommander before moving it, move it yourself, and reopen it.
+- **Start is blocked after a temporary macOS launch** — App Translocation is active. Move the app out of
+  the translocated location and reopen it; CodexCommander never moves it automatically.
 - **Menu icon missing after login** — open the app, check its **Launch at Login** row, and follow the
   **Open Settings** action if macOS reports that approval is required.
 - **Authentication unavailable** — run <code>ccx doctor</code>; verify that the CodexCommander state

@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as nodeFs from "node:fs";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   CODEX_SHIM_AUTO_RESTORE_ENV,
   codexAutoStartEnabled,
@@ -12,6 +14,7 @@ import {
   getRuntimePortPath,
   isValidProviderName,
   isCodexCommanderStartCommandLine,
+  initializeConfigIfMissing,
   loadConfig,
   multiAgentGuidanceEnabled,
   parsePidFile,
@@ -28,6 +31,7 @@ import {
 
 import * as windowsAcl from "../src/lib/windows-secret-acl";
 import { AtomicWriteResidualTempError, atomicWriteFile, atomicWriteFileAsync, hardenConfigDir, hardenExistingSecret, renameAtomicFile, saveConfig } from "../src/config";
+import { sameConfigRootFileIdentity } from "../src/lib/config-ownership";
 let testDir = "";
 let previousCodexCommanderHome: string | undefined;
 
@@ -101,6 +105,341 @@ function writeAccountNamespaceConfig(
     ...overrides,
   });
 }
+
+describe("create-only config initialization", () => {
+  test("creates the canonical candidate only when config.json is absent", () => {
+    const previousCwd = process.cwd();
+    const candidate = getDefaultConfig();
+    expect(initializeConfigIfMissing(candidate)).toEqual({ status: "created" });
+    expect(process.cwd()).toBe(previousCwd);
+    expect(JSON.parse(readFileSync(getConfigPath(), "utf8"))).toEqual(candidate);
+    expect(lstatSync(getConfigPath()).isFile()).toBe(true);
+    if (process.platform !== "win32") {
+      expect(lstatSync(getConfigPath()).mode & 0o077).toBe(0);
+    }
+  });
+
+  test("keeps an existing valid config byte-for-byte", () => {
+    const bytes = `${JSON.stringify({ ...getDefaultConfig(), port: 12001 })}\n`;
+    writeFileSync(getConfigPath(), bytes, { mode: 0o600 });
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "existing" });
+    expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
+  });
+
+  test("refuses malformed and schema-invalid config without rewriting", () => {
+    for (const bytes of ["{", '{"port":10100,"providers":{},"defaultProvider":"missing"}']) {
+      writeFileSync(getConfigPath(), bytes, "utf8");
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+        status: "refused",
+        reason: "existing-invalid",
+      });
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
+      unlinkSync(getConfigPath());
+    }
+  });
+
+  test("rechecks a transient incomplete preflight under coordination", () => {
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "created" });
+    unlinkSync(getConfigPath());
+    const bytes = `${JSON.stringify({ ...getDefaultConfig(), port: 12003 })}\n`;
+    writeFileSync(getConfigPath(), bytes, { mode: 0o600 });
+    const originalRead = nodeFs.readFileSync;
+    let injected = false;
+    const readSpy = spyOn(nodeFs, "readFileSync").mockImplementation(((...args: unknown[]) => {
+      if (!injected && args[0] === getConfigPath()) {
+        injected = true;
+        return "{";
+      }
+      return (originalRead as (...values: unknown[]) => unknown)(...args);
+    }) as typeof nodeFs.readFileSync);
+
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "existing" });
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
+  test("rejects an invalid candidate without creating config state", () => {
+    const invalid = { ...getDefaultConfig(), defaultProvider: "missing" };
+    expect(initializeConfigIfMissing(invalid)).toEqual({
+      status: "refused",
+      reason: "candidate-invalid",
+    });
+    expect(existsSync(getConfigPath())).toBe(false);
+  });
+
+  test("refuses when exclusive creation of the final config entry fails", () => {
+    const originalOpen = nodeFs.openSync;
+    const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((...args: unknown[]) => {
+      if (args[0] === getConfigPath() && args[1] === "wx") {
+        throw Object.assign(new Error("exclusive final create failed"), { code: "EACCES" });
+      }
+      return (originalOpen as (...values: unknown[]) => number)(...args);
+    }) as typeof nodeFs.openSync);
+
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+        status: "refused",
+        reason: "coordination-unavailable",
+      });
+      expect(existsSync(getConfigPath())).toBe(false);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  test("refuses and removes its incomplete file when descriptor write fails", () => {
+    const originalWrite = nodeFs.writeFileSync;
+    const writeSpy = spyOn(nodeFs, "writeFileSync").mockImplementation(((...args: unknown[]) => {
+      if (typeof args[0] === "number") {
+        throw Object.assign(new Error("descriptor write failed"), { code: "EIO" });
+      }
+      return (originalWrite as (...values: unknown[]) => unknown)(...args);
+    }) as typeof nodeFs.writeFileSync);
+
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+        status: "refused",
+        reason: "coordination-unavailable",
+      });
+      expect(existsSync(getConfigPath())).toBe(false);
+    } finally {
+      writeSpy.mockRestore();
+    }
+  });
+
+  test("refuses and removes its incomplete file when descriptor flush fails", () => {
+    const fsyncSpy = spyOn(nodeFs, "fsyncSync").mockImplementation(() => {
+      throw Object.assign(new Error("flush failed"), { code: "EIO" });
+    });
+
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+        status: "refused",
+        reason: "coordination-unavailable",
+      });
+      expect(existsSync(getConfigPath())).toBe(false);
+    } finally {
+      fsyncSpy.mockRestore();
+    }
+  });
+
+  test("refuses linked and non-regular destinations", () => {
+    const real = join(testDir, "real-config.json");
+    writeFileSync(real, `${JSON.stringify(getDefaultConfig())}\n`, "utf8");
+    symlinkSync(real, getConfigPath());
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+      status: "refused",
+      reason: "existing-unsafe",
+    });
+    unlinkSync(getConfigPath());
+    mkdirSync(getConfigPath());
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+      status: "refused",
+      reason: "existing-unsafe",
+    });
+  });
+
+  test("refuses a hard-linked destination without changing either link", () => {
+    const real = join(testDir, "hard-linked-config.json");
+    const bytes = `${JSON.stringify(getDefaultConfig())}\n`;
+    writeFileSync(real, bytes, { mode: 0o600 });
+    nodeFs.linkSync(real, getConfigPath());
+
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+      status: "refused",
+      reason: "existing-unsafe",
+    });
+    expect(readFileSync(real, "utf8")).toBe(bytes);
+    expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
+  });
+
+  test("refuses an inaccessible existing file without replacing it", () => {
+    if (process.platform === "win32") return;
+    writeFileSync(getConfigPath(), `${JSON.stringify(getDefaultConfig())}\n`, { mode: 0o600 });
+    chmodSync(getConfigPath(), 0o000);
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+        status: "refused",
+        reason: "existing-inaccessible",
+      });
+    } finally {
+      chmodSync(getConfigPath(), 0o600);
+    }
+  });
+
+  test("refuses to claim a nonempty unowned configuration root", () => {
+    const foreign = join(testDir, "foreign.txt");
+    writeFileSync(foreign, "keep", "utf8");
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+      status: "refused",
+      reason: "existing-unsafe",
+    });
+    expect(readFileSync(foreign, "utf8")).toBe("keep");
+    expect(existsSync(getConfigPath())).toBe(false);
+  });
+
+  test("adopts a valid file that wins exclusive final creation", () => {
+    const winner = { ...getDefaultConfig(), port: 12002 };
+    const winnerBytes = `${JSON.stringify(winner)}\n`;
+    const originalOpen = nodeFs.openSync;
+    const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((...args: unknown[]) => {
+      if (args[0] === getConfigPath() && args[1] === "wx") {
+        writeFileSync(getConfigPath(), winnerBytes, { mode: 0o600 });
+        throw Object.assign(new Error("winner created config"), { code: "EEXIST" });
+      }
+      return (originalOpen as (...values: unknown[]) => number)(...args);
+    }) as typeof nodeFs.openSync);
+
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "existing" });
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(winnerBytes);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  test("refuses an invalid file that wins exclusive final creation", () => {
+    const originalOpen = nodeFs.openSync;
+    const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((...args: unknown[]) => {
+      if (args[0] === getConfigPath() && args[1] === "wx") {
+        writeFileSync(getConfigPath(), "{", { mode: 0o600 });
+        throw Object.assign(new Error("invalid winner created config"), { code: "EEXIST" });
+      }
+      return (originalOpen as (...values: unknown[]) => number)(...args);
+    }) as typeof nodeFs.openSync);
+
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+        status: "refused",
+        reason: "existing-invalid",
+      });
+      expect(readFileSync(getConfigPath(), "utf8")).toBe("{");
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  test("two processes racing initialization publish once and adopt the winner", async () => {
+    const raceRoot = join(testDir, "raced-home");
+    const releasePath = join(testDir, "race-release");
+    const configModuleUrl = pathToFileURL(join(import.meta.dir, "../src/config.ts")).href;
+    const children = ["a", "b"].map(id => {
+      const readyPath = join(testDir, `race-${id}-ready`);
+      const childSource = `
+        import { existsSync, writeFileSync } from "node:fs";
+        import {
+          getDefaultConfig,
+          initializeConfigIfMissing,
+        } from ${JSON.stringify(configModuleUrl)};
+        writeFileSync(${JSON.stringify(readyPath)}, "ready");
+        while (!existsSync(${JSON.stringify(releasePath)})) Bun.sleepSync(5);
+        console.log(JSON.stringify(initializeConfigIfMissing(getDefaultConfig())));
+      `;
+      return {
+        child: Bun.spawn([process.execPath, "-e", childSource], {
+          cwd: join(import.meta.dir, ".."),
+          env: { ...process.env, CODEXCOMMANDER_HOME: raceRoot },
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        }),
+        readyPath,
+      };
+    });
+
+    try {
+      for (let attempt = 0; attempt < 1_000; attempt += 1) {
+        if (children.every(({ readyPath }) => existsSync(readyPath))) break;
+        await Bun.sleep(5);
+      }
+      expect(children.every(({ readyPath }) => existsSync(readyPath))).toBe(true);
+      writeFileSync(releasePath, "go");
+      const results = await Promise.all(children.map(async ({ child }) => {
+        const exitCode = await Promise.race([
+          child.exited,
+          Bun.sleep(10_000).then(() => null),
+        ]);
+        if (exitCode === null) {
+          child.kill();
+          await child.exited;
+          throw new Error("Timed out waiting for config initializer child");
+        }
+        const stdout = await new Response(child.stdout).text();
+        const stderr = await new Response(child.stderr).text();
+        if (exitCode !== 0) {
+          throw new Error(`Config initializer child exited ${exitCode}: ${stderr}`);
+        }
+        return JSON.parse(stdout.trim()) as ReturnType<typeof initializeConfigIfMissing>;
+      }));
+
+      expect(results.sort((left, right) => left.status.localeCompare(right.status))).toEqual([
+        { status: "created" },
+        { status: "existing" },
+      ]);
+      const finalPath = join(raceRoot, "config.json");
+      const validatedDefault = validateConfigCandidate(getDefaultConfig());
+      expect(validatedDefault.ok).toBe(true);
+      if (!validatedDefault.ok) throw new Error(validatedDefault.error);
+      expect(readFileSync(finalPath, "utf8")).toBe(
+        `${JSON.stringify(validatedDefault.config, null, 2)}\n`,
+      );
+      expect(lstatSync(finalPath).nlink).toBe(1);
+    } finally {
+      writeFileSync(releasePath, "go");
+      for (const { child } of children) {
+        if (child.exitCode === null) child.kill();
+        await child.exited;
+      }
+    }
+  }, { timeout: 20_000 });
+
+  test("refuses a linked configuration root even when its target has valid ownership", () => {
+    const realRoot = join(testDir, "owned-real-root");
+    const linkedRoot = join(testDir, "linked-root");
+    mkdirSync(realRoot);
+    process.env.CODEXCOMMANDER_HOME = realRoot;
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "created" });
+    unlinkSync(getConfigPath());
+    symlinkSync(realRoot, linkedRoot, process.platform === "win32" ? "junction" : "dir");
+    process.env.CODEXCOMMANDER_HOME = linkedRoot;
+
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+      status: "refused",
+      reason: "existing-unsafe",
+    });
+    expect(existsSync(join(realRoot, "config.json"))).toBe(false);
+  });
+
+  test("does not reuse cached ownership after the configuration root was replaced", () => {
+    const displacedRoot = `${testDir}.cached-root`;
+    expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({ status: "created" });
+    unlinkSync(getConfigPath());
+    renameSync(testDir, displacedRoot);
+    mkdirSync(testDir, { mode: 0o700 });
+    try {
+      expect(initializeConfigIfMissing(getDefaultConfig())).toEqual({
+        status: "refused",
+        reason: "existing-unsafe",
+      });
+      expect(existsSync(getConfigPath())).toBe(false);
+    } finally {
+      rmSync(displacedRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("distinguishes bigint root identities whose inode numbers collide after numeric conversion", () => {
+    const firstIno = 2n ** 53n;
+    const replacementIno = firstIno + 1n;
+    expect(Number(firstIno)).toBe(Number(replacementIno));
+    expect(sameConfigRootFileIdentity(
+      { dev: 1n, ino: firstIno },
+      { dev: 1n, ino: replacementIno },
+    )).toBe(false);
+  });
+});
 
 describe("CodexCommander config defaults", () => {
   test("usage and MCP config overrides change the effective bound while defaults remain compatible", () => {

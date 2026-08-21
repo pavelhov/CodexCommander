@@ -64,6 +64,28 @@ package enum LifecycleConfirmation {
 package enum LifecycleResultMessage {
     package static let proxyStopped =
         "Proxy stopped. Fully quit ChatGPT and Codex if still open, then reopen them to use native routing."
+    package static let appTranslocated = (
+        title: "Move CodexCommander to Applications",
+        detail: "This temporary macOS launch location cannot safely run the background proxy. Move the app, then reopen it."
+    )
+
+    package static func setupRequired(_ requirement: ProxySetupRequirement) -> (
+        title: String,
+        detail: String
+    ) {
+        switch requirement {
+        case .codexFirstRun:
+            return (
+                "Open Codex to finish setup",
+                "CodexCommander is running. Open Codex once, then choose Route Codex Through Proxy."
+            )
+        case .unknown:
+            return (
+                "CodexCommander setup is required",
+                "The proxy is running. Update CodexCommander for setup instructions."
+            )
+        }
+    }
 
     package static func codexRouteSaved(_ destination: CodexRouteDestination) -> (
         title: String,
@@ -271,7 +293,11 @@ package enum ApplicationMenuFactory {
 /// A failed or ambiguous stop leaves the UI alive so the user can see and recover.
 package enum StopAndQuitPolicy {
     package static func shouldTerminate(after outcome: ProxyControlOutcome) -> Bool {
-        if case .stopped = outcome { return true }
-        return false
+        switch outcome {
+        case .stopped:
+            return true
+        case .running, .setupRequired, .catalogUpdateReady, .failed:
+            return false
+        }
     }
 }

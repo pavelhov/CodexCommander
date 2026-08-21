@@ -15,6 +15,28 @@ final class ApplicationMenuTarget: NSObject {
     @objc func stopCodexCommanderAndQuit(_ sender: Any?) {}
 }
 
+final class RecordingLifecycleRunner: @unchecked Sendable, LifecycleCommandRunning {
+    private let queue = DispatchQueue(label: "menu-bar-ui-tests.lifecycle-recorder")
+    private var actions: [LifecycleAction] = []
+
+    func run(_ action: LifecycleAction) async throws -> LifecycleCommandResult {
+        queue.sync { actions.append(action) }
+        return LifecycleCommandResult(
+            action: action,
+            ok: true,
+            state: .running,
+            changed: true,
+            pid: 41,
+            port: 10100,
+            message: "running"
+        )
+    }
+
+    var recordedActions: [LifecycleAction] {
+        queue.sync { actions }
+    }
+}
+
 func quotaJSON(
     provider: String,
     label: String,
@@ -291,7 +313,7 @@ runner.test("ui: startup control exposes desktop, headless, off, and approval st
     )
     runner.equal(controller.startupModeView.isLaunchAtLoginToggleEnabled, false)
     runner.expect(
-        controller.startupModeView.showsSettingsButton,
+        controller.startupModeView.showsRemediationButton,
         "approval state should expose Login Items settings"
     )
 }
@@ -332,11 +354,57 @@ runner.test("ui: unavailable startup switch ignores AppKit clicks") {
     runner.isNil(requested, "a disabled NSSwitch must not dispatch its action")
 }
 
-runner.test("ui: approval disables startup switch and forwards settings") {
+runner.test("ui: relocation guidance is neutral and opens Applications on explicit action") {
     let controller = PopoverViewController()
     _ = controller.view
-    var openedSettings = false
-    controller.onOpenLoginSettings = { openedSettings = true }
+    var remediation: LaunchAtLoginRemediation?
+    controller.onLaunchAtLoginRemediation = { remediation = $0 }
+
+    controller.applyLaunchAtLogin(
+        LaunchAtLoginPresentation(
+            status: .unavailable,
+            desiredEnabled: true,
+            isToggleEnabled: false,
+            errorMessage: "comparison error"
+        )
+    )
+    let errorColor = controller.startupModeView.modeTextColor
+
+    controller.applyLaunchAtLogin(
+        LaunchAtLoginPresentation(
+            status: .unavailable,
+            desiredEnabled: true,
+            isToggleEnabled: false,
+            relocationRequired: true
+        )
+    )
+
+    runner.equal(
+        controller.startupModeView.modeText,
+        "Move CodexCommander to Applications to launch at login."
+    )
+    runner.expect(
+        controller.startupModeView.modeTextColor != errorColor,
+        "relocation detail must use the neutral faint tone, not the error tone"
+    )
+    runner.equal(controller.startupModeView.remediationButtonTitle, "Open Applications")
+    runner.equal(
+        controller.startupModeView.remediationButtonAccessibilityLabel,
+        "Open Applications folder"
+    )
+    runner.equal(
+        controller.startupModeView.remediationButtonToolTip,
+        "Quit CodexCommander before moving the app, then reopen it from Applications."
+    )
+    controller.startupModeView.activateRemediationForTesting()
+    runner.equal(remediation, .openApplications)
+}
+
+runner.test("ui: approval disables startup switch and forwards System Settings remediation") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    var remediation: LaunchAtLoginRemediation?
+    controller.onLaunchAtLoginRemediation = { remediation = $0 }
     controller.applyLaunchAtLogin(
         LaunchAtLoginPresentation(
             status: .requiresApproval,
@@ -346,9 +414,14 @@ runner.test("ui: approval disables startup switch and forwards settings") {
     )
 
     runner.equal(controller.startupModeView.isLaunchAtLoginToggleEnabled, false)
-    runner.equal(controller.startupModeView.showsSettingsButton, true)
-    controller.startupModeView.onOpenSettings?()
-    runner.equal(openedSettings, true)
+    runner.equal(controller.startupModeView.showsRemediationButton, true)
+    runner.equal(controller.startupModeView.remediationButtonTitle, "Open Settings")
+    runner.equal(
+        controller.startupModeView.remediationButtonAccessibilityLabel,
+        "Open Login Items settings"
+    )
+    controller.startupModeView.activateRemediationForTesting()
+    runner.equal(remediation, .openSystemSettings)
 }
 
 runner.test("ui: running snapshot with recommended guidance offers Startup options, not a raw command") {
@@ -795,6 +868,36 @@ runner.test("ui: saved route with unavailable confirmation stays a caution, not 
     runner.equal(status.isDismissVisible, true, "caution persists")
 }
 
+runner.test("ui: first-run guidance warns without disabling proxy route recovery") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    let snapshot = makeSnapshot(health: currentHealth(
+        routingKind: "native",
+        routingInjected: false
+    ))
+    controller.apply(snapshot)
+
+    controller.showSetupRequired(.codexFirstRun)
+
+    runner.equal(controller.operationStatusTitle, "Open Codex to finish setup")
+    runner.equal(
+        controller.operationStatusDetail,
+        "CodexCommander is running. Open Codex once, then choose Route Codex Through Proxy."
+    )
+    runner.equal(controller.operationStatusTone, .warning)
+    runner.expect(controller.routeThroughProxyEnabled, "route retry remains available")
+    runner.equal(
+        controller.operationStatusView.accessibilityLabel(),
+        "Open Codex to finish setup",
+        "setup warning has a concise accessible label"
+    )
+    runner.equal(
+        controller.operationStatusView.accessibilityStatusValue,
+        "Open Codex to finish setup. CodexCommander is running. Open Codex once, then choose Route Codex Through Proxy.",
+        "setup warning exposes the complete recovery instruction"
+    )
+}
+
 runner.test("ui: route success persists with explicit ChatGPT restart step until dismissed") {
     let controller = PopoverViewController()
     _ = controller.view
@@ -1186,6 +1289,22 @@ runner.test("ui: lifecycle confirmations default to Cancel and mark stop actions
     )
 }
 
+runner.test("ui: setup requirements present actionable and forward-compatible guidance") {
+    let firstRun = LifecycleResultMessage.setupRequired(.codexFirstRun)
+    runner.equal(firstRun.title, "Open Codex to finish setup")
+    runner.equal(
+        firstRun.detail,
+        "CodexCommander is running. Open Codex once, then choose Route Codex Through Proxy."
+    )
+
+    let future = LifecycleResultMessage.setupRequired(.unknown("future-setup"))
+    runner.equal(future.title, "CodexCommander setup is required")
+    runner.equal(
+        future.detail,
+        "The proxy is running. Update CodexCommander for setup instructions."
+    )
+}
+
 runner.test("ui: catalog confirmation is activity-aware and defaults to Later") {
     let busy = CatalogUpdateConfirmation(activity: .active(2))
     let busyAlert = busy.makeAlert()
@@ -1356,9 +1475,156 @@ runner.test("ui: stop-and-quit exits only after a confirmed stopped outcome") {
     runner.equal(StopAndQuitPolicy.shouldTerminate(after: .stopped), true)
     runner.equal(StopAndQuitPolicy.shouldTerminate(after: .running), false)
     runner.equal(
+        StopAndQuitPolicy.shouldTerminate(after: .setupRequired(.codexFirstRun)),
+        false,
+        "first-run guidance never turns a failed stop into termination"
+    )
+    runner.equal(
         StopAndQuitPolicy.shouldTerminate(after: .failed("still running")),
         false
     )
+}
+
+runner.test("ui: translocated automatic launch shows move guidance without starting lifecycle") {
+    let lifecycle = RecordingLifecycleRunner()
+    let location = LaunchAtLoginEligibility.classify(
+        URL(fileURLWithPath: "/private/var/folders/xx/AppTranslocation/CodexCommander.app")
+    )
+    runner.equal(location, .translocated)
+    let delegate = AppDelegate(
+        appBundleLocation: location,
+        actions: ActionCoordinator(lifecycle: lifecycle)
+    )
+
+    delegate.startProxyOnLaunchForTesting()
+    spinMainRunLoop(seconds: 0.05)
+
+    runner.equal(lifecycle.recordedActions, [], "randomized bundle path must never reach Start")
+    runner.equal(
+        delegate.presentationControllerForTesting.operationStatusTitle,
+        "Move CodexCommander to Applications"
+    )
+    runner.equal(
+        delegate.presentationControllerForTesting.operationStatusDetail,
+        "This temporary macOS launch location cannot safely run the background proxy. Move the app, then reopen it."
+    )
+}
+
+runner.test("ui: translocated manual Start remains blocked") {
+    let lifecycle = RecordingLifecycleRunner()
+    let delegate = AppDelegate(
+        appBundleLocation: .translocated,
+        actions: ActionCoordinator(lifecycle: lifecycle)
+    )
+
+    delegate.startProxyForTesting()
+    spinMainRunLoop(seconds: 0.05)
+
+    runner.equal(lifecycle.recordedActions, [], "manual Start must not escape translocation blocking")
+    runner.equal(delegate.presentationControllerForTesting.operationStatusTone, .warning)
+}
+
+runner.test("ui: relocatable automatic launch continues through Start for this session") {
+    let lifecycle = RecordingLifecycleRunner()
+    let delegate = AppDelegate(
+        appBundleLocation: .relocatable,
+        actions: ActionCoordinator(lifecycle: lifecycle)
+    )
+
+    delegate.startProxyOnLaunchForTesting()
+    spinMainRunLoop(seconds: 0.10)
+
+    runner.equal(lifecycle.recordedActions, [.start])
+}
+
+runner.test("ui: ordinary AppTranslocation folder-name collision still starts this session") {
+    let lifecycle = RecordingLifecycleRunner()
+    let location = LaunchAtLoginEligibility.classify(
+        URL(fileURLWithPath: "/Users/example/Downloads/AppTranslocation/CodexCommander.app")
+    )
+    runner.equal(location, .relocatable)
+    let delegate = AppDelegate(
+        appBundleLocation: location,
+        actions: ActionCoordinator(lifecycle: lifecycle)
+    )
+
+    delegate.startProxyOnLaunchForTesting()
+    spinMainRunLoop(seconds: 0.10)
+
+    runner.equal(lifecycle.recordedActions, [.start])
+}
+
+runner.test("ui: translocated Restart records zero lifecycle dispatch") {
+    let lifecycle = RecordingLifecycleRunner()
+    let delegate = AppDelegate(
+        appBundleLocation: .translocated,
+        actions: ActionCoordinator(lifecycle: lifecycle),
+        lifecycleConfirmation: { _ in true }
+    )
+
+    delegate.restartProxyForTesting()
+    spinMainRunLoop(seconds: 0.05)
+
+    runner.equal(lifecycle.recordedActions, [])
+    runner.equal(delegate.spawnActionInFlightForTesting, false)
+    runner.equal(
+        delegate.presentationControllerForTesting.operationStatusTitle,
+        "Move CodexCommander to Applications"
+    )
+}
+
+runner.test("ui: stable and relocatable Restart still dispatch lifecycle") {
+    for location in [AppBundleLocation.stable, .relocatable] {
+        let lifecycle = RecordingLifecycleRunner()
+        let delegate = AppDelegate(
+            appBundleLocation: location,
+            actions: ActionCoordinator(lifecycle: lifecycle),
+            lifecycleConfirmation: { _ in true }
+        )
+
+        delegate.restartProxyForTesting()
+        spinMainRunLoop(seconds: 0.10)
+
+        runner.equal(lifecycle.recordedActions, [.restart], "\(location)")
+    }
+}
+
+runner.test("ui: translocated catalog recheck records zero lifecycle dispatch") {
+    let lifecycle = RecordingLifecycleRunner()
+    let delegate = AppDelegate(
+        appBundleLocation: .translocated,
+        actions: ActionCoordinator(lifecycle: lifecycle)
+    )
+
+    delegate.recheckCodexCatalogForTesting()
+    spinMainRunLoop(seconds: 0.05)
+
+    runner.equal(lifecycle.recordedActions, [])
+    runner.equal(delegate.spawnActionInFlightForTesting, false)
+    runner.equal(
+        delegate.presentationControllerForTesting.operationStatusTitle,
+        "Move CodexCommander to Applications"
+    )
+    runner.equal(
+        delegate.presentationControllerForTesting.catalogUpdateVisible,
+        true,
+        "blocking Ensure preserves the pending catalog card"
+    )
+}
+
+runner.test("ui: stable and relocatable catalog recheck still dispatches Ensure") {
+    for location in [AppBundleLocation.stable, .relocatable] {
+        let lifecycle = RecordingLifecycleRunner()
+        let delegate = AppDelegate(
+            appBundleLocation: location,
+            actions: ActionCoordinator(lifecycle: lifecycle)
+        )
+
+        delegate.recheckCodexCatalogForTesting()
+        spinMainRunLoop(seconds: 0.10)
+
+        runner.equal(lifecycle.recordedActions, [.ensure], "\(location)")
+    }
 }
 
 // MARK: - Resource honesty

@@ -20,6 +20,7 @@ vision and web-search sidecars can also use your ChatGPT login when a routed mod
 ```bash
 bun install
 bun run build:gui
+bun run src/cli/index.ts init
 bun run src/cli/index.ts start
 ```
 
@@ -30,6 +31,35 @@ terminal:
 ```bash
 bun run src/cli/index.ts --version
 ```
+
+This is the source/headless installation path. Run `ccx init` (or
+`bun run src/cli/index.ts init`) before an ordinary CLI start so CodexCommander has a valid
+`$CODEXCOMMANDER_HOME/config.json`:
+
+```bash
+ccx init
+ccx start
+```
+
+The CLI does not create a missing configuration implicitly and does not create a Codex config by
+writing JSON or TOML for you. If its configuration is missing, invalid, unreadable, or unsafe, repair
+that state and retry; existing bytes are preserved. Codex's own configuration and any external Codex
+provider remain untouched unless you explicitly choose a CodexCommander route.
+
+## Packaged macOS app
+
+The direct **Start** action in the packaged macOS companion is the one app-only exception: on a fresh
+Mac it creates the canonical secret-free ChatGPT passthrough default without a setup wizard. It never
+copies providers, API keys, or OAuth accounts from another Mac. If Codex has not created
+`~/.codex/config.toml` yet, the proxy and dashboard still start while Codex stays native. Open Codex
+once, then choose **Route Codex Through Proxy** from the menu. The app never creates Codex's config
+automatically.
+
+The app initializer is create-only/no-clobber. An existing valid, invalid, unreadable, or unsafe
+CodexCommander config is never overwritten; invalid or inaccessible state must be repaired before the
+app can start. A user-managed external Codex provider is also preserved. For release installation,
+use the universal Intel + Apple silicon archive from [GitHub Releases](https://github.com/pavelhov/CodexCommander/releases),
+not a thin development `.app` from a source checkout.
 
 ## Development mode
 
@@ -47,7 +77,7 @@ bun run dev:gui   # another terminal
 On macOS, build the companion from this same checkout with `bun run test:macos && bun run
 build:macos`. Its source-build location is `dist/macos/CodexCommander.app`; do not copy that development
 build into Application Support. See [macOS Menu Bar Companion](/guides/macos-menu-bar/) for lifecycle
-behavior, Launch at Login, Desktop/Headless/Off modes, and source-build operation.
+behavior, Launch at Login, Desktop/Headless/Off modes, app-location rules, and source-build operation.
 
 ## What gets created
 

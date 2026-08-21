@@ -5,6 +5,7 @@
 ```bash
 bun install
 bun run build:gui
+bun run src/cli/index.ts init
 bun run src/cli/index.ts start
 ```
 
@@ -64,6 +65,7 @@ flowchart LR
 ```bash
 bun install
 bun run build:gui
+bun run src/cli/index.ts init
 bun run src/cli/index.ts start   # バックグラウンド実行には start の代わりに service
 ```
 
@@ -72,13 +74,13 @@ bun run src/cli/index.ts start   # バックグラウンド実行には start �
 ### エージェント向け
 
 ```bash
-bun run src/cli/index.ts start
 bun run src/cli/index.ts init
+bun run src/cli/index.ts start
 ```
 
 このソースチェックアウトでは、以降の `ccx <args>` を `bun run src/cli/index.ts <args>` として実行できます。
 
-`ccx init` 自体はプロキシを起動しません。先に起動しても後から起動しても構いませんが、`ccx provider add` や `ccx combo set` などのヘッドレスコマンドは**稼働中の**プロキシと通信し、接続できない場合は非ゼロで終了します。`ccx status` / `ccx doctor` / `ccx health` で稼働状態を確認できます。
+`ccx init` 自体はプロキシを起動しないため、通常の CLI または service を起動する前に先に実行してください。設定がない状態で通常起動すると拒否されます。`ccx provider add` や `ccx combo set` などのヘッドレスコマンドは**稼働中の**プロキシと通信し、接続できない場合は非ゼロで終了します。`ccx status` / `ccx doctor` / `ccx health` で稼働状態を確認できます。
 
 ## プロバイダーを追加
 

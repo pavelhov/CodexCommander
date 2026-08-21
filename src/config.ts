@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, copyFileSync, existsSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
@@ -40,7 +40,10 @@ import {
   hardenSecretPathAsync,
   windowsSecretAclApplies,
 } from "./lib/windows-secret-acl";
-import { recordOwnedConfigPath } from "./lib/config-ownership";
+import {
+  inspectPhysicalConfigRoot,
+  recordOwnedConfigPath,
+} from "./lib/config-ownership";
 import { assertNotRealHomeUnderTest } from "./lib/test-home-guard";
 import { isLocalAttestationSecret } from "./lib/local-management-attestation";
 import { providerDestinationConfigError } from "./lib/destination-policy";
@@ -1637,6 +1640,216 @@ export function readConfigDiagnostics(): ConfigDiagnostics {
   return readConfigFileSnapshot().diagnostics;
 }
 
+export type ConfigInitializationRefusal =
+  | "candidate-invalid"
+  | "existing-invalid"
+  | "existing-inaccessible"
+  | "existing-unsafe"
+  | "coordination-unavailable";
+
+export type ConfigInitializationResult =
+  | { status: "created" }
+  | { status: "existing" }
+  | { status: "refused"; reason: ConfigInitializationRefusal };
+
+type ConfigEntryProbe =
+  | { kind: "missing" }
+  | { kind: "valid" }
+  | {
+    kind: "refused";
+    reason: Exclude<
+      ConfigInitializationRefusal,
+      "candidate-invalid" | "coordination-unavailable"
+    >;
+  };
+
+type ConfigRootProbe =
+  | { kind: "missing" }
+  | { kind: "valid" }
+  | { kind: "refused"; reason: "existing-inaccessible" | "existing-unsafe" };
+
+const CONFIG_INITIALIZATION_WAIT_MS = 2_000;
+const CONFIG_INITIALIZATION_POLL_MS = 10;
+
+function probeConfigRoot(): ConfigRootProbe {
+  const path = getConfigDir();
+  let entry;
+  try {
+    entry = inspectPhysicalConfigRoot(path);
+  } catch (error) {
+    return isMissingPathError(error)
+      ? { kind: "missing" }
+      : { kind: "refused", reason: "existing-inaccessible" };
+  }
+  if (entry.kind !== "valid") {
+    return { kind: "refused", reason: "existing-unsafe" };
+  }
+  return { kind: "valid" };
+}
+
+function probeConfigEntry(): ConfigEntryProbe {
+  let entry;
+  try {
+    entry = lstatSync(getConfigPath());
+  } catch (error) {
+    return isMissingPathError(error)
+      ? { kind: "missing" }
+      : { kind: "refused", reason: "existing-inaccessible" };
+  }
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
+    return { kind: "refused", reason: "existing-unsafe" };
+  }
+  try {
+    return configDiagnosticsFromRaw(readFileSync(getConfigPath(), "utf8")).source === "file"
+      ? { kind: "valid" }
+      : { kind: "refused", reason: "existing-invalid" };
+  } catch {
+    return { kind: "refused", reason: "existing-inaccessible" };
+  }
+}
+
+function createConfigExclusive(path: string, bytes: string): boolean {
+  let descriptor: number;
+  try {
+    descriptor = openSync(path, "wx", 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw error;
+  }
+
+  let complete = false;
+  let descriptorOpen = true;
+  try {
+    writeFileSync(descriptor, bytes, { encoding: "utf8" });
+    try { fchmodSync(descriptor, 0o600); } catch { /* filesystem may ignore chmod */ }
+    fsyncSync(descriptor);
+    closeSync(descriptor);
+    descriptorOpen = false;
+    if (process.platform === "win32") {
+      hardenSecretPath(path, { required: true, timeoutMemoKey: path });
+    }
+    complete = true;
+    return true;
+  } finally {
+    if (descriptorOpen) {
+      try { closeSync(descriptor); } catch { /* the create/write error remains authoritative */ }
+    }
+    if (!complete) {
+      try { unlinkSync(path); } catch { /* a later static probe will refuse any residue */ }
+    }
+  }
+}
+
+function configInitializationContenderObservation(): ConfigInitializationResult | ConfigEntryProbe {
+  const current = probeConfigEntry();
+  if (current.kind === "valid") return { status: "existing" };
+  return current;
+}
+
+function waitForConfigInitializationWinner(
+  deadline: number,
+  fallback: ConfigInitializationRefusal,
+): ConfigInitializationResult {
+  let lastRefusal: ConfigInitializationRefusal | null = null;
+  for (;;) {
+    const observed = configInitializationContenderObservation();
+    if ("status" in observed) return observed;
+    if (observed.kind === "refused") lastRefusal = observed.reason;
+    if (performance.now() >= deadline) {
+      return { status: "refused", reason: lastRefusal ?? fallback };
+    }
+    Bun.sleepSync(CONFIG_INITIALIZATION_POLL_MS);
+  }
+}
+
+export function initializeConfigIfMissing(
+  candidate: CodexCommanderConfig,
+): ConfigInitializationResult {
+  const validated = validateConfigCandidate(candidate);
+  if (!validated.ok) return { status: "refused", reason: "candidate-invalid" };
+  const deadline = performance.now() + CONFIG_INITIALIZATION_WAIT_MS;
+  const initialRoot = probeConfigRoot();
+  if (initialRoot.kind === "refused") {
+    return { status: "refused", reason: initialRoot.reason };
+  }
+  const observed = probeConfigEntry();
+  if (observed.kind === "valid") return { status: "existing" };
+  if (observed.kind === "refused" && observed.reason !== "existing-invalid") {
+    return { status: "refused", reason: observed.reason };
+  }
+  let ownershipFailure: ConfigInitializationRefusal | null = null;
+  try {
+    if (!recordOwnedConfigPath(getConfigDir(), getConfigPath())) {
+      ownershipFailure = "existing-unsafe";
+    }
+  } catch {
+    ownershipFailure = "existing-inaccessible";
+  }
+
+  const ownedRoot = probeConfigRoot();
+  if (ownedRoot.kind !== "valid") {
+    return {
+      status: "refused",
+      reason: ownedRoot.kind === "refused" ? ownedRoot.reason : "existing-unsafe",
+    };
+  }
+  if (!ownershipFailure) {
+    try {
+      if (!recordOwnedConfigPath(getConfigDir(), getConfigPath())) {
+        ownershipFailure = "existing-unsafe";
+      }
+    } catch {
+      ownershipFailure = "existing-inaccessible";
+    }
+  }
+  if (ownershipFailure) {
+    if (observed.kind === "refused" && observed.reason === "existing-invalid") {
+      return { status: "refused", reason: observed.reason };
+    }
+    return waitForConfigInitializationWinner(deadline, ownershipFailure);
+  }
+
+  let lastContentionRefusal: ConfigInitializationRefusal | null = null;
+  for (;;) {
+    try {
+      return withConfigMutationLockTimeoutSync(() => {
+        const current = probeConfigEntry();
+        if (current.kind === "valid") return { status: "existing" } as const;
+        if (current.kind === "refused") {
+          return { status: "refused", reason: current.reason } as const;
+        }
+
+        const bytes = `${JSON.stringify(validated.config, null, 2)}\n`;
+        const published = createConfigExclusive(getConfigPath(), bytes);
+        if (!published) {
+          const winner = probeConfigEntry();
+          if (winner.kind === "valid") return { status: "existing" } as const;
+          return {
+            status: "refused",
+            reason: winner.kind === "refused" ? winner.reason : "coordination-unavailable",
+          } as const;
+        }
+        bumpGenerationForCooperatingConfigWrite();
+        return { status: "created" } as const;
+      }, CONFIG_INITIALIZATION_WAIT_MS);
+    } catch (error) {
+      if (!(error instanceof ConfigMutationLockError)) {
+        return { status: "refused", reason: "coordination-unavailable" };
+      }
+      const contender = configInitializationContenderObservation();
+      if ("status" in contender) return contender;
+      if (contender.kind === "refused") lastContentionRefusal = contender.reason;
+      if (performance.now() >= deadline) {
+        return {
+          status: "refused",
+          reason: lastContentionRefusal ?? "coordination-unavailable",
+        };
+      }
+      Bun.sleepSync(CONFIG_INITIALIZATION_POLL_MS);
+    }
+  }
+}
+
 /**
  * The persisted config, plus a digest of the EXACT bytes it was parsed from.
  *
@@ -1744,6 +1957,13 @@ let configMutationDatabase: Database | null = null;
  * Reentrancy is limited to the current synchronous call stack; never return a Promise from `fn`.
  */
 export function withConfigMutationLockSync<T>(fn: () => T): T {
+  return withConfigMutationLockTimeoutSync(fn, 0);
+}
+
+function withConfigMutationLockTimeoutSync<T>(
+  fn: () => T,
+  busyTimeoutMs: number,
+): T {
   if (configMutationLockDepth > 0) {
     configMutationLockDepth += 1;
     try {
@@ -1758,7 +1978,7 @@ export function withConfigMutationLockSync<T>(fn: () => T): T {
   try {
     database = new Database(path, { create: true });
     try { chmodSync(path, 0o600); } catch { /* platform may ignore chmod */ }
-    database.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}; BEGIN IMMEDIATE`);
     transactionOpen = true;
     initializeConfigGeneration(database);
   } catch (cause) {

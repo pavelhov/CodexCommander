@@ -20,6 +20,45 @@ $CODEX_HOME/.codexcommander-native-main-profiles/
 Never assume macOS-only paths. Windows, service installs, and app-launched Codex can all depend on
 the resolved `CODEX_HOME`.
 
+## macOS app first-run bootstrap
+
+The direct packaged macOS companion **Start** path is the only app-only configuration bootstrap. It
+uses `getDefaultConfig()`'s canonical secret-free ChatGPT passthrough provider and calls
+`initializeConfigIfMissing` with create-only/no-clobber semantics. The initializer validates the
+candidate before touching disk, refuses existing invalid, unreadable, inaccessible, or unsafe state,
+and never overwrites an existing valid file. At the coordinated missing-entry probe it opens the final
+`config.json` directly with `wx` and mode `0600`, writes and flushes through the owned descriptor, and
+re-probes once after `EEXIST`; only a complete valid ordinary single-link winner is adopted. Providers,
+API keys, OAuth accounts, and Codex configuration are not copied or created by this bootstrap.
+An incomplete first read in an already owned root is rechecked only after acquiring mutation
+coordination, so one CodexCommander process never adopts or rejects another's partial descriptor write.
+
+The bootstrap candidate is trusted in-process policy data and is validated for schema correctness.
+Static unsafe state remains fail-closed: linked roots, symlinked/nonregular/hard-linked entries,
+inaccessible state, and unowned roots are refused. Active same-user filesystem mutation after the
+coordinated probe is outside this narrow bootstrap boundary; the initializer does not anchor process
+CWD or promise descriptor-relative defense against a same-user pathname swap.
+
+Lifecycle authority acquires the Ensure lock (`E`) before the app preparation hook; the hook acquires
+the shared `config-mutation.sqlite` lock only after E is held. This E → config-mutation-lock ordering
+is an invariant: it keeps direct app bootstrap serialized with lifecycle start while preserving the
+config writer's cross-process race protections. Ordinary CLI and service startup do not call the app
+hook and require `ccx init` to create a valid CodexCommander config; a missing config is refused rather
+than synthesized.
+
+When the app observes that `$CODEX_HOME/config.toml` is missing on a fresh app bootstrap, it writes
+only the app-owned default with `clientIntegrations.codex=false`. The proxy and dashboard still start,
+but Codex remains native and the result reports `setupRequired: "codex-first-run"`; the companion tells
+the user to open Codex once and then choose **Route Codex Through Proxy**. No Codex file is created
+automatically. Existing Codex config, including an external provider route, remains untouched.
+
+The companion's physical bundle classifier is part of this contract. `/Applications`, `~/Applications`,
+and the source-build path are stable for Launch at Login; Desktop or Downloads copies are relocatable,
+allowed for the current session, and presented with neutral guidance to move to Applications. The user
+must quit CodexCommander before moving a running app, and the app never moves it. True App
+Translocation is a hard pre-dispatch prohibition: Start stops before proxy launch and requires move and
+reopen.
+
 Native-main profile ownership is bound to the real `CODEX_HOME`, not to a CodexCommander instance.
 Its encrypted vault, transaction journal, recovery marker, and referenced quarantine files live in
 the owner-only `.codexcommander-native-main-profiles` directory. The unchanged
@@ -182,8 +221,12 @@ proxy lifecycle. Existing `codexcommander-catalog.json` and `models_cache.json` 
 but are inert once `config.toml` no longer references them. Codex tasks, thread/history/rollout state,
 and authentication are outside lifecycle ownership and are never modified by the native escape.
 
-Explicit Start and Route Back are the inverse OFF→ON transition. If a recovery journal exists, they
-first classify what it represents. The journal is a protected crash-recovery checkpoint: it records
+Explicit Start and Route Back are the inverse OFF→ON transition once Codex configuration exists. The
+fresh direct app-start bootstrap is the exception: if Codex has not created `$CODEX_HOME/config.toml`,
+the app starts the proxy and dashboard with Codex native, returns `setupRequired: "codex-first-run"`,
+and waits for the user to open Codex once before choosing **Route Codex Through Proxy**. Passive
+companion `ensure` does not install or invoke the bootstrap hook. If a recovery journal exists, Start
+and Route Back first classify what it represents. The journal is a protected crash-recovery checkpoint: it records
 the exact config/profile images needed to distinguish CodexCommander's write from unrelated user
 edits. It is not a second routing preference or user-maintained database, and users must not delete
 it manually.

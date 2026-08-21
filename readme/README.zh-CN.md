@@ -5,6 +5,7 @@
 ```bash
 bun install
 bun run build:gui
+bun run src/cli/index.ts init
 bun run src/cli/index.ts start
 ```
 
@@ -63,6 +64,7 @@ flowchart LR
 ```bash
 bun install
 bun run build:gui
+bun run src/cli/index.ts init
 bun run src/cli/index.ts start   # 后台运行时用 service 代替 start
 ```
 
@@ -72,13 +74,13 @@ provider，或任意 OpenAI 兼容端点）、选择模型并管理账户。随�
 ### 面向代理
 
 ```bash
-bun run src/cli/index.ts start
 bun run src/cli/index.ts init
+bun run src/cli/index.ts start
 ```
 
 在此源码检出目录中，下文的 `ccx <args>` 命令都可以写成 `bun run src/cli/index.ts <args>`。
 
-`ccx init` 不会启动代理；可以先启动代理，也可以之后再启动——两种顺序都可行，但
+`ccx init` 不会启动代理，因此必须先完成初始化，再启动普通 CLI 或 service。未初始化时尝试普通启动会因缺少配置而被拒绝。
 `ccx provider add`、`ccx combo set` 等无头命令会连接**正在运行的**代理，无法访问时将以非零状态
 退出。`ccx status` / `ccx doctor` / `ccx health` 可报告运行状态。
 

@@ -30,6 +30,9 @@ public struct LifecycleCommandResult: Decodable, Equatable, Sendable {
     public let port: Int?
     public let message: String
     public let errorCode: String?
+    /// Optional setup guidance from a successful proxy start. Retain the raw string
+    /// so newer helper values remain forward-compatible with older app builds.
+    public let setupRequired: String?
     /// These fields are present only for the `applyCodexCatalog` action. The app receives
     /// counts rather than process identifiers.
     public let catalogUpdated: Bool?
@@ -48,6 +51,7 @@ public struct LifecycleCommandResult: Decodable, Equatable, Sendable {
         port: Int? = nil,
         message: String,
         errorCode: String? = nil,
+        setupRequired: String? = nil,
         catalogUpdated: Bool? = nil,
         codexRestartRequired: Bool? = nil,
         staleWorkerCount: Int? = nil,
@@ -63,6 +67,7 @@ public struct LifecycleCommandResult: Decodable, Equatable, Sendable {
         self.port = port
         self.message = message
         self.errorCode = errorCode
+        self.setupRequired = setupRequired
         self.catalogUpdated = catalogUpdated
         self.codexRestartRequired = codexRestartRequired
         self.staleWorkerCount = staleWorkerCount
@@ -72,6 +77,7 @@ public struct LifecycleCommandResult: Decodable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, action, ok, state, changed, pid, port, message, errorCode
+        case setupRequired
         case catalogUpdated, codexRestartRequired, staleWorkerCount
         case stoppedWorkerCount, survivingWorkerCount
     }
@@ -89,6 +95,7 @@ public struct LifecycleCommandResult: Decodable, Equatable, Sendable {
         port = try values.decode(Int?.self, forKey: .port)
         message = try values.decode(String.self, forKey: .message)
         errorCode = try values.decodeIfPresent(String.self, forKey: .errorCode)
+        setupRequired = try values.decodeIfPresent(String.self, forKey: .setupRequired)
 
         if action == .applyCodexCatalog {
             catalogUpdated = try values.decode(Bool.self, forKey: .catalogUpdated)

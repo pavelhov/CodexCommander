@@ -209,13 +209,15 @@ enum LaunchAtLoginSuite {
 
             t.equal(result.status, .requiresApproval)
             t.equal(result.needsApproval, true)
+            t.equal(result.relocationRequired, false)
+            t.equal(result.remediation, .openSystemSettings)
             t.equal(result.isToggleEnabled, false)
             t.equal(service.registerCalls, 0)
             t.equal(service.unregisterCalls, 0)
             t.equal(service.settingsCalls, 1)
         }
 
-        t.test("login: an unstable app path never creates a registration") {
+        t.test("login: a relocatable app path offers neutral Applications remediation") {
             let service = FakeLaunchAtLoginService(status: .disabled)
             let preferences = FakeLaunchAtLoginPreferences()
             let controller = LaunchAtLoginController(
@@ -231,6 +233,12 @@ enum LaunchAtLoginSuite {
 
             t.equal(result.status, .unavailable)
             t.equal(refreshed.status, .unavailable)
+            t.equal(result.relocationRequired, true)
+            t.equal(refreshed.relocationRequired, true)
+            t.equal(result.remediation, .openApplications)
+            t.equal(refreshed.remediation, .openApplications)
+            t.isNil(result.errorMessage, "relocation is guidance, not an error")
+            t.isNil(refreshed.errorMessage, "refreshed relocation remains neutral")
             t.equal(result.isToggleEnabled, false)
             t.equal(refreshed.isToggleEnabled, false)
             t.equal(service.registerCalls, 0)
@@ -335,56 +343,112 @@ enum LaunchAtLoginSuite {
             )
         }
 
-        t.test("menu app: stable login paths exclude downloads and translocation") {
+        t.test("menu app: bundle locations distinguish stable, relocatable, and translocated copies") {
             let home = URL(fileURLWithPath: "/Users/example", isDirectory: true)
             t.equal(
-                LaunchAtLoginEligibility.isStableBundle(
+                LaunchAtLoginEligibility.classify(
                     URL(fileURLWithPath: "/repo/dist/macos/CodexCommander.app"),
                     home: home
                 ),
-                true
+                .stable
             )
             t.equal(
-                LaunchAtLoginEligibility.isStableBundle(
+                LaunchAtLoginEligibility.classify(
                     URL(fileURLWithPath: "/Applications/CodexCommander.app"),
                     home: home
                 ),
-                true
+                .stable
             )
             t.equal(
-                LaunchAtLoginEligibility.isStableBundle(
+                LaunchAtLoginEligibility.classify(
                     URL(fileURLWithPath: "/Users/example/Applications/CodexCommander.app"),
                     home: home
                 ),
-                true
+                .stable
+            )
+            t.equal(
+                LaunchAtLoginEligibility.classify(
+                    URL(fileURLWithPath: "/Users/example/Downloads/CodexCommander.app"),
+                    home: home
+                ),
+                .relocatable
+            )
+            t.equal(
+                LaunchAtLoginEligibility.classify(
+                    URL(fileURLWithPath: "/Users/example/Downloads/AppTranslocation/CodexCommander.app"),
+                    home: home
+                ),
+                .relocatable,
+                "an ordinary folder-name collision is not macOS App Translocation"
+            )
+            t.equal(
+                LaunchAtLoginEligibility.classify(
+                    URL(fileURLWithPath: "/private/var/folders/xx/AppTranslocation/CodexCommander.app"),
+                    home: home
+                ),
+                .translocated
+            )
+            t.equal(
+                LaunchAtLoginEligibility.classify(
+                    URL(fileURLWithPath: "/repo/dist/macos/Other.app"),
+                    home: home
+                ),
+                .relocatable
+            )
+            t.equal(
+                LaunchAtLoginEligibility.classify(
+                    URL(fileURLWithPath: "/Applications/Other.app"),
+                    home: home
+                ),
+                .relocatable
+            )
+            t.equal(
+                LaunchAtLoginEligibility.classify(
+                    URL(fileURLWithPath: "/repo/build/macos/CodexCommander.app"),
+                    home: home
+                ),
+                .relocatable
+            )
+            t.equal(
+                LaunchAtLoginEligibility.classify(
+                    URL(fileURLWithPath: "/repo/dist/release/CodexCommander.app"),
+                    home: home
+                ),
+                .relocatable
             )
             t.equal(
                 LaunchAtLoginEligibility.isStableBundle(
                     URL(fileURLWithPath: "/Users/example/Downloads/CodexCommander.app"),
                     home: home
                 ),
-                false
+                false,
+                "compatibility wrapper remains stable-only"
             )
-            t.equal(
-                LaunchAtLoginEligibility.isStableBundle(
-                    URL(fileURLWithPath: "/private/var/folders/AppTranslocation/CodexCommander.app"),
-                    home: home
-                ),
-                false
+        }
+
+        t.test("menu app: symlinked home keeps its Applications bundle stable") {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "CodexCommander-Home-\(UUID().uuidString)",
+                isDirectory: true
             )
-            t.equal(
-                LaunchAtLoginEligibility.isStableBundle(
-                    URL(fileURLWithPath: "/repo/dist/macos/Other.app"),
-                    home: home
-                ),
-                false
+            let physicalHome = root.appendingPathComponent("physical-home", isDirectory: true)
+            let linkedHome = root.appendingPathComponent("linked-home", isDirectory: true)
+            let bundle = linkedHome
+                .appendingPathComponent("Applications", isDirectory: true)
+                .appendingPathComponent("CodexCommander.app", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: physicalHome.appendingPathComponent("Applications/CodexCommander.app"),
+                withIntermediateDirectories: true
             )
+            try FileManager.default.createSymbolicLink(
+                at: linkedHome,
+                withDestinationURL: physicalHome
+            )
+            defer { try? FileManager.default.removeItem(at: root) }
+
             t.equal(
-                LaunchAtLoginEligibility.isStableBundle(
-                    URL(fileURLWithPath: "/Applications/Other.app"),
-                    home: home
-                ),
-                false
+                LaunchAtLoginEligibility.classify(bundle, home: linkedHome),
+                .stable
             )
         }
 

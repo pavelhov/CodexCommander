@@ -8,6 +8,7 @@ import {
   type ProxyLifecycleAction,
   type ProxyLifecycleResult,
 } from "./proxy-lifecycle";
+import { prepareMacOSAppStart } from "./macos-first-run";
 import {
   APPLY_CODEX_CATALOG_ACTION,
   type ApplyCodexCatalogLifecycleResult,
@@ -80,16 +81,31 @@ export function encodeMacOSLifecycleResult(
   return { frame, exitCode: emitted.ok ? 0 : 1 };
 }
 
-async function perform(action: MacOSLifecycleAction): Promise<MacOSLifecycleResult> {
+export interface MacOSLifecycleDeps {
+  ensureProxyLifecycle?: typeof ensureProxyLifecycle;
+  prepareMacOSAppStart?: typeof prepareMacOSAppStart;
+}
+
+export async function performMacOSLifecycleAction(
+  action: MacOSLifecycleAction,
+  deps: MacOSLifecycleDeps = {},
+): Promise<MacOSLifecycleResult> {
+  const ensure = deps.ensureProxyLifecycle ?? ensureProxyLifecycle;
   switch (action) {
     case "status":
       return proxyLifecycleStatus();
     case "ensure":
-    case "start":
-      return ensureProxyLifecycle({
+      return ensure({
         action,
         honorAutoStart: false,
         ensureCompanion: false,
+      });
+    case "start":
+      return ensure({
+        action,
+        honorAutoStart: false,
+        ensureCompanion: false,
+        io: { prepareStart: deps.prepareMacOSAppStart ?? prepareMacOSAppStart },
       });
     case "stop":
       return stopProxyLifecycle();
@@ -130,7 +146,7 @@ export async function runMacOSLifecycleHelper(args: string[]): Promise<number> {
   console.error = () => {};
   let result: MacOSLifecycleResult;
   try {
-    result = await perform(action);
+    result = await performMacOSLifecycleAction(action);
   } catch {
     result = failedResult(action);
   } finally {

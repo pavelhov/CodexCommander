@@ -48,14 +48,47 @@ their own files.
 ## Lifecycle
 
 Explicit starts (`ccx start`, every new companion launch, companion Start, and service
-create/`install`/`repair`/`start`) enable managed Codex integration, preserve an external user-managed
-provider, refuse a duplicate PID, start the proxy, write
+create/`install`/`repair`/`start`) normally enable managed Codex integration, preserve an external
+user-managed provider, refuse a duplicate PID, start the proxy, write
 `~/.codexcommander/codexcommander.pid`, and sync Codex config/catalog. Automatic `ensure` preserves an
 intentional OFF state. Normal standalone shutdown restores native routing. Service mode sets
 `CCX_SERVICE=1`, so manager restarts preserve the current route; explicit service stop and uninstall
 restore and verify native routing before terminating anything.
 In this document, restoring native means removing CodexCommander-owned routing; an external
 user-managed Codex provider is preserved.
+
+The fresh direct app-start exception is deliberate: when the app-only bootstrap creates the
+CodexCommander config before Codex has created `$CODEX_HOME/config.toml`, it starts the proxy and
+dashboard but leaves Codex native and returns `setupRequired: "codex-first-run"`. The companion then
+asks the user to open Codex once and choose **Route Codex Through Proxy**. Passive companion `ensure`
+does not install or invoke this bootstrap hook; it preserves the existing OFF/native intent.
+
+Direct packaged macOS **Start** is the only lifecycle entrypoint with an app-only configuration
+bootstrap. `src/cli/macos-lifecycle.ts` passes `prepareMacOSAppStart` through the canonical lifecycle
+authority before config load, liveness probing, routing mutation, proxy launch, or catalog sync. The
+authority acquires Ensure (`E`) first; the preparation hook may then acquire the shared config-mutation
+lock, preserving the required E-lock → config-mutation-lock ordering. Ordinary CLI `ccx start` and
+service paths do not call this hook: they require `ccx init` to have created a configuration and refuse
+a missing one.
+
+The app hook validates the canonical secret-free ChatGPT passthrough default and initializes only a
+missing CodexCommander config. Publication is create-only/no-clobber: under config mutation
+coordination it directly opens the final entry with `wx`, writes and flushes through the owned
+descriptor, and never overwrites an existing valid, invalid, unreadable, or unsafe config. An
+`EEXIST` loser re-probes once and adopts only a complete valid ordinary single-link winner. The
+trusted candidate comes from in-process app policy; active same-user filesystem mutation after the
+coordinated probe is outside this bootstrap boundary. If Codex has not created its config yet on this
+fresh app start, the proxy and dashboard still run while Codex routing stays native; the result carries
+`setupRequired: "codex-first-run"` so the companion tells the user to open Codex once and then choose
+**Route Codex Through Proxy**. The hook never creates Codex configuration and never copies provider
+secrets, API keys, or OAuth accounts. Existing external Codex providers remain outside its ownership.
+
+The native companion classifies its physical bundle location before dispatching either automatic or
+manual Start. `/Applications`, `~/Applications`, and the source-build bundle are stable; ordinary
+physical copies such as Desktop or Downloads are relocatable and may run for the current session while
+showing neutral move-to-Applications guidance. Users must quit before moving a running app, and the app
+never moves itself. True macOS App Translocation blocks Start before proxy launch and requires the user
+to move the app and reopen it.
 
 An installed Codex shim is checked on ordinary CLI startup with a regular-file/1 MiB state bound plus
 bounded metadata and prefix reads. A complete replacement must produce identical fingerprints and
@@ -99,10 +132,14 @@ untouched. The GUI sidebar stop button calls this endpoint.
 Every new manual or Login Item launch of the macOS companion performs an explicit Start. A failed or
 offline start must leave the menu app alive with its status/Start controls available; it cannot
 self-terminate just because the proxy is unavailable. Its **Quit** action terminates only the AppKit process. Explicit
-**Start** enables Codex routing through the proxy. **Stop** restores and verifies native routing before
-termination and keeps the menu app open. **Restart** runs the canonical stop→start transaction: it
-restores native routing before terminating the old proxy, then its explicit Start phase launches the
-replacement and routes Codex back through it. A failed restart leaves Codex native.
+**Start** enables Codex routing through the proxy when usable Codex configuration exists. On the
+fresh app-first-run path where Codex has not created its config, Start still starts the proxy and
+dashboard but leaves Codex native and returns `setupRequired: "codex-first-run"`; it does not enable
+routing until the user opens Codex once and chooses **Route Codex Through Proxy**. **Stop** restores and
+verifies native routing before termination and keeps the menu app open. **Restart** runs the canonical
+stop→start transaction: it restores native routing before terminating the old proxy, then its explicit
+Start phase launches the replacement and routes Codex back through it when configuration is usable. A
+failed restart leaves Codex native.
 **Restore Native Codex** and **Route Codex Through Proxy** change routing without changing proxy
 lifecycle.
 The main app is the default desktop Login Item; launchd remains an independent optional headless

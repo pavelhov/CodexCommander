@@ -57,7 +57,7 @@ public final class PopoverViewController: NSViewController {
     public var onQuitMenuBar: (() -> Void)?
     public var onStopAndQuit: (() -> Void)?
     public var onLaunchAtLoginChange: ((Bool) -> Void)?
-    public var onOpenLoginSettings: (() -> Void)?
+    public var onLaunchAtLoginRemediation: ((LaunchAtLoginRemediation) -> Void)?
     public var onManageProvider: ((String) -> Void)?
     public var onViewAllProviders: (() -> Void)?
 
@@ -83,8 +83,8 @@ public final class PopoverViewController: NSViewController {
         startupMode.onToggle = { [weak self] enabled in
             self?.onLaunchAtLoginChange?(enabled)
         }
-        startupMode.onOpenSettings = { [weak self] in
-            self?.onOpenLoginSettings?()
+        startupMode.onRemediation = { [weak self] remediation in
+            self?.onLaunchAtLoginRemediation?(remediation)
         }
         catalogUpdate.onApply = { [weak self] in
             self?.onApplyCodexCatalog?()
@@ -296,6 +296,26 @@ public final class PopoverViewController: NSViewController {
 
     public func showResult(_ text: String, isError: Bool) {
         operationStatus.showResult(title: text, tone: isError ? .error : .success)
+        refreshSize()
+    }
+
+    public func showSetupRequired(_ requirement: ProxySetupRequirement) {
+        let result = LifecycleResultMessage.setupRequired(requirement)
+        operationStatus.showResult(
+            title: result.title,
+            detail: result.detail,
+            tone: .warning
+        )
+        refreshSize()
+    }
+
+    public func showAppTranslocated() {
+        let result = LifecycleResultMessage.appTranslocated
+        operationStatus.showResult(
+            title: result.title,
+            detail: result.detail,
+            tone: .warning
+        )
         refreshSize()
     }
 
@@ -558,6 +578,12 @@ public final class PopoverViewController: NSViewController {
     package var hasVerticalScroller: Bool { scrollView.hasVerticalScroller }
     package var headerView: StatusHeaderView { header }
     package var operationStatusView: OperationStatusView { operationStatus }
+    package var operationStatusTitle: String { operationStatus.titleText }
+    package var operationStatusDetail: String? { operationStatus.detailText }
+    package var operationStatusTone: OperationStatusTone? {
+        operationStatus.lastRenderedTone
+    }
+    package var routeThroughProxyEnabled: Bool { routeThroughProxyButton.isEnabled }
     package var startupModeView: StartupModeView { startupMode }
     package var catalogUpdateVisible: Bool { !catalogUpdate.isHidden }
     package var catalogUpdateDetail: String { catalogUpdate.detailText }

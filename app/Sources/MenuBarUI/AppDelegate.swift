@@ -23,14 +23,31 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     private var catalogUpdateReady = false
     private var companionHeartbeat: CompanionHeartbeat?
     private let launchAtLoginController = LaunchAtLoginController()
+    private let appBundleLocation: AppBundleLocation
+    private let lifecycleConfirmation: ((LifecycleConfirmation) -> Bool)?
     private lazy var executableFingerprint = ExecutableFingerprint.current()
     private lazy var sourceRevision = BuildProvenance.shortRevision(
         Bundle.main.object(forInfoDictionaryKey: "CodexCommanderSourceRevision")
     )
     private lazy var launchAtLoginRegistrationAllowed =
-        LaunchAtLoginEligibility.isStableBundle(Bundle.main.bundleURL)
+        appBundleLocation == .stable
 
-    public override init() { super.init() }
+    public override init() {
+        appBundleLocation = LaunchAtLoginEligibility.classify(Bundle.main.bundleURL)
+        lifecycleConfirmation = nil
+        super.init()
+    }
+
+    package init(
+        appBundleLocation: AppBundleLocation,
+        actions: ActionCoordinator?,
+        lifecycleConfirmation: ((LifecycleConfirmation) -> Bool)? = nil
+    ) {
+        self.appBundleLocation = appBundleLocation
+        self.actions = actions
+        self.lifecycleConfirmation = lifecycleConfirmation
+        super.init()
+    }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         installApplicationMenu()
@@ -136,8 +153,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         controller.onLaunchAtLoginChange = { [weak self] enabled in
             self?.setLaunchAtLogin(enabled)
         }
-        controller.onOpenLoginSettings = { [weak self] in
-            self?.launchAtLoginController.openSystemSettings()
+        controller.onLaunchAtLoginRemediation = { [weak self] remediation in
+            self?.performLaunchAtLoginRemediation(remediation)
         }
         controller.onManageProvider = { [weak self] provider in
             self?.openProvider(provider)
@@ -349,6 +366,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         }
     }
 
+    private func performLaunchAtLoginRemediation(_ remediation: LaunchAtLoginRemediation) {
+        switch remediation {
+        case .openSystemSettings:
+            launchAtLoginController.openSystemSettings()
+        case .openApplications:
+            NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications", isDirectory: true))
+        }
+    }
+
     private func installApplicationMenu() {
         NSApp.mainMenu = ApplicationMenuFactory.make(
             target: self,
@@ -381,6 +407,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     /// Manual and Launch-at-Login openings share the explicit Start contract. A failed
     /// start leaves the menu app alive so its diagnostics and Start control remain usable.
     private func startProxyOnLaunch() {
+        guard permitsSpawnCapableLifecycleAction() else { return }
         guard !lifecycleInFlight, !restartInFlight, !catalogActionInFlight else { return }
         lifecycleInFlight = true
         updateApplicationMenu()
@@ -397,6 +424,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                 case .running:
                     self.clearCatalogUpdate()
                     self.companionHeartbeat?.reportNow()
+                case .setupRequired(let requirement):
+                    self.clearCatalogUpdate()
+                    self.companionHeartbeat?.reportNow()
+                    self.controller.showSetupRequired(requirement)
                 case .catalogUpdateReady(let count):
                     // The proxy is running with a pending catalog refresh; report now so
                     // a failed pre-start report is retried right after startup.
@@ -414,6 +445,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     }
 
     private func startProxy() {
+        guard permitsSpawnCapableLifecycleAction() else { return }
         guard !lifecycleInFlight, !restartInFlight, !catalogActionInFlight else { return }
         lifecycleInFlight = true
         updateApplicationMenu()
@@ -432,6 +464,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                     self.clearCatalogUpdate()
                     self.companionHeartbeat?.reportNow()
                     self.controller.showResult("CodexCommander started.", isError: false)
+                case .setupRequired(let requirement):
+                    self.clearCatalogUpdate()
+                    self.companionHeartbeat?.reportNow()
+                    self.controller.showSetupRequired(requirement)
                 case .stopped:
                     self.controller.showResult("CodexCommander did not start.", isError: true)
                 case .catalogUpdateReady(let count):
@@ -489,6 +525,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                         isError: false
                     )
                 case .running:
+                    self.controller.showResult("CodexCommander is still running.", isError: true)
+                case .setupRequired:
                     self.controller.showResult("CodexCommander is still running.", isError: true)
                 case .catalogUpdateReady(let count):
                     self.presentCatalogUpdate(staleWorkerCount: count)
@@ -585,6 +623,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     /// Restart is destructive to in-flight work, so it always confirms first and only
     /// reports success only after the lifecycle helper confirms a running replacement.
     private func restartProxy() {
+        guard permitsSpawnCapableLifecycleAction() else { return }
         guard !restartInFlight, !lifecycleInFlight, !catalogActionInFlight else { return }
         guard confirm(.restartProxy) else { return }
 
@@ -650,6 +689,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
               !lifecycleInFlight,
               !restartInFlight
         else { return }
+        guard permitsSpawnCapableLifecycleAction() else { return }
 
         catalogActionInFlight = true
         updateApplicationMenu()
@@ -672,6 +712,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                         "No stale ChatGPT worker is detected. Start a new task after ChatGPT reopens.",
                         isError: false
                     )
+                case .setupRequired(let requirement):
+                    self.clearCatalogUpdate()
+                    self.companionHeartbeat?.reportNow()
+                    self.controller.showSetupRequired(requirement)
                 case .catalogUpdateReady(let count):
                     self.presentCatalogUpdate(staleWorkerCount: count)
                     self.controller.showResult(
@@ -709,7 +753,16 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         ))
     }
 
+    private func permitsSpawnCapableLifecycleAction() -> Bool {
+        guard appBundleLocation == .translocated else { return true }
+        controller.showAppTranslocated()
+        return false
+    }
+
     private func confirm(_ confirmation: LifecycleConfirmation) -> Bool {
+        if let lifecycleConfirmation {
+            return lifecycleConfirmation(confirmation)
+        }
         let alert = confirmation.makeAlert()
         panel.isPresentingModal = true
         NSApp.activate(ignoringOtherApps: true)
@@ -733,6 +786,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
             panel.makeKeyAndOrderFront(nil)
         }
         return choice
+    }
+
+    package var presentationControllerForTesting: PopoverViewController { controller }
+    package func startProxyOnLaunchForTesting() { startProxyOnLaunch() }
+    package func startProxyForTesting() { startProxy() }
+    package func restartProxyForTesting() { restartProxy() }
+    package func recheckCodexCatalogForTesting() {
+        presentCatalogUpdate(staleWorkerCount: nil)
+        recheckCodexCatalog()
+    }
+    package var spawnActionInFlightForTesting: Bool {
+        lifecycleInFlight || restartInFlight || catalogActionInFlight
     }
 }
 
