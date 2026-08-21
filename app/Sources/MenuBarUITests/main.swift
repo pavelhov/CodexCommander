@@ -1554,6 +1554,79 @@ runner.test("ui: ordinary AppTranslocation folder-name collision still starts th
     runner.equal(lifecycle.recordedActions, [.start])
 }
 
+runner.test("ui: translocated Restart records zero lifecycle dispatch") {
+    let lifecycle = RecordingLifecycleRunner()
+    let delegate = AppDelegate(
+        appBundleLocation: .translocated,
+        actions: ActionCoordinator(lifecycle: lifecycle),
+        lifecycleConfirmation: { _ in true }
+    )
+
+    delegate.restartProxyForTesting()
+    spinMainRunLoop(seconds: 0.05)
+
+    runner.equal(lifecycle.recordedActions, [])
+    runner.equal(delegate.spawnActionInFlightForTesting, false)
+    runner.equal(
+        delegate.presentationControllerForTesting.operationStatusTitle,
+        "Move CodexCommander to Applications"
+    )
+}
+
+runner.test("ui: stable and relocatable Restart still dispatch lifecycle") {
+    for location in [AppBundleLocation.stable, .relocatable] {
+        let lifecycle = RecordingLifecycleRunner()
+        let delegate = AppDelegate(
+            appBundleLocation: location,
+            actions: ActionCoordinator(lifecycle: lifecycle),
+            lifecycleConfirmation: { _ in true }
+        )
+
+        delegate.restartProxyForTesting()
+        spinMainRunLoop(seconds: 0.10)
+
+        runner.equal(lifecycle.recordedActions, [.restart], "\(location)")
+    }
+}
+
+runner.test("ui: translocated catalog recheck records zero lifecycle dispatch") {
+    let lifecycle = RecordingLifecycleRunner()
+    let delegate = AppDelegate(
+        appBundleLocation: .translocated,
+        actions: ActionCoordinator(lifecycle: lifecycle)
+    )
+
+    delegate.recheckCodexCatalogForTesting()
+    spinMainRunLoop(seconds: 0.05)
+
+    runner.equal(lifecycle.recordedActions, [])
+    runner.equal(delegate.spawnActionInFlightForTesting, false)
+    runner.equal(
+        delegate.presentationControllerForTesting.operationStatusTitle,
+        "Move CodexCommander to Applications"
+    )
+    runner.equal(
+        delegate.presentationControllerForTesting.catalogUpdateVisible,
+        true,
+        "blocking Ensure preserves the pending catalog card"
+    )
+}
+
+runner.test("ui: stable and relocatable catalog recheck still dispatches Ensure") {
+    for location in [AppBundleLocation.stable, .relocatable] {
+        let lifecycle = RecordingLifecycleRunner()
+        let delegate = AppDelegate(
+            appBundleLocation: location,
+            actions: ActionCoordinator(lifecycle: lifecycle)
+        )
+
+        delegate.recheckCodexCatalogForTesting()
+        spinMainRunLoop(seconds: 0.10)
+
+        runner.equal(lifecycle.recordedActions, [.ensure], "\(location)")
+    }
+}
+
 // MARK: - Resource honesty
 
 runner.test("ui: provider icon loader returns real SVG-backed images for known providers") {
