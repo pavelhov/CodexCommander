@@ -10,11 +10,11 @@ configuration file, so Start stops with:
 
 > Codex routing could not be enabled: No config file exists to record the switch in.
 
-The macOS app will gain a direct-launch-only bootstrap step. It will atomically create
-the existing secret-free `getDefaultConfig()` when, and only when, the CodexCommander
-configuration is genuinely absent. It will not run the interactive CLI wizard, write
-credentials, overwrite existing configuration, create Codex-owned configuration, or
-move the application.
+The macOS app will gain a direct-launch-only bootstrap step. It will create the existing
+secret-free `getDefaultConfig()` through exclusive final-entry creation when, and only when,
+the CodexCommander configuration is genuinely absent. It will not run the interactive CLI
+wizard, write credentials, overwrite existing configuration, create Codex-owned configuration,
+or move the application.
 
 ## Goals
 
@@ -75,7 +75,8 @@ configuration only if the persisted file is genuinely absent.
 
 The initializer returns a discriminated result:
 
-- `created` — the candidate was atomically persisted.
+- `created` — final-entry creation succeeded exclusively with owner-only requested permissions,
+  and descriptor writing and flushing completed before the result was reported.
 - `existing` — a valid configuration appeared before the commit or already existed.
 - `refused` — a file or filesystem object exists but is invalid, unreadable, unsafe, or
   otherwise cannot be admitted.
@@ -96,8 +97,13 @@ hostile getters, serialization methods, or an active same-user filesystem proces
 configuration mutation transaction it probes the final entry, opens that final entry directly
 with exclusive-create semantics, and never overwrites. If exclusive creation reports `EEXIST`,
 it re-probes once and adopts only a complete valid ordinary single-link configuration.
-An incomplete preflight read in an already owned root is not adopted or rejected before
-coordination; the under-lock probe is authoritative so a cooperating initializer can finish.
+Persisted bytes are the pretty-printed schema-validated configuration, including its
+schema-produced property order, rather than the raw candidate object's literal property order.
+The final entry may be transiently visible as empty or partial between exclusive creation and
+the completed descriptor write and flush. The initializer does not report `created` until those
+operations finish. An incomplete preflight read in an already owned root is not adopted or
+rejected before coordination; cooperating initializers recheck under the mutation coordination,
+and that under-lock probe is authoritative.
 
 It does not import macOS, lifecycle, provider-selection, or Codex-path logic. It does
 not change `mutatePersistedConfig()`.
@@ -194,7 +200,7 @@ and reopen it.
 
 ### Missing CodexCommander config, Codex ready
 
-1. Create the canonical default atomically.
+1. Create the canonical default through exclusive final-entry creation and descriptor flush.
 2. Execute normal explicit Start.
 3. Start or attach to the proxy.
 4. Synchronize the model catalog.

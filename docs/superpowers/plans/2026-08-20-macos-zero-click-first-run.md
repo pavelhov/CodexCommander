@@ -273,39 +273,90 @@ export function initializeConfigIfMissing(
 ): ConfigInitializationResult {
   const validated = validateConfigCandidate(candidate);
   if (!validated.ok) return { status: "refused", reason: "candidate-invalid" };
+  const deadline = performance.now() + CONFIG_INITIALIZATION_WAIT_MS;
+  const initialRoot = probeConfigRoot();
+  if (initialRoot.kind === "refused") {
+    return { status: "refused", reason: initialRoot.reason };
+  }
   const observed = probeConfigEntry();
   if (observed.kind === "valid") return { status: "existing" };
-  if (observed.kind === "refused") return { status: "refused", reason: observed.reason };
-  try {
-    if (!recordOwnedConfigPath(getConfigDir(), getConfigPath())) {
-      return { status: "refused", reason: "existing-unsafe" };
-    }
-  } catch {
-    return { status: "refused", reason: "existing-inaccessible" };
+  if (observed.kind === "refused" && observed.reason !== "existing-invalid") {
+    return { status: "refused", reason: observed.reason };
   }
 
+  // A transient empty or partial entry may be visible while another cooperating
+  // initializer owns the mutation transaction. Establish ownership/coordination
+  // before treating this preflight existing-invalid observation as authoritative.
+  let ownershipFailure: ConfigInitializationRefusal | null = null;
   try {
-    return withConfigMutationLockTimeoutSync(() => {
-      const current = probeConfigEntry();
-      if (current.kind === "valid") return { status: "existing" } as const;
-      if (current.kind === "refused") {
-        return { status: "refused", reason: current.reason } as const;
+    if (!recordOwnedConfigPath(getConfigDir(), getConfigPath())) {
+      ownershipFailure = "existing-unsafe";
+    }
+  } catch {
+    ownershipFailure = "existing-inaccessible";
+  }
+
+  const ownedRoot = probeConfigRoot();
+  if (ownedRoot.kind !== "valid") {
+    return {
+      status: "refused",
+      reason: ownedRoot.kind === "refused" ? ownedRoot.reason : "existing-unsafe",
+    };
+  }
+  if (!ownershipFailure) {
+    try {
+      if (!recordOwnedConfigPath(getConfigDir(), getConfigPath())) {
+        ownershipFailure = "existing-unsafe";
       }
-      const bytes = `${JSON.stringify(validated.config, null, 2)}\n`;
-      const published = createConfigExclusive(getConfigPath(), bytes);
-      if (!published) {
-        const winner = probeConfigEntry();
-        if (winner.kind === "valid") return { status: "existing" } as const;
+    } catch {
+      ownershipFailure = "existing-inaccessible";
+    }
+  }
+  if (ownershipFailure) {
+    if (observed.kind === "refused" && observed.reason === "existing-invalid") {
+      return { status: "refused", reason: observed.reason };
+    }
+    return waitForConfigInitializationWinner(deadline, ownershipFailure);
+  }
+
+  let lastContentionRefusal: ConfigInitializationRefusal | null = null;
+  for (;;) {
+    try {
+      return withConfigMutationLockTimeoutSync(() => {
+        // This under-lock probe, not the preflight observation, is authoritative.
+        const current = probeConfigEntry();
+        if (current.kind === "valid") return { status: "existing" } as const;
+        if (current.kind === "refused") {
+          return { status: "refused", reason: current.reason } as const;
+        }
+        const bytes = `${JSON.stringify(validated.config, null, 2)}\n`;
+        const published = createConfigExclusive(getConfigPath(), bytes);
+        if (!published) {
+          const winner = probeConfigEntry();
+          if (winner.kind === "valid") return { status: "existing" } as const;
+          return {
+            status: "refused",
+            reason: winner.kind === "refused" ? winner.reason : "coordination-unavailable",
+          } as const;
+        }
+        bumpGenerationForCooperatingConfigWrite();
+        return { status: "created" } as const;
+      }, CONFIG_INITIALIZATION_WAIT_MS);
+    } catch (error) {
+      if (!(error instanceof ConfigMutationLockError)) {
+        return { status: "refused", reason: "coordination-unavailable" };
+      }
+      const contender = configInitializationContenderObservation();
+      if ("status" in contender) return contender;
+      if (contender.kind === "refused") lastContentionRefusal = contender.reason;
+      if (performance.now() >= deadline) {
         return {
           status: "refused",
-          reason: winner.kind === "refused" ? winner.reason : "coordination-unavailable",
-        } as const;
+          reason: lastContentionRefusal ?? "coordination-unavailable",
+        };
       }
-      bumpGenerationForCooperatingConfigWrite();
-      return { status: "created" } as const;
-    }, CONFIG_INITIALIZATION_WAIT_MS);
-  } catch {
-    return { status: "refused", reason: "coordination-unavailable" };
+      Bun.sleepSync(CONFIG_INITIALIZATION_POLL_MS);
+    }
   }
 }
 ```

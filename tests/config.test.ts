@@ -380,7 +380,12 @@ describe("create-only config initialization", () => {
         { status: "existing" },
       ]);
       const finalPath = join(raceRoot, "config.json");
-      expect(JSON.parse(readFileSync(finalPath, "utf8"))).toEqual(getDefaultConfig());
+      const validatedDefault = validateConfigCandidate(getDefaultConfig());
+      expect(validatedDefault.ok).toBe(true);
+      if (!validatedDefault.ok) throw new Error(validatedDefault.error);
+      expect(readFileSync(finalPath, "utf8")).toBe(
+        `${JSON.stringify(validatedDefault.config, null, 2)}\n`,
+      );
       expect(lstatSync(finalPath).nlink).toBe(1);
     } finally {
       writeFileSync(releasePath, "go");
