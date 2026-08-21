@@ -1663,6 +1663,7 @@ type ConfigEntryProbe =
       ConfigInitializationRefusal,
       "candidate-invalid" | "coordination-unavailable"
     >;
+    retryablePublicationState?: boolean;
   };
 
 type ConfigRootIdentity = {
@@ -1686,6 +1687,7 @@ class ConfigRootChangedDuringInitializationError extends Error {
 
 const CONFIG_INITIALIZATION_WAIT_MS = 2_000;
 const CONFIG_INITIALIZATION_POLL_MS = 10;
+const CONFIG_INITIALIZATION_CONFIG_PATH = "config.json";
 
 function samePhysicalConfigRoot(left: ConfigRootIdentity, right: ConfigRootIdentity): boolean {
   const sameCanonicalPath = process.platform === "win32"
@@ -1804,8 +1806,17 @@ function probeConfigEntry(path = getConfigPath()): ConfigEntryProbe {
       ? { kind: "missing" }
       : { kind: "refused", reason: "existing-inaccessible" };
   }
-  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
+  if (!entry.isFile() || entry.isSymbolicLink()) {
     return { kind: "refused", reason: "existing-unsafe" };
+  }
+  if (entry.nlink !== 1) {
+    return {
+      kind: "refused",
+      reason: "existing-unsafe",
+      // The no-clobber publisher has exactly two links only between link() and
+      // temp cleanup. Other link counts remain a static unsafe destination.
+      retryablePublicationState: entry.nlink === 2,
+    };
   }
   try {
     return configDiagnosticsFromRaw(readFileSync(path, "utf8")).source === "file"
@@ -1840,12 +1851,13 @@ function unlinkPublishedConfigIfUnchanged(
 }
 
 function publishConfigNoReplace(
-  path: string,
   bytes: string,
   expectedRoot: ConfigRootIdentity,
 ): boolean {
-  const target = resolveWriteTarget(path);
-  assertResolvedTargetAllowed(path, target);
+  // This literal directory entry is already validated by the initializer. Resolving it
+  // would follow a contender symlink or turn it into an absolute pathname that can escape
+  // the admitted physical root after that root is renamed.
+  const target = CONFIG_INITIALIZATION_CONFIG_PATH;
   const temp = `${target}.ccx.${process.pid}.${++_atomicSeq}.create.tmp`;
   let published = false;
   let collision = false;
@@ -1854,7 +1866,7 @@ function publishConfigNoReplace(
     writeFileSync(temp, bytes, { encoding: "utf8", mode: 0o600, flag: "wx" });
     try { chmodSync(temp, 0o600); } catch { /* filesystem may ignore chmod */ }
     if (process.platform === "win32") {
-      hardenSecretPath(temp, { required: true, timeoutMemoKey: path });
+      hardenSecretPath(temp, { required: true, timeoutMemoKey: target });
     }
     const source = lstatSync(temp, { bigint: true });
     if (!source.isFile() || source.isSymbolicLink() || source.nlink !== 1n) {
@@ -1949,23 +1961,136 @@ export type ConfigInitializationTestAction = {
   releasePath: string;
 };
 
-function runConfigInitializationTestAction(
+type PreparedConfigInitializationTestAction = Readonly<{
+  readyPath: string;
+  releasePath: string;
+}>;
+
+type PreparedConfigInitialization =
+  | Readonly<{
+    kind: "ready";
+    bytes: string;
+    testAction?: PreparedConfigInitializationTestAction;
+  }>
+  | Readonly<{
+    kind: "refused";
+    reason: "candidate-invalid" | "coordination-unavailable";
+  }>;
+
+let configInitializationPreparationDepth = 0;
+
+function canonicalConfigInitializationBytes(
+  candidate: CodexCommanderConfig,
+  callerCwd: string,
+): string | null {
+  process.chdir(callerCwd);
+  const validated = validateConfigCandidate(candidate);
+  process.chdir(callerCwd);
+  if (!validated.ok) return null;
+
+  // `desktopProfile` is deliberately `unknown` at the Zod boundary. Serialize it while
+  // still outside both CWD fences, then parse and validate that private data-only copy.
+  // The second stringify cannot reach caller getters or inherited `toJSON` methods.
+  const serialized = JSON.stringify(validated.config);
+  process.chdir(callerCwd);
+  if (serialized === undefined) return null;
+  const privateCandidate = JSON.parse(serialized) as unknown;
+  const canonical = validateConfigCandidate(privateCandidate);
+  if (!canonical.ok) return null;
+  return `${JSON.stringify(canonical.config, null, 2)}\n`;
+}
+
+function snapshotConfigInitializationTestAction(
   action: ConfigInitializationTestAction,
-  expectedRoot: ConfigRootIdentity,
-): void {
-  if (!isTestHomeGuardArmed()) {
-    throw new Error("Config initialization test actions require the explicit test-home guard");
-  }
+  configRootPath: string,
+  callerCwd: string,
+): PreparedConfigInitializationTestAction | null {
+  if (!isTestHomeGuardArmed()) return null;
+
+  process.chdir(callerCwd);
+  const keys = Reflect.ownKeys(action as object);
+  process.chdir(callerCwd);
+  const kind = action.kind;
+  process.chdir(callerCwd);
+  const stage = action.stage;
+  process.chdir(callerCwd);
+  const readyPath = action.readyPath;
+  process.chdir(callerCwd);
+  const releasePath = action.releasePath;
+  process.chdir(callerCwd);
+
+  const expectedKeys = new Set(["kind", "stage", "readyPath", "releasePath"]);
   if (
-    action.kind !== "barrier"
-    || action.stage !== "after-final-root-check"
-    || !isAbsolute(action.readyPath)
-    || !isAbsolute(action.releasePath)
-    || relativePathWithin(expectedRoot.path, action.readyPath) !== null
-    || relativePathWithin(expectedRoot.path, action.releasePath) !== null
-  ) {
-    throw new Error("Config initialization test barrier paths must be absolute and outside the config root");
+    keys.length !== expectedKeys.size
+    || keys.some(key => typeof key !== "string" || !expectedKeys.has(key))
+    || kind !== "barrier"
+    || stage !== "after-final-root-check"
+    || typeof readyPath !== "string"
+    || typeof releasePath !== "string"
+    || !isAbsolute(readyPath)
+    || !isAbsolute(releasePath)
+    || readyPath === releasePath
+    || relativePathWithin(configRootPath, readyPath) !== null
+    || relativePathWithin(configRootPath, releasePath) !== null
+  ) return null;
+
+  return Object.freeze({ readyPath, releasePath });
+}
+
+function prepareConfigInitialization(
+  candidate: CodexCommanderConfig,
+  action: ConfigInitializationTestAction | undefined,
+  configRootPath: string,
+): PreparedConfigInitialization {
+  const callerCwd = process.cwd();
+  let prepared: PreparedConfigInitialization = {
+    kind: "refused",
+    reason: "candidate-invalid",
+  };
+  let restoreFailed = false;
+  configInitializationPreparationDepth = 1;
+  try {
+    let bytes: string | null = null;
+    try {
+      bytes = canonicalConfigInitializationBytes(candidate, callerCwd);
+    } catch {
+      bytes = null;
+    }
+    if (bytes !== null) {
+      let testAction: PreparedConfigInitializationTestAction | undefined;
+      let actionValid = true;
+      if (action !== undefined) {
+        try {
+          testAction = snapshotConfigInitializationTestAction(
+            action,
+            configRootPath,
+            callerCwd,
+          ) ?? undefined;
+          actionValid = testAction !== undefined;
+        } catch {
+          actionValid = false;
+        }
+      }
+      prepared = actionValid
+        ? Object.freeze({ kind: "ready", bytes, ...(testAction ? { testAction } : {}) })
+        : { kind: "refused", reason: "coordination-unavailable" };
+    }
+  } finally {
+    try {
+      process.chdir(callerCwd);
+    } catch {
+      restoreFailed = true;
+    }
+    configInitializationPreparationDepth = 0;
   }
+  return restoreFailed
+    ? { kind: "refused", reason: "coordination-unavailable" }
+    : prepared;
+}
+
+function runConfigInitializationTestAction(
+  action: PreparedConfigInitializationTestAction,
+): void {
   writeFileSync(action.readyPath, "ready", { encoding: "utf8", flag: "wx", mode: 0o600 });
   const deadline = performance.now() + 10_000;
   while (!existsSync(action.releasePath)) {
@@ -1977,12 +2102,12 @@ function runConfigInitializationTestAction(
 }
 
 function initializeConfigInBoundRoot(
-  candidate: CodexCommanderConfig,
+  bytes: string,
   expectedRoot: ConfigRootIdentity,
   deadline: number,
-  testAction?: ConfigInitializationTestAction,
+  testAction?: PreparedConfigInitializationTestAction,
 ): ConfigInitializationResult {
-  const configPath = "config.json";
+  const configPath = CONFIG_INITIALIZATION_CONFIG_PATH;
   const observed = probeConfigEntry(configPath);
   if (!boundConfigRootStillMatches(expectedRoot) || !configRootStillMatches(expectedRoot)) {
     throw new ConfigRootChangedDuringInitializationError();
@@ -2020,6 +2145,7 @@ function initializeConfigInBoundRoot(
       throw new ConfigRootChangedDuringInitializationError();
     }
     try {
+      const remainingWaitMs = Math.max(0, Math.ceil(deadline - performance.now()));
       return withConfigMutationLockAtDirSync(".", () => {
         if (!boundConfigRootStillMatches(expectedRoot) || !configRootStillMatches(expectedRoot)) {
           throw new ConfigRootChangedDuringInitializationError();
@@ -2030,19 +2156,18 @@ function initializeConfigInBoundRoot(
           return { status: "refused", reason: current.reason } as const;
         }
 
-        const bytes = `${JSON.stringify(candidate, null, 2)}\n`;
         if (!boundConfigRootStillMatches(expectedRoot) || !configRootStillMatches(expectedRoot)) {
           throw new ConfigRootChangedDuringInitializationError();
         }
         const action = pendingTestAction;
         pendingTestAction = undefined;
         if (action) {
-          runConfigInitializationTestAction(action, expectedRoot);
+          runConfigInitializationTestAction(action);
           if (!boundConfigRootStillMatches(expectedRoot) || !configRootStillMatches(expectedRoot)) {
             throw new ConfigRootChangedDuringInitializationError();
           }
         }
-        const published = publishConfigNoReplace(configPath, bytes, expectedRoot);
+        const published = publishConfigNoReplace(bytes, expectedRoot);
         if (!published) {
           if (!boundConfigRootStillMatches(expectedRoot) || !configRootStillMatches(expectedRoot)) {
             throw new ConfigRootChangedDuringInitializationError();
@@ -2056,7 +2181,7 @@ function initializeConfigInBoundRoot(
         }
         bumpGenerationForCooperatingConfigWrite();
         return { status: "created" } as const;
-      });
+      }, remainingWaitMs);
     } catch (error) {
       if (error instanceof ConfigRootChangedDuringInitializationError) throw error;
       if (!(error instanceof ConfigMutationLockError)) {
@@ -2080,12 +2205,16 @@ function initializeConfigIfMissingInternal(
   candidate: CodexCommanderConfig,
   testAction?: ConfigInitializationTestAction,
 ): ConfigInitializationResult {
-  const validated = validateConfigCandidate(candidate);
-  if (!validated.ok) return { status: "refused", reason: "candidate-invalid" };
-  // Entering a process-global CWD fence from an arbitrary outer mutation callback
-  // would create a reentrant seam while relative paths are authoritative.
-  if (configMutationLockDepth > 0) {
+  // Reject reentry before inspecting caller-owned candidate/action values. Preparation
+  // itself may run hostile getters or `toJSON`, but only at the restored caller CWD and
+  // before any configuration-root mutation.
+  if (configInitializationPreparationDepth > 0 || configMutationLockDepth > 0) {
     return { status: "refused", reason: "coordination-unavailable" };
+  }
+  const configRootPath = getConfigDir();
+  const prepared = prepareConfigInitialization(candidate, testAction, configRootPath);
+  if (prepared.kind === "refused") {
+    return { status: "refused", reason: prepared.reason };
   }
   const deadline = performance.now() + CONFIG_INITIALIZATION_WAIT_MS;
   const initialRoot = probeConfigRoot();
@@ -2116,7 +2245,7 @@ function initializeConfigIfMissingInternal(
 
   try {
     const preflight = withBoundConfigRootSync(admittedRoot.identity, () => {
-      const observed = probeConfigEntry("config.json");
+      const observed = probeConfigEntry(CONFIG_INITIALIZATION_CONFIG_PATH);
       if (!boundConfigRootStillMatches(admittedRoot.identity)
         || !configRootStillMatches(admittedRoot.identity)) {
         throw new ConfigRootChangedDuringInitializationError();
@@ -2125,7 +2254,14 @@ function initializeConfigIfMissingInternal(
     });
     if (preflight.kind === "valid") return { status: "existing" };
     if (preflight.kind === "refused") {
-      return { status: "refused", reason: preflight.reason };
+      if (!preflight.retryablePublicationState) {
+        return { status: "refused", reason: preflight.reason };
+      }
+      return waitForConfigInitializationWinner(
+        admittedRoot.identity,
+        deadline,
+        preflight.reason,
+      );
     }
 
     const hook = configInitializationBeforePublishForTests;
@@ -2134,10 +2270,10 @@ function initializeConfigIfMissingInternal(
 
     return withBoundConfigRootSync(admittedRoot.identity, () =>
       initializeConfigInBoundRoot(
-        validated.config,
+        prepared.bytes,
         admittedRoot.identity,
         deadline,
-        testAction,
+        prepared.testAction,
       ));
   } catch (error) {
     return {
@@ -2272,7 +2408,11 @@ export function withConfigMutationLockSync<T>(fn: () => T): T {
   return withConfigMutationLockAtDirSync(getConfigDir(), fn);
 }
 
-function withConfigMutationLockAtDirSync<T>(dir: string, fn: () => T): T {
+function withConfigMutationLockAtDirSync<T>(
+  dir: string,
+  fn: () => T,
+  busyTimeoutMs = 0,
+): T {
   if (configMutationLockDepth > 0) {
     configMutationLockDepth += 1;
     try {
@@ -2287,7 +2427,7 @@ function withConfigMutationLockAtDirSync<T>(dir: string, fn: () => T): T {
   try {
     database = new Database(path, { create: true });
     try { chmodSync(path, 0o600); } catch { /* platform may ignore chmod */ }
-    database.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}; BEGIN IMMEDIATE`);
     transactionOpen = true;
     initializeConfigGeneration(database);
   } catch (cause) {

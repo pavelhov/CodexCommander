@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as nodeFs from "node:fs";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   CODEX_SHIM_AUTO_RESTORE_ENV,
@@ -15,6 +15,7 @@ import {
   isValidProviderName,
   isCodexCommanderStartCommandLine,
   initializeConfigIfMissing,
+  initializeConfigIfMissingForTests,
   loadConfig,
   multiAgentGuidanceEnabled,
   parsePidFile,
@@ -283,7 +284,10 @@ describe("create-only config initialization", () => {
         return JSON.parse(stdout.trim()) as ReturnType<typeof initializeConfigIfMissing>;
       }));
 
-      expect(results.map(result => result.status).sort()).toEqual(["created", "existing"]);
+      expect(results.sort((left, right) => left.status.localeCompare(right.status))).toEqual([
+        { status: "created" },
+        { status: "existing" },
+      ]);
       const finalPath = join(raceRoot, "config.json");
       expect(JSON.parse(readFileSync(finalPath, "utf8"))).toEqual(getDefaultConfig());
       expect(lstatSync(finalPath).nlink).toBe(1);
@@ -363,6 +367,54 @@ describe("create-only config initialization", () => {
       rmSync(releasePath, { force: true });
     }
   }, { timeout: 20_000 });
+
+  test("a contender symlink cannot move publication outside the admitted root", () => {
+    const displacedRoot = `${testDir}.contender-root`;
+    const externalDir = `${testDir}.contender-external`;
+    const externalTarget = join(externalDir, "external-config.json");
+    const readyPath = `${testDir}.contender-ready`;
+    const releasePath = `${testDir}.contender-release`;
+    mkdirSync(externalDir, { mode: 0o700 });
+    writeFileSync(externalTarget, "external bytes", { mode: 0o600 });
+    writeFileSync(releasePath, "release", { mode: 0o600 });
+
+    const originalWrite = nodeFs.writeFileSync;
+    let swap: "pending" | "replaced" | "blocked" = "pending";
+    const writeSpy = spyOn(nodeFs, "writeFileSync").mockImplementation(((...args: unknown[]) => {
+      if (args[0] === readyPath) {
+        symlinkSync(externalTarget, "config.json");
+      } else if (
+        swap === "pending"
+        && typeof args[0] === "string"
+        && args[0].endsWith(".create.tmp")
+      ) {
+        swap = replaceAnchoredRoot(testDir, displacedRoot, 0o700);
+        if (isAbsolute(args[0])) {
+          throw new Error("publication escaped the admitted root");
+        }
+      }
+      return (originalWrite as (...values: unknown[]) => unknown)(...args);
+    }) as typeof nodeFs.writeFileSync);
+
+    try {
+      expect(initializeConfigIfMissingForTests(getDefaultConfig(), {
+        kind: "barrier",
+        stage: "after-final-root-check",
+        readyPath,
+        releasePath,
+      })).toEqual({ status: "refused", reason: "existing-unsafe" });
+      expect(readFileSync(externalTarget, "utf8")).toBe("external bytes");
+      expect(readdirSync(externalDir)).toEqual(["external-config.json"]);
+      if (swap === "replaced") expect(readdirSync(testDir)).toEqual([]);
+      else expect(swap).toBe("blocked");
+    } finally {
+      writeSpy.mockRestore();
+      rmSync(displacedRoot, { recursive: true, force: true });
+      rmSync(externalDir, { recursive: true, force: true });
+      rmSync(readyPath, { force: true });
+      rmSync(releasePath, { force: true });
+    }
+  });
 
   test("refuses a linked configuration root even when its target has valid ownership", () => {
     const realRoot = join(testDir, "owned-real-root");
@@ -505,6 +557,106 @@ describe("create-only config initialization", () => {
       expect(process.cwd()).toBe(previousCwd);
     } finally {
       writeSpy.mockRestore();
+    }
+  });
+
+  test("canonicalizes inherited toJSON before config mutation and blocks reentry", () => {
+    const originalCwd = process.cwd();
+    process.chdir(testDir);
+    const callerCwd = process.cwd();
+    const hostileCwd = `${testDir}.hostile-cwd`;
+    mkdirSync(hostileCwd, { mode: 0o700 });
+    let toJsonCwd: string | null = null;
+    let reentrantResult: ReturnType<typeof initializeConfigIfMissing> | null = null;
+    const profilePrototype = {
+      toJSON(): never {
+        toJsonCwd = process.cwd();
+        reentrantResult = initializeConfigIfMissing(getDefaultConfig());
+        process.chdir(hostileCwd);
+        throw new Error("hostile inherited toJSON");
+      },
+    };
+    const desktopProfile = Object.assign(Object.create(profilePrototype) as object, {
+      version: 1,
+      assignments: {},
+      defaults: { opus: null, fable: null, sonnet: null, haiku: null },
+    });
+    const defaults = getDefaultConfig();
+    const candidate = {
+      ...defaults,
+      claudeCode: { ...defaults.claudeCode, desktopProfile },
+    } as typeof defaults;
+
+    try {
+      expect(initializeConfigIfMissing(candidate)).toEqual({
+        status: "refused",
+        reason: "candidate-invalid",
+      });
+      expect(toJsonCwd).toBe(callerCwd);
+      expect(reentrantResult).toEqual({
+        status: "refused",
+        reason: "coordination-unavailable",
+      });
+      expect(process.cwd()).toBe(callerCwd);
+      expect(readdirSync(testDir)).toEqual([]);
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(hostileCwd, { recursive: true, force: true });
+    }
+  });
+
+  test("snapshots mutable test-action getters once before entering the cwd fence", () => {
+    const callerCwd = process.cwd();
+    const readyPath = `${testDir}.mutable-action-ready`;
+    const releasePath = `${testDir}.mutable-action-release`;
+    const hostileCwd = `${testDir}.mutable-action-cwd`;
+    writeFileSync(releasePath, "release", { mode: 0o600 });
+    mkdirSync(hostileCwd, { mode: 0o700 });
+    const reads = { kind: 0, stage: 0, readyPath: 0, releasePath: 0 };
+    const observedCwds: string[] = [];
+    let reentrantResult: ReturnType<typeof initializeConfigIfMissing> | null = null;
+    const action: Parameters<typeof initializeConfigIfMissingForTests>[1] = {
+      get kind(): "barrier" {
+        reads.kind += 1;
+        observedCwds.push(process.cwd());
+        reentrantResult = initializeConfigIfMissing(getDefaultConfig());
+        process.chdir(hostileCwd);
+        return "barrier";
+      },
+      get stage(): "after-final-root-check" {
+        reads.stage += 1;
+        observedCwds.push(process.cwd());
+        return "after-final-root-check";
+      },
+      get readyPath(): string {
+        reads.readyPath += 1;
+        observedCwds.push(process.cwd());
+        return reads.readyPath <= 2 ? readyPath : getConfigPath();
+      },
+      get releasePath(): string {
+        reads.releasePath += 1;
+        observedCwds.push(process.cwd());
+        return releasePath;
+      },
+    };
+
+    try {
+      expect(initializeConfigIfMissingForTests(getDefaultConfig(), action)).toEqual({
+        status: "created",
+      });
+      expect(reads).toEqual({ kind: 1, stage: 1, readyPath: 1, releasePath: 1 });
+      expect(observedCwds).toEqual(Array(4).fill(callerCwd));
+      expect(reentrantResult).toEqual({
+        status: "refused",
+        reason: "coordination-unavailable",
+      });
+      expect(JSON.parse(readFileSync(getConfigPath(), "utf8"))).toEqual(getDefaultConfig());
+      expect(readFileSync(readyPath, "utf8")).toBe("ready");
+      expect(process.cwd()).toBe(callerCwd);
+    } finally {
+      rmSync(readyPath, { force: true });
+      rmSync(releasePath, { force: true });
+      rmSync(hostileCwd, { recursive: true, force: true });
     }
   });
 
