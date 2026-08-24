@@ -27,8 +27,7 @@ function isRemovable(status: CodexDelegationStatus): boolean {
   const artifactStates = [status.artifacts.skill.state, status.artifacts.agentsPolicy.state];
   const safelyManaged = artifactStates.every(state => state === "absent" || isOwnedArtifact(state));
   if (!safelyManaged || !artifactStates.some(isOwnedArtifact)) return false;
-  if (status.state === "conflict") return artifactStates.every(isOwnedArtifact);
-  return status.state === "current" || status.state === "update-available" || status.state === "partial";
+  return status.state === "current" || status.state === "update-available" || status.state === "partial" || status.state === "conflict";
 }
 
 export default function CodexDelegationSetupCard({ delegationSetup }: { delegationSetup: CodexDelegationSetupController }) {

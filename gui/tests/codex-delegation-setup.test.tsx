@@ -267,6 +267,8 @@ for (const [name, initial] of [
   ["partial managed skill", makeArtifactStatus("partial", "current", "absent", null)],
   ["partial managed policy", makeArtifactStatus("partial", "absent", "outdated", "balanced")],
   ["compatibility collision", makeArtifactStatus("conflict", "current", "outdated", "balanced")],
+  ["compatibility collision with managed skill", makeArtifactStatus("conflict", "current", "absent", null)],
+  ["compatibility collision with managed policy", makeArtifactStatus("conflict", "absent", "outdated", "balanced")],
 ] as const) {
   test(`${name} exposes confirmed Remove and sends a bodyless DELETE`, async () => {
     const requests: Array<{ url: string; init?: RequestInit }> = [];
@@ -298,7 +300,6 @@ for (const [name, value] of [
   ["foreign skill", makeArtifactStatus("conflict", "foreign", "current", "balanced")],
   ["ambiguous agents markers", makeArtifactStatus("conflict", "current", "foreign", "balanced")],
   ["aggregate unsafe", makeArtifactStatus("unsafe", "current", "current", "balanced")],
-  ["unproven one-artifact conflict", makeArtifactStatus("conflict", "current", "absent", null)],
 ] as const) {
   test(`${name} never exposes Remove`, async () => {
     let uninstalls = 0;
