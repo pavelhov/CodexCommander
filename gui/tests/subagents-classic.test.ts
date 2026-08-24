@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import ts from "typescript";
 
 /**
  * Subagents ships one command-center layout (configured roster + library + policy).
@@ -62,16 +63,81 @@ test("Subagents workspace assets and i18n keys are present", async () => {
   }
 });
 
-test("Subagents places Codex delegation setup after Run Policy with a complete locale family", async () => {
+const delegationSetupKeys = [
+  "sub.delegationSetup.loading",
+  "sub.delegationSetup.title",
+  "sub.delegationSetup.subtitle",
+  "sub.delegationSetup.statusReady",
+  "sub.delegationSetup.statusInstalled",
+  "sub.delegationSetup.statusShadowed",
+  "sub.delegationSetup.statusNotInstalled",
+  "sub.delegationSetup.statusUpdate",
+  "sub.delegationSetup.statusPartial",
+  "sub.delegationSetup.statusConflict",
+  "sub.delegationSetup.statusUnsafe",
+  "sub.delegationSetup.modeLegend",
+  "sub.delegationSetup.mode.balanced",
+  "sub.delegationSetup.mode.balancedDescription",
+  "sub.delegationSetup.mode.orchestrator",
+  "sub.delegationSetup.mode.orchestratorDescription",
+  "sub.delegationSetup.liveRoster",
+  "sub.delegationSetup.skillArtifact",
+  "sub.delegationSetup.agentsArtifact",
+  "sub.delegationSetup.preview",
+  "sub.delegationSetup.install",
+  "sub.delegationSetup.update",
+  "sub.delegationSetup.repair",
+  "sub.delegationSetup.changeMode",
+  "sub.delegationSetup.remove",
+  "sub.delegationSetup.removeTitle",
+  "sub.delegationSetup.removeConfirm",
+  "sub.delegationSetup.manual",
+  "sub.delegationSetup.manualHint",
+  "sub.delegationSetup.copy",
+  "sub.delegationSetup.copied",
+  "sub.delegationSetup.copyUnavailable",
+  "sub.delegationSetup.newTask",
+  "sub.delegationSetup.working",
+  "sub.delegationSetup.reasonConflict",
+  "sub.delegationSetup.reasonUnsafe",
+  "sub.delegationSetup.error",
+  "sub.delegationSetup.retry",
+  "sub.delegationSetup.close",
+  "sub.delegationSetup.cancel",
+  "sub.delegationSetup.confirmChangeMode",
+] as const;
+
+test("Subagents places Codex delegation setup after Run Policy", async () => {
   const workspace = await Bun.file(new URL("../src/components/subagents-workspace/SubagentsWorkspace.tsx", import.meta.url)).text();
-  const card = await Bun.file(new URL("../src/components/subagents-workspace/CodexDelegationSetupCard.tsx", import.meta.url)).text();
   expect(workspace).toContain('import CodexDelegationSetupCard');
   expect(workspace.indexOf("swi-policy")).toBeLessThan(workspace.indexOf("CodexDelegationSetupCard delegationSetup"));
-  expect(card).not.toContain(">Teach Codex");
+});
+
+test("every locale has exact parity with the complete delegation setup key contract", async () => {
   for (const locale of ["en", "ko", "ja", "de", "ru", "zh"]) {
     const src = await Bun.file(new URL(`../src/i18n/${locale}.ts`, import.meta.url)).text();
-    expect(src).toContain("sub.delegationSetup.title");
-    expect(src).toContain("sub.delegationSetup.manual");
-    expect(src).toContain("sub.delegationSetup.reasonUnsafe");
+    const actual = Array.from(src.matchAll(/^\s*"(sub\.delegationSetup\.[^"]+)"\s*:/gm), match => match[1]).sort();
+    expect(actual).toEqual([...delegationSetupKeys].sort());
   }
+});
+
+test("delegation card has no hardcoded visible JSX copy", async () => {
+  const src = await Bun.file(new URL("../src/components/subagents-workspace/CodexDelegationSetupCard.tsx", import.meta.url)).text();
+  const sourceFile = ts.createSourceFile("CodexDelegationSetupCard.tsx", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const violations: string[] = [];
+  const visibleAttributes = new Set(["alt", "aria-label", "aria-description", "placeholder", "title"]);
+
+  const visit = (node: ts.Node) => {
+    if (ts.isJsxText(node) && node.getText(sourceFile).trim()) violations.push(node.getText(sourceFile).trim());
+    if (ts.isJsxAttribute(node) && visibleAttributes.has(node.name.getText(sourceFile)) && node.initializer && ts.isStringLiteral(node.initializer)) {
+      violations.push(node.initializer.text);
+    }
+    if (ts.isJsxExpression(node) && node.expression && (ts.isStringLiteral(node.expression) || ts.isNoSubstitutionTemplateLiteral(node.expression))) {
+      const parentTag = ts.isJsxElement(node.parent) ? node.parent.openingElement.tagName.getText(sourceFile) : "";
+      if (parentTag !== "code" && parentTag !== "pre") violations.push(node.expression.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  expect(violations).toEqual([]);
 });

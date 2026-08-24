@@ -3,7 +3,12 @@ import { Window } from "happy-dom";
 import { act, useState } from "react";
 import type { Root } from "react-dom/client";
 import CodexDelegationSetupCard from "../src/components/subagents-workspace/CodexDelegationSetupCard";
-import { useCodexDelegationSetup, type CodexDelegationSetupController, type CodexDelegationStatus } from "../src/pages/use-codex-delegation-setup";
+import {
+  useCodexDelegationSetup,
+  type CodexDelegationMode,
+  type CodexDelegationSetupController,
+  type CodexDelegationStatus,
+} from "../src/pages/use-codex-delegation-setup";
 import { LanguageProvider } from "../src/i18n/provider";
 
 const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -11,46 +16,25 @@ let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
 let container: HTMLElement;
 let root: Root | null = null;
-let selectedMode: "balanced" | "orchestrator";
-let installed = 0;
-let removed = 0;
 
-function status(state: CodexDelegationStatus["state"] = "not-installed", mode: "balanced" | "orchestrator" | null = null): CodexDelegationStatus {
+function makeStatus(state: CodexDelegationStatus["state"] = "not-installed", mode: CodexDelegationMode | null = null): CodexDelegationStatus {
   return {
-    schemaVersion: 1,
-    state,
-    installedMode: mode,
+    schemaVersion: 1, state, installedMode: mode,
     artifacts: {
       skill: { state: mode ? "current" : "absent", displayPath: "$HOME/.agents/skills/codexcommander-delegation/SKILL.md" },
       agentsPolicy: { state: mode ? "current" : "absent", displayPath: "$CODEX_HOME/AGENTS.md" },
     },
-    override: { state: "absent" },
-    activation: "effective",
+    override: { state: "absent" }, activation: "effective",
     previews: {
-      balanced: { skillText: "balanced skill", agentsBlockText: "balanced policy" },
-      orchestrator: { skillText: "orchestrator skill", agentsBlockText: "orchestrator policy" },
+      balanced: { skillText: "balanced skill from server", agentsBlockText: "balanced policy from server" },
+      orchestrator: { skillText: "orchestrator skill from server", agentsBlockText: "orchestrator policy from server" },
     },
-    copyPrompts: { balanced: "balanced manual prompt", orchestrator: "orchestrator manual prompt" },
-  };
-}
-
-function controller(value: CodexDelegationStatus | null, busy = false): CodexDelegationSetupController {
-  selectedMode = value?.installedMode ?? "balanced";
-  return {
-    loaded: value !== null,
-    status: value,
-    selectedMode,
-    busy,
-    error: null,
-    setSelectedMode: mode => { selectedMode = mode; },
-    install: async () => { installed++; return true; },
-    uninstall: async () => { removed++; return true; },
-    reload: async () => {},
+    copyPrompts: { balanced: "balanced manual prompt from server", orchestrator: "orchestrator manual prompt from server" },
   };
 }
 
 beforeEach(() => {
-  previousGlobals = Object.fromEntries(globals.map(k => [k, Reflect.get(globalThis, k)])) as typeof previousGlobals;
+  previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
   testWindow = new Window({ url: "http://localhost/" });
   Object.defineProperty(testWindow.navigator, "language", { configurable: true, value: "en-US" });
   Object.defineProperties(globalThis, {
@@ -61,8 +45,6 @@ beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   container = testWindow.document.createElement("div") as unknown as HTMLElement;
   testWindow.document.body.append(container as never);
-  installed = 0;
-  removed = 0;
 });
 
 afterEach(async () => {
@@ -70,153 +52,321 @@ afterEach(async () => {
   for (const key of globals) Object.defineProperty(globalThis, key, { configurable: true, value: previousGlobals[key] });
 });
 
-async function mount(value: CodexDelegationStatus | null, busy = false) {
+async function flush() { await new Promise(resolve => setTimeout(resolve, 0)); }
+
+async function render(node: React.ReactNode) {
   const { createRoot } = await import("react-dom/client");
-  function Harness() {
-    const [mode, setMode] = useState(value?.installedMode ?? "balanced");
-    return <CodexDelegationSetupCard delegationSetup={{ ...controller(value, busy), selectedMode: mode, setSelectedMode: setMode }} />;
-  }
-  await act(async () => {
-    root = createRoot(container);
-    root.render(<LanguageProvider><Harness /></LanguageProvider>);
-  });
+  await act(async () => { root = createRoot(container); root.render(<LanguageProvider>{node}</LanguageProvider>); await flush(); });
 }
 
-function button(label: string): HTMLButtonElement {
-  const found = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(item => item.textContent?.trim() === label);
+function button(label: string, within: ParentNode = container): HTMLButtonElement {
+  const found = Array.from(within.querySelectorAll<HTMLButtonElement>("button")).find(item => item.textContent?.trim() === label);
   if (!found) throw new Error(`Missing button: ${label}`);
   return found;
 }
 
+function radio(mode: CodexDelegationMode): HTMLInputElement {
+  const found = container.querySelector<HTMLInputElement>(`input[value="${mode}"]`);
+  if (!found) throw new Error(`Missing radio: ${mode}`);
+  return found;
+}
+
+function directController(value: CodexDelegationStatus | null, overrides: Partial<CodexDelegationSetupController> = {}): CodexDelegationSetupController {
+  return {
+    loaded: value !== null, status: value, selectedMode: value?.installedMode ?? "balanced", busy: false, error: null,
+    setSelectedMode: () => {}, install: async () => true, uninstall: async () => true, reload: async () => {}, ...overrides,
+  };
+}
+
+async function mountDirect(value: CodexDelegationStatus | null, overrides: Partial<CodexDelegationSetupController> = {}) {
+  function Harness() {
+    const [mode, setMode] = useState<CodexDelegationMode>(overrides.selectedMode ?? value?.installedMode ?? "balanced");
+    return <CodexDelegationSetupCard delegationSetup={{ ...directController(value, overrides), selectedMode: mode, setSelectedMode: setMode }} />;
+  }
+  await render(<Harness />);
+}
+
+async function mountHook(apiBase = "/hook") {
+  function Harness() { return <CodexDelegationSetupCard delegationSetup={useCodexDelegationSetup(apiBase)} />; }
+  await render(<Harness />);
+}
+
+async function openApply(label: "Install" | "Update" | "Repair" | "Change mode") {
+  await act(async () => { button(label).click(); await flush(); });
+  return container.querySelector<HTMLElement>('[role="dialog"]')!;
+}
+
 test("loading never makes a false not-installed claim", async () => {
-  await mount(null);
-  expect(container.textContent).toContain("Loading");
+  await mountDirect(null);
+  expect(container.textContent).toContain("Loading delegation setup");
   expect(container.textContent).not.toContain("Not installed");
 });
 
-test("fresh setup uses Balanced and previews before the install mutation", async () => {
-  await mount(status());
-  expect((container.querySelector('input[value="balanced"]') as HTMLInputElement).checked).toBe(true);
-  await act(async () => { button("Preview").click(); });
-  expect(container.querySelector('[role="dialog"]')?.textContent).toContain("balanced skill");
-  expect(installed).toBe(0);
+test("fresh Install requires preview confirmation, sends exact Balanced PUT, and shows the new-task reminder", async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  let current = makeStatus();
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url: String(url), init });
+    if (init?.method === "PUT") { current = makeStatus("current", "balanced"); return Response.json({ ok: true, status: current }); }
+    return Response.json(current);
+  };
+  await mountHook("/fresh");
+  expect(radio("balanced").checked).toBe(true);
+  const dialog = await openApply("Install");
+  expect(dialog.textContent).toContain("balanced skill from server");
+  expect(requests.some(request => request.init?.method === "PUT")).toBe(false);
+  await act(async () => { button("Install", dialog).click(); await flush(); });
+  const put = requests.find(request => request.init?.method === "PUT")!;
+  expect(put.url).toBe("/fresh/api/codex-delegation");
+  expect(put.init?.headers).toEqual({ "Content-Type": "application/json" });
+  expect(put.init?.body).toBe('{"mode":"balanced"}');
+  expect(container.querySelector('[role="dialog"]')).toBeNull();
+  expect(container.querySelector('[role="status"]')?.textContent).toContain("Start a new Codex task");
 });
 
-test("orchestrator selection uses its server preview and install flow", async () => {
-  await mount(status());
-  const radio = container.querySelector('input[value="orchestrator"]') as HTMLInputElement;
-  await act(async () => { radio.click(); });
-  await act(async () => { button("Preview").click(); });
-  expect(container.querySelector('[role="dialog"]')?.textContent).toContain("orchestrator skill");
+test("Orchestrator selection changes server preview and exact Install PUT", async () => {
+  const requests: RequestInit[] = [];
+  let current = makeStatus();
+  globalThis.fetch = async (_url, init) => {
+    requests.push(init ?? {});
+    if (init?.method === "PUT") { current = makeStatus("current", "orchestrator"); return Response.json({ ok: true, status: current }); }
+    return Response.json(current);
+  };
+  await mountHook();
+  await act(async () => { radio("orchestrator").click(); });
+  const dialog = await openApply("Install");
+  expect(dialog.textContent).toContain("orchestrator skill from server");
+  expect(dialog.textContent).not.toContain("balanced skill from server");
+  await act(async () => { button("Install", dialog).click(); await flush(); });
+  expect(requests.find(init => init.method === "PUT")?.body).toBe('{"mode":"orchestrator"}');
 });
 
-test("current effective setup exposes ready and installed controls", async () => {
-  await mount(status("current", "orchestrator"));
+for (const [state, action] of [["update-available", "Update"], ["partial", "Repair"]] as const) {
+  test(`${action} confirms its preview and sends the installed mode PUT`, async () => {
+    const requests: RequestInit[] = [];
+    let current = makeStatus(state, "balanced");
+    globalThis.fetch = async (_url, init) => {
+      requests.push(init ?? {});
+      if (init?.method === "PUT") { current = makeStatus("current", "balanced"); return Response.json({ ok: true, status: current }); }
+      return Response.json(current);
+    };
+    await mountHook(`/${action.toLowerCase()}`);
+    const dialog = await openApply(action);
+    expect(requests.some(init => init.method === "PUT")).toBe(false);
+    await act(async () => { button(action, dialog).click(); await flush(); });
+    expect(requests.find(init => init.method === "PUT")?.body).toBe('{"mode":"balanced"}');
+  });
+}
+
+test("installed Change mode confirms truthfully and sends the selected exact PUT", async () => {
+  const requests: RequestInit[] = [];
+  let current = makeStatus("current", "balanced");
+  globalThis.fetch = async (_url, init) => {
+    requests.push(init ?? {});
+    if (init?.method === "PUT") { current = makeStatus("current", "orchestrator"); return Response.json({ ok: true, status: current }); }
+    return Response.json(current);
+  };
+  await mountHook("/change");
   expect(container.textContent).toContain("Ready");
-  expect(container.textContent).toContain("Orchestrator");
-  expect(button("Change mode")).toBeTruthy();
   expect(button("Remove")).toBeTruthy();
+  await act(async () => { radio("orchestrator").click(); });
+  const dialog = await openApply("Change mode");
+  expect(dialog.textContent).toContain("orchestrator policy from server");
+  expect(requests.some(init => init.method === "PUT")).toBe(false);
+  await act(async () => { button("Change mode", dialog).click(); await flush(); });
+  expect(requests.find(init => init.method === "PUT")?.body).toBe('{"mode":"orchestrator"}');
 });
 
-test("update and partial states use their respective primary actions", async () => {
-  await mount(status("update-available", "balanced"));
-  expect(button("Update")).toBeTruthy();
-  await act(async () => { root?.unmount(); root = null; });
-  await mount(status("partial", "balanced"));
-  expect(button("Repair")).toBeTruthy();
-});
+for (const state of ["conflict", "unsafe"] as const) {
+  test(`${state} refuses automatic mutation and projects its distinct reason`, async () => {
+    const value = makeStatus(state);
+    value.artifacts.skill.reason = state === "conflict" ? "ownership_conflict" : "unsafe_path";
+    let installs = 0;
+    await mountDirect(value, { install: async () => { installs++; return true; } });
+    expect(button("Install").disabled).toBe(true);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(state === "conflict" ? "existing file is not managed" : "could not be safely verified");
+    button("Install").click();
+    expect(installs).toBe(0);
+  });
+}
 
-test("conflict and unsafe state fail closed with the projected reason", async () => {
-  const conflict = status("conflict", null);
-  conflict.artifacts.skill.reason = "ownership_conflict";
-  await mount(conflict);
-  expect(container.textContent).toContain("can’t be changed automatically");
-  expect(button("Install").disabled).toBe(true);
-});
-
-test("shadowed install is not presented as ready", async () => {
-  const shadowed = status("current", "balanced");
-  shadowed.activation = "shadowed";
-  shadowed.override.state = "active";
-  await mount(shadowed);
+test("shadowed current install is truthful and never claims Ready", async () => {
+  const value = makeStatus("current", "balanced"); value.activation = "shadowed"; value.override.state = "active";
+  await mountDirect(value);
   expect(container.textContent).toContain("Installed, but AGENTS.override.md is active");
   expect(container.textContent).not.toContain("Ready");
 });
 
-test("remove waits for an accessible confirmation before DELETE", async () => {
-  await mount(status("current", "balanced"));
-  await act(async () => { button("Remove").click(); });
-  const dialog = container.querySelector('[role="alertdialog"]');
-  expect(dialog).toBeTruthy();
-  expect(removed).toBe(0);
-  await act(async () => { Array.from(dialog!.querySelectorAll("button")).find(item => item.textContent?.trim() === "Remove")!.click(); });
-  expect(removed).toBe(1);
-});
-
-test("manual setup stays collapsed and copies only selected server prompt", async () => {
-  await mount(status());
+test("manual details are collapsed and copy the selected server prompt only after clipboard success", async () => {
+  const writes: string[] = [];
+  Object.defineProperty(testWindow.navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { writes.push(text); } } });
+  await mountDirect(makeStatus());
   const details = container.querySelector("details") as HTMLDetailsElement;
   expect(details.open).toBe(false);
-  expect(container.textContent).toContain("Installer unavailable? Show manual setup");
+  await act(async () => { details.querySelector("summary")!.click(); radio("orchestrator").click(); });
+  expect(button("Copy setup").textContent).toBe("Copy setup");
+  await act(async () => { button("Copy setup").click(); await flush(); });
+  expect(writes).toEqual(["orchestrator manual prompt from server"]);
+  expect(button("Copied")).toBeTruthy();
 });
 
-test("busy state disables every setup mutation and exposes a live status", async () => {
-  await mount(status("current", "balanced"), true);
+test("manual copy failure gives honest unavailable feedback and never claims copied", async () => {
+  Object.defineProperty(testWindow.navigator, "clipboard", { configurable: true, value: { writeText: async () => { throw new Error("denied"); } } });
+  Object.defineProperty(testWindow.document, "execCommand", { configurable: true, value: () => false });
+  await mountDirect(makeStatus());
+  const details = container.querySelector("details")!;
+  await act(async () => { details.querySelector("summary")!.click(); button("Copy setup").click(); await flush(); });
+  expect(button("Copy unavailable")).toBeTruthy();
+  expect(container.textContent).not.toContain("Copied");
+});
+
+test("Remove sends no DELETE before confirm, retains the failed dialog error, then closes and reminds on success", async () => {
+  const requests: RequestInit[] = [];
+  let deletes = 0; let current = makeStatus("current", "balanced");
+  globalThis.fetch = async (_url, init) => {
+    requests.push(init ?? {});
+    if (init?.method === "DELETE") {
+      deletes++;
+      if (deletes === 1) return Response.json({ error: "locked" }, { status: 500 });
+      current = makeStatus(); return Response.json({ ok: true, status: current });
+    }
+    return Response.json(current);
+  };
+  await mountHook("/remove");
+  await act(async () => { button("Remove").click(); await flush(); });
+  let dialog = container.querySelector<HTMLElement>('[role="alertdialog"]')!;
+  expect(requests.some(init => init.method === "DELETE")).toBe(false);
+  await act(async () => { button("Remove", dialog).click(); await flush(); });
+  dialog = container.querySelector<HTMLElement>('[role="alertdialog"]')!;
+  expect(dialog.querySelector('[role="alert"]')?.textContent).toContain("request failed");
+  expect(requests.find(init => init.method === "DELETE")?.body).toBeUndefined();
+  await act(async () => { button("Remove", dialog).click(); await flush(); });
+  expect(container.querySelector('[role="alertdialog"]')).toBeNull();
+  expect(container.querySelector('[role="status"]')?.textContent).toContain("Start a new Codex task");
+});
+
+test("initial GET failure shows Retry and a successful retry restores truthful status", async () => {
+  let reads = 0;
+  globalThis.fetch = async () => ++reads === 1 ? Response.json({ error: "offline" }, { status: 503 }) : Response.json(makeStatus("current", "orchestrator"));
+  await mountHook("/retry-initial");
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("request failed");
+  await act(async () => { button("Retry").click(); await flush(); });
+  expect(reads).toBe(2);
+  expect(container.textContent).toContain("Ready");
+  expect(radio("orchestrator").checked).toBe(true);
+});
+
+test("retained-status refresh failure keeps truth, exposes Retry, and clears the error after recovery", async () => {
+  let reads = 0; const current = makeStatus("current", "balanced");
+  globalThis.fetch = async (_url, init) => {
+    if (init?.method === "PUT") return Response.json({ ok: true, status: current });
+    reads++;
+    if (reads === 2) return Response.json({ error: "refresh failed" }, { status: 503 });
+    return Response.json(current);
+  };
+  await mountHook("/retry-retained");
+  const dialog = await openApply("Change mode");
+  await act(async () => { button("Change mode", dialog).click(); await flush(); });
+  expect(container.textContent).toContain("Ready");
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("request failed");
+  await act(async () => { button("Retry").click(); await flush(); });
+  expect(reads).toBe(3);
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  expect(container.textContent).toContain("Ready");
+});
+
+test("a superseded GET cannot replace the newer status", async () => {
+  let resolveFirst!: (response: Response) => void; let reads = 0;
+  globalThis.fetch = async () => {
+    reads++;
+    if (reads === 1) return new Promise<Response>(resolve => { resolveFirst = resolve; });
+    return Response.json(makeStatus("current", "orchestrator"));
+  };
+  function Harness() {
+    const setup = useCodexDelegationSetup("/race");
+    return <><button type="button" onClick={() => { void setup.reload(); }}>Force reload</button><span data-state>{setup.status?.installedMode ?? "none"}</span></>;
+  }
+  await render(<Harness />);
+  await act(async () => { button("Force reload").click(); await flush(); });
+  expect(container.querySelector("[data-state]")?.textContent).toBe("orchestrator");
+  await act(async () => { resolveFirst(Response.json(makeStatus("current", "balanced"))); await flush(); });
+  expect(container.querySelector("[data-state]")?.textContent).toBe("orchestrator");
+});
+
+test("unmount aborts the outstanding GET and suppresses its late result", async () => {
+  let signal: AbortSignal | undefined; let resolveRead!: (response: Response) => void;
+  globalThis.fetch = async (_url, init) => {
+    signal = init?.signal ?? undefined;
+    return new Promise<Response>(resolve => { resolveRead = resolve; });
+  };
+  function Harness() { const setup = useCodexDelegationSetup("/unmount"); return <span>{setup.loaded ? "loaded" : "pending"}</span>; }
+  await render(<Harness />);
+  await act(async () => { root?.unmount(); root = null; });
+  expect(signal?.aborted).toBe(true);
+  await act(async () => { resolveRead(Response.json(makeStatus("current", "balanced"))); await flush(); });
+  expect(container.textContent).toBe("");
+});
+
+test("malformed status is rejected as a visible retriable error", async () => {
+  globalThis.fetch = async () => Response.json({ schemaVersion: 1, state: "current" });
+  await mountHook("/malformed");
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("request failed");
+  expect(button("Retry")).toBeTruthy();
+  expect(container.textContent).not.toContain("Ready");
+});
+
+test("in-flight mutation disables every automatic control and announces busy state", async () => {
+  let resolvePut!: (response: Response) => void; const current = makeStatus("current", "balanced");
+  globalThis.fetch = async (_url, init) => init?.method === "PUT"
+    ? new Promise<Response>(resolve => { resolvePut = resolve; })
+    : Response.json(current);
+  await mountHook("/busy");
+  const dialog = await openApply("Change mode");
+  await act(async () => { button("Change mode", dialog).click(); await flush(); });
+  expect(container.querySelector("fieldset")?.hasAttribute("disabled")).toBe(true);
   expect(button("Preview").disabled).toBe(true);
   expect(button("Change mode").disabled).toBe(true);
   expect(button("Remove").disabled).toBe(true);
   expect(container.querySelector('[aria-live="polite"]')?.textContent).toContain("Working");
+  await act(async () => { resolvePut(Response.json({ ok: true, status: current })); await flush(); });
 });
 
-test("preview and remove dialogs restore focus to their triggers", async () => {
-  await mount(status("current", "balanced"));
-  const preview = button("Preview");
-  preview.focus();
-  await act(async () => { preview.click(); });
-  await act(async () => { Array.from(container.querySelector('[role="dialog"]')!.querySelectorAll("button")).find(item => item.textContent?.trim() === "Close")!.click(); await new Promise(resolve => setTimeout(resolve, 0)); });
-  expect(document.activeElement).toBe(preview);
-  const remove = button("Remove");
-  remove.focus();
-  await act(async () => { remove.click(); });
-  await act(async () => { Array.from(container.querySelector('[role="alertdialog"]')!.querySelectorAll("button")).find(item => item.textContent?.trim() === "Cancel")!.click(); await new Promise(resolve => setTimeout(resolve, 0)); });
-  expect(document.activeElement).toBe(remove);
+test("preview and remove dialogs take the documented safe initial focus", async () => {
+  await mountDirect(makeStatus("current", "balanced"));
+  await openApply("Change mode");
+  await act(async () => { await flush(); });
+  expect(document.activeElement).toBe(button("Change mode", container.querySelector('[role="dialog"]')!));
+  await act(async () => { button("Close").click(); await flush(); button("Remove").click(); await flush(); });
+  await act(async () => { await flush(); });
+  expect(document.activeElement).toBe(button("Cancel", container.querySelector('[role="alertdialog"]')!));
 });
 
-test("hook sends the exact selected PUT body and re-reads the dedicated resource", async () => {
-  const requests: Array<{ url: string; init?: RequestInit }> = [];
-  Object.defineProperty(globalThis, "fetch", {
-    configurable: true,
-    value: async (url: string, init?: RequestInit) => {
-      requests.push({ url, init });
-      return Response.json(init?.method === "PUT" ? { ok: true, status: status("current", "orchestrator") } : status());
-    },
-  });
-  function Harness() {
-    const setup = useCodexDelegationSetup("/hook");
-    return <><button type="button" onClick={() => setup.setSelectedMode("orchestrator")}>Select orchestrator</button><button type="button" onClick={() => { void setup.install(); }}>Hook install</button><span>{setup.loaded ? "loaded" : "loading"}</span></>;
-  }
-  const { createRoot } = await import("react-dom/client");
-  await act(async () => { root = createRoot(container); root.render(<Harness />); await new Promise(resolve => setTimeout(resolve, 0)); });
-  await act(async () => { button("Select orchestrator").click(); button("Hook install").click(); await new Promise(resolve => setTimeout(resolve, 0)); });
-  const put = requests.find(request => request.init?.method === "PUT");
-  expect(put?.url).toBe("/hook/api/codex-delegation");
-  expect(put?.init?.body).toBe(JSON.stringify({ mode: "orchestrator" }));
-  expect(requests.filter(request => request.init?.method === undefined).length).toBe(2);
+test("preview and remove dialogs trap forward and reverse Tab at their boundaries", async () => {
+  await mountDirect(makeStatus("current", "balanced"));
+  const preview = await openApply("Change mode");
+  const close = button("Close", preview); const confirm = button("Change mode", preview);
+  confirm.focus(); confirm.dispatchEvent(new testWindow.KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+  expect(document.activeElement).toBe(close);
+  close.dispatchEvent(new testWindow.KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }));
+  expect(document.activeElement).toBe(confirm);
+  await act(async () => { close.click(); await flush(); button("Remove").click(); await flush(); });
+  const remove = container.querySelector<HTMLElement>('[role="alertdialog"]')!;
+  const cancel = button("Cancel", remove); const confirmRemove = button("Remove", remove);
+  confirmRemove.focus(); confirmRemove.dispatchEvent(new testWindow.KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+  expect(document.activeElement).toBe(cancel);
 });
 
-test("retained truthful status exposes retry after a refresh error", async () => {
-  const value = status("current", "balanced");
-  let reloads = 0;
-  await mount(value);
-  // Remount with the same truthful status and a controller error, then prove the
-  // visible retry reaches the supplied refresh boundary.
-  const { createRoot } = await import("react-dom/client");
-  await act(async () => {
-    root?.unmount();
-    root = createRoot(container);
-    root.render(<LanguageProvider><CodexDelegationSetupCard delegationSetup={{ ...controller(value), error: "status=503", reload: async () => { reloads++; } }} /></LanguageProvider>);
-  });
-  expect(container.querySelector('[role="alert"]')?.textContent).toContain("request failed");
-  await act(async () => { button("Retry").click(); });
-  expect(reloads).toBe(1);
+test("Escape and backdrop close each dialog and restore its actual opener", async () => {
+  await mountDirect(makeStatus("current", "balanced"));
+  const previewOpener = button("Preview"); previewOpener.focus();
+  await act(async () => { previewOpener.click(); await flush(); });
+  await act(async () => { window.dispatchEvent(new testWindow.KeyboardEvent("keydown", { key: "Escape" })); await flush(); });
+  expect(container.querySelector('[role="dialog"]')).toBeNull();
+  expect(document.activeElement).toBe(previewOpener);
+  const removeOpener = button("Remove"); removeOpener.focus();
+  await act(async () => { removeOpener.click(); await flush(); });
+  const backdrop = container.querySelector('[role="alertdialog"]')!.parentElement!;
+  await act(async () => { backdrop.dispatchEvent(new testWindow.MouseEvent("mousedown", { bubbles: true })); await flush(); });
+  expect(container.querySelector('[role="alertdialog"]')).toBeNull();
+  expect(document.activeElement).toBe(removeOpener);
 });
