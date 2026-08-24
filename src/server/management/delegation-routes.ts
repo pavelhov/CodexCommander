@@ -3,13 +3,18 @@ import type {
   CodexDelegationStatus,
   DelegationArtifactStatus,
 } from "../../codex/delegation-installer";
+import { renderCodexDelegationBundle } from "../../codex/delegation-templates";
 import { jsonResponse } from "../auth-cors";
-import { managementBodyTooLargeResponse, readManagementJsonBody } from "./body";
+import { managementBodyTooLargeResponse, readManagementJsonBody, readManagementRawBody } from "./body";
 import type { ManagementContext } from "./context";
 import { isPlainRecord } from "./shared";
 
 const SKILL_DISPLAY_PATH = "$HOME/.agents/skills/codexcommander-delegation/SKILL.md" as const;
 const AGENTS_DISPLAY_PATH = "$CODEX_HOME/AGENTS.md" as const;
+const CANONICAL_BUNDLES = {
+  balanced: renderCodexDelegationBundle("balanced"),
+  orchestrator: renderCodexDelegationBundle("orchestrator"),
+};
 
 function noStore(response: Response): Response {
   response.headers.set("Cache-Control", "no-store");
@@ -45,10 +50,20 @@ function projectStatus(status: CodexDelegationStatus): CodexDelegationStatus {
     },
     override: { state: status.override.state },
     activation: status.activation,
-    // These values are rendered from the bundled templates by Task 2; they do
-    // not reflect any AGENTS file content that was inspected on disk.
-    previews: status.previews,
-    copyPrompts: status.copyPrompts,
+    previews: {
+      balanced: {
+        skillText: CANONICAL_BUNDLES.balanced.skillText,
+        agentsBlockText: CANONICAL_BUNDLES.balanced.agentsBlockText,
+      },
+      orchestrator: {
+        skillText: CANONICAL_BUNDLES.orchestrator.skillText,
+        agentsBlockText: CANONICAL_BUNDLES.orchestrator.agentsBlockText,
+      },
+    },
+    copyPrompts: {
+      balanced: CANONICAL_BUNDLES.balanced.copyPrompt,
+      orchestrator: CANONICAL_BUNDLES.orchestrator.copyPrompt,
+    },
   };
 }
 
@@ -86,14 +101,13 @@ function outcomeResponse(ctx: ManagementContext, outcome: CodexDelegationMutatio
 }
 
 async function hasDeleteBody(ctx: ManagementContext): Promise<boolean | Response> {
-  if (ctx.req.body === null) return false;
   try {
-    await readManagementJsonBody(ctx.req);
+    return (await readManagementRawBody(ctx.req)).byteLength > 0;
   } catch (error) {
     const tooLarge = managementBodyTooLargeResponse(error, ctx.req, ctx.config);
     if (tooLarge) return noStore(tooLarge);
+    throw error;
   }
-  return true;
 }
 
 export async function handleDelegationRoutes(ctx: ManagementContext): Promise<Response | null> {
