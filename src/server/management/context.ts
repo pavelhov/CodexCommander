@@ -27,8 +27,12 @@ import type {
   ProxyLifecycleAuthority,
 } from "../proxy-lifecycle-authority";
 import type { ProxyLifecycleLockLease } from "../proxy-lifecycle-protocol";
+import type { inspectCodexDelegation, mutateCodexDelegation } from "../../codex/delegation-installer";
 
 export interface ManagementApiDeps {
+  /** Delegation installer seams keep management-route tests off user-owned homes. */
+  inspectCodexDelegation?: typeof inspectCodexDelegation;
+  mutateCodexDelegation?: typeof mutateCodexDelegation;
   /** Shared lifecycle seams for Stop, native routing, and full-sync serialization tests. */
   proxyStopLifecycle?: {
     acquireAuthority?: (
