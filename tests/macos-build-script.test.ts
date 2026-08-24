@@ -17,6 +17,7 @@ import { join, resolve } from "node:path";
 const repoRoot = resolve(import.meta.dir, "..");
 const script = join(repoRoot, "scripts", "build-macos-app.sh");
 const scriptSource = readFileSync(script, "utf8");
+const releaseScriptSource = readFileSync(join(repoRoot, "scripts", "package-macos-release.sh"), "utf8");
 const isMacOS = process.platform === "darwin";
 
 describe("macOS build script bundle contract", () => {
@@ -28,6 +29,18 @@ describe("macOS build script bundle contract", () => {
     expect(scriptSource).toContain('assert_safe_tree "$repo_root/gui/dist" "gui/dist" "$repo_root"');
     expect(scriptSource).toContain('copy_verified_tree "$repo_root/gui/dist" "$runtime_root/gui/dist"');
     expect(scriptSource).toContain('find -P "$path" -print0');
+  });
+
+  test("requires the canonical delegation skill in staged and archived runtimes", () => {
+    expect(scriptSource).toContain(
+      'assert_safe_file "$runtime_root/src/skills/codexcommander-delegation/SKILL.md"',
+    );
+    expect(releaseScriptSource).toContain(
+      '"$runtime_root/src/skills/codexcommander-delegation/SKILL.md"',
+    );
+    expect(releaseScriptSource).toContain(
+      "'CodexCommander.app/Contents/Resources/runtime/src/skills/codexcommander-delegation/SKILL.md'",
+    );
   });
 });
 

@@ -18,6 +18,15 @@ function withTree(body: (root: string, outside: string) => void): void {
 }
 
 describe("package source-tree safety", () => {
+  test("ships the canonical delegation skill through the package src tree", async () => {
+    const packageJson = await Bun.file(new URL("../package.json", import.meta.url)).json() as {
+      files?: string[];
+    };
+
+    expect(packageJson.files).toContain("src");
+    expect(await Bun.file(new URL("../src/skills/codexcommander-delegation/SKILL.md", import.meta.url)).exists()).toBe(true);
+  });
+
   test("accepts a fully physical package tree without modifying its source modes", () => withTree(root => {
     const dist = join(root, "gui", "dist");
     mkdirSync(join(dist, "assets"), { recursive: true });

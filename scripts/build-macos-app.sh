@@ -351,6 +351,8 @@ copy_verified_tree "$repo_root/gui/public/provider-icons" \
 # before dependency installation: package-manager node_modules legitimately contains a
 # small number of executable shim links, while application-owned source assets do not.
 assert_safe_tree "$runtime_root/src" "staged runtime src" "$staging_root"
+assert_safe_file "$runtime_root/src/skills/codexcommander-delegation/SKILL.md" \
+  "staged delegation skill" "$staging_root"
 assert_safe_tree "$runtime_root/bin" "staged runtime bin" "$staging_root"
 assert_safe_tree "$runtime_root/gui/dist" "staged runtime gui/dist" "$staging_root"
 assert_safe_tree "$staged_app/Contents/Resources/provider-icons" "staged provider icons" "$staging_root"
