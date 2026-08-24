@@ -61,3 +61,17 @@ test("Subagents workspace assets and i18n keys are present", async () => {
     expect(src).toContain("sub.workspace.");
   }
 });
+
+test("Subagents places Codex delegation setup after Run Policy with a complete locale family", async () => {
+  const workspace = await Bun.file(new URL("../src/components/subagents-workspace/SubagentsWorkspace.tsx", import.meta.url)).text();
+  const card = await Bun.file(new URL("../src/components/subagents-workspace/CodexDelegationSetupCard.tsx", import.meta.url)).text();
+  expect(workspace).toContain('import CodexDelegationSetupCard');
+  expect(workspace.indexOf("swi-policy")).toBeLessThan(workspace.indexOf("CodexDelegationSetupCard delegationSetup"));
+  expect(card).not.toContain(">Teach Codex");
+  for (const locale of ["en", "ko", "ja", "de", "ru", "zh"]) {
+    const src = await Bun.file(new URL(`../src/i18n/${locale}.ts`, import.meta.url)).text();
+    expect(src).toContain("sub.delegationSetup.title");
+    expect(src).toContain("sub.delegationSetup.manual");
+    expect(src).toContain("sub.delegationSetup.reasonUnsafe");
+  }
+});

@@ -16,6 +16,8 @@ import { formatNamespacedModelId, providerIconSrc } from "../../provider-icons";
 import SubagentDelegationSection from "./SubagentDelegationSection";
 import type { DelegationPatch, DelegationModelOption } from "../../pages/use-subagent-delegation";
 import type { RosterReachability } from "../../pages/subagent-roster-reachability";
+import CodexDelegationSetupCard from "./CodexDelegationSetupCard";
+import type { CodexDelegationSetupController } from "../../pages/use-codex-delegation-setup";
 
 export const FEATURED_MAX = 5;
 export const LONG_CONTEXT_MIN = 200_000;
@@ -68,6 +70,7 @@ export interface SubagentsWorkspaceProps {
     onSave: (patch: DelegationPatch) => void | Promise<boolean>;
   };
   runPolicy?: React.ReactNode;
+  delegationSetup: CodexDelegationSetupController;
 }
 
 function providerFromSelector(selector: string): string {
@@ -163,6 +166,7 @@ export default function SubagentsWorkspace({
   onSave,
   delegation,
   runPolicy,
+  delegationSetup,
 }: SubagentsWorkspaceProps) {
   const t = useT();
   const [query, setQuery] = useState("");
@@ -516,6 +520,7 @@ export default function SubagentsWorkspace({
           />
         )}
       </section>
+      <CodexDelegationSetupCard delegationSetup={delegationSetup} />
     </div>
   );
 }

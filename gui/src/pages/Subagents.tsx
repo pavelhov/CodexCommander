@@ -12,6 +12,7 @@ import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { useSubagentDelegation } from "./use-subagent-delegation";
 import { useSubagentRunPolicy } from "./use-subagent-run-policy";
+import { useCodexDelegationSetup } from "./use-codex-delegation-setup";
 import { deriveRosterReachability, type RosterProjections } from "./subagent-roster-reachability";
 import SubagentRunPolicySection from "../components/subagents-workspace/SubagentRunPolicySection";
 import { setClientResourceData } from "../client-resource";
@@ -251,6 +252,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const busyRef = useRef(busy);
   const delegation = useSubagentDelegation(apiBase);
   const runPolicy = useSubagentRunPolicy(apiBase);
+  const delegationSetup = useCodexDelegationSetup(apiBase);
 
   const loadSubagents = useCallback(async (): Promise<SubagentsSnapshot> => {
     const rosterRequest = fetch(`${apiBase}/api/subagent-models`)
@@ -797,6 +799,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
             }}
           />
         )}
+        delegationSetup={delegationSetup}
       />
       {applyDialog && (
         <div className="dialog-backdrop" onMouseDown={() => { if (!busy) setApplyDialog(null); }}>
