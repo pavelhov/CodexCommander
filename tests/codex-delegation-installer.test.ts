@@ -335,6 +335,27 @@ describe("Codex delegation installer", () => {
     expect(mutateCodexDelegation({ action: "install", mode: "balanced" }, large.deps)).toMatchObject({ reason: "too_large" });
   });
 
+  test("AGENTS output crossing the read bound refuses before publication and compensates the skill", () => {
+    const fx = fixture();
+    const agentsBefore = Buffer.alloc(1024 * 1024 - 1, 0x78);
+    write(fx.agentsPath, agentsBefore);
+
+    const outcome = mutateCodexDelegation({ action: "install", mode: "balanced" }, fx.deps);
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      changed: false,
+      reason: "too_large",
+      status: {
+        state: "not-installed",
+        artifacts: { skill: { state: "absent" }, agentsPolicy: { state: "absent" } },
+      },
+    });
+    expect(readFileSync(fx.agentsPath)).toEqual(agentsBefore);
+    expect(existsSync(fx.skillPath)).toBe(false);
+    expect(readdirSync(fx.codexHome)).toEqual(["AGENTS.md"]);
+  });
+
   test("changed preimage before publish refuses", () => {
     const fx = fixture();
     write(fx.agentsPath, "user preface\n");
@@ -402,6 +423,84 @@ describe("Codex delegation installer", () => {
     });
     expect(outcome).toMatchObject({ ok: false, changed: true, reason: "partial_write" });
     expect(readFileSync(fx.skillPath, "utf8")).toBe("concurrent replacement");
+  });
+
+  test("a DelegationFsError after rename reports a published partial write", () => {
+    const fx = fixture();
+    const deps = {
+      ...fx.deps,
+      afterPublish: (artifact: "skill" | "agents", operation: "write" | "remove") => {
+        if (artifact === "skill" && operation === "write") {
+          writeFileSync(fx.skillPath, Buffer.alloc(256 * 1024 + 1, 0x78));
+        }
+      },
+    };
+
+    const outcome = mutateCodexDelegation({ action: "install", mode: "balanced" }, deps);
+
+    expect(outcome).toMatchObject({ ok: false, changed: true, reason: "partial_write" });
+    expect(readFileSync(fx.skillPath).byteLength).toBe(256 * 1024 + 1);
+    expect(existsSync(fx.agentsPath)).toBe(false);
+  });
+
+  test("an arbitrary error after rename reports a published partial write", () => {
+    const fx = fixture();
+    const deps = {
+      ...fx.deps,
+      afterPublish: (artifact: "skill" | "agents", operation: "write" | "remove") => {
+        if (artifact === "skill" && operation === "write") throw new Error("post-rename verification failure");
+      },
+    };
+
+    const outcome = mutateCodexDelegation({ action: "install", mode: "balanced" }, deps);
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      changed: true,
+      reason: "partial_write",
+      status: { state: "partial", artifacts: { skill: { state: "current" }, agentsPolicy: { state: "absent" } } },
+    });
+    expect(readFileSync(fx.skillPath, "utf8")).toBe(renderCodexDelegationBundle("balanced").skillText);
+    expect(existsSync(fx.agentsPath)).toBe(false);
+  });
+
+  test("a DelegationFsError after unlink reports a published partial write", () => {
+    const fx = fixture();
+    mutateCodexDelegation({ action: "install", mode: "balanced" }, fx.deps);
+    const deps = {
+      ...fx.deps,
+      afterPublish: (artifact: "skill" | "agents", operation: "write" | "remove") => {
+        if (artifact === "skill" && operation === "remove") mkdirSync(fx.skillPath);
+      },
+    };
+
+    const outcome = mutateCodexDelegation({ action: "uninstall" }, deps);
+
+    expect(outcome).toMatchObject({ ok: false, changed: true, reason: "partial_write" });
+    expect(lstatSync(fx.skillPath).isDirectory()).toBe(true);
+    expect(readFileSync(fx.agentsPath, "utf8")).toBe("");
+  });
+
+  test("an arbitrary error after unlink reports a published partial write", () => {
+    const fx = fixture();
+    mutateCodexDelegation({ action: "install", mode: "balanced" }, fx.deps);
+    const deps = {
+      ...fx.deps,
+      afterPublish: (artifact: "skill" | "agents", operation: "write" | "remove") => {
+        if (artifact === "skill" && operation === "remove") throw new Error("post-unlink verification failure");
+      },
+    };
+
+    const outcome = mutateCodexDelegation({ action: "uninstall" }, deps);
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      changed: true,
+      reason: "partial_write",
+      status: { state: "not-installed", artifacts: { skill: { state: "absent" }, agentsPolicy: { state: "absent" } } },
+    });
+    expect(existsSync(fx.skillPath)).toBe(false);
+    expect(readFileSync(fx.agentsPath, "utf8")).toBe("");
   });
 
   test("active AGENTS.override.md reports shadowed without changing override bytes", () => {

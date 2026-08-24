@@ -74,6 +74,8 @@ export interface CodexDelegationInstallerDeps {
   userHome?: string;
   codexHome?: string;
   beforePublish?: (artifact: "skill" | "agents") => void;
+  /** @internal Deterministic seam for post-publication verification tests. */
+  afterPublish?: (artifact: "skill" | "agents", operation: "write" | "remove") => void;
 }
 
 const SKILL_LIMIT = 256 * 1024;
@@ -466,12 +468,16 @@ function safeWrite(
   artifact: "skill" | "agents",
   deps: CodexDelegationInstallerDeps,
 ): FileSnapshotPresent {
+  const limit = artifact === "skill" ? SKILL_LIMIT : AGENTS_LIMIT;
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length > limit) {
+    throw new DelegationFsError("too_large", "delegation output exceeds its read bound");
+  }
   const root = rootForPath(paths, path);
   ensureSafeParent(root, dirname(path));
   const parentBefore = lstatSync(dirname(path), { bigint: true });
-  const currentBefore = readSnapshot(root, path, artifact === "skill" ? SKILL_LIMIT : AGENTS_LIMIT);
+  const currentBefore = readSnapshot(root, path, limit);
   if (!snapshotsEqual(expected, currentBefore)) throw new DelegationFsError("changed_during_mutation", "delegation preimage changed before preparation");
-  const bytes = Buffer.from(text, "utf8");
   const mode = expected.kind === "file" ? Number(expected.stat.mode & 0o777n) : 0o600;
   const tempPath = join(dirname(path), `.${basename(path)}.ccx.${process.pid}.${++tempSequence}.tmp`);
   let descriptor: number | null = null;
@@ -500,7 +506,7 @@ function safeWrite(
     assertSafeExistingDirectories(root, dirname(path));
     const parentNow = lstatSync(dirname(path), { bigint: true });
     if (!sameDirectoryIdentity(parentPrepared, parentNow)) throw new DelegationFsError("changed_during_mutation", "delegation parent changed before publication");
-    const current = readSnapshot(root, path, artifact === "skill" ? SKILL_LIMIT : AGENTS_LIMIT);
+    const current = readSnapshot(root, path, limit);
     if (!snapshotsEqual(expected, current)) throw new DelegationFsError("changed_during_mutation", "delegation preimage changed before publication");
     const temp = readSnapshot(root, tempPath, bytes.length);
     if (temp.kind !== "file" || temp.stat.dev !== tempIdentity.dev || temp.stat.ino !== tempIdentity.ino || !temp.bytes.equals(bytes)) {
@@ -508,7 +514,8 @@ function safeWrite(
     }
     renameAtomicFile(tempPath, path);
     published = true;
-    const after = readSnapshot(root, path, artifact === "skill" ? SKILL_LIMIT : AGENTS_LIMIT);
+    deps.afterPublish?.(artifact, "write");
+    const after = readSnapshot(root, path, limit);
     if (after.kind !== "file" || after.stat.dev !== tempIdentity.dev || after.stat.ino !== tempIdentity.ino || !after.bytes.equals(bytes)) {
       throw new DelegationFsError("partial_write", "delegation postimage verification failed", true);
     }
@@ -518,8 +525,11 @@ function safeWrite(
     } catch { /* not all platforms permit directory fsync */ }
     return after;
   } catch (error) {
+    if (published) {
+      throw new DelegationFsError("partial_write", "delegation post-publication verification failed", true, { cause: error });
+    }
     if (error instanceof DelegationFsError) throw error;
-    throw new DelegationFsError(published ? "partial_write" : "write_failed", "delegation write failed", published, { cause: error });
+    throw new DelegationFsError("write_failed", "delegation write failed", false, { cause: error });
   } finally {
     if (descriptor !== null) try { closeSync(descriptor); } catch { /* primary error wins */ }
     safeTempCleanup(tempPath, tempIdentity);
@@ -547,13 +557,17 @@ function safeRemove(
     if (!snapshotsEqual(expected, current)) throw new DelegationFsError("changed_during_mutation", "delegation preimage changed before removal");
     unlinkSync(path);
     published = true;
+    deps.afterPublish?.(artifact, "remove");
     if (readSnapshot(root, path, artifact === "skill" ? SKILL_LIMIT : AGENTS_LIMIT).kind !== "absent") {
       throw new DelegationFsError("partial_write", "delegation removal verification failed", true);
     }
     return ABSENT;
   } catch (error) {
+    if (published) {
+      throw new DelegationFsError("partial_write", "delegation post-removal verification failed", true, { cause: error });
+    }
     if (error instanceof DelegationFsError) throw error;
-    throw new DelegationFsError(published ? "partial_write" : "write_failed", "delegation removal failed", published, { cause: error });
+    throw new DelegationFsError("write_failed", "delegation removal failed", false, { cause: error });
   }
 }
 
