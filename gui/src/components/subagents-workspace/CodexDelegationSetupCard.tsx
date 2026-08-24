@@ -79,7 +79,7 @@ export default function CodexDelegationSetupCard({ delegationSetup }: { delegati
           <li><span>{t("sub.delegationSetup.agentsArtifact")}</span><code>{status.artifacts.agentsPolicy.displayPath}</code></li>
         </ul>
         {blocked && <p className="swi-delegation-blocked" role="alert">{t(blockedReason(status))}</p>}
-        {error && <p className="swi-delegation-error" role="alert">{t("sub.delegationSetup.error")}</p>}
+        {error && <div className="swi-delegation-retry"><p className="swi-delegation-error" role="alert">{t("sub.delegationSetup.error")}</p><button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { void delegationSetup.reload(); }}>{t("sub.delegationSetup.retry")}</button></div>}
         <div className="swi-delegation-actions">
           <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={event => openPreview(event, false)}>{t("sub.delegationSetup.preview")}</button>
           {!installed && <button type="button" className="btn btn-primary btn-sm" disabled={!canMutate} onClick={event => openPreview(event, true)}>{t(primaryKey)}</button>}

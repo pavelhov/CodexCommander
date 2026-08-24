@@ -203,3 +203,20 @@ test("hook sends the exact selected PUT body and re-reads the dedicated resource
   expect(put?.init?.body).toBe(JSON.stringify({ mode: "orchestrator" }));
   expect(requests.filter(request => request.init?.method === undefined).length).toBe(2);
 });
+
+test("retained truthful status exposes retry after a refresh error", async () => {
+  const value = status("current", "balanced");
+  let reloads = 0;
+  await mount(value);
+  // Remount with the same truthful status and a controller error, then prove the
+  // visible retry reaches the supplied refresh boundary.
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root?.unmount();
+    root = createRoot(container);
+    root.render(<LanguageProvider><CodexDelegationSetupCard delegationSetup={{ ...controller(value), error: "status=503", reload: async () => { reloads++; } }} /></LanguageProvider>);
+  });
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("request failed");
+  await act(async () => { button("Retry").click(); });
+  expect(reloads).toBe(1);
+});
