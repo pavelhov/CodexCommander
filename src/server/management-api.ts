@@ -20,6 +20,7 @@ import { handleRoutingProfileRoutes } from "./management/routing-profile-routes"
 import { handleProviderRoutes } from "./management/provider-routes";
 import { handleModelRoutes } from "./management/model-routes";
 import { handleAgentSettingsRoutes } from "./management/agent-settings-routes";
+import { handleDelegationRoutes } from "./management/delegation-routes";
 import { handleOauthAccountRoutes } from "./management/oauth-account-routes";
 import { handleComboRoutes } from "./management/combo-routes";
 import { handleSystemRoutes } from "./management/system-routes";
@@ -180,6 +181,7 @@ export async function handleManagementAPI(
       ?? (await handleModelRoutes(ctx))
       ?? (await handleNativeIntegrationRoutes(ctx))
       ?? (await handleAgentSettingsRoutes(ctx))
+      ?? (await handleDelegationRoutes(ctx))
       ?? (await handleCatalogActivationRoutes(ctx))
       ?? (await handleOauthAccountRoutes(ctx))
       ?? (await handleComboRoutes(ctx))

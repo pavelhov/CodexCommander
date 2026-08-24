@@ -31,6 +31,7 @@ import {
 } from "../src/lib/local-management-attestation";
 import { ATTESTATION_CHALLENGE_HEADER, ATTESTATION_PROOF_HEADER } from "../src/identity";
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+import type { CodexDelegationMutation, CodexDelegationStatus } from "../src/codex/delegation-installer";
 
 const previousHome = process.env.CODEXCOMMANDER_HOME;
 const previousDataToken = process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
@@ -52,6 +53,25 @@ function remoteConfig(): CodexCommanderConfig {
         models: ["gpt-test"],
       },
     },
+  };
+}
+
+function delegationStatusForManagementAuthTest(): CodexDelegationStatus {
+  return {
+    schemaVersion: 1,
+    state: "not-installed",
+    installedMode: null,
+    artifacts: {
+      skill: { state: "absent", displayPath: "$HOME/.agents/skills/codexcommander-delegation/SKILL.md" },
+      agentsPolicy: { state: "absent", displayPath: "$CODEX_HOME/AGENTS.md" },
+    },
+    override: { state: "absent" },
+    activation: "effective",
+    previews: {
+      balanced: { skillText: "managed skill", agentsBlockText: "managed AGENTS block" },
+      orchestrator: { skillText: "managed skill", agentsBlockText: "managed AGENTS block" },
+    },
+    copyPrompts: { balanced: "managed copy prompt", orchestrator: "managed copy prompt" },
   };
 }
 
@@ -809,6 +829,88 @@ describe("management and data-plane credential separation", () => {
         },
         body: JSON.stringify({ note: "admin authorization regression" }),
       })).status).toBe(200);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("Codex delegation changes require both a confirmed GUI session and its origin/CSRF proof", async () => {
+    delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
+    const config = remoteConfig();
+    config.hostname = "127.0.0.1";
+    saveConfig(config);
+    const state = initializeManagementAuthState(config);
+    const mutations: CodexDelegationMutation[] = [];
+    const server = startServer(0, {
+      managementAuthState: state,
+      managementApi: {
+        inspectCodexDelegation: delegationStatusForManagementAuthTest,
+        mutateCodexDelegation: mutation => {
+          mutations.push(mutation);
+          return {
+            ok: true,
+            changed: true,
+            status: delegationStatusForManagementAuthTest(),
+          };
+        },
+      },
+    });
+    try {
+      const mintedResponse = await fetch(new URL("/api/gui-launch-ticket", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-codexcommander-api-key": "admin-secret",
+        },
+        body: JSON.stringify({ route: "subagents" }),
+      });
+      expect(mintedResponse.status).toBe(200);
+      const minted = await mintedResponse.json() as { ticket: string; route: string };
+      const exchangeResponse = await fetch(new URL("/api/gui-launch-exchange", server.url), {
+        method: "POST",
+        headers: { Origin: server.url.origin, "content-type": "application/json" },
+        body: JSON.stringify({ ticket: minted.ticket, route: minted.route }),
+      });
+      expect(exchangeResponse.status).toBe(200);
+      const exchanged = await exchangeResponse.json() as {
+        session: { token: string; csrfToken: string; origin: string };
+      };
+
+      const missingBrowserProof = await fetch(new URL("/api/codex-delegation", server.url), {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          "x-codexcommander-api-key": exchanged.session.token,
+        },
+        body: JSON.stringify({ mode: "balanced" }),
+      });
+      expect(missingBrowserProof.status).toBe(401);
+      expect(mutations).toEqual([]);
+
+      const confirmed = await fetch(new URL("/api/codex-delegation", server.url), {
+        method: "PUT",
+        headers: {
+          Origin: exchanged.session.origin,
+          "content-type": "application/json",
+          "x-codexcommander-api-key": exchanged.session.token,
+          "x-codexcommander-gui-origin": exchanged.session.origin,
+          "x-codexcommander-csrf-token": exchanged.session.csrfToken,
+        },
+        body: JSON.stringify({ mode: "orchestrator" }),
+      });
+      expect(confirmed.status).toBe(200);
+      expect(mutations).toEqual([{ action: "install", mode: "orchestrator" }]);
+
+      const rawAdmin = await fetch(new URL("/api/codex-delegation", server.url), {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          "x-codexcommander-api-key": "admin-secret",
+        },
+        body: JSON.stringify({ mode: "balanced" }),
+      });
+      expect(rawAdmin.status).toBe(403);
+      expect(mutations).toEqual([{ action: "install", mode: "orchestrator" }]);
     } finally {
       await server.stop(true);
     }

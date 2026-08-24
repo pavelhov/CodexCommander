@@ -20,6 +20,66 @@ $CODEX_HOME/.codexcommander-native-main-profiles/
 Never assume macOS-only paths. Windows, service installs, and app-launched Codex can all depend on
 the resolved `CODEX_HOME`.
 
+## Managed Codex delegation setup
+
+The optional dashboard delegation setup owns exactly two artifacts at fixed symbolic paths:
+
+```text
+$HOME/.agents/skills/codexcommander-delegation/SKILL.md
+$CODEX_HOME/AGENTS.md
+```
+
+The first is the canonical user-skill path; `$CODEX_HOME/skills/codexcommander-delegation/SKILL.md`
+is only a compatibility-collision check and is never another managed target. The second remains a
+user file: CodexCommander owns only the block bounded by these stable, whole-line markers:
+
+```text
+<!-- BEGIN CODEXCOMMANDER DELEGATION -->
+<!-- END CODEXCOMMANDER DELEGATION -->
+```
+
+The skill proves ownership in its own YAML frontmatter with exactly one
+`name: codexcommander-delegation` and the metadata entries
+`managed-by: codexcommander` and `managed-version: "1"`. Older version `"0"` is recognized only so
+it can be safely updated or removed. This feature creates no persistent hash, manifest, lock, or
+hidden ownership file. Do not apply the ownership-manifest rules used by full `ccx uninstall` to
+these two artifacts.
+
+The installer accepts no caller-selected path. It resolves the physical user home and Codex home,
+keeps each target inside its fixed root, and refuses linked or reparse-substituted roots,
+directories, and leaves. An existing leaf must be a regular single-link file; symlinks, hard links,
+directories, nonregular files, oversized files, invalid UTF-8, and identities that change between
+inspection and publication fail closed. Reads and temporary writes use no-follow behavior where the
+platform exposes it, with identity and real-path checks providing the cross-platform invariant.
+Writes publish by prepared temporary file plus atomic rename and verify the postimage.
+
+Mutation of `$CODEX_HOME/AGENTS.md` is byte-preserving outside the bounded block. Existing CRLF or LF
+style, every prefix and suffix byte, and the file mode are preserved; update replaces only the
+managed region and uninstall removes only that region plus its immediately introduced separator.
+Ambiguous, duplicate, reversed, orphaned, or non-whole-line markers refuse every mutation.
+
+Install and update publish `SKILL.md` first and the `AGENTS.md` block second. Uninstall removes the
+`AGENTS.md` block first, then removes only the managed `SKILL.md`; it removes the skill directory
+only when that exact directory is still safe and empty, so unknown siblings survive. If the second
+artifact fails before publication, the installer compensates the first artifact back to its exact
+preimage. A successful compensation reports no remaining change and the underlying refusal reason.
+A failure after publication, failed compensation, or unverifiable cleanup reports
+`reason: "partial_write"` with `changed: true` so the dashboard never claims an atomic result.
+Concurrent in-process mutation is rejected as `mutation_busy`.
+
+Codex loads global policy from `$CODEX_HOME/AGENTS.md` once for a run. A nonempty
+`$CODEX_HOME/AGENTS.override.md` shadows the managed global block; an empty override does not, and an
+unsafe override makes activation unknown. Inspection never edits the override. Installing,
+updating, changing mode, or removing the setup does not reload a current task, so the user must
+start a new Codex task to consume the new policy.
+
+This setup is advisory only. The skill tells Codex to inspect the live collaboration roster and tool
+contract and contains no roster or model ids. Live tool guidance plus user and repository
+instructions remain authoritative, including instructions that prohibit delegation. The setup does
+not mutate `config.toml`, `subagentDeveloperInstructions`, native `[agents]` defaults, roster
+injection, or catalog state, and it does not restart a worker or replace the proxy. Those existing
+subsystems keep their independent ownership and activation rules.
+
 ## macOS app first-run bootstrap
 
 The direct packaged macOS companion **Start** path is the only app-only configuration bootstrap. It

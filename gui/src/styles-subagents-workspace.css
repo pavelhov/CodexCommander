@@ -336,6 +336,39 @@
   margin-top: 1px;
 }
 
+/* Managed Codex delegation follows the policy card grammar: one clear primary
+   action, quiet supporting details, and no roster/model data duplicated here. */
+.swi-delegation-setup { grid-column: 1 / -1; }
+.swi-delegation-body { display: flex; flex-direction: column; gap: var(--space-3); padding: 0 var(--space-4) var(--space-4); }
+.swi-delegation-badge { align-self: flex-start; padding: var(--space-1) var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-pill); color: var(--muted); background: var(--raised); font-size: var(--text-micro); font-weight: var(--weight-medium); }
+.swi-delegation-badge--current { color: var(--green); }
+.swi-delegation-badge--update-available, .swi-delegation-badge--partial { color: var(--amber); }
+.swi-delegation-badge--conflict, .swi-delegation-badge--unsafe { color: var(--red); }
+.swi-delegation-modes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); margin: 0; padding: 0; border: 0; }
+.swi-delegation-mode { display: flex; gap: var(--space-2); min-height: var(--control-lg); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; }
+.swi-delegation-mode.is-selected { border-color: var(--accent); background: var(--raised); }
+.swi-delegation-mode:focus-within { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+.swi-delegation-mode span { display: flex; flex-direction: column; gap: var(--space-1); color: var(--text); font-size: var(--text-label); }
+.swi-delegation-mode small, .swi-delegation-note, .swi-delegation-working, .swi-delegation-manual p { color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); }
+.swi-delegation-note, .swi-delegation-working, .swi-delegation-manual p { margin: 0; }
+.swi-delegation-artifacts { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+.swi-delegation-artifacts li { display: flex; justify-content: space-between; gap: var(--space-3); padding: var(--space-2); border: 1px solid var(--border-soft); border-radius: var(--radius-xs); color: var(--muted); font-size: var(--text-label); }
+.swi-delegation-artifacts code { color: var(--text); overflow-wrap: anywhere; text-align: end; }
+.swi-delegation-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.swi-delegation-remove { color: var(--red); }
+.swi-delegation-blocked, .swi-delegation-error { margin: 0; padding: var(--space-2); border: 1px solid color-mix(in srgb, var(--red) 35%, var(--border)); border-radius: var(--radius-xs); color: var(--red); font-size: var(--text-label); }
+.swi-delegation-manual { border-top: 1px solid var(--border-soft); }
+.swi-delegation-manual > summary { min-height: var(--control-lg); padding-top: var(--space-2); color: var(--muted); cursor: pointer; font-size: var(--text-label); font-weight: var(--weight-medium); }
+.swi-delegation-manual > summary:hover { color: var(--text); }
+.swi-delegation-dialog { max-width: min(680px, calc(100vw - var(--space-6))); }
+.swi-delegation-dialog pre { max-height: 230px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+@media (max-width: 700px) {
+  .swi-delegation-modes { grid-template-columns: 1fr; }
+  .swi-delegation-artifacts li { align-items: flex-start; flex-direction: column; }
+  .swi-delegation-artifacts code { text-align: start; }
+}
+
 /* Split notice: one quiet info row between the roster and the footer,
    mirroring the .swi-card-footer rhythm (icon + text + inline action). */
 .swi-roster-note {

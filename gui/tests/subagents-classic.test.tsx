@@ -170,13 +170,13 @@ function removeButtons(): HTMLButtonElement[] {
     /^Remove /.test(b.getAttribute("aria-label") ?? "")) as unknown as HTMLButtonElement[];
 }
 
-test("renders one configured roster, one agent library, and one run-policy card", async () => {
+test("renders one configured roster, one agent library, run policy, and delegation setup", async () => {
   await mount();
   expect(container.querySelector(".subagents-workspace-shell")).toBeTruthy();
-  expect(container.querySelectorAll(".subagents-command-card").length).toBe(3);
+  expect(container.querySelectorAll(".subagents-command-card").length).toBe(4);
   const headings = Array.from(container.querySelectorAll(".swi-card-title"))
     .map(node => node.textContent?.trim());
-  expect(headings).toEqual(["Configured Roster", "Agent Library", "Run Policy"]);
+  expect(headings).toEqual(["Configured Roster", "Agent Library", "Run Policy", "Teach Codex to use this roster"]);
   expect(container.textContent).toContain("Use roster as worker guidance");
   expect(container.textContent).toContain("No preferred model");
 });

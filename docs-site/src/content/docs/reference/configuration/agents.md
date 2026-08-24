@@ -62,6 +62,34 @@ replay prefixes and inserted before a trailing `compaction_trigger`.
 V2 text asks Codex to pass supported model/effort overrides to `spawn_agent` with
 `fork_turns: "none"`. A custom `injectionPrompt` substitutes missing values with an empty string.
 
+## Managed advisory setup
+
+**Codex delegation setup** in the Agent Command Center is not a `config.json` field. It manages only:
+
+```text
+$HOME/.agents/skills/codexcommander-delegation/SKILL.md
+$CODEX_HOME/AGENTS.md
+```
+
+The user skill proves CodexCommander ownership through `name: codexcommander-delegation` plus
+`metadata.managed-by: codexcommander` and `metadata.managed-version: "1"`. The global policy owns only
+the whole-line region from `<!-- BEGIN CODEXCOMMANDER DELEGATION -->` through
+`<!-- END CODEXCOMMANDER DELEGATION -->`. There is no hash, manifest, or hidden ownership file for
+this setup.
+
+The skill is advisory and contains no roster ids. It consults the current collaboration tool
+contract and live CodexCommander roster, which remain authoritative. The global block records the
+selected `balanced` or `orchestrator` mode and is loaded once per Codex run. Start a new task after
+install, update, mode change, repair, or removal; current tasks are not reloaded. User and repository
+instructions can prohibit delegation. A nonempty `$CODEX_HOME/AGENTS.override.md` shadows the managed
+global block, while an empty override does not.
+
+Uninstall removes only the owned `SKILL.md`, removes its directory only when empty, and removes only
+the bounded global block while preserving every other `AGENTS.md` byte. This setup never mutates
+`config.toml`, `subagentDeveloperInstructions`, native `[agents]` defaults, roster injection, or the
+catalog, and it does not restart workers or replace the proxy. Those remain separate from the
+`/api/codex-delegation` resource.
+
 ## Native Codex default sync
 
 When enabled, `syncCodexSubagentDefaults` writes marker-owned

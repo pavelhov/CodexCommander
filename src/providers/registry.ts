@@ -939,7 +939,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // grok-composer-2.5-fast is retained as account-verified despite being absent from public docs.
     // grok-4.20-multi-agent-0309 is intentionally absent: the OAuth chat-completions
     // transport returns 400 ("Multi Agent requests are not allowed on chat completions").
-    models: ["grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning", "grok-build-0.1", "grok-composer-2.5-fast"],
+    models: ["grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning", "grok-build-0.1", "grok-composer-2.5-fast"],
     defaultModel: "grok-4.5",
     // Vision lineup per docs.x.ai model-capabilities/images/understanding: the grok-4.x chat
     // models accept image input (JPEG/PNG, URL or base64). Without this the catalog leaves
@@ -948,6 +948,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // the app blocks attachments client-side. grok-build-0.1 / grok-composer-2.5-fast stay out
     // (they are already listed in noVisionModels below).
     modelInputModalities: {
+      "grok-4.6": ["text", "image"],
       "grok-4.5": ["text", "image"],
       "grok-4.3": ["text", "image"],
       "grok-4.20-0309-reasoning": ["text", "image"],
@@ -958,7 +959,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // reasoning_content as the top cause of prompt-cache misses on multi-turn conversations
     // (docs.x.ai prompt-caching/multi-turn, verified 2026-07-13).
     // Models that never emit reasoning simply have no thinking parts to replay (no-op).
-    preserveReasoningContentModels: ["grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning"],
+    preserveReasoningContentModels: ["grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning"],
     // grok reasoning is always-on with low/medium/high control (no off tier upstream);
     // grok-4.6+ extends the ladder with xhigh per docs.x.ai. xAI rejects max/ultra outright
     // (400 "Invalid reasoning effort"), so every grok reasoning model clamps ultra/max down
@@ -972,6 +973,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // ladder unless a per-model entry raises it (noReasoningModels stay effort-free).
     reasoningEfforts: ["low", "medium", "high"],
     modelContextWindows: {
+      "grok-4.6": 500_000,
       "grok-4.5": 500_000,
       "grok-4.3": 1_000_000,
       "grok-4.20-0309-reasoning": 1_000_000,

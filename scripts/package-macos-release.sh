@@ -51,6 +51,7 @@ runtime_root="$app_bundle/Contents/Resources/runtime"
 for required_path in \
   "$runtime_root/package.json" \
   "$runtime_root/src/cli/index.ts" \
+  "$runtime_root/src/skills/codexcommander-delegation/SKILL.md" \
   "$runtime_root/gui/dist/index.html"; do
   if [[ ! -e "$required_path" ]]; then
     echo "Packaged app is missing required runtime resource: $required_path" >&2
@@ -136,6 +137,7 @@ fi
 for required_entry in \
   'CodexCommander.app/Contents/Resources/runtime/package.json' \
   'CodexCommander.app/Contents/Resources/runtime/src/cli/index.ts' \
+  'CodexCommander.app/Contents/Resources/runtime/src/skills/codexcommander-delegation/SKILL.md' \
   'CodexCommander.app/Contents/Resources/runtime/gui/dist/index.html'; do
   if ! grep -Fqx "$required_entry" <<< "$archive_entries"; then
     echo "Packaged archive does not contain required runtime resource: $required_entry" >&2

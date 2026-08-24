@@ -50,7 +50,8 @@ A dashboard bound to a non-loopback hostname may use the admin token
 but the browser prompt is enabled only on a trusted HTTPS origin. A plaintext remote page never asks
 for or sends the bearer. Without trusted HTTPS, use a local or SSH tunnel that presents the dashboard
 as loopback, then open it through `ccx gui`. Raw admin remains available to headless management API
-clients, but catalog Apply is deliberately restricted to a confirmed local dashboard launch.
+clients, but catalog Apply and managed delegation install/remove are deliberately restricted to a
+confirmed local dashboard launch.
 
 On trusted HTTPS, a remote dashboard presents a standard password form so a browser password manager
 can offer to save and autofill the credential. The dashboard itself still keeps that raw admin token
@@ -71,7 +72,7 @@ the browser or password manager's decision.
 | **Providers** | Add, edit, set the default (enabled providers only), enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Removing the current default switches to the first remaining enabled provider when one exists; otherwise deletion is refused and the current default is kept. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. |
 | **Add provider** | Search registry-backed presets for account login, API-key services, local servers, or a custom endpoint. A query searches Accounts, Free and Paid together while the tabs remain useful for browsing. |
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, select the next-session account, refresh 5h / weekly / 30d quotas, enable or disable quota auto-switch, set its 1–100% threshold, and configure transient-failure failover. |
-| **Subagents** | Open the **Agent Command Center** to choose and order the five models advertised to `spawn_agent`, search the current catalog, and configure Run Policy for protocol, V2 delivery, guidance, fallback, and thread limits. Saved entries that are not advertised are reported explicitly. Its status distinguishes saved configuration, the generated on-disk catalog, and the roster loaded by current Codex workers. |
+| **Subagents** | Open the **Agent Command Center** to choose and order the five models advertised to `spawn_agent`, search the current catalog, configure Run Policy, and install the optional advisory Codex delegation setup. Saved entries that are not advertised are reported explicitly. Its status distinguishes saved configuration, the generated on-disk catalog, and the roster loaded by current Codex workers. |
 | **Models** | Toggle native GPT and routed models, set provider allowlists and context caps, choose **Reliable V1**, **Codex native**, or **Concurrent V2**, and configure the V2 thread limit. The Current behavior card reports context as **Uncapped**, **Limited**, or **Mixed limits**. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. Each routed-provider row reports **Auto-discovery on** or **Static catalog only** and links to the owning Provider setting. |
 | **Client Apps** | Inspect configured and available local clients, apply or remove managed config where supported, review backups, and reach Codex, Claude Code/Desktop, Grok Build, OpenCode and the file-managed clients without treating providers as clients. |
 | **API Access** | Issue and manage keys that authenticate other apps to the CodexCommander proxy. Provider credentials remain under Providers. |
@@ -137,6 +138,40 @@ one-time browser launch restores API access without exposing it.
 A new task or fork within the same ChatGPT worker does not reload its model catalog. Quit and reopen
 ChatGPT first, then start the new task. For advanced automation, `ccx sync --restart-codex` remains
 available with the same worker-interruption caveat as the dashboard fallback.
+
+## Install the advisory delegation setup
+
+The **Subagents → Agent Command Center** includes **Codex delegation setup**, an optional way to give
+new Codex tasks a durable delegation mode without freezing today's model roster into instructions.
+Use it in this order:
+
+1. Choose **Balanced** or **Orchestrator**. Balanced delegates substantial, bounded parallel work
+   when it clearly helps while allowing the root to implement. Orchestrator normally delegates
+   research and implementation and keeps the root focused on coordination and synthesis; it may
+   still work directly when delegation is unavailable or clearly wasteful.
+2. Choose **Preview** and review the exact two managed artifacts:
+   `$HOME/.agents/skills/codexcommander-delegation/SKILL.md` and the bounded CodexCommander block in
+   `$CODEX_HOME/AGENTS.md`.
+3. Confirm **Install**, **Update**, or **Repair**. An installed setup instead offers **Change mode**.
+   The dashboard refuses automatic changes when either path is unsafe, a skill at the target is not
+   CodexCommander-managed, or the `AGENTS.md` marker pair is ambiguous.
+4. Start a new Codex task. Codex reads the global block once per run; installing, repairing,
+   changing mode, or removing it does not reload a current task.
+5. To uninstall, choose **Remove**, then confirm the **Remove delegation setup** dialog. This removes
+   only the managed `SKILL.md` and bounded `AGENTS.md` block. The skill directory is removed only
+   when empty, so unrelated siblings are preserved.
+6. Expand **Manual setup** and copy its server-provided setup only when the local installer is
+   unavailable. It is a fallback, not an extra automatic installation method.
+
+The installed skill is advisory. It carries no roster or model ids and tells Codex to inspect the
+current collaboration tool contract and live CodexCommander roster before delegating. Those live
+contracts remain authoritative, and user or repository instructions can prohibit delegation. A
+nonempty `$CODEX_HOME/AGENTS.override.md` shadows the managed global block; the card reports that
+state rather than claiming the setup is Ready.
+
+This setup does not edit `config.toml`, `subagentDeveloperInstructions`, native `[agents]` defaults,
+the featured roster, or the model catalog. It neither restarts a Codex worker nor replaces the
+CodexCommander proxy. Configure and activate those separate surfaces through their existing controls.
 
 ## Delegation picker vs spawn routing
 
@@ -247,6 +282,7 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | `POST /api/codex-auth/login` · `GET /api/codex-auth/login-status` | Add a pool account through browser login. |
 | `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | Read recent request metadata with optional tail, provider, and exact/class status filters. With `limit`/`offset`, paging walks backward from the newest row (`offset=0` returns the latest page). Response shape: `{ timeZone, total, logs }` where `total` is the filtered row count before pagination. |
 | `GET` / `PUT /api/subagent-models` | Read or set the five featured `spawn_agent` override models. |
+| `GET` / `PUT` / `DELETE /api/codex-delegation` | Read the managed delegation status and canonical previews, or install/change/remove the two advisory artifacts. PUT/DELETE require a confirmed dashboard launch with same-origin CSRF; a raw admin client receives 403. |
 | `POST /api/stop` | Persist OFF, restore and prove native Codex, and stop an unsupervised proxy. Returns 409 for an installed supervisor, lifecycle contention, or an unsafe native restore; tray/CLI Stop owns the manager-first delegated path. |
 
 :::tip
