@@ -13,6 +13,7 @@ import { handleProviderRuntimeCommand } from "../src/cli/provider-runtime";
 import { handleSystemCommand, SYSTEM_USAGE } from "../src/cli/system-command";
 
 type Recorded = { path: string; method: string; body: unknown };
+type EndpointCoverage = readonly [prefix: string, resource: string, match?: "exact" | "prefix"];
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
 
 afterEach(() => {
@@ -55,6 +56,12 @@ function sourceFiles(root: string): string[] {
     const path = join(root, name);
     return statSync(path).isDirectory() ? sourceFiles(path) : /\.[jt]sx?$/.test(name) ? [path] : [];
   });
+}
+
+function endpointCovered(endpoint: string, coverage: readonly EndpointCoverage[]): boolean {
+  return coverage.some(([prefix, , match = "prefix"]) => (
+    match === "exact" ? endpoint === prefix : endpoint === prefix || endpoint.startsWith(prefix)
+  ));
 }
 
 describe("headless GUI parity CLI", () => {
@@ -105,6 +112,17 @@ describe("headless GUI parity CLI", () => {
     }
   });
 
+  test("exact GUI management classifications do not cover future routes", () => {
+    const coverage: EndpointCoverage[] = [[
+      "/api/codex-delegation",
+      "(none — confirmed-GUI installer; manual setup fallback in dashboard)",
+      "exact",
+    ]];
+    expect(endpointCovered("/api/codex-delegation", coverage)).toBe(true);
+    expect(endpointCovered("/api/codex-delegation/export", coverage)).toBe(false);
+    expect(endpointCovered("/api/codex-delegation-v2", coverage)).toBe(false);
+  });
+
   test("every GUI management endpoint belongs to a documented CLI resource", () => {
     const guiRoot = join(import.meta.dir, "..", "gui", "src");
     const endpoints = new Set<string>();
@@ -114,7 +132,7 @@ describe("headless GUI parity CLI", () => {
         endpoints.add(match[0].replace(/\.+$/, "").replace(/\/$/, ""));
       }
     }
-    const coverage: Array<[string, string]> = [
+    const coverage: EndpointCoverage[] = [
       ["/api/claude-code", "ccx claude config"],
       ["/api/claude-desktop", "ccx claude desktop"],
       ["/api/claude/", "ccx observe"],
@@ -131,7 +149,7 @@ describe("headless GUI parity CLI", () => {
       ["/api/client-integrations", "ccx integration client"],
       // CLI mutation is intentionally unavailable across the confirmed-GUI,
       // same-origin CSRF boundary; the dashboard provides a manual setup fallback.
-      ["/api/codex-delegation", "(none — confirmed-GUI installer; manual setup fallback in dashboard)"],
+      ["/api/codex-delegation", "(none — confirmed-GUI installer; manual setup fallback in dashboard)", "exact"],
       // GUI-only for now: the overview card switches for Claude Code and Grok.
       // Their effect is already reachable from the CLI by other names —
       // `ccx grok apply` regenerates the fence and `ccx stop` strips it, and
@@ -173,7 +191,7 @@ describe("headless GUI parity CLI", () => {
       ["/api/v2", "ccx v2/agent"],
       ["/api/windows-tray", "ccx tray"],
     ];
-    const uncovered = [...endpoints].filter(endpoint => !coverage.some(([prefix]) => endpoint === prefix || endpoint.startsWith(prefix)));
+    const uncovered = [...endpoints].filter(endpoint => !endpointCovered(endpoint, coverage));
     expect(uncovered).toEqual([]);
   });
 
