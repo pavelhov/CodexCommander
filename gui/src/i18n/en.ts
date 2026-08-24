@@ -2265,6 +2265,7 @@ export const en = {
   "sub.delegationSetup.retry": "Retry",
   "sub.delegationSetup.close": "Close",
   "sub.delegationSetup.cancel": "Cancel",
+  "sub.delegationSetup.confirmChangeMode": "Change mode",
 
 } as const;
 

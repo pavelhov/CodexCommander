@@ -2237,4 +2237,5 @@ export const de: Record<TKey, string> = {
   "sub.delegationSetup.retry": "Erneut versuchen",
   "sub.delegationSetup.close": "Schließen",
   "sub.delegationSetup.cancel": "Abbrechen",
+  "sub.delegationSetup.confirmChangeMode": "Modus ändern",
 };

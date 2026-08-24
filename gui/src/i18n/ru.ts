@@ -2259,4 +2259,5 @@ export const ru: Record<TKey, string> = {
   "sub.delegationSetup.retry": "Повторить",
   "sub.delegationSetup.close": "Закрыть",
   "sub.delegationSetup.cancel": "Отмена",
+  "sub.delegationSetup.confirmChangeMode": "Сменить режим",
 };

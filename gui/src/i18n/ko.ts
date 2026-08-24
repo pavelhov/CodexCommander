@@ -2257,5 +2257,6 @@ export const ko: Record<TKey, string> = {
   "sub.delegationSetup.retry": "다시 시도",
   "sub.delegationSetup.close": "닫기",
   "sub.delegationSetup.cancel": "취소",
+  "sub.delegationSetup.confirmChangeMode": "모드 변경",
 
 };

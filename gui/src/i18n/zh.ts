@@ -2257,4 +2257,5 @@ export const zh: Record<TKey, string> = {
   "sub.delegationSetup.retry": "重试",
   "sub.delegationSetup.close": "关闭",
   "sub.delegationSetup.cancel": "取消",
+  "sub.delegationSetup.confirmChangeMode": "更改模式",
 };

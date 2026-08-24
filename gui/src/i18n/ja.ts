@@ -2257,4 +2257,5 @@ export const ja: Record<TKey, string> = {
   "sub.delegationSetup.retry": "再試行",
   "sub.delegationSetup.close": "閉じる",
   "sub.delegationSetup.cancel": "キャンセル",
+  "sub.delegationSetup.confirmChangeMode": "モードを変更",
 };
