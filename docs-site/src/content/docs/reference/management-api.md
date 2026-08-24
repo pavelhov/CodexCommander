@@ -60,9 +60,11 @@ isolation. Browsers may copy the record into duplicated or opener-created tabs, 
 restored tab; every copy remains bound to the exact origin and CSRF token and is usable only until the
 fixed server expiry, a proxy restart, or a rejecting `401`.
 
-The raw admin bearer remains valid for ordinary API mutations. Catalog Apply is deliberately stricter:
-`POST /api/codex-catalog/apply` accepts only a confirmed GUI session, so scripts use
-`ccx sync --restart-codex` instead.
+The raw admin bearer remains valid for ordinary API mutations. Catalog Apply and managed delegation
+writes are deliberately stricter: `POST /api/codex-catalog/apply` and
+`PUT, DELETE /api/codex-delegation` accept only a confirmed GUI session. Scripts use
+`ccx sync --restart-codex` for catalog activation; delegation status remains readable and the
+dashboard provides a manual copy fallback when its local installer is unavailable.
 
 A remote operator browser may authenticate with the raw admin token only over trusted HTTPS; a
 plaintext remote page never prompts for or sends it. Without trusted HTTPS, use a local or SSH tunnel
@@ -96,6 +98,7 @@ route-specific results rather than repeating this table.
 | `GET, PUT /api/effort-caps` | Read or set global and sub-agent reasoning-effort ceilings | 400 invalid ladder value |
 | `GET, PUT /api/subagent-models` | Read or order up to five requested `spawn_agent` quick picks; this does not force routing. Responses keep the persisted `chosen` list separate from the effective `advertised` list, report any `excluded` choices, and include additive `activation` evidence for the desired config, on-disk catalog, and running Codex worker | 400 invalid list or more than five models |
 | `GET, PUT /api/subagent-model-fallback` | Read or set the ordered global fallback chain for spawned child turns and its poll interval | 400 invalid list or poll interval |
+| `GET, PUT, DELETE /api/codex-delegation` | Read managed advisory-delegation status, install/update one exact mode, or remove the two managed artifacts. GET accepts normal authenticated principals; PUT/DELETE require a confirmed GUI session with same-origin CSRF and reject a raw admin principal with 403 | 400 invalid PUT body or nonempty DELETE body; 403 confirmed dashboard launch required; 409 conflict/unsafe/concurrent-change refusal; 500 write or partial-write failure; 503 `mutation_busy` (`Retry-After: 1`) |
 | `GET /api/grok` | Read Grok managed-config status and candidate models | 400 status read failure |
 | `PUT /api/grok/selection` | Persist the excluded Grok models | 400 invalid or oversized selection |
 | `POST /api/grok/apply` | Apply persisted Grok configuration through the managed sync | 409 `grok_apply_busy`; 400/500 apply failure |
@@ -127,6 +130,167 @@ snapshot.
 
 For scripts or the native companion, `ccx sync --restart-codex` remains the compatible advanced
 fallback. Quitting and reopening Codex Desktop is the reliable manual worker-replacement boundary.
+
+#### Managed Codex delegation setup
+
+`/api/codex-delegation` is a focused management resource for the advisory user skill and bounded
+global `AGENTS.md` block. It is separate from `/api/v2`, `subagentDeveloperInstructions`, native
+`[agents]` defaults, roster injection, and the catalog lifecycle. It changes no Codex config, never
+restarts a worker, and never replaces the CodexCommander proxy. Current Codex tasks do not reload the
+managed block; start a new task after a successful install, update, mode change, repair, or removal.
+
+`GET` is authenticated and read-only. A raw admin client or a confirmed GUI session can read it:
+
+```http
+GET /api/codex-delegation HTTP/1.1
+Host: localhost:10100
+X-CodexCommander-API-Key: <admin-token>
+```
+
+The response uses only symbolic paths and fixed public states. This abridged example omits the
+canonical packaged preview and manual-copy text; the live `previews` and `copyPrompts` fields contain
+generated setup content, never the existing user `AGENTS.md`, an override file, or an inspected
+absolute path.
+
+```http
+HTTP/1.1 200 OK
+Cache-Control: no-store
+Content-Type: application/json
+
+{
+  "schemaVersion": 1,
+  "state": "current",
+  "installedMode": "balanced",
+  "artifacts": {
+    "skill": {
+      "state": "current",
+      "displayPath": "$HOME/.agents/skills/codexcommander-delegation/SKILL.md"
+    },
+    "agentsPolicy": {
+      "state": "current",
+      "displayPath": "$CODEX_HOME/AGENTS.md"
+    }
+  },
+  "override": { "state": "absent" },
+  "activation": "effective"
+}
+```
+
+`PUT` accepts exactly one safe public field, `mode`, with the stable value `balanced` or
+`orchestrator`. A confirmed GUI session must supply its exact origin claim, browser `Origin`, and
+CSRF token. These placeholders illustrate the launch-session exchange; do not substitute a raw
+admin token because that principal receives 403 before the body is consumed.
+
+```http
+PUT /api/codex-delegation HTTP/1.1
+Host: localhost:10100
+Origin: http://localhost:10100
+X-CodexCommander-API-Key: <confirmed-gui-session-token>
+X-CodexCommander-GUI-Origin: http://localhost:10100
+X-CodexCommander-CSRF-Token: <confirmed-gui-csrf-token>
+Content-Type: application/json
+
+{ "mode": "orchestrator" }
+```
+
+```http
+HTTP/1.1 200 OK
+Cache-Control: no-store
+Content-Type: application/json
+
+{
+  "ok": true,
+  "changed": true,
+  "status": {
+    "schemaVersion": 1,
+    "state": "current",
+    "installedMode": "orchestrator",
+    "artifacts": {
+      "skill": {
+        "state": "current",
+        "displayPath": "$HOME/.agents/skills/codexcommander-delegation/SKILL.md"
+      },
+      "agentsPolicy": {
+        "state": "current",
+        "displayPath": "$CODEX_HOME/AGENTS.md"
+      }
+    },
+    "override": { "state": "absent" },
+    "activation": "effective"
+  }
+}
+```
+
+`DELETE` accepts no request body and uses the same confirmed-session origin and CSRF headers:
+
+```http
+DELETE /api/codex-delegation HTTP/1.1
+Host: localhost:10100
+Origin: http://localhost:10100
+X-CodexCommander-API-Key: <confirmed-gui-session-token>
+X-CodexCommander-GUI-Origin: http://localhost:10100
+X-CodexCommander-CSRF-Token: <confirmed-gui-csrf-token>
+```
+
+```http
+HTTP/1.1 200 OK
+Cache-Control: no-store
+Content-Type: application/json
+
+{
+  "ok": true,
+  "changed": true,
+  "status": {
+    "schemaVersion": 1,
+    "state": "not-installed",
+    "installedMode": null,
+    "artifacts": {
+      "skill": {
+        "state": "absent",
+        "displayPath": "$HOME/.agents/skills/codexcommander-delegation/SKILL.md"
+      },
+      "agentsPolicy": {
+        "state": "absent",
+        "displayPath": "$CODEX_HOME/AGENTS.md"
+      }
+    },
+    "override": { "state": "absent" },
+    "activation": "effective"
+  }
+}
+```
+
+The stable status enums are:
+
+| Field | Values |
+| --- | --- |
+| `state` | `not-installed`, `current`, `update-available`, `partial`, `conflict`, `unsafe` |
+| `artifacts.*.state` | `absent`, `current`, `outdated`, `foreign`, `unsafe` |
+| `artifacts.*.reason` | `ownership_conflict`, `unsafe_path` when present |
+| `override.state` | `absent`, `empty`, `active`, `unsafe` |
+| `activation` | `effective`, `shadowed`, `unknown` |
+| `installedMode` | `balanced`, `orchestrator`, or `null` |
+
+A refused mutation returns `{ "ok": false, "changed": boolean, "reason": enum, "status": ... }`.
+Its stable `reason` values are `foreign_skill`, `ambiguous_agents_markers`, `unsafe_path`,
+`unreadable`, `invalid_utf8`, `too_large`, `changed_during_mutation`, `mutation_busy`,
+`write_failed`, and `partial_write`. `mutation_busy` returns 503 with `Retry-After: 1`;
+`write_failed` and `partial_write` return 500; the other mutation refusals return 409. A
+`partial_write` response reports `changed: true`, while successful compensation reports
+`changed: false` with the original refusal reason. Every response remains `Cache-Control: no-store`.
+
+The setup uses fixed filesystem targets and exposes no caller-selected path. Installation writes the
+skill before the policy block; removal deletes the policy block before the skill. It recognizes the
+skill only through its embedded ownership metadata and the policy only through its stable bounded
+marker pair. No hash, manifest, or hidden ownership file is created. Linked, nonregular, multi-link,
+ambiguous, or concurrently changed targets fail closed; bytes outside the bounded policy block are
+preserved. If the second artifact fails, the installer compensates the first when safe and otherwise
+reports a partial write.
+
+A nonempty `$CODEX_HOME/AGENTS.override.md` makes `activation: "shadowed"`; it is reported, never
+modified. The skill carries no roster ids and consults the live collaboration contract. It is
+advisory, and live tool guidance plus user or repository instructions remain authoritative about
+whether delegation is allowed.
 
 ### Combos
 

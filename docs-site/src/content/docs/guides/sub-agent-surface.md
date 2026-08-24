@@ -56,6 +56,36 @@ For a V2 roster, eligibility has three states: an entry stamped `"v2"`, explicit
 with no `multi_agent_version` field is eligible. A genuine `"v1"` pin is excluded because it states
 that the model belongs to the other collaboration surface.
 
+## Managed advisory setup
+
+The dashboard can install an optional `codexcommander-delegation` user skill plus a bounded global
+policy block. These artifacts supply a durable **Balanced** or **Orchestrator** mode hook for new
+Codex tasks:
+
+```text
+$HOME/.agents/skills/codexcommander-delegation/SKILL.md
+$CODEX_HOME/AGENTS.md
+```
+
+The skill is advisory and deliberately contains no roster or model ids. Before a spawn it reads the
+current collaboration tool contract and live injected guidance; CodexCommander remains the live
+roster authority. A roster can change independently without making the installed skill stale.
+
+The bounded `AGENTS.md` block is the durable mode hook. Codex loads it once for a run, so installing,
+updating, changing mode, or removing it does not rewrite the instructions of a current task. Start a
+new Codex task after any of those actions. User instructions and repository-scoped instructions
+remain higher priority and can limit or forbid delegation even in Orchestrator mode. A nonempty
+`$CODEX_HOME/AGENTS.override.md` shadows the global managed block; an empty override does not.
+
+**Remove setup** deletes only the managed `SKILL.md`, removes its directory only when it is empty,
+and removes only the `AGENTS.md` bytes bounded by the exact CodexCommander marker pair. Foreign skill
+content, ambiguous markers, linked paths, and unexpected sibling files are never force-removed.
+
+This advisory setup is separate from the collaboration surface and settings below. It does not call
+`/api/v2`, change `subagentDeveloperInstructions`, mutate native `[agents]` defaults or Codex config,
+inject a roster, rebuild or activate the catalog, restart a worker, or replace the proxy. Use the
+corresponding Run Policy and catalog controls for those operations.
+
 ## Delegation model and effort
 
 The dashboard's **Sub-agent delegation** controls three related settings:
