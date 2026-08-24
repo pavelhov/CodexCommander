@@ -464,12 +464,14 @@ function safeWrite(
   paths: Paths,
   path: string,
   expected: FileSnapshot,
-  text: string,
+  desired: string | Buffer,
   artifact: "skill" | "agents",
   deps: CodexDelegationInstallerDeps,
 ): FileSnapshotPresent {
   const limit = artifact === "skill" ? SKILL_LIMIT : AGENTS_LIMIT;
-  const bytes = Buffer.from(text, "utf8");
+  const bytes = typeof desired === "string"
+    ? Buffer.from(desired, "utf8")
+    : Buffer.from(desired);
   if (bytes.length > limit) {
     throw new DelegationFsError("too_large", "delegation output exceeds its read bound");
   }
@@ -591,7 +593,7 @@ function compensate(context: InspectionContext, applied: AppliedMutation, deps: 
   if (applied.before.kind === "absent") {
     if (applied.after.kind === "file") safeRemove(context.paths, applied.path, applied.after, applied.artifact, deps);
   } else {
-    safeWrite(context.paths, applied.path, applied.after, applied.before.text, applied.artifact, deps);
+    safeWrite(context.paths, applied.path, applied.after, applied.before.bytes, applied.artifact, deps);
   }
 }
 
@@ -616,8 +618,12 @@ function removeEmptySkillDir(paths: Paths, expected: BigIntStats): void {
   }
 }
 
-function failureStatus(deps: CodexDelegationInstallerDeps, fallback: CodexDelegationStatus): CodexDelegationStatus {
-  try { return buildInspection(deps).status; } catch { return fallback; }
+function failureStatus(deps: CodexDelegationInstallerDeps): CodexDelegationStatus {
+  try {
+    return buildInspection(deps).status;
+  } catch (error) {
+    return unsafeStatus(classifyIoError(error).reason);
+  }
 }
 
 export function mutateCodexDelegation(
@@ -628,13 +634,11 @@ export function mutateCodexDelegation(
     return { ok: false, changed: false, reason: "mutation_busy", status: inspectCodexDelegation(deps) };
   }
   mutationInProgress = true;
-  let initialStatus = unsafeStatus("unsafe_path");
   try {
     const paths = resolvePaths(deps);
     assertNotRealHomeUnderTest(paths.skillPath);
     assertNotRealHomeUnderTest(paths.agentsPath);
     const context = buildInspection({ ...deps, userHome: paths.userHome, codexHome: paths.codexHome });
-    initialStatus = context.status;
     if (context.status.artifacts.skill.state === "foreign") {
       return { ok: false, changed: false, reason: "foreign_skill", status: context.status };
     }
@@ -685,17 +689,17 @@ export function mutateCodexDelegation(
           ? error
           : new DelegationFsError("write_failed", "delegation mutation failed", false, { cause: error });
         if (classified.published) {
-          return { ok: false, changed: true, reason: "partial_write", status: failureStatus(deps, initialStatus) };
+          return { ok: false, changed: true, reason: "partial_write", status: failureStatus(deps) };
         }
         if (first !== null && index > 0) {
           try {
             compensate(context, first, deps);
-            return { ok: false, changed: false, reason: classified.reason, status: failureStatus(deps, initialStatus) };
+            return { ok: false, changed: false, reason: classified.reason, status: failureStatus(deps) };
           } catch {
-            return { ok: false, changed: true, reason: "partial_write", status: failureStatus(deps, initialStatus) };
+            return { ok: false, changed: true, reason: "partial_write", status: failureStatus(deps) };
           }
         }
-        return { ok: false, changed: false, reason: classified.reason, status: failureStatus(deps, initialStatus) };
+        return { ok: false, changed: false, reason: classified.reason, status: failureStatus(deps) };
       }
     }
 
@@ -705,7 +709,7 @@ export function mutateCodexDelegation(
     return { ok: true, changed, status };
   } catch (error) {
     const classified = classifyIoError(error);
-    return { ok: false, changed: classified.published, reason: classified.reason, status: failureStatus(deps, initialStatus) };
+    return { ok: false, changed: classified.published, reason: classified.reason, status: failureStatus(deps) };
   } finally {
     mutationInProgress = false;
   }

@@ -335,6 +335,34 @@ describe("Codex delegation installer", () => {
     expect(mutateCodexDelegation({ action: "install", mode: "balanced" }, large.deps)).toMatchObject({ reason: "too_large" });
   });
 
+  test("AGENTS output exactly at the read bound is accepted", () => {
+    const fx = fixture();
+    const agentsBlock = renderCodexDelegationBundle("balanced").agentsBlockText;
+    const agentsBefore = "x".repeat(1024 * 1024 - Buffer.byteLength(agentsBlock, "utf8") - 1);
+    write(fx.agentsPath, agentsBefore);
+
+    const outcome = mutateCodexDelegation({ action: "install", mode: "balanced" }, fx.deps);
+
+    expect(outcome).toMatchObject({ ok: true, changed: true, status: { state: "current" } });
+    expect(readFileSync(fx.agentsPath).byteLength).toBe(1024 * 1024);
+    expect(readFileSync(fx.agentsPath, "utf8")).toBe(`${agentsBefore}\n${agentsBlock}`);
+  });
+
+  test("multibyte AGENTS output crossing the byte bound refuses without residue", () => {
+    const fx = fixture();
+    const agentsBefore = `${"é".repeat((1024 * 1024 - 1) / 2)}x`;
+    write(fx.agentsPath, agentsBefore);
+    const exactBefore = readFileSync(fx.agentsPath);
+
+    const outcome = mutateCodexDelegation({ action: "install", mode: "balanced" }, fx.deps);
+
+    expect(agentsBefore.length).toBeLessThan(1024 * 1024);
+    expect(exactBefore.byteLength).toBe(1024 * 1024 - 1);
+    expect(outcome).toMatchObject({ ok: false, changed: false, reason: "too_large" });
+    expect(readFileSync(fx.agentsPath)).toEqual(exactBefore);
+    expect(existsSync(fx.skillPath)).toBe(false);
+  });
+
   test("AGENTS output crossing the read bound refuses before publication and compensates the skill", () => {
     const fx = fixture();
     const agentsBefore = Buffer.alloc(1024 * 1024 - 1, 0x78);
@@ -354,6 +382,27 @@ describe("Codex delegation installer", () => {
     expect(readFileSync(fx.agentsPath)).toEqual(agentsBefore);
     expect(existsSync(fx.skillPath)).toBe(false);
     expect(readdirSync(fx.codexHome)).toEqual(["AGENTS.md"]);
+  });
+
+  test("oversized-derived AGENTS refusal restores exact managed skill bytes and mode", () => {
+    const fx = fixture();
+    const skillBefore = Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      Buffer.from(renderCodexDelegationBundle("balanced").skillText, "utf8"),
+    ]);
+    const agentsBefore = Buffer.alloc(1024 * 1024 - 1, 0x78);
+    write(fx.skillPath, skillBefore);
+    chmodSync(fx.skillPath, 0o640);
+    write(fx.agentsPath, agentsBefore);
+    const skillModeBefore = lstatSync(fx.skillPath).mode & 0o777;
+    if (process.platform !== "win32") expect(skillModeBefore).toBe(0o640);
+
+    const outcome = mutateCodexDelegation({ action: "install", mode: "balanced" }, fx.deps);
+
+    expect(outcome).toMatchObject({ ok: false, changed: false, reason: "too_large" });
+    expect(readFileSync(fx.skillPath)).toEqual(skillBefore);
+    expect(lstatSync(fx.skillPath).mode & 0o777).toBe(skillModeBefore);
+    expect(readFileSync(fx.agentsPath)).toEqual(agentsBefore);
   });
 
   test("changed preimage before publish refuses", () => {
@@ -425,7 +474,7 @@ describe("Codex delegation installer", () => {
     expect(readFileSync(fx.skillPath, "utf8")).toBe("concurrent replacement");
   });
 
-  test("a DelegationFsError after rename reports a published partial write", () => {
+  test("an oversized post-rename skill reports a published partial write with unsafe status", () => {
     const fx = fixture();
     const deps = {
       ...fx.deps,
@@ -438,7 +487,18 @@ describe("Codex delegation installer", () => {
 
     const outcome = mutateCodexDelegation({ action: "install", mode: "balanced" }, deps);
 
-    expect(outcome).toMatchObject({ ok: false, changed: true, reason: "partial_write" });
+    expect(outcome).toMatchObject({
+      ok: false,
+      changed: true,
+      reason: "partial_write",
+      status: {
+        state: "unsafe",
+        artifacts: {
+          skill: { state: "unsafe", reason: "too_large" },
+          agentsPolicy: { state: "unsafe", reason: "too_large" },
+        },
+      },
+    });
     expect(readFileSync(fx.skillPath).byteLength).toBe(256 * 1024 + 1);
     expect(existsSync(fx.agentsPath)).toBe(false);
   });
@@ -464,7 +524,7 @@ describe("Codex delegation installer", () => {
     expect(existsSync(fx.agentsPath)).toBe(false);
   });
 
-  test("a DelegationFsError after unlink reports a published partial write", () => {
+  test("a directory recreated after unlink reports a published partial write with unsafe status", () => {
     const fx = fixture();
     mutateCodexDelegation({ action: "install", mode: "balanced" }, fx.deps);
     const deps = {
@@ -476,7 +536,18 @@ describe("Codex delegation installer", () => {
 
     const outcome = mutateCodexDelegation({ action: "uninstall" }, deps);
 
-    expect(outcome).toMatchObject({ ok: false, changed: true, reason: "partial_write" });
+    expect(outcome).toMatchObject({
+      ok: false,
+      changed: true,
+      reason: "partial_write",
+      status: {
+        state: "unsafe",
+        artifacts: {
+          skill: { state: "unsafe", reason: "unsafe_path" },
+          agentsPolicy: { state: "unsafe", reason: "unsafe_path" },
+        },
+      },
+    });
     expect(lstatSync(fx.skillPath).isDirectory()).toBe(true);
     expect(readFileSync(fx.agentsPath, "utf8")).toBe("");
   });
