@@ -136,6 +136,19 @@ describe("Codex delegation installer", () => {
     expect(readFileSync(fx.agentsPath, "utf8")).toBe(`prefix\r\n${orchestrator.replaceAll("\n", "\r\n")}\r\nsuffix\r\n`);
   });
 
+  test("a current CRLF policy inspects as current", () => {
+    const fx = fixture();
+    const bundle = renderCodexDelegationBundle("balanced");
+    write(fx.skillPath, bundle.skillText);
+    write(fx.agentsPath, bundle.agentsBlockText.replaceAll("\n", "\r\n"));
+
+    expect(inspectCodexDelegation(fx.deps)).toMatchObject({
+      state: "current",
+      installedMode: "balanced",
+      artifacts: { skill: { state: "current" }, agentsPolicy: { state: "current" } },
+    });
+  });
+
   test("uninstall removes AGENTS block first, then only SKILL.md, and rmdir only when empty", () => {
     const fx = fixture();
     mutateCodexDelegation({ action: "install", mode: "balanced" }, fx.deps);
@@ -225,16 +238,56 @@ describe("Codex delegation installer", () => {
     expect(existsSync(fx.skillPath)).toBe(false);
   });
 
-  test("a duplicate compatibility-root skill refuses without writes", () => {
+  test("a duplicate compatibility-root skill refuses install without reclassifying the managed user skill", () => {
     const fx = fixture();
-    write(fx.compatSkillPath, renderCodexDelegationBundle("balanced").skillText);
-    expect(mutateCodexDelegation({ action: "install", mode: "balanced" }, fx.deps)).toMatchObject({
+    mutateCodexDelegation({ action: "install", mode: "balanced" }, fx.deps);
+    const compatibilityBytes = Buffer.from("compatibility collision");
+    write(fx.compatSkillPath, compatibilityBytes);
+
+    expect(inspectCodexDelegation(fx.deps)).toMatchObject({
+      state: "conflict",
+      artifacts: { skill: { state: "current" }, agentsPolicy: { state: "current" } },
+    });
+    expect(mutateCodexDelegation({ action: "install", mode: "orchestrator" }, fx.deps)).toMatchObject({
       ok: false,
       changed: false,
       reason: "foreign_skill",
     });
+    expect(readFileSync(fx.skillPath, "utf8")).toBe(renderCodexDelegationBundle("balanced").skillText);
+    expect(readFileSync(fx.compatSkillPath)).toEqual(compatibilityBytes);
+  });
+
+  test("managed uninstall succeeds while a compatibility-root collision remains untouched", () => {
+    const fx = fixture();
+    mutateCodexDelegation({ action: "install", mode: "balanced" }, fx.deps);
+    const compatibilityBytes = Buffer.from("compatibility collision");
+    write(fx.compatSkillPath, compatibilityBytes);
+
+    expect(mutateCodexDelegation({ action: "uninstall" }, fx.deps)).toMatchObject({ ok: true, changed: true });
     expect(existsSync(fx.skillPath)).toBe(false);
-    expect(existsSync(fx.agentsPath)).toBe(false);
+    expect(readFileSync(fx.agentsPath, "utf8")).toBe("");
+    expect(readFileSync(fx.compatSkillPath)).toEqual(compatibilityBytes);
+  });
+
+  test.each([
+    ["missing managed-version", "---\nname: codexcommander-delegation\nmetadata:\n  managed-by: codexcommander\n---\nforeign\n"],
+    ["managed-by outside metadata", "---\nname: codexcommander-delegation\nownership:\n  managed-by: codexcommander\nmetadata:\n  managed-version: \"0\"\n---\nforeign\n"],
+    ["non-scalar metadata", "---\nname: codexcommander-delegation\nmetadata: codexcommander\n  managed-by: codexcommander\n  managed-version: \"0\"\n---\nforeign\n"],
+  ])("%s never proves skill ownership for install or uninstall", (_name, foreignSkill) => {
+    for (const mutation of [{ action: "install", mode: "balanced" }, { action: "uninstall" }] as const) {
+      const fx = fixture();
+      write(fx.skillPath, foreignSkill);
+      const agents = renderCodexDelegationBundle("balanced").agentsBlockText;
+      write(fx.agentsPath, agents);
+
+      expect(mutateCodexDelegation(mutation, fx.deps)).toMatchObject({
+        ok: false,
+        changed: false,
+        reason: "foreign_skill",
+      });
+      expect(readFileSync(fx.skillPath, "utf8")).toBe(foreignSkill);
+      expect(readFileSync(fx.agentsPath, "utf8")).toBe(agents);
+    }
   });
 
   test.each(["symlink parent", "symlink leaf", "hardlink", "directory leaf"])("%s refuses as unsafe", (shape) => {

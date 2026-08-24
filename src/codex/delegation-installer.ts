@@ -25,7 +25,6 @@ import {
   type DelegationAgentsInspection,
 } from "./delegation-agents-block";
 import {
-  isCodexCommanderManagedSkill,
   renderCodexDelegationBundle,
   type CodexDelegationMode,
 } from "./delegation-templates";
@@ -115,6 +114,7 @@ interface InspectionContext {
   skill: FileSnapshot;
   agents: FileSnapshot;
   agentsInspection: DelegationAgentsInspection;
+  compatibilityCollision: boolean;
   status: CodexDelegationStatus;
 }
 
@@ -329,11 +329,23 @@ function previewsAndPrompts(): Pick<CodexDelegationStatus, "previews" | "copyPro
 }
 
 function hasManagedSkillOwnership(content: string): boolean {
-  if (isCodexCommanderManagedSkill(content)) return true;
   const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content)?.[1];
-  return frontmatter !== undefined
-    && /^name:\s*codexcommander-delegation\s*\r?$/m.test(frontmatter)
-    && /^\s{2}managed-by:\s*codexcommander\s*\r?$/m.test(frontmatter);
+  if (frontmatter === undefined) return false;
+  const lines = frontmatter.split(/\r?\n/);
+  if (lines.filter((line) => line === "name: codexcommander-delegation").length !== 1) return false;
+  const metadataRows = lines.flatMap((line, index) => line === "metadata:" ? [index] : []);
+  if (metadataRows.length !== 1) return false;
+
+  const entries: string[] = [];
+  for (let index = metadataRows[0] + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line.length === 0) continue;
+    if (!line.startsWith(" ")) break;
+    entries.push(line);
+  }
+  return entries.length === 2
+    && entries.includes("  managed-by: codexcommander")
+    && entries.some((line) => line === '  managed-version: "0"' || line === '  managed-version: "1"');
 }
 
 function unsafeStatus(reason: string): CodexDelegationStatus {
@@ -365,13 +377,11 @@ function buildInspection(deps: CodexDelegationInstallerDeps): InspectionContext 
   }
   const balanced = renderCodexDelegationBundle("balanced");
   const orchestrator = renderCodexDelegationBundle("orchestrator");
+  const compatibilityCollision = compatibilitySkill.kind === "file";
 
   let skillState: DelegationArtifactState;
   let skillReason: string | undefined;
-  if (compatibilitySkill.kind === "file") {
-    skillState = "foreign";
-    skillReason = "same-name skill exists in the compatibility Codex skill root";
-  } else if (skill.kind === "absent") {
+  if (skill.kind === "absent") {
     skillState = "absent";
   } else if (!hasManagedSkillOwnership(skill.text)) {
     skillState = "foreign";
@@ -381,6 +391,11 @@ function buildInspection(deps: CodexDelegationInstallerDeps): InspectionContext 
   }
 
   const agentsInspection = inspectDelegationAgentsBlock(agents.kind === "file" ? agents.text : "");
+  const agentsText = agents.kind === "file" ? agents.text : "";
+  const balancedPolicyCurrent = agentsInspection.kind === "managed"
+    && !upsertDelegationAgentsBlock(agentsText, balanced.agentsBlockText).changed;
+  const orchestratorPolicyCurrent = agentsInspection.kind === "managed"
+    && !upsertDelegationAgentsBlock(agentsText, orchestrator.agentsBlockText).changed;
   let agentsState: DelegationArtifactState;
   let agentsReason: string | undefined;
   if (agentsInspection.kind === "absent") {
@@ -388,7 +403,7 @@ function buildInspection(deps: CodexDelegationInstallerDeps): InspectionContext 
   } else if (agentsInspection.kind === "conflict") {
     agentsState = "foreign";
     agentsReason = `ambiguous delegation markers: ${agentsInspection.reason}`;
-  } else if (agentsInspection.content === balanced.agentsBlockText || agentsInspection.content === orchestrator.agentsBlockText) {
+  } else if (balancedPolicyCurrent || orchestratorPolicyCurrent) {
     agentsState = "current";
   } else {
     agentsState = "outdated";
@@ -396,12 +411,12 @@ function buildInspection(deps: CodexDelegationInstallerDeps): InspectionContext 
 
   const installedMode = agentsInspection.kind === "managed" ? agentsInspection.mode : null;
   let state: CodexDelegationStatus["state"];
-  if (skillState === "foreign" || agentsState === "foreign") state = "conflict";
+  if (compatibilityCollision || skillState === "foreign" || agentsState === "foreign") state = "conflict";
   else if (skillState === "absent" && agentsState === "absent") state = "not-installed";
   else if (skillState === "absent" || agentsState === "absent") state = "partial";
   else if (skillState === "current" && agentsState === "current"
     && installedMode !== null
-    && (agentsInspection.kind !== "managed" || agentsInspection.content === (installedMode === "balanced" ? balanced.agentsBlockText : orchestrator.agentsBlockText))) {
+    && (installedMode === "balanced" ? balancedPolicyCurrent : orchestratorPolicyCurrent)) {
     state = "current";
   } else state = "update-available";
 
@@ -417,7 +432,7 @@ function buildInspection(deps: CodexDelegationInstallerDeps): InspectionContext 
     activation: overrideState === "unsafe" ? "unknown" : overrideState === "active" ? "shadowed" : "effective",
     ...previewsAndPrompts(),
   };
-  return { paths, skill, agents, agentsInspection, status };
+  return { paths, skill, agents, agentsInspection, compatibilityCollision, status };
 }
 
 export function inspectCodexDelegation(deps: CodexDelegationInstallerDeps = {}): CodexDelegationStatus {
@@ -607,6 +622,9 @@ export function mutateCodexDelegation(
     const context = buildInspection({ ...deps, userHome: paths.userHome, codexHome: paths.codexHome });
     initialStatus = context.status;
     if (context.status.artifacts.skill.state === "foreign") {
+      return { ok: false, changed: false, reason: "foreign_skill", status: context.status };
+    }
+    if (mutation.action === "install" && context.compatibilityCollision) {
       return { ok: false, changed: false, reason: "foreign_skill", status: context.status };
     }
     if (context.status.artifacts.agentsPolicy.state === "foreign") {
