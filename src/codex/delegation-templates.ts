@@ -41,12 +41,28 @@ export function renderCodexDelegationBundle(mode: CodexDelegationMode): CodexDel
   const skillText = canonicalSkillText();
   const agentsBlockText = agentsBlock(mode);
   const copyPrompt = [
-    "Preview the following two writes exactly, then wait for my approval before changing any files.",
+    `Set up CodexCommander delegation in ${mode} mode.`,
     "",
-    "SKILL.md:",
+    "Use only these two write targets:",
+    "- Write the exact skill payload below to `$HOME/.agents/skills/codexcommander-delegation/SKILL.md`.",
+    "- Add or update only the exact marker-bounded block below in `$CODEX_HOME/AGENTS.md`.",
+    "",
+    "Before writing, inspect both targets, preview both proposed changes and obtain my explicit approval. Do not make any changes until I approve.",
+    "",
+    "Safety rules:",
+    "- Replace an existing target skill only when its frontmatter has the exact ownership identity `name: codexcommander-delegation`, `managed-by: codexcommander`, and `managed-version: \"1\"`; otherwise treat it as foreign ownership and refuse the write.",
+    "- Also inspect `$CODEX_HOME/skills/codexcommander-delegation` for a same-name skill-name collision. If one exists, refuse the write.",
+    "- In `$CODEX_HOME/AGENTS.md`, replace only bytes inside one exact full-line begin/end marker pair. Treat duplicate, orphaned, reversed, malformed, or substring markers as an ambiguous marker state and refuse the write. Preserve every unrelated byte in `$CODEX_HOME/AGENTS.md`.",
+    "- If either target has an unsafe path or filesystem state, refuse to write rather than overwrite conflicting content.",
+    "- Do not edit `$CODEX_HOME/AGENTS.override.md`, `$CODEX_HOME/config.toml`, or `subagentDeveloperInstructions`.",
+    "- Do not copy the current roster or hardcode model IDs, effort levels, tool namespaces, or slot counts.",
+    "",
+    "After the approved writes, report the paths changed and tell me to start a new Codex task so the policy is guaranteed to load.",
+    "",
+    "Canonical skill payload:",
     skillText,
     "",
-    "AGENTS.md block:",
+    "Canonical AGENTS.md block:",
     agentsBlockText,
   ].join("\n");
 

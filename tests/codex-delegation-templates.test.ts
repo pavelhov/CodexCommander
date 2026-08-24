@@ -34,6 +34,44 @@ describe("Codex delegation templates", () => {
     expect(bundle.agentsBlockText).toContain("synthesis");
   });
 
+  test.each(["balanced", "orchestrator"] as const)(
+    "%s manual setup prompt is self-contained and fail-closed",
+    (mode) => {
+      const bundle = renderCodexDelegationBundle(mode);
+
+      expect(bundle.copyPrompt).toContain(`Set up CodexCommander delegation in ${mode} mode.`);
+      expect(bundle.copyPrompt).toContain("`$HOME/.agents/skills/codexcommander-delegation/SKILL.md`");
+      expect(bundle.copyPrompt).toContain("`$CODEX_HOME/AGENTS.md`");
+      expect(bundle.copyPrompt).toContain("`$CODEX_HOME/skills/codexcommander-delegation`");
+      expect(bundle.copyPrompt).toContain("preview both proposed changes and obtain my explicit approval");
+      expect(bundle.copyPrompt).toContain("Do not make any changes until I approve.");
+      expect(bundle.copyPrompt).toContain("Preserve every unrelated byte in `$CODEX_HOME/AGENTS.md`.");
+      expect(bundle.copyPrompt).toContain(
+        "Replace an existing target skill only when its frontmatter has the exact ownership identity `name: codexcommander-delegation`, `managed-by: codexcommander`, and `managed-version: \"1\"`; otherwise treat it as foreign ownership and refuse the write.",
+      );
+      expect(bundle.copyPrompt).toContain(
+        "Also inspect `$CODEX_HOME/skills/codexcommander-delegation` for a same-name skill-name collision. If one exists, refuse the write.",
+      );
+      expect(bundle.copyPrompt).toContain("exact full-line begin/end marker pair");
+      expect(bundle.copyPrompt).toContain("ambiguous marker state and refuse the write");
+      expect(bundle.copyPrompt).toContain("unsafe path or filesystem state");
+      expect(bundle.copyPrompt).toContain("refuse to write rather than overwrite conflicting content");
+      expect(bundle.copyPrompt).toContain(
+        "Do not edit `$CODEX_HOME/AGENTS.override.md`, `$CODEX_HOME/config.toml`, or `subagentDeveloperInstructions`.",
+      );
+      expect(bundle.copyPrompt).toContain("tell me to start a new Codex task");
+      expect(bundle.copyPrompt.split(bundle.skillText)).toHaveLength(2);
+      expect(bundle.copyPrompt.split(bundle.agentsBlockText)).toHaveLength(2);
+      expect(bundle.copyPrompt).toContain(
+        "Do not copy the current roster or hardcode model IDs, effort levels, tool namespaces, or slot counts.",
+      );
+
+      for (const frozenData of ["gpt-5.6", "kimi/", "xai/", "grok-4.6", "functions.collaboration", "ccx_collaboration"]) {
+        expect(bundle.copyPrompt).not.toContain(frozenData);
+      }
+    },
+  );
+
   test("managed skill ownership is carried by SKILL.md itself", () => {
     const skill = renderCodexDelegationBundle("balanced").skillText;
     expect(isCodexCommanderManagedSkill(skill)).toBe(true);
