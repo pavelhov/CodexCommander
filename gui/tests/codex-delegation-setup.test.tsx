@@ -33,6 +33,18 @@ function makeStatus(state: CodexDelegationStatus["state"] = "not-installed", mod
   };
 }
 
+function makeArtifactStatus(
+  state: CodexDelegationStatus["state"],
+  skill: CodexDelegationStatus["artifacts"]["skill"]["state"],
+  agentsPolicy: CodexDelegationStatus["artifacts"]["agentsPolicy"]["state"],
+  mode: CodexDelegationMode | null,
+): CodexDelegationStatus {
+  const value = makeStatus(state, mode);
+  value.artifacts.skill.state = skill;
+  value.artifacts.agentsPolicy.state = agentsPolicy;
+  return value;
+}
+
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
   testWindow = new Window({ url: "http://localhost/" });
@@ -59,8 +71,12 @@ async function render(node: React.ReactNode) {
   await act(async () => { root = createRoot(container); root.render(<LanguageProvider>{node}</LanguageProvider>); await flush(); });
 }
 
+function findButton(label: string, within: ParentNode = container): HTMLButtonElement | null {
+  return Array.from(within.querySelectorAll<HTMLButtonElement>("button")).find(item => item.textContent?.trim() === label) ?? null;
+}
+
 function button(label: string, within: ParentNode = container): HTMLButtonElement {
-  const found = Array.from(within.querySelectorAll<HTMLButtonElement>("button")).find(item => item.textContent?.trim() === label);
+  const found = findButton(label, within);
   if (!found) throw new Error(`Missing button: ${label}`);
   return found;
 }
@@ -244,6 +260,53 @@ test("Remove sends no DELETE before confirm, retains the failed dialog error, th
   expect(container.querySelector('[role="alertdialog"]')).toBeNull();
   expect(container.querySelector('[role="status"]')?.textContent).toContain("Start a new Codex task");
 });
+
+for (const [name, initial] of [
+  ["current", makeArtifactStatus("current", "current", "current", "balanced")],
+  ["update available", makeArtifactStatus("update-available", "outdated", "current", "balanced")],
+  ["partial managed skill", makeArtifactStatus("partial", "current", "absent", null)],
+  ["partial managed policy", makeArtifactStatus("partial", "absent", "outdated", "balanced")],
+  ["compatibility collision", makeArtifactStatus("conflict", "current", "outdated", "balanced")],
+] as const) {
+  test(`${name} exposes confirmed Remove and sends a bodyless DELETE`, async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    let current = initial;
+    globalThis.fetch = async (url, init) => {
+      requests.push({ url: String(url), init });
+      if (init?.method === "DELETE") {
+        current = makeStatus();
+        return Response.json({ ok: true, status: current });
+      }
+      return Response.json(current);
+    };
+    await mountHook(`/remove-${name.replaceAll(" ", "-")}`);
+    const remove = findButton("Remove");
+    expect(remove).not.toBeNull();
+    await act(async () => { remove!.click(); await flush(); });
+    const dialog = container.querySelector<HTMLElement>('[role="alertdialog"]')!;
+    expect(dialog).toBeTruthy();
+    expect(requests.some(request => request.init?.method === "DELETE")).toBe(false);
+    await act(async () => { button("Remove", dialog).click(); await flush(); });
+    const deletion = requests.find(request => request.init?.method === "DELETE")!;
+    expect(deletion.url).toBe(`/remove-${name.replaceAll(" ", "-")}/api/codex-delegation`);
+    expect(deletion.init?.body).toBeUndefined();
+  });
+}
+
+for (const [name, value] of [
+  ["aggregate state without managed artifacts", makeArtifactStatus("partial", "absent", "absent", null)],
+  ["foreign skill", makeArtifactStatus("conflict", "foreign", "current", "balanced")],
+  ["ambiguous agents markers", makeArtifactStatus("conflict", "current", "foreign", "balanced")],
+  ["aggregate unsafe", makeArtifactStatus("unsafe", "current", "current", "balanced")],
+  ["unproven one-artifact conflict", makeArtifactStatus("conflict", "current", "absent", null)],
+] as const) {
+  test(`${name} never exposes Remove`, async () => {
+    let uninstalls = 0;
+    await mountDirect(value, { uninstall: async () => { uninstalls++; return true; } });
+    expect(Array.from(container.querySelectorAll("button")).some(item => item.textContent?.trim() === "Remove")).toBe(false);
+    expect(uninstalls).toBe(0);
+  });
+}
 
 test("initial GET failure shows Retry and a successful retry restores truthful status", async () => {
   let reads = 0;

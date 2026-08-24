@@ -19,6 +19,18 @@ function blockedReason(status: CodexDelegationStatus): TKey {
   return reason === "ownership_conflict" ? "sub.delegationSetup.reasonConflict" : "sub.delegationSetup.reasonUnsafe";
 }
 
+function isOwnedArtifact(state: CodexDelegationStatus["artifacts"]["skill"]["state"]): boolean {
+  return state === "current" || state === "outdated";
+}
+
+function isRemovable(status: CodexDelegationStatus): boolean {
+  const artifactStates = [status.artifacts.skill.state, status.artifacts.agentsPolicy.state];
+  const safelyManaged = artifactStates.every(state => state === "absent" || isOwnedArtifact(state));
+  if (!safelyManaged || !artifactStates.some(isOwnedArtifact)) return false;
+  if (status.state === "conflict") return artifactStates.every(isOwnedArtifact);
+  return status.state === "current" || status.state === "update-available" || status.state === "partial";
+}
+
 export default function CodexDelegationSetupCard({ delegationSetup }: { delegationSetup: CodexDelegationSetupController }) {
   const t = useT();
   const { loaded, status, selectedMode, busy, error, setSelectedMode, install, uninstall } = delegationSetup;
@@ -33,6 +45,8 @@ export default function CodexDelegationSetupCard({ delegationSetup }: { delegati
   const blocked = status?.state === "conflict" || status?.state === "unsafe";
   const canMutate = loaded && !!status && !blocked && !busy;
   const installed = status?.state === "current";
+  const removable = !!status && isRemovable(status);
+  const canRemove = removable && !busy;
   const primaryKey = status?.state === "update-available" ? "sub.delegationSetup.update"
     : status?.state === "partial" ? "sub.delegationSetup.repair" : "sub.delegationSetup.install";
   const prompt = status?.copyPrompts[selectedMode] ?? "";
@@ -84,7 +98,7 @@ export default function CodexDelegationSetupCard({ delegationSetup }: { delegati
           <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={event => openPreview(event, false)}>{t("sub.delegationSetup.preview")}</button>
           {!installed && <button type="button" className="btn btn-primary btn-sm" disabled={!canMutate} onClick={event => openPreview(event, true)}>{t(primaryKey)}</button>}
           {installed && <button type="button" className="btn btn-ghost btn-sm" disabled={!canMutate} onClick={event => openPreview(event, true)}>{t("sub.delegationSetup.changeMode")}</button>}
-          {installed && <button ref={removeTriggerRef} type="button" className="btn btn-ghost btn-sm swi-delegation-remove" disabled={!canMutate} onClick={() => setRemoveOpen(true)}>{t("sub.delegationSetup.remove")}</button>}
+          {removable && <button ref={removeTriggerRef} type="button" className="btn btn-ghost btn-sm swi-delegation-remove" disabled={!canRemove} onClick={() => setRemoveOpen(true)}>{t("sub.delegationSetup.remove")}</button>}
         </div>
         {busy && <p className="swi-delegation-working" aria-live="polite">{t("sub.delegationSetup.working")}</p>}
         {success && <p className="swi-delegation-working" role="status">{t("sub.delegationSetup.newTask")}</p>}
