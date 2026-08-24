@@ -2254,4 +2254,7 @@ export const zh: Record<TKey, string> = {
   "sub.delegationSetup.reasonConflict": "现有文件不由 CodexCommander 管理，因此无法自动更改此设置。",
   "sub.delegationSetup.reasonUnsafe": "无法安全验证其文件，因此无法自动更改此设置。",
   "sub.delegationSetup.error": "委派设置请求失败。请重试。",
+  "sub.delegationSetup.retry": "重试",
+  "sub.delegationSetup.close": "关闭",
+  "sub.delegationSetup.cancel": "取消",
 };

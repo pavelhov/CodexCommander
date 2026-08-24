@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useState } from "react";
 import type { Root } from "react-dom/client";
 import CodexDelegationSetupCard from "../src/components/subagents-workspace/CodexDelegationSetupCard";
 import { useCodexDelegationSetup, type CodexDelegationSetupController, type CodexDelegationStatus } from "../src/pages/use-codex-delegation-setup";
@@ -72,9 +72,13 @@ afterEach(async () => {
 
 async function mount(value: CodexDelegationStatus | null, busy = false) {
   const { createRoot } = await import("react-dom/client");
+  function Harness() {
+    const [mode, setMode] = useState(value?.installedMode ?? "balanced");
+    return <CodexDelegationSetupCard delegationSetup={{ ...controller(value, busy), selectedMode: mode, setSelectedMode: setMode }} />;
+  }
   await act(async () => {
     root = createRoot(container);
-    root.render(<LanguageProvider><CodexDelegationSetupCard delegationSetup={controller(value, busy)} /></LanguageProvider>);
+    root.render(<LanguageProvider><Harness /></LanguageProvider>);
   });
 }
 

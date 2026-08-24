@@ -2256,4 +2256,7 @@ export const ru: Record<TKey, string> = {
   "sub.delegationSetup.reasonConflict": "Эту настройку нельзя изменить автоматически, потому что существующий файл не управляется CodexCommander.",
   "sub.delegationSetup.reasonUnsafe": "Эту настройку нельзя изменить автоматически, потому что её файлы не удалось безопасно проверить.",
   "sub.delegationSetup.error": "Запрос настройки делегирования не выполнен. Повторите попытку.",
+  "sub.delegationSetup.retry": "Повторить",
+  "sub.delegationSetup.close": "Закрыть",
+  "sub.delegationSetup.cancel": "Отмена",
 };

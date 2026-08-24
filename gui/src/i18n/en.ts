@@ -2262,6 +2262,9 @@ export const en = {
   "sub.delegationSetup.reasonConflict": "This setup can’t be changed automatically because an existing file is not managed by CodexCommander.",
   "sub.delegationSetup.reasonUnsafe": "This setup can’t be changed automatically because its files could not be safely verified.",
   "sub.delegationSetup.error": "The delegation setup request failed. Try again.",
+  "sub.delegationSetup.retry": "Retry",
+  "sub.delegationSetup.close": "Close",
+  "sub.delegationSetup.cancel": "Cancel",
 
 } as const;
 

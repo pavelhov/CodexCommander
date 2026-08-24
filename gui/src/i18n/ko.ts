@@ -2254,5 +2254,8 @@ export const ko: Record<TKey, string> = {
   "sub.delegationSetup.reasonConflict": "기존 파일이 CodexCommander에서 관리되지 않아 이 설정을 자동으로 변경할 수 없습니다.",
   "sub.delegationSetup.reasonUnsafe": "파일을 안전하게 확인할 수 없어 이 설정을 자동으로 변경할 수 없습니다.",
   "sub.delegationSetup.error": "위임 설정 요청에 실패했습니다. 다시 시도하세요.",
+  "sub.delegationSetup.retry": "다시 시도",
+  "sub.delegationSetup.close": "닫기",
+  "sub.delegationSetup.cancel": "취소",
 
 };

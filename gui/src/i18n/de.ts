@@ -2234,4 +2234,7 @@ export const de: Record<TKey, string> = {
   "sub.delegationSetup.reasonConflict": "Diese Einrichtung kann nicht automatisch geändert werden, weil eine vorhandene Datei nicht von CodexCommander verwaltet wird.",
   "sub.delegationSetup.reasonUnsafe": "Diese Einrichtung kann nicht automatisch geändert werden, weil ihre Dateien nicht sicher geprüft werden konnten.",
   "sub.delegationSetup.error": "Die Anfrage zur Delegationseinrichtung ist fehlgeschlagen. Versuchen Sie es erneut.",
+  "sub.delegationSetup.retry": "Erneut versuchen",
+  "sub.delegationSetup.close": "Schließen",
+  "sub.delegationSetup.cancel": "Abbrechen",
 };

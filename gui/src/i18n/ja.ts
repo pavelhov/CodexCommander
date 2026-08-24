@@ -2254,4 +2254,7 @@ export const ja: Record<TKey, string> = {
   "sub.delegationSetup.reasonConflict": "既存のファイルが CodexCommander により管理されていないため、この設定を自動的に変更できません。",
   "sub.delegationSetup.reasonUnsafe": "ファイルを安全に検証できないため、この設定を自動的に変更できません。",
   "sub.delegationSetup.error": "委任設定リクエストに失敗しました。再試行してください。",
+  "sub.delegationSetup.retry": "再試行",
+  "sub.delegationSetup.close": "閉じる",
+  "sub.delegationSetup.cancel": "キャンセル",
 };
