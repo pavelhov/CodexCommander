@@ -969,7 +969,6 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "grok-4.5": ["low", "medium", "high"],
       "grok-4.6": ["low", "medium", "high", "xhigh"],
     },
-    modelDefaultReasoningEfforts: { "grok-4.6": "high" },
     // Provider default for live-discovered reasoning models: clamp to the verified xAI
     // ladder unless a per-model entry raises it (noReasoningModels stay effort-free).
     reasoningEfforts: ["low", "medium", "high"],

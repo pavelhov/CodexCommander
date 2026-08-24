@@ -230,4 +230,26 @@ describe("vision-capable provider models feed combo modalities", () => {
     const hinted = applyProviderConfigHints("xai", prov, { provider: "xai", id: "grok-4.5" });
     expect(hinted.inputModalities).toEqual(["text", "image"]);
   });
+
+  test("a pre-4.6 partial xAI context map inherits Grok 4.6 metadata through catalog gathering", async () => {
+    clearModelCache("xai");
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "xai",
+      providers: {
+        xai: {
+          baseUrl: "https://api.x.ai/v1",
+          adapter: "openai-chat",
+          authMode: "key",
+          liveModels: false,
+          models: ["grok-4.5", "grok-4.6"],
+          modelContextWindows: { "grok-4.5": 420_000 },
+        },
+      },
+    });
+    const grok45 = models.find(model => model.provider === "xai" && model.id === "grok-4.5");
+    const grok46 = models.find(model => model.provider === "xai" && model.id === "grok-4.6");
+    expect(grok45?.contextWindow).toBe(420_000);
+    expect(grok46?.contextWindow).toBe(500_000);
+  });
 });
