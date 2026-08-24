@@ -72,7 +72,7 @@ describe("real-home write guard", () => {
       import { mutateStore } from "${REPO_ROOT_URL}src/oauth/store";
       import { saveCodexAccountCredential } from "${REPO_ROOT_URL}src/codex/account-store";
       const threw: string[] = [];
-      const REFUSAL = "refusing to write a real CodexCommander home";
+      const REFUSAL = "refusing to write a protected user state home";
       try { saveConfig({
         port: 10100,
         multiAgentGuidanceEnabled: true,
@@ -128,7 +128,7 @@ describe("real-home write guard", () => {
 
     const probe = runProbe(`
       import { saveConfig } from "${REPO_ROOT_URL}src/config";
-      const REFUSAL = "refusing to write a real CodexCommander home";
+      const REFUSAL = "refusing to write a protected user state home";
       try {
         saveConfig({
           port: 10100,
@@ -189,7 +189,7 @@ describe("real-home write guard", () => {
 
     const probe = runProbe(`
       import { atomicWriteFile, writePid } from "${REPO_ROOT_URL}src/config";
-      const REFUSAL = "refusing to write a real CodexCommander home";
+      const REFUSAL = "refusing to write a protected user state home";
       try {
         atomicWriteFile("${linkDir}/never-created.json", "x");
         console.log("WRITE_SUCCEEDED");
@@ -263,6 +263,36 @@ describe("real-home write guard", () => {
     `, { CCX_TEST_HOME_GUARD: "1", CCX_REAL_HOME: realHome });
 
     expect(probe.stdout.trim()).toBe("rejected");
+  });
+
+  test("descendants of the real .codex and .agents homes are rejected", () => {
+    const { realHome } = sentinelHome();
+    const probe = runProbe(`
+      import { assertNotRealHomeUnderTest } from "${REPO_ROOT_URL}src/lib/test-home-guard";
+      const results: string[] = [];
+      for (const path of [
+        ${JSON.stringify(join(realHome, ".codex", "AGENTS.md"))},
+        ${JSON.stringify(join(realHome, ".agents", "skills", "managed", "SKILL.md"))},
+      ]) {
+        try { assertNotRealHomeUnderTest(path); results.push("allowed"); }
+        catch (error) { results.push(String(error).includes("protected user state home") ? "rejected" : "wrong-error"); }
+      }
+      console.log(JSON.stringify(results));
+    `, { CCX_TEST_HOME_GUARD: "1", CCX_REAL_HOME: realHome });
+
+    expect(JSON.parse(probe.stdout.trim())).toEqual(["rejected", "rejected"]);
+  });
+
+  test("an armed test sandbox outside every protected home succeeds", () => {
+    const { realHome } = sentinelHome();
+    const sandbox = mkdtempSync(join(tmpdir(), "ccx-guard-safe-sandbox-"));
+    const probe = runProbe(`
+      import { assertNotRealHomeUnderTest } from "${REPO_ROOT_URL}src/lib/test-home-guard";
+      try { assertNotRealHomeUnderTest(${JSON.stringify(join(sandbox, ".agents", "skills"))}); console.log("allowed"); }
+      catch { console.log("rejected"); }
+    `, { CCX_TEST_HOME_GUARD: "1", CCX_REAL_HOME: realHome });
+
+    expect(probe.stdout.trim()).toBe("allowed");
   });
 
   test("/var and /private/var spellings of one path agree", () => {

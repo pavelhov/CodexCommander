@@ -21,7 +21,7 @@
  *    how this incident happened.
  */
 import { homedir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { realpathSync } from "node:fs";
 
 const GUARD_ENV = "CCX_TEST_HOME_GUARD";
@@ -60,7 +60,16 @@ function canonicalize(path: string): string {
  * guard would be perfectly inverted while its tests still looked green.
  */
 const REAL_HOME = process.env[REAL_HOME_ENV]?.trim() || homedir();
-const PROTECTED_HOMES = [canonicalize(join(REAL_HOME, ".codexcommander"))] as const;
+const PROTECTED_HOMES = [
+  canonicalize(join(REAL_HOME, ".codexcommander")),
+  canonicalize(join(REAL_HOME, ".codex")),
+  canonicalize(join(REAL_HOME, ".agents")),
+] as const;
+
+function isAtOrBelow(root: string, target: string): boolean {
+  const fromRoot = relative(root, target);
+  return fromRoot === "" || (!isAbsolute(fromRoot) && fromRoot !== ".." && !fromRoot.startsWith(`..${sep}`));
+}
 
 /** The production home this process protects. Exported for the guard's own tests. */
 export function protectedHomeForTests(): string {
@@ -87,10 +96,10 @@ export function isTestHomeGuardArmed(): boolean {
 export function assertNotRealHomeUnderTest(dir: string): void {
   if (!isTestHomeGuardArmed()) return;
   const target = canonicalize(dir);
-  if (!PROTECTED_HOMES.includes(target as (typeof PROTECTED_HOMES)[number])) return;
+  if (!PROTECTED_HOMES.some((root) => isAtOrBelow(root, target))) return;
   throw new Error(
-    `refusing to write a real CodexCommander home (${target}) from a test process. `
-    + "Point CODEXCOMMANDER_HOME at a temp directory for this test, or inject persistence "
+    `refusing to write a protected user state home (${target}) from a test process. `
+    + "Point the affected home at a temp directory for this test, or inject persistence "
     + "instead of calling the global writer.",
   );
 }
