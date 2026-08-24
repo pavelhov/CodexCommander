@@ -129,6 +129,9 @@ describe("headless GUI parity CLI", () => {
       ["/api/combos", "ccx combo"],
       ["/api/client-config", "ccx export"],
       ["/api/client-integrations", "ccx integration client"],
+      // CLI mutation is intentionally unavailable across the confirmed-GUI,
+      // same-origin CSRF boundary; the dashboard provides a manual setup fallback.
+      ["/api/codex-delegation", "(none — confirmed-GUI installer; manual setup fallback in dashboard)"],
       // GUI-only for now: the overview card switches for Claude Code and Grok.
       // Their effect is already reachable from the CLI by other names —
       // `ccx grok apply` regenerates the fence and `ccx stop` strips it, and
