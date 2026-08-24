@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import * as delegationTemplates from "../src/codex/delegation-templates";
 import {
   DELEGATION_BEGIN_MARKER,
   DELEGATION_END_MARKER,
@@ -15,6 +16,12 @@ const SKILL_PAYLOAD_BEGIN = "<<<CODEXCOMMANDER_DELEGATION_SKILL_PAYLOAD_BEGIN_7F
 const SKILL_PAYLOAD_END = "<<<CODEXCOMMANDER_DELEGATION_SKILL_PAYLOAD_END_7F3A9C2E>>>";
 const AGENTS_PAYLOAD_BEGIN = "<<<CODEXCOMMANDER_DELEGATION_AGENTS_PAYLOAD_BEGIN_B6D1E840>>>";
 const AGENTS_PAYLOAD_END = "<<<CODEXCOMMANDER_DELEGATION_AGENTS_PAYLOAD_END_B6D1E840>>>";
+const MANUAL_PAYLOAD_DELIMITERS = [
+  SKILL_PAYLOAD_BEGIN,
+  SKILL_PAYLOAD_END,
+  AGENTS_PAYLOAD_BEGIN,
+  AGENTS_PAYLOAD_END,
+] as const;
 
 function extractPayload(prompt: string, begin: string, end: string): string {
   const beginToken = `${begin}\n`;
@@ -52,6 +59,51 @@ describe("Codex delegation templates", () => {
   });
 
   test.each(["balanced", "orchestrator"] as const)(
+    "%s manual setup follows platform default discovery instead of equating an unset CODEX_HOME with the Unix default",
+    (mode) => {
+      const prompt = renderCodexDelegationBundle(mode).copyPrompt;
+
+      expect(prompt).toContain("same effective platform default discovery as CodexCommander");
+      expect(prompt).toContain("supported WSL");
+      expect(prompt).toContain("Windows-profile `.codex` home");
+      expect(prompt).toContain("`USERPROFILE`");
+      expect(prompt).not.toContain("When it is unset or empty, use `$HOME/.codex`.");
+    },
+  );
+
+  test.each(["balanced", "orchestrator"] as const)(
+    "%s manual setup authorizes a safe fresh parent and exactly one identity-bound temp without unrelated persistent writes",
+    (mode) => {
+      const prompt = renderCodexDelegationBundle(mode).copyPrompt;
+
+      expect(prompt).toContain("one missing descendant at a time");
+      expect(prompt).toContain("exclusive, non-recursive directory creation");
+      expect(prompt).toContain("Immediately lstat, realpath, and identity-check");
+      expect(prompt).toContain("mode `0700` on POSIX");
+      expect(prompt).toContain("one exclusive same-parent temporary file per artifact");
+      expect(prompt).toContain("sole transient-path exception");
+      expect(prompt).toContain("clean up only that exact temporary path when its recorded identity still matches");
+      expect(prompt).toContain("Only the two target artifacts may persistently change");
+      expect(prompt).not.toContain("any path other than the two artifact targets");
+    },
+  );
+
+  test.each(
+    MANUAL_PAYLOAD_DELIMITERS.flatMap((delimiter) => [
+      [`skill payload containing ${delimiter}`, `${delimiter}\ncanonical skill`, "canonical policy"],
+      [`AGENTS payload containing ${delimiter}`, "canonical skill", `${delimiter}\ncanonical policy`],
+    ] as const),
+  )("rejects a cross-frame delimiter collision in the %s", (_case, skillText, agentsBlockText) => {
+    const seam = (
+      delegationTemplates as unknown as {
+        assertManualPayloadFrameSafety?: (skill: string, agents: string) => void;
+      }
+    ).assertManualPayloadFrameSafety;
+
+    expect(() => seam?.(skillText, agentsBlockText)).toThrow(/collides with a manual-copy delimiter/);
+  });
+
+  test.each(["balanced", "orchestrator"] as const)(
     "%s manual setup prompt has an exact fail-closed wrapper and byte-extractable payloads",
     (mode) => {
       const bundle = renderCodexDelegationBundle(mode);
@@ -68,7 +120,7 @@ describe("Codex delegation templates", () => {
         `Set up CodexCommander delegation in ${mode} mode.\n\n`
         + "Resolve and inspect before any write:\n"
         + "- Resolve the platform user home displayed as `$HOME` exactly once as a readable, safe physical directory, then derive the skill target `$HOME/.agents/skills/codexcommander-delegation/SKILL.md`; never blindly interpolate an empty home variable.\n"
-        + "- Resolve the Codex home exactly once. Use a configured `CODEX_HOME` only when its trimmed value is non-empty and resolves to a readable, safe physical directory. When it is unset or empty, use `$HOME/.codex`. Refuse an unreadable, non-directory, or unsafe configured root instead of falling back, and never blindly interpolate an empty shell variable.\n"
+        + "- Resolve the Codex home exactly once. A configured `CODEX_HOME` whose trimmed value is non-empty is authoritative and must resolve to a readable, safe physical directory; refuse an unreadable, non-directory, or unsafe explicit root instead of falling back. When `CODEX_HOME` is unset or empty, use the same effective platform default discovery as CodexCommander: start with `$HOME/.codex`; if that Linux/default home contains `config.toml`, select it. On supported WSL when it does not, honor the `[automount] root` from `/etc/wsl.conf` (default `/mnt`), discover readable physical Windows-profile `.codex` homes containing `config.toml`, prefer the candidate matching `USERPROFILE`, otherwise select a sole candidate only, and fall back to the Linux default when discovery is absent or ambiguous. Validate the selected root and never blindly interpolate an empty shell variable.\n"
         + "- From that validated Codex home derive the policy target displayed as `$CODEX_HOME/AGENTS.md`, compatibility collision path `skills/codexcommander-delegation`, read-only override path `AGENTS.override.md`, and protected configuration path `config.toml`; `$CODEX_HOME/AGENTS.md` is a symbolic display path, never a shell string to interpolate before resolution.\n\n"
         + "Before writing, safely inspect the targets and override, preview both proposed artifact changes, and obtain my explicit approval. Make no write before approval; approval never substitutes for the safety requirements below.\n\n"
         + "Ownership and content rules:\n"
@@ -80,10 +132,12 @@ describe("Codex delegation templates", () => {
         + "- Inspect `AGENTS.override.md` read-only and never edit it. Absent or zero-byte means a fresh Codex task can load the global policy; any non-zero-byte file, including whitespace-only content, means the artifacts are structurally installed but the policy is shadowed; unreadable or unsafe means activation is unknown. Never guarantee activation.\n\n"
         + "Fail-closed filesystem rules:\n"
         + "- Refuse any symlink, junction, or reparse substitution in either validated root, any parent component, or a leaf; a present leaf must be a regular single-link file, never a hardlink or nonregular file.\n"
+        + "- If an exact target parent is missing beneath its validated physical root, inspect each existing component and create one missing descendant at a time with exclusive, non-recursive directory creation using mode `0700` on POSIX (or the platform-equivalent user-only mode). Immediately lstat, realpath, and identity-check every created or concurrently appeared component; require a physical directory at the expected path with no symlink, junction, or reparse substitution, record its identity, and refuse any failed or changing check.\n"
         + "- Read with bounded, no-follow inspection and fatal UTF-8 decoding: at most 256 KiB for each skill and 1 MiB for each AGENTS file. Refuse unreadable, oversized, invalid-UTF-8, or changing inputs.\n"
-        + "- Bind publication to the exact inspected parent and preimage: revalidate parent identity plus leaf identity and bytes immediately before publishing; create an exclusive regular single-link temporary file in that verified parent; write and sync the exact desired bytes; publish atomically relative to the verified parent; then verify the postimage identity and bytes.\n"
+        + "- Bind publication to the exact inspected parent and preimage: revalidate parent identity plus leaf identity and bytes immediately before publishing. For each artifact that changes, create one exclusive same-parent temporary file per artifact as the sole transient-path exception; create it as a regular single-link file at mode `0600`, bind its recorded device/file identity, preserve an existing target's mode when supported, write and sync the exact desired bytes, revalidate it, publish atomically relative to the verified parent, then verify the postimage identity and bytes.\n"
+        + "- On every success or failure, clean up only that exact temporary path when its recorded identity still matches a regular single-link file; never remove a changed, replaced, or unknown path.\n"
         + "- Refuse without writing if available filesystem primitives cannot establish no-follow parent/leaf checks, exact parent and preimage revalidation, exclusive temporary creation, parent-bound atomic publication, and postimage verification.\n"
-        + "- Do not edit the override, `config.toml`, `subagentDeveloperInstructions`, or any path other than the two artifact targets. Do not copy a roster or persist model/provider IDs, effort values, tool namespaces, or slot counts.\n\n"
+        + "- Only the two target artifacts may persistently change. The minimal missing physical parent directories needed to create those exact artifacts are the only authorized scaffolding; do not create, edit, remove, or leave any unrelated persistent file or directory. Do not edit the override, `config.toml`, or `subagentDeveloperInstructions`. Do not copy a roster or persist model/provider IDs, effort values, tool namespaces, or slot counts.\n\n"
         + "Payload framing rules: each exact payload starts after the LF following its BEGIN delimiter and ends before the single wrapper LF immediately preceding its END delimiter. The wrapper LF and all delimiter bytes are not part of either artifact. Preserve payload bytes between those boundaries exactly, including whether the payload itself has a terminal newline; never write a delimiter.\n\n"
         + "Canonical skill payload:\n",
       );
