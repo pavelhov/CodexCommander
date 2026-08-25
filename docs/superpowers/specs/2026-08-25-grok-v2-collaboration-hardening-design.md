@@ -127,11 +127,20 @@ or treat model response wording as an assertion.
 
 ### 5. Reasoning-effort drift
 
-The observed `xhigh` to `high` change appeared in Codex's resumed child `turn_context`,
-upstream of CCX response translation. The implementation phase will add a narrow
-characterization probe. CCX code changes are allowed only if the drift can be reproduced at
-a CCX-owned boundary; otherwise the result is documented as an upstream Codex issue with the
-sanitized reproduction.
+The sanitized characterization established that the resumed child's Codex-native
+`turn_context` already contained `high` after the earlier turn used `xhigh`; the changed value
+therefore reached CCX ingress rather than being created inside CCX. The child continuation's
+sanitized provider-wire and request-log metadata remained `high`. The owned boundaries did
+not reproduce a mutation: `src/responses/parser.ts` parses the incoming effort,
+`src/server/effort-policy.ts` only performs explicit configured cap rewrites,
+`src/reasoning-effort.ts` and `src/adapters/openai-chat.ts` map that parsed value onto the
+provider wire, and `src/server/request-log.ts` observes the effective wire metadata without
+changing it. The corresponding boundary behavior is covered in `tests/responses-parser.test.ts`,
+`tests/effort-policy.test.ts`, and `tests/request-log.test.ts`.
+
+The drift is therefore classified as upstream Codex-native. No CCX runtime change or new CCX
+regression test is warranted unless a future reproduction shows a different value entering
+and leaving one of those owned boundaries.
 
 ## Sequencing and ownership
 
