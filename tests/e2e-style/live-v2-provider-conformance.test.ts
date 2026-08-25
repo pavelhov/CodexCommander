@@ -278,6 +278,8 @@ test("live V2 catalog parser accepts valid ids and an empty catalog", () => {
 test("live V2 catalog parser rejects every malformed row shape", () => {
   for (const data of [
     [null],
+    [42],
+    ["x"],
     [[{ id: "nested" }]],
     [{}],
     [{ id: 42 }],
