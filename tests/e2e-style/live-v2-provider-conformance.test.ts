@@ -16,7 +16,7 @@ interface RouteTarget {
 
 interface SanitizedEvidence {
   route: string;
-  status: number | "deadline" | "error";
+  status: number | "deadline" | "discovery_error" | "error" | "missing";
   elapsedMs: number;
   toolTerminal: boolean;
   responseTerminal: boolean;
@@ -29,38 +29,92 @@ const routeTargets: readonly RouteTarget[] = [
   { route: "native OpenAI Responses", model: "gpt-5.6-sol" },
 ];
 
-function messageTool(name: string): JsonRecord {
+function objectParameters(properties: JsonRecord, required?: string[]): JsonRecord {
   return {
-    type: "function",
-    name,
-    parameters: {
-      type: "object",
-      properties: {
-        message: { type: "string", encrypted: true },
-      },
-      required: ["message"],
-    },
+    type: "object",
+    properties,
+    ...(required ? { required } : {}),
+    additionalProperties: false,
   };
 }
 
-function collaborationNamespace(): JsonRecord {
+/**
+ * Construct the current Codex-owned MultiAgentV2 declarations only in the enabled request
+ * path. The contract source is codex-rs/core/src/tools/handlers/multi_agents_spec.rs; CCX has
+ * no canonical schema export of its own. In particular, the reserved native namespace needs
+ * exact required fields, encrypted message fields, and closed parameter objects.
+ */
+function currentCollaborationNamespace(): JsonRecord {
+  const encryptedMessage = (description: string): JsonRecord => ({
+    type: "string",
+    description,
+    encrypted: true,
+  });
   return {
     type: "namespace",
     name: "collaboration",
+    description: "Tools for spawning and managing sub-agents.",
     tools: [
-      messageTool("spawn_agent"),
-      messageTool("followup_task"),
-      { type: "function", name: "interrupt_agent", parameters: { type: "object", properties: {} } },
-      { type: "function", name: "list_agents", parameters: { type: "object", properties: {} } },
-      messageTool("send_message"),
+      {
+        type: "function",
+        name: "followup_task",
+        description: "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle.",
+        strict: false,
+        parameters: objectParameters({
+          target: { type: "string", description: "Agent id or canonical task name to send a follow-up task to (from spawn_agent)." },
+          message: encryptedMessage("Message text to send to the target agent."),
+        }, ["target", "message"]),
+      },
+      {
+        type: "function",
+        name: "interrupt_agent",
+        description: "Interrupt an agent's current turn, if any, and return its previous status.",
+        strict: false,
+        parameters: objectParameters({
+          target: { type: "string", description: "Agent id or canonical task name to interrupt (from spawn_agent)." },
+        }, ["target"]),
+      },
+      {
+        type: "function",
+        name: "list_agents",
+        description: "List live agents in the current root thread tree. Optionally filter by task-path prefix.",
+        strict: false,
+        parameters: objectParameters({
+          path_prefix: { type: "string", description: "Task-path prefix filter without a trailing slash. Omit to list all live agents." },
+        }),
+      },
+      {
+        type: "function",
+        name: "send_message",
+        description: "Send a message to an existing agent. The message will be delivered promptly. Does not trigger a new turn.",
+        strict: false,
+        parameters: objectParameters({
+          target: { type: "string", description: "Relative or canonical task name to message (from spawn_agent)." },
+          message: encryptedMessage("Message text to queue on the target agent."),
+        }, ["target", "message"]),
+      },
+      {
+        type: "function",
+        name: "spawn_agent",
+        description: "Spawns an agent to work on the specified task.",
+        strict: false,
+        parameters: objectParameters({
+          task_name: { type: "string", description: "Task name for the new agent. Use lowercase letters, digits, and underscores." },
+          message: encryptedMessage("Initial plain-text task for the new agent."),
+          fork_turns: { type: "string", description: "Optional number of turns to fork. Defaults to `all`. Use `none`, `all`, or a positive integer string." },
+          agent_type: { type: "string", description: "Agent type override for the new agent. Omit unless explicitly asked." },
+          model: { type: "string", description: "Model override for the new agent. Omit unless an explicit override is needed." },
+          reasoning_effort: { type: "string", description: "Reasoning effort override for the new agent. Omit to inherit the parent effort." },
+        }, ["task_name", "message"]),
+      },
       {
         type: "function",
         name: "wait_agent",
-        parameters: {
-          type: "object",
-          properties: { timeout_ms: { type: "number" } },
-          required: ["timeout_ms"],
-        },
+        description: "Wait for a mailbox update from any live agent, including queued messages and final-status notifications.",
+        strict: false,
+        parameters: objectParameters({
+          timeout_ms: { type: "number", description: "Timeout in milliseconds. Defaults to 30000, min 10000, max 3600000." },
+        }),
       },
     ],
   };
@@ -75,7 +129,7 @@ function initialRequest(model: string): JsonRecord {
       {
         type: "additional_tools",
         role: "developer",
-        tools: [collaborationNamespace()],
+        tools: [currentCollaborationNamespace()],
       },
       {
         type: "message",
@@ -186,40 +240,59 @@ async function postResponses(body: JsonRecord, signal: AbortSignal): Promise<{ s
     signal,
   });
   if (!response.ok) {
-    await response.body?.cancel();
+    await cancelBodyQuietly(response);
     return { status: response.status, payloads: [] };
   }
   return { status: response.status, payloads: ssePayloads(await response.text()) };
 }
 
-async function configuredTargets(): Promise<RouteTarget[]> {
+async function cancelBodyQuietly(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Cancellation errors carry transport detail and never escape the sanitizer boundary.
+  }
+}
+
+async function availableModels(): Promise<Set<string> | null> {
   const controller = new AbortController();
   const deadline = setTimeout(() => controller.abort(), DISCOVERY_DEADLINE_MS);
   try {
     const response = await fetch(`${PROXY_BASE_URL}/v1/models`, { signal: controller.signal });
     if (!response.ok) {
-      await response.body?.cancel();
-      throw new Error("live V2 model discovery was not successful");
+      await cancelBodyQuietly(response);
+      return null;
     }
     let payload: unknown;
     try {
       payload = await response.json();
     } catch {
-      throw new Error("live V2 model discovery returned an invalid catalog");
+      return null;
     }
     const data = payload && typeof payload === "object" && !Array.isArray(payload)
       ? (payload as JsonRecord).data
       : undefined;
-    if (!Array.isArray(data)) throw new Error("live V2 model discovery returned an invalid catalog");
-    const available = new Set(data.flatMap(row => {
+    if (!Array.isArray(data)) return null;
+    return new Set(data.flatMap(row => {
       if (!row || typeof row !== "object" || Array.isArray(row)) return [];
       const id = (row as JsonRecord).id;
       return typeof id === "string" ? [id] : [];
     }));
-    return routeTargets.filter(target => available.has(target.model));
+  } catch {
+    return null;
   } finally {
     clearTimeout(deadline);
   }
+}
+
+function emptyEvidence(target: RouteTarget, status: "discovery_error" | "missing"): SanitizedEvidence {
+  return {
+    route: target.route,
+    status,
+    elapsedMs: 0,
+    toolTerminal: false,
+    responseTerminal: false,
+  };
 }
 
 async function probeTarget(target: RouteTarget): Promise<SanitizedEvidence> {
@@ -261,12 +334,18 @@ async function probeTarget(target: RouteTarget): Promise<SanitizedEvidence> {
 }
 
 liveTest("configured V2 provider routes complete one collaboration wait and final answer", async () => {
-  const targets = await configuredTargets();
-  expect(targets.length).toBeGreaterThan(0);
-
-  const evidence = await Promise.all(targets.map(probeTarget));
+  const available = await availableModels();
+  const evidence = available === null
+    ? routeTargets.map(target => emptyEvidence(target, "discovery_error"))
+    : await Promise.all(routeTargets.map(target => available.has(target.model)
+      ? probeTarget(target)
+      : Promise.resolve(emptyEvidence(target, "missing"))));
   for (const item of evidence) {
     console.log(JSON.stringify(item));
+  }
+
+  expect(evidence.length).toBe(4);
+  for (const item of evidence) {
     expect(item.status).toBe(200);
     expect(item.toolTerminal).toBe(true);
     expect(item.responseTerminal).toBe(true);
