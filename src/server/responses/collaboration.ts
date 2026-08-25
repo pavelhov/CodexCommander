@@ -111,6 +111,8 @@ export function buildToolBridgeMaps(parsed: CodexCommanderParsedRequest, budget?
   const freeformToolNames = new Set<string>();
   const toolSearchToolNames = new Set<string>();
   const toolParameterSchemas = new Map<string, Record<string, unknown>>();
+  const exactWireNames = new Set<string>();
+  const generatedBareOwners = new Map<string, string>();
   for (const t of parsed.context.tools ?? []) {
     if (t.namespace) {
       const wireName = namespacedToolName(t.namespace, t.name);
@@ -128,8 +130,18 @@ export function buildToolBridgeMaps(parsed: CodexCommanderParsedRequest, budget?
     if (t.parameters !== null && typeof t.parameters === "object" && !Array.isArray(t.parameters)) {
       const wireName = namespacedToolName(t.namespace, t.name);
       toolParameterSchemas.set(wireName, t.parameters);
-      if (t.namespace && t.name !== wireName) toolParameterSchemas.set(t.name, t.parameters);
+      exactWireNames.add(wireName);
+      if (t.namespace && t.name !== wireName) {
+        const owner = generatedBareOwners.get(t.name);
+        if (owner === undefined) generatedBareOwners.set(t.name, wireName);
+        else if (owner !== wireName) generatedBareOwners.set(t.name, "");
+      }
     }
+  }
+  for (const [bareName, ownerWireName] of generatedBareOwners) {
+    if (!ownerWireName || exactWireNames.has(bareName)) continue;
+    const schema = toolParameterSchemas.get(ownerWireName);
+    if (schema) toolParameterSchemas.set(bareName, schema);
   }
   return { toolNsMap, freeformToolNames, toolSearchToolNames, toolParameterSchemas };
 }

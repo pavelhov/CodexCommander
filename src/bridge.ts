@@ -489,7 +489,7 @@ export function bridgeToResponsesSSE(
       // synthetic compaction item's payload on done.
       let compactionText = "";
       let compactionTextBytes = 0;
-      let currentToolCall: { itemId: string; outputIndex: number; callId: string; name: string; args: string; argsBytes: number; namespace?: string; freeform?: boolean; toolSearch?: boolean; inputEmitted?: string } | null = null;
+      let currentToolCall: { itemId: string; outputIndex: number; callId: string; name: string; schemaName: string; args: string; argsBytes: number; namespace?: string; freeform?: boolean; toolSearch?: boolean; inputEmitted?: string } | null = null;
       // Open native web-search cell (between begin and end). Holds the output index allocated on
       // begin so the matching done reuses it; closed as `failed` if the stream terminates early.
       let currentWebSearch: { itemId: string; eventId: string; outputIndex: number } | null = null;
@@ -600,7 +600,8 @@ export function bridgeToResponsesSSE(
         if (!currentToolCall) return;
         currentToolCall.args = coerceIntegerToolArguments(
           currentToolCall.args,
-          options?.toolParameterSchemas?.get(currentToolCall.name),
+          options?.toolParameterSchemas?.get(currentToolCall.schemaName)
+            ?? options?.toolParameterSchemas?.get(currentToolCall.name),
         );
         // Empty input (no-arg tools like computer_use get_app_state / list_apps) must serialize as
         // "{}", never "" — Codex echoes the call back as a function_call next turn, and JSON.parse("")
@@ -1006,7 +1007,7 @@ export function bridgeToResponsesSSE(
                     arguments: "", status: "in_progress", ...(ns ? { namespace: ns } : {}),
                   };
               emit("response.output_item.added", { output_index: outputIndex, item });
-              currentToolCall = { itemId, outputIndex, callId: event.id, name: realName, args: "", argsBytes: 0, namespace: ns, freeform, toolSearch };
+              currentToolCall = { itemId, outputIndex, callId: event.id, name: realName, schemaName: event.name, args: "", argsBytes: 0, namespace: ns, freeform, toolSearch };
               budget?.openCall(event.id);
               break;
             }
@@ -1550,10 +1551,12 @@ function buildResponseJSONWithBudget(
   };
   const flushToolCall = (status: "completed" | "incomplete" = "completed") => {
     if (!currentToolCallId) return;
-    currentToolCallArgs = coerceIntegerToolArguments(
-      currentToolCallArgs,
-      options?.toolParameterSchemas?.get(currentToolCallName),
-    );
+    if (status === "completed") {
+      currentToolCallArgs = coerceIntegerToolArguments(
+        currentToolCallArgs,
+        options?.toolParameterSchemas?.get(currentToolCallName),
+      );
+    }
     const mapped = options?.toolNsMap?.get(currentToolCallName);
     const realName = mapped?.name ?? currentToolCallName;
     const ns = mapped?.namespace;
