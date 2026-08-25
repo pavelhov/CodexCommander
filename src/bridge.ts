@@ -1447,6 +1447,7 @@ function buildResponseJSONWithBudget(
   let endTurn: boolean | undefined;
   let stopReason: string | undefined;
   let cleanDone = false;
+  let sawTerminal = false;
   let compactionText = "";
   let compactionTextBytes = 0;
 
@@ -1747,15 +1748,18 @@ function buildResponseJSONWithBudget(
         }
         break;
       case "error":
+        sawTerminal = true;
         errorEvent = e;
         usage = e.usage ?? usage;
         break;
       case "incomplete":
+        sawTerminal = true;
         incompleteEvent = e;
         endTurn = e.endTurn;
         if (e.providerState) options?.onProviderState?.(e.providerState);
         break;
       case "done":
+        sawTerminal = true;
         usage = e.usage;
         endTurn = e.endTurn;
         cleanDone = e.stopReason === undefined;
@@ -1770,7 +1774,7 @@ function buildResponseJSONWithBudget(
   flushSummaryReasoning();
   flushRawReasoning();
   // Open tool call on a failed/incomplete turn must not land as status:"completed".
-  if (currentToolCallId) flushToolCall(errorEvent || incompleteEvent ? "incomplete" : "completed");
+  if (currentToolCallId) flushToolCall(errorEvent || incompleteEvent || !sawTerminal ? "incomplete" : "completed");
   if (batchKiroRedacted) {
     // pushOutput reserves the item itself and releases the retained raw blob it replaces.
     pushOutput({
@@ -1786,6 +1790,7 @@ function buildResponseJSONWithBudget(
     options?.compaction
     && !errorEvent
     && !incompleteEvent
+    && sawTerminal
     && stopReason !== "max_tokens"
     && stopReason !== "content_filter"
   ) {
@@ -1797,6 +1802,8 @@ function buildResponseJSONWithBudget(
     ? "failed"
     : incompleteEvent || stopReason === "max_tokens" || stopReason === "content_filter"
       ? "incomplete"
+      : !sawTerminal
+        ? "incomplete"
       : "completed";
   options?.onUsage?.(incompleteEvent?.usage ?? usage);
   return {
@@ -1813,6 +1820,8 @@ function buildResponseJSONWithBudget(
         ...(incompleteEvent.message ? { message: incompleteEvent.message } : {}),
         ...(incompleteEvent.retryable !== undefined ? { retryable: incompleteEvent.retryable } : {}),
       },
+    } : !sawTerminal ? {
+      incomplete_details: { reason: "adapter_eof" },
     } : stopReason === "max_tokens" ? {
       incomplete_details: { reason: "max_output_tokens" },
     } : stopReason === "content_filter" ? {
