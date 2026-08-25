@@ -146,10 +146,11 @@ the legacy string form. A guidance-bearing write uses:
 ```
 
 For compatibility clients, `{ "models": ["gpt-5.5", "anthropic/claude-sonnet-5"] }` remains
-valid and preserves existing guidance for matching models. The first write of the object form is a
-durable migration point: older CodexCommander binaries that only read `string[]` fail when they next
-read the configuration. The dashboard's Save action always sends `{ "roster": [...] }` so guidance
-is not lost.
+valid as a request shape and preserves existing guidance for matching models. Every successful roster
+write—including a compatibility `models` write—persists the canonical object array. Therefore any
+successful write can be the durable migration point after which older CodexCommander binaries that
+only read `string[]` fail when they next read the configuration. The dashboard's Save action always
+sends `{ "roster": [...] }` so guidance is not lost.
 
 #### Catalog activation
 

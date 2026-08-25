@@ -39,10 +39,11 @@ The relevant no-selector priorities are:
 | Native GPT slugs by default | `9` | Native entry creation in `src/codex/catalog/sync.ts` |
 | Unselected native models while a featured list exists | At least `featured.length + 100` | Native catalog merge in `src/codex/catalog/sync.ts` |
 
-The management API limits `subagentModels` to five entries with `slice(0, 5)` in
-`src/server/management/agent-settings-routes.ts`. This matches the Codex `spawn_agent` surface, which
-advertises only the first five model overrides. Models outside those five can still remain visible
-in the main picker and callable by their exact id.
+The management API enforces the five-entry limit in
+`src/server/management/agent-settings-routes.ts`: a request containing more than five selectors is
+rejected before normalization. This matches the Codex `spawn_agent` surface, which advertises only
+the first five model overrides. Models outside those five can still remain visible in the main picker
+and callable by their exact id.
 
 ## How ties are ordered
 
@@ -86,14 +87,16 @@ alphabetical.
 
 Suppose `subagentModels` contains these five entries in this exact order:
 
-```toml
-subagentModels = [
-  { model = "gpt-5.5" },
-  { model = "opencode-go/glm-5.2" },
-  { model = "anthropic/claude-opus-4-6", guidance = "Use for synthesis." },
-  { model = "gpt-5.6-sol" },
-  { model = "gpt-5.6-terra" },
-]
+```json
+{
+  "subagentModels": [
+    { "model": "gpt-5.5" },
+    { "model": "opencode-go/glm-5.2" },
+    { "model": "anthropic/claude-opus-4-6", "guidance": "Use for synthesis." },
+    { "model": "gpt-5.6-sol" },
+    { "model": "gpt-5.6-terra" }
+  ]
+}
 ```
 
 The picker begins as follows:
