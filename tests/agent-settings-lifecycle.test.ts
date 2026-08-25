@@ -375,6 +375,31 @@ describe("subagent roster management API", () => {
     expect((await unknown.json() as { error: string }).error).toContain("missing/model");
   });
 
+  test("PATCH guidance is idempotent when setting the existing note or clearing an empty note", async () => {
+    const config = getDefaultConfig();
+    config.subagentModels = [
+      { model: "gpt-5.6-luna", guidance: "Already set" },
+      { model: "xai/grok-4.6" },
+    ];
+    saveConfig(config);
+    const deps = rosterApiDeps([]);
+    delete deps.saveConfigPreservingClaudeCode;
+
+    const same = await patchSubagentModels(config, deps, {
+      model: "gpt-5.6-luna",
+      guidance: "Already set",
+    });
+    expect(same.status).toBe(200);
+    expect((await same.json() as Record<string, unknown>).roster).toEqual(config.subagentModels);
+
+    const clear = await patchSubagentModels(config, deps, {
+      model: "xai/grok-4.6",
+      guidance: null,
+    });
+    expect(clear.status).toBe(200);
+    expect((await clear.json() as Record<string, unknown>).roster).toEqual(config.subagentModels);
+  });
+
   test("PUT roster round-trips guidance while GET retains the chosen id projection", async () => {
     const config = getDefaultConfig();
     const events: string[] = [];

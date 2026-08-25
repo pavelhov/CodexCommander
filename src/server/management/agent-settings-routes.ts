@@ -839,11 +839,15 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       async () => {
         type GuidanceMutation =
           | { kind: "missing"; previous: ReturnType<typeof canonicalSubagentRoster> }
+          | { kind: "unchanged"; previous: ReturnType<typeof canonicalSubagentRoster> }
           | { kind: "updated"; previous: ReturnType<typeof canonicalSubagentRoster>; next: ReturnType<typeof canonicalSubagentRoster> };
         const persisted = mutatePersistedConfig<GuidanceMutation>(current => {
           const previous = canonicalSubagentRoster(current.subagentModels ?? []);
           const index = previous.findIndex(entry => entry.model === model);
           if (index === -1) return { changed: false, value: { kind: "missing", previous } };
+          if (previous[index]!.guidance === guidance) {
+            return { changed: false, value: { kind: "unchanged", previous } };
+          }
           const next = previous.map((entry, entryIndex) => entryIndex === index
             ? { model: entry.model, ...(guidance === undefined ? {} : { guidance }) }
             : entry);
@@ -856,10 +860,18 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
           if (status === 503) response.headers.set("Retry-After", "1");
           return response;
         }
-        if (persisted.status === "unchanged" || persisted.value.kind === "missing") {
-          return jsonResponse({ error: `unknown subagent roster model ${model}` }, 404);
+        let persistedRoster: ReturnType<typeof canonicalSubagentRoster>;
+        if (persisted.status === "unchanged") {
+          if (persisted.value.kind === "missing") {
+            return jsonResponse({ error: `unknown subagent roster model ${model}` }, 404);
+          }
+          persistedRoster = persisted.value.previous;
+        } else {
+          if (persisted.value.kind !== "updated") {
+            return jsonResponse({ error: `unknown subagent roster model ${model}` }, 404);
+          }
+          persistedRoster = persisted.value.next;
         }
-        const { next: persistedRoster } = persisted.value;
         config.subagentModels = persistedRoster;
         const { catalogState, activationWorkers } = collectCatalogWorkerObservation();
         const responseDesired = currentCatalogDesired();
