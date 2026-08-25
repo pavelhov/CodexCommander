@@ -393,7 +393,7 @@ describe("combo management API", () => {
     await withTempHome(async () => {
       const config = baseConfig({
         disabledModels: ["before", "combo/old", "middle", "old-public", "after"],
-        subagentModels: ["combo/old", "another", "old-public"],
+        subagentModels: [{ model: "combo/old" }, { model: "another" }, { model: "old-public" }],
         subagentModelFallback: ["old-public", "another", "combo/old"],
         injectionModel: "combo/old",
         shadowCallIntercept: { enabled: true, model: "old-public" },
@@ -443,7 +443,7 @@ describe("combo management API", () => {
       expect(config.combos?.old).toBeUndefined();
       expect(config.combos?.new?.alias).toBe("new-public");
       expect(config.disabledModels).toEqual(["before", "new-public", "middle", "after"]);
-      expect(config.subagentModels).toEqual(["new-public", "another"]);
+      expect(config.subagentModels).toEqual([{ model: "new-public" }, { model: "another" }]);
       expect(config.subagentModelFallback).toEqual(["new-public", "another"]);
       expect(config.injectionModel).toBe("new-public");
       expect(config.shadowCallIntercept).toEqual({ enabled: true, model: "new-public" });
@@ -466,7 +466,7 @@ describe("combo management API", () => {
       expect(persisted.combos?.old).toBeUndefined();
       expect(persisted.combos?.new?.alias).toBe("new-public");
       expect(persisted.disabledModels).toEqual(["before", "new-public", "middle", "after"]);
-      expect(persisted.subagentModels).toEqual(["new-public", "another"]);
+      expect(persisted.subagentModels).toEqual([{ model: "new-public" }, { model: "another" }]);
       expect(persisted.subagentModelFallback).toEqual(["new-public", "another"]);
       expect(persisted.injectionModel).toBe("new-public");
       expect(persisted.shadowCallIntercept).toEqual({ enabled: true, model: "new-public" });
@@ -481,7 +481,7 @@ describe("combo management API", () => {
     await withTempHome(async () => {
       const config = baseConfig({
         disabledModels: ["before", "combo/old", "after"],
-        subagentModels: ["combo/old", "another"],
+        subagentModels: [{ model: "combo/old" }, { model: "another" }],
         combos: {
           old: { ...VALID_COMBO, alias: "stable-public" },
         },
@@ -496,10 +496,10 @@ describe("combo management API", () => {
 
       expect(response?.status).toBe(200);
       expect(config.disabledModels).toEqual(["before", "stable-public", "after"]);
-      expect(config.subagentModels).toEqual(["stable-public", "another"]);
+      expect(config.subagentModels).toEqual([{ model: "stable-public" }, { model: "another" }]);
       const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as CodexCommanderConfig;
       expect(persisted.disabledModels).toEqual(["before", "stable-public", "after"]);
-      expect(persisted.subagentModels).toEqual(["stable-public", "another"]);
+      expect(persisted.subagentModels).toEqual([{ model: "stable-public" }, { model: "another" }]);
     });
   });
 
@@ -530,7 +530,7 @@ describe("combo management API", () => {
     await withTempHome(async () => {
       const config = baseConfig({
         disabledModels: ["combo/free"],
-        subagentModels: ["combo/free"],
+      subagentModels: [{ model: "combo/free" }],
       });
       saveConfig(config);
       const response = await comboApi(config, "PUT", "/api/combos", {
@@ -539,13 +539,13 @@ describe("combo management API", () => {
       });
       expect(response?.status).toBe(200);
       expect(config.disabledModels).toEqual(["free-public"]);
-      expect(config.subagentModels).toEqual(["free-public"]);
+      expect(config.subagentModels).toEqual([{ model: "free-public" }]);
     });
   });
 
   test("GET subagent models exposes a combo alias as an available round-trip value", async () => {
     const config = baseConfig({
-      subagentModels: ["deepseek-v4-flash"],
+      subagentModels: [{ model: "deepseek-v4-flash" }],
       combos: {
         free: { ...VALID_COMBO, alias: "deepseek-v4-flash" },
       },
@@ -635,7 +635,7 @@ describe("combo management API", () => {
     await withTempHome(async () => {
       const config = baseConfig({
         disabledModels: ["before", "old-public", "combo/free", "after", "old-public"],
-        subagentModels: ["old-public", "another", "combo/free"],
+        subagentModels: [{ model: "old-public" }, { model: "another" }, { model: "combo/free" }],
         combos: { free: { ...VALID_COMBO, alias: "old-public" } },
       });
       saveConfig(config);
@@ -645,10 +645,10 @@ describe("combo management API", () => {
       });
       expect(response?.status).toBe(200);
       expect(config.disabledModels).toEqual(["before", "combo/free", "after"]);
-      expect(config.subagentModels).toEqual(["combo/free", "another"]);
+      expect(config.subagentModels).toEqual([{ model: "combo/free" }, { model: "another" }]);
       const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as CodexCommanderConfig;
       expect(persisted.disabledModels).toEqual(["before", "combo/free", "after"]);
-      expect(persisted.subagentModels).toEqual(["combo/free", "another"]);
+      expect(persisted.subagentModels).toEqual([{ model: "combo/free" }, { model: "another" }]);
     });
   });
 

@@ -11,7 +11,7 @@ test("rewrites every routed-string site", () => {
   const config = {
     defaultProvider: FROM,
     disabledModels: [`${FROM}/glm-5.2`, "anthropic/claude-sonnet-5"],
-    subagentModels: [`${FROM}/qwen3.7-max`],
+    subagentModels: [{ model: `${FROM}/qwen3.7-max` }],
     subagentModelFallback: [`${FROM}/qwen3.6-flash`],
     injectionModel: `${FROM}/qwen3.7-plus`,
     shadowCallIntercept: { model: `${FROM}/qwen3.6-flash` },
@@ -48,6 +48,20 @@ test("reports a providerContextCaps collision instead of overwriting it", () => 
   expect(result.collisions).toEqual([`providerContextCaps.${TO}`]);
   expect(providerContextCap(config, TO)).toBe(900_000);
   expect(providerContextCap(config, FROM)).toBe(500_000);
+});
+
+test("provider rewrite keeps roster guidance and dedupes by rewritten model", () => {
+  const config = {
+    subagentModels: [
+      { model: `${FROM}/qwen3.7-max`, guidance: "Use for coding" },
+      { model: `${FROM}/other` },
+    ],
+  } as unknown as CodexCommanderConfig;
+  rewriteProviderReferences(config, FROM, TO);
+  expect(config.subagentModels).toEqual([
+    { model: `${TO}/qwen3.7-max`, guidance: "Use for coding" },
+    { model: `${TO}/other` },
+  ]);
 });
 
 test("re-points combo targets so the migrated config still validates", () => {

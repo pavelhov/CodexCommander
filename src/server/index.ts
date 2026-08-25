@@ -49,6 +49,7 @@ import {
   cooldownErrorMessage,
 } from "../codex/auth-context";
 import { codexAccountNamespaceForModel } from "../codex/account-namespace-match";
+import { canonicalSubagentRoster, subagentRosterModels } from "../codex/subagent-roster";
 export {
   clearThreadAccountMap,
   formatCodexProviderForLog,
@@ -493,7 +494,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // Apply the fresh-install featured roster in memory when the optional field is absent. A user-set
   // list, including [], remains authoritative, and startup never rewrites persisted config.
   if (config.subagentModels === undefined) {
-    config.subagentModels = [...DEFAULT_SUBAGENT_MODELS];
+    config.subagentModels = canonicalSubagentRoster(DEFAULT_SUBAGENT_MODELS.map(model => ({ model })));
   }
   // Arm the `claudeCode` hand-edit guard (implementation contract H1) BEFORE
   // the server can serve a request. Arming is eager on
@@ -850,7 +851,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           ? visibleCodexAccountSelectors(config)
           : [];
         const goEnabled = filterCatalogVisibleModels(goModels, config);
-        const goOrdered = orderForSubagents(goEnabled, config.subagentModels);
+        const featured = subagentRosterModels(config.subagentModels);
+        const goOrdered = orderForSubagents(goEnabled, featured);
         // Claude Code / Claude Desktop gateway model discovery (GET /v1/models with
         // Anthropic-style headers; 003 G1-G8 + implementation contract). Entries use the official
         // ModelInfo shape incl. capabilities (effort ladder / thinking) — Desktop 3P can
@@ -898,7 +900,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           const catalogNativeSlugs = accountSelectors.length > 0
             ? NATIVE_OPENAI_MODELS
             : nativeSlugs;
-          const entries = buildCatalogEntries(loadCatalogTemplate(), catalogNativeSlugs, goOrdered, config.subagentModels, websocketsEnabled(config), maMode as "v1" | "default" | "v2", exactComboCatalogSlugs(config), accountSelectors, suppressedBareNativeSlugs);
+          const entries = buildCatalogEntries(loadCatalogTemplate(), catalogNativeSlugs, goOrdered, featured, websocketsEnabled(config), maMode as "v1" | "default" | "v2", exactComboCatalogSlugs(config), accountSelectors, suppressedBareNativeSlugs);
           return jsonResponse({
             models: applyNativeVisibility(
               entries,

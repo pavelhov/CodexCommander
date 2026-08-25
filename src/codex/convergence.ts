@@ -12,6 +12,7 @@ import {
 import { COMBO_NAMESPACE } from "../combos";
 import { getAuthStorePath } from "../oauth/store";
 import type { CodexCommanderConfig } from "../types";
+import { subagentRosterModels } from "./subagent-roster";
 import {
   captureCatalogAdmissionSnapshot,
   captureCatalogConfigAuthority,
@@ -242,7 +243,7 @@ function catalogInputIdentity(config: Readonly<CodexCommanderConfig>): string {
     disabledModels: [...(value.disabledModels ?? [])].sort(),
     customModels: value.customModels ?? [],
     providerContextCaps: value.providerContextCaps ?? {},
-    subagentModels: value.subagentModels ?? [],
+    subagentModels: subagentRosterModels(value.subagentModels),
     multiAgentMode: value.multiAgentMode ?? "default",
     // In default mode the native Codex feature flag decides the advertised
     // multi_agent_version. Forced v1/v2 modes intentionally ignore it.
@@ -397,7 +398,7 @@ function prepareCatalog(
   const catalog = JSON.parse(JSON.stringify(source.catalog)) as RawCatalog;
   const template = findNativeTemplate(catalog);
   const enabled = filterCatalogVisibleModels(routedModels, config);
-  const featured = config.subagentModels ?? [];
+  const featured = subagentRosterModels(config.subagentModels);
   const ordered = orderForSubagents(enabled, featured);
   const multiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2"
     ? config.multiAgentMode : "default";

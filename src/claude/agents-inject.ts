@@ -22,6 +22,7 @@ import { DEFAULT_SUBAGENT_MODELS, hasOwnProvider } from "../config";
 import { effectiveBlockedSkillNames, resolveInboundModel } from "./inbound";
 import { knownModelIdsForProvider } from "../router";
 import { encodeRoutedModelId } from "../providers/slug-codec";
+import { subagentRosterModels } from "../codex/subagent-roster";
 
 export interface ClaudeAgentDef {
   file: string;
@@ -135,7 +136,9 @@ export function buildClaudeAgentDefs(config: CodexCommanderConfig, windows: Reco
 
   // Default roster applies only when the field is UNSET — an explicit [] is
   // respected (audit 071 #6: an upgraded config must not lose the default five).
-  const roster = config.subagentModels === undefined ? DEFAULT_SUBAGENT_MODELS : config.subagentModels;
+  const roster = config.subagentModels === undefined
+    ? DEFAULT_SUBAGENT_MODELS
+    : subagentRosterModels(config.subagentModels);
   for (const entry of roster.slice(0, 5)) {
     if (typeof entry !== "string" || entry.trim() === "") continue;
     const parts = entryParts(entry.trim(), config);

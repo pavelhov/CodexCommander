@@ -12,6 +12,7 @@ import { resetCodexAppServerCatalogStateCache } from "../../codex/app-server-pro
 import { loadConfig, multiAgentGuidanceEnabled, mutatePersistedConfig, saveConfigPreservingClaudeCode, subagentDefaultSyncEffective } from "../../config";
 
 import { routedSlug } from "../../providers/slug-codec";
+import { mergeLegacyRosterWrite, subagentRosterModels } from "../../codex/subagent-roster";
 
 import type { CodexCommanderClaudeCodeConfig, CodexCommanderConfig } from "../../types";
 
@@ -792,7 +793,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       deps.codexRoutingKindForActivation?.(),
     );
     const response = jsonResponse({
-      chosen: rosterConfig.subagentModels ?? [],
+      chosen: subagentRosterModels(rosterConfig.subagentModels),
       available,
       catalogState,
       advertised: activation.catalog.advertised,
@@ -819,15 +820,16 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       deps.proxyStopLifecycle?.acquireAuthority,
       async () => {
     if (deps.saveConfigPreservingClaudeCode) {
-      config.subagentModels = canonicalChosen;
+      config.subagentModels = mergeLegacyRosterWrite(config.subagentModels, canonicalChosen);
       deps.saveConfigPreservingClaudeCode(config);
     } else {
       const persisted = mutatePersistedConfig(current => {
-        const previous = current.subagentModels ?? [];
+        const previous = subagentRosterModels(current.subagentModels);
+        const nextRoster = mergeLegacyRosterWrite(current.subagentModels, canonicalChosen);
         const changed = previous.length !== canonicalChosen.length
           || previous.some((model, index) => model !== canonicalChosen[index]);
-        current.subagentModels = [...canonicalChosen];
-        return { changed, value: [...canonicalChosen] };
+        current.subagentModels = nextRoster;
+        return { changed, value: nextRoster };
       });
       if (persisted.status === "unavailable") {
         const status = persisted.reason === "conflict" ? 503 : 409;
@@ -847,7 +849,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const { catalogState, activationWorkers } = collectCatalogWorkerObservation();
     const responseDesired = currentCatalogDesired();
     const responseConfig = responseDesired.config;
-    const currentChosen = [...(responseConfig.subagentModels ?? [])];
+    const currentChosen = subagentRosterModels(responseConfig.subagentModels);
     const superseded = currentChosen.length !== canonicalChosen.length
       || currentChosen.some((model, index) => model !== canonicalChosen[index]);
     const activation = inspectCodexCatalogActivation(

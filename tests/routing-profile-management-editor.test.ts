@@ -276,7 +276,7 @@ describe("routing profile management editor API", () => {
   test("PUT update migrates config references when the profile alias changes", async () => {
     const config = baseConfig();
     config.disabledModels = ["ccx/fast"];
-    config.subagentModels = ["ccx/fast", "a/m1"];
+    config.subagentModels = [{ model: "ccx/fast" }, { model: "a/m1" }];
     config.subagentModelFallback = ["ccx/fast", "a/m1"];
     config.injectionModel = "ccx/fast";
     config.shadowCallIntercept = { model: "ccx/fast" };
@@ -314,7 +314,7 @@ describe("routing profile management editor API", () => {
 
     expect(response?.status).toBe(200);
     expect(config.disabledModels).toEqual(["ccx/faster"]);
-    expect(config.subagentModels).toEqual(["ccx/faster", "a/m1"]);
+    expect(config.subagentModels).toEqual([{ model: "ccx/faster" }, { model: "a/m1" }]);
     expect(config.subagentModelFallback).toEqual(["ccx/faster", "a/m1"]);
     expect(config.injectionModel).toBe("ccx/faster");
     expect(config.shadowCallIntercept?.model).toBe("ccx/faster");

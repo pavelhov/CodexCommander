@@ -25,6 +25,7 @@ import { getEffectiveActiveCodexAccountId } from "../../codex/routing";
 import { getAccountSet } from "../../oauth/store";
 import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { saveConfigPreservingClaudeCode } from "../../config";
+import { rewriteSubagentRosterModels } from "../../codex/subagent-roster";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { isPlainRecord } from "./shared";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
@@ -211,7 +212,7 @@ function migrateProfileModelReferences(
     config.disabledModels = migrateReferences(config.disabledModels);
   }
   if (config.subagentModels) {
-    config.subagentModels = [...new Set(config.subagentModels.map(migrateAgentReference))];
+    config.subagentModels = rewriteSubagentRosterModels(config.subagentModels, migrateAgentReference);
   }
   if (config.subagentModelFallback) {
     config.subagentModelFallback = [...new Set(config.subagentModelFallback.map(migrateAgentReference))];

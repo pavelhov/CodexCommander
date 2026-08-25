@@ -3,6 +3,7 @@ import { statSync } from "node:fs";
 
 import { loadConfig } from "../config";
 import type { CodexCommanderConfig } from "../types";
+import { subagentRosterModels } from "./subagent-roster";
 import {
   configuredSubagentModelMatchesEntry,
   effectiveSubagentRoster,
@@ -134,8 +135,15 @@ export function codexCatalogDesiredRevision(
     // The persisted CodexCommander config still provides a stable fence when
     // native boot settings are temporarily unreadable.
   }
+  const revisionConfig = {
+    ...config,
+    // Guidance is parent-facing metadata and never changes the catalog or its
+    // activation fence. Hash the projected ids so notes can be edited without
+    // forcing catalog convergence or worker reloads.
+    subagentModels: subagentRosterModels(config.subagentModels),
+  };
   const bytes = JSON.stringify(canonicalValue({
-    config,
+    config: revisionConfig,
     bootInputs,
     configAuthority: authority
       ? {
@@ -372,7 +380,7 @@ export function inspectCodexCatalogActivation(
     : "not-required",
   routingKind: CodexRoutingKind = getCodexRoutingKind(),
 ): CodexCatalogActivationState {
-  const chosen = [...(config.subagentModels ?? [])];
+  const chosen = subagentRosterModels(config.subagentModels);
   const protocol = config.multiAgentMode === "v1" || config.multiAgentMode === "v2"
     ? config.multiAgentMode
     : "default";

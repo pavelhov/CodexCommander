@@ -641,7 +641,7 @@ describe("provider management validation", () => {
       expect(injection).toMatchObject({ model: selected, effort: "high" });
       expect(loadConfig()).toMatchObject({
         disabledModels: [selected],
-        subagentModels: [selected],
+        subagentModels: [{ model: selected }],
         injectionModel: selected,
       });
     } finally {
