@@ -9,6 +9,7 @@ type PathPart = string | number;
 type NumericTokens = Map<string, string>;
 
 const U64_NUMBER_FIELDS = new Set(["timeout_ms"]);
+const MAX_SCHEMA_DEPTH = 64;
 
 function asSchema(value: unknown): SchemaNode | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -85,10 +86,15 @@ function decodeJsonString(raw: string): string {
   return result;
 }
 
-/** Collect raw number tokens so canonical integer spelling can be distinguished from whitespace changes. */
+/**
+ * Collect raw number tokens so canonical integer spelling can be distinguished from whitespace
+ * changes. A value beyond the schema walker's bound rejects the whole token set conservatively:
+ * no repair is safer than recursing through an adversarial provider argument tree.
+ */
 function collectNumericTokens(text: string): NumericTokens {
   const tokens: NumericTokens = new Map();
   let index = 0;
+  let exceededDepth = false;
   const skipWhitespace = () => {
     while (/\s/.test(text[index] ?? "")) index++;
   };
@@ -100,7 +106,11 @@ function collectNumericTokens(text: string): NumericTokens {
     }
     return decodeJsonString(text.slice(start, index));
   };
-  const parseValue = (path: PathPart[]): void => {
+  const parseValue = (path: PathPart[], depth: number): void => {
+    if (depth > MAX_SCHEMA_DEPTH) {
+      exceededDepth = true;
+      return;
+    }
     skipWhitespace();
     const char = text[index];
     if (char === "{") {
@@ -112,7 +122,8 @@ function collectNumericTokens(text: string): NumericTokens {
         const key = parseString();
         skipWhitespace();
         index++;
-        parseValue([...path, key]);
+        parseValue([...path, key], depth + 1);
+        if (exceededDepth) return;
         skipWhitespace();
         if (text[index] === "}") { index++; return; }
         index++;
@@ -125,7 +136,8 @@ function collectNumericTokens(text: string): NumericTokens {
       let item = 0;
       if (text[index] === "]") { index++; return; }
       while (index < text.length) {
-        parseValue([...path, item++]);
+        parseValue([...path, item++], depth + 1);
+        if (exceededDepth) return;
         skipWhitespace();
         if (text[index] === "]") { index++; return; }
         index++;
@@ -141,8 +153,8 @@ function collectNumericTokens(text: string): NumericTokens {
     }
     while (index < text.length && /[A-Za-z]/.test(text[index] ?? "")) index++;
   };
-  parseValue([]);
-  return tokens;
+  parseValue([], 0);
+  return exceededDepth ? new Map() : tokens;
 }
 
 function coerceValue(
@@ -154,7 +166,7 @@ function coerceValue(
   path: PathPart[] = [],
   numericTokens: NumericTokens = new Map(),
 ): CoerceResult {
-  if (depth > 64 || !schema) return { value, changed: false };
+  if (depth > MAX_SCHEMA_DEPTH || !schema) return { value, changed: false };
   const resolved = resolveRef(schema, root, new Set());
   if (!resolved) return { value, changed: false };
 

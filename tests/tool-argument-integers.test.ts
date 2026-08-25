@@ -105,7 +105,7 @@ describe("coerceIntegerToolArguments", () => {
     )).toBe('{"count":1.0}');
   });
 
-  test("stops cyclic refs and traversal deeper than the recursion bound", () => {
+  test("stops cyclic refs and bounds aligned deeply nested traversal", () => {
     const cyclic: Record<string, unknown> = {
       type: "object",
       properties: { child: { $ref: "#/$defs/node" } },
@@ -113,10 +113,10 @@ describe("coerceIntegerToolArguments", () => {
     };
     expect(coerceIntegerToolArguments('{"child":{"child":1.0}}', cyclic)).toBe('{"child":{"child":1.0}}');
 
+    const depth = 50_000;
     let schema: Record<string, unknown> = { type: "integer" };
-    for (let i = 0; i < 70; i++) schema = { type: "object", properties: { child: schema } };
-    let value: Record<string, unknown> = { value: 1.0 };
-    for (let i = 0; i < 70; i++) value = { child: value };
-    expect(coerceIntegerToolArguments(JSON.stringify(value), schema)).toBe(JSON.stringify(value));
+    for (let i = 0; i < depth; i++) schema = { type: "object", properties: { child: schema } };
+    const args = '{"child":'.repeat(depth) + "1.0" + "}".repeat(depth);
+    expect(coerceIntegerToolArguments(args, schema)).toBe(args);
   });
 });
