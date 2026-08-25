@@ -523,6 +523,11 @@ export interface CodexCommanderClientIntegrationsConfig {
   "claude-desktop"?: boolean;
 }
 
+export interface SubagentRosterEntry {
+  model: string;
+  guidance?: string;
+}
+
 export interface CodexCommanderConfig {
   port: number;
   /** Maximum usage-log bytes read for one management snapshot. */
@@ -539,7 +544,7 @@ export interface CodexCommanderConfig {
    * "<provider>/<model>" ids. With account selectors, one bare native choice can expand
    * into a selector-qualified group; Codex still advertises only the first 5 visible rows.
    */
-  subagentModels?: string[];
+  subagentModels?: SubagentRosterEntry[];
   /**
    * Priority-ordered fallback models for spawned sub-agents. When the requested
    * model is quota-exhausted or recently failed, CodexCommander rewrites the child

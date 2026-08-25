@@ -73,6 +73,7 @@ import {
   MIN_APP_OWNED_MEMORY_BUDGET_MB,
 } from "./lib/app-owned-memory";
 import { isHostedToolUnsupportedForModel } from "./responses/hosted-tool-policy";
+import { normalizeSubagentRoster } from "./codex/subagent-roster";
 
 let _atomicSeq = 0;
 
@@ -408,6 +409,10 @@ const retryOn429PolicySchema = z.object({
 }).strict();
 
 const stringArraySchema = z.array(z.string());
+const subagentRosterSchema = z.array(z.union([
+  z.string(),
+  z.object({ model: z.string(), guidance: z.string().optional() }).strict(),
+])).transform(value => normalizeSubagentRoster(value));
 const stringRecordSchema = z.record(z.string(), z.string());
 const numberRecordSchema = z.record(z.string(), z.number());
 const booleanRecordSchema = z.record(z.string(), z.boolean());
@@ -1104,7 +1109,7 @@ const configSchema = z.object({
   defaultProvider: z.string().min(1),
   claudeCode: claudeCodeSchema.optional(),
   clientIntegrations: clientIntegrationsSchema.optional(),
-  subagentModels: stringArraySchema.optional(),
+  subagentModels: subagentRosterSchema.optional(),
   subagentModelFallback: stringArraySchema.optional(),
   subagentModelFallbackPollMs: z.number().int().nonnegative().optional(),
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
@@ -2518,7 +2523,7 @@ export function getDefaultConfig(): CodexCommanderConfig {
       },
     },
     defaultProvider: "openai",
-    subagentModels: [...DEFAULT_SUBAGENT_MODELS],
+    subagentModels: DEFAULT_SUBAGENT_MODELS.map(model => ({ model })),
     multiAgentGuidanceEnabled: true,
     websockets: false,
     codexAutoStart: true,
