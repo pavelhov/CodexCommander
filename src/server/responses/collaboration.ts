@@ -27,7 +27,7 @@ import {
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { modelInList, namespacedToolName } from "../../types";
-import type { AdapterEvent, CodexCommanderConfig, CodexCommanderParsedRequest, CodexCommanderProviderConfig, CodexCommanderProviderContinuationState, CodexCommanderUsage } from "../../types";
+import type { AdapterEvent, CodexCommanderConfig, CodexCommanderParsedRequest, CodexCommanderProviderConfig, CodexCommanderProviderContinuationState, CodexCommanderUsage, SubagentRosterEntry } from "../../types";
 import {
   forceRefreshOAuthAccessSnapshot,
   getOAuthCredentialApiBaseUrl,
@@ -62,6 +62,7 @@ import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, ty
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { slugsEquivalent } from "../../providers/slug-codec";
 import { subagentFallbackGuidanceText } from "../../codex/subagent-model-fallback";
+import { subagentRosterModels } from "../../codex/subagent-roster";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
@@ -174,6 +175,7 @@ export interface MultiAgentGuidanceOptions {
   codexAccountNamespace?: string;
   injectionModel?: string;
   injectionEffort?: string;
+  subagentRoster?: readonly SubagentRosterEntry[];
   subagentModels?: string[];
   subagentModelFallback?: string[];
   injectionPrompt?: string;
@@ -189,6 +191,11 @@ export interface MultiAgentGuidanceDeps {
   collectCatalogState?: () => { state: "fresh" | "stale" | "not_running" | "unknown" };
   /** Resolve whether a candidate route can consume native ChatGPT task ciphertext. */
   isEncryptedTaskCompatibleModel?: (model: string) => boolean | Promise<boolean>;
+  /** Match one configured selector to one advertised row in the request catalog snapshot. */
+  configuredSubagentModelMatchesAdvertised?: (
+    configured: string,
+    advertised: string,
+  ) => boolean | Promise<boolean>;
 }
 
 async function defaultCollectCatalogState(): Promise<{ state: "fresh" | "stale" | "not_running" | "unknown" }> {
@@ -213,13 +220,25 @@ export async function resolveEffectiveSubagentRoster(
 }
 
 /** Reuse one parsed catalog snapshot across every roster projection for this request. */
-async function createRequestScopedSubagentRosterResolver(): Promise<NonNullable<
-  MultiAgentGuidanceDeps["resolveEffectiveSubagentRoster"]
->> {
-  const { effectiveSubagentRoster, readCatalog, readCodexCatalogPath } = await import("../../codex/catalog");
+async function createRequestScopedSubagentRosterContext(): Promise<{
+  resolveEffectiveSubagentRoster: NonNullable<MultiAgentGuidanceDeps["resolveEffectiveSubagentRoster"]>;
+  configuredSubagentModelMatchesAdvertised: NonNullable<MultiAgentGuidanceDeps["configuredSubagentModelMatchesAdvertised"]>;
+}> {
+  const {
+    configuredSubagentModelMatchesEntry,
+    effectiveSubagentRoster,
+    readCatalog,
+    readCodexCatalogPath,
+  } = await import("../../codex/catalog");
   const catalogEntries = readCatalog(readCodexCatalogPath())?.models ?? [];
-  return (configuredModels, surface) =>
-    effectiveSubagentRoster(configuredModels, surface, catalogEntries);
+  return {
+    resolveEffectiveSubagentRoster: (configuredModels, surface) =>
+      effectiveSubagentRoster(configuredModels, surface, catalogEntries),
+    configuredSubagentModelMatchesAdvertised: (configured, advertised) =>
+      catalogEntries.some(entry =>
+        entry.slug === advertised && configuredSubagentModelMatchesEntry(configured, entry)
+      ),
+  };
 }
 
 
@@ -235,6 +254,7 @@ export async function multiAgentGuidanceText(
     encryptedCodexTasks,
     injectionEffort,
     codexAccountNamespace,
+    subagentRoster,
     subagentModels,
     subagentModelFallback,
     injectionPrompt,
@@ -258,12 +278,23 @@ export async function multiAgentGuidanceText(
     // codex-rs supplies the Proactive text on v2; the proxy only adds model-designation
     // guidance, and only when there is something concrete to designate: a configured
     // injectionModel and/or a roster entry that resolves in the injected catalog.
+    const configuredRosterEntries = subagentRoster ?? [];
+    const configuredSubagents = subagentRoster === undefined
+      ? subagentModels ?? []
+      : subagentRosterModels(subagentRoster);
     const configuredForGuidance = [
-      ...(subagentModels ?? []),
+      ...configuredSubagents,
       ...(injectionModel ? [injectionModel] : []),
     ];
+    const needsGuidanceMatcher = configuredRosterEntries.some(entry => entry.guidance !== undefined);
+    const requestContext = deps.resolveEffectiveSubagentRoster === undefined
+      || (needsGuidanceMatcher && deps.configuredSubagentModelMatchesAdvertised === undefined)
+      ? await createRequestScopedSubagentRosterContext()
+      : undefined;
     const resolveRoster = deps.resolveEffectiveSubagentRoster
-      ?? await createRequestScopedSubagentRosterResolver();
+      ?? requestContext!.resolveEffectiveSubagentRoster;
+    const configuredMatchesAdvertised = deps.configuredSubagentModelMatchesAdvertised
+      ?? requestContext?.configuredSubagentModelMatchesAdvertised;
     // Native ChatGPT parents may hand a child only backend-encrypted task content.
     // Filter automatic guidance to routes with the same capability, while leaving
     // exact model ids and the downstream fail-closed guard untouched. If capability
@@ -280,7 +311,6 @@ export async function multiAgentGuidanceText(
     const candidateModels = new Set(effective.candidates.map(candidate => candidate.model));
     const withinCandidateWindow = (candidate: EffectiveSubagentModel): boolean =>
       candidateModels.has(candidate.model);
-    const configuredSubagents = subagentModels ?? [];
     const subagentEffective = configuredSubagents.length > 0
       ? injectionModel
         ? await resolveRoster(configuredSubagents, "v2")
@@ -307,7 +337,20 @@ export async function multiAgentGuidanceText(
     for (const candidate of rosterModels) {
       if (await encryptedTaskCompatible(candidate.model)) compatibleRosterModels.push(candidate);
     }
-    const roster = subagentRosterText(compatibleRosterModels);
+    const compatibleRosterWithGuidance: Array<EffectiveSubagentModel & { guidance?: string }> = [];
+    for (const candidate of compatibleRosterModels) {
+      let guidance: string | undefined;
+      for (const entry of configuredRosterEntries) {
+        if (entry.guidance === undefined) continue;
+        if (await configuredMatchesAdvertised?.(entry.model, candidate.model)) {
+          guidance = entry.guidance;
+          break;
+        }
+      }
+      compatibleRosterWithGuidance.push({ ...candidate, ...(guidance ? { guidance } : {}) });
+    }
+    const compactRoster = subagentRosterText(compatibleRosterWithGuidance, { includeNotes: false });
+    const annotatedRoster = subagentRosterText(compatibleRosterWithGuidance, { includeNotes: true });
     const preferredCandidates: EffectiveSubagentModel[] = [];
     for (const candidate of (preferredEffective?.advertised ?? []).filter(withinCandidateWindow)) {
       if (await encryptedTaskCompatible(candidate.model)) preferredCandidates.push(candidate);
@@ -334,10 +377,10 @@ export async function multiAgentGuidanceText(
       if (await encryptedTaskCompatible(model)) compatibleFallback.push(model);
     }
     const fallbackGuidance = subagentFallbackGuidanceText({ subagentModelFallback: compatibleFallback } as CodexCommanderConfig);
-    const hasCompatibleGuidance = preferred !== undefined || roster !== "" || fallbackGuidance !== "";
+    const hasCompatibleGuidance = preferred !== undefined || compactRoster !== "" || fallbackGuidance !== "";
     if (!hasCompatibleGuidance) return null;
     if (injectionPrompt) {
-      return `<multi_agent_mode>${applyInjectionPlaceholders(injectionPrompt, preferred?.model, injectionEffort, roster, fallbackGuidance)}</multi_agent_mode>`;
+      return `<multi_agent_mode>${applyInjectionPlaceholders(injectionPrompt, preferred?.model, injectionEffort, compactRoster, fallbackGuidance)}</multi_agent_mode>`;
     }
     let text = "When the active spawn_agent tool supports optional \"model\" or \"reasoning_effort\" overrides, "
       + "use only models listed for this collaboration surface. "
@@ -350,10 +393,13 @@ export async function multiAgentGuidanceText(
         + " — use it unless the user names another.";
     }
     text += fallbackGuidance;
-    text += roster;
+    const textWithoutRoster = text;
+    text += annotatedRoster;
+    if (text.length > V2_GUIDANCE_CHAR_BUDGET && annotatedRoster !== compactRoster) {
+      text = textWithoutRoster + compactRoster;
+    }
     if (text.length > V2_GUIDANCE_CHAR_BUDGET) {
-      // Roster is the only unbounded part — drop it before breaking the budget.
-      text = text.slice(0, text.length - roster.length);
+      text = textWithoutRoster;
     }
     return `<multi_agent_mode>${text}</multi_agent_mode>`;
   }
@@ -379,17 +425,27 @@ export function applyInjectionPlaceholders(prompt: string, model?: string, effor
 
 
 
-export function subagentRosterText(models: Array<{ model: string; efforts: string[] }>): string {
+export function subagentRosterText(
+  models: ReadonlyArray<{ model: string; efforts: string[]; guidance?: string }>,
+  options: { includeNotes?: boolean } = {},
+): string {
   if (models.length === 0) return "";
+  const includeNotes = options.includeNotes === true;
+  const hasNotes = includeNotes && models.some(model => model.guidance !== undefined);
   const ladders = new Set(models.map(model => model.efforts.join("/")));
-  if (!ladders.has("") && ladders.size === 1) {
+  if (!hasNotes && !ladders.has("") && ladders.size === 1) {
     return ` Available models (reasoning_effort ${[...ladders][0]}): ${models
       .map(model => `"${model.model}"`)
       .join(", ")}.`;
   }
-  const entries = models.map(model => model.efforts.length > 0
-    ? `"${model.model}" (${model.efforts.join("/")})`
-    : `"${model.model}"`);
+  const entries = models.map(model => {
+    const ladder = model.efforts.length > 0
+      ? `"${model.model}" (${model.efforts.join("/")})`
+      : `"${model.model}"`;
+    return includeNotes && model.guidance
+      ? `${ladder} — ${model.guidance}`
+      : ladder;
+  });
   return ` Available models (valid reasoning_effort): ${entries.join(", ")}.`;
 }
 

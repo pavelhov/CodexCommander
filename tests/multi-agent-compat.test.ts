@@ -579,6 +579,126 @@ describe("multiAgentGuidanceText", () => {
     expect(v1).not.toContain("Available models"); // v1 stays lean: Proactive text only
   });
 
+  test("v2 roster notes appear only for advertised compatible models", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [
+      { slug: "xai/grok-4.6", efforts: ["low", "medium", "high", "xhigh"] },
+      { slug: "gpt-5.6-luna", efforts: ["low", "medium", "high", "max"] },
+    ]);
+    const v2 = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        subagentRoster: [
+          { model: "xai/grok-4.6", guidance: "Use for independent review" },
+          { model: "missing/model", guidance: "Must not appear" },
+        ],
+      },
+    );
+
+    expect(v2).toContain('"xai/grok-4.6" (low/medium/high/xhigh) — Use for independent review');
+    expect(v2).not.toContain("Must not appear");
+  });
+
+  test("bare-native notes do not attach to unrelated provider rows", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [
+      { slug: "gpt-5.6-sol", visibility: "hide", priority: 0 },
+      { slug: "vendor/gpt-5.6-sol", efforts: ["high", "max"], priority: 1 },
+      {
+        slug: "team/gpt-5.6-sol",
+        efforts: ["high", "max"],
+        priority: 2,
+        accountBound: true,
+      },
+    ]);
+
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        codexAccountNamespace: "team",
+        subagentRoster: [
+          { model: "gpt-5.6-sol", guidance: "Native account only" },
+          { model: "vendor/gpt-5.6-sol" },
+        ],
+      },
+    );
+
+    expect(text).toContain('"team/gpt-5.6-sol" (high/max) — Native account only');
+    expect(text).toContain('"vendor/gpt-5.6-sol" (high/max)');
+    expect(text).not.toContain('"vendor/gpt-5.6-sol" (high/max) — Native account only');
+  });
+
+  test("v1 and stale catalogs omit roster notes", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{ slug: "gpt-5.6-sol", efforts: ["high", "max"] }]);
+    const roster = [{ model: "gpt-5.6-sol", guidance: "Hidden off eligible V2" }];
+
+    const v1 = await multiAgentGuidanceText(
+      parsedFixture({
+        reasoning: "max",
+        tools: [
+          { name: "spawn_agent", namespace: "multi_agent_v1" },
+          { name: "send_input", namespace: "multi_agent_v1" },
+        ],
+      }),
+      { subagentRoster: roster },
+    );
+    const stale = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      { subagentRoster: roster },
+      { collectCatalogState: () => ({ state: "stale" }) },
+    );
+
+    expect(v1).not.toContain("Hidden off eligible V2");
+    expect(stale).not.toContain("Hidden off eligible V2");
+  });
+
+  test("encrypted-task filtering omits incompatible roster notes", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [
+      { slug: "gpt-native", efforts: ["high", "max"] },
+      { slug: "xai/routed", efforts: ["high", "max"] },
+    ]);
+
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        encryptedCodexTasks: true,
+        subagentRoster: [
+          { model: "gpt-native", guidance: "Compatible native note" },
+          { model: "xai/routed", guidance: "Incompatible routed note" },
+        ],
+      },
+      { isEncryptedTaskCompatibleModel: model => model === "gpt-native" },
+    );
+
+    expect(text).toContain("Compatible native note");
+    expect(text).not.toContain("Incompatible routed note");
+  });
+
+  test("custom roster placeholder omits roster notes", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{
+      slug: "xai/grok-4.6",
+      efforts: ["low", "medium", "high", "xhigh"],
+    }]);
+
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionPrompt: "CUSTOM{{roster}}",
+        subagentRoster: [{
+          model: "xai/grok-4.6",
+          guidance: "Use for independent review",
+        }],
+      },
+    );
+
+    expect(text).toContain('"xai/grok-4.6"');
+    expect(text).toContain("low/medium/high/xhigh");
+    expect(text).not.toContain("Use for independent review");
+  });
+
   test("native encrypted V2 guidance advertises only routes with encrypted-task capability", async () => {
     const dir = codexHomeFixture(V2_ON);
     catalogFixture(dir, [
@@ -842,6 +962,37 @@ describe("multiAgentGuidanceText", () => {
     const body = text!.replace(/^<multi_agent_mode>/, "").replace(/<\/multi_agent_mode>$/, "");
     expect(body.length).toBeLessThanOrEqual(700);
     expect(body).toContain("Available models"); // roster fits inside the budget
+  });
+
+  test("700-character budget drops notes before dropping spawn-contract text", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    const models = [
+      "gpt-5.5",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.4-mini",
+    ];
+    catalogFixture(dir, models.map(slug => ({
+      slug,
+      efforts: ["low", "medium", "high", "xhigh"],
+    })));
+    const note = "N".repeat(160);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionModel: "gpt-5.6-terra",
+        injectionEffort: "xhigh",
+        subagentRoster: models.map(model => ({ model, guidance: note })),
+      },
+    );
+
+    expect(text).toContain("fork_turns");
+    expect(text).toContain('"gpt-5.5"');
+    expect(text).not.toContain(note);
+    expect(String(text).length).toBeLessThanOrEqual(
+      700 + "<multi_agent_mode></multi_agent_mode>".length,
+    );
   });
 
   test("false suppresses v1 top-tier guidance", async () => {

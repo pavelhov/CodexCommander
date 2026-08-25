@@ -37,7 +37,6 @@ import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { modelInList, namespacedToolName } from "../../types";
 import type { AdapterEvent, CodexCommanderConfig, CodexCommanderParsedRequest, CodexCommanderProviderConfig, CodexCommanderProviderContinuationState, CodexCommanderUsage } from "../../types";
-import { subagentRosterModels } from "../../codex/subagent-roster";
 import {
   forceRefreshOAuthAccessSnapshot,
   getOAuthCredentialApiBaseUrl,
@@ -948,7 +947,7 @@ async function applyFinalRouteRequestNormalization(args: {
       codexAccountNamespace: route.codexAccountNamespace,
       injectionModel: config.injectionModel,
       injectionEffort: config.injectionEffort,
-      subagentModels: subagentRosterModels(config.subagentModels),
+      subagentRoster: config.subagentModels,
       subagentModelFallback: config.subagentModelFallback,
       injectionPrompt: config.injectionPrompt,
     }, encryptedCodexTasks
