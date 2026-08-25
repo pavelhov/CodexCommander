@@ -379,7 +379,13 @@ describe("subagent roster management API", () => {
       ["duplicate models", { roster: [{ model: "gpt-5.6-luna" }, { model: "gpt-5.6-luna" }] }],
       ["non-canonical selector", { roster: [{ model: "openai/default/gpt-5.6-luna" }] }],
       ["tag guidance", { roster: [{ model: "gpt-5.6-luna", guidance: "<tag>" }] }],
+      ["line separator", { roster: [{ model: "gpt-5.6-luna", guidance: "review\u2028later" }] }],
+      ["paragraph separator", { roster: [{ model: "gpt-5.6-luna", guidance: "review\u2029later" }] }],
+      ["right-to-left override", { roster: [{ model: "gpt-5.6-luna", guidance: "review\u202elater" }] }],
+      ["carriage return", { roster: [{ model: "gpt-5.6-luna", guidance: "review\rlater" }] }],
+      ["line feed", { roster: [{ model: "gpt-5.6-luna", guidance: "review\nlater" }] }],
       ["token-shaped guidance", { roster: [{ model: "gpt-5.6-luna", guidance: "sk-abcdefgh" }] }],
+      ["161 Unicode code points", { roster: [{ model: "gpt-5.6-luna", guidance: "😀".repeat(161) }] }],
     ];
 
     for (const [, body] of cases) {
@@ -387,5 +393,26 @@ describe("subagent roster management API", () => {
       expect(response.status).toBe(400);
       expect((await response.json() as { error: string }).error).toContain("roster");
     }
+  });
+
+  test("PUT canonicalizes blank, NFC, and exact-boundary guidance", async () => {
+    const config = getDefaultConfig();
+    const deps = rosterApiDeps([]);
+
+    const blank = await putSubagentModels(config, deps, {
+      roster: [{ model: "gpt-5.6-luna", guidance: " \t " }],
+    });
+    expect(blank.status).toBe(200);
+    expect((await blank.json() as Record<string, unknown>).roster).toEqual([
+      { model: "gpt-5.6-luna" },
+    ]);
+
+    const boundary = await putSubagentModels(config, deps, {
+      roster: [{ model: "gpt-5.6-luna", guidance: ` e\u0301${"😀".repeat(159)} ` }],
+    });
+    expect(boundary.status).toBe(200);
+    expect((await boundary.json() as Record<string, unknown>).roster).toEqual([
+      { model: "gpt-5.6-luna", guidance: `\u00e9${"😀".repeat(159)}` },
+    ]);
   });
 });

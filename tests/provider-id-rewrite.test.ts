@@ -50,17 +50,16 @@ test("reports a providerContextCaps collision instead of overwriting it", () => 
   expect(providerContextCap(config, FROM)).toBe(500_000);
 });
 
-test("provider rewrite keeps roster guidance and dedupes by rewritten model", () => {
+test("provider rewrite keeps the first roster object and guidance on a real destination collision", () => {
   const config = {
     subagentModels: [
       { model: `${FROM}/qwen3.7-max`, guidance: "Use for coding" },
-      { model: `${FROM}/other` },
+      { model: `${TO}/qwen3.7-max`, guidance: "Use for review" },
     ],
   } as unknown as CodexCommanderConfig;
   rewriteProviderReferences(config, FROM, TO);
   expect(config.subagentModels).toEqual([
     { model: `${TO}/qwen3.7-max`, guidance: "Use for coding" },
-    { model: `${TO}/other` },
   ]);
 });
 

@@ -1,9 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
 import {
   canonicalSubagentRoster,
+  isSubagentGuidanceSafe,
   mergeLegacyRosterWrite,
   normalizeSubagentRoster,
   rewriteSubagentRosterModels,
@@ -22,6 +23,35 @@ test("rejects extra keys, blank models, duplicate models, and unsafe guidance", 
   expect(() => normalizeSubagentRoster([{ model: "gpt-5.6-sol", effort: "high" }])).toThrow();
   expect(() => normalizeSubagentRoster([{ model: "gpt-5.6-sol" }, { model: "gpt-5.6-sol" }])).toThrow();
   expect(() => normalizeSubagentRoster([{ model: "xai/grok-4.6", guidance: "Use <secret>" }])).toThrow();
+});
+
+test.each([
+  ["line separator", "review\u2028later"],
+  ["paragraph separator", "review\u2029later"],
+  ["right-to-left override", "review\u202elater"],
+  ["carriage return", "review\rlater"],
+  ["line feed", "review\nlater"],
+  ["secret-shaped value", "sk-abcdefgh"],
+] as const)("rejects %s in direct guidance safety checks", (_name, guidance) => {
+  expect(isSubagentGuidanceSafe(guidance)).toBe(false);
+  expect(() => canonicalSubagentRoster([{ model: "gpt-5.6-sol", guidance }])).toThrow();
+});
+
+test("canonical guidance omits blanks, normalizes NFC, and enforces code-point boundaries", () => {
+  expect(canonicalSubagentRoster([{ model: "gpt-5.6-sol", guidance: " \t " }])).toEqual([
+    { model: "gpt-5.6-sol" },
+  ]);
+  expect(canonicalSubagentRoster([{ model: "gpt-5.6-sol", guidance: " e\u0301lan " }])).toEqual([
+    { model: "gpt-5.6-sol", guidance: "\u00e9lan" },
+  ]);
+  expect(isSubagentGuidanceSafe("😀".repeat(160))).toBe(true);
+  expect(isSubagentGuidanceSafe("😀".repeat(161))).toBe(false);
+});
+
+test("normalize rejects six roster entries before they reach consumers", () => {
+  expect(() => normalizeSubagentRoster(
+    Array.from({ length: 6 }, (_, index) => ({ model: `gpt-${index}` })),
+  )).toThrow("subagent roster may contain at most 5 entries");
 });
 
 test("legacy model writes preserve remaining guidance", () => {
@@ -73,7 +103,10 @@ test("config validation reports helper errors as schema failures without throwin
 test("invalid roster diagnostics report schema errors rather than invalid_json", () => {
   const dir = mkdtempSync(join(tmpdir(), "ccx-roster-invalid-"));
   const previousHome = process.env.CODEXCOMMANDER_HOME;
+  const previousCodexHome = process.env.CODEX_HOME;
   process.env.CODEXCOMMANDER_HOME = dir;
+  process.env.CODEX_HOME = join(dir, "codex");
+  mkdirSync(process.env.CODEX_HOME, { recursive: true });
   const configPath = join(dir, "config.json");
   writeFileSync(configPath, JSON.stringify({
     ...getDefaultConfig(),
@@ -84,6 +117,8 @@ test("invalid roster diagnostics report schema errors rather than invalid_json",
   } finally {
     if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
     else process.env.CODEXCOMMANDER_HOME = previousHome;
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -91,7 +126,10 @@ test("invalid roster diagnostics report schema errors rather than invalid_json",
 test("loads a legacy string roster without rewriting the file", () => {
   const dir = mkdtempSync(join(tmpdir(), "ccx-roster-"));
   const previousHome = process.env.CODEXCOMMANDER_HOME;
+  const previousCodexHome = process.env.CODEX_HOME;
   process.env.CODEXCOMMANDER_HOME = dir;
+  process.env.CODEX_HOME = join(dir, "codex");
+  mkdirSync(process.env.CODEX_HOME, { recursive: true });
   const configPath = join(dir, "config.json");
   writeFileSync(configPath, JSON.stringify({
     port: 10100,
@@ -108,6 +146,8 @@ test("loads a legacy string roster without rewriting the file", () => {
   } finally {
     if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
     else process.env.CODEXCOMMANDER_HOME = previousHome;
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
     rmSync(dir, { recursive: true, force: true });
   }
 });

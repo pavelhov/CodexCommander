@@ -22,7 +22,7 @@ function normalizeModel(model: string): string {
 
 export function isSubagentGuidanceSafe(text: string): boolean {
   if (typeof text !== "string") return false;
-  return !/[\p{Cc}]/u.test(text)
+  return !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(text)
     && !/[<>{}]/u.test(text)
     && [...text].length <= SUBAGENT_GUIDANCE_MAX_CODE_POINTS
     && redactSecretString(text) === text;

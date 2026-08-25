@@ -6,6 +6,22 @@ import ts from "typescript";
  * Classic stacked cards and the view-mode toggle are gone.
  */
 
+function countJsxNodesNamed(src: string, name: string): number {
+  const sourceFile = ts.createSourceFile("fixture.tsx", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let count = 0;
+  const visit = (node: ts.Node) => {
+    if (
+      (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node))
+      && node.tagName.getText(sourceFile) === name
+    ) {
+      count += 1;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return count;
+}
+
 test("Subagents mounts the denser workspace as the only layout", async () => {
   const page = await Bun.file(new URL("../src/pages/Subagents.tsx", import.meta.url)).text();
 
@@ -20,7 +36,7 @@ test("Subagents mounts the denser workspace as the only layout", async () => {
   // Exactly one workspace render path remains after the shared cold-state guard.
   expect(page).toContain('state.showSkeleton && !snapshot');
   expect(page).toContain("DataSurfaceSkeleton");
-  expect(page.match(/<SubagentsWorkspace\b/g)?.length).toBe(1);
+  expect(countJsxNodesNamed(page, "SubagentsWorkspace")).toBe(1);
 });
 
 test("Subagents keeps the featured-slot contract: 5 slots, reorder, remove, save", async () => {

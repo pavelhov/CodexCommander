@@ -58,14 +58,14 @@ beforeEach(() => {
         if (gate) await gate;
         const responseRoster = gate ? delayedRoster ?? roster : roster;
         return Response.json({
-          available: ["a-1", "a-2", "a-3"],
+          available: ["a-1", "a-2", "a-3", "a-4", "a-5", "a-6"],
           chosen: responseRoster.map(entry => entry.model),
           roster: responseRoster,
           catalogState: { state: "fresh" },
         });
       }
       if (path.endsWith("/api/models")) {
-        return Response.json(["a-1", "a-2", "a-3"].map(id => ({ provider: "openai", id, namespaced: id, native: true })));
+        return Response.json(["a-1", "a-2", "a-3", "a-4", "a-5", "a-6"].map(id => ({ provider: "openai", id, namespaced: id, native: true })));
       }
       if (path.endsWith("/api/injection-model")) return Response.json({ model: null, effort: null, efforts: ["low", "high"], available: [], multiAgentGuidanceEnabled: true, syncCodexSubagentDefaults: false });
       if (path.endsWith("/api/v2")) return Response.json({ multiAgentMode: "default", maxConcurrentThreadsPerSession: null });
@@ -161,6 +161,39 @@ test("shows a muted guidance preview when the row is collapsed", async () => {
   const preview = container.querySelector<HTMLElement>(".swi-roster-guidance-preview");
   expect(preview?.textContent).toBe("Use for independent review");
   expect(preview?.getAttribute("title")).toBe("Use for independent review");
+});
+
+test("renders a clean prepopulated five-row roster with complete resting controls and library state", async () => {
+  roster = [
+    { model: "a-1", guidance: "Use for independent review" },
+    { model: "a-2" },
+    { model: "a-3" },
+    { model: "a-4" },
+    { model: "a-5" },
+  ];
+  await mount();
+
+  expect(container.querySelectorAll(".swi-roster-grip")).toHaveLength(5);
+  expect(Array.from(container.querySelectorAll(".swi-roster-rank"), node => node.textContent?.trim())).toEqual([
+    "1", "2", "3", "4", "5",
+  ]);
+  expect(Array.from(container.querySelectorAll(".swi-roster-name"), node => node.textContent?.trim())).toEqual([
+    "a-1", "a-2", "a-3", "a-4", "a-5",
+  ]);
+  expect(guidanceButton("a-1").textContent).toContain("Edit guidance");
+  expect(guidanceButton("a-2").textContent).toContain("Add guidance");
+  expect(container.querySelectorAll(".swi-roster-arrow")).toHaveLength(10);
+  expect(container.querySelectorAll(".swi-roster-remove")).toHaveLength(5);
+  expect((container.querySelector('[aria-label="Move a-1 up"]') as HTMLButtonElement).disabled).toBe(true);
+  expect((container.querySelector('[aria-label="Move a-5 down"]') as HTMLButtonElement).disabled).toBe(true);
+
+  expect(container.querySelectorAll(".swi-library-row--selected")).toHaveLength(5);
+  expect(Array.from(container.querySelectorAll(".swi-library-priority"), node => node.textContent?.trim())).toEqual([
+    "#1", "#2", "#3", "#4", "#5",
+  ]);
+  const addSixth = container.querySelector('[aria-label="Add a-6 to configured roster"]') as HTMLButtonElement;
+  expect(addSixth.disabled).toBe(true);
+  expect(saveButton().disabled).toBe(true);
 });
 
 test("trims whitespace-only guidance out of dirty state", async () => {
