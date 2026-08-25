@@ -56,7 +56,25 @@ describe("buffered bridge terminal handling", () => {
       type: "function_call",
       call_id: "call_1",
       status: "incomplete",
+      arguments: '{"code":"tru',
     }));
+  });
+
+  test("terminal-less open tool-search call preserves truncated arguments", () => {
+    const response = buildResponseJSON([
+      { type: "tool_call_start", id: "search_1", name: "tool_search" },
+      { type: "tool_call_delta", arguments: '{"query":"repo' },
+    ], "m", { toolSearchToolNames: new Set(["tool_search"]) });
+
+    expect(response.status).toBe("incomplete");
+    expect(outputOf(response)).toContainEqual(expect.objectContaining({
+      type: "function_call",
+      call_id: "search_1",
+      name: "tool_search",
+      status: "incomplete",
+      arguments: '{"query":"repo',
+    }));
+    expect(outputOf(response).some(item => item.type === "tool_search_call")).toBe(false);
   });
 
   test("streaming terminal-less output emits only response.incomplete", async () => {

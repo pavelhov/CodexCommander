@@ -1563,11 +1563,21 @@ function buildResponseJSONWithBudget(
     const ns = mapped?.namespace;
     const toolSearch = options?.toolSearchToolNames?.has(realName) ?? false;
     const freeform = !toolSearch && (options?.freeformToolNames?.has(realName) ?? false);
-    if (toolSearch) {
+    if (toolSearch && status === "completed") {
       pushOutput({
         type: "tool_search_call", id: `tsc_${uuid()}`,
         call_id: currentToolCallId, execution: "client",
         arguments: parseArgsObj(currentToolCallArgs), status,
+      });
+    } else if (toolSearch) {
+      // Responses tool_search_call.arguments is an object, so it cannot carry a truncated
+      // JSON buffer without silently replacing evidence with {}. Preserve incomplete raw bytes
+      // in the API-valid function_call.arguments string; completed tool_search_call output above
+      // keeps its existing parsed representation.
+      pushOutput({
+        type: "function_call", id: `fc_${uuid()}`,
+        call_id: currentToolCallId, name: realName,
+        arguments: currentToolCallArgs || "{}", status,
       });
     } else if (freeform) {
       pushOutput({
