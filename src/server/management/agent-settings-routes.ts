@@ -12,7 +12,12 @@ import { resetCodexAppServerCatalogStateCache } from "../../codex/app-server-pro
 import { loadConfig, multiAgentGuidanceEnabled, mutatePersistedConfig, saveConfigPreservingClaudeCode, subagentDefaultSyncEffective } from "../../config";
 
 import { routedSlug } from "../../providers/slug-codec";
-import { mergeLegacyRosterWrite, subagentRosterModels } from "../../codex/subagent-roster";
+import {
+  canonicalSubagentRoster,
+  mergeLegacyRosterWrite,
+  normalizeSubagentRoster,
+  subagentRosterModels,
+} from "../../codex/subagent-roster";
 
 import type { CodexCommanderClaudeCodeConfig, CodexCommanderConfig } from "../../types";
 
@@ -769,6 +774,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   if (url.pathname === "/api/subagent-models" && req.method === "GET") {
     const rosterDesired = currentCatalogDesired();
     const rosterConfig = rosterDesired.config;
+    const roster = canonicalSubagentRoster(rosterConfig.subagentModels ?? []);
     const models = await fetchAllModels(rosterConfig);
     const disabled = new Set(rosterConfig.disabledModels ?? []);
     // Native gpt (passthrough) are also valid subagent picks — they're picker-visible models in the
@@ -778,7 +784,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       .filter(m => !disabled.has(catalogModelSlug(m)))
       .map(catalogModelSlug))];
     const available = [
-      ...listCatalogNativeSlugs().filter(ns => !disabled.has(ns)),
+      ...(deps.visibleNativeSlugs ?? listCatalogNativeSlugs)(rosterConfig).filter(ns => !disabled.has(ns)),
       ...visibleRouted,
     ];
     // #857: let CLI/GUI show when a running Codex app-server keeps an older
@@ -793,7 +799,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       deps.codexRoutingKindForActivation?.(),
     );
     const response = jsonResponse({
-      chosen: subagentRosterModels(rosterConfig.subagentModels),
+      chosen: subagentRosterModels(roster),
+      roster,
       available,
       catalogState,
       advertised: activation.catalog.advertised,
@@ -804,32 +811,57 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     return response;
   }
   if (url.pathname === "/api/subagent-models" && req.method === "PUT") {
-    let body: { models?: unknown };
+    let body: Record<string, unknown>;
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
-    if (!Array.isArray(body.models)) return jsonResponse({ error: "models must be an array" }, 400);
-    if (body.models.length > 5) return jsonResponse({ error: "models must contain at most five selectors" }, 400);
-    const chosen = body.models;
-    if (chosen.some(model => typeof model !== "string" || model.trim().length === 0 || !isCanonicalPersistedModelSelector(model.trim()))) {
-      return jsonResponse({ error: "models must contain canonical selectors" }, 400);
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return jsonResponse({ error: "subagent roster request must be an object" }, 400);
     }
-    const canonicalChosen = chosen.map(model => (model as string).trim());
-    if (new Set(canonicalChosen).size !== canonicalChosen.length) {
-      return jsonResponse({ error: "models must not contain duplicate selectors" }, 400);
+    const hasModels = Object.prototype.hasOwnProperty.call(body, "models");
+    const hasRoster = Object.prototype.hasOwnProperty.call(body, "roster");
+    if (hasModels === hasRoster || Object.keys(body).some(key => key !== "models" && key !== "roster")) {
+      return jsonResponse({ error: "subagent roster request must contain exactly one of models or roster" }, 400);
+    }
+
+    let canonicalChosen: string[] | undefined;
+    let requestedRoster: ReturnType<typeof canonicalSubagentRoster> | undefined;
+    if (hasModels) {
+      if (!Array.isArray(body.models)) return jsonResponse({ error: "models must be an array" }, 400);
+      if (body.models.length > 5) return jsonResponse({ error: "models must contain at most five selectors" }, 400);
+      if (body.models.some(model => typeof model !== "string" || model.trim().length === 0 || !isCanonicalPersistedModelSelector(model.trim()))) {
+        return jsonResponse({ error: "models must contain canonical selectors" }, 400);
+      }
+      canonicalChosen = body.models.map(model => (model as string).trim());
+      if (new Set(canonicalChosen).size !== canonicalChosen.length) {
+        return jsonResponse({ error: "models must not contain duplicate selectors" }, 400);
+      }
+    } else {
+      if (!Array.isArray(body.roster) || body.roster.some(entry => !entry || typeof entry !== "object" || Array.isArray(entry))) {
+        return jsonResponse({ error: "roster must be an array of objects" }, 400);
+      }
+      try {
+        requestedRoster = normalizeSubagentRoster(body.roster);
+      } catch (error) {
+        return jsonResponse({ error: error instanceof Error ? error.message : "invalid subagent roster" }, 400);
+      }
     }
     return withAgentSettingsLifecycleAuthority(
       deps.proxyStopLifecycle?.acquireAuthority,
       async () => {
+    let previousRoster: ReturnType<typeof canonicalSubagentRoster>;
+    let persistedRoster: ReturnType<typeof canonicalSubagentRoster>;
     if (deps.saveConfigPreservingClaudeCode) {
-      config.subagentModels = mergeLegacyRosterWrite(config.subagentModels, canonicalChosen);
+      previousRoster = canonicalSubagentRoster(config.subagentModels ?? []);
+      persistedRoster = requestedRoster ?? mergeLegacyRosterWrite(previousRoster, canonicalChosen!);
+      config.subagentModels = persistedRoster;
       deps.saveConfigPreservingClaudeCode(config);
     } else {
       const persisted = mutatePersistedConfig(current => {
-        const previous = subagentRosterModels(current.subagentModels);
-        const nextRoster = mergeLegacyRosterWrite(current.subagentModels, canonicalChosen);
-        const changed = previous.length !== canonicalChosen.length
-          || previous.some((model, index) => model !== canonicalChosen[index]);
+        const previous = canonicalSubagentRoster(current.subagentModels ?? []);
+        const nextRoster = requestedRoster ?? mergeLegacyRosterWrite(previous, canonicalChosen!);
         current.subagentModels = nextRoster;
-        return { changed, value: nextRoster };
+        // A roster write is the compatibility migration point for legacy string
+        // arrays. Persist even when its canonical semantic value is unchanged.
+        return { changed: true, value: { previous, next: nextRoster } };
       });
       if (persisted.status === "unavailable") {
         const status = persisted.reason === "conflict" ? 503 : 409;
@@ -837,21 +869,29 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         if (status === 503) response.headers.set("Retry-After", "1");
         return response;
       }
-      config.subagentModels = [...persisted.value];
+      previousRoster = persisted.value.previous;
+      persistedRoster = persisted.value.next;
+      config.subagentModels = persistedRoster;
     }
     // The field-scoped mutation rebases onto the newest persisted config. Build
     // from that same authority, not the server's older whole-config snapshot.
-    const catalogDesired = currentCatalogDesired();
-    const catalogRefresh = await convergeCodexCatalog(catalogDesired.config);
-    await syncClaudeAgentDefsBestEffort();
-    await autoApplyDesktopBestEffort();
-    resetCatalogWorkerObservation();
+    const catalogChanged = subagentRosterModels(previousRoster).length !== subagentRosterModels(persistedRoster).length
+      || subagentRosterModels(previousRoster).some((model, index) => model !== subagentRosterModels(persistedRoster)[index]);
+    const catalogRefresh = catalogChanged
+      ? await convergeCodexCatalog(currentCatalogDesired().config)
+      : undefined;
+    if (catalogChanged) {
+      await syncClaudeAgentDefsBestEffort();
+      await autoApplyDesktopBestEffort();
+      resetCatalogWorkerObservation();
+    }
     const { catalogState, activationWorkers } = collectCatalogWorkerObservation();
     const responseDesired = currentCatalogDesired();
     const responseConfig = responseDesired.config;
-    const currentChosen = subagentRosterModels(responseConfig.subagentModels);
-    const superseded = currentChosen.length !== canonicalChosen.length
-      || currentChosen.some((model, index) => model !== canonicalChosen[index]);
+    const currentRoster = canonicalSubagentRoster(responseConfig.subagentModels ?? []);
+    const currentChosen = subagentRosterModels(currentRoster);
+    const superseded = currentRoster.length !== persistedRoster.length
+      || currentRoster.some((entry, index) => entry.model !== persistedRoster[index].model || entry.guidance !== persistedRoster[index].guidance);
     const activation = inspectCodexCatalogActivation(
       responseConfig,
       activationWorkers,
@@ -863,8 +903,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     return jsonResponse({
       ok: true,
       saved: true,
-      ...(superseded ? { superseded: true, requested: canonicalChosen } : {}),
+      ...(superseded ? { superseded: true, requested: persistedRoster } : {}),
       applied: currentChosen,
+      roster: currentRoster,
       catalogRefresh,
       catalogState,
       advertised: activation.catalog.advertised,

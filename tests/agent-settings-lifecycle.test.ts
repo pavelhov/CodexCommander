@@ -255,3 +255,137 @@ describe("agent settings lifecycle authority", () => {
     });
   }
 });
+
+function rosterRequest(body?: unknown): Request {
+  return new Request("http://127.0.0.1/api/subagent-models", {
+    method: body === undefined ? "GET" : "PUT",
+    headers: { Host: "127.0.0.1", ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+function rosterApiDeps(events: string[]): ManagementApiDeps {
+  return {
+    saveConfigPreservingClaudeCode: () => { events.push("save"); },
+    createManagementConvergeCodex: catalogConvergenceFactory(() => { events.push("converge"); }),
+    syncClaudeAgentDefsBestEffort: () => { events.push("sync-claude-agents"); },
+    fetchAllModels: async () => [],
+    visibleNativeSlugs: () => [],
+    resetCodexAppServerCatalogStateCache: () => {},
+    collectCodexAppServerCatalogState: () => ({
+      state: "not_running",
+      processes: [],
+      catalogMtimeMs: null,
+    }),
+    catalogArtifactProofForActivation: () => "not-required",
+    codexRoutingKindForActivation: () => "native",
+  };
+}
+
+async function putSubagentModels(
+  config: CodexCommanderConfig,
+  deps: ManagementApiDeps,
+  body: unknown,
+): Promise<Response> {
+  const request = rosterRequest(body);
+  return (await handleManagementAPI(request, new URL(request.url), config, deps))!;
+}
+
+async function getSubagentModels(
+  config: CodexCommanderConfig,
+  deps: ManagementApiDeps,
+): Promise<Record<string, unknown>> {
+  const request = rosterRequest();
+  const response = await handleManagementAPI(request, new URL(request.url), config, deps);
+  expect(response?.status).toBe(200);
+  return await response!.json() as Record<string, unknown>;
+}
+
+describe("subagent roster management API", () => {
+  test("PUT roster round-trips guidance while GET retains the chosen id projection", async () => {
+    const config = getDefaultConfig();
+    const events: string[] = [];
+    const deps = rosterApiDeps(events);
+
+    const response = await putSubagentModels(config, deps, {
+      roster: [
+        { model: "xai/grok-4.6", guidance: "Use for independent review" },
+        { model: "gpt-5.6-luna" },
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as Record<string, unknown>;
+    expect(body.applied).toEqual(["xai/grok-4.6", "gpt-5.6-luna"]);
+    expect(body.roster).toEqual([
+      { model: "xai/grok-4.6", guidance: "Use for independent review" },
+      { model: "gpt-5.6-luna" },
+    ]);
+    const got = await getSubagentModels(config, deps);
+    expect(got.chosen).toEqual(["xai/grok-4.6", "gpt-5.6-luna"]);
+    expect(got.roster).toEqual([
+      { model: "xai/grok-4.6", guidance: "Use for independent review" },
+      { model: "gpt-5.6-luna" },
+    ]);
+  });
+
+  test("PUT models preserves guidance while changing roster order", async () => {
+    const config = getDefaultConfig();
+    const events: string[] = [];
+    const deps = rosterApiDeps(events);
+    await putSubagentModels(config, deps, {
+      roster: [
+        { model: "xai/grok-4.6", guidance: "Review" },
+        { model: "gpt-5.6-luna" },
+      ],
+    });
+
+    const response = await putSubagentModels(config, deps, {
+      models: ["gpt-5.6-luna", "xai/grok-4.6"],
+    });
+
+    expect(response.status).toBe(200);
+    expect((await response.json() as Record<string, unknown>).roster).toEqual([
+      { model: "gpt-5.6-luna" },
+      { model: "xai/grok-4.6", guidance: "Review" },
+    ]);
+  });
+
+  test("guidance-only PUT persists without catalog convergence or Claude sync", async () => {
+    const config = getDefaultConfig();
+    const events: string[] = [];
+    const deps = rosterApiDeps(events);
+    await putSubagentModels(config, deps, { models: ["gpt-5.6-luna"] });
+    events.length = 0;
+
+    const response = await putSubagentModels(config, deps, {
+      roster: [{ model: "gpt-5.6-luna", guidance: "Fast mechanical work" }],
+    });
+
+    expect(response.status).toBe(200);
+    expect(events).toEqual(["save"]);
+    expect((await response.json() as Record<string, unknown>).roster).toEqual([
+      { model: "gpt-5.6-luna", guidance: "Fast mechanical work" },
+    ]);
+  });
+
+  test("PUT rejects ambiguous or unsafe roster payloads", async () => {
+    const config = getDefaultConfig();
+    const deps = rosterApiDeps([]);
+    const cases: readonly [string, unknown][] = [
+      ["both selector forms", { models: ["gpt-5.6-luna"], roster: [{ model: "gpt-5.6-luna" }] }],
+      ["missing selector form", {}],
+      ["more than five entries", { roster: ["a", "b", "c", "d", "e", "f"].map(model => ({ model })) }],
+      ["duplicate models", { roster: [{ model: "gpt-5.6-luna" }, { model: "gpt-5.6-luna" }] }],
+      ["non-canonical selector", { roster: [{ model: "openai/default/gpt-5.6-luna" }] }],
+      ["tag guidance", { roster: [{ model: "gpt-5.6-luna", guidance: "<tag>" }] }],
+      ["token-shaped guidance", { roster: [{ model: "gpt-5.6-luna", guidance: "sk-abcdefgh" }] }],
+    ];
+
+    for (const [, body] of cases) {
+      const response = await putSubagentModels(config, deps, body);
+      expect(response.status).toBe(400);
+      expect((await response.json() as { error: string }).error).toContain("roster");
+    }
+  });
+});
