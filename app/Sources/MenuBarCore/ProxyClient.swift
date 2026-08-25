@@ -87,6 +87,10 @@ private struct GuiLaunchTicketResponse: Decodable {
 
 private let attestationChallengeHeader = "x-codexcommander-attestation-challenge"
 private let attestationProofHeader = "x-codexcommander-attestation-proof"
+private let attestationMetadataProofHeader = "x-codexcommander-attestation-metadata-proof"
+private let runtimeVersionHeader = "x-codexcommander-runtime-version"
+private let runtimeGenerationHeader = "x-codexcommander-lifecycle-generation"
+private let lifecycleLeaseHeader = "x-codexcommander-lifecycle-lock-lease"
 private let attestedHealthBodyLimit = 16 * 1024
 
 private func base64URL(_ data: Data) -> String {
@@ -125,6 +129,42 @@ private func validAttestationProof(
         authenticating: Data(payload.utf8),
         using: key
     )
+}
+
+private func validMetadataAttestationProof(
+    _ response: HTTPURLResponse,
+    challenge: String,
+    runtime: ProxyRuntimeAttestation
+) -> Bool {
+    guard runtime.attestationProtocol == 2,
+          let proof = response.value(forHTTPHeaderField: attestationMetadataProofHeader),
+          let bytes = decodeBase64URL(proof),
+          let version = response.value(forHTTPHeaderField: runtimeVersionHeader),
+          let generation = response.value(forHTTPHeaderField: runtimeGenerationHeader),
+          generation.range(of: "^(0|[1-9][0-9]*)$", options: .regularExpression) != nil,
+          let parsedGeneration = Int(generation),
+          parsedGeneration >= 0,
+          parsedGeneration <= 9_007_199_254_740_991,
+          String(parsedGeneration) == generation
+    else { return false }
+    let lease = response.value(forHTTPHeaderField: lifecycleLeaseHeader) == "1" ? "1" : "0"
+    let payload = "codexcommander-local-management-v2\n\(challenge)\n\(runtime.pid)\n\(runtime.port)\n\(version)\n\(generation)\n\(lease)"
+    let key = SymmetricKey(data: Data(runtime.secret.utf8))
+    return HMAC<SHA256>.isValidAuthenticationCode(
+        bytes,
+        authenticating: Data(payload.utf8),
+        using: key
+    )
+}
+
+private func validRuntimeAttestation(
+    _ response: HTTPURLResponse,
+    challenge: String,
+    runtime: ProxyRuntimeAttestation
+) -> Bool {
+    runtime.attestationProtocol == 2
+        ? validMetadataAttestationProof(response, challenge: challenge, runtime: runtime)
+        : validAttestationProof(response.value(forHTTPHeaderField: attestationProofHeader), challenge: challenge, runtime: runtime)
 }
 
 public struct RestartAccepted: Decodable, Equatable, Sendable {
@@ -209,7 +249,8 @@ public actor ProxyClient {
         endpoint: ProxyEndpoint,
         session: URLSession? = nil,
         credentials: CredentialStore,
-        attestationSecret: String?
+        attestationSecret: String?,
+        attestationProtocol: Int? = nil
     ) {
         let credential = credentials.loadAPIKey()
         let fixed = ProxyInstallation(
@@ -223,7 +264,8 @@ public actor ProxyClient {
                     host: endpoint.host,
                     port: endpoint.port,
                     pid: pid,
-                    secret: secret
+                    secret: secret,
+                    attestationProtocol: attestationProtocol
                 )
             }
         )
@@ -566,11 +608,7 @@ public actor ProxyClient {
               !identity.version.isEmpty,
               identity.pid == runtime.pid,
               identity.port == runtime.port,
-              validAttestationProof(
-                response.value(forHTTPHeaderField: attestationProofHeader),
-                challenge: challenge,
-                runtime: runtime
-              )
+              validRuntimeAttestation(response, challenge: challenge, runtime: runtime)
         else { throw ProxyError.identityMismatch }
         return identity
     }
@@ -608,11 +646,7 @@ public actor ProxyClient {
                 .lowercased()
             guard http.statusCode == 200,
                   encoding == nil || encoding == "identity",
-                  validAttestationProof(
-                    http.value(forHTTPHeaderField: attestationProofHeader),
-                    challenge: challenge,
-                    runtime: runtime
-                  )
+                  validRuntimeAttestation(http, challenge: challenge, runtime: runtime)
             else {
                 bytes.task.cancel()
                 throw ProxyError.identityMismatch

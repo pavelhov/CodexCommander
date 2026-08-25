@@ -81,17 +81,20 @@ public struct ProxyRuntimeAttestation: Equatable, Sendable {
     public let port: Int
     public let pid: Int
     let secret: String
+    public let attestationProtocol: Int?
 
-    public init?(host: String, port: Int, pid: Int, secret: String) {
+    public init?(host: String, port: Int, pid: Int, secret: String, attestationProtocol: Int? = nil) {
         guard let normalized = ProxyEndpoint.normalizedLoopbackHost(host),
               ProxyEndpoint.validPorts.contains(port),
               pid > 0,
+              attestationProtocol == nil || attestationProtocol == 2,
               secret.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil
         else { return nil }
         self.host = normalized
         self.port = port
         self.pid = pid
         self.secret = secret
+        self.attestationProtocol = attestationProtocol
     }
 }
 
@@ -142,12 +145,13 @@ private struct RuntimePortRecord: Decodable {
     let port: Int
     let hostname: String?
     let attestationSecret: String?
+    let attestationProtocol: Int?
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: RuntimePortCodingKey.self)
         let actualKeys = Set(container.allKeys.map(\.stringValue))
         let requiredKeys: Set<String> = ["schemaVersion", "pid", "port"]
-        let allowedKeys = requiredKeys.union(["hostname", "attestationSecret"])
+        let allowedKeys = requiredKeys.union(["hostname", "attestationSecret", "attestationProtocol"])
         guard requiredKeys.isSubset(of: actualKeys), actualKeys.isSubset(of: allowedKeys) else {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: decoder.codingPath, debugDescription: "invalid runtime-port keys")
@@ -163,6 +167,9 @@ private struct RuntimePortRecord: Decodable {
         attestationSecret = actualKeys.contains("attestationSecret")
             ? try container.decode(String.self, forKey: RuntimePortCodingKey("attestationSecret"))
             : nil
+        attestationProtocol = actualKeys.contains("attestationProtocol")
+            ? try container.decode(Int.self, forKey: RuntimePortCodingKey("attestationProtocol"))
+            : nil
 
         guard schemaVersion == 1 else {
             throw DecodingError.dataCorrupted(
@@ -176,6 +183,11 @@ private struct RuntimePortRecord: Decodable {
            ) == nil {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: decoder.codingPath, debugDescription: "invalid runtime-port attestation")
+            )
+        }
+        if let attestationProtocol, attestationProtocol != 2 {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "invalid runtime-port attestation protocol")
             )
         }
     }
@@ -316,7 +328,8 @@ public enum ProxyDiscovery {
                     host: record.hostname ?? "127.0.0.1",
                     port: record.port,
                     pid: record.pid,
-                    secret: $0
+                    secret: $0,
+                    attestationProtocol: record.attestationProtocol
                 )
             }
         } catch SecureReadError.missing {

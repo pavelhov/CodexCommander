@@ -33,7 +33,7 @@ describe("Grok fence lifecycle wiring", () => {
     expect(syncFn).toContain("live.hostname ? { hostname: live.hostname }");
   });
 
-  test("handleStop admits service ownership, restores routing, then terminates", () => {
+  test("handleStop restores native routing before service admission and termination", () => {
     const serviceStopFn = sliceFn(LIFECYCLE_SOURCE, "function stopLifecycleService(", "interface ManagedStateRestoreResult");
     const stopFn = sliceFn(LIFECYCLE_SOURCE, "export async function stopProxyLifecycle(", "export async function restartProxyLifecycle(");
 
@@ -44,8 +44,9 @@ describe("Grok fence lifecycle wiring", () => {
     const serviceAt = stopFn.indexOf("stopLifecycleService(logger, admission.installed");
     const terminateAt = stopFn.indexOf("await (io.stopProxy ?? stopProxy)(pid,");
     expect(admissionAt).toBeGreaterThan(-1);
-    expect(restoreAt).toBeGreaterThan(admissionAt);
-    expect(serviceAt).toBeGreaterThan(restoreAt);
+    expect(restoreAt).toBeGreaterThan(-1);
+    expect(admissionAt).toBeGreaterThan(restoreAt);
+    expect(serviceAt).toBeGreaterThan(admissionAt);
     expect(terminateAt).toBeGreaterThan(serviceAt);
     expect(stopFn.slice(restoreAt, serviceAt)).toContain("if (!restored.ok)");
     expect(stopFn.slice(restoreAt, serviceAt)).toContain("CodexCommander stayed running");
@@ -65,11 +66,10 @@ describe("Grok fence lifecycle wiring", () => {
     const bareCatchAfterStopProxy = /await stopProxy\([^)]*\);[\s\S]{0,400}?\}\s*catch\s*\{/;
     expect(stopFn).not.toMatch(bareCatchAfterStopProxy);
 
-    // Both proxy-stop call sites (tracked pid, and the orphan-recovery pid) bind the error
-    // and echo its message.
+    // Every proxy-stop error path binds the error and echoes its message.
     const detailEchoes = stopFn.match(/const detail = error instanceof Error \? error\.message : String\(error\);/g);
-    expect(detailEchoes).toHaveLength(2);
-    expect(stopFn.match(/if \(detail\) logger\.error\(detail\);/g)).toHaveLength(2);
+    expect(detailEchoes).toHaveLength(3);
+    expect(stopFn.match(/if \(detail\) logger\.error\(detail\);/g)).toHaveLength(3);
   });
 
   test("handleStop returns its outcome so restart and the tray can react", () => {

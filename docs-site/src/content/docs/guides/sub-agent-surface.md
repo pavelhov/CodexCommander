@@ -112,10 +112,9 @@ understands string arrays fails when it reads that configuration. There are at m
 Guidance is optional, sanitized operator text. Empty text is omitted; nonempty text is limited to 160
 Unicode code points. Treat it as untrusted advisory context, not as an effort, quota, role, or
 fallback control. On eligible V2 turns CodexCommander first applies live picker, surface, route, and
-encrypted-task compatibility filters, then adds surviving row guidance to the developer message. It
-shares the built-in 700-character V2 budget, so annotations may be omitted when the core instructions
-need the space. Row guidance is not injected on V1 and is never copied into the managed skill or
-global `AGENTS.md` policy.
+encrypted-task compatibility filters, then adds every surviving row annotation to the built-in
+developer message without an aggregate character budget. Row guidance is not injected on V1 and is
+never copied into the managed skill or global `AGENTS.md` policy.
 
 Custom `injectionPrompt` text can use all four placeholders:
 
@@ -126,11 +125,10 @@ Custom `injectionPrompt` text can use all four placeholders:
 | `{{roster}}` | The resolved picker-visible, surface-compatible roster |
 | `{{fallback}}` | The configured global fallback guidance |
 
-The built-in V2 guidance has a 700-character budget. If it would exceed the budget, CodexCommander drops
-the roster first rather than truncating the core spawn instructions. Built-in guidance fires only
-when a preferred model, eligible roster, or fallback chain resolves. A configured `injectionModel`
-is sufficient to render a custom prompt; if a bare value cannot resolve uniquely, `{{model}}`
-expands to an empty string.
+Built-in V2 guidance includes every accepted roster annotation that survives the compatibility
+filters. Built-in guidance fires only when a preferred model, eligible roster, or fallback chain
+resolves. A configured `injectionModel` is sufficient to render a custom prompt; if a bare value
+cannot resolve uniquely, `{{model}}` expands to an empty string.
 
 On V1, CodexCommander injects only the upstream-style proactive delegation guidance at `max` or `ultra`
 effort. It does not add a preferred model, roster, fallback list, or custom prompt on V1.

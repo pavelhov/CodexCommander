@@ -55,6 +55,11 @@ enum DiscoverySuite {
                     #"{"schemaVersion":1,"pid":4242,"port":18181,"attestationSecret":"\#(validSecret)"}"#
                 )
                 t.equal(try discover(root).endpoint.port, 18181)
+                try writeRuntimeJSON(
+                    root,
+                    #"{"schemaVersion":1,"pid":4242,"port":18181,"attestationSecret":"\#(validSecret)","attestationProtocol":2}"#
+                )
+                t.equal(try discover(root).runtimeAttestation?.attestationProtocol, 2)
 
                 let invalidRecords = [
                     #"{"pid":4242,"port":18181}"#,
@@ -62,6 +67,8 @@ enum DiscoverySuite {
                     #"{"schemaVersion":1,"pid":4242,"port":18181,"legacyPort":18181}"#,
                     #"{"schemaVersion":1,"pid":4242,"port":18181,"hostname":null}"#,
                     #"{"schemaVersion":1,"pid":4242,"port":18181,"attestationSecret":"short"}"#,
+                    #"{"schemaVersion":1,"pid":4242,"port":18181,"attestationSecret":"\#(validSecret)","attestationProtocol":3}"#,
+                    #"{"schemaVersion":1,"pid":4242,"port":18181,"attestationSecret":"\#(validSecret)","attestationProtocol":"2"}"#,
                 ]
                 for record in invalidRecords {
                     try writeRuntimeJSON(root, record)

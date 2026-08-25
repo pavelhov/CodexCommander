@@ -153,6 +153,25 @@ and `codex-code-mode-host` matches, and verifies which old workers exited. The C
 menu app remain running. The current companion does not defer this operation until idle; the confirmation uses
 fresh request activity only to explain interruption risk, and **Later** leaves the update pending.
 
+The macOS companion also performs one bounded stale-runtime recovery before **Ensure**, explicit
+**Start**, or **Route Codex Through Proxy**. It replaces only a runtime-record-backed PID that proves
+the local HMAC attestation and advertises an older package version or lifecycle compatibility
+generation. It first restores native routing, stops the exact attested predecessor, starts the
+current bundled runtime, synchronizes the catalog, and restores Codex routing only when it was
+previously ON or the chosen action explicitly requests it. Ensure preserves an intentional OFF
+state. A missing record, failed attestation, foreign listener, or newer runtime is never signaled;
+an attested predecessor that omits the newer metadata is treated as stale for this compatibility
+boundary. A failed recovery remains native and returns a structured lifecycle failure.
+Current foreground records carry `attestationProtocol: 2`; that marker requires a metadata-bound
+health proof, so present version/generation headers cannot be stripped or altered into a legacy
+candidate. Legacy records omit the marker and are accepted only with both metadata headers absent.
+
+The process-control fallback is similarly narrow. A proxy `409` refusal is absolute by default;
+only the shared Stop lifecycle may permit its already-attested exact-identity SIGTERM/SIGKILL ladder,
+and only after native routing was verified and the service supervisor was independently stopped or
+verified absent. PID, UID/owner, argv hash, birth identity, and protected runtime-record fences are
+rechecked before every signal.
+
 ## Providers and adapters
 
 | Path | Responsibility |

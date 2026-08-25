@@ -969,29 +969,7 @@ describe("multiAgentGuidanceText", () => {
     expect(await multiAgentGuidanceText(parsedFixture({ reasoning: "max", tools: v1Tools }))).not.toBeNull();
   });
 
-  test("v2 body stays within the 700-char budget with a full 5-model roster", async () => {
-    const dir = codexHomeFixture(V2_ON);
-    catalogFixture(dir, [
-      { slug: "gpt-5.5", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
-      { slug: "opencode-go/glm-5.2", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
-      { slug: "anthropic/claude-opus-4-6", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
-      { slug: "gpt-5.6-sol", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
-      { slug: "gpt-5.6-terra", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
-    ]);
-    const text = await multiAgentGuidanceText(
-      parsedFixture({ reasoning: "high", tools: [{ name: "spawn_agent" }] }),
-      {
-        injectionModel: "gpt-5.6-sol",
-        injectionEffort: "xhigh",
-        subagentModels: ["gpt-5.5", "opencode-go/glm-5.2", "anthropic/claude-opus-4-6", "gpt-5.6-sol", "gpt-5.6-terra"],
-      },
-    );
-    const body = text!.replace(/^<multi_agent_mode>/, "").replace(/<\/multi_agent_mode>$/, "");
-    expect(body.length).toBeLessThanOrEqual(700);
-    expect(body).toContain("Available models"); // roster fits inside the budget
-  });
-
-  test("700-character budget drops notes before dropping spawn-contract text", async () => {
+  test("built-in v2 guidance includes all five accepted 160-code-point roster notes", async () => {
     const dir = codexHomeFixture(V2_ON);
     const models = [
       "gpt-5.5",
@@ -1004,22 +982,22 @@ describe("multiAgentGuidanceText", () => {
       slug,
       efforts: ["low", "medium", "high", "xhigh"],
     })));
-    const note = "N".repeat(160);
+    const notes = ["A", "B", "C", "D", "E"].map(character => character.repeat(160));
     const text = await multiAgentGuidanceText(
       parsedFixture({ tools: [{ name: "spawn_agent" }] }),
       {
         injectionModel: "gpt-5.6-terra",
         injectionEffort: "xhigh",
-        subagentRoster: models.map(model => ({ model, guidance: note })),
+        subagentRoster: models.map((model, index) => ({ model, guidance: notes[index] })),
       },
     );
 
     expect(text).toContain("fork_turns");
-    expect(text).toContain('"gpt-5.5"');
-    expect(text).not.toContain(note);
-    expect(String(text).length).toBeLessThanOrEqual(
-      700 + "<multi_agent_mode></multi_agent_mode>".length,
-    );
+    expect(text).toContain(`"gpt-5.5" (low/medium/high/xhigh) — ${notes[0]}`);
+    expect(text).toContain(`"gpt-5.6-sol" (low/medium/high/xhigh) — ${notes[1]}`);
+    expect(text).toContain(`"gpt-5.6-terra" (low/medium/high/xhigh) — ${notes[2]}`);
+    expect(text).toContain(`"gpt-5.6-luna" (low/medium/high/xhigh) — ${notes[3]}`);
+    expect(text).toContain(`"gpt-5.4-mini" (low/medium/high/xhigh) — ${notes[4]}`);
   });
 
   test("false suppresses v1 top-tier guidance", async () => {

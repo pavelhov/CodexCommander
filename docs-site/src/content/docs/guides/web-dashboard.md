@@ -190,8 +190,8 @@ than overwritten, so they may continue to override the requested defaults.
 
 Per-row roster guidance is separate live V2 developer text. It is optional sanitized operator text
 (empty omitted, at most 160 Unicode code points), advisory and untrusted rather than an effort, quota,
-role, or fallback control. The proxy injects it only after live V2 compatibility filters and within the
-existing 700-character guidance budget; it is not copied into the managed skill or `AGENTS.md`.
+role, or fallback control. The built-in developer message includes every accepted annotation that
+survives the live V2 compatibility filters; it is not copied into the managed skill or `AGENTS.md`.
 
 :::caution
 Neither control is a proxy-side cross-model spawn router. CodexCommander guidance asks Codex to pass

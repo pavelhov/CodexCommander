@@ -99,12 +99,14 @@ export async function performMacOSLifecycleAction(
         action,
         honorAutoStart: false,
         ensureCompanion: false,
+        replaceStaleRuntime: true,
       });
     case "start":
       return ensure({
         action,
         honorAutoStart: false,
         ensureCompanion: false,
+        replaceStaleRuntime: true,
         io: { prepareStart: deps.prepareMacOSAppStart ?? prepareMacOSAppStart },
       });
     case "stop":
@@ -114,7 +116,7 @@ export async function performMacOSLifecycleAction(
     case "restore-native":
       return restoreNativeRoutingLifecycle();
     case "restore-back":
-      return restoreBackRoutingLifecycle();
+      return restoreBackRoutingLifecycle({ replaceStaleRuntime: true });
     case APPLY_CODEX_CATALOG_ACTION:
       return applyCodexCatalogForCompanion();
   }

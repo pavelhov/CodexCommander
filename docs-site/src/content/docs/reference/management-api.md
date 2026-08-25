@@ -130,8 +130,8 @@ The roster is ordered and capped at five entries. Each object has a canonical `m
 an optional sanitized `guidance` string. Empty guidance is omitted; nonempty guidance is limited to
 160 Unicode code points. Guidance is advisory, untrusted operator text. It is included only in live
 V2 developer guidance after the current surface, visibility, route, and encrypted-task compatibility
-filters, and it shares the existing 700-character guidance budget. It cannot control effort, quotas,
-roles, or fallback behavior.
+filters. Built-in V2 guidance includes every accepted annotation that survives those filters. It
+cannot control effort, quotas, roles, or fallback behavior.
 
 `PUT /api/subagent-models` accepts exactly one top-level field: either the canonical object form or
 the legacy string form. A guidance-bearing write uses:

@@ -22,7 +22,11 @@ import { shouldSyncCodexOnStart } from "../codex/desired-state";
 import { inspectNativeCodexOwnership } from "../integrations/native/ownership-preflight";
 import { registerCodexCooldownRecoveryProbeWorker } from "../codex/auth-api";
 import { startMemoryWatchdog } from "./memory-watchdog";
-import { PROXY_LIFECYCLE_LEASE_CAPABILITY_HEADER } from "./proxy-start-lock";
+import {
+  advertiseProxyLifecycleLockLease,
+  advertiseProxyRuntimeMetadata,
+  PROXY_LIFECYCLE_COMPATIBILITY_GENERATION,
+} from "./proxy-lifecycle-protocol";
 import {
   reconcileLiveStateStores,
   setLiveStateStoreConfig,
@@ -171,6 +175,7 @@ import {
   AUTH_REQUIRED_MESSAGE,
   ARTIFACT_HTTP_PREFIX,
   ATTESTATION_CHALLENGE_HEADER,
+  ATTESTATION_METADATA_PROOF_HEADER,
   ATTESTATION_PROOF_HEADER,
   HEALTH_SERVICE_ID,
   GUI_LAUNCH_EXCHANGE_PATH,
@@ -185,6 +190,7 @@ import {
   type ManagementAuthState,
 } from "./management-auth";
 import {
+  createLocalAttestationMetadataProof,
   createLocalAttestationProof,
   createLocalAttestationSecret,
 } from "../lib/local-management-attestation";
@@ -680,8 +686,19 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         if (challenge) {
           const proof = createLocalAttestationProof(localAttestationSecret, challenge, process.pid, healthPort);
           if (proof) response.headers.set(ATTESTATION_PROOF_HEADER, proof);
+          const metadataProof = createLocalAttestationMetadataProof(
+            localAttestationSecret,
+            challenge,
+            process.pid,
+            healthPort,
+            VERSION,
+            PROXY_LIFECYCLE_COMPATIBILITY_GENERATION,
+            true,
+          );
+          if (metadataProof) response.headers.set(ATTESTATION_METADATA_PROOF_HEADER, metadataProof);
         }
-        response.headers.set(PROXY_LIFECYCLE_LEASE_CAPABILITY_HEADER, "1");
+        advertiseProxyLifecycleLockLease(response.headers);
+        advertiseProxyRuntimeMetadata(response.headers, VERSION);
         return response;
       }
 

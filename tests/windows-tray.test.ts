@@ -327,7 +327,8 @@ describe("Windows tray packaging and command safety", () => {
     expect(source).toContain('Load-TrayIcon "codexcommander-tray-warning.ico"');
     expect(source).toContain('Load-TrayIcon "codexcommander-tray-offline.ico"');
     expect(source).toContain('$path = Join-Path $CodexCommanderHome "runtime-port.json"');
-    expect(source).toContain('@("schemaVersion", "pid", "port", "hostname", "attestationSecret")');
+    expect(source).toContain('@("schemaVersion", "pid", "port", "hostname", "attestationSecret", "attestationProtocol")');
+    expect(source).toContain('(Test-JsonInteger $value.attestationProtocol) -and [int64]$value.attestationProtocol -eq 2');
     expect(source).toContain("[int64]$value.schemaVersion -ne 1");
     expect(source).toContain('throw "invalid runtime-port schema"');
     expect(source).not.toContain('Join-Path $CodexCommanderHome "config.json"');

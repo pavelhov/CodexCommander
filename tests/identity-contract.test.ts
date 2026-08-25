@@ -16,6 +16,7 @@ describe("CodexCommander identity contract", () => {
       "API_KEY_HEADER",
       "ARTIFACT_HTTP_PREFIX",
       "ATTESTATION_CHALLENGE_HEADER",
+      "ATTESTATION_METADATA_PROOF_HEADER",
       "ATTESTATION_PROOF_HEADER",
       "AUTH_REQUIRED_MESSAGE",
       "BRAND_DISPLAY",

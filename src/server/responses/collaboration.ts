@@ -397,14 +397,7 @@ export async function multiAgentGuidanceText(
         + " — use it unless the user names another.";
     }
     text += fallbackGuidance;
-    const textWithoutRoster = text;
     text += annotatedRoster;
-    if (text.length > V2_GUIDANCE_CHAR_BUDGET && annotatedRoster !== compactRoster) {
-      text = textWithoutRoster + compactRoster;
-    }
-    if (text.length > V2_GUIDANCE_CHAR_BUDGET) {
-      text = textWithoutRoster;
-    }
     return `<multi_agent_mode>${text}</multi_agent_mode>`;
   }
 
@@ -416,8 +409,6 @@ export async function multiAgentGuidanceText(
 }
 
 
-
-export const V2_GUIDANCE_CHAR_BUDGET = 700;
 
 export function applyInjectionPlaceholders(prompt: string, model?: string, effort?: string, roster?: string, fallback?: string): string {
   return prompt

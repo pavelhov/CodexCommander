@@ -2589,6 +2589,8 @@ export type RuntimePortState = {
   hostname?: string;
   /** Per-process proof key; protected by the config directory and never served. */
   attestationSecret?: string;
+  /** Current runtimes require metadata-bound v2 health attestation. */
+  attestationProtocol?: 2;
 };
 
 export type RuntimePortWriteState = Omit<RuntimePortState, "schemaVersion">;
@@ -2596,10 +2598,11 @@ export type RuntimePortWriteState = Omit<RuntimePortState, "schemaVersion">;
 function isValidRuntimePortState(value: unknown): value is RuntimePortState {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const state = value as Record<string, unknown>;
-  const allowedKeys = new Set(["schemaVersion", "pid", "port", "hostname", "attestationSecret"]);
+  const allowedKeys = new Set(["schemaVersion", "pid", "port", "hostname", "attestationSecret", "attestationProtocol"]);
   if (Object.keys(state).some(key => !allowedKeys.has(key))) return false;
   const hostnameOk = state.hostname === undefined || typeof state.hostname === "string";
   const attestationOk = state.attestationSecret === undefined || isLocalAttestationSecret(state.attestationSecret);
+  const protocolOk = state.attestationProtocol === undefined || state.attestationProtocol === 2;
   return state.schemaVersion === 1
     && Number.isSafeInteger(state.pid)
     && Number(state.pid) > 0
@@ -2607,7 +2610,8 @@ function isValidRuntimePortState(value: unknown): value is RuntimePortState {
     && Number(state.port) > 0
     && Number(state.port) <= 65535
     && hostnameOk
-    && attestationOk;
+    && attestationOk
+    && protocolOk;
 }
 
 export function writeRuntimePort(state: RuntimePortWriteState): void {
@@ -2617,6 +2621,7 @@ export function writeRuntimePort(state: RuntimePortWriteState): void {
     port: state.port,
     ...(state.hostname !== undefined ? { hostname: state.hostname } : {}),
     ...(state.attestationSecret !== undefined ? { attestationSecret: state.attestationSecret } : {}),
+    ...(state.attestationProtocol !== undefined ? { attestationProtocol: state.attestationProtocol } : {}),
   };
   if (!isValidRuntimePortState(persisted)) throw new Error("Invalid runtime port state");
   const dir = getConfigDir();

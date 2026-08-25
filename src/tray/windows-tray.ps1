@@ -121,7 +121,7 @@ function Read-ListenTarget {
   try {
     $value = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
     $names = @($value.PSObject.Properties.Name)
-    $allowedNames = @("schemaVersion", "pid", "port", "hostname", "attestationSecret")
+    $allowedNames = @("schemaVersion", "pid", "port", "hostname", "attestationSecret", "attestationProtocol")
     $requiredNames = @("schemaVersion", "pid", "port")
     $hasExactKeys = $names.Count -ge $requiredNames.Count `
       -and @($names | Where-Object { $_ -notin $allowedNames }).Count -eq 0 `
@@ -129,11 +129,14 @@ function Read-ListenTarget {
     $hostnameValid = "hostname" -notin $names -or $value.hostname -is [string]
     $attestationValid = "attestationSecret" -notin $names `
       -or ($value.attestationSecret -is [string] -and $value.attestationSecret -match '^[A-Za-z0-9_-]{43}$')
+    $protocolValid = "attestationProtocol" -notin $names -or (
+      (Test-JsonInteger $value.attestationProtocol) -and [int64]$value.attestationProtocol -eq 2
+    )
     if (-not $hasExactKeys `
       -or -not (Test-JsonInteger $value.schemaVersion) -or [int64]$value.schemaVersion -ne 1 `
       -or -not (Test-JsonInteger $value.pid) -or [int64]$value.pid -le 0 `
       -or -not (Test-JsonInteger $value.port) -or [int64]$value.port -le 0 -or [int64]$value.port -gt 65535 `
-      -or -not $hostnameValid -or -not $attestationValid) {
+      -or -not $hostnameValid -or -not $attestationValid -or -not $protocolValid) {
       throw "invalid runtime-port schema"
     }
     $candidate = [int]$value.port

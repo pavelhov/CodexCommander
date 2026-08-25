@@ -313,7 +313,6 @@ export default function SubagentsWorkspace({
                 const guidanceControlId = subagentGuidanceControlId(selector);
                 const guidanceLength = [...(canonicalGuidance ?? "")].length;
                 const guidanceTooLong = guidanceLength > SUBAGENT_GUIDANCE_MAX_CODE_POINTS;
-                const showCounter = guidanceTooLong || guidanceLength >= SUBAGENT_GUIDANCE_MAX_CODE_POINTS * 0.8;
                 const model = modelForSelector(selector, modelBySelector);
                 const state = rosterReachability?.get(selector);
                 // Routed = namespaced row. modelForSelector always returns a
@@ -444,7 +443,7 @@ export default function SubagentsWorkspace({
                         <span id={`subagent-guidance-hint-${index}`} className="swi-roster-guidance-hint">{t("sub.guidance.hint")}</span>
                         <div className="swi-roster-guidance-meta">
                           {hasGuidance && <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => onGuidanceChange(selector, "")}>{t("sub.guidance.clear")}</button>}
-                          {showCounter && <span className={guidanceTooLong ? "swi-roster-guidance-count swi-roster-guidance-count--error" : "swi-roster-guidance-count"}>{guidanceLength}/{SUBAGENT_GUIDANCE_MAX_CODE_POINTS}</span>}
+                          <span className={guidanceTooLong ? "swi-roster-guidance-count swi-roster-guidance-count--error" : "swi-roster-guidance-count"}>{guidanceLength}/{SUBAGENT_GUIDANCE_MAX_CODE_POINTS}</span>
                         </div>
                         {guidanceTooLong && <Notice tone="err"><span id={`subagent-guidance-error-${index}`}>{t("sub.guidance.tooLong")}</span></Notice>}
                       </div>

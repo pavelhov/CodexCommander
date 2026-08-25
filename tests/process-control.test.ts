@@ -6,6 +6,7 @@ import {
   type ProxySignalIdentity,
   type StopProxyIo,
 } from "../src/lib/process-control";
+import { runtimeRecordIdentity, type AttestedLiveManagementProxy } from "../src/server/proxy-liveness";
 
 const PID = 4242;
 const SECRET_A = "a".repeat(43);
@@ -38,6 +39,19 @@ function fallbackIo(overrides: StopProxyIo = {}): StopProxyIo {
   };
 }
 
+function attestedTarget(secret = SECRET_A): AttestedLiveManagementProxy {
+  const record = runtime(secret);
+  return {
+    pid: PID,
+    port: 10100,
+    hostname: "127.0.0.1",
+    source: "runtime",
+    baseUrl: "http://127.0.0.1:10100",
+    lifecycleLockLeaseV1: true,
+    runtimeRecordIdentity: runtimeRecordIdentity(record)!,
+  };
+}
+
 describe("process control helpers", () => {
   test("reports the current process as alive", () => {
     expect(isProcessAlive(process.pid)).toBe(true);
@@ -52,6 +66,50 @@ describe("process control helpers", () => {
 });
 
 describe("stopProxy forced fallback identity fence", () => {
+  test("a graceful 409 remains an absolute refusal by default", async () => {
+    const signals: NodeJS.Signals[] = [];
+    await expect(stopProxy(PID, fallbackIo({
+      gracefulStop: async () => "refused",
+      signal: (_pid, signal) => { signals.push(signal); },
+    }))).rejects.toThrow("refused to stop");
+    expect(signals).toEqual([]);
+  });
+
+  test("an independently authorized graceful 409 reaches the exact-identity signal ladder", async () => {
+    const signals: NodeJS.Signals[] = [];
+    await stopProxy(PID, fallbackIo({
+      gracefulStop: async () => "refused",
+      authorizeForcedAfterGracefulRefusal: () => true,
+      signal: (_pid, signal) => { signals.push(signal); },
+    }));
+    expect(signals).toEqual(["SIGTERM"]);
+  });
+
+  test("a fresh post-409 authorization refusal sends no signal", async () => {
+    const signals: NodeJS.Signals[] = [];
+    let checks = 0;
+    await expect(stopProxy(PID, fallbackIo({
+      gracefulStop: async () => "refused",
+      authorizeForcedAfterGracefulRefusal: () => { checks += 1; return false; },
+      signal: (_pid, signal) => { signals.push(signal); },
+    }))).rejects.toThrow("refused to stop");
+    expect(signals).toEqual([]);
+    expect(checks).toBe(1);
+  });
+
+  test("rechecks post-409 authorization before SIGKILL", async () => {
+    const signals: NodeJS.Signals[] = [];
+    let checks = 0;
+    await expect(stopProxy(PID, fallbackIo({
+      gracefulStop: async () => "refused",
+      authorizeForcedAfterGracefulRefusal: () => ++checks === 1,
+      signal: (_pid, signal) => { signals.push(signal); },
+      waitExit: () => false,
+    }))).rejects.toThrow("refused to stop");
+    expect(signals).toEqual(["SIGTERM"]);
+    expect(checks).toBe(2);
+  });
+
   test("stable runtime, current-user argv and birth authorize SIGTERM", async () => {
     const signals: NodeJS.Signals[] = [];
     await stopProxy(PID, fallbackIo({
@@ -71,6 +129,51 @@ describe("stopProxy forced fallback identity fence", () => {
       },
       signal: (_pid, signal) => { signals.push(signal); },
     }))).rejects.toThrow("identity changed");
+    expect(signals).toEqual([]);
+  });
+
+  test("an immutable stale target refuses PID/runtime rotation before any stop request", async () => {
+    const signals: NodeJS.Signals[] = [];
+    await expect(stopProxy(PID, fallbackIo({
+      readRuntime: () => runtime(SECRET_B),
+      expectedAttestedTarget: attestedTarget(),
+      signal: (_pid, signal) => { signals.push(signal); },
+    }))).rejects.toThrow("identity changed");
+    expect(signals).toEqual([]);
+  });
+
+  test("an immutable stale process identity refuses exec replacement after graceful response", async () => {
+    const signals: NodeJS.Signals[] = [];
+    let current = identity();
+    await expect(stopProxy(PID, fallbackIo({
+      expectedProcessIdentity: identity(),
+      readProcessIdentity: () => current,
+      gracefulStop: async () => {
+        current = identity({ birthIdentity: "exec-replacement" });
+        return false;
+      },
+      signal: (_pid, signal) => { signals.push(signal); },
+    }))).rejects.toThrow("identity changed");
+    expect(signals).toEqual([]);
+  });
+
+  test("real graceful attestation rechecks immutable process identity before POST", async () => {
+    const signals: NodeJS.Signals[] = [];
+    let current = identity();
+    let posts = 0;
+    await expect(stopProxy(PID, fallbackIo({
+      expectedProcessIdentity: identity(),
+      expectedAttestedTarget: attestedTarget(),
+      gracefulStop: undefined,
+      readProcessIdentity: () => current,
+      attestLiveManagementProxyImpl: async () => {
+        current = identity({ birthIdentity: "exec-during-attestation" });
+        return attestedTarget();
+      },
+      gracefulFetchFn: (async () => { posts += 1; return new Response(); }) as typeof fetch,
+      signal: (_pid, signal) => { signals.push(signal); },
+    }))).rejects.toThrow("identity changed");
+    expect(posts).toBe(0);
     expect(signals).toEqual([]);
   });
 

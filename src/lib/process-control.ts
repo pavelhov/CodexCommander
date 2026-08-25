@@ -11,6 +11,9 @@ import { configuredAdminToken } from "./admin-secrets";
 import { isLocalAttestationSecret } from "./local-management-attestation";
 import {
   attestLiveManagementProxy,
+  runtimeRecordIdentity,
+  sameAttestedRuntimeTarget,
+  type AttestedLiveManagementProxy,
   type RuntimeLivenessRecord,
 } from "../server/proxy-liveness";
 import {
@@ -47,6 +50,7 @@ export interface GracefulStopIo {
   env?: Record<string, string | undefined>;
   exitTimeoutMs?: number;
   lifecycleLease?: ProxyLifecycleLockLease;
+  attestedTargetPolicy?: (target: AttestedLiveManagementProxy) => boolean;
 }
 
 interface ProtectedRuntimeIdentity {
@@ -54,6 +58,7 @@ interface ProtectedRuntimeIdentity {
   readonly port: number;
   readonly hostname?: string;
   readonly attestationSecret: string;
+  readonly attestationProtocol?: 2;
 }
 
 /** Opaque, non-logging identity used only to detect PID reuse before a signal. */
@@ -64,6 +69,18 @@ export interface ProxySignalIdentity {
   readonly ownerIdentity: string;
 }
 
+/** Exact, non-secret process fence for a lifecycle transaction. */
+export function sameProxySignalIdentity(
+  expected: ProxySignalIdentity,
+  current: ProxySignalIdentity | null,
+): boolean {
+  return current !== null
+    && current.pid === expected.pid
+    && current.argvSha256 === expected.argvSha256
+    && current.birthIdentity === expected.birthIdentity
+    && current.ownerIdentity === expected.ownerIdentity;
+}
+
 export interface StopProxyIo {
   platform?: NodeJS.Platform;
   getuid?: () => number | undefined;
@@ -72,7 +89,16 @@ export interface StopProxyIo {
   readRuntime?: (pid?: number) => RuntimeLivenessRecord | null;
   readProcessIdentity?: (pid: number) => ProxySignalIdentity | null;
   gracefulStop?: (pid: number, lease?: ProxyLifecycleLockLease) => Promise<GracefulStopResult>;
+  attestLiveManagementProxyImpl?: typeof attestLiveManagementProxy;
+  gracefulFetchFn?: typeof fetch;
   lifecycleLease?: ProxyLifecycleLockLease;
+  /** Re-proves service safety after a graceful 409 and before every forced signal. */
+  authorizeForcedAfterGracefulRefusal?: () => boolean;
+  attestedTargetPolicy?: (target: AttestedLiveManagementProxy) => boolean;
+  /** Immutable, already-attested stale target; never adopt a replacement. */
+  expectedAttestedTarget?: AttestedLiveManagementProxy;
+  /** Exact predecessor process identity captured before stale classification. */
+  expectedProcessIdentity?: ProxySignalIdentity;
   signal?: (pid: number, signal: NodeJS.Signals) => void;
   taskkill?: (pid: number) => void;
   waitStoppedPort?: (
@@ -105,7 +131,7 @@ export function gracefulStopHost(hostname: string | undefined): string {
  * Outcome of a graceful stop attempt. `"refused"` is distinct from failure: the proxy answered
  * that it must NOT be stopped from here, so callers must not escalate to a forced kill.
  */
-export type GracefulStopResult = boolean | "refused";
+export type GracefulStopResult = boolean | "refused" | "ineligible";
 
 /**
  * Ask a running proxy to stop itself via the management API (`POST /api/stop`), which
@@ -128,6 +154,7 @@ export async function stopProxyGracefully(pid: number, io: GracefulStopIo = {}):
     timeoutMs: io.exitTimeoutMs ? Math.min(io.exitTimeoutMs, 10_000) : 10_000,
   });
   if (!target) return false;
+  if (io.attestedTargetPolicy && !io.attestedTargetPolicy(target)) return "ineligible";
   // Older proxies do not understand the delegated E/S lease. The caller has
   // already restored native routing, so fall through to the identity-checked
   // signal ladder instead of entering the old server-side restore path.
@@ -195,6 +222,7 @@ function protectedRuntimeIdentity(
     port: record.port,
     ...(record.hostname !== undefined ? { hostname: record.hostname } : {}),
     attestationSecret: record.attestationSecret,
+    ...(record.attestationProtocol !== undefined ? { attestationProtocol: record.attestationProtocol } : {}),
   };
 }
 
@@ -205,19 +233,10 @@ function sameProtectedRuntime(
   return current?.pid === expected.pid
     && current.port === expected.port
     && current.hostname === expected.hostname
-    && current.attestationSecret === expected.attestationSecret;
+    && current.attestationSecret === expected.attestationSecret
+    && current.attestationProtocol === expected.attestationProtocol;
 }
 
-function sameProxySignalIdentity(
-  expected: ProxySignalIdentity,
-  current: ProxySignalIdentity | null,
-): boolean {
-  return current !== null
-    && current.pid === expected.pid
-    && current.argvSha256 === expected.argvSha256
-    && current.birthIdentity === expected.birthIdentity
-    && current.ownerIdentity === expected.ownerIdentity;
-}
 
 function linuxProcessBirthIdentity(pid: number): string | null {
   try {
@@ -354,11 +373,14 @@ function windowsProcessIdentity(pid: number): ProxySignalIdentity | null {
   }
 }
 
-function readCurrentUserProxyIdentity(
+export function captureProxySignalIdentity(
   pid: number,
-  platform: NodeJS.Platform,
-  getuid: () => number | undefined,
+  options: { platform?: NodeJS.Platform; getuid?: () => number | undefined } = {},
 ): ProxySignalIdentity | null {
+  const platform = options.platform ?? process.platform;
+  const getuid = options.getuid ?? (() => {
+    try { return typeof process.getuid === "function" ? process.getuid() : undefined; } catch { return undefined; }
+  });
   if (!Number.isSafeInteger(pid) || pid <= 1) return null;
   if (platform === "win32") return windowsProcessIdentity(pid);
   if (platform === "darwin") return darwinProcessIdentity(pid, getuid);
@@ -382,7 +404,7 @@ function captureForcedStopAuthorization(
     }
   });
   const processIdentity = (io.readProcessIdentity
-    ?? (candidatePid => readCurrentUserProxyIdentity(candidatePid, platform, getuid)))(pid);
+    ?? (candidatePid => captureProxySignalIdentity(candidatePid, { platform, getuid })))(pid);
   return processIdentity ? { runtime, process: processIdentity } : null;
 }
 
@@ -401,7 +423,7 @@ function forcedStopAuthorizationStillMatches(
     }
   });
   const current = (io.readProcessIdentity
-    ?? (candidatePid => readCurrentUserProxyIdentity(candidatePid, platform, getuid)))(expected.process.pid);
+    ?? (candidatePid => captureProxySignalIdentity(candidatePid, { platform, getuid })))(expected.process.pid);
   return sameProxySignalIdentity(expected.process, current);
 }
 
@@ -415,15 +437,51 @@ function forcedStopRefusal(): Error {
 export async function stopProxy(pid: number, io: StopProxyIo = {}): Promise<void> {
   const isAlive = io.isAlive ?? isProcessAlive;
   if (!isAlive(pid)) return;
+  const readProcessIdentity = io.readProcessIdentity ?? (candidatePid => captureProxySignalIdentity(candidatePid, {
+    platform: io.platform,
+    getuid: io.getuid,
+  }));
+  const expectedProcessStillMatches = (): boolean => !io.expectedProcessIdentity
+    || sameProxySignalIdentity(io.expectedProcessIdentity, readProcessIdentity(pid));
+  if (!expectedProcessStillMatches()) throw forcedStopRefusal();
   // Capture before the potentially long HMAC attestation, request, drain and
   // wait. A same-number replacement is never adopted as the fallback target.
-  const authorization = captureForcedStopAuthorization(pid, io);
   const readRuntime = io.readRuntime ?? readRuntimePort;
+  if (io.expectedAttestedTarget) {
+    const currentRecord = readRuntime(pid);
+    const currentIdentity = currentRecord ? runtimeRecordIdentity(currentRecord) : null;
+    if (!currentIdentity || currentIdentity !== io.expectedAttestedTarget.runtimeRecordIdentity) {
+      throw forcedStopRefusal();
+    }
+  }
+  const authorization = captureForcedStopAuthorization(pid, io);
+  if (io.expectedProcessIdentity
+    && (!authorization || !sameProxySignalIdentity(io.expectedProcessIdentity, authorization.process))) {
+    throw forcedStopRefusal();
+  }
   const runtime = readRuntime(pid);
   const graceful = await (io.gracefulStop
     ? io.gracefulStop(pid, io.lifecycleLease)
-    : stopProxyGracefully(pid, { readRuntime, lifecycleLease: io.lifecycleLease }));
-  if (graceful === "refused") {
+    : stopProxyGracefully(pid, {
+      readRuntime,
+      lifecycleLease: io.lifecycleLease,
+      attestLiveManagementProxyImpl: io.attestLiveManagementProxyImpl,
+      fetchFn: io.gracefulFetchFn,
+      attestedTargetPolicy: target => (
+        (!io.expectedAttestedTarget || sameAttestedRuntimeTarget(io.expectedAttestedTarget, target))
+        && (!io.attestedTargetPolicy || io.attestedTargetPolicy(target))
+        && expectedProcessStillMatches()
+      ),
+    }));
+  // The network round-trip is an exec/PID-reuse window. A predecessor that
+  // exited is harmless; a same-PID replacement is never adopted.
+  if (io.expectedProcessIdentity && isAlive(pid) && !expectedProcessStillMatches()) {
+    throw forcedStopRefusal();
+  }
+  if (graceful === "ineligible") {
+    throw new Error("The running proxy changed or is not eligible for stale-runtime replacement.");
+  }
+  if (graceful === "refused" && !io.authorizeForcedAfterGracefulRefusal?.()) {
     // The proxy refused on purpose (foreign service owns it). Forcing would strip shared
     // config while that service keeps the proxy alive.
     throw new Error(
@@ -431,12 +489,14 @@ export async function stopProxy(pid: number, io: StopProxyIo = {}): Promise<void
       + "CODEX_HOME/CODEXCOMMANDER_HOME owns it. Run the stop from that home.",
     );
   }
-  if (graceful) {
+  if (graceful === true) {
     await (io.waitStoppedPort ?? waitForStoppedPort)(runtime);
     return;
   }
   if (!authorization) throw forcedStopRefusal();
-  killProxyWithAuthorization(pid, authorization, io);
+  killProxyWithAuthorization(pid, authorization, io, graceful === "refused"
+    ? io.authorizeForcedAfterGracefulRefusal
+    : undefined);
   await (io.waitStoppedPort ?? waitForStoppedPort)(runtime);
 }
 
@@ -466,6 +526,7 @@ function killProxyWithAuthorization(
   pid: number,
   authorization: ForcedStopAuthorization,
   io: StopProxyIo,
+  authorize?: () => boolean,
 ): void {
   const isAlive = io.isAlive ?? isProcessAlive;
   const waitExit = io.waitExit ?? waitForExit;
@@ -484,6 +545,7 @@ function killProxyWithAuthorization(
         windowsHide: true,
       });
     });
+    if (authorize && !authorize()) throw new Error("The running proxy refused to stop after service safety changed.");
     try {
       taskkill(pid);
     } catch (err) {
@@ -496,6 +558,7 @@ function killProxyWithAuthorization(
       // SIGTERM's five-second grace is another PID-reuse/exec window. Never
       // escalate without the original runtime, owner, argv and birth evidence.
       if (!forcedStopAuthorizationStillMatches(authorization, io)) throw forcedStopRefusal();
+      if (authorize && !authorize()) throw new Error("The running proxy refused to stop after service safety changed.");
       signal(pid, "SIGKILL");
     }
   }

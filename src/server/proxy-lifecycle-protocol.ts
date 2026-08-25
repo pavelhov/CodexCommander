@@ -7,6 +7,11 @@ export const PROXY_START_LEASE_HEADER = "x-codexcommander-proxy-start-lock";
 export const PROXY_ENSURE_LEASE_HEADER = "x-codexcommander-proxy-ensure-lock";
 export const PROXY_LIFECYCLE_LEASE_CAPABILITY_HEADER = "x-codexcommander-lifecycle-lock-lease";
 export const PROXY_LIFECYCLE_LEASE_CAPABILITY_VALUE = "1";
+/** Authenticated /healthz metadata used only for bounded stale-runtime replacement. */
+export const PROXY_RUNTIME_VERSION_HEADER = "x-codexcommander-runtime-version";
+export const PROXY_LIFECYCLE_COMPATIBILITY_GENERATION_HEADER = "x-codexcommander-lifecycle-generation";
+/** Increment only when a newer lifecycle helper must retire older runtime behavior. */
+export const PROXY_LIFECYCLE_COMPATIBILITY_GENERATION = 1;
 
 /**
  * One-shot foreground child whose parent already owns E. This deliberately
@@ -63,5 +68,13 @@ export function advertiseProxyLifecycleLockLease(headers: HeaderWriter): void {
   headers.set(
     PROXY_LIFECYCLE_LEASE_CAPABILITY_HEADER,
     PROXY_LIFECYCLE_LEASE_CAPABILITY_VALUE,
+  );
+}
+
+export function advertiseProxyRuntimeMetadata(headers: HeaderWriter, version: string): void {
+  headers.set(PROXY_RUNTIME_VERSION_HEADER, version);
+  headers.set(
+    PROXY_LIFECYCLE_COMPATIBILITY_GENERATION_HEADER,
+    String(PROXY_LIFECYCLE_COMPATIBILITY_GENERATION),
   );
 }

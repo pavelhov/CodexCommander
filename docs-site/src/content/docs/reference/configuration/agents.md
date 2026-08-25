@@ -55,8 +55,8 @@ Surface detection uses tool shape. A namespaced `spawn_agent` with `send_input`,
 
 V1 guidance is proactive text only at `max` or `ultra`. V2 receives a proxy-authored developer
 message only when a preferred model, eligible roster, or fallback chain exists. Built-in V2 guidance
-has a 700-character budget and drops the roster first if necessary. Guidance is deduplicated across
-replay prefixes and inserted before a trailing `compaction_trigger`.
+includes every accepted eligible roster annotation; it has no aggregate character budget. Guidance
+is deduplicated across replay prefixes and inserted before a trailing `compaction_trigger`.
 
 `injectionModel` and `injectionEffort` are advisory unless native-default sync is enabled. The built-in
 V2 text asks Codex to pass supported model/effort overrides to `spawn_agent` with
@@ -66,9 +66,9 @@ Each roster row may also carry optional `guidance`. This is untrusted operator t
 delegation message, not a policy control: it cannot set effort, quotas, roles, or fallback behavior.
 After normalization (NFC plus trim), empty text is omitted; nonempty text is limited to 160 Unicode
 code points and sanitized before persistence. Row guidance is considered only on eligible V2 turns,
-after live picker, route, surface, and encrypted-task compatibility filters. It shares the built-in
-700-character V2 guidance budget, so annotations may be dropped to preserve the core instructions.
-It is not injected on V1 and is never copied into the managed skill or global `AGENTS.md` block.
+after live picker, route, surface, and encrypted-task compatibility filters. Every accepted annotation
+that survives those filters is included in built-in V2 guidance. It is not injected on V1 and is
+never copied into the managed skill or global `AGENTS.md` block.
 
 ## Managed advisory setup
 

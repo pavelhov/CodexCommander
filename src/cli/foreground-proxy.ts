@@ -496,6 +496,7 @@ export async function runForegroundProxyStart(
       port,
       hostname: config.hostname,
       attestationSecret: localAttestationSecret,
+      attestationProtocol: 2,
     });
   } catch (error) {
     if (explicitRoutingPrepared) {

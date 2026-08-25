@@ -203,6 +203,14 @@ test("trims whitespace-only guidance out of dirty state", async () => {
   expect(saveButton().disabled).toBe(true);
 });
 
+test("always shows the current guidance count below the warning threshold", async () => {
+  await mount();
+  await act(async () => { guidanceButton().click(); });
+  expect(container.querySelector(".swi-roster-guidance-count")?.textContent).toBe("0/160");
+  await setGuidance("Short note");
+  expect(container.querySelector(".swi-roster-guidance-count")?.textContent).toBe("10/160");
+});
+
 test("does not let the five-second poll clobber unsaved guidance", async () => {
   const previousSetInterval = globalThis.setInterval;
   const previousClearInterval = globalThis.clearInterval;

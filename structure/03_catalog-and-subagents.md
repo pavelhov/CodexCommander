@@ -270,6 +270,12 @@ forms in memory to ordered objects and writes the object form. The first canonic
 schema migration point: older binaries that only understand `string[]` fail when they next read the
 configuration. Keep that rollout boundary in mind when sharing a config between versions.
 
+The macOS companion recognizes that this schema migration can leave an older bundled proxy alive
+that cannot read the current configuration. Its Ensure, Start, and Route Back paths may make one
+bounded replacement attempt only for an exact HMAC-attested runtime record whose authenticated
+`/healthz` version or lifecycle generation is older. It never replaces a newer, foreign,
+recordless, or unattested listener, and it keeps Codex native if the safe replacement cannot finish.
+
 Use at most five configured roster entries; each `model` may be a bare catalog id, routed
 `provider/model` id, or exact account-qualified `<selector>/<native-openai-model>` id. An optional
 per-row `guidance` value is sanitized operator text: empty text is omitted, and nonempty text is
@@ -290,8 +296,8 @@ the requested model id only; effort remains owned by the caps described under
 
 On eligible V2 turns, a surviving row's guidance is included in the live developer message only
 after the current catalog's surface, visibility, route, and encrypted-task compatibility filters
-have run. It shares the existing 700-character V2 guidance budget, so the roster annotation may be
-dropped when the core instructions need the space. It is never copied into the managed delegation
+have run. Every accepted annotation that survives those filters is included in the built-in V2
+message, which has no aggregate character budget. It is never copied into the managed delegation
 skill or global `AGENTS.md` block, and it does not change native Codex behavior on V1.
 
 `injectionModel` and `injectionEffort` are shared selections with two independent consumers.
