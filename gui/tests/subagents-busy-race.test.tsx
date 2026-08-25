@@ -51,6 +51,11 @@ beforeEach(() => {
     value: async (url: string, init?: RequestInit) => {
       const path = String(url);
       if (path.endsWith("/api/subagent-models") && init?.method === "PUT") {
+        const payload = JSON.parse(String(init.body)) as { roster?: Array<{ model?: unknown }>; models?: string[] };
+        const requested = Array.isArray(payload.roster)
+          ? payload.roster.map(entry => entry.model).filter((model): model is string => typeof model === "string")
+          : payload.models ?? [];
+        if (requested.length === 0) return Response.json({ error: "missing roster" }, { status: 400 });
         putCount += 1;
         await putGate;
         chosen = [...appliedOnSave];

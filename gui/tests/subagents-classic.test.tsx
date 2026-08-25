@@ -74,7 +74,10 @@ beforeEach(() => {
       const method = init?.method ?? "GET";
       if (path.endsWith("/api/subagent-models")) {
         if (method === "PUT") {
-          const models = JSON.parse(String(init?.body)).models as string[];
+          const payload = JSON.parse(String(init?.body)) as { roster?: Array<{ model?: unknown }>; models?: string[] };
+          const models = Array.isArray(payload.roster)
+            ? payload.roster.map(entry => entry.model).filter((model): model is string => typeof model === "string")
+            : payload.models ?? [];
           const overrideApplied = saveResponseOverride?.applied;
           const applied = Array.isArray(overrideApplied)
             ? overrideApplied.filter((model): model is string => typeof model === "string")
@@ -237,10 +240,10 @@ test("caps featured selections at five", async () => {
     .find((b) => b.textContent?.trim() === "Save roster") as HTMLButtonElement | undefined;
   await act(async () => { save!.click(); });
   const put = requests.find((r) => r.init?.method === "PUT");
-  expect(JSON.parse(String(put!.init!.body)).models.length).toBe(5);
+  expect(JSON.parse(String(put!.init!.body)).roster.length).toBe(5);
 });
 
-test("saves the featured order with PUT and the models payload", async () => {
+test("saves the featured order with PUT and the roster payload", async () => {
   await mount();
 
   await act(async () => { addToggle("a-1").click(); });
@@ -254,7 +257,7 @@ test("saves the featured order with PUT and the models payload", async () => {
   const put = requests.find((r) => r.init?.method === "PUT");
   expect(put).toBeDefined();
   expect(put!.url).toContain("/api/subagent-models");
-  expect(put!.init?.body).toBe(JSON.stringify({ models: ["a-1", "a-2"] }));
+  expect(put!.init?.body).toBe(JSON.stringify({ roster: [{ model: "a-1" }, { model: "a-2" }] }));
 });
 
 test("warns when the roster persists but catalog convergence is skipped", async () => {

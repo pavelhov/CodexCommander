@@ -4,8 +4,10 @@ import { Notice } from "../ui";
 import { useT } from "../i18n/shared";
 import SubagentsWorkspace, {
   FEATURED_MAX,
+  SUBAGENT_GUIDANCE_MAX_CODE_POINTS,
   type AgentModelRow,
   type CatalogState,
+  type SubagentRosterEntry,
 } from "../components/subagents-workspace/SubagentsWorkspace";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { useDataSurface } from "../data-surface";
@@ -25,6 +27,7 @@ import {
 type SubagentsSnapshot = {
   available: string[];
   chosen: string[];
+  roster?: SubagentRosterEntry[];
   advertised: string[];
   excluded: RosterExclusion[];
   models: AgentModelRow[];
@@ -42,6 +45,7 @@ type RosterExclusion = {
 type SaveResponse = {
   superseded?: boolean;
   applied?: string[];
+  roster?: SubagentRosterEntry[];
   advertised?: string[];
   excluded?: RosterExclusion[];
   catalogRefresh?: {
@@ -52,6 +56,40 @@ type SaveResponse = {
   };
   activation?: unknown;
 };
+
+function canonicalSubagentRoster(entries: readonly SubagentRosterEntry[]): SubagentRosterEntry[] {
+  return entries.map(entry => {
+    const guidance = entry.guidance?.normalize("NFC").trim();
+    return guidance ? { model: entry.model, guidance } : { model: entry.model };
+  });
+}
+
+function rosterModels(entries: readonly SubagentRosterEntry[]): string[] {
+  return entries.map(entry => entry.model);
+}
+
+function rosterFromResponse(
+  roster: unknown,
+  chosen: readonly string[] | undefined,
+): SubagentRosterEntry[] {
+  if (Array.isArray(roster) && roster.every(entry => entry !== null && typeof entry === "object" && !Array.isArray(entry)
+    && typeof (entry as { model?: unknown }).model === "string")) {
+    return (roster as Array<{ model: string; guidance?: unknown }>).map(entry => ({
+      model: entry.model,
+      ...(typeof entry.guidance === "string" ? { guidance: entry.guidance } : {}),
+    }));
+  }
+  return (chosen ?? []).filter((model): model is string => typeof model === "string" && model.length > 0)
+    .map(model => ({ model }));
+}
+
+function rostersEqual(left: readonly SubagentRosterEntry[], right: readonly SubagentRosterEntry[]): boolean {
+  const canonicalLeft = canonicalSubagentRoster(left);
+  const canonicalRight = canonicalSubagentRoster(right);
+  return canonicalLeft.length === canonicalRight.length
+    && canonicalLeft.every((entry, index) => entry.model === canonicalRight[index]?.model
+      && entry.guidance === canonicalRight[index]?.guidance);
+}
 
 type CatalogActivation = {
   desiredRevision: string | null;
@@ -232,8 +270,9 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const t = useT();
   const cacheKey = `ccx.subagents.v2:${apiBase}`;
   const cached = seedSubagents(cacheKey);
-  const [chosen, setChosen] = useState<string[]>(() => cached?.chosen ?? []);
-  const [committedChosen, setCommittedChosen] = useState<string[]>(() => cached?.chosen ?? []);
+  const [chosen, setChosen] = useState<SubagentRosterEntry[]>(() => rosterFromResponse(cached?.roster, cached?.chosen));
+  const [committedRoster, setCommittedRoster] = useState<SubagentRosterEntry[]>(() => rosterFromResponse(cached?.roster, cached?.chosen));
+  const [expandedModel, setExpandedModel] = useState<string | null>(null);
   const [status, setStatus] = useState("");
   const [statusTone, setStatusTone] = useState<"ok" | "warn" | "err">("ok");
   const [busy, setBusy] = useState(false);
@@ -245,7 +284,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const catalogRefreshRequested = useRef(false);
   const applyInFlight = useRef(false);
   /** Last server-persisted roster; the dirty guard for polled revalidations. */
-  const committedChosenRef = useRef<string[]>(cached?.chosen ?? []);
+  const committedRosterRef = useRef<SubagentRosterEntry[]>(rosterFromResponse(cached?.roster, cached?.chosen));
   const applyTriggerRef = useRef<HTMLButtonElement>(null);
   const applyCancelRef = useRef<HTMLButtonElement>(null);
   const applyConfirmRef = useRef<HTMLButtonElement>(null);
@@ -259,6 +298,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       .then(res => readJsonOrThrow<{
         available?: string[];
         chosen?: string[];
+        roster?: SubagentRosterEntry[];
         advertised?: string[];
         excluded?: RosterExclusion[];
         catalogState?: CatalogState;
@@ -274,10 +314,11 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     // Preserve configured exact selectors even when a provider is temporarily
     // unavailable. The roster endpoint is the persistence authority; the live
     // catalog only controls what can be added from the library right now.
-    const nextChosen = response.chosen ?? [];
+    const nextRoster = rosterFromResponse(response.roster, response.chosen);
     const next: SubagentsSnapshot = {
       available,
-      chosen: nextChosen,
+      chosen: rosterModels(nextRoster),
+      roster: nextRoster,
       advertised: response.advertised ?? [],
       excluded: response.excluded ?? [],
       models: (modelRows ?? []).filter(model => !model.disabled),
@@ -288,13 +329,13 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     // The 5s surface poll must never clobber unsaved roster edits: adopt the
     // server list only while the visible roster matches the last committed one.
     setChosen(previous => {
-      const committed = committedChosenRef.current;
-      if (previous.length === committed.length && previous.every((model, index) => model === committed[index])) {
-        return nextChosen;
+      const committed = committedRosterRef.current;
+      if (rostersEqual(previous, committed)) {
+        return nextRoster;
       }
       return previous;
     });
-    setCommittedChosen(next.chosen);
+    setCommittedRoster(nextRoster);
     setCatalogLive(true);
     writeSessionListCache(cacheKey, next);
     return next;
@@ -341,7 +382,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   // a draft row absent from the server's projection computation must get no
   // reachability claim (deriveRosterReachability returns an empty map for
   // malformed/absent projections).
-  const serverRoster = activation?.desiredChosen ?? committedChosen;
+  const serverRoster = activation?.desiredChosen ?? rosterModels(committedRoster);
   const rosterReachability = useMemo(
     () => deriveRosterReachability(serverRoster, activation?.projections),
     [serverRoster, activation?.projections],
@@ -360,8 +401,8 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   }, [busy]);
 
   useEffect(() => {
-    committedChosenRef.current = committedChosen;
-  }, [committedChosen]);
+    committedRosterRef.current = committedRoster;
+  }, [committedRoster]);
 
   useEffect(() => {
     if (!applyDialog) return;
@@ -408,9 +449,10 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     catalogRefreshRequested.current = true;
     load();
   }, [catalogLive, load, snapshot]);
-  const rosterDirty = useMemo(
-    () => chosen.length !== committedChosen.length || chosen.some((model, index) => model !== committedChosen[index]),
-    [chosen, committedChosen],
+  const rosterDirty = useMemo(() => !rostersEqual(chosen, committedRoster), [chosen, committedRoster]);
+  const hasGuidanceError = useMemo(
+    () => chosen.some(entry => [...(entry.guidance ?? "")].length > SUBAGENT_GUIDANCE_MAX_CODE_POINTS),
+    [chosen],
   );
 
   /** Focus-only affordance: scroll to and focus the protocol mode Select. Never changes or saves the draft. */
@@ -427,9 +469,9 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const toggle = (model: string) => {
     if (busy) return;
     setStatus("");
-    setChosen(previous => previous.includes(model)
-      ? previous.filter(value => value !== model)
-      : previous.length >= FEATURED_MAX ? previous : [...previous, model]);
+    setChosen(previous => previous.some(entry => entry.model === model)
+      ? previous.filter(entry => entry.model !== model)
+      : previous.length >= FEATURED_MAX ? previous : [...previous, { model }]);
   };
 
   const move = (index: number, direction: -1 | 1) => {
@@ -442,6 +484,12 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       [next[index], next[destination]] = [next[destination], next[index]];
       return next;
     });
+  };
+
+  const updateGuidance = (model: string, guidance: string) => {
+    if (busy) return;
+    setStatus("");
+    setChosen(previous => previous.map(entry => entry.model === model ? { ...entry, guidance } : entry));
   };
 
   const reorder = (from: number, to: number) => {
@@ -457,7 +505,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   };
 
   const save = async () => {
-    if (busy || saveInFlight.current || !rosterDirty) return;
+    if (busy || saveInFlight.current || !rosterDirty || hasGuidanceError) return;
     saveInFlight.current = true;
     setBusy(true);
     setStatus("");
@@ -465,10 +513,11 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       const response = await fetch(`${apiBase}/api/subagent-models`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ models: chosen }),
+        body: JSON.stringify({ roster: canonicalSubagentRoster(chosen) }),
       });
       const data = await readJsonOrThrow<SaveResponse>(response, t("sub.saveFailed"));
-      const applied = data?.applied ?? chosen;
+      const applied = data?.applied ?? rosterModels(chosen);
+      const nextRoster = canonicalSubagentRoster(rosterFromResponse(data?.roster, applied));
       const advertised = data?.advertised ?? [];
       const excluded = data?.excluded ?? [];
       const parsedActivation = parseActivation(data?.activation);
@@ -476,6 +525,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       const nextSnapshot: SubagentsSnapshot = {
         available,
         chosen: applied,
+        roster: nextRoster,
         advertised: parsedActivation ? parsedActivation.advertised : advertised,
         excluded: parsedActivation ? parsedActivation.excluded : excluded,
         models,
@@ -483,8 +533,8 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
         activation: nextActivation,
         metadataLimited: snapshot?.metadataLimited,
       };
-      setChosen(applied);
-      setCommittedChosen(applied);
+      setChosen(nextRoster);
+      setCommittedRoster(nextRoster);
       setClientResourceData(cacheKey, nextSnapshot);
       writeSessionListCache(cacheKey, nextSnapshot);
       const refreshStatus = data?.catalogRefresh?.status;
@@ -763,12 +813,16 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
         chosen={chosen}
         busy={busy}
         rosterDirty={rosterDirty}
+        rosterInvalid={hasGuidanceError}
         protocol={protocol}
         rosterReachability={rosterReachability}
         onUseConcurrentV2={useConcurrentV2}
         onToggle={toggle}
         onMove={move}
         onReorder={reorder}
+        expandedModel={expandedModel}
+        onExpandedModelChange={setExpandedModel}
+        onGuidanceChange={updateGuidance}
         onSave={() => { void save(); }}
         delegation={{
           loaded: delegation.loaded,
