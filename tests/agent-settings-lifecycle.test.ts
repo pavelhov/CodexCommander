@@ -3,7 +3,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { getDefaultConfig, saveConfig } from "../src/config";
+import {
+  getConfigPath,
+  getDefaultConfig,
+  saveConfig,
+  setPersistedConfigMutationBeforeCommitForTests,
+} from "../src/config";
 import { handleManagementAPI, type ManagementApiDeps } from "../src/server/management-api";
 import {
   setGrokApplyFlightTestHooks,
@@ -73,6 +78,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setGrokApplyFlightTestHooks(null);
+  setPersistedConfigMutationBeforeCommitForTests(null);
   if (savedCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
   else process.env.CODEXCOMMANDER_HOME = savedCommanderHome;
   if (savedCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -264,6 +270,14 @@ function rosterRequest(body?: unknown): Request {
   });
 }
 
+function rosterPatchRequest(body: unknown): Request {
+  return new Request("http://127.0.0.1/api/subagent-models", {
+    method: "PATCH",
+    headers: { Host: "127.0.0.1", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 function rosterApiDeps(events: string[]): ManagementApiDeps {
   return {
     saveConfigPreservingClaudeCode: () => { events.push("save"); },
@@ -291,6 +305,15 @@ async function putSubagentModels(
   return (await handleManagementAPI(request, new URL(request.url), config, deps))!;
 }
 
+async function patchSubagentModels(
+  config: CodexCommanderConfig,
+  deps: ManagementApiDeps,
+  body: unknown,
+): Promise<Response> {
+  const request = rosterPatchRequest(body);
+  return (await handleManagementAPI(request, new URL(request.url), config, deps))!;
+}
+
 async function getSubagentModels(
   config: CodexCommanderConfig,
   deps: ManagementApiDeps,
@@ -302,6 +325,56 @@ async function getSubagentModels(
 }
 
 describe("subagent roster management API", () => {
+  test("PATCH guidance changes one row on the newest roster after a concurrent edit", async () => {
+    const config = getDefaultConfig();
+    config.subagentModels = [
+      { model: "gpt-5.6-luna", guidance: "Old note" },
+      { model: "xai/grok-4.6" },
+    ];
+    saveConfig(config);
+    const deps = rosterApiDeps([]);
+    delete deps.saveConfigPreservingClaudeCode;
+
+    setPersistedConfigMutationBeforeCommitForTests(() => {
+      const competing = structuredClone(config);
+      competing.subagentModels = [
+        { model: "xai/grok-4.6", guidance: "Concurrent note" },
+        { model: "gpt-5.6-luna", guidance: "Old note" },
+      ];
+      writeFileSync(getConfigPath(), JSON.stringify(competing));
+    });
+
+    const response = await patchSubagentModels(config, deps, {
+      model: "gpt-5.6-luna",
+      guidance: "Updated note",
+    });
+
+    expect(response.status).toBe(200);
+    expect((await response.json() as Record<string, unknown>).roster).toEqual([
+      { model: "xai/grok-4.6", guidance: "Concurrent note" },
+      { model: "gpt-5.6-luna", guidance: "Updated note" },
+    ]);
+  });
+
+  test("PATCH guidance keeps the roster validation and unknown-model contract", async () => {
+    const config = getDefaultConfig();
+    saveConfig(config);
+    const deps = rosterApiDeps([]);
+    const unsafe = await patchSubagentModels(config, deps, {
+      model: "gpt-5.6-luna",
+      guidance: "review\nlater",
+    });
+    expect(unsafe.status).toBe(400);
+    expect((await unsafe.json() as { error: string }).error).toContain("unsafe");
+
+    const unknown = await patchSubagentModels(config, deps, {
+      model: "missing/model",
+      guidance: "Review",
+    });
+    expect(unknown.status).toBe(404);
+    expect((await unknown.json() as { error: string }).error).toContain("missing/model");
+  });
+
   test("PUT roster round-trips guidance while GET retains the chosen id projection", async () => {
     const config = getDefaultConfig();
     const events: string[] = [];

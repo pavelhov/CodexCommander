@@ -270,11 +270,13 @@ forms in memory to ordered objects and writes the object form. The first canonic
 schema migration point: older binaries that only understand `string[]` fail when they next read the
 configuration. Keep that rollout boundary in mind when sharing a config between versions.
 
-The macOS companion recognizes that this schema migration can leave an older bundled proxy alive
-that cannot read the current configuration. Its Ensure, Start, and Route Back paths may make one
-bounded replacement attempt only for an exact HMAC-attested runtime record whose authenticated
-`/healthz` version or lifecycle generation is older. It never replaces a newer, foreign,
-recordless, or unattested listener, and it keeps Codex native if the safe replacement cannot finish.
+All current-home Ensure, Start, Restart, and Route Back entry points recognize that this schema
+migration can leave an older proxy alive that cannot read the current configuration. They may make
+one bounded replacement attempt only for an exact HMAC-attested runtime record whose authenticated
+`/healthz` version or lifecycle generation is older, and only after stable process birth identity is
+proven for the signals. An exact compatible runtime is reused without a signal. A newer, foreign,
+recordless, ambiguously attested, or metadata-unknown listener is never signaled or accepted as a new
+route, and Codex stays native if a safe explicit transition cannot finish.
 
 Use at most five configured roster entries; each `model` may be a bare catalog id, routed
 `provider/model` id, or exact account-qualified `<selector>/<native-openai-model>` id. An optional

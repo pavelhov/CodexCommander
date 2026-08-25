@@ -5,6 +5,7 @@ import {
   rejectArgs,
   runCliAction,
   runtimeRequest,
+  RuntimeApiError,
   summaryLines,
   takeBooleanOption,
   takeFlag,
@@ -124,16 +125,23 @@ async function subagents(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     const roster = normalizeSubagentRoster(current.roster);
     const index = roster.findIndex(entry => entry.model === model);
     if (index === -1) throw new CliUsageError(`unknown subagent roster model ${model}`, USAGE);
-    const nextRoster = roster.map((entry, entryIndex) => {
-      if (entryIndex !== index) return entry;
-      return guidanceAction === "set"
-        ? { model: entry.model, guidance: text }
-        : { model: entry.model };
-    });
-    const result = await runtimeRequest("/api/subagent-models", {
-      method: "PUT",
-      body: JSON.stringify({ roster: nextRoster }),
-    }, deps);
+    let result: unknown;
+    try {
+      result = await runtimeRequest("/api/subagent-models", {
+        method: "PATCH",
+        body: JSON.stringify({
+          model,
+          guidance: guidanceAction === "set" ? text : null,
+        }),
+      }, deps);
+    } catch (error) {
+      // Preserve the pre-PATCH CLI usage error if a concurrent roster edit removes
+      // the selected model after the validation GET but before the atomic write.
+      if (error instanceof RuntimeApiError && error.status === 404) {
+        throw new CliUsageError(`unknown subagent roster model ${model}`, USAGE);
+      }
+      throw error;
+    }
     printData(result, wantsJson, [`Subagent guidance ${guidanceAction === "set" ? "updated" : "cleared"}: ${model}`]);
     return;
   }

@@ -16,9 +16,13 @@ import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCES, BUN_RUNTIME_SOURCE_ENV } fro
 import type { ServiceDiagnostic } from "../src/service";
 import type { LivenessIo } from "../src/server/proxy-liveness";
 import { runtimeReplacementDisposition, type AttestedLiveManagementProxy } from "../src/server/proxy-liveness";
+import { VERSION } from "../src/server/management-api";
 import type { CodexCommanderConfig } from "../src/types";
 import type { ProxyLifecycleAuthority } from "../src/server/proxy-lifecycle-authority";
-import { PROXY_DELEGATED_START_ENV } from "../src/server/proxy-lifecycle-protocol";
+import {
+  PROXY_DELEGATED_START_ENV,
+  PROXY_LIFECYCLE_COMPATIBILITY_GENERATION,
+} from "../src/server/proxy-lifecycle-protocol";
 
 function authority(
   calls: string[] = [],
@@ -1086,6 +1090,124 @@ describe("shared proxy lifecycle authority", () => {
     });
     expect(result).toMatchObject({ ok: false, state: "blocked", errorCode: "START_FAILED" });
     expect(calls).toEqual(["native"]);
+  });
+
+  test("an attested compatible Start does not require signal identity when no process is retired", async () => {
+    const calls: string[] = [];
+    const result = await ensureProxyLifecycle({
+      action: "start",
+      replaceStaleRuntime: true,
+      io: baseIo({
+        findLive: async () => ({ pid: 42, port: 10100, source: "runtime" }),
+        captureSignalIdentity: () => null,
+        attestLive: async () => ({
+          pid: 42,
+          port: 10100,
+          source: "runtime",
+          baseUrl: "http://127.0.0.1:10100",
+          lifecycleLockLeaseV1: true,
+          runtimeVersion: VERSION,
+          lifecycleCompatibilityGeneration: PROXY_LIFECYCLE_COMPATIBILITY_GENERATION,
+          runtimeRecordIdentity: "current-42",
+        }),
+        staleStopIo: { stopProxy: async () => { calls.push("stop"); } },
+        setEnabled: (_client, enabled) => {
+          calls.push(`enable:${enabled}`);
+          return { ok: true, status: "committed", enabled };
+        },
+        syncLive: async () => {
+          calls.push("sync");
+          return {
+            status: "applied",
+            ok: true,
+            catalogQuality: "live",
+            catalogState: { state: "not_running", processes: [], catalogMtimeMs: null },
+          };
+        },
+        restoreNative: () => {
+          calls.push("native");
+          return { success: true, changed: true, desiredChanged: true, configChanged: true, message: "native" };
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: true, state: "running", pid: 42 });
+    expect(calls).toEqual(["enable:true", "sync"]);
+  });
+
+  test("an attested newer Start stays live but cannot authorize routing", async () => {
+    const calls: string[] = [];
+    const result = await ensureProxyLifecycle({
+      action: "start",
+      replaceStaleRuntime: true,
+      io: baseIo({
+        findLive: async () => ({ pid: 42, port: 10100, source: "runtime" }),
+        attestLive: async () => ({
+          pid: 42,
+          port: 10100,
+          source: "runtime",
+          baseUrl: "http://127.0.0.1:10100",
+          lifecycleLockLeaseV1: true,
+          runtimeVersion: "99.0.0",
+          lifecycleCompatibilityGeneration: PROXY_LIFECYCLE_COMPATIBILITY_GENERATION + 1,
+          runtimeRecordIdentity: "newer-42",
+        }),
+        staleStopIo: { stopProxy: async () => { calls.push("stop"); } },
+        setEnabled: (_client, enabled) => {
+          calls.push(`enable:${enabled}`);
+          return { ok: true, status: "committed", enabled };
+        },
+        syncLive: async () => {
+          calls.push("sync");
+          return { status: "applied", ok: true };
+        },
+        restoreNative: () => {
+          calls.push("native");
+          return { success: true, changed: true, desiredChanged: true, configChanged: true, message: "native" };
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: false, state: "blocked", errorCode: "START_FAILED" });
+    expect(calls).toEqual(["native"]);
+  });
+
+  test("an attested compatible Route Back does not require signal identity", async () => {
+    const calls: string[] = [];
+    const result = await restoreBackRoutingLifecycle({
+      replaceStaleRuntime: true,
+      acquireAuthority: async () => authority(),
+      loadConfig: () => config(),
+      findLive: async () => ({ pid: 42, port: 10100, source: "runtime" }),
+      captureSignalIdentity: () => null,
+      attestLive: async () => ({
+        pid: 42,
+        port: 10100,
+        source: "runtime",
+        baseUrl: "http://127.0.0.1:10100",
+        lifecycleLockLeaseV1: true,
+        runtimeVersion: VERSION,
+        lifecycleCompatibilityGeneration: PROXY_LIFECYCLE_COMPATIBILITY_GENERATION,
+        runtimeRecordIdentity: "current-42",
+      }),
+      journalPending: () => false,
+      externalProvider: () => null,
+      setEnabled: (_client, enabled) => {
+        calls.push(`enable:${enabled}`);
+        return { ok: true, status: "committed", enabled };
+      },
+      syncModels: async () => {
+        calls.push("sync");
+        return { status: "applied", ok: true };
+      },
+      restoreNative: () => {
+        calls.push("native");
+        return { success: true, changed: true, desiredChanged: true, configChanged: true, message: "native" };
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, state: "running", pid: 42 });
+    expect(calls).toEqual(["enable:true", "sync"]);
   });
 
   test("explicit start retires an external-provider journal before enabling", () => {

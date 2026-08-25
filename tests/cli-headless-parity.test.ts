@@ -344,7 +344,7 @@ describe("headless GUI parity CLI", () => {
     ]);
   });
 
-  test("agent guidance set reads the current roster and writes the replaced note", async () => {
+  test("agent guidance set reads the current roster and patches only the selected note", async () => {
     const runtime = fakeRuntime((req) => {
       const url = new URL(req.url);
       if (url.pathname === "/api/subagent-models" && req.method === "GET") {
@@ -364,16 +364,14 @@ describe("headless GUI parity CLI", () => {
     ], runtime.deps)).toBe(0);
     expect(runtime.requests.map(row => [row.path, row.method, row.body])).toEqual([
       ["/api/subagent-models", "GET", null],
-      ["/api/subagent-models", "PUT", {
-        roster: [
-          { model: "xai/grok-4.6", guidance: "Use for independent review" },
-          { model: "gpt-5.6-luna" },
-        ],
+      ["/api/subagent-models", "PATCH", {
+        model: "xai/grok-4.6",
+        guidance: "Use for independent review",
       }],
     ]);
   });
 
-  test("agent guidance clear reads the current roster and omits only the selected note", async () => {
+  test("agent guidance clear reads the current roster and patches only the selected note", async () => {
     const runtime = fakeRuntime((req) => {
       const url = new URL(req.url);
       if (url.pathname === "/api/subagent-models" && req.method === "GET") {
@@ -392,11 +390,9 @@ describe("headless GUI parity CLI", () => {
     ], runtime.deps)).toBe(0);
     expect(runtime.requests.map(row => [row.path, row.method, row.body])).toEqual([
       ["/api/subagent-models", "GET", null],
-      ["/api/subagent-models", "PUT", {
-        roster: [
-          { model: "xai/grok-4.6" },
-          { model: "gpt-5.6-luna", guidance: "Mechanical work" },
-        ],
+      ["/api/subagent-models", "PATCH", {
+        model: "xai/grok-4.6",
+        guidance: null,
       }],
     ]);
   });

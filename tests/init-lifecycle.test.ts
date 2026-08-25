@@ -4,12 +4,27 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { routeCodexThroughLiveProxyFromInit } from "../src/cli/init";
+import { VERSION } from "../src/server/management-api";
 import {
   acquireProxyLifecycleAuthority,
   type AcquireProxyLifecycleAuthorityOptions,
   type ProxyLifecycleAuthority,
 } from "../src/server/proxy-lifecycle-authority";
+import { PROXY_LIFECYCLE_COMPATIBILITY_GENERATION } from "../src/server/proxy-lifecycle-protocol";
 import type { ProxyStartLock, ProxyStartLockOptions } from "../src/server/proxy-start-lock";
+
+function compatibleRuntime(pid: number, port: number) {
+  return {
+    pid,
+    port,
+    source: "runtime" as const,
+    baseUrl: `http://127.0.0.1:${port}`,
+    lifecycleLockLeaseV1: true,
+    runtimeVersion: VERSION,
+    lifecycleCompatibilityGeneration: PROXY_LIFECYCLE_COMPATIBILITY_GENERATION,
+    runtimeRecordIdentity: `current-${pid}`,
+  };
+}
 
 function authority(calls: string[] = []): ProxyLifecycleAuthority {
   let startHeld = true;
@@ -143,6 +158,8 @@ describe("ccx init Codex routing lifecycle", () => {
         return authority(calls);
       },
       findLive: async () => ({ pid: 42, port: 10123, source: "runtime" }),
+      captureSignalIdentity: () => null,
+      attestLive: async () => compatibleRuntime(42, 10123),
       journalPending: () => false,
       externalProvider: () => null,
       setEnabled: (client, enabled) => {
@@ -187,6 +204,8 @@ describe("ccx init Codex routing lifecycle", () => {
         calls.push("find-live");
         return { pid: 42, port: 10100, source: "runtime" };
       },
+      captureSignalIdentity: () => null,
+      attestLive: async () => compatibleRuntime(42, 10100),
       journalPending: () => false,
       externalProvider: () => null,
       setEnabled: (_client, enabled) => {

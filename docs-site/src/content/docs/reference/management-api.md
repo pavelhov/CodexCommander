@@ -96,7 +96,7 @@ route-specific results rather than repeating this table.
 | `GET, PUT /api/v2` | Read or change the agent protocol, V2 task-message delivery, and thread settings. A protocol/thread boot-config change needs **Apply agent catalog** to replace a running worker, then a new task for its session-bound tool shape. `multiAgentV2MessageDelivery` accepts `plaintext` or the `encrypted` default; sending `encrypted` or `null` removes the explicit plaintext override. Delivery changes need only a new task and do not dirty the catalog. `maxConcurrentThreadsPerSession: null` restores the Codex default | 400 invalid settings; 502 transition or persistence failure |
 | `GET, PUT /api/injection-model` | Read or set the preferred guidance model, effort, prompt, and guidance settings; this is advisory unless native-default sync is enabled | 400 invalid model, effort, or body |
 | `GET, PUT /api/effort-caps` | Read or set global and sub-agent reasoning-effort ceilings | 400 invalid ladder value |
-| `GET, PUT /api/subagent-models` | Read or order up to five requested `spawn_agent` quick picks; this does not force routing. `GET` keeps the legacy `chosen: string[]` and adds ordered `roster` objects. `PUT` accepts exactly one of `roster` (objects with optional guidance) or legacy `models` (strings); a `models` write preserves guidance for models that remain. Responses report the effective `advertised` list, any `excluded` choices, and additive `activation` evidence for the desired config, on-disk catalog, and running Codex worker | 400 invalid list, object, guidance, or more than five models |
+| `GET, PUT, PATCH /api/subagent-models` | Read or order up to five requested `spawn_agent` quick picks; this does not force routing. `GET` keeps the legacy `chosen: string[]` and adds ordered `roster` objects. `PUT` accepts exactly one of `roster` (objects with optional guidance) or legacy `models` (strings); a `models` write preserves guidance for models that remain. `PATCH` atomically changes one existing row's guidance without replacing the rest of the roster. Responses report the effective `advertised` list, any `excluded` choices, and additive `activation` evidence for the desired config, on-disk catalog, and running Codex worker | 400 invalid list, object, guidance, or more than five models; 404 unknown PATCH model |
 | `GET, PUT /api/subagent-model-fallback` | Read or set the ordered global fallback chain for spawned child turns and its poll interval | 400 invalid list or poll interval |
 | `GET, PUT, DELETE /api/codex-delegation` | Read managed advisory-delegation status, install/update one exact mode, or remove the two managed artifacts. GET accepts normal authenticated principals; PUT/DELETE require a confirmed GUI session with same-origin CSRF and reject a raw admin principal with 403 | 400 invalid PUT body or nonempty DELETE body; 403 confirmed dashboard launch required; 409 conflict/unsafe/concurrent-change refusal; 500 write or partial-write failure; 503 `mutation_busy` (`Retry-After: 1`) |
 | `GET /api/grok` | Read Grok managed-config status and candidate models | 400 status read failure |
@@ -151,6 +151,17 @@ write—including a compatibility `models` write—persists the canonical object
 successful write can be the durable migration point after which older CodexCommander binaries that
 only read `string[]` fail when they next read the configuration. The dashboard's Save action always
 sends `{ "roster": [...] }` so guidance is not lost.
+
+For a guidance-only edit, use `PATCH /api/subagent-models` with exactly one model selector and
+guidance value. Send a string to set or replace the note, or `null` to clear it:
+
+```json
+{ "model": "anthropic/claude-sonnet-5", "guidance": "Use for short research tasks." }
+```
+
+This mutation is field-scoped and rebases against the newest persisted roster, so concurrent
+reorders, model changes, and notes on other rows are preserved. The selected model must already
+exist in the roster.
 
 #### Catalog activation
 

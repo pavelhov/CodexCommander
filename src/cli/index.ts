@@ -85,6 +85,7 @@ async function handleEnsure() {
   const result = await ensureProxyLifecycle({
     honorAutoStart: true,
     ensureCompanion: true,
+    replaceStaleRuntime: true,
     logger: lifecycleLogger,
   });
   if (result.state === "disabled") {
@@ -104,6 +105,7 @@ async function handleTrayProxyStart(): Promise<void> {
     action: "start",
     honorAutoStart: false,
     ensureCompanion: false,
+    replaceStaleRuntime: true,
     logger: lifecycleLogger,
   });
   if (result.ok) console.log(`Proxy running on port ${result.port}.`);
@@ -116,6 +118,7 @@ async function handleTrayProxyStart(): Promise<void> {
 async function handleTrayProxyRestart(): Promise<void> {
   const result = await restartProxyLifecycle({
     ensureCompanion: false,
+    replaceStaleRuntime: true,
     logger: lifecycleLogger,
   });
   if (!result.ok) {
@@ -240,7 +243,7 @@ switch (command) {
   case "eject": {
     const restoreJson = args[1] === "--json";
     if (args[1] === "back") {
-      const restored = await restoreBackRoutingLifecycle();
+      const restored = await restoreBackRoutingLifecycle({ replaceStaleRuntime: true });
       if (!restored.ok) {
         process.exitCode = 1;
         console.error(restored.message);
@@ -409,6 +412,7 @@ switch (command) {
     const ensured = await ensureProxyLifecycle({
       honorAutoStart: false,
       ensureCompanion: true,
+      replaceStaleRuntime: true,
       logger: lifecycleLogger,
     });
     if (!ensured.ok || !ensured.port) {
@@ -493,6 +497,7 @@ switch (command) {
   case "restart": {
     const result = await restartProxyLifecycle({
       ensureCompanion: true,
+      replaceStaleRuntime: true,
       logger: lifecycleLogger,
     });
     if (result.ok) console.log(`✅ Proxy restarted on port ${result.port}.`);

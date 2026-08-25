@@ -389,7 +389,7 @@ export function proxyStartArgv(port?: number, entry = process.argv[1]): string[]
   return argv;
 }
 
-interface StaleRuntimeRetirement {
+export interface StaleRuntimeRetirement {
   live: LiveProxy | null;
   changed: boolean;
   failed?: ProxyLifecycleResult;
@@ -410,20 +410,6 @@ async function retireStaleRuntimeUnderAuthority(
   if (!live || live.source !== "runtime" || live.pid === null) return { live, changed: false };
   const captureSignalIdentity = io.captureSignalIdentity ?? captureProxySignalIdentity;
   const preliminaryProcessIdentity = captureSignalIdentity(live.pid);
-  if (!preliminaryProcessIdentity) {
-    if (action === "start" || action === "restore-back") {
-      const failed = await failExplicitProxyStartWithoutLive(action, {
-        ...io,
-        rollbackNativeOnFailure: true,
-      }, authority, false, {
-        state: "blocked",
-        message: "The running proxy could not be verified as the exact CodexCommander predecessor.",
-        errorCode: "START_FAILED",
-      });
-      return { live, changed: failed.changed, failed };
-    }
-    return { live, changed: false };
-  }
   let target: AttestedLiveManagementProxy | null = null;
   try {
     target = await (io.attestLive ?? (pid => attestLiveManagementProxy({ expectedPid: pid, attempts: 1 })))(live.pid);
@@ -441,24 +427,47 @@ async function retireStaleRuntimeUnderAuthority(
     }
     return { live, changed: false };
   }
-  const preliminaryStillMatches = captureSignalIdentity(live.pid);
-  const disposition = target && preliminaryStillMatches
-    && sameProxySignalIdentity(preliminaryProcessIdentity, preliminaryStillMatches)
-    ? runtimeReplacementDisposition(target, {
+  const exactAttestedTarget = target?.pid === live.pid
+    && typeof target.runtimeRecordIdentity === "string"
+    ? target
+    : null;
+  const disposition = exactAttestedTarget
+    ? runtimeReplacementDisposition(exactAttestedTarget, {
       version: VERSION,
       lifecycleCompatibilityGeneration: PROXY_LIFECYCLE_COMPATIBILITY_GENERATION,
     })
     : "unknown";
-  if (!target || target.pid !== live.pid || typeof target.runtimeRecordIdentity !== "string"
-    || disposition !== "stale") {
-    if ((action === "start" || action === "restore-back")
-      && (disposition === "unknown" || !target || !preliminaryStillMatches)) {
+  if (disposition === "compatible") return { live, changed: false };
+  if (disposition !== "stale") {
+    if (action === "start" || action === "restore-back") {
       const failed = await failExplicitProxyStartWithoutLive(action, {
         ...io,
         rollbackNativeOnFailure: true,
       }, authority, false, {
         state: "blocked",
         message: "The running proxy could not be attested as an eligible CodexCommander runtime.",
+        errorCode: "START_FAILED",
+      });
+      return { live, changed: failed.changed, failed };
+    }
+    return { live, changed: false };
+  }
+  // `stale` can only be produced from an exact attested target above.
+  if (!exactAttestedTarget) return { live, changed: false };
+
+  // HMAC metadata is sufficient to reuse an exact compatible runtime, but any
+  // destructive stale replacement additionally requires stable process-birth
+  // identity before and after attestation. Never signal on metadata alone.
+  const preliminaryStillMatches = captureSignalIdentity(live.pid);
+  if (!preliminaryProcessIdentity || !preliminaryStillMatches
+    || !sameProxySignalIdentity(preliminaryProcessIdentity, preliminaryStillMatches)) {
+    if (action === "start" || action === "restore-back") {
+      const failed = await failExplicitProxyStartWithoutLive(action, {
+        ...io,
+        rollbackNativeOnFailure: true,
+      }, authority, false, {
+        state: "blocked",
+        message: "The running proxy could not be verified as the exact CodexCommander predecessor.",
         errorCode: "START_FAILED",
       });
       return { live, changed: failed.changed, failed };
@@ -490,7 +499,7 @@ async function retireStaleRuntimeUnderAuthority(
     action: "stop",
     io: {
       ...io.staleStopIo,
-      readPid: () => target.pid,
+      readPid: () => exactAttestedTarget.pid,
       attestStopTarget: async pid => {
         const before = captureSignalIdentity(pid);
         if (!before || !sameProxySignalIdentity(preliminaryProcessIdentity, before)) return null;
@@ -498,7 +507,7 @@ async function retireStaleRuntimeUnderAuthority(
           ?? (expectedPid => attestLiveManagementProxy({ expectedPid, attempts: 1 })))(pid);
         const after = captureSignalIdentity(pid);
         return candidate && candidate.pid === pid
-          && candidate.runtimeRecordIdentity === target.runtimeRecordIdentity
+          && candidate.runtimeRecordIdentity === exactAttestedTarget.runtimeRecordIdentity
           && after !== null
           && sameProxySignalIdentity(preliminaryProcessIdentity, after)
           && runtimeReplacementDisposition(candidate, {
@@ -557,6 +566,19 @@ async function retireStaleRuntimeUnderAuthority(
     };
   }
   return { live: null, changed: stopped.changed || prepared.changed };
+}
+
+/**
+ * Foreground `ccx start` already owns the canonical E/S authority, so it uses
+ * the same stale-runtime classifier and retirement transaction without
+ * recursively entering the detached Ensure path.
+ */
+export async function replaceStaleRuntimeForExplicitStart(
+  live: LiveProxy,
+  authority: ProxyLifecycleAuthority,
+  io: EnsureProxyLifecycleIo = {},
+): Promise<StaleRuntimeRetirement> {
+  return retireStaleRuntimeUnderAuthority("start", live, true, io, authority);
 }
 
 /** Spawn the canonical foreground start command and resolve only after OS spawn succeeds. */

@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { isServiceOwnershipError, ServiceOwnershipError } from "../src/service";
 
 const CLI_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
+const INIT_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "init.ts"), "utf8");
+const MACOS_LIFECYCLE_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "macos-lifecycle.ts"), "utf8");
 const LIFECYCLE_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "proxy-lifecycle.ts"), "utf8");
 const SERVICE_COMMAND_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "service-command.ts"), "utf8");
 const MANAGEMENT_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "server", "management-api.ts"), "utf8");
@@ -25,6 +27,21 @@ describe("Grok fence lifecycle wiring", () => {
     const trayStart = sliceFn(CLI_SOURCE, "async function handleTrayProxyStart(", "async function handleTrayProxyRestart(");
     expect(trayStart).toContain('action: "start"');
     expect(trayStart).toContain("honorAutoStart: false");
+    expect(trayStart).toContain("replaceStaleRuntime: true");
+  });
+
+  test("every background startup and Route Back entry point opts into attested stale recovery", () => {
+    const ensure = sliceFn(CLI_SOURCE, "async function handleEnsure(", "/** Fixed tray action");
+    const trayRestart = sliceFn(CLI_SOURCE, "async function handleTrayProxyRestart(", "async function handleStop(");
+    const restore = sliceFn(CLI_SOURCE, 'case "restore":', 'case "doctor":');
+    const gui = sliceFn(CLI_SOURCE, 'case "gui":', 'case "service":');
+    const restart = sliceFn(CLI_SOURCE, 'case "restart":', 'case "ready":');
+    const initRoute = sliceFn(INIT_SOURCE, "export async function routeCodexThroughLiveProxyFromInit(", "function replaceSetupConfigPreservingIntegrationIntent(");
+    const macRestart = sliceFn(MACOS_LIFECYCLE_SOURCE, 'case "restart":', 'case "restore-native":');
+
+    for (const source of [ensure, trayRestart, restore, gui, restart, initRoute, macRestart]) {
+      expect(source).toContain("replaceStaleRuntime: true");
+    }
   });
 
   test("ensure syncs Grok against the observed live bind host", () => {

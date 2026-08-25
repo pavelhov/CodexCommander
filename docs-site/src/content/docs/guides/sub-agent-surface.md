@@ -247,14 +247,14 @@ roster or fallback list. See the [CLI reference](/reference/cli/) for all comman
 
 ### API
 
-The management API exposes matching `GET` and `PUT` endpoints:
+The management API exposes matching `GET`, `PUT`, and guidance-only `PATCH` endpoints:
 
 | Endpoint | Manages |
 | --- | --- |
 | `/api/v2` | Surface mode, V2 message delivery, native feature flag, and thread settings |
 | `/api/injection-model` | Preferred model, effort, custom prompt, guidance, and native-default sync |
 | `/api/effort-caps` | Main-agent and sub-agent effort ceilings |
-| `/api/subagent-models` | Ordered roster of up to five `{ model, guidance? }` objects; `GET` also keeps `chosen: string[]`, while legacy `{ models }` writes preserve matching guidance. Saving is non-disruptive and reports catalog activation state |
+| `/api/subagent-models` | Ordered roster of up to five `{ model, guidance? }` objects; `GET` also keeps `chosen: string[]`, while legacy `{ models }` writes preserve matching guidance. `PATCH` changes one existing row's guidance atomically. Saving is non-disruptive and reports catalog activation state |
 | `/api/subagent-model-fallback` | Global fallback order and poll interval |
 | `/api/codex-catalog/status` | Read desired configuration, deterministic on-disk catalog evidence, and current-worker activation evidence |
 | `/api/codex-catalog/apply` | Guarded reconciliation for a pending catalog or uninjected managed route, followed when necessary by a confirmed force-restart of verified stale workers. For an already-converged stale worker this is an advanced fallback that may make ChatGPT show **stopped unexpectedly**; browser use requires a confirmed `ccx gui` or menu-app launch |

@@ -112,7 +112,7 @@ export async function performMacOSLifecycleAction(
     case "stop":
       return stopProxyLifecycle();
     case "restart":
-      return restartProxyLifecycle({ ensureCompanion: false });
+      return restartProxyLifecycle({ ensureCompanion: false, replaceStaleRuntime: true });
     case "restore-native":
       return restoreNativeRoutingLifecycle();
     case "restore-back":

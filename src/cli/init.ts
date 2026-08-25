@@ -92,7 +92,7 @@ const envKeyFor = (id: string) => `${id.toUpperCase().replace(/[^A-Z0-9]+/g, "_"
 export async function routeCodexThroughLiveProxyFromInit(
   io: RoutingLifecycleIo = {},
 ): Promise<ProxyLifecycleResult> {
-  return restoreBackRoutingLifecycle(io);
+  return restoreBackRoutingLifecycle({ ...io, replaceStaleRuntime: true });
 }
 
 function replaceSetupConfigPreservingIntegrationIntent(

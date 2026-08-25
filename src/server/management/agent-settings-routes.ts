@@ -810,6 +810,86 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     response.headers.set("Cache-Control", "no-store");
     return response;
   }
+  // PATCH changes exactly one guidance field against the newest persisted roster. The CLI
+  // intentionally reads first to retain its friendly unknown-model usage error, but the write
+  // must never round-trip a stale whole roster and erase a concurrent reorder or note edit.
+  if (url.pathname === "/api/subagent-models" && req.method === "PATCH") {
+    let body: Record<string, unknown>;
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!body || typeof body !== "object" || Array.isArray(body)
+      || Object.keys(body).some(key => key !== "model" && key !== "guidance")
+      || Object.keys(body).length !== 2) {
+      return jsonResponse({ error: "subagent guidance request must contain exactly model and guidance" }, 400);
+    }
+    if (typeof body.model !== "string") return jsonResponse({ error: "model must be a canonical selector" }, 400);
+    let model: string;
+    let guidance: string | undefined;
+    try {
+      model = normalizeSubagentRoster([{ model: body.model }])[0]!.model;
+      if (body.guidance !== null) {
+        if (typeof body.guidance !== "string") throw new Error("subagent roster guidance must be a string");
+        guidance = normalizeSubagentRoster([{ model, guidance: body.guidance }])[0]!.guidance;
+      }
+    } catch (error) {
+      return jsonResponse({ error: error instanceof Error ? error.message : "invalid subagent guidance" }, 400);
+    }
+
+    return withAgentSettingsLifecycleAuthority(
+      deps.proxyStopLifecycle?.acquireAuthority,
+      async () => {
+        type GuidanceMutation =
+          | { kind: "missing"; previous: ReturnType<typeof canonicalSubagentRoster> }
+          | { kind: "updated"; previous: ReturnType<typeof canonicalSubagentRoster>; next: ReturnType<typeof canonicalSubagentRoster> };
+        const persisted = mutatePersistedConfig<GuidanceMutation>(current => {
+          const previous = canonicalSubagentRoster(current.subagentModels ?? []);
+          const index = previous.findIndex(entry => entry.model === model);
+          if (index === -1) return { changed: false, value: { kind: "missing", previous } };
+          const next = previous.map((entry, entryIndex) => entryIndex === index
+            ? { model: entry.model, ...(guidance === undefined ? {} : { guidance }) }
+            : entry);
+          current.subagentModels = next;
+          return { changed: true, value: { kind: "updated", previous, next } };
+        });
+        if (persisted.status === "unavailable") {
+          const status = persisted.reason === "conflict" ? 503 : 409;
+          const response = jsonResponse({ error: `subagent guidance could not be saved (${persisted.reason})` }, status);
+          if (status === 503) response.headers.set("Retry-After", "1");
+          return response;
+        }
+        if (persisted.status === "unchanged" || persisted.value.kind === "missing") {
+          return jsonResponse({ error: `unknown subagent roster model ${model}` }, 404);
+        }
+        const { next: persistedRoster } = persisted.value;
+        config.subagentModels = persistedRoster;
+        const { catalogState, activationWorkers } = collectCatalogWorkerObservation();
+        const responseDesired = currentCatalogDesired();
+        const responseConfig = responseDesired.config;
+        const currentRoster = canonicalSubagentRoster(responseConfig.subagentModels ?? []);
+        const superseded = currentRoster.length !== persistedRoster.length
+          || currentRoster.some((entry, index) => entry.model !== persistedRoster[index].model || entry.guidance !== persistedRoster[index].guidance);
+        const activation = inspectCodexCatalogActivation(
+          responseConfig,
+          activationWorkers,
+          undefined,
+          responseDesired.authority,
+          deps.catalogArtifactProofForActivation?.(),
+          deps.codexRoutingKindForActivation?.(),
+        );
+        return jsonResponse({
+          ok: true,
+          saved: true,
+          ...(superseded ? { superseded: true, requested: persistedRoster } : {}),
+          applied: subagentRosterModels(currentRoster),
+          roster: currentRoster,
+          catalogState,
+          advertised: activation.catalog.advertised,
+          excluded: activation.catalog.excluded,
+          activation: projectCatalogActivationForPrincipal(activation, ctx.principal),
+        });
+      },
+      () => agentSettingsLifecycleBusyResponse(req, config),
+    );
+  }
   if (url.pathname === "/api/subagent-models" && req.method === "PUT") {
     let body: Record<string, unknown>;
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
