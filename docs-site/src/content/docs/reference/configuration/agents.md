@@ -12,7 +12,7 @@ routes, and limits delegated work.
 | --- | --- | --- | --- |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` stamps every catalog model as V1; `v2` stamps every model as V2. `default` restores upstream pins (Sol/Terra V2, Luna V1) and otherwise follows the native `multi_agent_v2` flag. After changing it, Apply replaces a running worker; then start a new task for the session-bound tool shape. |
 | `multiAgentV2MessageDelivery?` | `"encrypted" \| "plaintext"` | `"encrypted"` | V2 task-message delivery only, not credential encryption. `encrypted` preserves ChatGPT's reserved backend contract and native-only ciphertext guard. `plaintext` opts subsequent V2 parent requests into experimental mixed-provider compatibility; all delegated messages from that parent become plaintext, and routed parents receive the stock Codex plaintext marker on message-bearing collaboration calls. Start a new task after changing it; it does not dirty the catalog or need Apply. |
-| `subagentModels?` | `string[]` | `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.4-mini` | Up to five bare native, account-qualified `<selector>/<native-openai-model>`, or routed `provider/model` ids advertised first in the sub-agent picker. The dashboard preserves configured exact selectors, including account-qualified choices, and reports which saved entries are advertised or excluded. Use `ccx agent subagents set` or edit the configuration for choices that are not in the current catalog. An explicit empty list is preserved. |
+| `subagentModels?` | `{ model: string, guidance?: string }[] \| string[]` (on disk) | `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.4-mini` | Up to five ordered bare native, account-qualified `<selector>/<native-openai-model>`, or routed `provider/model` entries advertised first in the sub-agent picker. Reads accept either legacy strings or objects, but CodexCommander canonicalizes in memory and writes objects. The first object write is a migration point: older binaries that only understand `string[]` fail when they read the config. Optional `guidance` is sanitized operator text, capped at 160 Unicode code points; empty guidance is omitted. The dashboard preserves configured exact selectors and reports which saved entries are advertised or excluded. Use `ccx agent subagents set` or edit the configuration for choices that are not in the current catalog. An explicit empty list is preserved. |
 | `injectionModel?` | `string` | — | Preferred native or routed sub-agent model used in proxy-authored V2 delegation guidance. |
 | `injectionEffort?` | `string` | — | Preferred effort (`low` through `ultra`), meaningful only with `injectionModel`. |
 | `injectionPrompt?` | `string` | — | Replaces the built-in V2 guidance body. Supports `{{model}}`, `{{effort}}`, `{{roster}}`, and `{{fallback}}`. A configured `injectionModel` is sufficient to render the custom prompt. |
@@ -62,6 +62,14 @@ replay prefixes and inserted before a trailing `compaction_trigger`.
 V2 text asks Codex to pass supported model/effort overrides to `spawn_agent` with
 `fork_turns: "none"`. A custom `injectionPrompt` substitutes missing values with an empty string.
 
+Each roster row may also carry optional `guidance`. This is untrusted operator text for the live
+delegation message, not a policy control: it cannot set effort, quotas, roles, or fallback behavior.
+After normalization (NFC plus trim), empty text is omitted; nonempty text is limited to 160 Unicode
+code points and sanitized before persistence. Row guidance is considered only on eligible V2 turns,
+after live picker, route, surface, and encrypted-task compatibility filters. It shares the built-in
+700-character V2 guidance budget, so annotations may be dropped to preserve the core instructions.
+It is not injected on V1 and is never copied into the managed skill or global `AGENTS.md` block.
+
 ## Managed advisory setup
 
 **Codex delegation setup** in the Agent Command Center is not a `config.json` field. It manages only:
@@ -77,8 +85,8 @@ the whole-line region from `<!-- BEGIN CODEXCOMMANDER DELEGATION -->` through
 `<!-- END CODEXCOMMANDER DELEGATION -->`. There is no hash, manifest, or hidden ownership file for
 this setup.
 
-The skill is advisory and contains no roster ids. It consults the current collaboration tool
-contract and live CodexCommander roster, which remain authoritative. The global block records the
+The skill and global block are advisory and contain no roster or model ids. They consult the current
+collaboration tool contract and live CodexCommander roster, which remain authoritative. The global block records the
 selected `balanced` or `orchestrator` mode and is loaded once per Codex run. Start a new task after
 install, update, mode change, repair, or removal; current tasks are not reloaded. User and repository
 instructions can prohibit delegation. A nonempty `$CODEX_HOME/AGENTS.override.md` shadows the managed
@@ -93,7 +101,8 @@ catalog, and it does not restart workers or replace the proxy. Those remain sepa
 ## Native Codex default sync
 
 When enabled, `syncCodexSubagentDefaults` writes marker-owned
-`[agents] default_subagent_model` and `default_subagent_reasoning_effort` fields. Existing unmarked
+`[agents] default_subagent_model` and `default_subagent_reasoning_effort` fields from
+`injectionModel` and `injectionEffort` only. Existing unmarked
 user-owned target fields are treated as conflicts and remain authoritative; partial or ambiguous TOML
 writes fail closed. Clearing `injectionModel` also clears the opt-in. These defaults affect newly
 created Codex tasks and do not cause delegation by themselves.
@@ -116,7 +125,10 @@ session uses the ordinary heterogeneous chain while preserving V2 lifecycle sema
 {
   "multiAgentMode": "v2",
   "multiAgentV2MessageDelivery": "plaintext",
-  "subagentModels": ["gpt-5.5", "anthropic/claude-sonnet-5"],
+  "subagentModels": [
+    { "model": "gpt-5.5" },
+    { "model": "anthropic/claude-sonnet-5", "guidance": "Use for short research tasks." }
+  ],
   "injectionModel": "gpt-5.5",
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,

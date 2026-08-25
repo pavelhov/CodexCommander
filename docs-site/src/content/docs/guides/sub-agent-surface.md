@@ -102,6 +102,21 @@ inherits the parent model and rejects model or effort overrides. Guidance theref
 use `fork_turns: "none"` (or a positive partial turn count such as `"3"`) when passing `model` or
 `reasoning_effort`, and to make the task message self-contained.
 
+### Per-model roster guidance
+
+The featured roster is persisted as ordered objects with `model` and optional `guidance` fields.
+Configuration reads also accept the older `string[]` form, but the canonical in-memory and newly
+written form is objects. The first object write is a migration boundary: an older binary that only
+understands string arrays fails when it reads that configuration. There are at most five entries.
+
+Guidance is optional, sanitized operator text. Empty text is omitted; nonempty text is limited to 160
+Unicode code points. Treat it as untrusted advisory context, not as an effort, quota, role, or
+fallback control. On eligible V2 turns CodexCommander first applies live picker, surface, route, and
+encrypted-task compatibility filters, then adds surviving row guidance to the developer message. It
+shares the built-in 700-character V2 budget, so annotations may be omitted when the core instructions
+need the space. Row guidance is not injected on V1 and is never copied into the managed skill or
+global `AGENTS.md` policy.
+
 Custom `injectionPrompt` text can use all four placeholders:
 
 | Placeholder | Replaced with |
@@ -121,8 +136,9 @@ On V1, CodexCommander injects only the upstream-style proactive delegation guida
 effort. It does not add a preferred model, roster, fallback list, or custom prompt on V1.
 
 The default-off `syncCodexSubagentDefaults` option is separate from guidance. When CodexCommander owns
-active Codex routing, sync or restart can write the selected values as marker-owned
-`[agents] default_subagent_model` and `default_subagent_reasoning_effort` entries in Codex TOML.
+active Codex routing, sync or restart can write only `injectionModel` and `injectionEffort` as
+marker-owned `[agents] default_subagent_model` and `default_subagent_reasoning_effort` entries in
+Codex TOML.
 CodexCommander updates or removes only fields bearing its markers. If either target field is user-owned,
 the pair is left unchanged rather than partially written; ambiguous TOML is rejected without a
 write. External provider managers and user-owned root routing also remain authoritative.
@@ -240,7 +256,7 @@ The management API exposes matching `GET` and `PUT` endpoints:
 | `/api/v2` | Surface mode, V2 message delivery, native feature flag, and thread settings |
 | `/api/injection-model` | Preferred model, effort, custom prompt, guidance, and native-default sync |
 | `/api/effort-caps` | Main-agent and sub-agent effort ceilings |
-| `/api/subagent-models` | Ordered roster of up to five models; saving it is non-disruptive and also reports catalog activation state |
+| `/api/subagent-models` | Ordered roster of up to five `{ model, guidance? }` objects; `GET` also keeps `chosen: string[]`, while legacy `{ models }` writes preserve matching guidance. Saving is non-disruptive and reports catalog activation state |
 | `/api/subagent-model-fallback` | Global fallback order and poll interval |
 | `/api/codex-catalog/status` | Read desired configuration, deterministic on-disk catalog evidence, and current-worker activation evidence |
 | `/api/codex-catalog/apply` | Guarded reconciliation for a pending catalog or uninjected managed route, followed when necessary by a confirmed force-restart of verified stale workers. For an already-converged stale worker this is an advanced fallback that may make ChatGPT show **stopped unexpectedly**; browser use requires a confirmed `ccx gui` or menu-app launch |

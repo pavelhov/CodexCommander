@@ -72,7 +72,7 @@ the browser or password manager's decision.
 | **Providers** | Add, edit, set the default (enabled providers only), enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Removing the current default switches to the first remaining enabled provider when one exists; otherwise deletion is refused and the current default is kept. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. |
 | **Add provider** | Search registry-backed presets for account login, API-key services, local servers, or a custom endpoint. A query searches Accounts, Free and Paid together while the tabs remain useful for browsing. |
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, select the next-session account, refresh 5h / weekly / 30d quotas, enable or disable quota auto-switch, set its 1–100% threshold, and configure transient-failure failover. |
-| **Subagents** | Open the **Agent Command Center** to choose and order the five models advertised to `spawn_agent`, search the current catalog, configure Run Policy, and install the optional advisory Codex delegation setup. Saved entries that are not advertised are reported explicitly. Its status distinguishes saved configuration, the generated on-disk catalog, and the roster loaded by current Codex workers. |
+| **Subagents** | Open the **Agent Command Center** to choose and order up to five models advertised to `spawn_agent`, add optional per-model advisory guidance, search the current catalog, configure Run Policy, and install the optional advisory Codex delegation setup. Save sends the ordered `{ roster: [{ model, guidance? }] }` form. Saved entries that are not advertised are reported explicitly. Its status distinguishes saved configuration, the generated on-disk catalog, and the roster loaded by current Codex workers. |
 | **Models** | Toggle native GPT and routed models, set provider allowlists and context caps, choose **Reliable V1**, **Codex native**, or **Concurrent V2**, and configure the V2 thread limit. The Current behavior card reports context as **Uncapped**, **Limited**, or **Mixed limits**. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. Each routed-provider row reports **Auto-discovery on** or **Static catalog only** and links to the owning Provider setting. |
 | **Client Apps** | Inspect configured and available local clients, apply or remove managed config where supported, review backups, and reach Codex, Claude Code/Desktop, Grok Build, OpenCode and the file-managed clients without treating providers as clients. |
 | **API Access** | Issue and manage keys that authenticate other apps to the CodexCommander proxy. Provider credentials remain under Providers. |
@@ -181,11 +181,17 @@ instructions that use those values. On eligible V2 turns, that guidance tells th
 agent which exact model and reasoning effort to pass to `spawn_agent`; clearing the model also clears
 the stored effort.
 
-The default-off **Use as native Codex subagent defaults** switch applies the same selection to Codex's
-native `[agents]` defaults on the next sync/restart when CodexCommander manages the active Codex routing.
+The default-off **Use as native Codex subagent defaults** switch applies only the selected
+`injectionModel` and `injectionEffort` to Codex's native `[agents]` defaults on the next sync/restart
+when CodexCommander manages the active Codex routing.
 External user-managed provider configs remain untouched. Those defaults affect newly created Codex tasks
 and do not themselves cause delegation. Existing user-owned `[agents]` defaults are preserved rather
 than overwritten, so they may continue to override the requested defaults.
+
+Per-row roster guidance is separate live V2 developer text. It is optional sanitized operator text
+(empty omitted, at most 160 Unicode code points), advisory and untrusted rather than an effort, quota,
+role, or fallback control. The proxy injects it only after live V2 compatibility filters and within the
+existing 700-character guidance budget; it is not copied into the managed skill or `AGENTS.md`.
 
 :::caution
 Neither control is a proxy-side cross-model spawn router. CodexCommander guidance asks Codex to pass
@@ -281,7 +287,7 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | `GET /api/codex-auth/active` · `PUT /api/codex-auth/accounts/priority` | Read the effective account (including `pinned` and which account is `pinnedAccountId`) and set one account's selection order. |
 | `POST /api/codex-auth/login` · `GET /api/codex-auth/login-status` | Add a pool account through browser login. |
 | `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | Read recent request metadata with optional tail, provider, and exact/class status filters. With `limit`/`offset`, paging walks backward from the newest row (`offset=0` returns the latest page). Response shape: `{ timeZone, total, logs }` where `total` is the filtered row count before pagination. |
-| `GET` / `PUT /api/subagent-models` | Read or set the five featured `spawn_agent` override models. |
+| `GET` / `PUT /api/subagent-models` | Read or set up to five ordered roster objects. GET keeps `chosen: string[]` and adds `roster`; Save sends `{ roster }`. Legacy `{ models }` writes preserve matching guidance. |
 | `GET` / `PUT` / `DELETE /api/codex-delegation` | Read the managed delegation status and canonical previews, or install/change/remove the two advisory artifacts. PUT/DELETE require a confirmed dashboard launch with same-origin CSRF; a raw admin client receives 403. |
 | `POST /api/stop` | Persist OFF, restore and prove native Codex, and stop an unsupervised proxy. Returns 409 for an installed supervisor, lifecycle contention, or an unsafe native restore; tray/CLI Stop owns the manager-first delegated path. |
 

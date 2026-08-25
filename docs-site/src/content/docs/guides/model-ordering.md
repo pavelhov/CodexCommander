@@ -7,6 +7,13 @@ The Codex model picker does not preserve the order of provider declarations or m
 CodexCommander configuration. Its final order comes from catalog priorities, with a deterministic
 alphabetical order for routed models that share the same priority.
 
+The featured `subagentModels` setting has a compatibility dual-read on disk: legacy `string[]` and
+ordered `{ model: string, guidance?: string }[]` values are accepted. CodexCommander canonicalizes
+both to objects in memory and writes the object form. The first object write is a migration point;
+older binaries that only understand string arrays fail when they read the updated configuration.
+Ordering uses each object's `model` field. Optional per-row guidance is advisory V2 text and never
+changes catalog priority.
+
 ## The rule Codex applies
 
 Codex's models-manager sorts picker-visible catalog entries by `priority` in ascending order. It
@@ -27,7 +34,7 @@ The relevant no-selector priorities are:
 
 | Catalog entry | Priority | Source |
 | --- | ---: | --- |
-| `subagentModels[i]` | `i` (`0` through `4`) | The featured rank map in `src/codex/catalog/sync.ts` |
+| `subagentModels[i].model` | `i` (`0` through `4`) | The featured rank map in `src/codex/catalog/sync.ts` |
 | Other routed models | `5` | Routed entry creation in `src/codex/catalog/sync.ts` |
 | Native GPT slugs by default | `9` | Native entry creation in `src/codex/catalog/sync.ts` |
 | Unselected native models while a featured list exists | At least `featured.length + 100` | Native catalog merge in `src/codex/catalog/sync.ts` |
@@ -49,7 +56,7 @@ This means neither of these configuration details changes the final order:
 - the order of ids in a provider's `models` array.
 
 `orderForSubagents()` then uses a stable sort to move configured featured picks to the front in the
-same order as `subagentModels`. Non-featured models keep the provider/id alphabetical relative order
+same order as the roster's `model` fields. Non-featured models keep the provider/id alphabetical relative order
 established earlier (`src/codex/catalog/sync.ts`). The featured rank is also converted to
 priorities `0` through `4` when entries are built, so Codex's priority sort preserves that leading
 sequence.
@@ -77,15 +84,15 @@ alphabetical.
 
 ## Example
 
-Suppose `subagentModels` contains these five ids in this exact order:
+Suppose `subagentModels` contains these five entries in this exact order:
 
 ```toml
 subagentModels = [
-  "gpt-5.5",
-  "opencode-go/glm-5.2",
-  "anthropic/claude-opus-4-6",
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
+  { model = "gpt-5.5" },
+  { model = "opencode-go/glm-5.2" },
+  { model = "anthropic/claude-opus-4-6", guidance = "Use for synthesis." },
+  { model = "gpt-5.6-sol" },
+  { model = "gpt-5.6-terra" },
 ]
 ```
 
@@ -108,7 +115,7 @@ have expanded into selector-qualified groups.
 
 ## Changing the order
 
-The supported way to customize leading model order is to reorder `subagentModels`. In the dashboard,
+The supported way to customize leading model order is to reorder the object entries in `subagentModels`. In the dashboard,
 open **Subagents** → **Agent Command Center** and reorder the **Configured Roster** by dragging, with the
 arrow buttons, or with <kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd>. The searchable **Agent Library** may
 contain far more than five catalog models; entries remain addressable by exact id when their route is

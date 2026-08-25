@@ -96,7 +96,7 @@ route-specific results rather than repeating this table.
 | `GET, PUT /api/v2` | Read or change the agent protocol, V2 task-message delivery, and thread settings. A protocol/thread boot-config change needs **Apply agent catalog** to replace a running worker, then a new task for its session-bound tool shape. `multiAgentV2MessageDelivery` accepts `plaintext` or the `encrypted` default; sending `encrypted` or `null` removes the explicit plaintext override. Delivery changes need only a new task and do not dirty the catalog. `maxConcurrentThreadsPerSession: null` restores the Codex default | 400 invalid settings; 502 transition or persistence failure |
 | `GET, PUT /api/injection-model` | Read or set the preferred guidance model, effort, prompt, and guidance settings; this is advisory unless native-default sync is enabled | 400 invalid model, effort, or body |
 | `GET, PUT /api/effort-caps` | Read or set global and sub-agent reasoning-effort ceilings | 400 invalid ladder value |
-| `GET, PUT /api/subagent-models` | Read or order up to five requested `spawn_agent` quick picks; this does not force routing. Responses keep the persisted `chosen` list separate from the effective `advertised` list, report any `excluded` choices, and include additive `activation` evidence for the desired config, on-disk catalog, and running Codex worker | 400 invalid list or more than five models |
+| `GET, PUT /api/subagent-models` | Read or order up to five requested `spawn_agent` quick picks; this does not force routing. `GET` keeps the legacy `chosen: string[]` and adds ordered `roster` objects. `PUT` accepts exactly one of `roster` (objects with optional guidance) or legacy `models` (strings); a `models` write preserves guidance for models that remain. Responses report the effective `advertised` list, any `excluded` choices, and additive `activation` evidence for the desired config, on-disk catalog, and running Codex worker | 400 invalid list, object, guidance, or more than five models |
 | `GET, PUT /api/subagent-model-fallback` | Read or set the ordered global fallback chain for spawned child turns and its poll interval | 400 invalid list or poll interval |
 | `GET, PUT, DELETE /api/codex-delegation` | Read managed advisory-delegation status, install/update one exact mode, or remove the two managed artifacts. GET accepts normal authenticated principals; PUT/DELETE require a confirmed GUI session with same-origin CSRF and reject a raw admin principal with 403 | 400 invalid PUT body or nonempty DELETE body; 403 confirmed dashboard launch required; 409 conflict/unsafe/concurrent-change refusal; 500 write or partial-write failure; 503 `mutation_busy` (`Retry-After: 1`) |
 | `GET /api/grok` | Read Grok managed-config status and candidate models | 400 status read failure |
@@ -109,6 +109,47 @@ route-specific results rather than repeating this table.
 
 For the concepts behind the model roster and encrypted worker-task behavior, see
 [Sub-agent Surface](/guides/sub-agent-surface/).
+
+#### Roster object shape and compatibility writes
+
+`GET /api/subagent-models` returns both a compatibility projection and the canonical roster:
+
+```json
+{
+  "chosen": ["gpt-5.5", "anthropic/claude-sonnet-5"],
+  "roster": [
+    { "model": "gpt-5.5" },
+    { "model": "anthropic/claude-sonnet-5", "guidance": "Use for short research tasks." }
+  ],
+  "available": ["gpt-5.5", "anthropic/claude-sonnet-5"],
+  "advertised": ["gpt-5.5", "anthropic/claude-sonnet-5"]
+}
+```
+
+The roster is ordered and capped at five entries. Each object has a canonical `model` selector and
+an optional sanitized `guidance` string. Empty guidance is omitted; nonempty guidance is limited to
+160 Unicode code points. Guidance is advisory, untrusted operator text. It is included only in live
+V2 developer guidance after the current surface, visibility, route, and encrypted-task compatibility
+filters, and it shares the existing 700-character guidance budget. It cannot control effort, quotas,
+roles, or fallback behavior.
+
+`PUT /api/subagent-models` accepts exactly one top-level field: either the canonical object form or
+the legacy string form. A guidance-bearing write uses:
+
+```json
+{
+  "roster": [
+    { "model": "gpt-5.5" },
+    { "model": "anthropic/claude-sonnet-5", "guidance": "Use for short research tasks." }
+  ]
+}
+```
+
+For compatibility clients, `{ "models": ["gpt-5.5", "anthropic/claude-sonnet-5"] }` remains
+valid and preserves existing guidance for matching models. The first write of the object form is a
+durable migration point: older CodexCommander binaries that only read `string[]` fail when they next
+read the configuration. The dashboard's Save action always sends `{ "roster": [...] }` so guidance
+is not lost.
 
 #### Catalog activation
 
