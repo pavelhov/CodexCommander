@@ -20,7 +20,7 @@ test("Subagents mounts the denser workspace as the only layout", async () => {
   // Exactly one workspace render path remains after the shared cold-state guard.
   expect(page).toContain('state.showSkeleton && !snapshot');
   expect(page).toContain("DataSurfaceSkeleton");
-  expect(page.match(/^ {2}return \(/gm)?.length).toBe(1);
+  expect(page.match(/<SubagentsWorkspace\b/g)?.length).toBe(1);
 });
 
 test("Subagents keeps the featured-slot contract: 5 slots, reorder, remove, save", async () => {

@@ -161,7 +161,7 @@ test("auto-apply re-reads desired state after catalog fetch and skips a concurre
   const request = dispatch("/api/subagent-models", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ models: [] }),
+    body: JSON.stringify({ models: ["gpt-5.6-terra"] }),
   }, {
     fetchAllModels: () => {
       started();
