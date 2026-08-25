@@ -85,9 +85,7 @@ function configFor(route: RouteCase): CodexCommanderConfig {
       defaultProvider: "openai",
       providers: {
         openai: {
-          adapter: "openai-responses",
-          baseUrl: "https://chatgpt.com/backend-api/codex",
-          authMode: "forward",
+          ...providerConfigSeed(getProviderRegistryEntry("openai")!),
           codexAccountMode: "direct",
         },
       },
@@ -192,6 +190,20 @@ function hasCompletedAssistantMessage(output: unknown): boolean {
   });
 }
 
+function completedAssistantOutputText(output: unknown): string | undefined {
+  if (!Array.isArray(output)) return undefined;
+  const message = output.find(item => {
+    const record = item as JsonRecord;
+    return record.type === "message"
+      && record.role === "assistant"
+      && record.status === "completed";
+  }) as JsonRecord | undefined;
+  const part = Array.isArray(message?.content)
+    ? (message.content as JsonRecord[]).find(candidate => candidate.type === "output_text")
+    : undefined;
+  return typeof part?.text === "string" ? part.text : undefined;
+}
+
 describe("V2 provider route-class conformance", () => {
   for (const route of routeCases.filter((candidate): candidate is Extract<RouteCase, { adapter: "openai-chat" }> => candidate.adapter === "openai-chat")) {
     test(`${route.label} preserves V2 namespace and completed numeric tool arguments`, async () => {
@@ -242,6 +254,7 @@ describe("V2 provider route-class conformance", () => {
         arguments: "{\"timeout_ms\":120,\"retry_after\":1.5}",
       });
       expect(hasCompletedAssistantMessage(completed.output)).toBe(true);
+      expect(completedAssistantOutputText(completed.output)).toBe("terminal answer");
       expect(text).toContain("data: [DONE]");
     });
   }
@@ -269,6 +282,7 @@ describe("V2 provider route-class conformance", () => {
     expect(upstreamBody).not.toHaveProperty("messages");
     const completed = completedResponse(payloads);
     expect(hasCompletedAssistantMessage(completed.output)).toBe(true);
+    expect(completedAssistantOutputText(completed.output)).toBe("terminal answer");
     expect(text).toContain("data: [DONE]");
   });
 
@@ -276,8 +290,10 @@ describe("V2 provider route-class conformance", () => {
     const route = routeCases.find(candidate => candidate.provider === "openai")!;
     const requestBody = v2Request(route.model);
     const upstreamSse = nativeCompletedSse();
+    let upstreamUrl = "";
     let upstreamBody: JsonRecord | undefined;
-    globalThis.fetch = (async (_input, init) => {
+    globalThis.fetch = (async (input, init) => {
+      upstreamUrl = String(input);
       upstreamBody = JSON.parse(String(init?.body ?? "{}")) as JsonRecord;
       return new Response(upstreamSse, { headers: { "content-type": "text/event-stream" } });
     }) as typeof fetch;
@@ -289,6 +305,7 @@ describe("V2 provider route-class conformance", () => {
     }), configFor(route), { model: "", provider: "" });
     const text = await response.text();
 
+    expect(upstreamUrl).toBe("https://chatgpt.com/backend-api/codex/responses");
     expect(upstreamBody).toEqual(requestBody);
     expect(text).toBe(upstreamSse);
     expect(text).toContain("120.0");
