@@ -16,6 +16,9 @@ let roster: RosterEntry[] = [];
 let requests: Array<{ url: string; init?: RequestInit }> = [];
 let putGate: Promise<void> | null = null;
 let releasePut: (() => void) | null = null;
+let rosterReadGate: Promise<void> | null = null;
+let releaseRosterRead: (() => void) | null = null;
+let delayedRoster: RosterEntry[] | null = null;
 let apiBase = "";
 let sequence = 0;
 
@@ -35,6 +38,9 @@ beforeEach(() => {
   requests = [];
   putGate = null;
   releasePut = null;
+  rosterReadGate = null;
+  releaseRosterRead = null;
+  delayedRoster = null;
   apiBase = `/roster-guidance-${++sequence}`;
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
@@ -47,10 +53,14 @@ beforeEach(() => {
         return Response.json({ applied: roster.map(entry => entry.model), roster });
       }
       if (path.endsWith("/api/subagent-models")) {
+        const gate = rosterReadGate;
+        rosterReadGate = null;
+        if (gate) await gate;
+        const responseRoster = gate ? delayedRoster ?? roster : roster;
         return Response.json({
           available: ["a-1", "a-2", "a-3"],
-          chosen: roster.map(entry => entry.model),
-          roster,
+          chosen: responseRoster.map(entry => entry.model),
+          roster: responseRoster,
           catalogState: { state: "fresh" },
         });
       }
@@ -70,6 +80,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   releasePut?.();
+  releaseRosterRead?.();
   if (root) {
     const current = root;
     await act(async () => { current.unmount(); });
@@ -107,6 +118,12 @@ function saveButton(): HTMLButtonElement {
   return button as HTMLButtonElement;
 }
 
+function moveUp(model: string): HTMLButtonElement {
+  const button = Array.from(container.querySelectorAll("button")).find(candidate => candidate.getAttribute("aria-label") === `Move ${model} up`);
+  if (!button) throw new Error(`move-up control not found for ${model}`);
+  return button as HTMLButtonElement;
+}
+
 async function setGuidance(value: string) {
   await act(async () => {
     const field = textarea();
@@ -126,6 +143,15 @@ test("adds optional guidance and persists canonical roster objects", async () =>
   await act(async () => { saveButton().click(); });
   const put = requests.find(request => request.init?.method === "PUT");
   expect(put?.init?.body).toBe(JSON.stringify({ roster: [{ model: "a-1", guidance: "Use for independent review" }] }));
+});
+
+test("disclosure exposes stable expanded and controlled-field semantics", async () => {
+  await mount();
+  expect(guidanceButton().getAttribute("aria-expanded")).toBe("false");
+  expect(guidanceButton().getAttribute("aria-controls")).toBe("subagent-guidance-a-1");
+  await act(async () => { guidanceButton().click(); });
+  expect(guidanceButton().getAttribute("aria-expanded")).toBe("true");
+  expect(textarea().id).toBe("subagent-guidance-a-1");
 });
 
 test("shows a muted guidance preview when the row is collapsed", async () => {
@@ -186,6 +212,27 @@ test("blocks an over-limit guidance value and exposes an invalid textarea", asyn
   expect(saveButton().disabled).toBe(true);
 });
 
+test("canonical whitespace guidance does not block a separate roster edit", async () => {
+  roster = [{ model: "a-1" }, { model: "a-2" }];
+  await mount();
+  await act(async () => { guidanceButton().click(); });
+  await setGuidance(" ".repeat(161));
+  await act(async () => { moveUp("a-2").click(); });
+  expect(saveButton().disabled).toBe(false);
+  await act(async () => { saveButton().click(); });
+  const put = requests.find(request => request.init?.method === "PUT");
+  expect(put?.init?.body).toBe(JSON.stringify({ roster: [{ model: "a-2" }, { model: "a-1" }] }));
+});
+
+test("accepts decomposed Unicode that canonicalizes to the 160-code-point guidance boundary", async () => {
+  await mount();
+  await act(async () => { guidanceButton().click(); });
+  await setGuidance("e\u0301".repeat(160));
+  expect(textarea().getAttribute("aria-invalid")).toBeNull();
+  expect(container.textContent).toContain("160/160");
+  expect(saveButton().disabled).toBe(false);
+});
+
 test("textarea arrow keys do not reorder the roster and Escape keeps its draft", async () => {
   roster = [{ model: "a-1" }, { model: "a-2" }];
   await mount();
@@ -201,8 +248,38 @@ test("textarea arrow keys do not reorder the roster and Escape keeps its draft",
   expect(textarea().value).toBe("draft remains");
 });
 
+test("an aborted stale poll cannot overwrite guidance saved after that poll began", async () => {
+  const previousSetInterval = globalThis.setInterval;
+  const previousClearInterval = globalThis.clearInterval;
+  let poll: (() => void) | null = null;
+  Object.defineProperty(globalThis, "setInterval", { configurable: true, value: (callback: () => void, ms: number) => {
+    if (ms === 5_000) poll = callback;
+    return 1;
+  } });
+  Object.defineProperty(globalThis, "clearInterval", { configurable: true, value: () => {} });
+  try {
+    await mount();
+    delayedRoster = [{ model: "a-1" }];
+    rosterReadGate = new Promise<void>(resolve => { releaseRosterRead = resolve; });
+    await act(async () => { poll?.(); await Promise.resolve(); });
+    await act(async () => { guidanceButton().click(); });
+    await setGuidance("saved guidance");
+    await act(async () => { saveButton().click(); });
+    releaseRosterRead?.();
+    releaseRosterRead = null;
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+    expect(textarea().value).toBe("saved guidance");
+  } finally {
+    Object.defineProperty(globalThis, "setInterval", { configurable: true, value: previousSetInterval });
+    Object.defineProperty(globalThis, "clearInterval", { configurable: true, value: previousClearInterval });
+  }
+});
+
 test("keeps the guidance disclosure visible while the 620px stylesheet hides arrows", async () => {
   const css = await Bun.file(new URL("../src/styles-subagents-workspace.css", import.meta.url)).text();
-  expect(css).toContain(".swi-roster-actions .swi-roster-arrow");
-  expect(css).toContain(".swi-roster-guidance-toggle");
+  const compactStart = css.indexOf("@container subagents-workspace (max-width: 620px)");
+  const compactEnd = css.indexOf("@media (prefers-reduced-motion", compactStart);
+  const compact = css.slice(compactStart, compactEnd);
+  expect(compact).toMatch(/\.swi-roster-actions \.swi-roster-arrow\s*\{\s*display: none/);
+  expect(compact).not.toMatch(/\.swi-roster-guidance[^}]*display:\s*none/);
 });

@@ -24,6 +24,15 @@ export const FEATURED_MAX = 5;
 export const LONG_CONTEXT_MIN = 200_000;
 export const SUBAGENT_GUIDANCE_MAX_CODE_POINTS = 160;
 
+function canonicalSubagentGuidance(guidance: string | undefined): string | undefined {
+  const canonical = guidance?.normalize("NFC").trim();
+  return canonical || undefined;
+}
+
+function subagentGuidanceControlId(model: string): string {
+  return `subagent-guidance-${encodeURIComponent(model)}`;
+}
+
 export type SubagentRosterEntry = {
   model: string;
   guidance?: string;
@@ -298,9 +307,11 @@ export default function SubagentsWorkspace({
               {chosen.map((entry, index) => {
                 const selector = entry.model;
                 const guidance = entry.guidance ?? "";
-                const hasGuidance = guidance.trim().length > 0;
+                const canonicalGuidance = canonicalSubagentGuidance(guidance);
+                const hasGuidance = canonicalGuidance !== undefined;
                 const isExpanded = expandedModel === selector;
-                const guidanceLength = [...guidance].length;
+                const guidanceControlId = subagentGuidanceControlId(selector);
+                const guidanceLength = [...(canonicalGuidance ?? "")].length;
                 const guidanceTooLong = guidanceLength > SUBAGENT_GUIDANCE_MAX_CODE_POINTS;
                 const showCounter = guidanceTooLong || guidanceLength >= SUBAGENT_GUIDANCE_MAX_CODE_POINTS * 0.8;
                 const model = modelForSelector(selector, modelBySelector);
@@ -365,13 +376,15 @@ export default function SubagentsWorkspace({
                     <ModelMark model={model} />
                     <span className="swi-roster-identity">
                       <span className="swi-roster-name" title={formatNamespacedModelId(selector, t)}>{formatNamespacedModelId(selector, t)}</span>
-                      {hasGuidance && <span className="swi-roster-guidance-preview" title={guidance.trim()}>{guidance.trim()}</span>}
+                      {hasGuidance && <span className="swi-roster-guidance-preview" title={canonicalGuidance}>{canonicalGuidance}</span>}
                       <button
                         type="button"
                         className="btn btn-ghost btn-sm swi-roster-guidance-toggle"
                         onClick={() => onExpandedModelChange(isExpanded ? null : selector)}
                         disabled={busy}
                         aria-label={t(hasGuidance ? "sub.guidance.editAria" : "sub.guidance.addAria", { m: selector })}
+                        aria-expanded={isExpanded}
+                        aria-controls={guidanceControlId}
                       >{t(hasGuidance ? "sub.guidance.edit" : "sub.guidance.add")}</button>
                       {/* No map entry (e.g. unsaved draft row) => no claim at
                           all; the sr-only "both" line requires an explicit
@@ -413,9 +426,9 @@ export default function SubagentsWorkspace({
                     </span>
                     {isExpanded && (
                       <div className="swi-roster-guidance-field">
-                        <label htmlFor={`subagent-guidance-${index}`} className="swi-roster-guidance-label">{t("sub.guidance.label")}</label>
+                        <label htmlFor={guidanceControlId} className="swi-roster-guidance-label">{t("sub.guidance.label")}</label>
                         <textarea
-                          id={`subagent-guidance-${index}`}
+                          id={guidanceControlId}
                           value={guidance}
                           placeholder={t("sub.guidance.placeholder")}
                           disabled={busy}

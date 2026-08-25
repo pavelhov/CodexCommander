@@ -57,9 +57,14 @@ type SaveResponse = {
   activation?: unknown;
 };
 
+function canonicalSubagentGuidance(guidance: string | undefined): string | undefined {
+  const canonical = guidance?.normalize("NFC").trim();
+  return canonical || undefined;
+}
+
 function canonicalSubagentRoster(entries: readonly SubagentRosterEntry[]): SubagentRosterEntry[] {
   return entries.map(entry => {
-    const guidance = entry.guidance?.normalize("NFC").trim();
+    const guidance = canonicalSubagentGuidance(entry.guidance);
     return guidance ? { model: entry.model, guidance } : { model: entry.model };
   });
 }
@@ -293,8 +298,8 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const runPolicy = useSubagentRunPolicy(apiBase);
   const delegationSetup = useCodexDelegationSetup(apiBase);
 
-  const loadSubagents = useCallback(async (): Promise<SubagentsSnapshot> => {
-    const rosterRequest = fetch(`${apiBase}/api/subagent-models`)
+  const loadSubagents = useCallback(async (signal: AbortSignal): Promise<SubagentsSnapshot> => {
+    const rosterRequest = fetch(`${apiBase}/api/subagent-models`, { signal })
       .then(res => readJsonOrThrow<{
         available?: string[];
         chosen?: string[];
@@ -304,11 +309,15 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
         catalogState?: CatalogState;
         activation?: unknown;
       }>(res, t("sub.loadFail")));
-    const metadataRequest = fetch(`${apiBase}/api/models`)
+    const metadataRequest = fetch(`${apiBase}/api/models`, { signal })
       .then(res => readJsonOrThrow<AgentModelRow[]>(res, t("sub.metadataLoadFail")))
       .then(rows => Array.isArray(rows) ? rows : [])
-      .catch(() => null);
+      .catch(error => {
+        if (signal.aborted) throw error;
+        return null;
+      });
     const [response, modelRows] = await Promise.all([rosterRequest, metadataRequest]);
+    if (signal.aborted) throw new Error("subagent roster request aborted");
     if (!response) throw new Error(t("sub.loadFail"));
     const available = response.available ?? [];
     // Preserve configured exact selectors even when a provider is temporarily
@@ -451,7 +460,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   }, [catalogLive, load, snapshot]);
   const rosterDirty = useMemo(() => !rostersEqual(chosen, committedRoster), [chosen, committedRoster]);
   const hasGuidanceError = useMemo(
-    () => chosen.some(entry => [...(entry.guidance ?? "")].length > SUBAGENT_GUIDANCE_MAX_CODE_POINTS),
+    () => chosen.some(entry => [...(canonicalSubagentGuidance(entry.guidance) ?? "")].length > SUBAGENT_GUIDANCE_MAX_CODE_POINTS),
     [chosen],
   );
 
