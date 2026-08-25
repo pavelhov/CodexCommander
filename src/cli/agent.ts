@@ -12,6 +12,7 @@ import {
   takeOption,
   type RuntimeApiDeps,
 } from "./runtime-api";
+import { normalizeSubagentRoster } from "../codex/subagent-roster";
 
 const USAGE = `Usage:
   ccx agent [status] [--json]
@@ -19,6 +20,8 @@ const USAGE = `Usage:
       [--prompt <text|->] [--guidance <on|off>] [--json]
   ccx agent effort <status|set> [--main <level|->] [--subagent <level|->] [--json]
   ccx agent subagents <status|set|clear> [model,model...] [--json]
+  ccx agent subagents guidance set <model> --text <text> [--json]
+  ccx agent subagents guidance clear <model> [--json]
   ccx agent fallback <status|set|clear> [model,model...] [--poll-ms <5000-600000>] [--json]
   ccx agent sidecar <status|web|vision> [--model <id|->] [--backend <openai|anthropic|->]
       [--reasoning <level>] [--max-descriptions <n>] [--json]`;
@@ -99,6 +102,39 @@ async function subagents(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     rejectArgs(args, USAGE);
     const result = await runtimeRequest("/api/subagent-models", {}, deps);
     printData(result, wantsJson, summaryLines(result));
+    return;
+  }
+  if (action === "guidance") {
+    const guidanceAction = (args.shift() ?? "").toLowerCase();
+    if (guidanceAction !== "set" && guidanceAction !== "clear") {
+      throw new CliUsageError(`unknown subagent guidance action ${guidanceAction || "(missing)"}`, USAGE);
+    }
+    const model = args.shift()?.trim();
+    if (!model) throw new CliUsageError("subagent model is required", USAGE);
+    const text = guidanceAction === "set" ? takeOption(args, "--text") : undefined;
+    if (guidanceAction === "set" && text === undefined) {
+      throw new CliUsageError("--text is required when setting subagent guidance", USAGE);
+    }
+    rejectArgs(args, USAGE);
+
+    const current = await runtimeRequest<{ roster?: unknown }>("/api/subagent-models", {}, deps);
+    if (!Array.isArray(current.roster)) {
+      throw new Error("Management API returned an invalid subagent roster");
+    }
+    const roster = normalizeSubagentRoster(current.roster);
+    const index = roster.findIndex(entry => entry.model === model);
+    if (index === -1) throw new CliUsageError(`unknown subagent roster model ${model}`, USAGE);
+    const nextRoster = roster.map((entry, entryIndex) => {
+      if (entryIndex !== index) return entry;
+      return guidanceAction === "set"
+        ? { model: entry.model, guidance: text }
+        : { model: entry.model };
+    });
+    const result = await runtimeRequest("/api/subagent-models", {
+      method: "PUT",
+      body: JSON.stringify({ roster: nextRoster }),
+    }, deps);
+    printData(result, wantsJson, [`Subagent guidance ${guidanceAction === "set" ? "updated" : "cleared"}: ${model}`]);
     return;
   }
   let models: string[];

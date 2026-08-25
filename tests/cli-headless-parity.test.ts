@@ -344,6 +344,86 @@ describe("headless GUI parity CLI", () => {
     ]);
   });
 
+  test("agent guidance set reads the current roster and writes the replaced note", async () => {
+    const runtime = fakeRuntime((req) => {
+      const url = new URL(req.url);
+      if (url.pathname === "/api/subagent-models" && req.method === "GET") {
+        return {
+          chosen: ["xai/grok-4.6", "gpt-5.6-luna"],
+          roster: [
+            { model: "xai/grok-4.6", guidance: "Old note" },
+            { model: "gpt-5.6-luna" },
+          ],
+        };
+      }
+      return undefined;
+    });
+
+    expect(await handleAgentCommand([
+      "subagents", "guidance", "set", "xai/grok-4.6", "--text", "Use for independent review", "--json",
+    ], runtime.deps)).toBe(0);
+    expect(runtime.requests.map(row => [row.path, row.method, row.body])).toEqual([
+      ["/api/subagent-models", "GET", null],
+      ["/api/subagent-models", "PUT", {
+        roster: [
+          { model: "xai/grok-4.6", guidance: "Use for independent review" },
+          { model: "gpt-5.6-luna" },
+        ],
+      }],
+    ]);
+  });
+
+  test("agent guidance clear reads the current roster and omits only the selected note", async () => {
+    const runtime = fakeRuntime((req) => {
+      const url = new URL(req.url);
+      if (url.pathname === "/api/subagent-models" && req.method === "GET") {
+        return {
+          roster: [
+            { model: "xai/grok-4.6", guidance: "Review" },
+            { model: "gpt-5.6-luna", guidance: "Mechanical work" },
+          ],
+        };
+      }
+      return undefined;
+    });
+
+    expect(await handleAgentCommand([
+      "subagents", "guidance", "clear", "xai/grok-4.6", "--json",
+    ], runtime.deps)).toBe(0);
+    expect(runtime.requests.map(row => [row.path, row.method, row.body])).toEqual([
+      ["/api/subagent-models", "GET", null],
+      ["/api/subagent-models", "PUT", {
+        roster: [
+          { model: "xai/grok-4.6" },
+          { model: "gpt-5.6-luna", guidance: "Mechanical work" },
+        ],
+      }],
+    ]);
+  });
+
+  test("agent guidance rejects an unknown roster model before writing", async () => {
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const runtime = fakeRuntime((req) => {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/subagent-models" && req.method === "GET") {
+          return { roster: [{ model: "xai/grok-4.6" }] };
+        }
+        return undefined;
+      });
+
+      expect(await handleAgentCommand([
+        "subagents", "guidance", "set", "unknown/model", "--text", "Review", "--json",
+      ], runtime.deps)).toBe(2);
+      expect(runtime.requests.map(row => [row.path, row.method, row.body])).toEqual([
+        ["/api/subagent-models", "GET", null],
+      ]);
+      expect(errorSpy.mock.calls.map(call => String(call[0])).join("\n")).toContain("unknown/model");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   test("API key create returns the one-time key through the access command", async () => {
     const runtime = fakeRuntime((req) => new URL(req.url).pathname === "/api/keys"
       ? { id: "key-1", name: "deploy", key: "ccx_secret" }
