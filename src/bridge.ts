@@ -660,9 +660,13 @@ export function bridgeToResponsesSSE(
         const argsStr = currentToolCall.args || "{}";
         const item = currentToolCall.toolSearch
           ? {
-              type: "tool_search_call", id: currentToolCall.itemId,
-              call_id: currentToolCall.callId, execution: "client",
-              arguments: parseArgsObj(currentToolCall.args), status: "incomplete",
+              // tool_search_call.arguments must be an object, so an incomplete JSON buffer
+              // cannot be represented there without losing bytes. Match the buffered bridge's
+              // lossless fallback and preserve the raw string in an incomplete function call.
+              type: "function_call", id: currentToolCall.itemId,
+              call_id: currentToolCall.callId, name: currentToolCall.name,
+              arguments: argsStr, status: "incomplete",
+              ...(currentToolCall.namespace ? { namespace: currentToolCall.namespace } : {}),
             }
           : currentToolCall.freeform
           ? {
@@ -1131,7 +1135,11 @@ export function bridgeToResponsesSSE(
               // After every close above, so the blob lands AFTER the assistant message it belongs
               // to and the parser's backwards pairing finds it.
               flushKiroRedactedReasoning();
-              if (options?.compaction) {
+              if (
+                options?.compaction
+                && event.stopReason !== "max_tokens"
+                && event.stopReason !== "content_filter"
+              ) {
                 // Exactly one compaction item per turn; codex-rs takes the first and fatals on 0.
                 const item = {
                   type: "compaction", id: `cmp_${uuid()}`,

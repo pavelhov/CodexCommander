@@ -77,6 +77,62 @@ describe("buffered bridge terminal handling", () => {
     expect(outputOf(response).some(item => item.type === "tool_search_call")).toBe(false);
   });
 
+  test("streaming terminal-less tool-search call preserves truncated arguments", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "search_1", name: "tool_search" },
+      { type: "tool_call_delta", arguments: '{"query":"repo' },
+    ]), "m", undefined, undefined, new Set(["tool_search"]), undefined, 2_000));
+
+    const outputItem = frames.filter(frame => frame.event === "response.output_item.done")
+      .map(frame => frame.data.item as Record<string, unknown>)
+      .find(item => item.call_id === "search_1");
+    expect(outputItem).toMatchObject({
+      type: "function_call",
+      call_id: "search_1",
+      name: "tool_search",
+      status: "incomplete",
+      arguments: '{"query":"repo',
+    });
+    expect(frames.some(frame => frame.event === "response.function_call_arguments.done")).toBe(false);
+    const terminal = frames.find(frame => frame.event === "response.incomplete");
+    const output = (terminal?.data.response as { output?: Record<string, unknown>[] } | undefined)?.output ?? [];
+    expect(output.some(item => item.type === "tool_search_call")).toBe(false);
+    expect(output).toContainEqual(expect.objectContaining({
+      type: "function_call",
+      call_id: "search_1",
+      arguments: '{"query":"repo',
+    }));
+  });
+
+  test("streaming completed tool-search call keeps its native completed shape", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "search_1", name: "tool_search" },
+      { type: "tool_call_delta", arguments: '{"query":"repo"}' },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ]), "m", undefined, undefined, new Set(["tool_search"]), undefined, 2_000));
+
+    const outputItem = frames.filter(frame => frame.event === "response.output_item.done")
+      .map(frame => frame.data.item as Record<string, unknown>)
+      .find(item => item.call_id === "search_1");
+    expect(outputItem).toMatchObject({
+      type: "tool_search_call",
+      call_id: "search_1",
+      execution: "client",
+      status: "completed",
+      arguments: { query: "repo" },
+    });
+    const terminal = frames.find(frame => frame.event === "response.completed");
+    const output = (terminal?.data.response as { output?: Record<string, unknown>[] } | undefined)?.output ?? [];
+    expect(output).toContainEqual(expect.objectContaining({
+      type: "tool_search_call",
+      call_id: "search_1",
+      status: "completed",
+      arguments: { query: "repo" },
+    }));
+    expect(output.some(item => item.type === "function_call" && item.call_id === "search_1")).toBe(false);
+  });
+
   test("streaming terminal-less output emits only response.incomplete", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
       { type: "text_delta", text: "partial answer" },
