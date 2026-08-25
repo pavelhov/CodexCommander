@@ -160,6 +160,7 @@ function coerceValue(
 
   let current = value;
   let changed = false;
+  const hasComposition = ["anyOf", "oneOf", "allOf"].some((keyword) => Array.isArray(resolved[keyword]));
   for (const branch of compositionBranches(resolved)) {
     const branchResult = coerceValue(current, branch, root, depth + 1, propertyName, path, numericTokens);
     if (branchResult.changed) {
@@ -169,8 +170,8 @@ function coerceValue(
   }
 
   if (typeof current === "number" && safelyIntegral(current)) {
-    const integerIntent = declaresInteger(resolved);
-    const timeoutIntent = propertyName !== undefined && U64_NUMBER_FIELDS.has(propertyName) && declaresNumeric(resolved);
+    const integerIntent = !hasComposition && declaresInteger(resolved);
+    const timeoutIntent = !hasComposition && propertyName !== undefined && U64_NUMBER_FIELDS.has(propertyName) && declaresNumeric(resolved);
     const raw = numericTokens.get(pathKey(path));
     if ((integerIntent || timeoutIntent) && raw !== undefined && /[.eE]/.test(raw)) {
       return { value: current, changed: true };

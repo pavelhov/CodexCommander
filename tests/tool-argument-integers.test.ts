@@ -16,6 +16,10 @@ describe("coerceIntegerToolArguments", () => {
       '{"count":1.2e5}',
       objectSchema({ count: { type: "integer" } }),
     )).toBe('{"count":120000}');
+    expect(coerceIntegerToolArguments(
+      '{"count":120000e0}',
+      objectSchema({ count: { type: "integer" } }),
+    )).toBe('{"count":120000}');
   });
 
   test("repairs Codex timeout_ms under its advertised numeric schema", () => {
@@ -73,13 +77,13 @@ describe("coerceIntegerToolArguments", () => {
 
   test("resolves local JSON Pointer refs with unescaped segments", () => {
     expect(coerceIntegerToolArguments(
-      '{"a/b":7.0}',
+      '{"a~b/c":7.0}',
       {
         type: "object",
-        properties: { "a/b": { $ref: "#/$defs/a~1b" } },
-        $defs: { "a/b": { type: "integer" } },
+        properties: { "a~b/c": { $ref: "#/$defs/a~0b~1c" } },
+        $defs: { "a~b/c": { type: "integer" } },
       },
-    )).toBe('{"a/b":7}');
+    )).toBe('{"a~b/c":7}');
   });
 
   test("requires composition branches to declare numeric intent", () => {
@@ -95,6 +99,10 @@ describe("coerceIntegerToolArguments", () => {
       '{"count":1.0}',
       objectSchema({ count: { allOf: [{ type: "integer" }, { minimum: 0 }] } }),
     )).toBe('{"count":1}');
+    expect(coerceIntegerToolArguments(
+      '{"count":1.0}',
+      objectSchema({ count: { type: "integer", oneOf: [{}] } }),
+    )).toBe('{"count":1.0}');
   });
 
   test("stops cyclic refs and traversal deeper than the recursion bound", () => {
