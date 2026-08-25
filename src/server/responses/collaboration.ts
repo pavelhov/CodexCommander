@@ -105,10 +105,12 @@ export function buildToolBridgeMaps(parsed: CodexCommanderParsedRequest, budget?
   toolNsMap: Map<string, { namespace: string; name: string }>;
   freeformToolNames: Set<string>;
   toolSearchToolNames: Set<string>;
+  toolParameterSchemas: ReadonlyMap<string, Record<string, unknown>>;
 } {
   const toolNsMap = new Map<string, { namespace: string; name: string }>();
   const freeformToolNames = new Set<string>();
   const toolSearchToolNames = new Set<string>();
+  const toolParameterSchemas = new Map<string, Record<string, unknown>>();
   for (const t of parsed.context.tools ?? []) {
     if (t.namespace) {
       const wireName = namespacedToolName(t.namespace, t.name);
@@ -123,8 +125,13 @@ export function buildToolBridgeMaps(parsed: CodexCommanderParsedRequest, budget?
       budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
       toolSearchToolNames.add(t.name);
     }
+    if (t.parameters !== null && typeof t.parameters === "object" && !Array.isArray(t.parameters)) {
+      const wireName = namespacedToolName(t.namespace, t.name);
+      toolParameterSchemas.set(wireName, t.parameters);
+      if (t.namespace && t.name !== wireName) toolParameterSchemas.set(t.name, t.parameters);
+    }
   }
-  return { toolNsMap, freeformToolNames, toolSearchToolNames };
+  return { toolNsMap, freeformToolNames, toolSearchToolNames, toolParameterSchemas };
 }
 
 

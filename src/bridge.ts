@@ -1,4 +1,5 @@
 import type { AdapterEvent, CodexCommanderMessagePhase, CodexCommanderProviderContinuationState, CodexCommanderUsage } from "./types";
+import { coerceIntegerToolArguments } from "./lib/tool-argument-integers";
 import { adapterFailureFromMessage, classifyError, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, type CodexCommanderErrorPayload } from "./lib/errors";
 import { encodeCompactionSummary } from "./responses/compaction";
 import { encodeReasoningEnvelope, type ReasoningEnvelope } from "./responses/reasoning-envelope";
@@ -198,6 +199,7 @@ export function bridgeToResponsesSSE(
       setInterval: (handler: () => void, ms: number) => unknown;
       clearInterval: (id: unknown) => void;
     };
+    toolParameterSchemas?: ReadonlyMap<string, Record<string, unknown>>;
   },
 ): ReadableStream<Uint8Array> {
   const replayCacheScope = options?.replayCacheScope ?? "global";
@@ -596,6 +598,10 @@ export function bridgeToResponsesSSE(
 
       const closeCurrentToolCall = () => {
         if (!currentToolCall) return;
+        currentToolCall.args = coerceIntegerToolArguments(
+          currentToolCall.args,
+          options?.toolParameterSchemas?.get(currentToolCall.name),
+        );
         // Empty input (no-arg tools like computer_use get_app_state / list_apps) must serialize as
         // "{}", never "" — Codex echoes the call back as a function_call next turn, and JSON.parse("")
         // would 400 the whole session ("invalid JSON arguments"), poisoning all later turns.
@@ -1390,6 +1396,7 @@ function buildResponseJSONWithBudget(
     translatorBudget?: TranslatorBudget;
     /** Conversation identity for the reasoning replay cache (issue #950). */
     replayCacheScope?: string;
+    toolParameterSchemas?: ReadonlyMap<string, Record<string, unknown>>;
   },
 ): Record<string, unknown> {
   const responseId = `resp_${uuid()}`;
@@ -1543,6 +1550,10 @@ function buildResponseJSONWithBudget(
   };
   const flushToolCall = (status: "completed" | "incomplete" = "completed") => {
     if (!currentToolCallId) return;
+    currentToolCallArgs = coerceIntegerToolArguments(
+      currentToolCallArgs,
+      options?.toolParameterSchemas?.get(currentToolCallName),
+    );
     const mapped = options?.toolNsMap?.get(currentToolCallName);
     const realName = mapped?.name ?? currentToolCallName;
     const ns = mapped?.namespace;

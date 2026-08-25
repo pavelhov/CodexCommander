@@ -196,4 +196,13 @@ describe("openai-chat parallel tool call stream assembly", () => {
     ]));
     expect(assembled(events)).toEqual([{ id: "call_b", name: "read", args: "{\"p\":\"x\"}" }]);
   });
+
+  test("leaves incomplete streamed arguments untouched", async () => {
+    const events = await collect(sse([
+      chunkOf([{ index: 0, id: "cut", function: { name: "f", arguments: "{\"timeout_ms\":300000." } }]),
+    ], false));
+    expect(events.at(-1)?.type).toBe("error");
+    expect(events.some(e => e.type === "tool_call_delta")).toBe(false);
+    expect(events.some(e => e.type === "tool_call_end")).toBe(false);
+  });
 });
