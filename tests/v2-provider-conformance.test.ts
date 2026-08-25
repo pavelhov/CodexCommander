@@ -127,13 +127,24 @@ function responsesCompletedJson(): JsonRecord {
     id: "resp_deepseek",
     object: "response",
     status: "completed",
-    output: [{
-      type: "message",
-      id: "msg_deepseek",
-      role: "assistant",
-      status: "completed",
-      content: [{ type: "output_text", text: "terminal answer" }],
-    }],
+    output: [
+      {
+        type: "function_call",
+        id: "fc_deepseek",
+        call_id: "call_deepseek",
+        namespace: "collaboration",
+        name: "wait_agent",
+        arguments: "{\"timeout_ms\":120.0,\"retry_after\":1.5}",
+        status: "completed",
+      },
+      {
+        type: "message",
+        id: "msg_deepseek",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: "terminal answer" }],
+      },
+    ],
   };
 }
 
@@ -280,7 +291,34 @@ describe("V2 provider route-class conformance", () => {
     expect(upstreamUrl).toBe("https://api.deepseek.com/responses");
     expect(upstreamBody).toMatchObject({ stream: false });
     expect(upstreamBody).not.toHaveProperty("messages");
+    expect(payloads.map(payload => payload.type)).toEqual([
+      "response.created",
+      "response.output_item.done",
+      "response.output_item.done",
+      "response.completed",
+    ]);
+    const completedCall = payloads
+      .filter(payload => payload.type === "response.output_item.done")
+      .map(payload => payload.item as JsonRecord)
+      .find(item => item.type === "function_call");
+    expect(completedCall).toMatchObject({
+      type: "function_call",
+      namespace: "collaboration",
+      name: "wait_agent",
+      call_id: "call_deepseek",
+      status: "completed",
+    });
+    expect(completedCall?.arguments).toBe("{\"timeout_ms\":120.0,\"retry_after\":1.5}");
     const completed = completedResponse(payloads);
+    expect(completed.status).toBe("completed");
+    const completedSnapshotCall = (completed.output as JsonRecord[])
+      .find(item => item.type === "function_call");
+    expect(completedSnapshotCall).toMatchObject({
+      namespace: "collaboration",
+      name: "wait_agent",
+      status: "completed",
+      arguments: "{\"timeout_ms\":120.0,\"retry_after\":1.5}",
+    });
     expect(hasCompletedAssistantMessage(completed.output)).toBe(true);
     expect(completedAssistantOutputText(completed.output)).toBe("terminal answer");
     expect(text).toContain("data: [DONE]");

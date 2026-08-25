@@ -206,12 +206,20 @@ function completedItems(payloads: readonly JsonRecord[]): JsonRecord[] {
   return items;
 }
 
+function hasSafeIntegerTimeoutArguments(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const match = value.match(/^\s*\{\s*"timeout_ms"\s*:\s*(-?(?:0|[1-9]\d*))\s*\}\s*$/);
+  if (!match) return false;
+  return Number.isSafeInteger(Number(match[1]));
+}
+
 function completedWaitCall(payloads: readonly JsonRecord[]): JsonRecord | undefined {
   return completedItems(payloads).find(item => item.type === "function_call"
     && item.namespace === "collaboration"
     && item.name === "wait_agent"
     && item.status === "completed"
-    && typeof item.call_id === "string");
+    && typeof item.call_id === "string"
+    && hasSafeIntegerTimeoutArguments(item.arguments));
 }
 
 function hasTerminalAnswer(payloads: readonly JsonRecord[]): boolean {
@@ -227,10 +235,50 @@ function hasTerminalAnswer(payloads: readonly JsonRecord[]): boolean {
       && message.content.some(part => {
         if (!part || typeof part !== "object" || Array.isArray(part)) return false;
         return (part as JsonRecord).type === "output_text"
-          && typeof (part as JsonRecord).text === "string";
+          && typeof (part as JsonRecord).text === "string"
+          && ((part as JsonRecord).text as string).trim().length > 0;
       });
   });
 }
+
+function structuralPayloads(argumentsText: string, answerText: string): JsonRecord[] {
+  return [
+    {
+      type: "response.output_item.done",
+      item: {
+        type: "function_call",
+        namespace: "collaboration",
+        name: "wait_agent",
+        call_id: "call_wait",
+        status: "completed",
+        arguments: argumentsText,
+      },
+    },
+    {
+      type: "response.completed",
+      response: {
+        id: "resp_final",
+        status: "completed",
+        output: [{
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: answerText }],
+        }],
+      },
+    },
+  ];
+}
+
+test("live V2 structural evidence requires lexical integer timeout arguments and nonblank final text", () => {
+  expect(completedWaitCall(structuralPayloads('{"timeout_ms":10000}', "done"))).toBeDefined();
+  expect(completedWaitCall(structuralPayloads('{"timeout_ms":10000.0}', "done"))).toBeUndefined();
+  expect(completedWaitCall(structuralPayloads('{"timeout_ms":1e4}', "done"))).toBeUndefined();
+  expect(completedWaitCall(structuralPayloads('{"timeout_ms":9007199254740992}', "done"))).toBeUndefined();
+
+  expect(hasTerminalAnswer(structuralPayloads('{"timeout_ms":10000}', " final answer "))).toBe(true);
+  expect(hasTerminalAnswer(structuralPayloads('{"timeout_ms":10000}', " \n\t "))).toBe(false);
+});
 
 async function postResponses(body: JsonRecord, signal: AbortSignal): Promise<{ status: number; payloads: JsonRecord[] }> {
   const response = await fetch(`${PROXY_BASE_URL}/v1/responses`, {

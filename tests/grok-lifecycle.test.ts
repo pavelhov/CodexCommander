@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  dispatchRecoveryLifecycleEntrypoint,
+  type RecoveryLifecycleDispatchDeps,
+} from "../src/cli/lifecycle-entrypoint-dispatch";
+import type { ProxyLifecycleResult } from "../src/cli/proxy-lifecycle";
 import { isServiceOwnershipError, ServiceOwnershipError } from "../src/service";
 
 const CLI_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
-const INIT_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "init.ts"), "utf8");
-const MACOS_LIFECYCLE_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "macos-lifecycle.ts"), "utf8");
 const LIFECYCLE_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "proxy-lifecycle.ts"), "utf8");
 const SERVICE_COMMAND_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "service-command.ts"), "utf8");
 const MANAGEMENT_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "server", "management-api.ts"), "utf8");
@@ -19,29 +22,68 @@ function sliceFn(source: string, start: string, end: string): string {
   return source.slice(from, to);
 }
 
-// `src/cli/index.ts` runs its command switch on import, so the remaining command-dispatch
-// assertions read that thin entrypoint. Foreground startup itself is covered through the
-// dependency-injected module in tests/foreground-proxy.test.ts.
 describe("Grok fence lifecycle wiring", () => {
-  test("legacy tray Start uses explicit start semantics instead of automatic ensure", () => {
-    const trayStart = sliceFn(CLI_SOURCE, "async function handleTrayProxyStart(", "async function handleTrayProxyRestart(");
-    expect(trayStart).toContain('action: "start"');
-    expect(trayStart).toContain("honorAutoStart: false");
-    expect(trayStart).toContain("replaceStaleRuntime: true");
-  });
+  test("background startup and Route Back entry points dispatch attested stale recovery", async () => {
+    const calls: Array<{ kind: "ensure" | "restart" | "restore-back"; options: unknown }> = [];
+    const result = (action: ProxyLifecycleResult["action"], message: string): ProxyLifecycleResult => ({
+      schemaVersion: 1,
+      action,
+      ok: true,
+      state: "running",
+      changed: false,
+      pid: 42,
+      port: 10100,
+      message,
+    });
+    const deps: RecoveryLifecycleDispatchDeps = {
+      ensureProxyLifecycle: async (options) => {
+        calls.push({ kind: "ensure", options });
+        return result(options.action ?? "ensure", "ensure-result");
+      },
+      restartProxyLifecycle: async (options) => {
+        calls.push({ kind: "restart", options });
+        return result("restart", "restart-result");
+      },
+      restoreBackRoutingLifecycle: async (options) => {
+        calls.push({ kind: "restore-back", options });
+        return result("restore-back", "restore-result");
+      },
+    };
+    const logger = { info: () => {}, warn: () => {}, error: () => {} };
+    const prepareStart = () => ({ ok: true as const, changed: false, enableCodexRouting: true });
+    const findLive = async () => null;
 
-  test("every background startup and Route Back entry point opts into attested stale recovery", () => {
-    const ensure = sliceFn(CLI_SOURCE, "async function handleEnsure(", "/** Fixed tray action");
-    const trayRestart = sliceFn(CLI_SOURCE, "async function handleTrayProxyRestart(", "async function handleStop(");
-    const restore = sliceFn(CLI_SOURCE, 'case "restore":', 'case "doctor":');
-    const gui = sliceFn(CLI_SOURCE, 'case "gui":', 'case "service":');
-    const restart = sliceFn(CLI_SOURCE, 'case "restart":', 'case "ready":');
-    const initRoute = sliceFn(INIT_SOURCE, "export async function routeCodexThroughLiveProxyFromInit(", "function replaceSetupConfigPreservingIntegrationIntent(");
-    const macRestart = sliceFn(MACOS_LIFECYCLE_SOURCE, 'case "restart":', 'case "restore-native":');
+    const results = await Promise.all([
+      dispatchRecoveryLifecycleEntrypoint("cli-ensure", { logger }, deps),
+      dispatchRecoveryLifecycleEntrypoint("tray-start", { logger }, deps),
+      dispatchRecoveryLifecycleEntrypoint("gui", { logger }, deps),
+      dispatchRecoveryLifecycleEntrypoint("macos-ensure", {}, deps),
+      dispatchRecoveryLifecycleEntrypoint("macos-start", { ensureIo: { prepareStart } }, deps),
+      dispatchRecoveryLifecycleEntrypoint("tray-restart", { logger }, deps),
+      dispatchRecoveryLifecycleEntrypoint("cli-restart", { logger }, deps),
+      dispatchRecoveryLifecycleEntrypoint("route-back", { routingIo: { findLive } }, deps),
+    ]);
 
-    for (const source of [ensure, trayRestart, restore, gui, restart, initRoute, macRestart]) {
-      expect(source).toContain("replaceStaleRuntime: true");
-    }
+    expect(results.map(item => item.message)).toEqual([
+      "ensure-result",
+      "ensure-result",
+      "ensure-result",
+      "ensure-result",
+      "ensure-result",
+      "restart-result",
+      "restart-result",
+      "restore-result",
+    ]);
+    expect(calls).toEqual([
+      { kind: "ensure", options: { honorAutoStart: true, ensureCompanion: true, replaceStaleRuntime: true, logger } },
+      { kind: "ensure", options: { action: "start", honorAutoStart: false, ensureCompanion: false, replaceStaleRuntime: true, logger } },
+      { kind: "ensure", options: { honorAutoStart: false, ensureCompanion: true, replaceStaleRuntime: true, logger } },
+      { kind: "ensure", options: { action: "ensure", honorAutoStart: false, ensureCompanion: false, replaceStaleRuntime: true } },
+      { kind: "ensure", options: { action: "start", honorAutoStart: false, ensureCompanion: false, replaceStaleRuntime: true, io: { prepareStart } } },
+      { kind: "restart", options: { ensureCompanion: false, replaceStaleRuntime: true, logger } },
+      { kind: "restart", options: { ensureCompanion: true, replaceStaleRuntime: true, logger } },
+      { kind: "restore-back", options: { findLive, replaceStaleRuntime: true } },
+    ]);
   });
 
   test("ensure syncs Grok against the observed live bind host", () => {
