@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-25
 
-**Status:** Proposed for final user review
+**Status:** Approved for implementation
 
 ## Problem
 
@@ -166,4 +166,3 @@ Implementation order:
   and `bun run privacy:scan` pass.
 - The packaged macOS runtime contains the verified source and the existing task's live
   replacement remains recoverable.
-
