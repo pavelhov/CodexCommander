@@ -339,12 +339,16 @@ export async function multiAgentGuidanceText(
     }
     const compatibleRosterWithGuidance: Array<EffectiveSubagentModel & { guidance?: string }> = [];
     for (const candidate of compatibleRosterModels) {
-      let guidance: string | undefined;
-      for (const entry of configuredRosterEntries) {
-        if (entry.guidance === undefined) continue;
-        if (await configuredMatchesAdvertised?.(entry.model, candidate.model)) {
-          guidance = entry.guidance;
-          break;
+      let guidance = configuredRosterEntries.find(entry =>
+        entry.model === candidate.model && entry.guidance !== undefined
+      )?.guidance;
+      if (guidance === undefined) {
+        for (const entry of configuredRosterEntries) {
+          if (entry.guidance === undefined) continue;
+          if (await configuredMatchesAdvertised?.(entry.model, candidate.model)) {
+            guidance = entry.guidance;
+            break;
+          }
         }
       }
       compatibleRosterWithGuidance.push({ ...candidate, ...(guidance ? { guidance } : {}) });

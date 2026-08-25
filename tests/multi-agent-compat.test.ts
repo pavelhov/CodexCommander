@@ -628,6 +628,33 @@ describe("multiAgentGuidanceText", () => {
     expect(text).not.toContain('"vendor/gpt-5.6-sol" (high/max) — Native account only');
   });
 
+  test("exact account selector note wins over an earlier bare-native note", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [
+      { slug: "gpt-5.6-sol", visibility: "hide", priority: 0 },
+      {
+        slug: "team/gpt-5.6-sol",
+        efforts: ["high", "max"],
+        priority: 1,
+        accountBound: true,
+      },
+    ]);
+
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        codexAccountNamespace: "team",
+        subagentRoster: [
+          { model: "gpt-5.6-sol", guidance: "default" },
+          { model: "team/gpt-5.6-sol", guidance: "team-specific" },
+        ],
+      },
+    );
+
+    expect(text).toContain('"team/gpt-5.6-sol" (high/max) — team-specific');
+    expect(text).not.toContain('"team/gpt-5.6-sol" (high/max) — default');
+  });
+
   test("v1 and stale catalogs omit roster notes", async () => {
     const dir = codexHomeFixture(V2_ON);
     catalogFixture(dir, [{ slug: "gpt-5.6-sol", efforts: ["high", "max"] }]);
