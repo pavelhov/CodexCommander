@@ -71,6 +71,16 @@ The skill is advisory and deliberately contains no roster or model ids. Before a
 current collaboration tool contract and live injected guidance; CodexCommander remains the live
 roster authority. A roster can change independently without making the installed skill stale.
 
+For V2 coordination, a `wait_agent` timeout means only that no qualifying mailbox or final event
+arrived during that wait. It does not mean a running child failed or stopped. The managed skill tells
+the coordinator to reconcile once, continue useful local work or wait another 5–10 minutes, and never
+interrupt solely because waits timed out—even when a checkpoint or conclude request is followed by
+silence. Interruption instead needs explicit cancellation, a confirmed error or blocked state, a hard
+deadline communicated to the child in advance, or deliberate replacement after preserving available
+work. For a bounded high-stakes gate, the coordinator can request a checkpoint or durable partial
+artifact prospectively; a conclude request is advisory and is delivered only at a model or tool
+boundary.
+
 The bounded `AGENTS.md` block is the durable mode hook. Codex loads it once for a run, so installing,
 updating, changing mode, or removing it does not rewrite the instructions of a current task. Start a
 new Codex task after any of those actions. User instructions and repository-scoped instructions
@@ -85,6 +95,10 @@ This advisory setup is separate from the collaboration surface and settings belo
 `/api/v2`, change `subagentDeveloperInstructions`, mutate native `[agents]` defaults or Codex config,
 inject a roster, rebuild or activate the catalog, restart a worker, or replace the proxy. Use the
 corresponding Run Policy and catalog controls for those operations.
+
+CodexCommander renders the canonical managed skill and bounded policy block into dashboard previews,
+then publishes those exact artifacts through the atomic installer and packaging flow. Update through
+the dashboard or project source; do not edit `~/.agents` or packaged `dist` output manually.
 
 ## Delegation model and effort
 

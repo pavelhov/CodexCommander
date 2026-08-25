@@ -92,11 +92,24 @@ install, update, mode change, repair, or removal; current tasks are not reloaded
 instructions can prohibit delegation. A nonempty `$CODEX_HOME/AGENTS.override.md` shadows the managed
 global block, while an empty override does not.
 
+The managed wait lifecycle treats `wait_agent` timeout as a neutral subscription result, not child
+failure evidence. After one `list_agents` reconciliation, a coordinator should do useful local work or
+wait another 5–10 minutes while the child remains running. Timeout alone—including silence after a
+checkpoint or conclude request—never authorizes `interrupt_agent`. Interruption requires explicit
+user cancellation, a confirmed error or blocked state, a hard deadline communicated to the child in
+advance, or deliberate replacement after available work is preserved. A bounded high-stakes gate can
+prospectively request one checkpoint or durable partial artifact; conclude delivery remains advisory
+and occurs at a model or tool boundary.
+
 Uninstall removes only the owned `SKILL.md`, removes its directory only when empty, and removes only
 the bounded global block while preserving every other `AGENTS.md` byte. This setup never mutates
 `config.toml`, `subagentDeveloperInstructions`, native `[agents]` defaults, roster injection, or the
 catalog, and it does not restart workers or replace the proxy. Those remain separate from the
 `/api/codex-delegation` resource.
+
+The canonical skill source flows through the renderer into API previews and the atomic installer and
+packaging outputs. Use those managed paths rather than manually editing `~/.agents` or generated
+`dist` files.
 
 ## Native Codex default sync
 
