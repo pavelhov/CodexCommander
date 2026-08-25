@@ -9,7 +9,7 @@ import {
   rewriteSubagentRosterModels,
   subagentRosterModels,
 } from "../src/codex/subagent-roster";
-import { loadConfig } from "../src/config";
+import { getDefaultConfig, loadConfig, readConfigDiagnostics, validateConfigCandidate } from "../src/config";
 
 test("normalizes strings, objects, and mixed arrays", () => {
   expect(normalizeSubagentRoster(["gpt-5.6-sol", { model: "xai/grok-4.6", guidance: "  Review  " }])).toEqual([
@@ -52,6 +52,40 @@ test("canonicalizes guidance and rewrites models while keeping first duplicate",
 test("rewrite rejects an oversized roster before deduplication", () => {
   const entries = Array.from({ length: 6 }, (_, index) => ({ model: `gpt-${index}` }));
   expect(() => rewriteSubagentRosterModels(entries, () => "xai/same")).toThrow();
+});
+
+test("config validation reports helper errors as schema failures without throwing", () => {
+  const base = getDefaultConfig();
+  expect(() => validateConfigCandidate({
+    ...base,
+    subagentModels: [{ model: "gpt-5.6-sol", guidance: "Use <secret>" }],
+  })).not.toThrow();
+  expect(validateConfigCandidate({
+    ...base,
+    subagentModels: [{ model: "gpt-5.6-sol", guidance: "Use <secret>" }],
+  })).toMatchObject({ ok: false });
+  expect(validateConfigCandidate({
+    ...base,
+    subagentModels: [{ model: "gpt-5.6-sol", extra: true }],
+  })).toMatchObject({ ok: false });
+});
+
+test("invalid roster diagnostics report schema errors rather than invalid_json", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ccx-roster-invalid-"));
+  const previousHome = process.env.CODEXCOMMANDER_HOME;
+  process.env.CODEXCOMMANDER_HOME = dir;
+  const configPath = join(dir, "config.json");
+  writeFileSync(configPath, JSON.stringify({
+    ...getDefaultConfig(),
+    subagentModels: [{ model: "gpt-5.6-sol", guidance: "Use <secret>" }],
+  }));
+  try {
+    expect(readConfigDiagnostics().error).toMatch(/^schema_invalid:/);
+  } finally {
+    if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+    else process.env.CODEXCOMMANDER_HOME = previousHome;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("loads a legacy string roster without rewriting the file", () => {

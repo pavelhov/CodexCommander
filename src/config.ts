@@ -409,10 +409,17 @@ const retryOn429PolicySchema = z.object({
 }).strict();
 
 const stringArraySchema = z.array(z.string());
-const subagentRosterSchema = z.array(z.union([
-  z.string(),
-  z.object({ model: z.string(), guidance: z.string().optional() }).strict(),
-])).transform(value => normalizeSubagentRoster(value));
+const subagentRosterSchema = z.array(z.unknown()).transform((value, ctx) => {
+  try {
+    return normalizeSubagentRoster(value);
+  } catch (error) {
+    ctx.addIssue({
+      code: "custom",
+      message: error instanceof Error ? error.message : "invalid subagent roster",
+    });
+    return z.NEVER;
+  }
+});
 const stringRecordSchema = z.record(z.string(), z.string());
 const numberRecordSchema = z.record(z.string(), z.number());
 const booleanRecordSchema = z.record(z.string(), z.boolean());
