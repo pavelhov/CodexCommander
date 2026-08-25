@@ -489,7 +489,7 @@ export function bridgeToResponsesSSE(
       // synthetic compaction item's payload on done.
       let compactionText = "";
       let compactionTextBytes = 0;
-      let currentToolCall: { itemId: string; outputIndex: number; callId: string; name: string; schemaName: string; args: string; argsBytes: number; namespace?: string; freeform?: boolean; toolSearch?: boolean; inputEmitted?: string } | null = null;
+      let currentToolCall: { itemId: string; outputIndex: number; callId: string; name: string; schemaName: string; args: string; argsBytes: number; argumentDeltas: string[]; namespace?: string; freeform?: boolean; toolSearch?: boolean; inputEmitted?: string } | null = null;
       // Open native web-search cell (between begin and end). Holds the output index allocated on
       // begin so the matching done reuses it; closed as `failed` if the stream terminates early.
       let currentWebSearch: { itemId: string; eventId: string; outputIndex: number } | null = null;
@@ -642,6 +642,18 @@ export function bridgeToResponsesSSE(
                 currentToolCall.name,
               ),
             };
+        if (currentToolCall.toolSearch) {
+          // Tool-search items are exposed only once their terminal status is known. The added
+          // frame must still precede the matching done frame, even though no live item was
+          // available while arguments were arriving.
+          emit("response.output_item.added", {
+            output_index: currentToolCall.outputIndex,
+            item: {
+              type: "tool_search_call", id: currentToolCall.itemId,
+              call_id: currentToolCall.callId, execution: "client", arguments: {}, status: "in_progress",
+            },
+          });
+        }
         emit("response.output_item.done", { output_index: currentToolCall.outputIndex, item });
         retainFinishedItem(item as OutputItem);
         budget?.closeCall(currentToolCall.callId);
@@ -652,8 +664,8 @@ export function bridgeToResponsesSSE(
       // Terminal-error / incomplete path for an open tool call (#765 remainder).
       // Closing via closeCurrentToolCall() would emit function_call_arguments.done and
       // status:"completed" BEFORE response.failed — the client still sees an issued call.
-      // Cancel instead: no *.done argument frames, status:"incomplete" (same pattern as an
-      // in-flight web_search_call closing as "failed"). Args still serialize as "{}" when
+      // Cancel instead: no function_call_arguments.done frame, status:"incomplete" (same
+      // pattern as an in-flight web_search_call closing as "failed"). Args still serialize as "{}" when
       // empty so echoed items cannot poison the next turn with JSON.parse("").
       const failCurrentToolCall = () => {
         if (!currentToolCall) return;
@@ -679,7 +691,26 @@ export function bridgeToResponsesSSE(
               call_id: currentToolCall.callId, name: currentToolCall.name,
               arguments: argsStr, status: "incomplete",
               ...(currentToolCall.namespace ? { namespace: currentToolCall.namespace } : {}),
-            };
+          };
+        if (currentToolCall.toolSearch) {
+          // An incomplete tool-search call cannot carry its raw, truncated JSON in a native
+          // tool_search_call. Fall back to function_call, exposing the item before replaying
+          // the buffered argument deltas so the SSE lifecycle remains well-formed.
+          emit("response.output_item.added", {
+            output_index: currentToolCall.outputIndex,
+            item: {
+              type: "function_call", id: currentToolCall.itemId,
+              call_id: currentToolCall.callId, name: currentToolCall.name,
+              arguments: "", status: "in_progress",
+              ...(currentToolCall.namespace ? { namespace: currentToolCall.namespace } : {}),
+            },
+          });
+          for (const delta of currentToolCall.argumentDeltas) {
+            emit("response.function_call_arguments.delta", {
+              item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex, delta,
+            });
+          }
+        }
         emit("response.output_item.done", { output_index: currentToolCall.outputIndex, item });
         retainFinishedItem(item as OutputItem);
         budget?.closeCall(currentToolCall.callId);
@@ -1010,8 +1041,8 @@ export function bridgeToResponsesSSE(
                     type: "function_call", id: itemId, call_id: event.id, name: realName,
                     arguments: "", status: "in_progress", ...(ns ? { namespace: ns } : {}),
                   };
-              emit("response.output_item.added", { output_index: outputIndex, item });
-              currentToolCall = { itemId, outputIndex, callId: event.id, name: realName, schemaName: event.name, args: "", argsBytes: 0, namespace: ns, freeform, toolSearch };
+              if (!toolSearch) emit("response.output_item.added", { output_index: outputIndex, item });
+              currentToolCall = { itemId, outputIndex, callId: event.id, name: realName, schemaName: event.name, args: "", argsBytes: 0, argumentDeltas: [], namespace: ns, freeform, toolSearch };
               budget?.openCall(event.id);
               break;
             }
@@ -1024,6 +1055,7 @@ export function bridgeToResponsesSSE(
                   "tool_args",
                   currentToolCall.callId,
                 ));
+                if (currentToolCall.toolSearch) currentToolCall.argumentDeltas.push(event.arguments);
                 if (!currentToolCall.freeform && !currentToolCall.toolSearch) {
                   emit("response.function_call_arguments.delta", {
                     item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,

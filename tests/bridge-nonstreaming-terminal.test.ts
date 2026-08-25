@@ -83,16 +83,36 @@ describe("buffered bridge terminal handling", () => {
       { type: "tool_call_delta", arguments: '{"query":"repo' },
     ]), "m", undefined, undefined, new Set(["tool_search"]), undefined, 2_000));
 
-    const outputItem = frames.filter(frame => frame.event === "response.output_item.done")
-      .map(frame => frame.data.item as Record<string, unknown>)
-      .find(item => item.call_id === "search_1");
+    const addedIndex = frames.findIndex(frame => frame.event === "response.output_item.added"
+      && (frame.data.item as Record<string, unknown> | undefined)?.call_id === "search_1");
+    const doneIndex = frames.findIndex(frame => frame.event === "response.output_item.done"
+      && (frame.data.item as Record<string, unknown> | undefined)?.call_id === "search_1");
+    expect(addedIndex).toBeGreaterThanOrEqual(0);
+    expect(doneIndex).toBeGreaterThan(addedIndex);
+    const added = frames[addedIndex].data.item as Record<string, unknown>;
+    const outputItem = frames[doneIndex].data.item as Record<string, unknown>;
+    expect(added).toMatchObject({
+      type: "function_call",
+      id: outputItem.id,
+      call_id: "search_1",
+      name: "tool_search",
+      status: "in_progress",
+      arguments: "",
+    });
     expect(outputItem).toMatchObject({
       type: "function_call",
+      id: added.id,
       call_id: "search_1",
       name: "tool_search",
       status: "incomplete",
       arguments: '{"query":"repo',
     });
+    expect(frames[addedIndex].data.output_index).toBe(frames[doneIndex].data.output_index);
+    const argumentDeltas = frames.filter(frame => frame.event === "response.function_call_arguments.delta");
+    expect(argumentDeltas.every(frame => frames.indexOf(frame) > addedIndex)).toBe(true);
+    expect(argumentDeltas.every(frame => frame.data.item_id === added.id
+      && frame.data.output_index === frames[addedIndex].data.output_index)).toBe(true);
+    expect(argumentDeltas.map(frame => frame.data.delta).join("")).toBe('{"query":"repo');
     expect(frames.some(frame => frame.event === "response.function_call_arguments.done")).toBe(false);
     const terminal = frames.find(frame => frame.event === "response.incomplete");
     const output = (terminal?.data.response as { output?: Record<string, unknown>[] } | undefined)?.output ?? [];
@@ -112,16 +132,31 @@ describe("buffered bridge terminal handling", () => {
       { type: "done" },
     ]), "m", undefined, undefined, new Set(["tool_search"]), undefined, 2_000));
 
-    const outputItem = frames.filter(frame => frame.event === "response.output_item.done")
-      .map(frame => frame.data.item as Record<string, unknown>)
-      .find(item => item.call_id === "search_1");
+    const addedIndex = frames.findIndex(frame => frame.event === "response.output_item.added"
+      && (frame.data.item as Record<string, unknown> | undefined)?.call_id === "search_1");
+    const doneIndex = frames.findIndex(frame => frame.event === "response.output_item.done"
+      && (frame.data.item as Record<string, unknown> | undefined)?.call_id === "search_1");
+    expect(addedIndex).toBeGreaterThanOrEqual(0);
+    expect(doneIndex).toBeGreaterThan(addedIndex);
+    const added = frames[addedIndex].data.item as Record<string, unknown>;
+    const outputItem = frames[doneIndex].data.item as Record<string, unknown>;
+    expect(added).toMatchObject({
+      type: "tool_search_call",
+      id: outputItem.id,
+      call_id: "search_1",
+      execution: "client",
+      status: "in_progress",
+      arguments: {},
+    });
     expect(outputItem).toMatchObject({
       type: "tool_search_call",
+      id: added.id,
       call_id: "search_1",
       execution: "client",
       status: "completed",
       arguments: { query: "repo" },
     });
+    expect(frames[addedIndex].data.output_index).toBe(frames[doneIndex].data.output_index);
     const terminal = frames.find(frame => frame.event === "response.completed");
     const output = (terminal?.data.response as { output?: Record<string, unknown>[] } | undefined)?.output ?? [];
     expect(output).toContainEqual(expect.objectContaining({
