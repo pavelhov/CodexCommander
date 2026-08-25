@@ -254,6 +254,38 @@ async function cancelBodyQuietly(response: Response): Promise<void> {
   }
 }
 
+function catalogModelIds(payload: unknown): Set<string> | null {
+  const data = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? (payload as JsonRecord).data
+    : undefined;
+  if (!Array.isArray(data)) return null;
+  const ids = new Set<string>();
+  for (const row of data) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+    const id = (row as JsonRecord).id;
+    if (typeof id !== "string") return null;
+    ids.add(id);
+  }
+  return ids;
+}
+
+test("live V2 catalog parser accepts valid ids and an empty catalog", () => {
+  expect(catalogModelIds({ data: [{ id: "xai/grok-4.5" }, { id: "gpt-5.6-sol" }] }))
+    .toEqual(new Set(["xai/grok-4.5", "gpt-5.6-sol"]));
+  expect(catalogModelIds({ data: [] })).toEqual(new Set());
+});
+
+test("live V2 catalog parser rejects every malformed row shape", () => {
+  for (const data of [
+    [null],
+    [[{ id: "nested" }]],
+    [{}],
+    [{ id: 42 }],
+  ]) {
+    expect(catalogModelIds({ data })).toBeNull();
+  }
+});
+
 async function availableModels(): Promise<Set<string> | null> {
   const controller = new AbortController();
   const deadline = setTimeout(() => controller.abort(), DISCOVERY_DEADLINE_MS);
@@ -269,15 +301,7 @@ async function availableModels(): Promise<Set<string> | null> {
     } catch {
       return null;
     }
-    const data = payload && typeof payload === "object" && !Array.isArray(payload)
-      ? (payload as JsonRecord).data
-      : undefined;
-    if (!Array.isArray(data)) return null;
-    return new Set(data.flatMap(row => {
-      if (!row || typeof row !== "object" || Array.isArray(row)) return [];
-      const id = (row as JsonRecord).id;
-      return typeof id === "string" ? [id] : [];
-    }));
+    return catalogModelIds(payload);
   } catch {
     return null;
   } finally {
