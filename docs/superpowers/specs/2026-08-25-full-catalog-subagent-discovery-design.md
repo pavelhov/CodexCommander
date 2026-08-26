@@ -265,7 +265,8 @@ adds no placeholder containing user input.
 
 Surface-specific copy remains separate:
 
-- V2 retains the current `fork_turns` rules and flat collaboration terminology.
+- V2 retains the current `fork_turns` rules and V2 collaboration terminology across routed flat and
+  native namespaced tool shapes.
 - V1 names its namespaced `spawn_agent` contract and never mentions `fork_turns`, `send_message`, or
   other V2-only arguments/tools.
 - Named V1 intent renders this selection block at any parent reasoning effort. Unnamed V1 still emits
@@ -281,16 +282,33 @@ the five quick picks through a closed enum or a bounded description. Add:
 ```ts
 export function advertiseRequestScopedSpawnCandidates(
   parsed: CodexCommanderParsedRequest,
+  surface: "v1" | "v2",
   candidates: readonly RequestScopedSpawnCandidate[],
-): { changedParsed: boolean; changedRaw: boolean };
+): {
+  advertised: boolean;
+  changedParsed: boolean;
+  changedRaw: boolean;
+};
 ```
 
-The function updates only the active `spawn_agent` tool for the detected collaboration surface:
+The function updates only the active `spawn_agent` tool for the confirmed collaboration surface. It
+first validates every active parsed/raw representation, builds copy-on-write patches, and applies
+them atomically. `advertised: true` means every required representation can emit the exact ids,
+including when the ids were already present and no bytes changed. Any unsupported required
+representation returns `advertised: false` and leaves every representation untouched.
 
 - Update `parsed.context.tools` for routed adapters.
 - Update matching tools in `parsed._rawBody.tools` and current-suffix `additional_tools` items for
   native Responses passthrough.
-- For V2, match only the confirmed flat `spawn_agent` function.
+- Also update current-suffix `tool_search_output` tool declarations, which the parser and native V2
+  plaintext rewrite treat as active tool groups.
+- For V2, support both the routed flat `spawn_agent` function and native parsed
+  `collaboration.spawn_agent` plus its nested raw `type: "namespace", name: "collaboration"`
+  declaration.
+- When the native V2 plaintext rewrite already activated, parsed tools deliberately remain under
+  `collaboration` while raw declarations use `ccx_collaboration_plaintext`. Accept that exact pair
+  only when `parsed._v2PlaintextCollaborationAlias === true`; every other namespace mismatch fails
+  closed.
 - For V1, match only the confirmed namespaced `spawn_agent` inside `agents` or `multi_agent_v1` raw
   namespace groups and its flattened parsed `{ namespace, name: "spawn_agent" }` representation.
 - Locate `parameters.properties.model` only when it is an optional string-valued property.
@@ -302,6 +320,8 @@ The function updates only the active `spawn_agent` tool for the detected collabo
 - Do not alter tool names, required fields, strictness, namespaces, companion tools, lifecycle tools,
   or the five persistent roster choices.
 - Refuse malformed, contradictory, mixed V1/V2, or future unknown collaboration shapes.
+- Never leave a partial parsed/raw mutation. Positive off-roster guidance is rendered only after
+  this function returns `advertised: true`.
 
 The native client remains the final executor and validates the chosen exact id against the catalog
 already loaded by that worker. No proxy-created tool or custom spawn path is introduced.
@@ -313,9 +333,20 @@ preserving the current public test surface:
 
 ```ts
 export interface MultiAgentGuidancePlan {
+  surface: "v1" | "v2";
   text: string | null;
+  requestScopedResolution: RequestScopedSpawnResolution;
   requestScopedCandidates: RequestScopedSpawnCandidate[];
 }
+
+export function finalizeMultiAgentGuidanceText(
+  plan: MultiAgentGuidancePlan,
+  advertisement: {
+    advertised: boolean;
+    changedParsed: boolean;
+    changedRaw: boolean;
+  },
+): string | null;
 
 export async function prepareMultiAgentGuidance(
   parsed: CodexCommanderParsedRequest,
@@ -330,9 +361,24 @@ export async function multiAgentGuidanceText(
 ): Promise<string | null>;
 ```
 
-`multiAgentGuidanceText()` remains a compatibility wrapper returning `plan.text`. The production
-`core.ts` path calls `prepareMultiAgentGuidance()`, advertises the returned candidates into the parsed
-and raw tool schemas through the selected surface adapter, then injects `plan.text` as it does today.
+`plan.text` contains only the existing surface guidance and never contains request-scoped candidate
+ids. `finalizeMultiAgentGuidanceText()` switches on `requestScopedResolution.status` before consulting
+advertisement:
+
+- `none` returns `plan.text` byte-for-byte.
+- `unavailable` with `stale_catalog` returns restart-only `plan.text` and adds nothing.
+- Other `unavailable` reasons append fixed unavailable copy containing no model id.
+- `matched` appends the positive exact-id block only when advertisement succeeded; otherwise it
+  appends fixed `no_spawn_override` copy containing no model id.
+
+This distinction is required because `advertised: false` is normal for unnamed and stale turns as
+well as schema failure. It must never make an unnamed V1/V2 request gain an unavailable appendix.
+
+`multiAgentGuidanceText()` remains a compatibility text projection for the existing public test
+surface. The production `core.ts` path must call `prepareMultiAgentGuidance()`, atomically advertise
+the returned candidates, call `finalizeMultiAgentGuidanceText()` with the advertisement result, and
+only then inject the finalized text. This keeps schema mutation explicit and prevents guidance from
+claiming an id that the active tool cannot emit.
 
 Extend the request-scoped catalog context so roster projection and named discovery share one parsed
 catalog snapshot and do no new network I/O.
@@ -370,8 +416,10 @@ continues reading the skill file at render time; no hardcoded ids are added to
 6. Apply visibility, surface eligibility, routing, account, worker-freshness, and task-delivery
    filters.
 7. Return the top bounded candidate facts.
-8. Add those exact ids to the current `spawn_agent.model` schema/description.
-9. Inject the fixed request-scoped developer guidance.
+8. Atomically add those exact ids to every active parsed/raw `spawn_agent.model`
+   schema/description, including native V2 namespace aliases.
+9. Only after successful advertisement, inject the fixed positive request-scoped developer guidance;
+   otherwise inject fixed no-override/unavailable guidance containing no id.
 10. The parent chooses the best task-fit candidate and calls native `spawn_agent` with its exact id.
 11. The native worker validates the id against its loaded catalog; CodexCommander routes the child
     request normally.
@@ -384,8 +432,8 @@ continues reading the skill file at render time; no hardcoded ids are added to
   request-scoped model claim.
 - **V2 encrypted incompatibility:** suppress external candidates. If none remain, use the unavailable
   path. V1 never enters this branch.
-- **Malformed tool schema:** do not mutate it. The plan reports `no_spawn_override` and does not claim
-  the off-roster id is usable.
+- **Malformed or mismatched tool schema:** do not mutate any representation. Finalization reports
+  `no_spawn_override` and does not claim the off-roster id is usable.
 - **Catalog parse/read failure:** fail closed to ordinary guidance without throwing the parent request.
 - **Candidate later rejected by the native worker:** surface the native failure. Do not mutate the
   roster or retry a different model family automatically.
@@ -475,13 +523,18 @@ continues reading the skill file at render time; no hardcoded ids are added to
 ### Tool advertisement
 
 - Parsed and raw flat V2 schemas receive the same candidate ids.
+- Parsed native `collaboration.spawn_agent` and raw nested `collaboration` schemas receive the same
+  candidate ids.
+- After native V2 plaintext rewriting, parsed `collaboration` and raw
+  `ccx_collaboration_plaintext` declarations receive the same candidate ids without renaming either.
 - Parsed flattened V1 tools and raw nested `agents` / `multi_agent_v1` namespace schemas receive the
   same candidate ids without flattening or renaming the namespace.
 - Closed string enums are unioned without replacing the five choices.
 - Open string schemas receive bounded description augmentation.
 - Top-level tools and current-suffix `additional_tools` are covered.
-- Mixed surfaces, missing model properties, malformed schemas, and replay-prefix tool definitions are
-  unchanged.
+- Current-suffix `tool_search_output` declarations are covered.
+- Mixed surfaces, missing model properties, malformed schemas, namespace mismatches, and replay-prefix
+  tool definitions are unchanged atomically and receive no positive off-roster guidance.
 
 ### Integration
 
