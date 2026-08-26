@@ -2,8 +2,8 @@
 
 ## Summary
 
-CodexCommander keeps the configured five-model subagent roster as the default quick menu. On a V2
-parent turn whose current user request names a model or provider, CodexCommander additionally searches
+CodexCommander keeps the configured five-model subagent roster as the default quick menu. On a V1 or
+V2 parent turn whose current user request names a model or provider, CodexCommander additionally searches
 the complete catalog loaded for that Codex worker, exposes the relevant compatible matches for that
 request, and tells the parent agent to choose the best task-fit exact id and spawn it without asking the
 user to clarify.
@@ -38,7 +38,7 @@ model selection.
   request.
 - Adding a model-search command, MCP tool, or second spawn implementation.
 - A generic natural-language router for the parent's own model.
-- V1 behavior changes.
+- Changing unnamed V1 behavior, its max/ultra Proactive gate, or its namespaced lifecycle tools.
 - Silently substituting another model family when the requested family is unavailable.
 - Persisting aliases learned from user prompts.
 
@@ -50,8 +50,9 @@ model selection.
    and deterministic ordering. It does not claim that one model is universally better than another.
 3. **The five quick picks remain.** They are still the complete default advertisement for turns without
    a named model intent.
-4. **V2 only.** V1 keeps its current Proactive-at-top-effort behavior and receives no full-catalog
-   overlay.
+4. **Both collaboration surfaces.** V1 and V2 share extraction and matching, then use separate
+   surface adapters. Unnamed V1 keeps its current Proactive-at-max/ultra behavior byte-identically;
+   named V1 intent may add the request-scoped target block at any parent effort.
 5. **No persistent mutation.** Request-scoped discovery never changes config, catalog bytes, activation
    state, or worker priority.
 6. **No family substitution.** If a requested family has no spawnable match, the parent is told that the
@@ -72,6 +73,8 @@ model selection.
   raw input restored from `previous_response_id` state.
 - V2 plaintext delivery is required for external routed children. Encrypted native parents may name
   only targets proven able to consume native ChatGPT ciphertext.
+- V1 uses namespaced collaboration tools and plaintext cross-provider task delivery. It does not use
+  the V2 encrypted-task compatibility policy or `fork_turns` contract.
 - The proxy already routes exact `provider/model` ids and applies subagent effort caps after selection.
 
 ## Architecture
@@ -154,14 +157,19 @@ A catalog row is eligible only when all applicable checks pass:
 
 - `slug` is a nonblank canonical string.
 - `visibility === "list"`.
-- `isEligibleV2SubagentEntry(entry)` is true.
+- On V2, `isEligibleV2SubagentEntry(entry)` is true.
+- On V1, use the existing `effectiveSubagentRoster(..., "v1")` semantics: list-visible rows are not
+  rejected for carrying a V2 pin or no pin. Forced V1 mode already stamps all generated rows V1.
 - The model and provider are enabled and `routeModel` can resolve the exact slug.
 - Bare native account clones resolve only to the active account namespace unless the user wrote an
   exact account-qualified slug.
 - Explicit routed provider matches such as xAI, Anthropic, or Kimi remain eligible even when they are
   outside the parent native account namespace.
-- An encrypted parent keeps only targets for which `isEncryptedTaskCompatibleModel(model) === true`.
-  Missing compatibility evidence fails closed.
+- An encrypted V2 parent keeps only targets for which
+  `isEncryptedTaskCompatibleModel(model) === true`. Missing compatibility evidence fails closed.
+- V1 does not apply encrypted-task filtering and does not require
+  `multiAgentV2MessageDelivery = "plaintext"`; its namespaced task delivery is already the established
+  cross-provider path.
 - The worker catalog state is `fresh` or `not_running`. `stale` or `unknown` returns the existing
   restart guidance and names no request-scoped ids.
 
@@ -228,7 +236,7 @@ for a more specific future request.
 
 ### 5. Parent-agent choice contract
 
-Built-in V2 guidance gains a request-scoped block when candidates exist:
+Both surfaces gain a request-scoped block when candidates exist. The shared selection copy is:
 
 ```text
 The current user request names a model/provider. Matching live spawn targets from the full catalog,
@@ -255,6 +263,16 @@ Custom `injectionPrompt` does not suppress this safety/selection block. The cust
 its existing placeholders; request-scoped discovery is appended as separate fixed developer text and
 adds no placeholder containing user input.
 
+Surface-specific copy remains separate:
+
+- V2 retains the current `fork_turns` rules and flat collaboration terminology.
+- V1 names its namespaced `spawn_agent` contract and never mentions `fork_turns`, `send_message`, or
+  other V2-only arguments/tools.
+- Named V1 intent renders this selection block at any parent reasoning effort. Unnamed V1 still emits
+  only the current Proactive block at max/ultra and remains silent below that gate.
+- V1 still receives no configured-roster, preferred-worker, fallback-list, or custom
+  `injectionPrompt` payload; only the named request-scoped block is additive.
+
 ### 6. Request-scoped spawn tool advertisement
 
 Developer guidance alone is insufficient for Codex builds whose `spawn_agent.model` property exposes
@@ -267,16 +285,20 @@ export function advertiseRequestScopedSpawnCandidates(
 ): { changedParsed: boolean; changedRaw: boolean };
 ```
 
-The function updates only the active flat V2 `spawn_agent` tool for this request:
+The function updates only the active `spawn_agent` tool for the detected collaboration surface:
 
 - Update `parsed.context.tools` for routed adapters.
 - Update matching tools in `parsed._rawBody.tools` and current-suffix `additional_tools` items for
   native Responses passthrough.
+- For V2, match only the confirmed flat `spawn_agent` function.
+- For V1, match only the confirmed namespaced `spawn_agent` inside `agents` or `multi_agent_v1` raw
+  namespace groups and its flattened parsed `{ namespace, name: "spawn_agent" }` representation.
 - Locate `parameters.properties.model` only when it is an optional string-valued property.
 - If the property has a string `enum`, append the request-scoped exact ids, preserving existing order
   and deduping.
 - Append a bounded sentence listing the request-scoped exact ids to the model property's description.
 - Do not create a model override on a tool schema that does not support one.
+- Never flatten, rename, or move a V1 namespace group.
 - Do not alter tool names, required fields, strictness, namespaces, companion tools, lifecycle tools,
   or the five persistent roster choices.
 - Refuse malformed, contradictory, mixed V1/V2, or future unknown collaboration shapes.
@@ -310,7 +332,7 @@ export async function multiAgentGuidanceText(
 
 `multiAgentGuidanceText()` remains a compatibility wrapper returning `plan.text`. The production
 `core.ts` path calls `prepareMultiAgentGuidance()`, advertises the returned candidates into the parsed
-and raw tool schemas, then injects `plan.text` as it does today.
+and raw tool schemas through the selected surface adapter, then injects `plan.text` as it does today.
 
 Extend the request-scoped catalog context so roster projection and named discovery share one parsed
 catalog snapshot and do no new network I/O.
@@ -322,7 +344,8 @@ catalog snapshot and do no new network I/O.
 - A configured `injectionEffort` may be suggested only when it exists on the chosen candidate's
   ladder; otherwise omit it.
 - Existing `subagentEffortCap` remains the enforcement boundary and may lower the requested effort.
-- `fork_turns` rules stay unchanged.
+- V2 `fork_turns` rules stay unchanged. V1 guidance never invents a `fork_turns` argument.
+- Do not extend V2-only main-turn effort-cap behavior to V1 parent turns.
 
 ### 9. Managed delegation guidance
 
@@ -340,11 +363,12 @@ continues reading the skill file at render time; no hardcoded ids are added to
 ## Data flow
 
 1. Expand `previous_response_id` state and parse the request as today.
-2. Detect the V2 collaboration surface.
+2. Detect the V1 or V2 collaboration surface and select its adapter.
 3. Extract the last direct current-suffix user text.
 4. Read one request-scoped catalog snapshot.
 5. Match the named provider/model against the complete snapshot.
-6. Apply visibility, V2, routing, account, worker-freshness, and task-delivery filters.
+6. Apply visibility, surface eligibility, routing, account, worker-freshness, and task-delivery
+   filters.
 7. Return the top bounded candidate facts.
 8. Add those exact ids to the current `spawn_agent.model` schema/description.
 9. Inject the fixed request-scoped developer guidance.
@@ -358,8 +382,8 @@ continues reading the skill file at render time; no hardcoded ids are added to
 - **No matching catalog row:** fixed unavailable guidance, no invented id, no substitution.
 - **Stale or unknown worker catalog:** keep the existing restart message and suppress every positive
   request-scoped model claim.
-- **Encrypted incompatibility:** suppress external candidates. If none remain, use the unavailable
-  path.
+- **V2 encrypted incompatibility:** suppress external candidates. If none remain, use the unavailable
+  path. V1 never enters this branch.
 - **Malformed tool schema:** do not mutate it. The plan reports `no_spawn_override` and does not claim
   the off-roster id is usable.
 - **Catalog parse/read failure:** fail closed to ordinary guidance without throwing the parent request.
@@ -391,8 +415,8 @@ continues reading the skill file at render time; no hardcoded ids are added to
 
 ### Modified
 
-- `src/server/responses/collaboration.ts` — shared catalog snapshot, guidance-plan result, V2
-  request-scoped candidate block, and compatibility wrapper.
+- `src/server/responses/collaboration.ts` — shared catalog snapshot, guidance-plan result, separate V1
+  and V2 request-scoped candidate renderers/adapters, and compatibility wrapper.
 - `src/server/responses/core.ts` — apply the guidance plan's tool advertisement before injecting its
   developer message.
 - `src/skills/codexcommander-delegation/SKILL.md` — current-turn candidate contract without model ids.
@@ -412,7 +436,7 @@ continues reading the skill file at render time; no hardcoded ids are added to
 - `MAX_SPAWN_AGENT_MODEL_OVERRIDES` and catalog priority policy.
 - `src/codex/subagent-roster.ts` and `/api/subagent-models`.
 - Catalog activation, Apply, and worker interruption flows.
-- V1 collaboration guidance.
+- Unnamed V1 Proactive guidance and its max/ultra gate.
 - Provider authentication and routing configuration.
 
 ## Testing
@@ -439,27 +463,35 @@ continues reading the skill file at render time; no hardcoded ids are added to
 
 ### Eligibility
 
-- Hidden, disabled, unroutable, V1-pinned, wrong-account native clone, and encrypted-incompatible rows
-  are excluded.
+- Hidden, disabled, unroutable, wrong-account native clone, and surface-incompatible rows are
+  excluded.
+- Genuine V1-pinned rows such as Luna are eligible on V1 and excluded on V2; V2-pinned and unpinned
+  list-visible rows retain the existing V1 roster semantics.
 - Explicit routed provider matches remain eligible outside the active native account namespace when
   V2 task delivery is plaintext.
+- V1 direct routed matches remain eligible without V2 plaintext mode or encrypted-task filtering.
 - Stale and unknown workers yield no positive ids.
 
 ### Tool advertisement
 
 - Parsed and raw flat V2 schemas receive the same candidate ids.
+- Parsed flattened V1 tools and raw nested `agents` / `multi_agent_v1` namespace schemas receive the
+  same candidate ids without flattening or renaming the namespace.
 - Closed string enums are unioned without replacing the five choices.
 - Open string schemas receive bounded description augmentation.
 - Top-level tools and current-suffix `additional_tools` are covered.
-- V1 namespaces, mixed surfaces, missing model properties, malformed schemas, and replay-prefix tool
-  definitions are unchanged.
+- Mixed surfaces, missing model properties, malformed schemas, and replay-prefix tool definitions are
+  unchanged.
 
 ### Integration
 
 - Unnamed V2 requests remain byte-identical to five-only guidance.
 - Named V2 requests include request-scoped candidate facts and no user text.
 - The parent contract says choose without clarification and pass an exact id.
-- V1 remains byte-identical.
+- Named V1 at medium effort receives the exact-id candidate block and namespaced schema overlay with no
+  `fork_turns` or V2 companion-tool copy.
+- Unnamed V1 remains byte-identical: silent below max/ultra and Proactive-only at max/ultra, with no
+  roster or full-catalog payload.
 - Custom injection prompts retain their current substitution while the fixed selection block remains.
 - Encrypted native parents never receive external candidate ids.
 - The ordinary fallback chain and subagent effort cap are unchanged.
@@ -478,7 +510,8 @@ continues reading the skill file at render time; no hardcoded ids are added to
 - The first implementation commit lands the pure extractor/matcher and tests without production
   wiring.
 - The second commit wires the V2 guidance plan and tool schema overlay.
-- The third commit updates the managed skill and documentation.
+- The third commit wires the isolated V1 namespaced adapter, eligibility, and guidance renderer.
+- The fourth commit updates the managed skill and documentation.
 - Existing fresh workers already contain the full catalog, so the feature itself does not require
   Apply or a catalog rewrite. A stale worker still requires the existing restart path.
 - If a supported Codex build rejects an exact off-roster id after the current request advertised it,
@@ -497,6 +530,8 @@ continues reading the skill file at render time; no hardcoded ids are added to
   upstream descriptions are never injected.
 - **Token/schema growth:** mitigated by an eight-candidate cap and byte-bounded descriptions.
 - **Encrypted child task unreadable:** mitigated by the existing fail-closed compatibility predicate.
+- **Surface cross-contamination:** mitigated by separate V1/V2 schema visitors and guidance renderers,
+  mixed-surface silence, and golden tests for every unnamed/no-op path.
 
 ## Acceptance criteria
 
@@ -507,6 +542,10 @@ continues reading the skill file at render time; no hardcoded ids are added to
   spawns it without asking the user.
 - The same catalog with an encrypted parent exposes no external Grok id and never sends unreadable
   ciphertext to it.
+- In a fresh V1 session with `xai/grok-4.6` outside the configured five, `use Grok 4.6` adds the exact
+  id to the namespaced V1 spawn contract and spawns it through V1 plaintext task delivery without
+  requiring V2 plaintext mode or mentioning `fork_turns`.
+- Unnamed V1 behavior remains byte-identical at medium and max effort.
 - A model mention present only in replayed history does not affect the current turn.
 - A request with no named model produces the same five-only tool/guidance behavior as before.
 - No request-scoped choice or user text reaches logs, config, catalog bytes, or managed artifacts.
