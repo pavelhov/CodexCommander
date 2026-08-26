@@ -153,6 +153,29 @@ and `codex-code-mode-host` matches, and verifies which old workers exited. The C
 menu app remain running. The current companion does not defer this operation until idle; the confirmation uses
 fresh request activity only to explain interruption risk, and **Later** leaves the update pending.
 
+Every current-home **Ensure**, explicit **Start**, **Restart**, and **Route Back** entry point performs
+the same bounded stale-runtime classification before trusting an already-running proxy. That includes
+the foreground CLI, CLI and GUI ensure/restart paths, tray actions, and the macOS companion. An exact
+runtime-record PID with a valid local HMAC attestation and the current package version and lifecycle
+generation is reused without requiring process-signal identity because no signal is sent. An exact
+attested runtime that advertises an older package version or generation is replaced only after its
+PID birth identity is captured and rechecked. Recovery first restores native routing, stops that exact
+predecessor, starts the current runtime, synchronizes the catalog, and restores Codex routing only
+when it was previously ON or the chosen action explicitly requests it. Ensure preserves an intentional
+OFF state. A missing record, failed or non-exact attestation, foreign listener, unknown metadata, or
+newer runtime is never signaled or authorized as a new route; an explicit routing action remains native
+and returns a structured lifecycle failure. An attested predecessor that omits the newer metadata is
+treated as stale only at the legacy compatibility boundary described below.
+Current foreground records carry `attestationProtocol: 2`; that marker requires a metadata-bound
+health proof, so present version/generation headers cannot be stripped or altered into a legacy
+candidate. Legacy records omit the marker and are accepted only with both metadata headers absent.
+
+The process-control fallback is similarly narrow. A proxy `409` refusal is absolute by default;
+only the shared Stop lifecycle may permit its already-attested exact-identity SIGTERM/SIGKILL ladder,
+and only after native routing was verified and the service supervisor was independently stopped or
+verified absent. PID, UID/owner, argv hash, birth identity, and protected runtime-record fences are
+rechecked before every signal.
+
 ## Providers and adapters
 
 | Path | Responsibility |

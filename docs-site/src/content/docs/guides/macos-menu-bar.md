@@ -129,6 +129,17 @@ override it.
   stopping fails, the companion stays open and reports the error. With the panel active, its shortcut
   is `⌥⌘Q`.
 
+When the companion finds an older bundled CodexCommander runtime that can no longer read the current
+configuration, automatic ensure, **Start Proxy**, **Restart Proxy**, and **Route Codex Through Proxy**
+use the same one-time recovery: they verify the exact runtime record and local management attestation,
+restore native routing, recheck the predecessor's process identity, retire only that exact process,
+start the current bundled proxy, and synchronize the model catalog. The previous Codex route is
+restored only when it was ON or the selected action explicitly requests routing; automatic ensure
+while native routing is OFF stays OFF. A compatible current runtime is reused without being signaled.
+A newer runtime, a listener without the protected runtime record, or any listener whose attestation
+or metadata cannot be proven is left untouched and is not accepted for a new route. If recovery cannot
+complete, Codex remains native and the companion shows the structured failure.
+
 Choosing either route action immediately opens a status card below the header. It shows a spinner,
 elapsed time, and the real orchestration phases: **Changing route** and **Confirming route**. Route
 and lifecycle buttons are disabled while the operation is running, and the button for the already

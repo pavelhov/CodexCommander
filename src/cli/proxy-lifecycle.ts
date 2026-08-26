@@ -25,7 +25,12 @@ import { codexIntegrationEnabled, setIntegrationEnabled } from "../codex/desired
 import { reconcileJournal } from "../codex/journal";
 import { stripGrokConfig } from "../grok/inject";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
-import { stopProxy } from "../lib/process-control";
+import {
+  captureProxySignalIdentity,
+  sameProxySignalIdentity,
+  stopProxy,
+  type ProxySignalIdentity,
+} from "../lib/process-control";
 import {
   diagnoseService,
   isServiceOwnershipError,
@@ -39,8 +44,12 @@ import {
   findLiveProxy,
   probeHostname,
   probeReadiness,
+  attestLiveManagementProxy,
+  runtimeReplacementDisposition,
+  type AttestedLiveManagementProxy,
   type LiveProxy,
 } from "../server/proxy-liveness";
+import { VERSION } from "../server/management-api";
 import {
   acquireProxyLifecycleAuthority,
   type AcquireProxyLifecycleAuthorityOptions,
@@ -48,6 +57,7 @@ import {
 } from "../server/proxy-lifecycle-authority";
 import {
   PROXY_DELEGATED_START_ENV,
+  PROXY_LIFECYCLE_COMPATIBILITY_GENERATION,
   proxyLifecycleLockLeaseHeaders,
   type ProxyLifecycleLockLease,
 } from "../server/proxy-lifecycle-protocol";
@@ -173,6 +183,16 @@ export interface EnsureProxyLifecycleIo extends ExplicitProxyStartIo {
   restoreNative?: typeof restoreNativeCodexRoutingForStop;
   ensureCompanion?: () => Promise<boolean>;
   acquireAuthority?: ProxyLifecycleAuthorityAcquirer;
+  /** Attestation is mandatory before a macOS stale-runtime replacement may stop anything. */
+  attestLive?: (expectedPid: number) => Promise<AttestedLiveManagementProxy | null>;
+  captureSignalIdentity?: (expectedPid: number) => ProxySignalIdentity | null;
+  /** Captures the immutable stale target only after its supervisor is inactive. */
+  attestStopTarget?: (expectedPid: number) => Promise<AttestedLiveManagementProxy | null>;
+  expectedProcessIdentity?: ProxySignalIdentity;
+  /** Narrow stop seams used only for a just-attested stale runtime. */
+  staleStopIo?: StopProxyLifecycleIo;
+  /** Internal stale transaction fence: every later failure restores native routing. */
+  rollbackNativeOnFailure?: boolean;
 }
 
 export interface EnsureProxyLifecycleOptions {
@@ -182,6 +202,8 @@ export interface EnsureProxyLifecycleOptions {
   preferService?: boolean;
   startEnv?: NodeJS.ProcessEnv;
   waitTimeoutMs?: number;
+  /** macOS companion-only recovery for an older, attested bundled runtime. */
+  replaceStaleRuntime?: boolean;
   logger?: ProxyLifecycleLogger;
   io?: EnsureProxyLifecycleIo;
 }
@@ -209,6 +231,10 @@ export interface StopProxyLifecycleIo {
   removeRuntimePort?: typeof removeRuntimePort;
   removePidIfValueIs?: typeof removePidIfValueIs;
   removeRuntimePortIfPidIs?: typeof removeRuntimePortIfPidIs;
+  attestedTargetPolicy?: (target: AttestedLiveManagementProxy) => boolean;
+  /** Optional post-supervisor capture for a stale-runtime stop transaction. */
+  attestStopTarget?: (expectedPid: number) => Promise<AttestedLiveManagementProxy | null>;
+  expectedProcessIdentity?: ProxySignalIdentity;
 }
 
 export interface RoutingLifecycleIo extends ExplicitProxyStartIo {
@@ -219,6 +245,13 @@ export interface RoutingLifecycleIo extends ExplicitProxyStartIo {
     lifecycleLease: ProxyLifecycleLockLease,
   ) => Promise<ProxyCatalogSyncOutcome>;
   acquireAuthority?: ProxyLifecycleAuthorityAcquirer;
+  attestLive?: (expectedPid: number) => Promise<AttestedLiveManagementProxy | null>;
+  captureSignalIdentity?: (expectedPid: number) => ProxySignalIdentity | null;
+  staleStopIo?: StopProxyLifecycleIo;
+  /** Compensating native rollback for stale Route Back replacement failures. */
+  restoreNative?: typeof restoreNativeCodexRoutingForStop;
+  /** macOS Route Back stale-runtime recovery flag. */
+  replaceStaleRuntime?: boolean;
 }
 
 /** Shared by direct CLI, tray Start, Restore Back, restart, and service parents. */
@@ -246,7 +279,7 @@ export function prepareExplicitProxyStartWithIo(
 }
 
 async function failExplicitProxyStartWithoutLive(
-  action: "ensure" | "start" | "restart",
+  action: "ensure" | "start" | "restart" | "restore-back",
   io: EnsureProxyLifecycleIo,
   authority: ProxyLifecycleAuthority,
   preparedChanged: boolean,
@@ -255,11 +288,11 @@ async function failExplicitProxyStartWithoutLive(
     message: string;
     errorCode: Extract<
       NonNullable<ProxyLifecycleResult["errorCode"]>,
-      "AUTOSTART_DISABLED" | "SERVICE_BLOCKED" | "START_FAILED"
+      "AUTOSTART_DISABLED" | "SERVICE_BLOCKED" | "START_FAILED" | "STOP_FAILED" | "SYNC_FAILED"
     >;
   },
 ): Promise<ProxyLifecycleResult> {
-  if (action === "ensure") {
+  if (action === "ensure" && !io.rollbackNativeOnFailure) {
     return lifecycleResult(action, failure.state, {
       ok: failure.errorCode === "AUTOSTART_DISABLED",
       changed: preparedChanged,
@@ -271,7 +304,7 @@ async function failExplicitProxyStartWithoutLive(
   try {
     // A delegated child can release S once it has bound. Reacquire S under the
     // retained E lease before publishing the compensating OFF/native state.
-    await authority.acquireStart();
+    try { await authority.acquireStart(); } catch { /* E still fences direct native compensation. */ }
     const restored = (io.restoreNative ?? restoreNativeCodexRoutingForStop)();
     return lifecycleResult(action, failure.state, {
       ok: false,
@@ -354,6 +387,198 @@ export function proxyStartArgv(port?: number, entry = process.argv[1]): string[]
     argv.push("--port", String(port));
   }
   return argv;
+}
+
+export interface StaleRuntimeRetirement {
+  live: LiveProxy | null;
+  changed: boolean;
+  failed?: ProxyLifecycleResult;
+}
+
+/**
+ * Retire only an HMAC-attested, older bundled runtime while E/S authority remains
+ * held. Missing metadata, missing attestation, recordless listeners, and newer
+ * runtimes deliberately leave the listener untouched.
+ */
+async function retireStaleRuntimeUnderAuthority(
+  action: "ensure" | "start" | "restart" | "restore-back",
+  live: LiveProxy | null,
+  shouldRestoreRouting: boolean,
+  io: EnsureProxyLifecycleIo,
+  authority: ProxyLifecycleAuthority,
+): Promise<StaleRuntimeRetirement> {
+  if (!live || live.source !== "runtime" || live.pid === null) return { live, changed: false };
+  const captureSignalIdentity = io.captureSignalIdentity ?? captureProxySignalIdentity;
+  const preliminaryProcessIdentity = captureSignalIdentity(live.pid);
+  let target: AttestedLiveManagementProxy | null = null;
+  try {
+    target = await (io.attestLive ?? (pid => attestLiveManagementProxy({ expectedPid: pid, attempts: 1 })))(live.pid);
+  } catch {
+    if (action === "start" || action === "restore-back") {
+      const failed = await failExplicitProxyStartWithoutLive(action, {
+        ...io,
+        rollbackNativeOnFailure: true,
+      }, authority, false, {
+        state: "blocked",
+        message: "The running proxy could not be attested as an eligible CodexCommander runtime.",
+        errorCode: "START_FAILED",
+      });
+      return { live, changed: failed.changed, failed };
+    }
+    return { live, changed: false };
+  }
+  const exactAttestedTarget = target?.pid === live.pid
+    && typeof target.runtimeRecordIdentity === "string"
+    ? target
+    : null;
+  const disposition = exactAttestedTarget
+    ? runtimeReplacementDisposition(exactAttestedTarget, {
+      version: VERSION,
+      lifecycleCompatibilityGeneration: PROXY_LIFECYCLE_COMPATIBILITY_GENERATION,
+    })
+    : "unknown";
+  if (disposition === "compatible") return { live, changed: false };
+  if (disposition !== "stale") {
+    if (action === "start" || action === "restore-back") {
+      const failed = await failExplicitProxyStartWithoutLive(action, {
+        ...io,
+        rollbackNativeOnFailure: true,
+      }, authority, false, {
+        state: "blocked",
+        message: "The running proxy could not be attested as an eligible CodexCommander runtime.",
+        errorCode: "START_FAILED",
+      });
+      return { live, changed: failed.changed, failed };
+    }
+    return { live, changed: false };
+  }
+  // `stale` can only be produced from an exact attested target above.
+  if (!exactAttestedTarget) return { live, changed: false };
+
+  // HMAC metadata is sufficient to reuse an exact compatible runtime, but any
+  // destructive stale replacement additionally requires stable process-birth
+  // identity before and after attestation. Never signal on metadata alone.
+  const preliminaryStillMatches = captureSignalIdentity(live.pid);
+  if (!preliminaryProcessIdentity || !preliminaryStillMatches
+    || !sameProxySignalIdentity(preliminaryProcessIdentity, preliminaryStillMatches)) {
+    if (action === "start" || action === "restore-back") {
+      const failed = await failExplicitProxyStartWithoutLive(action, {
+        ...io,
+        rollbackNativeOnFailure: true,
+      }, authority, false, {
+        state: "blocked",
+        message: "The running proxy could not be verified as the exact CodexCommander predecessor.",
+        errorCode: "START_FAILED",
+      });
+      return { live, changed: failed.changed, failed };
+    }
+    return { live, changed: false };
+  }
+
+  try {
+    // Ensure normally owns only E; stale retirement is a full Stop transaction
+    // and must reacquire S in the sole valid E -> S order.
+    await authority.acquireStart();
+  } catch {
+    const failed = await failExplicitProxyStartWithoutLive(action, {
+      ...io,
+      rollbackNativeOnFailure: true,
+    }, authority, false, {
+      state: "blocked",
+      message: "CodexCommander lifecycle coordination was lost before stale runtime recovery.",
+      errorCode: "STOP_FAILED",
+    });
+    return {
+      live,
+      changed: failed.changed,
+      failed,
+    };
+  }
+
+  const stopped = await stopProxyLifecycleUnderAuthority({
+    action: "stop",
+    io: {
+      ...io.staleStopIo,
+      readPid: () => exactAttestedTarget.pid,
+      attestStopTarget: async pid => {
+        const before = captureSignalIdentity(pid);
+        if (!before || !sameProxySignalIdentity(preliminaryProcessIdentity, before)) return null;
+        const candidate = await (io.attestStopTarget ?? io.attestLive
+          ?? (expectedPid => attestLiveManagementProxy({ expectedPid, attempts: 1 })))(pid);
+        const after = captureSignalIdentity(pid);
+        return candidate && candidate.pid === pid
+          && candidate.runtimeRecordIdentity === exactAttestedTarget.runtimeRecordIdentity
+          && after !== null
+          && sameProxySignalIdentity(preliminaryProcessIdentity, after)
+          && runtimeReplacementDisposition(candidate, {
+            version: VERSION,
+            lifecycleCompatibilityGeneration: PROXY_LIFECYCLE_COMPATIBILITY_GENERATION,
+          }) === "stale"
+          ? candidate
+          : null;
+      },
+      expectedProcessIdentity: preliminaryProcessIdentity,
+    },
+  }, authority);
+  if (!stopped.ok) {
+    const failed = await failExplicitProxyStartWithoutLive(action, {
+      ...io,
+      rollbackNativeOnFailure: true,
+    }, authority, stopped.changed, {
+      state: "failed",
+      message: "An older CodexCommander runtime could not be retired safely.",
+      errorCode: "STOP_FAILED",
+    });
+    return {
+      live: null,
+      changed: failed.changed,
+      failed,
+    };
+  }
+  if (!shouldRestoreRouting) return { live: null, changed: stopped.changed };
+
+  let prepared: ReturnType<typeof prepareExplicitProxyStartWithIo>;
+  try {
+    prepared = prepareExplicitProxyStartWithIo(io);
+  } catch {
+    const failed = await failExplicitProxyStartWithoutLive(action, {
+      ...io,
+      rollbackNativeOnFailure: true,
+    }, authority, stopped.changed, {
+      state: "failed",
+      message: "The older CodexCommander runtime stopped, but routing preparation threw for its replacement.",
+      errorCode: "START_FAILED",
+    });
+    return { live: null, changed: failed.changed, failed };
+  }
+  if (!prepared.success) {
+    return {
+      live: null,
+      changed: stopped.changed || prepared.changed,
+      failed: await failExplicitProxyStartWithoutLive(action, {
+        ...io,
+        rollbackNativeOnFailure: true,
+      }, authority, stopped.changed || prepared.changed, {
+        state: "failed",
+        message: "The older CodexCommander runtime stopped, but Codex routing could not be restored for its replacement.",
+        errorCode: "START_FAILED",
+      }),
+    };
+  }
+  return { live: null, changed: stopped.changed || prepared.changed };
+}
+
+/**
+ * Foreground `ccx start` already owns the canonical E/S authority, so it uses
+ * the same stale-runtime classifier and retirement transaction without
+ * recursively entering the detached Ensure path.
+ */
+export async function replaceStaleRuntimeForExplicitStart(
+  live: LiveProxy,
+  authority: ProxyLifecycleAuthority,
+  io: EnsureProxyLifecycleIo = {},
+): Promise<StaleRuntimeRetirement> {
+  return retireStaleRuntimeUnderAuthority("start", live, true, io, authority);
 }
 
 /** Spawn the canonical foreground start command and resolve only after OS spawn succeeds. */
@@ -699,7 +924,7 @@ async function ensureProxyLifecycleUnderLock(
 ): Promise<ProxyLifecycleResult> {
   const action = options.action ?? "ensure";
   const logger = options.logger ?? quietLogger;
-  const io = options.io ?? {};
+  let io = options.io ?? {};
   const findLive = io.findLive ?? findLiveProxy;
   const startPreparation: ProxyStartPreparation = action === "start"
     ? io.prepareStart?.() ?? { ok: true, changed: false, enableCodexRouting: true }
@@ -714,6 +939,7 @@ async function ensureProxyLifecycleUnderLock(
   }
   let config = (io.loadConfig ?? loadConfig)();
   let preparedChanged = startPreparation.changed;
+  let explicitStartPrepared = false;
   // Probe before mutating durable intent. Only this home's protected runtime
   // record may authorize retirement of a journal whose owner is still alive.
   let live = action === "start" ? await findLive() : null;
@@ -725,7 +951,10 @@ async function ensureProxyLifecycleUnderLock(
       errorCode: "START_FAILED",
     });
   }
-  if (action === "start" && startPreparation.enableCodexRouting) {
+  // For a potential stale replacement, do not route Codex through the old
+  // runtime before it has been retired. The preparation runs after retirement
+  // (or immediately for a compatible/non-stale listener) below.
+  if (action === "start" && startPreparation.enableCodexRouting && !options.replaceStaleRuntime) {
     const prepared = prepareExplicitProxyStartWithIo(io, live?.pid ?? undefined);
     if (!prepared.success) {
       return lifecycleResult(action, "blocked", {
@@ -735,6 +964,54 @@ async function ensureProxyLifecycleUnderLock(
         errorCode: "START_FAILED",
       });
     }
+    explicitStartPrepared = true;
+    preparedChanged ||= prepared.changed;
+    try {
+      config = (io.loadConfig ?? loadConfig)();
+    } catch {
+      return await failExplicitProxyStartWithoutLive(action, io, authority, preparedChanged, {
+        state: "failed",
+        message: "CodexCommander configuration could not be reloaded after enabling routing.",
+        errorCode: "START_FAILED",
+      });
+    }
+  }
+  if (options.replaceStaleRuntime) {
+    const retirement = await retireStaleRuntimeUnderAuthority(
+      action,
+      live,
+      codexIntegrationEnabled(config)
+        || (action === "start" && startPreparation.enableCodexRouting),
+      io,
+      authority,
+    );
+    if (retirement.failed) return retirement.failed;
+    if (retirement.live === null && live !== null) {
+      live = null;
+      explicitStartPrepared = true;
+      io = { ...io, rollbackNativeOnFailure: true };
+      preparedChanged ||= retirement.changed;
+      try {
+        config = (io.loadConfig ?? loadConfig)();
+      } catch {
+        return await failExplicitProxyStartWithoutLive(action, io, authority, preparedChanged, {
+          state: "failed",
+          message: "CodexCommander configuration could not be reloaded for the replacement runtime.",
+          errorCode: "START_FAILED",
+        });
+      }
+    }
+  }
+  if (action === "start" && startPreparation.enableCodexRouting && !explicitStartPrepared) {
+    const prepared = prepareExplicitProxyStartWithIo(io, live?.pid ?? undefined);
+    if (!prepared.success) {
+      return await failExplicitProxyStartWithoutLive(action, io, authority, preparedChanged || prepared.changed, {
+        state: "blocked",
+        message: prepared.message,
+        errorCode: "START_FAILED",
+      });
+    }
+    explicitStartPrepared = true;
     preparedChanged ||= prepared.changed;
     try {
       config = (io.loadConfig ?? loadConfig)();
@@ -750,8 +1027,16 @@ async function ensureProxyLifecycleUnderLock(
   // inert stale journal. Explicit Start has just cleaned that residue and enabled
   // integration, so it may reconcile even when the pre-mutation snapshot was OFF.
   if (action !== "start" && codexIntegrationEnabled(config)) {
-    if (io.reconcile) io.reconcile();
-    else if (!currentExternalCodexModelProvider()) reconcileJournal();
+    try {
+      if (io.reconcile) io.reconcile();
+      else if (!currentExternalCodexModelProvider()) reconcileJournal();
+    } catch {
+      return await failExplicitProxyStartWithoutLive(action, io, authority, preparedChanged, {
+        state: "failed",
+        message: "Codex routing reconciliation failed.",
+        errorCode: "START_FAILED",
+      });
+    }
   }
 
   if (!live) {
@@ -771,6 +1056,32 @@ async function ensureProxyLifecycleUnderLock(
       message: "A recordless or different-home proxy cannot authorize Codex routing changes.",
       errorCode: "START_FAILED",
     });
+  }
+  // Ensure discovers its live endpoint only after preserving OFF intent above;
+  // inspect that endpoint here, still under the same canonical authority.
+  if (options.replaceStaleRuntime && action !== "start") {
+    const retirement = await retireStaleRuntimeUnderAuthority(
+      action,
+      live,
+      codexIntegrationEnabled(config),
+      io,
+      authority,
+    );
+    if (retirement.failed) return retirement.failed;
+    if (retirement.live === null && live !== null) {
+      live = null;
+      io = { ...io, rollbackNativeOnFailure: true };
+      preparedChanged ||= retirement.changed;
+      try {
+        config = (io.loadConfig ?? loadConfig)();
+      } catch {
+        return await failExplicitProxyStartWithoutLive(action, io, authority, preparedChanged, {
+          state: "failed",
+          message: "CodexCommander configuration could not be reloaded for the replacement runtime.",
+          errorCode: "START_FAILED",
+        });
+      }
+    }
   }
   let startedHere = false;
   let serviceStartDelegation: ProxyServiceStartDelegation | undefined;
@@ -905,15 +1216,32 @@ async function ensureProxyLifecycleUnderLock(
       startedHere = true;
     }
     if (startedHere) {
-      const readiness = await (io.waitForReady ?? waitForProxyReadiness)(
-        live,
-        Math.min(options.waitTimeoutMs ?? 20_000, 20_000),
-      );
+      let readiness: ProxyStartupReadiness;
+      try {
+        readiness = await (io.waitForReady ?? waitForProxyReadiness)(
+          live,
+          Math.min(options.waitTimeoutMs ?? 20_000, 20_000),
+        );
+      } catch {
+        return await failExplicitProxyStartWithoutLive(action, io, authority, preparedChanged || startedHere, {
+          state: "failed",
+          message: "CodexCommander readiness verification failed after starting.",
+          errorCode: "START_FAILED",
+        });
+      }
       if (readiness !== "ready") {
         logger.warn(`Startup catalog readiness was ${readiness}; retrying through the live proxy.`);
       }
     }
-  await authority.acquireStart();
+  try {
+    await authority.acquireStart();
+  } catch {
+    return await failExplicitProxyStartWithoutLive(action, io, authority, preparedChanged || startedHere, {
+      state: "blocked",
+      message: "CodexCommander lifecycle coordination was lost before routing synchronization.",
+      errorCode: "START_FAILED",
+    });
+  }
   const lifecycleLease = authority.delegatedLease();
   if (!lifecycleLease) {
     return await failExplicitProxyStartWithoutLive(action, io, authority, preparedChanged, {
@@ -922,12 +1250,22 @@ async function ensureProxyLifecycleUnderLock(
       errorCode: "START_FAILED",
     });
   }
-  const syncResult = await (io.syncLive ?? syncLiveProxy)(
-    live,
-    config,
-    logger,
-    lifecycleLease,
-  );
+  let syncResult: ProxyCatalogSyncOutcome;
+  try {
+    syncResult = await (io.syncLive ?? syncLiveProxy)(
+      live,
+      config,
+      logger,
+      lifecycleLease,
+    );
+  } catch {
+    return await failExplicitProxyStartWithoutLive(action, io, authority,
+      preparedChanged || startedHere, {
+        state: "failed",
+        message: "CodexCommander model catalog synchronization failed.",
+        errorCode: "SYNC_FAILED",
+      });
+  }
   syncProblem = catalogSyncFailure(syncResult, config);
   syncNotice = catalogSyncNotice(syncResult);
   if (action === "start" && startPreparation.setupRequired) {
@@ -940,6 +1278,14 @@ async function ensureProxyLifecycleUnderLock(
     });
   }
   if (syncProblem) {
+    if (io.rollbackNativeOnFailure) {
+      return await failExplicitProxyStartWithoutLive(action, io, authority,
+        preparedChanged || startedHere, {
+          state: "failed",
+          message: syncProblem.message,
+          errorCode: "START_FAILED",
+        });
+    }
     return lifecycleResult(action, "running", {
       ok: false,
       changed: preparedChanged || startedHere,
@@ -1181,19 +1527,8 @@ export async function stopProxyLifecycleUnderAuthority(
   try {
   let stopFailed = false;
   let changed = false;
-  const admission = admitLifecycleServiceStop(logger, io.diagnoseService);
-  if (admission.blocked) {
-    return lifecycleResult(action, "blocked", {
-      ok: false,
-      changed,
-      message: "An installed background service could not be stopped safely; shared state was left unchanged.",
-      errorCode: "SERVICE_BLOCKED",
-    });
-  }
-
-  // Native routing is the precondition for terminating the endpoint. The
-  // escape is config-only and cannot be blocked by transition coordinator DB
-  // state; if it cannot be verified, leave both service and proxy alive.
+  // Stop/Quit must first leave the durable client route native even when the
+  // service supervisor is indeterminate; process termination remains blocked.
   const restored = restoreManagedClientState(logger, io);
   changed ||= restored.changed;
   if (!restored.ok) {
@@ -1204,6 +1539,15 @@ export async function stopProxyLifecycleUnderAuthority(
       live,
       message: "Native client routing could not be restored; CodexCommander stayed running.",
       errorCode: "STOP_FAILED",
+    });
+  }
+  const admission = admitLifecycleServiceStop(logger, io.diagnoseService);
+  if (admission.blocked) {
+    return lifecycleResult(action, "blocked", {
+      ok: false,
+      changed,
+      message: "Native routing was restored, but the installed background service could not be stopped safely.",
+      errorCode: "SERVICE_BLOCKED",
     });
   }
 
@@ -1220,10 +1564,76 @@ export async function stopProxyLifecycleUnderAuthority(
   }
   stopFailed ||= service.failed;
 
+  // A graceful 409 normally remains an absolute refusal. Only after this
+  // lifecycle has independently restored native routing and proved the local
+  // supervisor inactive may process-control use its exact-identity fallback.
+  let serviceSafeForStop = !service.failed;
+  if (admission.installed && serviceSafeForStop) {
+    try {
+      serviceSafeForStop = (io.verifyServiceStopped
+        ?? serviceSupervisorInactiveAfterStop)();
+    } catch {
+      serviceSafeForStop = false;
+    }
+    if (!serviceSafeForStop) {
+      logger.error("The background service did not confirm an inactive state.");
+      try { revertSystemEnv(); } catch { /* ownership-checked best effort */ }
+      return lifecycleResult(action, "failed", {
+        ok: false,
+        changed,
+        message: "CodexCommander proxy stop did not complete cleanly.",
+        errorCode: "STOP_FAILED",
+      });
+    }
+  }
+  const authorizeForcedAfterGracefulRefusal = (): boolean => {
+    if (!serviceSafeForStop) return false;
+    const diagnose = io.diagnoseService ?? diagnoseService;
+    try {
+      const current = diagnose();
+      if (current.registrationState === "indeterminate"
+        || current.supervisorState === "indeterminate"
+        || current.conflict
+        || current.stale) return false;
+      // A supervisor registration that appeared after an initially absent
+      // admission is new ownership evidence, not permission to signal.
+      if (!admission.installed && current.registrationState === "present") return false;
+      return current.registrationState !== "present"
+        || (io.verifyServiceStopped ?? serviceSupervisorInactiveAfterStop)();
+    } catch {
+      return false;
+    }
+  };
+
   const pid = (io.readPid ?? readPid)();
   if (pid) {
+    let expectedAttestedTarget: AttestedLiveManagementProxy | undefined;
+    if (io.attestStopTarget) {
+      try {
+        const captured = await io.attestStopTarget(pid);
+        if (!captured || captured.pid !== pid || typeof captured.runtimeRecordIdentity !== "string") {
+          throw new Error("The stale runtime target changed before its exact identity could be captured.");
+        }
+        expectedAttestedTarget = captured;
+      } catch (error) {
+        stopFailed = true;
+        logger.error("The stale runtime target changed before it could be stopped safely.");
+        const detail = error instanceof Error ? error.message : String(error);
+        if (detail) logger.error(detail);
+      }
+    }
+    if (stopFailed) {
+      // Supervisor shutdown and native routing restoration are intentionally
+      // retained. A new/unknown PID is never adopted just to finish cleanup.
+    } else {
     try {
-      await (io.stopProxy ?? stopProxy)(pid, { lifecycleLease });
+      await (io.stopProxy ?? stopProxy)(pid, {
+        lifecycleLease,
+        authorizeForcedAfterGracefulRefusal,
+        attestedTargetPolicy: io.attestedTargetPolicy,
+        expectedAttestedTarget,
+        expectedProcessIdentity: io.expectedProcessIdentity,
+      });
       logger.info(`✅ Proxy (PID ${pid}) stopped.`);
       (io.removePid ?? removePid)(pid);
       (io.removeRuntimePort ?? removeRuntimePort)(pid);
@@ -1234,13 +1644,18 @@ export async function stopProxyLifecycleUnderAuthority(
       const detail = error instanceof Error ? error.message : String(error);
       if (detail) logger.error(detail);
     }
+    }
   } else {
     const stalePidValue = (io.readPidFileValue ?? readPidFileValue)();
     const staleRuntimePid = (io.readRuntimePort ?? readRuntimePort)()?.pid ?? null;
     const live = await (io.findLive ?? findLiveProxy)();
     if (live?.pid) {
       try {
-        await (io.stopProxy ?? stopProxy)(live.pid, { lifecycleLease });
+        await (io.stopProxy ?? stopProxy)(live.pid, {
+          lifecycleLease,
+          authorizeForcedAfterGracefulRefusal,
+          attestedTargetPolicy: io.attestedTargetPolicy,
+        });
         logger.info(`✅ Proxy (PID ${live.pid}) stopped.`);
         changed = true;
       } catch (error) {
@@ -1399,6 +1814,31 @@ async function restoreBackRoutingLifecycleUnderLock(
       message: "A recordless or different-home proxy cannot authorize Codex routing changes.",
       errorCode: "START_FAILED",
     });
+  }
+  if (io.replaceStaleRuntime) {
+    const retirement = await retireStaleRuntimeUnderAuthority(
+      "restore-back",
+      live,
+      true,
+      io as EnsureProxyLifecycleIo,
+      authority,
+    );
+    if (retirement.failed) return retirement.failed;
+    if (retirement.live === null) {
+      const replacement = await ensureProxyLifecycleUnderLock({
+        action: "start",
+        replaceStaleRuntime: false,
+        io: { ...(io as EnsureProxyLifecycleIo), rollbackNativeOnFailure: true },
+      }, authority);
+      return {
+        ...replacement,
+        action: "restore-back",
+        changed: replacement.changed || retirement.changed,
+        message: replacement.ok
+          ? "Codex now routes through the current CodexCommander proxy."
+          : replacement.message,
+      };
+    }
   }
   const prepared = prepareExplicitProxyStartWithIo(io, live.pid);
   if (!prepared.success) {

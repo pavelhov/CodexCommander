@@ -1,4 +1,5 @@
 import { saveConfigPreservingClaudeCode } from "../../config";
+import { rewriteSubagentRosterModels } from "../../codex/subagent-roster";
 
 import {
   CODEX_ACCOUNT_NAMESPACE_COMBO_ALIAS_COLLISION_ERROR,
@@ -126,7 +127,7 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
         return migrated;
       };
       if (config.subagentModels) {
-        config.subagentModels = [...new Set(config.subagentModels.map(migrateAgentReference))];
+        config.subagentModels = rewriteSubagentRosterModels(config.subagentModels, migrateAgentReference);
       }
       if (config.subagentModelFallback) {
         config.subagentModelFallback = [

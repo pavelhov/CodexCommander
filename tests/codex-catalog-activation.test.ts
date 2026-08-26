@@ -33,7 +33,7 @@ function config(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderCo
         models: ["gpt-5.6-luna"],
       },
     },
-    subagentModels: ["gpt-5.6-luna"],
+    subagentModels: [{ model: "gpt-5.6-luna" }],
     ...overrides,
   } as CodexCommanderConfig;
 }
@@ -157,6 +157,12 @@ describe("Codex catalog activation state", () => {
     expect(codexCatalogDesiredRevision(left)).not.toBe(beforeBootChange);
   });
 
+  test("guidance-only roster changes do not change catalog desired revision", () => {
+    const ids = config({ subagentModels: [{ model: "gpt-5.6-luna" }] });
+    const notes = config({ subagentModels: [{ model: "gpt-5.6-luna", guidance: "Fast mechanical work" }] });
+    expect(codexCatalogDesiredRevision(ids)).toBe(codexCatalogDesiredRevision(notes));
+  });
+
   test("the activation fence ignores desktop config churn but includes boot changes", () => {
     const catalogPath = join(codexHome, "codexcommander-catalog.json");
     const configPath = join(codexHome, "config.toml");
@@ -179,7 +185,7 @@ describe("Codex catalog activation state", () => {
     }));
     const state = inspectCodexCatalogActivation(config({
       multiAgentMode: "v2",
-      subagentModels: ["fixture/b", "fixture/a"],
+      subagentModels: [{ model: "fixture/b" }, { model: "fixture/a" }],
     }), {
       state: "not_running",
       catalogMtimeMs: null,
@@ -871,7 +877,7 @@ describe("catalog activation management routes", () => {
   test("a warning-bearing degraded sync never signals", async () => {
     const cfg = config({
       multiAgentMode: "v2",
-      subagentModels: ["fixture/missing"],
+      subagentModels: [{ model: "fixture/missing" }],
     });
     let applied = 0;
     const response = await handleCatalogActivationRoutes(routeContext({

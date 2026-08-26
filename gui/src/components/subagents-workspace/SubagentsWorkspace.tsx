@@ -11,6 +11,7 @@ import {
   IconX,
 } from "../../icons";
 import { useI18n, useT, type Locale, type TFn } from "../../i18n/shared";
+import { Notice } from "../../ui";
 import { modelLabel } from "../../model-display";
 import { formatNamespacedModelId, providerIconSrc } from "../../provider-icons";
 import SubagentDelegationSection from "./SubagentDelegationSection";
@@ -21,6 +22,21 @@ import type { CodexDelegationSetupController } from "../../pages/use-codex-deleg
 
 export const FEATURED_MAX = 5;
 export const LONG_CONTEXT_MIN = 200_000;
+export const SUBAGENT_GUIDANCE_MAX_CODE_POINTS = 160;
+
+function canonicalSubagentGuidance(guidance: string | undefined): string | undefined {
+  const canonical = guidance?.normalize("NFC").trim();
+  return canonical || undefined;
+}
+
+function subagentGuidanceControlId(model: string): string {
+  return `subagent-guidance-${encodeURIComponent(model)}`;
+}
+
+export type SubagentRosterEntry = {
+  model: string;
+  guidance?: string;
+};
 
 export type CatalogState = {
   state: "fresh" | "stale" | "not_running" | "unknown";
@@ -48,15 +64,19 @@ type ModelFilter = "all" | "reasoning" | "context" | "vision" | "tools";
 export interface SubagentsWorkspaceProps {
   available: string[];
   models: AgentModelRow[];
-  chosen: string[];
+  chosen: SubagentRosterEntry[];
   protocol?: "v1" | "default" | "v2" | null;
   rosterReachability?: ReadonlyMap<string, RosterReachability>;
   onUseConcurrentV2?: () => void;
   busy?: boolean;
   rosterDirty?: boolean;
+  rosterInvalid?: boolean;
   onToggle: (model: string) => void;
   onMove: (index: number, direction: -1 | 1) => void;
   onReorder: (from: number, to: number) => void;
+  expandedModel: string | null;
+  onExpandedModelChange: (model: string | null) => void;
+  onGuidanceChange: (model: string, guidance: string) => void;
   onSave: () => void;
   delegation: {
     loaded?: boolean;
@@ -160,9 +180,13 @@ export default function SubagentsWorkspace({
   onUseConcurrentV2,
   busy = false,
   rosterDirty = false,
+  rosterInvalid = false,
   onToggle,
   onMove,
   onReorder,
+  expandedModel,
+  onExpandedModelChange,
+  onGuidanceChange,
   onSave,
   delegation,
   runPolicy,
@@ -185,7 +209,8 @@ export default function SubagentsWorkspace({
     else setTimeout(focus, 0);
   };
 
-  const chosenSet = useMemo(() => new Set(chosen), [chosen]);
+  const chosenModels = useMemo(() => chosen.map(entry => entry.model), [chosen]);
+  const chosenSet = useMemo(() => new Set(chosenModels), [chosenModels]);
   const full = chosen.length >= FEATURED_MAX;
   const modelBySelector = useMemo(() => {
     const next = new Map<string, AgentModelRow>();
@@ -211,7 +236,7 @@ export default function SubagentsWorkspace({
   const reorder = (from: number, to: number, focusSelector?: string) => {
     if (busy || from === to || from < 0 || to < 0 || from >= chosen.length || to >= chosen.length) return;
     onReorder(from, to);
-    const moved = focusSelector ?? chosen[from];
+    const moved = focusSelector ?? chosen[from]?.model;
     setAnnouncement(t("sub.reordered", { m: moved ?? "", n: to + 1 }));
     if (moved) restoreGripFocus(moved);
   };
@@ -219,7 +244,7 @@ export default function SubagentsWorkspace({
   const moveWithAnnouncement = (index: number, direction: -1 | 1) => {
     const next = index + direction;
     if (next < 0 || next >= chosen.length) return;
-    const moved = chosen[index]!;
+    const moved = chosen[index]!.model;
     onMove(index, direction);
     setAnnouncement(t("sub.reordered", { m: moved, n: next + 1 }));
     restoreGripFocus(moved);
@@ -238,7 +263,7 @@ export default function SubagentsWorkspace({
     const v1: string[] = [];
     const v2: string[] = [];
     if (rosterReachability) {
-      for (const selector of chosen) {
+      for (const { model: selector } of chosen) {
         const state = rosterReachability.get(selector);
         if (state === "v1") v1.push(selector);
         else if (state === "v2") v2.push(selector);
@@ -279,7 +304,15 @@ export default function SubagentsWorkspace({
             </div>
           ) : (
             <ol className="swi-roster-list">
-              {chosen.map((selector, index) => {
+              {chosen.map((entry, index) => {
+                const selector = entry.model;
+                const guidance = entry.guidance ?? "";
+                const canonicalGuidance = canonicalSubagentGuidance(guidance);
+                const hasGuidance = canonicalGuidance !== undefined;
+                const isExpanded = expandedModel === selector;
+                const guidanceControlId = subagentGuidanceControlId(selector);
+                const guidanceLength = [...(canonicalGuidance ?? "")].length;
+                const guidanceTooLong = guidanceLength > SUBAGENT_GUIDANCE_MAX_CODE_POINTS;
                 const model = modelForSelector(selector, modelBySelector);
                 const state = rosterReachability?.get(selector);
                 // Routed = namespaced row. modelForSelector always returns a
@@ -291,7 +324,7 @@ export default function SubagentsWorkspace({
                 return (
                   <li
                     key={selector}
-                    className={`swi-roster-row${dragging ? " swi-roster-row--dragging" : ""}${dropTarget ? " swi-roster-row--drop" : ""}`}
+                    className={`swi-roster-row${dragging ? " swi-roster-row--dragging" : ""}${dropTarget ? " swi-roster-row--drop" : ""}${isExpanded ? " swi-roster-row--expanded" : ""}`}
                     onDragOver={event => {
                       if (dragIndex === null) return;
                       event.preventDefault();
@@ -341,7 +374,17 @@ export default function SubagentsWorkspace({
                     <span className="swi-roster-rank" aria-hidden="true">{index + 1}</span>
                     <ModelMark model={model} />
                     <span className="swi-roster-identity">
-                    <span className="swi-roster-name" title={formatNamespacedModelId(selector, t)}>{formatNamespacedModelId(selector, t)}</span>
+                      <span className="swi-roster-name" title={formatNamespacedModelId(selector, t)}>{formatNamespacedModelId(selector, t)}</span>
+                      {hasGuidance && <span className="swi-roster-guidance-preview" title={canonicalGuidance}>{canonicalGuidance}</span>}
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm swi-roster-guidance-toggle"
+                        onClick={() => onExpandedModelChange(isExpanded ? null : selector)}
+                        disabled={busy}
+                        aria-label={t(hasGuidance ? "sub.guidance.editAria" : "sub.guidance.addAria", { m: selector })}
+                        aria-expanded={isExpanded}
+                        aria-controls={guidanceControlId}
+                      >{t(hasGuidance ? "sub.guidance.edit" : "sub.guidance.add")}</button>
                       {/* No map entry (e.g. unsaved draft row) => no claim at
                           all; the sr-only "both" line requires an explicit
                           "both" entry from the server. */}
@@ -380,6 +423,31 @@ export default function SubagentsWorkspace({
                         aria-label={t("sub.removeAria", { m: selector })}
                       ><IconX aria-hidden="true" /></button>
                     </span>
+                    {isExpanded && (
+                      <div className="swi-roster-guidance-field">
+                        <label htmlFor={guidanceControlId} className="swi-roster-guidance-label">{t("sub.guidance.label")}</label>
+                        <textarea
+                          id={guidanceControlId}
+                          value={guidance}
+                          placeholder={t("sub.guidance.placeholder")}
+                          disabled={busy}
+                          aria-label={t("sub.guidance.label")}
+                          aria-invalid={guidanceTooLong || undefined}
+                          aria-describedby={`subagent-guidance-hint-${index}${guidanceTooLong ? ` subagent-guidance-error-${index}` : ""}`}
+                          onChange={event => onGuidanceChange(selector, event.target.value)}
+                          onKeyDown={event => {
+                            if (event.key === "Escape") onExpandedModelChange(null);
+                            if (event.key === "ArrowUp" || event.key === "ArrowDown") event.stopPropagation();
+                          }}
+                        />
+                        <span id={`subagent-guidance-hint-${index}`} className="swi-roster-guidance-hint">{t("sub.guidance.hint")}</span>
+                        <div className="swi-roster-guidance-meta">
+                          {hasGuidance && <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => onGuidanceChange(selector, "")}>{t("sub.guidance.clear")}</button>}
+                          <span className={guidanceTooLong ? "swi-roster-guidance-count swi-roster-guidance-count--error" : "swi-roster-guidance-count"}>{guidanceLength}/{SUBAGENT_GUIDANCE_MAX_CODE_POINTS}</span>
+                        </div>
+                        {guidanceTooLong && <Notice tone="err"><span id={`subagent-guidance-error-${index}`}>{t("sub.guidance.tooLong")}</span></Notice>}
+                      </div>
+                    )}
                   </li>
                 );
               })}
@@ -416,7 +484,7 @@ export default function SubagentsWorkspace({
               <summary>{t("sub.roster.diagnostics")}</summary>
               <p>{t("sub.roster.diagnosticsHint")}</p>
               <ul className="swi-roster-matrix">
-                {chosen.map(selector => {
+                {chosenModels.map(selector => {
                   const surface = rosterReachability.get(selector);
                   if (!surface) return null;
                   return (
@@ -432,7 +500,7 @@ export default function SubagentsWorkspace({
 
           <div className="swi-card-footer">
             <span><IconInfo width={15} height={15} aria-hidden="true" />{t("sub.dragHint")}</span>
-            <button type="button" className="btn btn-primary" onClick={onSave} disabled={busy || !rosterDirty}>
+            <button type="button" className="btn btn-primary" onClick={onSave} disabled={busy || !rosterDirty || rosterInvalid}>
               {busy ? t("sub.saving") : t("sub.saveRoster")}
             </button>
           </div>
@@ -467,7 +535,7 @@ export default function SubagentsWorkspace({
             ) : visibleModels.map(model => {
               const selector = model.native ? model.id : model.namespaced;
               const selected = chosenSet.has(selector);
-              const priority = selected ? chosen.indexOf(selector) + 1 : null;
+              const priority = selected ? chosenModels.indexOf(selector) + 1 : null;
               const blocked = !selected && (full || busy);
               return (
                 <li className={`swi-library-row${selected ? " swi-library-row--selected" : ""}`} key={selector}>

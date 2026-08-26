@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  dispatchRecoveryLifecycleEntrypoint,
+  type RecoveryLifecycleDispatchDeps,
+} from "../src/cli/lifecycle-entrypoint-dispatch";
+import type { ProxyLifecycleResult } from "../src/cli/proxy-lifecycle";
 import { isServiceOwnershipError, ServiceOwnershipError } from "../src/service";
 
 const CLI_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
@@ -17,14 +22,68 @@ function sliceFn(source: string, start: string, end: string): string {
   return source.slice(from, to);
 }
 
-// `src/cli/index.ts` runs its command switch on import, so the remaining command-dispatch
-// assertions read that thin entrypoint. Foreground startup itself is covered through the
-// dependency-injected module in tests/foreground-proxy.test.ts.
 describe("Grok fence lifecycle wiring", () => {
-  test("legacy tray Start uses explicit start semantics instead of automatic ensure", () => {
-    const trayStart = sliceFn(CLI_SOURCE, "async function handleTrayProxyStart(", "async function handleTrayProxyRestart(");
-    expect(trayStart).toContain('action: "start"');
-    expect(trayStart).toContain("honorAutoStart: false");
+  test("background startup and Route Back entry points dispatch attested stale recovery", async () => {
+    const calls: Array<{ kind: "ensure" | "restart" | "restore-back"; options: unknown }> = [];
+    const result = (action: ProxyLifecycleResult["action"], message: string): ProxyLifecycleResult => ({
+      schemaVersion: 1,
+      action,
+      ok: true,
+      state: "running",
+      changed: false,
+      pid: 42,
+      port: 10100,
+      message,
+    });
+    const deps: RecoveryLifecycleDispatchDeps = {
+      ensureProxyLifecycle: async (options) => {
+        calls.push({ kind: "ensure", options });
+        return result(options.action ?? "ensure", "ensure-result");
+      },
+      restartProxyLifecycle: async (options) => {
+        calls.push({ kind: "restart", options });
+        return result("restart", "restart-result");
+      },
+      restoreBackRoutingLifecycle: async (options) => {
+        calls.push({ kind: "restore-back", options });
+        return result("restore-back", "restore-result");
+      },
+    };
+    const logger = { info: () => {}, warn: () => {}, error: () => {} };
+    const prepareStart = () => ({ ok: true as const, changed: false, enableCodexRouting: true });
+    const findLive = async () => null;
+
+    const results = await Promise.all([
+      dispatchRecoveryLifecycleEntrypoint("cli-ensure", { logger }, deps),
+      dispatchRecoveryLifecycleEntrypoint("tray-start", { logger }, deps),
+      dispatchRecoveryLifecycleEntrypoint("gui", { logger }, deps),
+      dispatchRecoveryLifecycleEntrypoint("macos-ensure", {}, deps),
+      dispatchRecoveryLifecycleEntrypoint("macos-start", { ensureIo: { prepareStart } }, deps),
+      dispatchRecoveryLifecycleEntrypoint("tray-restart", { logger }, deps),
+      dispatchRecoveryLifecycleEntrypoint("cli-restart", { logger }, deps),
+      dispatchRecoveryLifecycleEntrypoint("route-back", { routingIo: { findLive } }, deps),
+    ]);
+
+    expect(results.map(item => item.message)).toEqual([
+      "ensure-result",
+      "ensure-result",
+      "ensure-result",
+      "ensure-result",
+      "ensure-result",
+      "restart-result",
+      "restart-result",
+      "restore-result",
+    ]);
+    expect(calls).toEqual([
+      { kind: "ensure", options: { honorAutoStart: true, ensureCompanion: true, replaceStaleRuntime: true, logger } },
+      { kind: "ensure", options: { action: "start", honorAutoStart: false, ensureCompanion: false, replaceStaleRuntime: true, logger } },
+      { kind: "ensure", options: { honorAutoStart: false, ensureCompanion: true, replaceStaleRuntime: true, logger } },
+      { kind: "ensure", options: { action: "ensure", honorAutoStart: false, ensureCompanion: false, replaceStaleRuntime: true } },
+      { kind: "ensure", options: { action: "start", honorAutoStart: false, ensureCompanion: false, replaceStaleRuntime: true, io: { prepareStart } } },
+      { kind: "restart", options: { ensureCompanion: false, replaceStaleRuntime: true, logger } },
+      { kind: "restart", options: { ensureCompanion: true, replaceStaleRuntime: true, logger } },
+      { kind: "restore-back", options: { findLive, replaceStaleRuntime: true } },
+    ]);
   });
 
   test("ensure syncs Grok against the observed live bind host", () => {
@@ -33,7 +92,7 @@ describe("Grok fence lifecycle wiring", () => {
     expect(syncFn).toContain("live.hostname ? { hostname: live.hostname }");
   });
 
-  test("handleStop admits service ownership, restores routing, then terminates", () => {
+  test("handleStop restores native routing before service admission and termination", () => {
     const serviceStopFn = sliceFn(LIFECYCLE_SOURCE, "function stopLifecycleService(", "interface ManagedStateRestoreResult");
     const stopFn = sliceFn(LIFECYCLE_SOURCE, "export async function stopProxyLifecycle(", "export async function restartProxyLifecycle(");
 
@@ -44,8 +103,9 @@ describe("Grok fence lifecycle wiring", () => {
     const serviceAt = stopFn.indexOf("stopLifecycleService(logger, admission.installed");
     const terminateAt = stopFn.indexOf("await (io.stopProxy ?? stopProxy)(pid,");
     expect(admissionAt).toBeGreaterThan(-1);
-    expect(restoreAt).toBeGreaterThan(admissionAt);
-    expect(serviceAt).toBeGreaterThan(restoreAt);
+    expect(restoreAt).toBeGreaterThan(-1);
+    expect(admissionAt).toBeGreaterThan(restoreAt);
+    expect(serviceAt).toBeGreaterThan(admissionAt);
     expect(terminateAt).toBeGreaterThan(serviceAt);
     expect(stopFn.slice(restoreAt, serviceAt)).toContain("if (!restored.ok)");
     expect(stopFn.slice(restoreAt, serviceAt)).toContain("CodexCommander stayed running");
@@ -65,11 +125,10 @@ describe("Grok fence lifecycle wiring", () => {
     const bareCatchAfterStopProxy = /await stopProxy\([^)]*\);[\s\S]{0,400}?\}\s*catch\s*\{/;
     expect(stopFn).not.toMatch(bareCatchAfterStopProxy);
 
-    // Both proxy-stop call sites (tracked pid, and the orphan-recovery pid) bind the error
-    // and echo its message.
+    // Every proxy-stop error path binds the error and echoes its message.
     const detailEchoes = stopFn.match(/const detail = error instanceof Error \? error\.message : String\(error\);/g);
-    expect(detailEchoes).toHaveLength(2);
-    expect(stopFn.match(/if \(detail\) logger\.error\(detail\);/g)).toHaveLength(2);
+    expect(detailEchoes).toHaveLength(3);
+    expect(stopFn.match(/if \(detail\) logger\.error\(detail\);/g)).toHaveLength(3);
   });
 
   test("handleStop returns its outcome so restart and the tray can react", () => {

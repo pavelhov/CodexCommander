@@ -603,7 +603,7 @@ describe("/api/injection-model guidance kill switch + partial update", () => {
       },
       multiAgentGuidanceEnabled: true,
       multiAgentMode: "v2",
-      subagentModels: ["gpt-5.6-sol", "gpt-5.6-terra"],
+      subagentModels: [{ model: "gpt-5.6-sol" }, { model: "gpt-5.6-terra" }],
       injectionModel: "gpt-5.6-terra",
       injectionEffort: "max",
       injectionPrompt: "RULES {{roster}}",
@@ -645,7 +645,7 @@ describe("/api/injection-model guidance kill switch + partial update", () => {
     expect(reloaded).toMatchObject({
       multiAgentGuidanceEnabled: false,
       multiAgentMode: "v2",
-      subagentModels: ["gpt-5.6-sol", "gpt-5.6-terra"],
+      subagentModels: [{ model: "gpt-5.6-sol" }, { model: "gpt-5.6-terra" }],
       injectionModel: "gpt-5.6-terra",
       injectionEffort: "max",
       injectionPrompt: "RULES {{roster}}",

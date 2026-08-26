@@ -27,11 +27,9 @@ import { collectOrcaCodexHomeDiagnostic } from "../codex/home";
 import { initializeNodeLauncherContext } from "./launcher-context";
 import { runForegroundProxyStart } from "./foreground-proxy";
 import { runUninstallCommand } from "./uninstall-command";
+import { dispatchRecoveryLifecycleEntrypoint } from "./lifecycle-entrypoint-dispatch";
 import {
-  ensureProxyLifecycle,
-  restoreBackRoutingLifecycle,
   restoreNativeRoutingLifecycle,
-  restartProxyLifecycle,
   stopProxyLifecycle,
   type ProxyLifecycleLogger,
 } from "./proxy-lifecycle";
@@ -82,11 +80,7 @@ const lifecycleLogger: ProxyLifecycleLogger = {
 };
 
 async function handleEnsure() {
-  const result = await ensureProxyLifecycle({
-    honorAutoStart: true,
-    ensureCompanion: true,
-    logger: lifecycleLogger,
-  });
+  const result = await dispatchRecoveryLifecycleEntrypoint("cli-ensure", { logger: lifecycleLogger });
   if (result.state === "disabled") {
     console.log(result.message);
     return;
@@ -100,12 +94,7 @@ async function handleEnsure() {
 
 /** Fixed tray action: start the proxy without depending on codexAutoStart. */
 async function handleTrayProxyStart(): Promise<void> {
-  const result = await ensureProxyLifecycle({
-    action: "start",
-    honorAutoStart: false,
-    ensureCompanion: false,
-    logger: lifecycleLogger,
-  });
+  const result = await dispatchRecoveryLifecycleEntrypoint("tray-start", { logger: lifecycleLogger });
   if (result.ok) console.log(`Proxy running on port ${result.port}.`);
   else {
     console.error(result.message);
@@ -114,10 +103,7 @@ async function handleTrayProxyStart(): Promise<void> {
 }
 
 async function handleTrayProxyRestart(): Promise<void> {
-  const result = await restartProxyLifecycle({
-    ensureCompanion: false,
-    logger: lifecycleLogger,
-  });
+  const result = await dispatchRecoveryLifecycleEntrypoint("tray-restart", { logger: lifecycleLogger });
   if (!result.ok) {
     console.error(result.message);
     process.exitCode = 1;
@@ -240,7 +226,7 @@ switch (command) {
   case "eject": {
     const restoreJson = args[1] === "--json";
     if (args[1] === "back") {
-      const restored = await restoreBackRoutingLifecycle();
+      const restored = await dispatchRecoveryLifecycleEntrypoint("route-back");
       if (!restored.ok) {
         process.exitCode = 1;
         console.error(restored.message);
@@ -406,11 +392,7 @@ switch (command) {
     break;
   }
   case "gui": {
-    const ensured = await ensureProxyLifecycle({
-      honorAutoStart: false,
-      ensureCompanion: true,
-      logger: lifecycleLogger,
-    });
+    const ensured = await dispatchRecoveryLifecycleEntrypoint("gui", { logger: lifecycleLogger });
     if (!ensured.ok || !ensured.port) {
       console.error("❌ Proxy did not become healthy after starting. Not opening the GUI.");
       process.exitCode = 1;
@@ -491,10 +473,7 @@ switch (command) {
     break;
   }
   case "restart": {
-    const result = await restartProxyLifecycle({
-      ensureCompanion: true,
-      logger: lifecycleLogger,
-    });
+    const result = await dispatchRecoveryLifecycleEntrypoint("cli-restart", { logger: lifecycleLogger });
     if (result.ok) console.log(`✅ Proxy restarted on port ${result.port}.`);
     else {
       console.error(`↩️  Restart aborted: ${result.message}`);

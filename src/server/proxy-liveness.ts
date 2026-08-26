@@ -9,18 +9,25 @@
  *
  * Lives outside cli.ts (which dispatches argv at module top level) so tests can import it.
  */
+import { createHash } from "node:crypto";
 import { loadConfig, readAlivePid, readRuntimePort, verifyPidIdentity } from "../config";
 import {
   ATTESTATION_CHALLENGE_HEADER,
+  ATTESTATION_METADATA_PROOF_HEADER,
   ATTESTATION_PROOF_HEADER,
   isOwnedHealthService,
 } from "../identity";
 import {
   createLocalAttestationChallenge,
   isLocalAttestationSecret,
+  verifyLocalAttestationMetadataProof,
   verifyLocalAttestationProof,
 } from "../lib/local-management-attestation";
-import { PROXY_LIFECYCLE_LEASE_CAPABILITY_HEADER } from "./proxy-start-lock";
+import {
+  PROXY_LIFECYCLE_COMPATIBILITY_GENERATION_HEADER,
+  PROXY_LIFECYCLE_LEASE_CAPABILITY_HEADER,
+  PROXY_RUNTIME_VERSION_HEADER,
+} from "./proxy-lifecycle-protocol";
 
 export interface HealthzIdentity {
   service?: unknown;
@@ -37,6 +44,8 @@ export interface RuntimeLivenessRecord {
   hostname?: string;
   /** Protected per-process key used only for the local management challenge. */
   attestationSecret?: string;
+  /** Current protected records require metadata-bound v2 health attestation. */
+  attestationProtocol?: 2;
 }
 
 export interface LivenessIo {
@@ -92,6 +101,99 @@ export interface AttestedLiveManagementProxy extends LiveProxy {
   baseUrl: string;
   /** The attested listener understands delegated E/S shutdown leases. */
   lifecycleLockLeaseV1: boolean;
+  /** Present only when the HMAC-authenticated runtime advertises replacement metadata. */
+  runtimeVersion?: string;
+  lifecycleCompatibilityGeneration?: number;
+  /**
+   * Opaque fingerprint of the protected runtime record attested for this
+   * listener. It deliberately excludes the secret itself from lifecycle
+   * hand-offs while binding a later stop transaction to this exact record.
+   */
+  runtimeRecordIdentity?: string;
+}
+
+export type RuntimeReplacementDisposition = "stale" | "compatible" | "newer" | "unknown";
+
+interface RuntimeReplacementExpectation {
+  version: string;
+  lifecycleCompatibilityGeneration: number;
+}
+
+interface SemanticVersion {
+  core: [number, number, number];
+  prerelease: string[] | null;
+}
+
+function parseCanonicalGeneration(raw: string | null): number | undefined {
+  if (raw === null || !/^(0|[1-9]\d*)$/.test(raw)) return undefined;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) && parsed >= 0 && String(parsed) === raw ? parsed : undefined;
+}
+
+function parseSemanticVersion(value: string): SemanticVersion | null {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*|[1-9]\d*)(?:\.(?:0|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*|[1-9]\d*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(value);
+  if (!match) return null;
+  const parsed = match.slice(1, 4).map(Number);
+  if (!parsed.every(Number.isSafeInteger)) return null;
+  return { core: parsed as [number, number, number], prerelease: match[4]?.split(".") ?? null };
+}
+
+function compareSemanticVersions(left: string, right: string): -1 | 0 | 1 | null {
+  const a = parseSemanticVersion(left);
+  const b = parseSemanticVersion(right);
+  if (!a || !b) return null;
+  for (let index = 0; index < a.core.length; index += 1) {
+    if (a.core[index]! < b.core[index]!) return -1;
+    if (a.core[index]! > b.core[index]!) return 1;
+  }
+  if (a.prerelease === null && b.prerelease !== null) return 1;
+  if (a.prerelease !== null && b.prerelease === null) return -1;
+  if (a.prerelease === null || b.prerelease === null) return 0;
+  const max = Math.max(a.prerelease.length, b.prerelease.length);
+  for (let index = 0; index < max; index += 1) {
+    const left = a.prerelease[index];
+    const right = b.prerelease[index];
+    if (left === undefined) return -1;
+    if (right === undefined) return 1;
+    if (left === right) continue;
+    const leftNumeric = /^\d+$/.test(left);
+    const rightNumeric = /^\d+$/.test(right);
+    if (leftNumeric && rightNumeric) {
+      // SemVer permits arbitrarily long numeric identifiers. Never coerce
+      // them to IEEE-754 numbers and accidentally make two huge values equal.
+      if (left.length !== right.length) return left.length < right.length ? -1 : 1;
+      return left < right ? -1 : 1;
+    }
+    if (leftNumeric) return -1;
+    if (rightNumeric) return 1;
+    return left < right ? -1 : 1;
+  }
+  return 0;
+}
+
+/** Never replace an attested proxy that advertises a newer runtime contract. */
+export function runtimeReplacementDisposition(
+  target: AttestedLiveManagementProxy,
+  expected: RuntimeReplacementExpectation,
+): RuntimeReplacementDisposition {
+  const hasVersion = target.runtimeVersion !== undefined;
+  const hasGeneration = target.lifecycleCompatibilityGeneration !== undefined;
+  if (!hasVersion && !hasGeneration) {
+    return "stale";
+  }
+  if (!hasVersion || !hasGeneration
+    || typeof target.runtimeVersion !== "string"
+    || !Number.isSafeInteger(target.lifecycleCompatibilityGeneration)
+    || target.lifecycleCompatibilityGeneration! < 0) return "unknown";
+  const version = compareSemanticVersions(target.runtimeVersion, expected.version);
+  if (version === null) return "unknown";
+  if (version > 0 || target.lifecycleCompatibilityGeneration! > expected.lifecycleCompatibilityGeneration) {
+    return "newer";
+  }
+  if (version < 0 || target.lifecycleCompatibilityGeneration! < expected.lifecycleCompatibilityGeneration) {
+    return "stale";
+  }
+  return "compatible";
 }
 
 export interface ManagementAttestationIo {
@@ -235,12 +337,40 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
 
 function exactRuntimeRecord(
   record: RuntimeLivenessRecord | null,
-  expected: { pid: number; port: number; hostname?: string; attestationSecret: string },
+  expected: { pid: number; port: number; hostname?: string; attestationSecret: string; attestationProtocol?: 2 },
 ): boolean {
   return record?.pid === expected.pid
     && record.port === expected.port
     && record.hostname === expected.hostname
-    && record.attestationSecret === expected.attestationSecret;
+    && record.attestationSecret === expected.attestationSecret
+    && record.attestationProtocol === expected.attestationProtocol;
+}
+
+/** Non-secret exact-record identity for a single attested management target. */
+export function runtimeRecordIdentity(
+  record: Pick<RuntimeLivenessRecord, "pid" | "port" | "hostname" | "attestationSecret" | "attestationProtocol">,
+): string | null {
+  if (!Number.isSafeInteger(record.pid) || !Number.isInteger(record.port)
+    || !isLocalAttestationSecret(record.attestationSecret)) return null;
+  // The random secret is never returned. A non-reversible digest lets callers
+  // reject a runtime-record rotation without serializing the secret itself.
+  const secretDigest = createHash("sha256").update(record.attestationSecret).digest("hex");
+  return `${record.pid}:${record.port}:${record.hostname ?? ""}:${record.attestationProtocol ?? 1}:${secretDigest}`;
+}
+
+/** Exact target comparison for an immutable stale-runtime retirement transaction. */
+export function sameAttestedRuntimeTarget(
+  expected: AttestedLiveManagementProxy,
+  current: AttestedLiveManagementProxy,
+): boolean {
+  return expected.pid === current.pid
+    && expected.port === current.port
+    && expected.hostname === current.hostname
+    && expected.lifecycleLockLeaseV1 === current.lifecycleLockLeaseV1
+    && expected.runtimeVersion === current.runtimeVersion
+    && expected.lifecycleCompatibilityGeneration === current.lifecycleCompatibilityGeneration
+    && typeof expected.runtimeRecordIdentity === "string"
+    && expected.runtimeRecordIdentity === current.runtimeRecordIdentity;
 }
 
 /**
@@ -281,7 +411,8 @@ export async function attestLiveManagementProxy(
         || !Number.isInteger(record.port)
         || record.port <= 0
         || record.port > 65535
-        || !isLocalAttestationSecret(record.attestationSecret)) {
+        || !isLocalAttestationSecret(record.attestationSecret)
+        || (record.attestationProtocol !== undefined && record.attestationProtocol !== 2)) {
         continue;
       }
       const recordPid = record.pid as number;
@@ -292,7 +423,10 @@ export async function attestLiveManagementProxy(
         port: record.port,
         hostname: record.hostname,
         attestationSecret: record.attestationSecret,
+        attestationProtocol: record.attestationProtocol,
       };
+      const snapshotIdentity = runtimeRecordIdentity(snapshot);
+      if (!snapshotIdentity) continue;
       const challenge = createLocalAttestationChallenge();
       const baseUrl = `http://${probeHostname(snapshot.hostname)}:${snapshot.port}`;
       const response = await fetchFn(`${baseUrl}/healthz`, {
@@ -301,16 +435,37 @@ export async function attestLiveManagementProxy(
         signal: AbortSignal.timeout(timeoutMs),
       });
       const proof = response.headers.get(ATTESTATION_PROOF_HEADER);
+      const metadataProof = response.headers.get(ATTESTATION_METADATA_PROOF_HEADER);
       const lifecycleLockLeaseV1 = response.headers.get(
         PROXY_LIFECYCLE_LEASE_CAPABILITY_HEADER,
       ) === "1";
-      const proved = response.ok && verifyLocalAttestationProof(
+      const runtimeVersion = response.headers.get(PROXY_RUNTIME_VERSION_HEADER);
+      const rawGeneration = response.headers.get(PROXY_LIFECYCLE_COMPATIBILITY_GENERATION_HEADER);
+      const lifecycleCompatibilityGeneration = parseCanonicalGeneration(rawGeneration);
+      const hasAnyMetadata = runtimeVersion !== null || rawGeneration !== null || metadataProof !== null;
+      const provedV1 = response.ok && verifyLocalAttestationProof(
           snapshot.attestationSecret,
           challenge,
           snapshot.pid,
           snapshot.port,
           proof,
         );
+      const proved = record.attestationProtocol === 2
+        ? response.ok
+          && runtimeVersion !== null
+          && lifecycleCompatibilityGeneration !== undefined
+          && metadataProof !== null
+          && verifyLocalAttestationMetadataProof(
+            snapshot.attestationSecret,
+            challenge,
+            snapshot.pid,
+            snapshot.port,
+            runtimeVersion,
+            lifecycleCompatibilityGeneration,
+            lifecycleLockLeaseV1,
+            metadataProof,
+          )
+        : provedV1 && !hasAnyMetadata;
       // The proof authenticates the exact PID/port; never parse a listener-controlled
       // body on this credential-release path. Cancellation bounds both declared-huge
       // and chunked/streaming spoof responses.
@@ -328,6 +483,12 @@ export async function attestLiveManagementProxy(
         source: "runtime",
         baseUrl,
         lifecycleLockLeaseV1,
+        runtimeRecordIdentity: snapshotIdentity,
+        ...(runtimeVersion && parseSemanticVersion(runtimeVersion) ? { runtimeVersion } : {}),
+        ...(lifecycleCompatibilityGeneration !== undefined
+          && Number.isSafeInteger(lifecycleCompatibilityGeneration)
+          ? { lifecycleCompatibilityGeneration }
+          : {}),
       };
     } catch {
       // Retry only by re-reading discovery state and issuing a fresh challenge.

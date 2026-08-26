@@ -1362,7 +1362,7 @@ describe("cli surface", () => {
     process.env.CODEXCOMMANDER_HOME = mkdtempSync(join(tmpdir(), "ccx-cli-v2-rebase-"));
     const initial = getDefaultConfig();
     saveConfig(initial);
-    const concurrentRoster = ["opencode-go/deepseek-v4-flash"];
+    const concurrentRoster = [{ model: "opencode-go/deepseek-v4-flash" }];
     let syncCalls = 0;
     const deps = {
       featuresInvocation: (action: "enable" | "disable") => ({
@@ -1419,7 +1419,7 @@ describe("cli surface", () => {
       }),
       execFile: () => {
         const concurrent = loadConfig();
-        concurrent.subagentModels = ["opencode-go/deepseek-v4-flash"];
+        concurrent.subagentModels = [{ model: "opencode-go/deepseek-v4-flash" }];
         saveConfig(concurrent);
         throw new Error("feature transition blocked");
       },
@@ -1430,7 +1430,7 @@ describe("cli surface", () => {
       expect(await cmdV2(["mode", "v2"], deps)).toBe(1);
       expect(readFileSync(path, "utf8")).toBe(originalToml);
       expect(loadConfig()).toMatchObject({
-        subagentModels: ["opencode-go/deepseek-v4-flash"],
+        subagentModels: [{ model: "opencode-go/deepseek-v4-flash" }],
       });
       expect(loadConfig().multiAgentMode).toBeUndefined();
       expect(syncCalls).toBe(0);

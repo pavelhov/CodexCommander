@@ -947,7 +947,7 @@ async function applyFinalRouteRequestNormalization(args: {
       codexAccountNamespace: route.codexAccountNamespace,
       injectionModel: config.injectionModel,
       injectionEffort: config.injectionEffort,
-      subagentModels: config.subagentModels,
+      subagentRoster: config.subagentModels,
       subagentModelFallback: config.subagentModelFallback,
       injectionPrompt: config.injectionPrompt,
     }, encryptedCodexTasks
@@ -2491,6 +2491,7 @@ async function handleResponsesInner(
     const imgResponse = await runWithImageBridge({
       parsed, adapter,
       incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget },
+      toolParameterSchemas: toolBridgeMaps.toolParameterSchemas,
       ...(imgPlan ? { plan: imgPlan } : {}),
       ...(vidPlan ? { videoPlan: vidPlan } : {}),
       forwardHeaders: selectedForwardHeaders,
@@ -2566,6 +2567,7 @@ async function handleResponsesInner(
     const wsResponse = await runWithWebSearch({
       parsed, adapter,
       incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget },
+      toolParameterSchemas: toolBridgeMaps.toolParameterSchemas,
       backend: wsPlan.backend,
       forwardProvider: wsPlan.forwardSidecar?.provider,
       anthropicSidecar: wsPlan.anthropicSidecar,
@@ -2647,7 +2649,7 @@ async function handleResponsesInner(
       }
     };
 
-    const { toolNsMap, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
+    const { toolNsMap, freeformToolNames, toolSearchToolNames, toolParameterSchemas } = toolBridgeMaps;
     if (parsed.stream) {
       void runTurn();
       let eventSource: AsyncIterable<AdapterEvent> = queue.stream();
@@ -2670,6 +2672,7 @@ async function handleResponsesInner(
         {
           translatorBudget,
           replayCacheScope: parsed._clientThreadId ?? "global",
+          toolParameterSchemas,
           ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
           stallTimeoutSec: config.stallTimeoutSec,
           hideThinkingSummary: parsed.options.hideThinkingSummary,
@@ -2723,6 +2726,7 @@ async function handleResponsesInner(
       toolNsMap,
       freeformToolNames,
       toolSearchToolNames,
+      toolParameterSchemas,
       ...(routedCompaction ? { compaction: true } : {}),
       onProviderState: state => { providerState = state; },
       onUsage: usage => {
@@ -3360,13 +3364,14 @@ async function handleResponsesInner(
           continuation: fetchTerminalGuardContinuation,
         })
       : initialEventStream;
-    const { toolNsMap, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
+    const { toolNsMap, freeformToolNames, toolSearchToolNames, toolParameterSchemas } = toolBridgeMaps;
     const sseStream = bridgeToResponsesSSE(
       eventStream, parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
       () => upstream.abort(), 2_000,
       {
         translatorBudget,
         replayCacheScope: parsed._clientThreadId ?? "global",
+        toolParameterSchemas,
         ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
         stallTimeoutSec: config.stallTimeoutSec,
         hideThinkingSummary: parsed.options.hideThinkingSummary,
@@ -3421,7 +3426,7 @@ async function handleResponsesInner(
     } finally {
       cleanupUpstreamAbort();
     }
-    const { toolNsMap, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
+    const { toolNsMap, freeformToolNames, toolSearchToolNames, toolParameterSchemas } = toolBridgeMaps;
     let providerState: CodexCommanderProviderContinuationState | undefined;
     const json = buildResponseJSON(events, parsed.modelId, {
       translatorBudget,
@@ -3431,6 +3436,7 @@ async function handleResponsesInner(
       toolNsMap,
       freeformToolNames,
       toolSearchToolNames,
+      toolParameterSchemas,
       ...(routedCompaction ? { compaction: true } : {}),
       onProviderState: state => { providerState = state; },
       onUsage: usage => {

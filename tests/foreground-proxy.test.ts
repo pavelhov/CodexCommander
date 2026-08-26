@@ -255,6 +255,7 @@ describe("foreground proxy lifecycle", () => {
         events.push("probe-current-home");
         return live;
       },
+      replaceStaleRuntime: async candidate => ({ live: candidate, changed: false }),
       syncCatalog: async (candidate, _deps, lease) => {
         events.push(`sync:${candidate?.pid}`);
         events.push(`lease:${lease?.ensureToken}:${lease?.startToken}`);
@@ -284,6 +285,36 @@ describe("foreground proxy lifecycle", () => {
     expect(events).not.toContain("unexpected-port-choice");
     expect(events).not.toContain("unexpected-bind");
     expect(events.at(-1)).toBe("release-authority");
+  });
+
+  test("explicit foreground Start retires a stale current-home runtime before routing and bind", async () => {
+    const events: string[] = [];
+    const stale: LiveProxy = {
+      pid: 4242,
+      port: 10100,
+      hostname: "127.0.0.1",
+      source: "runtime",
+    };
+    const io = baseStartIo(events, {
+      findLive: async () => {
+        events.push("probe-stale");
+        return stale;
+      },
+      replaceStaleRuntime: async (candidate) => {
+        events.push(`replace-stale:${candidate.pid}`);
+        return { live: null, changed: true };
+      },
+      syncCatalog: async () => {
+        events.push("unexpected-sync-old");
+        return successfulCatalogSync();
+      },
+    } as ForegroundProxyStartIo);
+
+    expect(await runForegroundProxyStart([], { block: false, io })).toBe(0);
+    expect(events.indexOf("replace-stale:4242")).toBeGreaterThan(events.indexOf("probe-stale"));
+    expect(events.indexOf("routing-write:true")).toBeGreaterThan(events.indexOf("replace-stale:4242"));
+    expect(events.indexOf("bind")).toBeGreaterThan(events.indexOf("routing-write:true"));
+    expect(events).not.toContain("unexpected-sync-old");
   });
 
   test("refuses a recordless listener before routing mutation or bind", async () => {

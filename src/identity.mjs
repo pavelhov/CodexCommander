@@ -37,6 +37,7 @@ export const GUI_ORIGIN_HEADER = "x-codexcommander-gui-origin";
 export const CSRF_HEADER = "x-codexcommander-csrf-token";
 export const ATTESTATION_CHALLENGE_HEADER = "x-codexcommander-attestation-challenge";
 export const ATTESTATION_PROOF_HEADER = "x-codexcommander-attestation-proof";
+export const ATTESTATION_METADATA_PROOF_HEADER = "x-codexcommander-attestation-metadata-proof";
 
 export const AUTH_REQUIRED_MESSAGE = "CodexCommander API key required";
 export const ADMIN_AUTH_REQUIRED_MESSAGE = "CodexCommander admin token required";

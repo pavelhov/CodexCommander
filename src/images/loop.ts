@@ -260,6 +260,8 @@ export interface ImageBridgeDeps {
   onCompletedResponse?: (response: Record<string, unknown>, providerState?: CodexCommanderProviderContinuationState) => void;
   /** WebSocket Responses path only — leave response id empty for protocol compatibility. */
   forceEmptyResponseId?: boolean;
+  /** Request-visible tool parameter schemas for integer argument canonicalization at the Responses bridge. */
+  toolParameterSchemas?: ReadonlyMap<string, Record<string, unknown>>;
 }
 
 /**
@@ -906,6 +908,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
     {
       translatorBudget,
       replayCacheScope: parsed._clientThreadId ?? "global",
+      ...(deps.toolParameterSchemas ? { toolParameterSchemas: deps.toolParameterSchemas } : {}),
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       stallTimeoutSec: deps.stallTimeoutSec,

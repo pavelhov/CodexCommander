@@ -264,10 +264,27 @@ the request, and they never raise it.
 ## Subagents
 
 Codex `spawn_agent` advertises only the highest-priority first five picker-visible catalog rows.
-Use at most five configured `subagentModels` ids; they may contain bare catalog ids, routed
-`provider/model` ids, or exact account-qualified `<selector>/<native-openai-model>` ids. The
-dashboard offers bare native and routed choices; exact account-qualified choices are configured
-through `ccx agent subagents set` or the CodexCommander configuration.
+On disk, `subagentModels` has a compatibility dual-read: older `string[]` values and the ordered
+object form `{ model: string, guidance?: string }[]` are accepted. CodexCommander canonicalizes both
+forms in memory to ordered objects and writes the object form. The first canonical object write is a
+schema migration point: older binaries that only understand `string[]` fail when they next read the
+configuration. Keep that rollout boundary in mind when sharing a config between versions.
+
+All current-home Ensure, Start, Restart, and Route Back entry points recognize that this schema
+migration can leave an older proxy alive that cannot read the current configuration. They may make
+one bounded replacement attempt only for an exact HMAC-attested runtime record whose authenticated
+`/healthz` version or lifecycle generation is older, and only after stable process birth identity is
+proven for the signals. An exact compatible runtime is reused without a signal. A newer, foreign,
+recordless, ambiguously attested, or metadata-unknown listener is never signaled or accepted as a new
+route, and Codex stays native if a safe explicit transition cannot finish.
+
+Use at most five configured roster entries; each `model` may be a bare catalog id, routed
+`provider/model` id, or exact account-qualified `<selector>/<native-openai-model>` id. An optional
+per-row `guidance` value is sanitized operator text: empty text is omitted, and nonempty text is
+limited to 160 Unicode code points. Guidance is advisory and untrusted; it is not an effort, quota,
+role, or fallback control. The dashboard offers bare native and routed choices; exact
+account-qualified choices are configured through `ccx agent subagents set` or CodexCommander
+configuration.
 
 When account selectors are active, one featured bare native id expands into a complete selector row
 group. Catalog priorities use the selector count as a stride so each group stays together without
@@ -279,6 +296,12 @@ availability on a bounded interval (default 60 s, `src/codex/subagent-model-fall
 the requested model id only; effort remains owned by the caps described under
 [Ultra reasoning level](#ultra-reasoning-level).
 
+On eligible V2 turns, a surviving row's guidance is included in the live developer message only
+after the current catalog's surface, visibility, route, and encrypted-task compatibility filters
+have run. Every accepted annotation that survives those filters is included in the built-in V2
+message, which has no aggregate character budget. It is never copied into the managed delegation
+skill or global `AGENTS.md` block, and it does not change native Codex behavior on V1.
+
 `injectionModel` and `injectionEffort` are shared selections with two independent consumers.
 `multiAgentGuidanceEnabled` controls only CodexCommander-authored delegation guidance.
 `syncCodexSubagentDefaults` is a separate, default-off opt-in that applies the selected values to
@@ -287,6 +310,10 @@ the active Codex routing; external user-managed provider configs remain untouche
 cause delegation. The TOML edit owns only marker-tagged values, preserves existing unmarked
 user-owned `[agents]` defaults rather than overwriting them, and rejects ambiguous table shapes
 without changing the file.
+
+Native `[agents]` defaults remain limited to `injectionModel` and `injectionEffort`; roster entries and
+per-row guidance are not persisted there. The managed skill and bounded global `AGENTS.md` policy are
+also deliberately roster-free and consult the live collaboration contract instead.
 
 Claude Code `ccx-*` agent definitions consume the same effective `claudeCode.blockedSkills` policy
 as inbound bundle elision. When the list is non-empty (default: `claude-api`), generated definitions

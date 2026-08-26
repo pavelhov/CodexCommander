@@ -1,13 +1,14 @@
 import {
-  ensureProxyLifecycle,
   proxyLifecycleStatus,
-  restoreBackRoutingLifecycle,
   restoreNativeRoutingLifecycle,
-  restartProxyLifecycle,
   stopProxyLifecycle,
   type ProxyLifecycleAction,
   type ProxyLifecycleResult,
 } from "./proxy-lifecycle";
+import {
+  dispatchRecoveryLifecycleEntrypoint,
+  type RecoveryLifecycleDispatchDeps,
+} from "./lifecycle-entrypoint-dispatch";
 import { prepareMacOSAppStart } from "./macos-first-run";
 import {
   APPLY_CODEX_CATALOG_ACTION,
@@ -81,8 +82,7 @@ export function encodeMacOSLifecycleResult(
   return { frame, exitCode: emitted.ok ? 0 : 1 };
 }
 
-export interface MacOSLifecycleDeps {
-  ensureProxyLifecycle?: typeof ensureProxyLifecycle;
+export interface MacOSLifecycleDeps extends RecoveryLifecycleDispatchDeps {
   prepareMacOSAppStart?: typeof prepareMacOSAppStart;
 }
 
@@ -90,31 +90,23 @@ export async function performMacOSLifecycleAction(
   action: MacOSLifecycleAction,
   deps: MacOSLifecycleDeps = {},
 ): Promise<MacOSLifecycleResult> {
-  const ensure = deps.ensureProxyLifecycle ?? ensureProxyLifecycle;
   switch (action) {
     case "status":
       return proxyLifecycleStatus();
     case "ensure":
-      return ensure({
-        action,
-        honorAutoStart: false,
-        ensureCompanion: false,
-      });
+      return dispatchRecoveryLifecycleEntrypoint("macos-ensure", {}, deps);
     case "start":
-      return ensure({
-        action,
-        honorAutoStart: false,
-        ensureCompanion: false,
-        io: { prepareStart: deps.prepareMacOSAppStart ?? prepareMacOSAppStart },
-      });
+      return dispatchRecoveryLifecycleEntrypoint("macos-start", {
+        ensureIo: { prepareStart: deps.prepareMacOSAppStart ?? prepareMacOSAppStart },
+      }, deps);
     case "stop":
       return stopProxyLifecycle();
     case "restart":
-      return restartProxyLifecycle({ ensureCompanion: false });
+      return dispatchRecoveryLifecycleEntrypoint("tray-restart", {}, deps);
     case "restore-native":
       return restoreNativeRoutingLifecycle();
     case "restore-back":
-      return restoreBackRoutingLifecycle();
+      return dispatchRecoveryLifecycleEntrypoint("route-back", {}, deps);
     case APPLY_CODEX_CATALOG_ACTION:
       return applyCodexCatalogForCompanion();
   }

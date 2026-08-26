@@ -23,6 +23,7 @@ export const GUI_ORIGIN_HEADER: string;
 export const CSRF_HEADER: string;
 export const ATTESTATION_CHALLENGE_HEADER: string;
 export const ATTESTATION_PROOF_HEADER: string;
+export const ATTESTATION_METADATA_PROOF_HEADER: string;
 export const AUTH_REQUIRED_MESSAGE: string;
 export const ADMIN_AUTH_REQUIRED_MESSAGE: string;
 export const ARTIFACT_HTTP_PREFIX: string;

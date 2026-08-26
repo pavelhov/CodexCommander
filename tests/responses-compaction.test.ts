@@ -132,6 +132,24 @@ describe("bridge compaction mode (streaming)", () => {
     expect(frames.some(f => f.event === "response.output_item.done")).toBe(false);
   });
 
+  test.each(["max_tokens", "content_filter"] as const)(
+    "%s stop emits an incomplete terminal without replacement compaction output",
+    async (stopReason) => {
+      const frames = await collectFrames(bridgeToResponsesSSE(replay([
+        { type: "text_delta", text: "truncated summary" },
+        { type: "done", stopReason },
+      ]), "m", undefined, undefined, undefined, undefined, 2_000, { compaction: true }));
+
+      expect(frames.some(f => f.event === "response.completed")).toBe(false);
+      expect(frames.filter(f => f.event === "response.incomplete")).toHaveLength(1);
+      expect(frames.filter(f => f.event === "response.output_item.done")
+        .some(f => (f.data.item as { type?: string } | undefined)?.type === "compaction")).toBe(false);
+      const terminal = frames.find(f => f.event === "response.incomplete");
+      const output = (terminal?.data.response as { output?: Array<{ type?: string }> } | undefined)?.output ?? [];
+      expect(output.some(item => item.type === "compaction")).toBe(false);
+    },
+  );
+
   test("without the flag nothing changes", async () => {
     const frames = await collectFrames(bridgeToResponsesSSE(replay([
       { type: "text_delta", text: "normal answer" },

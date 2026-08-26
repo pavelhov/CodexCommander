@@ -279,7 +279,7 @@ describe("Codex catalog restore", () => {
             disabled: true,
           } },
           defaultProvider: "openai",
-          subagentModels: ["gpt-5.5"],
+          subagentModels: [{ model: "gpt-5.5" }],
         };
         saveConfig(config);
         const result = await convergeCodexCatalog(captureCatalogAdmissionSnapshot(config), {
@@ -335,7 +335,7 @@ describe("Codex catalog restore", () => {
             disabled: true,
           } },
           defaultProvider: "openai",
-          subagentModels: ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex-spark", "gpt-5.6-sol"],
+          subagentModels: [{ model: "gpt-5.5" }, { model: "gpt-5.4" }, { model: "gpt-5.3-codex-spark" }, { model: "gpt-5.6-sol" }],
         };
         saveConfig(config);
         const result = await convergeCodexCatalog(captureCatalogAdmissionSnapshot(config), {

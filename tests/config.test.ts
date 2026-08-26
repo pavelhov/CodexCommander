@@ -2042,6 +2042,20 @@ describe("CodexCommander config defaults", () => {
     expect(readRuntimePort(9999)).toBeNull();
   });
 
+  test("runtime port metadata accepts only the optional protected attestation protocol 2", () => {
+    const attestationSecret = "A".repeat(43);
+    writeRuntimePort({ pid: 1234, port: 58195, attestationSecret, attestationProtocol: 2 });
+    expect(readRuntimePort()).toMatchObject({ pid: 1234, attestationProtocol: 2 });
+    writeFileSync(getRuntimePortPath(), JSON.stringify({
+      schemaVersion: 1, pid: 1234, port: 58195, attestationSecret, attestationProtocol: 3,
+    }), "utf-8");
+    expect(readRuntimePort()).toBeNull();
+    writeFileSync(getRuntimePortPath(), JSON.stringify({
+      schemaVersion: 1, pid: 1234, port: 58195, attestationSecret, attestationProtocol: "2",
+    }), "utf-8");
+    expect(readRuntimePort()).toBeNull();
+  });
+
   test("runtime port metadata removal preserves newer pid state", () => {
     writeRuntimePort({ pid: 1234, port: 58195 });
 

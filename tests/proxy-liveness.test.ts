@@ -11,13 +11,22 @@ import {
   probeReadiness,
   proxyIdentityAt,
   validateReadyzBody,
+  runtimeReplacementDisposition,
 } from "../src/server/proxy-liveness";
-import { createLocalAttestationProof } from "../src/lib/local-management-attestation";
+import {
+  createLocalAttestationMetadataProof,
+  createLocalAttestationProof,
+} from "../src/lib/local-management-attestation";
 import {
   ATTESTATION_CHALLENGE_HEADER,
+  ATTESTATION_METADATA_PROOF_HEADER,
   ATTESTATION_PROOF_HEADER,
 } from "../src/identity";
 import { PROXY_LIFECYCLE_LEASE_CAPABILITY_HEADER } from "../src/server/proxy-start-lock";
+import {
+  PROXY_LIFECYCLE_COMPATIBILITY_GENERATION_HEADER,
+  PROXY_RUNTIME_VERSION_HEADER,
+} from "../src/server/proxy-lifecycle-protocol";
 
 function healthz(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
@@ -143,8 +152,8 @@ describe("attestLiveManagementProxy", () => {
   const port = 19191;
   const hostname = "127.0.0.1";
 
-  function record(secret: string) {
-    return { pid, port, hostname, attestationSecret: secret };
+  function record(secret: string, attestationProtocol?: 2) {
+    return { pid, port, hostname, attestationSecret: secret, ...(attestationProtocol ? { attestationProtocol } : {}) };
   }
 
   function proofResponse(
@@ -152,6 +161,7 @@ describe("attestLiveManagementProxy", () => {
     input: string | URL | Request,
     init?: RequestInit,
     lifecycleLease = false,
+    runtime?: { version: string; generation: number; v2?: boolean; signedVersion?: string; signedGeneration?: number },
   ): Response {
     expect(String(input)).toBe(`http://${hostname}:${port}/healthz`);
     const headers = new Headers(init?.headers);
@@ -162,6 +172,14 @@ describe("attestLiveManagementProxy", () => {
     const proof = createLocalAttestationProof(secret, challenge, pid, port)!;
     const responseHeaders = new Headers({ [ATTESTATION_PROOF_HEADER]: proof });
     if (lifecycleLease) responseHeaders.set(PROXY_LIFECYCLE_LEASE_CAPABILITY_HEADER, "1");
+    if (runtime) {
+      responseHeaders.set(PROXY_RUNTIME_VERSION_HEADER, runtime.version);
+      responseHeaders.set(PROXY_LIFECYCLE_COMPATIBILITY_GENERATION_HEADER, String(runtime.generation));
+      if (runtime.v2) responseHeaders.set(
+        ATTESTATION_METADATA_PROOF_HEADER,
+        createLocalAttestationMetadataProof(secret, challenge, pid, port, runtime.signedVersion ?? runtime.version, runtime.signedGeneration ?? runtime.generation, lifecycleLease)!,
+      );
+    }
     return new Response("ignored", { headers: responseHeaders });
   }
 
@@ -172,7 +190,7 @@ describe("attestLiveManagementProxy", () => {
       verifyPidFn: candidate => candidate,
       fetchFn: (async (input, init) => proofResponse(secret, input, init)) as typeof fetch,
     });
-    expect(target).toEqual({
+    expect(target).toMatchObject({
       pid,
       port,
       hostname,
@@ -180,6 +198,7 @@ describe("attestLiveManagementProxy", () => {
       baseUrl: `http://${hostname}:${port}`,
       lifecycleLockLeaseV1: false,
     });
+    expect(target?.runtimeRecordIdentity).toMatch(/^4242:19191:127\.0\.0\.1:1:[a-f0-9]{64}$/);
   });
 
   test("captures the authenticated lifecycle-lease capability header", async () => {
@@ -190,6 +209,62 @@ describe("attestLiveManagementProxy", () => {
       fetchFn: (async (input, init) => proofResponse(secret, input, init, true)) as typeof fetch,
     });
     expect(target?.lifecycleLockLeaseV1).toBe(true);
+  });
+
+  test("captures authenticated runtime version and compatibility-generation headers", async () => {
+    const secret = "A".repeat(43);
+    const target = await attestLiveManagementProxy({
+      readRuntimeFn: () => record(secret, 2),
+      verifyPidFn: candidate => candidate,
+      fetchFn: (async (input, init) => proofResponse(
+        secret,
+        input,
+        init,
+        true,
+        { version: "1.2.3", generation: 7, v2: true },
+      )) as typeof fetch,
+    });
+    expect(target).toMatchObject({ runtimeVersion: "1.2.3", lifecycleCompatibilityGeneration: 7 });
+  });
+
+  test("a v2 runtime rejects stripped metadata", async () => {
+    const secret = "A".repeat(43);
+    const recordV2 = () => record(secret, 2);
+    expect(await attestLiveManagementProxy({
+      attempts: 1,
+      readRuntimeFn: recordV2,
+      verifyPidFn: candidate => candidate,
+      fetchFn: (async (input, init) => proofResponse(secret, input, init)) as typeof fetch,
+    })).toBeNull();
+  });
+
+  test("a v2 runtime rejects altered present metadata", async () => {
+    const secret = "A".repeat(43);
+    expect(await attestLiveManagementProxy({
+      attempts: 1,
+      readRuntimeFn: () => record(secret, 2),
+      verifyPidFn: candidate => candidate,
+      fetchFn: (async (input, init) => proofResponse(
+        secret, input, init, true,
+        { version: "9.9.9", generation: 7, signedVersion: "1.2.3", signedGeneration: 7, v2: true },
+      )) as typeof fetch,
+    })).toBeNull();
+  });
+
+  test("a v2 runtime rejects non-canonical or unsafe generation headers", async () => {
+    const secret = "A".repeat(43);
+    for (const generation of ["02", "9007199254740992"]) {
+      expect(await attestLiveManagementProxy({
+        attempts: 1,
+        readRuntimeFn: () => record(secret, 2),
+        verifyPidFn: candidate => candidate,
+        fetchFn: (async (input, init) => {
+          const response = proofResponse(secret, input, init, true, { version: "1.2.3", generation: 2, v2: true });
+          response.headers.set(PROXY_LIFECYCLE_COMPATIBILITY_GENERATION_HEADER, generation);
+          return response;
+        }) as typeof fetch,
+      })).toBeNull();
+    }
   });
 
   test("rejects missing/malformed records and wrong proofs", async () => {
@@ -274,6 +349,37 @@ describe("attestLiveManagementProxy", () => {
     expect(target).not.toBeNull();
     expect(cancels).toBe(1);
     expect(pulls).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("runtime replacement metadata", () => {
+  const base = {
+    pid: 1,
+    port: 10100,
+    source: "runtime" as const,
+    baseUrl: "http://127.0.0.1:10100",
+    lifecycleLockLeaseV1: true,
+  };
+  const expected = { version: "1.2.3", lifecycleCompatibilityGeneration: 2 };
+
+  test("only both absent headers are legacy stale", () => {
+    expect(runtimeReplacementDisposition(base, expected)).toBe("stale");
+    expect(runtimeReplacementDisposition({ ...base, runtimeVersion: "1.2.3" }, expected)).toBe("unknown");
+    expect(runtimeReplacementDisposition({ ...base, lifecycleCompatibilityGeneration: 2 }, expected)).toBe("unknown");
+  });
+
+  test("invalid and contradictory metadata refuses replacement while newer evidence dominates", () => {
+    expect(runtimeReplacementDisposition({ ...base, runtimeVersion: "nope", lifecycleCompatibilityGeneration: 2 }, expected)).toBe("unknown");
+    expect(runtimeReplacementDisposition({ ...base, runtimeVersion: "1.2.2", lifecycleCompatibilityGeneration: 3 }, expected)).toBe("newer");
+    expect(runtimeReplacementDisposition({ ...base, runtimeVersion: "1.2.4", lifecycleCompatibilityGeneration: 1 }, expected)).toBe("newer");
+  });
+
+  test("compares SemVer prereleases before stable releases and ignores build metadata", () => {
+    expect(runtimeReplacementDisposition({ ...base, runtimeVersion: "1.2.3-alpha.2", lifecycleCompatibilityGeneration: 2 }, expected)).toBe("stale");
+    expect(runtimeReplacementDisposition({ ...base, runtimeVersion: "1.2.3+build.9", lifecycleCompatibilityGeneration: 2 }, expected)).toBe("compatible");
+    expect(runtimeReplacementDisposition({ ...base, runtimeVersion: "1.2.3-999999999999999999999999", lifecycleCompatibilityGeneration: 2 }, {
+      version: "1.2.3-1000000000000000000000000", lifecycleCompatibilityGeneration: 2,
+    })).toBe("stale");
   });
 });
 

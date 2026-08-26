@@ -32,6 +32,23 @@ Use only model IDs and effort levels advertised live. Prefer the current preferr
 
 The root verifies and synthesizes the result. Use bounded waits; do not invent an ACK or PING ritual.
 
+## Waiting and interruption
+
+A `wait_agent` timeout means only that no qualifying mailbox or final event arrived during that
+subscription window. It is neutral, not evidence that the child failed, stopped, or made no progress.
+After a timeout, reconcile state once with `list_agents`; if the child is still running, continue
+useful local work or wait again for 5–10 minutes.
+
+Never interrupt solely because one or more waits timed out, including silence after a checkpoint or
+conclude request. That silence creates no interruption authority. Interrupt only for explicit user
+cancellation, a confirmed error or blocked state, a hard deadline communicated prospectively to the
+child, or deliberate replacement after preserving available work. Release pressure cannot turn a
+retroactive deadline into a communicated gate.
+
+For a bounded high-stakes gate, prospectively request one explicit checkpoint or a durable partial
+artifact with `send_message`. Private child commentary does not wake the parent mailbox. A conclude
+message is advisory and arrives at a model or tool boundary; it does not prove that the child stopped.
+
 ## Compaction
 
 If details were compacted, reread this skill and the live tool contract before the next spawn.

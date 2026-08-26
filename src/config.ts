@@ -73,6 +73,7 @@ import {
   MIN_APP_OWNED_MEMORY_BUDGET_MB,
 } from "./lib/app-owned-memory";
 import { isHostedToolUnsupportedForModel } from "./responses/hosted-tool-policy";
+import { normalizeSubagentRoster } from "./codex/subagent-roster";
 
 let _atomicSeq = 0;
 
@@ -408,6 +409,17 @@ const retryOn429PolicySchema = z.object({
 }).strict();
 
 const stringArraySchema = z.array(z.string());
+const subagentRosterSchema = z.array(z.unknown()).transform((value, ctx) => {
+  try {
+    return normalizeSubagentRoster(value);
+  } catch (error) {
+    ctx.addIssue({
+      code: "custom",
+      message: error instanceof Error ? error.message : "invalid subagent roster",
+    });
+    return z.NEVER;
+  }
+});
 const stringRecordSchema = z.record(z.string(), z.string());
 const numberRecordSchema = z.record(z.string(), z.number());
 const booleanRecordSchema = z.record(z.string(), z.boolean());
@@ -1104,7 +1116,7 @@ const configSchema = z.object({
   defaultProvider: z.string().min(1),
   claudeCode: claudeCodeSchema.optional(),
   clientIntegrations: clientIntegrationsSchema.optional(),
-  subagentModels: stringArraySchema.optional(),
+  subagentModels: subagentRosterSchema.optional(),
   subagentModelFallback: stringArraySchema.optional(),
   subagentModelFallbackPollMs: z.number().int().nonnegative().optional(),
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
@@ -2518,7 +2530,7 @@ export function getDefaultConfig(): CodexCommanderConfig {
       },
     },
     defaultProvider: "openai",
-    subagentModels: [...DEFAULT_SUBAGENT_MODELS],
+    subagentModels: DEFAULT_SUBAGENT_MODELS.map(model => ({ model })),
     multiAgentGuidanceEnabled: true,
     websockets: false,
     codexAutoStart: true,
@@ -2577,6 +2589,8 @@ export type RuntimePortState = {
   hostname?: string;
   /** Per-process proof key; protected by the config directory and never served. */
   attestationSecret?: string;
+  /** Current runtimes require metadata-bound v2 health attestation. */
+  attestationProtocol?: 2;
 };
 
 export type RuntimePortWriteState = Omit<RuntimePortState, "schemaVersion">;
@@ -2584,10 +2598,11 @@ export type RuntimePortWriteState = Omit<RuntimePortState, "schemaVersion">;
 function isValidRuntimePortState(value: unknown): value is RuntimePortState {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const state = value as Record<string, unknown>;
-  const allowedKeys = new Set(["schemaVersion", "pid", "port", "hostname", "attestationSecret"]);
+  const allowedKeys = new Set(["schemaVersion", "pid", "port", "hostname", "attestationSecret", "attestationProtocol"]);
   if (Object.keys(state).some(key => !allowedKeys.has(key))) return false;
   const hostnameOk = state.hostname === undefined || typeof state.hostname === "string";
   const attestationOk = state.attestationSecret === undefined || isLocalAttestationSecret(state.attestationSecret);
+  const protocolOk = state.attestationProtocol === undefined || state.attestationProtocol === 2;
   return state.schemaVersion === 1
     && Number.isSafeInteger(state.pid)
     && Number(state.pid) > 0
@@ -2595,7 +2610,8 @@ function isValidRuntimePortState(value: unknown): value is RuntimePortState {
     && Number(state.port) > 0
     && Number(state.port) <= 65535
     && hostnameOk
-    && attestationOk;
+    && attestationOk
+    && protocolOk;
 }
 
 export function writeRuntimePort(state: RuntimePortWriteState): void {
@@ -2605,6 +2621,7 @@ export function writeRuntimePort(state: RuntimePortWriteState): void {
     port: state.port,
     ...(state.hostname !== undefined ? { hostname: state.hostname } : {}),
     ...(state.attestationSecret !== undefined ? { attestationSecret: state.attestationSecret } : {}),
+    ...(state.attestationProtocol !== undefined ? { attestationProtocol: state.attestationProtocol } : {}),
   };
   if (!isValidRuntimePortState(persisted)) throw new Error("Invalid runtime port state");
   const dir = getConfigDir();

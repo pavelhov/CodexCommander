@@ -1,4 +1,5 @@
 import type { AdapterEvent, CodexCommanderMessagePhase, CodexCommanderProviderContinuationState, CodexCommanderUsage } from "./types";
+import { coerceIntegerToolArguments } from "./lib/tool-argument-integers";
 import { adapterFailureFromMessage, classifyError, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, type CodexCommanderErrorPayload } from "./lib/errors";
 import { encodeCompactionSummary } from "./responses/compaction";
 import { encodeReasoningEnvelope, type ReasoningEnvelope } from "./responses/reasoning-envelope";
@@ -198,6 +199,7 @@ export function bridgeToResponsesSSE(
       setInterval: (handler: () => void, ms: number) => unknown;
       clearInterval: (id: unknown) => void;
     };
+    toolParameterSchemas?: ReadonlyMap<string, Record<string, unknown>>;
   },
 ): ReadableStream<Uint8Array> {
   const replayCacheScope = options?.replayCacheScope ?? "global";
@@ -487,7 +489,7 @@ export function bridgeToResponsesSSE(
       // synthetic compaction item's payload on done.
       let compactionText = "";
       let compactionTextBytes = 0;
-      let currentToolCall: { itemId: string; outputIndex: number; callId: string; name: string; args: string; argsBytes: number; namespace?: string; freeform?: boolean; toolSearch?: boolean; inputEmitted?: string } | null = null;
+      let currentToolCall: { itemId: string; outputIndex: number; callId: string; name: string; schemaName: string; args: string; argsBytes: number; argumentDeltas: string[]; namespace?: string; freeform?: boolean; toolSearch?: boolean; inputEmitted?: string } | null = null;
       // Open native web-search cell (between begin and end). Holds the output index allocated on
       // begin so the matching done reuses it; closed as `failed` if the stream terminates early.
       let currentWebSearch: { itemId: string; eventId: string; outputIndex: number } | null = null;
@@ -596,6 +598,11 @@ export function bridgeToResponsesSSE(
 
       const closeCurrentToolCall = () => {
         if (!currentToolCall) return;
+        currentToolCall.args = coerceIntegerToolArguments(
+          currentToolCall.args,
+          options?.toolParameterSchemas?.get(currentToolCall.schemaName)
+            ?? options?.toolParameterSchemas?.get(currentToolCall.name),
+        );
         // Empty input (no-arg tools like computer_use get_app_state / list_apps) must serialize as
         // "{}", never "" — Codex echoes the call back as a function_call next turn, and JSON.parse("")
         // would 400 the whole session ("invalid JSON arguments"), poisoning all later turns.
@@ -635,6 +642,18 @@ export function bridgeToResponsesSSE(
                 currentToolCall.name,
               ),
             };
+        if (currentToolCall.toolSearch) {
+          // Tool-search items are exposed only once their terminal status is known. The added
+          // frame must still precede the matching done frame, even though no live item was
+          // available while arguments were arriving.
+          emit("response.output_item.added", {
+            output_index: currentToolCall.outputIndex,
+            item: {
+              type: "tool_search_call", id: currentToolCall.itemId,
+              call_id: currentToolCall.callId, execution: "client", arguments: {}, status: "in_progress",
+            },
+          });
+        }
         emit("response.output_item.done", { output_index: currentToolCall.outputIndex, item });
         retainFinishedItem(item as OutputItem);
         budget?.closeCall(currentToolCall.callId);
@@ -645,17 +664,21 @@ export function bridgeToResponsesSSE(
       // Terminal-error / incomplete path for an open tool call (#765 remainder).
       // Closing via closeCurrentToolCall() would emit function_call_arguments.done and
       // status:"completed" BEFORE response.failed — the client still sees an issued call.
-      // Cancel instead: no *.done argument frames, status:"incomplete" (same pattern as an
-      // in-flight web_search_call closing as "failed"). Args still serialize as "{}" when
+      // Cancel instead: no function_call_arguments.done frame, status:"incomplete" (same
+      // pattern as an in-flight web_search_call closing as "failed"). Args still serialize as "{}" when
       // empty so echoed items cannot poison the next turn with JSON.parse("").
       const failCurrentToolCall = () => {
         if (!currentToolCall) return;
         const argsStr = currentToolCall.args || "{}";
         const item = currentToolCall.toolSearch
           ? {
-              type: "tool_search_call", id: currentToolCall.itemId,
-              call_id: currentToolCall.callId, execution: "client",
-              arguments: parseArgsObj(currentToolCall.args), status: "incomplete",
+              // tool_search_call.arguments must be an object, so an incomplete JSON buffer
+              // cannot be represented there without losing bytes. Match the buffered bridge's
+              // lossless fallback and preserve the raw string in an incomplete function call.
+              type: "function_call", id: currentToolCall.itemId,
+              call_id: currentToolCall.callId, name: currentToolCall.name,
+              arguments: argsStr, status: "incomplete",
+              ...(currentToolCall.namespace ? { namespace: currentToolCall.namespace } : {}),
             }
           : currentToolCall.freeform
           ? {
@@ -668,7 +691,26 @@ export function bridgeToResponsesSSE(
               call_id: currentToolCall.callId, name: currentToolCall.name,
               arguments: argsStr, status: "incomplete",
               ...(currentToolCall.namespace ? { namespace: currentToolCall.namespace } : {}),
-            };
+          };
+        if (currentToolCall.toolSearch) {
+          // An incomplete tool-search call cannot carry its raw, truncated JSON in a native
+          // tool_search_call. Fall back to function_call, exposing the item before replaying
+          // the buffered argument deltas so the SSE lifecycle remains well-formed.
+          emit("response.output_item.added", {
+            output_index: currentToolCall.outputIndex,
+            item: {
+              type: "function_call", id: currentToolCall.itemId,
+              call_id: currentToolCall.callId, name: currentToolCall.name,
+              arguments: "", status: "in_progress",
+              ...(currentToolCall.namespace ? { namespace: currentToolCall.namespace } : {}),
+            },
+          });
+          for (const delta of currentToolCall.argumentDeltas) {
+            emit("response.function_call_arguments.delta", {
+              item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex, delta,
+            });
+          }
+        }
         emit("response.output_item.done", { output_index: currentToolCall.outputIndex, item });
         retainFinishedItem(item as OutputItem);
         budget?.closeCall(currentToolCall.callId);
@@ -999,8 +1041,8 @@ export function bridgeToResponsesSSE(
                     type: "function_call", id: itemId, call_id: event.id, name: realName,
                     arguments: "", status: "in_progress", ...(ns ? { namespace: ns } : {}),
                   };
-              emit("response.output_item.added", { output_index: outputIndex, item });
-              currentToolCall = { itemId, outputIndex, callId: event.id, name: realName, args: "", argsBytes: 0, namespace: ns, freeform, toolSearch };
+              if (!toolSearch) emit("response.output_item.added", { output_index: outputIndex, item });
+              currentToolCall = { itemId, outputIndex, callId: event.id, name: realName, schemaName: event.name, args: "", argsBytes: 0, argumentDeltas: [], namespace: ns, freeform, toolSearch };
               budget?.openCall(event.id);
               break;
             }
@@ -1013,6 +1055,7 @@ export function bridgeToResponsesSSE(
                   "tool_args",
                   currentToolCall.callId,
                 ));
+                if (currentToolCall.toolSearch) currentToolCall.argumentDeltas.push(event.arguments);
                 if (!currentToolCall.freeform && !currentToolCall.toolSearch) {
                   emit("response.function_call_arguments.delta", {
                     item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,
@@ -1124,7 +1167,11 @@ export function bridgeToResponsesSSE(
               // After every close above, so the blob lands AFTER the assistant message it belongs
               // to and the parser's backwards pairing finds it.
               flushKiroRedactedReasoning();
-              if (options?.compaction) {
+              if (
+                options?.compaction
+                && event.stopReason !== "max_tokens"
+                && event.stopReason !== "content_filter"
+              ) {
                 // Exactly one compaction item per turn; codex-rs takes the first and fatals on 0.
                 const item = {
                   type: "compaction", id: `cmp_${uuid()}`,
@@ -1390,6 +1437,7 @@ function buildResponseJSONWithBudget(
     translatorBudget?: TranslatorBudget;
     /** Conversation identity for the reasoning replay cache (issue #950). */
     replayCacheScope?: string;
+    toolParameterSchemas?: ReadonlyMap<string, Record<string, unknown>>;
   },
 ): Record<string, unknown> {
   const responseId = `resp_${uuid()}`;
@@ -1439,6 +1487,7 @@ function buildResponseJSONWithBudget(
   let endTurn: boolean | undefined;
   let stopReason: string | undefined;
   let cleanDone = false;
+  let sawTerminal = false;
   let compactionText = "";
   let compactionTextBytes = 0;
 
@@ -1543,16 +1592,32 @@ function buildResponseJSONWithBudget(
   };
   const flushToolCall = (status: "completed" | "incomplete" = "completed") => {
     if (!currentToolCallId) return;
+    if (status === "completed") {
+      currentToolCallArgs = coerceIntegerToolArguments(
+        currentToolCallArgs,
+        options?.toolParameterSchemas?.get(currentToolCallName),
+      );
+    }
     const mapped = options?.toolNsMap?.get(currentToolCallName);
     const realName = mapped?.name ?? currentToolCallName;
     const ns = mapped?.namespace;
     const toolSearch = options?.toolSearchToolNames?.has(realName) ?? false;
     const freeform = !toolSearch && (options?.freeformToolNames?.has(realName) ?? false);
-    if (toolSearch) {
+    if (toolSearch && status === "completed") {
       pushOutput({
         type: "tool_search_call", id: `tsc_${uuid()}`,
         call_id: currentToolCallId, execution: "client",
         arguments: parseArgsObj(currentToolCallArgs), status,
+      });
+    } else if (toolSearch) {
+      // Responses tool_search_call.arguments is an object, so it cannot carry a truncated
+      // JSON buffer without silently replacing evidence with {}. Preserve incomplete raw bytes
+      // in the API-valid function_call.arguments string; completed tool_search_call output above
+      // keeps its existing parsed representation.
+      pushOutput({
+        type: "function_call", id: `fc_${uuid()}`,
+        call_id: currentToolCallId, name: realName,
+        arguments: currentToolCallArgs || "{}", status,
       });
     } else if (freeform) {
       pushOutput({
@@ -1733,15 +1798,18 @@ function buildResponseJSONWithBudget(
         }
         break;
       case "error":
+        sawTerminal = true;
         errorEvent = e;
         usage = e.usage ?? usage;
         break;
       case "incomplete":
+        sawTerminal = true;
         incompleteEvent = e;
         endTurn = e.endTurn;
         if (e.providerState) options?.onProviderState?.(e.providerState);
         break;
       case "done":
+        sawTerminal = true;
         usage = e.usage;
         endTurn = e.endTurn;
         cleanDone = e.stopReason === undefined;
@@ -1756,7 +1824,7 @@ function buildResponseJSONWithBudget(
   flushSummaryReasoning();
   flushRawReasoning();
   // Open tool call on a failed/incomplete turn must not land as status:"completed".
-  if (currentToolCallId) flushToolCall(errorEvent || incompleteEvent ? "incomplete" : "completed");
+  if (currentToolCallId) flushToolCall(errorEvent || incompleteEvent || !sawTerminal ? "incomplete" : "completed");
   if (batchKiroRedacted) {
     // pushOutput reserves the item itself and releases the retained raw blob it replaces.
     pushOutput({
@@ -1772,6 +1840,7 @@ function buildResponseJSONWithBudget(
     options?.compaction
     && !errorEvent
     && !incompleteEvent
+    && sawTerminal
     && stopReason !== "max_tokens"
     && stopReason !== "content_filter"
   ) {
@@ -1783,6 +1852,8 @@ function buildResponseJSONWithBudget(
     ? "failed"
     : incompleteEvent || stopReason === "max_tokens" || stopReason === "content_filter"
       ? "incomplete"
+      : !sawTerminal
+        ? "incomplete"
       : "completed";
   options?.onUsage?.(incompleteEvent?.usage ?? usage);
   return {
@@ -1799,6 +1870,8 @@ function buildResponseJSONWithBudget(
         ...(incompleteEvent.message ? { message: incompleteEvent.message } : {}),
         ...(incompleteEvent.retryable !== undefined ? { retryable: incompleteEvent.retryable } : {}),
       },
+    } : !sawTerminal ? {
+      incomplete_details: { reason: "adapter_eof" },
     } : stopReason === "max_tokens" ? {
       incomplete_details: { reason: "max_output_tokens" },
     } : stopReason === "content_filter" ? {

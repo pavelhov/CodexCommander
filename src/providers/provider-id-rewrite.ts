@@ -1,4 +1,5 @@
 import type { CodexCommanderConfig } from "../types";
+import { rewriteSubagentRosterModels } from "../codex/subagent-roster";
 
 export interface ProviderRewriteResult {
   /** Number of references re-pointed. */
@@ -50,7 +51,7 @@ export function rewriteProviderReferences(config: CodexCommanderConfig, from: st
    * than `keyof CodexCommanderConfig`: the latter also admits `customModels` and friends, so
    * `map` would infer a union array that is not assignable back.
    */
-  type RoutedListKey = "disabledModels" | "subagentModels" | "subagentModelFallback";
+  type RoutedListKey = "disabledModels" | "subagentModelFallback";
   const routeListAt = (key: RoutedListKey): void => {
     const list = config[key];
     if (!list) return;
@@ -71,8 +72,10 @@ export function rewriteProviderReferences(config: CodexCommanderConfig, from: st
   }
 
   routeListAt("disabledModels");
-  routeListAt("subagentModels");
   routeListAt("subagentModelFallback");
+  if (config.subagentModels) {
+    config.subagentModels = rewriteSubagentRosterModels(config.subagentModels, model => route(model) ?? model);
+  }
 
   const scalarOwners: Array<[Record<string, unknown> | undefined, string]> = [
     [config as unknown as Record<string, unknown>, "injectionModel"],

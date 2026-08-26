@@ -31,19 +31,25 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         let headers: [String: String]
         let urlError: URLError.Code?
         let automaticAttestation: Bool
+        let attestationProtocol: Int?
+        let metadataProofVersion: String?
 
         init(
             status: Int,
             body: String = "",
             headers: [String: String] = [:],
             urlError: URLError.Code? = nil,
-            automaticAttestation: Bool = true
+            automaticAttestation: Bool = true,
+            attestationProtocol: Int? = nil,
+            metadataProofVersion: String? = nil
         ) {
             self.status = status
             self.body = body
             self.headers = headers
             self.urlError = urlError
             self.automaticAttestation = automaticAttestation
+            self.attestationProtocol = attestationProtocol
+            self.metadataProofVersion = metadataProofVersion
         }
     }
 
@@ -127,8 +133,16 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         if response.automaticAttestation,
            request.url?.path == "/healthz",
            headers["x-codexcommander-attestation-proof"] == nil,
-           let proof = Self.attestationProof(request: request, body: response.body) {
-            headers["x-codexcommander-attestation-proof"] = proof
+           let proof = Self.attestationProof(
+               request: request,
+               body: response.body,
+               protocolVersion: response.attestationProtocol,
+               headers: headers,
+               metadataProofVersion: response.metadataProofVersion
+           ) {
+            headers[response.attestationProtocol == 2
+                ? "x-codexcommander-attestation-metadata-proof"
+                : "x-codexcommander-attestation-proof"] = proof
         }
         let http = HTTPURLResponse(
             url: request.url!,
@@ -147,7 +161,13 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         Self.lock.unlock()
     }
 
-    private static func attestationProof(request: URLRequest, body: String) -> String? {
+    private static func attestationProof(
+        request: URLRequest,
+        body: String,
+        protocolVersion: Int?,
+        headers: [String: String],
+        metadataProofVersion: String?
+    ) -> String? {
         guard let challenge = request.value(
             forHTTPHeaderField: "x-codexcommander-attestation-challenge"
         ),
@@ -157,7 +177,16 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         let pid = json["pid"] as? Int,
         let port = json["port"] as? Int
         else { return nil }
-        let payload = "codexcommander-local-management-v1\n\(challenge)\n\(pid)\n\(port)"
+        let payload: String
+        if protocolVersion == 2 {
+            guard let version = metadataProofVersion ?? headers["x-codexcommander-runtime-version"],
+                  let generation = headers["x-codexcommander-lifecycle-generation"]
+            else { return nil }
+            let lease = headers["x-codexcommander-lifecycle-lock-lease"] == "1" ? "1" : "0"
+            payload = "codexcommander-local-management-v2\n\(challenge)\n\(pid)\n\(port)\n\(version)\n\(generation)\n\(lease)"
+        } else {
+            payload = "codexcommander-local-management-v1\n\(challenge)\n\(pid)\n\(port)"
+        }
         let key = SymmetricKey(data: Data(attestationSecret.utf8))
         let digest = Data(HMAC<SHA256>.authenticationCode(
             for: Data(payload.utf8),
@@ -235,6 +264,73 @@ enum TransportSuite {
                 $0.key.lowercased().hasSuffix("-api-key") && $0.value == "admin-secret"
             }
             t.equal(credentialHeaders.count, 1, "one management credential header")
+        }
+
+        t.test("transport: current v2 runtime accepts only metadata-bound health proof") {
+            StubProtocol.reset([
+                .init(
+                    status: 200,
+                    body: identity,
+                    headers: [
+                        "x-codexcommander-runtime-version": "1.2.3",
+                        "x-codexcommander-lifecycle-generation": "2",
+                        "x-codexcommander-lifecycle-lock-lease": "1",
+                    ],
+                    attestationProtocol: 2
+                ),
+                .init(status: 200, body: startupHealth),
+            ])
+            let client = makeClient(credential: "admin-secret", attestationProtocol: 2)
+            let status: String? = sync { try? await client.health().status }
+            t.equal(status, "protected")
+        }
+
+        t.test("transport: current v2 runtime rejects stripped or altered metadata proof") {
+            for response in [
+                StubProtocol.Response(status: 200, body: identity, automaticAttestation: false),
+                StubProtocol.Response(
+                    status: 200,
+                    body: identity,
+                    headers: [
+                        "x-codexcommander-runtime-version": "9.9.9",
+                        "x-codexcommander-lifecycle-generation": "2",
+                    ],
+                    attestationProtocol: 2,
+                    metadataProofVersion: "1.2.3"
+                ),
+            ] {
+                StubProtocol.reset([response])
+                let client = makeClient(credential: "admin-secret", attestationProtocol: 2)
+                let error = sync { await proxyError { try await client.health() } }
+                t.equal(error, .identityMismatch)
+                t.equal(StubProtocol.recorded.count, 1)
+            }
+            for generation in ["02", "9007199254740992"] {
+                StubProtocol.reset([
+                    .init(
+                        status: 200,
+                        body: identity,
+                        headers: [
+                            "x-codexcommander-runtime-version": "1.2.3",
+                            "x-codexcommander-lifecycle-generation": generation,
+                        ],
+                        attestationProtocol: 2
+                    ),
+                ])
+                let canonicalClient = makeClient(credential: "admin-secret", attestationProtocol: 2)
+                let canonicalError = sync { await proxyError { try await canonicalClient.health() } }
+                t.equal(canonicalError, .identityMismatch)
+            }
+        }
+
+        t.test("transport: legacy runtime record remains compatible with v1 health proof") {
+            StubProtocol.reset([
+                .init(status: 200, body: identity),
+                .init(status: 200, body: startupHealth),
+            ])
+            let client = makeClient(credential: "admin-secret")
+            let status: String? = sync { try? await client.health().status }
+            t.equal(status, "protected")
         }
 
         t.test("transport: fresh Codex route status uses the attested management path") {
@@ -679,14 +775,15 @@ enum TransportSuite {
         }
     }
 
-    private static func makeClient(credential: String?) -> ProxyClient {
+    private static func makeClient(credential: String?, attestationProtocol: Int? = nil) -> ProxyClient {
         let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
         let session = ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self])
         return ProxyClient(
             endpoint: endpoint,
             session: session,
             credentials: StaticCredentialStore(credential),
-            attestationSecret: StubProtocol.attestationSecret
+            attestationSecret: StubProtocol.attestationSecret,
+            attestationProtocol: attestationProtocol
         )
     }
 

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import * as delegationTemplates from "../src/codex/delegation-templates";
 import {
   DELEGATION_BEGIN_MARKER,
@@ -39,7 +40,12 @@ describe("Codex delegation templates", () => {
   test("balanced is deterministic and carries no roster ids", () => {
     const first = renderCodexDelegationBundle("balanced");
     const second = renderCodexDelegationBundle("balanced");
+    const canonicalSkillSource = readFileSync(
+      new URL("../src/skills/codexcommander-delegation/SKILL.md", import.meta.url),
+      "utf8",
+    );
     expect(first).toEqual(second);
+    expect(first.skillText).toBe(canonicalSkillSource);
     expect(first.skillText).toContain("name: codexcommander-delegation");
     expect(first.skillText).toContain("managed-by: codexcommander");
     expect(first.agentsBlockText).toContain("Mode: balanced");

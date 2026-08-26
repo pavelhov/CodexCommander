@@ -53,8 +53,11 @@ import {
   ensureMacOSCompanionApp,
   findLiveProxyForStart,
   prepareExplicitProxyStartWithIo,
+  replaceStaleRuntimeForExplicitStart,
+  type EnsureProxyLifecycleIo,
   type ExplicitProxyStartIo,
   type ProxyLifecycleAuthorityAcquirer,
+  type StaleRuntimeRetirement,
 } from "./proxy-lifecycle";
 
 type ForegroundServer = ReturnType<typeof startServer>;
@@ -257,6 +260,12 @@ export interface ForegroundProxyStartIo {
     requestedPort: number | undefined,
     config: Pick<CodexCommanderConfig, "port" | "hostname">,
   ) => Promise<LiveProxy | null>;
+  replaceStaleRuntime?: (
+    live: LiveProxy,
+    authority: ProxyLifecycleAuthority,
+    io?: EnsureProxyLifecycleIo,
+  ) => Promise<StaleRuntimeRetirement>;
+  staleReplacementIo?: EnsureProxyLifecycleIo;
   routing?: ExplicitProxyStartIo;
   syncCatalog?: typeof syncCodexCatalogForCli;
   catalogCanApply?: typeof catalogSyncCanApply;
@@ -385,12 +394,27 @@ export async function runForegroundProxyStart(
   try {
     const existingPid = (io.readPid ?? readPid)();
     const live = await (io.findLive ?? findLiveProxyForStart)(parsed.port, config);
-    const currentHomeLive = live?.source === "runtime" && live.pid !== null ? live : null;
+    let currentHomeLive = live?.source === "runtime" && live.pid !== null ? live : null;
     if (live && (serviceChild || !currentHomeLive)) {
       logger.error(currentHomeLive
         ? `⚠️  Proxy already running (PID ${currentHomeLive.pid}, port ${currentHomeLive.port}).`
         : `⚠️  A recordless or different-home proxy is already listening on port ${live.port}; Codex routing was left unchanged.`);
       return 1;
+    }
+
+    if (currentHomeLive && !parentDelegated) {
+      if (!lifecycle.authority) {
+        logger.error("❌ Explicit Start lost lifecycle authority before stale-runtime inspection.");
+        return 1;
+      }
+      const replacement = await (
+        io.replaceStaleRuntime ?? replaceStaleRuntimeForExplicitStart
+      )(currentHomeLive, lifecycle.authority, io.staleReplacementIo);
+      if (replacement.failed) {
+        logger.error(`❌ ${replacement.failed.message}`);
+        return 1;
+      }
+      currentHomeLive = replacement.live;
     }
 
     if (!parentDelegated) {
@@ -496,6 +520,7 @@ export async function runForegroundProxyStart(
       port,
       hostname: config.hostname,
       attestationSecret: localAttestationSecret,
+      attestationProtocol: 2,
     });
   } catch (error) {
     if (explicitRoutingPrepared) {

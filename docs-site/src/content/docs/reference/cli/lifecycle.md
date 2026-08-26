@@ -53,6 +53,14 @@ the replacement and routes Codex back through it. If restart fails, Codex remain
 Idempotently ensure a background proxy is running, then sync its live model catalog. If
 `codexAutoStart` is `false`, it prints that autostart is disabled and does nothing.
 
+Before a current-home Ensure, explicit Start, Restart, or Route Back trusts an existing proxy, every
+CLI, dashboard/tray, and macOS entry point applies the same bounded runtime check. An exact locally
+attested runtime with the current version and lifecycle generation is reused without a signal. An
+exact attested older runtime is replaced only after its process birth identity is captured and
+rechecked. A newer runtime, foreign or recordless listener, failed or ambiguous attestation, or
+unknown metadata is never signaled or accepted as a new route. Explicit transitions fail with Codex
+left native when safe replacement cannot be proven; Ensure preserves an intentionally native route.
+
 ### `ccx restore [back]` · `ccx eject [back]`
 
 Restore native Codex **without** stopping the proxy. The native escape removes only the exact

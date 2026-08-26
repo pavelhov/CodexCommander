@@ -282,6 +282,8 @@ export interface WebSearchLoopDeps {
   on429?: (retryAfterHeader: string | null) => ProviderAdapter | null;
   /** Opt-in same-target 429 policy (key-auth providers). When present, 429 replays on the SAME key before on429 rotation. */
   retryOn429Policy?: Required<RateLimitRetryPolicy> | null;
+  /** Request-visible tool parameter schemas for integer argument canonicalization at the Responses bridge. */
+  toolParameterSchemas?: ReadonlyMap<string, Record<string, unknown>>;
 }
 
 /**
@@ -780,6 +782,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     {
       translatorBudget,
       replayCacheScope: parsed._clientThreadId ?? "global",
+      ...(deps.toolParameterSchemas ? { toolParameterSchemas: deps.toolParameterSchemas } : {}),
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),

@@ -10,8 +10,8 @@ import {
 import { enrichProviderFromCatalog } from "../oauth/key-providers";
 import { deriveInitProviders } from "../providers/derive";
 import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../types";
+import { dispatchRecoveryLifecycleEntrypoint } from "./lifecycle-entrypoint-dispatch";
 import {
-  restoreBackRoutingLifecycle,
   type ProxyLifecycleResult,
   type RoutingLifecycleIo,
 } from "./proxy-lifecycle";
@@ -92,7 +92,7 @@ const envKeyFor = (id: string) => `${id.toUpperCase().replace(/[^A-Z0-9]+/g, "_"
 export async function routeCodexThroughLiveProxyFromInit(
   io: RoutingLifecycleIo = {},
 ): Promise<ProxyLifecycleResult> {
-  return restoreBackRoutingLifecycle(io);
+  return dispatchRecoveryLifecycleEntrypoint("route-back", { routingIo: io });
 }
 
 function replaceSetupConfigPreservingIntegrationIntent(

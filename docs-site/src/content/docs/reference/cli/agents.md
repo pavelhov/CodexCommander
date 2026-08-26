@@ -15,7 +15,22 @@ the collaboration protocol, delegation, effort, and fallback behavior fit togeth
 
 ```bash
 ccx agent subagents set ark/model-a,openai/gpt-5.5
+ccx agent subagents guidance set ark/model-a --text "Use for independent review"
+ccx agent subagents guidance clear ark/model-a
 ```
+
+`ccx agent subagents status --json` returns the live sub-agent status, including `chosen` as the
+ordered model-id projection and `roster` as the ordered roster objects (`model` plus optional
+`guidance`). The full `ccx agent status --json` output contains that same status object under
+`subagents`.
+
+Guidance set and clear first read the live roster to validate the named model, then send an atomic
+single-row `PATCH /api/subagent-models` with `{ model, guidance }` (or `guidance: null` to clear).
+Concurrent reorders, model changes, and notes on other rows are preserved. The management API's
+`GET /api/subagent-models` exposes both projections; a direct `PUT` with `{ roster }` still replaces
+the full roster. Existing id-only writes—`ccx agent subagents set ...` and direct `{ models }` PUTs—keep
+guidance for selectors that survive the replacement or reorder, while removed selectors lose their
+roster objects.
 
 ### `ccx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
 

@@ -80,6 +80,26 @@ not mutate `config.toml`, `subagentDeveloperInstructions`, native `[agents]` def
 injection, or catalog state, and it does not restart a worker or replace the proxy. Those existing
 subsystems keep their independent ownership and activation rules.
 
+### Managed wait lifecycle
+
+A managed `wait_agent` timeout is a neutral subscription result: it proves only that no qualifying
+mailbox or final event arrived during that window. The coordinator reconciles once with `list_agents`
+and, for a still-running child, continues useful local work or starts another 5–10 minute wait. One or
+more timeouts, including silence after a checkpoint or conclude message, do not authorize
+`interrupt_agent`. Interruption requires explicit user cancellation, a confirmed error or blocked
+state, a hard deadline communicated prospectively to the child, or deliberate replacement after
+available work is preserved. Release pressure cannot create a deadline retroactively.
+
+When a bounded high-stakes gate needs evidence, the coordinator may prospectively request one
+explicit checkpoint or durable partial artifact with `send_message`; private child commentary does
+not wake the parent mailbox. A conclude message is advisory, delivered at a model or tool boundary,
+and is not proof that the child stopped.
+
+The source of truth is `src/skills/codexcommander-delegation/SKILL.md`. The delegation renderer reads
+those exact bytes, adds the concise marker-owned `AGENTS.md` block, and supplies both artifacts to the
+preview, atomic installer, manual-copy payload, and packaging flows. Update the canonical source and
+renderer; never hand-edit installed `~/.agents` artifacts or packaged `dist` output.
+
 ## macOS app first-run bootstrap
 
 The direct packaged macOS companion **Start** path is the only app-only configuration bootstrap. It
