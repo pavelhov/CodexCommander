@@ -661,7 +661,7 @@ export const en = {
   "sub.addFromLibrary": "Add from library",
   "sub.browseLibrary": "Browse agent library",
   "sub.libraryCount": "{n} catalog models",
-  "sub.libraryHint": "Any catalog model remains callable by exact ID. The roster controls the five models advertised to spawn_agent; it does not force a worker or fallback.",
+  "sub.libraryHint": "Any catalog model remains callable by exact ID. The roster controls the five featured spawn_agent suggestions, not an exhaustive allowlist; it does not force a worker or fallback.",
   "sub.noMatchingModels": "No models match this search and filter.",
   "sub.policyHint": "Set the agent protocol, worker guidance, and child fallbacks. Saves separately from the roster.",
   "sub.policy.mode": "Agent protocol",

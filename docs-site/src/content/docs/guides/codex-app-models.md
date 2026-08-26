@@ -159,16 +159,17 @@ never advertised where it cannot be honored, and custom gateways can opt in expl
 ## Subagent selection
 
 Codex sorts picker-visible catalog entries by ascending `priority` and advertises the first five as
-`spawn_agent` model overrides. The dashboard's **Agent Command Center** can select and save up to
-five bare native ids or routed `provider/model` ids. It also preserves already-configured
-account-qualified `<selector>/<native-openai-model>` ids, reports whether each saved choice is
-actually advertised, and assigns low catalog priorities in the selected order. When account selectors
-are active, bare native selections expand into selector-qualified groups. Other models remain callable
-by exact id.
+featured `spawn_agent` suggestions, not as an exhaustive allowlist. The dashboard's **Agent Command
+Center** can select and save up to five bare native ids or routed `provider/model` ids. It also
+preserves already-configured account-qualified `<selector>/<native-openai-model>` ids, reports
+whether each saved choice is actually advertised, and assigns low catalog priorities in the selected
+order. When account selectors are active, bare native selections expand into selector-qualified
+groups. Other models remain callable by exact id when they are in the worker-loaded catalog and
+compatible with the surface and task delivery.
 
 The configured roster is separate from the Dashboard's **Sub-agent delegation** selection. It
-controls which overrides Codex offers first; it does not select a model or trigger delegation by
-itself.
+controls which overrides Codex offers first; it does not select a model, trigger delegation, or
+limit native `spawn_agent` to those five IDs.
 
 ## Refreshing model state
 

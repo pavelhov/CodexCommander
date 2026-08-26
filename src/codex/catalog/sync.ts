@@ -190,7 +190,7 @@ export function finishUpstreamNativeEntry(clone: RawEntry, priority: number): Ra
  * 1. A featured exact rank always wins (featured = the configured subagent roster).
  * 2. When a nonempty featured roster exists, an unfeatured native sorts STRICTLY
  *    BELOW the featured block — Codex's models-manager sorts by priority ASC and
- *    advertises only the first 5 to spawn_agent, so a genuine upstream priority
+ *    advertises only the first 5 as spawn_agent suggestions, so a genuine upstream priority
  *    (gpt-5.6-terra=2, gpt-5.6-luna=3) would otherwise displace configured routed
  *    models from that five-slot window.
  * 3. With no featured roster, the genuine upstream/baseline priority is preserved
@@ -342,7 +342,7 @@ export function buildCatalogEntries(
   disabledNativeAccountSlugs: ReadonlySet<string> = new Set(),
 ): RawEntry[] {
   // Codex's models-manager sorts by `priority` ASC and advertises the first 5 picker-visible
-  // models to spawn_agent (sort_by_key(priority) + MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT=5). Catalog
+  // models as spawn_agent suggestions (sort_by_key(priority) + MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT=5). Catalog
   // ARRAY order is discarded — so "featuring" a model = giving it the LOWEST priority (0..N-1) so
   // it sorts to the front. This works for native gpt slugs AND routed slugs alike.
   const rank = new Map((featured ?? []).map((slug, i) => [slug, i] as const));

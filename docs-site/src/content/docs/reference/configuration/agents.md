@@ -45,9 +45,12 @@ loudly when the installed Codex build does not know the flag yet.
 ## Roster and guidance
 
 The effective V2 roster is the configured, picker-visible, priority-sorted first five models that
-are compatible with V2 and present in the injected catalog. V2 eligibility treats an explicit `"v2"`,
-`null`, or absent upstream pin as eligible; a real `"v1"` pin is excluded. Excluded entries remain in
-configuration so they can become eligible later.
+are compatible with V2 and present in the injected catalog. Those five are featured suggestions, not
+an exhaustive `spawn_agent` allowlist. A parent that already knows an exact catalog ID may pass it
+to native `spawn_agent` when the ID is in the worker-loaded catalog and compatible with this surface
+and task delivery. Native validation remains authoritative. V2 eligibility treats an explicit `"v2"`,
+`null`, or absent upstream pin as eligible; a real `"v1"` pin is excluded. Excluded roster entries
+remain in configuration so they can become featured later.
 
 Surface detection uses tool shape. A namespaced `spawn_agent` with `send_input`, `resume_agent`, or
 `close_agent` is V1. A flat `spawn_agent` with `send_message`, `followup_task`, `interrupt_agent`, or
@@ -59,8 +62,10 @@ includes every accepted eligible roster annotation; it has no aggregate characte
 is deduplicated across replay prefixes and inserted before a trailing `compaction_trigger`.
 
 `injectionModel` and `injectionEffort` are advisory unless native-default sync is enabled. The built-in
-V2 text asks Codex to pass supported model/effort overrides to `spawn_agent` with
-`fork_turns: "none"`. A custom `injectionPrompt` substitutes missing values with an empty string.
+V2 text treats the featured roster as suggestions, allows a known exact compatible catalog ID to be
+passed to native `spawn_agent`, and asks Codex to pass supported model/effort overrides with
+`fork_turns: "none"`. A custom `injectionPrompt` substitutes missing values with an empty string and
+replaces that built-in exact-ID wording.
 
 Each roster row may also carry optional `guidance`. This is untrusted operator text for the live
 delegation message, not a policy control: it cannot set effort, quotas, roles, or fallback behavior.
@@ -86,7 +91,9 @@ the whole-line region from `<!-- BEGIN CODEXCOMMANDER DELEGATION -->` through
 this setup.
 
 The skill and global block are advisory and contain no roster or model ids. They consult the current
-collaboration tool contract and live CodexCommander roster, which remain authoritative. The global block records the
+collaboration tool contract and live CodexCommander guidance. Featured models are suggestions, not an
+exhaustive allowlist; a known exact compatible catalog ID may be passed to native `spawn_agent`.
+The global block records the
 selected `balanced` or `orchestrator` mode and is loaded once per Codex run. Start a new task after
 install, update, mode change, repair, or removal; current tasks are not reloaded. User and repository
 instructions can prohibit delegation. A nonempty `$CODEX_HOME/AGENTS.override.md` shadows the managed

@@ -41,9 +41,10 @@ The relevant no-selector priorities are:
 
 The management API enforces the five-entry limit in
 `src/server/management/agent-settings-routes.ts`: a request containing more than five selectors is
-rejected before normalization. This matches the Codex `spawn_agent` surface, which advertises only
-the first five model overrides. Models outside those five can still remain visible in the main picker
-and callable by their exact id.
+rejected before normalization. This matches the Codex `spawn_agent` surface, which advertises the first five model overrides as
+featured suggestions rather than an exhaustive allowlist. Models outside those five can still remain
+visible in the main picker and, when present in the worker-loaded catalog and compatible with the
+surface and task delivery, callable by their exact id through native `spawn_agent`.
 
 ## How ties are ordered
 
@@ -112,9 +113,10 @@ The picker begins as follows:
 | 7 onward | Remaining routed models | `5` | Provider alphabetically, then model id alphabetically |
 | After routed models | Remaining native models | `featured.length + 100` or higher | Unselected natives are moved below the featured block |
 
-The first five entries are the overrides advertised to `spawn_agent`; the rest continue in the
-normal picker order. With account selectors, the five-entry limit applies after bare native choices
-have expanded into selector-qualified groups.
+The first five entries are the featured suggestions advertised to `spawn_agent`; they are not the
+runtime allowlist. The rest continue in the normal picker order and remain spawnable by exact id
+when the worker catalog contains them. With account selectors, the five-entry limit applies after
+bare native choices have expanded into selector-qualified groups.
 
 ## Changing the order
 
@@ -122,7 +124,8 @@ The supported way to customize leading model order is to reorder the object entr
 open **Subagents** → **Agent Command Center** and reorder the **Configured Roster** by dragging, with the
 arrow buttons, or with <kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd>. The searchable **Agent Library** may
 contain far more than five catalog models; entries remain addressable by exact id when their route is
-available, while the five-slot limit applies only to the overrides advertised first to `spawn_agent`.
+available. The five-slot limit applies only to the featured suggestions advertised first to
+`spawn_agent`; it is not an exhaustive native spawn allowlist.
 
 Use `ccx agent subagents set` or edit the CodexCommander configuration to add exact
 `<selector>/<native-openai-model>` choices that are not in the live library. The command center

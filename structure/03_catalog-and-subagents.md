@@ -263,7 +263,13 @@ the request, and they never raise it.
 
 ## Subagents
 
-Codex `spawn_agent` advertises only the highest-priority first five picker-visible catalog rows.
+Codex `spawn_agent` advertises the highest-priority first five picker-visible catalog rows as
+featured suggestions, not as an exhaustive runtime allowlist. Native spawn still validates a
+requested `model` against the worker-loaded catalog: a known exact, fresh, routable, surface- and
+task-delivery-compatible catalog ID may be passed directly to stock native `spawn_agent`. Vague
+family-name discovery is not provided. Native validation remains authoritative and fail-closed for
+stale or unknown workers, unknown slugs, unsupported efforts, encrypted-task incompatibility, and
+native rejection.
 On disk, `subagentModels` has a compatibility dual-read: older `string[]` values and the ordered
 object form `{ model: string, guidance?: string }[]` are accepted. CodexCommander canonicalizes both
 forms in memory to ordered objects and writes the object form. The first canonical object write is a

@@ -623,7 +623,7 @@ export const ja: Record<TKey, string> = {
   "sub.addFromLibrary": "ライブラリから追加",
   "sub.browseLibrary": "エージェント・ライブラリを参照",
   "sub.libraryCount": "{n} 件のカタログモデル",
-  "sub.libraryHint": "カタログ内のモデルは正確な ID で引き続き呼び出せます。ロースターは spawn_agent に通知される 5 モデルを制御しますが、ワーカーやフォールバックを強制しません。",
+  "sub.libraryHint": "カタログ内のモデルは正確な ID で引き続き呼び出せます。ロースターは spawn_agent に提示する 5 件の推奨候補を制御するだけで、網羅的な許可リストではなく、ワーカーやフォールバックも強制しません。",
   "sub.noMatchingModels": "この検索とフィルターに一致するモデルがありません。",
   "sub.policyHint": "エージェントプロトコル、ワーカーガイダンス、子タスクのフォールバックを設定します。ロースターとは別に保存されます。",
   "sub.policy.mode": "エージェントプロトコル",

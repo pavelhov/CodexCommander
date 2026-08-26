@@ -650,7 +650,7 @@ export const ko: Record<TKey, string> = {
   "sub.addFromLibrary": "라이브러리에서 추가",
   "sub.browseLibrary": "에이전트 라이브러리 둘러보기",
   "sub.libraryCount": "카탈로그 모델 {n}개",
-  "sub.libraryHint": "카탈로그 모델은 정확한 ID로 계속 호출할 수 있습니다. 로스터는 spawn_agent에 알리는 5개 모델을 제어하지만 워커나 폴백을 강제하지 않습니다.",
+  "sub.libraryHint": "카탈로그 모델은 정확한 ID로 계속 호출할 수 있습니다. 로스터는 spawn_agent에 보여주는 5개 추천 항목을 제어할 뿐 전체 허용 목록이 아니며, 워커나 폴백을 강제하지 않습니다.",
   "sub.noMatchingModels": "이 검색 및 필터와 일치하는 모델이 없습니다.",
   "sub.policyHint": "에이전트 프로토콜, 워커 안내, 하위 작업 폴백을 설정하세요. 로스터와 별개로 저장됩니다.",
   "sub.policy.mode": "에이전트 프로토콜",

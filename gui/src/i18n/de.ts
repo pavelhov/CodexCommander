@@ -638,7 +638,7 @@ export const de: Record<TKey, string> = {
   "sub.addFromLibrary": "Aus Bibliothek hinzufügen",
   "sub.browseLibrary": "Agenten-Bibliothek durchsuchen",
   "sub.libraryCount": "{n} Katalogmodelle",
-  "sub.libraryHint": "Jedes Katalogmodell bleibt über seine exakte ID aufrufbar. Der Roster steuert die fünf an spawn_agent beworbenen Modelle, nicht Worker- oder Fallback-Auswahl.",
+  "sub.libraryHint": "Jedes Katalogmodell bleibt über seine exakte ID aufrufbar. Der Roster steuert die fünf an spawn_agent beworbenen Vorschläge, nicht eine vollständige Allowlist und nicht Worker- oder Fallback-Auswahl.",
   "sub.noMatchingModels": "Keine Modelle passen zu dieser Suche und diesem Filter.",
   "sub.policyHint": "Lege Agentenprotokoll, Worker-Anleitung und Kind-Fallbacks fest. Wird unabhängig vom Roster gespeichert.",
   "sub.policy.mode": "Agentenprotokoll",

@@ -89,11 +89,12 @@ codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 
 ## Choose sub-agent models (optional)
 
-A fresh config features five native models in Codex's sub-agent picker: `gpt-5.5`,
-`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, and `gpt-5.4-mini`. Open `ccx gui` to replace or
-reorder up to five native or routed models. The dashboard can also set one preferred sub-agent model
-and reasoning effort. See [Sub-agent Surface](/guides/sub-agent-surface/) to choose v1/base/v2 and
-understand when guidance, native defaults, and fallback apply.
+A fresh config features five native models as Codex's sub-agent suggestions: `gpt-5.5`,
+`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, and `gpt-5.4-mini`. Those five are not an exhaustive
+`spawn_agent` allowlist. Open `ccx gui` to replace or reorder up to five native or routed models.
+The dashboard can also set one preferred sub-agent model and reasoning effort. See
+[Sub-agent Surface](/guides/sub-agent-surface/) to choose v1/base/v2 and understand when guidance,
+native defaults, and fallback apply.
 
 For a headless roster, use the same live proxy policy:
 

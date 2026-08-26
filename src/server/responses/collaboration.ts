@@ -326,7 +326,7 @@ export async function multiAgentGuidanceText(
     const effective = await resolveRoster(configuredForGuidance, "v2");
     // Resolve the roster and preferred roles independently so a bare native can project onto its
     // generated account rows without making an unrelated provider/gpt-* row look equivalent.
-    // The intersection keeps both projections inside Codex's one global five-model window.
+    // The intersection keeps both featured projections inside Codex's one global five-model advertisement window.
     const candidateModels = new Set(effective.candidates.map(candidate => candidate.model));
     const withinCandidateWindow = (candidate: EffectiveSubagentModel): boolean =>
       candidateModels.has(candidate.model);
@@ -406,7 +406,10 @@ export async function multiAgentGuidanceText(
       return `<multi_agent_mode>${applyInjectionPlaceholders(injectionPrompt, preferred?.model, injectionEffort, compactRoster, fallbackGuidance)}</multi_agent_mode>`;
     }
     let text = "When the active spawn_agent tool supports optional \"model\" or \"reasoning_effort\" overrides, "
-      + "use only models listed for this collaboration surface. "
+      + "listed models are featured suggestions, not an exhaustive allowlist. "
+      + "A known exact catalog ID that is fresh, routable, and compatible with this surface and task delivery "
+      + "may be passed directly to native spawn_agent; native validation remains authoritative. "
+      + "Do not invent IDs or substitute another family. "
       + "When setting either override, set fork_turns to \"none\" "
       + "(or a positive turn count such as \"3\"; full-history forks reject overrides) "
       + "and make the task message self-contained.";

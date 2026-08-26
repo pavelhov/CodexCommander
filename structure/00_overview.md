@@ -98,7 +98,7 @@ journal.
 - Root TOML keys such as `model_provider` and `model_catalog_json` must stay before any table.
 - Routed model slugs use `provider/model`.
 - OpenAI has one `openai` Codex-login provider with Pool(default)/Direct modes and a separate `openai-apikey`; see [`08_openai-provider-tiers.md`](08_openai-provider-tiers.md).
-- Codex `spawn_agent` visibility depends on the first five featured catalog entries.
+- Codex `spawn_agent` advertises the first five featured catalog entries as suggestions; a known exact compatible catalog ID may still be passed to native spawn_agent.
 - The management plane (`/api/*`) and the data plane (`/v1/*`) never share an admission credential.
 - `ccx stop`, `ccx restore`, and service stop/uninstall must leave native Codex usable without modifying tasks, history, rollouts, or authentication.
 

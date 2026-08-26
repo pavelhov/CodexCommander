@@ -41,9 +41,12 @@ to disk. That is why a mode change affects newly created App, CLI, and TUI sessi
 
 Changing to **V2** makes Luna *eligible for the V2 collaboration surface* because the generated
 catalog stamps it as V2. It does not, by itself, make Luna (or any other model) available to a
-currently running Codex worker. For a model to be usable by `spawn_agent`, all of these must hold:
+currently running Codex worker. The five featured roster rows are suggestions shown first to
+`spawn_agent`, not an exhaustive allowlist. A parent that already knows a compatible exact catalog
+ID may pass it to native `spawn_agent`. For that spawn to succeed, all of these must hold:
 
-1. It is selected, surface-compatible, picker-visible, and inside the five-model advertised window.
+1. The exact ID is present in the worker-loaded catalog and is compatible with this collaboration
+   surface and V2 task-delivery policy.
 2. The deterministic CodexCommander catalog containing it has been written to disk.
 3. The current Codex app-server has loaded that catalog (not an older in-memory copy).
 4. Its proxy route is enabled and can actually serve the request.
@@ -68,8 +71,9 @@ $CODEX_HOME/AGENTS.md
 ```
 
 The skill is advisory and deliberately contains no roster or model ids. Before a spawn it reads the
-current collaboration tool contract and live injected guidance; CodexCommander remains the live
-roster authority. A roster can change independently without making the installed skill stale.
+current collaboration tool contract and live injected guidance. Featured models are suggestions, not
+an exhaustive allowlist; a known exact compatible catalog ID may be passed to native `spawn_agent`.
+A roster can change independently without making the installed skill stale.
 
 For V2 coordination, a `wait_agent` timeout means only that no qualifying mailbox or final event
 arrived during that wait. It does not mean a running child failed or stopped. The managed skill tells
@@ -302,17 +306,21 @@ a positive partial count before passing a model or effort override.
 
 ### Why is a configured model missing from the V2 roster?
 
-It may be picker-hidden, outside the five-model display limit, missing from the catalog, or pinned
+The featured V2 roster only lists picker-visible, surface-compatible, in-window rows. A model can
+still be spawnable by exact ID when it is in the worker-loaded catalog and compatible with this
+surface, even if it is outside the five featured suggestions. It is missing from that featured list
+when it is picker-hidden, outside the five-model display limit, missing from the catalog, or pinned
 to V1. A `"v2"`, `null`, or absent surface value is eligible; a real `"v1"` pin is not.
 
 ### Does V2 make Luna available immediately?
 
 No. Forced V2 removes Luna's upstream V1 surface pin, so it can be eligible for the V2 roster. It
-still needs to be selected and advertised, written into the catalog, loaded by the current Codex
-worker, and routable through the proxy. Use the dashboard's catalog status to see which condition
-is pending. If the catalog and routing are current and only the worker is stale, quit ChatGPT
-completely, reopen it, and start a new task. If the catalog is pending or routing is not injected,
-use **Apply to Codex** for reconciliation first.
+still needs to be written into the catalog, loaded by the current Codex worker, and routable
+through the proxy. Being outside the five featured suggestions does not by itself block an exact-ID
+spawn. Use the dashboard's catalog status to see which condition is pending. If the catalog and
+routing are current and only the worker is stale, quit ChatGPT completely, reopen it, and start a
+new task. If the catalog is pending or routing is not injected, use **Apply to Codex** for
+reconciliation first.
 
 ### Do mode changes affect running sessions?
 

@@ -184,6 +184,17 @@ describe("Codex delegation templates", () => {
     expect(artifacts).not.toMatch(/\b\d+\s+(?:concurrency\s+)?slots?\b/i);
   });
 
+  test("managed skill treats featured models as suggestions, not an exhaustive spawn allowlist", () => {
+    const skill = renderCodexDelegationBundle("balanced").skillText;
+    expect(skill).toContain("featured suggestions, not an exhaustive allowlist");
+    expect(skill).toContain("known exact");
+    expect(skill).toContain("native");
+    expect(skill).not.toContain("Use only model IDs and effort levels advertised live");
+    expect(skill).not.toMatch(
+      /\b(?:gpt|claude|gemini|grok|deepseek|llama|mistral|qwen|kimi|xai|anthropic|openai)[-_/.:][a-z0-9]/i,
+    );
+  });
+
   test("managed skill ownership is carried by SKILL.md itself", () => {
     const skill = renderCodexDelegationBundle("balanced").skillText;
     expect(isCodexCommanderManagedSkill(skill)).toBe(true);

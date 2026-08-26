@@ -542,7 +542,7 @@ export interface CodexCommanderConfig {
    * Up to 5 Codex-facing catalog ids to feature first. Values may be bare catalog ids,
    * exact account-qualified "<selector>/<native-openai-model>" ids, or routed
    * "<provider>/<model>" ids. With account selectors, one bare native choice can expand
-   * into a selector-qualified group; Codex still advertises only the first 5 visible rows.
+   * into a selector-qualified group; Codex still advertises only the first 5 visible rows as suggestions.
    */
   subagentModels?: SubagentRosterEntry[];
   /**

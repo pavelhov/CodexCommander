@@ -1462,7 +1462,7 @@ const configSchema = z.object({
 
 /**
  * Default featured subagent models (native GPT) seeded on a fresh install and when `subagentModels`
- * is unset. Codex's spawn_agent advertises the first 5 featured catalog entries, so this seed is a
+ * is unset. Codex's spawn_agent advertises the first 5 featured catalog entries as suggestions, so this seed is a
  * deliberate 5-list: frontier gpt-5.5 first, the gpt-5.6 preview trio, and gpt-5.4-mini as the cheap
  * tier. gpt-5.4 / gpt-5.3-codex-spark stay selectable in the GUI's available list. The user can
  * remove any in the GUI — once they set the list (even to []), it is respected, so removals persist

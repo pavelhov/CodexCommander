@@ -196,8 +196,8 @@ Running from source requires [Bun](https://bun.sh). Windows runs natively withou
   fail-closed auth handling.
 - **Combos** — one virtual model id with failover or weighted round-robin across providers. See
   the [combo guide](docs-site/src/content/docs/guides/combos.md).
-- **Sub-agents on any model** — feature routed models in Codex's sub-agent picker, with v1/v2
-  surface control and fallback chains. See the
+- **Sub-agents on any model** — feature up to five routed or native suggestions in Codex's
+  sub-agent picker; a known exact catalog ID remains spawnable. See the
   [sub-agent guide](docs-site/src/content/docs/guides/sub-agent-surface.md).
 - **Log in once, skip the API key** — OAuth for xAI, Anthropic, and Kimi; or forward
   `codex login`, paste a key, or use `${ENV_VAR}` references.

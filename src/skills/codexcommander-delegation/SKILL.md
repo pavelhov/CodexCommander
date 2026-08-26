@@ -26,7 +26,7 @@ Give every child a self-contained brief with its goal, paths or inputs, owned fi
 
 ## Model and effort
 
-Use only model IDs and effort levels advertised live. Prefer the current preferred worker when it fits. Omit overrides when the roster is stale, unknown, or uncertain, and never remember IDs.
+Live featured models are featured suggestions, not an exhaustive allowlist. Prefer the current preferred worker when it fits. If you already know an exact compatible catalog ID, pass that known exact ID to native spawn_agent with a supported effort and, on V2, fork_turns "none" or a positive partial count. Omit overrides when the catalog is stale, unknown, or uncertain. Native validation remains authoritative. Do not invent IDs, substitute another family, or remember IDs.
 
 ## Coordination
 

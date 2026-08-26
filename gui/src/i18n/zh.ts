@@ -647,7 +647,7 @@ export const zh: Record<TKey, string> = {
   "sub.addFromLibrary": "从库中添加",
   "sub.browseLibrary": "浏览代理库",
   "sub.libraryCount": "{n} 个目录模型",
-  "sub.libraryHint": "目录中的模型仍可按确切 ID 调用。名单控制向 spawn_agent 公布的五个模型，但不会强制工作者或回退选择。",
+  "sub.libraryHint": "目录中的模型仍可按确切 ID 调用。名单控制向 spawn_agent 展示的五个推荐项，而不是完整允许列表；它不会强制工作者或回退选择。",
   "sub.noMatchingModels": "没有符合此搜索和筛选条件的模型。",
   "sub.policyHint": "设置代理协议、工作者指导和子任务回退。与名单分开保存。",
   "sub.policy.mode": "代理协议",

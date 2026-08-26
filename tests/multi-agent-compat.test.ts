@@ -172,12 +172,15 @@ describe("multiAgentGuidanceText", () => {
     );
 
     expect(text).toContain("When the active spawn_agent tool supports optional");
-    expect(text).toContain("use only models listed for this collaboration surface");
-    expect(text).toContain("fork_turns");
-    expect(text).toContain('"none"');
+    expect(text).toContain("featured suggestions, not an exhaustive allowlist");
+    expect(text).toContain("known exact");
+    expect(text).toContain("native");
+    expect(text).not.toContain("use only models listed for this collaboration surface");
     expect(text).not.toMatch(/hidden/i);
     expect(text).not.toMatch(/not in the schema/i);
     expect(text).not.toMatch(/never claim/i);
+    expect(text).toContain("fork_turns");
+    expect(text).toContain('"none"');
     expect(text).not.toContain("Proactive multi-agent delegation is active");
   });
 
