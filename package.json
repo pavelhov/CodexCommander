@@ -1,6 +1,6 @@
 {
   "name": "codexcommander",
-  "version": "0.1.3",
+  "version": "1.0.4",
   "private": true,
   "description": "CodexCommander — universal provider proxy for OpenAI Codex & Claude Code — use any LLM with Codex CLI/App/SDK and Claude Code",
   "type": "module",
