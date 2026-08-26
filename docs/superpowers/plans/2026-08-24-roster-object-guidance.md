@@ -17,7 +17,7 @@
 - Do not add hashes, manifests, or hidden ownership files.
 - Do not push, merge to main, publish, or release.
 - Do not restart the user's running proxy or mutate live Codex configuration without explicit permission.
-- Work directly in `/Users/pavel/tools/CodexCommander` on `codex/managed-delegation-setup`. Do not create a Git worktree.
+- Work directly in the CodexCommander checkout on `codex/managed-delegation-setup`. Do not create a Git worktree.
 - Maximum five roster entries. Guidance is optional, advisory, and untrusted operator text.
 - Guidance-only writes must not dirty catalog identity or force Apply.
 - Every visible GUI string must exist in `en`, `de`, `ko`, `zh`, `ru`, and `ja`.
@@ -790,7 +790,7 @@ cd docs-site && bun run build
 
 - [ ] **Step 3: Rebuild the packaged development app**
 
-Rebuild from this checkout so testing targets `/Users/pavel/tools/CodexCommander/dist/macos/CodexCommander.app`. Do not stop or reroute the currently running proxy.
+Rebuild from this checkout so testing targets `dist/macos/CodexCommander.app`. Do not stop or reroute the currently running proxy.
 
 - [ ] **Step 4: Handoff**
 
