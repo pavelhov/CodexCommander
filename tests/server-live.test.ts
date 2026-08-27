@@ -578,6 +578,8 @@ test("buildLiveSidebandUpstreamWsUrl maps Frameless and Realtime join shapes", a
     style: "realtime-query",
     callId: "rtc_2",
   });
+  expect(parseLiveSidebandTarget("/v1/live/%E0%A4%A", new URLSearchParams())).toBeNull();
+  expect(parseLiveSidebandTarget("/v1/realtime/calls/%E0%A4%A", new URLSearchParams())).toBeNull();
 
   expect(
     buildLiveSidebandUpstreamWsUrl({

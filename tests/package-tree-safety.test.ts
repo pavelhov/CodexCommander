@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertSafePackageFile, assertSafePackageTree } from "../scripts/package-tree-safety";
+import { assertSafeBundledSymlinks, assertSafePackageFile, assertSafePackageTree } from "../scripts/package-tree-safety";
 
 function withTree(body: (root: string, outside: string) => void): void {
   const sandbox = mkdtempSync(join(tmpdir(), "ccx-package-tree-"));
@@ -89,5 +89,22 @@ describe("package source-tree safety", () => {
     const linked = join(root, "ccx.mjs");
     linkSync(external, linked);
     expect(() => assertSafePackageFile(linked, "launcher", root)).toThrow("multiply linked");
+  }));
+
+  test("accepts relative bundled shims and rejects absolute or escaping symlink targets", () => withTree((root, outside) => {
+    const modules = join(root, "node_modules", "bun", "bin");
+    mkdirSync(modules, { recursive: true });
+    writeFileSync(join(modules, "bun.exe"), "#!/usr/bin/env bun");
+    symlinkSync("bun.exe", join(modules, "bunx.exe"));
+    expect(() => assertSafeBundledSymlinks(join(root, "node_modules"), "bundled node_modules", root)).not.toThrow();
+
+    symlinkSync("/tmp/outside-bin", join(modules, "absolute.exe"));
+    expect(() => assertSafeBundledSymlinks(join(root, "node_modules"), "bundled node_modules", root)).toThrow("absolute symlink");
+    rmSync(join(modules, "absolute.exe"));
+
+    writeFileSync(join(outside, "secret"), "keep-this-external-content");
+    symlinkSync(join("..", "..", "..", "..", "outside", "secret"), join(modules, "escape.exe"));
+    expect(() => assertSafeBundledSymlinks(join(root, "node_modules"), "bundled node_modules", root)).toThrow("escapes its trusted root");
+    expect(readFileSync(join(outside, "secret"), "utf8")).toBe("keep-this-external-content");
   }));
 });

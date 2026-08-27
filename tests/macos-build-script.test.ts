@@ -26,9 +26,20 @@ describe("macOS build script bundle contract", () => {
     expect(scriptSource).toContain('staged_app="$staging_root/CodexCommander.app"');
     expect(scriptSource).toContain('! -f "$runtime_root/bin/ccx.mjs"');
     expect(scriptSource).toContain('source_revision="${CCX_BUILD_REVISION:-}"');
-    expect(scriptSource).toContain('assert_safe_tree "$repo_root/gui/dist" "gui/dist" "$repo_root"');
+    expect(scriptSource).toContain("git ls-files -z --");
+    expect(scriptSource).toContain("assert_tracked_tree \"src\"");
+    expect(scriptSource).toContain("assert_tracked_tree \"bin\"");
+    expect(scriptSource).toContain("stage_tracked_tree \"src\"");
+    expect(scriptSource).toContain("stage_tracked_tree \"bin\"");
+    expect(scriptSource).toContain("bun run build");
+    expect(scriptSource).toContain("privacy-scan.ts");
+    expect(scriptSource).toContain("--check-symlinks");
+    expect(scriptSource).not.toContain('copy_verified_tree "$repo_root/src"');
+    expect(scriptSource).not.toContain('copy_verified_tree "$repo_root/bin"');
     expect(scriptSource).toContain('copy_verified_tree "$repo_root/gui/dist" "$runtime_root/gui/dist"');
     expect(scriptSource).toContain('find -P "$path" -print0');
+    expect(releaseScriptSource).toContain("status --porcelain");
+    expect(releaseScriptSource).toContain("package:macos requires a clean git working tree");
   });
 
   test("requires the canonical delegation skill in staged and archived runtimes", () => {
@@ -73,14 +84,15 @@ async function withSandbox<T>(body: (sandbox: string) => Promise<T>): Promise<T>
 }
 
 describe.skipIf(!isMacOS)("macOS build script containment", () => {
-  test("fails closed on linked GUI source entries before invoking the build", async () => {
+  test("fails closed on a tracked source path that became a symlink", async () => {
     await withSandbox(async sandbox => {
-      const guiDist = join(repoRoot, "gui", "dist");
+      const tracked = join(repoRoot, "src", "identity.ts");
+      const original = readFileSync(tracked);
       const external = join(sandbox, "external.txt");
-      const sourceLink = join(guiDist, `.ccx-unsafe-file-${process.pid}`);
       writeFileSync(external, "external content must not be copied or chmodded");
       chmodSync(external, 0o600);
-      symlinkSync(external, sourceLink);
+      rmSync(tracked);
+      symlinkSync(external, tracked);
       try {
         const { stderr, exitCode } = await runScript(join(sandbox, "output"));
         expect(exitCode).not.toBe(0);
@@ -88,39 +100,26 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
         expect(stderr).toContain("symbolic link");
         expect(readFileSync(external, "utf8")).toBe("external content must not be copied or chmodded");
       } finally {
-        rmSync(sourceLink, { force: true });
+        rmSync(tracked, { force: true });
+        writeFileSync(tracked, original);
       }
     });
   }, 120_000);
 
-  test("rejects symlinked GUI directories and hard-linked files without modifying the external inode", async () => {
+  test("rejects a multiply-linked tracked source file without modifying the external inode", async () => {
     await withSandbox(async sandbox => {
-      const guiDist = join(repoRoot, "gui", "dist");
-      const externalDir = join(sandbox, "external-dir");
-      const external = join(sandbox, "external.txt");
-      const directoryLink = join(guiDist, `.ccx-unsafe-dir-${process.pid}`);
-      const hardLink = join(guiDist, `.ccx-unsafe-hardlink-${process.pid}`);
-      mkdirSync(externalDir);
-      writeFileSync(join(externalDir, "asset.js"), "outside");
-      writeFileSync(external, "external hardlink content");
-      chmodSync(external, 0o600);
-      symlinkSync(externalDir, directoryLink);
-      try {
-        let result = await runScript(join(sandbox, "directory-output"));
-        expect(result.exitCode).not.toBe(0);
-        expect(result.stderr).toContain("symbolic link");
-      } finally {
-        rmSync(directoryLink, { force: true });
-      }
-
-      linkSync(external, hardLink);
+      const tracked = join(repoRoot, "src", "identity.ts");
+      const original = readFileSync(tracked, "utf8");
+      const extraLink = join(sandbox, "identity-hardlink.ts");
+      linkSync(tracked, extraLink);
       try {
         const result = await runScript(join(sandbox, "hardlink-output"));
         expect(result.exitCode).not.toBe(0);
         expect(result.stderr).toContain("multiply linked");
-        expect(readFileSync(external, "utf8")).toBe("external hardlink content");
+        expect(readFileSync(tracked, "utf8")).toBe(original);
+        expect(readFileSync(extraLink, "utf8")).toBe(original);
       } finally {
-        rmSync(hardLink, { force: true });
+        rmSync(extraLink, { force: true });
       }
     });
   }, 120_000);
@@ -247,6 +246,9 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
   test("allows a destination inside the repository", async () => {
     const inside = join(repoRoot, "dist", `ccx-inside-${process.pid}`);
     const probeCwd = mkdtempSync(join(tmpdir(), "ccx-bundled-probe-"));
+    const untrackedName = `.ccx-untracked-secret-${process.pid}.ts`;
+    const untracked = join(repoRoot, "src", untrackedName);
+    writeFileSync(untracked, "export const shouldNotShip = true;\n");
     try {
       const { stderr, exitCode } = await runScript(inside);
       expect(exitCode).toBe(0);
@@ -265,6 +267,7 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
       expect(existsSync(join(runtime, "package.json"))).toBe(true);
       expect(existsSync(join(runtime, "bin", "ccx.mjs"))).toBe(true);
       expect(existsSync(join(runtime, "src", "cli", "index.ts"))).toBe(true);
+      expect(existsSync(join(runtime, "src", untrackedName))).toBe(false);
       const bundledBun = existsSync(join(runtime, "node_modules", "bun", "bin", "bun.exe"))
         ? join(runtime, "node_modules", "bun", "bin", "bun.exe")
         : join(runtime, "node_modules", "bun", "bin", "bun");
@@ -293,6 +296,7 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
       expect(info).toContain("<key>CodexCommanderSourceRevision</key>");
       expect(info).toMatch(/[0-9a-f]{40}(?:-dirty)?/);
     } finally {
+      rmSync(untracked, { force: true });
       rmSync(inside, { recursive: true, force: true });
       rmSync(probeCwd, { recursive: true, force: true });
     }

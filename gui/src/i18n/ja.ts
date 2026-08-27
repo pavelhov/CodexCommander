@@ -2267,4 +2267,5 @@ export const ja: Record<TKey, string> = {
   "sub.delegationSetup.close": "閉じる",
   "sub.delegationSetup.cancel": "キャンセル",
   "sub.delegationSetup.confirmChangeMode": "モードを変更",
+  "sub.delegationSetup.launcherRequired": "このダッシュボードではインストール、更新、削除は読み取り専用です。`ccx gui` または CodexCommander メニューバーアプリから開いて、これらの変更を確認してください。",
 };

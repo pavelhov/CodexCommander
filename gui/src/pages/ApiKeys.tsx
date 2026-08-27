@@ -4,7 +4,7 @@ import { useI18n, LOCALES } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import {
-  classifyExternalModel,
+  classifyManagementModel,
   externalModelId,
   type ExternalModelRow,
   type GatewayInboundProtocol,
@@ -153,22 +153,13 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
   }, [apiBase, keysCacheKey, t]);
 
   const fetchModels = useCallback(async (signal: AbortSignal): Promise<ExternalModelRow[]> => {
-    const res = await fetch(`${apiBase}/v1/models`, { signal });
+    const res = await fetch(`${apiBase}/api/models`, { signal });
     if (!res.ok) throw new Error(t("api.modelsLoadFailed"));
     const data = await res.json() as unknown;
-    const rawRows = Array.isArray(data)
-      ? data
-      : (typeof data === "object" && data !== null && Array.isArray((data as { data?: unknown }).data)
-        ? (data as { data: unknown[] }).data
-        : null);
-    if (!rawRows) throw new Error(t("api.modelsLoadFailed"));
-    const rows = rawRows
-      .filter((row): row is { id: string; owned_by?: string } => (
-        typeof row === "object"
-        && row !== null
-        && typeof (row as { id?: unknown }).id === "string"
-      ))
-      .map(row => classifyExternalModel(row))
+    if (!Array.isArray(data)) throw new Error(t("api.modelsLoadFailed"));
+    const rows = data
+      .map(row => classifyManagementModel(row))
+      .filter((row): row is ExternalModelRow => row !== null)
       .sort((a, b) => externalModelId(a).localeCompare(externalModelId(b)));
     writeSessionListCache(modelsCacheKey, rows);
     return rows;

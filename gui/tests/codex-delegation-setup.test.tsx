@@ -10,6 +10,7 @@ import {
   type CodexDelegationStatus,
 } from "../src/pages/use-codex-delegation-setup";
 import { LanguageProvider } from "../src/i18n/provider";
+import { setConfirmedGuiLaunchForTests } from "../src/api";
 
 const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
@@ -46,6 +47,7 @@ function makeArtifactStatus(
 }
 
 beforeEach(() => {
+  setConfirmedGuiLaunchForTests(true);
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
   testWindow = new Window({ url: "http://localhost/" });
   Object.defineProperty(testWindow.navigator, "language", { configurable: true, value: "en-US" });
@@ -205,6 +207,25 @@ for (const state of ["conflict", "unsafe"] as const) {
     expect(installs).toBe(0);
   });
 }
+
+test("without a confirmed launch Install, Update, and Remove stay disabled", async () => {
+  setConfirmedGuiLaunchForTests(false);
+  let installs = 0;
+  let uninstalls = 0;
+  await mountDirect(makeStatus("current", "balanced"), {
+    install: async () => { installs++; return true; },
+    uninstall: async () => { uninstalls++; return true; },
+  });
+  expect(button("Change mode").disabled).toBe(true);
+  expect(button("Remove").disabled).toBe(true);
+  expect(container.querySelector('[role="status"]')?.textContent).toContain("read-only for Install, Update, and Remove");
+  button("Change mode").click();
+  button("Remove").click();
+  expect(installs).toBe(0);
+  expect(uninstalls).toBe(0);
+  expect(container.querySelector('[role="dialog"]')).toBeNull();
+  expect(container.querySelector('[role="alertdialog"]')).toBeNull();
+});
 
 test("shadowed current install is truthful and never claims Ready", async () => {
   const value = makeStatus("current", "balanced"); value.activation = "shadowed"; value.override.state = "active";

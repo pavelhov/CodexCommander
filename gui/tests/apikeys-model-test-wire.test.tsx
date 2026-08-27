@@ -88,8 +88,8 @@ function installFetch(sent: SentRequest[], dataPlaneStatus = 200): void {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
-    if (url.endsWith("/v1/models") && method === "GET") {
-      return Response.json({ data: [{ id: "gpt-5.4", owned_by: "openai" }] });
+    if (url.endsWith("/api/models") && method === "GET") {
+      return Response.json([{ id: "gpt-5.4", namespaced: "gpt-5.4", provider: "openai", native: true, disabled: false }]);
     }
     if (url.endsWith("/api/keys") && method === "GET") return Response.json(KEYS_OK);
     if (url.endsWith("/api/keys") && method === "POST") return Response.json({ key: ONE_TIME_KEY });

@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useT, type TKey } from "../../i18n/shared";
 import { useCopyFeedback } from "../use-copy-feedback";
+import {
+  isConfirmedGuiLaunch,
+  subscribeGuiLaunchCapability,
+  whenGuiLaunchCapabilitySettles,
+} from "../../api";
 import type { CodexDelegationSetupController, CodexDelegationStatus } from "../../pages/use-codex-delegation-setup";
 
 function statusKey(status: CodexDelegationStatus): TKey {
@@ -41,11 +46,18 @@ export default function CodexDelegationSetupCard({ delegationSetup }: { delegati
   const previewConfirmRef = useRef<HTMLButtonElement>(null);
   const removeTriggerRef = useRef<HTMLButtonElement>(null);
   const copyFeedback = useCopyFeedback<CodexDelegationStatus["copyPrompts"][keyof CodexDelegationStatus["copyPrompts"]]>();
+  const [confirmedLaunch, setConfirmedLaunch] = useState(isConfirmedGuiLaunch);
+  useEffect(() => {
+    const update = () => setConfirmedLaunch(isConfirmedGuiLaunch());
+    const unsubscribe = subscribeGuiLaunchCapability(update);
+    void whenGuiLaunchCapabilitySettles().then(update);
+    return unsubscribe;
+  }, []);
   const blocked = status?.state === "conflict" || status?.state === "unsafe";
-  const canMutate = loaded && !!status && !blocked && !busy;
+  const canMutate = loaded && !!status && !blocked && !busy && confirmedLaunch;
   const installed = status?.state === "current";
   const removable = !!status && isRemovable(status);
-  const canRemove = removable && !busy;
+  const canRemove = removable && !busy && confirmedLaunch;
   const primaryKey = status?.state === "update-available" ? "sub.delegationSetup.update"
     : status?.state === "partial" ? "sub.delegationSetup.repair" : "sub.delegationSetup.install";
   const prompt = status?.copyPrompts[selectedMode] ?? "";
@@ -92,6 +104,7 @@ export default function CodexDelegationSetupCard({ delegationSetup }: { delegati
           <li><span>{t("sub.delegationSetup.agentsArtifact")}</span><code>{status.artifacts.agentsPolicy.displayPath}</code></li>
         </ul>
         {blocked && <p className="swi-delegation-blocked" role="alert">{t(blockedReason(status))}</p>}
+        {!confirmedLaunch && <p className="swi-delegation-blocked" role="status">{t("sub.delegationSetup.launcherRequired")}</p>}
         {error && <div className="swi-delegation-retry"><p className="swi-delegation-error" role="alert">{t("sub.delegationSetup.error")}</p><button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { void delegationSetup.reload(); }}>{t("sub.delegationSetup.retry")}</button></div>}
         <div className="swi-delegation-actions">
           <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={event => openPreview(event, false)}>{t("sub.delegationSetup.preview")}</button>
@@ -103,8 +116,8 @@ export default function CodexDelegationSetupCard({ delegationSetup }: { delegati
         {success && <p className="swi-delegation-working" role="status">{t("sub.delegationSetup.newTask")}</p>}
         <details className="swi-delegation-manual"><summary>{t("sub.delegationSetup.manual")}</summary><div><p>{t("sub.delegationSetup.manualHint")}</p><button type="button" className="btn btn-ghost btn-sm" disabled={!prompt} onClick={() => copyFeedback.copy(prompt, prompt)}>{t(copyOutcome === "copied" ? "sub.delegationSetup.copied" : copyOutcome === "unavailable" ? "sub.delegationSetup.copyUnavailable" : "sub.delegationSetup.copy")}</button></div></details>
       </div>}
-      {previewOpen && status && <div className="dialog-backdrop" onMouseDown={closePreview}><div className="dialog swi-delegation-dialog" role="dialog" aria-modal="true" aria-labelledby="delegation-preview-title" aria-describedby="delegation-preview-copy" onKeyDown={trap} onMouseDown={event => event.stopPropagation()}><h3 id="delegation-preview-title">{t("sub.delegationSetup.preview")}</h3><div id="delegation-preview-copy"><pre>{status.previews[selectedMode].skillText}</pre><pre>{status.previews[selectedMode].agentsBlockText}</pre></div><div className="swi-delegation-actions"><button type="button" className="btn btn-ghost btn-sm" onClick={closePreview}>{t("sub.delegationSetup.close")}</button>{previewApply && <button ref={previewConfirmRef} type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => { void runInstall(); }}>{installed ? t("sub.delegationSetup.confirmChangeMode") : t(primaryKey)}</button>}</div></div></div>}
-      {removeOpen && <div className="dialog-backdrop" onMouseDown={closeRemove}><div className="dialog swi-delegation-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delegation-remove-title" aria-describedby="delegation-remove-copy" onKeyDown={trap} onMouseDown={event => event.stopPropagation()}><h3 id="delegation-remove-title">{t("sub.delegationSetup.removeTitle")}</h3><p id="delegation-remove-copy">{t("sub.delegationSetup.removeConfirm")}</p>{error && <p className="swi-delegation-error" role="alert">{t("sub.delegationSetup.error")}</p>}<div className="swi-delegation-actions"><button type="button" className="btn btn-ghost btn-sm" onClick={closeRemove}>{t("sub.delegationSetup.cancel")}</button><button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => { void runRemove(); }}>{t("sub.delegationSetup.remove")}</button></div></div></div>}
+      {previewOpen && status && <div className="dialog-backdrop" onMouseDown={closePreview}><div className="dialog swi-delegation-dialog" role="dialog" aria-modal="true" aria-labelledby="delegation-preview-title" aria-describedby="delegation-preview-copy" onKeyDown={trap} onMouseDown={event => event.stopPropagation()}><h3 id="delegation-preview-title">{t("sub.delegationSetup.preview")}</h3><div id="delegation-preview-copy"><pre>{status.previews[selectedMode].skillText}</pre><pre>{status.previews[selectedMode].agentsBlockText}</pre></div><div className="swi-delegation-actions"><button type="button" className="btn btn-ghost btn-sm" onClick={closePreview}>{t("sub.delegationSetup.close")}</button>{previewApply && <button ref={previewConfirmRef} type="button" className="btn btn-primary btn-sm" disabled={busy || !confirmedLaunch} onClick={() => { void runInstall(); }}>{installed ? t("sub.delegationSetup.confirmChangeMode") : t(primaryKey)}</button>}</div></div></div>}
+      {removeOpen && <div className="dialog-backdrop" onMouseDown={closeRemove}><div className="dialog swi-delegation-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delegation-remove-title" aria-describedby="delegation-remove-copy" onKeyDown={trap} onMouseDown={event => event.stopPropagation()}><h3 id="delegation-remove-title">{t("sub.delegationSetup.removeTitle")}</h3><p id="delegation-remove-copy">{t("sub.delegationSetup.removeConfirm")}</p>{error && <p className="swi-delegation-error" role="alert">{t("sub.delegationSetup.error")}</p>}<div className="swi-delegation-actions"><button type="button" className="btn btn-ghost btn-sm" onClick={closeRemove}>{t("sub.delegationSetup.cancel")}</button><button type="button" className="btn btn-primary btn-sm" disabled={busy || !confirmedLaunch} onClick={() => { void runRemove(); }}>{t("sub.delegationSetup.remove")}</button></div></div></div>}
     </section>
   );
 }

@@ -126,6 +126,8 @@ required):
 UNIVERSAL=1 bun run package:macos
 ```
 
+`package:macos` requires a clean git working tree so a release archive cannot include uncommitted files. Use `bun run build:macos` for a local development build from a dirty checkout.
+
 Every built app launches only the Bun runtime and server resources embedded in its own
 `Contents/Resources/runtime`; it never executes checkout `src/` or an ambient `ccx`. Rebuild the app
 to pick up source changes. If startup fails, the menu app stays open so its diagnostics and **Start**

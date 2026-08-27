@@ -2247,4 +2247,5 @@ export const de: Record<TKey, string> = {
   "sub.delegationSetup.close": "Schließen",
   "sub.delegationSetup.cancel": "Abbrechen",
   "sub.delegationSetup.confirmChangeMode": "Modus ändern",
+  "sub.delegationSetup.launcherRequired": "Dieses Dashboard ist für Installieren, Aktualisieren und Entfernen schreibgeschützt. Öffne es mit `ccx gui` oder über die CodexCommander-Menüleiste, um diese Änderungen zu bestätigen.",
 };

@@ -1,15 +1,15 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 
-type Finding = {
+export type Finding = {
   file: string;
   line: number;
   kind: string;
   value: string;
 };
 
-const TEXT_FILE_RE = /\.(?:cjs|css|html|js|json|jsonc|md|mjs|ps1|sh|toml|ts|tsx|txt|yml|yaml)$/;
+export const TEXT_FILE_RE = /\.(?:cjs|css|html|js|json|jsonc|md|mjs|plist|ps1|sh|swift|toml|ts|tsx|txt|yml|yaml)$/;
 const EXCLUDED_PREFIXES = [
-  "gui/dist/",
   "node_modules/",
   "tests/.tmp-",
 ];
@@ -30,14 +30,26 @@ function gitLsFiles(): string[] {
     .filter(Boolean);
 }
 
-function shouldScan(file: string): boolean {
-  if (!TEXT_FILE_RE.test(file)) return false;
-  if (EXCLUDED_PREFIXES.some(prefix => file.startsWith(prefix))) return false;
-  if (EXCLUDED_SUFFIXES.some(suffix => file.endsWith(suffix))) return false;
+function posixPath(file: string): string {
+  return file.replaceAll("\\", "/");
+}
+
+function pathHasSegment(file: string, segment: string): boolean {
+  return posixPath(file).split("/").includes(segment);
+}
+
+export function shouldScan(file: string): boolean {
+  const normalized = posixPath(file);
+  if (!TEXT_FILE_RE.test(normalized)) return false;
+  if (pathHasSegment(normalized, "node_modules")) return false;
+  if (EXCLUDED_PREFIXES.some(prefix => normalized.startsWith(prefix) || normalized.includes(`/${prefix}`))) {
+    return false;
+  }
+  if (EXCLUDED_SUFFIXES.some(suffix => normalized.endsWith(suffix))) return false;
   return true;
 }
 
-function lineNumber(text: string, index: number): number {
+export function lineNumber(text: string, index: number): number {
   let line = 1;
   for (let i = 0; i < index; i += 1) {
     if (text.charCodeAt(i) === 10) line += 1;
@@ -57,16 +69,23 @@ function isAllowedEmail(file: string, email: string): boolean {
 }
 
 function isAllowedHomePath(file: string, username: string): boolean {
-  if (file.startsWith("tests/") && (username === "example" || username === "test" || username === "x")) {
+  const normalized = posixPath(file);
+  if (
+    (normalized.startsWith("tests/")
+      || normalized.startsWith("app/")
+      || normalized.includes("/tests/")
+      || normalized.includes("/app/"))
+    && (username === "example" || username === "test" || username === "x")
+  ) {
     return true;
   }
-  if (file.startsWith("docs/") && (username === "me" || username === "user")) return true;
-  if (file.startsWith("docs-site/") && username === "example") return true;
+  if (normalized.startsWith("docs/") && (username === "me" || username === "user")) return true;
+  if (normalized.startsWith("docs-site/") && username === "example") return true;
   return false;
 }
 
 function isAllowedTokenLooking(file: string, token: string): boolean {
-  if (file.startsWith("tests/")) {
+  if (posixPath(file).includes("/tests/") || posixPath(file).startsWith("tests/")) {
     // Test fixture sentinels: sk-rawsentinel..., sk-test-...
     return /^sk-(?:rawsentinel|test-)\d+[a-z]*$/.test(token);
   }
@@ -74,7 +93,8 @@ function isAllowedTokenLooking(file: string, token: string): boolean {
 }
 
 function isAllowedBearerToken(file: string, token: string): boolean {
-  if (!file.startsWith("tests/")) return false;
+  const normalized = posixPath(file);
+  if (!normalized.startsWith("tests/") && !normalized.includes("/tests/")) return false;
   return /^(?:access|stack|usage-debug)-token(?:-value)?-[A-Za-z0-9-]+$/.test(token);
 }
 
@@ -97,8 +117,7 @@ function addFindingsForPattern(
   }
 }
 
-function scanFile(file: string): Finding[] {
-  const text = readFileSync(file, "utf-8");
+export function scanFile(file: string, text: string = readFileSync(file, "utf-8")): Finding[] {
   const findings: Finding[] = [];
   addFindingsForPattern(
     findings,
@@ -136,17 +155,61 @@ function scanFile(file: string): Finding[] {
   return findings;
 }
 
-const findings = gitLsFiles()
-  .filter(existsSync)
-  .filter(shouldScan)
-  .flatMap(scanFile);
-
-if (findings.length > 0) {
-  console.error("Privacy scan failed:");
-  for (const finding of findings) {
-    console.error(`${finding.file}:${finding.line} ${finding.kind}: ${finding.value}`);
-  }
-  process.exit(1);
+export function redactSecret(value: string): string {
+  return `[redacted ${value.length} chars]`;
 }
 
-console.log("Privacy scan passed");
+export function formatFinding(finding: Finding): string {
+  return `${finding.file}:${finding.line} ${finding.kind}: ${redactSecret(finding.value)}`;
+}
+
+function walkTextFiles(root: string, files: string[] = []): string[] {
+  if (!existsSync(root)) return files;
+  const entries = readdirSync(root, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = join(root, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "node_modules") continue;
+      walkTextFiles(full, files);
+      continue;
+    }
+    if (entry.isFile() || entry.isSymbolicLink()) files.push(full);
+  }
+  return files;
+}
+
+export function collectScanFiles(options: { scanRoot?: string; cwd?: string } = {}): string[] {
+  if (options.scanRoot) {
+    return walkTextFiles(options.scanRoot).filter(existsSync).filter(shouldScan);
+  }
+  const tracked = gitLsFiles().filter(existsSync).filter(shouldScan);
+  const generatedGui = walkTextFiles(join(options.cwd ?? ".", "gui/dist")).filter(shouldScan);
+  return [...new Set([...tracked, ...generatedGui])];
+}
+
+export function scanFiles(files: string[]): Finding[] {
+  return files.flatMap(file => scanFile(file));
+}
+
+export function main(argv: string[] = process.argv.slice(2)): number {
+  const scanRootIndex = argv.indexOf("--scan-root");
+  const scanRoot = scanRootIndex >= 0 ? argv[scanRootIndex + 1] : undefined;
+  if (scanRootIndex >= 0 && !scanRoot) {
+    console.error("privacy-scan: --scan-root requires a directory");
+    return 2;
+  }
+  const findings = scanFiles(collectScanFiles({ scanRoot }));
+  if (findings.length > 0) {
+    console.error("Privacy scan failed:");
+    for (const finding of findings) {
+      console.error(formatFinding(finding));
+    }
+    return 1;
+  }
+  console.log("Privacy scan passed");
+  return 0;
+}
+
+if (import.meta.main) {
+  process.exit(main());
+}

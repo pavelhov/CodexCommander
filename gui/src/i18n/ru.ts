@@ -2269,4 +2269,5 @@ export const ru: Record<TKey, string> = {
   "sub.delegationSetup.close": "Закрыть",
   "sub.delegationSetup.cancel": "Отмена",
   "sub.delegationSetup.confirmChangeMode": "Сменить режим",
+  "sub.delegationSetup.launcherRequired": "Эта панель только для чтения при установке, обновлении и удалении. Откройте её через `ccx gui` или приложение CodexCommander в строке меню, чтобы подтвердить эти изменения.",
 };

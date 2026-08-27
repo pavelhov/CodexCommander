@@ -1060,7 +1060,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         if (!isAllowedRequestOrigin(req, config)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
         }
-        const id = decodeURIComponent(url.pathname.slice(ARTIFACT_HTTP_PREFIX.length + 1));
+        let id: string;
+        try {
+          id = decodeURIComponent(url.pathname.slice(ARTIFACT_HTTP_PREFIX.length + 1));
+        } catch {
+          return withCors(formatErrorResponse(400, "invalid_request", "invalid artifact id encoding"), req, config);
+        }
         const { resolveArtifactPath } = await import("../images/artifacts");
         const artifactPath = resolveArtifactPath(id);
         if (!artifactPath) {

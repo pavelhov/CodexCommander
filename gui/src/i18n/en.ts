@@ -2275,6 +2275,7 @@ export const en = {
   "sub.delegationSetup.close": "Close",
   "sub.delegationSetup.cancel": "Cancel",
   "sub.delegationSetup.confirmChangeMode": "Change mode",
+  "sub.delegationSetup.launcherRequired": "This dashboard is read-only for Install, Update, and Remove. Open it with `ccx gui` or from the CodexCommander menu bar app to confirm those changes.",
 
 } as const;
 

@@ -87,7 +87,7 @@ test("successful key create keeps last-good keys visible when follow-up refresh 
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
-    if (url.endsWith("/v1/models")) {
+    if (url.endsWith("/api/models")) {
       return Response.json({ data: [] });
     }
     if (url.endsWith("/api/keys") && method === "GET") {
@@ -162,7 +162,7 @@ test("successful key delete keeps last-good keys visible when follow-up refresh 
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
-    if (url.endsWith("/v1/models")) {
+    if (url.endsWith("/api/models")) {
       return Response.json({ data: [] });
     }
     if (url.endsWith("/api/keys") && method === "GET") {

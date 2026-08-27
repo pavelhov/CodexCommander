@@ -114,7 +114,7 @@ function installStallingFetch(seen: { aborted: boolean }): void {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
-    if (url.endsWith("/v1/models")) return Response.json({ data: [] });
+    if (url.endsWith("/api/models")) return Response.json([]);
     if (url.endsWith("/api/keys") && method === "GET") return Response.json(KEYS_OK);
     return new Promise((_resolve, reject) => {
       const signal = init?.signal;

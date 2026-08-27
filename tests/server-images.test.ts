@@ -1887,6 +1887,12 @@ test("GET /v1/codexcommander/artifacts/:id serves opaque artifacts with API auth
       headers: { authorization: "Bearer proxy-admission-secret" },
     });
     expect(traversal.status).toBe(404);
+
+    const malformed = await fetch(`http://127.0.0.1:${server.port}/v1/codexcommander/artifacts/%E0%A4%A`, {
+      headers: { authorization: "Bearer proxy-admission-secret" },
+    });
+    expect(malformed.status).toBe(400);
+    expect(await malformed.json()).toMatchObject({ error: { message: "invalid artifact id encoding" } });
   } finally {
     await server.stop(true);
     delete process.env.CODEXCOMMANDER_API_AUTH_TOKEN;

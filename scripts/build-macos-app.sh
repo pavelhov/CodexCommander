@@ -98,10 +98,42 @@ assert_safe_file "$repo_root/gui/public/logo.png" "gui/public/logo.png" "$repo_r
 assert_safe_file "$repo_root/gui/public/favicon.png" "gui/public/favicon.png" "$repo_root"
 assert_safe_file "$repo_root/LICENSE" "LICENSE" "$repo_root"
 assert_safe_file "$repo_root/THIRD_PARTY_NOTICES.md" "THIRD_PARTY_NOTICES.md" "$repo_root"
-assert_safe_tree "$repo_root/src" "src" "$repo_root"
-assert_safe_tree "$repo_root/bin" "bin" "$repo_root"
-assert_safe_tree "$repo_root/gui/dist" "gui/dist" "$repo_root"
 assert_safe_tree "$repo_root/gui/public/provider-icons" "gui/public/provider-icons" "$repo_root"
+
+assert_tracked_tree() {
+  local prefix="$1"
+  local rel found=0
+  while IFS= read -r -d '' rel; do
+    found=1
+    assert_safe_file "$repo_root/$rel" "$rel" "$repo_root"
+  done < <(git -C "$repo_root" ls-files -z -- "$prefix")
+  if [[ "$found" -eq 0 ]]; then
+    echo "No tracked files under $prefix to package." >&2
+    exit 1
+  fi
+}
+
+# Inspect tracked runtime sources before the Swift/GUI work. Untracked files are
+# ignored here on purpose: they must never enter the bundle.
+assert_tracked_tree "src"
+assert_tracked_tree "bin"
+
+stage_tracked_tree() {
+  local prefix="$1"
+  local dest_root="$2"
+  local rel dest dest_dir found=0
+  while IFS= read -r -d '' rel; do
+    found=1
+    dest="$dest_root/$rel"
+    dest_dir="$(dirname "$dest")"
+    mkdir -p "$dest_dir"
+    copy_verified_file "$repo_root/$rel" "$dest" "$rel" "$repo_root" "$staging_root"
+  done < <(git -C "$repo_root" ls-files -z -- "$prefix")
+  if [[ "$found" -eq 0 ]]; then
+    echo "No tracked files under $prefix to stage." >&2
+    exit 1
+  fi
+}
 
 # Validate BEFORE creating anything, so the script cannot leave a directory behind at a
 # path it then refuses to build into.
@@ -243,13 +275,19 @@ copy_verified_file "$package_dir/Info.plist" "$staged_app/Contents/Info.plist" \
 # relying on the caller's checkout, PATH, npm, or a separately installed Bun. Resolve one
 # lockfile-pinned production install for both Darwin architectures; the installed app never
 # repeats this step or performs a first-launch network install.
+#
+# Stage only git-tracked runtime files. Copying the live working tree would ship untracked
+# secrets dropped under src/ or bin/. A fresh GUI build replaces ignored gui/dist so a
+# stale dashboard cannot ride into the bundle.
 runtime_root="$staged_app/Contents/Resources/runtime"
+echo "==> Building GUI…"
+(cd "$repo_root/gui" && bun install --frozen-lockfile && bun run build)
 assert_safe_file "$repo_root/gui/dist/index.html" "gui/dist/index.html" "$repo_root"
 mkdir -p "$runtime_root"
 copy_verified_file "$repo_root/package.json" "$runtime_root/package.json" "package.json" "$repo_root" "$staging_root"
 copy_verified_file "$repo_root/bun.lock" "$runtime_root/bun.lock" "bun.lock" "$repo_root" "$staging_root"
-copy_verified_tree "$repo_root/src" "$runtime_root/src" "src" "$repo_root" "$staging_root"
-copy_verified_tree "$repo_root/bin" "$runtime_root/bin" "bin" "$repo_root" "$staging_root"
+stage_tracked_tree "src" "$runtime_root"
+stage_tracked_tree "bin" "$runtime_root"
 mkdir -p "$runtime_root/gui"
 copy_verified_tree "$repo_root/gui/dist" "$runtime_root/gui/dist" "gui/dist" "$repo_root" "$staging_root"
 
@@ -288,6 +326,8 @@ chmod 755 "$runtime_bun"
 rm -f "$runtime_root/node_modules/bun/bin/bunx" "$runtime_root/node_modules/bun/bin/bunx.exe" \
   "$runtime_root/node_modules/.bin/bunx"
 ln -s bun.exe "$runtime_root/node_modules/bun/bin/bunx.exe"
+bun "$script_dir/package-tree-safety.ts" --check-symlinks \
+  "$runtime_root/node_modules" "$staging_root"
 
 keyring_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)",/\1/p' \
   "$runtime_root/node_modules/@napi-rs/keyring/package.json" | head -n 1)"
@@ -356,6 +396,12 @@ assert_safe_file "$runtime_root/src/skills/codexcommander-delegation/SKILL.md" \
 assert_safe_tree "$runtime_root/bin" "staged runtime bin" "$staging_root"
 assert_safe_tree "$runtime_root/gui/dist" "staged runtime gui/dist" "$staging_root"
 assert_safe_tree "$staged_app/Contents/Resources/provider-icons" "staged provider icons" "$staging_root"
+
+echo "==> Scanning staged runtime…"
+if ! bun "$repo_root/scripts/privacy-scan.ts" --scan-root "$runtime_root"; then
+  echo "Staged app failed the privacy scan." >&2
+  exit 1
+fi
 
 # The app version comes from package.json, so it can never claim a version the release
 # did not ship.
