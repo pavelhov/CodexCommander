@@ -138,3 +138,35 @@ test("Settings for Cursor oauth still shows accounts and an API-key pool", async
   expect(host.textContent).toContain(CURSOR_HINT);
   expect(host.textContent).toContain(en["pws.addKey"]);
 });
+
+test("a custom cursor adapter does not get the OAuth dual-mode surface; canonical cursor still does", async () => {
+  const custom: WorkspaceItem = {
+    name: "custom-cursor",
+    adapter: "cursor",
+    baseUrl: "https://api2.cursor.sh",
+    authMode: "key",
+    hasApiKey: true,
+  };
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(
+      <LanguageProvider>
+        <ProviderAuthPanel
+          item={custom}
+          apiBase=""
+          oauth={{ loggedIn: false }}
+          keys={[{ id: "aaaaaaaa", masked: "crsr****key1", active: true }]}
+          authHandlers={HANDLERS}
+        />
+      </LanguageProvider>,
+    );
+  });
+
+  expect(host.textContent).toContain(en["pws.apiKeys"]);
+  expect(host.textContent).toContain(en["pws.addKey"]);
+  expect(host.textContent).not.toContain(en["pws.availableAccounts"]);
+  expect(host.textContent).not.toContain(en["pws.notLoggedInTitle"]);
+  expect(host.textContent).not.toContain(en["prov.login"]);
+  expect(host.textContent).not.toContain(CURSOR_HINT);
+});

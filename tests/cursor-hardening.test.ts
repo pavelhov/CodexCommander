@@ -7,11 +7,13 @@ import {
   ModelDetailsSchema,
 } from "../src/adapters/cursor/gen/agent_pb";
 import { encodeConnectFrame } from "../src/adapters/cursor/framing";
+import * as cursorLiveModels from "../src/adapters/cursor/live-models";
 import { fetchCursorUsableModels } from "../src/adapters/cursor/live-models";
+import * as cursorRunBearer from "../src/adapters/cursor/run-bearer";
 import { armTimeoutDestroyFallback, createLiveCursorTransport, createTerminalSettler } from "../src/adapters/cursor/live-transport";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
 import { gatherRoutedModels } from "../src/codex/catalog";
-import { clearModelCache, getProviderDiscoveryStatus } from "../src/codex/model-cache";
+import { clearModelCache, getProviderDiscoveryStatus, setCached } from "../src/codex/model-cache";
 import { handleManagementAPI } from "../src/server/management-api";
 
 async function withDiscoveryServer<T>(
@@ -266,6 +268,87 @@ describe("Cursor catalog discovery cooldown", () => {
     } finally {
       warning.mockRestore();
       clearModelCache(providerName);
+    }
+  });
+});
+
+describe("Cursor catalog gather isolation", () => {
+  const sibling = {
+    adapter: "openai-chat" as const,
+    baseUrl: "https://api.example.test/v1",
+    apiKey: "sibling-key",
+    liveModels: false,
+    models: ["sibling-model"],
+  };
+
+  function cursorProvider(apiKey: string, models = ["auto", "composer-2.5"]) {
+    return {
+      adapter: "cursor" as const,
+      baseUrl: "https://api2.cursor.sh",
+      apiKey,
+      models,
+    };
+  }
+
+  test("a dashboard-key exchange throw does not reject Promise.all; siblings stay and Cursor degrades to static", async () => {
+    const cursorName = "cursor-exchange-throw";
+    const siblingName = "sibling-after-cursor-exchange";
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    const exchange = spyOn(cursorRunBearer, "materializeCursorRunBearer").mockRejectedValue(
+      new Error("Cursor token refresh failed: 500"),
+    );
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          [cursorName]: cursorProvider("crsr_transient_500"),
+          [siblingName]: sibling,
+        },
+      });
+      const ids = models.map(model => `${model.provider}/${model.id}`);
+      expect(ids).toContain(`${siblingName}/sibling-model`);
+      expect(ids).toContain(`${cursorName}/auto`);
+      expect(ids).toContain(`${cursorName}/composer-2.5`);
+      expect(exchange).toHaveBeenCalled();
+      expect(warning.mock.calls.some(args => String(args[0]).includes(
+        `Cursor model discovery for "${cursorName}" failed [throw]`,
+      ))).toBe(true);
+    } finally {
+      exchange.mockRestore();
+      warning.mockRestore();
+      clearModelCache(cursorName);
+      clearModelCache(siblingName);
+    }
+  });
+
+  test("a GetUsableModels throw/500 does not reject Promise.all; Cursor falls back to stale cache", async () => {
+    const cursorName = "cursor-discovery-throw";
+    const siblingName = "sibling-after-cursor-discovery";
+    setCached(cursorName, [{ id: "cached-composer", provider: cursorName }], 0);
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    const discovery = spyOn(cursorLiveModels, "fetchCursorUsableModels").mockRejectedValue(
+      new Error("HTTP 500"),
+    );
+    try {
+      const models = await gatherRoutedModels({
+        modelCacheTtlMs: 0,
+        providers: {
+          [cursorName]: cursorProvider("hdr.payload.sig"),
+          [siblingName]: sibling,
+        },
+      });
+      const ids = models.map(model => `${model.provider}/${model.id}`);
+      expect(ids).toContain(`${siblingName}/sibling-model`);
+      expect(ids).toContain(`${cursorName}/cached-composer`);
+      expect(ids).not.toContain(`${cursorName}/auto`);
+      expect(discovery).toHaveBeenCalled();
+      expect(warning.mock.calls.some(args => String(args[0]).includes(
+        `Cursor model discovery for "${cursorName}" failed [throw]`,
+      ))).toBe(true);
+    } finally {
+      discovery.mockRestore();
+      warning.mockRestore();
+      clearModelCache(cursorName);
+      clearModelCache(siblingName);
     }
   });
 });

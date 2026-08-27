@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObjec
 import type { AccountLoadState } from "../components/provider-workspace/types";
 import { accountNeedsReauth } from "../oauth-health-display";
 import type { AccountQuota } from "../codex-quota-utils";
-import { oauthAccountDisplayLabel } from "../provider-workspace/auth";
+import { isCursorKeyAuthOverride, oauthAccountDisplayLabel } from "../provider-workspace/auth";
 
 export interface Config {
   port: number;
@@ -239,7 +239,7 @@ export function useProviderAccountPools(deps: {
   const oauthCardProviders = useMemo(
     () => config
       ? Object.entries(config.providers)
-        .filter(([name, p]) => p.authMode === "oauth" || name === "cursor" || p.adapter === "cursor")
+        .filter(([name, p]) => p.authMode === "oauth" || isCursorKeyAuthOverride({ name, adapter: p.adapter }))
         .map(([n]) => n)
       : [],
     [config],

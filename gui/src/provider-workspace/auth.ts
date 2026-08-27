@@ -28,9 +28,14 @@ export function providerAuthSurface(item: WorkspaceItem): ProviderAuthSurface {
   return "api-keys";
 }
 
-/** Cursor is OAuth-default dual-mode: Settings shows accounts and an API-key pool. */
+/**
+ * Canonical `providers.cursor` is OAuth-default dual-mode: Settings shows accounts and an API-key
+ * pool. Backend OAuth endpoints only accept the `cursor` provider id, so a custom row that reuses
+ * `adapter: "cursor"` must not get those OAuth controls. Key-only custom cursor adapters still
+ * resolve through the normal key surface when the backend accepts keys for them.
+ */
 export function isCursorKeyAuthOverride(item: Pick<WorkspaceItem, "name" | "adapter">): boolean {
-  return item.name.trim().toLowerCase() === "cursor" || item.adapter === "cursor";
+  return item.name.trim().toLowerCase() === "cursor" && item.adapter === "cursor";
 }
 
 /** Human-safe label for OAuth account rows; opaque storage ids stay private. */
