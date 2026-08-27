@@ -16,6 +16,8 @@ let restoreGlobals: (() => void) | undefined;
 let previousLanguageDescriptor: PropertyDescriptor | undefined;
 let previousAbortTimeout: PropertyDescriptor | undefined;
 let testWindow: Window;
+/** Bound AbortSignal.timeout is released by the test, not a wall-clock 30ms. */
+let pendingTimeoutAbort: (() => void) | undefined;
 
 const AUTH_MATRIX = [
   { endpoint: "/v1/responses", bearer: "rejected", dedicated: "required", xApiKey: "rejected" },
@@ -46,13 +48,16 @@ beforeEach(() => {
   // `fetch` — waiting the real 15s would only prove the clock works, at the
   // price of half a minute on every suite run. The timer itself is covered in
   // tests/bounded-fetch.test.ts.
+  pendingTimeoutAbort = undefined;
   previousAbortTimeout = Object.getOwnPropertyDescriptor(AbortSignal, "timeout");
   Object.defineProperty(AbortSignal, "timeout", {
     configurable: true,
     value: (ms: number) => {
       expect(ms).toBe(15_000);
       const controller = new AbortController();
-      setTimeout(() => controller.abort(new DOMException("TimeoutError", "TimeoutError")), 30);
+      pendingTimeoutAbort = () => {
+        controller.abort(new DOMException("TimeoutError", "TimeoutError"));
+      };
       return controller.signal;
     },
   });
@@ -93,6 +98,15 @@ async function tick(ms = 0): Promise<void> {
     await new Promise<void>(resolve => testWindow.setTimeout(resolve, ms));
     await Promise.resolve();
   });
+}
+
+async function fireMutationTimeout(): Promise<void> {
+  expect(pendingTimeoutAbort).toBeTruthy();
+  await act(async () => {
+    pendingTimeoutAbort!();
+    await Promise.resolve();
+  });
+  await tick();
 }
 
 /** A mutation that is accepted and then abandoned; only the abort signal ends it. */
@@ -180,8 +194,7 @@ test("a delete that never answers gives navigation back instead of locking it", 
     expect(backButton(container).disabled).toBe(true);
 
     // The bound fires and the page is usable again — no reload required.
-    await tick(120);
-    await tick();
+    await fireMutationTimeout();
 
     expect(seen.aborted).toBe(true);
     expect(backButton(container).disabled).toBe(false);
@@ -222,8 +235,7 @@ test("a rename that never answers releases the lock and keeps the draft", async 
 
     expect(backButton(container).disabled).toBe(true);
 
-    await tick(120);
-    await tick();
+    await fireMutationTimeout();
 
     expect(seen.aborted).toBe(true);
     expect(backButton(container).disabled).toBe(false);

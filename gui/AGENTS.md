@@ -45,10 +45,15 @@ Run all of the following for every functional `gui/` change:
 
 ```bash
 cd gui
-bun test tests
+bun run test
 bun run lint
 bun run build
 ```
+
+`bun run test` is the suite CI runs: isolated workers (cap 4) so happy-dom files
+do not share `globalThis`, with a retry of only the failed files. A single file
+is `bun test tests/<name>.test.ts`. Do not recover a red suite by rerunning
+everything at a lower worker count.
 
 After any UI-copy or locale change, also run:
 

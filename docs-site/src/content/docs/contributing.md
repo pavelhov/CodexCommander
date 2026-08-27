@@ -29,6 +29,7 @@ scripts so local commands match CI:
 bun run typecheck                 # strict TypeScript check
 bun run test                      # complete tests/ suite
 bun test tests/router.test.ts     # focused test file
+cd gui && bun run test            # dashboard tests (isolated workers)
 bun run build:gui                 # Vite GUI build + package preparation
 bun run privacy:scan              # credential/privacy scan used by CI
 bun run prepare:package           # refresh package launchers/assets

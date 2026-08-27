@@ -109,7 +109,7 @@ bun x tsc --noEmit
 bun run privacy:scan
 cd gui && bun run lint
 cd gui && bun run lint:i18n
-cd gui && bun test tests
+cd gui && bun run test
 cd gui && bun run build
 bun run test:parallel
 bun run src/cli/index.ts help
