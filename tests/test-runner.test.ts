@@ -150,6 +150,10 @@ describe("test runner isolation", () => {
       flags: ["--timeout=1", "--bail"],
       targets: ["tests/foo.test.ts"],
     });
+    expect(partitionBunTestCliArgs(["--bail", "tests/foo.test.ts"])).toEqual({
+      flags: ["--bail"],
+      targets: ["tests/foo.test.ts"],
+    });
     expect(bunTestArgvForWorkItem(
       { files: ["tests/foo.test.ts", "tests/bar.test.ts"], isolate: false },
       ["--timeout", "1"],

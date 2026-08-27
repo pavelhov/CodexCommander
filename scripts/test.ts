@@ -142,6 +142,13 @@ const BUN_TEST_VALUE_FLAGS = new Set([
   "--retry",
 ]);
 
+function looksLikeBunTestTarget(arg: string): boolean {
+  const base = arg.split(/[/\\]/).pop() ?? arg;
+  if (BUN_TEST_FILE_PATTERN.test(base)) return true;
+  const normalized = arg.replaceAll("\\", "/").replace(/\/+$/, "");
+  return normalized === "tests" || normalized === "./tests" || normalized.endsWith("/tests");
+}
+
 export function partitionBunTestCliArgs(args: readonly string[]): {
   flags: string[];
   targets: string[];
@@ -154,7 +161,7 @@ export function partitionBunTestCliArgs(args: readonly string[]): {
       flags.push(arg);
       if (!arg.includes("=") && BUN_TEST_VALUE_FLAGS.has(arg)) {
         const next = args[i + 1];
-        if (next !== undefined && !next.startsWith("-")) {
+        if (next !== undefined && !next.startsWith("-") && !looksLikeBunTestTarget(next)) {
           flags.push(next);
           i += 1;
         }
