@@ -313,7 +313,8 @@ Source development requires the `bun` CLI on your `PATH`.
 cd /path/to/CodexCommander
 bun install
 bun run typecheck
-bun run test:parallel   # preferred — much faster (parallel runner)
+bun run test:parallel   # preferred — batches cheap files, isolates server/spawn files,
+                        # retries only failures (do not rerun the whole suite on a flake)
 bun run test            # serial fallback
 ```
 

@@ -10,7 +10,14 @@ import {
   resolveTestShardSize,
   resolveTestStartShard,
 } from "../scripts/test";
-import { resolveWorkerCount } from "../scripts/test-parallel";
+import { resolveRetryCount, resolveWorkerCount } from "../scripts/test-parallel";
+import {
+  classifyTestFile,
+  DEFAULT_TEST_BATCH_SIZE,
+  filesFromFailedPlanItems,
+  planParallelTests,
+  resolveTestBatchSize,
+} from "../scripts/test-plan";
 
 describe("test runner isolation", () => {
   test("redirects user homes to a disposable root", () => {
@@ -48,6 +55,48 @@ describe("test runner isolation", () => {
     expect(() => resolveWorkerCount("0", 10)).toThrow("positive integer");
     expect(() => resolveWorkerCount("1.5", 10)).toThrow("positive integer");
     expect(() => resolveWorkerCount("x", 10)).toThrow("positive integer");
+  });
+
+  test("retries failed files once by default and validates overrides", () => {
+    expect(resolveRetryCount(undefined)).toBe(1);
+    expect(resolveRetryCount("0")).toBe(0);
+    expect(resolveRetryCount("2")).toBe(2);
+    expect(() => resolveRetryCount("-1")).toThrow("non-negative integer");
+    expect(() => resolveRetryCount("1.5")).toThrow("non-negative integer");
+  });
+
+  test("classifies server, spawn, and HOME-mutating files as isolate; cheap unit files as batch", () => {
+    expect(classifyTestFile("tests/adapter-resolve.test.ts", "expect(resolveAdapter()).toBe(\"x\")")).toBe("batch");
+    expect(classifyTestFile("tests/server-auth.test.ts", "const server = startServer(0);")).toBe("isolate");
+    expect(classifyTestFile("tests/cli-help.test.ts", "spawnSync(process.execPath, [cliPath]);")).toBe("isolate");
+    expect(classifyTestFile("tests/config.test.ts", "saveConfig(config);")).toBe("isolate");
+    expect(classifyTestFile("tests/e2e-style/native.test.ts", "expect(true).toBe(true);")).toBe("isolate");
+  });
+
+  test("plans batches without dropping isolate files, and flattens failed batch items for retry", () => {
+    const original = process.env.CCX_TEST_BATCH_SIZE;
+    delete process.env.CCX_TEST_BATCH_SIZE;
+    try {
+      expect(DEFAULT_TEST_BATCH_SIZE).toBe(8);
+      expect(resolveTestBatchSize()).toBe(8);
+    } finally {
+      if (original === undefined) delete process.env.CCX_TEST_BATCH_SIZE;
+      else process.env.CCX_TEST_BATCH_SIZE = original;
+    }
+
+    const plan = planParallelTests(
+      ["a.test.ts", "b.test.ts", "c.test.ts", "d.test.ts", "e.test.ts"],
+      {
+        batchSize: 2,
+        readSource: (file) => file === "c.test.ts" ? "startServer(0)" : "expect(1).toBe(1)",
+      },
+    );
+    expect(plan.isolate).toEqual(["c.test.ts"]);
+    expect(plan.batches).toEqual([["a.test.ts", "b.test.ts"], ["d.test.ts", "e.test.ts"]]);
+    expect(filesFromFailedPlanItems([{ files: ["a.test.ts", "b.test.ts"] }, { files: ["a.test.ts"] }]))
+      .toEqual(["a.test.ts", "b.test.ts"]);
+    expect(resolveTestBatchSize("12")).toBe(12);
+    expect(() => resolveTestBatchSize("0")).toThrow("positive integer");
   });
 
   test("uses a bounded default shard size and validates overrides", () => {

@@ -75,7 +75,7 @@ jobs:
         run: cd gui && bun run build
 
       - name: Test suite
-        run: bun test --isolate tests
+        run: bun run test:parallel
 
       - name: CLI help smoke
         run: bun run src/cli/index.ts help

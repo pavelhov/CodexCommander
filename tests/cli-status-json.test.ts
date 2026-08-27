@@ -6,20 +6,27 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveStatusPid, selectListenTarget } from "../src/cli/status";
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
 
-setDefaultTimeout(30_000);
+setDefaultTimeout(SPAWN_BUDGET_MS);
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
 
-function runStatusJson(codexCommanderHome: string) {
+function runStatusJson(codexCommanderHome: string, extraEnv: Record<string, string> = {}) {
   const runtimeDir = mkdtempSync(join(tmpdir(), "ccx-status-runtime-"));
   try {
     const codexCliPath = createCodexRuntimeFixture(runtimeDir);
     return spawnSync(process.execPath, [cliPath, "status", "--json"], {
       cwd: repoRoot,
-      env: { ...process.env, CODEXCOMMANDER_HOME: codexCommanderHome, CODEX_CLI_PATH: codexCliPath },
+      env: {
+        ...process.env,
+        CODEXCOMMANDER_HOME: codexCommanderHome,
+        CODEX_CLI_PATH: codexCliPath,
+        ...extraEnv,
+      },
       encoding: "utf8",
+      timeout: SPAWN_BUDGET_MS - 5_000,
     });
   } finally {
     rmSync(runtimeDir, { recursive: true, force: true });
@@ -29,6 +36,8 @@ function runStatusJson(codexCommanderHome: string) {
 describe("CLI status JSON", () => {
   test("status --json prints valid read-only diagnostics without secrets", () => {
     const codexCommanderHome = mkdtempSync(join(tmpdir(), "ccx-status-json-"));
+    const codexHome = mkdtempSync(join(tmpdir(), "ccx-status-codex-home-"));
+    writeFileSync(join(codexHome, "config.toml"), `model = "gpt-5"\n`, "utf8");
     try {
       const configPath = join(codexCommanderHome, "config.json");
       writeFileSync(configPath, JSON.stringify({
@@ -47,12 +56,15 @@ describe("CLI status JSON", () => {
       }), "utf8");
 
       const beforeFiles = readdirSync(codexCommanderHome).sort();
-      const result = runStatusJson(codexCommanderHome);
+      const beforeCodexHome = readdirSync(codexHome).sort();
+      const result = runStatusJson(codexCommanderHome, { CODEX_HOME: codexHome });
       const afterFiles = readdirSync(codexCommanderHome).sort();
+      const afterCodexHome = readdirSync(codexHome).sort();
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
       expect(afterFiles).toEqual(beforeFiles);
+      expect(afterCodexHome).toEqual(beforeCodexHome);
       expect(existsSync(join(codexCommanderHome, "codexcommander.pid"))).toBe(false);
 
       const parsed = JSON.parse(result.stdout) as {
@@ -78,6 +90,7 @@ describe("CLI status JSON", () => {
         config?: { source?: unknown; error?: unknown };
         service?: { summary?: unknown };
         codexShim?: { summary?: unknown };
+        codexPlugins?: { applicable?: unknown };
         codexRuntime?: {
           path?: unknown;
           version?: unknown;
@@ -123,6 +136,8 @@ describe("CLI status JSON", () => {
       expect(parsed.config?.error).toBeNull();
       expect(typeof parsed.service?.summary).toBe("string");
       expect(typeof parsed.codexShim?.summary).toBe("string");
+      expect(parsed.codexPlugins).toBeDefined();
+      expect(typeof parsed.codexPlugins?.applicable).toBe("boolean");
       expect(typeof parsed.codexRuntime?.path).toBe("string");
       expect(typeof parsed.codexRuntime?.source).toBe("string");
       expect(parsed.codexRuntime?.version === null || typeof parsed.codexRuntime?.version === "string").toBe(true);
@@ -145,6 +160,7 @@ describe("CLI status JSON", () => {
       }
     } finally {
       rmSync(codexCommanderHome, { recursive: true, force: true });
+      rmSync(codexHome, { recursive: true, force: true });
     }
   });
 

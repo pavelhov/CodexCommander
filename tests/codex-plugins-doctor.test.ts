@@ -1,13 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { collectStatus } from "../src/cli/status";
 import { diagnoseCodexBundledPlugins, locateCurrentBundledMarketplace } from "../src/codex/plugins-doctor";
-
-const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
-const cliPath = join(repoRoot, "src", "cli", "index.ts");
+import { SERVER_BUDGET_MS } from "./helpers/test-budget";
 
 function makeConfig(body: string): { dir: string; configPath: string } {
   const dir = mkdtempSync(join(tmpdir(), "ccx-codex-home-"));
@@ -291,8 +288,8 @@ describe("diagnose path-mismatch (current vs registered)", () => {
   });
 });
 
-describe("ccx status --json codexPlugins (spawned, read-only)", () => {
-  test("status --json includes a codexPlugins block and never writes CODEX_HOME", () => {
+describe("collectStatus codexPlugins (in-process, read-only)", () => {
+  test("status JSON includes a codexPlugins block and never writes CODEX_HOME", async () => {
     const codexCommanderHome = mkdtempSync(join(tmpdir(), "ccx-status-home-"));
     const codexHome = mkdtempSync(join(tmpdir(), "ccx-codex-home-"));
     writeFileSync(join(codexHome, "config.toml"), `model = "gpt-5"\n`, "utf8");
@@ -309,26 +306,25 @@ describe("ccx status --json codexPlugins (spawned, read-only)", () => {
       defaultProvider: "openai",
       codexAutoStart: false,
     }), "utf8");
+    const previousCommanderHome = process.env.CODEXCOMMANDER_HOME;
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEXCOMMANDER_HOME = codexCommanderHome;
+    process.env.CODEX_HOME = codexHome;
     try {
       const before = readdirSync(codexHome).sort();
-      const result = spawnSync(process.execPath, [cliPath, "status", "--json"], {
-        cwd: repoRoot,
-        env: { ...process.env, CODEXCOMMANDER_HOME: codexCommanderHome, CODEX_HOME: codexHome },
-        encoding: "utf8",
-      });
+      const status = await collectStatus();
       const after = readdirSync(codexHome).sort();
 
-      expect(result.status).toBe(0);
       expect(after).toEqual(before); // read-only: no files added to CODEX_HOME
-
-      const parsed = JSON.parse(result.stdout) as {
-        codexPlugins?: { applicable?: unknown };
-      };
-      expect(parsed.codexPlugins).toBeDefined();
-      expect(typeof parsed.codexPlugins?.applicable).toBe("boolean");
+      expect(status.json.codexPlugins).toBeDefined();
+      expect(typeof status.json.codexPlugins.applicable).toBe("boolean");
     } finally {
+      if (previousCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
+      else process.env.CODEXCOMMANDER_HOME = previousCommanderHome;
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
       rmSync(codexCommanderHome, { recursive: true, force: true });
       rmSync(codexHome, { recursive: true, force: true });
     }
-  }, { timeout: 20_000 });
+  }, { timeout: SERVER_BUDGET_MS });
 });
