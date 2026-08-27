@@ -1845,6 +1845,7 @@ export const ko: Record<TKey, string> = {
   "pws.adapterBaseRequired": "어댑터와 기본 URL은 필수입니다.",
   "pws.addAccount": "계정 추가",
   "pws.addKey": "API 키 추가",
+  "pws.cursorApiKeyHint": "Cursor 대시보드 사용자 API 키를 붙여넣으세요. 이 비공식 AgentService 경로는 실험적이며 ToS 위험이 높습니다. api.cursor.com Cloud Agents 키는 여기서 사용할 수 없습니다.",
   "pws.apiKeys": "API 키",
   "pws.authMode": "인증 방식",
   "pws.availableAccounts": "사용 가능한 계정",

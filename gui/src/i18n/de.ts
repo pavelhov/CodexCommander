@@ -1823,6 +1823,7 @@ export const de: Record<TKey, string> = {
   "pws.adapterBaseRequired": "Adapter und Basis-URL sind erforderlich.",
   "pws.addAccount": "Konto hinzufügen",
   "pws.addKey": "API-Schlüssel hinzufügen",
+  "pws.cursorApiKeyHint": "Füge einen Cursor-Dashboard-Benutzer-API-Schlüssel ein. Dieser inoffizielle AgentService-Pfad ist experimentell (erhöhtes ToS-Risiko). Cloud-Agents-Schlüssel von api.cursor.com funktionieren hier nicht.",
   "pws.apiKeys": "API-Schlüssel",
   "pws.authMode": "Auth-Modus",
   "pws.availableAccounts": "Verfügbare Konten",

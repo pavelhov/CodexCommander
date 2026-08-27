@@ -36,7 +36,7 @@ describe("routeModel registry effort defaults", () => {
 
     expect(routeModel(xaiKey, "xai/grok-4.5").provider.authMode).toBe("key");
     expect(routeModel(xaiDefault, "xai/grok-4.5").provider.authMode).toBe("oauth");
-    expect(routeModel(cursorKeyAttempt, "cursor/auto").provider.authMode).toBe("oauth");
+    expect(routeModel(cursorKeyAttempt, "cursor/auto").provider.authMode).toBe("key");
   });
 
   test("falls back to OAuth routing for allowKeyAuthOverride providers when the active key is unresolved", () => {

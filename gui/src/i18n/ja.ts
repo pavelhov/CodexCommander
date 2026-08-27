@@ -1230,6 +1230,7 @@ export const ja: Record<TKey, string> = {
   "pws.adapterBaseRequired": "アダプターとベース URL は必須です。",
   "pws.addAccount": "アカウントを追加",
   "pws.addKey": "API キーを追加",
+  "pws.cursorApiKeyHint": "Cursor ダッシュボードのユーザー API キーを貼り付けてください。この非公式 AgentService 経路は実験的で、利用規約リスクが高めです。api.cursor.com の Cloud Agents キーはここでは使えません。",
   "pws.apiKeys": "API キー",
   "pws.authMode": "認証モード",
   "pws.availableAccounts": "利用可能なアカウント",

@@ -1278,6 +1278,7 @@ export const en = {
   "pws.adapterBaseRequired": "Adapter and base URL are required.",
   "pws.addAccount": "Add account",
   "pws.addKey": "Add API key",
+  "pws.cursorApiKeyHint": "Paste a Cursor dashboard user API key. This unofficial AgentService path is experimental (elevated ToS risk). Cloud Agents keys from api.cursor.com will not work here.",
   "pws.apiKeys": "API Keys",
   "pws.authMode": "Auth mode",
   "pws.availableAccounts": "Available accounts",

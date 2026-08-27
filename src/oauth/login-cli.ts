@@ -92,6 +92,7 @@ export function providerConfigFromKeyLoginProvider(def: KeyLoginProvider, key: s
   return {
     adapter: def.adapter,
     baseUrl: baseUrlOverride ?? def.baseUrl,
+    authMode: "key",
     apiKey: key,
     ...(def.apiKeyTransport !== undefined ? { apiKeyTransport: def.apiKeyTransport } : {}),
     ...(def.defaultModel ? { defaultModel: def.defaultModel } : {}),

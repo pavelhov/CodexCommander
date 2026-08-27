@@ -870,7 +870,7 @@ export function buildModelsRequest(
 /**
  * Add/refresh an OAuth provider's config entry on a config object (does not persist).
  *
- * Providers whose registry entry sets `allowKeyAuthOverride` (xai, github-copilot) can be
+ * Providers whose registry entry sets `allowKeyAuthOverride` (xai, github-copilot, cursor) can be
  * billed through a stored API key instead of the OAuth login (router.ts honors
  * `authMode: "key"` for them). A blind preset overwrite here deletes `apiKey`/`apiKeyPool`
  * on every OAuth login, silently destroying the stored key and forcing a re-paste — and it

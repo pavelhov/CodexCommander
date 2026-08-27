@@ -1272,6 +1272,7 @@ export const ru: Record<TKey, string> = {
   "pws.adapterBaseRequired": "Укажите адаптер и базовый URL.",
   "pws.addAccount": "Добавить аккаунт",
   "pws.addKey": "Добавить API-ключ",
+  "pws.cursorApiKeyHint": "Вставьте пользовательский API-ключ из панели Cursor. Этот неофициальный путь AgentService экспериментальный (повышенный риск ToS). Ключи Cloud Agents с api.cursor.com здесь не работают.",
   "pws.apiKeys": "API-ключи",
   "pws.authMode": "Режим аутентификации",
   "pws.availableAccounts": "Доступные аккаунты",

@@ -140,6 +140,9 @@ export function AddProviderFormPane({
               <IconKey style={{ width: 14, height: 14 }} />{t("modal.getApiKey", { label: preset.label })}<IconExternal style={{ width: 13, height: 13 }} />
             </a>
           )}
+          {form.adapter === "cursor" && (
+            <p className="muted text-label">{t("pws.cursorApiKeyHint")}</p>
+          )}
           <AddProviderField label={t("modal.apiKey")}>
             <input className="input" type="password" value={form.apiKey} onChange={e => onFormChange({ ...form, apiKey: e.target.value })} placeholder={t("modal.apiKeyPlaceholder")} />
           </AddProviderField>

@@ -33,9 +33,15 @@ export function apiKeyPoolEntryId(key: string): string {
   return createHash("sha256").update(key).digest("hex").slice(0, 8);
 }
 
-/** True for providers whose upstream auth is a configured API key (not oauth/forward). */
+/**
+ * True for providers whose upstream auth is a configured API key (not oauth/forward).
+ * Cursor is OAuth-default dual-mode: a pasted dashboard key is stored on the same provider
+ * row, so the pool APIs must accept `authMode: "oauth"` when the adapter is `cursor`.
+ */
 export function isKeyAuthProvider(provider: CodexCommanderProviderConfig): boolean {
-  return provider.authMode !== "oauth" && provider.authMode !== "forward";
+  if (provider.authMode === "forward") return false;
+  if (provider.authMode === "oauth") return provider.adapter === "cursor";
+  return true;
 }
 
 /** Trim and reject blank / CRLF-bearing secrets. Shared by pool writes and OAuth upsert. */
@@ -107,6 +113,9 @@ export function addProviderApiKey(config: CodexCommanderConfig, name: string, ke
   }
   provider.apiKeyPool = pool;
   provider.apiKey = trimmed;
+  // Dual-mode OAuth presets (Cursor) keep oauth as default until a key is pasted.
+  // Routing only honors the key when authMode is explicitly "key".
+  if (provider.adapter === "cursor") provider.authMode = "key";
   saveConfigPreservingClaudeCode(config);
   return { id };
 }

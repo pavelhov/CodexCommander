@@ -35,6 +35,7 @@ import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-co
 import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
+import { materializeCursorRunBearer } from "../../adapters/cursor/run-bearer";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import {
   COMBO_NAMESPACE,
@@ -1003,7 +1004,10 @@ async function fetchProviderModelsWithAuth(
       const cooling = getStaleCached(name);
       return cooling ? applyConfigHintsToCachedModels(name, prov, cooling) : configured;
     }
-    const liveResult = await fetchCursorUsableModels({ apiKey, baseUrl: prov.baseUrl });
+    const liveResult = await fetchCursorUsableModels({
+      apiKey: await materializeCursorRunBearer(apiKey),
+      baseUrl: prov.baseUrl,
+    });
     if (liveResult.ok) {
       const available = filterCursorConfiguredModelsByLiveDiscovery(configured, liveResult.models);
       const result = available.length > 0 ? available : configured;

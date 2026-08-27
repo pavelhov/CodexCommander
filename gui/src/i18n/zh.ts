@@ -1842,6 +1842,7 @@ export const zh: Record<TKey, string> = {
   "pws.adapterBaseRequired": "适配器和基本 URL 为必填项。",
   "pws.addAccount": "添加账户",
   "pws.addKey": "添加 API 密钥",
+  "pws.cursorApiKeyHint": "粘贴 Cursor 控制台用户 API 密钥。此非官方 AgentService 路径为实验性功能（服务条款风险较高）。api.cursor.com 的 Cloud Agents 密钥在此无效。",
   "pws.apiKeys": "API 密钥",
   "pws.authMode": "认证方式",
   "pws.availableAccounts": "可用账户",
