@@ -582,7 +582,7 @@ class LiveCursorTransport implements CursorTransport {
           ? { estimatedInputTokens: prepared.estimatedInputTokens }
           : {}),
       });
-      this.open(prepared.bytes, runBearer, signal, state, push, err => {
+      this.open(prepared.bytes, signal, state, push, err => {
         this.releaseBlobRequestScope();
         failure = err;
         wake();
@@ -590,7 +590,7 @@ class LiveCursorTransport implements CursorTransport {
         this.releaseBlobRequestScope();
         done = true;
         wake();
-      });
+      }, runBearer);
     } catch (error) {
       this.releaseBlobRequestScope();
       throw error;
@@ -749,12 +749,12 @@ class LiveCursorTransport implements CursorTransport {
 
   private open(
     encodedRequest: Uint8Array,
-    runBearer: string,
     signal: AbortSignal | undefined,
     state: ReturnType<typeof createCursorProtobufEventState>,
     push: (message: CursorServerMessage) => void,
     fail: (error: Error) => void,
     finish: () => void,
+    runBearer: string,
   ): void {
     this.turnStartedAt = Date.now();
     this.framesReceived = 0;
