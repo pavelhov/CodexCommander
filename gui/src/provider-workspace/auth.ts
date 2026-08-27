@@ -28,6 +28,11 @@ export function providerAuthSurface(item: WorkspaceItem): ProviderAuthSurface {
   return "api-keys";
 }
 
+/** Cursor is OAuth-default dual-mode: Settings shows accounts and an API-key pool. */
+export function isCursorKeyAuthOverride(item: Pick<WorkspaceItem, "name" | "adapter">): boolean {
+  return item.name.trim().toLowerCase() === "cursor" || item.adapter === "cursor";
+}
+
 /** Human-safe label for OAuth account rows; opaque storage ids stay private. */
 export function oauthAccountDisplayLabel<T extends OAuthAccountIdentity>(
   accounts: readonly T[],

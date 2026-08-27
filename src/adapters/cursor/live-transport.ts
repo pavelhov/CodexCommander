@@ -78,6 +78,7 @@ import {
   terminateBackgroundShellsForSession,
   type BackgroundShellTerminationReport,
 } from "./native-exec-shell";
+import { materializeCursorRunBearer } from "./run-bearer";
 import type { CursorClientMessage, CursorRunRequest, CursorServerMessage } from "./types";
 import type { CursorTransport, CursorTransportFactoryInput } from "./transport";
 import { getCursorLiveSmokeToken } from "./live-smoke-gate";
@@ -537,6 +538,9 @@ class LiveCursorTransport implements CursorTransport {
 
     // Advertise MCP tools before the stream opens — the server only calls tools it was told about.
     await this.prepareMcp();
+    // Keep `this.token` as the original secret (`crsr_` dashboard key or OAuth JWT) so a later
+    // turn can re-exchange. The Run request uses the materialized Bearer only.
+    const runBearer = await materializeCursorRunBearer(this.token, signal);
     const activeText = activePromptText(request);
     this.activeClientToolFinalizeGraceMs = clientToolFinalizeGraceMsForRequest(request, this.clientToolFinalizeGraceMs);
     const cursorVisibleTools = cursorToolsForActivePrompt(request.tools, activeText, request.toolChoice);
@@ -578,7 +582,7 @@ class LiveCursorTransport implements CursorTransport {
           ? { estimatedInputTokens: prepared.estimatedInputTokens }
           : {}),
       });
-      this.open(prepared.bytes, signal, state, push, err => {
+      this.open(prepared.bytes, runBearer, signal, state, push, err => {
         this.releaseBlobRequestScope();
         failure = err;
         wake();
@@ -745,6 +749,7 @@ class LiveCursorTransport implements CursorTransport {
 
   private open(
     encodedRequest: Uint8Array,
+    runBearer: string,
     signal: AbortSignal | undefined,
     state: ReturnType<typeof createCursorProtobufEventState>,
     push: (message: CursorServerMessage) => void,
@@ -771,7 +776,7 @@ class LiveCursorTransport implements CursorTransport {
       "content-type": "application/connect+proto",
       "connect-protocol-version": "1",
       te: "trailers",
-      authorization: `Bearer ${this.token}`,
+      authorization: `Bearer ${runBearer}`,
       "x-ghost-mode": "true",
       "x-cursor-client-version": CURSOR_CLIENT_VERSION,
       "x-cursor-client-type": "cli",

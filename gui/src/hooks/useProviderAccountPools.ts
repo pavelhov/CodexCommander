@@ -237,7 +237,11 @@ export function useProviderAccountPools(deps: {
   };
 
   const oauthCardProviders = useMemo(
-    () => config ? Object.entries(config.providers).filter(([, p]) => p.authMode === "oauth").map(([n]) => n) : [],
+    () => config
+      ? Object.entries(config.providers)
+        .filter(([name, p]) => p.authMode === "oauth" || name === "cursor" || p.adapter === "cursor")
+        .map(([n]) => n)
+      : [],
     [config],
   );
   useEffect(() => {
@@ -255,7 +259,14 @@ export function useProviderAccountPools(deps: {
   }, [fetchAccountSets, oauthCardProviders]);
 
   const keyCardProviders = useMemo(
-    () => config ? Object.entries(config.providers).filter(([, p]) => p.hasApiKey && p.authMode !== "oauth" && p.authMode !== "forward").map(([n]) => n) : [],
+    () => config
+      ? Object.entries(config.providers)
+        .filter(([name, p]) =>
+          (p.hasApiKey && p.authMode !== "oauth" && p.authMode !== "forward")
+          || name === "cursor"
+          || p.adapter === "cursor")
+        .map(([n]) => n)
+      : [],
     [config],
   );
   useEffect(() => {

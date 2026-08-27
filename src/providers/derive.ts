@@ -191,10 +191,21 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): CodexCommander
   };
 }
 
+function isKeyLoginRegistryEntry(entry: ProviderRegistryEntry): boolean {
+  if (entry.authKind === "key") return true;
+  // OAuth dual-mode appears in key-login lists only when a real API-key dashboard exists.
+  // GitHub Copilot has allowKeyAuthOverride, but its dashboardUrl is subscription settings,
+  // not a key-minting page, so it stays OAuth-only in this list.
+  return entry.authKind === "oauth"
+    && entry.allowKeyAuthOverride === true
+    && Boolean(entry.dashboardUrl)
+    && entry.id === "cursor";
+}
+
 export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
   const out: Record<string, DerivedKeyLoginProvider> = {};
   for (const entry of PROVIDER_REGISTRY) {
-    if (entry.authKind !== "key") continue;
+    if (!isKeyLoginRegistryEntry(entry)) continue;
     if (!entry.dashboardUrl) throw new Error(`Registry key provider missing dashboardUrl: ${entry.id}`);
     out[entry.id] = {
       label: entry.label,

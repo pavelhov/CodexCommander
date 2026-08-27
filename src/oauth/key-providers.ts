@@ -1,4 +1,5 @@
 import type { CodexCommanderProviderConfig } from "../types";
+import { validateCursorApiKey } from "../adapters/cursor/run-bearer";
 import { deriveKeyLoginMap, enrichProviderFromRegistry, type DerivedKeyLoginProvider } from "../providers/derive";
 import { resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
 
@@ -91,6 +92,10 @@ export async function validateApiKey(
       if (res.ok) return true;
       if (res.status === 401 || res.status === 403) return false;
       return "unknown";
+    }
+
+    if (provider.adapter === "cursor") {
+      return validateCursorApiKey(key, provider.baseUrl);
     }
 
     if (provider.adapter === "google" && (provider.googleMode ?? "ai-studio") === "ai-studio") {

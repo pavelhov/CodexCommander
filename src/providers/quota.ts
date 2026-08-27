@@ -23,6 +23,7 @@ import {
   markAccountNeedsReauthIfGeneration,
 } from "../oauth/store";
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
+import { materializeCursorRunBearer } from "../adapters/cursor/run-bearer";
 import { apiKeyPoolEntryId } from "./api-keys";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "./xai-transport";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "./registry";
@@ -1148,11 +1149,20 @@ async function fetchKimiQuota(
     : quotaUnavailable("upstream_unavailable");
 }
 
-/** Cursor included usage via api2.cursor.sh (Bearer from OAuth) — unofficial, may change. */
-async function fetchCursorQuota(provider: string): Promise<ProviderQuotaReport | null> {
+/** Cursor included usage via api2.cursor.sh (Bearer from OAuth or a pasted Run key) — unofficial, may change. */
+async function fetchCursorQuota(
+  provider: string,
+  config: CodexCommanderProviderConfig,
+): Promise<ProviderQuotaReport | null> {
   let accessToken: string;
   try {
-    accessToken = await getValidAccessToken("cursor");
+    if (config.authMode === "key") {
+      const raw = resolveEnvValue(config.apiKey)?.trim();
+      if (!raw) return null;
+      accessToken = await materializeCursorRunBearer(raw);
+    } else {
+      accessToken = await getValidAccessToken("cursor");
+    }
   } catch {
     return null;
   }
@@ -1614,6 +1624,7 @@ export function supportsProviderQuotaReporting(
     if (["xai", "anthropic", "cursor", "google-antigravity"].includes(name)) return true;
     if (name === "kimi" && isCanonicalKimiCodeBaseUrl(provider.baseUrl)) return true;
   }
+  if (provider.authMode === "key" && name === "cursor" && provider.adapter === "cursor") return true;
   if (provider.authMode === "key" && isCanonicalKimiCodeBaseUrl(provider.baseUrl)) return true;
   return (provider.authMode ?? "key") === "key" && isCanonicalA6apiBaseUrl(provider.baseUrl);
 }
@@ -1635,7 +1646,10 @@ async function maybeFetchProviderQuota(
     }
     if (provider.authMode === "oauth" && name === "xai") return fetchXaiQuota(name);
     if (provider.authMode === "oauth" && name === "anthropic") return fetchAnthropicQuota(name);
-    if (provider.authMode === "oauth" && name === "cursor") return fetchCursorQuota(name);
+    if (provider.authMode === "oauth" && name === "cursor") return fetchCursorQuota(name, provider);
+    if (provider.authMode === "key" && name === "cursor" && provider.adapter === "cursor") {
+      return fetchCursorQuota(name, provider);
+    }
     if (provider.authMode === "oauth" && name === "google-antigravity") return fetchAntigravityQuota(name, provider);
     // Kimi Code `/usages` accepts OAuth or coding-plan API keys, but only on the canonical
     // host and only for real key auth — forward/local modes carry no credential of ours.

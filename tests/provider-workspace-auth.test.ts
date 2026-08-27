@@ -39,6 +39,8 @@ describe("provider workspace auth surface", () => {
     expect(providerAuthSurface(provider("configured", { hasApiKey: true }))).toBe("api-keys");
     expect(providerAuthSurface(provider("free", { keyOptional: true }))).toBeNull();
     expect(providerAuthSurface(provider("ollama", { authMode: "local", baseUrl: "http://127.0.0.1:11434/v1" }))).toBeNull();
+    expect(providerAuthSurface(provider("cursor", { adapter: "cursor", authMode: "oauth" }))).toBe("oauth-accounts");
+    expect(providerAuthSurface(provider("cursor", { adapter: "cursor", authMode: "key", hasApiKey: true }))).toBe("api-keys");
   });
 });
 
