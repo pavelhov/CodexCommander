@@ -3,14 +3,25 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  commandLineLooksLikeBunTest,
   createIsolatedTestEnvironment,
   DEFAULT_TEST_SHARD_SIZE,
+  findCompetingTestRunners,
   listRepositoryTestFiles,
+  partitionBunTestCliArgs,
   partitionTestFiles,
   resolveTestShardSize,
   resolveTestStartShard,
 } from "../scripts/test";
-import { resolveRetryCount, resolveWorkerCount } from "../scripts/test-parallel";
+import {
+  bunTestArgvForWorkItem,
+  diagnosticIsolateRetryItems,
+  resolveRetryCount,
+  resolveWorkerCount,
+  retryFailuresInSameMode,
+  retryQueueForFailures,
+  type WorkItem,
+} from "../scripts/test-parallel";
 import {
   classifyTestFile,
   DEFAULT_TEST_BATCH_SIZE,
@@ -128,6 +139,108 @@ describe("test runner isolation", () => {
     expect(() => resolveTestStartShard(12, "13")).toThrow("integer from 1 to 12");
     expect(() => resolveTestStartShard(12, "later")).toThrow("integer from 1 to 12");
     expect(() => resolveTestStartShard(0, "1")).toThrow("positive integer");
+  });
+
+  test("retries forward caller flags including --timeout", () => {
+    expect(partitionBunTestCliArgs(["--timeout", "1", "tests/foo.test.ts", "tests/bar.test.ts"])).toEqual({
+      flags: ["--timeout", "1"],
+      targets: ["tests/foo.test.ts", "tests/bar.test.ts"],
+    });
+    expect(partitionBunTestCliArgs(["--timeout=1", "--bail", "tests/foo.test.ts"])).toEqual({
+      flags: ["--timeout=1", "--bail"],
+      targets: ["tests/foo.test.ts"],
+    });
+    expect(bunTestArgvForWorkItem(
+      { files: ["tests/foo.test.ts", "tests/bar.test.ts"], isolate: false },
+      ["--timeout", "1"],
+    )).toEqual([
+      "test",
+      "--no-isolate",
+      "--max-concurrency=1",
+      "--timeout",
+      "1",
+      "tests/foo.test.ts",
+      "tests/bar.test.ts",
+    ]);
+    expect(bunTestArgvForWorkItem(
+      { files: ["tests/foo.test.ts"], isolate: true },
+      ["--timeout", "1"],
+    )).toEqual(["test", "--isolate", "--timeout", "1", "tests/foo.test.ts"]);
+  });
+
+  test("a shared-process batch failure stays a failure if files only pass isolated", async () => {
+    const batch: WorkItem = { files: ["a.test.ts", "b.test.ts"], isolate: false };
+    expect(retryQueueForFailures([batch])).toEqual([
+      { files: ["a.test.ts", "b.test.ts"], isolate: false },
+    ]);
+
+    const fakeRun = async (items: WorkItem[]) => items.filter(item => !item.isolate);
+    const result = await retryFailuresInSameMode([batch], 1, fakeRun);
+    expect(result.failures).toEqual([batch]);
+    expect(result.recovered).toEqual([]);
+
+    const diagnostics = diagnosticIsolateRetryItems(result.failures);
+    expect(diagnostics).toEqual([
+      { files: ["a.test.ts"], isolate: true },
+      { files: ["b.test.ts"], isolate: true },
+    ]);
+    expect(await fakeRun(diagnostics)).toEqual([]);
+    expect(result.failures.length).toBeGreaterThan(0);
+  });
+
+  test("a shared-process batch can recover when the same batch passes on retry", async () => {
+    const batch: WorkItem = { files: ["a.test.ts", "b.test.ts"], isolate: false };
+    const result = await retryFailuresInSameMode([batch], 1, async () => []);
+    expect(result.failures).toEqual([]);
+    expect(result.recovered).toEqual(["a.test.ts", "b.test.ts"]);
+  });
+
+  test("overlap lock matches bun test including --no-isolate and not the wrapper scripts", () => {
+    expect(commandLineLooksLikeBunTest("/home/x/.bun/bin/bun test --no-isolate --max-concurrency=1 a.test.ts")).toBe(true);
+    expect(commandLineLooksLikeBunTest("/home/x/.bun/bin/bun test --isolate a.test.ts")).toBe(true);
+    expect(commandLineLooksLikeBunTest("/home/x/.bun/bin/bun test --parallel=4 tests")).toBe(true);
+    expect(commandLineLooksLikeBunTest("C:\\Users\\x\\.bun\\bin\\bun.exe test --no-isolate a.test.ts")).toBe(true);
+    expect(commandLineLooksLikeBunTest("/home/x/.bun/bin/bun scripts/test-parallel.ts")).toBe(false);
+    expect(commandLineLooksLikeBunTest("/home/x/.bun/bin/bun scripts/test.ts")).toBe(false);
+    expect(commandLineLooksLikeBunTest("/home/x/.bun/bin/bun gui/scripts/test.ts")).toBe(false);
+  });
+
+  test("overlap lock fires for a live --no-isolate bun test process", async () => {
+    if (process.platform === "win32") return;
+    const dir = mkdtempSync(join(tmpdir(), "ccx-overlap-"));
+    const file = join(dir, "hold.test.ts");
+    writeFileSync(file, `
+      test("hold the process for the overlap lock probe", async () => {
+        await Bun.sleep(30_000);
+      });
+    `);
+    writeFileSync(join(dir, "bunfig.toml"), "[test]\n");
+    const child = Bun.spawn(
+      [process.execPath, "test", "--no-isolate", "--timeout", "30000", file],
+      {
+        cwd: dir,
+        stdout: "ignore",
+        stderr: "ignore",
+        env: { ...process.env, CCX_TEST_NO_QUEUE: "1" },
+      },
+    );
+    try {
+      const started = Date.now();
+      let seen = false;
+      while (Date.now() - started < 8_000) {
+        const competing = findCompetingTestRunners(process.pid);
+        if (child.pid !== undefined && competing.includes(child.pid)) {
+          seen = true;
+          break;
+        }
+        await Bun.sleep(50);
+      }
+      expect(seen).toBe(true);
+    } finally {
+      child.kill();
+      await child.exited;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("discovers Bun test filename patterns in stable order", () => {

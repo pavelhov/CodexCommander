@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { failedFilesFromJunit, resolveRetryCount, resolveWorkerCount } from "../scripts/test";
+import { failedFilesFromJunit, partitionBunTestCliArgs, resolveRetryCount, resolveWorkerCount, retryTestArgs } from "../scripts/test";
 
 describe("GUI test runner", () => {
   test("defaults to a bounded worker count and validates overrides", () => {
@@ -25,6 +25,25 @@ describe("GUI test runner", () => {
     expect("event" in win).toBe(true);
     expect((win as { event?: unknown }).event).toBeUndefined();
     win.close();
+  });
+
+  test("retries forward caller flags including --timeout", () => {
+    expect(partitionBunTestCliArgs(["--timeout", "1", "tests/foo.test.tsx"])).toEqual({
+      flags: ["--timeout", "1"],
+      targets: ["tests/foo.test.tsx"],
+    });
+    expect(retryTestArgs(["--timeout", "1"], "tests/foo.test.tsx")).toEqual([
+      "--timeout",
+      "1",
+      "--isolate",
+      "tests/foo.test.tsx",
+    ]);
+    expect(retryTestArgs(["--timeout=1", "--bail"], "tests/bar.test.ts")).toEqual([
+      "--timeout=1",
+      "--bail",
+      "--isolate",
+      "tests/bar.test.ts",
+    ]);
   });
 
   test("junit parser names only files that actually failed", () => {

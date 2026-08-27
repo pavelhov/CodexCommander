@@ -6,7 +6,8 @@
  * afterEach then throws on `window.event` and poisons later files. `--parallel`
  * implies `--isolate` (fresh global per file) and is the default here, capped
  * like the proxy suite at min(4, CPU). Failed files retry once on a single
- * worker — never a full-suite rerun.
+ * worker — never a full-suite rerun — and retries forward the caller's `bun test`
+ * flags unchanged (including `--timeout`).
  *
  * Override with CCX_TEST_PARALLEL_WORKERS and CCX_TEST_RETRY.
  */
@@ -14,6 +15,9 @@ import { availableParallelism } from "node:os";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
+import { partitionBunTestCliArgs, waitForExclusiveRun } from "../../scripts/test";
+
+export { partitionBunTestCliArgs };
 
 const GUI_ROOT = join(import.meta.dir, "..");
 const TEST_ROOT = "tests";
@@ -60,6 +64,10 @@ function displayPath(file: string): string {
   return rel && !rel.startsWith("..") ? rel : file;
 }
 
+export function retryTestArgs(callerFlags: readonly string[], file: string): string[] {
+  return [...callerFlags, "--isolate", file];
+}
+
 function resolveSuiteFile(file: string): string {
   return isAbsolute(file) ? file : join(GUI_ROOT, file);
 }
@@ -82,7 +90,12 @@ function spawnTest(args: string[], junitPath?: string): Promise<number> {
   return child.exited.then(code => code ?? 1);
 }
 
-async function runQueue(files: string[], workers: number, label: string): Promise<string[]> {
+async function runQueue(
+  files: string[],
+  workers: number,
+  label: string,
+  callerFlags: readonly string[],
+): Promise<string[]> {
   const failed: string[] = [];
   let next = 0;
   const workerCount = Math.min(workers, Math.max(1, files.length));
@@ -92,7 +105,7 @@ async function runQueue(files: string[], workers: number, label: string): Promis
       next += 1;
       if (index >= files.length) return;
       const file = files[index]!;
-      const code = await spawnTest(["--isolate", file]);
+      const code = await spawnTest(retryTestArgs(callerFlags, file));
       const status = code === 0 ? "ok" : "FAIL";
       console.warn(`[gui:test] ${label} ${index + 1}/${files.length} ${status} ${displayPath(file)}`);
       if (code !== 0) failed.push(file);
@@ -103,7 +116,8 @@ async function runQueue(files: string[], workers: number, label: string): Promis
 }
 
 async function main(): Promise<void> {
-  const requested = process.argv.slice(2);
+  const { flags: callerFlags, targets: requested } = partitionBunTestCliArgs(process.argv.slice(2));
+  await waitForExclusiveRun(process.pid);
   const workers = resolveWorkerCount();
   const retryCount = resolveRetryCount();
   const scratch = mkdtempSync(join(tmpdir(), "ccx-gui-test-"));
@@ -112,11 +126,11 @@ async function main(): Promise<void> {
   try {
     const patterns = requested.length > 0 ? requested : [TEST_ROOT];
     console.warn(
-      `[gui:test] ${patterns.join(" ")} across ${workers} worker(s) `
+      `[gui:test] ${[...callerFlags, ...patterns].join(" ")} across ${workers} worker(s) `
       + `(CCX_TEST_PARALLEL_WORKERS / CCX_TEST_RETRY to override)`,
     );
     const startedAt = Date.now();
-    const code = await spawnTest([`--parallel=${workers}`, ...patterns], junitPath);
+    const code = await spawnTest([`--parallel=${workers}`, ...callerFlags, ...patterns], junitPath);
 
     let failures: string[] = [];
     if (code !== 0) {
@@ -144,7 +158,7 @@ async function main(): Promise<void> {
       for (const file of failures) console.warn(`  ${displayPath(file)}`);
       const stillFailing = new Set(failures);
       for (let attempt = 1; attempt <= retryCount; attempt += 1) {
-        const retryFailures = await runQueue([...stillFailing], 1, `retry ${attempt}/${retryCount}`);
+        const retryFailures = await runQueue([...stillFailing], 1, `retry ${attempt}/${retryCount}`, callerFlags);
         const failedThisPass = new Set(retryFailures);
         for (const file of stillFailing) {
           if (!failedThisPass.has(file)) recovered.push(file);

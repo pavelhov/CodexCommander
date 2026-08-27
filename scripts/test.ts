@@ -116,6 +116,57 @@ function runIsolatedTestProcess(testArgs: readonly string[]): number {
 }
 
 /**
+ * Bun test flags that consume the next argv token when written without `=`.
+ * Used so `--timeout 1 tests/foo.test.ts` keeps `1` as a flag value, not a file.
+ */
+const BUN_TEST_VALUE_FLAGS = new Set([
+  "--timeout",
+  "--preload",
+  "-r",
+  "--reporter",
+  "--reporter-outfile",
+  "--max-concurrency",
+  "--parallel",
+  "--test-name-pattern",
+  "-t",
+  "--rerun-each",
+  "--seed",
+  "--bail",
+  "--coverage-reporter",
+  "--env-file",
+  "--dotenv",
+  "--tsconfig",
+  "--config",
+  "-c",
+  "--max-timeout",
+  "--retry",
+]);
+
+export function partitionBunTestCliArgs(args: readonly string[]): {
+  flags: string[];
+  targets: string[];
+} {
+  const flags: string[] = [];
+  const targets: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    if (arg.startsWith("-")) {
+      flags.push(arg);
+      if (!arg.includes("=") && BUN_TEST_VALUE_FLAGS.has(arg)) {
+        const next = args[i + 1];
+        if (next !== undefined && !next.startsWith("-")) {
+          flags.push(next);
+          i += 1;
+        }
+      }
+      continue;
+    }
+    targets.push(arg);
+  }
+  return { flags, targets };
+}
+
+/**
  * Other `bun test` runners already on this machine.
  *
  * Two full suites sharing one CPU do not fail — they crawl. A run that normally
@@ -123,12 +174,25 @@ function runIsolatedTestProcess(testArgs: readonly string[]): number {
  * left behind, and neither process said anything, so the slowdown read as a hang
  * in this suite. Bun's own timeouts cannot see the contention, so name it here.
  *
+ * The lock covers the whole `bun test` period, including `--no-isolate` and
+ * `--parallel` runs. Matching only `test --isolate` misses the parallel runner's
+ * shared-process batches and the GUI suite's first `--parallel` spawn.
+ *
  * `pgrep` is absent on Windows and may exit non-zero for "no matches"; both cases
  * mean "nothing to warn about" rather than an error worth failing a test run over.
  */
+export const COMPETING_BUN_TEST_PGREP_PATTERN = "bun(.exe)?[[:space:]]+test([[:space:]]|$)";
+
+/** JS form of {@link COMPETING_BUN_TEST_PGREP_PATTERN} for unit tests and ps fallbacks. */
+const COMPETING_BUN_TEST_JS = /bun(?:\.exe)?\s+test(?:\s|$)/i;
+
+export function commandLineLooksLikeBunTest(commandLine: string): boolean {
+  return COMPETING_BUN_TEST_JS.test(commandLine);
+}
+
 export function findCompetingTestRunners(selfPid: number): number[] {
   try {
-    const found = Bun.spawnSync(["pgrep", "-f", "bun.*test --isolate"], {
+    const found = Bun.spawnSync(["pgrep", "-f", COMPETING_BUN_TEST_PGREP_PATTERN], {
       stdout: "pipe",
       stderr: "ignore",
     });

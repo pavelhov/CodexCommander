@@ -39,7 +39,9 @@ Most tests are flat `tests/*.test.ts` Bun tests. `tests/helpers/` contains share
 `tests/e2e-style/` contains broader native-parity scenarios. Keep a focused regression near the
 existing tests for the subsystem you change; run `bun run test:parallel` for shared routing,
 adapters, config, or server behavior. If that reports failed files, rerun only those files — not
-the entire suite. The parallel runner retries failed files once automatically.
+the entire suite. The parallel runner retries failed items once in the same
+isolation mode; an isolated rerun of a failed shared-process batch cannot mark
+the suite green.
 
 The docs site you're reading lives in `docs-site/` (Astro + Starlight):
 
