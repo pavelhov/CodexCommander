@@ -471,9 +471,11 @@ provider-wide adapter. To opt a model without a built-in default (for example
 Cursor is tracked separately as an experimental unofficial adapter. `adapter: "cursor"` appears in `ccx init`
 and the dashboard Add Provider picker as an experimental local config entry with Cursor's static
 fallback model catalog metadata. Default auth is PKCE (`ccx login cursor`). A pasted
-[dashboard user API key](https://cursor.com/dashboard/api) is dual-mode on the same `cursor`
+[dashboard user API key](https://cursor.com/dashboard/api) is dual-mode on the same canonical `cursor`
 provider: set `authMode: "key"` (Add Provider → **Use an API key instead**, or the Settings API-key
-pool). That key uses the same unofficial `api2.cursor.sh` AgentService/Run protocol as OAuth — it is
+pool). OAuth accounts are only for `providers.cursor`; a custom id with `adapter: "cursor"` can still
+use a key, but the dashboard will not show Cursor OAuth controls that the backend cannot honor.
+That key uses the same unofficial `api2.cursor.sh` AgentService/Run protocol as OAuth — it is
 **not** a documented OpenAI `/v1/chat/completions` credential, and Cursor Cloud Agents keys from
 `api.cursor.com` are a different product and will not work here. Dashboard `crsr_` user API keys are
 exchanged via `POST /auth/exchange_user_api_key` when they are not already a valid Run Bearer.

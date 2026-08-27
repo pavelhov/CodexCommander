@@ -252,10 +252,11 @@ so passthrough stays byte-for-byte identical.
 
 The Cursor bridge is experimental and unofficial (elevated ToS risk). Default auth is
 `ccx login cursor` (PKCE). You can instead paste a [dashboard user API key](https://cursor.com/dashboard/api)
-with `authMode: "key"` on the same `providers.cursor` row — the unofficial `api2.cursor.sh`
-AgentService/Run protocol, not a public OpenAI chat-completions API. Cloud Agents keys from
-`api.cursor.com` are a different product and will not work here. After login or a working Run Bearer,
-add or edit `providers.cursor`.
+with `authMode: "key"` on the same canonical `providers.cursor` row — the unofficial `api2.cursor.sh`
+AgentService/Run protocol, not a public OpenAI chat-completions API. OAuth dual-mode is that
+canonical id only; a custom provider using `adapter: "cursor"` can still store a dashboard key.
+Cloud Agents keys from `api.cursor.com` are a different product and will not work here. After login
+or a working Run Bearer, add or edit `providers.cursor`.
 Cursor Router's optimization ladder is exposed as separate Codex ids because the picker cannot render
 Cursor-specific model parameters:
 

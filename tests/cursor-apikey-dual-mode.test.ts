@@ -135,7 +135,18 @@ describe("Cursor API-key dual-mode contract", () => {
     expect(providerAuthSurface(keyCursor)).toBe("api-keys");
     expect(isCursorKeyAuthOverride(oauthCursor)).toBe(true);
     expect(isCursorKeyAuthOverride(keyCursor)).toBe(true);
+    expect(isCursorKeyAuthOverride({ name: "Cursor", adapter: "cursor" })).toBe(true);
     expect(isCursorKeyAuthOverride({ name: "xai", adapter: "openai-chat" })).toBe(false);
+    expect(isCursorKeyAuthOverride({ name: "custom-cursor", adapter: "cursor" })).toBe(false);
+    expect(isCursorKeyAuthOverride({ name: "cursor", adapter: "openai-chat" })).toBe(false);
+  });
+
+  test("dual-mode OAuth surface is canonical providers.cursor only", async () => {
+    const pools = await Bun.file("gui/src/hooks/useProviderAccountPools.ts").text();
+    expect(pools).toContain("isCursorKeyAuthOverride({ name, adapter: p.adapter })");
+    const auth = await Bun.file("gui/src/provider-workspace/auth.ts").text();
+    expect(auth).toContain('item.name.trim().toLowerCase() === "cursor" && item.adapter === "cursor"');
+    expect(auth).not.toContain('item.name.trim().toLowerCase() === "cursor" || item.adapter === "cursor"');
   });
 });
 
