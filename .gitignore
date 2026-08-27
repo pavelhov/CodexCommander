@@ -29,3 +29,7 @@ dist/
 tests/.tmp-*/
 /.ccx-*
 .claude/
+
+# Local visualization and generated output artifacts
+.lavish/
+output/
