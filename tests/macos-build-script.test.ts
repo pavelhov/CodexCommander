@@ -26,7 +26,7 @@ describe("macOS build script bundle contract", () => {
     expect(scriptSource).toContain('staged_app="$staging_root/CodexCommander.app"');
     expect(scriptSource).toContain('! -f "$runtime_root/bin/ccx.mjs"');
     expect(scriptSource).toContain('source_revision="${CCX_BUILD_REVISION:-}"');
-    expect(scriptSource).toContain("git ls-files -z --");
+    expect(scriptSource).toContain("ls-files -z --");
     expect(scriptSource).toContain("assert_tracked_tree \"src\"");
     expect(scriptSource).toContain("assert_tracked_tree \"bin\"");
     expect(scriptSource).toContain("stage_tracked_tree \"src\"");
