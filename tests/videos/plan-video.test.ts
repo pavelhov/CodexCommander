@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { planVideoBridge } from "../../src/images/plan";
 import type { CodexCommanderConfig, CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../../src/types";
 import { VIDEO_GEN_TOOL_NAME } from "../../src/images/synthetic-tool";
+import { buildMediaExecutionPlan, buildMediaReadinessSnapshot } from "../../src/images/capabilities";
 
 function makeConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommanderConfig {
   const xai: CodexCommanderProviderConfig = {
@@ -76,5 +77,47 @@ describe("planVideoBridge", () => {
     const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
     expect(plan).toBeDefined();
     expect(plan!.model).toBe("custom-video-model");
+  });
+});
+
+describe("media video capability contract", () => {
+  test("video can be eligible while the image bridge stays native", () => {
+    const config = makeConfig({
+      images: {
+        bridgeEnabled: false,
+        videoBridgeEnabled: true,
+        authSource: "subscription_oauth",
+      },
+    } as unknown as CodexCommanderConfig);
+    const snapshot = buildMediaReadinessSnapshot(config, { subscription_oauth: "ready" });
+    const plan = buildMediaExecutionPlan(snapshot, {
+      surface: "responses",
+      routeEligible: true,
+      imageToolRequested: true,
+      videoToolRequested: true,
+    });
+
+    expect(plan.image).toMatchObject({ toolEligible: false, executionEligible: false, reason: "disabled" });
+    expect(plan.video).toMatchObject({ toolEligible: true, executionEligible: true, reason: null });
+  });
+
+  test("an enabled but unready video remains visibly blocked without becoming eligible", () => {
+    const config = makeConfig({
+      images: { bridgeEnabled: false, videoBridgeEnabled: true, authSource: "api_key" },
+    } as unknown as CodexCommanderConfig);
+    const snapshot = buildMediaReadinessSnapshot(config, { api_key: "missing" });
+    const plan = buildMediaExecutionPlan(snapshot, {
+      surface: "responses",
+      routeEligible: true,
+      imageToolRequested: false,
+      videoToolRequested: true,
+    });
+
+    expect(snapshot.video).toMatchObject({ state: "blocked", reason: "credential_unavailable" });
+    expect(plan.video).toMatchObject({
+      toolEligible: false,
+      executionEligible: false,
+      reason: "credential_unavailable",
+    });
   });
 });

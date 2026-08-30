@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { CodexCommanderConfig, CodexCommanderProviderConfig, CodexCommanderParsedRequest } from "../../src/types";
+import { buildMediaExecutionPlan, buildMediaReadinessSnapshot } from "../../src/images/capabilities";
+import type { MediaCredentialBinding } from "../../src/images/types";
 
 const PREV_HOME = process.env.CODEXCOMMANDER_HOME;
 let planImageBridge: typeof import("../../src/images/plan")["planImageBridge"];
@@ -28,7 +30,13 @@ beforeEach(() => {
 
 function makeConfig(
   providers: Record<string, Partial<CodexCommanderProviderConfig>>,
-  images?: { bridgeEnabled?: boolean; bridgeModel?: string; timeoutMs?: number },
+  images?: {
+    bridgeEnabled?: boolean;
+    videoBridgeEnabled?: boolean;
+    authSource?: "subscription_oauth" | "api_key";
+    bridgeModel?: string;
+    timeoutMs?: number;
+  },
 ): CodexCommanderConfig {
   return {
     port: 0,
@@ -185,5 +193,162 @@ describe("planImageBridge", () => {
     );
     expect(await planImageBridge(cfg, makeParsed(true), routed)).toBeUndefined();
     tokenResult = null;
+  });
+});
+
+describe("media image capability contract", () => {
+  const sources = ["api_key", "subscription_oauth"] as const;
+
+  test("keeps image and video capability states independent for both credential sources", () => {
+    for (const authSource of sources) {
+      for (const bridgeEnabled of [false, true]) {
+        for (const videoBridgeEnabled of [false, true]) {
+          const config = makeConfig(
+            { xai: { baseUrl: "https://api.x.ai/v1" } },
+            { bridgeEnabled, videoBridgeEnabled, authSource },
+          );
+          const snapshot = buildMediaReadinessSnapshot(config, {
+            api_key: "ready",
+            subscription_oauth: "ready",
+          });
+          expect(snapshot.authSource).toBe(authSource);
+          expect(snapshot.image.state).toBe(bridgeEnabled ? "ready" : "disabled");
+          expect(snapshot.video.state).toBe(videoBridgeEnabled ? "ready" : "disabled");
+        }
+      }
+    }
+  });
+
+  test("uses only the selected source and produces a redacted blocked snapshot", () => {
+    const config = makeConfig(
+      { xai: { baseUrl: "https://api.x.ai/v1", apiKey: "xai-secret-key-suffix" } },
+      { bridgeEnabled: true, videoBridgeEnabled: true, authSource: "subscription_oauth" },
+    );
+    const snapshot = buildMediaReadinessSnapshot(config, {
+      api_key: "ready",
+      subscription_oauth: "reauthentication_required",
+      token: "oauth-secret",
+      accountId: "private-account",
+    } as never);
+
+    expect(snapshot).toMatchObject({
+      authSource: "subscription_oauth",
+      credential: { state: "blocked", reason: "reauthentication_required" },
+      image: { state: "blocked", reason: "reauthentication_required" },
+      video: { state: "blocked", reason: "reauthentication_required" },
+    });
+    const serialized = JSON.stringify(snapshot);
+    expect(serialized).not.toContain("xai-secret-key-suffix");
+    expect(serialized).not.toContain("oauth-secret");
+    expect(serialized).not.toContain("private-account");
+  });
+
+  test("fails closed when an enabled in-memory config was not normalized with an auth source", () => {
+    const config = makeConfig(
+      { xai: { baseUrl: "https://api.x.ai/v1", apiKey: "must-not-arm" } },
+      { bridgeEnabled: true, videoBridgeEnabled: false },
+    );
+    const snapshot = buildMediaReadinessSnapshot(config, { api_key: "ready" });
+
+    expect(snapshot).toMatchObject({
+      authSource: null,
+      credential: { state: "blocked", reason: "auth_source_missing", provider: null },
+      image: { state: "blocked", reason: "auth_source_missing" },
+      video: { state: "disabled", reason: "disabled" },
+    });
+  });
+
+  test("fails closed with migration guidance for ambiguous legacy xAI API-key aliases", () => {
+    const config = makeConfig(
+      {
+        first: { baseUrl: "https://api.x.ai/v1" },
+        second: { baseUrl: "https://cli-chat-proxy.grok.com" },
+      },
+      { bridgeEnabled: true, videoBridgeEnabled: false, authSource: "api_key" },
+    );
+    const snapshot = buildMediaReadinessSnapshot(config, { api_key: "ready" });
+    expect(snapshot.credential).toMatchObject({
+      state: "blocked",
+      reason: "ambiguous_xai_provider",
+      recovery: expect.stringContaining("providers.xai"),
+    });
+    expect(snapshot.image.state).toBe("blocked");
+  });
+
+  test("canonical xai suppresses aliases and subscription OAuth requires canonical xai", () => {
+    const canonical = makeConfig(
+      {
+        xai: { baseUrl: "https://configured.example/v1" },
+        alias: { baseUrl: "https://api.x.ai/v1" },
+      },
+      { bridgeEnabled: true, videoBridgeEnabled: false, authSource: "api_key" },
+    );
+    expect(buildMediaReadinessSnapshot(canonical, { api_key: "ready" }).credential)
+      .toMatchObject({ state: "ready", provider: "canonical" });
+
+    const aliasOnly = makeConfig(
+      { alias: { baseUrl: "https://api.x.ai/v1" } },
+      { bridgeEnabled: true, videoBridgeEnabled: false, authSource: "subscription_oauth" },
+    );
+    expect(buildMediaReadinessSnapshot(aliasOnly, { subscription_oauth: "ready" }).credential)
+      .toMatchObject({ state: "blocked", reason: "canonical_xai_provider_missing" });
+
+    const oneEnabledAlias = makeConfig(
+      {
+        enabled: { baseUrl: "https://api.x.ai/v1" },
+        ignored: { baseUrl: "https://cli-chat-proxy.grok.com", disabled: true },
+      },
+      { bridgeEnabled: true, videoBridgeEnabled: false, authSource: "api_key" },
+    );
+    expect(buildMediaReadinessSnapshot(oneEnabledAlias, { api_key: "ready" }).credential)
+      .toMatchObject({ state: "ready", provider: "legacy_alias" });
+
+    const disabledCanonical = makeConfig(
+      {
+        xai: { baseUrl: "https://configured.example/v1", disabled: true },
+        alias: { baseUrl: "https://api.x.ai/v1" },
+      },
+      { bridgeEnabled: true, videoBridgeEnabled: false, authSource: "api_key" },
+    );
+    expect(buildMediaReadinessSnapshot(disabledCanonical, { api_key: "ready" }).credential)
+      .toMatchObject({ state: "blocked", reason: "xai_provider_disabled" });
+  });
+
+  test("request eligibility is separate from readiness and contains no credential binding", () => {
+    const config = makeConfig(
+      { xai: { baseUrl: "https://api.x.ai/v1", apiKey: "private-key" } },
+      { bridgeEnabled: true, videoBridgeEnabled: false, authSource: "api_key" },
+    );
+    const snapshot = buildMediaReadinessSnapshot(config, { api_key: "ready" });
+    const plan = buildMediaExecutionPlan(snapshot, {
+      surface: "responses",
+      routeEligible: true,
+      imageToolRequested: true,
+      videoToolRequested: true,
+    });
+
+    expect(plan.image).toMatchObject({ toolEligible: true, executionEligible: true });
+    expect(plan.video).toMatchObject({ toolEligible: false, executionEligible: false, reason: "disabled" });
+    expect(plan).not.toHaveProperty("binding");
+    expect(JSON.stringify(plan)).not.toContain("private-key");
+  });
+
+  test("execution credential binding contains opaque metadata only", () => {
+    const binding = {
+      authSource: "api_key",
+      providerKind: "legacy_alias",
+      slotRef: "media-slot:opaque",
+      identityDigest: "sha256:stable-non-secret-digest",
+    } satisfies MediaCredentialBinding;
+
+    expect(Object.keys(binding).sort()).toEqual([
+      "authSource",
+      "identityDigest",
+      "providerKind",
+      "slotRef",
+    ]);
+    expect(binding).not.toHaveProperty("provider");
+    expect(binding).not.toHaveProperty("baseUrl");
+    expect(binding).not.toHaveProperty("token");
   });
 });
