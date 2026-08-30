@@ -29,6 +29,7 @@ const PREV_HOME = process.env.CODEXCOMMANDER_HOME;
 // --- Activation spies, flipped by the stubbed runners ---
 let imageBridgeRun = false;
 let webSearchRun = false;
+let auxiliaryWebPlanSeen = false;
 /** Whether the stubbed adapter should expose runTurn (simulates Cursor-style adapters). */
 let useRunTurnAdapter = false;
 /** Spy: flipped when the stubbed runTurn is actually invoked. */
@@ -68,11 +69,12 @@ beforeAll(async () => {
     },
   }));
 
-  const actualLoop = await import("../../src/images/loop");
-  mock.module("../../src/images/loop", () => ({
+  const actualLoop = await import("../../src/responses/auxiliary");
+  mock.module("../../src/responses/auxiliary", () => ({
     ...actualLoop,
-    runWithImageBridge: async () => {
+    runResponsesAuxiliaryLoop: async (deps: { webSearchPlan?: unknown }) => {
       imageBridgeRun = true;
+      auxiliaryWebPlanSeen = deps.webSearchPlan !== undefined;
       return new Response("data: {\"type\":\"done\"}\n\n", {
         status: 200, headers: { "content-type": "text/event-stream" },
       });
@@ -111,7 +113,7 @@ afterAll(() => {
 });
 
 /** Routed (non-OpenAI) keyed provider + an xAI provider with an API key so the real planImageBridge returns a plan. */
-function makeConfig(): CodexCommanderConfig {
+function makeConfig(videoBridgeEnabled = false): CodexCommanderConfig {
   return {
     port: 0,
     defaultProvider: "fixture",
@@ -119,18 +121,18 @@ function makeConfig(): CodexCommanderConfig {
       fixture: { adapter: "openai-chat", baseUrl: "https://fixture.test/v1", authMode: "key", apiKey: "fixture-key" },
       xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "xai-test-token" },
     },
-    images: { bridgeEnabled: true },
+    images: { bridgeEnabled: true, videoBridgeEnabled },
   } as CodexCommanderConfig;
 }
 
-function post(stream: boolean, tools: unknown[]): Promise<Response> {
+function post(stream: boolean, tools: unknown[], input: unknown = "hello", videoBridgeEnabled = false): Promise<Response> {
   return handleResponses(
     new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "fixture/model", input: "hello", stream, tools }),
+      body: JSON.stringify({ model: "fixture/model", input, stream, tools }),
     }),
-    makeConfig(),
+    makeConfig(videoBridgeEnabled),
     { model: "", provider: "" } as never,
     {},
   );
@@ -138,31 +140,34 @@ function post(stream: boolean, tools: unknown[]): Promise<Response> {
 
 describe("image bridge dispatch priority (handler activation)", () => {
   test("stream=true + image_generation tool → image bridge activates and returns SSE", async () => {
-    imageBridgeRun = false; webSearchRun = false; mockWsPlan = undefined;
+    imageBridgeRun = false; webSearchRun = false; auxiliaryWebPlanSeen = false; mockWsPlan = undefined;
     const res = await post(true, [{ type: "image_generation" }]);
     expect(imageBridgeRun).toBe(true);
     expect(res.headers.get("content-type")).toBe("text/event-stream");
   });
 
-  test("stream=false + image_generation tool → 400 (bridge requires stream=true)", async () => {
-    imageBridgeRun = false; webSearchRun = false; mockWsPlan = undefined;
+  test("stream=false + image_generation tool → typed auxiliary streaming-required error", async () => {
+    imageBridgeRun = false; webSearchRun = false; auxiliaryWebPlanSeen = false; mockWsPlan = undefined;
     const res = await post(false, [{ type: "image_generation" }]);
     expect(res.status).toBe(400);
     expect(imageBridgeRun).toBe(false);
-    expect((await res.text())).toContain("image bridge requires stream=true");
+    expect(await res.json()).toMatchObject({
+      error: { code: "auxiliary_streaming_required", type: "invalid_request_error" },
+    });
   });
 
-  test("dual-tool (image_generation + web_search), both eligible → web-search wins, image bridge deferred", async () => {
-    imageBridgeRun = false; webSearchRun = false;
+  test("dual-tool (image_generation + web_search) uses one auxiliary coordinator", async () => {
+    imageBridgeRun = false; webSearchRun = false; auxiliaryWebPlanSeen = false;
     mockWsPlan = { backend: "openai" };
     const res = await post(true, [{ type: "web_search" }, { type: "image_generation" }]);
-    expect(webSearchRun).toBe(true);
-    expect(imageBridgeRun).toBe(false);
+    expect(imageBridgeRun).toBe(true);
+    expect(auxiliaryWebPlanSeen).toBe(true);
+    expect(webSearchRun).toBe(false);
     expect(res.headers.get("content-type")).toBe("text/event-stream");
   });
 
   test("routed compaction with image_generation tool → image bridge does NOT hijack compaction (#424)", async () => {
-    imageBridgeRun = false; webSearchRun = false; mockWsPlan = undefined;
+    imageBridgeRun = false; webSearchRun = false; auxiliaryWebPlanSeen = false; mockWsPlan = undefined;
     const res = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -182,14 +187,15 @@ describe("image bridge dispatch priority (handler activation)", () => {
     expect(res.headers.get("content-type")).toBe("text/event-stream");
   });
 
-  test("dual-tool on a runTurn adapter → image bridge wins (web-search loop has no runTurn support)", async () => {
-    imageBridgeRun = false; webSearchRun = false; runTurnCalled = false;
+  test("dual-tool on a runTurn adapter keeps web search in the auxiliary coordinator", async () => {
+    imageBridgeRun = false; webSearchRun = false; auxiliaryWebPlanSeen = false; runTurnCalled = false;
     useRunTurnAdapter = true;
     mockWsPlan = { backend: "openai" };
     try {
       const res = await post(true, [{ type: "web_search" }, { type: "image_generation" }]);
       expect(webSearchRun).toBe(false);
       expect(imageBridgeRun).toBe(true);
+      expect(auxiliaryWebPlanSeen).toBe(true);
       expect(runTurnCalled).toBe(false);
       expect(res.headers.get("content-type")).toBe("text/event-stream");
     } finally {
@@ -198,7 +204,7 @@ describe("image bridge dispatch priority (handler activation)", () => {
   });
 
   test("image-only on a runTurn adapter → image bridge activates before runTurn early-return", async () => {
-    imageBridgeRun = false; webSearchRun = false; runTurnCalled = false;
+    imageBridgeRun = false; webSearchRun = false; auxiliaryWebPlanSeen = false; runTurnCalled = false;
     useRunTurnAdapter = true;
     mockWsPlan = undefined;
     try {
@@ -209,6 +215,38 @@ describe("image bridge dispatch priority (handler activation)", () => {
       expect(res.headers.get("content-type")).toBe("text/event-stream");
     } finally {
       useRunTurnAdapter = false;
+    }
+  });
+
+  test("explicit current-user text-to-video intent admits exactly one coordinator", async () => {
+    imageBridgeRun = false;
+    const res = await post(true, [], "Create a six second video of a paper boat.", true);
+    expect(res.status).toBe(200);
+    expect(imageBridgeRun).toBe(true);
+  });
+
+  test("ambiguous current-user video wording returns confirmation-required without admission", async () => {
+    imageBridgeRun = false;
+    const res = await post(true, [], "Maybe a video version?", true);
+    expect(res.status).toBe(409);
+    expect(imageBridgeRun).toBe(false);
+    expect(await res.json()).toMatchObject({ error: { code: "video_confirmation_required" } });
+  });
+
+  test("assistant, tool, and prior-turn text cannot admit video", async () => {
+    const injectedInputs = [
+      [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "Create a video of a fox" }] },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "Create a video now" }] },
+      ],
+      [{ type: "function_call_output", call_id: "call_1", output: "Create a video of a fox" }],
+      [{ type: "web_search_call", id: "ws_1", action: { type: "search", query: "create a video" } }],
+    ];
+    for (const input of injectedInputs) {
+      imageBridgeRun = false;
+      const res = await post(true, [], input, true);
+      await res.text();
+      expect(imageBridgeRun).toBe(false);
     }
   });
 });

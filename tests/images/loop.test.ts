@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ProviderAdapter, IncomingMeta } from "../../src/adapters/base";
 import type { AdapterEvent, CodexCommanderParsedRequest } from "../../src/types";
-import type { ImageBridgePlan, ImageCallResult } from "../../src/images/types";
+import type { ImageBridgePlan, ImageCallResult, VideoBridgePlan } from "../../src/images/types";
 import type { ImageBridgeDeps } from "../../src/images/loop";
+import type { AuxiliaryWebSearchPlan } from "../../src/responses/auxiliary";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
 const PREV_HOME = process.env.CODEXCOMMANDER_HOME;
@@ -32,6 +33,34 @@ beforeAll(async () => {
   mock.module("../../src/images/fulfill", () => ({
     fulfillImageCall: async (): Promise<ImageCallResult> => fulfillResult,
   }));
+  const actualWebExecutor = await import("../../src/web-search/executor");
+  mock.module("../../src/web-search/executor", () => ({
+    ...actualWebExecutor,
+    runWebSearch: async () => ({
+      text: "Search result text",
+      sources: [{ url: "https://example.test/result", title: "Example" }],
+    }),
+  }));
+  const actualVideoClient = await import("../../src/images/xai-video-client");
+  mock.module("../../src/images/xai-video-client", () => ({
+    ...actualVideoClient,
+    submitVideoJob: async () => {
+      videoSubmissions += 1;
+      return { requestId: `video_${videoSubmissions}` };
+    },
+  }));
+  const actualVideoFulfill = await import("../../src/images/fulfill-video");
+  mock.module("../../src/images/fulfill-video", () => ({
+    ...actualVideoFulfill,
+    pollVideoWithHeartbeats: async function* () {
+      return { ok: true, videoUrl: "https://example.test/video.mp4" };
+    },
+  }));
+  const actualArtifacts = await import("../../src/images/artifacts");
+  mock.module("../../src/images/artifacts", () => ({
+    ...actualArtifacts,
+    downloadVideoToArtifact: async () => "/test/video.mp4",
+  }));
   ({
     runWithImageBridge: runWithImageBridgeProduction,
     clampImageMaxRounds,
@@ -56,6 +85,7 @@ afterAll(() => { if (PREV_HOME === undefined) delete process.env.CODEXCOMMANDER_
 // --- Mock adapter: yields canned events per iteration from a queue ---
 let streamQueue: AdapterEvent[][] = [];
 let buildRequestCalls = 0;
+let videoSubmissions = 0;
 
 const defaultFulfillResult: ImageCallResult = {
   ok: true, model: "grok-imagine-image-quality", prompt: "a cat",
@@ -64,6 +94,7 @@ const defaultFulfillResult: ImageCallResult = {
 beforeEach(() => {
   fulfillResult = { ...defaultFulfillResult, files: [...defaultFulfillResult.files] };
   buildRequestCalls = 0;
+  videoSubmissions = 0;
   streamQueue = [];
 });
 
@@ -176,6 +207,99 @@ describe("runWithImageBridge", () => {
     expect(sse).toContain("direct answer");
     // Single upstream request — first iteration is already forced-final
     expect(buildRequestCalls).toBe(1);
+  });
+
+  test("image and video keep independent round allowances", async () => {
+    const videoPlan = {
+      provider: {} as never,
+      auth: { baseUrl: "https://api.x.ai", token: "test-token" },
+      model: "grok-imagine-video",
+      toolNames: new Set(["video_gen"]),
+    } as VideoBridgePlan;
+    streamQueue = [
+      [...imageCallEvents],
+      [
+        { type: "tool_call_start", id: "video_1", name: "video_gen" },
+        // Deliberately malformed/missing prompt: proves handler admission without a live POST.
+        { type: "tool_call_delta", arguments: "{}" },
+        { type: "tool_call_end" },
+        { type: "done" },
+      ],
+      [{ type: "text_delta", text: "handled both media requests" }, { type: "done" }],
+    ];
+    const response = await runWithImageBridge({
+      parsed: makeParsed(),
+      adapter: mockAdapter,
+      plan,
+      videoPlan,
+      maxRounds: 1,
+      imageMaxRounds: 1,
+      videoMaxRounds: 1,
+    });
+    const sse = await response.text();
+    expect(sse).toContain("handled both media requests");
+    expect(buildRequestCalls).toBe(3);
+  });
+
+  test("web search and image execute in one coordinator with independent allowances", async () => {
+    const webSearchPlan = {
+      backend: "openai",
+      forwardProvider: {} as never,
+      hostedTool: { type: "web_search" },
+      selectedForwardHeaders: new Headers(),
+      settings: { model: "search-model", reasoning: "low", timeoutMs: 1_000, describeImages: false },
+      maxSearches: 1,
+    } as AuxiliaryWebSearchPlan;
+    streamQueue = [
+      [
+        { type: "tool_call_start", id: "search_1", name: "web_search" },
+        { type: "tool_call_delta", arguments: '{"query":"current docs"}' },
+        { type: "tool_call_end" },
+        { type: "done" },
+      ],
+      [...imageCallEvents],
+      [{ type: "text_delta", text: "used search and image" }, { type: "done" }],
+    ];
+    const response = await runWithImageBridge({
+      parsed: makeParsed(),
+      adapter: mockAdapter,
+      plan,
+      webSearchPlan,
+      imageMaxRounds: 1,
+    });
+    const sse = await response.text();
+    expect(sse).toContain("web_search_call");
+    expect(sse).toContain("used search and image");
+    expect(buildRequestCalls).toBe(3);
+  });
+
+  test("accepts at most one video submission per turn", async () => {
+    const videoPlan = {
+      provider: {} as never,
+      auth: { baseUrl: "https://api.x.ai", token: "test-token" },
+      model: "grok-imagine-video",
+      toolNames: new Set(["video_gen"]),
+    } as VideoBridgePlan;
+    streamQueue = [
+      [
+        { type: "tool_call_start", id: "video_1", name: "video_gen" },
+        { type: "tool_call_delta", arguments: '{"prompt":"paper boat"}' },
+        { type: "tool_call_end" },
+        { type: "tool_call_start", id: "video_2", name: "video_gen" },
+        { type: "tool_call_delta", arguments: '{"prompt":"second paid video"}' },
+        { type: "tool_call_end" },
+        { type: "done" },
+      ],
+      [{ type: "text_delta", text: "one video admitted" }, { type: "done" }],
+    ];
+    const response = await runWithImageBridge({
+      parsed: makeParsed(),
+      adapter: mockAdapter,
+      videoPlan,
+      videoMaxRounds: 2,
+    });
+    expect(await response.text()).toContain("one video admitted");
+    expect(videoSubmissions).toBe(1);
   });
 
   test("retryOn429 replays on the same key before on429 rotation", async () => {
