@@ -421,6 +421,17 @@ export async function getValidAccessTokenSnapshot(provider: string): Promise<OAu
   return resolveAccessSnapshotForAccount(provider, set.activeAccountId);
 }
 
+/**
+ * Resolve one exact stored account without consulting or changing the provider's active account.
+ * Media credential leases use this to keep a long-running job on its originally bound identity.
+ */
+export async function getValidAccessTokenSnapshotForAccount(
+  provider: string,
+  accountId: string,
+): Promise<OAuthAccessSnapshot> {
+  return resolveAccessSnapshotForAccount(provider, accountId);
+}
+
 /** Providers whose upstream-401 replay path may force a snapshot refresh. */
 const FORCE_REFRESH_PROVIDERS = new Set(["xai", "github-copilot", "kiro", "kimi"]);
 

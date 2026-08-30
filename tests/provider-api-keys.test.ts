@@ -46,6 +46,56 @@ afterEach(() => {
 });
 
 describe("provider API key pool", () => {
+  test("xAI key management remains available while chat auth stays OAuth", async () => {
+    const cfg = baseConfig();
+    cfg.defaultProvider = "xai";
+    cfg.providers = {
+      xai: {
+        adapter: "openai-chat",
+        baseUrl: "https://api.x.ai/v1",
+        authMode: "oauth",
+      },
+    };
+    saveConfig(cfg);
+    const server = startServer(0);
+    try {
+      const add = await fetch(new URL("/api/providers/keys", server.url), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "xai", key: "xai-media-key-000111222333" }),
+      });
+      expect(add.status).toBe(201);
+      const first = await add.json() as { id: string };
+      const addSecond = await fetch(new URL("/api/providers/keys", server.url), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "xai", key: "xai-media-key-444555666777" }),
+      });
+      expect(addSecond.status).toBe(201);
+      const listed = await fetch(new URL("/api/providers/keys?name=xai", server.url)).then(response => response.json()) as {
+        activeId: string | null;
+        keys: Array<{ id: string; active: boolean }>;
+      };
+      expect(listed.activeId).toBeTruthy();
+      expect(listed.keys).toHaveLength(2);
+      expect(loadDiskConfig().providers.xai!.authMode).toBe("oauth");
+
+      const select = await fetch(new URL("/api/providers/keys/active", server.url), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "xai", id: first.id }),
+      });
+      expect(select.status).toBe(200);
+      expect(loadDiskConfig().providers.xai!.authMode).toBe("oauth");
+
+      const remove = await fetch(new URL(`/api/providers/keys?name=xai&id=${first.id}`, server.url), { method: "DELETE" });
+      expect(remove.status).toBe(200);
+      expect(loadDiskConfig().providers.xai!.authMode).toBe("oauth");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("GET does not salvage a legacy bare apiKey", async () => {
     const legacy = baseConfig();
     delete legacy.providers["opencode-go"]!.apiKeyPool;
@@ -125,3 +175,7 @@ describe("provider API key pool", () => {
     }
   });
 });
+
+function loadDiskConfig(): CodexCommanderConfig {
+  return JSON.parse(readFileSync(join(testDir, "config.json"), "utf-8")) as CodexCommanderConfig;
+}

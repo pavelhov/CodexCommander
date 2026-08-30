@@ -38,6 +38,18 @@ export function isKeyAuthProvider(provider: CodexCommanderProviderConfig): boole
   return provider.authMode !== "oauth" && provider.authMode !== "forward";
 }
 
+/**
+ * Whether the management plane may maintain a dormant key pool for this provider row.
+ * Canonical xAI is dual-source for media: its chat route may remain OAuth while media binds
+ * an explicitly selected API-key slot. Managing that pool must never mutate chat authMode.
+ */
+export function supportsManagedProviderApiKeys(
+  name: string,
+  provider: CodexCommanderProviderConfig,
+): boolean {
+  return isKeyAuthProvider(provider) || (name === "xai" && provider.authMode === "oauth");
+}
+
 /** Trim and reject blank / CRLF-bearing secrets. Shared by pool writes and OAuth upsert. */
 export function sanitizeApiKeyValue(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -72,7 +84,7 @@ export function currentProviderApiKeyPool(
 
 export function listProviderApiKeys(config: CodexCommanderConfig, name: string): { activeId: string | null; keys: ProviderApiKeyInfo[] } {
   const provider = config.providers[name];
-  if (!provider || !isKeyAuthProvider(provider)) return { activeId: null, keys: [] };
+  if (!provider || !supportsManagedProviderApiKeys(name, provider)) return { activeId: null, keys: [] };
   const pool = currentProviderApiKeyPool(provider);
   if (!pool) return { activeId: null, keys: [] };
   const activeId = pool.find(entry => entry.key === provider.apiKey)!.id;
@@ -91,7 +103,7 @@ export function listProviderApiKeys(config: CodexCommanderConfig, name: string):
 /** Add (or upsert) a key and make it ACTIVE. Persists config. */
 export function addProviderApiKey(config: CodexCommanderConfig, name: string, key: string, label?: string): { id: string } | { error: string } {
   const provider = config.providers[name];
-  if (!provider || !isKeyAuthProvider(provider)) return { error: "provider does not use API-key auth" };
+  if (!provider || !supportsManagedProviderApiKeys(name, provider)) return { error: "provider does not use API-key auth" };
   if (typeof key !== "string" || !key.trim()) return { error: "key is required" };
   const trimmed = sanitizeApiKeyValue(key);
   if (!trimmed) return { error: "key must not include line breaks" };
@@ -114,7 +126,7 @@ export function addProviderApiKey(config: CodexCommanderConfig, name: string, ke
 /** Switch the ACTIVE key (mirrors into `provider.apiKey`). Persists config. */
 export function setActiveProviderApiKey(config: CodexCommanderConfig, name: string, id: string): boolean {
   const provider = config.providers[name];
-  if (!provider || !isKeyAuthProvider(provider)) return false;
+  if (!provider || !supportsManagedProviderApiKeys(name, provider)) return false;
   const pool = currentProviderApiKeyPool(provider);
   if (!pool) return false;
   const entry = pool.find(e => e.id === id);
@@ -127,7 +139,7 @@ export function setActiveProviderApiKey(config: CodexCommanderConfig, name: stri
 /** Rename a key slot without changing its id, secret, or active routing state. */
 export function setProviderApiKeyLabel(config: CodexCommanderConfig, name: string, id: string, label: string | undefined): boolean {
   const provider = config.providers[name];
-  if (!provider || !isKeyAuthProvider(provider)) return false;
+  if (!provider || !supportsManagedProviderApiKeys(name, provider)) return false;
   const pool = currentProviderApiKeyPool(provider);
   if (!pool) return false;
   const entry = pool.find(e => e.id === id);
@@ -142,7 +154,7 @@ export function setProviderApiKeyLabel(config: CodexCommanderConfig, name: strin
 /** Remove one key; removing the active one promotes the first remaining. Persists config. */
 export function removeProviderApiKey(config: CodexCommanderConfig, name: string, id: string): boolean {
   const provider = config.providers[name];
-  if (!provider || !isKeyAuthProvider(provider)) return false;
+  if (!provider || !supportsManagedProviderApiKeys(name, provider)) return false;
   const pool = currentProviderApiKeyPool(provider);
   if (!pool) return false;
   const entry = pool.find(e => e.id === id);
