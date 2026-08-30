@@ -1,13 +1,18 @@
-import { readdirSync, readFileSync, statSync, unlinkSync, existsSync } from "node:fs";
-import { mkdir, writeFile, open, unlink } from "node:fs/promises";
+import { readdirSync, readFileSync, statSync, lstatSync, unlinkSync, existsSync } from "node:fs";
+import { mkdir, writeFile, open, rename, unlink, type FileHandle } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
 import { getConfigDir } from "../config";
 import { assessUrlDestination, resolvePublicAddresses } from "../lib/destination-policy";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
-import { pinnedHttpGet, type PinnedAddress } from "../lib/pinned-http";
 import { ARTIFACT_HTTP_PREFIX } from "../identity";
+import {
+  pinnedHttpsGet,
+  type PinnedAddress,
+  type PinnedDownloadFn,
+} from "./pinned-https-get";
 
-export type { PinnedAddress } from "../lib/pinned-http";
+export { pinnedHttpsGet } from "./pinned-https-get";
+export type { PinnedAddress, PinnedDownloadFn } from "./pinned-https-get";
 
 const MAX_DECODED_BYTES_PER_IMAGE = 50 * 1024 * 1024;
 const MAX_DECODED_BYTES_PER_RESPONSE = 100 * 1024 * 1024;
@@ -31,7 +36,7 @@ export const DEFAULT_ARTIFACT_KEEP_COUNT = 200;
 /** Opaque artifact HTTP path prefix (data-plane, API-auth gated). */
 export { ARTIFACT_HTTP_PREFIX };
 
-const ARTIFACT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(png|jpe?g|webp|gif)$/i;
+const ARTIFACT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(png|jpe?g|webp|gif|mp4|webm)$/i;
 
 // Strict alphabet check: Buffer.from(..., "base64") silently ignores invalid
 // characters, so malformed payloads would otherwise decode to garbage bytes.
@@ -40,13 +45,6 @@ const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
 export interface ImageBudget {
   spent: number;
 }
-
-/** Test seam / custom transport: must connect to `pinned`, not re-resolve `url`'s hostname. */
-export type PinnedDownloadFn = (
-  url: string,
-  pinned: PinnedAddress,
-  signal?: AbortSignal,
-) => Promise<Response>;
 
 export function createImageBudget(): ImageBudget {
   return { spent: 0 };
@@ -88,7 +86,8 @@ export function resolveArtifactPath(id: string): string | null {
   if (candidate !== dir && !candidate.startsWith(dir + sep)) return null;
   if (!existsSync(candidate)) return null;
   try {
-    if (!statSync(candidate).isFile()) return null;
+    const stats = lstatSync(candidate);
+    if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1) return null;
   } catch {
     return null;
   }
@@ -105,7 +104,9 @@ export function readArtifactBytes(id: string): { bytes: Buffer; contentType: str
       : ext === "jpg" || ext === "jpeg" ? "image/jpeg"
         : ext === "webp" ? "image/webp"
           : ext === "gif" ? "image/gif"
-            : "application/octet-stream";
+            : ext === "mp4" ? "video/mp4"
+              : ext === "webm" ? "video/webm"
+                : "application/octet-stream";
   return { bytes, contentType };
 }
 
@@ -144,8 +145,8 @@ export function pruneOldArtifacts(dir: string, maxFiles: number): void {
   let entries: string[];
   try {
     entries = readdirSync(dir);
-  } catch (e) {
-    console.warn(`[images] prune: could not read ${dir}:`, e instanceof Error ? e.message : e);
+  } catch {
+    console.warn("[images] prune: artifact directory could not be read");
     return;
   }
   if (entries.length <= maxFiles) return;
@@ -156,8 +157,8 @@ export function pruneOldArtifacts(dir: string, maxFiles: number): void {
       const st = statSync(join(dir, name));
       return { name, mtime: st.mtimeMs };
     });
-  } catch (e) {
-    console.warn(`[images] prune: could not stat files in ${dir}:`, e instanceof Error ? e.message : e);
+  } catch {
+    console.warn("[images] prune: artifact metadata could not be read");
     return;
   }
 
@@ -167,8 +168,8 @@ export function pruneOldArtifacts(dir: string, maxFiles: number): void {
   for (const { name } of toDelete) {
     try {
       unlinkSync(join(dir, name));
-    } catch (e) {
-      console.warn(`[images] prune: could not delete ${name}:`, e instanceof Error ? e.message : e);
+    } catch {
+      console.warn("[images] prune: an artifact could not be deleted");
     }
   }
 }
@@ -265,35 +266,24 @@ export async function materializeInlineImage(
  * Returns a streaming Response so callers can enforce byte caps while reading;
  * the transport also destroys the request if `maxBytes` is exceeded mid-stream.
  */
-export function pinnedHttpsGet(
-  url: string,
-  pinned: PinnedAddress,
-  signal?: AbortSignal,
-  options?: {
-    maxBytes?: number;
-    idleTimeoutMs?: number;
-    rejectUnauthorized?: boolean;
-  },
-): Promise<Response> {
-  const parsed = new URL(url);
-  if (parsed.protocol !== "https:") {
-    throw new Error(`image URL must use HTTPS, got ${parsed.protocol}`);
-  }
-  const maxBytes = options?.maxBytes ?? MAX_DOWNLOAD_BYTES;
-  const idleTimeoutMs = options?.idleTimeoutMs ?? DOWNLOAD_IDLE_TIMEOUT_MS;
-  return pinnedHttpGet(url, pinned, signal, {
-    maxBytes,
-    idleTimeoutMs,
-    rejectUnauthorized: options?.rejectUnauthorized,
-    context: "image download",
-  }).then(response => {
-    if (!response.ok) throw new Error("image download failed: " + response.status);
-    return response;
-  });
-}
-
 function pickPinnedAddress(addresses: PinnedAddress[]): PinnedAddress {
   return addresses.find(a => a.family === 4) ?? addresses[0]!;
+}
+
+/** Delete one opaque artifact after its durable inspection record releases the pin. */
+export async function removeArtifactById(id: string): Promise<boolean> {
+  if (!ARTIFACT_ID_RE.test(id)) return false;
+  const dir = resolve(getArtifactsDir());
+  const candidate = resolve(dir, id);
+  if (!candidate.startsWith(dir + sep)) return false;
+  try {
+    const stats = lstatSync(candidate);
+    if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1) return false;
+    await unlink(candidate);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function downloadImageToArtifact(
@@ -403,6 +393,86 @@ export function guessVideoExtFromMagic(bytes: Uint8Array): string {
   throw new Error("unrecognized video format — magic bytes do not match MP4 or WebM");
 }
 
+async function syncArtifactDirectory(dir: string): Promise<void> {
+  // POSIX needs a directory fsync for rename durability. Windows does not expose
+  // a portable directory handle through node:fs; its rename is committed by the
+  // filesystem before the promise resolves.
+  if (process.platform === "win32") return;
+  const handle = await open(dir, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+function artifactFsErrorCode(error: unknown): string | undefined {
+  return error && typeof error === "object" && "code" in error
+    ? String((error as { code?: unknown }).code)
+    : undefined;
+}
+
+async function validateVideoTemp(path: string, expectedExt: string): Promise<void> {
+  const handle = await open(path, "r");
+  try {
+    const header = Buffer.alloc(12);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (bytesRead < header.length || guessVideoExtFromMagic(header) !== expectedExt) {
+      throw new Error("video artifact validation failed before publication");
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Publish a fully written video under its opaque final id in one rename.
+ * The temp and final share a directory, so the rename cannot cross filesystems.
+ * The exclusive temp token serializes same-token writers; an existing final id
+ * is detected and retried, so the rename never replaces an artifact we own.
+ */
+async function publishVideoArtifact(
+  dir: string,
+  ext: string,
+  write: (handle: FileHandle) => Promise<void>,
+): Promise<string> {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const token = crypto.randomUUID();
+    const finalPath = join(dir, `vid-${timestampPrefix()}-${token}.${ext}`);
+    const tempPath = join(dir, `.ccx-video-${token}.tmp`);
+    let handle: FileHandle | undefined;
+    let published = false;
+    try {
+      handle = await open(tempPath, "wx", 0o600);
+      await write(handle);
+      await handle.sync();
+      await handle.close();
+      handle = undefined;
+      await validateVideoTemp(tempPath, ext);
+      if (existsSync(finalPath)) {
+        await unlink(tempPath);
+        continue;
+      }
+      await rename(tempPath, finalPath);
+      published = true;
+      await syncArtifactDirectory(dir);
+      return finalPath;
+    } catch (error) {
+      if (handle) {
+        try { await handle.close(); } catch { /* cleanup continues */ }
+      }
+      try { await unlink(tempPath); } catch { /* absent or already renamed */ }
+      if (published) {
+        try { await unlink(finalPath); } catch { /* cleanup remains best effort */ }
+        try { await syncArtifactDirectory(dir); } catch { /* preserve original failure */ }
+      }
+      if (artifactFsErrorCode(error) === "EEXIST") continue;
+      throw error;
+    }
+  }
+  throw new Error("video artifact could not reserve a unique publication id");
+}
+
 /**
  * Download a video from a URL to an artifact file with a 200 MiB hard cap, streaming the body
  * to disk to avoid buffering. SSRF protection reuses the same destination policy + pinned HTTPS
@@ -427,11 +497,11 @@ export async function downloadVideoToArtifact(
     if (buf.byteLength > MAX_VIDEO_DOWNLOAD_BYTES) throw new Error("video data URI exceeds size cap");
     const ext = guessVideoExtFromMagic(buf);
     const dir = getArtifactsDir();
+    recordOwnedConfigPath(getConfigDir(), dir);
     await mkdir(dir, { recursive: true, mode: 0o700 });
-    const name = `vid-${timestampPrefix()}-${crypto.randomUUID()}.${ext}`;
-    const dest = join(dir, name);
-    await writeFile(dest, buf, { mode: 0o600 });
-    return dest;
+    return publishVideoArtifact(dir, ext, async handle => {
+      await handle.writeFile(buf);
+    });
   }
 
   // SSRF protection: same validation as downloadImageToArtifact
@@ -453,15 +523,14 @@ export async function downloadVideoToArtifact(
   }
 
   const dir = getArtifactsDir();
+  recordOwnedConfigPath(getConfigDir(), dir);
   await mkdir(dir, { recursive: true, mode: 0o700 });
 
   const reader = resp.body?.getReader();
   if (!reader) throw new Error("video download returned no body");
 
-  // Buffer at least 12 bytes for magic-byte sniffing before opening the file.
+  // Buffer at least 12 bytes for magic-byte sniffing before opening the temp file.
   // A single read() can return fewer bytes; accumulate until we have enough.
-  let dest: string | undefined;
-  let fh: { close(): Promise<void>; writeFile(data: Uint8Array): Promise<void> } | undefined;
   try {
     const sniffChunks: Uint8Array[] = [];
     let sniffLen = 0;
@@ -477,41 +546,35 @@ export async function downloadVideoToArtifact(
     }
     const sniffBuf = Buffer.concat(sniffChunks);
     const ext = guessVideoExtFromMagic(new Uint8Array(sniffBuf));
-    const name = `vid-${timestampPrefix()}-${crypto.randomUUID()}.${ext}`;
-    dest = join(dir, name);
-    fh = await open(dest, "w", 0o600);
-    // Write all buffered chunks and set up accounting
-    let totalBytes = sniffBuf.byteLength;
-    if (budget && !chargeVideoBudget(budget, totalBytes)) {
-      throw new Error("video download exceeds per-turn budget");
-    }
-    if (totalBytes > MAX_VIDEO_DOWNLOAD_BYTES) {
-      throw new Error("video download exceeds size cap");
-    }
-    await fh.writeFile(new Uint8Array(sniffBuf));
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      totalBytes += value.byteLength;
-      if (budget && !chargeVideoBudget(budget, value.byteLength)) {
+    const published = await publishVideoArtifact(dir, ext, async handle => {
+      // Write all buffered chunks and set up accounting.
+      let totalBytes = sniffBuf.byteLength;
+      if (budget && !chargeVideoBudget(budget, totalBytes)) {
         throw new Error("video download exceeds per-turn budget");
       }
       if (totalBytes > MAX_VIDEO_DOWNLOAD_BYTES) {
         throw new Error("video download exceeds size cap");
       }
-      await fh.writeFile(value);
-    }
-    await fh.close();
+      await handle.write(new Uint8Array(sniffBuf));
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        totalBytes += value.byteLength;
+        if (budget && !chargeVideoBudget(budget, value.byteLength)) {
+          throw new Error("video download exceeds per-turn budget");
+        }
+        if (totalBytes > MAX_VIDEO_DOWNLOAD_BYTES) {
+          throw new Error("video download exceeds size cap");
+        }
+        await handle.write(value);
+      }
+    });
     try { await reader.cancel(); } catch { /* ignore */ }
     reader.releaseLock();
-    return dest;
+    return published;
   } catch (err) {
     try { await reader.cancel(); } catch { /* ignore */ }
     reader.releaseLock();
-    if (fh) {
-      try { await fh.close(); } catch { /* ignore */ }
-    }
-    if (dest) await unlink(dest).catch(() => {});
     throw err;
   }
 }

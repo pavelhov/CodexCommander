@@ -189,6 +189,16 @@ const helpEntries: Record<string, HelpEntry> = {
     summary: "Inspect and safely modify validated CodexCommander configuration.",
     details: ["Secrets are masked by show/get. Import requires --yes and validates before writing."],
   },
+  media: {
+    usage: "ccx media [status [--json]|probe|acknowledge <opaque-operation-id> --revision <n>]",
+    summary: "Inspect the attested experimental media runtime or request a human-confirmed capability/recovery action.",
+    details: [
+      "The capability probe is fixed to one image and one one-second 1080p video.",
+      "API-key fallback is disabled; billing attribution remains unknown.",
+      "Probe and acknowledgement require an interactive terminal and fresh runtime attestation.",
+      "This feasibility probe is not packaged release verification.",
+    ],
+  },
   claude: {
     usage: "ccx claude [claude args...]",
     summary: "Launch Claude Code wired to the proxy (env injection + gateway model discovery).",
@@ -310,6 +320,7 @@ Usage:
   ccx grok <sub>              Grok Build model selection and apply
   ccx system <sub>            Runtime settings, startup, sync, and diagnostics
   ccx config <sub>            Validated configuration show/get/set/import/export
+  ccx media <sub>             Attested experimental media status/probe/recovery boundary
   ccx claude [args...]        Launch Claude Code wired to the proxy (model discovery on)
   ccx claude desktop [sub]    Manage and apply Claude Desktop's four-family profile
   ccx opencode [args...]      Launch opencode wired to the proxy (runtime provider config)
