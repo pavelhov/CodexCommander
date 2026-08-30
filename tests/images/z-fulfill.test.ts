@@ -55,9 +55,13 @@ function touchArtifact(name: string): string {
 }
 
 const plan = {
-  provider: {} as never,
-  auth: { baseUrl: "https://api.x.ai", token: "test-token" },
-  model: "grok-imagine-image-quality",
+  auth: {
+    authSource: "api_key",
+    providerKind: "canonical",
+    slotRef: "media-slot:test",
+    identityDigest: "sha256:test",
+  },
+  model: "grok-imagine-image-2.0",
   toolNames: new Set(["image_gen"]),
 } as ImageBridgePlan;
 
@@ -198,13 +202,15 @@ describe("fulfillImageCall", () => {
     expect(xaiCalls[0]!.n).toBe(4);
   });
 
-  test("forwards imageUrl from image_url arg", async () => {
+  test("image_url edit input is rejected before xAI dispatch", async () => {
     reset();
-    await fulfillImageCall(
+    const result = await fulfillImageCall(
       { id: "c1", name: "image_gen", arguments: JSON.stringify({ prompt: "x", image_url: "https://example.com/i.png" }) },
       plan, { spent: 0 },
     );
-    expect(xaiCalls[0]!.imageUrl).toBe("https://example.com/i.png");
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("grok_image_edits_unsupported");
+    expect(xaiCalls).toHaveLength(0);
   });
 
   test("plan.defaultSize and defaultQuality fill omitted args", async () => {

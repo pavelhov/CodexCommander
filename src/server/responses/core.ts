@@ -104,7 +104,10 @@ import {
   type TranslatorBudget,
 } from "../../lib/translator-budget";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
-import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import {
+  isCanonicalOpenAiForwardProvider,
+  supportsNativeResponsesCompactEndpoint,
+} from "../../providers/openai-tiers";
 import { slugsEquivalent } from "../../providers/slug-codec";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
@@ -624,8 +627,13 @@ export function clientCancelledResponse(): Response {
   return formatErrorResponse(499, "client_cancelled", "Client cancelled request");
 }
 
-function auxiliaryPolicyErrorResponse(status: number, code: string, message: string): Response {
-  return new Response(JSON.stringify({ error: { message, type: "invalid_request_error", code } }), {
+function auxiliaryPolicyErrorResponse(
+  status: number,
+  code: string,
+  message: string,
+  type = "invalid_request_error",
+): Response {
+  return new Response(JSON.stringify({ error: { message, type, code } }), {
     status,
     headers: { "Content-Type": "application/json" },
   });
@@ -2445,6 +2453,14 @@ async function handleResponsesInner(
     ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar)
     : undefined;
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
+  if (!routedCompaction && config.images?.bridgeEnabled === true && parsed._imageGeneration && !imgPlan) {
+    return auxiliaryPolicyErrorResponse(
+      401,
+      "needs_auth",
+      "The selected Grok image credential needs authentication",
+      "authentication_error",
+    );
+  }
   // Standing video enablement is not spend consent. Derive this once from the untouched current
   // user input, before any auxiliary output can enter the transcript.
   const videoIntent = deriveCurrentUserVideoIntent(parsed._rawBody);
@@ -2504,6 +2520,7 @@ async function handleResponsesInner(
     const auxiliaryResponse = await runResponsesAuxiliaryLoop({
       parsed, adapter,
       incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget },
+      nativeResponses: supportsNativeResponsesCompactEndpoint(route.providerName, route.provider),
       toolParameterSchemas: toolBridgeMaps.toolParameterSchemas,
       ...(imgPlan ? { plan: imgPlan } : {}),
       ...(vidPlan ? { videoPlan: vidPlan } : {}),

@@ -98,8 +98,8 @@ export interface MediaCredentialBinding {
 }
 
 export interface ImageBridgePlan {
-  provider: CodexCommanderProviderConfig;
-  auth: { baseUrl: string; token: string };
+  /** Private request-bound credential selector; the bearer is resolved only at dispatch. */
+  auth: MediaCredentialBinding;
   model: string;
   toolNames: Set<string>;
   /** Per-call xAI deadline (ms). Defaults inside callXaiImages when omitted. */

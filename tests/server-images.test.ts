@@ -132,6 +132,137 @@ function keyedProvider(_baseUrl = "") {
   return { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", apiKey: "sk-platform-key" };
 }
 
+function grokImagesConfig(apiKey = "xai-bound-key"): CodexCommanderConfig {
+  return {
+    ...forwardConfig(),
+    providers: {
+      ...forwardConfig().providers,
+      xai: {
+        adapter: "openai-chat",
+        // The media transport must ignore this configurable URL and pin api.x.ai.
+        baseUrl: "https://attacker.invalid/redirect-attempt",
+        authMode: "key",
+        apiKey,
+      },
+    },
+    images: { bridgeEnabled: true, authSource: "api_key", timeoutMs: 5_000 },
+  } as CodexCommanderConfig;
+}
+
+test("Grok opt-in routes direct generations through the bound fixed-origin transport and normalizes output", async () => {
+  const sent: Array<{ url: string; headers: Headers; body: Record<string, unknown> }> = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input.toString();
+    if (url === "https://api.x.ai/v1/images/generations") {
+      sent.push({
+        url,
+        headers: new Headers(init?.headers),
+        body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+      });
+      return Response.json({
+        created: 111,
+        provider: "must-not-leak",
+        data: [{ b64_json: "aW1hZ2U=" }],
+      });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig(grokImagesConfig());
+
+  const server = startServer(0);
+  try {
+    const response = await originalFetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        prompt: "ink fox",
+        model: "caller-model-must-not-win",
+        provider: "caller-provider-must-not-win",
+        base_url: "https://caller.invalid",
+        n: 1,
+        size: "1024x1024",
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      created: expect.any(Number),
+      data: [{ b64_json: "aW1hZ2U=" }],
+    });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.url).toBe("https://api.x.ai/v1/images/generations");
+    expect(sent[0]!.headers.get("authorization")).toBe("Bearer xai-bound-key");
+    expect([...sent[0]!.headers.keys()].sort()).toEqual(["accept", "authorization", "content-type"]);
+    expect(sent[0]!.body).toMatchObject({
+      model: "grok-imagine-image-2.0",
+      prompt: "ink fox",
+      n: 1,
+      aspect_ratio: "1:1",
+    });
+    expect(JSON.stringify(sent[0]!.body)).not.toContain("caller.invalid");
+    expect(JSON.stringify(sent[0]!.body)).not.toContain("caller-provider-must-not-win");
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("Grok opt-in rejects image edits with a stable typed error before any paid call", async () => {
+  let xaiCalls = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (input.toString().startsWith("https://api.x.ai/")) xaiCalls += 1;
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig(grokImagesConfig());
+
+  const server = startServer(0);
+  try {
+    const response = await originalFetch(new URL("/v1/images/edits", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "edit", image: "data:image/png;base64,aGk=" }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { type: "invalid_request_error", code: "grok_image_edits_unsupported" },
+    });
+    expect(xaiCalls).toBe(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("Grok direct generation never falls back from selected API key auth to stored OAuth", async () => {
+  let xaiCalls = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (input.toString().startsWith("https://api.x.ai/")) xaiCalls += 1;
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  const cfg = grokImagesConfig("");
+  saveConfig(cfg);
+  await saveCredential("xai", {
+    access: "oauth-must-not-be-used",
+    refresh: "oauth-refresh-must-not-be-used",
+    expires: Date.now() + 60_000,
+    accountId: "oauth-subject",
+    source: "oauth",
+  });
+
+  const server = startServer(0);
+  try {
+    const response = await originalFetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "must fail closed" }),
+    });
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({
+      error: { code: "needs_auth" },
+    });
+    expect(xaiCalls).toBe(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test("POST /v1/images/generations relays to the ChatGPT forward provider with forwarded auth", async () => {
   const captured: CapturedRequest[] = [];
   const upstream = fakeImagesUpstream(captured);

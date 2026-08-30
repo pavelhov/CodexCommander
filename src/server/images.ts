@@ -39,6 +39,10 @@ import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import { decodeValidatedImageBase64, MAX_ENCODED_BYTES_PER_IMAGE } from "../images/artifacts";
 import type { AdmissionLease } from "../lib/admission";
 import { codexAccountSelectionForTurn } from "./lifecycle";
+import { bindMediaCredential } from "../images/media-credentials";
+import { isMediaTransportError, type MediaTransportError } from "../images/media-errors";
+import { XAI_IMAGE_MODEL } from "../images/plan";
+import { callXaiImages } from "../images/xai-client";
 
 export type ImagesEndpoint = "generations" | "edits";
 
@@ -53,6 +57,95 @@ const IMAGES_UPSTREAM_TIMEOUT_MS = 300_000;
 const IMAGES_RESPONSE_MAX_BYTES = 100 * 1024 * 1024;
 
 const CCA_IMAGE_MODEL = "gemini-3.1-flash-image";
+
+function grokImageError(error: MediaTransportError): Response {
+  const status = error.code === "needs_auth"
+    ? 401
+    : error.code === "entitlement_denied"
+      ? 403
+      : error.code === "rate_limited"
+        ? 429
+        : error.code === "policy_rejected" || error.code === "invalid_request"
+          ? 400
+          : error.code === "ambiguous_submission"
+            ? 409
+            : error.code === "cancelled"
+              ? 499
+              : error.code === "timeout"
+                ? 408
+                : 502;
+  const code = error.code === "ambiguous_submission" ? "submission_outcome_unknown" : error.code;
+  const type = error.code === "needs_auth"
+    ? "authentication_error"
+    : status >= 400 && status < 500
+      ? "invalid_request_error"
+      : "upstream_error";
+  return new Response(JSON.stringify({ error: { message: error.message, type, code } }), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+async function handleGrokImageGeneration(
+  req: Request,
+  config: CodexCommanderConfig,
+  logCtx: RequestLogContext,
+): Promise<Response> {
+  let body: unknown;
+  try {
+    body = await readJsonRequestBody(req);
+  } catch (error) {
+    return decodeRequestErrorResponse(error, "images");
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return formatErrorResponse(400, "invalid_request_error", "image generation request must be a JSON object");
+  }
+  const request = body as Record<string, unknown>;
+  const prompt = typeof request.prompt === "string" ? request.prompt.trim() : "";
+  if (!prompt) return formatErrorResponse(400, "invalid_request_error", "prompt is required and must not be empty");
+  const n = request.n === undefined ? 1 : request.n;
+  if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > 4) {
+    return formatErrorResponse(400, "invalid_request_error", "n must be an integer from 1 to 4");
+  }
+
+  let binding;
+  try {
+    binding = bindMediaCredential(config);
+  } catch (error) {
+    if (isMediaTransportError(error)) return grokImageError(error);
+    return new Response(JSON.stringify({
+      error: {
+        message: "The selected media credential needs authentication.",
+        type: "authentication_error",
+        code: "needs_auth",
+      },
+    }), { status: 401, headers: { "content-type": "application/json" } });
+  }
+  const model = config.images?.bridgeModel ?? XAI_IMAGE_MODEL;
+  logCtx.provider = "xai";
+  logCtx.model = model;
+  const sidecarExit = sidecarEnter("images");
+  try {
+    const result = await callXaiImages({
+      prompt,
+      model,
+      n,
+      ...(typeof request.size === "string" ? { size: request.size } : {}),
+      ...(typeof request.quality === "string" ? { quality: request.quality } : {}),
+    }, binding, req.signal, config.images?.timeoutMs);
+    return Response.json({
+      created: Math.floor(Date.now() / 1000),
+      data: result.images.map(image => image.b64_json
+        ? { b64_json: image.b64_json }
+        : { url: image.url }),
+    });
+  } catch (error) {
+    if (isMediaTransportError(error)) return grokImageError(error);
+    return formatErrorResponse(502, "upstream_error", "Grok image generation failed");
+  } finally {
+    sidecarExit();
+  }
+}
 
 /**
  * Google Gemini finishReasons that indicate a permanent content/safety block.
@@ -329,6 +422,18 @@ export async function handleImages(
   logCtx: RequestLogContext,
   turnAdmissionLease?: AdmissionLease,
 ): Promise<Response> {
+  if (config.images?.bridgeEnabled === true) {
+    if (endpoint === "edits") {
+      return new Response(JSON.stringify({
+        error: {
+          message: "Grok image edits are not supported in this release.",
+          type: "invalid_request_error",
+          code: "grok_image_edits_unsupported",
+        },
+      }), { status: 400, headers: { "content-type": "application/json" } });
+    }
+    return handleGrokImageGeneration(req, config, logCtx);
+  }
   const candidates = selectImagesProvider(config);
   if (candidates.error) {
     return formatErrorResponse(400, "invalid_request_error", candidates.error);

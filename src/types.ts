@@ -922,7 +922,7 @@ export interface CodexCommanderImagesConfig {
    * are normalized to "api_key" when loaded from disk.
    */
   authSource?: MediaAuthSource;
-  /** xAI image model id. Default "grok-imagine-image-quality" (see DEFAULT_MODEL in images/plan.ts). */
+  /** xAI image model id. Default "grok-imagine-image-2.0" (see XAI_IMAGE_MODEL in images/plan.ts). */
   bridgeModel?: string;
   /** Max image-generation loop iterations before forced-final. Default 3; clamped to [0, 10]. */
   maxRounds?: number;

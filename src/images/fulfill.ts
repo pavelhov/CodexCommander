@@ -89,6 +89,16 @@ export async function fulfillImageCall(
   const n = typeof obj.n === "number" ? Math.max(1, Math.min(4, Math.floor(obj.n))) : 1;
   const imageUrl =
     typeof obj.image_url === "string" ? obj.image_url : typeof obj.image === "string" ? obj.image : undefined;
+  if (imageUrl) {
+    return {
+      ok: false,
+      model: plan.model,
+      prompt,
+      files: [],
+      count: 0,
+      error: "grok_image_edits_unsupported",
+    };
+  }
   const size = typeof obj.size === "string" ? obj.size : plan.defaultSize;
   const quality = typeof obj.quality === "string" ? obj.quality : plan.defaultQuality;
 

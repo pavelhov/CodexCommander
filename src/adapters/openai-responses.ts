@@ -15,6 +15,7 @@ import {
   reasoningEffortMapFor,
 } from "../reasoning-effort";
 import type { TranslatorBudget } from "../lib/translator-budget";
+import { buildImageTool, IMAGE_GEN_TOOL_NAME } from "../images/synthetic-tool";
 
 // Headers relayed verbatim from the caller in OAuth-passthrough ("forward") mode.
 // Exported so the web-search sidecar reuses the exact same forwarded-auth set for its ChatGPT call.
@@ -617,6 +618,100 @@ const HOSTED_IMAGE_GENERATION_TOOL = "image_generation";
 // resolves to an inner function of an explicitly declared canonical image_gen namespace.
 const IMAGE_GEN_SELECTOR_PREFIX = `${IMAGE_GEN_NAMESPACE}.`;
 const IMAGE_GEN_WIRE_PREFIX = `${IMAGE_GEN_NAMESPACE}__`;
+
+export type HostedImageBridgeRewriteMode = "synthetic" | "omit";
+
+function responsesImageBridgeTool(): Record<string, unknown> {
+  const { imageGeneration: _marker, ...tool } = buildImageTool();
+  return { type: "function", ...tool };
+}
+
+function rewriteHostedImageToolChoice(
+  value: unknown,
+  mode: HostedImageBridgeRewriteMode,
+): unknown {
+  if (!isPlainObject(value)) return value;
+  if (value.type === HOSTED_IMAGE_GENERATION_TOOL || value.type === IMAGE_GEN_NAMESPACE) {
+    return mode === "synthetic"
+      ? { type: "function", name: IMAGE_GEN_TOOL_NAME }
+      : "auto";
+  }
+  if (value.type !== "allowed_tools" || !Array.isArray(value.tools)) return value;
+  let changed = false;
+  const tools: unknown[] = [];
+  for (const tool of value.tools) {
+    if (!isPlainObject(tool) || (tool.type !== HOSTED_IMAGE_GENERATION_TOOL && tool.type !== IMAGE_GEN_NAMESPACE)) {
+      tools.push(tool);
+      continue;
+    }
+    changed = true;
+    if (mode === "synthetic") tools.push({ type: "function", name: IMAGE_GEN_TOOL_NAME });
+  }
+  if (!changed) return value;
+  return tools.length > 0 ? { ...value, tools } : "auto";
+}
+
+/**
+ * Copy-on-write native Responses rewrite used only after the Grok image execution plan binds.
+ * Opt-out callers never pass through this seam. Hosted declarations are replaced by one ordinary
+ * function so the native model can request the sealed xAI sidecar; a forced-final pass omits only
+ * that hosted capability. Additional-tools carriers and selectors follow the same exact rewrite.
+ */
+export function rewriteHostedImageGenerationForBridge(
+  body: unknown,
+  mode: HostedImageBridgeRewriteMode,
+): unknown {
+  if (!isPlainObject(body)) return body;
+  let inserted = false;
+  const rewriteGroup = (tools: unknown[]): unknown[] => {
+    let changed = false;
+    const next: unknown[] = [];
+    for (const tool of tools) {
+      if (!isPlainObject(tool) || (tool.type !== HOSTED_IMAGE_GENERATION_TOOL && tool.type !== IMAGE_GEN_NAMESPACE)) {
+        next.push(tool);
+        continue;
+      }
+      changed = true;
+      if (mode === "synthetic" && !inserted) {
+        next.push(responsesImageBridgeTool());
+        inserted = true;
+      }
+    }
+    return changed ? next : tools;
+  };
+
+  let changed = false;
+  let tools = body.tools;
+  if (Array.isArray(body.tools)) {
+    tools = rewriteGroup(body.tools);
+    changed ||= tools !== body.tools;
+  }
+  let input = body.input;
+  if (Array.isArray(body.input)) {
+    let nestedChanged = false;
+    const mapped = body.input.map(item => {
+      if (!isPlainObject(item) || item.type !== "additional_tools" || !Array.isArray(item.tools)) return item;
+      const nestedTools = rewriteGroup(item.tools);
+      if (nestedTools === item.tools) return item;
+      nestedChanged = true;
+      return { ...item, tools: nestedTools };
+    });
+    if (nestedChanged) {
+      input = mapped;
+      changed = true;
+    }
+  }
+  const toolChoice = rewriteHostedImageToolChoice(body.tool_choice, mode);
+  changed ||= toolChoice !== body.tool_choice;
+  if (!changed) return body;
+  return {
+    ...body,
+    ...(Array.isArray(body.tools) ? { tools } : {}),
+    ...(Array.isArray(body.input) ? { input } : {}),
+    ...(Object.hasOwn(body, "tool_choice") ? { tool_choice: toolChoice } : {}),
+    ...(mode === "synthetic" ? { parallel_tool_calls: false } : {}),
+  };
+}
 
 /** Build the flat public-Responses name used only on the upstream wire. */
 function imageGenWireName(localName: string): string {

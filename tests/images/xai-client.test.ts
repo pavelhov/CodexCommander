@@ -10,13 +10,18 @@ const PREV_HOME = process.env.CODEXCOMMANDER_HOME;
 beforeAll(() => { process.env.CODEXCOMMANDER_HOME = join(tmpdir(), "ccx-test-" + randomUUID()); });
 afterAll(() => { if (PREV_HOME === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = PREV_HOME; });
 
-const AUTH = { baseUrl: "https://api.x.ai", token: "test-token" };
 const BINDING: MediaCredentialBinding = {
   authSource: "api_key",
   providerKind: "canonical",
   slotRef: "media-slot:test",
   identityDigest: "sha256:test",
 };
+const boundLease = () => createStaticMediaCredentialLease(BINDING, "test-token");
+const callBound = (
+  request: Parameters<typeof callXaiImages>[0],
+  signal?: AbortSignal,
+  timeoutMs = 60_000,
+) => callXaiImages(request, BINDING, signal, timeoutMs, { lease: boundLease() });
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 
@@ -43,16 +48,6 @@ describe("callXaiImages", () => {
     expect(headers.get("authorization")).toBe("Bearer bound-transport-token");
     expect([...headers.keys()].sort()).toEqual(["accept", "authorization", "content-type"]);
     expect(calls[0]!.init?.redirect).toBe("manual");
-  });
-
-  test("legacy compatibility ignores base URL and cannot trigger OAuth fallback", async () => {
-    const calls = stubFetch(401, { error: "rejected" });
-    await expect(callXaiImages(
-      { prompt: "legacy" },
-      { baseUrl: "https://attacker.invalid/steal", token: "legacy-only-token" },
-    )).rejects.toMatchObject({ code: "needs_auth", certainty: "definite" });
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.url).toBe("https://api.x.ai/v1/images/generations");
   });
 
   test("complete POST rejection table is exhaustive for the API-key source", async () => {
@@ -176,20 +171,21 @@ describe("callXaiImages", () => {
 
   test("no imageUrl → POST /images/generations", async () => {
     const calls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
-    await callXaiImages({ prompt: "a cat" }, AUTH);
+    await callBound({ prompt: "a cat" });
     expect(calls[0]!.url).toContain("/images/generations");
     expect(calls[0]!.init?.method).toBe("POST");
   });
 
-  test("with imageUrl → POST /images/edits", async () => {
+  test("image edits fail as definite unsupported input before transport", async () => {
     const calls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
-    await callXaiImages({ prompt: "edit this", imageUrl: "https://example.com/img.png" }, AUTH);
-    expect(calls[0]!.url).toContain("/images/edits");
+    await expect(callBound({ prompt: "edit this", imageUrl: "https://example.com/img.png" }))
+      .rejects.toMatchObject({ code: "invalid_request", phase: "pre_dispatch", certainty: "definite" });
+    expect(calls).toHaveLength(0);
   });
 
   test("request body has correct model, prompt, n", async () => {
     const calls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
-    await callXaiImages({ prompt: "a dog", model: "grok-imagine-fast", n: 3 }, AUTH);
+    await callBound({ prompt: "a dog", model: "grok-imagine-fast", n: 3 });
     const body = JSON.parse((calls[0]!.init?.body as string) ?? "{}");
     expect(body.model).toBe("grok-imagine-fast");
     expect(body.prompt).toBe("a dog");
@@ -198,7 +194,7 @@ describe("callXaiImages", () => {
 
   test("complete non-2xx returns typed status without provider body", async () => {
     stubFetch(429, { error: "rate limited" });
-    await expect(callXaiImages({ prompt: "x" }, AUTH)).rejects.toMatchObject({
+    await expect(callBound({ prompt: "x" })).rejects.toMatchObject({
       code: "rate_limited",
       status: 429,
       certainty: "definite",
@@ -220,7 +216,7 @@ describe("callXaiImages", () => {
       });
       return new Response(stream, { status: 401, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
-    await expect(callXaiImages({ prompt: "x" }, AUTH, undefined, 25)).rejects.toMatchObject({
+    await expect(callBound({ prompt: "x" }, undefined, 25)).rejects.toMatchObject({
       code: "ambiguous_submission",
       certainty: "ambiguous",
       reason: "timeout",
@@ -231,21 +227,21 @@ describe("callXaiImages", () => {
 
   test("2xx with b64_json → returns normalized XaiImageResult", async () => {
     stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
-    const result = await callXaiImages({ prompt: "x" }, AUTH);
+    const result = await callBound({ prompt: "x" });
     expect(result.images.length).toBe(1);
     expect(result.images[0]!.b64_json).toBe("dGVzdA==");
   });
 
   test("2xx with url → returns images[0].url", async () => {
     stubFetch(200, { data: [{ url: "https://cdn.example.com/img.png" }] });
-    const result = await callXaiImages({ prompt: "x" }, AUTH);
+    const result = await callBound({ prompt: "x" });
     expect(result.images[0]!.url).toBe("https://cdn.example.com/img.png");
   });
 
   test("caller abort propagates into the composed signal", async () => {
     const calls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
     const controller = new AbortController();
-    await callXaiImages({ prompt: "x" }, AUTH, controller.signal);
+    await callBound({ prompt: "x" }, controller.signal);
     const passed = calls[0]!.init?.signal as AbortSignal;
     expect(passed.aborted).toBe(false);
     controller.abort("client gone");
@@ -254,7 +250,7 @@ describe("callXaiImages", () => {
 
   test("custom timeoutMs is composed into the abort signal", async () => {
     const calls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
-    await callXaiImages({ prompt: "x" }, AUTH, undefined, 5_000);
+    await callBound({ prompt: "x" }, undefined, 5_000);
     const passed = calls[0]!.init?.signal as AbortSignal;
     expect(passed).toBeDefined();
     expect(passed.aborted).toBe(false);
@@ -269,22 +265,16 @@ describe("callXaiImages", () => {
         headers: { "content-type": "application/json" },
       });
     }) as typeof fetch;
-    await callXaiImages({ prompt: "x" }, AUTH, undefined, 50);
+    await callBound({ prompt: "x" }, undefined, 50);
     expect(seenSignal).toBeDefined();
     expect(seenSignal!.aborted).toBe(false);
     await new Promise(resolve => setTimeout(resolve, 60));
     expect(seenSignal!.aborted).toBe(false);
   });
 
-  test("trailing slash on baseUrl does not produce double-slash URL", async () => {
-    const calls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
-    await callXaiImages({ prompt: "x" }, { baseUrl: "https://api.x.ai/v1/", token: "test-token" });
-    expect(calls[0]!.url).toBe("https://api.x.ai/v1/images/generations");
-  });
-
   test("size/quality mapped to aspect_ratio/resolution, no passthrough", async () => {
     const calls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
-    await callXaiImages({ prompt: "x", size: "1024x1792", quality: "hd" }, AUTH);
+    await callBound({ prompt: "x", size: "1024x1792", quality: "hd" });
     const body = JSON.parse((calls[0]!.init?.body as string) ?? "{}");
     expect(body.aspect_ratio).toBe("9:16");
     expect(body.resolution).toBe("2k");
@@ -294,7 +284,7 @@ describe("callXaiImages", () => {
 
   test("square size → 1:1", async () => {
     const calls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
-    await callXaiImages({ prompt: "x", size: "1024x1024" }, AUTH);
+    await callBound({ prompt: "x", size: "1024x1024" });
     const body = JSON.parse((calls[0]!.init?.body as string) ?? "{}");
     expect(body.aspect_ratio).toBe("1:1");
     expect(body).not.toHaveProperty("resolution");
@@ -302,7 +292,7 @@ describe("callXaiImages", () => {
 
   test("quality: standard → 1k", async () => {
     const calls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
-    await callXaiImages({ prompt: "x", quality: "standard" }, AUTH);
+    await callBound({ prompt: "x", quality: "standard" });
     const body = JSON.parse((calls[0]!.init?.body as string) ?? "{}");
     expect(body.resolution).toBe("1k");
     expect(body).not.toHaveProperty("aspect_ratio");
@@ -310,7 +300,7 @@ describe("callXaiImages", () => {
 
   test("unknown size/quality dropped", async () => {
     const calls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
-    await callXaiImages({ prompt: "x", size: "weird", quality: "ultra" }, AUTH);
+    await callBound({ prompt: "x", size: "weird", quality: "ultra" });
     const body = JSON.parse((calls[0]!.init?.body as string) ?? "{}");
     expect(body).not.toHaveProperty("aspect_ratio");
     expect(body).not.toHaveProperty("resolution");

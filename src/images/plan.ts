@@ -3,8 +3,9 @@ import type { ImageBridgePlan, VideoBridgePlan } from "./types";
 import { resolveEnvValue } from "../config";
 import { getProviderRegistryEntry } from "../providers/registry";
 import { IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME, isVideoGenName } from "./synthetic-tool";
+import { bindMediaCredential, type BindMediaCredentialDeps } from "./media-credentials";
 
-const DEFAULT_MODEL = "grok-imagine-image-quality";
+export const XAI_IMAGE_MODEL = "grok-imagine-image-2.0";
 /** Absolute ceiling for `images.timeoutMs` (matches /v1/images relay budget). */
 export const MAX_IMAGE_TIMEOUT_MS = 300_000;
 
@@ -28,11 +29,7 @@ export function findXaiProvider(config: CodexCommanderConfig): { name: string; p
   return undefined;
 }
 
-/**
- * Image Bridge fulfillment talks to the public Images API on api.x.ai with a Bearer API key.
- * OAuth / Grok CLI proxy transport is not used here (that path is chat-oriented and not a
- * supported Images transport), so oauth-only configs deliberately do not arm the bridge.
- */
+/** Legacy API-key lookup retained only for the temporary video compatibility seam. */
 export function resolveXaiImageApiKey(provider: CodexCommanderProviderConfig): string | undefined {
   if (provider.authMode === "oauth") return undefined;
   const apiKey = resolveEnvValue(provider.apiKey)?.trim();
@@ -42,20 +39,19 @@ export function resolveXaiImageApiKey(provider: CodexCommanderProviderConfig): s
 export async function planImageBridge(
   config: CodexCommanderConfig,
   parsed: CodexCommanderParsedRequest,
-  routedProvider: CodexCommanderProviderConfig,
+  _routedProvider: CodexCommanderProviderConfig,
+  credentialDeps: BindMediaCredentialDeps = {},
 ): Promise<ImageBridgePlan | undefined> {
   if (config.images?.bridgeEnabled !== true) return undefined;
   if (!parsed._imageGeneration) return undefined;
-  // Don't intercept for OpenAI native passthrough
-  const host = (() => { try { return new URL(routedProvider.baseUrl).hostname; } catch { return ""; } })();
-  if (host === "api.openai.com") return undefined;
-  const found = findXaiProvider(config);
-  if (!found) return undefined;
-  const token = resolveXaiImageApiKey(found.provider);
-  if (!token) return undefined;
-  // Pin the baseUrl to the registry entry, ignoring any config-level baseUrl override.
-  const registryEntry = getProviderRegistryEntry("xai");
-  const pinnedBaseUrl = (registryEntry?.baseUrl ?? "https://api.x.ai/v1").replace(/\/+$/, "");
+  let auth: ImageBridgePlan["auth"];
+  try {
+    auth = bindMediaCredential(config, credentialDeps);
+  } catch {
+    // An enabled-but-unready bridge is fail-closed. The existing/native tool remains
+    // unavailable for this opted-in request rather than consulting another source.
+    return undefined;
+  }
   // The synthetic tool injected into the conversation is named IMAGE_GEN_TOOL_NAME,
   // which is what the model will actually call. Merge it with any original hosted tool names.
   const toolNames = new Set(parsed._imageGeneration.toolNames);
@@ -68,9 +64,8 @@ export async function planImageBridge(
   const artifactsKeepCount =
     typeof keepRaw === "number" && Number.isFinite(keepRaw) ? Math.floor(keepRaw) : undefined;
   return {
-    provider: found.provider,
-    auth: { baseUrl: pinnedBaseUrl, token },
-    model: config.images?.bridgeModel ?? DEFAULT_MODEL,
+    auth,
+    model: config.images?.bridgeModel ?? XAI_IMAGE_MODEL,
     toolNames,
     ...(hostedSize ? { defaultSize: hostedSize } : {}),
     ...(hostedQuality ? { defaultQuality: hostedQuality } : {}),

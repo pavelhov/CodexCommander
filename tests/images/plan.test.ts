@@ -44,7 +44,12 @@ function makeConfig(
     providers: Object.fromEntries(
       Object.entries(providers).map(([k, v]) => [k, { adapter: "openai-chat", baseUrl: "https://api.test.com", ...v }]),
     ),
-    ...(images ? { images } : {}),
+    ...(images ? {
+      images: {
+        ...(images.bridgeEnabled === true && images.authSource === undefined ? { authSource: "api_key" as const } : {}),
+        ...images,
+      },
+    } : {}),
   } as CodexCommanderConfig;
 }
 
@@ -76,9 +81,11 @@ describe("planImageBridge", () => {
     expect(await planImageBridge(makeConfig({ test: routed }, { bridgeEnabled: true }), makeParsed(false), routed)).toBeUndefined();
   });
 
-  test("routedProvider is api.openai.com → undefined", async () => {
+  test("native api.openai.com route is eligible when the image opt-in is on", async () => {
     const cfg = makeConfig({ xai: { baseUrl: "https://api.x.ai", apiKey: "test-token" } }, { bridgeEnabled: true });
-    expect(await planImageBridge(cfg, makeParsed(true), openaiRouted)).toBeUndefined();
+    const plan = await planImageBridge(cfg, makeParsed(true), openaiRouted);
+    expect(plan).toBeDefined();
+    expect(plan!.auth).toMatchObject({ authSource: "api_key", providerKind: "canonical" });
   });
 
   test("no xAI provider → undefined", async () => {
@@ -95,23 +102,36 @@ describe("planImageBridge", () => {
     const cfg = makeConfig({ xai: { baseUrl: "https://api.x.ai", apiKey: "test-token" } }, { bridgeEnabled: true });
     const plan = await planImageBridge(cfg, makeParsed(true), routed);
     expect(plan).toBeDefined();
-    expect(plan!.model).toBe("grok-imagine-image-quality");
-    expect(plan!.auth.token).toBe("test-token");
-    expect(plan!.auth.baseUrl).toBe("https://api.x.ai/v1");
+    expect(plan!.model).toBe("grok-imagine-image-2.0");
+    expect(plan!.auth).toMatchObject({ authSource: "api_key", providerKind: "canonical" });
+    expect(plan!.auth).not.toHaveProperty("token");
+    expect(plan!.auth).not.toHaveProperty("baseUrl");
   });
 
-  test("xAI provider with OAuth only (no API key) → undefined (API-key-only bridge)", async () => {
-    tokenResult = "fake-oauth-123";
-    const cfg = makeConfig({ xai: { baseUrl: "https://api.x.ai" } }, { bridgeEnabled: true });
-    expect(await planImageBridge(cfg, makeParsed(true), routed)).toBeUndefined();
-    tokenResult = null;
+  test("subscription OAuth binds the canonical xAI slot without consulting an API key", async () => {
+    const cfg = makeConfig(
+      { xai: { baseUrl: "https://attacker.invalid/ignored", apiKey: "must-not-be-used", authMode: "oauth" } },
+      { bridgeEnabled: true, authSource: "subscription_oauth" },
+    );
+    const plan = await planImageBridge(cfg, makeParsed(true), routed, {
+      getOAuthAccountSet: () => ({
+        activeAccountId: "oauth-slot",
+        accounts: [{
+          id: "oauth-slot",
+          credential: { accessToken: "ephemeral", accountId: "stable-subject" },
+        }],
+      } as never),
+    });
+    expect(plan?.auth).toMatchObject({ authSource: "subscription_oauth", providerKind: "canonical" });
+    expect(JSON.stringify(plan?.auth)).not.toContain("must-not-be-used");
+    expect(JSON.stringify(plan?.auth)).not.toContain("ephemeral");
   });
 
   test("custom-named provider with api.x.ai baseUrl → found via fallback", async () => {
     const cfg = makeConfig({ mygrok: { baseUrl: "https://api.x.ai", apiKey: "test-token" } }, { bridgeEnabled: true });
     const plan = await planImageBridge(cfg, makeParsed(true), routed);
     expect(plan).toBeDefined();
-    expect(plan!.provider).toBe(cfg.providers.mygrok);
+    expect(plan!.auth.providerKind).toBe("legacy_alias");
   });
 
   test("custom bridgeModel is honored", async () => {
@@ -150,7 +170,7 @@ describe("planImageBridge", () => {
     expect(plan!.toolNames.has(IMAGE_GEN_TOOL_NAME)).toBe(true);
   });
 
-  test("baseUrl is pinned to registry regardless of config override", async () => {
+  test("credential binding never carries a caller-configurable base URL", async () => {
     // config 里 xai provider 的 baseUrl 被改成恶意 host
     const cfg = makeConfig(
       { xai: { adapter: "openai-chat", baseUrl: "https://evil.example.com/v1", apiKey: "test-key" } },
@@ -158,8 +178,8 @@ describe("planImageBridge", () => {
     );
     const plan = await planImageBridge(cfg, makeParsed(true), routed);
     expect(plan).toBeDefined();
-    // auth.baseUrl 必须是 registry pin 的地址，不是 config 里的恶意地址
-    expect(plan!.auth.baseUrl).toBe("https://api.x.ai/v1");
+    expect(plan!.auth).not.toHaveProperty("baseUrl");
+    expect(JSON.stringify(plan!.auth)).not.toContain("evil.example.com");
   });
 
   test("custom-named provider with api.x.ai baseUrl does NOT get built-in OAuth token", async () => {
@@ -175,11 +195,11 @@ describe("planImageBridge", () => {
     tokenResult = null;
   });
 
-  test("authMode oauth does not arm the bridge even with a stale apiKey", async () => {
+  test("selected subscription OAuth does not fall back to a stale API key", async () => {
     tokenResult = "oauth-token";
     const cfg = makeConfig(
       { xai: { baseUrl: "https://api.x.ai/v1", apiKey: "stale-key", authMode: "oauth" } },
-      { bridgeEnabled: true },
+      { bridgeEnabled: true, authSource: "subscription_oauth" },
     );
     expect(await planImageBridge(cfg, makeParsed(true), routed)).toBeUndefined();
     tokenResult = null;
@@ -246,7 +266,7 @@ describe("media image capability contract", () => {
   test("fails closed when an enabled in-memory config was not normalized with an auth source", () => {
     const config = makeConfig(
       { xai: { baseUrl: "https://api.x.ai/v1", apiKey: "must-not-arm" } },
-      { bridgeEnabled: true, videoBridgeEnabled: false },
+      { bridgeEnabled: true, videoBridgeEnabled: false, authSource: undefined },
     );
     const snapshot = buildMediaReadinessSnapshot(config, { api_key: "ready" });
 

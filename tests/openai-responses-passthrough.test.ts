@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../src/adapters/openai-responses";
+import {
+  createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction,
+  rewriteHostedImageGenerationForBridge,
+} from "../src/adapters/openai-responses";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
 import { sanitizeEncryptedContentInPlace } from "../src/server/responses";
@@ -1842,5 +1845,51 @@ describe("OpenAI Responses forward-mode unsupported param stripping", () => {
 
     expect(body.max_output_tokens).toBe(32000);
     expect(body.metadata).toEqual({ user_id: "u-1" });
+  });
+});
+
+describe("native Grok image bridge request rewriting", () => {
+  test("replaces only hosted image declarations/selectors and preserves the source body", () => {
+    const source = {
+      model: "gpt-5.6-sol",
+      input: [{
+        type: "additional_tools",
+        tools: [{ type: "web_search" }, { type: "image_generation", size: "1024x1024" }],
+      }],
+      tools: [{ type: "function", name: "real_tool", parameters: { type: "object" } }],
+      tool_choice: {
+        type: "allowed_tools",
+        tools: [{ type: "web_search" }, { type: "image_generation" }],
+      },
+      stream: true,
+      provider_extension: { keep: true },
+    };
+    const rewritten = rewriteHostedImageGenerationForBridge(source, "synthetic") as typeof source;
+
+    expect(source.input[0]!.tools[1]).toEqual({ type: "image_generation", size: "1024x1024" });
+    expect(rewritten.provider_extension).toEqual({ keep: true });
+    expect((rewritten as typeof rewritten & { parallel_tool_calls?: boolean }).parallel_tool_calls).toBe(false);
+    expect(rewritten.tools).toEqual(source.tools);
+    expect(rewritten.input[0]!.tools).toContainEqual(expect.objectContaining({
+      type: "function",
+      name: "image_gen",
+    }));
+    expect(rewritten.input[0]!.tools.some(tool => tool.type === "image_generation")).toBe(false);
+    expect(rewritten.tool_choice).toEqual({
+      type: "allowed_tools",
+      tools: [{ type: "web_search" }, { type: "function", name: "image_gen" }],
+    });
+  });
+
+  test("forced-final omission removes only the Grok image bridge declaration", () => {
+    const source = {
+      tools: [{ type: "web_search" }, { type: "image_generation" }],
+      tool_choice: { type: "image_generation" },
+    };
+    expect(rewriteHostedImageGenerationForBridge(source, "omit")).toEqual({
+      tools: [{ type: "web_search" }],
+      tool_choice: "auto",
+    });
+    expect(source.tools).toHaveLength(2);
   });
 });

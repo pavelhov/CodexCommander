@@ -30,6 +30,7 @@ const PREV_HOME = process.env.CODEXCOMMANDER_HOME;
 let imageBridgeRun = false;
 let webSearchRun = false;
 let auxiliaryWebPlanSeen = false;
+let auxiliaryNativeResponses = false;
 /** Whether the stubbed adapter should expose runTurn (simulates Cursor-style adapters). */
 let useRunTurnAdapter = false;
 /** Spy: flipped when the stubbed runTurn is actually invoked. */
@@ -72,9 +73,10 @@ beforeAll(async () => {
   const actualLoop = await import("../../src/responses/auxiliary");
   mock.module("../../src/responses/auxiliary", () => ({
     ...actualLoop,
-    runResponsesAuxiliaryLoop: async (deps: { webSearchPlan?: unknown }) => {
+    runResponsesAuxiliaryLoop: async (deps: { webSearchPlan?: unknown; nativeResponses?: boolean }) => {
       imageBridgeRun = true;
       auxiliaryWebPlanSeen = deps.webSearchPlan !== undefined;
+      auxiliaryNativeResponses = deps.nativeResponses === true;
       return new Response("data: {\"type\":\"done\"}\n\n", {
         status: 200, headers: { "content-type": "text/event-stream" },
       });
@@ -121,7 +123,7 @@ function makeConfig(videoBridgeEnabled = false): CodexCommanderConfig {
       fixture: { adapter: "openai-chat", baseUrl: "https://fixture.test/v1", authMode: "key", apiKey: "fixture-key" },
       xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "xai-test-token" },
     },
-    images: { bridgeEnabled: true, videoBridgeEnabled },
+    images: { bridgeEnabled: true, videoBridgeEnabled, authSource: "api_key" },
   } as CodexCommanderConfig;
 }
 
@@ -154,6 +156,62 @@ describe("image bridge dispatch priority (handler activation)", () => {
     expect(await res.json()).toMatchObject({
       error: { code: "auxiliary_streaming_required", type: "invalid_request_error" },
     });
+  });
+
+  test("missing selected Grok credential fails closed instead of falling through to native images", async () => {
+    imageBridgeRun = false; webSearchRun = false; auxiliaryWebPlanSeen = false; mockWsPlan = undefined;
+    const config = makeConfig();
+    config.providers.xai!.apiKey = "";
+    const res = await handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "fixture/model",
+          input: "draw a fox",
+          stream: true,
+          tools: [{ type: "image_generation" }],
+        }),
+      }),
+      config,
+      { model: "", provider: "" } as never,
+      {},
+    );
+    expect(res.status).toBe(401);
+    expect(imageBridgeRun).toBe(false);
+    expect(await res.json()).toMatchObject({
+      error: { code: "needs_auth", type: "authentication_error" },
+    });
+  });
+
+  test("official OpenAI API image turns select the raw native Responses replay seam", async () => {
+    imageBridgeRun = false; auxiliaryNativeResponses = false; mockWsPlan = undefined;
+    const config = makeConfig();
+    config.defaultProvider = "openai-apikey";
+    config.providers["openai-apikey"] = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      authMode: "key",
+      apiKey: "openai-test-key",
+    };
+    const res = await handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "openai-apikey/gpt-5.4",
+          input: "draw a fox",
+          stream: true,
+          tools: [{ type: "image_generation" }],
+        }),
+      }),
+      config,
+      { model: "", provider: "" } as never,
+      {},
+    );
+    expect(res.status).toBe(200);
+    expect(imageBridgeRun).toBe(true);
+    expect(auxiliaryNativeResponses).toBe(true);
   });
 
   test("dual-tool (image_generation + web_search) uses one auxiliary coordinator", async () => {

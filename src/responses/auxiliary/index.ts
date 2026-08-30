@@ -33,6 +33,12 @@ import { formatWebSearchResults } from "../../web-search/format-result";
 import { redactSecretString } from "../../lib/redact";
 import { WEB_SEARCH_TOOL_NAME } from "../../web-search/synthetic-tool";
 import type { AuxiliaryHandlerAllowances, AuxiliaryToolCall, AuxiliaryWebSearchPlan } from "./types";
+import { rewriteHostedImageGenerationForBridge } from "../../adapters/openai-responses";
+import {
+  appendNativeAuxiliaryTurn,
+  inspectNativeResponsesSse,
+  mergeNativeResponsesCompletedUsage,
+} from "./native-replay";
 
 export * from "./native-replay";
 export * from "./types";
@@ -54,6 +60,34 @@ export const MAX_ROUNDS_HARD_LIMIT = 10;
 export const MAX_IMAGE_CALLS_PER_TURN = 10;
 /** V1 admits at most one paid text-to-video submission per current user turn. */
 export const MAX_VIDEO_CALLS_PER_TURN = 1;
+
+function combineUsage(
+  a: CodexCommanderUsage | undefined,
+  b: CodexCommanderUsage | undefined,
+): CodexCommanderUsage | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    ...(a.contextTotalTokens !== undefined || b.contextTotalTokens !== undefined
+      ? { contextTotalTokens: Math.max(a.contextTotalTokens ?? 0, b.contextTotalTokens ?? 0) }
+      : {}),
+    ...(a.cachedInputTokens !== undefined || b.cachedInputTokens !== undefined
+      ? { cachedInputTokens: (a.cachedInputTokens ?? 0) + (b.cachedInputTokens ?? 0) }
+      : {}),
+    ...(a.cacheReadInputTokens !== undefined || b.cacheReadInputTokens !== undefined
+      ? { cacheReadInputTokens: (a.cacheReadInputTokens ?? 0) + (b.cacheReadInputTokens ?? 0) }
+      : {}),
+    ...(a.cacheCreationInputTokens !== undefined || b.cacheCreationInputTokens !== undefined
+      ? { cacheCreationInputTokens: (a.cacheCreationInputTokens ?? 0) + (b.cacheCreationInputTokens ?? 0) }
+      : {}),
+    ...(a.reasoningOutputTokens !== undefined || b.reasoningOutputTokens !== undefined
+      ? { reasoningOutputTokens: (a.reasoningOutputTokens ?? 0) + (b.reasoningOutputTokens ?? 0) }
+      : {}),
+    ...(a.estimated || b.estimated ? { estimated: true } : {}),
+  };
+}
 
 /**
  * Clamp a configured maxRounds value to a safe integer in [0, MAX_ROUNDS_HARD_LIMIT].
@@ -306,16 +340,262 @@ export interface ResponsesAuxiliaryLoopDeps {
   forceEmptyResponseId?: boolean;
   /** Request-visible tool parameter schemas for integer argument canonicalization at the Responses bridge. */
   toolParameterSchemas?: ReadonlyMap<string, Record<string, unknown>>;
+  /** Official OpenAI Responses route: buffer only synthetic iterations and relay final SSE raw. */
+  nativeResponses?: boolean;
 }
 
 /** Compatibility type for historical direct image-loop callers. */
 export type ImageBridgeDeps = ResponsesAuxiliaryLoopDeps;
+
+async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Promise<Response> {
+  const { parsed, plan, abortSignal } = deps;
+  if (!plan) return jsonError(500, "native image bridge plan is missing");
+  let adapter = deps.adapter;
+  const translatorBudget = deps.incomingMeta.translatorBudget;
+  const imageMaxRounds = clampImageMaxRounds(deps.imageMaxRounds ?? deps.maxRounds ?? DEFAULT_MAX_ROUNDS);
+  const connectTimeoutMs = typeof deps.connectTimeoutMs === "number" && Number.isFinite(deps.connectTimeoutMs) && deps.connectTimeoutMs > 0
+    ? Math.floor(deps.connectTimeoutMs)
+    : CONNECT_TIMEOUT_MS;
+  const stallTimeoutMs = typeof deps.stallTimeoutSec === "number" && Number.isFinite(deps.stallTimeoutSec) && deps.stallTimeoutSec > 0
+    ? Math.floor(deps.stallTimeoutSec * 1000)
+    : STALL_TIMEOUT_MS;
+  const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
+  const internalAbort = new AbortController();
+  const linkAbort = () => internalAbort.abort(abortSignal?.reason);
+  if (abortSignal) {
+    if (abortSignal.aborted) linkAbort();
+    else abortSignal.addEventListener("abort", linkAbort, { once: true });
+  }
+  const signal = internalAbort.signal;
+  const imageBudget = createImageBudget();
+  let replayBody = parsed._rawBody;
+  let firstOutput = false;
+  const noteFirstOutput = () => {
+    if (firstOutput) return;
+    firstOutput = true;
+    deps.onFirstOutput?.();
+  };
+
+  const fetchIteration = async (mode: "synthetic" | "omit"): Promise<Response> => {
+    const iterParsed: CodexCommanderParsedRequest = {
+      ...parsed,
+      stream: true,
+      _rawBody: rewriteHostedImageGenerationForBridge(replayBody, mode),
+    };
+    const deadline = clearableDeadline(connectTimeoutMs, signal);
+    let request: AdapterRequest | undefined;
+    try {
+      request = await adapter.buildRequest(iterParsed, {
+        headers: deps.forwardHeaders ? new Headers(deps.forwardHeaders) : new Headers(),
+        abortSignal: deadline.signal,
+        translatorBudget,
+      });
+      try { deps.onRequestBuilt?.(request); } catch { /* diagnostics are best effort */ }
+      deps.onAttemptSend?.();
+      let response = adapter.fetchResponse
+        ? await adapter.fetchResponse(request, {
+            abortSignal: deadline.signal,
+            timeoutMs: connectTimeoutMs,
+            returnRawErrors: true,
+            stream: true,
+          })
+        : await fetchWithResetRetry(
+            recovery => {
+              if (recovery) deps.onAttemptSend?.(recovery);
+              const headers = new Headers(request!.headers);
+              if (!headers.has("accept-encoding")) headers.set("accept-encoding", "identity");
+              return fetchImpl(request!.url, {
+                method: request!.method,
+                headers,
+                body: request!.body,
+                signal: deadline.signal,
+              });
+            },
+            { abortSignal: deadline.signal, label: "native-image-bridge-loop" },
+          );
+      while (response.status === 429 && deps.on429) {
+        const rotated = deps.on429(response.headers.get("retry-after"));
+        if (!rotated) break;
+        try { await response.body?.cancel(); } catch { /* best effort */ }
+        adapter = rotated;
+        request.releaseBodyObservation?.();
+        request = await adapter.buildRequest(iterParsed, {
+          headers: deps.forwardHeaders ? new Headers(deps.forwardHeaders) : new Headers(),
+          abortSignal: deadline.signal,
+          translatorBudget,
+        });
+        try { deps.onRequestBuilt?.(request); } catch { /* diagnostics are best effort */ }
+        deps.onAttemptSend?.("key-429");
+        response = adapter.fetchResponse
+          ? await adapter.fetchResponse(request, {
+              abortSignal: deadline.signal,
+              timeoutMs: connectTimeoutMs,
+              returnRawErrors: true,
+              stream: true,
+            })
+          : await fetchImpl(request.url, {
+              method: request.method,
+              headers: request.headers,
+              body: request.body,
+              signal: deadline.signal,
+            });
+      }
+      if (!response.ok) {
+        const observed = await readBoundedResponseBody(response, { signal, maxBytes: 65_536 });
+        throw new LoopError(response.status, observed.displaySafe && observed.text.trim()
+          ? `Provider error ${response.status}: ${redactSecretString(observed.text).slice(0, 400)}`
+          : `Provider error ${response.status}`);
+      }
+      return response;
+    } catch (error) {
+      if (signal.aborted) throw new LoopError(499, "client closed request during native image bridge");
+      if (deadline.didExpire()) throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during native image bridge`);
+      if (error instanceof LoopError) throw error;
+      throw new LoopError(502, `Provider unreachable: ${redactSecretString(error instanceof Error ? error.message : String(error))}`);
+    } finally {
+      request?.releaseBodyObservation?.();
+      deadline.clear();
+    }
+  };
+
+  let firstResponse: Response;
+  try {
+    firstResponse = await fetchIteration(imageMaxRounds > 0 ? "synthetic" : "omit");
+  } catch (error) {
+    if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
+    return error instanceof LoopError ? jsonError(error.status, error.message) : jsonError(502, "native image bridge failed");
+  }
+
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const encoder = new TextEncoder();
+      const drive = async () => {
+        let current = firstResponse;
+        let roundsUsed = 0;
+        let paidCalls = 0;
+        let hiddenUsage: CodexCommanderUsage | undefined;
+        try {
+          for (;;) {
+            let keepaliveOpen = true;
+            const keepalive = setInterval(() => {
+              if (!keepaliveOpen || signal.aborted) return;
+              noteFirstOutput();
+              try { controller.enqueue(encoder.encode(": ccx-auxiliary\n\n")); } catch { /* closed */ }
+            }, 2_000);
+            let observed: Awaited<ReturnType<typeof readBoundedResponseBody>>;
+            try {
+              observed = await readBoundedResponseBody(current, {
+                signal,
+                fatalUtf8: true,
+                maxBytes: TRANSLATOR_MAX_TURN_BYTES,
+                totalTimeoutMs: 24 * 60 * 60 * 1000,
+                firstByteTimeoutMs: stallTimeoutMs,
+                inactivityTimeoutMs: stallTimeoutMs,
+              });
+            } finally {
+              keepaliveOpen = false;
+              clearInterval(keepalive);
+            }
+            if (observed.timedOut) throw new LoopError(504, "native Responses stream stalled during image bridge");
+            if (observed.oversized || observed.truncated || !observed.displaySafe) {
+              throw new TranslatorBudgetExceededError("retained_collectors", TRANSLATOR_MAX_TURN_BYTES);
+            }
+            const rawBytes = encoder.encode(observed.text).byteLength;
+            translatorBudget.chargeRetained(rawBytes, { kind: "retained_collectors" });
+            let inspection;
+            try {
+              inspection = inspectNativeResponsesSse(observed.text, plan.toolNames);
+            } finally {
+              translatorBudget.releaseRetained(rawBytes, { kind: "retained_collectors" });
+            }
+
+            if (
+              inspection.terminal !== "completed"
+              || inspection.auxiliaryCalls.length === 0
+              || inspection.hasRealFunctionCall
+            ) {
+              const usage = combineUsage(hiddenUsage, inspection.usage);
+              deps.onUsage?.(usage);
+              if (inspection.completedResponse) deps.onCompletedResponse?.(inspection.completedResponse);
+              noteFirstOutput();
+              controller.enqueue(encoder.encode(mergeNativeResponsesCompletedUsage(inspection.raw, usage)));
+              controller.close();
+              return;
+            }
+            if (roundsUsed >= imageMaxRounds) {
+              throw new LoopError(409, `image auxiliary allowance exhausted; global iteration ceiling ${imageMaxRounds + 2}`);
+            }
+
+            const outputs = new Map<string, string>();
+            for (const call of inspection.auxiliaryCalls) {
+              let result;
+              if (paidCalls >= MAX_IMAGE_CALLS_PER_TURN) {
+                result = {
+                  ok: false,
+                  model: plan.model,
+                  prompt: "",
+                  files: [],
+                  count: 0,
+                  error: `image call budget exhausted (max ${MAX_IMAGE_CALLS_PER_TURN} per turn)`,
+                };
+              } else {
+                paidCalls += 1;
+                result = await fulfillImageCall(
+                  { id: call.callId, name: call.name, arguments: call.arguments },
+                  plan,
+                  imageBudget,
+                  signal,
+                );
+              }
+              outputs.set(call.callId, JSON.stringify(result));
+            }
+            hiddenUsage = combineUsage(hiddenUsage, inspection.usage);
+            replayBody = appendNativeAuxiliaryTurn(replayBody, inspection.outputItems, outputs);
+            roundsUsed += 1;
+            noteFirstOutput();
+            controller.enqueue(encoder.encode(": ccx-auxiliary\n\n"));
+            current = await fetchIteration(roundsUsed < imageMaxRounds ? "synthetic" : "omit");
+          }
+        } catch (error) {
+          if (signal.aborted) {
+            try { controller.close(); } catch { /* closed */ }
+            return;
+          }
+          deps.onUsage?.(hiddenUsage);
+          const message = redactSecretString(error instanceof Error ? error.message : String(error));
+          const payload = {
+            type: "response.failed",
+            response: {
+              status: "failed",
+              output: [],
+              error: { type: "server_error", code: "upstream_server_error", message },
+            },
+          };
+          noteFirstOutput();
+          controller.enqueue(encoder.encode(`event: response.failed\ndata: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`));
+          controller.close();
+        } finally {
+          if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
+        }
+      };
+      void drive();
+    },
+    cancel(reason) {
+      internalAbort.abort(reason);
+      if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
+    },
+  });
+  return new Response(body, { headers: SSE_HEADERS });
+}
 
 /**
  * Run the selected adapter in one bounded agentic loop. Semantic model output stays buffered until
  * synthetic calls validate, while progress and renderer-safe search cells stream live.
  */
 export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps): Promise<Response> {
+  if (deps.nativeResponses && deps.plan && !deps.adapter.runTurn && !deps.webSearchPlan && !deps.videoPlan) {
+    return runNativeResponsesImageLoop(deps);
+  }
   const translatorBudget = deps.incomingMeta.translatorBudget;
   const { parsed, plan, videoPlan, webSearchPlan, videoTimeoutMs, abortSignal } = deps;
   let adapter = deps.adapter;
@@ -339,34 +619,10 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
   let paidVideoCalls = 0;
   let hiddenUsage: CodexCommanderUsage | undefined;
 
-  const addUsage = (a: CodexCommanderUsage | undefined, b: CodexCommanderUsage | undefined): CodexCommanderUsage | undefined => {
-    if (!a) return b;
-    if (!b) return a;
-    return {
-      inputTokens: a.inputTokens + b.inputTokens,
-      outputTokens: a.outputTokens + b.outputTokens,
-      ...(a.contextTotalTokens !== undefined || b.contextTotalTokens !== undefined
-        ? { contextTotalTokens: Math.max(a.contextTotalTokens ?? 0, b.contextTotalTokens ?? 0) }
-        : {}),
-      ...(a.cachedInputTokens !== undefined || b.cachedInputTokens !== undefined
-        ? { cachedInputTokens: (a.cachedInputTokens ?? 0) + (b.cachedInputTokens ?? 0) }
-        : {}),
-      ...(a.cacheReadInputTokens !== undefined || b.cacheReadInputTokens !== undefined
-        ? { cacheReadInputTokens: (a.cacheReadInputTokens ?? 0) + (b.cacheReadInputTokens ?? 0) }
-        : {}),
-      ...(a.cacheCreationInputTokens !== undefined || b.cacheCreationInputTokens !== undefined
-        ? { cacheCreationInputTokens: (a.cacheCreationInputTokens ?? 0) + (b.cacheCreationInputTokens ?? 0) }
-        : {}),
-      ...(a.reasoningOutputTokens !== undefined || b.reasoningOutputTokens !== undefined
-        ? { reasoningOutputTokens: (a.reasoningOutputTokens ?? 0) + (b.reasoningOutputTokens ?? 0) }
-        : {}),
-      ...(a.estimated || b.estimated ? { estimated: true } : {}),
-    };
-  };
   const takeUsageFrom = (events: AdapterEvent[]): void => {
     for (const e of events) {
       if ((e.type === "done" || e.type === "incomplete") && e.usage) {
-        hiddenUsage = addUsage(hiddenUsage, e.usage);
+        hiddenUsage = combineUsage(hiddenUsage, e.usage);
       }
     }
   };
@@ -905,7 +1161,7 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
               for (let i = split.passthrough.length - 1; i >= 0; i--) {
                 const e = split.passthrough[i];
                 if (e?.type === "done" || e?.type === "incomplete") {
-                  split.passthrough[i] = { ...e, usage: addUsage(hiddenUsage, e.usage) };
+                  split.passthrough[i] = { ...e, usage: combineUsage(hiddenUsage, e.usage) };
                   break;
                 }
               }
