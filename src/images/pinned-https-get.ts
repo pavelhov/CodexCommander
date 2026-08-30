@@ -6,10 +6,12 @@ export type { PinnedAddress } from "../lib/pinned-http";
 
 export const DEFAULT_PINNED_MEDIA_MAX_BYTES = 50 * 1024 * 1024;
 export const DEFAULT_PINNED_MEDIA_IDLE_TIMEOUT_MS = 60_000;
+export const DEFAULT_PINNED_MEDIA_DEADLINE_MS = 5 * 60_000;
 
 export interface PinnedHttpsGetOptions {
   maxBytes?: number;
   idleTimeoutMs?: number;
+  deadlineMs?: number;
 }
 
 /** Test seam: implementations must connect to `pinned` without re-resolving the URL. */
@@ -47,15 +49,20 @@ export async function pinnedHttpsGet(
   ) throw new Error("media artifact pinned address is unsafe");
   const maxBytes = options.maxBytes ?? DEFAULT_PINNED_MEDIA_MAX_BYTES;
   const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_PINNED_MEDIA_IDLE_TIMEOUT_MS;
+  const deadlineMs = options.deadlineMs ?? DEFAULT_PINNED_MEDIA_DEADLINE_MS;
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0 || maxBytes > 1024 * 1024 * 1024) {
     throw new Error("media artifact byte limit is invalid");
   }
   if (!Number.isSafeInteger(idleTimeoutMs) || idleTimeoutMs <= 0 || idleTimeoutMs > 10 * 60_000) {
     throw new Error("media artifact timeout is invalid");
   }
+  if (!Number.isSafeInteger(deadlineMs) || deadlineMs <= 0 || deadlineMs > 30 * 60_000) {
+    throw new Error("media artifact deadline is invalid");
+  }
   const response = await pinnedHttpGet(url, pinned, signal, {
     maxBytes,
     idleTimeoutMs,
+    deadlineMs,
     rejectUnauthorized: true,
     context: "media artifact download",
   });

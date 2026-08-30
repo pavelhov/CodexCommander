@@ -101,6 +101,7 @@ describe("buildVideoResult", () => {
       aspectRatio: "16:9",
       audio: true,
     });
-    expect(result.markdown).toContain("file://");
+    expect(result.markdown).toMatch(/^\[Open video\]\(\/v1\/codexcommander\/artifacts\/vid-123\.mp4\)$/);
+    expect(result.markdown).not.toContain("file://");
   });
 });

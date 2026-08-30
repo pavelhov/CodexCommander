@@ -59,13 +59,24 @@ describe("video job journal", () => {
       expect((await stat(join(f.root, "private"))).mode & 0o777).toBe(0o700);
     }
     const db = new Database(f.path, { readonly: true });
-    expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(1);
+    expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(2);
     expect(db.query<{ synchronous: number }, []>("PRAGMA synchronous").get()?.synchronous).toBe(2);
     const columns = db.query<{ name: string }, []>("PRAGMA table_info(video_jobs)").all().map(row => row.name);
     expect(columns).not.toContain("prompt");
     expect(columns).not.toContain("url");
     expect(columns).not.toContain("provider_body");
     db.close();
+  });
+
+  test("fails a v1 journal closed instead of mutating its state constraint in place", async () => {
+    const f = await fixture();
+    const store = openVideoJobStore({ path: f.path, now: () => 1_000 });
+    store.close();
+    const db = new Database(f.path);
+    db.exec("PRAGMA user_version = 1");
+    db.close();
+    expect(() => openVideoJobStore({ path: f.path, now: () => 2_000 }))
+      .toThrow("schema version is unsupported");
   });
 
   test("startup converts a leftover submitting fence to outcome_unknown and holds admission until CAS acknowledgement", async () => {

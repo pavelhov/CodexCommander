@@ -8,7 +8,7 @@ mock.module("../../src/images/pinned-https-get", () => ({
   pinnedHttpsGet: async () => nextResponse(),
 }));
 
-const { downloadVideoToArtifact } = await import("../../src/images/artifacts");
+const { downloadVideoToArtifact, reserveVideoArtifactId } = await import("../../src/images/artifacts");
 
 const MP4_HEADER = new Uint8Array([
   0x00, 0x00, 0x00, 0x0c, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d,
@@ -80,5 +80,59 @@ describe("atomic video artifact publication", () => {
     const published = await downloadVideoToArtifact(`data:video/mp4;base64,${encoded}`);
     expect(await readdir(join(root, "artifacts"))).toEqual([basename(published)]);
     expect(published).toMatch(/\.mp4$/);
+  });
+
+  test.each([
+    ["empty", new Uint8Array(0), /empty/],
+    ["wrong magic", new TextEncoder().encode("not-video-data"), /magic|format/],
+  ] as const)("rejects %s bodies and leaves no partial", async (_name, bytes, message) => {
+    nextResponse = () => new Response(bytes, { status: 200 });
+    await expect(downloadVideoToArtifact("https://93.184.216.34/signed-result"))
+      .rejects.toThrow(message);
+    expect(await readdir(join(root, "artifacts"))).toEqual([]);
+  });
+
+  test("rejects redirects and private result targets without retaining signed URL text", async () => {
+    nextResponse = () => new Response(null, {
+      status: 302,
+      headers: { location: "https://127.0.0.1/private" },
+    });
+    let redirectError = "";
+    try {
+      await downloadVideoToArtifact("https://93.184.216.34/private-token-value");
+    } catch (error) {
+      redirectError = error instanceof Error ? error.message : String(error);
+    }
+    expect(redirectError).toMatch(/failed|302/);
+    expect(redirectError).not.toContain("private-token-value");
+    await expect(downloadVideoToArtifact("https://127.0.0.1/result"))
+      .rejects.toThrow(/loopback/);
+  });
+
+  test("an aborted replacement never deletes a prior valid reserved artifact", async () => {
+    const artifactId = reserveVideoArtifactId("mp4");
+    const encoded = Buffer.from(MP4_HEADER).toString("base64");
+    const published = await downloadVideoToArtifact(
+      `data:video/mp4;base64,${encoded}`,
+      undefined,
+      undefined,
+      { reservedArtifactId: artifactId },
+    );
+    const before = await Bun.file(published).arrayBuffer();
+
+    nextResponse = () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(MP4_HEADER);
+      },
+    }), { status: 200 });
+    // The already durable exact reservation wins without replacement.
+    expect(await downloadVideoToArtifact(
+      "https://93.184.216.34/signed-result",
+      undefined,
+      undefined,
+      { reservedArtifactId: artifactId },
+    )).toBe(published);
+    expect(await Bun.file(published).arrayBuffer()).toEqual(before);
+    expect(await readdir(join(root, "artifacts"))).toEqual([artifactId]);
   });
 });

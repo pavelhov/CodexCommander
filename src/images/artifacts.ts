@@ -1,15 +1,27 @@
-import { readdirSync, readFileSync, statSync, lstatSync, unlinkSync, existsSync } from "node:fs";
-import { mkdir, writeFile, open, rename, unlink, type FileHandle } from "node:fs/promises";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  type Stats,
+} from "node:fs";
+import { chmod, link, mkdir, open, unlink, type FileHandle } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
 import { getConfigDir } from "../config";
 import { assessUrlDestination, resolvePublicAddresses } from "../lib/destination-policy";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
+import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import { ARTIFACT_HTTP_PREFIX } from "../identity";
 import {
   pinnedHttpsGet,
   type PinnedAddress,
   type PinnedDownloadFn,
 } from "./pinned-https-get";
+import { pruneMediaArtifacts, removeMediaArtifact } from "./artifact-retention";
 
 export { pinnedHttpsGet } from "./pinned-https-get";
 export type { PinnedAddress, PinnedDownloadFn } from "./pinned-https-get";
@@ -37,6 +49,17 @@ export const DEFAULT_ARTIFACT_KEEP_COUNT = 200;
 export { ARTIFACT_HTTP_PREFIX };
 
 const ARTIFACT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(png|jpe?g|webp|gif|mp4|webm)$/i;
+const ARTIFACT_STREAM_CHUNK_BYTES = 256 * 1024;
+
+const ARTIFACT_CONTENT_TYPES: Readonly<Record<string, string>> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  gif: "image/gif",
+  mp4: "video/mp4",
+  webm: "video/webm",
+};
 
 // Strict alphabet check: Buffer.from(..., "base64") silently ignores invalid
 // characters, so malformed payloads would otherwise decode to garbage bytes.
@@ -61,6 +84,42 @@ export function chargeImageBudget(budget: ImageBudget | undefined, bytes: number
 
 export function getArtifactsDir(): string {
   return join(getConfigDir(), "artifacts");
+}
+
+async function ensureArtifactsDirectory(): Promise<string> {
+  const dir = getArtifactsDir();
+  recordOwnedConfigPath(getConfigDir(), dir);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  let stats = lstatSync(dir);
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    throw new Error("artifact directory is unsafe");
+  }
+  if (process.platform === "win32") {
+    hardenSecretDir(dir, { required: true, timeoutMemoKey: `${dir}::artifacts` });
+  } else {
+    await chmod(dir, 0o700);
+  }
+  stats = lstatSync(dir);
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    throw new Error("artifact directory is unsafe");
+  }
+  if (process.platform !== "win32") {
+    const uid = process.getuid?.();
+    if (uid === undefined || stats.uid !== uid || (stats.mode & 0o777) !== 0o700) {
+      throw new Error("artifact directory is not owner-only");
+    }
+  }
+  return dir;
+}
+
+function artifactExtension(id: string): string | null {
+  const ext = id.split(".").pop()?.toLowerCase();
+  return ext && ARTIFACT_CONTENT_TYPES[ext] ? ext : null;
+}
+
+function artifactContentType(id: string): string | null {
+  const ext = artifactExtension(id);
+  return ext ? ARTIFACT_CONTENT_TYPES[ext] ?? null : null;
 }
 
 /**
@@ -98,16 +157,203 @@ export function readArtifactBytes(id: string): { bytes: Buffer; contentType: str
   const path = resolveArtifactPath(id);
   if (!path) return null;
   const bytes = readFileSync(path);
-  const ext = path.split(".").pop()?.toLowerCase();
-  const contentType =
-    ext === "png" ? "image/png"
-      : ext === "jpg" || ext === "jpeg" ? "image/jpeg"
-        : ext === "webp" ? "image/webp"
-          : ext === "gif" ? "image/gif"
-            : ext === "mp4" ? "video/mp4"
-              : ext === "webm" ? "video/webm"
-                : "application/octet-stream";
+  const contentType = artifactContentType(path) ?? "application/octet-stream";
   return { bytes, contentType };
+}
+
+function sameFileIdentity(left: Stats, right: Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function privateArtifactFile(stats: Stats): boolean {
+  if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1) return false;
+  if (process.platform === "win32") return true;
+  const uid = process.getuid?.();
+  return uid !== undefined && stats.uid === uid && (stats.mode & 0o777) === 0o600;
+}
+
+function privateArtifactDirectory(stats: Stats): boolean {
+  if (!stats.isDirectory() || stats.isSymbolicLink()) return false;
+  if (process.platform === "win32") return true;
+  const uid = process.getuid?.();
+  return uid !== undefined && stats.uid === uid && (stats.mode & 0o777) === 0o700;
+}
+
+function magicMatchesExtension(bytes: Uint8Array, ext: string): boolean {
+  if (ext === "mp4" || ext === "webm") {
+    try { return guessVideoExtFromMagic(bytes) === ext; } catch { return false; }
+  }
+  const sniffed = sniffImageExtension(bytes);
+  return sniffed === ext || (sniffed === "jpg" && ext === "jpeg");
+}
+
+type ArtifactByteRange = { start: number; end: number };
+
+function parseArtifactRange(value: string, size: number): ArtifactByteRange | null {
+  if (/[^\x20-\x7e]/.test(value) || value.includes(",") || !/^bytes=/i.test(value)) return null;
+  const spec = value.slice(6);
+  const match = /^(\d*)-(\d*)$/.exec(spec);
+  if (!match || (!match[1] && !match[2])) return null;
+  const parse = (raw: string): number | null => {
+    if (!/^\d+$/.test(raw)) return null;
+    const parsed = Number(raw);
+    return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+  };
+  if (!match[1]) {
+    const suffix = parse(match[2]!);
+    if (suffix === null || suffix === 0 || size === 0) return null;
+    return { start: Math.max(0, size - suffix), end: size - 1 };
+  }
+  const start = parse(match[1]);
+  if (start === null || start >= size) return null;
+  if (!match[2]) return { start, end: size - 1 };
+  const requestedEnd = parse(match[2]);
+  if (requestedEnd === null || requestedEnd < start) return null;
+  return { start, end: Math.min(requestedEnd, size - 1) };
+}
+
+function closeQuietlyFd(fd: number): void {
+  try { closeSync(fd); } catch { /* already closed */ }
+}
+
+/**
+ * Open, validate, and stream one artifact through a single no-follow file
+ * descriptor. The pathname is rechecked against the opened identity before any
+ * bytes are returned, so a later replacement cannot retarget the response.
+ */
+export async function createArtifactResponse(
+  id: string,
+  method: "GET" | "HEAD",
+  rangeHeader: string | null,
+): Promise<Response | null> {
+  if (!ARTIFACT_ID_RE.test(id)) return null;
+  const ext = artifactExtension(id);
+  const contentType = artifactContentType(id);
+  if (!ext || !contentType) return null;
+
+  const dir = resolve(getArtifactsDir());
+  let dirStats: Stats;
+  let before: Stats;
+  const path = resolve(dir, id);
+  if (!path.startsWith(dir + sep)) return null;
+  try {
+    dirStats = lstatSync(dir);
+    before = lstatSync(path);
+  } catch {
+    return null;
+  }
+  if (!privateArtifactDirectory(dirStats) || !privateArtifactFile(before)) return null;
+  if (process.platform === "win32") {
+    if (!hardenSecretDir(dir, { required: false }).ok || !hardenSecretPath(path, { required: false }).ok) {
+      return null;
+    }
+    try {
+      dirStats = lstatSync(dir);
+      before = lstatSync(path);
+    } catch {
+      return null;
+    }
+    if (!privateArtifactDirectory(dirStats) || !privateArtifactFile(before)) return null;
+  }
+
+  let fd: number;
+  try {
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  } catch {
+    return null;
+  }
+  let stats: Stats;
+  try {
+    stats = fstatSync(fd);
+    const after = lstatSync(path);
+    if (
+      !privateArtifactFile(stats)
+      || !privateArtifactFile(after)
+      || !sameFileIdentity(before, stats)
+      || !sameFileIdentity(stats, after)
+    ) {
+      closeQuietlyFd(fd);
+      return null;
+    }
+    const maxBytes = ext === "mp4" || ext === "webm" ? MAX_VIDEO_DOWNLOAD_BYTES : MAX_DOWNLOAD_BYTES;
+    if (!Number.isSafeInteger(stats.size) || stats.size <= 0 || stats.size > maxBytes) {
+      closeQuietlyFd(fd);
+      return null;
+    }
+    const header = Buffer.alloc(Math.min(12, stats.size));
+    const bytesRead = readSync(fd, header, 0, header.length, 0);
+    if (bytesRead !== header.length || !magicMatchesExtension(header, ext)) {
+      closeQuietlyFd(fd);
+      return null;
+    }
+  } catch {
+    closeQuietlyFd(fd);
+    return null;
+  }
+
+  const commonHeaders = new Headers({
+    "accept-ranges": "bytes",
+    "cache-control": "private, max-age=3600",
+    "content-type": contentType,
+    "x-content-type-options": "nosniff",
+  });
+  let status = 200;
+  let start = 0;
+  let end = stats.size - 1;
+  if (rangeHeader !== null) {
+    const range = parseArtifactRange(rangeHeader, stats.size);
+    if (!range) {
+      closeQuietlyFd(fd);
+      commonHeaders.set("content-range", `bytes */${stats.size}`);
+      commonHeaders.set("content-length", "0");
+      return new Response(null, { status: 416, headers: commonHeaders });
+    }
+    status = 206;
+    start = range.start;
+    end = range.end;
+    commonHeaders.set("content-range", `bytes ${start}-${end}/${stats.size}`);
+  }
+  commonHeaders.set("content-length", String(end - start + 1));
+  if (method === "HEAD") {
+    closeQuietlyFd(fd);
+    return new Response(null, { status, headers: commonHeaders });
+  }
+
+  let position = start;
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    closeQuietlyFd(fd);
+  };
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (position > end) {
+        close();
+        controller.close();
+        return;
+      }
+      const length = Math.min(ARTIFACT_STREAM_CHUNK_BYTES, end - position + 1);
+      const chunk = Buffer.allocUnsafe(length);
+      try {
+        const bytesRead = readSync(fd, chunk, 0, length, position);
+        if (bytesRead <= 0) throw new Error("artifact changed during streaming");
+        position += bytesRead;
+        controller.enqueue(chunk.subarray(0, bytesRead));
+        if (position > end) {
+          close();
+          controller.close();
+        }
+      } catch (error) {
+        close();
+        controller.error(error);
+      }
+    },
+    cancel() {
+      close();
+    },
+  });
+  return new Response(body, { status, headers: commonHeaders });
 }
 
 /**
@@ -140,37 +386,9 @@ export function decodeValidatedImageBase64(base64Data: string): Buffer {
  * of files. All errors are swallowed and logged so a prune failure never breaks an image write.
  */
 export function pruneOldArtifacts(dir: string, maxFiles: number): void {
-  // A non-positive maxFiles disables pruning entirely (do not delete everything).
-  if (maxFiles <= 0) return;
-  let entries: string[];
-  try {
-    entries = readdirSync(dir);
-  } catch {
+  const result = pruneMediaArtifacts({ dir, maxFiles });
+  if (result.blocked && maxFiles > 0) {
     console.warn("[images] prune: artifact directory could not be read");
-    return;
-  }
-  if (entries.length <= maxFiles) return;
-
-  let stats: Array<{ name: string; mtime: number }>;
-  try {
-    stats = entries.map(name => {
-      const st = statSync(join(dir, name));
-      return { name, mtime: st.mtimeMs };
-    });
-  } catch {
-    console.warn("[images] prune: artifact metadata could not be read");
-    return;
-  }
-
-  // Sort oldest-first, delete the excess.
-  stats.sort((a, b) => a.mtime - b.mtime);
-  const toDelete = stats.slice(0, stats.length - maxFiles);
-  for (const { name } of toDelete) {
-    try {
-      unlinkSync(join(dir, name));
-    } catch {
-      console.warn("[images] prune: an artifact could not be deleted");
-    }
   }
 }
 
@@ -204,10 +422,23 @@ async function writeArtifactUnique(
   for (let attempt = 0; ; attempt++) {
     const suffix = attempt === 0 ? crypto.randomUUID() : `${crypto.randomUUID()}-${attempt}`;
     const filePath = join(dir, `${prefix}${timestampPrefix()}-${suffix}.${ext}`);
+    let handle: FileHandle | undefined;
     try {
-      await writeFile(filePath, buf, { mode: 0o600, flag: "wx" });
+      handle = await open(filePath, "wx", 0o600);
+      if (process.platform === "win32") {
+        hardenSecretPath(filePath, { required: true, timeoutMemoKey: `${dir}::artifact-file` });
+      }
+      await handle.writeFile(buf);
+      await handle.sync();
+      await handle.close();
+      handle = undefined;
+      await syncArtifactDirectory(dir);
       return filePath;
     } catch (e) {
+      if (handle) {
+        try { await handle.close(); } catch { /* cleanup continues */ }
+      }
+      try { await unlink(filePath); } catch { /* absent or collision */ }
       if (e instanceof Error && "code" in e && (e as { code: string }).code === "EEXIST" && attempt < 3) continue;
       throw e;
     }
@@ -243,9 +474,7 @@ export async function materializeInlineImage(
   base64Data: string,
   budget?: ImageBudget,
 ): Promise<string> {
-  const dir = getArtifactsDir();
-  recordOwnedConfigPath(getConfigDir(), dir);
-  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const dir = await ensureArtifactsDirectory();
 
   const buf = decodeValidatedImageBase64(base64Data);
   chargeImageBudget(budget, buf.length);
@@ -276,14 +505,7 @@ export async function removeArtifactById(id: string): Promise<boolean> {
   const dir = resolve(getArtifactsDir());
   const candidate = resolve(dir, id);
   if (!candidate.startsWith(dir + sep)) return false;
-  try {
-    const stats = lstatSync(candidate);
-    if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1) return false;
-    await unlink(candidate);
-    return true;
-  } catch {
-    return false;
-  }
+  return removeMediaArtifact(dir, id);
 }
 
 export async function downloadImageToArtifact(
@@ -354,15 +576,13 @@ export async function downloadImageToArtifact(
 
   chargeImageBudget(budget, bytes.length);
 
-  const dir = getArtifactsDir();
-  recordOwnedConfigPath(getConfigDir(), dir);
-  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const dir = await ensureArtifactsDirectory();
 
   // Retention is post-batch via pruneArtifacts (see fulfill.ts).
   return writeArtifactUnique(dir, "dl-", bytes, ext);
 }
 
-const MAX_VIDEO_DOWNLOAD_BYTES = 200 * 1024 * 1024; // 200 MiB
+export const MAX_VIDEO_DOWNLOAD_BYTES = 200 * 1024 * 1024; // 200 MiB
 /** Aggregate per-turn video download cap (600 MiB = 3 × max single download). */
 const MAX_VIDEO_BYTES_PER_TURN = MAX_VIDEO_DOWNLOAD_BYTES * 3;
 
@@ -393,6 +613,34 @@ export function guessVideoExtFromMagic(bytes: Uint8Array): string {
   throw new Error("unrecognized video format — magic bytes do not match MP4 or WebM");
 }
 
+export type VideoArtifactExtension = "mp4" | "webm";
+
+/** Reserve an opaque final artifact id before any final-name publication. */
+export function reserveVideoArtifactId(ext: VideoArtifactExtension): string {
+  if (ext !== "mp4" && ext !== "webm") throw new Error("video artifact extension is invalid");
+  return `vid-${timestampPrefix()}-${crypto.randomUUID()}.${ext}`;
+}
+
+export interface VideoArtifactDownloadOptions {
+  /** Existing durable reservation reused after a crash/retry. */
+  reservedArtifactId?: string;
+  /** Must commit the id to durable downloading state before publication starts. */
+  onReserveArtifact?: (artifactId: string) => void | Promise<void>;
+}
+
+function selectVideoArtifactId(
+  options: VideoArtifactDownloadOptions,
+  ext: VideoArtifactExtension,
+): string {
+  const artifactId = options.reservedArtifactId ?? reserveVideoArtifactId(ext);
+  if (
+    !ARTIFACT_ID_RE.test(artifactId)
+    || basename(artifactId) !== artifactId
+    || artifactExtension(artifactId) !== ext
+  ) throw new Error("video artifact reservation is invalid");
+  return artifactId;
+}
+
 async function syncArtifactDirectory(dir: string): Promise<void> {
   // POSIX needs a directory fsync for rename durability. Windows does not expose
   // a portable directory handle through node:fs; its rename is committed by the
@@ -413,8 +661,12 @@ function artifactFsErrorCode(error: unknown): string | undefined {
 }
 
 async function validateVideoTemp(path: string, expectedExt: string): Promise<void> {
-  const handle = await open(path, "r");
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
+    const stats = await handle.stat();
+    if (!privateArtifactFile(stats) || stats.size < 12 || stats.size > MAX_VIDEO_DOWNLOAD_BYTES) {
+      throw new Error("video artifact validation failed before publication");
+    }
     const header = Buffer.alloc(12);
     const { bytesRead } = await handle.read(header, 0, header.length, 0);
     if (bytesRead < header.length || guessVideoExtFromMagic(header) !== expectedExt) {
@@ -425,52 +677,87 @@ async function validateVideoTemp(path: string, expectedExt: string): Promise<voi
   }
 }
 
+async function validatePublishedVideo(path: string, expectedExt: string): Promise<void> {
+  const before = lstatSync(path);
+  if (!privateArtifactFile(before)) throw new Error("reserved video artifact is unsafe");
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const stats = await handle.stat();
+    const after = lstatSync(path);
+    if (
+      !privateArtifactFile(stats)
+      || !privateArtifactFile(after)
+      || !sameFileIdentity(before, stats)
+      || !sameFileIdentity(stats, after)
+      || stats.size < 12
+      || stats.size > MAX_VIDEO_DOWNLOAD_BYTES
+    ) throw new Error("reserved video artifact is unsafe");
+    const header = Buffer.alloc(12);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (bytesRead !== header.length || guessVideoExtFromMagic(header) !== expectedExt) {
+      throw new Error("reserved video artifact has invalid media bytes");
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
 /**
- * Publish a fully written video under its opaque final id in one rename.
- * The temp and final share a directory, so the rename cannot cross filesystems.
- * The exclusive temp token serializes same-token writers; an existing final id
- * is detected and retried, so the rename never replaces an artifact we own.
+ * Publish a fully written video under its opaque final id with an atomic,
+ * no-replace hard link. The private temp and final share one filesystem.
  */
 async function publishVideoArtifact(
   dir: string,
   ext: string,
+  artifactId: string,
   write: (handle: FileHandle) => Promise<void>,
 ): Promise<string> {
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const token = crypto.randomUUID();
-    const finalPath = join(dir, `vid-${timestampPrefix()}-${token}.${ext}`);
-    const tempPath = join(dir, `.ccx-video-${token}.tmp`);
-    let handle: FileHandle | undefined;
-    let published = false;
-    try {
-      handle = await open(tempPath, "wx", 0o600);
-      await write(handle);
-      await handle.sync();
-      await handle.close();
-      handle = undefined;
-      await validateVideoTemp(tempPath, ext);
-      if (existsSync(finalPath)) {
-        await unlink(tempPath);
-        continue;
-      }
-      await rename(tempPath, finalPath);
-      published = true;
-      await syncArtifactDirectory(dir);
-      return finalPath;
-    } catch (error) {
-      if (handle) {
-        try { await handle.close(); } catch { /* cleanup continues */ }
-      }
-      try { await unlink(tempPath); } catch { /* absent or already renamed */ }
-      if (published) {
-        try { await unlink(finalPath); } catch { /* cleanup remains best effort */ }
-        try { await syncArtifactDirectory(dir); } catch { /* preserve original failure */ }
-      }
-      if (artifactFsErrorCode(error) === "EEXIST") continue;
-      throw error;
-    }
+  if (!ARTIFACT_ID_RE.test(artifactId) || artifactExtension(artifactId) !== ext || basename(artifactId) !== artifactId) {
+    throw new Error("video artifact reservation is invalid");
   }
-  throw new Error("video artifact could not reserve a unique publication id");
+  const finalPath = join(dir, artifactId);
+  if (existsSync(finalPath)) {
+    await validatePublishedVideo(finalPath, ext);
+    return finalPath;
+  }
+  const token = crypto.randomUUID();
+  const tempPath = join(dir, `.ccx-video-${token}.tmp`);
+  let handle: FileHandle | undefined;
+  let published = false;
+  try {
+    handle = await open(tempPath, "wx", 0o600);
+    if (process.platform === "win32") {
+      hardenSecretPath(tempPath, { required: true, timeoutMemoKey: `${dir}::video-artifact` });
+    }
+    await write(handle);
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await validateVideoTemp(tempPath, ext);
+    // link() is an atomic no-replace publication primitive. Unlike rename(), it
+    // cannot overwrite a concurrently created final artifact.
+    await link(tempPath, finalPath);
+    published = true;
+    await unlink(tempPath);
+    await syncArtifactDirectory(dir);
+    await validatePublishedVideo(finalPath, ext);
+    return finalPath;
+  } catch (error) {
+    if (handle) {
+      try { await handle.close(); } catch { /* cleanup continues */ }
+    }
+    try { await unlink(tempPath); } catch { /* absent */ }
+    if (published) {
+      try { await unlink(finalPath); } catch { /* cleanup remains best effort */ }
+      try { await syncArtifactDirectory(dir); } catch { /* preserve original failure */ }
+    }
+    if (artifactFsErrorCode(error) === "EEXIST") {
+      // Another publisher may have completed the exact durable reservation.
+      await validatePublishedVideo(finalPath, ext);
+      return finalPath;
+    }
+    throw error;
+  }
 }
 
 /**
@@ -482,24 +769,28 @@ export async function downloadVideoToArtifact(
   url: string,
   budget?: VideoBudget,
   signal?: AbortSignal,
+  options: VideoArtifactDownloadOptions = {},
 ): Promise<string> {
   // For data: URLs, handle inline (unlikely for video but keep parity)
   if (url.startsWith("data:")) {
     const commaIdx = url.indexOf(",");
+    if (commaIdx < 0) throw new Error("video data URI is invalid");
     const meta = url.slice(0, commaIdx);
     const data = url.slice(commaIdx + 1);
     const isBase64 = meta.includes(";base64");
     if (!isBase64) throw new Error("non-base64 data URI for video is not supported");
+    if (!BASE64_RE.test(data) || data.length % 4 !== 0) throw new Error("video data URI is not valid base64");
     const buf = Buffer.from(data, "base64");
+    if (buf.byteLength === 0) throw new Error("video data URI is empty");
+    if (buf.byteLength > MAX_VIDEO_DOWNLOAD_BYTES) throw new Error("video data URI exceeds size cap");
     if (budget && !chargeVideoBudget(budget, buf.byteLength)) {
       throw new Error("video data URI exceeds per-turn download budget");
     }
-    if (buf.byteLength > MAX_VIDEO_DOWNLOAD_BYTES) throw new Error("video data URI exceeds size cap");
-    const ext = guessVideoExtFromMagic(buf);
-    const dir = getArtifactsDir();
-    recordOwnedConfigPath(getConfigDir(), dir);
-    await mkdir(dir, { recursive: true, mode: 0o700 });
-    return publishVideoArtifact(dir, ext, async handle => {
+    const ext = guessVideoExtFromMagic(buf) as VideoArtifactExtension;
+    const artifactId = selectVideoArtifactId(options, ext);
+    await options.onReserveArtifact?.(artifactId);
+    const dir = await ensureArtifactsDirectory();
+    return publishVideoArtifact(dir, ext, artifactId, async handle => {
       await handle.writeFile(buf);
     });
   }
@@ -522,9 +813,7 @@ export async function downloadVideoToArtifact(
     throw new Error("video download failed: " + resp.status);
   }
 
-  const dir = getArtifactsDir();
-  recordOwnedConfigPath(getConfigDir(), dir);
-  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const dir = await ensureArtifactsDirectory();
 
   const reader = resp.body?.getReader();
   if (!reader) throw new Error("video download returned no body");
@@ -545,8 +834,10 @@ export async function downloadVideoToArtifact(
       throw new Error("video download returned empty body");
     }
     const sniffBuf = Buffer.concat(sniffChunks);
-    const ext = guessVideoExtFromMagic(new Uint8Array(sniffBuf));
-    const published = await publishVideoArtifact(dir, ext, async handle => {
+    const ext = guessVideoExtFromMagic(new Uint8Array(sniffBuf)) as VideoArtifactExtension;
+    const artifactId = selectVideoArtifactId(options, ext);
+    await options.onReserveArtifact?.(artifactId);
+    const published = await publishVideoArtifact(dir, ext, artifactId, async handle => {
       // Write all buffered chunks and set up accounting.
       let totalBytes = sniffBuf.byteLength;
       if (budget && !chargeVideoBudget(budget, totalBytes)) {

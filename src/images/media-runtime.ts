@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 
-import { downloadVideoToArtifact } from "./artifacts";
+import { downloadVideoToArtifact, type VideoArtifactDownloadOptions } from "./artifacts";
 import { isMediaTransportError, mediaError, type MediaTransportError } from "./media-errors";
 import type { MediaCredentialBinding } from "./types";
 import {
@@ -12,6 +12,7 @@ import {
 } from "./xai-video-client";
 import {
   VIDEO_ADMISSION_HOLDING_STATES,
+  type ArtifactPinReleaseResult,
   type PublicVideoJob,
   type SafeMediaFailure,
   type VideoJobRecord,
@@ -19,7 +20,13 @@ import {
   type VideoJobUpdate,
 } from "./video-job-store";
 
-export type MediaRuntimeCrashSeam = "before_fence" | "after_fence" | "after_request_id" | "after_accepted_commit";
+export type MediaRuntimeCrashSeam =
+  | "before_fence"
+  | "after_fence"
+  | "after_request_id"
+  | "after_accepted_commit"
+  | "after_artifact_reserved"
+  | "after_artifact_published";
 
 export interface MediaRuntimeDeps {
   now?: () => number;
@@ -35,7 +42,11 @@ export interface MediaRuntimeDeps {
     signal?: AbortSignal,
     options?: { deadlineAt?: number; timeoutMs?: number },
   ) => Promise<XaiVideoPollResult>;
-  downloadVideo?: (url: string, signal?: AbortSignal) => Promise<string>;
+  downloadVideo?: (
+    url: string,
+    signal?: AbortSignal,
+    options?: VideoArtifactDownloadOptions,
+  ) => Promise<string>;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   pollIntervalMs?: number;
   /** Test-only hard-crash seam. A thrown error deliberately leaves the last durable state untouched. */
@@ -78,6 +89,9 @@ export interface ServerMediaRuntime extends ModelVideoRuntime {
   startBackgroundRecovery(): void;
   beginShutdown(): void;
   shutdown(): Promise<void>;
+  /** Optional durable artifact pins consumed by the shared retention coordinator. */
+  protectedArtifactIds?(): ReadonlySet<string>;
+  releaseArtifactForPrune?(artifactId: string): ArtifactPinReleaseResult;
 }
 
 function requireUpdated(update: VideoJobUpdate): VideoJobRecord {
@@ -158,7 +172,8 @@ export class MediaRuntime implements ServerMediaRuntime {
     this.#now = deps.now ?? Date.now;
     this.#submit = deps.submitVideoJob ?? submitXaiVideoJob;
     this.#poll = deps.pollVideoJob ?? pollXaiVideoJob;
-    this.#download = deps.downloadVideo ?? (async (url, signal) => downloadVideoToArtifact(url, undefined, signal));
+    this.#download = deps.downloadVideo
+      ?? (async (url, signal, options) => downloadVideoToArtifact(url, undefined, signal, options));
     this.#sleep = deps.sleep ?? sleepWithAbort;
     this.#pollIntervalMs = typeof deps.pollIntervalMs === "number" && Number.isFinite(deps.pollIntervalMs)
       ? Math.max(1, Math.floor(deps.pollIntervalMs))
@@ -367,34 +382,59 @@ export class MediaRuntime implements ServerMediaRuntime {
       return this.#public(job);
     }
 
-    // The signed URL remains on this stack only; the durable transition stores no URL.
-    job = this.#transition({
-      id: job.id,
-      expectedRevision: job.revision,
-      from: ["polling"],
-      to: "downloading",
-      safeError: null,
-    });
+    // The signed URL remains on this stack only. The artifact downloader sniffs
+    // the format, then CAS-reserves its exact final id before it creates or
+    // publishes any final-name bytes.
+    let hardCrash = false;
+    let path: string;
     try {
-      const path = await this.#download(result.videoUrl, signal);
-      job = this.#transition({
-        id: job.id,
-        expectedRevision: job.revision,
-        from: ["downloading"],
-        to: "completed",
-        artifactId: basename(path),
-        safeError: null,
+      path = await this.#download(result.videoUrl, signal, {
+        ...(job.artifactId ? { reservedArtifactId: job.artifactId } : {}),
+        onReserveArtifact: artifactId => {
+          const reservingJob = job;
+          if (!reservingJob) throw new Error("The durable media job is unavailable.");
+          job = requireUpdated(this.#store.reserveVideoArtifact(reservingJob.id, reservingJob.revision, artifactId));
+          this.#notify(job.id);
+          try {
+            this.#crashSeam?.("after_artifact_reserved", this.#public(job));
+          } catch (error) {
+            hardCrash = true;
+            throw error;
+          }
+        },
       });
-    } catch {
+      // Backward-compatible injected test seam: production's sole downloader
+      // always invokes onReserveArtifact before publication.
+      if (job.state === "polling") {
+        job = requireUpdated(this.#store.reserveVideoArtifact(job.id, job.revision, basename(path)));
+        this.#notify(job.id);
+      }
+      if (!job.artifactId || basename(path) !== job.artifactId) {
+        throw new Error("published video did not match its durable artifact reservation");
+      }
+    } catch (error) {
+      if (hardCrash) throw error;
       job = this.#transition({
         id: job.id,
         expectedRevision: job.revision,
-        from: ["downloading"],
+        from: ["polling", "downloading"],
         to: "download_failed",
         safeError: "download_rejected",
       });
+      return this.#public(job);
     }
+    this.#crashSeam?.("after_artifact_published", this.#public(job));
+    job = requireUpdated(this.#store.completeVideoArtifact(job.id, job.revision, job.artifactId!));
+    this.#notify(job.id);
     return this.#public(job);
+  }
+
+  protectedArtifactIds(): ReadonlySet<string> {
+    return this.#store.protectedArtifactIds();
+  }
+
+  releaseArtifactForPrune(artifactId: string): ArtifactPinReleaseResult {
+    return this.#store.releaseArtifactForPrune(artifactId);
   }
 
   prepareStartup(): ReturnType<VideoJobStore["recoverStartup"]> {
@@ -573,6 +613,10 @@ export class RecoveryBlockedMediaRuntime implements ServerMediaRuntime {
   startBackgroundRecovery(): void {}
   beginShutdown(): void {}
   shutdown(): Promise<void> { return Promise.resolve(); }
+  protectedArtifactIds(): ReadonlySet<string> {
+    throw new Error("video artifact pins are unavailable while recovery is blocked");
+  }
+  releaseArtifactForPrune(): ArtifactPinReleaseResult { return "protected"; }
 }
 
 let defaultModelVideoRuntime: ModelVideoRuntime | null = null;

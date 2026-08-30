@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 
 const PREV_HOME = process.env.CODEXCOMMANDER_HOME;
@@ -10,6 +10,10 @@ beforeAll(() => { process.env.CODEXCOMMANDER_HOME = join(tmpdir(), "ccx-prune-" 
 afterAll(() => { if (PREV_HOME === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = PREV_HOME; });
 
 const { pruneOldArtifacts, pruneArtifacts, DEFAULT_ARTIFACT_KEEP_COUNT } = await import("../../src/images/artifacts");
+const {
+  pruneMediaArtifacts,
+  registerArtifactPinAuthority,
+} = await import("../../src/images/artifact-retention");
 
 function touch(path: string, content: string = "x", ageMs = 0): void {
   writeFileSync(path, content);
@@ -88,4 +92,69 @@ describe("pruneArtifacts: integration with materializeInlineImage", () => {
     }
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   });
+
+  test("mixed image/video retention preserves pins and reports deliberate pruning", () => {
+    const dir = mkdtempSync(join(tmpdir(), "prune-mixed-"));
+    touch(join(dir, "vid-pinned.mp4"), "pinned", 10_000);
+    touch(join(dir, "img-old.png"), "old", 9_000);
+    touch(join(dir, "vid-old.webm"), "old-video", 8_000);
+    touch(join(dir, "img-recent.png"), "recent", 1_000);
+    const reported: string[] = [];
+    const result = pruneMediaArtifacts({
+      dir,
+      maxFiles: 2,
+      protectedArtifactIds: new Set(["vid-pinned.mp4"]),
+      onArtifactPruned: id => { reported.push(id); },
+    });
+    expect(readdirSync(dir).sort()).toEqual(["img-recent.png", "vid-pinned.mp4"]);
+    expect(result.prunedArtifactIds.sort()).toEqual(["img-old.png", "vid-old.webm"]);
+    expect(reported.sort()).toEqual(result.prunedArtifactIds.sort());
+  });
+
+  test("registered pin authorities protect video ids from legacy image prune callers", () => {
+    const dir = getArtifactsDirForTest();
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    touch(join(dir, "vid-job.mp4"), "video", 10_000);
+    touch(join(dir, "img-new.png"), "image", 1_000);
+    const unregister = registerArtifactPinAuthority({
+      protectedArtifactIds: () => new Set(["vid-job.mp4"]),
+    });
+    try {
+      pruneArtifacts(1);
+      expect(readdirSync(dir)).toContain("vid-job.mp4");
+    } finally {
+      unregister();
+    }
+  });
+
+  test("stale private temp files are cleaned without following symlinks", () => {
+    const dir = mkdtempSync(join(tmpdir(), "prune-temp-"));
+    const old = join(dir, ".ccx-video-stale.tmp");
+    touch(old, "partial", 60_000);
+    const outside = join(dir, "outside.txt");
+    touch(outside, "outside");
+    symlinkSync(outside, join(dir, ".ccx-video-link.tmp"));
+    const result = pruneMediaArtifacts({ dir, maxFiles: 10, staleTempAgeMs: 1_000, now: Date.now() });
+    expect(result.removedStaleTemps).toEqual([".ccx-video-stale.tmp"]);
+    expect(existsSync(outside)).toBe(true);
+    expect(existsSync(join(dir, ".ccx-video-link.tmp"))).toBe(true);
+  });
+
+  test("stale temp cleanup repairs a crash between no-replace link and temp unlink", () => {
+    const dir = mkdtempSync(join(tmpdir(), "prune-linked-temp-"));
+    const temp = join(dir, ".ccx-video-published.tmp");
+    const final = join(dir, "vid-recovered.mp4");
+    touch(temp, "durable-video", 60_000);
+    linkSync(temp, final);
+    expect(lstatSync(final).nlink).toBe(2);
+    const result = pruneMediaArtifacts({ dir, maxFiles: 10, staleTempAgeMs: 1_000, now: Date.now() });
+    expect(result.removedStaleTemps).toEqual([".ccx-video-published.tmp"]);
+    expect(existsSync(temp)).toBe(false);
+    expect(existsSync(final)).toBe(true);
+    expect(lstatSync(final).nlink).toBe(1);
+  });
 });
+
+function getArtifactsDirForTest(): string {
+  return join(process.env.CODEXCOMMANDER_HOME!, "artifacts");
+}

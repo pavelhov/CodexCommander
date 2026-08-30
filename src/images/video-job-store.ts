@@ -20,7 +20,7 @@ import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import type { MediaCredentialBinding } from "./types";
 
-export const MEDIA_JOURNAL_SCHEMA_VERSION = 1;
+export const MEDIA_JOURNAL_SCHEMA_VERSION = 2;
 export const MEDIA_JOURNAL_FILENAME = "media-journal.sqlite";
 const MEDIA_STATE_DIRECTORY = "media";
 const RECOVERY_OWNER_SUFFIX = ".recovery-owner.sqlite";
@@ -37,6 +37,7 @@ export type VideoJobState =
   | "download_failed"
   | "outcome_unknown"
   | "completed"
+  | "artifact_pruned"
   | "failed"
   | "expired"
   | "cancelled"
@@ -89,6 +90,8 @@ export type VideoJobReservation =
 export type VideoJobUpdate =
   | { kind: "updated"; job: VideoJobRecord }
   | { kind: "conflict"; current: VideoJobRecord | null };
+
+export type ArtifactPinReleaseResult = "released" | "protected" | "conflict" | "not_owned";
 
 export interface TransitionVideoJobInput {
   id: string;
@@ -233,6 +236,7 @@ export const VIDEO_ADMISSION_HOLDING_STATES: readonly VideoJobState[] = [
 const ALL_STATES: readonly VideoJobState[] = [
   ...VIDEO_ADMISSION_HOLDING_STATES,
   "completed",
+  "artifact_pruned",
   "failed",
   "expired",
   "cancelled",
@@ -248,7 +252,8 @@ const LEGAL_TRANSITIONS: Readonly<Record<VideoJobState, readonly VideoJobState[]
   downloading: ["completed", "download_failed", "expired", "cancelled"],
   download_failed: ["accepted", "polling", "downloading", "expired", "cancelled"],
   outcome_unknown: ["acknowledged"],
-  completed: [],
+  completed: ["artifact_pruned"],
+  artifact_pruned: [],
   failed: [],
   expired: [],
   cancelled: [],
@@ -886,6 +891,81 @@ export class VideoJobStore {
     });
   }
 
+  /** CAS-reserve the exact final video artifact id before publication begins. */
+  reserveVideoArtifact(id: string, expectedRevision: number, artifactId: string): VideoJobUpdate {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(?:mp4|webm)$/i.test(artifactId)) {
+      throw journalError("The video artifact reservation is invalid.");
+    }
+    return this.transitionVideoJob({
+      id,
+      expectedRevision,
+      from: ["polling"],
+      to: "downloading",
+      artifactId,
+      safeError: null,
+    });
+  }
+
+  /** Complete only when the durable downloading row still names these exact bytes. */
+  completeVideoArtifact(id: string, expectedRevision: number, artifactId: string): VideoJobUpdate {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(?:mp4|webm)$/i.test(artifactId)) {
+      throw journalError("The completed video artifact is invalid.");
+    }
+    return this.#transaction(() => {
+      const result = this.#database.query(`
+        UPDATE video_jobs
+           SET state = 'completed', revision = revision + 1, updated_at = ?, safe_error = NULL
+         WHERE id = ? AND revision = ? AND state = 'downloading' AND artifact_id = ?
+      `).run(this.#now(), id, expectedRevision, artifactId);
+      const current = this.#get(id);
+      return result.changes === 1 && current
+        ? { kind: "updated", job: current }
+        : { kind: "conflict", current };
+    });
+  }
+
+  /** CAS-tombstone a completed job before its durable artifact may be deleted. */
+  markVideoArtifactPruned(id: string, expectedRevision: number, artifactId: string): VideoJobUpdate {
+    if (!validText(id, 64) || !validInteger(expectedRevision) || !safeArtifactId(artifactId)) {
+      throw journalError("The pruned video artifact transition is invalid.");
+    }
+    return this.#transaction(() => {
+      const result = this.#database.query(`
+        UPDATE video_jobs
+           SET state = 'artifact_pruned', artifact_id = NULL, revision = revision + 1, updated_at = ?
+         WHERE id = ? AND revision = ? AND state = 'completed' AND artifact_id = ?
+      `).run(this.#now(), id, expectedRevision, artifactId);
+      const current = this.#get(id);
+      return result.changes === 1 && current
+        ? { kind: "updated", job: current }
+        : { kind: "conflict", current };
+    });
+  }
+
+  /** Atomically release every ordinary completed-job pin authorizing one deletion. */
+  releaseArtifactForPrune(artifactId: string): ArtifactPinReleaseResult {
+    if (!safeArtifactId(artifactId)) throw journalError("The pruned artifact id is invalid.");
+    return this.#transaction(() => {
+      const probePin = this.#database.query<{ found: number }, [string]>(
+        "SELECT 1 AS found FROM capability_probe_steps WHERE artifact_id = ? LIMIT 1",
+      ).get(artifactId);
+      if (probePin) return "protected";
+      const jobs = this.#database.query<{ id: string; revision: number; state: VideoJobState }, [string]>(`
+        SELECT id, revision, state FROM video_jobs WHERE artifact_id = ?
+        ORDER BY id LIMIT ${MAX_ROWS + 1}
+      `).all(artifactId);
+      if (jobs.length > MAX_ROWS) throw journalError("The media retention set is too large.");
+      if (jobs.length === 0) return "not_owned";
+      if (jobs.some(job => job.state !== "completed")) return "protected";
+      const changed = this.#database.query(`
+        UPDATE video_jobs
+           SET state = 'artifact_pruned', artifact_id = NULL, revision = revision + 1, updated_at = ?
+         WHERE artifact_id = ? AND state = 'completed'
+      `).run(this.#now(), artifactId);
+      return changed.changes === jobs.length ? "released" : "conflict";
+    });
+  }
+
   fenceVideoSubmission(id: string, expectedRevision: number): VideoJobUpdate {
     return this.transitionVideoJob({ id, expectedRevision, from: ["queued"], to: "submitting" });
   }
@@ -1006,6 +1086,16 @@ export class VideoJobStore {
     const ids = this.listVideoJobs()
       .filter(job => job.artifactId && (job.state === "completed" || VIDEO_ADMISSION_HOLDING_STATES.includes(job.state)))
       .map(job => job.artifactId!);
+    const probeRows = this.#database.query<{ artifact_id: unknown }, []>(`
+      SELECT DISTINCT artifact_id FROM capability_probe_steps
+       WHERE artifact_id IS NOT NULL LIMIT ${MAX_ROWS + 1}
+    `).all();
+    if (probeRows.length > MAX_ROWS) throw journalError("The media retention set is too large.");
+    for (const row of probeRows) {
+      const id = row.artifact_id;
+      if (typeof id !== "string" || !safeArtifactId(id)) throw journalError("The media journal contains an invalid artifact id.");
+      ids.push(id);
+    }
     return new Set(ids);
   }
 
@@ -1250,21 +1340,29 @@ export class VideoJobStore {
       const step = current.steps[input.step];
       if (step.state !== "completed" || !step.artifactId) return { kind: "conflict", current };
       const now = this.#now();
-      this.#database.query(`
+      if (step.videoJobId) {
+        const job = this.#get(step.videoJobId);
+        if (!job || job.state !== "completed" || job.artifactId !== step.artifactId) {
+          return { kind: "conflict", current };
+        }
+        const jobChanged = this.#database.query(`
+          UPDATE video_jobs
+             SET state = 'artifact_pruned', artifact_id = NULL, revision = revision + 1, updated_at = ?
+           WHERE id = ? AND revision = ? AND state = 'completed' AND artifact_id = ?
+        `).run(now, job.id, job.revision, step.artifactId);
+        if (jobChanged.changes !== 1) return { kind: "conflict", current };
+      }
+      const stepChanged = this.#database.query(`
         UPDATE capability_probe_steps
            SET artifact_id = NULL, inspected_at = ?, revision = revision + 1, updated_at = ?
          WHERE operation_id = ? AND step_kind = ? AND revision = ? AND state = 'completed'
       `).run(now, now, input.id, input.step, step.revision);
-      if (step.videoJobId) {
-        this.#database.query(`
-          UPDATE video_jobs SET artifact_id = NULL, revision = revision + 1, updated_at = ?
-           WHERE id = ? AND artifact_id = ?
-        `).run(now, step.videoJobId, step.artifactId);
-      }
-      this.#database.query(`
+      if (stepChanged.changes !== 1) throw journalError("The media inspection record changed concurrently.");
+      const probeChanged = this.#database.query(`
         UPDATE capability_probes SET revision = revision + 1, updated_at = ?
          WHERE id = ? AND revision = ?
       `).run(now, input.id, input.expectedRevision);
+      if (probeChanged.changes !== 1) throw journalError("The media inspection operation changed concurrently.");
       const updated = this.#getProbe(input.id);
       return updated
         ? { kind: "updated", probe: updated, artifactId: step.artifactId }
@@ -1299,18 +1397,22 @@ export class VideoJobStore {
       const artifacts: string[] = [];
       for (const row of rows) {
         if (!safeArtifactId(row.artifact_id)) throw journalError("The media journal contains an invalid artifact id.");
+        if (row.video_job_id) {
+          const job = this.#get(row.video_job_id);
+          if (!job || job.state !== "completed" || job.artifactId !== row.artifact_id) continue;
+          const jobChanged = this.#database.query(`
+            UPDATE video_jobs
+               SET state = 'artifact_pruned', artifact_id = NULL, revision = revision + 1, updated_at = ?
+             WHERE id = ? AND revision = ? AND state = 'completed' AND artifact_id = ?
+          `).run(now, job.id, job.revision, row.artifact_id);
+          if (jobChanged.changes !== 1) continue;
+        }
         const changed = this.#database.query(`
           UPDATE capability_probe_steps
              SET artifact_id = NULL, revision = revision + 1, updated_at = ?
            WHERE operation_id = ? AND step_kind = ? AND revision = ? AND artifact_id = ?
         `).run(now, row.operation_id, row.step_kind, row.revision, row.artifact_id);
         if (changed.changes !== 1) throw journalError("The media retention record changed concurrently.");
-        if (row.video_job_id) {
-          this.#database.query(`
-            UPDATE video_jobs SET artifact_id = NULL, revision = revision + 1, updated_at = ?
-             WHERE id = ? AND artifact_id = ?
-          `).run(now, row.video_job_id, row.artifact_id);
-        }
         operations.add(row.operation_id);
         artifacts.push(row.artifact_id);
       }

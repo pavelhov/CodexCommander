@@ -1,6 +1,5 @@
-import { pathToFileURL } from "node:url";
-
 import type { VideoCallResult } from "./types";
+import { artifactHttpUrl } from "./artifacts";
 
 export const DEFAULT_VIDEO_DURATION_SECONDS = 6;
 export const DEFAULT_VIDEO_RESOLUTION = "720p" as const;
@@ -96,7 +95,7 @@ export function buildVideoResult(
     path,
     files: [path],
     count: 1,
-    markdown: `[Open video](${pathToFileURL(path).href})`,
+    markdown: `[Open video](${artifactHttpUrl(path)})`,
     ...metadata,
   };
 }

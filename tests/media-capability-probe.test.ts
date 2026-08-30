@@ -242,7 +242,7 @@ describe("durable media capability probe", () => {
     f.store.close();
   });
 
-  test("inspection deletes immediately and the absolute 24h ceiling releases remaining probe media", async () => {
+  test("inspection tombstones video before deletion and the 24h ceiling releases remaining probe media", async () => {
     const root = await mkdtemp(join(tmpdir(), "ccx-capability-retention-"));
     roots.push(root);
     let now = 10_000;
@@ -266,22 +266,28 @@ describe("durable media capability probe", () => {
 
     status = await probe.recordInspection({
       operationId: status.id,
-      step: "image",
+      step: "video",
       expectedRevision: status.revision,
       caller: "interactive_cli",
       runtimeAttested: true,
       humanConfirmed: true,
     });
-    expect(removeArtifact).toHaveBeenCalledWith("img-retained.png");
-    expect(status.steps.image.artifactId).toBeUndefined();
+    expect(removeArtifact).toHaveBeenCalledWith("vid-retained.mp4");
+    expect(status.steps.video.artifactId).toBeUndefined();
+    expect(store.findVideoJobForProbe(status.id)?.state).toBe("artifact_pruned");
+    expect(store.findVideoJobForProbe(status.id)?.artifactId).toBeUndefined();
     now = 10_000 + PROBE_ARTIFACT_RETENTION_MS - 1;
     expect(await probe.sweepExpiredArtifacts()).toBe(0);
     now += 1;
     expect(await probe.sweepExpiredArtifacts()).toBe(1);
-    expect(removeArtifact).toHaveBeenCalledWith("vid-retained.mp4");
-    expect(probe.prepare(binding).steps.video.artifactId).toBeUndefined();
+    expect(removeArtifact).toHaveBeenCalledWith("img-retained.png");
+    expect(probe.prepare(binding).steps.image.artifactId).toBeUndefined();
     expect(store.findVideoJobForProbe(status.id)?.artifactId).toBeUndefined();
     store.close();
+    const reopened = openVideoJobStore({ path: join(root, "private", "journal.sqlite"), now: () => now + 1 });
+    expect(reopened.findVideoJobForProbe(status.id)?.state).toBe("artifact_pruned");
+    expect(reopened.findVideoJobForProbe(status.id)?.artifactId).toBeUndefined();
+    reopened.close();
   });
 
   test("accepted video recovery uses GET/download only and reconciles durable probe evidence", async () => {

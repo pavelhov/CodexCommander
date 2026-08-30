@@ -383,4 +383,40 @@ describe("pinnedHttpsGet transport", () => {
     expect(resIdleMs).toBe(12_345);
     await resp.arrayBuffer();
   });
+
+  test("enforces one total deadline across headers and body", async () => {
+    const requestMock = mock((
+      _options: unknown,
+      onResponse?: Function,
+    ) => {
+      const req = new EventEmitter() as EventEmitter & { setTimeout: Function; end: Function; destroy: Function };
+      req.setTimeout = () => {};
+      req.destroy = () => {};
+      req.end = () => {
+        const res = new EventEmitter() as EventEmitter & {
+          statusCode: number;
+          headers: Record<string, string>;
+          setTimeout: Function;
+          destroy: Function;
+        };
+        res.statusCode = 200;
+        res.headers = {};
+        res.setTimeout = () => {};
+        res.destroy = () => {};
+        queueMicrotask(() => onResponse?.(res));
+      };
+      return req;
+    });
+    mock.module("node:https", () => ({ default: { request: requestMock }, request: requestMock }));
+
+    const { pinnedHttpsGet } = await import("../../src/images/pinned-https-get");
+    const response = await pinnedHttpsGet(
+      "https://cdn.example/hanging-body.mp4",
+      { address: "93.184.216.34", family: 4 },
+      undefined,
+      { idleTimeoutMs: 60_000, deadlineMs: 5 },
+    );
+    const reader = response.body!.getReader();
+    await expect(reader.read()).rejects.toThrow(/deadline/);
+  });
 });

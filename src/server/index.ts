@@ -92,6 +92,8 @@ import {
   openVideoJobStore,
   type VideoJobStore,
 } from "../images/video-job-store";
+import { createArtifactResponse } from "../images/artifacts";
+import { registerArtifactPinAuthority } from "../images/artifact-retention";
 export {
   drainAndShutdown,
   getActiveTurnCount,
@@ -647,11 +649,18 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     };
   let server: Server<WsData>;
   let mediaRuntime: ServerMediaRuntime | null = null;
+  let unregisterArtifactPins = () => {};
   try {
     // Validate and normalize durable video state immediately before listen. A
     // bad/future/unsafe journal blocks only video admission, and failures in
     // earlier startup setup cannot leak a recovery-owner claim.
     mediaRuntime = initializeServerMediaRuntime(config, deps.mediaRuntime);
+    if (mediaRuntime?.protectedArtifactIds) {
+      unregisterArtifactPins = registerArtifactPinAuthority({
+        protectedArtifactIds: () => mediaRuntime!.protectedArtifactIds!(),
+        releaseArtifactForPrune: artifactId => mediaRuntime!.releaseArtifactForPrune?.(artifactId) ?? "protected",
+      });
+    }
     server = Bun.serve<WsData>({
       port: listenPort,
       hostname: bindHost,
@@ -1098,34 +1107,34 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         });
       }
 
-      if (req.method === "GET" && url.pathname.startsWith(`${ARTIFACT_HTTP_PREFIX}/`)) {
+      if (url.pathname.startsWith(`${ARTIFACT_HTTP_PREFIX}/`)) {
         const admission = resolveApiAuth(req, config);
         if (!admission) return withCors(formatErrorResponse(401, "authentication_error", AUTH_REQUIRED_MESSAGE), req, config);
         if (!isAllowedRequestOrigin(req, config)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
         }
-        const id = decodeURIComponent(url.pathname.slice(ARTIFACT_HTTP_PREFIX.length + 1));
-        const { resolveArtifactPath } = await import("../images/artifacts");
-        const artifactPath = resolveArtifactPath(id);
-        if (!artifactPath) {
+        let id: string;
+        try {
+          id = decodeURIComponent(url.pathname.slice(ARTIFACT_HTTP_PREFIX.length + 1));
+        } catch {
+          return withCors(formatErrorResponse(400, "invalid_request", "invalid artifact id encoding"), req, config);
+        }
+        if (!id || id.includes("/") || id.includes("\\")) {
           return withCors(formatErrorResponse(404, "not_found", "artifact not found"), req, config);
         }
-        const file = Bun.file(artifactPath);
-        const ext = artifactPath.split(".").pop()?.toLowerCase();
-        const contentType =
-          ext === "png" ? "image/png"
-            : ext === "jpg" || ext === "jpeg" ? "image/jpeg"
-              : ext === "webp" ? "image/webp"
-                : ext === "gif" ? "image/gif"
-                  : "application/octet-stream";
-        return withCors(new Response(file, {
-          status: 200,
-          headers: {
-            "content-type": contentType,
-            "cache-control": "private, max-age=3600",
-            "x-content-type-options": "nosniff",
-          },
-        }), req, config);
+        if (req.method !== "GET" && req.method !== "HEAD") {
+          const response = formatErrorResponse(405, "method_not_allowed", "artifact retrieval supports GET and HEAD only");
+          const headers = new Headers(response.headers);
+          headers.set("allow", "GET, HEAD");
+          return withCors(new Response(response.body, { status: 405, headers }), req, config);
+        }
+        const response = await createArtifactResponse(
+          id,
+          req.method,
+          req.method === "GET" ? req.headers.get("range") : null,
+        );
+        if (!response) return withCors(formatErrorResponse(404, "not_found", "artifact not found"), req, config);
+        return withCors(response, req, config);
       }
 
       if (url.pathname === "/v1/alpha/search" && req.method === "POST") {
@@ -1599,6 +1608,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     },
     });
   } catch (error) {
+    unregisterArtifactPins();
     mediaRuntime?.beginShutdown();
     void mediaRuntime?.shutdown();
     void nativeMainLifecycle.release();
@@ -1615,6 +1625,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         try {
           await stopServerMediaRuntime(server);
         } finally {
+          unregisterArtifactPins();
           if (getDefaultModelVideoRuntime() === mediaRuntime) setDefaultModelVideoRuntime(null);
           // Listener teardown is mandatory even if durable media cleanup reports
           // an error after fencing new paid work.
