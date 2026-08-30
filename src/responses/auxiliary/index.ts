@@ -22,9 +22,12 @@ import {
 } from "../../lib/translator-budget";
 import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchStreamProtocolError } from "../../web-search/progress-stream";
 import { fulfillImageCall } from "../../images/fulfill";
-import { parseVideoCallArgs, pollVideoWithHeartbeats, buildVideoResult, createVideoBudget } from "../../images/fulfill-video";
-import { submitVideoJob } from "../../images/xai-video-client";
-import { downloadVideoToArtifact, createImageBudget, pruneArtifacts } from "../../images/artifacts";
+import { parseVideoCallArgs, buildVideoResult } from "../../images/fulfill-video";
+import { createImageBudget, pruneArtifacts, resolveArtifactPath } from "../../images/artifacts";
+import {
+  getDefaultModelVideoRuntime,
+  type ModelVideoRuntime,
+} from "../../images/media-runtime";
 import { IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images/synthetic-tool";
 import type { ImageBridgePlan, VideoBridgePlan } from "../../images/types";
 import { runWebSearch, type SidecarOutcome } from "../../web-search/executor";
@@ -305,6 +308,8 @@ export interface ResponsesAuxiliaryLoopDeps {
   webSearchPlan?: AuxiliaryWebSearchPlan;
   /** Per-video generation timeout (ms) including polling. */
   videoTimeoutMs?: number;
+  /** Server-owned durable video runtime. Tests may inject the same narrow contract. */
+  videoRuntime?: ModelVideoRuntime;
   /** Headers forwarded from the original request (e.g. Codex auth). Cloned per iteration. */
   forwardHeaders?: Headers;
   /** Called before each routed-model dispatch in the bridge loop, for attempt telemetry. Same-target 429 replays pass the `rate-limit-429` recovery kind. */
@@ -616,7 +621,7 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
     : STALL_TIMEOUT_MS;
   const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
   let paidImageCalls = 0;
-  let paidVideoCalls = 0;
+  let acceptedVideoCalls = 0;
   let hiddenUsage: CodexCommanderUsage | undefined;
 
   const takeUsageFrom = (events: AdapterEvent[]): void => {
@@ -645,7 +650,6 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
     return true;
   });
   const budget = createImageBudget();
-  const vBudget = createVideoBudget();
 
   // Link an internal AbortController to the turn signal so a client cancel of the SSE body aborts
   // in-flight model fetches AND the sidecar.
@@ -1200,7 +1204,7 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
             const isVideoCall = call.handler === "video";
             if (isVideoCall) {
               yield { type: "heartbeat" };
-              if (paidVideoCalls >= MAX_VIDEO_CALLS_PER_TURN) {
+              if (acceptedVideoCalls >= MAX_VIDEO_CALLS_PER_TURN) {
                 const vResult = {
                   ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0,
                   error: `video call budget exhausted (max ${MAX_VIDEO_CALLS_PER_TURN} per turn)`,
@@ -1215,55 +1219,102 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
               if (!vArgs.ok) {
                 vResult = { ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0, error: vArgs.error };
               } else {
-                paidVideoCalls += 1;
                 const videoTimeout = videoTimeoutMs ?? 300_000;
-                const deadlineSignal = AbortSignal.timeout(videoTimeout);
                 try {
                   const videoDeadline = Date.now() + videoTimeout;
-                  // Bind submit to the shared deadline so submit + poll fit one budget.
-                  const linkedDeadline = signal
-                    ? AbortSignal.any([signal, deadlineSignal])
-                    : deadlineSignal;
-                  const { requestId } = await submitVideoJob(
-                    {
-                      prompt: vArgs.prompt, model: videoPlan!.model,
-                      ...(vArgs.duration != null ? { duration: vArgs.duration } : {}),
-                      ...(vArgs.resolution != null ? { resolution: vArgs.resolution } : {}),
-                      ...(vArgs.aspectRatio != null ? { aspectRatio: vArgs.aspectRatio } : {}),
-                    },
-                    videoPlan!.auth, linkedDeadline,
-                  );
-                  const remainingMs = videoDeadline - Date.now();
-                  if (remainingMs <= 0) {
-                    vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt, files: [], count: 0, error: `video generation timed out after ${Math.floor(videoTimeout / 1000)}s` };
+                  const runtime = deps.videoRuntime ?? getDefaultModelVideoRuntime();
+                  if (!runtime) {
+                    vResult = {
+                      ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0,
+                      error: "video recovery is unavailable (recovery_blocked)",
+                    };
                   } else {
-                  const pollGen = pollVideoWithHeartbeats(requestId, videoPlan!.auth, linkedDeadline, remainingMs);
-                  let pollResult: { ok: true; videoUrl: string } | { ok: false; error: string };
-                  try {
-                    for (;;) {
-                      const { value, done } = await pollGen.next();
-                      if (done) { pollResult = value; break; }
-                      yield { type: "heartbeat" };
+                    const submission = await runtime.submitVideo({
+                      binding: videoPlan!.auth,
+                      deadlineAt: videoDeadline,
+                      request: {
+                        prompt: vArgs.prompt,
+                        model: videoPlan!.model,
+                        duration: vArgs.duration,
+                        resolution: vArgs.resolution,
+                        aspectRatio: vArgs.aspectRatio,
+                        ...(vArgs.audio !== undefined ? { audio: vArgs.audio } : {}),
+                      },
+                      signal,
+                    });
+                    if (submission.kind === "busy") {
+                      vResult = {
+                        ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0,
+                        jobId: submission.reservationId,
+                        error: "video_busy: another video job is active for this credential",
+                      };
+                    } else {
+                      acceptedVideoCalls += 1;
+                      let job = submission.job;
+                      runtime.startVideoJob(job.id);
+                      // One renderer-safe progress item; later waits use invisible keepalives.
+                      yield {
+                        type: "text_delta",
+                        phase: "commentary",
+                        text: `Video accepted. Job ${job.id} is generating in the background.`,
+                      };
+                      while (["accepted", "polling", "needs_auth", "downloading", "download_failed"].includes(job.state)) {
+                        const update = await runtime.waitForVideoUpdate(job.id, job.revision, {
+                          signal,
+                          timeoutMs: 2_000,
+                        });
+                        if (update.kind === "timeout") {
+                          yield { type: "heartbeat" };
+                          continue;
+                        }
+                        if (update.kind === "updated") {
+                          job = update.job;
+                          yield { type: "heartbeat" };
+                          continue;
+                        }
+                        if (signal.aborted) throw new LoopError(499, "client closed request during video-bridge");
+                        vResult = {
+                          ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0,
+                          jobId: job.id,
+                          error: `video_detached: generation continues as job ${job.id}; inspect it in the dashboard or with ccx media status`,
+                        };
+                        break;
+                      }
+                      if (!vResult) {
+                        if (job.state === "completed" && job.artifactId) {
+                          const path = resolveArtifactPath(job.artifactId);
+                          vResult = path
+                            ? buildVideoResult(path, vArgs.prompt, videoPlan!.model, {
+                                duration: vArgs.duration,
+                                resolution: vArgs.resolution,
+                                aspectRatio: vArgs.aspectRatio,
+                                ...(vArgs.audio !== undefined ? { audio: vArgs.audio } : {}),
+                                jobId: job.id,
+                              })
+                            : {
+                                ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0,
+                                jobId: job.id,
+                                error: "video artifact is not available locally",
+                              };
+                        } else {
+                          const guidance = job.state === "outcome_unknown"
+                            ? "the submission outcome is unknown; acknowledge it in the dashboard or CLI before retrying"
+                            : `video job ended in state ${job.state}`;
+                          vResult = {
+                            ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0,
+                            jobId: job.id,
+                            error: `${guidance}${job.safeError ? ` (${job.safeError})` : ""}`,
+                          };
+                        }
+                      }
                     }
-                  } finally {
-                    await pollGen.return({ ok: false, error: "cancelled" }).catch(() => {});
-                  }
-                  if (signal.aborted) throw new LoopError(499, "client closed request during video-bridge");
-                  if (pollResult.ok) {
-                    const dlPath = await downloadVideoToArtifact(pollResult.videoUrl, vBudget, signal);
-                    vResult = buildVideoResult(dlPath, vArgs.prompt, videoPlan!.model);
-                  } else {
-                    vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt, files: [], count: 0, error: pollResult.error };
-                  }
                   }
                 } catch (e) {
-                  if (deadlineSignal.aborted && !signal.aborted) {
-                    vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt ?? "", files: [], count: 0, error: `video generation timed out after ${Math.floor(videoTimeout / 1000)}s` };
-                  } else if (signal.aborted) {
+                  if (signal.aborted) {
                     throw new LoopError(499, "client closed request during video-bridge");
                   } else {
                     const error = e instanceof Error ? e.message : String(e);
-                    vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt ?? "", files: [], count: 0, error };
+                    vResult = { ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0, error };
                   }
                 }
               }
@@ -1308,7 +1359,8 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
           }
           // Prune artifacts once after the entire batch so a tight keepCount
           // cannot delete a video from an earlier call in this same iteration.
-          pruneArtifacts(videoPlan?.artifactsKeepCount ?? plan?.artifactsKeepCount);
+          // Durable video jobs own their pins. The legacy generic pruner is image-only here.
+          if (plan) pruneArtifacts(plan.artifactsKeepCount);
           // Drop results whose artifact files were pruned — never hand the model a dead path.
           for (const f of fulfilled) {
             if (!f.result || !f.result.ok || !f.result.files || f.result.files.length === 0) continue;

@@ -119,14 +119,16 @@ export function buildVideoTool(): CodexCommanderTool {
       properties: {
         prompt: { type: "string", description: "Detailed video generation prompt. Required." },
         duration: { type: "integer", minimum: 1, maximum: 15, description: "Video length in seconds. Default 6." },
-        resolution: { type: "string", enum: ["480p", "720p"], description: "Video resolution. Default 720p." },
+        resolution: { type: "string", enum: ["480p", "720p", "1080p"], description: "Video resolution. Default 720p." },
         aspect_ratio: {
           type: "string",
           enum: ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"],
           description: "Aspect ratio. Default 16:9.",
         },
+        audio: { type: "boolean", description: "Whether the generated video should include audio." },
       },
       required: ["prompt"],
+      additionalProperties: false,
     },
     videoGeneration: true,
   };

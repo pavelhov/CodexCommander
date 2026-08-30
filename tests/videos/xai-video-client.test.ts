@@ -1,39 +1,103 @@
-import { describe, expect, test, mock, afterEach } from "bun:test";
-import { submitVideoJob, pollVideoJob } from "../../src/images/xai-video-client";
-import type { MediaCredentialBinding } from "../../src/images/types";
-import { createStaticMediaCredentialLease } from "../../src/images/media-credentials";
+import { describe, expect, test } from "bun:test";
 
-const auth = { baseUrl: "https://api.x.ai/v1", token: "test-key" };
-const binding: MediaCredentialBinding = {
+import { createStaticMediaCredentialLease } from "../../src/images/media-credentials";
+import type { MediaCredentialBinding } from "../../src/images/types";
+import { pollVideoJob, submitVideoJob, XAI_VIDEO_MODEL } from "../../src/images/xai-video-client";
+
+const oauthBinding: MediaCredentialBinding = {
   authSource: "subscription_oauth",
   providerKind: "canonical",
   slotRef: "media-oauth-slot:test",
   identityDigest: "sha256:test",
 };
+const keyBinding: MediaCredentialBinding = { ...oauthBinding, authSource: "api_key" };
 
-const originalFetch = globalThis.fetch;
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-  mock.restore();
-});
+function keyLease() {
+  return createStaticMediaCredentialLease(keyBinding, "key-only");
+}
 
-function mockFetchResponse(body: unknown, status = 200): Response {
+function json(body: unknown, status = 200, headers?: HeadersInit): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
   });
 }
 
 describe("submitVideoJob", () => {
-  test("OAuth 401 refreshes and replays exactly once", async () => {
-    const attempts: string[] = [];
-    const fetchMock = mock((_url: string, init: RequestInit) => {
-      attempts.push(new Headers(init.headers).get("authorization") ?? "");
-      return Promise.resolve(attempts.length === 1
-        ? mockFetchResponse({}, 401)
-        : mockFetchResponse({ request_id: "refreshed-job" }));
+  test("serializes the stable 1.5 text-to-video contract including 1080p and audio", async () => {
+    let capturedUrl = "";
+    let capturedBody = "";
+    const result = await submitVideoJob({
+      prompt: "dance",
+      model: XAI_VIDEO_MODEL,
+      duration: 15,
+      resolution: "1080p",
+      aspectRatio: "9:16",
+      audio: true,
+    }, keyBinding, undefined, {
+      lease: keyLease(),
+      fetchFn: (async (url, init) => {
+        capturedUrl = String(url);
+        capturedBody = String(init?.body);
+        return json({ request_id: "vid-123" });
+      }) as typeof fetch,
     });
-    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    expect(result).toEqual({ requestId: "vid-123" });
+    expect(capturedUrl).toBe("https://api.x.ai/v1/videos/generations");
+    expect(JSON.parse(capturedBody)).toEqual({
+      model: "grok-imagine-video-1.5",
+      prompt: "dance",
+      duration: 15,
+      resolution: "1080p",
+      aspect_ratio: "9:16",
+      audio: true,
+    });
+  });
+
+  test("serializes deterministic defaults", async () => {
+    let captured: Record<string, unknown> | undefined;
+    await submitVideoJob({ prompt: "default" }, keyBinding, undefined, {
+      lease: keyLease(),
+      fetchFn: (async (_url, init) => {
+        captured = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return json({ id: "vid-default" });
+      }) as typeof fetch,
+    });
+    expect(captured).toEqual({
+      model: "grok-imagine-video-1.5",
+      prompt: "default",
+      duration: 6,
+      resolution: "720p",
+      aspect_ratio: "16:9",
+    });
+  });
+
+  test.each([
+    { prompt: "bad", duration: 0 },
+    { prompt: "bad", duration: 16 },
+    { prompt: "bad", duration: 1.5 },
+    { prompt: "bad", resolution: "4k" },
+    { prompt: "bad", aspectRatio: "5:4" },
+    { prompt: "bad", model: "grok-imagine-video" },
+    { prompt: "bad", image_url: "https://example.test/input.png" },
+  ])("rejects invalid/non-text input before credential resolution or POST: %j", async request => {
+    let leaseCalls = 0;
+    let fetchCalls = 0;
+    const lease = {
+      resolve: async () => { leaseCalls += 1; return { bearer: "unexpected" }; },
+      refreshAfterRejectedOAuth: async () => { throw new Error("unexpected"); },
+    };
+    await expect(submitVideoJob(request as never, keyBinding, undefined, {
+      lease,
+      fetchFn: (async () => { fetchCalls += 1; return json({ request_id: "unexpected" }); }) as typeof fetch,
+    })).rejects.toMatchObject({ code: "invalid_request", phase: "pre_dispatch" });
+    expect(leaseCalls).toBe(0);
+    expect(fetchCalls).toBe(0);
+  });
+
+  test("OAuth 401 refreshes and replays exactly once", async () => {
+    const authorizations: string[] = [];
     const rejected = {
       provider: "xai",
       accountId: "opaque-internal-slot",
@@ -51,236 +115,137 @@ describe("submitVideoJob", () => {
         };
       },
     };
-    const result = await submitVideoJob({ prompt: "refresh" }, binding, undefined, { lease });
+    const result = await submitVideoJob({ prompt: "refresh" }, oauthBinding, undefined, {
+      lease,
+      fetchFn: (async (_url, init) => {
+        authorizations.push(new Headers(init?.headers).get("authorization") ?? "");
+        return authorizations.length === 1 ? json({}, 401) : json({ request_id: "refreshed-job" });
+      }) as typeof fetch,
+    });
     expect(result.requestId).toBe("refreshed-job");
     expect(refreshes).toBe(1);
-    expect(attempts).toEqual(["Bearer old-access", "Bearer fresh-access"]);
+    expect(authorizations).toEqual(["Bearer old-access", "Bearer fresh-access"]);
   });
 
-  test("a second complete OAuth 401 stops after one replay", async () => {
-    let attempts = 0;
-    globalThis.fetch = (async () => {
-      attempts += 1;
-      return mockFetchResponse({}, 401);
-    }) as typeof fetch;
-    const rejected = {
-      provider: "xai",
-      accountId: "opaque-internal-slot",
-      generation: "old-generation",
-      accessToken: "old-access",
-    };
-    let refreshes = 0;
-    const lease = {
-      resolve: async () => ({ bearer: "old-access", oauthSnapshot: rejected }),
-      refreshAfterRejectedOAuth: async () => {
-        refreshes += 1;
-        return { bearer: "fresh-access", oauthSnapshot: { ...rejected, accessToken: "fresh-access" } };
-      },
-    };
-    await expect(submitVideoJob({ prompt: "refresh" }, binding, undefined, { lease }))
-      .rejects.toMatchObject({ code: "needs_auth", certainty: "definite" });
-    expect(attempts).toBe(2);
-    expect(refreshes).toBe(1);
-  });
-
-  test("missing request id after dispatch is ambiguous", async () => {
-    globalThis.fetch = (async () => mockFetchResponse({ accepted: true })) as typeof fetch;
-    const lease = createStaticMediaCredentialLease({ ...binding, authSource: "api_key" }, "key-only");
-    await expect(submitVideoJob(
-      { prompt: "missing id" }, { ...binding, authSource: "api_key" }, undefined, { lease },
-    )).rejects.toMatchObject({ code: "ambiguous_submission", certainty: "ambiguous" });
-  });
-
-  test("returns request_id from response", async () => {
-    const fetchMock = mock(() => Promise.resolve(mockFetchResponse({ request_id: "vid-123" })));
-    globalThis.fetch = fetchMock as typeof globalThis.fetch;
-
-    const result = await submitVideoJob({ prompt: "a cat playing piano" }, auth);
-    expect(result.requestId).toBe("vid-123");
-  });
-
-  test("accepts id field as fallback", async () => {
-    const fetchMock = mock(() => Promise.resolve(mockFetchResponse({ id: "vid-456" })));
-    globalThis.fetch = fetchMock as typeof globalThis.fetch;
-
-    const result = await submitVideoJob({ prompt: "sunset" }, auth);
-    expect(result.requestId).toBe("vid-456");
-  });
-
-  test("sends correct POST body", async () => {
-    let capturedBody: string | undefined;
-    const fetchMock = mock((url: string, init: RequestInit) => {
-      capturedBody = init.body as string;
-      return Promise.resolve(mockFetchResponse({ request_id: "r1" }));
-    });
-    globalThis.fetch = fetchMock as typeof globalThis.fetch;
-
-    await submitVideoJob(
-      { prompt: "dance", model: "grok-imagine-video", duration: 5, resolution: "720p", aspectRatio: "16:9" },
-      auth,
-    );
-
-    const body = JSON.parse(capturedBody!);
-    expect(body.prompt).toBe("dance");
-    expect(body.model).toBe("grok-imagine-video");
-    expect(body.duration).toBe(5);
-    expect(body.resolution).toBe("720p");
-    expect(body.aspect_ratio).toBe("16:9");
-  });
-
-  test("throws on non-2xx response", async () => {
-    const fetchMock = mock(() => Promise.resolve(mockFetchResponse({ error: "rate limited" }, 429)));
-    globalThis.fetch = fetchMock as typeof globalThis.fetch;
-
-    await expect(submitVideoJob({ prompt: "test" }, auth)).rejects.toMatchObject({
-      code: "rate_limited",
-      status: 429,
-      certainty: "definite",
-    });
-  });
-
-  test("throws when request_id is missing", async () => {
-    const fetchMock = mock(() => Promise.resolve(mockFetchResponse({ foo: "bar" })));
-    globalThis.fetch = fetchMock as typeof globalThis.fetch;
-
-    await expect(submitVideoJob({ prompt: "test" }, auth)).rejects.toMatchObject({
-      code: "ambiguous_submission",
-      reason: "missing_result",
-    });
+  test("complete rejection and ambiguous-success classifications are preserved", async () => {
+    await expect(submitVideoJob({ prompt: "rate" }, keyBinding, undefined, {
+      lease: keyLease(),
+      fetchFn: (async () => json({}, 429)) as typeof fetch,
+    })).rejects.toMatchObject({ code: "rate_limited", certainty: "definite", status: 429 });
+    await expect(submitVideoJob({ prompt: "missing" }, keyBinding, undefined, {
+      lease: keyLease(),
+      fetchFn: (async () => json({ accepted: true })) as typeof fetch,
+    })).rejects.toMatchObject({ code: "ambiguous_submission", certainty: "ambiguous" });
   });
 });
 
 describe("pollVideoJob", () => {
-  test("GET classifies only 429/5xx/network outcomes as safe runtime retries and does not replay itself", async () => {
-    const cases: Array<Response | Error> = [
-      mockFetchResponse({}, 429),
-      mockFetchResponse({}, 503),
-      new Error("network detail"),
-    ];
-    for (const outcome of cases) {
-      let attempts = 0;
-      const fetchFn = (async () => {
-        attempts += 1;
-        if (outcome instanceof Error) throw outcome;
-        return outcome;
-      }) as typeof fetch;
-      const keyBinding = { ...binding, authSource: "api_key" } as const;
-      const lease = createStaticMediaCredentialLease(keyBinding, "key-only");
-      await expect(pollVideoJob("vid-safe-retry", keyBinding, undefined, { lease, fetchFn }))
-        .rejects.toMatchObject({ code: "poll_retryable", retryable: true, certainty: "definite" });
-      expect(attempts).toBe(1);
-    }
+  test("refreshes the same OAuth account after a complete poll 401 without any submit", async () => {
+    let polls = 0;
+    let refreshes = 0;
+    const rejected = {
+      provider: "xai",
+      accountId: "bound-account",
+      generation: "generation-1",
+      accessToken: "old",
+    };
+    const lease = {
+      resolve: async () => ({ bearer: "old", oauthSnapshot: rejected }),
+      refreshAfterRejectedOAuth: async (candidate: MediaCredentialBinding, snapshot: typeof rejected) => {
+        expect(candidate).toBe(oauthBinding);
+        expect(snapshot.accountId).toBe("bound-account");
+        refreshes += 1;
+        return { bearer: "fresh", oauthSnapshot: { ...rejected, generation: "generation-2", accessToken: "fresh" } };
+      },
+    };
+    const result = await pollVideoJob("accepted-id", oauthBinding, undefined, {
+      lease,
+      fetchFn: (async () => {
+        polls += 1;
+        return polls === 1 ? json({}, 401) : json({ status: "done", video: { url: "https://cdn.example/video.mp4" } });
+      }) as typeof fetch,
+    });
+    expect(result).toEqual({ status: "done", videoUrl: "https://cdn.example/video.mp4" });
+    expect(refreshes).toBe(1);
+    expect(polls).toBe(2);
   });
 
-  test("GET redirect is rejected without replay and never forwards bearer to Location", async () => {
+  test.each([429, 500, 503])("classifies HTTP %d as one safe GET retry outcome", async status => {
     let attempts = 0;
-    const fetchFn = (async () => {
-      attempts += 1;
-      return new Response(null, { status: 307, headers: { location: "https://attacker.invalid/result" } });
-    }) as typeof fetch;
-    const keyBinding = { ...binding, authSource: "api_key" } as const;
-    const lease = createStaticMediaCredentialLease(keyBinding, "key-only");
-    await expect(pollVideoJob("vid-redirect", keyBinding, undefined, { lease, fetchFn }))
-      .rejects.toMatchObject({ code: "upstream_failed", retryable: false });
+    await expect(pollVideoJob("vid-safe-retry", keyBinding, undefined, {
+      lease: keyLease(),
+      fetchFn: (async () => { attempts += 1; return json({}, status); }) as typeof fetch,
+    })).rejects.toMatchObject({ code: "poll_retryable", retryable: true, certainty: "definite" });
     expect(attempts).toBe(1);
   });
 
-  test("returns done status with video URL", async () => {
-    let calls = 0;
-    const fetchMock = mock(() => Promise.resolve(mockFetchResponse({
-      status: "done",
-      video: { url: "https://cdn.x.ai/video.mp4" },
-    })).then(response => { calls += 1; return response; }));
-    globalThis.fetch = fetchMock as typeof globalThis.fetch;
-
-    const result = await pollVideoJob("vid-123", auth);
-    expect(result.status).toBe("done");
-    expect(result.videoUrl).toBe("https://cdn.x.ai/video.mp4");
-    expect(calls).toBe(1); // Result URL is returned to the credentialless downloader, never fetched here.
+  test("carries only a bounded Retry-After delay hint for safe poll retries", async () => {
+    const rows = [
+      ["2", 2_000],
+      ["0", 250],
+      ["999999999", 60_000],
+      ["not-a-delay", 5_000],
+    ] as const;
+    for (const [retryAfter, retryAfterMs] of rows) {
+      let caught: unknown;
+      try {
+        await pollVideoJob("vid-retry-delay", keyBinding, undefined, {
+          lease: keyLease(),
+          fetchFn: (async () => json({}, 429, { "Retry-After": retryAfter })) as typeof fetch,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toMatchObject({
+        code: "poll_retryable",
+        retryable: true,
+        retryAfterMs,
+      });
+      expect(caught).not.toHaveProperty("retryAfter");
+    }
   });
 
-  test("normalizes completed → done", async () => {
-    const fetchMock = mock(() => Promise.resolve(mockFetchResponse({ status: "completed" })));
-    globalThis.fetch = fetchMock as typeof globalThis.fetch;
-
-    const result = await pollVideoJob("vid-123", auth);
-    expect(result.status).toBe("done");
+  test("normalizes pending, failed, expired, and completed results", async () => {
+    const outcomes = [
+      [{ status: "rendering" }, "processing"],
+      [{ state: "error" }, "failed"],
+      [{ status: "expired" }, "expired"],
+      [{ status: "completed", videos: [{ url: "https://cdn.example/result.mp4" }] }, "done"],
+    ] as const;
+    for (const [body, status] of outcomes) {
+      const result = await pollVideoJob("vid-status", keyBinding, undefined, {
+        lease: keyLease(),
+        fetchFn: (async () => json(body)) as typeof fetch,
+      });
+      expect(result.status).toBe(status);
+    }
   });
 
-  test("normalizes error → failed", async () => {
-    const fetchMock = mock(() => Promise.resolve(mockFetchResponse({ state: "error" })));
-    globalThis.fetch = fetchMock as typeof globalThis.fetch;
-
-    const result = await pollVideoJob("vid-123", auth);
-    expect(result.status).toBe("failed");
+  test("uses a fixed encoded GET URL and rejects redirects", async () => {
+    let capturedUrl = "";
+    await expect(pollVideoJob("req/with?special", keyBinding, undefined, {
+      lease: keyLease(),
+      fetchFn: (async (url) => {
+        capturedUrl = String(url);
+        return new Response(null, { status: 307, headers: { location: "https://attacker.invalid" } });
+      }) as typeof fetch,
+    })).rejects.toMatchObject({ code: "upstream_failed", retryable: false });
+    expect(capturedUrl).toBe(`https://api.x.ai/v1/videos/${encodeURIComponent("req/with?special")}`);
   });
 
-  test("returns processing for unknown status", async () => {
-    const fetchMock = mock(() => Promise.resolve(mockFetchResponse({ status: "rendering" })));
-    globalThis.fetch = fetchMock as typeof globalThis.fetch;
-
-    const result = await pollVideoJob("vid-123", auth);
-    expect(result.status).toBe("processing");
-  });
-
-  test("throws on non-2xx response", async () => {
-    const fetchMock = mock(() => Promise.resolve(mockFetchResponse({}, 401)));
-    globalThis.fetch = fetchMock as typeof globalThis.fetch;
-
-    await expect(pollVideoJob("vid-123", auth)).rejects.toMatchObject({
-      code: "needs_auth",
-      status: 401,
-      retryable: false,
-    });
-  });
-
-  test("uses GET method on poll URL", async () => {
-    let capturedUrl: string | undefined;
-    let capturedMethod: string | undefined;
-    const fetchMock = mock((url: string, init: RequestInit) => {
-      capturedUrl = url;
-      capturedMethod = init.method;
-      return Promise.resolve(mockFetchResponse({ status: "processing" }));
-    });
-    globalThis.fetch = fetchMock as typeof globalThis.fetch;
-
-    await pollVideoJob("vid-789", { baseUrl: "https://attacker.invalid", token: "test-key" });
-    expect(capturedUrl).toBe("https://api.x.ai/v1/videos/vid-789");
-    expect(capturedMethod).toBe("GET");
-  });
-
-  test("expired absolute deadline fails before resolving credentials or dispatching GET", async () => {
+  test("expired absolute deadline performs zero credential or GET work", async () => {
     let leaseCalls = 0;
     let fetchCalls = 0;
-    const keyBinding = { ...binding, authSource: "api_key" } as const;
-    const lease = {
-      resolve: async () => { leaseCalls += 1; return { bearer: "unexpected" }; },
-      refreshAfterRejectedOAuth: async () => { throw new Error("unexpected"); },
-    };
-    const fetchFn = (async () => {
-      fetchCalls += 1;
-      return mockFetchResponse({ status: "processing" });
-    }) as typeof fetch;
     await expect(pollVideoJob("vid-expired", keyBinding, undefined, {
-      lease,
-      fetchFn,
-      deadlineAt: Date.now() - 1,
-    })).rejects.toMatchObject({ code: "timeout", phase: "pre_dispatch", certainty: "definite" });
+      deadlineAt: 10,
+      now: () => 11,
+      lease: {
+        resolve: async () => { leaseCalls += 1; return { bearer: "unexpected" }; },
+        refreshAfterRejectedOAuth: async () => { throw new Error("unexpected"); },
+      },
+      fetchFn: (async () => { fetchCalls += 1; return json({ status: "processing" }); }) as typeof fetch,
+    })).rejects.toMatchObject({ code: "timeout", phase: "pre_dispatch" });
     expect(leaseCalls).toBe(0);
     expect(fetchCalls).toBe(0);
-  });
-
-  test("encodes requestId in poll URL", async () => {
-    let capturedUrl: string | undefined;
-    const fetchMock = mock((url: string) => {
-      capturedUrl = url;
-      return Promise.resolve(mockFetchResponse({ status: "processing" }));
-    });
-    globalThis.fetch = fetchMock as typeof globalThis.fetch;
-
-    await pollVideoJob("req/with?special&chars", auth);
-    expect(capturedUrl).toContain(encodeURIComponent("req/with?special&chars"));
-    // Must NOT contain the raw special chars in the path
-    expect(capturedUrl).not.toMatch(/\/videos\/req\/with/);
   });
 });

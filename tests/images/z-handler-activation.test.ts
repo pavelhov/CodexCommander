@@ -31,6 +31,7 @@ let imageBridgeRun = false;
 let webSearchRun = false;
 let auxiliaryWebPlanSeen = false;
 let auxiliaryNativeResponses = false;
+let modelDispatches = 0;
 /** Whether the stubbed adapter should expose runTurn (simulates Cursor-style adapters). */
 let useRunTurnAdapter = false;
 /** Spy: flipped when the stubbed runTurn is actually invoked. */
@@ -51,6 +52,7 @@ beforeAll(async () => {
         name: "test",
         buildRequest: async () => ({ url: provider.baseUrl, method: "POST", headers: {}, body: "" }),
         async fetchResponse() {
+          modelDispatches += 1;
           return new Response("data: {\"type\":\"done\"}\n\n", {
             status: 200, headers: { "content-type": "text/event-stream" },
           });
@@ -289,6 +291,60 @@ describe("image bridge dispatch priority (handler activation)", () => {
     expect(res.status).toBe(409);
     expect(imageBridgeRun).toBe(false);
     expect(await res.json()).toMatchObject({ error: { code: "video_confirmation_required" } });
+  });
+
+  test("missing video auth still requires confirmation before binding and dispatch", async () => {
+    imageBridgeRun = false;
+    modelDispatches = 0;
+    const config = makeConfig(true);
+    config.providers.xai!.apiKey = "";
+    const res = await handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "fixture/model",
+          input: "Maybe a video version?",
+          stream: true,
+          tools: [],
+        }),
+      }),
+      config,
+      { model: "", provider: "" } as never,
+      {},
+    );
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: { code: "video_confirmation_required" } });
+    expect(imageBridgeRun).toBe(false);
+    expect(modelDispatches).toBe(0);
+  });
+
+  test("explicit video intent with missing selected auth fails closed before any dispatch", async () => {
+    imageBridgeRun = false;
+    modelDispatches = 0;
+    const config = makeConfig(true);
+    config.providers.xai!.apiKey = "";
+    const res = await handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "fixture/model",
+          input: "Create a six second video of a paper boat.",
+          stream: true,
+          tools: [],
+        }),
+      }),
+      config,
+      { model: "", provider: "" } as never,
+      {},
+    );
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({
+      error: { code: "needs_auth", type: "authentication_error" },
+    });
+    expect(imageBridgeRun).toBe(false);
+    expect(modelDispatches).toBe(0);
   });
 
   test("assistant, tool, and prior-turn text cannot admit video", async () => {

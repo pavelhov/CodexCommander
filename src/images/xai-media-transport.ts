@@ -52,6 +52,9 @@ const MAX_REQUEST_BYTES = 1024 * 1024;
 const MAX_ERROR_BYTES = 64 * 1024;
 const IMAGE_RESPONSE_BYTES = 64 * 1024 * 1024;
 const VIDEO_RESPONSE_BYTES = 1024 * 1024;
+const POLL_RETRY_FALLBACK_MS = 5_000;
+const POLL_RETRY_MIN_MS = 250;
+const POLL_RETRY_MAX_MS = 60_000;
 
 function invalidRequest(): MediaTransportError {
   return mediaError({ code: "invalid_request", phase: "pre_dispatch", certainty: "definite" });
@@ -221,7 +224,11 @@ function postAmbiguous(reason: MediaErrorReason, status?: number): MediaTranspor
   });
 }
 
-function pollRetryable(reason: MediaErrorReason, status?: number): MediaTransportError {
+function pollRetryable(
+  reason: MediaErrorReason,
+  status?: number,
+  retryAfterMs?: number,
+): MediaTransportError {
   return mediaError({
     code: "poll_retryable",
     phase: "poll",
@@ -229,7 +236,22 @@ function pollRetryable(reason: MediaErrorReason, status?: number): MediaTranspor
     retryable: true,
     reason,
     ...(status !== undefined ? { status } : {}),
+    ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
   });
+}
+
+function safePollRetryDelay(value: string | null, now: number): number {
+  const text = value?.trim();
+  let parsed: number | undefined;
+  if (text && /^\d+$/.test(text)) {
+    const seconds = Number(text);
+    if (Number.isSafeInteger(seconds)) parsed = seconds * 1_000;
+  } else if (text) {
+    const timestamp = Date.parse(text);
+    if (Number.isFinite(timestamp)) parsed = timestamp - now;
+  }
+  if (parsed === undefined || !Number.isFinite(parsed) || parsed < 0) return POLL_RETRY_FALLBACK_MS;
+  return Math.min(Math.max(Math.ceil(parsed), POLL_RETRY_MIN_MS), POLL_RETRY_MAX_MS);
 }
 
 function incompleteError(spec: OperationSpec, body: BoundedBodyResult, status?: number): MediaTransportError {
@@ -241,7 +263,12 @@ function incompleteError(spec: OperationSpec, body: BoundedBodyResult, status?: 
   return spec.method === "POST" ? postAmbiguous(reason, status) : pollRetryable(reason, status);
 }
 
-function completeHttpError(spec: OperationSpec, status: number): MediaTransportError {
+function completeHttpError(
+  spec: OperationSpec,
+  status: number,
+  retryAfter: string | null,
+  now: number,
+): MediaTransportError {
   if (status >= 300 && status < 400) {
     return spec.method === "POST"
       ? postAmbiguous("redirect", status)
@@ -265,10 +292,10 @@ function completeHttpError(spec: OperationSpec, status: number): MediaTransportE
   if (status === 429) {
     return spec.method === "POST"
       ? mediaError({ code: "rate_limited", phase: "submit", certainty: "definite", status, reason: "http_status" })
-      : pollRetryable("http_status", status);
+      : pollRetryable("http_status", status, safePollRetryDelay(retryAfter, now));
   }
   if (spec.method === "POST") return postAmbiguous("http_status", status);
-  if (status >= 500) return pollRetryable("http_status", status);
+  if (status >= 500) return pollRetryable("http_status", status, safePollRetryDelay(retryAfter, now));
   // Poll GET is safe to issue again, but only its explicit table is retryable.
   return mediaError({ code: "upstream_failed", phase: "poll", certainty: "definite", status, reason: "http_status" });
 }
@@ -410,7 +437,12 @@ export async function requestXaiMediaJson(
           }
           continue;
         }
-        throw completeHttpError(spec, response.status);
+        throw completeHttpError(
+          spec,
+          response.status,
+          response.headers.get("retry-after"),
+          (deps.now ?? Date.now)(),
+        );
       }
 
       try {

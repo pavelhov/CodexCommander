@@ -285,15 +285,3 @@ export function createStaticMediaCredentialLease(
     },
   };
 }
-
-/** Create a non-secret binding used only to route a legacy key through the shared transport. */
-export function bindLegacyStaticApiKey(token: string): MediaCredentialBinding {
-  const bearer = sanitizeApiKeyValue(token);
-  if (!bearer) throw needsAuth();
-  return {
-    authSource: "api_key",
-    providerKind: "canonical",
-    slotRef: digest(SLOT_DOMAIN, `legacy-static\0${bearer}`),
-    identityDigest: digest(KEY_IDENTITY_DOMAIN, bearer),
-  };
-}

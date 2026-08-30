@@ -1,153 +1,94 @@
 import { pathToFileURL } from "node:url";
-import type { VideoBridgePlan, VideoCallResult } from "./types";
-import { submitVideoJob, pollVideoJob } from "./xai-video-client";
-import { downloadVideoToArtifact, createVideoBudget, type VideoBudget } from "./artifacts";
 
-/** Parsed arguments from the model's video_gen tool call. */
+import type { VideoCallResult } from "./types";
+
+export const DEFAULT_VIDEO_DURATION_SECONDS = 6;
+export const DEFAULT_VIDEO_RESOLUTION = "720p" as const;
+export const DEFAULT_VIDEO_ASPECT_RATIO = "16:9" as const;
+
+export type VideoResolution = "480p" | "720p" | "1080p";
+
+const VIDEO_RESOLUTIONS = new Set<VideoResolution>(["480p", "720p", "1080p"]);
+const VIDEO_ASPECT_RATIOS = new Set(["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"]);
+const VIDEO_ARGUMENTS = new Set(["prompt", "duration", "resolution", "aspect_ratio", "audio"]);
+
+/** Validated v1 text-to-video arguments. Defaults are explicit before submission. */
 export interface ParsedVideoArgs {
   ok: true;
   prompt: string;
-  duration?: number;
-  resolution?: string;
-  aspectRatio?: string;
+  duration: number;
+  resolution: VideoResolution;
+  aspectRatio: string;
+  audio?: boolean;
 }
 
-const INITIAL_POLL_INTERVAL_MS = 5_000;
-const MAX_POLL_INTERVAL_MS = 15_000;
-const POLL_BACKOFF = 1.5;
-const DEFAULT_VIDEO_TIMEOUT_MS = 300_000; // 5 min
-
-export type SleepFn = (ms: number, signal?: AbortSignal) => Promise<void>;
-export type PollVideoJobFn = (
-  requestId: string,
-  auth: { baseUrl: string; token: string },
-  signal?: AbortSignal,
-) => ReturnType<typeof pollVideoJob>;
-
-export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) return Promise.reject(new Error("aborted"));
-  return new Promise((resolve, reject) => {
-    const onAbort = (): void => { clearTimeout(timer); reject(new Error("aborted")); };
-    const timer = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, ms);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
+export type ParsedVideoCallArgs = ParsedVideoArgs | { ok: false; error: string };
 
 /**
- * Parse the JSON arguments string from a video_gen tool call. Mirrors fulfillImageCall's
- * defensive parsing: invalid JSON or missing prompt returns an error result.
+ * Parse the exact v1 text-to-video schema. Unknown/media-input fields and invalid
+ * values are rejected rather than silently dropped or clamped.
  */
-export function parseVideoCallArgs(raw: string):
-  | ParsedVideoArgs
-  | { ok: false; error: string } {
+export function parseVideoCallArgs(raw: string): ParsedVideoCallArgs {
   let args: unknown;
   try {
     args = JSON.parse(raw || "{}");
   } catch {
     return { ok: false, error: "invalid arguments JSON" };
   }
-  if (typeof args !== "object" || args === null) {
+  if (typeof args !== "object" || args === null || Array.isArray(args)) {
     return { ok: false, error: "invalid arguments JSON" };
   }
   const obj = args as Record<string, unknown>;
-
-  const prompt =
-    typeof obj.prompt === "string" ? obj.prompt : typeof obj.input === "string" ? obj.input : "";
-  if (!prompt) {
-    return { ok: false, error: "missing prompt" };
+  for (const key of Object.keys(obj)) {
+    if (!VIDEO_ARGUMENTS.has(key)) return { ok: false, error: `unsupported video argument: ${key}` };
   }
 
-  const result: ParsedVideoArgs = { ok: true, prompt };
+  const prompt = typeof obj.prompt === "string" ? obj.prompt.trim() : "";
+  if (!prompt) return { ok: false, error: "missing prompt" };
 
-  // duration: clamp to 1-15
-  if (typeof obj.duration === "number") {
-    result.duration = Math.max(1, Math.min(15, Math.floor(obj.duration)));
+  const duration = obj.duration === undefined ? DEFAULT_VIDEO_DURATION_SECONDS : obj.duration;
+  if (!Number.isInteger(duration) || (duration as number) < 1 || (duration as number) > 15) {
+    return { ok: false, error: "duration must be an integer from 1 through 15" };
   }
 
-  if (typeof obj.resolution === "string" && (obj.resolution === "480p" || obj.resolution === "720p")) {
-    result.resolution = obj.resolution;
-  }
-  if (typeof obj.aspect_ratio === "string") {
-    const VALID_RATIOS = ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"];
-    if (VALID_RATIOS.includes(obj.aspect_ratio)) result.aspectRatio = obj.aspect_ratio;
+  const resolution = obj.resolution === undefined ? DEFAULT_VIDEO_RESOLUTION : obj.resolution;
+  if (typeof resolution !== "string" || !VIDEO_RESOLUTIONS.has(resolution as VideoResolution)) {
+    return { ok: false, error: "unsupported resolution" };
   }
 
-  return result;
+  const aspectRatio = obj.aspect_ratio === undefined ? DEFAULT_VIDEO_ASPECT_RATIO : obj.aspect_ratio;
+  if (typeof aspectRatio !== "string" || !VIDEO_ASPECT_RATIOS.has(aspectRatio)) {
+    return { ok: false, error: "unsupported aspect_ratio" };
+  }
+  if (obj.audio !== undefined && typeof obj.audio !== "boolean") {
+    return { ok: false, error: "audio must be a boolean" };
+  }
+
+  return {
+    ok: true,
+    prompt,
+    duration: duration as number,
+    resolution: resolution as VideoResolution,
+    aspectRatio,
+    ...(typeof obj.audio === "boolean" ? { audio: obj.audio } : {}),
+  };
 }
 
-/**
- * Poll a video generation job, yielding heartbeats with elapsed-time messages so the
- * caller can forward them to the SSE stream. Returns the final result when the job
- * completes or fails/times out.
- */
-export async function* pollVideoWithHeartbeats(
-  requestId: string,
-  auth: { baseUrl: string; token: string },
-  signal: AbortSignal,
-  timeoutMs: number = DEFAULT_VIDEO_TIMEOUT_MS,
-  /** Test seams — avoid mock.module / global setTimeout (both poison parallel Bun CI). */
-  sleepFn: SleepFn = sleep,
-  pollFn: PollVideoJobFn = pollVideoJob,
-): AsyncGenerator<
-  { type: "heartbeat"; message: string },
-  { ok: true; videoUrl: string } | { ok: false; error: string }
-> {
-  const start = Date.now();
-  let interval = INITIAL_POLL_INTERVAL_MS;
-  const timeoutStr = `video generation timed out after ${Math.floor(timeoutMs / 1000)}s`;
-
-  for (;;) {
-    if (Date.now() - start >= timeoutMs) {
-      return { ok: false, error: timeoutStr };
-    }
-
-    try {
-      const poll = await pollFn(requestId, auth, signal);
-      if (poll.status === "done") {
-        if (poll.videoUrl) {
-          return { ok: true, videoUrl: poll.videoUrl };
-        }
-        return { ok: false, error: "video generation completed but no video URL was returned" };
-      }
-      if (poll.status === "failed") {
-        return { ok: false, error: "video generation failed" };
-      }
-      if (poll.status === "expired") {
-        return { ok: false, error: "video generation expired" };
-      }
-      // still processing — continue with backoff
-    } catch (e) {
-      // Distinguish deadline-expiry from client-cancel.
-      // AbortSignal.timeout sets signal.reason to a TimeoutError.
-      const isDeadline = signal.aborted && e instanceof Error && e.name === "TimeoutError";
-      if (isDeadline) return { ok: false, error: timeoutStr };
-      if (signal.aborted) return { ok: false, error: "client closed request during video generation" };
-      const status = (e as Error & { status?: number }).status;
-      if (status && status >= 400 && status < 500 && status !== 429) {
-        return { ok: false, error: `video poll failed permanently: HTTP ${status}` };
-      }
-      console.warn(`[videos] poll error (will retry): ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    const elapsed = Math.floor((Date.now() - start) / 1000);
-    yield { type: "heartbeat", message: `Generating video... ${elapsed}s` };
-
-    try {
-      await sleepFn(interval, signal);
-    } catch {
-      const isDeadline = signal.aborted && signal.reason instanceof Error && signal.reason.name === "TimeoutError";
-      if (isDeadline) return { ok: false, error: timeoutStr };
-      return { ok: false, error: "client closed request during video generation" };
-    }
-
-    interval = Math.min(MAX_POLL_INTERVAL_MS, Math.floor(interval * POLL_BACKOFF));
-  }
+export interface VideoResultMetadata {
+  duration?: number;
+  resolution?: VideoResolution;
+  aspectRatio?: string;
+  audio?: boolean;
+  jobId?: string;
 }
 
-/**
- * Build a success VideoCallResult after the video has been downloaded to disk.
- */
-export function buildVideoResult(path: string, prompt: string, model: string): VideoCallResult {
+/** Build the final local-only result after the durable runtime publishes an artifact. */
+export function buildVideoResult(
+  path: string,
+  prompt: string,
+  model: string,
+  metadata: VideoResultMetadata = {},
+): VideoCallResult {
   return {
     ok: true,
     model,
@@ -155,9 +96,7 @@ export function buildVideoResult(path: string, prompt: string, model: string): V
     path,
     files: [path],
     count: 1,
-    markdown: `[video](${pathToFileURL(path).href})`,
+    markdown: `[Open video](${pathToFileURL(path).href})`,
+    ...metadata,
   };
 }
-
-export type { VideoBudget };
-export { createVideoBudget };

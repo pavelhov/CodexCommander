@@ -2,14 +2,17 @@ import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "b
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
 import type { ProviderAdapter, IncomingMeta } from "../../src/adapters/base";
 import type { AdapterEvent, CodexCommanderParsedRequest } from "../../src/types";
 import type { ImageBridgePlan, ImageCallResult, VideoBridgePlan } from "../../src/images/types";
 import type { ImageBridgeDeps } from "../../src/images/loop";
 import type { AuxiliaryWebSearchPlan } from "../../src/responses/auxiliary";
+import type { ModelVideoRuntime } from "../../src/images/media-runtime";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
 const PREV_HOME = process.env.CODEXCOMMANDER_HOME;
+const TEST_HOME = join(tmpdir(), "ccx-test-" + randomUUID());
 let runWithImageBridgeProduction: typeof import("../../src/images/loop")["runWithImageBridge"];
 let clampImageMaxRounds: typeof import("../../src/images/loop")["clampImageMaxRounds"];
 let DEFAULT_MAX_ROUNDS: typeof import("../../src/images/loop")["DEFAULT_MAX_ROUNDS"];
@@ -21,7 +24,7 @@ let fulfillResult: ImageCallResult = {
 };
 
 beforeAll(async () => {
-  process.env.CODEXCOMMANDER_HOME = join(tmpdir(), "ccx-test-" + randomUUID());
+  process.env.CODEXCOMMANDER_HOME = TEST_HOME;
   mock.restore();
   mock.module("../../src/web-search/progress-stream", () => ({
     parseStreamWithProgress: async function* (_resp: Response, parse: (r: Response) => AsyncGenerator<AdapterEvent>, _opts: unknown) {
@@ -40,26 +43,6 @@ beforeAll(async () => {
       text: "Search result text",
       sources: [{ url: "https://example.test/result", title: "Example" }],
     }),
-  }));
-  const actualVideoClient = await import("../../src/images/xai-video-client");
-  mock.module("../../src/images/xai-video-client", () => ({
-    ...actualVideoClient,
-    submitVideoJob: async () => {
-      videoSubmissions += 1;
-      return { requestId: `video_${videoSubmissions}` };
-    },
-  }));
-  const actualVideoFulfill = await import("../../src/images/fulfill-video");
-  mock.module("../../src/images/fulfill-video", () => ({
-    ...actualVideoFulfill,
-    pollVideoWithHeartbeats: async function* () {
-      return { ok: true, videoUrl: "https://example.test/video.mp4" };
-    },
-  }));
-  const actualArtifacts = await import("../../src/images/artifacts");
-  mock.module("../../src/images/artifacts", () => ({
-    ...actualArtifacts,
-    downloadVideoToArtifact: async () => "/test/video.mp4",
   }));
   ({
     runWithImageBridge: runWithImageBridgeProduction,
@@ -87,11 +70,34 @@ let streamQueue: AdapterEvent[][] = [];
 let buildRequestCalls = 0;
 let videoSubmissions = 0;
 
+const completedVideoRuntime: ModelVideoRuntime = {
+  async submitVideo() {
+    videoSubmissions += 1;
+    return {
+      kind: "accepted",
+      job: {
+        id: `video-job-${videoSubmissions}`,
+        revision: 1,
+        state: "completed",
+        deadlineAt: Date.now() + 60_000,
+        artifactId: "video-test.mp4",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    };
+  },
+  startVideoJob() {},
+  getPublicVideoJob() { return null; },
+  async waitForVideoUpdate() { return { kind: "missing" }; },
+};
+
 const defaultFulfillResult: ImageCallResult = {
   ok: true, model: "grok-imagine-image-quality", prompt: "a cat",
   files: ["/test/img.png"], count: 1, markdown: "![image](/test/img.png)",
 };
 beforeEach(() => {
+  mkdirSync(join(TEST_HOME, "artifacts"), { recursive: true, mode: 0o700 });
+  writeFileSync(join(TEST_HOME, "artifacts", "video-test.mp4"), "local-video-fixture", { mode: 0o600 });
   fulfillResult = { ...defaultFulfillResult, files: [...defaultFulfillResult.files] };
   buildRequestCalls = 0;
   videoSubmissions = 0;
@@ -211,9 +217,13 @@ describe("runWithImageBridge", () => {
 
   test("image and video keep independent round allowances", async () => {
     const videoPlan = {
-      provider: {} as never,
-      auth: { baseUrl: "https://api.x.ai", token: "test-token" },
-      model: "grok-imagine-video",
+      auth: {
+        authSource: "api_key",
+        providerKind: "canonical",
+        slotRef: "media-slot:test",
+        identityDigest: "sha256:test",
+      },
+      model: "grok-imagine-video-1.5",
       toolNames: new Set(["video_gen"]),
     } as VideoBridgePlan;
     streamQueue = [
@@ -275,9 +285,13 @@ describe("runWithImageBridge", () => {
 
   test("accepts at most one video submission per turn", async () => {
     const videoPlan = {
-      provider: {} as never,
-      auth: { baseUrl: "https://api.x.ai", token: "test-token" },
-      model: "grok-imagine-video",
+      auth: {
+        authSource: "api_key",
+        providerKind: "canonical",
+        slotRef: "media-slot:test",
+        identityDigest: "sha256:test",
+      },
+      model: "grok-imagine-video-1.5",
       toolNames: new Set(["video_gen"]),
     } as VideoBridgePlan;
     streamQueue = [
@@ -292,13 +306,33 @@ describe("runWithImageBridge", () => {
       ],
       [{ type: "text_delta", text: "one video admitted" }, { type: "done" }],
     ];
+    let modelContext = "";
+    const observingAdapter: ProviderAdapter = {
+      ...mockAdapter,
+      buildRequest(parsed, incoming) {
+        modelContext = JSON.stringify(parsed.context);
+        return mockAdapter.buildRequest(parsed, incoming);
+      },
+    };
     const response = await runWithImageBridge({
       parsed: makeParsed(),
-      adapter: mockAdapter,
+      adapter: observingAdapter,
       videoPlan,
       videoMaxRounds: 2,
+      videoRuntime: completedVideoRuntime,
     });
-    expect(await response.text()).toContain("one video admitted");
+    const sse = await response.text();
+    expect(sse).toContain("one video admitted");
+    expect(sse).toContain("Video accepted.");
+    const observed = JSON.parse(modelContext) as {
+      messages: Array<{ role: string; toolCallId?: string; content?: string }>;
+    };
+    const videoResult = observed.messages.find(message => message.toolCallId === "video_1");
+    expect(JSON.parse(videoResult?.content ?? "{}")).toMatchObject({
+      ok: true,
+      path: expect.stringContaining("video-test.mp4"),
+      jobId: "video-job-1",
+    });
     expect(videoSubmissions).toBe(1);
   });
 

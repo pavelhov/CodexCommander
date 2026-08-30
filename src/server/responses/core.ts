@@ -2464,14 +2464,26 @@ async function handleResponsesInner(
   // Standing video enablement is not spend consent. Derive this once from the untouched current
   // user input, before any auxiliary output can enter the transcript.
   const videoIntent = deriveCurrentUserVideoIntent(parsed._rawBody);
-  const videoPlanCandidate = !routedCompaction && videoIntent.state !== "none"
-    ? await planVideoBridge(config, parsed, route.provider)
-    : undefined;
-  if (videoPlanCandidate && videoIntent.state === "confirmation_required") {
+  const videoEnabled = !routedCompaction && config.images?.videoBridgeEnabled === true;
+  // Confirmation is a current-user consent boundary, not a credential-readiness
+  // outcome. Enforce it before binding so missing auth cannot turn ambiguous
+  // wording into an ordinary routed-model request.
+  if (videoEnabled && videoIntent.state === "confirmation_required") {
     return auxiliaryPolicyErrorResponse(
       409,
       "video_confirmation_required",
       "Confirm an explicit text-to-video generation request before video submission",
+    );
+  }
+  const videoPlanCandidate = videoEnabled && videoIntent.state === "explicit"
+    ? await planVideoBridge(config, parsed, route.provider)
+    : undefined;
+  if (videoEnabled && videoIntent.state === "explicit" && !videoPlanCandidate) {
+    return auxiliaryPolicyErrorResponse(
+      401,
+      "needs_auth",
+      "The selected Grok video credential needs authentication",
+      "authentication_error",
     );
   }
   const vidPlan = videoIntent.state === "explicit" ? videoPlanCandidate : undefined;

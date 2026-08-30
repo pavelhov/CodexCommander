@@ -45,6 +45,8 @@ export interface MediaTransportErrorInit {
   retryable?: boolean;
   status?: number;
   reason?: MediaErrorReason;
+  /** Sanitized bounded delay hint for safe poll retries. Raw provider headers are never retained. */
+  retryAfterMs?: number;
 }
 
 export class MediaTransportError extends Error {
@@ -54,6 +56,7 @@ export class MediaTransportError extends Error {
   readonly retryable: boolean;
   readonly status?: number;
   readonly reason?: MediaErrorReason;
+  readonly retryAfterMs?: number;
 
   constructor(init: MediaTransportErrorInit) {
     super(SAFE_MESSAGES[init.code]);
@@ -64,6 +67,7 @@ export class MediaTransportError extends Error {
     this.retryable = init.retryable ?? false;
     if (init.status !== undefined) this.status = init.status;
     if (init.reason !== undefined) this.reason = init.reason;
+    if (init.retryAfterMs !== undefined) this.retryAfterMs = init.retryAfterMs;
   }
 
   toJSON(): MediaTransportErrorInit & { message: string } {
@@ -74,6 +78,7 @@ export class MediaTransportError extends Error {
       retryable: this.retryable,
       ...(this.status !== undefined ? { status: this.status } : {}),
       ...(this.reason !== undefined ? { reason: this.reason } : {}),
+      ...(this.retryAfterMs !== undefined ? { retryAfterMs: this.retryAfterMs } : {}),
       message: this.message,
     };
   }

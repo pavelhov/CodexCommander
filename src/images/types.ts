@@ -1,4 +1,4 @@
-import type { CodexCommanderProviderConfig, MediaAuthSource } from "../types";
+import type { MediaAuthSource } from "../types";
 
 export type MediaCredentialObservationState = "ready" | "missing" | "reauthentication_required";
 
@@ -124,8 +124,8 @@ export interface ImageCallResult {
 
 /** Plan for the video bridge. Same auth/provider shape as image, without image-specific defaults. */
 export interface VideoBridgePlan {
-  provider: CodexCommanderProviderConfig;
-  auth: { baseUrl: string; token: string };
+  /** Exact credential source/slot/digest bound before any paid action. */
+  auth: MediaCredentialBinding;
   model: string;
   toolNames: Set<string>;
   /** Per-call xAI deadline (ms) for submit + poll. */
@@ -134,5 +134,12 @@ export interface VideoBridgePlan {
   artifactsKeepCount?: number;
 }
 
-/** Result shape for video fulfillment — same as image. */
-export type VideoCallResult = ImageCallResult;
+/** Model-facing local video result. Signed provider URLs never enter this shape. */
+export interface VideoCallResult extends ImageCallResult {
+  duration?: number;
+  resolution?: "480p" | "720p" | "1080p";
+  aspectRatio?: string;
+  audio?: boolean;
+  /** Opaque local durable id used for recovery guidance. */
+  jobId?: string;
+}

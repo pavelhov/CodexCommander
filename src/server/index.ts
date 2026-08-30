@@ -1,4 +1,5 @@
 import { markActivity } from "../lib/sidecar-tracker";
+import { existsSync } from "node:fs";
 import { darwinPlaintextEagerRuntimeWarning } from "../lib/bun-stream-caps";
 import {
   buildWarmupCompletionFrames,
@@ -67,16 +68,30 @@ export { resolveGuiFilePath, rootFallbackPayload } from "./gui-static";
 export { resolveAdapter } from "./adapter-resolve";
 import { formatErrorResponse, type ResponsesTerminalStatus } from "../bridge";
 import {
+  bindServerMediaRuntime,
   drainAndShutdown,
   getActiveTurnCount,
   isDraining,
   registerTurn,
   setServerRef,
+  stopServerMediaRuntime,
   trackStreamLifetime,
   tryAdmitTurn,
   unregisterTurn,
   type ActiveTurnLease,
 } from "./lifecycle";
+import {
+  getDefaultModelVideoRuntime,
+  MediaRuntime,
+  RecoveryBlockedMediaRuntime,
+  setDefaultModelVideoRuntime,
+  type ServerMediaRuntime,
+} from "../images/media-runtime";
+import {
+  defaultMediaJournalPath,
+  openVideoJobStore,
+  type VideoJobStore,
+} from "../images/video-job-store";
 export {
   drainAndShutdown,
   getActiveTurnCount,
@@ -479,6 +494,30 @@ export interface StartServerDeps {
   localAttestationSecret?: string;
   /** Optional readiness gate; a fresh pending gate is created when omitted. */
   readinessGate?: ReadinessGate;
+  /** Test-only durable video runtime seam. Null disables initialization for this server. */
+  mediaRuntime?: ServerMediaRuntime | null;
+}
+
+function initializeServerMediaRuntime(
+  config: CodexCommanderConfig,
+  injected: ServerMediaRuntime | null | undefined,
+): ServerMediaRuntime | null {
+  if (injected !== undefined) {
+    if (injected) injected.prepareStartup();
+    return injected;
+  }
+  const journalPath = defaultMediaJournalPath();
+  if (config.images?.videoBridgeEnabled !== true && !existsSync(journalPath)) return null;
+  let store: VideoJobStore | undefined;
+  try {
+    store = openVideoJobStore();
+    const runtime = new MediaRuntime(store);
+    runtime.prepareStartup();
+    return runtime;
+  } catch {
+    try { store?.close(); } catch { /* recovery remains blocked */ }
+    return new RecoveryBlockedMediaRuntime();
+  }
 }
 
 export function startServer(port?: number, deps: StartServerDeps = {}): Server<WsData> {
@@ -607,7 +646,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       release: async () => {},
     };
   let server: Server<WsData>;
+  let mediaRuntime: ServerMediaRuntime | null = null;
   try {
+    // Validate and normalize durable video state immediately before listen. A
+    // bad/future/unsafe journal blocks only video admission, and failures in
+    // earlier startup setup cannot leak a recovery-owner claim.
+    mediaRuntime = initializeServerMediaRuntime(config, deps.mediaRuntime);
     server = Bun.serve<WsData>({
       port: listenPort,
       hostname: bindHost,
@@ -1555,23 +1599,37 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     },
     });
   } catch (error) {
+    mediaRuntime?.beginShutdown();
+    void mediaRuntime?.shutdown();
     void nativeMainLifecycle.release();
     throw error;
   }
 
   bindNativeMainStartupLifecycle(server, nativeMainLifecycle);
+  if (mediaRuntime) bindServerMediaRuntime(server, mediaRuntime);
   const nativeStop = server.stop.bind(server);
   Object.defineProperty(server, "stop", {
     configurable: true,
     value: async (closeActiveConnections?: boolean): Promise<void> => {
       try {
-        await nativeStop(closeActiveConnections);
+        try {
+          await stopServerMediaRuntime(server);
+        } finally {
+          if (getDefaultModelVideoRuntime() === mediaRuntime) setDefaultModelVideoRuntime(null);
+          // Listener teardown is mandatory even if durable media cleanup reports
+          // an error after fencing new paid work.
+          await nativeStop(closeActiveConnections);
+        }
       } finally {
         await releaseNativeMainStartupLifecycle(server);
       }
     },
   });
   setServerRef(server);
+  if (mediaRuntime) {
+    setDefaultModelVideoRuntime(mediaRuntime);
+    queueMicrotask(() => mediaRuntime.startBackgroundRecovery());
+  }
   const actualPort = server.port ?? listenPort;
   boundPort = actualPort;
   setCorsOrigin(actualPort);

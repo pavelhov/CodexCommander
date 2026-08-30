@@ -19,12 +19,6 @@ export interface XaiImageResult {
   images: Array<{ b64_json?: string; url?: string }>;
 }
 
-/** @deprecated Video-only compatibility carrier until U5 migrates its callers. */
-export interface LegacyXaiMediaAuth {
-  baseUrl: string;
-  token: string;
-}
-
 const XAI_IMAGES_TIMEOUT_MS = 60_000;
 const XAI_DEFAULT_MODEL = "grok-imagine-image-2.0";
 const MAX_IMAGES_PER_RESULT = 4;

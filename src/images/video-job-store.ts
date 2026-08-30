@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   realpathSync,
@@ -22,7 +23,9 @@ import type { MediaCredentialBinding } from "./types";
 export const MEDIA_JOURNAL_SCHEMA_VERSION = 1;
 export const MEDIA_JOURNAL_FILENAME = "media-journal.sqlite";
 const MEDIA_STATE_DIRECTORY = "media";
+const RECOVERY_OWNER_SUFFIX = ".recovery-owner.sqlite";
 const MAX_ROWS = 1_024;
+const claimedJournalPaths = new Set<string>();
 
 export type VideoJobState =
   | "queued"
@@ -216,7 +219,7 @@ interface CapabilityProbeStepRow {
   updated_at: unknown;
 }
 
-const ACTIVE_STATES: readonly VideoJobState[] = [
+export const VIDEO_ADMISSION_HOLDING_STATES: readonly VideoJobState[] = [
   "queued",
   "submitting",
   "accepted",
@@ -228,7 +231,7 @@ const ACTIVE_STATES: readonly VideoJobState[] = [
 ];
 
 const ALL_STATES: readonly VideoJobState[] = [
-  ...ACTIVE_STATES,
+  ...VIDEO_ADMISSION_HOLDING_STATES,
   "completed",
   "failed",
   "expired",
@@ -240,7 +243,7 @@ const LEGAL_TRANSITIONS: Readonly<Record<VideoJobState, readonly VideoJobState[]
   queued: ["submitting", "cancelled"],
   submitting: ["accepted", "needs_auth", "outcome_unknown", "failed", "cancelled"],
   accepted: ["polling", "needs_auth", "downloading", "failed", "expired", "cancelled"],
-  polling: ["accepted", "needs_auth", "downloading", "failed", "expired", "cancelled"],
+  polling: ["accepted", "needs_auth", "downloading", "download_failed", "failed", "expired", "cancelled"],
   needs_auth: ["polling", "accepted", "expired", "cancelled"],
   downloading: ["completed", "download_failed", "expired", "cancelled"],
   download_failed: ["accepted", "polling", "downloading", "expired", "cancelled"],
@@ -295,7 +298,7 @@ const CREATE_VIDEO_JOBS = `
 const CREATE_ACTIVE_BINDING_INDEX = `
   CREATE UNIQUE INDEX video_jobs_one_active_binding
   ON video_jobs(binding_digest)
-  WHERE state IN (${ACTIVE_STATES.map(state => `'${state}'`).join(",")})`;
+  WHERE state IN (${VIDEO_ADMISSION_HOLDING_STATES.map(state => `'${state}'`).join(",")})`;
 
 const CREATE_CAPABILITY_PROBES = `
   CREATE TABLE capability_probes (
@@ -370,6 +373,7 @@ function validSafeFailure(value: unknown): value is SafeMediaFailure {
 }
 
 function assertPrivateDirectory(path: string): void {
+  const existed = existsSync(path);
   mkdirSync(path, { recursive: true, mode: 0o700 });
   const stats = lstatSync(path);
   if (!stats.isDirectory() || stats.isSymbolicLink() || stats.nlink < 1) {
@@ -383,6 +387,9 @@ function assertPrivateDirectory(path: string): void {
   }
   const uid = process.getuid?.();
   if (uid === undefined || stats.uid !== uid) throw journalError("The private media journal directory has unsafe ownership.");
+  if (existed && (stats.mode & 0o777) !== 0o700) {
+    throw journalError("The private media journal directory has unsafe permissions.");
+  }
   chmodSync(path, 0o700);
   const hardened = lstatSync(path);
   if ((hardened.mode & 0o777) !== 0o700) throw journalError("The private media journal directory has unsafe permissions.");
@@ -409,6 +416,18 @@ function hardenJournalFile(path: string): void {
     chmodSync(path, 0o600);
   }
   assertPrivateFile(lstatSync(path));
+}
+
+function assertExistingJournalSidecars(path: string): void {
+  for (const suffix of ["-journal", "-wal", "-shm"]) {
+    const sidecar = `${path}${suffix}`;
+    if (!existsSync(sidecar)) continue;
+    const stats = lstatSync(sidecar);
+    assertPrivateFile(stats);
+    if (realpathSync.native(sidecar) !== sidecar) {
+      throw journalError("The private media journal sidecar is unsafe.");
+    }
+  }
 }
 
 function databaseSchemaIsEmpty(database: Database): boolean {
@@ -582,9 +601,13 @@ export function defaultMediaJournalPath(): string {
 export class VideoJobStore {
   readonly #database: Database;
   readonly #file: StableLockFile;
+  readonly #ownerDatabase: Database;
+  readonly #ownerFile: StableLockFile;
+  readonly #ownerPath: string;
   readonly #path: string;
   readonly #identity: string;
   readonly #now: () => number;
+  readonly #claimPath: string;
   #closed = false;
 
   constructor(options: VideoJobStoreOptions = {}) {
@@ -596,18 +619,43 @@ export class VideoJobStore {
     assertPrivateDirectory(requestedDirectory);
     const directory = realpathSync.native(requestedDirectory);
     this.#path = join(directory, basename(resolvedPath));
+    this.#ownerPath = `${this.#path}${RECOVERY_OWNER_SUFFIX}`;
+    this.#claimPath = this.#path;
+    if (claimedJournalPaths.has(this.#claimPath)) throw journalError("The media journal is busy.");
+    claimedJournalPaths.add(this.#claimPath);
     const productionPath = options.path === undefined;
     if (productionPath) {
       const root = getConfigDir();
       recordOwnedConfigPath(root, directory);
       for (const suffix of ["", "-journal", "-wal", "-shm"]) recordOwnedConfigPath(root, `${this.#path}${suffix}`);
+      for (const suffix of ["", "-journal", "-wal", "-shm"]) recordOwnedConfigPath(root, `${this.#ownerPath}${suffix}`);
     }
 
     let file: StableLockFile | undefined;
     let database: Database | undefined;
+    let ownerFile: StableLockFile | undefined;
+    let ownerDatabase: Database | undefined;
     try {
+      // Hold an OS-backed EXCLUSIVE transaction in a separate database for the
+      // store lifetime. It releases automatically on process death and keeps a
+      // second process from becoming an overlapping recovery owner.
+      const ownerExisted = existsSync(this.#ownerPath);
+      if (ownerExisted) assertPrivateFile(lstatSync(this.#ownerPath));
+      assertExistingJournalSidecars(this.#ownerPath);
+      ownerFile = openStableLockFile(this.#ownerPath);
+      if (!ownerExisted || process.platform === "win32") hardenJournalFile(this.#ownerPath);
+      assertStableLockFile(this.#ownerPath, ownerFile);
+      ownerDatabase = new Database(this.#ownerPath, { create: true, strict: true });
+      ownerDatabase.exec("PRAGMA busy_timeout = 0; PRAGMA locking_mode = NORMAL; PRAGMA journal_mode = DELETE");
+      ownerDatabase.exec("BEGIN EXCLUSIVE");
+      ownerDatabase.query<{ rootpage: number }, []>("SELECT rootpage FROM sqlite_schema LIMIT 1").get();
+      assertStableLockFile(this.#ownerPath, ownerFile);
+
+      const existed = existsSync(this.#path);
+      if (existed) assertPrivateFile(lstatSync(this.#path));
+      assertExistingJournalSidecars(this.#path);
       file = openStableLockFile(this.#path);
-      hardenJournalFile(this.#path);
+      if (!existed || process.platform === "win32") hardenJournalFile(this.#path);
       assertStableLockFile(this.#path, file);
       const fileStats = lstatSync(this.#path);
       assertPrivateFile(fileStats);
@@ -615,8 +663,9 @@ export class VideoJobStore {
       database = new Database(this.#path, { create: true, strict: true });
       database.exec("PRAGMA busy_timeout = 0; PRAGMA locking_mode = NORMAL; PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL");
       const mode = database.query<{ journal_mode: string }, []>("PRAGMA journal_mode = DELETE").get()?.journal_mode;
+      const lockingMode = database.query<{ locking_mode: string }, []>("PRAGMA locking_mode").get()?.locking_mode;
       const synchronous = database.query<{ synchronous: number }, []>("PRAGMA synchronous").get()?.synchronous;
-      if (mode?.toLowerCase() !== "delete" || synchronous !== 2) {
+      if (mode?.toLowerCase() !== "delete" || lockingMode?.toLowerCase() !== "normal" || synchronous !== 2) {
         throw journalError("The media journal durability mode is unavailable.");
       }
       database.exec("BEGIN IMMEDIATE");
@@ -634,10 +683,16 @@ export class VideoJobStore {
       }
       this.#database = database;
       this.#file = file;
+      this.#ownerDatabase = ownerDatabase;
+      this.#ownerFile = ownerFile;
       this.#now = options.now ?? Date.now;
     } catch (error) {
       try { database?.close(); } catch { /* mapped below */ }
       try { file?.close(); } catch { /* mapped below */ }
+      try { ownerDatabase?.exec("ROLLBACK"); } catch { /* close below */ }
+      try { ownerDatabase?.close(); } catch { /* mapped below */ }
+      try { ownerFile?.close(); } catch { /* mapped below */ }
+      claimedJournalPaths.delete(this.#claimPath);
       if (error instanceof Error && error.name === "MediaJournalError") throw error;
       throw journalError(isBusy(error) ? "The media journal is busy." : "The media journal is unavailable.");
     }
@@ -646,6 +701,7 @@ export class VideoJobStore {
   #assertOpen(): void {
     if (this.#closed) throw journalError("The media journal is closed.");
     assertStableLockFile(this.#path, this.#file);
+    assertStableLockFile(this.#ownerPath, this.#ownerFile);
     const stats = lstatSync(this.#path);
     assertPrivateFile(stats);
     if (`${stats.dev}:${stats.ino}` !== this.#identity || realpathSync.native(this.#path) !== this.#path) {
@@ -754,7 +810,7 @@ export class VideoJobStore {
     ) throw journalError("The media job reservation is invalid.");
     return this.#transaction(() => {
       const existing = rowToJob(this.#database.query<VideoJobRow, [string]>(
-        `SELECT * FROM video_jobs WHERE binding_digest = ? AND state IN (${ACTIVE_STATES.map(state => `'${state}'`).join(",")}) LIMIT 1`,
+        `SELECT * FROM video_jobs WHERE binding_digest = ? AND state IN (${VIDEO_ADMISSION_HOLDING_STATES.map(state => `'${state}'`).join(",")}) LIMIT 1`,
       ).get(input.binding.identityDigest));
       if (existing) return { kind: "busy", reservationId: existing.id };
       const activeProbe = this.#database.query<{ id: string }, [string, string]>(`
@@ -878,6 +934,14 @@ export class VideoJobStore {
            SET state = 'cancelled', safe_error = 'cancelled', revision = revision + 1, updated_at = ?
          WHERE state = 'queued'
       `).run(now);
+      // A restart never extends the original absolute deadline. Expire every
+      // poll/download-safe state before selecting background recovery work.
+      this.#database.query(`
+        UPDATE video_jobs
+           SET state = 'expired', safe_error = 'timeout', revision = revision + 1, updated_at = ?
+         WHERE deadline_at <= ?
+           AND state IN ('accepted','polling','needs_auth','downloading','download_failed')
+      `).run(now, now);
       this.#database.query(`
         UPDATE video_jobs
            SET state = 'outcome_unknown', safe_error = 'ambiguous_submission', revision = revision + 1, updated_at = ?
@@ -940,7 +1004,7 @@ export class VideoJobStore {
 
   protectedArtifactIds(): ReadonlySet<string> {
     const ids = this.listVideoJobs()
-      .filter(job => job.artifactId && (job.state === "completed" || ACTIVE_STATES.includes(job.state)))
+      .filter(job => job.artifactId && (job.state === "completed" || VIDEO_ADMISSION_HOLDING_STATES.includes(job.state)))
       .map(job => job.artifactId!);
     return new Set(ids);
   }
@@ -1270,7 +1334,14 @@ export class VideoJobStore {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
-    try { this.#database.close(); } finally { this.#file.close(); }
+    try { this.#database.close(); } finally {
+      try { this.#file.close(); } finally {
+        try { this.#ownerDatabase.exec("ROLLBACK"); } catch { /* close still releases */ }
+        try { this.#ownerDatabase.close(); } finally {
+          try { this.#ownerFile.close(); } finally { claimedJournalPaths.delete(this.#claimPath); }
+        }
+      }
+    }
   }
 }
 

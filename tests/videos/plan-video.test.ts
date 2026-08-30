@@ -13,6 +13,7 @@ function makeConfig(overrides: Partial<CodexCommanderConfig> = {}): CodexCommand
   };
   return {
     providers: { xai },
+    images: { authSource: "api_key" },
     ...overrides,
   } as unknown as CodexCommanderConfig;
 }
@@ -27,56 +28,48 @@ function makeProvider(host: string): CodexCommanderProviderConfig {
 
 describe("planVideoBridge", () => {
   test("returns undefined when videoBridgeEnabled is not true", async () => {
-    const config = makeConfig({ images: { videoBridgeEnabled: false } } as unknown as CodexCommanderConfig);
+    const config = makeConfig({ images: { videoBridgeEnabled: false, authSource: "api_key" } } as unknown as CodexCommanderConfig);
     const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
     expect(plan).toBeUndefined();
   });
 
   test("returns undefined when videoBridgeEnabled is missing", async () => {
-    const config = makeConfig({ images: {} } as unknown as CodexCommanderConfig);
+    const config = makeConfig({ images: { authSource: "api_key" } } as unknown as CodexCommanderConfig);
     const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
     expect(plan).toBeUndefined();
   });
 
   test("returns plan when enabled with valid xAI provider", async () => {
-    const config = makeConfig({ images: { videoBridgeEnabled: true } } as unknown as CodexCommanderConfig);
+    const config = makeConfig({ images: { videoBridgeEnabled: true, authSource: "api_key" } } as unknown as CodexCommanderConfig);
     const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
     expect(plan).toBeDefined();
-    expect(plan!.model).toBe("grok-imagine-video");
-    expect(plan!.auth.token).toBe("xai-test-key");
-    expect(plan!.auth.baseUrl).toBe("https://api.x.ai/v1");
+    expect(plan!.model).toBe("grok-imagine-video-1.5");
+    expect(plan!.auth).toMatchObject({ authSource: "api_key", providerKind: "canonical" });
+    expect(plan!.auth).not.toHaveProperty("token");
+    expect(plan!.auth).not.toHaveProperty("baseUrl");
     expect(plan!.toolNames.has(VIDEO_GEN_TOOL_NAME)).toBe(true);
   });
 
-  test("returns undefined for OpenAI native passthrough", async () => {
-    const config = makeConfig({ images: { videoBridgeEnabled: true } } as unknown as CodexCommanderConfig);
+  test("supports the native OpenAI Responses route", async () => {
+    const config = makeConfig({ images: { videoBridgeEnabled: true, authSource: "api_key" } } as unknown as CodexCommanderConfig);
     const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.openai.com"));
-    expect(plan).toBeUndefined();
+    expect(plan?.model).toBe("grok-imagine-video-1.5");
   });
 
   test("returns undefined when no xAI provider available", async () => {
     const config: CodexCommanderConfig = {
       providers: { anthropic: makeProvider("api.anthropic.com") },
-      images: { videoBridgeEnabled: true },
+      images: { videoBridgeEnabled: true, authSource: "api_key" },
     } as unknown as CodexCommanderConfig;
     const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
     expect(plan).toBeUndefined();
   });
 
-  test("returns undefined when xAI provider uses oauth (no API key)", async () => {
-    const config: CodexCommanderConfig = {
-      providers: { xai: { baseUrl: "https://api.x.ai/v1", authMode: "oauth", apiKey: undefined } },
-      images: { videoBridgeEnabled: true },
-    } as unknown as CodexCommanderConfig;
-    const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
-    expect(plan).toBeUndefined();
-  });
-
-  test("respects custom videoBridgeModel", async () => {
-    const config = makeConfig({ images: { videoBridgeEnabled: true, videoBridgeModel: "custom-video-model" } } as unknown as CodexCommanderConfig);
+  test("uses the stable v1.5 model even when legacy config names another model", async () => {
+    const config = makeConfig({ images: { videoBridgeEnabled: true, authSource: "api_key", videoBridgeModel: "custom-video-model" } } as unknown as CodexCommanderConfig);
     const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
     expect(plan).toBeDefined();
-    expect(plan!.model).toBe("custom-video-model");
+    expect(plan!.model).toBe("grok-imagine-video-1.5");
   });
 });
 

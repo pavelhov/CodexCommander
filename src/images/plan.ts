@@ -1,7 +1,6 @@
 import type { CodexCommanderConfig, CodexCommanderParsedRequest, CodexCommanderProviderConfig } from "../types";
 import type { ImageBridgePlan, VideoBridgePlan } from "./types";
 import { resolveEnvValue } from "../config";
-import { getProviderRegistryEntry } from "../providers/registry";
 import { IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME, isVideoGenName } from "./synthetic-tool";
 import { bindMediaCredential, type BindMediaCredentialDeps } from "./media-credentials";
 
@@ -29,7 +28,7 @@ export function findXaiProvider(config: CodexCommanderConfig): { name: string; p
   return undefined;
 }
 
-/** Legacy API-key lookup retained only for the temporary video compatibility seam. */
+/** Compatibility helper for callers that still inspect image API-key readiness directly. */
 export function resolveXaiImageApiKey(provider: CodexCommanderProviderConfig): string | undefined {
   if (provider.authMode === "oauth") return undefined;
   const apiKey = resolveEnvValue(provider.apiKey)?.trim();
@@ -74,32 +73,28 @@ export async function planImageBridge(
   };
 }
 
-const DEFAULT_VIDEO_MODEL = "grok-imagine-video";
+export const XAI_VIDEO_MODEL = "grok-imagine-video-1.5";
 
 /**
  * Decide whether the video bridge should activate for this request. Unlike images, video
  * generation has no hosted OpenAI tool type — the synthetic `video_gen` tool is unconditionally
  * injected when `videoBridgeEnabled` is true. The bridge activates only when:
  *   1. videoBridgeEnabled is explicitly true (opt-in)
- *   2. the routed provider is NOT api.openai.com (native passthrough)
- *   3. an xAI provider with a valid API key is available
+ *   2. the exact configured credential source can be bound
  */
 export async function planVideoBridge(
   config: CodexCommanderConfig,
   parsed: CodexCommanderParsedRequest,
-  routedProvider: CodexCommanderProviderConfig,
+  _routedProvider: CodexCommanderProviderConfig,
+  credentialDeps: BindMediaCredentialDeps = {},
 ): Promise<VideoBridgePlan | undefined> {
   if (config.images?.videoBridgeEnabled !== true) return undefined;
-  // Don't intercept for OpenAI native passthrough
-  const host = (() => { try { return new URL(routedProvider.baseUrl).hostname; } catch { return ""; } })();
-  if (host === "api.openai.com") return undefined;
-  const found = findXaiProvider(config);
-  if (!found) return undefined;
-  const token = resolveXaiImageApiKey(found.provider);
-  if (!token) return undefined;
-  // Pin the baseUrl to the registry entry, ignoring any config-level baseUrl override.
-  const registryEntry = getProviderRegistryEntry("xai");
-  const pinnedBaseUrl = (registryEntry?.baseUrl ?? "https://api.x.ai/v1").replace(/\/+$/, "");
+  let auth: VideoBridgePlan["auth"];
+  try {
+    auth = bindMediaCredential(config, credentialDeps);
+  } catch {
+    return undefined;
+  }
   const toolNames = new Set<string>();
   toolNames.add(VIDEO_GEN_TOOL_NAME);
   // Collect any existing function tools whose name matches a video_gen alias
@@ -118,9 +113,9 @@ export async function planVideoBridge(
   const artifactsKeepCount =
     typeof keepRaw === "number" && Number.isFinite(keepRaw) ? Math.floor(keepRaw) : undefined;
   return {
-    provider: found.provider,
-    auth: { baseUrl: pinnedBaseUrl, token },
-    model: config.images?.videoBridgeModel ?? DEFAULT_VIDEO_MODEL,
+    auth,
+    // V1 is one audited wire contract. A legacy configurable slug cannot retarget paid work.
+    model: XAI_VIDEO_MODEL,
     toolNames,
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     ...(artifactsKeepCount !== undefined ? { artifactsKeepCount } : {}),

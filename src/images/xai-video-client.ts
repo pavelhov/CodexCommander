@@ -1,15 +1,10 @@
 /** xAI video submit/poll request shaping over the shared fixed-origin media transport. */
 import type { MediaCredentialBinding } from "./types";
-import {
-  bindLegacyStaticApiKey,
-  createStaticMediaCredentialLease,
-} from "./media-credentials";
 import { ambiguousMediaSuccess, mediaError } from "./media-errors";
 import {
   requestXaiMediaJson,
   type XaiMediaTransportDeps,
 } from "./xai-media-transport";
-import type { LegacyXaiMediaAuth } from "./xai-client";
 
 export interface XaiVideoSubmitRequest {
   prompt: string;
@@ -17,6 +12,7 @@ export interface XaiVideoSubmitRequest {
   duration?: number;
   resolution?: string;
   aspectRatio?: string;
+  audio?: boolean;
 }
 
 export interface XaiVideoSubmitResult {
@@ -38,21 +34,35 @@ export interface XaiVideoClientOptions extends XaiMediaTransportDeps {
 
 const SUBMIT_TIMEOUT_MS = 60_000;
 const POLL_TIMEOUT_MS = 30_000;
-const DEFAULT_VIDEO_MODEL = "grok-imagine-video";
+export const XAI_VIDEO_MODEL = "grok-imagine-video-1.5";
+const VIDEO_RESOLUTIONS = new Set(["480p", "720p", "1080p"]);
+const VIDEO_ASPECT_RATIOS = new Set(["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"]);
+const VIDEO_REQUEST_KEYS = new Set(["prompt", "model", "duration", "resolution", "aspectRatio", "audio"]);
 
-function isBinding(value: MediaCredentialBinding | LegacyXaiMediaAuth): value is MediaCredentialBinding {
-  return "authSource" in value && "slotRef" in value && "identityDigest" in value;
+function invalidVideoRequest(): never {
+  throw mediaError({ code: "invalid_request", phase: "pre_dispatch", certainty: "definite" });
 }
 
-function transportContext(
-  credential: MediaCredentialBinding | LegacyXaiMediaAuth,
-  deps: XaiMediaTransportDeps,
-): { binding: MediaCredentialBinding; deps: XaiMediaTransportDeps } {
-  if (isBinding(credential)) return { binding: credential, deps };
-  const binding = bindLegacyStaticApiKey(credential.token);
+function normalizedSubmitBody(req: XaiVideoSubmitRequest): Record<string, unknown> {
+  if (!req || typeof req !== "object" || Object.keys(req).some(key => !VIDEO_REQUEST_KEYS.has(key))) {
+    return invalidVideoRequest();
+  }
+  if (typeof req.prompt !== "string" || !req.prompt.trim()) return invalidVideoRequest();
+  if (req.model !== undefined && req.model !== XAI_VIDEO_MODEL) return invalidVideoRequest();
+  const duration = req.duration ?? 6;
+  const resolution = req.resolution ?? "720p";
+  const aspectRatio = req.aspectRatio ?? "16:9";
+  if (!Number.isInteger(duration) || duration < 1 || duration > 15) return invalidVideoRequest();
+  if (!VIDEO_RESOLUTIONS.has(resolution)) return invalidVideoRequest();
+  if (!VIDEO_ASPECT_RATIOS.has(aspectRatio)) return invalidVideoRequest();
+  if (req.audio !== undefined && typeof req.audio !== "boolean") return invalidVideoRequest();
   return {
-    binding,
-    deps: { ...deps, lease: createStaticMediaCredentialLease(binding, credential.token) },
+    model: XAI_VIDEO_MODEL,
+    prompt: req.prompt,
+    duration,
+    resolution,
+    aspect_ratio: aspectRatio,
+    ...(req.audio !== undefined ? { audio: req.audio } : {}),
   };
 }
 
@@ -68,28 +78,21 @@ function safeRequestId(value: unknown): string | undefined {
 
 export async function submitVideoJob(
   req: XaiVideoSubmitRequest,
-  credential: MediaCredentialBinding | LegacyXaiMediaAuth,
+  credential: MediaCredentialBinding,
   signal?: AbortSignal,
   options: XaiVideoClientOptions = {},
 ): Promise<XaiVideoSubmitResult> {
-  const body: Record<string, unknown> = {
-    model: req.model ?? DEFAULT_VIDEO_MODEL,
-    prompt: req.prompt,
-  };
-  if (typeof req.duration === "number") body.duration = req.duration;
-  if (typeof req.resolution === "string") body.resolution = req.resolution;
-  if (typeof req.aspectRatio === "string") body.aspect_ratio = req.aspectRatio;
+  const body = normalizedSubmitBody(req);
 
   const { deadlineAt, timeoutMs = SUBMIT_TIMEOUT_MS, ...deps } = options;
-  const context = transportContext(credential, deps);
   const response = await requestXaiMediaJson({
     operation: "video_submit",
-    binding: context.binding,
+    binding: credential,
     body,
     signal,
     timeoutMs,
     ...(deadlineAt !== undefined ? { deadlineAt } : {}),
-  }, context.deps);
+  }, deps);
   if (!response || typeof response !== "object" || Array.isArray(response)) {
     throw ambiguousMediaSuccess("malformed_response");
   }
@@ -101,20 +104,19 @@ export async function submitVideoJob(
 
 export async function pollVideoJob(
   requestId: string,
-  credential: MediaCredentialBinding | LegacyXaiMediaAuth,
+  credential: MediaCredentialBinding,
   signal?: AbortSignal,
   options: XaiVideoClientOptions = {},
 ): Promise<XaiVideoPollResult> {
   const { deadlineAt, timeoutMs = POLL_TIMEOUT_MS, ...deps } = options;
-  const context = transportContext(credential, deps);
   const response = await requestXaiMediaJson({
     operation: "video_poll",
-    binding: context.binding,
+    binding: credential,
     requestId,
     signal,
     timeoutMs,
     ...(deadlineAt !== undefined ? { deadlineAt } : {}),
-  }, context.deps);
+  }, deps);
   if (!response || typeof response !== "object" || Array.isArray(response)) {
     throw mediaError({
       code: "upstream_failed",
