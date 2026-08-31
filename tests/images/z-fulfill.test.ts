@@ -18,6 +18,7 @@ beforeAll(async () => {
   testHome = join(tmpdir(), "ccx-test-" + randomUUID());
   process.env.CODEXCOMMANDER_HOME = testHome;
   mock.restore();
+  const actualArtifacts = await import("../../src/images/artifacts");
   mock.module("../../src/images/xai-client", () => ({
     callXaiImages: async (req: XaiImageRequest, _auth: unknown, _signal?: AbortSignal, timeoutMs?: number) => {
       xaiCalls.push(req);
@@ -27,6 +28,7 @@ beforeAll(async () => {
     },
   }));
   mock.module("../../src/images/artifacts", () => ({
+    ...actualArtifacts,
     artifactHttpUrl: (path: string) => `/v1/codexcommander/artifacts/${path.split(/[\\/]/).at(-1)}`,
     createImageBudget: () => ({ spent: 0 }),
     getArtifactsDir: () => join(testHome, "artifacts"),
@@ -98,6 +100,7 @@ describe("fulfillImageCall", () => {
       path: privatePath,
       files: [privatePath],
       count: 1,
+      jobId: "must-not-enter-image-results",
       markdown: `![image](file://${privatePath})`,
     }, "image"));
     expect(JSON.parse(serialized)).toEqual({
@@ -138,6 +141,75 @@ describe("fulfillImageCall", () => {
     expect(JSON.parse(serialized)).toEqual({ ok: false, status: "failed" });
     expect(serialized).not.toContain("provider.invalid");
     expect(serialized).not.toContain("must-not-leak");
+  });
+
+  test("provider-safe video recovery results retain only bounded local job ids", () => {
+    for (const [error, status] of [
+      ["video_busy: another video job is active", "busy"],
+      ["video_detached: generation continues", "detached"],
+      ["video job ended in state failed", "failed"],
+    ] as const) {
+      expect(safeMediaToolResult({
+        ok: false,
+        model: "private-model",
+        prompt: "private-prompt",
+        files: [],
+        count: 0,
+        jobId: "018f0f51-9db8-7f42-a9d8-4b9dfbd26e0f",
+        error,
+      }, "video")).toEqual({
+        ok: false,
+        status,
+        jobId: "018f0f51-9db8-7f42-a9d8-4b9dfbd26e0f",
+      });
+    }
+
+    const base = {
+      model: "private-model",
+      prompt: "private-prompt",
+      files: [],
+      count: 0,
+      jobId: "local-job-id",
+    };
+    expect(safeMediaToolResult({ ...base, ok: false, error: "video_busy" }, "image"))
+      .toEqual({ ok: false, status: "busy" });
+    expect(safeMediaToolResult({ ...base, ok: false, error: "video artifact is unavailable locally" }, "video"))
+      .toEqual({ ok: false, status: "artifact_unavailable" });
+    const completedPath = touchArtifact("completed-video.mp4");
+    expect(safeMediaToolResult({ ...base, ok: true, files: [completedPath], path: completedPath }, "video"))
+      .toEqual({
+        ok: true,
+        status: "completed",
+        artifacts: ["/v1/codexcommander/artifacts/completed-video.mp4"],
+        markdown: "[Open video](/v1/codexcommander/artifacts/completed-video.mp4)",
+      });
+    expect(safeMediaToolResult({
+      ...base,
+      ok: false,
+      jobId: `local-${"x".repeat(64)}`,
+      error: "video_detached",
+    }, "video")).toEqual({ ok: false, status: "detached" });
+    expect(safeMediaToolResult({
+      ...base,
+      ok: false,
+      jobId: "https://provider.invalid/private",
+      error: "video job ended in state failed",
+    }, "video")).toEqual({ ok: false, status: "failed" });
+
+    const outcomeUnknown = {
+      ...base,
+      ok: false,
+      jobId: "018f0f51-9db8-7f42-a9d8-4b9dfbd26e0f",
+      error: "submission_outcome_unknown: https://provider.invalid/result?token=must-not-leak",
+      path: "/private/local/video.mp4",
+      artifactId: "private-artifact-id",
+      credential: "private-credential",
+    };
+    expect(safeMediaToolResult(outcomeUnknown, "video")).toEqual({
+      ok: false,
+      status: "submission_outcome_unknown",
+      jobId: "018f0f51-9db8-7f42-a9d8-4b9dfbd26e0f",
+    });
   });
 
   test("valid args → ok:true with file", async () => {

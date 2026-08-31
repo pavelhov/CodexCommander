@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { basename, resolve as resolvePath } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ImageBridgePlan, ImageCallResult } from "./types";
+import type { ImageBridgePlan, ImageCallResult, VideoCallResult } from "./types";
 import { callXaiImages } from "./xai-client";
 import {
   artifactHttpUrl,
@@ -43,6 +43,8 @@ export type SafeMediaToolStatus =
 export interface SafeMediaToolResult {
   ok: boolean;
   status: SafeMediaToolStatus;
+  /** Bounded opaque local id for recovering a non-artifact video result. */
+  jobId?: string;
   /** Authenticated proxy-relative artifact references; never provider or filesystem URLs. */
   artifacts?: string[];
   /** Renderer hint built exclusively from the authenticated relative artifact reference. */
@@ -69,9 +71,15 @@ function safeMediaStatus(result: ImageFulfillmentResult): SafeMediaToolStatus {
   return "failed";
 }
 
+function safeLocalVideoJobId(value: unknown): value is string {
+  // Durable media ids are locally generated and journal-bounded to 64 characters. Keep the
+  // provider-visible contract narrower still by rejecting whitespace, controls, URLs, and paths.
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value);
+}
+
 /** Serialize only the narrow result contract safe to replay into another provider request. */
 export function safeMediaToolResult(
-  result: ImageFulfillmentResult,
+  result: ImageFulfillmentResult | VideoCallResult,
   kind: "image" | "video",
 ): SafeMediaToolResult {
   const artifacts: string[] = [];
@@ -85,9 +93,21 @@ export function safeMediaToolResult(
     }
   }
   const primary = artifacts[0];
+  const status = safeMediaStatus(result);
+  const jobId = kind === "video"
+    && !result.ok
+    && (status === "busy"
+      || status === "detached"
+      || status === "failed"
+      || status === "submission_outcome_unknown")
+    && "jobId" in result
+    && safeLocalVideoJobId(result.jobId)
+    ? result.jobId
+    : undefined;
   return {
     ok: result.ok,
-    status: safeMediaStatus(result),
+    status,
+    ...(jobId ? { jobId } : {}),
     ...(artifacts.length > 0 ? { artifacts } : {}),
     ...(primary
       ? { markdown: kind === "image" ? `![image](${primary})` : `[Open video](${primary})` }

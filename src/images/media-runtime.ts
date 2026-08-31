@@ -1,6 +1,9 @@
-import { basename } from "node:path";
-import { existsSync } from "node:fs";
+import { basename, resolve } from "node:path";
+import { chmodSync, existsSync, lstatSync, mkdirSync } from "node:fs";
 
+import { getConfigDir } from "../config";
+import { recordOwnedConfigPath } from "../lib/config-ownership";
+import { hardenSecretDir } from "../lib/windows-secret-acl";
 import {
   adoptReservedVideoArtifact,
   DEFAULT_ARTIFACT_KEEP_COUNT,
@@ -8,7 +11,12 @@ import {
   getArtifactsDir,
   type VideoArtifactDownloadOptions,
 } from "./artifacts";
-import { pruneMediaArtifacts } from "./artifact-retention";
+import {
+  pruneMediaArtifacts,
+  unlinkMediaArtifactDurably,
+  type ArtifactRetentionIo,
+} from "./artifact-retention";
+import { clearableDeadline } from "../lib/abort";
 import {
   isMediaTransportError,
   mediaError,
@@ -42,6 +50,11 @@ export type MediaRuntimeCrashSeam =
   | "after_artifact_reserved"
   | "after_artifact_published";
 
+export interface RuntimeVideoArtifactDownloadOptions extends VideoArtifactDownloadOptions {
+  /** Persisted absolute job deadline. The runtime also enforces it through the download signal. */
+  deadlineAt: number;
+}
+
 export interface MediaRuntimeDeps {
   now?: () => number;
   submitVideoJob?: (
@@ -59,12 +72,14 @@ export interface MediaRuntimeDeps {
   downloadVideo?: (
     url: string,
     signal?: AbortSignal,
-    options?: VideoArtifactDownloadOptions,
+    options?: RuntimeVideoArtifactDownloadOptions,
   ) => Promise<string>;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   pollIntervalMs?: number;
   /** Shared image/video artifact cap. Defaults to the canonical retention limit. */
   artifactsKeepCount?: number;
+  /** Test-only durable artifact deletion fault seam. */
+  artifactRetentionIo?: ArtifactRetentionIo;
   /** Test-only hard-crash seam. A thrown error deliberately leaves the last durable state untouched. */
   crashSeam?: (seam: MediaRuntimeCrashSeam, job: PublicVideoJob) => void;
 }
@@ -129,6 +144,103 @@ function requireUpdated(update: VideoJobUpdate): VideoJobRecord {
   return update.job;
 }
 
+const MEDIA_RECOVERY_JOB_ID = Symbol("ccx.mediaRecoveryJobId");
+
+function validRecoveryJobId(value: unknown): value is string {
+  return typeof value === "string"
+    && value.length > 0
+    && value.length <= 64
+    && /^[A-Za-z0-9._-]+$/.test(value);
+}
+
+/** Read one private durable recovery handle without exposing it through serialization. */
+export function mediaRecoveryJobId(error: unknown): string | undefined {
+  if ((typeof error !== "object" || error === null) && typeof error !== "function") return undefined;
+  try {
+    const value = (error as { [MEDIA_RECOVERY_JOB_ID]?: unknown })[MEDIA_RECOVERY_JOB_ID];
+    return validRecoveryJobId(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeRecoveryWrapper(error: unknown): MediaTransportError {
+  if (isMediaTransportError(error)) {
+    return mediaError({
+      code: error.code,
+      phase: error.phase,
+      certainty: error.certainty,
+      retryable: error.retryable,
+      ...(error.status !== undefined ? { status: error.status } : {}),
+      ...(error.reason !== undefined ? { reason: error.reason } : {}),
+      ...(error.retryAfterMs !== undefined ? { retryAfterMs: error.retryAfterMs } : {}),
+    });
+  }
+  return mediaError({
+    code: "ambiguous_submission",
+    phase: "submit",
+    certainty: "ambiguous",
+    reason: "incomplete_response",
+  });
+}
+
+function withMediaRecoveryJobId(error: unknown, jobId: string): unknown {
+  const attach = (target: object): boolean => {
+    try {
+      Object.defineProperty(target, MEDIA_RECOVERY_JOB_ID, {
+        value: jobId,
+        enumerable: false,
+        configurable: false,
+        writable: false,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (((typeof error === "object" && error !== null) || typeof error === "function") && attach(error)) {
+    return error;
+  }
+  const wrapper = safeRecoveryWrapper(error);
+  attach(wrapper);
+  return wrapper;
+}
+
+function submissionOutcomeUnknownError(jobId: string, original?: unknown): unknown {
+  return withMediaRecoveryJobId(
+    original ?? mediaError({
+      code: "ambiguous_submission",
+      phase: "submit",
+      certainty: "ambiguous",
+      reason: "incomplete_response",
+    }),
+    jobId,
+  );
+}
+
+function ensurePrivateArtifactsDirectory(dir: string): boolean {
+  try {
+    recordOwnedConfigPath(getConfigDir(), dir);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    let stats = lstatSync(dir);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) return false;
+    if (process.platform === "win32") {
+      if (!hardenSecretDir(dir, { required: true, timeoutMemoKey: `${dir}::artifacts` }).ok) return false;
+    } else {
+      chmodSync(dir, 0o700);
+    }
+    stats = lstatSync(dir);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) return false;
+    if (process.platform !== "win32") {
+      const uid = process.getuid?.();
+      if (uid === undefined || stats.uid !== uid || (stats.mode & 0o777) !== 0o700) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(signal.reason);
   return new Promise((resolve, reject) => {
@@ -154,6 +266,21 @@ function terminal(state: PublicVideoJob["state"]): boolean {
   return !VIDEO_ADMISSION_HOLDING_STATES.includes(state);
 }
 
+function rejectWhenAborted(signal: AbortSignal): { promise: Promise<never>; cleanup: () => void } {
+  let onAbort: (() => void) | undefined;
+  const promise = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason);
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
+  return {
+    promise,
+    cleanup: () => {
+      if (onAbort) signal.removeEventListener("abort", onAbort);
+    },
+  };
+}
+
 type UpdateWaiter = (result: WaitForVideoUpdateResult) => void;
 
 /**
@@ -169,6 +296,7 @@ export class MediaRuntime implements ServerMediaRuntime {
   readonly #sleep: NonNullable<MediaRuntimeDeps["sleep"]>;
   readonly #pollIntervalMs: number;
   readonly #artifactsKeepCount: number;
+  readonly #artifactRetentionIo: ArtifactRetentionIo;
   readonly #crashSeam?: MediaRuntimeDeps["crashSeam"];
   readonly #submissionControllers = new Map<string, AbortController>();
   readonly #submissionFlights = new Map<string, Promise<unknown>>();
@@ -177,7 +305,9 @@ export class MediaRuntime implements ServerMediaRuntime {
   readonly #retryDelays = new Map<string, number>();
   readonly #waiters = new Map<string, Set<UpdateWaiter>>();
   readonly #pendingDeliveryArtifactIds = new Set<string>();
+  readonly #pendingLatePublicationArtifactIds = new Set<string>();
   readonly #artifactDeliveryLeaseCounts = new Map<string, number>();
+  readonly #artifactCleanupFlights = new Set<Promise<void>>();
   #prepared: ReturnType<VideoJobStore["recoverStartup"]> | undefined;
   #accepting = true;
   #closed = false;
@@ -199,6 +329,7 @@ export class MediaRuntime implements ServerMediaRuntime {
       && Number.isSafeInteger(deps.artifactsKeepCount)
       ? deps.artifactsKeepCount
       : DEFAULT_ARTIFACT_KEEP_COUNT;
+    this.#artifactRetentionIo = deps.artifactRetentionIo ?? {};
     this.#crashSeam = deps.crashSeam;
   }
 
@@ -221,6 +352,27 @@ export class MediaRuntime implements ServerMediaRuntime {
     const job = requireUpdated(this.#store.transitionVideoJob(input));
     this.#notify(job.id);
     return job;
+  }
+
+  #bestEffortFenceSubmissionOutcomeUnknown(id: string): void {
+    try {
+      const current = this.#store.getVideoJob(id);
+      if (current?.state === "submitting") {
+        const changed = this.#store.transitionVideoJob({
+          id,
+          expectedRevision: current.revision,
+          from: ["submitting"],
+          to: "outcome_unknown",
+          safeError: "ambiguous_submission",
+        });
+        if (changed.kind === "updated") this.#notify(id);
+      } else if (current?.state === "outcome_unknown") {
+        this.#notify(id);
+      }
+    } catch {
+      // Startup recovery still converts a surviving submitting fence. The
+      // caller receives the known local id even when journal I/O is unavailable.
+    }
   }
 
   async submitVideo(input: SubmitRuntimeVideoInput): Promise<SubmitRuntimeVideoResult> {
@@ -257,17 +409,21 @@ export class MediaRuntime implements ServerMediaRuntime {
       submitted = await submitFlight;
     } catch (error) {
       const current = this.#store.getVideoJob(job.id);
-      if (!current || current.state !== "submitting") throw error;
+      if (!current) throw error;
+      if (current.state === "outcome_unknown") {
+        throw submissionOutcomeUnknownError(current.id, error);
+      }
+      if (current.state !== "submitting") throw error;
       job = current;
       if (!isMediaTransportError(error) || error.certainty === "ambiguous") {
-        this.#transition({
+        const outcomeUnknown = this.#transition({
           id: job.id,
           expectedRevision: job.revision,
           from: ["submitting"],
           to: "outcome_unknown",
           safeError: "ambiguous_submission",
         });
-        throw error;
+        throw submissionOutcomeUnknownError(outcomeUnknown.id, error);
       }
       if (error.code === "needs_auth" && error.phase === "pre_dispatch") {
         this.#transition({
@@ -294,8 +450,21 @@ export class MediaRuntime implements ServerMediaRuntime {
 
     this.#crashSeam?.("after_request_id", this.#public(job));
     const current = this.#store.getVideoJob(job.id);
-    if (!current || current.state !== "submitting") throw stoppingError();
-    job = requireUpdated(this.#store.commitVideoAccepted(current.id, current.revision, submitted.requestId));
+    if (!current) throw stoppingError();
+    if (current.state === "outcome_unknown") throw submissionOutcomeUnknownError(current.id);
+    if (current.state !== "submitting") throw stoppingError();
+    let accepted: VideoJobUpdate;
+    try {
+      accepted = this.#store.commitVideoAccepted(current.id, current.revision, submitted.requestId);
+    } catch (error) {
+      this.#bestEffortFenceSubmissionOutcomeUnknown(current.id);
+      throw submissionOutcomeUnknownError(current.id, error);
+    }
+    if (accepted.kind !== "updated") {
+      this.#bestEffortFenceSubmissionOutcomeUnknown(current.id);
+      throw submissionOutcomeUnknownError(current.id);
+    }
+    job = accepted.job;
     this.#notify(job.id);
     const projected = this.#public(job);
     this.#crashSeam?.("after_accepted_commit", projected);
@@ -310,6 +479,14 @@ export class MediaRuntime implements ServerMediaRuntime {
       return this.#store.publicVideoJob(id);
     }
     if (terminal(job.state)) return this.#store.publicVideoJob(id);
+    if (
+      job.artifactId
+      && job.state === "download_failed"
+      && job.safeError === "cancelled"
+      && this.#now() >= job.deadlineAt
+    ) {
+      return this.#expireVideoJob(job, ["download_failed"]);
+    }
     if (job.artifactId && (job.state === "downloading" || job.state === "download_failed")) {
       try {
         const adopted = await adoptReservedVideoArtifact(job.artifactId);
@@ -337,26 +514,13 @@ export class MediaRuntime implements ServerMediaRuntime {
           });
         }
         if (this.#now() >= job.deadlineAt) {
-          job = this.#transition({
-            id: job.id,
-            expectedRevision: job.revision,
-            from: ["download_failed"],
-            to: "expired",
-            safeError: "timeout",
-          });
+          return this.#expireVideoJob(job, ["download_failed"]);
         }
         return this.#public(job);
       }
     }
     if (this.#now() >= job.deadlineAt) {
-      job = this.#transition({
-        id: job.id,
-        expectedRevision: job.revision,
-        from: [job.state],
-        to: "expired",
-        safeError: "timeout",
-      });
-      return this.#public(job);
+      return this.#expireVideoJob(job, [job.state]);
     }
     const requestId = job.requestId;
     if (!requestId) return this.#store.publicVideoJob(id);
@@ -441,13 +605,22 @@ export class MediaRuntime implements ServerMediaRuntime {
       return this.#public(job);
     }
 
+    if (this.#now() >= job.deadlineAt) {
+      return this.#expireVideoJob(job, ["polling"]);
+    }
+
     // The signed URL remains on this stack only. The artifact downloader sniffs
     // the format, then CAS-reserves its exact final id before it creates or
     // publishes any final-name bytes.
     let hardCrash = false;
     let path: string;
+    let downloadFlight: Promise<string> | undefined;
+    const deadline = clearableDeadline(Math.max(1, Math.ceil(job.deadlineAt - this.#now())), signal);
+    const downloadSignal = deadline.signal;
+    const deadlineAbort = rejectWhenAborted(deadline.signal);
     try {
-      path = await this.#download(result.videoUrl, signal, {
+      downloadFlight = this.#download(result.videoUrl, downloadSignal, {
+        deadlineAt: job.deadlineAt,
         ...(job.artifactId ? { reservedArtifactId: job.artifactId } : {}),
         onReserveArtifact: artifactId => {
           const reservingJob = job;
@@ -462,6 +635,7 @@ export class MediaRuntime implements ServerMediaRuntime {
           }
         },
       });
+      path = await Promise.race([downloadFlight, deadlineAbort.promise]);
       // Backward-compatible injected test seam: production's sole downloader
       // always invokes onReserveArtifact before publication.
       if (job.state === "polling") {
@@ -471,8 +645,17 @@ export class MediaRuntime implements ServerMediaRuntime {
       if (!job.artifactId || basename(path) !== job.artifactId) {
         throw new Error("published video did not match its durable artifact reservation");
       }
+      if (deadline.didExpire() || this.#now() >= job.deadlineAt) {
+        return this.#expireVideoJob(job, ["downloading"]);
+      }
     } catch (error) {
       if (hardCrash) throw error;
+      if (deadline.didExpire() || this.#now() >= job.deadlineAt) {
+        return this.#expireVideoJob(job, ["polling", "downloading"], downloadFlight);
+      }
+      if (signal?.aborted) {
+        return this.#interruptVideoDownload(job, ["polling", "downloading"], downloadFlight);
+      }
       job = this.#transition({
         id: job.id,
         expectedRevision: job.revision,
@@ -481,9 +664,99 @@ export class MediaRuntime implements ServerMediaRuntime {
         safeError: "download_rejected",
       });
       return this.#public(job);
+    } finally {
+      deadlineAbort.cleanup();
+      deadline.clear();
     }
     this.#crashSeam?.("after_artifact_published", this.#public(job));
     return this.#finishCompletedVideo(job);
+  }
+
+  #trackArtifactCleanup(flight: Promise<void>): void {
+    const settled = flight.catch(() => { /* the durable obligation is retried by retention/startup */ });
+    this.#artifactCleanupFlights.add(settled);
+    void settled.then(() => this.#artifactCleanupFlights.delete(settled));
+  }
+
+  #cleanupUnreservedLatePath(latePath: string | undefined): void {
+    if (!latePath || latePath.length > 4_096) return;
+    const dir = getArtifactsDir();
+    const lateArtifactId = basename(latePath);
+    if (resolve(latePath) !== resolve(dir, lateArtifactId)) return;
+    unlinkMediaArtifactDurably(dir, lateArtifactId, this.#artifactRetentionIo);
+  }
+
+  #interruptVideoDownload(
+    job: VideoJobRecord,
+    from: readonly VideoJobRecord["state"][],
+    lateDownload?: Promise<string>,
+  ): PublicVideoJob {
+    const artifactId = job.artifactId;
+    job = this.#transition({
+      id: job.id,
+      expectedRevision: job.revision,
+      from,
+      to: "download_failed",
+      safeError: "cancelled",
+    });
+    if (lateDownload) {
+      const continuation = (async () => {
+        let latePath: string | undefined;
+        try {
+          latePath = await lateDownload;
+        } catch {
+          return;
+        }
+        if (!artifactId) this.#cleanupUnreservedLatePath(latePath);
+      })();
+      this.#trackArtifactCleanup(continuation);
+    }
+    return this.#public(job);
+  }
+
+  async #expireVideoJob(
+    job: VideoJobRecord,
+    from: readonly VideoJobRecord["state"][],
+    lateDownload?: Promise<string>,
+  ): Promise<PublicVideoJob> {
+    const artifactId = job.artifactId;
+    job = this.#transition({
+      id: job.id,
+      expectedRevision: job.revision,
+      from,
+      to: "expired",
+      safeError: "timeout",
+    });
+
+    if (lateDownload) {
+      // The absent final name is not evidence of cleanup while this producer can
+      // still publish it. Keep a live pin until the producer settles, then run
+      // the durable pending-deletion/finalization pass as runtime-owned work.
+      if (artifactId) this.#pendingLatePublicationArtifactIds.add(artifactId);
+      const cleanup = (async () => {
+        let latePath: string | undefined;
+        try {
+          latePath = await lateDownload;
+        } catch {
+          // A rejected producer cannot publish a returned compatibility path.
+        }
+        if (artifactId) {
+          this.#pendingLatePublicationArtifactIds.delete(artifactId);
+          await this.runArtifactRetention();
+          return;
+        }
+        // Production reserves before publication. For an injected/legacy
+        // downloader that returns a late unreserved path, clean only one
+        // bounded regular artifact name inside the canonical artifact dir.
+        this.#cleanupUnreservedLatePath(latePath);
+      })();
+      this.#trackArtifactCleanup(cleanup);
+      return this.#public(job);
+    }
+
+    if (!artifactId) return this.#public(job);
+    await this.runArtifactRetention();
+    return this.#public(job);
   }
 
   async #finishCompletedVideo(job: VideoJobRecord): Promise<PublicVideoJob | null> {
@@ -538,6 +811,7 @@ export class MediaRuntime implements ServerMediaRuntime {
     return new Set([
       ...this.#store.protectedArtifactIds(),
       ...this.#pendingDeliveryArtifactIds,
+      ...this.#pendingLatePublicationArtifactIds,
     ]);
   }
 
@@ -546,12 +820,18 @@ export class MediaRuntime implements ServerMediaRuntime {
   }
 
   canReleaseArtifactForPrune(artifactId: string): ArtifactPinPreflightResult {
-    if (this.#pendingDeliveryArtifactIds.has(artifactId)) return "protected";
+    if (
+      this.#pendingDeliveryArtifactIds.has(artifactId)
+      || this.#pendingLatePublicationArtifactIds.has(artifactId)
+    ) return "protected";
     return this.#store.canReleaseArtifactForPrune(artifactId);
   }
 
   releaseArtifactForPrune(artifactId: string): ArtifactPinReleaseResult {
-    if (this.#pendingDeliveryArtifactIds.has(artifactId)) return "protected";
+    if (
+      this.#pendingDeliveryArtifactIds.has(artifactId)
+      || this.#pendingLatePublicationArtifactIds.has(artifactId)
+    ) return "protected";
     return this.#store.releaseArtifactForPrune(artifactId);
   }
 
@@ -572,12 +852,19 @@ export class MediaRuntime implements ServerMediaRuntime {
     const run = previous.then(() => {
       if (this.#closed) return;
       const dir = getArtifactsDir();
-      if (!existsSync(dir)) return;
+      if (!existsSync(dir)) {
+        if (this.#store.pendingArtifactDeletionIds().size === 0) return;
+        if (!ensurePrivateArtifactsDirectory(dir)) return;
+      }
       pruneMediaArtifacts({
         dir,
         maxFiles: this.#artifactsKeepCount,
-        protectedArtifactIds: new Set(this.#pendingDeliveryArtifactIds),
+        protectedArtifactIds: new Set([
+          ...this.#pendingDeliveryArtifactIds,
+          ...this.#pendingLatePublicationArtifactIds,
+        ]),
         pinAuthorities: [this],
+        io: this.#artifactRetentionIo,
       });
     });
     const settled = run.catch(() => { /* a later pass can retry */ });
@@ -734,21 +1021,20 @@ export class MediaRuntime implements ServerMediaRuntime {
   shutdown(): Promise<void> {
     if (this.#shutdownFlight) return this.#shutdownFlight;
     this.beginShutdown();
-    const flights = [
-      ...this.#submissionFlights.values(),
-      ...this.#runnerFlights.values(),
-      ...(this.#retentionTail ? [this.#retentionTail] : []),
-    ];
-    if (flights.length === 0) {
-      if (!this.#closed) {
-        this.#closed = true;
-        this.#store.close();
-      }
-      this.#shutdownFlight = Promise.resolve();
-      return this.#shutdownFlight;
-    }
     this.#shutdownFlight = (async () => {
-      await Promise.allSettled(flights);
+      // A runner aborted by beginShutdown may create a late-publication cleanup
+      // continuation before it settles. Re-snapshot until every runtime-owned
+      // flight, including work spawned by another flight, is drained.
+      for (;;) {
+        const flights = [
+          ...this.#submissionFlights.values(),
+          ...this.#runnerFlights.values(),
+          ...this.#artifactCleanupFlights,
+          ...(this.#retentionTail ? [this.#retentionTail] : []),
+        ];
+        if (flights.length === 0) break;
+        await Promise.allSettled(flights);
+      }
       if (this.#closed) return;
       this.#closed = true;
       this.#store.close();

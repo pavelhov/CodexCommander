@@ -75,13 +75,19 @@ can fund media uses the same human-only boundary; ordinary provider-key controls
 
 The card shows only safe readiness, experimental observations, and bounded job state. It does not
 show prompts, account/key IDs, credential digests, provider request IDs, signed URLs, or filesystem
-paths. Provider-visible media tool results likewise contain only authenticated proxy-relative
-artifact references, never absolute local paths. Completed artifacts can be opened or revealed only
-through a confirmed privileged action. The server derives and revalidates the artifact, then uses a
-fixed platform opener with a scrubbed environment. `outcome_unknown` requires acknowledgement rather
-than automatic resubmission. Future-version, active, or locked journal recovery is read-only, while
-a separately confirmed corrupt-journal reset cannot quarantine a live journal; proven hard-link
-publication crash aliases are reconciled safely.
+paths. Completed provider-visible media results contain authenticated proxy-relative artifact
+references and renderer hints only. An eligible non-artifact video result may include a bounded
+opaque local `jobId` when a real durable job is busy, detached, failed, or has
+`submission_outcome_unknown`; completed artifacts, image results, and capability-probe busy
+contention omit it. It is not a provider ID, and provider-visible results never include provider
+IDs, credentials, paths, prompts, or private artifact fields. The dashboard (or `ccx media jobs`)
+uses that handle to show safe state; a `submission_outcome_unknown` job requires the confirmed
+dashboard acknowledgement action or `ccx media ack-job <opaque-job-id> --revision <n>`, not
+automatic resubmission. Completed artifacts can be opened or revealed only through a confirmed
+privileged action. The server derives and revalidates the artifact, then uses a fixed platform
+opener with a scrubbed environment. Future-version, active, or locked journal recovery is read-only,
+while a separately confirmed corrupt-journal reset cannot quarantine a live journal; proven
+hard-link publication crash aliases are reconciled safely.
 
 Video completion and startup recovery run the durable retention coordinator. Its job-store pins
 protect accepted/recent video artifacts from image retention, and a pruned completed artifact is

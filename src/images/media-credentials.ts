@@ -70,16 +70,24 @@ interface KeySlot {
   storedValue: string;
 }
 
-function selectedKeySlot(provider: CodexCommanderProviderConfig): KeySlot {
-  const pool = currentProviderApiKeyPool(provider);
-  if (pool) {
-    const active = pool.find(entry => entry.key === provider.apiKey);
-    if (!active) throw needsAuth();
-    return { storedSlot: `pool:${active.id}`, storedValue: active.key };
+function configuredKeySlots(provider: CodexCommanderProviderConfig): KeySlot[] {
+  if (Object.hasOwn(provider, "apiKeyPool")) {
+    const pool = currentProviderApiKeyPool(provider);
+    // A present pool that is empty, malformed, or does not canonically mirror
+    // apiKey must never revive the separately billed legacy bare-key path.
+    return pool?.map(entry => ({ storedSlot: `pool:${entry.id}`, storedValue: entry.key })) ?? [];
   }
   const bare = sanitizeApiKeyValue(provider.apiKey);
-  if (!bare) throw needsAuth();
-  return { storedSlot: "legacy-bare", storedValue: bare };
+  return bare ? [{ storedSlot: "legacy-bare", storedValue: bare }] : [];
+}
+
+function selectedKeySlot(provider: CodexCommanderProviderConfig): KeySlot {
+  const candidates = configuredKeySlots(provider);
+  const active = Object.hasOwn(provider, "apiKeyPool")
+    ? candidates.find(entry => entry.storedValue === provider.apiKey)
+    : candidates[0];
+  if (!active) throw needsAuth();
+  return active;
 }
 
 function resolvedKey(storedValue: string): string {
@@ -200,14 +208,7 @@ function findBoundKey(config: CodexCommanderConfig, binding: MediaCredentialBind
 
   const matchingBearers: string[] = [];
   for (const selected of providerCandidates) {
-    const candidates: KeySlot[] = [];
-    const pool = currentProviderApiKeyPool(selected.provider);
-    if (pool) {
-      for (const entry of pool) candidates.push({ storedSlot: `pool:${entry.id}`, storedValue: entry.key });
-    } else {
-      const bare = sanitizeApiKeyValue(selected.provider.apiKey);
-      if (bare) candidates.push({ storedSlot: "legacy-bare", storedValue: bare });
-    }
+    const candidates = configuredKeySlots(selected.provider);
     const candidate = candidates.find(item =>
       slotRef("key", selected.kind, selected.name, item.storedSlot) === binding.slotRef);
     if (!candidate) continue;

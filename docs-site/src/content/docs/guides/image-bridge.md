@@ -75,9 +75,12 @@ or video allowance.
 Completed outputs are materialized in private local artifact storage and surfaced through an
 authenticated opaque artifact URL, not a `file:` URL or a provider-signed URL. The artifact service
 validates media, enforces retention, and may later report `artifact_pruned` when a retained item has
-expired or been pruned. The tool result replayed to a routed provider contains only those
-proxy-relative artifact references and renderer hints: it never includes an absolute local path,
-prompt, model id, provider URL, or signed URL.
+expired or been pruned. Completed image and video results replay only authenticated proxy-relative
+artifact references and renderer hints. An eligible non-artifact video result may instead include a
+bounded opaque local `jobId` when its durable job is busy, detached, failed, or has
+`submission_outcome_unknown`; it is not a provider identifier. Capability-probe contention does not
+expose a job ID. No provider IDs, credentials, paths, prompts, private artifact fields, model IDs,
+provider URLs, or signed URLs are replayed to a routed provider.
 
 ## Troubleshooting
 
@@ -86,9 +89,12 @@ prompt, model id, provider URL, or signed URL.
 - An entitlement, quota, policy, or rate-limit result is an xAI result for the selected source; no
   alternate source is tried.
 - `submission_outcome_unknown` means a request may have reached xAI but its outcome was not safely
-  known. CodexCommander does not replay that POST automatically.
-- For an accepted video job, use the dashboard or `ccx media jobs` to follow recovery instead of
-  submitting another request.
+  known. CodexCommander does not replay that POST automatically. Use its opaque `jobId` in the
+  dashboard or `ccx media jobs` / `ccx media jobs wait <opaque-job-id> --revision <n>` to inspect or
+  follow the safe job state. A human can acknowledge it with the dashboard action or `ccx media
+  ack-job <opaque-job-id> --revision <n>` before any deliberate retry.
+- For an accepted or detached video job, use the dashboard or `ccx media jobs` to follow recovery
+  instead of submitting another request.
 
 See [Video Bridge](/guides/video-bridge/) for text-to-video limits and durable-job behavior, and
 [Media configuration](/reference/configuration/server/#images-codexcommanderimagesconfig) for all

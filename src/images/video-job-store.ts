@@ -26,6 +26,8 @@ export const MEDIA_JOURNAL_FILENAME = "media-journal.sqlite";
 const MEDIA_STATE_DIRECTORY = "media";
 const RECOVERY_OWNER_SUFFIX = ".recovery-owner.sqlite";
 const MAX_ROWS = 1_024;
+/** Durable terminal-id visibility lease; terminal transitions already persist updated_at atomically. */
+export const VIDEO_JOB_RECOVERY_RETENTION_MS = 24 * 60 * 60_000;
 const claimedJournalPaths = new Set<string>();
 
 export interface MediaJournalOwnerLease {
@@ -250,6 +252,21 @@ const ALL_STATES: readonly VideoJobState[] = [
   "expired",
   "cancelled",
   "acknowledged",
+];
+
+const EVICTABLE_TERMINAL_STATES: readonly VideoJobState[] = [
+  "completed",
+  "artifact_pruned",
+  "failed",
+  "expired",
+  "cancelled",
+  "acknowledged",
+];
+
+const PROBE_OBLIGATION_STATES: readonly CapabilityProbeStepState[] = [
+  "submitting",
+  "accepted",
+  "outcome_unknown",
 ];
 
 const LEGAL_TRANSITIONS: Readonly<Record<VideoJobState, readonly VideoJobState[]>> = {
@@ -538,7 +555,9 @@ function publicJob(job: VideoJobRecord): PublicVideoJob {
     revision: job.revision,
     state: job.state,
     deadlineAt: job.deadlineAt,
-    ...(job.artifactId && job.state !== "artifact_pruned" ? { artifactId: job.artifactId } : {}),
+    ...(job.artifactId && job.state !== "artifact_pruned" && job.state !== "expired"
+      ? { artifactId: job.artifactId }
+      : {}),
     ...(job.safeError ? { safeError: job.safeError } : {}),
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
@@ -818,6 +837,45 @@ export class VideoJobStore {
     };
   }
 
+  #compactVideoJobsForAdmission(rowCount: number): void {
+    const rowsNeeded = rowCount - MAX_ROWS + 1;
+    if (rowsNeeded <= 0) return;
+    const now = this.#now();
+    if (!validInteger(now, 1)) throw journalError("The media journal retention time is invalid.");
+    const recoveryRetentionCutoff = now - VIDEO_JOB_RECOVERY_RETENTION_MS;
+    const evicted = this.#database.query(`
+      DELETE FROM video_jobs
+       WHERE id IN (
+         SELECT job.id
+           FROM video_jobs AS job
+          WHERE job.state IN (${EVICTABLE_TERMINAL_STATES.map(state => `'${state}'`).join(",")})
+            AND job.artifact_id IS NULL
+            AND (job.state = 'acknowledged' OR job.updated_at <= ?)
+            AND NOT EXISTS (
+              SELECT 1
+                FROM capability_probe_steps AS step
+               WHERE (
+                 step.video_job_id = job.id
+                 OR (
+                   job.probe_operation_id IS NOT NULL
+                   AND step.operation_id = job.probe_operation_id
+                   AND step.step_kind = 'video'
+                 )
+               )
+                 AND (
+                   step.state IN (${PROBE_OBLIGATION_STATES.map(state => `'${state}'`).join(",")})
+                   OR step.artifact_id IS NOT NULL
+                 )
+            )
+          ORDER BY job.created_at ASC, job.id ASC
+          LIMIT ?
+       )
+    `).run(recoveryRetentionCutoff, rowsNeeded);
+    if (evicted.changes !== rowsNeeded) {
+      throw journalError("The media journal row limit was exceeded.");
+    }
+  }
+
   getVideoJob(id: string): VideoJobRecord | null {
     this.#assertOpen();
     return this.#get(id);
@@ -870,8 +928,9 @@ export class VideoJobStore {
          LIMIT 1
       `).get(input.binding.identityDigest, input.probeOperationId ?? "-");
       if (activeProbe) return { kind: "busy", reservationId: activeProbe.id };
-      const count = this.#database.query<{ count: number }, []>("SELECT count(*) AS count FROM video_jobs").get()?.count ?? MAX_ROWS;
-      if (count >= MAX_ROWS) throw journalError("The media journal row limit was exceeded.");
+      const count = this.#database.query<{ count: number }, []>("SELECT count(*) AS count FROM video_jobs").get()?.count;
+      if (!validInteger(count)) throw journalError("The media journal row limit was exceeded.");
+      this.#compactVideoJobsForAdmission(count);
       const id = crypto.randomUUID();
       const now = this.#now();
       this.#database.query(`
@@ -1029,11 +1088,11 @@ export class VideoJobStore {
 
   pendingArtifactDeletionIds(): ReadonlySet<string> {
     return new Set(this.listVideoJobs()
-      .filter(job => job.state === "artifact_pruned" && job.artifactId)
+      .filter(job => (job.state === "artifact_pruned" || job.state === "expired") && job.artifactId)
       .map(job => job.artifactId!));
   }
 
-  /** Clear prepared private ids only after the artifact directory is durably synced. */
+  /** Clear prune/expiry-prepared private ids only after the artifact directory is durably synced. */
   finalizeArtifactPrune(artifactId: string): ArtifactPinFinalizeResult {
     if (!safeArtifactId(artifactId)) throw journalError("The finalized artifact id is invalid.");
     return this.#transaction(() => {
@@ -1043,11 +1102,11 @@ export class VideoJobStore {
       `).all(artifactId);
       if (rows.length > MAX_ROWS) throw journalError("The media retention set is too large.");
       if (rows.length === 0) return "not_owned";
-      if (rows.some(row => row.state !== "artifact_pruned")) return "protected";
+      if (rows.some(row => row.state !== "artifact_pruned" && row.state !== "expired")) return "protected";
       const changed = this.#database.query(`
         UPDATE video_jobs
            SET artifact_id = NULL, revision = revision + 1, updated_at = ?
-         WHERE artifact_id = ? AND state = 'artifact_pruned'
+         WHERE artifact_id = ? AND state IN ('artifact_pruned','expired')
       `).run(this.#now(), artifactId);
       return changed.changes === rows.length ? "finalized" : "conflict";
     });
@@ -1407,25 +1466,49 @@ export class VideoJobStore {
       const step = current.steps[input.step];
       if (step.state !== "outcome_unknown") return { kind: "conflict", current };
       const now = this.#now();
-      if (step.videoJobId) {
-        const job = this.#get(step.videoJobId);
-        if (!job || job.state !== "outcome_unknown") return { kind: "conflict", current };
-        this.#database.query(`
+      if (input.step === "video") {
+        const confirmationRevision = step.confirmationRevision;
+        if (confirmationRevision === undefined) return { kind: "conflict", current };
+        const matches = this.#database.query<VideoJobRow, [string, number]>(`
+          SELECT * FROM video_jobs
+           WHERE probe_operation_id = ?
+             AND confirmation_revision = ?
+             AND state = 'outcome_unknown'
+           ORDER BY created_at ASC, id ASC
+           LIMIT 2
+        `).all(input.id, confirmationRevision).map(row => rowToJob(row) as VideoJobRecord);
+        if (matches.length !== 1) return { kind: "conflict", current };
+        const job = matches[0]!;
+        if (step.videoJobId !== undefined && step.videoJobId !== job.id) {
+          return { kind: "conflict", current };
+        }
+        const jobChanged = this.#database.query(`
           UPDATE video_jobs SET state = 'acknowledged', revision = revision + 1, updated_at = ?
            WHERE id = ? AND revision = ? AND state = 'outcome_unknown'
-        `).run(now, job.id, job.revision);
+             AND probe_operation_id = ? AND confirmation_revision = ?
+        `).run(now, job.id, job.revision, input.id, confirmationRevision);
+        if (jobChanged.changes !== 1) {
+          throw journalError("The capability probe video acknowledgement changed concurrently.");
+        }
       }
-      this.#database.query(`
+      const stepChanged = this.#database.query(`
         UPDATE capability_probe_steps
            SET state = 'acknowledged', revision = revision + 1, updated_at = ?
          WHERE operation_id = ? AND step_kind = ? AND revision = ? AND state = 'outcome_unknown'
       `).run(now, input.id, input.step, step.revision);
-      this.#database.query(`
+      if (stepChanged.changes !== 1) {
+        throw journalError("The capability probe step acknowledgement changed concurrently.");
+      }
+      const probeChanged = this.#database.query(`
         UPDATE capability_probes SET revision = revision + 1, updated_at = ?
          WHERE id = ? AND revision = ?
       `).run(now, input.id, input.expectedRevision);
+      if (probeChanged.changes !== 1) {
+        throw journalError("The capability probe acknowledgement changed concurrently.");
+      }
       const updated = this.#getProbe(input.id);
-      return updated ? { kind: "updated", probe: updated } : { kind: "conflict", current: null };
+      if (!updated) throw journalError("The acknowledged capability probe is unavailable.");
+      return { kind: "updated", probe: updated };
     });
   }
 

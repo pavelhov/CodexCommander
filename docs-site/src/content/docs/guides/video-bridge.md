@@ -64,8 +64,21 @@ Finished MP4 or WebM artifacts are private, opaque, and authenticated. Their rou
 state. Use the dashboard or `ccx media jobs` to see safe job state and to open/reveal a completed
 artifact; those actions accept opaque job IDs rather than paths or signed URLs. The server
 revalidates the artifact and launches it only through a fixed platform opener with a scrubbed child
-environment. The provider-visible tool result contains proxy-relative artifact references only,
-never an absolute local path.
+environment. A completed artifact result exposes only proxy-relative artifact references and
+renderer hints. An eligible non-artifact video result may expose a bounded opaque local `jobId` for
+a real durable job that is busy, detached, failed, or `submission_outcome_unknown`; completed
+artifacts, image results, and capability-probe busy contention omit it. This local recovery handle
+is not a provider identifier and the provider-visible result never contains provider IDs,
+credentials, paths, prompts, private artifact fields, model IDs, or signed/provider URLs.
+
+Use that `jobId` with the dashboard, `ccx media jobs`, or `ccx media jobs wait <opaque-job-id>
+--revision <n>` to inspect or follow its safe state (the management equivalents are `GET /api/media`
+and `GET /api/media/jobs/<opaque-id>`). For `submission_outcome_unknown`, a confirmed human must
+acknowledge the job in the dashboard, with `ccx media ack-job <opaque-job-id> --revision <n>`, or
+through the documented `POST /api/media/actions` acknowledgement; acknowledgement never replays the
+uncertain POST. Non-artifact terminal recovery IDs have a
+24-hour visibility window, subject to bounded-journal compaction; an acknowledged job may be
+compacted earlier when space is needed.
 
 `needs_auth` asks for recovery of the job's original source. A future or otherwise unsafe recovery
 journal remains read-only until the documented acknowledgement/upgrade path is completed; no new

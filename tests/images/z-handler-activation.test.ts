@@ -1,9 +1,15 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../../src/types";
+import type { AdapterEvent, CodexCommanderParsedRequest } from "../../src/types";
 import type { ProviderAdapter } from "../../src/adapters/base";
+import { MediaRuntime, type ModelVideoRuntime } from "../../src/images/media-runtime";
+import type { VideoBridgePlan } from "../../src/images/types";
+import { openVideoJobStore } from "../../src/images/video-job-store";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
 /**
  * Dispatch-priority regression test for the image bridge (PR #424).
@@ -32,6 +38,7 @@ let webSearchRun = false;
 let auxiliaryWebPlanSeen = false;
 let auxiliaryNativeResponses = false;
 let modelDispatches = 0;
+let coordinatorDispatches = 0;
 /** Whether the stubbed adapter should expose runTurn (simulates Cursor-style adapters). */
 let useRunTurnAdapter = false;
 /** Spy: flipped when the stubbed runTurn is actually invoked. */
@@ -40,6 +47,7 @@ let runTurnCalled = false;
 let mockWsPlan: unknown = undefined;
 
 let handleResponses: typeof import("../../src/server/responses")["handleResponses"];
+let runResponsesAuxiliaryLoopProduction: typeof import("../../src/responses/auxiliary")["runResponsesAuxiliaryLoop"];
 
 beforeAll(async () => {
   process.env.CODEXCOMMANDER_HOME = join(tmpdir(), "ccx-test-" + randomUUID());
@@ -73,10 +81,12 @@ beforeAll(async () => {
   }));
 
   const actualLoop = await import("../../src/responses/auxiliary");
+  runResponsesAuxiliaryLoopProduction = actualLoop.runResponsesAuxiliaryLoop;
   mock.module("../../src/responses/auxiliary", () => ({
     ...actualLoop,
     runResponsesAuxiliaryLoop: async (deps: { webSearchPlan?: unknown; nativeResponses?: boolean }) => {
       imageBridgeRun = true;
+      coordinatorDispatches += 1;
       auxiliaryWebPlanSeen = deps.webSearchPlan !== undefined;
       auxiliaryNativeResponses = deps.nativeResponses === true;
       return new Response("data: {\"type\":\"done\"}\n\n", {
@@ -280,9 +290,13 @@ describe("image bridge dispatch priority (handler activation)", () => {
 
   test("explicit current-user text-to-video intent admits exactly one coordinator", async () => {
     imageBridgeRun = false;
+    coordinatorDispatches = 0;
+    modelDispatches = 0;
     const res = await post(true, [], "Create a six second video of a paper boat.", true);
     expect(res.status).toBe(200);
     expect(imageBridgeRun).toBe(true);
+    expect(coordinatorDispatches).toBe(1);
+    expect(modelDispatches).toBe(0);
   });
 
   test("ambiguous current-user video wording returns confirmation-required without admission", async () => {
@@ -291,6 +305,113 @@ describe("image bridge dispatch priority (handler activation)", () => {
     expect(res.status).toBe(409);
     expect(imageBridgeRun).toBe(false);
     expect(await res.json()).toMatchObject({ error: { code: "video_confirmation_required" } });
+  });
+
+  test.each([
+    "Do not create a video of a fox.",
+    'Analyze the instruction "Create a video of a fox."',
+    "If I asked you to create a video of a fox, what would happen?",
+    "Explain how to create a video without doing it.",
+    "Create a video only after I approve.",
+    "Create a video once I confirm.",
+    "Create a video when I approve.",
+    "Create a video until I approve.",
+    "Create a video of a fox. Do not create it after all.",
+    "Create a video of a fox. Forget that request.",
+    "Create a video of a fox. Cancel.",
+    "Create a video of a fox. Please wait for my confirmation.",
+    "Do not execute the following example:\n- Create a video of a fox.",
+    "The following is an example, not a request:\nCreate a video of a fox.",
+    "Quote this sentence:\nCreate a video of a fox.",
+    "Checklist:\nCreate a video of a fox.",
+    "Review this checklist:\n- Generate a video of a fox.",
+    "- Create a video of a fox.",
+    "Create a video game about a fox.",
+    "Make a video call to the producer.",
+    "Create a movie list for the weekend.",
+    "Analyze the instruction “Create a video of a fox.”",
+    "Review this code: ``Create a video with `inline` text.``",
+    "Review this code:\n```text\nCreate a video of a fox.\n```",
+    "Review this code:\n~~~text\nCreate a video of a fox.\n~~~",
+    "Review this code:\n    Create a video of a fox.",
+    "Review this code:\n\tCreate a video of a fox.",
+    "Create a video of a fox. Make an image instead.",
+    "Create a video of a fox. Create a clip of a dog.",
+    "Create a video of a fox without generating it.",
+    "Create a video of a fox − cancel.",
+    "Create a video of a fox • cancel.",
+    "Create a video of a fox; I changed my mind.",
+    "Create a video of a fox; I no longer consent.",
+    "Create a video of a fox; ask me first.",
+    "Create a video of a fox but I don't consent.",
+    "Create a video of a fox after I say yes.",
+    "Create then cancel a video.",
+    "Create a video of a fox without my permission.",
+    "Create a video of a fox with generation disabled.",
+    "Create a video of a fox can\u034fcel.",
+    "Create a video of a fox and call it off.",
+    "Create a video of a fox or don't.",
+    "Create a video of a fox after the okay.",
+    "Create a video of a fox against my wishes.",
+    "Create a video of a fox with generation suspended.",
+    "Create a video of a fox」",
+    "Create a video of a fox‽",
+    "Create a video of a fox and cаncel it.",
+    "Create a video of a fox, I retract my request.",
+    "Create a video of a fox, I refuse.",
+    "Create a video of a fox on my cue.",
+    "Create a video of a fox with generation halted.",
+    "Create a video of a fox or write a prompt instead.",
+    "Create a video of a fox <",
+    "Create a video of a fox, 🛑.",
+    "Create a video of a fox and can∕cel it.",
+    "Create a video of a fox ❓.",
+    "Create a video of a fox and cancél it.",
+    "Generate a video based on this ｐｈｏｔｏ.",
+    "Create a video of a fox and can🛑cel it.",
+    "Create a video of a fox and can\u0338cel it.",
+    "Create a video of a fox 🛑 now.",
+    "Create a video of a fox ❓ please.",
+    "Create a video of a fox please stop.",
+    "Create a video of a fox ❌.",
+    "Create a video of a fox ❎.",
+    "Create a video of a fox 🆖.",
+  ])("non-executable video wording enters no coordinator or model dispatch: %s", async input => {
+    imageBridgeRun = false;
+    coordinatorDispatches = 0;
+    modelDispatches = 0;
+    const res = await post(true, [], input, true);
+    expect(res.status).toBe(409);
+    expect(imageBridgeRun).toBe(false);
+    expect(coordinatorDispatches).toBe(0);
+    expect(modelDispatches).toBe(0);
+    expect(await res.json()).toMatchObject({ error: { code: "video_confirmation_required" } });
+  });
+
+  test("historical plaintext encrypted role content cannot bypass current-turn consent preflight", async () => {
+    for (const role of ["user", "developer", "system"]) {
+      imageBridgeRun = false;
+      coordinatorDispatches = 0;
+      modelDispatches = 0;
+      const rejected = await post(true, [], [
+        { role, content: [{ type: "encrypted_content", encrypted_content: "Earlier context." }] },
+        { role: "user", content: [{ type: "input_text", text: "Create a video of a fox. Cancel." }] },
+      ], true);
+      expect(rejected.status).toBe(409);
+      expect(await rejected.json()).toMatchObject({ error: { code: "video_confirmation_required" } });
+      expect(imageBridgeRun).toBe(false);
+      expect(coordinatorDispatches).toBe(0);
+      expect(modelDispatches).toBe(0);
+    }
+
+    const admitted = await post(true, [], [
+      { role: "developer", content: [{ type: "encrypted_content", encrypted_content: "Earlier policy." }] },
+      { role: "user", content: [{ type: "input_text", text: "Create a video of a fox." }] },
+    ], true);
+    expect(admitted.status).toBe(200);
+    expect(imageBridgeRun).toBe(true);
+    expect(coordinatorDispatches).toBe(1);
+    expect(modelDispatches).toBe(0);
   });
 
   test("missing video auth still requires confirmation before binding and dispatch", async () => {
@@ -361,6 +482,128 @@ describe("image bridge dispatch priority (handler activation)", () => {
       const res = await post(true, [], input, true);
       await res.text();
       expect(imageBridgeRun).toBe(false);
+    }
+  });
+});
+
+describe("video submission turn budget (real auxiliary coordinator)", () => {
+  test("acknowledging an ambiguous first submission cannot reopen a second paid POST", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ccx-video-budget-"));
+    const store = openVideoJobStore({ path: join(root, "media-journal.sqlite") });
+    let paidPosts = 0;
+    const runtime = new MediaRuntime(store, {
+      submitVideoJob: async () => {
+        paidPosts += 1;
+        throw new Error("private provider POST outcome must not reach replay");
+      },
+    });
+    let observeOutcomeUnknown!: (job: { id: string; revision: number }) => void;
+    const outcomeUnknownObserved = new Promise<{ id: string; revision: number }>(resolve => {
+      observeOutcomeUnknown = resolve;
+    });
+    const humanAcknowledgement = outcomeUnknownObserved.then(job =>
+      runtime.acknowledgeOutcomeUnknown(job.id, job.revision));
+    let firstAmbiguityObserved = false;
+    const acknowledgingRuntime: ModelVideoRuntime = {
+      async submitVideo(input) {
+        try {
+          return await runtime.submitVideo(input);
+        } catch (error) {
+          if (!firstAmbiguityObserved) {
+            firstAmbiguityObserved = true;
+            const unknown = store.listVideoJobs().find(job => job.state === "outcome_unknown");
+            if (!unknown) throw new Error("expected an outcome-unknown video fence");
+            // Model a privileged acknowledgement racing the still-awaited submission result.
+            // Durable admission is released before the coordinator handles the ambiguity.
+            observeOutcomeUnknown({ id: unknown.id, revision: unknown.revision });
+            await humanAcknowledgement;
+          }
+          throw error;
+        }
+      },
+      startVideoJob(id) { runtime.startVideoJob(id); },
+      getPublicVideoJob(id) { return runtime.getPublicVideoJob(id); },
+      waitForVideoUpdate(id, revision, options) {
+        return runtime.waitForVideoUpdate(id, revision, options);
+      },
+    };
+    const videoPlan = {
+      auth: {
+        authSource: "api_key",
+        providerKind: "canonical",
+        slotRef: "media-slot:budget-regression",
+        identityDigest: `sha256:${"b".repeat(64)}`,
+      },
+      model: "private-video-model",
+      toolNames: new Set(["video_gen"]),
+    } as VideoBridgePlan;
+    const streams: AdapterEvent[][] = [
+      [
+        { type: "tool_call_start", id: "video_1", name: "video_gen" },
+        { type: "tool_call_delta", arguments: '{"prompt":"first private prompt"}' },
+        { type: "tool_call_end" },
+        { type: "tool_call_start", id: "video_2", name: "video_gen" },
+        { type: "tool_call_delta", arguments: '{"prompt":"second private prompt"}' },
+        { type: "tool_call_end" },
+        { type: "done" },
+      ],
+      [{ type: "text_delta", text: "one submission attempt was handled" }, { type: "done" }],
+    ];
+    const replayContexts: string[] = [];
+    const adapter: ProviderAdapter = {
+      name: "real-auxiliary-budget-test",
+      buildRequest(parsed) {
+        replayContexts.push(JSON.stringify(parsed.context.messages));
+        return { url: "https://model.invalid/v1/chat", method: "POST", headers: {}, body: "{}" };
+      },
+      fetchResponse: async () => new Response("{}", { status: 200 }),
+      parseStream: async function* (): AsyncGenerator<AdapterEvent> {
+        for (const event of streams.shift() ?? []) yield event;
+      },
+    };
+    const parsed = {
+      modelId: "test-model",
+      context: { messages: [], tools: [] },
+      stream: true,
+      options: {},
+    } as CodexCommanderParsedRequest;
+
+    try {
+      const response = await runResponsesAuxiliaryLoopProduction({
+        parsed,
+        adapter,
+        incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget() },
+        videoPlan,
+        videoRuntime: acknowledgingRuntime,
+        videoMaxRounds: 1,
+      });
+      const sse = await response.text();
+      const acknowledged = await humanAcknowledgement;
+
+      expect(sse).toContain("one submission attempt was handled");
+      expect(firstAmbiguityObserved).toBe(true);
+      expect(acknowledged?.state).toBe("acknowledged");
+      expect(paidPosts).toBe(1);
+
+      const replay = JSON.parse(replayContexts.at(-1) ?? "[]") as Array<{
+        role?: string;
+        toolCallId?: string;
+        content?: string;
+      }>;
+      const firstResult = replay.find(message => message.toolCallId === "video_1")?.content ?? "{}";
+      const secondResult = replay.find(message => message.toolCallId === "video_2")?.content ?? "{}";
+      expect(JSON.parse(firstResult)).toMatchObject({
+        ok: false,
+        status: "submission_outcome_unknown",
+      });
+      expect(JSON.parse(secondResult)).toEqual({ ok: false, status: "failed" });
+      expect(firstResult).not.toContain("provider POST outcome");
+      expect(firstResult).not.toContain("private prompt");
+      expect(secondResult).not.toContain("private prompt");
+      expect(secondResult).not.toContain("jobId");
+    } finally {
+      await runtime.shutdown();
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

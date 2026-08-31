@@ -60,7 +60,7 @@ import {
 } from "../../oauth/anthropic-routing";
 import { buildWebSearchTool, planWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
 import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
-import { deriveCurrentUserVideoIntent, runResponsesAuxiliaryLoop } from "../../responses/auxiliary";
+import { deriveCurrentUserVideoIntent, runResponsesAuxiliaryLoop, type CurrentUserVideoIntent } from "../../responses/auxiliary";
 import { describeImagesInPlace, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
 import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/run-turn-queue";
 import {
@@ -609,6 +609,8 @@ export interface HandleResponsesOptions {
   inboundTransport?: "websocket";
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
+  /** Internal combo handoff: preserve the one current-user video-intent decision. */
+  currentUserVideoIntent?: CurrentUserVideoIntent;
   /** Internal combo handoff: allow a later same-provider model after a reset-derived 429/402. */
   deferCodexResetDerivedCooldown?: boolean;
   /** 030-owned handoff when a child consumed the original failure under bounds. */
@@ -1380,9 +1382,73 @@ async function handleResponsesInner(
       req.headers,
     );
   }
+  const sanitizePlaintextEncryptedContent = (): void => {
+    const rewritten = sanitizeEncryptedContentInPlace(
+      (body as { input?: unknown } | undefined)?.input,
+    );
+    if (rewritten > 0) {
+      console.warn(
+        `[codexcommander] rewrote ${rewritten} plaintext encrypted_content part(s) to input_text (spawn-message compatibility)`,
+      );
+    }
+  };
+  // Video enablement is not spend consent. Resolve the current user's wording once, before the
+  // combo handoff or any provider-capable sidecar/adapter path. Compaction keeps its existing
+  // routing contract even when retained payload text mentions video.
+  let videoIntent = options.currentUserVideoIntent;
+  if (videoIntent === undefined && config.images?.videoBridgeEnabled === true) {
+    // Build a preflight-only semantic view with parser parity. The full spawn compatibility sanitizer
+    // also reclassifies plaintext agent_message items as user messages; doing that before consent
+    // derivation would let delegated task text authorize paid media. Clone and sanitize every other
+    // input item instead: historical plaintext encrypted_content in any parser-supported role must
+    // not make the parser fail before the current user's consent wording is classified.
+    let intentBody = body;
+    if (body && typeof body === "object" && !Array.isArray(body)) {
+      const input = (body as { input?: unknown }).input;
+      if (Array.isArray(input)) {
+        let rewritten = false;
+        const intentInput = input.map(value => {
+          if (value && typeof value === "object" && !Array.isArray(value)) {
+            const item = value as Record<string, unknown>;
+            if (item.type !== "agent_message") {
+              const clonedItem = structuredClone(item);
+              if (sanitizeEncryptedContentInPlace([clonedItem]) > 0) {
+                rewritten = true;
+                return clonedItem;
+              }
+            }
+          }
+          return value;
+        });
+        if (rewritten) intentBody = { ...(body as Record<string, unknown>), input: intentInput };
+      }
+    }
+    let preflightParsed: CodexCommanderParsedRequest | undefined;
+    try {
+      preflightParsed = parseRequest(intentBody);
+    } catch {
+      // The normal parser below (or in the selected combo child) owns request-shape errors;
+      // malformed input must not change from its existing 400 into a consent response.
+    }
+    if (preflightParsed) {
+      videoIntent = preflightParsed._compactionRequest === true
+        ? { state: "none" }
+        : deriveCurrentUserVideoIntent(intentBody);
+    }
+  }
+  if (videoIntent?.state === "confirmation_required") {
+    return auxiliaryPolicyErrorResponse(
+      409,
+      "video_confirmation_required",
+      "Confirm an explicit text-to-video generation request before video submission",
+    );
+  }
   const comboId = !options.comboAttempt ? comboIdFromRawBody(body, config) : null;
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
-    return handleComboResponses(req, body, comboId, config, logCtx, options);
+    return handleComboResponses(req, body, comboId, config, logCtx, {
+      ...options,
+      ...(videoIntent ? { currentUserVideoIntent: videoIntent } : {}),
+    });
   }
   const unreadableEncryptedAgentTask = hasUnreadableEncryptedAgentTask(
     (body as { input?: unknown } | undefined)?.input,
@@ -1398,20 +1464,9 @@ async function handleResponsesInner(
   }
   const previousResponseInputExpanded = body !== originalBody;
 
-  // Spawn-message compatibility (both directions): agent_message task payloads ride in
-  // encrypted_content slots as plaintext. Rewrite them to input_text on the RAW body BEFORE
-  // parsing so every consumer sees the payload: parseRequest (routed/translated providers read
-  // the parsed messages) and the native passthrough (_rawBody is this same object, serialized
-  // verbatim). Genuine backend ciphertext is left byte-identical (looksLikeBackendCiphertext).
-  {
-    const rewritten = sanitizeEncryptedContentInPlace(
-      (body as { input?: unknown } | undefined)?.input,
-    );
-    if (rewritten > 0)
-      console.warn(
-        `[codexcommander] rewrote ${rewritten} plaintext encrypted_content part(s) to input_text (spawn-message compatibility)`,
-      );
-  }
+  // Expansion can add historical input items that were not present during current-user preflight.
+  // Sanitize those too before parsing/native serialization; the current tail is already a no-op.
+  sanitizePlaintextEncryptedContent();
 
   let parsed;
   let toolBridgeMaps: ReturnType<typeof buildToolBridgeMaps>;
@@ -1715,6 +1770,7 @@ async function handleResponsesInner(
   logCtx.providerAdapter = adapter.name;
   sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, adapter.name);
   const isPassthrough = "passthrough" in adapter && !!adapter.passthrough;
+  const explicitVideoIntent = parsed._compactionRequest !== true && videoIntent?.state === "explicit";
 
   if (adapter.name === "kiro" && parsed.previousResponseId && !parsed._previousResponseInputExpanded) {
     return formatErrorResponse(
@@ -1820,7 +1876,7 @@ async function handleResponsesInner(
     parsed.context.messages.push({ role: "user", content: COMPACT_PROMPT, timestamp: Date.now() });
   }
 
-  if ("passthrough" in adapter && adapter.passthrough && !routedCompaction) {
+  if ("passthrough" in adapter && adapter.passthrough && !routedCompaction && !explicitVideoIntent) {
     const imageGenCallAliases = route.provider.authMode === "forward"
       ? new Map<string, { namespace: string; name: string }>()
       : imageGenToolCallAliases(toolBridgeMaps.toolNsMap, translatorBudget);
@@ -2450,7 +2506,7 @@ async function handleResponsesInner(
   //   - runTurn: image bridge may run (it supports runTurn); web-search is skipped so runTurn
   //     can proceed for web-search-only turns
   const wsPlan = !routedCompaction
-    ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar)
+    ? planWebSearch(config, parsed, isPassthrough, route.provider, route.modelId, openAiSidecar)
     : undefined;
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
   if (!routedCompaction && config.images?.bridgeEnabled === true && parsed._imageGeneration && !imgPlan) {
@@ -2461,24 +2517,11 @@ async function handleResponsesInner(
       "authentication_error",
     );
   }
-  // Standing video enablement is not spend consent. Derive this once from the untouched current
-  // user input, before any auxiliary output can enter the transcript.
-  const videoIntent = deriveCurrentUserVideoIntent(parsed._rawBody);
   const videoEnabled = !routedCompaction && config.images?.videoBridgeEnabled === true;
-  // Confirmation is a current-user consent boundary, not a credential-readiness
-  // outcome. Enforce it before binding so missing auth cannot turn ambiguous
-  // wording into an ordinary routed-model request.
-  if (videoEnabled && videoIntent.state === "confirmation_required") {
-    return auxiliaryPolicyErrorResponse(
-      409,
-      "video_confirmation_required",
-      "Confirm an explicit text-to-video generation request before video submission",
-    );
-  }
-  const videoPlanCandidate = videoEnabled && videoIntent.state === "explicit"
+  const videoPlanCandidate = videoEnabled && videoIntent?.state === "explicit"
     ? await planVideoBridge(config, parsed, route.provider)
     : undefined;
-  if (videoEnabled && videoIntent.state === "explicit" && !videoPlanCandidate) {
+  if (videoEnabled && videoIntent?.state === "explicit" && !videoPlanCandidate) {
     return auxiliaryPolicyErrorResponse(
       401,
       "needs_auth",
@@ -2486,7 +2529,7 @@ async function handleResponsesInner(
       "authentication_error",
     );
   }
-  const vidPlan = videoIntent.state === "explicit" ? videoPlanCandidate : undefined;
+  const vidPlan = videoIntent?.state === "explicit" ? videoPlanCandidate : undefined;
   if (imgPlan || vidPlan || wsPlan) {
     // Auxiliary media depends on renderer-safe incremental events. Both handlers expose the same
     // typed failure; the standalone Images API remains an independent non-streaming route.
@@ -2532,7 +2575,8 @@ async function handleResponsesInner(
     const auxiliaryResponse = await runResponsesAuxiliaryLoop({
       parsed, adapter,
       incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget },
-      nativeResponses: supportsNativeResponsesCompactEndpoint(route.providerName, route.provider),
+      nativeResponses: (vidPlan !== undefined && adapter.name === "openai-responses")
+        || supportsNativeResponsesCompactEndpoint(route.providerName, route.provider),
       toolParameterSchemas: toolBridgeMaps.toolParameterSchemas,
       ...(imgPlan ? { plan: imgPlan } : {}),
       ...(vidPlan ? { videoPlan: vidPlan } : {}),

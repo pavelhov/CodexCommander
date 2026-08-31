@@ -30,6 +30,7 @@ import { parseVideoCallArgs, buildVideoResult } from "../../images/fulfill-video
 import { createImageBudget, pruneArtifacts, resolveArtifactPath } from "../../images/artifacts";
 import {
   getDefaultModelVideoRuntime,
+  mediaRecoveryJobId,
   type ModelVideoRuntime,
 } from "../../images/media-runtime";
 import { IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images/synthetic-tool";
@@ -40,7 +41,13 @@ import { formatWebSearchResults } from "../../web-search/format-result";
 import { redactSecretString } from "../../lib/redact";
 import { WEB_SEARCH_TOOL_NAME } from "../../web-search/synthetic-tool";
 import type { AuxiliaryHandlerAllowances, AuxiliaryToolCall, AuxiliaryWebSearchPlan } from "./types";
-import { rewriteHostedImageGenerationForBridge } from "../../adapters/openai-responses";
+import {
+  rewriteHostedImageGenerationForBridge,
+  repairOversizedReplayCallIds,
+  rewriteVideoGenerationForBridge,
+  type HostedImageBridgeRewriteMode,
+  type VideoBridgeRewriteMode,
+} from "../../adapters/openai-responses";
 import {
   appendNativeAuxiliaryTurn,
   inspectNativeResponsesSse,
@@ -67,6 +74,26 @@ export const MAX_ROUNDS_HARD_LIMIT = 10;
 export const MAX_IMAGE_CALLS_PER_TURN = 10;
 /** V1 admits at most one paid text-to-video submission per current user turn. */
 export const MAX_VIDEO_CALLS_PER_TURN = 1;
+
+/** Pure no-dispatch validation used to make a native multi-call batch atomic before fulfillment. */
+function nativeImageArgumentError(raw: string): string | undefined {
+  let args: unknown;
+  try {
+    args = JSON.parse(raw || "{}");
+  } catch {
+    return "invalid arguments JSON";
+  }
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return "invalid arguments JSON";
+  const obj = args as Record<string, unknown>;
+  const prompt = typeof obj.prompt === "string" ? obj.prompt : typeof obj.input === "string" ? obj.input : "";
+  if (!prompt) return "missing prompt";
+  const imageUrl = typeof obj.image_url === "string"
+    ? obj.image_url
+    : typeof obj.image === "string"
+      ? obj.image
+      : undefined;
+  return imageUrl ? "grok_image_edits_unsupported" : undefined;
+}
 
 function combineUsage(
   a: CodexCommanderUsage | undefined,
@@ -349,19 +376,26 @@ export interface ResponsesAuxiliaryLoopDeps {
   forceEmptyResponseId?: boolean;
   /** Request-visible tool parameter schemas for integer argument canonicalization at the Responses bridge. */
   toolParameterSchemas?: ReadonlyMap<string, Record<string, unknown>>;
-  /** Official OpenAI Responses route: buffer only synthetic iterations and relay final SSE raw. */
+  /** Raw Responses adapter route: buffer only synthetic iterations and relay final SSE raw. */
   nativeResponses?: boolean;
 }
 
 /** Compatibility type for historical direct image-loop callers. */
 export type ImageBridgeDeps = ResponsesAuxiliaryLoopDeps;
 
-async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Promise<Response> {
-  const { parsed, plan, abortSignal } = deps;
-  if (!plan) return jsonError(500, "native image bridge plan is missing");
+async function runNativeResponsesMediaLoop(deps: ResponsesAuxiliaryLoopDeps): Promise<Response> {
+  const { parsed, plan, videoPlan, videoTimeoutMs, abortSignal } = deps;
+  if (!plan && !videoPlan) return jsonError(500, "native media bridge plan is missing");
   let adapter = deps.adapter;
   const translatorBudget = deps.incomingMeta.translatorBudget;
-  const imageMaxRounds = clampImageMaxRounds(deps.imageMaxRounds ?? deps.maxRounds ?? DEFAULT_MAX_ROUNDS);
+  const legacyMaxRounds = clampImageMaxRounds(deps.maxRounds ?? DEFAULT_MAX_ROUNDS);
+  const imageMaxRounds = plan
+    ? clampImageMaxRounds(deps.imageMaxRounds ?? legacyMaxRounds)
+    : 0;
+  const videoMaxRounds = videoPlan
+    ? clampImageMaxRounds(deps.videoMaxRounds ?? legacyMaxRounds)
+    : 0;
+  const globalCeiling = deriveAuxiliaryGlobalCeiling({ webSearch: 0, image: imageMaxRounds, video: videoMaxRounds });
   const connectTimeoutMs = typeof deps.connectTimeoutMs === "number" && Number.isFinite(deps.connectTimeoutMs) && deps.connectTimeoutMs > 0
     ? Math.floor(deps.connectTimeoutMs)
     : CONNECT_TIMEOUT_MS;
@@ -378,6 +412,13 @@ async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
   const signal = internalAbort.signal;
   const imageBudget = createImageBudget();
   let replayBody = parsed._rawBody;
+  const auxiliaryNames = new Set<string>([
+    ...(plan ? [IMAGE_GEN_TOOL_NAME] : []),
+    ...(videoPlan ? [VIDEO_GEN_TOOL_NAME] : []),
+  ]);
+  // One same-target 429 allowance spans every native replay iteration in this request.
+  const rateLimitRetryPolicy = deps.retryOn429Policy ?? null;
+  let rateLimitRetries = 0;
   let firstOutput = false;
   const noteFirstOutput = () => {
     if (firstOutput) return;
@@ -385,13 +426,19 @@ async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
     deps.onFirstOutput?.();
   };
 
-  const fetchIteration = async (mode: "synthetic" | "omit"): Promise<Response> => {
+  const fetchIteration = async (modes: {
+    image: HostedImageBridgeRewriteMode;
+    video: VideoBridgeRewriteMode;
+  }, onHeartbeat?: () => void): Promise<Response> => {
+    let rawBody = replayBody;
+    if (plan) rawBody = rewriteHostedImageGenerationForBridge(rawBody, modes.image);
+    if (videoPlan) rawBody = rewriteVideoGenerationForBridge(rawBody, modes.video, videoPlan.toolNames);
     const iterParsed: CodexCommanderParsedRequest = {
       ...parsed,
       stream: true,
-      _rawBody: rewriteHostedImageGenerationForBridge(replayBody, mode),
+      _rawBody: rawBody,
     };
-    const deadline = clearableDeadline(connectTimeoutMs, signal);
+    let deadline = clearableDeadline(connectTimeoutMs, signal);
     let request: AdapterRequest | undefined;
     try {
       request = await adapter.buildRequest(iterParsed, {
@@ -400,17 +447,16 @@ async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
         translatorBudget,
       });
       try { deps.onRequestBuilt?.(request); } catch { /* diagnostics are best effort */ }
-      deps.onAttemptSend?.();
-      let response = adapter.fetchResponse
-        ? await adapter.fetchResponse(request, {
+      const send = async (recovery?: AttemptRecoveryKind): Promise<Response> => adapter.fetchResponse
+        ? (deps.onAttemptSend?.(recovery), adapter.fetchResponse(request!, {
             abortSignal: deadline.signal,
             timeoutMs: connectTimeoutMs,
             returnRawErrors: true,
             stream: true,
-          })
-        : await fetchWithResetRetry(
-            recovery => {
-              if (recovery) deps.onAttemptSend?.(recovery);
+          }))
+        : fetchWithResetRetry(
+            retryRecovery => {
+              deps.onAttemptSend?.(retryRecovery ?? recovery);
               const headers = new Headers(request!.headers);
               if (!headers.has("accept-encoding")) headers.set("accept-encoding", "identity");
               return fetchImpl(request!.url, {
@@ -420,8 +466,35 @@ async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
                 signal: deadline.signal,
               });
             },
-            { abortSignal: deadline.signal, label: "native-image-bridge-loop" },
+            { abortSignal: deadline.signal, label: "native-media-bridge-loop" },
           );
+      let response = await send();
+      while (
+        response.status === 429
+        && rateLimitRetryPolicy !== null
+        && rateLimitRetries < rateLimitRetryPolicy.attempts
+      ) {
+        rateLimitRetries += 1;
+        const retryAfterHeader = response.headers.get("retry-after");
+        deadline.clear();
+        try {
+          for await (const _ of prepareSameTarget429Wait({
+            body: response.body,
+            signal,
+            delayMs: rateLimitRetryDelayMs(rateLimitRetryPolicy, retryAfterHeader, Date.now()),
+            heartbeatIntervalMs: Math.min(10_000, Math.max(250, stallTimeoutMs / 2)),
+          })) {
+            onHeartbeat?.();
+          }
+        } catch (error) {
+          if (signal.aborted) throw new LoopError(499, "client closed request during native media bridge");
+          throw error;
+        }
+        if (signal.aborted) throw new LoopError(499, "client closed request during native media bridge");
+        deadline = clearableDeadline(connectTimeoutMs, signal);
+        onHeartbeat?.();
+        response = await send("rate-limit-429");
+      }
       while (response.status === 429 && deps.on429) {
         const rotated = deps.on429(response.headers.get("retry-after"));
         if (!rotated) break;
@@ -434,20 +507,8 @@ async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
           translatorBudget,
         });
         try { deps.onRequestBuilt?.(request); } catch { /* diagnostics are best effort */ }
-        deps.onAttemptSend?.("key-429");
-        response = adapter.fetchResponse
-          ? await adapter.fetchResponse(request, {
-              abortSignal: deadline.signal,
-              timeoutMs: connectTimeoutMs,
-              returnRawErrors: true,
-              stream: true,
-            })
-          : await fetchImpl(request.url, {
-              method: request.method,
-              headers: request.headers,
-              body: request.body,
-              signal: deadline.signal,
-            });
+        onHeartbeat?.();
+        response = await send("key-429");
       }
       if (!response.ok) {
         const observed = await readBoundedResponseBody(response, { signal, maxBytes: 65_536 });
@@ -457,8 +518,8 @@ async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
       }
       return response;
     } catch (error) {
-      if (signal.aborted) throw new LoopError(499, "client closed request during native image bridge");
-      if (deadline.didExpire()) throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during native image bridge`);
+      if (signal.aborted) throw new LoopError(499, `client closed request during native ${videoPlan ? "media" : "image"} bridge`);
+      if (deadline.didExpire()) throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during native ${videoPlan ? "media" : "image"} bridge`);
       if (error instanceof LoopError) throw error;
       throw new LoopError(502, `Provider unreachable: ${redactSecretString(error instanceof Error ? error.message : String(error))}`);
     } finally {
@@ -469,10 +530,15 @@ async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
 
   let firstResponse: Response;
   try {
-    firstResponse = await fetchIteration(imageMaxRounds > 0 ? "synthetic" : "omit");
+    firstResponse = await fetchIteration({
+      image: imageMaxRounds > 0 ? "synthetic" : "omit",
+      video: videoMaxRounds > 0 ? "synthetic" : "omit",
+    });
   } catch (error) {
     if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
-    return error instanceof LoopError ? jsonError(error.status, error.message) : jsonError(502, "native image bridge failed");
+    return error instanceof LoopError
+      ? jsonError(error.status, error.message)
+      : jsonError(502, videoPlan ? "native media bridge failed" : "native image bridge failed");
   }
 
   const body = new ReadableStream<Uint8Array>({
@@ -480,19 +546,26 @@ async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
       const encoder = new TextEncoder();
       const drive = async () => {
         const imageArtifacts = createImageArtifactProtectionScope();
+        const videoDeliveryLeases: Array<() => void> = [];
+        const enqueueKeepalive = () => {
+          if (signal.aborted) return;
+          noteFirstOutput();
+          try { controller.enqueue(encoder.encode(": ccx-auxiliary\n\n")); } catch { /* closed */ }
+        };
         let current = firstResponse;
-        let roundsUsed = 0;
+        let imageRoundsUsed = 0;
+        let videoRoundsUsed = 0;
         let paidCalls = 0;
         let imageSubmissionOutcomeUnknown = false;
         let imagePaidSubmissionConsumedWithoutArtifact = false;
+        let videoSubmissionBudgetUsed = 0;
         let hiddenUsage: CodexCommanderUsage | undefined;
         try {
           for (;;) {
             let keepaliveOpen = true;
             const keepalive = setInterval(() => {
               if (!keepaliveOpen || signal.aborted) return;
-              noteFirstOutput();
-              try { controller.enqueue(encoder.encode(": ccx-auxiliary\n\n")); } catch { /* closed */ }
+              enqueueKeepalive();
             }, 2_000);
             let observed: Awaited<ReturnType<typeof readBoundedResponseBody>>;
             try {
@@ -508,7 +581,7 @@ async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
               keepaliveOpen = false;
               clearInterval(keepalive);
             }
-            if (observed.timedOut) throw new LoopError(504, "native Responses stream stalled during image bridge");
+            if (observed.timedOut) throw new LoopError(504, `native Responses stream stalled during ${videoPlan ? "media" : "image"} bridge`);
             if (observed.oversized || observed.truncated || !observed.displaySafe) {
               throw new TranslatorBudgetExceededError("retained_collectors", TRANSLATOR_MAX_TURN_BYTES);
             }
@@ -516,7 +589,11 @@ async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
             translatorBudget.chargeRetained(rawBytes, { kind: "retained_collectors" });
             let inspection;
             try {
-              inspection = inspectNativeResponsesSse(observed.text, plan.toolNames);
+              inspection = inspectNativeResponsesSse(
+                observed.text,
+                auxiliaryNames,
+                [replayBody, repairOversizedReplayCallIds(replayBody)],
+              );
             } finally {
               translatorBudget.releaseRetained(rawBytes, { kind: "retained_collectors" });
             }
@@ -524,7 +601,7 @@ async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
             if (
               inspection.terminal !== "completed"
               || inspection.auxiliaryCalls.length === 0
-              || inspection.hasRealFunctionCall
+              || inspection.hasUnsafeActionableCall
             ) {
               const usage = combineUsage(hiddenUsage, inspection.usage);
               deps.onUsage?.(usage);
@@ -534,15 +611,212 @@ async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
               controller.close();
               return;
             }
-            if (roundsUsed >= imageMaxRounds) {
-              throw new LoopError(409, `image auxiliary allowance exhausted; global iteration ceiling ${imageMaxRounds + 2}`);
+            const hasImageCall = inspection.auxiliaryCalls.some(call => plan !== undefined && call.name === IMAGE_GEN_TOOL_NAME);
+            const hasVideoCall = inspection.auxiliaryCalls.some(call => videoPlan !== undefined && call.name === VIDEO_GEN_TOOL_NAME);
+            if (hasImageCall && imageRoundsUsed >= imageMaxRounds) {
+              throw new LoopError(409, `image auxiliary allowance exhausted; global iteration ceiling ${globalCeiling}`);
+            }
+            if (hasVideoCall && videoRoundsUsed >= videoMaxRounds) {
+              throw new LoopError(409, `video auxiliary allowance exhausted; global iteration ceiling ${globalCeiling}`);
             }
 
             const outputs = new Map<string, string>();
             const replayDisabledAtRoundStart = imagePaidSubmissionConsumedWithoutArtifact;
+            const videoArguments = new Map<string, Extract<ReturnType<typeof parseVideoCallArgs>, { ok: true }>>();
+            const argumentErrors = new Map<string, string>();
             for (const call of inspection.auxiliaryCalls) {
+              if (videoPlan && call.name === VIDEO_GEN_TOOL_NAME) {
+                const args = parseVideoCallArgs(call.arguments);
+                if (args.ok) videoArguments.set(call.callId, args);
+                else argumentErrors.set(call.callId, args.error);
+              } else if (plan && call.name === IMAGE_GEN_TOOL_NAME) {
+                const error = nativeImageArgumentError(call.arguments);
+                if (error) argumentErrors.set(call.callId, error);
+              }
+            }
+            const invalidArgumentBatch = argumentErrors.size > 0;
+            for (const call of inspection.auxiliaryCalls) {
+              if (videoPlan && call.name === VIDEO_GEN_TOOL_NAME) {
+                const keepalive = setInterval(enqueueKeepalive, 2_000);
+                try {
+                  let result;
+                  if (invalidArgumentBatch) {
+                    result = {
+                      ok: false,
+                      model: videoPlan.model,
+                      prompt: "",
+                      files: [],
+                      count: 0,
+                      error: argumentErrors.get(call.callId) ?? "auxiliary batch contains invalid arguments",
+                    };
+                  } else if (videoSubmissionBudgetUsed >= MAX_VIDEO_CALLS_PER_TURN) {
+                    result = {
+                      ok: false,
+                      model: videoPlan.model,
+                      prompt: "",
+                      files: [],
+                      count: 0,
+                      error: `video call budget exhausted (max ${MAX_VIDEO_CALLS_PER_TURN} per turn)`,
+                    };
+                  } else {
+                    const args = videoArguments.get(call.callId)!;
+                      const runtime = deps.videoRuntime ?? getDefaultModelVideoRuntime();
+                      if (!runtime) {
+                        result = {
+                          ok: false,
+                          model: videoPlan.model,
+                          prompt: "",
+                          files: [],
+                          count: 0,
+                          error: "video recovery is unavailable (recovery_blocked)",
+                        };
+                      } else {
+                        // Debit before awaiting the paid POST. A concurrently acknowledged
+                        // ambiguous submission must not reopen this turn; only busy proves that
+                        // no dispatch occurred and refunds the request-local allowance.
+                        videoSubmissionBudgetUsed += 1;
+                        const deliveryRuntime: ModelVideoRuntime = runtime;
+                        try {
+                          const submission = await runtime.submitVideo({
+                            binding: videoPlan.auth,
+                            deadlineAt: Date.now() + (videoTimeoutMs ?? 300_000),
+                            request: {
+                              prompt: args.prompt,
+                              model: videoPlan.model,
+                              duration: args.duration,
+                              resolution: args.resolution,
+                              aspectRatio: args.aspectRatio,
+                              ...(args.audio !== undefined ? { audio: args.audio } : {}),
+                            },
+                            signal,
+                          });
+                          if (submission.kind === "busy") {
+                            videoSubmissionBudgetUsed -= 1;
+                            result = {
+                              ok: false,
+                              model: videoPlan.model,
+                              prompt: "",
+                              files: [],
+                              count: 0,
+                              ...(submission.job ? { jobId: submission.job.id } : {}),
+                              error: "video_busy: another video job is active for this credential",
+                            };
+                          } else {
+                            let job = submission.job;
+                            runtime.startVideoJob(job.id);
+                            enqueueKeepalive();
+                            while (["accepted", "polling", "needs_auth", "downloading", "download_failed"].includes(job.state)) {
+                              const update = await runtime.waitForVideoUpdate(job.id, job.revision, {
+                                signal,
+                                timeoutMs: 2_000,
+                              });
+                              if (update.kind === "timeout") {
+                                enqueueKeepalive();
+                                continue;
+                              }
+                              if (update.kind === "updated") {
+                                job = update.job;
+                                enqueueKeepalive();
+                                continue;
+                              }
+                              if (signal.aborted) throw new LoopError(499, "client closed request during video-bridge");
+                              result = {
+                                ok: false,
+                                model: videoPlan.model,
+                                prompt: "",
+                                files: [],
+                                count: 0,
+                                jobId: job.id,
+                                error: `video_detached: generation continues as job ${job.id}; inspect it in the dashboard or with ccx media status`,
+                              };
+                              break;
+                            }
+                            if (!result) {
+                              if (job.state === "completed" && job.artifactId) {
+                                const path = resolveArtifactPath(job.artifactId);
+                                result = path
+                                  ? buildVideoResult(path, args.prompt, videoPlan.model, {
+                                      duration: args.duration,
+                                      resolution: args.resolution,
+                                      aspectRatio: args.aspectRatio,
+                                      ...(args.audio !== undefined ? { audio: args.audio } : {}),
+                                      jobId: job.id,
+                                    })
+                                  : {
+                                      ok: false,
+                                      model: videoPlan.model,
+                                      prompt: "",
+                                      files: [],
+                                      count: 0,
+                                      jobId: job.id,
+                                      error: "video artifact is not available locally",
+                                    };
+                              } else {
+                                const guidance = job.state === "outcome_unknown"
+                                  ? "the submission outcome is unknown; acknowledge it in the dashboard or CLI before retrying"
+                                  : `video job ended in state ${job.state}`;
+                                result = {
+                                  ok: false,
+                                  model: videoPlan.model,
+                                  prompt: "",
+                                  files: [],
+                                  count: 0,
+                                  jobId: job.id,
+                                  error: `${guidance}${job.safeError ? ` (${job.safeError})` : ""}`,
+                                };
+                              }
+                            }
+                          }
+                        } catch (error) {
+                          if (signal.aborted) throw new LoopError(499, "client closed request during video-bridge");
+                          const recoveryJobId = mediaRecoveryJobId(error);
+                          result = recoveryJobId
+                            ? {
+                                ok: false,
+                                model: videoPlan.model,
+                                prompt: "",
+                                files: [],
+                                count: 0,
+                                jobId: recoveryJobId,
+                                error: "submission_outcome_unknown",
+                              }
+                            : {
+                                ok: false,
+                                model: videoPlan.model,
+                                prompt: "",
+                                files: [],
+                                count: 0,
+                                error: error instanceof Error ? error.message : String(error),
+                              };
+                        }
+                        if (result.ok) {
+                          const artifactId = result.files[0]?.split(/[\\/]/).at(-1);
+                          if (artifactId) {
+                            const release = deliveryRuntime.acquireArtifactDeliveryLease?.(artifactId);
+                            if (release) videoDeliveryLeases.push(release);
+                          }
+                        }
+                      }
+                  }
+                  imageArtifacts.protect(result.files);
+                  outputs.set(call.callId, JSON.stringify(safeMediaToolResult(result, "video")));
+                } finally {
+                  clearInterval(keepalive);
+                }
+                continue;
+              }
+              if (!plan || call.name !== IMAGE_GEN_TOOL_NAME) continue;
               let result;
-              if (imageSubmissionOutcomeUnknown) {
+              if (invalidArgumentBatch) {
+                result = {
+                  ok: false,
+                  model: plan.model,
+                  prompt: "",
+                  files: [],
+                  count: 0,
+                  error: argumentErrors.get(call.callId) ?? "auxiliary batch contains invalid arguments",
+                };
+              } else if (imageSubmissionOutcomeUnknown) {
                 result = {
                   ok: false,
                   model: plan.model,
@@ -592,16 +866,21 @@ async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
             }
             hiddenUsage = combineUsage(hiddenUsage, inspection.usage);
             replayBody = appendNativeAuxiliaryTurn(replayBody, inspection.outputItems, outputs);
-            roundsUsed += 1;
+            if (hasImageCall) imageRoundsUsed += 1;
+            if (hasVideoCall) videoRoundsUsed += 1;
             noteFirstOutput();
             controller.enqueue(encoder.encode(": ccx-auxiliary\n\n"));
-            current = await fetchIteration(
-              !imageSubmissionOutcomeUnknown
+            current = await fetchIteration({
+              image: !imageSubmissionOutcomeUnknown
                 && !imagePaidSubmissionConsumedWithoutArtifact
-                && roundsUsed < imageMaxRounds
+                && imageRoundsUsed < imageMaxRounds
                 ? "synthetic"
                 : "omit",
-            );
+              video: videoSubmissionBudgetUsed < MAX_VIDEO_CALLS_PER_TURN
+                && videoRoundsUsed < videoMaxRounds
+                ? "synthetic"
+                : "omit",
+            }, enqueueKeepalive);
           }
         } catch (error) {
           if (signal.aborted) {
@@ -622,6 +901,7 @@ async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
           controller.enqueue(encoder.encode(`event: response.failed\ndata: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`));
           controller.close();
         } finally {
+          for (const release of videoDeliveryLeases.splice(0)) release();
           imageArtifacts.close();
           if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
         }
@@ -641,8 +921,8 @@ async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
  * synthetic calls validate, while progress and renderer-safe search cells stream live.
  */
 export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps): Promise<Response> {
-  if (deps.nativeResponses && deps.plan && !deps.adapter.runTurn && !deps.webSearchPlan && !deps.videoPlan) {
-    return runNativeResponsesImageLoop(deps);
+  if (deps.nativeResponses && (deps.plan || deps.videoPlan) && !deps.adapter.runTurn && !deps.webSearchPlan) {
+    return runNativeResponsesMediaLoop(deps);
   }
   const translatorBudget = deps.incomingMeta.translatorBudget;
   const { parsed, plan, videoPlan, webSearchPlan, videoTimeoutMs, abortSignal } = deps;
@@ -666,7 +946,7 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
   let paidImageCalls = 0;
   let imageSubmissionOutcomeUnknown = false;
   let imagePaidSubmissionConsumedWithoutArtifact = false;
-  let acceptedVideoCalls = 0;
+  let videoSubmissionBudgetUsed = 0;
   let hiddenUsage: CodexCommanderUsage | undefined;
 
   const takeUsageFrom = (events: AdapterEvent[]): void => {
@@ -1254,7 +1534,7 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
             const isVideoCall = call.handler === "video";
             if (isVideoCall) {
               yield { type: "heartbeat" };
-              if (acceptedVideoCalls >= MAX_VIDEO_CALLS_PER_TURN) {
+              if (videoSubmissionBudgetUsed >= MAX_VIDEO_CALLS_PER_TURN) {
                 const vResult = {
                   ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0,
                   error: `video call budget exhausted (max ${MAX_VIDEO_CALLS_PER_TURN} per turn)`,
@@ -1287,6 +1567,10 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
                       error: "video recovery is unavailable (recovery_blocked)",
                     };
                   } else {
+                    // Debit before dispatch settles: an ambiguous paid POST can be acknowledged
+                    // concurrently and release durable admission, but it must not reopen this
+                    // turn's one-submission allowance. Busy is the only proven no-dispatch result.
+                    videoSubmissionBudgetUsed += 1;
                     const submission = await runtime.submitVideo({
                       binding: videoPlan!.auth,
                       deadlineAt: videoDeadline,
@@ -1301,13 +1585,13 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
                       signal,
                     });
                     if (submission.kind === "busy") {
+                      videoSubmissionBudgetUsed -= 1;
                       vResult = {
                         ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0,
-                        jobId: submission.reservationId,
+                        ...(submission.job ? { jobId: submission.job.id } : {}),
                         error: "video_busy: another video job is active for this credential",
                       };
                     } else {
-                      acceptedVideoCalls += 1;
                       let job = submission.job;
                       runtime.startVideoJob(job.id);
                       // One renderer-safe progress item; later waits use invisible keepalives.
@@ -1371,8 +1655,17 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
                   if (signal.aborted) {
                     throw new LoopError(499, "client closed request during video-bridge");
                   } else {
-                    const error = e instanceof Error ? e.message : String(e);
-                    vResult = { ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0, error };
+                    const recoveryJobId = mediaRecoveryJobId(e);
+                    vResult = recoveryJobId
+                      ? {
+                          ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0,
+                          jobId: recoveryJobId,
+                          error: "submission_outcome_unknown",
+                        }
+                      : {
+                          ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0,
+                          error: e instanceof Error ? e.message : String(e),
+                        };
                   }
                 }
               }

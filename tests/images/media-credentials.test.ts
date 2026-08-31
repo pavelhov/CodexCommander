@@ -140,7 +140,7 @@ describe("media credential binding", () => {
     }
   });
 
-  test("API-key binding pins the selected slot and resolved-key digest without consulting OAuth", async () => {
+  test("a valid API-key pool binds the selected slot and resolved-key digest without consulting OAuth", async () => {
     const envName = "CCX_TEST_MEDIA_BOUND_KEY";
     const previous = process.env[envName];
     process.env[envName] = "initial-key-material";
@@ -150,7 +150,10 @@ describe("media credential binding", () => {
         baseUrl: "https://attacker.invalid/v1",
         authMode: "oauth",
         apiKey: `\${${envName}}`,
-        apiKeyPool: [{ id: "media-slot", key: `\${${envName}}` }],
+        apiKeyPool: [
+          { id: "unselected-slot", key: "unselected-key-material" },
+          { id: "media-slot", key: `\${${envName}}` },
+        ],
       });
       let oauthCalls = 0;
       const binding = bindMediaCredential(cfg);
@@ -176,6 +179,44 @@ describe("media credential binding", () => {
       if (previous === undefined) delete process.env[envName];
       else process.env[envName] = previous;
     }
+  });
+
+  test("a legacy bare API key binds only when apiKeyPool is absent", async () => {
+    const cfg = config({
+      adapter: "openai-chat",
+      baseUrl: "https://api.x.ai/v1",
+      apiKey: "legacy-bare-media-key",
+    });
+    expect(Object.hasOwn(cfg.providers.xai!, "apiKeyPool")).toBe(false);
+
+    const binding = bindMediaCredential(cfg);
+    expect(binding).toMatchObject({ authSource: "api_key", providerKind: "canonical" });
+    const lease = createMediaCredentialLease({ loadConfig: () => cfg });
+    await expect(lease.resolve(binding)).resolves.toEqual({ bearer: "legacy-bare-media-key" });
+  });
+
+  test("an existing malformed or noncanonical API-key pool fails closed instead of falling back to the bare key", async () => {
+    const cfg = config({
+      adapter: "openai-chat",
+      baseUrl: "https://api.x.ai/v1",
+      apiKey: "legacy-bare-media-key",
+    });
+    const legacyBinding = bindMediaCredential(cfg);
+    const lease = createMediaCredentialLease({ loadConfig: () => cfg });
+    const expectFailClosed = async () => {
+      expect(() => bindMediaCredential(cfg)).toThrow(MediaTransportError);
+      await expect(lease.resolve(legacyBinding)).rejects.toMatchObject({
+        code: "needs_auth",
+        phase: "pre_dispatch",
+        certainty: "definite",
+      });
+    };
+
+    cfg.providers.xai!.apiKeyPool = [];
+    await expectFailClosed();
+
+    cfg.providers.xai!.apiKeyPool = [{ id: "unselected-slot", key: "unselected-key-material" }];
+    await expectFailClosed();
   });
 
   test("a managed key on a legacy xAI alias cannot bind or arm paid media", async () => {

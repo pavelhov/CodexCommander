@@ -15,7 +15,7 @@ import {
   reasoningEffortMapFor,
 } from "../reasoning-effort";
 import type { TranslatorBudget } from "../lib/translator-budget";
-import { buildImageTool, IMAGE_GEN_TOOL_NAME } from "../images/synthetic-tool";
+import { buildImageTool, buildVideoTool, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../images/synthetic-tool";
 
 // Headers relayed verbatim from the caller in OAuth-passthrough ("forward") mode.
 // Exported so the web-search sidecar reuses the exact same forwarded-auth set for its ChatGPT call.
@@ -417,7 +417,7 @@ const REPAIRED_CALL_ID_DIGEST_LENGTH = MAX_RESPONSES_CALL_ID_LENGTH - REPAIRED_C
  * reference a call stored upstream under the original id. Proxy-expanded API-key replays are
  * explicit and stateless here, so they are safe to repair too.
  */
-function repairOversizedReplayCallIds(body: unknown): unknown {
+export function repairOversizedReplayCallIds(body: unknown): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
 
   const occupied = new Set<string>();
@@ -707,6 +707,151 @@ export function rewriteHostedImageGenerationForBridge(
   return {
     ...body,
     ...(Array.isArray(body.tools) ? { tools } : {}),
+    ...(Array.isArray(body.input) ? { input } : {}),
+    ...(Object.hasOwn(body, "tool_choice") ? { tool_choice: toolChoice } : {}),
+    ...(mode === "synthetic" ? { parallel_tool_calls: false } : {}),
+  };
+}
+
+export type VideoBridgeRewriteMode = "synthetic" | "omit";
+
+function responsesVideoBridgeTool(): Record<string, unknown> {
+  const { videoGeneration: _marker, ...tool } = buildVideoTool();
+  return { type: "function", ...tool };
+}
+
+function rewriteVideoToolChoice(
+  value: unknown,
+  mode: VideoBridgeRewriteMode,
+  toolNames: ReadonlySet<string>,
+): unknown {
+  if (!isPlainObject(value)) return value;
+  if (
+    value.type === "function"
+    && value.namespace === undefined
+    && typeof value.name === "string"
+    && toolNames.has(value.name)
+  ) {
+    return mode === "synthetic"
+      ? { ...value, name: VIDEO_GEN_TOOL_NAME }
+      : "auto";
+  }
+  if (value.type !== "allowed_tools" || !Array.isArray(value.tools)) return value;
+  let changed = false;
+  const tools: unknown[] = [];
+  for (const tool of value.tools) {
+    if (
+      !isPlainObject(tool)
+      || tool.type !== "function"
+      || tool.namespace !== undefined
+      || typeof tool.name !== "string"
+      || !toolNames.has(tool.name)
+    ) {
+      tools.push(tool);
+      continue;
+    }
+    changed = true;
+    if (mode === "synthetic") tools.push({ ...tool, name: VIDEO_GEN_TOOL_NAME });
+  }
+  if (!changed) return value;
+  return tools.length > 0 ? { ...value, tools } : "auto";
+}
+
+/**
+ * Copy-on-write native Responses rewrite used only after the Grok video execution plan binds.
+ * Existing unnamespaced video aliases are replaced by one canonical `video_gen` function; when
+ * no alias exists, the function is injected into the request's existing tool carrier. Omit mode
+ * removes only plan-owned video functions and their selectors after the turn budget is consumed.
+ */
+export function rewriteVideoGenerationForBridge(
+  body: unknown,
+  mode: VideoBridgeRewriteMode,
+  names: ReadonlySet<string>,
+): unknown {
+  if (!isPlainObject(body)) return body;
+  const toolNames = names.has(VIDEO_GEN_TOOL_NAME)
+    ? names
+    : new Set([...names, VIDEO_GEN_TOOL_NAME]);
+  let inserted = false;
+  const rewriteGroup = (tools: unknown[]): unknown[] => {
+    let changed = false;
+    const next: unknown[] = [];
+    for (const tool of tools) {
+      if (
+        !isPlainObject(tool)
+        || tool.type !== "function"
+        || tool.namespace !== undefined
+        || typeof tool.name !== "string"
+        || !toolNames.has(tool.name)
+      ) {
+        next.push(tool);
+        continue;
+      }
+      changed = true;
+      if (mode === "synthetic" && !inserted) {
+        next.push(responsesVideoBridgeTool());
+        inserted = true;
+      }
+    }
+    return changed ? next : tools;
+  };
+
+  let changed = false;
+  let tools = body.tools;
+  if (Array.isArray(body.tools)) {
+    tools = rewriteGroup(body.tools);
+    changed ||= tools !== body.tools;
+  }
+  let input = body.input;
+  let firstAdditionalToolsIndex = -1;
+  if (Array.isArray(body.input)) {
+    let nestedChanged = false;
+    const mapped = body.input.map((item, index) => {
+      if (!isPlainObject(item) || item.type !== "additional_tools" || !Array.isArray(item.tools)) return item;
+      if (firstAdditionalToolsIndex < 0) firstAdditionalToolsIndex = index;
+      const nestedTools = rewriteGroup(item.tools);
+      if (nestedTools === item.tools) return item;
+      nestedChanged = true;
+      return { ...item, tools: nestedTools };
+    });
+    if (nestedChanged) {
+      input = mapped;
+      changed = true;
+    }
+  }
+
+  if (mode === "synthetic" && !inserted) {
+    const videoTool = responsesVideoBridgeTool();
+    if (Array.isArray(tools)) {
+      tools = [...tools, videoTool];
+    } else if (Array.isArray(input) && firstAdditionalToolsIndex >= 0) {
+      input = input.map((item, index) => index === firstAdditionalToolsIndex
+        && isPlainObject(item)
+        && Array.isArray(item.tools)
+        ? { ...item, tools: [...item.tools, videoTool] }
+        : item);
+    } else {
+      tools = [videoTool];
+    }
+    inserted = true;
+    changed = true;
+  }
+
+  let toolChoice = rewriteVideoToolChoice(body.tool_choice, mode, toolNames);
+  if (mode === "omit" && toolChoice === "required") {
+    const hasTopLevelTool = Array.isArray(tools) && tools.length > 0;
+    const hasAdditionalTool = Array.isArray(input) && input.some(item =>
+      isPlainObject(item)
+      && item.type === "additional_tools"
+      && Array.isArray(item.tools)
+      && item.tools.length > 0);
+    if (!hasTopLevelTool && !hasAdditionalTool) toolChoice = "auto";
+  }
+  changed ||= toolChoice !== body.tool_choice;
+  if (!changed) return body;
+  return {
+    ...body,
+    ...(Array.isArray(tools) ? { tools } : {}),
     ...(Array.isArray(body.input) ? { input } : {}),
     ...(Object.hasOwn(body, "tool_choice") ? { tool_choice: toolChoice } : {}),
     ...(mode === "synthetic" ? { parallel_tool_calls: false } : {}),
