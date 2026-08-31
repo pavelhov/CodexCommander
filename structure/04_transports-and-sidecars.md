@@ -580,6 +580,56 @@ combo whose remaining eligible targets use other providers.
 - 장점, 단점 및 영향: Same-account model fallback works without weakening explicit upstream backoff; the account health map intentionally does not remember that one deferred reset-derived failure, while the combo target map does.
 ```
 
+## Grok Imagine media transport invariants
+
+`src/images/` owns a shared xAI media credential binding, but image and video remain independently
+planned capabilities. `images.bridgeEnabled` and `images.videoBridgeEnabled` must never be coupled:
+off/off preserves native image behavior, and video-only must not alter the native/OpenAI image route.
+The selected `images.authSource` is exactly `subscription_oauth` or `api_key`; media must never
+fall back between them after absence, 401, 403, 429, or a network failure. This source is separate
+from the routed xAI/Grok chat credential path.
+
+Each media operation binds a stable credential slot and identity digest before dispatch. An accepted
+video keeps that binding and its absolute deadline through changes, disconnects, and restart. OAuth
+polling may resolve the same binding's generation-aware token and replay one complete rejected poll;
+it may not retarget the account or resubmit the job. A changed/missing key becomes `needs_auth`, not
+an OAuth lookup. Credential values, prompts, provider request ids, and signed result URLs never enter
+the durable job projection or logs.
+
+Every paid video POST has a durable prompt-free `submitting` fence before dispatch. A known returned
+request id is durably accepted before polling. An ambiguous post-dispatch result is `outcome_unknown`:
+no automatic POST replay, retained admission, and a privileged human acknowledgement before release.
+GET polling/downloading may retry within the already-persisted deadline. The first release accepts one
+text-to-video job per current human-intent turn; auxiliary web, image, and video budgets are
+independent, while the global iteration cap remains a shared runaway guard.
+
+Media artifacts are immediately downloaded through the credentialless SSRF-safe path into private
+storage. Artifact identifiers are opaque; MIME/magic, size, ownership, and retention are validated.
+The authenticated artifact endpoint supports MP4/WebM `GET`, `HEAD`, and one byte range without
+full-file buffering. The durable job store is the retention pin authority, so pruning records
+`artifact_pruned` rather than leaving a silently dangling completion. Video completion and startup
+recovery own the shared retention pass; legacy image pruning consults those live pins and cannot
+delete a protected video. Provider-visible media tool results are a narrow replay contract with only
+authenticated proxy-relative artifact references and renderer hints, never local paths, prompts,
+model ids, provider URLs, signed URLs, or raw errors.
+
+Recovery uses an exclusive owner lease and stable journal inode through inspection, fencing, and
+quarantine. An active, busy, or locked journal remains read-only and cannot be quarantined out from
+under its owner. Artifact publication is a no-replace hard link; only the exact `nlink=2` interrupted
+publication shape with an explicit durable video reservation may be reconciled; transient image
+delivery guards and arbitrary hard links never authorize repair. Every normal artifact operation
+validates a single private link before serving, retaining, or deleting it. Windows recovery is
+inspection-only because its SQLite VFS cannot preserve the exclusive proof handle across rename;
+quarantine therefore fails closed before fencing or moving journal bytes.
+
+Subscription OAuth media is experimental. The fixed capability operation is one image plus a
+one-second 1080p video for one bound account with API-key fallback disabled. It is a paid action
+behind preflight, explicit confirmation, and a single-flight durable operation; capability evidence
+does not prove billing attribution or packaged release verification. The image step must durably
+settle before video can submit. Accepted probe video runs through the background driver and startup
+recovery, which reconcile GET/download outcomes into the existing probe evidence without another
+POST. Production preflight remains disabled until explicit U8 approval.
+
 ## Transport inventory
 
 The sections above cover the transports with load-bearing invariants. The rest of the transport

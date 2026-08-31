@@ -127,11 +127,10 @@ describe("planImageBridge", () => {
     expect(JSON.stringify(plan?.auth)).not.toContain("ephemeral");
   });
 
-  test("custom-named provider with api.x.ai baseUrl → found via fallback", async () => {
+  test("custom-named provider with api.x.ai baseUrl cannot arm paid media", async () => {
     const cfg = makeConfig({ mygrok: { baseUrl: "https://api.x.ai", apiKey: "test-token" } }, { bridgeEnabled: true });
     const plan = await planImageBridge(cfg, makeParsed(true), routed);
-    expect(plan).toBeDefined();
-    expect(plan!.auth.providerKind).toBe("legacy_alias");
+    expect(plan).toBeUndefined();
   });
 
   test("custom bridgeModel is honored", async () => {
@@ -278,7 +277,7 @@ describe("media image capability contract", () => {
     });
   });
 
-  test("fails closed with migration guidance for ambiguous legacy xAI API-key aliases", () => {
+  test("fails closed with canonical migration guidance for legacy xAI API-key aliases", () => {
     const config = makeConfig(
       {
         first: { baseUrl: "https://api.x.ai/v1" },
@@ -289,7 +288,7 @@ describe("media image capability contract", () => {
     const snapshot = buildMediaReadinessSnapshot(config, { api_key: "ready" });
     expect(snapshot.credential).toMatchObject({
       state: "blocked",
-      reason: "ambiguous_xai_provider",
+      reason: "canonical_xai_provider_missing",
       recovery: expect.stringContaining("providers.xai"),
     });
     expect(snapshot.image.state).toBe("blocked");
@@ -321,7 +320,7 @@ describe("media image capability contract", () => {
       { bridgeEnabled: true, videoBridgeEnabled: false, authSource: "api_key" },
     );
     expect(buildMediaReadinessSnapshot(oneEnabledAlias, { api_key: "ready" }).credential)
-      .toMatchObject({ state: "ready", provider: "legacy_alias" });
+      .toMatchObject({ state: "blocked", reason: "canonical_xai_provider_missing" });
 
     const disabledCanonical = makeConfig(
       {

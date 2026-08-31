@@ -218,7 +218,7 @@ describe("ccx media safe command boundary", () => {
     expect(f.errors.join("\n")).not.toContain("secret-bearer");
   });
 
-  test("settings and read-only jobs keep source/toggle parity without TTY prompts", async () => {
+  test("settings require two TTYs, exact confirmation, and runtime re-attestation", async () => {
     expect(parseMediaArgs(["settings", "--images", "on", "--videos", "off", "--source", "api_key"]))
       .toEqual({
         command: "settings",
@@ -236,10 +236,51 @@ describe("ccx media safe command boundary", () => {
       settings,
       jobs: async () => [],
     });
-    expect(await handleMediaCommand(["settings", "--images", "on"], f.deps)).toBe(0);
-    expect(settings).toHaveBeenCalledWith({ imagesEnabled: true }, 7);
+    expect(await handleMediaCommand(["settings", "--images", "on"], f.deps)).toBe(1);
+    expect(settings).toHaveBeenCalledTimes(0);
     expect(f.confirm).toHaveBeenCalledTimes(0);
 
+    const declined = fixture({ confirm: false });
+    const declinedSettings = mock(async () => safeStatus);
+    declined.deps.createService = () => ({
+      status: declined.status,
+      probe: declined.probe,
+      acknowledge: declined.acknowledge,
+      settings: declinedSettings,
+    });
+    expect(await handleMediaCommand(["settings", "--videos", "on"], declined.deps)).toBe(1);
+    expect(declined.confirm).toHaveBeenCalledWith("Apply media settings: videos on?");
+    expect(declinedSettings).toHaveBeenCalledTimes(0);
+
+    const confirmed = fixture();
+    const confirmedSettings = mock(async () => ({ ...safeStatus, source: "api_key" as const }));
+    confirmed.deps.createService = () => ({
+      status: confirmed.status,
+      probe: confirmed.probe,
+      acknowledge: confirmed.acknowledge,
+      settings: confirmedSettings,
+    });
+    expect(await handleMediaCommand([
+      "settings", "--images", "on", "--videos", "off", "--source", "api_key",
+    ], confirmed.deps)).toBe(0);
+    expect(confirmed.confirm).toHaveBeenCalledWith(
+      "Apply media settings: images on, videos off, source api_key?",
+    );
+    expect(confirmed.attest).toHaveBeenCalledTimes(2);
+    expect(confirmedSettings).toHaveBeenCalledWith(
+      { imagesEnabled: true, videosEnabled: false, authSource: "api_key" },
+      7,
+    );
+  });
+
+  test("read-only jobs remain available without TTY prompts", async () => {
+    const f = fixture({ stdinIsTTY: false, stdoutIsTTY: false });
+    f.deps.createService = () => ({
+      status: f.status,
+      probe: f.probe,
+      acknowledge: f.acknowledge,
+      jobs: async () => [],
+    });
     expect(await handleMediaCommand(["jobs", "--json"], f.deps)).toBe(0);
     expect(f.output.at(-1)).toBe("[]");
   });

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
-import { createStaticMediaCredentialLease } from "../../src/images/media-credentials";
 import type { MediaCredentialBinding } from "../../src/images/types";
 import { pollVideoJob, submitVideoJob, XAI_VIDEO_MODEL } from "../../src/images/xai-video-client";
+import { createStaticMediaCredentialLease } from "../helpers/static-media-credential-lease";
 
 const oauthBinding: MediaCredentialBinding = {
   authSource: "subscription_oauth",

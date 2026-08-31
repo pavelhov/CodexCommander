@@ -563,7 +563,9 @@ function initializeServerMediaRuntime(
   let store: VideoJobStore | undefined;
   try {
     store = openVideoJobStore();
-    const runtime = new MediaRuntime(store);
+    const runtime = new MediaRuntime(store, {
+      artifactsKeepCount: config.images?.artifactsKeepCount,
+    });
     runtime.prepareStartup();
     const probe = new CapabilityProbeService(store, runtime);
     return { runtime, management: createMediaManagementRuntime(store, runtime, probe) };
@@ -771,12 +773,21 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       if (mediaRuntime.protectedArtifactIds) {
         unregisterArtifactPins = registerArtifactPinAuthority({
           protectedArtifactIds: () => mediaRuntime!.protectedArtifactIds!(),
+          recoverablePublicationArtifactIds: () => mediaRuntime!.recoverablePublicationArtifactIds?.() ?? new Set<string>(),
+          canReleaseArtifactForPrune: artifactId => mediaRuntime!.canReleaseArtifactForPrune?.(artifactId) ?? "protected",
           releaseArtifactForPrune: artifactId => mediaRuntime!.releaseArtifactForPrune?.(artifactId) ?? "protected",
+          pendingArtifactDeletionIds: () => mediaRuntime!.pendingArtifactDeletionIds?.() ?? new Set<string>(),
+          finalizeArtifactPrune: artifactId => mediaRuntime!.finalizeArtifactPrune?.(artifactId) ?? "protected",
         });
       }
       bindServerMediaRuntime(server, mediaRuntime);
       setDefaultModelVideoRuntime(mediaRuntime);
-      queueMicrotask(() => mediaRuntime?.startBackgroundRecovery());
+      const activatedRuntime = mediaRuntime;
+      const activatedProbe = mediaManagementImpl?.probe;
+      queueMicrotask(() => {
+        if (activatedProbe) activatedProbe.startBackgroundRecovery();
+        else activatedRuntime.startBackgroundRecovery();
+      });
     },
   };
   try {
@@ -789,7 +800,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     if (mediaRuntime?.protectedArtifactIds) {
       unregisterArtifactPins = registerArtifactPinAuthority({
         protectedArtifactIds: () => mediaRuntime!.protectedArtifactIds!(),
+        recoverablePublicationArtifactIds: () => mediaRuntime!.recoverablePublicationArtifactIds?.() ?? new Set<string>(),
+        canReleaseArtifactForPrune: artifactId => mediaRuntime!.canReleaseArtifactForPrune?.(artifactId) ?? "protected",
         releaseArtifactForPrune: artifactId => mediaRuntime!.releaseArtifactForPrune?.(artifactId) ?? "protected",
+        pendingArtifactDeletionIds: () => mediaRuntime!.pendingArtifactDeletionIds?.() ?? new Set<string>(),
+        finalizeArtifactPrune: artifactId => mediaRuntime!.finalizeArtifactPrune?.(artifactId) ?? "protected",
       });
     }
     server = Bun.serve<WsData>({
@@ -1745,6 +1760,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   } catch (error) {
     unregisterArtifactPins();
     mediaRuntime?.beginShutdown();
+    mediaManagementImpl?.probe?.shutdown();
     void mediaRuntime?.shutdown();
     void nativeMainLifecycle.release();
     throw error;
@@ -1758,6 +1774,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     value: async (closeActiveConnections?: boolean): Promise<void> => {
       try {
         try {
+          // Stop the probe's periodic owner before runtime shutdown closes its journal.
+          mediaManagementImpl?.probe?.shutdown();
           await stopServerMediaRuntime(server);
         } finally {
           unregisterArtifactPins();
@@ -1774,8 +1792,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   setServerRef(server);
   if (mediaRuntime) {
     const initialMediaRuntime = mediaRuntime;
+    const initialMediaProbe = mediaManagementImpl?.probe;
     setDefaultModelVideoRuntime(initialMediaRuntime);
-    queueMicrotask(() => initialMediaRuntime.startBackgroundRecovery());
+    queueMicrotask(() => {
+      if (initialMediaProbe) initialMediaProbe.startBackgroundRecovery();
+      else initialMediaRuntime.startBackgroundRecovery();
+    });
   }
   const actualPort = server.port ?? listenPort;
   boundPort = actualPort;

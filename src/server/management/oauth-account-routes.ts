@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
-import { hasOwnProvider, isValidProviderName, readConfigDiagnostics, reconcileLiveConfigFromDisk, saveConfigPreservingClaudeCode } from "../../config";
+import { hasOwnProvider, isValidProviderName, mutatePersistedConfig, readConfigDiagnostics, reconcileLiveConfigFromDisk, saveConfigPreservingClaudeCode } from "../../config";
 import {
   clearLoginState,
   getLoginStatus,
@@ -24,6 +24,18 @@ import {
 } from "../../codex/pool-rotation";
 
 import { DATA_KEY_PREFIX } from "../../identity";
+import {
+  MEDIA_ACTION_ATTESTATION_HEADER,
+  MEDIA_ACTION_NONCE,
+  type MediaActionAttestationInput,
+} from "../../lib/media-action-attestation";
+import {
+  addProviderApiKey,
+  listProviderApiKeys,
+  removeProviderApiKey,
+  setActiveProviderApiKey,
+  setProviderApiKeyLabel,
+} from "../../providers/api-keys";
 
 import { AUTH_MATRIX, jsonResponse } from "../auth-cors";
 
@@ -34,6 +46,7 @@ import { isPlainRecord } from "./shared";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBody, readManagementJsonBodyOr, rethrowManagementBodyTooLarge } from "./body";
 import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
+import type { CodexCommanderConfig } from "../../types";
 
 /**
  * Parses a bounded JSON object body, or null. Malformed JSON is swallowed; an
@@ -74,6 +87,110 @@ function validateKeyName(
   if (opts.required && !value) return { error: "name required" };
   if (value.length > 64) return { error: "name too long" };
   return { value };
+}
+
+type XaiKeyMutationAction = "xai_key_add" | "xai_key_select" | "xai_key_remove" | "xai_key_alias";
+
+function exactKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === allowed.length && keys.every(key => allowed.includes(key));
+}
+
+function authorizeXaiKeyMutation(
+  ctx: ManagementContext,
+  body: Record<string, unknown>,
+  action: XaiKeyMutationAction,
+  expectedId: string,
+  guiKeys: readonly string[],
+): Response | null {
+  const expectedRevision = body.expectedRevision;
+  if (ctx.principal === "confirmed-gui-session") {
+    if (!exactKeys(body, guiKeys)) return jsonResponse({ error: "invalid xAI key mutation" }, 400, ctx.req, ctx.config);
+  } else {
+    const cliKeys = [...guiKeys, "action", "target", ...(guiKeys.includes("id") ? [] : ["id"]), "confirmation", "caller", "nonce", "issuedAt"];
+    const validEnvelope = exactKeys(body, cliKeys)
+      && body.action === action
+      && body.target === "xai_key"
+      && body.id === expectedId
+      && body.confirmation === true
+      && body.caller === "interactive_cli"
+      && Number.isSafeInteger(expectedRevision)
+      && (expectedRevision as number) >= 0
+      && typeof body.nonce === "string"
+      && MEDIA_ACTION_NONCE.test(body.nonce)
+      && Number.isSafeInteger(body.issuedAt)
+      && (body.issuedAt as number) > 0;
+    if (
+      ctx.principal !== "admin-token"
+      || !validEnvelope
+      || ctx.deps.mediaManagement?.authorizeInteractiveCliAction?.(
+        body as unknown as MediaActionAttestationInput,
+        ctx.req.headers.get(MEDIA_ACTION_ATTESTATION_HEADER),
+      ) !== true
+    ) return jsonResponse({ error: "xAI key action attestation required" }, 403, ctx.req, ctx.config);
+  }
+  if (!Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 0) {
+    return jsonResponse({ error: "xAI key pool revision required" }, 400, ctx.req, ctx.config);
+  }
+  return null;
+}
+
+type XaiKeyMutationValue<T> =
+  | { kind: "applied"; config: CodexCommanderConfig; value: T }
+  | { kind: "stale" | "missing" | "rejected"; config: CodexCommanderConfig };
+
+function mirrorXaiProvider(target: CodexCommanderConfig, source: CodexCommanderConfig): void {
+  const provider = source.providers.xai;
+  if (provider) target.providers.xai = structuredClone(provider);
+  else delete target.providers.xai;
+}
+
+/**
+ * Re-check the key-pool revision and mutate the canonical xAI credentials on the
+ * newest persisted snapshot under the shared config mutation lock. This prevents
+ * an async provider replacement or another writer from restoring stale billing
+ * authority after the user has attested an exact key operation.
+ */
+function mutatePersistedXaiKeyPool<T>(
+  ctx: ManagementContext,
+  expectedRevision: number,
+  mutate: (config: CodexCommanderConfig) => { ok: true; value: T } | { ok: false },
+): { ok: true; value: T } | { ok: false; response: Response } {
+  const outcome = mutatePersistedConfig<XaiKeyMutationValue<T>>(persisted => {
+    if (!hasOwnProvider(persisted.providers, "xai")) {
+      return { changed: false, value: { kind: "missing", config: persisted } };
+    }
+    if (listProviderApiKeys(persisted, "xai").revision !== expectedRevision) {
+      return { changed: false, value: { kind: "stale", config: persisted } };
+    }
+    const result = mutate(persisted);
+    if (!result.ok) {
+      return { changed: false, value: { kind: "rejected", config: persisted } };
+    }
+    return { changed: true, value: { kind: "applied", config: persisted, value: result.value } };
+  });
+  if (outcome.status === "unavailable") {
+    return {
+      ok: false,
+      response: jsonResponse({ error: `xAI key config ${outcome.reason}` }, 409, ctx.req, ctx.config),
+    };
+  }
+  const value = outcome.value;
+  switch (value.kind) {
+    case "stale":
+      // The winner's fresh persisted snapshot is authoritative. Mirror it so
+      // the next GET exposes a retryable revision instead of trapping this
+      // process on the stale live value that just lost the CAS.
+      mirrorXaiProvider(ctx.config, value.config);
+      return { ok: false, response: jsonResponse({ error: "stale xAI key pool revision" }, 409, ctx.req, ctx.config) };
+    case "missing":
+      return { ok: false, response: jsonResponse({ error: "unknown provider" }, 404, ctx.req, ctx.config) };
+    case "rejected":
+      return { ok: false, response: jsonResponse({ error: "key not found" }, 404, ctx.req, ctx.config) };
+    case "applied":
+      mirrorXaiProvider(ctx.config, value.config);
+      return { ok: true, value: value.value };
+  }
 }
 
 export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<Response | null> {
@@ -396,16 +513,32 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   if (url.pathname === "/api/providers/keys" && req.method === "GET") {
     const name = (url.searchParams.get("name") ?? "").trim();
     if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
-    const { listProviderApiKeys } = await import("../../providers/api-keys");
     return jsonResponse(listProviderApiKeys(config, name));
   }
   if (url.pathname === "/api/providers/keys" && req.method === "POST") {
-    const body = await readManagementJsonBodyOr(req, {}) as { name?: string; key?: string; label?: string };
-    const name = (body.name ?? "").trim();
+    const body = await readManagementJsonBodyOr(req, {}) as Record<string, unknown>;
+    const nameValue = typeof body.name === "string" ? body.name : "";
+    const keyValue = typeof body.key === "string" ? body.key : "";
+    const labelValue = typeof body.label === "string" ? body.label : undefined;
+    const name = nameValue.trim();
     if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
-    if (typeof body.key !== "string" || !body.key.trim()) return jsonResponse({ error: "key is required" }, 400);
-    const { addProviderApiKey } = await import("../../providers/api-keys");
-    const result = addProviderApiKey(config, name, body.key, body.label);
+    if (!keyValue.trim()) return jsonResponse({ error: "key is required" }, 400);
+    let result: { id: string } | { error: string };
+    if (name === "xai") {
+      const guiKeys = labelValue === undefined
+        ? ["name", "key", "expectedRevision"]
+        : ["name", "key", "label", "expectedRevision"];
+      const denied = authorizeXaiKeyMutation(ctx, body, "xai_key_add", "new", guiKeys);
+      if (denied) return denied;
+      const persisted = mutatePersistedXaiKeyPool<string>(ctx, body.expectedRevision as number, candidate => {
+        const added = addProviderApiKey(candidate, name, keyValue, labelValue, { persist: false });
+        return "error" in added ? { ok: false } : { ok: true, value: added.id };
+      });
+      if (persisted.ok === false) return persisted.response;
+      result = { id: persisted.value };
+    } else {
+      result = addProviderApiKey(config, name, keyValue, labelValue);
+    }
     if ("error" in result) return jsonResponse({ error: result.error }, 400);
     const { clearModelCache } = await import("../../codex/model-cache");
     clearModelCache(name);
@@ -416,22 +549,33 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     return jsonResponse({ ok: true, id: result.id }, 201);
   }
   if (url.pathname === "/api/providers/keys/active" && req.method === "PUT") {
-    const body = await readManagementJsonBodyOr(req, {}) as { name?: string; id?: string };
-    const name = (body.name ?? "").trim();
+    const body = await readManagementJsonBodyOr(req, {}) as Record<string, unknown>;
+    const name = typeof body.name === "string" ? body.name.trim() : "";
     if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
-    if (!body.id) return jsonResponse({ error: "missing id" }, 400);
-    const { setActiveProviderApiKey } = await import("../../providers/api-keys");
-    if (!setActiveProviderApiKey(config, name, body.id)) return jsonResponse({ error: "key not found" }, 404);
+    const id = typeof body.id === "string" ? body.id : "";
+    if (!id) return jsonResponse({ error: "missing id" }, 400);
+    if (name === "xai") {
+      const denied = authorizeXaiKeyMutation(ctx, body, "xai_key_select", id, ["name", "id", "expectedRevision"]);
+      if (denied) return denied;
+      const persisted = mutatePersistedXaiKeyPool(ctx, body.expectedRevision as number, candidate => (
+        setActiveProviderApiKey(candidate, name, id, { persist: false })
+          ? { ok: true, value: true }
+          : { ok: false }
+      ));
+      if (!persisted.ok) return persisted.response;
+    } else if (!setActiveProviderApiKey(config, name, id)) {
+      return jsonResponse({ error: "key not found" }, 404);
+    }
     const { clearModelCache } = await import("../../codex/model-cache");
     clearModelCache(name);
     const { clearProviderQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
     const { clearKeyCooldowns } = await import("../../providers/key-failover");
     clearKeyCooldowns(name); // manual key management resets 429 cooldown state
-    return jsonResponse({ ok: true, name, activeId: body.id });
+    return jsonResponse({ ok: true, name, activeId: id });
   }
   if (url.pathname === "/api/providers/keys/alias" && req.method === "PUT") {
-    const body = await readManagementJsonBodyOr(req, {}) as { name?: unknown; id?: unknown; alias?: unknown };
+    const body = await readManagementJsonBodyOr(req, {}) as Record<string, unknown>;
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const id = typeof body.id === "string" ? body.id.trim() : "";
     const alias = typeof body.alias === "string" ? body.alias.trim() : "";
@@ -440,8 +584,18 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (typeof body.alias !== "string" || alias.length > 80 || /[\x00-\x1f\x7f]/.test(alias)) {
       return jsonResponse({ error: "alias must be at most 80 printable characters" }, 400);
     }
-    const { setProviderApiKeyLabel } = await import("../../providers/api-keys");
-    if (!setProviderApiKeyLabel(config, name, id, alias || undefined)) return jsonResponse({ error: "key not found" }, 404);
+    if (name === "xai") {
+      const denied = authorizeXaiKeyMutation(ctx, body, "xai_key_alias", id, ["name", "id", "alias", "expectedRevision"]);
+      if (denied) return denied;
+      const persisted = mutatePersistedXaiKeyPool(ctx, body.expectedRevision as number, candidate => (
+        setProviderApiKeyLabel(candidate, name, id, alias || undefined, { persist: false })
+          ? { ok: true, value: true }
+          : { ok: false }
+      ));
+      if (!persisted.ok) return persisted.response;
+    } else if (!setProviderApiKeyLabel(config, name, id, alias || undefined)) {
+      return jsonResponse({ error: "key not found" }, 404);
+    }
     return jsonResponse({ ok: true, name, id, alias: alias || null });
   }
   if (url.pathname === "/api/providers/keys" && req.method === "DELETE") {
@@ -449,8 +603,20 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const id = url.searchParams.get("id") ?? "";
     if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
     if (!id) return jsonResponse({ error: "missing id" }, 400);
-    const { removeProviderApiKey } = await import("../../providers/api-keys");
-    if (!removeProviderApiKey(config, name, id)) return jsonResponse({ error: "key not found" }, 404);
+    if (name === "xai") {
+      const body = await readManagementJsonBodyOr(req, {}) as Record<string, unknown>;
+      if (body.name !== name || body.id !== id) return jsonResponse({ error: "invalid xAI key mutation" }, 400, req, config);
+      const denied = authorizeXaiKeyMutation(ctx, body, "xai_key_remove", id, ["name", "id", "expectedRevision"]);
+      if (denied) return denied;
+      const persisted = mutatePersistedXaiKeyPool(ctx, body.expectedRevision as number, candidate => (
+        removeProviderApiKey(candidate, name, id, { persist: false })
+          ? { ok: true, value: true }
+          : { ok: false }
+      ));
+      if (!persisted.ok) return persisted.response;
+    } else if (!removeProviderApiKey(config, name, id)) {
+      return jsonResponse({ error: "key not found" }, 404);
+    }
     const { clearModelCache } = await import("../../codex/model-cache");
     clearModelCache(name);
     const { clearProviderQuotaCache } = await import("../../providers/quota");

@@ -25,6 +25,7 @@ interface RecordedRequest {
   path: string;
   search: string;
   body?: unknown;
+  proof?: string | null;
 }
 
 interface MockFailure {
@@ -58,6 +59,7 @@ let oauthActiveId: string | null = "acct_1";
 let oauthLoginStatus: Record<string, unknown> = { loggedIn: false };
 let keyEntries: Array<Record<string, unknown>> = [];
 let keyActiveId: string | null = "key_1";
+let keyRevision = 7;
 let logs: string[] = [];
 let errors: string[] = [];
 let originalLog: typeof console.log;
@@ -120,8 +122,15 @@ function json(body: unknown, status = 200): Response {
 
 async function mockManagementApi(req: Request): Promise<Response> {
   const url = new URL(req.url);
-  const body = req.method === "PUT" || req.method === "POST" ? await req.json() : undefined;
-  requests.push({ method: req.method, path: url.pathname, search: url.search, body });
+  const requestText = req.method === "GET" ? "" : await req.text();
+  const body = requestText ? JSON.parse(requestText) : undefined;
+  requests.push({
+    method: req.method,
+    path: url.pathname,
+    search: url.search,
+    body,
+    proof: req.headers.get("x-codexcommander-media-action-proof"),
+  });
 
   if (req.method === "GET" && url.pathname === "/api/codex-auth/accounts") {
     if (url.searchParams.get("refresh") === "1" && codexRefreshFailure) {
@@ -251,8 +260,8 @@ async function mockManagementApi(req: Request): Promise<Response> {
     if (provider === "openrouter" && lastDeletedType === "api-key" && postDeleteReadFailure) {
       return json({ error: postDeleteReadFailure.error }, postDeleteReadFailure.status);
     }
-    if (provider === "openrouter") {
-      return json({ activeId: keyActiveId, keys: keyEntries.map(entry => ({
+    if (provider === "openrouter" || provider === "xai") {
+      return json({ revision: keyRevision, activeId: keyActiveId, keys: keyEntries.map(entry => ({
         ...entry,
         active: entry.id === keyActiveId,
       })) });
@@ -261,6 +270,9 @@ async function mockManagementApi(req: Request): Promise<Response> {
   }
 
   if (req.method === "PUT" && url.pathname === "/api/providers/keys/active") {
+    const id = (body as { id?: string } | undefined)?.id;
+    if (id) keyActiveId = id;
+    keyRevision += 1;
     return json({ ok: true });
   }
 
@@ -278,6 +290,7 @@ async function mockManagementApi(req: Request): Promise<Response> {
     const id = "key_added";
     keyEntries.push({ id, label: payload.label, masked: "sk-te****cdef" });
     keyActiveId = id;
+    keyRevision += 1;
     return json({ ok: true, id }, 201);
   }
 
@@ -286,6 +299,7 @@ async function mockManagementApi(req: Request): Promise<Response> {
     const id = url.searchParams.get("id");
     keyEntries = keyEntries.filter(entry => entry.id !== id);
     if (keyActiveId === id) keyActiveId = (keyEntries[0]?.id as string | undefined) ?? null;
+    keyRevision += 1;
     lastDeletedType = "api-key";
     return json({ ok: true });
   }
@@ -325,6 +339,44 @@ function defaultDeps(): AccountDeps {
       source: "runtime",
       baseUrl,
     }),
+  };
+}
+
+function xaiConfig(): CodexCommanderConfig {
+  const config = fixtureConfig();
+  config.providers.xai = {
+    adapter: "openai-chat",
+    baseUrl: "https://api.x.ai/v1",
+    authMode: "oauth",
+    apiKey: RAW_SENTINEL,
+    apiKeyPool: [{ id: "key_1", key: RAW_SENTINEL }],
+  };
+  return config;
+}
+
+function xaiDeps(overrides: Partial<AccountDeps> = {}): AccountDeps {
+  const parsed = new URL(baseUrl);
+  const attested = {
+    pid: 4242,
+    port: Number(parsed.port),
+    hostname: parsed.hostname,
+    source: "runtime" as const,
+    baseUrl,
+    lifecycleLockLeaseV1: true,
+    runtimeVersion: "1.0.0",
+    lifecycleCompatibilityGeneration: 1,
+    runtimeRecordIdentity: "xai-key-runtime",
+    proveMediaAction: () => "proof",
+  };
+  return {
+    baseUrl,
+    loadConfigImpl: xaiConfig,
+    attestLiveManagementProxyImpl: async () => attested,
+    stdinIsTTY: true,
+    stdoutIsTTY: true,
+    confirm: async () => true,
+    readSecret: async () => "xai-new-secret-key",
+    ...overrides,
   };
 }
 
@@ -423,6 +475,7 @@ beforeEach(() => {
     apiKey: RAW_SENTINEL,
   }];
   keyActiveId = "key_1";
+  keyRevision = 7;
   requests.length = 0;
   logs = [];
   errors = [];
@@ -1005,6 +1058,79 @@ describe("ccx account CLI (issue #180 matrix)", () => {
     expect(posts).toHaveLength(0);
   });
 
+  test("canonical xAI list/current expose the dormant media-key family while chat remains OAuth", async () => {
+    const listed = await run(["list", "xai"], xaiDeps());
+    expect(listed.code).toBe(0);
+    expect(listed.stdout).toMatch(/^xai\s+api-key\s+key_1\s+/m);
+    expect(requests).toContainEqual(expect.objectContaining({ method: "GET", path: "/api/oauth/accounts" }));
+    expect(requests).toContainEqual(expect.objectContaining({ method: "GET", path: "/api/providers/keys" }));
+
+    requests.length = 0;
+    const current = await run(["current", "xai", "--json"], xaiDeps());
+    expect(current.code).toBe(0);
+    expect(JSON.parse(current.stdout)).toMatchObject({
+      provider: "xai",
+      type: "oauth",
+      activeId: null,
+      account: null,
+      mediaKeyActiveId: "key_1",
+      mediaKey: { id: "key_1", type: "api-key", active: true },
+    });
+  });
+
+  test("xAI key mutations reject non-TTY and declined confirmation with zero writes", async () => {
+    let result = await run(["use", "xai", "key_1"], xaiDeps({ stdinIsTTY: false }));
+    expect(result.code).toBe(1);
+    expect(requests.some(request => request.method === "PUT")).toBe(false);
+
+    requests.length = 0;
+    const confirm = async () => false;
+    result = await run(["use", "xai", "key_1"], xaiDeps({ confirm }));
+    expect(result.code).toBe(1);
+    expect(requests.some(request => request.method === "PUT")).toBe(false);
+
+    requests.length = 0;
+    let secretReads = 0;
+    result = await run(["add-key", "xai"], xaiDeps({
+      stdinIsTTY: false,
+      readSecret: async () => { secretReads += 1; return "must-not-read"; },
+    }));
+    expect(result.code).toBe(1);
+    expect(secretReads).toBe(0);
+    expect(requests.some(request => request.method === "POST")).toBe(false);
+  });
+
+  test("xAI add, use, and remove send exact confirmed revisioned envelopes", async () => {
+    let result = await run(["use", "xai", "key_1"], xaiDeps());
+    expect(result.code).toBe(0);
+    let mutation = requests.find(request => request.method === "PUT" && request.path === "/api/providers/keys/active");
+    expect(mutation?.body).toMatchObject({
+      name: "xai", id: "key_1", expectedRevision: 7,
+      action: "xai_key_select", target: "xai_key", confirmation: true, caller: "interactive_cli",
+    });
+    expect(mutation?.proof).toBe("proof");
+
+    requests.length = 0;
+    result = await run(["add-key", "xai", "--label", "media"], xaiDeps());
+    expect(result.code).toBe(0);
+    mutation = requests.find(request => request.method === "POST" && request.path === "/api/providers/keys");
+    expect(mutation?.body).toMatchObject({
+      name: "xai", key: "xai-new-secret-key", label: "media", expectedRevision: 8,
+      action: "xai_key_add", target: "xai_key", id: "new", confirmation: true, caller: "interactive_cli",
+    });
+    expect(result.output).not.toContain("xai-new-secret-key");
+
+    requests.length = 0;
+    result = await run(["remove", "xai", "key_1", "--yes"], xaiDeps());
+    expect(result.code).toBe(0);
+    mutation = requests.find(request => request.method === "DELETE" && request.path === "/api/providers/keys");
+    expect(mutation?.body).toMatchObject({
+      name: "xai", id: "key_1", expectedRevision: 9,
+      action: "xai_key_remove", target: "xai_key", confirmation: true, caller: "interactive_cli",
+    });
+    expect(mutation?.proof).toBe("proof");
+  });
+
   test("36: refresh and remove emit exact JSON envelopes", async () => {
     const refresh = await run(["refresh", "openai", "--json"]);
     const refreshed = JSON.parse(refresh.stdout) as Record<string, unknown>;
@@ -1046,6 +1172,25 @@ describe("ccx account CLI (issue #180 matrix)", () => {
     expect(requests).toContainEqual(expect.objectContaining({ method: "PUT", path: "/api/codex-auth/accounts/alias" }));
     expect(requests).toContainEqual(expect.objectContaining({ method: "PUT", path: "/api/oauth/accounts/alias" }));
     expect(requests).toContainEqual(expect.objectContaining({ method: "PUT", path: "/api/providers/keys/alias" }));
+
+    requests.length = 0;
+    const xaiKey = await run(["alias", "xai", "key_1", "Media key"], xaiDeps());
+    expect(xaiKey.code).toBe(0);
+    expect(requests).toContainEqual(expect.objectContaining({
+      method: "PUT",
+      path: "/api/providers/keys/alias",
+      body: expect.objectContaining({
+        name: "xai",
+        id: "key_1",
+        alias: "Media key",
+        expectedRevision: 7,
+        action: "xai_key_alias",
+        target: "xai_key",
+        confirmation: true,
+        caller: "interactive_cli",
+      }),
+      proof: "proof",
+    }));
   });
 
   describe("37b: account priority sets and reads Codex selection order", () => {

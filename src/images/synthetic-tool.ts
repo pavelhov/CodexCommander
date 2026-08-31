@@ -73,7 +73,7 @@ export function buildImageTool(): CodexCommanderTool {
   return {
     name: IMAGE_GEN_TOOL_NAME,
     description:
-      "Generate an image from a text prompt. Returns absolute local filesystem path(s). " +
+      "Generate an image from a text prompt. Returns authenticated proxy-relative artifact reference(s). " +
       "Use when the user asks to create or draw an image.",
     parameters: {
       type: "object",
@@ -112,7 +112,7 @@ export function buildVideoTool(): CodexCommanderTool {
   return {
     name: VIDEO_GEN_TOOL_NAME,
     description:
-      "Generate a short video (1-15 seconds) from a text prompt. Returns an absolute local filesystem path. " +
+      "Generate a short video (1-15 seconds) from a text prompt. Returns an authenticated proxy-relative artifact reference. " +
       "Use when the user asks to create, animate, or generate a video.",
     parameters: {
       type: "object",

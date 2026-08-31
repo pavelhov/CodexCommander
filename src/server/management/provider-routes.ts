@@ -1,4 +1,4 @@
-import { hasOwnProvider, isValidProviderName, providerHeadersConfigError, saveConfigPreservingClaudeCode, withConfigMutationLockSync } from "../../config";
+import { hasOwnProvider, isValidProviderName, mutatePersistedConfig, providerHeadersConfigError, saveConfigPreservingClaudeCode, withConfigMutationLockSync } from "../../config";
 
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
@@ -234,6 +234,16 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const providerError = providerManagementConfigError(name, body.provider);
     if (providerError) return jsonResponse({ error: providerError }, 400);
+    if (
+      name === "xai"
+      && isPlainRecord(body.provider)
+      && (Object.hasOwn(body.provider, "apiKey") || Object.hasOwn(body.provider, "apiKeyPool"))
+    ) {
+      return jsonResponse({
+        error: "canonical xAI credentials cannot be written through provider replacement; use the attested provider API-key endpoints",
+        code: "xai_media_key_attestation_required",
+      }, 403);
+    }
     const prov = body.provider ? stripCodexRuntimeProviderFields(body.provider as CodexCommanderProviderConfig) : undefined;
     if (!name || !prov?.adapter || !prov?.baseUrl) {
       return jsonResponse({ error: "name, provider.adapter and provider.baseUrl are required" }, 400);
@@ -261,10 +271,32 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // Catalog providers (e.g. ollama-cloud) carry a models + vision/reasoning classification the GUI
     // doesn't send — merge it in so the sidecars are gated correctly.
     enrichProviderFromCatalog(name, prov);
-    const { saveConfigPreservingClaudeCode: save } = await import("../../config");
-    config.providers[name] = stripRegistryOnlyStaticHeaders(name, prov);
-    if (body.setDefault === true) config.defaultProvider = name;
-    save(config);
+    if (name === "xai") {
+      // Provider replacement owns chat/routing fields, never the canonical xAI
+      // media-key pool. Preserve credentials from the final persisted snapshot
+      // under the same lock used by attested xAI key mutations. In particular,
+      // never carry a pre-await credential snapshot across destination probing.
+      const replacement = structuredClone(prov);
+      const outcome = mutatePersistedConfig(persisted => {
+        const next = structuredClone(replacement);
+        const existing = persisted.providers.xai;
+        if (existing?.apiKey !== undefined) next.apiKey = existing.apiKey;
+        if (existing?.apiKeyPool !== undefined) next.apiKeyPool = structuredClone(existing.apiKeyPool);
+        persisted.providers.xai = stripRegistryOnlyStaticHeaders(name, next);
+        if (body.setDefault === true) persisted.defaultProvider = name;
+        return { changed: true, value: persisted };
+      });
+      if (outcome.status === "unavailable") {
+        return jsonResponse({ error: `xAI provider config ${outcome.reason}` }, 409);
+      }
+      config.providers.xai = structuredClone(outcome.value.providers.xai!);
+      if (body.setDefault === true) config.defaultProvider = outcome.value.defaultProvider;
+    } else {
+      const { saveConfigPreservingClaudeCode: save } = await import("../../config");
+      config.providers[name] = stripRegistryOnlyStaticHeaders(name, prov);
+      if (body.setDefault === true) config.defaultProvider = name;
+      save(config);
+    }
     reconcileLiveStateStores();
     const { clearModelCache } = await import("../../codex/model-cache");
     clearModelCache(name);
@@ -516,43 +548,79 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
   if (url.pathname === "/api/providers" && req.method === "DELETE") {
     const name = url.searchParams.get("name")?.trim();
     if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
-    // Config validation requires a default provider. Reassigning before deletion keeps
-    // the persisted config valid and makes removal of the current default a one-step UI
-    // operation. Prefer the first remaining *enabled* provider so DELETE cannot leave a
-    // disabled default that setDefault / disable already refuse. Object-key order is the
-    // documented configuration order and is stable through JSON persistence.
-    const fallbackDefault = name === config.defaultProvider
-      ? Object.entries(config.providers)
-        .find(([provider, providerConfig]) => provider !== name && providerConfig.disabled !== true)
-        ?.[0]
-      : undefined;
-    if (name === config.defaultProvider && !fallbackDefault) {
+    type DeleteValue =
+      | { kind: "deleted"; config: CodexCommanderConfig; fallbackDefault?: string }
+      | { kind: "unknown"; config: CodexCommanderConfig }
+      | { kind: "xai_key_attestation_required"; config: CodexCommanderConfig }
+      | { kind: "last_provider"; config: CodexCommanderConfig }
+      | { kind: "dependent_combos"; config: CodexCommanderConfig; combos: string[] };
+    const outcome = mutatePersistedConfig<DeleteValue>(persisted => {
+      if (!hasOwnProvider(persisted.providers, name)) {
+        return { changed: false, value: { kind: "unknown", config: persisted } };
+      }
+      if (
+        name === "xai"
+        && (persisted.providers.xai?.apiKey !== undefined || persisted.providers.xai?.apiKeyPool !== undefined)
+      ) {
+        return { changed: false, value: { kind: "xai_key_attestation_required", config: persisted } };
+      }
+      // Config validation requires a default provider. Reassigning before deletion keeps
+      // the persisted config valid and makes removal of the current default a one-step UI
+      // operation. Object-key order is stable through JSON persistence.
+      const fallbackDefault = name === persisted.defaultProvider
+        ? Object.entries(persisted.providers)
+          .find(([provider, providerConfig]) => provider !== name && providerConfig.disabled !== true)
+          ?.[0]
+        : undefined;
+      if (name === persisted.defaultProvider && !fallbackDefault) {
+        return { changed: false, value: { kind: "last_provider", config: persisted } };
+      }
+      const dependentCombos = Object.entries(persisted.combos ?? {})
+        .filter(([, combo]) => combo.targets.some(target => target.provider === name))
+        .map(([id]) => id)
+        .sort((a, b) => a.localeCompare(b));
+      if (dependentCombos.length > 0) {
+        return { changed: false, value: { kind: "dependent_combos", config: persisted, combos: dependentCombos } };
+      }
+      if (fallbackDefault) persisted.defaultProvider = fallbackDefault;
+      delete persisted.providers[name];
+      setProviderContextCap(persisted, name, false);
+      return { changed: true, value: { kind: "deleted", config: persisted, ...(fallbackDefault ? { fallbackDefault } : {}) } };
+    });
+    if (outcome.status === "unavailable") {
+      return jsonResponse({ error: `provider config ${outcome.reason}` }, 409);
+    }
+    const result = outcome.value;
+    if (result.kind === "unknown") return jsonResponse({ error: "unknown provider" }, 404);
+    if (result.kind === "xai_key_attestation_required") {
+      return jsonResponse({
+        error: "remove canonical xAI credentials through the attested provider API-key endpoints before deleting the provider",
+        code: "xai_media_key_attestation_required",
+      }, 403);
+    }
+    if (result.kind === "last_provider") {
       return jsonResponse({
         error: "cannot delete the default provider when no enabled replacement remains",
         code: "last_provider",
       }, 409);
     }
-    const dependentCombos = Object.entries(config.combos ?? {})
-      .filter(([, combo]) => combo.targets.some(target => target.provider === name))
-      .map(([id]) => id)
-      .sort((a, b) => a.localeCompare(b));
-    if (dependentCombos.length > 0) {
+    if (result.kind === "dependent_combos") {
       return jsonResponse({
         error: `cannot delete provider "${name}" while combos depend on it`,
         code: "provider_has_dependent_combos",
-        combos: dependentCombos,
+        combos: result.combos,
       }, 409);
     }
-    const { saveConfigPreservingClaudeCode: save } = await import("../../config");
-    if (fallbackDefault) config.defaultProvider = fallbackDefault;
-    delete config.providers[name];
-    setProviderContextCap(config, name, false);
-    save(config);
+    config.providers = structuredClone(result.config.providers);
+    config.defaultProvider = result.config.defaultProvider;
+    config.providerContextCaps = result.config.providerContextCaps
+      ? structuredClone(result.config.providerContextCaps)
+      : undefined;
     reconcileLiveStateStores();
     const { clearModelCache: clearCache } = await import("../../codex/model-cache");
     clearCache(name);
     const catalogRefresh = await convergeCodexCatalog();
-    return jsonResponse({ success: true, ...(fallbackDefault ? { defaultProvider: fallbackDefault } : {}), catalogRefresh });
+    return jsonResponse({ success: true, ...(result.fallbackDefault ? { defaultProvider: result.fallbackDefault } : {}), catalogRefresh });
   }
 
   if (url.pathname === "/api/provider-context-caps" && req.method === "GET") {

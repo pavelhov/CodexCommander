@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { EventEmitter } from "node:events";
 
 import type { PublicVideoJob, VideoJobState } from "../src/images/video-job-store";
 import type { CapabilityProbeStatus } from "../src/images/capability-probe";
@@ -13,6 +14,7 @@ import { handleManagementAPI } from "../src/server/management-api";
 import {
   publicMediaJobStatus,
   publicMediaProbeStatus,
+  spawnMediaArtifactOpener,
   type MediaManagementRuntime,
 } from "../src/server/management/media-routes";
 import type { CodexCommanderConfig } from "../src/types";
@@ -136,11 +138,27 @@ describe("media management resource", () => {
     });
     expect(unknown!.status).toBe(400);
 
-    const applied = await request(cfg, runtime, "/api/media", {
+    const rawAdmin = await request(cfg, runtime, "/api/media", {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ expectedRevision: initial.revision, videosEnabled: true }),
     });
+    expect(rawAdmin!.status).toBe(403);
+    expect(settingsApplied).toHaveBeenCalledTimes(0);
+
+    const credentialMutation = await request(cfg, runtime, "/api/media", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedRevision: initial.revision, videosEnabled: true, apiKey: "caller-secret" }),
+    }, "confirmed-gui-session");
+    expect(credentialMutation!.status).toBe(400);
+    expect(JSON.stringify(cfg)).not.toContain("caller-secret");
+
+    const applied = await request(cfg, runtime, "/api/media", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedRevision: initial.revision, videosEnabled: true }),
+    }, "confirmed-gui-session");
     expect(applied!.status).toBe(200);
     const body = await applied!.json() as { settings: Record<string, unknown>; revision: number };
     expect(body.settings).toEqual({ imagesEnabled: false, videosEnabled: true, authSource: "api_key" });
@@ -152,7 +170,7 @@ describe("media management resource", () => {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ expectedRevision: initial.revision, authSource: "subscription_oauth" }),
-    });
+    }, "confirmed-gui-session");
     expect(stale!.status).toBe(409);
     expect(cfg.images!.authSource).toBe("api_key");
 
@@ -160,11 +178,161 @@ describe("media management resource", () => {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ expectedRevision: body.revision, authSource: "subscription_oauth" }),
-    });
+    }, "confirmed-gui-session");
     expect(source!.status).toBe(200);
     expect(cfg.images).toMatchObject({ bridgeEnabled: false, videoBridgeEnabled: true, authSource: "subscription_oauth" });
     expect(cfg.providers.xai!.authMode).toBe("oauth");
     expect(settingsApplied).toHaveBeenCalledTimes(2);
+  });
+
+  test("interactive CLI settings proof is exact-body bound and single-use", async () => {
+    const secret = createLocalAttestationSecret();
+    const pid = 4_321;
+    const port = 10_100;
+    const now = 2_000_000_000_000;
+    const consumed = new Set<string>();
+    const cfg = config();
+    const runtime: MediaManagementRuntime = {
+      state: "ready",
+      authorizeInteractiveCliAction: (input, proof) => {
+        if (consumed.has(input.nonce) || !verifyMediaActionAttestationProof(secret, input, pid, port, proof, now)) return false;
+        consumed.add(input.nonce);
+        return true;
+      },
+    };
+    const initial = (await (await request(cfg, runtime, "/api/media"))!.json()) as { revision: number };
+    const envelope = {
+      action: "settings",
+      target: "settings",
+      id: "media-settings",
+      expectedRevision: initial.revision,
+      imagesEnabled: true,
+      videosEnabled: false,
+      authSource: "api_key",
+      confirmation: true,
+      caller: "interactive_cli",
+      nonce: "s".repeat(43),
+      issuedAt: now,
+    } satisfies MediaActionAttestationInput;
+    const send = (body: MediaActionAttestationInput, proof: string | null) => request(cfg, runtime, "/api/media", {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        ...(proof ? { "x-codexcommander-media-action-proof": proof } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+
+    expect((await send(envelope, null))!.status).toBe(403);
+    const changedBody = { ...envelope, videosEnabled: true };
+    const changedProof = createMediaActionAttestationProof(secret, changedBody, pid, port);
+    expect((await send(envelope, changedProof))!.status).toBe(403);
+    const proof = createMediaActionAttestationProof(secret, envelope, pid, port);
+    expect((await send(envelope, proof))!.status).toBe(200);
+    expect(cfg.images).toMatchObject({ bridgeEnabled: true, videoBridgeEnabled: false, authSource: "api_key" });
+    expect((await send(envelope, proof))!.status).toBe(403);
+  });
+
+  test("artifact opener uses fixed executables and a scrubbed Linux desktop environment", async () => {
+    const sourceEnv = {
+      PATH: "/hostile-bin",
+      BROWSER: "credential-stealing-browser",
+      XAI_API_KEY: "xai-provider-secret",
+      OPENAI_API_KEY: "openai-provider-secret",
+      AWS_SECRET_ACCESS_KEY: "cloud-secret",
+      HOME: "/home/media-user",
+      DISPLAY: ":99",
+      WAYLAND_DISPLAY: "wayland-0",
+      XDG_RUNTIME_DIR: "/run/user/1234",
+      XDG_CURRENT_DESKTOP: "GNOME",
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1234/bus",
+      XAUTHORITY: "/run/user/1234/xauthority",
+    };
+    for (const [platform, expectedCommand] of [
+      ["darwin", "/usr/bin/open"],
+      ["linux", "/usr/bin/xdg-open"],
+      ["win32", "C:\\Windows\\explorer.exe"],
+    ] as const) {
+      let captured: { command: string; args: string[]; env: Record<string, string> } | undefined;
+      const result = await spawnMediaArtifactOpener("/private/artifact.mp4", true, {
+        platform,
+        sourceEnv,
+        spawnImpl: (command, args, options) => {
+          captured = { command, args, env: options.env };
+          const child = Object.assign(new EventEmitter(), {
+            kill: () => true,
+            unref: () => child,
+          });
+          queueMicrotask(() => child.emit("exit", 0, null));
+          return child;
+        },
+      });
+      expect(result).toBe(true);
+      expect(captured?.command).toBe(expectedCommand);
+      expect(captured?.command).not.toContain("hostile-bin");
+      expect(JSON.stringify(captured?.env)).not.toContain("secret");
+      expect(captured?.env.BROWSER).toBeUndefined();
+      expect(captured?.env.XAI_API_KEY).toBeUndefined();
+      expect(captured?.env.OPENAI_API_KEY).toBeUndefined();
+      expect(captured?.env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+      expect(captured?.env).toEqual(platform === "linux"
+        ? {
+            PATH: "/usr/bin:/bin",
+            DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1234/bus",
+            DISPLAY: ":99",
+            HOME: "/home/media-user",
+            WAYLAND_DISPLAY: "wayland-0",
+            XAUTHORITY: "/run/user/1234/xauthority",
+            XDG_CURRENT_DESKTOP: "GNOME",
+            XDG_RUNTIME_DIR: "/run/user/1234",
+          }
+        : platform === "win32"
+          ? { SystemRoot: "C:\\Windows", WINDIR: "C:\\Windows" }
+          : {});
+      expect(captured?.args.at(-1)).toBe("/private/artifact.mp4");
+    }
+  });
+
+  test("artifact opener succeeds only after exit zero and bounds failed helpers", async () => {
+    const resultFor = async (outcome: "zero" | "nonzero" | "signal" | "error") =>
+      spawnMediaArtifactOpener("/private/artifact.mp4", false, {
+        platform: "linux",
+        sourceEnv: {},
+        spawnImpl: () => {
+          const child = Object.assign(new EventEmitter(), {
+            kill: () => true,
+            unref: () => child,
+          });
+          queueMicrotask(() => {
+            if (outcome === "error") child.emit("error", new Error("controlled opener failure"));
+            else if (outcome === "zero") child.emit("exit", 0, null);
+            else if (outcome === "nonzero") child.emit("exit", 7, null);
+            else child.emit("exit", null, "SIGTERM");
+          });
+          return child;
+        },
+      });
+
+    expect(await resultFor("zero")).toBe(true);
+    expect(await resultFor("nonzero")).toBe(false);
+    expect(await resultFor("signal")).toBe(false);
+    expect(await resultFor("error")).toBe(false);
+    expect(await spawnMediaArtifactOpener("/private/artifact.mp4", false, {
+      platform: "linux",
+      sourceEnv: {},
+      spawnImpl: () => { throw new Error("controlled synchronous spawn failure"); },
+    })).toBe(false);
+
+    const kill = mock(() => true);
+    const unref = mock(() => undefined);
+    expect(await spawnMediaArtifactOpener("/private/artifact.mp4", false, {
+      platform: "linux",
+      sourceEnv: {},
+      timeoutMs: 5,
+      spawnImpl: () => Object.assign(new EventEmitter(), { kill, unref }),
+    })).toBe(false);
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(unref).toHaveBeenCalledTimes(1);
   });
 
   test("human action envelope principal-matches, CAS rechecks, and never accepts paths", async () => {

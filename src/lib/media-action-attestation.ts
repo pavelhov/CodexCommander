@@ -8,13 +8,21 @@ export const MEDIA_ACTION_ATTESTATION_MAX_AGE_MS = 5 * 60_000;
 const MEDIA_ACTION_ATTESTATION_MAX_FUTURE_SKEW_MS = 30_000;
 
 export interface MediaActionAttestationInput {
-  action: "probe" | "acknowledge" | "open" | "reveal" | "quarantine_reset";
-  target?: "job" | "probe" | "recovery";
+  action: "probe" | "acknowledge" | "open" | "reveal" | "quarantine_reset" | "settings"
+    | "xai_key_add" | "xai_key_select" | "xai_key_remove" | "xai_key_alias";
+  target?: "job" | "probe" | "recovery" | "settings" | "xai_key";
   id: string;
   expectedRevision: number;
   confirmation: true;
   caller: "interactive_cli";
   step?: "image" | "video";
+  imagesEnabled?: boolean;
+  videosEnabled?: boolean;
+  authSource?: "subscription_oauth" | "api_key";
+  name?: "xai";
+  key?: string;
+  label?: string;
+  alias?: string;
   nonce: string;
   issuedAt: number;
 }
@@ -36,6 +44,13 @@ function payload(input: MediaActionAttestationInput, pid: number, port: number):
     input.confirmation,
     input.caller,
     input.step ?? null,
+    input.imagesEnabled ?? null,
+    input.videosEnabled ?? null,
+    input.authSource ?? null,
+    input.name ?? null,
+    input.key ?? null,
+    input.label ?? null,
+    input.alias ?? null,
     input.nonce,
     input.issuedAt,
   ]);

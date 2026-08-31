@@ -110,6 +110,45 @@ route-specific results rather than repeating this table.
 For the concepts behind the model roster and encrypted worker-task behavior, see
 [Sub-agent Surface](/guides/sub-agent-surface/).
 
+### Grok media
+
+| Method and path | Purpose | Notable errors |
+| --- | --- | --- |
+| `GET /api/media` | Read no-store, bounded/paginated safe settings, readiness, experimental status, jobs, and recovery state. | 400 invalid pagination |
+| `PATCH /api/media` | Atomically change `imagesEnabled`, `videosEnabled`, and/or `authSource` with `expectedRevision`; requires a confirmed GUI session or a fresh exact interactive-CLI attestation. | 400 `media_auth_source_required`; 403 `media_settings_attestation_required`; 409 `stale_media_revision` |
+| `GET /api/media/jobs/<opaque-id>` | Read one safe job projection. | 400 invalid id; 404 job not found |
+| `GET /api/media/probes/<opaque-id>` | Read one safe capability-probe projection. | 400 invalid id; 404 probe not found |
+| `POST /api/media/actions` | Confirmed privileged probe, acknowledgement, open/reveal, or recovery action. | 403 `media_action_attestation_required`; 409 stale/preflight/recovery conflict |
+
+The resource represents two independent switches and one explicit source: `subscription_oauth` or
+`api_key`. The other source is never consulted as fallback, and source selection has no effect on
+xAI/Grok chat authentication. Accepted jobs retain their original binding. Public projections are
+deliberately safe: no prompt, credential, account/key identifier, binding/digest, provider request
+id, signed URL, or artifact path is returned.
+
+All mutations require a current revision; an old revision returns `stale_media_revision`. `PATCH
+/api/media` and `POST /api/media/actions` are unavailable to agent/data-plane routes. They require a
+confirmed GUI session or the separately attested interactive CLI envelope, an opaque target ID where
+applicable, current revision, and explicit confirmation. A raw admin token alone is rejected for
+these media mutations. The CLI envelope is fresh, tied to the exact attested local runtime, and
+requires both stdin and stdout to be TTYs. These are the only paths that can acknowledge an uncertain
+submit, open/reveal an artifact, or start the fixed OAuth capability probe.
+
+Open/reveal takes only a completed opaque job ID. The server revalidates the contained artifact and
+uses a fixed platform opener with a scrubbed child environment; callers never supply a filesystem
+path, URL, executable, or environment value. Active media journals are not quarantined. Busy/locked
+or future/unsafe journals stay read-only; a proven interrupted hard-link publication is reconciled
+before normal retention can proceed. Windows recovery is inspection-only and refuses quarantine
+before creating a fence or moving bytes because the required SQLite proof handle cannot be retained
+across a database rename on that platform.
+
+The probe is experimental and feasibility-only: one `grok-imagine-image-2.0` image plus one-second
+1080p `grok-imagine-video-1.5` video, with API-key fallback disabled and billing attribution
+reported as unknown. It remains blocked with `probe_preflight_required` until explicit U8 safety
+approval. Image is durably settled before the video POST can begin. Accepted video work is reconciled
+in the background and again at startup without a new POST. A completed step can be retained while a
+failed step awaits fresh confirmation; an `outcome_unknown` step must be acknowledged before retry.
+
 #### Roster object shape and compatibility writes
 
 `GET /api/subagent-models` returns both a compatibility projection and the canonical roster:
@@ -443,13 +482,17 @@ the user workflow.
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | Read or update Anthropic OAuth pool policy | 400 non-Anthropic provider or invalid policy |
 | `POST /api/oauth/accounts/clear-cooldown` | Clear one OAuth account's runtime cooldown | 400 invalid provider/account |
 | `PUT /api/oauth/accounts/alias` | Set or clear an OAuth account alias | 400 invalid provider/account/alias |
-| `GET, POST, DELETE /api/providers/keys` | List masked provider keys, add/activate one, or remove one | 400 invalid input; 404 provider/key missing |
-| `PUT /api/providers/keys/active` | Select a provider's active key | 400 invalid input; 404 provider/key missing |
-| `PUT /api/providers/keys/alias` | Set or clear a provider-key alias | 400 invalid input; 404 provider/key missing |
+| `GET, POST, DELETE /api/providers/keys` | List masked provider keys, add/activate one, or remove one. Canonical xAI media-key mutations are human-only; ordinary provider-key management is unchanged. | 400 invalid input; 403 `xAI key action attestation required`; 404 provider/key missing; 409 stale xAI key-pool revision |
+| `PUT /api/providers/keys/active` | Select a provider's active key. Canonical xAI media-key selection is human-only; ordinary provider-key selection is unchanged. | 400 invalid input; 403 `xAI key action attestation required`; 404 provider/key missing; 409 stale xAI key-pool revision |
+| `PUT /api/providers/keys/alias` | Set or clear a provider-key alias. Canonical xAI media-key renames are human-only; ordinary provider-key aliases are unchanged. | 400 invalid input; 403 `xAI key action attestation required`; 404 provider/key missing; 409 stale xAI key-pool revision |
 | `GET, POST, PATCH, DELETE /api/keys` | List, create, edit, or delete data-plane admission keys | 400 invalid body/id; 404 key missing |
 
 Credential list responses are deliberately masked. OAuth access tokens and complete provider API
-keys are not returned to dashboard clients.
+keys are not returned to dashboard clients. Adding, selecting, renaming, or removing a canonical xAI key that
+can fund media requires the same confirmed-GUI or fresh exact two-TTY CLI-attested human action as
+media settings. A raw admin token alone is rejected. This exception does not alter normal provider
+key management for other providers. `ccx account list xai` and `ccx account current xai` expose both
+the OAuth chat family and the separately masked media-key family when both are configured.
 
 ### Providers
 

@@ -15,10 +15,10 @@ import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../type
 import type { MediaCredentialBinding, MediaProviderKind } from "./types";
 import { MediaTransportError, mediaError } from "./media-errors";
 
-const XAI_MEDIA_HOSTS = new Set(["api.x.ai", "cli-chat-proxy.grok.com"]);
 const SLOT_DOMAIN = "ccx-xai-media-slot-v1";
 const OAUTH_IDENTITY_DOMAIN = "ccx-xai-media-oauth-subject-v1";
 const KEY_IDENTITY_DOMAIN = "ccx-xai-media-api-key-v1";
+const XAI_MEDIA_HOSTS = new Set(["api.x.ai", "cli-chat-proxy.grok.com"]);
 
 function digest(domain: string, value: string): string {
   return `sha256:${createHash("sha256").update(domain).update("\0").update(value).digest("hex")}`;
@@ -42,31 +42,27 @@ function needsAuth(): MediaTransportError {
   return mediaError({ code: "needs_auth", phase: "pre_dispatch", certainty: "definite" });
 }
 
-function isXaiHostname(baseUrl: string): boolean {
-  try {
-    return XAI_MEDIA_HOSTS.has(new URL(baseUrl).hostname.toLowerCase());
-  } catch {
-    return false;
-  }
-}
-
 interface ProviderSlot {
-  name: string;
-  kind: MediaProviderKind;
+  name: "xai";
+  kind: "canonical";
   provider: CodexCommanderProviderConfig;
 }
 
-function configuredProvider(config: CodexCommanderConfig, source: MediaCredentialBinding["authSource"]): ProviderSlot {
+function configuredProvider(config: CodexCommanderConfig): ProviderSlot {
   const canonical = Object.hasOwn(config.providers, "xai") ? config.providers.xai : undefined;
-  if (canonical) {
-    if (canonical.disabled === true) throw needsAuth();
-    return { name: "xai", kind: "canonical", provider: canonical };
+  if (!canonical || canonical.disabled === true) throw needsAuth();
+  // Paid media authority is intentionally narrower than ordinary provider
+  // routing. Only the human-attested canonical xai credential may arm work;
+  // hostname-matched legacy aliases remain usable for chat but never media.
+  return { name: "xai", kind: "canonical", provider: canonical };
+}
+
+function isLegacyXaiMediaProvider(provider: CodexCommanderProviderConfig): boolean {
+  try {
+    return XAI_MEDIA_HOSTS.has(new URL(provider.baseUrl).hostname.toLowerCase());
+  } catch {
+    return false;
   }
-  if (source === "subscription_oauth") throw needsAuth();
-  const aliases = Object.entries(config.providers).filter(([, provider]) =>
-    provider.disabled !== true && isXaiHostname(provider.baseUrl));
-  if (aliases.length !== 1) throw needsAuth();
-  return { name: aliases[0]![0], kind: "legacy_alias", provider: aliases[0]![1] };
 }
 
 interface KeySlot {
@@ -122,7 +118,7 @@ export function bindMediaCredential(
 ): MediaCredentialBinding {
   const source = config.images?.authSource;
   if (source !== "api_key" && source !== "subscription_oauth") throw needsAuth();
-  const selected = configuredProvider(config, source);
+  const selected = configuredProvider(config);
   if (source === "subscription_oauth") {
     if (selected.kind !== "canonical") throw needsAuth();
     const account = stableOAuthAccount((deps.getOAuthAccountSet ?? getAccountSet)("xai"));
@@ -184,22 +180,42 @@ function findBoundOAuthAccount(
 
 function findBoundKey(config: CodexCommanderConfig, binding: MediaCredentialBinding): string {
   if (binding.authSource !== "api_key") throw needsAuth();
-  const selected = configuredProvider(config, "api_key");
-  if (selected.kind !== binding.providerKind) throw needsAuth();
-  const candidates: KeySlot[] = [];
-  const pool = currentProviderApiKeyPool(selected.provider);
-  if (pool) {
-    for (const entry of pool) candidates.push({ storedSlot: `pool:${entry.id}`, storedValue: entry.key });
+  const providerCandidates: Array<{
+    name: string;
+    kind: MediaProviderKind;
+    provider: CodexCommanderProviderConfig;
+  }> = [];
+  if (binding.providerKind === "canonical") {
+    const selected = configuredProvider(config);
+    providerCandidates.push(selected);
   } else {
-    const bare = sanitizeApiKeyValue(selected.provider.apiKey);
-    if (bare) candidates.push({ storedSlot: "legacy-bare", storedValue: bare });
+    // Upgrade compatibility only: an already-durable accepted job may finish
+    // GET/poll/download work through its exact former alias slot. New binding
+    // never enters this branch, so aliases cannot arm another paid POST.
+    for (const [name, provider] of Object.entries(config.providers)) {
+      if (name === "xai" || !isLegacyXaiMediaProvider(provider)) continue;
+      providerCandidates.push({ name, kind: "legacy_alias", provider });
+    }
   }
-  const candidate = candidates.find(item =>
-    slotRef("key", selected.kind, selected.name, item.storedSlot) === binding.slotRef);
-  if (!candidate) throw needsAuth();
-  const bearer = resolvedKey(candidate.storedValue);
-  if (digest(KEY_IDENTITY_DOMAIN, bearer) !== binding.identityDigest) throw needsAuth();
-  return bearer;
+
+  const matchingBearers: string[] = [];
+  for (const selected of providerCandidates) {
+    const candidates: KeySlot[] = [];
+    const pool = currentProviderApiKeyPool(selected.provider);
+    if (pool) {
+      for (const entry of pool) candidates.push({ storedSlot: `pool:${entry.id}`, storedValue: entry.key });
+    } else {
+      const bare = sanitizeApiKeyValue(selected.provider.apiKey);
+      if (bare) candidates.push({ storedSlot: "legacy-bare", storedValue: bare });
+    }
+    const candidate = candidates.find(item =>
+      slotRef("key", selected.kind, selected.name, item.storedSlot) === binding.slotRef);
+    if (!candidate) continue;
+    const bearer = resolvedKey(candidate.storedValue);
+    if (digest(KEY_IDENTITY_DOMAIN, bearer) === binding.identityDigest) matchingBearers.push(bearer);
+  }
+  if (matchingBearers.length !== 1) throw needsAuth();
+  return matchingBearers[0]!;
 }
 
 /** Exact-slot dynamic lease backed by the existing generation-aware OAuth subsystem and live config. */
@@ -259,29 +275,3 @@ export function createMediaCredentialLease(deps: MediaCredentialLeaseDeps = {}):
 }
 
 export const defaultMediaCredentialLease = createMediaCredentialLease();
-
-/**
- * Temporary U2 compatibility seam for the legacy bridge plans that still carry one API key.
- * The shared transport still pins the origin, owns retry classification, and cannot consult OAuth.
- * U3/U5 must remove this once every handler passes MediaCredentialBinding.
- */
-export function createStaticMediaCredentialLease(
-  binding: MediaCredentialBinding,
-  token: string,
-): MediaCredentialLease {
-  const bearer = sanitizeApiKeyValue(token);
-  if (!bearer || binding.authSource !== "api_key") throw needsAuth();
-  return {
-    async resolve(candidate) {
-      if (
-        candidate.authSource !== "api_key"
-        || candidate.slotRef !== binding.slotRef
-        || candidate.identityDigest !== binding.identityDigest
-      ) throw needsAuth();
-      return { bearer };
-    },
-    async refreshAfterRejectedOAuth() {
-      throw needsAuth();
-    },
-  };
-}

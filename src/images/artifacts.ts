@@ -7,9 +7,10 @@ import {
   openSync,
   readFileSync,
   readSync,
+  unlinkSync,
   type Stats,
 } from "node:fs";
-import { chmod, link, mkdir, open, unlink, type FileHandle } from "node:fs/promises";
+import { chmod, link, mkdir, open, readdir, unlink, type FileHandle } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
 import { getConfigDir } from "../config";
 import { assessUrlDestination, resolvePublicAddresses } from "../lib/destination-policy";
@@ -21,7 +22,7 @@ import {
   type PinnedAddress,
   type PinnedDownloadFn,
 } from "./pinned-https-get";
-import { pruneMediaArtifacts, removeMediaArtifact } from "./artifact-retention";
+import { pruneMediaArtifacts, removeMediaArtifact, unlinkMediaArtifactDurably } from "./artifact-retention";
 
 export { pinnedHttpsGet } from "./pinned-https-get";
 export type { PinnedAddress, PinnedDownloadFn } from "./pinned-https-get";
@@ -49,6 +50,7 @@ export const DEFAULT_ARTIFACT_KEEP_COUNT = 200;
 export { ARTIFACT_HTTP_PREFIX };
 
 const ARTIFACT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(png|jpe?g|webp|gif|mp4|webm)$/i;
+const PRIVATE_VIDEO_TEMP_RE = /^\.ccx-video-[A-Za-z0-9._-]{1,200}\.tmp$/;
 const ARTIFACT_STREAM_CHUNK_BYTES = 256 * 1024;
 
 const ARTIFACT_CONTENT_TYPES: Readonly<Record<string, string>> = {
@@ -165,11 +167,15 @@ function sameFileIdentity(left: Stats, right: Stats): boolean {
   return left.dev === right.dev && left.ino === right.ino;
 }
 
-function privateArtifactFile(stats: Stats): boolean {
-  if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1) return false;
+function privateArtifactFileWithLinks(stats: Stats, links: number): boolean {
+  if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== links) return false;
   if (process.platform === "win32") return true;
   const uid = process.getuid?.();
   return uid !== undefined && stats.uid === uid && (stats.mode & 0o777) === 0o600;
+}
+
+function privateArtifactFile(stats: Stats): boolean {
+  return privateArtifactFileWithLinks(stats, 1);
 }
 
 function privateArtifactDirectory(stats: Stats): boolean {
@@ -465,9 +471,16 @@ export function guessExtFromMagic(bytes: Uint8Array): string {
   return ext;
 }
 
-/** Prune `CODEXCOMMANDER_HOME/artifacts` after a full image batch has been written. */
-export function pruneArtifacts(keepCount?: number): void {
-  pruneOldArtifacts(getArtifactsDir(), keepCount ?? DEFAULT_ARTIFACT_KEEP_COUNT);
+/** Prune after a full image batch while preserving every artifact in the response being returned. */
+export function pruneArtifacts(
+  keepCount?: number,
+  protectedArtifactIds: ReadonlySet<string> = new Set(),
+): void {
+  const maxFiles = keepCount ?? DEFAULT_ARTIFACT_KEEP_COUNT;
+  const result = pruneMediaArtifacts({ dir: getArtifactsDir(), maxFiles, protectedArtifactIds });
+  if (result.blocked && maxFiles > 0) {
+    console.warn("[images] prune: artifact directory could not be read");
+  }
 }
 
 export async function materializeInlineImage(
@@ -506,6 +519,30 @@ export async function removeArtifactById(id: string): Promise<boolean> {
   const candidate = resolve(dir, id);
   if (!candidate.startsWith(dir + sep)) return false;
   return removeMediaArtifact(dir, id);
+}
+
+/**
+ * Exact deletion primitive for a capability artifact whose durable probe row already records
+ * pending deletion. It deliberately bypasses generic pin release, revalidates the private file
+ * identity immediately before unlink, and leaves journal finalization to the probe owner's CAS.
+ */
+export async function removePendingCapabilityArtifactById(id: string): Promise<boolean> {
+  if (!ARTIFACT_ID_RE.test(id)) return false;
+  const dir = resolve(getArtifactsDir());
+  const candidate = resolve(dir, id);
+  if (!candidate.startsWith(dir + sep)) return false;
+  try {
+    const observed = lstatSync(candidate);
+    if (!privateArtifactFile(observed)) return false;
+    const current = lstatSync(candidate);
+    if (!privateArtifactFile(current) || !sameFileIdentity(observed, current)) return false;
+    return unlinkMediaArtifactDurably(dir, id, {}, observed);
+  } catch (error) {
+    // A prior unlink-before-fsync attempt is completed only by durably syncing
+    // the directory while the exact name remains absent.
+    if (artifactFsErrorCode(error) === "ENOENT") return unlinkMediaArtifactDurably(dir, id);
+    return false;
+  }
 }
 
 export async function downloadImageToArtifact(
@@ -626,6 +663,10 @@ export interface VideoArtifactDownloadOptions {
   reservedArtifactId?: string;
   /** Must commit the id to durable downloading state before publication starts. */
   onReserveArtifact?: (artifactId: string) => void | Promise<void>;
+  /** Internal durability-test seam; production uses an artifact-directory fsync. */
+  syncDirectory?: (dir: string) => Promise<void>;
+  /** Internal publication-race test seam; production uses an atomic no-replace link. */
+  linkArtifact?: (tempPath: string, finalPath: string) => Promise<void>;
 }
 
 function selectVideoArtifactId(
@@ -702,6 +743,75 @@ async function validatePublishedVideo(path: string, expectedExt: string): Promis
   }
 }
 
+async function validateLinkedPublishedVideo(path: string, expectedExt: string): Promise<void> {
+  const before = lstatSync(path);
+  if (!privateArtifactFileWithLinks(before, 2)) throw new Error("reserved video artifact is unsafe");
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const stats = await handle.stat();
+    const after = lstatSync(path);
+    if (
+      !privateArtifactFileWithLinks(stats, 2)
+      || !privateArtifactFileWithLinks(after, 2)
+      || !sameFileIdentity(before, stats)
+      || !sameFileIdentity(stats, after)
+      || stats.size < 12
+      || stats.size > MAX_VIDEO_DOWNLOAD_BYTES
+    ) throw new Error("reserved video artifact is unsafe");
+    const header = Buffer.alloc(12);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (bytesRead !== header.length || guessVideoExtFromMagic(header) !== expectedExt) {
+      throw new Error("reserved video artifact has invalid media bytes");
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Complete the exact link(temp, final) crash state without accepting arbitrary hard links. */
+async function recoverLinkedVideoPublication(
+  dir: string,
+  finalPath: string,
+  expectedExt: string,
+  syncDirectory: (dir: string) => Promise<void> = syncArtifactDirectory,
+): Promise<boolean> {
+  let finalBefore: Stats;
+  try {
+    finalBefore = lstatSync(finalPath);
+  } catch {
+    return false;
+  }
+  if (!privateArtifactFileWithLinks(finalBefore, 2)) return false;
+  const matches: Array<{ path: string; stats: Stats }> = [];
+  for (const name of await readdir(dir)) {
+    if (!PRIVATE_VIDEO_TEMP_RE.test(name)) continue;
+    const path = join(dir, name);
+    try {
+      const stats = lstatSync(path);
+      if (privateArtifactFileWithLinks(stats, 2) && sameFileIdentity(finalBefore, stats)) {
+        matches.push({ path, stats });
+      }
+    } catch {
+      // A racing or missing temp cannot prove this narrow crash state.
+    }
+  }
+  if (matches.length !== 1) return false;
+  await validateLinkedPublishedVideo(finalPath, expectedExt);
+  const match = matches[0]!;
+  const finalCurrent = lstatSync(finalPath);
+  const tempCurrent = lstatSync(match.path);
+  if (
+    !privateArtifactFileWithLinks(finalCurrent, 2)
+    || !privateArtifactFileWithLinks(tempCurrent, 2)
+    || !sameFileIdentity(finalBefore, finalCurrent)
+    || !sameFileIdentity(match.stats, tempCurrent)
+    || !sameFileIdentity(finalCurrent, tempCurrent)
+  ) return false;
+  await unlink(match.path);
+  await syncDirectory(dir);
+  return true;
+}
+
 /**
  * Publish a fully written video under its opaque final id with an atomic,
  * no-replace hard link. The private temp and final share one filesystem.
@@ -711,12 +821,18 @@ async function publishVideoArtifact(
   ext: string,
   artifactId: string,
   write: (handle: FileHandle) => Promise<void>,
+  options: Pick<VideoArtifactDownloadOptions, "syncDirectory" | "linkArtifact"> = {},
 ): Promise<string> {
   if (!ARTIFACT_ID_RE.test(artifactId) || artifactExtension(artifactId) !== ext || basename(artifactId) !== artifactId) {
     throw new Error("video artifact reservation is invalid");
   }
+  const syncDirectory = options.syncDirectory ?? syncArtifactDirectory;
+  const linkArtifact = options.linkArtifact ?? link;
   const finalPath = join(dir, artifactId);
   if (existsSync(finalPath)) {
+    await recoverLinkedVideoPublication(dir, finalPath, ext, syncDirectory);
+    await validatePublishedVideo(finalPath, ext);
+    await syncDirectory(dir);
     await validatePublishedVideo(finalPath, ext);
     return finalPath;
   }
@@ -736,10 +852,17 @@ async function publishVideoArtifact(
     await validateVideoTemp(tempPath, ext);
     // link() is an atomic no-replace publication primitive. Unlike rename(), it
     // cannot overwrite a concurrently created final artifact.
-    await link(tempPath, finalPath);
+    await linkArtifact(tempPath, finalPath);
     published = true;
-    await unlink(tempPath);
-    await syncArtifactDirectory(dir);
+    try {
+      await unlink(tempPath);
+    } catch (error) {
+      // A retry/retention pass may have completed this exact nlink=2 crash
+      // state after publication. Missing temp is success; every other unlink
+      // failure still rejects and removes the final in the catch below.
+      if (artifactFsErrorCode(error) !== "ENOENT") throw error;
+    }
+    await syncDirectory(dir);
     await validatePublishedVideo(finalPath, ext);
     return finalPath;
   } catch (error) {
@@ -749,15 +872,45 @@ async function publishVideoArtifact(
     try { await unlink(tempPath); } catch { /* absent */ }
     if (published) {
       try { await unlink(finalPath); } catch { /* cleanup remains best effort */ }
-      try { await syncArtifactDirectory(dir); } catch { /* preserve original failure */ }
+      try { await syncDirectory(dir); } catch { /* preserve original failure */ }
     }
     if (artifactFsErrorCode(error) === "EEXIST") {
       // Another publisher may have completed the exact durable reservation.
+      await validatePublishedVideo(finalPath, ext);
+      await syncDirectory(dir);
       await validatePublishedVideo(finalPath, ext);
       return finalPath;
     }
     throw error;
   }
+}
+
+/**
+ * Adopt already-published bytes for one exact durable reservation without DNS,
+ * provider polling, or a signed URL. Returns null only when no final file exists;
+ * an unsafe or invalid existing file is a hard failure.
+ */
+export async function adoptReservedVideoArtifact(
+  artifactId: string,
+  options: { syncDirectory?: (dir: string) => Promise<void> } = {},
+): Promise<string | null> {
+  if (!ARTIFACT_ID_RE.test(artifactId) || basename(artifactId) !== artifactId) {
+    throw new Error("video artifact reservation is invalid");
+  }
+  const ext = artifactExtension(artifactId);
+  if (ext !== "mp4" && ext !== "webm") throw new Error("video artifact reservation is invalid");
+  const dir = await ensureArtifactsDirectory();
+  const finalPath = join(dir, artifactId);
+  if (!existsSync(finalPath)) return null;
+  const syncDirectory = options.syncDirectory ?? syncArtifactDirectory;
+  await recoverLinkedVideoPublication(dir, finalPath, ext, syncDirectory);
+  await validatePublishedVideo(finalPath, ext);
+  // Even an already-single-link final can be the visible result of an earlier
+  // unlink whose directory sync failed. Never complete the durable job until
+  // the exact reserved name is confirmed in directory metadata.
+  await syncDirectory(dir);
+  await validatePublishedVideo(finalPath, ext);
+  return finalPath;
 }
 
 /**
@@ -792,7 +945,7 @@ export async function downloadVideoToArtifact(
     const dir = await ensureArtifactsDirectory();
     return publishVideoArtifact(dir, ext, artifactId, async handle => {
       await handle.writeFile(buf);
-    });
+    }, options);
   }
 
   // SSRF protection: same validation as downloadImageToArtifact
@@ -859,7 +1012,7 @@ export async function downloadVideoToArtifact(
         }
         await handle.write(value);
       }
-    });
+    }, options);
     try { await reader.cancel(); } catch { /* ignore */ }
     reader.releaseLock();
     return published;

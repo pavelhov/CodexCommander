@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isImageGenName, extractHostedImageGeneration, buildImageTool } from "../../src/images/synthetic-tool";
+import { isImageGenName, extractHostedImageGeneration, buildImageTool, buildVideoTool } from "../../src/images/synthetic-tool";
 
 describe("isImageGenName", () => {
   test("'image_gen' → true", () => {
@@ -82,5 +82,13 @@ describe("buildImageTool", () => {
     const tool = buildImageTool();
     expect(tool.name).toBe("image_gen");
     expect(tool.imageGeneration).toBe(true);
+  });
+
+  test("media descriptions promise only authenticated relative artifact references", () => {
+    for (const tool of [buildImageTool(), buildVideoTool()]) {
+      expect(tool.description).toContain("authenticated proxy-relative artifact reference");
+      expect(tool.description).not.toContain("filesystem path");
+      expect(tool.description).not.toContain("file:");
+    }
   });
 });

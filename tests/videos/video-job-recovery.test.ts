@@ -49,6 +49,19 @@ async function settleBackground(runtime: MediaRuntime, id: string): Promise<void
 }
 
 describe("durable video recovery", () => {
+  test("idle shutdown releases the journal owner before returning its resolved flight", async () => {
+    const f = await fixture("ccx-video-idle-shutdown-");
+    const runtime = new MediaRuntime(
+      openVideoJobStore({ path: f.path, now: () => 1_000 }),
+      { now: () => 1_000 },
+    );
+
+    const shutdown = runtime.shutdown();
+    const reopened = openVideoJobStore({ path: f.path, now: () => 1_001 });
+    reopened.close();
+    await shutdown;
+  });
+
   test("repeated restart preserves one POST and the original absolute deadline", async () => {
     const f = await fixture();
     const submit = mock(async () => ({ requestId: "accepted-private-id" }));

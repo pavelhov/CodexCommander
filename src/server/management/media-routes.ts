@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { basename, join } from "node:path";
 
 import { loadConfig, mutatePersistedConfig } from "../../config";
@@ -34,6 +34,7 @@ import {
 import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
+import { isPlainRecord } from "./shared";
 
 const MAX_PAGE_SIZE = 100;
 const DEFAULT_PAGE_SIZE = 25;
@@ -135,10 +136,6 @@ export interface PublicMediaProbeStatus {
   createdAt: number;
   updatedAt: number;
   steps: Record<CapabilityProbeStepKind, PublicMediaProbeStep>;
-}
-
-function exactObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function mediaRevision(config: CodexCommanderConfig): number {
@@ -336,14 +333,26 @@ function freshConfig(ctx: ManagementContext): CodexCommanderConfig {
   return loadConfig();
 }
 
-function strictPatch(value: unknown): {
+type SettingsPatchBody = {
   expectedRevision: number;
   imagesEnabled?: boolean;
   videosEnabled?: boolean;
   authSource?: MediaAuthSource;
-} | null {
-  if (!exactObject(value)) return null;
-  const allowed = new Set(["expectedRevision", "imagesEnabled", "videosEnabled", "authSource"]);
+  action?: "settings";
+  target?: "settings";
+  id?: "media-settings";
+  confirmation?: true;
+  caller?: "interactive_cli";
+  nonce?: string;
+  issuedAt?: number;
+};
+
+function strictPatch(value: unknown): SettingsPatchBody | null {
+  if (!isPlainRecord(value)) return null;
+  const allowed = new Set([
+    "expectedRevision", "imagesEnabled", "videosEnabled", "authSource",
+    "action", "target", "id", "confirmation", "caller", "nonce", "issuedAt",
+  ]);
   const keys = Object.keys(value);
   if (keys.some(key => !allowed.has(key)) || keys.length < 2) return null;
   if (!Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0) return null;
@@ -351,7 +360,20 @@ function strictPatch(value: unknown): {
   if (value.videosEnabled !== undefined && typeof value.videosEnabled !== "boolean") return null;
   if (value.authSource !== undefined && value.authSource !== "subscription_oauth" && value.authSource !== "api_key") return null;
   if (value.imagesEnabled === undefined && value.videosEnabled === undefined && value.authSource === undefined) return null;
-  return value as ReturnType<typeof strictPatch> & {};
+  const attestationFields = ["action", "target", "id", "confirmation", "caller", "nonce", "issuedAt"];
+  const hasAttestation = attestationFields.some(key => value[key] !== undefined);
+  if (hasAttestation && (
+    value.action !== "settings"
+    || value.target !== "settings"
+    || value.id !== "media-settings"
+    || value.confirmation !== true
+    || value.caller !== "interactive_cli"
+    || typeof value.nonce !== "string"
+    || !MEDIA_ACTION_NONCE.test(value.nonce)
+    || !Number.isSafeInteger(value.issuedAt)
+    || (value.issuedAt as number) <= 0
+  )) return null;
+  return value as SettingsPatchBody;
 }
 
 function mirrorMediaSettings(target: CodexCommanderConfig, source: CodexCommanderConfig): void {
@@ -361,6 +383,21 @@ function mirrorMediaSettings(target: CodexCommanderConfig, source: CodexCommande
 async function patchSettings(ctx: ManagementContext, body: unknown): Promise<Response> {
   const patch = strictPatch(body);
   if (!patch) return error(ctx, 400, "invalid_media_patch");
+  const runtime = ctx.deps.mediaManagement;
+  if (ctx.principal !== "confirmed-gui-session") {
+    const attested = patch.action === "settings"
+      && patch.target === "settings"
+      && patch.id === "media-settings"
+      && patch.confirmation === true
+      && patch.caller === "interactive_cli"
+      && typeof patch.nonce === "string"
+      && ctx.principal === "admin-token"
+      && runtime?.authorizeInteractiveCliAction?.(
+        patch as MediaActionAttestationInput,
+        ctx.req.headers.get(MEDIA_ACTION_ATTESTATION_HEADER),
+      ) === true;
+    if (!attested) return error(ctx, 403, "media_settings_attestation_required");
+  }
   type MutationValue = { kind: "stale" | "applied" | "source_required"; config: CodexCommanderConfig };
   const apply = (current: CodexCommanderConfig): { changed: boolean; value: MutationValue } => {
     if (mediaRevision(current) !== patch.expectedRevision) {
@@ -411,7 +448,7 @@ type ActionBody = {
 };
 
 function strictAction(value: unknown): ActionBody | null {
-  if (!exactObject(value)) return null;
+  if (!isPlainRecord(value)) return null;
   const allowed = new Set(["action", "id", "expectedRevision", "confirmation", "caller", "target", "step", "nonce", "issuedAt"]);
   if (Object.keys(value).some(key => !allowed.has(key))) return null;
   if (typeof value.action !== "string" || !MEDIA_ACTIONS.has(value.action)) return null;
@@ -452,12 +489,101 @@ async function defaultLaunchArtifact(artifactId: string, reveal: boolean): Promi
   const validated = await createArtifactResponse(artifactId, "HEAD", null);
   if (!validated || validated.status !== 200) return false;
   const path = join(getArtifactsDir(), artifactId);
-  const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer.exe" : "xdg-open";
-  const args = process.platform === "darwin" && reveal ? ["-R", path] : [path];
+  return spawnMediaArtifactOpener(path, reveal);
+}
+
+interface MediaArtifactOpenerChild {
+  once: ChildProcess["once"];
+  kill(): unknown;
+  unref(): unknown;
+}
+
+const LINUX_ARTIFACT_OPENER_PATH = "/usr/bin:/bin";
+const LINUX_ARTIFACT_OPENER_ENV = [
+  "DBUS_SESSION_BUS_ADDRESS",
+  "DESKTOP_SESSION",
+  "DISPLAY",
+  "GNOME_DESKTOP_SESSION_ID",
+  "HOME",
+  "KDE_FULL_SESSION",
+  "KDE_SESSION_VERSION",
+  "WAYLAND_DISPLAY",
+  "XAUTHORITY",
+  "XDG_CONFIG_HOME",
+  "XDG_CURRENT_DESKTOP",
+  "XDG_DATA_DIRS",
+  "XDG_DATA_HOME",
+  "XDG_RUNTIME_DIR",
+  "XDG_SESSION_DESKTOP",
+  "XDG_SESSION_TYPE",
+] as const;
+
+function linuxArtifactOpenerEnv(source: Readonly<NodeJS.ProcessEnv>): Record<string, string> {
+  const env: Record<string, string> = { PATH: LINUX_ARTIFACT_OPENER_PATH };
+  for (const key of LINUX_ARTIFACT_OPENER_ENV) {
+    const value = source[key];
+    // Environment variables cannot contain NUL. Bound inherited values as an
+    // additional fail-closed guard before handing them to the fixed helper.
+    if (typeof value === "string" && value.length <= 4_096 && !value.includes("\0")) env[key] = value;
+  }
+  return env;
+}
+
+export interface MediaArtifactOpenerDeps {
+  platform?: NodeJS.Platform;
+  sourceEnv?: Readonly<NodeJS.ProcessEnv>;
+  spawnImpl?: (
+    command: string,
+    args: string[],
+    options: { shell: false; detached: true; stdio: "ignore"; env: Record<string, string> },
+  ) => MediaArtifactOpenerChild;
+  timeoutMs?: number;
+}
+
+/** Launch only a server-derived path through a fixed OS executable with no inherited secrets. */
+export async function spawnMediaArtifactOpener(
+  path: string,
+  reveal: boolean,
+  deps: MediaArtifactOpenerDeps = {},
+): Promise<boolean> {
+  const platform = deps.platform ?? process.platform;
+  const command = platform === "darwin"
+    ? "/usr/bin/open"
+    : platform === "win32"
+      ? "C:\\Windows\\explorer.exe"
+      : "/usr/bin/xdg-open";
+  const args = platform === "darwin" && reveal ? ["-R", path] : [path];
+  const env: Record<string, string> = platform === "linux"
+    ? linuxArtifactOpenerEnv(deps.sourceEnv ?? process.env)
+    : platform === "win32"
+      ? { SystemRoot: "C:\\Windows", WINDIR: "C:\\Windows" }
+      : {};
+  const spawnImpl = deps.spawnImpl ?? ((executable, commandArgs, options) =>
+    spawn(executable, commandArgs, options));
+  const timeoutMs = Math.max(1, Math.min(deps.timeoutMs ?? 10_000, 60_000));
   return await new Promise(resolve => {
-    const child = spawn(command, args, { shell: false, detached: true, stdio: "ignore" });
-    child.once("error", () => resolve(false));
-    child.once("spawn", () => { child.unref(); resolve(true); });
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (success: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(success);
+    };
+    let child: MediaArtifactOpenerChild;
+    try {
+      child = spawnImpl(command, args, { shell: false, detached: true, stdio: "ignore", env });
+    } catch {
+      finish(false);
+      return;
+    }
+    child.once("error", () => finish(false));
+    child.once("exit", code => finish(code === 0));
+    timer = setTimeout(() => {
+      try { child.kill(); } catch { /* best-effort termination of a stuck fixed helper */ }
+      try { child.unref(); } catch { /* do not let an uncooperative helper hold shutdown open */ }
+      finish(false);
+    }, timeoutMs);
   });
 }
 

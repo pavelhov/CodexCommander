@@ -4,7 +4,7 @@
  * instead of the /v1/* JSON-404 guard.
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { clearAccountNeedsReauth, clearAccountQuota } from "../src/codex/auth-api";
@@ -18,6 +18,8 @@ import { ANTIGRAVITY_REQUEST_UA } from "../src/adapters/google-antigravity-wire"
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+import { getArtifactsDir } from "../src/images/artifacts";
+import { registerArtifactPinAuthority } from "../src/images/artifact-retention";
 
 const previousApiToken = process.env.CODEXCOMMANDER_API_AUTH_TOKEN;
 const previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
@@ -149,6 +151,31 @@ function grokImagesConfig(apiKey = "xai-bound-key"): CodexCommanderConfig {
   } as CodexCommanderConfig;
 }
 
+const GROK_TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==";
+
+/** Faithful OpenAI SDK default: retry 408/409/429/5xx unless x-should-retry says false. */
+async function fetchGrokImageLikeCodex(serverUrl: URL, prompt: string): Promise<{ response: Response; attempts: number }> {
+  let response!: Response;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    response = await originalFetch(new URL("/v1/images/generations", serverUrl), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt }),
+    });
+    const explicit = response.headers.get("x-should-retry")?.toLowerCase();
+    const retryable = explicit === "true"
+      || (explicit !== "false" && (
+        response.status === 408
+        || response.status === 409
+        || response.status === 429
+        || response.status >= 500
+      ));
+    if (!retryable) return { response, attempts: attempt };
+    if (attempt < 3) await response.body?.cancel();
+  }
+  return { response, attempts: 3 };
+}
+
 test("Grok opt-in routes direct generations through the bound fixed-origin transport and normalizes output", async () => {
   const sent: Array<{ url: string; headers: Headers; body: Record<string, unknown> }> = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -162,7 +189,7 @@ test("Grok opt-in routes direct generations through the bound fixed-origin trans
       return Response.json({
         created: 111,
         provider: "must-not-leak",
-        data: [{ b64_json: "aW1hZ2U=" }],
+        data: [{ b64_json: GROK_TINY_PNG }],
       });
     }
     return originalFetch(input, init);
@@ -186,7 +213,7 @@ test("Grok opt-in routes direct generations through the bound fixed-origin trans
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       created: expect.any(Number),
-      data: [{ b64_json: "aW1hZ2U=" }],
+      data: [{ b64_json: GROK_TINY_PNG }],
     });
     expect(sent).toHaveLength(1);
     expect(sent[0]!.url).toBe("https://api.x.ai/v1/images/generations");
@@ -200,6 +227,233 @@ test("Grok opt-in routes direct generations through the bound fixed-origin trans
     });
     expect(JSON.stringify(sent[0]!.body)).not.toContain("caller.invalid");
     expect(JSON.stringify(sent[0]!.body)).not.toContain("caller-provider-must-not-win");
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("Grok direct URL results satisfy codex-rs's self-contained b64_json contract", async () => {
+  const providerResultUrl = "data:image/png;base64,iVBORw0KGgo=";
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (input.toString() === "https://api.x.ai/v1/images/generations") {
+      return Response.json({
+        data: [{ url: providerResultUrl }],
+      });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig(grokImagesConfig());
+
+  const server = startServer(0);
+  try {
+    const response = await originalFetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "local-only result" }),
+    });
+    expect(response.status).toBe(200);
+    const payload = await response.json() as { data: Array<{ b64_json?: string; url?: string }> };
+    expect(payload.data).toHaveLength(1);
+    expect(Object.keys(payload.data[0]!).sort()).toEqual(["b64_json"]);
+    expect(Buffer.from(payload.data[0]!.b64_json!, "base64")).toEqual(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
+    expect(JSON.stringify(payload)).not.toContain(providerResultUrl);
+    expect(JSON.stringify(payload)).not.toContain("data:image");
+    expect(JSON.stringify(payload)).not.toContain("/v1/codexcommander/artifacts/");
+    expect(payload.data[0]!.url).toBeUndefined();
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("Grok direct URL batches survive low-cap retention until every returned artifact is deliverable", async () => {
+  const providerResultUrl = "data:image/png;base64,iVBORw0KGgo=";
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (input.toString() === "https://api.x.ai/v1/images/generations") {
+      return Response.json({ data: [{ url: providerResultUrl }, { url: providerResultUrl }] });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  const cfg = grokImagesConfig();
+  cfg.images!.artifactsKeepCount = 1;
+  saveConfig(cfg);
+
+  const server = startServer(0);
+  try {
+    const response = await originalFetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "two locally retained results", n: 2 }),
+    });
+    expect(response.status).toBe(200);
+    const payload = await response.json() as { data: Array<{ b64_json?: string; url?: string }> };
+    expect(payload.data).toHaveLength(2);
+    for (const item of payload.data) {
+      expect(item.url).toBeUndefined();
+      expect(Buffer.from(item.b64_json!, "base64")).toEqual(
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      );
+    }
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("Grok direct URL response artifacts survive when older durable pins consume the cap", async () => {
+  const artifacts = getArtifactsDir();
+  mkdirSync(artifacts, { recursive: true, mode: 0o700 });
+  const pinnedId = "vid-existing-probe-pin.mp4";
+  writeFileSync(join(artifacts, pinnedId), "durable-pin", { mode: 0o600 });
+  const unregister = registerArtifactPinAuthority({
+    protectedArtifactIds: () => new Set([pinnedId]),
+  });
+  const providerResultUrl = "data:image/png;base64,iVBORw0KGgo=";
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (input.toString() === "https://api.x.ai/v1/images/generations") {
+      return Response.json({ data: [{ url: providerResultUrl }] });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  const cfg = grokImagesConfig();
+  cfg.images!.artifactsKeepCount = 1;
+  saveConfig(cfg);
+
+  const server = startServer(0);
+  try {
+    const response = await originalFetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "retain under pin pressure" }),
+    });
+    expect(response.status).toBe(200);
+    const payload = await response.json() as { data: Array<{ b64_json?: string; url?: string }> };
+    expect(payload.data[0]!.url).toBeUndefined();
+    expect(payload.data[0]!.b64_json).toBe("iVBORw0KGgo=");
+    expect(existsSync(join(artifacts, pinnedId))).toBe(true);
+  } finally {
+    unregister();
+    await server.stop(true);
+  }
+});
+
+test("Grok direct URL download failures do not reflect signed provider URLs", async () => {
+  const signedProviderUrl = "https://127.0.0.1/private.png?token=must-not-leak";
+  let xaiCalls = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (input.toString() === "https://api.x.ai/v1/images/generations") {
+      xaiCalls += 1;
+      return Response.json({ data: [{ url: signedProviderUrl }] });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig(grokImagesConfig());
+
+  const server = startServer(0);
+  try {
+    const { response, attempts } = await fetchGrokImageLikeCodex(server.url, "reject unsafe result URL");
+    expect(response.status).toBe(409);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(attempts).toBe(1);
+    expect(xaiCalls).toBe(1);
+    const text = await response.text();
+    expect(JSON.parse(text)).toEqual({
+      error: {
+        message: "Grok image artifact is unavailable after provider completion.",
+        type: "invalid_request_error",
+        code: "artifact_unavailable",
+      },
+    });
+    expect(text).not.toContain(signedProviderUrl);
+    expect(text).not.toContain("must-not-leak");
+    expect(text).not.toContain("127.0.0.1");
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("Grok invalid inline bytes are non-retryable after exactly one paid provider POST", async () => {
+  let xaiCalls = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (input.toString() === "https://api.x.ai/v1/images/generations") {
+      xaiCalls += 1;
+      return Response.json({ data: [{ b64_json: "bm90LWFuLWltYWdl" }] });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig(grokImagesConfig());
+
+  const server = startServer(0);
+  try {
+    const { response, attempts } = await fetchGrokImageLikeCodex(server.url, "invalid inline result");
+    expect(response.status).toBe(409);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(attempts).toBe(1);
+    expect(xaiCalls).toBe(1);
+    expect(await response.json()).toEqual({
+      error: {
+        message: "Grok image artifact is unavailable after provider completion.",
+        type: "invalid_request_error",
+        code: "artifact_unavailable",
+      },
+    });
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("Grok mixed valid-URL and invalid-inline batches stay non-retryable without leaking the artifact cap", async () => {
+  const providerResultUrl = "data:image/png;base64,iVBORw0KGgo=";
+  let xaiCalls = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (input.toString() === "https://api.x.ai/v1/images/generations") {
+      xaiCalls += 1;
+      return Response.json({
+        data: [{ url: providerResultUrl }, { b64_json: "bm90LWFuLWltYWdl" }],
+      });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  const cfg = grokImagesConfig();
+  cfg.images!.artifactsKeepCount = 1;
+  saveConfig(cfg);
+
+  const server = startServer(0);
+  try {
+    for (const prompt of ["mixed result one", "mixed result two"]) {
+      const { response, attempts } = await fetchGrokImageLikeCodex(server.url, prompt);
+      expect(response.status).toBe(409);
+      expect(response.headers.get("x-should-retry")).toBe("false");
+      expect(attempts).toBe(1);
+      expect(await response.json()).toMatchObject({ error: { code: "artifact_unavailable" } });
+      const retained = readdirSync(getArtifactsDir()).filter(name => /\.(?:png|jpe?g|webp|gif|mp4|webm)$/i.test(name));
+      expect(retained.length).toBeLessThanOrEqual(1);
+    }
+    expect(xaiCalls).toBe(2);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("Grok ambiguous submissions carry the SDK no-retry override after one provider POST", async () => {
+  let xaiCalls = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (input.toString() === "https://api.x.ai/v1/images/generations") {
+      xaiCalls += 1;
+      throw new TypeError("simulated connection loss after dispatch began");
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig(grokImagesConfig());
+
+  const server = startServer(0);
+  try {
+    const { response, attempts } = await fetchGrokImageLikeCodex(server.url, "ambiguous paid request");
+    expect(response.status).toBe(409);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(attempts).toBe(1);
+    expect(xaiCalls).toBe(1);
+    expect(await response.json()).toMatchObject({ error: { code: "submission_outcome_unknown" } });
   } finally {
     await server.stop(true);
   }

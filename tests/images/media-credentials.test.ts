@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import type { CodexCommanderConfig } from "../../src/types";
 import type { ProviderAccountSet } from "../../src/oauth/types";
 import {
   bindMediaCredential,
   createMediaCredentialLease,
 } from "../../src/images/media-credentials";
+import { planImageBridge } from "../../src/images/plan";
 import { MediaTransportError } from "../../src/images/media-errors";
 
 function config(provider: CodexCommanderConfig["providers"][string]): CodexCommanderConfig {
@@ -43,6 +45,26 @@ function oauthAccounts(activeAccountId = "slot-a"): ProviderAccountSet {
       },
     ],
   };
+}
+
+function legacyApiKeyBinding(providerName: string, poolId: string, key: string) {
+  const slotRef = `media-slot:${createHash("sha256")
+    .update("ccx-xai-media-slot-v1")
+    .update("\0")
+    .update("key")
+    .update("\0")
+    .update("legacy_alias")
+    .update("\0")
+    .update(providerName)
+    .update("\0")
+    .update(`pool:${poolId}`)
+    .digest("hex")}`;
+  const identityDigest = `sha256:${createHash("sha256")
+    .update("ccx-xai-media-api-key-v1")
+    .update("\0")
+    .update(key)
+    .digest("hex")}`;
+  return { authSource: "api_key", providerKind: "legacy_alias", slotRef, identityDigest } as const;
 }
 
 describe("media credential binding", () => {
@@ -156,8 +178,8 @@ describe("media credential binding", () => {
     }
   });
 
-  test("only one unambiguous legacy xAI API-key alias may bind", () => {
-    const legacy: CodexCommanderConfig = {
+  test("a managed key on a legacy xAI alias cannot bind or arm paid media", async () => {
+    const aliasOnly: CodexCommanderConfig = {
       port: 0,
       hostname: "127.0.0.1",
       defaultProvider: "legacy-media",
@@ -165,21 +187,56 @@ describe("media credential binding", () => {
         "legacy-media": {
           adapter: "openai-chat",
           baseUrl: "https://api.x.ai/custom/path",
-          apiKey: "legacy-key-material",
+          apiKey: "alias-managed-key",
+          apiKeyPool: [{ id: "alias-managed-slot", key: "alias-managed-key" }],
         },
       },
       images: { bridgeEnabled: true, authSource: "api_key" },
     } as CodexCommanderConfig;
-    const binding = bindMediaCredential(legacy);
-    expect(binding.providerKind).toBe("legacy_alias");
-    expect(JSON.stringify(binding)).not.toContain("legacy-media");
-    expect(JSON.stringify(binding)).not.toContain("legacy-key-material");
+    expect(() => bindMediaCredential(aliasOnly)).toThrow(MediaTransportError);
+    const parsed = {
+      context: { messages: [], tools: [] },
+      stream: true,
+      options: {},
+      _imageGeneration: { toolNames: new Set(["image_gen"]) },
+    } as never;
+    expect(await planImageBridge(aliasOnly, parsed, aliasOnly.providers["legacy-media"]!)).toBeUndefined();
 
-    legacy.providers.second = {
-      adapter: "openai-chat",
-      baseUrl: "https://cli-chat-proxy.grok.com/v1",
-      apiKey: "second-key-material",
-    };
-    expect(() => bindMediaCredential(legacy)).toThrow(MediaTransportError);
+    const canonical = structuredClone(aliasOnly);
+    canonical.providers.xai = canonical.providers["legacy-media"]!;
+    delete canonical.providers["legacy-media"];
+    const binding = bindMediaCredential(canonical);
+    expect(binding).toMatchObject({ authSource: "api_key", providerKind: "canonical" });
+    expect(JSON.stringify(binding)).not.toContain("alias-managed-key");
+    expect(await planImageBridge(canonical, parsed, canonical.providers.xai!)).toMatchObject({
+      auth: { authSource: "api_key", providerKind: "canonical" },
+    });
+  });
+
+  test("an already-durable legacy alias binding may resolve only its exact prior key slot", async () => {
+    const key = "accepted-legacy-media-key";
+    const cfg: CodexCommanderConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "legacy-media",
+      providers: {
+        "legacy-media": {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          apiKey: key,
+          apiKeyPool: [{ id: "accepted-slot", key }],
+        },
+      },
+      images: { bridgeEnabled: true, videoBridgeEnabled: true, authSource: "api_key" },
+    } as CodexCommanderConfig;
+    const binding = legacyApiKeyBinding("legacy-media", "accepted-slot", key);
+    const lease = createMediaCredentialLease({ loadConfig: () => cfg });
+
+    await expect(lease.resolve(binding)).resolves.toEqual({ bearer: key });
+    expect(() => bindMediaCredential(cfg)).toThrow(MediaTransportError);
+
+    cfg.providers["legacy-media"]!.apiKeyPool![0]!.key = "rotated";
+    cfg.providers["legacy-media"]!.apiKey = "rotated";
+    await expect(lease.resolve(binding)).rejects.toMatchObject({ code: "needs_auth" });
   });
 });

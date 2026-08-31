@@ -134,12 +134,23 @@ normal turns and requests with missing, malformed, or unrecognized metadata are 
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `provider?` | `string` | automatic OpenAI selection | Explicit custom API-key `openai-responses` provider for `/v1/images/generations` and `/v1/images/edits`. Registry-managed ids are rejected. |
+| `provider?` | `string` | automatic OpenAI selection | Explicit custom API-key `openai-responses` provider when the Grok image bridge is off. |
 | `timeoutMs?` | `number` | `300000` | Whole-request timeout for one standalone Images request. |
+| `bridgeEnabled?` | `boolean` | `false` | Opt into Grok Images. When false, native/OpenAI image selection remains the default. |
+| `videoBridgeEnabled?` | `boolean` | `false` | Independently opt into Grok text-to-video. It does not enable Grok Images. |
+| `authSource?` | `"subscription_oauth" \| "api_key"` | required when either Grok switch is on | The single media credential source. There is no source fallback and it does not change xAI chat auth. |
+| `bridgeModel?` | `string` | `grok-imagine-image-2.0` | Grok image model override; the stable model is the default. |
+| `maxRounds?` | `integer` | `3` | Image auxiliary-loop allowance, 0–10. |
+| `videoMaxRounds?` | `integer` | `2` | Video auxiliary-loop allowance, 0–10; independent of image and web budgets. |
+| `videoTimeoutMs?` | `integer` | `300000` | Per-video lifecycle timeout, including submit and polling. |
+| `videoBridgeModel?` | `string` | compatibility only | Retained for old configurations; video v1 always uses `grok-imagine-video-1.5`. |
+| `artifactsKeepCount?` | `integer` | `200` | Maximum retained local image/video artifacts; zero disables count-based pruning. |
 
-Explicit selection fails closed when the provider is missing, disabled, incompatible, or lacks a
-usable key; it never falls back to another paid upstream. The endpoint must implement the OpenAI
-Images API paths and response shape expected by Codex.
+With Grok Images on, both hosted Responses `image_generation` and direct
+`/v1/images/generations` use the selected source. `/v1/images/edits` is unsupported by the Grok
+bridge in v1. With Grok Images off, explicit provider selection still fails closed when the provider
+is missing, disabled, incompatible, or lacks a usable key; it never falls back to another paid
+upstream. See [Image Bridge](/guides/image-bridge/) and [Video Bridge](/guides/video-bridge/).
 
 ### `webSearchSidecar` (`CodexCommanderWebSearchSidecarConfig`)
 

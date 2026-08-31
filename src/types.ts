@@ -930,7 +930,7 @@ export interface CodexCommanderImagesConfig {
   artifactsKeepCount?: number;
   /** Master switch for the video bridge. Default false — must be explicitly opted in. */
   videoBridgeEnabled?: boolean;
-  /** Model for xAI video generation. Default "grok-imagine-video". */
+  /** Legacy video-model override retained for config compatibility; video v1 uses grok-imagine-video-1.5. */
   videoBridgeModel?: string;
   /** Max video-gen rounds before forced-final. Default 2 (video is slower than image). */
   videoMaxRounds?: number;

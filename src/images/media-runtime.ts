@@ -1,7 +1,20 @@
 import { basename } from "node:path";
+import { existsSync } from "node:fs";
 
-import { downloadVideoToArtifact, type VideoArtifactDownloadOptions } from "./artifacts";
-import { isMediaTransportError, mediaError, type MediaTransportError } from "./media-errors";
+import {
+  adoptReservedVideoArtifact,
+  DEFAULT_ARTIFACT_KEEP_COUNT,
+  downloadVideoToArtifact,
+  getArtifactsDir,
+  type VideoArtifactDownloadOptions,
+} from "./artifacts";
+import { pruneMediaArtifacts } from "./artifact-retention";
+import {
+  isMediaTransportError,
+  mediaError,
+  safeMediaFailure,
+  type MediaTransportError,
+} from "./media-errors";
 import type { MediaCredentialBinding } from "./types";
 import {
   pollVideoJob as pollXaiVideoJob,
@@ -13,8 +26,9 @@ import {
 import {
   VIDEO_ADMISSION_HOLDING_STATES,
   type ArtifactPinReleaseResult,
+  type ArtifactPinPreflightResult,
+  type ArtifactPinFinalizeResult,
   type PublicVideoJob,
-  type SafeMediaFailure,
   type VideoJobRecord,
   type VideoJobStore,
   type VideoJobUpdate,
@@ -49,6 +63,8 @@ export interface MediaRuntimeDeps {
   ) => Promise<string>;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   pollIntervalMs?: number;
+  /** Shared image/video artifact cap. Defaults to the canonical retention limit. */
+  artifactsKeepCount?: number;
   /** Test-only hard-crash seam. A thrown error deliberately leaves the last durable state untouched. */
   crashSeam?: (seam: MediaRuntimeCrashSeam, job: PublicVideoJob) => void;
 }
@@ -82,6 +98,8 @@ export interface ModelVideoRuntime {
     afterRevision: number,
     options?: { signal?: AbortSignal; timeoutMs?: number },
   ): Promise<WaitForVideoUpdateResult>;
+  /** Hold the runtime's own completed-job pin until one consumer finishes replay/delivery. */
+  acquireArtifactDeliveryLease?(artifactId: string): () => void;
 }
 
 export interface ServerMediaRuntime extends ModelVideoRuntime {
@@ -91,7 +109,15 @@ export interface ServerMediaRuntime extends ModelVideoRuntime {
   shutdown(): Promise<void>;
   /** Optional durable artifact pins consumed by the shared retention coordinator. */
   protectedArtifactIds?(): ReadonlySet<string>;
+  /** Exact durable video reservations eligible for publication crash recovery. */
+  recoverablePublicationArtifactIds?(): ReadonlySet<string>;
+  /** Non-mutating retention release preflight. */
+  canReleaseArtifactForPrune?(artifactId: string): ArtifactPinPreflightResult;
   releaseArtifactForPrune?(artifactId: string): ArtifactPinReleaseResult;
+  pendingArtifactDeletionIds?(): ReadonlySet<string>;
+  finalizeArtifactPrune?(artifactId: string): ArtifactPinFinalizeResult;
+  /** Serialized runtime-owned retention pass, safe before global pin registration. */
+  runArtifactRetention?(): Promise<void>;
 }
 
 function requireUpdated(update: VideoJobUpdate): VideoJobRecord {
@@ -101,19 +127,6 @@ function requireUpdated(update: VideoJobUpdate): VideoJobRecord {
     throw error;
   }
   return update.job;
-}
-
-function safeFailure(error: MediaTransportError): SafeMediaFailure {
-  switch (error.code) {
-    case "needs_auth": return "needs_auth";
-    case "entitlement_denied": return "entitlement_denied";
-    case "rate_limited": return "rate_limited";
-    case "policy_rejected": return "policy_rejected";
-    case "ambiguous_submission": return "ambiguous_submission";
-    case "cancelled": return "cancelled";
-    case "timeout": return "timeout";
-    default: return "upstream_failed";
-  }
 }
 
 function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
@@ -155,6 +168,7 @@ export class MediaRuntime implements ServerMediaRuntime {
   readonly #download: NonNullable<MediaRuntimeDeps["downloadVideo"]>;
   readonly #sleep: NonNullable<MediaRuntimeDeps["sleep"]>;
   readonly #pollIntervalMs: number;
+  readonly #artifactsKeepCount: number;
   readonly #crashSeam?: MediaRuntimeDeps["crashSeam"];
   readonly #submissionControllers = new Map<string, AbortController>();
   readonly #submissionFlights = new Map<string, Promise<unknown>>();
@@ -162,10 +176,13 @@ export class MediaRuntime implements ServerMediaRuntime {
   readonly #runnerFlights = new Map<string, Promise<void>>();
   readonly #retryDelays = new Map<string, number>();
   readonly #waiters = new Map<string, Set<UpdateWaiter>>();
+  readonly #pendingDeliveryArtifactIds = new Set<string>();
+  readonly #artifactDeliveryLeaseCounts = new Map<string, number>();
   #prepared: ReturnType<VideoJobStore["recoverStartup"]> | undefined;
   #accepting = true;
   #closed = false;
   #shutdownFlight: Promise<void> | undefined;
+  #retentionTail: Promise<void> | undefined;
 
   constructor(store: VideoJobStore, deps: MediaRuntimeDeps = {}) {
     this.#store = store;
@@ -178,6 +195,10 @@ export class MediaRuntime implements ServerMediaRuntime {
     this.#pollIntervalMs = typeof deps.pollIntervalMs === "number" && Number.isFinite(deps.pollIntervalMs)
       ? Math.max(1, Math.floor(deps.pollIntervalMs))
       : 5_000;
+    this.#artifactsKeepCount = typeof deps.artifactsKeepCount === "number"
+      && Number.isSafeInteger(deps.artifactsKeepCount)
+      ? deps.artifactsKeepCount
+      : DEFAULT_ARTIFACT_KEEP_COUNT;
     this.#crashSeam = deps.crashSeam;
   }
 
@@ -263,7 +284,7 @@ export class MediaRuntime implements ServerMediaRuntime {
         expectedRevision: job.revision,
         from: ["submitting"],
         to: error.code === "cancelled" ? "cancelled" : "failed",
-        safeError: safeFailure(error),
+        safeError: safeMediaFailure(error),
       });
       throw error;
     } finally {
@@ -289,6 +310,44 @@ export class MediaRuntime implements ServerMediaRuntime {
       return this.#store.publicVideoJob(id);
     }
     if (terminal(job.state)) return this.#store.publicVideoJob(id);
+    if (job.artifactId && (job.state === "downloading" || job.state === "download_failed")) {
+      try {
+        const adopted = await adoptReservedVideoArtifact(job.artifactId);
+        if (adopted) {
+          if (job.state === "download_failed") {
+            job = this.#transition({
+              id: job.id,
+              expectedRevision: job.revision,
+              from: ["download_failed"],
+              to: "downloading",
+              artifactId: job.artifactId,
+              safeError: null,
+            });
+          }
+          return this.#finishCompletedVideo(job);
+        }
+      } catch {
+        if (job.state === "downloading") {
+          job = this.#transition({
+            id: job.id,
+            expectedRevision: job.revision,
+            from: ["downloading"],
+            to: "download_failed",
+            safeError: "download_rejected",
+          });
+        }
+        if (this.#now() >= job.deadlineAt) {
+          job = this.#transition({
+            id: job.id,
+            expectedRevision: job.revision,
+            from: ["download_failed"],
+            to: "expired",
+            safeError: "timeout",
+          });
+        }
+        return this.#public(job);
+      }
+    }
     if (this.#now() >= job.deadlineAt) {
       job = this.#transition({
         id: job.id,
@@ -336,7 +395,7 @@ export class MediaRuntime implements ServerMediaRuntime {
             expectedRevision: job.revision,
             from: ["polling"],
             to: "failed",
-            safeError: safeFailure(error),
+            safeError: safeMediaFailure(error),
           });
         }
         return this.#public(job);
@@ -424,17 +483,109 @@ export class MediaRuntime implements ServerMediaRuntime {
       return this.#public(job);
     }
     this.#crashSeam?.("after_artifact_published", this.#public(job));
+    return this.#finishCompletedVideo(job);
+  }
+
+  async #finishCompletedVideo(job: VideoJobRecord): Promise<PublicVideoJob | null> {
     job = requireUpdated(this.#store.completeVideoArtifact(job.id, job.revision, job.artifactId!));
+    const completedArtifactId = job.artifactId!;
+    this.#pendingDeliveryArtifactIds.add(completedArtifactId);
     this.#notify(job.id);
-    return this.#public(job);
+    try {
+      // Every concurrently completed result remains pinned across every queued
+      // completion-time pass. This permits a temporary cap overflow until each
+      // caller has received its result or the probe continuation has durably
+      // adopted it; otherwise A's pass could tombstone B before B's pass starts.
+      await this.runArtifactRetention();
+      return this.#store.publicVideoJob(job.id);
+    } finally {
+      // A timer crosses the promise-delivery boundary: synchronous/microtask
+      // continuations (including probe settlement and other queued retention
+      // passes) observe the pin, while a future independent pass may prune it.
+      const timer = setTimeout(() => {
+        if (!this.#artifactDeliveryLeaseCounts.has(completedArtifactId)) {
+          this.#pendingDeliveryArtifactIds.delete(completedArtifactId);
+        }
+      }, 0);
+      timer.unref?.();
+    }
+  }
+
+  acquireArtifactDeliveryLease(artifactId: string): () => void {
+    const ownsCompletedArtifact = this.#store.listVideoJobs()
+      .some(job => job.state === "completed" && job.artifactId === artifactId);
+    if (!ownsCompletedArtifact) return () => {};
+    this.#artifactDeliveryLeaseCounts.set(
+      artifactId,
+      (this.#artifactDeliveryLeaseCounts.get(artifactId) ?? 0) + 1,
+    );
+    this.#pendingDeliveryArtifactIds.add(artifactId);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      const remaining = (this.#artifactDeliveryLeaseCounts.get(artifactId) ?? 1) - 1;
+      if (remaining > 0) {
+        this.#artifactDeliveryLeaseCounts.set(artifactId, remaining);
+        return;
+      }
+      this.#artifactDeliveryLeaseCounts.delete(artifactId);
+      this.#pendingDeliveryArtifactIds.delete(artifactId);
+    };
   }
 
   protectedArtifactIds(): ReadonlySet<string> {
-    return this.#store.protectedArtifactIds();
+    return new Set([
+      ...this.#store.protectedArtifactIds(),
+      ...this.#pendingDeliveryArtifactIds,
+    ]);
+  }
+
+  recoverablePublicationArtifactIds(): ReadonlySet<string> {
+    return this.#store.recoverablePublicationArtifactIds();
+  }
+
+  canReleaseArtifactForPrune(artifactId: string): ArtifactPinPreflightResult {
+    if (this.#pendingDeliveryArtifactIds.has(artifactId)) return "protected";
+    return this.#store.canReleaseArtifactForPrune(artifactId);
   }
 
   releaseArtifactForPrune(artifactId: string): ArtifactPinReleaseResult {
+    if (this.#pendingDeliveryArtifactIds.has(artifactId)) return "protected";
     return this.#store.releaseArtifactForPrune(artifactId);
+  }
+
+  pendingArtifactDeletionIds(): ReadonlySet<string> {
+    return this.#store.pendingArtifactDeletionIds();
+  }
+
+  finalizeArtifactPrune(artifactId: string): ArtifactPinFinalizeResult {
+    return this.#store.finalizeArtifactPrune(artifactId);
+  }
+
+  /**
+   * One serialized image/video retention owner for this durable runtime. Passing
+   * the runtime explicitly makes startup safe even before server-global pin registration.
+   */
+  runArtifactRetention(): Promise<void> {
+    const previous = this.#retentionTail ?? Promise.resolve();
+    const run = previous.then(() => {
+      if (this.#closed) return;
+      const dir = getArtifactsDir();
+      if (!existsSync(dir)) return;
+      pruneMediaArtifacts({
+        dir,
+        maxFiles: this.#artifactsKeepCount,
+        protectedArtifactIds: new Set(this.#pendingDeliveryArtifactIds),
+        pinAuthorities: [this],
+      });
+    });
+    const settled = run.catch(() => { /* a later pass can retry */ });
+    this.#retentionTail = settled;
+    void settled.then(() => {
+      if (this.#retentionTail === settled) this.#retentionTail = undefined;
+    });
+    return settled;
   }
 
   prepareStartup(): ReturnType<VideoJobStore["recoverStartup"]> {
@@ -451,7 +602,9 @@ export class MediaRuntime implements ServerMediaRuntime {
 
   startBackgroundRecovery(): void {
     const recovered = this.prepareStartup();
-    for (const id of recovered.pollable) this.startVideoJob(id);
+    void this.runArtifactRetention().finally(() => {
+      for (const id of recovered.pollable) this.startVideoJob(id);
+    });
   }
 
   startVideoJob(id: string): void {
@@ -489,6 +642,7 @@ export class MediaRuntime implements ServerMediaRuntime {
   /** Compatibility one-pass recovery used by the capability probe and focused crash tests. */
   async recoverOnStartup(signal?: AbortSignal): Promise<PublicVideoJob[]> {
     const recovered = this.prepareStartup();
+    await this.runArtifactRetention();
     const results: PublicVideoJob[] = [];
     for (const id of recovered.pollable) {
       if (signal?.aborted) break;
@@ -580,7 +734,11 @@ export class MediaRuntime implements ServerMediaRuntime {
   shutdown(): Promise<void> {
     if (this.#shutdownFlight) return this.#shutdownFlight;
     this.beginShutdown();
-    const flights = [...this.#submissionFlights.values(), ...this.#runnerFlights.values()];
+    const flights = [
+      ...this.#submissionFlights.values(),
+      ...this.#runnerFlights.values(),
+      ...(this.#retentionTail ? [this.#retentionTail] : []),
+    ];
     if (flights.length === 0) {
       if (!this.#closed) {
         this.#closed = true;
@@ -616,7 +774,15 @@ export class RecoveryBlockedMediaRuntime implements ServerMediaRuntime {
   protectedArtifactIds(): ReadonlySet<string> {
     throw new Error("video artifact pins are unavailable while recovery is blocked");
   }
+  recoverablePublicationArtifactIds(): ReadonlySet<string> {
+    throw new Error("video artifact reservations are unavailable while recovery is blocked");
+  }
+  canReleaseArtifactForPrune(): ArtifactPinPreflightResult { return "protected"; }
   releaseArtifactForPrune(): ArtifactPinReleaseResult { return "protected"; }
+  pendingArtifactDeletionIds(): ReadonlySet<string> {
+    throw new Error("video artifact deletions are unavailable while recovery is blocked");
+  }
+  finalizeArtifactPrune(): ArtifactPinFinalizeResult { return "protected"; }
 }
 
 let defaultModelVideoRuntime: ModelVideoRuntime | null = null;

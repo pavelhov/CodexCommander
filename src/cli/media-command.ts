@@ -452,10 +452,23 @@ function createHttpMediaService(target: AttestedLiveManagementProxy, fetchImpl: 
       }
     },
     async settings(patch, expectedRevision) {
+      const envelope = {
+        action: "settings" as const,
+        target: "settings" as const,
+        id: "media-settings",
+        expectedRevision,
+        ...patch,
+        confirmation: true as const,
+        caller: "interactive_cli" as const,
+        nonce: randomBytes(32).toString("base64url"),
+        issuedAt: Date.now(),
+      } satisfies MediaActionAttestationInput;
+      const proof = target.proveMediaAction?.(envelope);
+      if (!proof) throw new RuntimeApiError("The attested runtime cannot prove this media settings action.", 403, null);
       const value = await request("/api/media", {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expectedRevision, ...patch }),
+        headers: { "Content-Type": "application/json", [MEDIA_ACTION_ATTESTATION_HEADER]: proof },
+        body: JSON.stringify(envelope),
       });
       latestResource = value;
       return (await read()).status;
@@ -581,12 +594,6 @@ export async function handleMediaCommand(argv: string[], deps: MediaCommandDeps 
       if (job.phase === "terminal") return 7;
       return 8;
     }
-    if (parsed.command === "settings") {
-      const result = await service.settings?.(parsed.patch, preview.settingsRevision ?? preview.revision);
-      if (!result) throw new RuntimeApiError("Media settings are unavailable.", 503, null);
-      printStatus(result, out, false);
-      return 0;
-    }
     if (parsed.command === "recovery-status") {
       const recovery = await service.recovery?.();
       if (!recovery) out("Media recovery is ready.");
@@ -600,10 +607,17 @@ export async function handleMediaCommand(argv: string[], deps: MediaCommandDeps 
       throw new RuntimeApiError("Media OAuth binding is not ready.", 403, null);
     }
     if (!stdinIsTTY || !stdoutIsTTY) {
-      throw new RuntimeApiError("Media paid/recovery actions require an interactive terminal.", 403, null);
+      throw new RuntimeApiError("Media settings and paid/recovery actions require an interactive terminal.", 403, null);
     }
     let question: string;
-    if (parsed.command === "probe") {
+    if (parsed.command === "settings") {
+      const changes = [
+        parsed.patch.imagesEnabled === undefined ? null : `images ${parsed.patch.imagesEnabled ? "on" : "off"}`,
+        parsed.patch.videosEnabled === undefined ? null : `videos ${parsed.patch.videosEnabled ? "on" : "off"}`,
+        parsed.patch.authSource === undefined ? null : `source ${parsed.patch.authSource}`,
+      ].filter((value): value is string => value !== null);
+      question = `Apply media settings: ${changes.join(", ")}?`;
+    } else if (parsed.command === "probe") {
       question = "Run exactly one fixed image and one one-second 1080p video capability probe?";
     } else if (parsed.command === "acknowledge") {
       question = `Acknowledge outcome-unknown media operation ${parsed.operationId}?`;
@@ -623,6 +637,17 @@ export async function handleMediaCommand(argv: string[], deps: MediaCommandDeps 
     }
     const freshService = createService(fresh);
     const freshPreview = safeStatus(await freshService.status());
+    if (parsed.command === "settings") {
+      const expectedRevision = preview.settingsRevision ?? preview.revision;
+      const freshRevision = freshPreview.settingsRevision ?? freshPreview.revision;
+      if (freshRevision !== expectedRevision) {
+        throw new RuntimeApiError("Media settings changed during confirmation.", 409, null);
+      }
+      const result = await freshService.settings?.(parsed.patch, expectedRevision);
+      if (!result) throw new RuntimeApiError("Media settings are unavailable.", 503, null);
+      printStatus(result, out, false);
+      return 0;
+    }
     if (parsed.command === "job-action") {
       const current = await freshService.job?.(parsed.jobId);
       if (!current || current.revision !== parsed.revision) {

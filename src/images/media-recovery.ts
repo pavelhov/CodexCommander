@@ -15,8 +15,14 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
+import {
+  assertStableLockFile,
+  openStableLockFile,
+  type StableLockFile,
+} from "../codex/native-main-lock-file";
 import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import {
+  acquireMediaJournalOwnerLease,
   defaultMediaJournalPath,
   MEDIA_JOURNAL_SCHEMA_VERSION,
 } from "./video-job-store";
@@ -39,6 +45,18 @@ export interface MediaRecoveryFence {
 export interface MediaRecoveryInspection {
   cause: MediaRecoveryCause;
   readOnly: boolean;
+}
+
+interface StableJournalSnapshot {
+  readonly path: string;
+  readonly file: StableLockFile;
+  readonly dev: number;
+  readonly ino: number;
+}
+
+interface LockedJournalInspection {
+  readonly inspection: MediaRecoveryInspection;
+  close(): void;
 }
 
 function mediaDirectory(): string {
@@ -123,6 +141,134 @@ function fsyncDirectory(path: string): void {
   }
 }
 
+function openStableJournalSnapshot(path: string): StableJournalSnapshot {
+  assertPrivateFile(path);
+  const file = openStableLockFile(path);
+  try {
+    assertStableLockFile(path, file);
+    const stats = lstatSync(path);
+    assertPrivateFile(path);
+    return { path, file, dev: stats.dev, ino: stats.ino };
+  } catch (error) {
+    file.close();
+    throw error;
+  }
+}
+
+function assertStableJournalSnapshot(snapshot: StableJournalSnapshot): void {
+  assertStableLockFile(snapshot.path, snapshot.file);
+  const stats = lstatSync(snapshot.path);
+  assertPrivateFile(snapshot.path);
+  if (stats.dev !== snapshot.dev || stats.ino !== snapshot.ino) {
+    throw new Error("media journal identity changed");
+  }
+}
+
+function sqliteBusyOrLocked(error: unknown): boolean {
+  const code = error && typeof error === "object" && "code" in error
+    ? String((error as { code?: unknown }).code)
+    : "";
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return code === "SQLITE_BUSY" || code === "SQLITE_LOCKED" || /\b(?:busy|locked)\b/i.test(message);
+}
+
+function classifyOpenJournal(db: Database): MediaRecoveryInspection {
+  try {
+    const version = db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version;
+    return !Number.isSafeInteger(version)
+      ? { cause: "corrupt", readOnly: false }
+      : (version as number) > MEDIA_JOURNAL_SCHEMA_VERSION
+        ? { cause: "future_schema", readOnly: true }
+        : (version as number) < MEDIA_JOURNAL_SCHEMA_VERSION
+          ? { cause: "old_schema", readOnly: false }
+          : { cause: "corrupt", readOnly: false };
+  } catch (error) {
+    if (sqliteBusyOrLocked(error)) throw error;
+    return { cause: "corrupt", readOnly: false };
+  }
+}
+
+/**
+ * Classify through a read-only connection first, then (only for a journal that
+ * may be quarantined) hold an EXCLUSIVE lock on the primary SQLite inode while
+ * reclassifying it. Future-schema journals never pass through a read-write open.
+ */
+function lockAndInspectStableJournal(snapshot: StableJournalSnapshot): LockedJournalInspection {
+  let reader: Database | undefined;
+  let db: Database | undefined;
+  let transactionOpen = false;
+  try {
+    reader = new Database(snapshot.path, { readonly: true, strict: true });
+    reader.exec("PRAGMA busy_timeout = 0; PRAGMA query_only = ON");
+    const initial = classifyOpenJournal(reader);
+    reader.close();
+    reader = undefined;
+    assertStableJournalSnapshot(snapshot);
+    if (initial.cause === "future_schema") {
+      return { inspection: initial, close() {} };
+    }
+
+    db = new Database(snapshot.path, { strict: true });
+    db.exec("PRAGMA busy_timeout = 0; PRAGMA locking_mode = NORMAL");
+    // Keep BEGIN separate: Bun's multi-statement exec reports only the final
+    // statement, which can hide SQLITE_BUSY from the lock acquisition.
+    db.exec("BEGIN EXCLUSIVE");
+    transactionOpen = true;
+    db.exec("PRAGMA query_only = ON");
+    const inspection = classifyOpenJournal(db);
+    assertStableJournalSnapshot(snapshot);
+    const locked = db;
+    return {
+      inspection,
+      close() {
+        if (transactionOpen) {
+          transactionOpen = false;
+          try { locked.exec("ROLLBACK"); } catch { /* close still releases the inode lock */ }
+        }
+        try { locked.close(); } catch { /* quarantine may already have moved the locked inode */ }
+      },
+    };
+  } catch (error) {
+    try { reader?.close(); } catch { /* mapped below */ }
+    if (transactionOpen) {
+      try { db?.exec("ROLLBACK"); } catch { /* close below */ }
+    }
+    try { db?.close(); } catch { /* mapped below */ }
+    throw error;
+  }
+}
+
+function readOnlyInspection(error: unknown): MediaRecoveryInspection {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /unsafe|ownership|permission|secured|identity/i.test(message)
+    ? { cause: "unsafe", readOnly: true }
+    : { cause: "unavailable", readOnly: true };
+}
+
+/**
+ * SQLite's default Win32 VFS opens the primary with read/write sharing but not
+ * FILE_SHARE_DELETE. Quarantine must retain both that SQLite handle and the
+ * stable identity descriptor until the primary move; closing them first would
+ * let a non-cooperating writer replace or mutate the journal between proof and
+ * rename. Windows therefore exposes inspection only and never creates a fence
+ * or moves journal bytes.
+ */
+function inspectionForPlatform(
+  inspection: MediaRecoveryInspection,
+  platform: NodeJS.Platform,
+): MediaRecoveryInspection {
+  return !mediaJournalQuarantineSupported(platform) && !inspection.readOnly
+    ? { ...inspection, readOnly: true }
+    : inspection;
+}
+
+/** Whether this host can move a journal without releasing its proof handles. */
+export function mediaJournalQuarantineSupported(
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return platform !== "win32";
+}
+
 function writeFence(record: MediaRecoveryFence, expected?: MediaRecoveryFence): void {
   const path = mediaRecoveryFencePath();
   const dir = dirname(path);
@@ -159,31 +305,28 @@ function writeFence(record: MediaRecoveryFence, expected?: MediaRecoveryFence): 
 
 export function inspectMediaJournalRecovery(error?: unknown): MediaRecoveryInspection {
   const journal = defaultMediaJournalPath();
+  let owner: ReturnType<typeof acquireMediaJournalOwnerLease> | undefined;
+  let snapshot: StableJournalSnapshot | undefined;
+  let primary: LockedJournalInspection | undefined;
   try {
     assertPrivateDirectory(dirname(journal));
     if (!existsSync(journal)) return { cause: "unavailable", readOnly: true };
-    assertPrivateFile(journal);
-    for (const base of [journal, `${journal}.recovery-owner.sqlite`]) {
-      for (const suffix of ["", "-journal", "-wal", "-shm"]) {
-        const candidate = `${base}${suffix}`;
-        if (existsSync(candidate)) assertPrivateFile(candidate);
-      }
+    owner = acquireMediaJournalOwnerLease(journal);
+    for (const suffix of ["-journal", "-wal", "-shm"]) {
+      const candidate = `${journal}${suffix}`;
+      if (existsSync(candidate)) assertPrivateFile(candidate);
     }
-    const db = new Database(journal, { readonly: true, strict: true });
-    try {
-      const version = db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version;
-      if (!Number.isSafeInteger(version)) return { cause: "corrupt", readOnly: false };
-      if ((version as number) > MEDIA_JOURNAL_SCHEMA_VERSION) return { cause: "future_schema", readOnly: true };
-      if ((version as number) < MEDIA_JOURNAL_SCHEMA_VERSION) return { cause: "old_schema", readOnly: false };
-      return { cause: "corrupt", readOnly: false };
-    } finally {
-      db.close();
-    }
-  } catch {
-    const message = error instanceof Error ? error.message : "";
-    return /unsafe|ownership|permission|secured|identity/i.test(message)
-      ? { cause: "unsafe", readOnly: true }
-      : { cause: "unavailable", readOnly: true };
+    snapshot = openStableJournalSnapshot(journal);
+    primary = lockAndInspectStableJournal(snapshot);
+    assertStableJournalSnapshot(snapshot);
+    owner.assertOwned();
+    return inspectionForPlatform(primary.inspection, process.platform);
+  } catch (caught) {
+    return readOnlyInspection(caught ?? error);
+  } finally {
+    primary?.close();
+    snapshot?.file.close();
+    owner?.close();
   }
 }
 
@@ -194,38 +337,65 @@ export function inspectMediaJournalRecovery(error?: unknown): MediaRecoveryInspe
  */
 export function quarantineMediaJournal(expectedRevision: number): MediaRecoveryFence {
   if (expectedRevision !== 0) throw new Error("media recovery revision changed");
-  const inspection = inspectMediaJournalRecovery();
-  if (inspection.readOnly || inspection.cause === "future_schema") throw new Error("media recovery is read-only");
-  const previousFence = readMediaRecoveryFence();
-  if (previousFence && !previousFence.acknowledged) throw new Error("media recovery fence already exists");
   const dir = mediaDirectory();
   const journal = defaultMediaJournalPath();
-  const fence: MediaRecoveryFence = {
-    id: randomUUID(),
-    revision: 0,
-    acknowledged: false,
-    restartRequired: true,
-    createdAt: Date.now(),
-    cause: inspection.cause as MediaRecoveryFence["cause"],
-  };
-  // An acknowledged fence has completed its restart boundary and may be
-  // atomically superseded by a later, independently identified recovery.
-  writeFence(fence, previousFence ?? undefined);
-  const quarantine = join(dir, `quarantine-${fence.id}`);
-  mkdirSync(quarantine, { mode: 0o700 });
-  if (process.platform !== "win32") chmodSync(quarantine, 0o700);
-  assertPrivateDirectory(quarantine);
-  for (const base of [journal, `${journal}.recovery-owner.sqlite`]) {
+  let owner: ReturnType<typeof acquireMediaJournalOwnerLease> | undefined;
+  let snapshot: StableJournalSnapshot | undefined;
+  let primary: LockedJournalInspection | undefined;
+  try {
+    assertPrivateDirectory(dir);
+    if (!existsSync(journal)) throw new Error("media recovery is read-only");
+    owner = acquireMediaJournalOwnerLease(journal);
     for (const suffix of ["", "-journal", "-wal", "-shm"]) {
-      const candidate = `${base}${suffix}`;
+      const candidate = `${journal}${suffix}`;
+      if (existsSync(candidate)) assertPrivateFile(candidate);
+    }
+    snapshot = openStableJournalSnapshot(journal);
+    primary = lockAndInspectStableJournal(snapshot);
+    const inspection = inspectionForPlatform(primary.inspection, process.platform);
+    if (inspection.readOnly || inspection.cause === "future_schema") throw new Error("media recovery is read-only");
+    const previousFence = readMediaRecoveryFence();
+    if (previousFence && !previousFence.acknowledged) throw new Error("media recovery fence already exists");
+    const fence: MediaRecoveryFence = {
+      id: randomUUID(),
+      revision: 0,
+      acknowledged: false,
+      restartRequired: true,
+      createdAt: Date.now(),
+      cause: inspection.cause as MediaRecoveryFence["cause"],
+    };
+    // Fence only while the exact journal inode and exclusive owner lease are
+    // both still held. A live runtime therefore cannot be reset underneath.
+    assertStableJournalSnapshot(snapshot);
+    owner.assertOwned();
+    writeFence(fence, previousFence ?? undefined);
+    const quarantine = join(dir, `quarantine-${fence.id}`);
+    mkdirSync(quarantine, { mode: 0o700 });
+    if (process.platform !== "win32") chmodSync(quarantine, 0o700);
+    assertPrivateDirectory(quarantine);
+    // Move DELETE-mode sidecars first and the stable primary inode last. The
+    // owner coordinator is permanent lock state, not journal data.
+    for (const suffix of ["-journal", "-wal", "-shm", ""]) {
+      const candidate = `${journal}${suffix}`;
       if (!existsSync(candidate)) continue;
+      assertStableJournalSnapshot(snapshot);
+      owner.assertOwned();
       assertPrivateFile(candidate);
       renameSync(candidate, join(quarantine, basename(candidate)));
     }
+    fsyncDirectory(quarantine);
+    fsyncDirectory(dir);
+    return fence;
+  } catch (error) {
+    if (error instanceof Error && /busy|locked/i.test(error.message)) {
+      throw new Error("media recovery is read-only");
+    }
+    throw error;
+  } finally {
+    primary?.close();
+    snapshot?.file.close();
+    owner?.close();
   }
-  fsyncDirectory(quarantine);
-  fsyncDirectory(dir);
-  return fence;
 }
 
 export function acknowledgeMediaRecoveryFence(id: string, expectedRevision: number): MediaRecoveryFence | null {

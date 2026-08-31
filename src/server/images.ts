@@ -7,8 +7,9 @@
  * without a route the tool died on the /v1/* JSON-404 guard. Only an OpenAI-family upstream
  * can serve these endpoints — routed providers (Cursor, Kiro, Gemini, …) have no image
  * generation surface — so the handler relays the body verbatim to the ChatGPT forward
- * provider, an OpenAI API-key provider, or an explicitly selected compatible custom provider and
- * passes the response through untouched:
+ * provider, an OpenAI API-key provider, or an explicitly selected compatible custom provider.
+ * The ordinary relay preserves upstream responses; the opt-in Grok path normalizes signed URL
+ * results into self-contained base64 rows before returning them:
  * codex's images client parses `{created, data:[{b64_json}]}` strictly and Debug-prints
  * error bodies into the model-visible failure, so upstream errors must stay legible.
  */
@@ -36,7 +37,20 @@ import { getValidAccessToken, getOAuthCredentialProjectId } from "../oauth/index
 import { safeAntigravityHttpErrorMessage } from "../adapters/google-errors";
 import { sanitizeUpstreamErrorText } from "../adapters/upstream-http-error";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
-import { decodeValidatedImageBase64, MAX_ENCODED_BYTES_PER_IMAGE } from "../images/artifacts";
+import {
+  createImageBudget,
+  chargeImageBudget,
+  decodeValidatedImageBase64,
+  downloadImageToArtifact,
+  MAX_ENCODED_BYTES_PER_IMAGE,
+  pruneArtifacts,
+  readArtifactBytes,
+} from "../images/artifacts";
+import {
+  beginImageArtifactMaterialization,
+  createImageArtifactProtectionScope,
+  type ImageArtifactProtectionScope,
+} from "../images/fulfill";
 import type { AdmissionLease } from "../lib/admission";
 import { codexAccountSelectionForTurn } from "./lifecycle";
 import { bindMediaCredential } from "../images/media-credentials";
@@ -57,6 +71,28 @@ const IMAGES_UPSTREAM_TIMEOUT_MS = 300_000;
 const IMAGES_RESPONSE_MAX_BYTES = 100 * 1024 * 1024;
 
 const CCA_IMAGE_MODEL = "gemini-3.1-flash-image";
+
+/**
+ * The provider already accepted and completed a paid POST, so retrying cannot repair local
+ * validation/materialization and may bill twice. Keep this response stable, URL-free, and
+ * deliberately outside the client's retryable 5xx class.
+ */
+function grokImageArtifactUnavailable(): Response {
+  return new Response(JSON.stringify({
+    error: {
+      message: "Grok image artifact is unavailable after provider completion.",
+      type: "invalid_request_error",
+      code: "artifact_unavailable",
+    },
+  }), {
+    status: 409,
+    headers: {
+      "content-type": "application/json",
+      // OpenAI SDKs retry 409 by default unless this explicit override is set.
+      "x-should-retry": "false",
+    },
+  });
+}
 
 function grokImageError(error: MediaTransportError): Response {
   const status = error.code === "needs_auth"
@@ -82,7 +118,10 @@ function grokImageError(error: MediaTransportError): Response {
       : "upstream_error";
   return new Response(JSON.stringify({ error: { message: error.message, type, code } }), {
     status,
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...(status === 409 ? { "x-should-retry": "false" } : {}),
+    },
   });
 }
 
@@ -125,6 +164,10 @@ async function handleGrokImageGeneration(
   logCtx.provider = "xai";
   logCtx.model = model;
   const sidecarExit = sidecarEnter("images");
+  let finishMaterialization: (() => void) | undefined;
+  let artifactProtection: ImageArtifactProtectionScope | undefined;
+  let paidSubmissionCompleted = false;
+  let materializedUrl = false;
   try {
     const result = await callXaiImages({
       prompt,
@@ -133,16 +176,61 @@ async function handleGrokImageGeneration(
       ...(typeof request.size === "string" ? { size: request.size } : {}),
       ...(typeof request.quality === "string" ? { quality: request.quality } : {}),
     }, binding, req.signal, config.images?.timeoutMs);
+    paidSubmissionCompleted = true;
+    const budget = createImageBudget();
+    const data: Array<{ b64_json: string }> = [];
+    try {
+      for (const image of result.images) {
+        if (image.b64_json) {
+          // A successful provider POST is already billable. Validate and bound its inline bytes
+          // before exposing them to codex-rs, which may otherwise retry malformed output.
+          const bytes = decodeValidatedImageBase64(image.b64_json);
+          chargeImageBudget(budget, bytes.byteLength);
+          data.push({ b64_json: bytes.toString("base64") });
+          continue;
+        }
+        if (!image.url) continue;
+        if (!artifactProtection) {
+          artifactProtection = createImageArtifactProtectionScope();
+          finishMaterialization = beginImageArtifactMaterialization();
+        }
+        const path = await downloadImageToArtifact(image.url, budget, req.signal);
+        artifactProtection.protect([path]);
+        const artifact = readArtifactBytes(path.split(/[\\/]/).at(-1) ?? "");
+        if (!artifact) throw new Error("materialized image artifact is unavailable");
+        const bytes = decodeValidatedImageBase64(artifact.bytes.toString("base64"));
+        data.push({ b64_json: bytes.toString("base64") });
+        materializedUrl = true;
+      }
+    } catch {
+      // Provider result URLs can be signed and validation failures can contain local details.
+      // Never reflect either after a known-success paid dispatch.
+      return grokImageArtifactUnavailable();
+    }
+    // Every URL result is now embedded in the response, so its local file no longer needs a
+    // response-delivery pin. Release only after all paths were registered and read; concurrent
+    // image requests retain their own files through the shared materialization guard/scope.
+    finishMaterialization?.();
+    finishMaterialization = undefined;
+    artifactProtection?.close();
+    artifactProtection = undefined;
+    if (data.length === 0) {
+      return grokImageArtifactUnavailable();
+    }
     return Response.json({
       created: Math.floor(Date.now() / 1000),
-      data: result.images.map(image => image.b64_json
-        ? { b64_json: image.b64_json }
-        : { url: image.url }),
+      data,
     });
   } catch (error) {
+    if (paidSubmissionCompleted) return grokImageArtifactUnavailable();
     if (isMediaTransportError(error)) return grokImageError(error);
     return formatErrorResponse(502, "upstream_error", "Grok image generation failed");
   } finally {
+    finishMaterialization?.();
+    artifactProtection?.close();
+    if (materializedUrl) {
+      try { pruneArtifacts(config.images?.artifactsKeepCount); } catch { /* paid response/error stays authoritative */ }
+    }
     sidecarExit();
   }
 }

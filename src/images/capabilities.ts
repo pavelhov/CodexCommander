@@ -12,24 +12,14 @@ import type {
   MediaReadinessSnapshot,
 } from "./types";
 
-const XAI_MEDIA_HOSTS = new Set(["api.x.ai", "cli-chat-proxy.grok.com"]);
-
 const API_KEY_PROVIDER_RECOVERY =
-  "Configure canonical providers.xai, or leave exactly one enabled custom provider whose baseUrl uses an xAI hostname.";
+  "Configure and enable canonical providers.xai for api_key media authentication.";
 const OAUTH_PROVIDER_RECOVERY =
   "Configure and enable canonical providers.xai for subscription_oauth media authentication.";
 
 type ProviderResolution =
   | { ok: true; provider: MediaProviderKind }
   | { ok: false; reason: MediaReadinessReason; recovery?: string };
-
-function isXaiMediaHostname(baseUrl: string): boolean {
-  try {
-    return XAI_MEDIA_HOSTS.has(new URL(baseUrl).hostname.toLowerCase());
-  } catch {
-    return false;
-  }
-}
 
 function resolveProvider(config: CodexCommanderConfig, source: MediaAuthSource): ProviderResolution {
   const canonical = Object.hasOwn(config.providers, "xai") ? config.providers.xai : undefined;
@@ -44,31 +34,10 @@ function resolveProvider(config: CodexCommanderConfig, source: MediaAuthSource):
     return { ok: true, provider: "canonical" };
   }
 
-  if (source === "subscription_oauth") {
-    return {
-      ok: false,
-      reason: "canonical_xai_provider_missing",
-      recovery: OAUTH_PROVIDER_RECOVERY,
-    };
-  }
-
-  let aliases = 0;
-  for (const provider of Object.values(config.providers)) {
-    if (provider.disabled === true) continue;
-    if (isXaiMediaHostname(provider.baseUrl)) aliases += 1;
-  }
-  if (aliases === 1) return { ok: true, provider: "legacy_alias" };
-  if (aliases > 1) {
-    return {
-      ok: false,
-      reason: "ambiguous_xai_provider",
-      recovery: API_KEY_PROVIDER_RECOVERY,
-    };
-  }
   return {
     ok: false,
-    reason: "xai_provider_missing",
-    recovery: API_KEY_PROVIDER_RECOVERY,
+    reason: "canonical_xai_provider_missing",
+    recovery: source === "subscription_oauth" ? OAUTH_PROVIDER_RECOVERY : API_KEY_PROVIDER_RECOVERY,
   };
 }
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { link, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
@@ -134,5 +134,93 @@ describe("atomic video artifact publication", () => {
     )).toBe(published);
     expect(await Bun.file(published).arrayBuffer()).toEqual(before);
     expect(await readdir(join(root, "artifacts"))).toEqual([artifactId]);
+  });
+
+  test("an already-existing final cannot return when artifact-directory sync fails", async () => {
+    const encoded = Buffer.from(MP4_HEADER).toString("base64");
+    const dataUri = `data:video/mp4;base64,${encoded}`;
+
+    const existingId = reserveVideoArtifactId("mp4");
+    const existingPath = await downloadVideoToArtifact(
+      dataUri,
+      undefined,
+      undefined,
+      { reservedArtifactId: existingId },
+    );
+    let existingSyncs = 0;
+    await expect(downloadVideoToArtifact(
+      dataUri,
+      undefined,
+      undefined,
+      {
+        reservedArtifactId: existingId,
+        syncDirectory: async () => {
+          existingSyncs += 1;
+          throw new Error("injected existing-final sync failure");
+        },
+      },
+    )).rejects.toThrow("injected existing-final sync failure");
+    expect(existingSyncs).toBe(1);
+    expect(await Bun.file(existingPath).exists()).toBe(true);
+
+    const revalidationId = reserveVideoArtifactId("mp4");
+    const revalidationPath = await downloadVideoToArtifact(
+      dataUri,
+      undefined,
+      undefined,
+      { reservedArtifactId: revalidationId },
+    );
+    await expect(downloadVideoToArtifact(
+      dataUri,
+      undefined,
+      undefined,
+      {
+        reservedArtifactId: revalidationId,
+        syncDirectory: async () => {
+          await writeFile(revalidationPath, Buffer.from("invalid-video"));
+        },
+      },
+    )).rejects.toThrow(/invalid media bytes|unsafe|unrecognized video format/);
+
+    expect(await downloadVideoToArtifact(
+      dataUri,
+      undefined,
+      undefined,
+      { reservedArtifactId: existingId },
+    )).toBe(existingPath);
+  });
+
+  test("an EEXIST publication race cannot return when artifact-directory sync fails", async () => {
+    const encoded = Buffer.from(MP4_HEADER).toString("base64");
+    const dataUri = `data:video/mp4;base64,${encoded}`;
+    const racedId = reserveVideoArtifactId("mp4");
+    let racedPath = "";
+    let racedSyncs = 0;
+    await expect(downloadVideoToArtifact(
+      dataUri,
+      undefined,
+      undefined,
+      {
+        reservedArtifactId: racedId,
+        linkArtifact: async (tempPath, finalPath) => {
+          racedPath = finalPath;
+          await link(tempPath, finalPath);
+          throw Object.assign(new Error("injected publication race"), { code: "EEXIST" });
+        },
+        syncDirectory: async () => {
+          racedSyncs += 1;
+          throw new Error("injected EEXIST sync failure");
+        },
+      },
+    )).rejects.toThrow("injected EEXIST sync failure");
+    expect(racedSyncs).toBe(1);
+    expect(await Bun.file(racedPath).exists()).toBe(true);
+
+    expect(await downloadVideoToArtifact(
+      dataUri,
+      undefined,
+      undefined,
+      { reservedArtifactId: racedId },
+    )).toBe(racedPath);
   });
 });

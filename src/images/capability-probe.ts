@@ -1,20 +1,21 @@
 import { createHash } from "node:crypto";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 
 import {
   downloadImageToArtifact,
   materializeInlineImage,
-  removeArtifactById,
+  removePendingCapabilityArtifactById,
 } from "./artifacts";
 import { callXaiImages, type XaiImageRequest, type XaiImageResult } from "./xai-client";
-import { isMediaTransportError, type MediaTransportError } from "./media-errors";
+import { isMediaTransportError, safeMediaFailure } from "./media-errors";
 import { MediaRuntime } from "./media-runtime";
 import type { MediaCredentialBinding } from "./types";
 import {
   type CapabilityProbeStepKind,
+  type CapabilityArtifactDeletion,
   type CapabilityProbeStepRecord,
   type PublicCapabilityProbe,
-  type SafeMediaFailure,
+  type PublicVideoJob,
   type VideoJobStore,
 } from "./video-job-store";
 
@@ -25,6 +26,7 @@ export const MEDIA_PROBE_VERSION = 1;
 export const PROBE_ARTIFACT_RETENTION_MS = 24 * 60 * 60_000;
 const PROBE_CONFIRMATION_MAX_LIFETIME_MS = 15 * 60_000;
 const PROBE_JOB_LIFETIME_MS = 10 * 60_000;
+const PROBE_ARTIFACT_SWEEP_INTERVAL_MS = 60_000;
 const PROBE_KEY_DOMAIN = "ccx-media-capability-probe-v1";
 // Fixed, code-owned test content. It is never persisted, logged, or accepted from a caller.
 const FIXED_IMAGE_PROMPT = "A plain red circle centered on a white background.";
@@ -102,6 +104,10 @@ export interface CapabilityProbeDeps {
   materializeImage?: (result: XaiImageResult["images"][number], signal?: AbortSignal) => Promise<string>;
   /** Test/store seam; production deletes through the opaque-id artifact helper. */
   removeArtifact?: (artifactId: string) => Promise<boolean>;
+  /** Exact-entry existence seam used to distinguish an already-absent artifact from unlink failure. */
+  artifactExists?: (artifactId: string) => boolean;
+  /** Fixed test seam for the long-lived expiry sweep cadence. */
+  sweepIntervalMs?: number;
 }
 
 function probeKey(bindingDigest: string): string {
@@ -141,19 +147,6 @@ function status(probe: PublicCapabilityProbe): CapabilityProbeStatus {
   };
 }
 
-function safeFailure(error: MediaTransportError): SafeMediaFailure {
-  switch (error.code) {
-    case "needs_auth": return "needs_auth";
-    case "entitlement_denied": return "entitlement_denied";
-    case "rate_limited": return "rate_limited";
-    case "policy_rejected": return "policy_rejected";
-    case "ambiguous_submission": return "ambiguous_submission";
-    case "cancelled": return "cancelled";
-    case "timeout": return "timeout";
-    default: return "upstream_failed";
-  }
-}
-
 async function defaultMaterializeImage(
   result: XaiImageResult["images"][number],
   signal?: AbortSignal,
@@ -167,6 +160,11 @@ function gateError(code: CapabilityProbeGateErrorCode): never {
   throw new CapabilityProbeGateError(code);
 }
 
+function imageStepSettledNonAmbiguous(step: CapabilityProbeStepRecord): boolean {
+  return (step.state === "completed" && step.dispatchCertainty === "completed")
+    || (step.state === "failed" && step.dispatchCertainty === "definite_rejection");
+}
+
 /** Durable, single-flight feasibility operation. It is not a billing or release-verification claim. */
 export class CapabilityProbeService {
   readonly #store: VideoJobStore;
@@ -175,6 +173,10 @@ export class CapabilityProbeService {
   readonly #callImage: NonNullable<CapabilityProbeDeps["callImage"]>;
   readonly #materializeImage: NonNullable<CapabilityProbeDeps["materializeImage"]>;
   readonly #removeArtifact: NonNullable<CapabilityProbeDeps["removeArtifact"]>;
+  readonly #sweepIntervalMs: number;
+  readonly #reconciliationFlights = new Map<string, Promise<void>>();
+  #sweepTimer: ReturnType<typeof setTimeout> | undefined;
+  #closed = false;
 
   constructor(store: VideoJobStore, runtime: MediaRuntime, deps: CapabilityProbeDeps = {}) {
     this.#store = store;
@@ -182,7 +184,8 @@ export class CapabilityProbeService {
     this.#now = deps.now ?? Date.now;
     this.#callImage = deps.callImage ?? callXaiImages;
     this.#materializeImage = deps.materializeImage ?? defaultMaterializeImage;
-    this.#removeArtifact = deps.removeArtifact ?? removeArtifactById;
+    this.#removeArtifact = deps.removeArtifact ?? removePendingCapabilityArtifactById;
+    this.#sweepIntervalMs = deps.sweepIntervalMs ?? PROBE_ARTIFACT_SWEEP_INTERVAL_MS;
   }
 
   prepare(binding: MediaCredentialBinding): CapabilityProbeStatus {
@@ -293,7 +296,7 @@ export class CapabilityProbeService {
         expectedStepRevision: step.revision,
         state: ambiguous ? "outcome_unknown" : "failed",
         dispatchCertainty: ambiguous ? "outcome_unknown" : "definite_rejection",
-        safeError: ambiguous ? "ambiguous_submission" : safeFailure(error),
+        safeError: ambiguous ? "ambiguous_submission" : safeMediaFailure(error),
       });
     }
     return status(this.#store.publicCapabilityProbe(current.id)!);
@@ -305,8 +308,10 @@ export class CapabilityProbeService {
     confirmationRevision: number,
     signal?: AbortSignal,
   ): Promise<CapabilityProbeStatus> {
-    // An ambiguous image stops the confirmation. It cannot silently advance to another paid POST.
-    if (current.steps.image.state === "outcome_unknown") return current;
+    // The durable image step must be fully settled before another paid POST can
+    // begin. The store repeats this predicate in the begin-step transaction so
+    // a concurrent fresh confirmation cannot race this snapshot.
+    if (!imageStepSettledNonAmbiguous(current.steps.image)) return current;
     if (!["pending", "failed", "acknowledged"].includes(current.steps.video.state)) return current;
     const begun = this.#store.beginCapabilityProbeStep({
       id: current.id,
@@ -377,6 +382,8 @@ export class CapabilityProbeService {
           safeError: driven.safeError ?? "upstream_failed",
           videoJobId: driven.id,
         });
+      } else {
+        this.#startAcceptedVideoDriver(driven.id);
       }
       void settled;
     } catch (error) {
@@ -398,6 +405,7 @@ export class CapabilityProbeService {
               }
             : {}),
         });
+        if (job.state !== "completed") this.#startAcceptedVideoDriver(job.id);
         return status(this.#store.publicCapabilityProbe(current.id)!);
       }
       const ambiguous = job?.state === "outcome_unknown" || !isMediaTransportError(error) || error.certainty === "ambiguous";
@@ -407,11 +415,114 @@ export class CapabilityProbeService {
         expectedStepRevision: step.revision,
         state: ambiguous ? "outcome_unknown" : "failed",
         dispatchCertainty: ambiguous ? "outcome_unknown" : "definite_rejection",
-        safeError: ambiguous ? "ambiguous_submission" : safeFailure(error),
+        safeError: ambiguous ? "ambiguous_submission" : safeMediaFailure(error),
         ...(job ? { videoJobId: job.id } : {}),
       });
     }
     return status(this.#store.publicCapabilityProbe(current.id)!);
+  }
+
+  #settleAcceptedProbeVideo(job: PublicVideoJob): boolean {
+    const storedJob = this.#store.getVideoJob(job.id);
+    if (!storedJob?.probeOperationId) return true;
+    const probe = this.#store.getCapabilityProbe(storedJob.probeOperationId);
+    if (
+      !probe
+      || probe.steps.video.state !== "accepted"
+      || probe.steps.video.videoJobId !== job.id
+    ) return true;
+    if (job.state === "completed" && job.artifactId) {
+      const verifiedAt = this.#now();
+      this.#store.settleCapabilityProbeStep({
+        id: probe.id,
+        step: "video",
+        expectedStepRevision: probe.steps.video.revision,
+        state: "completed",
+        dispatchCertainty: "completed",
+        artifactId: job.artifactId,
+        artifactExpiresAt: verifiedAt + PROBE_ARTIFACT_RETENTION_MS,
+        videoJobId: job.id,
+        verifiedAt,
+      });
+      return true;
+    }
+    if (["failed", "expired", "cancelled"].includes(job.state)) {
+      this.#store.settleCapabilityProbeStep({
+        id: probe.id,
+        step: "video",
+        expectedStepRevision: probe.steps.video.revision,
+        state: "failed",
+        dispatchCertainty: "definite_rejection",
+        safeError: job.safeError ?? "upstream_failed",
+        videoJobId: job.id,
+      });
+      return true;
+    }
+    if (job.state === "artifact_pruned") {
+      this.#store.settleCapabilityProbeStep({
+        id: probe.id,
+        step: "video",
+        expectedStepRevision: probe.steps.video.revision,
+        state: "failed",
+        dispatchCertainty: "definite_rejection",
+        safeError: "download_rejected",
+        videoJobId: job.id,
+      });
+      return true;
+    }
+    return job.state === "outcome_unknown" || job.state === "acknowledged";
+  }
+
+  async #watchAcceptedProbeVideo(id: string): Promise<void> {
+    let job = this.#runtime.getPublicVideoJob(id);
+    while (job) {
+      if (this.#settleAcceptedProbeVideo(job)) return;
+      const update = await this.#runtime.waitForVideoUpdate(id, job.revision, { timeoutMs: 30_000 });
+      if (update.kind === "missing" || update.kind === "detached") return;
+      job = update.job ?? this.#runtime.getPublicVideoJob(id);
+    }
+  }
+
+  #startAcceptedVideoDriver(id: string): void {
+    this.#runtime.startVideoJob(id);
+    if (this.#reconciliationFlights.has(id)) return;
+    const flight = this.#watchAcceptedProbeVideo(id)
+      .catch(() => { /* durable state is reconciled by the next startup */ })
+      .finally(() => this.#reconciliationFlights.delete(id));
+    this.#reconciliationFlights.set(id, flight);
+  }
+
+  /** Start GET/download-only recovery and continuously mirror its terminal result into probe evidence. */
+  startBackgroundRecovery(): void {
+    if (this.#closed) return;
+    this.#runtime.startBackgroundRecovery();
+    for (const job of this.#store.listVideoJobs()) {
+      if (!job.probeOperationId) continue;
+      const probe = this.#store.getCapabilityProbe(job.probeOperationId);
+      if (probe?.steps.video.state !== "accepted" || probe.steps.video.videoJobId !== job.id) continue;
+      this.#startAcceptedVideoDriver(job.id);
+    }
+    void this.sweepExpiredArtifacts().catch(() => { /* the periodic owner retries */ });
+    this.#scheduleArtifactSweep();
+  }
+
+  #scheduleArtifactSweep(): void {
+    if (this.#closed || this.#sweepTimer) return;
+    this.#sweepTimer = setTimeout(() => {
+      this.#sweepTimer = undefined;
+      if (this.#closed) return;
+      void this.sweepExpiredArtifacts()
+        .catch(() => { /* durable work remains for the next pass */ })
+        .finally(() => this.#scheduleArtifactSweep());
+    }, this.#sweepIntervalMs);
+    this.#sweepTimer.unref?.();
+  }
+
+  shutdown(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    if (this.#sweepTimer) clearTimeout(this.#sweepTimer);
+    this.#sweepTimer = undefined;
   }
 
   acknowledge(input: CapabilityProbeAcknowledgement): CapabilityProbeStatus {
@@ -445,15 +556,32 @@ export class CapabilityProbeService {
       expectedRevision: input.expectedRevision,
     });
     if (result.kind !== "updated") gateError("stale_confirmation");
-    if (result.artifactId) await this.#removeArtifact(result.artifactId);
+    await this.#attemptArtifactDeletion(result.deletion);
     return status(this.#store.publicCapabilityProbe(input.operationId)!);
   }
 
-  /** Release durable pins first, then remove only the returned opaque artifacts. */
+  async #attemptArtifactDeletion(deletion: CapabilityArtifactDeletion): Promise<boolean> {
+    let removed = false;
+    try {
+      removed = await this.#removeArtifact(deletion.artifactId);
+    } catch {
+      // Durable work stays in the journal and startup/retention retries it.
+    }
+    // `false` includes unlink success whose containing-directory fsync failed.
+    // The durable deletion row must survive even when the name is currently
+    // absent; a retry confirms absence with a successful directory fsync.
+    if (!removed) return false;
+    return this.#store.completeCapabilityArtifactDeletion(deletion).kind === "updated";
+  }
+
+  /** Retry durable inspection/expiry deletion work and finalize only confirmed removals. */
   async sweepExpiredArtifacts(now = this.#now()): Promise<number> {
-    const artifactIds = this.#store.releaseExpiredCapabilityArtifacts(now);
-    for (const artifactId of artifactIds) await this.#removeArtifact(artifactId);
-    return artifactIds.length;
+    const deletions = this.#store.listPendingCapabilityArtifactDeletions(now);
+    let completed = 0;
+    for (const deletion of deletions) {
+      if (await this.#attemptArtifactDeletion(deletion)) completed += 1;
+    }
+    return completed;
   }
 
   /** Recover only durable GET/download work, then reconcile probe evidence from local job state. */

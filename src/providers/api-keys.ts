@@ -18,6 +18,12 @@ export interface ProviderApiKeyInfo {
   addedAt?: number;
 }
 
+export interface ProviderApiKeyList {
+  revision: number;
+  activeId: string | null;
+  keys: ProviderApiKeyInfo[];
+}
+
 function isEnvReference(value: string): boolean {
   return /^\$\{?\w+\}?$/.test(value);
 }
@@ -82,26 +88,53 @@ export function currentProviderApiKeyPool(
   return pool.some(entry => entry.key === provider.apiKey) ? pool : undefined;
 }
 
-export function listProviderApiKeys(config: CodexCommanderConfig, name: string): { activeId: string | null; keys: ProviderApiKeyInfo[] } {
-  const provider = config.providers[name];
-  if (!provider || !supportsManagedProviderApiKeys(name, provider)) return { activeId: null, keys: [] };
-  const pool = currentProviderApiKeyPool(provider);
-  if (!pool) return { activeId: null, keys: [] };
-  const activeId = pool.find(entry => entry.key === provider.apiKey)!.id;
-  return {
+function providerApiKeyPoolRevision(activeId: string | null, keys: ProviderApiKeyInfo[]): number {
+  const semantic = JSON.stringify({
     activeId,
-    keys: pool.map(entry => ({
-      id: entry.id,
-      ...(entry.label ? { label: entry.label } : {}),
-      masked: maskApiKey(entry.key),
-      active: entry.id === activeId,
-      ...(entry.addedAt !== undefined ? { addedAt: entry.addedAt } : {}),
-    })),
+    keys: keys.map(key => ({ id: key.id, label: key.label ?? null })),
+  });
+  return Number.parseInt(createHash("sha256").update(semantic).digest("hex").slice(0, 12), 16);
+}
+
+export function listProviderApiKeys(config: CodexCommanderConfig, name: string): ProviderApiKeyList {
+  const provider = config.providers[name];
+  if (!provider || !supportsManagedProviderApiKeys(name, provider)) {
+    return { revision: providerApiKeyPoolRevision(null, []), activeId: null, keys: [] };
+  }
+  const pool = currentProviderApiKeyPool(provider);
+  if (!pool) return { revision: providerApiKeyPoolRevision(null, []), activeId: null, keys: [] };
+  const activeId = pool.find(entry => entry.key === provider.apiKey)!.id;
+  const keys = pool.map(entry => ({
+    id: entry.id,
+    ...(entry.label ? { label: entry.label } : {}),
+    masked: maskApiKey(entry.key),
+    active: entry.id === activeId,
+    ...(entry.addedAt !== undefined ? { addedAt: entry.addedAt } : {}),
+  }));
+  return {
+    revision: providerApiKeyPoolRevision(activeId, keys),
+    activeId,
+    keys,
   };
 }
 
-/** Add (or upsert) a key and make it ACTIVE. Persists config. */
-export function addProviderApiKey(config: CodexCommanderConfig, name: string, key: string, label?: string): { id: string } | { error: string } {
+type ProviderApiKeyMutationOptions = { persist?: boolean };
+
+function persistProviderApiKeyMutation(
+  config: CodexCommanderConfig,
+  options: ProviderApiKeyMutationOptions | undefined,
+): void {
+  if (options?.persist !== false) saveConfigPreservingClaudeCode(config);
+}
+
+/** Add (or upsert) a key and make it ACTIVE. Persists config unless explicitly composed inside a persisted-config mutation. */
+export function addProviderApiKey(
+  config: CodexCommanderConfig,
+  name: string,
+  key: string,
+  label?: string,
+  options?: ProviderApiKeyMutationOptions,
+): { id: string } | { error: string } {
   const provider = config.providers[name];
   if (!provider || !supportsManagedProviderApiKeys(name, provider)) return { error: "provider does not use API-key auth" };
   if (typeof key !== "string" || !key.trim()) return { error: "key is required" };
@@ -119,12 +152,17 @@ export function addProviderApiKey(config: CodexCommanderConfig, name: string, ke
   }
   provider.apiKeyPool = pool;
   provider.apiKey = trimmed;
-  saveConfigPreservingClaudeCode(config);
+  persistProviderApiKeyMutation(config, options);
   return { id };
 }
 
-/** Switch the ACTIVE key (mirrors into `provider.apiKey`). Persists config. */
-export function setActiveProviderApiKey(config: CodexCommanderConfig, name: string, id: string): boolean {
+/** Switch the ACTIVE key (mirrors into `provider.apiKey`). Persists config unless composed inside a persisted-config mutation. */
+export function setActiveProviderApiKey(
+  config: CodexCommanderConfig,
+  name: string,
+  id: string,
+  options?: ProviderApiKeyMutationOptions,
+): boolean {
   const provider = config.providers[name];
   if (!provider || !supportsManagedProviderApiKeys(name, provider)) return false;
   const pool = currentProviderApiKeyPool(provider);
@@ -132,12 +170,18 @@ export function setActiveProviderApiKey(config: CodexCommanderConfig, name: stri
   const entry = pool.find(e => e.id === id);
   if (!entry) return false;
   provider.apiKey = entry.key;
-  saveConfigPreservingClaudeCode(config);
+  persistProviderApiKeyMutation(config, options);
   return true;
 }
 
 /** Rename a key slot without changing its id, secret, or active routing state. */
-export function setProviderApiKeyLabel(config: CodexCommanderConfig, name: string, id: string, label: string | undefined): boolean {
+export function setProviderApiKeyLabel(
+  config: CodexCommanderConfig,
+  name: string,
+  id: string,
+  label: string | undefined,
+  options?: ProviderApiKeyMutationOptions,
+): boolean {
   const provider = config.providers[name];
   if (!provider || !supportsManagedProviderApiKeys(name, provider)) return false;
   const pool = currentProviderApiKeyPool(provider);
@@ -147,12 +191,17 @@ export function setProviderApiKeyLabel(config: CodexCommanderConfig, name: strin
   const trimmedLabel = label?.trim();
   if (trimmedLabel) entry.label = trimmedLabel;
   else delete entry.label;
-  saveConfigPreservingClaudeCode(config);
+  persistProviderApiKeyMutation(config, options);
   return true;
 }
 
-/** Remove one key; removing the active one promotes the first remaining. Persists config. */
-export function removeProviderApiKey(config: CodexCommanderConfig, name: string, id: string): boolean {
+/** Remove one key; removing the active one promotes the first remaining. Persists config unless composed inside a persisted-config mutation. */
+export function removeProviderApiKey(
+  config: CodexCommanderConfig,
+  name: string,
+  id: string,
+  options?: ProviderApiKeyMutationOptions,
+): boolean {
   const provider = config.providers[name];
   if (!provider || !supportsManagedProviderApiKeys(name, provider)) return false;
   const pool = currentProviderApiKeyPool(provider);
@@ -166,6 +215,6 @@ export function removeProviderApiKey(config: CodexCommanderConfig, name: string,
     else delete provider.apiKey;
   }
   if (provider.apiKeyPool.length === 0) delete provider.apiKeyPool;
-  saveConfigPreservingClaudeCode(config);
+  persistProviderApiKeyMutation(config, options);
   return true;
 }

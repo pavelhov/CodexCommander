@@ -3,7 +3,7 @@ import { loadConfig } from "../config";
 import { providerCodexAccountMode } from "../providers/registry";
 import type { CodexCommanderConfig } from "../types";
 import { cmdAddKey, cmdAlias, cmdAutoSwitch, cmdClearCooldown, cmdPriority, cmdRefresh, cmdRemove } from "./account-extended";
-import { apiError, apiJson, classifyAccount, fetchRows, proxyUnreachable, resolveBaseUrl, type AccountDeps, type AccountRow, type AccountType, type ApiResult }
+import { apiError, apiJson, classifyAccount, fetchRows, gateXaiKeyAction, proxyUnreachable, resolveBaseUrl, type AccountDeps, type AccountRow, type AccountType, type ApiResult }
   from "./account-api";
 
 export { classifyAccount } from "./account-api";
@@ -138,35 +138,45 @@ async function cmdList(rest: string[], deps: AccountDeps): Promise<number> {
   const rows: AccountRow[] = [];
   const notes: string[] = [];
   for (const t of targets) {
-    const r = await fetchRows(deps, baseUrl, t.name, t.type);
-    if (r.networkDown) return proxyUnreachable();
-    if (r.errorJson) {
-      if (name) return apiError(r.errorJson, `failed to list ${t.name}`);
-      const errorText = typeof r.errorJson.error === "string" ? r.errorJson.error : "";
-      const skipUnknownKey = t.type === "api-key"
-        && r.status === 404
-        && errorText.includes("unknown provider");
-      const skipConfigOAuth = t.type === "oauth"
-        && t.provenance === "config"
-        && r.status === 400
-        && errorText.includes("unknown oauth provider");
-      if (skipUnknownKey || skipConfigOAuth) continue;
-      return apiError(r.errorJson, `failed to list ${t.name}`);
-    }
-    if (r.rows.length === 0) {
-      if (showAll) notes.push(`${t.name}: no stored accounts or keys`);
-      continue;
-    }
-    rows.push(...r.rows);
-    if (t.type === "codex") {
-      if (r.activeId === null) notes.push("openai: auto (no pin — lowest-usage account is selected per request)");
-      if (providerCodexAccountMode("openai", config.providers?.openai) === "direct") {
-        notes.push("openai is in direct mode — the selection takes effect when pool mode is enabled");
+    // Canonical xAI is intentionally dual-family: chat may remain OAuth while
+    // its separately attested media-key pool is dormant. List both so masked
+    // key ids remain discoverable for later selection/removal.
+    const xaiProvider = t.name === "xai" ? config.providers?.xai : undefined;
+    const familyTypes: AccountType[] = t.name === "xai"
+      && t.type === "oauth"
+      && Boolean(xaiProvider?.apiKey || (xaiProvider?.apiKeyPool?.length ?? 0) > 0)
+      ? ["oauth", "api-key"]
+      : [t.type];
+    let targetRowCount = 0;
+    for (const familyType of familyTypes) {
+      const r = await fetchRows(deps, baseUrl, t.name, familyType);
+      if (r.networkDown) return proxyUnreachable();
+      if (r.errorJson) {
+        if (name) return apiError(r.errorJson, `failed to list ${t.name}`);
+        const errorText = typeof r.errorJson.error === "string" ? r.errorJson.error : "";
+        const skipUnknownKey = familyType === "api-key"
+          && r.status === 404
+          && errorText.includes("unknown provider");
+        const skipConfigOAuth = familyType === "oauth"
+          && t.provenance === "config"
+          && r.status === 400
+          && errorText.includes("unknown oauth provider");
+        if (skipUnknownKey || skipConfigOAuth) continue;
+        return apiError(r.errorJson, `failed to list ${t.name}`);
+      }
+      targetRowCount += r.rows.length;
+      rows.push(...r.rows);
+      if (familyType === "codex") {
+        if (r.activeId === null) notes.push("openai: auto (no pin — lowest-usage account is selected per request)");
+        if (providerCodexAccountMode("openai", config.providers?.openai) === "direct") {
+          notes.push("openai is in direct mode — the selection takes effect when pool mode is enabled");
+        }
+      }
+      if (familyType === "oauth" && REPLACEMENT_STYLE_OAUTH.has(t.name)) {
+        notes.push(`${t.name}: single login slot — re-login replaces the current account`);
       }
     }
-    if (t.type === "oauth" && REPLACEMENT_STYLE_OAUTH.has(t.name)) {
-      notes.push(`${t.name}: single login slot — re-login replaces the current account`);
-    }
+    if (targetRowCount === 0 && showAll) notes.push(`${t.name}: no stored accounts or keys`);
   }
 
   if (wantsJson) {
@@ -196,24 +206,35 @@ async function cmdCurrent(rest: string[], deps: AccountDeps): Promise<number> {
   }
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
-  const r = await fetchRows(deps, baseUrl, name, c.type);
-  if (r.networkDown) return proxyUnreachable();
-  if (r.errorJson) return apiError(r.errorJson, `failed to read ${name}`);
+  const primary = await fetchRows(deps, baseUrl, name, c.type);
+  if (primary.networkDown) return proxyUnreachable();
+  if (primary.errorJson) return apiError(primary.errorJson, `failed to read ${name}`);
+  const xaiProvider = name === "xai" ? config.providers?.xai : undefined;
+  const keyFamily = name === "xai"
+    && c.type === "oauth"
+    && Boolean(xaiProvider?.apiKey || (xaiProvider?.apiKeyPool?.length ?? 0) > 0)
+    ? await fetchRows(deps, baseUrl, name, "api-key")
+    : null;
+  if (keyFamily?.networkDown) return proxyUnreachable();
+  if (keyFamily?.errorJson) return apiError(keyFamily.errorJson, `failed to read ${name} media keys`);
 
-  const activeRow = r.rows.find(row => row.active) ?? null;
+  const activeRow = primary.rows.find(row => row.active) ?? null;
+  const activeKey = keyFamily?.rows.find(row => row.active) ?? null;
   if (wantsJson) {
     console.log(JSON.stringify({
       provider: name,
       type: c.type,
-      activeId: r.activeId,
-      autoSwitchThreshold: r.autoSwitchThreshold,
+      activeId: primary.activeId,
+      autoSwitchThreshold: primary.autoSwitchThreshold,
       account: activeRow,
+      ...(keyFamily ? { mediaKeyActiveId: keyFamily.activeId, mediaKey: activeKey } : {}),
     }, null, 2));
     return 0;
   }
-  if (activeRow) {
-    console.log(formatAccountTable([activeRow]));
-  } else if (c.type === "codex" && r.activeId === null) {
+  const activeRows = [activeRow, activeKey].filter((row): row is AccountRow => row !== null);
+  if (activeRows.length > 0) {
+    console.log(formatAccountTable(activeRows));
+  } else if (c.type === "codex" && primary.activeId === null) {
     console.log("openai: auto (no pin — lowest-usage account is selected per request)");
   } else {
     console.log(`${name}: no active account or key`);
@@ -240,24 +261,48 @@ async function cmdUse(rest: string[], deps: AccountDeps): Promise<number> {
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
 
+  let effectiveType = c.type;
+  if (name === "xai" && c.type === "oauth") {
+    const keyPool = await fetchRows(deps, baseUrl, name, "api-key");
+    if (!keyPool.networkDown && !keyPool.errorJson && keyPool.rows.some(row => row.id === id)) {
+      effectiveType = "api-key";
+    }
+  }
+
   let res: ApiResult;
   let activeId: string;
-  if (c.type === "codex") {
+  if (effectiveType === "codex") {
     activeId = id === MAIN_ALIAS ? MAIN_CODEX_ID : id;
     res = await apiJson(deps, baseUrl, "PUT", "/api/codex-auth/active", { accountId: activeId });
-  } else if (c.type === "oauth") {
+  } else if (effectiveType === "oauth") {
     activeId = id;
     res = await apiJson(deps, baseUrl, "PUT", "/api/oauth/accounts/active", { provider: name, accountId: id });
   } else {
     activeId = id;
-    res = await apiJson(deps, baseUrl, "PUT", "/api/providers/keys/active", { name, id });
+    if (name === "xai") {
+      const gate = await gateXaiKeyAction(deps, baseUrl, `Select xAI media API key ${id}?`);
+      if (!gate) return 1;
+      res = await apiJson(
+        deps,
+        baseUrl,
+        "PUT",
+        "/api/providers/keys/active",
+        { name, id, expectedRevision: gate.revision },
+        {
+          target: gate.target,
+          actionAttestation: { action: "xai_key_select", target: "xai_key", id },
+        },
+      );
+    } else {
+      res = await apiJson(deps, baseUrl, "PUT", "/api/providers/keys/active", { name, id });
+    }
   }
   if (res.status === 0) return proxyUnreachable();
   if (res.status !== 200) return apiError(res.json, `failed to switch ${name}`);
 
-  if (wantsJson) console.log(JSON.stringify({ ok: true, provider: name, type: c.type, activeId }, null, 2));
-  else console.log(`${name}: active ${c.type === "api-key" ? "key" : "account"} is now ${displayId(activeId)}`);
-  if (c.type === "codex") {
+  if (wantsJson) console.log(JSON.stringify({ ok: true, provider: name, type: effectiveType, activeId }, null, 2));
+  else console.log(`${name}: active ${effectiveType === "api-key" ? "key" : "account"} is now ${displayId(activeId)}`);
+  if (effectiveType === "codex") {
     console.error("Takes effect immediately; running threads move on their next request, and in-flight requests keep the account they captured.");
     const active = await apiJson(deps, baseUrl, "GET", "/api/codex-auth/active");
     if (active.status === 200 && typeof active.json.autoSwitchThreshold === "number" && active.json.autoSwitchThreshold > 0) {

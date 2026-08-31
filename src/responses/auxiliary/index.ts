@@ -21,7 +21,11 @@ import {
   TranslatorBudgetExceededError,
 } from "../../lib/translator-budget";
 import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchStreamProtocolError } from "../../web-search/progress-stream";
-import { fulfillImageCall } from "../../images/fulfill";
+import {
+  createImageArtifactProtectionScope,
+  fulfillImageCall,
+  safeMediaToolResult,
+} from "../../images/fulfill";
 import { parseVideoCallArgs, buildVideoResult } from "../../images/fulfill-video";
 import { createImageBudget, pruneArtifacts, resolveArtifactPath } from "../../images/artifacts";
 import {
@@ -475,9 +479,12 @@ async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
     start(controller) {
       const encoder = new TextEncoder();
       const drive = async () => {
+        const imageArtifacts = createImageArtifactProtectionScope();
         let current = firstResponse;
         let roundsUsed = 0;
         let paidCalls = 0;
+        let imageSubmissionOutcomeUnknown = false;
+        let imagePaidSubmissionConsumedWithoutArtifact = false;
         let hiddenUsage: CodexCommanderUsage | undefined;
         try {
           for (;;) {
@@ -532,9 +539,30 @@ async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
             }
 
             const outputs = new Map<string, string>();
+            const replayDisabledAtRoundStart = imagePaidSubmissionConsumedWithoutArtifact;
             for (const call of inspection.auxiliaryCalls) {
               let result;
-              if (paidCalls >= MAX_IMAGE_CALLS_PER_TURN) {
+              if (imageSubmissionOutcomeUnknown) {
+                result = {
+                  ok: false,
+                  model: plan.model,
+                  prompt: "",
+                  files: [],
+                  count: 0,
+                  error: "submission_outcome_unknown: image generation is disabled for the rest of this turn",
+                  dispatchCertainty: "ambiguous" as const,
+                };
+              } else if (replayDisabledAtRoundStart) {
+                result = {
+                  ok: false,
+                  model: plan.model,
+                  prompt: "",
+                  files: [],
+                  count: 0,
+                  error: "image artifact unavailable; paid submission replay is disabled for this turn",
+                  paidSubmissionConsumed: true,
+                };
+              } else if (paidCalls >= MAX_IMAGE_CALLS_PER_TURN) {
                 result = {
                   ok: false,
                   model: plan.model,
@@ -550,16 +578,30 @@ async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
                   plan,
                   imageBudget,
                   signal,
+                  imageArtifacts,
                 );
+                if (result.dispatchCertainty === "ambiguous") {
+                  imageSubmissionOutcomeUnknown = true;
+                }
+                if (result.paidSubmissionConsumed && !result.ok) {
+                  imagePaidSubmissionConsumedWithoutArtifact = true;
+                }
               }
-              outputs.set(call.callId, JSON.stringify(result));
+              imageArtifacts.protect(result.files);
+              outputs.set(call.callId, JSON.stringify(safeMediaToolResult(result, "image")));
             }
             hiddenUsage = combineUsage(hiddenUsage, inspection.usage);
             replayBody = appendNativeAuxiliaryTurn(replayBody, inspection.outputItems, outputs);
             roundsUsed += 1;
             noteFirstOutput();
             controller.enqueue(encoder.encode(": ccx-auxiliary\n\n"));
-            current = await fetchIteration(roundsUsed < imageMaxRounds ? "synthetic" : "omit");
+            current = await fetchIteration(
+              !imageSubmissionOutcomeUnknown
+                && !imagePaidSubmissionConsumedWithoutArtifact
+                && roundsUsed < imageMaxRounds
+                ? "synthetic"
+                : "omit",
+            );
           }
         } catch (error) {
           if (signal.aborted) {
@@ -580,6 +622,7 @@ async function runNativeResponsesImageLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
           controller.enqueue(encoder.encode(`event: response.failed\ndata: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`));
           controller.close();
         } finally {
+          imageArtifacts.close();
           if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
         }
       };
@@ -621,6 +664,8 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
     : STALL_TIMEOUT_MS;
   const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
   let paidImageCalls = 0;
+  let imageSubmissionOutcomeUnknown = false;
+  let imagePaidSubmissionConsumedWithoutArtifact = false;
   let acceptedVideoCalls = 0;
   let hiddenUsage: CodexCommanderUsage | undefined;
 
@@ -1108,6 +1153,8 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
   // Drive the remaining iterations live. Image generation runs interleaved with the real sidecar
   // timing; the final answer's passthrough events come last.
   async function* produce(): AsyncGenerator<AdapterEvent> {
+    const imageArtifacts = createImageArtifactProtectionScope();
+    const videoDeliveryLeases: Array<() => void> = [];
     let prepared = firstPrepared;
     let imageRoundsUsed = 0;
     let videoRoundsUsed = 0;
@@ -1116,7 +1163,10 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
         const atGlobalCeiling = i === HARD_CAP - 1;
         const availability = {
           webSearch: !atGlobalCeiling && webSearchesExecuted < webSearchMax,
-          image: !atGlobalCeiling && imageRoundsUsed < imageMaxRounds,
+          image: !atGlobalCeiling
+            && !imageSubmissionOutcomeUnknown
+            && !imagePaidSubmissionConsumedWithoutArtifact
+            && imageRoundsUsed < imageMaxRounds,
           video: !atGlobalCeiling && videoRoundsUsed < videoMaxRounds,
         };
         const forceFinal = !availability.webSearch && !availability.image && !availability.video;
@@ -1211,11 +1261,18 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
                 };
                 let pArgs: Record<string, unknown> = {};
                 try { const raw: unknown = JSON.parse(call.args || "{}"); if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) pArgs = raw as Record<string, unknown>; } catch { /* malformed args */ }
-                fulfilled.push({ call, result: vResult, args: pArgs, content: JSON.stringify(vResult), isError: true });
+                fulfilled.push({
+                  call,
+                  result: vResult,
+                  args: pArgs,
+                  content: JSON.stringify(safeMediaToolResult(vResult, "video")),
+                  isError: true,
+                });
                 continue;
               }
               const vArgs = parseVideoCallArgs(call.args);
               let vResult;
+              let deliveryRuntime: ModelVideoRuntime | undefined;
               if (!vArgs.ok) {
                 vResult = { ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0, error: vArgs.error };
               } else {
@@ -1223,6 +1280,7 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
                 try {
                   const videoDeadline = Date.now() + videoTimeout;
                   const runtime = deps.videoRuntime ?? getDefaultModelVideoRuntime();
+                  deliveryRuntime = runtime ?? undefined;
                   if (!runtime) {
                     vResult = {
                       ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0,
@@ -1319,18 +1377,51 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
                 }
               }
               if (signal.aborted) throw new LoopError(499, "client closed request during video-bridge");
+              if (vResult.ok) {
+                const artifactId = vResult.files[0]?.split(/[\\/]/).at(-1);
+                if (artifactId) {
+                  const release = deliveryRuntime?.acquireArtifactDeliveryLease?.(artifactId);
+                  if (release) videoDeliveryLeases.push(release);
+                }
+              }
+              // Runtime completion pins are deliberately short-lived. Adopt successful video
+              // paths into the request scope before a later handler can await and expose them to
+              // concurrent retention before replay.
+              imageArtifacts.protect(vResult.files);
               let vParsedArgs: Record<string, unknown> = {};
               try { const raw: unknown = JSON.parse(call.args || "{}"); if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) vParsedArgs = raw as Record<string, unknown>; } catch { /* malformed args */ }
-              fulfilled.push({ call, result: vResult, args: vParsedArgs, content: JSON.stringify(vResult), isError: !vResult.ok });
+              fulfilled.push({
+                call,
+                result: vResult,
+                args: vParsedArgs,
+                content: JSON.stringify(safeMediaToolResult(vResult, "video")),
+                isError: !vResult.ok,
+              });
             } else {
               yield { type: "heartbeat" };
               if (!plan) {
                 const unavailable = { ok: false, model: "", prompt: "", files: [], count: 0, error: "image bridge not configured" };
-                fulfilled.push({ call, result: unavailable, args: {}, content: JSON.stringify(unavailable), isError: true });
+                fulfilled.push({
+                  call,
+                  result: unavailable,
+                  args: {},
+                  content: JSON.stringify(safeMediaToolResult(unavailable, "image")),
+                  isError: true,
+                });
                 continue;
               }
               let result: Awaited<ReturnType<typeof fulfillImageCall>>;
-              if (paidImageCalls >= MAX_IMAGE_CALLS_PER_TURN) {
+              if (imageSubmissionOutcomeUnknown) {
+                result = {
+                  ok: false,
+                  model: plan.model,
+                  prompt: "",
+                  files: [],
+                  count: 0,
+                  error: "submission_outcome_unknown: image generation is disabled for the rest of this turn",
+                  dispatchCertainty: "ambiguous",
+                };
+              } else if (paidImageCalls >= MAX_IMAGE_CALLS_PER_TURN) {
                 result = {
                   ok: false,
                   model: plan.model,
@@ -1343,9 +1434,16 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
                 paidImageCalls += 1;
                 result = await fulfillImageCall(
                   { id: call.id, name: call.name, arguments: call.args },
-                  plan, budget, signal,
+                  plan, budget, signal, imageArtifacts,
                 );
+                if (result.dispatchCertainty === "ambiguous") {
+                  imageSubmissionOutcomeUnknown = true;
+                }
+                if (result.paidSubmissionConsumed && !result.ok) {
+                  imagePaidSubmissionConsumedWithoutArtifact = true;
+                }
               }
+              imageArtifacts.protect(result.files);
               if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
               let parsedArgs: Record<string, unknown> = {};
               try {
@@ -1354,7 +1452,13 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
                   parsedArgs = raw as Record<string, unknown>;
                 }
               } catch { /* malformed args */ }
-              fulfilled.push({ call, result, args: parsedArgs, content: JSON.stringify(result), isError: !result.ok });
+              fulfilled.push({
+                call,
+                result,
+                args: parsedArgs,
+                content: JSON.stringify(safeMediaToolResult(result, "image")),
+                isError: !result.ok,
+              });
             }
           }
           // Prune artifacts once after the entire batch so a tight keepCount
@@ -1386,7 +1490,10 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
                 }
               }
             }
-            f.content = JSON.stringify(f.result);
+            f.content = JSON.stringify(safeMediaToolResult(
+              f.result,
+              f.call.handler === "video" ? "video" : "image",
+            ));
             f.isError = !f.result.ok;
           }
           const now = Date.now();
@@ -1435,6 +1542,8 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
         }
       }
     } finally {
+      for (const release of videoDeliveryLeases.splice(0)) release();
+      imageArtifacts.close();
       if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
     }
   }

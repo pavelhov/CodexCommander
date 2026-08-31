@@ -25,6 +25,16 @@ export type MediaErrorReason =
   | "missing_result"
   | "http_status";
 
+export type MediaSafeFailureCode =
+  | "needs_auth"
+  | "entitlement_denied"
+  | "rate_limited"
+  | "policy_rejected"
+  | "ambiguous_submission"
+  | "upstream_failed"
+  | "cancelled"
+  | "timeout";
+
 const SAFE_MESSAGES: Record<MediaErrorCode, string> = {
   invalid_request: "The media request is invalid.",
   needs_auth: "The selected media credential needs authentication.",
@@ -90,6 +100,19 @@ export function mediaError(init: MediaTransportErrorInit): MediaTransportError {
 
 export function isMediaTransportError(error: unknown): error is MediaTransportError {
   return error instanceof MediaTransportError;
+}
+
+export function safeMediaFailure(error: Pick<MediaTransportError, "code">): MediaSafeFailureCode {
+  switch (error.code) {
+    case "needs_auth": return "needs_auth";
+    case "entitlement_denied": return "entitlement_denied";
+    case "rate_limited": return "rate_limited";
+    case "policy_rejected": return "policy_rejected";
+    case "ambiguous_submission": return "ambiguous_submission";
+    case "cancelled": return "cancelled";
+    case "timeout": return "timeout";
+    default: return "upstream_failed";
+  }
 }
 
 /** Convert malformed or incomplete 2xx POST results into the same no-replay certainty contract. */

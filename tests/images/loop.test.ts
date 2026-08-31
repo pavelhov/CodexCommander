@@ -2,14 +2,22 @@ import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "b
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import type { ProviderAdapter, IncomingMeta } from "../../src/adapters/base";
 import type { AdapterEvent, CodexCommanderParsedRequest } from "../../src/types";
 import type { ImageBridgePlan, ImageCallResult, VideoBridgePlan } from "../../src/images/types";
 import type { ImageBridgeDeps } from "../../src/images/loop";
 import type { AuxiliaryWebSearchPlan } from "../../src/responses/auxiliary";
-import type { ModelVideoRuntime } from "../../src/images/media-runtime";
+import { MediaRuntime, type ModelVideoRuntime } from "../../src/images/media-runtime";
+import { openVideoJobStore } from "../../src/images/video-job-store";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { registerArtifactPinAuthority } from "../../src/images/artifact-retention";
+import { pruneArtifacts } from "../../src/images/artifacts";
+
+type TestImageCallResult = ImageCallResult & {
+  dispatchCertainty?: "definite" | "ambiguous";
+  paidSubmissionConsumed?: boolean;
+};
 
 const PREV_HOME = process.env.CODEXCOMMANDER_HOME;
 const TEST_HOME = join(tmpdir(), "ccx-test-" + randomUUID());
@@ -18,7 +26,7 @@ let clampImageMaxRounds: typeof import("../../src/images/loop")["clampImageMaxRo
 let DEFAULT_MAX_ROUNDS: typeof import("../../src/images/loop")["DEFAULT_MAX_ROUNDS"];
 let MAX_ROUNDS_HARD_LIMIT: typeof import("../../src/images/loop")["MAX_ROUNDS_HARD_LIMIT"];
 
-let fulfillResult: ImageCallResult = {
+let fulfillResult: TestImageCallResult = {
   ok: true, model: "grok-imagine-image-quality", prompt: "a cat",
   files: ["/test/img.png"], count: 1, markdown: "![image](/test/img.png)",
 };
@@ -26,6 +34,7 @@ let fulfillResult: ImageCallResult = {
 beforeAll(async () => {
   process.env.CODEXCOMMANDER_HOME = TEST_HOME;
   mock.restore();
+  const actualFulfill = await import("../../src/images/fulfill");
   mock.module("../../src/web-search/progress-stream", () => ({
     parseStreamWithProgress: async function* (_resp: Response, parse: (r: Response) => AsyncGenerator<AdapterEvent>, _opts: unknown) {
       for await (const e of parse(_resp)) yield e;
@@ -34,7 +43,12 @@ beforeAll(async () => {
     WebSearchStreamProtocolError: class extends Error { /* */ },
   }));
   mock.module("../../src/images/fulfill", () => ({
-    fulfillImageCall: async (): Promise<ImageCallResult> => fulfillResult,
+    ...actualFulfill,
+    fulfillImageCall: async (): Promise<TestImageCallResult> => {
+      fulfillCalls += 1;
+      await fulfillGate;
+      return fulfillResult;
+    },
   }));
   const actualWebExecutor = await import("../../src/web-search/executor");
   mock.module("../../src/web-search/executor", () => ({
@@ -69,6 +83,8 @@ afterAll(() => { if (PREV_HOME === undefined) delete process.env.CODEXCOMMANDER_
 let streamQueue: AdapterEvent[][] = [];
 let buildRequestCalls = 0;
 let videoSubmissions = 0;
+let fulfillCalls = 0;
+let fulfillGate: Promise<void> | undefined;
 
 const completedVideoRuntime: ModelVideoRuntime = {
   async submitVideo() {
@@ -91,7 +107,7 @@ const completedVideoRuntime: ModelVideoRuntime = {
   async waitForVideoUpdate() { return { kind: "missing" }; },
 };
 
-const defaultFulfillResult: ImageCallResult = {
+const defaultFulfillResult: TestImageCallResult = {
   ok: true, model: "grok-imagine-image-quality", prompt: "a cat",
   files: ["/test/img.png"], count: 1, markdown: "![image](/test/img.png)",
 };
@@ -100,6 +116,8 @@ beforeEach(() => {
   writeFileSync(join(TEST_HOME, "artifacts", "video-test.mp4"), "local-video-fixture", { mode: 0o600 });
   fulfillResult = { ...defaultFulfillResult, files: [...defaultFulfillResult.files] };
   buildRequestCalls = 0;
+  fulfillCalls = 0;
+  fulfillGate = undefined;
   videoSubmissions = 0;
   streamQueue = [];
 });
@@ -171,12 +189,251 @@ describe("runWithImageBridge", () => {
     expect(sse).toContain("Here is your image");
   });
 
+  test("routed low-cap replay preserves the current paid image beside an older durable pin", async () => {
+    const artifactsDir = join(TEST_HOME, "artifacts");
+    rmSync(artifactsDir, { recursive: true, force: true });
+    mkdirSync(artifactsDir, { recursive: true, mode: 0o700 });
+    const olderPinnedId = "older-routed-video.mp4";
+    const olderPinned = join(artifactsDir, olderPinnedId);
+    const currentImage = join(artifactsDir, "current-routed-image.png");
+    writeFileSync(olderPinned, "video", { mode: 0o600 });
+    writeFileSync(currentImage, "image", { mode: 0o600 });
+    const oldSeconds = (Date.now() - 60_000) / 1_000;
+    utimesSync(olderPinned, oldSeconds, oldSeconds);
+    fulfillResult = {
+      ok: true,
+      model: plan.model,
+      prompt: "a cat",
+      path: currentImage,
+      files: [currentImage],
+      count: 1,
+      markdown: `![image](file://${currentImage})`,
+    };
+    const unregisterPin = registerArtifactPinAuthority({
+      protectedArtifactIds: () => new Set([olderPinnedId]),
+      releaseArtifactForPrune: () => "protected",
+    });
+    streamQueue = [
+      [...imageCallEvents],
+      [{ type: "text_delta", text: "Here is the retained image" }, { type: "done" }],
+    ];
+    try {
+      const response = await runWithImageBridge({
+        parsed: makeParsed(),
+        adapter: mockAdapter,
+        plan: { ...plan, artifactsKeepCount: 1 },
+      });
+      expect(await response.text()).toContain("Here is the retained image");
+      expect(existsSync(currentImage)).toBe(true);
+    } finally {
+      unregisterPin();
+    }
+  });
+
+  test("video remains request-pinned while a later image handler is delayed under older-pin pressure", async () => {
+    const artifactsDir = join(TEST_HOME, "artifacts");
+    rmSync(artifactsDir, { recursive: true, force: true });
+    mkdirSync(artifactsDir, { recursive: true, mode: 0o700 });
+    const videoPath = join(artifactsDir, "video-test.mp4");
+    const olderPinnedId = "older-video-delivery-pin.mp4";
+    const olderPinned = join(artifactsDir, olderPinnedId);
+    writeFileSync(olderPinned, "older durable pin", { mode: 0o600 });
+    const oldSeconds = (Date.now() - 60_000) / 1_000;
+    utimesSync(olderPinned, oldSeconds, oldSeconds);
+    const unregisterPin = registerArtifactPinAuthority({
+      protectedArtifactIds: () => new Set([olderPinnedId]),
+      releaseArtifactForPrune: () => "protected",
+    });
+    const store = openVideoJobStore({
+      path: join(TEST_HOME, "media", `delivery-${randomUUID()}.sqlite`),
+    });
+    const runtime = new MediaRuntime(store, {
+      artifactsKeepCount: 1,
+      submitVideoJob: async () => ({ requestId: "delivery-request" }),
+      pollVideoJob: async () => ({ status: "done", videoUrl: "https://signed.invalid/video" }),
+      downloadVideo: async () => {
+        writeFileSync(videoPath, Buffer.from([0x00, 0x00, 0x00, 0x0c, 0x66, 0x74, 0x79, 0x70]), { mode: 0o600 });
+        return videoPath;
+      },
+      sleep: async () => {},
+      pollIntervalMs: 1,
+    });
+    const unregisterRuntime = registerArtifactPinAuthority({
+      protectedArtifactIds: () => runtime.protectedArtifactIds(),
+      releaseArtifactForPrune: artifactId => runtime.releaseArtifactForPrune(artifactId),
+    });
+    let releaseImage!: () => void;
+    fulfillGate = new Promise<void>(resolve => { releaseImage = resolve; });
+    const videoPlan = {
+      auth: {
+        authSource: "api_key",
+        providerKind: "canonical",
+        slotRef: "media-slot:delivery-test",
+        identityDigest: `sha256:${"d".repeat(64)}`,
+      },
+      model: "grok-imagine-video-1.5",
+      toolNames: new Set(["video_gen"]),
+    } as VideoBridgePlan;
+    const videoThenImage: AdapterEvent[] = [
+      { type: "tool_call_start", id: "video-delivery", name: "video_gen" },
+      { type: "tool_call_delta", arguments: '{"prompt":"a red circle","duration":1,"resolution":"1080p"}' },
+      { type: "tool_call_end" },
+      { type: "tool_call_start", id: "image-delivery", name: "image_gen" },
+      { type: "tool_call_delta", arguments: '{"prompt":"a still frame"}' },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ];
+    streamQueue = [
+      videoThenImage,
+      [{ type: "text_delta", text: "Both media results are ready" }, { type: "done" }],
+    ];
+    try {
+      const response = await runWithImageBridge({
+        parsed: makeParsed(),
+        adapter: mockAdapter,
+        plan: { ...plan, artifactsKeepCount: 1 },
+        videoPlan,
+        videoRuntime: runtime,
+        imageMaxRounds: 1,
+        videoMaxRounds: 1,
+      });
+      const responseText = response.text();
+      while (fulfillCalls === 0) await Bun.sleep(1);
+      expect(store.listVideoJobs()[0]?.state).toBe("completed");
+      expect(runtime.protectedArtifactIds().has("video-test.mp4")).toBe(true);
+      pruneArtifacts(1);
+      expect(existsSync(videoPath)).toBe(true);
+      expect(store.listVideoJobs()[0]?.state).toBe("completed");
+      releaseImage();
+      expect(await responseText).toContain("Both media results are ready");
+      expect(existsSync(videoPath)).toBe(true);
+    } finally {
+      releaseImage();
+      unregisterRuntime();
+      unregisterPin();
+      await runtime.shutdown();
+    }
+  });
+
+  test("next hosted image request contains only safe relative artifact metadata", async () => {
+    const privatePath = join(TEST_HOME, "artifacts", "private-image.png");
+    writeFileSync(privatePath, "private-image", { mode: 0o600 });
+    fulfillResult = {
+      ok: true,
+      model: "private-model-sentinel",
+      prompt: "private-prompt-sentinel",
+      path: privatePath,
+      files: [privatePath],
+      count: 1,
+      markdown: `![image](file://${privatePath})`,
+    };
+    let nextContext: CodexCommanderParsedRequest["context"] | undefined;
+    const capturingAdapter: ProviderAdapter = {
+      ...mockAdapter,
+      buildRequest(parsed, incoming) {
+        if (buildRequestCalls > 0) nextContext = structuredClone(parsed.context);
+        return mockAdapter.buildRequest(parsed, incoming);
+      },
+    };
+    streamQueue = [
+      [...imageCallEvents],
+      [{ type: "text_delta", text: "safe image result received" }, { type: "done" }],
+    ];
+
+    const response = await runWithImageBridge({ parsed: makeParsed(), adapter: capturingAdapter, plan });
+    expect(await response.text()).toContain("safe image result received");
+
+    const toolResult = nextContext?.messages.find(message => message.role === "toolResult");
+    const content = typeof toolResult?.content === "string" ? toolResult.content : JSON.stringify(toolResult?.content);
+    expect(JSON.parse(content)).toEqual({
+      ok: true,
+      status: "completed",
+      artifacts: ["/v1/codexcommander/artifacts/private-image.png"],
+      markdown: "![image](/v1/codexcommander/artifacts/private-image.png)",
+    });
+    expect(content).not.toContain(privatePath);
+    expect(content).not.toContain('"path"');
+    expect(content).not.toContain('"files"');
+    expect(content).not.toContain("private-model-sentinel");
+    expect(content).not.toContain("private-prompt-sentinel");
+  });
+
   test("fulfillImageCall error → model responds about failure", async () => {
     const sse = await runAndGetSSE(
       [imageCallEvents, [{ type: "text_delta", text: "Sorry, image generation failed" }, { type: "done" }]],
       { ok: false, model: "grok-imagine-image-quality", prompt: "a cat", files: [], count: 0, error: "xAI unreachable" },
     );
     expect(sse).toContain("Sorry, image generation failed");
+  });
+
+  test("known-success paid POST with no artifact is not replayed in a later routed round", async () => {
+    fulfillResult = {
+      ok: false,
+      model: plan.model,
+      prompt: "a cat",
+      files: [],
+      count: 0,
+      error: "image artifact unavailable after provider completion",
+      paidSubmissionConsumed: true,
+    };
+    const contexts: CodexCommanderParsedRequest["context"][] = [];
+    const capturingAdapter: ProviderAdapter = {
+      ...mockAdapter,
+      buildRequest(parsed, incoming) {
+        contexts.push(structuredClone(parsed.context));
+        return mockAdapter.buildRequest(parsed, incoming);
+      },
+    };
+    streamQueue = [
+      [...imageCallEvents],
+      [{ type: "text_delta", text: "The paid image could not be stored." }, { type: "done" }],
+    ];
+
+    const response = await runWithImageBridge({
+      parsed: makeParsed(),
+      adapter: capturingAdapter,
+      plan,
+      imageMaxRounds: 3,
+    });
+    expect(await response.text()).toContain("could not be stored");
+    expect(fulfillCalls).toBe(1);
+    expect(contexts).toHaveLength(2);
+    expect(contexts[1]!.tools.some(tool => plan.toolNames.has(tool.name))).toBe(false);
+    const resultMessage = contexts[1]!.messages.find(message => message.role === "toolResult");
+    expect(JSON.parse(String(resultMessage?.content))).toEqual({ ok: false, status: "artifact_unavailable" });
+  });
+
+  test("an ambiguous image POST blocks later paid calls in the same hosted loop", async () => {
+    const secondImageCall: AdapterEvent[] = [
+      { type: "tool_call_start", id: "call_2", name: "image_gen" },
+      { type: "tool_call_delta", arguments: '{"prompt":"must not dispatch"}' },
+      { type: "tool_call_end" },
+    ];
+    streamQueue = [
+      [...imageCallEvents.slice(0, -1), ...secondImageCall, { type: "done" }],
+      [{ type: "text_delta", text: "submission outcome is unknown" }, { type: "done" }],
+    ];
+    fulfillResult = {
+      ok: false,
+      model: plan.model,
+      prompt: "a cat",
+      files: [],
+      count: 0,
+      error: "submission_outcome_unknown",
+      dispatchCertainty: "ambiguous",
+    };
+
+    const response = await runWithImageBridge({
+      parsed: makeParsed(),
+      adapter: mockAdapter,
+      plan,
+      imageMaxRounds: 2,
+    });
+    const sse = await response.text();
+
+    expect(sse).toContain("submission outcome is unknown");
+    expect(fulfillCalls).toBe(1);
+    expect(buildRequestCalls).toBe(2);
   });
 
   test("image_gen tool call is intercepted — not visible in client SSE", async () => {
@@ -283,7 +540,7 @@ describe("runWithImageBridge", () => {
     expect(buildRequestCalls).toBe(3);
   });
 
-  test("accepts at most one video submission per turn", async () => {
+  test("accepts at most one video submission and keeps the next adapter request path-safe", async () => {
     const videoPlan = {
       auth: {
         authSource: "api_key",
@@ -328,11 +585,18 @@ describe("runWithImageBridge", () => {
       messages: Array<{ role: string; toolCallId?: string; content?: string }>;
     };
     const videoResult = observed.messages.find(message => message.toolCallId === "video_1");
-    expect(JSON.parse(videoResult?.content ?? "{}")).toMatchObject({
+    const videoContent = videoResult?.content ?? "{}";
+    expect(JSON.parse(videoContent)).toEqual({
       ok: true,
-      path: expect.stringContaining("video-test.mp4"),
-      jobId: "video-job-1",
+      status: "completed",
+      artifacts: ["/v1/codexcommander/artifacts/video-test.mp4"],
+      markdown: "[Open video](/v1/codexcommander/artifacts/video-test.mp4)",
     });
+    expect(videoContent).not.toContain(TEST_HOME);
+    expect(videoContent).not.toContain("/Users/");
+    expect(videoContent).not.toContain('"path"');
+    expect(videoContent).not.toContain('"files"');
+    expect(videoContent).not.toContain('"jobId"');
     expect(videoSubmissions).toBe(1);
   });
 

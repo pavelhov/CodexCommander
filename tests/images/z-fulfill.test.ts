@@ -2,13 +2,16 @@ import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import type { ImageBridgePlan } from "../../src/images/types";
 import type { XaiImageRequest } from "../../src/images/xai-client";
+import { mediaError } from "../../src/images/media-errors";
+import { pruneMediaArtifacts, registerArtifactPinAuthority } from "../../src/images/artifact-retention";
 
 const PREV_HOME = process.env.CODEXCOMMANDER_HOME;
 let fulfillImageCall: typeof import("../../src/images/fulfill")["fulfillImageCall"];
 let imageFulfillmentTailSnapshot: typeof import("../../src/images/fulfill")["imageFulfillmentTailSnapshot"];
+let safeMediaToolResult: typeof import("../../src/images/fulfill")["safeMediaToolResult"];
 let testHome = "";
 
 beforeAll(async () => {
@@ -24,12 +27,19 @@ beforeAll(async () => {
     },
   }));
   mock.module("../../src/images/artifacts", () => ({
+    artifactHttpUrl: (path: string) => `/v1/codexcommander/artifacts/${path.split(/[\\/]/).at(-1)}`,
     createImageBudget: () => ({ spent: 0 }),
+    getArtifactsDir: () => join(testHome, "artifacts"),
     materializeInlineImage: async () => materializeFn(matIdx++),
     downloadImageToArtifact: async () => downloadFn(dlIdx++),
-    pruneArtifacts: () => pruneImpl(),
+    pruneArtifacts: (keepCount?: number) => pruneImpl(keepCount),
+    resolveArtifactPath: (id: string) => join(testHome, "artifacts", id),
   }));
-  ({ fulfillImageCall, imageFulfillmentTailSnapshot } = await import(`../../src/images/fulfill?fulfill=${Date.now()}`));
+  ({
+    fulfillImageCall,
+    imageFulfillmentTailSnapshot,
+    safeMediaToolResult,
+  } = await import(`../../src/images/fulfill?fulfill=${Date.now()}`));
 });
 afterAll(() => { if (PREV_HOME === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = PREV_HOME; mock.restore(); });
 
@@ -40,7 +50,7 @@ const xaiCalls: XaiImageRequest[] = [];
 let matIdx = 0;
 let dlIdx = 0;
 let pruneCalls = 0;
-let pruneImpl: () => void = () => { pruneCalls++; };
+let pruneImpl: (keepCount?: number) => void = () => { pruneCalls++; };
 let materializeFn: (i: number) => Promise<string> = async (i) => touchArtifact(`img-${i}.png`);
 let downloadFn: (i: number) => Promise<string> = async (i) => touchArtifact(`dl-${i}.png`);
 
@@ -79,6 +89,57 @@ function reset(): void {
 }
 
 describe("fulfillImageCall", () => {
+  test("provider-safe result serialization omits every private/internal field", () => {
+    const privatePath = touchArtifact("img-safe-result.png");
+    const serialized = JSON.stringify(safeMediaToolResult({
+      ok: true,
+      model: "private-model-sentinel",
+      prompt: "private-prompt-sentinel",
+      path: privatePath,
+      files: [privatePath],
+      count: 1,
+      markdown: `![image](file://${privatePath})`,
+    }, "image"));
+    expect(JSON.parse(serialized)).toEqual({
+      ok: true,
+      status: "completed",
+      artifacts: ["/v1/codexcommander/artifacts/img-safe-result.png"],
+      markdown: "![image](/v1/codexcommander/artifacts/img-safe-result.png)",
+    });
+    expect(serialized).not.toContain("/Users/test/");
+    expect(serialized).not.toContain('"path"');
+    expect(serialized).not.toContain('"files"');
+    expect(serialized).not.toContain("private-model-sentinel");
+    expect(serialized).not.toContain("private-prompt-sentinel");
+    expect(serialized).not.toContain("file://");
+
+    const externalPath = "/Users/test/private/home-user-sentinel.png";
+    const external = JSON.stringify(safeMediaToolResult({
+      ok: true,
+      model: "private-model",
+      prompt: "private-prompt",
+      path: externalPath,
+      files: [externalPath],
+      count: 1,
+    }, "image"));
+    expect(JSON.parse(external)).toEqual({ ok: true, status: "completed" });
+    expect(external).not.toContain("home-user-sentinel");
+  });
+
+  test("provider-safe failures collapse raw errors to an opaque status", () => {
+    const serialized = JSON.stringify(safeMediaToolResult({
+      ok: false,
+      model: "private-model",
+      prompt: "private-prompt",
+      files: [],
+      count: 0,
+      error: "download failed for https://provider.invalid/result?token=must-not-leak",
+    }, "video"));
+    expect(JSON.parse(serialized)).toEqual({ ok: false, status: "failed" });
+    expect(serialized).not.toContain("provider.invalid");
+    expect(serialized).not.toContain("must-not-leak");
+  });
+
   test("valid args → ok:true with file", async () => {
     reset();
     const r = await fulfillImageCall(
@@ -123,6 +184,24 @@ describe("fulfillImageCall", () => {
     expect(r.error).toContain("500");
   });
 
+  test("ambiguous xAI submission preserves certainty as a typed no-replay result", async () => {
+    reset();
+    xaiError = mediaError({
+      code: "ambiguous_submission",
+      phase: "submit",
+      certainty: "ambiguous",
+      reason: "network",
+    });
+    const r = await fulfillImageCall(
+      { id: "c1", name: "image_gen", arguments: JSON.stringify({ prompt: "x" }) }, plan, { spent: 0 },
+    );
+    expect(r).toMatchObject({
+      ok: false,
+      error: "submission_outcome_unknown",
+      dispatchCertainty: "ambiguous",
+    });
+  });
+
   test("b64_json result → materialized via materializeInlineImage", async () => {
     reset();
     xaiResult = { images: [{ b64_json: "dGVzdA==" }] };
@@ -141,10 +220,16 @@ describe("fulfillImageCall", () => {
 
   test("all images fail → ok:false", async () => {
     reset();
-    materializeFn = async () => { throw new Error("disk full"); };
+    xaiResult = { images: [{ b64_json: "invalid-provider-bytes" }, { url: "https://cdn.example.com/i.png" }] };
+    materializeFn = async () => { throw new Error("invalid inline image"); };
+    downloadFn = async () => { throw new Error("disk full"); };
     const r = await fulfillImageCall({ id: "c1", name: "image_gen", arguments: `{"prompt":"x"}` }, plan, { spent: 0 });
     expect(r.ok).toBe(false);
-    expect(r.error).toContain("no usable images");
+    expect(r.error).toBe("image artifact unavailable after provider completion");
+    expect(r.paidSubmissionConsumed).toBe(true);
+    expect(safeMediaToolResult(r, "image")).toEqual({ ok: false, status: "artifact_unavailable" });
+    expect(matIdx).toBe(1);
+    expect(dlIdx).toBe(1);
   });
 
   test("one of two images fails → ok:true with 1 file", async () => {
@@ -154,6 +239,7 @@ describe("fulfillImageCall", () => {
     const r = await fulfillImageCall({ id: "c1", name: "image_gen", arguments: `{"prompt":"x"}` }, plan, { spent: 0 });
     expect(r.ok).toBe(true);
     expect(r.files.length).toBe(1);
+    expect(r.paidSubmissionConsumed).toBe(true);
   });
 
   test("prunes once after the full batch and omits deleted paths", async () => {
@@ -179,6 +265,65 @@ describe("fulfillImageCall", () => {
     expect(r.ok).toBe(true);
     expect(r.files).toEqual([written[1]]);
     expect(r.path).toBe(written[1]);
+  });
+
+  test("concurrent paid batches protect unregistered bytes and each other under older-pin pressure", async () => {
+    reset();
+    const artifactsDir = join(testHome, "artifacts");
+    const olderPinnedId = "older-durable-video.mp4";
+    const olderPinned = touchArtifact(olderPinnedId);
+    const oldSeconds = (Date.now() - 60_000) / 1_000;
+    const { utimesSync } = await import("node:fs");
+    utimesSync(olderPinned, oldSeconds, oldSeconds);
+    const unregisterPin = registerArtifactPinAuthority({
+      protectedArtifactIds: () => new Set([olderPinnedId]),
+      releaseArtifactForPrune: () => "protected",
+    });
+    let secondWritten!: () => void;
+    const secondWrittenPromise = new Promise<void>(resolve => { secondWritten = resolve; });
+    let releaseSecond!: () => void;
+    const releaseSecondPromise = new Promise<void>(resolve => { releaseSecond = resolve; });
+    const written: string[] = [];
+    materializeFn = async (index) => {
+      const path = touchArtifact(`concurrent-${index}.png`);
+      written.push(path);
+      if (index === 1) {
+        secondWritten();
+        await releaseSecondPromise;
+      }
+      return path;
+    };
+    pruneImpl = (keepCount = 1) => {
+      pruneCalls += 1;
+      pruneMediaArtifacts({ dir: artifactsDir, maxFiles: keepCount });
+    };
+    const concurrentPlan = { ...plan, artifactsKeepCount: 1 } as ImageBridgePlan;
+    const first = fulfillImageCall(
+      { id: "concurrent-a", name: "image_gen", arguments: `{"prompt":"a"}` },
+      concurrentPlan,
+      { spent: 0 },
+    );
+    const second = fulfillImageCall(
+      { id: "concurrent-b", name: "image_gen", arguments: `{"prompt":"b"}` },
+      concurrentPlan,
+      { spent: 0 },
+    );
+    try {
+      await secondWrittenPromise;
+      // The second file exists but its materializer has deliberately not returned its path yet.
+      // Any unrelated retention pass in this window must fail safe.
+      expect(pruneMediaArtifacts({ dir: artifactsDir, maxFiles: 1 }).prunedArtifactIds).toEqual([]);
+      expect(written.every(path => existsSync(path))).toBe(true);
+      releaseSecond();
+      const results = await Promise.all([first, second]);
+      expect(results.every(result => result.ok)).toBe(true);
+      expect(written.every(path => existsSync(path))).toBe(true);
+      expect(pruneCalls).toBe(2);
+    } finally {
+      releaseSecond();
+      unregisterPin();
+      await Promise.allSettled([first, second]);
+    }
   });
 
   test("forwards prompt, model, and n to callXaiImages", async () => {

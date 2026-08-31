@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { callXaiImages } from "../../src/images/xai-client";
 import type { MediaCredentialBinding } from "../../src/images/types";
-import { createStaticMediaCredentialLease } from "../../src/images/media-credentials";
+import { createStaticMediaCredentialLease } from "../helpers/static-media-credential-lease";
 
 const PREV_HOME = process.env.CODEXCOMMANDER_HOME;
 beforeAll(() => { process.env.CODEXCOMMANDER_HOME = join(tmpdir(), "ccx-test-" + randomUUID()); });

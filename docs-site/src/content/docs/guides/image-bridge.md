@@ -1,95 +1,95 @@
 ---
 title: Image Bridge
-description: Route image_generation hosted-tool calls to xAI Grok Imagine when using a non-OpenAI provider.
+description: Opt into Grok Imagine image generation without changing native Codex images by default.
 ---
 
 ## Overview
 
-When you route Codex through a non-OpenAI model (Claude, Gemini, Grok, etc.), the
-`image_generation` **hosted tool** normally doesn't work — it requires OpenAI's server-side
-execution environment. The Image Bridge detects these calls and transparently reroutes them to
-xAI Grok Imagine, so the model you're actually chatting with can still generate images.
+Grok media has two independent switches: **Grok Images** and **Grok Video**. With Grok Images
+off, CodexCommander preserves its normal native/OpenAI image behavior. In particular, enabling
+Grok Video alone does not route image generation to xAI.
 
-## Prerequisites
+When Grok Images is on, CodexCommander uses the selected xAI media source for both supported
+image entry points:
 
-- **Enable the bridge** by setting `images.bridgeEnabled: true` in your config (it is off by
-  default to avoid unexpected xAI charges — see [Configuration](#configuration) below).
-- An `xai` provider entry with an **API key**. The bridge pins fulfillment to the registry xAI
-  Images endpoint (`https://api.x.ai/v1`); any configured `baseUrl` override is ignored for image
-  calls. OAuth / `ccx login xai` alone does **not** arm the bridge (the Grok CLI OAuth transport is
-  chat-oriented and is not used for `/images/*`).
+- Hosted Responses `image_generation` requests, including native and routed text-model paths.
+- Direct `POST /v1/images/generations` requests, including Codex's built-in image surface.
 
-  ```json
-  {
-    "providers": {
-      "xai": { "adapter": "openai-chat", "apiKey": "xai-…", "authMode": "key" }
-    }
-  }
-  ```
+`POST /v1/images/edits` is deliberately unsupported by the Grok bridge in v1. With Grok Images
+on it returns a typed unsupported result instead of silently selecting another paid image provider.
 
-- A non-OpenAI model selected as your active provider. (When the active provider is OpenAI,
-  the native hosted tool is used directly and the bridge is bypassed.)
+## Configure the four states
 
-## Configuration
+The switches are independent. Choose one explicit `authSource` whenever either switch is enabled:
 
-Image Bridge options live under `images` in `~/.codexcommander/config.json`. Bridging is
-**opt-in** — you must set `bridgeEnabled: true` to enable paid xAI Grok Imagine generation:
+| Images | Video | Result |
+| --- | --- | --- |
+| off | off | Existing native/OpenAI image behavior; no Grok video tool. |
+| on | off | Eligible image generation uses Grok; no video generation. |
+| off | on | Native/OpenAI images remain the default; eligible text-to-video is available. |
+| on | on | Eligible image and text-to-video generation use Grok. |
 
 ```json
 {
   "images": {
     "bridgeEnabled": true,
-    "bridgeModel": "grok-imagine-image-quality",
-    "maxRounds": 3,
-    "timeoutMs": 60000
+    "videoBridgeEnabled": false,
+    "authSource": "api_key"
   }
 }
 ```
 
-| Option | Default | Description |
-| --- | --- | --- |
-| `bridgeEnabled` | `false` | Master switch. Set `true` to enable bridging. Off by default to avoid unexpected xAI charges. |
-| `bridgeModel` | `grok-imagine-image-quality` | The xAI image model id to send prompts to. |
-| `maxRounds` | `3` | Maximum image-generation loop iterations per turn. Floored to an integer and clamped to `[0, 10]`; non-finite values fall back to `3`. |
-| `timeoutMs` | `60000` | Per-call xAI deadline in milliseconds. Finite positive values are floored and passed to the xAI request. |
-| `artifactsKeepCount` | `200` | Maximum number of files retained under `artifacts/`. When exceeded, the oldest files are deleted after each fulfilled call. Set to `0` or a negative value to disable pruning. |
+The standard image model is `grok-imagine-image-2.0`. See xAI's current
+[image-model page](https://docs.x.ai/developers/models/grok-imagine-image-2.0),
+[Imagine API overview](https://x.ai/api/imagine), and [pricing page](https://docs.x.ai/developers/pricing)
+for current availability, limits, and charges. Those values are controlled by xAI and are not
+promised by CodexCommander.
 
-## Artifact Retention
+## Choose the billing source deliberately
 
-Generated images are written to `~/.codexcommander/artifacts/`. To prevent unbounded disk
-growth in long-running sessions, the directory is pruned automatically after each fulfilled
-image call (once the full batch for that call is on disk) — the oldest files (by modification
-time) are deleted when the count exceeds the configured maximum (default 200, configurable via
-`images.artifactsKeepCount`). Only paths that survive pruning are returned to the model.
+`authSource` is either `subscription_oauth` or `api_key`. It applies only to Grok media; it does
+not change xAI/Grok chat authentication or routing. CodexCommander binds each operation to the
+selected credential before a submit or poll and has **no fallback** to the other source. Missing
+credentials, reauthentication, entitlement errors, rate limits, and network failures remain errors
+for that selected source; they never trigger API-key spend because OAuth failed, or OAuth use because
+a key failed.
 
-## How It Works
+Paid media authority always comes from the enabled canonical `providers.xai` row. A custom provider
+whose URL happens to use an xAI hostname remains an ordinary chat provider and cannot arm new image
+or video spend. This keeps media-key mutations behind the canonical human-attested management path.
+Already accepted jobs from an older legacy-alias configuration may resolve only their exact bound
+slot for recovery; they cannot use that compatibility path to submit new work.
 
-The Image Bridge activates only on **Responses** turns that include the hosted
-`image_generation` tool in the `/v1/responses` tools array while a **non-OpenAI**
-model is selected. It does **not** intercept Codex's built-in `image_gen` tool,
-which POSTs directly to `/v1/images/generations` (or `/images/edits`) — that path
-is covered separately in [Codex Integration](/guides/codex-integration/#built-in-image-generation-image_gen).
+`subscription_oauth` is experimental and is not assumed to be usable for media. Its capability
+probe is production-preflight-disabled until an explicit U8 safety approval. A successful future
+probe would observe capability only: it would not prove which xAI subscription, quota, or billing
+balance was charged. An ambiguous submit can consume quota without producing a result.
 
-1. When a Responses request lists `image_generation` in `tools`, CodexCommander detects it
-   during request preprocessing.
-2. The hosted tool is replaced with a **synthetic function tool** that the routed model can call
-   normally — the model sees a callable tool rather than an opaque hosted tool it can't execute.
-3. When the model invokes that tool, CodexCommander intercepts the call and sends the prompt to xAI's
-   image generation API.
-4. Generated images are saved to `~/.codexcommander/artifacts/` and the **local file path** is returned
-   to the model as the tool result.
-5. The model continues the conversation with knowledge of the generated image and its location.
+## Streaming, tools, and artifacts
 
-From the model's perspective nothing changed — it called a tool and got a result. From the user's
-perspective, image generation works with any routed provider instead of silently failing.
+Hosted Responses media requires `stream: true`; the direct Images API remains its own request path.
+Web search, image generation, and video generation have independent auxiliary budgets. One mixed
+turn may still hit the global model-iteration cap, but web search does not skip or consume an image
+or video allowance.
 
-## Limitations
+Completed outputs are materialized in private local artifact storage and surfaced through an
+authenticated opaque artifact URL, not a `file:` URL or a provider-signed URL. The artifact service
+validates media, enforces retention, and may later report `artifact_pruned` when a retained item has
+expired or been pruned. The tool result replayed to a routed provider contains only those
+proxy-relative artifact references and renderer hints: it never includes an absolute local path,
+prompt, model id, provider URL, or signed URL.
 
-- **Only xAI Grok Imagine is supported.** DALL-E and other image providers may be added later.
-- **Web search takes priority** on adapters that support the web-search sidecar loop. If both web
-  search and image generation are requested in the same turn, web-search runs and image
-  generation is skipped. Cursor/`runTurn` adapters cannot use that sidecar today, so the image
-  bridge may still run for those dual-tool turns.
-- **xAI costs apply.** Image generation via xAI requires an active xAI subscription or API credits.
-- **Streaming only.** The bridge works by intercepting the SSE response stream; requests with
-  `stream: false` are rejected with a 400 error.
+## Troubleshooting
+
+- `needs_auth` means the selected source is not ready. Establish or reauthenticate that same source;
+  switching sources is a separate explicit action.
+- An entitlement, quota, policy, or rate-limit result is an xAI result for the selected source; no
+  alternate source is tried.
+- `submission_outcome_unknown` means a request may have reached xAI but its outcome was not safely
+  known. CodexCommander does not replay that POST automatically.
+- For an accepted video job, use the dashboard or `ccx media jobs` to follow recovery instead of
+  submitting another request.
+
+See [Video Bridge](/guides/video-bridge/) for text-to-video limits and durable-job behavior, and
+[Media configuration](/reference/configuration/server/#images-codexcommanderimagesconfig) for all
+configuration fields.

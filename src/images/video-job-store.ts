@@ -18,6 +18,7 @@ import {
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
+import type { MediaSafeFailureCode } from "./media-errors";
 import type { MediaCredentialBinding } from "./types";
 
 export const MEDIA_JOURNAL_SCHEMA_VERSION = 2;
@@ -26,6 +27,12 @@ const MEDIA_STATE_DIRECTORY = "media";
 const RECOVERY_OWNER_SUFFIX = ".recovery-owner.sqlite";
 const MAX_ROWS = 1_024;
 const claimedJournalPaths = new Set<string>();
+
+export interface MediaJournalOwnerLease {
+  readonly journalPath: string;
+  assertOwned(): void;
+  close(): void;
+}
 
 export type VideoJobState =
   | "queued"
@@ -44,14 +51,7 @@ export type VideoJobState =
   | "acknowledged";
 
 export type SafeMediaFailure =
-  | "needs_auth"
-  | "entitlement_denied"
-  | "rate_limited"
-  | "policy_rejected"
-  | "ambiguous_submission"
-  | "upstream_failed"
-  | "cancelled"
-  | "timeout"
+  | MediaSafeFailureCode
   | "download_rejected"
   | "job_failed"
   | "job_expired";
@@ -92,6 +92,8 @@ export type VideoJobUpdate =
   | { kind: "conflict"; current: VideoJobRecord | null };
 
 export type ArtifactPinReleaseResult = "released" | "protected" | "conflict" | "not_owned";
+export type ArtifactPinPreflightResult = "releasable" | "protected" | "conflict" | "not_owned";
+export type ArtifactPinFinalizeResult = "finalized" | "protected" | "conflict" | "not_owned";
 
 export interface TransitionVideoJobInput {
   id: string;
@@ -172,6 +174,13 @@ export interface PublicCapabilityProbe {
 export type CapabilityProbeUpdate =
   | { kind: "updated"; probe: CapabilityProbeRecord }
   | { kind: "conflict"; current: CapabilityProbeRecord | null };
+
+export interface CapabilityArtifactDeletion {
+  readonly operationId: string;
+  readonly step: CapabilityProbeStepKind;
+  readonly stepRevision: number;
+  readonly artifactId: string;
+}
 
 interface VideoJobRow {
   id: unknown;
@@ -529,7 +538,7 @@ function publicJob(job: VideoJobRecord): PublicVideoJob {
     revision: job.revision,
     state: job.state,
     deadlineAt: job.deadlineAt,
-    ...(job.artifactId ? { artifactId: job.artifactId } : {}),
+    ...(job.artifactId && job.state !== "artifact_pruned" ? { artifactId: job.artifactId } : {}),
     ...(job.safeError ? { safeError: job.safeError } : {}),
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
@@ -603,58 +612,95 @@ export function defaultMediaJournalPath(): string {
   return join(getConfigDir(), MEDIA_STATE_DIRECTORY, MEDIA_JOURNAL_FILENAME);
 }
 
+function canonicalMediaJournalPath(selected: string): string {
+  const resolvedPath = resolve(selected);
+  if (!isAbsolute(resolvedPath)) throw journalError("The media journal path must be absolute.");
+  const requestedDirectory = dirname(resolvedPath);
+  assertNotRealHomeUnderTest(requestedDirectory);
+  assertPrivateDirectory(requestedDirectory);
+  return join(realpathSync.native(requestedDirectory), basename(resolvedPath));
+}
+
+/**
+ * Acquire the same process-lifetime lease used by the runtime before inspecting
+ * or moving journal bytes. The SQLite transaction is OS-backed and survives no
+ * process crash; the stable descriptor prevents lock-path replacement while it
+ * is held.
+ */
+export function acquireMediaJournalOwnerLease(selected = defaultMediaJournalPath()): MediaJournalOwnerLease {
+  const journalPath = canonicalMediaJournalPath(selected);
+  const ownerPath = `${journalPath}${RECOVERY_OWNER_SUFFIX}`;
+  if (claimedJournalPaths.has(journalPath)) throw journalError("The media journal is busy.");
+  claimedJournalPaths.add(journalPath);
+  let ownerFile: StableLockFile | undefined;
+  let ownerDatabase: Database | undefined;
+  let closed = false;
+  try {
+    const ownerExisted = existsSync(ownerPath);
+    if (ownerExisted) assertPrivateFile(lstatSync(ownerPath));
+    assertExistingJournalSidecars(ownerPath);
+    ownerFile = openStableLockFile(ownerPath);
+    if (!ownerExisted || process.platform === "win32") hardenJournalFile(ownerPath);
+    assertStableLockFile(ownerPath, ownerFile);
+    ownerDatabase = new Database(ownerPath, { create: true, strict: true });
+    ownerDatabase.exec("PRAGMA busy_timeout = 0; PRAGMA locking_mode = NORMAL; PRAGMA journal_mode = DELETE");
+    ownerDatabase.exec("BEGIN EXCLUSIVE");
+    ownerDatabase.query<{ rootpage: number }, []>("SELECT rootpage FROM sqlite_schema LIMIT 1").get();
+    assertStableLockFile(ownerPath, ownerFile);
+    const database = ownerDatabase;
+    const file = ownerFile;
+    return {
+      journalPath,
+      assertOwned() {
+        if (closed) throw journalError("The media journal owner lease is closed.");
+        assertStableLockFile(ownerPath, file);
+      },
+      close() {
+        if (closed) return;
+        closed = true;
+        try { database.exec("ROLLBACK"); } catch { /* close still releases */ }
+        try { database.close(); } finally {
+          try { file.close(); } finally { claimedJournalPaths.delete(journalPath); }
+        }
+      },
+    };
+  } catch (error) {
+    try { ownerDatabase?.exec("ROLLBACK"); } catch { /* close below */ }
+    try { ownerDatabase?.close(); } catch { /* mapped below */ }
+    try { ownerFile?.close(); } catch { /* mapped below */ }
+    claimedJournalPaths.delete(journalPath);
+    if (error instanceof Error && error.name === "MediaJournalError") throw error;
+    throw journalError(isBusy(error) ? "The media journal is busy." : "The media journal is unavailable.");
+  }
+}
+
 export class VideoJobStore {
   readonly #database: Database;
   readonly #file: StableLockFile;
-  readonly #ownerDatabase: Database;
-  readonly #ownerFile: StableLockFile;
-  readonly #ownerPath: string;
+  readonly #ownerLease: MediaJournalOwnerLease;
   readonly #path: string;
   readonly #identity: string;
   readonly #now: () => number;
-  readonly #claimPath: string;
   #closed = false;
 
   constructor(options: VideoJobStoreOptions = {}) {
     const selected = options.path ?? defaultMediaJournalPath();
-    const resolvedPath = resolve(selected);
-    if (!isAbsolute(resolvedPath)) throw journalError("The media journal path must be absolute.");
-    const requestedDirectory = dirname(resolvedPath);
-    assertNotRealHomeUnderTest(requestedDirectory);
-    assertPrivateDirectory(requestedDirectory);
-    const directory = realpathSync.native(requestedDirectory);
-    this.#path = join(directory, basename(resolvedPath));
-    this.#ownerPath = `${this.#path}${RECOVERY_OWNER_SUFFIX}`;
-    this.#claimPath = this.#path;
-    if (claimedJournalPaths.has(this.#claimPath)) throw journalError("The media journal is busy.");
-    claimedJournalPaths.add(this.#claimPath);
+    this.#path = canonicalMediaJournalPath(selected);
+    const directory = dirname(this.#path);
+    const ownerPath = `${this.#path}${RECOVERY_OWNER_SUFFIX}`;
     const productionPath = options.path === undefined;
     if (productionPath) {
       const root = getConfigDir();
       recordOwnedConfigPath(root, directory);
       for (const suffix of ["", "-journal", "-wal", "-shm"]) recordOwnedConfigPath(root, `${this.#path}${suffix}`);
-      for (const suffix of ["", "-journal", "-wal", "-shm"]) recordOwnedConfigPath(root, `${this.#ownerPath}${suffix}`);
+      for (const suffix of ["", "-journal", "-wal", "-shm"]) recordOwnedConfigPath(root, `${ownerPath}${suffix}`);
     }
 
     let file: StableLockFile | undefined;
     let database: Database | undefined;
-    let ownerFile: StableLockFile | undefined;
-    let ownerDatabase: Database | undefined;
+    let ownerLease: MediaJournalOwnerLease | undefined;
     try {
-      // Hold an OS-backed EXCLUSIVE transaction in a separate database for the
-      // store lifetime. It releases automatically on process death and keeps a
-      // second process from becoming an overlapping recovery owner.
-      const ownerExisted = existsSync(this.#ownerPath);
-      if (ownerExisted) assertPrivateFile(lstatSync(this.#ownerPath));
-      assertExistingJournalSidecars(this.#ownerPath);
-      ownerFile = openStableLockFile(this.#ownerPath);
-      if (!ownerExisted || process.platform === "win32") hardenJournalFile(this.#ownerPath);
-      assertStableLockFile(this.#ownerPath, ownerFile);
-      ownerDatabase = new Database(this.#ownerPath, { create: true, strict: true });
-      ownerDatabase.exec("PRAGMA busy_timeout = 0; PRAGMA locking_mode = NORMAL; PRAGMA journal_mode = DELETE");
-      ownerDatabase.exec("BEGIN EXCLUSIVE");
-      ownerDatabase.query<{ rootpage: number }, []>("SELECT rootpage FROM sqlite_schema LIMIT 1").get();
-      assertStableLockFile(this.#ownerPath, ownerFile);
+      ownerLease = acquireMediaJournalOwnerLease(this.#path);
 
       const existed = existsSync(this.#path);
       if (existed) assertPrivateFile(lstatSync(this.#path));
@@ -688,16 +734,12 @@ export class VideoJobStore {
       }
       this.#database = database;
       this.#file = file;
-      this.#ownerDatabase = ownerDatabase;
-      this.#ownerFile = ownerFile;
+      this.#ownerLease = ownerLease;
       this.#now = options.now ?? Date.now;
     } catch (error) {
       try { database?.close(); } catch { /* mapped below */ }
       try { file?.close(); } catch { /* mapped below */ }
-      try { ownerDatabase?.exec("ROLLBACK"); } catch { /* close below */ }
-      try { ownerDatabase?.close(); } catch { /* mapped below */ }
-      try { ownerFile?.close(); } catch { /* mapped below */ }
-      claimedJournalPaths.delete(this.#claimPath);
+      try { ownerLease?.close(); } catch { /* mapped below */ }
       if (error instanceof Error && error.name === "MediaJournalError") throw error;
       throw journalError(isBusy(error) ? "The media journal is busy." : "The media journal is unavailable.");
     }
@@ -706,7 +748,7 @@ export class VideoJobStore {
   #assertOpen(): void {
     if (this.#closed) throw journalError("The media journal is closed.");
     assertStableLockFile(this.#path, this.#file);
-    assertStableLockFile(this.#ownerPath, this.#ownerFile);
+    this.#ownerLease.assertOwned();
     const stats = lstatSync(this.#path);
     assertPrivateFile(stats);
     if (`${stats.dev}:${stats.ino}` !== this.#identity || realpathSync.native(this.#path) !== this.#path) {
@@ -924,7 +966,7 @@ export class VideoJobStore {
     });
   }
 
-  /** CAS-tombstone a completed job before its durable artifact may be deleted. */
+  /** CAS-prepare deletion while retaining the private id until directory fsync succeeds. */
   markVideoArtifactPruned(id: string, expectedRevision: number, artifactId: string): VideoJobUpdate {
     if (!validText(id, 64) || !validInteger(expectedRevision) || !safeArtifactId(artifactId)) {
       throw journalError("The pruned video artifact transition is invalid.");
@@ -932,7 +974,7 @@ export class VideoJobStore {
     return this.#transaction(() => {
       const result = this.#database.query(`
         UPDATE video_jobs
-           SET state = 'artifact_pruned', artifact_id = NULL, revision = revision + 1, updated_at = ?
+           SET state = 'artifact_pruned', revision = revision + 1, updated_at = ?
          WHERE id = ? AND revision = ? AND state = 'completed' AND artifact_id = ?
       `).run(this.#now(), id, expectedRevision, artifactId);
       const current = this.#get(id);
@@ -943,6 +985,25 @@ export class VideoJobStore {
   }
 
   /** Atomically release every ordinary completed-job pin authorizing one deletion. */
+  canReleaseArtifactForPrune(artifactId: string): ArtifactPinPreflightResult {
+    if (!safeArtifactId(artifactId)) throw journalError("The pruned artifact id is invalid.");
+    this.#assertOpen();
+    const probePin = this.#database.query<{ found: number }, [string]>(
+      "SELECT 1 AS found FROM capability_probe_steps WHERE artifact_id = ? LIMIT 1",
+    ).get(artifactId);
+    if (probePin) return "protected";
+    const jobs = this.#database.query<{ id: string; state: VideoJobState }, [string]>(`
+      SELECT id, state FROM video_jobs WHERE artifact_id = ?
+      ORDER BY id LIMIT ${MAX_ROWS + 1}
+    `).all(artifactId);
+    if (jobs.length > MAX_ROWS) throw journalError("The media retention set is too large.");
+    if (jobs.length === 0) return "not_owned";
+    if (jobs.some(job => job.state !== "completed" && job.state !== "artifact_pruned")) return "protected";
+    this.#assertOpen();
+    return "releasable";
+  }
+
+  /** Atomically prepare every completed-job pin while retaining its exact artifact id. */
   releaseArtifactForPrune(artifactId: string): ArtifactPinReleaseResult {
     if (!safeArtifactId(artifactId)) throw journalError("The pruned artifact id is invalid.");
     return this.#transaction(() => {
@@ -956,13 +1017,39 @@ export class VideoJobStore {
       `).all(artifactId);
       if (jobs.length > MAX_ROWS) throw journalError("The media retention set is too large.");
       if (jobs.length === 0) return "not_owned";
-      if (jobs.some(job => job.state !== "completed")) return "protected";
+      if (jobs.some(job => job.state !== "completed" && job.state !== "artifact_pruned")) return "protected";
       const changed = this.#database.query(`
         UPDATE video_jobs
-           SET state = 'artifact_pruned', artifact_id = NULL, revision = revision + 1, updated_at = ?
+           SET state = 'artifact_pruned', revision = revision + 1, updated_at = ?
          WHERE artifact_id = ? AND state = 'completed'
       `).run(this.#now(), artifactId);
-      return changed.changes === jobs.length ? "released" : "conflict";
+      return changed.changes === jobs.filter(job => job.state === "completed").length ? "released" : "conflict";
+    });
+  }
+
+  pendingArtifactDeletionIds(): ReadonlySet<string> {
+    return new Set(this.listVideoJobs()
+      .filter(job => job.state === "artifact_pruned" && job.artifactId)
+      .map(job => job.artifactId!));
+  }
+
+  /** Clear prepared private ids only after the artifact directory is durably synced. */
+  finalizeArtifactPrune(artifactId: string): ArtifactPinFinalizeResult {
+    if (!safeArtifactId(artifactId)) throw journalError("The finalized artifact id is invalid.");
+    return this.#transaction(() => {
+      const rows = this.#database.query<{ id: string; state: VideoJobState }, [string]>(`
+        SELECT id, state FROM video_jobs WHERE artifact_id = ?
+        ORDER BY id LIMIT ${MAX_ROWS + 1}
+      `).all(artifactId);
+      if (rows.length > MAX_ROWS) throw journalError("The media retention set is too large.");
+      if (rows.length === 0) return "not_owned";
+      if (rows.some(row => row.state !== "artifact_pruned")) return "protected";
+      const changed = this.#database.query(`
+        UPDATE video_jobs
+           SET artifact_id = NULL, revision = revision + 1, updated_at = ?
+         WHERE artifact_id = ? AND state = 'artifact_pruned'
+      `).run(this.#now(), artifactId);
+      return changed.changes === rows.length ? "finalized" : "conflict";
     });
   }
 
@@ -1021,6 +1108,7 @@ export class VideoJobStore {
            SET state = 'expired', safe_error = 'timeout', revision = revision + 1, updated_at = ?
          WHERE deadline_at <= ?
            AND state IN ('accepted','polling','needs_auth','downloading','download_failed')
+           AND NOT (state IN ('downloading','download_failed') AND artifact_id IS NOT NULL)
       `).run(now, now);
       this.#database.query(`
         UPDATE video_jobs
@@ -1097,6 +1185,13 @@ export class VideoJobStore {
       ids.push(id);
     }
     return new Set(ids);
+  }
+
+  /** Exact durable reservations whose local hard-link publication may be completed after a crash. */
+  recoverablePublicationArtifactIds(): ReadonlySet<string> {
+    return new Set(this.listVideoJobs()
+      .filter(job => job.artifactId && (job.state === "downloading" || job.state === "download_failed"))
+      .map(job => job.artifactId!));
   }
 
   getCapabilityProbe(id: string): CapabilityProbeRecord | null {
@@ -1220,9 +1315,14 @@ export class VideoJobStore {
         || current.confirmationExpiresAt <= this.#now()
       ) return { kind: "conflict", current };
       const step = current.steps[input.step];
+      const image = current.steps.image;
       if (
         !["pending", "failed", "acknowledged"].includes(step.state)
         || (step.confirmationRevision !== undefined && step.confirmationRevision >= input.confirmationRevision)
+        || (input.step === "video" && !(
+          (image.state === "completed" && image.dispatchCertainty === "completed")
+          || (image.state === "failed" && image.dispatchCertainty === "definite_rejection")
+        ))
       ) return { kind: "conflict", current };
       const now = this.#now();
       const changed = this.#database.query(`
@@ -1333,28 +1433,16 @@ export class VideoJobStore {
     id: string;
     step: CapabilityProbeStepKind;
     expectedRevision: number;
-  }): { kind: "updated"; probe: CapabilityProbeRecord; artifactId?: string } | { kind: "conflict"; current: CapabilityProbeRecord | null } {
+  }): { kind: "updated"; probe: CapabilityProbeRecord; deletion: CapabilityArtifactDeletion } | { kind: "conflict"; current: CapabilityProbeRecord | null } {
     return this.#transaction(() => {
       const current = this.#getProbe(input.id);
       if (!current || current.revision !== input.expectedRevision) return { kind: "conflict", current };
       const step = current.steps[input.step];
       if (step.state !== "completed" || !step.artifactId) return { kind: "conflict", current };
       const now = this.#now();
-      if (step.videoJobId) {
-        const job = this.#get(step.videoJobId);
-        if (!job || job.state !== "completed" || job.artifactId !== step.artifactId) {
-          return { kind: "conflict", current };
-        }
-        const jobChanged = this.#database.query(`
-          UPDATE video_jobs
-             SET state = 'artifact_pruned', artifact_id = NULL, revision = revision + 1, updated_at = ?
-           WHERE id = ? AND revision = ? AND state = 'completed' AND artifact_id = ?
-        `).run(now, job.id, job.revision, step.artifactId);
-        if (jobChanged.changes !== 1) return { kind: "conflict", current };
-      }
       const stepChanged = this.#database.query(`
         UPDATE capability_probe_steps
-           SET artifact_id = NULL, inspected_at = ?, revision = revision + 1, updated_at = ?
+           SET inspected_at = ?, revision = revision + 1, updated_at = ?
          WHERE operation_id = ? AND step_kind = ? AND revision = ? AND state = 'completed'
       `).run(now, now, input.id, input.step, step.revision);
       if (stepChanged.changes !== 1) throw journalError("The media inspection record changed concurrently.");
@@ -1365,63 +1453,103 @@ export class VideoJobStore {
       if (probeChanged.changes !== 1) throw journalError("The media inspection operation changed concurrently.");
       const updated = this.#getProbe(input.id);
       return updated
-        ? { kind: "updated", probe: updated, artifactId: step.artifactId }
+        ? {
+            kind: "updated",
+            probe: updated,
+            deletion: {
+              operationId: input.id,
+              step: input.step,
+              stepRevision: updated.steps[input.step].revision,
+              artifactId: step.artifactId,
+            },
+          }
         : { kind: "conflict", current: null };
     });
   }
 
-  /**
-   * Atomically releases probe artifact pins at their absolute retention ceiling.
-   * The returned opaque ids may then be deleted from the private artifact store;
-   * no filesystem path is stored in or returned from this journal.
-   */
-  releaseExpiredCapabilityArtifacts(now = this.#now()): string[] {
+  /** List durable inspection/expiry deletion work without clearing its artifact id. */
+  listPendingCapabilityArtifactDeletions(now = this.#now()): CapabilityArtifactDeletion[] {
     if (!validInteger(now, 1)) throw journalError("The capability artifact retention time is invalid.");
-    return this.#transaction(() => {
-      const rows = this.#database.query<{
+    this.#assertOpen();
+    const rows = this.#database.query<{
         operation_id: string;
         step_kind: CapabilityProbeStepKind;
         revision: number;
         artifact_id: string;
-        video_job_id: string | null;
       }, [number]>(`
-        SELECT operation_id, step_kind, revision, artifact_id, video_job_id
+        SELECT operation_id, step_kind, revision, artifact_id
           FROM capability_probe_steps
-         WHERE artifact_id IS NOT NULL AND artifact_expires_at IS NOT NULL
-           AND artifact_expires_at <= ?
+         WHERE artifact_id IS NOT NULL
+           AND (inspected_at IS NOT NULL OR (artifact_expires_at IS NOT NULL AND artifact_expires_at <= ?))
          ORDER BY operation_id, step_kind
          LIMIT ${MAX_ROWS + 1}
       `).all(now);
-      if (rows.length > MAX_ROWS) throw journalError("The media retention set is too large.");
-      const operations = new Set<string>();
-      const artifacts: string[] = [];
-      for (const row of rows) {
-        if (!safeArtifactId(row.artifact_id)) throw journalError("The media journal contains an invalid artifact id.");
-        if (row.video_job_id) {
-          const job = this.#get(row.video_job_id);
-          if (!job || job.state !== "completed" || job.artifactId !== row.artifact_id) continue;
-          const jobChanged = this.#database.query(`
+    if (rows.length > MAX_ROWS) throw journalError("The media retention set is too large.");
+    return rows.map(row => {
+      if (!safeArtifactId(row.artifact_id)) throw journalError("The media journal contains an invalid artifact id.");
+      return {
+        operationId: row.operation_id,
+        step: row.step_kind,
+        stepRevision: row.revision,
+        artifactId: row.artifact_id,
+      };
+    });
+  }
+
+  /** Clear durable delete work and tombstone its linked video job only after exact deletion. */
+  completeCapabilityArtifactDeletion(input: CapabilityArtifactDeletion): CapabilityProbeUpdate {
+    if (
+      !validText(input.operationId, 64)
+      || (input.step !== "image" && input.step !== "video")
+      || !validInteger(input.stepRevision)
+      || !safeArtifactId(input.artifactId)
+    ) {
+      throw journalError("The capability artifact deletion is invalid.");
+    }
+    return this.#transaction(() => {
+      const current = this.#getProbe(input.operationId);
+      if (!current) return { kind: "conflict", current: null };
+      const step = current.steps[input.step];
+      const deletionDue = step.inspectedAt !== undefined
+        || (step.artifactExpiresAt !== undefined && step.artifactExpiresAt <= this.#now());
+      if (step.revision !== input.stepRevision || step.artifactId !== input.artifactId || !deletionDue) {
+        return { kind: "conflict", current };
+      }
+      const now = this.#now();
+      if (step.videoJobId) {
+        const job = this.#get(step.videoJobId);
+        if (!job) return { kind: "conflict", current };
+        if (job.state === "completed" && job.artifactId === input.artifactId) {
+          const changed = this.#database.query(`
             UPDATE video_jobs
                SET state = 'artifact_pruned', artifact_id = NULL, revision = revision + 1, updated_at = ?
              WHERE id = ? AND revision = ? AND state = 'completed' AND artifact_id = ?
-          `).run(now, job.id, job.revision, row.artifact_id);
-          if (jobChanged.changes !== 1) continue;
+          `).run(now, job.id, job.revision, input.artifactId);
+          if (changed.changes !== 1) return { kind: "conflict", current };
+        } else if (job.state === "artifact_pruned" && job.artifactId === input.artifactId) {
+          const finalized = this.#database.query(`
+            UPDATE video_jobs
+               SET artifact_id = NULL, revision = revision + 1, updated_at = ?
+             WHERE id = ? AND revision = ? AND state = 'artifact_pruned' AND artifact_id = ?
+          `).run(now, job.id, job.revision, input.artifactId);
+          if (finalized.changes !== 1) return { kind: "conflict", current };
+        } else if (job.state !== "artifact_pruned" || job.artifactId !== undefined) {
+          return { kind: "conflict", current };
         }
-        const changed = this.#database.query(`
-          UPDATE capability_probe_steps
-             SET artifact_id = NULL, revision = revision + 1, updated_at = ?
-           WHERE operation_id = ? AND step_kind = ? AND revision = ? AND artifact_id = ?
-        `).run(now, row.operation_id, row.step_kind, row.revision, row.artifact_id);
-        if (changed.changes !== 1) throw journalError("The media retention record changed concurrently.");
-        operations.add(row.operation_id);
-        artifacts.push(row.artifact_id);
       }
-      for (const operationId of operations) {
-        this.#database.query(
-          "UPDATE capability_probes SET revision = revision + 1, updated_at = ? WHERE id = ?",
-        ).run(now, operationId);
-      }
-      return artifacts;
+      const changed = this.#database.query(`
+        UPDATE capability_probe_steps
+           SET artifact_id = NULL, artifact_expires_at = NULL, revision = revision + 1, updated_at = ?
+         WHERE operation_id = ? AND step_kind = ? AND revision = ? AND artifact_id = ?
+      `).run(now, input.operationId, input.step, input.stepRevision, input.artifactId);
+      if (changed.changes !== 1) throw journalError("The media deletion record changed concurrently.");
+      const probeChanged = this.#database.query(`
+        UPDATE capability_probes SET revision = revision + 1, updated_at = ?
+         WHERE id = ? AND revision = ?
+      `).run(now, input.operationId, current.revision);
+      if (probeChanged.changes !== 1) throw journalError("The media deletion operation changed concurrently.");
+      const updated = this.#getProbe(input.operationId);
+      return updated ? { kind: "updated", probe: updated } : { kind: "conflict", current: null };
     });
   }
 
@@ -1438,10 +1566,7 @@ export class VideoJobStore {
     this.#closed = true;
     try { this.#database.close(); } finally {
       try { this.#file.close(); } finally {
-        try { this.#ownerDatabase.exec("ROLLBACK"); } catch { /* close still releases */ }
-        try { this.#ownerDatabase.close(); } finally {
-          try { this.#ownerFile.close(); } finally { claimedJournalPaths.delete(this.#claimPath); }
-        }
+        this.#ownerLease.close();
       }
     }
   }
