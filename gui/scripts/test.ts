@@ -55,6 +55,11 @@ export function failedFilesFromJunit(xml: string): string[] {
   return [...files].sort((a, b) => a.localeCompare(b));
 }
 
+/** Static guidance only: failed test paths are PR-controlled and must never become shell syntax. */
+export function failedFilesSummary(files: readonly string[]): string {
+  return `[gui:test] ${files.length} file(s) remain failed. Review the failed file list above.`;
+}
+
 function displayPath(file: string): string {
   const rel = relative(GUI_ROOT, file);
   return rel && !rel.startsWith("..") ? rel : file;
@@ -164,8 +169,7 @@ async function main(): Promise<void> {
     if (failures.length > 0) {
       console.error(`[gui:test] ${failures.length} file(s) failed after ${minutes} min:`);
       for (const file of failures) console.error(`  ${displayPath(file)}`);
-      console.error("[gui:test] rerun only the failed files, not the entire suite:");
-      console.error(`  bun run test ${failures.map(displayPath).join(" ")}`);
+      console.error(failedFilesSummary(failures));
       process.exitCode = 1;
       return;
     }
