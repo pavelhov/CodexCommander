@@ -92,8 +92,19 @@ import {
   openVideoJobStore,
   type VideoJobStore,
 } from "../images/video-job-store";
+import {
+  acknowledgeMediaRecoveryFence,
+  inspectMediaJournalRecovery,
+  mediaRecoveryBlocksStartup,
+  quarantineMediaJournal,
+} from "../images/media-recovery";
 import { createArtifactResponse } from "../images/artifacts";
 import { registerArtifactPinAuthority } from "../images/artifact-retention";
+import { CapabilityProbeService } from "../images/capability-probe";
+import {
+  createMediaManagementRuntime,
+  type MediaManagementRuntime,
+} from "./management/media-routes";
 export {
   drainAndShutdown,
   getActiveTurnCount,
@@ -211,6 +222,7 @@ import {
   createLocalAttestationProof,
   createLocalAttestationSecret,
 } from "../lib/local-management-attestation";
+import { verifyMediaActionAttestationProof } from "../lib/media-action-attestation";
 import { createReadinessGate, type ReadinessGate } from "./readiness";
 
 const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
@@ -500,25 +512,100 @@ export interface StartServerDeps {
   mediaRuntime?: ServerMediaRuntime | null;
 }
 
+interface InitializedServerMediaRuntime {
+  runtime: ServerMediaRuntime | null;
+  management?: MediaManagementRuntime;
+}
+
 function initializeServerMediaRuntime(
   config: CodexCommanderConfig,
   injected: ServerMediaRuntime | null | undefined,
-): ServerMediaRuntime | null {
+): InitializedServerMediaRuntime {
   if (injected !== undefined) {
     if (injected) injected.prepareStartup();
-    return injected;
+    return { runtime: injected };
   }
   const journalPath = defaultMediaJournalPath();
-  if (config.images?.videoBridgeEnabled !== true && !existsSync(journalPath)) return null;
+  try {
+    const fence = mediaRecoveryBlocksStartup();
+    if (fence) {
+      const recovery: NonNullable<MediaManagementRuntime["recovery"]> = {
+        id: fence.id,
+        revision: fence.revision,
+        cause: fence.cause,
+        readOnly: false,
+        acknowledgementRequired: true,
+        restartRequired: true,
+        acknowledge: async (id, expectedRevision) => {
+          const updated = acknowledgeMediaRecoveryFence(id, expectedRevision);
+          if (!updated) return "conflict";
+          recovery.revision = updated.revision;
+          recovery.acknowledgementRequired = false;
+          return "applied";
+        },
+      };
+      return { runtime: new RecoveryBlockedMediaRuntime(), management: { state: "recovery_blocked", recovery } };
+    }
+  } catch {
+    return {
+      runtime: new RecoveryBlockedMediaRuntime(),
+      management: {
+        state: "recovery_blocked",
+        recovery: { id: "media-journal", revision: 0, cause: "unsafe", readOnly: true, restartRequired: true },
+      },
+    };
+  }
+  if (
+    config.images?.bridgeEnabled !== true
+    && config.images?.videoBridgeEnabled !== true
+    && !existsSync(journalPath)
+  ) return { runtime: null };
   let store: VideoJobStore | undefined;
   try {
     store = openVideoJobStore();
     const runtime = new MediaRuntime(store);
     runtime.prepareStartup();
-    return runtime;
-  } catch {
+    const probe = new CapabilityProbeService(store, runtime);
+    return { runtime, management: createMediaManagementRuntime(store, runtime, probe) };
+  } catch (cause) {
     try { store?.close(); } catch { /* recovery remains blocked */ }
-    return new RecoveryBlockedMediaRuntime();
+    const inspection = inspectMediaJournalRecovery(cause);
+    const recovery: NonNullable<MediaManagementRuntime["recovery"]> = {
+      id: "media-journal",
+      revision: 0,
+      cause: inspection.cause,
+      readOnly: inspection.readOnly,
+      restartRequired: true,
+    };
+    if (!inspection.readOnly && inspection.cause !== "future_schema") {
+      recovery.quarantineReset = async expectedRevision => {
+        if (expectedRevision !== recovery.revision) return "conflict";
+        try {
+          const fence = quarantineMediaJournal(expectedRevision);
+          recovery.id = fence.id;
+          recovery.revision = fence.revision;
+          recovery.cause = fence.cause;
+          recovery.acknowledgementRequired = true;
+          return "applied";
+        } catch {
+          return "unsupported";
+        }
+      };
+      recovery.acknowledge = async (id, expectedRevision) => {
+        const updated = acknowledgeMediaRecoveryFence(id, expectedRevision);
+        if (!updated) return "conflict";
+        recovery.revision = updated.revision;
+        recovery.acknowledgementRequired = false;
+        return "applied";
+      };
+    }
+    return {
+      runtime: new RecoveryBlockedMediaRuntime(),
+      management: {
+        state: "recovery_blocked",
+        recovery,
+      },
+    };
   }
 }
 
@@ -649,12 +736,56 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     };
   let server: Server<WsData>;
   let mediaRuntime: ServerMediaRuntime | null = null;
+  let mediaManagementImpl: MediaManagementRuntime | undefined;
   let unregisterArtifactPins = () => {};
+  const consumedMediaActionNonces = new Set<string>();
+  const mediaManagement: MediaManagementRuntime = {
+    get state() { return mediaManagementImpl?.state ?? "ready"; },
+    get probe() { return mediaManagementImpl?.probe; },
+    get probeStatus() { return mediaManagementImpl?.probeStatus; },
+    get recovery() { return mediaManagementImpl?.recovery; },
+    listJobs: () => mediaManagementImpl?.listJobs?.() ?? [],
+    getJob: id => mediaManagementImpl?.getJob?.(id) ?? null,
+    acknowledgeJob: (id, revision) => mediaManagementImpl?.acknowledgeJob?.(id, revision) ?? null,
+    probePreflightApproved: () => mediaManagementImpl?.probePreflightApproved?.() ?? false,
+    get launchArtifact() { return mediaManagementImpl?.launchArtifact; },
+    authorizeInteractiveCliAction: (input, proof) => {
+      const runtimePort = boundPort ?? server?.port ?? listenPort;
+      if (
+        consumedMediaActionNonces.has(input.nonce)
+        || !verifyMediaActionAttestationProof(localAttestationSecret, input, process.pid, runtimePort, proof)
+      ) return false;
+      consumedMediaActionNonces.add(input.nonce);
+      return true;
+    },
+    settingsApplied: updatedConfig => {
+      if (
+        mediaRuntime
+        || (updatedConfig.images?.bridgeEnabled !== true && updatedConfig.images?.videoBridgeEnabled !== true)
+      ) return;
+      const activated = initializeServerMediaRuntime(updatedConfig, undefined);
+      mediaRuntime = activated.runtime;
+      mediaManagementImpl = activated.management;
+      if (!mediaRuntime) return;
+      unregisterArtifactPins();
+      if (mediaRuntime.protectedArtifactIds) {
+        unregisterArtifactPins = registerArtifactPinAuthority({
+          protectedArtifactIds: () => mediaRuntime!.protectedArtifactIds!(),
+          releaseArtifactForPrune: artifactId => mediaRuntime!.releaseArtifactForPrune?.(artifactId) ?? "protected",
+        });
+      }
+      bindServerMediaRuntime(server, mediaRuntime);
+      setDefaultModelVideoRuntime(mediaRuntime);
+      queueMicrotask(() => mediaRuntime?.startBackgroundRecovery());
+    },
+  };
   try {
     // Validate and normalize durable video state immediately before listen. A
     // bad/future/unsafe journal blocks only video admission, and failures in
     // earlier startup setup cannot leak a recovery-owner claim.
-    mediaRuntime = initializeServerMediaRuntime(config, deps.mediaRuntime);
+    const initializedMedia = initializeServerMediaRuntime(config, deps.mediaRuntime);
+    mediaRuntime = initializedMedia.runtime;
+    mediaManagementImpl = initializedMedia.management;
     if (mediaRuntime?.protectedArtifactIds) {
       unregisterArtifactPins = registerArtifactPinAuthority({
         protectedArtifactIds: () => mediaRuntime!.protectedArtifactIds!(),
@@ -881,7 +1012,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           req,
           url,
           config,
-          { ...deps.managementApi, readinessGate },
+          {
+            ...deps.managementApi,
+            mediaManagement: deps.managementApi?.mediaManagement ?? mediaManagement,
+            readinessGate,
+          },
           principal,
         );
         if (mgmtResponse) return withManagementCors(mgmtResponse, req, config);
@@ -1638,8 +1773,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   });
   setServerRef(server);
   if (mediaRuntime) {
-    setDefaultModelVideoRuntime(mediaRuntime);
-    queueMicrotask(() => mediaRuntime.startBackgroundRecovery());
+    const initialMediaRuntime = mediaRuntime;
+    setDefaultModelVideoRuntime(initialMediaRuntime);
+    queueMicrotask(() => initialMediaRuntime.startBackgroundRecovery());
   }
   const actualPort = server.port ?? listenPort;
   boundPort = actualPort;

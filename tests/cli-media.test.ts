@@ -108,10 +108,44 @@ describe("ccx media safe command boundary", () => {
     expect(f.probe).toHaveBeenCalledTimes(0);
   });
 
+  test("outcome-unknown acknowledgement remains available after the selected source changes", async () => {
+    const changedSource = {
+      ...safeStatus,
+      source: "api_key" as const,
+      bindingReady: false,
+      operationId: "probe-operation",
+      steps: { image: "outcome_unknown" as const, video: "pending" as const },
+    };
+    const f = fixture({ status: changedSource });
+    let reads = 0;
+    const probeOperation = mock(async () => ({
+      id: "probe-operation",
+      revision: 7,
+      steps: changedSource.steps,
+    }));
+    f.deps.createService = () => ({
+      status: async () => reads++ === 0
+        ? changedSource
+        : { ...safeStatus, revision: 1, operationId: "new-credential-probe" },
+      probe: f.probe,
+      acknowledge: f.acknowledge,
+      probeOperation,
+    });
+    expect(await handleMediaCommand(["acknowledge", "probe-operation", "--revision", "7"], f.deps)).toBe(0);
+    expect(probeOperation).toHaveBeenCalledWith("probe-operation");
+    expect(f.acknowledge).toHaveBeenCalledWith({
+      action: "acknowledge",
+      operationId: "probe-operation",
+      expectedRevision: 7,
+      confirmation: true,
+    });
+  });
+
   test("accepted confirmation re-attests the exact runtime and mutates once with fixed fields", async () => {
     const f = fixture();
     expect(await handleMediaCommand(["probe"], f.deps)).toBe(0);
     expect(f.attest).toHaveBeenCalledTimes(2);
+    expect(f.status).toHaveBeenCalledTimes(2);
     expect(f.probe).toHaveBeenCalledTimes(1);
     expect(f.probe.mock.calls[0]?.[0]).toEqual({
       action: "probe",
@@ -131,6 +165,19 @@ describe("ccx media safe command boundary", () => {
       },
     });
     expect(await handleMediaCommand(["probe"], f.deps)).toBe(5);
+    expect(f.probe).toHaveBeenCalledTimes(0);
+  });
+
+  test("revision rotation during confirmation is re-read and aborts without mutation", async () => {
+    const f = fixture();
+    let reads = 0;
+    f.deps.createService = () => ({
+      status: async () => ({ ...safeStatus, revision: reads++ === 0 ? 7 : 8 }),
+      probe: f.probe,
+      acknowledge: f.acknowledge,
+    });
+    expect(await handleMediaCommand(["probe"], f.deps)).toBe(5);
+    expect(reads).toBe(2);
     expect(f.probe).toHaveBeenCalledTimes(0);
   });
 
@@ -169,5 +216,111 @@ describe("ccx media safe command boundary", () => {
     expect(await handleMediaCommand(["status"], f.deps)).toBe(1);
     expect(f.output.join("\n")).not.toContain("secret-bearer");
     expect(f.errors.join("\n")).not.toContain("secret-bearer");
+  });
+
+  test("settings and read-only jobs keep source/toggle parity without TTY prompts", async () => {
+    expect(parseMediaArgs(["settings", "--images", "on", "--videos", "off", "--source", "api_key"]))
+      .toEqual({
+        command: "settings",
+        patch: { imagesEnabled: true, videosEnabled: false, authSource: "api_key" },
+      });
+    expect(parseMediaArgs(["jobs", "wait", "opaque-job", "--revision", "3", "--timeout", "9"]))
+      .toEqual({ command: "wait", jobId: "opaque-job", revision: 3, timeoutMs: 9_000 });
+
+    const f = fixture({ stdinIsTTY: false, stdoutIsTTY: false });
+    const settings = mock(async () => ({ ...safeStatus, source: "api_key" as const }));
+    f.deps.createService = () => ({
+      status: f.status,
+      probe: f.probe,
+      acknowledge: f.acknowledge,
+      settings,
+      jobs: async () => [],
+    });
+    expect(await handleMediaCommand(["settings", "--images", "on"], f.deps)).toBe(0);
+    expect(settings).toHaveBeenCalledWith({ imagesEnabled: true }, 7);
+    expect(f.confirm).toHaveBeenCalledTimes(0);
+
+    expect(await handleMediaCommand(["jobs", "--json"], f.deps)).toBe(0);
+    expect(f.output.at(-1)).toBe("[]");
+  });
+
+  test("job wait has stable completed, human-action, terminal, and timeout outcomes", async () => {
+    const state = (phase: "completed" | "human_action_required" | "terminal" | "progress") => ({
+      id: "opaque-job",
+      revision: 8,
+      state: phase === "completed" ? "completed" : phase === "progress" ? "polling" : "failed",
+      phase,
+      action: phase === "completed" ? "open" as const : phase === "progress" ? "wait" as const : phase === "human_action_required" ? "acknowledge" as const : "none" as const,
+      reason: "safe_reason",
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    for (const [phase, expected] of [["completed", 0], ["human_action_required", 6], ["terminal", 7], ["progress", 8]] as const) {
+      const f = fixture({ stdinIsTTY: false, stdoutIsTTY: false });
+      f.deps.createService = () => ({
+        status: f.status,
+        probe: f.probe,
+        acknowledge: f.acknowledge,
+        waitJob: async () => state(phase),
+      });
+      expect(await handleMediaCommand(["jobs", "wait", "opaque-job", "--revision", "7", "--timeout", "1"], f.deps)).toBe(expected);
+      expect(f.confirm).toHaveBeenCalledTimes(0);
+    }
+  });
+
+  test("confirmed job actions re-read the exact job instead of relying on the bounded first page", async () => {
+    const f = fixture();
+    const exactJob = {
+      id: "opaque-job",
+      revision: 11,
+      state: "completed",
+      phase: "completed" as const,
+      action: "open" as const,
+      reason: "artifact_ready",
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const job = mock(async () => exactJob);
+    const jobs = mock(async () => []);
+    const actOnJob = mock(async () => exactJob);
+    f.deps.createService = () => ({
+      status: f.status,
+      probe: f.probe,
+      acknowledge: f.acknowledge,
+      job,
+      jobs,
+      actOnJob,
+    });
+    expect(await handleMediaCommand(["open", "opaque-job", "--revision", "11"], f.deps)).toBe(0);
+    expect(job).toHaveBeenCalledWith("opaque-job");
+    expect(jobs).toHaveBeenCalledTimes(0);
+    expect(actOnJob).toHaveBeenCalledWith("open", "opaque-job", 11);
+  });
+
+  test("recovery mutation requires two TTYs, confirmation, and exact runtime re-attestation", async () => {
+    expect(parseMediaArgs(["recovery", "reset", "recovery-id", "--revision", "2"]))
+      .toEqual({ command: "recovery-action", action: "quarantine_reset", id: "recovery-id", revision: 2 });
+    expect(() => parseMediaArgs(["recovery", "reset", "recovery-id", "--revision", "2", "--yes"])).toThrow();
+
+    let f = fixture({ stdinIsTTY: false });
+    const recover = mock(async () => null);
+    f.deps.createService = () => ({ status: f.status, probe: f.probe, acknowledge: f.acknowledge, recover });
+    expect(await handleMediaCommand(["recovery", "reset", "recovery-id", "--revision", "2"], f.deps)).toBe(1);
+    expect(recover).toHaveBeenCalledTimes(0);
+
+    f = fixture();
+    const applied = mock(async () => ({
+      id: "recovery-id", revision: 3, cause: "old_schema", readOnly: false,
+      acknowledgementRequired: true, restartRequired: true,
+    }));
+    const recovery = mock(async () => ({
+      id: "recovery-id", revision: 2, cause: "old_schema", readOnly: false,
+      acknowledgementRequired: false, restartRequired: true,
+    }));
+    f.deps.createService = () => ({ status: f.status, probe: f.probe, acknowledge: f.acknowledge, recovery, recover: applied });
+    expect(await handleMediaCommand(["recovery", "reset", "recovery-id", "--revision", "2"], f.deps)).toBe(0);
+    expect(f.attest).toHaveBeenCalledTimes(2);
+    expect(recovery).toHaveBeenCalledTimes(1);
+    expect(applied).toHaveBeenCalledWith("quarantine_reset", "recovery-id", 2);
   });
 });

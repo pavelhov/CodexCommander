@@ -47,7 +47,7 @@ export class CapabilityProbeGateError extends Error {
 }
 
 export interface CapabilityProbeGate {
-  caller: "interactive_cli";
+  caller: "interactive_cli" | "confirmed_gui";
   operationId: string;
   expectedRevision: number;
   confirmationRevision: number;
@@ -64,7 +64,7 @@ export interface CapabilityProbeGate {
 }
 
 export interface CapabilityProbeAcknowledgement {
-  caller: "interactive_cli";
+  caller: "interactive_cli" | "confirmed_gui";
   operationId: string;
   step: CapabilityProbeStepKind;
   expectedRevision: number;
@@ -204,7 +204,7 @@ export class CapabilityProbeService {
     if (!gate) gateError("confirmation_required");
     if (binding.authSource !== "subscription_oauth" || !gate.apiKeyFallbackDisabled) gateError("source_mismatch");
     if (!gate.runtimeAttested) gateError("runtime_attestation_required");
-    if (gate.caller !== "interactive_cli" || !gate.humanConfirmed) gateError("interactive_human_required");
+    if ((gate.caller !== "interactive_cli" && gate.caller !== "confirmed_gui") || !gate.humanConfirmed) gateError("interactive_human_required");
     if (
       !gate.targetedTestsPassed
       || !gate.privacyScanPassed
@@ -415,7 +415,7 @@ export class CapabilityProbeService {
   }
 
   acknowledge(input: CapabilityProbeAcknowledgement): CapabilityProbeStatus {
-    if (input.caller !== "interactive_cli" || !input.runtimeAttested || !input.humanConfirmed) {
+    if ((input.caller !== "interactive_cli" && input.caller !== "confirmed_gui") || !input.runtimeAttested || !input.humanConfirmed) {
       gateError("interactive_human_required");
     }
     const result = this.#store.acknowledgeCapabilityProbeStep({
