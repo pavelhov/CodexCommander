@@ -2267,7 +2267,6 @@ export const ja: Record<TKey, string> = {
   "sub.delegationSetup.close": "閉じる",
   "sub.delegationSetup.cancel": "キャンセル",
   "sub.delegationSetup.confirmChangeMode": "モードを変更",
-  "sub.delegationSetup.launcherRequired": "このダッシュボードではインストール、更新、削除は読み取り専用です。`ccx gui` または CodexCommander メニューバーアプリから開いて、これらの変更を確認してください。",
   "dash.media.title": "Grok Imagine メディア",
   "dash.media.experimental": "実験的機能です。画像と動画は個別に有効化でき、新しいターンにのみ適用されます。",
   "dash.media.source": "メディア認証元",

@@ -2269,7 +2269,6 @@ export const ru: Record<TKey, string> = {
   "sub.delegationSetup.close": "Закрыть",
   "sub.delegationSetup.cancel": "Отмена",
   "sub.delegationSetup.confirmChangeMode": "Сменить режим",
-  "sub.delegationSetup.launcherRequired": "Эта панель только для чтения при установке, обновлении и удалении. Откройте её через `ccx gui` или приложение CodexCommander в строке меню, чтобы подтвердить эти изменения.",
   "dash.media.title": "Медиа Grok Imagine",
   "dash.media.experimental": "Экспериментально. Изображения и видео включаются отдельно и влияют только на новые ходы.",
   "dash.media.source": "Источник учётных данных медиа",

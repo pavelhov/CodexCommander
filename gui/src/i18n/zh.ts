@@ -2267,7 +2267,6 @@ export const zh: Record<TKey, string> = {
   "sub.delegationSetup.close": "关闭",
   "sub.delegationSetup.cancel": "取消",
   "sub.delegationSetup.confirmChangeMode": "更改模式",
-  "sub.delegationSetup.launcherRequired": "此仪表板的安装、更新和移除为只读。请通过 `ccx gui` 或 CodexCommander 菜单栏应用打开，以确认这些更改。",
   "dash.media.title": "Grok Imagine 媒体",
   "dash.media.experimental": "实验性功能。图像和视频可分别启用，且仅影响新对话轮次。",
   "dash.media.source": "媒体凭据来源",

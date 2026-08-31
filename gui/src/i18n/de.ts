@@ -2247,7 +2247,6 @@ export const de: Record<TKey, string> = {
   "sub.delegationSetup.close": "Schließen",
   "sub.delegationSetup.cancel": "Abbrechen",
   "sub.delegationSetup.confirmChangeMode": "Modus ändern",
-  "sub.delegationSetup.launcherRequired": "Dieses Dashboard ist für Installieren, Aktualisieren und Entfernen schreibgeschützt. Öffne es mit `ccx gui` oder über die CodexCommander-Menüleiste, um diese Änderungen zu bestätigen.",
   "dash.media.title": "Grok-Imagine-Medien",
   "dash.media.experimental": "Experimentell. Bild- und Videogenerierung sind getrennte Optionen und gelten nur für neue Durchläufe.",
   "dash.media.source": "Medien-Anmeldequelle",
