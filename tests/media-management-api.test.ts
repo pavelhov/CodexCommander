@@ -248,10 +248,10 @@ describe("media management resource", () => {
       DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1234/bus",
       XAUTHORITY: "/run/user/1234/xauthority",
     };
-    for (const [platform, expectedCommand] of [
-      ["darwin", "/usr/bin/open"],
-      ["linux", "/usr/bin/xdg-open"],
-      ["win32", "C:\\Windows\\explorer.exe"],
+    for (const [platform, expectedCommand, expectedRevealArgs] of [
+      ["darwin", "/usr/bin/open", ["-R", "/private/artifact.mp4"]],
+      ["linux", "/usr/bin/xdg-open", ["/private"]],
+      ["win32", "C:\\Windows\\explorer.exe", ["/select,", "/private/artifact.mp4"]],
     ] as const) {
       let captured: { command: string; args: string[]; env: Record<string, string> } | undefined;
       const result = await spawnMediaArtifactOpener("/private/artifact.mp4", true, {
@@ -289,7 +289,7 @@ describe("media management resource", () => {
         : platform === "win32"
           ? { SystemRoot: "C:\\Windows", WINDIR: "C:\\Windows" }
           : {});
-      expect(captured?.args.at(-1)).toBe("/private/artifact.mp4");
+      expect(captured?.args).toEqual(expectedRevealArgs);
     }
   });
 

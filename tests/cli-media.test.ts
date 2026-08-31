@@ -309,6 +309,55 @@ describe("ccx media safe command boundary", () => {
     }
   });
 
+  test("HTTP job wait follows progress revisions until completion", async () => {
+    const progress = (revision: number) => ({
+      id: "opaque-job",
+      revision,
+      state: "polling",
+      phase: "progress",
+      action: "wait",
+      reason: "generating",
+      createdAt: 1,
+      updatedAt: revision,
+    });
+    const completed = {
+      ...progress(10),
+      state: "completed",
+      phase: "completed",
+      action: "open",
+      reason: "artifact_ready",
+    };
+    const jobs = [progress(8), progress(9), completed];
+    let jobReads = 0;
+    const output: string[] = [];
+    const resource = {
+      revision: 7,
+      settings: { imagesEnabled: false, videosEnabled: true, authSource: "subscription_oauth" },
+      readiness: { credential: { state: "ready" } },
+      sourceFallback: "disabled",
+      probe: null,
+    };
+    const fetchImpl = mock(async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("/api/media/jobs/")) {
+        const job = jobs[Math.min(jobReads, jobs.length - 1)];
+        jobReads += 1;
+        return Response.json({ job });
+      }
+      return Response.json(resource);
+    });
+
+    expect(await handleMediaCommand(["jobs", "wait", "opaque-job", "--revision", "7", "--timeout", "2"], {
+      attest: async () => target,
+      fetchImpl: fetchImpl as typeof fetch,
+      stdinIsTTY: false,
+      stdoutIsTTY: false,
+      out: line => output.push(line),
+    })).toBe(0);
+    expect(jobReads).toBe(3);
+    expect(output.at(-1)).toContain("completed");
+  });
+
   test("confirmed job actions re-read the exact job instead of relying on the bounded first page", async () => {
     const f = fixture();
     const exactJob = {

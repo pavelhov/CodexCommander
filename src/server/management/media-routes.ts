@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { loadConfig, mutatePersistedConfig } from "../../config";
 import { createArtifactResponse, getArtifactsDir } from "../../images/artifacts";
@@ -552,7 +552,13 @@ export async function spawnMediaArtifactOpener(
     : platform === "win32"
       ? "C:\\Windows\\explorer.exe"
       : "/usr/bin/xdg-open";
-  const args = platform === "darwin" && reveal ? ["-R", path] : [path];
+  const args = !reveal
+    ? [path]
+    : platform === "darwin"
+      ? ["-R", path]
+      : platform === "win32"
+        ? ["/select,", path]
+        : [dirname(path)];
   const env: Record<string, string> = platform === "linux"
     ? linuxArtifactOpenerEnv(deps.sourceEnv ?? process.env)
     : platform === "win32"

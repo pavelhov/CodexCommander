@@ -487,11 +487,11 @@ function createHttpMediaService(target: AttestedLiveManagementProxy, fetchImpl: 
         throw error;
       }
     },
-    async waitJob(id, afterRevision, timeoutMs) {
+    async waitJob(id, _afterRevision, timeoutMs) {
       const deadline = Date.now() + timeoutMs;
       for (;;) {
         const job = await this.job!(id);
-        if (!job || job.revision > afterRevision || job.phase !== "progress") return job;
+        if (!job || job.phase !== "progress") return job;
         if (Date.now() >= deadline) return job;
         await new Promise(resolve => setTimeout(resolve, Math.min(500, deadline - Date.now())));
       }
