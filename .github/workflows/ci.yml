@@ -64,8 +64,12 @@ jobs:
       - name: GUI i18n lint
         run: cd gui && bun run lint:i18n
 
+      # Isolated workers: GUI tests install happy-dom on globalThis. A shared-global
+      # `bun test tests` lets a late React 19 update throw on window.event and poison
+      # later files (red on GHA, green on a fast laptop). The runner retries only
+      # failed files.
       - name: GUI tests
-        run: cd gui && bun test tests
+        run: cd gui && bun run test
 
       # Nor is the build optional. Tests that fetch the served dashboard read
       # the session bootstrap meta tags out of `gui/dist/index.html`, so without
