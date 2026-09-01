@@ -309,6 +309,13 @@ export type AdapterEvent =
       retryable?: boolean;
     };
 
+/** Terminals that the Responses bridge exposes as `response.incomplete`. */
+export function isIncompleteAdapterTerminalEvent(event: AdapterEvent): boolean {
+  return event.type === "incomplete"
+    || (event.type === "done"
+      && (event.stopReason === "max_tokens" || event.stopReason === "content_filter"));
+}
+
 /**
  * A web source backing a search answer. Surfaced on the search-end event and rendered by the bridge
  * as a `url_citation` annotation on the following assistant message (the desktop app's Sources chip
@@ -906,6 +913,9 @@ export interface CodexCommanderTokenGuardianConfig {
   codexWarmupModel?: string;
 }
 
+/** Explicit credential family used by both optional Grok media bridges. */
+export type MediaAuthSource = "subscription_oauth" | "api_key";
+
 export interface CodexCommanderImagesConfig {
   /** Optional custom API-key provider for /v1/images relays. Built-in OpenAI tiers remain automatic. */
   provider?: string;
@@ -913,7 +923,13 @@ export interface CodexCommanderImagesConfig {
   timeoutMs?: number;
   /** Master switch for the image bridge. Default false — set true to enable paid xAI Grok Imagine generation. */
   bridgeEnabled?: boolean;
-  /** xAI image model id. Default "grok-imagine-image-quality" (see DEFAULT_MODEL in images/plan.ts). */
+  /**
+   * Credential family shared by image and video generation. There is no automatic
+   * fallback between sources. Legacy enabled bridge configs that omit this field
+   * are normalized to "api_key" when loaded from disk.
+   */
+  authSource?: MediaAuthSource;
+  /** xAI image model id. Default "grok-imagine-image-2.0" (see XAI_IMAGE_MODEL in images/plan.ts). */
   bridgeModel?: string;
   /** Max image-generation loop iterations before forced-final. Default 3; clamped to [0, 10]. */
   maxRounds?: number;
@@ -921,7 +937,7 @@ export interface CodexCommanderImagesConfig {
   artifactsKeepCount?: number;
   /** Master switch for the video bridge. Default false — must be explicitly opted in. */
   videoBridgeEnabled?: boolean;
-  /** Model for xAI video generation. Default "grok-imagine-video". */
+  /** Legacy video-model override retained for config compatibility; video v1 uses grok-imagine-video-1.5. */
   videoBridgeModel?: string;
   /** Max video-gen rounds before forced-final. Default 2 (video is slower than image). */
   videoMaxRounds?: number;

@@ -7,6 +7,8 @@ export interface PinnedHttpGetOptions {
   headers?: HeadersInit;
   maxBytes?: number;
   idleTimeoutMs?: number;
+  /** Total connect + headers + body deadline. */
+  deadlineMs?: number;
   rejectUnauthorized?: boolean;
   context?: string;
 }
@@ -27,6 +29,7 @@ export function pinnedHttpGet(
   }
   const context = options?.context ?? "request";
   const idleTimeoutMs = options?.idleTimeoutMs ?? 60_000;
+  const deadlineMs = options?.deadlineMs;
   const maxBytes = options?.maxBytes;
   const headers = new Headers(options?.headers);
   headers.set("host", parsed.host);
@@ -40,11 +43,23 @@ export function pinnedHttpGet(
     }
 
     let settled = false;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let activeResponse: IncomingMessage | undefined;
+    const clearDeadline = () => {
+      if (deadlineTimer === undefined) return;
+      clearTimeout(deadlineTimer);
+      deadlineTimer = undefined;
+    };
     const fail = (error: unknown) => {
+      try { activeResponse?.destroy(); } catch { /* ignore */ }
       try { req.destroy(); } catch { /* ignore */ }
+      clearDeadline();
+      const normalized = error instanceof Error ? error : new Error(String(error));
+      try { streamController?.error(normalized); } catch { /* closed */ }
       if (settled) return;
       settled = true;
-      reject(error instanceof Error ? error : new Error(String(error)));
+      reject(normalized);
     };
     const requestOptions: RequestOptions & { servername?: string } = {
       protocol: parsed.protocol,
@@ -79,6 +94,7 @@ export function pinnedHttpGet(
     };
 
     const onResponse = (response: IncomingMessage) => {
+      activeResponse = response;
       const status = response.statusCode ?? 0;
       const responseHeaders = new Headers();
       for (const [key, value] of Object.entries(response.headers)) {
@@ -95,6 +111,7 @@ export function pinnedHttpGet(
         try { req.destroy(); } catch { /* ignore */ }
         if (settled) return;
         settled = true;
+        clearDeadline();
         resolve(new Response(null, { status, headers: responseHeaders }));
         return;
       }
@@ -102,10 +119,10 @@ export function pinnedHttpGet(
       let received = 0;
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
+          streamController = controller;
           response.setTimeout(idleTimeoutMs, () => {
             const error = new Error(`${context} stalled`);
             fail(error);
-            try { controller.error(error); } catch { /* closed */ }
           });
           response.on("data", (chunk: Buffer | string) => {
             const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
@@ -113,20 +130,23 @@ export function pinnedHttpGet(
             if (maxBytes !== undefined && received > maxBytes) {
               const error = new Error(`${context} exceeds ${maxBytes} byte cap`);
               fail(error);
-              try { controller.error(error); } catch { /* closed */ }
               return;
             }
             try { controller.enqueue(buffer); } catch { /* closed */ }
           });
           response.on("end", () => {
+            clearDeadline();
+            streamController = undefined;
+            activeResponse = undefined;
             try { controller.close(); } catch { /* closed */ }
           });
           response.on("error", (error: Error) => {
             fail(error);
-            try { controller.error(error); } catch { /* closed */ }
           });
         },
         cancel() {
+          clearDeadline();
+          streamController = undefined;
           req.destroy();
         },
       });
@@ -138,6 +158,12 @@ export function pinnedHttpGet(
 
     const requestFn = parsed.protocol === "https:" ? https.request : http.request;
     const req = requestFn(requestOptions, onResponse);
+    if (deadlineMs !== undefined) {
+      deadlineTimer = setTimeout(
+        () => fail(new Error(`${context} exceeded its total deadline`)),
+        deadlineMs,
+      );
+    }
     const onAbort = () => fail(signal?.reason instanceof Error ? signal.reason : new Error("aborted"));
     signal?.addEventListener("abort", onAbort, { once: true });
     req.setTimeout(idleTimeoutMs, () => fail(new Error(`${context} timed out`)));

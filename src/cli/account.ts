@@ -3,7 +3,7 @@ import { loadConfig } from "../config";
 import { providerCodexAccountMode } from "../providers/registry";
 import type { CodexCommanderConfig } from "../types";
 import { cmdAddKey, cmdAlias, cmdAutoSwitch, cmdClearCooldown, cmdPriority, cmdRefresh, cmdRemove } from "./account-extended";
-import { apiError, apiJson, classifyAccount, fetchRows, proxyUnreachable, resolveBaseUrl, type AccountDeps, type AccountRow, type AccountType, type ApiResult }
+import { apiError, apiJson, classifyAccount, fetchRows, gateXaiKeyAction, gateXaiOAuthAction, proxyUnreachable, resolveBaseUrl, type AccountDeps, type AccountRow, type AccountType, type ApiResult }
   from "./account-api";
 
 export { classifyAccount } from "./account-api";
@@ -59,6 +59,17 @@ function candidateNames(config: CodexCommanderConfig): string {
 
 function displayId(id: string): string {
   return id === MAIN_CODEX_ID ? MAIN_ALIAS : id;
+}
+
+/**
+ * Cursor can retain OAuth accounts after a dashboard key becomes the routing
+ * credential, and canonical xAI keeps a separate media-key pool alongside its
+ * OAuth account. No other provider gets an implicit second credential family.
+ */
+function dualFamilyPeerType(config: CodexCommanderConfig, name: string, type: AccountType): AccountType | null {
+  const provider = config.providers?.[name];
+  if (!provider || type === "codex" || (name !== "xai" && provider.adapter !== "cursor")) return null;
+  return type === "oauth" ? "api-key" : type === "api-key" ? "oauth" : null;
 }
 
 function statusText(row: AccountRow): string {
@@ -138,35 +149,38 @@ async function cmdList(rest: string[], deps: AccountDeps): Promise<number> {
   const rows: AccountRow[] = [];
   const notes: string[] = [];
   for (const t of targets) {
-    const r = await fetchRows(deps, baseUrl, t.name, t.type);
-    if (r.networkDown) return proxyUnreachable();
-    if (r.errorJson) {
-      if (name) return apiError(r.errorJson, `failed to list ${t.name}`);
-      const errorText = typeof r.errorJson.error === "string" ? r.errorJson.error : "";
-      const skipUnknownKey = t.type === "api-key"
-        && r.status === 404
-        && errorText.includes("unknown provider");
-      const skipConfigOAuth = t.type === "oauth"
-        && t.provenance === "config"
-        && r.status === 400
-        && errorText.includes("unknown oauth provider");
-      if (skipUnknownKey || skipConfigOAuth) continue;
-      return apiError(r.errorJson, `failed to list ${t.name}`);
-    }
-    if (r.rows.length === 0) {
-      if (showAll) notes.push(`${t.name}: no stored accounts or keys`);
-      continue;
-    }
-    rows.push(...r.rows);
-    if (t.type === "codex") {
-      if (r.activeId === null) notes.push("openai: auto (no pin — lowest-usage account is selected per request)");
-      if (providerCodexAccountMode("openai", config.providers?.openai) === "direct") {
-        notes.push("openai is in direct mode — the selection takes effect when pool mode is enabled");
+    const peerType = dualFamilyPeerType(config, t.name, t.type);
+    const familyTypes: AccountType[] = peerType ? [t.type, peerType] : [t.type];
+    let targetRowCount = 0;
+    for (const familyType of familyTypes) {
+      const r = await fetchRows(deps, baseUrl, t.name, familyType);
+      if (r.networkDown) return proxyUnreachable();
+      if (r.errorJson) {
+        if (name) return apiError(r.errorJson, `failed to list ${t.name}`);
+        const errorText = typeof r.errorJson.error === "string" ? r.errorJson.error : "";
+        const skipUnknownKey = familyType === "api-key"
+          && r.status === 404
+          && errorText.includes("unknown provider");
+        const skipConfigOAuth = familyType === "oauth"
+          && t.provenance === "config"
+          && r.status === 400
+          && errorText.includes("unknown oauth provider");
+        if (skipUnknownKey || skipConfigOAuth) continue;
+        return apiError(r.errorJson, `failed to list ${t.name}`);
+      }
+      targetRowCount += r.rows.length;
+      rows.push(...r.rows);
+      if (familyType === "codex") {
+        if (r.activeId === null) notes.push("openai: auto (no pin — lowest-usage account is selected per request)");
+        if (providerCodexAccountMode("openai", config.providers?.openai) === "direct") {
+          notes.push("openai is in direct mode — the selection takes effect when pool mode is enabled");
+        }
+      }
+      if (familyType === "oauth" && REPLACEMENT_STYLE_OAUTH.has(t.name)) {
+        notes.push(`${t.name}: single login slot — re-login replaces the current account`);
       }
     }
-    if (t.type === "oauth" && REPLACEMENT_STYLE_OAUTH.has(t.name)) {
-      notes.push(`${t.name}: single login slot — re-login replaces the current account`);
-    }
+    if (targetRowCount === 0 && showAll) notes.push(`${t.name}: no stored accounts or keys`);
   }
 
   if (wantsJson) {
@@ -196,24 +210,44 @@ async function cmdCurrent(rest: string[], deps: AccountDeps): Promise<number> {
   }
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
-  const r = await fetchRows(deps, baseUrl, name, c.type);
-  if (r.networkDown) return proxyUnreachable();
-  if (r.errorJson) return apiError(r.errorJson, `failed to read ${name}`);
+  const primary = await fetchRows(deps, baseUrl, name, c.type);
+  if (primary.networkDown) return proxyUnreachable();
+  if (primary.errorJson) return apiError(primary.errorJson, `failed to read ${name}`);
+  const peerType = dualFamilyPeerType(config, name, c.type);
+  const peer = peerType ? await fetchRows(deps, baseUrl, name, peerType) : null;
+  if (peer?.networkDown) return proxyUnreachable();
+  if (peer?.errorJson) return apiError(peer.errorJson, `failed to read ${name} ${peerType} credentials`);
 
-  const activeRow = r.rows.find(row => row.active) ?? null;
+  const oauthFamily = c.type === "oauth" ? primary : peerType === "oauth" ? peer : null;
+  const keyFamily = c.type === "api-key" ? primary : peerType === "api-key" ? peer : null;
+
+  const activeRow = primary.rows.find(row => row.active) ?? null;
+  const activeKey = keyFamily?.rows.find(row => row.active) ?? null;
+  const activeOAuth = oauthFamily?.rows.find(row => row.active) ?? null;
   if (wantsJson) {
     console.log(JSON.stringify({
       provider: name,
       type: c.type,
-      activeId: r.activeId,
-      autoSwitchThreshold: r.autoSwitchThreshold,
+      activeId: primary.activeId,
+      autoSwitchThreshold: primary.autoSwitchThreshold,
       account: activeRow,
+      ...(name === "xai" && keyFamily ? { mediaKeyActiveId: keyFamily.activeId, mediaKey: activeKey } : {}),
+      ...(name !== "xai" && keyFamily && c.type !== "api-key"
+        ? { apiKeyActiveId: keyFamily.activeId, apiKey: activeKey }
+        : {}),
+      ...(c.type !== "oauth" && oauthFamily ? { oauthActiveId: oauthFamily.activeId, oauthAccount: activeOAuth } : {}),
     }, null, 2));
     return 0;
   }
-  if (activeRow) {
-    console.log(formatAccountTable([activeRow]));
-  } else if (c.type === "codex" && r.activeId === null) {
+  const activeRows: AccountRow[] = [];
+  for (const row of [activeRow, activeKey, activeOAuth]) {
+    if (row && !activeRows.some(candidate => candidate.type === row.type && candidate.id === row.id)) {
+      activeRows.push(row);
+    }
+  }
+  if (activeRows.length > 0) {
+    console.log(formatAccountTable(activeRows));
+  } else if (c.type === "codex" && primary.activeId === null) {
     console.log("openai: auto (no pin — lowest-usage account is selected per request)");
   } else {
     console.log(`${name}: no active account or key`);
@@ -240,24 +274,75 @@ async function cmdUse(rest: string[], deps: AccountDeps): Promise<number> {
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
 
+  let effectiveType = c.type;
+  const peerType = dualFamilyPeerType(config, name, c.type);
+  if (peerType) {
+    const peer = await fetchRows(deps, baseUrl, name, peerType);
+    if (!peer.networkDown && !peer.errorJson && peer.rows.some(row => row.id === id)) {
+      effectiveType = peerType;
+    }
+  }
+
   let res: ApiResult;
   let activeId: string;
-  if (c.type === "codex") {
+  if (effectiveType === "codex") {
     activeId = id === MAIN_ALIAS ? MAIN_CODEX_ID : id;
     res = await apiJson(deps, baseUrl, "PUT", "/api/codex-auth/active", { accountId: activeId });
-  } else if (c.type === "oauth") {
+  } else if (effectiveType === "oauth") {
     activeId = id;
-    res = await apiJson(deps, baseUrl, "PUT", "/api/oauth/accounts/active", { provider: name, accountId: id });
+    if (name === "xai") {
+      const gate = await gateXaiOAuthAction(
+        deps,
+        baseUrl,
+        "select",
+        id,
+        `Use xAI subscription account ${id} for media billing?`,
+      );
+      if (!gate) return 1;
+      res = await apiJson(
+        deps,
+        baseUrl,
+        "PUT",
+        "/api/oauth/accounts/active",
+        {
+          provider: name,
+          accountId: id,
+          ...(gate.kind === "attested" ? { expectedRevision: gate.revision } : {}),
+        },
+        gate.kind === "attested" ? {
+          target: gate.target,
+          actionAttestation: { action: "xai_oauth_select", target: "xai_oauth", id },
+        } : {},
+      );
+    } else {
+      res = await apiJson(deps, baseUrl, "PUT", "/api/oauth/accounts/active", { provider: name, accountId: id });
+    }
   } else {
     activeId = id;
-    res = await apiJson(deps, baseUrl, "PUT", "/api/providers/keys/active", { name, id });
+    if (name === "xai") {
+      const gate = await gateXaiKeyAction(deps, baseUrl, `Select xAI media API key ${id}?`);
+      if (!gate) return 1;
+      res = await apiJson(
+        deps,
+        baseUrl,
+        "PUT",
+        "/api/providers/keys/active",
+        { name, id, expectedRevision: gate.revision },
+        {
+          target: gate.target,
+          actionAttestation: { action: "xai_key_select", target: "xai_key", id },
+        },
+      );
+    } else {
+      res = await apiJson(deps, baseUrl, "PUT", "/api/providers/keys/active", { name, id });
+    }
   }
   if (res.status === 0) return proxyUnreachable();
   if (res.status !== 200) return apiError(res.json, `failed to switch ${name}`);
 
-  if (wantsJson) console.log(JSON.stringify({ ok: true, provider: name, type: c.type, activeId }, null, 2));
-  else console.log(`${name}: active ${c.type === "api-key" ? "key" : "account"} is now ${displayId(activeId)}`);
-  if (c.type === "codex") {
+  if (wantsJson) console.log(JSON.stringify({ ok: true, provider: name, type: effectiveType, activeId }, null, 2));
+  else console.log(`${name}: active ${effectiveType === "api-key" ? "key" : "account"} is now ${displayId(activeId)}`);
+  if (effectiveType === "codex") {
     console.error("Takes effect immediately; running threads move on their next request, and in-flight requests keep the account they captured.");
     const active = await apiJson(deps, baseUrl, "GET", "/api/codex-auth/active");
     if (active.status === 200 && typeof active.json.autoSwitchThreshold === "number" && active.json.autoSwitchThreshold > 0) {

@@ -58,8 +58,13 @@ import {
   resolveAnthropicAccountForSession,
   rotateAnthropicAccountOn429,
 } from "../../oauth/anthropic-routing";
-import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
-import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
+import { buildWebSearchTool, planWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
+import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
+import {
+  isValidVideoClientRequestId,
+  type VideoOperationIdentity,
+} from "../../images/video-operation-key";
+import { deriveCurrentUserVideoIntent, runResponsesAuxiliaryLoop, type CurrentUserVideoIntent } from "../../responses/auxiliary";
 import { describeImagesInPlace, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
 import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/run-turn-queue";
 import {
@@ -103,7 +108,10 @@ import {
   type TranslatorBudget,
 } from "../../lib/translator-budget";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
-import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import {
+  isCanonicalOpenAiForwardProvider,
+  supportsNativeResponsesCompactEndpoint,
+} from "../../providers/openai-tiers";
 import { slugsEquivalent } from "../../providers/slug-codec";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
@@ -603,8 +611,17 @@ export interface HandleResponsesOptions {
   inboundWire?: InboundWire;
   /** Internal transport identity for route-scoped upstream compatibility policy. */
   inboundTransport?: "websocket";
+  /** Journal-backed identity derivation supplied only by authenticated HTTP ingress. */
+  deriveVideoOperationIdentity?: (
+    clientRequestId: string,
+    body: unknown,
+  ) => VideoOperationIdentity | undefined;
+  /** Internal combo handoff: preserve the original logical request identity. */
+  videoOperationIdentity?: VideoOperationIdentity;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
+  /** Internal combo handoff: preserve the one current-user video-intent decision. */
+  currentUserVideoIntent?: CurrentUserVideoIntent;
   /** Internal combo handoff: allow a later same-provider model after a reset-derived 429/402. */
   deferCodexResetDerivedCooldown?: boolean;
   /** 030-owned handoff when a child consumed the original failure under bounds. */
@@ -621,6 +638,18 @@ export interface HandleResponsesOptions {
  */
 export function clientCancelledResponse(): Response {
   return formatErrorResponse(499, "client_cancelled", "Client cancelled request");
+}
+
+function auxiliaryPolicyErrorResponse(
+  status: number,
+  code: string,
+  message: string,
+  type = "invalid_request_error",
+): Response {
+  return new Response(JSON.stringify({ error: { message, type, code } }), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 
@@ -1364,9 +1393,95 @@ async function handleResponsesInner(
       req.headers,
     );
   }
+  const sanitizePlaintextEncryptedContent = (): void => {
+    const rewritten = sanitizeEncryptedContentInPlace(
+      (body as { input?: unknown } | undefined)?.input,
+    );
+    if (rewritten > 0) {
+      console.warn(
+        `[codexcommander] rewrote ${rewritten} plaintext encrypted_content part(s) to input_text (spawn-message compatibility)`,
+      );
+    }
+  };
+  // Video enablement is not spend consent. Resolve the current user's wording once, before the
+  // combo handoff or any provider-capable sidecar/adapter path. Compaction keeps its existing
+  // routing contract even when retained payload text mentions video.
+  let videoIntent = options.currentUserVideoIntent;
+  if (videoIntent === undefined && config.images?.videoBridgeEnabled === true) {
+    // Build a preflight-only semantic view with parser parity. The full spawn compatibility sanitizer
+    // also reclassifies plaintext agent_message items as user messages; doing that before consent
+    // derivation would let delegated task text authorize paid media. Clone and sanitize every other
+    // input item instead: historical plaintext encrypted_content in any parser-supported role must
+    // not make the parser fail before the current user's consent wording is classified.
+    let intentBody = body;
+    if (body && typeof body === "object" && !Array.isArray(body)) {
+      const input = (body as { input?: unknown }).input;
+      if (Array.isArray(input)) {
+        let rewritten = false;
+        const intentInput = input.map(value => {
+          if (value && typeof value === "object" && !Array.isArray(value)) {
+            const item = value as Record<string, unknown>;
+            if (item.type !== "agent_message") {
+              const clonedItem = structuredClone(item);
+              if (sanitizeEncryptedContentInPlace([clonedItem]) > 0) {
+                rewritten = true;
+                return clonedItem;
+              }
+            }
+          }
+          return value;
+        });
+        if (rewritten) intentBody = { ...(body as Record<string, unknown>), input: intentInput };
+      }
+    }
+    let preflightParsed: CodexCommanderParsedRequest | undefined;
+    try {
+      preflightParsed = parseRequest(intentBody);
+    } catch {
+      // The normal parser below (or in the selected combo child) owns request-shape errors;
+      // malformed input must not change from its existing 400 into a consent response.
+    }
+    if (preflightParsed) {
+      videoIntent = preflightParsed._compactionRequest === true
+        ? { state: "none" }
+        : deriveCurrentUserVideoIntent(intentBody);
+    }
+  }
+  if (videoIntent?.state === "confirmation_required") {
+    return auxiliaryPolicyErrorResponse(
+      409,
+      "video_confirmation_required",
+      "Confirm an explicit text-to-video generation request before video submission",
+    );
+  }
+  let videoOperationIdentity = options.videoOperationIdentity;
+  const clientVideoRetryId = req.headers.get("x-client-request-id");
+  if (videoOperationIdentity === undefined
+    && videoIntent?.state === "explicit"
+    && options.inboundTransport !== "websocket"
+    && isValidVideoClientRequestId(clientVideoRetryId)) {
+    try {
+      videoOperationIdentity = options.deriveVideoOperationIdentity?.(clientVideoRetryId, body);
+    } catch {
+      // Store corruption/closure must not silently degrade an advertised exact retry
+      // into another paid submission. The public error deliberately carries no details.
+    }
+    if (!videoOperationIdentity) {
+      return auxiliaryPolicyErrorResponse(
+        503,
+        "video_retry_protection_unavailable",
+        "Video retry protection is temporarily unavailable",
+        "server_error",
+      );
+    }
+  }
   const comboId = !options.comboAttempt ? comboIdFromRawBody(body, config) : null;
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
-    return handleComboResponses(req, body, comboId, config, logCtx, options);
+    return handleComboResponses(req, body, comboId, config, logCtx, {
+      ...options,
+      ...(videoIntent ? { currentUserVideoIntent: videoIntent } : {}),
+      ...(videoOperationIdentity ? { videoOperationIdentity } : {}),
+    });
   }
   const unreadableEncryptedAgentTask = hasUnreadableEncryptedAgentTask(
     (body as { input?: unknown } | undefined)?.input,
@@ -1382,20 +1497,9 @@ async function handleResponsesInner(
   }
   const previousResponseInputExpanded = body !== originalBody;
 
-  // Spawn-message compatibility (both directions): agent_message task payloads ride in
-  // encrypted_content slots as plaintext. Rewrite them to input_text on the RAW body BEFORE
-  // parsing so every consumer sees the payload: parseRequest (routed/translated providers read
-  // the parsed messages) and the native passthrough (_rawBody is this same object, serialized
-  // verbatim). Genuine backend ciphertext is left byte-identical (looksLikeBackendCiphertext).
-  {
-    const rewritten = sanitizeEncryptedContentInPlace(
-      (body as { input?: unknown } | undefined)?.input,
-    );
-    if (rewritten > 0)
-      console.warn(
-        `[codexcommander] rewrote ${rewritten} plaintext encrypted_content part(s) to input_text (spawn-message compatibility)`,
-      );
-  }
+  // Expansion can add historical input items that were not present during current-user preflight.
+  // Sanitize those too before parsing/native serialization; the current tail is already a no-op.
+  sanitizePlaintextEncryptedContent();
 
   let parsed;
   let toolBridgeMaps: ReturnType<typeof buildToolBridgeMaps>;
@@ -1699,6 +1803,7 @@ async function handleResponsesInner(
   logCtx.providerAdapter = adapter.name;
   sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, adapter.name);
   const isPassthrough = "passthrough" in adapter && !!adapter.passthrough;
+  const explicitVideoIntent = parsed._compactionRequest !== true && videoIntent?.state === "explicit";
 
   if (adapter.name === "kiro" && parsed.previousResponseId && !parsed._previousResponseInputExpanded) {
     return formatErrorResponse(
@@ -1804,7 +1909,7 @@ async function handleResponsesInner(
     parsed.context.messages.push({ role: "user", content: COMPACT_PROMPT, timestamp: Date.now() });
   }
 
-  if ("passthrough" in adapter && adapter.passthrough && !routedCompaction) {
+  if ("passthrough" in adapter && adapter.passthrough && !routedCompaction && !explicitVideoIntent) {
     const imageGenCallAliases = route.provider.authMode === "forward"
       ? new Map<string, { namespace: string; name: string }>()
       : imageGenToolCallAliases(toolBridgeMaps.toolNsMap, translatorBudget);
@@ -2434,33 +2539,44 @@ async function handleResponsesInner(
   //   - runTurn: image bridge may run (it supports runTurn); web-search is skipped so runTurn
   //     can proceed for web-search-only turns
   const wsPlan = !routedCompaction
-    ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar)
+    ? planWebSearch(config, parsed, isPassthrough, route.provider, route.modelId, openAiSidecar)
     : undefined;
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
-  const vidPlan = !routedCompaction ? await planVideoBridge(config, parsed, route.provider) : undefined;
-  const canRunWebSearch = !!wsPlan && !adapter.runTurn;
-  if ((imgPlan || vidPlan) && canRunWebSearch) {
-    // Web search takes priority when both are active — the media bridge cannot run
-    // alongside runWithWebSearch. Surface a runtime signal so the user knows their
-    // configured video/image bridge was skipped for this turn, rather than silently
-    // dropping a paid capability.
-    if (vidPlan) console.warn("[videos] video bridge skipped: web search is active for this turn");
-    if (imgPlan) console.warn("[images] image bridge skipped: web search is active for this turn");
+  if (!routedCompaction && config.images?.bridgeEnabled === true && parsed._imageGeneration && !imgPlan) {
+    return auxiliaryPolicyErrorResponse(
+      401,
+      "needs_auth",
+      "The selected Grok image credential needs authentication",
+      "authentication_error",
+    );
   }
-  if ((imgPlan || vidPlan) && (!wsPlan || adapter.runTurn)) {
-    // The image bridge detects a hosted image_generation tool and requires streaming.
-    // The video bridge activates from config and injects a tool — it also needs streaming
-    // (the loop returns SSE). For video-only (no imgPlan) on a non-streaming request, skip
-    // the bridge entirely so enabling the feature doesn't break ordinary non-streaming traffic.
-    if (!parsed.stream) {
-      if (imgPlan) {
-        return formatErrorResponse(400, "invalid_request_error", "image bridge requires stream=true");
-      }
-      // Video-only: skip bridge for non-streaming requests
-    } else {
+  const videoEnabled = !routedCompaction && config.images?.videoBridgeEnabled === true;
+  const videoPlanCandidate = videoEnabled && videoIntent?.state === "explicit"
+    ? await planVideoBridge(config, parsed, route.provider)
+    : undefined;
+  if (videoEnabled && videoIntent?.state === "explicit" && !videoPlanCandidate) {
+    return auxiliaryPolicyErrorResponse(
+      401,
+      "needs_auth",
+      "The selected Grok video credential needs authentication",
+      "authentication_error",
+    );
+  }
+  const vidPlan = videoIntent?.state === "explicit" ? videoPlanCandidate : undefined;
+  if (imgPlan || vidPlan || wsPlan) {
+    // Auxiliary media depends on renderer-safe incremental events. Both handlers expose the same
+    // typed failure; the standalone Images API remains an independent non-streaming route.
+    if ((imgPlan || vidPlan) && !parsed.stream) {
+      return auxiliaryPolicyErrorResponse(
+        400,
+        "auxiliary_streaming_required",
+        "Responses auxiliary media requires stream=true",
+      );
+    }
     // Replace any pre-existing image_gen/video_gen aliases instead of appending duplicate wire names.
     const priorTools = parsed.context.tools ?? [];
     const bridgeTools = [...priorTools.filter(t => {
+      if (t.webSearch) return false;
       if (t.imageGeneration) return false;
       if (t.videoGeneration) return false;
       if (imgPlan && imgPlan.toolNames.has(t.name)) return false;
@@ -2469,9 +2585,10 @@ async function handleResponsesInner(
       if (vidPlan && !t.namespace && vidPlan.toolNames.has(t.name)) return false;
       return true;
     })];
-    const existingNames = new Set(bridgeTools.map(t => t.name));
+    const existingNames = new Set(bridgeTools.filter(t => !t.namespace).map(t => t.name));
     if (imgPlan && !existingNames.has(IMAGE_GEN_TOOL_NAME)) bridgeTools.push(buildImageTool());
     if (vidPlan && !existingNames.has(VIDEO_GEN_TOOL_NAME)) bridgeTools.push(buildVideoTool());
+    if (wsPlan && !existingNames.has("web_search")) bridgeTools.push(buildWebSearchTool());
     parsed.context.tools = bridgeTools;
     // Hosted image_generation tool_choice / allowed_tools must target the synthetic function name.
     // Gate on imgPlan — in a video-only turn buildImageTool() was never injected, so rewriting
@@ -2488,23 +2605,36 @@ async function handleResponsesInner(
       && (tc.name === "image_generation" || imgPlan.toolNames.has(tc.name))) {
       parsed.options.toolChoice = { ...tc, name: IMAGE_GEN_TOOL_NAME };
     }
-    const imgResponse = await runWithImageBridge({
+    const auxiliaryResponse = await runResponsesAuxiliaryLoop({
       parsed, adapter,
       incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget },
+      nativeResponses: (vidPlan !== undefined && adapter.name === "openai-responses")
+        || supportsNativeResponsesCompactEndpoint(route.providerName, route.provider),
       toolParameterSchemas: toolBridgeMaps.toolParameterSchemas,
       ...(imgPlan ? { plan: imgPlan } : {}),
       ...(vidPlan ? { videoPlan: vidPlan } : {}),
+      ...(vidPlan && videoOperationIdentity ? { videoOperationIdentity } : {}),
+      ...(wsPlan ? {
+        webSearchPlan: {
+          backend: wsPlan.backend,
+          forwardProvider: wsPlan.forwardSidecar?.provider,
+          anthropicSidecar: wsPlan.anthropicSidecar,
+          hostedTool: wsPlan.hostedTool,
+          selectedForwardHeaders: wsPlan.forwardSidecar?.headers ?? selectedForwardHeaders,
+          settings: wsPlan.settings,
+          maxSearches: wsPlan.maxSearches,
+          recordSidecarOutcome: wsPlan.forwardSidecar?.recordOutcome,
+          routedModelStallTimeoutMs: wsPlan.routedModelStallTimeoutMs,
+        },
+      } : {}),
       forwardHeaders: selectedForwardHeaders,
       onAttemptSend: (recovery?: AttemptRecoveryKind) =>
         noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens, recovery),
       abortSignal: options.abortSignal,
-      maxRounds: imgPlan && vidPlan
-        ? clampImageMaxRounds(Math.min(config.images?.maxRounds ?? 3, config.images?.videoMaxRounds ?? 2))
-        : imgPlan
-          ? clampImageMaxRounds(config.images?.maxRounds)
-          : clampImageMaxRounds(config.images?.videoMaxRounds ?? 2),
+      imageMaxRounds: imgPlan ? clampImageMaxRounds(config.images?.maxRounds) : 0,
+      videoMaxRounds: vidPlan ? clampImageMaxRounds(config.images?.videoMaxRounds ?? 2) : 0,
       connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
-      stallTimeoutSec: config.stallTimeoutSec,
+      stallTimeoutSec: wsPlan?.stallTimeoutSec ?? config.stallTimeoutSec,
       fetchImpl: providerFetch(route.provider),
       onRequestBuilt: request => recordAdapterReasoning(logCtx, request),
       ...(vidPlan?.timeoutMs ? { videoTimeoutMs: vidPlan.timeoutMs } : {}),
@@ -2546,78 +2676,14 @@ async function handleResponsesInner(
           adapterNeedsForcedContinuation(adapter.name) ? { force: true } : undefined,
         ),
     });
-    if (imgResponse.body) {
-      const imgTurnAc = new AbortController();
-      return new Response(trackStreamLifetime(imgResponse.body, imgTurnAc, undefined, options.turnAdmissionLease), {
-        status: imgResponse.status,
-        headers: imgResponse.headers,
+    if (auxiliaryResponse.body) {
+      const auxiliaryTurnAc = new AbortController();
+      return new Response(trackStreamLifetime(auxiliaryResponse.body, auxiliaryTurnAc, undefined, options.turnAdmissionLease), {
+        status: auxiliaryResponse.status,
+        headers: auxiliaryResponse.headers,
       });
     }
-    return imgResponse;
-    } // end else (streaming bridge)
-  }
-
-  // Web-search sidecar: Codex enabled web_search but this is a routed (non-OpenAI) model that can't
-  // run it server-side. Expose web_search as a function tool and run searches via the gpt-mini sidecar
-  // through the ChatGPT passthrough, looping until the model answers. Otherwise take the normal path.
-  // Placed BEFORE the runTurn early-return for non-runTurn adapters so dual-tool turns dispatch
-  // through web-search instead of being swallowed. runTurn adapters never enter this branch.
-  if (canRunWebSearch && wsPlan) {
-    parsed.context.tools = [...(parsed.context.tools ?? []), buildWebSearchTool()];
-    const wsResponse = await runWithWebSearch({
-      parsed, adapter,
-      incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget },
-      toolParameterSchemas: toolBridgeMaps.toolParameterSchemas,
-      backend: wsPlan.backend,
-      forwardProvider: wsPlan.forwardSidecar?.provider,
-      anthropicSidecar: wsPlan.anthropicSidecar,
-      hostedTool: wsPlan.hostedTool,
-      selectedForwardHeaders: wsPlan.forwardSidecar?.headers ?? selectedForwardHeaders,
-      settings: wsPlan.settings,
-      maxSearches: wsPlan.maxSearches,
-      forceEmptyResponseId: true,
-      abortSignal: options.abortSignal,
-      ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
-      onRequestBuilt: request => recordAdapterReasoning(logCtx, request),
-      onAttemptSend: (recovery?: AttemptRecoveryKind) =>
-        noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens, recovery),
-      onUsage: usage => {
-        logCtx.usageFromBridge = true;
-        if (usage) {
-          logCtx.usage = usage;
-          if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
-        }
-      },
-      recordSidecarOutcome: wsPlan.forwardSidecar?.recordOutcome,
-      connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
-      routedModelStallTimeoutMs: wsPlan.routedModelStallTimeoutMs,
-      stallTimeoutSec: wsPlan.stallTimeoutSec,
-      on429: retryAfter => {
-        const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
-          retryAfter,
-          now: Date.now(),
-          attemptedKey: route.provider.apiKey,
-          promptCacheKey: parsed.options.promptCacheKey,
-        });
-        if (!rotated) return null;
-        route.provider = rotated;
-        return resolveAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
-          config.cacheRetention,
-        );
-      },
-      retryOn429Policy: rateLimitRetryPolicyFor(route.provider),
-    });
-    // Register the sidecar stream as an active turn so drainAndShutdown waits for (or aborts)
-    // in-flight web-search turns instead of skipping them during graceful shutdown.
-    if (wsResponse.body) {
-      const wsTurnAc = new AbortController();
-      return new Response(trackStreamLifetime(wsResponse.body, wsTurnAc, undefined, options.turnAdmissionLease), {
-        status: wsResponse.status,
-        headers: wsResponse.headers,
-      });
-    }
-    return wsResponse;
+    return auxiliaryResponse;
   }
 
   if (adapter.runTurn) {

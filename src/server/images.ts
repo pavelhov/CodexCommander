@@ -7,8 +7,9 @@
  * without a route the tool died on the /v1/* JSON-404 guard. Only an OpenAI-family upstream
  * can serve these endpoints — routed providers (Cursor, Kiro, Gemini, …) have no image
  * generation surface — so the handler relays the body verbatim to the ChatGPT forward
- * provider, an OpenAI API-key provider, or an explicitly selected compatible custom provider and
- * passes the response through untouched:
+ * provider, an OpenAI API-key provider, or an explicitly selected compatible custom provider.
+ * The ordinary relay preserves upstream responses; the opt-in Grok path normalizes signed URL
+ * results into self-contained base64 rows before returning them:
  * codex's images client parses `{created, data:[{b64_json}]}` strictly and Debug-prints
  * error bodies into the model-visible failure, so upstream errors must stay legible.
  */
@@ -36,9 +37,36 @@ import { getValidAccessToken, getOAuthCredentialProjectId } from "../oauth/index
 import { safeAntigravityHttpErrorMessage } from "../adapters/google-errors";
 import { sanitizeUpstreamErrorText } from "../adapters/upstream-http-error";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
-import { decodeValidatedImageBase64, MAX_ENCODED_BYTES_PER_IMAGE } from "../images/artifacts";
+import {
+  createImageBudget,
+  chargeImageBudget,
+  decodeValidatedImageBase64,
+  downloadImageToArtifact,
+  MAX_ENCODED_BYTES_PER_IMAGE,
+  pruneArtifacts,
+  readArtifactBytes,
+} from "../images/artifacts";
+import {
+  beginImageArtifactMaterialization,
+  createImageArtifactProtectionScope,
+  type ImageArtifactProtectionScope,
+} from "../images/fulfill";
 import type { AdmissionLease } from "../lib/admission";
 import { codexAccountSelectionForTurn } from "./lifecycle";
+import { bindMediaCredential } from "../images/media-credentials";
+import { isMediaTransportError, MediaTransportError } from "../images/media-errors";
+import { XAI_IMAGE_MODEL } from "../images/plan";
+import { callXaiImages } from "../images/xai-client";
+import {
+  isValidImageClientRequestId,
+  type ImageOperationAdmissionScope,
+} from "../images/image-operation-key";
+import type {
+  ImageReplayLookup,
+  ImageReplayReservation,
+  ImageReplayStore,
+  StoredImageResponse,
+} from "../images/image-replay-store";
 
 export type ImagesEndpoint = "generations" | "edits";
 
@@ -53,6 +81,301 @@ const IMAGES_UPSTREAM_TIMEOUT_MS = 300_000;
 const IMAGES_RESPONSE_MAX_BYTES = 100 * 1024 * 1024;
 
 const CCA_IMAGE_MODEL = "gemini-3.1-flash-image";
+
+/**
+ * The provider already accepted and completed a paid POST, so retrying cannot repair local
+ * validation/materialization and may bill twice. Keep this response stable, URL-free, and
+ * deliberately outside the client's retryable 5xx class.
+ */
+function grokImageArtifactUnavailable(): Response {
+  return new Response(JSON.stringify({
+    error: {
+      message: "Grok image artifact is unavailable after provider completion.",
+      type: "invalid_request_error",
+      code: "artifact_unavailable",
+    },
+  }), {
+    status: 409,
+    headers: {
+      "content-type": "application/json",
+      // OpenAI SDKs retry 409 by default unless this explicit override is set.
+      "x-should-retry": "false",
+    },
+  });
+}
+
+function grokImageReplayUnavailable(): Response {
+  return new Response(JSON.stringify({
+    error: {
+      message: "Grok image replay protection is unavailable; no paid retry was attempted.",
+      type: "server_error",
+      code: "image_replay_unavailable",
+    },
+  }), {
+    status: 503,
+    headers: { "content-type": "application/json", "x-should-retry": "false" },
+  });
+}
+
+function imageReplayDecisionResponse(
+  decision: ImageReplayLookup | ImageReplayReservation,
+): Response | undefined {
+  if (decision.kind === "replay") {
+    return new Response(decision.response.body, {
+      status: decision.response.status,
+      headers: {
+        "content-type": "application/json",
+        ...(decision.response.noRetry ? { "x-should-retry": "false" } : {}),
+        "x-codexcommander-replayed": "true",
+      },
+    });
+  }
+  if (decision.kind === "outcome_unknown") return grokImageError(new MediaTransportError({
+    code: "ambiguous_submission",
+    phase: "submit",
+    certainty: "ambiguous",
+  }));
+  if (decision.kind === "conflict") return new Response(JSON.stringify({ error: {
+    message: "This image idempotency key was already used for a different request.",
+    type: "invalid_request_error",
+    code: "idempotency_key_reused",
+  } }), { status: 409, headers: { "content-type": "application/json", "x-should-retry": "false" } });
+  if (decision.kind === "busy") return new Response(JSON.stringify({ error: {
+    message: "The matching image request is still in progress.",
+    type: "invalid_request_error",
+    code: "image_request_in_progress",
+  } }), { status: 409, headers: { "content-type": "application/json", "x-should-retry": "true" } });
+  if (decision.kind === "saturated") return new Response(JSON.stringify({ error: {
+    message: "Image replay capacity is full; no paid request was submitted.",
+    type: "server_error",
+    code: "image_replay_capacity",
+  } }), { status: 503, headers: { "content-type": "application/json", "x-should-retry": "false" } });
+  return undefined;
+}
+
+function grokImageError(error: MediaTransportError): Response {
+  const status = error.code === "needs_auth"
+    ? 401
+    : error.code === "entitlement_denied"
+      ? 403
+      : error.code === "rate_limited"
+        ? 429
+        : error.code === "policy_rejected" || error.code === "invalid_request"
+          ? 400
+          : error.code === "ambiguous_submission"
+            ? 409
+            : error.code === "cancelled"
+              ? 499
+              : error.code === "timeout"
+                ? 408
+                : 502;
+  const code = error.code === "ambiguous_submission" ? "submission_outcome_unknown" : error.code;
+  const type = error.code === "needs_auth"
+    ? "authentication_error"
+    : status >= 400 && status < 500
+      ? "invalid_request_error"
+      : "upstream_error";
+  return new Response(JSON.stringify({ error: { message: error.message, type, code } }), {
+    status,
+    headers: {
+      "content-type": "application/json",
+      ...(status === 409 ? { "x-should-retry": "false" } : {}),
+    },
+  });
+}
+
+async function handleGrokImageGeneration(
+  req: Request,
+  config: CodexCommanderConfig,
+  logCtx: RequestLogContext,
+  replayStore: ImageReplayStore | null,
+  admission: ImageOperationAdmissionScope,
+): Promise<Response> {
+  let body: unknown;
+  try {
+    body = await readJsonRequestBody(req);
+  } catch (error) {
+    return decodeRequestErrorResponse(error, "images");
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return formatErrorResponse(400, "invalid_request_error", "image generation request must be a JSON object");
+  }
+  const request = body as Record<string, unknown>;
+  const prompt = typeof request.prompt === "string" ? request.prompt.trim() : "";
+  if (!prompt) return formatErrorResponse(400, "invalid_request_error", "prompt is required and must not be empty");
+  const n = request.n === undefined ? 1 : request.n;
+  if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > 4) {
+    return formatErrorResponse(400, "invalid_request_error", "n must be an integer from 1 to 4");
+  }
+
+  if (!replayStore) {
+    return grokImageReplayUnavailable();
+  }
+
+  const idempotencyKey = req.headers.get("idempotency-key");
+  const clientRequestId = req.headers.get("x-client-request-id");
+  for (const value of [idempotencyKey, clientRequestId]) {
+    if (value !== null && !isValidImageClientRequestId(value)) {
+      return new Response(JSON.stringify({
+        error: {
+          message: "Image idempotency identifiers must be 1-256 safe ASCII characters.",
+          type: "invalid_request_error",
+          code: "invalid_idempotency_key",
+        },
+      }), { status: 400, headers: { "content-type": "application/json", "x-should-retry": "false" } });
+    }
+  }
+  if (idempotencyKey !== null && clientRequestId !== null && idempotencyKey !== clientRequestId) {
+    return new Response(JSON.stringify({
+      error: {
+        message: "Idempotency-Key and X-Client-Request-Id must match when both are supplied.",
+        type: "invalid_request_error",
+        code: "idempotency_key_conflict",
+      },
+    }), { status: 400, headers: { "content-type": "application/json", "x-should-retry": "false" } });
+  }
+
+  const model = config.images?.bridgeModel ?? XAI_IMAGE_MODEL;
+  logCtx.provider = "xai";
+  logCtx.model = model;
+  let finishMaterialization: (() => void) | undefined;
+  let artifactProtection: ImageArtifactProtectionScope | undefined;
+  let paidSubmissionCompleted = false;
+  let materializedUrl = false;
+  let identity;
+  let reservation;
+  try {
+    identity = replayStore.deriveIdentity(idempotencyKey ?? clientRequestId ?? undefined, admission, body);
+    reservation = replayStore.reserve(identity);
+  } catch {
+    return grokImageReplayUnavailable();
+  }
+  const reservationResponse = imageReplayDecisionResponse(reservation);
+  if (reservationResponse) return reservationResponse;
+  let binding;
+  try {
+    binding = bindMediaCredential(config);
+  } catch (error) {
+    try { replayStore.releaseReserved(identity.operationKey); } catch { return grokImageReplayUnavailable(); }
+    if (isMediaTransportError(error)) return grokImageError(error);
+    return new Response(JSON.stringify({
+      error: {
+        message: "The selected media credential needs authentication.",
+        type: "authentication_error",
+        code: "needs_auth",
+      },
+    }), { status: 401, headers: { "content-type": "application/json" } });
+  }
+  const sidecarExit = sidecarEnter("images");
+  let submissionFenced = false;
+  let dispatchAttempted = false;
+  const persistTerminal = async (response: Response): Promise<Response> => {
+    const stored: StoredImageResponse = {
+      status: response.status,
+      body: await response.clone().text(),
+      noRetry: response.headers.get("x-should-retry")?.toLowerCase() === "false",
+    };
+    replayStore.complete(identity.operationKey, stored);
+    submissionFenced = false;
+    return response;
+  };
+  try {
+    replayStore.markSubmitting(identity.operationKey);
+    submissionFenced = true;
+    dispatchAttempted = true;
+    const result = await callXaiImages({
+      prompt,
+      model,
+      n,
+      ...(typeof request.size === "string" ? { size: request.size } : {}),
+      ...(typeof request.quality === "string" ? { quality: request.quality } : {}),
+    }, binding, req.signal, config.images?.timeoutMs);
+    paidSubmissionCompleted = true;
+    const budget = createImageBudget();
+    const data: Array<{ b64_json: string }> = [];
+    try {
+      for (const image of result.images) {
+        if (image.b64_json) {
+          // A successful provider POST is already billable. Validate and bound its inline bytes
+          // before exposing them to codex-rs, which may otherwise retry malformed output.
+          const bytes = decodeValidatedImageBase64(image.b64_json);
+          chargeImageBudget(budget, bytes.byteLength);
+          data.push({ b64_json: bytes.toString("base64") });
+          continue;
+        }
+        if (!image.url) continue;
+        if (!artifactProtection) {
+          artifactProtection = createImageArtifactProtectionScope();
+          finishMaterialization = beginImageArtifactMaterialization();
+        }
+        const path = await downloadImageToArtifact(image.url, budget, req.signal);
+        artifactProtection.protect([path]);
+        const artifact = readArtifactBytes(path.split(/[\\/]/).at(-1) ?? "");
+        if (!artifact) throw new Error("materialized image artifact is unavailable");
+        const bytes = decodeValidatedImageBase64(artifact.bytes.toString("base64"));
+        data.push({ b64_json: bytes.toString("base64") });
+        materializedUrl = true;
+      }
+    } catch {
+      // Provider result URLs can be signed and validation failures can contain local details.
+      // Never reflect either after a known-success paid dispatch.
+      return await persistTerminal(grokImageArtifactUnavailable());
+    }
+    // Every URL result is now embedded in the response, so its local file no longer needs a
+    // response-delivery pin. Release only after all paths were registered and read; concurrent
+    // image requests retain their own files through the shared materialization guard/scope.
+    finishMaterialization?.();
+    finishMaterialization = undefined;
+    artifactProtection?.close();
+    artifactProtection = undefined;
+    if (data.length === 0) {
+      return await persistTerminal(grokImageArtifactUnavailable());
+    }
+    return await persistTerminal(Response.json({
+      created: Math.floor(Date.now() / 1000),
+      data,
+    }));
+  } catch (error) {
+    if (paidSubmissionCompleted) {
+      if (submissionFenced) {
+        try { return await persistTerminal(grokImageArtifactUnavailable()); }
+        catch { try { replayStore.markOutcomeUnknown(identity.operationKey); } catch { /* journal remains fail-closed */ } }
+      }
+      return grokImageArtifactUnavailable();
+    }
+    if (isMediaTransportError(error)) {
+      if (submissionFenced && error.phase === "pre_dispatch" && error.certainty === "definite") {
+        replayStore.releasePreDispatch(identity.operationKey);
+        submissionFenced = false;
+        return grokImageError(error);
+      }
+      if (submissionFenced && error.certainty === "definite") {
+        try { return await persistTerminal(grokImageError(error)); }
+        catch { try { replayStore.markOutcomeUnknown(identity.operationKey); } catch { /* journal remains fail-closed */ } }
+      } else if (submissionFenced) {
+        try { replayStore.markOutcomeUnknown(identity.operationKey); submissionFenced = false; } catch { /* fail closed below */ }
+      }
+      return grokImageError(error);
+    }
+    if (submissionFenced) {
+      try { replayStore.markOutcomeUnknown(identity.operationKey); submissionFenced = false; } catch { /* fail closed below */ }
+    }
+    return dispatchAttempted
+      ? grokImageError(new MediaTransportError({
+          code: "ambiguous_submission",
+          phase: "submit",
+          certainty: "ambiguous",
+        }))
+      : grokImageReplayUnavailable();
+  } finally {
+    finishMaterialization?.();
+    artifactProtection?.close();
+    if (materializedUrl) {
+      try { pruneArtifacts(config.images?.artifactsKeepCount); } catch { /* paid response/error stays authoritative */ }
+    }
+    sidecarExit();
+  }
+}
 
 /**
  * Google Gemini finishReasons that indicate a permanent content/safety block.
@@ -328,7 +651,56 @@ export async function handleImages(
   endpoint: ImagesEndpoint,
   logCtx: RequestLogContext,
   turnAdmissionLease?: AdmissionLease,
+  imageReplay?: {
+    store: ImageReplayStore | null;
+    admission: ImageOperationAdmissionScope;
+    required?: boolean;
+  },
 ): Promise<Response> {
+  if (config.images?.bridgeEnabled === true) {
+    if (endpoint === "edits") {
+      return new Response(JSON.stringify({
+        error: {
+          message: "Grok image edits are not supported in this release.",
+          type: "invalid_request_error",
+          code: "grok_image_edits_unsupported",
+        },
+      }), { status: 400, headers: { "content-type": "application/json" } });
+    }
+    return handleGrokImageGeneration(
+      req,
+      config,
+      logCtx,
+      imageReplay?.store ?? null,
+      imageReplay?.admission ?? { kind: "loopback" },
+    );
+  }
+  if (endpoint === "generations" && imageReplay?.required) {
+    if (!imageReplay.store) return grokImageReplayUnavailable();
+    let replayBody: unknown;
+    try { replayBody = await readJsonRequestBody(req.clone()); }
+    catch { replayBody = undefined; }
+    if (replayBody !== undefined) {
+      const idempotencyKey = req.headers.get("idempotency-key");
+      const clientRequestId = req.headers.get("x-client-request-id");
+      const validIds = [idempotencyKey, clientRequestId]
+        .every(value => value === null || isValidImageClientRequestId(value));
+      const compatibleIds = idempotencyKey === null || clientRequestId === null || idempotencyKey === clientRequestId;
+      if (validIds && compatibleIds) {
+        try {
+          const identity = imageReplay.store.deriveIdentity(
+            idempotencyKey ?? clientRequestId ?? undefined,
+            imageReplay.admission,
+            replayBody,
+          );
+          const priorResponse = imageReplayDecisionResponse(imageReplay.store.lookup(identity));
+          if (priorResponse) return priorResponse;
+        } catch {
+          return grokImageReplayUnavailable();
+        }
+      }
+    }
+  }
   const candidates = selectImagesProvider(config);
   if (candidates.error) {
     return formatErrorResponse(400, "invalid_request_error", candidates.error);

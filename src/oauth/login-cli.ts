@@ -29,20 +29,28 @@ export async function notifyRunningProxy(
   // body nor the admin token until the exact runtime listener proves its secret.
   const target = await attestLiveManagementProxy(io);
   if (!target) return;
+  let response: Response;
   try {
-    await (io.fetchFn ?? fetch)(`${target.baseUrl}/api/providers`, {
+    response = await (io.fetchFn ?? fetch)(`${target.baseUrl}/api/providers`, {
       method: "POST",
       headers: runningProxyUpdateHeaders(),
       body: JSON.stringify({ name, provider }),
     });
   } catch {
-    /* proxy unreachable; disk config loads on next start */
+    // A transport failure is safe: the persisted config loads on next start.
+    return;
+  }
+  // A reached listener's non-2xx response is not safe to hide, because the
+  // caller would otherwise report a live update that never happened.
+  if (!response.ok) {
+    throw new Error(`running proxy rejected the provider update (HTTP ${response.status})`);
   }
 }
 
 /**
- * After `runLogin()` has persisted the merged provider (including preserved apiKey /
- * apiKeyPool / authMode), push that on-disk entry into a running proxy.
+ * After `runLogin()` has persisted the merged provider, push its routing fields
+ * into a running proxy. Canonical xAI credential fields stay server-owned: the
+ * replacement route preserves its final locked key-pool snapshot.
  *
  * Must not send `OAUTH_PROVIDERS[name].providerConfig`: POST /api/providers replaces the
  * live entry and saves it, which would drop the preserved key billing state.
@@ -53,7 +61,14 @@ export async function notifyRunningProxyAfterOAuthLogin(
 ): Promise<void> {
   const provider = loadConfig().providers[name];
   if (!provider) return;
-  await notifyRunningProxy(name, provider, io);
+  const liveProvider = structuredClone(provider);
+  if (name === "xai") {
+    // The xAI provider replacement route deliberately cannot accept credential
+    // bytes. It atomically preserves the live/persisted key pool itself.
+    delete liveProvider.apiKey;
+    delete liveProvider.apiKeyPool;
+  }
+  await notifyRunningProxy(name, liveProvider, io);
 }
 
 export async function handleLogin(provider?: string): Promise<void> {

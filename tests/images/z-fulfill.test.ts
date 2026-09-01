@@ -2,19 +2,23 @@ import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import type { ImageBridgePlan } from "../../src/images/types";
 import type { XaiImageRequest } from "../../src/images/xai-client";
+import { mediaError } from "../../src/images/media-errors";
+import { pruneMediaArtifacts, registerArtifactPinAuthority } from "../../src/images/artifact-retention";
 
 const PREV_HOME = process.env.CODEXCOMMANDER_HOME;
 let fulfillImageCall: typeof import("../../src/images/fulfill")["fulfillImageCall"];
 let imageFulfillmentTailSnapshot: typeof import("../../src/images/fulfill")["imageFulfillmentTailSnapshot"];
+let safeMediaToolResult: typeof import("../../src/images/fulfill")["safeMediaToolResult"];
 let testHome = "";
 
 beforeAll(async () => {
   testHome = join(tmpdir(), "ccx-test-" + randomUUID());
   process.env.CODEXCOMMANDER_HOME = testHome;
   mock.restore();
+  const actualArtifacts = await import("../../src/images/artifacts");
   mock.module("../../src/images/xai-client", () => ({
     callXaiImages: async (req: XaiImageRequest, _auth: unknown, _signal?: AbortSignal, timeoutMs?: number) => {
       xaiCalls.push(req);
@@ -24,12 +28,20 @@ beforeAll(async () => {
     },
   }));
   mock.module("../../src/images/artifacts", () => ({
+    ...actualArtifacts,
+    artifactHttpUrl: (path: string) => `/v1/codexcommander/artifacts/${path.split(/[\\/]/).at(-1)}`,
     createImageBudget: () => ({ spent: 0 }),
+    getArtifactsDir: () => join(testHome, "artifacts"),
     materializeInlineImage: async () => materializeFn(matIdx++),
     downloadImageToArtifact: async () => downloadFn(dlIdx++),
-    pruneArtifacts: () => pruneImpl(),
+    pruneArtifacts: (keepCount?: number) => pruneImpl(keepCount),
+    resolveArtifactPath: (id: string) => join(testHome, "artifacts", id),
   }));
-  ({ fulfillImageCall, imageFulfillmentTailSnapshot } = await import(`../../src/images/fulfill?fulfill=${Date.now()}`));
+  ({
+    fulfillImageCall,
+    imageFulfillmentTailSnapshot,
+    safeMediaToolResult,
+  } = await import(`../../src/images/fulfill?fulfill=${Date.now()}`));
 });
 afterAll(() => { if (PREV_HOME === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = PREV_HOME; mock.restore(); });
 
@@ -40,7 +52,7 @@ const xaiCalls: XaiImageRequest[] = [];
 let matIdx = 0;
 let dlIdx = 0;
 let pruneCalls = 0;
-let pruneImpl: () => void = () => { pruneCalls++; };
+let pruneImpl: (keepCount?: number) => void = () => { pruneCalls++; };
 let materializeFn: (i: number) => Promise<string> = async (i) => touchArtifact(`img-${i}.png`);
 let downloadFn: (i: number) => Promise<string> = async (i) => touchArtifact(`dl-${i}.png`);
 
@@ -55,9 +67,13 @@ function touchArtifact(name: string): string {
 }
 
 const plan = {
-  provider: {} as never,
-  auth: { baseUrl: "https://api.x.ai", token: "test-token" },
-  model: "grok-imagine-image-quality",
+  auth: {
+    authSource: "api_key",
+    providerKind: "canonical",
+    slotRef: "media-slot:test",
+    identityDigest: "sha256:test",
+  },
+  model: "grok-imagine-image-2.0",
   toolNames: new Set(["image_gen"]),
 } as ImageBridgePlan;
 
@@ -75,6 +91,127 @@ function reset(): void {
 }
 
 describe("fulfillImageCall", () => {
+  test("provider-safe result serialization omits every private/internal field", () => {
+    const privatePath = touchArtifact("img-safe-result.png");
+    const serialized = JSON.stringify(safeMediaToolResult({
+      ok: true,
+      model: "private-model-sentinel",
+      prompt: "private-prompt-sentinel",
+      path: privatePath,
+      files: [privatePath],
+      count: 1,
+      jobId: "must-not-enter-image-results",
+      markdown: `![image](file://${privatePath})`,
+    }, "image"));
+    expect(JSON.parse(serialized)).toEqual({
+      ok: true,
+      status: "completed",
+      artifacts: ["/v1/codexcommander/artifacts/img-safe-result.png"],
+      markdown: "![image](/v1/codexcommander/artifacts/img-safe-result.png)",
+    });
+    expect(serialized).not.toContain("/Users/test/");
+    expect(serialized).not.toContain('"path"');
+    expect(serialized).not.toContain('"files"');
+    expect(serialized).not.toContain("private-model-sentinel");
+    expect(serialized).not.toContain("private-prompt-sentinel");
+    expect(serialized).not.toContain("file://");
+
+    const externalPath = "/Users/test/private/home-user-sentinel.png";
+    const external = JSON.stringify(safeMediaToolResult({
+      ok: true,
+      model: "private-model",
+      prompt: "private-prompt",
+      path: externalPath,
+      files: [externalPath],
+      count: 1,
+    }, "image"));
+    expect(JSON.parse(external)).toEqual({ ok: true, status: "completed" });
+    expect(external).not.toContain("home-user-sentinel");
+  });
+
+  test("provider-safe failures collapse raw errors to an opaque status", () => {
+    const serialized = JSON.stringify(safeMediaToolResult({
+      ok: false,
+      model: "private-model",
+      prompt: "private-prompt",
+      files: [],
+      count: 0,
+      error: "download failed for https://provider.invalid/result?token=must-not-leak",
+    }, "video"));
+    expect(JSON.parse(serialized)).toEqual({ ok: false, status: "failed" });
+    expect(serialized).not.toContain("provider.invalid");
+    expect(serialized).not.toContain("must-not-leak");
+  });
+
+  test("provider-safe video recovery results retain only bounded local job ids", () => {
+    for (const [error, status] of [
+      ["video_busy: another video job is active", "busy"],
+      ["video_detached: generation continues", "detached"],
+      ["video job ended in state failed", "failed"],
+    ] as const) {
+      expect(safeMediaToolResult({
+        ok: false,
+        model: "private-model",
+        prompt: "private-prompt",
+        files: [],
+        count: 0,
+        jobId: "018f0f51-9db8-7f42-a9d8-4b9dfbd26e0f",
+        error,
+      }, "video")).toEqual({
+        ok: false,
+        status,
+        jobId: "018f0f51-9db8-7f42-a9d8-4b9dfbd26e0f",
+      });
+    }
+
+    const base = {
+      model: "private-model",
+      prompt: "private-prompt",
+      files: [],
+      count: 0,
+      jobId: "local-job-id",
+    };
+    expect(safeMediaToolResult({ ...base, ok: false, error: "video_busy" }, "image"))
+      .toEqual({ ok: false, status: "busy" });
+    expect(safeMediaToolResult({ ...base, ok: false, error: "video artifact is unavailable locally" }, "video"))
+      .toEqual({ ok: false, status: "artifact_unavailable" });
+    const completedPath = touchArtifact("completed-video.mp4");
+    expect(safeMediaToolResult({ ...base, ok: true, files: [completedPath], path: completedPath }, "video"))
+      .toEqual({
+        ok: true,
+        status: "completed",
+        artifacts: ["/v1/codexcommander/artifacts/completed-video.mp4"],
+        markdown: "[Open video](/v1/codexcommander/artifacts/completed-video.mp4)",
+      });
+    expect(safeMediaToolResult({
+      ...base,
+      ok: false,
+      jobId: `local-${"x".repeat(64)}`,
+      error: "video_detached",
+    }, "video")).toEqual({ ok: false, status: "detached" });
+    expect(safeMediaToolResult({
+      ...base,
+      ok: false,
+      jobId: "https://provider.invalid/private",
+      error: "video job ended in state failed",
+    }, "video")).toEqual({ ok: false, status: "failed" });
+
+    const outcomeUnknown = {
+      ...base,
+      ok: false,
+      jobId: "018f0f51-9db8-7f42-a9d8-4b9dfbd26e0f",
+      error: "submission_outcome_unknown: https://provider.invalid/result?token=must-not-leak",
+      path: "/private/local/video.mp4",
+      artifactId: "private-artifact-id",
+      credential: "private-credential",
+    };
+    expect(safeMediaToolResult(outcomeUnknown, "video")).toEqual({
+      ok: false,
+      status: "submission_outcome_unknown",
+      jobId: "018f0f51-9db8-7f42-a9d8-4b9dfbd26e0f",
+    });
+  });
+
   test("valid args → ok:true with file", async () => {
     reset();
     const r = await fulfillImageCall(
@@ -119,6 +256,24 @@ describe("fulfillImageCall", () => {
     expect(r.error).toContain("500");
   });
 
+  test("ambiguous xAI submission preserves certainty as a typed no-replay result", async () => {
+    reset();
+    xaiError = mediaError({
+      code: "ambiguous_submission",
+      phase: "submit",
+      certainty: "ambiguous",
+      reason: "network",
+    });
+    const r = await fulfillImageCall(
+      { id: "c1", name: "image_gen", arguments: JSON.stringify({ prompt: "x" }) }, plan, { spent: 0 },
+    );
+    expect(r).toMatchObject({
+      ok: false,
+      error: "submission_outcome_unknown",
+      dispatchCertainty: "ambiguous",
+    });
+  });
+
   test("b64_json result → materialized via materializeInlineImage", async () => {
     reset();
     xaiResult = { images: [{ b64_json: "dGVzdA==" }] };
@@ -137,10 +292,16 @@ describe("fulfillImageCall", () => {
 
   test("all images fail → ok:false", async () => {
     reset();
-    materializeFn = async () => { throw new Error("disk full"); };
+    xaiResult = { images: [{ b64_json: "invalid-provider-bytes" }, { url: "https://cdn.example.com/i.png" }] };
+    materializeFn = async () => { throw new Error("invalid inline image"); };
+    downloadFn = async () => { throw new Error("disk full"); };
     const r = await fulfillImageCall({ id: "c1", name: "image_gen", arguments: `{"prompt":"x"}` }, plan, { spent: 0 });
     expect(r.ok).toBe(false);
-    expect(r.error).toContain("no usable images");
+    expect(r.error).toBe("image artifact unavailable after provider completion");
+    expect(r.paidSubmissionConsumed).toBe(true);
+    expect(safeMediaToolResult(r, "image")).toEqual({ ok: false, status: "artifact_unavailable" });
+    expect(matIdx).toBe(1);
+    expect(dlIdx).toBe(1);
   });
 
   test("one of two images fails → ok:true with 1 file", async () => {
@@ -150,6 +311,7 @@ describe("fulfillImageCall", () => {
     const r = await fulfillImageCall({ id: "c1", name: "image_gen", arguments: `{"prompt":"x"}` }, plan, { spent: 0 });
     expect(r.ok).toBe(true);
     expect(r.files.length).toBe(1);
+    expect(r.paidSubmissionConsumed).toBe(true);
   });
 
   test("prunes once after the full batch and omits deleted paths", async () => {
@@ -177,6 +339,65 @@ describe("fulfillImageCall", () => {
     expect(r.path).toBe(written[1]);
   });
 
+  test("concurrent paid batches protect unregistered bytes and each other under older-pin pressure", async () => {
+    reset();
+    const artifactsDir = join(testHome, "artifacts");
+    const olderPinnedId = "older-durable-video.mp4";
+    const olderPinned = touchArtifact(olderPinnedId);
+    const oldSeconds = (Date.now() - 60_000) / 1_000;
+    const { utimesSync } = await import("node:fs");
+    utimesSync(olderPinned, oldSeconds, oldSeconds);
+    const unregisterPin = registerArtifactPinAuthority({
+      protectedArtifactIds: () => new Set([olderPinnedId]),
+      releaseArtifactForPrune: () => "protected",
+    });
+    let secondWritten!: () => void;
+    const secondWrittenPromise = new Promise<void>(resolve => { secondWritten = resolve; });
+    let releaseSecond!: () => void;
+    const releaseSecondPromise = new Promise<void>(resolve => { releaseSecond = resolve; });
+    const written: string[] = [];
+    materializeFn = async (index) => {
+      const path = touchArtifact(`concurrent-${index}.png`);
+      written.push(path);
+      if (index === 1) {
+        secondWritten();
+        await releaseSecondPromise;
+      }
+      return path;
+    };
+    pruneImpl = (keepCount = 1) => {
+      pruneCalls += 1;
+      pruneMediaArtifacts({ dir: artifactsDir, maxFiles: keepCount });
+    };
+    const concurrentPlan = { ...plan, artifactsKeepCount: 1 } as ImageBridgePlan;
+    const first = fulfillImageCall(
+      { id: "concurrent-a", name: "image_gen", arguments: `{"prompt":"a"}` },
+      concurrentPlan,
+      { spent: 0 },
+    );
+    const second = fulfillImageCall(
+      { id: "concurrent-b", name: "image_gen", arguments: `{"prompt":"b"}` },
+      concurrentPlan,
+      { spent: 0 },
+    );
+    try {
+      await secondWrittenPromise;
+      // The second file exists but its materializer has deliberately not returned its path yet.
+      // Any unrelated retention pass in this window must fail safe.
+      expect(pruneMediaArtifacts({ dir: artifactsDir, maxFiles: 1 }).prunedArtifactIds).toEqual([]);
+      expect(written.every(path => existsSync(path))).toBe(true);
+      releaseSecond();
+      const results = await Promise.all([first, second]);
+      expect(results.every(result => result.ok)).toBe(true);
+      expect(written.every(path => existsSync(path))).toBe(true);
+      expect(pruneCalls).toBe(2);
+    } finally {
+      releaseSecond();
+      unregisterPin();
+      await Promise.allSettled([first, second]);
+    }
+  });
+
   test("forwards prompt, model, and n to callXaiImages", async () => {
     reset();
     await fulfillImageCall(
@@ -198,13 +419,15 @@ describe("fulfillImageCall", () => {
     expect(xaiCalls[0]!.n).toBe(4);
   });
 
-  test("forwards imageUrl from image_url arg", async () => {
+  test("image_url edit input is rejected before xAI dispatch", async () => {
     reset();
-    await fulfillImageCall(
+    const result = await fulfillImageCall(
       { id: "c1", name: "image_gen", arguments: JSON.stringify({ prompt: "x", image_url: "https://example.com/i.png" }) },
       plan, { spent: 0 },
     );
-    expect(xaiCalls[0]!.imageUrl).toBe("https://example.com/i.png");
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("grok_image_edits_unsupported");
+    expect(xaiCalls).toHaveLength(0);
   });
 
   test("plan.defaultSize and defaultQuality fill omitted args", async () => {

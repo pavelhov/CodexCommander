@@ -1,4 +1,5 @@
 import { markActivity } from "../lib/sidecar-tracker";
+import { existsSync } from "node:fs";
 import { darwinPlaintextEagerRuntimeWarning } from "../lib/bun-stream-caps";
 import {
   buildWarmupCompletionFrames,
@@ -67,16 +68,49 @@ export { resolveGuiFilePath, rootFallbackPayload } from "./gui-static";
 export { resolveAdapter } from "./adapter-resolve";
 import { formatErrorResponse, type ResponsesTerminalStatus } from "../bridge";
 import {
+  bindServerMediaRuntime,
   drainAndShutdown,
   getActiveTurnCount,
   isDraining,
   registerTurn,
   setServerRef,
+  stopServerMediaRuntime,
   trackStreamLifetime,
   tryAdmitTurn,
   unregisterTurn,
   type ActiveTurnLease,
 } from "./lifecycle";
+import {
+  getDefaultModelVideoRuntime,
+  MediaRuntime,
+  RecoveryBlockedMediaRuntime,
+  setDefaultModelVideoRuntime,
+  type ServerMediaRuntime,
+} from "../images/media-runtime";
+import {
+  defaultMediaJournalPath,
+  openVideoJobStore,
+  type VideoJobStore,
+} from "../images/video-job-store";
+import {
+  acknowledgeMediaRecoveryFence,
+  inspectMediaJournalRecovery,
+  mediaJournalQuarantineSupported,
+  mediaRecoveryBlocksStartup,
+  quarantineMediaJournal,
+} from "../images/media-recovery";
+import { createArtifactResponse } from "../images/artifacts";
+import { registerArtifactPinAuthority } from "../images/artifact-retention";
+import { CapabilityProbeService } from "../images/capability-probe";
+import {
+  imageReplayAuthorityExists,
+  openImageReplayStore,
+  type ImageReplayStore,
+} from "../images/image-replay-store";
+import {
+  createMediaManagementRuntime,
+  type MediaManagementRuntime,
+} from "./management/media-routes";
 export {
   drainAndShutdown,
   getActiveTurnCount,
@@ -194,6 +228,7 @@ import {
   createLocalAttestationProof,
   createLocalAttestationSecret,
 } from "../lib/local-management-attestation";
+import { verifyMediaActionAttestationProof } from "../lib/media-action-attestation";
 import { createReadinessGate, type ReadinessGate } from "./readiness";
 
 const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
@@ -479,6 +514,110 @@ export interface StartServerDeps {
   localAttestationSecret?: string;
   /** Optional readiness gate; a fresh pending gate is created when omitted. */
   readinessGate?: ReadinessGate;
+  /** Test-only durable video runtime seam. Null disables initialization for this server. */
+  mediaRuntime?: ServerMediaRuntime | null;
+  /** Test-only direct-image replay seam. Null keeps the Grok image path fail-closed. */
+  imageReplayStore?: ImageReplayStore | null;
+}
+
+interface InitializedServerMediaRuntime {
+  runtime: ServerMediaRuntime | null;
+  management?: MediaManagementRuntime;
+}
+
+function initializeServerMediaRuntime(
+  config: CodexCommanderConfig,
+  injected: ServerMediaRuntime | null | undefined,
+): InitializedServerMediaRuntime {
+  if (injected !== undefined) {
+    if (injected) injected.prepareStartup();
+    return { runtime: injected };
+  }
+  const journalPath = defaultMediaJournalPath();
+  try {
+    const fence = mediaRecoveryBlocksStartup();
+    if (fence) {
+      const acknowledgementSupported = mediaJournalQuarantineSupported();
+      const recovery: NonNullable<MediaManagementRuntime["recovery"]> = {
+        id: fence.id,
+        revision: fence.revision,
+        cause: fence.cause,
+        readOnly: !acknowledgementSupported,
+        acknowledgementRequired: acknowledgementSupported,
+        restartRequired: true,
+      };
+      if (acknowledgementSupported) recovery.acknowledge = async (id, expectedRevision) => {
+        const updated = acknowledgeMediaRecoveryFence(id, expectedRevision);
+        if (!updated) return "conflict";
+        recovery.revision = updated.revision;
+        recovery.acknowledgementRequired = false;
+        return "applied";
+      };
+      return { runtime: new RecoveryBlockedMediaRuntime(), management: { state: "recovery_blocked", recovery } };
+    }
+  } catch {
+    return {
+      runtime: new RecoveryBlockedMediaRuntime(),
+      management: {
+        state: "recovery_blocked",
+        recovery: { id: "media-journal", revision: 0, cause: "unsafe", readOnly: true, restartRequired: true },
+      },
+    };
+  }
+  if (
+    config.images?.bridgeEnabled !== true
+    && config.images?.videoBridgeEnabled !== true
+    && !existsSync(journalPath)
+  ) return { runtime: null };
+  let store: VideoJobStore | undefined;
+  try {
+    store = openVideoJobStore();
+    const runtime = new MediaRuntime(store, {
+      artifactsKeepCount: config.images?.artifactsKeepCount,
+    });
+    runtime.prepareStartup();
+    const probe = new CapabilityProbeService(store, runtime);
+    return { runtime, management: createMediaManagementRuntime(store, runtime, probe) };
+  } catch (cause) {
+    try { store?.close(); } catch { /* recovery remains blocked */ }
+    const inspection = inspectMediaJournalRecovery(cause);
+    const recovery: NonNullable<MediaManagementRuntime["recovery"]> = {
+      id: "media-journal",
+      revision: 0,
+      cause: inspection.cause,
+      readOnly: inspection.readOnly,
+      restartRequired: true,
+    };
+    if (!inspection.readOnly && inspection.cause !== "future_schema") {
+      recovery.quarantineReset = async expectedRevision => {
+        if (expectedRevision !== recovery.revision) return "conflict";
+        try {
+          const fence = quarantineMediaJournal(expectedRevision);
+          recovery.id = fence.id;
+          recovery.revision = fence.revision;
+          recovery.cause = fence.cause;
+          recovery.acknowledgementRequired = true;
+          return "applied";
+        } catch {
+          return "unsupported";
+        }
+      };
+      recovery.acknowledge = async (id, expectedRevision) => {
+        const updated = acknowledgeMediaRecoveryFence(id, expectedRevision);
+        if (!updated) return "conflict";
+        recovery.revision = updated.revision;
+        recovery.acknowledgementRequired = false;
+        return "applied";
+      };
+    }
+    return {
+      runtime: new RecoveryBlockedMediaRuntime(),
+      management: {
+        state: "recovery_blocked",
+        recovery,
+      },
+    };
+  }
 }
 
 export function startServer(port?: number, deps: StartServerDeps = {}): Server<WsData> {
@@ -607,7 +746,99 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       release: async () => {},
     };
   let server: Server<WsData>;
+  let mediaRuntime: ServerMediaRuntime | null = null;
+  let imageReplayStore: ImageReplayStore | null = null;
+  let imageReplayRequired = config.images?.bridgeEnabled === true || imageReplayAuthorityExists();
+  if (deps.imageReplayStore !== undefined) {
+    imageReplayStore = deps.imageReplayStore;
+    imageReplayRequired ||= deps.imageReplayStore !== null;
+  } else if (imageReplayRequired) {
+    try {
+      imageReplayStore = openImageReplayStore();
+    } catch {
+      // The data plane remains available, but the paid Grok image path refuses all
+      // submissions until its private replay authority is repaired.
+      imageReplayStore = null;
+    }
+  }
+  let mediaManagementImpl: MediaManagementRuntime | undefined;
+  let unregisterArtifactPins = () => {};
+  const consumedMediaActionNonces = new Set<string>();
+  const mediaManagement: MediaManagementRuntime = {
+    get state() { return mediaManagementImpl?.state ?? "ready"; },
+    get probe() { return mediaManagementImpl?.probe; },
+    get probeStatus() { return mediaManagementImpl?.probeStatus; },
+    get recovery() { return mediaManagementImpl?.recovery; },
+    listJobs: () => mediaManagementImpl?.listJobs?.() ?? [],
+    getJob: id => mediaManagementImpl?.getJob?.(id) ?? null,
+    acknowledgeJob: (id, revision) => mediaManagementImpl?.acknowledgeJob?.(id, revision) ?? null,
+    probePreflightApproved: () => mediaManagementImpl?.probePreflightApproved?.() ?? false,
+    get launchArtifact() { return mediaManagementImpl?.launchArtifact; },
+    authorizeInteractiveCliAction: (input, proof) => {
+      const runtimePort = boundPort ?? server?.port ?? listenPort;
+      if (
+        consumedMediaActionNonces.has(input.nonce)
+        || !verifyMediaActionAttestationProof(localAttestationSecret, input, process.pid, runtimePort, proof)
+      ) return false;
+      consumedMediaActionNonces.add(input.nonce);
+      return true;
+    },
+    settingsApplied: updatedConfig => {
+      if (
+        updatedConfig.images?.bridgeEnabled === true
+        && imageReplayStore === null
+        && deps.imageReplayStore === undefined
+      ) {
+        imageReplayRequired = true;
+        try { imageReplayStore = openImageReplayStore(); }
+        catch { imageReplayStore = null; }
+      }
+      if (
+        mediaRuntime
+        || (updatedConfig.images?.bridgeEnabled !== true && updatedConfig.images?.videoBridgeEnabled !== true)
+      ) return;
+      const activated = initializeServerMediaRuntime(updatedConfig, undefined);
+      mediaRuntime = activated.runtime;
+      mediaManagementImpl = activated.management;
+      if (!mediaRuntime) return;
+      unregisterArtifactPins();
+      if (mediaRuntime.protectedArtifactIds) {
+        unregisterArtifactPins = registerArtifactPinAuthority({
+          protectedArtifactIds: () => mediaRuntime!.protectedArtifactIds!(),
+          recoverablePublicationArtifactIds: () => mediaRuntime!.recoverablePublicationArtifactIds?.() ?? new Set<string>(),
+          canReleaseArtifactForPrune: artifactId => mediaRuntime!.canReleaseArtifactForPrune?.(artifactId) ?? "protected",
+          releaseArtifactForPrune: artifactId => mediaRuntime!.releaseArtifactForPrune?.(artifactId) ?? "protected",
+          pendingArtifactDeletionIds: () => mediaRuntime!.pendingArtifactDeletionIds?.() ?? new Set<string>(),
+          finalizeArtifactPrune: artifactId => mediaRuntime!.finalizeArtifactPrune?.(artifactId) ?? "protected",
+        });
+      }
+      bindServerMediaRuntime(server, mediaRuntime);
+      setDefaultModelVideoRuntime(mediaRuntime);
+      const activatedRuntime = mediaRuntime;
+      const activatedProbe = mediaManagementImpl?.probe;
+      queueMicrotask(() => {
+        if (activatedProbe) activatedProbe.startBackgroundRecovery();
+        else activatedRuntime.startBackgroundRecovery();
+      });
+    },
+  };
   try {
+    // Validate and normalize durable video state immediately before listen. A
+    // bad/future/unsafe journal blocks only video admission, and failures in
+    // earlier startup setup cannot leak a recovery-owner claim.
+    const initializedMedia = initializeServerMediaRuntime(config, deps.mediaRuntime);
+    mediaRuntime = initializedMedia.runtime;
+    mediaManagementImpl = initializedMedia.management;
+    if (mediaRuntime?.protectedArtifactIds) {
+      unregisterArtifactPins = registerArtifactPinAuthority({
+        protectedArtifactIds: () => mediaRuntime!.protectedArtifactIds!(),
+        recoverablePublicationArtifactIds: () => mediaRuntime!.recoverablePublicationArtifactIds?.() ?? new Set<string>(),
+        canReleaseArtifactForPrune: artifactId => mediaRuntime!.canReleaseArtifactForPrune?.(artifactId) ?? "protected",
+        releaseArtifactForPrune: artifactId => mediaRuntime!.releaseArtifactForPrune?.(artifactId) ?? "protected",
+        pendingArtifactDeletionIds: () => mediaRuntime!.pendingArtifactDeletionIds?.() ?? new Set<string>(),
+        finalizeArtifactPrune: artifactId => mediaRuntime!.finalizeArtifactPrune?.(artifactId) ?? "protected",
+      });
+    }
     server = Bun.serve<WsData>({
       port: listenPort,
       hostname: bindHost,
@@ -828,7 +1059,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           req,
           url,
           config,
-          { ...deps.managementApi, readinessGate },
+          {
+            ...deps.managementApi,
+            mediaManagement: deps.managementApi?.mediaManagement ?? mediaManagement,
+            readinessGate,
+          },
           principal,
         );
         if (mgmtResponse) return withManagementCors(mgmtResponse, req, config);
@@ -1048,13 +1283,20 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         };
         const endpoint = url.pathname.endsWith("/edits") ? "edits" as const : "generations" as const;
         return runAdmittedHttpTurn(req, async turnAdmissionLease => {
-          const response = await handleImages(req, config, endpoint, logCtx, turnAdmissionLease);
+          const response = await handleImages(
+            req,
+            config,
+            endpoint,
+            logCtx,
+            turnAdmissionLease,
+            { store: imageReplayStore, admission, required: imageReplayRequired },
+          );
           addFinalRequestLog(requestId, start, logCtx, response.status, response.status === 499 ? { closeReason: "client_cancel" } : undefined);
           return withCors(response, req, config);
         });
       }
 
-      if (req.method === "GET" && url.pathname.startsWith(`${ARTIFACT_HTTP_PREFIX}/`)) {
+      if (url.pathname.startsWith(`${ARTIFACT_HTTP_PREFIX}/`)) {
         const admission = resolveApiAuth(req, config);
         if (!admission) return withCors(formatErrorResponse(401, "authentication_error", AUTH_REQUIRED_MESSAGE), req, config);
         if (!isAllowedRequestOrigin(req, config)) {
@@ -1066,27 +1308,22 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         } catch {
           return withCors(formatErrorResponse(400, "invalid_request", "invalid artifact id encoding"), req, config);
         }
-        const { resolveArtifactPath } = await import("../images/artifacts");
-        const artifactPath = resolveArtifactPath(id);
-        if (!artifactPath) {
+        if (!id || id.includes("/") || id.includes("\\")) {
           return withCors(formatErrorResponse(404, "not_found", "artifact not found"), req, config);
         }
-        const file = Bun.file(artifactPath);
-        const ext = artifactPath.split(".").pop()?.toLowerCase();
-        const contentType =
-          ext === "png" ? "image/png"
-            : ext === "jpg" || ext === "jpeg" ? "image/jpeg"
-              : ext === "webp" ? "image/webp"
-                : ext === "gif" ? "image/gif"
-                  : "application/octet-stream";
-        return withCors(new Response(file, {
-          status: 200,
-          headers: {
-            "content-type": contentType,
-            "cache-control": "private, max-age=3600",
-            "x-content-type-options": "nosniff",
-          },
-        }), req, config);
+        if (req.method !== "GET" && req.method !== "HEAD") {
+          const response = formatErrorResponse(405, "method_not_allowed", "artifact retrieval supports GET and HEAD only");
+          const headers = new Headers(response.headers);
+          headers.set("allow", "GET, HEAD");
+          return withCors(new Response(response.body, { status: 405, headers }), req, config);
+        }
+        const response = await createArtifactResponse(
+          id,
+          req.method,
+          req.method === "GET" ? req.headers.get("range") : null,
+        );
+        if (!response) return withCors(formatErrorResponse(404, "not_found", "artifact not found"), req, config);
+        return withCors(response, req, config);
       }
 
       if (url.pathname === "/v1/alpha/search" && req.method === "POST") {
@@ -1142,9 +1379,15 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           addFinalRequestLog(requestId, start, logCtx, status, meta);
         };
         return runAdmittedHttpTurn(req, async turnAdmissionLease => {
+          const identityRuntime = mediaRuntime;
+          const deriveVideoOperationIdentity = identityRuntime?.deriveVideoOperationIdentity;
           const response = await handleResponses(req, config, logCtx, {
             turnAdmissionLease,
             abortSignal: req.signal,
+            ...(deriveVideoOperationIdentity ? {
+              deriveVideoOperationIdentity: (clientRequestId, body) =>
+                deriveVideoOperationIdentity.call(identityRuntime, clientRequestId, admission, body),
+            } : {}),
             onFirstOutput: () => {
               recordFirstOutput(logCtx, start);
               turnAdmissionLease.markAgentActivityFirstOutput();
@@ -1560,23 +1803,49 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     },
     });
   } catch (error) {
+    unregisterArtifactPins();
+    try { imageReplayStore?.close(); } catch { /* startup already failed */ }
+    mediaRuntime?.beginShutdown();
+    mediaManagementImpl?.probe?.shutdown();
+    void mediaRuntime?.shutdown();
     void nativeMainLifecycle.release();
     throw error;
   }
 
   bindNativeMainStartupLifecycle(server, nativeMainLifecycle);
+  if (mediaRuntime) bindServerMediaRuntime(server, mediaRuntime);
   const nativeStop = server.stop.bind(server);
   Object.defineProperty(server, "stop", {
     configurable: true,
     value: async (closeActiveConnections?: boolean): Promise<void> => {
       try {
-        await nativeStop(closeActiveConnections);
+        try {
+          // Stop the probe's periodic owner before runtime shutdown closes its journal.
+          mediaManagementImpl?.probe?.shutdown();
+          await stopServerMediaRuntime(server);
+        } finally {
+          unregisterArtifactPins();
+          try { imageReplayStore?.close(); } catch { /* listener teardown remains mandatory */ }
+          if (getDefaultModelVideoRuntime() === mediaRuntime) setDefaultModelVideoRuntime(null);
+          // Listener teardown is mandatory even if durable media cleanup reports
+          // an error after fencing new paid work.
+          await nativeStop(closeActiveConnections);
+        }
       } finally {
         await releaseNativeMainStartupLifecycle(server);
       }
     },
   });
   setServerRef(server);
+  if (mediaRuntime) {
+    const initialMediaRuntime = mediaRuntime;
+    const initialMediaProbe = mediaManagementImpl?.probe;
+    setDefaultModelVideoRuntime(initialMediaRuntime);
+    queueMicrotask(() => {
+      if (initialMediaProbe) initialMediaProbe.startBackgroundRecovery();
+      else initialMediaRuntime.startBackgroundRecovery();
+    });
+  }
   const actualPort = server.port ?? listenPort;
   boundPort = actualPort;
   setCorsOrigin(actualPort);

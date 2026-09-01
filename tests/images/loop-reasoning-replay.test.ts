@@ -27,6 +27,7 @@ let fulfillResult: import("../../src/images/types").ImageCallResult = {
 beforeAll(async () => {
   process.env.CODEXCOMMANDER_HOME = join(tmpdir(), "ccx-test-" + randomUUID());
   mock.restore();
+  const actualFulfill = await import("../../src/images/fulfill");
   mock.module("../../src/web-search/progress-stream", () => ({
     parseStreamWithProgress: async function* (_resp: Response, parse: (r: Response) => AsyncGenerator<AdapterEvent>, _opts: unknown) {
       for await (const e of parse(_resp)) yield e;
@@ -35,6 +36,7 @@ beforeAll(async () => {
     WebSearchStreamProtocolError: class extends Error { /* */ },
   }));
   mock.module("../../src/images/fulfill", () => ({
+    ...actualFulfill,
     fulfillImageCall: async (): Promise<import("../../src/images/types").ImageCallResult> => fulfillResult,
   }));
   ({ runWithImageBridge: runWithImageBridgeProduction } = await import("../../src/images/loop"));

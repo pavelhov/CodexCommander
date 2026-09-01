@@ -281,7 +281,7 @@ copy_verified_file "$package_dir/Info.plist" "$staged_app/Contents/Info.plist" \
 # stale dashboard cannot ride into the bundle.
 runtime_root="$staged_app/Contents/Resources/runtime"
 echo "==> Building GUI…"
-(cd "$repo_root/gui" && bun install --frozen-lockfile && bun run build)
+(cd "$repo_root/gui" && bun install --frozen-lockfile && NODE_ENV=production bun run build)
 assert_safe_file "$repo_root/gui/dist/index.html" "gui/dist/index.html" "$repo_root"
 mkdir -p "$runtime_root"
 copy_verified_file "$repo_root/package.json" "$runtime_root/package.json" "package.json" "$repo_root" "$staging_root"

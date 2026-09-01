@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { failedFilesFromJunit, partitionBunTestCliArgs, resolveRetryCount, resolveWorkerCount, retryTestArgs } from "../scripts/test";
+import {
+  failedFilesFromJunit,
+  failedFilesSummary,
+  partitionBunTestCliArgs,
+  resolveRetryCount,
+  resolveWorkerCount,
+  retryTestArgs,
+} from "../scripts/test";
 
 describe("GUI test runner", () => {
   test("defaults to a bounded worker count and validates overrides", () => {
@@ -60,5 +67,17 @@ describe("GUI test runner", () => {
   <testsuite name="tests/load.test.ts" file="tests/load.test.ts" tests="0" failures="0" errors="1" />
 </testsuites>`;
     expect(failedFilesFromJunit(xml)).toEqual(["tests/fail.test.tsx", "tests/load.test.ts"]);
+  });
+
+  test("failed-file diagnostics never build a shell command from untrusted paths", () => {
+    const paths = [
+      "tests/$(touch exploited).test.ts",
+      "tests/`touch exploited`.test.ts",
+      "tests/fail; touch exploited.test.ts",
+    ];
+    const summary = failedFilesSummary(paths);
+    expect(summary).toBe("[gui:test] 3 file(s) remain failed. Review the failed file list above.");
+    expect(summary).not.toContain("bun run");
+    for (const path of paths) expect(summary).not.toContain(path);
   });
 });

@@ -31,7 +31,7 @@ describe("macOS build script bundle contract", () => {
     expect(scriptSource).toContain("assert_tracked_tree \"bin\"");
     expect(scriptSource).toContain("stage_tracked_tree \"src\"");
     expect(scriptSource).toContain("stage_tracked_tree \"bin\"");
-    expect(scriptSource).toContain("bun run build");
+    expect(scriptSource).toContain("NODE_ENV=production bun run build");
     expect(scriptSource).toContain("privacy-scan.ts");
     expect(scriptSource).toContain("--check-symlinks");
     expect(scriptSource).not.toContain('copy_verified_tree "$repo_root/src"');

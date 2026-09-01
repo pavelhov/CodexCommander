@@ -44,6 +44,12 @@ afterEach(() => {
 
 const PNG_DATA_URL = "data:image/png;base64,aGVsbG8taW1hZ2UtYnl0ZXM=";
 const CAPTION = "A red square logo with the word CODEXCOMMANDER in white monospace text.";
+const UNCONFIRMED_VIDEO_INPUTS = [
+  "Create a video of a fox. Please wait for my confirmation.",
+  "Create a video of a fox?",
+  "Produce two videos about safe bicycle maintenance.",
+  "Could you create a video of a fox?",
+] as const;
 
 /** Fake ChatGPT forward backend: answers /responses with an SSE caption stream. */
 function serveSidecar(onRequest: (req: Request, bodyText: string) => void) {
@@ -88,6 +94,37 @@ function baseRequest(model: string) {
   };
 }
 
+function videoPassthroughConfig(upstreamPort: number, withXai = false): CodexCommanderConfig {
+  return {
+    port: 0, hostname: "127.0.0.1", defaultProvider: "passthrough",
+    multiAgentGuidanceEnabled: true,
+    providers: {
+      passthrough: {
+        adapter: "openai-responses",
+        baseUrl: `http://127.0.0.1:${upstreamPort}/v1`,
+        allowPrivateNetwork: true,
+        apiKey: "key-alpha-000111222333",
+      },
+      ...(withXai ? {
+        xai: {
+          adapter: "openai-chat" as const,
+          baseUrl: "https://api.x.ai/v1",
+          apiKey: "xai-test-token",
+        },
+      } : {}),
+    },
+    images: { videoBridgeEnabled: true, authSource: "api_key" },
+  } as CodexCommanderConfig;
+}
+
+function postResponses(serverUrl: URL, body: Record<string, unknown>): Promise<Response> {
+  return fetch(new URL("/v1/responses", serverUrl), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 describe("vision sidecar fallback (issue #88, end-to-end)", () => {
   test("noVisionModels request fires the sidecar and forwards the caption instead of the image", async () => {
     let upstreamBody = "";
@@ -130,6 +167,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
           codexAccountMode: "direct",
         },
       },
+      images: { videoBridgeEnabled: true, authSource: "api_key" },
     } as CodexCommanderConfig;
     saveConfig(config);
     const server = startServer(0);
@@ -157,6 +195,221 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
       expect(upstreamBody).toContain(CAPTION);
       expect(upstreamBody).not.toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
       expect(upstreamBody).not.toContain("image_url");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test.each(UNCONFIRMED_VIDEO_INPUTS)(
+    "video confirmation blocks passthrough before any upstream call: %s",
+    async input => {
+      let upstreamHits = 0;
+      upstream = serveUpstream(() => { upstreamHits += 1; });
+      saveConfig(videoPassthroughConfig(upstream.port, true));
+      let videoSubmissionAttempts = 0;
+      globalThis.fetch = ((request, init) => {
+        const requestUrl = typeof request === "string" ? request : request instanceof URL ? request.toString() : request.url;
+        if (new URL(requestUrl).hostname === "api.x.ai") {
+          videoSubmissionAttempts += 1;
+          throw new Error("unconfirmed video intent must not reach xAI");
+        }
+        return originalFetch(request, init);
+      }) as typeof fetch;
+      const server = startServer(0);
+      try {
+        const res = await postResponses(server.url, { model: "passthrough/model", input, stream: false });
+        expect(res.status).toBe(409);
+        expect(await res.json()).toMatchObject({ error: { code: "video_confirmation_required" } });
+        expect(upstreamHits).toBe(0);
+        expect(videoSubmissionAttempts).toBe(0);
+      } finally {
+        await server.stop(true);
+      }
+    },
+  );
+
+  test("malformed video-shaped request retains the normal parser error", async () => {
+    let upstreamHits = 0;
+    upstream = serveUpstream(() => { upstreamHits += 1; });
+    saveConfig(videoPassthroughConfig(upstream.port));
+    const server = startServer(0);
+    try {
+      const res = await postResponses(server.url, {
+        model: "passthrough/model",
+        input: "Create a video of a fox. Cancel.",
+        stream: "invalid",
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: { code: "invalid_request_error" } });
+      expect(upstreamHits).toBe(0);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("non-video request still dispatches on the native passthrough path", async () => {
+    let upstreamHits = 0;
+    upstream = serveUpstream(() => { upstreamHits += 1; });
+    saveConfig(videoPassthroughConfig(upstream.port));
+    const server = startServer(0);
+    try {
+      const res = await postResponses(server.url, {
+        model: "passthrough/model",
+        input: "Summarize this paragraph.",
+        stream: false,
+      });
+      expect(res.status).toBe(200);
+      expect(upstreamHits).toBe(1);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("explicit video command enters native Responses replay with the video tool", async () => {
+    let upstreamHits = 0;
+    let upstreamBody = "";
+    upstream = serveSidecar((_req, body) => {
+      upstreamHits += 1;
+      upstreamBody = body;
+    });
+    saveConfig(videoPassthroughConfig(upstream.port, true));
+    const server = startServer(0);
+    try {
+      const res = await postResponses(server.url, {
+        model: "passthrough/model",
+        input: "Create a six second video of a paper boat at sea.",
+        stream: true,
+        tools: [{ type: "web_search" }],
+      });
+      expect(res.status).toBe(200);
+      await res.text();
+      expect(upstreamHits).toBe(1);
+      expect(upstreamBody).toContain('"name":"video_gen"');
+      expect(upstreamBody).toContain('"type":"web_search"');
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("type-less and plaintext encrypted-content user messages share the early consent gate", async () => {
+    let upstreamHits = 0;
+    const upstreamBodies: string[] = [];
+    upstream = serveSidecar((_req, body) => {
+      upstreamHits += 1;
+      upstreamBodies.push(body);
+    });
+    saveConfig(videoPassthroughConfig(upstream.port, true));
+    const server = startServer(0);
+    try {
+      const routedNormally = await postResponses(server.url, {
+        model: "passthrough/model",
+        input: [{
+          role: "user",
+          content: [{
+            type: "encrypted_content",
+            encrypted_content: "Create a video of a fox. Cancel.",
+          }],
+        }],
+        stream: true,
+      });
+      expect(routedNormally.status).toBe(200);
+      await routedNormally.text();
+      expect(upstreamHits).toBe(1);
+      expect(upstreamBodies[0]).not.toContain('"name":"video_gen"');
+
+      const admitted = await postResponses(server.url, {
+        model: "passthrough/model",
+        input: [{
+          role: "user",
+          content: [{ type: "input_text", text: "Create a short video of a paper boat." }],
+        }],
+        stream: true,
+      });
+      expect(admitted.status).toBe(200);
+      await admitted.text();
+      expect(upstreamHits).toBe(2);
+      expect(upstreamBodies[1]).toContain('"name":"video_gen"');
+
+      const delegated = await postResponses(server.url, {
+        model: "passthrough/model",
+        input: [{
+          type: "agent_message",
+          author: "worker",
+          recipient: "parent",
+          content: [{
+            type: "encrypted_content",
+            encrypted_content: "Create a six second video of a paper boat.",
+          }],
+        }],
+        stream: true,
+      });
+      expect(delegated.status).toBe(200);
+      await delegated.text();
+      expect(upstreamHits).toBe(3);
+      expect(upstreamBodies[2]).not.toContain('"name":"video_gen"');
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("video confirmation blocks both the vision sidecar and routed provider", async () => {
+    let upstreamHits = 0;
+    let sidecarHits = 0;
+    upstream = serveUpstream(() => { upstreamHits += 1; });
+    sidecar = serveSidecar(() => { sidecarHits += 1; });
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const url = new URL(requestUrl);
+      const prefix = "/backend-api/codex";
+      if (url.hostname === "chatgpt.com" && url.pathname.startsWith(prefix)) {
+        return originalFetch(new URL(`${url.pathname.slice(prefix.length)}${url.search}`, sidecar!.url), init);
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    const config: CodexCommanderConfig = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "textonly",
+      multiAgentGuidanceEnabled: true,
+      providers: {
+        textonly: {
+          adapter: "openai-chat",
+          baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+          allowPrivateNetwork: true,
+          apiKey: "key-alpha-000111222333",
+          noVisionModels: ["blind-model"],
+        },
+        openai: {
+          adapter: "openai-responses",
+          authMode: "forward",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          codexAccountMode: "direct",
+        },
+      },
+      images: { videoBridgeEnabled: true, authSource: "api_key" },
+    } as CodexCommanderConfig;
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const token = fakeChatGptJwt({ chatgpt_account_id: "acct-vision-video-gate" });
+      const res = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+          "chatgpt-account-id": "acct-vision-video-gate",
+        },
+        body: JSON.stringify({
+          ...baseRequest("textonly/blind-model"),
+          input: [{ type: "message", role: "user", content: [
+            { type: "input_text", text: "Maybe a video version?" },
+            { type: "input_image", image_url: PNG_DATA_URL },
+          ] }],
+        }),
+      });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ error: { code: "video_confirmation_required" } });
+      expect(sidecarHits).toBe(0);
+      expect(upstreamHits).toBe(0);
     } finally {
       await server.stop(true);
     }

@@ -392,6 +392,69 @@ OAuth polling API: submit request, waiting-for-login completion, and terminal su
 `aria-live` status message that the code was accepted, and surface repeated `login-status` polling
 network failures as a visible warning instead of silently looking idle again.
 
+## Grok Imagine media management parity
+
+`GET/PATCH /api/media` is the one safe management resource for the independent image/video toggles,
+selected `subscription_oauth | api_key` source, redacted readiness, bounded job state, experimental
+probe observations, and recovery status. Every setting mutation uses the resource's expected
+revision; conflict leaves the persisted source/toggles unchanged. Source selection never changes xAI
+chat authentication, never causes fallback, and applies only to new media work. Accepted jobs retain
+their original bound credential and deadline. `PATCH /api/media` is a human-only exception: accept
+only a confirmed GUI session or a fresh exact two-TTY CLI attestation after confirmation. A raw admin
+token alone, agent authority, and data-plane authority are rejected.
+
+The public media projection must omit prompts, credential material, account/key ids, binding refs or
+digests, provider request ids, signed URLs, and filesystem paths. It exposes opaque IDs and a stable
+state/action map: active work waits; `needs_auth` recovers the original source; `outcome_unknown`
+requires acknowledgement; completed work may open; and `artifact_pruned`, failed, expired, or
+cancelled work is terminal. Future-version recovery is read-only; corrupt-journal quarantine/reset
+requires its own confirmation and preserves unknown-work fencing.
+
+`POST /api/media/actions` is outside agent and data-plane authority. It requires a current revision,
+opaque target ID, explicit confirmation, and either a confirmed GUI session or the CLI's fresh
+two-TTY/re-attested action envelope. The server derives and revalidates an artifact path for
+open/reveal, launches only a fixed platform executable with a scrubbed environment, and never
+accepts a caller path, URL, executable, or environment. The dashboard and `ccx media` consume the
+same projection and must present equivalent blocked, recovery, stale-revision, and human-action
+states.
+
+Canonical xAI API-key add/select/remove can alter the API-key media source and uses this same
+human-only exception; raw admin is insufficient. Existing key-pool management for other providers
+retains its ordinary management authorization and behavior. When `subscription_oauth` is the saved
+media source, switching or removing the active xAI OAuth account is protected by the same confirmed
+GUI or fresh revision-bound CLI action; a no-op selection and removal of an inactive account remain
+ordinary safe mutations. Re-enabling a disabled canonical xAI provider also requires that human
+authorization, while disabling it remains fail-safe. xAI key labels are bounded display text and
+cannot contain control characters, path separators, or their key material. Management projections
+and the provider-visible media tool replay contract remain path-free and secret-free.
+
+Only enabled canonical `providers.xai` can arm new paid media work. Hostname-matched aliases remain
+ordinary chat providers. The lease layer may resolve an exact already-durable legacy-alias binding
+for accepted-job GET/poll/download recovery only; that compatibility path never creates a new media
+binding or POST. CLI list/current project both the OAuth chat account and dormant masked xAI media
+key family when both exist.
+
+Recovery never quarantines a journal while its exclusive owner lease is active or when locking is
+ambiguous; those states are read-only. A crash in hard-link artifact publication is reconciled only
+when the exact private alias shape and durable reservation are proven. Video completion/startup owns
+artifact retention and its durable pin authority is visible to image retention. Windows recovery is
+inspection-only and refuses quarantine before fencing or moving bytes because SQLite cannot retain
+the proof handle across a database rename there.
+
+Quarantine and acknowledgement operate on a durable manifest for the complete journal-authority
+bundle (database and fixed sidecars, replay secret, recovery owner and owner sidecars). The global
+unacknowledged fence blocks default and custom store admission until a coordinator-serialized,
+owner-last acknowledgement completes; partial or legacy POSIX bundles resume only when their exact
+identity is provable.
+
+The OAuth capability probe stays experimental and production-preflight-disabled until explicit U8
+safety approval. Its fixed image and one-second 1080p-video steps are single-flight, persist each
+safe result separately, disable API-key fallback, and report billing attribution as unknown. A
+successful feasibility step is not packaged verification. The image is durably settled before the
+video POST, and accepted video is reconciled by the background/startup driver without a new POST.
+Outcome-unknown work requires privileged acknowledgement and a retry requires fresh confirmation;
+production preflight stays disabled until explicit U8 approval.
+
 ## Usage accounting
 
 `src/usage/log.ts` writes append-only JSONL to `~/.codexcommander/usage.jsonl` with file mode `0o600`.
