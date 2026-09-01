@@ -59,7 +59,7 @@ jobs:
 
       - name: GUI tests
         working-directory: gui
-        run: bun test tests
+        run: bun run test
 
       - name: Test suite
         run: bun run test

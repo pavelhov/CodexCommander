@@ -6,10 +6,11 @@ import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { SERVER_BUDGET_MS } from "./helpers/test-budget";
 
-// Full-suite Windows load: startServer + discovery GETs exceed the default 5s budget
+// startServer + discovery GETs exceed Bun's 5s default under parallel load
 // (same flake class as 810fa115 / claude-management-api).
-setDefaultTimeout(30_000);
+setDefaultTimeout(SERVER_BUDGET_MS);
 
 let testDir = "";
 let previousHome: string | undefined;

@@ -34,6 +34,12 @@ if [[ "$universal" != "0" && "$universal" != "1" ]]; then
   exit 1
 fi
 
+if [[ -n "$(git -C "$repo_root" status --porcelain --untracked-files=normal 2>/dev/null)" ]]; then
+  echo "package:macos requires a clean git working tree (no uncommitted or untracked files)." >&2
+  echo "Commit your changes, or use bun run build:macos for a local development build." >&2
+  exit 1
+fi
+
 mkdir -p "$output_dir"
 output_dir="$(cd "$output_dir" && pwd)"
 

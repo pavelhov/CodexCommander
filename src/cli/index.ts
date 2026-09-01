@@ -601,6 +601,11 @@ switch (command) {
     process.exitCode = await handleConfigCommand(args.slice(1));
     break;
   }
+  case "media": {
+    const { handleMediaCommand } = await import("./media-command");
+    process.exitCode = await handleMediaCommand(args.slice(1));
+    break;
+  }
   case "claude": {
     const { cmdClaude } = await import("./claude");
     // "ccx claude desktop" → write Desktop 3P config

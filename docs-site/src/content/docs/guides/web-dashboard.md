@@ -60,6 +60,46 @@ the browser or password manager's decision.
 
 ## What you can do
 
+### Grok media
+
+The dashboard's media card is the interactive client for the same authenticated media resource used
+by `ccx media`. It presents separate Grok Images and Grok Video switches plus one explicit
+`subscription_oauth` or `api_key` source selector. An enabled but unready source stays visibly
+blocked and does not make a paid request; choosing a media source never changes xAI/Grok chat auth.
+
+Every save carries an expected revision and needs the confirmed dashboard session. A stale save is
+rejected and the dashboard restores the current settings; a raw admin token alone cannot mutate
+media. Changes affect new turns only: an accepted video keeps its original bound credential even
+after a later toggle or source change. Adding, selecting, renaming, or removing the canonical xAI API key that
+can fund media uses the same human-only boundary; ordinary provider-key controls are unchanged.
+
+The card shows only safe readiness, experimental observations, and bounded job state. It does not
+show prompts, account/key IDs, credential digests, provider request IDs, signed URLs, or filesystem
+paths. Completed provider-visible media results contain authenticated proxy-relative artifact
+references and renderer hints only. An eligible non-artifact video result may include a bounded
+opaque local `jobId` when a real durable job is busy, detached, failed, or has
+`submission_outcome_unknown`; completed artifacts, image results, and capability-probe busy
+contention omit it. It is not a provider ID, and provider-visible results never include provider
+IDs, credentials, paths, prompts, or private artifact fields. The dashboard (or `ccx media jobs`)
+uses that handle to show safe state; a `submission_outcome_unknown` job requires the confirmed
+dashboard acknowledgement action or `ccx media ack-job <opaque-job-id> --revision <n>`, not
+automatic resubmission. Completed artifacts can be opened or revealed only through a confirmed
+privileged action. The server derives and revalidates the artifact, then uses a fixed platform
+opener with a scrubbed environment. Future-version, active, or locked journal recovery is read-only,
+while a separately confirmed corrupt-journal reset cannot quarantine a live journal; proven
+hard-link publication crash aliases are reconciled safely.
+
+Video completion and startup recovery run the durable retention coordinator. Its job-store pins
+protect accepted/recent video artifacts from image retention, and a pruned completed artifact is
+shown as `artifact_pruned` rather than a dead link.
+
+The subscription OAuth probe is deliberately exceptional: it needs confirmation, settles its fixed
+image before it can submit the one-second 1080p video, disables API-key fallback, and records
+separate safe observations. Accepted probe video is reconciled in the background and after restart
+without another POST. It is feasibility-only, billing attribution is unknown, and the production
+control remains disabled until explicit U8 safety approval. A successful observation does not claim
+that the selected subscription has been verified for release.
+
 | Area | What it does |
 | --- | --- |
 | **Dashboard summary** | Multi-agent mode, online state, version, uptime, provider count, 30-day token total and estimated list-price cost, active providers, and available native/routed models. |

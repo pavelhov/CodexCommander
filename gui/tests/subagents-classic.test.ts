@@ -121,6 +121,7 @@ const delegationSetupKeys = [
   "sub.delegationSetup.close",
   "sub.delegationSetup.cancel",
   "sub.delegationSetup.confirmChangeMode",
+  "sub.delegationSetup.launcherRequired",
 ] as const;
 
 function findHardcodedVisibleJsxCopy(src: string): string[] {

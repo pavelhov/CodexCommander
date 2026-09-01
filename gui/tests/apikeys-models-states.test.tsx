@@ -77,7 +77,7 @@ function installFetch(models: () => Response, counter: { gets: number }): void {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
-    if (url.endsWith("/v1/models") && method === "GET") {
+    if (url.endsWith("/api/models") && method === "GET") {
       counter.gets += 1;
       return models();
     }
@@ -121,7 +121,7 @@ function retryButton(container: HTMLDivElement): HTMLButtonElement | undefined {
 
 test("an empty catalog says the catalog is empty, with no query in the sentence", async () => {
   const counter = { gets: 0 };
-  installFetch(() => Response.json({ data: [] }), counter);
+  installFetch(() => Response.json([]), counter);
   const { container, root } = await mountPage();
   try {
     expect(container.textContent).toContain("No externally callable models are available yet.");
@@ -134,9 +134,10 @@ test("an empty catalog says the catalog is empty, with no query in the sentence"
 
 test("a query matching nothing names the query, and does not claim the catalog is empty", async () => {
   const counter = { gets: 0 };
-  installFetch(() => Response.json({
-    data: [{ id: "gpt-5.4", owned_by: "openai" }, { id: "claude/opus-4-6", owned_by: "anthropic" }],
-  }), counter);
+  installFetch(() => Response.json([
+    { id: "gpt-5.4", namespaced: "gpt-5.4", provider: "openai", native: true, disabled: false },
+    { id: "opus-4-6", namespaced: "claude/opus-4-6", provider: "anthropic", custom: true, disabled: false },
+  ]), counter);
   const { container, root } = await mountPage();
   try {
     expect(container.textContent).toContain("gpt-5.4");
@@ -158,7 +159,7 @@ test("a failed cold load offers a retry that really refetches, and no false empt
   installFetch(
     () => (fail
       ? new Response("upstream unavailable", { status: 503 })
-      : Response.json({ data: [{ id: "gpt-5.4", owned_by: "openai" }] })),
+      : Response.json([{ id: "gpt-5.4", namespaced: "gpt-5.4", provider: "openai", native: true, disabled: false }])),
     counter,
   );
   const { container, root } = await mountPage();
@@ -220,12 +221,12 @@ test("a failure is announced, and a cache-backed retry shows progress without lo
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
-    if (url.endsWith("/v1/models") && method === "GET") {
+    if (url.endsWith("/api/models") && method === "GET") {
       counter.gets += 1;
       if (counter.gets === 1) return new Response("upstream unavailable", { status: 503 });
       // Hold the retry open so the in-flight state is observable.
       await new Promise<void>(resolve => { release = resolve; });
-      return Response.json({ data: [{ id: "fresh-model", owned_by: "openai" }] });
+      return Response.json([{ id: "fresh-model", namespaced: "fresh-model", provider: "openai", native: true, disabled: false }]);
     }
     if (url.endsWith("/api/keys") && method === "GET") return Response.json(KEYS_OK);
     return new Response(null, { status: 404 });

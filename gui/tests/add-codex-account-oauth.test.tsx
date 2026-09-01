@@ -132,29 +132,49 @@ test("StrictMode remount clears the reauth latch and starts OAuth again", async 
 });
 
 test("slow login-status polls stay single-flight and abort on unmount", async () => {
-  await mountProbe(false);
-  await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
+  let poll: (() => void) | null = null;
+  const previousSetInterval = globalThis.setInterval;
+  const previousClearInterval = globalThis.clearInterval;
+  Object.defineProperty(globalThis, "setInterval", {
+    configurable: true,
+    value: (callback: () => void) => {
+      poll = callback;
+      return 1;
+    },
+  });
+  Object.defineProperty(globalThis, "clearInterval", {
+    configurable: true,
+    value: () => {},
+  });
+  try {
+    await mountProbe(false);
+    await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
 
-  // Wait past two interval ticks while the first status response is still held.
-  await act(async () => { await new Promise((r) => setTimeout(r, 4500)); });
+    // Two ticks while the first status response is still held: in-flight
+    // must stay a single fetch, not a second poll.
+    await act(async () => { void poll?.(); void poll?.(); });
 
-  const statusCalls = calls.filter((c) => c.path.includes("/api/codex-auth/login-status"));
-  expect(statusCalls.length).toBe(1);
-  expect(statusHolders.length).toBe(1);
+    const statusCalls = calls.filter((c) => c.path.includes("/api/codex-auth/login-status"));
+    expect(statusCalls.length).toBe(1);
+    expect(statusHolders.length).toBe(1);
 
-  const inFlightSignal = statusCalls[0]?.signal;
-  expect(inFlightSignal).toBeTruthy();
+    const inFlightSignal = statusCalls[0]?.signal;
+    expect(inFlightSignal).toBeTruthy();
 
-  if (root) {
-    const current = root;
-    await act(async () => { current.unmount(); });
-    root = null;
+    if (root) {
+      const current = root;
+      await act(async () => { current.unmount(); });
+      root = null;
+    }
+
+    expect(inFlightSignal!.aborted).toBe(true);
+
+    // A late tick must not open a second in-flight poll after cleanup.
+    await act(async () => { poll?.(); });
+    const statusAfter = calls.filter((c) => c.path.includes("/api/codex-auth/login-status"));
+    expect(statusAfter.length).toBe(1);
+  } finally {
+    Object.defineProperty(globalThis, "setInterval", { configurable: true, value: previousSetInterval });
+    Object.defineProperty(globalThis, "clearInterval", { configurable: true, value: previousClearInterval });
   }
-
-  expect(inFlightSignal!.aborted).toBe(true);
-
-  // A late tick must not open a second in-flight poll after cleanup.
-  await act(async () => { await new Promise((r) => setTimeout(r, 2500)); });
-  const statusAfter = calls.filter((c) => c.path.includes("/api/codex-auth/login-status"));
-  expect(statusAfter.length).toBe(1);
-}, { timeout: 20_000 });
+});

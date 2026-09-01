@@ -23,6 +23,7 @@ This file applies to `src/` and inherits the repository-wide rules in `/AGENTS.m
 
 - Place focused regression coverage near the existing tests for the affected subsystem.
 - For focused behavior, run the relevant `bun test tests/<name>.test.ts` and `bun run typecheck`.
-- For shared routing, adapters, config, OAuth, or server behavior, also run `bun run test`.
+- For shared routing, adapters, config, OAuth, or server behavior, also run `bun run test:parallel`.
+  If that reports failures, rerun only the failed files — not the entire suite.
 - For logging, requests, credentials, account data, or fixtures, also run `bun run privacy:scan`.
 - Update `docs-site/` when the change affects user-visible behavior or configuration.

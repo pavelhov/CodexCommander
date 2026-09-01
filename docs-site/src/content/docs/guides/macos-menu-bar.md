@@ -275,8 +275,7 @@ workflow does not install or copy the app into Application
 Support. A rebuild at the same path is detected on the
 next launch and refreshes the existing Login Item registration only when Launch at Login remains on.
 Each build stamps its exact Git revision into `CodexCommanderSourceRevision` in the bundle's `Info.plist`
-and prints it at the end of the build. Uncommitted source is marked with `-dirty`, so commit before
-making a final distributable bundle.
+and prints it at the end of the build. Uncommitted source is marked with `-dirty`. `bun run package:macos` refuses a dirty working tree so a distributable archive cannot include uncommitted files; commit first, or use `bun run build:macos` for a local development build.
 
 The source-build `.app` is a thin development artifact for the current checkout, not the public
 distribution format. Use the universal release archive for public installation. A source app in the

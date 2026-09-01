@@ -98,7 +98,7 @@ ccx login anthropic    # Anthropic Claude (Pro/Max)
 ccx login kimi         # Moonshot Kimi
 ccx login kiro         # import kiro-cli credentials (or token fallback)
 ccx login google-antigravity
-ccx login cursor       # standalone Cursor PKCE login
+ccx login cursor       # standalone Cursor PKCE login (default). Paste a dashboard key in the GUI or config instead.
 ccx login command-code # Command Code browser OAuth (or import ~/.commandcode/auth.json)
 ccx login github-copilot  # GitHub device flow → Copilot token (Copilot Pro/Business)
 ccx login chatgpt      # standalone ChatGPT OAuth login
@@ -112,7 +112,7 @@ ccx logout <provider>
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K3 (`k3`, 1M context), fixed-window `k3-256k`, compatibility alias `k3[1m]`, and K2.7/K2.6/K2.5 coding models. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Initial login imports the installed, signed-in `kiro-cli` session (on Unix, install with `curl -fsSL https://cli.kiro.dev/install | bash`; on Windows PowerShell, use `irm 'https://cli.kiro.dev/install.ps1' | iex`; then run `kiro-cli login`). **Add account** logs `kiro-cli` out, starts a fresh browser login that switches the account used by `kiro-cli`, and stores account-scoped profile metadata. Existing CodexCommander accounts are preserved, and cancellation or failure restores the previous `kiro-cli` session. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. Uses the maintained six-model static catalog because CCA does not expose the generic `/models` endpoint. |
-| `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport, and account-filtered model discovery. |
+| `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental unofficial PKCE login **or** a pasted dashboard user API key. Same unofficial AgentService/Run protocol either way; not a public OpenAI chat-completions API. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |
 
 For the canonical Kimi Coding Plan presets (`kimi` account login and `kimi-code` API key),
@@ -429,7 +429,10 @@ management API is `/api/providers/keys` and returns masked keys only.
 Use `ccx account list`, `ccx account current`, and `ccx account use` to inspect or switch the same
 Codex, OAuth, and API-key pools without opening the dashboard. See the
 [CLI reference](/reference/cli/#ccx-account-subcommand) for commands, JSON output, and
-new-session behavior.
+new-session behavior. If xAI subscription OAuth is the saved media source, changing or removing its
+active account requires an interactive confirmation and a fresh attestation of the same running
+proxy. Selecting the already-active account and removing an inactive account remain non-billing
+operations.
 
 ### GPT-5.6 preview paths
 
@@ -468,9 +471,18 @@ completions. The precedence is: hard wire pin → your explicit
 provider-wide adapter. To opt a model without a built-in default (for example
 `gpt-5.4-nano`) into Responses, set `"modelAdapters": { "gpt-5.4-nano": "openai-responses" }`.
 
-Cursor is tracked separately as an experimental adapter. `adapter: "cursor"` appears in `ccx init`
+Cursor is tracked separately as an experimental unofficial adapter. `adapter: "cursor"` appears in `ccx init`
 and the dashboard Add Provider picker as an experimental local config entry with Cursor's static
-fallback model catalog metadata. When a Cursor access token is configured, CodexCommander uses Cursor's
+fallback model catalog metadata. Default auth is PKCE (`ccx login cursor`). A pasted
+[dashboard user API key](https://cursor.com/dashboard/api) is dual-mode on the same canonical `cursor`
+provider: set `authMode: "key"` (Add Provider → **Use an API key instead**, or the Settings API-key
+pool). OAuth accounts are only for `providers.cursor`; a custom id with `adapter: "cursor"` can still
+use a key, but the dashboard will not show Cursor OAuth controls that the backend cannot honor.
+That key uses the same unofficial `api2.cursor.sh` AgentService/Run protocol as OAuth — it is
+**not** a documented OpenAI `/v1/chat/completions` credential, and Cursor Cloud Agents keys from
+`api.cursor.com` are a different product and will not work here. Dashboard `crsr_` user API keys are
+exchanged via `POST /auth/exchange_user_api_key` when they are not already a valid Run Bearer.
+When a Cursor access token is configured, CodexCommander uses Cursor's
 live HTTP/2 transport. Its bundled fallback seed includes `gpt-5.6-sol` / `terra` / `luna` (1M context),
 `grok-4.5` / `grok-4.5-fast` (500K), and `kimi-k3` (262K); live discovery decides which remain
 visible for the account. Cursor serves Kimi K3 only as effort-suffixed wire ids, so
@@ -482,8 +494,8 @@ only for trusted local experiments (or via **Providers → Cursor → Edit JSON*
 See the [Configuration reference](/reference/configuration/#cursor-provider-adapter-cursor)
 for a full example. MCP, screen recording, and computer-use are available as executor hooks; without a
 configured local executor, CodexCommander returns typed no-executor results instead of policy-blocking
-the request. Cursor OAuth and live model discovery are enabled for this experimental adapter;
-Cursor is still not shown in key-login lists.
+the request. Cursor OAuth, API-key dual-mode, and live model discovery are enabled for this experimental
+adapter. The dashboard still shows the elevated ToS warning for Cursor OAuth.
 :::
 
 ### Ollama Cloud

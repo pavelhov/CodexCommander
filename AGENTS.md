@@ -63,6 +63,13 @@ Run `bun run typecheck` and `bun run test:parallel` (fall back to
 `bun run test` if the parallel runner misbehaves) before proposing or
 approving any non-trivial change. CI runs these on Linux, Windows, and macOS.
 
+If `test:parallel` reports failed files, rerun **only those files**
+(`bun run test:parallel tests/foo.test.ts …`). The runner already retries
+failed items once on a single worker, in the same isolation mode they failed
+in (shared-process batches stay batches). Isolated reruns of a failed batch
+are diagnostic only and cannot mark the suite green. Do not recover from a
+load flake by rerunning the entire suite at `CCX_TEST_PARALLEL_WORKERS=2`.
+
 ## Issues and pull requests (agents)
 
 Agent-created issues must use the repository templates. Pull requests use

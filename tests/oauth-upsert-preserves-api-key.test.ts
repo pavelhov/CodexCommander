@@ -11,7 +11,7 @@ import type { CodexCommanderConfig } from "../src/types";
  * Regression: `upsertOAuthProvider` used to overwrite the provider entry with the bare preset
  * on every OAuth login, deleting a stored `apiKey`/`apiKeyPool` and silently flipping an
  * explicit `authMode: "key"` billing choice back to the subscription. Providers whose registry
- * entry sets `allowKeyAuthOverride` (xai, github-copilot) are the ones that can hold both.
+ * entry sets `allowKeyAuthOverride` (xai, github-copilot, cursor) are the ones that can hold both.
  */
 function configWithKey(provider: string, adapter: string, baseUrl: string): CodexCommanderConfig {
   return {
@@ -46,6 +46,16 @@ describe("upsertOAuthProvider credential preservation", () => {
     const provider = config.providers["github-copilot"]!;
     expect(provider.apiKey).toBe("stored-key-sentinel");
     expect(provider.authMode).toBe("key");
+  });
+
+  test("keeps a stored API key and the explicit key billing mode for cursor", () => {
+    const config = configWithKey("cursor", "cursor", "https://api2.cursor.sh");
+    upsertOAuthProvider(config, "cursor");
+    const provider = config.providers.cursor!;
+    expect(provider.apiKey).toBe("stored-key-sentinel");
+    expect(provider.apiKeyPool).toEqual([{ id: "aaaaaaaa", key: "stored-key-sentinel" }]);
+    expect(provider.authMode).toBe("key");
+    expect(routeModel(config, "cursor/auto").provider.authMode).toBe("key");
   });
 
   test("carries the key over without changing oauth billing when the user did not pick key mode", () => {

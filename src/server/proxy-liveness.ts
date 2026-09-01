@@ -24,6 +24,10 @@ import {
   verifyLocalAttestationProof,
 } from "../lib/local-management-attestation";
 import {
+  createMediaActionAttestationProof,
+  type MediaActionAttestationInput,
+} from "../lib/media-action-attestation";
+import {
   PROXY_LIFECYCLE_COMPATIBILITY_GENERATION_HEADER,
   PROXY_LIFECYCLE_LEASE_CAPABILITY_HEADER,
   PROXY_RUNTIME_VERSION_HEADER,
@@ -110,6 +114,8 @@ export interface AttestedLiveManagementProxy extends LiveProxy {
    * hand-offs while binding a later stop transaction to this exact record.
    */
   runtimeRecordIdentity?: string;
+  /** Non-serializable proof capability retained only by the locally attested CLI process. */
+  proveMediaAction?: (input: MediaActionAttestationInput) => string | null;
 }
 
 export type RuntimeReplacementDisposition = "stale" | "compatible" | "newer" | "unknown";
@@ -484,6 +490,12 @@ export async function attestLiveManagementProxy(
         baseUrl,
         lifecycleLockLeaseV1,
         runtimeRecordIdentity: snapshotIdentity,
+        proveMediaAction: input => createMediaActionAttestationProof(
+          snapshot.attestationSecret,
+          input,
+          snapshot.pid,
+          snapshot.port,
+        ),
         ...(runtimeVersion && parseSemanticVersion(runtimeVersion) ? { runtimeVersion } : {}),
         ...(lifecycleCompatibilityGeneration !== undefined
           && Number.isSafeInteger(lifecycleCompatibilityGeneration)

@@ -25,6 +25,7 @@ interface RecordedRequest {
   path: string;
   search: string;
   body?: unknown;
+  proof?: string | null;
 }
 
 interface MockFailure {
@@ -55,9 +56,14 @@ let lastDeletedType: "codex" | "oauth" | "api-key" | null = null;
 let codexAccounts: Array<Record<string, unknown>> = [];
 let oauthAccounts: Array<Record<string, unknown>> = [];
 let oauthActiveId: string | null = "acct_1";
+let xaiOauthAccounts: Array<Record<string, unknown>> = [];
+let xaiOauthActiveId: string | null = null;
+let xaiOauthRevision = 1;
+let xaiOauthProtected = true;
 let oauthLoginStatus: Record<string, unknown> = { loggedIn: false };
 let keyEntries: Array<Record<string, unknown>> = [];
 let keyActiveId: string | null = "key_1";
+let keyRevision = 7;
 let logs: string[] = [];
 let errors: string[] = [];
 let originalLog: typeof console.log;
@@ -120,8 +126,15 @@ function json(body: unknown, status = 200): Response {
 
 async function mockManagementApi(req: Request): Promise<Response> {
   const url = new URL(req.url);
-  const body = req.method === "PUT" || req.method === "POST" ? await req.json() : undefined;
-  requests.push({ method: req.method, path: url.pathname, search: url.search, body });
+  const requestText = req.method === "GET" ? "" : await req.text();
+  const body = requestText ? JSON.parse(requestText) : undefined;
+  requests.push({
+    method: req.method,
+    path: url.pathname,
+    search: url.search,
+    body,
+    proof: req.headers.get("x-codexcommander-media-action-proof"),
+  });
 
   if (req.method === "GET" && url.pathname === "/api/codex-auth/accounts") {
     if (url.searchParams.get("refresh") === "1" && codexRefreshFailure) {
@@ -203,7 +216,7 @@ async function mockManagementApi(req: Request): Promise<Response> {
     if (provider === "anthropic" && lastDeletedType === "oauth" && postDeleteReadFailure) {
       return json({ error: postDeleteReadFailure.error }, postDeleteReadFailure.status);
     }
-    if (provider === "anthropic") {
+    if (provider === "anthropic" || provider === "cursor") {
       return json({ activeAccountId: oauthActiveId, accounts: oauthAccounts.map(account => ({
         ...account,
         active: account.id === oauthActiveId,
@@ -215,13 +228,29 @@ async function mockManagementApi(req: Request): Promise<Response> {
         accounts: [{ id: "kiro_1", email: "k***@example.com", active: true }],
       });
     }
+    if (provider === "xai") {
+      return json({
+        revision: xaiOauthRevision,
+        mediaBillingIdentityProtected: xaiOauthProtected,
+        activeAccountId: xaiOauthActiveId,
+        accounts: xaiOauthAccounts.map(account => ({
+          ...account,
+          active: account.id === xaiOauthActiveId,
+        })),
+      });
+    }
     return json({ activeAccountId: null, accounts: [] });
   }
 
   if (req.method === "PUT" && url.pathname === "/api/oauth/accounts/active") {
-    const accountId = (body as { accountId?: string }).accountId;
+    const payload = body as { provider?: string; accountId?: string };
+    const accountId = payload.accountId;
     if (accountId === "nope") {
       return json({ error: "anthropic account nope was not found" }, 404);
+    }
+    if (payload.provider === "xai") {
+      xaiOauthActiveId = accountId ?? null;
+      xaiOauthRevision += 1;
     }
     return json({ ok: true, activeAccountId: accountId });
   }
@@ -237,6 +266,12 @@ async function mockManagementApi(req: Request): Promise<Response> {
   if (req.method === "DELETE" && url.pathname === "/api/oauth/accounts") {
     if (deleteFailure) return json({ error: deleteFailure.error }, deleteFailure.status);
     const id = url.searchParams.get("id");
+    if (url.searchParams.get("provider") === "xai") {
+      xaiOauthAccounts = xaiOauthAccounts.filter(account => account.id !== id);
+      if (xaiOauthActiveId === id) xaiOauthActiveId = (xaiOauthAccounts[0]?.id as string | undefined) ?? null;
+      xaiOauthRevision += 1;
+      return json({ ok: true });
+    }
     oauthAccounts = oauthAccounts.filter(account => account.id !== id);
     if (oauthActiveId === id) oauthActiveId = (oauthAccounts[0]?.id as string | undefined) ?? null;
     lastDeletedType = "oauth";
@@ -251,8 +286,8 @@ async function mockManagementApi(req: Request): Promise<Response> {
     if (provider === "openrouter" && lastDeletedType === "api-key" && postDeleteReadFailure) {
       return json({ error: postDeleteReadFailure.error }, postDeleteReadFailure.status);
     }
-    if (provider === "openrouter") {
-      return json({ activeId: keyActiveId, keys: keyEntries.map(entry => ({
+    if (provider === "openrouter" || provider === "xai" || provider === "cursor") {
+      return json({ revision: keyRevision, activeId: keyActiveId, keys: keyEntries.map(entry => ({
         ...entry,
         active: entry.id === keyActiveId,
       })) });
@@ -261,6 +296,9 @@ async function mockManagementApi(req: Request): Promise<Response> {
   }
 
   if (req.method === "PUT" && url.pathname === "/api/providers/keys/active") {
+    const id = (body as { id?: string } | undefined)?.id;
+    if (id) keyActiveId = id;
+    keyRevision += 1;
     return json({ ok: true });
   }
 
@@ -278,6 +316,7 @@ async function mockManagementApi(req: Request): Promise<Response> {
     const id = "key_added";
     keyEntries.push({ id, label: payload.label, masked: "sk-te****cdef" });
     keyActiveId = id;
+    keyRevision += 1;
     return json({ ok: true, id }, 201);
   }
 
@@ -286,6 +325,7 @@ async function mockManagementApi(req: Request): Promise<Response> {
     const id = url.searchParams.get("id");
     keyEntries = keyEntries.filter(entry => entry.id !== id);
     if (keyActiveId === id) keyActiveId = (keyEntries[0]?.id as string | undefined) ?? null;
+    keyRevision += 1;
     lastDeletedType = "api-key";
     return json({ ok: true });
   }
@@ -325,6 +365,62 @@ function defaultDeps(): AccountDeps {
       source: "runtime",
       baseUrl,
     }),
+  };
+}
+
+function xaiConfig(): CodexCommanderConfig {
+  const config = fixtureConfig();
+  config.providers.xai = {
+    adapter: "openai-chat",
+    baseUrl: "https://api.x.ai/v1",
+    authMode: "oauth",
+    apiKey: RAW_SENTINEL,
+    apiKeyPool: [{ id: "key_1", key: RAW_SENTINEL }],
+  };
+  return config;
+}
+
+function cursorConfig(authMode: "oauth" | "key"): CodexCommanderConfig {
+  const config = fixtureConfig();
+  config.providers.cursor = {
+    adapter: "cursor",
+    baseUrl: "https://api2.cursor.sh",
+    authMode,
+    ...(authMode === "key" ? {
+      apiKey: RAW_SENTINEL,
+      apiKeyPool: [{ id: "key_1", key: RAW_SENTINEL }],
+    } : {}),
+  };
+  return config;
+}
+
+function cursorDeps(authMode: "oauth" | "key", overrides: Partial<AccountDeps> = {}): AccountDeps {
+  return { ...defaultDeps(), loadConfigImpl: () => cursorConfig(authMode), ...overrides };
+}
+
+function xaiDeps(overrides: Partial<AccountDeps> = {}): AccountDeps {
+  const parsed = new URL(baseUrl);
+  const attested = {
+    pid: 4242,
+    port: Number(parsed.port),
+    hostname: parsed.hostname,
+    source: "runtime" as const,
+    baseUrl,
+    lifecycleLockLeaseV1: true,
+    runtimeVersion: "1.0.0",
+    lifecycleCompatibilityGeneration: 1,
+    runtimeRecordIdentity: "xai-key-runtime",
+    proveMediaAction: () => "proof",
+  };
+  return {
+    baseUrl,
+    loadConfigImpl: xaiConfig,
+    attestLiveManagementProxyImpl: async () => attested,
+    stdinIsTTY: true,
+    stdoutIsTTY: true,
+    confirm: async () => true,
+    readSecret: async () => "xai-new-secret-key",
+    ...overrides,
   };
 }
 
@@ -415,6 +511,10 @@ beforeEach(() => {
     { id: "acct_2" },
   ];
   oauthActiveId = "acct_1";
+  xaiOauthAccounts = [];
+  xaiOauthActiveId = null;
+  xaiOauthRevision = 1;
+  xaiOauthProtected = true;
   oauthLoginStatus = { loggedIn: false };
   keyEntries = [{
     id: "key_1",
@@ -423,6 +523,7 @@ beforeEach(() => {
     apiKey: RAW_SENTINEL,
   }];
   keyActiveId = "key_1";
+  keyRevision = 7;
   requests.length = 0;
   logs = [];
   errors = [];
@@ -920,7 +1021,7 @@ describe("ccx account CLI (issue #180 matrix)", () => {
     expect(update.stderr).toContain("threshold rejected");
   });
 
-  test("33: add-key redacts label containment and help lists the full family", async () => {
+  test("33: add-key rejects labels containing key material and help lists the full family", async () => {
     const key = "test-key-1234567890abcdef";
     const label = `prod-${key}-${key}`;
     const human = await run(
@@ -932,10 +1033,11 @@ describe("ccx account CLI (issue #180 matrix)", () => {
       { ...defaultDeps(), stdinImpl: stdinFrom(`${key}\n`) },
     );
 
-    expect(human.stdout).toContain("prod-[redacted]-[redacted]");
-    expect(machine.stdout).toContain("prod-[redacted]-[redacted]");
+    expect(human.code).toBe(1);
+    expect(machine.code).toBe(1);
     expect(human.output).not.toContain(key);
     expect(machine.output).not.toContain(key);
+    expect(requests.filter(request => request.method === "POST" && request.path === "/api/providers/keys")).toHaveLength(0);
 
     logs.length = 0;
     printSubcommandUsage("account");
@@ -945,7 +1047,7 @@ describe("ccx account CLI (issue #180 matrix)", () => {
     }
   });
 
-  test("C-gate fold: add-key redacts a key containing JSON-escaped characters", async () => {
+  test("C-gate fold: add-key rejects a label containing JSON-escaped key material", async () => {
     const key = 'sk-"x\\test';
     const human = await run(
       ["add-key", "openrouter", "--label", key],
@@ -956,8 +1058,8 @@ describe("ccx account CLI (issue #180 matrix)", () => {
       { ...defaultDeps(), stdinImpl: stdinFrom(`${key}\n`) },
     );
 
-    expect(human.stdout).toContain("[redacted]");
-    expect(machine.stdout).toContain("[redacted]");
+    expect(human.code).toBe(1);
+    expect(machine.code).toBe(1);
     // Raw key must not appear in any form — literal or JSON-escaped (Carver Medium).
     expect(human.output).not.toContain(key);
     expect(machine.output).not.toContain(key);
@@ -1005,6 +1107,234 @@ describe("ccx account CLI (issue #180 matrix)", () => {
     expect(posts).toHaveLength(0);
   });
 
+  test("Cursor keeps its OAuth and dashboard-key families visible and routable", async () => {
+    const key = "cursor-dashboard-key-1234567890";
+    const added = await run(
+      ["add-key", "cursor", "--label", "dashboard", "--json"],
+      cursorDeps("oauth", { stdinImpl: stdinFrom(`${key}\n`) }),
+    );
+    expect(added.code).toBe(0);
+    expect(requests).toContainEqual(expect.objectContaining({
+      method: "POST",
+      path: "/api/providers/keys",
+      body: { name: "cursor", key, label: "dashboard" },
+    }));
+
+    requests.length = 0;
+    const listed = await run(["list", "cursor", "--json"], cursorDeps("key"));
+    expect(listed.code).toBe(0);
+    const accounts = (JSON.parse(listed.stdout) as { accounts: Array<{ type: string }> }).accounts;
+    expect(new Set(accounts.map(account => account.type))).toEqual(new Set(["oauth", "api-key"]));
+    expect(requests).toContainEqual(expect.objectContaining({ method: "GET", path: "/api/oauth/accounts" }));
+    expect(requests).toContainEqual(expect.objectContaining({ method: "GET", path: "/api/providers/keys" }));
+
+    requests.length = 0;
+    const used = await run(["use", "cursor", "acct_2", "--json"], cursorDeps("key"));
+    expect(used.code).toBe(0);
+    expect(JSON.parse(used.stdout)).toMatchObject({ provider: "cursor", type: "oauth", activeId: "acct_2" });
+    expect(requests).toContainEqual(expect.objectContaining({
+      method: "PUT",
+      path: "/api/oauth/accounts/active",
+      body: { provider: "cursor", accountId: "acct_2" },
+    }));
+  });
+
+  test("canonical xAI list/current expose the dormant media-key family while chat remains OAuth", async () => {
+    const listed = await run(["list", "xai"], xaiDeps());
+    expect(listed.code).toBe(0);
+    expect(listed.stdout).toMatch(/^xai\s+api-key\s+key_1\s+/m);
+    expect(requests).toContainEqual(expect.objectContaining({ method: "GET", path: "/api/oauth/accounts" }));
+    expect(requests).toContainEqual(expect.objectContaining({ method: "GET", path: "/api/providers/keys" }));
+
+    requests.length = 0;
+    const current = await run(["current", "xai", "--json"], xaiDeps());
+    expect(current.code).toBe(0);
+    expect(JSON.parse(current.stdout)).toMatchObject({
+      provider: "xai",
+      type: "oauth",
+      activeId: null,
+      account: null,
+      mediaKeyActiveId: "key_1",
+      mediaKey: { id: "key_1", type: "api-key", active: true },
+    });
+  });
+
+  test("xAI key mutations reject non-TTY and declined confirmation with zero writes", async () => {
+    let result = await run(["use", "xai", "key_1"], xaiDeps({ stdinIsTTY: false }));
+    expect(result.code).toBe(1);
+    expect(requests.some(request => request.method === "PUT")).toBe(false);
+
+    requests.length = 0;
+    const confirm = async () => false;
+    result = await run(["use", "xai", "key_1"], xaiDeps({ confirm }));
+    expect(result.code).toBe(1);
+    expect(requests.some(request => request.method === "PUT")).toBe(false);
+
+    requests.length = 0;
+    let secretReads = 0;
+    result = await run(["add-key", "xai"], xaiDeps({
+      stdinIsTTY: false,
+      readSecret: async () => { secretReads += 1; return "must-not-read"; },
+    }));
+    expect(result.code).toBe(1);
+    expect(secretReads).toBe(0);
+    expect(requests.some(request => request.method === "POST")).toBe(false);
+  });
+
+  test("xAI add-key rejects secret/path labels before confirmation or persistence", async () => {
+    for (const label of ["xai-new-secret-key", "/private/credentials/key"]) {
+      requests.length = 0;
+      let confirmations = 0;
+      const result = await run(
+        ["add-key", "xai", "--label", label],
+        xaiDeps({ confirm: async () => { confirmations += 1; return true; } }),
+      );
+      expect(result.code).toBe(1);
+      expect(confirmations).toBe(0);
+      expect(requests.some(request => request.method === "POST")).toBe(false);
+      expect(result.output).not.toContain("xai-new-secret-key");
+      expect(result.output).not.toContain("/private/credentials/key");
+    }
+  });
+
+  test("xAI key mutation sends no write when the attested runtime changes after confirmation", async () => {
+    const parsed = new URL(baseUrl);
+    let attestations = 0;
+    let confirmed = false;
+    const result = await run(["use", "xai", "key_1"], xaiDeps({
+      attestLiveManagementProxyImpl: async () => {
+        attestations += 1;
+        return {
+          pid: 4242,
+          port: Number(parsed.port),
+          hostname: parsed.hostname,
+          source: "runtime" as const,
+          baseUrl,
+          lifecycleLockLeaseV1: true,
+          runtimeVersion: "1.0.0",
+          lifecycleCompatibilityGeneration: 1,
+          runtimeRecordIdentity: confirmed ? "runtime-after-confirmation" : "runtime-before-confirmation",
+          proveMediaAction: () => "proof",
+        };
+      },
+      confirm: async () => {
+        confirmed = true;
+        return true;
+      },
+    }));
+
+    expect(result.code).toBe(1);
+    expect(attestations).toBe(3);
+    expect(requests.filter(request => request.method !== "GET")).toEqual([]);
+  });
+
+  test("xAI key mutation sends no write when the key-pool revision changes after confirmation", async () => {
+    const result = await run(["use", "xai", "key_1"], xaiDeps({
+      confirm: async () => {
+        keyRevision += 1;
+        return true;
+      },
+    }));
+
+    expect(result.code).toBe(1);
+    expect(requests.filter(request => request.method !== "GET")).toEqual([]);
+  });
+
+  test("xAI add, use, and remove send exact confirmed revisioned envelopes", async () => {
+    let result = await run(["use", "xai", "key_1"], xaiDeps());
+    expect(result.code).toBe(0);
+    let mutation = requests.find(request => request.method === "PUT" && request.path === "/api/providers/keys/active");
+    expect(mutation?.body).toMatchObject({
+      name: "xai", id: "key_1", expectedRevision: 7,
+      action: "xai_key_select", target: "xai_key", confirmation: true, caller: "interactive_cli",
+    });
+    expect(mutation?.proof).toBe("proof");
+
+    requests.length = 0;
+    result = await run(["add-key", "xai", "--label", "media"], xaiDeps());
+    expect(result.code).toBe(0);
+    mutation = requests.find(request => request.method === "POST" && request.path === "/api/providers/keys");
+    expect(mutation?.body).toMatchObject({
+      name: "xai", key: "xai-new-secret-key", label: "media", expectedRevision: 8,
+      action: "xai_key_add", target: "xai_key", id: "new", confirmation: true, caller: "interactive_cli",
+    });
+    expect(result.output).not.toContain("xai-new-secret-key");
+
+    requests.length = 0;
+    result = await run(["remove", "xai", "key_1", "--yes"], xaiDeps());
+    expect(result.code).toBe(0);
+    mutation = requests.find(request => request.method === "DELETE" && request.path === "/api/providers/keys");
+    expect(mutation?.body).toMatchObject({
+      name: "xai", id: "key_1", expectedRevision: 9,
+      action: "xai_key_remove", target: "xai_key", confirmation: true, caller: "interactive_cli",
+    });
+    expect(mutation?.proof).toBe("proof");
+  });
+
+  test("xAI subscription account use/remove send exact confirmed revisioned envelopes", async () => {
+    xaiOauthAccounts = [
+      { id: "xai-acct-1", email: "f***@example.com" },
+      { id: "xai-acct-2", email: "s***@example.com" },
+    ];
+    xaiOauthActiveId = "xai-acct-1";
+    xaiOauthRevision = 21;
+
+    let result = await run(["use", "xai", "xai-acct-2"], xaiDeps());
+    expect(result.code).toBe(0);
+    let mutation = requests.find(request => request.method === "PUT" && request.path === "/api/oauth/accounts/active");
+    expect(mutation?.body).toMatchObject({
+      provider: "xai",
+      accountId: "xai-acct-2",
+      expectedRevision: 21,
+      action: "xai_oauth_select",
+      target: "xai_oauth",
+      id: "xai-acct-2",
+      confirmation: true,
+      caller: "interactive_cli",
+    });
+    expect(mutation?.proof).toBe("proof");
+
+    requests.length = 0;
+    xaiOauthRevision = 30;
+    result = await run(["remove", "xai", "xai-acct-2", "--yes"], xaiDeps());
+    expect(result.code).toBe(0);
+    mutation = requests.find(request => request.method === "DELETE" && request.path === "/api/oauth/accounts");
+    expect(mutation?.body).toMatchObject({
+      provider: "xai",
+      expectedRevision: 30,
+      action: "xai_oauth_remove",
+      target: "xai_oauth",
+      id: "xai-acct-2",
+      confirmation: true,
+      caller: "interactive_cli",
+    });
+    expect(mutation?.proof).toBe("proof");
+  });
+
+  test("xAI subscription account confirmation failure sends no write", async () => {
+    xaiOauthAccounts = [
+      { id: "xai-acct-1" },
+      { id: "xai-acct-2" },
+    ];
+    xaiOauthActiveId = "xai-acct-1";
+    xaiOauthRevision = 41;
+
+    const nonInteractive = await run(
+      ["use", "xai", "xai-acct-2"],
+      xaiDeps({ stdinIsTTY: false }),
+    );
+    expect(nonInteractive.code).toBe(1);
+    expect(requests.filter(request => request.method !== "GET")).toEqual([]);
+
+    requests.length = 0;
+    const declined = await run(
+      ["remove", "xai", "xai-acct-1", "--yes"],
+      xaiDeps({ confirm: async () => false }),
+    );
+    expect(declined.code).toBe(1);
+    expect(requests.filter(request => request.method !== "GET")).toEqual([]);
+  });
+
   test("36: refresh and remove emit exact JSON envelopes", async () => {
     const refresh = await run(["refresh", "openai", "--json"]);
     const refreshed = JSON.parse(refresh.stdout) as Record<string, unknown>;
@@ -1046,6 +1376,25 @@ describe("ccx account CLI (issue #180 matrix)", () => {
     expect(requests).toContainEqual(expect.objectContaining({ method: "PUT", path: "/api/codex-auth/accounts/alias" }));
     expect(requests).toContainEqual(expect.objectContaining({ method: "PUT", path: "/api/oauth/accounts/alias" }));
     expect(requests).toContainEqual(expect.objectContaining({ method: "PUT", path: "/api/providers/keys/alias" }));
+
+    requests.length = 0;
+    const xaiKey = await run(["alias", "xai", "key_1", "Media key"], xaiDeps());
+    expect(xaiKey.code).toBe(0);
+    expect(requests).toContainEqual(expect.objectContaining({
+      method: "PUT",
+      path: "/api/providers/keys/alias",
+      body: expect.objectContaining({
+        name: "xai",
+        id: "key_1",
+        alias: "Media key",
+        expectedRevision: 7,
+        action: "xai_key_alias",
+        target: "xai_key",
+        confirmation: true,
+        caller: "interactive_cli",
+      }),
+      proof: "proof",
+    }));
   });
 
   describe("37b: account priority sets and reads Codex selection order", () => {

@@ -102,7 +102,9 @@ test("ApiKeys workspace keeps endpoint, generate, models, and usage panels", asy
   expect(between).not.toContain('t("api.usageChatTitle")');
   expect(between).not.toContain('t("api.usageResponsesTitle")');
   expect(src).toContain("gatewayInboundProtocols(claudeCodeEnabled)");
-  expect(page).toContain("classifyExternalModel(row)");
+  expect(page).toContain("classifyManagementModel(row)");
+  expect(page).toContain("${apiBase}/api/models");
+  expect(page).not.toContain("${apiBase}/v1/models");
   expect(page).toContain('from "../api-access-models"');
 });
 

@@ -3,7 +3,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
-import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, ensureLaunchdExecutable, launchdExecutableDiagnostic, launchdExecutablePath, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, launchctlLoadFailed, launchdJobMatchesPlist, parseServiceInstallState, probeLaunchdSupervisor, probeSystemdSupervisor, readWindowsSchedulerXmlState, removeLaunchdExecutable, repairService, resolveServiceListenPort, runLaunchctl, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, startOwnedSystemdUnit, systemdNeedsDaemonReload, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
+import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, diagnoseService, ensureLaunchdExecutable, launchdExecutableDiagnostic, launchdExecutablePath, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, launchctlLoadFailed, launchdJobMatchesPlist, parseServiceInstallState, probeLaunchdSupervisor, probeSystemdSupervisor, readWindowsSchedulerXmlState, removeLaunchdExecutable, repairService, resolveServiceListenPort, runLaunchctl, serviceDiagnosticsSummary, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, startOwnedSystemdUnit, systemdNeedsDaemonReload, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
 import type { ServiceDiagnostic } from "../src/service";
 import { normalizeServiceSubcommand, parseServiceArgs, prepareServiceRoutingForStart, prepareServiceRoutingForTermination, runServiceLifecycleCommand, type ServiceCommandDependencies } from "../src/cli/service-command";
 import type { ProxyLifecycleAuthority } from "../src/server/proxy-lifecycle-authority";
@@ -1448,9 +1448,16 @@ describe("service diagnostics", () => {
   });
 
   test("status summary exposes the service log path", () => {
+    // The log path lives on the diagnostics fragment. Platform summaries embed
+    // that fragment when a service manager can be asked; hosts without a user
+    // bus (Linux CI/containers) report unsupported instead of guessing a unit.
+    expectTextToContainPath(serviceDiagnosticsSummary(), serviceLogPath());
     const summary = serviceStatusSummary();
-
-    expectTextToContainPath(summary, serviceLogPath());
+    if (diagnoseService().supported) {
+      expectTextToContainPath(summary, serviceLogPath());
+    } else {
+      expect(summary).toMatch(/unsupported/i);
+    }
   });
 
   test("flags stale baked service paths recorded at install time", () => {

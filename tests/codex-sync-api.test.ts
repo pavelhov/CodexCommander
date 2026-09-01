@@ -46,8 +46,8 @@ const config = {
   },
 } as CodexCommanderConfig;
 
-function claimTempHome(codexHome: string, ccxHome: string, home: string): void {
-  claimOwnedServiceHome(codexHome, ccxHome, home);
+function claimTempHome(codexHome: string, ccxHome: string, home: string): Record<string, string> {
+  return claimOwnedServiceHome(codexHome, ccxHome, home).env;
 }
 
 const admittedSync = () => ({ kind: "admitted" as const });
@@ -328,7 +328,7 @@ describe("GUI/CLI Codex sync backend", () => {
     try {
       writeFileSync(join(raceCodexHome, "config.toml"), 'model = "gpt-5"\n', "utf8");
       writeFileSync(join(raceCodexCommanderHome, "config.json"), JSON.stringify(config));
-      claimTempHome(raceCodexHome, raceCodexCommanderHome, raceHome);
+      const serviceManagerEnv = claimTempHome(raceCodexHome, raceCodexCommanderHome, raceHome);
       const script = [
         'const { spawnSync } = require("node:child_process");',
         'const { loadConfig } = require("./src/config");',
@@ -362,6 +362,7 @@ describe("GUI/CLI Codex sync backend", () => {
           USERPROFILE: raceHome,
           CODEX_HOME: raceCodexHome,
           CODEXCOMMANDER_HOME: raceCodexCommanderHome,
+          ...serviceManagerEnv,
         },
         encoding: "utf8",
       });

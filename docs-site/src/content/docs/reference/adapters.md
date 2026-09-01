@@ -183,7 +183,14 @@ advertised effort control on those models as proof of upstream-native reasoning 
 ## `cursor`
 
 **Targets:** Cursor's `agent.v1.AgentService/Run` over HTTP/2 Connect streaming at `api2.cursor.sh`.
-**Auth:** Cursor OAuth/access token from `provider.apiKey` or the forwarded authorization header.
+**Auth:** Dual-mode on the canonical `providers.cursor` row only — a custom provider that reuses
+`adapter: "cursor"` can still paste a dashboard key, but it does not get Cursor OAuth controls
+(those endpoints accept provider id `cursor`). Default is PKCE OAuth (`ccx login cursor`). A pasted
+[dashboard user API key](https://cursor.com/dashboard/api) with `authMode: "key"` uses the same
+unofficial AgentService/Run protocol — not a public OpenAI `/v1/chat/completions` credential, and
+not Cursor Cloud Agents keys from `api.cursor.com`. Dashboard `crsr_` keys are exchanged via
+`POST /auth/exchange_user_api_key` when they are not already a valid Run Bearer; a working JWT
+Bearer is used as-is. The dashboard still shows the elevated ToS warning.
 
 - Uses `runTurn` rather than the ordinary fetch/parse path. Requests, server events, tool arguments,
   usage checkpoints, and client replies are encoded with `@bufbuild/protobuf` schemas in

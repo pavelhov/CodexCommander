@@ -168,6 +168,7 @@ describe("headless GUI parity CLI", () => {
       ["/api/integrations/opencode", "ccx opencode"],
       ["/api/keys", "ccx access"],
       ["/api/logs", "ccx observe"],
+      ["/api/media", "ccx media"],
       // Short-lived proxy request leases are advisory UI telemetry. Persistent
       // request history remains available through `ccx observe logs`.
       ["/api/agent-activity", "ccx observe logs"],

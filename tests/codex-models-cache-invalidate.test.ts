@@ -163,6 +163,7 @@ describe("invalidateCodexModelsCache write gate (#476 / #518)", () => {
     saveConfig(emptyConfig);
 
     const syncResult = await syncModelsToCodex(10100, emptyConfig, null, {
+      admitCodexWrite: () => ({ kind: "admitted" }),
       prepareCodexTransitionState: () => ({
         kind: "ready",
         state: { nativeGeneration: 0, currentTxId: null },

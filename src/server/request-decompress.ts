@@ -45,6 +45,52 @@ function declaredBodyLength(req: Request): number | null {
   return Number.isFinite(length) && length >= 0 ? length : null;
 }
 
+function concatChunks(chunks: Uint8Array[], length: number): Uint8Array {
+  const body = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
+}
+
+/**
+ * Read a request body while counting bytes, aborting as soon as the cap is
+ * exceeded. `req.arrayBuffer()` cannot do this: it materializes the entire
+ * body first, so a missing or dishonest Content-Length still OOMs.
+ */
+export async function readBoundedRawRequestBody(req: Request, maxBytes: number): Promise<Uint8Array> {
+  const declaredLength = declaredBodyLength(req);
+  if (declaredLength !== null && declaredLength > maxBytes) {
+    throw new DecompressedBodyTooLargeError(declaredLength, maxBytes);
+  }
+  if (req.body == null) return new Uint8Array();
+
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      length += value.byteLength;
+      if (length > maxBytes) {
+        try { await reader.cancel(); } catch { /* the size error wins */ }
+        throw new DecompressedBodyTooLargeError(length, maxBytes);
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    try { await reader.cancel(); } catch { /* the original body error wins */ }
+    throw error;
+  } finally {
+    try { reader.releaseLock(); } catch { /* already cancelled or unlocked */ }
+  }
+  return concatChunks(chunks, length);
+}
+
 function inflateDeflateBody(compressed: Uint8Array<ArrayBuffer>, opts: { maxOutputLength: number }): Uint8Array {
   // HTTP "deflate" appears both zlib-wrapped and raw in the wild (Bun.deflateSync emits raw,
   // which the previous Bun.inflateSync accepted). Try zlib-wrapped first, fall back to raw —
@@ -93,18 +139,12 @@ export async function readBoundedJsonRequestBody(
 ): Promise<unknown> {
   const encoding = req.headers.get("content-encoding");
   const declaredLength = declaredBodyLength(req);
-  // Reject an honest oversized declaration before req.arrayBuffer() can allocate it.
-  // Missing, malformed, or dishonest declarations remain covered by decodeRequestBody's
-  // post-read cap below.
-  if (declaredLength !== null && declaredLength > maxBytes) {
-    throw new DecompressedBodyTooLargeError(declaredLength, maxBytes);
-  }
   const releaseReservation = budget && declaredLength !== null && declaredLength > 0
     ? budget.observeAcceptedRequestCopy(declaredLength)
     : undefined;
   let raw: Uint8Array;
   try {
-    raw = new Uint8Array(await req.arrayBuffer());
+    raw = await readBoundedRawRequestBody(req, maxBytes);
   } finally {
     releaseReservation?.();
   }

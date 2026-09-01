@@ -29,6 +29,7 @@ scripts so local commands match CI:
 bun run typecheck                 # strict TypeScript check
 bun run test                      # complete tests/ suite
 bun test tests/router.test.ts     # focused test file
+cd gui && bun run test            # dashboard tests (isolated workers)
 bun run build:gui                 # Vite GUI build + package preparation
 bun run privacy:scan              # credential/privacy scan used by CI
 bun run prepare:package           # refresh package launchers/assets
@@ -36,8 +37,11 @@ bun run prepare:package           # refresh package launchers/assets
 
 Most tests are flat `tests/*.test.ts` Bun tests. `tests/helpers/` contains shared fixtures and
 `tests/e2e-style/` contains broader native-parity scenarios. Keep a focused regression near the
-existing tests for the subsystem you change; run the full suite for shared routing, adapters, config,
-or server behavior.
+existing tests for the subsystem you change; run `bun run test:parallel` for shared routing,
+adapters, config, or server behavior. If that reports failed files, rerun only those files — not
+the entire suite. The parallel runner retries failed items once in the same
+isolation mode; an isolated rerun of a failed shared-process batch cannot mark
+the suite green.
 
 The docs site you're reading lives in `docs-site/` (Astro + Starlight):
 
@@ -78,7 +82,8 @@ contributor work.
   and results). Empty or placeholder-only descriptions are not enough for review.
 - If the change touches the dashboard UI, include a screenshot in the description.
 - Behavior changes need a focused regression near the existing tests for that subsystem.
-  Shared routing, adapter, config, or server changes need the full suite green.
+  Shared routing, adapter, config, or server changes need `bun run test:parallel` green.
+  On a flake, rerun only the failed files; do not rerun the entire suite.
 
 The retired dual-track Go native port is not part of this repository. Bun-native TypeScript on
 `main` is the single runtime line.

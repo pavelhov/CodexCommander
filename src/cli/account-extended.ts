@@ -12,11 +12,15 @@ import {
   fetchCodexRows,
   fetchProviderQuotaReport,
   fetchRows,
+  gateXaiKeyAction,
+  gateXaiOAuthAction,
   proxyUnreachable,
   resolveBaseUrl,
   type AccountDeps, type AccountStdin, type FamilyRows,
   type ProviderQuotaDto, type ProviderQuotaReportDto,
 } from "./account-api";
+import { maskApiKey, sanitizeProviderApiKeyLabel } from "../providers/api-keys";
+import type { CodexCommanderConfig } from "../types";
 
 const MAIN_ID = "__main__";
 const AUTO_NOTE = "auto (no pin — lowest-usage account is selected per request)";
@@ -56,6 +60,16 @@ function usage(message?: string): number {
 
 function configAndType(deps: AccountDeps, name: string) {
   return classifyAccount(deps.loadConfigImpl?.() ?? loadConfig(), name);
+}
+
+function dualFamilyPeerType(
+  config: CodexCommanderConfig,
+  name: string,
+  type: "codex" | "oauth" | "api-key",
+): "oauth" | "api-key" | null {
+  const provider = config.providers?.[name];
+  if (!provider || type === "codex" || (name !== "xai" && provider.adapter !== "cursor")) return null;
+  return type === "oauth" ? "api-key" : "oauth";
 }
 
 function familyFailure(result: FamilyRows, fallback: string): number | null {
@@ -142,11 +156,41 @@ export async function readStdinLine(deps: AccountDeps): Promise<string> {
   });
 }
 
+async function readHiddenSecret(question: string): Promise<string> {
+  const input = process.stdin;
+  const output = process.stdout;
+  if (typeof input.setRawMode !== "function") throw new Error("interactive secret input is unavailable");
+  return await new Promise<string>((resolve, reject) => {
+    let value = "";
+    const wasRaw = input.isRaw === true;
+    const finish = (result: string | Error) => {
+      input.off("data", onData);
+      if (!wasRaw) input.setRawMode(false);
+      input.pause();
+      output.write("\n");
+      if (result instanceof Error) reject(result);
+      else resolve(result.trim());
+    };
+    const onData = (chunk: Buffer | string) => {
+      for (const character of (typeof chunk === "string" ? chunk : chunk.toString("utf8"))) {
+        if (character === "\r" || character === "\n") return finish(value);
+        if (character === "\x03" || character === "\x1b") return finish(new Error("secret input cancelled"));
+        if (character === "\x7f" || character === "\b") value = value.slice(0, -1);
+        else if (character >= " ") value += character;
+      }
+    };
+    input.setRawMode(true);
+    input.resume();
+    input.on("data", onData);
+    output.write(question);
+  });
+}
+
 export async function cmdRefresh(args: string[], deps: AccountDeps): Promise<number> {
   const wantsJson = flag(args, "--json");
   const name = args.shift();
   if (!name || args.length) return usage();
-  const classified = configAndType(deps, name);
+  let classified = configAndType(deps, name);
   if ("error" in classified) return usage(`Error: ${classified.error}`);
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
@@ -171,7 +215,8 @@ export async function cmdAutoSwitch(args: string[], deps: AccountDeps): Promise<
   const name = args.shift();
   const action = args.shift();
   if (!name || !action) return usage();
-  const classified = configAndType(deps, name);
+  const config = deps.loadConfigImpl?.() ?? loadConfig();
+  let classified = classifyAccount(config, name);
   if ("error" in classified || classified.type !== "codex") {
     return usage("Error: auto-switch only applies to the openai Codex account pool");
   }
@@ -224,21 +269,63 @@ export async function cmdRemove(args: string[], deps: AccountDeps): Promise<numb
     const message = `Confirmation required. Re-run: ccx account remove ${name} ${requestedId} --yes`;
     return wantsJson ? fail(message) : usage(message);
   }
-  const classified = configAndType(deps, name);
+  const config = deps.loadConfigImpl?.() ?? loadConfig();
+  let classified = classifyAccount(config, name);
   if ("error" in classified) return wantsJson ? fail(classified.error) : usage(`Error: ${classified.error}`);
-  const id = classified.type === "codex" && requestedId === "main" ? MAIN_ID : requestedId;
+  let id = classified.type === "codex" && requestedId === "main" ? MAIN_ID : requestedId;
   if (classified.type === "codex" && id === MAIN_ID) return wantsJson
     ? fail("the main Codex App login cannot be removed")
     : usage("Error: the main Codex App login cannot be removed");
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return fail("Proxy not reachable. Start it with 'ccx start' or 'ccx ensure'.");
+  const peerType = dualFamilyPeerType(config, name, classified.type);
+  if (peerType) {
+    const peer = await fetchRows(deps, baseUrl, name, peerType);
+    if (peer.networkDown) return fail("Proxy not reachable. Start it with 'ccx start' or 'ccx ensure'.");
+    if (!peer.errorJson && peer.rows.some(row => row.id === requestedId)) {
+      classified = { type: peerType };
+      id = requestedId;
+    }
+  }
   const before = await fetchRows(deps, baseUrl, name, classified.type);
   if (before.networkDown) return fail("Proxy not reachable. Start it with 'ccx start' or 'ccx ensure'.");
   if (before.errorJson) return fail(errorText(before.errorJson, `failed to verify ${name} before removal`));
   if (!before.rows.some(row => row.id === id)) return wantsJson
     ? fail(`account or key "${requestedId}" was not found`)
     : usage(`Error: account or key "${requestedId}" was not found`);
-  const response = await apiJson(deps, baseUrl, "DELETE", deletePath(classified.type, name, id));
+  const xaiKeyMutation = classified.type === "api-key" && name === "xai";
+  const keyGate = xaiKeyMutation
+    ? await gateXaiKeyAction(deps, baseUrl, `Remove xAI media API key ${id}?`)
+    : null;
+  if (xaiKeyMutation && !keyGate) return 1;
+  const oauthGate = classified.type === "oauth" && name === "xai"
+    ? await gateXaiOAuthAction(
+        deps,
+        baseUrl,
+        "remove",
+        id,
+        `Remove active xAI subscription account ${id} and change the media billing identity?`,
+      )
+    : null;
+  if (classified.type === "oauth" && name === "xai" && !oauthGate) return 1;
+  const attestedGate = keyGate ?? (oauthGate?.kind === "attested" ? oauthGate : null);
+  const response = await apiJson(
+    deps,
+    baseUrl,
+    "DELETE",
+    deletePath(classified.type, name, id),
+    keyGate
+      ? { name, id, expectedRevision: keyGate.revision }
+      : oauthGate?.kind === "attested"
+        ? { provider: name, expectedRevision: oauthGate.revision }
+        : undefined,
+    attestedGate ? {
+      target: attestedGate.target,
+      actionAttestation: xaiKeyMutation
+        ? { action: "xai_key_remove", target: "xai_key", id }
+        : { action: "xai_oauth_remove", target: "xai_oauth", id },
+    } : {},
+  );
   if (response.status === 0) return fail("Proxy not reachable. Start it with 'ccx start' or 'ccx ensure'.");
   if (response.status !== 200) return fail(errorText(response.json, `failed to remove ${requestedId}`));
   const after = await fetchRows(deps, baseUrl, name, classified.type);
@@ -261,21 +348,56 @@ export async function cmdAddKey(args: string[], deps: AccountDeps): Promise<numb
   const labelArg = flagValue(args, "--label");
   const name = args.shift();
   if (!name || args.length || (labelArg.found && labelArg.value === undefined)) return usage();
-  const classified = configAndType(deps, name);
-  if ("error" in classified || classified.type !== "api-key") return usage("Error: add-key only applies to API-key providers");
-  const input: AccountStdin = deps.stdinImpl ?? process.stdin;
-  if (input.isTTY) return usage(PIPE_GUIDANCE);
+  const configured = deps.loadConfigImpl?.() ?? loadConfig();
+  const classified = classifyAccount(configured, name);
+  const peerType = "error" in classified ? null : dualFamilyPeerType(configured, name, classified.type);
+  if ("error" in classified || (classified.type !== "api-key" && peerType !== "api-key")) {
+    return usage("Error: add-key only applies to API-key providers");
+  }
   let key: string;
-  try {
-    key = await readStdinLine(deps);
-  } catch (error) {
-    return usage(`Error: ${error instanceof Error ? error.message : String(error)}\n${PIPE_GUIDANCE}`);
+  if (name === "xai") {
+    const stdinIsTTY = deps.stdinIsTTY ?? process.stdin.isTTY === true;
+    const stdoutIsTTY = deps.stdoutIsTTY ?? process.stdout.isTTY === true;
+    if (!stdinIsTTY || !stdoutIsTTY) return usage("Error: xAI media key changes require an interactive terminal");
+    try {
+      key = await (deps.readSecret ?? readHiddenSecret)("Paste xAI media API key: ");
+    } catch (error) {
+      return usage(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  } else {
+    const input: AccountStdin = deps.stdinImpl ?? process.stdin;
+    if (input.isTTY) return usage(PIPE_GUIDANCE);
+    try {
+      key = await readStdinLine(deps);
+    } catch (error) {
+      return usage(`Error: ${error instanceof Error ? error.message : String(error)}\n${PIPE_GUIDANCE}`);
+    }
   }
   if (!key) return usage(`Error: API key input was empty\n${PIPE_GUIDANCE}`);
-  const label = labelArg.value?.trim();
+  const sanitizedLabel = sanitizeProviderApiKeyLabel(labelArg.value, key);
+  if (!sanitizedLabel.ok) return usage(`Error: ${sanitizedLabel.error}`);
+  const label = sanitizedLabel.label;
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
-  const response = await apiJson(deps, baseUrl, "POST", "/api/providers/keys", { name, key, ...(label ? { label } : {}) });
+  const gate = name === "xai"
+    ? await gateXaiKeyAction(
+        deps,
+        baseUrl,
+        `Add and select xAI media API key ${maskApiKey(key)}${label ? ` (${label})` : ""}?`,
+      )
+    : null;
+  if (name === "xai" && !gate) return 1;
+  const response = await apiJson(
+    deps,
+    baseUrl,
+    "POST",
+    "/api/providers/keys",
+    { name, key, ...(label ? { label } : {}), ...(gate ? { expectedRevision: gate.revision } : {}) },
+    gate ? {
+      target: gate.target,
+      actionAttestation: { action: "xai_key_add", target: "xai_key", id: "new" },
+    } : {},
+  );
   if (response.status === 0) return proxyUnreachable();
   if (response.status !== 201) return apiError(response.json, `failed to add a key for ${name}`);
   const id = typeof response.json.id === "string" ? response.json.id : null;
@@ -434,25 +556,58 @@ export async function cmdAlias(args: string[], deps: AccountDeps): Promise<numbe
   const requestedId = args.shift();
   const requestedAlias = args.shift();
   if (!name || !requestedId || requestedAlias === undefined || args.length) return usage();
-  const classified = configAndType(deps, name);
+  const config = deps.loadConfigImpl?.() ?? loadConfig();
+  let classified = classifyAccount(config, name);
   if ("error" in classified) return usage(`Error: ${classified.error}`);
   const id = classified.type === "codex" && requestedId === "main" ? MAIN_ID : requestedId;
   if (id === MAIN_ID) return usage("Error: the main Codex App login cannot be renamed");
-  const alias = requestedAlias === "-" ? "" : requestedAlias.trim();
+  let alias = requestedAlias === "-" ? "" : requestedAlias.trim();
   if (alias.length > 80 || /[\x00-\x1f\x7f]/.test(alias)) return usage("Error: alias must be at most 80 printable characters");
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
+  const peerType = dualFamilyPeerType(config, name, classified.type);
+  if (peerType) {
+    const peer = await fetchRows(deps, baseUrl, name, peerType);
+    if (peer.networkDown) return proxyUnreachable();
+    if (!peer.errorJson && peer.rows.some(row => row.id === requestedId)) {
+      classified = { type: peerType };
+    }
+  }
+  if (name === "xai" && classified.type === "api-key") {
+    const sanitizedAlias = sanitizeProviderApiKeyLabel(alias);
+    if (!sanitizedAlias.ok) return usage(`Error: ${sanitizedAlias.error}`);
+    alias = sanitizedAlias.label ?? "";
+  }
   const path = classified.type === "codex"
     ? "/api/codex-auth/accounts/alias"
     : classified.type === "oauth"
       ? "/api/oauth/accounts/alias"
       : "/api/providers/keys/alias";
+  const xaiKeyMutation = name === "xai" && classified.type === "api-key";
+  const gate = xaiKeyMutation
+    ? await gateXaiKeyAction(
+      deps,
+      baseUrl,
+      alias ? `Rename xAI media API key ${id} to “${alias}”?` : `Clear the alias for xAI media API key ${id}?`,
+    )
+    : null;
+  if (xaiKeyMutation && !gate) return 1;
   const body = classified.type === "codex"
     ? { id, alias }
     : classified.type === "oauth"
       ? { provider: name, accountId: id, alias }
-      : { name, id, alias };
-  const response = await apiJson(deps, baseUrl, "PUT", path, body);
+      : { name, id, alias, ...(gate ? { expectedRevision: gate.revision } : {}) };
+  const response = await apiJson(
+    deps,
+    baseUrl,
+    "PUT",
+    path,
+    body,
+    gate ? {
+      target: gate.target,
+      actionAttestation: { action: "xai_key_alias", target: "xai_key", id },
+    } : {},
+  );
   if (response.status === 0) return proxyUnreachable();
   if (response.status !== 200) return apiError(response.json, `failed to rename ${requestedId}`);
   const result = { ok: true, provider: name, id, alias: alias || null };

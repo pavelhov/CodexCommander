@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { useT } from "../../i18n/shared";
 import { IconLock, IconTrash } from "../../icons";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
-import { oauthAccountDisplayLabel, providerAuthSurface } from "../../provider-workspace/auth";
+import { oauthAccountDisplayLabel, providerAuthSurface, isCursorKeyAuthOverride } from "../../provider-workspace/auth";
 import { displayAccountId } from "../../lib/privacy";
 import {
   formatOAuthHealthLabel,
@@ -78,8 +78,9 @@ export default function ProviderAuthPanel({
   }, [accounts]);
 
   const surface = providerAuthSurface({ ...item, hasApiKey: item.hasApiKey || keys.length > 0 });
-  const isOauth = surface === "oauth-accounts";
-  const isKeyAuth = surface === "api-keys";
+  const dualMode = isCursorKeyAuthOverride(item);
+  const isOauth = surface === "oauth-accounts" || dualMode;
+  const isKeyAuth = surface === "api-keys" || dualMode;
 
   if (surface === "codex-accounts") {
     return (
@@ -97,7 +98,8 @@ export default function ProviderAuthPanel({
     );
   }
 
-  if (!surface || !authHandlers) return null;
+  if (!surface && !dualMode) return null;
+  if (!authHandlers) return null;
 
   const hintForThis = loginHint?.provider === item.name ? loginHint : null;
   const deviceCode = hintForThis?.deviceCode ?? "";
@@ -289,6 +291,11 @@ export default function ProviderAuthPanel({
 
         {isKeyAuth && (
           <>
+            {dualMode && (
+              <p className="muted text-label" style={{ marginTop: isOauth ? 12 : 0 }}>
+                {t("pws.cursorApiKeyHint")}
+              </p>
+            )}
             {keys.length > 0 && (
               <ul className="pwi-auth-list">
                 {keys.map(entry => (

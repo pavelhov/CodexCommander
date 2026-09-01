@@ -35,6 +35,7 @@ import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-co
 import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
+import { materializeCursorRunBearer } from "../../adapters/cursor/run-bearer";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import {
   COMBO_NAMESPACE,
@@ -1003,22 +1004,35 @@ async function fetchProviderModelsWithAuth(
       const cooling = getStaleCached(name);
       return cooling ? applyConfigHintsToCachedModels(name, prov, cooling) : configured;
     }
-    const liveResult = await fetchCursorUsableModels({ apiKey, baseUrl: prov.baseUrl });
-    if (liveResult.ok) {
-      const available = filterCursorConfiguredModelsByLiveDiscovery(configured, liveResult.models);
-      const result = available.length > 0 ? available : configured;
-      // Count what discovery actually returned, not the configured rows we fall back to.
-      markProviderDiscoveryOk(name, liveResult.models.length);
-      setCached(name, result);
-      return result;
+    const degradeCursorDiscovery = (error: string, detail?: string): CatalogModel[] => {
+      markModelsFetchFailure(name);
+      markProviderDiscoveryFailed(name, { reason: "provider" });
+      console.warn(
+        `[codexcommander] Cursor model discovery for "${name}" failed [${error}]${detail ? `: ${detail}` : ""}; using stale/static catalog degradation.`,
+      );
+      const staleCursor = getStaleCached(name);
+      return staleCursor ? applyConfigHintsToCachedModels(name, prov, staleCursor) : configured;
+    };
+    // Dashboard-key exchange (`materializeCursorRunBearer`) and GetUsableModels can throw or
+    // 5xx. Catalog gather uses Promise.all across providers, so a Cursor-only failure must
+    // degrade here — never reject the whole catalog.
+    try {
+      const liveResult = await fetchCursorUsableModels({
+        apiKey: await materializeCursorRunBearer(apiKey),
+        baseUrl: prov.baseUrl,
+      });
+      if (liveResult.ok) {
+        const available = filterCursorConfiguredModelsByLiveDiscovery(configured, liveResult.models);
+        const result = available.length > 0 ? available : configured;
+        // Count what discovery actually returned, not the configured rows we fall back to.
+        markProviderDiscoveryOk(name, liveResult.models.length);
+        setCached(name, result);
+        return result;
+      }
+      return degradeCursorDiscovery(liveResult.error, liveResult.detail);
+    } catch (error) {
+      return degradeCursorDiscovery("throw", error instanceof Error ? error.name : undefined);
     }
-    markModelsFetchFailure(name);
-    markProviderDiscoveryFailed(name, { reason: "provider" });
-    console.warn(
-      `[codexcommander] Cursor model discovery for "${name}" failed [${liveResult.error}]${liveResult.detail ? `: ${liveResult.detail}` : ""}; using stale/static catalog degradation.`,
-    );
-    const staleCursor = getStaleCached(name);
-    return staleCursor ? applyConfigHintsToCachedModels(name, prov, staleCursor) : configured;
   }
   if (prov.authMode === "oauth" && !apiKey) {
     // No usable token (logged out, or account marked needsReauth). Still surface the

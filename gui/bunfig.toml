@@ -1,0 +1,6 @@
+# GUI tests install happy-dom onto globalThis.document / window. A bare
+# `bun test tests` shares one global across every file; use `bun run test`
+# (isolated workers) for the suite. Single-file `bun test tests/foo.test.tsx`
+# is fine. This preload keeps React 19's window.event read from throwing.
+[test]
+preload = ["./tests/preload.ts"]

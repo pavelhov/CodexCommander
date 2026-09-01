@@ -180,17 +180,25 @@ function httpsToWss(httpUrl: string): string {
   return httpUrl;
 }
 
+function decodeLivePathSegment(encoded: string): string | null {
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return null;
+  }
+}
+
 export function parseLiveSidebandTarget(pathname: string, searchParams: URLSearchParams): LiveSidebandTarget | null {
   const liveMatch = pathname.match(/^\/v1\/live\/([^/]+)\/?$/);
   if (liveMatch) {
-    const callId = decodeURIComponent(liveMatch[1]!);
-    if (!LIVE_CALL_ID_RE.test(callId)) return null;
+    const callId = decodeLivePathSegment(liveMatch[1]!);
+    if (callId === null || !LIVE_CALL_ID_RE.test(callId)) return null;
     return { style: "frameless-path", callId };
   }
   const callsMatch = pathname.match(/^\/v1\/realtime\/calls\/([^/]+)\/?$/);
   if (callsMatch) {
-    const callId = decodeURIComponent(callsMatch[1]!);
-    if (!LIVE_CALL_ID_RE.test(callId)) return null;
+    const callId = decodeLivePathSegment(callsMatch[1]!);
+    if (callId === null || !LIVE_CALL_ID_RE.test(callId)) return null;
     return { style: "realtime-calls-path", callId };
   }
   if (pathname === "/v1/realtime" || pathname === "/v1/realtime/") {

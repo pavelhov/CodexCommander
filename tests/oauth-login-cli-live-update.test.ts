@@ -12,6 +12,23 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isol
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 import { SERVER_BUDGET_MS } from "./helpers/test-budget";
 
+const XAI_RECONCILIATION_FIELDS = [
+  "adapter",
+  "authMode",
+  "baseUrl",
+  "defaultModel",
+  "liveModels",
+  "modelContextWindows",
+  "modelInputModalities",
+  "modelReasoningEfforts",
+  "models",
+  "noReasoningModels",
+  "noVisionModels",
+  "parallelToolCalls",
+  "preserveReasoningContentModels",
+  "reasoningEfforts",
+] as const;
+
 /**
  * Regression: CLI OAuth login used to POST the bare OAuth preset into a running proxy.
  * That wiped the preserved apiKey / apiKeyPool / authMode:"key" that runLogin had just
@@ -74,33 +91,62 @@ describe("CLI OAuth live-update credential preservation", () => {
       const boot = loadConfig();
       boot.port = port;
       saveConfig(boot);
+      const beforeLiveUpdate = await fetch(new URL("/api/providers", server.url)).then(r => r.json()) as Array<{
+        name: string;
+        defaultModel?: string;
+      }>;
+      expect(beforeLiveUpdate.find(entry => entry.name === "xai")?.defaultModel).toBeUndefined();
 
       // Mirror runLogin()'s disk write: upsert preserves key material, then save.
       const afterLogin = loadConfig();
       upsertOAuthProvider(afterLogin, "xai");
+      // This is a safe routing-only change made after the listener has started. It proves
+      // reconciliation updates live routing rather than only preserving credentials on disk.
+      afterLogin.providers.xai!.defaultModel = "grok-4.20-0309-reasoning";
       saveConfig(afterLogin);
       expect(afterLogin.providers.xai!.authMode).toBe("key");
       expect(afterLogin.providers.xai!.apiKey).toBe("live-update-sentinel-key");
 
+      const expectedPostedProvider = structuredClone(afterLogin.providers.xai!);
+      delete expectedPostedProvider.apiKey;
+      delete expectedPostedProvider.apiKeyPool;
+
+      let reconciliationBody: Record<string, unknown> | null = null;
+      const observedFetch: typeof fetch = async (input, init) => {
+        const requestUrl = input instanceof Request ? input.url : String(input);
+        const method = input instanceof Request ? input.method : init?.method;
+        const body = input instanceof Request ? await input.clone().text() : String(init?.body ?? "");
+        if (new URL(requestUrl).pathname === "/api/providers" && method === "POST") {
+          reconciliationBody = JSON.parse(body) as Record<string, unknown>;
+        }
+        return globalThis.fetch(input, init);
+      };
       await notifyRunningProxyAfterOAuthLogin("xai", {
-        fetchFn: globalThis.fetch,
+        fetchFn: observedFetch,
         readRuntimeFn: () => ({
           pid: process.pid,
           port,
           hostname: "127.0.0.1",
           attestationSecret,
+          attestationProtocol: 2,
         }),
         verifyPidFn: candidate => candidate,
       });
+      const postedProvider = reconciliationBody?.provider as Record<string, unknown> | undefined;
+      expect(reconciliationBody).toEqual({ name: "xai", provider: expectedPostedProvider });
+      expect(postedProvider).toEqual(expectedPostedProvider);
+      expect(Object.keys(postedProvider ?? {}).sort()).toEqual([...XAI_RECONCILIATION_FIELDS].sort());
 
       const listed = await fetch(new URL("/api/providers", server.url)).then(r => r.json()) as Array<{
         name: string;
         authMode?: string;
         hasApiKey?: boolean;
+        defaultModel?: string;
       }>;
       const live = listed.find(entry => entry.name === "xai");
       expect(live?.authMode).toBe("key");
       expect(live?.hasApiKey).toBe(true);
+      expect(live?.defaultModel).toBe("grok-4.20-0309-reasoning");
 
       const pool = await fetch(new URL("/api/providers/keys?name=xai", server.url)).then(r => r.json()) as {
         activeId: string | null;
@@ -113,6 +159,44 @@ describe("CLI OAuth live-update credential preservation", () => {
       expect(disk.providers.xai!.authMode).toBe("key");
       expect(disk.providers.xai!.apiKey).toBe("live-update-sentinel-key");
       expect(disk.providers.xai!.apiKeyPool?.some(entry => entry.key === "live-update-sentinel-key")).toBe(true);
+    } finally {
+      await server.stop(true);
+    }
+  }, SERVER_BUDGET_MS);
+
+  test("a reached proxy rejection is visible and leaves persisted xAI credentials untouched", async () => {
+    const attestationSecret = "B".repeat(43);
+    const server = startServer(0, {
+      localAttestationSecret: attestationSecret,
+      managementApi: { refreshCodexCatalog: async () => {} },
+    });
+    try {
+      const port = server.port!;
+      const boot = loadConfig();
+      boot.port = port;
+      saveConfig(boot);
+      const before = readFileSync(join(testDir, "config.json"), "utf8");
+      const rejectingFetch: typeof fetch = async (input, init) => {
+        const requestUrl = input instanceof Request ? input.url : String(input);
+        const method = input instanceof Request ? input.method : init?.method;
+        if (new URL(requestUrl).pathname === "/api/providers" && method === "POST") {
+          return Response.json({ error: "stale live provider" }, { status: 409 });
+        }
+        return globalThis.fetch(input, init);
+      };
+
+      await expect(notifyRunningProxyAfterOAuthLogin("xai", {
+        fetchFn: rejectingFetch,
+        readRuntimeFn: () => ({
+          pid: process.pid,
+          port,
+          hostname: "127.0.0.1",
+          attestationSecret,
+          attestationProtocol: 2,
+        }),
+        verifyPidFn: candidate => candidate,
+      })).rejects.toThrow(/^running proxy rejected the provider update \(HTTP 409\)$/);
+      expect(readFileSync(join(testDir, "config.json"), "utf8")).toBe(before);
     } finally {
       await server.stop(true);
     }

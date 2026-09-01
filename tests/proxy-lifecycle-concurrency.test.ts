@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { claimAbsentLinuxServiceBus } from "./helpers/owned-service-home";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -94,6 +95,7 @@ wire_api = "responses"
       CODEX_HOME: codexHome,
       CCX_DISABLE_COMPANION: "1",
       NO_COLOR: "1",
+      ...claimAbsentLinuxServiceBus(home).env,
     };
     let livePid: number | null = null;
     try {

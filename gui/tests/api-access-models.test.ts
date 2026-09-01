@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   classifyExternalModel,
+  classifyManagementModel,
   gatewayInboundProtocols,
 } from "../src/api-access-models";
 
@@ -43,6 +44,23 @@ describe("classifyExternalModel", () => {
       native: false,
       custom: true,
     });
+  });
+});
+
+describe("classifyManagementModel", () => {
+  test("uses the namespaced callable id and drops disabled rows", () => {
+    expect(classifyManagementModel({
+      id: "opus-4-6", namespaced: "anthropic/opus-4-6", provider: "anthropic", custom: true, disabled: false,
+    })).toEqual({
+      id: "anthropic/opus-4-6",
+      displayName: "anthropic/opus-4-6",
+      provider: "anthropic",
+      native: false,
+      custom: true,
+    });
+    expect(classifyManagementModel({
+      id: "gpt-5.4", namespaced: "gpt-5.4", provider: "openai", native: true, disabled: true,
+    })).toBeNull();
   });
 });
 

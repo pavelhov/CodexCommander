@@ -3,6 +3,8 @@ import {
   DecompressedBodyTooLargeError,
   decodeRequestBody,
   MAX_DECOMPRESSED_BODY_BYTES,
+  readBoundedJsonRequestBody,
+  readBoundedRawRequestBody,
   readJsonRequestBody,
   UnsupportedContentEncodingError,
 } from "../src/server/request-decompress";
@@ -111,6 +113,58 @@ describe("readJsonRequestBody", () => {
 
     await expect(readJsonRequestBody(req)).rejects.toBeInstanceOf(DecompressedBodyTooLargeError);
     expect(arrayBufferCalls).toBe(0);
+  });
+
+  test("rejects undeclared over-cap bodies while streaming without buffering the remainder", async () => {
+    const cap = 2048;
+    let pulled = 0;
+    let cancelled = false;
+    let arrayBufferCalls = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(new Uint8Array(512).fill(65));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const req = {
+      headers: new Headers(),
+      body: stream,
+      arrayBuffer: async () => {
+        arrayBufferCalls += 1;
+        return new ArrayBuffer(0);
+      },
+    } as Request;
+    await expect(readBoundedJsonRequestBody(req, cap)).rejects.toBeInstanceOf(DecompressedBodyTooLargeError);
+    expect(arrayBufferCalls).toBe(0);
+    expect(pulled).toBeLessThan(16);
+    expect(cancelled).toBe(true);
+  });
+
+  test("rejects a dishonest understated Content-Length once the streamed body exceeds the cap", async () => {
+    const cap = 1024;
+    let pulled = 0;
+    let arrayBufferCalls = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(new Uint8Array(400).fill(66));
+      },
+      cancel() {},
+    });
+    const req = {
+      headers: new Headers({ "content-length": "8" }),
+      body: stream,
+      arrayBuffer: async () => {
+        arrayBufferCalls += 1;
+        return new ArrayBuffer(0);
+      },
+    } as Request;
+    await expect(readBoundedRawRequestBody(req, cap)).rejects.toBeInstanceOf(DecompressedBodyTooLargeError);
+    expect(arrayBufferCalls).toBe(0);
+    expect(pulled).toBeLessThan(10);
   });
 
   test("management routes reject a lying declaration when the buffered body exceeds 4 MiB", async () => {

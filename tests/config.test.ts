@@ -441,6 +441,90 @@ describe("create-only config initialization", () => {
   });
 });
 
+describe("media authentication source config", () => {
+  test("normalizes legacy enabled bridge configs to api_key without enabling the other bridge", () => {
+    writeConfig({
+      ...getDefaultConfig(),
+      images: { bridgeEnabled: true, videoBridgeEnabled: false },
+    });
+
+    const loaded = loadConfig();
+    expect(loaded.images).toEqual({
+      bridgeEnabled: true,
+      videoBridgeEnabled: false,
+      authSource: "api_key",
+    });
+    saveConfig(loaded);
+    expect(JSON.parse(readFileSync(getConfigPath(), "utf8")).images).toEqual({
+      bridgeEnabled: true,
+      videoBridgeEnabled: false,
+      authSource: "api_key",
+    });
+
+    writeConfig({
+      ...getDefaultConfig(),
+      images: { bridgeEnabled: false, videoBridgeEnabled: true },
+    });
+    expect(loadConfig().images).toEqual({
+      bridgeEnabled: false,
+      videoBridgeEnabled: true,
+      authSource: "api_key",
+    });
+  });
+
+  test("accepts both explicit media authentication sources for all four switch states", () => {
+    for (const authSource of ["api_key", "subscription_oauth"] as const) {
+      for (const bridgeEnabled of [false, true]) {
+        for (const videoBridgeEnabled of [false, true]) {
+          const result = validateConfigCandidate({
+            ...getDefaultConfig(),
+            images: { authSource, bridgeEnabled, videoBridgeEnabled },
+          });
+          expect(result).toMatchObject({
+            ok: true,
+            config: { images: { authSource, bridgeEnabled, videoBridgeEnabled } },
+          });
+        }
+      }
+    }
+  });
+
+  test("rejects missing, automatic, unknown, and malformed sources at mutation boundaries", () => {
+    expect(validateConfigCandidate({
+      ...getDefaultConfig(),
+      images: { bridgeEnabled: true },
+    })).toMatchObject({ ok: false, error: expect.stringContaining("authSource") });
+    expect(validateConfigCandidate({
+      ...getDefaultConfig(),
+      images: { videoBridgeEnabled: true },
+    })).toMatchObject({ ok: false, error: expect.stringContaining("authSource") });
+
+    for (const authSource of ["auto", "oauth", "api-key", true, null]) {
+      expect(validateConfigCandidate({
+        ...getDefaultConfig(),
+        images: { bridgeEnabled: true, authSource },
+      }).ok).toBe(false);
+    }
+
+    expect(validateConfigCandidate({
+      ...getDefaultConfig(),
+      images: { bridgeEnabled: true, authSource: "api_key", credential: "secret" },
+    })).toMatchObject({ ok: false, error: expect.stringContaining("unrecognized field") });
+  });
+
+  test("off/off remains valid and does not invent a credential source", () => {
+    const result = validateConfigCandidate({
+      ...getDefaultConfig(),
+      images: { bridgeEnabled: false, videoBridgeEnabled: false },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      config: { images: { bridgeEnabled: false, videoBridgeEnabled: false } },
+    });
+    if (result.ok) expect(result.config.images?.authSource).toBeUndefined();
+  });
+});
+
 describe("CodexCommander config defaults", () => {
   test("usage and MCP config overrides change the effective bound while defaults remain compatible", () => {
     const defaults = getDefaultConfig();

@@ -30,7 +30,7 @@ function nativeTemplate(): Record<string, unknown> {
 }
 
 const EXPECTED_KEY_PROVIDER_IDS = [
-  "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "cline-pass", "cline", "orcarouter", "bizrouter", "groq", "google", "google-vertex", "azure-openai",
+  "cursor", "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "cline-pass", "cline", "orcarouter", "bizrouter", "groq", "google", "google-vertex", "azure-openai",
   "deepseek", "cerebras", "deepinfra", "hyperbolic", "nscale", "vultr", "baseten", "commandcode", "sambanova", "nebius", "digitalocean", "scaleway", "together", "fireworks", "firepass", "moonshot",
   "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
   "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
@@ -554,8 +554,10 @@ describe("provider registry parity", () => {
       id: "cursor",
       adapter: "cursor",
       authKind: "oauth",
+      allowKeyAuthOverride: true,
       featured: false,
       dashboardPreset: true,
+      dashboardUrl: "https://cursor.com/dashboard/api",
       defaultModel: "auto",
       liveModels: true,
     });
@@ -578,12 +580,21 @@ describe("provider registry parity", () => {
     expect(cursor?.models).toContain("kimi-k2.7-code");
     expect(cursor?.models).not.toContain("grok-4.3");
     expect(deriveFeaturedProviderIds()).not.toContain("cursor");
-    expect(Object.keys(deriveKeyLoginMap())).not.toContain("cursor");
+    expect(Object.keys(deriveKeyLoginMap())).toContain("cursor");
+    expect(deriveKeyLoginMap().cursor).toMatchObject({
+      adapter: "cursor",
+      dashboardUrl: "https://cursor.com/dashboard/api",
+      defaultModel: "auto",
+      liveModels: true,
+    });
+    expect(Object.keys(deriveKeyLoginMap())).not.toContain("github-copilot");
+    expect(Object.keys(deriveKeyLoginMap())).not.toContain("xai");
     expect(deriveProviderPresets().find(preset => preset.id === "cursor")).toMatchObject({
       id: "cursor",
       adapter: "cursor",
       auth: "oauth",
       defaultModel: "auto",
+      dashboardUrl: "https://cursor.com/dashboard/api",
     });
     const seed = providerConfigSeed(cursor!);
     expect(seed).toMatchObject({
@@ -709,6 +720,7 @@ describe("provider registry parity", () => {
       adapter: "cursor",
       auth: "oauth",
       defaultModel: "auto",
+      dashboardUrl: "https://cursor.com/dashboard/api",
     });
     expect(presets.find(p => p.id === "kimi")?.baseUrl).toBe("https://api.kimi.com/coding/v1");
     expect(presets.find(p => p.id === "anthropic")?.defaultModel).toBe("claude-sonnet-5");

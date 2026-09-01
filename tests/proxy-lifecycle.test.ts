@@ -1014,6 +1014,7 @@ describe("shared proxy lifecycle authority", () => {
       acquireAuthority: async () => authority(),
       loadConfig: () => config(),
       findLive: async () => live,
+      diagnoseService: () => service(),
       attestLive: async () => ({
         pid: 42, port: 10100, source: "runtime", baseUrl: "http://127.0.0.1:10100",
         lifecycleLockLeaseV1: true, runtimeVersion: "0.0.1", lifecycleCompatibilityGeneration: 0, runtimeRecordIdentity: "old-42",
@@ -1048,6 +1049,7 @@ describe("shared proxy lifecycle authority", () => {
       acquireAuthority: async () => authority(),
       loadConfig: () => config(),
       findLive: async () => live,
+      diagnoseService: () => service(),
       attestLive: async () => ({ pid: 42, port: 10100, source: "runtime", baseUrl: "http://127.0.0.1:10100", lifecycleLockLeaseV1: true, runtimeVersion: "0.0.1", lifecycleCompatibilityGeneration: 0, runtimeRecordIdentity: "old-42" }),
       captureSignalIdentity: pid => ({ pid, argvSha256: "argv", birthIdentity: "birth", ownerIdentity: "uid:501" }),
       staleStopIo: { diagnoseService: () => service(), restoreNative: () => ({ success: true, changed: true, desiredChanged: true, configChanged: true, message: "native" }), stripGrok: () => ({ ok: true, changed: false, message: "native" }), readPid: () => 42, stopProxy: async () => { calls.push("stop"); live = null; }, findSurvivor: async () => null },

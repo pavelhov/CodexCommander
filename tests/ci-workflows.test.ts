@@ -122,7 +122,7 @@ describe("ci.yml is the only pull-request check", () => {
     for (const step of [
       "bun x tsc --noEmit",
       "bun run privacy:scan",
-      "bun test --isolate tests",
+      "bun run test:parallel",
       "bun run lint",
       "bun run lint:i18n",
       "bun run build",
@@ -130,7 +130,7 @@ describe("ci.yml is the only pull-request check", () => {
       expect(ci).toContain(step);
     }
     // The suite serves gui/dist, so the build must precede the test run.
-    expect(ci.indexOf("bun run build")).toBeLessThan(ci.indexOf("bun test --isolate tests"));
+    expect(ci.indexOf("bun run build")).toBeLessThan(ci.indexOf("bun run test:parallel"));
   });
 
   test("grants read-only permissions and keeps no checkout credentials", () => {

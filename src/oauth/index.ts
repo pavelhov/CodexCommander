@@ -1,7 +1,13 @@
 import type { KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./types";
 import { parseCallbackInput } from "./callback-server";
 import type { CodexCommanderConfig, CodexCommanderProviderConfig, RefreshPolicy } from "../types";
-import { loadConfig, resolveEnvValue, saveConfig } from "../config";
+import {
+  loadConfig,
+  mutatePersistedConfig,
+  resolveEnvValue,
+  saveConfig,
+  withConfigMutationLockSync,
+} from "../config";
 import { maskEmail } from "../lib/privacy";
 import { KiroTokenRefreshError, loginKiro, refreshKiroToken, settleKiroLoginTransaction } from "./kiro";
 import { getAccountCredential, getAccountSet, removeAccount, saveAccountCredential, saveCredential, setActiveAccount, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration, readOAuthRefreshIntent, writeOAuthRefreshIntent, markOAuthRefreshIntentStaleOwner, clearOAuthRefreshIntent, normalizeAuthStoreBuffer, OAuthMutationBusyError } from "./store";
@@ -419,6 +425,17 @@ export async function getValidAccessTokenSnapshot(provider: string): Promise<OAu
   const set = getAccountSet(provider);
   if (!set) throw new OAuthLoginRequiredError(provider);
   return resolveAccessSnapshotForAccount(provider, set.activeAccountId);
+}
+
+/**
+ * Resolve one exact stored account without consulting or changing the provider's active account.
+ * Media credential leases use this to keep a long-running job on its originally bound identity.
+ */
+export async function getValidAccessTokenSnapshotForAccount(
+  provider: string,
+  accountId: string,
+): Promise<OAuthAccessSnapshot> {
+  return resolveAccessSnapshotForAccount(provider, accountId);
 }
 
 /** Providers whose upstream-401 replay path may force a snapshot refresh. */
@@ -870,7 +887,7 @@ export function buildModelsRequest(
 /**
  * Add/refresh an OAuth provider's config entry on a config object (does not persist).
  *
- * Providers whose registry entry sets `allowKeyAuthOverride` (xai, github-copilot) can be
+ * Providers whose registry entry sets `allowKeyAuthOverride` (xai, github-copilot, cursor) can be
  * billed through a stored API key instead of the OAuth login (router.ts honors
  * `authMode: "key"` for them). A blind preset overwrite here deletes `apiKey`/`apiKeyPool`
  * on every OAuth login, silently destroying the stored key and forcing a re-paste — and it
@@ -919,6 +936,51 @@ interface RunLoginDeps {
   settleKiroLoginTransaction?: typeof settleKiroLoginTransaction;
   removeAccount?: typeof removeAccount;
   setActiveAccount?: typeof setActiveAccount;
+}
+
+function lateOAuthProviderNamespaceCollisionError(provider: string, collision: string): Error {
+  return new Error(
+    `${collision}. The credential for "${provider}" was saved, but the provider entry was not written. `
+    + "Rename the account selector, then re-run the login.",
+  );
+}
+
+function upsertOAuthProviderAfterCredential(config: CodexCommanderConfig, provider: string): void {
+  const collision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
+  if (collision) throw lateOAuthProviderNamespaceCollisionError(provider, collision);
+  upsertOAuthProvider(config, provider);
+}
+
+/**
+ * Persist the provider row against the freshest snapshot held by the shared config lock.
+ * The missing-file branch retains first-login initialization, but retries the ordinary
+ * field-scoped mutation after taking the lock so a competing creator always wins.
+ */
+function persistOAuthProviderAfterCredential(provider: string): void {
+  const mutateCurrent = () => mutatePersistedConfig(config => {
+    upsertOAuthProviderAfterCredential(config, provider);
+    return { changed: true, value: undefined };
+  });
+
+  let outcome = mutateCurrent();
+  if (outcome.status !== "unavailable") return;
+  if (outcome.reason === "missing") {
+    withConfigMutationLockSync(() => {
+      outcome = mutateCurrent();
+      if (outcome.status !== "unavailable") return;
+      if (outcome.reason !== "missing") return;
+      const initial = loadConfig();
+      upsertOAuthProviderAfterCredential(initial, provider);
+      saveConfig(initial);
+      outcome = { status: "committed", value: undefined };
+    });
+  }
+  if (outcome.status !== "unavailable") return;
+  throw new Error(
+    outcome.reason === "invalid"
+      ? "Cannot overwrite an invalid CodexCommander config."
+      : "CodexCommander configuration changed repeatedly during OAuth login; retry login.",
+  );
 }
 
 /** Roll back only accounts created by this forced login, preserving concurrent refreshes of others. */
@@ -995,19 +1057,15 @@ export async function runLogin(
     if (provider !== "chatgpt") {
       // Re-run against post-credential state so same-provider API-key additions, removals,
       // and active-key switches survive. A late namespace claim wins over provider creation.
-      const latestConfig = loadLatestConfig();
-      const lateCollision = codexAccountNamespaceProviderCollisionError(
-        latestConfig.codexAccountNamespaces,
-        provider,
-      );
-      if (lateCollision) {
-        throw new Error(
-          `${lateCollision}. The credential for "${provider}" was saved, but the provider entry was not written. `
-          + "Rename the account selector, then re-run the login.",
-        );
+      // Keep explicit config dependencies as a narrow test seam for injected persistence
+      // failures. Production commits through the field-scoped, rebase-capable mutator.
+      if (deps.loadConfig || deps.saveConfig) {
+        const latestConfig = loadLatestConfig();
+        upsertOAuthProviderAfterCredential(latestConfig, provider);
+        saveLatestConfig(latestConfig);
+      } else {
+        persistOAuthProviderAfterCredential(provider);
       }
-      upsertOAuthProvider(latestConfig, provider);
-      saveLatestConfig(latestConfig);
     }
   } catch (error) {
     const errors: unknown[] = [error];

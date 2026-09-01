@@ -28,6 +28,7 @@ describe("Cursor provider routing + standalone OAuth module", () => {
       adapter: "cursor",
       auth: "oauth",
       defaultModel: "auto",
+      dashboardUrl: "https://cursor.com/dashboard/api",
     });
   });
 
